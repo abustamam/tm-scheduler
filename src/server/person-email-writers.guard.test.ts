@@ -67,8 +67,22 @@ const WAIVERS: Record<
 		/** A CLUB-side writer (#907): its UPDATE must also carry the sole-holder
 		 *  predicate, `soleHoldingClub(...)`, in the statement itself. */
 		requiresSoleHolder?: boolean;
+		/** The member's own change (#1091): its UPDATE must carry
+		 *  `eq(people.userId, …)` in the statement itself, so it can only ever
+		 *  move the address of the Person bound to the confirming account. */
+		requiresBoundToUser?: boolean;
 	}
 > = {
+	// A member changing their OWN sign-in address (#1091, ADR-0030). The new
+	// address was just proved by a link to its inbox; the write runs in the
+	// same transaction that moves `user.email`.
+	"server/account-email-change-logic.ts": {
+		fn: "confirmEmailChange",
+		sites: 1,
+		reason:
+			"the member's own verified change of sign-in address (#1091, ADR-0030), only on the Person bound to the confirming account",
+		requiresBoundToUser: true,
+	},
 	// The officer's typo repair (#907). Club-reachable, so both predicates.
 	"server/members-logic.ts": {
 		fn: "applyMemberEdit",
@@ -549,7 +563,11 @@ describe("people.email writers (verified identity address)", () => {
 			// name to the same table, and checking the first statement would check
 			// the wrong one.
 			const stmts = emailWriteStatements(text ?? "");
-			if (waiver.requiresUnlinkedGuard || waiver.requiresSoleHolder) {
+			if (
+				waiver.requiresUnlinkedGuard ||
+				waiver.requiresSoleHolder ||
+				waiver.requiresBoundToUser
+			) {
 				expect(
 					stmts,
 					`${key}: no readable people.email UPDATE to check`,
@@ -562,6 +580,13 @@ describe("people.email writers (verified identity address)", () => {
 						`${key}'s people.email write must carry isNull(people.userId) in the STATEMENT — ` +
 							`a check outside the transaction is a TOCTOU, and no behavioural test can reach it`,
 					).toMatch(/isNull\(\s*people\.userId\s*\)/);
+				}
+				if (waiver.requiresBoundToUser) {
+					expect(
+						stmt,
+						`${key}'s people.email write must carry eq(people.userId, …) in the STATEMENT — ` +
+							`a member may move only the address of the Person bound to their own account (#1091)`,
+					).toMatch(/eq\(\s*people\.userId\s*,/);
 				}
 				if (waiver.requiresSoleHolder) {
 					expect(

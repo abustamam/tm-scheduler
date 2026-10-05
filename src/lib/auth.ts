@@ -12,6 +12,7 @@ import { jwt, magicLink } from "better-auth/plugins";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { db } from "#/db";
 import { recordAuthInitFailure } from "#/lib/auth-init-status";
+import { memberEmailChange } from "#/lib/change-email-plugin";
 import { fetchClientMetadataResource } from "#/lib/cimd-transport";
 import { captureDevMagicLink, isDevLoginEnabled } from "#/lib/dev-login";
 import { sendEmail } from "#/lib/email";
@@ -239,6 +240,12 @@ export const auth = betterAuth({
 				await sendEmail({ to: email, subject, html, text });
 			},
 		}),
+		// #1091 / ADR-0030 — a member bound to a Person changes their own
+		// sign-in address: verify the NEW inbox, notify the old one. A plugin of
+		// ours, not Better Auth's `user.changeEmail` (which stays disabled):
+		// `#/lib/change-email-plugin` says why. Its request path carries its own
+		// per-address limiter rule; the per-account cap is in the logic module.
+		memberEmailChange(),
 		// #842 / ADR-0027 — GavelUp becomes an OAuth 2.1 authorization server so
 		// claude.ai can reach `/api/mcp` from Anthropic's cloud, where a pasted
 		// `tmk_` bearer token cannot go.

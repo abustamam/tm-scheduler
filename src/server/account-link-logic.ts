@@ -333,6 +333,55 @@ export async function rosterConflictFor(
 	return others.length > 0 ? "shared_address" : null;
 }
 
+/**
+ * **Is this address already somebody else's?** (#1091, ADR-0030) The question a
+ * member changing their own sign-in address must get "no" to, asked at request
+ * time and again inside the confirm transaction.
+ *
+ * Two arms, either one refuses:
+ *  - another `user` row carries it (a second account already signs in with it);
+ *  - another Person carries it who COUNTS AS A HOLDER (`countsAsHolder`, the
+ *    bind's own rule): bound to an account, or on at least one roster. That is
+ *    ADR-0008's household case — moving an address onto this Person would make
+ *    it ambiguous, and the bind refuses an ambiguous address for BOTH Persons.
+ *
+ * "Another" means not `userId`'s own account and not a Person bound to it. It
+ * is the same predicate the bind uses, not a restatement, so a change can
+ * never create an ambiguity the bind would then refuse.
+ *
+ * `address` must already be normalised (`normalizeEmail`). `executor` is a
+ * transaction handle at confirm time, so the read sees that transaction.
+ */
+export async function addressHeldByAnother(
+	address: string,
+	userId: string,
+	executor: Pick<typeof db, "select"> = db,
+): Promise<boolean> {
+	const otherUser = await executor
+		.select({ id: user.id })
+		.from(user)
+		.where(
+			and(
+				ne(user.id, userId),
+				sql`${normalizedEmail(user.email)} = ${address}`,
+			),
+		)
+		.limit(1);
+	if (otherUser.length > 0) return true;
+	const otherPerson = await executor
+		.select({ id: people.id })
+		.from(people)
+		.where(
+			and(
+				or(isNull(people.userId), ne(people.userId, userId)),
+				sql`${normalizedEmail(people.email)} = ${address}`,
+				countsAsHolder(people),
+			),
+		)
+		.limit(1);
+	return otherPerson.length > 0;
+}
+
 /** The DISTINCT Persons whose own address is this one and who count as a
  *  holder (`countsAsHolder`), linked or not. */
 async function peopleMatching(address: string): Promise<string[]> {

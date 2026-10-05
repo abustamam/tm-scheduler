@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ApiTokensSection } from "#/components/api-tokens-section";
 import { ConnectedAppsSection } from "#/components/connected-apps-section";
 import { PageContainer } from "#/components/page-container";
+import { SignInEmailSection } from "#/components/sign-in-email-section";
 import { navLabel } from "#/lib/nav-destinations";
 
 /**
@@ -14,15 +15,27 @@ import { navLabel } from "#/lib/nav-destinations";
  * #902), so there is nothing to opt out of.
  */
 export const Route = createFileRoute("/_authed/account")({
+	// `?emailChange=` is where a clicked change-of-address link lands (#1091).
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { emailChange?: string } =>
+		typeof search.emailChange === "string"
+			? { emailChange: search.emailChange }
+			: {},
 	component: AccountSettings,
 });
 
 function AccountSettings() {
+	const { emailChange } = Route.useSearch();
 	return (
 		<PageContainer className="space-y-4">
 			<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 				{navLabel("/account")}
 			</h1>
+
+			{/* Every signed-in account sees its address; only one bound to a
+			    club member gets the change form (#1091, ADR-0030). */}
+			<SignInEmailSection outcome={emailChange} />
 
 			{/* Renders nothing unless the user is an admin or officer somewhere
 			    (#773). That check is server-side — see `ApiTokensSection`. */}
