@@ -137,7 +137,7 @@ describe.skipIf(!hasTestDb)("role-reminder producer (#272)", () => {
 		const personId = await seedPerson({ name, email, userId });
 		const [m] = await testDb
 			.insert(members)
-			.values({ clubId: club.clubId, personId, name, email })
+			.values({ clubId: club.clubId, personId, name })
 			.returning({ id: members.id });
 		return { userId, personId, memberId: m.id };
 	}

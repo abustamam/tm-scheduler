@@ -764,6 +764,13 @@
       "when": 1790880914193,
       "tag": "0108_little_iron_monger",
       "breakpoints": true
+    },
+    {
+      "idx": 109,
+      "version": "7",
+      "when": 1790974374342,
+      "tag": "0109_small_reaper",
+      "breakpoints": true
     }
   ]
 }

@@ -17,19 +17,15 @@ import type { RosterObstacle } from "#/server/account-link-logic";
 
 export const ROSTER_CONFLICT_COPY: Record<RosterObstacle, string> = {
 	no_vouching_row:
-		"Saved — but this member can't sign in yet, because no roster entry of theirs carries that email. Add it to their roster row in the club they belong to.",
-	multiple_clubs:
-		"Saved — but this member is on more than one club's roster, so an account can't be attached to them automatically. Get in touch with GavelUp to sort it out.",
+		"Saved — but this member can't sign in yet, because that email isn't the one on file for them.",
 	shared_address:
-		"Saved — but another member already has that email on their roster entry, so neither of them can sign in until each has their own address.",
+		"Saved — but another member already has that email, so neither of them can sign in until each has their own address.",
 };
 
-/** The same three, phrased for the INVITE button, where nothing was saved. */
+/** The same two, phrased for the INVITE button, where nothing was saved. */
 export const INVITE_CONFLICT_COPY: Record<RosterObstacle, string> = {
 	no_vouching_row:
-		"No invite sent — no roster entry of theirs carries that email, so the link couldn't attach to their account.",
-	multiple_clubs:
-		"No invite sent — this member is on more than one club's roster, so an account can't be attached to them automatically. Get in touch with GavelUp to sort it out.",
+		"No invite sent — that email isn't the one on file for them, so the link couldn't attach to their account.",
 	shared_address:
-		"No invite sent — another member has the same email on their roster entry. Give each of them their own address first.",
+		"No invite sent — another member has the same email. Give each of them their own address first.",
 };

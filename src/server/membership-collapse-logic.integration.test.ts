@@ -94,7 +94,6 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		name: string;
 		clubRole?: "admin" | "member";
 		status?: "active" | "inactive";
-		email?: string | null;
 		joinedAt?: Date | null;
 		preferredName?: string | null;
 	}): Promise<string> {
@@ -108,7 +107,6 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 				name: opts.name,
 				clubRole: opts.clubRole ?? "member",
 				status: opts.status ?? "active",
-				email: opts.email ?? null,
 				joinedAt: opts.joinedAt ?? null,
 				preferredName: opts.preferredName ?? null,
 			})
@@ -186,23 +184,22 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		expect(dues[0]?.amountCents).toBe(5000);
 	});
 
-	it("reconciles club_role, status, joined_at, and fills a null email", async () => {
+	it("reconciles club_role, status and joined_at", async () => {
 		const older = new Date(Date.now() - 400 * DAY);
 		const newer = new Date(Date.now() - 100 * DAY);
-		// Keeper: member / active / null email / later join.
+		// Keeper: member / active / later join. (No email: an address is the
+		// Person's since #907, so a collapse has none to reconcile.)
 		const keeperId = await addMembership({
 			name: "Keeper",
 			clubRole: "member",
 			status: "active",
-			email: null,
 			joinedAt: newer,
 		});
-		// Absorbed: admin / inactive / has email / earlier join.
+		// Absorbed: admin / inactive / earlier join.
 		const absorbedId = await addMembership({
 			name: "Absorbed",
 			clubRole: "admin",
 			status: "inactive",
-			email: "absorbed@example.com",
 			joinedAt: older,
 		});
 
@@ -214,7 +211,6 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			.where(eq(members.id, keeperId));
 		expect(keeper?.clubRole).toBe("admin"); // higher of the two wins
 		expect(keeper?.status).toBe("active"); // active if either is active
-		expect(keeper?.email).toBe("absorbed@example.com"); // null filled from absorbed
 		expect(keeper?.joinedAt?.getTime()).toBe(older.getTime()); // earliest known
 	});
 

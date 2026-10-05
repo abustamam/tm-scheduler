@@ -77,7 +77,7 @@ async function makeMember(
 	const email = over.email ?? "test@example.com";
 	await testDb.insert(people).values({ id, name, email, ...over });
 	createdPersonIds.push(id);
-	await testDb.insert(members).values({ clubId, personId: id, name, email });
+	await testDb.insert(members).values({ clubId, personId: id, name });
 	return id;
 }
 
@@ -199,17 +199,10 @@ describe.skipIf(!hasTestDb)("syncClubProgress", () => {
 		expect(levels).toHaveLength(2);
 	});
 
-	it("matches on the ROSTER address when the Person carries none", async () => {
-		// The post-#756 shape, and the state migration 0076 leaves every un-claimed
-		// member in: `people.email` null, the club's contact record holding the
-		// address. Matching only the person-level column would quietly move most of
-		// a club's roster into `unmatched` on the next sync — a silent degradation,
-		// since an unmatched row is a normal thing for this report to contain.
-		const personId = await makeMember({ email: null });
-		await testDb
-			.update(members)
-			.set({ email: "roster-only@example.com" })
-			.where(eq(members.personId, personId));
+	it("matches on the Person's own address, normalised (#907)", async () => {
+		// `people.email` is the one address since #907; there is no per-club
+		// copy left to fall back on. A padded, mixed-case value still matches.
+		const personId = await makeMember({ email: " Roster-Only@Example.com\t" });
 
 		const res = await syncClubProgress(clubId, [
 			mp({ email: "roster-only@example.com", basecampUserId: "bc-roster" }),
@@ -547,7 +540,6 @@ describe.skipIf(!hasTestDb)("syncClubProgress", () => {
 			clubId: secondClubId,
 			personId,
 			name: "Multi",
-			email: "multi@example.com",
 		});
 
 		// Club A witnesses the completion → A is credited.

@@ -6,8 +6,10 @@ import {
 	type AddressHolders,
 	addressConflictFor,
 	classifyMembership,
+	EMAIL_REFUSED_NOTE,
 	type ExistingMembershipRow,
 	type ExistingPersonRow,
+	emailDecision,
 	FOREIGN_SKIP_NOTE,
 	normalizeAddress,
 	planImport,
@@ -16,7 +18,11 @@ import {
 } from "./members-import-plan";
 
 /** A Person the importing club holds, not linked to an account. */
-const HERE = { heldBy: "this_club", linked: false } as const;
+const HERE = {
+	heldBy: "this_club",
+	heldElsewhere: false,
+	linked: false,
+} as const;
 const NO_HOLDERS: AddressHolders = new Map();
 /** An address held by unlinked Persons. */
 const held = (address: string, ...ids: string[]): AddressHolders =>
@@ -106,25 +112,38 @@ describe("classifyMembership", () => {
 		expect(d.kind).toBe("insert");
 	});
 
-	it("fill-only update: keeps a non-empty stored value, fills an empty one", () => {
-		const existing = { name: "Stored Name", email: null, phone: "+1" };
-		const d = classifyMembership(
+	it("fill-only update: keeps a non-empty stored name, fills an empty one", () => {
+		const kept = classifyMembership(
 			row({ name: "CSV Name", email: "csv@x.io", phone: "+2" }),
-			existing,
+			{ name: "Stored Name" },
 		);
-		expect(d.kind).toBe("update");
-		if (d.kind !== "update") throw new Error("expected update");
-		// Name already present → untouched; empty email → filled.
-		expect(d.set.name).toBe("Stored Name");
-		expect(d.set.email).toBe("csv@x.io");
-		expect(d.fills.map((f) => f.field)).toEqual(["email"]);
+		if (kept.kind !== "update") throw new Error("expected update");
+		expect(kept.set.name).toBe("Stored Name");
+		expect(kept.fills).toEqual([]);
+		const filled = classifyMembership(row({ name: "CSV Name" }), { name: " " });
+		if (filled.kind !== "update") throw new Error("expected update");
+		expect(filled.set.name).toBe("CSV Name");
+		expect(filled.fills.map((f) => f.field)).toEqual(["name"]);
+	});
+
+	it("carries no contact at all — email and phone are the Person's (#906, #907)", () => {
+		const ins = classifyMembership(
+			row({ name: "N", email: "n@x.io", phone: "+1" }),
+			undefined,
+		);
+		if (ins.kind !== "insert") throw new Error("expected insert");
+		expect(Object.keys(ins.values).sort()).toEqual(["joinedAt", "name"]);
+		const upd = classifyMembership(row({ name: "N", email: "n@x.io" }), {
+			name: "N",
+		});
+		if (upd.kind !== "update") throw new Error("expected update");
+		expect(Object.keys(upd.set).sort()).toEqual(["joinedAt", "name"]);
 	});
 
 	it("always (re)writes joinedAt on an update", () => {
 		const joined = new Date("2024-05-01");
 		const d = classifyMembership(row({ name: "X", joinedAt: joined }), {
 			name: "X",
-			email: "x@x.io",
 		});
 		if (d.kind !== "update") throw new Error("expected update");
 		expect(d.set.joinedAt).toBe(joined);
@@ -144,7 +163,7 @@ describe("planImport", () => {
 			},
 		];
 		const memberships: ExistingMembershipRow[] = [
-			{ id: "m1", personId: "p1", name: "Ada", email: "ada@x.io" },
+			{ id: "m1", personId: "p1", name: "Ada" },
 		];
 		const plan = planImport(
 			people,
@@ -194,7 +213,7 @@ describe("planImport", () => {
 			},
 		];
 		const memberships: ExistingMembershipRow[] = [
-			{ id: "m1", personId: "p1", name: "Ada", email: "ada@x.io" },
+			{ id: "m1", personId: "p1", name: "Ada" },
 		];
 		const plan = planImport(
 			people,
@@ -338,6 +357,7 @@ describe("planImport — foreign rows and shared addresses (#759)", () => {
 					name: "Vic",
 					phone: null,
 					heldBy: "other_club_only",
+					heldElsewhere: true,
 					linked: false,
 				},
 			],
@@ -370,6 +390,7 @@ describe("planImport — foreign rows and shared addresses (#759)", () => {
 					name: "Vic",
 					phone: null,
 					heldBy: "other_club_only",
+					heldElsewhere: true,
 					linked: false,
 				},
 			],
@@ -424,7 +445,7 @@ describe("planImport — foreign rows and shared addresses (#759)", () => {
 					...HERE,
 				},
 			],
-			[{ id: "m1", personId: "p1", name: "Ada", email: null }],
+			[{ id: "m1", personId: "p1", name: "Ada" }],
 			[row({ customerId: "PN-1", name: "Ada", email: "ada@x.io" })],
 			held("ada@x.io", "p1"),
 		);
@@ -433,13 +454,13 @@ describe("planImport — foreign rows and shared addresses (#759)", () => {
 		expect(plan.summary.addressConflicts).toBe(0);
 	});
 
-	it("reports nothing when fill-only keeps the roster row's own address", () => {
+	it("reports nothing when fill-only keeps the Person's own address", () => {
 		const plan = planImport(
 			[
 				{
 					id: "p1",
 					customerId: "PN-1",
-					email: null,
+					email: "own@x.io",
 					name: "Ada",
 					phone: null,
 					...HERE,
@@ -450,7 +471,6 @@ describe("planImport — foreign rows and shared addresses (#759)", () => {
 					id: "m1",
 					personId: "p1",
 					name: "Ada",
-					email: "own@x.io",
 				},
 			],
 			[row({ customerId: "PN-1", name: "Ada", email: "taken@x.io" })],
@@ -468,6 +488,7 @@ describe("planImport — orphans (#855)", () => {
 		name: "Orphan",
 		phone: null,
 		heldBy,
+		heldElsewhere: false,
 		linked: false,
 	});
 
@@ -525,6 +546,7 @@ describe("planImport — review fixes (#759)", () => {
 					name: "Vic",
 					phone: null,
 					heldBy: "other_club_only",
+					heldElsewhere: true,
 					linked: false,
 				},
 			],
@@ -614,23 +636,139 @@ describe("addressConflictFor", () => {
 	});
 });
 
+describe("emailDecision (#907)", () => {
+	const person = (
+		over: Partial<
+			Pick<ExistingPersonRow, "email" | "linked" | "heldElsewhere">
+		>,
+	) => ({ email: null, linked: false, heldElsewhere: false, ...over });
+
+	it("fills a blank address on an unbound Person this club alone holds", () => {
+		expect(emailDecision(person({}), " new@x.io ")).toEqual({
+			kind: "fill",
+			to: "new@x.io",
+		});
+	});
+
+	it("keeps an existing address (fill-only) without reporting", () => {
+		expect(emailDecision(person({ email: "old@x.io" }), "new@x.io")).toEqual({
+			kind: "none",
+		});
+	});
+
+	it("refuses a new address for a BOUND Person", () => {
+		expect(
+			emailDecision(person({ email: "me@x.io", linked: true }), "new@x.io"),
+		).toEqual({ kind: "refused", reason: "bound" });
+	});
+
+	it("refuses a new address for a Person another club also holds", () => {
+		expect(emailDecision(person({ heldElsewhere: true }), "new@x.io")).toEqual({
+			kind: "refused",
+			reason: "multi_club",
+		});
+	});
+
+	it("is not a refusal when the address is the same one, normalised", () => {
+		expect(
+			emailDecision(person({ email: "Me@X.io", linked: true }), " me@x.io"),
+		).toEqual({ kind: "none" });
+		expect(emailDecision(person({ linked: true }), "  ")).toEqual({
+			kind: "none",
+		});
+	});
+});
+
+describe("planImport — email is the Person's (#907)", () => {
+	it("reports a row whose new address cannot reach a bound or shared Person", () => {
+		const plan = planImport(
+			[
+				{
+					id: "b",
+					customerId: "PN-B",
+					email: "bound@x.io",
+					name: "Bound",
+					phone: null,
+					...HERE,
+					linked: true,
+				},
+				{
+					id: "s",
+					customerId: "PN-S",
+					email: null,
+					name: "Shared",
+					phone: null,
+					...HERE,
+					heldElsewhere: true,
+				},
+			],
+			[
+				{ id: "mb", personId: "b", name: "Bound" },
+				{ id: "ms", personId: "s", name: "Shared" },
+			],
+			[
+				row({ customerId: "PN-B", name: "Bound", email: "other@x.io" }),
+				row({ customerId: "PN-S", name: "Shared", email: "s@x.io" }),
+			],
+			NO_HOLDERS,
+		);
+		expect(plan.summary.emailNotWritten).toBe(2);
+		expect(plan.rows[0]?.note).toContain(EMAIL_REFUSED_NOTE.bound);
+		expect(plan.rows[1]?.note).toContain(EMAIL_REFUSED_NOTE.multi_club);
+	});
+
+	it("previews a fill on a single-club unbound Person", () => {
+		const plan = planImport(
+			[
+				{
+					id: "p",
+					customerId: "PN-P",
+					email: null,
+					name: "P",
+					phone: null,
+					...HERE,
+				},
+			],
+			[{ id: "m", personId: "p", name: "P" }],
+			[row({ customerId: "PN-P", name: "P", email: "p@x.io" })],
+			NO_HOLDERS,
+		);
+		expect(plan.summary.emailNotWritten).toBe(0);
+		expect(plan.rows[0]?.note).toContain("Fills email");
+	});
+});
+
 describe("writtenAddress", () => {
-	it("is the fill, not the CSV cell, on an update", () => {
+	it("is the fill, not the CSV cell, on a match", () => {
 		// Fill-only leaves an existing address in place, so the CSV's differing
 		// address is never written and must not be checked.
-		const kept = classifyMembership(row({ name: "A", email: "new@x.io" }), {
+		const base = {
+			customerId: "PN-A",
 			name: "A",
-			email: "old@x.io",
-		});
+			phone: null,
+			...HERE,
+		};
+		const kept = resolvePersonDecision(
+			row({ customerId: "PN-A", name: "A", email: "new@x.io" }),
+			[{ id: "a", email: "old@x.io", ...base }],
+			new Set(),
+		);
+		if (kept.kind === "foreign") throw new Error("expected a match");
 		expect(writtenAddress(kept)).toBeNull();
-		const filled = classifyMembership(row({ name: "A", email: "new@x.io" }), {
-			name: "A",
-			email: null,
-		});
+		const filled = resolvePersonDecision(
+			row({ customerId: "PN-A", name: "A", email: "new@x.io" }),
+			[{ id: "a", email: null, ...base }],
+			new Set(),
+		);
+		if (filled.kind === "foreign") throw new Error("expected a match");
 		expect(writtenAddress(filled)).toBe("new@x.io");
-		expect(
-			writtenAddress(classifyMembership(row({ email: "i@x.io" }), undefined)),
-		).toBe("i@x.io");
+		const inserted = resolvePersonDecision(
+			row({ email: "i@x.io" }),
+			[],
+			new Set(),
+		);
+		if (inserted.kind === "foreign") throw new Error("expected an insert");
+		expect(writtenAddress(inserted)).toBe("i@x.io");
 	});
 });
 

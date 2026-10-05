@@ -35,6 +35,7 @@ import {
 	type SeededClub,
 	seedClub,
 	seedPerson,
+	setMemberEmail,
 	setMemberPhone,
 	testDb,
 } from "#/test/db";
@@ -796,20 +797,15 @@ describe.skipIf(!hasTestDb)("Close to a level (#898)", () => {
 		const ada = await addMember(seeded.clubId, "Ada Lovelace");
 		await testDb
 			.update(members)
-			.set({
-				email: "ada@example.com",
-				preferredName: "Addy",
-			})
+			.set({ preferredName: "Addy" })
 			.where(eq(members.id, ada.memberId));
+		await setMemberEmail(ada.memberId, "ada@example.com");
 		await setMemberPhone(ada.memberId, "(415) 555-2671");
 		await enrollClose(ada.personId);
 
 		// Bea: no membership goes-by, so the Person's; a blank email; no phone.
 		const bea = await addMember(seeded.clubId, "Beatrice Blank");
-		await testDb
-			.update(members)
-			.set({ email: "   " })
-			.where(eq(members.id, bea.memberId));
+		await setMemberEmail(bea.memberId, "   ");
 		await setMemberPhone(bea.memberId, null);
 		await testDb
 			.update(people)
@@ -879,10 +875,7 @@ describe.skipIf(!hasTestDb)("Close to a level (#898)", () => {
 
 		const { enrollClose } = await closePath();
 		const ada = await addMember(seeded.clubId, "Ada Lovelace");
-		await testDb
-			.update(members)
-			.set({ email: "ada@example.com" })
-			.where(eq(members.id, ada.memberId));
+		await setMemberEmail(ada.memberId, "ada@example.com");
 		await setMemberPhone(ada.memberId, "+14155552671");
 		await enrollClose(ada.personId);
 

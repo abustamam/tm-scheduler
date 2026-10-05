@@ -138,7 +138,8 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 			.values({
 				name,
 				customerId: over.customerId ?? null,
-				email: over.personEmail ?? null,
+				// One address since #907: a "roster" address is the Person's too.
+				email: over.personEmail ?? over.rosterEmail ?? null,
 				phone: over.phone ?? null,
 				userId: over.userId ?? null,
 			})
@@ -150,7 +151,6 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 				clubId,
 				personId: p.id,
 				name,
-				email: over.rosterEmail ?? null,
 				status: over.status ?? "active",
 			});
 		}
@@ -170,10 +170,11 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 		return testDb
 			.select({
 				personId: members.personId,
-				email: members.email,
+				email: people.email,
 				name: members.name,
 			})
 			.from(members)
+			.innerJoin(people, eq(people.id, members.personId))
 			.where(eq(members.clubId, clubId));
 	}
 
@@ -309,7 +310,10 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 			personIds.push(...created.map((c) => c.id));
 		});
 
-		it("imports a row whose address another club's member carries, and counts it", async () => {
+		it("refuses a new row whose address is another club's member's (#907)", async () => {
+			// Since #907 the address is the Person's one column, so the email arm
+			// of the match is global: a row carrying it resolves to that Person,
+			// whom another club holds — `foreign`, exactly as a Customer ID would.
 			const shared = `shared-${n}@x.io`;
 			await person(victimClub.clubId, { rosterEmail: shared });
 
@@ -317,8 +321,21 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 				row({ name: `Newcomer ${n}`, email: shared.toUpperCase() }),
 			]);
 
+			expect(stats.foreignSkipped).toBe(1);
+			expect(stats.membersCreated).toBe(0);
+		});
+
+		it("fills an address another club's member carries, and counts the conflict", async () => {
+			const shared = `shared-fill-${n}@x.io`;
+			await person(victimClub.clubId, { rosterEmail: shared });
+			await person(attackerClub.clubId, { customerId: `PN-S-${n}` });
+
+			const stats = await importPeopleAndMembers(attackerClub.clubId, [
+				row({ customerId: `PN-S-${n}`, name: "Filler", email: shared }),
+			]);
+
 			// Reported, never refused — the edit form's policy.
-			expect(stats.membersCreated).toBe(1);
+			expect(stats.membersUpdated).toBe(1);
 			expect(stats.addressConflicts).toBe(1);
 		});
 
@@ -338,10 +355,10 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 			}
 		});
 
-		it("reports a linked subject's fill that locks out a hidden member who has not signed in", async () => {
-			// The linked Person keeps their own sign-in, but the victim in another
-			// club, whose roster row already carries the address, can now never
-			// bind: arm 3 of the bind rule sees a second Person carrying it.
+		it("never writes a linked subject's address, so a hidden member is not locked out (#907)", async () => {
+			// Before #907 this fill landed on the linked Person's ROSTER row and
+			// locked out the victim in another club. A bound Person's address is
+			// theirs now: the row is reported and nothing is written.
 			const shared = `linked-${n}@x.io`;
 			const victim = await person(victimClub.clubId, { rosterEmail: shared });
 			const userId = await account(`own-${n}@x.io`);
@@ -355,12 +372,12 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 			]);
 
 			expect(stats.membersUpdated).toBe(1);
-			expect(stats.addressConflicts).toBe(1);
-			// The lockout the report names is real, not hypothetical.
+			expect(stats.emailNotWritten).toBe(1);
+			expect(stats.addressConflicts).toBe(0);
 			const victimUser = await account(shared);
 			expect(
 				await bindVerifiedPerson({ personId: victim, userId: victimUser }),
-			).toBe(false);
+			).toBe(true);
 		});
 
 		it("reports no conflict when everyone carrying the address is already bound", async () => {
@@ -451,9 +468,13 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 				name: `Holder ${n}`,
 				rosterEmail: shared,
 			});
+			await person(attackerClub.clubId, {
+				name: `Shares ${n}`,
+				customerId: `PN-S-${n}`,
+			});
 			const text = csv([
 				{ customerId: `PN-V-${n}`, name: "Victim" },
-				{ name: `Shares ${n}`, email: shared },
+				{ customerId: `PN-S-${n}`, name: `Shares ${n}`, email: shared },
 				{ name: `Plain ${n}`, email: `plain-${n}@x.io` },
 			]);
 
@@ -465,7 +486,7 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 				action: "skip",
 				note: FOREIGN_SKIP_NOTE.customerId,
 			});
-			expect(preview.rows[1]?.note).toBe(ADDRESS_CONFLICT_NOTE);
+			expect(preview.rows[1]?.note).toContain(ADDRESS_CONFLICT_NOTE);
 
 			const { stats } = await commitMemberImport(attackerClub.clubId, text);
 			expect(stats.foreignSkipped).toBe(preview.summary.foreignSkipped);
@@ -1080,7 +1101,6 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 					clubId: attackerClub.clubId,
 					personId: firstPerson,
 					name,
-					email,
 				});
 			});
 
@@ -1120,16 +1140,11 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 			personIds.push(res.personId);
 
 			expect(res).not.toHaveProperty("rosterConflict");
-			const [m] = await testDb
-				.select({ email: members.email })
-				.from(members)
-				.where(
-					and(
-						eq(members.clubId, attackerClub.clubId),
-						eq(members.personId, res.personId),
-					),
-				);
-			expect(m?.email).toBe(`alone-${n}@x.io`);
+			const [p] = await testDb
+				.select({ email: people.email })
+				.from(people)
+				.where(eq(people.id, res.personId));
+			expect(p?.email).toBe(`alone-${n}@x.io`);
 		});
 	});
 });

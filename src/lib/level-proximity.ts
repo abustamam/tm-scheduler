@@ -51,7 +51,7 @@ export type LevelProgress = Pick<
  * and never has to know what a phone number is.
  */
 export interface LevelProximityContact {
-	/** The club's own `members.email`; a blank value is stored as null. */
+	/** The Person's `people.email` (#907); a blank value is returned as null. */
 	email: string | null;
 	/** `people.phone` (#906) normalized by `toE164` with the club's country code. */
 	phone: string | null;

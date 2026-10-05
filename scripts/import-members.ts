@@ -8,9 +8,9 @@
  * - Imports only PaidMember rows.
  * - Resolves each row to a Person by precedence: Customer ID → unambiguous
  *   non-blank email → new person (never on name). Then upserts the per-club
- *   membership. Person-level facts (name/phone/original join date/Customer ID)
- *   live on `people`; the membership carries name/email (fill-only) and
- *   joined_at.
+ *   membership. Person-level facts (name/phone/email/original join date/
+ *   Customer ID) live on `people` (#906, #907); the membership carries name
+ *   (fill-only) and joined_at.
  * Idempotent. Bun auto-loads .env.local for DATABASE_URL.
  */
 import { readFileSync } from "node:fs";

@@ -73,7 +73,7 @@ export async function loadRosterWithContact(
 				name: members.name,
 				preferredName: memberGoesBy,
 				phone: people.phone,
-				email: members.email,
+				email: people.email,
 			})
 			.from(members)
 			.innerJoin(people, eq(people.id, members.personId))
@@ -107,7 +107,7 @@ export async function loadHolderContacts(
 			.select({
 				id: members.id,
 				phone: people.phone,
-				email: members.email,
+				email: people.email,
 				preferredName: memberGoesBy,
 			})
 			.from(members)

@@ -124,7 +124,6 @@ describe.skipIf(!hasTestDb)("convert onto a lapsed membership: access", () => {
 				clubId: seed.clubId,
 				personId: returneePersonId,
 				name: "Returning Member",
-				email: returneeEmail,
 				status: "inactive",
 				clubRole,
 			})
@@ -335,7 +334,6 @@ describe.skipIf(!hasTestDb)("convert onto a lapsed membership: access", () => {
 				clubId: seed.clubId,
 				personId: orphanPersonId,
 				name: "Accountless Officer",
-				email: orphanEmail,
 				status: "inactive",
 				clubRole: "member",
 			})

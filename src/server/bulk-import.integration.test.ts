@@ -13,6 +13,7 @@ import { activityLog, members, officerTerms } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
+	memberEmail,
 	memberPhone,
 	type SeededClub,
 	seedClub,
@@ -56,7 +57,7 @@ describe.skipIf(!hasTestDb)("bulk roster import", () => {
 			.where(
 				and(eq(members.clubId, seed.clubId), eq(members.name, "Alice Apple")),
 			);
-		expect(alice.email).toBe("alice@club.org");
+		expect(await memberEmail(alice.id)).toBe("alice@club.org");
 		// Standardized to E.164 on write (#295/#397) — this club never set a
 		// country code, so the app default applies. The pasted `1` is NANP's
 		// long-distance prefix, not a 12th digit, so it becomes the `+1` rather
@@ -83,7 +84,7 @@ describe.skipIf(!hasTestDb)("bulk roster import", () => {
 			.where(
 				and(eq(members.clubId, seed.clubId), eq(members.name, "Bob Banana")),
 			);
-		expect(bob.email).toBe("bob@club.org");
+		expect(await memberEmail(bob.id)).toBe("bob@club.org");
 		// Empty cells stored as NULL, not "".
 		expect(await memberPhone(bob.id)).toBeNull();
 		// No office pasted → no officer term opened.

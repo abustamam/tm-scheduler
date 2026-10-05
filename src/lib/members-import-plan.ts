@@ -10,7 +10,8 @@
  *     (Customer ID → unambiguous email → new/ambiguous), plus the fill-only
  *     values to write.
  *   - {@link classifyMembership} — insert vs. fill-only update of the per-club
- *     membership row, and which contact fields the update actually fills.
+ *     membership row, and which fields the update actually fills. It carries
+ *     no contact at all: email (#907) and phone (#906) are Person facts.
  *
  * {@link planImport} runs those two decisions over a whole batch WITHOUT
  * touching the DB, producing the insert/update/skip diff the VPE confirms before
@@ -31,13 +32,11 @@ const isBlank = (s: string | null | undefined) => norm(s) === "";
 /**
  * An existing Person, as the resolver sees it.
  *
- * People are global and club-less, but `email` here is NOT simply
- * `people.email`: since #756 the loader (`loadPersonCandidates`) supplies the
- * person-level address falling back to THIS club's roster address, because
- * migration 0076 nulled the person-level one for everyone who has never signed
- * in. Both sides of the import — the committing writer and the dry-run preview —
- * must build this list through that same function, or the diff the VPE approves
- * stops matching what runs.
+ * People are global and club-less; `email` is `people.email`, the Person's one
+ * address (#907). Both sides of the import — the committing writer and the
+ * dry-run preview — must build this list through the same function
+ * (`loadPersonCandidates`), or the diff the VPE approves stops matching what
+ * runs.
  */
 export interface ExistingPersonRow {
 	id: string;
@@ -54,9 +53,8 @@ export interface ExistingPersonRow {
 	 *   should not have been narrowed.
 	 * - `other_club_only` — held by at least one other club and not by this one.
 	 *   A match onto such a Person is REFUSED ({@link PersonDecision} `foreign`):
-	 *   attaching it would give them a second club, `rosterPermitsBind` refuses
-	 *   a Person two clubs hold, and so the import would stop a stranger signing
-	 *   in from a club neither they nor their officers can see.
+	 *   attaching a stranger from a file is the attack shape, and a Person
+	 *   another club already holds is that club's to vouch for.
 	 * - `released_by_this_club` — no memberships anywhere, and the LATEST
 	 *   `member_remove` naming this Person (`detail.personId`) is in the
 	 *   importing club (#855). Matchable, which keeps remove-then-reimport
@@ -80,15 +78,17 @@ export interface ExistingPersonRow {
 	 *   (`onboarding-logic.ts`, `findBestPersonByEmail`) already attaches an
 	 *   existing Person by a global email lookup with no release check, so an
 	 *   onboarding racing the releasing club's import can still leave one
-	 *   Person held by two clubs. Any further path that attaches an EXISTING
+	 *   Person held by two clubs (since #907 that no longer blocks their sign-in,
+	 *   but it does end every club's authority over their address). Any further
+	 *   path that attaches an EXISTING
 	 *   Person no club holds (another importer, a convert arm, a restore)
 	 *   reopens the race the same way unless it is held to the single-club
 	 *   rule or serialised.
 	 * - `nobody` — no memberships anywhere and no such removal record. REFUSED
 	 *   like `other_club_only` (#855). An orphan keeps its person-scoped history
 	 *   (speeches, Pathways), and the roster row an import would mint is then the
-	 *   only membership that can vouch for a bind — carrying whatever address
-	 *   the importing club typed. Refusing writes nothing, so it cannot collide
+	 *   only membership that can vouch for a bind, with the importing club its
+	 *   sole holder and so free to set its address. Refusing writes nothing, so it cannot collide
 	 *   with `people_customer_id_unique` either.
 	 *
 	 *   Orphans with no removal record, and so refused by every club: Persons
@@ -104,8 +104,12 @@ export interface ExistingPersonRow {
 	 * membership in the importing club is inserted immediately after it.
 	 */
 	heldBy: "this_club" | "released_by_this_club" | "other_club_only" | "nobody";
-	/** `people.user_id` is set — bound to an account, so nothing a CSV writes
-	 *  to a roster row can change their sign-in. */
+	/** Some club OTHER than the importing one holds a membership of this
+	 *  Person. With `heldBy: "this_club"` it means the Person is shared, so the
+	 *  importing club may not change their address (#907, `soleHoldingClub`). */
+	heldElsewhere: boolean;
+	/** `people.user_id` is set — bound to an account, so the address is theirs
+	 *  and nothing a CSV carries may change it (#907). */
 	linked: boolean;
 }
 
@@ -114,15 +118,14 @@ export interface ExistingMembershipRow {
 	id: string;
 	personId: string;
 	name: string;
-	email: string | null;
 }
 
 /**
  * Person-row column values written on INSERT.
  *
- * `email` is on this type because Person CREATION still carries it — a brand-new
- * row is nobody's identity yet, and `people.email` remains ADR-0008's fallback
- * dedupe key. A MATCH does not: see {@link MatchedPersonValues}.
+ * `email` is on this type because Person CREATION carries it — a brand-new row
+ * is nobody's identity yet. A MATCH writes it separately, if at all: see
+ * {@link MatchedPersonValues} and {@link EmailDecision}.
  */
 export interface PersonValues {
 	customerId: string | null;
@@ -133,19 +136,33 @@ export interface PersonValues {
 }
 
 /**
- * What a MATCH writes to the Person row — everything `PersonValues` carries
- * except `email` (#756).
+ * What a MATCH writes to the Person row in its ordinary SET — everything
+ * `PersonValues` carries except `email`.
  *
- * The omission is the type doing a job a comment was doing badly. A CSV is a
- * file an officer uploaded, so it may not re-key an existing human's identity;
- * the committing writer therefore stopped writing the column on a match. It
- * expressed that by destructuring the field away, which left the PLANNER still
- * computing it and still mirroring it into its in-memory candidate list — so the
- * preview and the commit disagreed inside a single batch, and a row that matched
- * in the diff the VPE approved minted a duplicate Person and a duplicate roster
- * row on commit. Narrowing the type makes that shape unrepresentable.
+ * The omission is the type doing a job a comment was doing badly (#756). The
+ * address is written, when it is written at all, by its own guarded statement
+ * ({@link EmailDecision}), so the ordinary SET can never carry it and the
+ * preview cannot mirror an address write the commit does not perform.
  */
 export type MatchedPersonValues = Omit<PersonValues, "email">;
+
+/**
+ * What a MATCH does with the row's address (#907, ADR-0029).
+ *
+ * - `fill` — the Person has no address, nobody has signed in as them, and the
+ *   importing club is their only holder: the row's address fills it. The writer
+ *   repeats all three conditions in the UPDATE's own WHERE.
+ * - `refused` — the row carries a DIFFERENT address, and the Person is bound
+ *   (`bound`) or shared with another club (`multi_club`). Not written; the row
+ *   is reported.
+ * - `none` — nothing to do: no address in the row, the same address, or a
+ *   different one the fill-only rule keeps out (the club may correct it on the
+ *   member page).
+ */
+export type EmailDecision =
+	| { kind: "fill"; to: string }
+	| { kind: "refused"; reason: "bound" | "multi_club" }
+	| { kind: "none" };
 
 /** The `heldBy` values a CSV row may match onto; every other one is `foreign`. */
 const ATTACHABLE: ReadonlySet<ExistingPersonRow["heldBy"]> = new Set([
@@ -160,8 +177,18 @@ const ATTACHABLE: ReadonlySet<ExistingPersonRow["heldBy"]> = new Set([
  * shared by 2+ distinct people this batch, so it is deliberately NOT merged).
  */
 export type PersonDecision =
-	| { kind: "customerId"; id: string; set: MatchedPersonValues }
-	| { kind: "email"; id: string; set: MatchedPersonValues }
+	| {
+			kind: "customerId";
+			id: string;
+			set: MatchedPersonValues;
+			email: EmailDecision;
+	  }
+	| {
+			kind: "email";
+			id: string;
+			set: MatchedPersonValues;
+			email: EmailDecision;
+	  }
 	| { kind: "insert"; values: PersonValues }
 	| { kind: "ambiguous"; values: PersonValues }
 	/**
@@ -181,9 +208,8 @@ export type PersonDecision =
  * a shared-email row is forced ambiguous up front, otherwise ADR-0008
  * precedence (Customer ID → unambiguous email → insert) applies. On a match the
  * `set` is fill-only for name/phone, always adopts a Customer ID and refreshes
- * the original join date — and carries NO `email` at all (#756): a CSV may fill
- * this club's roster row, never re-key an existing human's identity. An INSERT
- * still carries it; see {@link MatchedPersonValues}.
+ * the original join date. The address is its own decision ({@link EmailDecision},
+ * #907): fill-only, and only while the importing club may write it at all.
  *
  * A match onto a Person only ANOTHER club holds is `foreign` instead (#759):
  * the row writes nothing. So is one onto a Person NO club holds, unless the
@@ -233,18 +259,17 @@ export function resolvePersonDecision(
 		if (!ATTACHABLE.has(current.heldBy)) {
 			return { kind: "foreign", reason: match.kind };
 		}
-		// No `email` — a match does not re-key an existing Person's identity
-		// (#756). The address still reaches the club's own roster row through
-		// `classifyMembership` below.
+		// No `email` in the SET — see `EmailDecision`.
 		const set: MatchedPersonValues = {
 			customerId: current.customerId ?? row.customerId,
 			name: fillOnly(current.name, row.name) ?? current.name,
 			phone: fillOnly(current.phone, row.phone),
 			originalJoinDate: row.originalJoinDate,
 		};
+		const email = emailDecision(current, row.email);
 		return match.kind === "customerId"
-			? { kind: "customerId", id: current.id, set }
-			: { kind: "email", id: current.id, set };
+			? { kind: "customerId", id: current.id, set, email }
+			: { kind: "email", id: current.id, set, email };
 	}
 
 	return match.kind === "ambiguous"
@@ -252,7 +277,26 @@ export function resolvePersonDecision(
 		: { kind: "insert", values: personValues(row) };
 }
 
-/** A Person carrying an address on a roster row, as the conflict check sees
+/**
+ * The address half of a match (#907). Mirrors the writers' SQL predicate: a
+ * Person nobody has bound, whom no club but the importing one holds. A Person
+ * this club last RELEASED counts as solely held — the writer fills only after
+ * the membership row is back, so the statement's own predicate agrees.
+ */
+export function emailDecision(
+	current: Pick<ExistingPersonRow, "email" | "linked" | "heldElsewhere">,
+	address: string | null,
+): EmailDecision {
+	const next = normalizeAddress(address);
+	if (!next || !address) return { kind: "none" };
+	if (normalizeAddress(current.email) === next) return { kind: "none" };
+	if (current.linked) return { kind: "refused", reason: "bound" };
+	if (current.heldElsewhere) return { kind: "refused", reason: "multi_club" };
+	if (isBlank(current.email)) return { kind: "fill", to: address.trim() };
+	return { kind: "none" };
+}
+
+/** A Person carrying an address, as the conflict check sees
  *  them: whether they are bound to an account decides whose sign-in a shared
  *  address can still break. */
 export interface AddressHolder {
@@ -260,15 +304,14 @@ export interface AddressHolder {
 	linked: boolean;
 }
 
-/** Normalised address → the distinct Persons whose roster rows carry it. */
+/** Normalised address → the distinct Persons who carry it. */
 export type AddressHolders = ReadonlyMap<string, readonly AddressHolder[]>;
 
 /**
- * Would writing `address` onto this row's roster entry leave SOMEONE unable to
- * sign in (#759)? Arm 3 of the bind rule refuses a Person when any OTHER
- * Person's roster row carries their address, so one shared address can lock
- * out both people. Reported, never refused, like the member edit form:
- * `members.email` is the club's own column.
+ * Would writing `address` onto this row's Person leave SOMEONE unable to sign
+ * in (#759)? Arm 3 of the bind rule refuses a Person when any OTHER Person
+ * carries their address, so one shared address can lock out both people.
+ * Reported, never refused, like the member edit form.
  *
  * `holders` is `loadAddressHolders`' snapshot. Both sides of the import call
  * this one function, which keeps the preview and the commit agreeing.
@@ -345,14 +388,25 @@ export function normalizeAddress(
 }
 
 /**
- * The address a membership decision newly WRITES, or null: a fresh roster
- * row's address, or an empty one the fill-only update fills. An address the
- * update merely preserves is not new, and is not checked.
+ * The address a Person decision newly WRITES, or null: a fresh Person's
+ * address, or an empty one a match fills. An address a match merely preserves
+ * (or is refused) is not new, and is not checked.
  */
-export function writtenAddress(md: MembershipDecision): string | null {
-	if (md.kind === "insert") return md.values.email;
-	return md.fills.find((f) => f.field === "email")?.to ?? null;
+export function writtenAddress(
+	pd: Exclude<PersonDecision, { kind: "foreign" }>,
+): string | null {
+	if (pd.kind === "insert" || pd.kind === "ambiguous") return pd.values.email;
+	return pd.email.kind === "fill" ? pd.email.to : null;
 }
+
+/** Added to a row's note when its address is NOT written to the Person
+ *  (#907): they have signed in, or another club holds them too. */
+export const EMAIL_REFUSED_NOTE: Record<"bound" | "multi_club", string> = {
+	bound:
+		"Email not changed — this member has signed in, so their address is theirs",
+	multi_club:
+		"Email not changed — this member is also on another club's roster. Contact GavelUp support to change it",
+};
 
 function personValues(row: MappedMember): PersonValues {
 	return {
@@ -365,10 +419,9 @@ function personValues(row: MappedMember): PersonValues {
 }
 
 /**
- * A contact field a fill-only update populates (was empty, now filled). `name`
- * and `email` are the membership's; `phone` is the PERSON's (#906) — a phone
- * number is a Person fact, so the only phone an import fills is `people.phone`,
- * through {@link resolvePersonDecision}'s fill-only `set`.
+ * A field a fill-only update populates (was empty, now filled). `name` is the
+ * membership's; `email` (#907) and `phone` (#906) are the PERSON's, filled
+ * through {@link resolvePersonDecision}.
  */
 export interface FieldFill {
 	field: "name" | "email" | "phone";
@@ -376,16 +429,15 @@ export interface FieldFill {
 }
 
 /** Membership-row column values written on insert / fill-only update. No
- *  phone: it lives on `people` only (#906). */
+ *  contact: phone (#906) and email (#907) live on `people` only. */
 export interface MembershipValues {
 	name: string;
-	email: string | null;
 	joinedAt: Date | null;
 }
 
 /**
  * Insert a fresh membership, or fill-only update the existing one. `fills` lists
- * the contact fields the update actually populates (existing was empty) so the
+ * the fields the update actually populates (existing was empty) so the
  * preview can say exactly what changes; `joinedAt` is always (re)written and is
  * reported separately.
  */
@@ -396,14 +448,13 @@ export type MembershipDecision =
 /** Classify the per-club membership for a row (insert vs. fill-only update). */
 export function classifyMembership(
 	row: MappedMember,
-	existing: Pick<ExistingMembershipRow, "name" | "email"> | undefined,
+	existing: Pick<ExistingMembershipRow, "name"> | undefined,
 ): MembershipDecision {
 	if (!existing) {
 		return {
 			kind: "insert",
 			values: {
 				name: row.name,
-				email: row.email,
 				joinedAt: row.joinedAt,
 			},
 		};
@@ -413,15 +464,11 @@ export function classifyMembership(
 	if (isBlank(existing.name) && !isBlank(row.name)) {
 		fills.push({ field: "name", to: row.name });
 	}
-	if (isBlank(existing.email) && !isBlank(row.email) && row.email) {
-		fills.push({ field: "email", to: row.email });
-	}
 
 	return {
 		kind: "update",
 		set: {
 			name: fillOnly(existing.name, row.name) ?? existing.name,
-			email: fillOnly(existing.email, row.email),
 			joinedAt: row.joinedAt,
 		},
 		fills,
@@ -452,9 +499,12 @@ export interface PlanSummary {
 	 *  (#759), or one no club holds that this club did not last remove (#855).
 	 *  Its own count, never folded into `toSkip`. */
 	foreignSkipped: number;
-	/** Rows imported whose written address another Person's roster row already
-	 *  carries, in any club — neither can then sign in (#759). */
+	/** Rows imported whose written address another Person already carries, in
+	 *  any club — neither can then sign in (#759). */
 	addressConflicts: number;
+	/** Rows whose address was NOT written to the Person they matched, because
+	 *  that Person has signed in or another club holds them too (#907). */
+	emailNotWritten: number;
 	/** New Person records created (a subset drives `toInsert`). */
 	peopleCreated: number;
 	/** Rows matched to an existing Person (Customer ID or email). */
@@ -500,11 +550,20 @@ export function foreignSkipSummary(count: number): string {
 
 /** Added to a row's note when the address it writes is shared (#759). */
 export const ADDRESS_CONFLICT_NOTE =
-	"Another member already has this email on their roster entry, so neither can sign in until each has their own";
+	"Another member already has this email, so neither can sign in until each has their own";
 
 function withConflict(note: string | null, conflict: boolean): string | null {
 	if (!conflict) return note;
 	return note ? `${note} · ${ADDRESS_CONFLICT_NOTE}` : ADDRESS_CONFLICT_NOTE;
+}
+
+function withEmailRefusal(
+	note: string | null,
+	email: EmailDecision | null,
+): string | null {
+	if (email?.kind !== "refused") return note;
+	const refusal = EMAIL_REFUSED_NOTE[email.reason];
+	return note ? `${note} · ${refusal}` : refusal;
 }
 
 function updateNote(fills: FieldFill[], joinedAt: Date | null): string {
@@ -541,6 +600,7 @@ export function planImport(
 		toSkip: 0,
 		foreignSkipped: 0,
 		addressConflicts: 0,
+		emailNotWritten: 0,
 		peopleCreated: 0,
 		peopleMatched: 0,
 		ambiguous: 0,
@@ -583,27 +643,31 @@ export function planImport(
 		let personId: string;
 		// The Person the address check is about, or null for a row creating one.
 		let subject: AddressHolder | null = null;
-		// The Person phone this row fills, for the preview note (#906). The phone
-		// is the Person's now, so the membership arm no longer reports it; the
-		// Person's own fill-only write is what the note has to describe — on
-		// EITHER membership arm, since a row can fill an existing Person's phone
-		// while inserting their membership in this club.
-		let personPhoneFill: FieldFill | null = null;
+		// The Person fields this row fills, for the preview note (#906, #907).
+		// Phone and email are the Person's now, so the membership arm no longer
+		// reports them; the Person's own fill-only writes are what the note has
+		// to describe — on EITHER membership arm, since a row can fill an
+		// existing Person while inserting their membership in this club.
+		const personFills: FieldFill[] = [];
+		let emailOutcome: EmailDecision | null = null;
 		if (pd.kind === "customerId" || pd.kind === "email") {
 			const current = people.find((p) => p.id === pd.id);
 			if (!current) continue; // unreachable
 			personId = current.id;
 			subject = { id: current.id, linked: current.linked };
 			summary.peopleMatched++;
-			// `current.email` is deliberately NOT updated — the commit does not write
-			// it on a match either, and mirroring a write that does not happen is
-			// what made the preview promise a diff the commit would not perform.
 			current.customerId = pd.set.customerId;
 			current.name = pd.set.name;
 			// Derived from the decision itself, read before the mirror below
 			// overwrites `current` — never a second copy of the fill-only rule.
+			if (pd.email.kind === "fill") {
+				personFills.push({ field: "email", to: pd.email.to });
+				current.email = pd.email.to;
+			}
+			if (pd.email.kind === "refused") summary.emailNotWritten++;
+			emailOutcome = pd.email;
 			if (pd.set.phone !== current.phone && pd.set.phone) {
-				personPhoneFill = { field: "phone", to: pd.set.phone };
+				personFills.push({ field: "phone", to: pd.set.phone });
 			}
 			current.phone = pd.set.phone;
 		} else {
@@ -617,6 +681,7 @@ export function planImport(
 				name: pd.values.name,
 				phone: pd.values.phone,
 				heldBy: "this_club",
+				heldElsewhere: false,
 				linked: false,
 			});
 		}
@@ -628,7 +693,7 @@ export function planImport(
 		const conflict = checkWrittenAddress(
 			addressHolders,
 			writtenInFile,
-			writtenAddress(md),
+			writtenAddress(pd),
 			subject,
 			personId,
 			pd.kind === "ambiguous",
@@ -642,19 +707,18 @@ export function planImport(
 				phone: row.phone,
 				joinedAt: isoOrNull(row.joinedAt),
 				action: "update",
-				note: withConflict(
-					updateNote(
-						personPhoneFill ? [...md.fills, personPhoneFill] : md.fills,
-						row.joinedAt,
+				note: withEmailRefusal(
+					withConflict(
+						updateNote([...md.fills, ...personFills], row.joinedAt),
+						conflict,
 					),
-					conflict,
+					emailOutcome,
 				),
 			});
 			// Mirror the fill-only write so a later same-person row sees it.
 			membershipByPerson.set(personId, {
 				...existingMember,
 				name: md.set.name,
-				email: md.set.email,
 			});
 		} else if (md.kind === "insert") {
 			summary.toInsert++;
@@ -664,20 +728,22 @@ export function planImport(
 				phone: row.phone,
 				joinedAt: isoOrNull(row.joinedAt),
 				action: "insert",
-				note: withConflict(
-					pd.kind === "ambiguous"
-						? "New — shares an email with another member; added separately"
-						: personPhoneFill
-							? updateNote([personPhoneFill], null)
-							: null,
-					conflict,
+				note: withEmailRefusal(
+					withConflict(
+						pd.kind === "ambiguous"
+							? "New — shares an email with another member; added separately"
+							: personFills.length > 0
+								? updateNote(personFills, null)
+								: null,
+						conflict,
+					),
+					emailOutcome,
 				),
 			});
 			membershipByPerson.set(personId, {
 				id: `__new_member_${personId}`,
 				personId,
 				name: md.values.name,
-				email: md.values.email,
 			});
 		}
 	}

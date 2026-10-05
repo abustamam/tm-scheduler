@@ -346,14 +346,10 @@ describe("member profile — edit dialog phone prefill", () => {
 });
 
 /**
- * A roster save either works or throws — it can no longer HALF-succeed (#756).
- *
- * This screen used to branch on `applyMemberEdit`'s three-state
- * `personEmailSynced` and warn when the member's sign-in address could not be
- * moved, because the form wrote `people.email` under a guard that could refuse
- * and no other surface a club admin can reach shows that column. The form writes
- * `members.email` and nothing else now, so there is no refusal to surface and no
- * three-state falsiness trap to keep pinning apart.
+ * A roster save's feedback. Since #907 the email is the Person's, so the save
+ * can refuse JUST the address (another club holds them too, or they signed in
+ * since the page loaded) while the rest of the edit lands — and the officer has
+ * to be told which, in words they can act on.
  */
 describe("member profile — edit dialog save feedback", () => {
 	async function saveEdit() {
@@ -398,14 +394,13 @@ describe("member profile — edit dialog save feedback", () => {
 		expect(toast.success).not.toHaveBeenCalled();
 	});
 
-	it("names the obstacle rather than a generic refusal", async () => {
-		// Three obstacles, three remedies — and one of them (`multiple_clubs`) is
-		// not something a club officer can fix at all. A single catch-all message
-		// sent that group to an officer with nothing to try, which is the copy bug
-		// review found in the `/claim` page.
+	it("explains a refused email for a member another club also holds (#907)", async () => {
+		// Not something a club officer can fix at all, so the message has to
+		// say who can.
 		vi.mocked(editMember).mockResolvedValue({
 			ok: true,
-			rosterConflict: "multiple_clubs",
+			rosterConflict: null,
+			emailRefused: "multi_club",
 			// biome-ignore lint/suspicious/noExplicitAny: server-fn return stub
 		} as any);
 		await renderRoute();
@@ -413,9 +408,10 @@ describe("member profile — edit dialog save feedback", () => {
 		await saveEdit();
 
 		await vi.waitFor(() => expect(toast.warning).toHaveBeenCalled());
-		expect(String(vi.mocked(toast.warning).mock.calls[0]?.[0])).toMatch(
-			/more than one club/i,
+		expect(String(vi.mocked(toast.warning).mock.calls[0]?.[0])).toBe(
+			"Ada Member is also on another club's roster, so their email can't be changed here. Contact GavelUp support.",
 		);
+		expect(toast.success).not.toHaveBeenCalled();
 	});
 
 	it("reports the error and keeps the dialog open when the save throws", async () => {
@@ -429,6 +425,61 @@ describe("member profile — edit dialog save feedback", () => {
 			/Member not found/,
 		);
 		expect(toast.success).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * #907: once a member has signed in, their address is theirs. The edit dialog
+ * shows it read-only with the reason, and a save does not send it at all.
+ */
+describe("member profile — edit dialog email (#907)", () => {
+	async function openEditDialog(): Promise<HTMLInputElement> {
+		fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+		return (await screen.findByLabelText("Email")) as HTMLInputElement;
+	}
+
+	it("renders a BOUND member's email read-only, with the explanation", async () => {
+		await renderRoute({ userId: "user-1" });
+
+		const input = await openEditDialog();
+
+		expect(input.readOnly).toBe(true);
+		expect(input.value).toBe("ada@example.com");
+		expect(
+			screen.getByText(
+				"This is Ada Member's sign-in address. Only they can change it.",
+			),
+		).toBeTruthy();
+	});
+
+	it("leaves an UNBOUND member's email editable", async () => {
+		await renderRoute({ userId: null });
+
+		const input = await openEditDialog();
+
+		expect(input.readOnly).toBe(false);
+		expect(
+			screen.queryByText(
+				"This is Ada Member's sign-in address. Only they can change it.",
+			),
+		).toBeNull();
+	});
+
+	it("does not send a bound member's email on save", async () => {
+		vi.mocked(editMember).mockResolvedValue({
+			ok: true,
+			rosterConflict: null,
+			emailRefused: null,
+			// biome-ignore lint/suspicious/noExplicitAny: server-fn return stub
+		} as any);
+		await renderRoute({ userId: "user-1" });
+		await openEditDialog();
+		fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+		await vi.waitFor(() => expect(editMember).toHaveBeenCalled());
+		const sent = vi.mocked(editMember).mock.calls[0]?.[0] as {
+			data: Record<string, unknown>;
+		};
+		expect(Object.hasOwn(sent.data, "email")).toBe(false);
 	});
 });
 

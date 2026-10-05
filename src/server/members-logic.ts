@@ -18,7 +18,14 @@ import {
 } from "#/lib/officers";
 import { toStoredPhone } from "#/lib/phone";
 import { buildImportPreview } from "#/lib/roster-import";
-import { type RosterObstacle, rosterConflictFor } from "./account-link-logic";
+import {
+	type EmailWriteRefusal,
+	emailWriteRefusalFor,
+	normalizeEmail,
+	type RosterObstacle,
+	rosterConflictFor,
+	soleHoldingClub,
+} from "./account-link-logic";
 import { logActivity } from "./activity";
 import { isReadableClub } from "./club-readable-logic";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
@@ -163,15 +170,22 @@ export const editSchema = z.object({
 	// What this member is actually called, when it isn't the first token of
 	// `name` (#486). Trimmed-empty is stored as NULL, not "" — a cleared input
 	// submits "" and `greetingName` must see "nobody told us", not a blank.
-	// OMITTING it clears it, same as `email` below and UNLIKE `phone` and
-	// `officerPositions` (whose `undefined` means "leave untouched").
+	// OMITTING it clears it, UNLIKE `email`, `phone` and `officerPositions`
+	// (whose `undefined` means "leave untouched").
 	// Capped because THIS field really can land on a Person other clubs share: its
-	// seed-up is guarded only on `people.preferred_name IS NULL`. `email` needs no
-	// such cap for that reason — since #756 it reaches `members.email` and nothing
-	// else. 80 was the cap the deleted public self-add used for a name
-	// (#326/#630); it stays the ceiling for a person-level name here.
+	// seed-up is guarded only on `people.preferred_name IS NULL`. 80 was the cap
+	// the deleted public self-add used for a name (#326/#630); it stays the
+	// ceiling for a person-level name here.
 	preferredName: z.string().trim().max(80).nullable().optional(),
-	email: z.string().trim().email().nullable().optional(),
+	// The PERSON's address (#907, ADR-0029). Omitted means leave it alone; `null`
+	// (or a blank) clears it. Written only while nobody has signed in as this
+	// Person AND this club is their sole holder — otherwise the rest of the
+	// edit saves and the response names the refusal (`emailRefused`). A blank
+	// is turned into `null` BEFORE `.email()`, which would otherwise reject it.
+	email: z.preprocess(
+		(v) => (typeof v === "string" && v.trim() === "" ? null : v),
+		z.string().trim().email().nullable().optional(),
+	),
 	// The PERSON's phone (#906), shared by every club that holds them. Omitted
 	// (`undefined`) means LEAVE IT ALONE — no write, no log entry — so a
 	// name-only save from a stale page cannot revert a number another club has
@@ -194,10 +208,15 @@ type EditInput = z.infer<typeof editSchema> & RosterActor;
  * Person fact, so an edit in any club that holds the Person changes it in every
  * club. It is not a credential, so there is no cross-club authority question.
  *
- * **The email written here is `members.email` and only that** — the club's own
- * contact record (#756). It used to also reconcile `people.email`, the identity
- * key, under a blast-radius guard; the club no longer owns that column at all,
- * so there is nothing here to refuse.
+ * **The email written here is `people.email`** (#907, ADR-0029) — the Person's
+ * one address, which is also what binds a sign-in. An officer may correct it
+ * (a typo) only while nobody has signed in as this Person AND this club is the
+ * Person's sole holder; both predicates sit in the UPDATE's own WHERE, so a
+ * bind landing between the form's load and this save makes the write a no-op.
+ * A refused email does not refuse the edit: the other fields still save, and
+ * `emailRefused` says why (`bound` | `multi_club`). An input that normalises to
+ * the address already on file is not part of the write at all — never refused,
+ * never logged — so a bound member's profile saves cleanly.
  *
  * @returns `rosterConflict`, the obstacle that would now stop this member
  * binding an account, or null. **Reported, not refused** — and it is not only
@@ -225,27 +244,33 @@ export async function applyMemberEdit(input: EditInput) {
 		// AND seed "   " onto people.preferred_name, permanently defeating the
 		// isNull guard below so the real name could never seed up.
 		preferredName: input.preferredName?.trim() || null,
-		// Trimmed HERE for the same reason as `preferredName` above: the zod schema
-		// trims, but `applyMemberEdit` is exported and reached directly with the
-		// validator bypassed. Both identity readers normalise what they read, so a
-		// padded value no longer costs a member their sign-in — but it still reaches
-		// every screen that renders the roster, and the invite is sent to it raw.
-		email: input.email?.trim() || null,
 	};
+	// Trimmed HERE for the same reason as `preferredName` above: the zod schema
+	// trims, but `applyMemberEdit` is exported and reached directly with the
+	// validator bypassed. `undefined` = leave the Person's address alone.
+	const email =
+		input.email === undefined ? undefined : input.email?.trim() || null;
 	// Person-level, written to `people` below rather than to the membership —
 	// and only when the caller sent one (`undefined` = leave it alone).
 	const phone =
 		input.phone === undefined ? undefined : toStoredPhone(input.phone, cc);
 	// Current offices before the edit — derived from open terms, for the log.
 	const beforeOffices = await currentOfficersFor(input.memberId);
+	let emailChange: { before: string | null; after: string | null } | null =
+		null;
+	let emailRefused: EmailWriteRefusal | null = null;
 	await db.transaction(async (tx) => {
 		// LOCK ORDER: the Person, THEN the membership. Guest conversion
 		// (`applyConvertGuestToMember`) writes the Person (its phone fill and its
 		// goes-by seed) and then takes the membership `FOR UPDATE`; taking them
 		// here in the opposite order deadlocks the two (#906 review).
 		// `edit-convert-lock-order.integration.test.ts` drives both orders.
+		//
+		// The Person lock is also what the email write below relies on (#907): a
+		// bind that commits first is seen by its WHERE, one that arrives later
+		// waits for this transaction.
 		const [currentPerson] = await tx
-			.select({ phone: people.phone })
+			.select({ phone: people.phone, email: people.email })
 			.from(people)
 			.where(eq(people.id, current.personId))
 			.for("update");
@@ -258,7 +283,36 @@ export async function applyMemberEdit(input: EditInput) {
 				.set({ phone })
 				.where(eq(people.id, current.personId));
 		}
-		// The "goes by" name below is the only person-level write this form makes
+		// The email (#907): written whenever the stored STRING differs, so an
+		// officer can repair a stored address carrying a NBSP or U+FEFF — JS
+		// `.trim()` hides those and SQL `[[:space:]]` does not, so comparing
+		// normalised values reported success while the bind kept failing. A
+		// refusal is only REPORTED when the address actually differs
+		// (normalised): a case- or whitespace-only difference on a bound or
+		// shared Person is the same address, never refused and never logged.
+		if (email !== undefined && email !== currentPerson.email) {
+			const written = await tx
+				.update(people)
+				.set({ email })
+				.where(
+					and(
+						eq(people.id, current.personId),
+						isNull(people.userId),
+						soleHoldingClub(input.clubId),
+					),
+				)
+				.returning({ id: people.id });
+			if (written.length > 0) {
+				emailChange = { before: currentPerson.email, after: email };
+			} else if (
+				normalizeEmail(email) !== normalizeEmail(currentPerson.email)
+			) {
+				emailRefused =
+					(await emailWriteRefusalFor(current.personId, input.clubId, tx)) ??
+					"multi_club";
+			}
+		}
+		// The "goes by" name below is the only other person-level write this form makes
 		// besides the phone above (which is a Person fact outright, #906), and it
 		// is scoped by VALUE rather than by blast radius. That is
 		// deliberate: `preferred_name` is a display fallback, so the worst a stale
@@ -321,13 +375,15 @@ export async function applyMemberEdit(input: EditInput) {
 				before: {
 					name: current.name,
 					preferredName: current.preferredName,
-					email: current.email,
+					// Logged only when the edit wrote it.
+					...(emailChange ? { email: emailChange.before } : {}),
 					// Logged only when the edit wrote it.
 					...(phone !== undefined ? { phone: currentPerson.phone } : {}),
 					officerPositions: beforeOffices,
 				},
 				after: {
 					...next,
+					...(emailChange ? { email: emailChange.after } : {}),
 					...(phone !== undefined ? { phone } : {}),
 					officerPositions: afterOffices,
 				},
@@ -335,39 +391,33 @@ export async function applyMemberEdit(input: EditInput) {
 		});
 	});
 
-	// Did this edit leave the member unable to sign in? Reported, never refused —
-	// `members.email` is the club's own column and an officer may set it to
-	// whatever the club needs.
+	// Did this edit leave the member unable to sign in? Reported, never refused.
 	//
-	// The case that makes this necessary is not the member being edited: typing an
-	// address ANOTHER active member already carries makes the roster ambiguous, and
+	// The case that makes this necessary is not only the member being edited:
+	// typing an address ANOTHER Person already carries makes it ambiguous, and
 	// the bind then refuses BOTH of them. So a save on Alice's row can silently
-	// revoke Bob's sign-in — a member the admin was not editing and cannot see from
-	// this screen. The invite button and the bulk dialog both ask this question;
-	// the edit form is where the address is actually typed.
+	// revoke Bob's sign-in — a member the admin was not editing and cannot see
+	// from this screen. The invite button and the bulk dialog both ask this
+	// question; the edit form is where the address is actually typed.
 	//
-	// Skipped for a Person who already holds an account: their sign-in address is
-	// `people.email`, which this form cannot touch, so nothing here can break it.
-	const rosterConflict = current.personId
-		? await personEmailObstacle(current.personId, next.email)
-		: null;
-	return { ok: true as const, rosterConflict };
+	// Skipped for a Person who already holds an account: nothing this form can
+	// write affects their sign-in.
+	const rosterConflict = await personEmailObstacle(current.personId);
+	return { ok: true as const, rosterConflict, emailRefused };
 }
 
 /** The bind obstacle for a member's Person, or null — including for an already
- *  linked Person (nothing this form writes can affect their sign-in). */
+ *  linked Person or one with no address. */
 async function personEmailObstacle(
 	personId: string,
-	email: string | null,
 ): Promise<RosterObstacle | null> {
-	if (!email) return null;
 	const [person] = await db
-		.select({ userId: people.userId })
+		.select({ userId: people.userId, email: people.email })
 		.from(people)
 		.where(eq(people.id, personId))
 		.limit(1);
-	if (person?.userId) return null;
-	return rosterConflictFor(personId, email);
+	if (!person || person.userId || !normalizeEmail(person.email)) return null;
+	return rosterConflictFor(personId, person.email ?? "");
 }
 
 export const setStatusSchema = z.object({
@@ -733,8 +783,9 @@ export async function applyBulkImport(
 	input: BulkImportInput,
 ): Promise<BulkImportResult> {
 	const existing = await db
-		.select({ name: members.name, email: members.email })
+		.select({ name: members.name, email: people.email })
 		.from(members)
+		.innerJoin(people, eq(people.id, members.personId))
 		.where(eq(members.clubId, input.clubId));
 
 	const preview = buildImportPreview(input.rows, existing);
@@ -774,7 +825,6 @@ export async function applyBulkImport(
 					clubId: input.clubId,
 					personId: person.id,
 					name,
-					email,
 					clubRole: "member",
 					// Leave the column to its DEFAULT now() only when asked; see
 					// `startOrientation` on the schema above.

@@ -143,14 +143,8 @@ export async function listClubsForConsole(): Promise<ConsoleClubList> {
 		.select({
 			clubId: members.clubId,
 			name: people.name,
-			// The person-level address falling back to this club's roster row
-			// (#756). Migration 0076 nulled `people.email` for everyone who has
-			// never signed in, which is every admin this console exists to chase —
-			// so reading the person column alone showed a blank address for exactly
-			// the rows the operator is here to act on, next to a repair button that
-			// WRITES the identity column. That invites typing an address back over
-			// one the roster already holds correctly.
-			email: sql<string | null>`coalesce(${people.email}, ${members.email})`,
+			// The Person's one address (#907).
+			email: people.email,
 			userId: people.userId,
 		})
 		.from(members)
@@ -268,10 +262,8 @@ async function firstAdminOf(clubId: string) {
 			personId: people.id,
 			memberId: members.id,
 			name: people.name,
-			// Same coalesce as `listClubsForConsole`, for the same reason: this is
-			// the value the repair form prefills, so reading the column 0076 clears
-			// would have the operator retype an address the roster already holds.
-			email: sql<string | null>`coalesce(${people.email}, ${members.email})`,
+			// The Person's one address (#907) — what the repair form prefills.
+			email: people.email,
 			userId: people.userId,
 		})
 		.from(members)
@@ -437,7 +429,6 @@ export async function createClubWithAdmin(
 				clubId: club.id,
 				personId,
 				name: input.adminName,
-				email: input.adminEmail,
 				clubRole: "admin",
 				status: "active",
 				// The founding admin is setting the club up, not a new member
@@ -494,15 +485,11 @@ export type UpdateAdminEmailInput = z.infer<typeof updateAdminEmailSchema>;
  * the superadmin gate. Throws when the club or its admin can't be found, or the
  * admin is already linked.
  *
- * **Writes BOTH columns, and the membership one is the load-bearing half**
- * (#756). The sign-in auto-link matches `members.email`; `people.email` is the
- * verified identity address, and this is the one waiver to "only a bind writes
- * it" — the bootstrap case, where a club exists, nobody has signed in, and there
- * is therefore no verified address in existence to fall back on. Writing only
- * the Person row would leave this console reporting success while the admin
- * stayed locked out, which is precisely the silent half-failure the roster form
- * shipped and #756 removed. `person-email-writers.guard.test.ts` records the
- * waiver.
+ * Writes `people.email`, the Person's one address and the sign-in match key
+ * (#907). A superadmin action, so it keeps its own waiver in
+ * `person-email-writers.guard.test.ts` with `isNull(people.userId)` only — it
+ * is deliberately NOT held to `soleHoldingClub`, because the operator is the
+ * one person who may repair a Person several clubs share.
  */
 export async function updateUnclaimedAdminEmail(
 	input: UpdateAdminEmailInput,
@@ -520,39 +507,26 @@ export async function updateUnclaimedAdminEmail(
 		);
 	}
 
-	await db.transaction(async (tx) => {
-		// LOCK ORDER: the Person, THEN the membership (#906) — the order
-		// `applyMemberEdit`, guest conversion and `mergePeople` take them in.
-		// Writing the membership first deadlocked against an edit of this admin.
-		// Still all-or-nothing: a Person that no longer matches throws before the
-		// membership is touched, and the throw rolls the transaction back.
-		//
-		// `isNull(people.userId)` in the STATEMENT, not only in the check above.
-		// The `admin.userId` read happens outside this transaction, so under READ
-		// COMMITTED a sign-in that binds the Person in between would leave a LINKED
-		// Person carrying a superadmin-typed address in place of the one a magic
-		// link proved — breaking the invariant the whole release rests on, from the
-		// one writer whose waiver claims it is safe.
-		const moved = await tx
-			.update(people)
-			.set({ email: input.email })
-			.where(and(eq(people.id, admin.personId), isNull(people.userId)))
-			.returning({ id: people.id });
-		if (moved.length === 0) {
-			throw new Error(
-				"This admin claimed their account while you were editing — their email can't be edited here.",
-			);
-		}
-		await tx
-			.update(members)
-			.set({ email: input.email })
-			.where(eq(members.id, admin.memberId));
-	});
+	// `isNull(people.userId)` in the STATEMENT, not only in the check above.
+	// The `admin.userId` read happens outside this statement, so under READ
+	// COMMITTED a sign-in that binds the Person in between would leave a LINKED
+	// Person carrying a superadmin-typed address in place of the one a magic link
+	// proved — from the one writer whose waiver claims it is safe.
+	const moved = await db
+		.update(people)
+		.set({ email: input.email })
+		.where(and(eq(people.id, admin.personId), isNull(people.userId)))
+		.returning({ id: people.id });
+	if (moved.length === 0) {
+		throw new Error(
+			"This admin claimed their account while you were editing — their email can't be edited here.",
+		);
+	}
 
 	// Did the repair actually repair anything? This console's whole job is to get
-	// an un-claimed first admin signed in, and writing both columns is not
-	// sufficient on its own: if a second club also holds them, or another member
-	// carries the same address, the bind still refuses and the admin stays locked
+	// an un-claimed first admin signed in, and writing the address is not
+	// sufficient on its own: if another Person carries the same address, the
+	// bind still refuses and the admin stays locked
 	// out — while this function returns `{ ok: true }`. That is verbatim the
 	// silent half-failure the release exists to remove, on the one surface
 	// specifically built to fix it.

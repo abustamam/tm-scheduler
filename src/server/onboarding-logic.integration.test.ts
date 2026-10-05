@@ -239,11 +239,9 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		]);
 	});
 
-	it("the console shows the roster address once 0076 has cleared the Person's", async () => {
+	it("the console shows the unclaimed admin's address (#907: the Person's)", async () => {
 		// The repair surface must not go blank for exactly the rows it exists to
-		// chase. `updateUnclaimedAdminEmail` sits on this screen and WRITES the
-		// identity column, so showing an empty field next to it invites an operator
-		// to retype an address the roster already holds correctly.
+		// chase: `updateUnclaimedAdminEmail` sits on this screen and prefills it.
 		const { listClubsForConsole, getClubConsoleDetail } = await import(
 			"#/server/onboarding-logic"
 		);
@@ -257,11 +255,6 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 			timezone: DEFAULT_CLUB_TIMEZONE,
 		});
 		createdClubs.push(res.clubId);
-		// Simulate migration 0076 against this club's admin.
-		await testDb
-			.update(people)
-			.set({ email: null })
-			.where(eq(people.id, res.personId));
 
 		const detail = await getClubConsoleDetail(res.clubId);
 		expect(detail.firstAdmin?.email).toBe(addr);
@@ -474,7 +467,8 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		const member = await testDb
 			.select({ id: members.id })
 			.from(members)
-			.where(eq(members.email, adminEmail));
+			.innerJoin(people, eq(people.id, members.personId))
+			.where(eq(people.email, adminEmail));
 		expect(member, "a members row was written").toHaveLength(0);
 
 		// And both failed for the RIGHT reason, with the message AC 1 names —

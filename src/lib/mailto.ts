@@ -20,7 +20,7 @@
  * blind-copies a third party on a message the sender believes is private, and
  * `&body=…` puts words in their mouth. Not every writer of these columns has
  * always validated the value as an email (`guests.email` had two free-text
- * writers until this change; `members.email` still has one in
+ * writers until this change; `people.email` still has one in
  * `bulkImportSchema`), and rows written before a validator was added persist
  * regardless. The write-side fix and this read-side fix are both needed: one
  * stops new values, the other neutralises the ones already stored.

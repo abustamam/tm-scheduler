@@ -108,9 +108,9 @@ export async function collapseMemberships(
 
 	// --- Reconcile the surviving keeper row --------------------------------
 	// club_role: higher wins (admin > member). status: active if EITHER is
-	// active. joined_at: earliest known. email/preferred_name: keeper's,
-	// filling a null from the absorbed. (name is left as the keeper's; the phone
-	// is the Person's, not either membership's, #906.)
+	// active. joined_at: earliest known. preferred_name: keeper's, filling a
+	// null from the absorbed. (name is left as the keeper's; the phone and the
+	// email are the Person's, not either membership's, #906 / #907.)
 	await tx
 		.update(members)
 		.set({
@@ -123,7 +123,6 @@ export async function collapseMemberships(
 					? "active"
 					: "inactive",
 			joinedAt: earliestDate(keeper.joinedAt, absorbed.joinedAt),
-			email: keeper.email ?? absorbed.email,
 			preferredName: keeper.preferredName ?? absorbed.preferredName,
 			// #939: willing to mentor if EITHER row said so. The flag is the
 			// member's own statement, and one human said it on one of the two.
