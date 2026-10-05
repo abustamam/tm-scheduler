@@ -14,6 +14,7 @@ import {
 	roleSlots,
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
+import { assertMeetingNotCancelled } from "#/lib/meeting-cancellation-notice";
 import {
 	isMeetingLocked,
 	MEETING_LOCKED_MESSAGE,
@@ -437,7 +438,8 @@ export async function loadTmodMemberId(
  * Allowed when the caller is a club `admin` (via a live session) OR the
  * self-asserted `memberId` equals the meeting's TMOD slot assignee. If the TMOD
  * slot is unassigned there is no self-serve editor — only admin passes.
- * Throws when the meeting does not exist, is locked, or its club is archived.
+ * Throws when the meeting does not exist, is locked or cancelled, or its club
+ * is archived.
  */
 export async function resolveMeetingAgendaAuthz(
 	input: MeetingAgendaAuthzInput,
@@ -468,6 +470,12 @@ export async function resolveMeetingAgendaAuthz(
 	// meeting-row lock; this preflight alone cannot protect a later write from
 	// concurrent completion. Reopen is a separate admin path.
 	assertMeetingNotLocked(meeting.status);
+	// #1085. A cancelled meeting is hidden from every member and its editors are
+	// hidden from the officers, but a stale tab, an offline replay or a direct
+	// call still lands here: without this it quietly gains a theme, a location or
+	// a new date. Both arms, beside the lock and for the lock's reason. Restore
+	// is the way back, and it does not come through here.
+	assertMeetingNotCancelled(meeting.status);
 	const { tmodMemberId } = await loadRoleSlotAssignees(input.meetingId);
 
 	// Admin path (session admin or read_write impersonation, #246). Also hands
@@ -530,7 +538,7 @@ export interface WordOfTheDayAuthz {
  * a Toastmasters meeting, so the grammarian slot unlocks WOD editing on the
  * self-serve surface without granting any other meeting-meta edit. If the slot a
  * path keys off is unassigned, that path can't grant. Throws when the meeting
- * does not exist or is locked (#150 choke point).
+ * does not exist, is locked (#150 choke point) or is cancelled (#1085).
  */
 export async function resolveWordOfTheDayAuthz(
 	input: MeetingAgendaAuthzInput,
@@ -544,6 +552,8 @@ export async function resolveWordOfTheDayAuthz(
 	// the same position: before the admin arm returns, and before the lock check.
 	await assertMeetingClubNotArchived(clubId);
 	assertMeetingNotLocked(meeting.status);
+	// #1085, as in the agenda resolver above.
+	assertMeetingNotCancelled(meeting.status);
 	const { tmodMemberId, grammarianMemberId } = await loadRoleSlotAssignees(
 		input.meetingId,
 	);
@@ -622,7 +632,7 @@ export interface TableTopicsNotesAuthz {
  * meeting-meta field), OR the self-asserted holder of its Table Topics Master
  * slot, who gains this one column and nothing else. An unassigned slot grants
  * nothing. Throws when the meeting does not exist, its club is archived, or it
- * is locked.
+ * is locked or cancelled.
  */
 export async function resolveTableTopicsNotesAuthz(
 	input: MeetingAgendaAuthzInput,
@@ -636,6 +646,8 @@ export async function resolveTableTopicsNotesAuthz(
 	// admin arm can return.
 	await assertMeetingClubNotArchived(clubId);
 	assertMeetingNotLocked(meeting.status);
+	// #1085, as in the agenda resolver above.
+	assertMeetingNotCancelled(meeting.status);
 	const { tmodMemberId, tableTopicsMasterMemberId } =
 		await loadRoleSlotAssignees(input.meetingId);
 

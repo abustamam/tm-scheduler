@@ -1558,6 +1558,12 @@ export async function confirmSlotCore(args: {
 	// ordering, for the same two reasons, as `resolveMeetingAgendaAuthz`.
 	await assertClubNotArchived(slot.clubId);
 	assertMeetingNotLocked(slot.meetingStatus);
+	// #1085. Both arms. The holder arm was already refused one step later, by
+	// `setPlanStatus`'s own cancelled gate; the officer arm writes no plan row,
+	// so until this nothing stopped it flipping a slot on a cancelled meeting.
+	// Here, before either grant, so the two arms refuse alike and in the order
+	// the lock does.
+	assertMeetingNotCancelled(slot.meetingStatus);
 
 	const grant = await resolveConfirmGrant(args, slot);
 
