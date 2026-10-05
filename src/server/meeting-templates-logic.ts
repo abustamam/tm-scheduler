@@ -1299,11 +1299,13 @@ export async function planTemplateConversion(
  * Apply a template to an existing meeting, or `null` to convert it back to the
  * club's standard shape. ONE transaction.
  *
- * Released holders are RETURNED, never enqueued on `notifications`:
- * `notifications.slot_id` is NOT NULL and ON DELETE CASCADE to `role_slots`, so
- * a row enqueued against a slot this transaction then deletes is cascade-deleted
- * before the poller could ever see it — a notification that silently never
- * sends. The caller surfaces the existing WhatsApp nudge against each name.
+ * Released holders are RETURNED, and the app never tells them itself
+ * (ADR-0028 — a human sends every message). The officer learns who they are
+ * BEFORE applying: `MeetingTemplateDialog` lists the names from
+ * `planTemplateConversion`'s preview and tells the officer to message them
+ * afterwards. Its `onApply` applies the conversion (`applyTemplateToMeeting`)
+ * and then reloads the meeting; nothing drafts or sends a message on the
+ * officer's behalf.
  *
  * Authorization is the CALLER's: this function has no session. The server fn
  * gates on the club role and the archive state before calling it.
@@ -1542,10 +1544,10 @@ export async function applyTemplateConversion(input: {
 		// fold — and a slot pointing at the loser still has to move. What is gone
 		// is the id churn a conversion used to cause on EVERY role.
 		//
-		// It was never a nicety: a released holder CANNOT be notified
-		// (`notifications.slot_id` is NOT NULL and cascades from `role_slots`,
-		// see this function's docblock), so every avoidable release is a member
-		// who silently loses a role they agreed to.
+		// It was never a nicety: a released holder hears about it only if an
+		// officer sends the nudge (see this function's docblock), so every
+		// avoidable release is a member who may silently lose a role they
+		// agreed to.
 		for (const [oldDefId, def] of matched) {
 			if (def.id === oldDefId) continue;
 			await tx

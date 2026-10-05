@@ -1815,10 +1815,9 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 	});
 
 	it("names the people a role removal would release, BEFORE removing", async () => {
-		// The dialog leads with names because a released holder cannot be told:
-		// notifications.slot_id is NOT NULL and ON DELETE CASCADE to role_slots,
-		// so a row enqueued against a slot the same transaction deletes is
-		// destroyed before the poller sees it.
+		// The dialog leads with names because the app never tells a released
+		// holder itself (ADR-0028): the officer must, and only before the slot is
+		// gone can they see who to tell.
 		await givePrivateTemplate();
 		const role = await addAgendaRole({
 			meetingId: club.meetingId,

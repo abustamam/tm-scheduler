@@ -44,10 +44,9 @@ type Phase =
 /**
  * "Change meeting type" — switches a meeting to a template, or back.
  *
- * The copy here IS the safety mechanism, not decoration. A released member
- * CANNOT be told by the app: `notifications.slot_id` is NOT NULL and ON DELETE
- * CASCADE to `role_slots`, so a notification enqueued against a slot the same
- * transaction deletes is destroyed before the poller sees it. This dialog is
+ * The copy here IS the safety mechanism, not decoration. A released member is
+ * never told by the app (ADR-0028: a human sends every message), so the officer
+ * has to, and once the slot is gone nothing records who held it. This dialog is
  * therefore the only thing standing between two members and a wasted trip,
  * which is why it leads with their NAMES and an explicit instruction to message
  * them, rather than with a count.

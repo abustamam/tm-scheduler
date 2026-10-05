@@ -476,10 +476,12 @@ and the club role sheets, HTML and PDF), digital voting (`meeting_vote_sessions`
 `officer_training_records`, #531 — the record behind DCP goal 9; the periods
 table is a SPARSE override of TI's own window dates, so **row absent = the
 default**, see `CONTEXT.md`'s **Club Officer Training (COT)** entry),
-notifications (drained by an in-process poller, ADR-0023), and access requests
+and access requests
 (`access_requests` / `access_request_alerts`, #866 — the public request-access form's rows and
-its per-reason daily alerts; club-less, delivered by the same poller, and deleted after 180 days by
-its sweep). Better-Auth's tables
+its per-reason daily alerts; club-less, delivered to the maintainer by the in-process poller,
+ADR-0023, and deleted after 180 days by its sweep). Nothing queues mail to a member: the
+`notifications` table and role reminders were removed under ADR-0028, **humans send every
+message** (#902). Better-Auth's tables
 live in `src/db/auth-schema.ts` — hand-maintained, and since #842 that file also carries the
 eight OAuth tables (`jwks` + seven from `@better-auth/mcp`). **Adding a Better Auth plugin
 means adding its tables there AND re-exporting them from `schema.ts`**: the Drizzle adapter
@@ -519,7 +521,8 @@ the server serves traffic (drizzle tracks applied migrations, so reruns are no-o
 failure exits non-zero and the deploy fails closed). The runtime image is `node:22-slim` with no
 Bun/drizzle-kit, which is why the runner is bundled rather than invoked via `drizzle-kit migrate`.
 Do NOT adopt edge/serverless adapters (Cloudflare Workers / Convex) — the persistent process is
-required for the `pg` pool and the planned in-process reminder poller (#7). The Workers + Neon
+required for the `pg` pool and the in-process poller (ADR-0023), which now delivers request-access
+mail and runs the retention sweeps; it sends no reminders (ADR-0028). The Workers + Neon
 path stays a deferred future option only.
 
 **Changing a `createServerFn`'s `method` is a BREAKING change for tabs already open**, and

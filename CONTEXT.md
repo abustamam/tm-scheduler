@@ -335,10 +335,10 @@ the nouns in `src/db/schema.ts`.
   `role_definitions.key` (`dutiesForRole`, `src/lib/role-duties.ts`). Exactly three exist: the
   TMOD owes the meeting **theme**, the Grammarian owes the **Word of the Day**, and a speaker
   (`speaker`, or a contest `contestant_prepared`) owes their **speech details**. Each carries a
-  `done` predicate over a plain caller-supplied context — never a db handle — so the checklist,
-  the nudge draft and the reminder email ask ONE question and cannot disagree about whether a job
-  is finished. A NULL key falls back to an **exact** canonical-name match, never a prefix, for the
-  #464 reason the entry above gives. **Every other role owns ZERO duties** and gets
+  `done` predicate over a plain caller-supplied context — never a db handle — so the checklist
+  and the nudge draft ask ONE question and cannot disagree about whether a job is finished. (A
+  reminder email used to ask it too; ADR-0028 removed reminders, #902.) A NULL key falls back to
+  an **exact** canonical-name match, never a prefix, for the #464 reason the entry above gives. **Every other role owns ZERO duties** and gets
   `ROLE_CONFIRM_PROMPT`, which deliberately has no `done`: their prep is real but nothing records
   it, and an unverifiable self-report must never be able to SUPPRESS a nudge. No consumers yet —
   #667 (nudges), #665 (personal confirm page) and #666 (theme / Word-of-the-Day subroutes) land
@@ -1018,10 +1018,15 @@ seed data.
 **Out of scope (schema must not block, but build no logic):** swap matching, role-rotation
 fairness, Pathways progress dashboards, calendar export. These are the later phases.
 
-**Reminders are fully built.** The `notifications` table is drained by an in-process poller
-(#271 / ADR-0023), the role-assignment producer enqueues rows (#272), and the control layer —
-per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — ships alongside it
-(#274, `notification-prefs-logic.ts`). Multi-club switching is built too (`club-switcher.tsx`).
+**Reminders were built and then removed.** Role-reminder emails (#271 / #272 / #274) were taken
+out in #902 under ADR-0028: **humans send every message**. GavelUp drafts and templates (the nudge
+drafts, the lineup blast, guest invites) and an officer sends from their own app; the app never
+mails a member, guest or prospect on its own. The only app-sent mail is account-security mail to
+the account's own address (the magic link, and the change-of-address emails pending in #1091 /
+ADR-0030), the officer-sent roster invite (a sign-in link only, no meeting content), and operator
+alerts to the maintainer (request-access, #866). The in-process poller (ADR-0023) still runs, for
+the request-access delivery pass and the retention sweeps; `/unsubscribe` is a static page so old
+reminder links do not 404. Multi-club switching is built (`club-switcher.tsx`).
 
 ## Invariants
 
@@ -1166,9 +1171,17 @@ per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — s
   that hides data prints `+N more` rather than stopping silently. Several of the fields it caps
   (`theme`, `topic`, `roleName`) are still unbounded on write, which is the point of a render cap:
   see #525.
-- A `notifications` row is delivered **at most once**: the poller claims it with a conditional
-  update (bump `attempts` / stamp `last_attempted_at` `WHERE sent_at IS NULL AND attempts = <read>`)
-  before sending, then sets `sent_at` on success. Never send without claiming first (ADR-0023).
+- **Humans send every message** (ADR-0028). No feature delivers a message to a member, guest or
+  prospect on its own: it builds a draft and the officer sends it from their own app. The three
+  exemptions are closed, not examples: account-security mail to the account's own address, prompted
+  by that account's own action (magic link; the change-of-address verification and notice pending
+  in #1091 / ADR-0030); the officer-sent roster invite (`account-invite.ts`), a magic link to the
+  invitee's own address that only lets them sign in and carries no meeting content; and operator
+  alerts to the maintainer. A new sender needs a new ADR first.
+- App-sent mail that IS allowed is delivered **at most once**: the poller claims a request-access
+  row with a conditional update (bump its attempts counter / stamp its last-attempted time
+  `WHERE` unsent `AND` attempts `= <read>`) before sending, then stamps it sent on success. Never
+  send without claiming first (ADR-0023; the constants live in `src/server/mail-delivery.ts`).
 - A signed-in user may map to **several Person rows** (`people.user_id` is not unique — ADR-0008).
   Never resolve one with a bare `where(eq(people.userId, …))`: with no `ORDER BY` and no `LIMIT`
   that returns an ARBITRARY row, and two such queries in one request can disagree. Three
@@ -1184,14 +1197,6 @@ per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — s
   applies to the club switcher, so it is a strict **superset** of the switcher, not a match for
   it: leaving a club does not un-give the speeches you gave there. Do not "reconcile" the two by
   adding a status filter — that silently re-breaks #437 for anyone whose old membership lapsed.
-- A reminder email is addressed to the **account** (`notifications.user_id`), never to the Person,
-  so duplicate Persons on one account mail the identical inbox. Any per-Person reminder preference
-  must therefore converge across EVERY Person on the account: both writers do
-  (`setReminderOptOutForUser` from the `/me` toggle, `setPersonReminderOptOut` from the no-auth
-  `/unsubscribe` link), and the reader `getReminderOptOutForUser` reports opted-out only when every
-  **mailable** Person is — mailable meaning one holding a roster membership, matching the join the
-  #272 producer builds its recipients from. A membership-less Person is structurally unreachable by
-  mail and must not vote. See #437 / #472.
 - Member and guest **contact** (email, phone) reaches a payload only behind
   `requireClubViewAccess` — the club's own signed-in members, never a session-less caller. The two
   roster/profile queries that carry it live in `src/server/club-logic.ts` (`loadClubMembers`,

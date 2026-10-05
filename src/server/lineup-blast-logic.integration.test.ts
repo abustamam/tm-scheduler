@@ -45,7 +45,7 @@ const { hashApiToken } = await import("#/server/api-tokens-logic");
 const { buildLineupBlast, LINEUP_BLAST_REFUSED_MESSAGE } = await import(
 	"#/lib/lineup-blast"
 );
-const { appBaseUrl } = await import("#/lib/unsubscribe-token");
+const { appBaseUrl } = await import("#/lib/app-base-url");
 
 interface ToolResult {
 	text: string;

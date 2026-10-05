@@ -17,8 +17,8 @@
 // What does NOT link here, deliberately: the role-less `attendance` and
 // `arriving` drafts, which ask about the MEETING and keep `nudgeShareUrl`; a
 // slot held by a GUEST, who has no `members` row and so no `?as=` identity to
-// seed; and the automated role-reminder email, which is a different surface
-// with its own send-time re-validation (#667 leaves it for a follow-up).
+// seed. (The automated role-reminder email, once also left out of this, no
+// longer exists: #902 removed it under ADR-0028.)
 //
 // This header said "nothing links here yet" until #667, and three drafts before
 // that claimed the opposite while it was still true. Either way the rule is the

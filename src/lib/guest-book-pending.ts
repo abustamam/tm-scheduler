@@ -30,7 +30,7 @@
  * `node:` builtin and no database module. That is why `guestBookConfirmUrl`
  * takes the origin as an argument rather than reading `BETTER_AUTH_URL` here —
  * the server passes `appBaseUrl()`, whose fallback stays declared in exactly one
- * place (`src/lib/unsubscribe-token.ts`).
+ * place (`src/lib/app-base-url.ts`).
  */
 
 /** A line resolves onto a guest already on file, or declares a new person. */

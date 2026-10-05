@@ -15,11 +15,13 @@
  * `https://zoom.us@evil.example.com/j/123` is a valid URL whose hostname is
  * `evil.example.com`; `zoom.us` is the username. The WHATWG parser preserves it,
  * so before this arm the function returned that string unchanged and every
- * caller stored it. Rendered as a link whose text is its own href — which is how
- * the #731 reminder email draws it — it reads as a Zoom link to the recipient
- * and lands them somewhere else. A bare host is not safe either: `new URL()`
- * parses `zoom.us@evil.example.com/j/123` the same way once `https://` is
- * prepended.
+ * caller stored it. The #731 reminder email rendered it as a link whose text
+ * was its own href; #902 removed that email, and the meeting page labels the
+ * link "Join the video call" instead. The raw URL is still what a reader sees
+ * on hover, in the edit field, and wherever an officer pastes it into a
+ * message, and there it reads as a Zoom link and lands them somewhere else. A
+ * bare host is not safe either: `new URL()` parses
+ * `zoom.us@evil.example.com/j/123` the same way once `https://` is prepended.
  *
  * Hardened HERE rather than at the `joinUrl` boundary, deliberately, and the
  * reasoning is in the PR for #731. Both callers are "paste the link" fields and

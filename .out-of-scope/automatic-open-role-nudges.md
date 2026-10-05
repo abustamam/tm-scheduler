@@ -17,10 +17,10 @@ quietly replace a person's job at the meeting.
   (`NudgeButtons`, `NudgeRecruitPicker`), driven by the same open-slot data an
   automatic producer would read. The officer decides who to ask; the app removes
   the friction of asking.
-- **Per-holder reminders** for claimed and confirmed slots through the in-process
-  poller (ADR-0023), gated by `clubs.reminder_enabled` and the member opt-out
-  layer. Those remind a person of a commitment they made, which is a different
-  thing from recruiting.
+- **Per-holder reminders** for claimed and confirmed slots used to go through the
+  in-process poller (ADR-0023). #902 removed them under ADR-0028 (humans send
+  every message), along with `clubs.reminder_enabled` and the member opt-out;
+  reminding a holder is now an officer's nudge, like recruiting.
 - **Duty-aware nudge drafts** (#667) sharpen the manual message so it names what
   the role still owes.
 

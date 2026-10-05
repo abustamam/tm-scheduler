@@ -51,6 +51,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { db } from "#/db";
 import { mcpPendingPlans } from "#/db/schema";
+import { appBaseUrl } from "#/lib/app-base-url";
 import { localDate } from "#/lib/club-local-date";
 import {
 	guestBookConfirmUrl,
@@ -58,7 +59,6 @@ import {
 	pendingPlanExpiresAt,
 } from "#/lib/guest-book-pending";
 import { MAX_GUEST_BOOK_ENTRIES } from "#/lib/mcp-limits";
-import { appBaseUrl } from "#/lib/unsubscribe-token";
 import { loadClubDefaultCountryCode } from "#/server/clubs-logic";
 import {
 	guestBookPlanHash,

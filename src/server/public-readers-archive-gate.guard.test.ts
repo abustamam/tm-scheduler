@@ -432,7 +432,6 @@ const REVIEWED_UNGATED: Record<string, string> = {
 	setAttendance: "write — gated by gateAdmin",
 	addMinutesGuest: "write — gated by gateAdmin",
 	removeMinutesGuest: "write — gated by gateAdmin",
-	unsubscribeFromReminders: "write — gated by a signed unsubscribe token",
 	// The eight session-less writes are no longer waived — they are ENFORCED by
 	// `WRITE_GATES` below (#555). They sat here reading `"write — #544
 	// follow-up"` for one release, which is what a waiver is for: it named the

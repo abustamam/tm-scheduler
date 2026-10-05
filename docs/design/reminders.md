@@ -1,5 +1,10 @@
 # Design: Reminders / Notifications
 
+> **Removed, see ADR-0028.** Role reminders were built from this design (#271, #272, #274) and then
+> removed in #902: GavelUp never sends a message to a member on its own, a human does. The
+> `notifications` table, the reminder settings and the opt-out are gone; `/unsubscribe` is a static
+> page. This document is kept as history only.
+
 **Related issue**: [#7 — Reminder send job over the notifications table](https://github.com/abustamam/tm-scheduler/issues/7)
 **Status**: Design spike only — no code ships from this doc.
 **Gate — CLEARED (2026-07-08)**: the shared email transport shipped (`src/lib/email.ts`, Resend; `sendMagicLink` in `src/lib/auth.ts` now sends real email). The build is unblocked.

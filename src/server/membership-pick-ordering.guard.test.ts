@@ -28,8 +28,8 @@
  * come back.
  *
  * Deliberately narrow, to stay honest rather than large. It says nothing about
- * queries that fan out over every linked Person (`userPersonIds`,
- * `setReminderOptOutForUser` — where the fan-out is the feature, #437), and
+ * queries that fan out over every linked Person (`userPersonIds`, where the
+ * fan-out is the feature, #437), and
  * nothing about whether an ordering is the RIGHT one. A guard that flagged
  * those would need a waiver list longer than the rule.
  */

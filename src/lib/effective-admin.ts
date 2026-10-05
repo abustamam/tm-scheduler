@@ -47,11 +47,9 @@ export function effectiveAdminClub<C extends ClubCtx>(
  * Reusing that arm for an arbitrary club is unsound in a way that is not
  * theoretical: an officer of club A who is a plain member of club B would pass
  * for B. That matters because this guard is the admin boundary for the settings
- * READS — all four (`getClubProfileSettings`, `loadClubReminderSettings`,
- * `loadClubAgendaSettings`, `loadClubTimezoneSettings`) gate on
- * `requireClubViewAccess`, which is member-level, and
- * `loadClubReminderSettings`'s own docblock says so ("any member with view
- * access — the route itself is admin-gated"). Only the WRITES run
+ * READS — `getClubProfileSettings`, `loadClubAgendaSettings` and
+ * `loadClubTimezoneSettings` all gate on `requireClubViewAccess`, which is
+ * member-level. Only the WRITES run
  * `requireClubRole(…, ["admin"])`. So a permissive arm here renders club B's
  * real settings, not an error page.
  *

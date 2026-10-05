@@ -25,10 +25,6 @@ vi.mock("#/server/clubs", () => ({
 	updateClubProfile: vi.fn(),
 	updateClubTimezone: vi.fn(),
 }));
-vi.mock("#/server/notification-prefs", () => ({
-	loadClubReminderSettings: vi.fn(),
-	updateClubReminderSettings: vi.fn(),
-}));
 vi.mock("#/server/club-logo", () => ({
 	getClubLogoMeta: vi.fn(),
 	uploadClubLogo: vi.fn(),

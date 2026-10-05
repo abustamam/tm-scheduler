@@ -1,9 +1,19 @@
-// In-process reminder poller (#271). A long-running interval on the single Node
-// server (ADR-0007 / ADR-0023 — NOT edge/serverless/cron) that drains DUE
-// `notifications` rows each tick via `processDueNotifications`. Started once at
-// server boot by the Nitro plugin (`reminder-poller.nitro.ts`).
+// In-process poller (#271, ADR-0023). A long-running interval on the single
+// Node server (ADR-0007 — NOT edge/serverless/cron). Started once at server boot
+// by the Nitro plugin (`reminder-poller.nitro.ts`).
 //
-// Server-only: imports `#/db` transitively (via notifications-logic). It is
+// Each tick it delivers the request-access form's mail to the maintainer (#866)
+// and runs the two retention sweeps (MCP pending plans, old access requests).
+// It no longer sends role reminders: ADR-0028 removed them (#902), because a
+// human sends every message to a member, guest or prospect — the app only
+// drafts. So the exports say what it does (`runPollerTick`,
+// `startBackgroundPoller`, `stopBackgroundPoller`) and the log tag is
+// `[poller]`. The FILE names and both env vars, `REMINDER_POLL_INTERVAL_MS` and
+// `DISABLE_REMINDER_POLLER`, keep their old names on purpose: a deployment
+// (Railway) may already set either, and renaming one would silently drop the
+// setting rather than fail.
+//
+// Server-only: imports `#/db` transitively (via access-requests-logic). It is
 // referenced solely from the Nitro plugin — never from a client route — so it
 // stays out of the client bundle.
 import { describePendingSweep } from "#/lib/pending-plan";
@@ -12,8 +22,6 @@ import {
 	sweepExpiredAccessRequests,
 } from "./access-requests-logic";
 import { sweepExpiredPendingPlans } from "./mcp-pending-logic";
-import { processDueNotifications } from "./notifications-logic";
-import { produceRoleReminders } from "./role-reminders-logic";
 
 /** Default cadence; override with `REMINDER_POLL_INTERVAL_MS`. */
 const DEFAULT_POLL_INTERVAL_MS = 60_000;
@@ -30,62 +38,33 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let ticking = false;
 
 /**
- * Run one poll tick: ENQUEUE-then-SEND, then SWEEP. First the role-reminder
- * producer (#272) tops up the queue with reminders for upcoming slot holders;
- * then the delivery loop (#271) drains everything currently due; then the
- * MCP pending-plan sweep (#806, shared by every write tool since #812) removes
- * confirm links past their grace window. The producer is idempotent (a partial unique index makes a re-enqueue
- * a no-op), so running it every tick is safe and needs no separate cadence. A
- * producer failure is logged but never blocks the send pass — delivery of
- * already-queued reminders must still happen, and neither blocks the sweep.
+ * Run one poll tick: DELIVER, then SWEEP. First the request-access form's mail
+ * to the maintainer (#866); then the MCP pending-plan sweep (#806, shared by
+ * every write tool since #812) and the access-request retention sweep. There is
+ * no role-reminder pass any more (ADR-0028, #902): GavelUp never mails a member
+ * on its own, so nothing here enqueues or sends to one.
  *
- * `DISABLE_REMINDER_POLLER=1` stops the two delivery passes and NOT the sweep —
- * see `startReminderPoller`. A pending plan holds a visitor's unmasked name,
+ * `DISABLE_REMINDER_POLLER=1` stops the delivery pass and NOT the sweeps —
+ * see `startBackgroundPoller`. A pending plan holds a visitor's unmasked name,
  * email and phone, and the sweep is the only thing in the system that deletes
  * one, so letting the send flag disable it turned a 48-hour retention window
  * into an indefinite one.
  *
- * Every pass has its own try, so any one failing still lets the rest run.
- * Exported for `reminder-poller.test.ts`, which proves exactly that; nothing
- * else calls it.
+ * The delivery pass has its own try and `sweepTick` never throws, so a failing
+ * delivery still lets the sweeps run. Exported for `reminder-poller.test.ts`,
+ * which proves exactly that; nothing else calls it.
  *
  * Overlap guard: if the previous tick is still in flight when the interval fires
  * (a slow send batch), skip this one so ticks never stack up in the single
  * process. A thrown error is logged and swallowed — the poller must survive a
  * bad tick and keep running.
  */
-export async function runReminderTick(): Promise<void> {
+export async function runPollerTick(): Promise<void> {
 	if (ticking) return;
 	ticking = true;
 	try {
-		try {
-			const produced = await produceRoleReminders();
-			if (produced.enqueued > 0) {
-				console.log(
-					`[reminders] produced: enqueued=${produced.enqueued} duplicates=${produced.duplicates} optedOut=${produced.optedOut} disabled=${produced.disabled}`,
-				);
-			}
-		} catch (err) {
-			// Never let a producer error skip the send pass below.
-			console.error("[reminders] producer failed:", err);
-		}
-
-		// Its own try (#866): a reminder-pass throw must not skip the
-		// access-request delivery or the retention sweep below.
-		try {
-			const result = await processDueNotifications();
-			if (result.due > 0) {
-				console.log(
-					`[reminders] tick: due=${result.due} sent=${result.sent} failed=${result.failed} skipped=${result.skipped} suppressed=${result.suppressed} stale=${result.stale}`,
-				);
-			}
-		} catch (err) {
-			console.error("[reminders] send pass failed:", err);
-		}
-
 		// The request-access form's emails (#866): request notifications and the
-		// per-reason cap alerts. Its own try, like the pass above, so neither can
-		// hide the other or stop the sweep.
+		// per-reason cap alerts. Its own try, so a throw cannot stop the sweep.
 		try {
 			const mail = await deliverAccessRequestMail();
 			if (mail.sent + mail.failed + mail.alertsSent + mail.alertsFailed > 0) {
@@ -99,7 +78,7 @@ export async function runReminderTick(): Promise<void> {
 
 		await sweepTick();
 	} catch (err) {
-		console.error("[reminders] poll tick failed:", err);
+		console.error("[poller] tick failed:", err);
 	} finally {
 		ticking = false;
 	}
@@ -181,7 +160,7 @@ function startSweepOnlyTimer(): boolean {
  * `DISABLE_REMINDER_POLLER=1` to opt out (e.g. a worker that shouldn't send).
  * Returns whether it started.
  */
-export function startReminderPoller(): boolean {
+export function startBackgroundPoller(): boolean {
 	if (timer) return false;
 	if (process.env.DISABLE_REMINDER_POLLER === "1") {
 		// The SWEEP still runs, and there is no way to stop it (see `sweepTick`).
@@ -192,21 +171,21 @@ export function startReminderPoller(): boolean {
 		// 48-hour retention window into an indefinite one, with no user-facing
 		// way to discard a row. A worker that should not send has every reason
 		// to still sweep.
-		console.log("[reminders] poller disabled via DISABLE_REMINDER_POLLER");
+		console.log("[poller] disabled via DISABLE_REMINDER_POLLER");
 		return startSweepOnlyTimer();
 	}
 	const intervalMs = resolveIntervalMs();
 	timer = setInterval(() => {
-		void runReminderTick();
+		void runPollerTick();
 	}, intervalMs);
 	// Don't let the interval alone hold the process open — clean shutdown wins.
 	timer.unref?.();
-	console.log(`[reminders] poller started (interval=${intervalMs}ms)`);
+	console.log(`[poller] started (interval=${intervalMs}ms)`);
 	return true;
 }
 
 /** Stop the poller (server shutdown / dev restart). Idempotent. */
-export function stopReminderPoller(): void {
+export function stopBackgroundPoller(): void {
 	if (timer) {
 		clearInterval(timer);
 		timer = null;
