@@ -49,6 +49,8 @@ const {
 } = await import("#/lib/member-email-change");
 const {
 	EMAIL_CHANGE_LOCK_NAMESPACE,
+	emailChangeGenerationIdentifier,
+	emailChangeRequestIdentifier,
 	requestEmailChange,
 	signInEmailStateFor,
 	takeEmailChangeRequestSlot,
@@ -182,10 +184,12 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 	}
 
 	/**
-	 * Press the button on a rendered confirm page, the way a browser would:
-	 * post exactly the fields of its POST form, to its `action`, with the
-	 * page's own Origin. Nothing is taken from the link URL, so a broken
-	 * action or a missing hidden input fails here.
+	 * Press the button on a rendered confirm page: post exactly the fields of
+	 * its POST form, to its `action`, with the page's own Origin. Nothing is
+	 * taken from the link URL, so a missing hidden input or an action on the
+	 * wrong path fails here. There is no network: `loaded.handler` routes by
+	 * pathname alone, so the action's ORIGIN is asserted explicitly before
+	 * dispatch — a form posting to another site must fail, not reach the app.
 	 */
 	function submitPage(pageUrl: string, html: string): Promise<Response> {
 		const form =
@@ -194,6 +198,12 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 			);
 		if (!form) throw new Error("the confirm page has no POST form");
 		const action = new URL(unescapeHtml(form[1] ?? ""), pageUrl);
+		const appOrigin = new URL(oauth.TEST_ISSUER).origin;
+		if (action.origin !== appOrigin) {
+			throw new Error(
+				`the confirm form posts to ${action.origin}, not the app (${appOrigin})`,
+			);
+		}
 		const fields = new URLSearchParams();
 		for (const input of (form[2] ?? "").matchAll(/<input\b[^>]*>/gi)) {
 			const name = /\bname="([^"]*)"/.exec(input[0])?.[1];
@@ -245,8 +255,8 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 			.delete(verification)
 			.where(
 				inArray(verification.identifier, [
-					...ids.map((id) => `change-email-request:${id}`),
-					...ids.map((id) => `change-email-generation:${id}`),
+					...ids.map((id) => emailChangeRequestIdentifier(id, secret)),
+					...ids.map((id) => emailChangeGenerationIdentifier(id, secret)),
 				]),
 			);
 		for (const c of [...clubs].reverse()) {
@@ -648,6 +658,66 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 		});
 	});
 
+	describe("rows an outsider can name (#1091 review, fix round 3)", () => {
+		/**
+		 * Better Auth's magic-link verify CONSUMES (deletes) whatever
+		 * `verification` row its `token` names, before validating it. So any
+		 * row whose identifier can be guessed from a user id can be deleted by
+		 * anyone, with no session. These drive that real endpoint with the
+		 * identifier an attacker could build from the user id alone.
+		 */
+		function consumeByName(identifier: string): Promise<Response> {
+			return loaded.handler(
+				new Request(
+					`${oauth.TEST_ISSUER}/magic-link/verify?token=${encodeURIComponent(identifier)}`,
+					{ headers: { "x-real-ip": freshIp() } },
+				),
+			);
+		}
+
+		it("cannot reset the change generation and reopen the A to B to A replay", async () => {
+			const club = await freshClub();
+			const cookie = await cookieFor(club.memberUserId);
+			const a = (await emailOf(club.memberUserId)) ?? "";
+			const b = addr("gen-attack");
+			await requestChange(cookie, b);
+			const aToB = linkSentTo(b);
+			expect(outcome(await open(aToB))).toBe("changed");
+			addresses.add(a);
+			await requestChange(cookie, a);
+			expect(outcome(await open(linkSentTo(a)))).toBe("changed");
+
+			await consumeByName(`change-email-generation:${club.memberUserId}`);
+			// The row is named by an HMAC under the auth secret, so the name an
+			// outsider can build from the user id is not its name.
+			const [generationRow] = await testDb
+				.select({ value: verification.value })
+				.from(verification)
+				.where(
+					eq(
+						verification.identifier,
+						emailChangeGenerationIdentifier(club.memberUserId, secret),
+					),
+				);
+			expect(generationRow?.value).toBe("2");
+
+			expect(outcome(await open(aToB))).toBe("stale");
+			expect(await emailOf(club.memberUserId)).toBe(a);
+		});
+
+		it("cannot clear the per-account request count", async () => {
+			const club = await freshClub();
+			const cookie = await cookieFor(club.memberUserId);
+			for (let i = 0; i < 3; i++) {
+				expect((await requestChange(cookie, addr(`rr${i}`))).status).toBe(200);
+			}
+			for (let i = 0; i < 3; i++) {
+				await consumeByName(`change-email-request:${club.memberUserId}`);
+			}
+			expect((await requestChange(cookie, addr("rr3"))).status).toBe(429);
+		});
+	});
+
 	describe("abuse limits", () => {
 		it("refuses the fourth request in an hour from one account, even from fresh addresses", async () => {
 			const club = await freshClub();
@@ -688,7 +758,7 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 					sql`select pg_advisory_xact_lock(${EMAIL_CHANGE_LOCK_NAMESPACE}::int4, hashtext(${club.memberUserId}))`,
 				);
 			});
-			const taking = takeEmailChangeRequestSlot(club.memberUserId);
+			const taking = takeEmailChangeRequestSlot(club.memberUserId, secret);
 			await waitForLockWait("pg_advisory_xact_lock", holder.pid);
 			await holder.commit();
 			expect(await taking).toBe(true);
@@ -698,7 +768,7 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 			const club = await freshClub();
 			const granted = await Promise.all(
 				Array.from({ length: 20 }, () =>
-					takeEmailChangeRequestSlot(club.memberUserId),
+					takeEmailChangeRequestSlot(club.memberUserId, secret),
 				),
 			);
 			expect(granted.filter(Boolean)).toHaveLength(3);
@@ -913,6 +983,7 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 			requestEmailChange({
 				userId: club.memberUserId,
 				newEmail: taken,
+				secret,
 				mintLink,
 			}),
 		);

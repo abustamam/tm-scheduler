@@ -15,7 +15,7 @@
 //    the OLD address gets a notice.
 //  - Nothing else: sessions, OAuth grants and `tmk_` tokens key off the user
 //    id and are untouched (decision 4).
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { and, asc, count, eq, gt, lte, sql } from "drizzle-orm";
 import * as z from "zod";
 import { db } from "#/db";
@@ -35,9 +35,35 @@ import { addressHeldByAnother, normalizeEmail } from "./account-link-logic";
 import { logActivity } from "./activity";
 import { isUniqueViolation } from "./pg-errors";
 
+/**
+ * The per-account part of every `verification.identifier` this flow writes:
+ * an HMAC of the user id under the auth secret, never the user id itself
+ * (#1091 review, fix round 3).
+ *
+ * Why. Better Auth's magic-link verify CONSUMES (deletes) the `verification`
+ * row its `token` query names, before checking it is a magic link. So any row
+ * whose identifier an outsider can build — `…:<userId>` — is deletable by
+ * anyone, with no session: the per-account request count (cap bypassed) and
+ * the change generation (back to 0, reviving a replayed link). An HMAC under
+ * the secret cannot be built without it.
+ *
+ * `secret` is the auth instance's (`ctx.context.secret`), threaded in by the
+ * plugin. Rotating it orphans these rows, so the count and the generation read
+ * as fresh; that revives nothing, because rotation also invalidates every link
+ * signed with the old secret.
+ */
+function accountKey(kind: string, userId: string, secret: string): string {
+	return createHmac("sha256", secret)
+		.update(`${kind}:${userId}`)
+		.digest("base64url");
+}
+
 /** The `verification.identifier` one account's request rows are counted under. */
-export function emailChangeRequestIdentifier(userId: string): string {
-	return `change-email-request:${userId}`;
+export function emailChangeRequestIdentifier(
+	userId: string,
+	secret: string,
+): string {
+	return `change-email-request:${accountKey("change-email-request", userId, secret)}`;
 }
 
 /**
@@ -49,8 +75,11 @@ export function emailChangeRequestIdentifier(userId: string): string {
  * A counter, not a timestamp: two `Date.now()` readings compared across a
  * backward clock step could revive a replayed link; a counter only moves up.
  */
-export function emailChangeGenerationIdentifier(userId: string): string {
-	return `change-email-generation:${userId}`;
+export function emailChangeGenerationIdentifier(
+	userId: string,
+	secret: string,
+): string {
+	return `change-email-generation:${accountKey("change-email-generation", userId, secret)}`;
 }
 
 /**
@@ -65,13 +94,17 @@ const GENERATION_NEVER_EXPIRES = new Date("9999-12-31T00:00:00Z");
 /** The account's current change generation (0 when it never changed). */
 export async function emailChangeGenerationFor(
 	userId: string,
+	secret: string,
 	executor: Pick<typeof db, "select"> = db,
 ): Promise<number> {
 	const rows = await executor
 		.select({ value: verification.value })
 		.from(verification)
 		.where(
-			eq(verification.identifier, emailChangeGenerationIdentifier(userId)),
+			eq(
+				verification.identifier,
+				emailChangeGenerationIdentifier(userId, secret),
+			),
 		);
 	return Math.max(0, ...rows.map((row) => Number.parseInt(row.value, 10) || 0));
 }
@@ -157,9 +190,10 @@ export async function signInEmailStateFor(
  */
 export async function takeEmailChangeRequestSlot(
 	userId: string,
+	secret: string,
 	now: Date = new Date(),
 ): Promise<boolean> {
-	const identifier = emailChangeRequestIdentifier(userId);
+	const identifier = emailChangeRequestIdentifier(userId, secret);
 	return db.transaction(async (tx) => {
 		await tx.execute(
 			sql`select pg_advisory_xact_lock(${EMAIL_CHANGE_LOCK_NAMESPACE}::int4, hashtext(${userId}))`,
@@ -229,6 +263,8 @@ const isEmail = (value: string) => z.email().safeParse(value).success;
 export async function requestEmailChange(input: {
 	userId: string;
 	newEmail: string;
+	/** The auth instance's secret, for this flow's row identifiers. */
+	secret: string;
 	mintLink: (claim: EmailChangeClaim) => Promise<string>;
 }): Promise<EmailChangeRequestResult> {
 	const bound = await boundPersonFor(input.userId);
@@ -247,7 +283,7 @@ export async function requestEmailChange(input: {
 	if (!from) return { kind: "unbound" };
 	if (from === to) return { kind: "same" };
 
-	if (!(await takeEmailChangeRequestSlot(input.userId))) {
+	if (!(await takeEmailChangeRequestSlot(input.userId, input.secret))) {
 		return { kind: "rate_limited" };
 	}
 
@@ -256,7 +292,7 @@ export async function requestEmailChange(input: {
 		userId: input.userId,
 		from,
 		to,
-		generation: await emailChangeGenerationFor(input.userId),
+		generation: await emailChangeGenerationFor(input.userId, input.secret),
 	});
 	const { subject, html, text } = held
 		? buildAddressInUseEmail(to)
@@ -299,6 +335,8 @@ export type EmailChangeConfirmResult =
  */
 export async function confirmEmailChange(
 	claim: EmailChangeClaim,
+	/** The auth instance's secret, for this flow's row identifiers. */
+	secret: string,
 ): Promise<EmailChangeConfirmResult> {
 	const to = normalizeEmail(claim.to);
 	const from = normalizeEmail(claim.from);
@@ -326,7 +364,11 @@ export async function confirmEmailChange(
 
 			// Serialised by the account row lock above: every landing for this
 			// account advances the generation under that same lock.
-			const generation = await emailChangeGenerationFor(claim.userId, tx);
+			const generation = await emailChangeGenerationFor(
+				claim.userId,
+				secret,
+				tx,
+			);
 			if (claim.generation !== generation) {
 				return { kind: "stale" } as const;
 			}
@@ -384,12 +426,12 @@ export async function confirmEmailChange(
 				.where(
 					eq(
 						verification.identifier,
-						emailChangeGenerationIdentifier(claim.userId),
+						emailChangeGenerationIdentifier(claim.userId, secret),
 					),
 				);
 			await tx.insert(verification).values({
 				id: randomUUID(),
-				identifier: emailChangeGenerationIdentifier(claim.userId),
+				identifier: emailChangeGenerationIdentifier(claim.userId, secret),
 				value: String(generation + 1),
 				expiresAt: GENERATION_NEVER_EXPIRES,
 			});

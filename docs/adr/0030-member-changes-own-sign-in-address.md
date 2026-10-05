@@ -54,14 +54,14 @@ decisions in #1091 are the contract. In short:
 6. **Abuse limits.** Three requests per account per hour, and three per client address per
    hour on the same path through Better Auth's own limiter. That limiter keys on client
    address and path and cannot express "per account", so the per-account count is expiring
-   rows in Better Auth's existing `verification` table (`change-email-request:<userId>`,
+   rows in Better Auth's existing `verification` table (`change-email-request:<key>`,
    holding no address, under a per-account advisory lock). No migration.
 7. **Links live one hour** and name `{userId, from, to, generation}`. Requesting again does
    not cancel an earlier link. Once any change lands, every link minted before it is dead,
    including the link that just landed and including one whose `from` the account has since
    returned to (A→B, then B→A, must not let the old A→B link work again). How: each account
    has a CHANGE GENERATION, an integer in Better Auth's existing `verification` table
-   (`change-email-generation:<userId>`, absent = 0). Every landed change increments it inside
+   (`change-email-generation:<key>`, absent = 0). Every landed change increments it inside
    the confirm transaction, under the account row lock. A link carries the generation read
    when it was minted and is applied only while that is still the current generation. A
    counter rather than a timestamp, so a clock step cannot revive a link. The row never
@@ -70,6 +70,16 @@ decisions in #1091 are the contract. In short:
    expiry would lean on JWT `exp`, which is the same clock. The row holds a number, never an
    address, so there is still no pending-change table: the pending change lives only in the
    signed link.
+
+   **Both identifiers are keyed by `HMAC-SHA256(auth secret, user id)`, never the bare user
+   id.** Better Auth's magic-link verify consumes (deletes) whatever `verification` row its
+   `token` query names, before checking it is a magic link, and needs no session. A name an
+   outsider can build from a user id is therefore a row anyone can delete: deleting the
+   generation row resets it to 0 and reopens the A→B→A replay, and deleting the request rows
+   one at a time bypasses the per-account cap. The magic-link plugin's `storeToken` is left
+   as it is; the fix is that this flow's names cannot be built without the secret. Rotating
+   the secret orphans the rows, so the count and the generation read as fresh; that revives
+   nothing, because rotation also invalidates every link signed with the old secret.
 8. **Audit.** One `member_edit` entry in every club that holds the member, the member as
    actor, `{before: {email}, after: {email}}` in the detail. Reusing the action needs no
    migration.

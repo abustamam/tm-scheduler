@@ -192,6 +192,7 @@ export function memberEmailChange() {
 					const result = await requestEmailChange({
 						userId: ctx.context.session.user.id,
 						newEmail: ctx.body.newEmail,
+						secret: ctx.context.secret,
 						mintLink: async (claim) => {
 							const token = await signEmailChangeToken(
 								claim,
@@ -266,7 +267,7 @@ export function memberEmailChange() {
 						ctx.context.secret,
 					);
 					if (!claim) throw ctx.redirect(confirmRedirect("expired"));
-					const result = await confirmEmailChange(claim);
+					const result = await confirmEmailChange(claim, ctx.context.secret);
 					throw ctx.redirect(confirmRedirect(result.kind));
 				},
 			),
