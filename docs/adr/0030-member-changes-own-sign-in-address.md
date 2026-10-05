@@ -39,10 +39,14 @@ decisions in #1091 are the contract. In short:
    check runs at request time AND again inside the confirm transaction, with the `user.email`
    unique constraint as the backstop for a race. For this question only, a STORED address is
    trimmed of the Unicode spaces JS `.trim()` strips as well as the POSIX class (NBSP, U+FEFF
-   and the rest, plus U+200B): `normalizedEmail`'s narrower trim fails closed for the bind but
-   would fail OPEN here, letting a holder stored as the address plus a NBSP be overtaken. Both
-   arms run on every request, and a link is minted whichever email is sent, so the response
-   time does not say which.
+   and the rest, plus U+200B). `normalizedEmail`'s narrower trim would fail OPEN here, letting
+   a holder stored as the address plus a NBSP be overtaken. (The bind keeps its own trim: for
+   the Person being bound a padded address fails closed, but a DIFFERENT holder's padded
+   address can drop out of the bind's ambiguity check. That predates this change and is out
+   of its scope.) Both arms run on every request and a link is minted whichever email is
+   sent, so the same queries are issued either way. That is not a claim the timing is
+   indistinguishable: a LIMIT-1 scan over an unindexed normalised expression can finish
+   sooner on a hit. That gap is accepted and unmeasured.
 4. **Sessions, OAuth grants and `tmk_` tokens are untouched.** They key off the user id. A
    change is not a security reset.
 5. **Superadmin follows the address at once.** `reconcileSuperadminFlag` runs inside the
@@ -52,15 +56,20 @@ decisions in #1091 are the contract. In short:
    address and path and cannot express "per account", so the per-account count is expiring
    rows in Better Auth's existing `verification` table (`change-email-request:<userId>`,
    holding no address, under a per-account advisory lock). No migration.
-7. **Links live one hour** and name `{userId, from, to, issuedAtMs}`. Requesting again does
+7. **Links live one hour** and name `{userId, from, to, generation}`. Requesting again does
    not cancel an earlier link. Once any change lands, every link minted before it is dead,
    including the link that just landed and including one whose `from` the account has since
-   returned to (A→B, then B→A, must not let the old A→B link work again). How: the confirm
-   transaction records the landing instant in Better Auth's existing `verification` table
-   (`change-email-landed:<userId>`, one row, replaced at each landing, expiring a link
-   lifetime later), under the account row lock; a link is applied only if it was minted
-   strictly after that instant. The marker holds a timestamp, never an address, so there is
-   still no pending-change table: the pending change lives only in the signed link.
+   returned to (A→B, then B→A, must not let the old A→B link work again). How: each account
+   has a CHANGE GENERATION, an integer in Better Auth's existing `verification` table
+   (`change-email-generation:<userId>`, absent = 0). Every landed change increments it inside
+   the confirm transaction, under the account row lock. A link carries the generation read
+   when it was minted and is applied only while that is still the current generation. A
+   counter rather than a timestamp, so a clock step cannot revive a link. The row never
+   expires: Better Auth deletes every expired `verification` row on lookup, and a generation
+   that fell back to 0 would make generation-0 links current again; proving that safe through
+   expiry would lean on JWT `exp`, which is the same clock. The row holds a number, never an
+   address, so there is still no pending-change table: the pending change lives only in the
+   signed link.
 8. **Audit.** One `member_edit` entry in every club that holds the member, the member as
    actor, `{before: {email}, after: {email}}` in the detail. Reusing the action needs no
    migration.
@@ -70,7 +79,7 @@ naming the new address and changes nothing. Its button POSTs the token to
 `/member-email/apply`, the only path that runs the confirm. Mail providers and corporate link
 scanners prefetch GETs, so a GET that changed the address would apply every change the moment
 the mail arrived, defeating "the change happens when the link is clicked". The POST must carry
-an `Origin` that is one of the auth instance's trusted origins, checked by the endpoint itself:
+an `Origin` that is one of the auth instance's `trustedOrigins`, checked by the endpoint itself:
 Better Auth's global check only validates the origin when a cookie comes with the request, and
 this POST is meant to work from a phone with no session. The page is `no-store`, cannot be
 framed, and escapes every value it shows.
@@ -78,8 +87,12 @@ framed, and escapes every value it shows.
 **The bind re-reads the address in its own statement.** `bindVerifiedPerson` reads the
 account's address and then runs its UPDATE; a change confirmed in between would let it stamp
 the OLD address onto a second Person and bind it, past a household arm the change itself
-moved. The UPDATE now also requires that the account still signs in with that address. This
-is not a change to the bind rule, only the same in-statement atomicity its other arms have.
+moved. The UPDATE now also requires that the account's stored address is unchanged since it
+was read, compared raw to raw so an address stored with a leading BOM or NBSP still binds as
+it did before. This is not a change to the bind rule, only atomicity, and it has a known
+limit under READ COMMITTED: it closes the window before the UPDATE starts, but if the UPDATE
+is already waiting on the Person's row lock when a change commits, Postgres re-checks only
+that row (EvalPlanQual) and the subquery keeps reading the statement's original snapshot.
 
 **The writer.** `confirmEmailChange` (`src/server/account-email-change-logic.ts`) is a named
 waiver in `person-email-writers.guard.test.ts`, held to `eq(people.userId, …)` in its UPDATE's
@@ -90,8 +103,9 @@ edit takes them in.
 ### Deviation from #1091's "Key interfaces": Better Auth's `user.changeEmail` stays OFF
 
 The issue's brief suggested enabling Better Auth's built-in change-email flow. It is not
-used. Two endpoints of our own, in a small Better Auth plugin (`src/lib/change-email-plugin.ts`,
-`/api/auth/member-email/request` and `/member-email/confirm`), do the work instead, because
+used. Endpoints of our own, in a small Better Auth plugin (`src/lib/change-email-plugin.ts`:
+`/api/auth/member-email/request`, the `/member-email/confirm` page and its
+`/member-email/apply` button), do the work instead, because
 the built-in flow cannot hold this ADR's rules:
 
 - its link names the OLD address, not the account, and its verify finds the user by that

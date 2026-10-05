@@ -172,11 +172,52 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 		return new URL(url).searchParams.get("token") ?? "";
 	}
 
+	function unescapeHtml(value: string): string {
+		return value
+			.replace(/&quot;/g, '"')
+			.replace(/&#39;/g, "'")
+			.replace(/&lt;/g, "<")
+			.replace(/&gt;/g, ">")
+			.replace(/&amp;/g, "&");
+	}
+
+	/**
+	 * Press the button on a rendered confirm page, the way a browser would:
+	 * post exactly the fields of its POST form, to its `action`, with the
+	 * page's own Origin. Nothing is taken from the link URL, so a broken
+	 * action or a missing hidden input fails here.
+	 */
+	function submitPage(pageUrl: string, html: string): Promise<Response> {
+		const form =
+			/<form\b[^>]*\bmethod="post"[^>]*\baction="([^"]*)"[^>]*>([\s\S]*?)<\/form>/i.exec(
+				html,
+			);
+		if (!form) throw new Error("the confirm page has no POST form");
+		const action = new URL(unescapeHtml(form[1] ?? ""), pageUrl);
+		const fields = new URLSearchParams();
+		for (const input of (form[2] ?? "").matchAll(/<input\b[^>]*>/gi)) {
+			const name = /\bname="([^"]*)"/.exec(input[0])?.[1];
+			const value = /\bvalue="([^"]*)"/.exec(input[0])?.[1] ?? "";
+			if (name) fields.append(unescapeHtml(name), unescapeHtml(value));
+		}
+		return loaded.handler(
+			new Request(action, {
+				method: "POST",
+				headers: {
+					"content-type": "application/x-www-form-urlencoded",
+					origin: new URL(pageUrl).origin,
+					"x-real-ip": freshIp(),
+				},
+				body: fields.toString(),
+			}),
+		);
+	}
+
 	/** A member clicking the link and then the page's button. */
 	async function open(url: string): Promise<Response> {
 		const page = await getPage(url);
 		if (page.status !== 200) return page;
-		return apply(tokenOf(url));
+		return submitPage(url, await page.text());
 	}
 
 	function outcome(res: Response): string | null {
@@ -205,7 +246,7 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 			.where(
 				inArray(verification.identifier, [
 					...ids.map((id) => `change-email-request:${id}`),
-					...ids.map((id) => `change-email-landed:${id}`),
+					...ids.map((id) => `change-email-generation:${id}`),
 				]),
 			);
 		for (const c of [...clubs].reverse()) {
@@ -503,7 +544,7 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 			userId: club.memberUserId,
 			from: old ?? "",
 			to: addr("forged"),
-			issuedAtMs: Date.now(),
+			generation: 0,
 		};
 		const forged = await signEmailChangeToken(claim, "not-the-secret");
 		const expired = await signEmailChangeToken(claim, secret, -60);
@@ -704,7 +745,7 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 			expect(await personEmail(club.personId)).toBe(old);
 			expect(mails()).toEqual([]);
 
-			expect(outcome(await apply(tokenOf(link)))).toBe("changed");
+			expect(outcome(await submitPage(link, html))).toBe("changed");
 			expect(await emailOf(club.memberUserId)).toBe(next);
 		});
 
@@ -716,7 +757,7 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 					userId: club.memberUserId,
 					from: old ?? "",
 					to: `<script>x</script>@evil.example`,
-					issuedAtMs: Date.now(),
+					generation: 0,
 				},
 				secret,
 			);
@@ -769,7 +810,7 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 
 		sent.mockClear();
 		// The account is on A again, which is the old link's `from`: only the
-		// landing marker can tell this link is from before.
+		// change generation can tell this link is from before.
 		expect(outcome(await apply(tokenOf(aToB)))).toBe("stale");
 		expect(await emailOf(club.memberUserId)).toBe(a);
 		expect(mails()).toEqual([]);
@@ -863,7 +904,7 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 		});
 	});
 
-	it("does the same work whichever email the request sends (#1091 review)", async () => {
+	it("issues the same queries whichever email the request sends (#1091 review)", async () => {
 		const club = await freshClub();
 		const other = await freshClub();
 		const taken = (await emailOf(other.adminUserId)) ?? "";
@@ -875,7 +916,10 @@ describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 				mintLink,
 			}),
 		);
-		// A link is minted even though the in-use email carries none…
+		// The same work is issued whichever email is sent — not a claim the
+		// timing is identical (a LIMIT-1 scan can finish sooner on a hit; that
+		// gap is accepted and unmeasured). A link is minted though the in-use
+		// email carries none…
 		expect(mintLink).toHaveBeenCalledTimes(1);
 		// …and both collision arms ran, though the first already answered.
 		const collisionReads = statements.filter((q) =>

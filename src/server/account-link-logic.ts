@@ -251,6 +251,15 @@ export async function bindVerifiedPerson(input: {
 }): Promise<boolean> {
 	const verified = await verifiedEmailFor(input.userId);
 	if (!verified) return false;
+	// The STORED address, unnormalised, for the in-statement check below that
+	// the account's address is unchanged since it was read (#1091 review). It
+	// is compared raw to raw: comparing `verified` (JS `.trim()`) with SQL's
+	// `normalizedEmail` would refuse an address stored with a leading BOM or
+	// NBSP, which the two trims treat differently, and that bind succeeded
+	// before. Read second, so it must agree with `verified`; if a change landed
+	// between the two reads they disagree and the bind refuses (fails closed).
+	const stored = await storedEmailFor(input.userId);
+	if (stored === null || normalizeEmail(stored) !== verified) return false;
 
 	const bound = await db
 		.update(people)
@@ -260,12 +269,18 @@ export async function bindVerifiedPerson(input: {
 				eq(people.id, input.personId),
 				isNull(people.userId),
 				rosterPermitsBind(verified),
-				// The account STILL signs in with `verified` (#1091 review). It was
-				// read above, outside this statement; a change of sign-in address
-				// confirmed in between would otherwise let the bind stamp the OLD
-				// address — one the account no longer holds — onto this Person and
-				// bind it, past the household arm that the change itself moved.
-				// Not a new rule: the same atomicity every guard here already has.
+				// The account's stored address is UNCHANGED since it was read
+				// (#1091 review). It was read above, outside this statement; a
+				// change of sign-in address confirmed in between would otherwise
+				// let the bind stamp the OLD address — one the account no longer
+				// holds — onto this Person and bind it, past the household arm the
+				// change itself moved. Not a new rule: atomicity only.
+				//
+				// Known limit (READ COMMITTED): this closes the window before the
+				// statement starts. If the UPDATE is already waiting on this
+				// Person's row lock when the change commits, Postgres re-checks only
+				// the locked row (EvalPlanQual) and this subquery keeps reading the
+				// statement's original snapshot.
 				exists(
 					db
 						.select({ one: sql`1` })
@@ -273,7 +288,7 @@ export async function bindVerifiedPerson(input: {
 						.where(
 							and(
 								eq(bindingAccount.id, input.userId),
-								sql`${normalizedEmail(bindingAccount.email)} = ${verified}`,
+								eq(bindingAccount.email, stored),
 							),
 						),
 				),
@@ -291,6 +306,16 @@ export async function verifiedEmailFor(userId: string): Promise<string | null> {
 		.where(eq(user.id, userId))
 		.limit(1);
 	return normalizeEmail(account?.email);
+}
+
+/** The account's address exactly as stored, unnormalised, or null. */
+async function storedEmailFor(userId: string): Promise<string | null> {
+	const [account] = await db
+		.select({ email: user.email })
+		.from(user)
+		.where(eq(user.id, userId))
+		.limit(1);
+	return account?.email ?? null;
 }
 
 /** Why a bind for an address would be refused by the ROSTER. */

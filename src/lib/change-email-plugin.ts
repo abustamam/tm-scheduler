@@ -23,14 +23,15 @@
  *  - `POST /member-email/request` (session): mint and send the link.
  *  - `GET /member-email/confirm?token=` : a PAGE naming the new address, with
  *    one button. It changes NOTHING, so a link scanner's prefetch is harmless.
- *  - `POST /member-email/apply` (form, `token`): the button. Same-origin only,
- *    checked here whether or not a cookie came with it. The only path that
- *    runs `confirmEmailChange`.
+ *  - `POST /member-email/apply` (form, `token`): the button. Trusted origins
+ *    only (the auth instance's `trustedOrigins`), checked here whether or not
+ *    a cookie came with it. The only path that runs `confirmEmailChange`.
  *
- * The link is a one-hour HS256 JWT naming `{userId, from, to, issuedAtMs}` and
+ * The link is a one-hour HS256 JWT naming `{userId, from, to, generation}` and
  * a `purpose` no other token signed with this secret carries. Requesting again
- * does not cancel an earlier link; once ANY change lands, every link minted
- * before it is dead (`confirmEmailChange`).
+ * does not cancel an earlier link; once ANY change lands, the account's change
+ * generation moves on and every link minted before it is dead
+ * (`confirmEmailChange`).
  *
  * All the DB work is `#/server/account-email-change-logic`.
  */
@@ -79,7 +80,7 @@ const claimSchema = z.object({
 	userId: z.string().min(1),
 	from: z.string().min(1),
 	to: z.string().min(1),
-	issuedAtMs: z.number().int().positive(),
+	generation: z.number().int().nonnegative(),
 });
 
 /** Sign a change claim into the confirm link's token. */
@@ -99,8 +100,8 @@ export async function readEmailChangeToken(
 	const payload = await verifyJWT(token, secret);
 	const parsed = claimSchema.safeParse(payload);
 	if (!parsed.success) return null;
-	const { userId, from, to, issuedAtMs } = parsed.data;
-	return { userId, from, to, issuedAtMs };
+	const { userId, from, to, generation } = parsed.data;
+	return { userId, from, to, generation };
 }
 
 /** Where an applied link lands: Account settings, with the outcome. */
@@ -119,9 +120,11 @@ const PAGE_HEADERS = {
 };
 
 /**
- * The confirm page. Every interpolated value is escaped: the address came from
- * a member's typing, and the token from a URL anyone can edit (a forged one
- * fails at the POST, but its text still lands in this markup).
+ * The confirm page. Every interpolated value is escaped. The GET renders it
+ * only for a token that has already VERIFIED (signature, purpose, expiry), so
+ * a forged token never reaches this markup; but the address inside a genuine
+ * one came from a member's typing, and escaping every value is the rule
+ * whatever its source.
  */
 export function confirmPageHtml(input: {
 	applyUrl: string;
@@ -157,12 +160,13 @@ export function confirmPageHtml(input: {
 }
 
 /**
- * Same-origin only, cookie or not. Better Auth's global check validates the
+ * Trusted origins only (the auth instance's `trustedOrigins`), cookie or not.
+ * Better Auth's global check validates the
  * Origin only when a cookie comes with the request, and this POST is meant to
  * work from a phone with no session — so it checks for itself: an Origin that
  * is one of the auth instance's trusted origins, or refused.
  */
-const sameOriginOnly = createAuthMiddleware(async (ctx) => {
+const trustedOriginOnly = createAuthMiddleware(async (ctx) => {
 	const origin = ctx.request?.headers.get("origin") ?? null;
 	if (
 		!origin ||
@@ -249,7 +253,7 @@ export function memberEmailChange() {
 				{
 					method: "POST",
 					body: z.object({ token: z.string().max(4096) }),
-					use: [sameOriginOnly],
+					use: [trustedOriginOnly],
 					// A plain HTML form posts urlencoded; Better Auth's router
 					// accepts only JSON unless an endpoint says otherwise.
 					metadata: {

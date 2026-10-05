@@ -10,7 +10,8 @@
 //    "already in use" email, and the requester sees the same answer either way.
 //  - CONFIRM: one transaction re-checks everything, moves `user.email` and the
 //    bound Person's `people.email` together, reconciles superadmin, writes one
-//    `member_edit` per holding club and records when the change landed. Then
+//    `member_edit` per holding club and advances the account's change
+//    generation, which kills every link minted before it. Then
 //    the OLD address gets a notice.
 //  - Nothing else: sessions, OAuth grants and `tmk_` tokens key off the user
 //    id and are untouched (decision 4).
@@ -26,7 +27,6 @@ import {
 	buildChangeEmailVerificationEmail,
 } from "#/lib/magic-link-email";
 import {
-	EMAIL_CHANGE_LINK_LIFETIME_SECONDS,
 	EMAIL_CHANGE_REQUEST_WINDOW_SECONDS,
 	EMAIL_CHANGE_REQUESTS_PER_WINDOW,
 } from "#/lib/member-email-change";
@@ -40,10 +40,40 @@ export function emailChangeRequestIdentifier(userId: string): string {
 	return `change-email-request:${userId}`;
 }
 
-/** The `verification.identifier` holding when this account's address last
- *  changed (#1091 review, the A→B→A replay). Its value is that instant in ms. */
-export function emailChangeLandedIdentifier(userId: string): string {
-	return `change-email-landed:${userId}`;
+/**
+ * The `verification.identifier` holding this account's CHANGE GENERATION
+ * (#1091 review, the A→B→A replay): an integer, absent = 0, incremented by
+ * every landed change under the account row lock. A link carries the
+ * generation it was minted at and applies only while it is still current.
+ *
+ * A counter, not a timestamp: two `Date.now()` readings compared across a
+ * backward clock step could revive a replayed link; a counter only moves up.
+ */
+export function emailChangeGenerationIdentifier(userId: string): string {
+	return `change-email-generation:${userId}`;
+}
+
+/**
+ * The generation row never expires. Better Auth deletes EVERY expired
+ * `verification` row whenever it looks one up, and a generation that fell back
+ * to 0 would make a link minted at generation 0 current again. Making that safe
+ * by expiry would rest on JWT `exp`, which is the same clock this replaces. So
+ * the row is kept: one small row per account that has ever changed address.
+ */
+const GENERATION_NEVER_EXPIRES = new Date("9999-12-31T00:00:00Z");
+
+/** The account's current change generation (0 when it never changed). */
+export async function emailChangeGenerationFor(
+	userId: string,
+	executor: Pick<typeof db, "select"> = db,
+): Promise<number> {
+	const rows = await executor
+		.select({ value: verification.value })
+		.from(verification)
+		.where(
+			eq(verification.identifier, emailChangeGenerationIdentifier(userId)),
+		);
+	return Math.max(0, ...rows.map((row) => Number.parseInt(row.value, 10) || 0));
 }
 
 /** First int of the per-account advisory lock key: ASCII "EmlC". Its own
@@ -166,14 +196,15 @@ export async function takeEmailChangeRequestSlot(
 
 /**
  * A signed change-of-address claim: which account, from what, to what, and
- * when it was minted (ms). `issuedAtMs` is what kills a link once ANY change
- * lands, including one that lands the account back on this link's `from`.
+ * the account's change generation when it was minted. `generation` is what
+ * kills a link once ANY change lands, including one that lands the account
+ * back on this link's `from`.
  */
 export interface EmailChangeClaim {
 	userId: string;
 	from: string;
 	to: string;
-	issuedAtMs: number;
+	generation: number;
 }
 
 const isEmail = (value: string) => z.email().safeParse(value).success;
@@ -186,9 +217,14 @@ const isEmail = (value: string) => z.email().safeParse(value).success;
  * the confirm transaction asks again, because an address can be taken in the
  * hour the link is alive.
  *
- * Both branches do the same work (#1091 review): both collision arms run and a
- * link is minted whichever email is sent, so the response time does not say
- * which one it was.
+ * Both branches do the same work (#1091 review): both collision arms always
+ * run and a link is always minted, whichever email is sent, so the queries
+ * issued are the same. That is NOT a claim the timing is indistinguishable: a
+ * LIMIT-1 scan over an unindexed normalised expression can still finish sooner
+ * on a hit. That residual is accepted and unmeasured.
+ *
+ * The generation is read without a lock: a change landing between this read
+ * and the click only makes the link dead, which fails closed.
  */
 export async function requestEmailChange(input: {
 	userId: string;
@@ -220,7 +256,7 @@ export async function requestEmailChange(input: {
 		userId: input.userId,
 		from,
 		to,
-		issuedAtMs: Date.now(),
+		generation: await emailChangeGenerationFor(input.userId),
 	});
 	const { subject, html, text } = held
 		? buildAddressInUseEmail(to)
@@ -250,13 +286,13 @@ export type EmailChangeConfirmResult =
  *  1. lock every Person bound to the account (Person before anything else, the
  *     order the roster edit takes them in, `members-logic.ts`), refusing two or
  *     more, then the account row;
- *  2. refuse a claim minted at or before the account's last landed change, or
- *     whose `from` is not the account's address now;
+ *  2. refuse a claim minted at an earlier change generation, or whose `from` is
+ *     not the account's address now;
  *  3. ask the collision question again, inside the transaction;
  *  4. move `user.email` and `people.email` together;
  *  5. reconcile `is_superadmin` against the NEW address, both directions;
  *  6. one `member_edit` per club that holds the member, actor = that member;
- *  7. record when this change landed, which kills every link minted before it.
+ *  7. advance the change generation, which kills every link minted before it.
  *
  * Only after commit does the OLD address get its notice (decision 1), so a
  * refused or rolled-back confirm never tells anyone a change happened.
@@ -289,21 +325,9 @@ export async function confirmEmailChange(
 			if (!account) return { kind: "unbound" } as const;
 
 			// Serialised by the account row lock above: every landing for this
-			// account writes the marker under that same lock.
-			const landed = await tx
-				.select({ value: verification.value })
-				.from(verification)
-				.where(
-					eq(
-						verification.identifier,
-						emailChangeLandedIdentifier(claim.userId),
-					),
-				);
-			const lastLandedMs = Math.max(
-				0,
-				...landed.map((row) => Number(row.value) || 0),
-			);
-			if (!(claim.issuedAtMs > lastLandedMs)) {
+			// account advances the generation under that same lock.
+			const generation = await emailChangeGenerationFor(claim.userId, tx);
+			if (claim.generation !== generation) {
 				return { kind: "stale" } as const;
 			}
 			if (normalizeEmail(account.email) !== from || from === to) {
@@ -353,26 +377,21 @@ export async function confirmEmailChange(
 				});
 			}
 
-			// The landing marker. It outlives every link minted before it (a
-			// link lives EMAIL_CHANGE_LINK_LIFETIME_SECONDS from its mint, which
-			// is before now), so once it expires no link it could refuse is
-			// still alive.
-			const landedAt = Date.now();
+			// Advance the generation: every link minted before this landing is
+			// now dead. Kept forever — see GENERATION_NEVER_EXPIRES.
 			await tx
 				.delete(verification)
 				.where(
 					eq(
 						verification.identifier,
-						emailChangeLandedIdentifier(claim.userId),
+						emailChangeGenerationIdentifier(claim.userId),
 					),
 				);
 			await tx.insert(verification).values({
 				id: randomUUID(),
-				identifier: emailChangeLandedIdentifier(claim.userId),
-				value: String(landedAt),
-				expiresAt: new Date(
-					landedAt + EMAIL_CHANGE_LINK_LIFETIME_SECONDS * 1000,
-				),
+				identifier: emailChangeGenerationIdentifier(claim.userId),
+				value: String(generation + 1),
+				expiresAt: GENERATION_NEVER_EXPIRES,
 			});
 			return { kind: "changed", from, to } as const;
 		});
