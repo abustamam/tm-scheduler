@@ -1303,8 +1303,9 @@ export async function planTemplateConversion(
  * (ADR-0028 — a human sends every message). The officer learns who they are
  * BEFORE applying: `MeetingTemplateDialog` lists the names from
  * `planTemplateConversion`'s preview and tells the officer to message them
- * afterwards. Its `onApply` only reloads the meeting; nothing drafts or sends a
- * message on the officer's behalf.
+ * afterwards. Its `onApply` applies the conversion (`applyTemplateToMeeting`)
+ * and then reloads the meeting; nothing drafts or sends a message on the
+ * officer's behalf.
  *
  * Authorization is the CALLER's: this function has no session. The server fn
  * gates on the club role and the archive state before calling it.

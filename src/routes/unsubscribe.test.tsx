@@ -21,11 +21,15 @@ import { Route } from "./unsubscribe";
 afterEach(cleanup);
 
 /**
- * Any static, side-effect or dynamic import of a `server/` module, through
- * either alias (`#/`, `@/`) or a relative path.
+ * ANY string literal — single, double or backtick quoted — whose content starts
+ * with a `server/` module path, through either alias (`#/`, `@/`) or a relative
+ * path, whatever surrounds it. Matching the literal rather than the import
+ * syntax means no spelling of an import (static, side-effect, dynamic, a
+ * template literal, a comment inside `import(…)`) slips past. It also fails a
+ * commented-out server import, which is acceptable here: this page is static
+ * and has no reason to name a server module at all.
  */
-const SERVER_IMPORT =
-	/(?:\bfrom\s*|\bimport\s*\(?\s*)["'](?:#\/|@\/|(?:\.\.?\/)+)server\//;
+const SERVER_IMPORT = /["'`](?:#\/|@\/|(?:\.\.?\/)+)server\//;
 
 /** Mount the route's component at `url` under a memory router. */
 async function mountAt(url: string) {
@@ -81,6 +85,8 @@ describe("/unsubscribe (static since #902)", () => {
 		'import "#/server/clubs";',
 		'const m = await import("#/server/clubs");',
 		"const m = await import('../server/clubs');",
+		"const m = await import(`#/server/clubs`);",
+		'const m = await import(/* lazy */ "#/server/clubs");',
 	])("SERVER_IMPORT recognises %s", (line) => {
 		expect(line).toMatch(SERVER_IMPORT);
 	});
