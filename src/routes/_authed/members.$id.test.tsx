@@ -447,7 +447,7 @@ describe("member profile — edit dialog email (#907)", () => {
 		expect(input.value).toBe("ada@example.com");
 		expect(
 			screen.getByText(
-				"This is Ada Member's sign-in address. Only they can change it.",
+				"This is Ada Member's sign-in address. Only they can change it, from Account settings.",
 			),
 		).toBeTruthy();
 	});
@@ -460,7 +460,7 @@ describe("member profile — edit dialog email (#907)", () => {
 		expect(input.readOnly).toBe(false);
 		expect(
 			screen.queryByText(
-				"This is Ada Member's sign-in address. Only they can change it.",
+				"This is Ada Member's sign-in address. Only they can change it, from Account settings.",
 			),
 		).toBeNull();
 	});

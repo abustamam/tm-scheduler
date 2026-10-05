@@ -30,6 +30,14 @@ vi.mock("#/server/oauth-grants", () => ({
 	getConnectedApps,
 	disconnectConnectedApp: vi.fn(),
 }));
+// The sign-in email section (#1091) reads its state through a server fn that
+// reaches `#/db`; mocked like the other sections' server fns.
+vi.mock("#/server/account-email", () => ({
+	getSignInEmailState: vi.fn(async () => ({
+		email: "a@b.example",
+		canChange: true,
+	})),
+}));
 vi.mock("#/server/meetings", () => ({
 	listMyCommitments: vi.fn(),
 }));
