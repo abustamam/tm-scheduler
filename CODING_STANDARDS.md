@@ -289,6 +289,7 @@ There is no per-club copy; `members.email` was dropped by migration 0109.
 | the bind (`bindVerifiedPerson`) | the rule below holds; it reads the address off the `user` row itself |
 | the roster edit (`applyMemberEdit`) | `isNull(people.userId)` AND `soleHoldingClub(clubId)`, in the UPDATE's own WHERE |
 | the CSV importer's fill (`importPeopleAndMembers`) | the same two, plus the address is blank |
+| the member's own address change (`confirmEmailChange`, ADR-0030) | the new address was just proved by its link, and `eq(people.userId, …)` for the confirming account is in the UPDATE's own WHERE |
 | the superadmin first-admin repair, `mergePeople` | their named waivers |
 | a plain INSERT of a brand-new Person | always — a fresh row is nobody's yet |
 

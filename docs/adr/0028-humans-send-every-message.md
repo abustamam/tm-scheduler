@@ -3,7 +3,7 @@
 Status: Accepted
 
 Supersedes in part: ADR-0023 (its reminder purpose; the poller mechanism stands).
-Relates to: ADR-0030 (pending in #1091: a member changes their own sign-in address), #902 (this change), #903 (the
+Relates to: ADR-0030 (a member changes their own sign-in address, #1091), #902 (this change), #903 (the
 minutes email became a draft), #898 / #899 (built draft-first under this rule), #271 / #272 / #274
 (the reminders this removes).
 
@@ -31,8 +31,8 @@ button that opens the officer's app, never a sender.
 Three classes of mail are outside the rule, and only these three:
 
 1. **Account-security mail to the account's own address**, sent because that account's holder
-   just asked for it. That is the magic-link sign-in email, and, once ADR-0030 lands (pending,
-   #1091), the change-of-address verification link sent to the new address a member typed
+   just asked for it. That is the magic-link sign-in email, and, under ADR-0030 (#1091), the
+   change-of-address verification link sent to the new address a member typed
    (including its "this address is already in use" variant) and the "your sign-in address was
    changed" notice sent to the old one. These are not club communication. No human could send
    them, since their whole job is to prove control of an inbox, and nobody but the account holder

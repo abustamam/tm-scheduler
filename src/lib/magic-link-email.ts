@@ -1,4 +1,8 @@
 import { escapeHtml } from "#/lib/html-escape";
+import {
+	ADDRESS_IN_USE_SENTENCE,
+	EMAIL_CHANGE_LINK_LIFETIME_SECONDS,
+} from "#/lib/member-email-change";
 
 // Single source of truth for the magic-link TTL: src/lib/auth.ts imports this
 // for the magicLink `expiresIn`, and the email copy below derives its wording
@@ -106,5 +110,131 @@ export function buildInviteEmail(
   </body>
 </html>`;
 
+	return { subject, html, text };
+}
+
+// ---------------------------------------------------------------------------
+// Changing a member's own sign-in address (#1091, ADR-0030). Three emails, all
+// ADR-0028 class 1: account-security mail to the account's own address, sent
+// because its holder just asked. None carries club content.
+// ---------------------------------------------------------------------------
+
+/** How long a change-of-address link lives (decision 7); its one home is
+ *  `#/lib/member-email-change`. */
+export const CHANGE_EMAIL_LINK_EXPIRY_SECONDS =
+	EMAIL_CHANGE_LINK_LIFETIME_SECONDS;
+const CHANGE_LINK_HOURS = CHANGE_EMAIL_LINK_EXPIRY_SECONDS / 3600;
+const CHANGE_LINK_LIFETIME_PHRASE = `${CHANGE_LINK_HOURS} hour${CHANGE_LINK_HOURS === 1 ? "" : "s"}`;
+
+/** One shell for the three change emails, so their markup cannot drift. */
+function changeEmailShell(heading: string, bodyHtml: string): string {
+	return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+  </head>
+  <body style="margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <div style="max-width:480px;margin:0 auto;padding:32px 24px;">
+      <h1 style="font-size:20px;color:#18181b;margin:0 0 16px;">${heading}</h1>
+${bodyHtml}
+    </div>
+  </body>
+</html>`;
+}
+
+/**
+ * Sent to the NEW address a member typed: the link that proves they control it.
+ * The change happens only when it is clicked.
+ */
+export function buildChangeEmailVerificationEmail(
+	url: string,
+	newAddress: string,
+): MagicLinkEmail {
+	const subject = "Confirm your new GavelUp sign-in address";
+	const text = [
+		"Confirm your new GavelUp sign-in address",
+		"",
+		`Someone signed in to GavelUp asked to change their sign-in address to ${newAddress}. Click the link below to confirm. Nothing changes until you do.`,
+		"",
+		url,
+		"",
+		`This link expires in ${CHANGE_LINK_LIFETIME_PHRASE}. If you didn't ask for this, you can safely ignore this email.`,
+	].join("\n");
+	const safeAddress = escapeHtml(newAddress);
+	const html = changeEmailShell(
+		"Confirm your new sign-in address",
+		`      <p style="font-size:15px;line-height:1.5;color:#3f3f46;margin:0 0 24px;">
+        Someone signed in to GavelUp asked to change their sign-in address to <strong>${safeAddress}</strong>. Nothing changes until you confirm.
+      </p>
+      <a href="${url}" style="display:inline-block;background:#18181b;color:#ffffff;text-decoration:none;font-size:15px;font-weight:600;padding:12px 20px;border-radius:8px;">
+        Confirm this address
+      </a>
+      <p style="font-size:13px;line-height:1.5;color:#71717a;margin:24px 0 0;">
+        Or paste this link into your browser:<br />
+        <a href="${url}" style="color:#3f3f46;word-break:break-all;">${url}</a>
+      </p>
+      <p style="font-size:13px;line-height:1.5;color:#a1a1aa;margin:24px 0 0;">
+        This link expires in ${CHANGE_LINK_LIFETIME_PHRASE}. If you didn't ask for this, you can safely ignore this email.
+      </p>`,
+	);
+	return { subject, html, text };
+}
+
+/**
+ * Sent to the NEW address instead of a link when another account or another
+ * member already carries it (decision 3). The requester's screen is the same
+ * either way; only this inbox learns the real answer.
+ */
+export function buildAddressInUseEmail(newAddress: string): MagicLinkEmail {
+	const subject = "This address is already in use on GavelUp";
+	const sentence = ADDRESS_IN_USE_SENTENCE;
+	const text = [
+		"This address is already in use on GavelUp",
+		"",
+		`Someone signed in to GavelUp asked to change their sign-in address to ${newAddress}.`,
+		"",
+		sentence,
+		"",
+		"If you didn't ask for this, you can safely ignore this email.",
+	].join("\n");
+	const html = changeEmailShell(
+		"This address is already in use",
+		`      <p style="font-size:15px;line-height:1.5;color:#3f3f46;margin:0 0 16px;">
+        Someone signed in to GavelUp asked to change their sign-in address to <strong>${escapeHtml(newAddress)}</strong>.
+      </p>
+      <p style="font-size:15px;line-height:1.5;color:#3f3f46;margin:0 0 16px;">${sentence}</p>
+      <p style="font-size:13px;line-height:1.5;color:#a1a1aa;margin:24px 0 0;">
+        If you didn't ask for this, you can safely ignore this email.
+      </p>`,
+	);
+	return { subject, html, text };
+}
+
+/**
+ * Sent to the OLD address once a change has been confirmed, and only then
+ * (decision 1). The old inbox does not have to approve: the usual reason to
+ * change is that it was lost.
+ */
+export function buildAddressChangedNoticeEmail(
+	newAddress: string,
+): MagicLinkEmail {
+	const subject = "Your GavelUp sign-in address was changed";
+	const sentence = `Your GavelUp sign-in address was changed to ${newAddress}. If this wasn't you, contact GavelUp support.`;
+	const text = [
+		"Your GavelUp sign-in address was changed",
+		"",
+		sentence,
+		"",
+		"You'll sign in with the new address from now on.",
+	].join("\n");
+	const html = changeEmailShell(
+		"Your sign-in address was changed",
+		`      <p style="font-size:15px;line-height:1.5;color:#3f3f46;margin:0 0 16px;">
+        Your GavelUp sign-in address was changed to <strong>${escapeHtml(newAddress)}</strong>. If this wasn't you, contact GavelUp support.
+      </p>
+      <p style="font-size:13px;line-height:1.5;color:#71717a;margin:0;">
+        You'll sign in with the new address from now on.
+      </p>`,
+	);
 	return { subject, html, text };
 }

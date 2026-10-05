@@ -64,6 +64,9 @@ const otherPeople = alias(people, "other_people");
 const holding = alias(members, "holding_member");
 const vouching = alias(members, "vouching_member");
 const otherHolding = alias(members, "other_holding_member");
+/** The binding account, re-read INSIDE the bind's own statement (#1091
+ *  review). Aliased so it always renders qualified (#802). */
+const bindingAccount = alias(user, "binding_account");
 
 /**
  * Does this Person COUNT as a holder of an address, for ambiguity? Only when it
@@ -248,6 +251,15 @@ export async function bindVerifiedPerson(input: {
 }): Promise<boolean> {
 	const verified = await verifiedEmailFor(input.userId);
 	if (!verified) return false;
+	// The STORED address, unnormalised, for the in-statement check below that
+	// the account's address is unchanged since it was read (#1091 review). It
+	// is compared raw to raw: comparing `verified` (JS `.trim()`) with SQL's
+	// `normalizedEmail` would refuse an address stored with a leading BOM or
+	// NBSP, which the two trims treat differently, and that bind succeeded
+	// before. Read second, so it must agree with `verified`; if a change landed
+	// between the two reads they disagree and the bind refuses (fails closed).
+	const stored = await storedEmailFor(input.userId);
+	if (stored === null || normalizeEmail(stored) !== verified) return false;
 
 	const bound = await db
 		.update(people)
@@ -257,6 +269,29 @@ export async function bindVerifiedPerson(input: {
 				eq(people.id, input.personId),
 				isNull(people.userId),
 				rosterPermitsBind(verified),
+				// The account's stored address is UNCHANGED since it was read
+				// (#1091 review). It was read above, outside this statement; a
+				// change of sign-in address confirmed in between would otherwise
+				// let the bind stamp the OLD address — one the account no longer
+				// holds — onto this Person and bind it, past the household arm the
+				// change itself moved. Not a new rule: atomicity only.
+				//
+				// Known limit (READ COMMITTED): this closes the window before the
+				// statement starts. If the UPDATE is already waiting on this
+				// Person's row lock when the change commits, Postgres re-checks only
+				// the locked row (EvalPlanQual) and this subquery keeps reading the
+				// statement's original snapshot.
+				exists(
+					db
+						.select({ one: sql`1` })
+						.from(bindingAccount)
+						.where(
+							and(
+								eq(bindingAccount.id, input.userId),
+								eq(bindingAccount.email, stored),
+							),
+						),
+				),
 			),
 		)
 		.returning({ id: people.id });
@@ -271,6 +306,16 @@ export async function verifiedEmailFor(userId: string): Promise<string | null> {
 		.where(eq(user.id, userId))
 		.limit(1);
 	return normalizeEmail(account?.email);
+}
+
+/** The account's address exactly as stored, unnormalised, or null. */
+async function storedEmailFor(userId: string): Promise<string | null> {
+	const [account] = await db
+		.select({ email: user.email })
+		.from(user)
+		.where(eq(user.id, userId))
+		.limit(1);
+	return account?.email ?? null;
 }
 
 /** Why a bind for an address would be refused by the ROSTER. */
@@ -331,6 +376,74 @@ export async function rosterConflictFor(
 		)
 		.limit(1);
 	return others.length > 0 ? "shared_address" : null;
+}
+
+/**
+ * Every space a stored address may carry at either end, for the COLLISION
+ * question only (#1091 review): the POSIX class `normalizedEmail` trims, plus
+ * the Unicode spaces JS `.trim()` also strips (NBSP, U+1680, U+2000–U+200A,
+ * U+2028/9, U+202F, U+205F, U+3000, U+FEFF) and the zero-width space U+200B.
+ *
+ * `normalizedEmail` leaves those, which fails CLOSED for the bind (it is
+ * documented there) but OPEN here: a holder stored as `victim@x.com` plus a
+ * NBSP would not block a change TO `victim@x.com`. The bind rule is untouched;
+ * only "is this address somebody else's" reads through this.
+ */
+const HELD_ADDRESS_EDGE_SPACE =
+	"^[[:space:]\u00a0\u1680\u2000-\u200b\u2028\u2029\u202f\u205f\u3000\ufeff]+|[[:space:]\u00a0\u1680\u2000-\u200b\u2028\u2029\u202f\u205f\u3000\ufeff]+$";
+
+/** A stored address, normalised for the collision question. */
+function heldAddress(column: AnyPgColumn): SQL {
+	return sql`lower(regexp_replace(${column}, ${HELD_ADDRESS_EDGE_SPACE}, '', 'g'))`;
+}
+
+/**
+ * **Is this address already somebody else's?** (#1091, ADR-0030) The question a
+ * member changing their own sign-in address must get "no" to, asked at request
+ * time and again inside the confirm transaction.
+ *
+ * Two arms, either one refuses:
+ *  - another `user` row carries it (a second account already signs in with it);
+ *  - another Person carries it who COUNTS AS A HOLDER (`countsAsHolder`, the
+ *    bind's own rule): bound to an account, or on at least one roster. That is
+ *    ADR-0008's household case — moving an address onto this Person would make
+ *    it ambiguous, and the bind refuses an ambiguous address for BOTH Persons.
+ *
+ * "Another" means not `userId`'s own account and not a Person bound to it. It
+ * is the same predicate the bind uses, not a restatement, so a change can
+ * never create an ambiguity the bind would then refuse.
+ *
+ * `address` must already be normalised (`normalizeEmail`). `executor` is a
+ * transaction handle at confirm time, so the read sees that transaction.
+ */
+export async function addressHeldByAnother(
+	address: string,
+	userId: string,
+	executor: Pick<typeof db, "select"> = db,
+): Promise<boolean> {
+	// BOTH arms run every time (#1091 review): the request path answers the
+	// same whichever arm hits, so it must also take the same time.
+	const [otherUser, otherPerson] = await Promise.all([
+		executor
+			.select({ id: user.id })
+			.from(user)
+			.where(
+				and(ne(user.id, userId), sql`${heldAddress(user.email)} = ${address}`),
+			)
+			.limit(1),
+		executor
+			.select({ id: people.id })
+			.from(people)
+			.where(
+				and(
+					or(isNull(people.userId), ne(people.userId, userId)),
+					sql`${heldAddress(people.email)} = ${address}`,
+					countsAsHolder(people),
+				),
+			)
+			.limit(1),
+	]);
+	return otherUser.length > 0 || otherPerson.length > 0;
 }
 
 /** The DISTINCT Persons whose own address is this one and who count as a

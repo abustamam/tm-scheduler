@@ -733,7 +733,7 @@ function emailRefusedCopy(
 	name: string,
 ): string {
 	return reason === "bound"
-		? `This is ${name}'s sign-in address. Only they can change it.`
+		? `This is ${name}'s sign-in address. Only they can change it, from Account settings.`
 		: `${name} is also on another club's roster, so their email can't be changed here. Contact GavelUp support.`;
 }
 

@@ -3,7 +3,8 @@
 Status: Accepted
 
 Relates to: ADR-0008 (Person vs Membership), ADR-0026, #906 (phone), #907 (email, this
-change), #756 (the split this supersedes), #755 (the blast-radius guard reused here), #759.
+change), #756 (the split this supersedes), #755 (the blast-radius guard reused here), #759,
+ADR-0030 (how a member changes the address once it is theirs, #1091).
 
 ## Context
 
@@ -75,7 +76,8 @@ never-auto-merge-on-a-shared-email.
 
 - Members of several clubs sign in by email.
 - A typo is repaired on the member page, until the member signs in; after that the field is
-  read-only and says why.
+  read-only and says why, and the member changes it themselves from Account settings
+  (ADR-0030).
 - The CSV importer's email arm matches `people.email` globally. A row carrying the address of
   a Person only another club holds now resolves to that Person and is refused as `foreign`
   (#759), exactly as a foreign Customer ID is — rather than minting a second Person for the
