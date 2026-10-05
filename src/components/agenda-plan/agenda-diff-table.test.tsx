@@ -164,7 +164,7 @@ describe("AgendaDiffTable", () => {
 				lines={[
 					{
 						...UPDATE,
-						warnings: ["weekday_mismatch", "time_ignored", "meeting_cancelled"],
+						warnings: ["weekday_mismatch", "time_ignored"],
 					},
 				]}
 				blocking={[]}
@@ -173,7 +173,6 @@ describe("AgendaDiffTable", () => {
 		);
 		expect(screen.getByText(/usual weekday/)).toBeTruthy();
 		expect(screen.getByText(/time it already has/)).toBeTruthy();
-		expect(screen.getByText(/cancelled/)).toBeTruthy();
 	});
 
 	it("puts a blocked date back in the position it was asked in", () => {

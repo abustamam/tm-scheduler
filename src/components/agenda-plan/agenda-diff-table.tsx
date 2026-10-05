@@ -37,7 +37,6 @@ const HEAD =
 /** One sentence per warning, in the words an officer is thinking in. */
 const WARNING_LABEL: Record<AgendaWarning, string> = {
 	weekday_mismatch: "Not the club's usual weekday",
-	meeting_cancelled: "This meeting is cancelled",
 	time_ignored: "Keeping the time it already has",
 };
 

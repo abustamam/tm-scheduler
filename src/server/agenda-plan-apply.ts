@@ -41,6 +41,7 @@ import { roleDefinitions } from "#/db/schema";
 import {
 	AGENDA_APPLIED_WHILE_OPEN_MESSAGE,
 	AGENDA_EXPIRED_IN_LOCK_MESSAGE,
+	AGENDA_MEETING_CANCELLED_IN_LOCK_MESSAGE,
 	AGENDA_MEETING_LOCKED_IN_LOCK_MESSAGE,
 	AGENDA_STILL_BLOCKED_MESSAGE,
 	AGENDA_UNREADABLE_MESSAGE,
@@ -58,7 +59,7 @@ import {
 	parseAgendaPayload,
 } from "#/server/agenda-plan-pending-schemas";
 import { lockClubForWrite } from "#/server/club-write-lock";
-import { McpError } from "#/server/mcp/errors";
+import { type McpBlockingCode, McpError } from "#/server/mcp/errors";
 import { applyPendingPlanLocked } from "#/server/mcp-pending-apply";
 import { insertMeetingWithSlots } from "#/server/meeting-create-logic";
 import { applyMeetingMetaPatch } from "#/server/meetings-logic";
@@ -144,13 +145,19 @@ export async function applyAgendaPlan(
 			// Before the hash — see the module header. A blocking item is a
 			// specific explanation; a hash mismatch is a generic one, and the
 			// specific one should win when both are true.
+			// A meeting completed or cancelled during the wait each get a sentence
+			// only this path says (#1088 added the second), so a test can tell the
+			// in-lock refusal from the plan-time one.
 			if (blocking.length > 0) {
-				const locked = blocking.some((b) => b.code === "MEETING_LOCKED");
+				const has = (code: McpBlockingCode) =>
+					blocking.some((b) => b.code === code);
 				throw new McpError(
 					"BLOCKED",
-					locked
+					has("MEETING_LOCKED")
 						? AGENDA_MEETING_LOCKED_IN_LOCK_MESSAGE
-						: AGENDA_STILL_BLOCKED_MESSAGE,
+						: has("MEETING_CANCELLED")
+							? AGENDA_MEETING_CANCELLED_IN_LOCK_MESSAGE
+							: AGENDA_STILL_BLOCKED_MESSAGE,
 					{ blocking },
 				);
 			}

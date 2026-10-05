@@ -73,7 +73,8 @@ export const upsertAgendasTool: McpToolDefinition = {
 			"plan saying what each date would do, plus a confirmUrl. Give the user " +
 			"that link — they open it signed in, read the per-date diff, and save " +
 			"it there. It cannot reschedule or delete a meeting, and it never sets " +
-			"a meeting number.",
+			"a meeting number. A date whose meeting is completed or cancelled is " +
+			"blocked: its agenda no longer accepts changes.",
 		inputSchema,
 	},
 	handler: async (input, ctx) => {

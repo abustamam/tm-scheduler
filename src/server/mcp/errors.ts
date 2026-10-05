@@ -97,8 +97,26 @@ export type McpBlockingCode =
 	 * ran. `upsert_agendas` (#808) has the same pair: its planner pushes this
 	 * item so the confirm page can explain it, and its apply re-plans inside the
 	 * club lock and refuses again with a sentence only that path says.
+	 *
+	 * `upsert_agendas` raises it for a COMPLETED meeting only. A cancelled one
+	 * gets `MEETING_CANCELLED` below.
 	 */
 	| "MEETING_LOCKED"
+	/**
+	 * The date names a CANCELLED meeting, which accepts no agenda changes until
+	 * it is restored (#1088). Raised by `upsert_agendas`: a cancelled meeting
+	 * still occupies its date, so the date resolves to it, and editing it was a
+	 * warning until #1088 made it a refusal to match #1085's browser refusal.
+	 *
+	 * Its own code there, rather than `MEETING_LOCKED` with another sentence as
+	 * `assign_roles` does, because the apply's in-lock re-plan maps each code to
+	 * its own sentence, and a code shared by two states would have to read the
+	 * message to tell which one to say. Same pair as the lock: the planner pushes
+	 * this so the confirm page can explain it, the apply re-plans inside the club
+	 * lock and refuses with `AGENDA_MEETING_CANCELLED_IN_LOCK_MESSAGE`, and
+	 * `applyMeetingMetaPatch` refuses again in its own conditional UPDATE.
+	 */
+	| "MEETING_CANCELLED"
 	/**
 	 * There is no meeting on that date and no standing rule to take a start time
 	 * from, so `upsert_agendas` cannot create one (#808).

@@ -17,6 +17,7 @@ import {
 	MEETING_ALREADY_CANCELLED_MESSAGE,
 	MEETING_CANCEL_COMPLETED_MESSAGE,
 	MEETING_CANCEL_PAST_MESSAGE,
+	MEETING_CANCELLED_MESSAGE,
 	MEETING_NOT_CANCELLED_MESSAGE,
 	MEETING_REOPEN_NOT_COMPLETED_MESSAGE,
 	MEETING_RESTORE_PAST_MESSAGE,
@@ -505,11 +506,33 @@ export async function applyMeetingMetaPatch(
 	// An empty patch is a save with nothing in it — a `set` with no keys is a
 	// drizzle error, and an audit entry naming no change is noise. Reachable from
 	// the dialog now that an unchanged resubmit drops out above.
+	//
+	// A cancelled meeting refuses even this (#1088): "saved" on a meeting hidden
+	// from every member is a success the caller should not be told. With no
+	// UPDATE to make conditional, the status this function read is the only one
+	// there is to check.
 	const changed = Object.keys(next) as (keyof typeof next)[];
-	if (changed.length === 0) return { clubId: meeting.clubId };
+	if (changed.length === 0) {
+		assertMeetingNotCancelled(meeting.status);
+		return { clubId: meeting.clubId };
+	}
 
 	await conn.transaction(async (tx) => {
-		await tx.update(meetings).set(next).where(eq(meetings.id, input.meetingId));
+		// Conditional on status IN the UPDATE (#1088), not on the status read
+		// above: that read takes no lock, so a cancel landing between it and here
+		// would otherwise be written straight past. No meeting-row lock either —
+		// the `upsert_agendas` apply already holds the club write lock, and a new
+		// lock here would change lock order on that path. Matching no row means
+		// the meeting was cancelled (it existed a moment ago), and the throw rolls
+		// the transaction back before any `meeting_edit` is logged.
+		const written = await tx
+			.update(meetings)
+			.set(next)
+			.where(
+				and(eq(meetings.id, input.meetingId), ne(meetings.status, "cancelled")),
+			)
+			.returning({ id: meetings.id });
+		if (written.length === 0) throw new Error(MEETING_CANCELLED_MESSAGE);
 		// `before` mirrors `after` key for key, and both name only what actually
 		// MOVED (unchanged keys were dropped above) — so the entry reads as the
 		// diff it is rather than eleven columns of which two changed.
