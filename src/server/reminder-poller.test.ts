@@ -16,7 +16,7 @@ import {
 	sweepExpiredAccessRequests,
 } from "./access-requests-logic";
 import { sweepExpiredPendingPlans } from "./mcp-pending-logic";
-import { runReminderTick } from "./reminder-poller";
+import { runPollerTick } from "./reminder-poller";
 
 beforeEach(() => {
 	vi.spyOn(console, "error").mockImplementation(() => {});
@@ -39,9 +39,9 @@ afterEach(() => {
 	vi.clearAllMocks();
 });
 
-describe("runReminderTick isolation (#866)", () => {
+describe("runPollerTick isolation (#866)", () => {
 	it("delivers access-request mail and runs both sweeps once per tick", async () => {
-		await runReminderTick();
+		await runPollerTick();
 		expect(deliverAccessRequestMail).toHaveBeenCalledTimes(1);
 		expect(sweepExpiredPendingPlans).toHaveBeenCalledTimes(1);
 		expect(sweepExpiredAccessRequests).toHaveBeenCalledTimes(1);
@@ -49,14 +49,14 @@ describe("runReminderTick isolation (#866)", () => {
 
 	it("still sweeps when access-request delivery throws", async () => {
 		vi.mocked(deliverAccessRequestMail).mockRejectedValue(new Error("boom"));
-		await runReminderTick();
+		await runPollerTick();
 		expect(sweepExpiredPendingPlans).toHaveBeenCalledTimes(1);
 		expect(sweepExpiredAccessRequests).toHaveBeenCalledTimes(1);
 	});
 
 	it("still runs the access-request sweep when the pending-plan sweep throws", async () => {
 		vi.mocked(sweepExpiredPendingPlans).mockRejectedValue(new Error("boom"));
-		await runReminderTick();
+		await runPollerTick();
 		expect(sweepExpiredAccessRequests).toHaveBeenCalledTimes(1);
 	});
 });

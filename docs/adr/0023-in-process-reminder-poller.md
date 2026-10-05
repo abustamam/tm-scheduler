@@ -7,8 +7,9 @@ Status: Superseded in part by ADR-0028
 > the reminder producer are gone. The MECHANISM below still stands and still runs: the Nitro-booted
 > interval, the overlap guard, claim-before-send and bounded retry now serve the request-access
 > delivery pass (#866), with `MAX_SEND_ATTEMPTS`, `RETRY_BACKOFF_MS` and the injectable transport in
-> `src/server/mail-delivery.ts`, plus the two retention sweeps. Read the file and table names below
-> as history.
+> `src/server/mail-delivery.ts`, plus the two retention sweeps. The functions are now
+> `runPollerTick` / `startBackgroundPoller` / `stopBackgroundPoller` (the file and env var names are
+> unchanged). Read the other file, function and table names below as history.
 
 ## Context
 

@@ -220,19 +220,19 @@ export async function collapseMemberships(
 		.set({ memberId: keeperId })
 		.where(eq(meetingAwards.memberId, absorbedId));
 
-	// 7. role_slots.assigned_member_id — no member-unique; re-point all.
+	// 6. role_slots.assigned_member_id — no member-unique; re-point all.
 	await tx
 		.update(roleSlots)
 		.set({ assignedMemberId: keeperId })
 		.where(eq(roleSlots.assignedMemberId, absorbedId));
 
-	// 8. table_topics_speakers.member_id — no member-unique; re-point all.
+	// 7. table_topics_speakers.member_id — no member-unique; re-point all.
 	await tx
 		.update(tableTopicsSpeakers)
 		.set({ memberId: keeperId })
 		.where(eq(tableTopicsSpeakers.memberId, absorbedId));
 
-	// 8b. club_action_items.owner_member_id (#529) — nullable, no member-unique
+	// 7b. club_action_items.owner_member_id (#529) — nullable, no member-unique
 	//    constraint, so re-point all. Without this the absorbed membership's
 	//    action items lose "whose job this was" on every merge. The FK
 	//    drift-guard in this module's integration test is what caught the
@@ -242,7 +242,7 @@ export async function collapseMemberships(
 		.set({ ownerMemberId: keeperId })
 		.where(eq(clubActionItems.ownerMemberId, absorbedId));
 
-	// 8c. meeting_timings.recorded_by_member_id (#730) — nullable attribution,
+	// 7c. meeting_timings.recorded_by_member_id (#730) — nullable attribution,
 	//    and the table's only unique index is on `slot_id`, which carries no
 	//    member at all. So a plain re-point can never collide: two members can
 	//    never both hold one slot's timing. Without this the absorbed
@@ -255,7 +255,7 @@ export async function collapseMemberships(
 		.set({ recordedByMemberId: keeperId })
 		.where(eq(meetingTimings.recordedByMemberId, absorbedId));
 
-	// 8d. guest_invites.invited_by_member_id (#899) — nullable attribution of
+	// 7d. guest_invites.invited_by_member_id (#899) — nullable attribution of
 	//    who opened an invite draft. The table's unique index is (guest,
 	//    meeting), which carries no member, so a plain re-point cannot collide.
 	//    Without it the absorbed membership's delete would SET NULL every
@@ -265,7 +265,7 @@ export async function collapseMemberships(
 		.set({ invitedByMemberId: keeperId })
 		.where(eq(guestInvites.invitedByMemberId, absorbedId));
 
-	// 8e. role_feedback_notes.recipient_member_id (#984) — anonymous notes left
+	// 7e. role_feedback_notes.recipient_member_id (#984) — anonymous notes left
 	//    for this member about a role they served. ON DELETE CASCADE, so without
 	//    this the absorbed membership's delete would destroy every note it was
 	//    given. No unique index carries the member (the per-recipient cap is
@@ -277,7 +277,7 @@ export async function collapseMemberships(
 		.set({ recipientMemberId: keeperId })
 		.where(eq(roleFeedbackNotes.recipientMemberId, absorbedId));
 
-	// 9. project_completion_marks.marked_by_member_id — attribution only, and
+	// 8. project_completion_marks.marked_by_member_id — attribution only, and
 	//    nullable. No member-unique constraint (the mark's uniqueness is on
 	//    enrollment+project, which is person-level and so unaffected by a
 	//    membership collapse), so re-point all: "who ticked this" survives.
@@ -286,13 +286,13 @@ export async function collapseMemberships(
 		.set({ markedByMemberId: keeperId })
 		.where(eq(projectCompletionMarks.markedByMemberId, absorbedId));
 
-	// 10. guests.converted_membership_id — no member-unique; re-point all so the
+	// 9. guests.converted_membership_id — no member-unique; re-point all so the
 	//    "guest became this membership" history survives the collapse.
 	await tx
 		.update(guests)
 		.set({ convertedMembershipId: keeperId })
 		.where(eq(guests.convertedMembershipId, absorbedId));
-	// 10b. guests.introduced_by_member_id (#1046) — nullable attribution, no
+	// 9b. guests.introduced_by_member_id (#1046) — nullable attribution, no
 	//    member-unique; re-point all, or the absorbed row's delete SETs NULL and
 	//    "who brought this guest" is lost.
 	await tx
@@ -300,7 +300,7 @@ export async function collapseMemberships(
 		.set({ introducedByMemberId: keeperId })
 		.where(eq(guests.introducedByMemberId, absorbedId));
 
-	// 11. activity_log — re-point the actor column AND the jsonb subject refs
+	// 10. activity_log — re-point the actor column AND the jsonb subject refs
 	//     (detail.memberId / detail.fromMemberId, scoped to this club), then
 	//     drop the absorbed member's OWN member-target rows (member_add etc.),
 	//     mirroring the existing merge so we don't accumulate dangling history.
@@ -325,7 +325,7 @@ export async function collapseMemberships(
 			),
 		);
 
-	// 12. meeting_vote_sessions.opened_by_member_id (#510) — nullable attribution
+	// 11. meeting_vote_sessions.opened_by_member_id (#510) — nullable attribution
 	//     ("who opened this vote"). The table's unique is (meeting, category),
 	//     which does not include the member, so a plain re-point cannot collide.
 	await tx
@@ -333,7 +333,7 @@ export async function collapseMemberships(
 		.set({ openedByMemberId: keeperId })
 		.where(eq(meetingVoteSessions.openedByMemberId, absorbedId));
 
-	// 13. meeting_votes.voter_member_id (#510) — unique (session, voter). If ONE
+	// 12. meeting_votes.voter_member_id (#510) — unique (session, voter). If ONE
 	//     human held both memberships and each cast a ballot in the same session,
 	//     re-pointing would violate that index. Drop the absorbed ballot and keep
 	//     the keeper's, which is also the right answer on the merits: the whole
@@ -350,7 +350,7 @@ export async function collapseMemberships(
 		.set({ voterMemberId: keeperId })
 		.where(eq(meetingVotes.voterMemberId, absorbedId));
 
-	// 14. meeting_votes.candidate_member_id (#510) — no member-unique on the
+	// 13. meeting_votes.candidate_member_id (#510) — no member-unique on the
 	//     candidate side (a session legitimately holds many ballots naming the
 	//     same person), so re-point all. Ballots cast for either membership now
 	//     count toward the one surviving person, which is what a merge means.
@@ -359,7 +359,7 @@ export async function collapseMemberships(
 		.set({ candidateMemberId: keeperId })
 		.where(eq(meetingVotes.candidateMemberId, absorbedId));
 
-	// 15. officer_training_records.membership_id (#531) — unique (membership,
+	// 14. officer_training_records.membership_id (#531) — unique (membership,
 	//     position, program_year, period), and ON DELETE CASCADE, so without a
 	//     re-point the merge would DESTROY the absorbed membership's training
 	//     credit and silently drop the club below goal 9's four-officer bar. The
@@ -411,7 +411,7 @@ export async function collapseMemberships(
 		.set({ membershipId: keeperId })
 		.where(eq(officerTrainingRecords.membershipId, absorbedId));
 
-	// 16. meeting_candidate_disqualifications.candidate_member_id (#723) —
+	// 15. meeting_candidate_disqualifications.candidate_member_id (#723) —
 	//     unique (meeting, category, candidate). The collision is the same shape
 	//     as `meeting_votes.voter_member_id` above and just as reachable: a
 	//     duplicate membership is usually one human recorded twice, both can hold
@@ -442,10 +442,10 @@ export async function collapseMemberships(
 		.set({ candidateMemberId: keeperId })
 		.where(eq(meetingCandidateDisqualifications.candidateMemberId, absorbedId));
 
-	// 17. meeting_candidate_disqualifications.disqualified_by_member_id (#723) —
+	// 16. meeting_candidate_disqualifications.disqualified_by_member_id (#723) —
 	//     nullable attribution ("who ruled this candidate out"), in no unique
 	//     index, so a plain re-point cannot collide. Same shape as
-	//     `meeting_vote_sessions.opened_by_member_id` at step 12.
+	//     `meeting_vote_sessions.opened_by_member_id` at step 11.
 	await tx
 		.update(meetingCandidateDisqualifications)
 		.set({ disqualifiedByMemberId: keeperId })
@@ -453,7 +453,7 @@ export async function collapseMemberships(
 			eq(meetingCandidateDisqualifications.disqualifiedByMemberId, absorbedId),
 		);
 
-	// 18. mentorships (#939) — mentor_member_id and mentee_member_id are ON
+	// 17. mentorships (#939) — mentor_member_id and mentee_member_id are ON
 	//     DELETE CASCADE, so without this a merge silently destroys every
 	//     pairing the absorbed membership was part of. Two constraints make a
 	//     plain re-point unsafe, so the colliding rows go FIRST:
@@ -508,7 +508,7 @@ export async function collapseMemberships(
 		.set({ menteeMemberId: keeperId })
 		.where(eq(mentorships.menteeMemberId, absorbedId));
 	//     created_by_member_id is nullable attribution in no unique index, so it
-	//     re-points plainly, like `disqualified_by_member_id` at step 17.
+	//     re-points plainly, like `disqualified_by_member_id` at step 16.
 	await tx
 		.update(mentorships)
 		.set({ createdByMemberId: keeperId })

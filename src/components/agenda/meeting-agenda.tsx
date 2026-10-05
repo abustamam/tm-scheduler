@@ -560,9 +560,10 @@ export function MeetingAgenda({
 								</span>
 							</span>
 						</div>
-						{/* No "Remind unfilled" control until reminder sending is actually
-						    built (#7) — even a disabled "(soon)" placeholder was dead
-						    weight two audits flagged (#542, F-010). */}
+						{/* No "Remind unfilled" control: the app sends no reminders
+						    (ADR-0028); officers nudge from the slot cards. A disabled
+						    "(soon)" placeholder was dead weight two audits flagged
+						    (#542, F-010). */}
 						{canSuggestFills ? (
 							<Button
 								type="button"

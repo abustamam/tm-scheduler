@@ -8,9 +8,10 @@
  *
  * ## Why this lives in `src/lib`
  *
- * Both halves of the app need it — the checklist UI and nudge draft on the
- * client, the reminder-email producer on the server — and a module that reaches
- * the database layer cannot be imported by a client route at all (the driver
+ * The checklist UI and the nudge draft both run on the client (the server-side
+ * reminder-email producer that also read it was removed by #902, ADR-0028), and
+ * a module that reaches the database layer cannot be imported by a client route
+ * at all (the driver
  * drags `Buffer` in and white-screens the page). It also has to be ASSERTABLE:
  * per the #519/#522 lesson, a predicate living inside a `createServerFn`
  * handler, or beside a database import, is unreachable from vitest and can be
@@ -101,7 +102,7 @@ export type DutyId =
 
 /**
  * What `done` reads: a plain object the caller ALREADY holds, never a db
- * handle. Every consumer — checklist, nudge draft, reminder email — therefore
+ * handle. Every consumer — the checklist and the nudge draft — therefore
  * asks the identical question, which is the point. Two consumers each deriving
  * "is the theme set?" is how they come to disagree, and disagreement here means
  * nudging somebody about a job they already did.

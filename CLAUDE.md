@@ -521,7 +521,8 @@ the server serves traffic (drizzle tracks applied migrations, so reruns are no-o
 failure exits non-zero and the deploy fails closed). The runtime image is `node:22-slim` with no
 Bun/drizzle-kit, which is why the runner is bundled rather than invoked via `drizzle-kit migrate`.
 Do NOT adopt edge/serverless adapters (Cloudflare Workers / Convex) — the persistent process is
-required for the `pg` pool and the planned in-process reminder poller (#7). The Workers + Neon
+required for the `pg` pool and the in-process poller (ADR-0023), which now delivers request-access
+mail and runs the retention sweeps; it sends no reminders (ADR-0028). The Workers + Neon
 path stays a deferred future option only.
 
 **Changing a `createServerFn`'s `method` is a BREAKING change for tabs already open**, and

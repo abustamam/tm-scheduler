@@ -335,10 +335,10 @@ the nouns in `src/db/schema.ts`.
   `role_definitions.key` (`dutiesForRole`, `src/lib/role-duties.ts`). Exactly three exist: the
   TMOD owes the meeting **theme**, the Grammarian owes the **Word of the Day**, and a speaker
   (`speaker`, or a contest `contestant_prepared`) owes their **speech details**. Each carries a
-  `done` predicate over a plain caller-supplied context — never a db handle — so the checklist,
-  the nudge draft ask ONE question and cannot disagree about whether a job is finished. (A
-  reminder email used to ask it too; ADR-0028 removed reminders, #902.) A NULL key falls back to an **exact** canonical-name match, never a prefix, for the
-  #464 reason the entry above gives. **Every other role owns ZERO duties** and gets
+  `done` predicate over a plain caller-supplied context — never a db handle — so the checklist
+  and the nudge draft ask ONE question and cannot disagree about whether a job is finished. (A
+  reminder email used to ask it too; ADR-0028 removed reminders, #902.) A NULL key falls back to
+  an **exact** canonical-name match, never a prefix, for the #464 reason the entry above gives. **Every other role owns ZERO duties** and gets
   `ROLE_CONFIRM_PROMPT`, which deliberately has no `done`: their prep is real but nothing records
   it, and an unverifiable self-report must never be able to SUPPRESS a nudge. No consumers yet —
   #667 (nudges), #665 (personal confirm page) and #666 (theme / Word-of-the-Day subroutes) land
@@ -1022,7 +1022,8 @@ fairness, Pathways progress dashboards, calendar export. These are the later pha
 out in #902 under ADR-0028: **humans send every message**. GavelUp drafts and templates (the nudge
 drafts, the lineup blast, guest invites) and an officer sends from their own app; the app never
 mails a member, guest or prospect on its own. The only app-sent mail is account-security mail to
-the account's own address (the magic link, and ADR-0030's change-of-address emails) and operator
+the account's own address (the magic link, and the change-of-address emails pending in #1091 /
+ADR-0030), the officer-sent roster invite (a sign-in link only, no meeting content), and operator
 alerts to the maintainer (request-access, #866). The in-process poller (ADR-0023) still runs, for
 the request-access delivery pass and the retention sweeps; `/unsubscribe` is a static page so old
 reminder links do not 404. Multi-club switching is built (`club-switcher.tsx`).
@@ -1171,10 +1172,12 @@ reminder links do not 404. Multi-club switching is built (`club-switcher.tsx`).
   (`theme`, `topic`, `roleName`) are still unbounded on write, which is the point of a render cap:
   see #525.
 - **Humans send every message** (ADR-0028). No feature delivers a message to a member, guest or
-  prospect on its own: it builds a draft and the officer sends it from their own app. The two
+  prospect on its own: it builds a draft and the officer sends it from their own app. The three
   exemptions are closed, not examples: account-security mail to the account's own address, prompted
-  by that account's own action (magic link; ADR-0030's change-of-address verification and notice),
-  and operator alerts to the maintainer. A new sender needs a new ADR first.
+  by that account's own action (magic link; the change-of-address verification and notice pending
+  in #1091 / ADR-0030); the officer-sent roster invite (`account-invite.ts`), a magic link to the
+  invitee's own address that only lets them sign in and carries no meeting content; and operator
+  alerts to the maintainer. A new sender needs a new ADR first.
 - App-sent mail that IS allowed is delivered **at most once**: the poller claims a request-access
   row with a conditional update (bump its attempts counter / stamp its last-attempted time
   `WHERE` unsent `AND` attempts `= <read>`) before sending, then stamps it sent on success. Never

@@ -3,7 +3,7 @@
 Status: Accepted
 
 Supersedes in part: ADR-0023 (its reminder purpose; the poller mechanism stands).
-Relates to: ADR-0030 (a member changes their own sign-in address), #902 (this change), #903 (the
+Relates to: ADR-0030 (pending in #1091: a member changes their own sign-in address), #902 (this change), #903 (the
 minutes email became a draft), #898 / #899 (built draft-first under this rule), #271 / #272 / #274
 (the reminders this removes).
 
@@ -13,10 +13,11 @@ Toastmasters is a communication organization. A role reminder, a guest invitatio
 released from this role" note: each is a small act of club leadership, and the member it reaches
 should hear it from a person in their club, in that person's words, from that person's own app.
 
-GavelUp had one place where it mailed members on its own: automated role reminders (#271 queue and
-poller, #272 producer, #274 per-club settings, per-member opt-out and a one-click `/unsubscribe`).
-Nobody used it (maintainer, 2026-09-25). The app-sent minutes email was the other, and #903 turned
-it into a draft. Everything else the app says to a person already goes through a human: the nudge
+GavelUp mailed members with club content on its own in two places: automated role reminders (#271
+queue and poller, #272 producer, #274 per-club settings, per-member opt-out and a one-click
+`/unsubscribe`), which nobody used (maintainer, 2026-09-25), and the minutes email, which #903
+turned into a draft. It also sends sign-in links, including the roster invite an officer
+triggers; those carry no club content and are exempt below. Everything else the app says to a person already goes through a human: the nudge
 drafts (`src/lib/nudge.ts`, "The app only ever DRAFTS; the human sends."), the lineup blast, the
 guest invite drafts, the flyer.
 
@@ -27,21 +28,28 @@ templates; an officer reviews the words and sends them from their own app (Whats
 own email client). A feature that wants to tell someone something builds a draft and a send
 button that opens the officer's app, never a sender.
 
-Two classes of mail are outside the rule, and only these two:
+Three classes of mail are outside the rule, and only these three:
 
 1. **Account-security mail to the account's own address**, sent because that account's holder
-   just asked for it. That is the magic-link sign-in email, and, from ADR-0030, the
-   change-of-address verification link sent to the new address a member typed (including its
-   "this address is already in use" variant) and the "your sign-in address was changed" notice
-   sent to the old one. These are not club communication. No human could send them, since their
-   whole job is to prove control of an inbox, and nobody but the account holder receives them.
-2. **Operator alerts to the maintainer**, such as the request-access form's notifications and
+   just asked for it. That is the magic-link sign-in email, and, once ADR-0030 lands (pending,
+   #1091), the change-of-address verification link sent to the new address a member typed
+   (including its "this address is already in use" variant) and the "your sign-in address was
+   changed" notice sent to the old one. These are not club communication. No human could send
+   them, since their whole job is to prove control of an inbox, and nobody but the account holder
+   receives them.
+2. **The officer-sent roster invite** (`src/server/account-invite.ts`, single and bulk,
+   `signInMagicLink` with `kind: "invite"`). An officer chooses to send it; it goes only to the
+   invitee's own address on the roster; and it is a magic link that only lets them sign in and
+   claim their record. It carries no meeting content: no roles, no dates, no club announcements.
+   (Maintainer decision, #902 review.)
+3. **Operator alerts to the maintainer**, such as the request-access form's notifications and
    cap alerts (#866). They go to GavelUp's own operator, not to anyone in a club.
 
-Neither class may be widened by analogy. "It's about the member's account", "it's transactional",
-or "it's only a reminder" do not move a message into class 1. Class 1 means the account's own
-address, prompted by the account holder's own action, about the security of that account. A new
-exemption needs its own ADR.
+No class may be widened by analogy. "It's about the member's account", "it's transactional",
+or "it's only a reminder" do not move a message into class 1 or 2. Class 1 means the account's own
+address, prompted by the account holder's own action, about the security of that account. Class 2
+means a sign-in link and nothing else: an invite that grew a meeting summary, a role, or a "see you
+Tuesday" would leave it. A new exemption needs its own ADR.
 
 What #902 removed under this rule: `role-reminders-logic.ts`, `notifications-logic.ts`,
 `notification-prefs*.ts`, `src/lib/unsubscribe-token.ts`, the `notifications` table, the
@@ -64,6 +72,7 @@ a static page so the links in reminder emails already sent do not 404.
   only way they are told.
 - **`meetings.reminders` is unrelated.** It is the Announcements field (#349), printed on the
   agenda and projected on the slides. Same word, never mailed.
-- **Review rule.** A change that calls `sendEmail` (or any other transport) with a recipient who
-  is not the account holder acting on their own account, and not the maintainer, contradicts this
-  ADR and needs a new one first.
+- **Review rule.** A change that calls `sendEmail` or `signInMagicLink` (or any other transport)
+  needs to fit one of the three classes exactly: the account holder acting on their own account,
+  an officer-triggered roster invite that is only a sign-in link, or the maintainer. Anything else,
+  including new content added to an invite, contradicts this ADR and needs a new one first.

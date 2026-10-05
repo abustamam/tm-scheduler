@@ -20,6 +20,13 @@ import { Route } from "./unsubscribe";
 
 afterEach(cleanup);
 
+/**
+ * Any static, side-effect or dynamic import of a `server/` module, through
+ * either alias (`#/`, `@/`) or a relative path.
+ */
+const SERVER_IMPORT =
+	/(?:\bfrom\s*|\bimport\s*\(?\s*)["'](?:#\/|@\/|(?:\.\.?\/)+)server\//;
+
 /** Mount the route's component at `url` under a memory router. */
 async function mountAt(url: string) {
 	const rootRoute = createRootRoute();
@@ -61,6 +68,24 @@ describe("/unsubscribe (static since #902)", () => {
 			resolve(process.cwd(), "src/routes/unsubscribe.tsx"),
 			"utf8",
 		);
-		expect(src).not.toMatch(/from\s+["']#\/server\//);
+		expect(src).not.toMatch(SERVER_IMPORT);
+	});
+
+	// The regex has to catch every spelling of a server import, or the guard
+	// above reads green while the page calls a server fn again.
+	it.each([
+		'import { x } from "#/server/clubs";',
+		'import { x } from "@/server/clubs";',
+		'import { x } from "../server/clubs";',
+		'import { x } from "./server/clubs";',
+		'import "#/server/clubs";',
+		'const m = await import("#/server/clubs");',
+		"const m = await import('../server/clubs');",
+	])("SERVER_IMPORT recognises %s", (line) => {
+		expect(line).toMatch(SERVER_IMPORT);
+	});
+
+	it("SERVER_IMPORT leaves a non-server import alone", () => {
+		expect('import { x } from "#/lib/brand";').not.toMatch(SERVER_IMPORT);
 	});
 });

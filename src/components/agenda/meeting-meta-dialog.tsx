@@ -264,8 +264,8 @@ export function MeetingMetaDialog({
 							</p>
 						) : (
 							<p className="text-muted-foreground text-xs">
-								Shown to members on the meeting page and in role reminder
-								emails. Left off the printout, slides and poster.
+								Shown to members on the meeting page. Left off the printout,
+								slides and poster.
 							</p>
 						)}
 					</div>

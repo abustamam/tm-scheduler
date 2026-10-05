@@ -33,7 +33,7 @@ export const importHash = (value: string) =>
 function signature(payload: string): Buffer | null {
 	const secret = process.env.BETTER_AUTH_SECRET;
 	if (!secret) return null;
-	// Domain-separated from the existing unsubscribe/session signing uses.
+	// Domain-separated from Better Auth's own session signing with this secret.
 	return createHmac("sha256", secret)
 		.update(`csv-officer-approval:v1:${payload}`)
 		.digest();

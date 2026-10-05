@@ -1299,9 +1299,12 @@ export async function planTemplateConversion(
  * Apply a template to an existing meeting, or `null` to convert it back to the
  * club's standard shape. ONE transaction.
  *
- * Released holders are RETURNED: the app never tells them itself (ADR-0028 —
- * a human sends every message), so the caller surfaces the existing WhatsApp
- * nudge against each name and the officer sends it.
+ * Released holders are RETURNED, and the app never tells them itself
+ * (ADR-0028 — a human sends every message). The officer learns who they are
+ * BEFORE applying: `MeetingTemplateDialog` lists the names from
+ * `planTemplateConversion`'s preview and tells the officer to message them
+ * afterwards. Its `onApply` only reloads the meeting; nothing drafts or sends a
+ * message on the officer's behalf.
  *
  * Authorization is the CALLER's: this function has no session. The server fn
  * gates on the club role and the archive state before calling it.

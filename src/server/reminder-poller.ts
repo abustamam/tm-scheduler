@@ -6,8 +6,12 @@
 // and runs the two retention sweeps (MCP pending plans, old access requests).
 // It no longer sends role reminders: ADR-0028 removed them (#902), because a
 // human sends every message to a member, guest or prospect — the app only
-// drafts. The file, the plugin and `REMINDER_POLL_INTERVAL_MS` keep their names
-// on purpose, so a deployment's env var still applies.
+// drafts. So the exports say what it does (`runPollerTick`,
+// `startBackgroundPoller`, `stopBackgroundPoller`) and the log tag is
+// `[poller]`. The FILE names and both env vars, `REMINDER_POLL_INTERVAL_MS` and
+// `DISABLE_REMINDER_POLLER`, keep their old names on purpose: a deployment
+// (Railway) may already set either, and renaming one would silently drop the
+// setting rather than fail.
 //
 // Server-only: imports `#/db` transitively (via access-requests-logic). It is
 // referenced solely from the Nitro plugin — never from a client route — so it
@@ -41,7 +45,7 @@ let ticking = false;
  * on its own, so nothing here enqueues or sends to one.
  *
  * `DISABLE_REMINDER_POLLER=1` stops the delivery pass and NOT the sweeps —
- * see `startReminderPoller`. A pending plan holds a visitor's unmasked name,
+ * see `startBackgroundPoller`. A pending plan holds a visitor's unmasked name,
  * email and phone, and the sweep is the only thing in the system that deletes
  * one, so letting the send flag disable it turned a 48-hour retention window
  * into an indefinite one.
@@ -55,7 +59,7 @@ let ticking = false;
  * process. A thrown error is logged and swallowed — the poller must survive a
  * bad tick and keep running.
  */
-export async function runReminderTick(): Promise<void> {
+export async function runPollerTick(): Promise<void> {
 	if (ticking) return;
 	ticking = true;
 	try {
@@ -74,7 +78,7 @@ export async function runReminderTick(): Promise<void> {
 
 		await sweepTick();
 	} catch (err) {
-		console.error("[reminders] poll tick failed:", err);
+		console.error("[poller] tick failed:", err);
 	} finally {
 		ticking = false;
 	}
@@ -156,7 +160,7 @@ function startSweepOnlyTimer(): boolean {
  * `DISABLE_REMINDER_POLLER=1` to opt out (e.g. a worker that shouldn't send).
  * Returns whether it started.
  */
-export function startReminderPoller(): boolean {
+export function startBackgroundPoller(): boolean {
 	if (timer) return false;
 	if (process.env.DISABLE_REMINDER_POLLER === "1") {
 		// The SWEEP still runs, and there is no way to stop it (see `sweepTick`).
@@ -167,21 +171,21 @@ export function startReminderPoller(): boolean {
 		// 48-hour retention window into an indefinite one, with no user-facing
 		// way to discard a row. A worker that should not send has every reason
 		// to still sweep.
-		console.log("[reminders] poller disabled via DISABLE_REMINDER_POLLER");
+		console.log("[poller] disabled via DISABLE_REMINDER_POLLER");
 		return startSweepOnlyTimer();
 	}
 	const intervalMs = resolveIntervalMs();
 	timer = setInterval(() => {
-		void runReminderTick();
+		void runPollerTick();
 	}, intervalMs);
 	// Don't let the interval alone hold the process open — clean shutdown wins.
 	timer.unref?.();
-	console.log(`[reminders] poller started (interval=${intervalMs}ms)`);
+	console.log(`[poller] started (interval=${intervalMs}ms)`);
 	return true;
 }
 
 /** Stop the poller (server shutdown / dev restart). Idempotent. */
-export function stopReminderPoller(): void {
+export function stopBackgroundPoller(): void {
 	if (timer) {
 		clearInterval(timer);
 		timer = null;
