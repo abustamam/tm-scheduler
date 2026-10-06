@@ -108,6 +108,9 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 			"Text Ayesha Khan by SMS (preferred)",
 		);
 		expect(links).toHaveLength(2);
+		// Two icons keep today's single line.
+		expect(links[0]?.parentElement?.hasAttribute("data-own-line")).toBe(false);
+		expect(links[0]?.parentElement?.classList.contains("w-full")).toBe(false);
 	});
 
 	it("lists the whole roster with its counts line", () => {
@@ -831,16 +834,15 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 
 		// 6px between the status control and Email put two DIFFERENT actions inside
 		// one fat-finger: a slip writes `reached_out` and throws the tablet into a
-		// mail client mid-meeting. The icons are only 2px apart (#1094, so a
-		// three-icon preferred-SMS row fits the rail) — same member, same
-		// handler — so both halves are asserted, or "widen everything" passes.
+		// mail client mid-meeting. WhatsApp and Email keep their 6px — same member,
+		// same handler — so both halves are asserted, or "widen everything" passes.
 		const actionLine = trigger.parentElement;
-		expect(actionLine?.classList.contains("gap-2.5")).toBe(true);
+		expect(actionLine?.classList.contains("gap-3")).toBe(true);
 		expect(actionLine?.classList.contains("gap-1.5")).toBe(false);
 		const nudges = getByRole("link", {
 			name: /Message Ayesha Khan on WhatsApp/i,
 		}).closest("div");
-		expect(nudges?.classList.contains("gap-0.5")).toBe(true);
+		expect(nudges?.classList.contains("gap-1.5")).toBe(true);
 	});
 });
 
@@ -1172,7 +1174,7 @@ describe("roll mode", () => {
 		expect(chip.classList.contains("justify-between")).toBe(true);
 		const actionLine = chip.parentElement;
 		expect(actionLine?.classList.contains("justify-end")).toBe(true);
-		expect(actionLine?.classList.contains("gap-2.5")).toBe(true);
+		expect(actionLine?.classList.contains("gap-3")).toBe(true);
 		// Same WCAG 1.4.11 point plan mode's chevron test makes: `currentColor` at
 		// 60% takes a non-text indicator under 3:1.
 		const chevron = chip.querySelector("svg");
@@ -1200,7 +1202,7 @@ describe("roll mode", () => {
 		);
 	});
 
-	it("#1094: a roll row preferring SMS gets a third, marked icon", () => {
+	it("#1094: a roll row preferring SMS gets a third, marked icon on its own line", () => {
 		const { getAllByRole } = render(
 			<MeetingAttendancePanel
 				{...rollProps}
@@ -1221,6 +1223,13 @@ describe("roll mode", () => {
 			"Text Abe Nkemelu by SMS (preferred)",
 		);
 		expect(links[0]?.textContent).toBe("");
+		// The two-line shape: the icon group takes the whole line (so the line's
+		// `flex-wrap` puts it above the status control), right-aligned.
+		const group = links[0]?.parentElement;
+		expect(group?.hasAttribute("data-own-line")).toBe(true);
+		expect(group?.classList.contains("w-full")).toBe(true);
+		expect(group?.classList.contains("justify-end")).toBe(true);
+		expect(group?.parentElement?.classList.contains("flex-wrap")).toBe(true);
 	});
 
 	it("F6: drafts an on-your-way ask, not a pre-meeting one, from the room", () => {

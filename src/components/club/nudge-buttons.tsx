@@ -341,8 +341,18 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 		order.unshift(preferredContact);
 	}
 
+	// Three icons do not fit the rail's action line beside the status control
+	// once a classic scrollbar takes 15px (#1094), so that group takes the whole
+	// line, right-aligned, and the caller's `flex-wrap` puts it above the status
+	// control. Two icons keep today's single line.
+	const rendered = order.filter((m) => buttons[m]).length;
+	const ownLine = iconOnly && rendered >= 3;
+
 	return (
-		<div className={`flex items-center ${iconOnly ? "gap-0.5" : "gap-1.5"}`}>
+		<div
+			className={`flex items-center gap-1.5${ownLine ? " w-full justify-end" : ""}`}
+			data-own-line={ownLine ? "" : undefined}
+		>
 			{order.map((m) => buttons[m] ?? null)}
 		</div>
 	);

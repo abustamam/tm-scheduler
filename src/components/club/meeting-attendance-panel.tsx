@@ -255,18 +255,26 @@ function PanelIdentityLine({
  *  edge — this is the alignment fix. Nothing is vertically centred across a
  *  variable-height block any more.
  *
- *  `gap-2.5` (10px) between the status control and the contact icons. Those
- *  icons are 2px apart (`gap-0.5`) when icon-only, 6px when labelled: they
- *  are the same action on the same member and both fire `onContacted`, so a
- *  fat-finger between them costs nothing. The status control is neither: a
- *  slip from it onto Email writes `reached_out` AND throws the tablet into a
- *  mail client mid-meeting, so it keeps a wider gap than the icons have
- *  between each other. The gaps shrank (from 12px and 6px) so a three-icon
- *  preferred-contact row (#1094) fits the ~290px column; the geometry test in
- *  `pinned-column-reachability.test.ts` holds it. */
+ *  `gap-3`, not `gap-1.5`. The 6px inside `NudgeButtons` is justified by
+ *  WhatsApp and Email being the same action on the same member — both fire
+ *  `onContacted` — so a fat-finger between them costs nothing. The status
+ *  control is neither: a slip from it onto Email writes `reached_out` AND
+ *  throws the tablet into a mail client mid-meeting. The extra 6px is ~2%
+ *  of a 340px rail.
+ *
+ *  `flex-wrap` is for ONE case (#1094): a member who prefers Call or SMS has
+ *  three icons, which with the status control's fixed `w-44` need 296px — more
+ *  than the ~275px a classic (non-overlay) scrollbar leaves on Windows and
+ *  Linux. Their `NudgeButtons` group takes the full width, so it wraps onto
+ *  its own right-aligned line ABOVE the status control, which stays on the
+ *  row's right edge with the same gap away from the icons. Two-icon rows fit
+ *  on one line and never wrap. `pinned-column-reachability.test.ts` holds both
+ *  shapes under a forced 15px scrollbar. */
 function PanelActionLine({ children }: { children: ReactNode }) {
 	return (
-		<div className="flex items-center justify-end gap-2.5">{children}</div>
+		<div className="flex flex-wrap items-center justify-end gap-3">
+			{children}
+		</div>
 	);
 }
 
