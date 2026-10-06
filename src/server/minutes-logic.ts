@@ -28,7 +28,7 @@ import {
 	ATTENDANCE_BEFORE_MEETING_MESSAGE,
 	meetingDateReached,
 } from "#/lib/meeting-lifecycle";
-import { hasPhoneExtension, toStoredPhone } from "#/lib/phone";
+import { toStoredPhone } from "#/lib/phone";
 import { writeInKey, writeInNameSchema } from "#/lib/write-in-limits";
 import type { MinutesActionItems } from "./action-items-logic";
 import { loadActionItemsForMinutes } from "./action-items-logic";
@@ -755,7 +755,6 @@ async function resolveGuestId(
 			name,
 			email,
 			phone,
-			phoneHadExtension: hasPhoneExtension(input.newGuest.phone),
 		});
 		if (existing) return existing.id;
 

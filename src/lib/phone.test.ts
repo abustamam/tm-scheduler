@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
 	coalesceToE164,
 	DEFAULT_COUNTRY_CODE,
-	hasPhoneExtension,
 	toE164,
 	toStoredPhone,
 } from "./phone";
@@ -62,15 +61,6 @@ describe("phone extensions are dropped (#1106)", () => {
 
 	it("a domestic 1 plus an extension lands on the main number", () => {
 		expect(toE164("1-415-555-2671 x9", "+1")).toBe("+14155552671");
-	});
-
-	it("hasPhoneExtension reports whether an extension was cut", () => {
-		expect(hasPhoneExtension("415-555-2671 x10")).toBe(true);
-		expect(hasPhoneExtension("+1 415 555 2671 #9")).toBe(true);
-		expect(hasPhoneExtension("415-555-2671")).toBe(false);
-		expect(hasPhoneExtension("x 415 555 2671")).toBe(false);
-		expect(hasPhoneExtension("ext 9")).toBe(false);
-		expect(hasPhoneExtension(null)).toBe(false);
 	});
 
 	it("a value that is only an extension behaves as before", () => {

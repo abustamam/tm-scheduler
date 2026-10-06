@@ -53,7 +53,6 @@ import { namesAgree } from "#/lib/person-name";
 import {
 	coalesceToE164,
 	DEFAULT_COUNTRY_CODE,
-	hasPhoneExtension,
 	toStoredPhone,
 } from "#/lib/phone";
 import { normalizedEmail, rosterConflictFor } from "./account-link-logic";
@@ -136,13 +135,6 @@ export interface GuestMatchInput {
 	 * #397.
 	 */
 	phone: string | null;
-	/**
-	 * True when the phone as TYPED carried an extension that `toStoredPhone`
-	 * dropped (#1106, `hasPhoneExtension(rawPhone)`). A phone-only match is then
-	 * ambiguous: the extension is what told two people at one main line apart, and
-	 * it is not in `phone`. An email match is unaffected.
-	 */
-	phoneHadExtension?: boolean;
 }
 
 /**
@@ -158,7 +150,7 @@ export type GuestMatch =
 	| { outcome: "new" }
 	| {
 			outcome: "ambiguous";
-			reason: "phone_name_disagree" | "name_only" | "phone_extension";
+			reason: "phone_name_disagree" | "name_only";
 			candidates: GuestMatchCandidate[];
 	  };
 
@@ -194,9 +186,6 @@ export type GuestMatch =
  *   - `phone_name_disagree`: the number is on file under a name that does not
  *     agree. The public path creating a second prospect here is CORRECT (#488);
  *     a transcriber looking at one handwritten line deserves to be asked.
- *   - `phone_extension`: the number matches, but the incoming one had an
- *     extension that normalization dropped, so the match is on the main line
- *     alone (#1106). Never auto-matched, whether or not the names agree.
  *   - `name_only`: no email and no phone at all, but an existing guest's name
  *     agrees. Reported only when `nameOnlyAmbiguity` is set, because a name is
  *     not a dedup key — the public path must keep creating a new guest for a
@@ -224,13 +213,6 @@ export function matchGuest(
 	const digits = normalizePhone(input.phone);
 	if (digits) {
 		const samePhone = pool.filter((c) => normalizePhone(c.phone) === digits);
-		if (input.phoneHadExtension && samePhone.length > 0) {
-			return {
-				outcome: "ambiguous",
-				reason: "phone_extension",
-				candidates: samePhone,
-			};
-		}
 		const agreeing = samePhone.find((c) => namesAgree(c.name, input.name));
 		if (agreeing) return { outcome: "matched", via: "phone", guest: agreeing };
 		if (samePhone.length > 0) {
@@ -607,7 +589,6 @@ export async function captureGuestVisit(
 			name,
 			email,
 			phone,
-			phoneHadExtension: hasPhoneExtension(input.phone),
 		});
 	} catch (err) {
 		// #925. The writers that lock this club AND one of its meetings take the
@@ -626,14 +607,9 @@ export async function captureGuestVisit(
 function captureInTransaction(
 	input: { clubId: string },
 	meetingId: string | null,
-	contact: {
-		name: string;
-		email: string | null;
-		phone: string | null;
-		phoneHadExtension: boolean;
-	},
+	contact: { name: string; email: string | null; phone: string | null },
 ): Promise<CaptureGuestResult> {
-	const { name, email, phone, phoneHadExtension } = contact;
+	const { name, email, phone } = contact;
 	return db.transaction(async (tx) => {
 		// 0. The club write lock, before any row is locked (#925). A new guest
 		//    locks the club and then (through the attendance insert's foreign
@@ -652,7 +628,6 @@ function captureInTransaction(
 			name,
 			email,
 			phone,
-			phoneHadExtension,
 		});
 
 		let guestId: string;
@@ -1141,12 +1116,7 @@ export async function applyUpdateGuest(
 	const clash = await findGuestForContact(
 		db,
 		input.clubId,
-		{
-			name,
-			email,
-			phone,
-			phoneHadExtension: hasPhoneExtension(input.phone),
-		},
+		{ name, email, phone },
 		{ excludeGuestId: input.guestId },
 	);
 	if (clash) {

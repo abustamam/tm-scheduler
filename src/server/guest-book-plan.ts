@@ -57,7 +57,7 @@ import {
 	meetingDateReached,
 } from "#/lib/meeting-lifecycle";
 import { deriveMeetingNumber } from "#/lib/meeting-number";
-import { hasPhoneExtension, toStoredPhone } from "#/lib/phone";
+import { toStoredPhone } from "#/lib/phone";
 import {
 	type GuestMatchCandidate,
 	loadGuestMatchCandidates,
@@ -423,12 +423,7 @@ export async function plan(
 
 		const m = matchGuest(
 			[...candidates, ...plannedNew],
-			{
-				name: raw.name,
-				email,
-				phone,
-				phoneHadExtension: hasPhoneExtension(typedPhone),
-			},
+			{ name: raw.name, email, phone },
 			// MCP planning asks about a name-only line whose name matches someone
 			// already on file; the public guest book keeps creating a new guest
 			// there, because a name is not a dedup key.
@@ -442,9 +437,7 @@ export async function plan(
 				message:
 					m.reason === "phone_name_disagree"
 						? `Entry ${index}: that phone number is on file under a different name. Say which guest this is, or that it is someone new.`
-						: m.reason === "phone_extension"
-							? `Entry ${index}: that phone number has an extension and matches a guest on file by the main number alone. Say which guest this is, or that it is someone new.`
-							: `Entry ${index}: a guest with that name is already on file and this line has no email or phone. Say which guest this is, or that it is someone new.`,
+						: `Entry ${index}: a guest with that name is already on file and this line has no email or phone. Say which guest this is, or that it is someone new.`,
 				// UNMASKED, and masked by `toPublicBlocking` on the way to an MCP
 				// caller only. The confirm page needs these values: an email is
 				// routinely the only thing distinguishing two guests with one name,
