@@ -18,8 +18,23 @@ carrying >150k context.
   Sonnet), searches to `explorer` (Haiku). A wave agent is an implementer. Opus is for the main
   session's judgement: specs, review, the merge decision.
 - **One wave or one issue per session, then hand off** — a comment on the issue or PR saying
-  where it stands. A session idle for over an hour has lost its cache; start fresh from the
-  handoff instead of resuming. Compact near 250k.
+  where it stands. Compact near 250k.
+- **Before you stop to wait for the maintainer, post the handoff first**, then send a push
+  notification. They may be away overnight, so do not count on them seeing it soon. A
+  session idle for over an hour has lost its cache: on the Mac, 32 resumes at a median 229k context cost 5.7% of
+  all spend in the rebuild call alone, and every call after it carried that context. So the
+  maintainer answers a short reply ("yes", "option B") in place, and anything that starts real
+  work in a fresh session from the handoff. The comment, on the issue or PR (one on the tracking
+  issue for a wave):
+
+  ```markdown
+  **Handoff** — <date>
+  - **Needs you:** the decision, with options and a recommendation (or "nothing")
+  - **State:** PR / branch / worktree, CI status
+  - **Done:** what landed, with the real test counts or CI run link
+  - **Next:** the one or two concrete steps after the decision
+  - **Gotchas:** anything a fresh session would trip on
+  ```
 - An agent's "it passed" is not evidence: read the number (the test count, the CI run) yourself.
 
 ## Git worktree isolation (required)
