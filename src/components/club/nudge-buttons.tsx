@@ -30,6 +30,11 @@ interface NudgeButtonsBase {
 	 *  with the agenda slot cards and the recruit picker, where the words are
 	 *  affordable; only the 340px attendance rail needs the space back. */
 	iconOnly?: boolean;
+	/** OPT-IN, and only the attendance rail passes it (#1094): a three-icon
+	 *  `iconOnly` group takes the whole line, right-aligned, so a wrapping parent
+	 *  (`flex-wrap`) puts it above its sibling. A percentage width means nothing
+	 *  in a content-sized cell, so `iconOnly` alone must not turn it on. */
+	ownLineWhenCrowded?: boolean;
 }
 
 /** The meeting a draft asks about. Required on every arm but `orientation`. */
@@ -105,6 +110,7 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 		onContacted,
 		iconOnly = false,
 		preferredContact = null,
+		ownLineWhenCrowded = false,
 	} = props;
 	// Render the channel links only after mount. The caller builds `shareUrl` with
 	// a `window.location.origin` prefix that is correct only on the client; during
@@ -342,11 +348,12 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 	}
 
 	// Three icons do not fit the rail's action line beside the status control
-	// once a classic scrollbar takes 15px (#1094), so that group takes the whole
-	// line, right-aligned, and the caller's `flex-wrap` puts it above the status
+	// once a classic scrollbar takes 15px (#1094), so, for a caller that opts in
+	// (`ownLineWhenCrowded`, the rail), that group takes the whole line,
+	// right-aligned, and the caller's `flex-wrap` puts it above the status
 	// control. Two icons keep today's single line.
 	const rendered = order.filter((m) => buttons[m]).length;
-	const ownLine = iconOnly && rendered >= 3;
+	const ownLine = iconOnly && ownLineWhenCrowded && rendered >= 3;
 
 	return (
 		<div

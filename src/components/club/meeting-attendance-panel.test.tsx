@@ -88,7 +88,7 @@ function renderPanel(
 describe("MeetingAttendancePanel (plan mode)", () => {
 	afterEach(() => cleanup());
 
-	it("#1094: a plan row preferring SMS leads with an SMS icon", () => {
+	it("#1094: a plan row preferring SMS leads with an SMS icon on its own line", () => {
 		const { getAllByRole } = renderPanel({
 			roster: [
 				{
@@ -96,7 +96,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 					name: "Ayesha Khan",
 					preferredName: null,
 					phone: "+15551234567",
-					email: null,
+					email: "ayesha@club.example",
 					preferredContact: "sms",
 				},
 			],
@@ -107,10 +107,9 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		expect(links[0]?.getAttribute("aria-label")).toBe(
 			"Text Ayesha Khan by SMS (preferred)",
 		);
-		expect(links).toHaveLength(2);
-		// Two icons keep today's single line.
-		expect(links[0]?.parentElement?.hasAttribute("data-own-line")).toBe(false);
-		expect(links[0]?.parentElement?.classList.contains("w-full")).toBe(false);
+		expect(links).toHaveLength(3);
+		// Plan rows opt in to the rail's own-line layout too.
+		expect(links[0]?.parentElement?.hasAttribute("data-own-line")).toBe(true);
 	});
 
 	it("lists the whole roster with its counts line", () => {

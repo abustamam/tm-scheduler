@@ -411,6 +411,7 @@ function AttendanceRow({
 				<NudgeButtons
 					{...nudgeMode}
 					iconOnly
+					ownLineWhenCrowded
 					name={m.name}
 					preferredName={m.preferredName}
 					phone={m.phone}
@@ -828,6 +829,7 @@ function RollAttendanceRow({
 					<NudgeButtons
 						mode="arriving"
 						iconOnly
+						ownLineWhenCrowded
 						name={row.name}
 						preferredName={row.preferredName}
 						phone={row.phone}
