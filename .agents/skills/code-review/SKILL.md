@@ -57,6 +57,8 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 
 ### 4. Spawn both sub-agents in parallel
 
+Dispatch both sub-agents with `model: "opus"`: review is judgement work (CLAUDE.md), and a dispatch that names no model is denied by the `scripts/agent-model-guard.ts` hook.
+
 **Standards sub-agent prompt** should include:
 
 - The full diff command and commit list.

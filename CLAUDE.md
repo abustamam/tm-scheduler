@@ -17,6 +17,8 @@ carrying >150k context.
 - **Dispatch implementation to the `implementer` agent** (`.claude/agents/implementer.md`,
   Sonnet), searches to `explorer` (Haiku). A wave agent is an implementer. Opus is for the main
   session's judgement: specs, review, the merge decision.
+  A PreToolUse hook (`scripts/agent-model-guard.ts`) denies any Agent dispatch that names neither
+  a `model` nor a pinned agent; it fails open on malformed input.
 - **One wave or one issue per session, then hand off.** Compact near 250k.
 - **Write or update the handoff before ANY wait for the maintainer's input**, including a
   question in chat, and when the session's work is done. The maintainer cannot predict when they
