@@ -306,6 +306,86 @@ describe("SeasonGrid prospective claim + undo", () => {
 	});
 });
 
+describe("SeasonGrid: no Claim on a completed or past meeting (#1107)", () => {
+	afterEach(() => claimSlot.mockClear());
+	const liveMeeting = data.meetings[0]!;
+	const liveCell = data.cells[0]!;
+	// A locked column beside the live one, so the lock must land on the RIGHT
+	// column: Claim has to survive on m1 and be absent on m2.
+	function mixed(locked: { isCompleted: boolean; isPast: boolean }) {
+		return {
+			...data,
+			meetings: [
+				liveMeeting,
+				{
+					...liveMeeting,
+					id: "m2",
+					urlKey: "2026-06-24",
+					scheduledAt: "2026-06-24T19:00:00Z",
+					isAnchor: false,
+					...locked,
+				},
+			],
+			cells: [liveCell, { ...liveCell, slotId: "slot-2", meetingId: "m2" }],
+		} satisfies SeasonGridData;
+	}
+	const claimButtons = () =>
+		screen.queryAllByRole("button", { name: /claim/i });
+
+	it("a signed-in member gets Claim on the live column only, beside a completed one", async () => {
+		await renderGrid(undefined, {
+			data: mixed({ isCompleted: true, isPast: false }),
+			currentMemberId: "m-me",
+			currentMemberSource: "session",
+		});
+		expect(claimButtons()).toHaveLength(1);
+		await userEvent.click(claimButtons()[0]!);
+		await waitFor(() => expect(claimSlot).toHaveBeenCalledTimes(1));
+		expect(claimSlot).toHaveBeenCalledWith({
+			data: expect.objectContaining({ slotId: "slot-1" }),
+		});
+	});
+
+	it("a past meeting that is still scheduled offers no Claim either", async () => {
+		await renderGrid(undefined, {
+			data: mixed({ isCompleted: false, isPast: true }),
+			currentMemberId: "m-me",
+			currentMemberSource: "session",
+		});
+		expect(claimButtons()).toHaveLength(1);
+		await userEvent.click(claimButtons()[0]!);
+		await waitFor(() => expect(claimSlot).toHaveBeenCalledTimes(1));
+		expect(claimSlot).toHaveBeenCalledWith({
+			data: expect.objectContaining({ slotId: "slot-1" }),
+		});
+	});
+
+	it("an anonymous visitor gets Claim on live data — the control", async () => {
+		await renderGrid(vi.fn(async () => PICKED));
+		expect(claimButtons()).toHaveLength(1);
+	});
+
+	it("an anonymous visitor gets Claim on the live column only, beside a completed one", async () => {
+		await renderGrid(
+			vi.fn(async () => PICKED),
+			{
+				data: mixed({ isCompleted: true, isPast: false }),
+			},
+		);
+		expect(claimButtons()).toHaveLength(1);
+	});
+
+	it("an anonymous visitor gets Claim on the live column only, beside a past one", async () => {
+		await renderGrid(
+			vi.fn(async () => PICKED),
+			{
+				data: mixed({ isCompleted: false, isPast: true }),
+			},
+		);
+		expect(claimButtons()).toHaveLength(1);
+	});
+});
+
 describe("SeasonGrid: your own role is a release control only with a session (#763)", () => {
 	const mine: SeasonGridData = {
 		...data,

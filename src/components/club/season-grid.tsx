@@ -47,6 +47,11 @@ const VIEWS: { value: Orientation; label: string }[] = [
 	{ value: "members", label: "Members × Meetings" },
 ];
 
+/** A completed or past meeting takes no new claim and no role-picker edit (#1107). */
+function isLocked(m: { isCompleted: boolean; isPast: boolean }): boolean {
+	return m.isCompleted || m.isPast;
+}
+
 export function SeasonGrid({
 	data,
 	orientation,
@@ -712,8 +717,7 @@ export function SeasonGrid({
 												!!currentMemberId &&
 												!!clubId &&
 												!!m &&
-												!m.isCompleted &&
-												!m.isPast &&
+												!isLocked(m) &&
 												(isOwnRow || canManageOthers);
 											if (editable && m && targetMemberId && currentMemberId) {
 												const label = row.label;
@@ -804,7 +808,9 @@ export function SeasonGrid({
 															(!!cell.slotId && busySlotId === cell.slotId) ||
 															busyMeetingId === cell.meetingId
 														}
-														onClaim={claim}
+														// A completed or past meeting is locked: the server refuses the claim
+														// (#1107), so the grid offers no control for it.
+														onClaim={m && isLocked(m) ? undefined : claim}
 														// Releasing is session-gated (#763), so an
 														// anonymous pick's own cell is not a control.
 														onRelease={provenIdentity ? release : undefined}
