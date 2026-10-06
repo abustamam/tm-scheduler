@@ -190,8 +190,13 @@ export function resolveMeetingViewer(input: {
 }): MeetingViewer {
 	const locked = isMeetingLocked(input.status);
 	const over = isMeetingOver(input);
+	// A cancelled meeting (#1057/#1090) is read-only for everyone, officers
+	// included: the server refuses every claim, assignment and edit on it, so the
+	// viewer must not offer one. Restore and View notice key off the route's
+	// `canManage`, not this viewer, so they are unaffected.
+	const cancelled = input.status === "cancelled";
 	// Managers edit until Complete (locked); members/anon freeze once `over`.
-	const editable = input.canManage ? !locked : !over;
+	const editable = !cancelled && (input.canManage ? !locked : !over);
 	const base = meetingViewer({
 		currentMemberId: input.currentMemberId,
 		canManage: input.canManage,

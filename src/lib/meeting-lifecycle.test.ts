@@ -255,6 +255,45 @@ describe("resolveMeetingViewer", () => {
 		});
 		expect(v.canClaim).toBe(false);
 	});
+
+	it("cancelled meeting is read-only for a manager, whatever the date (#1090)", () => {
+		for (const scheduledAt of [future, past]) {
+			const v = resolveMeetingViewer({
+				...common,
+				status: "cancelled",
+				scheduledAt,
+				canManage: true,
+				isSignedIn: true,
+			});
+			expect(v).toEqual(
+				lockedViewer(
+					meetingViewer({
+						currentMemberId: "m1",
+						canManage: true,
+						isTmod: false,
+						isGrammarian: false,
+						isEditableWindow: true,
+						isSignedIn: true,
+					}),
+				),
+			);
+		}
+	});
+
+	it("cancelled meeting is read-only for a member (#1090)", () => {
+		const v = resolveMeetingViewer({
+			...common,
+			status: "cancelled",
+			scheduledAt: future,
+			canManage: false,
+			isSignedIn: true,
+		});
+		expect(v.canClaim).toBe(false);
+		expect(v.canTakeOver).toBe(false);
+		expect(v.canToggleAvailability).toBe(false);
+		expect(v.canManage).toBe(false);
+		expect(v.currentMemberId).toBe("m1");
+	});
 });
 
 describe("meetingPhase (#541 D1)", () => {
