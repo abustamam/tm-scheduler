@@ -447,6 +447,66 @@ describe("MeetingAgenda capability gating", () => {
 		expect((claim as HTMLButtonElement).disabled).toBe(true);
 	});
 
+	describe("Claim is not rendered on a closed meeting (#1090)", () => {
+		const memberViewer = (over: { signedIn: boolean; me: boolean }) =>
+			meetingViewer({
+				currentMemberId: over.me ? "me" : null,
+				canManage: false,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+				isSignedIn: over.signedIn,
+			});
+
+		it.each([
+			"cancelled",
+			"completed",
+		])("renders no Claim on a %s meeting, for a manager viewer too", (status) => {
+			renderAgenda(
+				lockedViewer(memberViewer({ signedIn: true, me: true })),
+				[slot({ status: "open" })],
+				undefined,
+				undefined,
+				{ meeting: meetingFixture({ status }) },
+			);
+			expect(screen.queryByRole("button", { name: /^Claim / })).toBeNull();
+		});
+
+		it.each([
+			"cancelled",
+			"completed",
+		])("renders no Claim and a disabled card even for an UNLOCKED viewer on a %s meeting", (status) => {
+			renderAgenda(
+				memberViewer({ signedIn: true, me: true }),
+				[slot({ status: "open" })],
+				undefined,
+				undefined,
+				{ meeting: meetingFixture({ status }) },
+			);
+			expect(screen.queryByRole("button", { name: /^Claim / })).toBeNull();
+			const card = screen.getByRole("button", { name: /Timer/ });
+			expect((card as HTMLButtonElement).disabled).toBe(true);
+		});
+
+		it("renders an enabled Claim on a scheduled meeting", () => {
+			renderAgenda(memberViewer({ signedIn: true, me: true }), [
+				slot({ status: "open" }),
+			]);
+			const claim = screen.getByRole("button", { name: /^Claim / });
+			expect((claim as HTMLButtonElement).disabled).toBe(false);
+		});
+
+		it("still renders Claim for a signed-out viewer on a scheduled meeting", () => {
+			renderAgenda(
+				memberViewer({ signedIn: false, me: false }),
+				[slot({ status: "open" })],
+				undefined,
+				async () => null,
+			);
+			expect(screen.getByRole("button", { name: /^Claim / })).toBeTruthy();
+		});
+	});
+
 	it("grants the TMOD assign + speaker management on the public surface", () => {
 		const openSpeaker = slot({
 			id: "sp1",
