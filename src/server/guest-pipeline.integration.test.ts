@@ -2936,14 +2936,14 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			// aliased `phone` would pass a bare "is it defined" check while putting
 			// the country-code guess back in the input.
 			//
-			// "x12" is an extension: coalescing welds it into the subscriber number,
-			// so the guess is visibly not a phone number the VPM ever typed.
+			// The stored text carries an extension, which the coalesced number drops,
+			// so the two differ.
 			const guestId = await insertGuestWithPhone("415-555-2671 x12");
 			const row = (await loadGuestPipeline(seed.clubId)).find(
 				(r) => r.id === guestId,
 			);
 			expect(row?.phoneRaw).toBe("415-555-2671 x12");
-			expect(row?.phone).toBe("+1415555267112");
+			expect(row?.phone).toBe("+14155552671");
 			expect(row?.phoneRaw).not.toBe(row?.phone);
 		});
 

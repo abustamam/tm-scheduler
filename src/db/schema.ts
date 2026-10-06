@@ -864,6 +864,28 @@ export const membersPhoneBackup = pgTable("members_phone_backup", {
 });
 
 // ---------------------------------------------------------------------------
+// What migration 0112 overwrote in the phone columns (#1106).
+//
+// TEMPORARY, and meant to be dropped, like the backups above. 0112 cuts the
+// extension digits off every stored `+1` phone that has more than 10 digits
+// after the country code, in `people`, `guests` and `club_charter_helpers`. One
+// row per changed row: which table, its id, and the value it held. No foreign
+// keys, so a delete or a merge cannot take the undo with it.
+// Drop it (schema + a migration) once a release has passed without incident.
+// ---------------------------------------------------------------------------
+
+export const phoneExtensionBackup = pgTable(
+	"phone_extension_backup",
+	{
+		sourceTable: text("source_table").notNull(),
+		rowId: uuid("row_id").notNull(),
+		phone: text("phone"),
+		capturedAt: timestamp("captured_at").defaultNow().notNull(),
+	},
+	(t) => [primaryKey({ columns: [t.sourceTable, t.rowId] })],
+);
+
+// ---------------------------------------------------------------------------
 // What migration 0109 overwrote in `people.email` (#907).
 //
 // TEMPORARY, and meant to be dropped, like the backups above. 0109 makes

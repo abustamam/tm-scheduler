@@ -79,9 +79,29 @@ function repairIntlDigits(digits: string): string {
 		: digits;
 }
 
+const EXTENSION_MARKER = /extension|ext\.?|x|#/gi;
+
+/**
+ * Cut a free-text phone at its first extension marker (`x`, `ext`, `ext.`,
+ * `extension`, `#`, case-insensitive, spaced or not), keeping the part before
+ * it (#1106). The extension is dropped, not stored: `toE164` keeps every digit,
+ * so an extension left in would be dialed as part of the number and would make
+ * the dedup key (#397) differ for one phone with and without it.
+ *
+ * A marker only counts when at least one digit precedes it, so a value that is
+ * only an extension ("ext 9") is left alone and behaves as it always did.
+ */
+function stripExtension(trimmed: string): string {
+	for (const m of trimmed.matchAll(EXTENSION_MARKER)) {
+		const head = trimmed.slice(0, m.index);
+		if (/\d/.test(head)) return head.trim();
+	}
+	return trimmed;
+}
+
 /**
  * Normalize a free-text phone to E.164 (`+<digits>`), or null when it can't be
- * made reliable.
+ * made reliable. An extension is dropped (see `stripExtension`).
  *
  * - `+…` or `00…` (international prefix) → taken as-is (formatting stripped).
  * - otherwise, if `defaultCountryCode` is set → that code is prepended.
@@ -92,7 +112,7 @@ export function toE164(
 	raw: string | null | undefined,
 	defaultCountryCode?: string | null,
 ): string | null {
-	const trimmed = (raw ?? "").trim();
+	const trimmed = stripExtension((raw ?? "").trim());
 	if (trimmed === "") return null;
 
 	if (trimmed.startsWith("+")) {
