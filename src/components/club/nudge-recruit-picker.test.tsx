@@ -31,6 +31,22 @@ describe("buildRecruitTargets", () => {
 		expect(t.map((x) => x.id).sort()).toEqual(["a", "b", "c"]);
 	});
 
+	it("carries the effective preferred contact through (#1094)", () => {
+		const t = buildRecruitTargets(
+			[
+				{
+					...(roster[0] as (typeof roster)[0]),
+					preferredContact: "sms" as const,
+				},
+				roster[1] as (typeof roster)[0],
+			],
+			new Set(),
+			{},
+		);
+		expect(t.find((x) => x.id === "a")?.preferredContact).toBe("sms");
+		expect(t.find((x) => x.id === "b")?.preferredContact).toBeNull();
+	});
+
 	it("flags members marked not available, leaves others unflagged", () => {
 		const t = buildRecruitTargets(roster, new Set(["b"]), {});
 		expect(t.find((x) => x.id === "b")?.notAvailable).toBe(true);

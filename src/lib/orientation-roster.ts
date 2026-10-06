@@ -21,6 +21,7 @@
  * that is all the word does.
  */
 import type { OrientationItem, OrientationItemKey } from "#/lib/orientation";
+import type { ContactMethod } from "#/lib/preferred-contact";
 
 /** Past this many whole days in orientation, the row is highlighted. */
 export const ORIENTATION_STALLED_AFTER_DAYS = 28;
@@ -68,6 +69,8 @@ export interface OrientationRosterRow {
 	email: string | null;
 	/** E.164, or null. */
 	phone: string | null;
+	/** The EFFECTIVE preferred contact (#1093). */
+	preferredContact?: ContactMethod | null;
 	startedAt: Date;
 	/** `daysInOrientation(startedAt, now)`, computed once on the server. */
 	days: number;

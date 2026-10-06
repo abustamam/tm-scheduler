@@ -7,6 +7,10 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { guests, members, people } from "#/db/schema";
 import { toE164 } from "#/lib/phone";
+import {
+	type ContactMethod,
+	effectivePreferredContact,
+} from "#/lib/preferred-contact";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 
 /**
@@ -33,6 +37,9 @@ export interface Contact {
 	/** What to call them in a nudge draft, when it isn't the first token of
 	 *  their stored name (#486). Null ⇒ nobody recorded one. */
 	preferredName: string | null;
+	/** The EFFECTIVE preferred contact (#1093), never the raw column: null when
+	 *  none is chosen or the chosen method's data is gone. Guests have none. */
+	preferredContact?: ContactMethod | null;
 }
 
 export interface RosterContact extends Contact {
@@ -74,6 +81,7 @@ export async function loadRosterWithContact(
 				preferredName: memberGoesBy,
 				phone: people.phone,
 				email: people.email,
+				storedContact: people.preferredContact,
 			})
 			.from(members)
 			.innerJoin(people, eq(people.id, members.personId))
@@ -81,7 +89,17 @@ export async function loadRosterWithContact(
 			.orderBy(members.name),
 		loadClubDefaultCountryCode(clubId),
 	]);
-	return rows.map((r) => ({ ...r, phone: toE164(r.phone, cc) }));
+	return rows.map(({ storedContact, ...r }) => {
+		const phone = toE164(r.phone, cc);
+		return {
+			...r,
+			phone,
+			preferredContact: effectivePreferredContact(storedContact, {
+				email: r.email,
+				phone,
+			}),
+		};
+	});
 }
 
 /**
@@ -109,16 +127,22 @@ export async function loadHolderContacts(
 				phone: people.phone,
 				email: people.email,
 				preferredName: memberGoesBy,
+				storedContact: people.preferredContact,
 			})
 			.from(members)
 			.innerJoin(people, eq(people.id, members.personId))
 			.where(and(eq(members.clubId, clubId), inArray(members.id, memberIds)));
 		for (const r of rows) {
+			const phone = toE164(r.phone, cc);
 			map.set(contactKey("member", r.id), {
 				// Bare `toE164` on purpose — see `loadRosterWithContact`.
-				phone: toE164(r.phone, cc),
+				phone,
 				email: r.email,
 				preferredName: r.preferredName,
+				preferredContact: effectivePreferredContact(r.storedContact, {
+					email: r.email,
+					phone,
+				}),
 			});
 		}
 	}
@@ -139,6 +163,7 @@ export async function loadHolderContacts(
 				phone: toE164(r.phone, cc),
 				email: r.email,
 				preferredName: r.preferredName,
+				preferredContact: null,
 			});
 		}
 	}

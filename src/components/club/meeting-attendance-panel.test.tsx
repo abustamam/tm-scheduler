@@ -88,6 +88,30 @@ function renderPanel(
 describe("MeetingAttendancePanel (plan mode)", () => {
 	afterEach(() => cleanup());
 
+	it("#1094: a plan row preferring SMS leads with an SMS icon on its own line", () => {
+		const { getAllByRole } = renderPanel({
+			roster: [
+				{
+					id: "m1",
+					name: "Ayesha Khan",
+					preferredName: null,
+					phone: "+15551234567",
+					email: "ayesha@club.example",
+					preferredContact: "sms",
+				},
+			],
+		});
+		const links = getAllByRole("link").filter((l) =>
+			l.getAttribute("aria-label")?.includes("Ayesha"),
+		);
+		expect(links[0]?.getAttribute("aria-label")).toBe(
+			"Text Ayesha Khan by SMS (preferred)",
+		);
+		expect(links).toHaveLength(3);
+		// Plan rows opt in to the rail's own-line layout too.
+		expect(links[0]?.parentElement?.hasAttribute("data-own-line")).toBe(true);
+	});
+
 	it("lists the whole roster with its counts line", () => {
 		const { getByText, getAllByRole, container } = renderPanel({
 			plan: [{ memberId: "m1", status: "coming" as const }],
@@ -1175,6 +1199,36 @@ describe("roll mode", () => {
 		expect(getByRole("link", { name: /Email Abe Nkemelu/i }).textContent).toBe(
 			"",
 		);
+	});
+
+	it("#1094: a roll row preferring SMS gets a third, marked icon on its own line", () => {
+		const { getAllByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				roster={[
+					{
+						id: "m-abe",
+						name: "Abe Nkemelu",
+						phone: "+12025550101",
+						email: "abe@example.com",
+						preferredContact: "sms" as const,
+					},
+				]}
+			/>,
+		);
+		const links = getAllByRole("link");
+		expect(links).toHaveLength(3);
+		expect(links[0]?.getAttribute("aria-label")).toBe(
+			"Text Abe Nkemelu by SMS (preferred)",
+		);
+		expect(links[0]?.textContent).toBe("");
+		// The two-line shape: the icon group takes the whole line (so the line's
+		// `flex-wrap` puts it above the status control), right-aligned.
+		const group = links[0]?.parentElement;
+		expect(group?.hasAttribute("data-own-line")).toBe(true);
+		expect(group?.classList.contains("w-full")).toBe(true);
+		expect(group?.classList.contains("justify-end")).toBe(true);
+		expect(group?.parentElement?.classList.contains("flex-wrap")).toBe(true);
 	});
 
 	it("F6: drafts an on-your-way ask, not a pre-meeting one, from the room", () => {

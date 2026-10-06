@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clubs, guests, members, people } from "#/db/schema";
+import type { ContactMethod } from "#/lib/preferred-contact";
 import {
 	cleanup,
 	hasTestDb,
@@ -10,6 +11,7 @@ import {
 	testDb,
 } from "#/test/db";
 import {
+	contactKey,
 	loadHolderContacts,
 	loadRosterWithContact,
 } from "./meeting-contacts-logic";
@@ -167,6 +169,44 @@ describe.skipIf(!hasTestDb)("meeting contacts (integration)", () => {
 		).toBe(null);
 	});
 
+	async function setPreferred(memberId: string, method: ContactMethod) {
+		const [m] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.id, memberId));
+		if (!m) throw new Error("member missing");
+		await testDb
+			.update(people)
+			.set({ preferredContact: method })
+			.where(eq(people.id, m.personId));
+	}
+
+	it("returns the EFFECTIVE preferred contact on roster and holder loads (#1094)", async () => {
+		const id = await addMember(seeded.clubId, "Texter", {
+			phone: "+14155550011",
+			email: "t@x.io",
+		});
+		await setPreferred(id, "sms");
+
+		const roster = await loadRosterWithContact(seeded.clubId);
+		expect(roster.find((r) => r.id === id)?.preferredContact).toBe("sms");
+		const holders = await loadHolderContacts(seeded.clubId, [id], []);
+		expect(holders.get(contactKey("member", id))?.preferredContact).toBe("sms");
+	});
+
+	it("returns null when the chosen method's data is gone (#1094)", async () => {
+		const id = await addMember(seeded.clubId, "Lost Phone", {
+			phone: null,
+			email: "lp@x.io",
+		});
+		await setPreferred(id, "sms");
+
+		const roster = await loadRosterWithContact(seeded.clubId);
+		expect(roster.find((r) => r.id === id)?.preferredContact).toBeNull();
+		const holders = await loadHolderContacts(seeded.clubId, [id], []);
+		expect(holders.get(contactKey("member", id))?.preferredContact).toBeNull();
+	});
+
 	it("loadHolderContacts resolves member and guest contact by id", async () => {
 		const memberId = await addMember(seeded.clubId, "Holder M", {
 			phone: "+14155550003",
@@ -181,11 +221,13 @@ describe.skipIf(!hasTestDb)("meeting contacts (integration)", () => {
 			phone: "+14155550003",
 			email: "m@x.io",
 			preferredName: null,
+			preferredContact: null,
 		});
 		expect(map.get(`guest:${guestId}`)).toEqual({
 			phone: null,
 			email: "g@x.io",
 			preferredName: null,
+			preferredContact: null,
 		});
 	});
 

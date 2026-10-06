@@ -659,6 +659,27 @@ describe("tap-to-nudge confirm gate (#37)", () => {
 		expect(screen.getByText(/no contact on file/i)).toBeTruthy();
 	});
 
+	it("leads with the holder's preferred contact (#1094)", () => {
+		// Wiring: `slot.holderPreferredContact` reaches `NudgeButtons`. Severing it
+		// leaves the classic two buttons and no SMS link.
+		renderAgenda(manager(), [
+			{
+				...filled(),
+				holderPhone: "+14155552671",
+				holderEmail: "o@x.io",
+				holderPreferredContact: "sms",
+			},
+		]);
+		const links = screen
+			.getAllByRole("link")
+			.filter((l) => /^(SMS|WhatsApp|Email)/.test(l.textContent ?? ""));
+		expect(links.map((l) => l.textContent)).toEqual([
+			"SMSPreferred",
+			"WhatsApp",
+			"Email",
+		]);
+	});
+
 	it("does not render the confirm nudge for a manager on an open slot", () => {
 		renderAgenda(manager(), [slot({ status: "open" })]);
 		expect(screen.queryByText(/no contact on file/i)).toBeNull();

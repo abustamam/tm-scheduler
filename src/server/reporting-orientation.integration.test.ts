@@ -14,6 +14,7 @@ import {
 	mentorships,
 	pathEnrollments,
 	pathwaysPaths,
+	people,
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
@@ -54,6 +55,14 @@ afterEach(async () => {
 		createdPaths.length = 0;
 	}
 });
+
+async function personOf(memberId: string): Promise<string | undefined> {
+	const [m] = await testDb
+		.select({ personId: members.personId })
+		.from(members)
+		.where(eq(members.id, memberId));
+	return m?.personId;
+}
 
 /**
  * A club whose seeded admin is a veteran (not in orientation) and whose seeded
@@ -259,6 +268,22 @@ describe.skipIf(!hasTestDb)("loadOrientationRoster (#942)", () => {
 		const [row] = await loadOrientationRoster(s.clubId, NOW);
 		expect(row?.email).toBeNull();
 		expect(row?.phone).toBe("+14155550123");
+	});
+
+	it("carries the EFFECTIVE preferred contact, null once its data is gone (#1094)", async () => {
+		const s = await seed();
+		await setMemberEmail(s.memberId, "j@x.io");
+		await setMemberPhone(s.memberId, "+14155550123");
+		await testDb
+			.update(people)
+			.set({ preferredContact: "sms" })
+			.where(eq(people.id, (await personOf(s.memberId)) ?? ""));
+		const [withPhone] = await loadOrientationRoster(s.clubId, NOW);
+		expect(withPhone?.preferredContact).toBe("sms");
+
+		await setMemberPhone(s.memberId, null);
+		const [noPhone] = await loadOrientationRoster(s.clubId, NOW);
+		expect(noPhone?.preferredContact).toBeNull();
 	});
 
 	it("the admin gate refuses a plain member", async () => {
