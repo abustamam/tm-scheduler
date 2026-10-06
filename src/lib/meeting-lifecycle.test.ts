@@ -288,11 +288,18 @@ describe("resolveMeetingViewer", () => {
 			canManage: false,
 			isSignedIn: true,
 		});
-		expect(v.canClaim).toBe(false);
-		expect(v.canTakeOver).toBe(false);
-		expect(v.canToggleAvailability).toBe(false);
-		expect(v.canManage).toBe(false);
-		expect(v.currentMemberId).toBe("m1");
+		expect(v).toEqual(
+			lockedViewer(
+				meetingViewer({
+					currentMemberId: "m1",
+					canManage: false,
+					isTmod: false,
+					isGrammarian: false,
+					isEditableWindow: true,
+					isSignedIn: true,
+				}),
+			),
+		);
 	});
 });
 
