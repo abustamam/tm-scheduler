@@ -11,6 +11,7 @@ import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
 	DENY_REASON,
+	FORK_REASON,
 	decide,
 	parseAgentModel,
 	readRepoAgentModel,
@@ -35,7 +36,18 @@ describe("decide", () => {
 			'Agent dispatch would inherit the main session\'s Opus (docs/agents/token-usage.md). Retry with subagent_type "implementer" (Sonnet) or "explorer" (Haiku), or pass model explicitly; use model: "opus" only for judgement work such as review.',
 		);
 	});
-	it.each(["general-purpose", "Plan", "fork"])(
+	it("always denies fork, even with a model, with the fork reason", () => {
+		for (const input of [
+			dispatch({ subagent_type: "fork" }),
+			dispatch({ subagent_type: "fork", model: "sonnet" }),
+		]) {
+			expect(decide(input, sonnet)).toEqual({ allow: false, reason: FORK_REASON });
+		}
+		expect(FORK_REASON).toBe(
+			'subagent_type "fork" always inherits the main session\'s model and ignores model (docs/agents/token-usage.md). Use "implementer" or "explorer", or another subagent_type with model set.',
+		);
+	});
+	it.each(["general-purpose", "Plan"])(
 		"denies %s without model, allows with model",
 		(t) => {
 			expect(decide(dispatch({ subagent_type: t }), none).allow).toBe(false);
@@ -85,6 +97,19 @@ describe("parseAgentModel and readRepoAgentModel", () => {
 		expect(readRepoAgentModel(REPO, "implementer")).toBe("sonnet");
 		expect(readRepoAgentModel(REPO, "explorer")).toBe("haiku");
 	});
+	it("looks up by frontmatter name, not filename", () => {
+		const d = mkdtempSync(join(tmpdir(), "amg-names-"));
+		mkdirSync(join(d, ".claude", "agents"), { recursive: true });
+		const ag = join(d, ".claude", "agents");
+		writeFileSync(join(ag, "worker.md"), "---\nname: implementer\nmodel: sonnet\n---\n");
+		writeFileSync(join(ag, "implementer.md"), "---\nname: other\nmodel: sonnet\n---\n");
+		expect(readRepoAgentModel(d, "implementer")).toBe("sonnet");
+		expect(readRepoAgentModel(d, "other")).toBe("sonnet");
+		expect(readRepoAgentModel(d, "worker")).toBeNull();
+		rmSync(join(ag, "worker.md"));
+		expect(readRepoAgentModel(d, "implementer")).toBeNull();
+		rmSync(d, { recursive: true, force: true });
+	});
 	it("returns null for a missing file", () => {
 		expect(readRepoAgentModel(REPO, "no-such-agent")).toBeNull();
 	});
@@ -100,6 +125,12 @@ describe("parseAgentModel and readRepoAgentModel", () => {
 		["only below frontmatter", "---\nname: x\n---\nmodel: sonnet\n", null],
 		["no closing line", "---\nmodel: sonnet\n", null],
 		["first line not exactly ---", " ---\nmodel: sonnet\n---\n", null],
+		["comment-only value", "---\nmodel: # choose later\n---\n", null],
+		["null", "---\nmodel: null\n---\n", null],
+		["quoted null", '---\nmodel: "null"\n---\n', null],
+		["tilde", "---\nmodel: ~\n---\n", null],
+		["block scalar |-", "---\nmodel: |-\n  sonnet\n---\n", null],
+		["block scalar >", "---\nmodel: >\n  sonnet\n---\n", null],
 		["first model wins", "---\nmodel: a\nmodel: b\n---\n", "a"],
 	])("%s", (_n, content, want) => {
 		expect(parseAgentModel(content)).toBe(want);
@@ -154,7 +185,7 @@ describe("spawned hook", () => {
 		cpSync(join(REPO, ".claude", "agents"), join(proj, ".claude", "agents"), {
 			recursive: true,
 		});
-		writeFileSync(join(proj, ".claude", "agents", "inh.md"), "---\nmodel: inherit\n---\n");
+		writeFileSync(join(proj, ".claude", "agents", "inh.md"), "---\nname: inh\nmodel: inherit\n---\n");
 		const env = { CLAUDE_PROJECT_DIR: proj };
 		const ok = run(JSON.stringify(dispatch({ subagent_type: "implementer" })), env, "/");
 		expect(ok.status).toBe(0);
