@@ -15,6 +15,10 @@ import {
 	MEETING_CANCELLED_MESSAGE,
 } from "#/lib/meeting-cancellation-notice";
 import {
+	isMeetingLocked,
+	MEETING_LOCKED_MESSAGE,
+} from "#/lib/meeting-lifecycle";
+import {
 	pairedRoleIds,
 	pickSpeakerAndEvaluatorRoles,
 	type SpeakerEvaluatorRoles,
@@ -123,6 +127,28 @@ export function meetingNotCancelled(conn: DbOrTx) {
 				and(
 					eq(meetings.id, roleSlots.meetingId),
 					ne(meetings.status, "cancelled"),
+				),
+			),
+	);
+}
+
+/**
+ * The completed-meeting guard as a predicate on a claim's own WHERE (#1107):
+ * true while the slot's meeting is not `completed` (locked, see
+ * `isMeetingLocked`). A sibling of `meetingNotCancelled`, NOT a change to it:
+ * its other callers (guest assignment, reassign) keep their meaning. Rides in
+ * the statement for the same reason: a complete committed between the claim's
+ * earlier SELECT and its UPDATE is invisible to that read and visible here.
+ */
+export function meetingNotCompleted(conn: DbOrTx) {
+	return exists(
+		conn
+			.select({ one: sql`1` })
+			.from(meetings)
+			.where(
+				and(
+					eq(meetings.id, roleSlots.meetingId),
+					ne(meetings.status, "completed"),
 				),
 			),
 	);
@@ -1947,14 +1973,24 @@ export async function claimSlotCore(
 				eq(roleSlots.id, args.slotId),
 				eq(roleSlots.status, "open"),
 				meetingNotCancelled(tx),
+				meetingNotCompleted(tx),
 			),
 		)
 		.returning({ id: roleSlots.id });
 
 	if (updated.length === 0) {
-		// Two causes return no row: the slot was claimed first, or the meeting
-		// was cancelled. Tell them apart, because the member's next step differs.
+		// Three causes return no row: the slot was claimed first, or the meeting
+		// was cancelled or completed. Tell them apart, because the member's next
+		// step differs.
 		await assertMeetingNotCancelledOn(tx, slot.meetingId);
+		const [now] = await tx
+			.select({ status: meetings.status })
+			.from(meetings)
+			.where(eq(meetings.id, slot.meetingId))
+			.limit(1);
+		if (now && isMeetingLocked(now.status)) {
+			throw new Error(MEETING_LOCKED_MESSAGE);
+		}
 		throw new Error("Sorry — this role was just claimed by someone else.");
 	}
 

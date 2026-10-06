@@ -43,6 +43,20 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
+// A seam for #1107: with `skipLockCheck` on, the read-time lock check is a
+// no-op, which is exactly what a meeting completed AFTER that read looks like.
+// Off by default, so every other case runs the real check.
+const seam = vi.hoisted(() => ({ skipLockCheck: false }));
+vi.mock("#/server/meeting-authz-logic", async (orig) => {
+	const real = await orig<typeof import("#/server/meeting-authz-logic")>();
+	return {
+		...real,
+		assertMeetingNotLocked: (status: string) => {
+			if (!seam.skipLockCheck) real.assertMeetingNotLocked(status);
+		},
+	};
+});
+
 const { claimSlotCore } = await import("#/server/slots-logic");
 
 const JUST_CLAIMED = "Sorry — this role was just claimed by someone else.";
@@ -227,6 +241,27 @@ describe.skipIf(!hasTestDb)("claimSlotCore (#825)", () => {
 		await expect(claim(s.slotId, s.memberId, s.memberId)).rejects.toThrow(
 			MEETING_LOCKED_MESSAGE,
 		);
+		expect(await slotRow(s.slotId)).toMatchObject({
+			assignedMemberId: null,
+			status: "open",
+		});
+	});
+
+	it("the UPDATE refuses a completed meeting on its own, with the lock sentence (#1107)", async () => {
+		const s = await seedLiveClub();
+		await testDb
+			.update(meetings)
+			.set({ status: "completed" })
+			.where(eq(meetings.id, s.meetingId));
+
+		seam.skipLockCheck = true;
+		try {
+			await expect(claim(s.slotId, s.memberId, s.memberId)).rejects.toThrow(
+				MEETING_LOCKED_MESSAGE,
+			);
+		} finally {
+			seam.skipLockCheck = false;
+		}
 		expect(await slotRow(s.slotId)).toMatchObject({
 			assignedMemberId: null,
 			status: "open",
