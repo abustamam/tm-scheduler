@@ -45,11 +45,11 @@ comes from the script below, which fixes three bugs in the first version (see "T
 | Agent dispatches by type / model | `general-purpose` 77, untyped 14, `Explore` 3; **none named a model** |
 | cost on calls carrying >150k / >300k context | 77% / 35%; main-thread calls are 32% / 24% of each |
 | cache read / 5-min cache write / 1-h cache write / output | 70% / 18% / 9% / 3% |
-| first observed call, median, main / subagent | 89k / 74k; subagent startup 4% of cost |
+| first observed call, median, main / subagent | 89k / 74k; subagents' first observed calls are 4% of cost |
 | subagent peak context, deciles (k) | 88, 95, 104, 113, 130, 152, 182, 217, 316 |
 | main-session peak context (median) | 235k |
 | median session cost | 6.9M units |
-| resumes after >1h idle | 30, median 229k context; the rebuild call alone is 5.5% of cost |
+| main-thread calls more than an hour after the previous one | 23, median 235k context, 4.4% of cost |
 
 The two machines agree on the shape. Long context is mostly a SUBAGENT problem: of the 35% on
 calls over 300k, three quarters is subagents, and a tenth of subagents peak above 316k.
@@ -58,14 +58,15 @@ the 35% as main threads. That was wrong.)
 
 ## What the cut is worth [ESTIMATED from the Mac, 5.5 list prices]
 
-Repriced at list ($/MTok): Opus 5.5 is 4 in / 20 out, and Sonnet 5.5 is 2 / 10. **Both read cache at
-0.20.** Cache reads are 58% of Opus subagent dollars, and that part does not shrink on Sonnet.
+Repriced at list ($/MTok): Opus 5.5 is 4 in / 20 out, Sonnet 5.5 is 2 / 10, and Fable 5.1 is 10 / 50.
+**Opus and Sonnet both read cache at 0.20.** Cache reads are 58% of Opus subagent dollars, and that
+part does not shrink on Sonnet.
 
 | rule | what it hits | estimated saving |
 |---|---|---|
-| wave agents on Sonnet | Opus subagent dollars fall 21% ($325 → $258 of $509) | ~13% of total |
-| CLAUDE.md 56.7 KB → 15.1 KB | ~10k tokens off every call: 2.6% in cache reads, 0.7% in cold-call writes | ~3% |
-| handoff instead of resuming stale sessions | the rebuild call after >1h idle | up to ~5.5% |
+| wave agents on Sonnet | Opus subagent dollars fall 21% ($325 → $258 of $541) | ~12% of total |
+| CLAUDE.md 56.7 KB → 15.1 KB | ~10k tokens off every call, a scenario: 2.4% if read from cache, 0.7% more where written cold | ~3% |
+| handoff instead of resuming stale sessions | main-thread calls after a gap of over an hour: 4.4% of cost, the whole call, not only its rebuild | under 4.4% |
 | subagent context | the ~27% of cost on subagent calls over 300k | none yet: `implementer.md` asks for a small context and nothing caps it |
 
 So the cut helps, but it is no halving, and the largest pool left is long-running subagents, which
@@ -100,16 +101,18 @@ subagent first-call context (expect ~10k lower), the >300k share, and cost per m
 
 ## The script
 
-`python3 usage.py` prints every Mac number above for each project whose directory name contains
-`tm-scheduler`. Set `since` / `until` for the window you want. The first version had three bugs,
-all fixed here:
+`python3 usage.py` prints every Mac number above, pooled across every project directory whose name
+contains `tm-scheduler` (the main checkout and its worktrees). Set `since` / `until` for the window
+you want; a statistic with too small a sample prints `N/A`. Fable and Haiku are priced at their own
+list prices; a model it cannot price is listed, and contributes no dollars (`<synthetic>` is Claude
+Code's zero-usage placeholder). The first version had three bugs, all fixed here:
 
 - **It undercounted dispatches.** It read `Agent` calls only off the first logged line of each API
   call. One call is logged once per content block, so the later lines were dropped: it found 7
   dispatches on the Mac where there were 94. Dispatches are now counted by tool-use id on every
   line, before any usage check.
 - **It undercounted output.** An early line can carry a partial `output_tokens` (1 where the call
-  produced 446; 1,500 calls on the Mac), so each usage field now keeps its max across the lines.
+  produced 446; 1,500 calls on the Mac), so the most complete usage record is now kept whole.
 - **It divided subagent model shares by TOTAL cost**, so "subagent cost on Opus" printed 65% where
   it is 94%.
 
@@ -121,11 +124,12 @@ import json, os, glob, collections, datetime as dt, statistics as st
 ROOT = os.path.expanduser('~/.claude/projects')
 since = dt.datetime(2026, 9, 28, tzinfo=dt.timezone.utc)
 until = dt.datetime(2026, 10, 6, 1, 21, tzinfo=dt.timezone.utc)  # the #1097 merge
-W = dict(inp=1, cw5=1.25, cw1h=2, cr=0.1, out=5)          # units, relative to base input
-USD = {'opus': dict(inp=4, cw5=5, cw1h=8, cr=0.20, out=20),  # $/MTok, 5.5 list
-       'sonnet': dict(inp=2, cw5=2.5, cw1h=4, cr=0.20, out=10)}
+W = dict(inp=1, cw5=1.25, cw1h=2, cr=0.1, out=5)              # units, relative to base input
+LIST = dict(opus=(4, 0.20, 20), sonnet=(2, 0.20, 10), fable=(10, 0.25, 50), haiku=(1, 0.10, 5))
+USD = {f: dict(inp=i, cw5=1.25 * i, cw1h=2 * i, cr=c, out=o) for f, (i, c, o) in LIST.items()}  # $/MTok
+family = lambda model: next((f for f in USD if f in model), None)  # None: unpriced, reported
 calls, tools, dispatch = {}, set(), collections.Counter()
-for f in glob.glob(ROOT + '/*tm-scheduler*/**/*.jsonl', recursive=True):
+for f in glob.glob(ROOT + '/*tm-scheduler*/**/*.jsonl', recursive=True):  # all matches, pooled
     if os.path.getmtime(f) < since.timestamp(): continue
     rel = os.path.relpath(f, ROOT).split('/'); sub = 'subagents' in rel
     sess = rel[1].removesuffix('.jsonl')
@@ -146,56 +150,66 @@ for f in glob.glob(ROOT + '/*tm-scheduler*/**/*.jsonl', recursive=True):
         v = dict(inp=u.get('input_tokens', 0), cr=u.get('cache_read_input_tokens', 0), out=u.get('output_tokens', 0),
                  cw1h=cc.get('ephemeral_1h_input_tokens', 0),
                  cw5=cc.get('ephemeral_5m_input_tokens', 0) if cc else u.get('cache_creation_input_tokens', 0))
-        # One API call is logged once per content block; an early line can carry a partial
-        # output_tokens (1 where the call produced 446), so keep each field's max.
-        r = calls.setdefault((m['id'], d['requestId']), dict(t=t, sess=sess, agent=rel[-1] if sub else 'main',
-                                                              sub=sub, model=m.get('model') or '', **{k: 0 for k in W}))
-        for k in W: r[k] = max(r[k], v[k])
+        # One API call is logged once per content block, and an early line can carry a partial
+        # output_tokens (1 where the call produced 446). Keep the most complete record whole.
+        key = (m['id'], d['requestId'])
+        if key not in calls or v['out'] > calls[key]['out']:
+            calls[key] = dict(t=min(t, calls[key]['t']) if key in calls else t, sess=sess,
+                              agent=rel[-1] if sub else 'main', sub=sub, model=m.get('model') or '', **v)
 rows = list(calls.values())
 for r in rows:
     r['ctx'] = r['inp'] + r['cw1h'] + r['cw5'] + r['cr']
     r['cost'] = sum(W[k] * r[k] for k in W)
-    r['usd'] = sum(USD['opus' if 'opus' in r['model'] else 'sonnet'][k] * r[k] for k in W) / 1e6
+    p = USD.get(family(r['model'])); r['usd'] = sum(p[k] * r[k] for k in W) / 1e6 if p else 0
+def med(xs):
+    xs = list(xs); return round(st.median(xs) / 1e3) if xs else 'N/A'
+def share(a, b): return f'{100 * a / b:.1f}%' if b else 'N/A'
 tot = sum(r['cost'] for r in rows); subs = [r for r in rows if r['sub']]; stot = sum(r['cost'] for r in subs)
-pct = lambda x: f'{100 * x:.0f}%'
 print('calls', len(rows), '| main sessions', len({r['sess'] for r in rows if not r['sub']}),
       '| subagents', len({(r['sess'], r['agent']) for r in subs}), '| units M', round(tot / 1e6, 1))
-print('subagent share', pct(stot / tot))
+print('subagent share', share(stot, tot))
 for lab, rs in (('main', [r for r in rows if not r['sub']]), ('subagent', subs)):
     s = sum(r['cost'] for r in rs); by = collections.Counter()
-    for r in rs: by[r['model']] += r['cost'] / s       # share of THAT group's cost
-    print(lab, 'cost by model', {k: pct(v) for k, v in by.most_common(3)})
+    for r in rs: by[r['model']] += r['cost']           # share of THAT group's cost
+    print(lab, 'cost by model', {k: share(v, s) for k, v in by.most_common(3)})
 print('dispatches (type, model)', dispatch.most_common())
 for th in (150e3, 300e3):
-    big = [r for r in rows if r['ctx'] > th]
-    print(f'>{th / 1e3:.0f}k share', pct(sum(r['cost'] for r in big) / tot),
-          '| of it main', pct(sum(r['cost'] for r in big if not r['sub']) / sum(r['cost'] for r in big)))
-for k in W: print('kind', k, pct(sum(W[k] * r[k] for r in rows) / tot))
+    big = sum(r['cost'] for r in rows if r['ctx'] > th)
+    print(f'>{th / 1e3:.0f}k share', share(big, tot),
+          '| of it main', share(sum(r['cost'] for r in rows if r['ctx'] > th and not r['sub']), big))
+for k in W: print('kind', k, share(sum(W[k] * r[k] for r in rows), tot))
 by = collections.defaultdict(list)
 for r in rows: by[(r['sess'], r['agent'])].append(r)
 for rs in by.values(): rs.sort(key=lambda r: r['t'])
-# "first OBSERVED in the window": a session begun before `since` contributes a mid-session call
+# FIRST OBSERVED in the window: a session begun before `since` contributes a mid-session call
 firsts = {k: rs[0] for k, rs in by.items()}
-print('first observed call ctx median, main / sub',
-      st.median([r['ctx'] for k, r in firsts.items() if k[1] == 'main']),
-      st.median([r['ctx'] for k, r in firsts.items() if k[1] != 'main']))
-print('subagent startup share', pct(sum(r['cost'] for k, r in firsts.items() if k[1] != 'main') / tot))
-print('subagent peak deciles k', [round(x / 1e3) for x in st.quantiles([max(r['ctx'] for r in rs) for k, rs in by.items() if k[1] != 'main'], n=10)])
-print('main peak median k', round(st.median(max(r['ctx'] for r in rs) for k, rs in by.items() if k[1] == 'main') / 1e3))
+print('first observed call ctx median k, main / sub', med(r['ctx'] for k, r in firsts.items() if k[1] == 'main'),
+      med(r['ctx'] for k, r in firsts.items() if k[1] != 'main'))
+print('subagent first-observed-call share', share(sum(r['cost'] for k, r in firsts.items() if k[1] != 'main'), tot))
+peaks = [max(r['ctx'] for r in rs) for k, rs in by.items() if k[1] != 'main']
+print('subagent peak deciles k', [round(x / 1e3) for x in st.quantiles(peaks, n=10)] if len(peaks) > 1 else 'N/A')
+print('main peak median k', med(max(r['ctx'] for r in rs) for k, rs in by.items() if k[1] == 'main'))
 sc = collections.Counter()
 for r in rows: sc[r['sess']] += r['cost']
-print('median session units M', round(st.median(sc.values()) / 1e6, 2))
-resumes = [b for rs in by.values() for a, b in zip(rs, rs[1:]) if (b['t'] - a['t']).total_seconds() > 3600]
-print('resumes after >1h idle', len(resumes), '| rebuild-call share', f"{100 * sum(r['cost'] for r in resumes) / tot:.1f}%",
-      '| median ctx k', round(st.median(r['ctx'] for r in resumes) / 1e3))
-# Dollars, 5.5 list prices
-usd = sum(r['usd'] for r in rows); op = [r for r in subs if 'opus' in r['model']]
+print('median session units M', round(st.median(sc.values()) / 1e6, 2) if sc else 'N/A')
+# Main-thread calls more than an hour after the previous one. A gap is usually the maintainer
+# away, but can be a long tool run; this is a share of cost, not a measured saving.
+resumes = [b for k, rs in by.items() if k[1] == 'main' for a, b in zip(rs, rs[1:])
+           if (b['t'] - a['t']).total_seconds() > 3600]
+print('main-thread calls after >1h gap', len(resumes), '| their cost share', share(sum(r['cost'] for r in resumes), tot),
+      '| median ctx k', med(r['ctx'] for r in resumes))
+# Dollars at list price
+usd = sum(r['usd'] for r in rows)
+print('unpriced models', {r['model'] for r in rows if not family(r['model'])} or 'none')
+op = [r for r in subs if family(r['model']) == 'opus']
 so = sum(r['usd'] for r in op); ss = sum(sum(USD['sonnet'][k] * r[k] for k in W) / 1e6 for r in op)
-print(f'$ total {usd:.0f} | Opus subagents {so:.0f} -> Sonnet {ss:.0f}: saves {100 * (so - ss) / usd:.0f}% of total',
-      f'| cache reads {100 * sum(USD["opus"]["cr"] * r["cr"] for r in op) / 1e6 / so:.0f}% of those $')
+print(f'$ total {usd:.0f} | Opus subagents {so:.0f} -> Sonnet {ss:.0f}: saves {share(so - ss, usd)} of total',
+      f'| cache reads {share(sum(USD["opus"]["cr"] * r["cr"] for r in op) / 1e6, so)} of those $')
+# SCENARIO, not a measurement: assumes CLAUDE.md sits in the cached prefix of every call, read
+# when the call read at least that much from cache, else written at the call's dominant TTL.
 D = (56678 - 15133) / 4    # tokens the CLAUDE.md cut removes from every context (bytes / 4)
-rd = sum(D * 0.20 / 1e6 for r in rows if r['ctx'] >= D and r['cr'] >= D)     # prefix read from cache
-wr = sum(D * USD['opus' if 'opus' in r['model'] else 'sonnet']['cw1h' if r['cw1h'] > r['cw5'] else 'cw5'] / 1e6
-         for r in rows if r['ctx'] >= D and r['cr'] < D)                      # cold call: prefix written
-print(f'CLAUDE.md cut: reads {100 * rd / usd:.1f}% + cold writes {100 * wr / usd:.1f}% of $')
+pr = lambda r: USD.get(family(r['model'])) or {k: 0 for k in W}
+rd = sum(D * pr(r)['cr'] / 1e6 for r in rows if r['ctx'] >= D and r['cr'] >= D)
+wr = sum(D * pr(r)['cw1h' if r['cw1h'] > r['cw5'] else 'cw5'] / 1e6 for r in rows if r['ctx'] >= D and r['cr'] < D)
+print(f'CLAUDE.md cut (scenario): reads {share(rd, usd)} + cold writes {share(wr, usd)} of $')
 ```
