@@ -60,9 +60,13 @@ export {
 // below, so it contributes nothing at runtime. `AGENDA_LAYOUTS` (#1069), the
 // values of the `agenda_print_layout` enum, is a VALUE import, with the same
 // standing as `table-topics-limits`: `agenda-layouts.ts` imports nothing at
-// all, and the same guard test holds it to that.
+// all, and the same guard test holds it to that. `CONTACT_METHODS` (#1093), the
+// values of `contact_method`, is the same kind of VALUE import:
+// `preferred-contact.ts` imports nothing, and `preferred-contact-reads.guard.test.ts`
+// holds it to that.
 import { AGENDA_LAYOUTS } from "../lib/agenda-layouts";
 import type { McpPendingTool } from "../lib/pending-plan";
+import { CONTACT_METHODS } from "../lib/preferred-contact";
 import { MAX_TABLE_TOPICS_SECONDS } from "../lib/table-topics-limits";
 // user is re-exported above for Better-Auth; imported here for the people.userId
 // foreign key (the person-level auth link — ADR-0008 Phase B).
@@ -364,6 +368,11 @@ export const timingGrantedViaEnum = pgEnum("timing_granted_via", [
 // Deliberately decoupled from `membership_status` — dues track money, not the
 // roster/season renewal state, and no dues action ever mutates it.
 export const duesStatusEnum = pgEnum("dues_status", ["paid", "waived"]);
+
+// How a member wants officers to reach them (#1093). Person-level, like the
+// email and phone it depends on. Built from `CONTACT_METHODS` — the client-safe
+// list every reader, both writers and the forms use — rather than a copy of it.
+export const contactMethodEnum = pgEnum("contact_method", CONTACT_METHODS);
 
 // ---------------------------------------------------------------------------
 // Clubs & memberships
@@ -739,6 +748,18 @@ export const people = pgTable(
 		// what the one club that holds them typed.
 		email: text("email"),
 		phone: text("phone"),
+		// How this person wants officers to reach them (#1093); null = no
+		// preference. A STORED value, not the answer: it can name a method whose
+		// data has since gone (the phone removed after they chose SMS), and is then
+		// kept, not cleared, so restoring the phone brings it back. So NEVER read
+		// it raw — every reader goes through `effectivePreferredContact`
+		// (`#/lib/preferred-contact`). Two writers, both refusing a method whose
+		// data is missing in the UPDATE's own WHERE: the member on /account
+		// (`contact-preference-logic.ts`), and a club admin's roster edit only
+		// while nobody has signed in as this Person AND that club is their sole
+		// holder, the email's rule (`applyMemberEdit`). A merge carries it over
+		// (`people-merge-logic.ts`).
+		preferredContact: contactMethodEnum("preferred_contact"),
 		// First-ever Toastmasters join date — a person-level fact (identical across
 		// every club), moved off the per-club members row (ADR-0008).
 		originalJoinDate: timestamp("original_join_date"),

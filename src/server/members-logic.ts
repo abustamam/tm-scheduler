@@ -17,6 +17,13 @@ import {
 	parseOfficerPosition,
 } from "#/lib/officers";
 import { toStoredPhone } from "#/lib/phone";
+import {
+	CONTACT_METHOD_UNAVAILABLE_MESSAGE,
+	CONTACT_METHODS,
+	CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE,
+	CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE,
+	effectivePreferredContact,
+} from "#/lib/preferred-contact";
 import { buildImportPreview } from "#/lib/roster-import";
 import {
 	type EmailWriteRefusal,
@@ -29,6 +36,7 @@ import {
 import { logActivity } from "./activity";
 import { isReadableClub } from "./club-readable-logic";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
+import { contactMethodAvailableSql } from "./contact-preference-logic";
 import { collapseMemberships } from "./membership-collapse-logic";
 import {
 	currentOfficersByMember,
@@ -192,6 +200,12 @@ export const editSchema = z.object({
 	// since corrected. An explicit `null` (or a blank) clears it. The member
 	// page sends this key only when the field differs from what it loaded.
 	phone: z.string().trim().nullable().optional(),
+	// How the member wants officers to reach them (#1093), a Person fact.
+	// Omitted means leave it alone, like `phone`; the member page sends it only
+	// when the officer changed it, and never for a Person who has signed in (the
+	// choice is then theirs). `null` clears it. Validated against the email and
+	// phone AS THIS SAME EDIT LEAVES THEM, in the write's own WHERE.
+	preferredContact: z.enum(CONTACT_METHODS).nullable().optional(),
 	// The full set of offices this membership should currently hold (#100). The
 	// membership's open officer terms are reconciled to exactly this set: offices
 	// added here open a term, offices dropped close their open term (history is
@@ -254,6 +268,8 @@ export async function applyMemberEdit(input: EditInput) {
 	// and only when the caller sent one (`undefined` = leave it alone).
 	const phone =
 		input.phone === undefined ? undefined : toStoredPhone(input.phone, cc);
+	// `undefined` = leave the Person's preference alone (#1093).
+	const preferredContact = input.preferredContact;
 	// Current offices before the edit — derived from open terms, for the log.
 	const beforeOffices = await currentOfficersFor(input.memberId);
 	let emailChange: { before: string | null; after: string | null } | null =
@@ -270,7 +286,12 @@ export async function applyMemberEdit(input: EditInput) {
 		// bind that commits first is seen by its WHERE, one that arrives later
 		// waits for this transaction.
 		const [currentPerson] = await tx
-			.select({ phone: people.phone, email: people.email })
+			.select({
+				phone: people.phone,
+				email: people.email,
+				userId: people.userId,
+				storedPreferredContact: people.preferredContact,
+			})
 			.from(people)
 			.where(eq(people.id, current.personId))
 			.for("update");
@@ -310,6 +331,54 @@ export async function applyMemberEdit(input: EditInput) {
 				emailRefused =
 					(await emailWriteRefusalFor(current.personId, input.clubId, tx)) ??
 					"multi_club";
+			}
+		}
+		// The contact preference (#1093). AFTER the phone and email writes, so
+		// its WHERE judges availability against the row as this edit leaves it:
+		// clearing the phone and choosing SMS in one save matches nothing. Three
+		// rules sit in the UPDATE's own WHERE, not in a prior read: the Person
+		// has not signed in (once they have, the choice is theirs); this club is
+		// their SOLE holder (the rule `people.email` has, ADR-0029, applied to
+		// the preference too; the phone has no such rule); and the method's
+		// data exists.
+		//
+		// Zero rows refuses the WHOLE edit — unlike the email, whose refusal lets
+		// the rest of the save land. The throw rolls back every write above, so
+		// nothing in this save lands. The WHERE decides; the message is
+		// BEST-EFFORT. It comes from a read after the UPDATE that holds no
+		// membership lock, so another club removing its membership in between
+		// can turn a multi-club refusal into "add a phone number or email". No
+		// lock is taken for that: the outcome (refused, nothing written) is right
+		// either way, and only the sentence can be stale.
+		if (preferredContact !== undefined) {
+			const written = await tx
+				.update(people)
+				.set({ preferredContact })
+				.where(
+					and(
+						eq(people.id, current.personId),
+						isNull(people.userId),
+						soleHoldingClub(input.clubId),
+						contactMethodAvailableSql(preferredContact),
+					),
+				)
+				.returning({ id: people.id });
+			if (written.length === 0) {
+				// Ownership before availability, so a multi-club Person whose
+				// email write was just refused hears "another club", not "add an
+				// email" (#1093 review) — subject to the race described above.
+				const owner = await emailWriteRefusalFor(
+					current.personId,
+					input.clubId,
+					tx,
+				);
+				throw new Error(
+					owner === "bound"
+						? CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE
+						: owner === "multi_club"
+							? CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE
+							: CONTACT_METHOD_UNAVAILABLE_MESSAGE,
+				);
 			}
 		}
 		// The "goes by" name below is the only other person-level write this form makes
@@ -379,12 +448,23 @@ export async function applyMemberEdit(input: EditInput) {
 					...(emailChange ? { email: emailChange.before } : {}),
 					// Logged only when the edit wrote it.
 					...(phone !== undefined ? { phone: currentPerson.phone } : {}),
+					// Logged only when the edit wrote it: the preference as it was
+					// SHOWN, never the raw column (#1093).
+					...(preferredContact !== undefined
+						? {
+								preferredContact: effectivePreferredContact(
+									currentPerson.storedPreferredContact,
+									currentPerson,
+								),
+							}
+						: {}),
 					officerPositions: beforeOffices,
 				},
 				after: {
 					...next,
 					...(emailChange ? { email: emailChange.after } : {}),
 					...(phone !== undefined ? { phone } : {}),
+					...(preferredContact !== undefined ? { preferredContact } : {}),
 					officerPositions: afterOffices,
 				},
 			},
