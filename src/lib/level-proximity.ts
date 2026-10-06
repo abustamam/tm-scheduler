@@ -8,7 +8,6 @@
 // The copy says PROJECTS, never speeches: Level 1's "Evaluation and Feedback"
 // takes three assignments, and later levels hold projects that are not speeches
 // at all (`pathways-catalog.ts` header).
-
 import { levelLabel } from "#/lib/pathways-catalog";
 import type { ContactMethod } from "#/lib/preferred-contact";
 import type { PathViewModel } from "#/server/pathways-read-logic";

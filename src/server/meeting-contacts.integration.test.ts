@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clubs, guests, members, people } from "#/db/schema";
+import type { ContactMethod } from "#/lib/preferred-contact";
 import {
 	cleanup,
 	hasTestDb,
@@ -168,10 +169,7 @@ describe.skipIf(!hasTestDb)("meeting contacts (integration)", () => {
 		).toBe(null);
 	});
 
-	async function setPreferred(
-		memberId: string,
-		method: "email" | "call" | "sms" | "whatsapp",
-	) {
+	async function setPreferred(memberId: string, method: ContactMethod) {
 		const [m] = await testDb
 			.select({ personId: members.personId })
 			.from(members)

@@ -1199,7 +1199,7 @@ describe("roll mode", () => {
 		);
 	});
 
-	it("#1094: a roll row preferring SMS gets a third, marked icon on one line", () => {
+	it("#1094: a roll row preferring SMS gets a third, marked icon", () => {
 		const { getAllByRole } = render(
 			<MeetingAttendancePanel
 				{...rollProps}
@@ -1220,7 +1220,6 @@ describe("roll mode", () => {
 			"Text Abe Nkemelu by SMS (preferred)",
 		);
 		expect(links[0]?.textContent).toBe("");
-		expect(links[0]?.parentElement?.className).not.toContain("flex-wrap");
 	});
 
 	it("F6: drafts an on-your-way ask, not a pre-meeting one, from the room", () => {

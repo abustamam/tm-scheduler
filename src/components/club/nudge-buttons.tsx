@@ -24,7 +24,7 @@ interface NudgeButtonsBase {
 	 *  #1093), never the raw column. Its button leads and is marked; Call and SMS
 	 *  render only when preferred. Absent/null keeps the two classic buttons. */
 	preferredContact?: ContactMethod | null;
-	/** Fired when the WhatsApp or Email draft link is tapped (auto-mark contacted). */
+	/** Fired when the Call, SMS, WhatsApp or Email draft link is tapped (auto-mark contacted). */
 	onContacted?: () => void;
 	/** Render glyphs with no text label. OPT-IN, because this component is shared
 	 *  with the agenda slot cards and the recruit picker, where the words are
