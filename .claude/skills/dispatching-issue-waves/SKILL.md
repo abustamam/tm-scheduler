@@ -20,8 +20,10 @@ One stage per iteration, re-planned at the top of every iteration:
    `--max` set to the total of both. If they collapse into one wave, they never conflicted —
    the cap split them — and that merged wave is the stage to dispatch. Do this every time a
    trailing wave is smaller than `--max`; it is the only free throughput in the loop.
-4. Dispatch that stage — one agent per issue, each handed **the brief** below. The brief has
-   each agent create and bootstrap its own worktree.
+4. Dispatch that stage — one agent per issue, each handed **the brief** below, with
+   `subagent_type: "implementer"` (Sonnet, `.claude/agents/implementer.md`). An unnamed agent
+   inherits the main session's Opus; that was 75% of this repo's spend
+   (`docs/agents/token-usage.md`). The brief has each agent create and bootstrap its own worktree.
 5. Each agent opens its PR and **stops**: `gh pr create`, body carrying `Closes #N`, no merge.
 6. **From the main session**: review the wave's PRs, then land them one at a time — see
    **Landing the wave** below. The merge decision is the maintainer's, not an agent's.

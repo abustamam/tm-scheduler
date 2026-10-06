@@ -101,3 +101,17 @@ plans by hand after "NEEDS A FILE PATH" or a dependency violation comes back.
   quoting someone else: it is skipped, and reported as ignored in the plan. Double quotes are not
   stripped. A report of ANOTHER issue's dependency written in plain prose still counts as this
   issue's own, so put it in a code span or drop the `#`.
+
+## Why agent findings do not become queue items
+
+(Moved from `CLAUDE.md`, "What earns an issue", 2026-10-05.)
+
+The reason is measured. Of the 65 issues closed here in the 30 days to 2026-09-07, 63 closed
+COMPLETED and 2 NOT_PLANNED: nothing in the pipeline ever said no, so everything an agent noticed
+got built. The repo this repo's batcher was ported from measured the same shape, found ~2
+follow-ups per merged PR feeding its planner of which roughly one in eighteen was a bug a user
+could hit, and deleted the apparatus. Here the parallel layer stays, because the work is features
+and the waves are real throughput; what goes is every path by which an agent's observation becomes
+a queue item without the maintainer deciding to want it. `TODOS/` is closed to new entries (its
+README says what happens to what is already there), and `docs/agents/issue-tracker.md` has the two
+greps that check the rule is holding.
