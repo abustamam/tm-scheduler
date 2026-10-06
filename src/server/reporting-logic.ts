@@ -287,7 +287,7 @@ export async function loadLevelProximity(
 					email: people.email,
 					phone: people.phone,
 					preferredName: memberGoesBy,
-					preferredContact: people.preferredContact,
+					storedContact: people.preferredContact,
 				})
 				.from(members)
 				.innerJoin(people, eq(people.id, members.personId))
@@ -310,7 +310,7 @@ export async function loadLevelProximity(
 			email,
 			phone,
 			preferredName: m.preferredName,
-			preferredContact: effectivePreferredContact(m.preferredContact, {
+			preferredContact: effectivePreferredContact(m.storedContact, {
 				email,
 				phone,
 			}),
@@ -379,7 +379,7 @@ export async function loadOrientationRoster(
 				email: people.email,
 				phone: people.phone,
 				preferredName: memberGoesBy,
-				preferredContact: people.preferredContact,
+				storedContact: people.preferredContact,
 				startedAt: members.orientationStartedAt,
 			})
 			.from(members)
@@ -415,7 +415,7 @@ export async function loadOrientationRoster(
 			// Blank is no address: `buildNudge` would otherwise draft to "".
 			email,
 			phone,
-			preferredContact: effectivePreferredContact(c.preferredContact, {
+			preferredContact: effectivePreferredContact(c.storedContact, {
 				email,
 				phone,
 			}),

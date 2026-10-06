@@ -95,6 +95,9 @@ const ALLOWED: Record<string, "declares" | "reads"> = {
 	"server/club-logic.ts": "reads",
 	// The admin writer's locked read, logged as the effective value.
 	"server/members-logic.ts": "reads",
+	// The nudge loaders (#1094): the effective value, never the raw column.
+	"server/meeting-contacts-logic.ts": "reads",
+	"server/reporting-logic.ts": "reads",
 };
 
 function unwrap(node: ts.Expression): ts.Expression {

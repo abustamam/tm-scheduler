@@ -81,7 +81,7 @@ export async function loadRosterWithContact(
 				preferredName: memberGoesBy,
 				phone: people.phone,
 				email: people.email,
-				preferredContact: people.preferredContact,
+				storedContact: people.preferredContact,
 			})
 			.from(members)
 			.innerJoin(people, eq(people.id, members.personId))
@@ -89,12 +89,12 @@ export async function loadRosterWithContact(
 			.orderBy(members.name),
 		loadClubDefaultCountryCode(clubId),
 	]);
-	return rows.map((r) => {
+	return rows.map(({ storedContact, ...r }) => {
 		const phone = toE164(r.phone, cc);
 		return {
 			...r,
 			phone,
-			preferredContact: effectivePreferredContact(r.preferredContact, {
+			preferredContact: effectivePreferredContact(storedContact, {
 				email: r.email,
 				phone,
 			}),
@@ -127,7 +127,7 @@ export async function loadHolderContacts(
 				phone: people.phone,
 				email: people.email,
 				preferredName: memberGoesBy,
-				preferredContact: people.preferredContact,
+				storedContact: people.preferredContact,
 			})
 			.from(members)
 			.innerJoin(people, eq(people.id, members.personId))
@@ -139,7 +139,7 @@ export async function loadHolderContacts(
 				phone,
 				email: r.email,
 				preferredName: r.preferredName,
-				preferredContact: effectivePreferredContact(r.preferredContact, {
+				preferredContact: effectivePreferredContact(r.storedContact, {
 					email: r.email,
 					phone,
 				}),
