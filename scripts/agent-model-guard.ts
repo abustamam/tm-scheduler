@@ -51,7 +51,9 @@ function frontmatterField(content: string, key: string): string | null {
 			v = v.slice(1, -1);
 		}
 		v = v.trim();
-		if (v === "" || v === "null" || v === "~" || /^[|>]/.test(v)) return null;
+		// Allowlist a plain token (sonnet, claude-sonnet-5-5, opus[1m]); anything
+		// else (YAML null in any case, ~, tags, anchors, block scalars) is unpinned.
+		if (!/^[A-Za-z0-9][\w.:[\]-]*$/.test(v) || /^null$/i.test(v)) return null;
 		return v;
 	}
 	return null;
