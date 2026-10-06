@@ -306,6 +306,35 @@ describe("SeasonGrid prospective claim + undo", () => {
 	});
 });
 
+describe("SeasonGrid: no Claim on a completed meeting (#1107)", () => {
+	const completedData: SeasonGridData = {
+		...data,
+		meetings: data.meetings.map((m) => ({ ...m, isCompleted: true })),
+	};
+
+	it("offers Claim on the open slot of a live meeting — the control", async () => {
+		await renderGrid(undefined, { currentMemberId: "m-me" });
+		expect(screen.getByRole("button", { name: /claim/i })).toBeTruthy();
+	});
+
+	it("offers no Claim to a signed-in member", async () => {
+		await renderGrid(undefined, {
+			data: completedData,
+			currentMemberId: "m-me",
+			currentMemberSource: "session",
+		});
+		expect(screen.queryByRole("button", { name: /claim/i })).toBeNull();
+	});
+
+	it("offers no Claim to an anonymous visitor on the public sheet", async () => {
+		await renderGrid(
+			vi.fn(async () => PICKED),
+			{ data: completedData },
+		);
+		expect(screen.queryByRole("button", { name: /claim/i })).toBeNull();
+	});
+});
+
 describe("SeasonGrid: your own role is a release control only with a session (#763)", () => {
 	const mine: SeasonGridData = {
 		...data,

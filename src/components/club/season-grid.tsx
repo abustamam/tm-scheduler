@@ -804,7 +804,9 @@ export function SeasonGrid({
 															(!!cell.slotId && busySlotId === cell.slotId) ||
 															busyMeetingId === cell.meetingId
 														}
-														onClaim={claim}
+														// A completed meeting is locked: the server refuses the claim
+														// (#1107), so the grid offers no control for it.
+														onClaim={m?.isCompleted ? undefined : claim}
 														// Releasing is session-gated (#763), so an
 														// anonymous pick's own cell is not a control.
 														onRelease={provenIdentity ? release : undefined}
