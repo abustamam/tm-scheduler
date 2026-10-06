@@ -54,15 +54,15 @@ describe.skipIf(!hasTestDb)("club payload phone normalization", () => {
 		// `phone` would pass a bare "is it defined" assertion while putting the
 		// country-code guess straight back into the input.
 		//
-		// "x12" is an extension, so coalescing welds it into the subscriber number:
-		// the guess is visibly not a number anyone typed, which is the point. The
-		// member profile is the only screen showing what is actually on file.
+		// The stored text carries an extension, which the coalesced number drops, so
+		// the two differ. The member profile is the only screen showing what is
+		// actually on file.
 		const { loadMemberProfile } = await import("#/server/club-logic");
 		await setMemberPhone(seed.memberId, "415-555-2671 x12");
 
 		const row = await loadMemberProfile(seed.clubId, seed.memberId);
 		expect(row?.phoneRaw).toBe("415-555-2671 x12");
-		expect(row?.phone).toBe("+1415555267112");
+		expect(row?.phone).toBe("+14155552671");
 		expect(row?.phoneRaw).not.toBe(row?.phone);
 	});
 

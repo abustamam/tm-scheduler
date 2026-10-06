@@ -44,6 +44,35 @@ describe("toE164", () => {
  * reason it exists as a named function rather than an inline `toE164` call, so
  * the digit-less case below is the load-bearing one.
  */
+describe("phone extensions are dropped (#1106)", () => {
+	it.each([
+		["+1 415 555 2671 ext. 9", undefined, "+14155552671"],
+		["+1 (415) 555-2671 x12", undefined, "+14155552671"],
+		["415-555-2671 ext 9", "+1", "+14155552671"],
+		["+44 20 7946 0958 #3", undefined, "+442079460958"],
+		["4155552671 extension 9", "+1", "+14155552671"],
+		["+1 415 555 2671 EXT. 9", undefined, "+14155552671"],
+		["+1 415 555 2671x9", undefined, "+14155552671"],
+		["+1 415 555 2671 #9", undefined, "+14155552671"],
+	])("toE164(%j, %j) -> %s", (raw, cc, want) => {
+		expect(toE164(raw, cc)).toBe(want);
+		expect(toStoredPhone(raw, cc)).toBe(want);
+		expect(coalesceToE164(raw, cc)).toBe(want);
+	});
+
+	it("a value that is only an extension behaves as before", () => {
+		expect(toE164("ext 9")).toBeNull();
+		expect(toStoredPhone("ext 9")).toBe("ext 9");
+		expect(toE164("x12")).toBeNull();
+	});
+
+	it("a person and a guest differing only by an extension share a dedup key", () => {
+		expect(toStoredPhone("+14155552671")).toBe(
+			toStoredPhone("415 555 2671 ext. 9", "+1"),
+		);
+	});
+});
+
 describe("coalesceToE164", () => {
 	it("passes an already-E.164 value through, stripping formatting", () => {
 		expect(coalesceToE164("+14155552671", "+1")).toBe("+14155552671");
