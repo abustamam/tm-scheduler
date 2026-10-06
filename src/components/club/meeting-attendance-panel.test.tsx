@@ -831,15 +831,15 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 
 		// 6px between the status control and Email put two DIFFERENT actions inside
 		// one fat-finger: a slip writes `reached_out` and throws the tablet into a
-		// mail client mid-meeting. WhatsApp and Email keep their 6px — same member,
+		// mail client mid-meeting. The icons shrink to 2px (#1094, so a three-icon preferred-SMS row fits the rail) — same member,
 		// same handler — so both halves are asserted, or "widen everything" passes.
 		const actionLine = trigger.parentElement;
-		expect(actionLine?.classList.contains("gap-3")).toBe(true);
+		expect(actionLine?.classList.contains("gap-2.5")).toBe(true);
 		expect(actionLine?.classList.contains("gap-1.5")).toBe(false);
 		const nudges = getByRole("link", {
 			name: /Message Ayesha Khan on WhatsApp/i,
 		}).closest("div");
-		expect(nudges?.classList.contains("gap-1.5")).toBe(true);
+		expect(nudges?.classList.contains("gap-0.5")).toBe(true);
 	});
 });
 
@@ -1171,7 +1171,7 @@ describe("roll mode", () => {
 		expect(chip.classList.contains("justify-between")).toBe(true);
 		const actionLine = chip.parentElement;
 		expect(actionLine?.classList.contains("justify-end")).toBe(true);
-		expect(actionLine?.classList.contains("gap-3")).toBe(true);
+		expect(actionLine?.classList.contains("gap-2.5")).toBe(true);
 		// Same WCAG 1.4.11 point plan mode's chevron test makes: `currentColor` at
 		// 60% takes a non-text indicator under 3:1.
 		const chevron = chip.querySelector("svg");

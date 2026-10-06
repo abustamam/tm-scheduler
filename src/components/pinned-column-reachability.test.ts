@@ -6,6 +6,7 @@ import {
 	buildAppCss,
 	candidatesIn,
 	probeColumn,
+	renderAndReadTitle,
 } from "#/test/pinned-column-scroll";
 import { CHROME_TEST_TIMEOUT_MS, findChrome } from "#/test/print-page-count";
 
@@ -25,6 +26,8 @@ import { CHROME_TEST_TIMEOUT_MS, findChrome } from "#/test/print-page-count";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SHELL = resolve(HERE, "app-shell.tsx");
 const PANEL = resolve(HERE, "club/meeting-attendance-panel.tsx");
+const BUTTON = resolve(HERE, "ui/button.tsx");
+const NUDGE = resolve(HERE, "club/nudge-buttons.tsx");
 const MEETING_ROUTE = resolve(
 	HERE,
 	"../routes/club.$clubId.meeting.$meetingId.tsx",
@@ -282,6 +285,73 @@ describe.skipIf(!hasChrome)(
 				);
 				expect(p.tailVisibleAfterScroll).toBe(false);
 				expect(p.tailReachableByPageScroll).toBe(false);
+			});
+
+			it("keeps a row preferring SMS (three icon buttons) on one line with no overflow (#1094)", async () => {
+				// The row a member who prefers SMS gets: SMS, WhatsApp and Email icons
+				// ahead of the status control. Classes come from the real source: the
+				// action line, the icon size and the status trigger's fixed width. A
+				// row with today's two icons is measured beside it as the control.
+				const line = classAfterTag(PANEL, "function PanelActionLine");
+				const icon = /"icon-sm":\s*"([^"]*)"/.exec(readSource(BUTTON))?.[1];
+				expect(icon, "icon-sm size not found in button.tsx").toBeTruthy();
+				const chip = /"(w-44)[^"]*"/.exec(readSource(PANEL))?.[1];
+				expect(chip, "status trigger width not found").toBe("w-44");
+				const iconGap = /iconOnly \? "(gap-[\d.]+)"/.exec(
+					readSource(NUDGE),
+				)?.[1];
+				expect(
+					iconGap,
+					"icon-only gap not found in nudge-buttons",
+				).toBeTruthy();
+				const row = (n: number, id: string) =>
+					`<div class="${line}" data-line="${id}"><div class="flex items-center ${iconGap}">${Array.from(
+						{ length: n },
+						() =>
+							`<a class="inline-flex shrink-0 ${icon}" data-icon="${id}"></a>`,
+					).join(
+						"",
+					)}</div><div class="${chip} shrink-0" data-chip="${id}"></div></div>`;
+				const html = railHtml().replace(
+					/<div class="py-4 text-sm"[^>]*>Member 1<\/div>/,
+					`${row(2, "two")}${row(3, "three")}`,
+				);
+				const script = `<script>
+					var out = ["two", "three"].map(function (id) {
+						var l = document.querySelector('[data-line="' + id + '"]');
+						var tops = Array.prototype.map.call(
+							document.querySelectorAll('[data-icon="' + id + '"]'),
+							function (e) { return Math.round(e.getBoundingClientRect().top); });
+						var chip = document.querySelector('[data-chip="' + id + '"]').getBoundingClientRect();
+						var body = document.querySelector("[data-scroller]");
+						var br = body.getBoundingClientRect();
+						var cs = getComputedStyle(body);
+						var inner = br.right - parseFloat(cs.paddingRight);
+						// \`justify-end\` overflows to the LEFT, which \`scrollWidth\` never
+						// counts, so the first icon's left edge is what is checked.
+						var first = document.querySelector('[data-icon="' + id + '"]').getBoundingClientRect();
+						var innerLeft = br.left + parseFloat(cs.paddingLeft);
+						return [
+							new Set(tops).size === 1 ? "oneline" : "wrapped",
+							first.left >= innerLeft - 0.5 && l.scrollWidth <= l.clientWidth ? "fits" : "overflow",
+							chip.right <= inner + 0.5 ? "inside" : "outside",
+							body.scrollWidth <= body.clientWidth ? "noscroll" : "hscroll",
+						].join(",");
+					});
+					document.title = out.join("|");
+				</script>`;
+				// The row's own classes are not in the shared sheet built from the
+				// shell/rail/drawer fixtures, so build one that includes them.
+				const rowCss = await buildAppCss(candidatesIn(html));
+				const title = renderAndReadTitle({
+					bodyHtml: html,
+					css: rowCss,
+					script,
+					viewport: VIEWPORT,
+				});
+				const control = "oneline,fits,inside,noscroll";
+				expect(title.split("|")[0], "two-icon control row").toBe(control);
+				expect(title.split("|")[1], "three-icon SMS row").toBe(control);
 			});
 
 			it("loses the header if the scroller moves back out to the <aside>", () => {
