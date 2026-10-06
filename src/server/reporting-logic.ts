@@ -60,6 +60,7 @@ import {
 	type OrientationRosterRow,
 } from "#/lib/orientation-roster";
 import { toE164 } from "#/lib/phone";
+import { effectivePreferredContact } from "#/lib/preferred-contact";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { loadNextMeetingSummary } from "./meetings-logic";
 import { loadOrientationFactsForMembers } from "./orientation-logic";
@@ -286,6 +287,7 @@ export async function loadLevelProximity(
 					email: people.email,
 					phone: people.phone,
 					preferredName: memberGoesBy,
+					preferredContact: people.preferredContact,
 				})
 				.from(members)
 				.innerJoin(people, eq(people.id, members.personId))
@@ -301,11 +303,17 @@ export async function loadLevelProximity(
 		]);
 	const contact = new Map<string, LevelProximityContact>();
 	for (const m of roster) {
+		const email = m.email?.trim() ? m.email : null;
+		const phone = toE164(m.phone, countryCode);
 		contact.set(m.memberId, {
 			// Blank is no address: `buildNudge` would otherwise draft to "".
-			email: m.email?.trim() ? m.email : null,
-			phone: toE164(m.phone, countryCode),
+			email,
+			phone,
 			preferredName: m.preferredName,
+			preferredContact: effectivePreferredContact(m.preferredContact, {
+				email,
+				phone,
+			}),
 		});
 	}
 	const selected = selectLevelProximity({
@@ -321,6 +329,7 @@ export async function loadLevelProximity(
 				email: null,
 				phone: null,
 				preferredName: null,
+				preferredContact: null,
 			}),
 		})),
 		// NOT NULL with a default in the schema; the fallback is that default,
@@ -370,6 +379,7 @@ export async function loadOrientationRoster(
 				email: people.email,
 				phone: people.phone,
 				preferredName: memberGoesBy,
+				preferredContact: people.preferredContact,
 				startedAt: members.orientationStartedAt,
 			})
 			.from(members)
@@ -396,13 +406,19 @@ export async function loadOrientationRoster(
 		if (!c.startedAt || !facts) return null;
 		const view = orientationView(facts);
 		if (!view.visible) return null;
+		const email = c.email?.trim() ? c.email : null;
+		const phone = toE164(c.phone, countryCode);
 		return {
 			memberId: c.memberId,
 			name: c.name,
 			preferredName: c.preferredName,
 			// Blank is no address: `buildNudge` would otherwise draft to "".
-			email: c.email?.trim() ? c.email : null,
-			phone: toE164(c.phone, countryCode),
+			email,
+			phone,
+			preferredContact: effectivePreferredContact(c.preferredContact, {
+				email,
+				phone,
+			}),
 			startedAt: c.startedAt,
 			days: daysInOrientation(c.startedAt, now),
 			items: view.items.map(({ key, done }) => ({ key, done })),

@@ -163,10 +163,13 @@ export function preferredContactEditPayload(
 /**
  * The phone as a `tel:`/`sms:` target: a leading `+` and the digits, nothing
  * else, so no other character of the stored value (a `?body=`, a note) reaches
- * the URI. Null when there is nothing to dial.
+ * the URI. A trailing extension (`x123`, `ext. 123`) is dropped, not folded
+ * into the number. Null when there is nothing to dial.
  */
 function dialTarget(phone: string | null | undefined): string | null {
-	const trimmed = (phone ?? "").trim();
+	const trimmed = (phone ?? "")
+		.replace(/\s*(?:ext(?:ension)?\.?|x)\s*\d+.*$/i, "")
+		.trim();
 	const digits = trimmed.replace(/\D/g, "");
 	if (!digits) return null;
 	return trimmed.startsWith("+") ? `+${digits}` : digits;
@@ -178,8 +181,30 @@ export function telHref(phone: string | null | undefined): string | null {
 	return target ? `tel:${target}` : null;
 }
 
-/** `sms:` link, no body, for a stored phone, or null with no digit in it. */
-export function smsHref(phone: string | null | undefined): string | null {
+/** Is this client an iPhone or iPad (incl. iPadOS reporting a Macintosh UA)? */
+export function isIos(nav: {
+	userAgent: string;
+	maxTouchPoints: number;
+}): boolean {
+	if (/iPhone|iPod|iPad/i.test(nav.userAgent)) return true;
+	return /Macintosh/.test(nav.userAgent) && nav.maxTouchPoints > 1;
+}
+
+/** What `smsHref` keys its body separator off: iOS is its own case. */
+export type SmsPlatform = "mobile" | "desktop" | "ios";
+
+/**
+ * `sms:` link for a stored phone, or null with no digit in it. `body`
+ * prefills the draft: iOS wants `&body=`, Android and desktop `?body=`.
+ */
+export function smsHref(
+	phone: string | null | undefined,
+	platform: SmsPlatform = "mobile",
+	body?: string,
+): string | null {
 	const target = dialTarget(phone);
-	return target ? `sms:${target}` : null;
+	if (!target) return null;
+	if (!body) return `sms:${target}`;
+	const sep = platform === "ios" ? "&" : "?";
+	return `sms:${target}${sep}body=${encodeURIComponent(body)}`;
 }

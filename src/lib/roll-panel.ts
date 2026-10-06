@@ -19,6 +19,7 @@ import {
 	type PlanStatus,
 	resolveEffectiveRung,
 } from "#/lib/attendance-panel";
+import type { ContactMethod } from "#/lib/preferred-contact";
 import type { AttendanceStatus } from "#/server/minutes-logic";
 
 /** What the plan SUGGESTS for a member with no attendance row yet. `null` means
@@ -30,6 +31,8 @@ export interface RollRow {
 	name: string;
 	phone: string | null;
 	email: string | null;
+	/** The EFFECTIVE preferred contact (#1093). */
+	preferredContact?: ContactMethod | null;
 	/** A member's goes-by name — "Abdul-Rasheed Bustamam" who goes by Rasheed
 	 *  cannot be greeted right by splitting the stored name. Rendered instead of
 	 *  `name` when present (#486). */
@@ -97,6 +100,7 @@ export function buildRollPanel(input: {
 		name: string;
 		phone: string | null;
 		email: string | null;
+		preferredContact?: ContactMethod | null;
 		preferredName?: string | null;
 		departed?: boolean;
 	}[];
@@ -136,6 +140,7 @@ export function buildRollPanel(input: {
 		return {
 			...m,
 			preferredName: m.preferredName ?? null,
+			preferredContact: m.preferredContact ?? null,
 			departed: m.departed ?? false,
 			status,
 			// Present rows only: a mode on any other row would be a stale value

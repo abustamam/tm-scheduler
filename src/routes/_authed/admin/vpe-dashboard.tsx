@@ -770,6 +770,7 @@ function ProximityRow({
 						preferredName={row.preferredName}
 						phone={row.phone}
 						email={row.email}
+						preferredContact={row.preferredContact}
 						meetingDate={nudge.meetingDate}
 						shareUrl={nudge.shareUrl}
 						pathName={row.pathName}
@@ -884,6 +885,7 @@ function OrientationRow({
 						preferredName={row.preferredName}
 						phone={row.phone}
 						email={row.email}
+						preferredContact={row.preferredContact}
 						meetingDate={nudge?.meetingDate}
 						shareUrl={nudge?.shareUrl}
 						items={row.items}

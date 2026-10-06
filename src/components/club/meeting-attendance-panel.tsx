@@ -402,6 +402,7 @@ function AttendanceRow({
 					preferredName={m.preferredName}
 					phone={m.phone}
 					email={m.email}
+					preferredContact={m.preferredContact}
 					meetingDate={meetingDate}
 					shareUrl={shareUrl}
 					onContacted={() => onContacted(m.id)}
@@ -818,6 +819,7 @@ function RollAttendanceRow({
 						preferredName={row.preferredName}
 						phone={row.phone}
 						email={row.email}
+						preferredContact={row.preferredContact}
 						meetingDate={meetingDate}
 						shareUrl={shareUrl}
 					/>

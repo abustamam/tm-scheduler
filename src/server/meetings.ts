@@ -424,6 +424,7 @@ async function loadMeetingDetail(
 			holderPhone: c?.phone ?? null,
 			holderEmail: c?.email ?? null,
 			holderPreferredName: c?.preferredName ?? null,
+			holderPreferredContact: c?.preferredContact ?? null,
 		};
 	});
 

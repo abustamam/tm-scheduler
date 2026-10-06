@@ -9,6 +9,7 @@
 // and a count can be right for the wrong reason.
 
 import { buildShortCodes } from "#/lib/agenda";
+import type { ContactMethod } from "#/lib/preferred-contact";
 import type { AttendancePlanStatus } from "#/server/attendance-plan-logic";
 
 /** The three stored rungs. `null` (no row) means "no answer" and is not a
@@ -171,6 +172,8 @@ export interface PanelMember {
 	preferredName?: string | null;
 	phone: string | null;
 	email: string | null;
+	/** The EFFECTIVE preferred contact (#1093). Absent on a caller with no contact. */
+	preferredContact?: ContactMethod | null;
 	/** The EFFECTIVE rung after the precedence rule below — not necessarily the
 	 *  stored one. Counts and sort both read this, which is what makes an assumed
 	 *  Coming a real Coming everywhere without a second code path. */

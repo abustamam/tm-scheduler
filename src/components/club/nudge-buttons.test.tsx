@@ -280,4 +280,99 @@ describe("NudgeButtons", () => {
 		expect(screen.getByText(/no contact on file/i)).toBeTruthy();
 		expect(screen.queryByRole("link")).toBeNull();
 	});
+
+	describe("preferred contact (#1094)", () => {
+		const both = { phone: "+14155552671", email: "j@x.io" };
+		const names = () =>
+			screen.getAllByRole("link").map((l) => l.textContent ?? "");
+
+		it("renders today's two buttons with no preference", () => {
+			render(<NudgeButtons {...base} {...both} preferredContact={null} />);
+			expect(names()).toEqual(["WhatsApp", "Email"]);
+		});
+
+		it("leads with and marks a preferred Email", () => {
+			render(<NudgeButtons {...base} {...both} preferredContact="email" />);
+			expect(names()).toEqual(["EmailPreferred", "WhatsApp"]);
+		});
+
+		it("leads with and marks a preferred WhatsApp, without extras", () => {
+			render(<NudgeButtons {...base} {...both} preferredContact="whatsapp" />);
+			expect(names()).toEqual(["WhatsAppPreferred", "Email"]);
+		});
+
+		it("adds an SMS draft first with the WhatsApp draft's text", () => {
+			render(<NudgeButtons {...base} {...both} preferredContact="sms" />);
+			expect(names()).toEqual(["SMSPreferred", "WhatsApp", "Email"]);
+			const [sms, wa] = screen.getAllByRole("link");
+			expect(sms?.getAttribute("href")).toContain("sms:+14155552671?body=");
+			const smsText = decodeURIComponent(
+				(sms?.getAttribute("href") ?? "").split("body=")[1] ?? "",
+			);
+			const waText = decodeURIComponent(
+				new URL(wa?.getAttribute("href") ?? "").searchParams.get("text") ?? "",
+			);
+			expect(smsText).toBe(waText);
+			expect(smsText).toContain("Timer");
+		});
+
+		it("adds a tel: Call button first", () => {
+			render(<NudgeButtons {...base} {...both} preferredContact="call" />);
+			expect(names()).toEqual(["CallPreferred", "WhatsApp", "Email"]);
+			expect(screen.getAllByRole("link")[0]?.getAttribute("href")).toBe(
+				"tel:+14155552671",
+			);
+		});
+
+		it("marks the preferred icon button in its aria-label", () => {
+			render(
+				<NudgeButtons {...base} {...both} preferredContact="sms" iconOnly />,
+			);
+			const links = screen.getAllByRole("link");
+			expect(links).toHaveLength(3);
+			expect(links[0]?.getAttribute("aria-label")).toBe(
+				"Text Jane by SMS (preferred)",
+			);
+		});
+
+		it("renders no SMS button when the phone has no digits", () => {
+			render(
+				<NudgeButtons
+					{...base}
+					phone="ask at church"
+					email="j@x.io"
+					preferredContact="sms"
+				/>,
+			);
+			expect(names()).toEqual(["Email"]);
+		});
+
+		it("fires onContacted from Call and SMS", async () => {
+			const onContacted = vi.fn();
+			render(
+				<NudgeButtons
+					{...base}
+					{...both}
+					preferredContact="call"
+					onContacted={onContacted}
+				/>,
+			);
+			const link = screen.getAllByRole("link")[0];
+			link?.addEventListener("click", (e) => e.preventDefault());
+			await userEvent.click(link as HTMLElement);
+			cleanup();
+			render(
+				<NudgeButtons
+					{...base}
+					{...both}
+					preferredContact="sms"
+					onContacted={onContacted}
+				/>,
+			);
+			const sms = screen.getAllByRole("link")[0];
+			sms?.addEventListener("click", (e) => e.preventDefault());
+			await userEvent.click(sms as HTMLElement);
+			expect(onContacted).toHaveBeenCalledTimes(2);
+		});
+	});
 });

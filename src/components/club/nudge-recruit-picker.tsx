@@ -15,6 +15,7 @@ import {
 	PopoverTrigger,
 } from "#/components/ui/popover";
 import { type PersonalNudgeBase, personalNudgeUrl } from "#/lib/nudge";
+import type { ContactMethod } from "#/lib/preferred-contact";
 import type { RoleDuty } from "#/lib/role-duties";
 
 export interface RecruitTarget {
@@ -25,6 +26,8 @@ export interface RecruitTarget {
 	preferredName: string | null;
 	phone: string | null;
 	email: string | null;
+	/** The EFFECTIVE preferred contact (#1093). */
+	preferredContact?: ContactMethod | null;
 	/** Member has marked themselves Not Available for this meeting. */
 	notAvailable: boolean;
 	/** Role this member already holds in this meeting, if any. */
@@ -46,6 +49,7 @@ export function buildRecruitTargets(
 		preferredName?: string | null;
 		phone?: string | null;
 		email?: string | null;
+		preferredContact?: ContactMethod | null;
 	}[],
 	unavailableIds: ReadonlySet<string>,
 	roleByMemberId: Readonly<Record<string, string>>,
@@ -57,6 +61,7 @@ export function buildRecruitTargets(
 		preferredName: m.preferredName ?? null,
 		phone: m.phone ?? null,
 		email: m.email ?? null,
+		preferredContact: m.preferredContact ?? null,
 		notAvailable: unavailableIds.has(m.id),
 		alreadyRole: roleByMemberId[m.id] ?? null,
 		contacted: contactedIds.has(m.id),
@@ -136,6 +141,7 @@ export function NudgeRecruitPicker({
 							preferredName={livePicked.preferredName}
 							phone={livePicked.phone}
 							email={livePicked.email}
+							preferredContact={livePicked.preferredContact}
 							roleName={roleName}
 							duties={duties}
 							meetingDate={meetingDate}
