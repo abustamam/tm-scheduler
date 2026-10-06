@@ -60,5 +60,8 @@ ref
 # above all, which would otherwise recurse into this ignore file).
 !.claude/skills/
 !.claude/skills/**
+# Agent definitions pin each subagent's model (docs/agents/token-usage.md).
+!.claude/agents/
+!.claude/agents/**
 CLAUDE.local.md
 .release-worktree/
