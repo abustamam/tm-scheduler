@@ -17,20 +17,35 @@ carrying >150k context.
 - **Dispatch implementation to the `implementer` agent** (`.claude/agents/implementer.md`,
   Sonnet), searches to `explorer` (Haiku). A wave agent is an implementer. Opus is for the main
   session's judgement: specs, review, the merge decision.
-- **One wave or one issue per session, then hand off** — a comment on the issue or PR saying
-  where it stands. Compact near 250k.
-- **Before you stop to wait for the maintainer, post the handoff first**, then send a push
-  notification. They may be away overnight, so do not count on them seeing it soon. A
-  session idle for over an hour has lost its cache: on the Mac, 32 resumes at a median 229k context cost 5.7% of
-  all spend in the rebuild call alone, and every call after it carried that context. So the
-  maintainer answers a short reply ("yes", "option B") in place, and anything that starts real
-  work in a fresh session from the handoff. The comment, on the issue or PR (one on the tracking
-  issue for a wave):
+- **One wave or one issue per session, then hand off.** Compact near 250k.
+- **Write the handoff whenever the session stops: blocked on the maintainer, or done.** The
+  maintainer cannot predict when they step away, and a session idle for over an hour has lost
+  its cache. Resuming one costs a full rebuild of the context (`docs/agents/token-usage.md`), so
+  the handoff is what a fresh session starts from.
+  - **Only the main session writes it.** A subagent that needs a decision returns at once with the
+    question as its result; its parent batches every open question into ONE handoff.
+  - **Blocked on CI, a deploy or a running agent is not blocked on the maintainer.** Keep working
+    or wait on it; write no handoff for it.
+  - **Where:** one comment per issue or PR, EDITED in place as things change, never a new
+    comment per question. Find the one whose body starts `**Handoff**` with
+    `gh api repos/abustamam/tm-scheduler/issues/N/comments` and `PATCH` it by id. Do NOT use
+    `--edit-last`: agents post as the maintainer's account, so it edits the maintainer's latest
+    comment. A wave's goes on its
+    tracking issue, else on each PR. With no issue or PR, the handoff is the session's final
+    message.
+  - **The repo is PUBLIC.** Write repo-relative paths, branch names and public links only. No
+    local paths, env values, tokens, member data or prod rows. If the blocker itself is sensitive,
+    write "needs you: see the session" and put the detail in the final message.
+  - **Then notify:** a push notification when the handoff asks for something, never when it says
+    "nothing". If no notification tool exists, say so in the final message and stop anyway.
+  - **When the maintainer answers:** a short answer ("yes", "option B") is replied in place. An
+    answer that starts real work goes to a fresh session pointed at the handoff, and that session
+    first edits the handoff to record the decision.
 
   ```markdown
-  **Handoff** — <date>
-  - **Needs you:** the decision, with options and a recommendation (or "nothing")
-  - **State:** PR / branch / worktree, CI status
+  **Handoff** (<date>)
+  - **Needs you:** each decision, with options and a recommendation; or "nothing"
+  - **State:** PR / branch, CI status
   - **Done:** what landed, with the real test counts or CI run link
   - **Next:** the one or two concrete steps after the decision
   - **Gotchas:** anything a fresh session would trip on
