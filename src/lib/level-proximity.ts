@@ -9,6 +9,7 @@
 // takes three assignments, and later levels hold projects that are not speeches
 // at all (`pathways-catalog.ts` header).
 import { levelLabel } from "#/lib/pathways-catalog";
+import type { ContactMethod } from "#/lib/preferred-contact";
 import type { PathViewModel } from "#/server/pathways-read-logic";
 
 export const LEVEL_PROXIMITY = {
@@ -57,6 +58,8 @@ export interface LevelProximityContact {
 	phone: string | null;
 	/** `coalesce(members.preferred_name, people.preferred_name)` (#486). */
 	preferredName: string | null;
+	/** The EFFECTIVE preferred contact (#1093): null when their data is gone. */
+	preferredContact?: ContactMethod | null;
 }
 
 export type LevelProximityRow = LevelProximitySelection & LevelProximityContact;

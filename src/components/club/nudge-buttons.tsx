@@ -1,10 +1,16 @@
-import { Mail, MessageCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Mail, MessageCircle, MessageSquareText, Phone } from "lucide-react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Button } from "#/components/ui/button";
 import type { LevelProgress } from "#/lib/level-proximity";
 import { buildNudge } from "#/lib/nudge";
 import type { OrientationTick } from "#/lib/orientation-roster";
 import { detectPlatform } from "#/lib/platform";
+import {
+	type ContactMethod,
+	isIos,
+	smsHref,
+	telHref,
+} from "#/lib/preferred-contact";
 import type { RoleDuty } from "#/lib/role-duties";
 
 interface NudgeButtonsBase {
@@ -14,12 +20,21 @@ interface NudgeButtonsBase {
 	preferredName?: string | null;
 	phone: string | null;
 	email: string | null;
-	/** Fired when the WhatsApp or Email draft link is tapped (auto-mark contacted). */
+	/** The member's EFFECTIVE preferred method (`effectivePreferredContact`,
+	 *  #1093), never the raw column. Its button leads and is marked; Call and SMS
+	 *  render only when preferred. Absent/null keeps the two classic buttons. */
+	preferredContact?: ContactMethod | null;
+	/** Fired when the Call, SMS, WhatsApp or Email draft link is tapped (auto-mark contacted). */
 	onContacted?: () => void;
 	/** Render glyphs with no text label. OPT-IN, because this component is shared
 	 *  with the agenda slot cards and the recruit picker, where the words are
 	 *  affordable; only the 340px attendance rail needs the space back. */
 	iconOnly?: boolean;
+	/** OPT-IN, and only the attendance rail passes it (#1094): a three-icon
+	 *  `iconOnly` group takes the whole line, right-aligned, so a wrapping parent
+	 *  (`flex-wrap`) puts it above its sibling. A percentage width means nothing
+	 *  in a content-sized cell, so `iconOnly` alone must not turn it on. */
+	ownLineWhenCrowded?: boolean;
 }
 
 /** The meeting a draft asks about. Required on every arm but `orientation`. */
@@ -94,6 +109,8 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 		email,
 		onContacted,
 		iconOnly = false,
+		preferredContact = null,
+		ownLineWhenCrowded = false,
 	} = props;
 	// Render the channel links only after mount. The caller builds `shareUrl` with
 	// a `window.location.origin` prefix that is correct only on the client; during
@@ -120,6 +137,8 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 	// verify `navigator` exists, delete the "unnecessary" guard, ship the
 	// mismatch.
 	const platform = mounted ? detectPlatform(navigator) : "mobile";
+	// iOS needs its own `sms:` body separator; WhatsApp treats it as mobile.
+	const ios = mounted && isIos(navigator);
 
 	// Branch on the discriminant so `roleName` is carried only where it exists.
 	// Spreading `props` wholesale would defeat the union: TS cannot narrow a
@@ -193,7 +212,13 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 							},
 	);
 
-	if (!nudge.whatsappUrl && !nudge.mailtoUrl) {
+	const callUrl = preferredContact === "call" ? telHref(phone) : null;
+	const smsUrl =
+		preferredContact === "sms"
+			? smsHref(phone, ios ? "ios" : platform, nudge.message)
+			: null;
+
+	if (!nudge.whatsappUrl && !nudge.mailtoUrl && !callUrl && !smsUrl) {
 		return (
 			<span className="text-xs text-[var(--sea-ink-soft)]">
 				No contact on file
@@ -228,39 +253,114 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 	// assertion pass because the anchor stopped matching the (now longer)
 	// title, not because the title is actually gone.
 	// `mailto:` does not open a tab, so `mailLabel` says nothing about it.
-	const waLabel = `Message ${name} on WhatsApp, opens in a new tab`;
-	const mailLabel = `Email ${name}`;
+	const marked = (m: ContactMethod, label: string) =>
+		preferredContact === m ? `${label} (preferred)` : label;
+	const waLabel = marked(
+		"whatsapp",
+		`Message ${name} on WhatsApp, opens in a new tab`,
+	);
+	const mailLabel = marked("email", `Email ${name}`);
+	const callLabel = marked("call", `Call ${name}`);
+	const smsLabel = marked("sms", `Text ${name} by SMS`);
+
+	const badge = (m: ContactMethod) =>
+		preferredContact === m && !iconOnly ? (
+			<span className="rounded-full bg-[rgba(79,184,178,.16)] px-1.5 text-[10px] font-bold text-[var(--lagoon-deep)]">
+				Preferred
+			</span>
+		) : null;
+
+	const link = (
+		m: ContactMethod,
+		href: string,
+		label: string,
+		text: string,
+		icon: ReactNode,
+		external: boolean,
+	) => (
+		<Button
+			key={m}
+			asChild
+			size={iconOnly ? "icon-sm" : "sm"}
+			variant="outline"
+		>
+			<a
+				href={href}
+				{...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+				onClick={onContacted}
+				aria-label={iconOnly ? label : undefined}
+				title={iconOnly ? label : undefined}
+			>
+				{icon}
+				{iconOnly ? null : text}
+				{badge(m)}
+			</a>
+		</Button>
+	);
+
+	const buttons: Partial<Record<ContactMethod, ReactNode>> = {
+		call: callUrl
+			? link(
+					"call",
+					callUrl,
+					callLabel,
+					"Call",
+					<Phone className="size-4" aria-hidden />,
+					false,
+				)
+			: null,
+		sms: smsUrl
+			? link(
+					"sms",
+					smsUrl,
+					smsLabel,
+					"SMS",
+					<MessageSquareText className="size-4" aria-hidden />,
+					false,
+				)
+			: null,
+		whatsapp: nudge.whatsappUrl
+			? link(
+					"whatsapp",
+					nudge.whatsappUrl,
+					waLabel,
+					"WhatsApp",
+					<MessageCircle className="size-4" aria-hidden />,
+					true,
+				)
+			: null,
+		email: nudge.mailtoUrl
+			? link(
+					"email",
+					nudge.mailtoUrl,
+					mailLabel,
+					"Email",
+					<Mail className="size-4" aria-hidden />,
+					false,
+				)
+			: null,
+	};
+	// Preferred first (Call/SMS only exist when preferred), then today's order.
+	const order: ContactMethod[] = ["call", "sms", "whatsapp", "email"];
+	if (preferredContact) {
+		order.splice(order.indexOf(preferredContact), 1);
+		order.unshift(preferredContact);
+	}
+
+	// Three icons do not fit the rail's action line beside the status control
+	// once a classic scrollbar takes 15px (#1094), so, for a caller that opts in
+	// (`ownLineWhenCrowded`, the rail), that group takes the whole line,
+	// right-aligned, and the caller's `flex-wrap` puts it above the status
+	// control. Two icons keep today's single line.
+	const rendered = order.filter((m) => buttons[m]).length;
+	const ownLine = iconOnly && ownLineWhenCrowded && rendered >= 3;
 
 	return (
-		<div className="flex items-center gap-1.5">
-			{nudge.whatsappUrl ? (
-				<Button asChild size={iconOnly ? "icon-sm" : "sm"} variant="outline">
-					<a
-						href={nudge.whatsappUrl}
-						target="_blank"
-						rel="noopener noreferrer"
-						onClick={onContacted}
-						aria-label={iconOnly ? waLabel : undefined}
-						title={iconOnly ? waLabel : undefined}
-					>
-						<MessageCircle className="size-4" aria-hidden />
-						{iconOnly ? null : "WhatsApp"}
-					</a>
-				</Button>
-			) : null}
-			{nudge.mailtoUrl ? (
-				<Button asChild size={iconOnly ? "icon-sm" : "sm"} variant="outline">
-					<a
-						href={nudge.mailtoUrl}
-						onClick={onContacted}
-						aria-label={iconOnly ? mailLabel : undefined}
-						title={iconOnly ? mailLabel : undefined}
-					>
-						<Mail className="size-4" aria-hidden />
-						{iconOnly ? null : "Email"}
-					</a>
-				</Button>
-			) : null}
+		<div
+			className={`flex items-center gap-1.5${ownLine ? " w-full justify-end" : ""}`}
+			data-own-line={ownLine ? "" : undefined}
+		>
+			{order.map((m) => buttons[m] ?? null)}
 		</div>
 	);
 }

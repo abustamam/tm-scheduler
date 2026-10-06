@@ -51,6 +51,7 @@ import {
 	type PersonalNudgeBase,
 	personalNudgeUrl,
 } from "#/lib/nudge";
+import type { ContactMethod } from "#/lib/preferred-contact";
 import { rolesGuideUrl } from "#/lib/role-guide";
 import { speechWindow, speechWindowInputError } from "#/lib/speech-window";
 import {
@@ -122,6 +123,7 @@ export interface MeetingAgendaProps {
 		// a field that happens to survive on the object (#486). The public route
 		// omits it and `greetingName` falls back to the first token.
 		preferredName?: string | null;
+		preferredContact?: ContactMethod | null;
 	}[];
 	roleRecency: RoleRecency;
 	/** memberId → their current role label this meeting, lifted to the ROUTE
@@ -811,6 +813,7 @@ export function MeetingAgenda({
 														preferredName={slot.holderPreferredName}
 														phone={slot.holderPhone}
 														email={slot.holderEmail}
+														preferredContact={slot.holderPreferredContact}
 														roleName={slot.roleName}
 														duties={outstandingDutiesForSlot(slot, meeting)}
 														meetingDate={meetingDate}

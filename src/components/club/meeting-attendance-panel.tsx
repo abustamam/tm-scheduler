@@ -260,9 +260,22 @@ function PanelIdentityLine({
  *  `onContacted` — so a fat-finger between them costs nothing. The status
  *  control is neither: a slip from it onto Email writes `reached_out` AND
  *  throws the tablet into a mail client mid-meeting. The extra 6px is ~2%
- *  of a 340px rail. */
+ *  of a 340px rail.
+ *
+ *  `flex-wrap` is for ONE case (#1094): a member who prefers Call or SMS has
+ *  three icons, which with the status control's fixed `w-44` need 296px — more
+ *  than the ~275px a classic (non-overlay) scrollbar leaves on Windows and
+ *  Linux. Their `NudgeButtons` group takes the full width, so it wraps onto
+ *  its own right-aligned line ABOVE the status control, which stays on the
+ *  row's right edge with the same gap away from the icons. Two-icon rows fit
+ *  on one line and never wrap. `pinned-column-reachability.test.ts` holds both
+ *  shapes under a forced 15px scrollbar. */
 function PanelActionLine({ children }: { children: ReactNode }) {
-	return <div className="flex items-center justify-end gap-3">{children}</div>;
+	return (
+		<div className="flex flex-wrap items-center justify-end gap-3">
+			{children}
+		</div>
+	);
 }
 
 function AttendanceRow({
@@ -398,10 +411,12 @@ function AttendanceRow({
 				<NudgeButtons
 					{...nudgeMode}
 					iconOnly
+					ownLineWhenCrowded
 					name={m.name}
 					preferredName={m.preferredName}
 					phone={m.phone}
 					email={m.email}
+					preferredContact={m.preferredContact}
 					meetingDate={meetingDate}
 					shareUrl={shareUrl}
 					onContacted={() => onContacted(m.id)}
@@ -814,10 +829,12 @@ function RollAttendanceRow({
 					<NudgeButtons
 						mode="arriving"
 						iconOnly
+						ownLineWhenCrowded
 						name={row.name}
 						preferredName={row.preferredName}
 						phone={row.phone}
 						email={row.email}
+						preferredContact={row.preferredContact}
 						meetingDate={meetingDate}
 						shareUrl={shareUrl}
 					/>

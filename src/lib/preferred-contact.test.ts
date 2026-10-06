@@ -5,6 +5,7 @@ import {
 	type ContactMethod,
 	effectivePreferredContact,
 	hasDialablePhone,
+	isIos,
 	NON_BLANK_PATTERN,
 	preferredContactEditPayload,
 	smsHref,
@@ -128,7 +129,33 @@ describe("preferredContactEditPayload", () => {
 describe("telHref / smsHref", () => {
 	it("keeps a leading + and the digits only", () => {
 		expect(telHref("+1 (415) 555-2671")).toBe("tel:+14155552671");
-		expect(smsHref("415-555-2671 x12")).toBe("sms:415555267112");
+		expect(smsHref("415-555-2671")).toBe("sms:4155552671");
+	});
+
+	it("drops an extension instead of folding its digits in", () => {
+		expect(smsHref("415-555-2671 x12")).toBe("sms:4155552671");
+		expect(telHref("+1 415 555 2671 ext. 9")).toBe("tel:+14155552671");
+	});
+
+	it("uses &body= on iOS and ?body= elsewhere, URL-encoded", () => {
+		expect(smsHref(PHONE, "ios", "Hi & bye?")).toBe(
+			"sms:+14155552671&body=Hi%20%26%20bye%3F",
+		);
+		expect(smsHref(PHONE, "mobile", "Hi there")).toBe(
+			"sms:+14155552671?body=Hi%20there",
+		);
+		expect(smsHref(PHONE, "desktop", "Hi")).toBe("sms:+14155552671?body=Hi");
+	});
+
+	it("is null with no digit even with a body", () => {
+		expect(smsHref("ask", "ios", "hi")).toBeNull();
+	});
+
+	it("detects iOS, including iPadOS reporting a Macintosh UA", () => {
+		expect(isIos({ userAgent: "iPhone", maxTouchPoints: 5 })).toBe(true);
+		expect(isIos({ userAgent: "Macintosh", maxTouchPoints: 5 })).toBe(true);
+		expect(isIos({ userAgent: "Macintosh", maxTouchPoints: 0 })).toBe(false);
+		expect(isIos({ userAgent: "Android", maxTouchPoints: 5 })).toBe(false);
 	});
 
 	it("is null with nothing to dial", () => {

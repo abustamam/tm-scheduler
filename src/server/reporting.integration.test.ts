@@ -849,6 +849,30 @@ describe.skipIf(!hasTestDb)("Close to a level (#898)", () => {
 		});
 	});
 
+	it("loadLevelProximity carries the EFFECTIVE preferred contact, null once its data is gone (#1094)", async () => {
+		const { loadLevelProximity } = await import("#/server/reporting-logic");
+		const { enrollClose } = await closePath();
+		const ada = await addMember(seeded.clubId, "Ada Lovelace");
+		await setMemberEmail(ada.memberId, "ada@example.com");
+		await setMemberPhone(ada.memberId, "+14155552671");
+		await testDb
+			.update(people)
+			.set({ preferredContact: "sms" })
+			.where(eq(people.id, ada.personId));
+		await enrollClose(ada.personId);
+
+		const withPhone = await loadLevelProximity(seeded.clubId);
+		expect(
+			withPhone.rows.find((r) => r.memberId === ada.memberId)?.preferredContact,
+		).toBe("sms");
+
+		await setMemberPhone(ada.memberId, null);
+		const noPhone = await loadLevelProximity(seeded.clubId);
+		expect(
+			noPhone.rows.find((r) => r.memberId === ada.memberId)?.preferredContact,
+		).toBeNull();
+	});
+
 	it("a VPE who is not a stored admin passes the section's gate and reads each row's contact (#900)", async () => {
 		// `getLevelProximity` is `requireClubAdminView` then `loadLevelProximity`.
 		// A `createServerFn` cannot be invoked from vitest, so this drives the two

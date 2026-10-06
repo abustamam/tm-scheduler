@@ -6,6 +6,7 @@ import {
 	buildAppCss,
 	candidatesIn,
 	probeColumn,
+	renderAndReadTitle,
 } from "#/test/pinned-column-scroll";
 import { CHROME_TEST_TIMEOUT_MS, findChrome } from "#/test/print-page-count";
 
@@ -25,6 +26,8 @@ import { CHROME_TEST_TIMEOUT_MS, findChrome } from "#/test/print-page-count";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SHELL = resolve(HERE, "app-shell.tsx");
 const PANEL = resolve(HERE, "club/meeting-attendance-panel.tsx");
+const BUTTON = resolve(HERE, "ui/button.tsx");
+const NUDGE = resolve(HERE, "club/nudge-buttons.tsx");
 const MEETING_ROUTE = resolve(
 	HERE,
 	"../routes/club.$clubId.meeting.$meetingId.tsx",
@@ -282,6 +285,87 @@ describe.skipIf(!hasChrome)(
 				);
 				expect(p.tailVisibleAfterScroll).toBe(false);
 				expect(p.tailReachableByPageScroll).toBe(false);
+			});
+
+			it("a two-icon row stays on one line; a three-icon (preferred Call/SMS) row takes its own line above the status control (#1094)", async () => {
+				// Classes come from the real source: the action line, the icon size, the
+				// icon group (and its own-line arm) and the status trigger's fixed width.
+				// A classic 15px scrollbar is FORCED on the scroller, as Windows and Linux
+				// draw one, so this fails on every platform: with the overlay scrollbars
+				// macOS draws, a three-icon row squeezed onto one line still fit by 4px.
+				const line = classAfterTag(PANEL, "function PanelActionLine");
+				const icon = /"icon-sm":\s*"([^"]*)"/.exec(readSource(BUTTON))?.[1];
+				expect(icon, "icon-sm size not found in button.tsx").toBeTruthy();
+				const chip = /"(w-44)[^"]*"/.exec(readSource(PANEL))?.[1];
+				expect(chip, "status trigger width not found").toBe("w-44");
+				const nudgeSrc = readSource(NUDGE);
+				const group = /className=\{`(flex items-center gap-[\d.]+)/.exec(
+					nudgeSrc,
+				)?.[1];
+				const ownLine = /ownLine \? " ([^"]*)"/.exec(nudgeSrc)?.[1];
+				expect(
+					group,
+					"icon group class not found in nudge-buttons",
+				).toBeTruthy();
+				expect(ownLine, "own-line arm not found in nudge-buttons").toBeTruthy();
+				const row = (n: number, id: string, groupClass: string) =>
+					`<div class="${line}" data-line="${id}"><div class="${groupClass}">${Array.from(
+						{ length: n },
+						() =>
+							`<a class="inline-flex shrink-0 ${icon}" data-icon="${id}"></a>`,
+					).join(
+						"",
+					)}</div><div class="${chip} shrink-0" data-chip="${id}"></div></div>`;
+				const html = railHtml().replace(
+					/<div class="py-4 text-sm"[^>]*>Member 1<\/div>/,
+					`${row(2, "two", group ?? "")}${row(3, "three", `${group} ${ownLine}`)}`,
+				);
+				const script = `<script>
+					var out = ["two", "three"].map(function (id) {
+						var l = document.querySelector('[data-line="' + id + '"]');
+						var icons = Array.prototype.map.call(
+							document.querySelectorAll('[data-icon="' + id + '"]'),
+							function (e) { return e.getBoundingClientRect(); });
+						var chip = document.querySelector('[data-chip="' + id + '"]').getBoundingClientRect();
+						var body = document.querySelector("[data-scroller]");
+						var br = body.getBoundingClientRect();
+						var cs = getComputedStyle(body);
+						var inner = br.right - parseFloat(cs.paddingRight);
+						var innerLeft = br.left + parseFloat(cs.paddingLeft);
+						// \`justify-end\` overflows to the LEFT, which \`scrollWidth\` never
+						// counts, so the first icon's left edge is what is checked.
+						var first = icons[0];
+						var sameTop = icons.every(function (r) { return Math.round(r.top) === Math.round(first.top); });
+						var above = first.bottom <= chip.top + 0.5;
+						var sameLine = first.top < chip.bottom && chip.top < first.bottom;
+						return [
+							sameTop ? "iconsAligned" : "iconsWrapped",
+							above ? "iconsAboveStatus" : sameLine ? "iconsBesideStatus" : "other",
+							first.left >= innerLeft - 0.5 ? "fits" : "overflow",
+							chip.right <= inner + 0.5 && Math.max.apply(null, icons.map(function (r) { return r.right; })) <= inner + 0.5 ? "inside" : "outside",
+							body.scrollWidth <= body.clientWidth ? "noscroll" : "hscroll",
+						].join(",");
+					});
+					document.title = out.join("|");
+				</script>`;
+				// The rows' own classes are not in the shared sheet built from the
+				// shell/rail/drawer fixtures, so build one that includes them.
+				const rowCss =
+					(await buildAppCss(candidatesIn(html))) +
+					"\n[data-scroller]::-webkit-scrollbar{width:15px}";
+				const title = renderAndReadTitle({
+					bodyHtml: html,
+					css: rowCss,
+					script,
+					viewport: VIEWPORT,
+				});
+				const [two, three] = title.split("|");
+				expect(two, "two-icon row: one line, fits").toBe(
+					"iconsAligned,iconsBesideStatus,fits,inside,noscroll",
+				);
+				expect(three, "three-icon row: own line above the status").toBe(
+					"iconsAligned,iconsAboveStatus,fits,inside,noscroll",
+				);
 			});
 
 			it("loses the header if the scroller moves back out to the <aside>", () => {
