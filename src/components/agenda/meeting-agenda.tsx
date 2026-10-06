@@ -44,6 +44,8 @@ import {
 	slotLabel,
 	summarizeAgenda,
 } from "#/lib/agenda";
+import { isMeetingCancelled } from "#/lib/meeting-cancellation-notice";
+import { isMeetingLocked } from "#/lib/meeting-lifecycle";
 import type { MeetingViewer } from "#/lib/meeting-viewer";
 import type { StoredMember } from "#/lib/member-identity";
 import {
@@ -341,7 +343,15 @@ export function MeetingAgenda({
 	// completed or (for a non-manager) over, both of which make `meetingOver`
 	// true. It is kept because this component cannot see that coupling: it takes
 	// the viewer and `meetingOver` as two independent props, and a locked viewer
-	// is the one thing that hides Claim and Release, so it must hide this too.
+	// is the one thing that zeroes Claim and Release, so it must hide this too.
+	// (A locked viewer DISABLES the Claim button; it is the meeting's status,
+	// `claimOffered` below, that stops it rendering at all, #1090.)
+	// Claim is not even rendered on a cancelled or completed meeting (#1090): the
+	// server refuses it, so a disabled button is only noise. Keyed off the
+	// STATUS, not `!canClaim`: a signed-out or memberless viewer's Claim can
+	// drive a sign-in flow and must still render.
+	const claimOffered =
+		!isMeetingCancelled(meeting.status) && !isMeetingLocked(meeting.status);
 	const flagsUnavailableHolders =
 		viewer.canClaim && !meetingOver && meeting.status !== "cancelled";
 
@@ -923,7 +933,7 @@ export function MeetingAgenda({
 													)
 												) : null}
 
-												{isOpen ? (
+												{isOpen && claimOffered ? (
 													// Same success-outline treatment as the sign-up grid's
 													// Claim cells — one visual language for one verb.
 													<Button
@@ -936,7 +946,7 @@ export function MeetingAgenda({
 													>
 														Claim
 													</Button>
-												) : (isMine && viewer.canReleaseOwn) ||
+												) : isOpen ? null : (isMine && viewer.canReleaseOwn) ||
 													viewer.canManage ? (
 													<>
 														<Button
