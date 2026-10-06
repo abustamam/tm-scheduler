@@ -831,8 +831,9 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 
 		// 6px between the status control and Email put two DIFFERENT actions inside
 		// one fat-finger: a slip writes `reached_out` and throws the tablet into a
-		// mail client mid-meeting. The icons shrink to 2px (#1094, so a three-icon preferred-SMS row fits the rail) — same member,
-		// same handler — so both halves are asserted, or "widen everything" passes.
+		// mail client mid-meeting. The icons are only 2px apart (#1094, so a
+		// three-icon preferred-SMS row fits the rail) — same member, same
+		// handler — so both halves are asserted, or "widen everything" passes.
 		const actionLine = trigger.parentElement;
 		expect(actionLine?.classList.contains("gap-2.5")).toBe(true);
 		expect(actionLine?.classList.contains("gap-1.5")).toBe(false);
