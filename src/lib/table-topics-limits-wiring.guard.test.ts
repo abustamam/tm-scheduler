@@ -509,6 +509,8 @@ describe("table topics limits wiring (#443)", () => {
 		expect(outsideDb.sort()).toEqual([
 			// The layout list behind the `agenda_print_layout` enum (#1069).
 			"../lib/agenda-layouts",
+			// The method list behind the `contact_method` enum (#1093).
+			"../lib/preferred-contact",
 			"../lib/table-topics-limits",
 			"drizzle-orm",
 			"drizzle-orm/pg-core",
@@ -543,6 +545,19 @@ describe("table topics limits wiring (#443)", () => {
 		expect(layouts, "agenda-layouts: no bare side-effect import").not.toMatch(
 			/^import\s+"[^"]+";/m,
 		);
+		// And the third (#1093): `CONTACT_METHODS` is a VALUE import too.
+		const contact = readSource("src/lib/preferred-contact.ts");
+		const contactValueImports = [
+			...contact.matchAll(/^import\s+(?!type\b)[\s\S]*?from\s+"([^"]+)"/gm),
+		].map((m) => m[1]);
+		expect(
+			contactValueImports,
+			"preferred-contact must stay a leaf: only `import type`",
+		).toEqual([]);
+		expect(
+			contact,
+			"preferred-contact: no bare side-effect import",
+		).not.toMatch(/^import\s+"[^"]+";/m);
 	});
 
 	it("the templated deck states the club's rule, not the speech grace", () => {
