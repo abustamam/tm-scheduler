@@ -17,5 +17,8 @@ that area (`commands.md` before a migration, a browser-backed test or a mutation
 - Before the PR, run what CI's `check` job runs (`.github/workflows/ci.yml`) and report the
   real numbers: tests passed / skipped, typecheck exit code. A suite that skipped is not green.
 - Open the PR with `gh pr create` and `Closes #N`, then stop. Never merge, never review your own PR.
+- Need a decision you cannot make from the brief or the code? Return at once with the question,
+  its options and your recommendation as your result. Do not post a handoff comment or notify
+  anyone: the main session batches the questions and writes the one handoff.
 - Keep your context small: read files by line range when you know where to look, and do not
   re-read a file you just edited.
