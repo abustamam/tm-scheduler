@@ -8,19 +8,29 @@
  * nothing else fails: the value is a valid enum, typecheck is happy, and every
  * existing test's fixture has a phone.
  *
- * So, per FUNCTION rather than per file (#1093 review: a file-level "calls the
- * helper somewhere" passed with one reader resolving and its neighbour not):
- * every select of the column must alias it (`stored: people.preferredContact`),
- * and inside the function that selects it, every other mention of that alias
- * must be either a destructuring binding or an argument to
- * `effectivePreferredContact(`. A destructured binding is itself a mention of
- * the alias, so it is held to the same rule wherever it is used.
+ * What this guard checks, in the files allowed to name the column:
+ *  - every `people.preferredContact` in them is a select key with an alias
+ *    (`stored: people.preferredContact`);
+ *  - each file is cut into top-level DECLARATIONS (`function`, `const`, `let`,
+ *    `var`, `class`, optionally `export`/`async`), and every aliased select
+ *    falls inside one of them — the count inside slices must equal the count
+ *    in the file, so nothing sits outside a slice;
+ *  - inside the declaration that selects it, the alias is passed to
+ *    `effectivePreferredContact(` at least once, and every other mention of
+ *    the alias as a word is one of: the select key itself; an argument to
+ *    `effectivePreferredContact(` (bare or as `x.alias`); or a name bound by a
+ *    real destructuring — `const|let|var { … } =`, or an arrow parameter
+ *    `({ … }) =>`. An object LITERAL such as `{ alias, ...rest }` is not one.
  *
- * What this does NOT see: a `select()` of the whole `people` row, which carries
- * the column without naming it. The merge reconcile does that and only WRITES
- * the value back (`people-merge-logic.ts`); no such reader returns it to a
- * client today. The behavioural gates are the `*preferred-contact*`
- * integration suites.
+ * What it does NOT see, so the integration suites (`*preferred-contact*`) are
+ * the behavioural gate for these:
+ *  - a whole selected row spread or returned (`{ ...row }`, `return row`), or
+ *    the alias read by a non-identifier route (`row["stored"]`): the value
+ *    leaves without its alias being mentioned;
+ *  - a destructured binding RENAMED (`{ stored: s }`) and then used as `s`;
+ *  - a `select()` of the whole `people` row, which carries the column without
+ *    naming it. The merge reconcile does that and only WRITES the value back
+ *    (`people-merge-logic.ts`); no such reader returns it to a client today.
  */
 import { readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -55,14 +65,15 @@ const ALLOWED: Record<string, "declares" | "reads"> = {
 };
 
 /**
- * Top-level functions of a comment-stripped source, as `[name, body]`. A body
- * runs from its declaration to the next top-level declaration, which is
- * enough here: the checks below only look INSIDE a function for mentions of
- * an alias it selected, and the next declaration's text is never one of them.
+ * Top-level declarations of a comment-stripped source, as `[name, body]`. A
+ * body runs from its declaration to the next top-level declaration (or EOF),
+ * so every byte after the import preamble belongs to exactly one slice.
  */
-function topLevelFunctions(src: string): [string, string][] {
-	const decl = /^(?:export\s+)?(?:async\s+)?function\s+(\w+)/gm;
-	const starts = [...src.matchAll(decl)].map((m) => ({
+const DECLARATION =
+	/^(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function\*?|const|let|var|class)\s+(\w+)/gm;
+
+function topLevelDeclarations(src: string): [string, string][] {
+	const starts = [...src.matchAll(DECLARATION)].map((m) => ({
 		name: m[1] ?? "",
 		at: m.index ?? 0,
 	}));
@@ -72,19 +83,32 @@ function topLevelFunctions(src: string): [string, string][] {
 	]);
 }
 
+const ALIASED_SELECT = /\b(\w+)\s*:\s*people\.preferredContact\b/g;
+
 /** Every mention of `alias` in `body` that is NOT allowed by the rule. */
 function rawReads(body: string, alias: string): string[] {
 	const out: string[] = [];
 	const mention = new RegExp(`\\b${alias}\\b`, "g");
 	for (const m of body.matchAll(mention)) {
 		const at = m.index ?? 0;
-		const before = body.slice(Math.max(0, at - 60), at);
-		const after = body.slice(at + alias.length, at + alias.length + 40);
+		const before = body.slice(Math.max(0, at - 80), at);
+		const after = body.slice(at + alias.length, at + alias.length + 80);
 		const isSelectKey = /^\s*:\s*people\.preferredContact\b/.test(after);
 		const isArgument = /effectivePreferredContact\(\s*(?:\w+\.)?$/.test(before);
-		const isDestructure =
-			/[{,]\s*$/.test(before) && /^\s*,\s*\.\.\.\w+\s*}/.test(after);
-		if (!isSelectKey && !isArgument && !isDestructure) {
+		// A real destructuring BINDING, never an object literal: the pattern's
+		// braces must open after `const|let|var` and close into `=`, or open an
+		// arrow's parameter list and close into `) =>`.
+		const isDeclDestructure =
+			/\b(?:const|let|var)\s*\{[^{}]*$/.test(before) &&
+			/^[^{}]*\}\s*=(?!=|>)/.test(after);
+		const isParamDestructure =
+			/\(\s*\{[^{}]*$/.test(before) && /^[^{}]*\}\s*\)\s*=>/.test(after);
+		if (
+			!isSelectKey &&
+			!isArgument &&
+			!isDeclDestructure &&
+			!isParamDestructure
+		) {
 			out.push(`${before.slice(-30)}⟨${alias}⟩${after.slice(0, 20)}`);
 		}
 	}
@@ -103,39 +127,57 @@ describe("preferred contact reads (#1093)", () => {
 		expect(naming).toEqual(Object.keys(ALLOWED).sort());
 	});
 
-	it("every select of the column is aliased and resolved in the same function", () => {
+	it("every select of the column is aliased and resolved in the same declaration", () => {
 		let selects = 0;
 		for (const [file, role] of Object.entries(ALLOWED)) {
 			if (role !== "reads") continue;
 			const src = readSource(join(SRC, file));
-			// Every mention of the column in a reader is an aliased select.
 			const bare = [...src.matchAll(/people\.preferredContact\b/g)].length;
-			const aliased = [
-				...src.matchAll(/\b(\w+)\s*:\s*people\.preferredContact\b/g),
-			];
-			expect(aliased.length, `${file}: unaliased read`).toBe(bare);
-			for (const [fn, body] of topLevelFunctions(src)) {
-				for (const m of body.matchAll(
-					/\b(\w+)\s*:\s*people\.preferredContact\b/g,
-				)) {
+			const aliased = [...src.matchAll(ALIASED_SELECT)].length;
+			expect(aliased, `${file}: unaliased read`).toBe(bare);
+			let inSlices = 0;
+			for (const [decl, body] of topLevelDeclarations(src)) {
+				for (const m of body.matchAll(ALIASED_SELECT)) {
 					const alias = m[1] ?? "";
-					selects++;
+					inSlices++;
 					expect(
 						body,
-						`${file} ${fn}: ${alias} never reaches effectivePreferredContact`,
+						`${file} ${decl}: ${alias} never reaches effectivePreferredContact`,
 					).toMatch(
 						new RegExp(
 							`effectivePreferredContact\\(\\s*(?:\\w+\\.)?${alias}\\b`,
 						),
 					);
-					expect(rawReads(body, alias), `${file} ${fn}`).toEqual([]);
+					expect(rawReads(body, alias), `${file} ${decl}`).toEqual([]);
 				}
 			}
+			// Complete enrollment: no aliased select outside every slice.
+			expect(inSlices, `${file}: a select sits outside any declaration`).toBe(
+				aliased,
+			);
+			selects += inSlices;
 		}
 		// loadMyContactPreference, loadClubContactPreferences, loadClubMembers,
-		// loadMemberProfile and applyMemberEdit's locked read. A slicing bug
-		// that found none would pass every check above.
-		expect(selects).toBe(5);
+		// loadMemberProfile and applyMemberEdit's locked read today. A floor, not
+		// the enrollment proof (that is the per-file equality above): a slicing
+		// bug that found none would pass every other check.
+		expect(selects).toBeGreaterThanOrEqual(5);
+	});
+
+	it("rawReads tells a destructuring binding from an object literal", () => {
+		const ok = [
+			"const { stored, ...rest } = row; f(effectivePreferredContact(stored, rest));",
+			"rows.map(({ stored, ...r }) => effectivePreferredContact(stored, r));",
+		];
+		for (const body of ok) expect(rawReads(body, "stored"), body).toEqual([]);
+		const bad = [
+			"return { stored, ...rest };",
+			"return ({ stored, ...rest });",
+			"const x = { stored, ...rest };",
+			"return { preferredContact: row.stored };",
+		];
+		for (const body of bad)
+			expect(rawReads(body, "stored").length, body).toBeGreaterThan(0);
 	});
 
 	it("hasDialablePhone is declared once, in the shared module, and the roster imports it", () => {

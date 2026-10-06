@@ -38,9 +38,11 @@ export const CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE =
 	"This member sets their own contact preference.";
 
 /**
- * The admin edit's refusal for a Person another club also holds — the same rule
- * as the email (`soleHoldingClub`, ADR-0029): a club may change a Person-level
- * fact only while it is their sole holder. The WHOLE edit is refused.
+ * The admin edit's refusal for a Person another club also holds. The rule is
+ * the one `people.email` has (`soleHoldingClub`, ADR-0029), applied to the
+ * contact preference as well: a club may change either only while it is the
+ * Person's sole holder. (The phone has no such rule.) The WHOLE edit is
+ * refused.
  */
 export const CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE =
 	"This member is also on another club's roster, so their contact preference can't be changed here.";

@@ -338,14 +338,18 @@ export async function applyMemberEdit(input: EditInput) {
 		// clearing the phone and choosing SMS in one save matches nothing. Three
 		// rules sit in the UPDATE's own WHERE, not in a prior read: the Person
 		// has not signed in (once they have, the choice is theirs); this club is
-		// their SOLE holder (the email's rule, ADR-0029: a Person-level fact
-		// another club also relies on is not one club's to change); and the
-		// method's data exists.
+		// their SOLE holder (the rule `people.email` has, ADR-0029, applied to
+		// the preference too; the phone has no such rule); and the method's
+		// data exists.
 		//
 		// Zero rows refuses the WHOLE edit — unlike the email, whose refusal lets
 		// the rest of the save land. The throw rolls back every write above, so
-		// nothing in this save lands, and the admin is told the real reason. The
-		// read after it only picks which sentence that is; it never decides.
+		// nothing in this save lands. The WHERE decides; the message is
+		// BEST-EFFORT. It comes from a read after the UPDATE that holds no
+		// membership lock, so another club removing its membership in between
+		// can turn a multi-club refusal into "add a phone number or email". No
+		// lock is taken for that: the outcome (refused, nothing written) is right
+		// either way, and only the sentence can be stale.
 		if (preferredContact !== undefined) {
 			const written = await tx
 				.update(people)
@@ -360,9 +364,9 @@ export async function applyMemberEdit(input: EditInput) {
 				)
 				.returning({ id: people.id });
 			if (written.length === 0) {
-				// Ownership before availability: a multi-club Person whose email
-				// write was just refused must hear "another club", not "add an
-				// email" (#1093 review).
+				// Ownership before availability, so a multi-club Person whose
+				// email write was just refused hears "another club", not "add an
+				// email" (#1093 review) — subject to the race described above.
 				const owner = await emailWriteRefusalFor(
 					current.personId,
 					input.clubId,

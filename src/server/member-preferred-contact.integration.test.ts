@@ -233,7 +233,7 @@ describe.skipIf(!hasTestDb)(
 			expect((await person(unlinked.personId)).preferredContact).toBe("call");
 		});
 
-		it("names the real reason when the email write is refused and email is chosen", async () => {
+		it("reports the multi-club reason when the email write is refused and email is chosen", async () => {
 			// Another club holds this Person, so the new address is refused
 			// (`multi_club`) and the Person still has no email. The preference
 			// must say "another club", not "add an email".
