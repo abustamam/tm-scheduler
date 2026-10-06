@@ -10,34 +10,51 @@
  *
  * The per-reader check parses each reader file with the TypeScript compiler
  * API (an earlier regex version was fooled by template literals, destructuring
- * expressions and long patterns). In each file allowed to read the column:
+ * expressions and long patterns). For each file allowed to read the column:
  *
- *  - every `people.preferredContact` is the initializer of a property
- *    assignment with a plain identifier name — the ALIAS — and the number of
- *    such assignments the parser finds equals the number of textual
- *    `people.preferredContact` mentions in the comment-stripped source, so a
- *    mention the walk did not classify fails;
- *  - each such select lies inside a function (declaration, arrow, function
- *    expression or method); the nearest one is its SCOPE;
- *  - inside that scope, every identifier spelled like the alias must be one
- *    of: the select's own property name; a property access `x.alias` that is a
- *    direct argument of a call to `effectivePreferredContact`; a bare `alias`
- *    that is such an argument; or a binding element of an object binding
- *    pattern that binds the alias under its own name, with no initializer, no
- *    property rename and no computed key. Anything else — a shorthand property
- *    in an object literal, an access used as a default value or computed key,
- *    a renamed binding, a property key — is a failure. Because every
- *    same-named identifier in the scope is checked, a destructured binding's
- *    later uses are held to the same rule;
- *  - each select's scope passes its alias to `effectivePreferredContact` at
- *    least once.
+ *  - THE HELPER is the local name the file's import from
+ *    `#/lib/preferred-contact` binds to `effectivePreferredContact` (an `as`
+ *    rename is honoured). A file with a select but no such import fails, and
+ *    so does one that declares that local name again anywhere (a function,
+ *    class, variable, parameter or destructured binding): only a call whose
+ *    callee is that identifier counts, so a local look-alike cannot stand in.
+ *  - A SELECT is a property assignment whose value is exactly the property
+ *    access `people.preferredContact`; its key must be a plain identifier, the
+ *    ALIAS. Any other appearance of that property access in the file fails.
+ *  - Each select must lie inside a function (declaration, arrow, function
+ *    expression or method); the nearest one is its SCOPE.
+ *  - Inside that scope, every identifier spelled like the alias must be one
+ *    of: the key of a select (its own, or another select sharing the alias); a
+ *    property access `x.alias` that is a direct argument of a call to the
+ *    helper; a bare `alias` that is such an argument; or a binding element of
+ *    an object binding pattern that binds the alias under its own name, with
+ *    no initializer, no property rename, no computed key and no rest. Anything
+ *    else — a shorthand property in an object literal, an access used as a
+ *    default value or computed key, a renamed binding, any other property key,
+ *    a declaration — fails. Because every same-named identifier in the scope
+ *    is checked, a destructured binding's later uses are held to the same rule.
+ *  - Each select's scope passes its alias to the helper at least once. Two
+ *    selects sharing an alias in one scope are both satisfied by a single such
+ *    call; the walk does not track which row a call resolves.
+ *  - TRIPWIRE, not proof: the number of selects found must equal the number of
+ *    textual `people.preferredContact` matches in the comment-stripped source.
+ *    It catches a mention the walk left unclassified in the ordinary case, but
+ *    it is a text count, so it can mis-count (the text inside a string literal,
+ *    `people . preferredContact` with spaces, a comment marker inside a string
+ *    that the stripper misreads) and two such errors can cancel out.
  *
- * What it still cannot see, so the `*preferred-contact*` integration suites
- * are the behavioural gate for these:
+ * Known FALSE-FAIL shapes (loud, so safe, but they would need the check
+ * widened): transparent wrappers around either side, such as
+ * `stored: (people.preferredContact)`, `people.preferredContact as X`, or
+ * `effectivePreferredContact((row.stored)!, row)`; and the text-count cases
+ * above when they do not cancel.
+ *
+ * What it cannot see, so the `*preferred-contact*` integration suites are the
+ * behavioural gate for these:
  *  - a whole selected row spread or returned (`{ ...row }`, `return row`), or
  *    the row object aliased (`const r2 = row`) and the value read through the
- *    new name outside the checked spellings: the value escapes without the
- *    alias appearing anywhere the walk inspects;
+ *    new name: the value escapes without the alias appearing anywhere the walk
+ *    inspects;
  *  - the alias read OUTSIDE the select's scope, e.g. by a caller of the
  *    function that returned the row;
  *  - the alias read by a string key (`row["stored"]`);
@@ -55,6 +72,7 @@ vi.mock("#/db", () => ({ db: {} }));
 
 const SRC = resolve(__dirname, "..");
 const HELPER = "effectivePreferredContact";
+const HELPER_MODULE = "#/lib/preferred-contact";
 
 /** Every non-test source file under `src/`. */
 function sourceFiles(dir: string): string[] {
@@ -123,16 +141,63 @@ function nearestFunction(node: ts.Node): FunctionLike | null {
 	return null;
 }
 
-/** Is `node` (an expression) a direct argument of `effectivePreferredContact(…)`? */
-function isHelperArgument(node: ts.Node): boolean {
+/** Is `node` (an expression) a direct argument of a call to `helper`? */
+function isHelperArgument(node: ts.Node, helper: string): boolean {
 	const call = node.parent;
 	return (
 		!!call &&
 		ts.isCallExpression(call) &&
 		ts.isIdentifier(call.expression) &&
-		call.expression.text === HELPER &&
+		call.expression.text === helper &&
 		call.arguments.some((a) => a === node)
 	);
+}
+
+/**
+ * The local name `HELPER` is imported under from `HELPER_MODULE`, or null.
+ * A type-only import binds no value, so it does not count.
+ */
+function helperLocalName(sf: ts.SourceFile): string | null {
+	for (const stmt of sf.statements) {
+		if (
+			!ts.isImportDeclaration(stmt) ||
+			!ts.isStringLiteral(stmt.moduleSpecifier) ||
+			stmt.moduleSpecifier.text !== HELPER_MODULE ||
+			stmt.importClause?.isTypeOnly
+		) {
+			continue;
+		}
+		const bindings = stmt.importClause?.namedBindings;
+		if (!bindings || !ts.isNamedImports(bindings)) continue;
+		for (const el of bindings.elements) {
+			if (el.isTypeOnly) continue;
+			if ((el.propertyName ?? el.name).text === HELPER) return el.name.text;
+		}
+	}
+	return null;
+}
+
+/** Every declaration in the file that binds `name`, other than its import. */
+function rebindings(sf: ts.SourceFile, name: string): ts.Node[] {
+	const out: ts.Node[] = [];
+	forEachDescendant(sf, (n) => {
+		if (ts.isImportSpecifier(n) || !ts.isIdentifier(n) || n.text !== name)
+			return;
+		const p = n.parent;
+		const declares =
+			((ts.isFunctionDeclaration(p) ||
+				ts.isFunctionExpression(p) ||
+				ts.isClassDeclaration(p) ||
+				ts.isClassExpression(p) ||
+				ts.isVariableDeclaration(p) ||
+				ts.isParameter(p)) &&
+				p.name === n) ||
+			(ts.isBindingElement(p) && p.name === n) ||
+			(ts.isImportClause(p) && p.name === n) ||
+			ts.isNamespaceImport(p);
+		if (declares) out.push(n);
+	});
+	return out;
 }
 
 function forEachDescendant(root: ts.Node, visit: (n: ts.Node) => void) {
@@ -149,14 +214,20 @@ function forEachDescendant(root: ts.Node, visit: (n: ts.Node) => void) {
  * allowed but does not itself resolve (the select key, a plain binding), or a
  * description of why it is a raw read.
  */
-function classify(
-	id: ts.Identifier,
-	select: ts.PropertyAssignment,
-): "helper" | "ok" | string {
+function classify(id: ts.Identifier, helper: string): "helper" | "ok" | string {
 	const parent = id.parent;
-	if (parent === select && select.name === id) return "ok";
+	// The key of a select — this one, or another sharing the alias, which is
+	// checked as a select in its own right.
+	if (
+		ts.isPropertyAssignment(parent) &&
+		parent.name === id &&
+		isColumn(parent.initializer) &&
+		ts.isPropertyAccessExpression(parent.initializer)
+	) {
+		return "ok";
+	}
 	if (ts.isPropertyAccessExpression(parent) && parent.name === id) {
-		return isHelperArgument(parent) ? "helper" : "property access";
+		return isHelperArgument(parent, helper) ? "helper" : "property access";
 	}
 	if (ts.isBindingElement(parent)) {
 		if (parent.name !== id) return "renamed binding";
@@ -179,7 +250,7 @@ function classify(
 	if (ts.isParameter(parent) || ts.isVariableDeclaration(parent)) {
 		return "declared as a variable";
 	}
-	return isHelperArgument(id) ? "helper" : "bare reference";
+	return isHelperArgument(id, helper) ? "helper" : "bare reference";
 }
 
 interface ReaderReport {
@@ -207,6 +278,12 @@ function checkReaderSource(
 	let selects = 0;
 	const where = (n: ts.Node) =>
 		`${fileName}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`;
+	const helper = helperLocalName(sf);
+	if (helper) {
+		for (const n of rebindings(sf, helper)) {
+			problems.push(`${where(n)}: re-declares the helper's name ${helper}`);
+		}
+	}
 
 	forEachDescendant(sf, (node) => {
 		if (!ts.isPropertyAccessExpression(node) || !isColumn(node)) return;
@@ -224,6 +301,12 @@ function checkReaderSource(
 			return;
 		}
 		const alias = select.name.text;
+		if (!helper) {
+			problems.push(
+				`${where(node)}: no ${HELPER} imported from ${HELPER_MODULE}`,
+			);
+			return;
+		}
 		const scope = nearestFunction(select);
 		if (!scope) {
 			problems.push(`${where(node)}: select outside any function`);
@@ -232,13 +315,13 @@ function checkReaderSource(
 		let resolved = 0;
 		forEachDescendant(scope, (n) => {
 			if (!ts.isIdentifier(n) || n.text !== alias) return;
-			const verdict = classify(n, select);
+			const verdict = classify(n, helper);
 			if (verdict === "helper") resolved++;
 			else if (verdict !== "ok")
 				problems.push(`${where(n)}: ${alias} ${verdict}`);
 		});
 		if (resolved === 0) {
-			problems.push(`${where(node)}: ${alias} never reaches ${HELPER}`);
+			problems.push(`${where(node)}: ${alias} never reaches ${helper}`);
 		}
 	});
 
@@ -289,7 +372,9 @@ describe("preferred contact reads (#1093)", () => {
 	});
 
 	describe("checkReaderSource", () => {
-		const select = (rest: string) => `
+		const IMPORT = `import { effectivePreferredContact } from "#/lib/preferred-contact";`;
+		const select = (rest: string, preamble = IMPORT) => `
+			${preamble}
 			async function reader() {
 				const [row] = await db
 					.select({ email: people.email, stored: people.preferredContact })
@@ -369,9 +454,64 @@ describe("preferred contact reads (#1093)", () => {
 		it("rejects a select outside any function", () => {
 			expect(
 				check(
-					"export const q = db.select({ stored: people.preferredContact });",
+					`${IMPORT}\nexport const q = db.select({ stored: people.preferredContact });`,
 				).problems.length,
 			).toBeGreaterThan(0);
+		});
+
+		it("accepts the real helper imported under another name", () => {
+			const report = check(
+				select(
+					"return resolvePref(row.stored, row);",
+					`import { effectivePreferredContact as resolvePref } from "#/lib/preferred-contact";`,
+				),
+			);
+			expect(report.problems).toEqual([]);
+		});
+
+		it("rejects a call to the helper's NAME when it is not imported", () => {
+			const { problems } = check(
+				select("return effectivePreferredContact(row.stored, row);", ""),
+			);
+			expect(problems.join("\n")).toMatch(
+				/no effectivePreferredContact imported/,
+			);
+		});
+
+		it("rejects a local function shadowing the imported helper", () => {
+			const { problems } = check(
+				select(`
+				function effectivePreferredContact(v: unknown) {
+					return v;
+				}
+				return effectivePreferredContact(row.stored, row);`),
+			);
+			expect(problems.join("\n")).toMatch(/re-declares the helper's name/);
+		});
+
+		it("rejects a renamed import that a variable then shadows", () => {
+			const { problems } = check(
+				select(
+					"const resolvePref = (v: unknown) => v;\nreturn resolvePref(row.stored, row);",
+					`import { effectivePreferredContact as resolvePref } from "#/lib/preferred-contact";`,
+				),
+			);
+			expect(problems.join("\n")).toMatch(/re-declares the helper's name/);
+		});
+
+		it("accepts two selects in one function sharing an alias, each resolved", () => {
+			const report = check(`
+				${IMPORT}
+				async function reader() {
+					const [a] = await db.select({ stored: people.preferredContact }).from(people);
+					const [b] = await db.select({ stored: people.preferredContact }).from(people);
+					return [
+						effectivePreferredContact(a.stored, a),
+						effectivePreferredContact(b.stored, b),
+					];
+				}`);
+			expect(report.problems).toEqual([]);
+			expect(report.selects).toBe(2);
 		});
 	});
 
