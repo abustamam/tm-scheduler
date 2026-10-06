@@ -18,13 +18,6 @@
 export const CONTACT_METHODS = ["email", "call", "sms", "whatsapp"] as const;
 export type ContactMethod = (typeof CONTACT_METHODS)[number];
 
-/** The methods that need a phone. All three use the same "has a digit" test. */
-export const PHONE_CONTACT_METHODS: readonly ContactMethod[] = [
-	"call",
-	"sms",
-	"whatsapp",
-];
-
 /** What the forms and the roster icon's `aria-label` call each method. */
 export const CONTACT_METHOD_LABELS: Record<ContactMethod, string> = {
 	email: "Email",
@@ -45,6 +38,63 @@ export const CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE =
 	"This member sets their own contact preference.";
 
 /**
+ * The admin edit's refusal for a Person another club also holds — the same rule
+ * as the email (`soleHoldingClub`, ADR-0029): a club may change a Person-level
+ * fact only while it is their sole holder. The WHOLE edit is refused.
+ */
+export const CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE =
+	"This member is also on another club's roster, so their contact preference can't be changed here.";
+
+/**
+ * Exactly the characters JS `String.prototype.trim()` removes: ECMAScript
+ * WhiteSpace (TAB, VT, FF, SPACE, NBSP, ZWNBSP/BOM and every Unicode
+ * `Space_Separator`) plus LineTerminator (LF, CR, LS, PS).
+ *
+ * The ONE definition of "blank" for an email (#1093 review). Both halves of
+ * the availability test are built from it — `hasEmail` here, and the bound
+ * pattern in the writers' UPDATE (`contactMethodAvailableSql`) — so the UI and
+ * the server cannot disagree about NBSP or a BOM the way Postgres `\S` and JS
+ * `.trim()` did. Listed as literal characters rather than regex escapes, so the
+ * two regex engines read the same class with no escape dialect in between.
+ * `preferred-contact.test.ts` checks it against `.trim()` over the whole BMP.
+ */
+export const TRIM_WHITESPACE: readonly string[] = [
+	"\t",
+	"\n",
+	"\v",
+	"\f",
+	"\r",
+	" ",
+	"\u00a0",
+	"\u1680",
+	"\u2000",
+	"\u2001",
+	"\u2002",
+	"\u2003",
+	"\u2004",
+	"\u2005",
+	"\u2006",
+	"\u2007",
+	"\u2008",
+	"\u2009",
+	"\u200a",
+	"\u2028",
+	"\u2029",
+	"\u202f",
+	"\u205f",
+	"\u3000",
+	"\ufeff",
+];
+
+/**
+ * "Contains a character that is not `TRIM_WHITESPACE`", as a bracket
+ * expression both JS `RegExp` and Postgres `~` read identically. The writers
+ * bind it as a query PARAMETER, so no SQL string-literal escaping touches it.
+ */
+export const NON_BLANK_PATTERN = `[^${TRIM_WHITESPACE.join("")}]`;
+const NON_BLANK = new RegExp(NON_BLANK_PATTERN);
+
+/**
  * Does this stored phone have anything to dial?
  *
  * At least one digit. Deliberately not a truthiness check: a digit-less value
@@ -57,8 +107,9 @@ export function hasDialablePhone(phone: string | null | undefined): boolean {
 	return /\d/.test(phone ?? "");
 }
 
+/** Has an email with something in it besides `TRIM_WHITESPACE`. */
 function hasEmail(email: string | null | undefined): boolean {
-	return Boolean(email?.trim());
+	return NON_BLANK.test(email ?? "");
 }
 
 /** The methods this Person's current email and phone support, in display order. */

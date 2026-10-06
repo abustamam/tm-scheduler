@@ -21,6 +21,7 @@ import {
 	CONTACT_METHOD_UNAVAILABLE_MESSAGE,
 	CONTACT_METHODS,
 	CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE,
+	CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE,
 	effectivePreferredContact,
 } from "#/lib/preferred-contact";
 import { buildImportPreview } from "#/lib/roster-import";
@@ -289,7 +290,7 @@ export async function applyMemberEdit(input: EditInput) {
 				phone: people.phone,
 				email: people.email,
 				userId: people.userId,
-				preferredContact: people.preferredContact,
+				storedPreferredContact: people.preferredContact,
 			})
 			.from(people)
 			.where(eq(people.id, current.personId))
@@ -334,12 +335,17 @@ export async function applyMemberEdit(input: EditInput) {
 		}
 		// The contact preference (#1093). AFTER the phone and email writes, so
 		// its WHERE judges availability against the row as this edit leaves it:
-		// clearing the phone and choosing SMS in one save matches nothing. Both
+		// clearing the phone and choosing SMS in one save matches nothing. Three
 		// rules sit in the UPDATE's own WHERE, not in a prior read: the Person
-		// has not signed in (once they have, the choice is theirs), and the
-		// method's data exists. Zero rows refuses the WHOLE edit: the throw rolls
-		// back every write above, so nothing in this save lands. The locked read
-		// only picks which sentence to say.
+		// has not signed in (once they have, the choice is theirs); this club is
+		// their SOLE holder (the email's rule, ADR-0029: a Person-level fact
+		// another club also relies on is not one club's to change); and the
+		// method's data exists.
+		//
+		// Zero rows refuses the WHOLE edit — unlike the email, whose refusal lets
+		// the rest of the save land. The throw rolls back every write above, so
+		// nothing in this save lands, and the admin is told the real reason. The
+		// read after it only picks which sentence that is; it never decides.
 		if (preferredContact !== undefined) {
 			const written = await tx
 				.update(people)
@@ -348,15 +354,26 @@ export async function applyMemberEdit(input: EditInput) {
 					and(
 						eq(people.id, current.personId),
 						isNull(people.userId),
+						soleHoldingClub(input.clubId),
 						contactMethodAvailableSql(preferredContact),
 					),
 				)
 				.returning({ id: people.id });
 			if (written.length === 0) {
+				// Ownership before availability: a multi-club Person whose email
+				// write was just refused must hear "another club", not "add an
+				// email" (#1093 review).
+				const owner = await emailWriteRefusalFor(
+					current.personId,
+					input.clubId,
+					tx,
+				);
 				throw new Error(
-					currentPerson.userId
+					owner === "bound"
 						? CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE
-						: CONTACT_METHOD_UNAVAILABLE_MESSAGE,
+						: owner === "multi_club"
+							? CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE
+							: CONTACT_METHOD_UNAVAILABLE_MESSAGE,
 				);
 			}
 		}
@@ -432,7 +449,7 @@ export async function applyMemberEdit(input: EditInput) {
 					...(preferredContact !== undefined
 						? {
 								preferredContact: effectivePreferredContact(
-									currentPerson.preferredContact,
+									currentPerson.storedPreferredContact,
 									currentPerson,
 								),
 							}

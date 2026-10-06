@@ -14,6 +14,7 @@ import {
 	CONTACT_METHOD_UNAVAILABLE_MESSAGE,
 	CONTACT_METHODS,
 	type ContactMethod,
+	NON_BLANK_PATTERN,
 } from "#/lib/preferred-contact";
 import {
 	cleanup,
@@ -116,10 +117,18 @@ describe.skipIf(!hasTestDb)("setMyPreferredContact (#1093)", () => {
 		}
 	});
 
-	it("refuses email when the address is only a tab or a newline", async () => {
+	it("refuses email when the address is only whitespace JS .trim() removes", async () => {
 		// The server's test must agree with the UI's `email?.trim()`. `btrim`
-		// strips spaces only, so "\t" and "\n" used to pass the WHERE.
-		for (const email of ["\t", "\n", " \t\n "]) {
+		// strips spaces only, so "\t" and "\n" used to pass the WHERE, and
+		// Postgres `\S` disagreed with `.trim()` on NBSP and the BOM.
+		for (const email of [
+			"\t",
+			"\n",
+			" \t\n ",
+			"\u00a0",
+			"\ufeff",
+			"\u00a0\ufeff\u3000",
+		]) {
 			await setPerson(seed.personId, { email, phone: PHONE });
 			await expect(
 				applySetMyPreferredContact({
@@ -138,15 +147,47 @@ describe.skipIf(!hasTestDb)("setMyPreferredContact (#1093)", () => {
 		expect(await stored(seed.personId)).toBe("email");
 	});
 
-	it("binds the email pattern as a parameter, backslash intact", () => {
+	it("binds the shared email pattern as a parameter, byte for byte", () => {
 		const { sql: text, params } = testDb
 			.update(people)
 			.set({ preferredContact: "email" })
 			.where(contactMethodAvailableSql("email"))
 			.toSQL();
 		expect(text).toMatch(/coalesce\("people"\."email", ''\) ~ \$\d+/);
-		expect(params).toContain("\\S");
-		expect(params.find((p) => p === "\\S")).toHaveLength(2);
+		expect(params).toContain(NON_BLANK_PATTERN);
+	});
+
+	it("with duplicate Persons, refuses unless the one the card reads is written", async () => {
+		// The account's canonical Person is the one holding the membership
+		// (`resolveUserPersonId`); it has no phone. A membership-less duplicate
+		// carrying the same account does. SMS would land on the duplicate only,
+		// and the card would keep showing no preference — so it is refused, and
+		// the duplicate's write rolls back with it.
+		const duplicate = await seedPerson({
+			name: "Member Duplicate",
+			phone: PHONE,
+			userId: seed.memberUserId,
+		});
+		orphanPersonIds.push(duplicate);
+		await setPerson(seed.personId, { phone: null });
+
+		await expect(
+			applySetMyPreferredContact({
+				userId: seed.memberUserId,
+				preferredContact: "sms",
+			}),
+		).rejects.toThrow(CONTACT_METHOD_UNAVAILABLE_MESSAGE);
+		expect(await stored(seed.personId)).toBeNull();
+		expect(await stored(duplicate)).toBeNull();
+
+		// With the method available on the canonical Person, both are written.
+		await setPerson(seed.personId, { phone: PHONE });
+		await applySetMyPreferredContact({
+			userId: seed.memberUserId,
+			preferredContact: "sms",
+		});
+		expect(await stored(seed.personId)).toBe("sms");
+		expect(await stored(duplicate)).toBe("sms");
 	});
 
 	it("writes only the caller's own Person", async () => {

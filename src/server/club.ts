@@ -183,6 +183,8 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				phoneRaw: member.phoneRaw,
 				// The EFFECTIVE preference (#1093), resolved in `loadMemberProfile`.
 				preferredContact: member.preferredContact,
+				// Why this club may not change it, or null (#1093 review).
+				contactPreferenceRefusal: member.contactPreferenceRefusal,
 				officerPositions,
 				userId: member.userId,
 				status: member.status,

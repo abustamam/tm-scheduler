@@ -20,6 +20,7 @@ import {
 	CONTACT_METHOD_UNAVAILABLE_MESSAGE,
 	type ContactMethod,
 	effectivePreferredContact,
+	NON_BLANK_PATTERN,
 } from "#/lib/preferred-contact";
 import { resolveUserPersonId } from "./person-identity-logic";
 
@@ -27,29 +28,26 @@ import { resolveUserPersonId } from "./person-identity-logic";
 export const NO_LINKED_PERSON_MESSAGE =
 	"Your account isn't linked to a club member yet.";
 
-/** A POSIX-ARE class: any character that is not whitespace. */
-export const NON_WHITESPACE = "\\S";
-
 /**
  * `availableContactMethods`, as a predicate on the `people` row an UPDATE is
  * about to write. The SQL spelling of the same two tests: a phone method needs
- * a digit in `people.phone` (`hasDialablePhone`, `/\d/`), email needs a
- * `people.email` with a non-whitespace character (JS `.trim()`). Evaluated against the row as the statement sees it,
- * which inside `applyMemberEdit`'s transaction includes that edit's own phone
- * and email writes. `null` ("no preference") is always available.
+ * a digit in `people.phone` (`hasDialablePhone`, `/\d/`), and email needs a
+ * character outside `TRIM_WHITESPACE` in `people.email` (`NON_BLANK_PATTERN`,
+ * the same pattern the JS check is built from). Evaluated against the row as
+ * the statement sees it, which inside `applyMemberEdit`'s transaction includes
+ * that edit's own phone and email writes. `null` ("no preference") is always
+ * available.
  */
 export function contactMethodAvailableSql(
 	method: ContactMethod | null,
 ): SQL | undefined {
 	if (method === null) return undefined;
 	if (method === "email") {
-		// "Has a non-whitespace character", the SQL half of JS `email?.trim()`
-		// being non-empty. NOT `btrim(…) <> ''`: `btrim` strips only spaces, so
-		// an email of a tab or a newline passed the server while the UI called
-		// it blank. The pattern is a BOUND parameter rather than SQL text, so the
-		// backslash reaches Postgres exactly as written, with no string-literal
-		// escaping in between.
-		return sql`coalesce(${people.email}, '') ~ ${NON_WHITESPACE}`;
+		// A BOUND parameter, not SQL text: the class reaches Postgres byte for
+		// byte, with no string-literal escaping in between. Not `btrim(…) <> ''`
+		// (spaces only) and not `\S` (Postgres's own idea of whitespace, which
+		// disagrees with JS `.trim()` on NBSP and the BOM).
+		return sql`coalesce(${people.email}, '') ~ ${NON_BLANK_PATTERN}`;
 	}
 	return sql`${people.phone} ~ '[0-9]'`;
 }
@@ -60,7 +58,11 @@ export function contactMethodAvailableSql(
  * Writes only the caller's own Person: `people.user_id = userId` is in the
  * WHERE, and nothing about WHICH Person comes from the request. An account with
  * duplicate Persons (see `person-identity-logic.ts`) has the choice written to
- * each of them it is available on, so whichever one a surface resolves agrees.
+ * each of them it is available on — but the write must land on the one
+ * `resolveUserPersonId` picks, because that is the one the /account card and
+ * every person-level surface read. If it did not (that Person has no phone, a
+ * duplicate does), the whole write rolls back and is refused: answering "saved"
+ * while the card goes on showing the old value is the bug this prevents.
  *
  * Refuses a method whose data is missing with
  * `CONTACT_METHOD_UNAVAILABLE_MESSAGE`; `null` always saves.
@@ -69,26 +71,24 @@ export async function applySetMyPreferredContact(input: {
 	userId: string;
 	preferredContact: ContactMethod | null;
 }): Promise<{ ok: true; preferredContact: ContactMethod | null }> {
-	const written = await db
-		.update(people)
-		.set({ preferredContact: input.preferredContact })
-		.where(
-			and(
-				eq(people.userId, input.userId),
-				contactMethodAvailableSql(input.preferredContact),
-			),
-		)
-		.returning({ id: people.id });
-	if (written.length === 0) {
-		const [any] = await db
-			.select({ id: people.id })
-			.from(people)
-			.where(eq(people.userId, input.userId))
-			.limit(1);
-		throw new Error(
-			any ? CONTACT_METHOD_UNAVAILABLE_MESSAGE : NO_LINKED_PERSON_MESSAGE,
-		);
-	}
+	const canonical = await resolveUserPersonId(input.userId);
+	if (!canonical) throw new Error(NO_LINKED_PERSON_MESSAGE);
+	await db.transaction(async (tx) => {
+		const written = await tx
+			.update(people)
+			.set({ preferredContact: input.preferredContact })
+			.where(
+				and(
+					eq(people.userId, input.userId),
+					contactMethodAvailableSql(input.preferredContact),
+				),
+			)
+			.returning({ id: people.id });
+		// Throwing rolls back the duplicates written above too.
+		if (!written.some((w) => w.id === canonical)) {
+			throw new Error(CONTACT_METHOD_UNAVAILABLE_MESSAGE);
+		}
+	});
 	return { ok: true, preferredContact: input.preferredContact };
 }
 

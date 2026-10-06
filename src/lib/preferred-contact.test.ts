@@ -5,6 +5,7 @@ import {
 	type ContactMethod,
 	effectivePreferredContact,
 	hasDialablePhone,
+	NON_BLANK_PATTERN,
 	preferredContactEditPayload,
 	smsHref,
 	telHref,
@@ -35,6 +36,12 @@ describe("availableContactMethods (#1093)", () => {
 			"sms",
 			"whatsapp",
 		]);
+	});
+
+	it("treats an NBSP-only or BOM-only email as no email", () => {
+		for (const email of ["\u00a0", "\ufeff", "\u00a0\ufeff\u2028"]) {
+			expect(availableContactMethods({ email, phone: null })).toEqual([]);
+		}
 	});
 
 	it("treats a blank email as no email", () => {
@@ -127,5 +134,27 @@ describe("telHref / smsHref", () => {
 	it("is null with nothing to dial", () => {
 		expect(telHref("ask at church")).toBeNull();
 		expect(smsHref(null)).toBeNull();
+	});
+});
+
+describe("the shared whitespace definition (#1093 review)", () => {
+	it("is exactly what JS .trim() removes, over the whole BMP", () => {
+		const blank = new RegExp(`^${NON_BLANK_PATTERN.replace("[^", "[")}+$`);
+		const disagree: string[] = [];
+		for (let c = 0; c <= 0xffff; c++) {
+			const ch = String.fromCharCode(c);
+			if ((ch.trim() === "") !== blank.test(ch)) {
+				disagree.push(c.toString(16));
+			}
+		}
+		expect(disagree).toEqual([]);
+	});
+
+	it("is a bracket expression of literal characters, nothing to escape", () => {
+		expect(NON_BLANK_PATTERN.startsWith("[^")).toBe(true);
+		expect(NON_BLANK_PATTERN.endsWith("]")).toBe(true);
+		const body = NON_BLANK_PATTERN.slice(2, -1);
+		// No character either regex dialect would read as syntax in a class.
+		expect(body).not.toMatch(/[\\\]^-]/);
 	});
 });

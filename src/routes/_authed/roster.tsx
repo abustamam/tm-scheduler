@@ -6,9 +6,6 @@ import {
 	Loader2,
 	Mail,
 	MailCheck,
-	MessageCircle,
-	MessageSquare,
-	Phone,
 	ShieldCheck,
 	Upload,
 	UserPlus,
@@ -16,6 +13,7 @@ import {
 import { type ChangeEvent, useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
+import { CONTACT_METHOD_ICONS } from "#/components/contact-method-icon";
 import { PageContainer } from "#/components/page-container";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
@@ -196,19 +194,6 @@ interface RosterRow {
 	holdsOffice: boolean;
 }
 
-// `hasDialablePhone` — does this stored phone produce a CLICKABLE WhatsApp
-// link? — lives in `#/lib/preferred-contact` (#1093), because the same
-// has-a-digit test decides whether Call, SMS and WhatsApp are available as a
-// preferred contact method. One copy, so the two cannot drift.
-
-/** The roster's icon for each preferred contact method (#1093). */
-const CONTACT_METHOD_ICONS: Record<ContactMethod, typeof Mail> = {
-	email: Mail,
-	call: Phone,
-	sms: MessageSquare,
-	whatsapp: MessageCircle,
-};
-
 /**
  * A small icon for a member's effective preferred contact method, or nothing.
  * `role="img"` with an `aria-label` ("Prefers SMS"), so it is announced.
@@ -297,7 +282,7 @@ function Roster() {
 			speeches: m.speeches,
 			email: m.email,
 			phone: m.phone,
-			preferredContact: m.preferredContact ?? null,
+			preferredContact: m.preferredContact,
 			inviteState: inviteStateOf({ userId: m.userId, invitedAt: m.invitedAt }),
 			membershipStatus: m.status,
 			pathwayWithheld,

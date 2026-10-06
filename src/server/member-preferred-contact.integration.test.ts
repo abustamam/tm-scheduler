@@ -18,6 +18,7 @@ import {
 	CONTACT_METHOD_UNAVAILABLE_MESSAGE,
 	CONTACT_METHODS,
 	CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE,
+	CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE,
 	type ContactMethod,
 } from "#/lib/preferred-contact";
 import {
@@ -169,8 +170,8 @@ describe.skipIf(!hasTestDb)(
 			expect(await memberName(unlinked.memberId)).toBe("Una Linked");
 		});
 
-		it("refuses email when the address is only a tab or a newline", async () => {
-			for (const email of ["\t", "\n"]) {
+		it("refuses email when the address is only whitespace JS .trim() removes", async () => {
+			for (const email of ["\t", "\n", "\u00a0", "\ufeff"]) {
 				await testDb
 					.update(people)
 					.set({ email, phone: PHONE })
@@ -183,6 +184,93 @@ describe.skipIf(!hasTestDb)(
 				).rejects.toThrow(CONTACT_METHOD_UNAVAILABLE_MESSAGE);
 				expect((await person(unlinked.personId)).preferredContact).toBeNull();
 				expect(await memberName(unlinked.memberId)).toBe("Una Linked");
+			}
+		});
+
+		it("refuses the WHOLE edit for a Person another club also holds, writing nothing", async () => {
+			const other = await seedClub();
+			try {
+				await testDb.insert(members).values({
+					clubId: other.clubId,
+					personId: unlinked.personId,
+					name: "Una Linked",
+				});
+				await expect(
+					edit(unlinked.memberId, { name: "Renamed", preferredContact: "sms" }),
+				).rejects.toThrow(CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE);
+				expect((await person(unlinked.personId)).preferredContact).toBeNull();
+				expect(await memberName(unlinked.memberId)).toBe("Una Linked");
+				// The profile says so, so the form can lock the field.
+				expect(
+					(await loadMemberProfile(seed.clubId, unlinked.memberId))
+						?.contactPreferenceRefusal,
+				).toBe("multi_club");
+
+				// The same edit without the field saves.
+				await edit(unlinked.memberId, { name: "Renamed" });
+				expect(await memberName(unlinked.memberId)).toBe("Renamed");
+			} finally {
+				// Only the membership this test added: `cleanup` deletes the Persons
+				// of the club it is handed, and this Person belongs to the seed club.
+				await testDb
+					.delete(members)
+					.where(
+						and(
+							eq(members.clubId, other.clubId),
+							eq(members.personId, unlinked.personId),
+						),
+					);
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
+		});
+
+		it("allows the SOLE holding club, and the profile says it may", async () => {
+			expect(
+				(await loadMemberProfile(seed.clubId, unlinked.memberId))
+					?.contactPreferenceRefusal,
+			).toBeNull();
+			await edit(unlinked.memberId, { preferredContact: "call" });
+			expect((await person(unlinked.personId)).preferredContact).toBe("call");
+		});
+
+		it("names the real reason when the email write is refused and email is chosen", async () => {
+			// Another club holds this Person, so the new address is refused
+			// (`multi_club`) and the Person still has no email. The preference
+			// must say "another club", not "add an email".
+			await testDb
+				.update(people)
+				.set({ email: null })
+				.where(eq(people.id, unlinked.personId));
+			const other = await seedClub();
+			try {
+				await testDb.insert(members).values({
+					clubId: other.clubId,
+					personId: unlinked.personId,
+					name: "Una Linked",
+				});
+				const attempt = edit(unlinked.memberId, {
+					email: "new@example.com",
+					preferredContact: "email",
+				});
+				await expect(attempt).rejects.toThrow(
+					CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE,
+				);
+				await expect(attempt).rejects.not.toThrow(
+					CONTACT_METHOD_UNAVAILABLE_MESSAGE,
+				);
+				expect((await person(unlinked.personId)).email).toBeNull();
+			} finally {
+				// Only the membership this test added: `cleanup` deletes the Persons
+				// of the club it is handed, and this Person belongs to the seed club.
+				await testDb
+					.delete(members)
+					.where(
+						and(
+							eq(members.clubId, other.clubId),
+							eq(members.personId, unlinked.personId),
+						),
+					);
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
 			}
 		});
 

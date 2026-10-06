@@ -26,6 +26,7 @@ import {
 	type ContactMethod,
 	effectivePreferredContact,
 } from "#/lib/preferred-contact";
+import { emailWriteRefusalFor } from "./account-link-logic";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 
 export interface ClubMemberRow {
@@ -174,6 +175,15 @@ export async function loadMemberProfile(clubId: string, memberId: string) {
 	]);
 	if (!row) return undefined;
 	const { storedPreferredContact, ...profile } = row;
+	// Whether THIS club may change the Person's preference (#1093 review): the
+	// email's rule exactly — nobody has signed in, and this club is their sole
+	// holder — read through the email's own explainer, so the form and the
+	// write's WHERE ask the same question. Display only; the gate is the WHERE
+	// in `applyMemberEdit`.
+	const contactPreferenceRefusal = await emailWriteRefusalFor(
+		row.personId,
+		clubId,
+	);
 	// `phone` is for DISPLAY (the WhatsApp link); `phoneRaw` is the column
 	// verbatim, for the edit form. See `ClubMemberRow.phoneRaw`'s comment — a
 	// dialog bound to `phone` writes the country-code GUESS back over the stored
@@ -184,5 +194,6 @@ export async function loadMemberProfile(clubId: string, memberId: string) {
 		phoneRaw: row.phone,
 		// The EFFECTIVE preference (#1093), judged on the stored phone.
 		preferredContact: effectivePreferredContact(storedPreferredContact, row),
+		contactPreferenceRefusal,
 	};
 }

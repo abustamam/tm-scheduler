@@ -69,6 +69,7 @@ function profileMember(over: Record<string, unknown> = {}) {
 		phoneRaw: "+14155552671",
 		email: "ada@example.com",
 		preferredContact: null,
+		contactPreferenceRefusal: null,
 		officerPositions: [] as string[],
 		userId: null,
 		status: "active" as const,
@@ -207,13 +208,38 @@ describe("member edit dialog: preferred contact (#1093)", () => {
 	});
 
 	it("shows a signed-in member's choice read-only and never sends it", async () => {
-		await openEdit({ userId: "u1", preferredContact: "sms" });
+		await openEdit({
+			userId: "u1",
+			preferredContact: "sms",
+			contactPreferenceRefusal: "bound",
+		});
 		const field = screen.getByLabelText(
 			"Preferred contact",
 		) as HTMLInputElement;
 		expect(field.readOnly).toBe(true);
 		expect(field.value).toBe("SMS");
-		expect(screen.getByText("Set by the member.")).toBeTruthy();
+		// Not "set by the member": an admin may have set it before they signed in.
+		expect(screen.getByText("The member manages this now.")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+		await vi.waitFor(() => expect(editMember).toHaveBeenCalled());
+		expect(vi.mocked(editMember).mock.calls[0]?.[0]?.data).not.toHaveProperty(
+			"preferredContact",
+		);
+	});
+
+	it("locks the field for a Person another club also holds, and never sends it", async () => {
+		await openEdit({
+			preferredContact: "email",
+			contactPreferenceRefusal: "multi_club",
+		});
+		const field = screen.getByLabelText(
+			"Preferred contact",
+		) as HTMLInputElement;
+		expect(field.readOnly).toBe(true);
+		expect(field.value).toBe("Email");
+		expect(
+			screen.getByText(/Another club also has them on its roster/),
+		).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 		await vi.waitFor(() => expect(editMember).toHaveBeenCalled());
 		expect(vi.mocked(editMember).mock.calls[0]?.[0]?.data).not.toHaveProperty(

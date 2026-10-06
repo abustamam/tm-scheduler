@@ -11,13 +11,12 @@ import {
 	ChevronLeft,
 	Compass,
 	Mail,
-	MessageSquare,
-	Phone,
 	ShieldCheck,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
+import { CONTACT_METHOD_ICONS } from "#/components/contact-method-icon";
 import {
 	type MemberMentorshipsView,
 	MentorshipAdminPanel,
@@ -720,10 +719,10 @@ function MemberContactLinks({
 		name: string;
 		email: string | null;
 		phone: string | null;
-		preferredContact?: ContactMethod | null;
+		preferredContact: ContactMethod | null;
 	};
 }) {
-	const preferred = member.preferredContact ?? null;
+	const preferred = member.preferredContact;
 	if (!member.email && !member.phone) return null;
 
 	// `mailtoHref`, not raw interpolation: a stored "a@b.com?cc=x&subject=y"
@@ -755,7 +754,7 @@ function MemberContactLinks({
 		const href =
 			method === "call" ? telHref(member.phone) : smsHref(member.phone);
 		if (!href) return null;
-		const Icon = method === "call" ? Phone : MessageSquare;
+		const Icon = CONTACT_METHOD_ICONS[method];
 		return (
 			<a
 				key={method}
@@ -821,7 +820,13 @@ type ProfileMember = {
 	 *  round-trips the bytes instead of the country-code guess. */
 	phoneRaw: string | null;
 	/** The EFFECTIVE preference (#1093) — never the raw column. */
-	preferredContact?: ContactMethod | null;
+	preferredContact: ContactMethod | null;
+	/**
+	 * Why THIS club may not change the preference, or null when it may (#1093
+	 * review): `bound` once the member has signed in, `multi_club` while another
+	 * club holds them too — the email's rule. Drives the read-only field.
+	 */
+	contactPreferenceRefusal: "bound" | "multi_club" | null;
 	officerPositions: OfficerPosition[];
 	userId: string | null;
 	status: "active" | "inactive";
@@ -841,6 +846,10 @@ function MemberActions({
 	const [removeOpen, setRemoveOpen] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const isLinkedAccount = Boolean(member.userId);
+	// The server refuses the whole edit if the field is sent while this is set;
+	// a linked account is locked even if the refusal was not loaded.
+	const preferenceLocked =
+		isLinkedAccount || member.contactPreferenceRefusal !== null;
 	const isInactive = member.status === "inactive";
 
 	async function onToggleStatus() {
@@ -894,11 +903,11 @@ function MemberActions({
 					// Only when changed, and never for a member who has signed in:
 					// the choice is then theirs, and the server refuses the whole
 					// edit if it is sent (#1093).
-					...(isLinkedAccount
+					...(preferenceLocked
 						? {}
 						: preferredContactEditPayload(
 								String(form.get("preferredContact") ?? ""),
-								member.preferredContact ?? null,
+								member.preferredContact,
 							)),
 					officerPositions,
 				},
@@ -1044,12 +1053,13 @@ function MemberActions({
 						</div>
 						<div className="space-y-2">
 							<Label htmlFor="edit-preferred-contact">Preferred contact</Label>
-							{/* #1093. Once the member has signed in the choice is theirs: shown
-							    read-only and not sent. Otherwise the options are the methods the
-							    email and phone AS SAVED support; an edit that changes the phone and
-							    the preference together is judged by the server, against the row as
-							    that same save leaves it. */}
-							{isLinkedAccount ? (
+							{/* #1093. Once the member has signed in the choice is theirs, and
+							    while another club holds them it is not this club's to change
+							    (the email's rule): shown read-only and not sent. Otherwise the
+							    options are the methods the email and phone AS SAVED support; an
+							    edit that changes the phone and the preference together is judged
+							    by the server, against the row as that same save leaves it. */}
+							{preferenceLocked ? (
 								<>
 									{/* No `name`: a read-only field must not be submitted. */}
 									<Input
@@ -1066,7 +1076,10 @@ function MemberActions({
 										id="edit-preferred-contact-hint"
 										className="text-xs text-[var(--sea-ink-soft)]"
 									>
-										Set by the member.
+										{isLinkedAccount ||
+										member.contactPreferenceRefusal === "bound"
+											? "The member manages this now."
+											: "Another club also has them on its roster, so it can't be changed here."}
 									</p>
 								</>
 							) : (
