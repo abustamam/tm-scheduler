@@ -472,6 +472,22 @@ describe("MeetingAgenda capability gating", () => {
 			expect(screen.queryByRole("button", { name: /^Claim / })).toBeNull();
 		});
 
+		it.each([
+			"cancelled",
+			"completed",
+		])("renders no Claim and a disabled card even for an UNLOCKED viewer on a %s meeting", (status) => {
+			renderAgenda(
+				memberViewer({ signedIn: true, me: true }),
+				[slot({ status: "open" })],
+				undefined,
+				undefined,
+				{ meeting: meetingFixture({ status }) },
+			);
+			expect(screen.queryByRole("button", { name: /^Claim / })).toBeNull();
+			const card = screen.getByRole("button", { name: /Timer/ });
+			expect((card as HTMLButtonElement).disabled).toBe(true);
+		});
+
 		it("renders an enabled Claim on a scheduled meeting", () => {
 			renderAgenda(memberViewer({ signedIn: true, me: true }), [
 				slot({ status: "open" }),

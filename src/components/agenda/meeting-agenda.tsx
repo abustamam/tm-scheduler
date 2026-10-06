@@ -329,6 +329,13 @@ export function MeetingAgenda({
 		new Set(contactedMemberIds),
 	);
 
+	// Claim is not even rendered on a cancelled or completed meeting (#1090): the
+	// server refuses it, so a disabled button is only noise. Keyed off the
+	// STATUS, not `!canClaim`: a signed-out or memberless viewer's Claim can
+	// drive a sign-in flow and must still render.
+	const claimOffered =
+		!isMeetingCancelled(meeting.status) && !isMeetingLocked(meeting.status);
+
 	// "Can't make it" flag (#764). Since ADR-0026 an unverified "not coming" no
 	// longer frees the member's roles, so a role can stay assigned to someone who
 	// said they won't be there — the card has to say so to EVERY viewer, which is
@@ -343,15 +350,7 @@ export function MeetingAgenda({
 	// completed or (for a non-manager) over, both of which make `meetingOver`
 	// true. It is kept because this component cannot see that coupling: it takes
 	// the viewer and `meetingOver` as two independent props, and a locked viewer
-	// is the one thing that zeroes Claim and Release, so it must hide this too.
-	// (A locked viewer DISABLES the Claim button; it is the meeting's status,
-	// `claimOffered` below, that stops it rendering at all, #1090.)
-	// Claim is not even rendered on a cancelled or completed meeting (#1090): the
-	// server refuses it, so a disabled button is only noise. Keyed off the
-	// STATUS, not `!canClaim`: a signed-out or memberless viewer's Claim can
-	// drive a sign-in flow and must still render.
-	const claimOffered =
-		!isMeetingCancelled(meeting.status) && !isMeetingLocked(meeting.status);
+	// is the one thing that disables Claim and Release, so it must hide this too.
 	const flagsUnavailableHolders =
 		viewer.canClaim && !meetingOver && meeting.status !== "cancelled";
 
@@ -659,7 +658,7 @@ export function MeetingAgenda({
 												<button
 													type="button"
 													onClick={() => handleClaimClick(slot)}
-													disabled={!isOpen || !canClaim}
+													disabled={!isOpen || !canClaim || !claimOffered}
 													className="w-full min-w-0 text-left disabled:cursor-default"
 												>
 													<p className="font-medium">
