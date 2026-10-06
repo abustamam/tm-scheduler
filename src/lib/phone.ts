@@ -100,6 +100,16 @@ function stripExtension(trimmed: string): string {
 }
 
 /**
+ * True when `raw` carries an extension that `toE164` drops (#1106). Dedup uses it
+ * to treat a phone-only match on such a value as ambiguous: the extension was the
+ * part that told two people at one main line apart, and it is gone from the key.
+ */
+export function hasPhoneExtension(raw: string | null | undefined): boolean {
+	const trimmed = (raw ?? "").trim();
+	return stripExtension(trimmed) !== trimmed;
+}
+
+/**
  * Normalize a free-text phone to E.164 (`+<digits>`), or null when it can't be
  * made reliable. An extension is dropped (see `stripExtension`).
  *

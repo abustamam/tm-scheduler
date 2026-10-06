@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	coalesceToE164,
 	DEFAULT_COUNTRY_CODE,
+	hasPhoneExtension,
 	toE164,
 	toStoredPhone,
 } from "./phone";
@@ -38,12 +39,6 @@ describe("toE164", () => {
 	});
 });
 
-/**
- * The read-side coalescer every payload that renders a phone goes through
- * (season grid, club roster, guest pipeline). Its `?? raw` half is the whole
- * reason it exists as a named function rather than an inline `toE164` call, so
- * the digit-less case below is the load-bearing one.
- */
 describe("phone extensions are dropped (#1106)", () => {
 	it.each([
 		["+1 415 555 2671 ext. 9", undefined, "+14155552671"],
@@ -60,6 +55,24 @@ describe("phone extensions are dropped (#1106)", () => {
 		expect(coalesceToE164(raw, cc)).toBe(want);
 	});
 
+	it("a marker counts only after a digit: a leading x is not cut", () => {
+		expect(toE164("x 415 555 2671", "+1")).toBe("+14155552671");
+		expect(toE164("ext 415 555 2671", "+1")).toBe("+14155552671");
+	});
+
+	it("a domestic 1 plus an extension lands on the main number", () => {
+		expect(toE164("1-415-555-2671 x9", "+1")).toBe("+14155552671");
+	});
+
+	it("hasPhoneExtension reports whether an extension was cut", () => {
+		expect(hasPhoneExtension("415-555-2671 x10")).toBe(true);
+		expect(hasPhoneExtension("+1 415 555 2671 #9")).toBe(true);
+		expect(hasPhoneExtension("415-555-2671")).toBe(false);
+		expect(hasPhoneExtension("x 415 555 2671")).toBe(false);
+		expect(hasPhoneExtension("ext 9")).toBe(false);
+		expect(hasPhoneExtension(null)).toBe(false);
+	});
+
 	it("a value that is only an extension behaves as before", () => {
 		expect(toE164("ext 9")).toBeNull();
 		expect(toStoredPhone("ext 9")).toBe("ext 9");
@@ -73,6 +86,12 @@ describe("phone extensions are dropped (#1106)", () => {
 	});
 });
 
+/**
+ * The read-side coalescer every payload that renders a phone goes through
+ * (season grid, club roster, guest pipeline). Its `?? raw` half is the whole
+ * reason it exists as a named function rather than an inline `toE164` call, so
+ * the digit-less case below is the load-bearing one.
+ */
 describe("coalesceToE164", () => {
 	it("passes an already-E.164 value through, stripping formatting", () => {
 		expect(coalesceToE164("+14155552671", "+1")).toBe("+14155552671");
