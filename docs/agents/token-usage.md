@@ -110,7 +110,7 @@ subagent first-call context (expect ~10k lower), the >300k share, and cost per m
 
 ## The script
 
-`python3 usage.py` prints every number above (set the window per machine), pooled across every project directory whose name
+`python3 usage.py` prints every number above, pooled across every project directory whose name
 contains `tm-scheduler` (the main checkout and its worktrees). Set `since` / `until` for the window
 you want; a statistic with too small a sample prints `N/A`. Fable and Haiku are priced at their own
 list prices; a model it cannot price is listed, and contributes no dollars (`<synthetic>` is Claude
