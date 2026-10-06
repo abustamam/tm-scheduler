@@ -11,7 +11,8 @@
  * all: nothing in these tools needs it, and the meeting page's holder-contact
  * reader is gated for a reason (#37). A member's `preferredName` is a NAME and
  * not an exception to that rule (#776 item 4, decided on #788) — it sits beside
- * the full name this reader already publishes to anyone.
+ * the full name this reader already publishes to anyone. Nor is
+ * `preferredContact` (#1093): it names a METHOD ("sms"), never the number.
  *
  * Both sides read through existing readers rather than new queries:
  * `loadPublicClubRoster` for members (which carries its own archive gate) and
@@ -22,6 +23,7 @@
  */
 import { z } from "zod";
 import { MAX_FIND_PEOPLE_RESULTS } from "#/lib/mcp-limits";
+import { loadClubContactPreferences } from "#/server/contact-preference-logic";
 import { loadGuestPipeline } from "#/server/guest-pipeline-logic";
 import { loadPublicClubRoster } from "#/server/members-logic";
 import { authorizeToken } from "../authz-logic";
@@ -51,13 +53,17 @@ export const findPeopleTool: McpToolDefinition = {
 		const args = z.object(inputSchema).parse(input);
 		const { club } = await authorizeToken(ctx, args.clubId);
 
-		const [roster, guests] = await Promise.all([
+		const [roster, guests, contactPreferences] = await Promise.all([
 			loadPublicClubRoster(club.clubId),
 			// The VP-Membership board's reader: it is the one that already carries
 			// stage, the DERIVED visit count and the preferred name, which is
 			// exactly what this tool reports. `listClubGuests` is the narrow picker
 			// reader and carries none of them.
 			loadGuestPipeline(club.clubId),
+			// Each member's EFFECTIVE preferred contact method (#1093). Its reader
+			// looks at email and phone to decide availability and hands back only
+			// the method, so neither reaches this tool's output.
+			loadClubContactPreferences(club.clubId),
 		]);
 
 		const people = [
@@ -68,7 +74,10 @@ export const findPeopleTool: McpToolDefinition = {
 				// list answer the same field two ways: a guest's "goes by" name was
 				// populated and a member's never was, so a caller reading the roster
 				// concluded nobody on it had one.
-				...toMcpMember(m),
+				...toMcpMember({
+					...m,
+					preferredContact: contactPreferences.get(m.id) ?? null,
+				}),
 				officerPositions: m.officerPositions,
 			})),
 			...guests.map((g) => ({

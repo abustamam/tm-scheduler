@@ -18,8 +18,10 @@
  * contains a raw email address.
  *
  * Member contact is not returned by any tool at all, so it needs no masking
- * function — there is nothing to mask.
+ * function — there is nothing to mask. A member's preferred contact METHOD
+ * (#1093) is returned, and is not contact: it says "prefers SMS", not where.
  */
+import type { ContactMethod } from "#/lib/preferred-contact";
 
 /** A guest as the MCP tools present it. No unmasked contact field exists here. */
 export interface McpGuest {
@@ -80,24 +82,36 @@ export function toMcpGuest(row: {
 	};
 }
 
-/** A roster member as the MCP tools present it — name and identity only. */
+/**
+ * A roster member as the MCP tools present it: name and identity, plus HOW they
+ * want to be reached (#1093) — never the email or phone itself.
+ */
 export interface McpMember {
 	id: string;
 	kind: "member";
 	name: string;
 	preferredName: string | null;
+	/** The EFFECTIVE preference (`effectivePreferredContact`), or null. */
+	preferredContact: ContactMethod | null;
 }
 
+/**
+ * The one conversion from a roster row to what a tool may return. It builds the
+ * result field by field rather than spreading `row`, so a caller that hands it
+ * a row carrying `email` or `phone` still gets neither back.
+ */
 export function toMcpMember(row: {
 	id: string;
 	name: string;
 	preferredName?: string | null;
+	preferredContact?: ContactMethod | null;
 }): McpMember {
 	return {
 		id: row.id,
 		kind: "member",
 		name: row.name,
 		preferredName: row.preferredName ?? null,
+		preferredContact: row.preferredContact ?? null,
 	};
 }
 

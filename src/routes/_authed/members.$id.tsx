@@ -11,6 +11,8 @@ import {
 	ChevronLeft,
 	Compass,
 	Mail,
+	MessageSquare,
+	Phone,
 	ShieldCheck,
 } from "lucide-react";
 import { useState } from "react";
@@ -52,6 +54,14 @@ import {
 } from "#/lib/officers";
 import type { OrientationView } from "#/lib/orientation";
 import { firstNameOf } from "#/lib/person-name";
+import {
+	availableContactMethods,
+	CONTACT_METHOD_LABELS,
+	type ContactMethod,
+	preferredContactEditPayload,
+	smsHref,
+	telHref,
+} from "#/lib/preferred-contact";
 import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import {
 	speechLogEvaluatorLabel,
@@ -312,41 +322,7 @@ function MemberDetail() {
 							</>
 						) : null}
 					</div>
-					{member.email || member.phone ? (
-						<div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-[var(--sea-ink-soft)]">
-							{member.email ? (
-								// `mailtoHref`, not raw interpolation: a stored
-								// "a@b.com?cc=x&subject=y" would otherwise become live mailto
-								// HEADERS. `bulkImportSchema` still validates member email as a
-								// plain string, so this is not only a legacy-row concern.
-								//
-								// `data-slot="wa-email"` + `text-primary` mirrors the phone link
-								// beside it exactly, and both halves are required. The unlayered
-								// `a { color }` rule in styles.css beats any layered utility, so
-								// this anchor rendered --lagoon-deep (#328f97, 3.81:1) — under AA
-								// — next to a phone link at --lagoon-ink (5.82:1): one Contact
-								// pair in two colours, one of them failing. The `hover:text-[var
-								// (--sea-ink)]` that used to sit here was inert for the same
-								// reason and is gone rather than revived: it would now WORK, and
-								// send the two halves back to different colours on hover.
-								<a
-									href={mailtoHref(member.email)}
-									data-slot="wa-email"
-									className="inline-flex items-center gap-1.5 text-primary hover:underline"
-								>
-									<Mail className="size-3.5" aria-hidden />
-									{member.email}
-								</a>
-							) : null}
-							{/* WhatsApp, not the dialer. The component supplies its own icon,
-							    layout, `hover:underline` and colour — including the
-							    `data-slot` that lets that colour survive the unlayered
-							    `a { color }` rule — so this passes no styling at all. */}
-							{member.phone ? (
-								<WhatsAppPhoneLink phone={member.phone} name={member.name} />
-							) : null}
-						</div>
-					) : null}
+					<MemberContactLinks member={member} />
 				</div>
 				<div className="flex flex-wrap gap-2">
 					<Button asChild size="sm">
@@ -727,6 +703,103 @@ function UnscheduledSpeeches({
 	);
 }
 
+/**
+ * The member page's contact links (#1093): the EFFECTIVE preferred method's
+ * link first, with a "Preferred" badge, then email, then WhatsApp, each only
+ * when its data exists and never twice.
+ *
+ * Call and SMS have no link of their own anywhere else, so a `tel:` or `sms:`
+ * link appears ONLY while it is the effective preference, and goes the moment
+ * the preference stops being effective (the phone removed after they chose it).
+ * `preferredContact` is already the effective value from the server.
+ */
+function MemberContactLinks({
+	member,
+}: {
+	member: {
+		name: string;
+		email: string | null;
+		phone: string | null;
+		preferredContact?: ContactMethod | null;
+	};
+}) {
+	const preferred = member.preferredContact ?? null;
+	if (!member.email && !member.phone) return null;
+
+	// `mailtoHref`, not raw interpolation: a stored "a@b.com?cc=x&subject=y"
+	// would otherwise become live mailto HEADERS. `bulkImportSchema` still
+	// validates member email as a plain string, so this is not only a
+	// legacy-row concern.
+	//
+	// `data-slot="wa-email"` + `text-primary` mirrors the phone link beside it
+	// exactly. The `data-slot` is a test selector now; the global text-link rule
+	// is layered, so the anchor's own colour utility wins (CODING_STANDARDS.md).
+	const emailLink = member.email ? (
+		<a
+			key="email"
+			href={mailtoHref(member.email)}
+			data-slot="wa-email"
+			className="inline-flex items-center gap-1.5 text-primary hover:underline"
+		>
+			<Mail className="size-3.5" aria-hidden />
+			{member.email}
+		</a>
+	) : null;
+	// The component supplies its own icon, layout, `hover:underline` and
+	// colour, so this passes no styling at all.
+	const whatsappLink = member.phone ? (
+		<WhatsAppPhoneLink key="whatsapp" phone={member.phone} name={member.name} />
+	) : null;
+
+	function dialLink(method: "call" | "sms") {
+		const href =
+			method === "call" ? telHref(member.phone) : smsHref(member.phone);
+		if (!href) return null;
+		const Icon = method === "call" ? Phone : MessageSquare;
+		return (
+			<a
+				key={method}
+				href={href}
+				data-slot={method === "call" ? "tel-phone" : "sms-phone"}
+				className="inline-flex items-center gap-1.5 text-primary hover:underline"
+			>
+				<Icon className="size-3.5" aria-hidden />
+				{member.phone}
+				<span className="sr-only">
+					{method === "call"
+						? ` — call ${member.name}`
+						: ` — text ${member.name}`}
+				</span>
+			</a>
+		);
+	}
+
+	const preferredLink =
+		preferred === "email"
+			? emailLink
+			: preferred === "whatsapp"
+				? whatsappLink
+				: preferred === "call" || preferred === "sms"
+					? dialLink(preferred)
+					: null;
+
+	return (
+		<div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-[var(--sea-ink-soft)]">
+			{preferredLink ? (
+				<span
+					className="inline-flex items-center gap-1.5"
+					data-testid="preferred-contact"
+				>
+					{preferredLink}
+					<Badge variant="secondary">Preferred</Badge>
+				</span>
+			) : null}
+			{preferred !== "email" ? emailLink : null}
+			{preferred !== "whatsapp" ? whatsappLink : null}
+		</div>
+	);
+}
+
 /** Why an officer could not change a member's email (#907, ADR-0029). */
 function emailRefusedCopy(
 	reason: "bound" | "multi_club",
@@ -747,6 +820,8 @@ type ProfileMember = {
 	/** The stored column verbatim — what the edit dialog prefills, so a save
 	 *  round-trips the bytes instead of the country-code guess. */
 	phoneRaw: string | null;
+	/** The EFFECTIVE preference (#1093) — never the raw column. */
+	preferredContact?: ContactMethod | null;
 	officerPositions: OfficerPosition[];
 	userId: string | null;
 	status: "active" | "inactive";
@@ -816,6 +891,15 @@ function MemberActions({
 					// Only when the officer changed it (#906): the phone is the
 					// Person's, so a stale prefill must not overwrite another club's.
 					...phoneEditPayload(String(form.get("phone") ?? ""), member.phoneRaw),
+					// Only when changed, and never for a member who has signed in:
+					// the choice is then theirs, and the server refuses the whole
+					// edit if it is sent (#1093).
+					...(isLinkedAccount
+						? {}
+						: preferredContactEditPayload(
+								String(form.get("preferredContact") ?? ""),
+								member.preferredContact ?? null,
+							)),
 					officerPositions,
 				},
 			});
@@ -957,6 +1041,52 @@ function MemberActions({
 								type="tel"
 								defaultValue={member.phoneRaw ?? ""}
 							/>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="edit-preferred-contact">Preferred contact</Label>
+							{/* #1093. Once the member has signed in the choice is theirs: shown
+							    read-only and not sent. Otherwise the options are the methods the
+							    email and phone AS SAVED support; an edit that changes the phone and
+							    the preference together is judged by the server, against the row as
+							    that same save leaves it. */}
+							{isLinkedAccount ? (
+								<>
+									{/* No `name`: a read-only field must not be submitted. */}
+									<Input
+										id="edit-preferred-contact"
+										readOnly
+										value={
+											member.preferredContact
+												? CONTACT_METHOD_LABELS[member.preferredContact]
+												: "No preference"
+										}
+										aria-describedby="edit-preferred-contact-hint"
+									/>
+									<p
+										id="edit-preferred-contact-hint"
+										className="text-xs text-[var(--sea-ink-soft)]"
+									>
+										Set by the member.
+									</p>
+								</>
+							) : (
+								<select
+									id="edit-preferred-contact"
+									name="preferredContact"
+									defaultValue={member.preferredContact ?? ""}
+									className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+								>
+									<option value="">No preference</option>
+									{availableContactMethods({
+										email: member.email,
+										phone: member.phoneRaw,
+									}).map((m) => (
+										<option key={m} value={m}>
+											{CONTACT_METHOD_LABELS[m]}
+										</option>
+									))}
+								</select>
+							)}
 						</div>
 						<fieldset className="space-y-2">
 							<legend className="font-medium text-sm">Offices held</legend>

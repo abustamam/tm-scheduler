@@ -75,6 +75,9 @@ export const listClubMembers = createServerFn({ method: "GET" })
 			// Contact, same PII class and same gate as `email` above (#266): the
 			// club's own signed-in members, never a public caller.
 			phone: m.phone,
+			// How they want to be reached (#1093): already the EFFECTIVE value,
+			// resolved in `loadClubMembers`; the raw column never leaves it.
+			preferredContact: m.preferredContact,
 			officerPositions: officers.get(m.id) ?? [],
 			userId: m.userId,
 			invitedAt: m.invitedAt,
@@ -178,6 +181,8 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				// Binding the dialog to `phone` writes the country-code guess back over
 				// the stored digits on save — see `loadMemberProfile`.
 				phoneRaw: member.phoneRaw,
+				// The EFFECTIVE preference (#1093), resolved in `loadMemberProfile`.
+				preferredContact: member.preferredContact,
 				officerPositions,
 				userId: member.userId,
 				status: member.status,

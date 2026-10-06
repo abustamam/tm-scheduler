@@ -6,6 +6,9 @@ import {
 	Loader2,
 	Mail,
 	MailCheck,
+	MessageCircle,
+	MessageSquare,
+	Phone,
 	ShieldCheck,
 	Upload,
 	UserPlus,
@@ -35,6 +38,11 @@ import { type InviteState, inviteStateOf } from "#/lib/invite-state";
 import { formatTenure } from "#/lib/members";
 import { foreignSkipSummary } from "#/lib/members-import-plan";
 import { OFFICER_POSITION_LABELS, officerPositionLabel } from "#/lib/officers";
+import {
+	CONTACT_METHOD_LABELS,
+	type ContactMethod,
+	hasDialablePhone,
+} from "#/lib/preferred-contact";
 import { INVITE_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import {
 	buildImportPreview,
@@ -167,6 +175,11 @@ interface RosterRow {
 	 * click box on those rows.
 	 */
 	phone: string | null;
+	/**
+	 * How they want to be reached (#1093), already the EFFECTIVE value from the
+	 * server: null when there is no preference or its data has gone.
+	 */
+	preferredContact: ContactMethod | null;
 	/** Account-invite state: none / invited (link sent) / joined (linked) (#266). */
 	inviteState: InviteState;
 	/** Roster membership status (renewal): active vs unrenewed/inactive. */
@@ -183,17 +196,38 @@ interface RosterRow {
 	holdsOffice: boolean;
 }
 
+// `hasDialablePhone` — does this stored phone produce a CLICKABLE WhatsApp
+// link? — lives in `#/lib/preferred-contact` (#1093), because the same
+// has-a-digit test decides whether Call, SMS and WhatsApp are available as a
+// preferred contact method. One copy, so the two cannot drift.
+
+/** The roster's icon for each preferred contact method (#1093). */
+const CONTACT_METHOD_ICONS: Record<ContactMethod, typeof Mail> = {
+	email: Mail,
+	call: Phone,
+	sms: MessageSquare,
+	whatsapp: MessageCircle,
+};
+
 /**
- * Does this stored phone produce a CLICKABLE WhatsApp link?
- *
- * Mirrors `whatsappHref`'s own rule — it strips to digits and returns null when
- * there are none — so the roster cell's `pointer-events` can follow whether an
- * anchor actually renders. Deliberately not a truthiness check on the column:
- * `WhatsAppPhoneLink` renders a digit-less value ("ask at church") as plain
- * text, which is not clickable either.
+ * A small icon for a member's effective preferred contact method, or nothing.
+ * `role="img"` with an `aria-label` ("Prefers SMS"), so it is announced.
  */
-function hasDialablePhone(phone: string | null): boolean {
-	return /\d/.test(phone ?? "");
+function PreferredContactIcon({ method }: { method: ContactMethod | null }) {
+	if (!method) return null;
+	const Icon = CONTACT_METHOD_ICONS[method];
+	const label = `Prefers ${CONTACT_METHOD_LABELS[method]}`;
+	return (
+		<span
+			role="img"
+			aria-label={label}
+			title={label}
+			data-testid="preferred-contact-icon"
+			className="inline-flex shrink-0 text-[var(--sea-ink-soft)]"
+		>
+			<Icon className="size-3.5" aria-hidden />
+		</span>
+	);
 }
 
 /** "PathName · L2 3/5" (or "· Path complete"), compact for a one-line roster cell. */
@@ -263,6 +297,7 @@ function Roster() {
 			speeches: m.speeches,
 			email: m.email,
 			phone: m.phone,
+			preferredContact: m.preferredContact ?? null,
 			inviteState: inviteStateOf({ userId: m.userId, invitedAt: m.invitedAt }),
 			membershipStatus: m.status,
 			pathwayWithheld,
@@ -496,6 +531,7 @@ function Roster() {
 								<div className="min-w-0 leading-[1.25]">
 									<div className="flex items-center gap-2">
 										<span className="truncate text-sm font-bold">{m.name}</span>
+										<PreferredContactIcon method={m.preferredContact} />
 										{m.holdsOffice ? (
 											<Badge
 												variant="secondary"

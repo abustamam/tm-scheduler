@@ -129,6 +129,8 @@ describe.skipIf(!hasTestDb)("find_people (#773 D4)", () => {
 			"kind",
 			"name",
 			"officerPositions",
+			// A METHOD ("sms"), never the number or address (#1093).
+			"preferredContact",
 			"preferredName",
 		]);
 		expect(JSON.stringify(res)).not.toContain(

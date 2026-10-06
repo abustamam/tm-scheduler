@@ -209,6 +209,30 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 		}
 	}
 
+	/**
+	 * Insert a `people` row naming its columns, in raw SQL.
+	 *
+	 * Not `tx.insert(people)`: Drizzle emits EVERY column of the CURRENT schema
+	 * (as `default` when unset), and this database is migrated only to 0108. So
+	 * any `people` column added after 0108 failed every case here with "column
+	 * … does not exist", for a reason unrelated to 0076 (#1093 hit it with
+	 * `preferred_contact`). Naming the columns keeps the replay pinned to the
+	 * shape 0076 actually ran against.
+	 */
+	async function insertPerson(
+		tx: Tx,
+		values: { name: string; email: string | null; userId?: string | null },
+	): Promise<string> {
+		const result = await tx.execute<{ id: string }>(
+			sql`insert into people (name, email, user_id)
+			    values (${values.name}, ${values.email}, ${values.userId ?? null})
+			    returning id`,
+		);
+		const id = result.rows[0]?.id;
+		if (!id) throw new Error("person insert failed");
+		return id;
+	}
+
 	/** A Person plus a membership in the scratch club, created INSIDE `tx`. */
 	async function seedInTx(
 		tx: Tx,
@@ -228,18 +252,18 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 				emailVerified: true,
 			});
 		}
-		const [person] = await tx
-			.insert(people)
-			.values({ name: "Migration Person", email: opts.personEmail, userId })
-			.returning({ id: people.id });
-		if (!person) throw new Error("person insert failed");
+		const personId = await insertPerson(tx, {
+			name: "Migration Person",
+			email: opts.personEmail,
+			userId,
+		});
 		// Raw SQL: `members.email` is gone from the schema since #907, but it
 		// exists in this scratch database (migrated to 0108).
 		await tx.execute(
 			sql`insert into members (club_id, person_id, name, email)
-			    values (${clubId}, ${person.id}, 'Migration Person', ${opts.memberEmail})`,
+			    values (${clubId}, ${personId}, 'Migration Person', ${opts.memberEmail})`,
 		);
-		return person.id;
+		return personId;
 	}
 
 	async function personEmail(tx: Tx, personId: string) {
@@ -356,18 +380,14 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 		// one ahead of a conversion — and failing a production deploy over an
 		// orphan row would be a worse outcome than the one the abort protects.
 		await inRolledBackTx(async (tx) => {
-			const [person] = await tx
-				.insert(people)
-				.values({
-					name: "Club-less Person",
-					email: `orphan-${randomUUID()}@test.example`,
-				})
-				.returning({ id: people.id });
-			if (!person) throw new Error("person insert failed");
+			const personId = await insertPerson(tx, {
+				name: "Club-less Person",
+				email: `orphan-${randomUUID()}@test.example`,
+			});
 
 			await runMigration(tx);
 
-			expect(await personEmail(tx, person.id)).toBeNull();
+			expect(await personEmail(tx, personId)).toBeNull();
 		});
 	});
 

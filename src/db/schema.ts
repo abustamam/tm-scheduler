@@ -365,6 +365,17 @@ export const timingGrantedViaEnum = pgEnum("timing_granted_via", [
 // roster/season renewal state, and no dues action ever mutates it.
 export const duesStatusEnum = pgEnum("dues_status", ["paid", "waived"]);
 
+// How a member wants officers to reach them (#1093). Person-level, like the
+// email and phone it depends on. The values must stay in step with
+// `CONTACT_METHODS` in `#/lib/preferred-contact`, which is the client-safe copy
+// every reader and both writers use.
+export const contactMethodEnum = pgEnum("contact_method", [
+	"email",
+	"call",
+	"sms",
+	"whatsapp",
+]);
+
 // ---------------------------------------------------------------------------
 // Clubs & memberships
 // ---------------------------------------------------------------------------
@@ -739,6 +750,16 @@ export const people = pgTable(
 		// what the one club that holds them typed.
 		email: text("email"),
 		phone: text("phone"),
+		// How this person wants officers to reach them (#1093); null = no
+		// preference. A STORED value, not the answer: it can name a method whose
+		// data has since gone (the phone removed after they chose SMS), and is then
+		// kept, not cleared, so restoring the phone brings it back. So NEVER read
+		// it raw — every reader goes through `effectivePreferredContact`
+		// (`#/lib/preferred-contact`). Two writers, both refusing a method whose
+		// data is missing in the UPDATE's own WHERE: the member on /account
+		// (`contact-preference-logic.ts`), and a club admin's roster edit only
+		// while nobody has signed in as this Person (`applyMemberEdit`).
+		preferredContact: contactMethodEnum("preferred_contact"),
 		// First-ever Toastmasters join date — a person-level fact (identical across
 		// every club), moved off the per-club members row (ADR-0008).
 		originalJoinDate: timestamp("original_join_date"),

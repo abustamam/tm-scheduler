@@ -38,6 +38,17 @@ vi.mock("#/server/account-email", () => ({
 		canChange: true,
 	})),
 }));
+// The preferred-contact card (#1093) reads and writes through a server fn that
+// reaches `#/db`; mocked like the other sections'. Its own behaviour is
+// `preferred-contact-section.test.tsx`.
+vi.mock("#/server/contact-preference", () => ({
+	getMyContactPreference: vi.fn(async () => ({
+		linked: true,
+		available: ["email"],
+		preferredContact: null,
+	})),
+	setMyPreferredContact: vi.fn(),
+}));
 vi.mock("#/server/meetings", () => ({
 	listMyCommitments: vi.fn(),
 }));

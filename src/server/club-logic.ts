@@ -22,6 +22,10 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { members, people } from "#/db/schema";
 import { coalesceToE164 } from "#/lib/phone";
+import {
+	type ContactMethod,
+	effectivePreferredContact,
+} from "#/lib/preferred-contact";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 
 export interface ClubMemberRow {
@@ -39,6 +43,12 @@ export interface ClubMemberRow {
 	 * save — see `phoneRaw` on `loadMemberProfile`'s row.
 	 */
 	phone: string | null;
+	/**
+	 * How they want officers to reach them (#1093): the EFFECTIVE value, null
+	 * when they have no preference or chose a method whose data has since gone.
+	 * The raw column never leaves this module.
+	 */
+	preferredContact: ContactMethod | null;
 	userId: string | null;
 	invitedAt: Date | null;
 	status: "active" | "inactive";
@@ -64,6 +74,8 @@ export async function loadClubMembers(
 				email: people.email,
 				// A Person fact (#906): one number across every club that holds them.
 				phone: people.phone,
+				// Stored, not shown: resolved to the effective value below (#1093).
+				storedPreferredContact: people.preferredContact,
 				// "Signed-in account?" is now a Person-level fact (ADR-0008 Phase B):
 				// the auth link lives on people.user_id, not the membership row.
 				userId: people.userId,
@@ -82,7 +94,12 @@ export async function loadClubMembers(
 			.orderBy(asc(members.name)),
 		loadClubDefaultCountryCode(clubId),
 	]);
-	return rows.map((r) => ({ ...r, phone: coalesceToE164(r.phone, cc) }));
+	return rows.map(({ storedPreferredContact, ...r }) => ({
+		...r,
+		phone: coalesceToE164(r.phone, cc),
+		// Judged on the STORED phone, the same column the writers' WHERE reads.
+		preferredContact: effectivePreferredContact(storedPreferredContact, r),
+	}));
 }
 
 /**
@@ -135,6 +152,8 @@ export async function loadMemberProfile(clubId: string, memberId: string) {
 				email: people.email,
 				// A Person fact (#906): one number across every club that holds them.
 				phone: people.phone,
+				// Stored, not shown: resolved to the effective value below (#1093).
+				storedPreferredContact: people.preferredContact,
 				// "Signed-in account?" is now a Person-level fact (ADR-0008 Phase B):
 				// the auth link lives on people.user_id, not the membership row.
 				userId: people.userId,
@@ -154,9 +173,16 @@ export async function loadMemberProfile(clubId: string, memberId: string) {
 		loadClubDefaultCountryCode(clubId),
 	]);
 	if (!row) return undefined;
+	const { storedPreferredContact, ...profile } = row;
 	// `phone` is for DISPLAY (the WhatsApp link); `phoneRaw` is the column
 	// verbatim, for the edit form. See `ClubMemberRow.phoneRaw`'s comment — a
 	// dialog bound to `phone` writes the country-code GUESS back over the stored
 	// digits on any save, including a name-only one.
-	return { ...row, phone: coalesceToE164(row.phone, cc), phoneRaw: row.phone };
+	return {
+		...profile,
+		phone: coalesceToE164(row.phone, cc),
+		phoneRaw: row.phone,
+		// The EFFECTIVE preference (#1093), judged on the stored phone.
+		preferredContact: effectivePreferredContact(storedPreferredContact, row),
+	};
 }
