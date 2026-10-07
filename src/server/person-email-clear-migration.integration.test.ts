@@ -48,7 +48,7 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import * as schema from "#/db/schema";
-import { clubs, people, peopleEmailBackup, user } from "#/db/schema";
+import { people, peopleEmailBackup, user } from "#/db/schema";
 import { hasTestDb } from "#/test/db";
 
 const MIGRATION = resolve(process.cwd(), "drizzle/0076_bored_meltdown.sql");
@@ -169,9 +169,11 @@ describe.skipIf(!hasTestDb)("0076 clears un-verified people.email", () => {
 		await migrate(scratchDb, { migrationsFolder: upTo0108 });
 
 		clubId = randomUUID();
-		await scratchDb
-			.insert(clubs)
-			.values({ id: clubId, name: "0076 Club", slug: `club-0076-${clubId}` });
+		// Raw SQL, not the Drizzle insert: the schema names columns added after
+		// 0108 (e.g. `clubs.default_location`), which this scratch DB lacks.
+		await scratchDb.execute(
+			sql`insert into clubs (id, name, slug) values (${clubId}, ${"0076 Club"}, ${`club-0076-${clubId}`})`,
+		);
 	}, 60_000);
 
 	afterAll(async () => {
