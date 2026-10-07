@@ -7,11 +7,16 @@
 // ONE transaction, fetching the club's role definitions ONCE and reusing them.
 // No activity-log entry — single-create doesn't log creation, so batch keeps
 // parity.
-import { asc, eq } from "drizzle-orm";
+import { asc, desc, eq } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, meetings, roleDefinitions } from "#/db/schema";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
+import {
+	type MeetingFormDefaults,
+	meetingFormDefaults,
+} from "#/lib/meeting-form-defaults";
 import { insertMeetingWithSlots } from "./meeting-create-logic";
+import { getRecurrenceRule } from "./recurrence-rule-logic";
 
 export interface BatchCreateInput {
 	clubId: string;
@@ -137,4 +142,33 @@ export async function listClubMeetingDates(clubId: string): Promise<string[]> {
 			),
 		),
 	];
+}
+
+/**
+ * What the batch and single meeting forms open on (#1086): the standing
+ * schedule, else the latest meeting of ANY status, else fixed fallbacks. The
+ * precedence lives in `meetingFormDefaults`; this only loads its inputs.
+ * `now` is injectable so a test never reads the clock.
+ */
+export async function getMeetingFormDefaultsLogic(
+	clubId: string,
+	now: Date = new Date(),
+): Promise<MeetingFormDefaults> {
+	const club = await db.query.clubs.findFirst({ where: eq(clubs.id, clubId) });
+	if (!club) throw new Error("Club not found.");
+	const rule = await getRecurrenceRule(clubId);
+	const [latest] = await db
+		.select({ scheduledAt: meetings.scheduledAt })
+		.from(meetings)
+		.where(eq(meetings.clubId, clubId))
+		.orderBy(desc(meetings.scheduledAt))
+		.limit(1);
+	return meetingFormDefaults({
+		rule,
+		latestMeetingWall: latest
+			? utcToZonedWallTime(latest.scheduledAt, club.timezone)
+			: null,
+		clubDefaultLocation: club.defaultLocation,
+		today: utcToZonedWallTime(now, club.timezone).slice(0, 10),
+	});
 }

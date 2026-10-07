@@ -233,6 +233,7 @@ export async function plan(
 	const [clubRow] = await conn
 		.select({
 			defaultMeetingMinutes: clubs.defaultMeetingMinutes,
+			defaultLocation: clubs.defaultLocation,
 			// `enabled` is deliberately NOT read. A DISABLED rule still supplies a
 			// time and a weekday — see below — so selecting it would be a column
 			// nothing branches on.
@@ -340,7 +341,10 @@ export async function plan(
 				// An entry that says nothing about location inherits the club's
 				// standing one, matching `ensureScheduleToppedUp`; an entry that
 				// explicitly clears it gets null.
-				location: location === undefined ? (rule?.location ?? null) : location,
+				location:
+					location === undefined
+						? (rule?.location ?? clubRow.defaultLocation ?? null)
+						: location,
 				meta: agendaCreateMeta(entry),
 			});
 			continue;

@@ -393,6 +393,9 @@ export const clubs = pgTable(
 		district: text("district"),
 		mission: text("mission"),
 		meetingSchedule: text("meeting_schedule"),
+		// Where the club usually meets (#1086). Prefills the meeting forms and backs
+		// up a standing schedule with no location. NOT public: not on the public profile.
+		defaultLocation: text("default_location"),
 		// Default international dialing code (e.g. "+1") applied to member/guest phone
 		// numbers that lack one, so the tap-to-nudge WhatsApp link (#37) is a valid
 		// full E.164 number. Nullable — unset means numbers without a country code

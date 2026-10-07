@@ -325,5 +325,51 @@ describe.skipIf(!hasTestDb)(
 				await getPublicClubProfile("00000000-0000-4000-8000-000000000000"),
 			).toBeNull();
 		});
+
+		describe("default location (#1086)", () => {
+			it("round-trips trimmed, and blank stores NULL", async () => {
+				await applyClubProfileUpdate(
+					clubProfileSchema.parse({
+						clubId: seed.clubId,
+						defaultLocation: "  Room 4  ",
+					}),
+				);
+				expect((await getClubProfile(seed.clubId))?.defaultLocation).toBe(
+					"Room 4",
+				);
+				await applyClubProfileUpdate(
+					clubProfileSchema.parse({
+						clubId: seed.clubId,
+						defaultLocation: "  ",
+					}),
+				);
+				expect((await getClubProfile(seed.clubId))?.defaultLocation).toBeNull();
+			});
+
+			it("rejects 201 characters and accepts 200", () => {
+				const parse = (n: number) =>
+					clubProfileSchema.safeParse({
+						clubId: seed.clubId,
+						defaultLocation: "x".repeat(n),
+					});
+				expect(parse(200).success).toBe(true);
+				expect(parse(201).success).toBe(false);
+			});
+
+			it("the public profile still returns exactly three columns", async () => {
+				await applyClubProfileUpdate(
+					clubProfileSchema.parse({
+						clubId: seed.clubId,
+						defaultLocation: "Room 4",
+					}),
+				);
+				const pub = await getPublicClubProfile(seed.clubId);
+				expect(Object.keys(pub ?? {}).sort()).toEqual([
+					"district",
+					"meetingSchedule",
+					"mission",
+				]);
+			});
+		});
 	},
 );

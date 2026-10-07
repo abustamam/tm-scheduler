@@ -13,6 +13,7 @@ import {
 	INVALID_TIMEZONE_MESSAGE,
 	isSupportedClubTimezone,
 } from "#/lib/club-timezone";
+import { MEETING_LIMITS } from "#/lib/meeting-limits";
 import { DEFAULT_COUNTRY_CODE } from "#/lib/phone";
 import { refuseTableTopicsSeconds } from "#/lib/table-topics-limits";
 import { isReadableClub } from "./club-readable-logic";
@@ -147,6 +148,7 @@ export type ClubProfile = {
 	district: string | null;
 	mission: string | null;
 	meetingSchedule: string | null;
+	defaultLocation: string | null;
 	defaultCountryCode: string | null;
 };
 
@@ -160,6 +162,7 @@ export async function getClubProfile(
 			district: clubs.district,
 			mission: clubs.mission,
 			meetingSchedule: clubs.meetingSchedule,
+			defaultLocation: clubs.defaultLocation,
 			defaultCountryCode: clubs.defaultCountryCode,
 		})
 		.from(clubs)
@@ -241,6 +244,13 @@ export const clubProfileSchema = z.object({
 	district: emptyToNull,
 	mission: emptyToNull,
 	meetingSchedule: emptyToNull,
+	defaultLocation: z
+		.string()
+		.trim()
+		.max(MEETING_LIMITS.location)
+		.transform((s) => (s.length === 0 ? null : s))
+		.nullable()
+		.optional(),
 	defaultCountryCode: countryCode,
 });
 export type ClubProfileInput = z.infer<typeof clubProfileSchema>;
@@ -254,6 +264,7 @@ export async function applyClubProfileUpdate(input: ClubProfileInput) {
 			district: input.district ?? null,
 			mission: input.mission ?? null,
 			meetingSchedule: input.meetingSchedule ?? null,
+			defaultLocation: input.defaultLocation ?? null,
 			defaultCountryCode: input.defaultCountryCode ?? null,
 		})
 		.where(eq(clubs.id, input.clubId))

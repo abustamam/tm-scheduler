@@ -112,7 +112,7 @@ export async function ensureScheduleToppedUp(
 					clubId,
 					scheduledAt,
 					lengthMinutes: club.defaultMeetingMinutes,
-					location: rule.location,
+					location: rule.location ?? club.defaultLocation,
 				},
 				defs,
 			);
