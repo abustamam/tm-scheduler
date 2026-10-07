@@ -11,7 +11,18 @@
 // database constraint, so it is a check inside a transaction that first locks
 // the `clubs` row (`SELECT … FOR UPDATE`), which is what makes two concurrent
 // placements of one club serialize instead of both passing the check.
-import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	count,
+	desc,
+	eq,
+	inArray,
+	isNull,
+	ne,
+	or,
+	sql,
+} from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import {
@@ -274,15 +285,22 @@ function openTermState(
 }
 
 /**
- * Refuse unless `clubId` is in no area of `target`'s program year. Must run
- * AFTER `lockClubRow`, in the same transaction: the lock is what stops a second
- * placement of the same club from reading "not placed" while this one is
- * still inserting.
+ * Refuse unless `club` is in no area of `target`'s program year. Must run
+ * AFTER the club's row is locked (`lockClubRow`), in the same transaction: the
+ * lock is what stops a second placement of the same club from reading "not
+ * placed" while this one is still inserting.
+ *
+ * A club is placed by a row that LINKS it (`club_id`) or by a name-only row
+ * typed with its club number (`club_id` NULL): the second is the same club under
+ * another spelling, and left unseen it becomes a duplicate that can never be
+ * linked. `excludeAreaClubId` is the row being linked right now, which carries
+ * that number itself and must not refuse itself.
  */
 async function assertNotPlacedInYear(
 	tx: Tx,
-	clubId: string,
+	club: { id: string; clubNumber: string | null },
 	target: Pick<AreaPlace, "areaId" | "programYear">,
+	excludeAreaClubId?: string,
 ): Promise<void> {
 	const [placed] = await tx
 		.select({
@@ -295,8 +313,17 @@ async function assertNotPlacedInYear(
 		.innerJoin(divisions, eq(divisions.id, areas.divisionId))
 		.where(
 			and(
-				eq(areaClubs.clubId, clubId),
+				or(
+					eq(areaClubs.clubId, club.id),
+					club.clubNumber
+						? and(
+								isNull(areaClubs.clubId),
+								eq(areaClubs.clubNumber, club.clubNumber),
+							)
+						: undefined,
+				),
 				eq(divisions.programYear, target.programYear),
+				excludeAreaClubId ? ne(areaClubs.id, excludeAreaClubId) : undefined,
 			),
 		)
 		.orderBy(asc(areaClubs.createdAt), asc(areaClubs.id))
@@ -801,7 +828,7 @@ export async function addAreaClub(
 		const clubId = input.clubId;
 		return db.transaction(async (tx) => {
 			const club = await lockClubRow(tx, clubId);
-			await assertNotPlacedInYear(tx, club.id, target);
+			await assertNotPlacedInYear(tx, club, target);
 			const [row] = await tx
 				.insert(areaClubs)
 				.values({
@@ -823,7 +850,7 @@ export async function addAreaClub(
 			const club = await lockClubByNumber(tx, clubNumber, {
 				allowArchived: true,
 			});
-			if (club) await assertNotPlacedInYear(tx, club.id, target);
+			if (club) await assertNotPlacedInYear(tx, club, target);
 		}
 		const [row] = await tx
 			.insert(areaClubs)
@@ -864,7 +891,7 @@ export async function linkAreaClub(
 		if (locked.clubId) throw new Error(ALREADY_LINKED_MESSAGE);
 
 		const target = await loadAreaPlace(tx, locked.areaId);
-		await assertNotPlacedInYear(tx, club.id, target);
+		await assertNotPlacedInYear(tx, club, target, input.areaClubId);
 		await tx
 			.update(areaClubs)
 			.set({ clubId: club.id, name: club.name, updatedAt: sql`now()` })

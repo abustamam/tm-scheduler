@@ -537,6 +537,65 @@ describe.skipIf(!hasTestDb)("area hierarchy (#1116)", () => {
 		});
 	});
 
+	it("counts a name-only row as a placement of the club it names, in either order", async () => {
+		const districtId = await makeDistrict();
+		const a = await makeChain({ districtId, letter: "B", number: "2" });
+		const b = await makeChain({ districtId, letter: "C", number: "3" });
+
+		// Order 1: the name-only row first, then the club itself by id.
+		const first = uniqueClubNumber();
+		const firstClub = await makeClub({ clubNumber: first });
+		await addAreaClub({ areaId: a.areaId, name: "Typed", clubNumber: first });
+		await expect(
+			addAreaClub({ areaId: b.areaId, clubId: firstClub }),
+		).rejects.toThrow(alreadyPlacedMessage("B2", YEAR));
+		await expect(
+			addAreaClub({ areaId: a.areaId, clubId: firstClub }),
+		).rejects.toThrow(ALREADY_IN_THIS_AREA_MESSAGE);
+
+		// Order 2: a name-only row, then a second one with the same number elsewhere.
+		const second = uniqueClubNumber();
+		await makeClub({ clubNumber: second });
+		await addAreaClub({ areaId: a.areaId, name: "Typed", clubNumber: second });
+		await expect(
+			addAreaClub({
+				areaId: b.areaId,
+				name: "Typed again",
+				clubNumber: second,
+			}),
+		).rejects.toThrow(alreadyPlacedMessage("B2", YEAR));
+
+		// Nothing was written for either refusal.
+		const inB = await testDb
+			.select({ id: areaClubs.id })
+			.from(areaClubs)
+			.where(eq(areaClubs.areaId, b.areaId));
+		expect(inB).toHaveLength(0);
+	});
+
+	it("will not link a name-only row while another name-only row names the same club this year", async () => {
+		const districtId = await makeDistrict();
+		const a = await makeChain({ districtId, letter: "B", number: "2" });
+		const b = await makeChain({ districtId, letter: "C", number: "3" });
+		const clubNumber = uniqueClubNumber();
+		// Both rows were typed before the club existed, so each was accepted.
+		const rows = [];
+		for (const areaId of [a.areaId, b.areaId]) {
+			const [row] = await testDb
+				.insert(areaClubs)
+				.values({ areaId, name: "Typed before the club", clubNumber })
+				.returning({ id: areaClubs.id });
+			rows.push(row?.id as string);
+		}
+		await makeClub({ clubNumber });
+
+		// Linking A's row would make B's row an unlinkable duplicate of it.
+		await expect(
+			linkAreaClub({ areaClubId: rows[0] as string }),
+		).rejects.toThrow(alreadyPlacedMessage("C3", YEAR));
+		expect((await clubRow(rows[0] as string))?.clubId).toBeNull();
+	});
+
 	it("makes a name-only row wait for a concurrent placement of the club it names", async () => {
 		const districtId = await makeDistrict();
 		const first = await makeChain({ districtId, letter: "B", number: "2" });
