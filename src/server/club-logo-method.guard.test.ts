@@ -21,7 +21,7 @@
 // would otherwise be a false PASS — and this file's own header quotes neither
 // spelling for exactly that reason.
 import { readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
@@ -29,6 +29,17 @@ import { readSource } from "#/test/guard-source";
 const SELF = fileURLToPath(import.meta.url);
 const ROOT = resolve(SELF, "../../..");
 const MODULE = resolve(ROOT, "src/server/club-logo.ts");
+
+/**
+ * Read-shaped names that are declared POST on purpose, as `<module>: <fn>`,
+ * each with the reason. A name belongs here only if its declaration says so
+ * too, and the stale-waiver case below fails a key that no longer names a real
+ * POST declaration, so a waiver cannot outlive the fn it excuses.
+ */
+const POST_WAIVERS: Record<string, string> = {
+	"areas.ts: findUserForDirector":
+		"a GET would put a third party's email in the URL",
+};
 
 const declaration = (name: string, method: string) =>
 	new RegExp(
@@ -65,7 +76,8 @@ describe("club-logo server fn methods (#504)", () => {
 		const offenders: string[] = [];
 		for (const file of serverModules()) {
 			for (const m of readSource(file).matchAll(READ_SHAPED)) {
-				offenders.push(`${file.slice(ROOT.length + 1)}: ${m[1]}`);
+				const key = `${basename(file)}: ${m[1]}`;
+				if (!(key in POST_WAIVERS)) offenders.push(key);
 			}
 		}
 		expect(
@@ -74,8 +86,25 @@ describe("club-logo server fn methods (#504)", () => {
 				`${JSON.stringify(offenders)}. A fn that only reads should be a GET, ` +
 				"which is the convention #504 brought getClubLogoMeta into line with. " +
 				"If one genuinely needs POST (an oversized payload, say), say so at " +
-				"its declaration and add it to this test's waiver list.",
+				"its declaration and add it to POST_WAIVERS in this test.",
 		).toEqual([]);
+	});
+
+	it("every POST waiver still names a real POST declaration, with a reason", () => {
+		const waivers = Object.entries(POST_WAIVERS);
+		// Vacuity floor: an emptied map would make the loop below check nothing.
+		expect(waivers.length).toBeGreaterThan(0);
+		for (const [key, reason] of waivers) {
+			const [file, fn] = key.split(": ") as [string, string];
+			expect(reason.trim(), `${key} has no reason`).not.toBe("");
+			expect(
+				declaration(fn, "POST").test(
+					readSource(resolve(ROOT, "src/server", file)),
+				),
+				`${key} is waived as a read-shaped POST, but ${file} no longer ` +
+					`declares ${fn} as a POST. Delete the waiver or re-point it.`,
+			).toBe(true);
+		}
 	});
 });
 

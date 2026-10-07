@@ -809,6 +809,54 @@ the nouns in `src/db/schema.ts`.
   hand-toggled 0/1 — nothing here writes `dcp_goal_progress`
   (`officer-training-wiring.guard.test.ts` enforces that), and the President applies the
   suggestion explicitly with a button that names the value it will write.
+- **District** (`districts`) — a Toastmasters International district, identified by its TI number
+  as text (`"39"`). One row for ever: it persists across program years while its divisions are
+  redrawn. Set up by the superadmin console (#1116, part of #1115); nothing reads it for anyone
+  else until #1118 and #1119.
+- **Division** (`divisions`) — a district's division for ONE program year: unique on
+  `(district_id, program_year, letter)`. **The program year lives only here.** Areas, area clubs,
+  terms and visits inherit it through the chain, so there is no second `program_year` column to
+  disagree with this one. A division may be created for the current program year or the next
+  (so a June realignment can be staffed before July 1), and never for a past one.
+- **Area** (`areas`) — an area within a division, unique on `(division_id, number)`. Its label is
+  the division letter followed by the area number, `"C3"` (`areaLabel`,
+  `src/lib/area-health-fields.ts`). **The chain is immutable:** no fn moves an area to another
+  division, or a division to another district or year. July realignment is NEW rows for the new
+  year; last year's areas keep their clubs, terms and visits as they were. A letter or number typo
+  is fixed in place (`renameDivision`, `renameArea`); districts, divisions and areas are never
+  deleted in v1 (every parent link is RESTRICT).
+- **Area club** (`area_clubs`) — a club listed in an area: either a GavelUp club (`club_id`,
+  with `name` and `club_number` copied from it) or a **name-only** row for a club that is not on
+  GavelUp. `club_id` is ON DELETE SET NULL, so permanently deleting a club (#914) leaves the row
+  as a name-only one and keeps its visits. A name-only row with a club number is offered a link
+  to the GavelUp club carrying that number. **One area per club per program year:** placing or
+  linking a club that already sits in another area of a division with the same `program_year` is
+  refused, in one transaction that first locks the `clubs` row so two concurrent placements
+  serialize; a name-only row typed with a GavelUp club's number takes the same check. The same
+  club in areas of two different years is fine. **An archived club cannot be placed.**
+- **Area Director (term)** (`area_directors`) — the person who holds an area's office for a span
+  of time, the way `officer_terms` records an office. `ended_at IS NULL` means the term is
+  **open**; the database allows one open term per area. A term is **current** only while it is
+  open AND its area's division is in the current program year, which is asked in one place
+  (`src/server/area-terms-logic.ts`: `isCurrentTerm`, `loadCurrentDirector`,
+  `loadCurrentAreasForUser`) so the notice and the access cannot disagree. A past year's open
+  term is never ended and needs no ending: the year check retires it on July 1, and the console
+  shows it as "ended with 2026–27". So **a past year's area takes no new Area Director**; an
+  area staffed ahead of July 1 for the next year shows its director as upcoming. `user_id` is NO ACTION, not CASCADE, deliberately:
+  `deleteClubPermanently` keeps an account only when a NO ACTION key makes its delete fail, so
+  permanently deleting a director's only club must not delete the director. `display_name` is
+  typed by the superadmin at assignment, because `user.name` is `""` for a magic-link account and
+  a director with no club has no roster name; the Area Director is found by an exact,
+  case-insensitive match on a VERIFIED email.
+- **Club visit** (`club_visits`) — one Area Director visit to an area club, `round` 1 or 2 (two a
+  year), unique on `(area_club_id, round)`. `area_club_id` is RESTRICT: an area club with a visit
+  cannot be removed, by the console or by the database. The visits UI is #1120.
+- **Program-year rule (area hierarchy)** — the hierarchy has ONE program year per chain, stored as
+  the starting calendar year on `divisions.program_year` (as `dcp_scoreboards` does) and read as
+  `currentProgramYear()` (`src/lib/dcp.ts`) on the SERVER, never from a browser clock. Three
+  things hang on it, and only on it: a division may be created for this year or the next; a club
+  sits in one area per year; a term is current only in this year's division. Nothing is copied
+  forward on July 1 and nothing needs a scheduled job: the year check alone changes what is current.
 
 **Meeting template** — a named bundle of a role set plus a flat run-of-show, letting a meeting
 run a shape other than the club's standard night (today: **Speech Contest**).

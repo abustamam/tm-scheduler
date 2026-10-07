@@ -13,6 +13,7 @@ import {
 	pgTable,
 	primaryKey,
 	real,
+	smallint,
 	text,
 	timestamp,
 	uniqueIndex,
@@ -3497,6 +3498,194 @@ export const accessRequestAlerts = pgTable("access_request_alerts", {
 	lastAttemptedAt: timestamp("last_attempted_at", { withTimezone: true }),
 	lastError: text("last_error"),
 });
+
+// ---------------------------------------------------------------------------
+// Area hierarchy (#1116, part of #1115) — district → division → area, the
+// clubs placed in each area, the Area Director who visits them and the visits
+// they record. Set up by the superadmin console; nothing reads these tables for
+// anyone else until #1118 and #1119.
+//
+// The PROGRAM YEAR lives on `divisions` and nowhere below it: areas, area
+// clubs, director terms and visits inherit it through the chain. A district
+// keeps its number across years; its divisions are redrawn each year, so a
+// division is (district, year, letter) and an area is (division, number). The
+// year is identified by its STARTING calendar year, as `dcp_scoreboards` does
+// (`programYear` 2026 = Jul 1 2026 – Jun 30 2027, `src/lib/dcp.ts`).
+//
+// Every parent link is RESTRICT: no district, division or area is ever deleted
+// in v1, and the database refuses it rather than cascading away a year of
+// history. The two links that are not RESTRICT say why on the column.
+// ---------------------------------------------------------------------------
+
+export const districts = pgTable("districts", {
+	id: uuid("id").defaultRandom().primaryKey(),
+	// Toastmasters International's district number, as text ("39", "F"). Unique,
+	// and the same row across every program year.
+	number: text("number").notNull().unique(),
+	createdAt: timestamp("created_at").defaultNow().notNull(),
+	updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const divisions = pgTable(
+	"divisions",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		districtId: uuid("district_id")
+			.notNull()
+			.references(() => districts.id, { onDelete: "restrict" }),
+		// Starting calendar year of the program year this division exists in. The
+		// only place a program year is stored for the hierarchy.
+		programYear: integer("program_year").notNull(),
+		// The division letter ("B"), as text so a district that numbers its
+		// divisions is not shut out.
+		letter: text("letter").notNull(),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		uniqueIndex("divisions_district_year_letter_unique").on(
+			t.districtId,
+			t.programYear,
+			t.letter,
+		),
+	],
+);
+
+export const areas = pgTable(
+	"areas",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		divisionId: uuid("division_id")
+			.notNull()
+			.references(() => divisions.id, { onDelete: "restrict" }),
+		// The area number within its division ("3"); text, like `districts.number`.
+		// Division letter + area number is the label a member sees ("C3").
+		number: text("number").notNull(),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		uniqueIndex("areas_division_number_unique").on(t.divisionId, t.number),
+	],
+);
+
+export const areaClubs = pgTable(
+	"area_clubs",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		areaId: uuid("area_id")
+			.notNull()
+			.references(() => areas.id, { onDelete: "restrict" }),
+		// The GavelUp club, when there is one. NULLABLE and ON DELETE SET NULL on
+		// purpose: an area lists clubs that never joined GavelUp (a name-only row),
+		// and a club that is permanently deleted (#914) must leave its row and its
+		// visits behind rather than cascade them away — the Area Director's record
+		// of having visited it outlives the club's account.
+		clubId: uuid("club_id").references(() => clubs.id, {
+			onDelete: "set null",
+		}),
+		// Copied from `clubs.name` when the row is linked to a club, so the row
+		// still names the club after that club is deleted. Not kept in sync.
+		name: text("name").notNull(),
+		// The club's Toastmasters number, when known. Offered as the key to link a
+		// name-only row to the GavelUp club carrying the same number.
+		clubNumber: text("club_number"),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		// A club sits in an area once. Partial because a name-only row has no club
+		// and any number of them may share an area. (One area per club per PROGRAM
+		// YEAR is a cross-table rule the database cannot state here: it is checked
+		// in `areas-logic.ts` under a lock on the `clubs` row.)
+		uniqueIndex("area_clubs_area_club_unique")
+			.on(t.areaId, t.clubId)
+			.where(sql`${t.clubId} is not null`),
+		// The placement check and the SET NULL on a club delete both look up by club.
+		index("area_clubs_club_idx").on(t.clubId),
+	],
+);
+
+export const areaDirectors = pgTable(
+	"area_directors",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		areaId: uuid("area_id")
+			.notNull()
+			.references(() => areas.id, { onDelete: "restrict" }),
+		// The signed-in account that holds the office. NO ACTION, NOT cascade, and
+		// that is load-bearing: the one path that deletes `user` rows is
+		// `deleteClubPermanently` (#914), which deletes the account of every Person
+		// left with no club and keeps one only when a NO ACTION foreign key makes
+		// the delete fail (`deleteUserUnlessReferenced`). With CASCADE, deleting a
+		// director's only club would delete the director's account and the term with
+		// it. NO ACTION keeps both, with no change to #914's code.
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id),
+		// The name the club's admins are shown, TYPED by the superadmin when the
+		// term is opened. `user.name` is "" for a magic-link account, and a director
+		// who belongs to no club has no roster name to fall back on.
+		displayName: text("display_name").notNull(),
+		startedAt: timestamp("started_at").defaultNow().notNull(),
+		// NULL = an OPEN term. A non-null value is retained history — the row is
+		// never deleted on removal, as with `officer_terms`. Open is not the same as
+		// CURRENT: a term is current only while it is open AND its area's division
+		// is in the current program year (`area-terms-logic.ts`), so a past year's
+		// open term needs no ending; the year check retires it on July 1.
+		endedAt: timestamp("ended_at"),
+		// Audit: which superadmin opened and closed the term. SET NULL so deleting
+		// that account leaves the term.
+		assignedBy: text("assigned_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		endedBy: text("ended_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		// One OPEN term per area. The database is the arbiter: two concurrent
+		// assignments cannot both open a term.
+		uniqueIndex("area_directors_open_unique")
+			.on(t.areaId)
+			.where(sql`${t.endedAt} is null`),
+		// "Which areas does this user direct": the auth-context lookup on every
+		// page (#1119). Partial, because only an open term can be current.
+		index("area_directors_user_open_idx")
+			.on(t.userId)
+			.where(sql`${t.endedAt} is null`),
+		check(
+			"area_directors_term_order_check",
+			sql`${t.endedAt} is null or ${t.endedAt} >= ${t.startedAt}`,
+		),
+	],
+);
+
+export const clubVisits = pgTable(
+	"club_visits",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		// RESTRICT: an area club with a visit recorded cannot be deleted, in the
+		// database as well as in the console.
+		areaClubId: uuid("area_club_id")
+			.notNull()
+			.references(() => areaClubs.id, { onDelete: "restrict" }),
+		// The Toastmasters visit round: two a year, so 1 or 2.
+		round: smallint("round").notNull(),
+		visitedOn: date("visited_on", { mode: "string" }).notNull(),
+		recordedBy: text("recorded_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		uniqueIndex("club_visits_area_club_round_unique").on(t.areaClubId, t.round),
+		check("club_visits_round_check", sql`${t.round} in (1, 2)`),
+	],
+);
 
 // ---------------------------------------------------------------------------
 // Relations

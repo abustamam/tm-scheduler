@@ -64,8 +64,10 @@ import { Route as AuthedAdminClubSettingsRouteImport } from './routes/_authed/ad
 import { Route as AuthedAdminCharterRouteImport } from './routes/_authed/admin/charter'
 import { Route as AuthedAdminAgendasRouteImport } from './routes/_authed/admin/agendas'
 import { Route as AuthedAdminActionItemsRouteImport } from './routes/_authed/admin/action-items'
+import { Route as AuthedSuperadminAreasIndexRouteImport } from './routes/_authed/superadmin/areas.index'
 import { Route as ClubClubIdMeetingMeetingIdRouteImport } from './routes/club.$clubId.meeting.$meetingId'
 import { Route as ApiClubClubIdLogoRouteImport } from './routes/api/club.$clubId.logo'
+import { Route as AuthedSuperadminAreasAreaIdRouteImport } from './routes/_authed/superadmin/areas.$areaId'
 import { Route as AuthedAdminMeetingsNewRouteImport } from './routes/_authed/admin/meetings.new'
 import { Route as AuthedAdminMeetingsBatchRouteImport } from './routes/_authed/admin/meetings.batch'
 import { Route as ClubClubIdMeetingMeetingIdWordRouteImport } from './routes/club.$clubId_.meeting.$meetingId.word'
@@ -361,6 +363,12 @@ const AuthedAdminActionItemsRoute = AuthedAdminActionItemsRouteImport.update({
   path: '/admin/action-items',
   getParentRoute: () => AuthedRoute,
 } as any)
+const AuthedSuperadminAreasIndexRoute =
+  AuthedSuperadminAreasIndexRouteImport.update({
+    id: '/areas/',
+    path: '/areas/',
+    getParentRoute: () => AuthedSuperadminRoute,
+  } as any)
 const ClubClubIdMeetingMeetingIdRoute =
   ClubClubIdMeetingMeetingIdRouteImport.update({
     id: '/meeting/$meetingId',
@@ -372,6 +380,12 @@ const ApiClubClubIdLogoRoute = ApiClubClubIdLogoRouteImport.update({
   path: '/api/club/$clubId/logo',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthedSuperadminAreasAreaIdRoute =
+  AuthedSuperadminAreasAreaIdRouteImport.update({
+    id: '/areas/$areaId',
+    path: '/areas/$areaId',
+    getParentRoute: () => AuthedSuperadminRoute,
+  } as any)
 const AuthedAdminMeetingsNewRoute = AuthedAdminMeetingsNewRouteImport.update({
   id: '/admin/meetings/new',
   path: '/admin/meetings/new',
@@ -534,8 +548,10 @@ export interface FileRoutesByFullPath {
   '/club/$clubId/': typeof ClubClubIdIndexRoute
   '/admin/meetings/batch': typeof AuthedAdminMeetingsBatchRoute
   '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
+  '/superadmin/areas/$areaId': typeof AuthedSuperadminAreasAreaIdRoute
   '/api/club/$clubId/logo': typeof ApiClubClubIdLogoRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
+  '/superadmin/areas/': typeof AuthedSuperadminAreasIndexRoute
   '/api/clubs/$clubId/export/zip': typeof ApiClubsClubIdExportZipRoute
   '/api/meetings/$id/minutes/pdf': typeof ApiMeetingsIdMinutesPdfRoute
   '/api/meetings/$id/packet/pdf': typeof ApiMeetingsIdPacketPdfRoute
@@ -608,8 +624,10 @@ export interface FileRoutesByTo {
   '/club/$clubId': typeof ClubClubIdIndexRoute
   '/admin/meetings/batch': typeof AuthedAdminMeetingsBatchRoute
   '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
+  '/superadmin/areas/$areaId': typeof AuthedSuperadminAreasAreaIdRoute
   '/api/club/$clubId/logo': typeof ApiClubClubIdLogoRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
+  '/superadmin/areas': typeof AuthedSuperadminAreasIndexRoute
   '/api/clubs/$clubId/export/zip': typeof ApiClubsClubIdExportZipRoute
   '/api/meetings/$id/minutes/pdf': typeof ApiMeetingsIdMinutesPdfRoute
   '/api/meetings/$id/packet/pdf': typeof ApiMeetingsIdPacketPdfRoute
@@ -686,8 +704,10 @@ export interface FileRoutesById {
   '/club/$clubId/': typeof ClubClubIdIndexRoute
   '/_authed/admin/meetings/batch': typeof AuthedAdminMeetingsBatchRoute
   '/_authed/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
+  '/_authed/superadmin/areas/$areaId': typeof AuthedSuperadminAreasAreaIdRoute
   '/api/club/$clubId/logo': typeof ApiClubClubIdLogoRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
+  '/_authed/superadmin/areas/': typeof AuthedSuperadminAreasIndexRoute
   '/api/clubs/$clubId/export/zip': typeof ApiClubsClubIdExportZipRoute
   '/api/meetings/$id/minutes/pdf': typeof ApiMeetingsIdMinutesPdfRoute
   '/api/meetings/$id/packet/pdf': typeof ApiMeetingsIdPacketPdfRoute
@@ -764,8 +784,10 @@ export interface FileRouteTypes {
     | '/club/$clubId/'
     | '/admin/meetings/batch'
     | '/admin/meetings/new'
+    | '/superadmin/areas/$areaId'
     | '/api/club/$clubId/logo'
     | '/club/$clubId/meeting/$meetingId'
+    | '/superadmin/areas/'
     | '/api/clubs/$clubId/export/zip'
     | '/api/meetings/$id/minutes/pdf'
     | '/api/meetings/$id/packet/pdf'
@@ -838,8 +860,10 @@ export interface FileRouteTypes {
     | '/club/$clubId'
     | '/admin/meetings/batch'
     | '/admin/meetings/new'
+    | '/superadmin/areas/$areaId'
     | '/api/club/$clubId/logo'
     | '/club/$clubId/meeting/$meetingId'
+    | '/superadmin/areas'
     | '/api/clubs/$clubId/export/zip'
     | '/api/meetings/$id/minutes/pdf'
     | '/api/meetings/$id/packet/pdf'
@@ -915,8 +939,10 @@ export interface FileRouteTypes {
     | '/club/$clubId/'
     | '/_authed/admin/meetings/batch'
     | '/_authed/admin/meetings/new'
+    | '/_authed/superadmin/areas/$areaId'
     | '/api/club/$clubId/logo'
     | '/club/$clubId/meeting/$meetingId'
+    | '/_authed/superadmin/areas/'
     | '/api/clubs/$clubId/export/zip'
     | '/api/meetings/$id/minutes/pdf'
     | '/api/meetings/$id/packet/pdf'
@@ -1360,6 +1386,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAdminActionItemsRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/superadmin/areas/': {
+      id: '/_authed/superadmin/areas/'
+      path: '/areas'
+      fullPath: '/superadmin/areas/'
+      preLoaderRoute: typeof AuthedSuperadminAreasIndexRouteImport
+      parentRoute: typeof AuthedSuperadminRoute
+    }
     '/club/$clubId/meeting/$meetingId': {
       id: '/club/$clubId/meeting/$meetingId'
       path: '/meeting/$meetingId'
@@ -1373,6 +1406,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/club/$clubId/logo'
       preLoaderRoute: typeof ApiClubClubIdLogoRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_authed/superadmin/areas/$areaId': {
+      id: '/_authed/superadmin/areas/$areaId'
+      path: '/areas/$areaId'
+      fullPath: '/superadmin/areas/$areaId'
+      preLoaderRoute: typeof AuthedSuperadminAreasAreaIdRouteImport
+      parentRoute: typeof AuthedSuperadminRoute
     }
     '/_authed/admin/meetings/new': {
       id: '/_authed/admin/meetings/new'
@@ -1507,12 +1547,16 @@ interface AuthedSuperadminRouteChildren {
   AuthedSuperadminClubIdRoute: typeof AuthedSuperadminClubIdRoute
   AuthedSuperadminDuplicatePeopleRoute: typeof AuthedSuperadminDuplicatePeopleRoute
   AuthedSuperadminIndexRoute: typeof AuthedSuperadminIndexRoute
+  AuthedSuperadminAreasAreaIdRoute: typeof AuthedSuperadminAreasAreaIdRoute
+  AuthedSuperadminAreasIndexRoute: typeof AuthedSuperadminAreasIndexRoute
 }
 
 const AuthedSuperadminRouteChildren: AuthedSuperadminRouteChildren = {
   AuthedSuperadminClubIdRoute: AuthedSuperadminClubIdRoute,
   AuthedSuperadminDuplicatePeopleRoute: AuthedSuperadminDuplicatePeopleRoute,
   AuthedSuperadminIndexRoute: AuthedSuperadminIndexRoute,
+  AuthedSuperadminAreasAreaIdRoute: AuthedSuperadminAreasAreaIdRoute,
+  AuthedSuperadminAreasIndexRoute: AuthedSuperadminAreasIndexRoute,
 }
 
 const AuthedSuperadminRouteWithChildren =

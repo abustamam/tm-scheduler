@@ -62,12 +62,20 @@ function SuperadminConsole() {
 			<div className="space-y-3">
 				<div className="flex items-center justify-between gap-2">
 					<h2 className="text-sm font-bold">All clubs ({clubs.length})</h2>
-					<Link
-						to="/superadmin/duplicate-people"
-						className="text-sm text-[var(--palm)] underline-offset-2 hover:underline"
-					>
-						Duplicate people →
-					</Link>
+					<div className="flex items-center gap-4">
+						<Link
+							to="/superadmin/areas"
+							className="text-sm text-[var(--palm)] underline-offset-2 hover:underline"
+						>
+							Areas →
+						</Link>
+						<Link
+							to="/superadmin/duplicate-people"
+							className="text-sm text-[var(--palm)] underline-offset-2 hover:underline"
+						>
+							Duplicate people →
+						</Link>
+					</div>
 				</div>
 				{clubs.length === 0 ? (
 					<p className="text-sm text-muted-foreground">No clubs yet.</p>
