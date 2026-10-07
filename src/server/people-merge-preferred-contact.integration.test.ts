@@ -45,6 +45,26 @@ describe("mergedPreferredContact (#1093, #1110)", () => {
 		).toEqual({ preferredContact: "email", contactPreferenceBy: null });
 	});
 
+	it("pairs the value with the supplier's own source, never the other row's", () => {
+		// Keeper linked with nothing chosen, absorbed officer-set sms: the linked
+		// row supplies (null, null); "officer" must not leak onto that null.
+		expect(
+			mergedPreferredContact(side("u", null), side(null, "sms", "officer")),
+		).toEqual({ preferredContact: null, contactPreferenceBy: null });
+		expect(
+			mergedPreferredContact(side(null, "sms", "officer"), side("u", null)),
+		).toEqual({ preferredContact: null, contactPreferenceBy: null });
+	});
+
+	it("with both values null, takes the supplier's stamp", () => {
+		expect(
+			mergedPreferredContact(side(null, null), side(null, null, "officer")),
+		).toEqual({ preferredContact: null, contactPreferenceBy: "officer" });
+		expect(
+			mergedPreferredContact(side(null, null, "officer"), side(null, null)),
+		).toEqual({ preferredContact: null, contactPreferenceBy: null });
+	});
+
 	it("a member-set side wins over an officer-set one, whichever is keeper or linked", () => {
 		const member = side(null, "sms", "member");
 		const officer = side("u", "email", "officer");

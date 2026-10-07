@@ -74,9 +74,8 @@ export function checkMergeBlocks(
  * A side whose member chose it wins over an officer-set or unset side,
  * whichever row is linked or the keeper, even a deliberate "No preference".
  * Otherwise (neither or both member-set) the earlier order decides: the linked
- * row's value, else keeper ?? absorbed, carrying the source of whichever side
- * supplied the value; if neither supplied one, the keeper's source ?? the
- * absorbed's. The STORED value moves as-is; readers resolve it
+ * row's value, else keeper ?? absorbed, carrying that SUPPLIER's own source
+ * (never the other row's stamp). The STORED value moves as-is; readers resolve it
  * (`effectivePreferredContact`).
  */
 export function mergedPreferredContact(
@@ -106,15 +105,12 @@ export function mergedPreferredContact(
 	else if (keeper.userId && !absorbed.userId) supplier = keeper;
 	else if (keeper.preferredContact === null) supplier = absorbed;
 	const preferredContact = supplier.preferredContact;
-	if (keeperMember && absorbedMember) {
-		return { preferredContact, contactPreferenceBy: "member" };
-	}
+	// The source is the SUPPLIER's own stamp, never the other row's: pairing a
+	// value from one row with the other's stamp would claim an officer set a
+	// null nobody chose. (Both member-set: the supplier's stamp is 'member'.)
 	return {
 		preferredContact,
-		contactPreferenceBy:
-			preferredContact !== null
-				? supplier.contactPreferenceBy
-				: (keeper.contactPreferenceBy ?? absorbed.contactPreferenceBy),
+		contactPreferenceBy: supplier.contactPreferenceBy,
 	};
 }
 
@@ -239,10 +235,9 @@ export async function mergePeople(
 				customerId: keeper.customerId ?? absorbed.customerId,
 				basecampUserId: keeper.basecampUserId ?? absorbed.basecampUserId,
 				userId: keeper.userId ?? absorbed.userId,
-				// How they want to be reached (#1093). The member who signed in owns
-				// it (an admin can no longer set it on a linked Person), so the row
-				// carrying the account wins outright, even a deliberate "no
-				// preference". With neither or both linked, keeper wins as above.
+				// How they want to be reached (#1093, #1110). A side the MEMBER chose
+				// wins outright, even a deliberate "no preference"; otherwise the
+				// linked row, then keeper ?? absorbed, with the supplier's own source.
 				...mergedPreferredContact(keeper, absorbed),
 				originalJoinDate: earliestDate(
 					keeper.originalJoinDate,

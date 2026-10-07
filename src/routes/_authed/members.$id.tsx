@@ -823,8 +823,8 @@ type ProfileMember = {
 	preferredContact: ContactMethod | null;
 	/**
 	 * Why THIS club may not change the preference, or null when it may (#1093
-	 * review): `bound` once the member has signed in, `multi_club` while another
-	 * club holds them too — the email's rule. Drives the read-only field.
+	 * review, #1110): `member_set` once the member chose it themselves, `multi_club`
+	 * while another club holds them too. Drives the read-only field.
 	 */
 	contactPreferenceRefusal: "member_set" | "multi_club" | null;
 	officerPositions: OfficerPosition[];

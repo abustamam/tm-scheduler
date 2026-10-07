@@ -6,8 +6,8 @@
  */
 import { randomUUID } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
-import { eq, inArray, sql } from "drizzle-orm";
-import { afterEach, describe, expect, it } from "vitest";
+import { eq, sql } from "drizzle-orm";
+import { describe, expect, it } from "vitest";
 import { people, user } from "#/db/schema";
 import { hasTestDb, testDb } from "#/test/db";
 
@@ -23,66 +23,54 @@ function backfillStatement(): string {
 	return found;
 }
 
+class Rollback extends Error {}
+
 describe.skipIf(!hasTestDb)("contact_preference_by backfill (#1110)", () => {
-	const personIds: string[] = [];
-	const userIds: string[] = [];
-
-	afterEach(async () => {
-		if (personIds.length)
-			await testDb.delete(people).where(inArray(people.id, personIds));
-		if (userIds.length)
-			await testDb.delete(user).where(inArray(user.id, userIds));
-		personIds.length = 0;
-		userIds.length = 0;
-	});
-
+	// Everything runs in ONE transaction that is rolled back, so the verbatim,
+	// unscoped UPDATE never changes a row another suite is using.
 	it("maps value+user to member, value+no user to officer, no value to NULL", async () => {
-		const userId = randomUUID();
-		await testDb.insert(user).values({
-			id: userId,
-			name: "Linked",
-			email: `bf-${userId}@test.example`,
-			emailVerified: true,
-		});
-		userIds.push(userId);
-		const mk = async (values: Partial<typeof people.$inferInsert>) => {
-			const [row] = await testDb
-				.insert(people)
-				.values({ name: "BF", ...values })
-				.returning({ id: people.id });
-			if (!row) throw new Error("insert failed");
-			personIds.push(row.id);
-			return row.id;
-		};
-		const withUser = await mk({
-			userId,
-			phone: "+14155552671",
-			preferredContact: "sms",
-		});
-		const noUser = await mk({
-			phone: "+14155552672",
-			preferredContact: "call",
-		});
-		const noValue = await mk({ phone: "+14155552673" });
-		// Rows seeded as the pre-migration state: provenance NULL.
-		await testDb
-			.update(people)
-			.set({ contactPreferenceBy: null })
-			.where(inArray(people.id, personIds));
+		await expect(
+			testDb.transaction(async (tx) => {
+				const userId = randomUUID();
+				await tx.insert(user).values({
+					id: userId,
+					name: "Linked",
+					email: `bf-${userId}@test.example`,
+					emailVerified: true,
+				});
+				const mk = async (values: Partial<typeof people.$inferInsert>) => {
+					const [row] = await tx
+						.insert(people)
+						.values({ name: "BF", contactPreferenceBy: null, ...values })
+						.returning({ id: people.id });
+					if (!row) throw new Error("insert failed");
+					return row.id;
+				};
+				const withUser = await mk({
+					userId,
+					phone: "+14155552671",
+					preferredContact: "sms",
+				});
+				const noUser = await mk({
+					phone: "+14155552672",
+					preferredContact: "call",
+				});
+				const noValue = await mk({ phone: "+14155552673" });
 
-		// The statement updates every Person with a value, in this DB too; that
-		// is the migration's own behaviour, and only the three rows are asserted.
-		await testDb.execute(sql.raw(backfillStatement()));
+				await tx.execute(sql.raw(backfillStatement()));
 
-		const by = async (id: string) =>
-			(
-				await testDb
-					.select({ by: people.contactPreferenceBy })
-					.from(people)
-					.where(eq(people.id, id))
-			)[0]?.by;
-		expect(await by(withUser)).toBe("member");
-		expect(await by(noUser)).toBe("officer");
-		expect(await by(noValue)).toBeNull();
+				const by = async (id: string) =>
+					(
+						await tx
+							.select({ by: people.contactPreferenceBy })
+							.from(people)
+							.where(eq(people.id, id))
+					)[0]?.by;
+				expect(await by(withUser)).toBe("member");
+				expect(await by(noUser)).toBe("officer");
+				expect(await by(noValue)).toBeNull();
+				throw new Rollback();
+			}),
+		).rejects.toBeInstanceOf(Rollback);
 	});
 });

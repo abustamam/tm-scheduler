@@ -9,7 +9,8 @@
 // There are exactly two writers of `people.preferred_contact`, and both put the
 // availability condition below in the UPDATE's OWN WHERE rather than checking a
 // prior SELECT: the member's own, here, and a club admin's roster edit
-// (`applyMemberEdit`), which adds `isNull(people.userId)`. A phone cleared
+// (`applyMemberEdit`), which instead requires the preference not to have been
+// chosen by the member (`contact_preference_by` NULL or 'officer', #1110). A phone cleared
 // between a form's load and its save therefore makes the write match nothing,
 // and zero rows matched is the refusal.
 import { and, eq, type SQL, sql } from "drizzle-orm";

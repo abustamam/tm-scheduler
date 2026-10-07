@@ -32,7 +32,8 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { applyMemberEdit, editSchema } = await import("./members-logic");
+const { applyMemberEdit, contactPreferenceRefusalFor, editSchema } =
+	await import("./members-logic");
 const { loadClubMembers, loadMemberProfile } = await import("./club-logic");
 const { requireClubRole } = await import("./guards");
 
@@ -328,6 +329,78 @@ describe.skipIf(!hasTestDb)(
 			// The same admin's edit WITHOUT the field saves.
 			await edit(seed.memberId, { name: "Renamed" });
 			expect(await memberName(seed.memberId)).toBe("Renamed");
+		});
+
+		it("refuses a member-set real method and writes nothing, even with a phone change in the same save (AC2)", async () => {
+			await testDb
+				.update(people)
+				.set({ preferredContact: "sms", contactPreferenceBy: "member" })
+				.where(eq(people.id, seed.personId));
+			const before = await person(seed.personId);
+			await expect(
+				edit(seed.memberId, {
+					name: "Renamed",
+					phone: "+14155559999",
+					preferredContact: "call",
+				}),
+			).rejects.toThrow(CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE);
+			expect(await person(seed.personId)).toEqual(before);
+			expect(before.preferredContact).toBe("sms");
+			expect(await memberName(seed.memberId)).toBe("Member User");
+		});
+
+		it("the read-form refusal agrees with the write's WHERE: refused iff the write changes 0 rows", async () => {
+			const bys = [null, "officer", "member"] as const;
+			for (const by of bys) {
+				for (const soleHolder of [true, false]) {
+					const other = soleHolder ? null : await seedClub();
+					try {
+						if (other) {
+							await testDb.insert(members).values({
+								clubId: other.clubId,
+								personId: unlinked.personId,
+								name: "Una Linked",
+							});
+						}
+						await testDb
+							.update(people)
+							.set({ preferredContact: null, contactPreferenceBy: by })
+							.where(eq(people.id, unlinked.personId));
+						const refusal = await contactPreferenceRefusalFor(
+							unlinked.personId,
+							seed.clubId,
+						);
+						let wrote = true;
+						try {
+							// `call` is available: the phone is on file.
+							await edit(unlinked.memberId, { preferredContact: "call" });
+						} catch {
+							wrote = false;
+						}
+						expect(refusal !== null, `by=${by} soleHolder=${soleHolder}`).toBe(
+							!wrote,
+						);
+						expect(refusal).toBe(
+							by === "member" ? "member_set" : soleHolder ? null : "multi_club",
+						);
+					} finally {
+						if (other) {
+							await testDb
+								.delete(members)
+								.where(
+									and(
+										eq(members.clubId, other.clubId),
+										eq(members.personId, unlinked.personId),
+									),
+								);
+							await cleanup(other.clubId, [
+								other.adminUserId,
+								other.memberUserId,
+							]);
+						}
+					}
+				}
+			}
 		});
 
 		it("sets the preference on a signed-in member who never chose, as the officer's (AC1)", async () => {
