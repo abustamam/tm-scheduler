@@ -826,7 +826,7 @@ type ProfileMember = {
 	 * review): `bound` once the member has signed in, `multi_club` while another
 	 * club holds them too — the email's rule. Drives the read-only field.
 	 */
-	contactPreferenceRefusal: "bound" | "multi_club" | null;
+	contactPreferenceRefusal: "member_set" | "multi_club" | null;
 	officerPositions: OfficerPosition[];
 	userId: string | null;
 	status: "active" | "inactive";
@@ -846,10 +846,10 @@ function MemberActions({
 	const [removeOpen, setRemoveOpen] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const isLinkedAccount = Boolean(member.userId);
-	// The server refuses the whole edit if the field is sent while this is set;
-	// a linked account is locked even if the refusal was not loaded.
-	const preferenceLocked =
-		isLinkedAccount || member.contactPreferenceRefusal !== null;
+	// The server refuses the whole edit if the field is sent while this is set.
+	// It derives from the refusal (member-set or multi-club), NOT from whether
+	// the member has signed in (#1110).
+	const preferenceLocked = member.contactPreferenceRefusal !== null;
 	const isInactive = member.status === "inactive";
 
 	async function onToggleStatus() {
@@ -900,9 +900,9 @@ function MemberActions({
 					// Only when the officer changed it (#906): the phone is the
 					// Person's, so a stale prefill must not overwrite another club's.
 					...phoneEditPayload(String(form.get("phone") ?? ""), member.phoneRaw),
-					// Only when changed, and never for a member who has signed in:
-					// the choice is then theirs, and the server refuses the whole
-					// edit if it is sent (#1093).
+					// Only when changed, and never for a member who chose it
+					// themselves: the server refuses the whole edit if it is sent
+					// (#1093, #1110).
 					...(preferenceLocked
 						? {}
 						: preferredContactEditPayload(
@@ -1076,9 +1076,8 @@ function MemberActions({
 										id="edit-preferred-contact-hint"
 										className="text-xs text-[var(--sea-ink-soft)]"
 									>
-										{isLinkedAccount ||
-										member.contactPreferenceRefusal === "bound"
-											? "The member manages this now."
+										{member.contactPreferenceRefusal === "member_set"
+											? "The member chose this themselves."
 											: "Another club also has them on its roster, so it can't be changed here."}
 									</p>
 								</>

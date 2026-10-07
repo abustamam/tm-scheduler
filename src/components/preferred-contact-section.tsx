@@ -36,7 +36,7 @@ export function PreferredContactSection() {
 	});
 
 	if (!state.data?.linked) return null;
-	const { available } = state.data;
+	const { available, setBy } = state.data;
 	const current = save.isPending
 		? (save.variables ?? null)
 		: state.data.preferredContact;
@@ -72,6 +72,19 @@ export function PreferredContactSection() {
 					</label>
 				))}
 			</fieldset>
+			{setBy === "officer" ? (
+				<div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+					<p>An officer set this. Choose your own to replace it.</p>
+					<button
+						type="button"
+						className="rounded-md border px-2 py-1 text-foreground disabled:opacity-50"
+						disabled={save.isPending}
+						onClick={() => save.mutate(state.data.preferredContact)}
+					>
+						Keep it
+					</button>
+				</div>
+			) : null}
 			{available.length === 0 ? (
 				<p className="text-sm text-muted-foreground">
 					There is no phone number or email on file for you. An officer can add

@@ -76,7 +76,10 @@ export async function applySetMyPreferredContact(input: {
 	await db.transaction(async (tx) => {
 		const written = await tx
 			.update(people)
-			.set({ preferredContact: input.preferredContact })
+			.set({
+				preferredContact: input.preferredContact,
+				contactPreferenceBy: "member",
+			})
 			.where(
 				and(
 					eq(people.userId, input.userId),
@@ -99,6 +102,8 @@ export interface MyContactPreference {
 	available: ContactMethod[];
 	/** The EFFECTIVE preference — never the raw column. */
 	preferredContact: ContactMethod | null;
+	/** The RAW provenance (#1110): who set it, or null when nobody has. */
+	setBy: "member" | "officer" | null;
 }
 
 /** What the /account card shows for the signed-in member. */
@@ -107,22 +112,36 @@ export async function loadMyContactPreference(
 ): Promise<MyContactPreference> {
 	const personId = await resolveUserPersonId(userId);
 	if (!personId) {
-		return { linked: false, available: [], preferredContact: null };
+		return {
+			linked: false,
+			available: [],
+			preferredContact: null,
+			setBy: null,
+		};
 	}
 	const [row] = await db
 		.select({
 			email: people.email,
 			phone: people.phone,
 			stored: people.preferredContact,
+			setBy: people.contactPreferenceBy,
 		})
 		.from(people)
 		.where(and(eq(people.id, personId), eq(people.userId, userId)))
 		.limit(1);
-	if (!row) return { linked: false, available: [], preferredContact: null };
+	if (!row) {
+		return {
+			linked: false,
+			available: [],
+			preferredContact: null,
+			setBy: null,
+		};
+	}
 	return {
 		linked: true,
 		available: availableContactMethods(row),
 		preferredContact: effectivePreferredContact(row.stored, row),
+		setBy: row.setBy,
 	};
 }
 

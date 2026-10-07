@@ -190,6 +190,57 @@ describe.skipIf(!hasTestDb)("setMyPreferredContact (#1093)", () => {
 		expect(await stored(duplicate)).toBe("sms");
 	});
 
+	it("stamps the member as the source, over an officer-set value, and reports setBy (AC4)", async () => {
+		await setPerson(seed.personId, { email: "m@example.com" });
+		await testDb
+			.update(people)
+			.set({ preferredContact: "email", contactPreferenceBy: "officer" })
+			.where(eq(people.id, seed.personId));
+		expect((await loadMyContactPreference(seed.memberUserId)).setBy).toBe(
+			"officer",
+		);
+		await applySetMyPreferredContact({
+			userId: seed.memberUserId,
+			preferredContact: "email",
+		});
+		const [row] = await testDb
+			.select({ v: people.preferredContact, by: people.contactPreferenceBy })
+			.from(people)
+			.where(eq(people.id, seed.personId));
+		expect(row).toEqual({ v: "email", by: "member" });
+		expect((await loadMyContactPreference(seed.memberUserId)).setBy).toBe(
+			"member",
+		);
+	});
+
+	it("choosing No preference is the member's choice too, and setBy starts null", async () => {
+		expect((await loadMyContactPreference(seed.memberUserId)).setBy).toBeNull();
+		await applySetMyPreferredContact({
+			userId: seed.memberUserId,
+			preferredContact: null,
+		});
+		const [row] = await testDb
+			.select({ v: people.preferredContact, by: people.contactPreferenceBy })
+			.from(people)
+			.where(eq(people.id, seed.personId));
+		expect(row).toEqual({ v: null, by: "member" });
+	});
+
+	it("a refused write leaves the provenance alone", async () => {
+		await setPerson(seed.personId, { email: null, phone: null });
+		await expect(
+			applySetMyPreferredContact({
+				userId: seed.memberUserId,
+				preferredContact: "sms",
+			}),
+		).rejects.toThrow(CONTACT_METHOD_UNAVAILABLE_MESSAGE);
+		const [row] = await testDb
+			.select({ by: people.contactPreferenceBy })
+			.from(people)
+			.where(eq(people.id, seed.personId));
+		expect(row?.by).toBeNull();
+	});
+
 	it("writes only the caller's own Person", async () => {
 		// Everyone else can have email: an UPDATE missing its user predicate
 		// would match them all.
@@ -220,6 +271,7 @@ describe.skipIf(!hasTestDb)("setMyPreferredContact (#1093)", () => {
 			linked: true,
 			available: ["email", "call", "sms", "whatsapp"],
 			preferredContact: "sms",
+			setBy: "member",
 		});
 
 		// The phone goes: the column keeps `sms`, the reader shows none.
@@ -229,6 +281,7 @@ describe.skipIf(!hasTestDb)("setMyPreferredContact (#1093)", () => {
 			linked: true,
 			available: ["email"],
 			preferredContact: null,
+			setBy: "member",
 		});
 	});
 });

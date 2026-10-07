@@ -70,18 +70,52 @@ export function checkMergeBlocks(
 }
 
 /**
- * The merged Person's stored contact preference (#1093). The row that carries
- * the sign-in account wins, because only that member may set it once linked;
- * with neither or both linked, keeper ?? absorbed like every other fact here.
- * The STORED value moves as-is; readers resolve it (`effectivePreferredContact`).
+ * The merged Person's stored contact preference and who set it (#1093, #1110).
+ * A side whose member chose it wins over an officer-set or unset side,
+ * whichever row is linked or the keeper, even a deliberate "No preference".
+ * Otherwise (neither or both member-set) the earlier order decides: the linked
+ * row's value, else keeper ?? absorbed, carrying the source of whichever side
+ * supplied the value; if neither supplied one, the keeper's source ?? the
+ * absorbed's. The STORED value moves as-is; readers resolve it
+ * (`effectivePreferredContact`).
  */
 export function mergedPreferredContact(
-	keeper: Pick<PersonRow, "userId" | "preferredContact">,
-	absorbed: Pick<PersonRow, "userId" | "preferredContact">,
-): PersonRow["preferredContact"] {
-	if (absorbed.userId && !keeper.userId) return absorbed.preferredContact;
-	if (keeper.userId && !absorbed.userId) return keeper.preferredContact;
-	return keeper.preferredContact ?? absorbed.preferredContact;
+	keeper: Pick<
+		PersonRow,
+		"userId" | "preferredContact" | "contactPreferenceBy"
+	>,
+	absorbed: Pick<
+		PersonRow,
+		"userId" | "preferredContact" | "contactPreferenceBy"
+	>,
+): {
+	preferredContact: PersonRow["preferredContact"];
+	contactPreferenceBy: PersonRow["contactPreferenceBy"];
+} {
+	const keeperMember = keeper.contactPreferenceBy === "member";
+	const absorbedMember = absorbed.contactPreferenceBy === "member";
+	if (keeperMember !== absorbedMember) {
+		const winner = keeperMember ? keeper : absorbed;
+		return {
+			preferredContact: winner.preferredContact,
+			contactPreferenceBy: "member",
+		};
+	}
+	let supplier = keeper;
+	if (absorbed.userId && !keeper.userId) supplier = absorbed;
+	else if (keeper.userId && !absorbed.userId) supplier = keeper;
+	else if (keeper.preferredContact === null) supplier = absorbed;
+	const preferredContact = supplier.preferredContact;
+	if (keeperMember && absorbedMember) {
+		return { preferredContact, contactPreferenceBy: "member" };
+	}
+	return {
+		preferredContact,
+		contactPreferenceBy:
+			preferredContact !== null
+				? supplier.contactPreferenceBy
+				: (keeper.contactPreferenceBy ?? absorbed.contactPreferenceBy),
+	};
 }
 
 export interface MergePeopleResult {
@@ -209,7 +243,7 @@ export async function mergePeople(
 				// it (an admin can no longer set it on a linked Person), so the row
 				// carrying the account wins outright, even a deliberate "no
 				// preference". With neither or both linked, keeper wins as above.
-				preferredContact: mergedPreferredContact(keeper, absorbed),
+				...mergedPreferredContact(keeper, absorbed),
 				originalJoinDate: earliestDate(
 					keeper.originalJoinDate,
 					absorbed.originalJoinDate,

@@ -26,8 +26,8 @@ import {
 	type ContactMethod,
 	effectivePreferredContact,
 } from "#/lib/preferred-contact";
-import { emailWriteRefusalFor } from "./account-link-logic";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
+import { contactPreferenceRefusalFor } from "./members-logic";
 
 export interface ClubMemberRow {
 	id: string;
@@ -175,12 +175,12 @@ export async function loadMemberProfile(clubId: string, memberId: string) {
 	]);
 	if (!row) return undefined;
 	const { storedPreferredContact, ...profile } = row;
-	// Whether THIS club may change the Person's preference (#1093 review): the
-	// email's rule exactly — nobody has signed in, and this club is their sole
-	// holder — read through the email's own explainer, so the form and the
+	// Whether THIS club may change the Person's preference (#1093 review,
+	// #1110): the member has not chosen it themselves, and this club is their
+	// sole holder — read through the write's own explainer, so the form and the
 	// write's WHERE ask the same question. Display only; the gate is the WHERE
 	// in `applyMemberEdit`.
-	const contactPreferenceRefusal = await emailWriteRefusalFor(
+	const contactPreferenceRefusal = await contactPreferenceRefusalFor(
 		row.personId,
 		clubId,
 	);

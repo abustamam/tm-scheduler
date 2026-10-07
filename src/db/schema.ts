@@ -374,6 +374,14 @@ export const duesStatusEnum = pgEnum("dues_status", ["paid", "waived"]);
 // list every reader, both writers and the forms use — rather than a copy of it.
 export const contactMethodEnum = pgEnum("contact_method", CONTACT_METHODS);
 
+// Who last set a Person's contact preference (#1110). NULL: nobody has chosen.
+// 'officer': an officer set it, and officers may change it. 'member': the
+// member chose (including "No preference"), and officers may not change it.
+export const contactPreferenceSourceEnum = pgEnum("contact_preference_source", [
+	"member",
+	"officer",
+]);
+
 // ---------------------------------------------------------------------------
 // Clubs & memberships
 // ---------------------------------------------------------------------------
@@ -763,6 +771,10 @@ export const people = pgTable(
 		// holder, the email's rule (`applyMemberEdit`). A merge carries it over
 		// (`people-merge-logic.ts`).
 		preferredContact: contactMethodEnum("preferred_contact"),
+		// Provenance of `preferredContact` (#1110): the officer write is gated on
+		// this, not on whether the Person has signed in. Deliberately not named
+		// like the preference column, so it is not counted as a read of it.
+		contactPreferenceBy: contactPreferenceSourceEnum("contact_preference_by"),
 		// First-ever Toastmasters join date — a person-level fact (identical across
 		// every club), moved off the per-club members row (ADR-0008).
 		originalJoinDate: timestamp("original_join_date"),
