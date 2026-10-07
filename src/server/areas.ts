@@ -137,8 +137,10 @@ export const removeAreaClub = createServerFn({ method: "POST" })
 		return removeAreaClubLogic(data);
 	});
 
-/** Exact, case-insensitive match on a VERIFIED email; null when none. */
-export const findUserForDirector = createServerFn({ method: "GET" })
+/** Exact, case-insensitive match on a VERIFIED email; null when none. A POST,
+ *  not a GET: a GET would put a third party's email address in the URL, and so
+ *  in every access log and browser history on the way. */
+export const findUserForDirector = createServerFn({ method: "POST" })
 	.validator((input: unknown) => parse(findUserForDirectorSchema, input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();

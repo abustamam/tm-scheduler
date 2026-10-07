@@ -832,7 +832,8 @@ the nouns in `src/db/schema.ts`.
   to the GavelUp club carrying that number. **One area per club per program year:** placing or
   linking a club that already sits in another area of a division with the same `program_year` is
   refused, in one transaction that first locks the `clubs` row so two concurrent placements
-  serialize. The same club in areas of two different years is fine.
+  serialize; a name-only row typed with a GavelUp club's number takes the same check. The same
+  club in areas of two different years is fine. **An archived club cannot be placed.**
 - **Area Director (term)** (`area_directors`) — the person who holds an area's office for a span
   of time, the way `officer_terms` records an office. `ended_at IS NULL` means the term is
   **open**; the database allows one open term per area. A term is **current** only while it is
@@ -840,7 +841,8 @@ the nouns in `src/db/schema.ts`.
   (`src/server/area-terms-logic.ts`: `isCurrentTerm`, `loadCurrentDirector`,
   `loadCurrentAreasForUser`) so the notice and the access cannot disagree. A past year's open
   term is never ended and needs no ending: the year check retires it on July 1, and the console
-  shows it as "ended with 2026–27". `user_id` is NO ACTION, not CASCADE, deliberately:
+  shows it as "ended with 2026–27". So **a past year's area takes no new Area Director**; an
+  area staffed ahead of July 1 for the next year shows its director as upcoming. `user_id` is NO ACTION, not CASCADE, deliberately:
   `deleteClubPermanently` keeps an account only when a NO ACTION key makes its delete fail, so
   permanently deleting a director's only club must not delete the director. `display_name` is
   typed by the superadmin at assignment, because `user.name` is `""` for a magic-link account and

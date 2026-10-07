@@ -6,6 +6,11 @@ import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import {
+	AREA_NUMBER_MAX,
+	DISTRICT_NUMBER_MAX,
+	DIVISION_LETTER_MAX,
+} from "#/lib/area-limits";
 import { programYearLabel } from "#/lib/dcp";
 import {
 	createArea,
@@ -13,7 +18,10 @@ import {
 	createDivision,
 	listConsoleAreas,
 } from "#/server/areas";
-import type { ConsoleAreaListDistrict } from "#/server/areas-logic";
+import type {
+	ConsoleAreaListArea,
+	ConsoleAreaListDistrict,
+} from "#/server/areas-logic";
 
 export const Route = createFileRoute("/_authed/superadmin/areas/")({
 	loader: () => listConsoleAreas(),
@@ -103,9 +111,7 @@ function AreasConsole() {
 															{area.clubCount} club
 															{area.clubCount === 1 ? "" : "s"}
 															{" · "}
-															{area.directorCount > 0
-																? "Area Director assigned"
-																: "No Area Director"}
+															{directorSummary(area, division.programYearLabel)}
 														</span>
 													</li>
 												))}
@@ -190,7 +196,7 @@ function CreateDistrictForm({ onCreated }: { onCreated: () => void }) {
 					id="districtNumber"
 					name="districtNumber"
 					required
-					maxLength={8}
+					maxLength={DISTRICT_NUMBER_MAX}
 					placeholder="e.g. 39"
 				/>
 			</div>
@@ -282,7 +288,7 @@ function CreateDivisionForm({
 						id="divisionLetter"
 						name="divisionLetter"
 						required
-						maxLength={4}
+						maxLength={DIVISION_LETTER_MAX}
 						placeholder="e.g. C"
 					/>
 				</div>
@@ -356,7 +362,7 @@ function CreateAreaForm({
 					id="areaNumber"
 					name="areaNumber"
 					required
-					maxLength={4}
+					maxLength={AREA_NUMBER_MAX}
 					placeholder="e.g. 3"
 				/>
 			</div>
@@ -365,4 +371,17 @@ function CreateAreaForm({
 			</div>
 		</form>
 	);
+}
+
+/** What the list says about an area's director. An OPEN term in a later year
+ *  is upcoming, not absent; one left open in a past year was retired with it. */
+function directorSummary(area: ConsoleAreaListArea, yearLabel: string): string {
+	switch (area.directorState) {
+		case "current":
+			return "Area Director assigned";
+		case "upcoming":
+			return `Area Director from ${yearLabel}`;
+		default:
+			return "No Area Director";
+	}
 }

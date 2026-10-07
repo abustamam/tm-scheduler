@@ -18,7 +18,8 @@
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { districts, user } from "#/db/schema";
+import { areaDirectors, areas, districts, divisions, user } from "#/db/schema";
+import { currentProgramYear } from "#/lib/dcp";
 import { hasTestDb, testDb } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -158,6 +159,71 @@ describe.skipIf(!hasTestDb)("areas.ts refuses a non-superadmin (#1116)", () => {
 			.from(districts)
 			.where(eq(districts.number, DISTRICT_NUMBER));
 		expect(rows).toHaveLength(0);
+	});
+
+	it("pins assignedBy and endedBy to the session user, whatever the client sends", async () => {
+		sessionUserId = superadminId;
+		const director = await makeUser(false);
+		const number = `P${run.slice(0, 7)}`;
+		const { id: districtId } = (await (areaFns.createDistrict as Fn)({
+			data: { number },
+		})) as { id: string };
+		try {
+			const { id: divisionId } = (await (areaFns.createDivision as Fn)({
+				data: { districtId, programYear: currentProgramYear(), letter: "B" },
+			})) as { id: string };
+			const { id: areaId } = (await (areaFns.createArea as Fn)({
+				data: { divisionId, number: "2" },
+			})) as { id: string };
+
+			// `assignedBy` / `endedBy` are not fields of either input, so a client that
+			// sends them (naming the director, say) is stripped by the validator.
+			const { id: termId } = (await (areaFns.assignAreaDirector as Fn)({
+				data: {
+					areaId,
+					userId: director,
+					displayName: "Jamie",
+					assignedBy: director,
+				},
+			})) as { id: string };
+			const [opened] = await testDb
+				.select({ assignedBy: areaDirectors.assignedBy })
+				.from(areaDirectors)
+				.where(eq(areaDirectors.id, termId));
+			expect(opened?.assignedBy).toBe(superadminId);
+
+			await (areaFns.endAreaDirectorTerm as Fn)({
+				data: { termId, endedBy: director },
+			});
+			const [closed] = await testDb
+				.select({ endedBy: areaDirectors.endedBy })
+				.from(areaDirectors)
+				.where(eq(areaDirectors.id, termId));
+			expect(closed?.endedBy).toBe(superadminId);
+		} finally {
+			const divs = await testDb
+				.select({ id: divisions.id })
+				.from(divisions)
+				.where(eq(divisions.districtId, districtId));
+			const divIds = divs.map((d) => d.id);
+			const ars = divIds.length
+				? await testDb
+						.select({ id: areas.id })
+						.from(areas)
+						.where(inArray(areas.divisionId, divIds))
+				: [];
+			const areaIds = ars.map((a) => a.id);
+			if (areaIds.length > 0) {
+				await testDb
+					.delete(areaDirectors)
+					.where(inArray(areaDirectors.areaId, areaIds));
+				await testDb.delete(areas).where(inArray(areas.id, areaIds));
+			}
+			if (divIds.length > 0) {
+				await testDb.delete(divisions).where(inArray(divisions.id, divIds));
+			}
+			await testDb.delete(districts).where(eq(districts.id, districtId));
+		}
 	});
 
 	it("lets a superadmin through the same call, and refuses nobody signed in", async () => {

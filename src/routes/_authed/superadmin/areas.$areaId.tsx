@@ -1,11 +1,18 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, Link2, Loader2, Plus, Search, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import {
+	AREA_CLUB_NAME_MAX,
+	AREA_NUMBER_MAX,
+	CLUB_HAS_VISITS_MESSAGE,
+	DIRECTOR_DISPLAY_NAME_MAX,
+	DIVISION_LETTER_MAX,
+} from "#/lib/area-limits";
 import { CLUB_NUMBER_MAX, CLUB_NUMBER_PATTERN } from "#/lib/club-charter";
 import { programYearLabel } from "#/lib/dcp";
 import {
@@ -172,9 +179,7 @@ function ClubsPanel({
 									variant="outline"
 									disabled={busyId === club.id || club.visitCount > 0}
 									title={
-										club.visitCount > 0
-											? "This club has recorded visits"
-											: undefined
+										club.visitCount > 0 ? CLUB_HAS_VISITS_MESSAGE : undefined
 									}
 									onClick={() =>
 										act(
@@ -309,7 +314,7 @@ function AddNameOnlyClubForm({
 					id="nameOnlyClubName"
 					name="clubName"
 					required
-					maxLength={120}
+					maxLength={AREA_CLUB_NAME_MAX}
 					placeholder="Club name"
 				/>
 			</div>
@@ -436,16 +441,25 @@ function AssignDirectorForm({
 	const [found, setFound] = useState<{ id: string; email: string } | null>();
 	const [looking, setLooking] = useState(false);
 	const [assigning, setAssigning] = useState(false);
+	// Bumped by every lookup AND every keystroke. A response is applied only if
+	// it is still the latest ask: a slow answer for an email that has since been
+	// retyped would otherwise put the OLD account under the NEW address, and
+	// "Make Area Director" would assign it.
+	const latestAsk = useRef(0);
 
 	async function lookUp(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
+		const mine = ++latestAsk.current;
 		setLooking(true);
 		try {
-			setFound(await findUserForDirector({ data: { email } }));
+			const result = await findUserForDirector({ data: { email } });
+			if (mine === latestAsk.current) setFound(result);
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "That didn't work.");
+			if (mine === latestAsk.current) {
+				toast.error(err instanceof Error ? err.message : "That didn't work.");
+			}
 		} finally {
-			setLooking(false);
+			if (mine === latestAsk.current) setLooking(false);
 		}
 	}
 
@@ -481,8 +495,10 @@ function AssignDirectorForm({
 						required
 						value={email}
 						onChange={(e) => {
+							latestAsk.current++;
 							setEmail(e.target.value);
 							setFound(undefined);
+							setLooking(false);
 						}}
 						placeholder="name@example.com"
 					/>
@@ -513,7 +529,7 @@ function AssignDirectorForm({
 							id="directorDisplayName"
 							name="displayName"
 							required
-							maxLength={120}
+							maxLength={DIRECTOR_DISPLAY_NAME_MAX}
 							placeholder="e.g. Jamie Rivera"
 						/>
 						<p className="text-xs text-muted-foreground">
@@ -549,7 +565,7 @@ function RelabelPanel({
 		const form = new FormData(e.currentTarget);
 		const letter = String(form.get("divisionLetter") ?? "").trim();
 		const number = String(form.get("areaNumber") ?? "").trim();
-		const ok = await run(
+		await run(
 			setBusy,
 			async () => {
 				if (letter !== area.divisionLetter) {
@@ -563,7 +579,10 @@ function RelabelPanel({
 			},
 			"Saved.",
 		);
-		if (ok) onChanged();
+		// Refetch whatever happened. The two renames are separate writes: when the
+		// second is refused the first has still been saved, and a page that
+		// refetched only on success would keep printing the old label.
+		onChanged();
 	}
 
 	return (
@@ -580,7 +599,7 @@ function RelabelPanel({
 						id="relabelLetter"
 						name="divisionLetter"
 						required
-						maxLength={4}
+						maxLength={DIVISION_LETTER_MAX}
 						defaultValue={area.divisionLetter}
 					/>
 				</div>
@@ -590,7 +609,7 @@ function RelabelPanel({
 						id="relabelNumber"
 						name="areaNumber"
 						required
-						maxLength={4}
+						maxLength={AREA_NUMBER_MAX}
 						defaultValue={area.number}
 					/>
 				</div>

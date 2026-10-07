@@ -10,7 +10,13 @@
 //   - the current Area Director is shown with the name typed at assignment,
 //     and "End term" ends THAT term, while a term left open by a past year is
 //     shown as ended with that year and offers nothing to end.
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import {
+	act,
+	cleanup,
+	fireEvent,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
 
@@ -26,9 +32,18 @@ const fns = vi.hoisted(() => ({
 	renameDivision: vi.fn(),
 }));
 
+const { invalidate } = vi.hoisted(() => ({ invalidate: vi.fn() }));
+const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
+
 vi.mock("#/server/areas", () => fns);
 vi.mock("sonner", () => ({
-	toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
+	toast: { success: vi.fn(), error: toastError, warning: vi.fn() },
+}));
+// The page refetches through `router.invalidate()`; observing that is how the
+// half-save case below sees whether it refetched.
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@tanstack/react-router")>()),
+	useRouter: () => ({ invalidate }),
 }));
 
 import type { ConsoleAreaDetail } from "#/server/areas-logic";
@@ -241,6 +256,62 @@ describe("Area page Area Director (#1116)", () => {
 		);
 	});
 
+	it("offers assignment on the current and the next year's area, and not on a past one", async () => {
+		// The `programYear >= currentProgramYear` half of the form's condition:
+		// the server refuses a past year, so the page does not offer it.
+		await renderArea(area({ programYear: 2025, programYearLabel: "2025–26" }));
+		expect(screen.getByText(/no area director for 2025–26/i)).toBeTruthy();
+		expect(screen.queryByLabelText(/find the area director/i)).toBeNull();
+		cleanup();
+
+		await renderArea(area({ programYear: 2026 }));
+		expect(screen.getByLabelText(/find the area director/i)).toBeTruthy();
+		cleanup();
+
+		await renderArea(area({ programYear: 2027, programYearLabel: "2027–28" }));
+		expect(screen.getByLabelText(/find the area director/i)).toBeTruthy();
+	});
+
+	it("ignores a lookup answer for an email that is no longer the typed one", async () => {
+		let answerFirst: (user: { id: string; email: string } | null) => void =
+			() => {};
+		fns.findUserForDirector.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					answerFirst = resolve;
+				}),
+		);
+		await renderArea(area());
+
+		const input = screen.getByLabelText(/find the area director/i);
+		fireEvent.change(input, { target: { value: "first@example.com" } });
+		fireEvent.click(screen.getByRole("button", { name: /find/i }));
+		// Retyped before the answer arrives.
+		fireEvent.change(input, { target: { value: "second@example.com" } });
+		await act(async () => {
+			answerFirst({ id: "user-first", email: "first@example.com" });
+		});
+
+		// The answer is for the OLD address: it must not put that account under the
+		// new one, where "Make Area Director" would assign it.
+		expect(
+			screen.queryByLabelText(/name shown to the club's admins/i),
+		).toBeNull();
+		expect(screen.queryByText(/first@example\.com/)).toBeNull();
+		expect(
+			(screen.getByRole("button", { name: /find/i }) as HTMLButtonElement)
+				.disabled,
+		).toBe(false);
+
+		// The control: an answer for the address that IS typed is shown.
+		fns.findUserForDirector.mockResolvedValueOnce({
+			id: "user-second",
+			email: "second@example.com",
+		});
+		fireEvent.click(screen.getByRole("button", { name: /find/i }));
+		expect(await screen.findByText(/second@example\.com/)).toBeTruthy();
+	});
+
 	it("says so when no verified account has the email, and offers no assignment", async () => {
 		fns.findUserForDirector.mockResolvedValueOnce(null);
 		await renderArea(area());
@@ -255,5 +326,40 @@ describe("Area page Area Director (#1116)", () => {
 		expect(
 			screen.queryByRole("button", { name: "Make Area Director" }),
 		).toBeNull();
+	});
+});
+
+describe("Area page label fix (#1116)", () => {
+	function fillAndSave(letter: string, number: string) {
+		fireEvent.change(screen.getByLabelText("Division letter"), {
+			target: { value: letter },
+		});
+		fireEvent.change(screen.getByLabelText("Area number"), {
+			target: { value: number },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+	}
+
+	it("refetches after a save", async () => {
+		fns.renameDivision.mockResolvedValueOnce(undefined);
+		fns.renameArea.mockResolvedValueOnce(undefined);
+		await renderArea(area());
+		fillAndSave("D", "4");
+		await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
+	});
+
+	it("refetches when the second rename is refused after the first was saved", async () => {
+		// Two separate writes: the division letter is saved, the area number is
+		// refused. A page that refetched only on success would keep printing the
+		// old letter.
+		fns.renameDivision.mockResolvedValueOnce(undefined);
+		fns.renameArea.mockRejectedValueOnce(new Error("Area D4 already exists"));
+		await renderArea(area());
+		fillAndSave("D", "4");
+		await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
+		expect(fns.renameDivision).toHaveBeenCalledWith({
+			data: { divisionId: expect.any(String), letter: "D" },
+		});
+		expect(toastError).toHaveBeenCalledWith("Area D4 already exists");
 	});
 });

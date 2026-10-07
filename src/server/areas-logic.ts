@@ -25,10 +25,19 @@ import {
 	user,
 } from "#/db/schema";
 import { areaLabel } from "#/lib/area-health-fields";
+import {
+	AREA_CLUB_NAME_MAX,
+	AREA_NUMBER_MAX,
+	CLUB_HAS_VISITS_MESSAGE,
+	DIRECTOR_DISPLAY_NAME_MAX,
+	DISTRICT_NUMBER_MAX,
+	DIVISION_LETTER_MAX,
+} from "#/lib/area-limits";
 import { optionalClubNumberSchema } from "#/lib/club-charter";
 import { currentProgramYear, programYearLabel } from "#/lib/dcp";
+import { normalizedEmail, normalizeEmail } from "./account-link-logic";
 import { isCurrentTerm, loadCurrentDirector } from "./area-terms-logic";
-import { isUniqueViolation } from "./pg-errors";
+import { isSqlState, isUniqueViolation } from "./pg-errors";
 
 type Db = typeof db;
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -40,7 +49,6 @@ type Executor = Db | Tx;
 // toast, and the issue words them this way.
 // ---------------------------------------------------------------------------
 
-export const CLUB_HAS_VISITS_MESSAGE = "This club has recorded visits";
 export const CURRENT_TERM_EXISTS_MESSAGE = "End the current term first";
 export const NO_CURRENT_TERM_MESSAGE = "That term has already ended";
 export const ALREADY_IN_THIS_AREA_MESSAGE = "This club is already in this area";
@@ -51,6 +59,20 @@ export const AREA_CLUB_NOT_FOUND_MESSAGE = "Club not found in this area";
 export const DISPLAY_NAME_REQUIRED_MESSAGE = "Enter the Area Director's name";
 export const DIRECTOR_NOT_VERIFIED_MESSAGE =
 	"That account can't be made Area Director: its email isn't verified";
+export const ARCHIVED_CLUB_MESSAGE =
+	"An archived club can't be placed in an area";
+export const CLUB_NUMBER_CHANGED_MESSAGE =
+	"That club's number changed. Try again";
+export const ASSIGN_TARGET_GONE_MESSAGE =
+	"That account or area no longer exists. Reload the page";
+export const ASSIGN_FAILED_MESSAGE =
+	"Couldn't assign the Area Director. Try again";
+
+/** A past program year's area takes no new Area Director: an open term there
+ *  is never current, and the console offers nothing to end it. */
+export function pastYearAreaMessage(programYear: number): string {
+	return `${programYearLabel(programYear)} has ended, so its areas can't take a new Area Director`;
+}
 
 /** "This club is already in Area B2 for 2026–27". */
 export function alreadyPlacedMessage(
@@ -70,19 +92,26 @@ const districtNumber = z
 	.string()
 	.trim()
 	.min(1, "Enter a district number")
-	.max(8, "A district number is at most 8 characters");
+	.max(
+		DISTRICT_NUMBER_MAX,
+		`A district number is at most ${DISTRICT_NUMBER_MAX} characters`,
+	);
 const divisionLetter = z
 	.string()
 	.trim()
 	.min(1, "Enter a division letter")
-	.max(4, "A division letter is at most 4 characters");
+	.max(
+		DIVISION_LETTER_MAX,
+		`A division letter is at most ${DIVISION_LETTER_MAX} characters`,
+	);
 const areaNumber = z
 	.string()
 	.trim()
 	.min(1, "Enter an area number")
-	.max(4, "An area number is at most 4 characters");
-const CLUB_NAME_MAX = 120;
-const DISPLAY_NAME_MAX = 120;
+	.max(
+		AREA_NUMBER_MAX,
+		`An area number is at most ${AREA_NUMBER_MAX} characters`,
+	);
 
 export const areaIdSchema = z.object({ areaId: id });
 export const createDistrictSchema = z.object({ number: districtNumber });
@@ -107,7 +136,10 @@ export const addAreaClubSchema = z.object({
 	name: z
 		.string()
 		.trim()
-		.max(CLUB_NAME_MAX, `A club name is at most ${CLUB_NAME_MAX} characters`)
+		.max(
+			AREA_CLUB_NAME_MAX,
+			`A club name is at most ${AREA_CLUB_NAME_MAX} characters`,
+		)
 		.nullish(),
 	clubNumber: optionalClubNumberSchema,
 });
@@ -124,7 +156,10 @@ export const assignAreaDirectorSchema = z.object({
 		.string()
 		.trim()
 		.min(1, DISPLAY_NAME_REQUIRED_MESSAGE)
-		.max(DISPLAY_NAME_MAX, `A name is at most ${DISPLAY_NAME_MAX} characters`),
+		.max(
+			DIRECTOR_DISPLAY_NAME_MAX,
+			`A name is at most ${DIRECTOR_DISPLAY_NAME_MAX} characters`,
+		),
 });
 export const endAreaDirectorTermSchema = z.object({ termId: id });
 
@@ -164,15 +199,78 @@ async function loadAreaPlace(
 	return row;
 }
 
-/** Lock a GavelUp club's row for the rest of the transaction. */
-async function lockClubRow(tx: Tx, clubId: string) {
+/**
+ * Lock a GavelUp club's row for the rest of the transaction. An ARCHIVED club
+ * is refused here, inside the lock, so a club archived a moment ago cannot slip
+ * through a check made before it. `allowArchived` is for the one caller that
+ * only needs the lock to ask where the club is already placed.
+ */
+async function lockClubRow(
+	tx: Tx,
+	clubId: string,
+	opts: { allowArchived?: boolean } = {},
+) {
 	const [club] = await tx
-		.select({ id: clubs.id, name: clubs.name, clubNumber: clubs.clubNumber })
+		.select({
+			id: clubs.id,
+			name: clubs.name,
+			clubNumber: clubs.clubNumber,
+			archivedAt: clubs.archivedAt,
+		})
 		.from(clubs)
 		.where(eq(clubs.id, clubId))
 		.for("update");
 	if (!club) throw new Error("Club not found");
+	if (club.archivedAt && !opts.allowArchived) {
+		throw new Error(ARCHIVED_CLUB_MESSAGE);
+	}
 	return club;
+}
+
+/**
+ * The GavelUp club carrying `clubNumber`, locked, or null when none does.
+ *
+ * The number is read BEFORE the lock, so a club renumbered in between would
+ * otherwise be locked and then matched to a row it no longer belongs to: the
+ * locked row's number is compared with the one asked for.
+ */
+async function lockClubByNumber(
+	tx: Tx,
+	clubNumber: string,
+	opts: { allowArchived?: boolean } = {},
+) {
+	const [match] = await tx
+		.select({ id: clubs.id })
+		.from(clubs)
+		.where(eq(clubs.clubNumber, clubNumber));
+	if (!match) return null;
+	const club = await lockClubRow(tx, match.id, opts);
+	if (club.clubNumber !== clubNumber) {
+		throw new Error(CLUB_NUMBER_CHANGED_MESSAGE);
+	}
+	return club;
+}
+
+/** The id of a row an INSERT … RETURNING should have produced. */
+function inserted(row: { id: string } | undefined): { id: string } {
+	if (!row) throw new Error("The insert returned no row");
+	return { id: row.id };
+}
+
+/**
+ * Where an OPEN term stands. Whether it is current is `area-terms-logic`'s
+ * answer, passed in; only the two non-current cases are told apart here, by
+ * comparing the division's year with the current one. A later year is staffed
+ * ahead of July 1 (upcoming); an earlier one has been retired by the year check
+ * (ended with its year).
+ */
+function openTermState(
+	isCurrent: boolean,
+	programYear: number,
+	now: Date,
+): Exclude<ConsoleTermState, "ended"> {
+	if (isCurrent) return "current";
+	return programYear > currentProgramYear(now) ? "upcoming" : "ended-with-year";
 }
 
 /**
@@ -228,8 +326,10 @@ export interface ConsoleAreaListArea {
 	number: string;
 	label: string;
 	clubCount: number;
-	/** CURRENT directors: 0 or 1 (the database allows one open term per area). */
+	/** OPEN terms: 0 or 1 (the database allows one open term per area). */
 	directorCount: number;
+	/** Where that open term stands, or null when there is none. */
+	directorState: Exclude<ConsoleTermState, "ended"> | null;
 }
 
 export interface ConsoleAreaListDivision {
@@ -252,7 +352,8 @@ export interface ConsoleAreaList {
 }
 
 /** Districts → divisions (by year, newest first) → areas, with counts. A
- *  director counts only while CURRENT (`isCurrentTerm`). */
+ *  director counts while their term is OPEN, and `directorState` says whether it
+ *  is current, upcoming or retired with its year. */
 export async function listConsoleAreas(
 	now: Date = new Date(),
 ): Promise<ConsoleAreaList> {
@@ -278,16 +379,24 @@ export async function listConsoleAreas(
 				.groupBy(areaClubs.areaId)
 		).map((r) => [r.areaId, r.n]),
 	);
-	const directorCounts = new Map(
+	const openCounts = new Map(
 		(
 			await db
 				.select({ areaId: areaDirectors.areaId, n: count() })
 				.from(areaDirectors)
+				.where(isNull(areaDirectors.endedAt))
+				.groupBy(areaDirectors.areaId)
+		).map((r) => [r.areaId, r.n]),
+	);
+	const currentAreaIds = new Set(
+		(
+			await db
+				.select({ areaId: areaDirectors.areaId })
+				.from(areaDirectors)
 				.innerJoin(areas, eq(areas.id, areaDirectors.areaId))
 				.innerJoin(divisions, eq(divisions.id, areas.divisionId))
 				.where(isCurrentTerm(now))
-				.groupBy(areaDirectors.areaId)
-		).map((r) => [r.areaId, r.n]),
+		).map((r) => r.areaId),
 	);
 
 	const byDistrict = new Map<string, ConsoleAreaListDistrict>();
@@ -314,12 +423,17 @@ export async function listConsoleAreas(
 			district.divisions.push(division);
 		}
 		if (r.areaId !== null && r.areaNumber !== null) {
+			const open = openCounts.get(r.areaId) ?? 0;
 			division.areas.push({
 				id: r.areaId,
 				number: r.areaNumber,
 				label: areaLabel(r.letter, r.areaNumber),
 				clubCount: clubCounts.get(r.areaId) ?? 0,
-				directorCount: directorCounts.get(r.areaId) ?? 0,
+				directorCount: open,
+				directorState:
+					open === 0
+						? null
+						: openTermState(currentAreaIds.has(r.areaId), r.programYear, now),
 			});
 		}
 	}
@@ -347,7 +461,8 @@ export interface ConsoleAreaClub {
 	name: string;
 	clubNumber: string | null;
 	visitCount: number;
-	/** For a name-only row with a club number: the GavelUp club carrying it. */
+	/** For a name-only row with a club number: the GavelUp club carrying it, when
+	 *  that club is live and in no area of this program year. */
 	linkOffer: { clubId: string; name: string } | null;
 }
 
@@ -427,6 +542,19 @@ export async function getConsoleArea(
 				).map((r) => [r.areaClubId, r.n]),
 	);
 
+	// Clubs already in an area of THIS program year, wherever: neither offered a
+	// link here (it would be refused) nor listed as available to add.
+	const placedThisYear = new Set(
+		(
+			await db
+				.selectDistinct({ clubId: areaClubs.clubId })
+				.from(areaClubs)
+				.innerJoin(areas, eq(areas.id, areaClubs.areaId))
+				.innerJoin(divisions, eq(divisions.id, areas.divisionId))
+				.where(eq(divisions.programYear, place.programYear))
+		).flatMap((r) => (r.clubId ? [r.clubId] : [])),
+	);
+
 	const numbers = [
 		...new Set(
 			rows.flatMap((r) =>
@@ -445,8 +573,14 @@ export async function getConsoleArea(
 							clubNumber: clubs.clubNumber,
 						})
 						.from(clubs)
-						.where(inArray(clubs.clubNumber, numbers))
-				).flatMap((c) => (c.clubNumber ? [[c.clubNumber, c] as const] : [])),
+						.where(
+							and(inArray(clubs.clubNumber, numbers), isNull(clubs.archivedAt)),
+						)
+				).flatMap((c) =>
+					c.clubNumber && !placedThisYear.has(c.id)
+						? [[c.clubNumber, c] as const]
+						: [],
+				),
 	);
 
 	const areaClubList: ConsoleAreaClub[] = rows
@@ -466,16 +600,6 @@ export async function getConsoleArea(
 		})
 		.sort((a, b) => a.name.localeCompare(b.name, "en"));
 
-	const placedThisYear = new Set(
-		(
-			await db
-				.selectDistinct({ clubId: areaClubs.clubId })
-				.from(areaClubs)
-				.innerJoin(areas, eq(areas.id, areaClubs.areaId))
-				.innerJoin(divisions, eq(divisions.id, areas.divisionId))
-				.where(eq(divisions.programYear, place.programYear))
-		).flatMap((r) => (r.clubId ? [r.clubId] : [])),
-	);
 	const availableClubs = (
 		await db
 			.select({ id: clubs.id, name: clubs.name, clubNumber: clubs.clubNumber })
@@ -484,13 +608,13 @@ export async function getConsoleArea(
 			.orderBy(asc(clubs.name))
 	).filter((c) => !placedThisYear.has(c.id));
 
-	// "Current" is asked of `area-terms-logic`, never restated here.
-	const isCurrent = (await loadCurrentDirector(areaId, now)) !== null;
-	const openState: ConsoleTermState = isCurrent
-		? "current"
-		: place.programYear > currentProgramYear(now)
-			? "upcoming"
-			: "ended-with-year";
+	// Whether the open term is CURRENT is `area-terms-logic`'s answer. What this
+	// file adds is telling the two non-current cases apart (`openTermState`).
+	const openState = openTermState(
+		(await loadCurrentDirector(areaId, now)) !== null,
+		place.programYear,
+		now,
+	);
 	const terms: ConsoleDirectorTerm[] = (
 		await db
 			.select({
@@ -537,7 +661,7 @@ export async function createDistrict(
 			.insert(districts)
 			.values({ number: input.number })
 			.returning({ id: districts.id });
-		return { id: (row as { id: string }).id };
+		return inserted(row);
 	} catch (err) {
 		if (isUniqueViolation(err)) {
 			throw new Error(`District ${input.number} already exists`);
@@ -571,7 +695,7 @@ export async function createDivision(
 				letter: input.letter,
 			})
 			.returning({ id: divisions.id });
-		return { id: (row as { id: string }).id };
+		return inserted(row);
 	} catch (err) {
 		if (isUniqueViolation(err)) {
 			throw new Error(
@@ -595,7 +719,7 @@ export async function createArea(
 			.insert(areas)
 			.values({ divisionId: input.divisionId, number: input.number })
 			.returning({ id: areas.id });
-		return { id: (row as { id: string }).id };
+		return inserted(row);
 	} catch (err) {
 		if (isUniqueViolation(err)) {
 			throw new Error(
@@ -661,6 +785,12 @@ export async function renameArea(
 /**
  * Place a club in an area: a GavelUp club (`clubId`, whose name and club number
  * are copied) or a name-only row (`name`, optional `clubNumber`).
+ *
+ * An ARCHIVED club is refused (the console does not offer one; the server holds
+ * the line). A name-only row whose `clubNumber` is a GavelUp club's is that
+ * club under another spelling, so it takes the same lock and the same
+ * one-area-per-year check as placing the club itself; it is still inserted
+ * name-only, to be linked afterwards.
  */
 export async function addAreaClub(
 	input: z.input<typeof addAreaClubSchema>,
@@ -681,21 +811,26 @@ export async function addAreaClub(
 					clubNumber: club.clubNumber,
 				})
 				.returning({ id: areaClubs.id });
-			return { id: (row as { id: string }).id };
+			return inserted(row);
 		});
 	}
 
 	const name = input.name?.trim();
 	if (!name) throw new Error("Enter the club's name");
-	const [row] = await db
-		.insert(areaClubs)
-		.values({
-			areaId: target.areaId,
-			name,
-			clubNumber: input.clubNumber || null,
-		})
-		.returning({ id: areaClubs.id });
-	return { id: (row as { id: string }).id };
+	const clubNumber = input.clubNumber || null;
+	return db.transaction(async (tx) => {
+		if (clubNumber) {
+			const club = await lockClubByNumber(tx, clubNumber, {
+				allowArchived: true,
+			});
+			if (club) await assertNotPlacedInYear(tx, club.id, target);
+		}
+		const [row] = await tx
+			.insert(areaClubs)
+			.values({ areaId: target.areaId, name, clubNumber })
+			.returning({ id: areaClubs.id });
+		return inserted(row);
+	});
 }
 
 /** Link a name-only row to the GavelUp club carrying the same club number. */
@@ -712,18 +847,14 @@ export async function linkAreaClub(
 		if (!row.clubNumber) {
 			throw new Error("This club has no club number to match");
 		}
-		const [match] = await tx
-			.select({ id: clubs.id })
-			.from(clubs)
-			.where(eq(clubs.clubNumber, row.clubNumber));
-		if (!match) {
-			throw new Error(`No GavelUp club has club number ${row.clubNumber}`);
-		}
 
 		// Lock order: the club, then the area-club row. `deleteClubPermanently`
 		// locks the club and then reaches this row through ON DELETE SET NULL, so
 		// taking them the other way round could deadlock against it.
-		const club = await lockClubRow(tx, match.id);
+		const club = await lockClubByNumber(tx, row.clubNumber);
+		if (!club) {
+			throw new Error(`No GavelUp club has club number ${row.clubNumber}`);
+		}
 		const [locked] = await tx
 			.select({ clubId: areaClubs.clubId, areaId: areaClubs.areaId })
 			.from(areaClubs)
@@ -784,35 +915,53 @@ export async function removeAreaClub(
 export async function findUserForDirector(
 	input: z.infer<typeof findUserForDirectorSchema>,
 ): Promise<{ id: string; email: string } | null> {
-	const email = input.email.trim();
+	const email = normalizeEmail(input.email);
 	if (!email) return null;
 	const rows = await db
 		.select({ id: user.id, email: user.email })
 		.from(user)
 		.where(
-			and(
-				sql`lower(${user.email}) = lower(${email})`,
-				eq(user.emailVerified, true),
-			),
+			and(eq(normalizedEmail(user.email), email), eq(user.emailVerified, true)),
 		)
 		.limit(2);
 	return rows.length === 1 ? (rows[0] ?? null) : null;
 }
 
 /**
- * Open a term for `userId` on an area. The one-current-director rule is the
- * database's (`area_directors_current_unique`), so a concurrent second
+ * What a failed term insert says to the person, never the driver's text (which
+ * quotes the whole parameterised query). A unique violation is the one-open-term
+ * rule; an FK violation is an account or area deleted between the checks and
+ * the insert; anything else is logged here and answered plainly.
+ */
+export function assignDirectorFailure(err: unknown): Error {
+	if (isUniqueViolation(err)) return new Error(CURRENT_TERM_EXISTS_MESSAGE);
+	if (isSqlState(err, "23503")) return new Error(ASSIGN_TARGET_GONE_MESSAGE);
+	console.error("[areas] assignAreaDirector failed", err);
+	return new Error(ASSIGN_FAILED_MESSAGE);
+}
+
+/**
+ * Open a term for `userId` on an area. One OPEN term per area is the
+ * database's rule (`area_directors_open_unique`), so a concurrent second
  * assignment fails there and comes back as the refusal, not a 500.
+ *
+ * A PAST program year's area is refused: an open term there is never current,
+ * and the console offers nothing to end it. A year already staffed ahead of
+ * July 1 (the next one) is allowed.
  */
 export async function assignAreaDirector(
 	input: z.infer<typeof assignAreaDirectorSchema>,
 	assignedBy: string,
+	now: Date = new Date(),
 ): Promise<{ id: string }> {
 	// The schema trims and refuses blank, but this is also called directly, and
 	// the name is what #1118 shows the club's admins.
 	const displayName = input.displayName.trim();
 	if (!displayName) throw new Error(DISPLAY_NAME_REQUIRED_MESSAGE);
-	await loadAreaPlace(db, input.areaId);
+	const place = await loadAreaPlace(db, input.areaId);
+	if (place.programYear < currentProgramYear(now)) {
+		throw new Error(pastYearAreaMessage(place.programYear));
+	}
 	const [candidate] = await db
 		.select({ emailVerified: user.emailVerified })
 		.from(user)
@@ -830,10 +979,9 @@ export async function assignAreaDirector(
 				assignedBy,
 			})
 			.returning({ id: areaDirectors.id });
-		return { id: (row as { id: string }).id };
+		return inserted(row);
 	} catch (err) {
-		if (isUniqueViolation(err)) throw new Error(CURRENT_TERM_EXISTS_MESSAGE);
-		throw err;
+		throw assignDirectorFailure(err);
 	}
 }
 

@@ -108,6 +108,12 @@ describe("areas.ts server fns are superadmin-only (#1116)", () => {
 		});
 	}
 
+	it("looks a user up by POST: a GET would put their email address in the URL", () => {
+		const lookup = DECLARATIONS.find((d) => d.name === "findUserForDirector");
+		expect(lookup, "findUserForDirector is gone").toBeDefined();
+		expect(lookup?.method).toBe("POST");
+	});
+
 	it("reaches the database only through areas-logic", () => {
 		// No `#/db` import in the server-fn module: the logic is the only way in,
 		// so the gate above is the only door.
