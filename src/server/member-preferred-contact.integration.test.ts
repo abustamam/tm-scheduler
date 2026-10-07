@@ -7,13 +7,13 @@
  * here that fails without it:
  *  - the method's data exists, judged against the row as THIS edit leaves it
  *    (so clearing the phone and choosing SMS in one save is refused);
- *  - the Person has not signed in (`isNull(people.userId)`); once they have,
- *    the choice is theirs, and sending it refuses the whole edit;
+ *  - the member has not chosen it themselves (`contact_preference_by` NULL or
+ *    'officer', #1110); once they have, sending it refuses the whole edit;
  *  - a refusal writes NOTHING from that save.
  */
 import { and, desc, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { activityLog, members, people } from "#/db/schema";
+import { activityLog, members, officerTerms, people } from "#/db/schema";
 import {
 	CONTACT_METHOD_UNAVAILABLE_MESSAGE,
 	CONTACT_METHODS,
@@ -32,8 +32,10 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { applyMemberEdit, editSchema } = await import("./members-logic");
+const { applyMemberEdit, contactPreferenceRefusalFor, editSchema } =
+	await import("./members-logic");
 const { loadClubMembers, loadMemberProfile } = await import("./club-logic");
+const { requireClubRole } = await import("./guards");
 
 const PHONE = "+14155552671";
 
@@ -43,6 +45,7 @@ async function person(personId: string) {
 			phone: people.phone,
 			email: people.email,
 			preferredContact: people.preferredContact,
+			by: people.contactPreferenceBy,
 		})
 		.from(people)
 		.where(eq(people.id, personId));
@@ -299,25 +302,191 @@ describe.skipIf(!hasTestDb)(
 			expect((await person(unlinked.personId)).preferredContact).toBe("sms");
 		});
 
-		it("refuses the WHOLE edit for a Person who has signed in, writing nothing", async () => {
+		it("refuses the WHOLE edit for a Person the member set themselves, writing nothing (#1110)", async () => {
 			// seed.memberId's Person carries seed.memberUserId, and an email, so
-			// `email` is available: the refusal is about ownership alone.
+			// `email` is available: the refusal is about provenance alone.
+			await testDb
+				.update(people)
+				.set({ contactPreferenceBy: "member" })
+				.where(eq(people.id, seed.personId));
 			await expect(
 				edit(seed.memberId, { name: "Renamed", preferredContact: "email" }),
 			).rejects.toThrow(CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE);
+			// A member-set "No preference" is the member's choice too (AC3).
 			await expect(
 				edit(seed.memberId, { name: "Renamed", preferredContact: null }),
 			).rejects.toThrow(CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE);
-			expect((await person(seed.personId)).preferredContact).toBeNull();
+			expect(await person(seed.personId)).toMatchObject({
+				preferredContact: null,
+				by: "member",
+			});
 			expect(await memberName(seed.memberId)).toBe("Member User");
+			expect(
+				(await loadMemberProfile(seed.clubId, seed.memberId))
+					?.contactPreferenceRefusal,
+			).toBe("member_set");
 
 			// The same admin's edit WITHOUT the field saves.
 			await edit(seed.memberId, { name: "Renamed" });
 			expect(await memberName(seed.memberId)).toBe("Renamed");
+		});
 
-			// And the same admin may set it on an unlinked Person.
-			await edit(unlinked.memberId, { preferredContact: "email" });
-			expect((await person(unlinked.personId)).preferredContact).toBe("email");
+		it("refuses a member-set real method and writes nothing, even with a phone change in the same save (AC2)", async () => {
+			await testDb
+				.update(people)
+				.set({ preferredContact: "sms", contactPreferenceBy: "member" })
+				.where(eq(people.id, seed.personId));
+			const before = await person(seed.personId);
+			await expect(
+				edit(seed.memberId, {
+					name: "Renamed",
+					phone: "+14155559999",
+					preferredContact: "call",
+				}),
+			).rejects.toThrow(CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE);
+			expect(await person(seed.personId)).toEqual(before);
+			expect(before.preferredContact).toBe("sms");
+			expect(await memberName(seed.memberId)).toBe("Member User");
+		});
+
+		it("the read-form refusal agrees with the write's WHERE: refused iff the write changes 0 rows", async () => {
+			const bys = [null, "officer", "member"] as const;
+			for (const by of bys) {
+				for (const soleHolder of [true, false]) {
+					const other = soleHolder ? null : await seedClub();
+					try {
+						if (other) {
+							await testDb.insert(members).values({
+								clubId: other.clubId,
+								personId: unlinked.personId,
+								name: "Una Linked",
+							});
+						}
+						await testDb
+							.update(people)
+							.set({ preferredContact: null, contactPreferenceBy: by })
+							.where(eq(people.id, unlinked.personId));
+						const refusal = await contactPreferenceRefusalFor(
+							unlinked.personId,
+							seed.clubId,
+						);
+						let wrote = true;
+						try {
+							// `call` is available: the phone is on file.
+							await edit(unlinked.memberId, { preferredContact: "call" });
+						} catch {
+							wrote = false;
+						}
+						expect(refusal !== null, `by=${by} soleHolder=${soleHolder}`).toBe(
+							!wrote,
+						);
+						expect(refusal).toBe(
+							by === "member" ? "member_set" : soleHolder ? null : "multi_club",
+						);
+					} finally {
+						if (other) {
+							await testDb
+								.delete(members)
+								.where(
+									and(
+										eq(members.clubId, other.clubId),
+										eq(members.personId, unlinked.personId),
+									),
+								);
+							await cleanup(other.clubId, [
+								other.adminUserId,
+								other.memberUserId,
+							]);
+						}
+					}
+				}
+			}
+		});
+
+		it("sets the preference on a signed-in member who never chose, as the officer's (AC1)", async () => {
+			expect((await person(seed.personId)).by).toBeNull();
+			await edit(seed.memberId, { preferredContact: "email" });
+			expect(await person(seed.personId)).toMatchObject({
+				preferredContact: "email",
+				by: "officer",
+			});
+			expect(
+				(await loadMemberProfile(seed.clubId, seed.memberId))
+					?.contactPreferenceRefusal,
+			).toBeNull();
+		});
+
+		it("lets an officer overwrite an officer-set value, including with No preference (AC5)", async () => {
+			await edit(seed.memberId, { preferredContact: "email" });
+			await edit(seed.memberId, { phone: PHONE, preferredContact: "sms" });
+			expect(await person(seed.personId)).toMatchObject({
+				preferredContact: "sms",
+				by: "officer",
+			});
+			await edit(seed.memberId, { preferredContact: null });
+			expect(await person(seed.personId)).toMatchObject({
+				preferredContact: null,
+				by: "officer",
+			});
+		});
+
+		it("an officer-term member (stored role member) passes the gate and may set it (AC1)", async () => {
+			await testDb.insert(officerTerms).values({
+				membershipId: seed.memberId,
+				position: "vp_membership",
+			});
+			await expect(
+				requireClubRole(seed.memberUserId, seed.clubId, ["admin"]),
+			).resolves.toBeTruthy();
+			// Edit the signed-in ADMIN's Person, as the officer.
+			const [adminRow] = await testDb
+				.select({ personId: members.personId })
+				.from(members)
+				.where(eq(members.id, seed.adminMemberId));
+			if (!adminRow) throw new Error("admin membership gone");
+			await applyMemberEdit({
+				clubId: seed.clubId,
+				memberId: seed.adminMemberId,
+				name: "Admin User",
+				actorMemberId: seed.memberId,
+				preferredContact: "email",
+			});
+			expect(await person(adminRow.personId)).toMatchObject({
+				preferredContact: "email",
+				by: "officer",
+			});
+		});
+
+		it("a plain member without an office does not pass the gate", async () => {
+			await expect(
+				requireClubRole(seed.memberUserId, seed.clubId, ["admin"]),
+			).rejects.toThrow();
+		});
+
+		it("a multi-club Person's refusal reads multi_club even when officer-set", async () => {
+			const other = await seedClub();
+			try {
+				await edit(unlinked.memberId, { preferredContact: "call" });
+				await testDb.insert(members).values({
+					clubId: other.clubId,
+					personId: unlinked.personId,
+					name: "Una Linked",
+				});
+				await expect(
+					edit(unlinked.memberId, { preferredContact: "sms" }),
+				).rejects.toThrow(CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE);
+				expect((await person(unlinked.personId)).preferredContact).toBe("call");
+			} finally {
+				await testDb
+					.delete(members)
+					.where(
+						and(
+							eq(members.clubId, other.clubId),
+							eq(members.personId, unlinked.personId),
+						),
+					);
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
 		});
 
 		it("keeps a stale choice and shows none until the phone returns", async () => {

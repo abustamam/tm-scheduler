@@ -31,11 +31,12 @@ export const CONTACT_METHOD_UNAVAILABLE_MESSAGE =
 	"Add a phone number or email first.";
 
 /**
- * The admin edit's refusal for a Person who has signed in: once a member has an
- * account, the choice is theirs. The WHOLE edit is refused, not just the field.
+ * The admin edit's refusal for a Person whose member chose their own preference
+ * (`contact_preference_by = 'member'`, #1110). The WHOLE edit is refused, not
+ * just the field.
  */
 export const CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE =
-	"This member sets their own contact preference.";
+	"This member chose their own contact preference.";
 
 /**
  * The admin edit's refusal for a Person another club also holds. The rule is

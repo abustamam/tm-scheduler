@@ -9,7 +9,8 @@
 // There are exactly two writers of `people.preferred_contact`, and both put the
 // availability condition below in the UPDATE's OWN WHERE rather than checking a
 // prior SELECT: the member's own, here, and a club admin's roster edit
-// (`applyMemberEdit`), which adds `isNull(people.userId)`. A phone cleared
+// (`applyMemberEdit`), which instead requires the preference not to have been
+// chosen by the member (`contact_preference_by` NULL or 'officer', #1110). A phone cleared
 // between a form's load and its save therefore makes the write match nothing,
 // and zero rows matched is the refusal.
 import { and, eq, type SQL, sql } from "drizzle-orm";
@@ -76,7 +77,10 @@ export async function applySetMyPreferredContact(input: {
 	await db.transaction(async (tx) => {
 		const written = await tx
 			.update(people)
-			.set({ preferredContact: input.preferredContact })
+			.set({
+				preferredContact: input.preferredContact,
+				contactPreferenceBy: "member",
+			})
 			.where(
 				and(
 					eq(people.userId, input.userId),
@@ -99,6 +103,8 @@ export interface MyContactPreference {
 	available: ContactMethod[];
 	/** The EFFECTIVE preference — never the raw column. */
 	preferredContact: ContactMethod | null;
+	/** The RAW provenance (#1110): who set it, or null when nobody has. */
+	setBy: "member" | "officer" | null;
 }
 
 /** What the /account card shows for the signed-in member. */
@@ -107,22 +113,36 @@ export async function loadMyContactPreference(
 ): Promise<MyContactPreference> {
 	const personId = await resolveUserPersonId(userId);
 	if (!personId) {
-		return { linked: false, available: [], preferredContact: null };
+		return {
+			linked: false,
+			available: [],
+			preferredContact: null,
+			setBy: null,
+		};
 	}
 	const [row] = await db
 		.select({
 			email: people.email,
 			phone: people.phone,
 			stored: people.preferredContact,
+			setBy: people.contactPreferenceBy,
 		})
 		.from(people)
 		.where(and(eq(people.id, personId), eq(people.userId, userId)))
 		.limit(1);
-	if (!row) return { linked: false, available: [], preferredContact: null };
+	if (!row) {
+		return {
+			linked: false,
+			available: [],
+			preferredContact: null,
+			setBy: null,
+		};
+	}
 	return {
 		linked: true,
 		available: availableContactMethods(row),
 		preferredContact: effectivePreferredContact(row.stored, row),
+		setBy: row.setBy,
 	};
 }
 

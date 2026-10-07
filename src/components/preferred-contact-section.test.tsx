@@ -141,4 +141,41 @@ describe("PreferredContactSection (#1093)", () => {
 		await waitFor(() => expect(getMyContactPreference).toHaveBeenCalled());
 		expect(screen.queryByText("How should officers reach you?")).toBeNull();
 	});
+
+	it("shows the officer note and Keep it only when an officer set it, and Keep it saves the same value (AC9)", async () => {
+		getMyContactPreference.mockResolvedValue({
+			linked: true,
+			available: ["email", "sms"],
+			preferredContact: "sms",
+			setBy: "officer",
+		});
+		setMyPreferredContact.mockResolvedValue({ ok: true });
+		renderCard();
+		await screen.findByText("How should officers reach you?");
+		expect(
+			screen.getByText("An officer set this. Choose your own to replace it."),
+		).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Keep it" }));
+		await waitFor(() =>
+			expect(setMyPreferredContact).toHaveBeenCalledWith({
+				data: { preferredContact: "sms" },
+			}),
+		);
+	});
+
+	it.each([
+		["member"],
+		[null],
+	])("shows no officer note or Keep it when setBy is %s", async (setBy) => {
+		getMyContactPreference.mockResolvedValue({
+			linked: true,
+			available: ["email"],
+			preferredContact: "email",
+			setBy,
+		});
+		renderCard();
+		await screen.findByText("How should officers reach you?");
+		expect(screen.queryByText(/An officer set this/)).toBeNull();
+		expect(screen.queryByRole("button", { name: "Keep it" })).toBeNull();
+	});
 });

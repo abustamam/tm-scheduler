@@ -7,7 +7,7 @@
 // that same module is NOT stripped and drags `pg` → `Buffer` into the browser
 // (ReferenceError: Buffer is not defined). Keeping the db logic in this
 // never-client-imported module keeps `pg` server-side. See `auth-context.ts`.
-import { and, asc, eq, gte, inArray, isNull, ne } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings, members, people, roleSlots } from "#/db/schema";
@@ -214,6 +214,39 @@ export const editSchema = z.object({
 });
 type EditInput = z.infer<typeof editSchema> & RosterActor;
 
+export type ContactPreferenceRefusal =
+	/** The member chose it themselves (including "No preference"). */
+	| "member_set"
+	/** Another club holds this Person too (or this club does not hold them). */
+	| "multi_club";
+
+/**
+ * The READ form of the officer preference write's WHERE (#1110), for explaining
+ * a refusal and rendering the field read-only. Never the gate: that lives in
+ * `applyMemberEdit`'s own UPDATE. Member-set is checked first, then multi-club;
+ * null means neither, so a refusal that still happened is "unavailable".
+ */
+export async function contactPreferenceRefusalFor(
+	personId: string,
+	clubId: string,
+	executor: Pick<typeof db, "select" | "selectDistinct"> = db,
+): Promise<ContactPreferenceRefusal | null> {
+	const [row] = await executor
+		.select({ by: people.contactPreferenceBy })
+		.from(people)
+		.where(eq(people.id, personId))
+		.limit(1);
+	if (!row) return "multi_club";
+	if (row.by === "member") return "member_set";
+	const clubs = await executor
+		.selectDistinct({ clubId: members.clubId })
+		.from(members)
+		.where(eq(members.personId, personId));
+	return clubs.length === 1 && clubs[0]?.clubId === clubId
+		? null
+		: "multi_club";
+}
+
 /**
  * Update a roster member's name/contact and reconcile their office set (#100);
  * logs member_edit with the office change.
@@ -333,11 +366,11 @@ export async function applyMemberEdit(input: EditInput) {
 					"multi_club";
 			}
 		}
-		// The contact preference (#1093). AFTER the phone and email writes, so
+		// The contact preference (#1093, #1110). AFTER the phone and email writes, so
 		// its WHERE judges availability against the row as this edit leaves it:
 		// clearing the phone and choosing SMS in one save matches nothing. Three
-		// rules sit in the UPDATE's own WHERE, not in a prior read: the Person
-		// has not signed in (once they have, the choice is theirs); this club is
+		// rules sit in the UPDATE's own WHERE, not in a prior read: the member
+		// has not chosen it themselves (provenance is NULL or 'officer'); this club is
 		// their SOLE holder (the rule `people.email` has, ADR-0029, applied to
 		// the preference too; the phone has no such rule); and the method's
 		// data exists.
@@ -353,11 +386,14 @@ export async function applyMemberEdit(input: EditInput) {
 		if (preferredContact !== undefined) {
 			const written = await tx
 				.update(people)
-				.set({ preferredContact })
+				.set({ preferredContact, contactPreferenceBy: "officer" })
 				.where(
 					and(
 						eq(people.id, current.personId),
-						isNull(people.userId),
+						or(
+							isNull(people.contactPreferenceBy),
+							eq(people.contactPreferenceBy, "officer"),
+						),
 						soleHoldingClub(input.clubId),
 						contactMethodAvailableSql(preferredContact),
 					),
@@ -367,13 +403,13 @@ export async function applyMemberEdit(input: EditInput) {
 				// Ownership before availability, so a multi-club Person whose
 				// email write was just refused hears "another club", not "add an
 				// email" (#1093 review) — subject to the race described above.
-				const owner = await emailWriteRefusalFor(
+				const owner = await contactPreferenceRefusalFor(
 					current.personId,
 					input.clubId,
 					tx,
 				);
 				throw new Error(
-					owner === "bound"
+					owner === "member_set"
 						? CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE
 						: owner === "multi_club"
 							? CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE

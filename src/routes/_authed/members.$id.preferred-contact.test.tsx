@@ -207,24 +207,52 @@ describe("member edit dialog: preferred contact (#1093)", () => {
 		});
 	});
 
-	it("shows a signed-in member's choice read-only and never sends it", async () => {
+	it("shows a signed-in member's choice read-only and never sends it, when the member chose it", async () => {
 		await openEdit({
 			userId: "u1",
 			preferredContact: "sms",
-			contactPreferenceRefusal: "bound",
+			contactPreferenceRefusal: "member_set",
 		});
 		const field = screen.getByLabelText(
 			"Preferred contact",
 		) as HTMLInputElement;
 		expect(field.readOnly).toBe(true);
 		expect(field.value).toBe("SMS");
-		// Not "set by the member": an admin may have set it before they signed in.
-		expect(screen.getByText("The member manages this now.")).toBeTruthy();
+		expect(screen.getByText("The member chose this themselves.")).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 		await vi.waitFor(() => expect(editMember).toHaveBeenCalled());
 		expect(vi.mocked(editMember).mock.calls[0]?.[0]?.data).not.toHaveProperty(
 			"preferredContact",
 		);
+	});
+
+	it("shows the select for a signed-in member who never chose (AC8)", async () => {
+		await openEdit({
+			userId: "u1",
+			preferredContact: null,
+			contactPreferenceRefusal: null,
+		});
+		const field = screen.getByLabelText("Preferred contact");
+		expect(field.tagName).toBe("SELECT");
+		fireEvent.change(field, { target: { value: "call" } });
+		fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+		await vi.waitFor(() => expect(editMember).toHaveBeenCalled());
+		expect(vi.mocked(editMember).mock.calls[0]?.[0]?.data).toMatchObject({
+			preferredContact: "call",
+		});
+	});
+
+	// Wiring guard (AC12): the lock follows `contactPreferenceRefusal`, not
+	// `userId`. Swapping the prop that feeds it flips one of these two.
+	it("locks on the refusal even when nobody has signed in", async () => {
+		await openEdit({
+			userId: null,
+			preferredContact: "sms",
+			contactPreferenceRefusal: "member_set",
+		});
+		expect(
+			(screen.getByLabelText("Preferred contact") as HTMLInputElement).readOnly,
+		).toBe(true);
 	});
 
 	it("locks the field for a Person another club also holds, and never sends it", async () => {
