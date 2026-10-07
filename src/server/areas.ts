@@ -140,6 +140,7 @@ export const removeAreaClub = createServerFn({ method: "POST" })
 /** Exact, case-insensitive match on a VERIFIED email; null when none. A POST,
  *  not a GET: a GET would put a third party's email address in the URL, and so
  *  in every access log and browser history on the way. */
+// Read-shaped on purpose: waived in `club-logo-method.guard.test.ts` (POST_WAIVERS).
 export const findUserForDirector = createServerFn({ method: "POST" })
 	.validator((input: unknown) => parse(findUserForDirectorSchema, input))
 	.handler(async ({ data }) => {
