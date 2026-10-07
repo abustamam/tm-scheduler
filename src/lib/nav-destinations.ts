@@ -14,6 +14,7 @@ import {
 	ListChecks,
 	type LucideIcon,
 	Mic,
+	Network,
 	RefreshCw,
 	ScrollText,
 	Settings,
@@ -288,6 +289,14 @@ export const NAV_DESTINATIONS = [
 		group: "platform",
 		grant: "superadmin",
 		icon: Users,
+	},
+	{
+		key: "areas",
+		to: "/superadmin/areas",
+		label: "Areas",
+		group: "platform",
+		grant: "superadmin",
+		icon: Network,
 	},
 ] as const satisfies readonly NavDestination[];
 

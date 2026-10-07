@@ -95,6 +95,7 @@ describe("visibleDestinations", () => {
 		expect(keysIn(EVERYTHING, "platform")).toEqual([
 			"Superadmin",
 			"Duplicate people",
+			"Areas",
 		]);
 		expect(visibleDestinations(EVERYTHING)).toHaveLength(
 			NAV_DESTINATIONS.length,

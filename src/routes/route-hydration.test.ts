@@ -38,7 +38,12 @@ import { eq, inArray, like } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	activityLog,
+	areaClubs,
+	areaDirectors,
+	areas,
 	clubs,
+	districts,
+	divisions,
 	duesPeriods,
 	meetingAttendance,
 	meetings,
@@ -52,6 +57,7 @@ import {
 	user,
 	verification,
 } from "#/db/schema";
+import { currentProgramYear } from "#/lib/dcp";
 import {
 	FEEDBACK_CLOSED_MESSAGE,
 	FEEDBACK_NOT_OPEN_MESSAGE,
@@ -109,6 +115,10 @@ interface Fixture {
 	upcomingMeetingId: string;
 	/** Started the evening before the shifted instant: its feedback is open. */
 	feedbackMeetingId: string;
+	/** An area holding the club, with the admin as its Area Director (#1116). */
+	areaId: string;
+	divisionId: string;
+	districtId: string;
 }
 
 type Who = "signed-out" | "admin";
@@ -156,6 +166,11 @@ const COVERED: Record<string, { who: Who; url: (f: Fixture) => string }> = {
 	"/superadmin/$clubId": {
 		who: "admin",
 		url: (f) => `/superadmin/${f.clubId}`,
+	},
+	"/superadmin/areas/": { who: "admin", url: () => "/superadmin/areas" },
+	"/superadmin/areas/$areaId": {
+		who: "admin",
+		url: (f) => `/superadmin/areas/${f.areaId}`,
 	},
 	"/superadmin/duplicate-people": {
 		who: "admin",
@@ -332,6 +347,42 @@ async function seedFixture(nowMs: number): Promise<Fixture> {
 		emailVerified: true,
 	});
 
+	// An area with the club in it, a name-only club beside it, and the admin as
+	// its Area Director (#1116), so the area console pages have rows to print. The
+	// term starts the evening before the shifted instant, a day the page must
+	// name in UTC like the rest of the console. The division sits in the program
+	// year of the SHIFTED clock: the pages ask the server's clock which year is
+	// current, and that clock is the one moved.
+	const [district] = await testDb
+		.insert(districts)
+		.values({ number: `H${run}` })
+		.returning({ id: districts.id });
+	if (!district) throw new Error("district insert failed");
+	const [division] = await testDb
+		.insert(divisions)
+		.values({
+			districtId: district.id,
+			programYear: currentProgramYear(today),
+			letter: "H",
+		})
+		.returning({ id: divisions.id });
+	if (!division) throw new Error("division insert failed");
+	const [area] = await testDb
+		.insert(areas)
+		.values({ divisionId: division.id, number: "1" })
+		.returning({ id: areas.id });
+	if (!area) throw new Error("area insert failed");
+	await testDb.insert(areaClubs).values([
+		{ areaId: area.id, clubId: club.id, name: `Route Hydration ${run}` },
+		{ areaId: area.id, name: "Name-only Club", clubNumber: "7654321" },
+	]);
+	await testDb.insert(areaDirectors).values({
+		areaId: area.id,
+		userId: adminUserId,
+		displayName: "Ada Admin",
+		startedAt: at(-1),
+	});
+
 	const roster = [
 		{ key: "admin", name: "Ada Admin", email: adminEmail, userId: adminUserId },
 		{ key: "speaker", name: "Sam Speaker", email: null, userId: null },
@@ -497,10 +548,20 @@ async function seedFixture(nowMs: number): Promise<Fixture> {
 		pastMeetingId: past,
 		upcomingMeetingId: upcoming,
 		feedbackMeetingId: lastNight,
+		areaId: area.id,
+		divisionId: division.id,
+		districtId: district.id,
 	};
 }
 
 async function cleanupFixture(f: Fixture) {
+	// The area chain first: a director's term holds the admin's account (NO
+	// ACTION, #1116), and the hierarchy's parents are all RESTRICT.
+	await testDb.delete(areaDirectors).where(eq(areaDirectors.areaId, f.areaId));
+	await testDb.delete(areaClubs).where(eq(areaClubs.areaId, f.areaId));
+	await testDb.delete(areas).where(eq(areas.id, f.areaId));
+	await testDb.delete(divisions).where(eq(divisions.id, f.divisionId));
+	await testDb.delete(districts).where(eq(districts.id, f.districtId));
 	// The club cascades members, meetings, slots, attendance, roles and terms.
 	await testDb.delete(clubs).where(eq(clubs.id, f.clubId));
 	await testDb.delete(people).where(inArray(people.id, f.personIds));
