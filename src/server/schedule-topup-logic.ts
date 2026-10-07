@@ -7,6 +7,7 @@
 //
 // DB logic lives here (not in a createServerFn module) so it's integration-
 // testable and never pulled into the client bundle.
+
 import { asc, eq } from "drizzle-orm";
 import { db } from "#/db";
 import {
@@ -16,6 +17,7 @@ import {
 	roleDefinitions,
 } from "#/db/schema";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
+import { effectiveLocation } from "#/lib/effective-location";
 import { generateOccurrences } from "#/lib/meeting-recurrence";
 import { buildTopUpRecurrenceInput } from "#/lib/recurrence-rule";
 import { insertMeetingWithSlots } from "./meeting-create-logic";
@@ -112,7 +114,7 @@ export async function ensureScheduleToppedUp(
 					clubId,
 					scheduledAt,
 					lengthMinutes: club.defaultMeetingMinutes,
-					location: rule.location,
+					location: effectiveLocation(rule.location, club.defaultLocation),
 				},
 				defs,
 			);

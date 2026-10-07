@@ -11,6 +11,7 @@ import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	clubMeetingRecurrence,
+	clubs,
 	meetings,
 	roleDefinitions,
 	roleSlots,
@@ -238,5 +239,21 @@ describe.skipIf(!hasTestDb)("ensureScheduleToppedUp (#190)", () => {
 		expect(rows.length).toBe(4);
 		const dates = rows.map(localDate);
 		expect(new Set(dates).size).toBe(4);
+	});
+
+	it("falls back to the club default location when the rule has none (#1086)", async () => {
+		await clearMeetings(club.clubId);
+		await testDb
+			.update(clubs)
+			.set({ defaultLocation: "Room 4" })
+			.where(eq(clubs.id, club.clubId));
+		await seedWeeklyRule(club.clubId, { location: null });
+		await ensureScheduleToppedUp(club.clubId, NOW);
+		const rows = await testDb
+			.select({ location: meetings.location })
+			.from(meetings)
+			.where(eq(meetings.clubId, club.clubId));
+		expect(rows.length).toBeGreaterThan(0);
+		expect(rows.every((r) => r.location === "Room 4")).toBe(true);
 	});
 });

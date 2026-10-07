@@ -45,6 +45,7 @@ import {
 	type ImageDimensions,
 	readImageDimensions,
 } from "#/lib/image-dimensions";
+import { MEETING_LIMITS } from "#/lib/meeting-limits";
 import {
 	formatTableTopicsClock,
 	MAX_TABLE_TOPICS_SECONDS,
@@ -443,6 +444,7 @@ function ClubSettings() {
 					district: String(form.get("district") ?? ""),
 					mission: String(form.get("mission") ?? ""),
 					meetingSchedule: String(form.get("meetingSchedule") ?? ""),
+					defaultLocation: String(form.get("defaultLocation") ?? ""),
 					defaultCountryCode: String(form.get("defaultCountryCode") ?? ""),
 				},
 			});
@@ -629,6 +631,20 @@ function ClubSettings() {
 						defaultValue={profile?.meetingSchedule ?? ""}
 						placeholder="e.g. 2nd & 4th Thursday, 6:45–7:45 PM"
 					/>
+				</div>
+				<div className="space-y-2">
+					<Label htmlFor="defaultLocation">Default meeting location</Label>
+					<Input
+						id="defaultLocation"
+						name="defaultLocation"
+						maxLength={MEETING_LIMITS.location}
+						defaultValue={profile?.defaultLocation ?? ""}
+						placeholder="e.g. Community Hall, Room B"
+					/>
+					<p className="text-xs text-muted-foreground">
+						Prefilled on the new-meeting forms, and used for meetings created
+						automatically when the schedule has no location of its own.
+					</p>
 				</div>
 				<div className="space-y-2">
 					<Label htmlFor="mission">Mission</Label>

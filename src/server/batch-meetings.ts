@@ -4,6 +4,7 @@ import { MEETING_FIELDS } from "#/lib/meeting-limits";
 import { MAX_BATCH } from "#/lib/meeting-recurrence";
 import {
 	applyBatchCreateMeetings,
+	getMeetingFormDefaultsLogic,
 	listClubMeetingDates,
 } from "./batch-meetings-logic";
 import { requireClubAdminView, requireClubRole, requireUser } from "./guards";
@@ -43,4 +44,15 @@ export const getClubMeetingDates = createServerFn({ method: "GET" })
 		const currentUser = await requireUser();
 		await requireClubAdminView(currentUser.id, clubId);
 		return listClubMeetingDates(clubId);
+	});
+
+/** Admin view: what the batch and single meeting forms prefill (#1086).
+ *  AUTHED — requires an admin viewer of the club. A new fn, not a method
+ *  change, so open tabs are unaffected. */
+export const getMeetingFormDefaults = createServerFn({ method: "GET" })
+	.validator((clubId: unknown) => uuid.parse(clubId))
+	.handler(async ({ data: clubId }) => {
+		const currentUser = await requireUser();
+		await requireClubAdminView(currentUser.id, clubId);
+		return getMeetingFormDefaultsLogic(clubId);
 	});

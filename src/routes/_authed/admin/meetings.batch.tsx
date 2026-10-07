@@ -22,6 +22,7 @@ import { navDestination } from "#/lib/nav-destinations";
 import {
 	batchCreateMeetings,
 	getClubMeetingDates,
+	getMeetingFormDefaults,
 } from "#/server/batch-meetings";
 
 export const Route = createFileRoute("/_authed/admin/meetings/batch")({
@@ -33,10 +34,11 @@ export const Route = createFileRoute("/_authed/admin/meetings/batch")({
 		return { adminClub };
 	},
 	loader: async ({ context }) => {
-		const existingDates = await getClubMeetingDates({
-			data: context.adminClub.clubId,
-		});
-		return { existingDates };
+		const [existingDates, defaults] = await Promise.all([
+			getClubMeetingDates({ data: context.adminClub.clubId }),
+			getMeetingFormDefaults({ data: context.adminClub.clubId }),
+		]);
+		return { existingDates, defaults };
 	},
 	component: BatchMeetings,
 });
@@ -49,20 +51,20 @@ type BoundKind = "count" | "until";
 
 function BatchMeetings() {
 	const { adminClub } = Route.useRouteContext();
-	const { existingDates } = Route.useLoaderData();
+	const { existingDates, defaults } = Route.useLoaderData();
 	const router = useRouter();
 	const existing = useMemo(() => new Set(existingDates), [existingDates]);
 
-	const [mode, setMode] = useState<Mode>("interval");
-	const [weekday, setWeekday] = useState<Weekday>(2);
-	const [intervalWeeks, setIntervalWeeks] = useState(1);
-	const [ordinals, setOrdinals] = useState<Ordinal[]>([2, 4]);
-	const [startDate, setStartDate] = useState("");
-	const [timeOfDay, setTimeOfDay] = useState("19:00");
+	const [mode, setMode] = useState<Mode>(defaults.mode);
+	const [weekday, setWeekday] = useState<Weekday>(defaults.weekday);
+	const [intervalWeeks, setIntervalWeeks] = useState(defaults.intervalWeeks);
+	const [ordinals, setOrdinals] = useState<Ordinal[]>(defaults.ordinals);
+	const [startDate, setStartDate] = useState(defaults.startDate);
+	const [timeOfDay, setTimeOfDay] = useState(defaults.timeOfDay);
 	const [boundKind, setBoundKind] = useState<BoundKind>("count");
 	const [count, setCount] = useState(12);
 	const [until, setUntil] = useState("");
-	const [location, setLocation] = useState("");
+	const [location, setLocation] = useState(defaults.location);
 
 	const [preview, setPreview] = useState<Occurrence[] | null>(null);
 	const [clamped, setClamped] = useState(false);

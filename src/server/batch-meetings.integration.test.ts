@@ -9,7 +9,13 @@
  */
 import { and, eq, gte } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clubs, meetings, roleDefinitions, roleSlots } from "#/db/schema";
+import {
+	clubMeetingRecurrence,
+	clubs,
+	meetings,
+	roleDefinitions,
+	roleSlots,
+} from "#/db/schema";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
 import {
 	cleanup,
@@ -19,12 +25,33 @@ import {
 	testDb,
 } from "#/test/db";
 
+vi.mock("@tanstack/react-start", () => ({
+	createServerFn: () => ({
+		validator: (parse: (input: unknown) => unknown) => ({
+			handler:
+				(handle: (input: { data: unknown }) => unknown) =>
+				({ data }: { data: unknown }) =>
+					handle({ data: parse(data) }),
+		}),
+	}),
+}));
+
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
+const { currentUser } = vi.hoisted(() => ({ currentUser: { id: "" } }));
+
+vi.mock("./guards", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./guards")>()),
+	requireUser: vi.fn(async () => ({ id: currentUser.id })),
+}));
+
 const agenda = await import("#/lib/agenda");
-const { applyBatchCreateMeetings, listClubMeetingDates } = await import(
-	"./batch-meetings-logic"
-);
+const {
+	applyBatchCreateMeetings,
+	getMeetingFormDefaultsLogic,
+	listClubMeetingDates,
+} = await import("./batch-meetings-logic");
+const { getMeetingFormDefaults } = await import("./batch-meetings");
 
 const TZ = "America/Chicago";
 
@@ -162,5 +189,90 @@ describe.skipIf(!hasTestDb)("batch meeting creation", () => {
 				),
 			);
 		expect(after).toHaveLength(0);
+	});
+});
+
+describe.skipIf(!hasTestDb)("getMeetingFormDefaults (#1086)", () => {
+	let club: SeededClub;
+	// Friday 2026-10-02 noon in Chicago.
+	const NOW = new Date("2026-10-02T17:00:00Z");
+
+	beforeEach(async () => {
+		club = await seedClub();
+		await testDb
+			.update(clubs)
+			.set({ timezone: TZ, defaultLocation: "Room 4" })
+			.where(eq(clubs.id, club.clubId));
+		await testDb.delete(meetings).where(eq(meetings.clubId, club.clubId));
+	});
+	afterEach(async () => {
+		await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
+	});
+
+	async function seedMeeting(wall: string, status: "scheduled" | "cancelled") {
+		await testDb.insert(meetings).values({
+			clubId: club.clubId,
+			scheduledAt: zonedWallTimeToUtc(wall, TZ),
+			status,
+		});
+	}
+
+	it("rule club: rule fields, first occurrence after the latest meeting of any status", async () => {
+		await testDb.insert(clubMeetingRecurrence).values({
+			clubId: club.clubId,
+			mode: "monthly",
+			weekday: 4,
+			ordinals: ["2", "4"],
+			timeOfDay: "18:45",
+			location: "Library",
+			enabled: false,
+		});
+		await seedMeeting("2026-12-10T18:45", "cancelled");
+		expect(await getMeetingFormDefaultsLogic(club.clubId, NOW)).toEqual({
+			mode: "monthly",
+			weekday: 4,
+			intervalWeeks: 1,
+			ordinals: [2, 4],
+			timeOfDay: "18:45",
+			startDate: "2026-12-24",
+			location: "Library",
+		});
+	});
+
+	it("no rule: the latest meeting's weekday and time, in the club's timezone", async () => {
+		// 00:30 UTC on the 5th is still Wednesday the 4th, 18:30 in Chicago.
+		await seedMeeting("2026-11-04T18:30", "scheduled");
+		expect(await getMeetingFormDefaultsLogic(club.clubId, NOW)).toEqual({
+			mode: "interval",
+			weekday: 3,
+			intervalWeeks: 1,
+			ordinals: [2, 4],
+			timeOfDay: "18:30",
+			startDate: "2026-11-11",
+			location: "Room 4",
+		});
+	});
+
+	it("no rule, no meetings: fallbacks, start date is today in the club's timezone", async () => {
+		// 03:00 UTC on the 3rd is still the 2nd in Chicago.
+		const late = new Date("2026-10-03T03:00:00Z");
+		const d = await getMeetingFormDefaultsLogic(club.clubId, late);
+		expect(d).toMatchObject({
+			weekday: 2,
+			timeOfDay: "19:00",
+			startDate: "2026-10-02",
+			location: "Room 4",
+		});
+	});
+
+	it("refuses a user who is not an admin viewer of the club", async () => {
+		currentUser.id = club.memberUserId;
+		await expect(getMeetingFormDefaults({ data: club.clubId })).rejects.toThrow(
+			"You don't have permission to view this club.",
+		);
+		currentUser.id = club.adminUserId;
+		await expect(
+			getMeetingFormDefaults({ data: club.clubId }),
+		).resolves.toMatchObject({ location: "Room 4" });
 	});
 });

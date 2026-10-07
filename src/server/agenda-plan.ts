@@ -55,6 +55,7 @@
  * same read `applyBatchCreateMeetings` and `ensureScheduleToppedUp` already make
  * on this very path.
  */
+
 import { asc, eq } from "drizzle-orm";
 import type { db } from "#/db";
 import { clubMeetingRecurrence, clubs, meetings } from "#/db/schema";
@@ -75,6 +76,7 @@ import {
 	type Weekday,
 } from "#/lib/club-local-date";
 import { utcToZonedWallTime } from "#/lib/datetime";
+import { effectiveLocation } from "#/lib/effective-location";
 import { planHash } from "#/lib/mcp-plan";
 import {
 	isMeetingCancelled,
@@ -233,6 +235,7 @@ export async function plan(
 	const [clubRow] = await conn
 		.select({
 			defaultMeetingMinutes: clubs.defaultMeetingMinutes,
+			defaultLocation: clubs.defaultLocation,
 			// `enabled` is deliberately NOT read. A DISABLED rule still supplies a
 			// time and a weekday — see below — so selecting it would be a column
 			// nothing branches on.
@@ -340,7 +343,10 @@ export async function plan(
 				// An entry that says nothing about location inherits the club's
 				// standing one, matching `ensureScheduleToppedUp`; an entry that
 				// explicitly clears it gets null.
-				location: location === undefined ? (rule?.location ?? null) : location,
+				location:
+					location === undefined
+						? effectiveLocation(rule?.location, clubRow.defaultLocation)
+						: location,
 				meta: agendaCreateMeta(entry),
 			});
 			continue;

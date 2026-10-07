@@ -9,6 +9,7 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { navDestination } from "#/lib/nav-destinations";
+import { getMeetingFormDefaults } from "#/server/batch-meetings";
 import { createMeeting } from "#/server/meetings";
 
 export const Route = createFileRoute("/_authed/admin/meetings/new")({
@@ -19,11 +20,14 @@ export const Route = createFileRoute("/_authed/admin/meetings/new")({
 		}
 		return { adminClub };
 	},
+	loader: ({ context }) =>
+		getMeetingFormDefaults({ data: context.adminClub.clubId }),
 	component: NewMeeting,
 });
 
 function NewMeeting() {
 	const { adminClub } = Route.useRouteContext();
+	const defaults = Route.useLoaderData();
 	const router = useRouter();
 	const [submitting, setSubmitting] = useState(false);
 
@@ -79,6 +83,7 @@ function NewMeeting() {
 						id="scheduledAt"
 						name="scheduledAt"
 						type="datetime-local"
+						defaultValue={`${defaults.startDate}T${defaults.timeOfDay}`}
 						required
 					/>
 				</div>
@@ -91,6 +96,7 @@ function NewMeeting() {
 					<Input
 						id="location"
 						name="location"
+						defaultValue={defaults.location}
 						placeholder="Community Hall, Room B"
 					/>
 				</div>

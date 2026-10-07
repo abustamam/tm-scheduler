@@ -149,6 +149,32 @@ describe.skipIf(!hasTestDb)("the agenda planner", () => {
 			expect(line.location).toBeNull();
 		});
 
+		it("an entry with no location inherits the club default when the rule has none (#1086)", async () => {
+			await testDb
+				.update(clubs)
+				.set({ defaultLocation: "Room 4" })
+				.where(eq(clubs.id, seed.clubId));
+			const { plan: p } = await plan(testDb, club, [
+				{ date: TUESDAY, time: "19:00" },
+			]);
+			const line = p.lines[0];
+			if (line?.action !== "create") throw new Error("expected a create");
+			expect(line.location).toBe("Room 4");
+		});
+
+		it("an explicit null location stays none even with a club default (#1086)", async () => {
+			await testDb
+				.update(clubs)
+				.set({ defaultLocation: "Room 4" })
+				.where(eq(clubs.id, seed.clubId));
+			const { plan: p } = await plan(testDb, club, [
+				{ date: TUESDAY, time: "19:00", location: null },
+			]);
+			const line = p.lines[0];
+			if (line?.action !== "create") throw new Error("expected a create");
+			expect(line.location).toBeNull();
+		});
+
 		it("clears the location when the entry explicitly empties it", async () => {
 			await seedRule();
 			const { plan: p } = await plan(testDb, club, [
