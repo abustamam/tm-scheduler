@@ -55,6 +55,7 @@
  * same read `applyBatchCreateMeetings` and `ensureScheduleToppedUp` already make
  * on this very path.
  */
+
 import { asc, eq } from "drizzle-orm";
 import type { db } from "#/db";
 import { clubMeetingRecurrence, clubs, meetings } from "#/db/schema";
@@ -75,6 +76,7 @@ import {
 	type Weekday,
 } from "#/lib/club-local-date";
 import { utcToZonedWallTime } from "#/lib/datetime";
+import { effectiveLocation } from "#/lib/effective-location";
 import { planHash } from "#/lib/mcp-plan";
 import {
 	isMeetingCancelled,
@@ -343,7 +345,7 @@ export async function plan(
 				// explicitly clears it gets null.
 				location:
 					location === undefined
-						? (rule?.location ?? clubRow.defaultLocation ?? null)
+						? effectiveLocation(rule?.location, clubRow.defaultLocation)
 						: location,
 				meta: agendaCreateMeta(entry),
 			});

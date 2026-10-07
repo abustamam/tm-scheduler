@@ -154,4 +154,27 @@ describe("meetingFormDefaults", () => {
 		expect(d.timeOfDay).toBe("18:45");
 		expect(d.location).toBe("Library");
 	});
+
+	it("a rule meeting today whose time has passed starts at the next occurrence", () => {
+		// Thursday 2026-10-08, rule at 18:45 (2nd/4th Thursday).
+		const args = { ...base, rule: monthly, today: "2026-10-08" };
+		expect(meetingFormDefaults({ ...args, nowTime: "17:00" }).startDate).toBe(
+			"2026-10-08",
+		);
+		expect(meetingFormDefaults({ ...args, nowTime: "19:00" }).startDate).toBe(
+			"2026-10-22",
+		);
+		expect(meetingFormDefaults(args).startDate).toBe("2026-10-08");
+	});
+
+	it("no rule: today's weekday with a passed time moves a week", () => {
+		expect(
+			meetingFormDefaults({
+				...base,
+				latestMeetingWall: "2026-09-02T18:00",
+				today: "2026-10-07",
+				nowTime: "20:00",
+			}).startDate,
+		).toBe("2026-10-14");
+	});
 });

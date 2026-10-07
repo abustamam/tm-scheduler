@@ -170,5 +170,6 @@ export async function getMeetingFormDefaultsLogic(
 			: null,
 		clubDefaultLocation: club.defaultLocation,
 		today: utcToZonedWallTime(now, club.timezone).slice(0, 10),
+		nowTime: utcToZonedWallTime(now, club.timezone).slice(11, 16),
 	});
 }

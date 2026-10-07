@@ -13,7 +13,7 @@ import {
 	INVALID_TIMEZONE_MESSAGE,
 	isSupportedClubTimezone,
 } from "#/lib/club-timezone";
-import { MEETING_LIMITS } from "#/lib/meeting-limits";
+import { MEETING_FIELDS } from "#/lib/meeting-limits";
 import { DEFAULT_COUNTRY_CODE } from "#/lib/phone";
 import { refuseTableTopicsSeconds } from "#/lib/table-topics-limits";
 import { isReadableClub } from "./club-readable-logic";
@@ -244,10 +244,7 @@ export const clubProfileSchema = z.object({
 	district: emptyToNull,
 	mission: emptyToNull,
 	meetingSchedule: emptyToNull,
-	defaultLocation: z
-		.string()
-		.trim()
-		.max(MEETING_LIMITS.location)
+	defaultLocation: MEETING_FIELDS.location
 		.transform((s) => (s.length === 0 ? null : s))
 		.nullable()
 		.optional(),
@@ -264,7 +261,11 @@ export async function applyClubProfileUpdate(input: ClubProfileInput) {
 			district: input.district ?? null,
 			mission: input.mission ?? null,
 			meetingSchedule: input.meetingSchedule ?? null,
-			defaultLocation: input.defaultLocation ?? null,
+			// OMITTED leaves the stored value alone (a tab opened before this field
+			// existed saves without it); only an explicit empty or null clears it.
+			...(input.defaultLocation !== undefined && {
+				defaultLocation: input.defaultLocation,
+			}),
 			defaultCountryCode: input.defaultCountryCode ?? null,
 		})
 		.where(eq(clubs.id, input.clubId))

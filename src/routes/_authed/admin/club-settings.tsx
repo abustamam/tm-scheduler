@@ -45,6 +45,7 @@ import {
 	type ImageDimensions,
 	readImageDimensions,
 } from "#/lib/image-dimensions";
+import { MEETING_LIMITS } from "#/lib/meeting-limits";
 import {
 	formatTableTopicsClock,
 	MAX_TABLE_TOPICS_SECONDS,
@@ -636,7 +637,7 @@ function ClubSettings() {
 					<Input
 						id="defaultLocation"
 						name="defaultLocation"
-						maxLength={200}
+						maxLength={MEETING_LIMITS.location}
 						defaultValue={profile?.defaultLocation ?? ""}
 						placeholder="e.g. Community Hall, Room B"
 					/>

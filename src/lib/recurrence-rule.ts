@@ -35,22 +35,22 @@ export interface StoredRecurrenceRule {
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-function parseYmd(s: string): Date {
+export function parseYmd(s: string): Date {
 	const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
 	if (!m) throw new Error("Invalid date.");
 	return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
 }
 
-function fmtYmd(dt: Date): string {
+export function fmtYmd(dt: Date): string {
 	return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
 }
 
-function addDays(dt: Date, n: number): Date {
+export function addDays(dt: Date, n: number): Date {
 	return new Date(dt.getTime() + n * 86_400_000);
 }
 
 /** Parse a stored ordinal token into the `Ordinal` union. */
-function parseOrdinal(s: string): Ordinal {
+export function parseOrdinal(s: string): Ordinal {
 	if (s === "last") return "last";
 	const n = Number(s);
 	if (n >= 1 && n <= 5) return n as Ordinal;

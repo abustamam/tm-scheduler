@@ -346,6 +346,28 @@ describe.skipIf(!hasTestDb)(
 				expect((await getClubProfile(seed.clubId))?.defaultLocation).toBeNull();
 			});
 
+			it("an update that omits the field keeps the stored value; explicit null clears", async () => {
+				await applyClubProfileUpdate(
+					clubProfileSchema.parse({
+						clubId: seed.clubId,
+						defaultLocation: "Room 4",
+					}),
+				);
+				await applyClubProfileUpdate(
+					clubProfileSchema.parse({ clubId: seed.clubId, mission: "M" }),
+				);
+				expect((await getClubProfile(seed.clubId))?.defaultLocation).toBe(
+					"Room 4",
+				);
+				await applyClubProfileUpdate(
+					clubProfileSchema.parse({
+						clubId: seed.clubId,
+						defaultLocation: null,
+					}),
+				);
+				expect((await getClubProfile(seed.clubId))?.defaultLocation).toBeNull();
+			});
+
 			it("rejects 201 characters and accepts 200", () => {
 				const parse = (n: number) =>
 					clubProfileSchema.safeParse({
