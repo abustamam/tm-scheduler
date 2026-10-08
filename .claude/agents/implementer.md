@@ -16,7 +16,9 @@ that area (`commands.md` before a migration, a browser-backed test or a mutation
 - Stay inside the files the issue cites. An EXISTING file it does not cite: stop and report it.
 - Before the PR, run what CI's `check` job runs (`.github/workflows/ci.yml`) and report the
   real numbers: tests passed / skipped, typecheck exit code. A suite that skipped is not green.
-- A migration whose SQL changes data (`UPDATE`, `DELETE FROM`, `INSERT INTO`) needs a `## Prod check` section in the PR body: the read-only SQL to run after deploy and the result that means "as intended" (`docs/agents/data-and-deploy.md`).
+- A migration whose SQL changes data (`UPDATE`, `DELETE FROM`, `INSERT INTO`, `TRUNCATE`) needs a
+  `## Prod check` section in the PR body: the read-only SQL to run after deploy and the result
+  that means "as intended" (`docs/agents/data-and-deploy.md`).
 - Open the PR with `gh pr create` and `Closes #N`, then stop. Never merge, never review your own PR.
 - Need a decision you cannot make from the brief or the code? Return at once with the question,
   its options and your recommendation as your result. Do not post a handoff comment or notify

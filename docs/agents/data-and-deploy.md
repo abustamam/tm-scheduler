@@ -92,14 +92,18 @@ applied, and held 0 rows, so nothing had been rewritten. That was the good outco
 The week 2026-09-30..10-07 shipped ten migrations (`0105` to `0114`); this is the rule that stops
 the answer depending on luck.
 
-**When it applies.** A file under `drizzle/` with a statement that writes rows: `UPDATE <table>`,
-`DELETE FROM` or `INSERT INTO`, case-insensitive, comment lines ignored, including inside a `WITH`
-or a `DO` block. A migration that only changes the schema needs no section. The bare words do not
-count: a foreign key's `ON DELETE` / `ON UPDATE`, a `FOR UPDATE` lock and a `BEFORE INSERT` trigger
-event are DDL. Measured 2026-10-08, the bare words appear in 70 of 116 migrations (40 of them only
-as a foreign key's action) and a row-writing statement in 29, so a rule that matched the words
-would ask for a prod check on nearly every table. The exact command is in `/review-pr` step 3;
-`src/test/prod-check-contract.guard.test.ts` holds it to the real migrations.
+**When it applies.** A file under `drizzle/` with a statement that writes rows: `UPDATE`,
+`DELETE FROM`, `INSERT INTO` or `TRUNCATE`, case-insensitive, comment lines ignored. A migration
+that only changes the schema needs no section. The test is a line-based `grep` in `/review-pr`
+step 3 (`.claude/skills/review-pr/SKILL.md`), which is the one place that says exactly which
+shapes it catches and why it matches a statement rather than the bare words. In short: it is wide
+on purpose, so it sees a statement inside a `WITH`, `DO` or `IF ... THEN` body and one inside an
+`EXECUTE '...'` string. A foreign key's `ON DELETE` / `ON UPDATE`, a `FOR UPDATE` lock and a
+`BEFORE INSERT` trigger event are DDL and do not count. It can still fire on DDL (a foreign key
+whose `ON` and `UPDATE no action` sit on different lines is read as an `UPDATE`); that false alarm
+is accepted, because a silent hint reads as "DDL only" and a wrong one costs a line. It is a
+grep, not a SQL parser: when the hint is silent on SQL that is anything but plain DDL, read it.
+`src/test/prod-check-contract.guard.test.ts` runs that command over fixtures and real migrations.
 
 **What the PR carries.** A section headed exactly `## Prod check`. That heading is the contract
 between the PR body, this doc and `/review-pr`, so do not reword it. It holds:
