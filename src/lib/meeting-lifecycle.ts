@@ -4,7 +4,10 @@
 // rejected server-side. These pure helpers are client-safe (no `#/db`) so both
 // the server-side lock and the read-only UI can share them.
 import { utcToZonedWallTime } from "./datetime";
-import { isMeetingCancelled } from "./meeting-cancellation-notice";
+import {
+	isMeetingCancelled,
+	MEETING_CANCELLED_MESSAGE,
+} from "./meeting-cancellation-notice";
 import { type MeetingViewer, meetingViewer } from "./meeting-viewer";
 
 /** The exact banner/lock copy shown on a completed meeting. */
@@ -47,6 +50,94 @@ export const ATTENDANCE_BEFORE_MEETING_MESSAGE =
 /** True when the meeting is completed (locked, read-only). */
 export function isMeetingLocked(status: string): boolean {
 	return status === "completed";
+}
+
+/**
+ * The meeting write policy (#1134, decided in #1129 Q3/Q5): a writer refuses a
+ * frozen meeting by WRITE CLASS, not by hand-picking `assertMeetingNotCancelled`
+ * or `assertMeetingNotLocked`, and this one table says which statuses each class
+ * refuses. A new status is then one edit here, not an audit of every writer.
+ *
+ * - `plan`: what is intended for a meeting that has not happened (the agenda,
+ *   its meta, role claims and assignments). Refused once the meeting is
+ *   cancelled or completed.
+ * - `record`: what is written about a meeting after it happened (attendance,
+ *   minutes, votes, awards). Refused on a cancelled meeting, which never
+ *   happened, and accepted on a completed one, which is when it is written up.
+ *
+ * Client-safe (no schema import), like everything in this module, so the
+ * `MeetingStatus` union below is HAND-WRITTEN. `meeting-write-gate.ts`, which
+ * may import the schema, asserts at the type level that it equals
+ * `meetingStatusEnum`'s values, so the two cannot drift apart.
+ */
+export type MeetingStatus = "scheduled" | "cancelled" | "completed";
+/** Every status that is not `scheduled`: the ones a write class can refuse. */
+export type FrozenMeetingStatus = Exclude<MeetingStatus, "scheduled">;
+export type MeetingWriteClass = "plan" | "record";
+
+/**
+ * Which statuses each write class refuses. Adding a status to `MeetingStatus`
+ * fails typecheck here until it is placed in both rows, and in
+ * `REFUSAL_MESSAGE` below. `scheduled` is typed as `"accept"` alone: a meeting
+ * that has not been frozen is never refused, and `meetingRefusal`'s
+ * `FrozenMeetingStatus` return type rests on it.
+ */
+export const MEETING_WRITE_POLICY: Record<
+	MeetingWriteClass,
+	{ scheduled: "accept" } & Record<FrozenMeetingStatus, "accept" | "refuse">
+> = {
+	plan: { scheduled: "accept", cancelled: "refuse", completed: "refuse" },
+	record: { scheduled: "accept", cancelled: "refuse", completed: "accept" },
+};
+
+/** The sentence a refused status says when the writer gives no copy of its own. */
+const REFUSAL_MESSAGE: Record<FrozenMeetingStatus, string> = {
+	cancelled: MEETING_CANCELLED_MESSAGE,
+	completed: MEETING_LOCKED_MESSAGE,
+};
+
+/**
+ * The refused status, or null when the class accepts it. An unknown status
+ * throws (fail closed): a status this table has never heard of is not one a
+ * write may assume is fine, and `status` arrives as a bare string from every
+ * caller. `hasOwn` rather than `in`, so `"toString"` is unknown, not accepted.
+ */
+export function meetingRefusal(
+	status: string,
+	writeClass: MeetingWriteClass,
+): FrozenMeetingStatus | null {
+	const row = MEETING_WRITE_POLICY[writeClass];
+	if (!Object.hasOwn(row, status)) {
+		throw new Error(`Unknown meeting status: ${status}`);
+	}
+	const known = status as MeetingStatus;
+	if (row[known] === "accept") return null;
+	// `scheduled` is typed `"accept"`, so a refused status is a frozen one.
+	return known as FrozenMeetingStatus;
+}
+
+export interface MeetingWriteOptions {
+	/** Replaces the refusal sentence for a status, so a writer keeps its current copy. */
+	messages?: Partial<Record<FrozenMeetingStatus, string>>;
+	/** A per-writer override (#1129 Q3): statuses this writer accepts although its class refuses them. */
+	accept?: readonly FrozenMeetingStatus[];
+}
+
+/**
+ * Throw the refused status's message: `options.messages[status]` when given,
+ * else `MEETING_CANCELLED_MESSAGE` / `MEETING_LOCKED_MESSAGE`. A status in
+ * `options.accept` is not refused. Pure: call with the status a write already
+ * loaded. The unknown-status check runs even for an accepted status, so an
+ * override cannot turn a fail-closed refusal into a pass.
+ */
+export function assertMeetingAccepts(
+	status: string,
+	writeClass: MeetingWriteClass,
+	options: MeetingWriteOptions = {},
+): void {
+	const refused = meetingRefusal(status, writeClass);
+	if (refused === null || options.accept?.includes(refused)) return;
+	throw new Error(options.messages?.[refused] ?? REFUSAL_MESSAGE[refused]);
 }
 
 /**
