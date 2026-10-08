@@ -157,8 +157,8 @@ describe.skipIf(!hasTestDb)("meeting write gate (#1134)", () => {
 		});
 
 		it("refuses nothing when the writer accepts every status its class refuses", async () => {
-			// An empty refused set must not render `not in ()`, which is a syntax
-			// error, nor widen to a predicate that is always false.
+			// Accepting everything the class refuses leaves only the correlation: all
+			// three meetings' slots match, and the predicate is not always false.
 			const gate = () =>
 				meetingAcceptsWrite(testDb, "record", roleSlots.meetingId, {
 					accept: ["cancelled"],
@@ -166,12 +166,6 @@ describe.skipIf(!hasTestDb)("meeting write gate (#1134)", () => {
 			expect(await claimGuarded(cancelled.slotId, gate())).toBe(1);
 			expect(await claimGuarded(completed.slotId, gate())).toBe(1);
 			expect(await claimGuarded(scheduled.slotId, gate())).toBe(1);
-		});
-
-		it("refuses a self-correlation on meetings, which would match every row", () => {
-			expect(() => meetingAcceptsWrite(testDb, "plan", meetings.id)).toThrow(
-				"meetingRowAccepts",
-			);
 		});
 	});
 
@@ -205,11 +199,12 @@ describe.skipIf(!hasTestDb)("meeting write gate (#1134)", () => {
 	});
 });
 
-// The rendered SQL `meetingAcceptsWrite` produces. A hand-written correlated
-// subquery can come out unqualified and resolve both sides against its OWN
-// table, matching every row (`drizzle-sql-subquery-drops-qualifiers`). Pinned
-// the way `meeting-cancel.integration.test.ts` pins `meetingNotCancelled`. No
-// database: `toSQL()` renders.
+// The rendered SQL the helpers produce, and the one refusal that needs no
+// query. A hand-written correlated subquery can come out unqualified and
+// resolve both sides against its OWN table, matching every row
+// (`drizzle-sql-subquery-drops-qualifiers`). Pinned the way
+// `meeting-cancel.integration.test.ts` pins `meetingNotCancelled`. No database:
+// `toSQL()` renders, so these run with or without one.
 describe("meeting write gate renders qualified SQL", () => {
 	it("meetingAcceptsWrite names role_slots on one side and meetings on the other", () => {
 		const { sql: rendered } = testDb
@@ -223,7 +218,7 @@ describe("meeting write gate renders qualified SQL", () => {
 			)
 			.toSQL();
 		expect(rendered).toContain(
-			'exists (select 1 from "meetings" where ("meetings"."id" = "role_slots"."meeting_id" and "meetings"."status" not in ($',
+			'exists (select 1 from "meetings" where ("meetings"."id" = "role_slots"."meeting_id" and "meetings"."status" in ($',
 		);
 	});
 
@@ -233,7 +228,35 @@ describe("meeting write gate renders qualified SQL", () => {
 			.set({ lengthMinutes: 45 })
 			.where(and(eq(meetings.id, "x"), meetingRowAccepts("plan")))
 			.toSQL();
-		expect(rendered).toContain('"meetings"."status" not in ($');
+		expect(rendered).toContain('"meetings"."status" in ($');
 		expect(rendered).not.toContain("exists");
+	});
+
+	// An allow-list, so a status the policy has never heard of is not in it. The
+	// bound parameters ARE the list: a deny-list (`not in`) would carry the
+	// refused statuses instead, and an unknown enum value would pass it.
+	it("filters on the accepted statuses, never the refused ones", () => {
+		const accepted = (
+			writeClass: "plan" | "record",
+			accept?: readonly ("cancelled" | "completed")[],
+		) =>
+			testDb
+				.select({ id: meetings.id })
+				.from(meetings)
+				.where(meetingRowAccepts(writeClass, { accept }))
+				.toSQL();
+		expect(accepted("plan").sql).not.toContain("not in");
+		expect(accepted("plan").params).toEqual(["scheduled"]);
+		expect(accepted("record").params).toEqual(["scheduled", "completed"]);
+		expect(accepted("plan", ["cancelled"]).params).toEqual([
+			"scheduled",
+			"cancelled",
+		]);
+	});
+
+	it("meetingAcceptsWrite refuses a self-correlation on meetings, which would match every row", () => {
+		expect(() => meetingAcceptsWrite(testDb, "plan", meetings.id)).toThrow(
+			"meetingRowAccepts",
+		);
 	});
 });

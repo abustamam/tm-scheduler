@@ -141,6 +141,30 @@ export function assertMeetingAccepts(
 }
 
 /**
+ * The statuses a write of `writeClass` accepts, plus any the writer accepts
+ * anyway (`options.accept`), in policy order. `scheduled` is always among them.
+ *
+ * The SQL helpers in `src/server/meeting-write-gate.ts` filter on THIS list
+ * (`status IN (...)`), not on the refused one (`status NOT IN (...)`). The
+ * difference is a status the policy has never heard of: `meetingRefusal` fails
+ * closed on it, and an allow-list does the same in the statement, where a
+ * deny-list would let it through. It can happen: a Postgres enum value cannot
+ * be dropped, so one added by a migration and then rolled back stays in the
+ * enum for good. Pure and client-safe, so the accept-filtering is covered
+ * without a database.
+ */
+export function acceptedStatuses(
+	writeClass: MeetingWriteClass,
+	accept: MeetingWriteOptions["accept"] = [],
+): MeetingStatus[] {
+	const row = MEETING_WRITE_POLICY[writeClass];
+	const alsoAccepted: readonly string[] = accept;
+	return (Object.keys(row) as MeetingStatus[]).filter(
+		(status) => row[status] === "accept" || alsoAccepted.includes(status),
+	);
+}
+
+/**
  * Whether a meeting's scheduled *date* is today or in the past, in the club's
  * timezone. "Complete" is only offered/allowed once this is true — a future
  * meeting cannot be locked. Compared at day granularity (a meeting earlier

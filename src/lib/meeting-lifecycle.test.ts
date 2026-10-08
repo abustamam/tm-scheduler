@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MEETING_CANCELLED_MESSAGE } from "./meeting-cancellation-notice";
 import {
+	acceptedStatuses,
 	assertMeetingAccepts,
 	isMeetingLocked,
 	isMeetingOver,
@@ -513,5 +514,65 @@ describe("assertMeetingAccepts", () => {
 				accept: ["cancelled", "completed"],
 			}),
 		).toThrow("Unknown meeting status: postponed");
+	});
+});
+
+// The list the SQL helpers filter on (#1134). An allow-list: a status missing
+// from it is refused by the statement, which is how an unknown one fails closed.
+describe("acceptedStatuses", () => {
+	it("is the statuses the class accepts, in policy order", () => {
+		expect(acceptedStatuses("plan")).toEqual(["scheduled"]);
+		expect(acceptedStatuses("record")).toEqual(["scheduled", "completed"]);
+	});
+
+	it("always includes scheduled, whatever the class and override", () => {
+		for (const writeClass of ["plan", "record"] as const) {
+			expect(acceptedStatuses(writeClass)).toContain("scheduled");
+			expect(
+				acceptedStatuses(writeClass, ["cancelled", "completed"]),
+			).toContain("scheduled");
+		}
+	});
+
+	it("adds a status the writer accepts anyway, and no other", () => {
+		expect(acceptedStatuses("plan", ["cancelled"])).toEqual([
+			"scheduled",
+			"cancelled",
+		]);
+		expect(acceptedStatuses("plan", ["completed"])).toEqual([
+			"scheduled",
+			"completed",
+		]);
+		expect(acceptedStatuses("plan", ["cancelled", "completed"])).toEqual([
+			"scheduled",
+			"cancelled",
+			"completed",
+		]);
+	});
+
+	it("does not list a status twice when the class already accepts it", () => {
+		expect(acceptedStatuses("record", ["completed"])).toEqual([
+			"scheduled",
+			"completed",
+		]);
+	});
+
+	it("agrees with meetingRefusal on every status, with and without an override", () => {
+		for (const writeClass of ["plan", "record"] as const) {
+			for (const status of ["scheduled", "cancelled", "completed"] as const) {
+				expect(acceptedStatuses(writeClass).includes(status)).toBe(
+					meetingRefusal(status, writeClass) === null,
+				);
+			}
+		}
+	});
+
+	it("does not change the policy it reads", () => {
+		acceptedStatuses("plan", ["cancelled", "completed"]);
+		expect(MEETING_WRITE_POLICY.plan).toEqual({
+			scheduled: "accept",
+			cancelled: "refuse",
+			completed: "refuse",
+		});
 	});
 });

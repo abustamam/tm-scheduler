@@ -13,12 +13,22 @@
 // statement, as `meetingNotCancelled` (`slots-logic.ts`) does for the one
 // status it knows. These helpers are that predicate, generalised to a write
 // class, so adding a status changes `MEETING_WRITE_POLICY` and nothing here.
+//
+// ## An allow-list, not a deny-list
+//
+// Both helpers say `status IN (accepted)`, never `status NOT IN (refused)`. The
+// two agree on every status the policy knows. They differ on one it does not:
+// `meetingRefusal` fails closed on it, and only the allow-list does too. A
+// Postgres enum value cannot be dropped, so one added by a migration and then
+// rolled back stays in the column's type, and a deny-list would let it write.
+// The list is never empty, because `scheduled` is always accepted
+// (`acceptedStatuses`).
 import {
 	and,
 	eq,
 	exists,
 	getTableName,
-	notInArray,
+	inArray,
 	type SQL,
 	sql,
 } from "drizzle-orm";
@@ -26,7 +36,7 @@ import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import type { db } from "#/db";
 import { type meetingStatusEnum, meetings } from "#/db/schema";
 import {
-	MEETING_WRITE_POLICY,
+	acceptedStatuses,
 	type MeetingStatus,
 	type MeetingWriteClass,
 	type MeetingWriteOptions,
@@ -54,22 +64,11 @@ export type MeetingStatusMatchesEnum = AssertTrue<
 	Equal<MeetingStatus, (typeof meetingStatusEnum.enumValues)[number]>
 >;
 
-/** The statuses `writeClass` refuses, minus the ones this writer accepts anyway. */
-function refusedStatuses(
-	writeClass: MeetingWriteClass,
-	accept: MeetingWriteOptions["accept"],
-): MeetingStatus[] {
-	const row = MEETING_WRITE_POLICY[writeClass];
-	const accepted: readonly string[] = accept ?? [];
-	return (Object.keys(row) as MeetingStatus[]).filter(
-		(status) => row[status] === "refuse" && !accepted.includes(status),
-	);
-}
-
 /**
  * SQL predicate for a CHILD table's write, in its own WHERE: true while the
- * row's meeting accepts `writeClass` (minus `options.accept`). `meetingId` is
- * the child's column that points at the meeting, e.g. `roleSlots.meetingId`.
+ * row's meeting accepts `writeClass` (and any status in `options.accept`).
+ * `meetingId` is the child's column that points at the meeting, e.g.
+ * `roleSlots.meetingId`.
  *
  * Built with the query builder, the same shape as `meetingNotCancelled`, and
  * NOT a hand-written `sql` subquery: those can drop the column qualifier, and
@@ -97,33 +96,33 @@ export function meetingAcceptsWrite(
 			"meetingAcceptsWrite is for a child table's meeting_id; use meetingRowAccepts for a write to meetings.",
 		);
 	}
-	const refused = refusedStatuses(writeClass, options?.accept);
 	return exists(
 		conn
 			.select({ one: sql`1` })
 			.from(meetings)
 			.where(
-				refused.length === 0
-					? eq(meetings.id, meetingId)
-					: and(
-							eq(meetings.id, meetingId),
-							notInArray(meetings.status, refused),
-						),
+				and(
+					eq(meetings.id, meetingId),
+					inArray(
+						meetings.status,
+						acceptedStatuses(writeClass, options?.accept),
+					),
+				),
 			),
 	);
 }
 
 /**
  * For an UPDATE/DELETE on `meetings` itself: true while this row's own status
- * accepts `writeClass` (minus `options.accept`). No subquery: the row is the
- * meeting, so its own `status` column is the whole question.
+ * accepts `writeClass` (and any status in `options.accept`). No subquery: the
+ * row is the meeting, so its own `status` column is the whole question.
  */
 export function meetingRowAccepts(
 	writeClass: MeetingWriteClass,
 	options?: Pick<MeetingWriteOptions, "accept">,
 ): SQL {
-	const refused = refusedStatuses(writeClass, options?.accept);
-	return refused.length === 0
-		? sql`true`
-		: notInArray(meetings.status, refused);
+	return inArray(
+		meetings.status,
+		acceptedStatuses(writeClass, options?.accept),
+	);
 }

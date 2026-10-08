@@ -466,18 +466,16 @@ export async function resolveMeetingAgendaAuthz(
 	// discloses meeting state the takedown was meant to end and answers
 	// differently from the same club's scheduled meeting.
 	await assertMeetingClubNotArchived(clubId);
-	// Early refusal for both grant arms, by write class (#1134): this is a PLAN
-	// write, so a completed meeting (the lock, #150) and a cancelled one (#1085)
-	// are both refused, with their own sentences, from the one policy. Slot
-	// writers recheck status inside their meeting-row lock; this preflight alone
-	// cannot protect a later write from concurrent completion. Reopen is a
-	// separate admin path.
-	//
-	// #1085. A cancelled meeting is hidden from every member and its editors are
-	// hidden from the officers, but a stale tab, an offline replay or a direct
-	// call still lands here: without this it quietly gains a theme, a location or
-	// a new date. Both arms, beside the lock and for the lock's reason. Restore
-	// is the way back, and it does not come through here.
+	// Early refusal for both grant arms, by write class (#1134). The agenda is a
+	// PLAN write, so a completed meeting (the lock, #150) and a cancelled one
+	// (#1085) are both refused, each with its own sentence, from the one policy.
+	// A cancelled meeting is hidden from every member and its editors are hidden
+	// from the officers, but a stale tab, an offline replay or a direct call
+	// still lands here: without the cancelled arm it would quietly gain a theme,
+	// a location or a new date. Restore is the way back, and it does not come
+	// through here. Slot writers recheck status inside their meeting-row lock;
+	// this preflight alone cannot protect a later write from concurrent
+	// completion. Reopen is a separate admin path.
 	assertMeetingAccepts(meeting.status, "plan");
 	const { tmodMemberId } = await loadRoleSlotAssignees(input.meetingId);
 
