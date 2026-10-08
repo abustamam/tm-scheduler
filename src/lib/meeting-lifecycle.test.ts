@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { MEETING_CANCELLED_MESSAGE } from "./meeting-cancellation-notice";
 import {
+	acceptedStatuses,
+	assertMeetingAccepts,
 	isMeetingLocked,
 	isMeetingOver,
 	lockedViewer,
+	MEETING_LOCKED_MESSAGE,
+	MEETING_WRITE_POLICY,
+	type MeetingWriteClass,
 	meetingDatePassed,
 	meetingDateReached,
 	meetingPhase,
+	meetingRefusal,
 	resolveMeetingViewer,
 } from "./meeting-lifecycle";
 import { meetingViewer } from "./meeting-viewer";
@@ -413,5 +420,159 @@ describe("meetingPhase (#541 D1)", () => {
 				isSignedIn: true,
 			}).canManage,
 		).toBe(true);
+	});
+});
+
+// The meeting write policy (#1134). One table owns which statuses each write
+// class refuses; these pin its rows and the two functions that read it.
+describe("MEETING_WRITE_POLICY", () => {
+	it("has exactly the plan and record rows", () => {
+		expect(MEETING_WRITE_POLICY).toEqual({
+			plan: { scheduled: "accept", cancelled: "refuse", completed: "refuse" },
+			record: { scheduled: "accept", cancelled: "refuse", completed: "accept" },
+		});
+	});
+});
+
+describe("meetingRefusal", () => {
+	it.each<[string, MeetingWriteClass, string | null]>([
+		["scheduled", "plan", null],
+		["cancelled", "plan", "cancelled"],
+		["completed", "plan", "completed"],
+		["scheduled", "record", null],
+		["cancelled", "record", "cancelled"],
+		["completed", "record", null],
+	])("%s under %s refuses %s", (status, writeClass, refused) => {
+		expect(meetingRefusal(status, writeClass)).toBe(refused);
+	});
+
+	it("throws on an unknown status, naming it, for both classes", () => {
+		for (const writeClass of ["plan", "record"] as const) {
+			expect(() => meetingRefusal("postponed", writeClass)).toThrow(
+				"Unknown meeting status: postponed",
+			);
+		}
+	});
+
+	it("does not mistake an Object.prototype key for a known status", () => {
+		for (const status of ["toString", "__proto__", "constructor", ""]) {
+			expect(() => meetingRefusal(status, "plan")).toThrow(
+				"Unknown meeting status",
+			);
+		}
+	});
+});
+
+describe("assertMeetingAccepts", () => {
+	it("refuses a cancelled meeting for both classes with the cancelled sentence", () => {
+		for (const writeClass of ["plan", "record"] as const) {
+			expect(() => assertMeetingAccepts("cancelled", writeClass)).toThrow(
+				new Error(MEETING_CANCELLED_MESSAGE),
+			);
+		}
+	});
+
+	it("refuses a completed meeting for plan with the lock sentence", () => {
+		expect(() => assertMeetingAccepts("completed", "plan")).toThrow(
+			new Error(MEETING_LOCKED_MESSAGE),
+		);
+	});
+
+	it("accepts a completed meeting for record and a scheduled one for either", () => {
+		expect(() => assertMeetingAccepts("completed", "record")).not.toThrow();
+		expect(() => assertMeetingAccepts("scheduled", "plan")).not.toThrow();
+		expect(() => assertMeetingAccepts("scheduled", "record")).not.toThrow();
+	});
+
+	it("replaces the sentence for the status it names and no other", () => {
+		const messages = { cancelled: "No edits on a cancelled meeting." };
+		expect(() =>
+			assertMeetingAccepts("cancelled", "plan", { messages }),
+		).toThrow(new Error("No edits on a cancelled meeting."));
+		// The lock keeps its own copy when only the cancelled sentence is given.
+		expect(() =>
+			assertMeetingAccepts("completed", "plan", { messages }),
+		).toThrow(new Error(MEETING_LOCKED_MESSAGE));
+	});
+
+	it("lets a writer accept a status its class refuses, and only that one", () => {
+		const options = { accept: ["cancelled"] } as const;
+		expect(() =>
+			assertMeetingAccepts("cancelled", "plan", options),
+		).not.toThrow();
+		expect(() => assertMeetingAccepts("completed", "plan", options)).toThrow(
+			new Error(MEETING_LOCKED_MESSAGE),
+		);
+	});
+
+	it("throws on an unknown status, naming it, even when the writer accepts", () => {
+		expect(() => assertMeetingAccepts("postponed", "plan")).toThrow(
+			"Unknown meeting status: postponed",
+		);
+		expect(() =>
+			assertMeetingAccepts("postponed", "record", {
+				accept: ["cancelled", "completed"],
+			}),
+		).toThrow("Unknown meeting status: postponed");
+	});
+});
+
+// The list the SQL helpers filter on (#1134). An allow-list: a status missing
+// from it is refused by the statement, which is how an unknown one fails closed.
+describe("acceptedStatuses", () => {
+	it("is the statuses the class accepts, in policy order", () => {
+		expect(acceptedStatuses("plan")).toEqual(["scheduled"]);
+		expect(acceptedStatuses("record")).toEqual(["scheduled", "completed"]);
+	});
+
+	it("always includes scheduled, whatever the class and override", () => {
+		for (const writeClass of ["plan", "record"] as const) {
+			expect(acceptedStatuses(writeClass)).toContain("scheduled");
+			expect(
+				acceptedStatuses(writeClass, ["cancelled", "completed"]),
+			).toContain("scheduled");
+		}
+	});
+
+	it("adds a status the writer accepts anyway, and no other", () => {
+		expect(acceptedStatuses("plan", ["cancelled"])).toEqual([
+			"scheduled",
+			"cancelled",
+		]);
+		expect(acceptedStatuses("plan", ["completed"])).toEqual([
+			"scheduled",
+			"completed",
+		]);
+		expect(acceptedStatuses("plan", ["cancelled", "completed"])).toEqual([
+			"scheduled",
+			"cancelled",
+			"completed",
+		]);
+	});
+
+	it("does not list a status twice when the class already accepts it", () => {
+		expect(acceptedStatuses("record", ["completed"])).toEqual([
+			"scheduled",
+			"completed",
+		]);
+	});
+
+	it("agrees with meetingRefusal on every status, with and without an override", () => {
+		for (const writeClass of ["plan", "record"] as const) {
+			for (const status of ["scheduled", "cancelled", "completed"] as const) {
+				expect(acceptedStatuses(writeClass).includes(status)).toBe(
+					meetingRefusal(status, writeClass) === null,
+				);
+			}
+		}
+	});
+
+	it("does not change the policy it reads", () => {
+		acceptedStatuses("plan", ["cancelled", "completed"]);
+		expect(MEETING_WRITE_POLICY.plan).toEqual({
+			scheduled: "accept",
+			cancelled: "refuse",
+			completed: "refuse",
+		});
 	});
 });

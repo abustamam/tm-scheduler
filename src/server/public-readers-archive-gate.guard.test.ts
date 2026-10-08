@@ -889,19 +889,73 @@ describe("self-assert guards rest on an archive-gated resolver (#555)", () => {
 		});
 	}
 
-	it("places the gate before the meeting-lock check where both exist", () => {
+	/**
+	 * The call each resolver refuses a frozen meeting with. Since #1134 that is
+	 * `assertMeetingAccepts` (the write policy); `assertMeetingNotLocked` was the
+	 * name before it and is still recognised, so a resolver that goes back to the
+	 * per-status helper is still ordered. A rename that neither name matches fails
+	 * the "has a status check" case below instead of skipping the ordering one.
+	 */
+	const STATUS_CHECKS = ["assertMeetingAccepts(", "assertMeetingNotLocked("];
+
+	/**
+	 * The one resolver with NO status check, on purpose: a Ballot Counter's
+	 * capabilities span the live meeting, and completing a meeting is what
+	 * force-closes voting, so its callers check `meetingStatus` themselves
+	 * (#510). Named here so the exemption is a decision someone can read, not a
+	 * `continue` that a rename turns into silence.
+	 */
+	const NO_STATUS_CHECK = new Set(["resolveVoteCounterAuthz"]);
+
+	const statusCheckAt = (body: string): number => {
+		const found = STATUS_CHECKS.map((name) => body.indexOf(name)).filter(
+			(at) => at !== -1,
+		);
+		return found.length === 0 ? -1 : Math.min(...found);
+	};
+
+	it("names the one resolver without a status check", () => {
+		const resolvers = SELF_ASSERT_RESOLVERS.map((r) => r.resolver);
+		for (const exempt of NO_STATUS_CHECK) {
+			expect(
+				resolvers,
+				`${exempt} is exempt from the status check but is not a self-assert resolver; update NO_STATUS_CHECK.`,
+			).toContain(exempt);
+			expect(
+				statusCheckAt(namedFunctionBody(authz, exempt)),
+				`${exempt} now has a status check, so it is no longer exempt: drop it from NO_STATUS_CHECK so the ordering case below covers it.`,
+			).toBe(-1);
+		}
+	});
+
+	it("refuses a frozen meeting in every resolver except the exempt one", () => {
+		const missing = SELF_ASSERT_RESOLVERS.map((r) => r.resolver)
+			.filter((resolver) => !NO_STATUS_CHECK.has(resolver))
+			.filter(
+				(resolver) => statusCheckAt(namedFunctionBody(authz, resolver)) === -1,
+			);
+		expect(
+			missing,
+			`these resolvers call none of ${STATUS_CHECKS.join(", ")}, so a completed or cancelled meeting is editable through them again, or the call was renamed and the ordering case below would have skipped them. Restore the call, or add the new name to STATUS_CHECKS.\n${missing.join("\n")}`,
+		).toEqual([]);
+	});
+
+	it("places the gate before the meeting-status check in every resolver that has one", () => {
 		const offenders: string[] = [];
 		for (const { resolver } of SELF_ASSERT_RESOLVERS) {
+			if (NO_STATUS_CHECK.has(resolver)) continue;
 			const body = namedFunctionBody(authz, resolver);
 			const archive = body.indexOf("assertMeetingClubNotArchived(");
-			const lock = body.indexOf("assertMeetingNotLocked(");
-			// `resolveVoteCounterAuthz` deliberately has no lock check.
-			if (lock === -1) continue;
-			if (archive > lock) offenders.push(resolver);
+			const status = statusCheckAt(body);
+			// A missing check is reported by the case above; here it is an offender
+			// too, so this one cannot pass by finding nothing to order.
+			if (archive === -1 || status === -1 || archive > status) {
+				offenders.push(resolver);
+			}
 		}
 		expect(
 			offenders,
-			`the archive gate must precede the lock check: with the lock first, an archived club's COMPLETED meeting answers "this meeting is completed", which both discloses meeting state the takedown was meant to end and answers differently from the same club's scheduled meeting.\n${offenders.join("\n")}`,
+			`the archive gate must precede the status check: with the status check first, an archived club's COMPLETED meeting answers "this meeting is locked", which both discloses meeting state the takedown was meant to end and answers differently from the same club's scheduled meeting.\n${offenders.join("\n")}`,
 		).toEqual([]);
 	});
 });

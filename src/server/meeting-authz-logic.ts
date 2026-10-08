@@ -14,8 +14,8 @@ import {
 	roleSlots,
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
-import { assertMeetingNotCancelled } from "#/lib/meeting-cancellation-notice";
 import {
+	assertMeetingAccepts,
 	isMeetingLocked,
 	MEETING_LOCKED_MESSAGE,
 } from "#/lib/meeting-lifecycle";
@@ -466,16 +466,17 @@ export async function resolveMeetingAgendaAuthz(
 	// discloses meeting state the takedown was meant to end and answers
 	// differently from the same club's scheduled meeting.
 	await assertMeetingClubNotArchived(clubId);
-	// Early refusal for both grant arms. Slot writers recheck status inside their
-	// meeting-row lock; this preflight alone cannot protect a later write from
-	// concurrent completion. Reopen is a separate admin path.
-	assertMeetingNotLocked(meeting.status);
-	// #1085. A cancelled meeting is hidden from every member and its editors are
-	// hidden from the officers, but a stale tab, an offline replay or a direct
-	// call still lands here: without this it quietly gains a theme, a location or
-	// a new date. Both arms, beside the lock and for the lock's reason. Restore
-	// is the way back, and it does not come through here.
-	assertMeetingNotCancelled(meeting.status);
+	// Early refusal for both grant arms, by write class (#1134). The agenda is a
+	// PLAN write, so a completed meeting (the lock, #150) and a cancelled one
+	// (#1085) are both refused, each with its own sentence, from the one policy.
+	// A cancelled meeting is hidden from every member and its editors are hidden
+	// from the officers, but a stale tab, an offline replay or a direct call
+	// still lands here: without the cancelled arm it would quietly gain a theme,
+	// a location or a new date. Restore is the way back, and it does not come
+	// through here. Slot writers recheck status inside their meeting-row lock;
+	// this preflight alone cannot protect a later write from concurrent
+	// completion. Reopen is a separate admin path.
+	assertMeetingAccepts(meeting.status, "plan");
 	const { tmodMemberId } = await loadRoleSlotAssignees(input.meetingId);
 
 	// Admin path (session admin or read_write impersonation, #246). Also hands
@@ -551,9 +552,9 @@ export async function resolveWordOfTheDayAuthz(
 	// Same archive gate as the agenda resolver above, for the same reason and in
 	// the same position: before the admin arm returns, and before the lock check.
 	await assertMeetingClubNotArchived(clubId);
-	assertMeetingNotLocked(meeting.status);
-	// #1085, as in the agenda resolver above.
-	assertMeetingNotCancelled(meeting.status);
+	// The lock (#150) and the cancelled refusal (#1085), as one plan-write policy
+	// (#1134), as in the agenda resolver above.
+	assertMeetingAccepts(meeting.status, "plan");
 	const { tmodMemberId, grammarianMemberId } = await loadRoleSlotAssignees(
 		input.meetingId,
 	);
@@ -645,9 +646,9 @@ export async function resolveTableTopicsNotesAuthz(
 	// Same order as the WOD resolver: archive gate, then the lock, before the
 	// admin arm can return.
 	await assertMeetingClubNotArchived(clubId);
-	assertMeetingNotLocked(meeting.status);
-	// #1085, as in the agenda resolver above.
-	assertMeetingNotCancelled(meeting.status);
+	// The lock (#150) and the cancelled refusal (#1085), as one plan-write policy
+	// (#1134), as in the agenda resolver above.
+	assertMeetingAccepts(meeting.status, "plan");
 	const { tmodMemberId, tableTopicsMasterMemberId } =
 		await loadRoleSlotAssignees(input.meetingId);
 
