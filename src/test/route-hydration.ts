@@ -322,9 +322,26 @@ export function parseHydrationError(text: string): Mismatch {
  *
  * `Page.navigate` is the exception: it is answered only once the server has
  * sent the page, and a route `vite dev` is compiling for the first time can
- * take far longer than any `evaluate`, so `load` gives it its own `timeoutMs`.
+ * take far longer than any `evaluate`, so `load` gives it its own `timeoutMs`
+ * (90s by default). Measured on the same run it averaged 170ms and the slowest
+ * took 2.4s, warm loads included, so 90s is not a measured need but headroom
+ * for a cold compile on a loaded runner; a navigate that stalls costs the gate
+ * 90s once, where a hung one cost it 900s.
  */
 export const CDP_SEND_TIMEOUT_MS = 30_000;
+
+/**
+ * How long to wait, after Chrome's socket drops or its process exits, for the
+ * rest of the story: the exit to be reported and its stderr to drain (#1128).
+ * `launch` waits the same way when Chrome exits while starting.
+ *
+ * The socket usually goes a moment BEFORE `exit` is reported and stderr can
+ * trail `exit`, and the exit code, signal and last stderr lines are the
+ * useful half of a failure message. Chrome's own exit takes milliseconds, so
+ * this is the cap on a Chrome that never says (a renderer outliving it holds
+ * stderr open), and it is paid once, on a run that is already failing.
+ */
+export const EXIT_REPORT_GRACE_MS = 1_000;
 
 /** A command sent and not yet answered. */
 interface PendingCommand {
@@ -381,10 +398,13 @@ export class CdpClient {
 				return;
 			}
 			const id = ++this.nextId;
+			const sentAt = Date.now();
 			const timer = setTimeout(() => {
 				this.pending.delete(id);
 				reject(
-					this.failure(`CDP ${method} got no answer within ${timeoutMs}ms`),
+					this.failure(
+						`CDP ${method} got no answer after ${Date.now() - sentAt}ms (budget ${timeoutMs}ms)`,
+					),
 				);
 			}, timeoutMs);
 			this.pending.set(id, {
@@ -421,6 +441,16 @@ export class CdpClient {
 	}
 
 	/**
+	 * The connection has dropped and `lose` is about to settle every waiting
+	 * command, with a reason that is not known yet: stop their clocks, so that a
+	 * budget running out in the meantime cannot get in first and say "still
+	 * running" about a Chrome that was already gone. `lose` MUST follow.
+	 */
+	suspend(): void {
+		for (const waiting of this.pending.values()) clearTimeout(waiting.timer);
+	}
+
+	/**
 	 * The connection is gone: reject every command still waiting, at once, and
 	 * every later `send`. The first reason wins.
 	 */
@@ -441,6 +471,48 @@ export class CdpClient {
 	}
 }
 
+/** What `ConnectionWatch` needs of Chrome's process: a test passes an emitter. */
+export interface WatchedProcess {
+	once(event: "exit" | "close", listener: () => void): unknown;
+	off(event: "exit" | "close", listener: () => void): unknown;
+}
+
+/**
+ * Fails a session's waiting commands when its connection goes, and not before
+ * the failure can say how Chrome ended (#1128).
+ *
+ * A dropped socket or an exit stops the commands' clocks at once (`suspend`)
+ * and settles them on the process's `close`, which Node emits after `exit` AND
+ * after stderr has drained: settling on `exit` froze the message before the
+ * last lines of a crash had arrived. A Chrome that never reports is cut off at
+ * `EXIT_REPORT_GRACE_MS`.
+ */
+export class ConnectionWatch {
+	private dropped = false;
+
+	constructor(
+		private readonly cdp: CdpClient,
+		private readonly chrome: WatchedProcess,
+		private readonly graceMs = EXIT_REPORT_GRACE_MS,
+	) {
+		chrome.once("exit", () => this.lost("the browser process exited"));
+	}
+
+	/** The socket closed or errored, or the process exited. The first reason wins. */
+	lost(why: string): void {
+		if (this.dropped || this.cdp.isLost) return;
+		this.dropped = true;
+		this.cdp.suspend();
+		const settle = () => {
+			clearTimeout(grace);
+			this.chrome.off("close", settle);
+			this.cdp.lose(why);
+		};
+		const grace = setTimeout(settle, this.graceMs);
+		this.chrome.once("close", settle);
+	}
+}
+
 /**
  * A headless Chrome on `client`'s zone and locale with its clock moved by
  * `clockOffsetMs`, driven over CDP.
@@ -448,6 +520,7 @@ export class CdpClient {
 export class HydrationBrowser {
 	private ws!: WebSocket;
 	private cdp!: CdpClient;
+	private watch!: ConnectionWatch;
 	private errors: string[] = [];
 	private onLoad: (() => void) | null = null;
 	/** Main-frame navigations since the last `sweep` began. */
@@ -567,7 +640,6 @@ export class HydrationBrowser {
 						? ` Its stderr:\n${this.stderr.trim()}`
 						: " It printed nothing."),
 			);
-		const exitedEarly = () => this.chromeExited();
 
 		// 1. The endpoint, from Chrome's own announcement.
 		const endpoint = await new Promise<URL>((done, reject) => {
@@ -596,7 +668,7 @@ export class HydrationBrowser {
 						),
 					);
 				if (!chrome.stderr || chrome.stderr.readableEnded) return report();
-				const grace = setTimeout(report, 1_000);
+				const grace = setTimeout(report, EXIT_REPORT_GRACE_MS);
 				chrome.stderr.once("end", () => {
 					clearTimeout(grace);
 					report();
@@ -615,13 +687,15 @@ export class HydrationBrowser {
 			chrome.stderr?.on("data", onData);
 			chrome.once("exit", onExit);
 			chrome.once("error", onError);
-			if (exitedEarly()) onExit();
+			if (this.chromeExited()) onExit();
 		});
 
 		// 2. The page target, which can trail the endpoint by a moment.
 		let wsUrl: string | undefined;
 		while (!wsUrl) {
-			if (exitedEarly()) throw fail("exited before exposing a page target");
+			if (this.chromeExited()) {
+				throw fail("exited before exposing a page target");
+			}
 			if (Date.now() >= deadline) throw fail("exposed no page target");
 			try {
 				const res = await fetch(`http://${endpoint.host}/json/list`, {
@@ -676,15 +750,13 @@ export class HydrationBrowser {
 			this.sendTimeoutMs,
 			() => this.situation(),
 		);
+		this.watch = new ConnectionWatch(this.cdp, chrome);
 		ws.addEventListener("message", (event) => this.receive(event));
 		ws.addEventListener("close", (event) =>
-			this.connectionLost(`the DevTools socket closed (code ${event.code})`),
+			this.watch.lost(`the DevTools socket closed (code ${event.code})`),
 		);
 		ws.addEventListener("error", () =>
-			this.connectionLost("the DevTools socket errored"),
-		);
-		chrome.once("exit", () =>
-			this.connectionLost("the browser process exited"),
+			this.watch.lost("the DevTools socket errored"),
 		);
 
 		await this.send("Runtime.enable");
@@ -721,28 +793,6 @@ export class HydrationBrowser {
 		return `${where}. ${chrome}.${
 			stderr ? ` Its stderr:\n${stderr}` : " It printed nothing."
 		}`;
-	}
-
-	/**
-	 * The socket dropped or the process ended: fail every command waiting on it.
-	 *
-	 * The socket usually goes a moment BEFORE `exit` is reported, and the exit
-	 * code and signal are the useful half of the message, so a socket that drops
-	 * under a running Chrome is given a second to say how it ended.
-	 */
-	private connectionLost(why: string) {
-		if (this.cdp.isLost) return;
-		if (this.chromeExited()) {
-			this.cdp.lose(why);
-			return;
-		}
-		const lose = () => {
-			clearTimeout(grace);
-			this.chrome.off("exit", lose);
-			this.cdp.lose(why);
-		};
-		const grace = setTimeout(lose, 1_000);
-		this.chrome.once("exit", lose);
 	}
 
 	private receive(event: MessageEvent) {
