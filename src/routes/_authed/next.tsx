@@ -1,58 +1,30 @@
-import { createFileRoute, Link, redirect } from "@tanstack/react-router";
-import { CalendarPlus, Grid3x3 } from "lucide-react";
-import { PageContainer } from "#/components/page-container";
-import { Button } from "#/components/ui/button";
-import { getNextMeeting } from "#/server/meetings";
+import { createFileRoute, redirect } from "@tanstack/react-router";
+import { getPublicNextMeetingKey } from "#/server/meetings";
 
 /**
- * Shortcut to the club's next meeting. Resolves the active club's soonest upcoming
- * meeting and redirects to its canonical `/club/:clubId/meeting/:key` page; when
- * nothing is scheduled (or the user has no club), renders the empty state instead.
- * There is no standalone "agenda" screen — a meeting IS its agenda (#141).
+ * Shortcut to the active club's next meeting, for a signed-in member. It asks
+ * the same seam as the per-club permalink `/club/:clubId/next` (#1140), so the
+ * two URLs can never name different meetings, and redirects to the meeting's
+ * canonical `/club/:clubId/meeting/:key` page in one hop. When nothing is
+ * scheduled it hands over to the permalink, which owns the empty state, and
+ * with no active club (or an archived one) it goes to the dashboard. There is no
+ * standalone "agenda" screen — a meeting IS its agenda (#141).
  */
 export const Route = createFileRoute("/_authed/next")({
 	loader: async ({ context }) => {
 		const clubId = context.activeClubId;
-		if (!clubId) return { canManage: false };
-		const data = await getNextMeeting({ data: clubId });
-		if (data.meeting) {
+		if (!clubId) throw redirect({ to: "/dashboard" });
+		const r = await getPublicNextMeetingKey({ data: clubId });
+		if (!r) throw redirect({ to: "/dashboard" });
+		if (r.urlKey) {
 			throw redirect({
 				to: "/club/$clubId/meeting/$meetingId",
-				params: { clubId: data.clubSlug, meetingId: data.urlKey },
+				params: { clubId: r.clubSlug, meetingId: r.urlKey },
 			});
 		}
-		return { canManage: data.canManage };
+		throw redirect({
+			to: "/club/$clubId/next",
+			params: { clubId: r.clubSlug },
+		});
 	},
-	component: NoUpcomingMeeting,
 });
-
-function NoUpcomingMeeting() {
-	const { canManage } = Route.useLoaderData();
-	return (
-		<PageContainer>
-			<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
-				Next meeting
-			</h1>
-			<div className="mt-7 rounded-2xl border border-dashed border-[var(--line)] bg-[var(--surface)] px-6 py-16 text-center">
-				<p className="text-sm text-[var(--sea-ink-soft)]">
-					No upcoming meeting is scheduled yet.
-				</p>
-				{canManage ? (
-					<Button asChild size="sm" className="mt-4">
-						<Link to="/admin/meetings/new">
-							<CalendarPlus className="size-4" aria-hidden />
-							Schedule a meeting
-						</Link>
-					</Button>
-				) : (
-					<Button asChild size="sm" variant="outline" className="mt-4">
-						<Link to="/schedule" search={{ view: "members", count: 8 }}>
-							<Grid3x3 className="size-4" aria-hidden />
-							Browse the sign-up sheet
-						</Link>
-					</Button>
-				)}
-			</div>
-		</PageContainer>
-	);
-}

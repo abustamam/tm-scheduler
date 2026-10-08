@@ -62,7 +62,9 @@ const {
 } = await import("#/server/clubs-logic");
 const { loadPublicSeasonGrid } = await import("#/server/season-grid-logic");
 const { loadPublicClubRoster } = await import("#/server/members-logic");
-const { loadPublicUpcomingMeetings } = await import("#/server/meetings-logic");
+const { loadPublicNextMeetingKey, loadPublicUpcomingMeetings } = await import(
+	"#/server/meetings-logic"
+);
 const { loadPastMeetings } = await import("#/server/past-meetings-logic");
 const { resolveMeetingKey, resolvePublicMeetingKey } = await import(
 	"#/server/meeting-resolve-logic"
@@ -194,6 +196,17 @@ describe.skipIf(!hasTestDb)(
 
 			await archive(s.clubId);
 			expect(await loadPublicUpcomingMeetings(s.clubId)).toEqual([]);
+		});
+
+		it("getPublicNextMeetingKey: which meeting the club holds next disappears", async () => {
+			const s = await seedPublicClub();
+			// `seedClub`'s meeting is a week out, so it is the club's next one.
+			const live = await loadPublicNextMeetingKey(s.clubId, new Date());
+			expect(live?.urlKey).not.toBeNull();
+			expect(live?.clubSlug).toBe(`test-club-${s.clubId}`);
+
+			await archive(s.clubId);
+			expect(await loadPublicNextMeetingKey(s.clubId, new Date())).toBeNull();
 		});
 
 		it("listPastMeetings: the archive of past meetings disappears", async () => {

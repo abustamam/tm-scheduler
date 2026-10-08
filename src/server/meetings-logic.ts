@@ -27,6 +27,7 @@ import {
 	meetingDatePassed,
 	meetingDateReached,
 } from "#/lib/meeting-lifecycle";
+import { localDateKey, localDayRange } from "#/lib/meeting-url";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { logActivity } from "./activity";
 import type { AttendancePlanStatus as PlanStatus } from "./attendance-plan-logic";
@@ -113,6 +114,67 @@ export async function loadPublicUpcomingMeetings(
 		)
 		.groupBy(meetings.id, clubs.timezone)
 		.orderBy(asc(meetings.scheduledAt));
+}
+
+export interface PublicNextMeetingKey {
+	clubSlug: string;
+	/** Null when the club has no scheduled meeting today or later. */
+	urlKey: string | null;
+}
+
+/**
+ * The club's next meeting by the PHASE rule, not the instant rule: today's
+ * meeting stays "next" until its club-local day ends or it is completed,
+ * matching `meetingPhase` (#541). Null for an archived or unknown club (#544).
+ *
+ * The seam behind the PUBLIC, session-less `getPublicNextMeetingKey`, which
+ * both `/club/:clubId/next` and `/next` resolve through, so the two URLs can
+ * never name different meetings. `status = 'scheduled'` AND a date at or after
+ * the start of today (club-local) is exactly "not cancelled and not
+ * `isMeetingOver`" (`isMeetingLocked` is `status === 'completed'`).
+ *
+ * The instant rule used by `loadPublicUpcomingMeetings` and
+ * `loadNextMeetingSummary` drops a meeting the moment it starts, which is right
+ * for an invite and wrong for a link a member taps five minutes into the
+ * meeting. Those two stay as they are.
+ *
+ * Returns the slug and one key, nothing else: no PII, no `join_url`, no slots.
+ */
+export async function loadPublicNextMeetingKey(
+	clubId: string,
+	now: Date,
+): Promise<PublicNextMeetingKey | null> {
+	if (!(await isReadableClub(clubId))) return null;
+	const [club] = await db
+		.select({ slug: clubs.slug, timezone: clubs.timezone })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	if (!club) return null;
+	// The day boundary is club-local, never UTC: at 23:30 in Los Angeles on
+	// meeting day it is already tomorrow in UTC, and tonight's meeting is still
+	// the next one.
+	const { start } = localDayRange(
+		localDateKey(now, club.timezone),
+		club.timezone,
+	);
+	const [next] = await db
+		.select({ scheduledAt: meetings.scheduledAt })
+		.from(meetings)
+		.where(
+			and(
+				eq(meetings.clubId, clubId),
+				eq(meetings.status, "scheduled"),
+				gte(meetings.scheduledAt, start),
+			),
+		)
+		.orderBy(asc(meetings.scheduledAt))
+		.limit(1);
+	if (!next) return { clubSlug: club.slug, urlKey: null };
+	return {
+		clubSlug: club.slug,
+		urlKey: await resolveMeetingUrlKey(clubId, next.scheduledAt, club.timezone),
+	};
 }
 
 export interface NextMeetingSummary {

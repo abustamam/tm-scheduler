@@ -280,8 +280,10 @@ const EXCLUDED: Record<string, string> = {
 	"/api/meetings/$id/role-sheets/$sheet/pdf": "PDF endpoint, no HTML",
 	"/meetings/$id":
 		"redirect only: answers with a redirect to /club/$clubId/meeting/$meetingId, which is swept",
+	"/club/$clubId/next":
+		"redirect only when the fixture club has an upcoming meeting: answers with a redirect to /club/$clubId/meeting/$meetingId, which is swept",
 	"/next":
-		"redirect only: answers with a redirect to the next meeting's /club/$clubId/meeting/$meetingId, which is swept",
+		"redirect only: answers with a redirect to the next meeting's /club/$clubId/meeting/$meetingId, or to /club/$clubId/next when none is scheduled",
 	"/oauth/consent":
 		"renders only for a query the OAuth provider SIGNS; an unsigned one is refused before any page renders",
 	"/agenda-plan/$planId":
