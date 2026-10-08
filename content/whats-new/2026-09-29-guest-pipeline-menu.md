@@ -5,4 +5,4 @@ audience: admins
 public: false
 link: /admin/vp-membership
 ---
-Each guest on **VP Membership** now has one lane dropdown (**Prospect**, **Following up**, **Lost** or **Joined…**) and a **⋯** menu for Edit, Delete and the rarer actions, in place of a row of buttons. A guest already invited to an upcoming meeting is badged, and their invite button then reads **Resend invite**.
+On **VP Membership**, each guest who hasn't joined yet now has a lane dropdown (**Prospect**, **Following up**, **Lost**, or **Joined…** to record they became a member) and a three-dots menu for **Edit** and **Delete**, in place of a row of buttons. A guest invited to an upcoming meeting is badged, and one already invited to the next meeting gets **Resend invite** as the label above their WhatsApp and email drafts.
