@@ -537,10 +537,8 @@ async function shootSection(
 	const outerHtml = () =>
 		evaluate<string>("document.documentElement.outerHTML");
 	let problem = check(await outerHtml());
-	for (
-		const waitStart = Date.now();
-		problem && Date.now() - waitStart < HYDRATION_WAIT_MS;
-	) {
+	const waitStart = Date.now();
+	while (problem && Date.now() - waitStart < HYDRATION_WAIT_MS) {
 		await new Promise((r) => setTimeout(r, HYDRATION_POLL_MS));
 		problem = check(await outerHtml());
 	}

@@ -20,7 +20,7 @@ export const MIN_ASSIGNED_SLOTS = 3;
  * The earliest qualifying meeting dated today or later, else the most recent
  * qualifying past one. `candidates` holds only qualifying meetings.
  */
-export function pickMeeting<T extends { scheduledAt: Date }>(
+function pickMeeting<T extends { scheduledAt: Date }>(
 	candidates: T[],
 	now: Date,
 ): T | null {
@@ -68,7 +68,6 @@ export async function findQualifyingMeetings(
 export async function findCaptureMeeting(
 	db: NodePgDatabase<typeof schema>,
 	clubId: string,
-	now: Date = new Date(),
 ): Promise<{ id: string; scheduledAt: Date } | null> {
-	return pickMeeting(await findQualifyingMeetings(db, clubId), now);
+	return pickMeeting(await findQualifyingMeetings(db, clubId), new Date());
 }

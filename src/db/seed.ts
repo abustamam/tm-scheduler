@@ -1,11 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
+import { slotLabel } from "#/lib/agenda";
+import type { AttendanceMode } from "#/lib/attendance-mode";
 import { currentProgramYear } from "#/lib/dcp";
 import {
 	defaultClubRoleForOffices,
 	type OfficerPosition,
 } from "#/lib/officers";
-import type { ContactMethod } from "#/lib/preferred-contact";
+import {
+	availableContactMethods,
+	type ContactMethod,
+} from "#/lib/preferred-contact";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
 import { createMentorship } from "#/server/mentorship-logic";
 import { seedPathwaysCatalog } from "../../scripts/pathways-catalog-seed.ts";
@@ -139,19 +144,63 @@ interface SeededClub {
 	defs: (typeof roleDefinitions)["$inferSelect"][];
 	meetings: {
 		meetingId: string;
+		theme: string;
 		slots: (typeof roleSlots)["$inferSelect"][];
 	}[];
 }
 
-/** Delete any existing club(s) with this name (cascades to meetings/slots/role
- *  defs/memberships) so re-running the seed is deterministic. */
-async function resetClubByName(name: string) {
+/**
+ * A seeded meeting by its theme. A club's meetings are inserted in list order,
+ * so an index points at whatever sits there today; a theme keeps pointing at
+ * the meeting it names when one is added or moved, and a typo throws.
+ */
+function meetingByTheme(club: SeededClub, theme: string) {
+	const meeting = club.meetings.find((m) => m.theme === theme);
+	if (!meeting) throw new Error(`Seed: no meeting themed "${theme}"`);
+	return meeting;
+}
+
+/**
+ * Delete any existing club(s) with this name (cascades to meetings/slots/role
+ * defs/memberships) so re-running the seed is deterministic.
+ *
+ * People are club-less, so that cascade leaves the club's Persons behind, and
+ * every re-seed used to add another copy of each, with its path enrollments
+ * and speeches. So the Persons this seed made are removed too, and only those:
+ * a Person at one of THIS roster's addresses that no membership in any club
+ * holds any more. A Person a membership still holds (another club's) or at any
+ * other address is left alone. Done as a select and a filter in JS rather than
+ * a correlated subquery, which Drizzle can emit unqualified.
+ */
+async function resetClubByName(name: string, rosterEmails: string[]) {
 	const existing = await db
 		.select({ id: clubs.id })
 		.from(clubs)
 		.where(eq(clubs.name, name));
 	for (const c of existing) {
 		await db.delete(clubs).where(eq(clubs.id, c.id));
+	}
+
+	const atRosterAddress = await db
+		.select({ id: people.id })
+		.from(people)
+		.where(inArray(people.email, rosterEmails));
+	if (atRosterAddress.length === 0) return;
+	const stillHeld = await db
+		.selectDistinct({ id: members.personId })
+		.from(members)
+		.where(
+			inArray(
+				members.personId,
+				atRosterAddress.map((p) => p.id),
+			),
+		);
+	const heldIds = new Set(stillHeld.map((m) => m.id));
+	const orphanIds = atRosterAddress
+		.map((p) => p.id)
+		.filter((id) => !heldIds.has(id));
+	if (orphanIds.length > 0) {
+		await db.delete(people).where(inArray(people.id, orphanIds));
 	}
 }
 
@@ -176,7 +225,10 @@ async function seedClub(opts: {
 	roster: RosterEntry[];
 	meetings: MeetingSpec[];
 }): Promise<SeededClub> {
-	await resetClubByName(opts.name);
+	await resetClubByName(
+		opts.name,
+		opts.roster.map((r) => r.email),
+	);
 
 	const [club] = await db
 		.insert(clubs)
@@ -202,14 +254,30 @@ async function seedClub(opts: {
 	const insertedPeople = await db
 		.insert(people)
 		.values(
-			opts.roster.map((r, i) => ({
-				name: r.name,
-				email: r.email,
-				phone: r.phone === undefined ? seedPhone(i) : r.phone,
-				preferredContact: r.contactPreference?.method ?? null,
-				contactPreferenceBy: r.contactPreference?.by ?? null,
-				userId: userIdByEmail.get(r.email)!,
-			})),
+			opts.roster.map((r, i) => {
+				const phone = r.phone === undefined ? seedPhone(i) : r.phone;
+				// The two real writers refuse a method whose data is missing
+				// (`contactMethodAvailableSql`); this insert is neither of them, so it
+				// holds itself to the same rule rather than seed a preference every
+				// reader would show as "no preference".
+				const method = r.contactPreference?.method;
+				if (
+					method &&
+					!availableContactMethods({ email: r.email, phone }).includes(method)
+				) {
+					throw new Error(
+						`Seed: ${r.name} prefers ${method} but has no ${method === "email" ? "email" : "phone number"} to use it with`,
+					);
+				}
+				return {
+					name: r.name,
+					email: r.email,
+					phone,
+					preferredContact: method ?? null,
+					contactPreferenceBy: r.contactPreference?.by ?? null,
+					userId: userIdByEmail.get(r.email)!,
+				};
+			}),
 		)
 		.returning({ id: people.id, name: people.name });
 	const personByName = new Map(insertedPeople.map((p) => [p.name, p.id]));
@@ -273,7 +341,7 @@ async function seedClub(opts: {
 			})),
 		);
 		const slots = await db.insert(roleSlots).values(slotRows).returning();
-		meetingsOut.push({ meetingId: meeting.id, slots });
+		meetingsOut.push({ meetingId: meeting.id, theme: ms.theme, slots });
 	}
 
 	return {
@@ -1256,7 +1324,7 @@ async function main() {
 	// (`showsLevelNudge`), and Nina's row keeps its "Speaking" badge for contrast.
 	// Speaker 3 goes to the guest speaker, the Grammarian to the visiting
 	// Toastmaster, the Timer to the newest member.
-	const harborNext = harbor.meetings[0];
+	const harborNext = meetingByTheme(harbor, "Coastal Voices");
 	const harborClaimedAt = dayAt(-1, 12);
 	await fillMeeting(
 		harborNext,
@@ -1283,7 +1351,8 @@ async function main() {
 	);
 
 	// Two held past meetings (Omar and Camille had not joined for the older one).
-	const harborPast = [harbor.meetings[5], harbor.meetings[6]];
+	const harborRecent = meetingByTheme(harbor, "Safe Harbor"); // 7 days ago
+	const harborOlder = meetingByTheme(harbor, "Rising Tide"); // 14 days ago
 	const harborPastPool = [
 		"Dana Okafor",
 		"Priya Nair",
@@ -1292,7 +1361,7 @@ async function main() {
 		"Sofia Reyes",
 	];
 	await fillMeeting(
-		harborPast[0],
+		harborRecent,
 		harbor.defs,
 		harborPastPool,
 		harbor.memberByName,
@@ -1300,7 +1369,7 @@ async function main() {
 		{ count: 5, when: dayAt(-10, 12), speechCursor: { i: 0 } },
 	);
 	await fillMeeting(
-		harborPast[1],
+		harborOlder,
 		harbor.defs,
 		rotate(harborPastPool, 2),
 		harbor.memberByName,
@@ -1310,7 +1379,7 @@ async function main() {
 
 	// How each person attended (#1046): in the room or on the call. NULL means
 	// not recorded, so a few rows leave it out the way roll mode does today.
-	type Mode = "in_person" | "online" | null;
+	type Mode = AttendanceMode | null;
 	const presentMembers = (meetingId: string, rows: [string, Mode][]) =>
 		rows.map(([name, mode]) => ({
 			meetingId,
@@ -1326,7 +1395,7 @@ async function main() {
 			mode,
 		}));
 	await db.insert(meetingAttendance).values([
-		...presentMembers(harborPast[0].meetingId, [
+		...presentMembers(harborRecent.meetingId, [
 			["Dana Okafor", "in_person"],
 			["Priya Nair", "in_person"],
 			["Marcus Lee", "in_person"],
@@ -1334,56 +1403,78 @@ async function main() {
 			["Omar Haddad", "in_person"],
 			["Sofia Reyes", "online"],
 		]),
-		...presentGuests(harborPast[0].meetingId, [["Lucia Moreno", "in_person"]]),
-		...presentMembers(harborPast[1].meetingId, [
+		...presentGuests(harborRecent.meetingId, [["Lucia Moreno", "in_person"]]),
+		...presentMembers(harborOlder.meetingId, [
 			["Dana Okafor", "in_person"],
 			["Priya Nair", "in_person"],
 			["Marcus Lee", "online"],
 			["Nina Petrov", "in_person"],
 			["Sofia Reyes", null],
 		]),
-		...presentGuests(harborPast[1].meetingId, [
+		...presentGuests(harborOlder.meetingId, [
 			["Imani Clarke", "in_person"],
 			["Ethan Brooks", "online"],
 		]),
 	]);
 
-	// Anonymous notes for people who served on the older of the two held
-	// meetings (#981). No writer column exists, and `created_at` is the table's
-	// own day-granular default: neither is set here.
+	// Anonymous notes for the people who served on the more recent of the two
+	// held meetings (#981). The recipient and the slot are read back from what
+	// `fillMeeting` actually claimed, not matched by hand to its round-robin, so
+	// reordering the pool cannot put a note on a role its recipient never held.
+	// No writer column exists, and `created_at` is the table's own day-granular
+	// default: neither is set here.
+	const recentSlots = await db
+		.select({
+			id: roleSlots.id,
+			memberId: roleSlots.assignedMemberId,
+			roleName: roleDefinitions.name,
+			slotIndex: roleSlots.slotIndex,
+			slotsUnordered: roleDefinitions.slotsUnordered,
+		})
+		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
+		.where(eq(roleSlots.meetingId, harborRecent.meetingId));
+	const roleCounts = Object.fromEntries(
+		harbor.defs.map((d) => [d.name, d.defaultCount]),
+	);
+	const heldOnRecent = (roleName: string, slotIndex = 0) => {
+		const slot = recentSlots.find(
+			(x) => x.roleName === roleName && x.slotIndex === slotIndex,
+		);
+		if (!slot?.memberId) {
+			throw new Error(`Seed: nobody holds ${roleName} ${slotIndex + 1}`);
+		}
+		return {
+			clubId: harbor.clubId,
+			meetingId: harborRecent.meetingId,
+			recipientMemberId: slot.memberId,
+			roleSlotId: slot.id,
+			roleLabel: slotLabel(
+				{ roleName, slotIndex, slotsUnordered: slot.slotsUnordered },
+				roleCounts,
+			),
+		};
+	};
 	await db.insert(roleFeedbackNotes).values([
 		{
-			clubId: harbor.clubId,
-			meetingId: harborPast[0].meetingId,
-			recipientMemberId: harborMember("Marcus Lee"),
-			roleSlotId: slotOf(harborPast[0], harbor.defs, "Speaker", 0).id,
-			roleLabel: "Speaker 1",
+			...heldOnRecent("Speaker", 0),
 			wentWell:
 				"The story about your first night on the ferry pulled everyone in.",
 			tryNext: "A longer pause before the ending would let it land.",
 		},
 		{
-			clubId: harbor.clubId,
-			meetingId: harborPast[0].meetingId,
-			recipientMemberId: harborMember("Marcus Lee"),
-			roleSlotId: slotOf(harborPast[0], harbor.defs, "Speaker", 0).id,
-			roleLabel: "Speaker 1",
+			...heldOnRecent("Speaker", 0),
 			wentWell: "Great energy from the first sentence.",
 		},
 		{
-			clubId: harbor.clubId,
-			meetingId: harborPast[0].meetingId,
-			recipientMemberId: harborMember("Nina Petrov"),
-			roleSlotId: slotOf(harborPast[0], harbor.defs, "Speaker", 1).id,
-			roleLabel: "Speaker 2",
+			...heldOnRecent("Speaker", 1),
 			wentWell: "Clear structure. I could follow every point.",
 		},
 		{
-			clubId: harbor.clubId,
-			meetingId: harborPast[0].meetingId,
-			recipientMemberId: harborMember("Priya Nair"),
-			roleSlotId: slotOf(harborPast[0], harbor.defs, "Table Topics Master").id,
-			roleLabel: "Table Topics Master",
+			...heldOnRecent("Table Topics Master"),
 			wentWell: "Your questions made everyone want to answer.",
 			tryNext:
 				"Keep the introduction short so there is time for one more speaker.",
@@ -1451,7 +1542,7 @@ async function main() {
 		{
 			clubId: harbor.clubId,
 			guestId: harborGuest("Ethan Brooks"),
-			meetingId: harbor.meetings[1].meetingId,
+			meetingId: meetingByTheme(harbor, "Tides of Change").meetingId,
 			invitedByMemberId: harborMember("Sofia Reyes"),
 			invitedAt: dayAt(-1, 10),
 		},

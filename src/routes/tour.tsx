@@ -213,7 +213,7 @@ function Tour() {
 							<Shot
 								src="/landing/tour-vpm.png"
 								height={900}
-								alt="GavelUp's VP Membership guest pipeline for Harbor City Speakers, a sample club: each guest's kind, who brought them and whether they are already invited, with a one-tap invite to the next meeting."
+								alt="GavelUp's VP Membership guest pipeline for Harbor City Speakers, a sample club: guests in lanes, a visiting Toastmaster and a guest speaker named for what they are, and a one-tap invite to the next meeting, or Resend invite for a guest already asked."
 							/>
 						</div>
 					}
