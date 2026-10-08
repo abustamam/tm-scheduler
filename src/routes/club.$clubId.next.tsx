@@ -22,9 +22,12 @@ import { isInRoom, validateMeetingRoomSearch } from "#/lib/meeting-hub";
 import { getPublicNextMeetingKey } from "#/server/meetings";
 
 export const Route = createFileRoute("/club/$clubId/next")({
-	// Only the printed agenda's QR flag survives the hop (`?room=1`, #913). Every
-	// other param is dropped on purpose: `?as=` is the identity gate's seed and
-	// has no business being carried onto a different route by a permalink.
+	// Only the printed agenda's QR flag survives the REDIRECT (`?room=1`, #913).
+	// Every other param is dropped from it on purpose: `?as=` is the identity
+	// gate's seed and has no business being carried onto a different route by a
+	// permalink. On the empty-state render nothing is dropped:
+	// `validateMeetingRoomSearch` passes the search through, so `?as=` stays in
+	// the URL.
 	validateSearch: validateMeetingRoomSearch,
 	loaderDeps: ({ search }) => ({ room: isInRoom(search) }),
 	loader: async ({ context, deps }) => {
@@ -36,9 +39,12 @@ export const Route = createFileRoute("/club/$clubId/next")({
 				search: deps.room ? { room: 1 } : {},
 			});
 		}
-		// `effectiveAdminClubFor` decides, not the shell flag: a signed-in
-		// non-member and a superadmin in read-only impersonation both get the
-		// guest empty state, and `/admin/meetings/new` guards itself either way.
+		// `effectiveAdminClubFor` decides, not the shell flag. A signed-in
+		// non-member gets the guest state. A superadmin impersonating this club
+		// sees the officer button, as on every admin surface: `getAuthContext`
+		// lists the impersonated club with `clubRole: "admin"`. The button is only
+		// a link; `/admin/meetings/new` and the write guards refuse a read-only
+		// session.
 		const canSchedule = !!(
 			context.authCtx &&
 			effectiveAdminClubFor(context.authCtx, context.clubUuid)
