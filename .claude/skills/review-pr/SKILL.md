@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: Review an open pull request by number from the main checkout, with nothing checked out. Fetches the PR's branch, diffs it against origin/main, finds the originating issue, and runs the code-review skill's two axes (Standards, Spec) against that diff. Prints a risk-category hint when the diff touches an authorization, archive-gate, migration or service-worker path. Use when the user says "review PR 682", "/review-pr 682", or wants a wave's PRs reviewed before merge.
+description: Review an open pull request by number from the main checkout, with nothing checked out. Fetches the PR's branch, diffs it against origin/main, finds the originating issue, and runs the code-review skill's two axes (Standards, Spec) against that diff. Prints a risk-category hint when the diff touches an authorization, archive-gate, migration or service-worker path, and for a migration that changes data, whether the PR body carries a `## Prod check`. Use when the user says "review PR 682", "/review-pr 682", or wants a wave's PRs reviewed before merge.
 ---
 
 # Review a PR
@@ -67,6 +67,46 @@ the Spec axis's summary of what the diff does with that in mind. The categories 
 each is on the list live in CLAUDE.md's skill-routing section; this table mirrors the ones that
 have paths and changes with it.
 
+**A migration that changes data.** When the `drizzle/` row matched, the same hint also says
+whether the PR needs a `## Prod check` and has one. A migration applies to prod at container start
+and nothing afterwards asks what a data-changing one did there; the contract (what the section
+carries, who runs it after the deploy, where the result goes) is in
+`docs/agents/data-and-deploy.md`. List the migration SQL the PR adds or changes that contains a
+statement writing rows:
+
+```bash
+git diff --name-only --diff-filter=AM "origin/<base>...origin/<head>" -- 'drizzle/*.sql' |
+  while read -r f; do
+    git show "origin/<head>:$f" | grep -v '^[[:space:]]*--' |
+      grep -i -E -q '(^|[(),;])[[:space:]]*(update[[:space:]]+[^[:space:]]+|delete[[:space:]]+from|insert[[:space:]]+into)\b' && echo "$f"
+  done
+```
+
+The pattern is a statement, not the bare words `UPDATE`, `DELETE` and `INSERT`. On 2026-10-08 the
+words appeared in 70 of the repo's 116 migrations, and in 40 of those the only occurrence was a
+foreign key's `ON DELETE` / `ON UPDATE`, which is DDL; a statement that writes rows was in 29. A
+`FOR UPDATE` lock and a `BEFORE INSERT` trigger event are DDL too, and a comment line never counts.
+The pattern does catch a statement inside a `WITH` or a `DO` block.
+
+- **Nothing printed** (DDL only): add no line.
+- **A file printed and `body` from step 1 has no line that is exactly `## Prod check`** (trailing
+  whitespace allowed; the heading text is the contract, so other wording or another level does
+  not count): print one line.
+
+  > Data-changing migration (`<file>`) and the PR body has no `## Prod check` section.
+  > `docs/agents/data-and-deploy.md` says what it carries: the read-only SQL to run after the
+  > deploy and the result that means "as intended".
+
+- **A file printed and the body has the heading:** print one line saying so, as the reminder that
+  the check is owed after the deploy.
+
+  > Data-changing migration (`<file>`); the PR body carries a `## Prod check`. Once the deploy is
+  > live the main session runs it and comments the counts on the PR
+  > (`docs/agents/data-and-deploy.md`).
+
+`src/test/prod-check-contract.guard.test.ts` holds this pattern to the real migrations, and holds
+the heading to the three documents that name it.
+
 ### 4. Run the two axes
 
 Follow `.claude/skills/code-review/SKILL.md` steps 3 to 5 exactly (the smell baseline, the two
@@ -83,5 +123,5 @@ sub-agent briefs, the side-by-side aggregation) with these substitutions:
 ### 5. Report
 
 The code-review skill's format: `## Standards`, `## Spec`, one summary line per axis, no
-cross-axis ranking. Put the PR number and URL at the top and the risk hint, or its absence,
-beneath. Post nothing to GitHub unless asked.
+cross-axis ranking. Put the PR number and URL at the top and the risk hint (with its
+`## Prod check` line, if step 3 printed one), or its absence, beneath. Post nothing to GitHub unless asked.
