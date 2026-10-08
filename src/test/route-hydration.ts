@@ -304,13 +304,150 @@ export function parseHydrationError(text: string): Mismatch {
 }
 
 /**
+ * How long ONE CDP command may go unanswered before it fails (#1128).
+ *
+ * A CDP command is answered in milliseconds, but nothing in the protocol
+ * promises an answer: a page whose main thread is wedged never answers a
+ * `Runtime.evaluate`, and a Chrome that died mid-sweep answers nothing at all.
+ * Before this bound the command's promise simply never settled, so `load`'s
+ * 90s deadline (which only bounds its loops BETWEEN awaits) never got a turn
+ * and the gate's `beforeAll` ran its whole 900s hook budget in silence: one
+ * `hydration` run in 150 did, and printed nothing about where.
+ *
+ * Generous on purpose: a false positive fails a healthy gate, a stall costs
+ * the budget once. Measured across one local gate run (3 Chromes, 397
+ * `Runtime.evaluate` and 119 `Page.navigate`): evaluate averaged 44ms and the
+ * slowest took 2.3s, so this is over ten times the worst healthy command, and
+ * CI runs the same sweep slower still.
+ *
+ * `Page.navigate` is the exception: it is answered only once the server has
+ * sent the page, and a route `vite dev` is compiling for the first time can
+ * take far longer than any `evaluate`, so `load` gives it its own `timeoutMs`.
+ */
+export const CDP_SEND_TIMEOUT_MS = 30_000;
+
+/** A command sent and not yet answered. */
+interface PendingCommand {
+	method: string;
+	resolve: (value: unknown) => void;
+	reject: (err: Error) => void;
+	timer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * The request/response half of a CDP session: ids, answers, and what happens to
+ * a command that is never answered (#1128).
+ *
+ * Separate from the socket so that the two ways a command goes unanswered,
+ * a budget that runs out (`send`) and a connection that goes away (`lose`), can
+ * be tested against a fake `write`, with no browser to hang or kill. Every
+ * failure carries `describe()`, which is where the caller says WHICH page and
+ * what became of Chrome: a rejection that names neither is the silent hang
+ * again, one step later.
+ */
+export class CdpClient {
+	private nextId = 0;
+	private pending = new Map<number, PendingCommand>();
+	private lostWith: string | null = null;
+
+	/**
+	 * @param write puts one frame on the wire, and THROWS if it cannot: a
+	 *   `WebSocket` that is closing drops `send` silently, which is a command
+	 *   that would never be answered.
+	 * @param timeoutMs the default budget for one command.
+	 * @param describe where the session is and what became of the browser,
+	 *   appended to every failure.
+	 */
+	constructor(
+		private readonly write: (frame: string) => void,
+		private readonly timeoutMs: number,
+		private readonly describe: () => string,
+	) {}
+
+	/** True once `lose` has run: nothing sent from now on will be answered. */
+	get isLost(): boolean {
+		return this.lostWith !== null;
+	}
+
+	/** Send a command; rejects if it is not answered within `timeoutMs`. */
+	send<T = unknown>(
+		method: string,
+		params: object = {},
+		timeoutMs = this.timeoutMs,
+	): Promise<T> {
+		return new Promise<T>((resolve, reject) => {
+			if (this.lostWith !== null) {
+				reject(this.failure(`CDP ${method} not sent: ${this.lostWith}`));
+				return;
+			}
+			const id = ++this.nextId;
+			const timer = setTimeout(() => {
+				this.pending.delete(id);
+				reject(
+					this.failure(`CDP ${method} got no answer within ${timeoutMs}ms`),
+				);
+			}, timeoutMs);
+			this.pending.set(id, {
+				method,
+				resolve: resolve as (value: unknown) => void,
+				reject,
+				timer,
+			});
+			try {
+				this.write(JSON.stringify({ id, method, params }));
+			} catch (err) {
+				clearTimeout(timer);
+				this.pending.delete(id);
+				reject(
+					this.failure(
+						`CDP ${method} could not be sent (${err instanceof Error ? err.message : String(err)})`,
+					),
+				);
+			}
+		});
+	}
+
+	/**
+	 * Hand over the answer to command `id`. False when nothing is waiting for
+	 * it (an event, or an answer that arrived after its command timed out).
+	 */
+	answer(id: number, value: unknown): boolean {
+		const waiting = this.pending.get(id);
+		if (!waiting) return false;
+		clearTimeout(waiting.timer);
+		this.pending.delete(id);
+		waiting.resolve(value);
+		return true;
+	}
+
+	/**
+	 * The connection is gone: reject every command still waiting, at once, and
+	 * every later `send`. The first reason wins.
+	 */
+	lose(reason: string): void {
+		if (this.lostWith !== null) return;
+		this.lostWith = reason;
+		for (const waiting of this.pending.values()) {
+			clearTimeout(waiting.timer);
+			waiting.reject(
+				this.failure(`CDP ${waiting.method} was never answered: ${reason}`),
+			);
+		}
+		this.pending.clear();
+	}
+
+	private failure(what: string): Error {
+		return new Error(`${what}${this.describe()}`);
+	}
+}
+
+/**
  * A headless Chrome on `client`'s zone and locale with its clock moved by
  * `clockOffsetMs`, driven over CDP.
  */
 export class HydrationBrowser {
 	private ws!: WebSocket;
-	private nextId = 0;
-	private pending = new Map<number, (value: unknown) => void>();
+	private cdp!: CdpClient;
 	private errors: string[] = [];
 	private onLoad: (() => void) | null = null;
 	/** Main-frame navigations since the last `sweep` began. */
@@ -319,10 +456,15 @@ export class HydrationBrowser {
 	private lastNetworkChange = 0;
 	private chrome!: ChildProcess;
 	private dir!: string;
+	/** The tail of Chrome's stderr, kept for as long as it runs. */
+	private stderr = "";
+	/** The page last navigated to: what a stalled command names (#1128). */
+	private url: string | null = null;
 
 	private constructor(
 		private readonly client: ClientRuntime,
 		private readonly clockOffsetMs: number,
+		private readonly sendTimeoutMs: number,
 	) {}
 
 	static async launch(
@@ -333,6 +475,8 @@ export class HydrationBrowser {
 			bin?: string;
 			/** Budget for Chrome to come up. See `CHROME_LAUNCH_TIMEOUT_MS`. */
 			launchTimeoutMs?: number;
+			/** Budget for ONE CDP command. See `CDP_SEND_TIMEOUT_MS`. */
+			sendTimeoutMs?: number;
 			/**
 			 * Told the process and its profile the moment Chrome is spawned, before
 			 * it has run a line: how a test observes cleanup without depending on
@@ -343,7 +487,11 @@ export class HydrationBrowser {
 	): Promise<HydrationBrowser> {
 		const bin = opts.bin ?? findChrome();
 		if (!bin) throw new Error("no Chrome: see findChrome() / CHROME_PATH");
-		const b = new HydrationBrowser(client, clockOffsetMs);
+		const b = new HydrationBrowser(
+			client,
+			clockOffsetMs,
+			opts.sendTimeoutMs ?? CDP_SEND_TIMEOUT_MS,
+		);
 		try {
 			await b.start(
 				bin,
@@ -408,20 +556,18 @@ export class HydrationBrowser {
 
 		// Drained for the whole life of the process, so a chatty Chrome never
 		// blocks on a full pipe; only the tail is kept, for an error message.
-		let stderr = "";
 		chrome.stderr?.setEncoding("utf8");
 		chrome.stderr?.on("data", (chunk: string) => {
-			stderr = (stderr + chunk).slice(-4_000);
+			this.stderr = (this.stderr + chunk).slice(-4_000);
 		});
 		const fail = (why: string) =>
 			new Error(
 				`Chrome ${why} after ${Date.now() - started}ms (budget ${launchTimeoutMs}ms).` +
-					(stderr.trim()
-						? ` Its stderr:\n${stderr.trim()}`
+					(this.stderr.trim()
+						? ` Its stderr:\n${this.stderr.trim()}`
 						: " It printed nothing."),
 			);
-		const exitedEarly = () =>
-			chrome.exitCode !== null || chrome.signalCode !== null;
+		const exitedEarly = () => this.chromeExited();
 
 		// 1. The endpoint, from Chrome's own announcement.
 		const endpoint = await new Promise<URL>((done, reject) => {
@@ -432,7 +578,7 @@ export class HydrationBrowser {
 			// Only a COMPLETE line: the announcement can arrive split across
 			// chunks, and a prefix such as `ws://127.` is itself a valid match.
 			const onData = () => {
-				const m = /DevTools listening on (ws:\/\/\S+)\r?\n/.exec(stderr);
+				const m = /DevTools listening on (ws:\/\/\S+)\r?\n/.exec(this.stderr);
 				if (!m?.[1]) return;
 				try {
 					finish(new URL(m[1]));
@@ -494,12 +640,52 @@ export class HydrationBrowser {
 			if (!wsUrl) await new Promise((r) => setTimeout(r, 100));
 		}
 
-		this.ws = new WebSocket(wsUrl);
-		await new Promise((done, fail) => {
-			this.ws.addEventListener("open", done, { once: true });
-			this.ws.addEventListener("error", fail, { once: true });
+		const ws = new WebSocket(wsUrl);
+		this.ws = ws;
+		// Inside the same deadline as everything above: a Chrome that takes the
+		// connection and never completes the handshake would otherwise be waited
+		// on for ever, which is what "within ONE deadline" promised not to do.
+		await new Promise<void>((done, reject) => {
+			const timer = setTimeout(
+				() => settle(fail("opened no DevTools socket")),
+				Math.max(0, deadline - Date.now()),
+			);
+			const onOpen = () => settle();
+			const onRefused = () =>
+				settle(fail("could not open its DevTools socket"));
+			function settle(err?: Error) {
+				clearTimeout(timer);
+				ws.removeEventListener("open", onOpen);
+				ws.removeEventListener("error", onRefused);
+				ws.removeEventListener("close", onRefused);
+				if (err) reject(err);
+				else done();
+			}
+			ws.addEventListener("open", onOpen);
+			ws.addEventListener("error", onRefused);
+			ws.addEventListener("close", onRefused);
 		});
-		this.ws.addEventListener("message", (event) => this.receive(event));
+
+		this.cdp = new CdpClient(
+			(frame) => {
+				if (ws.readyState !== WebSocket.OPEN) {
+					throw new Error("the DevTools socket is not open");
+				}
+				ws.send(frame);
+			},
+			this.sendTimeoutMs,
+			() => this.situation(),
+		);
+		ws.addEventListener("message", (event) => this.receive(event));
+		ws.addEventListener("close", (event) =>
+			this.connectionLost(`the DevTools socket closed (code ${event.code})`),
+		);
+		ws.addEventListener("error", () =>
+			this.connectionLost("the DevTools socket errored"),
+		);
+		chrome.once("exit", () =>
+			this.connectionLost("the browser process exited"),
+		);
 
 		await this.send("Runtime.enable");
 		await this.send("Page.enable");
@@ -515,13 +701,53 @@ export class HydrationBrowser {
 		});
 	}
 
-	private receive(event: MessageEvent) {
-		const msg = JSON.parse(String(event.data));
-		if (msg.id && this.pending.has(msg.id)) {
-			this.pending.get(msg.id)?.(msg.result ?? msg.error);
-			this.pending.delete(msg.id);
+	private chromeExited(): boolean {
+		return this.chrome.exitCode !== null || this.chrome.signalCode !== null;
+	}
+
+	/**
+	 * What every failed CDP command says about where it was and what became of
+	 * Chrome (#1128): the same two facts `launch` quotes for a Chrome that dies
+	 * while starting, for one that dies, or wedges, while sweeping.
+	 */
+	private situation(): string {
+		const where = this.url
+			? ` while on ${this.url}`
+			: " before any page was loaded";
+		const chrome = this.chromeExited()
+			? `Chrome exited (code ${this.chrome.exitCode}, signal ${this.chrome.signalCode})`
+			: "Chrome is still running";
+		const stderr = this.stderr.trim().slice(-1_500);
+		return `${where}. ${chrome}.${
+			stderr ? ` Its stderr:\n${stderr}` : " It printed nothing."
+		}`;
+	}
+
+	/**
+	 * The socket dropped or the process ended: fail every command waiting on it.
+	 *
+	 * The socket usually goes a moment BEFORE `exit` is reported, and the exit
+	 * code and signal are the useful half of the message, so a socket that drops
+	 * under a running Chrome is given a second to say how it ended.
+	 */
+	private connectionLost(why: string) {
+		if (this.cdp.isLost) return;
+		if (this.chromeExited()) {
+			this.cdp.lose(why);
 			return;
 		}
+		const lose = () => {
+			clearTimeout(grace);
+			this.chrome.off("exit", lose);
+			this.cdp.lose(why);
+		};
+		const grace = setTimeout(lose, 1_000);
+		this.chrome.once("exit", lose);
+	}
+
+	private receive(event: MessageEvent) {
+		const msg = JSON.parse(String(event.data));
+		if (msg.id && this.cdp.answer(msg.id, msg.result ?? msg.error)) return;
 		if (msg.method === "Runtime.exceptionThrown") {
 			const d = msg.params.exceptionDetails;
 			this.errors.push(String(d.exception?.description ?? d.text));
@@ -558,12 +784,12 @@ export class HydrationBrowser {
 		}
 	}
 
-	private send<T = unknown>(method: string, params: object = {}): Promise<T> {
-		const id = ++this.nextId;
-		this.ws.send(JSON.stringify({ id, method, params }));
-		return new Promise((done) =>
-			this.pending.set(id, done as (value: unknown) => void),
-		);
+	private send<T = unknown>(
+		method: string,
+		params: object = {},
+		timeoutMs?: number,
+	): Promise<T> {
+		return this.cdp.send<T>(method, params, timeoutMs);
 	}
 
 	async evaluate<T>(expression: string): Promise<T> {
@@ -586,11 +812,14 @@ export class HydrationBrowser {
 	 */
 	async load(url: string, timeoutMs = 90_000): Promise<boolean> {
 		const deadline = Date.now() + timeoutMs;
+		this.url = url;
 		const loaded = new Promise<void>((done) => {
 			this.onLoad = done;
 		});
 		this.lastNetworkChange = Date.now();
-		await this.send("Page.navigate", { url });
+		// Answered only once the server has sent the page, so it gets the load's
+		// whole budget rather than the one an `evaluate` has (`CDP_SEND_TIMEOUT_MS`).
+		await this.send("Page.navigate", { url }, timeoutMs);
 		await Promise.race([loaded, new Promise((r) => setTimeout(r, timeoutMs))]);
 		let hydrated = false;
 		while (Date.now() < deadline) {
@@ -666,6 +895,9 @@ export class HydrationBrowser {
 	 * assertion green. `rm` is replaceable so a test can make the removal fail.
 	 */
 	async close(teardown: { rm?: (dir: string) => void } = {}): Promise<void> {
+		// Whatever is still waiting on a browser about to be killed would wait for
+		// ever (a worker still sweeping when another one failed the gate).
+		this.cdp?.lose("the browser was closed by the harness");
 		try {
 			this.ws?.close();
 		} catch {
