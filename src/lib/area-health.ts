@@ -16,6 +16,7 @@
 // reader cannot show a zero for something nobody recorded. That is the whole
 // reason for the wrapper: an Area Director comparing six clubs must be able to
 // tell a quiet club from one that does not use a feature.
+import type { AreaHealthFieldKey } from "#/lib/area-health-fields";
 import { computeDcpSummary } from "#/lib/dcp";
 import { selectActivePeriodId } from "#/lib/dues";
 import {
@@ -48,12 +49,22 @@ const NOT_TRACKED = { tracked: false } as const;
  */
 export type ClubHealthStatus = "on_gavelup" | "not_on_gavelup" | "archived";
 
-export interface ClubHealth {
+/** What the area view knows about a club before any number is read. */
+export interface ClubIdentity {
 	/** The `area_clubs` row, NOT the club: a name-only row has no club. */
 	areaClubId: string;
 	name: string;
 	clubNumber: string | null;
 	status: ClubHealthStatus;
+}
+
+/**
+ * The numbers the view shows for a club. `ClubHealth` below is built by
+ * indexing this with each `AREA_HEALTH_FIELDS` key, so a key added to that list
+ * without a member here fails to compile. The reverse (a member here with no
+ * entry in the list) is held by `area-health.test.ts`.
+ */
+interface ClubHealthFields {
 	meetings: Tracked<{
 		held: number;
 		cancelled: number;
@@ -76,6 +87,10 @@ export interface ClubHealth {
 	dcp: Tracked<{ goalsMet: number }>;
 	renewals: Tracked<{ paidThisPeriod: number; paidLastPeriod: number }>;
 }
+
+export type ClubHealth = ClubIdentity & {
+	[K in AreaHealthFieldKey]: ClubHealthFields[K];
+};
 
 export interface AreaHealth {
 	areaId: string;
@@ -224,14 +239,6 @@ export function renewalsHealth(
 // ---------------------------------------------------------------------------
 // One club
 // ---------------------------------------------------------------------------
-
-/** What the area view knows about a club before any number is read. */
-export interface ClubIdentity {
-	areaClubId: string;
-	name: string;
-	clubNumber: string | null;
-	status: ClubHealthStatus;
-}
 
 /**
  * The totals `area-health-logic.ts` counts for one GavelUp club. Counts and

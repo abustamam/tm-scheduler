@@ -12,9 +12,10 @@ import {
 	resolveTrainingWindows,
 	sortClubHealth,
 	wholeDaysSince,
-} from "./area-health";
-import { DCP_GOALS } from "./dcp";
-import type { TrainingWindow } from "./officer-training";
+} from "#/lib/area-health";
+import { AREA_HEALTH_FIELDS } from "#/lib/area-health-fields";
+import { DCP_GOALS } from "#/lib/dcp";
+import type { TrainingWindow } from "#/lib/officer-training";
 
 // A mid-November instant: program year 2026, training year 2026, and period 2's
 // default window (Nov 1 to Feb 28) open, in any server timezone.
@@ -74,6 +75,19 @@ describe("recent window", () => {
 			1,
 		);
 		expect(wholeDaysSince(ago(100), NOW)).toBe(100);
+	});
+});
+
+describe("ClubHealth's shape", () => {
+	it("has exactly the identity keys and one key per AREA_HEALTH_FIELDS entry, tracked or not", () => {
+		// The compile-time half lives on the type: a field with no member fails
+		// typecheck. This is the other direction, a member with no field.
+		const identityKeys = ["areaClubId", "clubNumber", "name", "status"];
+		const fieldKeys = AREA_HEALTH_FIELDS.map((f) => f.key).sort();
+		for (const data of [null, emptyData()]) {
+			const keys = Object.keys(health(data)).sort();
+			expect(keys).toEqual([...identityKeys, ...fieldKeys].sort());
+		}
 	});
 });
 

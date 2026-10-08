@@ -134,12 +134,21 @@ async function makeArea(letter = "B", number = "2") {
 	return area.id;
 }
 
-async function makeClub(opts?: { name?: string; archived?: boolean }) {
+/** A club number nothing else in the shared test database is likely to hold. */
+const uniqueClubNumber = () =>
+	String(Math.floor(10_000_000 + Math.random() * 89_999_999));
+
+async function makeClub(opts?: {
+	name?: string;
+	archived?: boolean;
+	clubNumber?: string;
+}) {
 	const id = randomUUID();
 	await testDb.insert(clubs).values({
 		id,
 		name: opts?.name ?? `Health Club ${run()}`,
 		slug: `area-health-1117-${id}`,
+		clubNumber: opts?.clubNumber ?? null,
 		archivedAt: opts?.archived ? new Date() : null,
 	});
 	created.clubs.push(id);
@@ -178,11 +187,7 @@ async function makeMeeting(
 }
 
 const roleDefinitionByClub = new Map<string, string>();
-async function makeSlots(
-	clubId: string,
-	meetingId: string,
-	statuses: ("open" | "claimed" | "confirmed")[],
-) {
+async function roleDefinitionFor(clubId: string) {
 	let roleDefinitionId = roleDefinitionByClub.get(clubId);
 	if (!roleDefinitionId) {
 		const [def] = await testDb
@@ -193,10 +198,19 @@ async function makeSlots(
 		roleDefinitionId = def.id;
 		roleDefinitionByClub.set(clubId, roleDefinitionId);
 	}
+	return roleDefinitionId;
+}
+
+async function makeSlots(
+	clubId: string,
+	meetingId: string,
+	statuses: ("open" | "claimed" | "confirmed")[],
+) {
+	const roleDefinitionId = await roleDefinitionFor(clubId);
 	await testDb.insert(roleSlots).values(
 		statuses.map((status, slotIndex) => ({
 			meetingId,
-			roleDefinitionId: roleDefinitionId as string,
+			roleDefinitionId,
 			slotIndex,
 			status,
 		})),
@@ -315,21 +329,33 @@ describe.skipIf(!hasTestDb)("area health reader (#1117)", () => {
 
 	it("returns a linked club, a name-only club and an archived club, in that order, the last two untracked", async () => {
 		const areaId = await makeArea("C", "3");
-		const live = await makeClub({ name: "Zulu Live Name" });
+		const liveNumber = uniqueClubNumber();
+		const live = await makeClub({
+			name: "Zulu Live Name",
+			clubNumber: liveNumber,
+		});
+		const archivedNumber = uniqueClubNumber();
 		const archived = await makeClub({
 			name: "Aardvark Archived",
 			archived: true,
+			clubNumber: archivedNumber,
 		});
 		await makeMeeting(live, ago(7));
 		// The names are chosen so a plain sort by name would put the archived
-		// row first and the linked one last.
+		// row first and the linked one last. The area's own copies of a linked
+		// club's name and number differ from the club's, so a read of the copy
+		// shows.
 		await place(areaId, {
 			clubId: live,
 			name: "Zulu Stale Copy",
 			clubNumber: "000",
 		});
 		await place(areaId, { name: "Beta Name Only", clubNumber: "4242" });
-		await place(areaId, { clubId: archived, name: "Aardvark Copy" });
+		await place(areaId, {
+			clubId: archived,
+			name: "Aardvark Copy",
+			clubNumber: "999",
+		});
 
 		const result = await loadAreaHealth(areaId, NOW);
 
@@ -341,8 +367,13 @@ describe.skipIf(!hasTestDb)("area health reader (#1117)", () => {
 			["Beta Name Only", "not_on_gavelup"],
 			["Aardvark Archived", "archived"],
 		]);
-		// A linked row reads the club's own name live; a name-only row, its copy.
-		expect(result.clubs[1]?.clubNumber).toBe("4242");
+		// A linked row, archived or not, reads the club's own name AND number
+		// live, not the area's copy; a name-only row reads the copy.
+		expect(result.clubs.map((c) => c.clubNumber)).toEqual([
+			liveNumber,
+			"4242",
+			archivedNumber,
+		]);
 		for (const untracked of result.clubs.slice(1)) {
 			expect(untracked).toMatchObject({
 				meetings: { tracked: false },
@@ -374,6 +405,30 @@ describe.skipIf(!hasTestDb)("area health reader (#1117)", () => {
 		await expect(loadAreaHealth(randomUUID(), NOW)).rejects.toThrow(
 			AREA_NOT_FOUND_MESSAGE,
 		);
+	});
+
+	it("reads none of a club's data, in two statements, when every club is archived or name-only", async () => {
+		const areaId = await makeArea("E", "1");
+		const archived = await makeClub({ archived: true });
+		const deleted = await makeClub();
+		// Data an archived club would show if it were read.
+		await makeMeeting(archived, ago(7));
+		await place(areaId, { clubId: archived, name: "x" });
+		await place(areaId, { clubId: deleted, name: "Deleted Club" });
+		await place(areaId, { name: "Name Only" });
+		await testDb.delete(clubs).where(eq(clubs.id, deleted));
+
+		const statements = await statementsDuring(() =>
+			loadAreaHealth(areaId, NOW),
+		);
+		// The area and its clubs: nothing else is asked about any of them.
+		expect(statements).toHaveLength(2);
+		expect(statements.join("\n")).not.toMatch(/from "meetings"/);
+
+		const empty = await makeArea("E", "2");
+		expect(
+			await statementsDuring(() => loadAreaHealth(empty, NOW)),
+		).toHaveLength(2);
 	});
 
 	it("returns attendance as untracked, not zero, for a club with meetings and no roll", async () => {
@@ -809,12 +864,13 @@ describe.skipIf(!hasTestDb)("area health reader (#1117)", () => {
 		expect(json).not.toContain(mark);
 	});
 
-	it("writes nothing: a club with a recurring schedule keeps its meetings and slots", async () => {
+	it("writes nothing: a club whose standing schedule has a gap keeps its meetings and slots", async () => {
 		const areaId = await makeArea();
 		const clubId = await makeClub();
 		const control = await makeClub();
 		await place(areaId, { clubId, name: "x" });
 		for (const id of [clubId, control]) {
+			await roleDefinitionFor(id);
 			await testDb.insert(clubMeetingRecurrence).values({
 				clubId: id,
 				mode: "interval",
@@ -826,31 +882,40 @@ describe.skipIf(!hasTestDb)("area health reader (#1117)", () => {
 				enabled: true,
 			});
 		}
-		// One old meeting and nothing ahead: the top-up would add four.
-		await makeMeeting(clubId, ago(200));
+		// One old meeting with slots and nothing ahead: the schedule has a gap of
+		// four meetings, each of which the top-up would give a slot.
+		await makeSlots(clubId, await makeMeeting(clubId, ago(200)), [
+			"claimed",
+			"open",
+		]);
 
-		// The control proves this fixture is one the top-up writes to.
-		expect(
-			(await ensureScheduleToppedUp(control, NOW)).created,
-		).toBeGreaterThan(0);
-
-		const counts = async () => {
+		const counts = async (id: string) => {
 			const m = await testDb
 				.select({ id: meetings.id })
 				.from(meetings)
-				.where(eq(meetings.clubId, clubId));
+				.where(eq(meetings.clubId, id));
 			const s = await testDb
 				.select({ id: roleSlots.id })
 				.from(roleSlots)
 				.innerJoin(meetings, eq(roleSlots.meetingId, meetings.id))
-				.where(eq(meetings.clubId, clubId));
-			return [m.length, s.length];
+				.where(eq(meetings.clubId, id));
+			return { meetings: m.length, slots: s.length };
 		};
-		const before = await counts();
+
+		// The control proves this fixture is one the top-up writes meetings AND
+		// slots to, so both counts below mean something.
+		expect(
+			(await ensureScheduleToppedUp(control, NOW)).created,
+		).toBeGreaterThan(0);
+		const topped = await counts(control);
+		expect(topped.meetings).toBeGreaterThan(0);
+		expect(topped.slots).toBeGreaterThan(0);
+
+		const before = await counts(clubId);
+		expect(before).toEqual({ meetings: 1, slots: 2 });
 		await loadAreaHealth(areaId, NOW);
 		await loadAreaHealth(areaId);
-		expect(await counts()).toEqual(before);
-		expect(before[0]).toBe(1);
+		expect(await counts(clubId)).toEqual(before);
 	});
 
 	it("issues the same number of statements for one club as for six", async () => {

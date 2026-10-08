@@ -76,7 +76,7 @@ import {
 export const AREA_NOT_FOUND_MESSAGE = "That area does not exist.";
 
 /** `and(...)` is typed as possibly undefined; every call here has conditions. */
-const all = (...conditions: SQL[]): SQL => and(...conditions) as SQL;
+const allOf = (...conditions: SQL[]): SQL => and(...conditions) as SQL;
 
 /** The rows of one aggregate query, keyed by club. */
 function byClub<T extends { clubId: string }>(
@@ -112,16 +112,16 @@ async function loadClubData(
 	// "Held": not cancelled, and before `now`. "Recent": from `recentFrom`
 	// (inclusive) up to `now` (exclusive). `now` is a parameter, never the
 	// database clock, so an injected time moves every rule together.
-	const isHeld = all(
+	const isHeld = allOf(
 		ne(meetings.status, "cancelled"),
 		lt(meetings.scheduledAt, now),
 	);
-	const isRecent = all(
+	const isRecent = allOf(
 		gte(meetings.scheduledAt, recentFrom),
 		lt(meetings.scheduledAt, now),
 	);
-	const isRecentHeld = all(isHeld, isRecent);
-	const isRecentCancelled = all(eq(meetings.status, "cancelled"), isRecent);
+	const isRecentHeld = allOf(isHeld, isRecent);
+	const isRecentCancelled = allOf(eq(meetings.status, "cancelled"), isRecent);
 
 	// Per club, per recent held meeting that has a roll: the present rows. One
 	// derived table, then summed per club below.

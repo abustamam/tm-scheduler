@@ -9,25 +9,50 @@
  * guard is the query-level half: it fails on what the module is ABLE to read,
  * whether or not the value is returned.
  *
- * THE IMPORT ALLOWLIST IS THE GUARD. A grep for column names is bypassed by
- * `db.select().from(members)` and `db.query.members`, which read every column
- * without naming one, and by tables a ban list never named, such as
- * `members_email_backup` and `members_phone_backup`. So the module may import
- * only the tables below, and a table it does not import cannot leak, whatever
- * its columns are called. The rules after it close the ways to read a column
- * without naming it from a table that IS imported.
+ * WHAT IT CHECKS, on the module's syntax tree (the TypeScript compiler API, not
+ * a text search, because a text search is bypassed by an import written after a
+ * comment on the same line, or by an alias):
+ *
+ * 1. IMPORTS. The module may import only the tables, drizzle helpers and pure
+ *    modules listed below. No alias (`as`), no namespace or default import, no
+ *    side-effect import, no dynamic `import()`, `require`, `import x = require`,
+ *    import type or re-export. An aliased table is a table the later rules can
+ *    no longer name, so aliases are refused outright.
+ * 2. THE ROSTER TABLE. `members` is the one table with a person's name on it.
+ *    It may appear only as `members.id`, `members.clubId`, `members.status`, or
+ *    as the table of a `.from()` / `.xJoin()`. Anything else (another column,
+ *    `members["name"]`, `const roster = members`, a spread) fails.
+ * 3. READING COLUMNS WITHOUT NAMING THEM. A `select` must take a projection
+ *    object with no spread. A `from` / join must take a named table or
+ *    subquery, never an expression. The relational query API, the raw
+ *    `execute`, the pg client and the writes (`insert`, `update`, `delete`,
+ *    `transaction`) are refused.
+ * 4. RAW SQL TEXT. `sql` is allowed only as a template tag, and the literal
+ *    text of every `sql` template may use only a short vocabulary of aggregate
+ *    and window function words (`SQL_WORDS`), no quote, dot or semicolon. A
+ *    word outside it could be a column (`name`), a table
+ *    (`members_email_backup`) or a subquery (`select`), so it is refused;
+ *    `sql.raw` and `sql.identifier` are refused too. Values come in through
+ *    `${}`, which this does not read: they are drizzle columns and parameters.
+ *
+ * WHAT IT DOES NOT CHECK. The columns of the other allowed tables (`clubs`,
+ * `areaClubs`, `meetings`, ...). None carries a person today. A person column
+ * added to one of them, and selected, is not caught here; only the response
+ * test catches it, and only if its fixture holds a marker in that column.
+ * Allowing a table here is a claim about its columns, so review any change to
+ * one.
  *
  * READS RAW, not through `readSource`: this is an offender sweep ("the list of
  * violations must be empty"), where blanking comments could only hide a real
- * statement, and a comment that trips a rule can only fail loudly. The cost is
- * that `area-health-logic.ts` must not spell a banned pattern in a comment;
- * the failure message names the line.
+ * statement. The syntax tree makes that moot for the checks above (a comment is
+ * not a node); the file is still read as written.
  *
- * Each rule is also run against deliberately offending copies of the real
- * source below, so a regex that stops matching fails here rather than going
- * quiet.
+ * Every rule below is run against deliberately offending copies of the real
+ * source, and a last test fails if a rule has no such case, so a rule that
+ * stops matching fails here rather than going quiet.
  */
 import { readFileSync } from "node:fs";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const LOGIC_PATH = "src/server/area-health-logic.ts";
@@ -61,300 +86,667 @@ const ALLOWED_PURE_MODULES = new Set([
 	"#/lib/club-archive",
 ]);
 
+/**
+ * The drizzle helpers the module may import. Condition builders and the `sql`
+ * tag; not `getTableColumns` or `getTableConfig`, which return every column.
+ * `SQL` is a type and must be imported as one.
+ */
+const ALLOWED_DRIZZLE_NAMES = new Set([
+	"and",
+	"asc",
+	"count",
+	"desc",
+	"eq",
+	"gt",
+	"gte",
+	"inArray",
+	"isNotNull",
+	"isNull",
+	"lt",
+	"lte",
+	"ne",
+	"not",
+	"or",
+	"sql",
+	"SQL",
+]);
+
 /** The only columns of the roster table the module may name. */
 const ALLOWED_MEMBER_COLUMNS = new Set(["id", "clubId", "status"]);
 
-/** Helpers that return every column of a table, for a projection to spread. */
-const DENIED_DRIZZLE_NAMES = new Set([
-	"getTableColumns",
-	"getTableConfig",
-	"getViewSelectedFields",
+/**
+ * The words the literal text of an `sql` template may use: the aggregate and
+ * window functions and the connectives the module's fragments are built from.
+ * A new one belongs here only if it cannot name a column, a table or a
+ * subquery.
+ */
+const SQL_WORDS = new Set([
+	"and",
+	"by",
+	"coalesce",
+	"count",
+	"distinct",
+	"filter",
+	"is",
+	"max",
+	"not",
+	"null",
+	"order",
+	"over",
+	"partition",
+	"row_number",
+	"sum",
+	"where",
 ]);
 
-const JOINS = "from|innerJoin|leftJoin|rightJoin|fullJoin|crossJoin";
+const JOIN_NAMES = new Set([
+	"from",
+	"innerJoin",
+	"leftJoin",
+	"rightJoin",
+	"fullJoin",
+	"crossJoin",
+]);
+const DB_WRITE_NAMES = new Set(["insert", "update", "delete", "transaction"]);
+const RAW_ACCESS_NAMES = new Set(["query", "$client", "execute"]);
 
-interface Import {
-	module: string;
-	/** The clause between `import` and `from`, or "" for a bare import. */
-	clause: string;
-	/** Where the whole statement starts and ends in the source. */
-	start: number;
-	end: number;
+const RULES = [
+	"import-not-allowed",
+	"import-alias",
+	"import-namespace-or-default",
+	"import-side-effect",
+	"import-bypass",
+	"members-column",
+	"members-use",
+	"select-projection",
+	"from-argument",
+	"relational-or-raw-api",
+	"db-write",
+	"sql-use",
+	"sql-text",
+] as const;
+type Rule = (typeof RULES)[number];
+
+interface Violation {
+	rule: Rule;
+	text: string;
 }
 
-/** Every static import, side-effect import and re-export in the source. */
-function parseImports(source: string): Import[] {
-	const found: Import[] = [];
-	const withClause =
-		/^(?:import|export)\s+([^;"']*?)\s*from\s*["']([^"']+)["'];?/gm;
-	for (const m of source.matchAll(withClause)) {
-		found.push({
-			module: m[2] as string,
-			clause: (m[1] as string).trim(),
-			start: m.index,
-			end: m.index + m[0].length,
-		});
-	}
-	const bare = /^import\s+["']([^"']+)["'];?/gm;
-	for (const m of source.matchAll(bare)) {
-		found.push({
-			module: m[1] as string,
-			clause: "",
-			start: m.index,
-			end: m.index + m[0].length,
-		});
-	}
-	return found;
+interface Analysis {
+	violations: Violation[];
+	/** The names imported from `#/db/schema`, for the floor below. */
+	schemaNames: string[];
+	/** The `select` calls seen, for the floor below. */
+	selects: number;
 }
 
-/** `{ a, type B, c as d }` to `["a", "B", "c"]`; null when it is not a braced list. */
-function namedImports(clause: string): string[] | null {
-	const braced = /^(?:type\s+)?\{([\s\S]*)\}$/.exec(clause);
-	if (!braced) return null;
-	return (braced[1] as string)
-		.split(",")
-		.map((part) => part.trim().replace(/^type\s+/, ""))
-		.filter(Boolean)
-		.map((part) => (part.split(/\s+as\s+/)[0] as string).trim());
-}
+const isNamed = (node: ts.Node, name: string): node is ts.Identifier =>
+	ts.isIdentifier(node) && node.text === name;
 
-function lineOf(source: string, index: number): number {
-	return source.slice(0, index).split("\n").length;
-}
+/** Every way `source` breaks the rules, read off its syntax tree. */
+function analyze(source: string): Analysis {
+	const file = ts.createSourceFile(
+		"area-health-logic.ts",
+		source,
+		ts.ScriptTarget.Latest,
+		true,
+		ts.ScriptKind.TS,
+	);
+	const violations: Violation[] = [];
+	const schemaNames: string[] = [];
+	let selects = 0;
 
-/** Every way `source` breaks the rules, as sentences naming the line. */
-function violations(source: string): string[] {
-	const found: string[] = [];
-	const at = (index: number) => `line ${lineOf(source, index)}`;
+	const report = (node: ts.Node, rule: Rule, message: string) => {
+		const { line } = file.getLineAndCharacterOfPosition(node.getStart(file));
+		violations.push({ rule, text: `line ${line + 1}: ${message}` });
+	};
 
-	// --- Imports ---------------------------------------------------------
-	const imports = parseImports(source);
-	for (const imp of imports) {
-		const where = at(imp.start);
-		const names = namedImports(imp.clause);
-		if (imp.module === "drizzle-orm") {
-			if (names === null) {
-				found.push(`${where}: imports drizzle-orm other than as a named list`);
-				continue;
-			}
-			for (const name of names) {
-				if (DENIED_DRIZZLE_NAMES.has(name)) {
-					found.push(`${where}: imports ${name}, which returns every column`);
+	const checkImport = (decl: ts.ImportDeclaration) => {
+		const module = ts.isStringLiteral(decl.moduleSpecifier)
+			? decl.moduleSpecifier.text
+			: "";
+		const clause = decl.importClause;
+		if (!clause) {
+			report(decl, "import-side-effect", `side-effect import of ${module}`);
+			return;
+		}
+		if (clause.name) {
+			report(
+				decl,
+				"import-namespace-or-default",
+				`default import from ${module}`,
+			);
+		}
+		const bindings = clause.namedBindings;
+		if (bindings && ts.isNamespaceImport(bindings)) {
+			report(
+				decl,
+				"import-namespace-or-default",
+				`namespace import of ${module} reaches everything it exports`,
+			);
+		}
+		const names: { name: string; typeOnly: boolean; node: ts.Node }[] = [];
+		if (bindings && ts.isNamedImports(bindings)) {
+			for (const element of bindings.elements) {
+				if (element.propertyName) {
+					report(
+						element,
+						"import-alias",
+						`aliases ${element.propertyName.text} as ${element.name.text}; an alias hides which table or helper a later use means`,
+					);
 				}
+				names.push({
+					name: (element.propertyName ?? element.name).text,
+					typeOnly: clause.isTypeOnly || element.isTypeOnly,
+					node: element,
+				});
 			}
-		} else if (imp.module === "#/db") {
-			if (names === null || names.some((n) => n !== "db")) {
-				found.push(`${where}: imports from #/db anything but { db }`);
-			}
-		} else if (imp.module === "#/db/schema") {
-			if (names === null) {
-				found.push(
-					`${where}: imports #/db/schema as a namespace or default, which reaches every table`,
-				);
-				continue;
-			}
-			for (const name of names) {
-				if (!ALLOWED_SCHEMA_NAMES.has(name)) {
-					found.push(
-						`${where}: imports ${name} from #/db/schema, which is not on the allowlist`,
+		}
+
+		if (module === "drizzle-orm") {
+			for (const { name, typeOnly, node } of names) {
+				if (!ALLOWED_DRIZZLE_NAMES.has(name)) {
+					report(
+						node,
+						"import-not-allowed",
+						`imports ${name} from drizzle-orm, which is not on the allowlist`,
+					);
+				} else if (name === "SQL" && !typeOnly) {
+					report(
+						node,
+						"import-not-allowed",
+						"imports SQL from drizzle-orm as a value; it is a type",
 					);
 				}
 			}
-		} else if (!ALLOWED_PURE_MODULES.has(imp.module)) {
-			found.push(
-				`${where}: imports ${imp.module}, which is not on the allowlist`,
+		} else if (module === "#/db") {
+			for (const { name, node } of names) {
+				if (name !== "db") {
+					report(
+						node,
+						"import-not-allowed",
+						`imports ${name} from #/db; only db may be`,
+					);
+				}
+			}
+		} else if (module === "#/db/schema") {
+			for (const { name, node } of names) {
+				schemaNames.push(name);
+				if (!ALLOWED_SCHEMA_NAMES.has(name)) {
+					report(
+						node,
+						"import-not-allowed",
+						`imports ${name} from #/db/schema, which is not on the allowlist`,
+					);
+				}
+			}
+		} else if (!ALLOWED_PURE_MODULES.has(module)) {
+			report(
+				decl,
+				"import-not-allowed",
+				`imports ${module}, which is not on the allowlist`,
 			);
 		}
-	}
+	};
 
-	// The rest is read with the import statements blanked, so the schema import
-	// list does not count as a use of a table.
-	let body = source;
-	for (const imp of imports) {
-		body =
-			body.slice(0, imp.start) +
-			body.slice(imp.start, imp.end).replace(/[^\n]/g, " ") +
-			body.slice(imp.end);
-	}
-
-	for (const m of body.matchAll(/\bimport\s*\(/g)) {
-		found.push(`${at(m.index)}: a dynamic import bypasses the allowlist`);
-	}
-	for (const m of body.matchAll(/\brequire\s*\(/g)) {
-		found.push(`${at(m.index)}: require bypasses the allowlist`);
-	}
-
-	// --- The roster table: id, club and status, and nothing else ----------
-	for (const m of body.matchAll(/\bmembers\b/g)) {
-		const after = body.slice(m.index + 7, m.index + 7 + 40);
-		const before = body.slice(Math.max(0, m.index - 40), m.index);
-		const column = /^\.(\w+)/.exec(after)?.[1];
-		if (column !== undefined) {
-			if (!ALLOWED_MEMBER_COLUMNS.has(column)) {
-				found.push(
-					`${at(m.index)}: reads members.${column}; only id, clubId and status may be named`,
+	const checkCall = (node: ts.CallExpression) => {
+		const callee = node.expression;
+		if (callee.kind === ts.SyntaxKind.ImportKeyword) {
+			report(node, "import-bypass", "a dynamic import bypasses the allowlist");
+		}
+		if (isNamed(callee, "require")) {
+			report(node, "import-bypass", "require bypasses the allowlist");
+		}
+		if (!ts.isPropertyAccessExpression(callee)) return;
+		const name = callee.name.text;
+		if (name === "select" || name === "selectDistinct") {
+			selects++;
+			const projection = node.arguments[0];
+			if (!projection || !ts.isObjectLiteralExpression(projection)) {
+				report(
+					node,
+					"select-projection",
+					"a select with no projection object reads every column",
+				);
+			} else if (projection.properties.some(ts.isSpreadAssignment)) {
+				report(
+					node,
+					"select-projection",
+					"a spread in a projection can pull in every column",
 				);
 			}
-			continue;
-		}
-		const asJoinedTable =
-			new RegExp(`\\.(?:${JOINS})\\(\\s*$`).test(before) &&
-			/^\s*[,)]/.test(after);
-		if (!asJoinedTable) {
-			found.push(
-				`${at(m.index)}: uses members other than as members.id, members.clubId, members.status or a joined table`,
+		} else if (name === "selectDistinctOn") {
+			report(
+				node,
+				"select-projection",
+				"selectDistinctOn is not a projection object",
 			);
 		}
-	}
+		if (JOIN_NAMES.has(name) && !isNamed(callee.expression, "Array")) {
+			const target = node.arguments[0];
+			if (!target || !ts.isIdentifier(target)) {
+				report(
+					node,
+					"from-argument",
+					`${name}() must take a named table or subquery, not an expression`,
+				);
+			}
+		}
+		if (isNamed(callee.expression, "db") && DB_WRITE_NAMES.has(name)) {
+			report(node, "db-write", `db.${name} writes; this reader is read-only`);
+		}
+	};
 
-	// --- Reading columns without naming them ------------------------------
-	for (const m of body.matchAll(
-		/\.(?:select|selectDistinct|selectDistinctOn)\(\s*[^\s{]/g,
-	)) {
-		found.push(
-			`${at(m.index)}: a select with no projection object reads every column`,
-		);
-	}
-	for (const m of body.matchAll(/\.query\b/g)) {
-		found.push(`${at(m.index)}: the relational query API reads every column`);
-	}
-	for (const m of body.matchAll(/\bsql\s*\.\s*raw\b/g)) {
-		found.push(`${at(m.index)}: sql.raw can read anything`);
-	}
-	for (const m of body.matchAll(/\.execute\s*\(/g)) {
-		found.push(`${at(m.index)}: a raw statement can read anything`);
-	}
-	for (const m of body.matchAll(/select\s+(?:distinct\s+)?\*/gi)) {
-		found.push(`${at(m.index)}: select * reads every column`);
-	}
-	for (const m of body.matchAll(/[\w"`})]\.\*/g)) {
-		found.push(`${at(m.index)}: table.* reads every column`);
-	}
-	return found;
+	const checkAccess = (node: ts.PropertyAccessExpression) => {
+		const name = node.name.text;
+		if (RAW_ACCESS_NAMES.has(name)) {
+			report(
+				node,
+				"relational-or-raw-api",
+				`.${name} is the relational query API, the pg client or a raw statement, and reads every column`,
+			);
+		}
+		if (
+			isNamed(node.expression, "sql") &&
+			(name === "raw" || name === "identifier")
+		) {
+			report(node, "sql-use", `sql.${name} can name any column or table`);
+		}
+	};
+
+	const checkSqlText = (node: ts.TaggedTemplateExpression) => {
+		const template = node.template;
+		const pieces = ts.isNoSubstitutionTemplateLiteral(template)
+			? [template.text]
+			: [
+					template.head.text,
+					...template.templateSpans.map((s) => s.literal.text),
+				];
+		const unknown = new Set<string>();
+		for (const piece of pieces) {
+			for (const match of piece.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)) {
+				if (!SQL_WORDS.has(match[0].toLowerCase())) unknown.add(match[0]);
+			}
+		}
+		if (unknown.size > 0) {
+			report(
+				node,
+				"sql-text",
+				`sql text uses ${[...unknown].map((w) => `"${w}"`).join(", ")}, outside the allowed vocabulary: it could name a column, a table or a subquery`,
+			);
+		}
+		if (pieces.some((piece) => /["'`.;]/.test(piece))) {
+			report(
+				node,
+				"sql-text",
+				"sql text contains a quote, a dot or a semicolon, which can name a column or table",
+			);
+		}
+	};
+
+	const checkIdentifier = (node: ts.Identifier) => {
+		if (node.text !== "members" && node.text !== "sql") return;
+		const parent = node.parent;
+		// A property name is not a reference to the imported binding.
+		if (
+			(ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+			(ts.isPropertyAssignment(parent) && parent.name === node) ||
+			(ts.isBindingElement(parent) && parent.propertyName === node)
+		) {
+			return;
+		}
+		if (node.text === "members") {
+			if (ts.isPropertyAccessExpression(parent) && parent.expression === node) {
+				if (!ALLOWED_MEMBER_COLUMNS.has(parent.name.text)) {
+					report(
+						node,
+						"members-column",
+						`reads members.${parent.name.text}; only id, clubId and status may be named`,
+					);
+				}
+				return;
+			}
+			if (
+				ts.isCallExpression(parent) &&
+				parent.arguments[0] === node &&
+				ts.isPropertyAccessExpression(parent.expression) &&
+				JOIN_NAMES.has(parent.expression.name.text)
+			) {
+				return;
+			}
+			report(
+				node,
+				"members-use",
+				"uses members other than as members.id, members.clubId, members.status or a joined table",
+			);
+			return;
+		}
+		if (ts.isTaggedTemplateExpression(parent) && parent.tag === node) return;
+		// `sql.raw` and `sql.identifier` are reported where they are accessed.
+		if (ts.isPropertyAccessExpression(parent) && parent.expression === node) {
+			return;
+		}
+		report(node, "sql-use", "sql used other than as a template tag");
+	};
+
+	const visit = (node: ts.Node): void => {
+		if (ts.isImportDeclaration(node)) {
+			// Its identifiers are the import list, not uses: checked once, here.
+			checkImport(node);
+			return;
+		}
+		if (ts.isImportEqualsDeclaration(node)) {
+			report(node, "import-bypass", "import = require bypasses the allowlist");
+		}
+		if (ts.isExportDeclaration(node) && node.moduleSpecifier) {
+			report(node, "import-bypass", "a re-export bypasses the allowlist");
+		}
+		if (ts.isImportTypeNode(node)) {
+			report(node, "import-bypass", "an import() type bypasses the allowlist");
+		}
+		if (ts.isCallExpression(node)) checkCall(node);
+		if (ts.isPropertyAccessExpression(node)) checkAccess(node);
+		if (
+			ts.isElementAccessExpression(node) &&
+			ts.isIdentifier(node.expression) &&
+			["db", "sql", "members"].includes(node.expression.text)
+		) {
+			report(
+				node,
+				node.expression.text === "members"
+					? "members-column"
+					: "relational-or-raw-api",
+				`${node.expression.text}[...] names a member by a string the other rules cannot read`,
+			);
+		}
+		if (ts.isTaggedTemplateExpression(node) && isNamed(node.tag, "sql")) {
+			checkSqlText(node);
+		}
+		if (ts.isIdentifier(node)) checkIdentifier(node);
+		ts.forEachChild(node, visit);
+	};
+	visit(file);
+
+	return { violations, schemaNames, selects };
 }
 
 const SOURCE = readFileSync(LOGIC_PATH, "utf8");
 
 describe("area-health-logic.ts reads no person column (#1117)", () => {
-	it("imports only the allowlist, names only members.id, clubId and status, and projects every select", () => {
-		// The floor: a parser that stopped matching would find no imports and no
-		// selects, and "no violations" would be vacuously true.
-		const imports = parseImports(SOURCE);
-		expect(imports.length).toBeGreaterThanOrEqual(8);
-		const schemaNames = imports
-			.filter((i) => i.module === "#/db/schema")
-			.flatMap((i) => namedImports(i.clause) ?? []);
-		expect(schemaNames.length).toBeGreaterThanOrEqual(10);
-		expect(schemaNames).toContain("members");
-		expect(SOURCE.match(/\.select\(/g)?.length).toBeGreaterThanOrEqual(10);
-		expect(SOURCE.match(/\bmembers\./g)?.length).toBeGreaterThanOrEqual(5);
+	it("imports only the allowlist, names only members.id, clubId and status, projects every select and keeps raw SQL to a short vocabulary", () => {
+		const analysis = analyze(SOURCE);
+		// The floor: a parser that found no imports and no selects would call an
+		// empty module clean. This asks only that the module still has any.
+		expect(analysis.schemaNames.length).toBeGreaterThan(0);
+		expect(analysis.selects).toBeGreaterThan(0);
 
-		expect(violations(SOURCE)).toEqual([]);
+		expect(analysis.violations.map((v) => v.text)).toEqual([]);
 	});
 
 	describe("each rule fails on the offence it exists for", () => {
 		// A copy of the real source with the offence added, so the rest of the
 		// file is the real one and the only new thing is what is being tested.
-		const withLine = (line: string) => `${SOURCE}\n${line}\n`;
+		const withSnippet = (snippet: string) => `${SOURCE}\n${snippet}\n`;
 
-		const cases: [string, string, RegExp][] = [
+		const cases: [label: string, snippet: string, rule: Rule][] = [
+			// --- imports ---------------------------------------------------
 			[
 				"a table outside the allowlist",
 				'import { people } from "#/db/schema";',
-				/people/,
+				"import-not-allowed",
 			],
 			[
 				"the email backup table",
 				'import { membersEmailBackup } from "#/db/schema";',
-				/membersEmailBackup/,
+				"import-not-allowed",
 			],
 			[
 				"the phone backup table",
 				'import { membersPhoneBackup } from "#/db/schema";',
-				/membersPhoneBackup/,
+				"import-not-allowed",
+			],
+			[
+				"a table imported after a comment on the same line",
+				'/* extra */ import { people } from "#/db/schema";',
+				"import-not-allowed",
+			],
+			[
+				"the roster table aliased, then read",
+				'import { members as roster } from "#/db/schema";\nconst leak = { who: roster.name };',
+				"import-alias",
+			],
+			[
+				"a drizzle helper aliased",
+				'import { sql as q } from "drizzle-orm";',
+				"import-alias",
 			],
 			[
 				"the whole schema as a namespace",
 				'import * as schema from "#/db/schema";',
-				/namespace or default/,
+				"import-namespace-or-default",
+			],
+			[
+				"the schema as a default import",
+				'import schema from "#/db/schema";',
+				"import-namespace-or-default",
+			],
+			[
+				"drizzle-orm as a namespace",
+				'import * as orm from "drizzle-orm";',
+				"import-namespace-or-default",
+			],
+			[
+				"drizzle-orm as a default import",
+				'import orm from "drizzle-orm";',
+				"import-namespace-or-default",
+			],
+			[
+				"a drizzle helper that returns every column",
+				'import { getTableColumns } from "drizzle-orm";',
+				"import-not-allowed",
+			],
+			[
+				"the SQL class imported as a value",
+				'import { SQL } from "drizzle-orm";',
+				"import-not-allowed",
+			],
+			[
+				"something other than db from #/db",
+				'import { schema } from "#/db";',
+				"import-not-allowed",
 			],
 			[
 				"another server module",
 				'import { currentOfficersForClub } from "./officers-logic";',
-				/officers-logic/,
+				"import-not-allowed",
 			],
 			[
 				"a server module through the alias",
 				'import { loadTrainingRecords } from "#/server/officer-training-logic";',
-				/officer-training-logic/,
+				"import-not-allowed",
 			],
 			[
 				"a pure module that is not on the list",
 				'import { personName } from "#/lib/person-name";',
-				/person-name/,
+				"import-not-allowed",
 			],
+			[
+				"a type-only import from a module that is not on the list",
+				'import type { PersonName } from "#/lib/person-name";',
+				"import-not-allowed",
+			],
+			["a side-effect import", 'import "./side-effect";', "import-side-effect"],
 			[
 				"a dynamic import of a loader",
 				'const topUp = await import("./schedule-topup-logic");',
-				/dynamic import/,
+				"import-bypass",
 			],
+			["require", 'const leak = require("./officers-logic");', "import-bypass"],
+			[
+				"import = require",
+				'import legacy = require("./officers-logic");',
+				"import-bypass",
+			],
+			[
+				"an import() type",
+				'type Leak = import("#/db/schema").Person;',
+				"import-bypass",
+			],
+			[
+				"a re-export from the schema",
+				'export { people } from "#/db/schema";',
+				"import-bypass",
+			],
+			// --- the roster table --------------------------------------------
 			[
 				"a name column of the roster table",
 				"const leak = { who: members.name };",
-				/members\.name/,
+				"members-column",
 			],
 			[
 				"a preferred name column of the roster table",
 				"const leak = { who: members.preferredName };",
-				/members\.preferredName/,
+				"members-column",
 			],
 			[
-				"a projection-less select from the roster table",
-				"const leak = await db.select().from(members);",
-				/no projection object/,
+				"a roster column named by a string",
+				'const leak = { who: members["name"] };',
+				"members-column",
 			],
 			[
 				"the roster table aliased to dodge the column rule",
 				"const roster = members;",
-				/uses members other than/,
+				"members-use",
+			],
+			[
+				"the roster table destructured",
+				"const { name } = members;",
+				"members-use",
+			],
+			[
+				"the roster table as a shorthand property",
+				"const leak = { members };",
+				"members-use",
+			],
+			[
+				"the roster table spread into a projection",
+				"const leak = db.select({ ...members }).from(clubs);",
+				"members-use",
+			],
+			// --- reading columns without naming them -------------------------
+			[
+				"a projection-less select from the roster table",
+				"const leak = await db.select().from(members);",
+				"select-projection",
+			],
+			[
+				"a select of a variable",
+				"const leak = await db.select(columns).from(clubs);",
+				"select-projection",
+			],
+			[
+				"a spread in a projection",
+				"const leak = await db.select({ ...columns, id: clubs.id }).from(clubs);",
+				"select-projection",
+			],
+			[
+				"selectDistinctOn",
+				"const leak = await db.selectDistinctOn([clubs.id], { id: clubs.id }).from(clubs);",
+				"select-projection",
+			],
+			[
+				"a from of an expression",
+				"const leak = await db.select({ id: clubs.id }).from(sql`clubs`);",
+				"from-argument",
+			],
+			[
+				"a join of an expression",
+				"const leak = await db.select({ id: clubs.id }).from(clubs).innerJoin(other(), eq(clubs.id, clubs.id));",
+				"from-argument",
 			],
 			[
 				"the relational query API",
 				"const leak = await db.query.members.findMany();",
-				/relational query API/,
+				"relational-or-raw-api",
 			],
-			["a raw sql fragment", 'const leak = sql.raw("select 1");', /sql\.raw/],
+			[
+				"the relational query API by string",
+				'const leak = db["query"];',
+				"relational-or-raw-api",
+			],
 			[
 				"a raw statement",
 				"const leak = await db.execute(sql`select 1`);",
-				/raw statement/,
+				"relational-or-raw-api",
 			],
-			["select star", "const leak = sql`select * from clubs`;", /select \*/],
-			["a whole-table star", "const leak = sql`${clubs}.*`;", /table\.\*/],
+			["the pg client", "const leak = db.$client;", "relational-or-raw-api"],
+			["an insert", "await db.insert(clubs).values({});", "db-write"],
+			["an update", "await db.update(clubs).set({});", "db-write"],
+			["a delete", "await db.delete(clubs);", "db-write"],
+			["a transaction", "await db.transaction(async () => {});", "db-write"],
+			// --- raw SQL ------------------------------------------------------
 			[
-				"a helper that returns every column",
-				'import { getTableColumns } from "drizzle-orm";',
-				/getTableColumns/,
+				"a subquery of the people table in sql text",
+				"const leak = { privateEmail: sql<string>`(select email from people limit 1)` };",
+				"sql-text",
 			],
+			[
+				"a backup table named in sql text",
+				"const leak = sql<string>`members_email_backup.email`;",
+				"sql-text",
+			],
+			[
+				"a bare column named in sql text",
+				"const leak = sql<string>`name`;",
+				"sql-text",
+			],
+			[
+				"a quoted identifier in sql text",
+				'const leak = sql<string>`"email"`;',
+				"sql-text",
+			],
+			[
+				"a whole-table star in sql text",
+				"const leak = sql`${clubs}.*`;",
+				"sql-text",
+			],
+			[
+				"select star in sql text",
+				"const leak = sql`select * from clubs`;",
+				"sql-text",
+			],
+			["sql.raw", 'const leak = sql.raw("select 1");', "sql-use"],
+			["sql.identifier", 'const leak = sql.identifier("email");', "sql-use"],
+			["sql taken out of its tag", "const { raw } = sql;", "sql-use"],
 		];
 
-		it.each(cases)("%s", (_label, line, expected) => {
-			const found = violations(withLine(line));
-			expect(found.length).toBeGreaterThan(0);
-			expect(found.join("\n")).toMatch(expected);
+		it.each(cases)("%s", (_label, snippet, rule) => {
+			const rules = analyze(withSnippet(snippet)).violations.map((v) => v.rule);
+			expect(rules, `expected a ${rule} violation`).toContain(rule);
+		});
+
+		it("has an offending-copy case for every rule", () => {
+			// The header's claim, held: a rule added to RULES with no case fails here.
+			const covered = new Set(cases.map(([, , rule]) => rule));
+			expect([...RULES].filter((rule) => !covered.has(rule))).toEqual([]);
 		});
 
 		it("does not flag the shapes the module legitimately uses", () => {
 			const fine = [
-				'import { and, eq, type SQL } from "drizzle-orm";',
+				'import { and, eq, type SQL, sql } from "drizzle-orm";',
 				'import { db } from "#/db";',
 				'import { members, meetings } from "#/db/schema";',
 				'import { areaLabel } from "#/lib/area-health-fields";',
 				"const a = db.select({ id: members.id }).from(members);",
 				"const b = db.select({ c: members.clubId }).from(meetings).innerJoin(members, eq(meetings.id, members.id));",
 				"const c = db.select({ n: count() }).from(members).where(eq(members.status, 'active'));",
+				"const d = { members: 1 };",
+				"const e = sql<number>`count(*) filter (where ${x} and ${y} is not null)`;",
+				"const f = sql<number>`row_number() over (partition by ${a} order by ${b}, ${c})`;",
+				"const g = sql<number>`coalesce(sum(${a}), 0)`;",
+				"const h = Array.from(new Set([1]));",
 			].join("\n");
-			expect(violations(fine)).toEqual([]);
+			expect(analyze(fine).violations).toEqual([]);
 		});
 	});
 });
