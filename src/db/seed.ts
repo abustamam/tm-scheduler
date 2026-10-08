@@ -5,7 +5,9 @@ import {
 	defaultClubRoleForOffices,
 	type OfficerPosition,
 } from "#/lib/officers";
+import type { ContactMethod } from "#/lib/preferred-contact";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
+import { createMentorship } from "#/server/mentorship-logic";
 import { seedPathwaysCatalog } from "../../scripts/pathways-catalog-seed.ts";
 import { seedGlobalTemplates } from "../../scripts/seed-global-templates.ts";
 import { db } from "./index.ts";
@@ -16,6 +18,7 @@ import {
 	duesPeriods,
 	guestInvites,
 	guests,
+	meetingAttendance,
 	meetings,
 	memberDues,
 	members,
@@ -27,6 +30,7 @@ import {
 	people,
 	projectCompletionMarks,
 	roleDefinitions,
+	roleFeedbackNotes,
 	roleSlots,
 	speeches,
 	user,
@@ -104,6 +108,13 @@ interface RosterEntry {
 	officerPosition?: OfficerPosition;
 	joinedAt?: Date;
 	status?: "active" | "inactive";
+	/** How officers should reach this person, and who chose it (#1093, #1110):
+	 *  ONE field so the method and its provenance cannot be seeded apart. The
+	 *  writers refuse a method whose data is missing, so every seeded phone and
+	 *  email keeps the method it names available. Omitted ⇒ no preference. */
+	contactPreference?: { method: ContactMethod; by: "member" | "officer" };
+	/** Offered as a mentor (#939). Omitted ⇒ false, the column default. */
+	willingToMentor?: boolean;
 }
 
 interface MeetingSpec {
@@ -195,6 +206,8 @@ async function seedClub(opts: {
 				name: r.name,
 				email: r.email,
 				phone: r.phone === undefined ? seedPhone(i) : r.phone,
+				preferredContact: r.contactPreference?.method ?? null,
+				contactPreferenceBy: r.contactPreference?.by ?? null,
 				userId: userIdByEmail.get(r.email)!,
 			})),
 		)
@@ -209,6 +222,7 @@ async function seedClub(opts: {
 				personId: personByName.get(r.name)!,
 				name: r.name,
 				status: r.status ?? "active",
+				willingToMentor: r.willingToMentor ?? false,
 				joinedAt: r.joinedAt ?? joinedAgo(2),
 				clubRole: defaultClubRoleForOffices(
 					r.officerPosition ? [r.officerPosition] : [],
@@ -285,6 +299,32 @@ async function linkEvaluator(evalSlotId: string, speakerSlotId: string) {
 		.update(roleSlots)
 		.set({ evaluatesSlotId: speakerSlotId })
 		.where(eq(roleSlots.id, evalSlotId));
+}
+
+/** The meeting's slot for `roleName` (`slotIndex` 0 = "Speaker 1"). Throws, so
+ *  a renamed role in `ROLE_TEMPLATE` fails the seed instead of seeding nothing. */
+function slotOf(
+	m: SeededClub["meetings"][number],
+	defs: SeededClub["defs"],
+	roleName: string,
+	slotIndex = 0,
+) {
+	const def = defs.find((d) => d.name === roleName);
+	const slot = m.slots.find(
+		(s) => s.roleDefinitionId === def?.id && s.slotIndex === slotIndex,
+	);
+	if (!slot)
+		throw new Error(`Seed: no slot ${slotIndex} for role "${roleName}"`);
+	return slot;
+}
+
+/** Claim a slot for a non-member guest (#151): `assigned_guest_id`, never both
+ *  assignees (the table's check). */
+async function claimSlotForGuest(slotId: string, guestId: string, when: Date) {
+	await db
+		.update(roleSlots)
+		.set({ assignedGuestId: guestId, status: "claimed", claimedAt: when })
+		.where(eq(roleSlots.id, slotId));
 }
 
 interface SpeechSpec {
@@ -1028,27 +1068,38 @@ async function main() {
 				email: "dana@example.com",
 				officerPosition: "president",
 				joinedAt: joinedAgo(3),
+				// A member's own choice, and a method outside the default pair.
+				contactPreference: { method: "call", by: "member" },
+				willingToMentor: true,
 			},
 			{
 				name: "Priya Nair",
 				email: "priya@example.com",
 				officerPosition: "vp_education",
 				joinedAt: joinedAgo(2),
+				willingToMentor: true,
 			},
 			{
+				// Marcus, Nina and Omar are on the VPE's "Close to a level" list, which
+				// is what `/tour`'s VP Education shot shows. They carry three different
+				// preferences, two of them set by an officer (#1110), so the nudge
+				// draft leads with each person's own channel (#1105).
 				name: "Marcus Lee",
 				email: "marcus@example.com",
 				joinedAt: joinedAgo(1),
+				contactPreference: { method: "whatsapp", by: "member" },
 			},
 			{
 				name: "Nina Petrov",
 				email: "nina@example.com",
 				joinedAt: joinedAgo(0, 8),
+				contactPreference: { method: "email", by: "officer" },
 			},
 			{
 				name: "Omar Haddad",
 				email: "omar@example.com",
 				joinedAt: joinedThisYear(10),
+				contactPreference: { method: "sms", by: "officer" },
 			},
 			{
 				// Harbor's VP Membership (#901): `/tour`'s officers stop signs in as
@@ -1057,6 +1108,14 @@ async function main() {
 				email: "sofia@example.com",
 				officerPosition: "vp_membership",
 				joinedAt: joinedAgo(1, 6),
+			},
+			{
+				// The second new member, with no mentor yet (Omar is the paired one),
+				// so the mentorship screens have both shapes. Last in the roster:
+				// `seedPhone` is by roster index, so nobody above is renumbered.
+				name: "Camille Roy",
+				email: "camille@example.com",
+				joinedAt: joinedThisYear(4),
 			},
 		],
 		meetings: [
@@ -1106,32 +1165,244 @@ async function main() {
 				wodDefinition: "lasting for a very short time",
 				wodExample: "The applause was ephemeral; the lesson was not.",
 			},
+			// Past meetings, last so the indices above stay put. Two held ones carry
+			// the history the newer screens read: how each person attended (in the
+			// room or on the call), and anonymous notes left for the people who
+			// served. The third was called off (#1084), so a list of past meetings
+			// has a cancelled row and `bun run marketing:screenshots` has one to skip.
+			{
+				scheduledAt: dayAt(-7, 18),
+				theme: "Safe Harbor",
+				location: "Harbor Library, Meeting Room 2",
+				wordOfTheDay: "Anchor",
+				wodDefinition: "to hold something firmly in place",
+				wodExample: "A good opening line anchors the whole speech.",
+				status: "completed",
+			},
+			{
+				scheduledAt: dayAt(-14, 18),
+				theme: "Rising Tide",
+				location: "Harbor Library, Meeting Room 2",
+				wordOfTheDay: "Swell",
+				wodDefinition: "to grow larger or stronger",
+				wodExample: "Applause began to swell as she finished.",
+				status: "completed",
+			},
+			{
+				scheduledAt: dayAt(-21, 18),
+				theme: "Storm Warning",
+				location: "Harbor Library, Meeting Room 2",
+				status: "cancelled",
+			},
 		],
 	});
 
-	const harborPool = [
+	// `/tour`'s officers stop (#901) is captured from Harbor's VPE and VPM
+	// dashboards, and its agenda shot from Harbor's next meeting, by
+	// `bun run marketing:screenshots`, which checks each of the shapes below is
+	// on the page before it shoots (`marketing-screenshot-features.ts`). The
+	// invite that keeps the VPM shot's "Invited to …" line current is for the
+	// +10-day meeting, so a seed stays good for a week or more.
+	const harborPerson = (n: string) => harbor.personByName.get(n)!;
+	const harborMember = (n: string) => harbor.memberByName.get(n)!;
+
+	// Guests, one of each kind (#1046), two of them brought by a member (#1050).
+	// The visiting Toastmaster and the guest speaker take roles on the next
+	// meeting below, which is what puts a kind caption on the printed agenda
+	// (#1059). A Visitor reads exactly as before.
+	const harborGuests = await db
+		.insert(guests)
+		.values([
+			{
+				clubId: harbor.clubId,
+				name: "Lucia Moreno",
+				email: "lucia.moreno@example.com",
+				phone: seedPhone(50),
+				stage: "prospect" as const,
+				introducedByMemberId: harborMember("Marcus Lee"),
+			},
+			{
+				clubId: harbor.clubId,
+				name: "Ethan Brooks",
+				email: "ethan.brooks@example.com",
+				phone: null,
+				stage: "following_up" as const,
+				introducedByMemberId: harborMember("Priya Nair"),
+			},
+			{
+				clubId: harbor.clubId,
+				name: "Imani Clarke",
+				email: "imani.clarke@example.com",
+				phone: seedPhone(51),
+				kind: "visiting_toastmaster" as const,
+				homeClub: "Bayview",
+			},
+			{
+				clubId: harbor.clubId,
+				name: "Theo Marchetti",
+				email: "theo.marchetti@example.com",
+				phone: seedPhone(52),
+				kind: "guest_speaker" as const,
+				homeClub: "Seaport Speakers",
+				introducedByMemberId: harborMember("Dana Okafor"),
+			},
+		])
+		.returning({ id: guests.id, name: guests.name });
+	const harborGuest = (n: string) => harborGuests.find((g) => g.name === n)!.id;
+
+	// The next meeting (+3 days): the one the print and present shots capture.
+	// Marcus and Omar are NOT on it, and nobody on "Close to a level" speaks: a
+	// row shows the nudge only while its member has no speaker slot ahead
+	// (`showsLevelNudge`), and Nina's row keeps its "Speaking" badge for contrast.
+	// Speaker 3 goes to the guest speaker, the Grammarian to the visiting
+	// Toastmaster, the Timer to the newest member.
+	const harborNext = harbor.meetings[0];
+	const harborClaimedAt = dayAt(-1, 12);
+	await fillMeeting(
+		harborNext,
+		harbor.defs,
+		["Dana Okafor", "Priya Nair", "Sofia Reyes", "Nina Petrov"],
+		harbor.memberByName,
+		harbor.personByName,
+		{ count: 4, when: harborClaimedAt, speechCursor: { i: 3 } },
+	);
+	await claimSlotForGuest(
+		slotOf(harborNext, harbor.defs, "Speaker", 2).id,
+		harborGuest("Theo Marchetti"),
+		harborClaimedAt,
+	);
+	await claimSlotForGuest(
+		slotOf(harborNext, harbor.defs, "Grammarian").id,
+		harborGuest("Imani Clarke"),
+		harborClaimedAt,
+	);
+	await claimSlot(
+		slotOf(harborNext, harbor.defs, "Timer").id,
+		harborMember("Camille Roy"),
+		harborClaimedAt,
+	);
+
+	// Two held past meetings (Omar and Camille had not joined for the older one).
+	const harborPast = [harbor.meetings[5], harbor.meetings[6]];
+	const harborPastPool = [
 		"Dana Okafor",
 		"Priya Nair",
 		"Marcus Lee",
 		"Nina Petrov",
-		"Omar Haddad",
+		"Sofia Reyes",
 	];
 	await fillMeeting(
-		harbor.meetings[0],
+		harborPast[0],
 		harbor.defs,
-		harborPool,
+		harborPastPool,
 		harbor.memberByName,
 		harbor.personByName,
-		{ count: 5, when: dayAt(-1, 12), speechCursor: { i: 3 } },
+		{ count: 5, when: dayAt(-10, 12), speechCursor: { i: 0 } },
+	);
+	await fillMeeting(
+		harborPast[1],
+		harbor.defs,
+		rotate(harborPastPool, 2),
+		harbor.memberByName,
+		harbor.personByName,
+		{ count: 5, when: dayAt(-17, 12), speechCursor: { i: 6 } },
 	);
 
-	// `/tour`'s officers stop (#901) is captured from Harbor's VPE and VPM
-	// dashboards by `bun run marketing:screenshots`, which checks each of the
-	// shapes below is on the page before it shoots. The guest invite below is
-	// for Harbor's +10-day meeting, so its "Invited to …" line (and the script's
-	// upcoming-meeting check) stays good for a week or more after a seed.
-	const harborPerson = (n: string) => harbor.personByName.get(n)!;
-	const harborMember = (n: string) => harbor.memberByName.get(n)!;
+	// How each person attended (#1046): in the room or on the call. NULL means
+	// not recorded, so a few rows leave it out the way roll mode does today.
+	type Mode = "in_person" | "online" | null;
+	const presentMembers = (meetingId: string, rows: [string, Mode][]) =>
+		rows.map(([name, mode]) => ({
+			meetingId,
+			memberId: harborMember(name),
+			status: "present" as const,
+			mode,
+		}));
+	const presentGuests = (meetingId: string, rows: [string, Mode][]) =>
+		rows.map(([name, mode]) => ({
+			meetingId,
+			guestId: harborGuest(name),
+			status: "present" as const,
+			mode,
+		}));
+	await db.insert(meetingAttendance).values([
+		...presentMembers(harborPast[0].meetingId, [
+			["Dana Okafor", "in_person"],
+			["Priya Nair", "in_person"],
+			["Marcus Lee", "in_person"],
+			["Nina Petrov", "online"],
+			["Omar Haddad", "in_person"],
+			["Sofia Reyes", "online"],
+		]),
+		...presentGuests(harborPast[0].meetingId, [["Lucia Moreno", "in_person"]]),
+		...presentMembers(harborPast[1].meetingId, [
+			["Dana Okafor", "in_person"],
+			["Priya Nair", "in_person"],
+			["Marcus Lee", "online"],
+			["Nina Petrov", "in_person"],
+			["Sofia Reyes", null],
+		]),
+		...presentGuests(harborPast[1].meetingId, [
+			["Imani Clarke", "in_person"],
+			["Ethan Brooks", "online"],
+		]),
+	]);
+
+	// Anonymous notes for people who served on the older of the two held
+	// meetings (#981). No writer column exists, and `created_at` is the table's
+	// own day-granular default: neither is set here.
+	await db.insert(roleFeedbackNotes).values([
+		{
+			clubId: harbor.clubId,
+			meetingId: harborPast[0].meetingId,
+			recipientMemberId: harborMember("Marcus Lee"),
+			roleSlotId: slotOf(harborPast[0], harbor.defs, "Speaker", 0).id,
+			roleLabel: "Speaker 1",
+			wentWell:
+				"The story about your first night on the ferry pulled everyone in.",
+			tryNext: "A longer pause before the ending would let it land.",
+		},
+		{
+			clubId: harbor.clubId,
+			meetingId: harborPast[0].meetingId,
+			recipientMemberId: harborMember("Marcus Lee"),
+			roleSlotId: slotOf(harborPast[0], harbor.defs, "Speaker", 0).id,
+			roleLabel: "Speaker 1",
+			wentWell: "Great energy from the first sentence.",
+		},
+		{
+			clubId: harbor.clubId,
+			meetingId: harborPast[0].meetingId,
+			recipientMemberId: harborMember("Nina Petrov"),
+			roleSlotId: slotOf(harborPast[0], harbor.defs, "Speaker", 1).id,
+			roleLabel: "Speaker 2",
+			wentWell: "Clear structure. I could follow every point.",
+		},
+		{
+			clubId: harbor.clubId,
+			meetingId: harborPast[0].meetingId,
+			recipientMemberId: harborMember("Priya Nair"),
+			roleSlotId: slotOf(harborPast[0], harbor.defs, "Table Topics Master").id,
+			roleLabel: "Table Topics Master",
+			wentWell: "Your questions made everyone want to answer.",
+			tryNext:
+				"Keep the introduction short so there is time for one more speaker.",
+		},
+	]);
+
+	// Mentorship (#939): Omar, a new member, is paired with Dana; Camille, the
+	// other new member, has no mentor yet. Through the pairing's own write path,
+	// the one a club admin's "Pair a mentor" uses, so a seeded pairing has passed
+	// the checks a real one does: both members active in this club, mentor and
+	// mentee different.
+	await createMentorship({
+		clubId: harbor.clubId,
+		mentorMemberId: harborMember("Dana Okafor"),
+		menteeMemberId: harborMember("Omar Haddad"),
+		focus: "new_member",
+		actorMemberId: harborMember("Priya Nair"),
+	});
+
 	// "Close to a level", catalog branch: a hand-declared path, 3 of Level 1's 4
 	// projects marked, so the row NAMES what is left ("1 left: …").
 	await declarePathWithMarks(
@@ -1163,36 +1434,28 @@ async function main() {
 		joinedAgo(0, 3),
 	);
 
-	// Guests for the VPM pipeline: one prospect already invited by Harbor's VPM
-	// to the +10-day meeting (NOT the +3-day one: once an invite's meeting has
-	// started the line reads "Last invited to …" and the capture's DOM check
-	// fails), and one following-up guest who can still be invited.
-	const [harborProspect] = await db
-		.insert(guests)
-		.values([
-			{
-				clubId: harbor.clubId,
-				name: "Lucia Moreno",
-				email: "lucia.moreno@example.com",
-				phone: seedPhone(50),
-				stage: "prospect" as const,
-			},
-			{
-				clubId: harbor.clubId,
-				name: "Ethan Brooks",
-				email: "ethan.brooks@example.com",
-				phone: null,
-				stage: "following_up" as const,
-			},
-		])
-		.returning({ id: guests.id });
-	await db.insert(guestInvites).values({
-		clubId: harbor.clubId,
-		guestId: harborProspect!.id,
-		meetingId: harbor.meetings[1].meetingId,
-		invitedByMemberId: harborMember("Sofia Reyes"),
-		invitedAt: dayAt(-1, 10),
-	});
+	// Invites, by Harbor's VPM. Lucia is invited to the NEXT meeting, so her row
+	// reads "Resend invite" (#1041) with an "Invited to …" badge; Ethan is
+	// invited to the +10-day one, so his row still offers "Invite to …" for the
+	// next meeting. That one is what keeps the capture's DOM check and its
+	// upcoming-meeting check good for a week: once the next meeting has started,
+	// Lucia's line reads "Last invited to …".
+	await db.insert(guestInvites).values([
+		{
+			clubId: harbor.clubId,
+			guestId: harborGuest("Lucia Moreno"),
+			meetingId: harborNext.meetingId,
+			invitedByMemberId: harborMember("Sofia Reyes"),
+			invitedAt: dayAt(-2, 10),
+		},
+		{
+			clubId: harbor.clubId,
+			guestId: harborGuest("Ethan Brooks"),
+			meetingId: harbor.meetings[1].meetingId,
+			invitedByMemberId: harborMember("Sofia Reyes"),
+			invitedAt: dayAt(-1, 10),
+		},
+	]);
 
 	// Global agenda templates (#agenda-templates). Club-less, so they are seeded
 	// once for the whole install rather than per club, and the script is
@@ -1204,7 +1467,7 @@ async function main() {
 		"  • MCF (mcf-toastmasters) — 16 active members, full officer team, 7 meetings, Pathways/DCP/guests/dues",
 	);
 	console.log(
-		"  • Harbor City Speakers (harbor-city-speakers) — Dana (President), Priya (VP Education), Sofia (VP Membership), 5 meetings, Pathways/guests",
+		"  • Harbor City Speakers (harbor-city-speakers) — Dana (President), Priya (VP Education), Sofia (VP Membership), 8 meetings (2 held, 1 cancelled), Pathways, 4 guests of 3 kinds, mentorship, feedback notes, attendance by mode",
 	);
 	console.log(`Admin sign-in email (MCF): ${ADMIN_EMAIL}`);
 	console.log(
