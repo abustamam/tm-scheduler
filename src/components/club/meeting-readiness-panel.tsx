@@ -10,11 +10,11 @@ const gapText = (gap: ReadinessGap): string =>
 	`${gap.slotLabel} (${gap.holderName ?? "open"})`;
 
 /**
- * "Is this meeting ready?" in one card (#963), for the officers and that
+ * "Is this meeting ready?" in one card (#963), for club admins and that
  * meeting's Toastmaster of the Day.
  *
  * READ-ONLY, on purpose. It names who is behind and sends nothing, writes
- * nothing and has no button: asking a person is the officer's own move, from the
+ * nothing and has no button: asking a person is the reader's own move, from the
  * agenda directly below, which keeps its nudge drafts unchanged. That is
  * `.out-of-scope/automatic-open-role-nudges.md` and ADR-0028 (humans send every
  * message) applied to a panel that could otherwise grow a "remind them" button.
@@ -37,8 +37,10 @@ export function MeetingReadinessPanel({
 	/** The meeting key the route links with (`urlKey`), not necessarily the uuid. */
 	meetingId: string;
 }) {
-	// Built the way `MeetingToolbar`'s Present link is, so the two cannot open
-	// different pages. A new tab: the meeting page stays where the officer left it.
+	// Built the way `MeetingToolbar`'s Present link is: the same route, the same
+	// params (the route's club slug and URL meeting key) and a new tab, so the
+	// meeting page stays where the reader left it. Nothing ties the two call
+	// sites together, so a change to one is a change to look for in the other.
 	const deckLink = (
 		<Link
 			to="/club/$clubId/meeting/$meetingId/present"

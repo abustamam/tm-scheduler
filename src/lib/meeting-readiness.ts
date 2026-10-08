@@ -8,7 +8,7 @@
  *
  * It is a VIEW, never a broadcast. It reads, it writes nothing and it sends
  * nothing (`.out-of-scope/automatic-open-role-nudges.md`, ADR-0028: humans send
- * every message). The panel names who is behind; asking them is the officer's
+ * every message). The panel names who is behind; asking them is the reader's
  * own move, from the agenda below it.
  *
  * ## Why this lives in `src/lib`, and takes structural inputs
@@ -100,36 +100,56 @@ export interface MeetingReadiness {
  * is not pre-meeting prep (`role-duties.ts`, `TIMING_DUTY`). `hasTiming` is
  * therefore never passed to a duty's `done` here either.
  */
-const SKIPPED_DUTY_IDS: ReadonlySet<DutyId> = new Set<DutyId>(["timing"]);
+const SKIPPED_DUTY_IDS = ["timing"] as const satisfies readonly DutyId[];
+type SkippedDutyId = (typeof SKIPPED_DUTY_IDS)[number];
 
-/** Every duty this view reports; adding a `DutyId` without deciding fails to compile. */
-type ReportedDutyId = Exclude<DutyId, "timing">;
+/** Every duty id that is not skipped: the ones this view must report. */
+type ReportableDutyId = Exclude<DutyId, SkippedDutyId>;
 
-const isReportedDuty = (id: DutyId): id is ReportedDutyId =>
-	!SKIPPED_DUTY_IDS.has(id);
+interface ReportedDuty {
+	id: Extract<ReportableDutyId, ReadinessItemId>;
+	label: string;
+	/**
+	 * `meeting`: one fact about the whole meeting, so it is ONE item with
+	 * `total: 1` however many slots own the duty (two Table Topics Masters do not
+	 * make two topics). `slot`: one fact per owning slot (each speaker's own
+	 * title).
+	 */
+	scope: "meeting" | "slot";
+}
 
 /**
- * `meeting`: one fact about the whole meeting, so it is ONE item with `total: 1`
- * however many slots own the duty (two Table Topics Masters do not make two
- * topics). `slot`: one fact per owning slot (each speaker's own title).
+ * The duty items, in the order they are shown after the two role items. This
+ * tuple is the ONE source: the order is its order, the lookup below is built
+ * from it, and `ReportedDutyId` is read off it, so none of the three can drift
+ * from the others.
  */
-const DUTY_ITEMS: Record<
-	ReportedDutyId,
-	{ label: string; scope: "meeting" | "slot" }
-> = {
-	meeting_theme: { label: "Theme set", scope: "meeting" },
-	word_of_the_day: { label: "Word of the Day set", scope: "meeting" },
-	table_topics: { label: "Table Topics set", scope: "meeting" },
-	speech_details: { label: "Speech details added", scope: "slot" },
-};
+const REPORTED_DUTIES = [
+	{ id: "meeting_theme", label: "Theme set", scope: "meeting" },
+	{ id: "word_of_the_day", label: "Word of the Day set", scope: "meeting" },
+	{ id: "table_topics", label: "Table Topics set", scope: "meeting" },
+	{ id: "speech_details", label: "Speech details added", scope: "slot" },
+] as const satisfies readonly ReportedDuty[];
 
-/** The order the duty items are shown in, after the two role items. */
-const DUTY_ITEM_ORDER: readonly ReportedDutyId[] = [
-	"meeting_theme",
-	"word_of_the_day",
-	"table_topics",
-	"speech_details",
-];
+type ReportedDutyId = (typeof REPORTED_DUTIES)[number]["id"];
+
+/**
+ * By id, for the loop below. The ANNOTATION is the compile-time check that every
+ * `DutyId` is decided: a duty added to the registry is neither in
+ * `SKIPPED_DUTY_IDS` nor in `REPORTED_DUTIES`, so `ReportableDutyId` gains a key
+ * the tuple's `ReportedDutyId` lacks and this assignment stops compiling until
+ * someone chooses. The same holds the other way: a duty in `REPORTED_DUTIES` that
+ * is also skipped fails the tuple's own `satisfies`. The cast is the one place
+ * `Object.fromEntries` loses its key type, and the assignment re-checks it.
+ */
+const REPORTED_DUTY_BY_ID: Readonly<Record<ReportableDutyId, ReportedDuty>> =
+	Object.fromEntries(REPORTED_DUTIES.map((duty) => [duty.id, duty])) as Record<
+		ReportedDutyId,
+		ReportedDuty
+	>;
+
+const isReportable = (id: DutyId): id is ReportableDutyId =>
+	!(SKIPPED_DUTY_IDS as readonly DutyId[]).includes(id);
 
 function buildItem(
 	id: ReadinessItemId,
@@ -199,13 +219,13 @@ export function meetingReadiness(input: {
 		tableTopicsNotes: meeting.tableTopicsNotes,
 	};
 	const byDuty = new Map<
-		ReportedDutyId,
+		ReportableDutyId,
 		{ total: number; gaps: ReadinessGap[] }
 	>();
 	for (const slot of slots) {
 		for (const duty of dutiesForRole(slot)) {
-			if (!isReportedDuty(duty.id)) continue;
-			const spec = DUTY_ITEMS[duty.id];
+			if (!isReportable(duty.id)) continue;
+			const spec = REPORTED_DUTY_BY_ID[duty.id];
 			const acc = byDuty.get(duty.id) ?? { total: 0, gaps: [] };
 			byDuty.set(duty.id, acc);
 			// A meeting-level duty counts once, at the first slot that owns it in
@@ -219,9 +239,9 @@ export function meetingReadiness(input: {
 			if (!duty.done(ctx)) acc.gaps.push(gapFor(slot));
 		}
 	}
-	for (const id of DUTY_ITEM_ORDER) {
+	for (const { id, label } of REPORTED_DUTIES) {
 		const acc = byDuty.get(id);
-		if (acc) addItem(buildItem(id, DUTY_ITEMS[id].label, acc.total, acc.gaps));
+		if (acc) addItem(buildItem(id, label, acc.total, acc.gaps));
 	}
 
 	return { ready: items.every((item) => item.done), items };
@@ -244,14 +264,22 @@ export function showsMeetingReadiness(input: {
 }
 
 /**
- * Who sees the panel: an officer (`canManage`, which already means an admin
- * membership or an open office) who is not previewing as a member, OR this
- * meeting's Toastmaster of the Day.
+ * Who sees the panel: a club admin (`canManage`) who is not previewing as a
+ * member, OR this meeting's Toastmaster of the Day.
  *
- * Preview-as-member (#320) drops only the OFFICER arm. The TMOD arm stays,
- * because the page derives `isTmod` from the viewer's own slot whether
- * previewing or not, so an officer who is also this meeting's TMOD still sees
- * the panel in preview, exactly as a non-officer TMOD would.
+ * `canManage` is `canManageClub`'s answer (`src/server/guards.ts`): a stored
+ * `club_role` of admin, or a `read_write` impersonation. It does NOT include an
+ * elected officer who is not an admin. That is the pre-existing asymmetry the
+ * route's `guestEdit` comment describes (the server is more permissive than this
+ * UI), and it is not this panel's call to widen: such an officer sees the panel
+ * only by holding this meeting's TMOD slot.
+ *
+ * Preview-as-member (#320) drops only the ADMIN arm. The TMOD arm stays (AC 8,
+ * third row) because the page derives `isTmod` from the viewer's own slot
+ * whether previewing or not. That DIFFERS, deliberately, from the route's
+ * `runsThisMeeting` (`effectiveCanManage || (isTmod && !previewAsMember)`),
+ * which drops the TMOD arm in preview: an admin who is also this meeting's TMOD
+ * still sees this panel while previewing, where the plan panel goes away.
  */
 export function canSeeMeetingReadiness(input: {
 	canManage: boolean;

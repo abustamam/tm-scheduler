@@ -86,6 +86,9 @@ describe("meetingReadiness (#963)", () => {
 			"table_topics",
 			"speech_details",
 		]);
+		// One item per id: the duty tuple the order is read from cannot list a duty
+		// twice and have it counted twice.
+		expect(new Set(r.items.map((i) => i.id)).size).toBe(r.items.length);
 		expect(r.items.map((i) => i.label)).toEqual([
 			"Roles filled",
 			"Roles confirmed",
@@ -382,6 +385,20 @@ describe("meetingReadiness agrees with /me's dutiesForRole (#963)", () => {
 		{
 			name: "Speaker",
 			build: () => speaker(),
+			itemId: "speech_details",
+			ctxDone: { meeting: FILLED_MEETING, speechTitle: "A real title" },
+			ctxNotDone: { meeting: FILLED_MEETING, speechTitle: "TBA" },
+		},
+		{
+			// A contest speech is a speech: `contestant_prepared` owns the same
+			// `SPEECH_DETAILS_DUTY` through its own key in the registry.
+			name: "Contestant",
+			build: () =>
+				slot({
+					roleName: "Contestant",
+					roleKey: "contestant_prepared",
+					slotsUnordered: true,
+				}),
 			itemId: "speech_details",
 			ctxDone: { meeting: FILLED_MEETING, speechTitle: "A real title" },
 			ctxNotDone: { meeting: FILLED_MEETING, speechTitle: "TBA" },

@@ -602,12 +602,15 @@ function MeetingView() {
 	});
 	// #320: previewing-as-member drops management everywhere it gates admin UI.
 	const effectiveCanManage = canManage && !previewAsMember;
-	// The "Before the meeting" panel (#963): an officer (not while previewing as
-	// a member, #320) or this meeting's Toastmaster, on a meeting that is still
-	// to be got ready. The three flags go in as themselves: `canManage` and not
+	// The "Before the meeting" panel (#963): a club admin (`canManage`, so not an
+	// elected officer who lacks the admin role) who is not previewing as a member
+	// (#320), or this meeting's Toastmaster, on a meeting that is still to be got
+	// ready. The three flags go in as themselves: `canManage` and not
 	// `effectiveCanManage`, because the helper owns the preview rule, and
 	// `isTmod` survives preview on purpose (the TMOD arm is the viewer's own
-	// slot, which previewing does not change). `now` is this render's one clock;
+	// slot, which previewing does not change), which differs from
+	// `runsThisMeeting` below: that one drops the TMOD arm in preview. `now` is
+	// this render's one clock;
 	// the helpers read none of their own. `meeting-readiness-wiring.guard.test.ts`
 	// holds all of it, since a component test injects its own props.
 	const readiness =

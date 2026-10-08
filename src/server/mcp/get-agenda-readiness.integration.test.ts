@@ -210,13 +210,24 @@ describe.skipIf(!hasTestDb)("get_agenda readiness (#963)", () => {
 			.update(meetings)
 			.set({ tableTopicsNotes: "Ask about the best advice you were given" })
 			.where(eq(meetings.id, seed.meetingId));
-		const after = (await getAgenda()).readiness;
-		expect(after?.items.find((i) => i.id === "table_topics")).toMatchObject({
+		const afterOut = await getAgenda();
+		expect(
+			afterOut.readiness?.items.find((i) => i.id === "table_topics"),
+		).toMatchObject({
 			done: true,
 			doneCount: 1,
 			total: 1,
 			gaps: [],
 		});
+		// The column is read for the computation and is NOT added to the output:
+		// neither the key nor the text itself reaches a caller.
+		expect(Object.keys(afterOut)).not.toContain("tableTopicsNotes");
+		expect(JSON.stringify(afterOut)).not.toContain("tableTopicsNotes");
+		expect(JSON.stringify(afterOut)).not.toContain(
+			"Ask about the best advice you were given",
+		);
+		// Non-vacuity: the same output does carry the fields it is meant to.
+		expect(Object.keys(afterOut)).toContain("readiness");
 	});
 
 	it("a meeting with every item done is ready", async () => {
