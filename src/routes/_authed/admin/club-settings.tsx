@@ -235,14 +235,11 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 				// the Charter section rather than blanking the settings page, which
 				// is also what a tab loaded before this fn existed gets.
 				loadClubCharter({ data: context.adminClub.clubId }).catch(() => null),
-				// The Area Director notice (#1118). Non-fatal like the logo and the
-				// charter: a failed read hides the notice rather than blanking the
-				// settings page, which is also what a tab loaded before this fn
-				// existed gets. Imported here, not at the top, like the promo
-				// template below: this page's component tests stub every server
-				// module they import by hand and run the component, never this
-				// loader, so a top-level import would load `#/db` under jsdom for
-				// tests that never call it.
+				// The Area Director notice (#1118). Non-fatal like the charter above.
+				// Imported here, not at the top, like the promo template below: this
+				// page's component tests stub every server module they import by hand
+				// and run the component, never this loader, so a top-level import
+				// would load `#/db` under jsdom for tests that never call it.
 				import("#/server/club-area-notice")
 					.then(({ loadClubAreaNotice }) =>
 						loadClubAreaNotice({ data: context.adminClub.clubId }),

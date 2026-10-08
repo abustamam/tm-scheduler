@@ -14,11 +14,7 @@
 import { AREA_HEALTH_FIELDS } from "#/lib/area-health-fields";
 import type { ClubAreaNotice } from "#/server/club-area-notice-logic";
 
-export function AreaNotice({
-	notice,
-}: {
-	notice: ClubAreaNotice | null | undefined;
-}) {
+export function AreaNotice({ notice }: { notice: ClubAreaNotice | null }) {
 	if (!notice) return null;
 	const { areaLabel, divisionLetter, districtNumber, directorName } = notice;
 	const numbers = AREA_HEALTH_FIELDS.map((field, i) => (
