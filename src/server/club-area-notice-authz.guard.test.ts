@@ -25,16 +25,23 @@ import {
 
 const SOURCE = readSource("src/server/club-area-notice.ts");
 
-const ADMIN_READ = /requireClubAdminView\(\s*user\.id,\s*clubId\s*\)/;
+// Both calls must be AWAITED. `requireUser()` and `requireClubAdminView()` are
+// async: without `await` the handler carries on to the query while the gate is
+// still pending, returns the notice, and the refusal becomes an unhandled
+// rejection nobody sees. A caller the gate would turn away gets the data, with
+// the call still present in the source and every pattern that omits `await`
+// still matching.
+const REQUIRE_USER = /await\s+requireUser\(\)/;
+const ADMIN_READ = /await\s+requireClubAdminView\(\s*user\.id,\s*clubId\s*\)/;
 
 describe("loadClubAreaNotice is admin-gated (#1118)", () => {
 	const body = serverFnBody(SOURCE, "loadClubAreaNotice");
 
 	it("resolves the caller and calls the admin view gate before the query", () => {
-		const userAt = body.search(/requireUser\(\)/);
+		const userAt = body.search(REQUIRE_USER);
 		const gateAt = body.search(ADMIN_READ);
 		const logicAt = body.indexOf("loadClubAreaNoticeDb(");
-		expect(userAt, "requireUser() missing").toBeGreaterThanOrEqual(0);
+		expect(userAt, `${REQUIRE_USER} missing`).toBeGreaterThanOrEqual(0);
 		expect(gateAt, `gate ${ADMIN_READ} missing`).toBeGreaterThan(userAt);
 		expect(logicAt, "loadClubAreaNoticeDb( missing").toBeGreaterThan(gateAt);
 	});

@@ -117,6 +117,24 @@ describe("club settings shows the Area Director notice (#1118)", () => {
 		expect(noticeAt).toBeLessThan(formAt);
 	});
 
+	it("renders it unconditionally: a plain JSX child, not inside an expression", () => {
+		// `{impersonating && <AreaNotice notice={areaNotice} />}` and
+		// `{cond ? <AreaNotice … /> : null}` both contain the element and both
+		// pass the checks above while hiding the notice from ordinary admins. A
+		// plain child follows a closing `>` (the previous element's, or the
+		// parent's opening tag); an expression container leaves `&&`, `?`, `:`,
+		// `(` or `{` there instead. A JSX comment `{/* … */}` directly above
+		// leaves `}` and fails this too: a false failure, the safe direction.
+		const component = src.slice(componentAt);
+		const noticeAt = component.indexOf("<AreaNotice");
+		expect(noticeAt).toBeGreaterThan(-1);
+		const before = component.slice(0, noticeAt).trimEnd();
+		expect(
+			before.endsWith(">") && !before.endsWith("=>"),
+			`<AreaNotice follows "${before.slice(-12)}": it must be a plain JSX child, not guarded by a condition`,
+		).toBe(true);
+	});
+
 	it("imports the component it renders", () => {
 		expect(src).toMatch(
 			/import \{ AreaNotice \} from "#\/components\/club\/area-notice";/,
