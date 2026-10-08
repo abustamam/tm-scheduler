@@ -15,6 +15,7 @@ import {
 	useSyncExternalStore,
 } from "react";
 import { toast } from "sonner";
+import { AreaNotice } from "#/components/club/area-notice";
 import { CharterSettings } from "#/components/club/charter-settings";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
@@ -217,23 +218,34 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 		return { adminClub };
 	},
 	loader: async ({ context }) => {
-		const [profile, agenda, logoMeta, timezone, charter] = await Promise.all([
-			getClubProfileSettings({ data: context.adminClub.clubId }),
-			loadClubAgendaSettings({ data: context.adminClub.clubId }),
-			// Degrades to "no logo" rather than blanking the whole settings page,
-			// matching the five public logo loaders, which already catch. It
-			// matters across a rolling deploy: a server fn's URL is derived from
-			// file+name, not content, so a tab left open across #504's POST->GET
-			// flip keeps POSTing to a URL that now answers 405.
-			getClubLogoMeta({ data: { clubId: context.adminClub.clubId } }).catch(
-				() => null,
-			),
-			loadClubTimezoneSettings({ data: context.adminClub.clubId }),
-			// Charter status (#944). Non-fatal like the logo: a failed read hides
-			// the Charter section rather than blanking the settings page, which
-			// is also what a tab loaded before this fn existed gets.
-			loadClubCharter({ data: context.adminClub.clubId }).catch(() => null),
-		]);
+		const [profile, agenda, logoMeta, timezone, charter, areaNotice] =
+			await Promise.all([
+				getClubProfileSettings({ data: context.adminClub.clubId }),
+				loadClubAgendaSettings({ data: context.adminClub.clubId }),
+				// Degrades to "no logo" rather than blanking the whole settings page,
+				// matching the five public logo loaders, which already catch. It
+				// matters across a rolling deploy: a server fn's URL is derived from
+				// file+name, not content, so a tab left open across #504's POST->GET
+				// flip keeps POSTing to a URL that now answers 405.
+				getClubLogoMeta({ data: { clubId: context.adminClub.clubId } }).catch(
+					() => null,
+				),
+				loadClubTimezoneSettings({ data: context.adminClub.clubId }),
+				// Charter status (#944). Non-fatal like the logo: a failed read hides
+				// the Charter section rather than blanking the settings page, which
+				// is also what a tab loaded before this fn existed gets.
+				loadClubCharter({ data: context.adminClub.clubId }).catch(() => null),
+				// The Area Director notice (#1118). Non-fatal like the charter above.
+				// Imported here, not at the top, like the promo template below: this
+				// page's component tests stub every server module they import by hand
+				// and run the component, never this loader, so a top-level import
+				// would load `#/db` under jsdom for tests that never call it.
+				import("#/server/club-area-notice")
+					.then(({ loadClubAreaNotice }) =>
+						loadClubAreaNotice({ data: context.adminClub.clubId }),
+					)
+					.catch(() => null),
+			]);
 		// The blast template (#931). Imported here rather than at the top so the
 		// promo module stays out of this page's first chunk; the editor that
 		// reads it is lazy for the same reason. Non-fatal, like the logo above:
@@ -251,6 +263,7 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 			timezone,
 			promoTemplate,
 			charter,
+			areaNotice,
 		};
 	},
 	component: ClubSettings,
@@ -380,8 +393,15 @@ const PromoTemplateEditor = lazy(() =>
 
 function ClubSettings() {
 	const { adminClub, impersonating } = Route.useRouteContext();
-	const { profile, agenda, logoMeta, timezone, promoTemplate, charter } =
-		Route.useLoaderData();
+	const {
+		profile,
+		agenda,
+		logoMeta,
+		timezone,
+		promoTemplate,
+		charter,
+		areaNotice,
+	} = Route.useLoaderData();
 	const router = useRouter();
 	const [submitting, setSubmitting] = useState(false);
 	const [geIntroduces, setGeIntroduces] = useState(
@@ -612,6 +632,8 @@ function ClubSettings() {
 					meeting agenda. Leave a field blank to omit it.
 				</p>
 			</div>
+
+			<AreaNotice notice={areaNotice} />
 
 			<form onSubmit={onSubmit} className="max-w-xl space-y-4">
 				<div className="space-y-2">
