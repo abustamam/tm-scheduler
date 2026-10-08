@@ -68,6 +68,7 @@ import {
 	applyTableTopicsNotesUpdate,
 	applyWordOfTheDayUpdate,
 	loadCancelledMeetings,
+	loadPublicNextMeetingKey,
 	loadPublicUpcomingMeetings,
 	loadTmodPanelData,
 } from "./meetings-logic";
@@ -92,6 +93,19 @@ export type { CancelledMeetingRow } from "./meetings-logic";
 export const listUpcomingMeetings = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
 	.handler(async ({ data: clubId }) => loadPublicUpcomingMeetings(clubId));
+
+/** The club's slug and the URL key of the meeting it holds next, or a null key
+ *  when nothing is scheduled today or later. PUBLIC — no session required, but
+ *  NOT ungated: an archived or unknown club yields `null`. Backs both
+ *  `/club/:clubId/next` and `/next`, so the two can never name different
+ *  meetings. "Next" is the phase rule, so today's meeting stays next until its
+ *  club-local day ends. The query and its archive gate live in
+ *  `loadPublicNextMeetingKey` (#544). */
+export const getPublicNextMeetingKey = createServerFn({ method: "GET" })
+	.validator((clubId: unknown) => uuid.parse(clubId))
+	.handler(async ({ data: clubId }) =>
+		loadPublicNextMeetingKey(clubId, new Date()),
+	);
 
 const tmodPlanInput = z.object({
 	meetingId: uuid,
@@ -551,6 +565,10 @@ export const getPublicMeetingByKey = createServerFn({ method: "GET" })
  * `{ meeting: null }` when none is scheduled. Backs the `/next` shortcut, which
  * redirects to that meeting's canonical `/club/:clubId/meeting/:key` page. AUTHED
  * — any signed-in club member.
+ *
+ * The current bundle no longer calls this (`/next` uses `getPublicNextMeetingKey`);
+ * it stays for browser tabs loaded before that change, whose old `/next` loader
+ * still calls it by id.
  */
 export const getNextMeeting = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))

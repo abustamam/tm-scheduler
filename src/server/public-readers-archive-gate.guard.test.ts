@@ -171,6 +171,12 @@ const WIRINGS: Wiring[] = [
 	},
 	{
 		file: "server/meetings.ts",
+		fn: "getPublicNextMeetingKey",
+		mustCall: "loadPublicNextMeetingKey",
+		leaks: "which meeting a club holds next",
+	},
+	{
+		file: "server/meetings.ts",
 		fn: "listPastMeetings",
 		mustCall: "loadPastMeetings",
 		leaks: "the club's meeting history",
