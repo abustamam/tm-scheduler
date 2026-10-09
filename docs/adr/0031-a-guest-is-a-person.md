@@ -45,60 +45,74 @@ merging: ADR-0008 forbids merging on name, and the public guest book never links
 A duplicate is repaired afterwards through the superadmin merge tool, which lists guest-only
 Persons with a "Guest" badge (`unboundGuestOnlyPerson()`, `account-link-logic.ts`).
 
-### Convert
+### Convert: adopt a pristine Person, otherwise mint a fresh one
 
-A convert that finds no member of THIS club to match (the #759 club-scoped dedupe) puts the
-membership on the guest's own Person. It inserts no `people` row and records
-`createdPerson: false`, which is still written so that code from before #1124 can read the
-record.
+The maintainer's ruling of 2026-10-09 (option A). A convert that finds no member of THIS club to
+match (the #759 club-scoped dedupe) looks at the Person the guest row names, and **adopts it only
+if it is PRISTINE**. Otherwise the guest gets a fresh Person, which is what a convert did before
+#1124.
 
-While the Person is still guest-only and unbound, and before the membership insert, convert
-writes two things onto it, each in its own UPDATE with its conditions in that UPDATE's own
-WHERE:
+A Person is pristine for a guest only if ALL of these hold (`pristineGuestPerson(guestId)`,
+`account-link-logic.ts`, the one definition):
 
-- **Name and goes-by name**, overwritten from the guest row, a cleared goes-by name included. The
-  Person was minted at capture time, and an officer's later correction lives only on the guest
-  row; the membership carries it, and `people.name` and `people.preferred_name` are the fallback
-  every other club reads. This is the fourth behavior change the spec did not list: a Person made
-  by `createGuestRecord` no longer goes stale when an officer renames the guest, which the old
-  convert avoided only because it created the Person at convert time.
-- **Email and phone**, SET from the guest row's current values, a cleared one included. The
-  Person owns their contact and a club is its custodian, which includes fixing a typo, until the
-  person signs in or speaks for themselves; so convert sets a guest-only, unbound Person's contact
-  from the guest row, and a bound or member Person keeps its own. This deviates from the letter
-  of the issue ("only into fields that are null"). A fill left a typo'd address on a Person that
-  holds a membership after an undo, a correction on the guest and a second convert, and the bind
-  rule lets whoever owns the typo sign in to it. Clearing the address at undo instead was tried
-  and rejected: it stops the undoing club's own roster CSV matching the Person convert minted
-  (#875), which then creates a second Person for the same human in the same club.
+- nobody has signed in as them (`user_id IS NULL`);
+- no membership in any club, in any status;
+- no speech, no Pathways enrolment, no charter-helper row;
+- no guest row but this one, in any club;
+- no email and no phone;
+- no activity record showing they ever held a membership: a `member_remove` naming them
+  (`detail.personId`, the shape `applyMemberRemove`, an undo and the CSV importer's release lookup
+  use) or a `member_add` naming them (convert's record).
 
-The conditions are that nobody has signed in as the Person and that it is held by guest rows only.
-The second reads false the moment the membership exists, so the writes run before the membership
-insert.
+The predicate is in the adopt UPDATE's own WHERE, and the UPDATE matching a row IS the decision,
+so a sign-in or a membership that lands after any earlier read makes it match nothing and the
+convert mints a fresh Person instead. It reads false the moment the membership exists, so the
+statement runs before the membership insert.
 
-This refines ADR-0029's "guest conversion never writes an EXISTING Person's address": the Person
-here is the guest's own, unbound and held by guest rows alone, exactly what a fresh Person was
-before. A matched Person (a member of this club) is still never written. The dedupe-hit path is
-otherwise unchanged, and the accepted residual is that such a human has two Persons until a
-superadmin merge. It now locks BOTH Persons, the guest's and the matched one, in id order before
-it writes.
+- **Pristine: adopt.** The membership goes on the guest's own Person, no `people` row is inserted
+  (`createdPerson: false`), and convert writes the guest row's name, goes-by name, email and phone
+  onto it. The contact is blank by the predicate, so that is a fill. The name and goes-by name are
+  the guest row's because an officer's correction since capture lives only there, and
+  `people.name` / `people.preferred_name` are the fallback every other club reads. This is the
+  fourth behavior change the spec did not list: a Person made by `createGuestRecord` no longer
+  goes stale when an officer renames the guest.
+- **Not pristine: a fresh Person.** Convert mints a Person carrying the guest row's name, goes-by
+  name, email and phone, points the guest row at it, and converts onto it (`createdPerson: true`).
+  The old Person is left EXACTLY as it is and is NOT deleted: it is somebody's history, or the
+  release target of an undone convert (#875).
 
-**Undo leaves the contact alone.** It takes back nothing convert wrote: the next convert sets the
-contact again from the guest row as it is then, and an undone Person keeps the address its own
-club's roster CSV will look for. Undo resolves the Person through the membership row's CURRENT
-`person_id`, not the activity record, because a merge since may have deleted the Person the
-record names.
+**Why contact on a guest's Person counts as evidence.** In #1124 nothing puts contact on a guest's
+Person except a convert or a member-level edit, so contact means the Person was a member.
+**#1125 moves a guest's contact onto its Person, and must replace this signal**; without that every
+guest Person with an email would read as a former member.
 
-**After an undo or an unlink, a guest never keeps a member's Person.** The backfill points a
-converted or linked guest at its membership's Person. If that Person still holds ANY membership
-once the undo or unlink is done (a convert that reused one, an unlink, a Person that is a member
-of another club too), the guest row is re-pointed to a fresh name-only Person, the backfill's
-shape. Left alone, the next convert would adopt the member's Person, take the reuse branch
-(reactivate, demote, close terms, skip the #617 name-clash refusal) and, for a row converted
-before #759, attach another club's Person. A link (#635) is the other direction: it points the
-guest at the member's Person, as a converted guest does, and takes back the guest's old Person
-when nothing else references it. A collapse of two memberships carries `guests.person_id` along
-with `converted_membership_id`.
+Why not adopt whatever the guest row names (the first cut of this change, which overwrote the
+Person's contact and name from the guest row, then restricted it to Persons held by guest rows
+only). A re-review found Persons that fit that rule and were not the guest's: one a merge had made
+a former member's, one an earlier convert had made a member that an officer had since corrected,
+one a wrong link had pointed at another member. Writing the guest row's values onto them re-keyed
+a real person and let an address typed on the anonymous guest book become the sign-in key of a
+Person with history. Every one of those fails a pristine condition, so each gets a fresh Person.
+Clearing the contact at undo was also tried and rejected: it stops the undoing club's own roster
+CSV matching the Person convert minted (#875), which then creates a second Person for one human.
+The cost of the rule is accepted: an undo followed by a re-convert always leaves the first Person
+behind as an orphan with a release record, and a typo'd address stays on it; it holds no
+membership, so nothing vouches for it.
+
+This refines ADR-0029's "guest conversion never writes an EXISTING Person's address": a Person
+written here is one that, by the predicate, nobody has any claim on, and is exactly what a fresh
+Person was before. A matched Person (a member of this club) is still never written. The dedupe-hit
+path is otherwise unchanged, and the accepted residual is that such a human has two Persons until a
+superadmin merge. It locks BOTH Persons, the guest's and the matched one, in id order before it
+writes.
+
+**Undo leaves the contact alone and leaves the guest where it is.** The guest keeps naming whatever
+Person it named; the next convert decides, and a Person that holds a membership, has contact or has
+a removal on record is not pristine. Undo resolves the Person through the membership row's CURRENT
+`person_id`, not the activity record, because a merge since may have deleted the Person the record
+names. A link (#635) points the guest at the member's Person, as a converted guest does, and takes
+back the guest's old Person when nothing else references it. A collapse of two memberships carries
+`guests.person_id` along with `converted_membership_id`.
 
 ### Contact (implemented in #1125, recorded here)
 
@@ -192,10 +206,11 @@ counts these rows right after the swap so they are known.
 - Every guest has a Person, so #1125 can move contact onto it and #1127 can link a human across
   clubs without a second identity concept.
 - Undo of a convert keeps the guest row, and the guest returns to `following_up` on the same
-  Person unless that Person still holds a membership, when it gets a fresh one. The undo's
-  speeches and Pathways checks are keyed on `createdMembership` rather than `createdPerson`,
-  which is always false for a new convert. The one case this over-refuses is a guest Person that
-  a merge had already made a member elsewhere; it refuses an undo and deletes nothing.
+  Person. A re-convert then adopts it only if it is still pristine, which after an undo it is not
+  (the undo leaves a removal on record), so the guest gets a fresh Person. The undo's speeches and
+  Pathways checks are keyed on `createdMembership` rather than `createdPerson`, which is false
+  whenever convert adopts. The one case this over-refuses is a guest Person that a merge had
+  already made a member elsewhere; it refuses an undo and deletes nothing.
 - **Accepted residual.** A dedupe-hit convert leaves the guest's own Person behind as a second
   guest-only Person for a human who is also a member, until a superadmin merges them.
 - The merge tool's lists include guest-only Persons so that residual can be repaired.

@@ -16,6 +16,7 @@ import {
 	countDistinct,
 	eq,
 	exists,
+	inArray,
 	isNotNull,
 	isNull,
 	ne,
@@ -27,6 +28,7 @@ import {
 import { type AnyPgColumn, alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import {
+	activityLog,
 	clubCharterHelpers,
 	guests,
 	members,
@@ -78,6 +80,8 @@ const heldGuest = alias(guests, "held_guest");
 const ownedSpeech = alias(speeches, "owned_speech");
 const enrolment = alias(pathEnrollments, "person_enrolment");
 const charterHelper = alias(clubCharterHelpers, "person_charter_helper");
+const otherGuestRow = alias(guests, "other_guest_row");
+const personRecord = alias(activityLog, "person_activity");
 /** The binding account, re-read INSIDE the bind's own statement (#1091
  *  review). Aliased so it always renders qualified (#802). */
 const bindingAccount = alias(user, "binding_account");
@@ -206,21 +210,15 @@ export function soleHoldingClub(clubId: string): SQL {
 }
 
 /**
- * The Person is held by guest rows only (#1124, ADR-0031): no club has them as a
- * member, and at least one club has them as a guest. Both arms are correlated on
- * `people.id`, for use inside a statement over `people`.
- *
- * It says NOTHING about a sign-in account: a Person somebody has signed in as
- * can still satisfy it. That is why the writers of `people.email` spell
- * `isNull(people.userId)` beside it, in the statement itself, and why
- * `unboundGuestOnlyPerson` exists for the readers that want both.
- *
- * Evaluate it BEFORE a membership is inserted for the Person, not after: the
- * moment convert adds one, this reads false, and an UPDATE that carries it
- * quietly matches no row.
+ * An UNBOUND guest-only Person (#1124, ADR-0031): nobody has signed in as them
+ * (`user_id IS NULL`), no club has them as a member, and at least one club has
+ * them as a guest. The superadmin merge tool labels such a Person "Guest" so a
+ * duplicate can be repaired. It is a READ predicate: what decides whether a
+ * convert may adopt a guest's Person is the stricter `pristineGuestPerson`.
  */
-export function heldByGuestRowsOnly(): SQL {
+export function unboundGuestOnlyPerson(): SQL {
 	return and(
+		isNull(people.userId),
 		notExists(
 			db
 				.select({ one: sql`1` })
@@ -237,12 +235,87 @@ export function heldByGuestRowsOnly(): SQL {
 }
 
 /**
- * An UNBOUND guest-only Person (#1124, ADR-0031): nobody has signed in as them
- * (`user_id IS NULL`) AND {@link heldByGuestRowsOnly}. The superadmin merge tool
- * labels such a Person "Guest" so a duplicate can be repaired.
+ * **The one definition of a PRISTINE guest Person** (#1124, ADR-0031, the
+ * maintainer's ruling of 2026-10-09): the only Person a convert may ADOPT for a
+ * guest. Everything else the guest row names gets a fresh Person instead, and the
+ * old one is left exactly as it is: it is somebody's history or a release target
+ * (#875). A Person is pristine for guest `guestId` only if ALL of these hold:
+ *
+ *  - nobody has signed in as them (`user_id IS NULL`);
+ *  - no membership in any club, in any status;
+ *  - no speech, no Pathways enrolment, no charter-helper row (nothing a Person
+ *    owns that is somebody's record);
+ *  - no guest row but this one, in any club (a Person two clubs share is not one
+ *    club's to rename and re-key);
+ *  - no email and no phone. In #1124 nothing puts contact on a guest's Person
+ *    except a convert or a member-level edit, so contact on it is EVIDENCE that
+ *    it was a member. #1125 moves a guest's contact onto its Person, and must
+ *    replace this signal (ADR-0031);
+ *  - no activity record showing it ever held a membership: a `member_remove`
+ *    naming it (`detail.personId`, the shape `applyMemberRemove`, an undo and the
+ *    importer's release lookup all use, and the partial index
+ *    `activity_log_member_remove_person_idx` serves), or a `member_add` naming
+ *    it (convert's record; the roster add and the import write no Person on
+ *    theirs, so they cannot be matched).
+ *
+ * One function, so the decision and the write cannot disagree: convert puts it
+ * in the adopt UPDATE's own WHERE, and the UPDATE matching a row IS the
+ * decision. A membership another transaction inserts for the Person between a
+ * read and the write makes the UPDATE match nothing, and the convert mints a
+ * fresh Person instead.
  */
-export function unboundGuestOnlyPerson(): SQL {
-	return and(isNull(people.userId), heldByGuestRowsOnly()) as SQL;
+export function pristineGuestPerson(guestId: string): SQL {
+	return and(
+		isNull(people.userId),
+		isNull(people.email),
+		isNull(people.phone),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(holding)
+				.where(eq(holding.personId, people.id)),
+		),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(ownedSpeech)
+				.where(eq(ownedSpeech.personId, people.id)),
+		),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(enrolment)
+				.where(eq(enrolment.personId, people.id)),
+		),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(charterHelper)
+				.where(eq(charterHelper.personId, people.id)),
+		),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(otherGuestRow)
+				.where(
+					and(
+						eq(otherGuestRow.personId, people.id),
+						ne(otherGuestRow.id, guestId),
+					),
+				),
+		),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(personRecord)
+				.where(
+					and(
+						inArray(personRecord.action, ["member_remove", "member_add"]),
+						sql`${personRecord.detail} ->> 'personId' = ${people.id}::text`,
+					),
+				),
+		),
+	) as SQL;
 }
 
 /**

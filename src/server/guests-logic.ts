@@ -187,51 +187,6 @@ export async function ensureGuestPerson(
 }
 
 /**
- * After an undo or an unlink (#1124): a guest row that still names a Person who
- * holds ANY membership is pointed at a fresh name-only Person instead (the
- * backfill's shape). Returns the new Person's id, or null when the guest's
- * Person holds none and nothing changed.
- *
- * Why it must. The backfill points a converted or linked guest at its
- * membership's Person, and after the undo or the unlink that Person is still a
- * member. Left there, the next convert adopts the member's Person, which takes
- * the REUSE branch (it reactivates a lapsed row, demotes, closes officer terms,
- * and skips the #617 name-clash refusal) and, for a row converted before #759,
- * attaches another club's Person to this one.
- *
- * The caller holds the club write lock, the guest's Person `FOR UPDATE` and the
- * guest row `FOR UPDATE`, in that order, and has already deleted or restored the
- * membership it is undoing: the question is asked AFTER that.
- */
-export async function separateGuestFromMemberPerson(
-	tx: DbOrTx,
-	guestId: string,
-): Promise<string | null> {
-	const [guest] = await tx
-		.select({
-			personId: guests.personId,
-			name: guests.name,
-			preferredName: guests.preferredName,
-		})
-		.from(guests)
-		.where(eq(guests.id, guestId))
-		.limit(1);
-	if (!guest?.personId) return null;
-	const [held] = await tx
-		.select({ id: members.id })
-		.from(members)
-		.where(eq(members.personId, guest.personId))
-		.limit(1);
-	if (!held) return null;
-	const fresh = await mintNameOnlyPerson(tx, guest);
-	await tx
-		.update(guests)
-		.set({ personId: fresh })
-		.where(eq(guests.id, guestId));
-	return fresh;
-}
-
-/**
  * Delete a guest's Person once nothing references it (#1124): after the guest
  * row is deleted, or after a link points the guest at a member's Person. The
  * conditions travel in the DELETE's own WHERE (`unreferencedUnboundPerson()`: no

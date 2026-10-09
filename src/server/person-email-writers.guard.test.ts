@@ -71,12 +71,13 @@ const WAIVERS: Record<
 		 *  `eq(people.userId, …)` in the statement itself, so it can only ever
 		 *  move the address of the Person bound to the confirming account. */
 		requiresBoundToUser?: boolean;
-		/** Convert's overwrite of a guest-only Person's contact from the guest row
-		 *  (#1124): its UPDATE must carry `heldByGuestRowsOnly(` or
-		 *  `unboundGuestOnlyPerson(` (the Person is held by guest rows only: no
-		 *  membership, so a member keeps what their club recorded), in the statement
-		 *  itself, beside the `isNull(people.userId)` every club-side writer carries. */
-		requiresGuestOnly?: boolean;
+		/** Convert's fill of a PRISTINE guest Person's contact from the guest row
+		 *  (#1124): its UPDATE must carry `pristineGuestPerson(` in the statement
+		 *  itself, which is the one definition of "nobody has signed in, never a
+		 *  member, no history, no other guest row, no contact, no record of a
+		 *  membership". It stands in for `isNull(people.userId)`: the function holds
+		 *  it, and a source test below pins that it does. */
+		requiresPristineGuestPerson?: boolean;
 	}
 > = {
 	// A member changing their OWN sign-in address (#1091, ADR-0030). The new
@@ -97,25 +98,25 @@ const WAIVERS: Record<
 		requiresUnlinkedGuard: true,
 		requiresSoleHolder: true,
 	},
-	// Convert-to-member's OVERWRITE of a guest-only Person's contact from the guest
-	// row (#1124, ADR-0031). Club-reachable (an officer's click). The Person owns
-	// their contact and a club is its custodian, which includes fixing a typo, until
-	// the person signs in or speaks for themselves, so this SETS the address from the
-	// guest row as it is now, a cleared one included, rather than filling a blank:
-	// a fill left a typo'd address on a Person that holds a membership after an undo
-	// and a correction, and clearing it at undo instead broke the undoing club's own
-	// roster CSV (#875). It is the only writer whose Person has NO membership yet, so
-	// `soleHoldingClub`, which demands a vouching membership, cannot be its
-	// predicate. Its own two, both in the statement: unbound, and held by guest rows
-	// only. The second must be evaluated BEFORE the membership insert, which is why
-	// the statement sits in the no-match branch ahead of it.
+	// Convert-to-member's fill of a PRISTINE guest Person's contact from the guest
+	// row (#1124, ADR-0031; the maintainer's option A of 2026-10-09). Club-reachable
+	// (an officer's click). The Person is one the guest row names that has never
+	// signed in, never been a member, owns nothing, is named by no other guest row,
+	// carries no contact and has no membership on record: the only kind of Person a
+	// convert may adopt. Any other gets a fresh Person (an INSERT, which the matcher
+	// exempts) and is left exactly as it is. So the statement can only ever write a
+	// Person nobody has a claim on, and what it writes is a fill of a blank. It is
+	// the only writer whose Person has NO membership yet, so `soleHoldingClub`,
+	// which demands a vouching membership, cannot be its predicate; its predicate is
+	// `pristineGuestPerson(guestId)`, in the statement's own WHERE, which reads false
+	// the moment the membership exists (so the UPDATE runs before the membership
+	// insert) and which includes `user_id IS NULL`.
 	"server/guest-pipeline-logic.ts": {
 		fn: "applyConvertGuestToMember",
 		sites: 1,
 		reason:
-			"convert sets a guest-only, unbound Person's address from the guest row, so a club can fix a typo until the person speaks (#1124)",
-		requiresUnlinkedGuard: true,
-		requiresGuestOnly: true,
+			"convert fills the blank contact of a PRISTINE guest Person from the guest row; any other Person gets a fresh one (#1124, option A)",
+		requiresPristineGuestPerson: true,
 	},
 	// The CSV importer's fill-only address (#907). Club-reachable.
 	"server/import-members-logic.ts": {
@@ -464,21 +465,17 @@ describe("the matcher itself", () => {
 		).toBe(1);
 	});
 
-	it("reads convert's overwrite UPDATE as one email write with its predicates (#1124)", () => {
-		// The waiver for `applyConvertGuestToMember` holds the statement to two
-		// tokens, and it can only do that if `emailWriteStatements` hands it the
+	it("reads convert's adopt UPDATE as one email write carrying the pristine predicate (#1124)", () => {
+		// The waiver for `applyConvertGuestToMember` holds the statement to one
+		// token, and it can only do that if `emailWriteStatements` hands it the
 		// whole statement: `.where(...)` and `.returning(...)` included, and the
 		// phone-only statement beside it NOT counted, since its SET carries no email.
 		const src = `
-			const overwritten = await tx
+			const adopted = await tx
 				.update(people)
-				.set({ email, phone })
+				.set({ name, preferredName, email, phone })
 				.where(
-					and(
-						eq(people.id, personId),
-						isNull(people.userId),
-						heldByGuestRowsOnly(),
-					),
+					and(eq(people.id, guestPersonId), pristineGuestPerson(input.guestId)),
 				)
 				.returning({ id: people.id });
 			await tx
@@ -489,10 +486,21 @@ describe("the matcher itself", () => {
 		expect(emailWriteSites(src)).toEqual(["update(people) setting email"]);
 		const stmts = emailWriteStatements(src);
 		expect(stmts).toHaveLength(1);
-		expect(stmts[0]).toMatch(/isNull\(\s*people\.userId\s*\)/);
-		expect(stmts[0]).toMatch(
-			/heldByGuestRowsOnly\(\)|unboundGuestOnlyPerson\(\)/,
-		);
+		expect(stmts[0]).toMatch(/pristineGuestPerson\(/);
+	});
+
+	it("pristineGuestPerson itself carries the conditions the waiver leans on", () => {
+		// The waiver names the predicate, not the conditions, so the function's own
+		// source is what must hold them: unbound, no contact, and a membership test.
+		const src = readFileSync(join(SERVER_DIR, "account-link-logic.ts"), "utf8");
+		const fn =
+			/export function pristineGuestPerson\(([\s\S]*?)\n}\n/.exec(src)?.[0] ??
+			"";
+		expect(fn, "pristineGuestPerson is gone or renamed").not.toBe("");
+		expect(fn).toMatch(/isNull\(\s*people\.userId\s*\)/);
+		expect(fn).toMatch(/isNull\(\s*people\.email\s*\)/);
+		expect(fn).toMatch(/isNull\(\s*people\.phone\s*\)/);
+		expect(fn).toMatch(/\.from\(\s*holding\s*\)/);
 	});
 
 	it("flags raw SQL however it is written or executed", () => {
@@ -624,7 +632,7 @@ describe("people.email writers (verified identity address)", () => {
 				waiver.requiresUnlinkedGuard ||
 				waiver.requiresSoleHolder ||
 				waiver.requiresBoundToUser ||
-				waiver.requiresGuestOnly
+				waiver.requiresPristineGuestPerson
 			) {
 				expect(
 					stmts,
@@ -653,12 +661,13 @@ describe("people.email writers (verified identity address)", () => {
 							`a club may change an address only while it is the Person's sole holder (#907)`,
 					).toMatch(/soleHoldingClub\(/);
 				}
-				if (waiver.requiresGuestOnly) {
+				if (waiver.requiresPristineGuestPerson) {
 					expect(
 						stmt,
-						`${key}'s people.email write must carry heldByGuestRowsOnly() or unboundGuestOnlyPerson() in the ` +
-							`STATEMENT — a Person already held as a member keeps what that club recorded (#1124)`,
-					).toMatch(/heldByGuestRowsOnly\(\)|unboundGuestOnlyPerson\(\)/);
+						`${key}'s people.email write must carry pristineGuestPerson(...) in the STATEMENT — ` +
+							`a Person that was ever a member, signed in, owns history or already has contact ` +
+							`is not the guest's to re-key (#1124)`,
+					).toMatch(/pristineGuestPerson\(/);
 				}
 			}
 		}

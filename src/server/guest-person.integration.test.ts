@@ -65,13 +65,16 @@ const {
 	applyConvertGuestToMember,
 	applyDeleteGuest,
 	applyLinkGuestToMember,
+	applySetGuestStage,
 	applyUndoGuestConversion,
 	applyUnlinkGuestFromMember,
 	applyUpdateGuest,
 	captureGuestVisit,
 } = await import("#/server/guest-pipeline-logic");
 const { bindVerifiedPerson } = await import("#/server/account-link-logic");
-const { applyMemberMerge } = await import("#/server/members-logic");
+const { applyMemberEdit, applyMemberMerge, applyMemberRemove } = await import(
+	"#/server/members-logic"
+);
 const { collapseMemberships } = await import(
 	"#/server/membership-collapse-logic"
 );
@@ -555,7 +558,7 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 	// -----------------------------------------------------------------------
 	// Convert: the membership goes on the guest's own Person.
 	// -----------------------------------------------------------------------
-	describe("convert adopts the guest's Person", () => {
+	describe("convert adopts the guest's Person when it is pristine", () => {
 		it("adds the membership on that Person, mints no Person, and copies the guest's contact onto it (AC6)", async () => {
 			const name = uniq("Adopt Me");
 			const email = `adopt-${randomUUID()}@example.com`;
@@ -631,118 +634,31 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			expect(res.rosterConflict).toBe("shared_address");
 		});
 
-		it("OVERWRITES a guest-only Person's stale address and phone with the guest row's (a club fixes typos)", async () => {
-			const email = `now-${randomUUID()}@example.com`;
+		it("a pristine guest Person is adopted: contact, name and goes-by are filled from the guest row, and no Person is inserted", async () => {
+			// The control for every case below: nothing about this Person says it was
+			// ever anyone but the guest.
+			const name = uniq("Pristine Adopt");
+			const email = `pristine-${randomUUID()}@example.com`;
 			const rawPhone = uniquePhone();
-			const { guestId, personId } = await newGuest(uniq("Has Old Contact"), {
+			const { id: guestId } = await createGuestRecord(testDb, {
+				clubId: seed.clubId,
+				name,
+				preferredName: "Pri",
 				email,
 				phone: rawPhone,
 			});
-			// What the Person carries from an earlier convert or a legacy mint: stale.
-			await testDb
-				.update(people)
-				.set({
-					email: `old-${randomUUID()}@example.com`,
-					phone: "+15550009999",
-				})
-				.where(eq(people.id, personId));
-
-			await convert(guestId);
-
-			const p = await personRow(personId);
-			expect(p?.email).toBe(email);
-			expect(p?.phone).toBe(toStoredPhone(rawPhone, "1"));
-		});
-
-		it("a contact the guest row no longer has is CLEARED on the guest-only Person", async () => {
-			const { guestId, personId } = await newGuest(uniq("Cleared Contact"));
-			// The Person still holds contact the officer has since removed from the guest.
-			await testDb
-				.update(people)
-				.set({
-					email: `gone-${randomUUID()}@example.com`,
-					phone: "+15550008888",
-				})
-				.where(eq(people.id, personId));
-
-			await convert(guestId);
-
-			const p = await personRow(personId);
-			expect(p?.email).toBeNull();
-			expect(p?.phone).toBeNull();
-		});
-
-		it("leaves a signed-in Person's contact and name alone", async () => {
-			const { guestId, personId } = await newGuest(uniq("Bound Guest"), {
-				email: `bound-${randomUUID()}@example.com`,
-				phone: uniquePhone(),
-			});
-			const theirName = uniq("Their Own Name");
-			const theirEmail = `theirs-${randomUUID()}@example.com`;
-			await testDb
-				.update(people)
-				.set({
-					userId: await makeUser(),
-					name: theirName,
-					preferredName: "T",
-					email: theirEmail,
-					phone: "+15550007777",
-				})
-				.where(eq(people.id, personId));
-
-			await convert(guestId);
-
-			// The address on a bound Person is its account's, and the guest book is an
-			// anonymous form. The name is theirs too: the guest row's does not replace it.
-			const p = await personRow(personId);
-			expect(p?.email).toBe(theirEmail);
-			expect(p?.phone).toBe("+15550007777");
-			expect(p?.name).toBe(theirName);
-			expect(p?.preferredName).toBe("T");
-		});
-
-		it("leaves a Person that is already a member somewhere else exactly as it is", async () => {
-			// A merge can leave a guest row pointing at a member's Person. What that
-			// club recorded stays; the guest row's contact is not theirs to set.
-			const otherClub = await makeClub();
-			const memberEmail = `member-${randomUUID()}@example.com`;
-			const memberPerson = await makePerson({
-				name: uniq("Elsewhere Member"),
-				email: memberEmail,
-				phone: "+15550006666",
-			});
-			await testDb.insert(members).values({
-				clubId: otherClub,
-				personId: memberPerson,
-				name: "Elsewhere Member",
-			});
-			const memberName = (await personRow(memberPerson))?.name;
-			const { id: guestId } = await createGuestRecord(testDb, {
-				clubId: seed.clubId,
-				name: uniq("Guest Of A Member"),
-				preferredName: "Gom",
-				email: `elsewhere-${randomUUID()}@example.com`,
-				phone: uniquePhone(),
-				personId: memberPerson,
-			});
+			const personId = (await guestRow(guestId)).personId as string;
+			guestPersons.push(personId);
 
 			const res = await convert(guestId);
 
-			// Still adopted: the membership goes on that Person...
-			expect(res.personId).toBe(memberPerson);
-			const held = await testDb
-				.select({ clubId: members.clubId })
-				.from(members)
-				.where(eq(members.personId, memberPerson));
-			expect(held.map((h) => h.clubId).sort()).toEqual(
-				[otherClub, seed.clubId].sort(),
-			);
-			// ...and its contact and name are not replaced by the guest row's.
-			const p = await personRow(memberPerson);
-			expect(p?.email).toBe(memberEmail);
-			expect(p?.phone).toBe("+15550006666");
-			expect(p?.name).toBe(memberName);
-			expect(p?.preferredName).toBeNull();
+			expect(res.personId).toBe(personId);
+			expect(await peopleNamed(name)).toHaveLength(1);
+			const p = await personRow(personId);
+			expect(p?.email).toBe(email);
+			expect(p?.phone).toBe(toStoredPhone(rawPhone, "1"));
+			expect(p?.preferredName).toBe("Pri");
+			expect((await guestRow(guestId)).personId).toBe(personId);
 		});
 
 		it("creates the Person first for a guest whose person_id is null, then converts (AC7)", async () => {
@@ -1199,7 +1115,7 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 	// -----------------------------------------------------------------------
 	// H1: undo reverses what convert filled.
 	// -----------------------------------------------------------------------
-	describe("convert sets the contact, undo leaves it, a corrected re-convert is right (H1)", () => {
+	describe("convert fills the contact, undo leaves it, a corrected re-convert is right (H1)", () => {
 		it("a typo'd address does not stay on a member's Person: convert, undo, correct, convert again", async () => {
 			const name = uniq("Typo Guest");
 			const typo = `typo-${randomUUID()}@example.test`;
@@ -1222,24 +1138,37 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			});
 			const second = await convert(guestId);
 
-			// The same Person, now a member, carrying the CORRECTED address: convert
-			// sets it from the guest row, it does not fill only a blank.
-			expect(second.personId).toBe(personId);
-			expect((await personRow(personId))?.email).toBe(fixed);
-			// End to end through the bind rule: whoever owns the typo cannot sign in to
-			// a Person that now holds a membership, and the real address can.
+			// The old Person now carries contact and a removal record, so it is not
+			// pristine: the guest gets a FRESH Person with the CORRECTED address, and
+			// the typo stays on the old Person, which holds no membership.
+			expect(second.personId).not.toBe(personId);
+			guestPersons.push(second.personId);
+			expect((await personRow(second.personId))?.email).toBe(fixed);
+			expect((await personRow(personId))?.email).toBe(typo);
+			// End to end through the bind rule: the typo's owner cannot sign in to the
+			// new member Person, nor to the old one (no membership vouches for it), and
+			// the real address can bind the new one.
 			const typoOwner = await makeUser(typo);
+			expect(
+				await bindVerifiedPerson({
+					personId: second.personId,
+					userId: typoOwner,
+				}),
+			).toBe(false);
 			expect(await bindVerifiedPerson({ personId, userId: typoOwner })).toBe(
 				false,
 			);
-			expect((await personRow(personId))?.userId).toBeNull();
+			expect((await personRow(second.personId))?.userId).toBeNull();
 			const realOwner = await makeUser(fixed);
-			expect(await bindVerifiedPerson({ personId, userId: realOwner })).toBe(
-				true,
-			);
+			expect(
+				await bindVerifiedPerson({
+					personId: second.personId,
+					userId: realOwner,
+				}),
+			).toBe(true);
 		});
 
-		it("the same for a record from BEFORE #1124 (createdPerson: true): the Person the old convert minted carries the corrected address", async () => {
+		it("the same for a record from BEFORE #1124 (createdPerson: true): the Person the old convert minted is not adopted again", async () => {
 			const name = uniq("Legacy Typo");
 			const typo = `legacy-typo-${randomUUID()}@example.test`;
 			const fixed = `legacy-fixed-${randomUUID()}@example.test`;
@@ -1266,30 +1195,38 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			});
 			const second = await convert(guestId);
 
-			expect(second.personId).toBe(personId);
-			const p = await personRow(personId);
-			expect(p?.email).toBe(fixed);
-			// The guest row has no phone (the correction omitted it), so neither has
-			// the Person: a stale number from the old convert does not survive.
-			expect(p?.phone).toBeNull();
+			// It has contact and a removal record: not pristine. A fresh Person carries
+			// the corrected address and the guest row's (empty) phone; the old one keeps
+			// what the old convert minted it with.
+			expect(second.personId).not.toBe(personId);
+			guestPersons.push(second.personId);
+			const fresh = await personRow(second.personId);
+			expect(fresh?.email).toBe(fixed);
+			expect(fresh?.phone).toBeNull();
+			expect((await personRow(personId))?.email).toBe(typo);
 			const typoOwner = await makeUser(typo);
-			expect(await bindVerifiedPerson({ personId, userId: typoOwner })).toBe(
-				false,
-			);
+			expect(
+				await bindVerifiedPerson({
+					personId: second.personId,
+					userId: typoOwner,
+				}),
+			).toBe(false);
 		});
 
-		it("a guest whose address was cleared after an undo: the re-convert clears it on the Person", async () => {
+		it("a guest whose address was cleared after an undo: the re-convert's fresh Person has none, and the old one keeps its own", async () => {
 			const name = uniq("Cleared After Undo");
-			const { guestId, personId } = await newGuest(name, {
-				email: `will-clear-${randomUUID()}@example.test`,
-			});
+			const email = `will-clear-${randomUUID()}@example.test`;
+			const { guestId, personId } = await newGuest(name, { email });
 			await convert(guestId);
 			await undo(guestId);
 			await applyUpdateGuest({ clubId: seed.clubId, guestId, name });
 
-			await convert(guestId);
+			const second = await convert(guestId);
 
-			expect((await personRow(personId))?.email).toBeNull();
+			expect(second.personId).not.toBe(personId);
+			guestPersons.push(second.personId);
+			expect((await personRow(second.personId))?.email).toBeNull();
+			expect((await personRow(personId))?.email).toBe(email);
 		});
 
 		it("an undo leaves the contact convert set, so the undoing club's CSV still matches it", async () => {
@@ -1353,8 +1290,8 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 	// -----------------------------------------------------------------------
 	// H2: after an undo or unlink the guest no longer names a member's Person.
 	// -----------------------------------------------------------------------
-	describe("after an undo or unlink a guest never keeps a member's Person (H2)", () => {
-		it("a backfilled converted row whose membership was REUSED: undo re-points the guest, and a re-convert makes a NEW membership", async () => {
+	describe("an undo or unlink leaves the guest alone, and a re-convert never lands on a member (H2)", () => {
+		it("a backfilled converted row whose membership was REUSED: undo leaves the guest alone, and a re-convert makes a NEW membership on a fresh Person", async () => {
 			const name = uniq("Reuse Member");
 			const memberPerson = await makePerson({ name });
 			// A lapsed ADMIN: the reuse branch would wake it and demote it.
@@ -1387,23 +1324,21 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 
 			const undone = await undo(guestId);
 
-			// The membership was convert's REUSE, so it stands, untouched...
+			// The membership was convert's REUSE, so it stands, untouched. Undo does not
+			// move the guest; the next convert decides.
 			expect(undone.membershipDeleted).toBe(false);
-			// ...and the guest no longer names its Person: a fresh name-only one.
 			const g = await guestRow(guestId);
-			expect(g.personId).not.toBe(memberPerson);
-			guestPersons.push(g.personId as string);
-			const fresh = await personRow(g.personId as string);
-			expect(fresh?.name).toBe(name);
-			expect(fresh?.email).toBeNull();
+			expect(g.personId).toBe(memberPerson);
 			expect(g.stage).toBe("following_up");
 
-			// A re-convert under the SAME name now meets the #617 refusal instead of
-			// quietly reusing the member's row.
+			// A re-convert under the SAME name meets the #617 refusal instead of
+			// quietly reusing the member's row, and the refusal leaves the guest where
+			// it was (the whole transaction rolled back, the fresh Person with it).
 			await expect(convert(guestId)).rejects.toThrow(
 				CONVERT_NAME_CLASH_MESSAGE,
 			);
-			// Rename the guest and it creates a NEW membership on the fresh Person.
+			expect((await guestRow(guestId)).personId).toBe(memberPerson);
+			// Rename the guest and it creates a NEW membership on a fresh Person.
 			await applyUpdateGuest({
 				clubId: seed.clubId,
 				guestId,
@@ -1411,19 +1346,23 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			});
 			const res = await convert(guestId);
 			expect(res.membershipId).not.toBe(m0.id);
-			expect(res.personId).toBe(g.personId);
+			expect(res.personId).not.toBe(memberPerson);
+			guestPersons.push(res.personId);
+			expect((await guestRow(guestId)).personId).toBe(res.personId);
 			expect(res.reactivated).toBe(false);
-			// The lapsed admin was not woken or demoted.
+			// The lapsed admin was not woken or demoted, and its Person is untouched.
 			const [still] = await testDb
 				.select({ status: members.status, clubRole: members.clubRole })
 				.from(members)
 				.where(eq(members.id, m0.id));
 			expect(still).toEqual({ status: "inactive", clubRole: "admin" });
+			expect((await personRow(memberPerson))?.name).toBe(name);
 		});
 
-		it("a linked guest unlinked: the guest gets a fresh Person, and a re-convert does not land on the member", async () => {
+		it("a #635-linked guest, unlinked: a re-convert makes a NEW membership on a fresh Person, and the member is untouched", async () => {
 			const stem = uniq("Linked");
-			const { guestId, personId: guestsOwn } = await newGuest(stem);
+			const { guestId } = await newGuest(stem);
+			const memberBefore = await personRow(seed.personId);
 
 			await applyLinkGuestToMember({
 				clubId: seed.clubId,
@@ -1431,30 +1370,37 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 				memberId: seed.memberId,
 				actorMemberId: seed.adminMemberId,
 			});
-			// L5: the link points the guest at the member's Person, as a convert does,
-			// and the guest's own Person, named by nobody now, is taken back.
-			const linked = await guestRow(guestId);
-			expect(linked.personId).toBe(seed.personId);
-			expect(await personRow(guestsOwn)).toBeUndefined();
+			// L5: the link points the guest at the member's Person, as a convert does.
+			expect((await guestRow(guestId)).personId).toBe(seed.personId);
 
 			await applyUnlinkGuestFromMember({
 				clubId: seed.clubId,
 				guestId,
 				actorMemberId: seed.adminMemberId,
 			});
-			const unlinked = await guestRow(guestId);
-			expect(unlinked.personId).not.toBe(seed.personId);
-			guestPersons.push(unlinked.personId as string);
-			expect((await personRow(unlinked.personId as string))?.name).toBe(stem);
-			// The member's Person is still theirs, untouched.
-			expect(await personRow(seed.personId)).toBeDefined();
+			// Unlink leaves the guest naming the member's Person; the next convert
+			// does not adopt it, because a member's Person is never pristine.
+			expect((await guestRow(guestId)).personId).toBe(seed.personId);
 
 			const res = await convert(guestId);
+
 			expect(res.membershipId).not.toBe(seed.memberId);
-			expect(res.personId).toBe(unlinked.personId);
+			expect(res.personId).not.toBe(seed.personId);
+			guestPersons.push(res.personId);
+			expect((await personRow(res.personId))?.name).toBe(stem);
+			expect((await guestRow(guestId)).personId).toBe(res.personId);
+			// The member is exactly as they were.
+			const memberAfter = await personRow(seed.personId);
+			expect(memberAfter?.name).toBe(memberBefore?.name);
+			expect(memberAfter?.email).toBe(memberBefore?.email);
+			const [m] = await testDb
+				.select({ status: members.status, clubRole: members.clubRole })
+				.from(members)
+				.where(eq(members.id, seed.memberId));
+			expect(m?.status).toBe("active");
 		});
 
-		it("the pre-#759 cross-club shape: a convert that attached ANOTHER club's Person is undone, and the guest lets go of it", async () => {
+		it("the pre-#759 cross-club shape: a convert that attached ANOTHER club's Person is undone, and a re-convert gives the guest a fresh Person", async () => {
 			const otherClub = await makeClub();
 			const strangersPerson = await makePerson({ name: uniq("Strangers") });
 			await testDb.insert(members).values({
@@ -1488,15 +1434,15 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 
 			const undone = await undo(guestId);
 			expect(undone.membershipDeleted).toBe(true);
-			const g = await guestRow(guestId);
-			// This club's membership is gone, but the stranger's Person still holds
-			// the OTHER club's, so the guest must not keep naming it.
-			expect(g.personId).not.toBe(strangersPerson);
-			guestPersons.push(g.personId as string);
-			expect((await personRow(g.personId as string))?.name).toBe(name);
+			// This club's membership is gone; the guest still names the stranger's
+			// Person, which holds the OTHER club's.
+			expect((await guestRow(guestId)).personId).toBe(strangersPerson);
 
 			const res = await convert(guestId);
-			expect(res.personId).toBe(g.personId);
+
+			expect(res.personId).not.toBe(strangersPerson);
+			guestPersons.push(res.personId);
+			expect((await personRow(res.personId))?.name).toBe(name);
 			const held = await testDb
 				.select({ clubId: members.clubId })
 				.from(members)
@@ -1605,6 +1551,399 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			expect(r.convertedMembershipId).toBe(keeper.id);
 			// Its own Person is its own: not swapped for the keeper's.
 			expect(r.personId).toBe(residualPerson);
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// Option A (the maintainer, 2026-10-09): convert adopts the guest's Person
+	// only if it is PRISTINE; any other gets a fresh Person and is left alone.
+	// -----------------------------------------------------------------------
+	describe("convert adopts only a PRISTINE guest Person (option A)", () => {
+		/** What a Person row holds that a convert must not change. */
+		const snapshot = async (personId: string) => {
+			const p = await personRow(personId);
+			return {
+				name: p?.name,
+				preferredName: p?.preferredName,
+				email: p?.email,
+				phone: p?.phone,
+				userId: p?.userId,
+			};
+		};
+
+		/**
+		 * The safe outcome for a Person that is not pristine: the guest ends up on a
+		 * FRESH Person carrying the guest row's values, the membership is on it, and
+		 * the old Person is untouched and still there.
+		 */
+		async function expectFreshPerson(
+			guestId: string,
+			oldPersonId: string,
+			before: Awaited<ReturnType<typeof snapshot>>,
+			res: Awaited<ReturnType<typeof convert>>,
+		) {
+			expect(res.personId).not.toBe(oldPersonId);
+			guestPersons.push(res.personId);
+			expect((await guestRow(guestId)).personId).toBe(res.personId);
+			const [m] = await testDb
+				.select({ personId: members.personId })
+				.from(members)
+				.where(eq(members.id, res.membershipId));
+			expect(m?.personId).toBe(res.personId);
+			expect(await snapshot(oldPersonId)).toEqual(before);
+			// And it was not deleted, whatever references it now.
+			expect(await personRow(oldPersonId)).toBeDefined();
+			const guest = await guestRow(guestId);
+			const fresh = await personRow(res.personId);
+			expect(fresh?.name).toBe(guest.name.trim());
+			expect(fresh?.email).toBe(guest.email?.trim() || null);
+			return fresh;
+		}
+
+		const conditions: Array<
+			[string, (personId: string, otherClub: string) => Promise<void>]
+		> = [
+			[
+				"a sign-in (and nothing else)",
+				async (p) => {
+					await testDb
+						.update(people)
+						.set({ userId: await makeUser() })
+						.where(eq(people.id, p));
+				},
+			],
+			[
+				"a membership in another club, of any status",
+				async (p, club) => {
+					await testDb.insert(members).values({
+						clubId: club,
+						personId: p,
+						name: "Lapsed",
+						status: "inactive",
+					});
+				},
+			],
+			[
+				"a speech",
+				async (p) => {
+					await testDb
+						.insert(speeches)
+						.values({ personId: p, title: uniq("Owned") });
+				},
+			],
+			[
+				"a Pathways enrolment",
+				async (p) => {
+					const [path] = await testDb
+						.insert(pathwaysPaths)
+						.values({ courseCode: `optA-${randomUUID()}`, name: "Path" })
+						.returning({ id: pathwaysPaths.id });
+					if (!path) throw new Error("fixture");
+					extraPaths.push(path.id);
+					await testDb
+						.insert(pathEnrollments)
+						.values({ personId: p, pathId: path.id });
+				},
+			],
+			[
+				"a charter-helper row",
+				async (p, club) => {
+					await testDb.insert(clubCharterHelpers).values({
+						clubId: club,
+						role: "sponsor",
+						personId: p,
+						name: "Helper",
+					});
+				},
+			],
+			[
+				"another guest row, in another club",
+				async (p, club) => {
+					await createGuestRecord(testDb, {
+						clubId: club,
+						name: uniq("Same Human Elsewhere"),
+						personId: p,
+					});
+				},
+			],
+			[
+				"an email",
+				async (p) => {
+					await testDb
+						.update(people)
+						.set({ email: `had-${randomUUID()}@example.test` })
+						.where(eq(people.id, p));
+				},
+			],
+			[
+				"a phone",
+				async (p) => {
+					await testDb
+						.update(people)
+						.set({ phone: "+15550004444" })
+						.where(eq(people.id, p));
+				},
+			],
+			[
+				"a member_remove on record",
+				async (p, club) => {
+					await testDb.insert(activityLog).values({
+						clubId: club,
+						action: "member_remove",
+						targetType: "member",
+						targetId: randomUUID(),
+						detail: { name: "Removed", personId: p },
+					});
+				},
+			],
+			[
+				"a member_add on record",
+				async (p, club) => {
+					await testDb.insert(activityLog).values({
+						clubId: club,
+						action: "member_add",
+						targetType: "member",
+						targetId: randomUUID(),
+						detail: { name: "Added", personId: p },
+					});
+				},
+			],
+		];
+
+		for (const [what, give] of conditions) {
+			it(`a guest Person with ${what} is not adopted: the guest gets a fresh Person, and the old one is left alone`, async () => {
+				const otherClub = await makeClub();
+				const email = `fresh-${randomUUID()}@example.test`;
+				const { guestId, personId } = await newGuest(uniq("Not Pristine"), {
+					email,
+					phone: uniquePhone(),
+				});
+				await give(personId, otherClub);
+				const before = await snapshot(personId);
+
+				const res = await convert(guestId);
+
+				const fresh = await expectFreshPerson(guestId, personId, before, res);
+				// The fresh Person carries what the guest row says, not the old one's.
+				expect(fresh?.email).toBe(email);
+				expect(fresh?.userId).toBeNull();
+				// A convert that minted it says so, for the undo's record.
+				const [entry] = await testDb
+					.select({ detail: activityLog.detail })
+					.from(activityLog)
+					.where(
+						and(
+							eq(activityLog.clubId, seed.clubId),
+							eq(activityLog.action, "member_add"),
+							eq(activityLog.targetId, res.membershipId),
+						),
+					);
+				expect(entry?.detail).toMatchObject({
+					createdPerson: true,
+					personId: res.personId,
+				});
+			});
+		}
+
+		it("S1: a stranded former member comes back; the officer's correction survives on the OLD Person and the typo owner cannot bind its history", async () => {
+			const typo = `alice-${randomUUID()}@gmial.example`;
+			const real = `alice-${randomUUID()}@gmail.example`;
+			const name = uniq("Alice Stranded");
+			const { guestId, personId } = await newGuest(name, { email: typo });
+			const c1 = await convert(guestId);
+			expect(c1.personId).toBe(personId);
+			// The officer corrects the MEMBER's address on the member page.
+			await applyMemberEdit({
+				clubId: seed.clubId,
+				memberId: c1.membershipId,
+				name,
+				email: real,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect((await personRow(personId))?.email).toBe(real);
+			// She lapses and is removed; the guest card is stranded, then revived.
+			await applyMemberRemove({
+				clubId: seed.clubId,
+				memberId: c1.membershipId,
+				actorMemberId: seed.adminMemberId,
+			});
+			await applySetGuestStage({
+				clubId: seed.clubId,
+				guestId,
+				stage: "following_up",
+			});
+			const before = await snapshot(personId);
+
+			const c2 = await convert(guestId);
+
+			// The new member Person has the guest row's values; the old one keeps the
+			// corrected address and is not re-keyed.
+			const fresh = await expectFreshPerson(guestId, personId, before, c2);
+			expect(fresh?.email).toBe(typo);
+			expect((await personRow(personId))?.email).toBe(real);
+			// Nobody can bind the OLD Person's history: it holds no membership, so no
+			// club vouches for it, whichever address they own.
+			const typoOwner = await makeUser(typo);
+			expect(await bindVerifiedPerson({ personId, userId: typoOwner })).toBe(
+				false,
+			);
+			const realOwner = await makeUser(real);
+			expect(await bindVerifiedPerson({ personId, userId: realOwner })).toBe(
+				false,
+			);
+		});
+
+		it("S3: a guest linked to the WRONG member, who is then removed, converts onto a fresh Person; the member's Person keeps its name, contact and speech", async () => {
+			const aliceEmail = `alice3-${randomUUID()}@example.test`;
+			const aliceName = uniq("Alice Member");
+			const alice = await makePerson({ name: aliceName, email: aliceEmail });
+			const [m] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId: alice, name: aliceName })
+				.returning({ id: members.id });
+			if (!m) throw new Error("fixture");
+			await testDb
+				.insert(speeches)
+				.values({ personId: alice, title: uniq("Alice's Icebreaker") });
+			const bobEmail = `bob3-${randomUUID()}@example.test`;
+			const bobName = uniq("Bob Visitor");
+			const { guestId } = await newGuest(bobName, { email: bobEmail });
+			// The officer links Bob's card to the wrong member; Alice is removed.
+			await applyLinkGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				memberId: m.id,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect((await guestRow(guestId)).personId).toBe(alice);
+			await applyMemberRemove({
+				clubId: seed.clubId,
+				memberId: m.id,
+				actorMemberId: seed.adminMemberId,
+			});
+			await applySetGuestStage({
+				clubId: seed.clubId,
+				guestId,
+				stage: "following_up",
+			});
+			const before = await snapshot(alice);
+
+			const c = await convert(guestId);
+
+			const fresh = await expectFreshPerson(guestId, alice, before, c);
+			expect(fresh?.name).toBe(bobName);
+			expect(fresh?.email).toBe(bobEmail);
+			// Alice's Person is exactly as it was, and so is her history.
+			expect((await personRow(alice))?.name).toBe(aliceName);
+			expect((await personRow(alice))?.email).toBe(aliceEmail);
+			const sp = await testDb
+				.select({ id: speeches.id })
+				.from(speeches)
+				.where(eq(speeches.personId, alice));
+			expect(sp).toHaveLength(1);
+		});
+
+		it("S4: guest-book input never reaches a former member's Person", async () => {
+			const real = `carol-${randomUUID()}@real.example`;
+			const attacker = `mallory-${randomUUID()}@evil.example`;
+			const phone = uniquePhone();
+			const name = uniq("Carol Phoneonly");
+			// Captured on the public book with a phone and no address.
+			const cap1 = await captureGuestVisit({
+				clubId: seed.clubId,
+				name,
+				phone,
+			});
+			const personId = (await guestRow(cap1.guestId)).personId as string;
+			guestPersons.push(personId);
+			const c1 = await convert(cap1.guestId);
+			// As a member the officer records her real address; then she is removed.
+			await applyMemberEdit({
+				clubId: seed.clubId,
+				memberId: c1.membershipId,
+				name,
+				email: real,
+				actorMemberId: seed.adminMemberId,
+			});
+			await applyMemberRemove({
+				clubId: seed.clubId,
+				memberId: c1.membershipId,
+				actorMemberId: seed.adminMemberId,
+			});
+			// Anonymous: someone signs the public book with her name and phone and
+			// their OWN address, which fills the stranded card's blank email.
+			const cap2 = await captureGuestVisit({
+				clubId: seed.clubId,
+				name,
+				phone,
+				email: attacker,
+			});
+			expect(cap2.guestId).toBe(cap1.guestId);
+			expect((await guestRow(cap1.guestId)).email).toBe(attacker);
+			await applySetGuestStage({
+				clubId: seed.clubId,
+				guestId: cap1.guestId,
+				stage: "following_up",
+			});
+			const before = await snapshot(personId);
+
+			const c2 = await convert(cap1.guestId);
+
+			await expectFreshPerson(cap1.guestId, personId, before, c2);
+			// Her Person still has HER address, and the guest-book one is nowhere on it.
+			expect((await personRow(personId))?.email).toBe(real);
+			const mallory = await makeUser(attacker);
+			expect(await bindVerifiedPerson({ personId, userId: mallory })).toBe(
+				false,
+			);
+		});
+
+		it("S5: a correction made on the member page is not reverted on the old Person by an undo and a re-convert", async () => {
+			const typo = `dave-${randomUUID()}@gmial.example`;
+			const real = `dave-${randomUUID()}@gmail.example`;
+			const name = uniq("Dave Undo");
+			const { guestId, personId } = await newGuest(name, { email: typo });
+			const c1 = await convert(guestId);
+			await applyMemberEdit({
+				clubId: seed.clubId,
+				memberId: c1.membershipId,
+				name,
+				preferredName: "Davey",
+				email: real,
+				actorMemberId: seed.adminMemberId,
+			});
+			await undo(guestId);
+			const before = await snapshot(personId);
+			expect(before.email).toBe(real);
+			expect(before.preferredName).toBe("Davey");
+
+			const c2 = await convert(guestId);
+
+			const fresh = await expectFreshPerson(guestId, personId, before, c2);
+			// The new Person carries the guest row (the typo; nobody fixed the card).
+			expect(fresh?.email).toBe(typo);
+			// The member-page correction is still on the old Person.
+			expect((await personRow(personId))?.email).toBe(real);
+			expect((await personRow(personId))?.preferredName).toBe("Davey");
+		});
+
+		it("a guest-only Person two clubs share (merged) is not adopted by either club's convert", async () => {
+			const clubB = await makeClub();
+			const a = await newGuest(uniq("Shared Human"));
+			const b = await newGuest(uniq("Shared Human B"), {}, clubB);
+			// A superadmin decides they are one human: both guest rows now name PA.
+			await mergePeople({
+				keeperPersonId: a.personId,
+				absorbedPersonId: b.personId,
+			});
+			expect((await guestRow(b.guestId)).personId).toBe(a.personId);
+			const before = await snapshot(a.personId);
+
+			const res = await convert(a.guestId);
+
+			await expectFreshPerson(a.guestId, a.personId, before, res);
+			// The other club's guest still names the shared Person.
+			expect((await guestRow(b.guestId)).personId).toBe(a.personId);
 		});
 	});
 

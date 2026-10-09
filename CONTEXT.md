@@ -122,12 +122,14 @@ the nouns in `src/db/schema.ts`.
   **first-visit date** are *derived* from `meeting_attendance` (never a stored counter). The
   admin pipeline view lives at `/admin/vp-membership`; the assign-guest picker excludes `joined`
   and `lost` guests (`stage in (prospect, following_up)`). Convert with no member of THIS club
-  to match puts the membership on the **guest's own Person** (#1124): no `people` row is
-  inserted, `createdPerson` is `false`, and before the membership insert the guest row's name,
-  goes-by name, email and phone are SET onto the Person (a cleared one included: a club fixes
-  typos until the person speaks), only while it is unbound and held by guest rows only; a bound or
-  member Person keeps its own. Undo leaves the contact alone; a guest whose Person still holds a
-  membership after an undo or unlink is pointed at a fresh name-only one.
+  to match puts the membership on the **guest's own Person** only if it is **pristine** (#1124,
+  ADR-0031, `pristineGuestPerson`): never signed in, never a member anywhere, no speech,
+  enrolment or charter-helper row, no other guest row, no email or phone, and no `member_remove` /
+  `member_add` naming it. Then no `people` row is inserted (`createdPerson` is `false`) and the guest
+  row's name, goes-by name, email and phone are filled onto it before the membership insert.
+  Otherwise convert mints a **fresh Person** carrying the guest row's values, points the guest at it,
+  and leaves the old Person exactly as it is (it is someone's history, or a #875 release target).
+  Undo leaves the contact and the guest's Person alone.
 - **Guest book** — the public, no-auth capture front door (ADR-0018, absorbing #239):
   `/club/:clubId/guest-book`, escaping the member-identity shell. A visitor self-enters
   name + optional email/phone; the server **creates-or-finds** the guest (dedup club-scoped, by

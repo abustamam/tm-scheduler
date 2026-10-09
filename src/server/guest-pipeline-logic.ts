@@ -60,10 +60,9 @@ import {
 	toStoredPhone,
 } from "#/lib/phone";
 import {
-	heldByGuestRowsOnly,
 	normalizedEmail,
+	pristineGuestPerson,
 	rosterConflictFor,
-	unboundGuestOnlyPerson,
 } from "./account-link-logic";
 import { logActivity } from "./activity";
 import {
@@ -78,7 +77,6 @@ import {
 	deleteGuestPersonIfUnreferenced,
 	ensureGuestPerson,
 	RECORD_CHANGED_MESSAGE,
-	separateGuestFromMemberPerson,
 } from "./guests-logic";
 import { closeOpenOfficerTerms } from "./officers-logic";
 import { isDeadlock } from "./pg-errors";
@@ -1666,9 +1664,10 @@ async function matchClubMemberPerson(
  * Convert-to-member (ADR-0018): promote a guest into a club Membership.
  *
  * Transactional: (1) dedup the Person by email→phone-with-name-agreement (link
- * an existing Person of THIS club, else adopt the guest's own Person, filling
- * its blank contact from the guest row — see the step-1 comment for why a bare
- * phone match is not enough); (2) create the Membership for this club (`clubRole: member`,
+ * an existing Person of THIS club, else adopt the guest's own Person if it is
+ * PRISTINE (`pristineGuestPerson`), filling its blank contact from the guest
+ * row, and otherwise mint a fresh one carrying the guest row's values — see the
+ * step-1 comment for why a bare phone match is not enough); (2) create the Membership for this club (`clubRole: member`,
  * `joinedAt: today`) — or reuse the person's existing membership so we never
  * violate one-membership-per-person-per-club, REACTIVATING that row when it had
  * lapsed (#501) — and writing its `club_role` back down to `member` when it was
@@ -1766,69 +1765,65 @@ export async function applyConvertGuestToMember(
 		// The same answer the unlocked read gave, or the Persons locked above are
 		// not the Persons this convert is about to write.
 		if (personId !== peekMatch) throw new Error(RECORD_CHANGED_MESSAGE);
-		// Whether THIS conversion minted the row, as opposed to deduping onto one
-		// that already existed. Recorded in step 5 because an undo must never
-		// delete a Person or a membership it did not create (#618) — and nothing
-		// readable after the fact distinguishes the two.
-		//
-		// With the guest's own Person (#1124, ADR-0031) there is no longer a fresh
-		// Person for convert to create: no match means the membership goes on the
-		// guest's Person, which the guest row already points at. That Person is
-		// therefore never `createdPerson`, and undo never deletes it. The key is
-		// still written, as `false`: code from before #1124 refuses a record that
-		// lacks it as unreplayable, and this is what lets a revert of this change
-		// keep every convert's Undo button.
-		const createdPerson = false;
+		// Whether THIS conversion minted the Person, as opposed to adopting the
+		// guest's or deduping onto one that already existed. Recorded in step 5 for
+		// the undo's benefit (#618): nothing readable after the fact distinguishes
+		// them, and an undo never deletes a Person either way.
+		let createdPerson = false;
 		let createdMembership = false;
 		if (!personId) {
-			personId = await ensureGuestPerson(tx, input.guestId);
+			// No member of THIS club matched. The membership goes on a Person the guest
+			// row names, but only if that Person is PRISTINE (#1124, ADR-0031,
+			// `pristineGuestPerson`): never signed in, never a member anywhere, no
+			// history, no other guest row, no contact, no record of a membership. Only
+			// such a Person is the guest's own to rename and to give contact, and that is
+			// what the maintainer ruled on 2026-10-09 (option A) after a Person turned up
+			// that was not: one a merge had made a former member's, one an earlier
+			// convert had made a member and an officer had corrected, one a wrong link
+			// had pointed at somebody else's. Writing the guest row's values onto those
+			// re-keyed a real person, and let an address typed on the anonymous guest
+			// book become the sign-in key of a Person with history.
+			const guestPersonId = await ensureGuestPerson(tx, input.guestId);
 			// The guest row is the officer's current word on who this is: the Person
 			// was minted at capture time with the name then typed, and an officer's
-			// correction since (a renamed guest, a goes-by name set or CLEARED, a
-			// fixed address) lives only on the guest row. The membership is about to
-			// carry it, and the Person is the fallback every other club reads, so it
-			// follows. Only while the Person is still the guest's alone and nobody has
-			// signed in as them (`unboundGuestOnlyPerson()`, which reads false the
-			// moment the membership below exists): a Person who is a member somewhere,
-			// or signed in, keeps the name they have.
-			await tx
-				.update(people)
-				.set({ name, preferredName })
-				.where(and(eq(people.id, personId), unboundGuestOnlyPerson()));
-			// The guest's contact too, and it is an OVERWRITE, not a fill: the Person
-			// owns their contact and a club is its custodian, which includes fixing a
-			// typo, until the person signs in or speaks for themselves (#1124,
-			// ADR-0031). So the Person's email and phone are SET to the guest row's
-			// current values, a cleared one included. A fill would leave a typo'd
-			// address on a Person that now holds a membership after an undo, a
-			// correction on the guest and a second convert, and the bind rule lets
-			// whoever owns the typo sign in to it. Clearing it at undo instead was
-			// tried and rejected: it stops the undoing club's own roster CSV matching
-			// the Person (#875), which then creates a second Person for one human.
+			// correction since (a renamed guest, a goes-by name set or CLEARED, a fixed
+			// address) lives only on the guest row. The membership is about to carry it,
+			// and the Person is the fallback every other club reads, so it follows. The
+			// contact is blank by the predicate, so this fills it.
 			//
-			// Two conditions, each in the statement's own WHERE so a sign-in or a
-			// second writer landing mid-transaction makes it a no-op rather than an
-			// overwrite:
-			//  - nobody has signed in as them (`isNull(people.userId)`): an address on
-			//    a bound Person is its account's;
-			//  - they are held by guest rows only (`heldByGuestRowsOnly()`): a Person
-			//    who is already a member somewhere keeps whatever that club recorded.
-			//
-			// BEFORE the membership insert below, because `heldByGuestRowsOnly()`
-			// reads false the moment this convert adds one, and the UPDATE would match
-			// nothing and report success.
-			const overwritten = await tx
+			// The predicate is in the statement's own WHERE, and the statement matching
+			// a row IS the decision: a sign-in, a membership or a second guest row that
+			// lands after any earlier read makes it match nothing. BEFORE the membership
+			// insert below, because the predicate reads false the moment this convert
+			// adds one.
+			const adopted = await tx
 				.update(people)
-				.set({ email, phone })
+				.set({ name, preferredName, email, phone })
 				.where(
-					and(
-						eq(people.id, personId),
-						isNull(people.userId),
-						heldByGuestRowsOnly(),
-					),
+					and(eq(people.id, guestPersonId), pristineGuestPerson(input.guestId)),
 				)
 				.returning({ id: people.id });
-			if (email && overwritten.length > 0) written = { personId, email };
+			if (adopted.length > 0) {
+				personId = guestPersonId;
+			} else {
+				// Not pristine. Mint a fresh Person carrying the guest row's name, goes-by
+				// name and contact, point the guest at it, and convert onto it. This is
+				// what a convert did before #1124. The old Person is left EXACTLY as it is
+				// and is not deleted: it is somebody's history, or the release target
+				// of an undone convert (#875).
+				const [minted] = await tx
+					.insert(people)
+					.values({ name, preferredName, email, phone })
+					.returning({ id: people.id });
+				if (!minted) throw new Error("Failed to create person.");
+				await tx
+					.update(guests)
+					.set({ personId: minted.id })
+					.where(eq(guests.id, input.guestId));
+				personId = minted.id;
+				createdPerson = true;
+			}
+			if (email) written = { personId, email };
 		} else {
 			if (preferredName) {
 				// Deduped onto an EXISTING Person: the insert above never ran, so seed
@@ -2486,10 +2481,9 @@ export async function applyUnlinkGuestFromMember(
 				updatedAt: new Date(),
 			})
 			.where(eq(guests.id, input.guestId));
-		// The unlinked member is still a member, so a guest still naming their Person
-		// is pointed at a fresh name-only one (H2 of #1155); otherwise the next
-		// convert adopts the member.
-		await separateGuestFromMemberPerson(tx, input.guestId);
+		// The guest still names the member's Person after the unlink, and that is
+		// fine: a member's Person is never PRISTINE, so the next convert gives the
+		// guest a fresh one instead of adopting it (`pristineGuestPerson`).
 
 		await logActivity(tx, {
 			clubId: input.clubId,
@@ -2661,18 +2655,18 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
  * nothing about this conversion.
  *
  * Since #1124 the check is keyed on `createdMembership`, not `createdPerson`:
- * convert no longer mints a Person, it adopts the guest's own, so
- * `createdPerson` is always false and would switch the check off for every new
- * conversion. A guest's Person is held by guest rows alone, and a guest holds no
- * speech (ADR-0009), so what it has afterwards was earned afterwards. The one
- * case this over-refuses is a guest Person that a merge had already made a
- * member elsewhere: its history there is read as evidence here. That refuses an
- * undo, never deletes anything, and the roster-removal path is still open.
+ * a convert that adopts the guest's own Person records `createdPerson: false`,
+ * which would switch the check off for it. A Person convert adopts is pristine
+ * (`pristineGuestPerson`: no history at all), so whatever it owns afterwards was
+ * earned afterwards; a Person convert mints is new for the same reason. Where
+ * convert reused a membership of this club the check does not run, as before.
  *
  * The guest's Person is deliberately LEFT BEHIND when the membership goes, as a
  * created one always was. It is global (ADR-0008), the guest row still points at
  * it, deleting it could cascade further than this undo's remit, and the Person
- * is the guest's, not the conversion's.
+ * is the guest's, not the conversion's. The guest keeps naming it too: a
+ * re-convert will not adopt it (the undo's removal record, and the contact
+ * convert put on it, make it not pristine) and gives the guest a fresh Person.
  *
  * Whenever the membership is deleted, created Person or not, the
  * `member_remove` names its Person in `detail.personId`, the release record
@@ -2918,16 +2912,12 @@ export async function applyUndoGuestConversion(
 			})
 			.where(eq(guests.id, input.guestId));
 
-		// Undo does not touch the Person's contact. Convert SETS it from the guest
-		// row, so the next convert sets it again from the guest row as it is then; and
-		// leaving it makes the undoing club's own roster CSV still find the Person the
-		// convert minted (#875), instead of creating a second one for the same human.
-		//
-		// If the guest's Person STILL holds a membership (a convert that reused
-		// one, or a row the backfill pointed at a member's Person), point the guest
-		// at a fresh name-only Person instead (H2 of #1155), so the next convert
-		// cannot adopt that member.
-		await separateGuestFromMemberPerson(tx, input.guestId);
+		// Undo does not touch the Person's contact, nor which Person the guest names.
+		// Leaving the contact makes the undoing club's own roster CSV still find the
+		// Person the convert minted (#875), instead of creating a second one for the
+		// same human. A Person that still holds a membership, or has contact, or has a
+		// removal on record is not pristine, so the next convert does not adopt it: it
+		// gives the guest a fresh Person (`pristineGuestPerson`).
 
 		await logActivity(tx, {
 			clubId: input.clubId,
