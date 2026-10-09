@@ -617,6 +617,13 @@ async function futureNonCancelledMeetingIds(
  *  `claimSlot`'s own "conditional UPDATE is the race guard" and
  *  `reassignSlotCore`'s `FOR UPDATE` lock.
  *
+ *  A meeting the `plan` class refuses (#1135) is skipped, in the same WHERE:
+ *  disabling a role must not strip the lineup of a COMPLETED meeting. The
+ *  caller's candidates exclude cancelled meetings only (a meeting completed
+ *  earlier today is still `scheduledAt > now`, so it is a candidate), which is
+ *  why this writer carries the class itself. A skipped meeting is left out of
+ *  the "kept claimed" count as well: its slots are untouched, not claimed.
+ *
  *  Returns how many of those meetings had a slot deleted, and how many kept at
  *  least one claimed slot for the role — read via a follow-up SELECT inside
  *  the SAME transaction as the delete (any row still present afterward is, by
@@ -641,6 +648,7 @@ async function removeOpenRoleSlots(
 					eq(roleSlots.roleDefinitionId, roleDefinitionId),
 					isNull(roleSlots.assignedMemberId),
 					isNull(roleSlots.assignedGuestId),
+					meetingAcceptsWrite(tx, "plan", roleSlots.meetingId),
 				),
 			)
 			.returning({ id: roleSlots.id, meetingId: roleSlots.meetingId });
@@ -670,6 +678,8 @@ async function removeOpenRoleSlots(
 				and(
 					inArray(roleSlots.meetingId, meetingIds),
 					eq(roleSlots.roleDefinitionId, roleDefinitionId),
+					// Not a meeting the DELETE skipped: its slots are all still here.
+					meetingAcceptsWrite(tx, "plan", roleSlots.meetingId),
 				),
 			);
 		const keptClaimedMeetings = new Set(remaining.map((r) => r.meetingId)).size;

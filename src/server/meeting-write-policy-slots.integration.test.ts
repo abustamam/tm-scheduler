@@ -620,6 +620,76 @@ describe.skipIf(!hasTestDb)(
 		});
 
 		// ------------------------------------------------------------------------
+		// removeOpenRoleSlots (through the role disable toggle): a completed meeting
+		// is skipped.
+		// ------------------------------------------------------------------------
+		//
+		// Seeded from the state the bug leaves behind. `completeMeeting` checks the
+		// club-local DAY, not the instant, so a meeting completed this afternoon but
+		// scheduled for this evening is still `scheduledAt > now`: the disable's
+		// candidate query (`futureNonCancelledMeetingIds`) excludes cancelled
+		// meetings only, so it was a candidate, and the DELETE stripped its open
+		// slots.
+		describe("disabling a role (removeOpenRoleSlots)", () => {
+			let completedTonightId: string;
+
+			beforeEach(async () => {
+				const [meeting] = await testDb
+					.insert(meetings)
+					.values({
+						clubId: club.clubId,
+						scheduledAt: new Date(Date.now() + 60 * 60 * 1000),
+						status: "completed",
+					})
+					.returning({ id: meetings.id });
+				if (!meeting) throw new Error("Failed to seed the completed meeting");
+				completedTonightId = meeting.id;
+				await testDb.insert(roleSlots).values({
+					meetingId: completedTonightId,
+					roleDefinitionId: club.roleDefinitionId,
+					slotIndex: 0,
+				});
+			});
+
+			const disable = () =>
+				syncSlotsForRoleEnabledChange({
+					clubId: club.clubId,
+					roleDefinitionId: club.roleDefinitionId,
+					roleName: "Timer",
+					defaultCount: 1,
+					enabled: false,
+					standing: true,
+					actorMemberId: club.adminMemberId,
+				});
+			const timerSlots = async (meetingId: string) =>
+				(await lineup(meetingId)).filter(
+					(s) => s.roleDefinitionId === club.roleDefinitionId,
+				);
+
+			it("leaves a completed meeting's open slots in place, and still clears the scheduled one", async () => {
+				const result = await disable();
+				// The control: the scheduled meeting lost its slot, so the disable ran.
+				expect(await timerSlots(club.meetingId)).toEqual([]);
+				expect(result).toMatchObject({
+					meetingsChanged: 1,
+					keptClaimedMeetings: 0,
+				});
+				// The locked meeting is exactly as it was.
+				expect(await timerSlots(completedTonightId)).toHaveLength(1);
+			});
+
+			it("does not count a skipped completed meeting as one that kept a claimed slot", async () => {
+				await testDb.delete(roleSlots).where(eq(roleSlots.id, club.slotId));
+				const result = await disable();
+				expect(result).toMatchObject({
+					meetingsChanged: 0,
+					keptClaimedMeetings: 0,
+				});
+				expect(await timerSlots(completedTonightId)).toHaveLength(1);
+			});
+		});
+
+		// ------------------------------------------------------------------------
 		// 4. The record writer.
 		// ------------------------------------------------------------------------
 		describe("attachSpeechToOpenSlot (class record)", () => {
