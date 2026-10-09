@@ -1,7 +1,7 @@
 // Speaker-slot management DB logic, split out from `slots.ts` (a createServerFn
 // module the guard test forbids from exporting db-touching functions).
 // Integration-testable by mocking `#/db`.
-import { and, eq, exists, gt, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	meetings,
@@ -11,7 +11,11 @@ import {
 	speeches,
 } from "#/db/schema";
 import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
-import { assertMeetingAccepts, meetingRefusal } from "#/lib/meeting-lifecycle";
+import {
+	assertMeetingAccepts,
+	type MeetingWriteClass,
+	meetingRefusal,
+} from "#/lib/meeting-lifecycle";
 import {
 	pairedRoleIds,
 	pickSpeakerAndEvaluatorRoles,
@@ -32,6 +36,7 @@ import { loadTmodMemberId } from "./meeting-authz-logic";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
 import { loadMeetingShapeDefs, roleDefScope } from "./meeting-templates-logic";
 import { meetingAcceptsWrite, meetingRowAccepts } from "./meeting-write-gate";
+import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
 import { resolveProjectDisplay } from "./project-picker-logic";
 import { resolveWriteActorWithProof } from "./write-actor-logic";
@@ -85,36 +90,6 @@ async function clubRoles(
 	};
 }
 
-/**
- * RETIRED from every writer (#1135): a slot write now carries
- * `meetingAcceptsWrite(tx, "plan", roleSlots.meetingId)`, which refuses by
- * write class instead of naming one status. Kept exported, and unchanged, only
- * because `meeting-cancel.integration.test.ts` imports it to pin the rendered
- * SQL of a correlated subquery; delete both together.
- *
- * What the in-statement form buys, and what it cannot see, is unchanged. A
- * check reads a row and a statement reads the row as of its own start, so a
- * cancel committed between the two is invisible to the check and visible in the
- * statement. A cancel that commits while the statement is parked behind another
- * writer's lock on the slot row is not: READ COMMITTED re-checks the locked
- * row's newest version but re-runs the subquery under the statement's original
- * snapshot, and closing that window means waiting on the meeting row, which is a
- * new lock on every claim, and #1057 declined it.
- */
-export function meetingNotCancelled(conn: DbOrTx) {
-	return exists(
-		conn
-			.select({ one: sql`1` })
-			.from(meetings)
-			.where(
-				and(
-					eq(meetings.id, roleSlots.meetingId),
-					ne(meetings.status, "cancelled"),
-				),
-			),
-	);
-}
-
 /** Re-read the meeting's status on the caller's connection and refuse a frozen
  *  one with its write class's sentence. The post-statement half of
  *  `meetingAcceptsWrite`: a zero-row UPDATE says nothing about WHY, and the
@@ -125,7 +100,7 @@ export function meetingNotCancelled(conn: DbOrTx) {
 async function assertMeetingAcceptsOn(
 	conn: DbOrTx,
 	meetingId: string,
-	writeClass: Parameters<typeof assertMeetingAccepts>[1],
+	writeClass: MeetingWriteClass,
 ): Promise<void> {
 	const [row] = await conn
 		.select({ status: meetings.status })
@@ -463,7 +438,7 @@ async function backfillMissingRoleSlots(
 			)
 				continue;
 			// The enable-toggle's candidates exclude cancelled meetings
-			// (`futureNonCancelledMeetingIds`), so one cancelled while this waited is
+			// (`futureScheduledOrCompletedMeetingIds`), so one cancelled while this waited is
 			// SKIPPED, not refused: a role toggle must not fail on a meeting that no
 			// longer runs. Spelled through the policy (`meetingRefusal`) so the skip
 			// follows the plan class rather than a hard-coded status.
@@ -481,7 +456,7 @@ async function backfillMissingRoleSlots(
 			assertMeetingAccepts(
 				meeting.status,
 				"plan",
-				input.changeLabel === "template_sync" ? { accept: ["cancelled"] } : {},
+				input.changeLabel === "template_sync" ? PLAN_ACCEPTING_CANCELLED : {},
 			);
 			const present = await tx
 				.select({ roleDefinitionId: roleSlots.roleDefinitionId })
@@ -542,7 +517,7 @@ export async function applyTemplateSyncToUpcomingMeetings(input: {
 	);
 
 	// Deliberately does NOT exclude cancelled meetings, unlike the enable-toggle
-	// path below (`futureNonCancelledMeetingIds`): that's a #368 addition and
+	// path below (`futureScheduledOrCompletedMeetingIds`): that's a #368 addition and
 	// this pre-existing query's behavior toward cancelled meetings was out of
 	// scope to change without its own dedicated test — this comment documents
 	// the divergence is intentional, not an oversight.
@@ -569,11 +544,18 @@ export async function applyTemplateSyncToUpcomingMeetings(input: {
 	});
 }
 
-/** Ids of a club's meetings scheduled in the future (`scheduledAt > now`) that
- *  are not cancelled. Used by the role enable/disable toggle (#368): past
- *  meetings are the club's history and cancelled ones aren't going to run, so
- *  neither should gain or lose slots when a role's `enabled` flag flips. */
-async function futureNonCancelledMeetingIds(
+/** Ids of a club's meetings scheduled in the future (`scheduledAt > now`) whose
+ *  status is `scheduled` or `completed`. Used by the role enable/disable toggle
+ *  (#368): past meetings are the club's history and cancelled ones aren't going
+ *  to run, so neither should gain or lose slots when a role's `enabled` flag
+ *  flips.
+ *
+ *  `completed` is a candidate on purpose, though it is not a meeting the toggle
+ *  may change: a meeting completed this afternoon but scheduled for this evening
+ *  is still `scheduledAt > now`. Each caller refuses it for itself: enabling
+ *  throws in `backfillMissingRoleSlots`, disabling skips it in
+ *  `removeOpenRoleSlots`. */
+async function futureScheduledOrCompletedMeetingIds(
 	clubId: string,
 	conn: DbOrTx = db,
 ): Promise<string[]> {
@@ -584,12 +566,10 @@ async function futureNonCancelledMeetingIds(
 			and(
 				eq(meetings.clubId, clubId),
 				gt(meetings.scheduledAt, new Date()),
-				// Everything the plan class does not refuse EXCEPT a completed meeting,
-				// which stays a candidate on purpose: enabling a role refuses it loudly
-				// in `backfillMissingRoleSlots` (the lock sentence), and that refusal
-				// predates this query being written through the policy. An allow-list
-				// (`status IN (...)`), so a status the policy has never heard of is
-				// not a candidate.
+				// `scheduled` (what the `plan` class accepts) PLUS `completed` (the
+				// override): see the doc above for why a completed meeting stays a
+				// candidate. An allow-list (`status IN (...)`), so a cancelled meeting
+				// is out, and so is a status the policy has never heard of.
 				meetingRowAccepts("plan", { accept: ["completed"] }),
 				// TEMPLATED meetings are not the club's standard shape. Enabling or
 				// disabling a standard role must not add or remove slots on a
@@ -621,8 +601,8 @@ async function futureNonCancelledMeetingIds(
  *  disabling a role must not strip the lineup of a COMPLETED meeting. The
  *  caller's candidates exclude cancelled meetings only (a meeting completed
  *  earlier today is still `scheduledAt > now`, so it is a candidate), which is
- *  why this writer carries the class itself. A skipped meeting is left out of
- *  the "kept claimed" count as well: its slots are untouched, not claimed.
+ *  why this writer carries the class itself. A skipped meeting's slots are
+ *  untouched, and only a CLAIMED slot counts as one the disable kept.
  *
  *  Returns how many of those meetings had a slot deleted, and how many kept at
  *  least one claimed slot for the role — read via a follow-up SELECT inside
@@ -668,9 +648,11 @@ async function removeOpenRoleSlots(
 			});
 		}
 
-		// Anything still present for this role on these meetings, post-delete, is
-		// necessarily claimed — we just deleted every unclaimed row. Reading this
-		// inside the same transaction keeps it consistent with the delete above.
+		// The claimed slots still present for this role on these meetings. Before
+		// the DELETE skipped a meeting, "anything still present" WAS "claimed";
+		// now a skipped (completed) meeting keeps its unclaimed slots too, so the
+		// claimed predicate is spelled out. Reading this inside the same
+		// transaction keeps it consistent with the delete above.
 		const remaining = await tx
 			.select({ meetingId: roleSlots.meetingId })
 			.from(roleSlots)
@@ -678,8 +660,10 @@ async function removeOpenRoleSlots(
 				and(
 					inArray(roleSlots.meetingId, meetingIds),
 					eq(roleSlots.roleDefinitionId, roleDefinitionId),
-					// Not a meeting the DELETE skipped: its slots are all still here.
-					meetingAcceptsWrite(tx, "plan", roleSlots.meetingId),
+					or(
+						isNotNull(roleSlots.assignedMemberId),
+						isNotNull(roleSlots.assignedGuestId),
+					),
 				),
 			);
 		const keptClaimedMeetings = new Set(remaining.map((r) => r.meetingId)).size;
@@ -733,7 +717,10 @@ export async function syncSlotsForRoleEnabledChange(
 	meetingsChanged: number;
 	rolesAdded: string[];
 }> {
-	const meetingIds = await futureNonCancelledMeetingIds(input.clubId, conn);
+	const meetingIds = await futureScheduledOrCompletedMeetingIds(
+		input.clubId,
+		conn,
+	);
 	if (meetingIds.length === 0) {
 		return { keptClaimedMeetings: 0, meetingsChanged: 0, rolesAdded: [] };
 	}
@@ -1770,11 +1757,14 @@ export async function confirmHeldClaimedSlots(args: {
 		.limit(1);
 	if (!meeting) throw new Error("Meeting not found.");
 	// Takedown first, then the meeting's status — `confirmSlotCore`'s own order
-	// and reason. By write class (#1135), which also refuses a CANCELLED meeting
-	// up front: a member holding nothing there used to succeed vacuously, though
-	// a member holding a claimed slot was already refused by its `confirmSlotCore`.
+	// and reason. By write class (#1135), accepting `cancelled`
+	// (`PLAN_ACCEPTING_CANCELLED`) as before: a member holding nothing on a
+	// cancelled meeting gets `{ confirmedRoles: [] }`, and one holding a claimed
+	// slot is refused by its `confirmSlotCore`. A cancel that commits after
+	// `setPlannedAttendance` saved the member's answer must not fail the request
+	// whose answer was saved.
 	await assertClubNotArchived(meeting.clubId);
-	assertMeetingAccepts(meeting.status, "plan");
+	assertMeetingAccepts(meeting.status, "plan", PLAN_ACCEPTING_CANCELLED);
 
 	const held = await db
 		.select({ slotId: roleSlots.id, roleName: roleDefinitions.name })
@@ -1933,12 +1923,11 @@ export async function claimSlotCore(
 	// Before the meeting's status: a takedown answers for the reason it was taken
 	// down, not for the meeting's status.
 	await assertClubNotArchived(slot.clubId, tx);
-	// The early refusal, by write class (#1135), and it ACCEPTS `cancelled` on
-	// purpose: a cancelled meeting is refused in the statement below, AFTER the
-	// asserted-caller gates, so a caller who fails one of them still hears that
-	// refusal and not the meeting's status (#1057). A completed meeting has
-	// always been refused here, before them. The statement refuses both.
-	assertMeetingAccepts(slot.meetingStatus, "plan", { accept: ["cancelled"] });
+	// The early refusal, by write class (#1135). It accepts `cancelled`
+	// (`PLAN_ACCEPTING_CANCELLED`): that is refused in the statement below, AFTER
+	// the asserted-caller gates. A completed meeting has always been refused
+	// here, before them. The statement refuses both.
+	assertMeetingAccepts(slot.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED);
 
 	const forSomeoneElse = args.actorMemberId !== args.memberId;
 	if (args.proof === "asserted") {

@@ -19,6 +19,7 @@ import {
 	requireMemberInClub,
 	requireUser,
 } from "./guards";
+import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 import {
 	applyAddRoleSlot,
 	applyAddSpeakerSlot,
@@ -225,8 +226,8 @@ export const unconfirmSlot = createServerFn({ method: "POST" })
 		// By write class (#1135), in two steps that keep the order each status has
 		// always had. The lock refuses HERE, before the role gate, so any caller of
 		// a completed meeting hears that it is locked; this call accepts `cancelled`
-		// for the reason the second one runs later.
-		assertMeetingAccepts(slot.meetingStatus, "plan", { accept: ["cancelled"] });
+		// (`PLAN_ACCEPTING_CANCELLED`) for the reason the second one runs later.
+		assertMeetingAccepts(slot.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED);
 
 		// The actor is the resolved admin membership — never the client (#396).
 		const membership = await requireClubRole(currentUser.id, slot.clubId, [

@@ -68,6 +68,7 @@ import {
 } from "./attendance-plan-logic";
 import { releaseSlotsAndMarkUnavailable } from "./availability-logic";
 import { assertClubNotArchived, requireMemberInClub } from "./guards";
+import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 import {
 	requestWriteActor,
 	requestWriteActorWithProof,
@@ -128,7 +129,7 @@ export const setAvailability = createServerFn({ method: "POST" })
 		// `cancelled` because that refusal is the plan seam's, further down
 		// (`setPlanStatus` / `clearPlanStatus`), and moving it up here would change
 		// what a caller who fails those checks is told.
-		assertMeetingAccepts(meeting.status, "plan", { accept: ["cancelled"] });
+		assertMeetingAccepts(meeting.status, "plan", PLAN_ACCEPTING_CANCELLED);
 		await requireMemberInClub(data.memberId, meeting.clubId);
 		// `…WithProof` (#762). The subject default stays — this endpoint has no
 		// ladder and never had one, so the claim only decides who is CREDITED —
@@ -206,7 +207,7 @@ export const clearAvailability = createServerFn({ method: "POST" })
 		await assertClubNotArchived(meeting.clubId);
 		// By write class (#1135), as `setAvailability`'s: `cancelled` is refused by
 		// the plan seam below.
-		assertMeetingAccepts(meeting.status, "plan", { accept: ["cancelled"] });
+		assertMeetingAccepts(meeting.status, "plan", PLAN_ACCEPTING_CANCELLED);
 		await requireMemberInClub(data.memberId, meeting.clubId);
 		// The RETURN is deliberately unused: this gate answers "may this request
 		// write at all", and who to CREDIT is the existing resolution below, which
@@ -260,7 +261,7 @@ export const markUnavailableReleasing = createServerFn({ method: "POST" })
 		// refuses it, after those checks and the actor ladder, so a caller who fails
 		// one of them still hears that. The seam refuses a completed meeting too, so
 		// this early copy exists for the order, not for the refusal.
-		assertMeetingAccepts(meeting.status, "plan", { accept: ["cancelled"] });
+		assertMeetingAccepts(meeting.status, "plan", PLAN_ACCEPTING_CANCELLED);
 		await requireMemberInClub(data.memberId, meeting.clubId);
 		// #762. The seam refuses an asserted caller itself — that is where the
 		// check is testable — so this is the explicit, readable half: a write

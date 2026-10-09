@@ -16,6 +16,7 @@ import {
 	eq,
 	exists,
 	gte,
+	inArray,
 	isNotNull,
 	isNull,
 	ne,
@@ -34,6 +35,7 @@ import {
 } from "#/db/schema";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { logActivity } from "./activity";
+import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 import { markComingOnSelfClaim } from "./slots-logic";
 
 // Either the main db client or a drizzle transaction — so these helpers can run
@@ -65,6 +67,14 @@ export const SPEECH_NOT_IN_CLUB_MESSAGE =
  *  Person's reschedule pool and no membership to assign a slot to. */
 export const GUEST_SPEECH_NOT_SCHEDULABLE_MESSAGE =
 	"That speech belongs to a guest, not a member, so it can't be scheduled from here.";
+
+/** The speech is still on a lineup in another club; this club's slot cannot take it. */
+export const SPEECH_SCHEDULED_ELSEWHERE_MESSAGE =
+	"That speech is scheduled in another club.";
+
+/** The speech was given at a completed meeting, whose lineup is history. */
+export const SPEECH_ON_COMPLETED_MEETING_MESSAGE =
+	"That speech was given at a completed meeting, so it can't be moved.";
 
 /**
  * List a Person's and/or a club's **unscheduled** speeches — those not
@@ -319,10 +329,40 @@ export async function attachSpeechToOpenSlot(
 
 	// Invariant guard: unlink any slot still pointing at this speech before we
 	// relink, so setting the new slot's speech_id can't violate the unique index.
-	await conn
-		.update(roleSlots)
-		.set({ speechId: null })
+	// The unlink is scoped to the slot's club and refuses a completed source
+	// meeting (#1135): the speech is Person-owned and a Person can belong to
+	// several clubs, so "every slot that points at it" is wider than this club's
+	// lineup, and a completed meeting's lineup is history. The documented case is
+	// a slot on a CANCELLED meeting, which is accepted: the speech leaves it.
+	const sources = await conn
+		.select({
+			id: roleSlots.id,
+			clubId: meetings.clubId,
+			meetingStatus: meetings.status,
+		})
+		.from(roleSlots)
+		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 		.where(eq(roleSlots.speechId, args.speechId));
+	for (const source of sources) {
+		if (source.clubId !== slot.clubId) {
+			throw new Error(SPEECH_SCHEDULED_ELSEWHERE_MESSAGE);
+		}
+		assertMeetingAccepts(source.meetingStatus, "plan", {
+			...PLAN_ACCEPTING_CANCELLED,
+			messages: { completed: SPEECH_ON_COMPLETED_MEETING_MESSAGE },
+		});
+	}
+	if (sources.length > 0) {
+		await conn
+			.update(roleSlots)
+			.set({ speechId: null })
+			.where(
+				inArray(
+					roleSlots.id,
+					sources.map((source) => source.id),
+				),
+			);
+	}
 
 	// Conditional UPDATE is the last-line race guard (ADR-0005): only one writer
 	// can flip an open, unassigned, speech-free slot. A concurrent attach/claim

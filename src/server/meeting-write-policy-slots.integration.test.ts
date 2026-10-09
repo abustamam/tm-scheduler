@@ -5,31 +5,38 @@
  * (completed) in one place, `meetingNotCancelled` (cancelled) in another, and
  * several writers had only the first, so a cancelled meeting's lineup could still
  * be edited through them. They now ask the policy (`MEETING_WRITE_POLICY`, class
- * `plan`), which refuses both, and this file holds four things:
+ * `plan`, except one `record` writer), which refuses both. What this file holds,
+ * in order of appearance:
  *
- * 1. The GAINS. Each writer that did not refuse a cancelled meeting under its
- *    own meeting lock now does, with the cancelled sentence, and writes nothing.
- *    The scheduled meeting is the control: same preparation, the write lands.
- * 2. The STATEMENT. The claim, reassign, release and guest-assignment writes carry
- *    the class in their own WHERE (`meetingAcceptsWrite`), so a status that
- *    committed after the early check is still refused. The early check is switched
- *    off through a seam (it is the only thing a serial test can reach first), and
- *    the statement alone must still refuse BOTH statuses with the right sentence.
- * 3. The OVERRIDES. Where a writer deliberately accepts a status its class
- *    refuses, the order of its refusals is observable, and each case here would
- *    change sentence if the `accept` option were dropped.
- * 4. The `record` writer: `attachSpeechToOpenSlot` accepts a completed meeting.
+ * - The GAINS. Each writer that did not refuse a cancelled meeting under its own
+ *   meeting lock now does, with the cancelled sentence, and writes nothing. The
+ *   scheduled meeting is the control: same preparation, the write lands.
+ * - The STATEMENT. The claim, reassign, release, guest-assignment and
+ *   release-and-decline writes carry the class in their own WHERE
+ *   (`meetingAcceptsWrite`), so a status that committed after the early check is
+ *   still refused. The early check is switched off through a seam (it is the
+ *   only thing a serial test can reach first), and the statement alone must
+ *   still refuse BOTH statuses with the right sentence.
+ * - The ORDER. Where an early check accepts `cancelled` because a later check
+ *   owns that refusal (`PLAN_ACCEPTING_CANCELLED`), the order of the refusals is
+ *   observable, and each case here changes sentence if the option is dropped.
+ * - The role toggle, `confirmHeldClaimedSlots`, the `record` writer
+ *   (`attachSpeechToOpenSlot`, including its owner arm and the scope of its
+ *   unlink) and the availability handlers.
  *
- * ## The seams, and why they are the only fakes
+ * ## The fakes, and what each is for
+ *
+ * Beyond what the suite always fakes (`#/db`, the cookie to session lookup and the
+ * minimal `createServerFn` adapter), there are two seams:
  *
  * - `assertMeetingAccepts` can be told to skip its next call(s). A completed or
  *   cancelled meeting is refused by it before any statement runs, so without the
  *   seam the statement's own refusal is unreachable serially, and deleting it
  *   leaves every serial case green.
- * - `setPlanStatus` can be told to skip its cancelled gate. `releaseSlots…` frees
- *   the roles and then writes `not_coming`; on a cancelled meeting that second
- *   write refuses with the SAME sentence and rolls the release back, which would
- *   hide whether the release itself accepted the meeting.
+ * - `setPlanStatus` can be told to do nothing. `releaseSlots…` frees the roles
+ *   and then writes `not_coming`; on a frozen meeting that second write refuses
+ *   with the SAME sentence and rolls the release back, which would hide whether
+ *   the release itself refused the meeting.
  */
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,7 +50,10 @@ import {
 	speeches,
 } from "#/db/schema";
 import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
-import { MEETING_LOCKED_MESSAGE } from "#/lib/meeting-lifecycle";
+import {
+	type FrozenMeetingStatus,
+	MEETING_LOCKED_MESSAGE,
+} from "#/lib/meeting-lifecycle";
 import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
 import {
 	cleanup,
@@ -136,16 +146,19 @@ const {
 	syncSlotsForRoleEnabledChange,
 } = await import("./slots-logic");
 const { applyAssignGuestToSlot } = await import("./guests-logic");
-const { attachSpeechToOpenSlot } = await import("./speeches-logic");
+const {
+	attachSpeechToOpenSlot,
+	SPEECH_ON_COMPLETED_MEETING_MESSAGE,
+	SPEECH_SCHEDULED_ELSEWHERE_MESSAGE,
+} = await import("./speeches-logic");
 const { releaseSlotsAndMarkUnavailable } = await import("./availability-logic");
 const { clearAvailability, markUnavailableReleasing, setAvailability } =
 	await import("./availability");
 const { unconfirmSlot } = await import("./slots");
 const { NO_PERMISSION_MESSAGE } = await import("./guards");
 
-type Frozen = "cancelled" | "completed";
-const FROZEN: readonly Frozen[] = ["cancelled", "completed"];
-const SENTENCE: Record<Frozen, string> = {
+const FROZEN: readonly FrozenMeetingStatus[] = ["cancelled", "completed"];
+const SENTENCE: Record<FrozenMeetingStatus, string> = {
 	cancelled: MEETING_CANCELLED_MESSAGE,
 	completed: MEETING_LOCKED_MESSAGE,
 };
@@ -154,7 +167,10 @@ const SENTENCE: Record<Frozen, string> = {
 const exact = (message: string) =>
 	new RegExp(`^${message.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
 
-async function setStatus(meetingId: string, status: Frozen | "scheduled") {
+async function setStatus(
+	meetingId: string,
+	status: FrozenMeetingStatus | "scheduled",
+) {
 	await testDb
 		.update(meetings)
 		.set({ status })
@@ -538,8 +554,14 @@ describe.skipIf(!hasTestDb)(
 		});
 
 		// ------------------------------------------------------------------------
-		// confirmHeldClaimedSlots: refuses up front, by class.
+		// confirmHeldClaimedSlots: refuses a completed meeting up front, by class.
 		// ------------------------------------------------------------------------
+		//
+		// It accepts `cancelled` up front, as it always did. `setPlannedAttendance`
+		// saves the member's answer and THEN confirms their held roles, so a cancel
+		// that commits in between must not fail a request whose answer was saved;
+		// where a role IS held, `confirmSlotCore` refuses it with the cancelled
+		// sentence.
 		describe("confirmHeldClaimedSlots", () => {
 			const confirmHeld = () =>
 				confirmHeldClaimedSlots({
@@ -547,16 +569,44 @@ describe.skipIf(!hasTestDb)(
 					meetingId: club.meetingId,
 					proof: "session",
 				});
+			const hold = () =>
+				testDb
+					.update(roleSlots)
+					.set({ status: "claimed", assignedMemberId: club.memberId })
+					.where(eq(roleSlots.id, club.slotId));
 
 			it("the control: a member holding nothing on a scheduled meeting confirms nothing", async () => {
 				expect(await confirmHeld()).toEqual({ confirmedRoles: [] });
 			});
 
-			it.each(
-				FROZEN,
-			)("refuses a member holding nothing on a %s meeting, rather than succeeding vacuously", async (status) => {
-				await setStatus(club.meetingId, status);
-				await expect(confirmHeld()).rejects.toThrow(exact(SENTENCE[status]));
+			it("the control: a member holding a claimed role on a scheduled meeting confirms it", async () => {
+				await hold();
+				expect(await confirmHeld()).toEqual({ confirmedRoles: ["Timer"] });
+				expect(
+					(await lineup(club.meetingId)).find((x) => x.id === club.slotId),
+				).toMatchObject({ status: "confirmed" });
+			});
+
+			it("a member holding nothing on a cancelled meeting still gets an empty answer", async () => {
+				await setStatus(club.meetingId, "cancelled");
+				expect(await confirmHeld()).toEqual({ confirmedRoles: [] });
+			});
+
+			it("a member holding a role on a cancelled meeting is refused by the per-slot confirm, and nothing changes", async () => {
+				await hold();
+				await setStatus(club.meetingId, "cancelled");
+				const before = await lineup(club.meetingId);
+				await expect(confirmHeld()).rejects.toThrow(
+					exact(MEETING_CANCELLED_MESSAGE),
+				);
+				expect(await lineup(club.meetingId)).toEqual(before);
+			});
+
+			it("refuses a member holding nothing on a completed meeting, rather than succeeding vacuously", async () => {
+				await setStatus(club.meetingId, "completed");
+				await expect(confirmHeld()).rejects.toThrow(
+					exact(MEETING_LOCKED_MESSAGE),
+				);
 			});
 		});
 
@@ -687,6 +737,24 @@ describe.skipIf(!hasTestDb)(
 				});
 				expect(await timerSlots(completedTonightId)).toHaveLength(1);
 			});
+
+			it("counts a completed meeting's CLAIMED slot as one the disable kept", async () => {
+				await testDb
+					.update(roleSlots)
+					.set({ status: "claimed", assignedMemberId: club.memberId })
+					.where(
+						and(
+							eq(roleSlots.meetingId, completedTonightId),
+							eq(roleSlots.roleDefinitionId, club.roleDefinitionId),
+						),
+					);
+				const result = await disable();
+				expect(result).toMatchObject({
+					meetingsChanged: 1,
+					keptClaimedMeetings: 1,
+				});
+				expect(await timerSlots(completedTonightId)).toHaveLength(1);
+			});
 		});
 
 		// ------------------------------------------------------------------------
@@ -762,6 +830,137 @@ describe.skipIf(!hasTestDb)(
 					exact("That meeting is cancelled."),
 				);
 				expect(await lineup(club.meetingId)).toEqual(before);
+			});
+
+			// The OWNER arm: the actor is the speech's owner, so `markComingOnSelfClaim`
+			// reaches `setPlanStatus` and writes a `coming` answer in the same
+			// transaction. The admin cases above never get that far, so on a
+			// completed meeting they cannot tell whether the plan seam accepts it.
+			// A `record` write must not be undone by a seam that refuses what the
+			// writer accepts.
+			describe("as the speech's owner", () => {
+				const attachAsOwner = () =>
+					attachSpeechToOpenSlot(testDb, {
+						speechId,
+						slotId: speakerSlotId,
+						actorMemberId: club.memberId,
+					});
+				const planRows = () =>
+					testDb
+						.select({ status: meetingAttendancePlan.status })
+						.from(meetingAttendancePlan)
+						.where(
+							and(
+								eq(meetingAttendancePlan.meetingId, club.meetingId),
+								eq(meetingAttendancePlan.memberId, club.memberId),
+							),
+						);
+
+				it.each([
+					"scheduled",
+					"completed",
+				] as const)("a %s meeting: the slot is claimed with the speech AND the owner is recorded as coming", async (status) => {
+					await setStatus(club.meetingId, status);
+					await attachAsOwner();
+					expect(await slotRow()).toMatchObject({
+						status: "claimed",
+						assignedMemberId: club.memberId,
+						speechId,
+					});
+					expect(await planRows()).toEqual([{ status: "coming" }]);
+				});
+			});
+
+			// The unlink before the relink. A speech is Person-owned and a Person can
+			// belong to several clubs, so "every slot that points at it" is wider than
+			// this club's lineup; the unlink is scoped to the slot's club, and a source
+			// on a completed meeting is history.
+			describe("the speech's current slot", () => {
+				let sourceMeetingId: string;
+				let sourceSlotId: string;
+
+				const seedSource = async (
+					clubId: string,
+					roleDefinitionId: string,
+					status: FrozenMeetingStatus | "scheduled",
+				) => {
+					const [meeting] = await testDb
+						.insert(meetings)
+						.values({
+							clubId,
+							scheduledAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+							status,
+						})
+						.returning({ id: meetings.id });
+					if (!meeting) throw new Error("Failed to seed the source meeting");
+					sourceMeetingId = meeting.id;
+					const [slot] = await testDb
+						.insert(roleSlots)
+						.values({
+							meetingId: meeting.id,
+							roleDefinitionId,
+							slotIndex: 0,
+							speechId,
+						})
+						.returning({ id: roleSlots.id });
+					if (!slot) throw new Error("Failed to seed the source slot");
+					sourceSlotId = slot.id;
+				};
+				const sourceRow = async () =>
+					(await lineup(sourceMeetingId)).find((x) => x.id === sourceSlotId);
+
+				it("the control: a slot on a CANCELLED meeting lets the speech go, and it moves", async () => {
+					await seedSource(club.clubId, speakerRoleId, "cancelled");
+					await attach();
+					expect(await sourceRow()).toMatchObject({ speechId: null });
+					expect(await slotRow()).toMatchObject({ speechId });
+				});
+
+				it("refuses when the speech sits on a COMPLETED meeting, and nothing moves", async () => {
+					await seedSource(club.clubId, speakerRoleId, "completed");
+					await expect(attach()).rejects.toThrow(
+						exact(SPEECH_ON_COMPLETED_MEETING_MESSAGE),
+					);
+					expect(await sourceRow()).toMatchObject({ speechId });
+					expect(await slotRow()).toMatchObject({
+						status: "open",
+						assignedMemberId: null,
+						speechId: null,
+					});
+				});
+
+				it("refuses when the speech sits on ANOTHER club's lineup, and leaves that lineup alone", async () => {
+					const other = await seedClub();
+					try {
+						const [member] = await testDb
+							.select({ personId: members.personId })
+							.from(members)
+							.where(eq(members.id, club.memberId));
+						if (!member) throw new Error("seeded member missing");
+						// The same Person, on the other club's roster too.
+						await testDb.insert(members).values({
+							clubId: other.clubId,
+							personId: member.personId,
+							name: "Member User",
+							clubRole: "member",
+							status: "active",
+						});
+						await seedSource(other.clubId, other.roleDefinitionId, "scheduled");
+						await expect(attach()).rejects.toThrow(
+							exact(SPEECH_SCHEDULED_ELSEWHERE_MESSAGE),
+						);
+						expect(await sourceRow()).toMatchObject({ speechId });
+						expect(await slotRow()).toMatchObject({
+							status: "open",
+							speechId: null,
+						});
+					} finally {
+						await cleanup(other.clubId, [
+							other.adminUserId,
+							other.memberUserId,
+						]);
+					}
+				});
 			});
 		});
 
@@ -915,6 +1114,31 @@ describe.skipIf(!hasTestDb)(
 				await expect(release(crypto.randomUUID())).rejects.toThrow(
 					exact("Meeting not found."),
 				);
+			});
+
+			// The statement refuses on its own too: with the early read skipped (what
+			// a meeting frozen AFTER that read looks like), the UPDATE's class
+			// predicate releases nothing and the re-read says why. Without either, the
+			// release would land on a frozen meeting, or would answer `not_coming`.
+			it.each(
+				FROZEN,
+			)("the release statement refuses a %s meeting on its own (early read skipped)", async (status) => {
+				await setStatus(club.meetingId, status);
+				seam.skipPlanWrite = true;
+				seam.skipAccepts = 1;
+				await expect(release()).rejects.toThrow(exact(SENTENCE[status]));
+				expect(seam.skipAccepts).toBe(0);
+				expect(await heldSlot()).toMatchObject({
+					status: "claimed",
+					assignedMemberId: club.memberId,
+				});
+				expect(await planRows()).toEqual([]);
+			});
+
+			it("a member holding nothing releases nothing and is still marked not_coming", async () => {
+				await testDb.delete(roleSlots).where(eq(roleSlots.id, heldSlotId));
+				expect(await release()).toEqual({ released: 0 });
+				expect(await planRows()).toEqual([{ status: "not_coming" }]);
 			});
 		});
 	},

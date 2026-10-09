@@ -7,6 +7,7 @@ import { logActivity } from "./activity";
 import { resolveActor } from "./attendance-actor-logic";
 import { lockMemberAttendance, setPlanStatus } from "./attendance-plan-logic";
 import { assertClubNotArchived } from "./guards";
+import { meetingAcceptsWrite } from "./meeting-write-gate";
 
 type Database = typeof db;
 
@@ -147,9 +148,23 @@ export async function releaseSlotsAndMarkUnavailable(
 				and(
 					eq(roleSlots.meetingId, args.meetingId),
 					eq(roleSlots.assignedMemberId, args.memberId),
+					// The class rides in the statement too (#1135), so a meeting frozen
+					// AFTER the read above releases nothing, as `claimSlotCore`'s does.
+					meetingAcceptsWrite(tx, "plan", roleSlots.meetingId),
 				),
 			)
 			.returning({ id: roleSlots.id });
+		if (released.length === 0) {
+			// Nothing released is ordinary (the member held nothing), and also what a
+			// freeze after the read leaves: tell them apart, so a locked or cancelled
+			// meeting is refused here rather than given a `not_coming` answer.
+			const [now] = await tx
+				.select({ status: meetings.status })
+				.from(meetings)
+				.where(eq(meetings.id, args.meetingId))
+				.limit(1);
+			if (now) assertMeetingAccepts(now.status, "plan");
+		}
 
 		// Inside the caller's transaction, which is why the seam takes a `DbOrTx`:
 		// the release and the "not coming" answer commit together or not at all.

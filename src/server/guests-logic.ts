@@ -20,6 +20,7 @@ import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import type { UpdateGuestProfileInput } from "./guest-pipeline-schemas";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
+import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 
 // Either the pooled client or a caller's transaction, so this can run inside a
 // batch that is already holding row locks.
@@ -126,11 +127,10 @@ export async function applyAssignGuestToSlot(
 	// a lock whose load-bearing role nothing recorded, rather than by the
 	// assertion its siblings make.
 	//
-	// By write class (#1135), and it ACCEPTS `cancelled` on purpose: a cancelled
-	// meeting is refused in the statement below, after the guest checks, so a
-	// request that fails one of them still hears that refusal (#1057). The
-	// statement refuses both statuses.
-	assertMeetingAccepts(slot.meetingStatus, "plan", { accept: ["cancelled"] });
+	// By write class (#1135), accepting `cancelled` (`PLAN_ACCEPTING_CANCELLED`):
+	// a cancelled meeting is refused in the statement below, after the guest
+	// checks (#1057). The statement refuses both statuses.
+	assertMeetingAccepts(slot.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED);
 
 	// Club default country code for E.164 normalization on write (#295).
 	const cc = await loadClubDefaultCountryCode(slot.clubId, conn);

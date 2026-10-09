@@ -375,7 +375,7 @@ describe.skipIf(!hasTestDb)("cancel and restore a meeting (#1057)", () => {
 			// MEASURED: a self-claim is refused twice over, because
 			// `markComingOnSelfClaim` writes a plan row in the same transaction
 			// and the plan seam refuses with the same sentence — so dropping the
-			// claim's `meetingNotCancelled` predicate left the case above green.
+			// claim's `meetingAcceptsWrite` predicate left the case above green.
 			// An officer claiming for someone else never reaches the plan seam
 			// (`markComingOnSelfClaim` returns early when actor ≠ member), so this
 			// is the case the UPDATE's own WHERE has to hold alone.
@@ -1016,7 +1016,7 @@ describe.skipIf(!hasTestDb)("cancel and restore a meeting (#1057)", () => {
 			}
 		});
 
-		describe("meetingNotCancelled reads the slot's OWN meeting", () => {
+		describe("the claim statement's meeting predicate reads the slot's OWN meeting", () => {
 			let siblingSlotId: string;
 
 			beforeEach(async () => {
@@ -1228,23 +1228,5 @@ describe.skipIf(!hasTestDb)("cancel and restore a meeting (#1057)", () => {
 				).toEqual([club.meetingId]);
 			});
 		});
-	});
-});
-
-// The rendered SQL `meetingNotCancelled` produces, which `slots-logic.ts`'s
-// comment cites. A hand-written correlated subquery can come out unqualified
-// and resolve both sides against its OWN table, matching every row
-// (`drizzle-sql-subquery-drops-qualifiers`). No database: `toSQL()` renders.
-describe("meetingNotCancelled renders a qualified correlation", () => {
-	it("names role_slots on one side and meetings on the other", async () => {
-		const { meetingNotCancelled } = await import("./slots-logic");
-		const { sql: rendered } = testDb
-			.update(roleSlots)
-			.set({ status: "claimed" })
-			.where(and(eq(roleSlots.id, "x"), meetingNotCancelled(testDb)))
-			.toSQL();
-		expect(rendered).toContain(
-			'exists (select 1 from "meetings" where ("meetings"."id" = "role_slots"."meeting_id" and "meetings"."status" <> $',
-		);
 	});
 });
