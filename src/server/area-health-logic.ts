@@ -439,20 +439,25 @@ export async function loadAreaHealth(
 
 	const identities: (ClubIdentity & { clubId: string | null })[] = placed.map(
 		(row) => {
-			// A linked row reads its name and number live, so a renamed club shows
-			// its new name. A name-only row, and one whose club was permanently
-			// deleted, reads the copy in the area.
-			const linked = row.clubId !== null && row.clubName !== null;
-			const status: ClubHealthStatus = !linked
-				? "not_on_gavelup"
-				: isClubArchived({ archivedAt: row.archivedAt })
-					? "archived"
-					: "on_gavelup";
+			// A live linked row reads its name and number live, so a renamed club
+			// shows its new name. Every other row reads the AREA's own copy
+			// (`area_clubs.name` / `.club_number`): a name-only row, one whose club
+			// was permanently deleted, and an ARCHIVED club. The area's list is the
+			// district's record, and a takedown (ADR-0024) covers GavelUp's copy of
+			// the club, not that record; so an archived club appears only as the name
+			// and number the area stored, and as "not on GavelUp", the same as a club
+			// that never joined. The payload must not say it was archived, or the
+			// takedown itself would be disclosed to every Area Director.
+			const live =
+				row.clubId !== null &&
+				row.clubName !== null &&
+				!isClubArchived({ archivedAt: row.archivedAt });
+			const status: ClubHealthStatus = live ? "on_gavelup" : "not_on_gavelup";
 			return {
 				areaClubId: row.areaClubId,
-				clubId: linked ? row.clubId : null,
-				name: linked ? (row.clubName as string) : row.areaName,
-				clubNumber: linked ? row.clubNumber : row.areaClubNumber,
+				clubId: live ? row.clubId : null,
+				name: live ? (row.clubName as string) : row.areaName,
+				clubNumber: live ? row.clubNumber : row.areaClubNumber,
 				status,
 			};
 		},

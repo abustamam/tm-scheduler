@@ -162,6 +162,9 @@ const COVERED: Record<string, { who: Who; url: (f: Fixture) => string }> = {
 	"/schedule": { who: "admin", url: () => "/schedule" },
 	"/meetings/": { who: "admin", url: () => "/meetings" },
 	"/members/$id": { who: "admin", url: (f) => `/members/${f.adminMemberId}` },
+	// The fixture's admin holds a current Area Director term on `f.areaId`
+	// (#1116), so this is the Area Director's page with its rows (#1119).
+	"/area/$areaId": { who: "admin", url: (f) => `/area/${f.areaId}` },
 	"/superadmin/": { who: "admin", url: () => "/superadmin" },
 	"/superadmin/$clubId": {
 		who: "admin",
@@ -749,6 +752,19 @@ describe("route hydration gate (#1000)", () => {
 			expect(r?.text).not.toContain(FEEDBACK_CLOSED_MESSAGE);
 			// The one served role's holder, on a card.
 			expect(r?.text).toContain("Eve Evaluator");
+		});
+
+		it("swept /area/$areaId as the Area Director's view, not the not-found page", () => {
+			const r = results.get("/area/$areaId");
+			if (ONLY.length && !r) return;
+			// A refusal renders the standard not-found, which also hydrates clean, so
+			// a clean result alone would not say the director was let in (#1119).
+			expect(r?.text).not.toContain("Page not found");
+			expect(r?.text).toContain("Area H1");
+			// The two rows the fixture put in the area: the club and a name-only one.
+			expect(r?.text).toContain(`Route Hydration ${fixture.run}`);
+			expect(r?.text).toContain("Name-only Club");
+			expect(r?.text).toContain("Not on GavelUp");
 		});
 
 		it("hydrates every route without a mismatch", () => {

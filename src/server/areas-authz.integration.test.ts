@@ -71,6 +71,8 @@ const CALLS: Record<string, () => Promise<unknown>> = {
 	listConsoleAreas: () => (areaFns.listConsoleAreas as Fn)({ data: undefined }),
 	getConsoleArea: () =>
 		(areaFns.getConsoleArea as Fn)({ data: { areaId: randomUUID() } }),
+	previewConsoleArea: () =>
+		(areaFns.previewConsoleArea as Fn)({ data: { areaId: randomUUID() } }),
 	createDistrict: () =>
 		(areaFns.createDistrict as Fn)({ data: { number: DISTRICT_NUMBER } }),
 	createDivision: () =>

@@ -1,5 +1,5 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { ChevronRight, LogOut, Menu } from "lucide-react";
+import { ChevronRight, LogOut, Menu, Network } from "lucide-react";
 import {
 	type ComponentType,
 	type ReactNode,
@@ -45,6 +45,12 @@ import {
 } from "#/lib/officers";
 import { shellStickyVars } from "#/lib/shell-sticky-offset";
 
+/** An area in the nav: `label` is the area as people say it ("C3"). */
+export interface AreaNavEntry {
+	id: string;
+	label: string;
+}
+
 export interface AppShellProps {
 	clubs: readonly {
 		clubId: string;
@@ -58,6 +64,12 @@ export interface AppShellProps {
 	isOfficer: boolean;
 	hasOffice: boolean;
 	isSuperadmin: boolean;
+	/**
+	 * The areas the user is the current Area Director of (#1119), one nav entry
+	 * each, in the order given: `getAuthContext` sorts them by label. Absent or
+	 * empty for everyone else.
+	 */
+	areas?: readonly AreaNavEntry[];
 	roleLabel: string;
 	displayName: string;
 	initials: string;
@@ -99,6 +111,8 @@ export interface ShellContext {
 		expiresAt: string | Date;
 		mode: "read_only" | "read_write";
 	} | null;
+	/** The `getAuthContext()` result's current Area Director terms (#1119). */
+	areas?: readonly AreaNavEntry[];
 }
 
 /** The `AppShell` display props — every field except the render/callback props. */
@@ -151,6 +165,7 @@ export function shellPropsFromContext(ctx: ShellContext): AppShellDisplayProps {
 		isOfficer,
 		hasOffice,
 		isSuperadmin,
+		areas: ctx.areas ?? [],
 		roleLabel,
 		displayName,
 		initials,
@@ -181,6 +196,8 @@ export function crumbFor(pathname: string): string {
 		return crumbOf(navDestination("superadmin"));
 	if (pathname.startsWith("/admin"))
 		return `${navGroup("setup").label} · Admin`;
+	// `/area/:areaId` (#1119) is an Area Director's page, in no registered group.
+	if (pathname.startsWith("/area/")) return "Area Director";
 	return "Workspace";
 }
 
@@ -192,6 +209,7 @@ export function AppShell({
 	isOfficer,
 	hasOffice,
 	isSuperadmin,
+	areas = [],
 	roleLabel,
 	displayName,
 	initials,
@@ -216,6 +234,7 @@ export function AppShell({
 			clubName={clubName}
 			clubNumber={clubNumber}
 			grants={{ hasOffice, isOfficer, isSuperadmin }}
+			areas={areas}
 			pathname={pathname}
 			displayName={displayName}
 			roleLabel={roleLabel}
@@ -361,6 +380,7 @@ function SidebarInner({
 	clubName,
 	clubNumber,
 	grants,
+	areas,
 	pathname,
 	displayName,
 	roleLabel,
@@ -373,6 +393,7 @@ function SidebarInner({
 	clubName: string;
 	clubNumber: string | null;
 	grants: NavGrants;
+	areas: readonly AreaNavEntry[];
 	pathname: string;
 	displayName: string;
 	roleLabel: string;
@@ -413,6 +434,7 @@ function SidebarInner({
 			<div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto overscroll-contain">
 				<SidebarNav
 					grants={grants}
+					areas={areas}
 					pathname={pathname}
 					onNavigate={onNavigate}
 				/>
@@ -453,10 +475,13 @@ function SidebarInner({
  */
 export function SidebarNav({
 	grants,
+	areas = [],
 	pathname,
 	onNavigate,
 }: {
 	grants: NavGrants;
+	/** The user's current Area Director terms (#1119): one entry each. */
+	areas?: readonly AreaNavEntry[];
 	pathname: string;
 	onNavigate?: () => void;
 }) {
@@ -484,6 +509,55 @@ export function SidebarNav({
 							/>
 						))}
 					</NavGroup>
+				);
+			})}
+			<AreaNavGroup areas={areas} pathname={pathname} onNavigate={onNavigate} />
+		</>
+	);
+}
+
+/**
+ * One "Area C3" entry per current Area Director term (#1119), in the order it
+ * is given (`loadCurrentAreasForUser` sorts by label and is the one owner of
+ * that order), and nothing at all for anyone else: no area picker, no index
+ * page. Not in `NAV_DESTINATIONS`, which is static: these entries exist per
+ * person, and the area's id is the route's param.
+ */
+function AreaNavGroup({
+	areas,
+	pathname,
+	onNavigate,
+}: {
+	areas: readonly AreaNavEntry[];
+	pathname: string;
+	onNavigate?: () => void;
+}) {
+	if (areas.length === 0) return null;
+	return (
+		<>
+			<div className={`px-2.5 pt-3.5 pb-0.5 ${GROUP_LABEL_CLASS}`}>
+				Area Director
+			</div>
+			{areas.map((area) => {
+				const active = pathname === `/area/${area.id}`;
+				return (
+					<Link
+						key={area.id}
+						to="/area/$areaId"
+						params={{ areaId: area.id }}
+						// `preload={false}`, against the router's `defaultPreload:
+						// "intent"` (`router.tsx`): hovering the entry would run the
+						// area's whole health read (about a dozen queries) for a page
+						// nobody has opened. The same fix `meeting-attendance-panel.tsx`
+						// applies to a heavy loader.
+						preload={false}
+						onClick={() => onNavigate?.()}
+						aria-current={active ? "page" : undefined}
+						className={navItemClass(active)}
+					>
+						<Network className="size-4" />
+						Area {area.label}
+					</Link>
 				);
 			})}
 		</>
@@ -587,6 +661,16 @@ function NavGroup({
 	);
 }
 
+/** The sidebar link's classes, current or not. One owner for `NavItem` and the
+ *  Area Director entries, so the two cannot drift apart. */
+function navItemClass(active: boolean): string {
+	return `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm tracking-[0.01em] transition-colors ${
+		active
+			? "bg-[var(--sand)] font-bold text-[var(--sea-ink)] [&_svg]:opacity-100"
+			: "font-medium text-[var(--sea-ink-soft)] hover:bg-[var(--foam)] [&_svg]:opacity-70"
+	}`;
+}
+
 function NavItem({
 	destination,
 	active,
@@ -619,11 +703,7 @@ function NavItem({
 			// keeps Superadmin from matching under Duplicate people.
 			activeOptions={{ exact: "exact" in destination && destination.exact }}
 			aria-current={active ? "page" : undefined}
-			className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm tracking-[0.01em] transition-colors ${
-				active
-					? "bg-[var(--sand)] font-bold text-[var(--sea-ink)] [&_svg]:opacity-100"
-					: "font-medium text-[var(--sea-ink-soft)] hover:bg-[var(--foam)] [&_svg]:opacity-70"
-			}`}
+			className={navItemClass(active)}
 		>
 			<Icon className="size-4" />
 			{destination.label}

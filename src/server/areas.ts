@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { z } from "zod";
+import { loadAreaHealth } from "./area-health-logic";
 import {
 	addAreaClub as addAreaClubLogic,
 	addAreaClubSchema,
@@ -67,6 +68,20 @@ export const getConsoleArea = createServerFn({ method: "GET" })
 		const currentUser = await requireUser();
 		await requireSuperadmin(currentUser.id);
 		return getConsoleAreaLogic(data.areaId);
+	});
+
+/**
+ * An area's health as its Area Director sees it (#1119), for the console's
+ * "Preview as Area Director". The same loader `getAreaHealth` runs, behind the
+ * superadmin gate instead of the director's: a superadmin with no term is
+ * refused by `getAreaHealth` (ADR-0016 section 4) and reads the numbers here.
+ */
+export const previewConsoleArea = createServerFn({ method: "GET" })
+	.validator((input: unknown) => parse(areaIdSchema, input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireSuperadmin(currentUser.id);
+		return loadAreaHealth(data.areaId);
 	});
 
 export const createDistrict = createServerFn({ method: "POST" })

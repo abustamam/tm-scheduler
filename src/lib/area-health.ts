@@ -43,11 +43,13 @@ export type Tracked<T> = { tracked: true; value: T } | { tracked: false };
 const NOT_TRACKED = { tracked: false } as const;
 
 /**
- * `on_gavelup`: a linked, live club. `not_on_gavelup`: a name-only row, or a row
- * whose club was permanently deleted. `archived`: a linked club that has been
- * archived. The last two carry no data.
+ * `on_gavelup`: a linked, live club. `not_on_gavelup`: a name-only row, a row
+ * whose club was permanently deleted, or a row whose club is ARCHIVED. It
+ * carries no data, and nothing in it says which of the three it was: an
+ * archived club reads as the area's own stored name and number, the same as a
+ * club that never joined, so the takedown is not disclosed (ADR-0032).
  */
-export type ClubHealthStatus = "on_gavelup" | "not_on_gavelup" | "archived";
+export type ClubHealthStatus = "on_gavelup" | "not_on_gavelup";
 
 /** What the area view knows about a club before any number is read. */
 export interface ClubIdentity {
@@ -301,8 +303,9 @@ function untracked(club: ClubIdentity): ClubHealth {
 
 /**
  * One club's health. A club that is not `on_gavelup`, or that has no `data`,
- * has every field untracked, `officers` included: an archived club's officers
- * are not the area's business, and a name-only club has none to count.
+ * has every field untracked, `officers` included: a club that is not on
+ * GavelUp (never was, was deleted, or is archived) has none of its officers
+ * to count here.
  */
 export function deriveClubHealth(
 	club: ClubIdentity,
@@ -400,12 +403,11 @@ export function deriveClubHealth(
 const STATUS_ORDER: Record<ClubHealthStatus, number> = {
 	on_gavelup: 0,
 	not_on_gavelup: 1,
-	archived: 2,
 };
 
 /**
- * Clubs on GavelUp first, then clubs that are not, then archived ones; by name
- * within each, numbers compared as numbers ("Club 2" before "Club 10"). The row
+ * Clubs on GavelUp first, then clubs that are not; by name within each,
+ * numbers compared as numbers ("Club 2" before "Club 10"). The row
  * id is the last key so two clubs with one name always sort the same way.
  */
 export function sortClubHealth(clubs: readonly ClubHealth[]): ClubHealth[] {

@@ -4,6 +4,7 @@ import { db } from "#/db";
 import { clubs, members, officerTerms, people, user } from "#/db/schema";
 import { auth } from "#/lib/auth";
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
+import { NO_PERMISSION_MESSAGE } from "#/lib/permission-message";
 import { RULING_NEEDS_SESSION_MESSAGE } from "#/lib/write-proof";
 import { markImpersonatedWrite } from "./impersonation-actor";
 import {
@@ -52,7 +53,7 @@ type DbOrTx =
  * so drift fails loudly instead of widening a fallback.
  */
 export const NOT_A_MEMBER_MESSAGE = "You're not a member of this club.";
-export const NO_PERMISSION_MESSAGE = "You don't have permission to do that.";
+export { NO_PERMISSION_MESSAGE };
 
 /** Raw session user (or null) for the current request. Server-only.
  *  Returns null when called outside a request context (e.g. integration tests
