@@ -694,17 +694,23 @@ function captureInTransaction(
 			// archive gate above, so takedown still outranks the meeting's own state.
 			//
 			// `resolveCurrentMeeting` already skips such a meeting, so this is
-			// reachable only when the meeting is cancelled between that read, which
-			// runs outside the transaction, and this one, which runs behind the club
-			// write lock a busy club can queue on. It is a read, not a row lock: the
-			// window left is the statements between it and the insert, the one #1057
-			// accepted for planned attendance. A meeting that is gone is refused too,
-			// rather than left to the foreign key's driver error.
+			// reachable only when the meeting is cancelled AFTER that read, which runs
+			// outside the transaction, and before the insert below, which runs behind
+			// the club write lock a busy club can queue on. That window is real and it
+			// is the whole of what this guards, so the read takes the meeting row
+			// `FOR SHARE`. Every status writer takes the row `FOR NO KEY UPDATE`
+			// (`lockMeetingForSlotEdit`), and the two conflict: a cancel still in
+			// flight is waited for and then seen, and once the SHARE is held a cancel
+			// waits for this transaction. The order is club write lock, then the club
+			// row (`lockOpenClub`), then this meeting row, the same one the attendance
+			// insert's foreign key already implies. A meeting that is gone is refused
+			// too, rather than left to the foreign key's driver error.
 			const [target] = await tx
 				.select({ status: meetings.status })
 				.from(meetings)
 				.where(eq(meetings.id, meetingId))
-				.limit(1);
+				.limit(1)
+				.for("share");
 			if (!target) throw new Error("Meeting not found.");
 			assertMeetingAccepts(target.status, "record");
 			const inserted = await tx

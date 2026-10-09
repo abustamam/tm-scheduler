@@ -157,7 +157,10 @@ export const recordGuestBookTool: McpToolDefinition = {
 			"line would do, plus a confirmUrl. Give the user that link — they open " +
 			"it signed in, check the names and contact details against the page, fix " +
 			"anything misread, and apply it there. Do not try to resolve an " +
-			"`ambiguous` line yourself; the confirm page asks about it.",
+			"`ambiguous` line yourself; the confirm page asks about it. A date " +
+			"that names a cancelled meeting is refused (LOCKED) and stores " +
+			"nothing: restore the meeting first, or give the date of the one " +
+			"the page belongs to.",
 		inputSchema,
 	},
 	handler: async (input, ctx) => {

@@ -6,7 +6,9 @@ import { readSource } from "#/test/guard-source";
 /**
  * The half of #663 a behavioural test cannot reach: that `setPlannedAttendance`
  * actually ROUTES a `not_coming` through `declinePlannedAttendance`, and routes
- * nothing else through it.
+ * nothing else through it. It also pins that the meeting lock runs before that
+ * branch: `assertMeetingNotLocked`, or since #1137
+ * `assertMeetingAccepts(…, "plan", { accept: ["cancelled"] })`.
  *
  * `attendance-decline.integration.test.ts` executes the seam — every arm, the
  * released slots, the preserved speech, the archive gate. None of that proves
@@ -36,13 +38,13 @@ const RAW = readFileSync(FILE, "utf8");
 
 /**
  * The meeting-lock call `setPlannedAttendance` must make before the decline
- * branch: the per-status helper, or the write policy asked for the `plan` class
- * (#1137), which refuses a completed meeting. `"record"` is deliberately NOT
- * recognised: that class ACCEPTS completed, so a bare `assertMeetingAccepts(`
- * prefix would let a locked meeting lose its programme.
+ * branch: the per-status helper, or EXACTLY the write policy's `plan` class with
+ * `accept: ["cancelled"]` (#1137). Exactly, because the options are the whole
+ * meaning: `accept: ["cancelled", "completed"]` would let a locked meeting lose
+ * its programme, and `"record"` accepts completed too.
  */
 const LOCK_CHECK =
-	/assertMeetingNotLocked\(meeting\.status\)|assertMeetingAccepts\(\s*meeting\.status,\s*"plan"/;
+	/assertMeetingNotLocked\(meeting\.status\)|assertMeetingAccepts\(\s*meeting\.status,\s*"plan",\s*\{\s*accept:\s*\["cancelled"\],?\s*\}\s*,?\s*\)/;
 
 /** One `export const <name> = createServerFn…` declaration, so a per-handler
  *  assertion cannot be satisfied by its neighbour's correct code. */

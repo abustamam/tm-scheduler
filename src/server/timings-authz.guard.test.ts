@@ -119,13 +119,18 @@ describe("capability resolution goes through the shared resolvers", () => {
 });
 
 /**
- * The meeting-window call the writer makes: the write policy asked for the
- * `record` class (#1137). `record` refuses a cancelled meeting and ACCEPTS a
- * completed one, which is what a timing needs. Matched as a pattern so the
- * options object after the class may wrap, and so that a different class does
- * not satisfy it.
+ * The meeting-window call the writer makes, EXACTLY: the write policy's
+ * `record` class, whose only option is the timings sentence for a cancelled
+ * meeting (#1137). `record` refuses a cancelled meeting and ACCEPTS a completed
+ * one, which is what a timing needs.
+ *
+ * Exactly, so any `accept` fails it: `accept: ["cancelled"]` would let a timing
+ * land on a cancelled meeting, where there was nothing to time. A different
+ * class does not match either. `\s*` between the pieces because the formatter
+ * wraps the call.
  */
-const WINDOW_CALL = /assertMeetingAccepts\(\s*meeting\.status,\s*"record"/;
+const WINDOW_CALL =
+	/assertMeetingAccepts\(\s*meeting\.status,\s*"record",\s*\{\s*messages:\s*\{\s*cancelled:\s*MEETING_CANCELLED_MESSAGE,?\s*\},?\s*\}\s*,?\s*\)/;
 
 describe("the writer runs every gate, in this order", () => {
 	function writerBody(): string {

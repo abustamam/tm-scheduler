@@ -9,11 +9,12 @@ import { readSource } from "#/test/guard-source";
  * `setPlannedAttendance` / `clearPlannedAttendance` are `createServerFn`
  * handlers, and a handler body cannot be invoked outside a request context in
  * vitest — `attendance-plan-logic.integration.test.ts` exercises the db seam
- * directly and therefore bypasses `requireClubRole`, `assertMeetingNotLocked`,
- * `assertClubNotArchived` and the self-only rule entirely. Nothing else in the
- * suite can see this wiring, so it is asserted against the real source, the
- * same way `outreach-authz.guard.test.ts` guards the writers this pair
- * replaces.
+ * directly and therefore bypasses `requireClubRole`, the meeting lock
+ * (`assertMeetingNotLocked`, or since #1137 `assertMeetingAccepts(…, "plan",
+ * { accept: ["cancelled"] })`), `assertClubNotArchived` and the self-only rule
+ * entirely. Nothing else in the suite can see this wiring, so it is asserted
+ * against the real source, the same way `outreach-authz.guard.test.ts` guards
+ * the writers this pair replaces.
  *
  * TWO readers, one per assertion class (`src/test/guard-source.ts`):
  *
@@ -63,14 +64,18 @@ function handlerBody(source: string, name: string): string {
 const HANDLERS = ["setPlannedAttendance", "clearPlannedAttendance"];
 
 /**
- * The meeting-lock call a handler must make: the per-status helper, or the write
- * policy asked for the `plan` class (#1137), which refuses a completed meeting.
- * `"record"` is deliberately NOT recognised: that class ACCEPTS completed, so a
- * handler that asked it would pass a bare `assertMeetingAccepts(` prefix check
- * and let a locked meeting through.
+ * The meeting-lock call a handler must make: the per-status helper, or EXACTLY
+ * the write policy's `plan` class with `accept: ["cancelled"]` (#1137).
+ *
+ * Exactly, because the options are the whole meaning. The class alone would
+ * refuse cancelled too and move that refusal ahead of the subject and actor
+ * checks; `accept: ["cancelled", "completed"]` would accept a completed meeting
+ * and let a locked one lose its plan. `"record"` is not recognised either: that
+ * class accepts completed. So the pattern allows the one option list and
+ * nothing else after the class.
  */
 const LOCK_CHECK =
-	/assertMeetingNotLocked\(meeting\.status\)|assertMeetingAccepts\(\s*meeting\.status,\s*"plan"/;
+	/assertMeetingNotLocked\(meeting\.status\)|assertMeetingAccepts\(\s*meeting\.status,\s*"plan",\s*\{\s*accept:\s*\["cancelled"\],?\s*\}\s*,?\s*\)/;
 
 describe("attendance-plan authz (D6)", () => {
 	it("gates the officer path on requireClubRole(admin)", () => {

@@ -123,11 +123,8 @@ export const getMinutes = createServerFn({ method: "GET" })
  * is told the reason that will not go away by waiting. A read, not a lock: the
  * window a cancel can commit inside is the one #1057 accepted for planned
  * attendance.
- *
- * The name keeps its history, because the class refuses cancelled and nothing
- * else today and #1085's tests and comments know the wrapper by it.
  */
-async function assertMinutesMeetingNotCancelled(
+async function assertMinutesMeetingRecordable(
 	meetingId: string,
 ): Promise<void> {
 	assertMeetingAccepts(await getMeetingStatus(meetingId), "record");
@@ -161,7 +158,7 @@ export const setAttendance = createServerFn({ method: "POST" })
 	.validator((input: unknown) => setPresenceSchema.parse(input))
 	.handler(async ({ data }) => {
 		await gateAdmin(data.meetingId);
-		await assertMinutesMeetingNotCancelled(data.meetingId);
+		await assertMinutesMeetingRecordable(data.meetingId);
 		await assertAttendanceRecordable(data.meetingId);
 		await setMemberPresence(data);
 		return { ok: true as const };
@@ -191,7 +188,7 @@ export const addMinutesGuest = createServerFn({ method: "POST" })
 	.validator((input: unknown) => addGuestSchema.parse(input))
 	.handler(async ({ data }) => {
 		await gateAdmin(data.meetingId);
-		await assertMinutesMeetingNotCancelled(data.meetingId);
+		await assertMinutesMeetingRecordable(data.meetingId);
 		await assertAttendanceRecordable(data.meetingId);
 		return addGuestPresent(data);
 	});
@@ -204,7 +201,7 @@ export const removeMinutesGuest = createServerFn({ method: "POST" })
 	.validator((input: unknown) => removeGuestSchema.parse(input))
 	.handler(async ({ data }) => {
 		await gateAdmin(data.meetingId);
-		await assertMinutesMeetingNotCancelled(data.meetingId);
+		await assertMinutesMeetingRecordable(data.meetingId);
 		await assertAttendanceRecordable(data.meetingId);
 		await removeGuestPresent(data);
 		return { ok: true as const };
@@ -243,7 +240,7 @@ export const addTableTopics = createServerFn({ method: "POST" })
 	.validator((input: unknown) => addSpeakerSchema.parse(input))
 	.handler(async ({ data }) => {
 		await requireVoteCounterCapability(data);
-		await assertMinutesMeetingNotCancelled(data.meetingId);
+		await assertMinutesMeetingRecordable(data.meetingId);
 		return addTableTopicsSpeaker(data);
 	});
 
@@ -259,7 +256,7 @@ export const removeTableTopics = createServerFn({ method: "POST" })
 	.validator((input: unknown) => removeSpeakerSchema.parse(input))
 	.handler(async ({ data }) => {
 		await requireVoteCounterCapability(data);
-		await assertMinutesMeetingNotCancelled(data.meetingId);
+		await assertMinutesMeetingRecordable(data.meetingId);
 		await removeTableTopicsSpeaker(data);
 		return { ok: true as const };
 	});
@@ -285,7 +282,7 @@ export const moveTableTopics = createServerFn({ method: "POST" })
 	.validator((input: unknown) => moveSpeakerSchema.parse(input))
 	.handler(async ({ data }) => {
 		await requireVoteCounterCapability(data);
-		await assertMinutesMeetingNotCancelled(data.meetingId);
+		await assertMinutesMeetingRecordable(data.meetingId);
 		await moveTableTopicsSpeaker(data);
 		return { ok: true as const };
 	});
@@ -325,7 +322,7 @@ export const setMinutesAward = createServerFn({ method: "POST" })
 	.validator((input: unknown) => setAwardSchema.parse(input))
 	.handler(async ({ data }) => {
 		await requireVoteCounterCapability(data);
-		await assertMinutesMeetingNotCancelled(data.meetingId);
+		await assertMinutesMeetingRecordable(data.meetingId);
 		await setAward(data);
 		return { ok: true as const };
 	});
@@ -343,7 +340,7 @@ export const clearMinutesAward = createServerFn({ method: "POST" })
 	.validator((input: unknown) => clearAwardSchema.parse(input))
 	.handler(async ({ data }) => {
 		await requireVoteCounterCapability(data);
-		await assertMinutesMeetingNotCancelled(data.meetingId);
+		await assertMinutesMeetingRecordable(data.meetingId);
 		await clearAward(data);
 		return { ok: true as const };
 	});
