@@ -40,6 +40,7 @@ import {
 	parseClubTemplateFields,
 	retiredTemplateKey,
 } from "#/lib/club-template-key";
+import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import {
 	MAX_TEMPLATE_BEATS,
 	MAX_TEMPLATE_ROLES,
@@ -57,7 +58,6 @@ import {
 	AGENDA_DEADLOCK_MESSAGE,
 	materialiseAgendaForMeeting,
 } from "./meeting-agenda-edit-logic";
-import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import {
 	linkEvaluatorsToSpeakers,
 	type MeetingSlotDefs,
@@ -1390,14 +1390,16 @@ export async function applyTemplateConversion(input: {
 		// include slot edits committed while we waited.
 		const meeting = await lockMeetingForSlotEdit(tx, meetingId);
 		if (meeting.clubId !== clubId) throw new Error("Meeting not found.");
-		// The canonical lock (#150 / ADR-0012) covers `completed`. A CANCELLED
-		// meeting is not locked by it, but reshaping one is equally pointless, so
-		// it is refused here rather than by widening the shared helper — every
-		// other mutator's meaning of "locked" stays exactly as it was.
-		assertMeetingNotLocked(meeting.status);
-		if (meeting.status === "cancelled") {
-			throw new Error("A cancelled meeting cannot change its template.");
-		}
+		// Reshaping a meeting is a `plan` write: refused once it is completed (the
+		// lock, #150 / ADR-0012) or cancelled, and under the meeting lock taken
+		// above so neither can land between this check and the first write. A
+		// completed meeting says the shared lock sentence; a cancelled one keeps
+		// this operation's own.
+		assertMeetingAccepts(meeting.status, "plan", {
+			messages: {
+				cancelled: "A cancelled meeting cannot change its template.",
+			},
+		});
 
 		if (input.expectStandard) {
 			await assertStillApplicable(tx, {
@@ -1855,11 +1857,17 @@ async function saveInTransaction(
 		if (!meeting || meeting.clubId !== clubId) {
 			throw new Error("Meeting not found.");
 		}
-		if (meeting.status === "cancelled") {
-			throw new Error(
-				"A cancelled meeting's agenda cannot be saved as a template.",
-			);
-		}
+		// Exempt from the freeze on purpose: this writes CLUB-level template rows,
+		// and a completed meeting is a legitimate source to save from. It reads
+		// the meeting, so what it refuses is a source that never happened: the
+		// `record` class refuses cancelled and accepts completed, with this
+		// operation's own sentence.
+		assertMeetingAccepts(meeting.status, "record", {
+			messages: {
+				cancelled:
+					"A cancelled meeting's agenda cannot be saved as a template.",
+			},
+		});
 
 		// Then the club row, with the archive gate INSIDE that locked read
 		// (CODING_STANDARDS.md, "gate INSIDE" a lock the write already holds):

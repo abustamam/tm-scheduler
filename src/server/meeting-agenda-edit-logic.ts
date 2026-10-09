@@ -32,8 +32,9 @@ import {
 	refreshTableTopicsMarks,
 } from "#/lib/agenda-template-rows";
 import {
-	isMeetingLocked,
-	MEETING_LOCKED_MESSAGE,
+	assertMeetingAccepts,
+	type MeetingWriteOptions,
+	meetingRefusal,
 } from "#/lib/meeting-lifecycle";
 import {
 	MAX_BEAT_MINUTES,
@@ -264,14 +265,18 @@ export type AgendaDraft = {
 };
 
 /**
- * Whether a meeting's agenda may currently be edited: not locked (completed)
- * and not cancelled. Shared by `loadAgendaDraft` (what `editable` reports) and
+ * Whether a meeting's agenda may currently be edited: the meeting write policy
+ * accepts a `plan` write on it (#1136), which today means neither completed nor
+ * cancelled. Shared by `loadAgendaDraft` (what `editable` reports) and
  * `ensureAgendaDraft` (what a write actually allows) so the two cannot drift.
  * They did, briefly: `editable` was `!isMeetingLocked` alone, so a cancelled
  * meeting rendered a fully interactive editor whose every save threw.
+ *
+ * Throws on a status the policy has never heard of (fail closed), as the write
+ * side does, so the editor cannot offer an edit the write would then refuse.
  */
 export function agendaEditable(status: string): boolean {
-	return !isMeetingLocked(status) && status !== "cancelled";
+	return meetingRefusal(status, "plan") === null;
 }
 
 /**
@@ -396,6 +401,16 @@ export const AGENDA_CANCELLED_MESSAGE =
 	"A cancelled meeting's agenda cannot be edited.";
 
 /**
+ * The agenda's refusal copy for `assertMeetingAccepts(status, "plan", …)`: a
+ * completed meeting says the shared lock sentence, a cancelled one its own.
+ * Exported so the connector's `loadEditable` says the editor's sentences, one
+ * definition for both surfaces.
+ */
+export const AGENDA_PLAN_WRITE_OPTIONS: MeetingWriteOptions = {
+	messages: { cancelled: AGENDA_CANCELLED_MESSAGE },
+};
+
+/**
  * Build this meeting its own editable copy of the standard agenda, once.
  *
  * In a TRANSACTION with a re-read under `FOR UPDATE`: two officers opening the
@@ -421,11 +436,28 @@ async function materialiseForMeeting(
 	// or rolls back with the caller's own writes.
 	return await conn.transaction(async (tx) => {
 		const [locked] = await tx
-			.select({ templateId: meetings.templateId })
+			.select({ templateId: meetings.templateId, status: meetings.status })
 			.from(meetings)
 			.where(eq(meetings.id, meetingId))
 			.for("update")
 			.limit(1);
+		// A `plan` writer with an override, decided on #1136. This is a snapshot
+		// of the club's standard agenda, taken the first time anyone opens the
+		// meeting, and both of the statuses `plan` refuses must still get it:
+		// the editor's page load calls this on READ and has to open a cancelled or
+		// completed meeting read-only (`AgendaDraft.cancelled` / `.editable`), and
+		// a completed meeting is a legitimate save-as-template source
+		// (`saveInTransaction`). The MCP apply path refuses a frozen meeting
+		// before it gets here (`loadEditable`). So the override accepts both, and
+		// what is left of the check is the fail-closed half: a status added to
+		// `MEETING_WRITE_POLICY` later is in neither list, so it is refused here
+		// until someone decides it belongs. Under the row lock, so a status
+		// change cannot slip in between the check and the insert.
+		if (locked) {
+			assertMeetingAccepts(locked.status, "plan", {
+				accept: ["cancelled", "completed"],
+			});
+		}
 		if (locked?.templateId) return locked.templateId;
 
 		const { seeds, roles: declared } = await standardAgendaFrom(tx, clubId, {
@@ -978,15 +1010,13 @@ async function resolveAgendaDraft(
 			"Only a meeting with a meeting type can have its agenda edited.",
 		);
 	}
-	// Same predicate `loadAgendaDraft` reports as `editable` — see
+	// The same policy `loadAgendaDraft` reports as `editable` — see
 	// `agendaEditable`'s docblock for why these two must share one definition.
-	if (!agendaEditable(meeting.status)) {
-		throw new Error(
-			isMeetingLocked(meeting.status)
-				? MEETING_LOCKED_MESSAGE
-				: AGENDA_CANCELLED_MESSAGE,
-		);
-	}
+	// THE refusal for every agenda writer in this module: each of them calls
+	// `ensureAgendaDraft` (which delegates here) before its first write, with
+	// the meeting row held `FOR UPDATE` above, so a cancel or complete cannot
+	// land between this check and the write.
+	assertMeetingAccepts(meeting.status, "plan", AGENDA_PLAN_WRITE_OPTIONS);
 
 	const [own] = await conn
 		.select({ id: meetingTemplates.id })

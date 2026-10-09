@@ -42,8 +42,8 @@
  * ## Refusals
  *
  * A completed or cancelled meeting is refused (`LOCKED`), with the editor's
- * own rule and sentences (`agendaEditable`). A batch with an illegal operation
- * is refused as `VALIDATION` naming the operation's index, before anything is
+ * own rule and sentences (the `plan` write class). A batch with an illegal
+ * operation is refused as `VALIDATION` naming the operation's index, before anything is
  * written — except on an apply, where the preview already accepted the batch,
  * so an operation that no longer fits means the agenda moved: `PLAN_STALE`.
  * Authorization is the meeting's own club (`authorizeTokenForMeeting`), the
@@ -60,10 +60,7 @@ import {
 } from "#/lib/agenda-edit-ops";
 import { type AgendaRunSheet, agendaRunSheet } from "#/lib/agenda-run-sheet";
 import { planHash } from "#/lib/mcp-plan";
-import {
-	isMeetingLocked,
-	MEETING_LOCKED_MESSAGE,
-} from "#/lib/meeting-lifecycle";
+import { assertMeetingAccepts, meetingRefusal } from "#/lib/meeting-lifecycle";
 import {
 	MAX_BEAT_MINUTES,
 	MAX_TEMPLATE_BEATS,
@@ -71,13 +68,12 @@ import {
 	MAX_TEMPLATE_LABEL_CHARS,
 } from "#/lib/meeting-template-limits";
 import {
-	AGENDA_CANCELLED_MESSAGE,
 	AGENDA_CONCURRENT_EDIT_MESSAGE,
 	AGENDA_DEADLOCK_MESSAGE,
+	AGENDA_PLAN_WRITE_OPTIONS,
 	type AgendaDraftRow,
 	type AgendaSnapshot,
 	addAgendaRow,
-	agendaEditable,
 	ensureAgendaDraft,
 	materialiseAgendaForMeeting,
 	placeAgendaRow,
@@ -244,8 +240,13 @@ function totals(sheet: AgendaRunSheet): PlanTotals {
  * The meeting's agenda, refused unless it is editable — the ONE read the
  * preview and the apply share. `lock` takes the meeting row `FOR UPDATE`, so
  * pass it only on a transaction. The rule and both sentences are the editor's
- * (`agendaEditable`), so the two surfaces cannot disagree about which meetings
- * take an edit.
+ * (the `plan` write class, with `AGENDA_PLAN_WRITE_OPTIONS`), so the two
+ * surfaces cannot disagree about which meetings take an edit.
+ *
+ * On the apply this is also what refuses a frozen meeting before
+ * `materialiseAgendaForMeeting` stores a never-edited meeting's copy: that
+ * writer accepts a frozen meeting on purpose (the editor opens one read-only),
+ * so THIS check, under the row lock, is the refusal that holds on this path.
  */
 async function loadEditable(
 	conn: DbOrTx,
@@ -254,13 +255,18 @@ async function loadEditable(
 ): Promise<AgendaSnapshot> {
 	const snap = await readAgendaSnapshot(meetingId, conn, { forUpdate: lock });
 	if (!snap) throw new McpError("NOT_FOUND", "Meeting not found.");
-	if (!agendaEditable(snap.status)) {
-		throw new McpError(
-			"LOCKED",
-			isMeetingLocked(snap.status)
-				? MEETING_LOCKED_MESSAGE
-				: AGENDA_CANCELLED_MESSAGE,
-		);
+	// `meetingRefusal` first: a status the policy has never heard of throws a
+	// plain Error there, which the tool layer reports as INTERNAL, where the
+	// catch below would have called it a lock.
+	if (meetingRefusal(snap.status, "plan") !== null) {
+		try {
+			assertMeetingAccepts(snap.status, "plan", AGENDA_PLAN_WRITE_OPTIONS);
+		} catch (err) {
+			throw new McpError(
+				"LOCKED",
+				err instanceof Error ? err.message : String(err),
+			);
+		}
 	}
 	return snap;
 }
