@@ -81,3 +81,58 @@ flip a method, every caller needs a fallback in the SAME change, and a guard tes
 thing that can hold it — a `createServerFn` cannot be invoked from vitest and call sites
 `vi.mock` the module wholesale, so the transport is invisible to the whole suite
 (`club-logo-method.guard.test.ts`).
+
+## A migration that changes data carries a `## Prod check`
+
+Added 2026-10-08 (#1130); not part of the move above. Migrations apply to prod at container start
+(see Deployment target), and nothing afterwards asks what a data-changing one did there. #1109's
+migration `0112` rewrote stored `+1` phone rows and its PR body said "NOT checked on prod". The
+maintainer read prod a week after the deploy: `phone_extension_backup` existed, so `0112` had
+applied, and held 0 rows, so nothing had been rewritten. That was the good outcome, found by luck.
+The week 2026-09-30..10-07 shipped ten migrations (`0105` to `0114`); this is the rule that stops
+the answer depending on luck.
+
+**When it applies.** A file under `drizzle/` with a statement that writes rows: `UPDATE`,
+`DELETE FROM`, `INSERT INTO` or `TRUNCATE`, case-insensitive, comment lines ignored. A migration
+that only changes the schema needs no section. The test is a line-based `grep` in `/review-pr`
+step 3 (`.claude/skills/review-pr/SKILL.md`), which is the one place that says exactly which
+shapes it catches and why it matches a statement rather than the bare words. In short: it is wide
+on purpose, so it sees a statement inside a `WITH`, `DO` or `IF ... THEN` body and one inside an
+`EXECUTE '...'` string. A foreign key's `ON DELETE` / `ON UPDATE`, a `FOR UPDATE` lock and a
+`BEFORE INSERT` trigger event are DDL and do not count. It can still fire on DDL (a foreign key
+whose `ON` and `UPDATE no action` sit on different lines is read as an `UPDATE`); that false alarm
+is accepted, because a silent hint reads as "DDL only" and a wrong one costs a line. It is a
+grep, not a SQL parser: when the hint is silent on SQL that is anything but plain DDL, read it.
+`src/test/prod-check-contract.guard.test.ts` runs that command over fixtures and real migrations.
+
+**What the PR carries.** A section headed exactly `## Prod check`. That heading is the contract
+between the PR body, this doc and `/review-pr`, so do not reword it. It holds:
+
+- the read-only SQL to run after the deploy is live. Write it to return a count or a boolean, not
+  rows: the result is posted on a public repo, so there should be nothing to scrub;
+- the result that means "as intended", for example `0 rows`, or `count = N` where N is what the
+  dev dry run counted.
+
+**Who runs it, when and how.** The main session runs it once the deploy carrying the migration is
+live, alongside its CI-on-`main` watch (`docs/agents/worktrees-and-landing.md`). "Live" is
+Railway's deployment status for the merge commit, not a green run on `main`: the migration runs
+before the server serves traffic, and a check run before it has applied reads exactly like one
+that found nothing to change. The read goes inside the Postgres service, which is the one working
+read path (no public TCP proxy, and the Railway MCP returns variable names only):
+
+```bash
+railway ssh --service Postgres -- psql -X -c "select count(*) from ..."
+```
+
+`psql` there reads its credentials from the service environment, so none are typed or printed.
+SELECT only. The auto-mode classifier may refuse the command for an agent; then give the
+maintainer the exact line to type instead of working around it.
+
+**Where the result goes.** A comment on the PR, counts and pass/fail only, never row values:
+
+```markdown
+**Prod check** (migration 0NNN): pass, count = 0 (expected 0)
+```
+
+A result that is not the one the section named is not repaired by hand on prod. Say so on the PR
+and put it in the handoff for the maintainer.
