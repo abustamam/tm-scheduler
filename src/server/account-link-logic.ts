@@ -19,6 +19,7 @@ import {
 	isNotNull,
 	isNull,
 	ne,
+	not,
 	notExists,
 	or,
 	type SQL,
@@ -245,14 +246,19 @@ export function unboundGuestOnlyPerson(): SQL {
  * them, while the Person is guest-only and unbound** (#1125, ADR-0031).
  *
  * A guest's contact lives on their Person (`people.email` / `people.phone`), and
- * the Person owns it; clubs are custodians until the person speaks for
- * themselves (the maintainer, 2026-10-07: "users should have agency over their
- * own data, not clubs"). So an officer may correct it only for a Person that is
+ * the Person owns it; clubs are custodians until the person speaks for themselves
+ * (the maintainer, 2026-10-07: "users should have agency over their own data, not
+ * clubs"). So an officer may correct it only for a Person that is
  * `unboundGuestOnlyPerson()` (nobody has signed in as them and no club has them as
- * a member) AND that THIS club holds a guest row on. The fix then shows in every
- * club holding a guest row on that Person, because it is one person with one
- * address. For anybody else the edit is refused: a signed-in person changes it
- * themselves (ADR-0030), and a member's contact is the roster's (ADR-0029).
+ * a member), that never was a member (`noMemberHistory()`), AND that THIS club
+ * holds a guest row on. Any club holding a guest row on a guest-only Person may
+ * correct it, and the fix then shows in every club holding one, because it is one
+ * person with one address. For anybody else the edit is refused: a signed-in
+ * person changes it themselves (ADR-0030), a member's contact is the roster's
+ * (ADR-0029), and a REMOVED member's Person keeps the contact it had: it holds no
+ * membership, so it reads guest-only, but a roster re-import re-attaches it
+ * (#875) and a contact an officer rewrote through a guest card would become that
+ * member's sign-in key.
  *
  * **A guest row never counts as a holder and never locks a member.** This is a
  * guest-side predicate only; `soleHoldingClub` and every member-side writer are
@@ -266,6 +272,7 @@ export function unboundGuestOnlyPerson(): SQL {
 export function guestContactWritable(clubId: string): SQL {
 	return and(
 		unboundGuestOnlyPerson(),
+		noMemberHistory(),
 		exists(
 			db
 				.select({ one: sql`1` })
@@ -345,8 +352,8 @@ function noMemberHistory(): SQL {
 
 /**
  * Why `guestContactWritable(clubId)` would refuse this Person, as ONE SQL
- * expression: the first of `signed_in`, `member_here`, `member_elsewhere` that
- * applies, else null (#1125).
+ * expression: the first of `signed_in`, `member_here`, `member_elsewhere`,
+ * `former_member` that applies, else null (#1125).
  *
  * It is the READ form of the writable predicate, never the gate: the writer's
  * own WHERE decides. It exists so the sentence an officer is shown and the
@@ -382,6 +389,7 @@ export function guestContactRefusalSql(
 					),
 				),
 		)} then 'member_elsewhere'
+		when ${not(noMemberHistory())} then 'former_member'
 		else null end`;
 }
 

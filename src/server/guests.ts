@@ -40,8 +40,8 @@ const assignGuestSchema = z
 			.object({
 				name: z.string().trim().min(1),
 				// Validated as an EMAIL for the same reason as `minutes.ts`'s
-				// `newGuestSchema`: this writes `guests.email`, which the VP-Membership
-				// card renders into a `mailto:` href, and free text there means a
+				// `newGuestSchema`: this is written to the guest's Person (`people.email`,
+				// #1125), which the VP-Membership card renders into a `mailto:` href, and free text there means a
 				// stored "a@b.com?bcc=x" becomes live mailto headers. Every writer of
 				// the column now agrees with `guestBookSchema`.
 				email: z.string().trim().email().max(200).optional(),

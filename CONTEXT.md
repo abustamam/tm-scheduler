@@ -95,7 +95,7 @@ the nouns in `src/db/schema.ts`.
   and `people.name` is the fallback; **email and phone are the Person's** (#1125): written
   through `createGuestRecord`, an officer's edit (`guestContactWritable`) or the guest book's
   blank fill (`guestContactFillable`), and read by joining `guests.person_id`. The `guests.email`
-  and `guests.phone` columns are dead until #1126 drops them. A guest is **not** a Membership: no login, no Pathways, no roster/officer presence,
+  and `guests.phone` columns are dead, no longer declared in `schema.ts`, until #1126 drops them. A guest is **not** a Membership: no login, no Pathways, no roster/officer presence,
   and NOT a `members` status. Created ONLY through `createGuestRecord` (Person and row in one
   transaction; `guest-insert.guard.test.ts`). `person_id` is NOT NULL (#1125). A Person held by guest rows only is **guest-only**
   (`unboundGuestOnlyPerson()`), and the superadmin merge tool labels it "Guest". A slot references at most one
@@ -129,8 +129,8 @@ the nouns in `src/db/schema.ts`.
   Base Camp id, join date, invite stamp), and no `member_remove` naming it; contact is NOT tested
   (a guest's own is on its Person). Then no `people` row is inserted (`createdPerson` is `false`)
   and the guest row's name and goes-by name are written onto it before the membership insert.
-  Otherwise convert mints a **fresh Person** carrying the guest row's name and the contact its old
-  Person carries, points the guest at it,
+  Otherwise convert mints a **fresh Person** carrying the guest row's name and, only when the old
+  Person is a guest's own (guest-only, no past as a member), the contact it carries, points the guest at it,
   and leaves the old Person exactly as it is (it is someone's history, or a #875 release target).
   Undo leaves the contact and the guest's Person alone.
 - **Guest book** — the public, no-auth capture front door (ADR-0018, absorbing #239):

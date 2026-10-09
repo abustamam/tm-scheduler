@@ -257,9 +257,10 @@ describe("GuestEditDialog — contact read-only (#1125)", () => {
 		expect(locked()).toBeNull();
 	});
 
-	it("saves a name fix on a locked card by resending the contact it shows, so nothing is cleared", async () => {
-		// `readOnly`, not `disabled`: a disabled input is left out of the form, and
-		// the save would send null for both and wipe the Person's contact.
+	const sentData = () =>
+		(updateGuest.mock.calls[0]?.[0] as { data: Record<string, unknown> }).data;
+
+	it("a name fix on a locked card sends NEITHER email nor phone, so the server leaves the stored contact alone", async () => {
 		getGuestProfile.mockResolvedValue({
 			...PROFILE,
 			contactRefusal: "member_here",
@@ -271,13 +272,82 @@ describe("GuestEditDialog — contact read-only (#1125)", () => {
 		});
 		save();
 		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-		expect(updateGuest).toHaveBeenCalledWith({
-			data: expect.objectContaining({
-				name: "Nadia Farouk-Hassan",
-				email: "nadia@example.com",
-				phone: "+15550001111",
-			}),
+		expect(sentData()).toMatchObject({ name: "Nadia Farouk-Hassan" });
+		expect(sentData()).not.toHaveProperty("email");
+		expect(sentData()).not.toHaveProperty("phone");
+	});
+
+	it("a locked card never sends a contact field even if its value is changed (the server would refuse it)", async () => {
+		getGuestProfile.mockResolvedValue({
+			...PROFILE,
+			contactRefusal: "former_member",
 		});
+		const { onOpenChange } = renderWith({ ...GUEST, phoneRaw: "+15550001111" });
+		await screen.findByLabelText("Kind");
+		fireEvent.change(email(), { target: { value: "tampered@example.com" } });
+		fireEvent.change(phone(), { target: { value: "+15559998888" } });
+		save();
+		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+		expect(sentData()).not.toHaveProperty("email");
+		expect(sentData()).not.toHaveProperty("phone");
+	});
+
+	it("a name fix on a locked card with a MALFORMED stored email still saves (a read-only field is not validated)", async () => {
+		getGuestProfile.mockResolvedValue({
+			...PROFILE,
+			contactRefusal: "signed_in",
+		});
+		const { onOpenChange } = renderWith({
+			...GUEST,
+			email: "not an address",
+		});
+		await screen.findByLabelText("Kind");
+		fireEvent.change(screen.getByLabelText("Name"), {
+			target: { value: "Nadia F." },
+		});
+		save();
+		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+		expect(updateGuest).toHaveBeenCalledTimes(1);
+		expect(sentData()).not.toHaveProperty("email");
+	});
+
+	it("on an editable card a name-only save sends no contact either, so a stale copy cannot overwrite a newer value", async () => {
+		getGuestProfile.mockResolvedValue({ ...PROFILE, contactRefusal: null });
+		const { onOpenChange } = renderWith({ ...GUEST, phoneRaw: "+15550001111" });
+		await screen.findByLabelText("Kind");
+		fireEvent.change(screen.getByLabelText("Name"), {
+			target: { value: "Nadia Renamed" },
+		});
+		save();
+		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+		expect(sentData()).not.toHaveProperty("email");
+		expect(sentData()).not.toHaveProperty("phone");
+	});
+
+	it("sends only the field the officer changed, and null when they clear it", async () => {
+		getGuestProfile.mockResolvedValue({ ...PROFILE, contactRefusal: null });
+		const { onOpenChange } = renderWith({ ...GUEST, phoneRaw: "+15550001111" });
+		await screen.findByLabelText("Kind");
+		fireEvent.change(email(), { target: { value: "new@example.com" } });
+		save();
+		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+		expect(sentData()).toMatchObject({ email: "new@example.com" });
+		expect(sentData()).not.toHaveProperty("phone");
+		cleanup();
+		vi.clearAllMocks();
+		updateGuest.mockResolvedValue({ ok: true });
+		invalidate.mockResolvedValue(undefined);
+
+		getGuestProfile.mockResolvedValue({ ...PROFILE, contactRefusal: null });
+		const second = renderWith({ ...GUEST, phoneRaw: "+15550001111" });
+		await screen.findByLabelText("Kind");
+		fireEvent.change(phone(), { target: { value: "" } });
+		save();
+		await waitFor(() =>
+			expect(second.onOpenChange).toHaveBeenCalledWith(false),
+		);
+		expect(sentData()).toMatchObject({ phone: null });
+		expect(sentData()).not.toHaveProperty("email");
 	});
 
 	it("before the read arrives, a reason the caller already holds keeps the fields shut", () => {

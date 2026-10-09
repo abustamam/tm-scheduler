@@ -291,11 +291,25 @@ export async function mergePeople(
 		// 5. Reconcile the keeper as the canonical Person: keeper wins, but adopt
 		//    any anchor the keeper is missing from the absorbed (checkMergeBlocks
 		//    guaranteed the non-null ones don't conflict). Earliest join wins.
+		//
+		// EXCEPT a guest-only absorbed Person's contact onto a keeper that holds a
+		// membership (#1125). A guest's contact is whatever a visitor typed on an
+		// anonymous book or an officer keyed in (ADR-0031); the keeper's address is the
+		// member's sign-in key (ADR-0029), and a blank on it is a blank the member or
+		// their club fills. Carrying a guest's address into that blank would let a
+		// stranger's typed address become the key. Guest-only means: no membership,
+		// no account, at least one guest row (the rows moved in 1b).
+		const absorbedGuestOnly =
+			absorbedMemberships.length === 0 &&
+			absorbed.userId === null &&
+			guestsToMove.length > 0;
+		const keeperIsMember = keeperMemberships.length > 0;
+		const carryContact = !(absorbedGuestOnly && keeperIsMember);
 		await tx
 			.update(people)
 			.set({
-				email: keeper.email ?? absorbed.email,
-				phone: keeper.phone ?? absorbed.phone,
+				email: carryContact ? (keeper.email ?? absorbed.email) : keeper.email,
+				phone: carryContact ? (keeper.phone ?? absorbed.phone) : keeper.phone,
 				// A recorded "goes by" name is scarce (someone had to type it) and
 				// the merge is irreversible, so adopt the absorbed's rather than
 				// lose it (#486).

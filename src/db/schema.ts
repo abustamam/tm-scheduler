@@ -943,6 +943,30 @@ export const membersEmailBackup = pgTable("members_email_backup", {
 });
 
 // ---------------------------------------------------------------------------
+// What migration 0117 found in `guests.email` / `guests.phone` (#1125).
+//
+// TEMPORARY, and meant to be dropped, like the backups above. 0117 copies each
+// guest's email and phone onto the guest's Person where that Person is guest-only
+// and the field is blank, then #1126 drops the two columns. This holds every
+// guest's contact as the columns held it at that moment (a guest with neither
+// field has no row), with the guest's club and Person, so a value the copy did
+// not write is recoverable by hand. A forensic copy, not a restore path (#1089).
+// One snapshot; nothing writes to it at runtime. Drop it (schema + a migration)
+// once a release has passed without incident.
+// ---------------------------------------------------------------------------
+
+export const guestsContactBackup = pgTable("guests_contact_backup", {
+	// Deliberately NOT foreign keys, for the reason `people_email_backup` gives: a
+	// guest delete, a club delete or a merge must not take the undo with it.
+	guestId: uuid("guest_id").primaryKey(),
+	clubId: uuid("club_id"),
+	personId: uuid("person_id"),
+	email: text("email"),
+	phone: text("phone"),
+	snapshotAt: timestamp("snapshot_at").defaultNow().notNull(),
+});
+
+// ---------------------------------------------------------------------------
 // Roster members (self-serve MVP — auth-decoupled identities).
 // The Membership: a Person's participation in one Club (one row per person per
 // club). Person-level facts live on `people`; this row holds the per-club facts.
@@ -1571,13 +1595,14 @@ export const guests = pgTable(
 		// Person's `preferred_name` is the fallback, and a convert carries this one
 		// onto it. Guests hold role slots and get nudged like anyone else.
 		preferredName: text("preferred_name"),
-		// DEAD since #1125: a guest's email and phone live on their Person
-		// (`people.email` / `people.phone`), and nothing reads or writes these two
-		// columns. Kept for one release so the old container, still running during
-		// the deploy swap, never reads a dropped column; #1126 drops them.
-		// `guest-contact-columns.guard.test.ts` fails on any reference.
-		email: text("email"),
-		phone: text("phone"),
+		// A guest's email and phone live on their Person (`people.email` /
+		// `people.phone`, #1125). The `guests.email` and `guests.phone` columns still
+		// EXIST in the database and are deliberately NOT declared here: they are dead,
+		// kept for one release so the old container, still serving during the deploy
+		// swap, never reads a dropped column, and #1126 drops them in SQL. Declaring
+		// them would let a whole-row `select().from(guests)` or an insert name them;
+		// leaving them out is what makes "nothing reads or writes them" true of the
+		// code. `guest-contact-columns.guard.test.ts` fails on any reference.
 		// Pipeline lifecycle stage (#208 / ADR-0018). Defaults to `prospect`.
 		stage: guestStageEnum("stage").notNull().default("prospect"),
 		// Set once, on convert-to-member: the Membership this guest became. The

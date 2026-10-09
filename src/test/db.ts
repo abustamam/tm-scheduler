@@ -140,6 +140,8 @@ export type TestConn = typeof testDb | TestTx;
 
 /** What a guest fixture may hand over: a `guests` insert, contact included. */
 export type GuestFixtureInput = Omit<typeof guests.$inferInsert, "personId"> & {
+	email?: string | null;
+	phone?: string | null;
 	/** An EXISTING Person (a converted guest's member Person). Its contact is
 	 *  left alone: a guest row never writes a member's. */
 	personId?: string;

@@ -38,6 +38,7 @@ import { hasTestDb } from "#/test/db";
 const MIGRATIONS = resolve(process.cwd(), "drizzle");
 const PREVIOUS_TAG = "0116_parched_sheva_callister";
 const FILE = readdirSync(MIGRATIONS).find((f) => /^0117_.*\.sql$/.test(f));
+const THIS_TAG = (FILE ?? "").replace(/\.sql$/, "");
 const SCRATCH_DB = `tm_0117_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
 
 interface JournalEntry {
@@ -51,13 +52,18 @@ function urlFor(database: string): string {
 	return url.toString();
 }
 
-/** A copy of `drizzle/` whose journal stops after 0116. */
-function migrationsThrough0116(): string {
+/**
+ * A copy of `drizzle/` whose journal stops after the entry tagged `tag`. Used
+ * twice: through 0116 (the state the rows are inserted in) and through 0117 (so
+ * #1126, and whatever lands after it, never runs here: its DROP COLUMN would
+ * take away the very columns this test seeds and reads).
+ */
+function migrationsThrough(tag: string): string {
 	const journal = JSON.parse(
 		readFileSync(join(MIGRATIONS, "meta/_journal.json"), "utf8"),
 	) as { entries: JournalEntry[] };
-	const at = journal.entries.findIndex((e) => e.tag === PREVIOUS_TAG);
-	expect(at, `${PREVIOUS_TAG} is not in the journal`).toBeGreaterThan(0);
+	const at = journal.entries.findIndex((e) => e.tag === tag);
+	expect(at, `${tag} is not in the journal`).toBeGreaterThan(0);
 	const through = journal.entries.slice(0, at + 1);
 	const dir = mkdtempSync(join(tmpdir(), "tm-0117-"));
 	mkdirSync(join(dir, "meta"));
@@ -81,7 +87,7 @@ function statements(): string[] {
 }
 
 describe("the migration file's shape", () => {
-	it("is the lock, the re-backfill, the backup, the two copies and NOT NULL, in that order", () => {
+	it("is the lock, the re-backfill, the backup, the two copies and NOT NULL, in that order, and never drops a column", () => {
 		const all = statements();
 		const kind = (s: string) => s.split(/\s+/).slice(0, 2).join(" ");
 		expect(all.map(kind)).toEqual([
@@ -92,6 +98,7 @@ describe("the migration file's shape", () => {
 			'UPDATE "guests"',
 			"DROP TABLE",
 			"CREATE TABLE",
+			"INSERT INTO",
 			'UPDATE "people"',
 			'UPDATE "people"',
 			"ALTER TABLE",
@@ -107,6 +114,7 @@ describe("the migration file's shape", () => {
 
 let pool: pg.Pool;
 let partialDir: string;
+let throughDir: string;
 
 describe.skipIf(!hasTestDb)(
 	"migration 0117: a guest's contact on their Person",
@@ -136,13 +144,15 @@ describe.skipIf(!hasTestDb)(
 				await admin.end();
 			}
 			pool = new pg.Pool({ connectionString: urlFor(SCRATCH_DB) });
-			partialDir = migrationsThrough0116();
+			partialDir = migrationsThrough(PREVIOUS_TAG);
+			throughDir = migrationsThrough(THIS_TAG);
 			await migrate(drizzle(pool), { migrationsFolder: partialDir });
 		}, 120_000);
 
 		afterAll(async () => {
 			await pool?.end();
 			if (partialDir) rmSync(partialDir, { recursive: true, force: true });
+			if (throughDir) rmSync(throughDir, { recursive: true, force: true });
 			const admin = new pg.Client({
 				connectionString: process.env.TEST_DATABASE_URL,
 			});
@@ -265,8 +275,53 @@ describe.skipIf(!hasTestDb)(
 			const bound = await person("Bound", { userId });
 			const g3 = await guest(clubId, "Bound", {
 				email: "typed-for-bound@x.test",
+				phone: "+15550000013",
 				personId: bound,
 			});
+			// Has its own phone: the guest's differing one does not replace it, and its
+			// blank email is filled (each field is judged on its own).
+			const hasPhone = await person("Has Phone", { phone: "+15550000099" });
+			const g4 = await guest(clubId, "Has Phone", {
+				email: "fills-email@x.test",
+				phone: "+15550000014",
+				personId: hasPhone,
+			});
+			// A past as a member, one arm at a time (`noMemberHistory`): the Person holds
+			// no membership and nobody has signed in, so it reads guest-only, but its
+			// contact is the member's. None of these is written.
+			const history = async (label: string, set: string) => {
+				const id = await person(`History ${label}`);
+				if (set)
+					await pool.query(`update people set ${set} where id = $1`, [id]);
+				return {
+					id,
+					guestId: await guest(clubId, `History ${label}`, {
+						email: `history-${label}@x.test`,
+						phone: `+1555000${label.length.toString().padStart(4, "0")}`,
+						personId: id,
+					}),
+				};
+			};
+			const hCustomer = await history("customer", "customer_id = 'PN-0117'");
+			const hBasecamp = await history(
+				"basecamp",
+				"basecamp_user_id = 'bc-0117'",
+			);
+			const hJoin = await history("join", "original_join_date = '2015-03-01'");
+			const hInvite = await history("invite", "invited_at = now()");
+			const hRemoved = await history("removed", "");
+			await pool.query(
+				`insert into activity_log (club_id, action, target_type, target_id, detail)
+				 values ($1, 'member_remove', 'member', $2, $3::jsonb)`,
+				[clubId, randomUUID(), JSON.stringify({ personId: hRemoved.id })],
+			);
+			// A removal that names a DIFFERENT Person does not disqualify.
+			const control = await history("control", "");
+			await pool.query(
+				`insert into activity_log (club_id, action, target_type, target_id, detail)
+				 values ($1, 'member_remove', 'member', $2, $3::jsonb)`,
+				[clubId, randomUUID(), JSON.stringify({ personId: randomUUID() })],
+			);
 			// A guest-only Person two guest rows name (a superadmin merge): the OLDEST
 			// row that has each field wins, so the result is deterministic.
 			const shared = await person("Shared Human");
@@ -290,8 +345,8 @@ describe.skipIf(!hasTestDb)(
 				`select count(*)::int as n from people`,
 			);
 
-			// The real folder: applies 0117 and nothing else.
-			await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS });
+			// The real files, the folder ending at 0117: applies 0117 and nothing else.
+			await migrate(drizzle(pool), { migrationsFolder: throughDir });
 
 			const personOf = (guestId: string) =>
 				one<{
@@ -368,17 +423,36 @@ describe.skipIf(!hasTestDb)(
 			).toEqual(memberBefore);
 			expect(await personOf(g2)).toMatchObject({ email: null, phone: null });
 			expect(await personOf(g3)).toMatchObject({ email: null, phone: null });
+			// Each field on its own: a Person with a phone still gets its blank email.
+			expect(await personOf(g4)).toMatchObject({
+				email: "fills-email@x.test",
+				phone: "+15550000099",
+			});
+			// The member-history arms, one by one, for BOTH fields.
+			for (const h of [hCustomer, hBasecamp, hJoin, hInvite, hRemoved]) {
+				expect(await personOf(h.guestId)).toMatchObject({
+					email: null,
+					phone: null,
+				});
+			}
+			// ...and the control, with only an unrelated removal on record, is written.
+			expect((await personOf(control.guestId)).email).toBe(
+				"history-control@x.test",
+			);
+			expect((await personOf(control.guestId)).phone).not.toBeNull();
 
 			// AC3's other half: the backup has one row per guest that had either field,
 			// as the guest row held it, written or not. Compared over THIS club's guests
 			// (the scratch database is this file's own, so that is every row).
 			const backup = await pool.query<{
 				guest_id: string;
+				club_id: string;
+				person_id: string;
 				email: string | null;
 				phone: string | null;
 				snapshot_at: Date;
 			}>(
-				`select guest_id, email, phone, snapshot_at from guests_contact_backup`,
+				`select guest_id, club_id, person_id, email, phone, snapshot_at from guests_contact_backup`,
 			);
 			const had = await pool.query<{ id: string }>(
 				`select id from guests where email is not null or phone is not null`,
@@ -392,6 +466,8 @@ describe.skipIf(!hasTestDb)(
 			expect(plainBackup).toMatchObject({
 				email: "plain@x.test",
 				phone: "+15550000001",
+				club_id: clubId,
+				person_id: plainP.id,
 			});
 			expect(backup.rows.find((b) => b.guest_id === g2)).toMatchObject({
 				email: "typed-for-member@x.test",

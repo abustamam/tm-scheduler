@@ -54,6 +54,10 @@ const DOMESTIC_EXT = "+1141555526719"; // 1-415-555-2671 x9, as stored today
 const MAIN = "+14155552671";
 
 async function runMigration(tx: Tx) {
+	// 0112 also repairs `guests.phone`, which `schema.ts` no longer declares
+	// (#1125) and a `db:push`ed database does not have; a migrated one does until
+	// #1126 drops it. Inside this transaction, which rolls back, make sure it exists.
+	await tx.execute(sql`alter table guests add column if not exists phone text`);
 	for (const s of dataStatements()) await tx.execute(sql.raw(s));
 }
 
@@ -84,20 +88,13 @@ describe.skipIf(!hasTestDb)("0112 repairs stored phone extensions", () => {
 		personIds.push(...Object.values(seeded));
 		const [guest] = await testDb
 			.insert(guests)
-			// `guests.person_id` is NOT NULL (#1125). The phone stays on the dead
-			// `guests.phone` column on purpose: migration 0112 repaired THAT column, and
-			// this test runs its statements as they were.
-			.values({
-				...(await withGuestPerson({ clubId: club.clubId, name: "G" })),
-				phone: WITH_EXT,
-			})
+			// `guests.person_id` is NOT NULL (#1125). The legacy `guests.phone` column
+			// is set inside the migration's own transaction (`legacyGuestPhones`).
+			.values(await withGuestPerson({ clubId: club.clubId, name: "G" }))
 			.returning({ id: guests.id });
 		const [guestDom] = await testDb
 			.insert(guests)
-			.values({
-				...(await withGuestPerson({ clubId: club.clubId, name: "G2" })),
-				phone: DOMESTIC_EXT,
-			})
+			.values(await withGuestPerson({ clubId: club.clubId, name: "G2" }))
 			.returning({ id: guests.id });
 		const [helper] = await testDb
 			.insert(clubCharterHelpers)
@@ -130,10 +127,30 @@ describe.skipIf(!hasTestDb)("0112 repairs stored phone extensions", () => {
 		(
 			await tx.select({ p: people.phone }).from(people).where(eq(people.id, id))
 		)[0]?.p;
+	/**
+	 * `guests.phone` is no longer declared in `schema.ts` (#1125) and a `db:push`ed
+	 * database does not have it, while a migrated one (CI, prod) does until #1126
+	 * drops it. Migration 0112 repaired THAT column, so inside the transaction this
+	 * test rolls back, make sure it exists and give the two guests the values 0112
+	 * found. The ALTER rolls back with everything else.
+	 */
+	async function legacyGuestPhones(
+		tx: Tx,
+		f: { guestId: string; guestDomId: string },
+	) {
+		await tx.execute(
+			sql`alter table guests add column if not exists phone text`,
+		);
+		await tx.execute(
+			sql`update guests set phone = ${WITH_EXT} where id = ${f.guestId}`,
+		);
+		await tx.execute(
+			sql`update guests set phone = ${DOMESTIC_EXT} where id = ${f.guestDomId}`,
+		);
+	}
 	const guestPhone = async (tx: Tx, id: string) =>
-		(
-			await tx.select({ p: guests.phone }).from(guests).where(eq(guests.id, id))
-		)[0]?.p;
+		(await tx.execute(sql`select phone from guests where id = ${id}`)).rows[0]
+			?.phone as string | null | undefined;
 	const helperPhone = async (tx: Tx, id: string) =>
 		(
 			await tx
@@ -167,6 +184,7 @@ describe.skipIf(!hasTestDb)("0112 repairs stored phone extensions", () => {
 
 		try {
 			await testDb.transaction(async (tx) => {
+				await legacyGuestPhones(tx, f);
 				await runMigration(tx);
 
 				expect(await personPhone(tx, s.ext)).toBe(MAIN);

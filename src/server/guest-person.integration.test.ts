@@ -36,6 +36,7 @@ import {
 	speeches,
 	user,
 } from "#/db/schema";
+import { GUEST_CONTACT_REFUSAL_MESSAGES } from "#/lib/guest-contact";
 import {
 	CONVERT_NAME_CLASH_MESSAGE,
 	UNDO_MEMBER_HAS_ACCOUNT_MESSAGE,
@@ -268,8 +269,6 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			expect(p?.email).toBe(contact.email ?? null);
 			expect(p?.phone).toBe(contact.phone ?? null);
 			expect(p?.userId).toBeNull();
-			expect(g.email, "the dead column was written").toBeNull();
-			expect(g.phone, "the dead column was written").toBeNull();
 			return g;
 		}
 
@@ -1021,7 +1020,7 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 	// H1: undo reverses what convert filled.
 	// -----------------------------------------------------------------------
 	describe("convert fills the contact, undo leaves it, a corrected re-convert is right (H1)", () => {
-		it("a typo'd address does not stay on a member's Person: convert, undo, correct, convert again", async () => {
+		it("a typo'd address does not reach a new member's Person: convert, undo, a correction is refused, convert again", async () => {
 			const name = uniq("Typo Guest");
 			const typo = `typo-${randomUUID()}@example.test`;
 			const fixed = `fixed-${randomUUID()}@example.test`;
@@ -1035,28 +1034,26 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			// roster CSV still finds this Person by that address.
 			expect((await personRow(personId))?.email).toBe(typo);
 
-			await applyUpdateGuest({
-				clubId: seed.clubId,
-				guestId,
-				name,
-				email: fixed,
-			});
+			// The Person was a member (a removal names it), so it reads guest-only but
+			// its contact is the member's: a correction through the guest card is
+			// refused, and says why. The roster is where it is corrected.
+			await expect(
+				applyUpdateGuest({ clubId: seed.clubId, guestId, name, email: fixed }),
+			).rejects.toThrow(GUEST_CONTACT_REFUSAL_MESSAGES.former_member);
+			expect((await personRow(personId))?.email).toBe(typo);
+
 			const second = await convert(guestId);
 
-			// The old Person has a removal record, so it is not pristine: the guest gets
-			// a FRESH Person carrying the CORRECTED address. Since #1125 the officer's
-			// correction was written to the Person the guest named, which was the old
-			// one (a guest-only Person again once the membership was undone), so the
-			// typo is gone from it too: it exists on no Person.
+			// The old Person has a removal on record, so it is not pristine: the guest
+			// gets a FRESH Person, and none of the old contact comes with it (it is the
+			// member's, #1125). The typo stays on the old Person, which holds no
+			// membership.
 			expect(second.personId).not.toBe(personId);
 			guestPersons.push(second.personId);
-			expect((await personRow(second.personId))?.email).toBe(fixed);
-			expect((await personRow(personId))?.email).toBe(fixed);
+			expect((await personRow(second.personId))?.email).toBeNull();
+			expect((await personRow(personId))?.email).toBe(typo);
 			// End to end through the bind rule: the typo's owner cannot sign in to the
-			// new member Person, nor to the old one (no membership vouches for it), and
-			// the real address can bind the new one. The old Person carries the same
-			// corrected address, and does not count as a holder (it is on no roster and
-			// nobody's account), so it does not make the address ambiguous.
+			// new member Person, nor to the old one (no membership vouches for it).
 			const typoOwner = await makeUser(typo);
 			expect(
 				await bindVerifiedPerson({
@@ -1068,13 +1065,6 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 				false,
 			);
 			expect((await personRow(second.personId))?.userId).toBeNull();
-			const realOwner = await makeUser(fixed);
-			expect(
-				await bindVerifiedPerson({
-					personId: second.personId,
-					userId: realOwner,
-				}),
-			).toBe(true);
 		});
 
 		it("the same for a record from BEFORE #1124 (createdPerson: true): the Person the old convert minted is not adopted again", async () => {
@@ -1096,26 +1086,20 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			expect(after?.name).toBe(name);
 			expect((await guestRow(guestId)).personId).toBe(personId);
 
-			await applyUpdateGuest({
-				clubId: seed.clubId,
-				guestId,
-				name,
-				email: fixed,
-			});
+			await expect(
+				applyUpdateGuest({ clubId: seed.clubId, guestId, name, email: fixed }),
+			).rejects.toThrow(GUEST_CONTACT_REFUSAL_MESSAGES.former_member);
 			const second = await convert(guestId);
 
-			// It has a removal record: not pristine. A fresh Person carries the
-			// corrected address and the (empty) phone the officer's edit sent. Since
-			// #1125 that edit was written to the Person the guest named, the old one,
-			// which is guest-only again once the membership is undone: the typo and the
-			// phone the old convert minted it with went with the edit.
+			// It has a removal record: not pristine. The fresh Person carries no
+			// contact; the old one keeps what the old convert minted it with.
 			expect(second.personId).not.toBe(personId);
 			guestPersons.push(second.personId);
 			const fresh = await personRow(second.personId);
-			expect(fresh?.email).toBe(fixed);
+			expect(fresh?.email).toBeNull();
 			expect(fresh?.phone).toBeNull();
-			expect((await personRow(personId))?.email).toBe(fixed);
-			expect((await personRow(personId))?.phone).toBeNull();
+			expect((await personRow(personId))?.email).toBe(typo);
+			expect((await personRow(personId))?.phone).toBe("+15550001111");
 			const typoOwner = await makeUser(typo);
 			expect(
 				await bindVerifiedPerson({
@@ -1125,20 +1109,31 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			).toBe(false);
 		});
 
-		it("a guest whose address was cleared after an undo: the re-convert's fresh Person has none, and so does the old one (the clearing landed on it)", async () => {
+		it("an edit after an undo cannot clear the former member's address either, and an edit that leaves the contact out saves the name", async () => {
 			const name = uniq("Cleared After Undo");
 			const email = `will-clear-${randomUUID()}@example.test`;
 			const { guestId, personId } = await newGuest(name, { email });
 			await convert(guestId);
 			await undo(guestId);
-			await applyUpdateGuest({ clubId: seed.clubId, guestId, name });
+
+			await expect(
+				applyUpdateGuest({ clubId: seed.clubId, guestId, name, email: null }),
+			).rejects.toThrow(GUEST_CONTACT_REFUSAL_MESSAGES.former_member);
+			// Contact omitted = leave it: the name is fixed and the address untouched.
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name: `${name} B`,
+			});
+			expect((await guestRow(guestId)).name).toBe(`${name} B`);
+			expect((await personRow(personId))?.email).toBe(email);
 
 			const second = await convert(guestId);
 
 			expect(second.personId).not.toBe(personId);
 			guestPersons.push(second.personId);
 			expect((await personRow(second.personId))?.email).toBeNull();
-			expect((await personRow(personId))?.email).toBeNull();
+			expect((await personRow(personId))?.email).toBe(email);
 		});
 
 		it("an undo leaves the contact convert set, so the undoing club's CSV still matches it", async () => {
@@ -1459,6 +1454,12 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			// or a removal names it, and is deleted when NOTHING does (a Person nobody
 			// can see, with whatever contact it carries).
 			oldSurvives = true,
+			// Whether the fresh Person carries the contact the old one had. Only a
+			// Person that is a guest's OWN (guest-only, no past as a member, nobody
+			// signed in) has contact that is the guest's to carry (#1125, blocker
+			// from review): any other one's contact is somebody else's, and copying it
+			// would put another human's address on a membership.
+			carriesContact = true,
 		) {
 			expect(res.personId).not.toBe(oldPersonId);
 			guestPersons.push(res.personId);
@@ -1477,8 +1478,10 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			const guest = await guestRow(guestId);
 			const fresh = await personRow(res.personId);
 			expect(fresh?.name).toBe(guest.name.trim());
-			// The contact the guest HAD (its old Person's, #1125) moved with it.
-			expect(fresh?.email).toBe(before.email?.trim() || null);
+			expect(fresh?.email).toBe(
+				carriesContact ? before.email?.trim() || null : null,
+			);
+			if (!carriesContact) expect(fresh?.phone).toBeNull();
 			return fresh;
 		}
 
@@ -1631,15 +1634,24 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 
 				const res = await convert(guestId);
 
+				// A Person that is still a guest's own carries its contact to the fresh
+				// Person; one that was signed in, a member somewhere, or a member before
+				// does not (its contact is somebody else's).
+				const carries = [
+					"a speech",
+					"a Pathways enrolment",
+					"a charter-helper row",
+					"another guest row, in another club",
+				].includes(what);
 				const fresh = await expectFreshPerson(
 					guestId,
 					personId,
 					before,
 					res,
 					survives,
+					carries,
 				);
-				// The fresh Person carries what the guest row says, not the old one's.
-				expect(fresh?.email).toBe(email);
+				expect(fresh?.email).toBe(carries ? email : null);
 				expect(fresh?.userId).toBeNull();
 				// A convert that minted it says so, for the undo's record.
 				const [entry] = await testDb
@@ -1690,11 +1702,19 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 
 			const c2 = await convert(guestId);
 
-			// The new member Person carries the guest's contact, which since #1125 is
-			// its Person's: the officer's member-page correction, not the typo. The
-			// old one keeps the corrected address and is not re-keyed.
-			const fresh = await expectFreshPerson(guestId, personId, before, c2);
-			expect(fresh?.email).toBe(real);
+			// The old Person has a past as a member (a removal names it), so the contact
+			// on it is the MEMBER's, not the guest's to carry: the new member Person
+			// starts with none, and the officer sets it on the roster. The old one keeps
+			// the corrected address and is not re-keyed.
+			const fresh = await expectFreshPerson(
+				guestId,
+				personId,
+				before,
+				c2,
+				true,
+				false,
+			);
+			expect(fresh?.email).toBeNull();
 			expect((await personRow(personId))?.email).toBe(real);
 			// Nobody can bind the OLD Person's history: it holds no membership, so no
 			// club vouches for it, whichever address they own.
@@ -1749,14 +1769,19 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 
 			const c = await convert(guestId);
 
-			const fresh = await expectFreshPerson(guestId, alice, before, c);
+			// Bob's own address lived on the Person the link deleted (#1125), and the
+			// Person the guest names now is Alice's, with a removal on record: her
+			// contact is not Bob's to carry, so Bob's new Person starts with none.
+			const fresh = await expectFreshPerson(
+				guestId,
+				alice,
+				before,
+				c,
+				true,
+				false,
+			);
 			expect(fresh?.name).toBe(bobName);
-			// Bob's own address lived on the Person the link deleted (#1125: a guest's
-			// contact is its Person's), so the fresh Person carries what the guest's
-			// Person carried at convert time, which is the linked member's. Known
-			// edge of reading a guest's contact through its Person; the repair for a
-			// wrong link is the unlink.
-			expect(fresh?.email).toBe(aliceEmail);
+			expect(fresh?.email).toBeNull();
 			// Alice's Person is exactly as it was, and so is her history.
 			expect((await personRow(alice))?.name).toBe(aliceName);
 			expect((await personRow(alice))?.email).toBe(aliceEmail);
@@ -1816,10 +1841,10 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 
 			const c2 = await convert(cap1.guestId);
 
-			// The fresh Person carries the guest's contact, which is her Person's: her
-			// real address, never the guest-book one. What this test pins is the OLD
-			// Person's safety.
-			await expectFreshPerson(cap1.guestId, personId, before, c2);
+			// The fresh Person carries no contact (her Person's is a former member's),
+			// and in particular never the guest-book address. What this test pins is the
+			// OLD Person's safety.
+			await expectFreshPerson(cap1.guestId, personId, before, c2, true, false);
 			// Her Person still has HER address, and the guest-book one is nowhere on it.
 			expect((await personRow(personId))?.email).toBe(real);
 			const mallory = await makeUser(attacker);
@@ -1849,10 +1874,17 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 
 			const c2 = await convert(guestId);
 
-			const fresh = await expectFreshPerson(guestId, personId, before, c2);
-			// The new Person carries the guest's contact, which since #1125 is its
-			// Person's: the member-page correction, not the typo.
-			expect(fresh?.email).toBe(real);
+			const fresh = await expectFreshPerson(
+				guestId,
+				personId,
+				before,
+				c2,
+				true,
+				false,
+			);
+			// The old Person has a removal on record, so its contact is the member's
+			// and the new Person starts with none (not the typo, not the correction).
+			expect(fresh?.email).toBeNull();
 			expect(typo).not.toBe(real);
 			// The member-page correction is still on the old Person.
 			expect((await personRow(personId))?.email).toBe(real);

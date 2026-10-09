@@ -397,8 +397,8 @@ describe("AttendanceGuestsGroup", () => {
 					guestId: "g1",
 					name: "Nadia Farouq",
 					preferredName: "Nadi",
-					email: "nadia@example.com",
-					phone: "415-555-2671 x12",
+					// No `email` / `phone`: since #1125 the dialog sends a contact field only
+					// when the officer changed it (a name fix leaves the stored contact alone).
 				},
 			});
 		});

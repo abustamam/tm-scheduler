@@ -68,6 +68,7 @@ import {
 	guestContactRefusalFor,
 	guestContactRefusalSql,
 	guestContactWritable,
+	identityIgnoredGuestPerson,
 	normalizedEmail,
 	pristineGuestPerson,
 	rosterConflictFor,
@@ -169,23 +170,26 @@ async function holdsMembership(
  *
  * `email` and `phone` are the guest's PERSON's (#1125): a guest's contact lives
  * on `people`, and every read of it joins `guests.person_id`. `personId` rides
- * along for the one caller that writes (the public fill in `captureGuestVisit`)
- * and is absent on a candidate a caller synthesised.
+ * along for the one caller that writes (the public fill in `captureGuestVisit`).
+ * A candidate a caller SYNTHESISES (the guest-book plan's not-yet-created guests)
+ * is a `GuestMatchCandidate`, which has no Person.
  */
-type GuestContactRow = {
+type GuestKeys = {
 	id: string;
 	name: string;
 	email: string | null;
 	phone: string | null;
-	personId?: string;
 };
+
+/** A club guest as the DATABASE resolves it: the keys above and its Person. */
+type GuestContactRow = GuestKeys & { personId: string };
 
 /**
  * What `matchGuest` compares against. Wider than `GuestContactRow` by the two
  * columns the ORDERING needs, because the order is part of the answer (below)
  * and a caller that loaded rows in some other order would get a different one.
  */
-export interface GuestMatchCandidate extends GuestContactRow {
+export interface GuestMatchCandidate extends GuestKeys {
 	createdAt: Date;
 }
 
@@ -210,13 +214,13 @@ export interface GuestMatchInput {
  * the guest list, and folding it in would make this function need a meeting.
  * `record_guest_book` upgrades `matched` to `already_present` itself.
  */
-export type GuestMatch =
-	| { outcome: "matched"; via: "email" | "phone"; guest: GuestMatchCandidate }
+export type GuestMatch<C extends GuestMatchCandidate = GuestMatchCandidate> =
+	| { outcome: "matched"; via: "email" | "phone"; guest: C }
 	| { outcome: "new" }
 	| {
 			outcome: "ambiguous";
 			reason: "phone_name_disagree" | "name_only";
-			candidates: GuestMatchCandidate[];
+			candidates: C[];
 	  };
 
 /**
@@ -256,11 +260,11 @@ export type GuestMatch =
  *     not a dedup key — the public path must keep creating a new guest for a
  *     visitor who gives only a name, or two different Sam Rays become one.
  */
-export function matchGuest(
-	candidates: GuestMatchCandidate[],
+export function matchGuest<C extends GuestMatchCandidate>(
+	candidates: C[],
 	input: GuestMatchInput,
 	opts?: { excludeGuestId?: string; nameOnlyAmbiguity?: boolean },
-): GuestMatch {
+): GuestMatch<C> {
 	const pool = candidates
 		.filter((c) => c.id !== opts?.excludeGuestId)
 		.sort(
@@ -328,7 +332,7 @@ async function findGuestMatch(
 	clubId: string,
 	input: GuestMatchInput,
 	opts?: { excludeGuestId?: string; excludePersonId?: string },
-): Promise<GuestMatch> {
+): Promise<GuestMatch<GuestMatchCandidate & { personId: string }>> {
 	const cols = {
 		id: guests.id,
 		name: guests.name,
@@ -355,7 +359,7 @@ async function findGuestMatch(
 	const email = input.email?.trim() || null;
 	const digits = normalizePhone(input.phone);
 
-	const candidates: GuestMatchCandidate[] = [];
+	const candidates: Array<GuestMatchCandidate & { personId: string }> = [];
 	if (email) {
 		candidates.push(
 			...(await conn
@@ -422,7 +426,7 @@ export async function findGuestForContact(
 export async function loadGuestMatchCandidates(
 	conn: DbOrTx,
 	clubId: string,
-): Promise<GuestMatchCandidate[]> {
+): Promise<Array<GuestMatchCandidate & { personId: string }>> {
 	return conn
 		.select({
 			id: guests.id,
@@ -1286,8 +1290,14 @@ export async function applyUpdateGuest(
 	if (!name) throw new Error("A guest name is required.");
 
 	const cc = await loadClubDefaultCountryCode(input.clubId);
-	const email = input.email?.trim() || null;
-	const phone = toStoredPhone(input.phone, cc);
+	// OMITTED contact (`undefined`) is "leave it as it is" (#1125); `null` or blank
+	// clears it. The dialog sends a field only when the officer changed it, so a
+	// form that only fixes a name neither re-sends a stale copy over a newer value
+	// nor trips a check on a stored value it never touched.
+	const sentEmail =
+		input.email === undefined ? undefined : input.email?.trim() || null;
+	const sentPhone =
+		input.phone === undefined ? undefined : toStoredPhone(input.phone, cc);
 
 	try {
 		return await db.transaction(async (tx) => {
@@ -1322,27 +1332,50 @@ export async function applyUpdateGuest(
 			if (guest.personId !== peek.personId)
 				throw new Error(RECORD_CHANGED_MESSAGE);
 
-			const clash = await findGuestForContact(
-				tx,
-				input.clubId,
-				{ name, email, phone },
-				{ excludeGuestId: input.guestId, excludePersonId: guest.personId },
-			);
+			// What is stored, and what the edit would leave: an omitted field keeps the
+			// stored value (read under the Person lock, so it is the NEWEST one).
+			// The stored phone is compared both as stored and as `toStoredPhone` would
+			// store it, so a legacy value that was never normalized does not read as a
+			// change on a form that only fixed a name.
+			const storedEmail = guest.email ?? null;
+			const storedPhone = guest.phone ?? null;
+			const emailChanged =
+				sentEmail !== undefined && sentEmail !== (storedEmail?.trim() || null);
+			const phoneChanged =
+				sentPhone !== undefined &&
+				sentPhone !== storedPhone &&
+				sentPhone !== toStoredPhone(storedPhone, cc);
+			const email = emailChanged ? (sentEmail ?? null) : storedEmail;
+			const phone = phoneChanged ? (sentPhone ?? null) : storedPhone;
+
+			// The clash check runs on a SUBMITTED CHANGE only, and only for the changed
+			// key: a stored value the officer did not touch is not re-litigated by a
+			// name fix (a legacy duplicate would otherwise block every edit of it).
+			const clash =
+				emailChanged || phoneChanged
+					? await findGuestForContact(
+							tx,
+							input.clubId,
+							{
+								name,
+								email: emailChanged ? email : null,
+								phone: phoneChanged ? phone : null,
+							},
+							{
+								excludeGuestId: input.guestId,
+								excludePersonId: guest.personId,
+							},
+						)
+					: undefined;
 			if (clash) {
 				throw new Error(
 					`Another guest in this club (${clash.name}) already has that phone number or email.`,
 				);
 			}
 
-			// 3. The contact, on the Person, only when it differs from what is stored.
-			//    The stored phone is compared both as stored and as `toStoredPhone`
-			//    would store it, so a legacy value that was never normalized does not
-			//    read as a change on a form that only fixed a name.
-			const sameEmail = email === (guest.email?.trim() || null);
-			const storedPhone = guest.phone ?? null;
-			const samePhone =
-				phone === storedPhone || phone === toStoredPhone(storedPhone, cc);
-			if (!sameEmail || !samePhone) {
+			// 3. The contact, on the Person, only when a submitted value differs from
+			//    what is stored.
+			if (emailChanged || phoneChanged) {
 				const written = await tx
 					.update(people)
 					.set({ email, phone })
@@ -1764,19 +1797,29 @@ export async function lockClubConverts(
 }
 
 /**
- * A Person's contact, for convert (#1125): a guest's email and phone are on the
- * Person its row names, so a convert reads them there. The caller holds the
- * Person, which is what keeps them from changing under it (a contact edit takes
- * it `FOR UPDATE`).
+ * The contact a convert may treat as THE GUEST'S (#1125): the email and phone on
+ * the Person its row names, but ONLY while that Person is a guest's own, i.e.
+ * `identityIgnoredGuestPerson()`: nobody has signed in as them, no membership,
+ * no roster-identity column and no removal on record. A Person with a past as a
+ * member (a removed member's, one a wrong link pointed the guest at), or one with
+ * an account, carries SOMEBODY ELSE's contact as far as this guest is concerned,
+ * and copying it onto the guest's new Person would put another human's address
+ * on a membership: a wrong-person sign-in key (Alice's card linked to Bob, Bob
+ * removed, Alice converted: Bob signing in would bind Alice's membership). Such a
+ * Person yields no contact, so the convert mints the new Person name-only and the
+ * dedupe below has no address to match on either.
+ *
+ * Read under the Person lock the caller holds, which keeps it from changing under
+ * the convert (a contact edit takes the Person `FOR UPDATE`).
  */
-async function contactOfPerson(
+async function guestOwnContact(
 	tx: DbOrTx,
 	personId: string,
 ): Promise<{ email: string | null; phone: string | null }> {
 	const [row] = await tx
 		.select({ email: people.email, phone: people.phone })
 		.from(people)
-		.where(eq(people.id, personId))
+		.where(and(eq(people.id, personId), identityIgnoredGuestPerson()))
 		.limit(1);
 	return row ?? { email: null, phone: null };
 }
@@ -1963,7 +2006,7 @@ export async function applyConvertGuestToMember(
 			tx,
 			input.clubId,
 			convertIdentity(
-				{ ...peek, ...(await contactOfPerson(tx, peek.personId)) },
+				{ ...peek, ...(await guestOwnContact(tx, peek.personId)) },
 				cc,
 			),
 		);
@@ -2001,7 +2044,7 @@ export async function applyConvertGuestToMember(
 
 		// The contact is the guest's Person's (#1125), read under the Person lock.
 		const identity = convertIdentity(
-			{ ...guest, ...(await contactOfPerson(tx, guest.personId)) },
+			{ ...guest, ...(await guestOwnContact(tx, guest.personId)) },
 			cc,
 		);
 		const { name, preferredName, email, phone } = identity;
@@ -2597,6 +2640,16 @@ export async function applyLinkGuestToMember(
 		// guest Person unrelated to the human it just joined to. The guest's own
 		// Person, now named by nobody, is taken back when nothing else references
 		// it, so a link leaves no stranded identity behind.
+		//
+		// The guest's own email and phone live on that Person (#1125) and go with it
+		// when it is deleted, so they are read first and written into this link's
+		// activity record, which is what lets an unlink put them back on the Person
+		// it mints. Only a guest's OWN contact (`guestOwnContact`), and never a
+		// Person the guest already shared with the member.
+		const ownContact =
+			guest.personId && guest.personId !== member.personId
+				? await guestOwnContact(tx, guest.personId)
+				: { email: null, phone: null };
 		await tx
 			.update(guests)
 			.set({
@@ -2621,7 +2674,18 @@ export async function applyLinkGuestToMember(
 			action: "member_merge",
 			targetType: "member",
 			targetId: input.memberId,
-			detail: { fromGuestId: input.guestId, guestName: guest.name, slotIds },
+			detail: {
+				fromGuestId: input.guestId,
+				guestName: guest.name,
+				slotIds,
+				// Read back ONLY by `applyUnlinkGuestFromMember`. The activity feed maps
+				// a fixed set of keys out of `detail` and never returns it whole
+				// (`loadActivity`), so this is not visible to the club's members;
+				// `guest-contact-on-person.integration.test.ts` pins that.
+				...(ownContact.email || ownContact.phone
+					? { guestContact: ownContact }
+					: {}),
+			},
 		});
 
 		return { ok: true as const, slotIds };
@@ -2750,7 +2814,21 @@ export async function applyUnlinkGuestFromMember(
 		// here: the member's roster rows can be merged afterwards, and a collapse
 		// deletes the absorbed membership and its records, which would leave the
 		// Person looking untouched (`separateGuestFromMemberPerson`).
-		await separateGuestFromMemberPerson(tx, input.guestId);
+		// The contact the guest had BEFORE the link, recorded by it, goes back onto
+		// the Person minted here (#1125).
+		const recordedContact = (
+			entry.detail as { guestContact?: { email?: unknown; phone?: unknown } }
+		).guestContact;
+		await separateGuestFromMemberPerson(tx, input.guestId, {
+			email:
+				typeof recordedContact?.email === "string"
+					? recordedContact.email
+					: null,
+			phone:
+				typeof recordedContact?.phone === "string"
+					? recordedContact.phone
+					: null,
+		});
 
 		await logActivity(tx, {
 			clubId: input.clubId,

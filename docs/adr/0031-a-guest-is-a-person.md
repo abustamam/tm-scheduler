@@ -106,8 +106,13 @@ statement runs before the membership insert.
   fourth behavior change the spec did not list: a Person made by `createGuestRecord` no longer
   goes stale when an officer renames the guest.
 - **Not pristine: a fresh Person.** Convert mints a Person carrying the guest row's name and
-  goes-by name and the contact the guest's old Person carries, points the guest row at it, and
-  converts onto it (`createdPerson: true`).
+  goes-by name and, ONLY when the old Person is a guest's own (`identityIgnoredGuestPerson()`:
+  unbound, guest-only, no past as a member), the contact it carries, points the guest row at it,
+  and converts onto it (`createdPerson: true`). A Person that signed in, holds a membership, or was
+  a member's has contact that is somebody else's as far as this guest goes: copying it would put
+  another human's address on a membership (Alice's card wrongly linked to Bob, Bob removed, Alice
+  converted: Bob signing in would bind Alice's membership). Such a convert mints the Person without
+  contact, and the dedupe has no address to match on either.
   The old Person is left exactly as it is, with one exception: if NOTHING references it any more
   (no sign-in, membership, guest row, speech, enrolment or charter-helper row) and no removal names
   it, it is deleted, with its `people_email_backup` rows, under `FOR UPDATE`. That is a Person a
@@ -171,12 +176,15 @@ back the guest's old Person when nothing else references it. A collapse of two m
 
 The Person owns their contact; clubs are custodians until the person speaks for themselves.
 A guest's email and phone live on, and are edited through, their Person. `guests.email` and
-`guests.phone` are kept, dead, for one release (the old container never reads a dropped column)
-and #1126 drops them; `guest-contact-columns.guard.test.ts` fails on any reference. Migration 0117
-re-backfills any guest with no Person, snapshots every guest contact into
-`guests_contact_backup` (forensic, not a restore path), copies it onto the guest's Person only
-where that Person is guest-only and the field is null (the oldest guest row wins if a merge gave
-one Person several), and sets `guests.person_id` NOT NULL.
+`guests.phone` still exist in the database, dead, for one release (the old container never reads
+a dropped column) and #1126 drops them in SQL. They are deliberately NOT declared in `schema.ts`
+(so no code can name them, and a whole-row read cannot carry them), and
+`guest-contact-columns.guard.test.ts` scans `src/` and `scripts/` for raw references. Migration
+0117 re-backfills any guest with no Person, snapshots every guest contact (with its club and
+Person) into `guests_contact_backup` (forensic, not a restore path), copies it onto the guest's
+Person only where that Person is guest-only, has no past as a member (the `noMemberHistory` arms
+below) and the field is null (the oldest guest row wins if a merge gave one Person several), and
+sets `guests.person_id` NOT NULL.
 
 - **Signed in:** only the person changes it (ADR-0030).
 - **Guest-only and not signed in:** any club holding a guest record on them may correct it.
@@ -190,21 +198,26 @@ one Person several), and sets `guests.person_id` NOT NULL.
 How it is enforced. Two predicates in `account-link-logic.ts`, each written into its own UPDATE's
 WHERE and held there by `person-email-writers.guard.test.ts`:
 
-- `guestContactWritable(clubId)` (an officer's edit, `applyUpdateGuest`): `unboundGuestOnlyPerson()`
-  and a guest row of THIS club on the Person. The edit writes `people`; name and goes-by stay on
-  the guest row. A submitted contact equal to the stored one attempts no write, so a form that only
+- `guestContactWritable(clubId)` (an officer's edit, `applyUpdateGuest`): `unboundGuestOnlyPerson()`,
+  no past as a member (`noMemberHistory()`: no roster-identity column, no `member_remove` naming
+  the Person) and a guest row of THIS club on the Person. Any club holding a guest row on a
+  guest-only Person may correct it. The edit writes `people`; name and goes-by stay on the guest
+  row. A contact field the form leaves out is left as it is (the dialog sends a field only when the
+  officer changed it, and a locked card sends neither), and the format and clash checks run only on
+  a submitted change. A submitted contact equal to the stored one attempts no write, so a form that only
   fixes a name still saves on a member's card. When a changed contact matches no row the whole edit
   rolls back with the first reason that applies: "This person has signed in. They change it
   themselves.", "They're a member here. Edit them on their member page.", "They're a member of
-  another club, which manages their contact." The same reason is one SQL expression
+  another club, which manages their contact.", "They were a member before, so their contact stays
+  as it was." The same reason is one SQL expression
   (`guestContactRefusalSql`), read with the board rows (`PipelineGuestRow.contactRefusal`) and with
   the dialog's profile (`GuestProfile.contactRefusal`), so the Edit guest dialog shows the contact
   read-only with that sentence and the refusal is normally never reached from the UI.
-- `guestContactFillable(clubId)` (the public guest book's fill): writable, no guest row in any
-  OTHER club, and no past as a member (a roster-identity column, or a `member_remove` naming the
-  Person). The last arm is stricter than the issue that shaped this step: a removed member's Person
-  holds no membership, so it reads guest-only, but a roster re-import re-attaches it (#875) and an
-  address typed on the anonymous book would become that member's sign-in key.
+- `guestContactFillable(clubId)` (the public guest book's fill): writable, and no guest row in any
+  OTHER club. The past-as-a-member arm (`noMemberHistory()`) is shared with the writable rule: a
+  removed member's Person holds no membership, so it reads guest-only, but a roster re-import
+  re-attaches it (#875), and an address typed on the anonymous book (or rewritten through a card)
+  would become that member's sign-in key.
 
 The member-identity paths that match `people` by address globally ignore a guest-only Person
 (`identityIgnoredGuestPerson()`): the CSV importer's candidates and address-holder map, and
@@ -213,15 +226,22 @@ already did, through `countsAsHolder`. "Ignore" stops at a Person that shows a p
 Customer ID, a join date, an invite stamp, a removal): `people.customer_id` is UNIQUE, so hiding
 one would turn an import into a unique violation, and #875's release matching needs it.
 
+`mergePeople` does not carry a guest-only absorbed Person's email or phone onto a keeper that holds
+a membership: the keeper's address is the member's sign-in key, and a stranger's typed address must
+not fill its blank.
+
+A link (#635) deletes the guest's abandoned guest-only Person with its contact, so the link records
+that contact in its `member_merge` activity detail (`guestContact`), and an unlink puts it back on
+the Person it mints. The activity feed maps a fixed set of keys out of `detail` and never returns
+it whole, so this is not visible to the club's members (a test pins it).
+
 Known edges of reading a guest's contact through its Person:
 
-- A link (#635) points the guest at the member's Person and the abandoned guest-only Person goes
-  with its contact. #1127 reworks link and separate.
-- A guest wrongly linked to a member, whose membership is then removed before an unlink, carries
-  that member's contact into the fresh Person a later convert mints. The unlink is the repair.
-- After an undo the officer's correction on the guest card lands on the former member's (guest-only
-  again) Person, so that Person and the re-convert's fresh Person can carry one address. Neither
-  counts as a holder, so sign-in is unaffected.
+- After an undo, the former member's Person (guest-only again, but with a removal on record) keeps
+  its contact: a correction through the guest card is refused as "former member", and a re-convert
+  gives the guest a fresh Person with no contact. The roster is where the contact is set.
+- A guest whose Person is shared with another club's guest row (after #1127) reads one contact in
+  both clubs, by design.
 
 ### Linking across clubs (implemented in #1127, recorded here)
 

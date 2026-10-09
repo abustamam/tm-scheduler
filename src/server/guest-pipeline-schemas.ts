@@ -60,6 +60,29 @@ export type RecordGuestInviteSchemaInput = z.infer<
 >;
 
 /**
+ * Fix a guest's name, goes-by name and contact (#364, #1125).
+ *
+ * **Omitted `email` / `phone` means "leave it as it is"; `null` clears it.** The
+ * Edit guest dialog sends a contact field only when the officer changed it, so a
+ * card whose contact is locked (the Person has signed in, or is a member) sends
+ * neither, and a name fix cannot trip the format check on a stored address it never
+ * touched, nor overwrite a newer value with a stale copy. The `.email()` check
+ * therefore runs on a submitted change only. `preferredName` keeps the older rule:
+ * omitting it clears it (#486).
+ */
+export const updateGuestSchema = z.object({
+	clubId: uuid,
+	guestId: uuid,
+	name: z.string().trim().min(1, "A guest name is required."),
+	// What they're called, when it isn't the first token of `name` (#486).
+	// Omitting it clears it. Capped to match the member path, which carries this
+	// value onto the shared `people` row on conversion.
+	preferredName: z.string().trim().max(80).nullable().optional(),
+	email: z.string().trim().email().nullable().optional(),
+	phone: z.string().trim().nullable().optional(),
+});
+
+/**
  * Set a guest's kind, home club and introducer (#1050). `.strict()` for the
  * same reason as `recordGuestInviteSchema`: nothing here names an actor, and an
  * unknown key should fail parsing rather than be dropped.

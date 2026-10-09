@@ -52,6 +52,10 @@ export const RECORD_CHANGED_MESSAGE = "This record changed. Try again.";
 
 /** What `createGuestRecord` takes: a `guests` insert, minus the Person it mints. */
 export type NewGuestRecord = Omit<typeof guests.$inferInsert, "personId"> & {
+	/** The guest's contact (#1125): written onto the Person it mints, never onto
+	 *  the `guests` row (the columns are not declared in `schema.ts`). */
+	email?: string | null;
+	phone?: string | null;
 	/**
 	 * Point the guest row at this EXISTING Person instead of minting one. For a
 	 * row that already IS somebody's Person, such as a converted guest in the
@@ -69,8 +73,8 @@ export type NewGuestRecord = Omit<typeof guests.$inferInsert, "personId"> & {
  * The contact is the visitor's own and nobody's sign-in key until a member
  * vouches for it: `bindVerifiedPerson` needs a membership, and the importer and
  * the new-club lookup ignore a guest-only Person (`identityIgnoredGuestPerson`).
- * `separateGuestFromMemberPerson` mints one with NO contact, the shape the
- * #1124 backfill gave a guest.
+ * `separateGuestFromMemberPerson` mints one with only the contact a link
+ * recorded (none, for a guest the link found with no contact).
  */
 async function mintGuestPerson(
 	tx: DbOrTx,
@@ -265,6 +269,16 @@ export async function deleteAbandonedGuestPerson(
 export async function separateGuestFromMemberPerson(
 	tx: DbOrTx,
 	guestId: string,
+	/**
+	 * The contact the guest had before it was linked (#1125), when the link recorded
+	 * it: the Person minted here carries it, so an unlink gives the guest back its
+	 * own email and phone rather than a bare name. Absent, the Person is name-only,
+	 * the shape the #1124 backfill gave a guest.
+	 */
+	restore: { email: string | null; phone: string | null } = {
+		email: null,
+		phone: null,
+	},
 ): Promise<string | null> {
 	const [guest] = await tx
 		.select({
@@ -282,7 +296,7 @@ export async function separateGuestFromMemberPerson(
 		.where(eq(members.personId, guest.personId))
 		.limit(1);
 	if (!held) return null;
-	const fresh = await mintGuestPerson(tx, guest);
+	const fresh = await mintGuestPerson(tx, { ...guest, ...restore });
 	await tx
 		.update(guests)
 		.set({ personId: fresh })

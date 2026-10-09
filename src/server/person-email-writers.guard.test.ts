@@ -73,12 +73,12 @@ const WAIVERS: Array<{
 	 *  `eq(people.userId, …)` in the statement itself, so it can only ever
 	 *  move the address of the Person bound to the confirming account. */
 	requiresBoundToUser?: boolean;
-	/** Convert's fill of a PRISTINE guest Person's contact from the guest row
-	 *  (#1124): its UPDATE must carry `pristineGuestPerson(` in the statement
-	 *  itself, which is the one definition of "nobody has signed in, no
-	 *  membership, no history, no other guest row, no contact or roster-identity
-	 *  column, no removal on record". It stands in for `isNull(people.userId)`:
-	 *  the function holds it, and a source test below pins that it does. */
+	/** Convert's adopt of a PRISTINE guest Person (#1124): its UPDATE must carry
+	 *  `pristineGuestPerson(` in the statement itself, which is the one definition
+	 *  of "nobody has signed in, no membership, nothing it owns, no other guest row,
+	 *  no roster-identity column, no removal on record". Contact is NOT one of its
+	 *  conditions (#1125). It stands in for `isNull(people.userId)`: the function
+	 *  holds it, and a source test below pins that it does. */
 	requiresPristineGuestPerson?: boolean;
 	/** An officer's edit of a GUEST's contact (#1125): its UPDATE must carry
 	 *  `guestContactWritable(` in the statement itself, which is the one
@@ -798,6 +798,9 @@ describe("people.email writers (verified identity address)", () => {
 		const writable = withoutComments(functionBody(src, "guestContactWritable"));
 		expect(writable, "guestContactWritable is gone or renamed").not.toBe("");
 		expect(writable).toMatch(/unboundGuestOnlyPerson\(\)/);
+		// ...and no past as a member: the arm that keeps a removed member's Person
+		// (no membership, so it reads guest-only) from being rewritten through a card.
+		expect(writable).toMatch(/noMemberHistory\(\)/);
 		expect(writable).toMatch(/clubGuestRow\.clubId\s*,\s*clubId/);
 		const unbound = withoutComments(
 			functionBody(src, "unboundGuestOnlyPerson"),

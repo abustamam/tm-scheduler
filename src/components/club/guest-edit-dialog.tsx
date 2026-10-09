@@ -254,6 +254,18 @@ export function GuestEditDialog({
 			// refresh rejects, over a write that has already COMMITTED, and leaves
 			// the dialog open with no indication which half went wrong.
 			try {
+				// A contact field is sent ONLY when the officer changed it (#1125). A
+				// locked card sends neither, and an untouched field is left out, so the
+				// server leaves the stored value alone: a name fix cannot trip the format
+				// or clash check on a stored address it never touched, and a stale copy
+				// of the card cannot overwrite a value somebody changed since it loaded.
+				const emailNow = String(form.get("email") ?? "").trim() || null;
+				const phoneNow = String(form.get("phone") ?? "").trim() || null;
+				const emailChanged =
+					!contactRefusal && emailNow !== ((guest.email ?? "").trim() || null);
+				const phoneChanged =
+					!contactRefusal &&
+					phoneNow !== ((guest.phoneRaw ?? "").trim() || null);
 				await updateGuest({
 					data: {
 						clubId,
@@ -261,8 +273,8 @@ export function GuestEditDialog({
 						name,
 						preferredName:
 							String(form.get("preferredName") ?? "").trim() || null,
-						email: String(form.get("email") ?? "").trim() || null,
-						phone: String(form.get("phone") ?? "").trim() || null,
+						...(emailChanged ? { email: emailNow } : {}),
+						...(phoneChanged ? { phone: phoneNow } : {}),
 					},
 				});
 			} catch (err) {

@@ -2,6 +2,11 @@
  * Source guard: **nothing in shipped code reads or writes `guests.email` or
  * `guests.phone`** (#1125, ADR-0031).
  *
+ * Since this change `schema.ts` does not declare the two columns at all: they
+ * still exist in the database, dead, until #1126 drops them in SQL. So a Drizzle
+ * reference no longer type-checks, and what this guard adds is raw SQL and an
+ * `alias()`/`as` spelling that a cast could still get past.
+ *
  * A guest's email and phone live on their Person (`people.email` / `people.phone`).
  * The two `guests` columns are kept for one release only so the old container,
  * still serving while a deploy swaps, never reads a column that was dropped; #1126
@@ -12,7 +17,7 @@
  *
  * ## What it scans, and the comment decision
  *
- * Every non-test `.ts` / `.tsx` under `src/`. It reads THROUGH `stripComments`:
+ * Every non-test `.ts` / `.tsx` under `src/` and `scripts/`. It reads THROUGH `stripComments`:
  * several files that are not this change's to edit still MENTION the column in a
  * comment, and a prose mention is not a reference. That is the loosening a
  * "the offender list must be empty" guard normally refuses (see the header of
@@ -31,10 +36,10 @@
  *
  * ## What it cannot see
  *
- * A whole-row read (`db.select().from(guests)` and then `row.email`) names the
- * column nowhere. Type-checking is what catches those once #1126 drops the column.
- * Every whole-row guest read in shipped code was read for this change; none uses
- * the contact.
+ * Raw SQL that selects `email` from `guests` without qualifying it
+ * (`select email from guests`) names the column nowhere in the shapes above. A
+ * whole-row Drizzle read can no longer carry the columns (they are not declared),
+ * so that old blind spot is closed by the schema, not by this scan.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -42,12 +47,20 @@ import { describe, expect, it } from "vitest";
 import { stripComments } from "#/test/guard-source";
 
 const SRC = join(import.meta.dirname, "..");
+/** `scripts/` too: a one-off that updates the dead column is still a writer. */
+const ROOTS = [SRC, join(SRC, "..", "scripts")];
 
 /** Non-test `.ts`/`.tsx` sources under `src/`, comments blanked, keyed relative to it. */
 function sources(): Array<{ key: string; text: string }> {
 	const out: Array<{ key: string; text: string }> = [];
 	const walk = (dir: string) => {
-		for (const entry of readdirSync(dir)) {
+		let entries: string[];
+		try {
+			entries = readdirSync(dir);
+		} catch {
+			return; // `scripts/` may not exist in every checkout shape
+		}
+		for (const entry of entries) {
 			const full = join(dir, entry);
 			if (statSync(full).isDirectory()) {
 				walk(full);
@@ -61,7 +74,7 @@ function sources(): Array<{ key: string; text: string }> {
 			});
 		}
 	};
-	walk(SRC);
+	for (const root of ROOTS) walk(root);
 	return out;
 }
 
