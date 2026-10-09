@@ -69,12 +69,17 @@ describe.skipIf(!hasTestDb)("loadMeetingSlots guest caption", () => {
 		expect(slot).not.toHaveProperty("assigneeGuestHomeClub");
 	});
 
-	it("captions a visiting Toastmaster with no home club by kind alone", async () => {
-		const slot = await holdSlotAsGuest({
-			kind: "visiting_toastmaster",
-			homeClub: null,
-		});
-		expect(slot?.assigneeGuestCaption).toBe("Visiting Toastmaster");
+	it("gives a visiting Toastmaster no caption, home club or not", async () => {
+		// Dropped from the agenda for now: the caption on every row they held
+		// crowded the printed run of show onto a third sheet.
+		for (const homeClub of [null, "GB TM"]) {
+			const slot = await holdSlotAsGuest({
+				kind: "visiting_toastmaster",
+				homeClub,
+			});
+			expect(slot?.assigneeIsGuest).toBe(true);
+			expect(slot?.assigneeGuestCaption).toBeNull();
+		}
 	});
 
 	it("gives a Visitor no caption, even with a leftover home club", async () => {
