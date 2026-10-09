@@ -697,7 +697,9 @@ status value that some writes must refuse, the refusal lives in a runtime policy
 one of two shapes:
 
 - **Gate:** it sits inside a gate every affected writer already has to call. The archived club is
-  refused in `requireMembership`, which `write-proof.guard.test.ts` makes every write call.
+  refused in `requireMembership` and `assertClubNotArchived` (`server/guards.ts`);
+  `public-readers-archive-gate.guard.test.ts` makes every session-less writer carry an archive
+  check (`WRITE_GATES`) or a reviewed reason it needs none (`REVIEWED_UNGATED`).
 - **Sweep:** a guard test derives the writers from the schema and fails any writer that doesn't
   call the policy for its class. Reference: meeting status, `meeting-writers.guard.test.ts`
   (#1139).
