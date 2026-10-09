@@ -27,10 +27,13 @@
  *      says which binary works and which one hangs).
  *
  * Exits non-zero, naming what is missing, when `BASE_URL` is not local, when
- * Chrome, the club, a qualifying meeting, an upcoming meeting or either seed
- * officer is absent, when dev-login is off, when a page does not serve the club
- * or fails its DOM check, or when a capture comes out too small to be anything
- * but a blank page.
+ * Chrome, the club, a qualifying meeting (never a cancelled one), an upcoming
+ * meeting or either seed officer is absent, when dev-login is off, when a page
+ * does not serve the club or fails its DOM check, when a page lacks a feature
+ * the tour is meant to show (the lane dropdown, a "Resend invite", the nudge
+ * links, a guest kind caption: `marketing-screenshot-features.ts`, which the
+ * seed's Harbor club is built to satisfy), or when a capture comes out too
+ * small to be anything but a blank page.
  */
 import { execFileSync, spawn } from "node:child_process";
 import {
@@ -55,10 +58,14 @@ import {
 	VPE_SECTION_ID,
 	VPM_SECTION_ID,
 } from "./marketing-screenshot-checks";
+import {
+	checkAgendaFeatures,
+	checkVpeHydrated,
+	checkVpmFeatures,
+	checkVpmHydrated,
+} from "./marketing-screenshot-features";
 
 const CLUB_NAME = "Harbor City Speakers";
-/** A meeting qualifies with at least this many filled role slots. */
-const MIN_ASSIGNED_SLOTS = 3;
 /** A blank or error page renders well under this; a real agenda well over. */
 const MIN_PNG_BYTES = 20 * 1024;
 const BASE_URL = (process.env.BASE_URL ?? "http://localhost:3000").replace(
@@ -75,32 +82,16 @@ function fail(message: string): never {
 	process.exit(1);
 }
 
-/**
- * The earliest qualifying meeting dated today or later, else the most recent
- * qualifying past one. `candidates` holds only qualifying meetings.
- */
-function pickMeeting<T extends { scheduledAt: Date }>(
-	candidates: T[],
-	now: Date,
-): T | null {
-	const startOfToday = new Date(now);
-	startOfToday.setHours(0, 0, 0, 0);
-	const upcoming = candidates
-		.filter((m) => m.scheduledAt >= startOfToday)
-		.sort((a, b) => +a.scheduledAt - +b.scheduledAt);
-	if (upcoming[0]) return upcoming[0];
-	const past = candidates
-		.filter((m) => m.scheduledAt < startOfToday)
-		.sort((a, b) => +b.scheduledAt - +a.scheduledAt);
-	return past[0] ?? null;
-}
-
 async function findTarget(): Promise<{ slug: string; meetingId: string }> {
 	// Imported here, after the Chrome check, so a missing browser is reported
 	// without needing a database at all.
 	const { db } = await import("#/db");
-	const { clubs, meetings, roleSlots } = await import("#/db/schema");
-	const { and, count, eq, gte, isNotNull, or } = await import("drizzle-orm");
+	const { clubs } = await import("#/db/schema");
+	const { eq } = await import("drizzle-orm");
+	// The query is its own module so a test can run it (#1122).
+	const { findCaptureMeeting, MIN_ASSIGNED_SLOTS } = await import(
+		"./marketing-screenshot-target"
+	);
 
 	const [club] = await db
 		.select({ id: clubs.id, slug: clubs.slug })
@@ -113,33 +104,24 @@ async function findTarget(): Promise<{ slug: string; meetingId: string }> {
 		);
 	}
 
-	const qualifying = await db
-		.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
-		.from(meetings)
-		.innerJoin(roleSlots, eq(roleSlots.meetingId, meetings.id))
-		.where(
-			and(
-				eq(meetings.clubId, club.id),
-				or(
-					isNotNull(roleSlots.assignedMemberId),
-					isNotNull(roleSlots.assignedGuestId),
-				),
-			),
-		)
-		.groupBy(meetings.id, meetings.scheduledAt)
-		.having(gte(count(roleSlots.id), MIN_ASSIGNED_SLOTS));
-
-	const meeting = pickMeeting(qualifying, new Date());
+	const meeting = await findCaptureMeeting(db, club.id);
 	if (!meeting) {
 		fail(
-			`club "${CLUB_NAME}" has no meeting with at least ${MIN_ASSIGNED_SLOTS} assigned role slots.`,
+			`club "${CLUB_NAME}" has no meeting that is not cancelled with at least ${MIN_ASSIGNED_SLOTS} assigned role slots.`,
 		);
 	}
 	return { slug: club.slug, meetingId: meeting.id };
 }
 
-/** A 200 whose HTML names the club, or the capture would show the wrong thing. */
-async function assertServes(url: string): Promise<void> {
+/**
+ * A 200 whose HTML names the club, or the capture would show the wrong thing.
+ * `check` is the page's own feature check (`marketing-screenshot-features.ts`),
+ * for a page whose features the server draws.
+ */
+async function assertServes(
+	url: string,
+	check?: (html: string) => string | null,
+): Promise<void> {
 	let res: Response;
 	try {
 		res = await fetch(url);
@@ -153,6 +135,8 @@ async function assertServes(url: string): Promise<void> {
 	if (!html.includes(CLUB_NAME)) {
 		fail(`${url} served a page that does not mention "${CLUB_NAME}".`);
 	}
+	const problem = check?.(html);
+	if (problem) fail(`${url}: ${problem}`);
 }
 
 async function findClubId(): Promise<string> {
@@ -368,6 +352,14 @@ const OFFICER_WINDOW = "1600,900";
 const OFFICER_VIEWPORT = { width: 1600, height: 900 };
 /** After `load`: hydration, the post-mount draft links, fonts. */
 const SETTLE_MS = 1500;
+/**
+ * How much longer the live page gets to pass its check. A dev server compiles
+ * a route's modules the first time it is asked for them, so a cold server can
+ * hydrate well after `SETTLE_MS`; shooting then would capture a page with no
+ * draft links on it. `CAPTURE_TIMEOUT_MS` still bounds the whole shot.
+ */
+const HYDRATION_WAIT_MS = 20_000;
+const HYDRATION_POLL_MS = 250;
 const CAPTURE_TIMEOUT_MS = 60_000;
 
 /**
@@ -542,9 +534,14 @@ async function shootSection(
 	await loaded;
 	await new Promise((r) => setTimeout(r, SETTLE_MS));
 
-	const problem = check(
-		await evaluate<string>("document.documentElement.outerHTML"),
-	);
+	const outerHtml = () =>
+		evaluate<string>("document.documentElement.outerHTML");
+	let problem = check(await outerHtml());
+	const waitStart = Date.now();
+	while (problem && Date.now() - waitStart < HYDRATION_WAIT_MS) {
+		await new Promise((r) => setTimeout(r, HYDRATION_POLL_MS));
+		problem = check(await outerHtml());
+	}
 	if (problem) throw new Error(problem);
 	// The dev server's TanStack devtools badge is not part of the product.
 	await evaluate(
@@ -590,7 +587,11 @@ async function main() {
 	const { slug, meetingId } = await findTarget();
 	const base = `${BASE_URL}/club/${slug}/meeting/${meetingId}`;
 	const shots = [
-		{ url: `${base}/print`, out: join(OUT_DIR, "tour-agenda.png") },
+		{
+			url: `${base}/print`,
+			out: join(OUT_DIR, "tour-agenda.png"),
+			check: checkAgendaFeatures,
+		},
 		{ url: `${base}/present`, out: join(OUT_DIR, "tour-present.png") },
 	];
 
@@ -602,19 +603,25 @@ async function main() {
 			email: vpeEmail,
 			id: VPE_SECTION_ID,
 			path: `/admin/vpe-dashboard#${VPE_SECTION_ID}`,
+			// `--dump-dom` is taken at the load event, before the page hydrates,
+			// so `check` sees only what the server drew. `settled` runs on the
+			// live page the shot is taken from and adds what appears after mount.
 			check: checkVpeDom,
+			settled: (html: string) => checkVpeDom(html) ?? checkVpeHydrated(html),
 			out: join(OUT_DIR, "tour-vpe.png"),
 		},
 		{
 			email: vpmEmail,
 			id: VPM_SECTION_ID,
 			path: `/admin/vp-membership#${VPM_SECTION_ID}`,
-			check: checkVpmDom,
+			check: (html: string) => checkVpmDom(html) ?? checkVpmFeatures(html),
+			settled: (html: string) =>
+				checkVpmDom(html) ?? checkVpmFeatures(html) ?? checkVpmHydrated(html),
 			out: join(OUT_DIR, "tour-vpm.png"),
 		},
 	];
 
-	for (const s of shots) await assertServes(s.url);
+	for (const s of shots) await assertServes(s.url, s.check);
 	await assertDevLogin(vpeEmail);
 
 	// DOM checks first, for every officer shot, so a failure writes nothing.
@@ -635,7 +642,7 @@ async function main() {
 			devLoginUrl(BASE_URL, s.email, s.path),
 			s.out,
 			s.id,
-			s.check,
+			s.settled,
 		);
 	}
 	process.exit(0);
