@@ -39,7 +39,9 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const { applyUpdateGuest, captureGuestVisit, loadGuestPipeline } = await import(
 	"#/server/guest-pipeline-logic"
 );
-const { createGuestRecord } = await import("#/server/guests-logic");
+const { createGuestRecord, loadGuestProfile } = await import(
+	"#/server/guests-logic"
+);
 const {
 	addressHeldByAnother,
 	bindVerifiedPerson,
@@ -482,6 +484,60 @@ describe.skipIf(!hasTestDb)(
 					email,
 					phone: "+15550009999",
 				});
+			});
+		});
+
+		// -----------------------------------------------------------------------
+		// The Edit guest dialog's read.
+		// -----------------------------------------------------------------------
+		describe("loadGuestProfile carries the reason the dialog shows the contact read-only", () => {
+			it("is null for a guest-only, unbound Person, and names each of the three refusals", async () => {
+				const clubB = await makeClub();
+				const plain = await newGuest(uniq("Profile Plain"));
+				const signedIn = await newGuest(uniq("Profile Signed In"));
+				await testDb
+					.update(people)
+					.set({ userId: await makeUser() })
+					.where(eq(people.id, signedIn.personId));
+				const here = await newGuest(uniq("Profile Here"));
+				await member(seed.clubId, here.personId);
+				const elsewhere = await newGuest(uniq("Profile Elsewhere"));
+				await member(clubB, elsewhere.personId);
+
+				const reason = async (guestId: string) =>
+					(await loadGuestProfile(seed.clubId, guestId))?.contactRefusal;
+				expect(await reason(plain.guestId)).toBeNull();
+				expect(await reason(signedIn.guestId)).toBe("signed_in");
+				expect(await reason(here.guestId)).toBe("member_here");
+				expect(await reason(elsewhere.guestId)).toBe("member_elsewhere");
+			});
+
+			it("is the same reason the board carries and the edit throws", async () => {
+				const name = uniq("Profile Same");
+				const personId = await makePerson({ name, email: address("theirs") });
+				await member(seed.clubId, personId, name);
+				const guestId = await guestOn(personId, seed.clubId, name);
+
+				const profile = await loadGuestProfile(seed.clubId, guestId);
+				const board = await loadGuestPipeline(seed.clubId);
+
+				expect(profile?.contactRefusal).toBe("member_here");
+				expect(board.find((g) => g.id === guestId)?.contactRefusal).toBe(
+					profile?.contactRefusal,
+				);
+				await expect(
+					edit(guestId, name, { email: address("other") }),
+				).rejects.toThrow(
+					GUEST_CONTACT_REFUSAL_MESSAGES[
+						profile?.contactRefusal ?? "member_here"
+					],
+				);
+			});
+
+			it("is null for another club's guest (the profile is club-scoped)", async () => {
+				const clubB = await makeClub();
+				const theirs = await newGuest(uniq("Theirs"), {}, clubB);
+				expect(await loadGuestProfile(seed.clubId, theirs.guestId)).toBeNull();
 			});
 		});
 

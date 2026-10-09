@@ -92,11 +92,12 @@ the nouns in `src/db/schema.ts`.
   (#1124, ADR-0031): the `guests` row is the per-club guest RECORD (stage, kind, home club,
   who introduced them, the membership they converted to), as `members` is the per-club
   membership, and `guests.person_id` points at the human. A guest row's name stays per club
-  and `people.name` is the fallback; email and phone are still on the row until #1125 moves
-  them. A guest is **not** a Membership: no login, no Pathways, no roster/officer presence,
+  and `people.name` is the fallback; **email and phone are the Person's** (#1125): written
+  through `createGuestRecord`, an officer's edit (`guestContactWritable`) or the guest book's
+  blank fill (`guestContactFillable`), and read by joining `guests.person_id`. The `guests.email`
+  and `guests.phone` columns are dead until #1126 drops them. A guest is **not** a Membership: no login, no Pathways, no roster/officer presence,
   and NOT a `members` status. Created ONLY through `createGuestRecord` (Person and row in one
-  transaction; `guest-insert.guard.test.ts`). `person_id` is nullable until #1125, so
-  `ensureGuestPerson` repairs a null. A Person held by guest rows only is **guest-only**
+  transaction; `guest-insert.guard.test.ts`). `person_id` is NOT NULL (#1125). A Person held by guest rows only is **guest-only**
   (`unboundGuestOnlyPerson()`), and the superadmin merge tool labels it "Guest". A slot references at most one
   assignee — a member (`assigned_member_id`) OR a guest (`assigned_guest_id`), never both
   (enforced in logic + a DB check constraint). Guests never appear in the member roster/picker;
@@ -124,10 +125,12 @@ the nouns in `src/db/schema.ts`.
   and `lost` guests (`stage in (prospect, following_up)`). Convert with no member of THIS club
   to match puts the membership on the **guest's own Person** only if it is **pristine** (#1124,
   ADR-0031, `pristineGuestPerson`): never signed in, never a member anywhere, no speech,
-  enrolment or charter-helper row, no other guest row, no email or phone, and no `member_remove` /
-  `member_add` naming it. Then no `people` row is inserted (`createdPerson` is `false`) and the guest
-  row's name, goes-by name, email and phone are filled onto it before the membership insert.
-  Otherwise convert mints a **fresh Person** carrying the guest row's values, points the guest at it,
+  enrolment or charter-helper row, no other guest row, no roster-identity column (Customer ID,
+  Base Camp id, join date, invite stamp), and no `member_remove` naming it; contact is NOT tested
+  (a guest's own is on its Person). Then no `people` row is inserted (`createdPerson` is `false`)
+  and the guest row's name and goes-by name are written onto it before the membership insert.
+  Otherwise convert mints a **fresh Person** carrying the guest row's name and the contact its old
+  Person carries, points the guest at it,
   and leaves the old Person exactly as it is (it is someone's history, or a #875 release target).
   Undo leaves the contact and the guest's Person alone.
 - **Guest book** — the public, no-auth capture front door (ADR-0018, absorbing #239):

@@ -11,6 +11,7 @@ import {
 	peopleEmailBackup,
 	roleSlots,
 } from "#/db/schema";
+import type { GuestContactRefusal } from "#/lib/guest-contact";
 import { GUEST_IS_NOW_A_MEMBER_MESSAGE } from "#/lib/guest-convert";
 import {
 	type BroughtCount,
@@ -24,6 +25,7 @@ import {
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { toStoredPhone } from "#/lib/phone";
 import {
+	guestContactRefusalFor,
 	releasedByRemoval,
 	unreferencedUnboundPerson,
 } from "./account-link-logic";
@@ -504,6 +506,16 @@ export interface IntroducerOption {
 
 export interface GuestProfile extends GuestProfileFields {
 	roster: IntroducerOption[];
+	/**
+	 * Why this club's officers may NOT change the guest's email or phone, or null
+	 * when they may (#1125, `guestContactWritable`): the first of "signed in", "a
+	 * member here", "a member of another club". Read fresh with the rest of the
+	 * profile when the Edit guest dialog opens, so the dialog shows the contact
+	 * read-only with the matching sentence and the refusal `applyUpdateGuest` throws
+	 * is normally never reached from it. The READ form of the writer's own WHERE,
+	 * never the gate.
+	 */
+	contactRefusal: GuestContactRefusal | null;
 }
 
 /**
@@ -539,18 +551,24 @@ export async function loadGuestProfile(
 			kind: guests.kind,
 			homeClub: guests.homeClub,
 			introducedByMemberId: members.id,
+			personId: guests.personId,
 		})
 		.from(guests)
 		.leftJoin(members, introducerOfClub(clubId))
 		.where(and(eq(guests.id, guestId), eq(guests.clubId, clubId)))
 		.limit(1);
 	if (!guest) return null;
+	const { personId, ...stored } = guest;
 	const roster = await db
 		.select({ id: members.id, name: members.name, status: members.status })
 		.from(members)
 		.where(eq(members.clubId, clubId))
 		.orderBy(asc(members.name));
-	return { ...guest, roster };
+	return {
+		...stored,
+		roster,
+		contactRefusal: await guestContactRefusalFor(personId, clubId),
+	};
 }
 
 /** One guest's kind / home club / introducer, for VP Membership's rows. */

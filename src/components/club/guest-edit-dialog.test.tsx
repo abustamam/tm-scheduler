@@ -3,7 +3,9 @@
  * The guest edit dialog's kind / home club / introducer half (#1050, #1060
  * review): the three load states, the "unchanged profile → no profile write"
  * rule, and the half-saved path where the contact write commits and the
- * profile write is refused.
+ * profile write is refused. And, since #1125, its contact half: the email and
+ * phone show read-only with the matching sentence when the club may not change
+ * them (a guest's contact is their Person's).
  */
 import {
 	cleanup,
@@ -41,10 +43,15 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 
 import {
 	GuestEditDialog,
+	type GuestEditFields,
 	PROFILE_NOT_SAVED_PREFIX,
 } from "#/components/club/guest-edit-dialog";
+import {
+	GUEST_CONTACT_REFUSAL_MESSAGES,
+	GUEST_CONTACT_REFUSAL_ORDER,
+} from "#/lib/guest-contact";
 
-const GUEST = {
+const GUEST: GuestEditFields = {
 	id: "g1",
 	name: "Nadia Farouk",
 	preferredName: null,
@@ -58,6 +65,7 @@ const PROFILE = {
 	kind: "guest_speaker" as const,
 	homeClub: "Laguna Speakers",
 	introducedByMemberId: "m1",
+	contactRefusal: null,
 	roster: [
 		{ id: "m1", name: "Sam Officer", status: "active" as const },
 		{ id: "m2", name: "Lee Lapsed", status: "inactive" as const },
@@ -201,5 +209,111 @@ describe("GuestEditDialog — contact saved, profile refused", () => {
 		// Open, on the profile fields.
 		expect(onOpenChange).not.toHaveBeenCalledWith(false);
 		expect(screen.getByLabelText("Introduced by")).toBeTruthy();
+	});
+});
+
+describe("GuestEditDialog — contact read-only (#1125)", () => {
+	const email = () => screen.getByLabelText("Email") as HTMLInputElement;
+	const phone = () => screen.getByLabelText("Phone") as HTMLInputElement;
+	const locked = () =>
+		document.querySelector('[data-slot="guest-contact-locked"]');
+
+	function renderWith(guest: GuestEditFields) {
+		const onOpenChange = vi.fn();
+		render(
+			<GuestEditDialog
+				guest={guest}
+				clubId="c1"
+				open
+				onOpenChange={onOpenChange}
+			/>,
+		);
+		return { onOpenChange };
+	}
+
+	for (const reason of GUEST_CONTACT_REFUSAL_ORDER) {
+		it(`${reason}: the email and phone are read-only and say why, and the name stays editable`, async () => {
+			getGuestProfile.mockResolvedValue({ ...PROFILE, contactRefusal: reason });
+			renderWith({ ...GUEST, phoneRaw: "+15550001111" });
+			await screen.findByLabelText("Kind");
+			expect(email().readOnly).toBe(true);
+			expect(phone().readOnly).toBe(true);
+			expect(locked()?.textContent).toBe(
+				GUEST_CONTACT_REFUSAL_MESSAGES[reason],
+			);
+			expect(email().getAttribute("aria-describedby")).toBe(locked()?.id);
+			expect((screen.getByLabelText("Name") as HTMLInputElement).readOnly).toBe(
+				false,
+			);
+		});
+	}
+
+	it("when the club may change the contact: both fields are editable and nothing is said", async () => {
+		getGuestProfile.mockResolvedValue({ ...PROFILE, contactRefusal: null });
+		renderWith(GUEST);
+		await screen.findByLabelText("Kind");
+		expect(email().readOnly).toBe(false);
+		expect(phone().readOnly).toBe(false);
+		expect(locked()).toBeNull();
+	});
+
+	it("saves a name fix on a locked card by resending the contact it shows, so nothing is cleared", async () => {
+		// `readOnly`, not `disabled`: a disabled input is left out of the form, and
+		// the save would send null for both and wipe the Person's contact.
+		getGuestProfile.mockResolvedValue({
+			...PROFILE,
+			contactRefusal: "member_here",
+		});
+		const { onOpenChange } = renderWith({ ...GUEST, phoneRaw: "+15550001111" });
+		await screen.findByLabelText("Kind");
+		fireEvent.change(screen.getByLabelText("Name"), {
+			target: { value: "Nadia Farouk-Hassan" },
+		});
+		save();
+		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+		expect(updateGuest).toHaveBeenCalledWith({
+			data: expect.objectContaining({
+				name: "Nadia Farouk-Hassan",
+				email: "nadia@example.com",
+				phone: "+15550001111",
+			}),
+		});
+	});
+
+	it("before the read arrives, a reason the caller already holds keeps the fields shut", () => {
+		getGuestProfile.mockReturnValue(new Promise(() => {}));
+		renderWith({ ...GUEST, contactRefusal: "signed_in" });
+		expect(email().readOnly).toBe(true);
+		expect(locked()?.textContent).toBe(
+			GUEST_CONTACT_REFUSAL_MESSAGES.signed_in,
+		);
+	});
+
+	it("the fresh read wins over the caller's copy, in both directions", async () => {
+		getGuestProfile.mockResolvedValue({ ...PROFILE, contactRefusal: null });
+		renderWith({ ...GUEST, contactRefusal: "member_elsewhere" });
+		await screen.findByLabelText("Kind");
+		await waitFor(() => expect(email().readOnly).toBe(false));
+		expect(locked()).toBeNull();
+		cleanup();
+
+		getGuestProfile.mockResolvedValue({
+			...PROFILE,
+			contactRefusal: "member_here",
+		});
+		renderWith({ ...GUEST, contactRefusal: null });
+		await screen.findByLabelText("Kind");
+		await waitFor(() => expect(email().readOnly).toBe(true));
+		expect(locked()?.textContent).toBe(
+			GUEST_CONTACT_REFUSAL_MESSAGES.member_here,
+		);
+	});
+
+	it("with no read and no reason from the caller the fields stay editable (the server still refuses)", async () => {
+		getGuestProfile.mockRejectedValue(new Error("boom"));
+		renderWith(GUEST);
+		await screen.findByText(/couldn't load this guest's kind/i);
+		expect(email().readOnly).toBe(false);
+		expect(locked()).toBeNull();
 	});
 });
