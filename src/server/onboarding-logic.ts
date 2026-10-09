@@ -46,7 +46,11 @@ import {
 } from "#/lib/club-timezone";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
 import { slugify } from "#/lib/slug";
-import { type RosterObstacle, rosterConflictFor } from "./account-link-logic";
+import {
+	type RosterObstacle,
+	rosterConflictFor,
+	unreferencedUnboundPerson,
+} from "./account-link-logic";
 import { findBestPersonByEmail } from "./people-logic";
 
 // A transaction handle (or the base db) — both expose the query builder we use.
@@ -771,6 +775,29 @@ async function personsOfClub(
 }
 
 /**
+ * The guest-only Persons among `locked` that a club delete must KEEP: those that
+ * do not satisfy `unreferencedUnboundPerson()`. Evaluated after the cascade, so
+ * this club's guest rows are already gone and any `guests` row it finds is
+ * another club's.
+ */
+async function keptGuestOnly(
+	tx: Tx,
+	locked: { id: string }[],
+	guestOnlyIds: Set<string>,
+): Promise<string[]> {
+	const candidates = locked
+		.map((p) => p.id)
+		.filter((id) => guestOnlyIds.has(id));
+	if (candidates.length === 0) return [];
+	const deletable = await tx
+		.select({ id: people.id })
+		.from(people)
+		.where(and(inArray(people.id, candidates), unreferencedUnboundPerson()));
+	const ok = new Set(deletable.map((p) => p.id));
+	return candidates.filter((id) => !ok.has(id));
+}
+
+/**
  * Persons among `personIds` whose own history still points at ANOTHER club.
  * Called after the cascade, under the Person lock, so every club reference that
  * survives is by construction some other club's: this club's slots are gone,
@@ -955,12 +982,14 @@ export async function deleteClubPermanently(
 			const keep = new Set([
 				...stillMembers.map((r) => r.personId),
 				...(await personsWithOtherClubHistory(tx, personIds)),
-				// A Person this club knew ONLY as a guest and who has signed in is
-				// somebody's account, not a guest-only Person (M3 of #1155): deleting
-				// them would take the account with it and queue its deletion below.
-				...locked
-					.filter((p) => p.userId && guestOnlyIds.has(p.id))
-					.map((p) => p.id),
+				// A Person this club knew ONLY as a guest keeps what a guest delete
+				// would keep (`unreferencedUnboundPerson()`): somebody who has signed in
+				// (M3 of #1155: deleting them takes the account with it and queues its
+				// deletion below), and one who owns a speech, an enrolment or a
+				// charter-helper row. A guest row here never made this club the owner of
+				// that history: a Person merged with a former member of another club is
+				// guest-only by the predicate and still has that club's record attached.
+				...(await keptGuestOnly(tx, locked, guestOnlyIds)),
 			]);
 			const doomed = locked.filter((p) => !keep.has(p.id));
 			peopleKept = locked.length - doomed.length;

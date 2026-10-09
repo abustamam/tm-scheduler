@@ -134,6 +134,16 @@ while it waited for a club lock closed a cycle with them. Its guest-row lock is 
 a slot assignment holds its slot and then key-share-locks the guest it names, and a `FOR UPDATE`
 there would deadlock with the merge's own collapse.
 
+**Person lock strength.** The Person locks are `FOR NO KEY UPDATE`, except in a path that DELETES a
+Person (a guest delete, a link, `mergePeople`), which takes `FOR UPDATE`. `NO KEY UPDATE`
+conflicts with every other writer of the row, `applyMemberEdit`'s `FOR UPDATE` included, and not
+with the key share a foreign-key insert takes on it. A speaker claim holds the slot or the
+membership and then inserts a speech, key-sharing the Person, and takes no club write lock, so a
+`FOR UPDATE` on a Person held while waiting for that slot or membership was a deadlock. A
+membership collapse locks the two memberships' Persons before it writes either membership row,
+for the same reason in the other direction: it now re-points `guests.person_id`, which key-shares
+the keeper's Person, and the roster edit locks that Person before the membership.
+
 **The read-then-lock rule.** A path that must read a row to learn which clubs or Persons to
 lock (convert, `mergePeople`, #1127's actions) reads it WITHOUT locking, takes the locks in
 protocol order, and re-reads. If the set of clubs or Persons changed, it refuses with
@@ -147,9 +157,15 @@ absorbed Person, counts them in `movedCounts.guests`, and writes an audit row fo
 whose guest record moved. Club delete deletes a guest-only Person whose only guest rows were in
 the deleted club, and keeps a Person with a guest row in another club
 (`personsWithOtherClubHistory` counts `guests` too) and a Person somebody has signed in as, which
-is an account and not a guest. Deleting a guest deletes its Person too, in the same transaction
-and under the same lock protocol, when nothing else references it: no sign-in, membership, other
-guest row, speech or Pathways enrolment. Deleting a member who has several converted guest rows
+is an account and not a guest, and a Person that owns a speech, a Pathways enrolment or a
+charter-helper row (a guest row never made the deleted club the owner of that history; a guest-only
+Person merged with a former member of another club still carries it). Deleting a guest deletes its
+Person too, in the same transaction and under the same lock protocol, when nothing else references
+it: no sign-in, membership, other guest row, speech, Pathways enrolment or charter-helper row
+(`club_charter_helpers.person_id` is `SET NULL`, and a helper with no name would then violate its
+identity check). That is the one predicate, `unreferencedUnboundPerson()`, which a club delete also
+applies to its guest-only Persons. A Person a guest delete or a link deletes loses its
+`people_email_backup` rows too, as in a club delete, and only that table. Deleting a member who has several converted guest rows
 succeeds: `converted_membership_id` is `SET NULL` and nothing forbids it. A client-supplied guest
 id that names ANOTHER club's guest is refused, not treated as a replay.
 

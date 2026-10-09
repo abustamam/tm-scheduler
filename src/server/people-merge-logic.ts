@@ -200,12 +200,21 @@ export async function mergePeople(
 		// `FOR UPDATE` while its collapse waits for that slot is a deadlock. This
 		// conflicts with every other writer of the row and not with that foreign
 		// key's lock, which is all `person_id` (not a referenced key) needs.
-		await tx
-			.select({ id: guests.id })
+		const lockedGuests = await tx
+			.select({
+				id: guests.id,
+				clubId: guests.clubId,
+				personId: guests.personId,
+			})
 			.from(guests)
 			.where(inArray(guests.personId, personIds))
 			.orderBy(guests.id)
 			.for("no key update");
+		// The absorbed Person's guest rows as they stand NOW, before any collapse
+		// below re-points a converted guest's Person along with its membership. The
+		// count and the audit are taken from this set so they agree with the
+		// preview, which counts the same rows before anything moves.
+		const guestsToMove = lockedGuests.filter((g) => g.personId === absorbed.id);
 
 		const block = checkMergeBlocks(keeper, absorbed);
 		if (block) throw new Error(block);
@@ -250,12 +259,11 @@ export async function mergePeople(
 		//     the guest RECORDS and stay per club; only whose they are changes.
 		//     Every club whose guest record moved is "affected" too, so a merge of
 		//     guest-only Persons is attributable to the clubs it touched.
-		const guestsMoved = await tx
+		await tx
 			.update(guests)
 			.set({ personId: keeper.id })
-			.where(eq(guests.personId, absorbed.id))
-			.returning({ id: guests.id, clubId: guests.clubId });
-		for (const g of guestsMoved) affectedClubIds.add(g.clubId);
+			.where(eq(guests.personId, absorbed.id));
+		for (const g of guestsToMove) affectedClubIds.add(g.clubId);
 
 		// 2. Speeches (person-scoped, no unique) → keeper.
 		const spMoved = await tx
@@ -318,7 +326,7 @@ export async function mergePeople(
 			collapsed,
 			speeches: spMoved.length,
 			enrollments: enMoved,
-			guests: guestsMoved.length,
+			guests: guestsToMove.length,
 		};
 		for (const clubId of affectedClubIds) {
 			await tx.insert(activityLog).values({

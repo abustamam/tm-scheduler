@@ -66,14 +66,17 @@ import {
 	unboundGuestOnlyPerson,
 } from "./account-link-logic";
 import { logActivity } from "./activity";
-import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
+import {
+	CLUB_BUSY_MESSAGE,
+	lockClubForWrite,
+	lockPersonsInOrder,
+} from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { assertClubNotArchived } from "./guards";
 import {
 	createGuestRecord,
 	deleteGuestPersonIfUnreferenced,
 	ensureGuestPerson,
-	lockPersonsInOrder,
 	RECORD_CHANGED_MESSAGE,
 	separateGuestFromMemberPerson,
 } from "./guests-logic";
@@ -1728,7 +1731,9 @@ export async function applyConvertGuestToMember(
 			input.clubId,
 			convertIdentity(peek, cc),
 		);
-		await lockPersonsInOrder(tx, [peek.personId, peekMatch]);
+		// NO KEY UPDATE: convert deletes no Person, and `FOR UPDATE` would block the
+		// key share a speaker claim takes on the Person while it holds the slot.
+		await lockPersonsInOrder(tx, [peek.personId, peekMatch], "no key update");
 
 		// Then lock the guest row, and re-check `stage` under that lock.
 		//
@@ -2407,7 +2412,13 @@ export async function applyUnlinkGuestFromMember(
 					.where(eq(members.id, peek.convertedMembershipId))
 					.limit(1)
 			: [];
-		await lockPersonsInOrder(tx, [peek.personId, peekMember?.personId]);
+		// NO KEY UPDATE, not `FOR UPDATE`: no Person is deleted here, and a speaker
+		// claim holds the slot or the membership and then key-shares the Person.
+		await lockPersonsInOrder(
+			tx,
+			[peek.personId, peekMember?.personId],
+			"no key update",
+		);
 
 		const [guest] = await tx
 			.select()
@@ -2701,7 +2712,13 @@ export async function applyUndoGuestConversion(
 					.where(eq(members.id, peek.convertedMembershipId))
 					.limit(1)
 			: [];
-		await lockPersonsInOrder(tx, [peek.personId, peekMember?.personId]);
+		// NO KEY UPDATE, not `FOR UPDATE`: no Person is deleted here, and a speaker
+		// claim holds the slot or the membership and then key-shares the Person.
+		await lockPersonsInOrder(
+			tx,
+			[peek.personId, peekMember?.personId],
+			"no key update",
+		);
 
 		const [guest] = await tx
 			.select()

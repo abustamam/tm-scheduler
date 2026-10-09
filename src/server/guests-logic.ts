@@ -3,7 +3,14 @@
 // Integration-testable by mocking `#/db`.
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "#/db";
-import { guests, meetings, members, people, roleSlots } from "#/db/schema";
+import {
+	guests,
+	meetings,
+	members,
+	people,
+	peopleEmailBackup,
+	roleSlots,
+} from "#/db/schema";
 import { GUEST_IS_NOW_A_MEMBER_MESSAGE } from "#/lib/guest-convert";
 import {
 	type BroughtCount,
@@ -233,7 +240,8 @@ export async function separateGuestFromMemberPerson(
  *
  * Without it every deleted guest leaves a Person behind that no club names, no
  * removal record points at, and not even a permanent club delete can collect.
- * The caller holds the club write lock and the Person `FOR UPDATE`.
+ * The caller holds the club write lock and the Person `FOR UPDATE`, which is
+ * why this path, unlike the undo and unlink, takes the strong mode: it deletes.
  */
 export async function deleteGuestPersonIfUnreferenced(
 	tx: DbOrTx,
@@ -243,26 +251,15 @@ export async function deleteGuestPersonIfUnreferenced(
 		.delete(people)
 		.where(and(eq(people.id, personId), unreferencedUnboundPerson()))
 		.returning({ id: people.id });
-	return gone.length > 0;
-}
-
-/**
- * Lock Persons `FOR UPDATE` in id order, the lock protocol's second step
- * (ADR-0031). Nulls and repeats are ignored. Returns what it locked.
- */
-export async function lockPersonsInOrder(
-	tx: DbOrTx,
-	personIds: Array<string | null | undefined>,
-): Promise<string[]> {
-	const ids = [...new Set(personIds.filter((id): id is string => !!id))];
-	if (ids.length === 0) return [];
-	const rows = await tx
-		.select({ id: people.id })
-		.from(people)
-		.where(inArray(people.id, ids))
-		.orderBy(people.id)
-		.for("update");
-	return rows.map((r) => r.id);
+	if (gone.length === 0) return false;
+	// The same clean-up a club delete does for the Persons it deletes (#914): the
+	// address snapshot in `people_email_backup` has no foreign key, so it would
+	// outlive the Person it is a copy of. Only that table, as there; the other
+	// temporary backups are left to their own drop, as a club delete leaves them.
+	await tx
+		.delete(peopleEmailBackup)
+		.where(eq(peopleEmailBackup.personId, personId));
+	return true;
 }
 
 /** Contact fields for a brand-new club guest (name required, contact optional). */

@@ -18,10 +18,12 @@
  */
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, sql } from "drizzle-orm";
+import pg from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
 	apiTokens,
+	clubCharterHelpers,
 	clubs,
 	guests,
 	meetings,
@@ -29,6 +31,7 @@ import {
 	pathEnrollments,
 	pathwaysPaths,
 	people,
+	peopleEmailBackup,
 	speeches,
 	user,
 } from "#/db/schema";
@@ -68,6 +71,7 @@ const {
 	captureGuestVisit,
 } = await import("#/server/guest-pipeline-logic");
 const { bindVerifiedPerson } = await import("#/server/account-link-logic");
+const { applyMemberMerge } = await import("#/server/members-logic");
 const { collapseMemberships } = await import(
 	"#/server/membership-collapse-logic"
 );
@@ -217,6 +221,11 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 				.delete(people)
 				.where(eq(people.id, id))
 				.catch(() => {});
+		}
+		if (toRemove.size > 0) {
+			await testDb
+				.delete(peopleEmailBackup)
+				.where(inArray(peopleEmailBackup.personId, [...toRemove]));
 		}
 		if (extraPaths.length > 0) {
 			await testDb
@@ -2073,6 +2082,528 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			);
 			expect(err?.message).toBe(RECORD_CHANGED_MESSAGE);
 			expect((await guestRow(guestId)).stage).not.toBe("joined");
+		});
+	});
+
+	// =======================================================================
+	// Round 3 of the review of #1155.
+	// =======================================================================
+
+	/** A second, raw connection: a writer that takes no club write lock. */
+	async function rawClient() {
+		const c = new pg.Client({
+			connectionString: process.env.TEST_DATABASE_URL,
+		});
+		await c.connect();
+		const res = await c.query("select pg_backend_pid() as pid");
+		return { c, pid: Number(res.rows[0].pid) };
+	}
+	const sqlState = (e: unknown) =>
+		(e as { code?: string }).code ?? (e as Error).message;
+
+	// -----------------------------------------------------------------------
+	// M1 and M2: lock cycles with writers that take no club write lock.
+	// -----------------------------------------------------------------------
+	describe("lock cycles with writers that take no club lock (M1, M2)", () => {
+		it("a membership merge locks the keeper's Person before its membership, so a roster edit cannot deadlock it (M1)", async () => {
+			const keeperPerson = await makePerson({ name: uniq("Edit Keeper") });
+			const absorbedPerson = await makePerson({ name: uniq("Edit Absorbed") });
+			const [mk] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId: keeperPerson, name: "EK" })
+				.returning({ id: members.id });
+			const [mx] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId: absorbedPerson, name: "EA" })
+				.returning({ id: members.id });
+			if (!mk || !mx) throw new Error("fixture");
+			// A converted guest that IS the absorbed member's Person: the collapse
+			// re-points it, which key-shares the keeper's Person.
+			await createGuestRecord(testDb, {
+				clubId: seed.clubId,
+				name: uniq("Collapse Guest"),
+				stage: "joined",
+				convertedMembershipId: mx.id,
+				personId: absorbedPerson,
+			});
+
+			// `applyMemberEdit`: the Person `FOR UPDATE`, then the membership.
+			const { c, pid } = await rawClient();
+			await c.query("begin");
+			await c.query("select id from people where id = $1 for update", [
+				keeperPerson,
+			]);
+			const merging = applyMemberMerge({
+				clubId: seed.clubId,
+				keeperId: mk.id,
+				absorbedId: mx.id,
+				actorMemberId: seed.adminMemberId,
+			}).then(
+				() => "ok",
+				(e: unknown) => sqlState(e),
+			);
+			// The merge is parked behind the edit. Before the fix it was parked on its
+			// guest re-point, having already written the keeper's membership row.
+			await waitForLockWait("", pid);
+			const edit = await c
+				.query("update members set name = name where id = $1", [mk.id])
+				.then(
+					() => "ok",
+					(e: unknown) => sqlState(e),
+				);
+			await c.query(edit === "ok" ? "commit" : "rollback");
+			await c.end();
+
+			expect(edit).toBe("ok");
+			expect(await merging).toBe("ok");
+		});
+
+		it("undo does not deadlock with a speaker claim that holds the slot and then key-shares the Person (M2)", async () => {
+			const { guestId } = await newGuest(uniq("Undo Claim"));
+			const res = await convert(guestId);
+
+			// `claimSlotCore`: the slot UPDATE (a key share on the membership), then the
+			// speech INSERT (a key share on the Person). No club write lock.
+			const { c, pid } = await rawClient();
+			await c.query("begin");
+			await c.query(
+				`update role_slots set assigned_member_id = $1, assigned_guest_id = null,
+				        status = 'claimed', claimed_at = now() where id = $2`,
+				[res.membershipId, seed.slotId],
+			);
+			const undoing = undo(guestId).then(
+				() => "ok",
+				(e: unknown) => sqlState(e),
+			);
+			await waitForLockWait("", pid);
+			const claim = await c
+				.query(
+					"insert into speeches (person_id, title) values ($1, 'claimed speech') returning id",
+					[res.personId],
+				)
+				.then(
+					() => "ok",
+					(e: unknown) => sqlState(e),
+				);
+			await c.query("rollback");
+			await c.end();
+
+			expect(claim).toBe("ok");
+			expect(await undoing).toBe("ok");
+		});
+
+		/**
+		 * Run `op` while a writer holds a key share on each Person, the lock a
+		 * foreign-key INSERT takes. Resolves with whether `op` finished while it was
+		 * held, or parked behind it; the holder is released either way.
+		 */
+		async function whileKeySharesHeld(
+			personIds: string[],
+			op: () => Promise<unknown>,
+		) {
+			const holder = await openBlockingTx(async (tx) => {
+				for (const id of personIds) {
+					await tx.execute(
+						sql`select id from people where id = ${id} for key share`,
+					);
+				}
+			});
+			const running = op().then(
+				(r) => ({ ok: r }),
+				(e: unknown) => ({ err: e }),
+			);
+			const raced = await Promise.race([
+				running.then(() => "finished" as const),
+				new Promise<"parked">((r) => setTimeout(() => r("parked"), 2500)),
+			]);
+			await holder.commit();
+			const result = await running;
+			return { raced, result };
+		}
+
+		it("undo takes the Person's lock without blocking a key share", async () => {
+			const { guestId } = await newGuest(uniq("Mode Undo"));
+			await convert(guestId);
+			const g = await guestRow(guestId);
+			const { raced, result } = await whileKeySharesHeld(
+				[g.personId as string],
+				() => undo(guestId),
+			);
+			expect(raced).toBe("finished");
+			expect("err" in result).toBe(false);
+		});
+
+		it("unlink takes the Persons' locks without blocking a key share", async () => {
+			const { guestId } = await newGuest(uniq("Mode Unlink"));
+			await applyLinkGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				memberId: seed.memberId,
+				actorMemberId: seed.adminMemberId,
+			});
+			const { raced, result } = await whileKeySharesHeld([seed.personId], () =>
+				applyUnlinkGuestFromMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			);
+			expect(raced).toBe("finished");
+			expect("err" in result).toBe(false);
+		});
+
+		it("convert's dedupe-hit path takes both Persons' locks without blocking a key share", async () => {
+			const email = `mode-${randomUUID()}@example.test`;
+			const matched = await makePerson({ name: uniq("Mode Matched"), email });
+			await testDb.insert(members).values({
+				clubId: seed.clubId,
+				personId: matched,
+				name: uniq("Mode Matched Row"),
+			});
+			const { guestId, personId } = await newGuest(uniq("Mode Hit"), {
+				email,
+			});
+			const { raced, result } = await whileKeySharesHeld(
+				[matched, personId],
+				() => convert(guestId),
+			);
+			expect(raced).toBe("finished");
+			expect("err" in result).toBe(false);
+		});
+
+		it("a membership collapse takes the Persons' locks without blocking a key share", async () => {
+			const pk = await makePerson({ name: uniq("Mode Keeper") });
+			const px = await makePerson({ name: uniq("Mode Absorbed") });
+			const [mk] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId: pk, name: "MK" })
+				.returning({ id: members.id });
+			const [mx] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId: px, name: "MX" })
+				.returning({ id: members.id });
+			if (!mk || !mx) throw new Error("fixture");
+			const { raced, result } = await whileKeySharesHeld([pk, px], () =>
+				testDb.transaction((tx) =>
+					collapseMemberships(tx, seed.clubId, mk.id, mx.id),
+				),
+			);
+			expect(raced).toBe("finished");
+			expect("err" in result).toBe(false);
+		});
+
+		it("a membership collapse refuses when a membership's Person moved between its reads", async () => {
+			const pk = await makePerson({ name: uniq("Move Keeper") });
+			const px = await makePerson({ name: uniq("Move Absorbed") });
+			const other = await makePerson({ name: uniq("Move Other") });
+			const [mk] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId: pk, name: "MvK" })
+				.returning({ id: members.id });
+			const [mx] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId: px, name: "MvX" })
+				.returning({ id: members.id });
+			if (!mk || !mx) throw new Error("fixture");
+			// A writer holds the keeper's Person and moves its membership to another
+			// Person; the collapse read the old one, parks on the Person lock, and
+			// must refuse when it re-reads.
+			const holder = await openBlockingTx(async (tx) => {
+				await tx.execute(
+					sql`select id from people where id = ${pk} for update`,
+				);
+				await tx
+					.update(members)
+					.set({ personId: other })
+					.where(eq(members.id, mk.id));
+			});
+			const collapsing = testDb
+				.transaction((tx) => collapseMemberships(tx, seed.clubId, mk.id, mx.id))
+				.then(
+					() => null,
+					(e: Error) => e,
+				);
+			await waitForLockWait("people", holder.pid);
+			await holder.commit();
+
+			const err = await collapsing;
+			expect(err?.message).toBe(RECORD_CHANGED_MESSAGE);
+			// Nothing was collapsed.
+			const still = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.id, mx.id));
+			expect(still).toHaveLength(1);
+		});
+
+		it("a guest delete and a link, which delete a Person, keep the strong lock: they park at the Person BEFORE taking the guest row", async () => {
+			// `FOR UPDATE` is what keeps a reference from appearing between the check
+			// and the delete, so these two park behind a key share at the lock itself.
+			// A weaker lock would let them through to the guest row and park only at
+			// the DELETE, which is the cycle with a claim that this round removed
+			// from the paths that do not delete.
+			async function parksAtThePersonLock(
+				guestId: string,
+				personId: string,
+				op: () => Promise<unknown>,
+			) {
+				const holder = await openBlockingTx(async (tx) => {
+					await tx.execute(
+						sql`select id from people where id = ${personId} for key share`,
+					);
+				});
+				const running = op().then(
+					() => null,
+					(e: Error) => e,
+				);
+				await waitForLockWait("people", holder.pid);
+				await testDb.transaction(async (tx) => {
+					const free = await tx
+						.select({ id: guests.id })
+						.from(guests)
+						.where(eq(guests.id, guestId))
+						.for("update", { noWait: true });
+					expect(free).toHaveLength(1);
+				});
+				await holder.commit();
+				expect(await running).toBeNull();
+			}
+
+			const a = await newGuest(uniq("Strong Delete"));
+			await parksAtThePersonLock(a.guestId, a.personId, () =>
+				applyDeleteGuest({
+					clubId: seed.clubId,
+					guestId: a.guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			);
+
+			const b = await newGuest(uniq("Strong Link"));
+			await parksAtThePersonLock(b.guestId, b.personId, () =>
+				applyLinkGuestToMember({
+					clubId: seed.clubId,
+					guestId: b.guestId,
+					memberId: seed.memberId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			);
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// M4 and the charter helper: what a club delete and a guest delete keep.
+	// -----------------------------------------------------------------------
+	describe("what a Person delete keeps (M4)", () => {
+		/** A former member of another club: unbound, no membership, owns history. */
+		async function formerMember(owns: {
+			speech?: boolean;
+			enrolment?: boolean;
+		}) {
+			const q = await makePerson({ name: uniq("Former Member") });
+			if (owns.enrolment) {
+				const [path] = await testDb
+					.insert(pathwaysPaths)
+					.values({ courseCode: `r3-${randomUUID()}`, name: "Path" })
+					.returning({ id: pathwaysPaths.id });
+				if (!path) throw new Error("fixture");
+				extraPaths.push(path.id);
+				await testDb
+					.insert(pathEnrollments)
+					.values({ personId: q, pathId: path.id });
+			}
+			if (owns.speech) {
+				await testDb
+					.insert(speeches)
+					.values({ personId: q, title: uniq("Logged") });
+			}
+			return q;
+		}
+
+		for (const owns of [
+			{ speech: true, enrolment: false },
+			{ speech: false, enrolment: true },
+		]) {
+			const what = owns.speech ? "speech" : "Pathways enrolment";
+			it(`club delete keeps a guest-only Person merged with a former member, and that Person's ${what}`, async () => {
+				const archivedName = uniq("Doomed History");
+				const doomed = await makeClub(archivedName, true);
+				const q = await formerMember(owns);
+				const g = await newGuest(uniq("Merged Guest"), {}, doomed);
+				await mergePeople({ keeperPersonId: q, absorbedPersonId: g.personId });
+				// The guest row now names Q, which is guest-only by the predicate.
+				expect((await guestRow(g.guestId)).personId).toBe(q);
+
+				const res = await deleteClubPermanently(doomed, archivedName);
+
+				expect(await personRow(q)).toBeDefined();
+				const kept = owns.speech
+					? await testDb
+							.select({ id: speeches.id })
+							.from(speeches)
+							.where(eq(speeches.personId, q))
+					: await testDb
+							.select({ id: pathEnrollments.id })
+							.from(pathEnrollments)
+							.where(eq(pathEnrollments.personId, q));
+				expect(kept).toHaveLength(1);
+				expect(res.peopleKept).toBe(1);
+				expect(res.peopleDeleted).toBe(0);
+			});
+		}
+
+		it("club delete keeps a guest-only Person a charter-helper row of another club names", async () => {
+			const archivedName = uniq("Doomed Helper");
+			const doomed = await makeClub(archivedName, true);
+			const other = await makeClub();
+			const g = await newGuest(uniq("Helper Guest"), {}, doomed);
+			await testDb.insert(clubCharterHelpers).values({
+				clubId: other,
+				role: "sponsor",
+				personId: g.personId,
+				name: "Helper Name",
+			});
+
+			await deleteClubPermanently(doomed, archivedName);
+
+			expect(await personRow(g.personId)).toBeDefined();
+		});
+
+		it("a guest delete keeps a Person a charter helper names, instead of breaking the helper's identity check", async () => {
+			const { guestId, personId } = await newGuest(uniq("Helped Guest"));
+			// A legacy or imported helper that names only the Person: nulling its
+			// person_id on a delete would violate `club_charter_helpers_identity_check`.
+			await testDb.insert(clubCharterHelpers).values({
+				clubId: seed.clubId,
+				role: "club_mentor",
+				personId,
+			});
+
+			await applyDeleteGuest({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			expect(await personRow(personId)).toBeDefined();
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// The email backup goes with a Person a guest delete or a link deletes.
+	// -----------------------------------------------------------------------
+	describe("the address backup goes with the Person (as in a club delete)", () => {
+		const backupRows = (personId: string) =>
+			testDb
+				.select({ id: peopleEmailBackup.personId })
+				.from(peopleEmailBackup)
+				.where(eq(peopleEmailBackup.personId, personId));
+
+		it("a guest delete clears the deleted Person's email backup", async () => {
+			const { guestId, personId } = await newGuest(uniq("Backed Up"));
+			await testDb
+				.insert(peopleEmailBackup)
+				.values({ personId, email: `bk-${randomUUID()}@example.test` });
+
+			await applyDeleteGuest({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			expect(await personRow(personId)).toBeUndefined();
+			expect(await backupRows(personId)).toHaveLength(0);
+		});
+
+		it("a link clears the guest's old Person's email backup", async () => {
+			const { guestId, personId } = await newGuest(uniq("Backed Up Link"));
+			await testDb
+				.insert(peopleEmailBackup)
+				.values({ personId, email: `bkl-${randomUUID()}@example.test` });
+
+			await applyLinkGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				memberId: seed.memberId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			expect(await personRow(personId)).toBeUndefined();
+			expect(await backupRows(personId)).toHaveLength(0);
+		});
+
+		it("keeps the backup of a Person that is NOT deleted", async () => {
+			const otherClub = await makeClub();
+			const { guestId, personId } = await newGuest(uniq("Kept Backup"));
+			await createGuestRecord(testDb, {
+				clubId: otherClub,
+				name: uniq("Kept Elsewhere"),
+				personId,
+			});
+			await testDb
+				.insert(peopleEmailBackup)
+				.values({ personId, email: `kb-${randomUUID()}@example.test` });
+
+			await applyDeleteGuest({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			expect(await personRow(personId)).toBeDefined();
+			expect(await backupRows(personId)).toHaveLength(1);
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// A merge's count and audit agree with its preview when a collapse moves
+	// the guest first.
+	// -----------------------------------------------------------------------
+	describe("a merge that collapses a membership counts the guest it moved (the preview agrees)", () => {
+		it("movedCounts.guests and the audit say 1, as the preview did", async () => {
+			const keeper = await makePerson({ name: uniq("Count Keeper") });
+			const absorbed = await makePerson({ name: uniq("Count Absorbed") });
+			await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId: keeper, name: "CK" });
+			const [mx] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId: absorbed, name: "CA" })
+				.returning({ id: members.id });
+			if (!mx) throw new Error("fixture");
+			// A converted guest that IS the absorbed member's Person: the collapse
+			// re-points it to the keeper before the merge's own guest step runs.
+			const { id: guestId } = await createGuestRecord(testDb, {
+				clubId: seed.clubId,
+				name: uniq("Counted Guest"),
+				stage: "joined",
+				convertedMembershipId: mx.id,
+				personId: absorbed,
+			});
+
+			const preview = await getMergePreview(keeper, absorbed);
+			expect(preview.movedCounts.guests).toBe(1);
+
+			const res = await mergePeople({
+				keeperPersonId: keeper,
+				absorbedPersonId: absorbed,
+			});
+
+			expect((await guestRow(guestId)).personId).toBe(keeper);
+			expect(res.movedCounts.guests).toBe(1);
+			expect(res.movedCounts.collapsed).toBe(1);
+			const [audit] = await testDb
+				.select({ detail: activityLog.detail })
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.action, "member_merge"),
+						eq(activityLog.targetId, keeper),
+					),
+				);
+			expect(
+				(audit?.detail as { movedCounts: { guests: number } }).movedCounts
+					.guests,
+			).toBe(1);
 		});
 	});
 });

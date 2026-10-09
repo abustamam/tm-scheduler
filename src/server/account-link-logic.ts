@@ -27,6 +27,7 @@ import {
 import { type AnyPgColumn, alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import {
+	clubCharterHelpers,
 	guests,
 	members,
 	pathEnrollments,
@@ -76,6 +77,7 @@ const otherHolding = alias(members, "other_holding_member");
 const heldGuest = alias(guests, "held_guest");
 const ownedSpeech = alias(speeches, "owned_speech");
 const enrolment = alias(pathEnrollments, "person_enrolment");
+const charterHelper = alias(clubCharterHelpers, "person_charter_helper");
 /** The binding account, re-read INSIDE the bind's own statement (#1091
  *  review). Aliased so it always renders qualified (#802). */
 const bindingAccount = alias(user, "binding_account");
@@ -276,6 +278,12 @@ export function unreferencedUnboundPerson(): SQL {
 				.select({ one: sql`1` })
 				.from(enrolment)
 				.where(eq(enrolment.personId, people.id)),
+		),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(charterHelper)
+				.where(eq(charterHelper.personId, people.id)),
 		),
 	) as SQL;
 }
