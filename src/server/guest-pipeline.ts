@@ -2,17 +2,23 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireClubAdminView, requireClubRole, requireUser } from "./guards";
 import {
+	applyAddGuestToClub,
 	applyConvertGuestToMember,
 	applyDeleteGuest,
+	applyLinkGuestAcrossClubs,
 	applyLinkGuestToMember,
 	applyRecordGuestInvite,
+	applySeparateGuest,
 	applySetGuestStage,
 	applyUndoGuestConversion,
 	applyUnlinkGuestFromMember,
 	applyUpdateGuest,
 	captureGuestVisit,
+	listGuestLinkCandidates as listGuestLinkCandidatesLogic,
 	loadGuestPipeline,
 	loadLinkCandidates,
+	loadOtherAdminClubs,
+	previewGuestLink as previewGuestLinkLogic,
 } from "./guest-pipeline-logic";
 import {
 	guestBookSchema,
@@ -27,6 +33,8 @@ import { loadNextMeetingSummary } from "./meetings-logic";
 export type {
 	CaptureGuestResult,
 	DeleteGuestResult,
+	GuestLinkCandidate,
+	GuestLinkPreview,
 	GuestStage,
 	LinkCandidate,
 	ManualGuestStage,
@@ -57,13 +65,35 @@ export const submitGuestBook = createServerFn({ method: "POST" })
 		return { ok: true as const, created: res.created };
 	});
 
-/** The club's guest pipeline (all stages, derived visits). AUTHED — admin-only. */
+/**
+ * The club's guest pipeline (all stages, derived visits). AUTHED — admin-only.
+ * Each row also says whether another club holds the guest's Person, and which of
+ * the VIEWER's other admin clubs it could be added to (#1127).
+ */
 export const getGuestPipeline = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
 	.handler(async ({ data: clubId }) => {
 		const currentUser = await requireUser();
 		await requireClubAdminView(currentUser.id, clubId);
-		return loadGuestPipeline(clubId);
+		const others = await loadOtherAdminClubs(currentUser.id, clubId);
+		return loadGuestPipeline(
+			clubId,
+			others.map((c) => c.clubId),
+		);
+	});
+
+/**
+ * The clubs other than this one where the viewer is an admin or an elected
+ * officer (#1127): the "Add to <club>" menu items and the picker's club choice.
+ * AUTHED — the same read gate as `getGuestPipeline`; it names only the viewer's
+ * own clubs.
+ */
+export const getOtherAdminClubs = createServerFn({ method: "GET" })
+	.validator((clubId: unknown) => uuid.parse(clubId))
+	.handler(async ({ data: clubId }) => {
+		const currentUser = await requireUser();
+		await requireClubAdminView(currentUser.id, clubId);
+		return loadOtherAdminClubs(currentUser.id, clubId);
 	});
 
 /**
@@ -267,4 +297,91 @@ export const getLinkCandidates = createServerFn({ method: "GET" })
 			clubId: data.clubId,
 			guestId: data.guestId,
 		});
+	});
+
+const addToClubSchema = z.object({
+	fromClubId: uuid,
+	guestId: uuid,
+	toClubId: uuid,
+});
+
+/**
+ * Add this club's guest to another club the officer also runs (#1127): a
+ * `prospect` row there on the same Person. AUTHED — admin of BOTH clubs; the
+ * logic asks `requireClubRole` of each, so a single-club admin naming a second
+ * club is refused. The session's user is the actor, never the payload.
+ */
+export const addGuestToClub = createServerFn({ method: "POST" })
+	.validator((input: unknown) => addToClubSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		return applyAddGuestToClub({ userId: currentUser.id, ...data });
+	});
+
+const crossClubRecordSchema = z.object({
+	clubId: uuid,
+	guestId: uuid,
+	otherClubId: uuid,
+	otherId: uuid,
+	otherKind: z.enum(["guest", "member"]),
+});
+
+const linkAcrossClubsSchema = crossClubRecordSchema.extend({
+	/** What the confirm step showed; the link recomputes it and refuses on a change. */
+	expected: z.object({
+		name: z.string(),
+		preferredName: z.string().nullable(),
+		email: z.string().nullable(),
+		phone: z.string().nullable(),
+	}),
+});
+
+/**
+ * Say this club's guest and a guest or member of another club are one human
+ * (#1127). AUTHED — admin of BOTH clubs, checked in the logic.
+ */
+export const linkGuestAcrossClubs = createServerFn({ method: "POST" })
+	.validator((input: unknown) => linkAcrossClubsSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		return applyLinkGuestAcrossClubs({ userId: currentUser.id, ...data });
+	});
+
+/**
+ * The confirm step of a link: the Person it would produce, name, goes-by name,
+ * email and phone only (#1127). AUTHED — admin of BOTH clubs.
+ */
+export const previewGuestLink = createServerFn({ method: "GET" })
+	.validator((input: unknown) => crossClubRecordSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		return previewGuestLinkLogic({ userId: currentUser.id, ...data });
+	});
+
+const linkCandidatesSchema = z.object({
+	clubId: uuid,
+	otherClubId: uuid,
+	q: z.string().max(100),
+});
+
+/**
+ * The picker behind "Same person as…": guests and active members of the other
+ * club, name, email and phone only (#1127). AUTHED — admin of BOTH clubs.
+ */
+export const listGuestLinkCandidates = createServerFn({ method: "GET" })
+	.validator((input: unknown) => linkCandidatesSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		return listGuestLinkCandidatesLogic({ userId: currentUser.id, ...data });
+	});
+
+/**
+ * Give this guest a Person of their own again (#1127): the undo of a wrong link.
+ * AUTHED — admin of THIS club only, by the maintainer's decision.
+ */
+export const separateGuest = createServerFn({ method: "POST" })
+	.validator((input: unknown) => deleteGuestSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		return applySeparateGuest({ userId: currentUser.id, ...data });
 	});

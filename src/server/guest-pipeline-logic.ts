@@ -9,11 +9,13 @@ import {
 	desc,
 	eq,
 	gte,
+	ilike,
 	inArray,
 	isNotNull,
 	isNull,
 	min,
 	ne,
+	or,
 	sql,
 } from "drizzle-orm";
 import { union } from "drizzle-orm/pg-core";
@@ -82,15 +84,28 @@ import {
 	noKeyUpdate,
 } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
-import { assertClubNotArchived } from "./guards";
+import {
+	assertClubNotArchived,
+	assertStillClubAdmin,
+	NO_PERMISSION_MESSAGE,
+	NOT_A_MEMBER_MESSAGE,
+	requireClubRole,
+} from "./guards";
 import {
 	createGuestRecord,
 	deleteAbandonedGuestPerson,
 	deleteGuestPersonIfUnreferenced,
+	GUEST_NOT_IN_CLUB_MESSAGE,
 	RECORD_CHANGED_MESSAGE,
 	separateGuestFromMemberPerson,
 } from "./guests-logic";
 import { closeOpenOfficerTerms } from "./officers-logic";
+import {
+	clubsHoldingPersons,
+	guestLinkResult,
+	isGuestOnlyPerson,
+	mergePeople,
+} from "./people-merge-logic";
 import { isDeadlock } from "./pg-errors";
 
 /** The pipeline stages a guest may occupy (#208 / ADR-0018). */
@@ -929,6 +944,19 @@ export interface PipelineGuestRow {
 	/** DISTINCT non-cancelled meetings this guest has been invited to (#899). */
 	inviteCount: number;
 	/**
+	 * Another club holds this guest's Person, as a guest or a member (#1127). A
+	 * boolean and nothing about that club: clubs stay blind. Drives "Separate from
+	 * other clubs". Absent reads as false.
+	 */
+	sharedWithOtherClub?: boolean;
+	/**
+	 * The ids, out of the viewer's other admin clubs (`loadOtherAdminClubs`), where
+	 * "Add to <club>" is offered: the Person has no unconverted guest row and no
+	 * active membership there. Empty for a converted guest and when the caller named
+	 * no clubs. Absent reads as empty.
+	 */
+	addableTo?: string[];
+	/**
 	 * Those meetings' ids. `lastInvite` is the latest by `invitedAt`, so it
 	 * cannot say whether the guest is invited to the NEXT meeting — a guest
 	 * invited to Oct 3 and then Oct 10 has Oct 10 as `lastInvite`.
@@ -1055,6 +1083,11 @@ export async function loadGuestVisitSummaries(
  */
 export async function loadGuestPipeline(
 	clubId: string,
+	/**
+	 * The viewer's OTHER admin clubs (#1127), for each row's `addableTo`. Callers
+	 * that are not a viewer's board (the MCP reader, an export) pass none.
+	 */
+	otherAdminClubIds: string[] = [],
 ): Promise<PipelineGuestRow[]> {
 	// Both club-level facts in ONE query. They live on the same `clubs` row, and
 	// the timezone has to resolve before the visits subquery can be built, so a
@@ -1077,6 +1110,13 @@ export async function loadGuestPipeline(
 					stage: guests.stage,
 					convertedMembershipId: guests.convertedMembershipId,
 					createdAt: guests.createdAt,
+					personId: guests.personId,
+					// Another club's guest row or membership on this Person (#1127). A
+					// boolean only; nothing about that club is selected.
+					sharedWithOtherClub: sql<boolean>`(
+						exists (select 1 from guests g2 where g2.person_id = ${guests.personId} and g2.club_id <> ${clubId}::uuid)
+						or exists (select 1 from members m2 where m2.person_id = ${guests.personId} and m2.club_id <> ${clubId}::uuid)
+					)`,
 				})
 				.from(guests)
 				.innerJoin(people, eq(people.id, guests.personId))
@@ -1169,6 +1209,41 @@ export async function loadGuestPipeline(
 				.orderBy(desc(guestInvites.invitedAt), desc(guestInvites.id)),
 		]);
 
+	// Which of the viewer's other admin clubs already hold each Person (#1127):
+	// an unconverted guest row or an active membership there means "Add to" is
+	// not offered. Two reads, only when the viewer has another club at all.
+	const heldIn = new Map<string, Set<string>>();
+	if (otherAdminClubIds.length > 0 && rows.length > 0) {
+		const personIds = [...new Set(rows.map((r) => r.personId))];
+		const [guestHolds, memberHolds] = await Promise.all([
+			db
+				.select({ personId: guests.personId, clubId: guests.clubId })
+				.from(guests)
+				.where(
+					and(
+						inArray(guests.personId, personIds),
+						inArray(guests.clubId, otherAdminClubIds),
+						ne(guests.stage, "joined"),
+					),
+				),
+			db
+				.select({ personId: members.personId, clubId: members.clubId })
+				.from(members)
+				.where(
+					and(
+						inArray(members.personId, personIds),
+						inArray(members.clubId, otherAdminClubIds),
+						eq(members.status, "active"),
+					),
+				),
+		]);
+		for (const h of [...guestHolds, ...memberHolds]) {
+			const set = heldIn.get(h.personId) ?? new Set<string>();
+			set.add(h.clubId);
+			heldIn.set(h.personId, set);
+		}
+	}
+
 	const visitsByGuest = new Map(visitRows.map((v) => [v.guestId, v]));
 	const slotsByGuest = new Map(slotRows.map((s) => [s.guestId, s]));
 	const reversible = new Set(linkRows.map((l) => l.guestId));
@@ -1224,6 +1299,11 @@ export async function loadGuestPipeline(
 			lastInvite: invitesByGuest.get(r.id)?.last ?? null,
 			inviteCount: invitesByGuest.get(r.id)?.meetings.size ?? 0,
 			invitedMeetingIds: [...(invitesByGuest.get(r.id)?.meetings ?? [])],
+			sharedWithOtherClub: Boolean(r.sharedWithOtherClub),
+			addableTo:
+				r.stage === "joined"
+					? []
+					: otherAdminClubIds.filter((id) => !heldIn.get(r.personId)?.has(id)),
 			createdAt: r.createdAt,
 		};
 	});
@@ -3423,4 +3503,679 @@ export async function loadLinkCandidates(input: {
 		suggested: namesAgree(m.name, guest.name),
 		sharesMeeting: collidingMemberIds.has(m.id),
 	}));
+}
+
+// ---------------------------------------------------------------------------
+// Across clubs (#1127, ADR-0031): add, link, separate
+// ---------------------------------------------------------------------------
+//
+// One human who visited two clubs is two Persons until an officer of BOTH says
+// otherwise. Three actions, each gated on `requireClubRole(…, ["admin"])` for
+// every club it names (which since #202 also passes an elected officer with an
+// open term), except Separate, whose gate is this club alone (the undo of a
+// wrong link must not need the other club).
+//
+// CLUBS STAY BLIND. Nothing below reads or returns another club's stage,
+// visits, invites, notes or history counts. The only facts that cross are the
+// ones the contract names: that a Person is held elsewhere (a boolean), the
+// viewer's OWN other admin clubs, and the name, email and phone of a record in a
+// club the viewer is admin of.
+//
+// LOCKS (ADR-0031, the read-then-lock rule). Every club holding a guest row or a
+// membership on any Person involved is read WITHOUT a lock, locked in id order,
+// then the Persons (`FOR UPDATE` where one is absorbed, else `FOR NO KEY UPDATE`)
+// in id order, then the guest rows; then everything is read again, and a set that
+// moved is refused with `RECORD_CHANGED_MESSAGE` and nothing written. "No other
+// unconverted guest row on this Person in this club" is checked after the locks,
+// in the transaction; the club lock is what makes it hold, in place of a unique
+// index.
+
+export const GUEST_NOW_MEMBER_MESSAGE = "This guest is now a member.";
+export const GUEST_ADD_ALREADY_THERE_MESSAGE =
+	"They're already a guest or a member there.";
+export const GUEST_LINK_ALREADY_HERE_MESSAGE =
+	"That person is already a guest or a member of this club.";
+export const GUEST_SEPARATE_FIRST_MESSAGE =
+	"Separate it from the other club first.";
+export const GUEST_ALREADY_SEPARATE_MESSAGE = "Already separate.";
+export const GUEST_LINK_STALE_MESSAGE =
+	"These records changed. Review the link again.";
+export const GUEST_LINK_SAME_PERSON_MESSAGE =
+	"These are already the same person.";
+export const GUEST_LINK_HAS_MEMBERSHIP_MESSAGE =
+	"This person is a member of a club. A superadmin has to merge them.";
+export const GUEST_LINK_SIGNED_IN_MESSAGE =
+	"This person has signed in. A superadmin has to merge them.";
+export const GUEST_LINK_NOT_FOUND_MESSAGE =
+	"That record is not in the other club.";
+export const GUEST_CROSS_CLUB_SAME_CLUB_MESSAGE = "Pick a different club.";
+
+/** The most candidates the picker returns. */
+export const GUEST_LINK_CANDIDATE_LIMIT = 20;
+
+type CrossClubTx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+/**
+ * Admin (or elected officer) of BOTH clubs, asked of the real gate twice, in one
+ * order. Returns the membership in `clubId`, the actor the audit row names. A
+ * single-club admin naming a second club is refused here, before anything is read.
+ */
+async function requireAdminOfBothClubs(
+	userId: string,
+	clubId: string,
+	otherClubId: string,
+) {
+	if (clubId === otherClubId)
+		throw new Error(GUEST_CROSS_CLUB_SAME_CLUB_MESSAGE);
+	const membership = await requireClubRole(userId, clubId, ["admin"]);
+	await requireClubRole(userId, otherClubId, ["admin"]);
+	return membership;
+}
+
+/** The same two checks, re-asked inside the transaction once the locks are held
+ *  (#806): a seat revoked while this waited for a club lock must not still write. */
+async function assertStillAdminOfBothClubs(
+	tx: CrossClubTx,
+	userId: string,
+	clubId: string,
+	otherClubId: string,
+) {
+	await assertStillClubAdmin(tx, userId, clubId);
+	await assertStillClubAdmin(tx, userId, otherClubId);
+}
+
+/**
+ * The clubs to lock for these Persons: every club holding a guest row or a
+ * membership on any of them (`clubsHoldingPersons`), plus the clubs the action
+ * names (a target club may hold neither yet), sorted.
+ */
+async function clubsToLock(
+	tx: CrossClubTx,
+	personIds: string[],
+	named: string[],
+): Promise<string[]> {
+	const held = await clubsHoldingPersons(tx, personIds);
+	return [...new Set([...held, ...named])].sort();
+}
+
+/**
+ * Take the club locks, then re-read the set under them. Returns false when the
+ * set moved (somebody attached or detached one of these Persons from a club that
+ * was not locked), which the caller turns into `RECORD_CHANGED_MESSAGE`.
+ */
+async function lockClubsStable(
+	tx: CrossClubTx,
+	before: string[],
+	personIds: string[],
+	named: string[],
+): Promise<boolean> {
+	for (const id of before) await lockClubForWrite(tx, id);
+	return sameIds(before, await clubsToLock(tx, personIds, named));
+}
+
+function sameIds(a: string[], b: string[]): boolean {
+	return a.length === b.length && a.every((id, i) => id === b[i]);
+}
+
+/** A guest in `clubId`, as these actions read it. */
+async function readGuestOf(
+	conn: DbOrTx,
+	clubId: string,
+	guestId: string,
+	lock = false,
+) {
+	const query = conn
+		.select({
+			id: guests.id,
+			clubId: guests.clubId,
+			name: guests.name,
+			preferredName: guests.preferredName,
+			stage: guests.stage,
+			personId: guests.personId,
+		})
+		.from(guests)
+		.where(and(eq(guests.id, guestId), eq(guests.clubId, clubId)))
+		.limit(1);
+	const [row] = lock ? await query.for("update") : await query;
+	return row ?? null;
+}
+
+/**
+ * Does `personId` already have, in `clubId`, a guest row that is not converted,
+ * or an ACTIVE membership? The two things that make Add and Link refuse. A lapsed
+ * membership does not: it is history, and the person may be a guest again.
+ */
+async function personIsHereAlready(
+	conn: DbOrTx,
+	personId: string,
+	clubId: string,
+	exceptGuestId?: string,
+): Promise<boolean> {
+	const [guest] = await conn
+		.select({ id: guests.id })
+		.from(guests)
+		.where(
+			and(
+				eq(guests.personId, personId),
+				eq(guests.clubId, clubId),
+				ne(guests.stage, "joined"),
+				exceptGuestId ? ne(guests.id, exceptGuestId) : undefined,
+			),
+		)
+		.limit(1);
+	if (guest) return true;
+	const [member] = await conn
+		.select({ id: members.id })
+		.from(members)
+		.where(
+			and(
+				eq(members.personId, personId),
+				eq(members.clubId, clubId),
+				eq(members.status, "active"),
+			),
+		)
+		.limit(1);
+	return Boolean(member);
+}
+
+export interface AddGuestToClubInput {
+	userId: string;
+	fromClubId: string;
+	guestId: string;
+	toClubId: string;
+}
+
+/**
+ * Add this club's guest to another club the officer also runs: the other club
+ * gets a `prospect` visitor row on the SAME Person, with the name and goes-by name
+ * copied, and no attendance. This club's row is untouched.
+ *
+ * Refused for a converted guest, for a Person that already has an unconverted
+ * guest row or an active membership in the other club, and for anybody who is
+ * not an admin of both clubs. Two sessions adding the same Person to the same
+ * club both hold that club's write lock in turn, so the second sees the first's
+ * row and is refused: exactly one row.
+ */
+export async function applyAddGuestToClub(
+	input: AddGuestToClubInput,
+): Promise<{ ok: true }> {
+	const { userId, fromClubId, guestId, toClubId } = input;
+	await requireAdminOfBothClubs(userId, fromClubId, toClubId);
+	return db.transaction(async (tx) => {
+		const peek = await readGuestOf(tx, fromClubId, guestId);
+		if (!peek) throw new Error(GUEST_NOT_IN_CLUB_MESSAGE);
+		const named = [fromClubId, toClubId];
+		const before = await clubsToLock(tx, [peek.personId], named);
+		const stable = await lockClubsStable(tx, before, [peek.personId], named);
+		await lockPersonsInOrder(tx, noKeyUpdate(peek.personId));
+		const guest = await readGuestOf(tx, fromClubId, guestId, true);
+		if (!stable || !guest || guest.personId !== peek.personId) {
+			throw new Error(RECORD_CHANGED_MESSAGE);
+		}
+		await assertStillAdminOfBothClubs(tx, userId, fromClubId, toClubId);
+
+		if (guest.stage === "joined") throw new Error(GUEST_NOW_MEMBER_MESSAGE);
+		if (await personIsHereAlready(tx, guest.personId, toClubId)) {
+			throw new Error(GUEST_ADD_ALREADY_THERE_MESSAGE);
+		}
+		await createGuestRecord(tx, {
+			clubId: toClubId,
+			personId: guest.personId,
+			name: guest.name,
+			preferredName: guest.preferredName,
+			stage: "prospect",
+			kind: "visitor",
+		});
+		return { ok: true as const };
+	});
+}
+
+export type GuestLinkOtherKind = "guest" | "member";
+
+export interface GuestLinkInput {
+	userId: string;
+	clubId: string;
+	guestId: string;
+	otherClubId: string;
+	otherId: string;
+	otherKind: GuestLinkOtherKind;
+}
+
+/** What the confirm step shows, and what the link recomputes: the keeper Person as
+ *  it would be after the link, and nothing else about either side. */
+export interface GuestLinkPreview {
+	name: string;
+	preferredName: string | null;
+	email: string | null;
+	phone: string | null;
+}
+
+interface LinkSides {
+	guest: NonNullable<Awaited<ReturnType<typeof readGuestOf>>>;
+	other: {
+		kind: GuestLinkOtherKind;
+		id: string;
+		personId: string;
+		/** Set for a guest, unset for a member. */
+		stage: GuestStage | null;
+	};
+}
+
+/** Both records, in their own clubs. A missing one is "not in that club". */
+async function readLinkSides(
+	conn: DbOrTx,
+	input: Omit<GuestLinkInput, "userId">,
+	lock = false,
+): Promise<LinkSides> {
+	const guest = await readGuestOf(conn, input.clubId, input.guestId);
+	if (!guest) throw new Error(GUEST_NOT_IN_CLUB_MESSAGE);
+	if (input.otherKind === "guest") {
+		const other = await readGuestOf(conn, input.otherClubId, input.otherId);
+		if (!other) throw new Error(GUEST_LINK_NOT_FOUND_MESSAGE);
+		if (lock) {
+			// Both guest rows, in id order, as the protocol's third step.
+			await conn
+				.select({ id: guests.id })
+				.from(guests)
+				.where(inArray(guests.id, [guest.id, other.id]))
+				.orderBy(guests.id)
+				.for("update");
+		}
+		return {
+			guest,
+			other: {
+				kind: "guest",
+				id: other.id,
+				personId: other.personId,
+				stage: other.stage,
+			},
+		};
+	}
+	const [member] = await conn
+		.select({ id: members.id, personId: members.personId })
+		.from(members)
+		.where(
+			and(
+				eq(members.id, input.otherId),
+				eq(members.clubId, input.otherClubId),
+				eq(members.status, "active"),
+			),
+		)
+		.limit(1);
+	if (!member) throw new Error(GUEST_LINK_NOT_FOUND_MESSAGE);
+	if (lock) {
+		await conn
+			.select({ id: guests.id })
+			.from(guests)
+			.where(eq(guests.id, guest.id))
+			.for("update");
+	}
+	return {
+		guest,
+		other: {
+			kind: "member",
+			id: member.id,
+			personId: member.personId,
+			stage: null,
+		},
+	};
+}
+
+/**
+ * Why this link may not be made, or nothing. The same checks run for the preview
+ * (so the confirm step never opens on a link that will refuse) and, under the
+ * locks, for the link itself. In this order, the first that applies:
+ *
+ * - either record is a converted guest (never the source of a link);
+ * - both already share a Person;
+ * - this guest's Person holds ANY membership, or is bound to a sign-in: those
+ *   are the superadmin's `mergePeople`;
+ * - this guest's Person has a guest row in any club but this one;
+ * - the other Person already has an unconverted guest row or an active
+ *   membership in THIS club (the link would leave two records of one human here).
+ */
+async function linkRefusal(
+	conn: DbOrTx,
+	clubId: string,
+	sides: LinkSides,
+): Promise<string | null> {
+	if (sides.guest.stage === "joined" || sides.other.stage === "joined") {
+		return GUEST_NOW_MEMBER_MESSAGE;
+	}
+	if (sides.guest.personId === sides.other.personId) {
+		return GUEST_LINK_SAME_PERSON_MESSAGE;
+	}
+	const [held] = await conn
+		.select({ id: members.id })
+		.from(members)
+		.where(eq(members.personId, sides.guest.personId))
+		.limit(1);
+	if (held) return GUEST_LINK_HAS_MEMBERSHIP_MESSAGE;
+	const [absorbed] = await conn
+		.select({ userId: people.userId })
+		.from(people)
+		.where(eq(people.id, sides.guest.personId))
+		.limit(1);
+	if (!absorbed) return GUEST_LINK_NOT_FOUND_MESSAGE;
+	if (absorbed.userId) return GUEST_LINK_SIGNED_IN_MESSAGE;
+	const [elsewhere] = await conn
+		.select({ id: guests.id })
+		.from(guests)
+		.where(
+			and(eq(guests.personId, sides.guest.personId), ne(guests.clubId, clubId)),
+		)
+		.limit(1);
+	if (elsewhere) return GUEST_SEPARATE_FIRST_MESSAGE;
+	if (await personIsHereAlready(conn, sides.other.personId, clubId)) {
+		return GUEST_LINK_ALREADY_HERE_MESSAGE;
+	}
+	return null;
+}
+
+/** The keeper Person as the merge would leave it: the preview's four values. */
+async function linkProjection(
+	conn: DbOrTx,
+	sides: LinkSides,
+): Promise<GuestLinkPreview> {
+	const rows = await conn
+		.select({
+			id: people.id,
+			name: people.name,
+			preferredName: people.preferredName,
+			email: people.email,
+			phone: people.phone,
+		})
+		.from(people)
+		.where(inArray(people.id, [sides.guest.personId, sides.other.personId]));
+	const absorbed = rows.find((r) => r.id === sides.guest.personId);
+	const keeper = rows.find((r) => r.id === sides.other.personId);
+	if (!absorbed || !keeper) throw new Error(GUEST_LINK_NOT_FOUND_MESSAGE);
+	return guestLinkResult(
+		keeper,
+		absorbed,
+		await isGuestOnlyPerson(conn, keeper.id),
+	);
+}
+
+/**
+ * The confirm step of a link: the Person the two records would become, as
+ * name, goes-by name, email and phone, and nothing else. NOT `getMergePreview`,
+ * whose decoration lists every membership's club and global history counts.
+ */
+export async function previewGuestLink(
+	input: GuestLinkInput,
+): Promise<GuestLinkPreview> {
+	await requireAdminOfBothClubs(input.userId, input.clubId, input.otherClubId);
+	const sides = await readLinkSides(db, input);
+	const refusal = await linkRefusal(db, input.clubId, sides);
+	if (refusal) throw new Error(refusal);
+	const p = await linkProjection(db, sides);
+	return {
+		name: p.name,
+		preferredName: p.preferredName,
+		email: p.email,
+		phone: p.phone,
+	};
+}
+
+function sameLinkPreview(a: GuestLinkPreview, b: GuestLinkPreview): boolean {
+	return (
+		a.name === b.name &&
+		a.preferredName === b.preferredName &&
+		a.email === b.email &&
+		a.phone === b.phone
+	);
+}
+
+/**
+ * Say that this club's guest and a guest or member of another club the officer
+ * runs are the same human. The OTHER record's Person is kept and this guest's is
+ * absorbed (`mergePeople`, `mode: "guest-link"`, in this transaction): every
+ * guest row of the absorbed Person re-points to the keeper, and the absorbed
+ * Person is deleted. Each club's own `guests.name` is unchanged.
+ *
+ * `expected` is what the officer was shown; it is recomputed under the locks and
+ * the link is refused if it differs, so the officer confirms what is written.
+ */
+export async function applyLinkGuestAcrossClubs(
+	input: GuestLinkInput & { expected: GuestLinkPreview },
+): Promise<{ ok: true }> {
+	const { userId, clubId, otherClubId } = input;
+	const actor = await requireAdminOfBothClubs(userId, clubId, otherClubId);
+	return db.transaction(async (tx) => {
+		const peek = await readLinkSides(tx, input);
+		const persons = [peek.guest.personId, peek.other.personId];
+		const named = [clubId, otherClubId];
+		const before = await clubsToLock(tx, persons, named);
+		const stable = await lockClubsStable(tx, before, persons, named);
+		// The absorbed Person is deleted by the merge, so both are taken `FOR UPDATE`.
+		await lockPersonsInOrder(tx, forUpdate(...persons));
+		const sides = await readLinkSides(tx, input, true);
+		if (
+			!stable ||
+			sides.guest.personId !== peek.guest.personId ||
+			sides.other.personId !== peek.other.personId
+		) {
+			throw new Error(RECORD_CHANGED_MESSAGE);
+		}
+		await assertStillAdminOfBothClubs(tx, userId, clubId, otherClubId);
+
+		const refusal = await linkRefusal(tx, clubId, sides);
+		if (refusal) throw new Error(refusal);
+		if (!sameLinkPreview(await linkProjection(tx, sides), input.expected)) {
+			throw new Error(GUEST_LINK_STALE_MESSAGE);
+		}
+		await mergePeople(
+			{
+				keeperPersonId: sides.other.personId,
+				absorbedPersonId: sides.guest.personId,
+				actorUserId: null,
+			},
+			tx,
+			{ mode: "guest-link", actorMemberId: actor.id },
+		);
+		return { ok: true as const };
+	});
+}
+
+export interface SeparateGuestInput {
+	userId: string;
+	clubId: string;
+	guestId: string;
+}
+
+/**
+ * Undo a link, or a Person two clubs share for any reason: this guest gets a
+ * fresh Person with its own name, and its row re-points to it. Admin of THIS club
+ * only (maintainer decision: the undo of a wrong link must not need the other
+ * club). The other clubs' rows keep the Person.
+ *
+ * Email and phone are copied to the fresh Person ONLY when the shared Person is
+ * guest-only (`isGuestOnlyPerson`: nobody has signed in as them, no membership,
+ * and never a member). A member's address is the roster's, and a signed-in
+ * person's is theirs: neither is ever copied onto a guest's Person.
+ */
+export async function applySeparateGuest(
+	input: SeparateGuestInput,
+): Promise<{ ok: true }> {
+	const { userId, clubId, guestId } = input;
+	await requireClubRole(userId, clubId, ["admin"]);
+	return db.transaction(async (tx) => {
+		const peek = await readGuestOf(tx, clubId, guestId);
+		if (!peek) throw new Error(GUEST_NOT_IN_CLUB_MESSAGE);
+		const named = [clubId];
+		const before = await clubsToLock(tx, [peek.personId], named);
+		const stable = await lockClubsStable(tx, before, [peek.personId], named);
+		await lockPersonsInOrder(tx, noKeyUpdate(peek.personId));
+		const guest = await readGuestOf(tx, clubId, guestId, true);
+		if (!stable || !guest || guest.personId !== peek.personId) {
+			throw new Error(RECORD_CHANGED_MESSAGE);
+		}
+		await assertStillClubAdmin(tx, userId, clubId);
+
+		if (guest.stage === "joined") throw new Error(GUEST_NOW_MEMBER_MESSAGE);
+		if (!(await personIsHeldElsewhere(tx, guest.personId, clubId))) {
+			throw new Error(GUEST_ALREADY_SEPARATE_MESSAGE);
+		}
+		const [shared] = await tx
+			.select({ email: people.email, phone: people.phone })
+			.from(people)
+			.where(eq(people.id, guest.personId))
+			.limit(1);
+		const copyContact = await isGuestOnlyPerson(tx, guest.personId);
+		const [fresh] = await tx
+			.insert(people)
+			.values({
+				name: guest.name,
+				preferredName: guest.preferredName,
+				email: copyContact ? (shared?.email ?? null) : null,
+				phone: copyContact ? (shared?.phone ?? null) : null,
+			})
+			.returning({ id: people.id });
+		if (!fresh) throw new Error("Failed to create person.");
+		await tx
+			.update(guests)
+			.set({ personId: fresh.id, updatedAt: new Date() })
+			.where(eq(guests.id, guest.id));
+		return { ok: true as const };
+	});
+}
+
+/** Does a club other than `clubId` hold `personId`, as a guest or a member? */
+async function personIsHeldElsewhere(
+	conn: DbOrTx,
+	personId: string,
+	clubId: string,
+): Promise<boolean> {
+	const [guest] = await conn
+		.select({ id: guests.id })
+		.from(guests)
+		.where(and(eq(guests.personId, personId), ne(guests.clubId, clubId)))
+		.limit(1);
+	if (guest) return true;
+	const [member] = await conn
+		.select({ id: members.id })
+		.from(members)
+		.where(and(eq(members.personId, personId), ne(members.clubId, clubId)))
+		.limit(1);
+	return Boolean(member);
+}
+
+/**
+ * The clubs OTHER than `exceptClubId` where this user is an admin or an elected
+ * officer. Each candidate (a club they hold an active membership in) goes through
+ * `requireClubRole` itself, so "admin" has exactly one definition; a refusal for a
+ * reason of standing (no permission, not a member, archived) drops the club, and
+ * anything else, a database error among them, propagates rather than reading as
+ * "not an admin".
+ */
+export async function loadOtherAdminClubs(
+	userId: string,
+	exceptClubId: string,
+): Promise<{ clubId: string; name: string }[]> {
+	const candidates = await db
+		.selectDistinct({ clubId: members.clubId, name: clubs.name })
+		.from(members)
+		.innerJoin(people, eq(people.id, members.personId))
+		.innerJoin(clubs, eq(clubs.id, members.clubId))
+		.where(
+			and(
+				eq(people.userId, userId),
+				eq(members.status, "active"),
+				ne(members.clubId, exceptClubId),
+			),
+		)
+		.orderBy(asc(clubs.name), asc(members.clubId));
+	const standing = new Set([
+		NO_PERMISSION_MESSAGE,
+		NOT_A_MEMBER_MESSAGE,
+		CLUB_ARCHIVED_MESSAGE,
+	]);
+	const out: { clubId: string; name: string }[] = [];
+	for (const c of candidates) {
+		try {
+			await requireClubRole(userId, c.clubId, ["admin"]);
+			out.push(c);
+		} catch (err) {
+			if (!(err instanceof Error && standing.has(err.message))) throw err;
+		}
+	}
+	return out;
+}
+
+export interface GuestLinkCandidate {
+	kind: GuestLinkOtherKind;
+	id: string;
+	name: string;
+	email: string | null;
+	phone: string | null;
+}
+
+/** A `%` or `_` or `\` typed into the search box means itself. */
+function likeContains(q: string): string {
+	return `%${q.replace(/[\\%_]/g, "\\$&")}%`;
+}
+
+/**
+ * The picker behind "Same person as…": up to 20 unconverted guests and active
+ * members of `otherClubId`, by name, name/email/phone only. A case-insensitive
+ * substring of `q` on the name or email filters them; an empty `q` is the first 20.
+ */
+export async function listGuestLinkCandidates(input: {
+	userId: string;
+	clubId: string;
+	otherClubId: string;
+	q: string;
+}): Promise<GuestLinkCandidate[]> {
+	await requireAdminOfBothClubs(input.userId, input.clubId, input.otherClubId);
+	const q = input.q.trim();
+	const pattern = q ? likeContains(q) : null;
+	const [guestRows, memberRows] = await Promise.all([
+		db
+			.select({
+				id: guests.id,
+				name: guests.name,
+				email: people.email,
+				phone: people.phone,
+			})
+			.from(guests)
+			.innerJoin(people, eq(people.id, guests.personId))
+			.where(
+				and(
+					eq(guests.clubId, input.otherClubId),
+					ne(guests.stage, "joined"),
+					pattern
+						? or(ilike(guests.name, pattern), ilike(people.email, pattern))
+						: undefined,
+				),
+			)
+			.orderBy(asc(guests.name), asc(guests.id))
+			.limit(GUEST_LINK_CANDIDATE_LIMIT),
+		db
+			.select({
+				id: members.id,
+				name: members.name,
+				email: people.email,
+				phone: people.phone,
+			})
+			.from(members)
+			.innerJoin(people, eq(people.id, members.personId))
+			.where(
+				and(
+					eq(members.clubId, input.otherClubId),
+					eq(members.status, "active"),
+					pattern
+						? or(ilike(members.name, pattern), ilike(people.email, pattern))
+						: undefined,
+				),
+			)
+			.orderBy(asc(members.name), asc(members.id))
+			.limit(GUEST_LINK_CANDIDATE_LIMIT),
+	]);
+	const all: GuestLinkCandidate[] = [
+		...guestRows.map((r) => ({ kind: "guest" as const, ...r })),
+		...memberRows.map((r) => ({ kind: "member" as const, ...r })),
+	];
+	all.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+	return all.slice(0, GUEST_LINK_CANDIDATE_LIMIT);
 }

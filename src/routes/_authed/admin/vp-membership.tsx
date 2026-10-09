@@ -1,11 +1,13 @@
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import {
 	ChevronDown,
+	CopyPlus,
 	Link2,
 	Loader2,
 	MoreHorizontal,
 	Pencil,
 	Printer,
+	Split,
 	Trash2,
 	Undo2,
 	Unlink,
@@ -15,6 +17,10 @@ import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { GuestEditDialog } from "#/components/club/guest-edit-dialog";
+import {
+	GuestLinkDialog,
+	type OtherAdminClub,
+} from "#/components/club/guest-link-dialog";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
 import { PageContainer } from "#/components/page-container";
@@ -58,18 +64,21 @@ import { mailtoHref } from "#/lib/mailto";
 import { cn } from "#/lib/utils";
 import { getClubByIdentifier } from "#/server/clubs";
 import {
+	addGuestToClub,
 	convertGuestToMember,
 	deleteGuest,
 	type GuestStage,
 	getGuestInviteContext,
 	getGuestPipeline,
 	getLinkCandidates,
+	getOtherAdminClubs,
 	type LinkCandidate,
 	linkGuestToMember,
 	type ManualGuestStage,
 	type NextMeetingSummary,
 	type PipelineGuestRow,
 	recordGuestInvite,
+	separateGuest,
 	setGuestStage,
 	undoGuestConversion,
 	unlinkGuestFromMember,
@@ -92,20 +101,26 @@ export const Route = createFileRoute("/_authed/admin/vp-membership")({
 				clubSlug: null,
 				inviteContext: NO_INVITE_CONTEXT,
 				profiles: NO_PROFILES,
+				otherAdminClubs: NO_OTHER_CLUBS,
 				readOnly: false,
 			};
 		}
-		const [guests, resolved, inviteContext, profiles] = await Promise.all([
-			getGuestPipeline({ data: club.clubId }),
-			getClubByIdentifier({ data: club.clubId }),
-			getGuestInviteContext({ data: club.clubId }),
-			// Captions and counts are decoration on this page: a failed read
-			// degrades to none of them rather than taking the pipeline down.
-			getGuestProfiles({ data: club.clubId }).catch(() => NO_PROFILES),
-		]);
+		const [guests, resolved, inviteContext, profiles, otherAdminClubs] =
+			await Promise.all([
+				getGuestPipeline({ data: club.clubId }),
+				getClubByIdentifier({ data: club.clubId }),
+				getGuestInviteContext({ data: club.clubId }),
+				// Captions and counts are decoration on this page: a failed read
+				// degrades to none of them rather than taking the pipeline down.
+				getGuestProfiles({ data: club.clubId }).catch(() => NO_PROFILES),
+				// The viewer's OTHER clubs (#1127): also decoration, and failing closed
+				// (no cross-club menu items) is the safe way for it to fail.
+				getOtherAdminClubs({ data: club.clubId }).catch(() => NO_OTHER_CLUBS),
+			]);
 		return {
 			guests,
 			profiles,
+			otherAdminClubs,
 			clubId: club.clubId,
 			clubName: club.name,
 			clubSlug: resolved?.slug ?? null,
@@ -130,6 +145,8 @@ const NO_PROFILES: { rows: GuestProfileRow[]; brought: BroughtCount[] } = {
 	rows: [],
 	brought: [],
 };
+
+const NO_OTHER_CLUBS: OtherAdminClub[] = [];
 
 const STAGES: { id: GuestStage; label: string; blurb: string; tone: string }[] =
 	[
@@ -179,6 +196,7 @@ function VpMembership() {
 		clubSlug,
 		inviteContext,
 		readOnly,
+		otherAdminClubs,
 	} = Route.useLoaderData();
 	// Kind / home club / introducer per guest (#1050), keyed for the rows.
 	const profileById = new Map(profiles.rows.map((p) => [p.guestId, p]));
@@ -347,6 +365,7 @@ function VpMembership() {
 										busy={busyId === g.id}
 										onMove={move}
 										onConvert={convert}
+										otherAdminClubs={otherAdminClubs ?? NO_OTHER_CLUBS}
 										timezone={inviteContext.timezone}
 										invite={{
 											clubName,
@@ -585,6 +604,7 @@ function GuestRow({
 	busy,
 	onMove,
 	onConvert,
+	otherAdminClubs,
 	timezone,
 	invite,
 }: {
@@ -595,6 +615,8 @@ function GuestRow({
 	busy: boolean;
 	onMove: (guestId: string, stage: ManualGuestStage) => void;
 	onConvert: (guest: PipelineGuestRow) => Promise<boolean>;
+	/** The viewer's other admin/officer clubs (#1127). */
+	otherAdminClubs: OtherAdminClub[];
 	timezone: string;
 	invite: InviteProps;
 }) {
@@ -760,6 +782,7 @@ function GuestRow({
 					busy={busy}
 					onMove={onMove}
 					onConvert={onConvert}
+					otherAdminClubs={otherAdminClubs}
 				/>
 			</div>
 		</div>
@@ -803,16 +826,19 @@ function GuestRowActions({
 	busy: rowBusy,
 	onMove,
 	onConvert,
+	otherAdminClubs,
 }: {
 	guest: PipelineGuestRow;
 	clubId: string;
 	busy: boolean;
 	onMove: (guestId: string, stage: ManualGuestStage) => void;
 	onConvert: (guest: PipelineGuestRow) => Promise<boolean>;
+	otherAdminClubs: OtherAdminClub[];
 }) {
 	const router = useRouter();
 	const [joinedOpen, setJoinedOpen] = useState(false);
 	const [editOpen, setEditOpen] = useState(false);
+	const [linkOpen, setLinkOpen] = useState(false);
 	const [deleteOpen, setDeleteOpen] = useState(false);
 	const [ownBusy, setOwnBusy] = useState(false);
 	const busy = rowBusy || ownBusy;
@@ -844,6 +870,17 @@ function GuestRowActions({
 	// can be moved "from"; the trigger says what to do instead of naming a lane
 	// it is not really in. The accessible name reads the same words.
 	const laneLabel = manualStage?.label ?? "Move to…";
+
+	// Across clubs (#1127). A converted guest (`stage` joined, stranded or not) is
+	// never the source of Add or Link, so none of the three is offered for one.
+	// "Add to" lists only the viewer's own clubs the Person is not in yet, which
+	// the server worked out (`addableTo`); the labels come from the club list.
+	const crossClubOpen = guest.stage !== "joined";
+	const addTargets = crossClubOpen
+		? otherAdminClubs.filter((c) => guest.addableTo?.includes(c.clubId))
+		: [];
+	const canLinkAcrossClubs = crossClubOpen && otherAdminClubs.length > 0;
+	const canSeparate = crossClubOpen && guest.sharedWithOtherClub === true;
 
 	/** Disable the row's controls while `work` runs, and toast if it throws. */
 	async function withBusyToast(work: () => Promise<void>) {
@@ -880,6 +917,32 @@ function GuestRowActions({
 		void withBusyToast(async () => {
 			await undoGuestConversion({ data: { clubId, guestId: guest.id } });
 			toast.success(`${guest.name} is a guest again.`);
+			await router.invalidate();
+		});
+	}
+
+	function onAddToClub(club: OtherAdminClub) {
+		void withBusyToast(async () => {
+			await addGuestToClub({
+				data: { fromClubId: clubId, guestId: guest.id, toClubId: club.clubId },
+			});
+			toast.success(`${guest.name} added to ${club.name} as a prospect.`);
+			await router.invalidate();
+		});
+	}
+
+	function onSeparate() {
+		if (
+			!window.confirm(
+				`Separate ${guest.name} from the other clubs? They get a record of ` +
+					`their own here. The other clubs keep the person they had.`,
+			)
+		) {
+			return;
+		}
+		void withBusyToast(async () => {
+			await separateGuest({ data: { clubId, guestId: guest.id } });
+			toast.success(`${guest.name} is now separate from other clubs.`);
 			await router.invalidate();
 		});
 	}
@@ -977,6 +1040,33 @@ function GuestRowActions({
 							Undo conversion
 						</DropdownMenuItem>
 					) : null}
+					{/* Across clubs (#1127): only an officer of 2+ clubs sees the first
+					    two, and only for the clubs they run; "Separate" is for this
+					    club's admin whenever another club holds the same Person. */}
+					{addTargets.length > 0 || canLinkAcrossClubs || canSeparate ? (
+						<DropdownMenuSeparator />
+					) : null}
+					{addTargets.map((club) => (
+						<DropdownMenuItem
+							key={club.clubId}
+							onSelect={() => onAddToClub(club)}
+						>
+							<CopyPlus aria-hidden />
+							Add to {club.name}
+						</DropdownMenuItem>
+					))}
+					{canLinkAcrossClubs ? (
+						<DropdownMenuItem onSelect={() => setLinkOpen(true)}>
+							<Link2 aria-hidden />
+							Same person as…
+						</DropdownMenuItem>
+					) : null}
+					{canSeparate ? (
+						<DropdownMenuItem onSelect={onSeparate}>
+							<Split aria-hidden />
+							Separate from other clubs
+						</DropdownMenuItem>
+					) : null}
 					{/* Not once they have converted — the server rejects it too. */}
 					{joined ? null : (
 						<>
@@ -1002,6 +1092,17 @@ function GuestRowActions({
 					onConvert={onConvert}
 				/>
 			)}
+
+			{canLinkAcrossClubs ? (
+				<GuestLinkDialog
+					guestId={guest.id}
+					guestName={guest.name}
+					clubId={clubId}
+					otherClubs={otherAdminClubs}
+					open={linkOpen}
+					onOpenChange={setLinkOpen}
+				/>
+			) : null}
 
 			{/* The SHARED dialog (#727) — the same component the meeting page's
 			    attendance rail opens from a guest's name. `PipelineGuestRow` is a
