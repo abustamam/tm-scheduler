@@ -199,6 +199,8 @@ describe("ProjectPicker", () => {
 	describe("given and booked history (#1160)", () => {
 		const LA = "America/Los_Angeles";
 		const CHI = "America/Chicago";
+		// Dates sit in the CURRENT year so the year-less form stays year-less.
+		const YEAR = new Date().getUTCFullYear();
 
 		/** Open the dialog on a single project row and return that row's text. */
 		async function rowText(
@@ -231,7 +233,7 @@ describe("ProjectPicker", () => {
 
 		it("reads 'Given Aug 29' for one past speech", async () => {
 			const text = await rowText({
-				given: [{ at: "2026-08-29T18:00:00Z", timeZone: CHI }],
+				given: [{ at: `${YEAR}-08-29T18:00:00Z`, timeZone: CHI }],
 				booked: [],
 			});
 			expect(text).toContain("Given Aug 29");
@@ -241,8 +243,8 @@ describe("ProjectPicker", () => {
 		it("reads 'Given 2×, last <newest>' for repeats", async () => {
 			const text = await rowText({
 				given: [
-					{ at: "2026-08-29T18:00:00Z", timeZone: CHI },
-					{ at: "2026-06-13T18:00:00Z", timeZone: CHI },
+					{ at: `${YEAR}-08-29T18:00:00Z`, timeZone: CHI },
+					{ at: `${YEAR}-06-13T18:00:00Z`, timeZone: CHI },
 				],
 				booked: [],
 			});
@@ -254,8 +256,8 @@ describe("ProjectPicker", () => {
 			const text = await rowText({
 				given: [],
 				booked: [
-					{ at: "2026-10-17T18:00:00Z", timeZone: CHI },
-					{ at: "2026-10-24T18:00:00Z", timeZone: CHI },
+					{ at: `${YEAR}-10-17T18:00:00Z`, timeZone: CHI },
+					{ at: `${YEAR}-10-24T18:00:00Z`, timeZone: CHI },
 				],
 			});
 			expect(text).toContain("Booked Oct 17");
@@ -265,10 +267,30 @@ describe("ProjectPicker", () => {
 
 		it("joins given and booked with ' · '", async () => {
 			const text = await rowText({
-				given: [{ at: "2026-08-29T18:00:00Z", timeZone: CHI }],
-				booked: [{ at: "2026-10-17T18:00:00Z", timeZone: CHI }],
+				given: [{ at: `${YEAR}-08-29T18:00:00Z`, timeZone: CHI }],
+				booked: [{ at: `${YEAR}-10-17T18:00:00Z`, timeZone: CHI }],
 			});
 			expect(text).toContain("Given Aug 29 · Booked Oct 17");
+		});
+
+		it("adds the year to a date from an earlier year", async () => {
+			const text = await rowText({
+				given: [{ at: `${YEAR - 3}-08-29T18:00:00Z`, timeZone: CHI }],
+				booked: [],
+			});
+			expect(text).toContain(`Given Aug 29, ${YEAR - 3}`);
+		});
+
+		it("leaves this year's date without a year, even beside an older one", async () => {
+			const text = await rowText({
+				given: [
+					{ at: `${YEAR}-08-29T18:00:00Z`, timeZone: CHI },
+					{ at: `${YEAR - 3}-08-29T18:00:00Z`, timeZone: CHI },
+				],
+				booked: [],
+			});
+			expect(text).toContain("Given 2×, last Aug 29");
+			expect(text).not.toContain(`Aug 29, ${YEAR}`);
 		});
 
 		it("renders no history text when there is none", async () => {
@@ -279,7 +301,7 @@ describe("ProjectPicker", () => {
 
 		it("renders each date in its club's zone: 03:00Z on Aug 30 is Aug 29 in Los Angeles", async () => {
 			const text = await rowText({
-				given: [{ at: "2026-08-30T03:00:00Z", timeZone: LA }],
+				given: [{ at: `${YEAR}-08-30T03:00:00Z`, timeZone: LA }],
 				booked: [],
 			});
 			expect(text).toContain("Given Aug 29");
@@ -288,7 +310,7 @@ describe("ProjectPicker", () => {
 
 		it("exposes the history to a screen reader (no aria-hidden)", async () => {
 			await rowText({
-				given: [{ at: "2026-08-29T18:00:00Z", timeZone: CHI }],
+				given: [{ at: `${YEAR}-08-29T18:00:00Z`, timeZone: CHI }],
 				booked: [],
 			});
 			const row = screen.getByRole("button", { name: /Given Aug 29/ });

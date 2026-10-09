@@ -480,7 +480,7 @@ describe.skipIf(!hasTestDb)("project picker (#418)", () => {
 			project: string,
 			at: Date,
 			opts: { cancelled?: boolean; la?: boolean } = {},
-		): Promise<void> {
+		): Promise<string> {
 			const [speech] = await testDb
 				.insert(speeches)
 				.values({
@@ -491,11 +491,12 @@ describe.skipIf(!hasTestDb)("project picker (#418)", () => {
 				.returning({ id: speeches.id });
 			// A unique second per meeting: (club, scheduled_at) is unique.
 			meetingSeq += 1;
+			const scheduledAt = new Date(at.getTime() + meetingSeq * 1000);
 			const [meeting] = await testDb
 				.insert(meetings)
 				.values({
 					clubId: opts.la ? laClubId : chicagoClubId,
-					scheduledAt: new Date(at.getTime() + meetingSeq * 1000),
+					scheduledAt,
 					status: opts.cancelled ? "cancelled" : "scheduled",
 				})
 				.returning({ id: meetings.id });
@@ -504,6 +505,7 @@ describe.skipIf(!hasTestDb)("project picker (#418)", () => {
 				roleDefinitionId: opts.la ? speakerRoleLa : speakerRoleChicago,
 				speechId: speech.id,
 			});
+			return scheduledAt.toISOString();
 		}
 
 		const find = (
@@ -519,7 +521,7 @@ describe.skipIf(!hasTestDb)("project picker (#418)", () => {
 
 		it("lists one past speech as given, with its club's zone, and nothing booked", async () => {
 			const person = await speaker();
-			await speechAt(
+			const insertedAt = await speechAt(
 				{ personId: person },
 				ICE,
 				new Date("2026-08-29T18:00:00Z"),
@@ -531,7 +533,7 @@ describe.skipIf(!hasTestDb)("project picker (#418)", () => {
 			);
 			expect(row.given).toHaveLength(1);
 			expect(row.given[0].timeZone).toBe("America/Chicago");
-			expect(row.given[0].at.startsWith("2026-08-29T18:00:0")).toBe(true);
+			expect(row.given[0].at).toBe(insertedAt);
 			expect(row.booked).toEqual([]);
 			// A project with no speech carries neither list.
 			const other = find(

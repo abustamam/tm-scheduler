@@ -9,7 +9,7 @@
  * A `-logic.ts` so `#/db` never leaks into the client bundle (server-modules
  * guard). Never imported by client code.
  */
-import { and, asc, eq, inArray, isNotNull, isNull, ne } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	bcmProjectProgress,
@@ -198,7 +198,7 @@ export async function listProjectOptions(
 			opts.includeProgress
 				? db
 						.select({
-							projectId: speeches.projectId,
+							projectId: pathwaysProjects.id,
 							scheduledAt: meetings.scheduledAt,
 							timeZone: clubs.timezone,
 						})
@@ -212,8 +212,7 @@ export async function listProjectOptions(
 						.innerJoin(clubs, eq(clubs.id, meetings.clubId))
 						.where(
 							and(
-								// A guest's speech (#1046) has a NULL person_id and never counts.
-								isNotNull(speeches.personId),
+								// A guest's speech (#1046) has a NULL person_id, which `=` never matches.
 								eq(speeches.personId, personId),
 								inArray(pathwaysProjects.pathId, pathIds),
 								ne(meetings.status, "cancelled"),
@@ -221,7 +220,7 @@ export async function listProjectOptions(
 						)
 				: Promise.resolve(
 						[] as {
-							projectId: string | null;
+							projectId: string;
 							scheduledAt: Date;
 							timeZone: string;
 						}[],
@@ -229,27 +228,20 @@ export async function listProjectOptions(
 		]);
 
 	// Split past from upcoming once, here, so no per-project query is needed.
+	// Walked oldest first, so each bucket is ascending: `booked` is soonest
+	// first as it stands, and `given` is reversed to newest first where it is read.
 	const now = new Date();
-	const givenByProject = new Map<string, { when: Date; timeZone: string }[]>();
-	const bookedByProject = new Map<string, { when: Date; timeZone: string }[]>();
-	for (const r of speechRows) {
-		if (r.projectId === null) continue;
+	const givenByProject = new Map<string, PickerSpeechDate[]>();
+	const bookedByProject = new Map<string, PickerSpeechDate[]>();
+	const oldestFirst = [...speechRows].sort(
+		(a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime(),
+	);
+	for (const r of oldestFirst) {
 		const bucket = r.scheduledAt < now ? givenByProject : bookedByProject;
 		const list = bucket.get(r.projectId) ?? [];
-		list.push({ when: r.scheduledAt, timeZone: r.timeZone });
+		list.push({ at: r.scheduledAt.toISOString(), timeZone: r.timeZone });
 		bucket.set(r.projectId, list);
 	}
-	const toDates = (
-		list: { when: Date; timeZone: string }[] | undefined,
-		newestFirst: boolean,
-	): PickerSpeechDate[] =>
-		[...(list ?? [])]
-			.sort((a, b) =>
-				newestFirst
-					? b.when.getTime() - a.when.getTime()
-					: a.when.getTime() - b.when.getTime(),
-			)
-			.map((d) => ({ at: d.when.toISOString(), timeZone: d.timeZone }));
 
 	// Keyed by project alone, exactly as the Base Camp half is: both queries
 	// are already scoped to this person's live enrollments.
@@ -288,8 +280,8 @@ export async function listProjectOptions(
 				isRequired: p.isRequired,
 				series: p.series,
 				complete: completeIds.has(p.id),
-				given: toDates(givenByProject.get(p.id), true),
-				booked: toDates(bookedByProject.get(p.id), false),
+				given: [...(givenByProject.get(p.id) ?? [])].reverse(),
+				booked: bookedByProject.get(p.id) ?? [],
 			}));
 		return {
 			pathId: e.pathId,
