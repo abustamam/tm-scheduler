@@ -713,6 +713,20 @@ it replaced. And a service worker's background revalidation needs `cache: "no-ca
 origin 404 at all — scoped to the crest, since the rest of that cache is hashed build output whose
 URL changes every deploy and can never go stale.
 
+**A status that freezes writes is enforced over a derived set of writers.** When a row gains a
+status value that some writes must refuse, the refusal lives in a runtime policy and is proven by
+one of two shapes:
+
+- **Gate:** it sits inside a gate every affected writer already has to call. The archived club is
+  refused in `requireMembership` and `assertClubNotArchived` (`server/guards.ts`);
+  `public-readers-archive-gate.guard.test.ts` makes every session-less writer carry an archive
+  check (`WRITE_GATES`) or a reviewed reason it needs none (`REVIEWED_UNGATED`).
+- **Sweep:** a guard test derives the writers from the schema and fails any writer that doesn't
+  call the policy for its class. Reference: meeting status, `meeting-writers.guard.test.ts`
+  (#1139).
+
+A hand-kept list of writers is not a guard: it misses the writer nobody remembered. That is how
+#1087, #1092 and #1104 followed #1084.
 
 **The MCP pending-plan lifecycle has ONE definition, and `mcp_pending_plans` is one table
 discriminated by `tool`** (#812). The `/api/mcp` write tools that are preview-only

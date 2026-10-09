@@ -116,7 +116,8 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 		// checks, and a caller who is refused for who they are must keep hearing
 		// that before the meeting's state. Refusing cancelled here too would move
 		// it ahead of them. Completed is refused ONLY here and in the other
-		// callers, never by the seam (see `assertPlanMeetingAccepts`).
+		// callers, never by the seam (see `PLAN_SEAM_WRITE_OPTIONS` in
+		// `attendance-plan-logic.ts`).
 		assertMeetingAccepts(meeting.status, "plan", { accept: ["cancelled"] });
 		await requireMemberInClub(data.memberId, meeting.clubId);
 		// A DECLINE is not just a rung (#663). A member cannot both hold a role and

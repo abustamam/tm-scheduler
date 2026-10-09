@@ -10,8 +10,8 @@
 // A check reads a row and a statement reads the row as of its own start: a
 // cancel or complete committed between the two is invisible to the check and
 // visible to the statement. So the writers that matter put the policy IN the
-// statement, as `meetingNotCancelled` (`slots-logic.ts`) does for the one
-// status it knows. These helpers are that predicate, generalised to a write
+// statement, as `claimSlotCore`'s UPDATE and `removeOpenRoleSlots`' DELETE do
+// (`slots-logic.ts`). These helpers are that predicate, generalised to a write
 // class, so adding a status changes `MEETING_WRITE_POLICY` and nothing here.
 //
 // ## An allow-list, not a deny-list
@@ -70,16 +70,16 @@ export type MeetingStatusMatchesEnum = AssertTrue<
  * `meetingId` is the child's column that points at the meeting, e.g.
  * `roleSlots.meetingId`.
  *
- * Built with the query builder, the same shape as `meetingNotCancelled`, and
- * NOT a hand-written `sql` subquery: those can drop the column qualifier, and
- * a subquery whose two sides both resolve against its own table matches every
- * row (`drizzle-sql-subquery-drops-qualifiers`). The rendered SQL is pinned in
+ * Built with the query builder, and NOT a hand-written `sql` subquery: those
+ * can drop the column qualifier, and a subquery whose two sides both resolve
+ * against its own table matches every row
+ * (`drizzle-sql-subquery-drops-qualifiers`). The rendered SQL is pinned in
  * `meeting-write-gate.integration.test.ts`.
  *
  * Correlates by the meeting's id, so a meeting that is gone is refused too:
  * the write touches no row, and a caller that needs to say WHY re-reads the
- * status and calls `assertMeetingAccepts`, the way `assertMeetingNotCancelledOn`
- * does after `meetingNotCancelled`.
+ * status and calls `assertMeetingAccepts`, the way `assertMeetingAcceptsOn`
+ * (`slots-logic.ts`) does after a refused statement.
  *
  * It is not for a write to `meetings` itself: that would correlate `meetings`
  * against `meetings`, which needs an alias and is not offered. Passing
@@ -126,3 +126,42 @@ export function meetingRowAccepts(
 		acceptedStatuses(writeClass, options?.accept),
 	);
 }
+
+/**
+ * The wrappers (#1139, decision D1 in #1129): functions a writer may call IN
+ * PLACE of a class helper, each keyed `src/server/<file>#<fn>` with the write
+ * class it refuses by. A writer that calls one of these counts as refusing by
+ * that class, so the refusal can live in one shared function (the minutes
+ * handlers' `assertMinutesMeetingRecordable`) instead of being copied into
+ * every writer.
+ *
+ * `meeting-writers.guard.test.ts` holds every entry to three things:
+ *
+ * - the key names a top-level function or const, so renaming a wrapper without
+ *   re-pointing it here fails;
+ * - its body (read comment-blind) calls `assertMeetingAccepts`,
+ *   `meetingAcceptsWrite` or `meetingRowAccepts` with the class as a `"plan"` /
+ *   `"record"` literal (or a same-file const holding one), or calls another
+ *   wrapper of the same class listed here.
+ *   A wrapper is a chain as often as not (`ensureAgendaDraft` calls
+ *   `resolveAgendaDraft`), so every hop is listed, and two wrappers that only
+ *   call each other end in nothing and fail;
+ * - its body passes no `accept`. A writer with an override refuses directly or
+ *   through the callers it names, never through a wrapper, so no override can
+ *   hide inside a function many writers share.
+ *
+ * A function that does not appear here is not a refusal, however it is named:
+ * a writer that relies on it fails the guard. A wrapper that passes `accept`
+ * cannot be listed (the plan seam's helper did, which is why `setPlanStatus` and
+ * `clearPlanStatus` now carry the call in their own bodies).
+ */
+export const MEETING_WRITE_GATES: Readonly<Record<string, MeetingWriteClass>> =
+	{
+		"src/server/guest-book-recordable.ts#assertGuestBookMeetingRecordable":
+			"record",
+		"src/server/meeting-agenda-edit-logic.ts#ensureAgendaDraft": "plan",
+		"src/server/meeting-agenda-edit-logic.ts#resolveAgendaDraft": "plan",
+		"src/server/minutes.ts#assertMinutesMeetingRecordable": "record",
+		"src/server/role-feedback-logic.ts#admitNote": "record",
+		"src/server/voting-logic.ts#assertVoteMeetingAccepts": "plan",
+	};
