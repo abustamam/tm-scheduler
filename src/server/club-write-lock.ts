@@ -21,7 +21,16 @@
  * take it for a different reason: `leaveFeedbackLogic` (its per-club caps)
  * and `collapseMemberships`, so a feedback note cannot land on a membership
  * mid-merge and be cascaded away by its DELETE. `mergePeople` takes every club
- * it will collapse in up front, in id order, before its first write. Taking this
+ * either Person holds, as a member OR as a guest (#1124), in id order, before it
+ * locks a Person or writes anything. Writers that touch a guest's Person (a
+ * convert, an undo, a link or unlink, a guest delete) take it before they lock
+ * the Person, the first step of ADR-0031's lock protocol: club write lock, then
+ * `people` rows in id order (`lockPersonsInOrder`, at the mode each caller names:
+ * `FOR UPDATE` on a Person the path may delete, `FOR NO KEY UPDATE` otherwise; a
+ * path that deletes one also takes `FOR UPDATE` itself just before the DELETE,
+ * whatever it took earlier), then the guest row it changes. `mergePeople` locks
+ * both its Persons `FOR UPDATE` with its own statement, not through
+ * `lockPersonsInOrder`. Taking this
  * lock before the first row lock serialises those writers per club, so the row
  * locks behind it are only ever contended by one of them at a time and the
  * order they take them in stops mattering between them. It ORDERS the rows; it
@@ -58,8 +67,9 @@
  * transaction, so a helper that takes it again under a caller that already
  * holds it is a no-op.
  */
-import { type SQL, sql } from "drizzle-orm";
+import { eq, type SQL, sql } from "drizzle-orm";
 import type { db } from "#/db";
+import { people } from "#/db/schema";
 import { isLockTimeout } from "./pg-errors";
 
 /** A drizzle transaction handle (mirrors `mcp/lock.ts`). */
@@ -147,4 +157,69 @@ export async function takeAdvisoryLockWithin(
 		throw err;
 	}
 	await tx.execute(sql`select set_config('lock_timeout', ${prev}, true)`);
+}
+
+/** The strength of a Person row lock; see `lockPersonsInOrder`. */
+export type PersonLockMode = "update" | "no key update";
+
+/** One Person to lock, and how strongly. */
+export type PersonLock = {
+	id: string | null | undefined;
+	mode: PersonLockMode;
+};
+
+/** `FOR NO KEY UPDATE` on each of `ids`: a Person the path will NOT delete. */
+export const noKeyUpdate = (
+	...ids: Array<string | null | undefined>
+): PersonLock[] => ids.map((id) => ({ id, mode: "no key update" as const }));
+
+/** `FOR UPDATE` on each of `ids`: a Person the path MAY delete. */
+export const forUpdate = (
+	...ids: Array<string | null | undefined>
+): PersonLock[] => ids.map((id) => ({ id, mode: "update" as const }));
+
+/**
+ * Lock Persons in id order, the lock protocol's second step (#1124, ADR-0031).
+ * Nulls are ignored, a Person named twice is locked once at the stronger mode,
+ * and each is locked by its own statement in id order, so two callers that want
+ * different strengths of different Persons still take them in one order.
+ * Returns what it locked.
+ *
+ * The mode is a decision, so there is no default and every caller says it, per
+ * Person. `"update"` (`FOR UPDATE`) conflicts with the key-share lock every
+ * foreign-key INSERT takes on the row it names, so a path holding it blocks a
+ * speech insert for that Person: take it only on a Person the path MAY DELETE
+ * (the guest's own Person in a guest delete or a link, when it holds no
+ * membership). `"no key update"` conflicts with every other writer of the row,
+ * `applyMemberEdit`'s `FOR UPDATE` included, and NOT with a key share, so it
+ * orders the Person against its writers without blocking a speaker claim, which
+ * holds the slot or the membership and then key-shares the Person while it
+ * inserts a speech, and takes no club lock. A path that held `FOR UPDATE` on a
+ * Person while it waited for that slot or membership closed exactly that cycle.
+ *
+ * The mode is chosen BEFORE the path has read everything under the locks, so it
+ * is not a promise that the Person is safe to delete: a path that deletes the
+ * Person takes `FOR UPDATE` itself, in its own statement just before the DELETE
+ * (`deleteGuestPersonIfUnreferenced`), and decides in the DELETE's own WHERE.
+ */
+export async function lockPersonsInOrder(
+	tx: Tx,
+	locks: PersonLock[],
+): Promise<string[]> {
+	const strongest = new Map<string, PersonLockMode>();
+	for (const { id, mode } of locks) {
+		if (!id) continue;
+		if (strongest.get(id) !== "update") strongest.set(id, mode);
+	}
+	const ids = [...strongest.keys()].sort();
+	const locked: string[] = [];
+	for (const id of ids) {
+		const rows = await tx
+			.select({ id: people.id })
+			.from(people)
+			.where(eq(people.id, id))
+			.for(strongest.get(id) as PersonLockMode);
+		if (rows[0]) locked.push(rows[0].id);
+	}
+	return locked;
 }

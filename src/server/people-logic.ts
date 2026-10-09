@@ -10,6 +10,7 @@ import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	clubs,
+	guests,
 	members,
 	pathEnrollments,
 	pathLevelProgress,
@@ -21,7 +22,10 @@ import {
 	type KeeperCandidate,
 	pickKeeper,
 } from "#/lib/person-identity";
-import { normalizedEmail } from "#/server/account-link-logic";
+import {
+	normalizedEmail,
+	unboundGuestOnlyPerson,
+} from "#/server/account-link-logic";
 import { checkMergeBlocks } from "#/server/people-merge-logic";
 
 // A transaction handle (or the base db) — both expose the query builder we use.
@@ -119,6 +123,12 @@ export interface DuplicatePerson {
 	linked: boolean;
 	historyCount: number;
 	clubs: string[];
+	/**
+	 * Held by guest rows only (#1124): no club has them as a member and nobody
+	 * has signed in as them. The merge UI shows a "Guest" badge so a duplicate
+	 * of a member can be repaired from here.
+	 */
+	guestOnly: boolean;
 }
 
 export interface DuplicateGroup {
@@ -192,6 +202,7 @@ export interface MergePreview {
 		collapsed: number;
 		speeches: number;
 		enrollments: number;
+		guests: number;
 	};
 }
 
@@ -251,6 +262,11 @@ export async function getMergePreview(
 		.select({ n: sql<number>`count(*)::int` })
 		.from(speeches)
 		.where(eq(speeches.personId, absorbedId));
+	// The guest records a real merge re-points (#1124), in any club.
+	const [guestCount] = await db
+		.select({ n: sql<number>`count(*)::int` })
+		.from(guests)
+		.where(eq(guests.personId, absorbedId));
 
 	return {
 		block: checkMergeBlocks(keeper, absorbed),
@@ -261,6 +277,7 @@ export async function getMergePreview(
 			collapsed,
 			speeches: speechCount?.n ?? 0,
 			enrollments: await countMovingEnrollments(keeperId, absorbedId),
+			guests: guestCount?.n ?? 0,
 		},
 	};
 }
@@ -359,7 +376,8 @@ async function peopleForEmail(email: string): Promise<DuplicatePerson[]> {
 
 /**
  * Decorate bare Person rows with what the superadmin duplicate/merge UI needs:
- * `linked` (has a sign-in account), `historyCount` (speeches + enrollments,
+ * `linked` (has a sign-in account), `guestOnly` (held by guest rows only,
+ * #1124), `historyCount` (speeches + enrollments,
  * via the shared `historyCounts`), and `clubs` (the NAMES of every club this
  * Person holds a membership in). Club names are fetched in ONE batched query
  * across all the given ids (not N+1) and grouped in JS. The returned array's
@@ -376,14 +394,19 @@ async function decorate(
 	const ids = rows.map((r) => r.id);
 	if (ids.length === 0) return [];
 
-	const [clubRows, history] = await Promise.all([
+	const [clubRows, history, guestOnlyRows] = await Promise.all([
 		db
 			.select({ personId: members.personId, clubName: clubs.name })
 			.from(members)
 			.innerJoin(clubs, eq(members.clubId, clubs.id))
 			.where(inArray(members.personId, ids)),
 		historyCounts(db, ids),
+		db
+			.select({ id: people.id })
+			.from(people)
+			.where(and(inArray(people.id, ids), unboundGuestOnlyPerson())),
 	]);
+	const guestOnlyIds = new Set(guestOnlyRows.map((r) => r.id));
 
 	const clubsByPerson = new Map<string, string[]>();
 	for (const row of clubRows) {
@@ -399,5 +422,6 @@ async function decorate(
 		linked: r.userId != null,
 		historyCount: history.get(r.id) ?? 0,
 		clubs: clubsByPerson.get(r.id) ?? [],
+		guestOnly: guestOnlyIds.has(r.id),
 	}));
 }

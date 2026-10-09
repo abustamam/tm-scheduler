@@ -40,6 +40,7 @@ import {
 } from "./award-candidates-logic";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { findGuestForContact } from "./guest-pipeline-logic";
+import { createGuestRecord } from "./guests-logic";
 
 export type AttendanceStatus = "present" | "absent" | "excused";
 export type AwardCategory =
@@ -758,22 +759,17 @@ async function resolveGuestId(
 		});
 		if (existing) return existing.id;
 
-		const [created] = await tx
-			.insert(guests)
-			.values({
-				...(newGuestId ? { id: newGuestId } : {}),
-				clubId,
-				name,
-				email,
-				phone,
-			})
-			.onConflictDoNothing({ target: guests.id })
-			.returning({ id: guests.id });
-		if (created) return created.id;
-		// Conflict on the client-supplied id → the guest already exists from a
-		// prior replay; the create is idempotent, so return that same id.
-		if (newGuestId) return newGuestId;
-		throw new Error("Failed to create guest.");
+		// A conflict on the client-supplied id means the guest already exists from
+		// a prior replay; the create is idempotent and returns that same id, and
+		// `createGuestRecord` takes back the Person it minted for the replay.
+		const created = await createGuestRecord(tx, {
+			...(newGuestId ? { id: newGuestId } : {}),
+			clubId,
+			name,
+			email,
+			phone,
+		});
+		return created.id;
 	}
 	if (input.guestId) {
 		const [existing] = await tx

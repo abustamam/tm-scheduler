@@ -14,6 +14,7 @@ import { db } from "#/db";
 import {
 	activityLog,
 	clubs,
+	guests,
 	members,
 	oauthClient,
 	pathEnrollments,
@@ -45,7 +46,11 @@ import {
 } from "#/lib/club-timezone";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
 import { slugify } from "#/lib/slug";
-import { type RosterObstacle, rosterConflictFor } from "./account-link-logic";
+import {
+	type RosterObstacle,
+	rosterConflictFor,
+	unreferencedUnboundPerson,
+} from "./account-link-logic";
 import { findBestPersonByEmail } from "./people-logic";
 
 // A transaction handle (or the base db) — both expose the query builder we use.
@@ -703,12 +708,20 @@ const UUID_RE =
  *   it cascades with the club. Read as `->>` text (the column is app-written
  *   jsonb, so no cast of untrusted text), and filtered to well-formed uuids in
  *   the app so a malformed row is skipped rather than aborting the delete;
- * - Persons with Pathways progress credited to this club.
+ * - Persons with Pathways progress credited to this club;
+ * - Persons this club holds as GUESTS (#1124), whose `guests` rows the cascade
+ *   is about to delete. A guest-only Person has no membership and no activity
+ *   entry, so the guest row is the only thing that names them. Those named
+ *   ONLY that way come back separately (`guestOnlyIds`): one of them who has
+ *   signed in is somebody's account and is kept.
  *
  * Whether each one is then deleted is decided after the cascade, under lock,
  * by whether they hold a membership anywhere.
  */
-async function personsOfClub(tx: Tx, clubId: string): Promise<string[]> {
+async function personsOfClub(
+	tx: Tx,
+	clubId: string,
+): Promise<{ personIds: string[]; guestOnlyIds: Set<string> }> {
 	const current = await tx
 		.selectDistinct({ personId: members.personId })
 		.from(members)
@@ -732,13 +745,56 @@ async function personsOfClub(tx: Tx, clubId: string): Promise<string[]> {
 			eq(pathEnrollments.id, pathLevelProgress.enrollmentId),
 		)
 		.where(eq(pathLevelProgress.creditedClubId, clubId));
+	const asGuest = await tx
+		.selectDistinct({ personId: guests.personId })
+		.from(guests)
+		.where(eq(guests.clubId, clubId));
 	const ids = new Set<string>();
+	const named = new Set<string>();
+	const add = (into: Set<string>, id: unknown) => {
+		if (typeof id === "string" && UUID_RE.test(id)) into.add(id.toLowerCase());
+	};
 	for (const r of [...current, ...removed, ...credited]) {
-		if (typeof r.personId === "string" && UUID_RE.test(r.personId)) {
-			ids.add(r.personId.toLowerCase());
+		add(ids, r.personId);
+		add(named, r.personId);
+	}
+	// A Person only a guest row of this club names (#1124): never a member here,
+	// never removed, no progress credited. The caller deletes such a Person only
+	// if nobody has signed in as them.
+	const guestOnlyIds = new Set<string>();
+	for (const r of asGuest) {
+		add(ids, r.personId);
+		if (
+			typeof r.personId === "string" &&
+			!named.has(r.personId.toLowerCase())
+		) {
+			add(guestOnlyIds, r.personId);
 		}
 	}
-	return [...ids];
+	return { personIds: [...ids], guestOnlyIds };
+}
+
+/**
+ * The guest-only Persons among `locked` that a club delete must KEEP: those that
+ * do not satisfy `unreferencedUnboundPerson()`. Evaluated after the cascade, so
+ * this club's guest rows are already gone and any `guests` row it finds is
+ * another club's.
+ */
+async function keptGuestOnly(
+	tx: Tx,
+	locked: { id: string }[],
+	guestOnlyIds: Set<string>,
+): Promise<string[]> {
+	const candidates = locked
+		.map((p) => p.id)
+		.filter((id) => guestOnlyIds.has(id));
+	if (candidates.length === 0) return [];
+	const deletable = await tx
+		.select({ id: people.id })
+		.from(people)
+		.where(and(inArray(people.id, candidates), unreferencedUnboundPerson()));
+	const ok = new Set(deletable.map((p) => p.id));
+	return candidates.filter((id) => !ok.has(id));
 }
 
 /**
@@ -756,7 +812,8 @@ async function personsOfClub(tx: Tx, clubId: string): Promise<string[]> {
  * - `path_level_progress.credited_club_id`: a level credited to another club;
  * - `project_completion_marks.marked_by_member_id`: a project another club's
  *   officer signed off;
- * - `path_enrollments` and `bcm_project_progress` name no club.
+ * - `path_enrollments` and `bcm_project_progress` name no club;
+ * - `guests.person_id` (#1124): a guest row in another club.
  */
 async function personsWithOtherClubHistory(
 	tx: Tx,
@@ -796,7 +853,15 @@ async function personsWithOtherClubHistory(
 				sql`${projectCompletionMarks.markedByMemberId} is not null`,
 			),
 		);
-	return [...spoke, ...credited, ...marked].flatMap((r) =>
+	// A guest row in ANOTHER club (#1124). The cascade has already deleted this
+	// club's, so every `guests` row still naming one of these Persons is some
+	// other club's visit, role and speech history, and a Person delete would hit
+	// the RESTRICT key on it. Kept, as a Person with a membership elsewhere is.
+	const guestElsewhere = await tx
+		.selectDistinct({ personId: guests.personId })
+		.from(guests)
+		.where(inArray(guests.personId, personIds));
+	return [...spoke, ...credited, ...marked, ...guestElsewhere].flatMap((r) =>
 		r.personId === null ? [] : [r.personId],
 	);
 }
@@ -829,8 +894,12 @@ function isForeignKeyViolation(err: unknown): boolean {
  * 3. People are club-less (ADR-0008), so the cascade leaves them. Each collected
  *    Person is locked `FOR UPDATE` and re-checked for a remaining `members` row
  *    AFTER the cascade, inside this transaction, along with whether their own
- *    history still points at another club (`personsWithOtherClubHistory`; such
- *    a Person is kept so that club's record survives). A membership another club adds
+ *    history still points at another club (`personsWithOtherClubHistory`, which
+ *    counts a guest row there too; such a Person is kept so that club's record
+ *    survives). A guest-only Person whose only guest rows were this club's goes
+ *    with it, unless somebody has signed in as them: that is an account, and a
+ *    Person this club never held as a member is not its to delete. A membership
+ *    another club adds
  *    concurrently either committed first (and is seen, so the Person is kept) or
  *    blocks on the lock and then fails its FK. A Person with no membership left
  *    is deleted, and their speeches, path enrollments and everything under those
@@ -865,7 +934,7 @@ export async function deleteClubPermanently(
 			throw new Error("The name doesn't match.");
 		}
 
-		const personIds = await personsOfClub(tx, clubId);
+		const { personIds, guestOnlyIds } = await personsOfClub(tx, clubId);
 		// LOCK ORDER: the club's Persons BEFORE its memberships (#906). The
 		// `delete clubs` below cascades to every membership, so it takes the
 		// membership rows; locking the Persons after it was membership-then-Person,
@@ -913,6 +982,14 @@ export async function deleteClubPermanently(
 			const keep = new Set([
 				...stillMembers.map((r) => r.personId),
 				...(await personsWithOtherClubHistory(tx, personIds)),
+				// A Person this club knew ONLY as a guest keeps what a guest delete
+				// would keep (`unreferencedUnboundPerson()`): somebody who has signed in
+				// (M3 of #1155: deleting them takes the account with it and queues its
+				// deletion below), and one who owns a speech, an enrolment or a
+				// charter-helper row. A guest row here never made this club the owner of
+				// that history: a Person merged with a former member of another club is
+				// guest-only by the predicate and still has that club's record attached.
+				...(await keptGuestOnly(tx, locked, guestOnlyIds)),
 			]);
 			const doomed = locked.filter((p) => !keep.has(p.id));
 			peopleKept = locked.length - doomed.length;

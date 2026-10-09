@@ -88,9 +88,16 @@ the nouns in `src/db/schema.ts`.
   resurrect it. Resolved for display by `greetingName` (`#/lib/person-name`), which falls back to
   the first token. Used only to address people in nudge drafts — never as a display name.
 - **Guest** — a club-scoped visitor (`guests`) who can be assigned to a role slot as an
-  alternative to a member (real case: a visitor served as evaluator). A lightweight, durable
-  identity (name + optional contact), **not** a Person and **not** a Membership: no login, no
-  Pathways, no roster/officer presence, and NOT a `members` status. A slot references at most one
+  alternative to a member (real case: a visitor served as evaluator). **A guest is a Person**
+  (#1124, ADR-0031): the `guests` row is the per-club guest RECORD (stage, kind, home club,
+  who introduced them, the membership they converted to), as `members` is the per-club
+  membership, and `guests.person_id` points at the human. A guest row's name stays per club
+  and `people.name` is the fallback; email and phone are still on the row until #1125 moves
+  them. A guest is **not** a Membership: no login, no Pathways, no roster/officer presence,
+  and NOT a `members` status. Created ONLY through `createGuestRecord` (Person and row in one
+  transaction; `guest-insert.guard.test.ts`). `person_id` is nullable until #1125, so
+  `ensureGuestPerson` repairs a null. A Person held by guest rows only is **guest-only**
+  (`unboundGuestOnlyPerson()`), and the superadmin merge tool labels it "Guest". A slot references at most one
   assignee — a member (`assigned_member_id`) OR a guest (`assigned_guest_id`), never both
   (enforced in logic + a DB check constraint). Guests never appear in the member roster/picker;
   guest-held slots render the name with a subtle "· Guest" marker and count as filled. Admin-only
@@ -114,7 +121,15 @@ the nouns in `src/db/schema.ts`.
   by convert-to-member (alongside `converted_membership_id`). Each guest's **visit count** and
   **first-visit date** are *derived* from `meeting_attendance` (never a stored counter). The
   admin pipeline view lives at `/admin/vp-membership`; the assign-guest picker excludes `joined`
-  and `lost` guests (`stage in (prospect, following_up)`).
+  and `lost` guests (`stage in (prospect, following_up)`). Convert with no member of THIS club
+  to match puts the membership on the **guest's own Person** only if it is **pristine** (#1124,
+  ADR-0031, `pristineGuestPerson`): never signed in, never a member anywhere, no speech,
+  enrolment or charter-helper row, no other guest row, no email or phone, and no `member_remove` /
+  `member_add` naming it. Then no `people` row is inserted (`createdPerson` is `false`) and the guest
+  row's name, goes-by name, email and phone are filled onto it before the membership insert.
+  Otherwise convert mints a **fresh Person** carrying the guest row's values, points the guest at it,
+  and leaves the old Person exactly as it is (it is someone's history, or a #875 release target).
+  Undo leaves the contact and the guest's Person alone.
 - **Guest book** — the public, no-auth capture front door (ADR-0018, absorbing #239):
   `/club/:clubId/guest-book`, escaping the member-identity shell. A visitor self-enters
   name + optional email/phone; the server **creates-or-finds** the guest (dedup club-scoped, by

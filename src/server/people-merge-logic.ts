@@ -1,8 +1,9 @@
 // mergePeople — the cross-club, IRREVERSIBLE Person merge (Task 6).
 // Fuses two `people` rows (a human that ended up as two Persons — different
 // clubs, a duplicate import, a self-claim that missed the match) into one.
-// Re-points the three PERSON-scoped FKs (members / speeches / path_enrollments)
-// from the absorbed Person onto the keeper, funnelling every SHARED-club
+// Re-points the PERSON-scoped FKs (members / speeches / path_enrollments, and
+// the guest rows' `guests.person_id`, #1124) from the absorbed Person onto the
+// keeper, funnelling every SHARED-club
 // membership through `collapseMemberships` (so membership FKs never drift),
 // keeps the more-progressed enrollment on a Pathways-path collision, deletes
 // the absorbed Person, and writes one `member_merge` audit row per affected
@@ -21,6 +22,7 @@ import { z } from "zod";
 import { db } from "#/db";
 import {
 	activityLog,
+	guests,
 	members,
 	pathEnrollments,
 	pathLevelProgress,
@@ -29,6 +31,7 @@ import {
 } from "#/db/schema";
 import { absorbedEnrollmentMoves, earliestDate } from "#/lib/person-identity";
 import { lockClubForWrite } from "./club-write-lock";
+import { RECORD_CHANGED_MESSAGE } from "./guests-logic";
 import { collapseMemberships } from "./membership-collapse-logic";
 
 // A transaction handle (or the base db) — both expose the query builder we use.
@@ -123,7 +126,29 @@ export interface MergePeopleResult {
 		collapsed: number;
 		speeches: number;
 		enrollments: number;
+		/** absorbed guest rows re-pointed to the keeper, in any club (#1124). */
+		guests: number;
 	};
+}
+
+/**
+ * Every club that holds any of `personIds`, as a member or as a guest, sorted:
+ * the set `mergePeople` locks before it locks a Person. Read twice, once before
+ * the locks and once under them.
+ */
+async function clubsHoldingPersons(
+	tx: Tx,
+	personIds: string[],
+): Promise<string[]> {
+	const asMember = await tx
+		.selectDistinct({ clubId: members.clubId })
+		.from(members)
+		.where(inArray(members.personId, personIds));
+	const asGuest = await tx
+		.selectDistinct({ clubId: guests.clubId })
+		.from(guests)
+		.where(inArray(guests.personId, personIds));
+	return [...new Set([...asMember, ...asGuest].map((r) => r.clubId))].sort();
 }
 
 export async function mergePeople(
@@ -131,33 +156,72 @@ export async function mergePeople(
 ): Promise<MergePeopleResult> {
 	const parsed = mergePeopleSchema.parse(input);
 	return db.transaction(async (tx) => {
-		// Both Persons locked FIRST, in id order, before any membership is
-		// touched (#906 review). `applyMemberEdit` and guest conversion lock the
-		// Person and then the membership; a merge that re-pointed memberships
-		// first and wrote the Persons last deadlocked against them, and id order
-		// keeps two merges over one Person from deadlocking each other. The club
-		// write locks below still come before the first WRITE; no other holder
-		// of a club write lock locks a `people` row, so these two row locks
-		// ahead of it close no cycle through it.
+		// The lock protocol (ADR-0031): every affected club's write lock, in id
+		// order; then both Persons `FOR UPDATE`, in id order (the absorbed one is
+		// deleted, so the strong mode is right here). The guest rows are not locked
+		// up front; see below.
+		// #1124 reversed this function's old order (Persons first, club locks
+		// after), because a convert, a guest-book capture and #1127's link all take
+		// the club's write lock BEFORE they touch a Person, and a merge that held a
+		// Person while it waited for a club lock closed a cycle with them.
+		//
+		// The clubs are only known by reading memberships and guest rows, so they
+		// are READ without a lock, locked in order, and read again under the locks
+		// (the read-then-lock rule). A set that moved in between means somebody
+		// attached or detached one of these Persons from a club we did not lock;
+		// the merge is refused with nothing written.
+		//
+		// `applyMemberEdit` and `confirmEmailChange` lock a Person and no club, so
+		// the Persons locked here after the clubs close no cycle through them.
+		const personIds = [parsed.keeperPersonId, parsed.absorbedPersonId];
+		const clubsBefore = await clubsHoldingPersons(tx, personIds);
+		for (const clubId of clubsBefore) await lockClubForWrite(tx, clubId);
+
 		const rows = await tx
 			.select()
 			.from(people)
-			.where(
-				inArray(people.id, [parsed.keeperPersonId, parsed.absorbedPersonId]),
-			)
+			.where(inArray(people.id, personIds))
 			.orderBy(people.id)
 			.for("update");
 		const keeper = rows.find((p) => p.id === parsed.keeperPersonId);
 		const absorbed = rows.find((p) => p.id === parsed.absorbedPersonId);
 		if (!keeper || !absorbed) throw new Error("Person not found.");
 
+		const clubsAfter = await clubsHoldingPersons(tx, personIds);
+		if (
+			clubsAfter.length !== clubsBefore.length ||
+			clubsAfter.some((id, i) => id !== clubsBefore[i])
+		) {
+			throw new Error(RECORD_CHANGED_MESSAGE);
+		}
+
+		// The absorbed Person's guest rows as they stand NOW, before any collapse
+		// below re-points a converted guest's Person along with its membership. The
+		// count and the audit are taken from this set so they agree with the
+		// preview, which counts the same rows before anything moves.
+		//
+		// READ, not locked. The guest rows used to be locked here `FOR NO KEY
+		// UPDATE` as the protocol's third step, which cycled with
+		// `applyUpdateGuestProfile` on the KEEPER side: the editor holds the
+		// introducer's membership `FOR SHARE` and then updates the guest row, while
+		// the collapse below updates the keeper's membership holding that guest row.
+		// That side is closed. The ABSORBED side is as on main: when the guest's
+		// introducer is the absorbed membership, the editor holds it `FOR SHARE`
+		// while the collapse deletes it, and that cycle is still there. The set
+		// cannot change in the meantime: both Persons are locked `FOR UPDATE`, so no
+		// guest row can be inserted naming either, and the re-point below locks each
+		// row it moves at the moment it moves it.
+		const guestsToMove = await tx
+			.select({ id: guests.id, clubId: guests.clubId })
+			.from(guests)
+			.where(eq(guests.personId, absorbed.id));
+
 		const block = checkMergeBlocks(keeper, absorbed);
 		if (block) throw new Error(block);
 
 		// 1. Memberships: collapse in shared clubs, else plain re-point. Every
 		//    club the absorbed Person belonged to is "affected" (gets an audit row).
-		// Ordered by club: each collapse below takes that club's write lock, so
-		// two merges over overlapping clubs take them in one order.
+		// Ordered by club, as the locks above were taken.
 		const absorbedMemberships = await tx
 			.select({ id: members.id, clubId: members.clubId })
 			.from(members)
@@ -170,15 +234,6 @@ export async function mergePeople(
 		const keeperByClub = new Map(
 			keeperMemberships.map((m) => [m.clubId, m.id]),
 		);
-		// Every club this merge will collapse in, locked HERE, in club order,
-		// before the first write. `collapseMemberships` takes its club's write
-		// lock itself, but inside this loop it would do so after the previous
-		// iteration's writes already hold row locks, which `club-write-lock.ts`
-		// rules out: taken after a row lock, it orders that row against nobody.
-		// Re-entrant, so the collapse's own call below is then a no-op.
-		for (const abs of absorbedMemberships) {
-			if (keeperByClub.has(abs.clubId)) await lockClubForWrite(tx, abs.clubId);
-		}
 		const affectedClubIds = new Set<string>();
 		let collapsed = 0;
 		let repointed = 0;
@@ -199,6 +254,17 @@ export async function mergePeople(
 			}
 		}
 
+		// 1b. Guest rows (#1124): a Person delete that forgot them fails on the
+		//     RESTRICT key, so they move to the keeper here, before step 4. They are
+		//     the guest RECORDS and stay per club; only whose they are changes.
+		//     Every club whose guest record moved is "affected" too, so a merge of
+		//     guest-only Persons is attributable to the clubs it touched.
+		await tx
+			.update(guests)
+			.set({ personId: keeper.id })
+			.where(eq(guests.personId, absorbed.id));
+		for (const g of guestsToMove) affectedClubIds.add(g.clubId);
+
 		// 2. Speeches (person-scoped, no unique) → keeper.
 		const spMoved = await tx
 			.update(speeches)
@@ -215,6 +281,8 @@ export async function mergePeople(
 		//      and `path_enrollments.person_id` are all `ON DELETE CASCADE` on
 		//      `people`, so deleting the absorbed row any earlier would cascade-WIPE
 		//      its real memberships/speeches/enrollments before they're re-pointed.
+		//      `guests.person_id` is RESTRICT instead, so a missed re-point is a
+		//      loud FK failure and not a silent loss.
 		//    - BEFORE the keeper reconcile below: adopting the absorbed's
 		//      `customer_id` / `basecamp_user_id` (both non-deferrable UNIQUE) would
 		//      collide with the still-live absorbed row if it hadn't been deleted yet.
@@ -248,14 +316,17 @@ export async function mergePeople(
 
 		// 6. Audit: one member_merge row per affected club, attributed to the
 		//    superadmin who ran the merge (impersonated_by; actor_member_id is null
-		//    — the superadmin holds no membership in the club). A merge where NEITHER
-		//    person has a membership writes NO audit row: activity_log.club_id is NOT
-		//    NULL, so there is no club to attribute the merge to — intentional/OK.
+		//    — the superadmin holds no membership in the club). An affected club is
+		//    one the absorbed Person held a membership in OR a guest record in
+		//    (#1124). A merge where the absorbed Person had neither writes NO audit
+		//    row: activity_log.club_id is NOT NULL, so there is no club to attribute
+		//    it to — and a Person no club names has nothing a club could miss.
 		const movedCounts = {
 			memberships: repointed,
 			collapsed,
 			speeches: spMoved.length,
 			enrollments: enMoved,
+			guests: guestsToMove.length,
 		};
 		for (const clubId of affectedClubIds) {
 			await tx.insert(activityLog).values({

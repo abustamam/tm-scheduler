@@ -290,13 +290,31 @@ There is no per-club copy; `members.email` was dropped by migration 0109.
 | the roster edit (`applyMemberEdit`) | `isNull(people.userId)` AND `soleHoldingClub(clubId)`, in the UPDATE's own WHERE |
 | the CSV importer's fill (`importPeopleAndMembers`) | the same two, plus the address is blank |
 | the member's own address change (`confirmEmailChange`, ADR-0030) | the new address was just proved by its link, and `eq(people.userId, …)` for the confirming account is in the UPDATE's own WHERE |
+| convert's fill of a PRISTINE guest Person (`applyConvertGuestToMember`, #1124, ADR-0031) | `pristineGuestPerson(guestId)` in the UPDATE's own WHERE, before the membership insert: unbound, no membership of any status, no speech/enrolment/helper row, no other guest row, no contact or roster-identity column, no `member_remove` on record. Any other Person gets a fresh one |
 | the superadmin first-admin repair, `mergePeople` | their named waivers |
 | a plain INSERT of a brand-new Person | always — a fresh row is nobody's yet |
 
 **Guest conversion never writes an existing Person's address** (#907 review). The
 guest book is an anonymous public form; a fill would let anyone who knows a
 member's name and phone put their own address on that member's Person and take
-the account with one magic link. Only a FRESH Person carries the guest's address.
+the account with one magic link. A Person a convert MATCHED on this club's roster
+is never written. The one address convert does write is the guest's own on the
+guest's OWN Person, and only when that Person is PRISTINE (#1124, the maintainer's
+ruling of 2026-10-09): nobody has signed in as them, no membership in any club
+(any status), no speech, enrolment or charter-helper row, no other guest row, no
+email or phone, none of the roster-identity columns (`customer_id`,
+`basecamp_user_id`, `original_join_date`, `invited_at`), and no `member_remove` naming them
+(`pristineGuestPerson`, the one definition, in the UPDATE's own WHERE). That is
+evidence, not proof: it cannot see a membership deleted without a record that left
+no column behind. A pristine Person is exactly what the fresh Person the old
+convert minted was, so convert fills its blank contact, and its name and goes-by
+name, from the guest row. Every other Person the guest row names (a former member,
+a corrected one, a merged one, a wrongly linked one) gets a fresh Person, and the
+old one is left as it is, or deleted when nothing references it and no removal
+names it. An unlink points the guest at a fresh name-only Person when its Person
+holds a membership. Undo does not touch the contact, so the undoing club's own
+roster CSV still matches the Person (#875). #1125 moves guest contact onto the
+Person and must replace the "has contact" signal.
 
 Non-null on a LINKED Person means verified; on an unlinked one it is what the one
 club that held them typed. That is why a club may write it only while it is the
@@ -368,12 +386,15 @@ column to itself.
 `person-email-writers.guard.test.ts` (every writer, matched by SHAPE — a SET that
 is not an inline object literal is refused outright, comments are stripped, the
 table is resolved through its local binding, upserts and raw SQL count; each
-club-side writer must carry `isNull(people.userId)` AND `soleHoldingClub(`),
+club-side writer must carry `isNull(people.userId)` AND `soleHoldingClub(`; convert's
+fill of a pristine guest Person carries `pristineGuestPerson(` instead),
 `roster-obstacle.guard.test.ts` (the complement),
 `account-link-logic.integration.test.ts` (each arm killed independently),
 `member-email-ownership.integration.test.ts`,
 `account-invite-logic.integration.test.ts`,
-`guest-convert-email.integration.test.ts` and
+`guest-convert-email.integration.test.ts`,
+`guest-person.integration.test.ts` (the guest's Person: the pristine rule one
+condition at a time, an undo that leaves the contact alone, and the lock order) and
 `person-email-migration.integration.test.ts`.
 
 ### Still open, and deliberately so

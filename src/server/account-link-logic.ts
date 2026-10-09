@@ -26,7 +26,16 @@ import {
 } from "drizzle-orm";
 import { type AnyPgColumn, alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
-import { members, people, user } from "#/db/schema";
+import {
+	activityLog,
+	clubCharterHelpers,
+	guests,
+	members,
+	pathEnrollments,
+	people,
+	speeches,
+	user,
+} from "#/db/schema";
 
 /**
  * One spelling of "normalise an address", for the SQL side. **Exported: use it
@@ -64,6 +73,14 @@ const otherPeople = alias(people, "other_people");
 const holding = alias(members, "holding_member");
 const vouching = alias(members, "vouching_member");
 const otherHolding = alias(members, "other_holding_member");
+/** Aliased `guests`, `speeches` and `path_enrollments`, for the guest-Person
+ *  predicates' correlated subqueries (#802). */
+const heldGuest = alias(guests, "held_guest");
+const ownedSpeech = alias(speeches, "owned_speech");
+const enrolment = alias(pathEnrollments, "person_enrolment");
+const charterHelper = alias(clubCharterHelpers, "person_charter_helper");
+const otherGuestRow = alias(guests, "other_guest_row");
+const personRecord = alias(activityLog, "person_activity");
 /** The binding account, re-read INSIDE the bind's own statement (#1091
  *  review). Aliased so it always renders qualified (#802). */
 const bindingAccount = alias(user, "binding_account");
@@ -187,6 +204,210 @@ export function soleHoldingClub(clubId: string): SQL {
 				.where(
 					and(eq(vouching.personId, people.id), eq(vouching.clubId, clubId)),
 				),
+		),
+	) as SQL;
+}
+
+/**
+ * An UNBOUND guest-only Person (#1124, ADR-0031): nobody has signed in as them
+ * (`user_id IS NULL`), no club has them as a member, and at least one club has
+ * them as a guest. The superadmin merge tool labels such a Person "Guest" so a
+ * duplicate can be repaired. It is a READ predicate: what decides whether a
+ * convert may adopt a guest's Person is the stricter `pristineGuestPerson`.
+ */
+export function unboundGuestOnlyPerson(): SQL {
+	return and(
+		isNull(people.userId),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(holding)
+				.where(eq(holding.personId, people.id)),
+		),
+		exists(
+			db
+				.select({ one: sql`1` })
+				.from(heldGuest)
+				.where(eq(heldGuest.personId, people.id)),
+		),
+	) as SQL;
+}
+
+/**
+ * **The one definition of a PRISTINE guest Person** (#1124, ADR-0031, the
+ * maintainer's ruling of 2026-10-09): the only Person a convert may ADOPT for a
+ * guest. Everything else the guest row names gets a fresh Person instead, and the
+ * old one is left as it is (or, if nothing at all references it, deleted): it is
+ * somebody's history or a release target (#875). "Pristine" means NOTHING a
+ * guest's Person is not meant to carry shows on the row or in the tables around
+ * it. A Person is pristine for guest `guestId` only if ALL of these hold:
+ *
+ *  - nobody has signed in as them (`user_id IS NULL`);
+ *  - no membership in any club, in any status;
+ *  - no speech, no Pathways enrolment, no charter-helper row (nothing a Person
+ *    owns that is somebody's record);
+ *  - no guest row but this one, in any club (a Person two clubs share is not one
+ *    club's to rename and re-key);
+ *  - no email and no phone, and none of the roster-identity columns that only a
+ *    membership, an import, a member or an officer sets: `customer_id`,
+ *    `basecamp_user_id`, `original_join_date` and `invited_at`. A Person a merge
+ *    folded a member into carries those columns (`mergePeople` copies the
+ *    absorbed Person's contact and anchors onto the keeper), and so does one a
+ *    roster collapse left behind, so the columns, not only the records, are the
+ *    evidence. The two contact-preference columns (`preferred_contact`,
+ *    `contact_preference_by`) are DELIBERATELY NOT checked:
+ *    `preferred-contact-reads.guard.test.ts` lets only the files it names spell
+ *    that column, this file is not one, and a null test is not one of its
+ *    shapes. The accepted gap: a Person whose ONLY remnant of a membership is
+ *    one of those two columns reads pristine and can be adopted by a guest, and
+ *    a stale contact-channel preference can then come back with it. #1125 moves
+ *    a guest's contact onto its Person, and must replace the contact signal
+ *    (ADR-0031);
+ *  - no removal on record: a `member_remove` naming it (`detail.personId`, the
+ *    shape `applyMemberRemove`, an undo and the importer's release lookup all use).
+ *
+ * That last arm is spelled like the importer's (a LITERAL `action =
+ * 'member_remove'` and the same `->>` expression), because
+ * `activity_log_member_remove_person_idx` is partial and on that expression and
+ * serves only a query that spells both the same way. A bound `action IN ($1, $2)`
+ * does not, and every convert then scanned the whole log across clubs while
+ * holding the club and Person locks. There is no `member_add` arm for the same
+ * reason and because it proves little: the roster add and the import write no
+ * Person on theirs, convert's names one but a roster collapse deletes the
+ * absorbed membership's own records, and every deletion that is logged writes a
+ * `member_remove`.
+ *
+ * What this cannot see is a membership that was deleted without a record and
+ * left no column behind (a removal from before #875 of a Person with nothing but a
+ * name). That Person reads as pristine, and it is the guest's to adopt: nothing
+ * about it distinguishes it from one.
+ *
+ * One function, so the decision and the write cannot disagree: convert puts it
+ * in the adopt UPDATE's own WHERE, and the UPDATE matching a row IS the
+ * decision. A membership another transaction inserts for the Person between a
+ * read and the write makes the UPDATE match nothing, and the convert mints a
+ * fresh Person instead.
+ */
+export function pristineGuestPerson(guestId: string): SQL {
+	return and(
+		isNull(people.userId),
+		isNull(people.email),
+		isNull(people.phone),
+		isNull(people.customerId),
+		isNull(people.basecampUserId),
+		isNull(people.originalJoinDate),
+		isNull(people.invitedAt),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(holding)
+				.where(eq(holding.personId, people.id)),
+		),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(ownedSpeech)
+				.where(eq(ownedSpeech.personId, people.id)),
+		),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(enrolment)
+				.where(eq(enrolment.personId, people.id)),
+		),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(charterHelper)
+				.where(eq(charterHelper.personId, people.id)),
+		),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(otherGuestRow)
+				.where(
+					and(
+						eq(otherGuestRow.personId, people.id),
+						ne(otherGuestRow.id, guestId),
+					),
+				),
+		),
+		notExists(releasedPersonSubquery()),
+	) as SQL;
+}
+
+/**
+ * A `member_remove` naming `people.id`, spelled exactly as the importer's release
+ * lookup spells it so the partial index `activity_log_member_remove_person_idx`
+ * serves it (a literal action, the same `->>` expression). Shared by
+ * `pristineGuestPerson` and the keep-a-release-target rule of a convert's delete.
+ * Exported, and takes the Person as text, so a test can EXPLAIN it against a
+ * constant and see an index condition on the expression.
+ */
+export function releasedPersonSubquery(
+	personIdText: SQL = sql`${people.id}::text`,
+) {
+	return db
+		.select({ one: sql`1` })
+		.from(personRecord)
+		.where(
+			and(
+				sql`${personRecord.action} = 'member_remove'`,
+				sql`${personRecord.detail} ->> 'personId' = ${personIdText}`,
+			),
+		);
+}
+
+/**
+ * The Person is the release target of a removal (#875): a `member_remove` names
+ * it. A convert that moves a guest off a Person it did not adopt deletes that
+ * Person when nothing references it, but never one a removal names: that is the
+ * record the undoing club's own roster CSV matches by, and its contact is
+ * somebody's correction.
+ */
+export function releasedByRemoval(): SQL {
+	return exists(releasedPersonSubquery()) as SQL;
+}
+
+/**
+ * An unbound Person nothing references any more (#1124): no sign-in account, no
+ * membership, no guest row, and nothing the Person owns that a delete would
+ * cascade away (a speech or a Pathways enrolment). The one condition under
+ * which deleting a guest's Person loses nothing; a guest delete and a link carry
+ * it in the DELETE's own WHERE.
+ */
+export function unreferencedUnboundPerson(): SQL {
+	return and(
+		isNull(people.userId),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(holding)
+				.where(eq(holding.personId, people.id)),
+		),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(heldGuest)
+				.where(eq(heldGuest.personId, people.id)),
+		),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(ownedSpeech)
+				.where(eq(ownedSpeech.personId, people.id)),
+		),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(enrolment)
+				.where(eq(enrolment.personId, people.id)),
+		),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(charterHelper)
+				.where(eq(charterHelper.personId, people.id)),
 		),
 	) as SQL;
 }

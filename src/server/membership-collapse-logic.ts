@@ -36,7 +36,12 @@ import {
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { earliestDate } from "#/lib/person-identity";
-import { lockClubForWrite } from "./club-write-lock";
+import {
+	lockClubForWrite,
+	lockPersonsInOrder,
+	noKeyUpdate,
+} from "./club-write-lock";
+import { RECORD_CHANGED_MESSAGE } from "./guests-logic";
 import { lockMembershipForMerge } from "./membership-merge-lock";
 
 /** A drizzle transaction handle (the arg the `db.transaction` callback gets). */
@@ -90,6 +95,30 @@ export async function collapseMemberships(
 	// club write lock → membership merge lock → row locks. `membership-merge-lock.ts`
 	// has the whole argument.
 	await lockMembershipForMerge(tx, absorbedId);
+
+	// The two memberships' Persons, locked BEFORE any membership row is written
+	// (the lock protocol of ADR-0031: club, then Persons, then rows). This
+	// function now re-points `guests.person_id` to the keeper's Person (step 9),
+	// and that write key-shares the Person; reached after the keeper's membership
+	// row was updated, it closed a cycle with `applyMemberEdit`, which locks the
+	// Person `FOR UPDATE` and then updates the membership. `NO KEY UPDATE`
+	// conflicts with that edit's lock and not with a speaker claim's key share,
+	// and no Person is deleted here. Re-entrant: `mergePeople` already holds both
+	// `FOR UPDATE`, which this then finds nothing to add to.
+	//
+	// The Persons are only known by reading the rows, so they are read without a
+	// lock, locked in id order, and read again below; a membership that moved to
+	// another Person in between refuses the collapse.
+	const peeked = await tx
+		.select({ id: members.id, personId: members.personId })
+		.from(members)
+		.where(
+			and(
+				eq(members.clubId, clubId),
+				inArray(members.id, [keeperId, absorbedId]),
+			),
+		);
+	await lockPersonsInOrder(tx, noKeyUpdate(...peeked.map((m) => m.personId)));
 	const rows = await tx
 		.select()
 		.from(members)
@@ -103,6 +132,11 @@ export async function collapseMemberships(
 	const absorbed = rows.find((m) => m.id === absorbedId);
 	if (!keeper || !absorbed) {
 		throw new Error("Both memberships must be in this club.");
+	}
+	for (const m of rows) {
+		if (peeked.find((p) => p.id === m.id)?.personId !== m.personId) {
+			throw new Error(RECORD_CHANGED_MESSAGE);
+		}
 	}
 
 	// --- Reconcile the surviving keeper row --------------------------------
@@ -287,10 +321,19 @@ export async function collapseMemberships(
 		.where(eq(projectCompletionMarks.markedByMemberId, absorbedId));
 
 	// 9. guests.converted_membership_id — no member-unique; re-point all so the
-	//    "guest became this membership" history survives the collapse.
+	//    "guest became this membership" history survives the collapse. A converted
+	//    guest IS its membership's Person (#1124, ADR-0031), so one whose
+	//    `person_id` is the ABSORBED membership's Person follows to the keeper's in
+	//    the same statement: left behind, the guest names a Person that no longer
+	//    holds the membership it joined, and an undo or unlink would then reason
+	//    about the wrong human. A guest that names some other Person (one convert
+	//    deduped past) keeps it; it is that guest's own.
 	await tx
 		.update(guests)
-		.set({ convertedMembershipId: keeperId })
+		.set({
+			convertedMembershipId: keeperId,
+			personId: sql`case when ${guests.personId} = ${absorbed.personId} then ${keeper.personId}::uuid else ${guests.personId} end`,
+		})
 		.where(eq(guests.convertedMembershipId, absorbedId));
 	// 9b. guests.introduced_by_member_id (#1046) — nullable attribution, no
 	//    member-unique; re-point all, or the absorbed row's delete SETs NULL and

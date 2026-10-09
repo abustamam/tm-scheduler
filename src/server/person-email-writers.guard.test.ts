@@ -71,6 +71,13 @@ const WAIVERS: Record<
 		 *  `eq(people.userId, …)` in the statement itself, so it can only ever
 		 *  move the address of the Person bound to the confirming account. */
 		requiresBoundToUser?: boolean;
+		/** Convert's fill of a PRISTINE guest Person's contact from the guest row
+		 *  (#1124): its UPDATE must carry `pristineGuestPerson(` in the statement
+		 *  itself, which is the one definition of "nobody has signed in, no
+		 *  membership, no history, no other guest row, no contact or roster-identity
+		 *  column, no removal on record". It stands in for `isNull(people.userId)`:
+		 *  the function holds it, and a source test below pins that it does. */
+		requiresPristineGuestPerson?: boolean;
 	}
 > = {
 	// A member changing their OWN sign-in address (#1091, ADR-0030). The new
@@ -90,6 +97,26 @@ const WAIVERS: Record<
 		reason: "roster edit, unbound sole-holder Persons only",
 		requiresUnlinkedGuard: true,
 		requiresSoleHolder: true,
+	},
+	// Convert-to-member's fill of a PRISTINE guest Person's contact from the guest
+	// row (#1124, ADR-0031; the maintainer's option A of 2026-10-09). Club-reachable
+	// (an officer's click). The Person is one the guest row names that nobody has
+	// signed in as, that holds no membership, owns nothing, is named by no other guest
+	// row, carries no contact or roster-identity column and has no removal on record:
+	// the only kind of Person a convert may adopt. Any other gets a fresh Person (an
+	// INSERT, which the matcher exempts) and is left as it is. So the statement can
+	// only ever write a Person nobody has a claim on, and what it writes is a fill of
+	// a blank. It is the only writer whose Person has NO membership yet, so
+	// `soleHoldingClub`, which demands a vouching membership, cannot be its
+	// predicate; its predicate is `pristineGuestPerson(guestId)`, in the statement's
+	// own WHERE, which reads false the moment the membership exists (so the UPDATE
+	// runs before the membership insert) and which includes `user_id IS NULL`.
+	"server/guest-pipeline-logic.ts": {
+		fn: "applyConvertGuestToMember",
+		sites: 1,
+		reason:
+			"convert fills the blank contact of a PRISTINE guest Person from the guest row; any other Person gets a fresh one (#1124, option A)",
+		requiresPristineGuestPerson: true,
 	},
 	// The CSV importer's fill-only address (#907). Club-reachable.
 	"server/import-members-logic.ts": {
@@ -438,6 +465,44 @@ describe("the matcher itself", () => {
 		).toBe(1);
 	});
 
+	it("reads convert's adopt UPDATE as one email write carrying the pristine predicate (#1124)", () => {
+		// The waiver for `applyConvertGuestToMember` holds the statement to one
+		// token, and it can only do that if `emailWriteStatements` hands it the
+		// whole statement: `.where(...)` and `.returning(...)` included, and the
+		// phone-only statement beside it NOT counted, since its SET carries no email.
+		const src = `
+			const adopted = await tx
+				.update(people)
+				.set({ name, preferredName, email, phone })
+				.where(
+					and(eq(people.id, guestPersonId), pristineGuestPerson(input.guestId)),
+				)
+				.returning({ id: people.id });
+			await tx
+				.update(people)
+				.set({ phone })
+				.where(and(eq(people.id, personId), isNull(people.phone)));
+		`;
+		expect(emailWriteSites(src)).toEqual(["update(people) setting email"]);
+		const stmts = emailWriteStatements(src);
+		expect(stmts).toHaveLength(1);
+		expect(stmts[0]).toMatch(/pristineGuestPerson\(/);
+	});
+
+	it("pristineGuestPerson itself carries the conditions the waiver leans on", () => {
+		// The waiver names the predicate, not the conditions, so the function's own
+		// source is what must hold them: unbound, no contact, and a membership test.
+		const src = readFileSync(join(SERVER_DIR, "account-link-logic.ts"), "utf8");
+		const fn =
+			/export function pristineGuestPerson\(([\s\S]*?)\n}\n/.exec(src)?.[0] ??
+			"";
+		expect(fn, "pristineGuestPerson is gone or renamed").not.toBe("");
+		expect(fn).toMatch(/isNull\(\s*people\.userId\s*\)/);
+		expect(fn).toMatch(/isNull\(\s*people\.email\s*\)/);
+		expect(fn).toMatch(/isNull\(\s*people\.phone\s*\)/);
+		expect(fn).toMatch(/\.from\(\s*holding\s*\)/);
+	});
+
 	it("flags raw SQL however it is written or executed", () => {
 		expect(
 			flags("await db.execute(sql.raw(`update people set email = null`));"),
@@ -566,7 +631,8 @@ describe("people.email writers (verified identity address)", () => {
 			if (
 				waiver.requiresUnlinkedGuard ||
 				waiver.requiresSoleHolder ||
-				waiver.requiresBoundToUser
+				waiver.requiresBoundToUser ||
+				waiver.requiresPristineGuestPerson
 			) {
 				expect(
 					stmts,
@@ -594,6 +660,14 @@ describe("people.email writers (verified identity address)", () => {
 						`${key}'s people.email write must carry soleHoldingClub(...) in the STATEMENT — ` +
 							`a club may change an address only while it is the Person's sole holder (#907)`,
 					).toMatch(/soleHoldingClub\(/);
+				}
+				if (waiver.requiresPristineGuestPerson) {
+					expect(
+						stmt,
+						`${key}'s people.email write must carry pristineGuestPerson(...) in the STATEMENT — ` +
+							`a Person that was ever a member, signed in, owns history or already has contact ` +
+							`is not the guest's to re-key (#1124)`,
+					).toMatch(/pristineGuestPerson\(/);
 				}
 			}
 		}

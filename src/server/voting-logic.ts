@@ -53,6 +53,7 @@ import {
 import { isReadableClubForMeeting } from "./club-readable-logic";
 import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
 import { assertClubNotArchived } from "./guards";
+import { createGuestRecord } from "./guests-logic";
 import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
 import {
 	AWARD_CATEGORIES,
@@ -1777,11 +1778,8 @@ function joinInTransaction(
 		if (existing) {
 			guest = existing;
 		} else {
-			const [created] = await tx
-				.insert(guests)
-				.values({ clubId, name })
-				.returning({ id: guests.id, name: guests.name });
-			guest = created;
+			const created = await createGuestRecord(tx, { clubId, name });
+			guest = { id: created.id, name };
 		}
 
 		// Idempotent: `meeting_ballot_guests`'s primary key is the (meeting, guest)

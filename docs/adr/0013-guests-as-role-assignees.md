@@ -15,6 +15,11 @@ is scattered and inconsistent across queries (some `eq(status,"active")`, some
 and vanish from others. A guest is also not a Person (ADR-0008): no login, no Pathways, no
 officer terms.
 
+> **Superseded in part by ADR-0031 (#1124):** a guest IS now a Person. Every `guests` row points
+> at a `people` row (`guests.person_id`), and `guests` remains the per-club guest record. The
+> rest of this ADR stands: a guest is still not a `members` row, has no login, no Pathways and no
+> officer terms, and a role slot still holds a member or a guest, never both.
+
 ## Decision
 
 Introduce a **dedicated, club-scoped `guests` entity** that a role slot can reference as an

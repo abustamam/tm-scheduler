@@ -1,9 +1,16 @@
 // Guest-assignment DB logic (#151), split out from `guests.ts` (a createServerFn
 // module the guard test forbids from exporting db-touching functions).
 // Integration-testable by mocking `#/db`.
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, not } from "drizzle-orm";
 import { db } from "#/db";
-import { guests, meetings, members, roleSlots } from "#/db/schema";
+import {
+	guests,
+	meetings,
+	members,
+	people,
+	peopleEmailBackup,
+	roleSlots,
+} from "#/db/schema";
 import { GUEST_IS_NOW_A_MEMBER_MESSAGE } from "#/lib/guest-convert";
 import {
 	type BroughtCount,
@@ -16,7 +23,12 @@ import {
 } from "#/lib/guest-profile";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { toStoredPhone } from "#/lib/phone";
+import {
+	releasedByRemoval,
+	unreferencedUnboundPerson,
+} from "./account-link-logic";
 import { logActivity } from "./activity";
+import { forUpdate, lockPersonsInOrder } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import type { UpdateGuestProfileInput } from "./guest-pipeline-schemas";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
@@ -27,6 +39,282 @@ import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 type DbOrTx =
 	| typeof db
 	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+/**
+ * What a refused read-then-lock re-read says (ADR-0031). A path that must read a
+ * row to learn which clubs or Persons to lock reads it without locking, takes
+ * the locks in protocol order, and re-reads; when the set it locked is no longer
+ * the set the row names, the work is refused with this and nothing is written.
+ */
+export const RECORD_CHANGED_MESSAGE = "This record changed. Try again.";
+
+/** What `createGuestRecord` takes: a `guests` insert, minus the Person it mints. */
+export type NewGuestRecord = Omit<typeof guests.$inferInsert, "personId"> & {
+	/**
+	 * Point the guest row at this EXISTING Person instead of minting one. For a
+	 * row that already IS somebody's Person, such as a converted guest in the
+	 * seed (`guests.person_id` equals its membership's Person). Nothing in the
+	 * app's own write paths passes it today.
+	 */
+	personId?: string;
+};
+
+/**
+ * The name-only Person a guest gets: the migration's backfill shape, and the one
+ * `createGuestRecord` and `ensureGuestPerson` both mint. Contact is not on it
+ * (#1125 moves it, and an address typed on the anonymous guest book is nobody's
+ * sign-in key until a member vouches for it).
+ */
+async function mintNameOnlyPerson(
+	tx: DbOrTx,
+	guest: { name: string; preferredName?: string | null },
+): Promise<string> {
+	const [person] = await tx
+		.insert(people)
+		.values({ name: guest.name, preferredName: guest.preferredName ?? null })
+		.returning({ id: people.id });
+	if (!person) throw new Error("Failed to create person.");
+	return person.id;
+}
+
+/** Take back a Person this transaction minted and then did not use. */
+async function discardMintedPerson(
+	tx: DbOrTx,
+	personId: string,
+): Promise<void> {
+	await tx.delete(people).where(eq(people.id, personId));
+}
+
+/** What a client-supplied guest id that belongs to ANOTHER club answers. */
+export const GUEST_NOT_IN_CLUB_MESSAGE = "Guest not found in this club.";
+
+/**
+ * The ONLY way a `guests` row is inserted (#1124, ADR-0031): a guest is a
+ * Person, so this mints the Person `{ name, preferredName }` and the guest row
+ * pointing at it, in one transaction. `guest-insert.guard.test.ts` fails on any
+ * other insert into the guests table in non-test source, comments included.
+ *
+ * A guest's email and phone are still written to the `guests` row here; moving
+ * them onto the Person is #1125.
+ *
+ * Always opens `conn.transaction`: given the pooled client that is the
+ * transaction the two inserts need, and given a caller's transaction it is a
+ * SAVEPOINT, so a failure rolls back the Person too and a caller's batch still
+ * aborts because the error propagates.
+ *
+ * An `id` the caller supplied (a client-side idempotency key) that already
+ * exists is a replay, not an error: the guest row is NOT written again and the
+ * Person minted for it is deleted again, so a replay leaves no orphan Person.
+ * `created` says which happened. Without an `id` nothing can conflict.
+ *
+ * A replay is only a replay in the SAME club. The id is client-supplied, so one
+ * that names another club's guest is refused rather than answered: returning it
+ * would let an officer attach a stranger club's guest to their own meeting.
+ */
+export async function createGuestRecord(
+	conn: DbOrTx,
+	input: NewGuestRecord,
+): Promise<{ id: string; created: boolean }> {
+	const { personId: existingPersonId, ...row } = input;
+	return conn.transaction(async (tx) => {
+		const personId = existingPersonId ?? (await mintNameOnlyPerson(tx, row));
+		const [guest] = await tx
+			.insert(guests)
+			.values({ ...row, personId })
+			.onConflictDoNothing({ target: guests.id })
+			.returning({ id: guests.id });
+		if (guest) return { id: guest.id, created: true };
+
+		const [existing] = row.id
+			? await tx
+					.select({ clubId: guests.clubId })
+					.from(guests)
+					.where(eq(guests.id, row.id))
+					.limit(1)
+			: [];
+		if (!row.id || !existing) throw new Error("Failed to create guest.");
+		// Another club's guest: nothing is written, and throwing rolls back the
+		// Person minted above (this transaction, or the savepoint inside a caller's).
+		if (existing.clubId !== row.clubId)
+			throw new Error(GUEST_NOT_IN_CLUB_MESSAGE);
+		// A replay of a client-supplied id. The Person above was minted for a row
+		// that was not written, so it goes; one the caller named is theirs.
+		if (!existingPersonId) await discardMintedPerson(tx, personId);
+		return { id: row.id, created: false };
+	});
+}
+
+/**
+ * The guest's Person, creating one when `person_id` is null (#1124).
+ *
+ * A null can only come from the OLD container during the deploy swap that
+ * shipped the column, or from a test fixture that inserts directly. The Person
+ * has the shape the migration's backfill gave everyone else: name only. Convert,
+ * and #1127's link and separate, call this before they rely on a Person.
+ *
+ * The caller holds the guest row `FOR UPDATE`, which is what makes the
+ * check-then-set safe; the UPDATE still carries `person_id IS NULL` so that a
+ * second writer that got there first is read, not overwritten.
+ */
+export async function ensureGuestPerson(
+	tx: DbOrTx,
+	guestId: string,
+): Promise<string> {
+	const [guest] = await tx
+		.select({
+			personId: guests.personId,
+			name: guests.name,
+			preferredName: guests.preferredName,
+		})
+		.from(guests)
+		.where(eq(guests.id, guestId))
+		.limit(1);
+	if (!guest) throw new Error("Guest not found.");
+	if (guest.personId) return guest.personId;
+
+	const minted = await mintNameOnlyPerson(tx, guest);
+	const set = await tx
+		.update(guests)
+		.set({ personId: minted })
+		.where(and(eq(guests.id, guestId), isNull(guests.personId)))
+		.returning({ id: guests.id });
+	if (set.length > 0) return minted;
+	// Lost the race: someone set it between the read and the write. Theirs wins.
+	await discardMintedPerson(tx, minted);
+	const [now] = await tx
+		.select({ personId: guests.personId })
+		.from(guests)
+		.where(eq(guests.id, guestId))
+		.limit(1);
+	if (!now?.personId) throw new Error("Failed to create person.");
+	return now.personId;
+}
+
+/**
+ * Delete a guest's Person once nothing references it (#1124): after the guest
+ * row is deleted, after a link points the guest at a member's Person, or after
+ * a convert moved the guest off it (`keepReleased`). The conditions travel in the
+ * DELETE's own WHERE (`unreferencedUnboundPerson()`: no sign-in, no membership,
+ * no other guest row, no speech or enrolment to cascade away), so a Person that
+ * gained a reference since the caller looked is kept.
+ *
+ * Without it every deleted guest leaves a Person behind that no club names, no
+ * removal record points at, and not even a permanent club delete can collect.
+ *
+ * THE STRONG LOCK IS TAKEN HERE, not by the caller. The caller's earlier lock on
+ * the Person may be the weak `FOR NO KEY UPDATE`, chosen from an unlocked read of
+ * whether the Person holds a membership (`holdsMembership`), and that read goes
+ * stale: a membership removed in another club since makes the Person a candidate
+ * for this delete after all. `FOR NO KEY UPDATE` does not conflict with the key
+ * share a third writer's uncommitted insert naming the Person holds, so a DELETE
+ * under it waits for that writer and then decides on a snapshot older than the
+ * writer's commit, and its cascade takes the row the writer just committed. So,
+ * once the Person is a candidate, `FOR UPDATE` is taken in its own statement
+ * immediately before the DELETE (whatever the caller took earlier: it waits for
+ * that key share), and the DELETE's own WHERE, a new statement and so a new
+ * snapshot, decides after it. Only a candidate is locked that strongly: a member's
+ * Person is locked weakly on every path that does not delete it, so that a speaker
+ * claim's key share is not blocked.
+ */
+export async function deleteGuestPersonIfUnreferenced(
+	tx: Parameters<Parameters<(typeof db)["transaction"]>[0]>[0],
+	personId: string,
+	opts: { keepReleased?: boolean } = {},
+): Promise<boolean> {
+	const deletable = and(
+		eq(people.id, personId),
+		unreferencedUnboundPerson(),
+		// A convert that moved a guest off a Person never deletes one a removal
+		// names (`releasedByRemoval`): that is #875's release target.
+		opts.keepReleased ? not(releasedByRemoval()) : undefined,
+	);
+	const [candidate] = await tx
+		.select({ id: people.id })
+		.from(people)
+		.where(deletable)
+		.limit(1);
+	if (!candidate) return false;
+	await lockPersonsInOrder(tx, forUpdate(personId));
+	const gone = await tx
+		.delete(people)
+		.where(deletable)
+		.returning({ id: people.id });
+	if (gone.length === 0) return false;
+	// The same clean-up a club delete does for the Persons it deletes (#914): the
+	// address snapshot in `people_email_backup` has no foreign key, so it would
+	// outlive the Person it is a copy of. Only that table, as there; the other
+	// temporary backups are left to their own drop, as a club delete leaves them.
+	await tx
+		.delete(peopleEmailBackup)
+		.where(eq(peopleEmailBackup.personId, personId));
+	return true;
+}
+
+/**
+ * A convert moved the guest off `personId` (it was not pristine, so the guest got
+ * a fresh Person): delete the old one if NOTHING references it now (#1124,
+ * `unreferencedUnboundPerson()`) and no removal names it (a release target,
+ * #875, and somebody's correction). Otherwise it is left exactly as it is: not
+ * deleted, and not written either (the convert wrote its own fresh Person).
+ *
+ * Without this a Person a merge had filled with a former member's contact, and
+ * that no removal record names, is stranded with its contact and no club can see
+ * it, not even a permanent club delete.
+ */
+export async function deleteAbandonedGuestPerson(
+	tx: Parameters<Parameters<(typeof db)["transaction"]>[0]>[0],
+	personId: string,
+): Promise<boolean> {
+	return deleteGuestPersonIfUnreferenced(tx, personId, { keepReleased: true });
+}
+
+/**
+ * After an UNLINK (#1124): a guest row that still names a Person who holds ANY
+ * membership is pointed at a fresh name-only Person (the backfill's shape).
+ * Returns the new Person's id, or null when the guest's Person holds none.
+ *
+ * Why at an unlink, and not at an undo. A link points the guest at the member's
+ * Person, and an unlink leaves the card naming it. The pristine test's column
+ * checks (`pristineGuestPerson`) cover what a member's Person usually carries
+ * (a customer id, a join date, an address), but not a member added by hand with
+ * only a name: when the roster later collapses that membership, the collapse
+ * deletes it AND its records, the Person reads pristine, and the guest still
+ * naming it would adopt it at the next convert and write its own name and contact
+ * onto the human the membership belonged to. Pointing the guest at a fresh
+ * name-only Person at the unlink leaves no guest row to do that. An undo needs
+ * no such step: it leaves the conversion's own removal on record.
+ *
+ * The caller holds the club write lock, the guest's Person `FOR NO KEY UPDATE`
+ * and the guest row `FOR UPDATE`, in that order, and has already cleared the
+ * link: the question is asked AFTER that.
+ */
+export async function separateGuestFromMemberPerson(
+	tx: DbOrTx,
+	guestId: string,
+): Promise<string | null> {
+	const [guest] = await tx
+		.select({
+			personId: guests.personId,
+			name: guests.name,
+			preferredName: guests.preferredName,
+		})
+		.from(guests)
+		.where(eq(guests.id, guestId))
+		.limit(1);
+	if (!guest?.personId) return null;
+	const [held] = await tx
+		.select({ id: members.id })
+		.from(members)
+		.where(eq(members.personId, guest.personId))
+		.limit(1);
+	if (!held) return null;
+	const fresh = await mintNameOnlyPerson(tx, guest);
+	await tx
+		.update(guests)
+		.set({ personId: fresh })
+		.where(eq(guests.id, guestId));
+	return fresh;
+}
 
 /** Contact fields for a brand-new club guest (name required, contact optional). */
 export type NewGuestInput = {
@@ -140,16 +428,12 @@ export async function applyAssignGuestToSlot(
 		if (input.newGuest) {
 			const name = input.newGuest.name.trim();
 			if (!name) throw new Error("A guest name is required.");
-			const [created] = await tx
-				.insert(guests)
-				.values({
-					clubId: slot.clubId,
-					name,
-					email: input.newGuest.email?.trim() || null,
-					phone: toStoredPhone(input.newGuest.phone, cc),
-				})
-				.returning({ id: guests.id });
-			if (!created) throw new Error("Failed to create guest.");
+			const created = await createGuestRecord(tx, {
+				clubId: slot.clubId,
+				name,
+				email: input.newGuest.email?.trim() || null,
+				phone: toStoredPhone(input.newGuest.phone, cc),
+			});
 			guestId = created.id;
 		} else if (input.guestId) {
 			const [existing] = await tx
