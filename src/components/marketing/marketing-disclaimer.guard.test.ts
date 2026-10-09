@@ -45,6 +45,8 @@ const EXEMPT: Record<string, string> = {
 	"unsubscribe.tsx":
 		"transactional surface with its own chrome; out of scope for #865",
 	"[.]well-known.$.ts": "a server handler for discovery documents, not a page",
+	"area.$areaId_.club.$areaClubId.print.tsx":
+		"a signed-in Area Director's printable sheet with its own print chrome; not a marketing page",
 };
 
 /**

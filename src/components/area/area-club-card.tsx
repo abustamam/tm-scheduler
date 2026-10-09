@@ -3,15 +3,28 @@ import {
 	FieldValue,
 	statusNote,
 } from "#/components/area/area-health-values";
+import { AreaVisitsCell } from "#/components/area/area-visits-cell";
+import { PrintSummaryLink } from "#/components/area/print-summary-link";
 import type { ClubHealth } from "#/lib/area-health";
 import { AREA_HEALTH_FIELDS } from "#/lib/area-health-fields";
+import type { AreaVisits } from "#/lib/area-visits";
 
 /**
  * The phone layout of the area view (#1119): one card per club, the same six
  * numbers as the desktop table's row, stacked. A club that is not on GavelUp,
  * or no longer is, has no numbers: its card names it and says so.
  */
-export function AreaClubCard({ club }: { club: ClubHealth }) {
+export function AreaClubCard({
+	areaId,
+	club,
+	visits,
+	readOnly = false,
+}: {
+	areaId: string;
+	club: ClubHealth;
+	visits: AreaVisits;
+	readOnly?: boolean;
+}) {
 	const note = statusNote(club.status);
 	const number = clubNumberText(club.clubNumber);
 	return (
@@ -38,6 +51,24 @@ export function AreaClubCard({ club }: { club: ClubHealth }) {
 					))}
 				</dl>
 			)}
+			<div>
+				<h4 className="text-xs font-bold uppercase tracking-[0.06em] text-muted-foreground">
+					Visits
+				</h4>
+				<div className="mt-0.5">
+					<AreaVisitsCell
+						areaClubId={club.areaClubId}
+						visits={visits[club.areaClubId]}
+						readOnly={readOnly}
+					/>
+				</div>
+			</div>
+			<PrintSummaryLink
+				areaId={areaId}
+				areaClubId={club.areaClubId}
+				readOnly={readOnly}
+				className="inline-block text-sm"
+			/>
 		</article>
 	);
 }

@@ -17,6 +17,11 @@ const { previewConsoleArea } = vi.hoisted(() => ({
 	previewConsoleArea: vi.fn(),
 }));
 vi.mock("#/server/areas", () => ({ previewConsoleArea }));
+// The visit cell imports the visit fns; the preview is read-only and never calls them.
+vi.mock("#/server/area-visits", () => ({
+	recordClubVisit: vi.fn(),
+	clearClubVisit: vi.fn(),
+}));
 
 import type { AreaHealth } from "#/lib/area-health";
 import { AreaPreviewPanel } from "./area-preview-panel";
@@ -51,7 +56,7 @@ const HEALTH: AreaHealth = {
 
 describe("AreaPreviewPanel", () => {
 	it("reads nothing until asked, then shows the director's view of the area", async () => {
-		previewConsoleArea.mockResolvedValue(HEALTH);
+		previewConsoleArea.mockResolvedValue({ health: HEALTH, visits: {} });
 		render(<AreaPreviewPanel areaId={AREA_ID} />);
 		expect(screen.getByText("Preview as Area Director")).toBeTruthy();
 		expect(previewConsoleArea).not.toHaveBeenCalled();
@@ -68,6 +73,26 @@ describe("AreaPreviewPanel", () => {
 		expect(
 			screen.getByRole("button", { name: "Refresh preview" }),
 		).toBeTruthy();
+	});
+
+	it("shows the recorded visit dates with no Record, Edit, Clear or print controls (#1120)", async () => {
+		previewConsoleArea.mockResolvedValue({
+			health: HEALTH,
+			visits: { "row-1": { 1: "2026-10-12" } },
+		});
+		render(<AreaPreviewPanel areaId={AREA_ID} />);
+
+		fireEvent.click(screen.getByRole("button", { name: "Show preview" }));
+
+		await waitFor(() => expect(screen.getByRole("table")).toBeTruthy());
+		// Table and card both show it.
+		expect(screen.getAllByText(/Round 1:/)).toHaveLength(2);
+		expect(screen.getAllByText("Oct 12")).toHaveLength(2);
+		expect(screen.getAllByText("not yet")).toHaveLength(2);
+		for (const name of [/^Record/, /^Edit/, /^Clear/]) {
+			expect(screen.queryByRole("button", { name })).toBeNull();
+		}
+		expect(screen.queryByRole("link", { name: "Print summary" })).toBeNull();
 	});
 
 	it("shows the refusal instead of a table when the read fails", async () => {

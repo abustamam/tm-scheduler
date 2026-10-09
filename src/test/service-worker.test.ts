@@ -389,11 +389,56 @@ describe("service worker takedown eviction (#556)", () => {
 		// Three keys, not one: opening a meeting online now caches the meeting a
 		// club actually uses, which is all of it. The eviction cases below used to
 		// build that state by hand; it is the system's own behaviour now.
-		expect([...sw.cacheFor("gavelup-nav-v4").entries.values()].sort()).toEqual([
+		expect([...sw.cacheFor("gavelup-nav-v5").entries.values()].sort()).toEqual([
 			"live agenda",
 			"primed present",
 			"primed print",
 		]);
+	});
+
+	it("does not cache an Area Director's club summary, which is a /print path outside any meeting (#1120)", async () => {
+		// `isOfflineRoute` once also accepted ANY path ending `/print` or `/present`.
+		// The summary's SSR HTML inlines a club's numbers; cached, it would be served
+		// offline to the next person on the device, after sign-out or a term ending.
+		const area = "/area/3f0b5c1e-6a3d-4d1b-9f5e-2c7a8b9d0e1f";
+		const summary = `${area}/club/9d2c4a70-1b3e-4f58-8a6d-0e7f1c2b3a49/print`;
+		expect(await sw.dispatchFetch(request(summary))).toBeUndefined();
+		expect(await sw.dispatchFetch(request(`${area}/present`))).toBeUndefined();
+		expect(sw.caches.size).toBe(0);
+
+		// Control: the meeting's own present and print are still offline routes, so
+		// the narrowing did not switch the feature off.
+		sw.nextFetch.push(
+			response(200, "DECK", { url: `${ORIGIN}${MEETING}/present` }),
+		);
+		primes("meeting", "print");
+		const present = await sw.dispatchFetch(request(`${MEETING}/present`));
+		expect(present?.status).toBe(200);
+		expect(
+			sw.cacheFor("gavelup-nav-v5").entries.get(`${ORIGIN}${MEETING}/present`),
+		).toBe("DECK");
+		sw.nextFetch.push(
+			response(200, "SHEET", { url: `${ORIGIN}${MEETING}/print?layout=grid` }),
+		);
+		primes("meeting", "present");
+		await sw.dispatchFetch(request(`${MEETING}/print?layout=grid`));
+		expect(
+			sw
+				.cacheFor("gavelup-nav-v5")
+				.entries.get(`${ORIGIN}${MEETING}/print?layout=grid`),
+		).toBe("SHEET");
+	});
+
+	it("drops the v4 nav cache, which may hold a club summary cached under the old matcher (#1120)", async () => {
+		sw.seed("gavelup-nav-v4", {
+			[`${ORIGIN}/area/a/club/b/print`]: "a club's numbers",
+		});
+		sw.seed("gavelup-nav-v5", { [`${ORIGIN}${MEETING}`]: "agenda" });
+
+		await sw.activate();
+
+		expect(sw.caches.has("gavelup-nav-v4")).toBe(false);
+		expect(sw.caches.has("gavelup-nav-v5")).toBe(true);
 	});
 
 	it("serves the cached copy when the network is down", async () => {
@@ -433,7 +478,7 @@ describe("service worker takedown eviction (#556)", () => {
 		sw.nextFetch.push(response(200, "pre-archive agenda"));
 		primes("present", "print");
 		await sw.dispatchFetch(request(MEETING));
-		const nav = sw.cacheFor("gavelup-nav-v4");
+		const nav = sw.cacheFor("gavelup-nav-v5");
 		expect(nav.entries.size).toBe(3);
 
 		sw.nextFetch.push(response(status, "gone"));
@@ -451,7 +496,7 @@ describe("service worker takedown eviction (#556)", () => {
 		sw.nextFetch.push(response(200, "live agenda"));
 		primes("present", "print");
 		await sw.dispatchFetch(request(MEETING));
-		const nav = sw.cacheFor("gavelup-nav-v4");
+		const nav = sw.cacheFor("gavelup-nav-v5");
 
 		// A non-ok response primes nothing — priming hangs off the `ok` branch, so
 		// a 500 cannot spend three requests re-asking a struggling server.
@@ -472,7 +517,7 @@ describe("service worker takedown eviction (#556)", () => {
 		sw.nextFetch.push(response(200, "live agenda"));
 		primes("present", "print");
 		await sw.dispatchFetch(request(MEETING));
-		const nav = sw.cacheFor("gavelup-nav-v4");
+		const nav = sw.cacheFor("gavelup-nav-v5");
 
 		// Venue wifi bounces the request to a login page. Same origin on the way back,
 		// so only the `redirected` flag separates this from a real takedown.
@@ -487,7 +532,7 @@ describe("service worker takedown eviction (#556)", () => {
 		sw.nextFetch.push(response(200, "live agenda"));
 		primes("present", "print");
 		await sw.dispatchFetch(request(MEETING));
-		const nav = sw.cacheFor("gavelup-nav-v4");
+		const nav = sw.cacheFor("gavelup-nav-v5");
 
 		// Not flagged as redirected — only the origin says this did not come from us.
 		sw.nextFetch.push(
@@ -516,7 +561,7 @@ describe("service worker takedown eviction (#556)", () => {
 		sw.nextFetch.push(response(200, "column sheet"));
 		primes("meeting", "present");
 		await sw.dispatchFetch(request(`${MEETING}/print?layout=columns`));
-		const nav = sw.cacheFor("gavelup-nav-v4");
+		const nav = sw.cacheFor("gavelup-nav-v5");
 		// Four requested surfaces plus the bare `/print` priming reached.
 		expect(nav.entries.size).toBe(5);
 
@@ -544,7 +589,7 @@ describe("service worker takedown eviction (#556)", () => {
 		sw.nextFetch.push(response(200, "live ballot"));
 		primes("meeting", "present", "print");
 		await sw.dispatchFetch(request(`${MEETING}/vote`));
-		const nav = sw.cacheFor("gavelup-nav-v4");
+		const nav = sw.cacheFor("gavelup-nav-v5");
 		// agenda + word + vote + the primed present/print.
 		expect(nav.entries.size).toBe(5);
 
@@ -559,7 +604,7 @@ describe("service worker takedown eviction (#556)", () => {
 		const legacy = "/meetings/11111111-1111-1111-1111-111111111111";
 		sw.nextFetch.push(response(200, "legacy redirect page"));
 		await sw.dispatchFetch(request(legacy));
-		const nav = sw.cacheFor("gavelup-nav-v4");
+		const nav = sw.cacheFor("gavelup-nav-v5");
 		expect(nav.entries.size).toBe(1);
 
 		sw.nextFetch.push(response(404, "gone"));
@@ -579,7 +624,7 @@ describe("service worker takedown eviction (#556)", () => {
 		sw.nextFetch.push(response(200, "another club"));
 		primes("harbor present", "harbor print");
 		await sw.dispatchFetch(request(otherClub));
-		const nav = sw.cacheFor("gavelup-nav-v4");
+		const nav = sw.cacheFor("gavelup-nav-v5");
 
 		sw.nextFetch.push(response(404, "gone"));
 		await sw.dispatchFetch(request(`${MEETING}/print?layout=grid`));
@@ -852,7 +897,7 @@ describe("the crest is cacheable by PATH, not only by destination (#514)", () =>
 		// to do with this change. Asserted through `activate`'s own sweep rather
 		// than against the source text, so it is the worker's behaviour that is
 		// pinned: a changed constant makes these seeded names unowned and they go.
-		sw.seed("gavelup-nav-v4", { [`${ORIGIN}${MEETING}`]: "primed agenda" });
+		sw.seed("gavelup-nav-v5", { [`${ORIGIN}${MEETING}`]: "primed agenda" });
 		sw.seed("gavelup-assets-v3", {
 			[`${ORIGIN}/_build/assets/app-abc123.js`]: "chunk",
 		});
@@ -861,9 +906,9 @@ describe("the crest is cacheable by PATH, not only by destination (#514)", () =>
 
 		expect([...sw.caches.keys()].sort()).toEqual([
 			"gavelup-assets-v3",
-			"gavelup-nav-v4",
+			"gavelup-nav-v5",
 		]);
-		expect([...sw.cacheFor("gavelup-nav-v4").entries.values()]).toEqual([
+		expect([...sw.cacheFor("gavelup-nav-v5").entries.values()]).toEqual([
 			"primed agenda",
 		]);
 		expect([...sw.cacheFor("gavelup-assets-v3").entries.values()]).toEqual([
@@ -1022,7 +1067,7 @@ describe("priming on activation (#362)", () => {
 		// The old cache is gone, as it should be — but the CURRENT one now holds
 		// the meeting, so the user has not lost offline access by updating.
 		expect(sw.caches.has("gavelup-nav-v3")).toBe(false);
-		const entries = sw.cacheFor("gavelup-nav-v4").entries;
+		const entries = sw.cacheFor("gavelup-nav-v5").entries;
 		// ALL THREE, not just the open one. `evict` has always treated a meeting as
 		// three keys; priming treated it as one, and that asymmetry is why Present
 		// still failed offline after the meeting page was fixed.
@@ -1087,7 +1132,7 @@ describe("priming on activation (#362)", () => {
 		// pages into it.
 		sw.openClients = [`${ORIGIN}/schedule`];
 		await sw.activate();
-		expect(sw.cacheFor("gavelup-nav-v4").entries.size).toBe(0);
+		expect(sw.cacheFor("gavelup-nav-v5").entries.size).toBe(0);
 		expect(sw.surplusFetches).toBe(0);
 	});
 
@@ -1097,7 +1142,7 @@ describe("priming on activation (#362)", () => {
 		sw.openClients = [`${ORIGIN}${MEETING}`];
 		for (let i = 0; i < 3; i++) sw.nextFetch.push(new Error("offline"));
 		await expect(sw.activate()).resolves.toBeUndefined();
-		expect(sw.cacheFor("gavelup-nav-v4").entries.size).toBe(0);
+		expect(sw.cacheFor("gavelup-nav-v5").entries.size).toBe(0);
 	});
 
 	it("does not cache a captive portal's redirected 200 over the agenda", async () => {
@@ -1117,7 +1162,7 @@ describe("priming on activation (#362)", () => {
 		// The DESTINATION is what disqualifies it, not the redirect: `/login` is not
 		// an offline route. Print's 307 to `?layout=grid` lands on one and is kept,
 		// which is the distinction `!response.redirected` could not make.
-		expect(sw.cacheFor("gavelup-nav-v4").entries.size).toBe(0);
+		expect(sw.cacheFor("gavelup-nav-v5").entries.size).toBe(0);
 	});
 });
 
@@ -1173,12 +1218,12 @@ describe("meeting priming on a visit, not only on activation (#362)", () => {
 		sw.nextFetch.push(response(500, "boom"));
 		await sw.dispatchFetch(request(MEETING));
 		expect(sw.surplusFetches).toBe(0);
-		expect(sw.cacheFor("gavelup-nav-v4").entries.size).toBe(0);
+		expect(sw.cacheFor("gavelup-nav-v5").entries.size).toBe(0);
 	});
 
 	it("primes nothing while offline — the reload that serves from cache", async () => {
 		sw.nextFetch.push(new Error("offline"));
-		sw.seed("gavelup-nav-v4", { [`${ORIGIN}${MEETING}`]: "AGENDA" });
+		sw.seed("gavelup-nav-v5", { [`${ORIGIN}${MEETING}`]: "AGENDA" });
 		const served = await sw.dispatchFetch(request(MEETING));
 		expect(served?.body).toBe("AGENDA");
 		// An offline reload must not spend three more failing requests.

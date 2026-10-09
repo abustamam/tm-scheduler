@@ -62,8 +62,9 @@ function logicCallNames(source: string): string[] {
 		.filter((name) => !name.endsWith("Schema"));
 }
 
-// `previewConsoleArea` runs #1117's loader, which is not an areas-logic fn.
-const LOGIC_NAMES = [...logicCallNames(SOURCE), "loadAreaHealth"];
+// `previewConsoleArea` runs #1120's `loadAreaView` (#1117's health and the visits
+// read together), which is not an areas-logic fn.
+const LOGIC_NAMES = [...logicCallNames(SOURCE), "loadAreaView"];
 
 describe("areas.ts server fns are superadmin-only (#1116)", () => {
 	it("sweeps every declared fn, and the floor is the issue's table", () => {

@@ -29,7 +29,7 @@ import { readSource, serverFnBody } from "#/test/guard-source";
 const raw = (path: string) => readFileSync(path, "utf8");
 
 describe("the area server fns run the gate before the loader (#1119)", () => {
-	it("getAreaHealth runs requireUser, then requireAreaDirector on that user, then loadAreaHealth", () => {
+	it("getAreaHealth runs requireUser, then requireAreaDirector on that user, then loadAreaView", () => {
 		const body = serverFnBody(
 			readSource("src/server/area-health.ts"),
 			"getAreaHealth",
@@ -39,15 +39,15 @@ describe("the area server fns run the gate before the loader (#1119)", () => {
 		const gate = handler.indexOf(
 			"await requireAreaDirector(user.id, data.areaId);",
 		);
-		const load = handler.indexOf("loadAreaHealth(");
+		const load = handler.indexOf("loadAreaView(");
 		expect(session, "requireUser() is gone").toBeGreaterThan(-1);
 		expect(gate, "requireAreaDirector(user.id, …) is gone").toBeGreaterThan(-1);
-		expect(load, "loadAreaHealth( is gone").toBeGreaterThan(-1);
+		expect(load, "loadAreaView( is gone").toBeGreaterThan(-1);
 		expect(session).toBeLessThan(gate);
 		expect(gate).toBeLessThan(load);
 	});
 
-	it("previewConsoleArea runs requireUser, then requireSuperadmin on that user, then loadAreaHealth", () => {
+	it("previewConsoleArea runs requireUser, then requireSuperadmin on that user, then loadAreaView", () => {
 		const body = serverFnBody(
 			readSource("src/server/areas.ts"),
 			"previewConsoleArea",
@@ -55,12 +55,12 @@ describe("the area server fns run the gate before the loader (#1119)", () => {
 		const handler = body.slice(body.indexOf(".handler("));
 		const session = handler.indexOf("const currentUser = await requireUser();");
 		const gate = handler.indexOf("await requireSuperadmin(currentUser.id);");
-		const load = handler.indexOf("loadAreaHealth(");
+		const load = handler.indexOf("loadAreaView(");
 		expect(session, "requireUser() is gone").toBeGreaterThan(-1);
 		expect(gate, "requireSuperadmin(currentUser.id) is gone").toBeGreaterThan(
 			-1,
 		);
-		expect(load, "loadAreaHealth( is gone").toBeGreaterThan(-1);
+		expect(load, "loadAreaView( is gone").toBeGreaterThan(-1);
 		expect(session).toBeLessThan(gate);
 		expect(gate).toBeLessThan(load);
 	});
@@ -180,12 +180,14 @@ describe("nothing under src/server/mcp imports an area module (#1119)", () => {
 		});
 	}
 
-	/** The area modules: the guard, #1116's terms, #1117's health, the area fns. */
+	/** The area modules: the guard, #1116's terms, #1117's health, the visits (#1120), the area fns. */
 	const AREA_MODULES = new Set([
 		"area-guards",
 		"area-terms-logic",
 		"area-health",
 		"area-health-logic",
+		"area-visits",
+		"area-visits-logic",
 		"areas",
 		"areas-logic",
 	]);

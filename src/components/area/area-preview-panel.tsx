@@ -3,12 +3,13 @@ import { useState } from "react";
 import { AreaHealthView } from "#/components/area/area-health-view";
 import { Button } from "#/components/ui/button";
 import type { AreaHealth } from "#/lib/area-health";
+import type { AreaVisits } from "#/lib/area-visits";
 import { previewConsoleArea } from "#/server/areas";
 
 type Preview =
 	| { status: "idle" }
 	| { status: "loading" }
-	| { status: "ready"; health: AreaHealth }
+	| { status: "ready"; health: AreaHealth; visits: AreaVisits }
 	| { status: "failed"; message: string };
 
 /**
@@ -26,8 +27,8 @@ export function AreaPreviewPanel({ areaId }: { areaId: string }) {
 	async function load() {
 		setPreview({ status: "loading" });
 		try {
-			const health = await previewConsoleArea({ data: { areaId } });
-			setPreview({ status: "ready", health });
+			const { health, visits } = await previewConsoleArea({ data: { areaId } });
+			setPreview({ status: "ready", health, visits });
 		} catch (err) {
 			setPreview({
 				status: "failed",
@@ -63,7 +64,11 @@ export function AreaPreviewPanel({ areaId }: { areaId: string }) {
 				</p>
 			) : null}
 			{preview.status === "ready" ? (
-				<AreaHealthView health={preview.health} />
+				<AreaHealthView
+					health={preview.health}
+					visits={preview.visits}
+					readOnly
+				/>
 			) : null}
 		</section>
 	);

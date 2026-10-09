@@ -39,7 +39,9 @@
 // release, v1 → v2, for the same one-time-clear reason the nav cache is — see
 // `src/lib/offline-auth-context.ts`, which is authoritative for the current value.
 
-const NAV_VERSION = "v4";
+// v5 (#1120): drops copies cached while `isOfflineRoute` still matched any path
+// ending `/print` or `/present`, which included an Area Director's club summary.
+const NAV_VERSION = "v5";
 const ASSET_VERSION = "v3";
 const NAV_CACHE = `gavelup-nav-${NAV_VERSION}`;
 const ASSET_CACHE = `gavelup-assets-${ASSET_VERSION}`;
@@ -335,9 +337,13 @@ function isOfflineRoute(url) {
 	// meeting prefix still matches, so an archived club's `/me` is evicted with
 	// the rest of the meeting.
 	if (/^\/club\/[^/]+\/meeting\/[^/]+\/me$/.test(url.pathname)) return false;
+	// MEETING paths only. This used to also accept any pathname ending `/present`
+	// or `/print`; the only such routes were already under the meeting prefix
+	// below, so the suffix arms added nothing but reach, and #1120's Area Director
+	// summary (`/area/<id>/club/<id>/print`) fell into it: its SSR HTML, carrying a
+	// club's numbers in the inlined loader data, would have been cached on the
+	// device and served offline after sign-out or a term ending.
 	return (
-		url.pathname.endsWith("/present") ||
-		url.pathname.endsWith("/print") ||
 		/^\/club\/[^/]+\/meeting\//.test(url.pathname) ||
 		url.pathname.startsWith("/meetings/")
 	);

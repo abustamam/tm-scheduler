@@ -36,6 +36,11 @@ const { invalidate } = vi.hoisted(() => ({ invalidate: vi.fn() }));
 const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
 
 vi.mock("#/server/areas", () => fns);
+// The preview panel's visit cell imports the visit fns; the console never calls them.
+vi.mock("#/server/area-visits", () => ({
+	recordClubVisit: vi.fn(),
+	clearClubVisit: vi.fn(),
+}));
 vi.mock("sonner", () => ({
 	toast: { success: vi.fn(), error: toastError, warning: vi.fn() },
 }));

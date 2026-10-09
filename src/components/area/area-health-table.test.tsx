@@ -6,7 +6,7 @@
 // number, a field the club does not record ("Not tracked", never "0"), and a
 // club that is not on GavelUp (a name and a sentence).
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AreaClubCard } from "#/components/area/area-club-card";
 import { AreaHealthTable } from "#/components/area/area-health-table";
 import {
@@ -16,6 +16,17 @@ import {
 import { AreaHealthView } from "#/components/area/area-health-view";
 import type { AreaHealth, ClubHealth } from "#/lib/area-health";
 import { AREA_HEALTH_FIELDS } from "#/lib/area-health-fields";
+
+// The visit cell's controls call these and reload the router; neither is under
+// test here (`area-visits-cell.test.tsx` covers them).
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@tanstack/react-router")>()),
+	useRouter: () => ({ invalidate: vi.fn() }),
+}));
+vi.mock("#/server/area-visits", () => ({
+	recordClubVisit: vi.fn(),
+	clearClubVisit: vi.fn(),
+}));
 
 afterEach(cleanup);
 
@@ -95,7 +106,11 @@ function health(clubs: ClubHealth[]): AreaHealth {
 describe("AreaHealthTable", () => {
 	it("has one row per club and one column per field, in AREA_HEALTH_FIELDS order", () => {
 		render(
-			<AreaHealthTable clubs={[tracked(), withoutData("not_on_gavelup")]} />,
+			<AreaHealthTable
+				areaId="area-1"
+				visits={{}}
+				clubs={[tracked(), withoutData("not_on_gavelup")]}
+			/>,
 		);
 		const headers = screen
 			.getAllByRole("columnheader")
@@ -103,13 +118,14 @@ describe("AreaHealthTable", () => {
 		expect(headers).toEqual([
 			"Club",
 			...AREA_HEALTH_FIELDS.map((f) => f.label),
+			"Visits",
 		]);
 		// Header row + one per club.
 		expect(screen.getAllByRole("row")).toHaveLength(3);
 	});
 
 	it("prints a club on GavelUp's numbers, with its name and number", () => {
-		render(<AreaHealthTable clubs={[tracked()]} />);
+		render(<AreaHealthTable areaId="area-1" visits={{}} clubs={[tracked()]} />);
 		const row = screen.getByRole("row", { name: /Downtown Speakers/ });
 		const cells = within(row);
 		expect(cells.getByText("Downtown Speakers")).toBeTruthy();
@@ -131,6 +147,8 @@ describe("AreaHealthTable", () => {
 	it("prints Not tracked for a field the club does not record, never a zero", () => {
 		render(
 			<AreaHealthTable
+				areaId="area-1"
+				visits={{}}
 				clubs={[
 					tracked({
 						attendance: { tracked: false },
@@ -158,6 +176,8 @@ describe("AreaHealthTable", () => {
 	it("says Training not tracked beside a tracked officer count, not a zero", () => {
 		render(
 			<AreaHealthTable
+				areaId="area-1"
+				visits={{}}
 				clubs={[
 					tracked({
 						officers: {
@@ -178,19 +198,33 @@ describe("AreaHealthTable", () => {
 	});
 
 	it("names a club that is not on GavelUp, with its number and a sentence, and no figures", () => {
-		render(<AreaHealthTable clubs={[withoutData("not_on_gavelup")]} />);
+		render(
+			<AreaHealthTable
+				areaId="area-1"
+				visits={{}}
+				clubs={[withoutData("not_on_gavelup")]}
+			/>,
+		);
 		const row = screen.getByRole("row", { name: /Uptown Orators/ });
 		expect(within(row).getByText("Uptown Orators")).toBeTruthy();
 		expect(within(row).getByText("Club 7654321")).toBeTruthy();
 		expect(within(row).getByText("Not on GavelUp")).toBeTruthy();
-		// One cell spanning the figures, not six "Not tracked" ones.
-		expect(within(row).getAllByRole("cell")).toHaveLength(1);
+		// One cell spanning the figures, not six "Not tracked" ones, and the visits
+		// cell beside it: a name-only club still has visits to record (#1120).
+		const cells = within(row).getAllByRole("cell");
+		expect(cells).toHaveLength(2);
+		expect(cells[0]?.getAttribute("colspan")).toBe(
+			String(AREA_HEALTH_FIELDS.length),
+		);
+		expect(within(row).getAllByText(/^Round \d:/)).toHaveLength(2);
 		expect(within(row).queryByText(NOT_TRACKED_TEXT)).toBeNull();
 	});
 
 	it("omits the club number line for a club with none on file", () => {
 		render(
 			<AreaHealthTable
+				areaId="area-1"
+				visits={{}}
 				clubs={[withoutData("not_on_gavelup", { clubNumber: null })]}
 			/>,
 		);
@@ -201,6 +235,8 @@ describe("AreaHealthTable", () => {
 	it("says there are no meetings on the calendar rather than printing an empty list", () => {
 		render(
 			<AreaHealthTable
+				areaId="area-1"
+				visits={{}}
 				clubs={[
 					tracked({
 						meetings: {
@@ -217,15 +253,84 @@ describe("AreaHealthTable", () => {
 	});
 
 	it("lists the next meeting dates after mount", () => {
-		render(<AreaHealthTable clubs={[tracked()]} />);
+		render(<AreaHealthTable areaId="area-1" visits={{}} clubs={[tracked()]} />);
 		// Noon UTC is the same calendar day in every zone from UTC-11 to UTC+11.
 		expect(screen.getByText(/^Next: .*Oct 15.*Oct 22/)).toBeTruthy();
 	});
 });
 
+describe("visits in the table and the card (#1120)", () => {
+	it("shows each club's visit dates in its row, from the visits map", () => {
+		render(
+			<AreaHealthTable
+				areaId="area-1"
+				visits={{ "row-1": { 1: "2026-10-12" } }}
+				clubs={[tracked()]}
+			/>,
+		);
+		const row = screen.getByRole("row", { name: /Downtown Speakers/ });
+		expect(within(row).getByText("Oct 12")).toBeTruthy();
+		expect(within(row).getByText("not yet")).toBeTruthy();
+		expect(
+			within(row).getByRole("button", { name: "Edit round 1 visit" }),
+		).toBeTruthy();
+	});
+
+	it("links each club's one-page summary, and hides the link and the controls when readOnly", () => {
+		const { unmount } = render(
+			<AreaHealthTable areaId="area-1" visits={{}} clubs={[tracked()]} />,
+		);
+		expect(
+			screen.getByRole("link", { name: "Print summary" }).getAttribute("href"),
+		).toBe("/area/area-1/club/row-1/print");
+		unmount();
+
+		render(
+			<AreaHealthTable
+				areaId="area-1"
+				visits={{}}
+				clubs={[tracked()]}
+				readOnly
+			/>,
+		);
+		expect(screen.queryByRole("link", { name: "Print summary" })).toBeNull();
+		expect(screen.queryAllByRole("button")).toHaveLength(0);
+	});
+
+	it("shows the card's visits and print link, and drops both controls when readOnly", () => {
+		const { unmount } = render(
+			<AreaClubCard
+				areaId="area-1"
+				visits={{ "row-1": { 2: "2027-01-20" } }}
+				club={tracked()}
+			/>,
+		);
+		expect(screen.getByText("Jan 20")).toBeTruthy();
+		expect(
+			screen.getByRole("link", { name: "Print summary" }).getAttribute("href"),
+		).toBe("/area/area-1/club/row-1/print");
+		expect(
+			screen.getByRole("button", { name: "Record round 1 visit" }),
+		).toBeTruthy();
+		unmount();
+
+		render(
+			<AreaClubCard
+				areaId="area-1"
+				visits={{ "row-1": { 2: "2027-01-20" } }}
+				club={tracked()}
+				readOnly
+			/>,
+		);
+		expect(screen.getByText("Jan 20")).toBeTruthy();
+		expect(screen.queryByRole("link", { name: "Print summary" })).toBeNull();
+		expect(screen.queryAllByRole("button")).toHaveLength(0);
+	});
+});
+
 describe("AreaClubCard", () => {
 	it("prints every field under its label for a club on GavelUp", () => {
-		render(<AreaClubCard club={tracked()} />);
+		render(<AreaClubCard areaId="area-1" visits={{}} club={tracked()} />);
 		expect(
 			screen.getByRole("heading", { name: "Downtown Speakers" }),
 		).toBeTruthy();
@@ -240,6 +345,8 @@ describe("AreaClubCard", () => {
 	it("prints Not tracked for an untracked field, never a zero", () => {
 		render(
 			<AreaClubCard
+				areaId="area-1"
+				visits={{}}
 				club={tracked({
 					roleFillRate: { tracked: false },
 					dcp: { tracked: false },
@@ -252,7 +359,13 @@ describe("AreaClubCard", () => {
 	});
 
 	it("says Not on GavelUp and carries no figures", () => {
-		render(<AreaClubCard club={withoutData("not_on_gavelup")} />);
+		render(
+			<AreaClubCard
+				areaId="area-1"
+				visits={{}}
+				club={withoutData("not_on_gavelup")}
+			/>,
+		);
 		expect(screen.getByText("Not on GavelUp")).toBeTruthy();
 		expect(screen.getByText("Club 7654321")).toBeTruthy();
 		expect(screen.queryByText("Meetings")).toBeNull();
@@ -261,19 +374,19 @@ describe("AreaClubCard", () => {
 
 describe("AreaHealthView", () => {
 	it("names when the numbers were read, in UTC, and what the counts cover", () => {
-		render(<AreaHealthView health={health([tracked()])} />);
+		render(<AreaHealthView health={health([tracked()])} visits={{}} />);
 		expect(screen.getByText(/As of Oct 9, 2026, 2:32 PM UTC\./)).toBeTruthy();
 		expect(screen.getByText(/the last 90 days/)).toBeTruthy();
 	});
 
 	it("renders both layouts, so a phone and a desktop each have one", () => {
-		render(<AreaHealthView health={health([tracked()])} />);
+		render(<AreaHealthView health={health([tracked()])} visits={{}} />);
 		expect(screen.getByRole("table")).toBeTruthy();
 		expect(screen.getAllByRole("article")).toHaveLength(1);
 	});
 
 	it("says so when the area has no clubs", () => {
-		render(<AreaHealthView health={health([])} />);
+		render(<AreaHealthView health={health([])} visits={{}} />);
 		expect(
 			screen.getByText("There are no clubs in this area yet."),
 		).toBeTruthy();
