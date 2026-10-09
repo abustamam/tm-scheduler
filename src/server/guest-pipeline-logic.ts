@@ -59,11 +59,20 @@ import {
 	DEFAULT_COUNTRY_CODE,
 	toStoredPhone,
 } from "#/lib/phone";
-import { normalizedEmail, rosterConflictFor } from "./account-link-logic";
+import {
+	guestHeldOnly,
+	normalizedEmail,
+	rosterConflictFor,
+} from "./account-link-logic";
 import { logActivity } from "./activity";
 import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { assertClubNotArchived } from "./guards";
+import {
+	createGuestRecord,
+	ensureGuestPerson,
+	RECORD_CHANGED_MESSAGE,
+} from "./guests-logic";
 import { closeOpenOfficerTerms } from "./officers-logic";
 import { isDeadlock } from "./pg-errors";
 
@@ -675,11 +684,15 @@ function captureInTransaction(
 			if ((recent?.n ?? 0) >= GUEST_BOOK_MAX_NEW_PER_WINDOW) {
 				throw new Error(GUEST_BOOK_THROTTLED_MESSAGE);
 			}
-			const [row] = await tx
-				.insert(guests)
-				.values({ clubId: input.clubId, name, email, phone, stage: "prospect" })
-				.returning({ id: guests.id });
-			if (!row) throw new Error("Failed to create guest.");
+			// The guest and their Person in one go (#1124): a failure on either
+			// insert leaves neither, so the public book cannot mint an orphan Person.
+			const row = await createGuestRecord(tx, {
+				clubId: input.clubId,
+				name,
+				email,
+				phone,
+				stage: "prospect",
+			});
 			guestId = row.id;
 			created = true;
 		}
@@ -1511,7 +1524,8 @@ export async function lockClubConverts(
  * Convert-to-member (ADR-0018): promote a guest into a club Membership.
  *
  * Transactional: (1) dedup the Person by email→phone-with-name-agreement (link
- * an existing Person, else create one — see the step-1 comment for why a bare
+ * an existing Person of THIS club, else adopt the guest's own Person, filling
+ * its blank contact from the guest row — see the step-1 comment for why a bare
  * phone match is not enough); (2) create the Membership for this club (`clubRole: member`,
  * `joinedAt: today`) — or reuse the person's existing membership so we never
  * violate one-membership-per-person-per-club, REACTIVATING that row when it had
@@ -1548,6 +1562,30 @@ export async function applyConvertGuestToMember(
 		// on this lock — a deadlock with no retry. Waiting here holds nothing.
 		await lockClubConverts(tx, input.clubId);
 
+		// The lock protocol (ADR-0031): the club write lock, then the Person row,
+		// then the guest row. This and the convert lock above are both advisory and
+		// wait holding no row; what matters is that the club's write lock is taken
+		// before any ROW lock, because `mergePeople` takes it and then both
+		// Persons, and a convert that locked the Person first would be the reverse.
+		//
+		// The Person is only known by reading the guest row, so it is READ without
+		// a lock, the locks are taken in protocol order, and the row is re-read
+		// under them (the read-then-lock rule). A Person that moved in between
+		// refuses the convert, with nothing written.
+		await lockClubForWrite(tx, input.clubId);
+		const [peek] = await tx
+			.select({ personId: guests.personId })
+			.from(guests)
+			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
+			.limit(1);
+		if (peek?.personId) {
+			await tx
+				.select({ id: people.id })
+				.from(people)
+				.where(eq(people.id, peek.personId))
+				.for("update");
+		}
+
 		// Then lock the guest row, and re-check `stage` under that lock.
 		//
 		// The unique index (#489) only catches a double-add once both racers have
@@ -1565,6 +1603,9 @@ export async function applyConvertGuestToMember(
 			.limit(1)
 			.for("update");
 		if (!guest) throw new Error("Guest not found in this club.");
+		if ((guest.personId ?? null) !== (peek?.personId ?? null)) {
+			throw new Error(RECORD_CHANGED_MESSAGE);
+		}
 		if (guest.stage === "joined") {
 			throw new Error("This guest has already been converted to a member.");
 		}
@@ -1660,17 +1701,59 @@ export async function applyConvertGuestToMember(
 		// that already existed. Recorded in step 5 because an undo must never
 		// delete a Person or a membership it did not create (#618) — and nothing
 		// readable after the fact distinguishes the two.
-		let createdPerson = false;
+		//
+		// With the guest's own Person (#1124, ADR-0031) there is no longer a fresh
+		// Person for convert to create: no match means the membership goes on the
+		// guest's Person, which the guest row already points at. That Person is
+		// therefore never `createdPerson`, and undo never touches it. The key stays
+		// in the record: a record without it is refused as unreplayable.
+		const createdPerson = false;
 		let createdMembership = false;
 		if (!personId) {
-			const [p] = await tx
-				.insert(people)
-				.values({ name, preferredName, email, phone })
-				.returning({ id: people.id });
-			if (!p) throw new Error("Failed to create person.");
-			personId = p.id;
-			createdPerson = true;
-			if (email) written = { personId, email };
+			personId = await ensureGuestPerson(tx, input.guestId);
+			// The guest's contact goes onto that Person as the Person becomes a
+			// member (it was name-only until now; #1125 moves the rest). Three
+			// conditions, each in the statement's own WHERE so a sign-in or a second
+			// writer landing mid-transaction makes it a no-op rather than an
+			// overwrite:
+			//  - nobody has signed in as them (`isNull(people.userId)`): an address
+			//    on a bound Person is its account's;
+			//  - the field is blank (`isNull(people.email)`): contact already on file
+			//    was typed by somebody with more standing than the guest book;
+			//  - they are held by guest rows only (`guestHeldOnly()`): a Person who
+			//    is already a member somewhere keeps whatever that club recorded.
+			//
+			// BEFORE the membership insert below, because `guestHeldOnly()` reads
+			// false the moment this convert adds one, and the UPDATE would match
+			// nothing and report success. A phone-only guest is the same.
+			if (email) {
+				const filled = await tx
+					.update(people)
+					.set({ email })
+					.where(
+						and(
+							eq(people.id, personId),
+							isNull(people.userId),
+							isNull(people.email),
+							guestHeldOnly(),
+						),
+					)
+					.returning({ id: people.id });
+				if (filled.length > 0) written = { personId, email };
+			}
+			if (phone) {
+				await tx
+					.update(people)
+					.set({ phone })
+					.where(
+						and(
+							eq(people.id, personId),
+							isNull(people.userId),
+							isNull(people.phone),
+							guestHeldOnly(),
+						),
+					);
+			}
 		} else {
 			if (preferredName) {
 				// Deduped onto an EXISTING Person: the insert above never ran, so seed
@@ -2422,17 +2505,26 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
  * once any is true.
  *
  * Speeches and Pathways enrolments are checked ONLY when the conversion created
- * the Person. They hang off `people`, not `members`, so removing a membership
- * never destroys them — but on a Person this conversion minted they can only
- * have been earned afterwards, which makes them evidence the human really did
- * start participating as a member. On a Person that was deduped onto, the same
- * rows are somebody's pre-existing history in another club and say nothing about
- * this conversion.
+ * the membership. They hang off `people`, not `members`, so removing a membership
+ * never destroys them — but on a Person that had no membership here they can
+ * only have been earned afterwards, which makes them evidence the human really
+ * did start participating as a member. When convert deduped onto a membership
+ * that already existed, the same rows are somebody's pre-existing history and say
+ * nothing about this conversion.
  *
- * The created Person is deliberately LEFT BEHIND when the membership goes. It is
- * global (ADR-0008), deleting it could cascade further than this undo's remit,
- * and an orphan Person is visible to the merge tool — which is the recoverable
- * direction this file keeps choosing.
+ * Since #1124 the check is keyed on `createdMembership`, not `createdPerson`:
+ * convert no longer mints a Person, it adopts the guest's own, so
+ * `createdPerson` is always false and would switch the check off for every new
+ * conversion. A guest's Person is held by guest rows alone, and a guest holds no
+ * speech (ADR-0009), so what it has afterwards was earned afterwards. The one
+ * case this over-refuses is a guest Person that a merge had already made a
+ * member elsewhere: its history there is read as evidence here. That refuses an
+ * undo, never deletes anything, and the roster-removal path is still open.
+ *
+ * The guest's Person is deliberately LEFT BEHIND when the membership goes, as a
+ * created one always was. It is global (ADR-0008), the guest row still points at
+ * it, deleting it could cascade further than this undo's remit, and the Person
+ * is the guest's, not the conversion's.
  *
  * Whenever the membership is deleted, created Person or not, the
  * `member_remove` names its Person in `detail.personId`, the release record
@@ -2547,7 +2639,7 @@ export async function applyUndoGuestConversion(
 			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("an officer term"));
 		}
 
-		if (record.createdPerson) {
+		if (record.createdMembership) {
 			const [spoken] = await tx
 				.select({ n: count() })
 				.from(speeches)

@@ -14,6 +14,7 @@ import { db } from "#/db";
 import {
 	activityLog,
 	clubs,
+	guests,
 	members,
 	oauthClient,
 	pathEnrollments,
@@ -703,7 +704,10 @@ const UUID_RE =
  *   it cascades with the club. Read as `->>` text (the column is app-written
  *   jsonb, so no cast of untrusted text), and filtered to well-formed uuids in
  *   the app so a malformed row is skipped rather than aborting the delete;
- * - Persons with Pathways progress credited to this club.
+ * - Persons with Pathways progress credited to this club;
+ * - Persons this club holds as GUESTS (#1124), whose `guests` rows the cascade
+ *   is about to delete. A guest-only Person has no membership and no activity
+ *   entry, so the guest row is the only thing that names them.
  *
  * Whether each one is then deleted is decided after the cascade, under lock,
  * by whether they hold a membership anywhere.
@@ -732,8 +736,12 @@ async function personsOfClub(tx: Tx, clubId: string): Promise<string[]> {
 			eq(pathEnrollments.id, pathLevelProgress.enrollmentId),
 		)
 		.where(eq(pathLevelProgress.creditedClubId, clubId));
+	const asGuest = await tx
+		.selectDistinct({ personId: guests.personId })
+		.from(guests)
+		.where(eq(guests.clubId, clubId));
 	const ids = new Set<string>();
-	for (const r of [...current, ...removed, ...credited]) {
+	for (const r of [...current, ...removed, ...credited, ...asGuest]) {
 		if (typeof r.personId === "string" && UUID_RE.test(r.personId)) {
 			ids.add(r.personId.toLowerCase());
 		}
@@ -756,7 +764,8 @@ async function personsOfClub(tx: Tx, clubId: string): Promise<string[]> {
  * - `path_level_progress.credited_club_id`: a level credited to another club;
  * - `project_completion_marks.marked_by_member_id`: a project another club's
  *   officer signed off;
- * - `path_enrollments` and `bcm_project_progress` name no club.
+ * - `path_enrollments` and `bcm_project_progress` name no club;
+ * - `guests.person_id` (#1124): a guest row in another club.
  */
 async function personsWithOtherClubHistory(
 	tx: Tx,
@@ -796,7 +805,15 @@ async function personsWithOtherClubHistory(
 				sql`${projectCompletionMarks.markedByMemberId} is not null`,
 			),
 		);
-	return [...spoke, ...credited, ...marked].flatMap((r) =>
+	// A guest row in ANOTHER club (#1124). The cascade has already deleted this
+	// club's, so every `guests` row still naming one of these Persons is some
+	// other club's visit, role and speech history, and a Person delete would hit
+	// the RESTRICT key on it. Kept, as a Person with a membership elsewhere is.
+	const guestElsewhere = await tx
+		.selectDistinct({ personId: guests.personId })
+		.from(guests)
+		.where(inArray(guests.personId, personIds));
+	return [...spoke, ...credited, ...marked, ...guestElsewhere].flatMap((r) =>
 		r.personId === null ? [] : [r.personId],
 	);
 }
@@ -829,8 +846,10 @@ function isForeignKeyViolation(err: unknown): boolean {
  * 3. People are club-less (ADR-0008), so the cascade leaves them. Each collected
  *    Person is locked `FOR UPDATE` and re-checked for a remaining `members` row
  *    AFTER the cascade, inside this transaction, along with whether their own
- *    history still points at another club (`personsWithOtherClubHistory`; such
- *    a Person is kept so that club's record survives). A membership another club adds
+ *    history still points at another club (`personsWithOtherClubHistory`, which
+ *    counts a guest row there too; such a Person is kept so that club's record
+ *    survives). A guest-only Person whose only guest rows were this club's goes
+ *    with it. A membership another club adds
  *    concurrently either committed first (and is seen, so the Person is kept) or
  *    blocks on the lock and then fails its FK. A Person with no membership left
  *    is deleted, and their speeches, path enrollments and everything under those

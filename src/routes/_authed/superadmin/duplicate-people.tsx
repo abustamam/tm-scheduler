@@ -107,6 +107,17 @@ function LinkBadge({ linked }: { linked: boolean }) {
 	);
 }
 
+/** Held by guest rows only (#1124): shown beside the link badge so a duplicate
+ *  of a member can be told apart from the member and repaired from here. */
+function GuestBadge({ guestOnly }: { guestOnly: boolean }) {
+	if (!guestOnly) return null;
+	return (
+		<span className="inline-block rounded-full bg-[var(--sand)] px-2 py-0.5 text-xs font-semibold text-[var(--sea-ink-soft)]">
+			Guest
+		</span>
+	);
+}
+
 function DuplicateGroupCard({
 	group,
 	onMerged,
@@ -158,6 +169,7 @@ function DuplicateGroupCard({
 							<span className="flex flex-wrap items-center gap-2">
 								<span className="font-medium">{person.name}</span>
 								<LinkBadge linked={person.linked} />
+								<GuestBadge guestOnly={person.guestOnly} />
 							</span>
 							<span className="block text-[var(--sea-ink-soft)]">
 								{person.email ?? "no email"} ·{" "}
@@ -280,6 +292,7 @@ function ManualSearchSection({ onMerged }: { onMerged: () => void }) {
 								<span className="flex flex-wrap items-center gap-2">
 									<span className="font-medium">{person.name}</span>
 									<LinkBadge linked={person.linked} />
+									<GuestBadge guestOnly={person.guestOnly} />
 								</span>
 								<span className="block text-[var(--sea-ink-soft)]">
 									{person.email ?? "no email"} ·{" "}

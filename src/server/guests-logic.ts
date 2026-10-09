@@ -1,9 +1,9 @@
 // Guest-assignment DB logic (#151), split out from `guests.ts` (a createServerFn
 // module the guard test forbids from exporting db-touching functions).
 // Integration-testable by mocking `#/db`.
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "#/db";
-import { guests, meetings, members, roleSlots } from "#/db/schema";
+import { guests, meetings, members, people, roleSlots } from "#/db/schema";
 import { GUEST_IS_NOW_A_MEMBER_MESSAGE } from "#/lib/guest-convert";
 import {
 	type BroughtCount,
@@ -27,6 +27,125 @@ import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 type DbOrTx =
 	| typeof db
 	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+/**
+ * What a refused read-then-lock re-read says (ADR-0031). A path that must read a
+ * row to learn which clubs or Persons to lock reads it without locking, takes
+ * the locks in protocol order, and re-reads; when the set it locked is no longer
+ * the set the row names, the work is refused with this and nothing is written.
+ */
+export const RECORD_CHANGED_MESSAGE = "This record changed. Try again.";
+
+/** What `createGuestRecord` takes: a `guests` insert, minus the Person it mints. */
+export type NewGuestRecord = Omit<typeof guests.$inferInsert, "personId"> & {
+	/**
+	 * Point the guest row at this EXISTING Person instead of minting one. For a
+	 * row that already IS somebody's Person, such as a converted guest in the
+	 * seed (`guests.person_id` equals its membership's Person). Nothing in the
+	 * app's own write paths passes it today.
+	 */
+	personId?: string;
+};
+
+/**
+ * The ONLY way a `guests` row is inserted (#1124, ADR-0031): a guest is a
+ * Person, so this mints the Person `{ name, preferredName }` and the guest row
+ * pointing at it, in one transaction. `guest-insert.guard.test.ts` fails on a
+ * `.insert(guests)` anywhere else in non-test source.
+ *
+ * A guest's email and phone are still written to the `guests` row here; moving
+ * them onto the Person is #1125.
+ *
+ * Always opens `conn.transaction`: given the pooled client that is the
+ * transaction the two inserts need, and given a caller's transaction it is a
+ * SAVEPOINT, so a failure rolls back the Person too and a caller's batch still
+ * aborts because the error propagates.
+ *
+ * An `id` the caller supplied (a client-side idempotency key) that already
+ * exists is a replay, not an error: the guest row is NOT written again and the
+ * Person minted for it is deleted again, so a replay leaves no orphan Person.
+ * `created` says which happened. Without an `id` nothing can conflict.
+ */
+export async function createGuestRecord(
+	conn: DbOrTx,
+	input: NewGuestRecord,
+): Promise<{ id: string; created: boolean }> {
+	const { personId: existingPersonId, ...row } = input;
+	return conn.transaction(async (tx) => {
+		let personId = existingPersonId;
+		if (!personId) {
+			const [person] = await tx
+				.insert(people)
+				.values({ name: row.name, preferredName: row.preferredName ?? null })
+				.returning({ id: people.id });
+			if (!person) throw new Error("Failed to create person.");
+			personId = person.id;
+		}
+		const [guest] = await tx
+			.insert(guests)
+			.values({ ...row, personId })
+			.onConflictDoNothing({ target: guests.id })
+			.returning({ id: guests.id });
+		if (guest) return { id: guest.id, created: true };
+		if (!row.id) throw new Error("Failed to create guest.");
+		// A replay of a client-supplied id. The Person above was minted for a row
+		// that was not written, so it goes; one the caller named is theirs.
+		if (!existingPersonId) {
+			await tx.delete(people).where(eq(people.id, personId));
+		}
+		return { id: row.id, created: false };
+	});
+}
+
+/**
+ * The guest's Person, creating one when `person_id` is null (#1124).
+ *
+ * A null can only come from the OLD container during the deploy swap that
+ * shipped the column, or from a test fixture that inserts directly. The Person
+ * has the shape the migration's backfill gave everyone else: name only. Convert,
+ * and #1127's link and separate, call this before they rely on a Person.
+ *
+ * The caller holds the guest row `FOR UPDATE`, which is what makes the
+ * check-then-set safe; the UPDATE still carries `person_id IS NULL` so that a
+ * second writer that got there first is read, not overwritten.
+ */
+export async function ensureGuestPerson(
+	tx: DbOrTx,
+	guestId: string,
+): Promise<string> {
+	const [guest] = await tx
+		.select({
+			personId: guests.personId,
+			name: guests.name,
+			preferredName: guests.preferredName,
+		})
+		.from(guests)
+		.where(eq(guests.id, guestId))
+		.limit(1);
+	if (!guest) throw new Error("Guest not found.");
+	if (guest.personId) return guest.personId;
+
+	const [person] = await tx
+		.insert(people)
+		.values({ name: guest.name, preferredName: guest.preferredName })
+		.returning({ id: people.id });
+	if (!person) throw new Error("Failed to create person.");
+	const set = await tx
+		.update(guests)
+		.set({ personId: person.id })
+		.where(and(eq(guests.id, guestId), isNull(guests.personId)))
+		.returning({ id: guests.id });
+	if (set.length > 0) return person.id;
+	// Lost the race: someone set it between the read and the write. Theirs wins.
+	await tx.delete(people).where(eq(people.id, person.id));
+	const [now] = await tx
+		.select({ personId: guests.personId })
+		.from(guests)
+		.where(eq(guests.id, guestId))
+		.limit(1);
+	if (!now?.personId) throw new Error("Failed to create person.");
+	return now.personId;
+}
 
 /** Contact fields for a brand-new club guest (name required, contact optional). */
 export type NewGuestInput = {
@@ -140,16 +259,12 @@ export async function applyAssignGuestToSlot(
 		if (input.newGuest) {
 			const name = input.newGuest.name.trim();
 			if (!name) throw new Error("A guest name is required.");
-			const [created] = await tx
-				.insert(guests)
-				.values({
-					clubId: slot.clubId,
-					name,
-					email: input.newGuest.email?.trim() || null,
-					phone: toStoredPhone(input.newGuest.phone, cc),
-				})
-				.returning({ id: guests.id });
-			if (!created) throw new Error("Failed to create guest.");
+			const created = await createGuestRecord(tx, {
+				clubId: slot.clubId,
+				name,
+				email: input.newGuest.email?.trim() || null,
+				phone: toStoredPhone(input.newGuest.phone, cc),
+			});
 			guestId = created.id;
 		} else if (input.guestId) {
 			const [existing] = await tx

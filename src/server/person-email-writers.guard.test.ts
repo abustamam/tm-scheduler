@@ -71,6 +71,11 @@ const WAIVERS: Record<
 		 *  `eq(people.userId, …)` in the statement itself, so it can only ever
 		 *  move the address of the Person bound to the confirming account. */
 		requiresBoundToUser?: boolean;
+		/** Convert's copy of a guest's address (#1124): its UPDATE must carry
+		 *  `isNull(people.email)` (fill a blank, never overwrite) and
+		 *  `guestHeldOnly(` or `guestOnlyPerson(` (the Person is held by guest
+		 *  rows only), in the statement itself. */
+		requiresGuestFill?: boolean;
 	}
 > = {
 	// A member changing their OWN sign-in address (#1091, ADR-0030). The new
@@ -90,6 +95,21 @@ const WAIVERS: Record<
 		reason: "roster edit, unbound sole-holder Persons only",
 		requiresUnlinkedGuard: true,
 		requiresSoleHolder: true,
+	},
+	// Convert-to-member's copy of a guest's address onto the guest's OWN Person
+	// (#1124, ADR-0031). Club-reachable (an officer's click), and the only writer
+	// whose Person has NO membership yet, so `soleHoldingClub`, which demands a
+	// vouching membership, cannot be its predicate. Its own three, all in the
+	// statement: unbound, blank, and held by guest rows only. The last must be
+	// evaluated BEFORE the membership insert, which is why the statement sits in
+	// the no-match branch ahead of it.
+	"server/guest-pipeline-logic.ts": {
+		fn: "applyConvertGuestToMember",
+		sites: 1,
+		reason:
+			"convert fills a blank address on the guest's own guest-only Person from the guest row (#1124)",
+		requiresUnlinkedGuard: true,
+		requiresGuestFill: true,
 	},
 	// The CSV importer's fill-only address (#907). Club-reachable.
 	"server/import-members-logic.ts": {
@@ -438,6 +458,37 @@ describe("the matcher itself", () => {
 		).toBe(1);
 	});
 
+	it("reads convert's guest-fill UPDATE as one email write with its predicates (#1124)", () => {
+		// The waiver for `applyConvertGuestToMember` holds the statement to three
+		// tokens, and it can only do that if `emailWriteStatements` hands it the
+		// whole statement: `.where(...)` and `.returning(...)` included, and the
+		// phone statement beside it NOT counted, since its SET carries no email.
+		const src = `
+			const filled = await tx
+				.update(people)
+				.set({ email })
+				.where(
+					and(
+						eq(people.id, personId),
+						isNull(people.userId),
+						isNull(people.email),
+						guestHeldOnly(),
+					),
+				)
+				.returning({ id: people.id });
+			await tx
+				.update(people)
+				.set({ phone })
+				.where(and(eq(people.id, personId), isNull(people.phone)));
+		`;
+		expect(emailWriteSites(src)).toEqual(["update(people) setting email"]);
+		const stmts = emailWriteStatements(src);
+		expect(stmts).toHaveLength(1);
+		expect(stmts[0]).toMatch(/isNull\(\s*people\.userId\s*\)/);
+		expect(stmts[0]).toMatch(/isNull\(\s*people\.email\s*\)/);
+		expect(stmts[0]).toMatch(/guest(?:HeldOnly|OnlyPerson)\(\)/);
+	});
+
 	it("flags raw SQL however it is written or executed", () => {
 		expect(
 			flags("await db.execute(sql.raw(`update people set email = null`));"),
@@ -566,7 +617,8 @@ describe("people.email writers (verified identity address)", () => {
 			if (
 				waiver.requiresUnlinkedGuard ||
 				waiver.requiresSoleHolder ||
-				waiver.requiresBoundToUser
+				waiver.requiresBoundToUser ||
+				waiver.requiresGuestFill
 			) {
 				expect(
 					stmts,
@@ -594,6 +646,18 @@ describe("people.email writers (verified identity address)", () => {
 						`${key}'s people.email write must carry soleHoldingClub(...) in the STATEMENT — ` +
 							`a club may change an address only while it is the Person's sole holder (#907)`,
 					).toMatch(/soleHoldingClub\(/);
+				}
+				if (waiver.requiresGuestFill) {
+					expect(
+						stmt,
+						`${key}'s people.email write must carry isNull(people.email) in the STATEMENT — ` +
+							`it may only FILL a blank, never overwrite an address on file (#1124)`,
+					).toMatch(/isNull\(\s*people\.email\s*\)/);
+					expect(
+						stmt,
+						`${key}'s people.email write must carry guestHeldOnly() or guestOnlyPerson() in the ` +
+							`STATEMENT — a Person already held as a member keeps what that club recorded (#1124)`,
+					).toMatch(/guest(?:HeldOnly|OnlyPerson)\(\)/);
 				}
 			}
 		}

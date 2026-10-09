@@ -12,6 +12,7 @@ import {
 	type ContactMethod,
 } from "#/lib/preferred-contact";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
+import { createGuestRecord } from "#/server/guests-logic";
 import { createMentorship } from "#/server/mentorship-logic";
 import { seedPathwaysCatalog } from "../../scripts/pathways-catalog-seed.ts";
 import { seedGlobalTemplates } from "../../scripts/seed-global-templates.ts";
@@ -177,6 +178,22 @@ async function resetClubByName(name: string, rosterEmails: string[]) {
 		.select({ id: clubs.id })
 		.from(clubs)
 		.where(eq(clubs.name, name));
+	// The Persons this club's guest rows point at (#1124), read BEFORE the
+	// cascade deletes the rows: nothing else names a guest-only Person afterwards.
+	const guestPersonIds =
+		existing.length === 0
+			? []
+			: (
+					await db
+						.select({ id: guests.personId })
+						.from(guests)
+						.where(
+							inArray(
+								guests.clubId,
+								existing.map((c) => c.id),
+							),
+						)
+				).flatMap((g) => (g.id ? [g.id] : []));
 	for (const c of existing) {
 		await db.delete(clubs).where(eq(clubs.id, c.id));
 	}
@@ -185,20 +202,25 @@ async function resetClubByName(name: string, rosterEmails: string[]) {
 		.select({ id: people.id })
 		.from(people)
 		.where(inArray(people.email, rosterEmails));
-	if (atRosterAddress.length === 0) return;
+	const candidateIds = [
+		...new Set([...atRosterAddress.map((p) => p.id), ...guestPersonIds]),
+	];
+	if (candidateIds.length === 0) return;
 	const stillHeld = await db
 		.selectDistinct({ id: members.personId })
 		.from(members)
-		.where(
-			inArray(
-				members.personId,
-				atRosterAddress.map((p) => p.id),
-			),
-		);
-	const heldIds = new Set(stillHeld.map((m) => m.id));
-	const orphanIds = atRosterAddress
-		.map((p) => p.id)
-		.filter((id) => !heldIds.has(id));
+		.where(inArray(members.personId, candidateIds));
+	// A guest row in ANOTHER club holds a Person too: deleting it would hit the
+	// RESTRICT key, and would take that club's visitor with it.
+	const stillGuest = await db
+		.selectDistinct({ id: guests.personId })
+		.from(guests)
+		.where(inArray(guests.personId, candidateIds));
+	const heldIds = new Set([
+		...stillHeld.map((m) => m.id),
+		...stillGuest.flatMap((g) => (g.id ? [g.id] : [])),
+	]);
+	const orphanIds = candidateIds.filter((id) => !heldIds.has(id));
 	if (orphanIds.length > 0) {
 		await db.delete(people).where(inArray(people.id, orphanIds));
 	}
@@ -1054,36 +1076,39 @@ async function main() {
 		})),
 	);
 
-	// Guests across the pipeline (VP Membership).
-	await db.insert(guests).values([
+	// Guests across the pipeline (VP Membership). Every guest row points at a
+	// Person (#1124), so each goes through `createGuestRecord`; Ravi, who joined,
+	// IS the member's Person, as the migration's backfill leaves a converted guest.
+	const raviPersonId = mcf.personByName.get("Ravi Anand");
+	if (!raviPersonId) throw new Error('Seed: no Person for "Ravi Anand"');
+	for (const g of [
 		{
-			clubId: mcf.clubId,
 			name: "Priyanka Rao",
 			email: "priyanka.rao@example.com",
 			phone: "+1 916 555 0181",
-			stage: "prospect",
+			stage: "prospect" as const,
 		},
 		{
-			clubId: mcf.clubId,
 			name: "Marcus Bailey",
 			email: "marcus.bailey@example.com",
-			stage: "following_up",
+			stage: "following_up" as const,
 		},
 		{
-			clubId: mcf.clubId,
 			name: "Elena Sokolova",
 			phone: "+1 916 555 0142",
-			stage: "following_up",
+			stage: "following_up" as const,
 		},
 		{
-			clubId: mcf.clubId,
 			name: "Ravi Anand",
 			email: "ravi@example.com",
-			stage: "joined",
+			stage: "joined" as const,
 			convertedMembershipId: mcf.memberByName.get("Ravi Anand")!,
+			personId: raviPersonId,
 		},
-		{ clubId: mcf.clubId, name: "Ben Carter", stage: "lost" },
-	]);
+		{ name: "Ben Carter", stage: "lost" as const },
+	]) {
+		await createGuestRecord(db, { clubId: mcf.clubId, ...g });
+	}
 
 	// Dues — the Apr 1 renewal, most paid, a few outstanding (Treasurer view).
 	const [mcfDues] = await db
@@ -1278,44 +1303,41 @@ async function main() {
 	// The visiting Toastmaster and the guest speaker take roles on the next
 	// meeting below, which is what puts a kind caption on the printed agenda
 	// (#1059). A Visitor reads exactly as before.
-	const harborGuests = await db
-		.insert(guests)
-		.values([
-			{
-				clubId: harbor.clubId,
-				name: "Lucia Moreno",
-				email: "lucia.moreno@example.com",
-				phone: seedPhone(50),
-				stage: "prospect" as const,
-				introducedByMemberId: harborMember("Marcus Lee"),
-			},
-			{
-				clubId: harbor.clubId,
-				name: "Ethan Brooks",
-				email: "ethan.brooks@example.com",
-				phone: null,
-				stage: "following_up" as const,
-				introducedByMemberId: harborMember("Priya Nair"),
-			},
-			{
-				clubId: harbor.clubId,
-				name: "Imani Clarke",
-				email: "imani.clarke@example.com",
-				phone: seedPhone(51),
-				kind: "visiting_toastmaster" as const,
-				homeClub: "Bayview",
-			},
-			{
-				clubId: harbor.clubId,
-				name: "Theo Marchetti",
-				email: "theo.marchetti@example.com",
-				phone: seedPhone(52),
-				kind: "guest_speaker" as const,
-				homeClub: "Seaport Speakers",
-				introducedByMemberId: harborMember("Dana Okafor"),
-			},
-		])
-		.returning({ id: guests.id, name: guests.name });
+	const harborGuests: { id: string; name: string }[] = [];
+	for (const g of [
+		{
+			name: "Lucia Moreno",
+			email: "lucia.moreno@example.com",
+			phone: seedPhone(50),
+			stage: "prospect" as const,
+			introducedByMemberId: harborMember("Marcus Lee"),
+		},
+		{
+			name: "Ethan Brooks",
+			email: "ethan.brooks@example.com",
+			phone: null,
+			stage: "following_up" as const,
+			introducedByMemberId: harborMember("Priya Nair"),
+		},
+		{
+			name: "Imani Clarke",
+			email: "imani.clarke@example.com",
+			phone: seedPhone(51),
+			kind: "visiting_toastmaster" as const,
+			homeClub: "Bayview",
+		},
+		{
+			name: "Theo Marchetti",
+			email: "theo.marchetti@example.com",
+			phone: seedPhone(52),
+			kind: "guest_speaker" as const,
+			homeClub: "Seaport Speakers",
+			introducedByMemberId: harborMember("Dana Okafor"),
+		},
+	]) {
+		const { id } = await createGuestRecord(db, { clubId: harbor.clubId, ...g });
+		harborGuests.push({ id, name: g.name });
+	}
 	const harborGuest = (n: string) => harborGuests.find((g) => g.name === n)!.id;
 
 	// The next meeting (+3 days): the one the print and present shots capture.

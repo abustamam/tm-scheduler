@@ -26,7 +26,7 @@ import {
 } from "drizzle-orm";
 import { type AnyPgColumn, alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
-import { members, people, user } from "#/db/schema";
+import { guests, members, people, user } from "#/db/schema";
 
 /**
  * One spelling of "normalise an address", for the SQL side. **Exported: use it
@@ -64,6 +64,8 @@ const otherPeople = alias(people, "other_people");
 const holding = alias(members, "holding_member");
 const vouching = alias(members, "vouching_member");
 const otherHolding = alias(members, "other_holding_member");
+/** Aliased `guests`, for `guestHeldOnly`'s correlated subquery (#802). */
+const heldGuest = alias(guests, "held_guest");
 /** The binding account, re-read INSIDE the bind's own statement (#1091
  *  review). Aliased so it always renders qualified (#802). */
 const bindingAccount = alias(user, "binding_account");
@@ -189,6 +191,46 @@ export function soleHoldingClub(clubId: string): SQL {
 				),
 		),
 	) as SQL;
+}
+
+/**
+ * The Person is held by guest rows only (#1124, ADR-0031): no club has them as a
+ * member, and at least one club has them as a guest. Both arms are correlated on
+ * `people.id`, for use inside a statement over `people`.
+ *
+ * Evaluate it BEFORE a membership is inserted for the Person, not after: the
+ * moment convert adds one, this reads false, and an UPDATE that carries it
+ * quietly matches no row.
+ *
+ * This is the membership-and-guest half of `guestOnlyPerson`. A writer whose
+ * statement must carry `isNull(people.userId)` in its own text (the
+ * `person-email-writers.guard.test.ts` waivers) spells that token itself and
+ * uses this for the rest, so neither predicate is hidden behind the other.
+ */
+export function guestHeldOnly(): SQL {
+	return and(
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(holding)
+				.where(eq(holding.personId, people.id)),
+		),
+		exists(
+			db
+				.select({ one: sql`1` })
+				.from(heldGuest)
+				.where(eq(heldGuest.personId, people.id)),
+		),
+	) as SQL;
+}
+
+/**
+ * A guest-only Person (#1124, ADR-0031): nobody has signed in as them, no club
+ * has them as a member, and at least one has them as a guest. The superadmin
+ * merge tool labels such a Person "Guest" so a duplicate can be repaired.
+ */
+export function guestOnlyPerson(): SQL {
+	return and(isNull(people.userId), guestHeldOnly()) as SQL;
 }
 
 /** Why a club-side writer may not change a Person's address. */

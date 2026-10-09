@@ -34,7 +34,7 @@
  * that is hashed, the plan that is executed, and the plan that is stored one
  * thing.
  */
-import { guests, meetingAttendance } from "#/db/schema";
+import { meetingAttendance } from "#/db/schema";
 import {
 	EXPIRED_IN_LOCK_MESSAGE,
 	livePendingEntries,
@@ -53,6 +53,7 @@ import {
 	assertGuestBookMeetingRecordable,
 	DATE_NAMES_NO_MEETING_MESSAGE,
 } from "#/server/guest-book-recordable";
+import { createGuestRecord } from "#/server/guests-logic";
 import { McpError } from "#/server/mcp/errors";
 import { applyPendingPlanLocked } from "#/server/mcp-pending-apply";
 
@@ -189,22 +190,17 @@ export async function applyGuestBookPlan(
 
 			for (const e of fresh.entries) {
 				if (e.outcome === "new" && e.write) {
-					const [created] = await tx
-						.insert(guests)
-						.values({
-							clubId: input.club.clubId,
-							name: e.write.name,
-							preferredName: e.write.preferredName,
-							email: e.write.email,
-							phone: e.write.phone,
-							// This flow never changes a guest's stage, and a brand-new visitor
-							// starts where the guest book's own front door starts them
-							// (ADR-0018).
-							stage: "prospect",
-						})
-						.returning({ id: guests.id });
-					if (!created)
-						throw new McpError("INTERNAL", "Failed to create guest.");
+					const created = await createGuestRecord(tx, {
+						clubId: input.club.clubId,
+						name: e.write.name,
+						preferredName: e.write.preferredName,
+						email: e.write.email,
+						phone: e.write.phone,
+						// This flow never changes a guest's stage, and a brand-new visitor
+						// starts where the guest book's own front door starts them
+						// (ADR-0018).
+						stage: "prospect",
+					});
 					newGuestIds.push(created.id);
 					attendanceFor.push(created.id);
 				} else if (e.outcome === "matched" && e.guestId) {

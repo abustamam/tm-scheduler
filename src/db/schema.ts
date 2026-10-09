@@ -1593,10 +1593,31 @@ export const guests = pgTable(
 			() => members.id,
 			{ onDelete: "set null" },
 		),
+		// The human this guest row is (#1124, ADR-0031): a guest is a Person, and
+		// `guests` is the per-club guest RECORD (stage, kind, home club, who
+		// introduced them), as `members` is the per-club membership.
+		//
+		// NULLABLE ON PURPOSE for this release: while a deploy swaps containers
+		// the old one still inserts guests without it, and `ensureGuestPerson`
+		// repairs such a row on its next convert. #1125 re-backfills and sets
+		// NOT NULL.
+		//
+		// RESTRICT, so a Person delete that forgot its guests fails loudly instead
+		// of silently deleting visit, role and speech history. NOT unique with
+		// `club_id`: several converted guest rows can legitimately share one
+		// member Person (#635), and a partial unique index on
+		// `converted_membership_id IS NULL` would abort a member delete, whose
+		// `SET NULL` clears them all at once. Uniqueness is checked in code.
+		personId: uuid("person_id").references(() => people.id, {
+			onDelete: "restrict",
+		}),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at").defaultNow().notNull(),
 	},
-	(t) => [index("guests_club_idx").on(t.clubId)],
+	(t) => [
+		index("guests_club_idx").on(t.clubId),
+		index("guests_person_idx").on(t.personId),
+	],
 );
 
 // ---------------------------------------------------------------------------
