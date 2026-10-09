@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { z } from "zod";
 import { loadAreaHealth } from "./area-health-logic";
+import { loadAreaVisits } from "./area-visits-logic";
 import {
 	addAreaClub as addAreaClubLogic,
 	addAreaClubSchema,
@@ -75,13 +76,17 @@ export const getConsoleArea = createServerFn({ method: "GET" })
  * "Preview as Area Director". The same loader `getAreaHealth` runs, behind the
  * superadmin gate instead of the director's: a superadmin with no term is
  * refused by `getAreaHealth` (ADR-0016 section 4) and reads the numbers here.
+ * Returns the visit dates too (#1120), read-only: the superadmin cannot call
+ * the visit endpoints.
  */
 export const previewConsoleArea = createServerFn({ method: "GET" })
 	.validator((input: unknown) => parse(areaIdSchema, input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
 		await requireSuperadmin(currentUser.id);
-		return loadAreaHealth(data.areaId);
+		const health = await loadAreaHealth(data.areaId);
+		const visits = await loadAreaVisits(data.areaId);
+		return { health, visits };
 	});
 
 export const createDistrict = createServerFn({ method: "POST" })

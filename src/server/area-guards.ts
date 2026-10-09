@@ -32,6 +32,8 @@ import { areaDirectors, areas, divisions } from "#/db/schema";
 import { isCurrentTerm } from "./area-terms-logic";
 import { NO_PERMISSION_MESSAGE } from "./guards";
 
+type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
 const uuid = z.string().uuid();
 
 /**
@@ -59,5 +61,42 @@ export async function requireAreaDirector(
 			),
 		)
 		.limit(1);
+	if (!term) throw new Error(NO_PERMISSION_MESSAGE);
+}
+
+/**
+ * `requireAreaDirector`, asked again INSIDE a write's transaction and under a
+ * lock (#1120). The fast refusal before the transaction can pass a moment
+ * before the term ends and the write still commit after: the check and the
+ * write are two statements with the superadmin's `endAreaDirectorTerm` free to
+ * land between them. Same failure and same fix as `assertStillClubAdmin`
+ * (`guards.ts`, #806).
+ *
+ * `FOR SHARE OF area_directors` conflicts with `endAreaDirectorTerm`'s UPDATE of
+ * that row, both ways. A write that queued behind a term ending waits, then
+ * re-reads the row, finds it ended (the `WHERE` is re-evaluated against the new
+ * version) and is refused; a term ending that queued behind a write waits for
+ * it. The refusal is `requireAreaDirector`'s, the same message.
+ */
+export async function requireAreaDirectorTx(
+	tx: Tx,
+	userId: string,
+	areaId: string,
+): Promise<void> {
+	if (!uuid.safeParse(areaId).success) throw new Error(NO_PERMISSION_MESSAGE);
+	const [term] = await tx
+		.select({ id: areaDirectors.id })
+		.from(areaDirectors)
+		.innerJoin(areas, eq(areas.id, areaDirectors.areaId))
+		.innerJoin(divisions, eq(divisions.id, areas.divisionId))
+		.where(
+			and(
+				eq(areaDirectors.userId, userId),
+				eq(areaDirectors.areaId, areaId),
+				isCurrentTerm(),
+			),
+		)
+		.limit(1)
+		.for("share", { of: areaDirectors });
 	if (!term) throw new Error(NO_PERMISSION_MESSAGE);
 }

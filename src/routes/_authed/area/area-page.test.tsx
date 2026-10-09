@@ -16,6 +16,11 @@ import { NO_PERMISSION_MESSAGE } from "#/lib/permission-message";
 
 const { getAreaHealth } = vi.hoisted(() => ({ getAreaHealth: vi.fn() }));
 vi.mock("#/server/area-health", () => ({ getAreaHealth }));
+// The page's visit cell imports the visit fns; the loader never calls them.
+vi.mock("#/server/area-visits", () => ({
+	recordClubVisit: vi.fn(),
+	clearClubVisit: vi.fn(),
+}));
 
 import { Route } from "./$areaId";
 
@@ -36,10 +41,13 @@ async function rejection(areaId = AREA_ID): Promise<unknown> {
 
 describe("the area page loader (#1119)", () => {
 	it("asks for the area in the URL, and hands the health to the page", async () => {
-		const health = { areaId: AREA_ID, label: "C3", clubs: [] };
-		getAreaHealth.mockResolvedValueOnce(health);
+		const result = {
+			health: { areaId: AREA_ID, label: "C3", clubs: [] },
+			visits: {},
+		};
+		getAreaHealth.mockResolvedValueOnce(result);
 
-		await expect(loader({ params: { areaId: AREA_ID } })).resolves.toBe(health);
+		await expect(loader({ params: { areaId: AREA_ID } })).resolves.toBe(result);
 		expect(getAreaHealth).toHaveBeenCalledWith({ data: { areaId: AREA_ID } });
 	});
 

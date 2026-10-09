@@ -180,12 +180,14 @@ describe("nothing under src/server/mcp imports an area module (#1119)", () => {
 		});
 	}
 
-	/** The area modules: the guard, #1116's terms, #1117's health, the area fns. */
+	/** The area modules: the guard, #1116's terms, #1117's health, the visits (#1120), the area fns. */
 	const AREA_MODULES = new Set([
 		"area-guards",
 		"area-terms-logic",
 		"area-health",
 		"area-health-logic",
+		"area-visits",
+		"area-visits-logic",
 		"areas",
 		"areas-logic",
 	]);

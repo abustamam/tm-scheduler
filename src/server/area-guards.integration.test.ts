@@ -86,7 +86,10 @@ const { listMembers } = await import("./members");
 const { NO_PERMISSION_MESSAGE } = guards;
 
 type Fn = (input: { data: unknown }) => Promise<unknown>;
-type AreaHealthResult = { areaId: string; label: string; clubs: unknown[] };
+type AreaHealthResult = {
+	health: { areaId: string; label: string; clubs: unknown[] };
+	visits: Record<string, unknown>;
+};
 type AuthContextResult = {
 	user: { id: string } | null;
 	areas: AreaNavEntry[];
@@ -310,7 +313,8 @@ describe.skipIf(!hasTestDb)("getAreaHealth (#1119)", () => {
 		await openTerm(areaA, userId);
 		sessionUserId = userId;
 
-		const health = await read(areaA);
+		const { health, visits } = await read(areaA);
+		expect(visits).toEqual({});
 		expect(health.areaId).toBe(areaA);
 		expect(health.label).toBe("B2");
 		expect(health.clubs).toHaveLength(1);
@@ -327,7 +331,9 @@ describe.skipIf(!hasTestDb)("getAreaHealth (#1119)", () => {
 		await openTerm(lastYear, userId);
 		sessionUserId = userId;
 		// Control: the open term reads.
-		await expect(read(ended)).resolves.toMatchObject({ areaId: ended });
+		await expect(read(ended)).resolves.toMatchObject({
+			health: { areaId: ended },
+		});
 
 		await endTerm(termId);
 
@@ -346,8 +352,9 @@ describe.skipIf(!hasTestDb)("getAreaHealth (#1119)", () => {
 		const preview = (await (previewConsoleArea as Fn)({
 			data: { areaId },
 		})) as AreaHealthResult;
-		expect(preview.areaId).toBe(areaId);
-		expect(preview.label).toBe("B2");
+		expect(preview.health.areaId).toBe(areaId);
+		expect(preview.health.label).toBe("B2");
+		expect(preview.visits).toEqual({});
 	});
 
 	it("refuses a director the console preview: it is the superadmin's, not the role's", async () => {
@@ -357,7 +364,9 @@ describe.skipIf(!hasTestDb)("getAreaHealth (#1119)", () => {
 		await openTerm(areaId, userId);
 		sessionUserId = userId;
 		// Control: the director's own read of the same area works.
-		await expect(read(areaId)).resolves.toMatchObject({ areaId });
+		await expect(read(areaId)).resolves.toMatchObject({
+			health: { areaId },
+		});
 
 		await expect(
 			(previewConsoleArea as Fn)({ data: { areaId } }),
@@ -371,7 +380,9 @@ describe.skipIf(!hasTestDb)("getAreaHealth (#1119)", () => {
 		await openTerm(areaId, userId);
 		sessionUserId = userId;
 		// Control: a valid id from the same user reads.
-		await expect(read(areaId)).resolves.toMatchObject({ areaId });
+		await expect(read(areaId)).resolves.toMatchObject({
+			health: { areaId },
+		});
 
 		const invalid: unknown[] = [
 			undefined,

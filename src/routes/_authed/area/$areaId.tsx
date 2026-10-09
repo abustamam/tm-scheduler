@@ -28,7 +28,7 @@ export const Route = createFileRoute("/_authed/area/$areaId")({
 });
 
 function AreaPage() {
-	const health = Route.useLoaderData();
+	const { health, visits } = Route.useLoaderData();
 	return (
 		<PageContainer className="space-y-6">
 			<div className="space-y-1">
@@ -40,7 +40,7 @@ function AreaPage() {
 					each club in your area. Nothing here names a member.
 				</p>
 			</div>
-			<AreaHealthView health={health} />
+			<AreaHealthView health={health} visits={visits} />
 		</PageContainer>
 	);
 }

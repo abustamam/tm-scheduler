@@ -42,6 +42,7 @@ import {
 	areaDirectors,
 	areas,
 	clubs,
+	clubVisits,
 	districts,
 	divisions,
 	duesPeriods,
@@ -117,6 +118,8 @@ interface Fixture {
 	feedbackMeetingId: string;
 	/** An area holding the club, with the admin as its Area Director (#1116). */
 	areaId: string;
+	/** The fixture club's `area_clubs` row, with a round-1 visit recorded (#1120). */
+	areaClubId: string;
 	divisionId: string;
 	districtId: string;
 }
@@ -165,6 +168,12 @@ const COVERED: Record<string, { who: Who; url: (f: Fixture) => string }> = {
 	// The fixture's admin holds a current Area Director term on `f.areaId`
 	// (#1116), so this is the Area Director's page with its rows (#1119).
 	"/area/$areaId": { who: "admin", url: (f) => `/area/${f.areaId}` },
+	// The same director's one-page summary of the fixture club (#1120), with a
+	// visit recorded and the next meetings named after mount.
+	"/area/$areaId/club/$areaClubId/print": {
+		who: "admin",
+		url: (f) => `/area/${f.areaId}/club/${f.areaClubId}/print`,
+	},
 	"/superadmin/": { who: "admin", url: () => "/superadmin" },
 	"/superadmin/$clubId": {
 		who: "admin",
@@ -377,10 +386,23 @@ async function seedFixture(nowMs: number): Promise<Fixture> {
 		.values({ divisionId: division.id, number: "1" })
 		.returning({ id: areas.id });
 	if (!area) throw new Error("area insert failed");
-	await testDb.insert(areaClubs).values([
-		{ areaId: area.id, clubId: club.id, name: `Route Hydration ${run}` },
-		{ areaId: area.id, name: "Name-only Club", clubNumber: "7654321" },
-	]);
+	const [areaClub] = await testDb
+		.insert(areaClubs)
+		.values([
+			{ areaId: area.id, clubId: club.id, name: `Route Hydration ${run}` },
+			{ areaId: area.id, name: "Name-only Club", clubNumber: "7654321" },
+		])
+		.returning({ id: areaClubs.id, clubId: areaClubs.clubId });
+	if (!areaClub || areaClub.clubId !== club.id) {
+		throw new Error("area club insert failed");
+	}
+	// A round-1 visit on the first day of the year: a date-only value, which the
+	// pages must print as written in every zone (#1120).
+	await testDb.insert(clubVisits).values({
+		areaClubId: areaClub.id,
+		round: 1,
+		visitedOn: `${currentProgramYear(today)}-07-01`,
+	});
 	await testDb.insert(areaDirectors).values({
 		areaId: area.id,
 		userId: adminUserId,
@@ -554,6 +576,7 @@ async function seedFixture(nowMs: number): Promise<Fixture> {
 		upcomingMeetingId: upcoming,
 		feedbackMeetingId: lastNight,
 		areaId: area.id,
+		areaClubId: areaClub.id,
 		divisionId: division.id,
 		districtId: district.id,
 	};
@@ -563,6 +586,9 @@ async function cleanupFixture(f: Fixture) {
 	// The area chain first: a director's term holds the admin's account (NO
 	// ACTION, #1116), and the hierarchy's parents are all RESTRICT.
 	await testDb.delete(areaDirectors).where(eq(areaDirectors.areaId, f.areaId));
+	await testDb
+		.delete(clubVisits)
+		.where(eq(clubVisits.areaClubId, f.areaClubId));
 	await testDb.delete(areaClubs).where(eq(areaClubs.areaId, f.areaId));
 	await testDb.delete(areas).where(eq(areas.id, f.areaId));
 	await testDb.delete(divisions).where(eq(divisions.id, f.divisionId));
@@ -765,6 +791,19 @@ describe("route hydration gate (#1000)", () => {
 			expect(r?.text).toContain(`Route Hydration ${fixture.run}`);
 			expect(r?.text).toContain("Name-only Club");
 			expect(r?.text).toContain("Not on GavelUp");
+			// The recorded visit, as written, with Record on the round with none.
+			expect(r?.text).toContain("Jul 1");
+			expect(r?.text).toContain("Print summary");
+		});
+
+		it("swept the club summary as the Area Director's sheet, with its visit and numbers", () => {
+			const r = results.get("/area/$areaId/club/$areaClubId/print");
+			if (ONLY.length && !r) return;
+			expect(r?.text).not.toContain("Page not found");
+			expect(r?.text).toContain(`Route Hydration ${fixture.run}`);
+			expect(r?.text).toContain("Area H1");
+			expect(r?.text).toContain("Jul 1");
+			expect(r?.text).toContain("not yet");
 		});
 
 		it("hydrates every route without a mismatch", () => {
