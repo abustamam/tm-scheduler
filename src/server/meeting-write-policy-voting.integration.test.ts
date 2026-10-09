@@ -451,7 +451,26 @@ describe.skipIf(!hasTestDb)(
 					});
 				}
 
-				it("the switch and the reason checks do answer on a scheduled meeting", async () => {
+				for (const [status, expected] of REFUSED) {
+					it(`a ${status} meeting answers before a ruling's candidate is resolved`, async () => {
+						// A write-in nobody has voted for is refused by candidate resolution,
+						// in `disqualifyCandidate` and in `undoDisqualification` alike.
+						await freeze(status);
+						const nobody = { kind: "writeIn" as const, name: "Nobody Cast" };
+						expect(
+							await messageOf(() =>
+								undoDisqualification({ ...voteWindow(), candidate: nobody }),
+							),
+						).toBe(expected);
+						expect(
+							await messageOf(() =>
+								disqualifyCandidate({ ...ruling(), candidate: nobody }),
+							),
+						).toBe(expected);
+					});
+				}
+
+				it("the switch, reason and candidate checks do answer on a scheduled meeting", async () => {
 					// The control for the two cases above: with the meeting not frozen the
 					// SAME inputs are refused by the check that those cases show losing the
 					// race, so they were not passing because that check was missing.
@@ -464,6 +483,18 @@ describe.skipIf(!hasTestDb)(
 							disqualifyCandidate({ ...ruling(), reason: "   " }),
 						),
 					).toBe("Give a reason.");
+					const nobody = { kind: "writeIn" as const, name: "Nobody Cast" };
+					const unresolved = "Nobody has voted for that name in this award.";
+					expect(
+						await messageOf(() =>
+							undoDisqualification({ ...voteWindow(), candidate: nobody }),
+						),
+					).toBe(unresolved);
+					expect(
+						await messageOf(() =>
+							disqualifyCandidate({ ...ruling(), candidate: nobody }),
+						),
+					).toBe(unresolved);
 				});
 			});
 		});
