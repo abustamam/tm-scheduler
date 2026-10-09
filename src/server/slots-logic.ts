@@ -10,14 +10,8 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
-import {
-	assertMeetingNotCancelled,
-	MEETING_CANCELLED_MESSAGE,
-} from "#/lib/meeting-cancellation-notice";
-import {
-	isMeetingLocked,
-	MEETING_LOCKED_MESSAGE,
-} from "#/lib/meeting-lifecycle";
+import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
+import { assertMeetingAccepts, meetingRefusal } from "#/lib/meeting-lifecycle";
 import {
 	pairedRoleIds,
 	pickSpeakerAndEvaluatorRoles,
@@ -34,12 +28,10 @@ import {
 	setPlanStatus,
 } from "./attendance-plan-logic";
 import { assertClubNotArchived, requireClubRole } from "./guards";
-import {
-	assertMeetingNotLocked,
-	loadTmodMemberId,
-} from "./meeting-authz-logic";
+import { loadTmodMemberId } from "./meeting-authz-logic";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
 import { loadMeetingShapeDefs, roleDefScope } from "./meeting-templates-logic";
+import { meetingAcceptsWrite, meetingRowAccepts } from "./meeting-write-gate";
 import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
 import { resolveProjectDisplay } from "./project-picker-logic";
 import { resolveWriteActorWithProof } from "./write-actor-logic";
@@ -94,29 +86,20 @@ async function clubRoles(
 }
 
 /**
- * The cancelled-meeting guard as a predicate on a `role_slots` write's own WHERE
- * (#1057): true while the slot's meeting is not `cancelled`.
+ * RETIRED from every writer (#1135): a slot write now carries
+ * `meetingAcceptsWrite(tx, "plan", roleSlots.meetingId)`, which refuses by
+ * write class instead of naming one status. Kept exported, and unchanged, only
+ * because `meeting-cancel.integration.test.ts` imports it to pin the rendered
+ * SQL of a correlated subquery; delete both together.
  *
- * In the STATEMENT rather than a check before it, because a check reads a row
- * and a statement reads the row as of its own start: a cancel committed between
- * the two is invisible to the check and visible here. A correlated subquery on
- * a DIFFERENT table from the one being updated, so `"meetings"."id" =
- * "role_slots"."meeting_id"` names two relations — the self-correlation trap
- * `drizzle-sql-subquery-drops-qualifiers` records cannot arise.
- * `meeting-cancel.integration.test.ts` pins the rendered SQL anyway ("renders a
- * qualified correlation"), and its two-meeting cases pin the behaviour: with a
- * scheduled sibling beside a cancelled meeting, only the slot's OWN meeting
- * decides.
- *
- * What this cannot see: a cancel that commits while the statement is parked
- * behind another writer's lock on the slot row. READ COMMITTED re-checks the
- * locked row's newest version but re-runs the subquery under the statement's
- * original snapshot. Closing that window means waiting on the meeting row,
- * which is a new lock on every claim, and #1057 declined it.
- *
- * Exported for `applyAssignGuestToSlot` (`guests-logic.ts`), the one slot
- * writer outside this module, so the four writes that can change who holds a
- * role on a cancelled meeting carry the same predicate.
+ * What the in-statement form buys, and what it cannot see, is unchanged. A
+ * check reads a row and a statement reads the row as of its own start, so a
+ * cancel committed between the two is invisible to the check and visible in the
+ * statement. A cancel that commits while the statement is parked behind another
+ * writer's lock on the slot row is not: READ COMMITTED re-checks the locked
+ * row's newest version but re-runs the subquery under the statement's original
+ * snapshot, and closing that window means waiting on the meeting row, which is a
+ * new lock on every claim, and #1057 declined it.
  */
 export function meetingNotCancelled(conn: DbOrTx) {
 	return exists(
@@ -132,43 +115,24 @@ export function meetingNotCancelled(conn: DbOrTx) {
 	);
 }
 
-/**
- * The completed-meeting guard as a predicate on a claim's own WHERE (#1107):
- * true while the slot's meeting is not `completed` (locked, see
- * `isMeetingLocked`). A sibling of `meetingNotCancelled`, NOT a change to it:
- * its other callers (guest assignment, reassign) keep their meaning. Rides in
- * the statement for the same reason: a complete committed between the claim's
- * earlier SELECT and its UPDATE is invisible to that read and visible here.
- */
-export function meetingNotCompleted(conn: DbOrTx) {
-	return exists(
-		conn
-			.select({ one: sql`1` })
-			.from(meetings)
-			.where(
-				and(
-					eq(meetings.id, roleSlots.meetingId),
-					ne(meetings.status, "completed"),
-				),
-			),
-	);
-}
-
-/** Re-read the meeting's status on the caller's connection and refuse a
- *  cancelled one with the member-facing sentence. The post-statement half of
- *  `meetingNotCancelled`: a zero-row UPDATE says nothing about WHY, and the
- *  member's next step differs between "someone beat you to it" and "there is
- *  no meeting". */
-async function assertMeetingNotCancelledOn(
+/** Re-read the meeting's status on the caller's connection and refuse a frozen
+ *  one with its write class's sentence. The post-statement half of
+ *  `meetingAcceptsWrite`: a zero-row UPDATE says nothing about WHY, and the
+ *  member's next step differs between "someone beat you to it", "the meeting is
+ *  cancelled" and "the meeting is locked". A meeting that is gone, or that
+ *  accepts the class again by now, is not refused here: the caller says what it
+ *  said before. */
+async function assertMeetingAcceptsOn(
 	conn: DbOrTx,
 	meetingId: string,
+	writeClass: Parameters<typeof assertMeetingAccepts>[1],
 ): Promise<void> {
 	const [row] = await conn
 		.select({ status: meetings.status })
 		.from(meetings)
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
-	if (row) assertMeetingNotCancelled(row.status);
+	if (row) assertMeetingAccepts(row.status, writeClass);
 }
 
 /** Next 0-based slotIndex for a (meeting, role) pair. */
@@ -224,7 +188,7 @@ export async function applyAddSpeakerSlot(input: {
 	return db.transaction(async (tx) => {
 		// Status and shape decisions must use the row acquired after any lock wait.
 		const meeting = await lockMeetingForSlotEdit(tx, input.meetingId);
-		assertMeetingNotLocked(meeting.status);
+		assertMeetingAccepts(meeting.status, "plan");
 		const { speakerRoleId, evaluatorRoleId, speakerEnabled, evaluatorEnabled } =
 			await clubRoles(tx, meeting.clubId, meeting.templateId);
 		if (!speakerEnabled) {
@@ -350,7 +314,7 @@ export async function applyAddRoleSlot(input: {
 		// role bank is club-scoped and no meeting row decides it. It runs on `tx`
 		// for one snapshot rather than because it needs the lock.
 		const meeting = await lockMeetingForSlotEdit(tx, input.meetingId);
-		assertMeetingNotLocked(meeting.status);
+		assertMeetingAccepts(meeting.status, "plan");
 
 		const defs = await clubRoleDefs(tx, meeting.clubId);
 		const role = defs.find((d) => d.id === input.roleDefinitionId);
@@ -406,7 +370,7 @@ export async function applyRemoveRoleSlot(input: {
 
 	return db.transaction(async (tx) => {
 		const meeting = await lockMeetingForSlotEdit(tx, target.meetingId);
-		assertMeetingNotLocked(meeting.status);
+		assertMeetingAccepts(meeting.status, "plan");
 		const [slot] = await tx
 			.select()
 			.from(roleSlots)
@@ -495,11 +459,30 @@ async function backfillMissingRoleSlots(
 			if (
 				meeting.clubId !== input.clubId ||
 				meeting.templateId !== null ||
-				meeting.scheduledAt <= new Date() ||
-				(input.changeLabel === "role_enabled" && meeting.status === "cancelled")
+				meeting.scheduledAt <= new Date()
 			)
 				continue;
-			assertMeetingNotLocked(meeting.status);
+			// The enable-toggle's candidates exclude cancelled meetings
+			// (`futureNonCancelledMeetingIds`), so one cancelled while this waited is
+			// SKIPPED, not refused: a role toggle must not fail on a meeting that no
+			// longer runs. Spelled through the policy (`meetingRefusal`) so the skip
+			// follows the plan class rather than a hard-coded status.
+			if (
+				input.changeLabel === "role_enabled" &&
+				meetingRefusal(meeting.status, "plan") === "cancelled"
+			)
+				continue;
+			// A completed meeting is refused by both callers, loudly, with the lock
+			// sentence. `template_sync` ALSO covers a cancelled meeting, on purpose:
+			// its candidate query does not exclude them (see
+			// `applyTemplateSyncToUpcomingMeetings`), so `plan` is overridden to
+			// accept `cancelled` for that label. `slot-writers-lock.integration.test.ts`
+			// pins both arms ("preserves its cancellation policy under a race").
+			assertMeetingAccepts(
+				meeting.status,
+				"plan",
+				input.changeLabel === "template_sync" ? { accept: ["cancelled"] } : {},
+			);
 			const present = await tx
 				.select({ roleDefinitionId: roleSlots.roleDefinitionId })
 				.from(roleSlots)
@@ -601,7 +584,13 @@ async function futureNonCancelledMeetingIds(
 			and(
 				eq(meetings.clubId, clubId),
 				gt(meetings.scheduledAt, new Date()),
-				ne(meetings.status, "cancelled"),
+				// Everything the plan class does not refuse EXCEPT a completed meeting,
+				// which stays a candidate on purpose: enabling a role refuses it loudly
+				// in `backfillMissingRoleSlots` (the lock sentence), and that refusal
+				// predates this query being written through the policy. An allow-list
+				// (`status IN (...)`), so a status the policy has never heard of is
+				// not a candidate.
+				meetingRowAccepts("plan", { accept: ["completed"] }),
 				// TEMPLATED meetings are not the club's standard shape. Enabling or
 				// disabling a standard role must not add or remove slots on a
 				// contest, whose role set comes from its template.
@@ -816,7 +805,7 @@ export async function applyRemoveSpeakerSlot(input: {
 	// column on the very row locked below — so it is inside as well.
 	return db.transaction(async (tx) => {
 		const meeting = await lockMeetingForSlotEdit(tx, input.meetingId);
-		assertMeetingNotLocked(meeting.status);
+		assertMeetingAccepts(meeting.status, "plan");
 		const { speakerRoleId, evaluatorRoleId } = await clubRoles(
 			tx,
 			meeting.clubId,
@@ -1085,7 +1074,7 @@ async function applyMoveSlot(
 
 	return db.transaction(async (tx) => {
 		const meeting = await lockMeetingForSlotEdit(tx, located.meetingId);
-		assertMeetingNotLocked(meeting.status);
+		assertMeetingAccepts(meeting.status, "plan");
 		// A conversion can repoint a slot to a different bank role while we wait.
 		const [target] = await tx
 			.select({
@@ -1583,13 +1572,13 @@ export async function confirmSlotCore(args: {
 	// returned would leave the wider (session-less) half open anyway. Same
 	// ordering, for the same two reasons, as `resolveMeetingAgendaAuthz`.
 	await assertClubNotArchived(slot.clubId);
-	assertMeetingNotLocked(slot.meetingStatus);
-	// #1085. Both arms. The holder arm was already refused one step later, by
-	// `setPlanStatus`'s own cancelled gate; the officer arm writes no plan row,
-	// so until this nothing stopped it flipping a slot on a cancelled meeting.
-	// Here, before either grant, so the two arms refuse alike and in the order
-	// the lock does.
-	assertMeetingNotCancelled(slot.meetingStatus);
+	// By write class (#1135): a completed meeting says locked and a cancelled one
+	// says cancelled (#1085). Both arms. The holder arm was already refused one
+	// step later for a cancelled meeting, by `setPlanStatus`'s own gate; the
+	// officer arm writes no plan row, so until #1085 nothing stopped it flipping
+	// a slot on a cancelled meeting. Here, before either grant, so the two arms
+	// refuse alike.
+	assertMeetingAccepts(slot.meetingStatus, "plan");
 
 	const grant = await resolveConfirmGrant(args, slot);
 
@@ -1770,9 +1759,12 @@ export async function confirmHeldClaimedSlots(args: {
 		.where(eq(meetings.id, args.meetingId))
 		.limit(1);
 	if (!meeting) throw new Error("Meeting not found.");
-	// Takedown first, then the lock — `confirmSlotCore`'s own order and reason.
+	// Takedown first, then the meeting's status — `confirmSlotCore`'s own order
+	// and reason. By write class (#1135), which also refuses a CANCELLED meeting
+	// up front: a member holding nothing there used to succeed vacuously, though
+	// a member holding a claimed slot was already refused by its `confirmSlotCore`.
 	await assertClubNotArchived(meeting.clubId);
-	assertMeetingNotLocked(meeting.status);
+	assertMeetingAccepts(meeting.status, "plan");
 
 	const held = await db
 		.select({ slotId: roleSlots.id, roleName: roleDefinitions.name })
@@ -1928,10 +1920,15 @@ export async function claimSlotCore(
 		.limit(1);
 	if (!slot) throw new Error("Role not found.");
 
-	// Before the lock check: a takedown answers for the reason it was taken down,
-	// not for the meeting's status.
+	// Before the meeting's status: a takedown answers for the reason it was taken
+	// down, not for the meeting's status.
 	await assertClubNotArchived(slot.clubId, tx);
-	assertMeetingNotLocked(slot.meetingStatus);
+	// The early refusal, by write class (#1135), and it ACCEPTS `cancelled` on
+	// purpose: a cancelled meeting is refused in the statement below, AFTER the
+	// asserted-caller gates, so a caller who fails one of them still hears that
+	// refusal and not the meeting's status (#1057). A completed meeting has
+	// always been refused here, before them. The statement refuses both.
+	assertMeetingAccepts(slot.meetingStatus, "plan", { accept: ["cancelled"] });
 
 	const forSomeoneElse = args.actorMemberId !== args.memberId;
 	if (args.proof === "asserted") {
@@ -1957,9 +1954,10 @@ export async function claimSlotCore(
 	}
 
 	// Conditional UPDATE is the race guard: only one claim can flip 'open'. The
-	// meeting's status rides in the SAME statement (#1057, `meetingNotCancelled`)
-	// rather than in a check above it, so a cancel that committed before this
-	// statement started is refused here whatever the row read above said.
+	// meeting's status rides in the SAME statement (#1057, #1107,
+	// `meetingAcceptsWrite`) rather than in a check above it, so a cancel or a
+	// complete that committed before this statement started is refused here
+	// whatever the row read above said.
 	const updated = await tx
 		.update(roleSlots)
 		.set({
@@ -1972,8 +1970,7 @@ export async function claimSlotCore(
 			and(
 				eq(roleSlots.id, args.slotId),
 				eq(roleSlots.status, "open"),
-				meetingNotCancelled(tx),
-				meetingNotCompleted(tx),
+				meetingAcceptsWrite(tx, "plan", roleSlots.meetingId),
 			),
 		)
 		.returning({ id: roleSlots.id });
@@ -1982,15 +1979,7 @@ export async function claimSlotCore(
 		// Three causes return no row: the slot was claimed first, or the meeting
 		// was cancelled or completed. Tell them apart, because the member's next
 		// step differs.
-		await assertMeetingNotCancelledOn(tx, slot.meetingId);
-		const [now] = await tx
-			.select({ status: meetings.status })
-			.from(meetings)
-			.where(eq(meetings.id, slot.meetingId))
-			.limit(1);
-		if (now && isMeetingLocked(now.status)) {
-			throw new Error(MEETING_LOCKED_MESSAGE);
-		}
+		await assertMeetingAcceptsOn(tx, slot.meetingId, "plan");
 		throw new Error("Sorry — this role was just claimed by someone else.");
 	}
 
@@ -2119,8 +2108,10 @@ export async function reassignSlotCore(
 	// `tx`, because `assign_roles` calls this inside a batch holding locks.
 	await assertClubNotArchived(slot.clubId, tx);
 	// Lock choke point (#150): reassign/claim-to-member on a completed meeting is
-	// rejected here under the row lock.
-	assertMeetingNotLocked(slot.meetingStatus);
+	// rejected here under the row lock, and a cancelled one (#1057) by the same
+	// call, by write class (#1135). Nothing between here and the statement below
+	// can throw on the status, so refusing both statuses early reorders nothing.
+	assertMeetingAccepts(slot.meetingStatus, "plan");
 
 	// Reassigning a speaker slot to a *different* Person unlinks the speech; the
 	// old speech persists Person-owned and unscheduled (ADR-0009). Within the
@@ -2141,10 +2132,10 @@ export async function reassignSlotCore(
 	const toPerson = slot.isSpeakerRole ? await personOf(args.memberId) : null;
 
 	// New holder hasn't been confirmed → back to "claimed". The meeting's
-	// status rides in the statement (#1057, `meetingNotCancelled`): the row
-	// above was read under the slot's lock, but a cancel takes the MEETING's
-	// lock, which this transaction never waits on, so a cancel committed between
-	// that read and this write is seen here and nowhere else.
+	// status rides in the statement (#1057, `meetingAcceptsWrite`): the row
+	// above was read under the slot's lock, but a cancel or a complete takes the
+	// MEETING's lock, which this transaction never waits on, so one committed
+	// between that read and this write is seen here and nowhere else.
 	const reassigned = await tx
 		.update(roleSlots)
 		.set({
@@ -2152,11 +2143,20 @@ export async function reassignSlotCore(
 			assignedGuestId: null,
 			status: "claimed",
 		})
-		.where(and(eq(roleSlots.id, args.slotId), meetingNotCancelled(tx)))
+		.where(
+			and(
+				eq(roleSlots.id, args.slotId),
+				meetingAcceptsWrite(tx, "plan", roleSlots.meetingId),
+			),
+		)
 		.returning({ id: roleSlots.id });
 	if (reassigned.length === 0) {
 		// The slot row is locked FOR UPDATE by this transaction and exists, so
-		// the only predicate that can have failed is the meeting's.
+		// the only predicate that can have failed is the meeting's. Re-read it for
+		// the sentence. Reaching the throw means the meeting accepts the class
+		// again by now (restored or reopened since the statement): it says what it
+		// has always said.
+		await assertMeetingAcceptsOn(tx, slot.meetingId, "plan");
 		throw new Error(MEETING_CANCELLED_MESSAGE);
 	}
 
@@ -2259,6 +2259,8 @@ export async function releaseSlotCore(
 			assignedMemberId: roleSlots.assignedMemberId,
 			clubId: meetings.clubId,
 			meetingStatus: meetings.status,
+			// For the sentence after a refused statement (`assertMeetingAcceptsOn`).
+			meetingId: roleSlots.meetingId,
 		})
 		.from(roleSlots)
 		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
@@ -2274,9 +2276,10 @@ export async function releaseSlotCore(
 	// taken-down club should refuse for the reason it was taken down rather than
 	// for the meeting's status.
 	await assertClubNotArchived(slot.clubId, conn);
-	assertMeetingNotLocked(slot.meetingStatus);
+	// By write class (#1135): completed says locked, cancelled says cancelled.
+	assertMeetingAccepts(slot.meetingStatus, "plan");
 
-	// The meeting's status rides in the statement (#1057, `meetingNotCancelled`),
+	// The meeting's status rides in the statement (#1057, `meetingAcceptsWrite`),
 	// as `reassignSlotCore`'s does. A cancelled meeting keeps its assignments
 	// until it is restored, and a clear would take one away — dropping the
 	// holder and unlinking any speech, neither of which a restore brings back.
@@ -2291,11 +2294,18 @@ export async function releaseSlotCore(
 			claimedAt: null,
 			speechId: null,
 		})
-		.where(and(eq(roleSlots.id, slot.id), meetingNotCancelled(conn)))
+		.where(
+			and(
+				eq(roleSlots.id, slot.id),
+				meetingAcceptsWrite(conn, "plan", roleSlots.meetingId),
+			),
+		)
 		.returning({ id: roleSlots.id });
 	if (released.length === 0) {
 		// The slot row is locked FOR UPDATE by this transaction and exists, so
-		// the only predicate that can have failed is the meeting's.
+		// the only predicate that can have failed is the meeting's: re-read it for
+		// the sentence, as `reassignSlotCore` does.
+		await assertMeetingAcceptsOn(conn, slot.meetingId, "plan");
 		throw new Error(MEETING_CANCELLED_MESSAGE);
 	}
 

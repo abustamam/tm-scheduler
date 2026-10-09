@@ -32,6 +32,7 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
+import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { logActivity } from "./activity";
 import { markComingOnSelfClaim } from "./slots-logic";
 
@@ -286,9 +287,13 @@ export async function attachSpeechToOpenSlot(
 	if (!slot.isSpeakerRole) {
 		throw new Error("Only a speaker slot can host a speech.");
 	}
-	if (slot.meetingStatus === "cancelled") {
-		throw new Error("That meeting is cancelled.");
-	}
+	// A RECORD write (#1135): putting a speech given in an open slot onto the
+	// meeting after it happened is history, so a completed meeting accepts it and
+	// only a cancelled one, which never happened, refuses. It keeps the sentence
+	// it has always said rather than the shared `MEETING_CANCELLED_MESSAGE`.
+	assertMeetingAccepts(slot.meetingStatus, "record", {
+		messages: { cancelled: "That meeting is cancelled." },
+	});
 	if (slot.speechId) {
 		throw new Error("That slot already has a speech attached.");
 	}

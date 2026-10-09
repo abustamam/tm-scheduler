@@ -40,6 +40,12 @@ const SEAM = readSource(SEAM_FILE);
 const HANDLER_RAW = readFileSync(HANDLER_FILE, "utf8");
 const SEAM_RAW = readFileSync(SEAM_FILE, "utf8");
 
+/** The handler's refusal of a completed meeting: the old per-status helper, or
+ *  the write policy's `plan` class (#1135), which refuses `completed`. The
+ *  lookahead rejects a `plan` call whose `accept` hands `completed` back. */
+const LOCK_CHECK =
+	/assertMeetingNotLocked\(|assertMeetingAccepts\([^)]*"plan"(?![^)]*"completed")/;
+
 /** One `export const <name> = createServerFn…` declaration, so a per-handler
  *  assertion cannot be satisfied by its neighbour's correct code — and the two
  *  neighbours here are precisely the ones that legitimately DO carry the
@@ -96,8 +102,19 @@ describe("markUnavailableReleasing subject check (#675)", () => {
 		const body = handlerBody(HANDLER, "markUnavailableReleasing");
 		const archive = body.indexOf("assertClubNotArchived(meeting.clubId)");
 		expect(archive).toBeGreaterThan(-1);
+		// The lock check, in either spelling. A bare `assertMeetingAccepts(` prefix
+		// would also match `"record"`, the write class that ACCEPTS a completed
+		// meeting, so the class is part of the pattern.
+		const lock = body.search(LOCK_CHECK);
+		expect(
+			lock,
+			'the handler must refuse a completed meeting: `assertMeetingNotLocked(` or `assertMeetingAccepts(…, "plan", …)`',
+		).toBeGreaterThan(-1);
+		expect(
+			lock,
+			"the lock check must not run before the archive gate",
+		).toBeGreaterThan(archive);
 		for (const later of [
-			"assertMeetingNotLocked(",
 			"requireMemberInClub(",
 			"releaseSlotsAndMarkUnavailable(",
 		]) {

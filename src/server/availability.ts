@@ -60,6 +60,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings } from "#/db/schema";
+import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import {
 	clearPlanStatus,
 	SELF_SERVICE_RUNGS,
@@ -67,7 +68,6 @@ import {
 } from "./attendance-plan-logic";
 import { releaseSlotsAndMarkUnavailable } from "./availability-logic";
 import { assertClubNotArchived, requireMemberInClub } from "./guards";
-import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import {
 	requestWriteActor,
 	requestWriteActorWithProof,
@@ -123,7 +123,12 @@ export const setAvailability = createServerFn({ method: "POST" })
 	.handler(async ({ data }) => {
 		const meeting = await loadMeeting(data.meetingId);
 		await assertClubNotArchived(meeting.clubId);
-		assertMeetingNotLocked(meeting.status);
+		// By write class (#1135). `plan` refuses a completed meeting here, as the lock
+		// always did, before the membership and actor checks. It accepts
+		// `cancelled` because that refusal is the plan seam's, further down
+		// (`setPlanStatus` / `clearPlanStatus`), and moving it up here would change
+		// what a caller who fails those checks is told.
+		assertMeetingAccepts(meeting.status, "plan", { accept: ["cancelled"] });
 		await requireMemberInClub(data.memberId, meeting.clubId);
 		// `…WithProof` (#762). The subject default stays — this endpoint has no
 		// ladder and never had one, so the claim only decides who is CREDITED —
@@ -199,7 +204,9 @@ export const clearAvailability = createServerFn({ method: "POST" })
 	.handler(async ({ data }) => {
 		const meeting = await loadMeeting(data.meetingId);
 		await assertClubNotArchived(meeting.clubId);
-		assertMeetingNotLocked(meeting.status);
+		// By write class (#1135), as `setAvailability`'s: `cancelled` is refused by
+		// the plan seam below.
+		assertMeetingAccepts(meeting.status, "plan", { accept: ["cancelled"] });
 		await requireMemberInClub(data.memberId, meeting.clubId);
 		// The RETURN is deliberately unused: this gate answers "may this request
 		// write at all", and who to CREDIT is the existing resolution below, which
@@ -248,7 +255,12 @@ export const markUnavailableReleasing = createServerFn({ method: "POST" })
 	.handler(async ({ data }) => {
 		const meeting = await loadMeeting(data.meetingId);
 		await assertClubNotArchived(meeting.clubId);
-		assertMeetingNotLocked(meeting.status);
+		// By write class (#1135): completed refuses here, before the membership and
+		// session checks. `cancelled` is accepted HERE for the order only: the seam
+		// refuses it, after those checks and the actor ladder, so a caller who fails
+		// one of them still hears that. The seam refuses a completed meeting too, so
+		// this early copy exists for the order, not for the refusal.
+		assertMeetingAccepts(meeting.status, "plan", { accept: ["cancelled"] });
 		await requireMemberInClub(data.memberId, meeting.clubId);
 		// #762. The seam refuses an asserted caller itself — that is where the
 		// check is testable — so this is the explicit, readable half: a write
