@@ -117,12 +117,19 @@ export async function loadMeetingSlots(
 	// and caption a non-visitor guest (#1059) — "Guest speaker, Downtown
 	// Toastmasters" — through the one formatter VP Membership uses. Null for a
 	// member, an open slot and a Visitor, who all read exactly as before.
+	//
+	// A Visiting Toastmaster is not captioned either, for now: "Visiting
+	// Toastmaster, <home club>" repeated on every row they hold crowded the
+	// printed agenda, and a short marker with a legend is the planned
+	// replacement. They read as "· Guest", like a Visitor.
 	const rowsWithGuestFlag = rows.map(
 		({ assigneeGuestKind, assigneeGuestHomeClub, ...r }) => ({
 			...r,
 			assigneeIsGuest: r.assigneeGuestId != null,
 			assigneeGuestCaption:
-				r.assigneeGuestId != null && assigneeGuestKind != null
+				r.assigneeGuestId != null &&
+				assigneeGuestKind != null &&
+				assigneeGuestKind !== "visiting_toastmaster"
 					? guestKindCaption(assigneeGuestKind, assigneeGuestHomeClub)
 					: null,
 		}),

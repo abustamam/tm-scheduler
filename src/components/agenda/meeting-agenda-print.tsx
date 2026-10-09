@@ -72,7 +72,7 @@ function hasGuestCaption(text: string | null | undefined): text is string {
 /**
  * `text` as a Visitor's would print — "Name · Guest" — on a line the name
  * SHARES with other copy: the grid layout's "Who. Detail" paragraph and the
- * timing layout's 150px Role column.
+ * timing layout's Role column.
  *
  * There is no one-line box that is safe there. Text either side of an inline
  * block flows around it, so a block wider than the word it replaces can always
@@ -2050,6 +2050,16 @@ function BigThemeCard({
 // ---------------------------------------------------------------------------
 // TIMING — two pages (the detailed timing sheet, default)
 // ---------------------------------------------------------------------------
+
+/** The run-of-show table's Role and Green·Yellow·Red columns. Role was 150px,
+ *  which wrapped nearly every "Role · Holder" cell onto two lines, and the
+ *  marks column was 150px for ~105px of content (its header, "Green · Yellow ·
+ *  Red", is the widest thing in it). THR's 2026-10-10 sheet measured 1500px
+ *  at the old widths and 6px row padding, past `MIN_FIT_SCALE`'s 1464px cliff,
+ *  so page 2 flowed onto a third sheet; `thr-timing-print-fit.test.tsx`. */
+const TIMING_ROLE_W = 190;
+const TIMING_MARKS_W = 110;
+
 function TimingLayout({
 	header,
 	roles,
@@ -2332,9 +2342,15 @@ function TimingLayout({
 						}}
 					>
 						<div style={{ flex: "none", width: 46 }}>Time</div>
-						<div style={{ flex: "none", width: 150 }}>Role</div>
+						<div style={{ flex: "none", width: TIMING_ROLE_W }}>Role</div>
 						<div style={{ flex: 1 }}>Segment</div>
-						<div style={{ flex: "none", width: 150, textAlign: "center" }}>
+						<div
+							style={{
+								flex: "none",
+								width: TIMING_MARKS_W,
+								textAlign: "center",
+							}}
+						>
 							Green · Yellow · Red
 						</div>
 					</div>
@@ -2354,7 +2370,7 @@ function TimingLayout({
 							// rather than filling four cells with a stampless echo of the
 							// row below it.
 							// A templated agenda's segment header, before the handoff arm.
-							// This layout splits `who` on " · " into a 150px Role column,
+							// This layout splits `who` on " · " into a TIMING_ROLE_W Role column,
 							// so a section falling through would have its title parsed as
 							// a role/holder pair and stamped with a clock.
 							if (r.section)
@@ -2400,7 +2416,7 @@ function TimingLayout({
 									style={{
 										display: "flex",
 										alignItems: "center",
-										padding: "6px 12px",
+										padding: "4px 12px",
 										borderBottom: i < rows.length - 1 ? HAIR : undefined,
 										background: isHighlighted(r)
 											? MINT
@@ -2425,7 +2441,7 @@ function TimingLayout({
 									<div
 										style={{
 											flex: "none",
-											width: 150,
+											width: TIMING_ROLE_W,
 											fontSize: 10.5,
 											fontWeight: name ? 700 : 600,
 											color: INK,
@@ -2452,7 +2468,7 @@ function TimingLayout({
 									<div
 										style={{
 											flex: "none",
-											width: 150,
+											width: TIMING_MARKS_W,
 											display: "flex",
 											justifyContent: "center",
 											gap: 11,
