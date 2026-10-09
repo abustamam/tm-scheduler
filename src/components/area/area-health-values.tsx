@@ -27,8 +27,6 @@ export function statusNote(status: ClubHealthStatus): string | null {
 			return null;
 		case "not_on_gavelup":
 			return "Not on GavelUp";
-		case "archived":
-			return "No longer on GavelUp";
 	}
 }
 

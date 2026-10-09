@@ -275,8 +275,8 @@ describe("deriveClubHealth", () => {
 		});
 	});
 
-	it("leaves every field untracked, officers included, for a club that is not on GavelUp or is archived", () => {
-		for (const status of ["not_on_gavelup", "archived"] as const) {
+	it("leaves every field untracked, officers included, for a club that is not on GavelUp", () => {
+		for (const status of ["not_on_gavelup"] as const) {
 			// Data is passed on purpose: a status that is not on_gavelup wins.
 			const h = deriveClubHealth(
 				{ ...IDENTITY, status },
@@ -443,13 +443,11 @@ describe("sortClubHealth", () => {
 	): ClubHealth =>
 		deriveClubHealth({ ...IDENTITY, areaClubId: id, name, status }, null, NOW);
 
-	it("puts GavelUp clubs first, then clubs that are not, then archived ones, each by name", () => {
+	it("puts GavelUp clubs first, then clubs that are not, each by name", () => {
 		const sorted = sortClubHealth([
-			club("A archived", "archived"),
 			club("Zulu", "on_gavelup"),
 			club("B not on", "not_on_gavelup"),
 			club("Alpha", "on_gavelup"),
-			club("C archived", "archived"),
 			club("A not on", "not_on_gavelup"),
 		]);
 		expect(sorted.map((c) => c.name)).toEqual([
@@ -457,8 +455,6 @@ describe("sortClubHealth", () => {
 			"Zulu",
 			"A not on",
 			"B not on",
-			"A archived",
-			"C archived",
 		]);
 	});
 

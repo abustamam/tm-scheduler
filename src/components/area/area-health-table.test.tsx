@@ -4,7 +4,7 @@
 // page around them. The values are stubbed `ClubHealth` rows, because what is
 // under test is what each kind of row PRINTS: a club on GavelUp with every
 // number, a field the club does not record ("Not tracked", never "0"), and a
-// club that is not on GavelUp or no longer is (a name and a sentence).
+// club that is not on GavelUp (a name and a sentence).
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { AreaClubCard } from "#/components/area/area-club-card";
@@ -66,14 +66,15 @@ function tracked(overrides: Partial<ClubHealth> = {}): ClubHealth {
 	};
 }
 
-/** A club that is not on GavelUp, or no longer is: no numbers at all. */
+/** A club that is not on GavelUp (never was, was deleted, or is archived, which
+ *  the payload does not tell apart): no numbers at all. */
 function withoutData(
-	status: "not_on_gavelup" | "archived",
+	status: "not_on_gavelup",
 	overrides: Partial<ClubHealth> = {},
 ): ClubHealth {
 	return {
 		areaClubId: `row-${status}`,
-		name: status === "archived" ? "Closed Club" : "Uptown Orators",
+		name: "Uptown Orators",
 		clubNumber: "7654321",
 		status,
 		...UNTRACKED,
@@ -94,13 +95,7 @@ function health(clubs: ClubHealth[]): AreaHealth {
 describe("AreaHealthTable", () => {
 	it("has one row per club and one column per field, in AREA_HEALTH_FIELDS order", () => {
 		render(
-			<AreaHealthTable
-				clubs={[
-					tracked(),
-					withoutData("not_on_gavelup"),
-					withoutData("archived"),
-				]}
-			/>,
+			<AreaHealthTable clubs={[tracked(), withoutData("not_on_gavelup")]} />,
 		);
 		const headers = screen
 			.getAllByRole("columnheader")
@@ -110,7 +105,7 @@ describe("AreaHealthTable", () => {
 			...AREA_HEALTH_FIELDS.map((f) => f.label),
 		]);
 		// Header row + one per club.
-		expect(screen.getAllByRole("row")).toHaveLength(4);
+		expect(screen.getAllByRole("row")).toHaveLength(3);
 	});
 
 	it("prints a club on GavelUp's numbers, with its name and number", () => {
@@ -193,14 +188,6 @@ describe("AreaHealthTable", () => {
 		expect(within(row).queryByText(NOT_TRACKED_TEXT)).toBeNull();
 	});
 
-	it("names an archived club as no longer on GavelUp", () => {
-		render(<AreaHealthTable clubs={[withoutData("archived")]} />);
-		const row = screen.getByRole("row", { name: /Closed Club/ });
-		expect(within(row).getByText("No longer on GavelUp")).toBeTruthy();
-		expect(within(row).getByText("Club 7654321")).toBeTruthy();
-		expect(within(row).getAllByRole("cell")).toHaveLength(1);
-	});
-
 	it("omits the club number line for a club with none on file", () => {
 		render(
 			<AreaHealthTable
@@ -264,16 +251,10 @@ describe("AreaClubCard", () => {
 		expect(screen.queryByText("0 of 10 goals")).toBeNull();
 	});
 
-	it("says Not on GavelUp / No longer on GavelUp and carries no figures", () => {
-		const { rerender } = render(
-			<AreaClubCard club={withoutData("not_on_gavelup")} />,
-		);
+	it("says Not on GavelUp and carries no figures", () => {
+		render(<AreaClubCard club={withoutData("not_on_gavelup")} />);
 		expect(screen.getByText("Not on GavelUp")).toBeTruthy();
 		expect(screen.getByText("Club 7654321")).toBeTruthy();
-		expect(screen.queryByText("Meetings")).toBeNull();
-
-		rerender(<AreaClubCard club={withoutData("archived")} />);
-		expect(screen.getByText("No longer on GavelUp")).toBeTruthy();
 		expect(screen.queryByText("Meetings")).toBeNull();
 	});
 });
