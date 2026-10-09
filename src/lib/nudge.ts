@@ -228,7 +228,7 @@ function messageFor(i: NudgeInput): string {
 			const lead = `Hi ${who}, just confirming you're evaluating ${speaker}'s speech at our ${i.meetingDate} meeting.`;
 			return isGenericFallback
 				? `${lead} Please print an evaluation form and bring it: ${GENERIC_EVALUATION_RESOURCE.url} (ask ${speaker} which project they're doing). Details: ${link}${guide}`
-				: `${lead} Their evaluation form is here: ${resources[0]?.url}. Please print it and bring it. Details: ${link}${guide}`;
+				: `${lead} Their evaluation form is here: ${resources[0].url}. Please print it and bring it. Details: ${link}${guide}`;
 		}
 		// TWO templates rather than one with an optional tail, because the
 		// no-duty draft has to stay BYTE-IDENTICAL to the one officers already

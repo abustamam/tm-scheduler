@@ -8,6 +8,7 @@
 
 import {
 	type EvaluationResource,
+	GENERIC_EVALUATION_RESOURCE,
 	resolveEvaluationResources,
 } from "#/lib/evaluation-resources";
 import { greetingName } from "#/lib/person-name";
@@ -15,8 +16,9 @@ import { greetingName } from "#/lib/person-name";
 export interface EvaluatorFormBrief {
 	/** The speaker's greeting name (preferred name, else first token). */
 	speaker: string;
-	/** Length >= 1: the project's forms, or the generic one. */
-	resources: readonly EvaluationResource[];
+	/** The project's forms, or the generic one. A tuple, so `resources[0]` is
+	 *  typed present: the draft links it. */
+	resources: readonly [EvaluationResource, ...EvaluationResource[]];
 	/** True when the project is absent, TBA or unknown. */
 	isGenericFallback: boolean;
 }
@@ -36,9 +38,14 @@ export function evaluatorFormBrief(
 	if (!target) return null;
 	const name = target.speakerName?.trim();
 	if (!name) return null;
-	const { resources, isGenericFallback } = resolveEvaluationResources(
-		target.projectName,
-	);
+	const resolved = resolveEvaluationResources(target.projectName);
+	// `resolveEvaluationResources` never returns an empty list (it falls back to
+	// the generic form); this is what makes that visible to the type.
+	const [first, ...rest] = resolved.resources;
+	const resources: EvaluatorFormBrief["resources"] = first
+		? [first, ...rest]
+		: [GENERIC_EVALUATION_RESOURCE];
+	const isGenericFallback = first ? resolved.isGenericFallback : true;
 	return {
 		speaker: greetingName({
 			name,

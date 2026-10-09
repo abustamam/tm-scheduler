@@ -27,6 +27,7 @@ import {
 	type RecruitTarget,
 } from "#/components/club/nudge-recruit-picker";
 import { buildPanelRoleMap } from "#/lib/attendance-panel";
+import { evaluatorFormBrief } from "#/lib/evaluator-form";
 import { GRAMMARIAN_ROLE_KEY } from "#/lib/meeting-roles";
 import { meetingViewer } from "#/lib/meeting-viewer";
 import { outstandingDuties, type PersonalNudgeBase } from "#/lib/nudge";
@@ -52,6 +53,15 @@ const WORD_DUTY = outstandingDuties(
 	{ roleName: "Grammarian", roleKey: GRAMMARIAN_ROLE_KEY },
 	{ wordOfTheDay: null },
 );
+
+/** An Evaluator's brief (#1163): Priya's Ice Breaker. Every surface below must
+ *  carry it through to the draft, and every one of those props is optional. */
+const ICE_BREAKER_FORM_FRAGMENT = "8101e-evaluation-resource.pdf";
+const EVALUATING = evaluatorFormBrief({
+	speakerName: "Priyanka Rao",
+	speakerPreferredName: "Priya",
+	projectName: "Ice Breaker",
+});
 
 const PERSONAL: PersonalNudgeBase = {
 	origin: "https://gavelup.app",
@@ -99,6 +109,20 @@ describe("NudgeButtons carries duties and the personal link", () => {
 		expect(text).not.toContain(`${SHARE_URL} `);
 	});
 
+	it("names the speaker and links their form for a paired evaluator (#1163)", () => {
+		render(
+			<NudgeButtons
+				{...base}
+				roleName="Evaluator"
+				mode="confirm"
+				evaluating={EVALUATING}
+			/>,
+		);
+		const text = draftText(whatsapp());
+		expect(text).toContain("you're evaluating Priya's speech");
+		expect(text).toContain(ICE_BREAKER_FORM_FRAGMENT);
+	});
+
 	it("drafts exactly what it used to when the role owes nothing", () => {
 		render(<NudgeButtons {...base} mode="confirm" duties={[]} />);
 		const text = draftText(whatsapp());
@@ -110,7 +134,10 @@ describe("NudgeButtons carries duties and the personal link", () => {
 describe("the recruit picker's draft", () => {
 	afterEach(() => cleanup());
 
-	const pick = async (over: Partial<RecruitTarget> = {}) => {
+	const pick = async (
+		over: Partial<RecruitTarget> = {},
+		evaluating?: typeof EVALUATING,
+	) => {
 		const user = userEvent.setup();
 		const target: RecruitTarget = {
 			id: "m9",
@@ -127,6 +154,7 @@ describe("the recruit picker's draft", () => {
 			<NudgeRecruitPicker
 				roleName="Grammarian"
 				duties={WORD_DUTY}
+				evaluating={evaluating}
 				meetingDate="Thu, Jul 23"
 				shareUrl={SHARE_URL}
 				personalNudgeBase={PERSONAL}
@@ -144,6 +172,12 @@ describe("the recruit picker's draft", () => {
 		// `?as=` is the PICKED member's, which is the whole reason the picker
 		// takes a base rather than a finished URL.
 		expect(text).toContain("/club/mcf/meeting/2026-09-09/me?as=m9");
+	});
+
+	it("asks about the speaker's speech for an open Evaluator slot, with no PDF (#1163)", async () => {
+		const text = draftText(await pick({}, EVALUATING));
+		expect(text).toContain("would you be open to evaluating Priya's speech");
+		expect(text).not.toContain("toastmasters.org");
 	});
 });
 
@@ -178,7 +212,9 @@ describe("the attendance rail's drafts", () => {
 		},
 	]);
 
-	const renderRail = () =>
+	const renderRail = (
+		evaluatingByMemberId?: ReadonlyMap<string, NonNullable<typeof EVALUATING>>,
+	) =>
 		render(
 			<MeetingAttendancePanel
 				mode="plan"
@@ -189,6 +225,7 @@ describe("the attendance rail's drafts", () => {
 				meetingDate="Tue 9 Sep"
 				shareUrl={SHARE_URL}
 				dutiesByMemberId={new Map([["m1", WORD_DUTY]])}
+				evaluatingByMemberId={evaluatingByMemberId}
 				personalNudgeBase={PERSONAL}
 				locked={false}
 				onWriteRung={vi.fn()}
@@ -205,6 +242,17 @@ describe("the attendance rail's drafts", () => {
 		expect(text).toContain("you're our Grammarian");
 		expect(text).toContain("you'll also need to set the Word of the Day");
 		expect(text).toContain("/me?as=m1");
+	});
+
+	it("names the speaker and links their form on an evaluator's row (#1163)", () => {
+		const evaluating = EVALUATING;
+		if (!evaluating) throw new Error("fixture");
+		renderRail(new Map([["m1", evaluating]]));
+		const text = draftText(rowLink("Jane Doe"));
+		expect(text).toContain("you're evaluating Priya's speech");
+		expect(text).toContain(ICE_BREAKER_FORM_FRAGMENT);
+		// Only the row the map names: the other member keeps the role-less draft.
+		expect(draftText(rowLink("Sam Rivera"))).toContain("are you able to make");
 	});
 
 	it("leaves the role-less row's attendance draft exactly as it was", () => {
@@ -303,6 +351,62 @@ describe("the agenda slot card's confirm draft", () => {
 		const text = draftText(whatsapp());
 		expect(text).toContain("you'll also need to set the Word of the Day");
 		expect(text).toContain("/club/mcf/meeting/2026-09-09/me?as=m1");
+	});
+
+	const EVALUATES = {
+		slotId: "s0",
+		speakerName: "Priyanka Rao",
+		speakerPreferredName: "Priya",
+		speechTitle: "Hello",
+		projectName: "Ice Breaker",
+	};
+
+	it("names the speaker and links their form on a paired evaluator's card (#1163)", () => {
+		renderCard(
+			[
+				slot({
+					roleName: "Evaluator",
+					roleKey: "evaluator",
+					evaluates: EVALUATES,
+				}),
+			],
+			{},
+		);
+		const text = draftText(whatsapp());
+		expect(text).toContain("you're evaluating Priya's speech");
+		expect(text).toContain(ICE_BREAKER_FORM_FRAGMENT);
+	});
+
+	it("hands the brief to an OPEN evaluator slot's recruit picker (#1163)", async () => {
+		const user = userEvent.setup();
+		renderCard(
+			[
+				slot({
+					roleName: "Evaluator",
+					roleKey: "evaluator",
+					status: "open",
+					assigneeId: null,
+					assigneeName: null,
+					evaluates: EVALUATES,
+				}),
+			],
+			{},
+			[
+				{
+					id: "m9",
+					name: "Priya Raman",
+					preferredName: null,
+					phone: "14155552671",
+					email: null,
+				},
+			],
+		);
+		await user.click(screen.getByRole("button", { name: /nudge someone/i }));
+		await user.click(await screen.findByText("Priya Raman"));
+		const text = draftText(
+			await screen.findByRole("link", { name: /whatsapp/i }),
+		);
+		expect(text).toContain("would you be open to evaluating Priya's speech");
 	});
 
 	it("goes quiet once the Word of the Day is set", () => {

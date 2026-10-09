@@ -61,11 +61,7 @@ import { WhatsNewBanner } from "#/components/whats-new-banner";
 import { showWriteError } from "#/components/write-error-toast";
 import { useOfflineMinutes } from "#/hooks/use-offline-minutes";
 import { useOnlineStatus } from "#/hooks/use-online-status";
-import {
-	buildRoleCounts,
-	resolveEvaluatorLinks,
-	slotLabel,
-} from "#/lib/agenda";
+import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { applyFlex, resolveAgendaRows } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
 import { buildTemplateSlideDeck } from "#/lib/agenda-template-slides";
@@ -1054,12 +1050,8 @@ function MeetingView() {
 	// `buildPanelRoleMap` gives beneath it: this route cannot mount in vitest.
 	const nudgeDutiesByMemberId = outstandingDutiesByMember(slots, meeting);
 	// The speaker each Evaluator evaluates, for the rail's confirm drafts (#1163).
-	// Same unfiltered `slots`, same first-slot-wins. Re-resolved over these rows
-	// rather than read off `slot.evaluates`, which the server builds BEFORE the
-	// holder's preferred name is attached, so it cannot greet the speaker by it.
-	const nudgeEvaluatingByMemberId = evaluatingByMember(
-		resolveEvaluatorLinks(slots),
-	);
+	// Same unfiltered `slots`, same first-slot-wins.
+	const nudgeEvaluatingByMemberId = evaluatingByMember(slots);
 	// Lifted from <MeetingAgenda> so the agenda and the panel share one map.
 	const roleCounts = buildRoleCounts(slots);
 	const roleByMemberId: Record<string, string> = {};

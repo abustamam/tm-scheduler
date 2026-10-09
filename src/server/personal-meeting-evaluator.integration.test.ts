@@ -6,11 +6,16 @@
  * third person to whoever opens the link, so the leak case seeds an email and a
  * phone on the speaker and asserts neither reaches the payload.
  */
+
+import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	guests,
 	members,
+	pathwaysPaths,
+	pathwaysProjects,
+	people,
 	roleDefinitions,
 	roleSlots,
 	speeches,
@@ -32,11 +37,17 @@ const { loadPublicPersonalMeetingView } = await import(
 );
 
 let seeded: SeededClub | null = null;
+let pathId: string | null = null;
 
 afterEach(async () => {
 	if (seeded) {
 		await cleanup(seeded.clubId, [seeded.adminUserId, seeded.memberUserId]);
 		seeded = null;
+	}
+	// The catalog is global, so the club's cascade does not reach it.
+	if (pathId) {
+		await testDb.delete(pathwaysPaths).where(eq(pathwaysPaths.id, pathId));
+		pathId = null;
 	}
 });
 
@@ -47,6 +58,12 @@ const SPEAKER_PHONE = "+15557654321";
 async function seedPair(opts: {
 	holder: "member" | "guest" | "none";
 	projectName?: string | null;
+	/** A catalog `pathways_projects` row the speech links to (`project_id`). */
+	catalogProject?: string;
+	/** The member speaker's club-level preferred name (default "Priya"). */
+	memberPreferredName?: string | null;
+	/** The speaker's PERSON-level preferred name, the fallback. */
+	personPreferredName?: string | null;
 	paired?: boolean;
 }) {
 	const s = await seedClub();
@@ -70,11 +87,29 @@ async function seedPair(opts: {
 		})
 		.returning({ id: roleDefinitions.id });
 
+	let projectId: string | undefined;
+	if (opts.catalogProject) {
+		const [path] = await testDb
+			.insert(pathwaysPaths)
+			.values({ courseCode: randomUUID(), name: "Test Path" })
+			.returning({ id: pathwaysPaths.id });
+		pathId = path?.id ?? null;
+		const [project] = await testDb
+			.insert(pathwaysProjects)
+			.values({
+				pathId: pathId as string,
+				level: 1,
+				name: opts.catalogProject,
+			})
+			.returning({ id: pathwaysProjects.id });
+		projectId = project?.id;
+	}
 	const [speech] = await testDb
 		.insert(speeches)
 		.values({
 			personId: s.personId,
 			title: "My first speech",
+			projectId,
 			projectName: opts.projectName ?? null,
 		})
 		.returning({ id: speeches.id });
@@ -87,13 +122,20 @@ async function seedPair(opts: {
 			email: SPEAKER_EMAIL,
 			phone: SPEAKER_PHONE,
 		});
+		await testDb
+			.update(people)
+			.set({ preferredName: opts.personPreferredName ?? null })
+			.where(eq(people.id, personId));
 		const [m] = await testDb
 			.insert(members)
 			.values({
 				clubId: s.clubId,
 				personId,
 				name: "Priyanka Rao",
-				preferredName: "Priya",
+				preferredName:
+					opts.memberPreferredName === undefined
+						? "Priya"
+						: opts.memberPreferredName,
 				clubRole: "member",
 				status: "active",
 			})
@@ -173,6 +215,45 @@ describe.skipIf(!hasTestDb)(
 				speakerPreferredName: "Gus G",
 				projectName: "Ice Breaker",
 			});
+		});
+
+		it("reaches the catalog-project arm: the catalog name beats the free text", async () => {
+			const s = await seedPair({
+				holder: "member",
+				catalogProject: "Ice Breaker",
+				projectName: "Evaluation and Feedback",
+			});
+			const { role } = await evaluatorRole(s);
+			expect(role?.evaluates?.projectName).toBe("Ice Breaker");
+		});
+
+		it("falls back to the free text with no catalog project", async () => {
+			const s = await seedPair({
+				holder: "member",
+				projectName: "Evaluation and Feedback",
+			});
+			const { role } = await evaluatorRole(s);
+			expect(role?.evaluates?.projectName).toBe("Evaluation and Feedback");
+		});
+
+		it("reaches the Person arm: a member with no club-level name goes by their Person's", async () => {
+			const s = await seedPair({
+				holder: "member",
+				memberPreferredName: null,
+				personPreferredName: "Pri",
+			});
+			const { role } = await evaluatorRole(s);
+			expect(role?.evaluates?.speakerPreferredName).toBe("Pri");
+		});
+
+		it("the club-level name beats the Person's", async () => {
+			const s = await seedPair({
+				holder: "member",
+				memberPreferredName: "Priya",
+				personPreferredName: "Pri",
+			});
+			const { role } = await evaluatorRole(s);
+			expect(role?.evaluates?.speakerPreferredName).toBe("Priya");
 		});
 
 		it("is present with a null speaker when the paired slot has no holder", async () => {
