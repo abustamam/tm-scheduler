@@ -96,6 +96,16 @@ describe("duty-aware nudge route wiring (#667)", () => {
 		);
 	});
 
+	it("builds the rail's evaluator map from the UNFILTERED slots (#1163)", () => {
+		// Same first-slot-wins rule, and the same reason for the unfiltered
+		// argument, as the duty map above. `evaluating` is optional down the whole
+		// chain, so a deleted statement still typechecks and the rail quietly
+		// drafts "you're our Evaluator" again.
+		expect(src).toContain(
+			"const nudgeEvaluatingByMemberId = evaluatingByMember(slots);",
+		);
+	});
+
 	it("keeps the personal link's three parts pointing at THIS club and meeting", () => {
 		// `clubId` is the club's URL segment and `urlKey` the meeting's; the
 		// route also holds `meeting.clubId` (a uuid) and `meeting.id`, either of
@@ -123,6 +133,15 @@ describe("duty-aware nudge route wiring (#667)", () => {
 		// every draft the rail sends.
 		expect(panelProps).toContain("dutiesByMemberId={nudgeDutiesByMemberId}");
 		expect(panelProps).toContain("personalNudgeBase={nudgePersonalBase}");
+	});
+
+	it("hands the rail its evaluator map (#1163)", () => {
+		// Windowed to the panel's own tag, like the two above: the agenda reads
+		// `slot.evaluates` off its rows and takes no such prop.
+		expect(panelProps).toContain(
+			"evaluatingByMemberId={nudgeEvaluatingByMemberId}",
+		);
+		expect(agendaProps).not.toContain("evaluatingByMemberId");
 	});
 
 	it("hands the agenda the link base, gated like its share link", () => {

@@ -3,6 +3,8 @@
 // edits and sends. NO `#/db` here so the meeting-detail client route can call it.
 // The app only ever DRAFTS; the human sends.
 
+import { GENERIC_EVALUATION_RESOURCE } from "#/lib/evaluation-resources";
+import type { EvaluatorFormBrief } from "#/lib/evaluator-form";
 import {
 	type LevelProgress,
 	plural,
@@ -137,6 +139,13 @@ export type NudgeInput =
 			 */
 			duties?: readonly RoleDuty[];
 			/**
+			 * The speaker an Evaluator is evaluating and the form to print (#1163),
+			 * from `evaluatorFormBrief`. Non-null REPLACES the standard templates
+			 * (Evaluator owes no duties, so there is no duty clause to merge).
+			 * Role-carrying arms only, for the reason `duties` gives.
+			 */
+			evaluating?: EvaluatorFormBrief | null;
+			/**
 			 * The recipient's OWN meeting page (#665), which this draft links to
 			 * instead of the public agenda so they can act in one tap. Build it
 			 * with `personalNudgeUrl` below.
@@ -205,12 +214,22 @@ function messageFor(i: NudgeInput): string {
 	// `shareUrl` prop does the same), and `??` would happily draft "Details: ".
 	const link = i.personalUrl || i.shareUrl;
 	const owed = i.duties ?? [];
+	const evaluating = i.evaluating ?? null;
 	if (i.mode === "confirm") {
 		// The guest arm (#933): no personal page, but a guide card. The draft
 		// keeps its actionable link and APPENDS the guide, so every other draft
 		// stays byte-identical. `||` for the blank-is-absent reason above.
 		const guide =
 			!i.personalUrl && i.guideUrl ? ` Your role guide: ${i.guideUrl}` : "";
+		// An Evaluator with a speaker set (#1163). The generic form is named as
+		// such: we do not know the project, so the speaker is the one to ask.
+		if (evaluating) {
+			const { speaker, resources, isGenericFallback } = evaluating;
+			const lead = `Hi ${who}, just confirming you're evaluating ${speaker}'s speech at our ${i.meetingDate} meeting.`;
+			return isGenericFallback
+				? `${lead} Please print an evaluation form and bring it: ${GENERIC_EVALUATION_RESOURCE.url} (ask ${speaker} which project they're doing). Details: ${link}${guide}`
+				: `${lead} Their evaluation form is here: ${resources[0].url}. Please print it and bring it. Details: ${link}${guide}`;
+		}
 		// TWO templates rather than one with an optional tail, because the
 		// no-duty draft has to stay BYTE-IDENTICAL to the one officers already
 		// send — five of the nine standard roles have no data-backed duty, so
@@ -219,6 +238,10 @@ function messageFor(i: NudgeInput): string {
 		return owed.length === 0
 			? `Hi ${who}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting. Details: ${link}${guide}`
 			: `Hi ${who}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting — you'll also need to ${dutyClauseList(owed)}. Confirm and do that here: ${link}${guide}`;
+	}
+	// No PDF here: they have not said yes, and the page carries the link.
+	if (evaluating) {
+		return `Hi ${who}, would you be open to evaluating ${evaluating.speaker}'s speech at our ${i.meetingDate} meeting? You'd need to print their evaluation form and bring it. Info here: ${link}`;
 	}
 	// "You'd", not "you'll": a recruit draft is asking, and stating what they
 	// WILL do to someone who has not said yes is the same presumption the

@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { and, asc, eq, gte, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
@@ -11,6 +11,7 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
+import { resolveEvaluatorLinks } from "#/lib/agenda";
 import { isDigitalVotingOn } from "#/lib/digital-voting";
 import {
 	JOIN_URL_FIELD,
@@ -442,6 +443,43 @@ async function loadMeetingDetail(
 		};
 	});
 
+	// Re-resolve each evaluator's `evaluates` over the rows that now carry the
+	// holder's preferred name (#1163). `loadMeetingSlots` resolves it first, from
+	// rows that cannot have one, and the manager's nudge drafts greet the speaker
+	// by it. The project is the one the personal page uses
+	// (`loadPublicPersonalMeetingView`): the catalog name first, then the free
+	// text, so the agenda, the rail and the page name the same form. The slot's
+	// own `projectName` is left alone: the agenda card still shows the free text.
+	const catalogProjectIds = [
+		...new Set(
+			slotsWithContact.flatMap((s) => (s.projectId ? [s.projectId] : [])),
+		),
+	];
+	const catalogNames = new Map(
+		catalogProjectIds.length === 0
+			? []
+			: (
+					await db
+						.select({ id: pathwaysProjects.id, name: pathwaysProjects.name })
+						.from(pathwaysProjects)
+						.where(inArray(pathwaysProjects.id, catalogProjectIds))
+				).map((p) => [p.id, p.name] as const),
+	);
+	const evaluatesBySlotId = new Map(
+		resolveEvaluatorLinks(
+			slotsWithContact.map((s) => ({
+				...s,
+				projectName:
+					(s.projectId ? catalogNames.get(s.projectId) : undefined) ??
+					s.projectName,
+			})),
+		).map((r) => [r.id, r.evaluates] as const),
+	);
+	const slotsWithEvaluates = slotsWithContact.map((s) => ({
+		...s,
+		evaluates: evaluatesBySlotId.get(s.id) ?? null,
+	}));
+
 	// The number to DISPLAY (#358): the stored one, or derived by counting held
 	// meetings forward from the club's most recent numbered meeting. Null when
 	// the club has never numbered one. Renderers use THIS, not
@@ -459,7 +497,7 @@ async function loadMeetingDetail(
 	return {
 		meeting,
 		meetingNumber,
-		slots: slotsWithContact,
+		slots: slotsWithEvaluates,
 		canManage,
 		roleRecency,
 		nextMeetingAt: nextMeeting?.scheduledAt ?? null,

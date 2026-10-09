@@ -51,14 +51,18 @@
  * phone or email — `loadTmodPanelData` is the precedent. `personal-meeting.integration.test.ts`
  * asserts the absence rather than trusting this comment.
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import {
 	clubs,
+	guests,
 	type meetingStatusEnum,
 	meetings,
 	meetingTimings,
 	members,
+	pathwaysProjects,
+	people,
 	roleDefinitions,
 	roleSlots,
 	speeches,
@@ -92,6 +96,25 @@ export interface PersonalMeetingRole {
 	 *  it yet, which is what decides whether the page still offers a lone
 	 *  "I'll be there" to a member who has already answered. */
 	status: (typeof roleSlots.$inferSelect)["status"];
+	/**
+	 * For an Evaluator paired to a speaker slot (#1163): who they evaluate and
+	 * that speech's project, which the page maps to TI's evaluation form. Null
+	 * when the slot evaluates nobody; `speakerName` is null when the paired
+	 * slot has no holder yet.
+	 *
+	 * NAMES AND PROJECT ONLY, never a contact field: this loader also serves
+	 * the session-less `?as=` view (`loadPublicPersonalMeetingView`), and the
+	 * speaker is a third person to the viewer. The integration test asserts
+	 * the absence.
+	 *
+	 * Optional so the many fixtures that predate #1163 stay valid; the loader
+	 * always sets it, and absent reads exactly as null.
+	 */
+	evaluates?: {
+		speakerName: string | null;
+		speakerPreferredName: string | null;
+		projectName: string | null;
+	} | null;
 }
 
 export interface PersonalMeetingView {
@@ -257,6 +280,17 @@ export async function loadPublicPersonalMeetingView(args: {
 	// Mirrors `requireMemberInClub`: present, in THIS club, and not inactive.
 	if (!member || member.status === "inactive") return null;
 
+	// The paired speaker slot, mirroring the join in `getMeeting`
+	// (`meetings.ts`, `loadMyCommitments`' sibling): holder name from a member
+	// OR a guest, and the speech's project by the same coalesce pair. Aliased
+	// because this query already reads `role_slots` and `speeches` as the
+	// member's own.
+	const speakerSlot = alias(roleSlots, "speaker_slot");
+	const speakerMember = alias(members, "speaker_member");
+	const speakerPerson = alias(people, "speaker_person");
+	const speakerGuest = alias(guests, "speaker_guest");
+	const evaluatedSpeech = alias(speeches, "evaluated_speech");
+	const evaluatedProject = alias(pathwaysProjects, "evaluated_project");
 	const slotRows = await db
 		.select({
 			slotId: roleSlots.id,
@@ -264,6 +298,18 @@ export async function loadPublicPersonalMeetingView(args: {
 			roleKey: roleDefinitions.key,
 			speechTitle: speeches.title,
 			status: roleSlots.status,
+			evaluatesSlotId: roleSlots.evaluatesSlotId,
+			speakerName: sql<
+				string | null
+			>`coalesce(${speakerMember.name}, ${speakerGuest.name})`,
+			// A member goes by their club's name, else their Person's; a guest by
+			// the club's name for them (`meeting-contacts-logic`'s `memberGoesBy`).
+			speakerPreferredName: sql<
+				string | null
+			>`coalesce(${speakerMember.preferredName}, ${speakerPerson.preferredName}, ${speakerGuest.preferredName})`,
+			speakerProjectName: sql<
+				string | null
+			>`coalesce(${evaluatedProject.name}, ${evaluatedSpeech.projectName})`,
 		})
 		.from(roleSlots)
 		.innerJoin(
@@ -275,6 +321,15 @@ export async function loadPublicPersonalMeetingView(args: {
 		// returns its role (with a null title, which `speech_details` reads as NOT
 		// DONE, exactly as an absent field should).
 		.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
+		.leftJoin(speakerSlot, eq(speakerSlot.id, roleSlots.evaluatesSlotId))
+		.leftJoin(speakerMember, eq(speakerMember.id, speakerSlot.assignedMemberId))
+		.leftJoin(speakerPerson, eq(speakerPerson.id, speakerMember.personId))
+		.leftJoin(speakerGuest, eq(speakerGuest.id, speakerSlot.assignedGuestId))
+		.leftJoin(evaluatedSpeech, eq(evaluatedSpeech.id, speakerSlot.speechId))
+		.leftJoin(
+			evaluatedProject,
+			eq(evaluatedProject.id, evaluatedSpeech.projectId),
+		)
 		.where(
 			and(
 				eq(roleSlots.meetingId, meetingId),
@@ -333,6 +388,13 @@ export async function loadPublicPersonalMeetingView(args: {
 			roleKey: r.roleKey,
 			speechTitle: r.speechTitle,
 			status: r.status,
+			evaluates: r.evaluatesSlotId
+				? {
+						speakerName: r.speakerName,
+						speakerPreferredName: r.speakerPreferredName,
+						projectName: r.speakerProjectName,
+					}
+				: null,
 		})),
 		planStatus,
 	};

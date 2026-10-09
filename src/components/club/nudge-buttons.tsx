@@ -1,6 +1,7 @@
 import { Mail, MessageCircle, MessageSquareText, Phone } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { Button } from "#/components/ui/button";
+import type { EvaluatorFormBrief } from "#/lib/evaluator-form";
 import type { LevelProgress } from "#/lib/level-proximity";
 import { buildNudge } from "#/lib/nudge";
 import type { OrientationTick } from "#/lib/orientation-roster";
@@ -86,6 +87,9 @@ type NudgeButtonsMeetingArm =
 			 *  On the role arm only, mirroring `NudgeInput`: a role-less draft
 			 *  has no duty to name. */
 			duties?: readonly RoleDuty[];
+			/** The speaker an Evaluator is evaluating and their form (#1163), from
+			 *  `evaluatorFormBrief`. Non-null replaces the standard wording. */
+			evaluating?: EvaluatorFormBrief | null;
 			/** The recipient's own meeting page, from `personalNudgeUrl`.
 			 *  Absent (a guest holder has no member identity) falls the draft
 			 *  back to `shareUrl`. */
@@ -170,6 +174,7 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 					// `props` would put the duty clause back in reach of a draft that
 					// names no role.
 					duties: props.duties,
+					evaluating: props.evaluating,
 					personalUrl: props.personalUrl,
 					guideUrl: props.guideUrl,
 				}

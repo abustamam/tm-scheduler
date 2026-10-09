@@ -74,6 +74,7 @@ import {
 import { buildPanelRoleMap, type PlanStatus } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { ballotUrlFor } from "#/lib/digital-voting";
+import { evaluatingByMember } from "#/lib/evaluator-form";
 import { feedbackWindow } from "#/lib/feedback-window";
 import {
 	formatMeetingDate,
@@ -1048,6 +1049,9 @@ function MeetingView() {
 	// function in `#/lib/nudge` rather than a loop here, for the reason
 	// `buildPanelRoleMap` gives beneath it: this route cannot mount in vitest.
 	const nudgeDutiesByMemberId = outstandingDutiesByMember(slots, meeting);
+	// The speaker each Evaluator evaluates, for the rail's confirm drafts (#1163).
+	// Same unfiltered `slots`, same first-slot-wins.
+	const nudgeEvaluatingByMemberId = evaluatingByMember(slots);
 	// Lifted from <MeetingAgenda> so the agenda and the panel share one map.
 	const roleCounts = buildRoleCounts(slots);
 	const roleByMemberId: Record<string, string> = {};
@@ -2577,6 +2581,7 @@ function MeetingView() {
 							// would strip the duty clause and the personal link out of every
 							// draft the rail sends.
 							dutiesByMemberId={nudgeDutiesByMemberId}
+							evaluatingByMemberId={nudgeEvaluatingByMemberId}
 							personalNudgeBase={nudgePersonalBase}
 							locked={locked}
 							onWriteRung={writeRung}

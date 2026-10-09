@@ -44,6 +44,7 @@ import {
 	slotLabel,
 	summarizeAgenda,
 } from "#/lib/agenda";
+import { evaluatorFormBrief } from "#/lib/evaluator-form";
 import { isMeetingCancelled } from "#/lib/meeting-cancellation-notice";
 import { isMeetingLocked } from "#/lib/meeting-lifecycle";
 import type { MeetingViewer } from "#/lib/meeting-viewer";
@@ -825,6 +826,7 @@ export function MeetingAgenda({
 														preferredContact={slot.holderPreferredContact}
 														roleName={slot.roleName}
 														duties={outstandingDutiesForSlot(slot, meeting)}
+														evaluating={evaluatorFormBrief(slot.evaluates)}
 														meetingDate={meetingDate}
 														shareUrl={shareUrl}
 														// The holder's own page when they are a MEMBER. A
@@ -899,6 +901,7 @@ export function MeetingAgenda({
 													<NudgeRecruitPicker
 														roleName={slot.roleName}
 														duties={outstandingDutiesForSlot(slot, meeting)}
+														evaluating={evaluatorFormBrief(slot.evaluates)}
 														meetingDate={meetingDate}
 														shareUrl={shareUrl}
 														personalNudgeBase={personalNudgeBase}

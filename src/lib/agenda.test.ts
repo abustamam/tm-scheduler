@@ -238,7 +238,10 @@ describe("resolveEvaluatorLinks", () => {
 		expect(evaluatorRow?.evaluates).toEqual({
 			slotId: "slot-speaker",
 			speakerName: "Alice",
+			// #1163: carried for the evaluator's draft; null when the row has none.
+			speakerPreferredName: null,
 			speechTitle: "My Ice Breaker",
+			projectName: null,
 		});
 	});
 
