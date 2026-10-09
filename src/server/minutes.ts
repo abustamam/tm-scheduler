@@ -31,10 +31,10 @@ import {
 const uuid = z.string().uuid();
 
 // A guest added from the minutes/attendance flow. `email` is validated as an
-// EMAIL, not free text, so every writer of `guests.email` agrees with
-// `guestBookSchema` and `updateGuestSchema` — this was the one path through
-// which "a@b.com?bcc=x&subject=y" could reach the column, and the VP-Membership
-// card renders that column into a `mailto:` href. The href is encoded there too;
+// EMAIL, not free text, so every writer of a guest's address (now
+// `people.email`, #1125) agrees with `guestBookSchema` and `updateGuestSchema` —
+// this was the one path through which "a@b.com?bcc=x&subject=y" could reach the
+// column, and the VP-Membership card renders it into a `mailto:` href. The href is encoded there too;
 // this is the other half, so the value never gets stored in the first place.
 // `.max(200)` matches `guestBookSchema`'s cap on the same column.
 const newGuestSchema = z.object({

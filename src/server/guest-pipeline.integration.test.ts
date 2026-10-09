@@ -47,8 +47,11 @@ import {
 	type SeededClub,
 	seedClub,
 	seedPerson,
+	setGuestContact,
 	testDb,
 	waitForLockWait,
+	withGuestPerson,
+	withGuestPersons,
 } from "#/test/db";
 import { readsOf, statementsDuring } from "#/test/query-spy";
 
@@ -201,10 +204,14 @@ async function seedMeetingLaterToday(clubId: string): Promise<string> {
 }
 
 /** A bare club guest — no attendance, no participation anywhere. */
-async function seedGuest(clubId: string, name: string): Promise<string> {
+async function seedGuest(
+	clubId: string,
+	name: string,
+	personName?: string,
+): Promise<string> {
 	const [g] = await testDb
 		.insert(guests)
-		.values({ clubId, name })
+		.values(await withGuestPerson({ clubId, name, personName }, testDb))
 		.returning({ id: guests.id });
 	if (!g) throw new Error("Failed to seed guest");
 	return g.id;
@@ -307,8 +314,15 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(res.meetingId).toBe(today);
 
 			const [g] = await testDb
-				.select()
+				.select({
+					clubId: guests.clubId,
+					name: guests.name,
+					stage: guests.stage,
+					// The guest's phone is its Person's (#1125).
+					phone: people.phone,
+				})
 				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
 				.where(eq(guests.id, res.guestId))
 				.limit(1);
 			expect(g).toMatchObject({
@@ -485,8 +499,9 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			});
 
 			const [row] = await testDb
-				.select({ phone: guests.phone })
+				.select({ phone: people.phone })
 				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
 				.where(eq(guests.id, first.guestId));
 			expect(row?.phone).toBeNull();
 			expect(
@@ -525,8 +540,9 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			});
 
 			const [row] = await testDb
-				.select({ email: guests.email })
+				.select({ email: people.email })
 				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
 				.where(eq(guests.id, first.guestId));
 			expect(row?.email).toBeNull();
 			expect(
@@ -634,8 +650,9 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(us.guestId).not.toBe(uk.guestId);
 
 			const stored = await testDb
-				.select({ phone: guests.phone })
+				.select({ phone: people.phone })
 				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
 				.where(eq(guests.clubId, seed.clubId));
 			expect(stored.map((g) => g.phone).sort()).toEqual([
 				"+12079460958",
@@ -666,8 +683,9 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(second.guestId).toBe(first.guestId);
 
 			const [g] = await testDb
-				.select({ phone: guests.phone })
+				.select({ phone: people.phone })
 				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
 				.where(eq(guests.id, first.guestId));
 			expect(g.phone).toBe("+442079460958");
 
@@ -704,7 +722,12 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			// A guest with no attendance derives zero visits / null first-visit.
 			const [orphan] = await testDb
 				.insert(guests)
-				.values({ clubId: seed.clubId, name: "Never Attended" })
+				.values(
+					await withGuestPerson(
+						{ clubId: seed.clubId, name: "Never Attended" },
+						testDb,
+					),
+				)
 				.returning({ id: guests.id });
 			const pipeline2 = await loadGuestPipeline(seed.clubId);
 			const orphanRow = pipeline2.find((g) => g.id === orphan!.id);
@@ -899,8 +922,9 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			});
 
 			const [g] = await testDb
-				.select({ name: guests.name, email: guests.email, phone: guests.phone })
+				.select({ name: guests.name, email: people.email, phone: people.phone })
 				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
 				.where(eq(guests.id, guestId));
 			expect(g).toMatchObject({
 				name: "Typo Fixed",
@@ -926,8 +950,9 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				phone: null,
 			});
 			const [g] = await testDb
-				.select({ email: guests.email, phone: guests.phone })
+				.select({ email: people.email, phone: people.phone })
 				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
 				.where(eq(guests.id, guestId));
 			expect(g).toMatchObject({ email: null, phone: null });
 		});
@@ -1134,8 +1159,9 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 
 			// The row is untouched, and editing a guest's OWN contact still works.
 			const [g] = await testDb
-				.select({ phone: guests.phone, email: guests.email })
+				.select({ phone: people.phone, email: people.email })
 				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
 				.where(eq(guests.id, otherId));
 			expect(g).toMatchObject({ phone: null, email: null });
 			await expect(
@@ -1473,8 +1499,9 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			).resolves.toMatchObject({ ok: true });
 
 			const [g] = await testDb
-				.select({ phone: guests.phone })
+				.select({ phone: people.phone })
 				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
 				.where(eq(guests.id, otherId));
 			expect(g?.phone).toBe(toStoredPhone(shared, "1"));
 		});
@@ -2789,10 +2816,13 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 		async function seedGuests(clubId: string, n: number) {
 			if (n === 0) return;
 			await testDb.insert(guests).values(
-				Array.from({ length: n }, (_, i) => ({
-					clubId,
-					name: `Seeded Guest ${i}`,
-				})),
+				await withGuestPersons(
+					Array.from({ length: n }, (_, i) => ({
+						clubId,
+						name: `Seeded Guest ${i}`,
+					})),
+					testDb,
+				),
 			);
 		}
 
@@ -2886,7 +2916,12 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 		async function insertGuestWithPhone(phone: string): Promise<string> {
 			const [row] = await testDb
 				.insert(guests)
-				.values({ clubId: seed.clubId, name: "Sam Visitor", phone })
+				.values(
+					await withGuestPerson(
+						{ clubId: seed.clubId, name: "Sam Visitor", phone },
+						testDb,
+					),
+				)
 				.returning({ id: guests.id });
 			if (!row) throw new Error("Failed to insert guest");
 			return row.id;
@@ -2924,7 +2959,12 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 		it("leaves a guest with no phone at null", async () => {
 			const [row] = await testDb
 				.insert(guests)
-				.values({ clubId: seed.clubId, name: "Phoneless Visitor" })
+				.values(
+					await withGuestPerson(
+						{ clubId: seed.clubId, name: "Phoneless Visitor" },
+						testDb,
+					),
+				)
 				.returning({ id: guests.id });
 			const rows = await loadGuestPipeline(seed.clubId);
 			expect(rows.find((r) => r.id === row!.id)?.phone).toBeNull();
@@ -3268,7 +3308,10 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			// this test counted every row in `people` and passed alone, then failed
 			// in the full suite — the exact order-dependence CLAUDE.md records.
 			const who = `Linkable Guest ${randomUUID().slice(0, 8)}`;
-			const guestId = await seedGuest(seed.clubId, who);
+			// The guest's own Person (#1125: every guest has one) is named differently,
+			// so the count by `who` below is the member's alone and still moves only
+			// if a link CREATES a Person.
+			const guestId = await seedGuest(seed.clubId, who, `${who} (guest)`);
 			const memberId = await memberRow(who);
 			const past = await seedPastMeeting(seed.clubId);
 			const pastSlot = await seedGuestRoleSlot(
@@ -3945,10 +3988,8 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				.from(people)
 				.where(eq(people.id, personId))
 				.limit(1);
-			await testDb
-				.update(guests)
-				.set({ email: person?.email ?? null })
-				.where(eq(guests.id, guestId));
+			// The guest's address is its own Person's (#1125).
+			await setGuestContact(guestId, { email: person?.email ?? null });
 
 			const conv = await applyConvertGuestToMember({
 				clubId: seed.clubId,

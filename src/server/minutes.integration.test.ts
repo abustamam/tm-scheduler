@@ -29,6 +29,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -63,7 +64,7 @@ describe.skipIf(!hasTestDb)("meeting minutes (#152)", () => {
 	async function newGuest(name: string): Promise<string> {
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name })
+			.values(await withGuestPerson({ clubId: seed.clubId, name }, testDb))
 			.returning({ id: guests.id });
 		return g!.id;
 	}

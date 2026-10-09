@@ -13,6 +13,10 @@ import {
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import {
+	GUEST_CONTACT_REFUSAL_MESSAGES,
+	type GuestContactRefusal,
+} from "#/lib/guest-contact";
 import { isStrandedConvertedGuest } from "#/lib/guest-convert";
 import {
 	GUEST_KIND_LABELS,
@@ -73,7 +77,7 @@ export interface GuestEditFields {
 	preferredName: string | null;
 	email: string | null;
 	/**
-	 * The `guests.phone` COLUMN verbatim — never the display value.
+	 * The stored phone verbatim (the Person's, #1125) — never the display value.
 	 *
 	 * `PipelineGuestRow` carries the number twice: `phone` is coalesced to E.164
 	 * for the card's WhatsApp link, `phoneRaw` is what is stored. Coalescing is a
@@ -101,6 +105,14 @@ export interface GuestEditFields {
 	 */
 	stage: string;
 	convertedMembershipId: string | null;
+	/**
+	 * Why this club may NOT change the contact (#1125), when the caller already
+	 * knows: VP Membership's pipeline row carries it, so its fields are read-only
+	 * from the first paint. OPTIONAL because the meeting rail has no pipeline row;
+	 * the dialog reads the reason fresh when it opens either way
+	 * (`GuestProfile.contactRefusal`), and that read wins over this copy.
+	 */
+	contactRefusal?: GuestContactRefusal | null;
 }
 
 /**
@@ -211,6 +223,16 @@ export function GuestEditDialog({
 	// disagree about what "joined" means.
 	const joined = guest.stage === "joined" && !isStrandedConvertedGuest(guest);
 
+	// A guest's email and phone are their Person's, and a club may correct them only
+	// while the Person is guest-only and has not signed in (#1125). Otherwise the
+	// fields show read-only with the reason, so the refusal `updateGuest` throws is
+	// normally never reached. The fresh read wins over the caller's copy; until it
+	// arrives, the caller's copy (when it has one) holds the fields shut.
+	const contactRefusal: GuestContactRefusal | null =
+		profileState.status === "ready"
+			? (profileState.profile.contactRefusal ?? null)
+			: (guest.contactRefusal ?? null);
+
 	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
 		const form = new FormData(e.currentTarget);
@@ -232,6 +254,18 @@ export function GuestEditDialog({
 			// refresh rejects, over a write that has already COMMITTED, and leaves
 			// the dialog open with no indication which half went wrong.
 			try {
+				// A contact field is sent ONLY when the officer changed it (#1125). A
+				// locked card sends neither, and an untouched field is left out, so the
+				// server leaves the stored value alone: a name fix cannot trip the format
+				// or clash check on a stored address it never touched, and a stale copy
+				// of the card cannot overwrite a value somebody changed since it loaded.
+				const emailNow = String(form.get("email") ?? "").trim() || null;
+				const phoneNow = String(form.get("phone") ?? "").trim() || null;
+				const emailChanged =
+					!contactRefusal && emailNow !== ((guest.email ?? "").trim() || null);
+				const phoneChanged =
+					!contactRefusal &&
+					phoneNow !== ((guest.phoneRaw ?? "").trim() || null);
 				await updateGuest({
 					data: {
 						clubId,
@@ -239,8 +273,8 @@ export function GuestEditDialog({
 						name,
 						preferredName:
 							String(form.get("preferredName") ?? "").trim() || null,
-						email: String(form.get("email") ?? "").trim() || null,
-						phone: String(form.get("phone") ?? "").trim() || null,
+						...(emailChanged ? { email: emailNow } : {}),
+						...(phoneChanged ? { phone: phoneNow } : {}),
 					},
 				});
 			} catch (err) {
@@ -360,6 +394,10 @@ export function GuestEditDialog({
 							type="email"
 							defaultValue={guest.email ?? ""}
 							placeholder="name@example.com"
+							readOnly={contactRefusal !== null}
+							aria-describedby={
+								contactRefusal ? `guest-contact-locked-${guest.id}` : undefined
+							}
 						/>
 					</div>
 					<div className="space-y-2">
@@ -371,7 +409,24 @@ export function GuestEditDialog({
 							name="phone"
 							type="tel"
 							defaultValue={guest.phoneRaw ?? ""}
+							readOnly={contactRefusal !== null}
+							aria-describedby={
+								contactRefusal ? `guest-contact-locked-${guest.id}` : undefined
+							}
 						/>
+						{/* `readOnly`, never `disabled`: a disabled input is left out of the
+						    FormData, so `form.get` would send null and the save would CLEAR
+						    the contact. A read-only one resends exactly what it shows, which
+						    the server treats as "unchanged" and writes nothing. */}
+						{contactRefusal ? (
+							<p
+								id={`guest-contact-locked-${guest.id}`}
+								data-slot="guest-contact-locked"
+								className="text-xs text-[var(--sea-ink-soft)]"
+							>
+								{GUEST_CONTACT_REFUSAL_MESSAGES[contactRefusal]}
+							</p>
+						) : null}
 					</div>
 					{profileState.status === "ready" ? (
 						<>

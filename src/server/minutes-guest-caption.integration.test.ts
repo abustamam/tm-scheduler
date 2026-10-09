@@ -27,6 +27,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -52,7 +53,12 @@ describe.skipIf(!hasTestDb)("loadMinutes guest caption (#1080)", () => {
 	async function newGuest(name: string, profile: GuestProfile) {
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name, ...profile })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name, ...profile },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		if (!g) throw new Error("guest insert failed");
 		return g.id;
@@ -155,7 +161,12 @@ describe.skipIf(!hasTestDb)("loadMinutes guest caption (#1080)", () => {
 		// default, so this is the "no kind stored" case the issue names.
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: "Default Kind" })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: "Default Kind" },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		if (!g) throw new Error("guest insert failed");
 		await markPresent(g.id);

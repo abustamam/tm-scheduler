@@ -19,6 +19,7 @@ import {
 	isNotNull,
 	isNull,
 	ne,
+	not,
 	notExists,
 	or,
 	type SQL,
@@ -36,6 +37,7 @@ import {
 	speeches,
 	user,
 } from "#/db/schema";
+import type { GuestContactRefusal } from "#/lib/guest-contact";
 
 /**
  * One spelling of "normalise an address", for the SQL side. **Exported: use it
@@ -80,6 +82,12 @@ const ownedSpeech = alias(speeches, "owned_speech");
 const enrolment = alias(pathEnrollments, "person_enrolment");
 const charterHelper = alias(clubCharterHelpers, "person_charter_helper");
 const otherGuestRow = alias(guests, "other_guest_row");
+/** Aliased `guests` and `members` for the guest-contact predicates (#1125): this
+ *  club's guest row on the Person, and any guest row of ANOTHER club. */
+const clubGuestRow = alias(guests, "club_guest_row");
+const otherClubGuestRow = alias(guests, "other_club_guest_row");
+const hereMember = alias(members, "here_member");
+const elsewhereMember = alias(members, "elsewhere_member");
 const personRecord = alias(activityLog, "person_activity");
 /** The binding account, re-read INSIDE the bind's own statement (#1091
  *  review). Aliased so it always renders qualified (#802). */
@@ -234,6 +242,207 @@ export function unboundGuestOnlyPerson(): SQL {
 }
 
 /**
+ * **Who may write a guest's email and phone: the club that holds a guest row on
+ * them, while the Person is guest-only and unbound** (#1125, ADR-0031).
+ *
+ * A guest's contact lives on their Person (`people.email` / `people.phone`), and
+ * the Person owns it; clubs are custodians until the person speaks for themselves
+ * (the maintainer, 2026-10-07: "users should have agency over their own data, not
+ * clubs"). So an officer may correct it only for a Person that is
+ * `unboundGuestOnlyPerson()` (nobody has signed in as them and no club has them as
+ * a member), that never was a member (`noMemberHistory()`), AND that THIS club
+ * holds a guest row on. Any club holding a guest row on a guest-only Person may
+ * correct it, and the fix then shows in every club holding one, because it is one
+ * person with one address. For anybody else the edit is refused: a signed-in
+ * person changes it themselves (ADR-0030), a member's contact is the roster's
+ * (ADR-0029), and a REMOVED member's Person keeps the contact it had: it holds no
+ * membership, so it reads guest-only, but a roster re-import re-attaches it
+ * (#875) and a contact an officer rewrote through a guest card would become that
+ * member's sign-in key.
+ *
+ * **A guest row never counts as a holder and never locks a member.** This is a
+ * guest-side predicate only; `soleHoldingClub` and every member-side writer are
+ * untouched, so a guest row in another club cannot stop a roster edit.
+ *
+ * For use INSIDE an `update(people)`'s WHERE, never as a pre-check: a bind or a
+ * membership that lands between a form's load and its save makes the UPDATE match
+ * nothing instead of overwriting. `person-email-writers.guard.test.ts` holds each
+ * writer to this token in the statement itself.
+ */
+export function guestContactWritable(clubId: string): SQL {
+	return and(
+		unboundGuestOnlyPerson(),
+		noMemberHistory(),
+		exists(
+			db
+				.select({ one: sql`1` })
+				.from(clubGuestRow)
+				.where(
+					and(
+						eq(clubGuestRow.personId, people.id),
+						eq(clubGuestRow.clubId, clubId),
+					),
+				),
+		),
+	) as SQL;
+}
+
+/**
+ * **Who may FILL a blank guest contact from the anonymous guest book** (#1125):
+ * `guestContactWritable(clubId)` AND no guest row in any OTHER club AND no past
+ * as a member (`noMemberHistory()`).
+ *
+ * Stricter than the officer's rule, because the public book has no session: the
+ * club link is the only credential. A visitor typing an address into a club's
+ * book may fill a blank on a Person only that club knows about. Once another club
+ * also holds a guest row on them, an address typed into THIS club's book would
+ * land on a person the other club also reaches, and nobody who can vouch for it
+ * has seen it. Nothing is written then, and nothing is written for a Person who
+ * holds any membership or is signed in (both are outside `guestContactWritable`).
+ *
+ * **A former member's Person is refused too**, which the issue's bare "writable
+ * and no other club" would let through: a removed member's Person holds no
+ * membership, so it reads guest-only, yet it is the Person a roster re-import
+ * re-attaches (#875), and an address typed on the anonymous book that landed on
+ * it would then be the sign-in key of a member with history. That is the takeover
+ * ADR-0031's pristine rule exists to stop, and a guest card stranded after a
+ * removal is exactly where a stranger's visit finds a blank to fill.
+ *
+ * In the UPDATE's own WHERE, like its sibling.
+ */
+export function guestContactFillable(clubId: string): SQL {
+	return and(
+		guestContactWritable(clubId),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(otherClubGuestRow)
+				.where(
+					and(
+						eq(otherClubGuestRow.personId, people.id),
+						ne(otherClubGuestRow.clubId, clubId),
+					),
+				),
+		),
+		noMemberHistory(),
+	) as SQL;
+}
+
+/**
+ * Nothing on this Person shows a past as a member (#1125): none of the
+ * roster-identity columns that only a membership, an import, a member or an
+ * officer sets (`customer_id`, `basecamp_user_id`, `original_join_date`,
+ * `invited_at`), and no `member_remove` naming it. The same evidence
+ * `pristineGuestPerson` reads, without the arms about ownership (a speech, an
+ * enrolment, another guest row), which are not about WHO the Person was.
+ *
+ * Evidence, not proof (ADR-0031): a membership removed without a record that
+ * left no column behind reads clean. Shared by `guestContactFillable` and
+ * `identityIgnoredGuestPerson`, so the two cannot disagree about it.
+ */
+export function noMemberHistory(): SQL {
+	return and(
+		isNull(people.customerId),
+		isNull(people.basecampUserId),
+		isNull(people.originalJoinDate),
+		isNull(people.invitedAt),
+		notExists(releasedPersonSubquery()),
+	) as SQL;
+}
+
+/**
+ * Why `guestContactWritable(clubId)` would refuse this Person, as ONE SQL
+ * expression: the first of `signed_in`, `member_here`, `member_elsewhere`,
+ * `former_member` that applies, else null (#1125).
+ *
+ * It is the READ form of the writable predicate, never the gate: the writer's
+ * own WHERE decides. It exists so the sentence an officer is shown and the
+ * refusal a write throws come from one definition, and the pipeline board loads
+ * it in the same query as the rows, with no second read per card.
+ * `guest-contact-on-person.integration.test.ts` pins that it is null exactly
+ * where the predicate matches, for a Person this club holds a guest row on.
+ */
+export function guestContactRefusalSql(
+	clubId: string,
+): SQL<GuestContactRefusal | null> {
+	return sql<GuestContactRefusal | null>`case
+		when ${people.userId} is not null then 'signed_in'
+		when ${exists(
+			db
+				.select({ one: sql`1` })
+				.from(hereMember)
+				.where(
+					and(
+						eq(hereMember.personId, people.id),
+						eq(hereMember.clubId, clubId),
+					),
+				),
+		)} then 'member_here'
+		when ${exists(
+			db
+				.select({ one: sql`1` })
+				.from(elsewhereMember)
+				.where(
+					and(
+						eq(elsewhereMember.personId, people.id),
+						ne(elsewhereMember.clubId, clubId),
+					),
+				),
+		)} then 'member_elsewhere'
+		when ${not(noMemberHistory())} then 'former_member'
+		else null end`;
+}
+
+/**
+ * The refusal for one Person, read. `null` means the Person is not refused on any
+ * of the three grounds (a guest-only, unbound Person); a writer that matched no
+ * row for some OTHER reason (the guest moved to another Person, or the Person is
+ * gone) gets `null` here and says the record changed.
+ */
+export async function guestContactRefusalFor(
+	personId: string,
+	clubId: string,
+	executor: Pick<typeof db, "select"> = db,
+): Promise<GuestContactRefusal | null> {
+	const [row] = await executor
+		.select({ refusal: guestContactRefusalSql(clubId) })
+		.from(people)
+		.where(eq(people.id, personId))
+		.limit(1);
+	return row?.refusal ?? null;
+}
+
+/**
+ * A guest-only Person that identity matching must not see (#1125): one only a
+ * guest row names, whose contact came from a guest writer.
+ *
+ * The member-identity paths match `people` by address or phone GLOBALLY: the CSV
+ * importer's candidates and its address-holder map, and onboarding's
+ * `findBestPersonByEmail`. Since a guest's contact moved onto its Person, an
+ * address typed on a club's anonymous guest book is on a `people` row, and
+ * without this a roster import, or a new club's first admin, would find that
+ * visitor's Person by it and put a membership on it, which is the re-keying
+ * ADR-0031's pristine rule exists to prevent. `rosterPermitsBind`,
+ * `rosterConflictFor` and `addressHeldByAnother` already ignore such a Person
+ * (`countsAsHolder`: it is neither bound nor on a roster).
+ *
+ * It is `unboundGuestOnlyPerson()` MINUS everything that shows a past, which a
+ * match must keep finding:
+ *  - a roster-identity column (`customer_id`, `basecamp_user_id`,
+ *    `original_join_date`, `invited_at`): the Person was a member's. The importer
+ *    matches by Customer ID and that column is UNIQUE, so hiding such a Person
+ *    would turn the next import into a unique violation rather than a fill;
+ *  - a `member_remove` naming it: it is the release target of an undone convert
+ *    (#875), and the undoing club's own roster CSV must still find it.
+ *
+ * A Person a guest writer made carries none of those, and that is the Person this
+ * hides.
+ */
+export function identityIgnoredGuestPerson(): SQL {
+	return and(unboundGuestOnlyPerson(), noMemberHistory()) as SQL;
+}
+
+/**
  * **The one definition of a PRISTINE guest Person** (#1124, ADR-0031, the
  * maintainer's ruling of 2026-10-09): the only Person a convert may ADOPT for a
  * guest. Everything else the guest row names gets a fresh Person instead, and the
@@ -248,21 +457,31 @@ export function unboundGuestOnlyPerson(): SQL {
  *    owns that is somebody's record);
  *  - no guest row but this one, in any club (a Person two clubs share is not one
  *    club's to rename and re-key);
- *  - no email and no phone, and none of the roster-identity columns that only a
- *    membership, an import, a member or an officer sets: `customer_id`,
- *    `basecamp_user_id`, `original_join_date` and `invited_at`. A Person a merge
- *    folded a member into carries those columns (`mergePeople` copies the
- *    absorbed Person's contact and anchors onto the keeper), and so does one a
- *    roster collapse left behind, so the columns, not only the records, are the
- *    evidence. The two contact-preference columns (`preferred_contact`,
- *    `contact_preference_by`) are DELIBERATELY NOT checked:
- *    `preferred-contact-reads.guard.test.ts` lets only the files it names spell
- *    that column, this file is not one, and a null test is not one of its
- *    shapes. The accepted gap: a Person whose ONLY remnant of a membership is
- *    one of those two columns reads pristine and can be adopted by a guest, and
- *    a stale contact-channel preference can then come back with it. #1125 moves
- *    a guest's contact onto its Person, and must replace the contact signal
- *    (ADR-0031);
+ *  - none of the roster-identity columns that only a membership, an import, a
+ *    member or an officer sets: `customer_id`, `basecamp_user_id`,
+ *    `original_join_date` and `invited_at`. A Person a merge folded a member into
+ *    carries those columns (`mergePeople` copies the absorbed Person's contact and
+ *    anchors onto the keeper), and so does one a roster collapse left behind, so
+ *    the columns, not only the records, are the evidence. The two
+ *    contact-preference columns (`preferred_contact`, `contact_preference_by`) are
+ *    DELIBERATELY NOT checked: `preferred-contact-reads.guard.test.ts` lets only
+ *    the files it names spell that column, this file is not one, and a null test
+ *    is not one of its shapes. The accepted gap: a Person whose ONLY remnant of a
+ *    membership is one of those two columns reads pristine and can be adopted by
+ *    a guest, and a stale contact-channel preference can then come back with it.
+ *    **Email and phone are NOT tested any more (#1125).** Until then a contact on
+ *    a guest's Person meant it had been, or had been merged with, a member's, and
+ *    this arm said so. Since #1125 a guest's own contact IS on its Person (written
+ *    by `createGuestRecord`, an officer's edit, or a returning visitor's blank
+ *    filled), so testing it would make every guest with an address read as a
+ *    former member and no convert would ever adopt. The evidence it carried is
+ *    still tested by the arms around it: a member's Person holds a membership, or
+ *    has a removal on record, or carries a roster-identity column. What it cannot
+ *    see is a membership removed without a record that left no column behind and
+ *    only a contact: the same accepted gap as a removal from before #875 (below),
+ *    widened by exactly that case. A Person a convert adopts keeps the contact it
+ *    has: the convert writes no email or phone onto it that was not already its
+ *    guest's;
  *  - no removal on record: a `member_remove` naming it (`detail.personId`, the
  *    shape `applyMemberRemove`, an undo and the importer's release lookup all use).
  *
@@ -291,8 +510,6 @@ export function unboundGuestOnlyPerson(): SQL {
 export function pristineGuestPerson(guestId: string): SQL {
 	return and(
 		isNull(people.userId),
-		isNull(people.email),
-		isNull(people.phone),
 		isNull(people.customerId),
 		isNull(people.basecampUserId),
 		isNull(people.originalJoinDate),

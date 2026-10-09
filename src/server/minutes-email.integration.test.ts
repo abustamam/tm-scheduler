@@ -19,6 +19,7 @@ import {
 	seedClub,
 	seedPerson,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -45,7 +46,9 @@ describe.skipIf(!hasTestDb)("minutes email default recipients (#903)", () => {
 	) {
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seeded.clubId, name, email })
+			.values(
+				await withGuestPerson({ clubId: seeded.clubId, name, email }, testDb),
+			)
 			.returning({ id: guests.id });
 		if (!g) throw new Error("guest insert failed");
 		await testDb.insert(meetingAttendance).values({

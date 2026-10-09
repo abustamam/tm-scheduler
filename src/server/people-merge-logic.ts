@@ -17,7 +17,7 @@
 // helpers (`findBestPersonByEmail`, `historyCounts`) stay in `people-logic.ts`;
 // this module owns the write path. `checkMergeBlocks` is exported for the
 // future preview server-fn (which shows the admin what a merge would do).
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, not, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import {
@@ -30,6 +30,10 @@ import {
 	speeches,
 } from "#/db/schema";
 import { absorbedEnrollmentMoves, earliestDate } from "#/lib/person-identity";
+import {
+	identityIgnoredGuestPerson,
+	noMemberHistory,
+} from "./account-link-logic";
 import { lockClubForWrite } from "./club-write-lock";
 import { RECORD_CHANGED_MESSAGE } from "./guests-logic";
 import { collapseMemberships } from "./membership-collapse-logic";
@@ -219,6 +223,27 @@ export async function mergePeople(
 		const block = checkMergeBlocks(keeper, absorbed);
 		if (block) throw new Error(block);
 
+		// Which side is a guest's own and which has a past as a member, read BEFORE
+		// anything moves: the memberships and guest rows re-point below, and the
+		// absorbed row is deleted (step 5 uses the answer; #1125).
+		const guestOnlyIds = new Set(
+			(
+				await tx
+					.select({ id: people.id })
+					.from(people)
+					.where(
+						and(inArray(people.id, personIds), identityIgnoredGuestPerson()),
+					)
+			).map((r) => r.id),
+		);
+		const withHistoryIds = new Set(
+			(
+				await tx
+					.select({ id: people.id })
+					.from(people)
+					.where(and(inArray(people.id, personIds), not(noMemberHistory())))
+			).map((r) => r.id),
+		);
 		// 1. Memberships: collapse in shared clubs, else plain re-point. Every
 		//    club the absorbed Person belonged to is "affected" (gets an audit row).
 		// Ordered by club, as the locks above were taken.
@@ -291,11 +316,30 @@ export async function mergePeople(
 		// 5. Reconcile the keeper as the canonical Person: keeper wins, but adopt
 		//    any anchor the keeper is missing from the absorbed (checkMergeBlocks
 		//    guaranteed the non-null ones don't conflict). Earliest join wins.
+		//
+		// EXCEPT contact (#1125). A guest-only Person's email and phone are whatever a
+		// visitor typed on an anonymous book or an officer keyed in (ADR-0031); a
+		// member's address is their sign-in key (ADR-0029). The superadmin picks the
+		// keeper freely, so the rule is about the MERGED Person, not about which side
+		// kept: when it will hold a membership or carries member history, its contact
+		// never comes from a guest-only side, in either direction. The other side's
+		// value is used (keeper first, then absorbed) and when that is blank the result
+		// stays blank. Otherwise (a merge of guest-only duplicates, or of Persons with
+		// no past) it is the old fill: keeper ?? absorbed.
+		const mergedIsMember =
+			absorbedMemberships.length > 0 ||
+			keeperMemberships.length > 0 ||
+			withHistoryIds.size > 0;
+		const contactSides = [keeper, absorbed].filter(
+			(side) => !(mergedIsMember && guestOnlyIds.has(side.id)),
+		);
+		const mergedEmail = contactSides.find((side) => side.email)?.email ?? null;
+		const mergedPhone = contactSides.find((side) => side.phone)?.phone ?? null;
 		await tx
 			.update(people)
 			.set({
-				email: keeper.email ?? absorbed.email,
-				phone: keeper.phone ?? absorbed.phone,
+				email: mergedEmail,
+				phone: mergedPhone,
 				// A recorded "goes by" name is scarce (someone had to type it) and
 				// the merge is irreversible, so adopt the absorbed's rather than
 				// lose it (#486).

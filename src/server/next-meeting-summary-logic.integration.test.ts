@@ -20,6 +20,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -113,12 +114,17 @@ describe.skipIf(!hasTestDb)("loadNextMeetingSummary (#932)", () => {
 			.returning({ id: roleDefinitions.id });
 		const [guest] = await testDb
 			.insert(guests)
-			.values({
-				clubId: seeded.clubId,
-				name: "Gus Guest",
-				email: "gus-932@test.example",
-				phone: "+1 555 0932",
-			})
+			.values(
+				await withGuestPerson(
+					{
+						clubId: seeded.clubId,
+						name: "Gus Guest",
+						email: "gus-932@test.example",
+						phone: "+1 555 0932",
+					},
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		await testDb.insert(roleSlots).values([
 			{

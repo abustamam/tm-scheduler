@@ -820,6 +820,13 @@
       "when": 1791523931756,
       "tag": "0116_parched_sheva_callister",
       "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "7",
+      "when": 1791575038884,
+      "tag": "0117_superb_nova",
+      "breakpoints": true
     }
   ]
 }

@@ -19,6 +19,7 @@ import {
 	seedClub,
 	setMemberPhone,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -40,13 +41,18 @@ async function addGuest(
 ): Promise<string> {
 	const [row] = await testDb
 		.insert(guests)
-		.values({
-			clubId,
-			name: g.name,
-			email: g.email ?? null,
-			phone: g.phone ?? null,
-			stage: "prospect",
-		})
+		.values(
+			await withGuestPerson(
+				{
+					clubId,
+					name: g.name,
+					email: g.email ?? null,
+					phone: g.phone ?? null,
+					stage: "prospect",
+				},
+				testDb,
+			),
+		)
 		.returning({ id: guests.id });
 	if (!row) throw new Error("guest insert failed");
 	return row.id;

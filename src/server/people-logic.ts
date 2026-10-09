@@ -6,7 +6,7 @@
 // createServerFn wrapper so it stays directly integration-testable and its
 // `#/db` import never leaks into the client bundle (the server-modules.guard.test.ts
 // rule; see `members-logic.ts`).
-import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, not, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	clubs,
@@ -23,6 +23,7 @@ import {
 	pickKeeper,
 } from "#/lib/person-identity";
 import {
+	identityIgnoredGuestPerson,
 	normalizedEmail,
 	unboundGuestOnlyPerson,
 } from "#/server/account-link-logic";
@@ -53,6 +54,11 @@ export async function findBestPersonByEmail(
 	//
 	// Deliberately NOT club-scoped: this runs before the new club exists, and the
 	// whole point of Rule B is to find the human across every club.
+	//
+	// A guest's Person is not a match (#1125, `identityIgnoredGuestPerson`): a
+	// guest's contact lives on their Person, so an address a visitor typed on a
+	// club's guest book is on a `people` row, and a new club's first admin would
+	// otherwise be put on that visitor's Person and inherit its guest records.
 	const rows = await conn
 		.select({
 			id: people.id,
@@ -60,7 +66,12 @@ export async function findBestPersonByEmail(
 			originalJoinDate: people.originalJoinDate,
 		})
 		.from(people)
-		.where(sql`${normalizedEmail(people.email)} = ${normalized}`);
+		.where(
+			and(
+				sql`${normalizedEmail(people.email)} = ${normalized}`,
+				not(identityIgnoredGuestPerson()),
+			),
+		);
 	if (rows.length === 0) return null;
 	if (rows.length === 1) return rows[0].id;
 

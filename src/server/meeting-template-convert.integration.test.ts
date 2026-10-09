@@ -32,6 +32,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -325,7 +326,12 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 		it("returns the GUEST holder of a released slot", async () => {
 			const [guest] = await testDb
 				.insert(guests)
-				.values({ clubId: club.clubId, name: "Visiting Judge" })
+				.values(
+					await withGuestPerson(
+						{ clubId: club.clubId, name: "Visiting Judge" },
+						testDb,
+					),
+				)
 				.returning({ id: guests.id });
 			if (!guest) throw new Error("Failed to insert guest");
 			const [slot] = await slotsFor(club.meetingId);

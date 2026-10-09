@@ -19,6 +19,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("@tanstack/react-start", () => ({
@@ -126,7 +127,12 @@ describe.skipIf(!hasTestDb)("attendance mode authz (#1049)", () => {
 	it("a plain member cannot set a guest's mode", async () => {
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: "Authz Guest" })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: "Authz Guest" },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		currentUser.id = seed.memberUserId;
 		await expect(

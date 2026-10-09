@@ -17,6 +17,7 @@ import {
 import {
 	guestBookSchema,
 	recordGuestInviteSchema,
+	updateGuestSchema,
 } from "./guest-pipeline-schemas";
 import { loadNextMeetingSummary } from "./meetings-logic";
 
@@ -112,18 +113,6 @@ export const setGuestStage = createServerFn({ method: "POST" })
 		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
 		return applySetGuestStage(data);
 	});
-
-const updateGuestSchema = z.object({
-	clubId: uuid,
-	guestId: uuid,
-	name: z.string().trim().min(1, "A guest name is required."),
-	// What they're called, when it isn't the first token of `name` (#486).
-	// Omitting it clears it, same as `email`/`phone`. Capped to match the member
-	// path, which carries this value onto the shared `people` row on conversion.
-	preferredName: z.string().trim().max(80).nullable().optional(),
-	email: z.string().trim().email().nullable().optional(),
-	phone: z.string().trim().nullable().optional(),
-});
 
 /**
  * Fix a guest's name / email / phone (#364). AUTHED — admin-only, the same gate

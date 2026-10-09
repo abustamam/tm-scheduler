@@ -28,6 +28,7 @@ import {
 	seedClub,
 	seedPerson,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -209,7 +210,9 @@ describe.skipIf(!hasTestDb)("loadAttendanceLapse (#530)", () => {
 		// whole club as "stopped attending" on the strength of a guest register.
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: "Visitor" })
+			.values(
+				await withGuestPerson({ clubId: seed.clubId, name: "Visitor" }, testDb),
+			)
 			.returning({ id: guests.id });
 		if (!g) throw new Error("guest insert failed");
 

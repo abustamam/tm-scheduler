@@ -42,6 +42,7 @@ import {
 	meetingAttendance,
 	meetingAttendancePlan,
 	meetings,
+	people,
 	roleDefinitions,
 	roleFeedbackNotes,
 	roleSlots,
@@ -60,6 +61,7 @@ import {
 	type TestTx,
 	testDb,
 	waitForLockWait,
+	withGuestPerson,
 } from "#/test/db";
 import type { Conn } from "./guest-book-plan";
 
@@ -229,14 +231,20 @@ describe.skipIf(!hasTestDb)(
 		it("a RETURNING guest is refused too, and the contact fill-in rolls back with it", async () => {
 			const [existing] = await testDb
 				.insert(guests)
-				.values({ clubId: club.clubId, name: "Visitor Guest", email: email() })
+				.values(
+					await withGuestPerson(
+						{ clubId: club.clubId, name: "Visitor Guest", email: email() },
+						testDb,
+					),
+				)
 				.returning({ id: guests.id });
 			if (!existing) throw new Error("failed to seed the returning guest");
 			const out = await visitQueuedOnClubLock(cancel, "+1 555 010 0199");
 			expect(out).toEqual({ ok: false, message: MEETING_CANCELLED_MESSAGE });
 			const [row] = await testDb
-				.select({ phone: guests.phone })
+				.select({ phone: people.phone })
 				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
 				.where(eq(guests.id, existing.id));
 			expect(row?.phone).toBeNull();
 			expect((await minted()).attendance).toBe(0);
@@ -501,11 +509,16 @@ describe.skipIf(!hasTestDb)(
 				/** The club changes under the page: Wanda is now on file, so the plan's
 				 *  `new` becomes `matched` and the hash the page holds goes stale. */
 				async function staleThePage() {
-					await testDb.insert(guests).values({
-						clubId: seed.clubId,
-						name: "Wanda Visitor",
-						email: "wanda@example.com",
-					});
+					await testDb.insert(guests).values(
+						await withGuestPerson(
+							{
+								clubId: seed.clubId,
+								name: "Wanda Visitor",
+								email: "wanda@example.com",
+							},
+							testDb,
+						),
+					);
 				}
 
 				it("the control: a stale page on a completed meeting hears that it is stale", async () => {
@@ -831,7 +844,12 @@ describe.skipIf(!hasTestDb)(
 			club = await seedClub();
 			const [guest] = await testDb
 				.insert(guests)
-				.values({ clubId: club.clubId, name: "Invitee", stage: "prospect" })
+				.values(
+					await withGuestPerson(
+						{ clubId: club.clubId, name: "Invitee", stage: "prospect" },
+						testDb,
+					),
+				)
 				.returning({ id: guests.id });
 			if (!guest) throw new Error("failed to seed the guest");
 			guestId = guest.id;

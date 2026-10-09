@@ -151,11 +151,13 @@ export async function loadHolderContacts(
 		const rows = await db
 			.select({
 				id: guests.id,
-				phone: guests.phone,
-				email: guests.email,
+				// A guest's contact lives on their Person (#1125).
+				phone: people.phone,
+				email: people.email,
 				preferredName: guests.preferredName,
 			})
 			.from(guests)
+			.innerJoin(people, eq(people.id, guests.personId))
 			.where(and(eq(guests.clubId, clubId), inArray(guests.id, guestIds)));
 		for (const r of rows) {
 			map.set(contactKey("guest", r.id), {

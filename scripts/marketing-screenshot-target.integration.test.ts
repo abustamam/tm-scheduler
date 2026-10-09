@@ -15,7 +15,7 @@ import {
 	hasTestDb,
 	type SeededClub,
 	seedClub,
-	testDb,
+	testDb, withGuestPerson
 } from "#/test/db";
 import {
 	findCaptureMeeting,
@@ -160,7 +160,7 @@ describe.skipIf(!hasTestDb)("marketing screenshot target (#1122)", () => {
 		seeded = await seedClub();
 		const [guest] = await testDb
 			.insert(guests)
-			.values({ clubId: seeded.clubId, name: "Test Guest" })
+			.values(await withGuestPerson({ clubId: seeded.clubId, name: "Test Guest" }, testDb))
 			.returning({ id: guests.id });
 		const held = await addMeeting(seeded, {
 			days: 4,

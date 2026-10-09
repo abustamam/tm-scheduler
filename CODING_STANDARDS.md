@@ -290,9 +290,11 @@ There is no per-club copy; `members.email` was dropped by migration 0109.
 | the roster edit (`applyMemberEdit`) | `isNull(people.userId)` AND `soleHoldingClub(clubId)`, in the UPDATE's own WHERE |
 | the CSV importer's fill (`importPeopleAndMembers`) | the same two, plus the address is blank |
 | the member's own address change (`confirmEmailChange`, ADR-0030) | the new address was just proved by its link, and `eq(people.userId, …)` for the confirming account is in the UPDATE's own WHERE |
-| convert's fill of a PRISTINE guest Person (`applyConvertGuestToMember`, #1124, ADR-0031) | `pristineGuestPerson(guestId)` in the UPDATE's own WHERE, before the membership insert: unbound, no membership of any status, no speech/enrolment/helper row, no other guest row, no contact or roster-identity column, no `member_remove` on record. Any other Person gets a fresh one |
+| convert's adopt of a PRISTINE guest Person (`applyConvertGuestToMember`, #1124, ADR-0031) | `pristineGuestPerson(guestId)` in the UPDATE's own WHERE, before the membership insert: unbound, no membership of any status, no speech/enrolment/helper row, no other guest row, no roster-identity column, no `member_remove` on record (contact is NOT a condition since #1125). It re-writes the Person's own contact in canonical form, not a fill. Any other Person gets a fresh one |
+| an officer's edit of a GUEST's contact (`applyUpdateGuest`, #1125, ADR-0031) | `guestContactWritable(clubId)` in the UPDATE's own WHERE: unbound, no membership in any club, no past as a member (`noMemberHistory()`), and THIS club holds a guest row on the Person. Any club holding a guest row may correct a guest-only Person; a refused write rolls the whole edit back with the first reason (signed in, a member here, elsewhere, a former member). NOT `soleHoldingClub`: a guest row is never a holder |
+| the public guest book's blank fill (`fillBlankGuestContact`, `captureGuestVisit`, #1125) | `guestContactFillable(clubId)` in the UPDATE's own WHERE: the writable rule, no guest row in any OTHER club, and no past as a member; fill-only in the SET (`coalesce`) |
 | the superadmin first-admin repair, `mergePeople` | their named waivers |
-| a plain INSERT of a brand-new Person | always — a fresh row is nobody's yet |
+| a plain INSERT of a brand-new Person (`createGuestRecord` carries the guest's contact onto the Person it mints) | always — a fresh row is nobody's yet |
 
 **Guest conversion never writes an existing Person's address** (#907 review). The
 guest book is an anonymous public form; a fill would let anyone who knows a
@@ -301,20 +303,44 @@ the account with one magic link. A Person a convert MATCHED on this club's roste
 is never written. The one address convert does write is the guest's own on the
 guest's OWN Person, and only when that Person is PRISTINE (#1124, the maintainer's
 ruling of 2026-10-09): nobody has signed in as them, no membership in any club
-(any status), no speech, enrolment or charter-helper row, no other guest row, no
-email or phone, none of the roster-identity columns (`customer_id`,
-`basecamp_user_id`, `original_join_date`, `invited_at`), and no `member_remove` naming them
+(any status), no speech, enrolment or charter-helper row, no other guest row,
+none of the roster-identity columns (`customer_id`, `basecamp_user_id`,
+`original_join_date`, `invited_at`), and no `member_remove` naming them
 (`pristineGuestPerson`, the one definition, in the UPDATE's own WHERE). That is
 evidence, not proof: it cannot see a membership deleted without a record that left
-no column behind. A pristine Person is exactly what the fresh Person the old
-convert minted was, so convert fills its blank contact, and its name and goes-by
-name, from the guest row. Every other Person the guest row names (a former member,
-a corrected one, a merged one, a wrongly linked one) gets a fresh Person, and the
-old one is left as it is, or deleted when nothing references it and no removal
-names it. An unlink points the guest at a fresh name-only Person when its Person
-holds a membership. Undo does not touch the contact, so the undoing club's own
-roster CSV still matches the Person (#875). #1125 moves guest contact onto the
-Person and must replace the "has contact" signal.
+no column behind. **Contact is not a condition** (#1125): a guest's own email and
+phone live on its Person, so testing them would make every guest with an address
+read as a former member. A pristine Person is exactly what the fresh Person the old
+convert minted was, so convert adopts it, writes its name and goes-by name from
+the guest row, and leaves the contact it already has (re-written in canonical
+form). Every other Person the guest row names (a former member, a corrected one, a
+merged one, a wrongly linked one) gets a fresh Person, and the old one is left as
+it is, or deleted when nothing references it and no removal names it. **The fresh
+Person carries the old one's contact ONLY when the old one is a guest's own**
+(`identityIgnoredGuestPerson()`: unbound, guest-only, no past as a member): a
+Person that signed in, holds a membership, or was a member's has contact that is
+somebody else's, and copying it would put another human's address on a membership
+(a wrong-person sign-in key). An unlink points the guest at a fresh Person when its
+Person holds a membership, carrying the contact the link recorded in its
+`member_merge` activity detail (`guestContact`; the activity feed never returns
+`detail` whole). The record is dropped once the unlink used it, and when the guest is
+deleted, converted, or re-linked. Undo does not touch the contact, so the undoing club's own roster
+CSV still matches the Person (#875).
+
+**A guest's email and phone are their Person's** (#1125, ADR-0031). Two predicates
+in `account-link-logic.ts` gate the guest-side writers: `guestContactWritable`
+(an officer's edit) and `guestContactFillable` (the anonymous book), both in the
+UPDATE's own WHERE, both with `noMemberHistory()`. `guestContactRefusalSql` is
+their one read form, shared by the board (`PipelineGuestRow.contactRefusal`), the
+edit dialog's profile read and the refusal the write throws. The member-identity
+paths that match `people` by address globally ignore a guest-only Person
+(`identityIgnoredGuestPerson()`: the CSV importer's candidates and address-holder
+map, `findBestPersonByEmail`). `mergePeople` never takes the merged Person's email or phone from a guest-only side
+when the merged Person will hold a membership or carries member history, whichever
+side the superadmin kept (the other side's value, or blank). `guests.email` and
+`guests.phone` still exist in the database, dead, and are deliberately NOT declared
+in `schema.ts` until #1126 drops them in SQL (`guest-contact-columns.guard.test.ts`
+scans `src/` and `scripts/` for raw references).
 
 Non-null on a LINKED Person means verified; on an unlinked one it is what the one
 club that held them typed. That is why a club may write it only while it is the
@@ -387,7 +413,13 @@ column to itself.
 is not an inline object literal is refused outright, comments are stripped, the
 table is resolved through its local binding, upserts and raw SQL count; each
 club-side writer must carry `isNull(people.userId)` AND `soleHoldingClub(`; convert's
-fill of a pristine guest Person carries `pristineGuestPerson(` instead),
+adopt of a pristine guest Person carries `pristineGuestPerson(` instead; the guest-side
+writers carry `guestContactWritable(` and `guestContactFillable(`, and each waiver is
+held to its own function's body),
+`guest-contact-columns.guard.test.ts` (no reference to the dead guest columns),
+`guest-contact-on-person.integration.test.ts` and `guest-contact-migration.integration.test.ts`
+(the predicates and their refusal, the writers, the identity paths, convert's
+own-contact rule, link and unlink, and migration 0117 through the real runner),
 `roster-obstacle.guard.test.ts` (the complement),
 `account-link-logic.integration.test.ts` (each arm killed independently),
 `member-email-ownership.integration.test.ts`,
@@ -410,8 +442,8 @@ condition at a time, an undo that leaves the contact alone, and the lock order) 
   `ConvertGuestResult.rosterConflict`, the edit's `rosterConflict`).
 - **READ COMMITTED phantom:** the bind's predicate is one statement, but a row
   committed after its snapshot is invisible to it.
-- **`people_email_backup`, `people_email_backup_2`, `members_email_backup` and
-  the phone backups are temporary.** Drop them (schema + a generated migration)
+- **`people_email_backup`, `people_email_backup_2`, `members_email_backup`,
+  `guests_contact_backup` (#1125) and the phone backups are temporary.** Drop them (schema + a generated migration)
   once a release has passed. The 0076 restore script was deleted in #907: it
   would write unverified pre-#756 addresses as sign-in keys.
 

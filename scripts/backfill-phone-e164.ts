@@ -15,15 +15,16 @@
  * means different things for old and new rows — which is #397 itself, one level
  * up. A returning guest whose row predates the fix would get a duplicate.
  *
- * - `guests.phone`: normalized with THEIR club's country code
- *   — the club's own setting, or `DEFAULT_COUNTRY_CODE` when it never set one
- *   (the same fallback `loadClubDefaultCountryCode` applies on write).
  * - `people.phone`: people are club-less (ADR-0008), so the app-wide
  *   `DEFAULT_COUNTRY_CODE` is what applies. Before #397 this pass left bare
  *   national numbers alone; it can't now, because the guest/member rows that
  *   convert-to-member dedups AGAINST are all E.164.
- * - There is no `members.phone` pass: that column was dropped in #906, and a
- *   member's phone is their Person's (`people.phone`, the pass above).
+ * - There is no `members.phone` pass (dropped in #906) and no `guests.phone` pass
+ *   (#1125): a member's and a guest's phone are both their Person's, which is
+ *   the pass above. The `guests.phone` column is dead and not in `schema.ts`; #1126
+ *   drops it. A guest row's old per-club copy was normalized with its club's own
+ *   country code, which this script no longer does; the copy 0117 made onto the
+ *   Person is as stored, and the Person pass applies the app default to it.
  *
  * The fallback is an assumption, and on a non-NANP club that never set a country
  * code it will be the wrong one. Check the dry-run output for `+1`-prefixed
@@ -38,7 +39,7 @@
  */
 import { eq, isNotNull } from "drizzle-orm";
 import { db } from "#/db";
-import { clubs, guests, people } from "#/db/schema";
+import { people } from "#/db/schema";
 import { DEFAULT_COUNTRY_CODE, toStoredPhone } from "#/lib/phone";
 
 const APPLY = process.argv.includes("--apply");
@@ -56,55 +57,9 @@ function dbTarget(): string {
 	}
 }
 
-/**
- * Name the guest rows that #397 duplicated. Two rows for one visitor — one per
- * spelling of their phone — are invisible while the spellings normalize
- * differently; once they don't, they collide on the dedup key.
- *
- * This only REPORTS. Merging two visit histories is a judgment call (which name,
- * which stage) that belongs to the VP Membership, not a backfill: capture picks
- * the OLDEST matching row from here on, so the pipeline is consistent either way
- * — it just still shows two prospects until someone merges them. `applyUpdateGuest`
- * will also refuse to edit the newer row's phone while the collision stands.
- */
-function reportGuestCollisions(
-	rows: { id: string; name: string; phone: string | null; clubId: string }[],
-	normalize: (row: { phone: string | null; clubId?: string }) => string | null,
-): void {
-	const byKey = new Map<string, { id: string; name: string }[]>();
-	for (const row of rows) {
-		const phone = normalize(row);
-		if (!phone) continue;
-		const key = `${row.clubId}|${phone}`;
-		byKey.set(key, [...(byKey.get(key) ?? []), { id: row.id, name: row.name }]);
-	}
-	const collisions = [...byKey].filter(([, group]) => group.length > 1);
-	if (collisions.length === 0) return;
-
-	console.log(
-		`\n${collisions.length} phone number(s) are shared by more than one guest in the same club —`,
-	);
-	console.log("the duplicate rows #397 created. Merge them by hand:");
-	for (const [key, group] of collisions) {
-		const [clubId, phone] = key.split("|");
-		console.log(`  club ${clubId} · ${phone}`);
-		for (const g of group) console.log(`    - ${g.name} (${g.id})`);
-	}
-}
-
 async function main() {
 	console.log(`Backfill phone → E.164 on ${dbTarget()}`);
 	console.log(APPLY ? "MODE: apply (writing changes)" : "MODE: dry run\n");
-
-	// Effective country code per club — the club's own, else the app default.
-	// Mirrors `loadClubDefaultCountryCode`, so backfilled rows land exactly where
-	// the write paths would put them.
-	const clubRows = await db
-		.select({ id: clubs.id, cc: clubs.defaultCountryCode })
-		.from(clubs);
-	const clubCc = new Map(
-		clubRows.map((c) => [c.id, c.cc?.trim() || DEFAULT_COUNTRY_CODE]),
-	);
 
 	let scanned = 0;
 	let changed = 0;
@@ -124,22 +79,6 @@ async function main() {
 			if (APPLY) await update(row.id, next);
 		}
 	}
-
-	// guests.phone — normalize with the guest's club default.
-	const guestRows = await db
-		.select({
-			id: guests.id,
-			name: guests.name,
-			phone: guests.phone,
-			clubId: guests.clubId,
-		})
-		.from(guests)
-		.where(isNotNull(guests.phone));
-	const guestPhone = (r: { phone: string | null; clubId?: string }) =>
-		toStoredPhone(r.phone, clubCc.get(r.clubId ?? "") ?? DEFAULT_COUNTRY_CODE);
-	await backfill("guest", guestRows, guestPhone, (id, next) =>
-		db.update(guests).set({ phone: next }).where(eq(guests.id, id)),
-	);
 
 	// people.phone — club-less, so the app-wide default is the only code that
 	// applies (#397). Convert-to-member dedups guests against these rows.
@@ -161,7 +100,6 @@ async function main() {
 	if (!APPLY && changed > 0) {
 		console.log("Re-run with --apply to write these changes.");
 	}
-	reportGuestCollisions(guestRows, guestPhone);
 }
 
 main()

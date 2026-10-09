@@ -30,6 +30,7 @@ import {
 	seedClub,
 	seedPerson,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -73,13 +74,18 @@ describe.skipIf(!hasTestDb)("guest-edit authorization (#727)", () => {
 		});
 		const [row] = await testDb
 			.insert(guests)
-			.values({
-				clubId: seed.clubId,
-				name: "Nadia Farouk",
-				email: `nadia-${randomUUID()}@example.test`,
-				phone: null,
-				stage: "prospect",
-			})
+			.values(
+				await withGuestPerson(
+					{
+						clubId: seed.clubId,
+						name: "Nadia Farouk",
+						email: `nadia-${randomUUID()}@example.test`,
+						phone: null,
+						stage: "prospect",
+					},
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		if (!row) throw new Error("failed to seed guest");
 		guestId = row.id;
@@ -142,9 +148,10 @@ describe.skipIf(!hasTestDb)("guest-edit authorization (#727)", () => {
 			.select({
 				name: guests.name,
 				preferredName: guests.preferredName,
-				email: guests.email,
+				email: people.email,
 			})
 			.from(guests)
+			.innerJoin(people, eq(people.id, guests.personId))
 			.where(eq(guests.id, guestId));
 		expect(after?.name).toBe("Nadia Farouq");
 		expect(after?.preferredName).toBe("Nadi");

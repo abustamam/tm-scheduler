@@ -47,6 +47,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -137,12 +138,17 @@ describe.skipIf(!hasTestDb)("convert onto a lapsed membership: access", () => {
 	async function guestForReturnee() {
 		const [g] = await testDb
 			.insert(guests)
-			.values({
-				clubId: seed.clubId,
-				name: "Returning Member",
-				email: returneeEmail,
-				stage: "prospect",
-			})
+			.values(
+				await withGuestPerson(
+					{
+						clubId: seed.clubId,
+						name: "Returning Member",
+						email: returneeEmail,
+						stage: "prospect",
+					},
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		if (!g) throw new Error("Failed to seed guest");
 		return g.id;
@@ -347,12 +353,17 @@ describe.skipIf(!hasTestDb)("convert onto a lapsed membership: access", () => {
 		});
 		const [g] = await testDb
 			.insert(guests)
-			.values({
-				clubId: seed.clubId,
-				name: "Accountless Officer",
-				email: orphanEmail,
-				stage: "prospect",
-			})
+			.values(
+				await withGuestPerson(
+					{
+						clubId: seed.clubId,
+						name: "Accountless Officer",
+						email: orphanEmail,
+						stage: "prospect",
+					},
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		if (!g) throw new Error("Failed to seed guest");
 

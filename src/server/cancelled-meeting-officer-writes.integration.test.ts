@@ -39,6 +39,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -178,7 +179,12 @@ async function awardRows(seed: SeededClub) {
 async function seedPresentGuest(seed: SeededClub): Promise<string> {
 	const [g] = await testDb
 		.insert(guests)
-		.values({ clubId: seed.clubId, name: "Cancelled Case Guest" })
+		.values(
+			await withGuestPerson(
+				{ clubId: seed.clubId, name: "Cancelled Case Guest" },
+				testDb,
+			),
+		)
 		.returning({ id: guests.id });
 	if (!g) throw new Error("Failed to seed the guest");
 	await testDb.insert(meetingAttendance).values({

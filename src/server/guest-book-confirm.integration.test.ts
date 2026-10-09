@@ -30,6 +30,7 @@ import {
 	meetingAttendance,
 	meetings,
 	members,
+	people,
 } from "#/db/schema";
 // Through the guest-book module deliberately: #812 moved the arithmetic into
 // `src/lib/pending-plan.ts` and re-exported it from here, and an importer that
@@ -44,6 +45,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -167,8 +169,9 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 
 	async function rows() {
 		const g = await testDb
-			.select({ id: guests.id, name: guests.name, email: guests.email })
+			.select({ id: guests.id, name: guests.name, email: people.email })
 			.from(guests)
+			.innerJoin(people, eq(people.id, guests.personId))
 			.where(eq(guests.clubId, seed.clubId));
 		const a = await testDb
 			.select({ guestId: meetingAttendance.guestId })
@@ -219,13 +222,18 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 		// The whole point of the page. A masked email cannot be checked against
 		// the paper, and on an ambiguous line it is often the ONLY thing telling
 		// two guests with the same name apart.
-		await testDb.insert(guests).values({
-			clubId: seed.clubId,
-			name: "Samir Patel",
-			phone: "+15551234567",
-			email: "samir@example.com",
-			stage: "prospect",
-		});
+		await testDb.insert(guests).values(
+			await withGuestPerson(
+				{
+					clubId: seed.clubId,
+					name: "Samir Patel",
+					phone: "+15551234567",
+					email: "samir@example.com",
+					stage: "prospect",
+				},
+				testDb,
+			),
+		);
 		const id = await preview([
 			{ name: "Vera Real", email: "vera@example.com", phone: "+15559876543" },
 			{ name: "Priya Raman", phone: "+1 555 123 4567" },
@@ -544,12 +552,17 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 	it("resolves an ambiguity from the page and applies it", async () => {
 		const [existing] = await testDb
 			.insert(guests)
-			.values({
-				clubId: seed.clubId,
-				name: "Samir Patel",
-				phone: "+15551234567",
-				stage: "prospect",
-			})
+			.values(
+				await withGuestPerson(
+					{
+						clubId: seed.clubId,
+						name: "Samir Patel",
+						phone: "+15551234567",
+						stage: "prospect",
+					},
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		// A shared number under a name that does not agree: #488 says these are
 		// two prospects, and a transcriber gets asked rather than guessed at.
@@ -590,12 +603,17 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 	// --- the happy path, and AC13 -----------------------------------------
 
 	it("applies a page: creates new guests, reuses matched ones, records attendance", async () => {
-		await testDb.insert(guests).values({
-			clubId: seed.clubId,
-			name: "Rita Vance",
-			email: "rita@example.com",
-			stage: "prospect",
-		});
+		await testDb.insert(guests).values(
+			await withGuestPerson(
+				{
+					clubId: seed.clubId,
+					name: "Rita Vance",
+					email: "rita@example.com",
+					stage: "prospect",
+				},
+				testDb,
+			),
+		);
 		const id = await preview([
 			{ name: "Rita Vance", email: "rita@example.com" },
 			{ name: "Newcomer One", email: "new1@example.com" },
@@ -828,7 +846,12 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 		try {
 			const [foreign] = await testDb
 				.insert(guests)
-				.values({ clubId: other.clubId, name: "Outsider", stage: "prospect" })
+				.values(
+					await withGuestPerson(
+						{ clubId: other.clubId, name: "Outsider", stage: "prospect" },
+						testDb,
+					),
+				)
 				.returning({ id: guests.id });
 			const id = await preview([{ name: "Who Is This" }]);
 			const before = editable(await load(id));
@@ -876,12 +899,17 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 		// the plan that would run.
 		const [g] = await testDb
 			.insert(guests)
-			.values({
-				clubId: seed.clubId,
-				name: "Rita Vance",
-				email: "rita@example.com",
-				stage: "prospect",
-			})
+			.values(
+				await withGuestPerson(
+					{
+						clubId: seed.clubId,
+						name: "Rita Vance",
+						email: "rita@example.com",
+						stage: "prospect",
+					},
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		await testDb.insert(meetingAttendance).values({
 			meetingId: pastMeetingId,
@@ -912,12 +940,17 @@ describe.skipIf(!hasTestDb)("the guest-book confirm page (#806)", () => {
 	// --- AC9: blocked ------------------------------------------------------
 
 	it("refuses while a line still blocks, and writes nothing", async () => {
-		await testDb.insert(guests).values({
-			clubId: seed.clubId,
-			name: "Samir Patel",
-			phone: "+15551234567",
-			stage: "prospect",
-		});
+		await testDb.insert(guests).values(
+			await withGuestPerson(
+				{
+					clubId: seed.clubId,
+					name: "Samir Patel",
+					phone: "+15551234567",
+					stage: "prospect",
+				},
+				testDb,
+			),
+		);
 		const id = await preview([
 			{ name: "Priya Raman", phone: "+1 555 123 4567" },
 		]);

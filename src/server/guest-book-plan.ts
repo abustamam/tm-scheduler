@@ -341,10 +341,10 @@ export async function plan(
 		// A guest marked present becomes a DEFAULT RECIPIENT of this meeting's
 		// minutes email draft (`loadRecipients` in `minutes-email-port-logic.ts`), and
 		// `resolveMinutesRecipients` only checks the string is non-empty before
-		// putting it in the officer's draft. Both other paths that write `guests.email`
-		// validate the format — the public guest book
-		// (`guest-pipeline-schemas.ts:33`) and the admin edit
-		// (`guest-pipeline.ts:85`) both use `z.string().trim().email()`. This one
+		// putting it in the officer's draft. Both other paths that write a guest's address
+		// (`people.email`, #1125) validate the format — the public guest book and the
+		// admin edit (`guestBookSchema`, `updateGuestSchema` in
+		// `guest-pipeline-schemas.ts`) both use `z.string().trim().email()`. This one
 		// is fed by an LLM reading HANDWRITING, so it is the path most likely to
 		// produce a malformed address and was the only one not checking.
 		//

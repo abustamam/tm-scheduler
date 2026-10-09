@@ -16,6 +16,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -39,12 +40,17 @@ describe.skipIf(!hasTestDb)("loadMeetingSlots guest caption", () => {
 	}) {
 		const [guest] = await testDb
 			.insert(guests)
-			.values({
-				clubId: seed.clubId,
-				name: "Ben Carter",
-				email: `ben-${randomUUID()}@example.test`,
-				...values,
-			})
+			.values(
+				await withGuestPerson(
+					{
+						clubId: seed.clubId,
+						name: "Ben Carter",
+						email: `ben-${randomUUID()}@example.test`,
+						...values,
+					},
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		if (!guest) throw new Error("guest insert failed");
 		await testDb

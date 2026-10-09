@@ -1077,8 +1077,10 @@ async function main() {
 	);
 
 	// Guests across the pipeline (VP Membership). Every guest row points at a
-	// Person (#1124), so each goes through `createGuestRecord`; Ravi, who joined,
-	// IS the member's Person, as the migration's backfill leaves a converted guest.
+	// Person (#1124), so each goes through `createGuestRecord`, which writes the
+	// contact onto the Person it mints (#1125). Ravi, who joined, IS the member's
+	// Person, as the migration's backfill leaves a converted guest, so he carries
+	// no contact of his own here: a guest row never writes a member's.
 	const raviPersonId = mcf.personByName.get("Ravi Anand");
 	if (!raviPersonId) throw new Error('Seed: no Person for "Ravi Anand"');
 	for (const g of [
@@ -1100,7 +1102,6 @@ async function main() {
 		},
 		{
 			name: "Ravi Anand",
-			email: "ravi@example.com",
 			stage: "joined" as const,
 			convertedMembershipId: mcf.memberByName.get("Ravi Anand")!,
 			personId: raviPersonId,

@@ -103,6 +103,7 @@ function guestRow(over: Partial<PipelineGuestRow> = {}): PipelineGuestRow {
 		// to `phone` by mistake would still show one, and identical fixtures would
 		// make the binding untestable.
 		phoneRaw: "415-555-2671 x12",
+		contactRefusal: null,
 		stage: "prospect",
 		convertedMembershipId: null,
 		linkReversible: false,

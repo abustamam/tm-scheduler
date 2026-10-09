@@ -34,6 +34,7 @@ import {
 	seedClub,
 	setMemberPhone,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -741,11 +742,16 @@ describe.skipIf(!hasTestDb)(
 			);
 			const [g] = await testDb
 				.insert(guests)
-				.values({
-					clubId: s.clubId,
-					name: `Convert Guest ${randomUUID()}`,
-					stage: "prospect",
-				})
+				.values(
+					await withGuestPerson(
+						{
+							clubId: s.clubId,
+							name: `Convert Guest ${randomUUID()}`,
+							stage: "prospect",
+						},
+						testDb,
+					),
+				)
 				.returning({ id: guests.id, name: guests.name });
 			if (!g) throw new Error("no guest");
 			await applyConvertGuestToMember({

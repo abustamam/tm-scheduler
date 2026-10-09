@@ -9,6 +9,7 @@ import {
 	seedClub,
 	seedPerson,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 import {
 	contactKey,
@@ -60,13 +61,18 @@ async function addGuest(
 ): Promise<string> {
 	const [row] = await testDb
 		.insert(guests)
-		.values({
-			clubId,
-			name,
-			phone: opts.phone ?? null,
-			email: opts.email ?? null,
-			preferredName: opts.preferredName ?? null,
-		})
+		.values(
+			await withGuestPerson(
+				{
+					clubId,
+					name,
+					phone: opts.phone ?? null,
+					email: opts.email ?? null,
+					preferredName: opts.preferredName ?? null,
+				},
+				testDb,
+			),
+		)
 		.returning({ id: guests.id });
 	if (!row) throw new Error("guest insert failed");
 	return row.id;
