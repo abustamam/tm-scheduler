@@ -717,8 +717,9 @@ export interface VoteCounterAuthz {
  * make the tally unreadable on exactly the meetings whose tally matters, and
  * (b) block the Ballot Counter from confirming a winner afterwards — which
  * `setAward` explicitly permits, because minutes are written up after the
- * meeting. Callers that MUTATE the vote window call `assertMeetingNotLocked`
- * on the returned `meetingStatus` themselves.
+ * meeting. Callers that MUTATE the vote window refuse a frozen meeting
+ * themselves, by the `plan` write class, on the returned `meetingStatus`
+ * (`assertMeetingAccepts(meetingStatus, "plan")`, in `voting.ts`).
  */
 export async function resolveVoteCounterAuthz(
 	input: MeetingAgendaAuthzInput,

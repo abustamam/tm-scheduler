@@ -9,7 +9,10 @@
  * | Writer                             | Row locks, in order                          |
  * |------------------------------------|----------------------------------------------|
  * | `joinBallotAsGuest`                | meeting FOR UPDATE, then club FOR SHARE       |
- * | `openVote`                         | meeting + club FOR SHARE, one statement       |
+ * | `openVote`                         | meeting FOR SHARE (frozen-status read), then  |
+ * |                                    | meeting + club FOR SHARE, one statement       |
+ * | `disqualifyCandidate`,             | meeting FOR SHARE (frozen-status read), no    |
+ * | `undoDisqualification`             | club row lock, so they take no club lock      |
  * | `captureGuestVisit`                | club, then the meeting (attendance FK)        |
  * | `saveMeetingAgendaAsClubTemplate`  | meeting FOR UPDATE, then club NO KEY UPDATE   |
  *

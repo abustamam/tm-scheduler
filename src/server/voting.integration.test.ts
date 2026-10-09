@@ -52,6 +52,7 @@ const PHONE = "5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a";
 
 const { GUEST_VOTE_CAST_ELSEWHERE_MESSAGE, VOTE_CAST_ELSEWHERE_MESSAGE } =
 	await import("#/lib/ballot-device");
+const { MEETING_LOCKED_MESSAGE } = await import("#/lib/meeting-lifecycle");
 
 const {
 	anonymousBallotLockKey,
@@ -68,7 +69,6 @@ const {
 } = await import("#/server/voting-logic");
 const { applyCompleteMeeting } = await import("#/server/meetings-logic");
 const { setAward } = await import("#/server/minutes-logic");
-const { assertMeetingNotLocked } = await import("#/server/meeting-authz-logic");
 
 describe.skipIf(!hasTestDb)("vote table constraints (#510)", () => {
 	let seed: SeededClub;
@@ -1541,9 +1541,16 @@ describe.skipIf(!hasTestDb)("completing a meeting closes voting (#510)", () => {
 			meetingId: seed.meetingId,
 			actorMemberId: seed.adminMemberId,
 		});
-		// The lock assert lives in the server fn, not in `openVote`, so assert it
-		// where it actually is.
-		expect(() => assertMeetingNotLocked("completed")).toThrow();
+		// `openVote` refuses it in its own body since #1138 (the server fn also
+		// refuses it, but a handler cannot be reached from vitest).
+		await expect(
+			openVote({
+				meetingId: seed.meetingId,
+				category: "best_speaker",
+				actorMemberId: seed.adminMemberId,
+				clubId: seed.clubId,
+			}),
+		).rejects.toThrow(MEETING_LOCKED_MESSAGE);
 	});
 });
 
