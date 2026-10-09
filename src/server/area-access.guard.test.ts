@@ -13,7 +13,7 @@
  *   `area_directors` exists, so the role can never widen one;
  * - the guard and the auth context ask #1116's predicate and do not restate it,
  *   so the nav and the access cannot disagree about the same person;
- * - nothing under `src/server/mcp/` can reach an area module, so the connector
+ * - nothing under `src/server/mcp/` imports an area module, so the connector
  *   stays blind to area data.
  *
  * Two reading modes (`guard-source.ts`): a "must BE present" assertion reads
@@ -24,7 +24,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { AREA_REFUSAL_MESSAGE } from "#/lib/area-refusal";
 import { readSource, serverFnBody } from "#/test/guard-source";
 
 const raw = (path: string) => readFileSync(path, "utf8");
@@ -87,6 +86,18 @@ describe("the area server fns run the gate before the loader (#1119)", () => {
 	});
 });
 
+describe("getAreaHealth bounds its input (#1119)", () => {
+	it("caps the id's length in the validator, before any guard or query sees it", () => {
+		// Every invalid input gets the one refusal (the integration test proves it
+		// at the real handler); the cap is what keeps an enormous string from being
+		// parsed as a uuid or sent to the database at all, and no message tells it
+		// apart, so only the source can hold it.
+		expect(readSource("src/server/area-health.ts")).toMatch(
+			/areaId:\s*z\.string\(\)\.max\(\d+\)/,
+		);
+	});
+});
+
 describe("no club guard can reach the area role (#1119)", () => {
 	// The files that decide who may read or write a club's records. Each must
 	// stay ignorant of `area_directors`, or the role has widened a guard.
@@ -94,6 +105,8 @@ describe("no club guard can reach the area role (#1119)", () => {
 		"src/server/guards.ts",
 		"src/server/club-readable-logic.ts",
 		"src/server/meeting-authz-logic.ts",
+		"src/server/meeting-write-gate.ts",
+		"src/server/mcp/authz-logic.ts",
 	];
 
 	for (const file of CLUB_GATES) {
@@ -113,13 +126,21 @@ describe("no club guard can reach the area role (#1119)", () => {
 		);
 	});
 
-	it("the client's copy of the refusal is the server's, word for word", () => {
-		// `area-refusal.ts` cannot import `guards.ts` (it reaches `#/db`), so the
-		// area page's not-found mapping holds a copy. A drifted copy would send a
-		// refused director to the error boundary instead of the not-found page.
-		expect(raw("src/server/guards.ts")).toContain(
-			`export const NO_PERMISSION_MESSAGE = ${JSON.stringify(AREA_REFUSAL_MESSAGE)};`,
+	it("the refusal message is declared once, in src/lib, and guards.ts re-exports it unchanged", () => {
+		// `area-refusal.ts` is client code and cannot import `guards.ts` (it reaches
+		// `#/db`), so the string lives in a client-safe module both read. A second
+		// literal in `guards.ts` would let the two drift while every test passes.
+		const guards = raw("src/server/guards.ts");
+		expect(guards).toContain(
+			'import { NO_PERMISSION_MESSAGE } from "#/lib/permission-message";',
 		);
+		expect(guards).toContain("export { NO_PERMISSION_MESSAGE };");
+		expect(guards).not.toMatch(/NO_PERMISSION_MESSAGE\s*=/);
+		const refusal = raw("src/lib/area-refusal.ts");
+		expect(readSource("src/lib/area-refusal.ts")).toContain(
+			"err.message === NO_PERMISSION_MESSAGE",
+		);
+		expect(refusal).not.toMatch(/permission to do that/);
 	});
 });
 
@@ -142,13 +163,14 @@ describe("the guard and the auth context ask #1116's predicate (#1119)", () => {
 		expect(readSource("src/server/area-guards.ts")).toContain(
 			"isCurrentTerm()",
 		);
-		expect(readSource("src/server/auth-context.ts")).toContain(
-			"loadCurrentAreasForUser(user.id)",
+		// Whitespace-tolerant: the formatter wraps the call across lines.
+		expect(readSource("src/server/auth-context.ts")).toMatch(
+			/loadCurrentAreasForUser\(\s*user\.id,?\s*\)/,
 		);
 	});
 });
 
-describe("nothing under src/server/mcp reaches an area module (#1119)", () => {
+describe("nothing under src/server/mcp imports an area module (#1119)", () => {
 	/** Every `.ts` / `.tsx` under a directory, recursively, tests included. */
 	function files(dir: string): string[] {
 		return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -199,5 +221,16 @@ describe("nothing under src/server/mcp reaches an area module (#1119)", () => {
 				.map((name) => `${file} imports ${name}`),
 		);
 		expect(offenders).toEqual([]);
+	});
+});
+
+describe("the console preview shows the area on the page (#1119)", () => {
+	it("keys the preview panel by the area, so moving to another area never shows the previous one's numbers", () => {
+		// The panel holds the loaded preview in state. Two console area pages are
+		// one component instance to React, so without `key` the state survives the
+		// move and the page would show area A's counts under area B's heading.
+		expect(
+			readSource("src/routes/_authed/superadmin/areas.$areaId.tsx"),
+		).toContain("<AreaPreviewPanel key={area.id} areaId={area.id} />");
 	});
 });

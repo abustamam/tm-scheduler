@@ -19,6 +19,7 @@
 import { randomUUID } from "node:crypto";
 import { eq, inArray, sql } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AreaNavEntry } from "#/components/app-shell";
 import {
 	areaClubs,
 	areaDirectors,
@@ -52,6 +53,21 @@ vi.mock("@tanstack/react-start/server", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-start/server")>()),
 	getRequest: () => ({ headers: new Headers() }),
 }));
+// A switch on the area read, so the auth context's `.catch` can be driven. It
+// passes straight through to #1116's loader unless a test turns it on.
+const areaRead = vi.hoisted(() => ({ failing: false }));
+vi.mock("./area-terms-logic", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./area-terms-logic")>();
+	return {
+		...actual,
+		loadCurrentAreasForUser: (
+			...args: Parameters<typeof actual.loadCurrentAreasForUser>
+		) =>
+			areaRead.failing
+				? Promise.reject(new Error("area read is down"))
+				: actual.loadCurrentAreasForUser(...args),
+	};
+});
 vi.mock("#/lib/auth", () => ({
 	auth: {
 		api: {
@@ -71,7 +87,10 @@ const { NO_PERMISSION_MESSAGE } = guards;
 
 type Fn = (input: { data: unknown }) => Promise<unknown>;
 type AreaHealthResult = { areaId: string; label: string; clubs: unknown[] };
-type AuthContextResult = { areas: { id: string; label: string }[] };
+type AuthContextResult = {
+	user: { id: string } | null;
+	areas: AreaNavEntry[];
+};
 
 const YEAR = currentProgramYear();
 const created = {
@@ -224,6 +243,24 @@ describe.skipIf(!hasTestDb)("requireAreaDirector (#1119)", () => {
 		);
 	});
 
+	it("refuses an open term on NEXT year's area: a division staffed in June takes effect in July", async () => {
+		const area = await makeWorld();
+		const thisYear = await area(YEAR, "B", "2");
+		const nextYear = await area(YEAR + 1, "C", "3");
+		const userId = await makeUser();
+		await openTerm(thisYear, userId);
+		await openTerm(nextYear, userId);
+		// Control: the same user passes on this year's area, so the refusal below
+		// is the year check and not a harness that refuses everything.
+		await expect(
+			requireAreaDirector(userId, thisYear),
+		).resolves.toBeUndefined();
+
+		await expect(requireAreaDirector(userId, nextYear)).rejects.toThrow(
+			exact(NO_PERMISSION_MESSAGE),
+		);
+	});
+
 	it("refuses a superadmin with no term: no ambient cross-club bypass (ADR-0016)", async () => {
 		const area = await makeWorld();
 		const areaId = await area(YEAR, "B", "2");
@@ -327,6 +364,37 @@ describe.skipIf(!hasTestDb)("getAreaHealth (#1119)", () => {
 		).rejects.toThrow(exact(NO_PERMISSION_MESSAGE));
 	});
 
+	it("answers EVERY input that is not a lookup-able area id with the one refusal, never a schema message", async () => {
+		const area = await makeWorld();
+		const areaId = await area(YEAR, "B", "2");
+		const userId = await makeUser();
+		await openTerm(areaId, userId);
+		sessionUserId = userId;
+		// Control: a valid id from the same user reads.
+		await expect(read(areaId)).resolves.toMatchObject({ areaId });
+
+		const invalid: unknown[] = [
+			undefined,
+			null,
+			"not-an-object",
+			{},
+			{ areaId: undefined },
+			{ areaId: 42 },
+			{ areaId: "x".repeat(101) },
+			{ areaId: "x".repeat(100_000) },
+			{ areaId: "not-a-uuid" },
+			{ areaId: "" },
+		];
+		for (const data of invalid) {
+			// The validator throws before the handler runs; a client sees that as a
+			// rejection, so the call is wrapped to read it the same way.
+			await expect(
+				Promise.resolve().then(() => (getAreaHealth as Fn)({ data })),
+				JSON.stringify(data)?.slice(0, 40),
+			).rejects.toThrow(exact(NO_PERMISSION_MESSAGE));
+		}
+	});
+
 	it("refuses nobody signed in with the sign-in message, before it reads any area", async () => {
 		const area = await makeWorld();
 		const areaId = await area(YEAR, "B", "2");
@@ -374,6 +442,42 @@ describe.skipIf(!hasTestDb)("getAuthContext().areas (#1119)", () => {
 
 		sessionUserId = null;
 		expect((await context()).areas).toEqual([]);
+	});
+
+	it("does not list an area for a term on NEXT year's division", async () => {
+		const area = await makeWorld();
+		const nextYear = await area(YEAR + 1, "B", "2");
+		const userId = await makeUser();
+		await openTerm(nextYear, userId);
+		sessionUserId = userId;
+
+		expect((await context()).areas).toEqual([]);
+	});
+
+	it("never blanks the shell: a failing area read yields no entries and the rest of the context", async () => {
+		const area = await makeWorld();
+		const areaId = await area(YEAR, "B", "2");
+		const userId = await makeUser();
+		await openTerm(areaId, userId);
+		sessionUserId = userId;
+		// Control: the read works, so the empty list below is the catch and not a
+		// user with no term.
+		expect((await context()).areas).toEqual([{ id: areaId, label: "B2" }]);
+
+		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+		areaRead.failing = true;
+		try {
+			const ctx = await context();
+			expect(ctx.areas).toEqual([]);
+			expect(ctx.user?.id).toBe(userId);
+			expect(logged).toHaveBeenCalledWith(
+				expect.stringContaining("area read failed"),
+				expect.any(Error),
+			);
+		} finally {
+			areaRead.failing = false;
+			logged.mockRestore();
+		}
 	});
 
 	it("does not list an area for a superadmin with no term", async () => {

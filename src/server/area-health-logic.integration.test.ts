@@ -327,7 +327,7 @@ describe.skipIf(!hasTestDb)("area health reader (#1117)", () => {
 		await teardown();
 	});
 
-	it("returns a linked club, a name-only club and an archived club, in that order, the last two untracked", async () => {
+	it("returns a linked club, then a name-only club and an archived club as not on GavelUp, the last two untracked", async () => {
 		const areaId = await makeArea("C", "3");
 		const liveNumber = uniqueClubNumber();
 		const live = await makeClub({
@@ -362,18 +362,24 @@ describe.skipIf(!hasTestDb)("area health reader (#1117)", () => {
 		expect(result.label).toBe("C3");
 		expect(result.programYear).toBe(2026);
 		expect(result.asOf).toBe(NOW.toISOString());
+		// The archived club is read from the AREA's copy ("Aardvark Copy", "999"),
+		// never the club's own name and number, and carries the status a club that
+		// never joined carries: nothing in the payload says it was archived. Being
+		// "not on GavelUp", it sorts with the name-only row, by the name it shows.
 		expect(result.clubs.map((c) => [c.name, c.status])).toEqual([
 			["Zulu Live Name", "on_gavelup"],
+			["Aardvark Copy", "not_on_gavelup"],
 			["Beta Name Only", "not_on_gavelup"],
-			["Aardvark Archived", "archived"],
 		]);
-		// A linked row, archived or not, reads the club's own name AND number
-		// live, not the area's copy; a name-only row reads the copy.
+		// A live linked row reads the club's own number live, not the area's copy;
+		// the two rows that are not on GavelUp read the copy.
 		expect(result.clubs.map((c) => c.clubNumber)).toEqual([
 			liveNumber,
+			"999",
 			"4242",
-			archivedNumber,
 		]);
+		expect(JSON.stringify(result)).not.toMatch(/archived/i);
+		expect(JSON.stringify(result)).not.toContain(archivedNumber);
 		for (const untracked of result.clubs.slice(1)) {
 			expect(untracked).toMatchObject({
 				meetings: { tracked: false },
@@ -385,6 +391,44 @@ describe.skipIf(!hasTestDb)("area health reader (#1117)", () => {
 			});
 		}
 		expect(result.clubs[0]?.meetings.tracked).toBe(true);
+	});
+
+	it("shows an archived club under the area's own name and number even after the club is renamed", async () => {
+		const areaId = await makeArea("D", "2");
+		const clubId = await makeClub({ name: "Placed As", clubNumber: "5550001" });
+		await place(areaId, {
+			clubId,
+			name: "Placed As",
+			clubNumber: "5550001",
+		});
+		const live = await makeClub({ name: "Live Placed As" });
+		await place(areaId, { clubId: live, name: "Live Placed As" });
+		// Renamed after it was placed, then taken down: the club's own row now
+		// carries a name and number the area never stored.
+		await testDb
+			.update(clubs)
+			.set({ name: "Renamed After Takedown", clubNumber: "5559999" })
+			.where(eq(clubs.id, clubId));
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, clubId));
+		// Control: a LIVE club renamed the same way shows its new name, so the
+		// archived row below is the archive rule and not a loader that stopped
+		// reading live names.
+		await testDb
+			.update(clubs)
+			.set({ name: "Live Renamed" })
+			.where(eq(clubs.id, live));
+
+		const result = await loadAreaHealth(areaId, NOW);
+
+		expect(result.clubs.map((c) => [c.name, c.clubNumber, c.status])).toEqual([
+			["Live Renamed", null, "on_gavelup"],
+			["Placed As", "5550001", "not_on_gavelup"],
+		]);
+		expect(JSON.stringify(result)).not.toContain("Renamed After Takedown");
+		expect(JSON.stringify(result)).not.toContain("5559999");
 	});
 
 	it("treats a row whose club was permanently deleted as not on GavelUp, reading the stored name", async () => {

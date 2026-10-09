@@ -28,12 +28,26 @@ A user with a CURRENT Area Director term on an area may call `getAreaHealth` for
 numbers (counts, rates and dates) or "not tracked". It names no person. `area-health-pii.guard.test.ts`
 holds that at the loader.
 
-The role changes no club guard and no public reader. A director who is not a member of a club gets
-from that club exactly what a signed-out visitor gets, no more and no less: its admin and member
-pages and its session-gated server fns refuse them as they refuse any stranger, and a public reader
-(the roster a guest picks their name from, `listMembers`) answers them as it answers anyone.
-`area-guards.integration.test.ts` calls the club guards and a public reader as a director and as a
-user with no term and requires identical answers.
+The role changes no club guard and no public reader. Through every one of them a director who is
+not a member of a club gets what a signed-out visitor gets, no more and no less: the club's admin
+and member pages and its session-gated server fns refuse them as they refuse any stranger, and a
+public reader (the roster a guest picks their name from, `listMembers`) answers them as it answers
+anyone. `area-guards.integration.test.ts` calls the club guards and a public reader as a director and
+as a user with no term and requires identical answers. What the role adds is the area view and
+nothing beside it: the counts `getAreaHealth` returns, and the area's own list of its clubs (below).
+
+### An archived club is the area's record, not GavelUp's
+
+The area's club list (`area_clubs`) is the district's record of the clubs it oversees. It keeps its
+own copy of each club's name and number, written when the club was placed in the area and not kept
+in sync. ADR-0024's takedown covers GavelUp's copy of a club: its page, its roster, its name and its
+number as GavelUp serves them. It does not reach into the district's record, and it must not be
+announced by it. So the area view reads an archived club the way it reads a club that never joined
+GavelUp: the area's stored name and number, the status "not on GavelUp", and no figures. The loader
+(`loadAreaHealth`) uses the club's live name and number only for a live club, and the payload
+carries no archived status at all, so a director cannot tell a taken-down club from one that was never
+on GavelUp, and the takedown itself is not disclosed. A club renamed after it was placed shows the
+area's copy, not the new name.
 
 ### The guard lives outside `guards.ts`
 

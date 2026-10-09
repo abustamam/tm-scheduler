@@ -97,7 +97,7 @@ function AreaDetail() {
 
 			<ClubsPanel area={area} onChanged={refresh} />
 			<DirectorPanel area={area} onChanged={refresh} />
-			<AreaPreviewPanel areaId={area.id} />
+			<AreaPreviewPanel key={area.id} areaId={area.id} />
 			<RelabelPanel area={area} onChanged={refresh} />
 		</PageContainer>
 	);

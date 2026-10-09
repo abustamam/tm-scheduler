@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getCookie, setCookie } from "@tanstack/react-start/server";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
+import type { AreaNavEntry } from "#/components/app-shell";
 import { db } from "#/db";
 import { clubs, user as userTable } from "#/db/schema";
 import { ACTIVE_CLUB_COOKIE, resolveActiveClubId } from "#/lib/active-club";
@@ -39,9 +40,29 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 				isSuperadmin: false,
 				impersonating: null,
 				archivedClubCount: 0,
-				areas: [] as { id: string; label: string }[],
+				areas: [] as AreaNavEntry[],
 			};
 		}
+		// The areas this user is the CURRENT Area Director of (#1119): the shell's nav
+		// entries, and the club-less screen's way in. Started here, before the first
+		// await below, so it runs beside the other reads instead of after the schedule
+		// top-up. Through #1116's own loader, the guard's predicate, so what the nav
+		// offers and what `requireAreaDirector` accepts cannot disagree. Everyone else
+		// gets `[]`.
+		//
+		// `.catch` to `[]`, like the display name below, because the entries are
+		// navigation and a page is not: a failure here must never be the thing that
+		// blanks the app shell for every member who is not a director.
+		const areasRead: Promise<AreaNavEntry[]> = loadCurrentAreasForUser(
+			user.id,
+		).catch((err) => {
+			console.error(
+				`[auth-context] area read failed for user ${user.id}:`,
+				err,
+			);
+			return [];
+		});
+
 		// Platform superadmin flag (ADR-0016 / #183) — orthogonal to club role.
 		// Read fresh from the user row; the sign-in hook keeps it reconciled.
 		const [userRow] = await db
@@ -162,15 +183,10 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 		// Only when the switcher came back empty: tell "never on a roster" apart from
 		// "your club was taken down" (#560), without putting the archived club's name
 		// or number back on the payload. Costs nothing on the ordinary path.
-		//
-		// Beside it, the areas this user is the CURRENT Area Director of (#1119): the
-		// shell's nav entries, and the club-less screen's way in. Through #1116's own
-		// loader, the guard's predicate, so what the nav offers and what
-		// `requireAreaDirector` accepts cannot disagree. Everyone else gets `[]`.
-		const [archivedClubCount, areas] = await Promise.all([
-			myClubs.length === 0 ? countArchivedClubMemberships(user.id) : 0,
-			loadCurrentAreasForUser(user.id),
-		]);
+		const archivedClubCount =
+			myClubs.length === 0 ? await countArchivedClubMemberships(user.id) : 0;
+
+		const areas = await areasRead;
 
 		return {
 			// `personName ?? user.name` — the roster name wins, and the Better-Auth

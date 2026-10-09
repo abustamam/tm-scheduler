@@ -51,14 +51,18 @@ vi.mock("#/components/whats-new-panel", () => ({
 	WhatsNewProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
-import { AppShell, shellPropsFromContext } from "./app-shell";
+import {
+	AppShell,
+	type AreaNavEntry,
+	shellPropsFromContext,
+} from "./app-shell";
 
 afterEach(cleanup);
 
 const B2 = { id: "4a1c6d2f-7b4e-4e2c-8a6f-3d8b9c0e1f2a", label: "B2" };
 const C3 = { id: "3f0b5c1e-6a3d-4d1b-9f5e-2c7a8b9d0e1f", label: "C3" };
 
-function ctx(areas?: { id: string; label: string }[]) {
+function ctx(areas?: AreaNavEntry[]) {
 	return {
 		user: { id: "u1", name: "Jane", email: "jane@club.org" },
 		clubs: [
@@ -78,7 +82,7 @@ function ctx(areas?: { id: string; label: string }[]) {
 	};
 }
 
-function renderShell(areas?: { id: string; label: string }[]) {
+function renderShell(areas?: AreaNavEntry[]) {
 	return render(
 		<AppShell
 			{...shellPropsFromContext(ctx(areas))}
@@ -99,7 +103,7 @@ describe("shellPropsFromContext (#1119)", () => {
 
 describe("AppShell for an Area Director (#1119)", () => {
 	it("shows one Area entry per current term in the sidebar, linking to its page", () => {
-		renderShell([C3, B2]);
+		renderShell([B2, C3]);
 		const entries = screen
 			.getAllByRole("link")
 			.filter((a) => /^Area /.test(a.textContent ?? ""));

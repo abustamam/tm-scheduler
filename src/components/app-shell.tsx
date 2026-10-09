@@ -65,8 +65,9 @@ export interface AppShellProps {
 	hasOffice: boolean;
 	isSuperadmin: boolean;
 	/**
-	 * The areas the user is the current Area Director of (#1119), sorted by
-	 * label, one nav entry each. Absent or empty for everyone else.
+	 * The areas the user is the current Area Director of (#1119), one nav entry
+	 * each, in the order given: `getAuthContext` sorts them by label. Absent or
+	 * empty for everyone else.
 	 */
 	areas?: readonly AreaNavEntry[];
 	roleLabel: string;
@@ -516,10 +517,11 @@ export function SidebarNav({
 }
 
 /**
- * One "Area C3" entry per current Area Director term (#1119), sorted by label,
- * and nothing at all for anyone else: no area picker, no index page. Not in
- * `NAV_DESTINATIONS`, which is static: these entries exist per person, and the
- * area's id is the route's param.
+ * One "Area C3" entry per current Area Director term (#1119), in the order it
+ * is given (`loadCurrentAreasForUser` sorts by label and is the one owner of
+ * that order), and nothing at all for anyone else: no area picker, no index
+ * page. Not in `NAV_DESTINATIONS`, which is static: these entries exist per
+ * person, and the area's id is the route's param.
  */
 function AreaNavGroup({
 	areas,
@@ -531,28 +533,27 @@ function AreaNavGroup({
 	onNavigate?: () => void;
 }) {
 	if (areas.length === 0) return null;
-	const sorted = [...areas].sort((a, b) =>
-		a.label.localeCompare(b.label, "en", { numeric: true }),
-	);
 	return (
 		<>
 			<div className={`px-2.5 pt-3.5 pb-0.5 ${GROUP_LABEL_CLASS}`}>
 				Area Director
 			</div>
-			{sorted.map((area) => {
+			{areas.map((area) => {
 				const active = pathname === `/area/${area.id}`;
 				return (
 					<Link
 						key={area.id}
 						to="/area/$areaId"
 						params={{ areaId: area.id }}
+						// `preload={false}`, against the router's `defaultPreload:
+						// "intent"` (`router.tsx`): hovering the entry would run the
+						// area's whole health read (about a dozen queries) for a page
+						// nobody has opened. The same fix `meeting-attendance-panel.tsx`
+						// applies to a heavy loader.
+						preload={false}
 						onClick={() => onNavigate?.()}
 						aria-current={active ? "page" : undefined}
-						className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm tracking-[0.01em] transition-colors ${
-							active
-								? "bg-[var(--sand)] font-bold text-[var(--sea-ink)] [&_svg]:opacity-100"
-								: "font-medium text-[var(--sea-ink-soft)] hover:bg-[var(--foam)] [&_svg]:opacity-70"
-						}`}
+						className={navItemClass(active)}
 					>
 						<Network className="size-4" />
 						Area {area.label}
@@ -660,6 +661,16 @@ function NavGroup({
 	);
 }
 
+/** The sidebar link's classes, current or not. One owner for `NavItem` and the
+ *  Area Director entries, so the two cannot drift apart. */
+function navItemClass(active: boolean): string {
+	return `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm tracking-[0.01em] transition-colors ${
+		active
+			? "bg-[var(--sand)] font-bold text-[var(--sea-ink)] [&_svg]:opacity-100"
+			: "font-medium text-[var(--sea-ink-soft)] hover:bg-[var(--foam)] [&_svg]:opacity-70"
+	}`;
+}
+
 function NavItem({
 	destination,
 	active,
@@ -692,11 +703,7 @@ function NavItem({
 			// keeps Superadmin from matching under Duplicate people.
 			activeOptions={{ exact: "exact" in destination && destination.exact }}
 			aria-current={active ? "page" : undefined}
-			className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm tracking-[0.01em] transition-colors ${
-				active
-					? "bg-[var(--sand)] font-bold text-[var(--sea-ink)] [&_svg]:opacity-100"
-					: "font-medium text-[var(--sea-ink-soft)] hover:bg-[var(--foam)] [&_svg]:opacity-70"
-			}`}
+			className={navItemClass(active)}
 		>
 			<Icon className="size-4" />
 			{destination.label}

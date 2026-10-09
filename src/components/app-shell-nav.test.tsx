@@ -15,7 +15,12 @@ import {
 	officerTaskTitle,
 } from "#/lib/officer-tasks";
 import { OFFICER_POSITIONS } from "#/lib/officers";
-import { crumbFor, navGroupStorageKey, SidebarNav } from "./app-shell";
+import {
+	type AreaNavEntry,
+	crumbFor,
+	navGroupStorageKey,
+	SidebarNav,
+} from "./app-shell";
 
 // `app-shell.tsx` transitively imports server fns that pull in `#/db`, which
 // throws at import without DATABASE_URL.
@@ -29,15 +34,19 @@ vi.mock("@tanstack/react-router", () => ({
 		params,
 		children,
 		className,
+		preload,
 		"aria-current": ariaCurrent,
 	}: {
 		to: string;
 		params?: Record<string, string>;
 		children: ReactNode;
 		className?: string;
+		preload?: false;
 		"aria-current"?: "page";
 	}) => (
 		<a
+			// What the router would be told about preloading on this link.
+			data-preload={preload === false ? "off" : "default"}
 			// The router fills `$param` segments from `params`.
 			href={to.replace(/\$(\w+)/g, (_, key: string) => params?.[key] ?? "")}
 			className={className}
@@ -133,17 +142,16 @@ describe("Area Director entries (#1119)", () => {
 	const C3 = { id: "3f0b5c1e-6a3d-4d1b-9f5e-2c7a8b9d0e1f", label: "C3" };
 	const B2 = { id: "4a1c6d2f-7b4e-4e2c-8a6f-3d8b9c0e1f2a", label: "B2" };
 
-	function renderWithAreas(
-		areas: { id: string; label: string }[],
-		pathname = "/roster",
-	) {
+	function renderWithAreas(areas: AreaNavEntry[], pathname = "/roster") {
 		return render(
 			<SidebarNav grants={MEMBER} areas={areas} pathname={pathname} />,
 		);
 	}
 
-	it("adds one Area entry per current term, sorted by label, linking to its page", () => {
-		renderWithAreas([C3, B2]);
+	it("adds one Area entry per current term, in the order given, linking to its page", () => {
+		// `getAuthContext` sorts the areas by label (`loadCurrentAreasForUser` owns
+		// that order); the nav lists them as it is handed them.
+		renderWithAreas([B2, C3]);
 		const entries = screen
 			.getAllByRole("link")
 			.filter((a) => /^Area /.test(a.textContent ?? ""));
@@ -153,6 +161,42 @@ describe("Area Director entries (#1119)", () => {
 			`/area/${C3.id}`,
 		]);
 		expect(screen.getByText("Area Director")).toBeTruthy();
+		cleanup();
+
+		renderWithAreas([C3, B2]);
+		expect(
+			screen
+				.getAllByRole("link")
+				.filter((a) => /^Area /.test(a.textContent ?? ""))
+				.map((a) => a.textContent),
+		).toEqual(["Area C3", "Area B2"]);
+	});
+
+	it("does not preload an area page on hover: its loader is the whole health read", () => {
+		renderWithAreas([B2, C3]);
+		const area = screen
+			.getAllByRole("link")
+			.filter((a) => /^Area /.test(a.textContent ?? ""));
+		expect(area.map((a) => a.getAttribute("data-preload"))).toEqual([
+			"off",
+			"off",
+		]);
+		// Control: an ordinary entry keeps the router's default.
+		expect(
+			screen.getByRole("link", { name: "Roster" }).getAttribute("data-preload"),
+		).toBe("default");
+	});
+
+	it("wears the same classes as a registered entry, current or not", () => {
+		renderWithAreas([B2, C3], `/area/${C3.id}`);
+		const roster = screen.getByRole("link", { name: "Roster" });
+		const current = screen.getByRole("link", { name: "Area C3" });
+		const other = screen.getByRole("link", { name: "Area B2" });
+		// The one `navItemClass` owns both; an entry that is current wears the
+		// current look and one that is not wears the resting look.
+		expect(other.className).toBe(roster.className);
+		expect(current.className).not.toBe(other.className);
+		expect(current.className).toContain("font-bold");
 	});
 
 	it("adds nothing for a user with no term: no entry, no empty header", () => {

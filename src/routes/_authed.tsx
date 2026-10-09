@@ -51,7 +51,20 @@ function WorkspaceLayout() {
 		areas,
 	} = Route.useRouteContext();
 	const router = useRouter();
-	const pathname = useRouterState({ select: (s) => s.location.pathname });
+	// Chosen on the ROUTES the router matched, not the URL's text: it matches
+	// case-insensitively, so `/AREA/<id>` is the area page (`clubless-routes.ts`).
+	// A boolean out of `select`, so the layout re-renders when the answer changes
+	// and not on every router update.
+	const clublessMayOpenPage = useRouterState({
+		select: (s) =>
+			clublessMayOpen(
+				s.matches.map((m) => m.routeId),
+				{
+					hasAreas: areas.length > 0,
+					isSuperadmin,
+				},
+			),
+	});
 
 	async function handleSignOut() {
 		await authClient.signOut();
@@ -76,9 +89,7 @@ function WorkspaceLayout() {
 		// The exceptions (#1119): an Area Director's `/area/<id>` and a
 		// superadmin's `/superadmin` need no club, so they render in a minimal
 		// frame. The pages keep their own gates; this only picks the frame.
-		if (
-			clublessMayOpen(pathname, { hasAreas: areas.length > 0, isSuperadmin })
-		) {
+		if (clublessMayOpenPage) {
 			return (
 				<ClublessFrame onSignOut={handleSignOut}>
 					<Outlet />

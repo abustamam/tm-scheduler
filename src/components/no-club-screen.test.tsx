@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 import { ClublessFrame, NoClubScreen } from "./no-club-screen";
 
 describe("NoClubScreen", () => {
@@ -175,5 +176,20 @@ describe("ClublessFrame (#1119)", () => {
 		expect(screen.queryByText("You're not in a club yet")).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: /sign out/i }));
 		expect(onSignOut).toHaveBeenCalledTimes(1);
+	});
+
+	it("carries the same brand header and disclaimer footer as NoClubScreen", () => {
+		// The two share one frame, so neither can lose the disclaimer alone.
+		const { container, rerender } = render(
+			<ClublessFrame onSignOut={() => {}}>
+				<p>page</p>
+			</ClublessFrame>,
+		);
+		expect(container.textContent).toContain(TOASTMASTERS_DISCLAIMER);
+		expect(screen.getByRole("banner")).toBeTruthy();
+
+		rerender(<NoClubScreen email="jane@club.org" onSignOut={() => {}} />);
+		expect(container.textContent).toContain(TOASTMASTERS_DISCLAIMER);
+		expect(screen.getByRole("banner")).toBeTruthy();
 	});
 });

@@ -1,24 +1,41 @@
 import { LogOut, Network, ShieldCheck, Users } from "lucide-react";
+import type { AreaNavEntry } from "#/components/app-shell";
 import { BrandMark } from "#/components/brand-mark";
 import { Button } from "#/components/ui/button";
 import { Toaster } from "#/components/ui/sonner";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 
-/** The brand and the sign-out button, shared by both club-less frames. */
-function ScreenHeader({ onSignOut }: { onSignOut: () => void }) {
+/**
+ * The page both club-less frames share: brand and sign out above, the
+ * Toastmasters disclaimer below, whatever `<main>` the caller brings between.
+ * One owner, so the two cannot drift apart.
+ */
+function ScreenFrame({
+	onSignOut,
+	children,
+}: {
+	onSignOut: () => void;
+	children: React.ReactNode;
+}) {
 	return (
-		<header className="flex items-center justify-between border-b border-[var(--line)] bg-[var(--surface)] px-5 py-4 sm:px-8">
-			<BrandMark />
-			<Button
-				variant="ghost"
-				size="sm"
-				className="font-semibold"
-				onClick={onSignOut}
-			>
-				<LogOut className="size-4" aria-hidden />
-				Sign out
-			</Button>
-		</header>
+		<div className="flex min-h-svh w-full flex-col bg-[var(--foam)] font-sans text-[var(--sea-ink)]">
+			<header className="flex items-center justify-between border-b border-[var(--line)] bg-[var(--surface)] px-5 py-4 sm:px-8">
+				<BrandMark />
+				<Button
+					variant="ghost"
+					size="sm"
+					className="font-semibold"
+					onClick={onSignOut}
+				>
+					<LogOut className="size-4" aria-hidden />
+					Sign out
+				</Button>
+			</header>
+			{children}
+			<footer className="border-t border-[var(--line)] px-5 py-4 text-center text-[11px] leading-relaxed text-[var(--sea-ink-soft)] sm:px-8">
+				{TOASTMASTERS_DISCLAIMER}
+			</footer>
+		</div>
 	);
 }
 
@@ -53,7 +70,7 @@ export function NoClubScreen({
 	 * The areas the user is the current Area Director of (#1119), each `label`
 	 * already the area as people say it ("C3"). One "Go to Area C3" button each.
 	 */
-	areas?: readonly { id: string; label: string }[];
+	areas?: readonly AreaNavEntry[];
 	/**
 	 * True when the user holds an active membership in a club that has been
 	 * soft-archived (#560). The default copy tells them their account "isn't linked
@@ -69,9 +86,7 @@ export function NoClubScreen({
 	accountControls?: React.ReactNode;
 }) {
 	return (
-		<div className="flex min-h-svh w-full flex-col bg-[var(--foam)] font-sans text-[var(--sea-ink)]">
-			<ScreenHeader onSignOut={onSignOut} />
-
+		<ScreenFrame onSignOut={onSignOut}>
 			<main className="flex flex-1 flex-col items-center justify-center gap-6 px-5 py-12">
 				<div className="w-full max-w-md rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-7 text-center shadow-[0_1px_0_var(--inset-glint)_inset,0_18px_44px_rgba(23,58,64,.10)] sm:p-9">
 					<span className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-[var(--sand)] text-[var(--lagoon-deep)]">
@@ -134,11 +149,7 @@ export function NoClubScreen({
 					<div className="w-full max-w-md text-left">{accountControls}</div>
 				) : null}
 			</main>
-
-			<footer className="border-t border-[var(--line)] px-5 py-4 text-center text-[11px] leading-relaxed text-[var(--sea-ink-soft)] sm:px-8">
-				{TOASTMASTERS_DISCLAIMER}
-			</footer>
-		</div>
+		</ScreenFrame>
 	);
 }
 
@@ -159,13 +170,11 @@ export function ClublessFrame({
 	children: React.ReactNode;
 }) {
 	return (
-		<div className="flex min-h-svh w-full flex-col bg-[var(--foam)] font-sans text-[var(--sea-ink)]">
-			<ScreenHeader onSignOut={onSignOut} />
-			<main className="min-w-0 flex-1">{children}</main>
-			<footer className="border-t border-[var(--line)] px-5 py-4 text-center text-[11px] leading-relaxed text-[var(--sea-ink-soft)] sm:px-8">
-				{TOASTMASTERS_DISCLAIMER}
-			</footer>
+		<>
+			<ScreenFrame onSignOut={onSignOut}>
+				<main className="min-w-0 flex-1">{children}</main>
+			</ScreenFrame>
 			<Toaster position="top-center" />
-		</div>
+		</>
 	);
 }
