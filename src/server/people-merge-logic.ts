@@ -29,13 +29,16 @@ import {
 	people,
 	speeches,
 } from "#/db/schema";
+import type { GuestLinkPreview } from "#/lib/guest-link";
 import { absorbedEnrollmentMoves, earliestDate } from "#/lib/person-identity";
+import { CONTACT_METHODS } from "#/lib/preferred-contact";
 import {
 	identityIgnoredGuestPerson,
 	noMemberHistory,
 } from "./account-link-logic";
 import { lockClubForWrite } from "./club-write-lock";
 import { RECORD_CHANGED_MESSAGE } from "./guests-logic";
+import type { DbOrTx } from "./meeting-templates-logic";
 import { collapseMemberships } from "./membership-collapse-logic";
 
 // A transaction handle (or the base db) — both expose the query builder we use.
@@ -121,6 +124,146 @@ export function mergedPreferredContact(
 	};
 }
 
+/**
+ * How a merge treats the two Persons' CONTACT.
+ *
+ * - `"superadmin"` (the default, `mergePeopleFn`): the platform superadmin picks the
+ *   keeper freely, and the rule is about the MERGED Person (step 5 below).
+ * - `"guest-link"` (#1127): an officer of two clubs links one guest's Person onto
+ *   another club's guest or member. The officer is not a superadmin, so the absorbed
+ *   side's email and phone are adopted ONLY when the keeper is itself a guest-only
+ *   Person (`guestLinkResult`); a member's or a signed-in person's contact is never
+ *   written (ADR-0029).
+ *
+ * A separate argument, not a field of `MergePeopleInput`: `mergePeopleFn` parses its
+ * client input with that schema, and a mode a client can name is a way past the
+ * superadmin gate's meaning.
+ */
+export interface MergePeopleOptions {
+	mode?: "superadmin" | "guest-link";
+	/** The officer's membership in the club the absorbed Person's guest record lives
+	 *  in, so the audit row names who linked it. Only `"guest-link"` passes it, and
+	 *  only because that mode guarantees the absorbed Person's records are in one club. */
+	actorMemberId?: string | null;
+	/**
+	 * The guest whose link this is (`"guest-link"` only). Written to the audit row
+	 * with the absorbed Person's own contact, so `separateGuest` can give that guest
+	 * back what it had (`readGuestLinkRecord`), the way an unlink does for a
+	 * guest-to-member link. The activity feed never returns `detail` whole.
+	 */
+	linkedGuest?: { id: string; name: string };
+}
+
+/**
+ * What a guest-link's audit row records of the absorbed side: the contact and the
+ * contact preference it had before the merge, so a Separate is a real undo and
+ * never has to copy the MERGED Person's contact (which may be another club's
+ * guest's) under this guest's name.
+ */
+export type GuestLinkContactRecord = {
+	email: string | null;
+	phone: string | null;
+	preferredName: string | null;
+	preferredContact: PersonRow["preferredContact"];
+	contactPreferenceBy: PersonRow["contactPreferenceBy"];
+};
+
+function guestLinkContactRecord(absorbed: PersonRow): GuestLinkContactRecord {
+	return {
+		email: absorbed.email,
+		phone: absorbed.phone,
+		preferredName: absorbed.preferredName,
+		preferredContact: absorbed.preferredContact,
+		contactPreferenceBy: absorbed.contactPreferenceBy,
+	};
+}
+
+/**
+ * The record a guest-link wrote, read back out of an audit row's `detail`, or null
+ * when the row carries none (or a malformed one: every value is checked, because
+ * JSON in a log is not typed). Pure.
+ */
+export function readGuestLinkRecord(detail: unknown): {
+	guestId: string;
+	keeperPersonId: string;
+	contact: GuestLinkContactRecord;
+} | null {
+	if (!detail || typeof detail !== "object") return null;
+	const d = detail as Record<string, unknown>;
+	const c = d.absorbedContact;
+	if (
+		typeof d.linkedGuestId !== "string" ||
+		typeof d.keeperPersonId !== "string" ||
+		!c ||
+		typeof c !== "object"
+	) {
+		return null;
+	}
+	const r = c as Record<string, unknown>;
+	const text = (v: unknown) => (typeof v === "string" ? v : null);
+	const method = CONTACT_METHODS.find((m) => m === r.preferredContact) ?? null;
+	const by =
+		r.contactPreferenceBy === "member" || r.contactPreferenceBy === "officer"
+			? r.contactPreferenceBy
+			: null;
+	return {
+		guestId: d.linkedGuestId,
+		keeperPersonId: d.keeperPersonId,
+		contact: {
+			email: text(r.email),
+			phone: text(r.phone),
+			preferredName: text(r.preferredName),
+			preferredContact: method,
+			contactPreferenceBy: by,
+		},
+	};
+}
+
+/**
+ * What the keeper Person holds after a guest-link merge, as far as the officer
+ * confirming it may see: name, goes-by name, email, phone, and nothing else.
+ * Pure, so `previewGuestLink` and the merge itself cannot disagree: the merge
+ * writes exactly what the preview showed (the link refuses when they differ).
+ *
+ * `people.name` is the keeper's. Goes-by name and contact: a guest-only keeper fills
+ * blanks from the absorbed side (`preferred_name` the keeper's else the absorbed's,
+ * the merge's own rule); any other keeper keeps its own, blank or not, because an
+ * officer of a guest's club does not write a member's or a signed-in person's
+ * Person (ADR-0029).
+ */
+export function guestLinkResult(
+	keeper: Pick<PersonRow, "name" | "preferredName" | "email" | "phone">,
+	absorbed: Pick<PersonRow, "preferredName" | "email" | "phone">,
+	keeperIsGuestOnly: boolean,
+): GuestLinkPreview {
+	return {
+		name: keeper.name,
+		preferredName: keeperIsGuestOnly
+			? (keeper.preferredName ?? absorbed.preferredName)
+			: keeper.preferredName,
+		email: keeperIsGuestOnly ? (keeper.email ?? absorbed.email) : keeper.email,
+		phone: keeperIsGuestOnly ? (keeper.phone ?? absorbed.phone) : keeper.phone,
+	};
+}
+
+/**
+ * Is `personId` a guest-only Person in the sense a guest-link's contact rule asks
+ * (`identityIgnoredGuestPerson`: nobody has signed in as them, no membership, a
+ * guest row somewhere, and never a member)? The merge reads the same predicate
+ * before it moves anything, so a preview computed with this agrees with it.
+ */
+export async function isGuestOnlyPerson(
+	conn: DbOrTx,
+	personId: string,
+): Promise<boolean> {
+	const [row] = await conn
+		.select({ id: people.id })
+		.from(people)
+		.where(and(eq(people.id, personId), identityIgnoredGuestPerson()))
+		.limit(1);
+	return Boolean(row);
+}
+
 export interface MergePeopleResult {
 	ok: true;
 	movedCounts: {
@@ -140,7 +283,7 @@ export interface MergePeopleResult {
  * the set `mergePeople` locks before it locks a Person. Read twice, once before
  * the locks and once under them.
  */
-async function clubsHoldingPersons(
+export async function clubsHoldingPersons(
 	tx: Tx,
 	personIds: string[],
 ): Promise<string[]> {
@@ -155,11 +298,19 @@ async function clubsHoldingPersons(
 	return [...new Set([...asMember, ...asGuest].map((r) => r.clubId))].sort();
 }
 
+/**
+ * `conn` is the caller's transaction when it has one (#1127: its checks, its locks
+ * and the merge are ONE transaction); `conn.transaction` is then a savepoint and
+ * the club and Person locks the caller already holds are simply held again.
+ */
 export async function mergePeople(
 	input: MergePeopleInput,
+	conn: DbOrTx = db,
+	options: MergePeopleOptions = {},
 ): Promise<MergePeopleResult> {
 	const parsed = mergePeopleSchema.parse(input);
-	return db.transaction(async (tx) => {
+	const guestLink = options.mode === "guest-link";
+	return conn.transaction(async (tx) => {
 		// The lock protocol (ADR-0031): every affected club's write lock, in id
 		// order; then both Persons `FOR UPDATE`, in id order (the absorbed one is
 		// deleted, so the strong mode is right here). The guest rows are not locked
@@ -333,8 +484,17 @@ export async function mergePeople(
 		const contactSides = [keeper, absorbed].filter(
 			(side) => !(mergedIsMember && guestOnlyIds.has(side.id)),
 		);
-		const mergedEmail = contactSides.find((side) => side.email)?.email ?? null;
-		const mergedPhone = contactSides.find((side) => side.phone)?.phone ?? null;
+		// A guest-link (#1127) is the officer's, not the superadmin's: the absorbed
+		// side's contact is adopted only by a guest-only keeper, and a signed-in
+		// keeper (which is not "a member" above) never has its contact written.
+		const keeperGuestOnly = guestOnlyIds.has(keeper.id);
+		const linked = guestLinkResult(keeper, absorbed, keeperGuestOnly);
+		const mergedEmail = guestLink
+			? linked.email
+			: (contactSides.find((side) => side.email)?.email ?? null);
+		const mergedPhone = guestLink
+			? linked.phone
+			: (contactSides.find((side) => side.phone)?.phone ?? null);
 		await tx
 			.update(people)
 			.set({
@@ -343,14 +503,19 @@ export async function mergePeople(
 				// A recorded "goes by" name is scarce (someone had to type it) and
 				// the merge is irreversible, so adopt the absorbed's rather than
 				// lose it (#486).
-				preferredName: keeper.preferredName ?? absorbed.preferredName,
+				preferredName: guestLink
+					? linked.preferredName
+					: (keeper.preferredName ?? absorbed.preferredName),
 				customerId: keeper.customerId ?? absorbed.customerId,
 				basecampUserId: keeper.basecampUserId ?? absorbed.basecampUserId,
 				userId: keeper.userId ?? absorbed.userId,
 				// How they want to be reached (#1093, #1110). A side the MEMBER chose
 				// wins outright, even a deliberate "no preference"; otherwise the
 				// linked row, then keeper ?? absorbed, with the supplier's own source.
-				...mergedPreferredContact(keeper, absorbed),
+				// A guest-link leaves a member's or signed-in keeper's untouched.
+				...(guestLink && !keeperGuestOnly
+					? {}
+					: mergedPreferredContact(keeper, absorbed)),
 				originalJoinDate: earliestDate(
 					keeper.originalJoinDate,
 					absorbed.originalJoinDate,
@@ -375,7 +540,7 @@ export async function mergePeople(
 		for (const clubId of affectedClubIds) {
 			await tx.insert(activityLog).values({
 				clubId,
-				actorMemberId: null,
+				actorMemberId: guestLink ? (options.actorMemberId ?? null) : null,
 				impersonatedBy: parsed.actorUserId ?? null,
 				action: "member_merge",
 				// targetId is a Person id (not a membership id) — label the id-space
@@ -387,6 +552,21 @@ export async function mergePeople(
 					absorbedPersonId: absorbed.id,
 					keeperName: keeper.name,
 					absorbedName: absorbed.name,
+					...(guestLink
+						? {
+								mode: "guest-link",
+								// How the feed tells this from a member merge (it carries
+								// `change` through and nothing else of this).
+								change: "guest_cross_club_link",
+								...(options.linkedGuest
+									? {
+											linkedGuestId: options.linkedGuest.id,
+											guestName: options.linkedGuest.name,
+										}
+									: {}),
+								absorbedContact: guestLinkContactRecord(absorbed),
+							}
+						: {}),
 					movedCounts,
 				},
 			});
