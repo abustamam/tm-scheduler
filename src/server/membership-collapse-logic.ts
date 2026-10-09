@@ -36,7 +36,11 @@ import {
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { earliestDate } from "#/lib/person-identity";
-import { lockClubForWrite, lockPersonsInOrder } from "./club-write-lock";
+import {
+	lockClubForWrite,
+	lockPersonsInOrder,
+	noKeyUpdate,
+} from "./club-write-lock";
 import { RECORD_CHANGED_MESSAGE } from "./guests-logic";
 import { lockMembershipForMerge } from "./membership-merge-lock";
 
@@ -114,11 +118,7 @@ export async function collapseMemberships(
 				inArray(members.id, [keeperId, absorbedId]),
 			),
 		);
-	await lockPersonsInOrder(
-		tx,
-		peeked.map((m) => m.personId),
-		"no key update",
-	);
+	await lockPersonsInOrder(tx, noKeyUpdate(...peeked.map((m) => m.personId)));
 	const rows = await tx
 		.select()
 		.from(members)

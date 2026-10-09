@@ -25,7 +25,9 @@
  * locks a Person or writes anything. Writers that touch a guest's Person (a
  * convert, an undo, a link or unlink, a guest delete) take it before they lock
  * the Person, the first step of ADR-0031's lock protocol: club write lock, then
- * `people` rows `FOR UPDATE` in id order, then `guests` rows. Taking this
+ * `people` rows in id order (`FOR UPDATE` only on a Person the path may delete,
+ * `FOR NO KEY UPDATE` otherwise; see `lockPersonsInOrder`), then the guest row it
+ * changes. Taking this
  * lock before the first row lock serialises those writers per club, so the row
  * locks behind it are only ever contended by one of them at a time and the
  * order they take them in stops mattering between them. It ORDERS the rows; it
@@ -62,7 +64,7 @@
  * transaction, so a helper that takes it again under a caller that already
  * holds it is a no-op.
  */
-import { inArray, type SQL, sql } from "drizzle-orm";
+import { eq, type SQL, sql } from "drizzle-orm";
 import type { db } from "#/db";
 import { people } from "#/db/schema";
 import { isLockTimeout } from "./pg-errors";
@@ -154,34 +156,63 @@ export async function takeAdvisoryLockWithin(
 	await tx.execute(sql`select set_config('lock_timeout', ${prev}, true)`);
 }
 
+/** The strength of a Person row lock; see `lockPersonsInOrder`. */
+export type PersonLockMode = "update" | "no key update";
+
+/** One Person to lock, and how strongly. */
+export type PersonLock = {
+	id: string | null | undefined;
+	mode: PersonLockMode;
+};
+
+/** `FOR NO KEY UPDATE` on each of `ids`: a Person the path will NOT delete. */
+export const noKeyUpdate = (
+	...ids: Array<string | null | undefined>
+): PersonLock[] => ids.map((id) => ({ id, mode: "no key update" as const }));
+
+/** `FOR UPDATE` on each of `ids`: a Person the path MAY delete. */
+export const forUpdate = (
+	...ids: Array<string | null | undefined>
+): PersonLock[] => ids.map((id) => ({ id, mode: "update" as const }));
+
 /**
  * Lock Persons in id order, the lock protocol's second step (#1124, ADR-0031).
- * Nulls and repeats are ignored. Returns what it locked.
+ * Nulls are ignored, a Person named twice is locked once at the stronger mode,
+ * and each is locked by its own statement in id order, so two callers that want
+ * different strengths of different Persons still take them in one order.
+ * Returns what it locked.
  *
- * `mode` is the row-lock strength, and it is a decision, not a default to
- * forget. `"update"` (`FOR UPDATE`) conflicts with the key-share lock that every
- * foreign key INSERT takes on the row it names, so a path holding it blocks a
- * speech insert for that Person; take it only where the path deletes the Person
- * (a guest delete, a link, `mergePeople`). `"no key update"` conflicts with every
- * other writer of the row, `applyMemberEdit`'s `FOR UPDATE` included, and NOT
- * with a key share, so it orders the Person against its writers without
- * blocking the claim that inserts a speech for it. Taking `FOR UPDATE` on a
- * Person while waiting for a membership or a slot closed a cycle with
- * `claimSlotCore`, which holds the slot, then takes the key share while it
- * inserts the speech.
+ * The mode is a decision, so there is no default and every caller says it, per
+ * Person. `"update"` (`FOR UPDATE`) conflicts with the key-share lock every
+ * foreign-key INSERT takes on the row it names, so a path holding it blocks a
+ * speech insert for that Person: take it only on a Person the path MAY DELETE
+ * (the guest's own Person in a guest delete or a link, `mergePeople`'s absorbed
+ * one). `"no key update"` conflicts with every other writer of the row,
+ * `applyMemberEdit`'s `FOR UPDATE` included, and NOT with a key share, so it
+ * orders the Person against its writers without blocking a speaker claim, which
+ * holds the slot or the membership and then key-shares the Person while it
+ * inserts a speech, and takes no club lock. Taking `FOR UPDATE` on a Person that
+ * the path then waits for a slot or membership while holding closed exactly that
+ * cycle.
  */
 export async function lockPersonsInOrder(
 	tx: Tx,
-	personIds: Array<string | null | undefined>,
-	mode: "update" | "no key update" = "update",
+	locks: PersonLock[],
 ): Promise<string[]> {
-	const ids = [...new Set(personIds.filter((id): id is string => !!id))];
-	if (ids.length === 0) return [];
-	const rows = await tx
-		.select({ id: people.id })
-		.from(people)
-		.where(inArray(people.id, ids))
-		.orderBy(people.id)
-		.for(mode);
-	return rows.map((r) => r.id);
+	const strongest = new Map<string, PersonLockMode>();
+	for (const { id, mode } of locks) {
+		if (!id) continue;
+		if (strongest.get(id) !== "update") strongest.set(id, mode);
+	}
+	const ids = [...strongest.keys()].sort();
+	const locked: string[] = [];
+	for (const id of ids) {
+		const rows = await tx
+			.select({ id: people.id })
+			.from(people)
+			.where(eq(people.id, id))
+			.for(strongest.get(id) as PersonLockMode);
+		if (rows[0]) locked.push(rows[0].id);
+	}
+	return locked;
 }

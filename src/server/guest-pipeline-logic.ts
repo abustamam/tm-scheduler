@@ -67,16 +67,20 @@ import {
 import { logActivity } from "./activity";
 import {
 	CLUB_BUSY_MESSAGE,
+	forUpdate,
 	lockClubForWrite,
 	lockPersonsInOrder,
+	noKeyUpdate,
 } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { assertClubNotArchived } from "./guards";
 import {
 	createGuestRecord,
+	deleteAbandonedGuestPerson,
 	deleteGuestPersonIfUnreferenced,
 	ensureGuestPerson,
 	RECORD_CHANGED_MESSAGE,
+	separateGuestFromMemberPerson,
 } from "./guests-logic";
 import { closeOpenOfficerTerms } from "./officers-logic";
 import { isDeadlock } from "./pg-errors";
@@ -125,6 +129,27 @@ const PHONE_CANDIDATE_LIMIT = 50;
 type DbOrTx =
 	| typeof db
 	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+/**
+ * Whether any club holds `personId` as a member, read WITHOUT a lock, to choose
+ * how strongly to lock that Person (`lockPersonsInOrder`). A Person who holds a
+ * membership is never deleted by a guest delete or a link, so it is locked
+ * `FOR NO KEY UPDATE` and does not block a speaker claim's key share; one who
+ * holds none MAY be deleted, so it gets `FOR UPDATE`. The delete's own WHERE
+ * (`unreferencedUnboundPerson()`) re-decides under the lock.
+ */
+async function holdsMembership(
+	tx: DbOrTx,
+	personId: string | null | undefined,
+): Promise<boolean> {
+	if (!personId) return false;
+	const [row] = await tx
+		.select({ id: members.id })
+		.from(members)
+		.where(eq(members.personId, personId))
+		.limit(1);
+	return Boolean(row);
+}
 
 /** The guest row `findGuestByContact` resolves: identity + the dedup keys. */
 type GuestContactRow = {
@@ -1261,7 +1286,15 @@ export async function applyDeleteGuest(
 			.from(guests)
 			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
 			.limit(1);
-		await lockPersonsInOrder(tx, [peek?.personId]);
+		// FOR UPDATE only on a Person this delete MAY delete: one that holds a
+		// membership (a linked or converted guest's member Person) never is, and
+		// holding it that strongly would cycle with a speaker claim.
+		await lockPersonsInOrder(
+			tx,
+			(await holdsMembership(tx, peek?.personId))
+				? noKeyUpdate(peek?.personId)
+				: forUpdate(peek?.personId),
+		);
 
 		const [guest] = await tx
 			.select({
@@ -1732,7 +1765,7 @@ export async function applyConvertGuestToMember(
 		);
 		// NO KEY UPDATE: convert deletes no Person, and `FOR UPDATE` would block the
 		// key share a speaker claim takes on the Person while it holds the slot.
-		await lockPersonsInOrder(tx, [peek.personId, peekMatch], "no key update");
+		await lockPersonsInOrder(tx, noKeyUpdate(peek.personId, peekMatch));
 
 		// Then lock the guest row, and re-check `stage` under that lock.
 		//
@@ -1774,10 +1807,12 @@ export async function applyConvertGuestToMember(
 		if (!personId) {
 			// No member of THIS club matched. The membership goes on a Person the guest
 			// row names, but only if that Person is PRISTINE (#1124, ADR-0031,
-			// `pristineGuestPerson`): never signed in, never a member anywhere, no
-			// history, no other guest row, no contact, no record of a membership. Only
-			// such a Person is the guest's own to rename and to give contact, and that is
-			// what the maintainer ruled on 2026-10-09 (option A) after a Person turned up
+			// `pristineGuestPerson`): nobody has signed in as it, no membership in any
+			// club, nothing it owns, no other guest row, no contact or roster-identity
+			// column, no removal on record. That is evidence, not proof, of a Person that
+			// was only ever the guest. Only such a Person is the guest's own to rename and
+			// to give contact, and that is what the maintainer ruled on 2026-10-09 (option
+			// A) after a Person turned up
 			// that was not: one a merge had made a former member's, one an earlier
 			// convert had made a member and an officer had corrected, one a wrong link
 			// had pointed at somebody else's. Writing the guest row's values onto those
@@ -1822,6 +1857,11 @@ export async function applyConvertGuestToMember(
 					.where(eq(guests.id, input.guestId));
 				personId = minted.id;
 				createdPerson = true;
+				// The guest no longer names the old Person. If nothing else does, and no
+				// removal names it, it would be stranded with whatever contact it
+				// carries, so it goes (with its email backup); anything that references
+				// it, or a release target, is left exactly as it is.
+				await deleteAbandonedGuestPerson(tx, guestPersonId);
 			}
 			if (email) written = { personId, email };
 		} else {
@@ -2282,7 +2322,16 @@ export async function applyLinkGuestToMember(
 			)
 			.limit(1);
 		if (!member) throw new Error(LINK_MEMBER_NOT_IN_CLUB_MESSAGE);
-		await lockPersonsInOrder(tx, [peek.personId, member.personId]);
+		// The guest's own Person is the one a link may delete (nothing else names
+		// it afterwards), so it is locked FOR UPDATE unless it holds a membership;
+		// the member's Person is never deleted, and is locked FOR NO KEY UPDATE so
+		// a claim for that member is not blocked while the link waits for a slot.
+		await lockPersonsInOrder(tx, [
+			...((await holdsMembership(tx, peek.personId))
+				? noKeyUpdate(peek.personId)
+				: forUpdate(peek.personId)),
+			...noKeyUpdate(member.personId),
+		]);
 
 		// Lock the guest row and re-read `stage` under it, for the reason
 		// `applyConvertGuestToMember` documents: read outside the transaction it is
@@ -2411,8 +2460,7 @@ export async function applyUnlinkGuestFromMember(
 		// claim holds the slot or the membership and then key-shares the Person.
 		await lockPersonsInOrder(
 			tx,
-			[peek.personId, peekMember?.personId],
-			"no key update",
+			noKeyUpdate(peek.personId, peekMember?.personId),
 		);
 
 		const [guest] = await tx
@@ -2481,9 +2529,12 @@ export async function applyUnlinkGuestFromMember(
 				updatedAt: new Date(),
 			})
 			.where(eq(guests.id, input.guestId));
-		// The guest still names the member's Person after the unlink, and that is
-		// fine: a member's Person is never PRISTINE, so the next convert gives the
-		// guest a fresh one instead of adopting it (`pristineGuestPerson`).
+		// The member is still a member, so a guest still naming their Person is
+		// pointed at a fresh name-only one. The pristine rule alone is not enough
+		// here: the member's roster rows can be merged afterwards, and a collapse
+		// deletes the absorbed membership and its records, which would leave the
+		// Person looking untouched (`separateGuestFromMemberPerson`).
+		await separateGuestFromMemberPerson(tx, input.guestId);
 
 		await logActivity(tx, {
 			clubId: input.clubId,
@@ -2657,16 +2708,17 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
  * Since #1124 the check is keyed on `createdMembership`, not `createdPerson`:
  * a convert that adopts the guest's own Person records `createdPerson: false`,
  * which would switch the check off for it. A Person convert adopts is pristine
- * (`pristineGuestPerson`: no history at all), so whatever it owns afterwards was
- * earned afterwards; a Person convert mints is new for the same reason. Where
+ * (`pristineGuestPerson`: nothing on or around it shows a past), so whatever it
+ * owns afterwards was earned afterwards; a Person convert mints is new for the same reason. Where
  * convert reused a membership of this club the check does not run, as before.
  *
  * The guest's Person is deliberately LEFT BEHIND when the membership goes, as a
  * created one always was. It is global (ADR-0008), the guest row still points at
  * it, deleting it could cascade further than this undo's remit, and the Person
- * is the guest's, not the conversion's. The guest keeps naming it too: a
- * re-convert will not adopt it (the undo's removal record, and the contact
- * convert put on it, make it not pristine) and gives the guest a fresh Person.
+ * is the guest's, not the conversion's. The guest keeps naming it too: after an
+ * undo of a convert that created the membership a re-convert will not adopt it
+ * (the undo's removal record makes it not pristine) and gives the guest a fresh
+ * Person, and a later re-convert deletes it only if no removal names it.
  *
  * Whenever the membership is deleted, created Person or not, the
  * `member_remove` names its Person in `detail.personId`, the release record
@@ -2710,8 +2762,7 @@ export async function applyUndoGuestConversion(
 		// claim holds the slot or the membership and then key-shares the Person.
 		await lockPersonsInOrder(
 			tx,
-			[peek.personId, peekMember?.personId],
-			"no key update",
+			noKeyUpdate(peek.personId, peekMember?.personId),
 		);
 
 		const [guest] = await tx
@@ -2915,9 +2966,11 @@ export async function applyUndoGuestConversion(
 		// Undo does not touch the Person's contact, nor which Person the guest names.
 		// Leaving the contact makes the undoing club's own roster CSV still find the
 		// Person the convert minted (#875), instead of creating a second one for the
-		// same human. A Person that still holds a membership, or has contact, or has a
-		// removal on record is not pristine, so the next convert does not adopt it: it
-		// gives the guest a fresh Person (`pristineGuestPerson`).
+		// same human. After an undo of a convert that created the membership the Person
+		// has a removal on record (and usually contact), so it is not pristine and the
+		// next convert gives the guest a fresh Person; after an undo of a dedupe-hit
+		// convert the guest's own Person was never touched and is still pristine,
+		// which is fine (`pristineGuestPerson`).
 
 		await logActivity(tx, {
 			clubId: input.clubId,

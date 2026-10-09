@@ -1,7 +1,7 @@
 // Guest-assignment DB logic (#151), split out from `guests.ts` (a createServerFn
 // module the guard test forbids from exporting db-touching functions).
 // Integration-testable by mocking `#/db`.
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, not } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	guests,
@@ -23,8 +23,12 @@ import {
 } from "#/lib/guest-profile";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { toStoredPhone } from "#/lib/phone";
-import { unreferencedUnboundPerson } from "./account-link-logic";
+import {
+	releasedByRemoval,
+	unreferencedUnboundPerson,
+} from "./account-link-logic";
 import { logActivity } from "./activity";
+import { forUpdate, lockPersonsInOrder } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import type { UpdateGuestProfileInput } from "./guest-pipeline-schemas";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
@@ -196,15 +200,26 @@ export async function ensureGuestPerson(
  * Without it every deleted guest leaves a Person behind that no club names, no
  * removal record points at, and not even a permanent club delete can collect.
  * The caller holds the club write lock and the Person `FOR UPDATE`, which is
- * why this path, unlike the undo and unlink, takes the strong mode: it deletes.
+ * why this path, unlike the undo and unlink, takes the strong mode on a Person it
+ * may delete: the DELETE must see a reference another transaction commits before
+ * it, or its cascade would take that reference with it.
  */
 export async function deleteGuestPersonIfUnreferenced(
 	tx: DbOrTx,
 	personId: string,
+	opts: { keepReleased?: boolean } = {},
 ): Promise<boolean> {
 	const gone = await tx
 		.delete(people)
-		.where(and(eq(people.id, personId), unreferencedUnboundPerson()))
+		.where(
+			and(
+				eq(people.id, personId),
+				unreferencedUnboundPerson(),
+				// A convert that moved a guest off a Person never deletes one a removal
+				// names (`releasedByRemoval`): that is #875's release target.
+				opts.keepReleased ? not(releasedByRemoval()) : undefined,
+			),
+		)
 		.returning({ id: people.id });
 	if (gone.length === 0) return false;
 	// The same clean-up a club delete does for the Persons it deletes (#914): the
@@ -215,6 +230,82 @@ export async function deleteGuestPersonIfUnreferenced(
 		.delete(peopleEmailBackup)
 		.where(eq(peopleEmailBackup.personId, personId));
 	return true;
+}
+
+/**
+ * A convert moved the guest off `personId` (it was not pristine, so the guest got
+ * a fresh Person): delete the old one if NOTHING references it now (#1124,
+ * `unreferencedUnboundPerson()`) and no removal names it (a release target,
+ * #875, and somebody's correction). Otherwise it is left exactly as it is.
+ *
+ * Without this a Person a merge had filled with a former member's contact, and
+ * that no removal record names, is stranded with its contact and no club can see
+ * it, not even a permanent club delete.
+ *
+ * Only a Person that really is a candidate is locked `FOR UPDATE`: a member's
+ * Person is locked weakly everywhere else on the convert path so that a speaker
+ * claim's key share is not blocked, and this does not upgrade it. The candidate
+ * test is read first, without a lock; the lock is taken before the DELETE, whose
+ * own WHERE then re-decides on a fresh snapshot, including the release rule (a
+ * released Person is locked and left).
+ */
+export async function deleteAbandonedGuestPerson(
+	tx: Parameters<Parameters<(typeof db)["transaction"]>[0]>[0],
+	personId: string,
+): Promise<boolean> {
+	const [candidate] = await tx
+		.select({ id: people.id })
+		.from(people)
+		.where(and(eq(people.id, personId), unreferencedUnboundPerson()))
+		.limit(1);
+	if (!candidate) return false;
+	await lockPersonsInOrder(tx, forUpdate(personId));
+	return deleteGuestPersonIfUnreferenced(tx, personId, { keepReleased: true });
+}
+
+/**
+ * After an UNLINK (#1124): a guest row that still names a Person who holds ANY
+ * membership is pointed at a fresh name-only Person (the backfill's shape).
+ * Returns the new Person's id, or null when the guest's Person holds none.
+ *
+ * Why at an unlink, and not at an undo. A link points the guest at the member's
+ * Person, and an unlink leaves the card naming it. The member's roster rows can
+ * then be merged: a collapse deletes the absorbed membership AND its records, so
+ * that Person reads pristine to the next convert, which would adopt it and write
+ * the guest's name and contact onto a Person that still carries the member's
+ * customer id and join date. An undo needs no such step: it leaves the
+ * conversion's own removal on record.
+ *
+ * The caller holds the club write lock, the guest's Person `FOR NO KEY UPDATE`
+ * and the guest row `FOR UPDATE`, in that order, and has already cleared the
+ * link: the question is asked AFTER that.
+ */
+export async function separateGuestFromMemberPerson(
+	tx: DbOrTx,
+	guestId: string,
+): Promise<string | null> {
+	const [guest] = await tx
+		.select({
+			personId: guests.personId,
+			name: guests.name,
+			preferredName: guests.preferredName,
+		})
+		.from(guests)
+		.where(eq(guests.id, guestId))
+		.limit(1);
+	if (!guest?.personId) return null;
+	const [held] = await tx
+		.select({ id: members.id })
+		.from(members)
+		.where(eq(members.personId, guest.personId))
+		.limit(1);
+	if (!held) return null;
+	const fresh = await mintNameOnlyPerson(tx, guest);
+	await tx
+		.update(guests)
+		.set({ personId: fresh })
+		.where(eq(guests.id, guestId));
+	return fresh;
 }
 
 /** Contact fields for a brand-new club guest (name required, contact optional). */

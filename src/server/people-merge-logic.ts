@@ -157,7 +157,9 @@ export async function mergePeople(
 	const parsed = mergePeopleSchema.parse(input);
 	return db.transaction(async (tx) => {
 		// The lock protocol (ADR-0031): every affected club's write lock, in id
-		// order; then both Persons `FOR UPDATE`, in id order; then the guest rows.
+		// order; then both Persons `FOR UPDATE`, in id order (the absorbed one is
+		// deleted, so the strong mode is right here). The guest rows are not locked
+		// up front; see below.
 		// #1124 reversed this function's old order (Persons first, club locks
 		// after), because a convert, a guest-book capture and #1127's link all take
 		// the club's write lock BEFORE they touch a Person, and a merge that held a
@@ -193,28 +195,24 @@ export async function mergePeople(
 			throw new Error(RECORD_CHANGED_MESSAGE);
 		}
 
-		// The guest rows last, in id order: the protocol's third step, and the lock
-		// the re-point below would take anyway, taken where the protocol puts it.
-		// `NO KEY UPDATE`, not `UPDATE`: a slot assignment holds its slot row and
-		// then key-share-locks the guest it names, and a merge holding the guest
-		// `FOR UPDATE` while its collapse waits for that slot is a deadlock. This
-		// conflicts with every other writer of the row and not with that foreign
-		// key's lock, which is all `person_id` (not a referenced key) needs.
-		const lockedGuests = await tx
-			.select({
-				id: guests.id,
-				clubId: guests.clubId,
-				personId: guests.personId,
-			})
-			.from(guests)
-			.where(inArray(guests.personId, personIds))
-			.orderBy(guests.id)
-			.for("no key update");
 		// The absorbed Person's guest rows as they stand NOW, before any collapse
 		// below re-points a converted guest's Person along with its membership. The
 		// count and the audit are taken from this set so they agree with the
 		// preview, which counts the same rows before anything moves.
-		const guestsToMove = lockedGuests.filter((g) => g.personId === absorbed.id);
+		//
+		// READ, not locked. The guest rows used to be locked here `FOR NO KEY
+		// UPDATE` as the protocol's third step, and that closed a cycle with
+		// `applyUpdateGuestProfile`: it holds the introducer's membership `FOR
+		// SHARE` and then updates the guest row, while the collapse below updates
+		// that membership. The rows cannot change membership of this set in the
+		// meantime: both Persons are locked `FOR UPDATE`, so no guest row can be
+		// inserted naming either, and the re-point below locks each row it moves at
+		// the moment it moves it, after the collapse, holding nothing the editor
+		// waits for.
+		const guestsToMove = await tx
+			.select({ id: guests.id, clubId: guests.clubId })
+			.from(guests)
+			.where(eq(guests.personId, absorbed.id));
 
 		const block = checkMergeBlocks(keeper, absorbed);
 		if (block) throw new Error(block);

@@ -73,10 +73,10 @@ const WAIVERS: Record<
 		requiresBoundToUser?: boolean;
 		/** Convert's fill of a PRISTINE guest Person's contact from the guest row
 		 *  (#1124): its UPDATE must carry `pristineGuestPerson(` in the statement
-		 *  itself, which is the one definition of "nobody has signed in, never a
-		 *  member, no history, no other guest row, no contact, no record of a
-		 *  membership". It stands in for `isNull(people.userId)`: the function holds
-		 *  it, and a source test below pins that it does. */
+		 *  itself, which is the one definition of "nobody has signed in, no
+		 *  membership, no history, no other guest row, no contact or roster-identity
+		 *  column, no removal on record". It stands in for `isNull(people.userId)`:
+		 *  the function holds it, and a source test below pins that it does. */
 		requiresPristineGuestPerson?: boolean;
 	}
 > = {
@@ -100,17 +100,17 @@ const WAIVERS: Record<
 	},
 	// Convert-to-member's fill of a PRISTINE guest Person's contact from the guest
 	// row (#1124, ADR-0031; the maintainer's option A of 2026-10-09). Club-reachable
-	// (an officer's click). The Person is one the guest row names that has never
-	// signed in, never been a member, owns nothing, is named by no other guest row,
-	// carries no contact and has no membership on record: the only kind of Person a
-	// convert may adopt. Any other gets a fresh Person (an INSERT, which the matcher
-	// exempts) and is left exactly as it is. So the statement can only ever write a
-	// Person nobody has a claim on, and what it writes is a fill of a blank. It is
-	// the only writer whose Person has NO membership yet, so `soleHoldingClub`,
-	// which demands a vouching membership, cannot be its predicate; its predicate is
-	// `pristineGuestPerson(guestId)`, in the statement's own WHERE, which reads false
-	// the moment the membership exists (so the UPDATE runs before the membership
-	// insert) and which includes `user_id IS NULL`.
+	// (an officer's click). The Person is one the guest row names that nobody has
+	// signed in as, that holds no membership, owns nothing, is named by no other guest
+	// row, carries no contact or roster-identity column and has no removal on record:
+	// the only kind of Person a convert may adopt. Any other gets a fresh Person (an
+	// INSERT, which the matcher exempts) and is left as it is. So the statement can
+	// only ever write a Person nobody has a claim on, and what it writes is a fill of
+	// a blank. It is the only writer whose Person has NO membership yet, so
+	// `soleHoldingClub`, which demands a vouching membership, cannot be its
+	// predicate; its predicate is `pristineGuestPerson(guestId)`, in the statement's
+	// own WHERE, which reads false the moment the membership exists (so the UPDATE
+	// runs before the membership insert) and which includes `user_id IS NULL`.
 	"server/guest-pipeline-logic.ts": {
 		fn: "applyConvertGuestToMember",
 		sites: 1,

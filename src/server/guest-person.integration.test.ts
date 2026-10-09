@@ -32,6 +32,7 @@ import {
 	pathwaysPaths,
 	people,
 	peopleEmailBackup,
+	roleSlots,
 	speeches,
 	user,
 } from "#/db/schema";
@@ -71,7 +72,11 @@ const {
 	applyUpdateGuest,
 	captureGuestVisit,
 } = await import("#/server/guest-pipeline-logic");
-const { bindVerifiedPerson } = await import("#/server/account-link-logic");
+const { bindVerifiedPerson, pristineGuestPerson, releasedPersonSubquery } =
+	await import("#/server/account-link-logic");
+const { importPeopleAndMembers } = await import(
+	"#/server/import-members-logic"
+);
 const { applyMemberEdit, applyMemberMerge, applyMemberRemove } = await import(
 	"#/server/members-logic"
 );
@@ -84,7 +89,8 @@ const { mergePeople } = await import("#/server/people-merge-logic");
 const { searchPeopleForMerge, listDuplicatePeople, getMergePreview } =
 	await import("#/server/people-logic");
 const { deleteClubPermanently } = await import("#/server/onboarding-logic");
-const { lockClubForWrite } = await import("#/server/club-write-lock");
+const { forUpdate, lockClubForWrite, lockPersonsInOrder, noKeyUpdate } =
+	await import("#/server/club-write-lock");
 const { recordGuestBookTool } = await import(
 	"#/server/mcp/tools/record-guest-book"
 );
@@ -1359,7 +1365,7 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			expect((await personRow(memberPerson))?.name).toBe(name);
 		});
 
-		it("a #635-linked guest, unlinked: a re-convert makes a NEW membership on a fresh Person, and the member is untouched", async () => {
+		it("a #635-linked guest, unlinked: the guest gets a fresh name-only Person, a re-convert makes a NEW membership on it, and the member is untouched", async () => {
 			const stem = uniq("Linked");
 			const { guestId } = await newGuest(stem);
 			const memberBefore = await personRow(seed.personId);
@@ -1378,17 +1384,20 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 				guestId,
 				actorMemberId: seed.adminMemberId,
 			});
-			// Unlink leaves the guest naming the member's Person; the next convert
-			// does not adopt it, because a member's Person is never pristine.
-			expect((await guestRow(guestId)).personId).toBe(seed.personId);
+			// The member is still a member, so the unlink points the guest at a fresh
+			// name-only Person rather than leaving it on theirs.
+			const after = await guestRow(guestId);
+			expect(after.personId).not.toBe(seed.personId);
+			guestPersons.push(after.personId as string);
+			const fresh = await personRow(after.personId as string);
+			expect(fresh?.name).toBe(stem);
+			expect(fresh?.email).toBeNull();
 
 			const res = await convert(guestId);
 
+			// It is pristine, so the convert adopts it: a NEW membership on it.
 			expect(res.membershipId).not.toBe(seed.memberId);
-			expect(res.personId).not.toBe(seed.personId);
-			guestPersons.push(res.personId);
-			expect((await personRow(res.personId))?.name).toBe(stem);
-			expect((await guestRow(guestId)).personId).toBe(res.personId);
+			expect(res.personId).toBe(after.personId);
 			// The member is exactly as they were.
 			const memberAfter = await personRow(seed.personId);
 			expect(memberAfter?.name).toBe(memberBefore?.name);
@@ -1581,6 +1590,10 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			oldPersonId: string,
 			before: Awaited<ReturnType<typeof snapshot>>,
 			res: Awaited<ReturnType<typeof convert>>,
+			// Whether the old Person is still there: it is when something references it
+			// or a removal names it, and is deleted when NOTHING does (a Person nobody
+			// can see, with whatever contact it carries).
+			oldSurvives = true,
 		) {
 			expect(res.personId).not.toBe(oldPersonId);
 			guestPersons.push(res.personId);
@@ -1590,9 +1603,12 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 				.from(members)
 				.where(eq(members.id, res.membershipId));
 			expect(m?.personId).toBe(res.personId);
-			expect(await snapshot(oldPersonId)).toEqual(before);
-			// And it was not deleted, whatever references it now.
-			expect(await personRow(oldPersonId)).toBeDefined();
+			if (oldSurvives) {
+				expect(await snapshot(oldPersonId)).toEqual(before);
+				expect(await personRow(oldPersonId)).toBeDefined();
+			} else {
+				expect(await personRow(oldPersonId)).toBeUndefined();
+			}
 			const guest = await guestRow(guestId);
 			const fresh = await personRow(res.personId);
 			expect(fresh?.name).toBe(guest.name.trim());
@@ -1600,8 +1616,14 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			return fresh;
 		}
 
+		/**
+		 * One condition at a time that makes a Person not pristine, with whether the
+		 * old Person survives the convert: it does when something still references it
+		 * (a sign-in, a membership, owned history, another guest row) or a removal
+		 * names it, and is deleted when NOTHING does.
+		 */
 		const conditions: Array<
-			[string, (personId: string, otherClub: string) => Promise<void>]
+			[string, (personId: string, otherClub: string) => Promise<void>, boolean]
 		> = [
 			[
 				"a sign-in (and nothing else)",
@@ -1611,6 +1633,7 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 						.set({ userId: await makeUser() })
 						.where(eq(people.id, p));
 				},
+				true,
 			],
 			[
 				"a membership in another club, of any status",
@@ -1622,6 +1645,7 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 						status: "inactive",
 					});
 				},
+				true,
 			],
 			[
 				"a speech",
@@ -1630,6 +1654,7 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 						.insert(speeches)
 						.values({ personId: p, title: uniq("Owned") });
 				},
+				true,
 			],
 			[
 				"a Pathways enrolment",
@@ -1644,6 +1669,7 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 						.insert(pathEnrollments)
 						.values({ personId: p, pathId: path.id });
 				},
+				true,
 			],
 			[
 				"a charter-helper row",
@@ -1655,6 +1681,7 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 						name: "Helper",
 					});
 				},
+				true,
 			],
 			[
 				"another guest row, in another club",
@@ -1665,24 +1692,7 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 						personId: p,
 					});
 				},
-			],
-			[
-				"an email",
-				async (p) => {
-					await testDb
-						.update(people)
-						.set({ email: `had-${randomUUID()}@example.test` })
-						.where(eq(people.id, p));
-				},
-			],
-			[
-				"a phone",
-				async (p) => {
-					await testDb
-						.update(people)
-						.set({ phone: "+15550004444" })
-						.where(eq(people.id, p));
-				},
+				true,
 			],
 			[
 				"a member_remove on record",
@@ -1695,23 +1705,72 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 						detail: { name: "Removed", personId: p },
 					});
 				},
+				true,
 			],
 			[
-				"a member_add on record",
-				async (p, club) => {
-					await testDb.insert(activityLog).values({
-						clubId: club,
-						action: "member_add",
-						targetType: "member",
-						targetId: randomUUID(),
-						detail: { name: "Added", personId: p },
-					});
+				"an email",
+				async (p) => {
+					await testDb
+						.update(people)
+						.set({ email: `had-${randomUUID()}@example.test` })
+						.where(eq(people.id, p));
 				},
+				false,
+			],
+			[
+				"a phone",
+				async (p) => {
+					await testDb
+						.update(people)
+						.set({ phone: "+15550004444" })
+						.where(eq(people.id, p));
+				},
+				false,
+			],
+			[
+				"a Toastmasters customer id",
+				async (p) => {
+					await testDb
+						.update(people)
+						.set({ customerId: `PN-${randomUUID()}` })
+						.where(eq(people.id, p));
+				},
+				false,
+			],
+			[
+				"a Base Camp user id",
+				async (p) => {
+					await testDb
+						.update(people)
+						.set({ basecampUserId: `bc-${randomUUID()}` })
+						.where(eq(people.id, p));
+				},
+				false,
+			],
+			[
+				"an original join date",
+				async (p) => {
+					await testDb
+						.update(people)
+						.set({ originalJoinDate: new Date("2015-03-01") })
+						.where(eq(people.id, p));
+				},
+				false,
+			],
+			[
+				"an account invite on record",
+				async (p) => {
+					await testDb
+						.update(people)
+						.set({ invitedAt: new Date("2025-01-01") })
+						.where(eq(people.id, p));
+				},
+				false,
 			],
 		];
 
-		for (const [what, give] of conditions) {
-			it(`a guest Person with ${what} is not adopted: the guest gets a fresh Person, and the old one is left alone`, async () => {
+		for (const [what, give, survives] of conditions) {
+			it(`a guest Person with ${what} is not adopted: the guest gets a fresh Person, and the old one ${survives ? "is left alone" : "is deleted, nothing referencing it"}`, async () => {
 				const otherClub = await makeClub();
 				const email = `fresh-${randomUUID()}@example.test`;
 				const { guestId, personId } = await newGuest(uniq("Not Pristine"), {
@@ -1723,7 +1782,13 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 
 				const res = await convert(guestId);
 
-				const fresh = await expectFreshPerson(guestId, personId, before, res);
+				const fresh = await expectFreshPerson(
+					guestId,
+					personId,
+					before,
+					res,
+					survives,
+				);
 				// The fresh Person carries what the guest row says, not the old one's.
 				expect(fresh?.email).toBe(email);
 				expect(fresh?.userId).toBeNull();
@@ -1889,6 +1954,9 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 
 			const c2 = await convert(cap1.guestId);
 
+			// The fresh Person carries the guest row, which now holds the guest-book
+			// address: that outcome is what `main` does for any guest, and it is the NEW
+			// member's, not Carol's. What this test pins is the OLD Person's safety.
 			await expectFreshPerson(cap1.guestId, personId, before, c2);
 			// Her Person still has HER address, and the guest-book one is nowhere on it.
 			expect((await personRow(personId))?.email).toBe(real);
@@ -2675,6 +2743,33 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			expect(still).toHaveLength(1);
 		});
 
+		it("a link of a guest that names a MEMBER's Person takes that Person's lock without blocking a key share", async () => {
+			const otherMember = await makePerson({ name: uniq("Guest Names Me") });
+			await testDb.insert(members).values({
+				clubId: seed.clubId,
+				personId: otherMember,
+				name: uniq("Guest Names Me Row"),
+			});
+			// The backfill's shape for a guest linked before the deploy: following_up,
+			// naming a member's Person.
+			const { id: guestId } = await createGuestRecord(testDb, {
+				clubId: seed.clubId,
+				name: uniq("Names A Member"),
+				stage: "following_up",
+				personId: otherMember,
+			});
+			const { raced, result } = await whileKeySharesHeld([otherMember], () =>
+				applyLinkGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					memberId: seed.memberId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			);
+			expect(raced).toBe("finished");
+			expect("err" in result).toBe(false);
+		});
+
 		it("a guest delete and a link, which delete a Person, keep the strong lock: they park at the Person BEFORE taking the guest row", async () => {
 			// `FOR UPDATE` is what keeps a reference from appearing between the check
 			// and the delete, so these two park behind a key share at the lock itself.
@@ -2943,6 +3038,603 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 				(audit?.detail as { movedCounts: { guests: number } }).movedCounts
 					.guests,
 			).toBe(1);
+		});
+	});
+
+	// =======================================================================
+	// Round 5 of the review of #1155.
+	// =======================================================================
+
+	/** Whether `personId` reads PRISTINE for `guestId`, evaluated as the convert does. */
+	async function readsPristine(personId: string, guestId: string) {
+		const rows = await testDb
+			.select({ id: people.id })
+			.from(people)
+			.where(and(eq(people.id, personId), pristineGuestPerson(guestId)));
+		return rows.length === 1;
+	}
+
+	describe("pristine means never a member, nobody else's Person (H1)", () => {
+		const snap = async (personId: string) => {
+			const p = await personRow(personId);
+			return {
+				name: p?.name,
+				email: p?.email,
+				phone: p?.phone,
+				customerId: p?.customerId,
+				originalJoinDate: p?.originalJoinDate,
+			};
+		};
+
+		it("roster merge: link, unlink, then the club merges the member's duplicate rows; the next convert does not write the guest onto the member's Person", async () => {
+			const customerId = `PN-${randomUUID()}`;
+			const samName = uniq("Sam Dup");
+			const a = await makePerson({ name: samName });
+			await testDb
+				.update(people)
+				.set({ customerId, originalJoinDate: new Date("2015-03-01") })
+				.where(eq(people.id, a));
+			const [ma] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId: a, name: samName })
+				.returning({ id: members.id });
+			const k = await makePerson({
+				name: uniq("Sam Keeper"),
+				email: `sam-${randomUUID()}@keeper.example`,
+			});
+			const [mk] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId: k, name: "Sam Keeper Row" })
+				.returning({ id: members.id });
+			if (!ma || !mk) throw new Error("fixture");
+			const ginaName = uniq("Gina Guest");
+			const ginaEmail = `gina-${randomUUID()}@guest.example`;
+			const { guestId } = await newGuest(ginaName, { email: ginaEmail });
+			// The officer links Gina's card to the wrong member, then unlinks it.
+			await applyLinkGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				memberId: ma.id,
+				actorMemberId: seed.adminMemberId,
+			});
+			await applyUnlinkGuestFromMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			// The unlink does not leave the card on Sam's duplicate Person.
+			const after = await guestRow(guestId);
+			expect(after.personId).not.toBe(a);
+			guestPersons.push(after.personId as string);
+			// The club merges Sam's duplicate roster rows: the absorbed membership AND
+			// its records are deleted, so nothing on record says A was ever a member.
+			await applyMemberMerge({
+				clubId: seed.clubId,
+				keeperId: mk.id,
+				absorbedId: ma.id,
+				actorMemberId: seed.adminMemberId,
+			});
+			const before = await snap(a);
+
+			const res = await convert(guestId);
+
+			// Gina's membership is on a Person that is hers, never on Sam's.
+			expect(res.personId).not.toBe(a);
+			expect(await snap(a)).toEqual(before);
+			const held = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.personId, a));
+			expect(held).toHaveLength(0);
+			expect((await personRow(res.personId))?.name).toBe(ginaName);
+			// The next roster import by Sam's customer id cannot land on Gina's membership.
+			await importPeopleAndMembers(seed.clubId, [
+				{
+					customerId,
+					name: "Sam Keeper Row",
+					email: null,
+					phone: null,
+					joinedAt: new Date("2015-03-01"),
+					originalJoinDate: new Date("2015-03-01"),
+					officerPosition: null,
+					currentPosition: null,
+				},
+			]);
+			const [gina] = await testDb
+				.select({ name: members.name, personId: members.personId })
+				.from(members)
+				.where(eq(members.id, res.membershipId));
+			expect(gina).toEqual({ name: ginaName, personId: res.personId });
+		});
+
+		it("the state the roster merge used to leave: a guest naming a Person with a customer id and join date, no membership and no record, reads not pristine", async () => {
+			const a = await makePerson({ name: uniq("Collapsed Away") });
+			await testDb
+				.update(people)
+				.set({
+					customerId: `PN-${randomUUID()}`,
+					originalJoinDate: new Date("2015-03-01"),
+				})
+				.where(eq(people.id, a));
+			const { id: guestId } = await createGuestRecord(testDb, {
+				clubId: seed.clubId,
+				name: uniq("Guest On Collapsed"),
+				personId: a,
+			});
+
+			expect(await readsPristine(a, guestId)).toBe(false);
+
+			const before = await snap(a);
+			const res = await convert(guestId);
+			expect(res.personId).not.toBe(a);
+			guestPersons.push(res.personId);
+			// Unreferenced, unreleased and not pristine: deleted, with nothing left of it.
+			expect(await personRow(a)).toBeUndefined();
+			void before;
+		});
+
+		it("superadmin merge: a released former member folded into the guest's own Person as keeper makes it not pristine, and the convert gives the guest a fresh one", async () => {
+			const clubB = await makeClub();
+			const fredName = uniq("Fred Former");
+			const f = await makePerson({ name: fredName });
+			await testDb
+				.update(people)
+				.set({ customerId: `PNF-${randomUUID()}` })
+				.where(eq(people.id, f));
+			// Fred was a member of club B and was removed: the release names F, and a
+			// merge copies F's anchors onto the keeper but leaves that record naming F.
+			await testDb.insert(activityLog).values({
+				clubId: clubB,
+				action: "member_remove",
+				targetType: "member",
+				targetId: randomUUID(),
+				detail: { name: fredName, personId: f },
+			});
+			const g = await newGuest(fredName);
+			await mergePeople({ keeperPersonId: g.personId, absorbedPersonId: f });
+			// The keeper now carries Fred's customer id and no removal names it.
+			expect((await personRow(g.personId))?.customerId).not.toBeNull();
+			expect(await readsPristine(g.personId, g.guestId)).toBe(false);
+
+			const res = await convert(g.guestId);
+
+			expect(res.personId).not.toBe(g.personId);
+			guestPersons.push(res.personId);
+			expect((await personRow(res.personId))?.customerId).toBeNull();
+		});
+
+		it("club delete: a Person kept by another club's guest row, whose membership and records went with the deleted club, reads not pristine", async () => {
+			const doomedName = uniq("Doomed Roster");
+			const doomed = await makeClub(doomedName, true);
+			const x = await makePerson({ name: uniq("Imported Member") });
+			await testDb
+				.update(people)
+				.set({ customerId: `PN-${randomUUID()}` })
+				.where(eq(people.id, x));
+			await testDb
+				.insert(members)
+				.values({ clubId: doomed, personId: x, name: "Imported Member" });
+			// A guest of another club (this one) names that Person.
+			const { id: guestId } = await createGuestRecord(testDb, {
+				clubId: seed.clubId,
+				name: uniq("Guest Of Imported"),
+				personId: x,
+			});
+
+			await deleteClubPermanently(doomed, doomedName);
+
+			// Kept (the guest row names it), but the membership and its records are gone.
+			expect(await personRow(x)).toBeDefined();
+			const held = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.personId, x));
+			expect(held).toHaveLength(0);
+			expect(await readsPristine(x, guestId)).toBe(false);
+			const res = await convert(guestId);
+			expect(res.personId).not.toBe(x);
+			guestPersons.push(res.personId);
+		});
+
+		it("a Person released by a removal from before #875, whose record names no Person and who has only a join date, reads not pristine", async () => {
+			const p = await makePerson({ name: uniq("Old Removal") });
+			await testDb
+				.update(people)
+				.set({ originalJoinDate: new Date("2012-06-01") })
+				.where(eq(people.id, p));
+			// A removal record as it was written before #875: the name, no Person.
+			await testDb.insert(activityLog).values({
+				clubId: seed.clubId,
+				action: "member_remove",
+				targetType: "member",
+				targetId: randomUUID(),
+				detail: { name: "Old Removal" },
+			});
+			const { id: guestId } = await createGuestRecord(testDb, {
+				clubId: seed.clubId,
+				name: uniq("Guest On Old Removal"),
+				personId: p,
+			});
+
+			expect(await readsPristine(p, guestId)).toBe(false);
+		});
+
+		it("a removal that names ANOTHER Person does not disqualify, and a bare name-only Person is pristine (the control)", async () => {
+			const { guestId, personId } = await newGuest(uniq("Control"));
+			await testDb.insert(activityLog).values({
+				clubId: seed.clubId,
+				action: "member_remove",
+				targetType: "member",
+				targetId: randomUUID(),
+				detail: { name: "Somebody Else", personId: randomUUID() },
+			});
+
+			expect(await readsPristine(personId, guestId)).toBe(true);
+		});
+
+		it("the activity-log arm is served by the partial index, with an index condition on the expression", async () => {
+			// The arm as the convert runs it, against a constant Person so the plan can
+			// show an index condition. Sequential scans off: a plan that CAN use the
+			// index does, and one that cannot (a bound `action IN (...)`, which the
+			// partial index's predicate does not imply, or a wrapped expression) scans.
+			const sub = releasedPersonSubquery(sql`${randomUUID()}::text`).toSQL();
+			const c = new pg.Client({
+				connectionString: process.env.TEST_DATABASE_URL,
+			});
+			await c.connect();
+			try {
+				await c.query("begin");
+				await c.query("set local enable_seqscan = off");
+				const plan = await c.query(
+					`explain ${sub.sql}`,
+					sub.params as unknown[],
+				);
+				const text = plan.rows
+					.map((r: Record<string, string>) => r["QUERY PLAN"])
+					.join("\n");
+				expect(text).toContain("activity_log_member_remove_person_idx");
+				expect(text).toMatch(/Index Cond:.*personId/);
+				await c.query("rollback");
+			} finally {
+				await c.end();
+			}
+		});
+	});
+
+	describe("a convert that moves the guest off a Person deletes it only when nothing references it (L3)", () => {
+		it("a Person a merge filled with a former member's contact, with no removal naming it, is deleted with its email backup", async () => {
+			const clubB = await makeClub();
+			const fernName = uniq("Fern Former");
+			const f = await makePerson({
+				name: fernName,
+				email: `fern-${randomUUID()}@example.test`,
+			});
+			await testDb.insert(activityLog).values({
+				clubId: clubB,
+				action: "member_remove",
+				targetType: "member",
+				targetId: randomUUID(),
+				detail: { name: fernName, personId: f },
+			});
+			const g = await newGuest(fernName);
+			await mergePeople({ keeperPersonId: g.personId, absorbedPersonId: f });
+			await testDb.insert(peopleEmailBackup).values({
+				personId: g.personId,
+				email: `bk-${randomUUID()}@example.test`,
+			});
+			expect((await personRow(g.personId))?.email).not.toBeNull();
+
+			const res = await convert(g.guestId);
+
+			expect(res.personId).not.toBe(g.personId);
+			guestPersons.push(res.personId);
+			expect(await personRow(g.personId)).toBeUndefined();
+			const backup = await testDb
+				.select({ id: peopleEmailBackup.personId })
+				.from(peopleEmailBackup)
+				.where(eq(peopleEmailBackup.personId, g.personId));
+			expect(backup).toHaveLength(0);
+		});
+
+		it("an undone convert's Person, which a removal names, is kept through a re-convert (#875's release target)", async () => {
+			const { guestId, personId } = await newGuest(uniq("Release Target"), {
+				email: `rt-${randomUUID()}@example.test`,
+			});
+			await convert(guestId);
+			await undo(guestId);
+
+			const res = await convert(guestId);
+
+			expect(res.personId).not.toBe(personId);
+			guestPersons.push(res.personId);
+			expect(await personRow(personId)).toBeDefined();
+		});
+	});
+
+	describe("the delete of the old Person is taken under the strong lock (L3)", () => {
+		it("a membership another transaction inserts for the old Person while the convert waits on that lock keeps the Person, and the member", async () => {
+			const otherClub = await makeClub();
+			const { guestId, personId } = await newGuest(uniq("Raced Person"), {
+				email: `raced-${randomUUID()}@example.test`,
+			});
+			// Not pristine (it carries contact) and unreferenced: a candidate to delete.
+			await testDb
+				.update(people)
+				.set({ email: `old-${randomUUID()}@example.test` })
+				.where(eq(people.id, personId));
+			// A writer is attaching a membership to it, uncommitted: its foreign key
+			// holds a key share on the Person.
+			const attaching = await openBlockingTx(async (tx) => {
+				await tx.insert(members).values({
+					clubId: otherClub,
+					personId,
+					name: "Attached Mid-Convert",
+				});
+			});
+			const converting = convert(guestId).then(
+				(r) => r,
+				(e: Error) => e,
+			);
+			// The convert is parked on the Person's `FOR UPDATE`, behind that key share.
+			await waitForLockWait("people", attaching.pid);
+			await attaching.commit();
+
+			const res = await converting;
+			expect(res).not.toBeInstanceOf(Error);
+			guestPersons.push((res as { personId: string }).personId);
+			// With the lock, the DELETE's own WHERE saw the committed membership and
+			// kept the Person. Without it the DELETE waited, ran on its old snapshot and
+			// cascaded the new member away.
+			expect(await personRow(personId)).toBeDefined();
+			const kept = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.personId, personId));
+			expect(kept).toHaveLength(1);
+		});
+	});
+
+	describe("unlink leaves no guest on a member's Person (H1b)", () => {
+		it("a guest whose Person holds no membership stays on it", async () => {
+			// A guest linked to a membership, but naming a Person that holds none (the
+			// two-Person residual a dedupe-hit convert leaves): nothing to separate from.
+			const { guestId, personId } = await newGuest(uniq("Own Person"));
+			const m = await testDb
+				.insert(members)
+				.values({
+					clubId: seed.clubId,
+					personId: await makePerson({ name: uniq("Linked Elsewhere") }),
+					name: uniq("Linked Elsewhere Row"),
+				})
+				.returning({ id: members.id });
+			await testDb
+				.update(guests)
+				.set({ stage: "joined", convertedMembershipId: m[0]?.id })
+				.where(eq(guests.id, guestId));
+			// A link record, as `applyLinkGuestToMember` writes it.
+			await testDb.insert(activityLog).values({
+				clubId: seed.clubId,
+				action: "member_merge",
+				targetType: "member",
+				targetId: m[0]?.id,
+				detail: { fromGuestId: guestId, guestName: "G", slotIds: [] },
+			});
+
+			await applyUnlinkGuestFromMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			expect((await guestRow(guestId)).personId).toBe(personId);
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// L2: lock cycles, each reproduced with two connections.
+	// -----------------------------------------------------------------------
+	describe("lock cycles with writers that take no club lock, round 5 (L2)", () => {
+		it("mergePeople does not deadlock a guest-profile edit that holds the keeper's membership FOR SHARE and then updates the guest", async () => {
+			const keeper = await makePerson({ name: uniq("Profile Keeper") });
+			const absorbed = await makePerson({ name: uniq("Profile Absorbed") });
+			const [mk] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId: keeper, name: "PK" })
+				.returning({ id: members.id });
+			await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId: absorbed, name: "PA" });
+			if (!mk) throw new Error("fixture");
+			const { id: guestId } = await createGuestRecord(testDb, {
+				clubId: seed.clubId,
+				name: uniq("Profile Guest"),
+				personId: absorbed,
+			});
+
+			// `applyUpdateGuestProfile`: the introducer's membership FOR SHARE, then the
+			// guest row.
+			const { c, pid } = await rawClient();
+			await c.query("begin");
+			await c.query("select id from members where id = $1 for share", [mk.id]);
+			const merging = mergePeople({
+				keeperPersonId: keeper,
+				absorbedPersonId: absorbed,
+			}).then(
+				() => "ok",
+				(e: unknown) => sqlState(e),
+			);
+			// Parked on the keeper's membership behind the share lock.
+			await waitForLockWait("", pid);
+			const edit = await c
+				.query("update guests set updated_at = now() where id = $1", [guestId])
+				.then(
+					() => "ok",
+					(e: unknown) => sqlState(e),
+				);
+			await c.query(edit === "ok" ? "commit" : "rollback");
+			await c.end();
+
+			expect(edit).toBe("ok");
+			expect(await merging).toBe("ok");
+			expect((await guestRow(guestId)).personId).toBe(keeper);
+		});
+
+		it("a guest delete of a guest naming a MEMBER's Person does not deadlock a speaker claim", async () => {
+			// The shape the backfill leaves for a linked guest that was unlinked before
+			// the deploy: stage following_up, naming the member's Person.
+			const { id: guestId } = await createGuestRecord(testDb, {
+				clubId: seed.clubId,
+				name: uniq("Backfilled Unlinked"),
+				stage: "following_up",
+				personId: seed.personId,
+			});
+			await testDb
+				.update(roleSlots)
+				.set({
+					status: "open",
+					assignedMemberId: null,
+					assignedGuestId: guestId,
+				})
+				.where(eq(roleSlots.id, seed.slotId));
+
+			// `claimSlotCore`: the conditional UPDATE of the open slot, then the speech.
+			const { c, pid } = await rawClient();
+			await c.query("begin");
+			await c.query(
+				`update role_slots set assigned_member_id = $1, assigned_guest_id = null, status = 'claimed'
+				  where id = $2 and status = 'open' returning id`,
+				[seed.memberId, seed.slotId],
+			);
+			const deleting = applyDeleteGuest({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			}).then(
+				() => "ok",
+				(e: unknown) => sqlState(e),
+			);
+			await waitForLockWait("", pid);
+			const claim = await c
+				.query(
+					"insert into speeches (person_id, title) values ($1, 'claim') returning id",
+					[seed.personId],
+				)
+				.then(
+					() => "ok",
+					(e: unknown) => sqlState(e),
+				);
+			await c.query("rollback");
+			await c.end();
+
+			expect(claim).toBe("ok");
+			// The delete finishes once the claim lets go; the member's Person is intact.
+			expect(await deleting).toBe("ok");
+			expect(await personRow(seed.personId)).toBeDefined();
+		});
+
+		it("a link does not deadlock a speaker claim for the member it links to", async () => {
+			const { guestId } = await newGuest(uniq("Link Claim"));
+			// The guest holds a slot that a claim for the member is touching.
+			await testDb
+				.update(roleSlots)
+				.set({
+					status: "claimed",
+					assignedMemberId: null,
+					assignedGuestId: guestId,
+				})
+				.where(eq(roleSlots.id, seed.slotId));
+			const { c, pid } = await rawClient();
+			await c.query("begin");
+			await c.query("update role_slots set claimed_at = now() where id = $1", [
+				seed.slotId,
+			]);
+			const linking = applyLinkGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				memberId: seed.memberId,
+				actorMemberId: seed.adminMemberId,
+			}).then(
+				() => "ok",
+				(e: unknown) => sqlState(e),
+			);
+			await waitForLockWait("", pid);
+			const claim = await c
+				.query(
+					"insert into speeches (person_id, title) values ($1, 'claim') returning id",
+					[seed.personId],
+				)
+				.then(
+					() => "ok",
+					(e: unknown) => sqlState(e),
+				);
+			await c.query("rollback");
+			await c.end();
+
+			expect(claim).toBe("ok");
+			expect(await linking).toBe("ok");
+			expect((await guestRow(guestId)).personId).toBe(seed.personId);
+		});
+	});
+
+	describe("lockPersonsInOrder (L2)", () => {
+		/**
+		 * Hold the locks `locks` takes, then try a `FOR KEY SHARE NOWAIT` on the
+		 * Person from another connection: the lock a foreign-key INSERT takes. A
+		 * `FOR UPDATE` refuses it (55P03); `FOR NO KEY UPDATE` does not.
+		 */
+		async function keyShareWhileHeld(
+			locks: Parameters<typeof lockPersonsInOrder>[1],
+			personId: string,
+		) {
+			const holder = await openBlockingTx(async (tx) => {
+				await lockPersonsInOrder(tx, locks);
+			});
+			const { c } = await rawClient();
+			try {
+				await c.query("begin");
+				return await c
+					.query("select id from people where id = $1 for key share nowait", [
+						personId,
+					])
+					.then(
+						() => "free",
+						(e: unknown) => sqlState(e),
+					);
+			} finally {
+				await c.query("rollback");
+				await c.end();
+				await holder.commit();
+			}
+		}
+
+		it("locks in id order, once each, and ignores a null", async () => {
+			const a = await makePerson({ name: uniq("Order A") });
+			const b = await makePerson({ name: uniq("Order B") });
+			const c = await makePerson({ name: uniq("Order C") });
+			const locked = await testDb.transaction((tx) =>
+				lockPersonsInOrder(tx, [...noKeyUpdate(c, null, a, c, undefined, b)]),
+			);
+			expect(locked).toEqual([a, b, c].sort());
+		});
+
+		it("FOR NO KEY UPDATE does not block a key share", async () => {
+			const p = await makePerson({ name: uniq("Weak") });
+			expect(await keyShareWhileHeld(noKeyUpdate(p), p)).toBe("free");
+		});
+
+		it("FOR UPDATE blocks a key share", async () => {
+			const p = await makePerson({ name: uniq("Strong") });
+			expect(await keyShareWhileHeld(forUpdate(p), p)).toBe("55P03");
+		});
+
+		it("a Person named at both strengths is held at the stronger, whichever is listed first", async () => {
+			const p = await makePerson({ name: uniq("Both") });
+			expect(
+				await keyShareWhileHeld([...noKeyUpdate(p), ...forUpdate(p)], p),
+			).toBe("55P03");
+			expect(
+				await keyShareWhileHeld([...forUpdate(p), ...noKeyUpdate(p)], p),
+			).toBe("55P03");
 		});
 	});
 });

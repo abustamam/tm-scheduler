@@ -16,7 +16,6 @@ import {
 	countDistinct,
 	eq,
 	exists,
-	inArray,
 	isNotNull,
 	isNull,
 	ne,
@@ -238,8 +237,10 @@ export function unboundGuestOnlyPerson(): SQL {
  * **The one definition of a PRISTINE guest Person** (#1124, ADR-0031, the
  * maintainer's ruling of 2026-10-09): the only Person a convert may ADOPT for a
  * guest. Everything else the guest row names gets a fresh Person instead, and the
- * old one is left exactly as it is: it is somebody's history or a release target
- * (#875). A Person is pristine for guest `guestId` only if ALL of these hold:
+ * old one is left as it is (or, if nothing at all references it, deleted): it is
+ * somebody's history or a release target (#875). "Pristine" means NOTHING a
+ * guest's Person is not meant to carry shows on the row or in the tables around
+ * it. A Person is pristine for guest `guestId` only if ALL of these hold:
  *
  *  - nobody has signed in as them (`user_id IS NULL`);
  *  - no membership in any club, in any status;
@@ -247,16 +248,37 @@ export function unboundGuestOnlyPerson(): SQL {
  *    owns that is somebody's record);
  *  - no guest row but this one, in any club (a Person two clubs share is not one
  *    club's to rename and re-key);
- *  - no email and no phone. In #1124 nothing puts contact on a guest's Person
- *    except a convert or a member-level edit, so contact on it is EVIDENCE that
- *    it was a member. #1125 moves a guest's contact onto its Person, and must
- *    replace this signal (ADR-0031);
- *  - no activity record showing it ever held a membership: a `member_remove`
- *    naming it (`detail.personId`, the shape `applyMemberRemove`, an undo and the
- *    importer's release lookup all use, and the partial index
- *    `activity_log_member_remove_person_idx` serves), or a `member_add` naming
- *    it (convert's record; the roster add and the import write no Person on
- *    theirs, so they cannot be matched).
+ *  - no email and no phone, and none of the roster-identity columns that only a
+ *    membership, an import, a member or an officer sets: `customer_id`,
+ *    `basecamp_user_id`, `original_join_date` and `invited_at`. A Person a merge
+ *    folded a member into carries those columns (`mergePeople` copies the
+ *    absorbed Person's contact and anchors onto the keeper), and so does one a
+ *    roster collapse left behind, so the columns, not only the records, are the
+ *    evidence. The two contact-preference columns are NOT on this list:
+ *    `preferred-contact-reads.guard.test.ts` lets only the files it names spell
+ *    that column, and this file is not one. Only a member's own page, an
+ *    officer's edit of a member and `mergePeople` write them, so the membership
+ *    and removal arms below, and the anchors above, are what see them. #1125
+ *    moves a guest's contact onto its Person, and must replace the contact
+ *    signal (ADR-0031);
+ *  - no removal on record: a `member_remove` naming it (`detail.personId`, the
+ *    shape `applyMemberRemove`, an undo and the importer's release lookup all use).
+ *
+ * That last arm is spelled like the importer's (a LITERAL `action =
+ * 'member_remove'` and the same `->>` expression), because
+ * `activity_log_member_remove_person_idx` is partial and on that expression and
+ * serves only a query that spells both the same way. A bound `action IN ($1, $2)`
+ * does not, and every convert then scanned the whole log across clubs while
+ * holding the club and Person locks. There is no `member_add` arm for the same
+ * reason and because it proves little: the roster add and the import write no
+ * Person on theirs, convert's names one but a roster collapse deletes the
+ * absorbed membership's own records, and every deletion that is logged writes a
+ * `member_remove`.
+ *
+ * What this cannot see is a membership that was deleted without a record and
+ * left no column behind (a removal from before #875 of a Person with nothing but a
+ * name). That Person reads as pristine, and it is the guest's to adopt: nothing
+ * about it distinguishes it from one.
  *
  * One function, so the decision and the write cannot disagree: convert puts it
  * in the adopt UPDATE's own WHERE, and the UPDATE matching a row IS the
@@ -269,6 +291,10 @@ export function pristineGuestPerson(guestId: string): SQL {
 		isNull(people.userId),
 		isNull(people.email),
 		isNull(people.phone),
+		isNull(people.customerId),
+		isNull(people.basecampUserId),
+		isNull(people.originalJoinDate),
+		isNull(people.invitedAt),
 		notExists(
 			db
 				.select({ one: sql`1` })
@@ -304,18 +330,41 @@ export function pristineGuestPerson(guestId: string): SQL {
 					),
 				),
 		),
-		notExists(
-			db
-				.select({ one: sql`1` })
-				.from(personRecord)
-				.where(
-					and(
-						inArray(personRecord.action, ["member_remove", "member_add"]),
-						sql`${personRecord.detail} ->> 'personId' = ${people.id}::text`,
-					),
-				),
-		),
+		notExists(releasedPersonSubquery()),
 	) as SQL;
+}
+
+/**
+ * A `member_remove` naming `people.id`, spelled exactly as the importer's release
+ * lookup spells it so the partial index `activity_log_member_remove_person_idx`
+ * serves it (a literal action, the same `->>` expression). Shared by
+ * `pristineGuestPerson` and the keep-a-release-target rule of a convert's delete.
+ * Exported, and takes the Person as text, so a test can EXPLAIN it against a
+ * constant and see an index condition on the expression.
+ */
+export function releasedPersonSubquery(
+	personIdText: SQL = sql`${people.id}::text`,
+) {
+	return db
+		.select({ one: sql`1` })
+		.from(personRecord)
+		.where(
+			and(
+				sql`${personRecord.action} = 'member_remove'`,
+				sql`${personRecord.detail} ->> 'personId' = ${personIdText}`,
+			),
+		);
+}
+
+/**
+ * The Person is the release target of a removal (#875): a `member_remove` names
+ * it. A convert that moves a guest off a Person it did not adopt deletes that
+ * Person when nothing references it, but never one a removal names: that is the
+ * record the undoing club's own roster CSV matches by, and its contact is
+ * somebody's correction.
+ */
+export function releasedByRemoval(): SQL {
+	return exists(releasedPersonSubquery()) as SQL;
 }
 
 /**
