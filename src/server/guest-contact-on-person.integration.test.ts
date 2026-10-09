@@ -40,6 +40,7 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const {
 	applyConvertGuestToMember,
+	applyDeleteGuest,
 	applyLinkGuestToMember,
 	applySetGuestStage,
 	applyUnlinkGuestFromMember,
@@ -1171,6 +1172,93 @@ describe.skipIf(!hasTestDb)(
 				extraPeople.push((await guestRow(g.guestId)).personId);
 			});
 
+			const recordedContact = async (membershipId: string) => {
+				const rows = await testDb
+					.select({ detail: activityLog.detail })
+					.from(activityLog)
+					.where(
+						and(
+							eq(activityLog.clubId, seed.clubId),
+							eq(activityLog.action, "member_merge"),
+							eq(activityLog.targetId, membershipId),
+						),
+					);
+				return rows.map((r) => (r.detail as Record<string, unknown>) ?? {});
+			};
+
+			it("link then unlink: the recorded contact is dropped from the activity row once the unlink has used it", async () => {
+				const g = await newGuest(uniq("Drop After Unlink"), {
+					email: address("drop"),
+					phone: "+15550008003",
+				});
+				const memberPerson = await makePerson({ name: uniq("M4") });
+				const membershipId = await member(seed.clubId, memberPerson, "M4");
+				await applyLinkGuestToMember({
+					clubId: seed.clubId,
+					guestId: g.guestId,
+					memberId: membershipId,
+					actorMemberId: seed.adminMemberId,
+				});
+				expect(
+					(await recordedContact(membershipId)).some(
+						(d) => "guestContact" in d,
+					),
+				).toBe(true);
+
+				await applyUnlinkGuestFromMember({
+					clubId: seed.clubId,
+					guestId: g.guestId,
+					actorMemberId: seed.adminMemberId,
+				});
+
+				// Restored onto the new Person, and gone from the log.
+				expect((await guestContactOf(g.guestId)).phone).toBe("+15550008003");
+				expect(
+					(await recordedContact(membershipId)).some(
+						(d) => "guestContact" in d,
+					),
+				).toBe(false);
+				extraPeople.push((await guestRow(g.guestId)).personId);
+			});
+
+			it("link then DELETE the guest: the recorded contact does not outlive it", async () => {
+				const g = await newGuest(uniq("Deleted After Link"), {
+					email: address("gone"),
+				});
+				const memberPerson = await makePerson({ name: uniq("M5") });
+				const membershipId = await member(seed.clubId, memberPerson, "M5");
+				await applyLinkGuestToMember({
+					clubId: seed.clubId,
+					guestId: g.guestId,
+					memberId: membershipId,
+					actorMemberId: seed.adminMemberId,
+				});
+				// A linked guest cannot be deleted (it is joined): unlink first would use
+				// the record, so mark the card stranded the way a removal leaves it, which
+				// is the state in which a delete is allowed.
+				await testDb
+					.update(guests)
+					.set({ convertedMembershipId: null, stage: "lost" })
+					.where(eq(guests.id, g.guestId));
+				expect(
+					(await recordedContact(membershipId)).some(
+						(d) => "guestContact" in d,
+					),
+				).toBe(true);
+
+				await applyDeleteGuest({
+					clubId: seed.clubId,
+					guestId: g.guestId,
+					actorMemberId: seed.adminMemberId,
+				});
+
+				expect(
+					(await recordedContact(membershipId)).some(
+						(d) => "guestContact" in d,
+					),
+				).toBe(false);
+			});
+
 			it("the recorded contact is not readable through the activity feed", async () => {
 				const email = address("feed");
 				const g = await newGuest(uniq("Feed Guest"), {
@@ -1232,6 +1320,88 @@ describe.skipIf(!hasTestDb)(
 				expect(k?.phone).toBeNull();
 				// The guest row moved to the keeper, so it now reads the member's contact.
 				expect((await guestRow(g.guestId)).personId).toBe(keeper);
+			});
+
+			it("(a) a GUEST-ONLY keeper with an address and a MEMBER absorbed Person: the member's contact wins, and a blank member field stays blank", async () => {
+				const guestKeeper = await newGuest(uniq("Guest Keeper A"), {
+					email: address("guest-typed"),
+					phone: "+15550008001",
+				});
+				const memberAbsorbed = await makePerson({
+					name: uniq("Member Absorbed A"),
+					email: address("member"),
+				});
+				const clubB = await makeClub();
+				await member(clubB, memberAbsorbed, "Member Absorbed A");
+				const memberEmail = (await personRow(memberAbsorbed))?.email;
+
+				await mergePeople({
+					keeperPersonId: guestKeeper.personId,
+					absorbedPersonId: memberAbsorbed,
+				});
+
+				const merged = await personRow(guestKeeper.personId);
+				expect(merged?.email).toBe(memberEmail);
+				// The member side had no phone: the guest's typed phone does not fill it.
+				expect(merged?.phone).toBeNull();
+			});
+
+			it("(b) a keeper with member HISTORY but no membership, and a guest-only absorbed Person: the guest's contact does not fill the former member's", async () => {
+				const keeper = await makePerson({ name: uniq("Former Keeper") });
+				await testDb
+					.update(people)
+					.set({ customerId: `PN-${randomUUID()}` })
+					.where(eq(people.id, keeper));
+				const g = await newGuest(uniq("Guest Absorbed B"), {
+					email: address("typed"),
+					phone: "+15550008002",
+				});
+
+				await mergePeople({
+					keeperPersonId: keeper,
+					absorbedPersonId: g.personId,
+				});
+
+				const merged = await personRow(keeper);
+				expect(merged?.email).toBeNull();
+				expect(merged?.phone).toBeNull();
+			});
+
+			it("(b2) the same with a removal on record as the history", async () => {
+				const keeper = await makePerson({ name: uniq("Removed Keeper") });
+				await released(keeper, seed.clubId);
+				const g = await newGuest(uniq("Guest Absorbed B2"), {
+					email: address("typed"),
+				});
+				await mergePeople({
+					keeperPersonId: keeper,
+					absorbedPersonId: g.personId,
+				});
+				expect((await personRow(keeper))?.email).toBeNull();
+			});
+
+			it("(c) a guest-only keeper and an absorbed Person with member history: the absorbed side's contact is used, the guest's is not", async () => {
+				const guestKeeper = await newGuest(uniq("Guest Keeper C"), {
+					email: address("guest-typed"),
+				});
+				const absorbed = await makePerson({
+					name: uniq("Former Absorbed C"),
+					email: address("former"),
+				});
+				await testDb
+					.update(people)
+					.set({ customerId: `PN-${randomUUID()}` })
+					.where(eq(people.id, absorbed));
+				const formerEmail = (await personRow(absorbed))?.email;
+
+				await mergePeople({
+					keeperPersonId: guestKeeper.personId,
+					absorbedPersonId: absorbed,
+				});
+
+				expect((await personRow(guestKeeper.personId))?.email).toBe(
+					formerEmail,
+				);
 			});
 
 			it("control: a guest-only keeper still adopts a guest-only absorbed Person's contact, and a member absorbed Person's contact still fills a member keeper", async () => {

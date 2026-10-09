@@ -226,14 +226,17 @@ already did, through `countsAsHolder`. "Ignore" stops at a Person that shows a p
 Customer ID, a join date, an invite stamp, a removal): `people.customer_id` is UNIQUE, so hiding
 one would turn an import into a unique violation, and #875's release matching needs it.
 
-`mergePeople` does not carry a guest-only absorbed Person's email or phone onto a keeper that holds
-a membership: the keeper's address is the member's sign-in key, and a stranger's typed address must
-not fill its blank.
+`mergePeople` never takes the merged Person's email or phone from a guest-only side when the merged
+Person will hold a membership or carries member history, whichever side the superadmin kept: a
+member's address is their sign-in key, and a stranger's typed address must neither fill its blank
+nor beat it. The other side's value is used, and when that is blank the result stays blank.
 
 A link (#635) deletes the guest's abandoned guest-only Person with its contact, so the link records
 that contact in its `member_merge` activity detail (`guestContact`), and an unlink puts it back on
 the Person it mints. The activity feed maps a fixed set of keys out of `detail` and never returns
-it whole, so this is not visible to the club's members (a test pins it).
+it whole, so this is not visible to the club's members (a test pins it). The key is dropped from the
+log once the unlink has used it, and when the guest is deleted, converted or re-linked, so it does
+not outlive the guest (a club delete takes the log with it).
 
 Known edges of reading a guest's contact through its Person:
 

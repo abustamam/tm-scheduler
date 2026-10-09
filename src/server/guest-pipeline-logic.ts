@@ -1582,6 +1582,7 @@ export async function applyDeleteGuest(
 				detail: { guestId: input.guestId, guestName: guest.name },
 			});
 		}
+		await clearRecordedGuestContact(tx, input.clubId, input.guestId);
 		await tx.delete(guests).where(eq(guests.id, input.guestId));
 		// A guest is a Person (#1124): the Person goes with the guest, unless
 		// something else still names it: another club's guest row, a membership, a
@@ -1794,6 +1795,34 @@ export async function lockClubConverts(
 	await tx.execute(
 		sql`select pg_advisory_xact_lock(hashtextextended(${`guest-convert:${clubId}`}, 0))`,
 	);
+}
+
+/**
+ * Drop the contact a link recorded for this guest from every `member_merge`
+ * activity row that still carries it (#1125). The record exists only so an unlink
+ * can give the guest back the contact its abandoned Person took with it; it must
+ * not outlive that purpose, because activity rows outlive the guest and the Person
+ * (the repo's rule is that deleting a Person removes their contact). Called when
+ * the unlink has used it, when the guest is deleted, when a convert moves a
+ * stranded linked guest onto a Person of its own, and when a new link supersedes an
+ * older record. A club delete takes the activity log with it (`ON DELETE CASCADE`).
+ */
+async function clearRecordedGuestContact(
+	tx: DbOrTx,
+	clubId: string,
+	guestId: string,
+): Promise<void> {
+	await tx
+		.update(activityLog)
+		.set({ detail: sql`${activityLog.detail} - 'guestContact'` })
+		.where(
+			and(
+				eq(activityLog.clubId, clubId),
+				eq(activityLog.action, "member_merge"),
+				sql`${activityLog.detail}->>'fromGuestId' = ${guestId}`,
+				sql`${activityLog.detail} ? 'guestContact'`,
+			),
+		);
 }
 
 /**
@@ -2042,6 +2071,10 @@ export async function applyConvertGuestToMember(
 			throw new Error("This guest has already been converted to a member.");
 		}
 
+		// A stranded guest that was once LINKED still has that link's recorded
+		// contact in the activity log; a convert gives it a Person of its own, so the
+		// record has no unlink left to serve.
+		await clearRecordedGuestContact(tx, input.clubId, input.guestId);
 		// The contact is the guest's Person's (#1125), read under the Person lock.
 		const identity = convertIdentity(
 			{ ...guest, ...(await guestOwnContact(tx, guest.personId)) },
@@ -2646,6 +2679,7 @@ export async function applyLinkGuestToMember(
 		// activity record, which is what lets an unlink put them back on the Person
 		// it mints. Only a guest's OWN contact (`guestOwnContact`), and never a
 		// Person the guest already shared with the member.
+		await clearRecordedGuestContact(tx, input.clubId, input.guestId);
 		const ownContact =
 			guest.personId && guest.personId !== member.personId
 				? await guestOwnContact(tx, guest.personId)
@@ -2819,6 +2853,7 @@ export async function applyUnlinkGuestFromMember(
 		const recordedContact = (
 			entry.detail as { guestContact?: { email?: unknown; phone?: unknown } }
 		).guestContact;
+		await clearRecordedGuestContact(tx, input.clubId, input.guestId);
 		await separateGuestFromMemberPerson(tx, input.guestId, {
 			email:
 				typeof recordedContact?.email === "string"

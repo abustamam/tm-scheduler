@@ -323,7 +323,8 @@ somebody else's, and copying it would put another human's address on a membershi
 (a wrong-person sign-in key). An unlink points the guest at a fresh Person when its
 Person holds a membership, carrying the contact the link recorded in its
 `member_merge` activity detail (`guestContact`; the activity feed never returns
-`detail` whole). Undo does not touch the contact, so the undoing club's own roster
+`detail` whole). The record is dropped once the unlink used it, and when the guest is
+deleted, converted, or re-linked. Undo does not touch the contact, so the undoing club's own roster
 CSV still matches the Person (#875).
 
 **A guest's email and phone are their Person's** (#1125, ADR-0031). Two predicates
@@ -334,8 +335,9 @@ their one read form, shared by the board (`PipelineGuestRow.contactRefusal`), th
 edit dialog's profile read and the refusal the write throws. The member-identity
 paths that match `people` by address globally ignore a guest-only Person
 (`identityIgnoredGuestPerson()`: the CSV importer's candidates and address-holder
-map, `findBestPersonByEmail`). `mergePeople` does not carry a guest-only absorbed
-Person's contact onto a keeper that holds a membership. `guests.email` and
+map, `findBestPersonByEmail`). `mergePeople` never takes the merged Person's email or phone from a guest-only side
+when the merged Person will hold a membership or carries member history, whichever
+side the superadmin kept (the other side's value, or blank). `guests.email` and
 `guests.phone` still exist in the database, dead, and are deliberately NOT declared
 in `schema.ts` until #1126 drops them in SQL (`guest-contact-columns.guard.test.ts`
 scans `src/` and `scripts/` for raw references).

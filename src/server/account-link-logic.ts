@@ -340,7 +340,7 @@ export function guestContactFillable(clubId: string): SQL {
  * left no column behind reads clean. Shared by `guestContactFillable` and
  * `identityIgnoredGuestPerson`, so the two cannot disagree about it.
  */
-function noMemberHistory(): SQL {
+export function noMemberHistory(): SQL {
 	return and(
 		isNull(people.customerId),
 		isNull(people.basecampUserId),
