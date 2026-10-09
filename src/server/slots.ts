@@ -9,7 +9,7 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
-import { assertMeetingNotCancelled } from "#/lib/meeting-cancellation-notice";
+import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { logActivity } from "./activity";
 import {
 	assertClubNotArchived,
@@ -19,7 +19,7 @@ import {
 	requireMemberInClub,
 	requireUser,
 } from "./guards";
-import { assertMeetingNotLocked } from "./meeting-authz-logic";
+import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 import {
 	applyAddRoleSlot,
 	applyAddSpeakerSlot,
@@ -223,7 +223,11 @@ export const unconfirmSlot = createServerFn({ method: "POST" })
 		if (!slot) {
 			throw new Error("Role not found.");
 		}
-		assertMeetingNotLocked(slot.meetingStatus);
+		// By write class (#1135), in two steps that keep the order each status has
+		// always had. The lock refuses HERE, before the role gate, so any caller of
+		// a completed meeting hears that it is locked; this call accepts `cancelled`
+		// (`PLAN_ACCEPTING_CANCELLED`) for the reason the second one runs later.
+		assertMeetingAccepts(slot.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED);
 
 		// The actor is the resolved admin membership — never the client (#396).
 		const membership = await requireClubRole(currentUser.id, slot.clubId, [
@@ -233,8 +237,10 @@ export const unconfirmSlot = createServerFn({ method: "POST" })
 		// direct call should not be able to edit a meeting nobody can see. AFTER
 		// the role gate, unlike the lock above (which predates it): a cancelled
 		// meeting is hidden from members, so a caller outside the club must be
-		// refused for who they are, not told the meeting is cancelled.
-		assertMeetingNotCancelled(slot.meetingStatus);
+		// refused for who they are, not told the meeting is cancelled. The plain
+		// class call: it refuses a completed meeting too, which the call above has
+		// already done.
+		assertMeetingAccepts(slot.meetingStatus, "plan");
 
 		return db.transaction(async (tx) => {
 			// Conditional UPDATE: only flips 'confirmed' → 'claimed'.
@@ -361,12 +367,12 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 		// deliberately: it is the call `public-readers-archive-gate`'s WRITE_GATES
 		// row pins in this file, and it outlives a change to that gate.
 		await assertClubNotArchived(slot.clubId);
-		assertMeetingNotLocked(slot.meetingStatus);
+		// By write class (#1135): completed says locked, cancelled says cancelled.
 		// #1057. A cancelled meeting keeps every assignment until restored, and a
 		// blank input here UNLINKS the speech (`editSlotSpeech`), which a restore
 		// cannot bring back — on a page that is read-only, so the holder could not
-		// put it right either. Beside the lock check, for the lock's reason.
-		assertMeetingNotCancelled(slot.meetingStatus);
+		// put it right either.
+		assertMeetingAccepts(slot.meetingStatus, "plan");
 		if (!slot.isSpeakerRole) {
 			throw new Error("Only speaker roles have speech details.");
 		}

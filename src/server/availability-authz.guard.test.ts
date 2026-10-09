@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
+import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 
 /**
  * The one half of #675 a behavioural test cannot reach: that
@@ -40,6 +41,18 @@ const SEAM = readSource(SEAM_FILE);
 const HANDLER_RAW = readFileSync(HANDLER_FILE, "utf8");
 const SEAM_RAW = readFileSync(SEAM_FILE, "utf8");
 
+/**
+ * The handler's refusal of a completed meeting, in the exact forms it may take:
+ * the old per-status helper, or the write policy's `plan` class (#1135), which
+ * refuses `completed`, with at most the one named options constant that hands
+ * `cancelled` on to the seam. Pinned whole rather than by prefix, so none of
+ * these passes: `"record"` (the class that ACCEPTS a completed meeting), an
+ * inline `accept` that also lists `completed`, or an options variable whose
+ * contents this file cannot see. The constant's own value is pinned below.
+ */
+const LOCK_CHECK =
+	/assertMeetingNotLocked\(meeting\.status\)|assertMeetingAccepts\(meeting\.status, "plan"(?:, PLAN_ACCEPTING_CANCELLED)?\)/;
+
 /** One `export const <name> = createServerFn…` declaration, so a per-handler
  *  assertion cannot be satisfied by its neighbour's correct code — and the two
  *  neighbours here are precisely the ones that legitimately DO carry the
@@ -54,6 +67,24 @@ function handlerBody(source: string, name: string): string {
 	const next = source.indexOf("\nexport const", start + 1);
 	return source.slice(start, next === -1 ? source.length : next);
 }
+
+describe("the lock check's options constant (#1135)", () => {
+	it("hands `cancelled` on and nothing else", () => {
+		// The three handlers pass this constant and this guard reads only their
+		// source, so the constant's value is what decides whether a completed
+		// meeting is still refused: add `completed` to it and every handler would
+		// accept one.
+		expect(PLAN_ACCEPTING_CANCELLED).toEqual({ accept: ["cancelled"] });
+	});
+
+	it.each([
+		"setAvailability",
+		"clearAvailability",
+		"markUnavailableReleasing",
+	])("%s spells the lock check in a form LOCK_CHECK allows", (name) => {
+		expect(handlerBody(HANDLER, name).search(LOCK_CHECK)).toBeGreaterThan(-1);
+	});
+});
 
 describe("markUnavailableReleasing subject check (#675)", () => {
 	it("hands the seam the client's raw assertion", () => {
@@ -96,8 +127,19 @@ describe("markUnavailableReleasing subject check (#675)", () => {
 		const body = handlerBody(HANDLER, "markUnavailableReleasing");
 		const archive = body.indexOf("assertClubNotArchived(meeting.clubId)");
 		expect(archive).toBeGreaterThan(-1);
+		// The lock check, in either spelling. A bare `assertMeetingAccepts(` prefix
+		// would also match `"record"`, the write class that ACCEPTS a completed
+		// meeting, so the class is part of the pattern.
+		const lock = body.search(LOCK_CHECK);
+		expect(
+			lock,
+			'the handler must refuse a completed meeting: `assertMeetingNotLocked(` or `assertMeetingAccepts(…, "plan", …)`',
+		).toBeGreaterThan(-1);
+		expect(
+			lock,
+			"the lock check must not run before the archive gate",
+		).toBeGreaterThan(archive);
 		for (const later of [
-			"assertMeetingNotLocked(",
 			"requireMemberInClub(",
 			"releaseSlotsAndMarkUnavailable(",
 		]) {

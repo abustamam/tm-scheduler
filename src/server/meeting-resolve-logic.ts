@@ -90,7 +90,7 @@ export async function resolveMeetingKey(
 	// and then by time, so the fallback costs no second round trip.
 	//
 	// Writers are unaffected: each takes a uuid, or reaches a cancelled meeting
-	// only to meet the refusal it already had (see `meetingNotCancelled`, the
+	// only to meet the refusal it already had (see `meetingAcceptsWrite`, the
 	// plan seam, `castVote`, `agendaEditable`, `leaveFeedbackLogic`).
 	const { start, end } = localDayRange(parsed.date, tz);
 	const [row] = await db

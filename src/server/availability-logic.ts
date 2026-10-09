@@ -1,11 +1,13 @@
 import { and, eq } from "drizzle-orm";
 import type { db } from "#/db";
-import { roleSlots } from "#/db/schema";
+import { meetings, roleSlots } from "#/db/schema";
+import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
 import { logActivity } from "./activity";
 import { resolveActor } from "./attendance-actor-logic";
 import { lockMemberAttendance, setPlanStatus } from "./attendance-plan-logic";
 import { assertClubNotArchived } from "./guards";
+import { meetingAcceptsWrite } from "./meeting-write-gate";
 
 type Database = typeof db;
 
@@ -113,6 +115,26 @@ export async function releaseSlotsAndMarkUnavailable(
 		// claim that checked this member's answer must finish before we look for
 		// the roles to free, or its slot flips after we have looked.
 		await lockMemberAttendance(tx, args.meetingId, args.memberId);
+		// The writer's own refusal, by write class (#1135), where it used to rest on
+		// each caller (the handler's lock check; the decline's `isMeetingOver`).
+		// `plan`: freeing someone's roles rewrites the agenda, so a completed
+		// meeting says locked and a cancelled one says cancelled, BEFORE anything is
+		// released. A cancelled meeting was already refused as a whole, one step
+		// later, by the `not_coming` write below (`setPlanStatus`), whose throw
+		// rolls the release back (`decline-release-cancelled.integration.test.ts`);
+		// this says the same sentence, and says it from this writer.
+		//
+		// A plain read, with no meeting lock: one would sit after the attendance
+		// lock taken above, against the order every slot editor takes them in. A
+		// complete committing between this read and the release is the window the
+		// callers' own checks always had.
+		const [meeting] = await tx
+			.select({ status: meetings.status })
+			.from(meetings)
+			.where(eq(meetings.id, args.meetingId))
+			.limit(1);
+		if (!meeting) throw new Error("Meeting not found.");
+		assertMeetingAccepts(meeting.status, "plan");
 		const released = await tx
 			.update(roleSlots)
 			.set({
@@ -126,9 +148,23 @@ export async function releaseSlotsAndMarkUnavailable(
 				and(
 					eq(roleSlots.meetingId, args.meetingId),
 					eq(roleSlots.assignedMemberId, args.memberId),
+					// The class rides in the statement too (#1135), so a meeting frozen
+					// AFTER the read above releases nothing, as `claimSlotCore`'s does.
+					meetingAcceptsWrite(tx, "plan", roleSlots.meetingId),
 				),
 			)
 			.returning({ id: roleSlots.id });
+		if (released.length === 0) {
+			// Nothing released is ordinary (the member held nothing), and also what a
+			// freeze after the read leaves: tell them apart, so a locked or cancelled
+			// meeting is refused here rather than given a `not_coming` answer.
+			const [now] = await tx
+				.select({ status: meetings.status })
+				.from(meetings)
+				.where(eq(meetings.id, args.meetingId))
+				.limit(1);
+			if (now) assertMeetingAccepts(now.status, "plan");
+		}
 
 		// Inside the caller's transaction, which is why the seam takes a `DbOrTx`:
 		// the release and the "not coming" answer commit together or not at all.

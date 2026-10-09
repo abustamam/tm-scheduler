@@ -14,13 +14,13 @@ import {
 	HOME_CLUB_TOO_LONG_MESSAGE,
 	normalizeHomeClub,
 } from "#/lib/guest-profile";
-import { assertMeetingNotCancelled } from "#/lib/meeting-cancellation-notice";
+import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { toStoredPhone } from "#/lib/phone";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import type { UpdateGuestProfileInput } from "./guest-pipeline-schemas";
-import { assertMeetingNotLocked } from "./meeting-authz-logic";
-import { meetingNotCancelled } from "./slots-logic";
+import { meetingAcceptsWrite } from "./meeting-write-gate";
+import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 
 // Either the pooled client or a caller's transaction, so this can run inside a
 // batch that is already holding row locks.
@@ -126,7 +126,11 @@ export async function applyAssignGuestToSlot(
 	// meeting row `FOR UPDATE` for the batch, so that path was covered — but by
 	// a lock whose load-bearing role nothing recorded, rather than by the
 	// assertion its siblings make.
-	assertMeetingNotLocked(slot.meetingStatus);
+	//
+	// By write class (#1135), accepting `cancelled` (`PLAN_ACCEPTING_CANCELLED`):
+	// a cancelled meeting is refused in the statement below, after the guest
+	// checks (#1057). The statement refuses both statuses.
+	assertMeetingAccepts(slot.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED);
 
 	// Club default country code for E.164 normalization on write (#295).
 	const cc = await loadClubDefaultCountryCode(slot.clubId, conn);
@@ -177,13 +181,13 @@ export async function applyAssignGuestToSlot(
 		// Mutual exclusivity: setting a guest clears the member assignee and any
 		// Person-owned speech (a guest speaker slot just shows the name — ADR-0009).
 		//
-		// The meeting's status rides in the statement (#1057, `meetingNotCancelled`
-		// from `slots-logic`, the same predicate the three slot writers there
-		// carry): a cancelled meeting keeps its assignments until restored, and
-		// this write drops a speech a restore could not bring back. The slot read
-		// above took no row lock, so a zero-row result is not proof of WHICH
-		// predicate failed; the status is re-read for the sentence, and a slot
-		// that vanished meanwhile gets the not-found answer it would have got.
+		// The meeting's status rides in the statement (#1057, `meetingAcceptsWrite`,
+		// the same predicate the slot writers in `slots-logic` carry): a cancelled
+		// meeting keeps its assignments until restored, and this write drops a
+		// speech a restore could not bring back. The slot read above took no row
+		// lock, so a zero-row result is not proof of WHICH predicate failed; the
+		// status is re-read for the sentence, and a slot that vanished meanwhile
+		// gets the not-found answer it would have got.
 		const assigned = await tx
 			.update(roleSlots)
 			.set({
@@ -193,7 +197,12 @@ export async function applyAssignGuestToSlot(
 				status: "claimed",
 				claimedAt: new Date(),
 			})
-			.where(and(eq(roleSlots.id, slot.id), meetingNotCancelled(tx)))
+			.where(
+				and(
+					eq(roleSlots.id, slot.id),
+					meetingAcceptsWrite(tx, "plan", roleSlots.meetingId),
+				),
+			)
 			.returning({ id: roleSlots.id });
 		if (assigned.length === 0) {
 			const [status] = await tx
@@ -202,7 +211,7 @@ export async function applyAssignGuestToSlot(
 				.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 				.where(eq(roleSlots.id, slot.id))
 				.limit(1);
-			if (status) assertMeetingNotCancelled(status.status);
+			if (status) assertMeetingAccepts(status.status, "plan");
 			throw new Error("Role not found.");
 		}
 
