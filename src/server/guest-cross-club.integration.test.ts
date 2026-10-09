@@ -52,8 +52,11 @@ const { NO_PERMISSION_MESSAGE, NOT_A_MEMBER_MESSAGE } = await import(
 );
 const {
 	applyAddGuestToClub,
+	applyConvertGuestToMember,
+	applyDeleteGuest,
 	applyLinkGuestAcrossClubs,
 	applySeparateGuest,
+	CLUB_SET_MOVED_MESSAGE,
 	GUEST_ADD_ALREADY_THERE_MESSAGE,
 	GUEST_CROSS_CLUB_SAME_CLUB_MESSAGE,
 	GUEST_ALREADY_SEPARATE_MESSAGE,
@@ -71,8 +74,9 @@ const {
 	loadOtherAdminClubs,
 	previewGuestLink,
 } = await import("#/server/guest-pipeline-logic");
-const { guestLinkResult } = await import("#/server/people-merge-logic");
-const { RECORD_CHANGED_MESSAGE } = await import("#/server/guests-logic");
+const { guestLinkResult, mergePeople } = await import(
+	"#/server/people-merge-logic"
+);
 const { statementsDuring } = await import("#/test/query-spy");
 
 const uniq = () => randomUUID().slice(0, 8);
@@ -634,7 +638,7 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 					await seedGuest(c.clubId, { personId: g.personId });
 				},
 			);
-			expect(err?.message).toBe(RECORD_CHANGED_MESSAGE);
+			expect(err?.message).toBe(CLUB_SET_MOVED_MESSAGE);
 			expect(
 				(await guestRowsOf(g.personId)).filter((r) => r.clubId === b.clubId),
 			).toHaveLength(0);
@@ -1255,6 +1259,119 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				expect((await personRow(again?.personId ?? ""))?.email).toBe(newEmail);
 			});
 
+			/** Records of a cross-club link still held for this guest. */
+			async function recordsFor(guestId: string): Promise<number> {
+				const res = await testDb.execute<{ n: number }>(
+					sql`select count(*)::int as n from activity_log
+						where action = 'member_merge'
+						  and detail->>'linkedGuestId' = ${guestId}
+						  and detail ? 'absorbedContact'`,
+				);
+				return Number(res.rows[0]?.n ?? 0);
+			}
+
+			it("Separate consumes the record it used", async () => {
+				const { mine } = await linked({
+					keeperContact: { email: `k-${uniq()}@example.test`, phone: null },
+					mineContact: { email: `m-${uniq()}@example.test`, phone: null },
+				});
+				expect(await recordsFor(mine.id)).toBe(1);
+				await applySeparateGuest({
+					userId: onlyB,
+					clubId: b.clubId,
+					guestId: mine.id,
+				});
+				expect(await recordsFor(mine.id)).toBe(0);
+			});
+
+			it("a deleted guest leaves no record of its contact", async () => {
+				const { mine } = await linked({
+					keeperContact: { email: null, phone: null },
+					mineContact: { email: `m-${uniq()}@example.test`, phone: null },
+				});
+				expect(await recordsFor(mine.id)).toBe(1);
+				await applyDeleteGuest({
+					clubId: b.clubId,
+					guestId: mine.id,
+					actorMemberId: officerMemberInB,
+				});
+				expect(await recordsFor(mine.id)).toBe(0);
+			});
+
+			it("a convert drops it too", async () => {
+				const { mine } = await linked({
+					keeperContact: { email: null, phone: null },
+					mineContact: { email: `m-${uniq()}@example.test`, phone: null },
+				});
+				expect(await recordsFor(mine.id)).toBe(1);
+				await applyConvertGuestToMember({
+					clubId: b.clubId,
+					guestId: mine.id,
+					actorMemberId: officerMemberInB,
+				});
+				expect(await recordsFor(mine.id)).toBe(0);
+			});
+
+			it("a newer link supersedes the record an older one left", async () => {
+				const { keeper, mine } = await linked({
+					keeperContact: { email: null, phone: null },
+					mineContact: { email: `m-${uniq()}@example.test`, phone: null },
+				});
+				// The keeper's own guest row goes, so the guest's Person is held by
+				// this club alone again and can be linked once more.
+				await applyDeleteGuest({
+					clubId: a.clubId,
+					guestId: keeper.id,
+					actorMemberId: a.adminMemberId,
+				});
+				const second = await seedGuest(a.clubId, { name: "Second Keeper" });
+				const shown = await preview(mine.id, { id: second.id, kind: "guest" });
+				await link(mine.id, { id: second.id, kind: "guest" }, shown);
+				expect(await recordsFor(mine.id)).toBe(1);
+			});
+
+			it("a merge that puts the guest back on the Person does not replay a stale record", async () => {
+				const keeperEmail = `k-${uniq()}@example.test`;
+				const oldEmail = `old-${uniq()}@example.test`;
+				const { keeper, mine } = await linked({
+					keeperContact: { email: keeperEmail, phone: null },
+					mineContact: { email: oldEmail, phone: null },
+				});
+				await applySeparateGuest({
+					userId: onlyB,
+					clubId: b.clubId,
+					guestId: mine.id,
+				});
+				// The officer corrects the guest's own contact, then a superadmin merges
+				// that Person back into the keeper's.
+				const [own] = await testDb
+					.select({ personId: guests.personId })
+					.from(guests)
+					.where(eq(guests.id, mine.id));
+				const corrected = `corrected-${uniq()}@example.test`;
+				await testDb
+					.update(people)
+					.set({ email: corrected })
+					.where(eq(people.id, own?.personId ?? ""));
+				await mergePeople({
+					keeperPersonId: keeper.personId,
+					absorbedPersonId: own?.personId ?? "",
+				});
+				await applySeparateGuest({
+					userId: onlyB,
+					clubId: b.clubId,
+					guestId: mine.id,
+				});
+				const [again] = await testDb
+					.select({ personId: guests.personId })
+					.from(guests)
+					.where(eq(guests.id, mine.id));
+				// Never the contact from before the correction.
+				expect((await personRow(again?.personId ?? ""))?.email).not.toBe(
+					oldEmail,
+				);
+			});
+
 			it("a record of ANOTHER guest on the same Person does not apply", async () => {
 				const keeperEmail = `k-${uniq()}@example.test`;
 				const { keeper } = await linked({
@@ -1286,7 +1403,7 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				const err = await clubAppearsWhileParkedOnPerson(
 					keeper.personId,
 					c.clubId,
-					"for no key update",
+					"for update",
 					() =>
 						applySeparateGuest({
 							userId: onlyB,
@@ -1495,7 +1612,7 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 					await seedGuest(c.clubId, { personId: keeper.personId });
 				},
 			);
-			expect(err?.message).toBe(RECORD_CHANGED_MESSAGE);
+			expect(err?.message).toBe(CLUB_SET_MOVED_MESSAGE);
 			expect(await personRow(mine.personId)).not.toBeNull();
 		});
 

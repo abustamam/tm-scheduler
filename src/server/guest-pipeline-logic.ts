@@ -89,6 +89,7 @@ import { loadClubDefaultCountryCode } from "./clubs-logic";
 import {
 	assertClubNotArchived,
 	assertStillClubAdmin,
+	getMembership,
 	NO_PERMISSION_MESSAGE,
 	NOT_A_MEMBER_MESSAGE,
 	requireClubRole,
@@ -1871,8 +1872,9 @@ export async function lockClubConverts(
  * not outlive that purpose, because activity rows outlive the guest and the Person
  * (the repo's rule is that deleting a Person removes their contact). Called when
  * the unlink has used it, when the guest is deleted, when a convert moves a
- * stranded linked guest onto a Person of its own, and when a new link supersedes an
- * older record. A club delete takes the activity log with it (`ON DELETE CASCADE`).
+ * stranded linked guest onto a Person of its own, when a new link supersedes an
+ * older record, and (for a cross-club link's record) when Separate has used it. A
+ * club delete takes the activity log with it (`ON DELETE CASCADE`).
  */
 async function clearRecordedGuestContact(
 	tx: DbOrTx,
@@ -1888,6 +1890,23 @@ async function clearRecordedGuestContact(
 				eq(activityLog.action, "member_merge"),
 				sql`${activityLog.detail}->>'fromGuestId' = ${guestId}`,
 				sql`${activityLog.detail} ? 'guestContact'`,
+			),
+		);
+	// The same for the record a cross-club link wrote (#1127, `absorbedContact`,
+	// keyed by `linkedGuestId`): the contact the guest had before its Person was
+	// absorbed, kept for `applySeparateGuest` and for nothing else. A Separate
+	// consumes it; a delete, a convert and a newer link drop it. Left behind it
+	// would outlive the guest, and replay a pre-correction contact when a merge later
+	// puts the guest back on the Person the link named.
+	await tx
+		.update(activityLog)
+		.set({ detail: sql`${activityLog.detail} - 'absorbedContact'` })
+		.where(
+			and(
+				eq(activityLog.clubId, clubId),
+				eq(activityLog.action, "member_merge"),
+				sql`${activityLog.detail}->>'linkedGuestId' = ${guestId}`,
+				sql`${activityLog.detail} ? 'absorbedContact'`,
 			),
 		);
 }
@@ -3537,6 +3556,8 @@ export const GUEST_LINK_HAS_HISTORY_MESSAGE =
 	"This person has a history of their own (a past membership, speeches or Pathways progress). A superadmin has to merge them.";
 export const GUEST_LINK_NOT_FOUND_MESSAGE =
 	"That record is not in the other club.";
+/** The clubs holding these Persons moved while a cross-club action took its locks. */
+export const CLUB_SET_MOVED_MESSAGE = CLUB_BUSY_MESSAGE;
 export const GUEST_CROSS_CLUB_SAME_CLUB_MESSAGE = "Pick a different club.";
 
 /** The most candidates the picker returns. */
@@ -3589,20 +3610,12 @@ async function clubsToLock(
 }
 
 /**
- * Take the club locks, then re-read the set under them. A set that moved
- * (somebody attached or detached one of these Persons from a club that was not
- * locked) is refused with `RECORD_CHANGED_MESSAGE`, nothing written.
+ * Take the club locks, in id order. The set is re-read AFTER the Persons are
+ * locked (`assertClubSetHeld`), the one read that matters, so there is no
+ * re-read here.
  */
-async function lockClubsStable(
-	tx: CrossClubTx,
-	before: string[],
-	personIds: string[],
-	named: string[],
-): Promise<void> {
-	for (const id of before) await lockClubForWrite(tx, id);
-	if (!sameIds(before, await clubsToLock(tx, personIds, named))) {
-		throw new Error(RECORD_CHANGED_MESSAGE);
-	}
+async function lockClubs(tx: CrossClubTx, ids: string[]): Promise<void> {
+	for (const id of ids) await lockClubForWrite(tx, id);
 }
 
 function sameIds(a: string[], b: string[]): boolean {
@@ -3685,12 +3698,18 @@ async function personIsHeldElsewhere(
 }
 
 /**
- * After the Persons are locked, the clubs that hold them are read ONCE MORE. A
- * guest row or a membership naming a Person needs a key share on it, which the
- * lock now refuses, so this read is the authoritative one; the set read before
- * the locks (`lockClubsStable`) was only the one to lock by. A club that appeared
- * in between is a club this transaction holds no lock on, so nothing is written:
- * the writer retries, as for any busy club.
+ * The club set read before the locks (`clubsToLock`) is only the set to lock by.
+ * Read again once the Persons are locked: a club that gained or lost one of them
+ * since is a club this transaction holds no lock on, so the work is refused with
+ * `CLUB_SET_MOVED_MESSAGE`, nothing written, and the writer retries.
+ *
+ * The re-read is FROZEN only under `FOR UPDATE`: a guest row or a membership naming
+ * a Person takes a key share on it, which `FOR UPDATE` refuses and `FOR NO KEY
+ * UPDATE` does not. Link takes `FOR UPDATE` (it deletes the absorbed Person), and so
+ * does Separate, whose copy-the-contact decision reads whether any club holds the
+ * Person as a member. Add takes `FOR NO KEY UPDATE` and reads nothing of a club it
+ * holds no lock on (its guards are on the destination club, which it locks), so for
+ * Add this re-read checks the protocol's premise at that instant and freezes nothing.
  */
 async function assertClubSetHeld(
 	tx: CrossClubTx,
@@ -3699,7 +3718,7 @@ async function assertClubSetHeld(
 	named: string[],
 ): Promise<void> {
 	if (!sameIds(locked, await clubsToLock(tx, personIds, named))) {
-		throw new Error(CLUB_BUSY_MESSAGE);
+		throw new Error(CLUB_SET_MOVED_MESSAGE);
 	}
 }
 
@@ -3725,17 +3744,13 @@ export async function applyAddGuestToClub(
 	input: AddGuestToClubInput,
 ): Promise<{ ok: true }> {
 	const { userId, fromClubId, guestId, toClubId } = input;
-	const { otherMembership: destination } = await requireAdminOfBothClubs(
-		userId,
-		fromClubId,
-		toClubId,
-	);
+	await requireAdminOfBothClubs(userId, fromClubId, toClubId);
 	return db.transaction(async (tx) => {
 		const peek = await readGuestOf(tx, fromClubId, guestId);
 		if (!peek) throw new Error(GUEST_NOT_IN_CLUB_MESSAGE);
 		const named = [fromClubId, toClubId];
 		const before = await clubsToLock(tx, [peek.personId], named);
-		await lockClubsStable(tx, before, [peek.personId], named);
+		await lockClubs(tx, before);
 		await lockPersonsInOrder(tx, noKeyUpdate(peek.personId));
 		await assertClubSetHeld(tx, before, [peek.personId], named);
 		const guest = await readGuestOf(tx, fromClubId, guestId, true);
@@ -3743,6 +3758,9 @@ export async function applyAddGuestToClub(
 			throw new Error(RECORD_CHANGED_MESSAGE);
 		}
 		await assertStillAdminOfBothClubs(tx, userId, fromClubId, toClubId);
+		// The officer's seat in the destination, read in this transaction by the same
+		// resolver the re-check just used (null for an impersonating superadmin).
+		const destination = await getMembership(userId, toClubId, tx);
 
 		if (guest.stage === "joined") throw new Error(GUEST_NOW_MEMBER_MESSAGE);
 		if (await personIsHereAlready(tx, guest.personId, toClubId)) {
@@ -3757,7 +3775,7 @@ export async function applyAddGuestToClub(
 			kind: "visitor",
 			// The officer who added them, so the destination club's officers can see
 			// who did (null for an impersonating superadmin, who holds no seat).
-			introducedByMemberId: destination.id,
+			introducedByMemberId: destination?.id ?? null,
 		});
 		return { ok: true as const };
 	});
@@ -3857,6 +3875,10 @@ async function readLinkSides(
  * - this guest's Person holds ANY membership, or is bound to a sign-in: those
  *   are the superadmin's `mergePeople`;
  * - this guest's Person has a guest row in any club but this one;
+ * - this guest's Person is not PRISTINE (`pristineGuestPerson`): a speech, an
+ *   enrolment, a charter-helper row, a roster-identity column or a removal on
+ *   record. The merge moves or adopts those and Separate cannot give them back, so
+ *   a Person with a history of its own is the superadmin's `mergePeople`;
  * - the other Person already has an unconverted guest row or an active
  *   membership in THIS club (the link would leave two records of one human here).
  */
@@ -3987,7 +4009,7 @@ export async function applyLinkGuestAcrossClubs(
 		const persons = [peek.guest.personId, peek.other.personId];
 		const named = [clubId, otherClubId];
 		const before = await clubsToLock(tx, persons, named);
-		await lockClubsStable(tx, before, persons, named);
+		await lockClubs(tx, before);
 		// The absorbed Person is deleted by the merge, so both are taken `FOR UPDATE`.
 		await lockPersonsInOrder(tx, forUpdate(...persons));
 		await assertClubSetHeld(tx, before, persons, named);
@@ -4007,6 +4029,8 @@ export async function applyLinkGuestAcrossClubs(
 		) {
 			throw new Error(GUEST_LINK_STALE_MESSAGE);
 		}
+		// A newer link supersedes any record an older one left for this guest.
+		await clearRecordedGuestContact(tx, clubId, sides.guest.id);
 		await mergePeople(
 			{
 				keeperPersonId: sides.other.personId,
@@ -4098,8 +4122,11 @@ export async function applySeparateGuest(
 		if (!peek) throw new Error(GUEST_NOT_IN_CLUB_MESSAGE);
 		const named = [clubId];
 		const before = await clubsToLock(tx, [peek.personId], named);
-		await lockClubsStable(tx, before, [peek.personId], named);
-		await lockPersonsInOrder(tx, noKeyUpdate(peek.personId));
+		await lockClubs(tx, before);
+		// `FOR UPDATE`, not `NO KEY UPDATE`: the contact it copies depends on whether
+		// any club holds the Person as a member, and only this lock refuses the key
+		// share a member attach needs, so that answer cannot move under it.
+		await lockPersonsInOrder(tx, forUpdate(peek.personId));
 		await assertClubSetHeld(tx, before, [peek.personId], named);
 		const guest = await readGuestOf(tx, clubId, guestId, true);
 		if (!guest || guest.personId !== peek.personId) {
@@ -4131,6 +4158,8 @@ export async function applySeparateGuest(
 			.limit(1);
 		const recorded = readGuestLinkRecord(entry?.detail)?.contact ?? null;
 		const fresh = await mintSeparatedPerson(tx, guest, recorded);
+		// The record has done its one job.
+		await clearRecordedGuestContact(tx, clubId, guest.id);
 		await tx
 			.update(guests)
 			.set({ personId: fresh, updatedAt: new Date() })
