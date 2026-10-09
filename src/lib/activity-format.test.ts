@@ -258,6 +258,27 @@ describe("formatActivity", () => {
 		expect(formatActivity(mk("member_remove")).summary).toMatch(/removed/i);
 	});
 
+	it("a guest linked across clubs does not read as a member merge (#1127)", () => {
+		const e = {
+			...base,
+			action: "member_merge",
+			targetType: "member",
+			roleName: null,
+			actorName: "Rasheed",
+			change: "guest_cross_club_link",
+			guestName: "Ada Guest",
+			guestLink: false,
+			unlinked: false,
+		} as ActivityEntry;
+		const { summary } = formatActivity(e);
+		expect(summary).toBe("linked Ada Guest to the same person in another club");
+		expect(summary).not.toMatch(/merged a duplicate/i);
+		// A blank name still reads as a link, not a merge.
+		expect(formatActivity({ ...e, guestName: null }).summary).toMatch(
+			/^linked a guest/,
+		);
+	});
+
 	describe("plan_set", () => {
 		it("reads as self-service when the subject is the actor", () => {
 			const e = {

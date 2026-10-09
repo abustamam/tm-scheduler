@@ -294,6 +294,8 @@ There is no per-club copy; `members.email` was dropped by migration 0109.
 | an officer's edit of a GUEST's contact (`applyUpdateGuest`, #1125, ADR-0031) | `guestContactWritable(clubId)` in the UPDATE's own WHERE: unbound, no membership in any club, no past as a member (`noMemberHistory()`), and THIS club holds a guest row on the Person. Any club holding a guest row may correct a guest-only Person; a refused write rolls the whole edit back with the first reason (signed in, a member here, elsewhere, a former member). NOT `soleHoldingClub`: a guest row is never a holder |
 | the public guest book's blank fill (`fillBlankGuestContact`, `captureGuestVisit`, #1125) | `guestContactFillable(clubId)` in the UPDATE's own WHERE: the writable rule, no guest row in any OTHER club, and no past as a member; fill-only in the SET (`coalesce`) |
 | the superadmin first-admin repair, `mergePeople` | their named waivers |
+| an officer of two clubs linking a guest across them (`applyLinkGuestAcrossClubs` → `mergePeople` in `mode: "guest-link"`, #1127, ADR-0031) | the same `mergePeople` waiver, with no new write site: the absorbed Person must be PRISTINE (`pristineGuestPerson(guestId)`, under the locks), and the contact the keeper ends with is `guestLinkResult`'s, which the officer was shown and the link recomputes: a guest-only keeper (`identityIgnoredGuestPerson()`) fills blanks from the absorbed side, every other keeper keeps its own email, phone, goes-by name and contact preference, blank or not |
+| Separate (`applySeparateGuest`, #1127) | a plain INSERT of a fresh Person: the contact the link recorded in its `member_merge` detail, else the shared Person's only when it is guest-only |
 | a plain INSERT of a brand-new Person (`createGuestRecord` carries the guest's contact onto the Person it mints) | always — a fresh row is nobody's yet |
 
 **Guest conversion never writes an existing Person's address** (#907 review). The
@@ -337,7 +339,16 @@ paths that match `people` by address globally ignore a guest-only Person
 (`identityIgnoredGuestPerson()`: the CSV importer's candidates and address-holder
 map, `findBestPersonByEmail`). `mergePeople` never takes the merged Person's email or phone from a guest-only side
 when the merged Person will hold a membership or carries member history, whichever
-side the superadmin kept (the other side's value, or blank). `guests.email` and
+side the superadmin kept (the other side's value, or blank). An officer's guest link
+(`mergePeople(…, tx, { mode: "guest-link" })`, #1127) is a second caller with a
+narrower rule: it runs inside the caller's transaction (`conn`), refuses an absorbed
+Person that is not `pristineGuestPerson` (the merge moves speeches and enrolments,
+adopts roster-identity columns and nulls charter-helper rows, none of which Separate
+can give back), and writes the keeper's email, phone, goes-by name and contact
+preference only when the keeper is guest-only. It records the absorbed side's
+contact in the audit row's `detail` (`absorbedContact`, `linkedGuestId`) so
+`separateGuest` restores THAT guest's own contact. The mode is an argument, never a
+field of `mergePeopleSchema`, which the superadmin's client input is parsed with. `guests.email` and
 `guests.phone` still exist in the database, dead, and are deliberately NOT declared
 in `schema.ts` until #1126 drops them in SQL (`guest-contact-columns.guard.test.ts`
 scans `src/` and `scripts/` for raw references).

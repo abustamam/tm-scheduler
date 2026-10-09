@@ -17,7 +17,19 @@
 import { randomUUID } from "node:crypto";
 import { eq, inArray, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guests, members, officerTerms, people, user } from "#/db/schema";
+import {
+	activityLog,
+	clubCharterHelpers,
+	guests,
+	impersonationSessions,
+	members,
+	officerTerms,
+	pathEnrollments,
+	pathwaysPaths,
+	people,
+	speeches,
+	user,
+} from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -32,7 +44,9 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { CLUB_WRITE_LOCK_NAMESPACE } = await import("#/server/club-write-lock");
+const { CLUB_BUSY_MESSAGE, CLUB_WRITE_LOCK_NAMESPACE } = await import(
+	"#/server/club-write-lock"
+);
 const { NO_PERMISSION_MESSAGE, NOT_A_MEMBER_MESSAGE } = await import(
 	"#/server/guards"
 );
@@ -44,6 +58,7 @@ const {
 	GUEST_CROSS_CLUB_SAME_CLUB_MESSAGE,
 	GUEST_ALREADY_SEPARATE_MESSAGE,
 	GUEST_LINK_ALREADY_HERE_MESSAGE,
+	GUEST_LINK_HAS_HISTORY_MESSAGE,
 	GUEST_LINK_HAS_MEMBERSHIP_MESSAGE,
 	GUEST_LINK_NOT_FOUND_MESSAGE,
 	GUEST_LINK_SAME_PERSON_MESSAGE,
@@ -58,6 +73,7 @@ const {
 } = await import("#/server/guest-pipeline-logic");
 const { guestLinkResult } = await import("#/server/people-merge-logic");
 const { RECORD_CHANGED_MESSAGE } = await import("#/server/guests-logic");
+const { statementsDuring } = await import("#/test/query-spy");
 
 const uniq = () => randomUUID().slice(0, 8);
 
@@ -74,6 +90,7 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 	let onlyB: string;
 	const extraUsers: string[] = [];
 	const extraPeople: string[] = [];
+	const extraPaths: string[] = [];
 
 	/** A signed-in user with a Person, optionally an admin of `clubId`. */
 	async function seedUser(
@@ -191,6 +208,36 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 		}
 	}
 
+	/**
+	 * A writer that holds `personId` `FOR UPDATE` and NO club lock, adds a guest row
+	 * for it in `lateClubId`, and commits only after `run` has passed its club locks
+	 * and is parked on the Person. Returns what `run` threw, or null.
+	 */
+	async function clubAppearsWhileParkedOnPerson(
+		personId: string,
+		lateClubId: string,
+		waitFor: string,
+		run: () => Promise<unknown>,
+	): Promise<Error | null> {
+		const blocker = await openBlockingTx(async (tx) => {
+			await tx.execute(
+				sql`select id from people where id = ${personId} for update`,
+			);
+			await tx.insert(guests).values({
+				clubId: lateClubId,
+				name: "Late Arrival",
+				personId,
+			});
+		});
+		const settled = run().then(
+			() => null,
+			(e: Error) => e,
+		);
+		await waitForLockWait(waitFor, blocker.pid);
+		await blocker.commit();
+		return settled;
+	}
+
 	async function guestRowsOf(personId: string) {
 		return testDb
 			.select({ id: guests.id, clubId: guests.clubId, stage: guests.stage })
@@ -260,6 +307,12 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 		await cleanup(a.clubId, [a.adminUserId, a.memberUserId]);
 		await cleanup(b.clubId, [b.adminUserId, b.memberUserId]);
 		await cleanup(c.clubId, [c.adminUserId, c.memberUserId]);
+		const paths = extraPaths.splice(0);
+		if (paths.length > 0) {
+			await testDb
+				.delete(pathwaysPaths)
+				.where(inArray(pathwaysPaths.id, paths));
+		}
 		const people_ = extraPeople.splice(0);
 		if (people_.length > 0) {
 			await testDb.delete(people).where(inArray(people.id, people_));
@@ -313,6 +366,61 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				.from(guests)
 				.where(eq(guests.id, g.id));
 			expect(mine).toEqual({ stage: "following_up", clubId: a.clubId });
+		});
+
+		it("re-reads the clubs that hold the Person once it is locked", async () => {
+			const g = await seedGuest(a.clubId);
+			const err = await clubAppearsWhileParkedOnPerson(
+				g.personId,
+				c.clubId,
+				"for no key update",
+				() =>
+					applyAddGuestToClub({
+						userId: officer,
+						fromClubId: a.clubId,
+						guestId: g.id,
+						toClubId: b.clubId,
+					}),
+			);
+			expect(err?.message).toBe(CLUB_BUSY_MESSAGE);
+			expect(
+				(await guestRowsOf(g.personId)).filter((r) => r.clubId === b.clubId),
+			).toHaveLength(0);
+		});
+
+		it("a CONVERTED guest row of the same Person in the other club does not block it", async () => {
+			const g = await seedGuest(a.clubId);
+			await seedGuest(b.clubId, { personId: g.personId, stage: "joined" });
+			const board = await loadGuestPipeline(a.clubId, [b.clubId]);
+			expect(board.find((r) => r.id === g.id)?.addableTo).toEqual([b.clubId]);
+			await expect(
+				applyAddGuestToClub({
+					userId: officer,
+					fromClubId: a.clubId,
+					guestId: g.id,
+					toClubId: b.clubId,
+				}),
+			).resolves.toEqual({ ok: true });
+		});
+
+		it("credits the officer who added them as the new row's introducer", async () => {
+			const g = await seedGuest(a.clubId);
+			await applyAddGuestToClub({
+				userId: officer,
+				fromClubId: a.clubId,
+				guestId: g.id,
+				toClubId: b.clubId,
+			});
+			const [added] = await testDb
+				.select({ introducedBy: guests.introducedByMemberId })
+				.from(guests)
+				.where(eq(guests.clubId, b.clubId));
+			expect(added?.introducedBy).toBe(officerMemberInB);
+			const [mine] = await testDb
+				.select({ introducedBy: guests.introducedByMemberId })
+				.from(guests)
+				.where(eq(guests.id, g.id));
+			expect(mine?.introducedBy).toBeNull();
 		});
 
 		it("is refused when the other club already has an unconverted guest on that Person", async () => {
@@ -723,6 +831,499 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			expect(await personRow(mine.personId)).not.toBeNull();
 		});
 
+		describe("a guest's Person with a history of its own is not absorbed (#1127 review)", () => {
+			const stub = { name: "x", preferredName: null, email: null, phone: null };
+
+			async function refuseAndWriteNothing(
+				mine: { id: string; personId: string },
+				keeper: { id: string; personId: string },
+			) {
+				await expect(
+					preview(mine.id, { id: keeper.id, kind: "guest" }),
+				).rejects.toThrow(GUEST_LINK_HAS_HISTORY_MESSAGE);
+				await expect(
+					link(mine.id, { id: keeper.id, kind: "guest" }, stub),
+				).rejects.toThrow(GUEST_LINK_HAS_HISTORY_MESSAGE);
+				// Nothing moved: both Persons stand and each guest row is on its own.
+				expect(await personRow(mine.personId)).not.toBeNull();
+				expect(await personRow(keeper.personId)).not.toBeNull();
+				const [row] = await testDb
+					.select({ personId: guests.personId })
+					.from(guests)
+					.where(eq(guests.id, mine.id));
+				expect(row?.personId).toBe(mine.personId);
+			}
+
+			it("a FORMER member: a removal names the Person and no membership remains", async () => {
+				const keeper = await seedGuest(a.clubId);
+				const mine = await seedGuest(b.clubId);
+				await testDb.insert(activityLog).values({
+					clubId: b.clubId,
+					actorMemberId: null,
+					action: "member_remove",
+					targetType: "member",
+					detail: { personId: mine.personId },
+				});
+				await refuseAndWriteNothing(mine, keeper);
+			});
+
+			it.each([
+				["customer_id", { customerId: `C${uniq()}` }],
+				["basecamp_user_id", { basecampUserId: `B${uniq()}` }],
+				["original_join_date", { originalJoinDate: new Date("2020-01-01") }],
+			] as const)("a roster-identity column: %s", async (_name, set) => {
+				const keeper = await seedGuest(a.clubId);
+				const mine = await seedGuest(b.clubId);
+				await testDb
+					.update(people)
+					.set(set)
+					.where(eq(people.id, mine.personId));
+				await refuseAndWriteNothing(mine, keeper);
+			});
+
+			it("a speech of its own", async () => {
+				const keeper = await seedGuest(a.clubId);
+				const mine = await seedGuest(b.clubId);
+				await testDb
+					.insert(speeches)
+					.values({ personId: mine.personId, title: "Icebreaker" });
+				await refuseAndWriteNothing(mine, keeper);
+				const left = await testDb
+					.select({ id: speeches.id })
+					.from(speeches)
+					.where(eq(speeches.personId, keeper.personId));
+				expect(left).toHaveLength(0);
+			});
+
+			it("an enrolment, and the KEEPER's own enrolment on the same path survives", async () => {
+				const keeper = await seedGuest(a.clubId);
+				const mine = await seedGuest(b.clubId);
+				const [path] = await testDb
+					.insert(pathwaysPaths)
+					.values({ courseCode: `PM-${randomUUID()}`, name: "Presentation" })
+					.returning({ id: pathwaysPaths.id });
+				if (!path) throw new Error("no path");
+				extraPaths.push(path.id);
+				await testDb.insert(pathEnrollments).values([
+					{ personId: mine.personId, pathId: path.id },
+					{ personId: keeper.personId, pathId: path.id },
+				]);
+				await refuseAndWriteNothing(mine, keeper);
+				const kept = await testDb
+					.select({ id: pathEnrollments.id })
+					.from(pathEnrollments)
+					.where(eq(pathEnrollments.personId, keeper.personId));
+				expect(kept).toHaveLength(1);
+			});
+
+			it("a charter-helper row naming it, in a club the officer does not run", async () => {
+				const keeper = await seedGuest(a.clubId);
+				const mine = await seedGuest(b.clubId);
+				const [helper] = await testDb
+					.insert(clubCharterHelpers)
+					.values({
+						clubId: c.clubId,
+						role: "club_mentor",
+						personId: mine.personId,
+					})
+					.returning({ id: clubCharterHelpers.id });
+				await refuseAndWriteNothing(mine, keeper);
+				const [row] = await testDb
+					.select({ personId: clubCharterHelpers.personId })
+					.from(clubCharterHelpers)
+					.where(eq(clubCharterHelpers.id, helper?.id ?? ""));
+				expect(row?.personId).toBe(mine.personId);
+			});
+
+			it("the history is checked under the locks too: one that appears while the link waits refuses it", async () => {
+				const keeper = await seedGuest(a.clubId);
+				const mine = await seedGuest(b.clubId);
+				const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
+				const err = await parkedThen(
+					b.clubId,
+					() => link(mine.id, { id: keeper.id, kind: "guest" }, shown),
+					async () => {
+						await testDb
+							.insert(speeches)
+							.values({ personId: mine.personId, title: "Late" });
+					},
+				);
+				expect(err?.message).toBe(GUEST_LINK_HAS_HISTORY_MESSAGE);
+				expect(await personRow(mine.personId)).not.toBeNull();
+			});
+		});
+
+		describe("a member's or signed-in keeper keeps its goes-by name and contact preference", () => {
+			async function setPrefs(
+				personId: string,
+				prefs: {
+					preferredName?: string | null;
+					preferredContact?: "sms" | "email" | null;
+					contactPreferenceBy?: "member" | "officer" | null;
+				},
+			) {
+				await testDb.update(people).set(prefs).where(eq(people.id, personId));
+			}
+
+			it("a MEMBER keeper's blank goes-by name and blank preference stay blank", async () => {
+				const member = await seedMember(a.clubId);
+				const mine = await seedGuest(b.clubId, { name: "Bobby" });
+				await setPrefs(mine.personId, {
+					preferredName: "Bob",
+					preferredContact: "sms",
+					contactPreferenceBy: "officer",
+				});
+				const shown = await preview(mine.id, {
+					id: member.memberId,
+					kind: "member",
+				});
+				expect(shown.preferredName).toBeNull();
+				await link(mine.id, { id: member.memberId, kind: "member" }, shown);
+				const kept = await personRow(member.personId);
+				expect(kept?.preferredName).toBeNull();
+				expect(kept?.preferredContact).toBeNull();
+				expect(kept?.contactPreferenceBy).toBeNull();
+			});
+
+			it("a MEMBER keeper's own preference is not replaced either", async () => {
+				const member = await seedMember(a.clubId);
+				await setPrefs(member.personId, {
+					preferredName: "Mem",
+					preferredContact: "email",
+					contactPreferenceBy: "member",
+				});
+				const mine = await seedGuest(b.clubId);
+				await setPrefs(mine.personId, {
+					preferredName: "Other",
+					preferredContact: "sms",
+					contactPreferenceBy: "member",
+				});
+				const shown = await preview(mine.id, {
+					id: member.memberId,
+					kind: "member",
+				});
+				await link(mine.id, { id: member.memberId, kind: "member" }, shown);
+				const kept = await personRow(member.personId);
+				expect(kept?.preferredName).toBe("Mem");
+				expect(kept?.preferredContact).toBe("email");
+			});
+
+			it("a GUEST-ONLY keeper fills its blank goes-by name and preference from the absorbed side", async () => {
+				const keeper = await seedGuest(a.clubId, { name: "Robert" });
+				const mine = await seedGuest(b.clubId, { name: "Bobby" });
+				await setPrefs(mine.personId, {
+					preferredName: "Bob",
+					preferredContact: "sms",
+					contactPreferenceBy: "officer",
+				});
+				const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
+				expect(shown.preferredName).toBe("Bob");
+				await link(mine.id, { id: keeper.id, kind: "guest" }, shown);
+				const merged = await personRow(keeper.personId);
+				expect(merged?.preferredName).toBe("Bob");
+				expect(merged?.preferredContact).toBe("sms");
+			});
+
+			it("a SIGNED-IN keeper keeps its own, too", async () => {
+				const keeper = await seedGuest(a.clubId);
+				const signedIn = await seedUser(null);
+				await testDb
+					.update(people)
+					.set({ userId: null })
+					.where(eq(people.id, signedIn.personId));
+				await testDb
+					.update(people)
+					.set({ userId: signedIn.userId })
+					.where(eq(people.id, keeper.personId));
+				const mine = await seedGuest(b.clubId);
+				await setPrefs(mine.personId, {
+					preferredName: "Abs",
+					preferredContact: "sms",
+					contactPreferenceBy: "officer",
+				});
+				const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
+				await link(mine.id, { id: keeper.id, kind: "guest" }, shown);
+				const kept = await personRow(keeper.personId);
+				expect(kept?.preferredName).toBeNull();
+				expect(kept?.preferredContact).toBeNull();
+				await testDb
+					.update(people)
+					.set({ userId: null })
+					.where(eq(people.id, keeper.personId));
+			});
+		});
+
+		it("re-reads the clubs that hold the Persons once they are locked: a club that appeared while it waited for a Person refuses it", async () => {
+			const keeper = await seedGuest(a.clubId);
+			const mine = await seedGuest(b.clubId);
+			const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
+			const err = await clubAppearsWhileParkedOnPerson(
+				keeper.personId,
+				c.clubId,
+				"for update",
+				() => link(mine.id, { id: keeper.id, kind: "guest" }, shown),
+			);
+			expect(err?.message).toBe(CLUB_BUSY_MESSAGE);
+			expect(await personRow(mine.personId)).not.toBeNull();
+		});
+
+		it("an impersonating superadmin's link names them on the audit row", async () => {
+			const keeper = await seedGuest(b.clubId);
+			const mine = await seedGuest(a.clubId);
+			const su = await seedUser(b.clubId);
+			await testDb
+				.update(user)
+				.set({ isSuperadmin: true })
+				.where(eq(user.id, su.userId));
+			await testDb.insert(impersonationSessions).values({
+				superadminUserId: su.userId,
+				clubId: a.clubId,
+				mode: "read_write",
+				reason: "repair",
+				expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+			});
+			const shown = await previewGuestLink({
+				userId: su.userId,
+				clubId: a.clubId,
+				guestId: mine.id,
+				otherClubId: b.clubId,
+				otherId: keeper.id,
+				otherKind: "guest",
+			});
+			await applyLinkGuestAcrossClubs({
+				userId: su.userId,
+				clubId: a.clubId,
+				guestId: mine.id,
+				otherClubId: b.clubId,
+				otherId: keeper.id,
+				otherKind: "guest",
+				expected: shown,
+			});
+			const rows = await testDb
+				.select({
+					impersonatedBy: activityLog.impersonatedBy,
+					actorMemberId: activityLog.actorMemberId,
+				})
+				.from(activityLog)
+				.where(eq(activityLog.targetId, keeper.personId));
+			expect(rows).toEqual([
+				{ impersonatedBy: su.userId, actorMemberId: null },
+			]);
+		});
+
+		describe("Separate is the undo of a link", () => {
+			async function linked(over: {
+				keeperContact: { email: string | null; phone: string | null };
+				mineContact: { email: string | null; phone: string | null };
+			}) {
+				const keeper = await seedGuest(a.clubId, {
+					name: "Robert Lee",
+					...over.keeperContact,
+				});
+				const mine = await seedGuest(b.clubId, {
+					name: "Bob Lee",
+					...over.mineContact,
+				});
+				const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
+				await link(mine.id, { id: keeper.id, kind: "guest" }, shown);
+				return { keeper, mine };
+			}
+
+			it("gives the separated guest back ITS OWN contact, never the other club's merged one", async () => {
+				const keeperEmail = `keeper-${uniq()}@example.test`;
+				const mineEmail = `mine-${uniq()}@example.test`;
+				const { keeper, mine } = await linked({
+					keeperContact: { email: keeperEmail, phone: null },
+					mineContact: { email: mineEmail, phone: "+14155550188" },
+				});
+				// The merged Person holds the keeper's email and the filled phone.
+				expect(await personRow(keeper.personId)).toMatchObject({
+					email: keeperEmail,
+					phone: "+14155550188",
+				});
+
+				await applySeparateGuest({
+					userId: onlyB,
+					clubId: b.clubId,
+					guestId: mine.id,
+				});
+
+				const [row] = await testDb
+					.select({ personId: guests.personId })
+					.from(guests)
+					.where(eq(guests.id, mine.id));
+				expect(row?.personId).not.toBe(keeper.personId);
+				const fresh = await personRow(row?.personId ?? "");
+				expect(fresh).toMatchObject({
+					name: "Bob Lee",
+					email: mineEmail,
+					phone: "+14155550188",
+				});
+				expect(fresh?.email).not.toBe(keeperEmail);
+				// The keeper's club still has the Person it had.
+				const [k] = await testDb
+					.select({ personId: guests.personId })
+					.from(guests)
+					.where(eq(guests.id, keeper.id));
+				expect(k?.personId).toBe(keeper.personId);
+			});
+
+			it("restores a contact the guest did NOT have as blank, not as the keeper's", async () => {
+				const { mine } = await linked({
+					keeperContact: {
+						email: `k-${uniq()}@example.test`,
+						phone: "+14155550199",
+					},
+					mineContact: { email: null, phone: null },
+				});
+				await applySeparateGuest({
+					userId: onlyB,
+					clubId: b.clubId,
+					guestId: mine.id,
+				});
+				const [row] = await testDb
+					.select({ personId: guests.personId })
+					.from(guests)
+					.where(eq(guests.id, mine.id));
+				expect(await personRow(row?.personId ?? "")).toMatchObject({
+					email: null,
+					phone: null,
+				});
+			});
+
+			it("restores the goes-by name and contact preference it had", async () => {
+				const keeper = await seedGuest(a.clubId, { name: "Robert Lee" });
+				const mine = await seedGuest(b.clubId, { name: "Bob Lee" });
+				await testDb
+					.update(people)
+					.set({
+						preferredName: "Bobby",
+						preferredContact: "sms",
+						contactPreferenceBy: "officer",
+					})
+					.where(eq(people.id, mine.personId));
+				const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
+				await link(mine.id, { id: keeper.id, kind: "guest" }, shown);
+				await applySeparateGuest({
+					userId: onlyB,
+					clubId: b.clubId,
+					guestId: mine.id,
+				});
+				const [row] = await testDb
+					.select({ personId: guests.personId })
+					.from(guests)
+					.where(eq(guests.id, mine.id));
+				expect(await personRow(row?.personId ?? "")).toMatchObject({
+					preferredName: "Bobby",
+					preferredContact: "sms",
+					contactPreferenceBy: "officer",
+				});
+			});
+
+			it("a record of a link the guest has since left does not apply to a later Person", async () => {
+				const keeperEmail = `k-${uniq()}@example.test`;
+				const { mine } = await linked({
+					keeperContact: { email: keeperEmail, phone: null },
+					mineContact: { email: `old-${uniq()}@example.test`, phone: null },
+				});
+				await applySeparateGuest({
+					userId: onlyB,
+					clubId: b.clubId,
+					guestId: mine.id,
+				});
+				// A later, different shared Person: the guest's new Person is corrected
+				// and then shared with club C by an Add.
+				const [own] = await testDb
+					.select({ personId: guests.personId })
+					.from(guests)
+					.where(eq(guests.id, mine.id));
+				const newEmail = `new-${uniq()}@example.test`;
+				await testDb
+					.update(people)
+					.set({ email: newEmail })
+					.where(eq(people.id, own?.personId ?? ""));
+				await seedGuest(c.clubId, { personId: own?.personId });
+				await applySeparateGuest({
+					userId: onlyB,
+					clubId: b.clubId,
+					guestId: mine.id,
+				});
+				const [again] = await testDb
+					.select({ personId: guests.personId })
+					.from(guests)
+					.where(eq(guests.id, mine.id));
+				expect((await personRow(again?.personId ?? ""))?.email).toBe(newEmail);
+			});
+
+			it("a record of ANOTHER guest on the same Person does not apply", async () => {
+				const keeperEmail = `k-${uniq()}@example.test`;
+				const { keeper } = await linked({
+					keeperContact: { email: keeperEmail, phone: null },
+					mineContact: { email: `old-${uniq()}@example.test`, phone: null },
+				});
+				// A second guest of club B that came to share the keeper's Person
+				// without a link of its own (a state older code could leave).
+				const other = await seedGuest(b.clubId, {
+					name: "Other Guest",
+					personId: keeper.personId,
+				});
+				await applySeparateGuest({
+					userId: onlyB,
+					clubId: b.clubId,
+					guestId: other.id,
+				});
+				const [row] = await testDb
+					.select({ personId: guests.personId })
+					.from(guests)
+					.where(eq(guests.id, other.id));
+				// Not the first guest's recorded contact; the shared guest-only Person's.
+				expect((await personRow(row?.personId ?? ""))?.email).toBe(keeperEmail);
+			});
+
+			it("re-reads the clubs that hold the Person once it is locked", async () => {
+				const keeper = await seedGuest(a.clubId);
+				const mine = await seedGuest(b.clubId, { personId: keeper.personId });
+				const err = await clubAppearsWhileParkedOnPerson(
+					keeper.personId,
+					c.clubId,
+					"for no key update",
+					() =>
+						applySeparateGuest({
+							userId: onlyB,
+							clubId: b.clubId,
+							guestId: mine.id,
+						}),
+				);
+				expect(err?.message).toBe(CLUB_BUSY_MESSAGE);
+				const [row] = await testDb
+					.select({ personId: guests.personId })
+					.from(guests)
+					.where(eq(guests.id, mine.id));
+				expect(row?.personId).toBe(keeper.personId);
+			});
+
+			it("without a link record (an Add) the shared guest-only Person's contact is copied, as before", async () => {
+				const email = `add-${uniq()}@example.test`;
+				const g = await seedGuest(a.clubId, { email, phone: null });
+				await applyAddGuestToClub({
+					userId: officer,
+					fromClubId: a.clubId,
+					guestId: g.id,
+					toClubId: b.clubId,
+				});
+				await applySeparateGuest({
+					userId: onlyA,
+					clubId: a.clubId,
+					guestId: g.id,
+				});
+				const [row] = await testDb
+					.select({ personId: guests.personId })
+					.from(guests)
+					.where(eq(guests.id, g.id));
+				expect((await personRow(row?.personId ?? ""))?.email).toBe(email);
+			});
+		});
+
 		it("is refused when this guest's Person is bound to a sign-in", async () => {
 			const keeper = await seedGuest(a.clubId);
 			const mine = await seedGuest(b.clubId);
@@ -1038,7 +1639,7 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			});
 			expect(guestLinkResult(keeper, absorbed, false)).toEqual({
 				name: "Keep",
-				preferredName: "Abs",
+				preferredName: null,
 				email: null,
 				phone: "+2000",
 			});
@@ -1274,6 +1875,27 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			// A caller that names no clubs gets no Add offers.
 			const plain = await loadGuestPipeline(a.clubId);
 			expect(plain.every((g) => g.addableTo?.length === 0)).toBe(true);
+		});
+
+		it("probes the viewer's other clubs once, and only when there is something to probe", async () => {
+			await seedGuest(a.clubId, { name: "On The Board" });
+			const probes = (statements: string[]) =>
+				statements.filter((q) => q.includes("unnest("));
+			// Anti-vacuity: the spy sees the board's own reads.
+			const none = await statementsDuring(() => loadGuestPipeline(a.clubId));
+			expect(none.length).toBeGreaterThan(0);
+			expect(probes(none)).toHaveLength(0);
+			// Clubs named, a non-empty board: exactly one probe for the whole board.
+			const some = await statementsDuring(() =>
+				loadGuestPipeline(a.clubId, [b.clubId, c.clubId]),
+			);
+			expect(probes(some)).toHaveLength(1);
+			// Clubs named, an empty board: nothing to ask about, nothing asked.
+			const empty = await statementsDuring(() =>
+				loadGuestPipeline(b.clubId, [a.clubId]),
+			);
+			expect(empty.length).toBeGreaterThan(0);
+			expect(probes(empty)).toHaveLength(0);
 		});
 
 		it("the flags carry nothing about the other club's record", async () => {

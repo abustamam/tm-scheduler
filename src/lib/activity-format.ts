@@ -100,7 +100,12 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 			// merge, and a guest↔member LINK (#635), which reuses the enum value so
 			// it needs no migration. `guestLink` is the discriminator rather than
 			// `guestName`, so a blank name cannot make a link read as a merge.
-			if (entry.guestLink) {
+			// A guest linked to the same person in another club (#1127), by an officer
+			// of both. Told apart by `change`, which the feed carries from `detail`;
+			// the other club is not named, because clubs stay blind.
+			if (entry.change === "guest_cross_club_link") {
+				summary = `linked ${entry.guestName ?? "a guest"} to the same person in another club`;
+			} else if (entry.guestLink) {
 				const who = entry.guestName ?? "a guest";
 				summary = entry.unlinked
 					? `unlinked ${who} from their member record`

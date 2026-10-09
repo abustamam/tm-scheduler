@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { guestLinkPreviewSchema } from "#/lib/guest-link";
 import { requireClubAdminView, requireClubRole, requireUser } from "./guards";
 import {
 	applyAddGuestToClub,
@@ -328,12 +329,7 @@ const crossClubRecordSchema = z.object({
 
 const linkAcrossClubsSchema = crossClubRecordSchema.extend({
 	/** What the confirm step showed; the link recomputes it and refuses on a change. */
-	expected: z.object({
-		name: z.string(),
-		preferredName: z.string().nullable(),
-		email: z.string().nullable(),
-		phone: z.string().nullable(),
-	}),
+	expected: guestLinkPreviewSchema,
 });
 
 /**
