@@ -32,8 +32,9 @@ import {
 	refreshTableTopicsMarks,
 } from "#/lib/agenda-template-rows";
 import {
-	isMeetingLocked,
-	MEETING_LOCKED_MESSAGE,
+	assertMeetingAccepts,
+	type MeetingWriteOptions,
+	meetingRefusal,
 } from "#/lib/meeting-lifecycle";
 import {
 	MAX_BEAT_MINUTES,
@@ -264,14 +265,29 @@ export type AgendaDraft = {
 };
 
 /**
- * Whether a meeting's agenda may currently be edited: not locked (completed)
- * and not cancelled. Shared by `loadAgendaDraft` (what `editable` reports) and
- * `ensureAgendaDraft` (what a write actually allows) so the two cannot drift.
- * They did, briefly: `editable` was `!isMeetingLocked` alone, so a cancelled
- * meeting rendered a fully interactive editor whose every save threw.
+ * Whether a meeting's agenda may currently be edited: the `plan` write class
+ * accepts it (#1136), which today means neither completed nor cancelled.
+ * Shared by `loadAgendaDraft` (what `editable` reports) and `ensureAgendaDraft`
+ * (what a write actually allows) so the two cannot drift. They did, briefly:
+ * `editable` was `!isMeetingLocked` alone, so a cancelled meeting rendered a
+ * fully interactive editor whose every save threw.
+ *
+ * What the two share is the class AND `AGENDA_PLAN_WRITE_OPTIONS`' `accept`
+ * list (empty today), so a status accepted there changes the editor and the
+ * write together. They do not share one function: the write side throws a
+ * sentence through `assertMeetingAccepts`, and this answers a boolean.
+ * `meeting-write-policy-agenda.integration.test.ts` pins the two to agree for
+ * every status.
+ *
+ * Throws on a status the policy has never heard of (fail closed), as the write
+ * side does, so the editor cannot offer an edit the write would then refuse.
  */
 export function agendaEditable(status: string): boolean {
-	return !isMeetingLocked(status) && status !== "cancelled";
+	const refused = meetingRefusal(status, "plan");
+	return (
+		refused === null ||
+		(AGENDA_PLAN_WRITE_OPTIONS.accept?.includes(refused) ?? false)
+	);
 }
 
 /**
@@ -396,6 +412,20 @@ export const AGENDA_CANCELLED_MESSAGE =
 	"A cancelled meeting's agenda cannot be edited.";
 
 /**
+ * The agenda's options for `assertMeetingAccepts(status, "plan", …)`: a
+ * completed meeting says the shared lock sentence, a cancelled one its own, and
+ * no status is accepted although `plan` refuses it. Passed by the two refusals
+ * that hold for the row and role editors (`resolveAgendaDraft` here, and the
+ * connector's `loadEditable`), and read by `agendaEditable`, so all three say
+ * the same thing. Frozen, so one of them cannot change the others' answer at
+ * runtime.
+ */
+export const AGENDA_PLAN_WRITE_OPTIONS: Readonly<MeetingWriteOptions> =
+	Object.freeze({
+		messages: Object.freeze({ cancelled: AGENDA_CANCELLED_MESSAGE }),
+	});
+
+/**
  * Build this meeting its own editable copy of the standard agenda, once.
  *
  * In a TRANSACTION with a re-read under `FOR UPDATE`: two officers opening the
@@ -421,12 +451,32 @@ async function materialiseForMeeting(
 	// or rolls back with the caller's own writes.
 	return await conn.transaction(async (tx) => {
 		const [locked] = await tx
-			.select({ templateId: meetings.templateId })
+			.select({ templateId: meetings.templateId, status: meetings.status })
 			.from(meetings)
 			.where(eq(meetings.id, meetingId))
 			.for("update")
 			.limit(1);
-		if (locked?.templateId) return locked.templateId;
+		// The meeting was deleted since the caller read it. Said here rather than
+		// left to the insert below, which would fail on the foreign key with the
+		// driver's own `Failed query: insert into …` and no sentence.
+		if (!locked) throw new Error("Meeting not found.");
+		// A `plan` writer with an override, decided on #1136. This is a snapshot
+		// of the club's standard agenda, taken the first time anyone opens the
+		// meeting, and both of the statuses `plan` refuses must still get it:
+		// the editor's page load calls this on READ and has to open a cancelled or
+		// completed meeting read-only (`AgendaDraft.cancelled` / `.editable`), and
+		// a completed meeting is a legitimate save-as-template source
+		// (`saveInTransaction`). The MCP apply path refuses a frozen meeting
+		// before it gets here (`loadEditable`). So the override accepts both, and
+		// what is left of the check is the fail-closed half: a status added to
+		// `MEETING_WRITE_POLICY` later is in neither of the two lists (the ones
+		// `plan` accepts in that table, and this call's `accept`), so it is
+		// refused here until someone decides it belongs. Under the row lock, so a
+		// status change cannot slip in between the check and the insert.
+		assertMeetingAccepts(locked.status, "plan", {
+			accept: ["cancelled", "completed"],
+		});
+		if (locked.templateId) return locked.templateId;
 
 		const { seeds, roles: declared } = await standardAgendaFrom(tx, clubId, {
 			geIntroducesFunctionaries,
@@ -816,7 +866,16 @@ export async function readAgendaSnapshot(
  * savepoint there. Returns whatever `meetings.template_id` names, which is
  * USUALLY the meeting's private copy and, for a meeting converted before
  * private copies existed, a shared row (see `loadAgendaDraft`'s docblock).
- * Throws "Meeting not found." for an id that matches no meeting.
+ * Throws "Meeting not found." for an id that matches no meeting, and the write
+ * policy's "Unknown meeting status" error for a status it has never heard of
+ * (`materialiseForMeeting`'s fail-closed check).
+ *
+ * EXPORTED, and it accepts a cancelled or completed meeting: it stores a
+ * snapshot of the standard agenda and refuses neither (see
+ * `materialiseForMeeting`). That is safe only because both of its callers
+ * refuse first: the connector's `edit_agenda` apply, in `loadEditable` under the
+ * meeting row lock, and `saveInTransaction`, which refuses a cancelled source
+ * and takes a completed one on purpose. A new caller has to do the same.
  */
 export async function materialiseAgendaForMeeting(
 	conn: DbOrTx,
@@ -978,15 +1037,14 @@ async function resolveAgendaDraft(
 			"Only a meeting with a meeting type can have its agenda edited.",
 		);
 	}
-	// Same predicate `loadAgendaDraft` reports as `editable` — see
+	// The same policy `loadAgendaDraft` reports as `editable` — see
 	// `agendaEditable`'s docblock for why these two must share one definition.
-	if (!agendaEditable(meeting.status)) {
-		throw new Error(
-			isMeetingLocked(meeting.status)
-				? MEETING_LOCKED_MESSAGE
-				: AGENDA_CANCELLED_MESSAGE,
-		);
-	}
+	// The refusal for the row and role writers: each of them calls
+	// `ensureAgendaDraft` (which delegates here) before its first write, with
+	// the meeting row held `FOR UPDATE` above, so a cancel or complete cannot
+	// land between this check and the write. `materialiseForMeeting` has its own
+	// call and its own override.
+	assertMeetingAccepts(meeting.status, "plan", AGENDA_PLAN_WRITE_OPTIONS);
 
 	const [own] = await conn
 		.select({ id: meetingTemplates.id })
