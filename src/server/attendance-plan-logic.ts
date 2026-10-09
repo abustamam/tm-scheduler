@@ -6,7 +6,7 @@ import {
 	meetings,
 	members,
 } from "#/db/schema";
-import { assertMeetingNotCancelled } from "#/lib/meeting-cancellation-notice";
+import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
 import { logActivity } from "./activity";
 import { takeAdvisoryLockWithin } from "./club-write-lock";
@@ -240,10 +240,23 @@ export type SetPlanStatusArgs = SetPlanStatusCommon &
 	);
 
 /**
- * Refuse a plan write on a cancelled meeting (#1057), with the one sentence
- * every member-facing write says. Here in the seam rather than in its dozen
- * callers, for the reason the seam exists: one place where "may this row
- * change" is true or false.
+ * Refuse a plan write on a CANCELLED meeting (#1057, #1137), by write class:
+ * who is EXPECTED at a meeting is what is intended for one that has not
+ * happened, so this asks the `plan` class, which refuses cancelled and
+ * completed. Here in the seam rather than in its dozen callers, for the reason
+ * the seam exists: one place where "may this row change" is true or false.
+ *
+ * `accept: ["completed"]` is the override that keeps this seam exactly as it
+ * was: it refuses CANCELLED and nothing else. A completed meeting stays refused
+ * by the callers that mean to (each of `attendance-plan.ts`, `availability.ts`,
+ * `outreach.ts` and the plan slot writers calls the lock ahead of its own
+ * checks, so a locked meeting is refused before a subject or a session is
+ * looked at) and ACCEPTED here, because one caller reaches this seam on a
+ * completed meeting on purpose: `attachSpeechToOpenSlot` is a `record` write,
+ * and when its actor owns the speech it records them as coming through
+ * `markComingOnSelfClaim`. Refusing completed here would answer "This meeting
+ * is locked." to a member scheduling their own speech into an open slot of a
+ * meeting main accepts it on, while an officer still can.
  *
  * Read through the CALLER's handle, so a writer inside a transaction compares
  * against its own view, and as its own statement, so a cancel committed
@@ -256,7 +269,7 @@ export type SetPlanStatusArgs = SetPlanStatusCommon &
  * reader of a meeting that no longer happens. A meeting that does not exist is
  * left to the FK: this gate answers one question only.
  */
-async function assertPlanMeetingNotCancelled(
+async function assertPlanMeetingAccepts(
 	database: DbOrTx,
 	meetingId: string,
 ): Promise<void> {
@@ -265,7 +278,7 @@ async function assertPlanMeetingNotCancelled(
 		.from(meetings)
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
-	if (row) assertMeetingNotCancelled(row.status);
+	if (row) assertMeetingAccepts(row.status, "plan", { accept: ["completed"] });
 }
 
 /**
@@ -300,7 +313,7 @@ export async function setPlanStatus(
 	if (!args.onlyIfAbsent && args.proof === "asserted" && !args.demoteFrom) {
 		throw new Error(ASSERTED_OVERWRITE_MESSAGE);
 	}
-	await assertPlanMeetingNotCancelled(database, args.meetingId);
+	await assertPlanMeetingAccepts(database, args.meetingId);
 	const values = {
 		memberId: args.memberId,
 		meetingId: args.meetingId,
@@ -423,7 +436,7 @@ export async function clearPlanStatus(
 		onlyFrom: readonly AttendancePlanStatus[];
 	},
 ): Promise<{ ok: true; cleared: boolean }> {
-	await assertPlanMeetingNotCancelled(database, args.meetingId);
+	await assertPlanMeetingAccepts(database, args.meetingId);
 	const removed = await database
 		.delete(meetingAttendancePlan)
 		.where(

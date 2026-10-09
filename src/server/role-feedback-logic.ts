@@ -39,6 +39,7 @@ import {
 	feedbackWindow,
 	feedbackWindowState,
 } from "#/lib/feedback-window";
+import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import {
 	type FeedbackRoleChoice,
 	GENERAL_FEEDBACK_LABEL,
@@ -537,9 +538,13 @@ async function admitNote(
 		.where(eq(meetings.id, input.meetingId))
 		.limit(1);
 	if (!meeting) throw new Error(FEEDBACK_MEETING_NOT_FOUND_MESSAGE);
-	if (meeting.status === "cancelled") {
-		throw new Error(FEEDBACK_CANCELLED_MESSAGE);
-	}
+	// A note is written ABOUT a meeting after it happened, so this is the
+	// `record` write class (#1137): cancelled is refused, completed is when notes
+	// are left. The sentence stays this module's own, which `publicFeedbackError`
+	// lets through to a caller with no session.
+	assertMeetingAccepts(meeting.status, "record", {
+		messages: { cancelled: FEEDBACK_CANCELLED_MESSAGE },
+	});
 	const window = feedbackWindow(meeting, at);
 	const state = feedbackWindowState(window, at);
 	if (state === "notYet") throw new Error(FEEDBACK_NOT_OPEN_MESSAGE);

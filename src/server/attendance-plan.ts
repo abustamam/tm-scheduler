@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { attendancePlanStatusEnum, meetings } from "#/db/schema";
+import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { resolveActor } from "./attendance-actor-logic";
 import { declinePlannedAttendance } from "./attendance-decline-logic";
 import {
@@ -12,7 +13,6 @@ import {
 	setPlanStatus,
 } from "./attendance-plan-logic";
 import { assertClubNotArchived, requireMemberInClub } from "./guards";
-import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import { confirmHeldClaimedSlots } from "./slots-logic";
 import { requireSessionActor } from "./write-actor-logic";
 
@@ -109,7 +109,15 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 		// FIRST, so an archived club cannot be probed through the different errors
 		// the checks below return — the existence oracle #544 set out to close.
 		await assertClubNotArchived(meeting.clubId);
-		assertMeetingNotLocked(meeting.status);
+		// The `plan` write class (#1137), which refuses a completed meeting HERE,
+		// ahead of the subject and actor checks below. It accepts `cancelled` on
+		// purpose, and only for ORDER: `setPlanStatus` and `clearPlanStatus` refuse
+		// a cancelled meeting by the same class in their own bodies, after those
+		// checks, and a caller who is refused for who they are must keep hearing
+		// that before the meeting's state. Refusing cancelled here too would move
+		// it ahead of them. Completed is refused ONLY here and in the other
+		// callers, never by the seam (see `assertPlanMeetingAccepts`).
+		assertMeetingAccepts(meeting.status, "plan", { accept: ["cancelled"] });
 		await requireMemberInClub(data.memberId, meeting.clubId);
 		// A DECLINE is not just a rung (#663). A member cannot both hold a role and
 		// be absent, so `not_coming` also frees every slot they hold in this
@@ -275,7 +283,9 @@ export const clearPlannedAttendance = createServerFn({ method: "POST" })
 	.handler(async ({ data }) => {
 		const meeting = await loadMeeting(data.meetingId);
 		await assertClubNotArchived(meeting.clubId);
-		assertMeetingNotLocked(meeting.status);
+		// The `plan` class, completed only, for the order `setPlannedAttendance`
+		// explains above.
+		assertMeetingAccepts(meeting.status, "plan", { accept: ["cancelled"] });
 		await requireMemberInClub(data.memberId, meeting.clubId);
 		// #762 / ADR-0026. A clear DESTROYS an answer a person put there, and the
 		// ladder below cannot tell a signed-in member from a visitor who typed

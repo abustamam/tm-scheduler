@@ -49,6 +49,10 @@ import {
 	UNREADABLE_ENTRIES_MESSAGE,
 } from "#/server/guest-book-pending-schemas";
 import { guestBookPlanHash, plan, planSummary } from "#/server/guest-book-plan";
+import {
+	assertGuestBookMeetingRecordable,
+	DATE_NAMES_NO_MEETING_MESSAGE,
+} from "#/server/guest-book-recordable";
 import { McpError } from "#/server/mcp/errors";
 import { applyPendingPlanLocked } from "#/server/mcp-pending-apply";
 
@@ -140,14 +144,24 @@ export async function applyGuestBookPlan(
 			// rescheduled or deleted, or a second one was added to the day. Nothing is
 			// written; the transaction rolls back on throw.
 			if (!fresh) {
-				throw new McpError(
-					"BLOCKED",
-					"That date no longer names one meeting.",
-					{
-						blocking,
-					},
-				);
+				throw new McpError("BLOCKED", DATE_NAMES_NO_MEETING_MESSAGE, {
+					blocking,
+				});
 			}
+
+			// The meeting's own status, as the `record` write class reads it (#1137):
+			// a cancelled meeting takes no page. Inside the lock, refused before any
+			// insert, so the transaction rolls back with nothing in it, and it holds
+			// the meeting row `FOR SHARE` until then.
+			//
+			// Its POSITION, ahead of the hash comparison, decides one thing and only
+			// one: which sentence a page that is BOTH stale and for a cancelled
+			// meeting gets. Cancelled wins, because refreshing the page cannot fix
+			// that and "the club changed, check the plan" would send the officer round
+			// again. A page that is merely stale, or merely cancelled, is refused the
+			// same either side of the hash, since the hash covers the plan and not the
+			// meeting's status.
+			await assertGuestBookMeetingRecordable(tx, fresh.meeting.meetingId);
 
 			const freshHash = guestBookPlanHash({
 				clubId: input.club.clubId,

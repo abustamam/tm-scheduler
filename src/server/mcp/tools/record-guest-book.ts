@@ -66,6 +66,7 @@ import {
 	toPublicBlocking,
 	toPublicPlan,
 } from "#/server/guest-book-plan";
+import { assertGuestBookMeetingRecordable } from "#/server/guest-book-recordable";
 import { authorizeToken } from "../authz-logic";
 import { McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
@@ -156,7 +157,10 @@ export const recordGuestBookTool: McpToolDefinition = {
 			"line would do, plus a confirmUrl. Give the user that link — they open " +
 			"it signed in, check the names and contact details against the page, fix " +
 			"anything misread, and apply it there. Do not try to resolve an " +
-			"`ambiguous` line yourself; the confirm page asks about it.",
+			"`ambiguous` line yourself; the confirm page asks about it. A date " +
+			"that names a cancelled meeting is refused (LOCKED) and stores " +
+			"nothing: restore the meeting first, or give the date of the one " +
+			"the page belongs to.",
 		inputSchema,
 	},
 	handler: async (input, ctx) => {
@@ -187,6 +191,10 @@ export const recordGuestBookTool: McpToolDefinition = {
 			args,
 			countryCode,
 		);
+		// A date that names a CANCELLED meeting is the first kind: the page cannot
+		// be recorded against it (#1137), so it throws `LOCKED` with the sentence
+		// and stores nothing, rather than minting a link that opens on an error.
+		if (p) await assertGuestBookMeetingRecordable(db, p.meeting.meetingId);
 
 		const entries = toPendingEntries(args.entries, args.resolve);
 		const createdAt = new Date();

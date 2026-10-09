@@ -6,7 +6,9 @@ import { readSource } from "#/test/guard-source";
 /**
  * The half of #663 a behavioural test cannot reach: that `setPlannedAttendance`
  * actually ROUTES a `not_coming` through `declinePlannedAttendance`, and routes
- * nothing else through it.
+ * nothing else through it. It also pins that the meeting lock runs before that
+ * branch: `assertMeetingNotLocked`, or since #1137
+ * `assertMeetingAccepts(…, "plan", { accept: ["cancelled"] })`.
  *
  * `attendance-decline.integration.test.ts` executes the seam — every arm, the
  * released slots, the preserved speech, the archive gate. None of that proves
@@ -33,6 +35,16 @@ const FILE = resolve(__dirname, "attendance-plan.ts");
 const SRC = readSource(FILE);
 /** Verbatim — for "must be ABSENT" only. */
 const RAW = readFileSync(FILE, "utf8");
+
+/**
+ * The meeting-lock call `setPlannedAttendance` must make before the decline
+ * branch: the per-status helper, or EXACTLY the write policy's `plan` class with
+ * `accept: ["cancelled"]` (#1137). Exactly, because the options are the whole
+ * meaning: `accept: ["cancelled", "completed"]` would let a locked meeting lose
+ * its programme, and `"record"` accepts completed too.
+ */
+const LOCK_CHECK =
+	/assertMeetingNotLocked\(meeting\.status\)|assertMeetingAccepts\(\s*meeting\.status,\s*"plan",\s*\{\s*accept:\s*\["cancelled"\],?\s*\}\s*,?\s*\)/;
 
 /** One `export const <name> = createServerFn…` declaration, so a per-handler
  *  assertion cannot be satisfied by its neighbour's correct code. */
@@ -100,12 +112,18 @@ describe("setPlannedAttendance declines through the release seam (#663)", () => 
 		const body = handlerBody(SRC, "setPlannedAttendance");
 		const branch = body.indexOf('if (data.status === "not_coming")');
 		expect(branch).toBeGreaterThan(-1);
-		for (const earlier of [
-			"assertClubNotArchived(meeting.clubId)",
-			"assertMeetingNotLocked(meeting.status)",
-			"requireMemberInClub(data.memberId, meeting.clubId)",
-		]) {
-			const at = body.indexOf(earlier);
+		const earlierChecks: [string, number][] = [
+			[
+				"assertClubNotArchived(meeting.clubId)",
+				body.indexOf("assertClubNotArchived(meeting.clubId)"),
+			],
+			["the meeting-lock call", body.search(LOCK_CHECK)],
+			[
+				"requireMemberInClub(data.memberId, meeting.clubId)",
+				body.indexOf("requireMemberInClub(data.memberId, meeting.clubId)"),
+			],
+		];
+		for (const [earlier, at] of earlierChecks) {
 			expect(
 				at,
 				`${earlier} must run before the decline branch`,

@@ -9,11 +9,12 @@ import { readSource } from "#/test/guard-source";
  * `setPlannedAttendance` / `clearPlannedAttendance` are `createServerFn`
  * handlers, and a handler body cannot be invoked outside a request context in
  * vitest — `attendance-plan-logic.integration.test.ts` exercises the db seam
- * directly and therefore bypasses `requireClubRole`, `assertMeetingNotLocked`,
- * `assertClubNotArchived` and the self-only rule entirely. Nothing else in the
- * suite can see this wiring, so it is asserted against the real source, the
- * same way `outreach-authz.guard.test.ts` guards the writers this pair
- * replaces.
+ * directly and therefore bypasses `requireClubRole`, the meeting lock
+ * (`assertMeetingNotLocked`, or since #1137 `assertMeetingAccepts(…, "plan",
+ * { accept: ["cancelled"] })`), `assertClubNotArchived` and the self-only rule
+ * entirely. Nothing else in the suite can see this wiring, so it is asserted
+ * against the real source, the same way `outreach-authz.guard.test.ts` guards
+ * the writers this pair replaces.
  *
  * TWO readers, one per assertion class (`src/test/guard-source.ts`):
  *
@@ -62,6 +63,20 @@ function handlerBody(source: string, name: string): string {
 
 const HANDLERS = ["setPlannedAttendance", "clearPlannedAttendance"];
 
+/**
+ * The meeting-lock call a handler must make: the per-status helper, or EXACTLY
+ * the write policy's `plan` class with `accept: ["cancelled"]` (#1137).
+ *
+ * Exactly, because the options are the whole meaning. The class alone would
+ * refuse cancelled too and move that refusal ahead of the subject and actor
+ * checks; `accept: ["cancelled", "completed"]` would accept a completed meeting
+ * and let a locked one lose its plan. `"record"` is not recognised either: that
+ * class accepts completed. So the pattern allows the one option list and
+ * nothing else after the class.
+ */
+const LOCK_CHECK =
+	/assertMeetingNotLocked\(meeting\.status\)|assertMeetingAccepts\(\s*meeting\.status,\s*"plan",\s*\{\s*accept:\s*\["cancelled"\],?\s*\}\s*,?\s*\)/;
+
 describe("attendance-plan authz (D6)", () => {
 	it("gates the officer path on requireClubRole(admin)", () => {
 		// Whitespace-tolerant: the formatter wraps this call across lines.
@@ -93,9 +108,7 @@ describe("attendance-plan authz (D6)", () => {
 		});
 
 		it(`${fn} asserts the meeting is not locked`, () => {
-			expect(handlerBody(SRC, fn)).toContain(
-				"assertMeetingNotLocked(meeting.status)",
-			);
+			expect(handlerBody(SRC, fn)).toMatch(LOCK_CHECK);
 		});
 
 		it(`${fn} resolves the actor through the shared self-only gate`, () => {
@@ -111,13 +124,14 @@ describe("attendance-plan authz (D6)", () => {
 			const body = handlerBody(SRC, fn);
 			const archive = body.indexOf("assertClubNotArchived(meeting.clubId)");
 			expect(archive).toBeGreaterThan(-1);
-			for (const later of [
-				"assertMeetingNotLocked(",
-				"requireMemberInClub(",
-				"resolveActor(",
-			]) {
+			const positions: [string, number][] = [
+				["the meeting-lock call", body.search(LOCK_CHECK)],
+				["requireMemberInClub(", body.indexOf("requireMemberInClub(")],
+				["resolveActor(", body.indexOf("resolveActor(")],
+			];
+			for (const [later, at] of positions) {
 				expect(
-					body.indexOf(later),
+					at,
 					`${later} must not run before the archive gate`,
 				).toBeGreaterThan(archive);
 			}
