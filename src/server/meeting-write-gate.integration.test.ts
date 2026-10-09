@@ -202,9 +202,8 @@ describe.skipIf(!hasTestDb)("meeting write gate (#1134)", () => {
 // The rendered SQL the helpers produce, and the one refusal that needs no
 // query. A hand-written correlated subquery can come out unqualified and
 // resolve both sides against its OWN table, matching every row
-// (`drizzle-sql-subquery-drops-qualifiers`). Pinned the way
-// `meeting-cancel.integration.test.ts` pins `meetingNotCancelled`. No database:
-// `toSQL()` renders, so these run with or without one.
+// (`drizzle-sql-subquery-drops-qualifiers`), so the rendered statement is
+// pinned. No database: `toSQL()` renders, so these run with or without one.
 describe("meeting write gate renders qualified SQL", () => {
 	it("meetingAcceptsWrite names role_slots on one side and meetings on the other", () => {
 		const { sql: rendered } = testDb

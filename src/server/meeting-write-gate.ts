@@ -152,8 +152,8 @@ export function meetingRowAccepts(
  *
  * A function that does not appear here is not a refusal, however it is named:
  * a writer that relies on it fails the guard. A wrapper that passes `accept`
- * (the plan seam's `assertPlanMeetingAccepts`) cannot be listed, and its
- * writers are classified by hand.
+ * cannot be listed (the plan seam's helper did, which is why `setPlanStatus` and
+ * `clearPlanStatus` now carry the call in their own bodies).
  */
 export const MEETING_WRITE_GATES: Readonly<Record<string, MeetingWriteClass>> =
 	{

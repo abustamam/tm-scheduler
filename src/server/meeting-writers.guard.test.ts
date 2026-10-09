@@ -46,10 +46,9 @@
  *
  * Not handled, stated so nobody assumes it is: a local that shadows a writer's
  * name; a write through a variable holding a table (`const t = roleSlots;
- * db.insert(t)`); a write built dynamically; a caller outside `src/server` (the
- * UI reaches a writer through a server fn, which is itself a unit here; seeds,
- * test helpers and `scripts/` write these tables too and are not swept); a
- * table referenced with the typed `(): AnyPgColumn =>` form (see
+ * db.insert(t)`); a write built dynamically; seeds, test helpers and
+ * `scripts/`, which write these tables too and are not swept; a table
+ * referenced with the typed `(): AnyPgColumn =>` form (see
  * `typedPointersIntoSwept`); and any status other than the meeting's.
  *
  * ## Two readers, chosen by what an erased character would do
@@ -62,6 +61,11 @@
  * **Checking refusal evidence** uses `readSource`. Erased text there can only
  * hide evidence, which fails a good writer, never passes a bad one. A helper
  * call counts only when BOTH readers see it, at the same offset.
+ *
+ * Call sites, entry points and module shapes are enumerations, so they read
+ * through `lexSource` too. The one raw read is `hiddenWrites`, which compares
+ * the file as written against what the lexer blanked, to measure the lexer's
+ * one soft spot (a regex it takes for a division) on the real tree.
  *
  * ## The map
  *
@@ -97,10 +101,56 @@
  * `copyTemplateForMeeting` and `copyTemplateContent` have refusing and
  * exempt callers at once, and a rule of "every caller refuses" cannot hold them.
  *
+ * Every unit the walk passes through (the writer, and an intermediary that
+ * refuses nothing) is held to being reachable only from its callers. A server fn
+ * is an entry point whoever else calls it, so it has to refuse itself; so is a
+ * unit that a module outside `src/server` (a route, a component, `src/lib`)
+ * imports and mentions. A top-level statement outside any unit that mentions it,
+ * and a barrel, namespace import, dynamic `import()` or alias of its module, are
+ * callers no list can name, and fail, outside `src/server` as well.
+ *
+ * **An override can name the callers that keep its status refused.** A writer
+ * that accepts a status itself (`setPlanStatus` accepts a completed meeting,
+ * which its callers refuse) puts `refusedBy` and `exemptCallers` inside that
+ * override. The writer must still refuse in its own body for the statuses it
+ * does not accept, so deleting that call fails; each named refuser must refuse
+ * THAT status by the writer's class, with options that leave it out; and the
+ * same walk applies, so a new caller that refuses nothing fails.
+ *
  * Wrappers are chains too (`ensureAgendaDraft` calls `resolveAgendaDraft`), so
  * every hop is registered, and a wrapper counts only if it ends in a helper.
  *
- * Reads the whole of `src/server` raw, as an offender sweep.
+ * ## Mutation record — MEASURED, not assumed
+ *
+ * Each of these was injected with `bun run mutate` against this file and
+ * observed red, then restored. Counts are the number of tests that failed.
+ *
+ *  - **A plan writer loses its refusal:** `applyAddRoleSlot` drops its
+ *    `assertMeetingAccepts` (2); asks `"record"` in code (2); the map says
+ *    `record` (2).
+ *  - **A new caller of a `refusedBy` writer:** `clearAward` gains a caller that
+ *    refuses nothing (2).
+ *  - **A registered wrapper is renamed:** `assertMinutesMeetingRecordable` (3),
+ *    and the first hop of the `ensureAgendaDraft` chain (3).
+ *  - **A new meeting-scoped table:** `districts` gains a `meetingId` (3).
+ *  - **A new writer with no entry** (2); **a raw SQL delete in a plain string**
+ *    in a new unit (2).
+ *  - **An override and its `accept` drift apart:** a registered wrapper starts
+ *    passing `accept` (2); `PLAN_ACCEPTING_CANCELLED` also accepts completed
+ *    (2); `claimSlotCore` stops passing it, so its override goes stale (2).
+ *  - **The plan seam** (`setPlanStatus`, `clearPlanStatus`, which accept a
+ *    completed meeting and leave it to their callers): `setPlanStatus` loses its
+ *    refusal of a cancelled meeting (2); a new caller of either that refuses
+ *    nothing (2 each); a named caller starts accepting completed (2); the seam's
+ *    options also accept cancelled (2).
+ *  - **A way past the chain's intermediaries:** a server barrel re-exporting
+ *    `editSlotSpeech` (2); a module outside `src/server` importing it (1); one
+ *    dynamically importing `slots-logic` (3).
+ *  - **The checks themselves, switched off one at a time:** module shapes of an
+ *    intermediary (3); a server fn as an entry point (3); callers outside
+ *    `src/server` (2); module shapes outside `src/server` (1); a caller that
+ *    accepts the overridden status counting as a refuser (1); top-level
+ *    statements that mention an intermediary (1).
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { posix, relative, resolve } from "node:path";
@@ -119,7 +169,18 @@ import { readSource, stripComments } from "#/test/guard-source";
 // The class map
 // ===========================================================================
 
-type Override = { accept: true; reason: string };
+type Override = {
+	accept: true;
+	reason: string;
+	/**
+	 * Only for a writer that refuses in its OWN body: the units that refuse this
+	 * status before any path reaches it. The writer accepts the status, so who
+	 * calls it is what keeps it refused, and a new caller must refuse too.
+	 */
+	refusedBy?: readonly string[];
+	/** Callers that reach the writer on this status with no refusal on purpose, each with its reason. */
+	exemptCallers?: Readonly<Record<string, string>>;
+};
 
 /** A writer that refuses by a write class. */
 type ClassEntry = {
@@ -143,8 +204,10 @@ const MEETING_CREATION =
 	"Runs while a meeting is being created, or builds the slots of one that was just created: a meeting that does not exist yet has no status to refuse.";
 const GUEST_REPOINT =
 	"Moves a slot's holder between a guest and the member that guest became (or stopped being), on past meetings as well, so role history follows the person. It changes who holds the slot, not what is planned, so the meeting's status does not decide it.";
-const PLAN_SEAM =
-	'The plan seam refuses a CANCELLED meeting in the module-local assertPlanMeetingAccepts, which passes `accept: ["completed"]` on purpose: attachSpeechToOpenSlot, a record write, reaches the seam on a completed meeting through markComingOnSelfClaim, and refusing completed there would turn away a member scheduling their own speech. A registered wrapper may not pass accept, so this cannot be a plan entry with an override until the helper call sits in the writer\'s own body. Completed is refused by each caller (attendance-plan.ts, availability.ts, outreach.ts and the plan slot writers). Pinned behaviourally by meeting-write-policy-record.integration.test.ts.';
+const PLAN_SEAM_COMPLETED =
+	"The seam refuses a cancelled meeting itself (`PLAN_SEAM_WRITE_OPTIONS` in attendance-plan-logic.ts) and leaves a completed one to its callers, each of which refuses it ahead of its own checks so a locked meeting is refused before a subject or a session is looked at. The callers named here are the ones the guard verifies refuse it by the plan class; the exempt ones refuse it another way or are meant to reach it.";
+const OUTREACH_LOCKS =
+	"Refuses a completed meeting with assertMeetingNotLocked ahead of its role check, a per-status helper older than the class policy. It is not a class helper, so the guard cannot read it; a new caller that does the same has to be named here too.";
 
 /**
  * Every writer of a swept table, classified. Keyed `<path>#<name>`; built from
@@ -155,12 +218,42 @@ const PLAN_SEAM =
 const MEETING_WRITERS: Record<string, Entry> = {
 	// -- attendance plan seam (#1137)
 	"src/server/attendance-plan-logic.ts#clearPlanStatus": {
-		class: "exempt",
-		reason: PLAN_SEAM,
+		class: "plan",
+		overrides: {
+			completed: {
+				accept: true,
+				reason: PLAN_SEAM_COMPLETED,
+				refusedBy: [
+					"src/server/attendance-plan.ts#clearPlannedAttendance",
+					"src/server/availability.ts#clearAvailability",
+				],
+				exemptCallers: {
+					"src/server/outreach.ts#clearContacted": OUTREACH_LOCKS,
+				},
+			},
+		},
 	},
 	"src/server/attendance-plan-logic.ts#setPlanStatus": {
-		class: "exempt",
-		reason: PLAN_SEAM,
+		class: "plan",
+		overrides: {
+			completed: {
+				accept: true,
+				reason: PLAN_SEAM_COMPLETED,
+				refusedBy: [
+					"src/server/attendance-plan.ts#setPlannedAttendance",
+					"src/server/availability-logic.ts#releaseSlotsAndMarkUnavailable",
+					"src/server/availability.ts#setAvailability",
+					"src/server/slots-logic.ts#claimSlotCore",
+					"src/server/slots-logic.ts#confirmSlotCore",
+					"src/server/slots-logic.ts#reassignSlotCore",
+				],
+				exemptCallers: {
+					"src/server/outreach.ts#setContacted": OUTREACH_LOCKS,
+					"src/server/speeches-logic.ts#attachSpeechToOpenSlot":
+						'A record write, and a completed meeting is when it is accepted: when its actor owns the speech it records them as coming through markComingOnSelfClaim. Refusing completed in the seam would answer "This meeting is locked." to a member scheduling their own speech into an open slot of a meeting main accepts it on, while an officer still can.',
+				},
+			},
+		},
 	},
 
 	// -- availability (#1135)
@@ -786,7 +879,16 @@ function bracketBalance(skel: string): number {
 	return d;
 }
 
-/** A top-level `function` or `const`/`let`/`var`, keyed `<path>#<name>`. */
+/** How every unit is keyed, in the map, the registry and the walk: `<path>#<name>`. */
+const unitKey = (path: string, name: string): string => `${path}#${name}`;
+
+/** The inverse of {@link unitKey}. */
+function splitKey(key: string): [path: string, name: string] {
+	const at = key.indexOf("#");
+	return [key.slice(0, at), key.slice(at + 1)];
+}
+
+/** A top-level `function` or `const`/`let`/`var`, keyed by {@link unitKey}. */
 interface Unit {
 	key: string;
 	file: string;
@@ -854,7 +956,7 @@ function buildModel(
 	const units = new Map<string, Unit>();
 	for (const st of statements) {
 		if (st.kind === "other") continue;
-		const key = `${path}#${st.name}`;
+		const key = unitKey(path, st.name as string);
 		const unit = units.get(key);
 		if (unit) unit.ranges.push([st.start, st.end]);
 		else {
@@ -1126,7 +1228,11 @@ function hasRawSqlWrite(m: Model, from: number, to: number): boolean {
 	return false;
 }
 
-const SCHEMA_MODULE = /^src\/db\/(?:auth-)?schema$/;
+/** The two modules that declare tables. */
+const SCHEMA_FILES: ReadonlySet<string> = new Set([
+	"src/db/schema.ts",
+	"src/db/auth-schema.ts",
+]);
 
 /**
  * Every unit whose body writes a swept table, and every shape that has to fail
@@ -1144,15 +1250,13 @@ function deriveWriters(
 	const failures: string[] = [];
 	for (const m of models) {
 		for (const imp of m.imports) {
-			if (imp.namespace) {
-				const base = imp.spec.startsWith(".")
-					? posix.normalize(posix.join(posix.dirname(m.path), imp.spec))
-					: `src/${imp.spec.replace(/^[#@]\//, "")}`;
-				if (SCHEMA_MODULE.test(base)) {
-					failures.push(
-						`${m.path}: namespace import of ${imp.spec}, which hides which table a write names`,
-					);
-				}
+			if (
+				imp.namespace &&
+				resolveSpecifier(m.path, imp.spec, SCHEMA_FILES) !== null
+			) {
+				failures.push(
+					`${m.path}: namespace import of ${imp.spec}, which hides which table a write names`,
+				);
 			}
 			for (const b of imp.named) {
 				if (swept.has(b.imported) && b.local !== b.imported) {
@@ -1174,7 +1278,7 @@ function deriveWriters(
 			const { sites, unreadable } = writesIn(skel, swept);
 			const rawSql = hasRawSqlWrite(m, st.start, st.end);
 			if (st.kind !== "other") {
-				const key = `${m.path}#${st.name}`;
+				const key = unitKey(m.path, st.name as string);
 				for (const u of unreadable) failures.push(`${key}: ${u}`);
 				if (sites.length > 0 || rawSql) {
 					const all = writers.get(key) ?? [];
@@ -1205,7 +1309,14 @@ function deriveWriters(
 // ===========================================================================
 
 interface World {
+	/** Every non-test module under `src/server`. */
 	models: Model[];
+	/**
+	 * Modules outside `src/server` (routes, components, `src/lib`). They hold no
+	 * unit the walk follows, but they reach units: a route that imports a
+	 * function has a way in that no refuser in `src/server` stands in front of.
+	 */
+	outside: Model[];
 	known: ReadonlySet<string>;
 	units: Map<string, { model: Model; unit: Unit }>;
 	/** Top-level consts by bare name (for options constants and class constants). */
@@ -1214,7 +1325,7 @@ interface World {
 	helperCache: Map<string, HelperCall[]>;
 }
 
-function buildWorld(models: Model[]): World {
+function buildWorld(models: Model[], outside: Model[] = []): World {
 	const units = new Map<string, { model: Model; unit: Unit }>();
 	const consts = new Map<string, { model: Model; unit: Unit }[]>();
 	for (const model of models) {
@@ -1229,6 +1340,7 @@ function buildWorld(models: Model[]): World {
 	}
 	return {
 		models,
+		outside,
 		known: new Set(models.map((m) => m.path)),
 		units,
 		consts,
@@ -1303,6 +1415,39 @@ function callersOf(world: World, key: string): string[] {
 	return out;
 }
 
+const IMPORT_STATEMENT = /^import\s[\s\S]*?\bfrom\s*["'][^"']*["']\s*;?/gm;
+
+/**
+ * Files outside `src/server` that import `key` and mention it. Read from the
+ * comment-stripped code with the import statements removed, strings kept, so
+ * this over-approximates: a mention in a string counts. A wrong answer here
+ * demands a decision about an entry point, it never waives one.
+ */
+function outsideCallersOf(world: World, key: string): string[] {
+	const target = world.units.get(key);
+	if (!target) return [];
+	const out: string[] = [];
+	for (const model of world.outside) {
+		const names = localNames(world, model, target.unit);
+		if (names.length === 0) continue;
+		const code = model.lexed.code.replace(IMPORT_STATEMENT, "");
+		if (names.some((name) => wordRe(name).test(code))) out.push(model.path);
+	}
+	return out;
+}
+
+/** `export const x = createServerFn(…)`: callable over the wire with no caller in front of it. */
+function isServerFn(world: World, key: string): boolean {
+	const found = world.units.get(key);
+	return (
+		found !== undefined &&
+		found.unit.kind === "const" &&
+		/^(?:export\s+)?const\s+[\w$]+\s*(?::[^=]+)?=\s*createServerFn\b/.test(
+			skelOf(found.model, found.unit),
+		)
+	);
+}
+
 const NON_CALLING_STATEMENT =
 	/^(?:import\b|export\s+(?:type\s+)?\{|export\s+\*|(?:export\s+)?(?:type|interface)\b)/;
 
@@ -1334,57 +1479,58 @@ function strayReferences(world: World, writerKeys: Iterable<string>): string[] {
 }
 
 /**
- * Ways a writer can be reached that a name search in a unit would not see:
- * `import * as x` of its module, a dynamic `import()` of it, a re-export of it
- * (`export { w } from`, `export * from`), and an `export { w as v }`.
+ * Ways a unit the guard follows (a writer, or an intermediary on the way to
+ * one) can be reached that a name search in a unit would not see: `import * as
+ * x` of its module, a dynamic `import()` of it, a re-export of it (`export { w }
+ * from`, `export * from`), and an `export { w as v }`. Checked in every module,
+ * outside `src/server` as well: a barrel there is a way in.
  */
-function moduleShapeFailures(
-	world: World,
-	writers: ReadonlyMap<string, unknown>,
-): string[] {
-	const writerFiles = new Map<string, Set<string>>();
-	for (const key of writers.keys()) {
-		const [file, name] = key.split("#") as [string, string];
-		const set = writerFiles.get(file) ?? new Set<string>();
+function moduleShapeFailures(world: World, keys: Iterable<string>): string[] {
+	const followedFiles = new Map<string, Set<string>>();
+	for (const key of keys) {
+		const [file, name] = splitKey(key);
+		const set = followedFiles.get(file) ?? new Set<string>();
 		set.add(name);
-		writerFiles.set(file, set);
+		followedFiles.set(file, set);
 	}
 	const failures: string[] = [];
-	for (const m of world.models) {
+	for (const m of [...world.models, ...world.outside]) {
 		for (const imp of m.imports) {
 			const target = resolveSpecifier(m.path, imp.spec, world.known);
-			if (imp.namespace && target && writerFiles.has(target)) {
+			const names = target ? followedFiles.get(target) : undefined;
+			if (imp.namespace && names) {
 				failures.push(
-					`${m.path}: namespace import of ${imp.spec}, which defines a meeting writer; a call through it is not seen. Import the names.`,
+					`${m.path}: namespace import of ${imp.spec}, which defines ${[...names].join(", ")}, a meeting writer or a unit on the way to one; a call through it is not seen. Import the names.`,
 				);
 			}
 		}
 		for (const spec of m.dynamicImports) {
 			const target = resolveSpecifier(m.path, spec, world.known);
-			if (target && writerFiles.has(target)) {
+			const names = target ? followedFiles.get(target) : undefined;
+			if (names) {
 				failures.push(
-					`${m.path}: dynamic import() of ${spec}, which defines a meeting writer; a call through it is not seen.`,
+					`${m.path}: dynamic import() of ${spec}, which defines ${[...names].join(", ")}, a meeting writer or a unit on the way to one; a call through it is not seen.`,
 				);
 			}
 		}
 		for (const ex of m.exportsFrom) {
 			const target = resolveSpecifier(m.path, ex.spec, world.known);
-			const names = target ? writerFiles.get(target) : undefined;
+			const names = target ? followedFiles.get(target) : undefined;
 			if (!names) continue;
 			const hit = ex.star
 				? [...names]
 				: ex.names.filter((b) => names.has(b.imported)).map((b) => b.imported);
 			if (hit.length > 0) {
 				failures.push(
-					`${m.path}: re-exports the meeting writer ${hit.join(", ")} from ${ex.spec}; a caller of the re-export is not seen.`,
+					`${m.path}: re-exports ${hit.join(", ")} from ${ex.spec}, a meeting writer or a unit on the way to one; a caller of the re-export is not seen.`,
 				);
 			}
 		}
-		const own = writerFiles.get(m.path);
+		const own = followedFiles.get(m.path);
 		for (const b of m.aliasExports) {
 			if (own?.has(b.imported)) {
 				failures.push(
-					`${m.path}: exports the meeting writer ${b.imported} as ${b.local}; a caller of the alias is not seen.`,
+					`${m.path}: exports ${b.imported} as ${b.local}, a meeting writer or a unit on the way to one; a caller of the alias is not seen.`,
 				);
 			}
 		}
@@ -1441,7 +1587,7 @@ function resolveClass(model: Model, text: string): string | null {
 	const lit = /^["'`](plan|record)["'`]$/.exec(text);
 	if (lit) return lit[1] as string;
 	if (!/^[A-Za-z_$][\w$]*$/.test(text)) return null;
-	const unit = model.units.get(`${model.path}#${text}`);
+	const unit = model.units.get(unitKey(model.path, text));
 	if (!unit || unit.kind !== "const") return null;
 	const init = /=\s*["'`](plan|record)["'`]\s*;/.exec(evidOf(model, unit));
 	return init ? (init[1] as string) : null;
@@ -1460,8 +1606,10 @@ function helperCallsOf(world: World, model: Model, unit: Unit): HelperCall[] {
 	const skel = skelOf(model, unit);
 	const evid = evidOf(model, unit);
 	const out: HelperCall[] = [];
-	const re =
-		/(?<![.\w$])(assertMeetingAccepts|meetingAcceptsWrite|meetingRowAccepts)\s*\(/g;
+	const re = new RegExp(
+		`(?<![.\\w$])(${Object.keys(HELPERS).join("|")})\\s*\\(`,
+		"g",
+	);
 	for (const m of skel.matchAll(re)) {
 		const idx = m.index as number;
 		const name = m[1] as HelperName;
@@ -1481,7 +1629,11 @@ function helperCallsOf(world: World, model: Model, unit: Unit): HelperCall[] {
 	return out;
 }
 
-const FROZEN = ["cancelled", "completed"] as const;
+/** The statuses a write class can refuse: every status but the one a meeting starts in. */
+const FROZEN: readonly FrozenMeetingStatus[] =
+	meetingStatusEnum.enumValues.filter(
+		(s): s is FrozenMeetingStatus => s !== "scheduled",
+	);
 
 /**
  * The statuses a helper call's options can accept, read statically, with
@@ -1514,7 +1666,7 @@ function acceptedBy(
 			.split(",")
 			.map((e) => e.trim())
 			.filter(Boolean)) {
-			const lit = /^["'](cancelled|completed)["']$/.exec(el);
+			const lit = new RegExp(`^["'](${FROZEN.join("|")})["']$`).exec(el);
 			if (lit) statuses.add(lit[1] as string);
 			else problems.push(`accept element ${el}`);
 		}
@@ -1663,10 +1815,37 @@ function nonEmpty(s: unknown): boolean {
 }
 
 /**
- * Every call path to `key` must meet a unit named in `refusedBy` or
- * `exemptCallers` before it runs out. The guard walks the reference graph
- * BACKWARDS from the writer and stops at a named unit; a unit that is reached,
- * has no caller of its own and is not named has an unguarded way in.
+ * Ways into `at` that nothing in `src/server` stands in front of: it is a
+ * server fn (callable over the wire), or a module outside `src/server` (a
+ * route, a component) imports it.
+ */
+function entryPointFailures(world: World, key: string, at: string): string[] {
+	const failures: string[] = [];
+	if (isServerFn(world, at)) {
+		failures.push(
+			`${key}: ${at}${at === key ? "" : " is on the way to it and"} is a server fn, callable directly with no caller in front of it, so it has to refuse itself`,
+		);
+	}
+	for (const file of outsideCallersOf(world, at)) {
+		failures.push(
+			`${key}: ${file}, outside src/server, reaches ${at}${at === key ? "" : " on the way to it"}, and nothing in src/server is in front of it`,
+		);
+	}
+	return failures;
+}
+
+/**
+ * Every call path to `key` must meet a unit named in `listed` before it runs
+ * out. The guard walks the reference graph BACKWARDS from the writer and stops
+ * at a named unit. Every unit it walks THROUGH (the writer, and an intermediary
+ * that refuses nothing) is held to being reachable only from its callers:
+ *
+ * - a unit with no caller of its own that is not named has an unguarded way in;
+ * - a server fn, or a unit a module outside `src/server` imports, has one too,
+ *   whoever else calls it;
+ * - a top-level statement outside any unit that mentions it, and a barrel,
+ *   namespace import, dynamic `import()` or alias of its module, are callers no
+ *   caller list can name.
  */
 function coverageFailures(
 	world: World,
@@ -1678,16 +1857,21 @@ function coverageFailures(
 	const stack = [key];
 	while (stack.length > 0) {
 		const at = stack.pop() as string;
-		// An intermediary referenced from a top-level statement outside any unit
-		// has a caller no key can name.
-		if (at !== key) failures.push(...strayReferences(world, [at]));
+		failures.push(...entryPointFailures(world, key, at));
+		// The writer's own module shapes are checked once, for every writer.
+		if (at !== key) {
+			failures.push(
+				...strayReferences(world, [at]),
+				...moduleShapeFailures(world, [at]),
+			);
+		}
 		for (const caller of callersOf(world, at)) {
 			if (reached.has(caller) || caller === key) continue;
 			reached.add(caller);
 			if (listed.has(caller)) continue;
 			if (callersOf(world, caller).length === 0) {
 				failures.push(
-					`${key}: ${caller} reaches it${at === key ? "" : ` through ${at}`} and is neither in refusedBy nor in exemptCallers. A new caller has to refuse, or be classified here.`,
+					`${key}: ${caller} reaches it${at === key ? "" : ` through ${at}`} and is neither a refuser nor an exempt caller named in the entry. A new caller has to refuse, or be classified here.`,
 				);
 			} else stack.push(caller);
 		}
@@ -1695,10 +1879,103 @@ function coverageFailures(
 	for (const l of listed) {
 		if (!reached.has(l)) {
 			failures.push(
-				`${key}: ${l} is listed in refusedBy / exemptCallers but nothing reaches the writer through it. Stale, or reached only behind another listed unit.`,
+				`${key}: ${l} is listed as a refuser or an exempt caller but nothing reaches the writer through it. Stale, or reached only behind another listed unit.`,
 			);
 		}
 	}
+	return failures;
+}
+
+/**
+ * Does `unit` refuse `status` by `cls`: a class-helper call of that class whose
+ * options do not accept the status, or a grounded registered wrapper of it
+ * (a wrapper never passes accept). A helper with options the guard cannot read
+ * is no evidence.
+ */
+function refusesStatusIn(
+	world: World,
+	grounded: ReadonlySet<string>,
+	gates: Gates,
+	model: Model,
+	unit: Unit,
+	cls: string,
+	status: string,
+): boolean {
+	for (const call of helperCallsOf(world, model, unit)) {
+		if (call.cls !== cls) continue;
+		const { statuses, problems } = acceptedBy(world, call.options);
+		if (problems.length === 0 && !statuses.has(status)) return true;
+	}
+	for (const [gkey, gcls] of Object.entries(gates)) {
+		if (gcls !== cls || !grounded.has(gkey)) continue;
+		const gate = world.units.get(gkey);
+		if (gate && references(world, model, unit, gate.unit, true)) return true;
+	}
+	return false;
+}
+
+/**
+ * An override that names the callers keeping its status refused (`refusedBy`,
+ * `exemptCallers`): the writer accepts the status itself, so every path to it
+ * must meet a unit that refuses that status, or an exempt caller with a reason.
+ * It needs a refusal of the writer's own for the statuses it does not accept,
+ * and so cannot be combined with an entry that has none.
+ */
+function delegatedOverrideFailures(
+	world: World,
+	gates: Gates,
+	grounded: ReadonlySet<string>,
+	key: string,
+	cls: string,
+	status: string,
+	ov: Override | undefined,
+	direct: boolean,
+): string[] {
+	const refusedBy = ov?.refusedBy ?? [];
+	const exemptCallers = ov?.exemptCallers ?? {};
+	if (refusedBy.length === 0 && Object.keys(exemptCallers).length === 0) {
+		return [];
+	}
+	const failures: string[] = [];
+	const at = `${key}: overrides.${status}`;
+	if (!direct) {
+		failures.push(
+			`${at} names callers, but the writer has no "${cls}" refusal in its own body for the statuses it does not accept`,
+		);
+	}
+	for (const [caller, reason] of Object.entries(exemptCallers)) {
+		if (!nonEmpty(reason))
+			failures.push(`${at}: exemptCallers ${caller} needs a reason`);
+	}
+	for (const r of refusedBy) {
+		const caller = world.units.get(r);
+		if (!caller) {
+			failures.push(
+				`${at}: refusedBy ${r} names no top-level function or const`,
+			);
+		} else if (
+			!refusesStatusIn(
+				world,
+				grounded,
+				gates,
+				caller.model,
+				caller.unit,
+				cls,
+				status,
+			)
+		) {
+			failures.push(
+				`${at}: refusedBy ${r}, which does not refuse ${status} by "${cls}" (no helper call of that class whose options leave it out, and no registered wrapper)`,
+			);
+		}
+	}
+	failures.push(
+		...coverageFailures(
+			world,
+			key,
+			new Set([...refusedBy, ...Object.keys(exemptCallers)]),
+		).map((f) => `${f} (for overrides.${status})`),
+	);
 	return failures;
 }
 
@@ -1792,6 +2069,18 @@ function entryFailures(
 		}
 		if (!nonEmpty(ov?.reason))
 			failures.push(`${key}: the ${status} override needs a reason`);
+		failures.push(
+			...delegatedOverrideFailures(
+				world,
+				gates,
+				grounded,
+				key,
+				cls,
+				status,
+				ov,
+				direct,
+			),
+		);
 	}
 	const accepted = new Set<string>();
 	for (const unitKey of evidenceUnits) {
@@ -1867,6 +2156,8 @@ function hiddenWrites(
 
 interface Inputs {
 	models: Model[];
+	/** Modules outside `src/server`, which reach units without being one. */
+	outside?: Model[];
 	swept: ReadonlySet<string>;
 	map: Readonly<Record<string, Entry>>;
 	gates: Gates;
@@ -1874,20 +2165,23 @@ interface Inputs {
 
 /** Everything the guard asserts about writers, in one pass; each failure is one line. */
 function allFailures(input: Inputs): string[] {
-	const world = buildWorld(input.models);
+	const world = buildWorld(input.models, input.outside);
 	const grounded = groundedGates(world, input.gates);
 	const { writers, failures } = deriveWriters(input.models, input.swept);
+	// A shared intermediary is walked once per writer behind it: say it once.
 	return [
-		...failures,
-		...moduleShapeFailures(world, writers),
-		...strayReferences(world, writers.keys()),
-		...mapFailures(writers, input.map),
-		...gateFailures(world, input.gates),
-		...Object.entries(input.map).flatMap(([key, entry]) =>
-			writers.has(key)
-				? entryFailures(world, input.gates, grounded, key, entry)
-				: [],
-		),
+		...new Set([
+			...failures,
+			...moduleShapeFailures(world, writers.keys()),
+			...strayReferences(world, writers.keys()),
+			...mapFailures(writers, input.map),
+			...gateFailures(world, input.gates),
+			...Object.entries(input.map).flatMap(([key, entry]) =>
+				writers.has(key)
+					? entryFailures(world, input.gates, grounded, key, entry)
+					: [],
+			),
+		]),
 	];
 }
 
@@ -1920,8 +2214,31 @@ function realModels(): Model[] {
 		});
 }
 
+/**
+ * Every non-test module under `src/` outside `src/server`. Lexed best-effort:
+ * these are mostly `.tsx`, where JSX text can open a "string" the lexer ends at
+ * the newline. That is harmless here, because only their imports and whether
+ * they mention a name are read.
+ */
+function realOutsideModels(): Model[] {
+	return walk(resolve(ROOT, "src"))
+		.filter(
+			(p) =>
+				/\.tsx?$/.test(p) &&
+				!/\.test\.tsx?$/.test(p) &&
+				!p.startsWith(resolve(ROOT, "src/server/")),
+		)
+		.sort()
+		.map((p) =>
+			buildModel(
+				relative(ROOT, p).split("\\").join("/"),
+				readFileSync(p, "utf8"),
+			),
+		);
+}
+
 function realTables(): TableDecl[] {
-	return ["src/db/schema.ts", "src/db/auth-schema.ts"].flatMap((f) =>
+	return [...SCHEMA_FILES].flatMap((f) =>
 		parseTables(readFileSync(resolve(ROOT, f), "utf8")),
 	);
 }
@@ -1960,8 +2277,10 @@ describe("the meeting writers of the real tree", () => {
 	const tables = realTables();
 	const swept = sweptTables(tables);
 	const models = realModels();
+	const outside = realOutsideModels();
 	const inputs: Inputs = {
 		models,
+		outside,
 		swept: new Set(swept),
 		map: MEETING_WRITERS,
 		gates: MEETING_WRITE_GATES,
@@ -1979,6 +2298,14 @@ describe("the meeting writers of the real tree", () => {
 			typedPointersIntoSwept(tables, new Set(swept)),
 			"a table points at a meeting-scoped one with the typed form, which the sweep does not follow. If it is a child of the meeting, write it with `() => X.id`; if it is a back-pointer like clubs.defaultTemplateId, pin it",
 		).toEqual(PINNED_TYPED_POINTERS);
+	});
+
+	it("reads the modules outside src/server too, or the entry-point checks would pass on nothing", () => {
+		expect(outside.length).toBeGreaterThan(100);
+		expect(outside.every((m) => !m.path.startsWith("src/server/"))).toBe(true);
+		// Routes and components are in it, and so is the lib a barrel would live in.
+		expect(outside.some((m) => m.path.startsWith("src/routes/"))).toBe(true);
+		expect(outside.some((m) => m.path.startsWith("src/lib/"))).toBe(true);
 	});
 
 	it("lexes every file to balanced brackets and hides no write in a string or regex", () => {
@@ -2006,17 +2333,17 @@ describe("the meeting writers of the real tree", () => {
 	});
 
 	it("meets no shape that has to fail closed", () => {
-		const world = buildWorld(models);
+		const world = buildWorld(models, outside);
 		const { writers, failures } = deriveWriters(models, inputs.swept);
 		expect([
 			...failures,
-			...moduleShapeFailures(world, writers),
+			...moduleShapeFailures(world, writers.keys()),
 			...strayReferences(world, writers.keys()),
 		]).toEqual([]);
 	});
 
 	it("refuses by its class in every plan and record writer", () => {
-		const world = buildWorld(models);
+		const world = buildWorld(models, outside);
 		const grounded = groundedGates(world, MEETING_WRITE_GATES);
 		const { writers } = deriveWriters(models, inputs.swept);
 		const failures = Object.entries(MEETING_WRITERS).flatMap(([key, entry]) =>
@@ -2057,13 +2384,23 @@ const modelsOf = (files: Record<string, string>): Model[] =>
 
 const lines = (...l: string[]): string => `${l.join("\n")}\n`;
 
-/** Every guard failure for fixture files, a fixture map and a fixture registry. */
+/**
+ * Every guard failure for fixture files, a fixture map and a fixture registry.
+ * `outside` are modules outside `src/server`: routes, components, `src/lib`.
+ */
 function run(
 	files: Record<string, string>,
 	map: Record<string, Entry> = {},
 	gates: Gates = {},
+	outside: Record<string, string> = {},
 ): string[] {
-	return allFailures({ models: modelsOf(files), swept: SW, map, gates });
+	return allFailures({
+		models: modelsOf(files),
+		outside: modelsOf(outside),
+		swept: SW,
+		map,
+		gates,
+	});
 }
 
 const writerKeys = (files: Record<string, string>): string[] =>
@@ -2416,7 +2753,10 @@ describe("call sites", () => {
 		const failures = (b: string) => {
 			const models = modelsOf({ [A]: writer, "src/server/b.ts": b });
 			const world = buildWorld(models);
-			return moduleShapeFailures(world, deriveWriters(models, SW).writers);
+			return moduleShapeFailures(
+				world,
+				deriveWriters(models, SW).writers.keys(),
+			);
 		};
 		expect(
 			failures('import * as logic from "./a-logic";\n').join("\n"),
@@ -2428,10 +2768,10 @@ describe("call sites", () => {
 		).toMatch(/dynamic import\(\) of \.\/a-logic/);
 		expect(
 			failures('export { writeIt } from "./a-logic";\n').join("\n"),
-		).toMatch(/re-exports the meeting writer writeIt/);
+		).toMatch(/re-exports writeIt from/);
 		expect(
 			failures('export { writeIt as w } from "./a-logic";\n').join("\n"),
-		).toMatch(/re-exports the meeting writer writeIt/);
+		).toMatch(/re-exports writeIt from/);
 		expect(failures('export * from "./a-logic";\n').join("\n")).toMatch(
 			/re-exports/,
 		);
@@ -2441,11 +2781,11 @@ describe("call sites", () => {
 			const models = modelsOf({ [A]: writer + tail });
 			return moduleShapeFailures(
 				buildWorld(models),
-				deriveWriters(models, SW).writers,
+				deriveWriters(models, SW).writers.keys(),
 			);
 		};
 		expect(own("export { writeIt as v };\n").join("\n")).toMatch(
-			/exports the meeting writer writeIt as v/,
+			/exports writeIt as v/,
 		);
 		expect(own("export { writeIt };\n")).toEqual([]);
 	});
@@ -2878,7 +3218,7 @@ describe("refusedBy follows the callers", () => {
 			{ [W]: entry({ refusedBy: ["src/server/h.ts#handler"] }) },
 		);
 		expect(failures.join("\n")).toMatch(
-			/src\/server\/rogue\.ts#rogue reaches it and is neither in refusedBy nor in exemptCallers/,
+			/src\/server\/rogue\.ts#rogue reaches it and is neither a refuser nor an exempt caller/,
 		);
 	});
 
@@ -3029,6 +3369,285 @@ describe("refusedBy follows the callers", () => {
 		expect(run(files(), { [W]: entry({}) }).join("\n")).toMatch(
 			/and no refusedBy/,
 		);
+	});
+});
+
+describe("the way into a unit the walk passes through", () => {
+	const W = "src/server/w-logic.ts#store";
+	const store = lines(
+		"export async function store(tx) {",
+		"\tawait tx.insert(roleSlots).values({});",
+		"}",
+	);
+	const middle = lines(
+		'import { store } from "./w-logic";',
+		"export async function middle(tx) {",
+		"\tawait store(tx);",
+		"}",
+	);
+	const top = lines(
+		'import { middle } from "./m";',
+		"export async function top(tx, status) {",
+		'\tassertMeetingAccepts(status, "plan");',
+		"\tawait middle(tx);",
+		"}",
+	);
+	const entry: Entry = {
+		class: "plan",
+		refusedBy: ["src/server/t.ts#top"],
+	};
+	const base = {
+		"src/server/w-logic.ts": store,
+		"src/server/m.ts": middle,
+		"src/server/t.ts": top,
+	};
+	const check = (
+		more: Record<string, string> = {},
+		outside: Record<string, string> = {},
+		files: Record<string, string> = base,
+	): string =>
+		run({ ...files, ...more }, { [W]: entry }, {}, outside).join("\n");
+
+	it("passes when the intermediary is reachable only from its listed chain", () => {
+		expect(check()).toBe("");
+	});
+
+	it("fails a barrel that re-exports the intermediary, however it spells it", () => {
+		expect(
+			check({ "src/server/barrel.ts": 'export { middle } from "./m";\n' }),
+		).toMatch(/barrel\.ts: re-exports middle from \.\/m/);
+		expect(
+			check({
+				"src/server/barrel.ts": 'export { middle as renamed } from "./m";\n',
+			}),
+		).toMatch(/barrel\.ts: re-exports middle from \.\/m/);
+		expect(check({ "src/server/barrel.ts": 'export * from "./m";\n' })).toMatch(
+			/barrel\.ts: re-exports middle from \.\/m/,
+		);
+	});
+
+	it("fails an alias of the intermediary in its own module, a namespace import and a dynamic import of it", () => {
+		expect(
+			check({ "src/server/m.ts": `${middle}export { middle as other };\n` }),
+		).toMatch(/m\.ts: exports middle as other/);
+		expect(check({ "src/server/n.ts": 'import * as m from "./m";\n' })).toMatch(
+			/n\.ts: namespace import of \.\/m, which defines middle/,
+		);
+		expect(
+			check({
+				"src/server/n.ts":
+					'export async function lazy() {\n\treturn import("./m");\n}\n',
+			}),
+		).toMatch(/n\.ts: dynamic import\(\) of \.\/m, which defines middle/);
+	});
+
+	it("fails the same shapes in a module outside src/server, where a route or a lib file can sit", () => {
+		expect(
+			check(
+				{},
+				{ "src/lib/barrel.ts": 'export { middle } from "#/server/m";\n' },
+			),
+		).toMatch(/src\/lib\/barrel\.ts: re-exports middle/);
+		expect(
+			check(
+				{},
+				{
+					"src/routes/r.tsx":
+						'export const lazy = () => import("#/server/m");\n',
+				},
+			),
+		).toMatch(/src\/routes\/r\.tsx: dynamic import\(\) of #\/server\/m/);
+		expect(
+			check(
+				{},
+				{ "src/routes/r.tsx": 'import * as logic from "#/server/m";\n' },
+			),
+		).toMatch(/src\/routes\/r\.tsx: namespace import of #\/server\/m/);
+	});
+
+	it("fails a module outside src/server that imports the intermediary or the writer", () => {
+		const route = (from: string, name: string) =>
+			lines(
+				`import { ${name} } from "${from}";`,
+				"export function Page() {",
+				`\treturn ${name};`,
+				"}",
+			);
+		expect(
+			check({}, { "src/routes/api/x.tsx": route("#/server/m", "middle") }),
+		).toMatch(
+			/src\/routes\/api\/x\.tsx, outside src\/server, reaches .*#middle on the way to it/,
+		);
+		expect(
+			check({}, { "src/routes/api/x.tsx": route("#/server/w-logic", "store") }),
+		).toMatch(
+			/src\/routes\/api\/x\.tsx, outside src\/server, reaches .*#store, and nothing/,
+		);
+		// An import that is never used is not a way in.
+		expect(
+			check(
+				{},
+				{ "src/routes/x.tsx": 'import { middle } from "#/server/m";\n' },
+			),
+		).toBe("");
+		// Nor is a module that imports something else from the same file.
+		expect(check({}, { "src/routes/x.tsx": route("#/server/t", "top") })).toBe(
+			"",
+		);
+	});
+
+	it("fails an intermediary that is a server fn, which anyone can call with nothing in front of it", () => {
+		const serverFn = lines(
+			'import { store } from "./w-logic";',
+			'export const middle = createServerFn({ method: "POST" }).handler(async () => {',
+			"\tawait store(tx);",
+			"});",
+		);
+		expect(check({ "src/server/m.ts": serverFn })).toMatch(
+			/#middle is on the way to it and is a server fn/,
+		);
+	});
+
+	it("fails a refusedBy writer that is itself a server fn", () => {
+		const serverFn = lines(
+			'export const store = createServerFn({ method: "POST" }).handler(async () => {',
+			"\tawait tx.insert(roleSlots).values({});",
+			"});",
+		);
+		expect(check({ "src/server/w-logic.ts": serverFn })).toMatch(
+			/#store is a server fn, callable directly/,
+		);
+	});
+});
+
+describe("an override that the callers keep refused", () => {
+	const W = "src/server/w-logic.ts#store";
+	const store = lines(
+		"export async function store(tx, status) {",
+		'\tassertMeetingAccepts(status, "plan", { accept: ["completed"] });',
+		"\tawait tx.insert(roleSlots).values({});",
+		"}",
+	);
+	const caller = (name: string, call: string) =>
+		lines(
+			'import { store } from "./w-logic";',
+			`export async function ${name}(tx, status) {`,
+			`\t${call}`,
+			"\tawait store(tx, status);",
+			"}",
+		);
+	const entry = (
+		extra: Partial<Override> = {},
+		overrides: ClassEntry["overrides"] = {
+			completed: {
+				accept: true,
+				reason: "the callers refuse it",
+				refusedBy: ["src/server/h.ts#handler"],
+				...extra,
+			},
+		},
+	): Entry => ({ class: "plan", overrides });
+	const files = (
+		more: Record<string, string> = {},
+		handler = 'assertMeetingAccepts(status, "plan", { accept: ["cancelled"] });',
+	) => ({
+		"src/server/w-logic.ts": store,
+		"src/server/h.ts": caller("handler", handler),
+		...more,
+	});
+
+	it("passes when every caller refuses the status the writer accepts", () => {
+		expect(run(files(), { [W]: entry() })).toEqual([]);
+	});
+
+	it("fails a new caller that is not named, which is how a completed meeting gets through", () => {
+		expect(
+			run(files({ "src/server/rogue.ts": caller("rogue", "void status;") }), {
+				[W]: entry(),
+			}).join("\n"),
+		).toMatch(
+			/rogue reaches it and is neither a refuser nor an exempt caller.*overrides\.completed/,
+		);
+	});
+
+	it("fails a named caller that accepts the status, or refuses by another class, or nothing", () => {
+		for (const handler of [
+			'assertMeetingAccepts(status, "plan", { accept: ["cancelled", "completed"] });',
+			'assertMeetingAccepts(status, "record");',
+			"void status;",
+		]) {
+			expect(
+				run(files({}, handler), { [W]: entry() }).join("\n"),
+				handler,
+			).toMatch(
+				/refusedBy src\/server\/h\.ts#handler, which does not refuse completed by "plan"/,
+			);
+		}
+	});
+
+	it("takes an exempt caller with a reason, and fails one without", () => {
+		const seed = caller("seed", "void status;");
+		const named = (reason: string) =>
+			entry({ exemptCallers: { "src/server/s.ts#seed": reason } });
+		expect(
+			run(files({ "src/server/s.ts": seed }), { [W]: named("on purpose") }),
+		).toEqual([]);
+		expect(
+			run(files({ "src/server/s.ts": seed }), { [W]: named(" ") }).join("\n"),
+		).toMatch(/exemptCallers src\/server\/s\.ts#seed needs a reason/);
+	});
+
+	it("fails a listed caller nothing reaches the writer through", () => {
+		expect(
+			run(files(), {
+				[W]: entry({
+					refusedBy: ["src/server/h.ts#handler", "src/server/gone.ts#x"],
+				}),
+			}).join("\n"),
+		).toMatch(
+			/refusedBy src\/server\/gone\.ts#x names no top-level function or const/,
+		);
+	});
+
+	it("needs the writer's own refusal for the statuses it does not accept: deleting it fails", () => {
+		const noRefusal = lines(
+			"export async function store(tx, status) {",
+			"\tawait tx.insert(roleSlots).values({});",
+			"}",
+		);
+		expect(
+			run(files({ "src/server/w-logic.ts": noRefusal }), { [W]: entry() }).join(
+				"\n",
+			),
+		).toMatch(/no "plan" refusal|has no "plan" refusal in its own body/);
+	});
+
+	it("is a way into a server fn writer, which is callable with no caller", () => {
+		const serverFn = lines(
+			'export const store = createServerFn({ method: "POST" }).handler(async () => {',
+			'\tassertMeetingAccepts(status, "plan", { accept: ["completed"] });',
+			"\tawait tx.insert(roleSlots).values({});",
+			"});",
+		);
+		expect(
+			run(files({ "src/server/w-logic.ts": serverFn }), { [W]: entry() }).join(
+				"\n",
+			),
+		).toMatch(/#store is a server fn, callable directly/);
+	});
+
+	it("fails a module outside src/server that calls the writer directly", () => {
+		const page = lines(
+			'import { store } from "#/server/w-logic";',
+			"export function Page() {",
+			"\treturn store;",
+			"}",
+		);
+		expect(
+			run(files(), { [W]: entry() }, {}, { "src/routes/p.tsx": page }).join(
+				"\n",
+			),
+		).toMatch(/src\/routes\/p\.tsx, outside src\/server, reaches .*#store/);
 	});
 });
 

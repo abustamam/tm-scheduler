@@ -6,7 +6,10 @@ import {
 	meetings,
 	members,
 } from "#/db/schema";
-import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
+import {
+	assertMeetingAccepts,
+	type MeetingWriteOptions,
+} from "#/lib/meeting-lifecycle";
 import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
 import { logActivity } from "./activity";
 import { takeAdvisoryLockWithin } from "./club-write-lock";
@@ -240,11 +243,12 @@ export type SetPlanStatusArgs = SetPlanStatusCommon &
 	);
 
 /**
- * Refuse a plan write on a CANCELLED meeting (#1057, #1137), by write class:
- * who is EXPECTED at a meeting is what is intended for one that has not
- * happened, so this asks the `plan` class, which refuses cancelled and
- * completed. Here in the seam rather than in its dozen callers, for the reason
- * the seam exists: one place where "may this row change" is true or false.
+ * What the seam asks of a meeting's status (#1057, #1137), by write class: who is
+ * EXPECTED at a meeting is what is intended for one that has not happened, so
+ * `setPlanStatus` and `clearPlanStatus` ask the `plan` class, which refuses
+ * cancelled and completed. Here in the seam rather than in its dozen callers,
+ * for the reason the seam exists: one place where "may this row change" is true
+ * or false.
  *
  * `accept: ["completed"]` is the override that keeps this seam exactly as it
  * was: it refuses CANCELLED and nothing else. A completed meeting stays refused
@@ -258,27 +262,39 @@ export type SetPlanStatusArgs = SetPlanStatusCommon &
  * is locked." to a member scheduling their own speech into an open slot of a
  * meeting main accepts it on, while an officer still can.
  *
- * Read through the CALLER's handle, so a writer inside a transaction compares
- * against its own view, and as its own statement, so a cancel committed
- * before it is seen. There is no lock to re-read behind — these writes take an
- * advisory lock on the member, never the meeting row — and the INSERT below is
- * an upsert whose insert arm cannot carry a predicate without rebuilding it as
- * an INSERT … SELECT. A cancel that commits between this read and that write
- * is the window #1057 accepted when it declined a new lock; the plan row it
- * leaves is harmless, since every reader of a cancelled meeting's plan is a
- * reader of a meeting that no longer happens. A meeting that does not exist is
- * left to the FK: this gate answers one question only.
+ * `meeting-writers.guard.test.ts` holds both halves: each writer's own body
+ * calls the helper with THIS constant (so deleting the call, or widening the
+ * option, fails it), and the callers that keep completed refused are named in
+ * the writers' `overrides.completed`, so a new caller has to refuse or be
+ * classified. The call sits in each writer rather than in a shared helper
+ * because the guard reads an override only from the writer that declares it.
+ *
+ * The status is read through the CALLER's handle, so a writer inside a
+ * transaction compares against its own view, and as its own statement, so a
+ * cancel committed before it is seen. There is no lock to re-read behind —
+ * these writes take an advisory lock on the member, never the meeting row — and
+ * the INSERT below is an upsert whose insert arm cannot carry a predicate
+ * without rebuilding it as an INSERT … SELECT. A cancel that commits between
+ * this read and that write is the window #1057 accepted when it declined a new
+ * lock; the plan row it leaves is harmless, since every reader of a cancelled
+ * meeting's plan is a reader of a meeting that no longer happens. A meeting
+ * that does not exist is left to the FK: this gate answers one question only.
  */
-async function assertPlanMeetingAccepts(
+const PLAN_SEAM_WRITE_OPTIONS = {
+	accept: ["completed"],
+} as const satisfies Pick<MeetingWriteOptions, "accept">;
+
+/** The meeting's status on the caller's handle, or null when there is no such meeting. */
+async function meetingStatusOf(
 	database: DbOrTx,
 	meetingId: string,
-): Promise<void> {
+): Promise<string | null> {
 	const [row] = await database
 		.select({ status: meetings.status })
 		.from(meetings)
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
-	if (row) assertMeetingAccepts(row.status, "plan", { accept: ["completed"] });
+	return row?.status ?? null;
 }
 
 /**
@@ -313,7 +329,10 @@ export async function setPlanStatus(
 	if (!args.onlyIfAbsent && args.proof === "asserted" && !args.demoteFrom) {
 		throw new Error(ASSERTED_OVERWRITE_MESSAGE);
 	}
-	await assertPlanMeetingAccepts(database, args.meetingId);
+	const status = await meetingStatusOf(database, args.meetingId);
+	if (status !== null) {
+		assertMeetingAccepts(status, "plan", PLAN_SEAM_WRITE_OPTIONS);
+	}
 	const values = {
 		memberId: args.memberId,
 		meetingId: args.meetingId,
@@ -436,7 +455,10 @@ export async function clearPlanStatus(
 		onlyFrom: readonly AttendancePlanStatus[];
 	},
 ): Promise<{ ok: true; cleared: boolean }> {
-	await assertPlanMeetingAccepts(database, args.meetingId);
+	const status = await meetingStatusOf(database, args.meetingId);
+	if (status !== null) {
+		assertMeetingAccepts(status, "plan", PLAN_SEAM_WRITE_OPTIONS);
+	}
 	const removed = await database
 		.delete(meetingAttendancePlan)
 		.where(
