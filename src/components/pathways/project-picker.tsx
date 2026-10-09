@@ -11,6 +11,7 @@ import {
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { formatHistoryDate } from "#/lib/format";
 import {
 	levelLabel,
 	type PathwaysSeries,
@@ -293,6 +294,35 @@ function LevelProjects({
 	);
 }
 
+/**
+ * What the speaker has already done with this project (#1160): "Given Aug 29",
+ * "Given 2×, last Aug 29", "Booked Oct 17" (the soonest), or the first and last
+ * joined by " · ". Each date renders in the zone of the club it happened at, with
+ * the year when it is not this one (`given` has no date floor).
+ * Null when there is neither, so the row stays one line.
+ */
+function projectHistoryText(project: PickerProject): string | null {
+	const parts: string[] = [];
+	const [lastGiven] = project.given;
+	if (lastGiven) {
+		const last = formatHistoryDate(lastGiven.at, {
+			timeZone: lastGiven.timeZone,
+		});
+		parts.push(
+			project.given.length === 1
+				? `Given ${last}`
+				: `Given ${project.given.length}\u00d7, last ${last}`,
+		);
+	}
+	const [nextBooked] = project.booked;
+	if (nextBooked) {
+		parts.push(
+			`Booked ${formatHistoryDate(nextBooked.at, { timeZone: nextBooked.timeZone })}`,
+		);
+	}
+	return parts.length > 0 ? parts.join(" \u00b7 ") : null;
+}
+
 function ProjectRow({
 	project,
 	selected,
@@ -308,6 +338,7 @@ function ProjectRow({
 		: project.isRequired
 			? "Required"
 			: null;
+	const history = projectHistoryText(project);
 	return (
 		<li>
 			<button
@@ -326,7 +357,14 @@ function ProjectRow({
 					}`}
 					aria-hidden
 				/>
-				<span className="min-w-0 flex-1 truncate">{project.name}</span>
+				<span className="min-w-0 flex-1">
+					<span className="block truncate">{project.name}</span>
+					{history ? (
+						<span className="block truncate text-xs text-muted-foreground">
+							{history}
+						</span>
+					) : null}
+				</span>
 				{badge ? (
 					<Badge variant="secondary" className="shrink-0 text-[10px]">
 						{badge}

@@ -9,10 +9,12 @@
  * A `-logic.ts` so `#/db` never leaks into the client bundle (server-modules
  * guard). Never imported by client code.
  */
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	bcmProjectProgress,
+	clubs,
+	meetings,
 	members,
 	officerTerms,
 	pathEnrollments,
@@ -21,6 +23,8 @@ import {
 	pathwaysProjects,
 	people,
 	projectCompletionMarks,
+	roleSlots,
+	speeches,
 } from "#/db/schema";
 import { PATHWAYS_COURSE_CODES } from "#/lib/basecamp-progress";
 import { cap } from "#/lib/cap";
@@ -36,6 +40,14 @@ import {
 	membershipPickOrder,
 } from "./membership-pick-order";
 import { userPersonIds } from "./person-identity-logic";
+
+/** One speech on a project: the meeting's instant and its club's zone. */
+export interface PickerSpeechDate {
+	/** `meetings.scheduled_at` as an ISO string. */
+	at: string;
+	/** The meeting's club's `clubs.timezone`, so the date renders where it happened. */
+	timeZone: string;
+}
 
 export interface PickerProject {
 	id: string;
@@ -58,6 +70,18 @@ export interface PickerProject {
 	 * Always false on the anonymous surface; see `listProjectOptions`.
 	 */
 	complete: boolean;
+	/**
+	 * The subject's speeches on this project at past, non-cancelled meetings,
+	 * newest first (#1160). Empty when `!includeProgress`: which projects someone
+	 * has given stays behind sign-in, the same line completion sits on.
+	 */
+	given: PickerSpeechDate[];
+	/**
+	 * The subject's speeches on this project at upcoming, non-cancelled meetings,
+	 * soonest first (#1160). Empty when `!includeProgress`. A speech booked for
+	 * the very slot being edited shows here on its own project; that is accurate.
+	 */
+	booked: PickerSpeechDate[];
 }
 
 export interface PickerPath {
@@ -115,57 +139,109 @@ export async function listProjectOptions(
 	const pathIds = enrolled.map((e) => e.pathId);
 	const enrollmentIds = enrolled.map((e) => e.enrollmentId);
 
-	const [projectRows, completeRows, markRows, levelRows] = await Promise.all([
-		db
-			.select({
-				id: pathwaysProjects.id,
-				pathId: pathwaysProjects.pathId,
-				level: pathwaysProjects.level,
-				name: pathwaysProjects.name,
-				isRequired: pathwaysProjects.isRequired,
-				series: pathwaysProjects.series,
-			})
-			.from(pathwaysProjects)
-			// Education Series rows (#921) included: the picker groups them under
-			// their own heading inside each level (#922).
-			.where(inArray(pathwaysProjects.pathId, pathIds))
-			.orderBy(
-				asc(pathwaysProjects.level),
-				asc(pathwaysProjects.sortOrder),
-				asc(pathwaysProjects.name),
-			),
-		opts.includeProgress
-			? db
-					.select({ projectId: bcmProjectProgress.projectId })
-					.from(bcmProjectProgress)
-					.where(
-						and(
-							inArray(bcmProjectProgress.enrollmentId, enrollmentIds),
-							eq(bcmProjectProgress.complete, true),
-						),
-					)
-			: Promise.resolve([] as { projectId: string }[]),
-		// Marks are completion too, under the same privacy seam: an anonymous
-		// caller never learns one exists.
-		opts.includeProgress
-			? db
-					.select({ projectId: projectCompletionMarks.projectId })
-					.from(projectCompletionMarks)
-					.where(inArray(projectCompletionMarks.enrollmentId, enrollmentIds))
-			: Promise.resolve([] as { projectId: string }[]),
-		opts.includeProgress
-			? db
-					.select({
-						enrollmentId: pathLevelProgress.enrollmentId,
-						level: pathLevelProgress.level,
-						approved: pathLevelProgress.approved,
-					})
-					.from(pathLevelProgress)
-					.where(inArray(pathLevelProgress.enrollmentId, enrollmentIds))
-			: Promise.resolve(
-					[] as { enrollmentId: string; level: number; approved: boolean }[],
+	const [projectRows, completeRows, markRows, levelRows, speechRows] =
+		await Promise.all([
+			db
+				.select({
+					id: pathwaysProjects.id,
+					pathId: pathwaysProjects.pathId,
+					level: pathwaysProjects.level,
+					name: pathwaysProjects.name,
+					isRequired: pathwaysProjects.isRequired,
+					series: pathwaysProjects.series,
+				})
+				.from(pathwaysProjects)
+				// Education Series rows (#921) included: the picker groups them under
+				// their own heading inside each level (#922).
+				.where(inArray(pathwaysProjects.pathId, pathIds))
+				.orderBy(
+					asc(pathwaysProjects.level),
+					asc(pathwaysProjects.sortOrder),
+					asc(pathwaysProjects.name),
 				),
-	]);
+			opts.includeProgress
+				? db
+						.select({ projectId: bcmProjectProgress.projectId })
+						.from(bcmProjectProgress)
+						.where(
+							and(
+								inArray(bcmProjectProgress.enrollmentId, enrollmentIds),
+								eq(bcmProjectProgress.complete, true),
+							),
+						)
+				: Promise.resolve([] as { projectId: string }[]),
+			// Marks are completion too, under the same privacy seam: an anonymous
+			// caller never learns one exists.
+			opts.includeProgress
+				? db
+						.select({ projectId: projectCompletionMarks.projectId })
+						.from(projectCompletionMarks)
+						.where(inArray(projectCompletionMarks.enrollmentId, enrollmentIds))
+				: Promise.resolve([] as { projectId: string }[]),
+			opts.includeProgress
+				? db
+						.select({
+							enrollmentId: pathLevelProgress.enrollmentId,
+							level: pathLevelProgress.level,
+							approved: pathLevelProgress.approved,
+						})
+						.from(pathLevelProgress)
+						.where(inArray(pathLevelProgress.enrollmentId, enrollmentIds))
+				: Promise.resolve(
+						[] as { enrollmentId: string; level: number; approved: boolean }[],
+					),
+			// The speeches this person has given or booked on these paths (#1160), in
+			// ONE statement whatever the number of projects or speeches. Scoped by PATH
+			// because `projectRows` is not available inside this `Promise.all`; the
+			// predicate follows `fetchDeliveredWins` (pathways-read-logic). Behind the
+			// same seam as the other progress reads: anonymous callers never run it.
+			opts.includeProgress
+				? db
+						.select({
+							projectId: pathwaysProjects.id,
+							scheduledAt: meetings.scheduledAt,
+							timeZone: clubs.timezone,
+						})
+						.from(speeches)
+						.innerJoin(
+							pathwaysProjects,
+							eq(pathwaysProjects.id, speeches.projectId),
+						)
+						.innerJoin(roleSlots, eq(roleSlots.speechId, speeches.id))
+						.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+						.innerJoin(clubs, eq(clubs.id, meetings.clubId))
+						.where(
+							and(
+								// A guest's speech (#1046) has a NULL person_id, which `=` never matches.
+								eq(speeches.personId, personId),
+								inArray(pathwaysProjects.pathId, pathIds),
+								ne(meetings.status, "cancelled"),
+							),
+						)
+				: Promise.resolve(
+						[] as {
+							projectId: string;
+							scheduledAt: Date;
+							timeZone: string;
+						}[],
+					),
+		]);
+
+	// Split past from upcoming once, here, so no per-project query is needed.
+	// Walked oldest first, so each bucket is ascending: `booked` is soonest
+	// first as it stands, and `given` is reversed to newest first where it is read.
+	const now = new Date();
+	const givenByProject = new Map<string, PickerSpeechDate[]>();
+	const bookedByProject = new Map<string, PickerSpeechDate[]>();
+	const oldestFirst = [...speechRows].sort(
+		(a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime(),
+	);
+	for (const r of oldestFirst) {
+		const bucket = r.scheduledAt < now ? givenByProject : bookedByProject;
+		const list = bucket.get(r.projectId) ?? [];
+		list.push({ at: r.scheduledAt.toISOString(), timeZone: r.timeZone });
+		bucket.set(r.projectId, list);
+	}
 
 	// Keyed by project alone, exactly as the Base Camp half is: both queries
 	// are already scoped to this person's live enrollments.
@@ -204,6 +280,8 @@ export async function listProjectOptions(
 				isRequired: p.isRequired,
 				series: p.series,
 				complete: completeIds.has(p.id),
+				given: [...(givenByProject.get(p.id) ?? [])].reverse(),
+				booked: bookedByProject.get(p.id) ?? [],
 			}));
 		return {
 			pathId: e.pathId,
