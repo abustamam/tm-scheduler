@@ -59,11 +59,12 @@ export function isMeetingLocked(status: string): boolean {
  * refuses. A new status is then one edit here, not an audit of every writer.
  *
  * - `plan`: what is intended for a meeting that has not happened (the agenda,
- *   its meta, role claims and assignments). Refused once the meeting is
- *   cancelled or completed.
+ *   its meta, role claims and assignments, and the vote window with its
+ *   ballots and rulings, which close when the meeting completes). Refused once
+ *   the meeting is cancelled or completed.
  * - `record`: what is written about a meeting after it happened (attendance,
- *   minutes, votes, awards). Refused on a cancelled meeting, which never
- *   happened, and accepted on a completed one, which is when it is written up.
+ *   minutes, awards). Refused on a cancelled meeting, which never happened,
+ *   and accepted on a completed one, which is when it is written up.
  *
  * Client-safe (no schema import), like everything in this module, so the
  * `MeetingStatus` union below is HAND-WRITTEN. `meeting-write-gate.ts`, which

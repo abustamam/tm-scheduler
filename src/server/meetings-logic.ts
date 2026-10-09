@@ -466,6 +466,20 @@ const META_WRITE_OPTIONS = {
 } as const satisfies Pick<MeetingWriteOptions, "accept">;
 
 /**
+ * The digital-voting switch's write policy (#1138): `plan`, with the same
+ * `accept: ["completed"]` override, for its own reason. Switching on a completed
+ * meeting changes what is SHOWN and opens nothing: completing already closed
+ * every vote, and a vote cannot be opened or cast on a completed meeting. And
+ * refusing it would strand a tally: `VoteCounterPanel`, which carries the tally
+ * and the confirm-winner control, renders only while the switch is on, so a
+ * meeting whose switch was turned off before it completed could never show its
+ * panel again. A cancelled meeting still refuses.
+ */
+const DIGITAL_VOTING_SWITCH_WRITE_OPTIONS = {
+	accept: ["completed"],
+} as const satisfies Pick<MeetingWriteOptions, "accept">;
+
+/**
  * The UPDATE both meta writers issue, refusing a CANCELLED meeting atomically
  * (#1088).
  *
@@ -813,12 +827,16 @@ export async function applyMeetingDigitalVoting(input: {
 	await db.transaction(async (tx) => {
 		// #1085. Under the meeting row's lock, the one `applyCancelMeeting` takes,
 		// so a cancel and this switch serialise and the status read here is the
-		// status the write lands on. A completed meeting refuses too (#1138): the
-		// switch is part of the plan, and completing already closed every vote.
-		// This reverses #1085's "a completed meeting's switch stays writable",
-		// which was a deliberate choice then; #1138 classes the switch as `plan`.
+		// status the write lands on. No completed-lock check, as before: a
+		// completed meeting's switch stays writable, unchanged by #1085. Under the
+		// write policy (#1138) that is the `plan` class with a named override; see
+		// `DIGITAL_VOTING_SWITCH_WRITE_OPTIONS` for why completed is accepted.
 		const locked = await lockMeetingForSlotEdit(tx, input.meetingId);
-		assertMeetingAccepts(locked.status, "plan");
+		assertMeetingAccepts(
+			locked.status,
+			"plan",
+			DIGITAL_VOTING_SWITCH_WRITE_OPTIONS,
+		);
 		const [meeting] = await tx
 			.update(meetings)
 			.set({ digitalVotingDisabled: input.disabled })

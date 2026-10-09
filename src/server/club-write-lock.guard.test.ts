@@ -4,9 +4,9 @@
  * row lock. Taken after a row lock it orders nothing, and a passing interleaving
  * cannot see that — `club-write-lock.integration.test.ts` is the behavioural
  * half, and it drives only the pairs with a deterministic cycle. `openVote`
- * (meeting and club FOR SHARE in one statement, against a save holding the
- * meeting and waiting on the club) has none a test can force, so this is its
- * only gate.
+ * (a meeting FOR SHARE read of its status, then meeting and club FOR SHARE in
+ * one statement, against a save holding the meeting and waiting on the club)
+ * has none a test can force, so this is its only gate.
  *
  * Read comment-blind: every assertion is "this must BE in the code".
  */

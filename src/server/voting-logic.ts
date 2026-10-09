@@ -100,14 +100,22 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  * the sentence `assertMeetingAccepts` owns. A meeting that does not exist is
  * left to the caller's own lookup, which already names that case.
  *
- * Reads the status as of this statement. `lock: "share"` is for a caller already
- * inside a transaction that wants the answer to hold for the write that follows:
- * a cancel or complete takes `FOR NO KEY UPDATE` on the same row, so under a
- * share lock the status read here is the status the write lands on. Without it
- * this is a plain re-read, the shape #1057 chose for `castVote` when it declined
- * a new lock: the window between read and write is accepted, because a vote
- * write on a meeting that froze in it changes nothing a reader of that meeting
- * shows.
+ * Reads the status as of this statement. `lock: "share"` is for a writer already
+ * inside its write transaction: a cancel or complete takes `FOR NO KEY UPDATE`
+ * on the same row, so under a share lock the status read here is the status the
+ * write lands on, and one in flight is waited out. `openVote`,
+ * `disqualifyCandidate` and `undoDisqualification` take it, because what they
+ * write is read back on a frozen meeting (`loadTally` and `setAward` read the
+ * record of a completed one), so a write that lands after a freeze is seen.
+ *
+ * Without it this is a plain re-read, the shape #1057 chose for `castVote` when
+ * it declined a new lock, and `closeVote` shares it. The window between that
+ * read and the write is accepted for both: a close on a meeting that froze in it
+ * changes nothing a reader shows, and a ballot that slips in counts toward a
+ * meeting every reader of its tally already hides. The two ruling writers do
+ * BOTH: a plain read up front, so a frozen meeting answers before the reason or
+ * the candidate is looked at, and the locked read first inside the transaction,
+ * which is the one that holds.
  */
 async function assertVoteMeetingAccepts(
 	conn: typeof db | Tx,
@@ -278,9 +286,9 @@ export async function closeVote(input: WindowInput): Promise<void> {
  * been closed out cannot still be voted on.
  *
  * Takes `tx` rather than opening its own, and does NOT route through
- * `closeVote`: the completion path sets `status = completed`, and `closeVote`'s
- * caller asserts the lock — so calling it here would throw on the very
- * transition that triggers it.
+ * `closeVote`: the completion path sets `status = completed`, and `closeVote`
+ * refuses a completed meeting itself (#1138) — so calling it here would throw on
+ * the very transition that triggers it.
  */
 export async function closeAllVotesTx(
 	tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
@@ -390,6 +398,11 @@ export async function disqualifyCandidate(
 
 	try {
 		await db.transaction(async (tx) => {
+			// The read that holds (#1138): under a share lock on the meeting row, so
+			// a Complete or Cancel in flight is waited out and the ruling cannot land
+			// on a meeting that froze since the read above. The first statement,
+			// before the insert takes its own locks.
+			await assertVoteMeetingAccepts(tx, input.meetingId, "share");
 			await tx.insert(meetingCandidateDisqualifications).values({
 				meetingId: input.meetingId,
 				category: input.category,
@@ -449,6 +462,8 @@ export async function undoDisqualification(
 	);
 
 	await db.transaction(async (tx) => {
+		// The read that holds: see `disqualifyCandidate`.
+		await assertVoteMeetingAccepts(tx, input.meetingId, "share");
 		const removed = await tx
 			.delete(meetingCandidateDisqualifications)
 			.where(
@@ -1695,12 +1710,13 @@ function joinInTransaction(
 			.limit(1)
 			.for("update");
 		// #1057, read off the row the lock above returned, and before anything
-		// is looked up or minted. This path is public and writes a visitor's
-		// name, and cancelling does not close vote sessions (a restore must lose
+		// is looked up or minted. This path writes a visitor's name,
+		// and cancelling does not close vote sessions (a restore must lose
 		// nothing) — so without this a cancelled meeting with an open category
 		// kept minting `guests` rows for a ballot nobody can cast. A completed
 		// meeting is refused here too (#1138), for the same reason: it is a ballot
-		// nobody can cast, and a public path that mints a visitor's name for it.
+		// nobody can cast. (No production caller reaches this writer since #982
+		// made the ballot anonymous-first; it stays exported and tested.)
 		if (lockedMeeting) assertMeetingAccepts(lockedMeeting.status, "plan");
 		// #770, under the lock above and before any name is looked up or
 		// minted: a refused join must leave no `guests` row behind.
