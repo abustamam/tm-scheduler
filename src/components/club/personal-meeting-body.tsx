@@ -76,6 +76,7 @@ import {
 	CheckCircle2,
 	Circle,
 	Loader2,
+	Printer,
 	XCircle,
 } from "lucide-react";
 import { type ReactNode, useCallback, useState } from "react";
@@ -90,6 +91,7 @@ import {
 	DialogTitle,
 } from "#/components/ui/dialog";
 import { showWriteError } from "#/components/write-error-toast";
+import { evaluatorFormBrief } from "#/lib/evaluator-form";
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
 import { listRoles } from "#/lib/list-roles";
 import {
@@ -445,6 +447,10 @@ export function PersonalMeetingBody({
 						// The guide text for this role (#933), AFTER the duties: the
 						// duties are what the member can act on, the guide is reading.
 						const guideSource = findRoleGuideSource(roleGuides, role);
+						// An Evaluator with a speaker set (#1163): print rows in place
+						// of the confirm prompt. Null for every other role and for an
+						// unpaired or speaker-less evaluator, which keep the prompt.
+						const evaluatorBrief = evaluatorFormBrief(role.evaluates ?? null);
 						const sheet = roleSheetForKey(role.roleKey);
 						return (
 							<div
@@ -510,6 +516,29 @@ export function PersonalMeetingBody({
 												</li>
 											);
 										})
+									) : evaluatorBrief ? (
+										// External links with no checkbox: "printed" is not something
+										// the app can know, so nothing here can be ticked or go stale.
+										evaluatorBrief.resources.map((resource) => (
+											<li key={resource.key}>
+												<a
+													href={resource.url}
+													target="_blank"
+													rel="noopener noreferrer"
+													className={DUTY_ROW}
+												>
+													<Printer
+														aria-hidden
+														className="size-4 shrink-0 text-muted-foreground"
+													/>
+													<span>
+														{evaluatorBrief.isGenericFallback
+															? `Print an evaluation form (ask ${evaluatorBrief.speaker} which project they're doing)`
+															: `Print ${evaluatorBrief.speaker}'s evaluation form${resource.part ? ` (${resource.part})` : ""}`}
+													</span>
+												</a>
+											</li>
+										))
 									) : (
 										// A role that owns nothing recordable gets the prompt, not an
 										// always-unticked box — see ROLE_CONFIRM_PROMPT's docblock.

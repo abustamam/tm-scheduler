@@ -28,6 +28,7 @@ import {
 	type PanelRowRole,
 	type PlanStatus,
 } from "#/lib/attendance-panel";
+import type { EvaluatorFormBrief } from "#/lib/evaluator-form";
 import { type PersonalNudgeBase, personalNudgeUrl } from "#/lib/nudge";
 import type { RoleDuty } from "#/lib/role-duties";
 import { buildRollPanel, type RollRow } from "#/lib/roll-panel";
@@ -37,6 +38,10 @@ import type { AttendanceStatus, MinutesGuestRow } from "#/server/minutes-logic";
 /** One shared empty map for the duty prop's default (#667), so a panel render
  *  with no duties wired does not mint a new object every pass. */
 const NO_DUTIES_BY_MEMBER: ReadonlyMap<string, readonly RoleDuty[]> = new Map();
+
+/** Same, for the evaluator brief prop (#1163). */
+const NO_EVALUATING_BY_MEMBER: ReadonlyMap<string, EvaluatorFormBrief> =
+	new Map();
 
 /** Chip copy. "No answer" is the ABSENCE of a row, so choosing it clears. */
 const RUNG_LABELS: Record<PlanStatus, string> = {
@@ -284,6 +289,7 @@ function AttendanceRow({
 	meetingDate,
 	shareUrl,
 	duties,
+	evaluating,
 	personalNudgeBase,
 	linkIdentity,
 	canClearRung,
@@ -300,6 +306,10 @@ function AttendanceRow({
 	 *  also every row that sends the role-less `attendance` draft below, so the
 	 *  two cannot come apart. */
 	duties?: readonly RoleDuty[];
+	/** The speaker this member's FIRST slot evaluates and their form (#1163).
+	 *  Undefined unless that first slot is a paired evaluator, so the draft
+	 *  never names one role and describes another. */
+	evaluating?: EvaluatorFormBrief;
 	/** Where a role draft's link points (#667) — `?as=` is appended per row. */
 	personalNudgeBase?: PersonalNudgeBase | null;
 	/** #727 — see the panel's `canViewMemberDetail` prop. */
@@ -351,6 +361,7 @@ function AttendanceRow({
 					// hoisting either out of this ternary is how a role-less draft
 					// grows a clause about somebody else's job.
 					duties,
+					evaluating,
 					personalUrl: personalNudgeBase
 						? personalNudgeUrl(personalNudgeBase, m.id)
 						: null,
@@ -888,6 +899,7 @@ export function MeetingAttendancePanel({
 	meetingDate,
 	shareUrl,
 	dutiesByMemberId = NO_DUTIES_BY_MEMBER,
+	evaluatingByMemberId = NO_EVALUATING_BY_MEMBER,
 	personalNudgeBase = null,
 	locked,
 	phaseCompleted = false,
@@ -952,6 +964,9 @@ export function MeetingAttendancePanel({
 	 * keep drafting exactly what they drafted before.
 	 */
 	dutiesByMemberId?: ReadonlyMap<string, readonly RoleDuty[]>;
+	/** The evaluator brief per member (#1163), from `evaluatingByMember`. The
+	 *  same first-slot-wins rule as `dutiesByMemberId`. Defaults to empty. */
+	evaluatingByMemberId?: ReadonlyMap<string, EvaluatorFormBrief>;
 	/** Where a role draft's link points (#667) — the member's own meeting page.
 	 *  Absent leaves every draft on `shareUrl`, which is what it was. */
 	personalNudgeBase?: PersonalNudgeBase | null;
@@ -1368,6 +1383,7 @@ export function MeetingAttendancePanel({
 										meetingDate={meetingDate}
 										shareUrl={shareUrl}
 										duties={dutiesByMemberId.get(m.id)}
+										evaluating={evaluatingByMemberId.get(m.id)}
 										personalNudgeBase={personalNudgeBase}
 										linkIdentity={canViewMemberDetail}
 										canClearRung={canClearRung}

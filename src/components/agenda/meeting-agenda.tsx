@@ -40,10 +40,12 @@ import {
 import { showWriteError } from "#/components/write-error-toast";
 import {
 	buildRoleCounts,
+	resolveEvaluatorLinks,
 	slotAccessibleLabel,
 	slotLabel,
 	summarizeAgenda,
 } from "#/lib/agenda";
+import { evaluatorFormBrief } from "#/lib/evaluator-form";
 import { isMeetingCancelled } from "#/lib/meeting-cancellation-notice";
 import { isMeetingLocked } from "#/lib/meeting-lifecycle";
 import type { MeetingViewer } from "#/lib/meeting-viewer";
@@ -296,6 +298,12 @@ export function MeetingAgenda({
 
 	// Number repeated roles ("Speaker 1", "Speaker 2", …).
 	const roleCounts = buildRoleCounts(slots);
+	// Re-resolve the evaluator pairings HERE (#1163), over the rows the client
+	// holds: `slot.evaluates` is resolved server-side before the holder's
+	// preferred name is attached, so it cannot greet the speaker by it.
+	const evaluatesBySlotId = new Map(
+		resolveEvaluatorLinks(slots).map((s) => [s.id, s.evaluates]),
+	);
 	const summary = summarizeAgenda(slots);
 	// "Suggest fills" (#58): managers only — `roleRecency` and the full roster are
 	// manager-only payloads, so a TMOD's `canAssign` alone is not enough — and
@@ -825,6 +833,9 @@ export function MeetingAgenda({
 														preferredContact={slot.holderPreferredContact}
 														roleName={slot.roleName}
 														duties={outstandingDutiesForSlot(slot, meeting)}
+														evaluating={evaluatorFormBrief(
+															evaluatesBySlotId.get(slot.id) ?? null,
+														)}
 														meetingDate={meetingDate}
 														shareUrl={shareUrl}
 														// The holder's own page when they are a MEMBER. A
@@ -899,6 +910,9 @@ export function MeetingAgenda({
 													<NudgeRecruitPicker
 														roleName={slot.roleName}
 														duties={outstandingDutiesForSlot(slot, meeting)}
+														evaluating={evaluatorFormBrief(
+															evaluatesBySlotId.get(slot.id) ?? null,
+														)}
 														meetingDate={meetingDate}
 														shareUrl={shareUrl}
 														personalNudgeBase={personalNudgeBase}

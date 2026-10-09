@@ -432,7 +432,9 @@ type EvaluatorRow = {
 	id: string;
 	evaluatesSlotId: string | null;
 	assigneeName: string | null;
+	holderPreferredName?: string | null;
 	speechTitle: string | null;
+	projectName?: string | null;
 };
 
 /** Attach `evaluates` (the speaker slot this row evaluates) by id lookup. */
@@ -442,7 +444,9 @@ export function resolveEvaluatorLinks<T extends EvaluatorRow>(
 	evaluates: {
 		slotId: string;
 		speakerName: string | null;
+		speakerPreferredName: string | null;
 		speechTitle: string | null;
+		projectName: string | null;
 	} | null;
 })[] {
 	const bySlotId = new Map(rows.map((r) => [r.id, r]));
@@ -456,7 +460,9 @@ export function resolveEvaluatorLinks<T extends EvaluatorRow>(
 				? {
 						slotId: target.id,
 						speakerName: target.assigneeName,
+						speakerPreferredName: target.holderPreferredName ?? null,
 						speechTitle: target.speechTitle,
+						projectName: target.projectName ?? null,
 					}
 				: null,
 		};

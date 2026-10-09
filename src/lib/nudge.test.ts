@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildPanelRoleMap } from "#/lib/attendance-panel";
+import { evaluatorFormBrief } from "#/lib/evaluator-form";
 import {
 	GRAMMARIAN_ROLE_KEY,
 	TIMER_ROLE_KEY,
@@ -1221,5 +1222,93 @@ describe("guest confirm appends the role's guide card (#933)", () => {
 		const r = buildNudge({ ...base, mode: "recruit", guideUrl: guide });
 		expect(r.message).not.toContain("roles-guide");
 		expect(r.message.endsWith(base.shareUrl)).toBe(true);
+	});
+});
+
+describe("buildNudge: Evaluator with a speaker set (#1163)", () => {
+	const evalBase = {
+		...base,
+		roleName: "Evaluator",
+		email: "j@x.io",
+	};
+	const known = evaluatorFormBrief({
+		speakerName: "Priyanka Rao",
+		speakerPreferredName: "Priya",
+		projectName: "Ice Breaker",
+	});
+	const generic = evaluatorFormBrief({
+		speakerName: "Priyanka Rao",
+		projectName: "TBA",
+	});
+	const iceBreakerUrl =
+		"https://ccdn.toastmasters.org/medias/files/department-documents/education-documents/evaluation-resources/english/8101e-evaluation-resource.pdf";
+	const genericUrl =
+		"https://content.toastmasters.org/image/upload/8053-generic-evaluation-resource.pdf";
+
+	it("confirm links the speaker's form", () => {
+		expect(
+			buildNudge({ ...evalBase, mode: "confirm", evaluating: known }).message,
+		).toBe(
+			`Hi Jane, just confirming you're evaluating Priya's speech at our Thu, Jul 23 meeting. Their evaluation form is here: ${iceBreakerUrl}. Please print it and bring it. Details: https://gavelup.app/club/mcf/meeting/abc`,
+		);
+	});
+
+	it("confirm with an unknown project links the generic form and says to ask", () => {
+		expect(
+			buildNudge({ ...evalBase, mode: "confirm", evaluating: generic }).message,
+		).toBe(
+			`Hi Jane, just confirming you're evaluating Priyanka's speech at our Thu, Jul 23 meeting. Please print an evaluation form and bring it: ${genericUrl} (ask Priyanka which project they're doing). Details: https://gavelup.app/club/mcf/meeting/abc`,
+		);
+	});
+
+	it("recruit asks and carries no PDF, for a known or generic project", () => {
+		for (const [evaluating, who] of [
+			[known, "Priya"],
+			[generic, "Priyanka"],
+		] as const) {
+			const m = buildNudge({
+				...evalBase,
+				mode: "recruit",
+				evaluating,
+			}).message;
+			expect(m).toBe(
+				`Hi Jane, would you be open to evaluating ${who}'s speech at our Thu, Jul 23 meeting? You'd need to print their evaluation form and bring it. Info here: https://gavelup.app/club/mcf/meeting/abc`,
+			);
+			expect(m).not.toContain("toastmasters.org");
+		}
+	});
+
+	it("uses the personal link, and a guest's guide link follows Details unchanged", () => {
+		const m = buildNudge({
+			...evalBase,
+			mode: "confirm",
+			evaluating: known,
+			guideUrl: "https://gavelup.app/roles#evaluator",
+		}).message;
+		expect(m).toMatch(
+			/Details: https:\/\/gavelup\.app\/club\/mcf\/meeting\/abc Your role guide: https:\/\/gavelup\.app\/roles#evaluator$/,
+		);
+		const p = buildNudge({
+			...evalBase,
+			mode: "confirm",
+			evaluating: known,
+			personalUrl: "https://gavelup.app/me?as=1",
+		}).message;
+		expect(p.endsWith("Details: https://gavelup.app/me?as=1")).toBe(true);
+	});
+
+	it("an unpaired evaluator's drafts are byte-identical to today's", () => {
+		for (const evaluating of [undefined, null, evaluatorFormBrief(null)]) {
+			expect(
+				buildNudge({ ...evalBase, mode: "confirm", evaluating }).message,
+			).toBe(
+				"Hi Jane, just confirming you're our Evaluator for the Thu, Jul 23 meeting. Details: https://gavelup.app/club/mcf/meeting/abc",
+			);
+			expect(
+				buildNudge({ ...evalBase, mode: "recruit", evaluating }).message,
+			).toBe(
+				"Hi Jane, would you be open to taking Evaluator at our Thu, Jul 23 meeting? Info here: https://gavelup.app/club/mcf/meeting/abc",
+			);
+		}
 	});
 });

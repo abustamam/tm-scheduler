@@ -14,6 +14,7 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "#/components/ui/popover";
+import type { EvaluatorFormBrief } from "#/lib/evaluator-form";
 import { type PersonalNudgeBase, personalNudgeUrl } from "#/lib/nudge";
 import type { ContactMethod } from "#/lib/preferred-contact";
 import type { RoleDuty } from "#/lib/role-duties";
@@ -76,6 +77,7 @@ export function buildRecruitTargets(
 export function NudgeRecruitPicker({
 	roleName,
 	duties,
+	evaluating,
 	meetingDate,
 	shareUrl,
 	personalNudgeBase,
@@ -90,6 +92,9 @@ export function NudgeRecruitPicker({
 	 *  so the only completions that can suppress a clause are the meeting-wide
 	 *  ones the caller already resolved. */
 	duties?: readonly RoleDuty[];
+	/** The speaker an open Evaluator slot evaluates and their form (#1163), from
+	 *  `evaluatorFormBrief`. Threaded to the draft; null when no speaker is set. */
+	evaluating?: EvaluatorFormBrief | null;
 	meetingDate: string;
 	shareUrl: string;
 	/** Where the draft's personal link points (#667). The `?as=` seed is built
@@ -144,6 +149,7 @@ export function NudgeRecruitPicker({
 							preferredContact={livePicked.preferredContact}
 							roleName={roleName}
 							duties={duties}
+							evaluating={evaluating}
 							meetingDate={meetingDate}
 							shareUrl={shareUrl}
 							personalUrl={
