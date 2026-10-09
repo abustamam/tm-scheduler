@@ -49,6 +49,7 @@ import {
 	UNREADABLE_ENTRIES_MESSAGE,
 } from "#/server/guest-book-pending-schemas";
 import { guestBookPlanHash, plan, planSummary } from "#/server/guest-book-plan";
+import { assertGuestBookMeetingRecordable } from "#/server/guest-book-recordable";
 import { McpError } from "#/server/mcp/errors";
 import { applyPendingPlanLocked } from "#/server/mcp-pending-apply";
 
@@ -148,6 +149,14 @@ export async function applyGuestBookPlan(
 					},
 				);
 			}
+
+			// The meeting's own status, as the `record` write class reads it (#1137):
+			// a cancelled meeting takes no page. Inside the lock and BEFORE the hash,
+			// because the hash covers the plan and not the meeting's status, so a
+			// meeting cancelled since the page rendered would otherwise pass it and
+			// be written to. Refused before any insert, so the transaction rolls back
+			// with nothing in it.
+			await assertGuestBookMeetingRecordable(tx, fresh.meeting.meetingId);
 
 			const freshHash = guestBookPlanHash({
 				clubId: input.club.clubId,

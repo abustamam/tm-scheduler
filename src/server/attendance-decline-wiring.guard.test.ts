@@ -34,6 +34,16 @@ const SRC = readSource(FILE);
 /** Verbatim — for "must be ABSENT" only. */
 const RAW = readFileSync(FILE, "utf8");
 
+/**
+ * The meeting-lock call `setPlannedAttendance` must make before the decline
+ * branch: the per-status helper, or the write policy asked for the `plan` class
+ * (#1137), which refuses a completed meeting. `"record"` is deliberately NOT
+ * recognised: that class ACCEPTS completed, so a bare `assertMeetingAccepts(`
+ * prefix would let a locked meeting lose its programme.
+ */
+const LOCK_CHECK =
+	/assertMeetingNotLocked\(meeting\.status\)|assertMeetingAccepts\(\s*meeting\.status,\s*"plan"/;
+
 /** One `export const <name> = createServerFn…` declaration, so a per-handler
  *  assertion cannot be satisfied by its neighbour's correct code. */
 function handlerBody(source: string, name: string): string {
@@ -100,12 +110,18 @@ describe("setPlannedAttendance declines through the release seam (#663)", () => 
 		const body = handlerBody(SRC, "setPlannedAttendance");
 		const branch = body.indexOf('if (data.status === "not_coming")');
 		expect(branch).toBeGreaterThan(-1);
-		for (const earlier of [
-			"assertClubNotArchived(meeting.clubId)",
-			"assertMeetingNotLocked(meeting.status)",
-			"requireMemberInClub(data.memberId, meeting.clubId)",
-		]) {
-			const at = body.indexOf(earlier);
+		const earlierChecks: [string, number][] = [
+			[
+				"assertClubNotArchived(meeting.clubId)",
+				body.indexOf("assertClubNotArchived(meeting.clubId)"),
+			],
+			["the meeting-lock call", body.search(LOCK_CHECK)],
+			[
+				"requireMemberInClub(data.memberId, meeting.clubId)",
+				body.indexOf("requireMemberInClub(data.memberId, meeting.clubId)"),
+			],
+		];
+		for (const [earlier, at] of earlierChecks) {
 			expect(
 				at,
 				`${earlier} must run before the decline branch`,

@@ -66,6 +66,7 @@ import {
 	plan,
 	planSummary,
 } from "#/server/guest-book-plan";
+import { assertGuestBookMeetingRecordable } from "#/server/guest-book-recordable";
 import { type McpBlockingCode, McpError } from "#/server/mcp/errors";
 import {
 	PENDING_ARCHIVED,
@@ -303,6 +304,15 @@ async function renderPendingPlan(
 			{ meetingDate, ...pendingPlanArgs(entries) },
 			countryCode,
 		);
+		// The date named one meeting; say so if that meeting takes no page (a
+		// cancelled one, #1137). Inside the `try`, so the refusal becomes a page
+		// state like the planner's own.
+		if (planned.plan) {
+			await assertGuestBookMeetingRecordable(
+				db,
+				planned.plan.meeting.meetingId,
+			);
+		}
 	} catch (err) {
 		// `plan()` throws `McpError` for a meeting that has not happened yet, and
 		// this page re-plans through the same function — so the error has to become
@@ -312,9 +322,11 @@ async function renderPendingPlan(
 		//
 		// There is deliberately no `ARCHIVED` arm here. `resolvePending` calls
 		// the archive gate before `plan()` is ever reached, so an archived club
-		// has already rendered `ARCHIVED` and cannot arrive; `NOT_RECORDABLE` is
-		// in fact `plan()`'s only throw today. An arm no caller can produce is
-		// the same drift `blocking-codes.guard.test.ts` was built to remove.
+		// has already rendered `ARCHIVED` and cannot arrive. The throws that DO
+		// arrive are `plan()`'s `NOT_RECORDABLE` and the status gate's `LOCKED`
+		// (a cancelled meeting) and `BLOCKED` (the meeting is gone). An arm no
+		// caller can produce is the same drift `blocking-codes.guard.test.ts` was
+		// built to remove.
 		if (err instanceof McpError) {
 			return {
 				...header,

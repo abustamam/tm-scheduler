@@ -48,6 +48,10 @@ import {
 	UNLINK_NOT_LINKED_MESSAGE,
 } from "#/lib/guest-convert";
 import { isInvitableStage, NOT_INVITABLE_MESSAGE } from "#/lib/guest-invite";
+import {
+	acceptedStatuses,
+	assertMeetingAccepts,
+} from "#/lib/meeting-lifecycle";
 import type { OfficerPosition } from "#/lib/officers";
 import { namesAgree } from "#/lib/person-name";
 import {
@@ -451,7 +455,10 @@ export async function resolveCurrentMeeting(
 		.where(
 			and(
 				eq(meetings.clubId, clubId),
-				ne(meetings.status, "cancelled"),
+				// The meetings a visit may be RECORDED against: the `record` write
+				// class's accepted statuses (#1137), so which meeting this picks and
+				// which one `captureInTransaction` then refuses are one policy.
+				inArray(meetings.status, acceptedStatuses("record")),
 				gte(meetings.scheduledAt, horizon),
 			),
 		)
@@ -681,6 +688,25 @@ function captureInTransaction(
 		//    for a returning guest yields a new row.
 		let attendanceRecorded = false;
 		if (meetingId) {
+			// A visit is the RECORD of who was in the room, so this is the `record`
+			// write class (#1137): a meeting the class refuses takes no visit, and a
+			// refusal here rolls the transaction back, guest row and all. After the
+			// archive gate above, so takedown still outranks the meeting's own state.
+			//
+			// `resolveCurrentMeeting` already skips such a meeting, so this is
+			// reachable only when the meeting is cancelled between that read, which
+			// runs outside the transaction, and this one, which runs behind the club
+			// write lock a busy club can queue on. It is a read, not a row lock: the
+			// window left is the statements between it and the insert, the one #1057
+			// accepted for planned attendance. A meeting that is gone is refused too,
+			// rather than left to the foreign key's driver error.
+			const [target] = await tx
+				.select({ status: meetings.status })
+				.from(meetings)
+				.where(eq(meetings.id, meetingId))
+				.limit(1);
+			if (!target) throw new Error("Meeting not found.");
+			assertMeetingAccepts(target.status, "record");
 			const inserted = await tx
 				.insert(meetingAttendance)
 				.values({ meetingId, guestId, status: "present" })
@@ -1357,9 +1383,12 @@ export async function applyRecordGuestInvite(
 		)
 		.limit(1);
 	if (!meeting) throw new Error("Meeting not found in this club.");
-	if (meeting.status === "cancelled") {
-		throw new Error("That meeting is cancelled.");
-	}
+	// The `record` write class (#1137): an invite records an officer's act
+	// against the meeting, and a cancelled one takes none. The sentence stays this
+	// writer's own, which the VP Membership card shows as written.
+	assertMeetingAccepts(meeting.status, "record", {
+		messages: { cancelled: "That meeting is cancelled." },
+	});
 	if (meeting.scheduledAt.getTime() < Date.now()) {
 		throw new Error("That meeting has already started.");
 	}

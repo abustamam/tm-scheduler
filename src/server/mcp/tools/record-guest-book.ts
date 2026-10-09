@@ -66,6 +66,7 @@ import {
 	toPublicBlocking,
 	toPublicPlan,
 } from "#/server/guest-book-plan";
+import { assertGuestBookMeetingRecordable } from "#/server/guest-book-recordable";
 import { authorizeToken } from "../authz-logic";
 import { McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
@@ -187,6 +188,10 @@ export const recordGuestBookTool: McpToolDefinition = {
 			args,
 			countryCode,
 		);
+		// A date that names a CANCELLED meeting is the first kind: the page cannot
+		// be recorded against it (#1137), so it throws `LOCKED` with the sentence
+		// and stores nothing, rather than minting a link that opens on an error.
+		if (p) await assertGuestBookMeetingRecordable(db, p.meeting.meetingId);
 
 		const entries = toPendingEntries(args.entries, args.resolve);
 		const createdAt = new Date();

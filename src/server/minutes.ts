@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { ATTENDANCE_MODES } from "#/lib/attendance-mode";
-import { assertMeetingNotCancelled } from "#/lib/meeting-cancellation-notice";
+import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { MEETING_UPDATE_FIELDS } from "#/lib/meeting-limits";
 import { isReadableClub } from "./club-readable-logic";
 import {
@@ -109,19 +109,28 @@ export const getMinutes = createServerFn({ method: "GET" })
 	});
 
 /**
- * Refuse a minutes or roll write on a cancelled meeting (#1085). A cancelled
- * meeting is hidden from every member and never happened, so it must not
- * quietly gain a roll, guests, Table Topics speakers or awards from a stale
- * tab, an offline replay or a direct call. AFTER each handler's caller gate, so
- * an outsider is refused for who they are before learning the meeting's state,
- * and BEFORE the date rule, so an officer is told the reason that will not go
- * away by waiting. A read, not a lock: the window a cancel can commit inside is
- * the one #1057 accepted for planned attendance.
+ * Refuse a minutes or roll write the meeting's status refuses, by write class
+ * (#1137): every writer below WRITES THE MEETING UP, so each is the `record`
+ * class, which refuses a cancelled meeting and accepts a completed one (that is
+ * when it is written up). Only `MEETING_WRITE_POLICY` says which statuses those
+ * are, so a new status is one edit there and not an audit of these eight.
+ *
+ * The cancelled case is #1085. A cancelled meeting is hidden from every member
+ * and never happened, so it must not quietly gain a roll, guests, Table Topics
+ * speakers or awards from a stale tab, an offline replay or a direct call.
+ * AFTER each handler's caller gate, so an outsider is refused for who they are
+ * before learning the meeting's state, and BEFORE the date rule, so an officer
+ * is told the reason that will not go away by waiting. A read, not a lock: the
+ * window a cancel can commit inside is the one #1057 accepted for planned
+ * attendance.
+ *
+ * The name keeps its history, because the class refuses cancelled and nothing
+ * else today and #1085's tests and comments know the wrapper by it.
  */
 async function assertMinutesMeetingNotCancelled(
 	meetingId: string,
 ): Promise<void> {
-	assertMeetingNotCancelled(await getMeetingStatus(meetingId));
+	assertMeetingAccepts(await getMeetingStatus(meetingId), "record");
 }
 
 /** Resolve the meeting's club and gate the caller to the club admin role. */

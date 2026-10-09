@@ -62,6 +62,16 @@ function handlerBody(source: string, name: string): string {
 
 const HANDLERS = ["setPlannedAttendance", "clearPlannedAttendance"];
 
+/**
+ * The meeting-lock call a handler must make: the per-status helper, or the write
+ * policy asked for the `plan` class (#1137), which refuses a completed meeting.
+ * `"record"` is deliberately NOT recognised: that class ACCEPTS completed, so a
+ * handler that asked it would pass a bare `assertMeetingAccepts(` prefix check
+ * and let a locked meeting through.
+ */
+const LOCK_CHECK =
+	/assertMeetingNotLocked\(meeting\.status\)|assertMeetingAccepts\(\s*meeting\.status,\s*"plan"/;
+
 describe("attendance-plan authz (D6)", () => {
 	it("gates the officer path on requireClubRole(admin)", () => {
 		// Whitespace-tolerant: the formatter wraps this call across lines.
@@ -93,9 +103,7 @@ describe("attendance-plan authz (D6)", () => {
 		});
 
 		it(`${fn} asserts the meeting is not locked`, () => {
-			expect(handlerBody(SRC, fn)).toContain(
-				"assertMeetingNotLocked(meeting.status)",
-			);
+			expect(handlerBody(SRC, fn)).toMatch(LOCK_CHECK);
 		});
 
 		it(`${fn} resolves the actor through the shared self-only gate`, () => {
@@ -111,13 +119,14 @@ describe("attendance-plan authz (D6)", () => {
 			const body = handlerBody(SRC, fn);
 			const archive = body.indexOf("assertClubNotArchived(meeting.clubId)");
 			expect(archive).toBeGreaterThan(-1);
-			for (const later of [
-				"assertMeetingNotLocked(",
-				"requireMemberInClub(",
-				"resolveActor(",
-			]) {
+			const positions: [string, number][] = [
+				["the meeting-lock call", body.search(LOCK_CHECK)],
+				["requireMemberInClub(", body.indexOf("requireMemberInClub(")],
+				["resolveActor(", body.indexOf("resolveActor(")],
+			];
+			for (const [later, at] of positions) {
 				expect(
-					body.indexOf(later),
+					at,
 					`${later} must not run before the archive gate`,
 				).toBeGreaterThan(archive);
 			}

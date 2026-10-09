@@ -6,7 +6,7 @@ import {
 	meetings,
 	members,
 } from "#/db/schema";
-import { assertMeetingNotCancelled } from "#/lib/meeting-cancellation-notice";
+import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
 import { logActivity } from "./activity";
 import { takeAdvisoryLockWithin } from "./club-write-lock";
@@ -240,10 +240,18 @@ export type SetPlanStatusArgs = SetPlanStatusCommon &
 	);
 
 /**
- * Refuse a plan write on a cancelled meeting (#1057), with the one sentence
- * every member-facing write says. Here in the seam rather than in its dozen
+ * Refuse a plan write the meeting's status refuses, by write class (#1137):
+ * who is EXPECTED at a meeting is what is intended for one that has not
+ * happened, so this is the `plan` class, which refuses a cancelled meeting
+ * (#1057) and a completed one. Here in the seam rather than in its dozen
  * callers, for the reason the seam exists: one place where "may this row
  * change" is true or false.
+ *
+ * The completed half used to live only in the callers, each of which calls
+ * `assertMeetingNotLocked` ahead of its own checks so that a locked meeting is
+ * refused before a subject or a session is looked at. They still do, and this
+ * says the same sentence, so adding it here changes no outcome. What it adds is
+ * a floor under a caller that forgets.
  *
  * Read through the CALLER's handle, so a writer inside a transaction compares
  * against its own view, and as its own statement, so a cancel committed
@@ -256,7 +264,7 @@ export type SetPlanStatusArgs = SetPlanStatusCommon &
  * reader of a meeting that no longer happens. A meeting that does not exist is
  * left to the FK: this gate answers one question only.
  */
-async function assertPlanMeetingNotCancelled(
+async function assertPlanMeetingAccepts(
 	database: DbOrTx,
 	meetingId: string,
 ): Promise<void> {
@@ -265,7 +273,7 @@ async function assertPlanMeetingNotCancelled(
 		.from(meetings)
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
-	if (row) assertMeetingNotCancelled(row.status);
+	if (row) assertMeetingAccepts(row.status, "plan");
 }
 
 /**
@@ -300,7 +308,7 @@ export async function setPlanStatus(
 	if (!args.onlyIfAbsent && args.proof === "asserted" && !args.demoteFrom) {
 		throw new Error(ASSERTED_OVERWRITE_MESSAGE);
 	}
-	await assertPlanMeetingNotCancelled(database, args.meetingId);
+	await assertPlanMeetingAccepts(database, args.meetingId);
 	const values = {
 		memberId: args.memberId,
 		meetingId: args.meetingId,
@@ -423,7 +431,7 @@ export async function clearPlanStatus(
 		onlyFrom: readonly AttendancePlanStatus[];
 	},
 ): Promise<{ ok: true; cleared: boolean }> {
-	await assertPlanMeetingNotCancelled(database, args.meetingId);
+	await assertPlanMeetingAccepts(database, args.meetingId);
 	const removed = await database
 		.delete(meetingAttendancePlan)
 		.where(
