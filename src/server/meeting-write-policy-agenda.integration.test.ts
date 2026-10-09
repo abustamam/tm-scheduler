@@ -15,16 +15,20 @@
  * Run with:
  *   bunx vitest run src/server/meeting-write-policy-agenda.integration.test.ts
  */
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	meetings,
 	meetingTemplateBeats,
 	meetingTemplateRoles,
 	meetingTemplates,
+	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
-import { MEETING_LOCKED_MESSAGE } from "#/lib/meeting-lifecycle";
+import {
+	assertMeetingAccepts,
+	MEETING_LOCKED_MESSAGE,
+} from "#/lib/meeting-lifecycle";
 import {
 	cleanup,
 	hasTestDb,
@@ -37,6 +41,7 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const {
 	AGENDA_CANCELLED_MESSAGE,
+	AGENDA_PLAN_WRITE_OPTIONS,
 	addAgendaRole,
 	addAgendaRow,
 	agendaEditable,
@@ -86,6 +91,26 @@ describe("agendaEditable follows the plan write class", () => {
 		expect(agendaEditable("completed")).toBe(false);
 	});
 
+	it("agrees with the write side for every status, because both read the same options", () => {
+		// `agendaEditable` answers a boolean and the writers throw a sentence, so
+		// they are two code paths over one class and one options object. This is
+		// what notices if one of them stops reading it.
+		for (const status of ["scheduled", "cancelled", "completed"]) {
+			let writeAccepts = true;
+			try {
+				assertMeetingAccepts(status, "plan", AGENDA_PLAN_WRITE_OPTIONS);
+			} catch {
+				writeAccepts = false;
+			}
+			expect(agendaEditable(status), status).toBe(writeAccepts);
+		}
+	});
+
+	it("the shared options are frozen, so one surface cannot change another's answer", () => {
+		expect(Object.isFrozen(AGENDA_PLAN_WRITE_OPTIONS)).toBe(true);
+		expect(Object.isFrozen(AGENDA_PLAN_WRITE_OPTIONS.messages)).toBe(true);
+	});
+
 	it("fails closed on a status the policy has never heard of", () => {
 		// It used to say `true` for anything that was not exactly the two names
 		// it knew, which is how a new freezing status would have read as open.
@@ -95,17 +120,14 @@ describe("agendaEditable follows the plan write class", () => {
 
 describe.skipIf(!hasTestDb)("agenda writers refuse a frozen meeting", () => {
 	let club: SeededClub;
-	const madeTemplates: string[] = [];
 
 	beforeEach(async () => {
 		club = await seedClub();
 	});
 
 	afterEach(async () => {
+		// Every template here is club-owned, so the club's cascade removes them.
 		await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
-		for (const id of madeTemplates.splice(0)) {
-			await testDb.delete(meetingTemplates).where(eq(meetingTemplates.id, id));
-		}
 	});
 
 	/**
@@ -125,7 +147,6 @@ describe.skipIf(!hasTestDb)("agenda writers refuse a frozen meeting", () => {
 			})
 			.returning({ id: meetingTemplates.id });
 		if (!t) throw new Error("template insert failed");
-		madeTemplates.push(t.id);
 		await testDb.insert(meetingTemplateRoles).values({
 			templateId: t.id,
 			key: "chair",
@@ -169,7 +190,8 @@ describe.skipIf(!hasTestDb)("agenda writers refuse a frozen meeting", () => {
 	/**
 	 * Everything an agenda write could touch, for this club: the meeting's
 	 * pointer, every template row, every beat and role declaration under them,
-	 * and the meeting's role slots. A refused write must leave it deep-equal.
+	 * the meeting's role slots and the club's role bank. A refused write must
+	 * leave it deep-equal.
 	 */
 	async function stateOf() {
 		const [meeting] = await testDb
@@ -218,7 +240,20 @@ describe.skipIf(!hasTestDb)("agenda writers refuse a frozen meeting", () => {
 			.from(roleSlots)
 			.where(eq(roleSlots.meetingId, club.meetingId))
 			.orderBy(roleSlots.id);
-		return { pointer: meeting?.templateId, templates, beats, declared, slots };
+		// `addAgendaRole` mints a bank row when the club has none for the key.
+		const bank = await testDb
+			.select({ id: roleDefinitions.id, key: roleDefinitions.key })
+			.from(roleDefinitions)
+			.where(eq(roleDefinitions.clubId, club.clubId))
+			.orderBy(roleDefinitions.id);
+		return {
+			pointer: meeting?.templateId,
+			templates,
+			beats,
+			declared,
+			slots,
+			bank,
+		};
 	}
 
 	/**
@@ -273,9 +308,9 @@ describe.skipIf(!hasTestDb)("agenda writers refuse a frozen meeting", () => {
 					await freeze(status);
 					const before = await stateOf();
 
-					const call = writers()[writer];
-					if (!call) throw new Error(`no writer ${writer}`);
-					await expect(call(ids)).rejects.toThrow(new Error(message));
+					await expect(writers()[writer](ids)).rejects.toThrow(
+						new Error(message),
+					);
 
 					expect(await stateOf()).toEqual(before);
 				});
@@ -299,9 +334,8 @@ describe.skipIf(!hasTestDb)("agenda writers refuse a frozen meeting", () => {
 			const ids = await rowIds();
 			const before = await stateOf();
 
-			const call = writers()[writer];
-			if (!call) throw new Error(`no writer ${writer}`);
-			await expect(call(ids)).resolves.not.toThrow();
+			// A rejection fails the test here; what is asserted is the write itself.
+			await writers()[writer](ids);
 
 			expect(await stateOf()).not.toEqual(before);
 		});
@@ -343,6 +377,56 @@ describe.skipIf(!hasTestDb)("agenda writers refuse a frozen meeting", () => {
 		}
 	});
 
+	describe("materialiseForMeeting meets a meeting that vanished under it", () => {
+		/**
+		 * Wait until another connection is blocked BY the holder's transaction
+		 * (`pg_blocking_pids`, so a lock wait elsewhere in a parallel run does not
+		 * count), which is how this test knows the reader has reached
+		 * `materialiseForMeeting`'s `FOR UPDATE` and is queued behind it.
+		 */
+		async function waitForBlockedBy(holderPid: number) {
+			for (let i = 0; i < 200; i++) {
+				const { rows } = await testDb.execute<{ n: number }>(
+					sql`select count(*)::int as n from pg_stat_activity
+						where ${holderPid} = any(pg_blocking_pids(pid))`,
+				);
+				if ((rows[0]?.n ?? 0) > 0) return;
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+			throw new Error("the reader never blocked on the meeting row");
+		}
+
+		it("says so, and does not fall through to the foreign key", async () => {
+			// `loadAgendaDraft` reads the meeting, finds no copy, and goes to
+			// materialise one. A cancel-and-delete that wins the row lock in between
+			// leaves the locked re-read with no row; without its own check the code
+			// went on to INSERT a template for a meeting that is gone and surfaced
+			// the driver's `Failed query: insert into "meeting_templates"` (23503).
+			let outcome: Promise<unknown> | undefined;
+			await testDb.transaction(async (tx) => {
+				await tx
+					.select({ id: meetings.id })
+					.from(meetings)
+					.where(eq(meetings.id, club.meetingId))
+					.for("update");
+				const { rows } = await tx.execute<{ pid: number }>(
+					sql`select pg_backend_pid() as pid`,
+				);
+				const holderPid = rows[0]?.pid;
+				if (holderPid === undefined) throw new Error("no backend pid");
+				outcome = loadAgendaDraft(club.meetingId).then(
+					() => "resolved",
+					(err: unknown) => err,
+				);
+				await waitForBlockedBy(holderPid);
+				await tx.delete(meetings).where(eq(meetings.id, club.meetingId));
+			});
+			const err = await outcome;
+			expect(err).toBeInstanceOf(Error);
+			expect((err as Error).message).toBe("Meeting not found.");
+		});
+	});
+
 	describe("applyTemplateConversion", () => {
 		function convert() {
 			return applyTemplateConversion({
@@ -375,7 +459,9 @@ describe.skipIf(!hasTestDb)("agenda writers refuse a frozen meeting", () => {
 
 		it("still converts a scheduled meeting", async () => {
 			await giveAgenda(false);
-			await expect(convert()).resolves.toBeDefined();
+			const before = await stateOf();
+			await convert();
+			expect(await stateOf()).not.toEqual(before);
 		});
 	});
 
@@ -426,9 +512,11 @@ describe.skipIf(!hasTestDb)("agenda writers refuse a frozen meeting", () => {
 
 		it("saves from a scheduled meeting", async () => {
 			await giveAgenda(false);
+			const before = await clubTemplateCount();
 			await expect(save()).resolves.toMatchObject({
 				templateId: expect.any(String),
 			});
+			expect(await clubTemplateCount()).toBe(before + 1);
 		});
 	});
 });
