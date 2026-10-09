@@ -1,7 +1,26 @@
-import { LogOut, ShieldCheck, Users } from "lucide-react";
+import { LogOut, Network, ShieldCheck, Users } from "lucide-react";
 import { BrandMark } from "#/components/brand-mark";
 import { Button } from "#/components/ui/button";
+import { Toaster } from "#/components/ui/sonner";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
+
+/** The brand and the sign-out button, shared by both club-less frames. */
+function ScreenHeader({ onSignOut }: { onSignOut: () => void }) {
+	return (
+		<header className="flex items-center justify-between border-b border-[var(--line)] bg-[var(--surface)] px-5 py-4 sm:px-8">
+			<BrandMark />
+			<Button
+				variant="ghost"
+				size="sm"
+				className="font-semibold"
+				onClick={onSignOut}
+			>
+				<LogOut className="size-4" aria-hidden />
+				Sign out
+			</Button>
+		</header>
+	);
+}
 
 /**
  * The signed-in "you're not in a club yet" screen (#267). Shown by the authed
@@ -13,13 +32,16 @@ import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
  * hint to sign in with the email their club has on its roster.
  *
  * A club-less platform superadmin still gets an escape hatch to `/superadmin`
- * (a full-page link — this shell renders outside the workspace router chrome).
- * Presentational + router-context-free so it renders anywhere and stays testable.
+ * (a full-page link — this shell renders outside the workspace router chrome),
+ * and a club-less Area Director one "Go to Area C3" link per current term
+ * (#1119). Presentational + router-context-free so it renders anywhere and stays
+ * testable.
  */
 export function NoClubScreen({
 	email,
 	onSignOut,
 	isSuperadmin = false,
+	areas = [],
 	hasArchivedClub = false,
 	accountControls,
 }: {
@@ -27,6 +49,11 @@ export function NoClubScreen({
 	email: string;
 	onSignOut: () => void;
 	isSuperadmin?: boolean;
+	/**
+	 * The areas the user is the current Area Director of (#1119), each `label`
+	 * already the area as people say it ("C3"). One "Go to Area C3" button each.
+	 */
+	areas?: readonly { id: string; label: string }[];
 	/**
 	 * True when the user holds an active membership in a club that has been
 	 * soft-archived (#560). The default copy tells them their account "isn't linked
@@ -43,18 +70,7 @@ export function NoClubScreen({
 }) {
 	return (
 		<div className="flex min-h-svh w-full flex-col bg-[var(--foam)] font-sans text-[var(--sea-ink)]">
-			<header className="flex items-center justify-between border-b border-[var(--line)] bg-[var(--surface)] px-5 py-4 sm:px-8">
-				<BrandMark />
-				<Button
-					variant="ghost"
-					size="sm"
-					className="font-semibold"
-					onClick={onSignOut}
-				>
-					<LogOut className="size-4" aria-hidden />
-					Sign out
-				</Button>
-			</header>
+			<ScreenHeader onSignOut={onSignOut} />
 
 			<main className="flex flex-1 flex-col items-center justify-center gap-6 px-5 py-12">
 				<div className="w-full max-w-md rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-7 text-center shadow-[0_1px_0_var(--inset-glint)_inset,0_18px_44px_rgba(23,58,64,.10)] sm:p-9">
@@ -80,6 +96,14 @@ export function NoClubScreen({
 							    router-context-free (see above). */}
 							<a href="/request-access">Request access</a>
 						</Button>
+						{areas.map((area) => (
+							<Button key={area.id} asChild variant="outline" size="lg">
+								<a href={`/area/${area.id}`}>
+									<Network className="size-4" aria-hidden />
+									Go to Area {area.label}
+								</a>
+							</Button>
+						))}
 						{isSuperadmin ? (
 							<Button asChild variant="outline" size="lg">
 								<a href="/superadmin">
@@ -114,6 +138,34 @@ export function NoClubScreen({
 			<footer className="border-t border-[var(--line)] px-5 py-4 text-center text-[11px] leading-relaxed text-[var(--sea-ink-soft)] sm:px-8">
 				{TOASTMASTERS_DISCLAIMER}
 			</footer>
+		</div>
+	);
+}
+
+/**
+ * The minimal frame for a page a club-less person may still use (#1119): the
+ * brand and sign out above, the disclaimer below, the page between. For an Area
+ * Director with no club at `/area/<id>`, and a superadmin with no club at
+ * `/superadmin`. It carries no club nav, because there is no club to navigate
+ * in; the page brings its own links. The toaster is here because the console
+ * pages report their results through it and the workspace shell, which
+ * normally mounts it, is not rendered for this person.
+ */
+export function ClublessFrame({
+	onSignOut,
+	children,
+}: {
+	onSignOut: () => void;
+	children: React.ReactNode;
+}) {
+	return (
+		<div className="flex min-h-svh w-full flex-col bg-[var(--foam)] font-sans text-[var(--sea-ink)]">
+			<ScreenHeader onSignOut={onSignOut} />
+			<main className="min-w-0 flex-1">{children}</main>
+			<footer className="border-t border-[var(--line)] px-5 py-4 text-center text-[11px] leading-relaxed text-[var(--sea-ink-soft)] sm:px-8">
+				{TOASTMASTERS_DISCLAIMER}
+			</footer>
+			<Toaster position="top-center" />
 		</div>
 	);
 }

@@ -3,12 +3,14 @@ import {
 	Outlet,
 	redirect,
 	useRouter,
+	useRouterState,
 } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { AppShell, shellPropsFromContext } from "#/components/app-shell";
 import { ConnectedAppsSection } from "#/components/connected-apps-section";
-import { NoClubScreen } from "#/components/no-club-screen";
+import { ClublessFrame, NoClubScreen } from "#/components/no-club-screen";
 import { authClient } from "#/lib/auth-client";
+import { clublessMayOpen } from "#/lib/clubless-routes";
 import { getAuthContext } from "#/server/auth-context";
 import { endImpersonation } from "#/server/impersonation";
 
@@ -30,6 +32,7 @@ export const Route = createFileRoute("/_authed")({
 			isSuperadmin: ctx.isSuperadmin,
 			impersonating: ctx.impersonating,
 			archivedClubCount: ctx.archivedClubCount,
+			areas: ctx.areas,
 		};
 	},
 	component: WorkspaceLayout,
@@ -45,8 +48,10 @@ function WorkspaceLayout() {
 		isSuperadmin,
 		impersonating,
 		archivedClubCount,
+		areas,
 	} = Route.useRouteContext();
 	const router = useRouter();
+	const pathname = useRouterState({ select: (s) => s.location.pathname });
 
 	async function handleSignOut() {
 		await authClient.signOut();
@@ -68,11 +73,24 @@ function WorkspaceLayout() {
 	// No club (and not impersonating one) → the workspace nav dead-ends into empty
 	// pages, so show a purposeful "you're not in a club yet" screen instead (#267).
 	if (clubs.length === 0) {
+		// The exceptions (#1119): an Area Director's `/area/<id>` and a
+		// superadmin's `/superadmin` need no club, so they render in a minimal
+		// frame. The pages keep their own gates; this only picks the frame.
+		if (
+			clublessMayOpen(pathname, { hasAreas: areas.length > 0, isSuperadmin })
+		) {
+			return (
+				<ClublessFrame onSignOut={handleSignOut}>
+					<Outlet />
+				</ClublessFrame>
+			);
+		}
 		return (
 			<NoClubScreen
 				email={authUser.email}
 				onSignOut={handleSignOut}
 				isSuperadmin={isSuperadmin}
+				areas={areas}
 				hasArchivedClub={archivedClubCount > 0}
 				// A club-less person never reaches `/me`, so a grant they still
 				// hold would otherwise be undisconnectable (#851).
@@ -90,6 +108,7 @@ function WorkspaceLayout() {
 		officerPositions,
 		isSuperadmin,
 		impersonating,
+		areas,
 	});
 
 	return (

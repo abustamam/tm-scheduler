@@ -27,6 +27,7 @@ const DECLARATIONS = serverFnDeclarations(SOURCE);
 const EXPECTED_FNS = [
 	"listConsoleAreas",
 	"getConsoleArea",
+	"previewConsoleArea",
 	"createDistrict",
 	"createDivision",
 	"createArea",
@@ -61,7 +62,8 @@ function logicCallNames(source: string): string[] {
 		.filter((name) => !name.endsWith("Schema"));
 }
 
-const LOGIC_NAMES = logicCallNames(SOURCE);
+// `previewConsoleArea` runs #1117's loader, which is not an areas-logic fn.
+const LOGIC_NAMES = [...logicCallNames(SOURCE), "loadAreaHealth"];
 
 describe("areas.ts server fns are superadmin-only (#1116)", () => {
 	it("sweeps every declared fn, and the floor is the issue's table", () => {

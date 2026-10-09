@@ -2,6 +2,7 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, Link2, Loader2, Plus, Search, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
+import { AreaPreviewPanel } from "#/components/area/area-preview-panel";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -96,6 +97,7 @@ function AreaDetail() {
 
 			<ClubsPanel area={area} onChanged={refresh} />
 			<DirectorPanel area={area} onChanged={refresh} />
+			<AreaPreviewPanel areaId={area.id} />
 			<RelabelPanel area={area} onChanged={refresh} />
 		</PageContainer>
 	);

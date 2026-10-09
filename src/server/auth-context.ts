@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db } from "#/db";
 import { clubs, user as userTable } from "#/db/schema";
 import { ACTIVE_CLUB_COOKIE, resolveActiveClubId } from "#/lib/active-club";
+import { loadCurrentAreasForUser } from "./area-terms-logic";
 import {
 	countArchivedClubMemberships,
 	loadUserClubMemberships,
@@ -38,6 +39,7 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 				isSuperadmin: false,
 				impersonating: null,
 				archivedClubCount: 0,
+				areas: [] as { id: string; label: string }[],
 			};
 		}
 		// Platform superadmin flag (ADR-0016 / #183) — orthogonal to club role.
@@ -160,8 +162,15 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 		// Only when the switcher came back empty: tell "never on a roster" apart from
 		// "your club was taken down" (#560), without putting the archived club's name
 		// or number back on the payload. Costs nothing on the ordinary path.
-		const archivedClubCount =
-			myClubs.length === 0 ? await countArchivedClubMemberships(user.id) : 0;
+		//
+		// Beside it, the areas this user is the CURRENT Area Director of (#1119): the
+		// shell's nav entries, and the club-less screen's way in. Through #1116's own
+		// loader, the guard's predicate, so what the nav offers and what
+		// `requireAreaDirector` accepts cannot disagree. Everyone else gets `[]`.
+		const [archivedClubCount, areas] = await Promise.all([
+			myClubs.length === 0 ? countArchivedClubMemberships(user.id) : 0,
+			loadCurrentAreasForUser(user.id),
+		]);
 
 		return {
 			// `personName ?? user.name` — the roster name wins, and the Better-Auth
@@ -177,6 +186,7 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 			isSuperadmin,
 			impersonating,
 			archivedClubCount,
+			areas,
 		};
 	},
 );

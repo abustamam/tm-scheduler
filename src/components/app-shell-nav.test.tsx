@@ -26,16 +26,23 @@ vi.mock("#/db", () => ({ db: {} }));
 vi.mock("@tanstack/react-router", () => ({
 	Link: ({
 		to,
+		params,
 		children,
 		className,
 		"aria-current": ariaCurrent,
 	}: {
 		to: string;
+		params?: Record<string, string>;
 		children: ReactNode;
 		className?: string;
 		"aria-current"?: "page";
 	}) => (
-		<a href={to} className={className} aria-current={ariaCurrent}>
+		<a
+			// The router fills `$param` segments from `params`.
+			href={to.replace(/\$(\w+)/g, (_, key: string) => params?.[key] ?? "")}
+			className={className}
+			aria-current={ariaCurrent}
+		>
 			{children}
 		</a>
 	),
@@ -119,6 +126,57 @@ describe("sidebar per role", () => {
 		renderNav(EVERYTHING);
 		expect(screen.getByText("Platform")).toBeTruthy();
 		expect(visibleLinkLabels()).toContain("Duplicate people");
+	});
+});
+
+describe("Area Director entries (#1119)", () => {
+	const C3 = { id: "3f0b5c1e-6a3d-4d1b-9f5e-2c7a8b9d0e1f", label: "C3" };
+	const B2 = { id: "4a1c6d2f-7b4e-4e2c-8a6f-3d8b9c0e1f2a", label: "B2" };
+
+	function renderWithAreas(
+		areas: { id: string; label: string }[],
+		pathname = "/roster",
+	) {
+		return render(
+			<SidebarNav grants={MEMBER} areas={areas} pathname={pathname} />,
+		);
+	}
+
+	it("adds one Area entry per current term, sorted by label, linking to its page", () => {
+		renderWithAreas([C3, B2]);
+		const entries = screen
+			.getAllByRole("link")
+			.filter((a) => /^Area /.test(a.textContent ?? ""));
+		expect(entries.map((a) => a.textContent)).toEqual(["Area B2", "Area C3"]);
+		expect(entries.map((a) => a.getAttribute("href"))).toEqual([
+			`/area/${B2.id}`,
+			`/area/${C3.id}`,
+		]);
+		expect(screen.getByText("Area Director")).toBeTruthy();
+	});
+
+	it("adds nothing for a user with no term: no entry, no empty header", () => {
+		renderWithAreas([]);
+		expect(screen.queryByText("Area Director")).toBeNull();
+		expect(
+			screen
+				.queryAllByRole("link")
+				.filter((a) => /^Area /.test(a.textContent ?? "")),
+		).toHaveLength(0);
+		// The registered entries are unchanged (control): a plain member's nine.
+		expect(visibleLinkLabels()).toHaveLength(9);
+	});
+
+	it("marks the entry current on its own page and no other", () => {
+		renderWithAreas([B2, C3], `/area/${C3.id}`);
+		const current = screen
+			.getAllByRole("link")
+			.filter((a) => a.getAttribute("aria-current") === "page");
+		expect(current.map((a) => a.textContent)).toEqual(["Area C3"]);
+	});
+
+	it("is titled Area Director in the page crumb", () => {
+		expect(crumbFor(`/area/${C3.id}`)).toBe("Area Director");
 	});
 });
 
