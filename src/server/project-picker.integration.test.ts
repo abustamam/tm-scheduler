@@ -12,14 +12,20 @@ import { user } from "#/db/auth-schema";
 import {
 	bcmProjectProgress,
 	clubs,
+	guests,
+	meetings,
 	members,
 	pathEnrollments,
 	pathLevelProgress,
 	pathwaysPaths,
 	pathwaysProjects,
 	people,
+	roleDefinitions,
+	roleSlots,
+	speeches,
 } from "#/db/schema";
 import { hasTestDb, testDb } from "#/test/db";
+import { readsOf, statementsDuring } from "#/test/query-spy";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
@@ -403,6 +409,317 @@ describe.skipIf(!hasTestDb)("project picker (#418)", () => {
 			const display = await resolveProjectDisplay(projectIds["Managing Time"]);
 			expect(display.projectName).toBe(`Managing Time ${SUITE_TAG}`);
 			expect(display.projectName).not.toContain("…");
+		});
+	});
+
+	// #1160: the speeches a person has already given or booked, per project.
+	describe("given and booked (#1160)", () => {
+		const DAY = 24 * 60 * 60 * 1000;
+		const HOUR = 60 * 60 * 1000;
+		const ICE = "Ice Breaker";
+		const ELECTIVE = "Some Elective";
+		const TIME = "Managing Time";
+
+		let chicagoClubId: string;
+		let laClubId: string;
+		let speakerRoleChicago: string;
+		let speakerRoleLa: string;
+		let meetingSeq = 0;
+
+		beforeAll(async () => {
+			const make = async (
+				tag: string,
+				timezone: string,
+			): Promise<{ clubId: string; roleId: string }> => {
+				const [club] = await testDb
+					.insert(clubs)
+					.values({
+						name: `${tag} ${SUITE_TAG}`,
+						slug: `${tag}-${SUITE_TAG}`,
+						timezone,
+					})
+					.returning({ id: clubs.id });
+				const [role] = await testDb
+					.insert(roleDefinitions)
+					.values({
+						clubId: club.id,
+						name: "Speaker",
+						category: "speaker",
+						isSpeakerRole: true,
+					})
+					.returning({ id: roleDefinitions.id });
+				return { clubId: club.id, roleId: role.id };
+			};
+			const chicago = await make("pk-chi", "America/Chicago");
+			const la = await make("pk-la", "America/Los_Angeles");
+			chicagoClubId = chicago.clubId;
+			speakerRoleChicago = chicago.roleId;
+			laClubId = la.clubId;
+			speakerRoleLa = la.roleId;
+		});
+
+		afterAll(async () => {
+			if (!hasTestDb) return;
+			await testDb
+				.delete(clubs)
+				.where(inArray(clubs.id, [chicagoClubId, laClubId]));
+		});
+
+		/** A fresh enrolled speaker, so no test sees another's speeches. */
+		async function speaker(): Promise<string> {
+			const m = await makeMember(chicagoClubId);
+			await testDb
+				.insert(pathEnrollments)
+				.values({ personId: m.personId, pathId: realPathId });
+			return m.personId;
+		}
+
+		/** One speech on `project` at a meeting at `at`, held by `owner`. */
+		async function speechAt(
+			owner: { personId: string } | { guestId: string },
+			project: string,
+			at: Date,
+			opts: { cancelled?: boolean; la?: boolean } = {},
+		): Promise<void> {
+			const [speech] = await testDb
+				.insert(speeches)
+				.values({
+					...owner,
+					title: "A speech",
+					projectId: projectIds[project],
+				})
+				.returning({ id: speeches.id });
+			// A unique second per meeting: (club, scheduled_at) is unique.
+			meetingSeq += 1;
+			const [meeting] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: opts.la ? laClubId : chicagoClubId,
+					scheduledAt: new Date(at.getTime() + meetingSeq * 1000),
+					status: opts.cancelled ? "cancelled" : "scheduled",
+				})
+				.returning({ id: meetings.id });
+			await testDb.insert(roleSlots).values({
+				meetingId: meeting.id,
+				roleDefinitionId: opts.la ? speakerRoleLa : speakerRoleChicago,
+				speechId: speech.id,
+			});
+		}
+
+		const find = (
+			paths: Awaited<ReturnType<typeof listProjectOptions>>,
+			project: string,
+		) => {
+			const found = paths
+				.flatMap((p) => p.projects)
+				.find((p) => p.id === projectIds[project]);
+			if (!found) throw new Error(`${project} missing from the picker`);
+			return found;
+		};
+
+		it("lists one past speech as given, with its club's zone, and nothing booked", async () => {
+			const person = await speaker();
+			await speechAt(
+				{ personId: person },
+				ICE,
+				new Date("2026-08-29T18:00:00Z"),
+			);
+
+			const row = find(
+				await listProjectOptions(person, { includeProgress: true }),
+				ICE,
+			);
+			expect(row.given).toHaveLength(1);
+			expect(row.given[0].timeZone).toBe("America/Chicago");
+			expect(row.given[0].at.startsWith("2026-08-29T18:00:0")).toBe(true);
+			expect(row.booked).toEqual([]);
+			// A project with no speech carries neither list.
+			const other = find(
+				await listProjectOptions(person, { includeProgress: true }),
+				ELECTIVE,
+			);
+			expect(other.given).toEqual([]);
+			expect(other.booked).toEqual([]);
+		});
+
+		it("orders repeats newest first", async () => {
+			const person = await speaker();
+			await speechAt(
+				{ personId: person },
+				ICE,
+				new Date("2026-06-13T18:00:00Z"),
+			);
+			await speechAt(
+				{ personId: person },
+				ICE,
+				new Date("2026-08-29T18:00:00Z"),
+			);
+			await speechAt(
+				{ personId: person },
+				ICE,
+				new Date("2026-07-11T18:00:00Z"),
+			);
+
+			const row = find(
+				await listProjectOptions(person, { includeProgress: true }),
+				ICE,
+			);
+			expect(row.given.map((g) => g.at.slice(0, 10))).toEqual([
+				"2026-08-29",
+				"2026-07-11",
+				"2026-06-13",
+			]);
+		});
+
+		it("lists upcoming speeches as booked, soonest first, beside what was given", async () => {
+			const person = await speaker();
+			const now = Date.now();
+			await speechAt({ personId: person }, ICE, new Date(now + 15 * DAY));
+			await speechAt({ personId: person }, ICE, new Date(now + 8 * DAY));
+			await speechAt(
+				{ personId: person },
+				ICE,
+				new Date("2026-08-29T18:00:00Z"),
+			);
+
+			const row = find(
+				await listProjectOptions(person, { includeProgress: true }),
+				ICE,
+			);
+			expect(row.booked).toHaveLength(2);
+			expect(new Date(row.booked[0].at).getTime()).toBeLessThan(
+				new Date(row.booked[1].at).getTime(),
+			);
+			expect(new Date(row.booked[0].at).getTime()).toBeGreaterThan(now);
+			expect(row.given).toHaveLength(1);
+		});
+
+		it("takes each date's zone from the meeting's own club, not the speaker's", async () => {
+			const person = await speaker();
+			await speechAt(
+				{ personId: person },
+				ICE,
+				new Date("2026-08-30T03:00:00Z"),
+				{ la: true },
+			);
+			const row = find(
+				await listProjectOptions(person, { includeProgress: true }),
+				ICE,
+			);
+			expect(row.given[0].timeZone).toBe("America/Los_Angeles");
+		});
+
+		it("never counts a cancelled meeting, a guest's speech or another person's", async () => {
+			const person = await speaker();
+			const rival = await speaker();
+			await speechAt(
+				{ personId: person },
+				ICE,
+				new Date("2026-08-29T18:00:00Z"),
+				{ cancelled: true },
+			);
+			await speechAt(
+				{ personId: person },
+				TIME,
+				new Date(Date.now() + 9 * DAY),
+				{ cancelled: true },
+			);
+			await speechAt(
+				{ personId: rival },
+				ELECTIVE,
+				new Date("2026-08-29T18:00:00Z"),
+			);
+			await speechAt({ personId: rival }, TIME, new Date(Date.now() + 9 * DAY));
+
+			// A guest's speech has a NULL person_id. The guest row needs a Person;
+			// the club delete in this block's afterAll removes the guest before the
+			// outer afterAll removes any Person (guests.person_id is RESTRICT).
+			const guestPerson = await makeMember(chicagoClubId);
+			const [guest] = await testDb
+				.insert(guests)
+				.values({
+					clubId: chicagoClubId,
+					name: "Visitor",
+					personId: guestPerson.personId,
+				})
+				.returning({ id: guests.id });
+			await speechAt(
+				{ guestId: guest.id },
+				ICE,
+				new Date("2026-08-29T18:00:00Z"),
+			);
+			await speechAt(
+				{ guestId: guest.id },
+				ELECTIVE,
+				new Date(Date.now() + 9 * DAY),
+			);
+
+			const paths = await listProjectOptions(person, { includeProgress: true });
+			for (const name of [ICE, ELECTIVE, TIME]) {
+				const row = find(paths, name);
+				expect(row.given, `${name} given`).toEqual([]);
+				expect(row.booked, `${name} booked`).toEqual([]);
+			}
+		});
+
+		it("returns empty lists and never reads speeches for an anonymous caller", async () => {
+			const person = await speaker();
+			await speechAt(
+				{ personId: person },
+				ICE,
+				new Date("2026-08-29T18:00:00Z"),
+			);
+			await speechAt({ personId: person }, ICE, new Date(Date.now() + 8 * DAY));
+
+			let paths: Awaited<ReturnType<typeof listProjectOptions>> = [];
+			const statements = await statementsDuring(async () => {
+				paths = await listProjectOptions(person, { includeProgress: false });
+			});
+
+			// Non-empty first: a dead spy would make the zero below vacuous.
+			expect(statements.length).toBeGreaterThan(0);
+			expect(readsOf(statements, "speeches")).toHaveLength(0);
+			const all = paths.flatMap((p) => p.projects);
+			expect(all.length).toBeGreaterThan(0);
+			for (const p of all) {
+				expect(p.given).toEqual([]);
+				expect(p.booked).toEqual([]);
+			}
+		});
+
+		it("reads speeches in exactly one statement, however many speeches and projects", async () => {
+			const one = await speaker();
+			await speechAt({ personId: one }, ICE, new Date("2026-08-29T18:00:00Z"));
+			const many = await speaker();
+			const now = Date.now();
+			const names = [ICE, ELECTIVE, TIME];
+			for (let i = 0; i < 10; i++) {
+				const when =
+					i < 6
+						? new Date(now - (i + 1) * 7 * DAY)
+						: new Date(now + (i - 5) * 7 * DAY + HOUR);
+				await speechAt({ personId: many }, names[i % 3], when);
+			}
+
+			for (const [label, person, rows] of [
+				["1 speech", one, 1],
+				["10 speeches", many, 10],
+			] as const) {
+				const statements = await statementsDuring(() =>
+					listProjectOptions(person, { includeProgress: true }),
+				);
+				expect(statements.length, "spy saw nothing").toBeGreaterThan(0);
+				expect(readsOf(statements, "speeches"), label).toHaveLength(1);
+				// And it is the payload those speeches produce, so one statement
+				// is not one statement that returned nothing.
+				const paths = await listProjectOptions(person, {
+					includeProgress: true,
+				});
+				const total = paths
+					.flatMap((p) => p.projects)
+					.reduce((n, p) => n + p.given.length + p.booked.length, 0);
+				expect(total, label).toBe(rows);
+			}
 		});
 	});
 });
