@@ -1,7 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { z } from "zod";
-import { loadAreaHealth } from "./area-health-logic";
-import { loadAreaVisits } from "./area-visits-logic";
+import { loadAreaView } from "./area-visits-logic";
 import {
 	addAreaClub as addAreaClubLogic,
 	addAreaClubSchema,
@@ -84,9 +83,7 @@ export const previewConsoleArea = createServerFn({ method: "GET" })
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
 		await requireSuperadmin(currentUser.id);
-		const health = await loadAreaHealth(data.areaId);
-		const visits = await loadAreaVisits(data.areaId);
-		return { health, visits };
+		return loadAreaView(data.areaId);
 	});
 
 export const createDistrict = createServerFn({ method: "POST" })

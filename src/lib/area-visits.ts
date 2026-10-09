@@ -23,6 +23,11 @@ export interface AreaClubSummary {
 export const VISIT_ROUNDS = [1, 2] as const;
 export type VisitRound = (typeof VISIT_ROUNDS)[number];
 
+/** A number that is one of the visit rounds. */
+export function isVisitRound(value: unknown): value is VisitRound {
+	return (VISIT_ROUNDS as readonly unknown[]).includes(value);
+}
+
 /** One club's visits: a round is absent until it is recorded. ISO `YYYY-MM-DD`. */
 export type ClubVisits = Partial<Record<VisitRound, string>>;
 
@@ -33,8 +38,9 @@ export const VISIT_IN_FUTURE_MESSAGE = "A visit can't be dated in the future";
 export const VISIT_DATE_INVALID_MESSAGE = "Enter the visit date";
 export const VISIT_ROUND_INVALID_MESSAGE = "A visit is round 1 or round 2";
 
-/** `YYYY-MM-DD` that is a real calendar day (not `2026-02-31`). */
-export function isIsoDate(value: unknown): value is string {
+/** `YYYY-MM-DD` that is a real calendar day (not `2026-02-31`). Shape AND
+ * existence; `officer-training.ts` has an `isIsoDate` that checks the shape only. */
+export function isCalendarDate(value: unknown): value is string {
 	if (typeof value !== "string") return false;
 	const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
 	if (!m) return false;
@@ -65,32 +71,6 @@ export function outsideProgramYearMessage(programYear: number): string {
 	return `That date is outside the ${programYear}–${String(
 		(programYear + 1) % 100,
 	).padStart(2, "0")} program year (July 1 to June 30)`;
-}
-
-const MONTHS = [
-	"Jan",
-	"Feb",
-	"Mar",
-	"Apr",
-	"May",
-	"Jun",
-	"Jul",
-	"Aug",
-	"Sep",
-	"Oct",
-	"Nov",
-	"Dec",
-] as const;
-
-/**
- * "Oct 12" for the visit date `2026-10-12`. Read off the string, never through
- * a `Date`: a date-only value has no zone, and `new Date("2026-10-12")` is
- * midnight UTC, which a browser west of Greenwich prints as the 11th (#1017).
- */
-export function formatVisitDate(iso: string): string {
-	const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(iso);
-	if (!m) return iso;
-	return `${MONTHS[Number(m[1]) - 1] ?? "?"} ${Number(m[2])}`;
 }
 
 /** Where a club's one-page visit summary prints. */

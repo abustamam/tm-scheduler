@@ -79,6 +79,7 @@ const { NO_PERMISSION_MESSAGE } = await import("./guards");
 const { VISIT_IN_FUTURE_MESSAGE, outsideProgramYearMessage } = await import(
 	"#/lib/area-visits"
 );
+const { VISIT_SAVE_FAILED_MESSAGE } = await import("./area-visits-logic");
 
 type Fn = (input: { data: unknown }) => Promise<unknown>;
 
@@ -453,6 +454,88 @@ describe.skipIf(!hasTestDb)(
 			await expect(
 				recordVisitLogic(directorId, areaId, input(`${YEAR + 1}-07-01`), later),
 			).rejects.toThrow(exact(outsideProgramYearMessage(YEAR)));
+		});
+
+		it("stamps an edit with the clock it was handed, not a second one", async () => {
+			const { areaId, areaClubId, directorId } = await setup();
+			const input = (visitedOn: string) => ({
+				areaClubId,
+				round: 1 as const,
+				visitedOn,
+			});
+			const now = new Date(`${YEAR}-09-15T12:00:00.000Z`);
+
+			await recordVisitLogic(directorId, areaId, input(OK_DATE), now);
+			const edited = new Date(`${YEAR}-09-16T12:00:00.000Z`);
+			await recordVisitLogic(
+				directorId,
+				areaId,
+				input(`${YEAR}-07-02`),
+				edited,
+			);
+
+			const [row] = await testDb
+				.select({ updatedAt: clubVisits.updatedAt })
+				.from(clubVisits)
+				.where(eq(clubVisits.areaClubId, areaClubId));
+			expect(row?.updatedAt.toISOString()).toBe(edited.toISOString());
+		});
+
+		it("takes the program year's first day and refuses the day before, whatever zone the server runs in", async () => {
+			const { areaClubId } = await setup();
+			const original = process.env.TZ;
+			try {
+				// A zone far east of UTC and one far west: a Date-built window moves the
+				// boundary by up to a day in each direction; the ISO strings do not.
+				for (const zone of ["Pacific/Kiritimati", "Pacific/Pago_Pago", "UTC"]) {
+					process.env.TZ = zone;
+					// Control: the runtime really changed zone.
+					expect(new Date(2026, 6, 1).getTimezoneOffset()).toBe(
+						{
+							"Pacific/Kiritimati": -840,
+							"Pacific/Pago_Pago": 660,
+							UTC: 0,
+						}[zone],
+					);
+					await expect(
+						record(areaClubId, 1, `${YEAR}-06-30`),
+						zone,
+					).rejects.toThrow(exact(outsideProgramYearMessage(YEAR)));
+					await expect(
+						record(areaClubId, 1, `${YEAR}-07-01`),
+						zone,
+					).resolves.toMatchObject({ visitedOn: `${YEAR}-07-01` });
+				}
+			} finally {
+				if (original === undefined) delete process.env.TZ;
+				else process.env.TZ = original;
+			}
+		});
+
+		it("never prints a raw database error: an unexpected failure is logged and answered with a fixed sentence", async () => {
+			const { areaClubId } = await setup();
+			const raw = new Error(
+				"Failed query: insert into club_visits params: 3f0b5c1e-secret",
+			);
+			const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+			const tx = vi.spyOn(testDb, "transaction").mockRejectedValueOnce(raw);
+			try {
+				await expect(record(areaClubId, 1, OK_DATE)).rejects.toThrow(
+					exact(VISIT_SAVE_FAILED_MESSAGE),
+				);
+				expect(logged).toHaveBeenCalledWith(
+					expect.stringContaining("area-visits"),
+					raw,
+				);
+				// Control: a refusal the rules wrote still reaches the person.
+				tx.mockRestore();
+				await expect(record(areaClubId, 1, "2999-01-01")).rejects.toThrow(
+					exact(VISIT_IN_FUTURE_MESSAGE),
+				);
+			} finally {
+				tx.mockRestore();
+				logged.mockRestore();
+			}
 		});
 
 		it("refuses a write that was waiting on a term ending, and writes no row (the FOR SHARE re-ask)", async () => {

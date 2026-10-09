@@ -14,12 +14,9 @@ import {
 	statusNote,
 } from "#/components/area/area-health-values";
 import { AREA_HEALTH_FIELDS } from "#/lib/area-health-fields";
-import {
-	type AreaClubSummary,
-	formatVisitDate,
-	VISIT_ROUNDS,
-} from "#/lib/area-visits";
+import { type AreaClubSummary, VISIT_ROUNDS } from "#/lib/area-visits";
 import { programYearLabel } from "#/lib/dcp";
+import { formatCalendarDay } from "#/lib/format";
 
 /**
  * The one-page club visit summary (#1120): the club, the area, when the numbers
@@ -103,7 +100,7 @@ export function AreaClubSummarySheet({
 									<div key={round}>
 										Round {round}:{" "}
 										{date ? (
-											<strong>{formatVisitDate(date)}</strong>
+											<strong>{formatCalendarDay(date)}</strong>
 										) : (
 											<span style={{ color: MUTED }}>not yet</span>
 										)}

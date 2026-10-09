@@ -10,6 +10,9 @@ import {
 	loadAreaClubSummary,
 	recordClubVisit as recordClubVisitLogic,
 	recordClubVisitSchema,
+	VISIT_LOAD_FAILED_MESSAGE,
+	VISIT_SAVE_FAILED_MESSAGE,
+	visitFailure,
 } from "./area-visits-logic";
 import { requireUser } from "./guards";
 
@@ -25,6 +28,10 @@ import { requireUser } from "./guards";
 // a moment ago from authorizing a write that commits after. A superadmin with no
 // term is refused by all three (ADR-0016 section 4). Not reachable from
 // `/api/mcp`: no file under `src/server/mcp/` may import this module.
+//
+// Each handler answers only what it wrote: the no-permission refusal and the
+// visit rules' own sentences reach the person; any other failure is logged and
+// becomes a fixed one, never a raw `Failed query … params` (`visitFailure`).
 //
 // This module is imported by client route files, so it exports ONLY
 // createServerFns (server-modules.guard.test.ts); the logic and the zod schemas
@@ -61,9 +68,13 @@ export const recordClubVisit = createServerFn({ method: "POST" })
 	)
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		const areaId = await areaIdOfAreaClub(data.areaClubId);
-		await requireAreaDirector(user.id, areaId);
-		return recordClubVisitLogic(user.id, areaId, data);
+		try {
+			const areaId = await areaIdOfAreaClub(data.areaClubId);
+			await requireAreaDirector(user.id, areaId);
+			return await recordClubVisitLogic(user.id, areaId, data);
+		} catch (err) {
+			throw visitFailure(err, VISIT_SAVE_FAILED_MESSAGE);
+		}
 	});
 
 /** Clear one round's visit. */
@@ -73,9 +84,13 @@ export const clearClubVisit = createServerFn({ method: "POST" })
 	)
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		const areaId = await areaIdOfAreaClub(data.areaClubId);
-		await requireAreaDirector(user.id, areaId);
-		return clearClubVisitLogic(user.id, areaId, data);
+		try {
+			const areaId = await areaIdOfAreaClub(data.areaClubId);
+			await requireAreaDirector(user.id, areaId);
+			return await clearClubVisitLogic(user.id, areaId, data);
+		} catch (err) {
+			throw visitFailure(err, VISIT_SAVE_FAILED_MESSAGE);
+		}
 	});
 
 /**
@@ -89,6 +104,10 @@ export const getAreaClubSummary = createServerFn({ method: "GET" })
 	)
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireAreaDirector(user.id, data.areaId);
-		return loadAreaClubSummary(data.areaId, data.areaClubId);
+		try {
+			await requireAreaDirector(user.id, data.areaId);
+			return await loadAreaClubSummary(data.areaId, data.areaClubId);
+		} catch (err) {
+			throw visitFailure(err, VISIT_LOAD_FAILED_MESSAGE);
+		}
 	});

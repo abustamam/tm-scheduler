@@ -2,8 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { NO_PERMISSION_MESSAGE } from "#/lib/permission-message";
 import { requireAreaDirector } from "./area-guards";
-import { loadAreaHealth } from "./area-health-logic";
-import { loadAreaVisits } from "./area-visits-logic";
+import { loadAreaView } from "./area-visits-logic";
 import { requireUser } from "./guards";
 
 // The Area Director's read (#1119, part of #1115, ADR-0032): an area's health
@@ -37,7 +36,5 @@ export const getAreaHealth = createServerFn({ method: "GET" })
 	.handler(async ({ data }) => {
 		const user = await requireUser();
 		await requireAreaDirector(user.id, data.areaId);
-		const health = await loadAreaHealth(data.areaId);
-		const visits = await loadAreaVisits(data.areaId);
-		return { health, visits };
+		return loadAreaView(data.areaId);
 	});

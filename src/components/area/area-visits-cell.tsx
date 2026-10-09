@@ -4,10 +4,10 @@ import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import {
 	type ClubVisits,
-	formatVisitDate,
 	VISIT_ROUNDS,
 	type VisitRound,
 } from "#/lib/area-visits";
+import { formatCalendarDay } from "#/lib/format";
 import { clearClubVisit, recordClubVisit } from "#/server/area-visits";
 
 /**
@@ -61,7 +61,7 @@ function VisitText({
 		<span>
 			Round {round}:{" "}
 			{date ? (
-				<span className="font-medium">{formatVisitDate(date)}</span>
+				<span className="font-medium">{formatCalendarDay(date)}</span>
 			) : (
 				<span className="text-muted-foreground">not yet</span>
 			)}

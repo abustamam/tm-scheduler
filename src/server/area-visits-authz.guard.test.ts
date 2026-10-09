@@ -113,6 +113,37 @@ describe("the visit server fns run the Area Director gate (#1120)", () => {
 	});
 });
 
+describe("the view loader and the failure wrapper (#1120)", () => {
+	it("loadAreaView reads the health and the visits together, and both area reads go through it", () => {
+		const body = fnBody(LOGIC, "loadAreaView");
+		expect(body).toContain("Promise.all(");
+		expect(body).toContain("loadAreaHealth(areaId)");
+		expect(
+			body,
+			"the visits are no longer read with the health: the page loses them",
+		).toContain("loadAreaVisits(areaId)");
+		for (const file of ["src/server/area-health.ts", "src/server/areas.ts"]) {
+			expect(readSource(file)).toContain("loadAreaView(data.areaId)");
+		}
+	});
+
+	for (const fn of [
+		"recordClubVisit",
+		"clearClubVisit",
+		"getAreaClubSummary",
+	]) {
+		it(`${fn} answers an unexpected failure through visitFailure, never a raw error`, () => {
+			const handler = handlerOf(fn);
+			expect(handler).toMatch(/catch \(err\) \{\s*throw visitFailure\(err,/);
+			// The sign-in message must still reach the person: requireUser is OUTSIDE
+			// the try.
+			expect(handler.indexOf("await requireUser()")).toBeLessThan(
+				handler.indexOf("try {"),
+			);
+		});
+	}
+});
+
 describe("the two writes re-ask the term under a lock before they write (#1120)", () => {
 	for (const [fn, write] of [
 		["recordClubVisit", ".insert(clubVisits)"],

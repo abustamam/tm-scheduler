@@ -4,9 +4,10 @@ import {
 	statusNote,
 } from "#/components/area/area-health-values";
 import { AreaVisitsCell } from "#/components/area/area-visits-cell";
+import { PrintSummaryLink } from "#/components/area/print-summary-link";
 import type { ClubHealth } from "#/lib/area-health";
 import { AREA_HEALTH_FIELDS } from "#/lib/area-health-fields";
-import { type AreaVisits, areaClubPrintPath } from "#/lib/area-visits";
+import type { AreaVisits } from "#/lib/area-visits";
 
 /**
  * The phone layout of the area view (#1119): one card per club, the same six
@@ -62,16 +63,12 @@ export function AreaClubCard({
 					/>
 				</div>
 			</div>
-			{readOnly ? null : (
-				<a
-					href={areaClubPrintPath(areaId, club.areaClubId)}
-					target="_blank"
-					rel="noreferrer"
-					className="inline-block text-sm underline-offset-4 hover:underline"
-				>
-					Print summary
-				</a>
-			)}
+			<PrintSummaryLink
+				areaId={areaId}
+				areaClubId={club.areaClubId}
+				readOnly={readOnly}
+				className="inline-block text-sm"
+			/>
 		</article>
 	);
 }

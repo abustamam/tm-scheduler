@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
 	areaClubPrintPath,
-	formatVisitDate,
-	isIsoDate,
+	isCalendarDate,
+	isVisitRound,
 	outsideProgramYearMessage,
 	programYearIsoWindow,
+	VISIT_ROUNDS,
 } from "./area-visits";
 
 describe("the visit date rules (#1120)", () => {
 	it("takes real calendar days only", () => {
-		expect(isIsoDate("2026-10-12")).toBe(true);
-		expect(isIsoDate("2028-02-29")).toBe(true);
+		expect(isCalendarDate("2026-10-12")).toBe(true);
+		expect(isCalendarDate("2028-02-29")).toBe(true);
 		for (const bad of [
 			"2026-02-31",
 			"2027-02-29",
@@ -21,7 +22,7 @@ describe("the visit date rules (#1120)", () => {
 			null,
 			20261012,
 		]) {
-			expect(isIsoDate(bad)).toBe(false);
+			expect(isCalendarDate(bad)).toBe(false);
 		}
 	});
 
@@ -37,10 +38,11 @@ describe("the visit date rules (#1120)", () => {
 		expect(outsideProgramYearMessage(2026)).toContain("2026–27");
 	});
 
-	it("prints a date-only value without a Date, so no zone can move it", () => {
-		expect(formatVisitDate("2026-10-12")).toBe("Oct 12");
-		expect(formatVisitDate("2026-07-01")).toBe("Jul 1");
-		expect(formatVisitDate("2027-12-31")).toBe("Dec 31");
+	it("knows the rounds from VISIT_ROUNDS alone", () => {
+		for (const round of VISIT_ROUNDS) expect(isVisitRound(round)).toBe(true);
+		for (const bad of [0, 3, "1", null, undefined, 1.5]) {
+			expect(isVisitRound(bad)).toBe(false);
+		}
 	});
 
 	it("links the summary at the print route", () => {

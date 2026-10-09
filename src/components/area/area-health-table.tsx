@@ -4,9 +4,10 @@ import {
 	statusNote,
 } from "#/components/area/area-health-values";
 import { AreaVisitsCell } from "#/components/area/area-visits-cell";
+import { PrintSummaryLink } from "#/components/area/print-summary-link";
 import type { ClubHealth } from "#/lib/area-health";
 import { AREA_HEALTH_FIELDS } from "#/lib/area-health-fields";
-import { type AreaVisits, areaClubPrintPath } from "#/lib/area-visits";
+import type { AreaVisits } from "#/lib/area-visits";
 
 /**
  * The desktop layout of the area view (#1119): one row per club, one column per
@@ -72,16 +73,12 @@ export function AreaHealthTable({
 											{number}
 										</div>
 									) : null}
-									{readOnly ? null : (
-										<a
-											href={areaClubPrintPath(areaId, club.areaClubId)}
-											target="_blank"
-											rel="noreferrer"
-											className="text-xs underline-offset-4 hover:underline"
-										>
-											Print summary
-										</a>
-									)}
+									<PrintSummaryLink
+										areaId={areaId}
+										areaClubId={club.areaClubId}
+										readOnly={readOnly}
+										className="text-xs"
+									/>
 								</th>
 								{note ? (
 									<td
