@@ -46,6 +46,18 @@ const SESSION_GATED = ["disqualifyCandidateFn", "undoDisqualificationFn"];
 const ANON_GATED = GATED.filter((n) => !SESSION_GATED.includes(n));
 
 /**
+ * The call that refuses a COMPLETED meeting in a window handler: the old per-
+ * status helper, or the write policy asked for the `plan` class (#1138), which
+ * refuses cancelled and completed. The class must be `plan` and the call must
+ * end there: the `record` class accepts a completed meeting, and an `accept`
+ * option can waive one from `plan`, so either would drop the lock and still
+ * contain the name `assertMeetingAccepts(`. A false FAILURE here (a call shaped
+ * some other way) is the safe direction; a bare name match is the false pass.
+ */
+const LOCK_CALL =
+	/assertMeetingNotLocked\(|assertMeetingAccepts\([^()]*,\s*"plan"\s*\)/;
+
+/**
  * The slice of SOURCE covering just `name`'s export — from its `export const`
  * line up to whichever other GATED export comes next, or EOF. Bounding to the
  * NEXT export (rather than a fixed-length window) matters: mutation-testing
@@ -107,7 +119,10 @@ describe("voting server fns are gated (#510)", () => {
 			"disqualifyCandidateFn",
 			"undoDisqualificationFn",
 		]) {
-			expect(gatedExportBody(name)).toContain("assertMeetingNotLocked(");
+			expect(
+				LOCK_CALL.test(gatedExportBody(name)),
+				`${name} no longer refuses a completed meeting. It must call assertMeetingNotLocked(...) or assertMeetingAccepts(<status>, "plan"): the "record" class accepts a completed meeting, so it is not the lock.`,
+			).toBe(true);
 		}
 	});
 
@@ -116,9 +131,36 @@ describe("voting server fns are gated (#510)", () => {
 	// everywhere" reads as strictly safer and would silently break confirming a
 	// winner on a completed meeting — the normal case, since completion is when
 	// the minutes get written.
+	//
+	// BOTH spellings are refused, and `assertMeetingAccepts(` in ANY class: since
+	// #1138 the handlers above say the lock through the write policy, so a check
+	// that only knew the old name would pass here while the tally refused a
+	// completed meeting through the new one.
 	it("getVoteTally does NOT assert the meeting lock", () => {
-		expect(gatedExportBody("getVoteTally")).not.toContain(
-			"assertMeetingNotLocked(",
+		expect(gatedExportBody("getVoteTally")).not.toMatch(
+			/assertMeetingNotLocked\(|assertMeetingAccepts\(/,
 		);
+	});
+
+	// The matcher is itself a guard, so it gets its own floor. A regex too loose
+	// to tell the lock from a class that accepts a completed meeting is the one
+	// way the test above stays green over a dropped lock.
+	it("the lock matcher accepts the two spellings of the lock and nothing weaker", () => {
+		for (const call of [
+			"assertMeetingNotLocked(authz.meetingStatus)",
+			'assertMeetingAccepts(authz.meetingStatus, "plan")',
+		]) {
+			expect(LOCK_CALL.test(call), call).toBe(true);
+		}
+		for (const call of [
+			// `record` accepts a completed meeting, so it is not the lock.
+			'assertMeetingAccepts(authz.meetingStatus, "record")',
+			// An `accept` override can waive completed; the class alone would not show it.
+			'assertMeetingAccepts(authz.meetingStatus, "plan", { accept: ["completed"] })',
+			"assertMeetingAccepts(authz.meetingStatus)",
+			"assertMeetingNotCancelled(authz.meetingStatus)",
+		]) {
+			expect(LOCK_CALL.test(call), call).toBe(false);
+		}
 	});
 });

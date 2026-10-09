@@ -1,11 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import {
 	getSessionUser,
 	requireSignedInVoteCounter,
 	requireVoteCounterCapability,
 } from "./guards";
-import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import {
 	type BallotVoter,
 	castVote,
@@ -151,7 +151,7 @@ export const openVoteFn = createServerFn({ method: "POST" })
 	.validator((input: unknown) => operateSchema.parse(input))
 	.handler(async ({ data }) => {
 		const authz = await requireVoteCounter(data);
-		assertMeetingNotLocked(authz.meetingStatus);
+		assertMeetingAccepts(authz.meetingStatus, "plan");
 		await openVote({
 			meetingId: data.meetingId,
 			clubId: authz.clubId,
@@ -166,7 +166,7 @@ export const closeVoteFn = createServerFn({ method: "POST" })
 	.validator((input: unknown) => operateSchema.parse(input))
 	.handler(async ({ data }) => {
 		const authz = await requireVoteCounter(data);
-		assertMeetingNotLocked(authz.meetingStatus);
+		assertMeetingAccepts(authz.meetingStatus, "plan");
 		await closeVote({
 			meetingId: data.meetingId,
 			clubId: authz.clubId,
@@ -213,7 +213,7 @@ export const disqualifyCandidateFn = createServerFn({ method: "POST" })
 	)
 	.handler(async ({ data }) => {
 		const authz = await requireSignedInVoteCounter(data);
-		assertMeetingNotLocked(authz.meetingStatus);
+		assertMeetingAccepts(authz.meetingStatus, "plan");
 		await disqualifyCandidate({
 			meetingId: data.meetingId,
 			clubId: authz.clubId,
@@ -235,7 +235,7 @@ export const undoDisqualificationFn = createServerFn({ method: "POST" })
 	.validator((input: unknown) => disqualifySchema.parse(input))
 	.handler(async ({ data }) => {
 		const authz = await requireSignedInVoteCounter(data);
-		assertMeetingNotLocked(authz.meetingStatus);
+		assertMeetingAccepts(authz.meetingStatus, "plan");
 		await undoDisqualification({
 			meetingId: data.meetingId,
 			clubId: authz.clubId,

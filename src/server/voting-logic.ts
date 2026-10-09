@@ -34,7 +34,7 @@ import {
 	isDigitalVotingOn,
 } from "#/lib/digital-voting";
 import { disqualificationReasonSchema } from "#/lib/disqualification";
-import { assertMeetingNotCancelled } from "#/lib/meeting-cancellation-notice";
+import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import {
 	WRITE_IN_LIMITS,
 	writeInKey,
@@ -93,6 +93,35 @@ export async function listVoteSessions(
 }
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * The write policy's refusal for a vote write (#1138, #1129 Q3/Q5): a frozen
+ * meeting, cancelled or completed, refuses every `plan`-class write here, with
+ * the sentence `assertMeetingAccepts` owns. A meeting that does not exist is
+ * left to the caller's own lookup, which already names that case.
+ *
+ * Reads the status as of this statement. `lock: "share"` is for a caller already
+ * inside a transaction that wants the answer to hold for the write that follows:
+ * a cancel or complete takes `FOR NO KEY UPDATE` on the same row, so under a
+ * share lock the status read here is the status the write lands on. Without it
+ * this is a plain re-read, the shape #1057 chose for `castVote` when it declined
+ * a new lock: the window between read and write is accepted, because a vote
+ * write on a meeting that froze in it changes nothing a reader of that meeting
+ * shows.
+ */
+async function assertVoteMeetingAccepts(
+	conn: typeof db | Tx,
+	meetingId: string,
+	lock?: "share",
+): Promise<void> {
+	const query = conn
+		.select({ status: meetings.status })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	const [row] = lock ? await query.for("share") : await query;
+	if (row) assertMeetingAccepts(row.status, "plan");
+}
 
 /** The two switches #770 reads, joined in one statement. */
 const DIGITAL_VOTING_SWITCHES = {
@@ -171,6 +200,12 @@ export async function openVote(input: WindowInput): Promise<void> {
 		// and the club together, which a template save holding the meeting and
 		// waiting on the club could otherwise meet head-on.
 		await lockClubForWrite(tx, input.clubId);
+		// A frozen meeting opens no vote (#1138). Under a share lock on the meeting
+		// row, the lock `applyCancelMeeting` and `applyCompleteMeeting` conflict
+		// with, so the status read is the one this write lands on. First among the
+		// checks below, so a completed meeting answers with the lock sentence
+		// whatever the switches say.
+		await assertVoteMeetingAccepts(tx, input.meetingId, "share");
 		// #770. Opening is the one window write gated on the switch. CLOSING is
 		// deliberately NOT gated: switching off closes every open vote itself, and
 		// a Close arriving afterwards — from a console tab loaded before the
@@ -209,6 +244,10 @@ export async function openVote(input: WindowInput): Promise<void> {
 export async function closeVote(input: WindowInput): Promise<void> {
 	// #555 — see openVote above.
 	await assertClubNotArchived(input.clubId);
+	// A frozen meeting closes nothing (#1138). Cancelling does not close vote
+	// sessions, so a session can still be open here; completing closes them all,
+	// so this is the refusal that answers for a completed meeting first.
+	await assertVoteMeetingAccepts(db, input.meetingId);
 	await db.transaction(async (tx) => {
 		const closed = await tx
 			.update(meetingVoteSessions)
@@ -291,7 +330,7 @@ export async function closeClubVotesTx(tx: Tx, clubId: string): Promise<void> {
  *
  * Declared beside `openVote`/`closeVote` because it is the same kind of thing:
  * a Vote Counter operating the window from the console, gated by the same
- * `requireVoteCounter` + `assertMeetingNotLocked` pair in `voting.ts`, and
+ * `requireVoteCounter` + `assertMeetingAccepts` pair in `voting.ts`, and
  * archive-gated here in the SEAM for the reason `openVote` states — a handler
  * body cannot be reached from vitest, so a check placed there is covered by a
  * source grep alone.
@@ -315,6 +354,9 @@ export async function disqualifyCandidate(
 	input: WindowInput & { candidate: CandidateRef; reason: string },
 ): Promise<void> {
 	await assertClubNotArchived(input.clubId);
+	// A frozen meeting rules nobody out (#1138). Before the reason and the
+	// candidate are looked at, so the refusal does not depend on either.
+	await assertVoteMeetingAccepts(db, input.meetingId);
 
 	const parsedReason = disqualificationReasonSchema.safeParse(input.reason);
 	if (!parsedReason.success) {
@@ -396,6 +438,8 @@ export async function undoDisqualification(
 	input: WindowInput & { candidate: CandidateRef },
 ): Promise<void> {
 	await assertClubNotArchived(input.clubId);
+	// A frozen meeting undoes no ruling either (#1138): see `disqualifyCandidate`.
+	await assertVoteMeetingAccepts(db, input.meetingId);
 
 	const { memberId, guestId, writeIn } = await resolveDisqualifiedCandidate(
 		input.candidate,
@@ -564,19 +608,6 @@ export type BallotVoter = VoterRef | { kind: "anonymous" };
 export const ANONYMOUS_VOTE_NEEDS_DEVICE_MESSAGE =
 	"Couldn't send that — refresh the page and tap your choice again.";
 
-/** `castVote`'s cancelled-meeting gate (#1057): the status as of this read,
- *  refused with the member-facing sentence. An unknown meeting is left to
- *  `getMeetingClubId` beside it, which already names that case. Declared here,
- *  ABOVE `castVote`'s own doc comment, so that comment stays attached to it. */
-async function assertVoteMeetingNotCancelled(meetingId: string): Promise<void> {
-	const [row] = await db
-		.select({ status: meetings.status })
-		.from(meetings)
-		.where(eq(meetings.id, meetingId))
-		.limit(1);
-	if (row) assertMeetingNotCancelled(row.status);
-}
-
 /**
  * Cast (or change) one ballot.
  *
@@ -667,7 +698,12 @@ export async function castVote(input: {
 	// this read and that write is the one #1057 accepted when it declined a
 	// new lock — a ballot slipping in there counts toward a meeting that no
 	// longer happens, which every reader of its tally already hides.
-	await assertVoteMeetingNotCancelled(input.meetingId);
+	//
+	// The same read refuses a COMPLETED meeting (#1138), with the lock sentence
+	// and before any session-state check. Completing closes every session, so
+	// the closed-window error is what a completed meeting said before; this is
+	// the answer that names the real reason.
+	await assertVoteMeetingAccepts(db, input.meetingId);
 	// #770, before eligibility for the same reason as the archive gate above.
 	// Not locked: the atomic INSERT below already refuses a session that a
 	// switch-off has closed (the switch-off closes every open session in its own
@@ -1662,8 +1698,10 @@ function joinInTransaction(
 		// is looked up or minted. This path is public and writes a visitor's
 		// name, and cancelling does not close vote sessions (a restore must lose
 		// nothing) — so without this a cancelled meeting with an open category
-		// kept minting `guests` rows for a ballot nobody can cast.
-		if (lockedMeeting) assertMeetingNotCancelled(lockedMeeting.status);
+		// kept minting `guests` rows for a ballot nobody can cast. A completed
+		// meeting is refused here too (#1138), for the same reason: it is a ballot
+		// nobody can cast, and a public path that mints a visitor's name for it.
+		if (lockedMeeting) assertMeetingAccepts(lockedMeeting.status, "plan");
 		// #770, under the lock above and before any name is looked up or
 		// minted: a refused join must leave no `guests` row behind.
 		await assertDigitalVotingOnTx(tx, input.meetingId);

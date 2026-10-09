@@ -12,18 +12,20 @@ import {
 } from "#/db/schema";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
 import {
-	assertMeetingNotCancelled,
 	isMeetingCancelled,
 	MEETING_ALREADY_CANCELLED_MESSAGE,
 	MEETING_CANCEL_COMPLETED_MESSAGE,
 	MEETING_CANCEL_PAST_MESSAGE,
+	MEETING_CANCELLED_MESSAGE,
 	MEETING_NOT_CANCELLED_MESSAGE,
 	MEETING_REOPEN_NOT_COMPLETED_MESSAGE,
 	MEETING_RESTORE_PAST_MESSAGE,
 	meetingHasStarted,
 } from "#/lib/meeting-cancellation-notice";
 import {
+	assertMeetingAccepts,
 	isMeetingLocked,
+	type MeetingWriteOptions,
 	meetingDatePassed,
 	meetingDateReached,
 } from "#/lib/meeting-lifecycle";
@@ -46,6 +48,7 @@ import {
 } from "./meeting-number-logic";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
 import { resolveMeetingUrlKey } from "./meeting-url-key-logic";
+import { meetingRowAccepts } from "./meeting-write-gate";
 import { loadPublicClubRoster } from "./members-logic";
 import { closeAllVotesTx } from "./voting-logic";
 
@@ -448,6 +451,21 @@ const TABLE_TOPICS_TEXT_FIELDS = [
 ] as const satisfies readonly (typeof META_TEXT_FIELDS)[number][];
 
 /**
+ * The meta writers' write policy (#1138): the `plan` class, which refuses a
+ * cancelled and a completed meeting, with ONE override. They accept a completed
+ * meeting. The completed lock is enforced in front of them, by the resolvers
+ * (`resolveMeetingAgendaAuthz` and its two narrow siblings) and the planner,
+ * and `agenda-cancelled-meeting.integration.test.ts` pins that the writer itself
+ * has never refused one ("still writes a completed meeting, as it did before",
+ * #1088). Dropping the override would add a refusal to a writer whose callers
+ * already make it, so it is kept, named, and shared by every refusal below so
+ * the WHERE, the re-read and the two empty-patch checks cannot disagree.
+ */
+const META_WRITE_OPTIONS = {
+	accept: ["completed"],
+} as const satisfies Pick<MeetingWriteOptions, "accept">;
+
+/**
  * The UPDATE both meta writers issue, refusing a CANCELLED meeting atomically
  * (#1088).
  *
@@ -473,7 +491,12 @@ async function updateMeetingUnlessCancelled(
 	const written = await tx
 		.update(meetings)
 		.set(next)
-		.where(and(eq(meetings.id, meetingId), ne(meetings.status, "cancelled")))
+		.where(
+			and(
+				eq(meetings.id, meetingId),
+				meetingRowAccepts("plan", META_WRITE_OPTIONS),
+			),
+		)
 		.returning({ id: meetings.id });
 	if (written.length > 0) return;
 	const [row] = await tx
@@ -481,7 +504,7 @@ async function updateMeetingUnlessCancelled(
 		.from(meetings)
 		.where(eq(meetings.id, meetingId));
 	if (!row) throw new Error("Meeting not found.");
-	assertMeetingNotCancelled(row.status);
+	assertMeetingAccepts(row.status, "plan", META_WRITE_OPTIONS);
 	// Reachable, narrowly: a cancel commits before the UPDATE above (so it matched
 	// no row), then a restore commits before the re-read (READ COMMITTED takes a
 	// fresh snapshot per statement), so the re-read sees the meeting scheduled.
@@ -620,7 +643,7 @@ export async function applyMeetingMetaPatch(
 	// there is to check.
 	const changed = Object.keys(next) as (keyof typeof next)[];
 	if (changed.length === 0) {
-		assertMeetingNotCancelled(meeting.status);
+		assertMeetingAccepts(meeting.status, "plan", META_WRITE_OPTIONS);
 		return { clubId: meeting.clubId };
 	}
 
@@ -742,7 +765,7 @@ async function applyNarrowTextPatch<
 	// having typed nothing sends nothing. A cancelled meeting refuses even this,
 	// as the general patch does (#1088).
 	if (changed.length === 0) {
-		assertMeetingNotCancelled(meeting.status);
+		assertMeetingAccepts(meeting.status, "plan", META_WRITE_OPTIONS);
 		return { clubId: meeting.clubId };
 	}
 
@@ -790,10 +813,12 @@ export async function applyMeetingDigitalVoting(input: {
 	await db.transaction(async (tx) => {
 		// #1085. Under the meeting row's lock, the one `applyCancelMeeting` takes,
 		// so a cancel and this switch serialise and the status read here is the
-		// status the write lands on. No completed-lock check, as before: a
-		// completed meeting's switch stays writable, unchanged by #1085.
+		// status the write lands on. A completed meeting refuses too (#1138): the
+		// switch is part of the plan, and completing already closed every vote.
+		// This reverses #1085's "a completed meeting's switch stays writable",
+		// which was a deliberate choice then; #1138 classes the switch as `plan`.
 		const locked = await lockMeetingForSlotEdit(tx, input.meetingId);
-		assertMeetingNotCancelled(locked.status);
+		assertMeetingAccepts(locked.status, "plan");
 		const [meeting] = await tx
 			.update(meetings)
 			.set({ digitalVotingDisabled: input.disabled })
@@ -843,7 +868,9 @@ export async function applyCompleteMeeting(input: {
 			columns: { timezone: true },
 		});
 		if (!club) throw new Error("Club not found.");
-		assertMeetingNotCancelled(locked.status);
+		if (isMeetingCancelled(locked.status)) {
+			throw new Error(MEETING_CANCELLED_MESSAGE);
+		}
 		if (!meetingDateReached(locked.scheduledAt, club.timezone)) {
 			throw new Error(
 				"You can only complete a meeting on or after its scheduled date.",
