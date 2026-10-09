@@ -36,6 +36,7 @@ import { MeetingFeedbackLink } from "#/components/club/meeting-feedback-link";
 import { MeetingMinutes } from "#/components/club/meeting-minutes";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { MeetingPersonalStrip } from "#/components/club/meeting-personal-strip";
+import { MeetingReadinessPanel } from "#/components/club/meeting-readiness-panel";
 import { MeetingRoomStrip } from "#/components/club/meeting-room-strip";
 import {
 	type LifecycleAction,
@@ -107,6 +108,11 @@ import {
 	resolveMeetingViewer,
 } from "#/lib/meeting-lifecycle";
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
+import {
+	canSeeMeetingReadiness,
+	meetingReadiness,
+	showsMeetingReadiness,
+} from "#/lib/meeting-readiness";
 import { deriveMeetingRoleFlags } from "#/lib/meeting-roles";
 import { useEffectiveMember } from "#/lib/member-identity";
 import { outstandingDutiesByMember } from "#/lib/nudge";
@@ -596,6 +602,27 @@ function MeetingView() {
 	});
 	// #320: previewing-as-member drops management everywhere it gates admin UI.
 	const effectiveCanManage = canManage && !previewAsMember;
+	// The "Before the meeting" panel (#963): a club admin (`canManage`, so not an
+	// elected officer who lacks the admin role) who is not previewing as a member
+	// (#320), or this meeting's Toastmaster, on a meeting that is still to be got
+	// ready. The three flags go in as themselves: `canManage` and not
+	// `effectiveCanManage`, because the helper owns the preview rule, and
+	// `isTmod` survives preview on purpose (the TMOD arm is the viewer's own
+	// slot, which previewing does not change), which differs from
+	// `runsThisMeeting` below: that one drops the TMOD arm in preview. `now` is
+	// this render's one clock;
+	// the helpers read none of their own. `meeting-readiness-wiring.guard.test.ts`
+	// holds all of it, since a component test injects its own props.
+	const readiness =
+		canSeeMeetingReadiness({ canManage, previewAsMember, isTmod }) &&
+		showsMeetingReadiness({
+			status: meeting.status,
+			scheduledAt: meeting.scheduledAt,
+			timezone,
+			now,
+		})
+			? meetingReadiness({ meeting, slots })
+			: null;
 	const canComplete = meetingDateReached(meeting.scheduledAt, timezone, now);
 	// Cancel is offered on a scheduled meeting that is not completed and has not
 	// STARTED (#1057; the maintainer's rule on #1084): a meeting later today is
@@ -2148,6 +2175,14 @@ function MeetingView() {
 			<div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:gap-6">
 				<div className="order-2 min-w-0 flex-1 space-y-5 lg:order-1">
 					{effectiveCanManage ? null : <GuestResources clubId={clubId} />}
+
+					{readiness ? (
+						<MeetingReadinessPanel
+							readiness={readiness}
+							clubId={clubId}
+							meetingId={urlKey}
+						/>
+					) : null}
 
 					{/* The strip's "Today's agenda" target (#913). Always rendered, so
 					    a shared `#agenda` link works on any day. */}

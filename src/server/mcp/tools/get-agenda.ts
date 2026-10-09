@@ -35,6 +35,10 @@ import { db } from "#/db";
 import { meetings } from "#/db/schema";
 import { agendaRunSheet } from "#/lib/agenda-run-sheet";
 import { isMeetingLocked } from "#/lib/meeting-lifecycle";
+import {
+	meetingReadiness,
+	showsMeetingReadiness,
+} from "#/lib/meeting-readiness";
 import { readAgendaSnapshot } from "#/server/meeting-agenda-edit-logic";
 import { resolveMeetingNumber } from "#/server/meeting-number-logic";
 import { loadMeetingSlots } from "#/server/meeting-slots-logic";
@@ -57,7 +61,10 @@ export const getAgendaTool: McpToolDefinition = {
 			"it ends against the booked slot (`overByMinutes`, positive is over). " +
 			"Row ids from there are what edit_agenda takes. A `status` of " +
 			'"cancelled" means every write tool refuses this meeting until ' +
-			"restore_meeting puts it back.",
+			"restore_meeting puts it back. `readiness` lists what is still " +
+			"missing before an upcoming meeting (open or unconfirmed roles, " +
+			"theme, Word of the Day, Table Topics, speech details); it is null " +
+			"once the meeting is completed, cancelled or past.",
 		inputSchema,
 	},
 	handler: async (input, ctx) => {
@@ -71,6 +78,8 @@ export const getAgendaTool: McpToolDefinition = {
 				status: meetings.status,
 				theme: meetings.theme,
 				wordOfTheDay: meetings.wordOfTheDay,
+				// Read for `readiness` only; it is not in the output below.
+				tableTopicsNotes: meetings.tableTopicsNotes,
 				wodDefinition: meetings.wodDefinition,
 				wodExample: meetings.wodExample,
 				location: meetings.location,
@@ -131,6 +140,19 @@ export const getAgendaTool: McpToolDefinition = {
 				speechTitle: s.speechTitle,
 			})),
 			runSheet: draft ? agendaRunSheet(draft) : null,
+			// What is still missing before an upcoming meeting (#963), derived by the
+			// function the meeting page's "Before the meeting" panel reads, from the
+			// SAME slot rows, so the two cannot disagree. Gaps carry a slot label and
+			// a display name, never contact details. Null once there is nothing left
+			// to prepare: cancelled, completed, or past in the club's own calendar.
+			readiness: showsMeetingReadiness({
+				status: meeting.status,
+				scheduledAt: meeting.scheduledAt,
+				timezone: club.timezone,
+				now: new Date(),
+			})
+				? meetingReadiness({ meeting, slots })
+				: null,
 		};
 	},
 };
