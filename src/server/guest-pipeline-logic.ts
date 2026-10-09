@@ -132,11 +132,17 @@ type DbOrTx =
 
 /**
  * Whether any club holds `personId` as a member, read WITHOUT a lock, to choose
- * how strongly to lock that Person (`lockPersonsInOrder`). A Person who holds a
- * membership is never deleted by a guest delete or a link, so it is locked
- * `FOR NO KEY UPDATE` and does not block a speaker claim's key share; one who
- * holds none MAY be deleted, so it gets `FOR UPDATE`. The delete's own WHERE
- * (`unreferencedUnboundPerson()`) re-decides under the lock.
+ * how strongly to lock that Person EARLY (`lockPersonsInOrder`, in the lock
+ * order, before the guest row). A Person who holds a membership is not a delete
+ * candidate, so a guest delete or a link locks it `FOR NO KEY UPDATE` and does
+ * not block a speaker claim's key share; one who holds none gets `FOR UPDATE`.
+ *
+ * The read can be STALE, and the choice is only an early one, not a decision:
+ * the delete takes `FOR UPDATE` itself, in its own statement just before the
+ * DELETE, once the Person is a candidate, whatever was taken here
+ * (`deleteGuestPersonIfUnreferenced`), and its WHERE decides after that. What a
+ * stale read costs is a strong lock held earlier than needed, which can cycle
+ * with a concurrent CSV import of another club (a 40P01, no data loss).
  */
 async function holdsMembership(
 	tx: DbOrTx,
@@ -1286,9 +1292,12 @@ export async function applyDeleteGuest(
 			.from(guests)
 			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
 			.limit(1);
-		// FOR UPDATE only on a Person this delete MAY delete: one that holds a
-		// membership (a linked or converted guest's member Person) never is, and
-		// holding it that strongly would cycle with a speaker claim.
+		// An EARLY lock, chosen from an unlocked read that may be stale
+		// (`holdsMembership`): FOR UPDATE on a Person that holds no membership, which
+		// this delete may then delete; FOR NO KEY UPDATE on one that does (a linked or
+		// converted guest's member Person), which would otherwise cycle with a speaker
+		// claim. The delete itself takes FOR UPDATE once the Person is a candidate
+		// (`deleteGuestPersonIfUnreferenced`), whatever this took.
 		await lockPersonsInOrder(
 			tx,
 			(await holdsMembership(tx, peek?.personId))
@@ -1763,8 +1772,11 @@ export async function applyConvertGuestToMember(
 			input.clubId,
 			convertIdentity(peek, cc),
 		);
-		// NO KEY UPDATE: convert deletes no Person, and `FOR UPDATE` would block the
-		// key share a speaker claim takes on the Person while it holds the slot.
+		// NO KEY UPDATE: a convert MAY delete a Person, but only the guest's old one
+		// when the guest was not pristine, and then `deleteGuestPersonIfUnreferenced`
+		// takes `FOR UPDATE` on it in its own statement just before the DELETE. Taking
+		// it here would block the key share a speaker claim takes on the Person while
+		// it holds the slot, for every convert, including the many that delete nothing.
 		await lockPersonsInOrder(tx, noKeyUpdate(peek.personId, peekMatch));
 
 		// Then lock the guest row, and re-check `stage` under that lock.
@@ -1843,9 +1855,9 @@ export async function applyConvertGuestToMember(
 			} else {
 				// Not pristine. Mint a fresh Person carrying the guest row's name, goes-by
 				// name and contact, point the guest at it, and convert onto it. This is
-				// what a convert did before #1124. The old Person is left EXACTLY as it is
-				// and is not deleted: it is somebody's history, or the release target
-				// of an undone convert (#875).
+				// what a convert did before #1124. The old Person is somebody's history,
+				// or the release target of an undone convert (#875), so it is not written;
+				// it is deleted only if nothing references it (below).
 				const [minted] = await tx
 					.insert(people)
 					.values({ name, preferredName, email, phone })
@@ -1860,7 +1872,7 @@ export async function applyConvertGuestToMember(
 				// The guest no longer names the old Person. If nothing else does, and no
 				// removal names it, it would be stranded with whatever contact it
 				// carries, so it goes (with its email backup); anything that references
-				// it, or a release target, is left exactly as it is.
+				// it, or a release target, is left as it is, neither written nor deleted.
 				await deleteAbandonedGuestPerson(tx, guestPersonId);
 			}
 			if (email) written = { personId, email };
@@ -2323,9 +2335,11 @@ export async function applyLinkGuestToMember(
 			.limit(1);
 		if (!member) throw new Error(LINK_MEMBER_NOT_IN_CLUB_MESSAGE);
 		// The guest's own Person is the one a link may delete (nothing else names
-		// it afterwards), so it is locked FOR UPDATE unless it holds a membership;
-		// the member's Person is never deleted, and is locked FOR NO KEY UPDATE so
-		// a claim for that member is not blocked while the link waits for a slot.
+		// it afterwards), so it is locked FOR UPDATE EARLY unless it holds a
+		// membership, by an unlocked read that may be stale (`holdsMembership`): the
+		// delete takes FOR UPDATE itself once the Person is a candidate. The
+		// member's Person is never deleted, and is locked FOR NO KEY UPDATE so a
+		// claim for that member is not blocked while the link waits for a slot.
 		await lockPersonsInOrder(tx, [
 			...((await holdsMembership(tx, peek.personId))
 				? noKeyUpdate(peek.personId)
@@ -2968,9 +2982,9 @@ export async function applyUndoGuestConversion(
 		// Person the convert minted (#875), instead of creating a second one for the
 		// same human. After an undo of a convert that created the membership the Person
 		// has a removal on record (and usually contact), so it is not pristine and the
-		// next convert gives the guest a fresh Person; after an undo of a dedupe-hit
-		// convert the guest's own Person was never touched and is still pristine,
-		// which is fine (`pristineGuestPerson`).
+		// next convert gives the guest a fresh Person. After an undo of a dedupe-hit
+		// convert the guest's own Person was never touched by it, so it is pristine
+		// only if it was before the convert (`pristineGuestPerson`).
 
 		await logActivity(tx, {
 			clubId: input.clubId,

@@ -25,9 +25,12 @@
  * locks a Person or writes anything. Writers that touch a guest's Person (a
  * convert, an undo, a link or unlink, a guest delete) take it before they lock
  * the Person, the first step of ADR-0031's lock protocol: club write lock, then
- * `people` rows in id order (`FOR UPDATE` only on a Person the path may delete,
- * `FOR NO KEY UPDATE` otherwise; see `lockPersonsInOrder`), then the guest row it
- * changes. Taking this
+ * `people` rows in id order (`lockPersonsInOrder`, at the mode each caller names:
+ * `FOR UPDATE` on a Person the path may delete, `FOR NO KEY UPDATE` otherwise; a
+ * path that deletes one also takes `FOR UPDATE` itself just before the DELETE,
+ * whatever it took earlier), then the guest row it changes. `mergePeople` locks
+ * both its Persons `FOR UPDATE` with its own statement, not through
+ * `lockPersonsInOrder`. Taking this
  * lock before the first row lock serialises those writers per club, so the row
  * locks behind it are only ever contended by one of them at a time and the
  * order they take them in stops mattering between them. It ORDERS the rows; it
@@ -186,14 +189,18 @@ export const forUpdate = (
  * Person. `"update"` (`FOR UPDATE`) conflicts with the key-share lock every
  * foreign-key INSERT takes on the row it names, so a path holding it blocks a
  * speech insert for that Person: take it only on a Person the path MAY DELETE
- * (the guest's own Person in a guest delete or a link, `mergePeople`'s absorbed
- * one). `"no key update"` conflicts with every other writer of the row,
+ * (the guest's own Person in a guest delete or a link, when it holds no
+ * membership). `"no key update"` conflicts with every other writer of the row,
  * `applyMemberEdit`'s `FOR UPDATE` included, and NOT with a key share, so it
  * orders the Person against its writers without blocking a speaker claim, which
  * holds the slot or the membership and then key-shares the Person while it
- * inserts a speech, and takes no club lock. Taking `FOR UPDATE` on a Person that
- * the path then waits for a slot or membership while holding closed exactly that
- * cycle.
+ * inserts a speech, and takes no club lock. A path that held `FOR UPDATE` on a
+ * Person while it waited for that slot or membership closed exactly that cycle.
+ *
+ * The mode is chosen BEFORE the path has read everything under the locks, so it
+ * is not a promise that the Person is safe to delete: a path that deletes the
+ * Person takes `FOR UPDATE` itself, in its own statement just before the DELETE
+ * (`deleteGuestPersonIfUnreferenced`), and decides in the DELETE's own WHERE.
  */
 export async function lockPersonsInOrder(
 	tx: Tx,

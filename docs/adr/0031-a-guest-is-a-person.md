@@ -62,9 +62,10 @@ A Person is pristine for a guest only if ALL of these hold (`pristineGuestPerson
 - no email and no phone, and none of the roster-identity columns that only a membership, an
   import, a member or an officer sets: `customer_id`, `basecamp_user_id`, `original_join_date`,
   `invited_at`. The two contact-preference columns (`preferred_contact`, `contact_preference_by`)
-  are not tested: `preferred-contact-reads.guard.test.ts` lets only the files it names spell the
-  column, and only a member's own page, an officer's edit of a member and `mergePeople` write
-  them, so the membership, the removal and the anchor tests are what see them;
+  are deliberately NOT tested: `preferred-contact-reads.guard.test.ts` lets only the files it names
+  spell the column, and a null test is not one of its shapes. The accepted gap: a Person whose ONLY
+  remnant of a membership is one of those two columns reads pristine and can be adopted by a guest,
+  and a stale contact-channel preference can then come back with it;
 - no removal on record: a `member_remove` naming them (`detail.personId`, the shape
   `applyMemberRemove`, an undo and the CSV importer's release lookup all use).
 
@@ -185,18 +186,23 @@ Every writer in this series that touches more than one of these takes them in th
 This extends the club-lock-first rule of #1010 (`src/server/club-write-lock.ts`). `mergePeople`
 used to lock both Persons before any club lock; #1124 reverses it, because a convert, a
 guest-book capture and #1127's link all take the club lock first, and a merge holding a Person
-while it waited for a club lock closed a cycle with them. `mergePeople` takes no guest-row lock up
-front: it locks both Persons `FOR UPDATE`, which already keeps any guest row from being inserted
-naming either, and each guest row it moves is locked by the UPDATE that moves it, after the
-collapse. Locking them first closed a cycle with `applyUpdateGuestProfile`, which holds the
-introducer's membership `FOR SHARE` and then updates the guest row, while the collapse updates that
-membership.
+while it waited for a club lock closed a cycle with them. `mergePeople` locks both its Persons `FOR
+UPDATE` with its own statement (not through `lockPersonsInOrder`), and takes no guest-row lock up
+front: `FOR UPDATE` on both already keeps any guest row from being inserted naming either, and each
+guest row it moves is locked by the UPDATE that moves it, after the collapse. Locking them first
+cycled with `applyUpdateGuestProfile`, which holds the introducer's membership `FOR SHARE` and then
+updates the guest row, while the collapse updates that membership. Not locking them first closes the
+KEEPER side of that cycle. The ABSORBED side is as on main: when the guest's introducer is the
+absorbed membership, the editor holds it `FOR SHARE` while the collapse deletes it, and the cycle
+is still there.
 
 **Person lock strength.** The mode is a decision, and `lockPersonsInOrder` makes every caller say
 it, per Person. `FOR UPDATE` only on a Person the path may DELETE (the guest's own Person in a
-guest delete or a link, when it holds no membership; the absorbed Person in `mergePeople`; the
-old Person at the end of a convert, taken only once it is a candidate), `FOR NO KEY UPDATE` on
-every other (an undo, an unlink, a convert, a collapse, and the member's Person in a link). `NO KEY UPDATE`
+guest delete or a link, when it holds no membership; the old Person of a convert, taken only once
+it is a candidate), `FOR NO KEY UPDATE` on every other (an undo, an unlink, a convert, a collapse,
+and the member's Person in a link). `mergePeople` is the one path that does not go through
+`lockPersonsInOrder`: it locks BOTH its Persons `FOR UPDATE` with its own statement, the absorbed
+one because it is deleted. `NO KEY UPDATE`
 conflicts with every other writer of the row, `applyMemberEdit`'s `FOR UPDATE` included, and not
 with the key share a foreign-key insert takes on it. A speaker claim holds the slot or the
 membership and then inserts a speech, key-sharing the Person, and takes no club write lock, so a
@@ -204,6 +210,16 @@ membership and then inserts a speech, key-sharing the Person, and takes no club 
 membership collapse locks the two memberships' Persons before it writes either membership row,
 for the same reason in the other direction: it now re-points `guests.person_id`, which key-shares
 the keeper's Person, and the roster edit locks that Person before the membership.
+
+The mode a guest delete or a link chooses early comes from an UNLOCKED read of whether the Person
+holds a membership, which can be stale (a membership removed in another club since). So the mode is
+not a promise: once the Person is a delete candidate, `deleteGuestPersonIfUnreferenced` takes `FOR
+UPDATE` in its own statement just before the DELETE, whatever was taken earlier, and the DELETE's
+own WHERE decides after it. Without that, a writer's uncommitted insert naming the Person (a key
+share, compatible with `NO KEY UPDATE`) made the DELETE wait and then decide on a snapshot older
+than that writer's commit, and its cascade took the row. The accepted cost of a stale early
+choice is a strong lock held earlier than needed, which can cycle with a CSV import of another
+club (a 40P01, no data loss).
 
 **The read-then-lock rule.** A path that must read a row to learn which clubs or Persons to
 lock (convert, `mergePeople`, #1127's actions) reads it WITHOUT locking, takes the locks in
@@ -255,8 +271,9 @@ counts these rows right after the swap so they are known.
 - Undo of a convert keeps the guest row, and the guest returns to `following_up` on the same
   Person. A re-convert then adopts it only if it is still pristine. After an undo of a convert
   that created the membership it is not (the undo leaves a removal on record), so the guest gets a
-  fresh Person; after an undo of a dedupe-hit convert the guest's own Person was never touched and
-  is still pristine, and a re-convert adopts it, which is fine. The undo's speeches and Pathways
+  fresh Person; after an undo of a dedupe-hit convert the guest's own Person was never touched by
+  it, so it is pristine only if it was before the convert, and then a re-convert adopts it, which
+  is fine. The undo's speeches and Pathways
   checks are keyed on `createdMembership` rather than `createdPerson`, which is false whenever
   convert adopts. They no longer over-refuse: a Person convert puts a membership on is pristine or
   freshly minted, so what it owns afterwards was earned afterwards.

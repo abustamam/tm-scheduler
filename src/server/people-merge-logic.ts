@@ -201,14 +201,16 @@ export async function mergePeople(
 		// preview, which counts the same rows before anything moves.
 		//
 		// READ, not locked. The guest rows used to be locked here `FOR NO KEY
-		// UPDATE` as the protocol's third step, and that closed a cycle with
-		// `applyUpdateGuestProfile`: it holds the introducer's membership `FOR
-		// SHARE` and then updates the guest row, while the collapse below updates
-		// that membership. The rows cannot change membership of this set in the
-		// meantime: both Persons are locked `FOR UPDATE`, so no guest row can be
-		// inserted naming either, and the re-point below locks each row it moves at
-		// the moment it moves it, after the collapse, holding nothing the editor
-		// waits for.
+		// UPDATE` as the protocol's third step, which cycled with
+		// `applyUpdateGuestProfile` on the KEEPER side: the editor holds the
+		// introducer's membership `FOR SHARE` and then updates the guest row, while
+		// the collapse below updates the keeper's membership holding that guest row.
+		// That side is closed. The ABSORBED side is as on main: when the guest's
+		// introducer is the absorbed membership, the editor holds it `FOR SHARE`
+		// while the collapse deletes it, and that cycle is still there. The set
+		// cannot change in the meantime: both Persons are locked `FOR UPDATE`, so no
+		// guest row can be inserted naming either, and the re-point below locks each
+		// row it moves at the moment it moves it.
 		const guestsToMove = await tx
 			.select({ id: guests.id, clubId: guests.clubId })
 			.from(guests)

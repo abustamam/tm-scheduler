@@ -254,13 +254,15 @@ export function unboundGuestOnlyPerson(): SQL {
  *    folded a member into carries those columns (`mergePeople` copies the
  *    absorbed Person's contact and anchors onto the keeper), and so does one a
  *    roster collapse left behind, so the columns, not only the records, are the
- *    evidence. The two contact-preference columns are NOT on this list:
+ *    evidence. The two contact-preference columns (`preferred_contact`,
+ *    `contact_preference_by`) are DELIBERATELY NOT checked:
  *    `preferred-contact-reads.guard.test.ts` lets only the files it names spell
- *    that column, and this file is not one. Only a member's own page, an
- *    officer's edit of a member and `mergePeople` write them, so the membership
- *    and removal arms below, and the anchors above, are what see them. #1125
- *    moves a guest's contact onto its Person, and must replace the contact
- *    signal (ADR-0031);
+ *    that column, this file is not one, and a null test is not one of its
+ *    shapes. The accepted gap: a Person whose ONLY remnant of a membership is
+ *    one of those two columns reads pristine and can be adopted by a guest, and
+ *    a stale contact-channel preference can then come back with it. #1125 moves
+ *    a guest's contact onto its Person, and must replace the contact signal
+ *    (ADR-0031);
  *  - no removal on record: a `member_remove` naming it (`detail.personId`, the
  *    shape `applyMemberRemove`, an undo and the importer's release lookup all use).
  *

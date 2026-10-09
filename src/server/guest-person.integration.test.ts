@@ -3394,6 +3394,99 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 		});
 	});
 
+	describe("a mode chosen from a stale read cannot let a delete cascade away a committed row (M1)", () => {
+		/**
+		 * A guest in this club naming a Person K that holds a membership in another
+		 * club (the shape a superadmin merge leaves): the guest delete and the link
+		 * read that, without a lock, and take the WEAK lock on K. Then, AFTER that
+		 * choice (the guest row is held `FOR SHARE` so the path parks past it), the
+		 * other club's membership is removed, which makes K a delete candidate, while
+		 * a third writer's uncommitted membership insert for K holds a key share on
+		 * it. `FOR NO KEY UPDATE` does not conflict with that key share, so a DELETE
+		 * under it waits for the writer and then decides on a snapshot older than the
+		 * writer's commit: the cascade took the row the writer just committed.
+		 */
+		async function raceAfterTheModeChoice(
+			run: (guestId: string) => Promise<unknown>,
+		) {
+			const clubC = await makeClub();
+			const clubD = await makeClub();
+			const k = await makePerson({ name: uniq("Stale Mode") });
+			const [mC] = await testDb
+				.insert(members)
+				.values({ clubId: clubC, personId: k, name: uniq("Held Elsewhere") })
+				.returning({ id: members.id });
+			if (!mC) throw new Error("fixture");
+			const { id: guestId } = await createGuestRecord(testDb, {
+				clubId: seed.clubId,
+				name: uniq("Stale Guest"),
+				stage: "following_up",
+				personId: k,
+			});
+
+			// The third writer: attaching K to club D, uncommitted (a key share on K).
+			const attaching = await openBlockingTx(async (tx) => {
+				await tx.insert(members).values({
+					clubId: clubD,
+					personId: k,
+					name: "Attached Mid-Delete",
+				});
+			});
+			// Holds the guest row, so the path parks AFTER it chose its lock mode.
+			const { c, pid } = await rawClient();
+			await c.query("begin");
+			await c.query("select 1 from guests where id = $1 for share", [guestId]);
+			const running = run(guestId).then(
+				() => "ok" as const,
+				(e: Error) => e.message,
+			);
+			await waitForLockWait("guests", pid);
+			// The membership K held elsewhere is removed (`applyMemberRemove`'s DELETE),
+			// so K is a candidate now; the path's early read said it was not.
+			await c.query("delete from members where id = $1", [mC.id]);
+			await c.query("commit");
+			await c.end();
+			// The path now reaches K's delete and waits behind the key share.
+			await waitForLockWait("people", attaching.pid);
+			await attaching.commit();
+			return { outcome: await running, k, clubD };
+		}
+
+		async function expectCommittedRowSurvived(k: string, clubD: string) {
+			expect(await personRow(k)).toBeDefined();
+			const attached = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(and(eq(members.clubId, clubD), eq(members.personId, k)));
+			expect(attached).toHaveLength(1);
+		}
+
+		it("a guest delete keeps the Person and the membership another writer committed", async () => {
+			const { outcome, k, clubD } = await raceAfterTheModeChoice((guestId) =>
+				applyDeleteGuest({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			);
+			expect(outcome).toBe("ok");
+			await expectCommittedRowSurvived(k, clubD);
+		});
+
+		it("a link keeps the Person and the membership another writer committed", async () => {
+			const { outcome, k, clubD } = await raceAfterTheModeChoice((guestId) =>
+				applyLinkGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					memberId: seed.memberId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			);
+			expect(outcome).toBe("ok");
+			await expectCommittedRowSurvived(k, clubD);
+		});
+	});
+
 	describe("unlink leaves no guest on a member's Person (H1b)", () => {
 		it("a guest whose Person holds no membership stays on it", async () => {
 			// A guest linked to a membership, but naming a Person that holds none (the
