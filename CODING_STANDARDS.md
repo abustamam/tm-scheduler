@@ -290,8 +290,7 @@ There is no per-club copy; `members.email` was dropped by migration 0109.
 | the roster edit (`applyMemberEdit`) | `isNull(people.userId)` AND `soleHoldingClub(clubId)`, in the UPDATE's own WHERE |
 | the CSV importer's fill (`importPeopleAndMembers`) | the same two, plus the address is blank |
 | the member's own address change (`confirmEmailChange`, ADR-0030) | the new address was just proved by its link, and `eq(people.userId, …)` for the confirming account is in the UPDATE's own WHERE |
-| convert's fill of the guest's own Person (`applyConvertGuestToMember`, #1124, ADR-0031) | `isNull(people.userId)`, `isNull(people.email)` and `heldByGuestRowsOnly()`, in the UPDATE's own WHERE, before the membership insert |
-| undo's take-back of that fill (`revertGuestContactFill`, #1124) | `isNull(people.userId)` and `heldByGuestRowsOnly()` in the WHERE, and for a recorded fill `eq(people.email, <what convert wrote>)`; it only ever writes null |
+| convert's overwrite of the guest's own Person (`applyConvertGuestToMember`, #1124, ADR-0031) | `isNull(people.userId)` and `heldByGuestRowsOnly()`, in the UPDATE's own WHERE, before the membership insert; it SETS the address from the guest row (a cleared one included), it does not fill a blank |
 | the superadmin first-admin repair, `mergePeople` | their named waivers |
 | a plain INSERT of a brand-new Person | always — a fresh row is nobody's yet |
 
@@ -300,11 +299,15 @@ guest book is an anonymous public form; a fill would let anyone who knows a
 member's name and phone put their own address on that member's Person and take
 the account with one magic link. A Person a convert MATCHED on this club's roster
 is never written. The one address convert does write is the guest's own on the
-guest's OWN Person (#1124): the Person the guest row names, which is name-only,
-unbound and held by guest rows only until the convert makes it a member, and
-which is exactly what the FRESH Person the old convert minted was. Undo takes the
-fill back, so a typo'd address cannot stay on a Person that now holds a
-membership.
+guest's OWN Person (#1124): the Person the guest row names, which is name-only
+(or carries what an earlier convert set), unbound and held by guest rows only until
+the convert makes it a member, and which is exactly what the FRESH Person the old
+convert minted was. The Person owns their contact and a club is its custodian,
+which includes fixing a typo, until the person signs in or speaks for themselves:
+so convert SETS that Person's email and phone from the guest row as it is now, a
+cleared one included, and does not merely fill a blank. A bound Person, or one a
+club holds as a member, keeps its own. Undo does not touch the contact, so the
+undoing club's own roster CSV still matches the Person (#875).
 
 Non-null on a LINKED Person means verified; on an unlinked one it is what the one
 club that held them typed. That is why a club may write it only while it is the
@@ -376,15 +379,16 @@ column to itself.
 `person-email-writers.guard.test.ts` (every writer, matched by SHAPE — a SET that
 is not an inline object literal is refused outright, comments are stripped, the
 table is resolved through its local binding, upserts and raw SQL count; each
-club-side writer must carry `isNull(people.userId)` AND `soleHoldingClub(`; the two
-guest-Person writers carry `heldByGuestRowsOnly()` instead of the sole-holder test),
+club-side writer must carry `isNull(people.userId)` AND `soleHoldingClub(`; convert's
+overwrite of a guest-only Person carries `heldByGuestRowsOnly()` instead of the
+sole-holder test),
 `roster-obstacle.guard.test.ts` (the complement),
 `account-link-logic.integration.test.ts` (each arm killed independently),
 `member-email-ownership.integration.test.ts`,
 `account-invite-logic.integration.test.ts`,
 `guest-convert-email.integration.test.ts`,
-`guest-person.integration.test.ts` (the guest's Person: the convert fill's
-predicates, its undo, and the lock order) and
+`guest-person.integration.test.ts` (the guest's Person: convert's overwrite and
+its predicates, an undo that leaves the contact alone, and the lock order) and
 `person-email-migration.integration.test.ts`.
 
 ### Still open, and deliberately so

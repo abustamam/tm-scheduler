@@ -75,7 +75,6 @@ import {
 	ensureGuestPerson,
 	lockPersonsInOrder,
 	RECORD_CHANGED_MESSAGE,
-	revertGuestContactFill,
 	separateGuestFromMemberPerson,
 } from "./guests-logic";
 import { closeOpenOfficerTerms } from "./officers-logic";
@@ -1776,72 +1775,55 @@ export async function applyConvertGuestToMember(
 		// keep every convert's Undo button.
 		const createdPerson = false;
 		let createdMembership = false;
-		// The fields this convert FILLED on the Person, recorded in step 5 so an
-		// undo can take back exactly those and nothing else (H1 of #1155).
-		const filledContact: { email?: string; phone?: string } = {};
 		if (!personId) {
 			personId = await ensureGuestPerson(tx, input.guestId);
 			// The guest row is the officer's current word on who this is: the Person
 			// was minted at capture time with the name then typed, and an officer's
-			// correction since (a renamed guest, a goes-by name set or CLEARED) lives
-			// only on the guest row. The membership is about to carry it, and the
-			// Person is the fallback every other club reads (`people.name`,
-			// `people.preferred_name`), so it follows. Only while the Person is still
-			// the guest's alone (`unboundGuestOnlyPerson()`, which reads false the
-			// moment the membership below exists): a Person who is a member
-			// somewhere, or signed in, keeps the name they have.
+			// correction since (a renamed guest, a goes-by name set or CLEARED, a
+			// fixed address) lives only on the guest row. The membership is about to
+			// carry it, and the Person is the fallback every other club reads, so it
+			// follows. Only while the Person is still the guest's alone and nobody has
+			// signed in as them (`unboundGuestOnlyPerson()`, which reads false the
+			// moment the membership below exists): a Person who is a member somewhere,
+			// or signed in, keeps the name they have.
 			await tx
 				.update(people)
 				.set({ name, preferredName })
 				.where(and(eq(people.id, personId), unboundGuestOnlyPerson()));
-			// The guest's contact goes onto that Person as the Person becomes a
-			// member (it was name-only until now; #1125 moves the rest). Three
-			// conditions, each in the statement's own WHERE so a sign-in or a second
-			// writer landing mid-transaction makes it a no-op rather than an
+			// The guest's contact too, and it is an OVERWRITE, not a fill: the Person
+			// owns their contact and a club is its custodian, which includes fixing a
+			// typo, until the person signs in or speaks for themselves (#1124,
+			// ADR-0031). So the Person's email and phone are SET to the guest row's
+			// current values, a cleared one included. A fill would leave a typo'd
+			// address on a Person that now holds a membership after an undo, a
+			// correction on the guest and a second convert, and the bind rule lets
+			// whoever owns the typo sign in to it. Clearing it at undo instead was
+			// tried and rejected: it stops the undoing club's own roster CSV matching
+			// the Person (#875), which then creates a second Person for one human.
+			//
+			// Two conditions, each in the statement's own WHERE so a sign-in or a
+			// second writer landing mid-transaction makes it a no-op rather than an
 			// overwrite:
-			//  - nobody has signed in as them (`isNull(people.userId)`): an address
-			//    on a bound Person is its account's;
-			//  - the field is blank (`isNull(people.email)`): contact already on file
-			//    was typed by somebody with more standing than the guest book;
+			//  - nobody has signed in as them (`isNull(people.userId)`): an address on
+			//    a bound Person is its account's;
 			//  - they are held by guest rows only (`heldByGuestRowsOnly()`): a Person
 			//    who is already a member somewhere keeps whatever that club recorded.
 			//
 			// BEFORE the membership insert below, because `heldByGuestRowsOnly()`
 			// reads false the moment this convert adds one, and the UPDATE would match
-			// nothing and report success. A phone-only guest is the same.
-			if (email) {
-				const filled = await tx
-					.update(people)
-					.set({ email })
-					.where(
-						and(
-							eq(people.id, personId),
-							isNull(people.userId),
-							isNull(people.email),
-							heldByGuestRowsOnly(),
-						),
-					)
-					.returning({ id: people.id });
-				if (filled.length > 0) {
-					written = { personId, email };
-					filledContact.email = email;
-				}
-			}
-			if (phone) {
-				const filled = await tx
-					.update(people)
-					.set({ phone })
-					.where(
-						and(
-							eq(people.id, personId),
-							isNull(people.userId),
-							isNull(people.phone),
-							heldByGuestRowsOnly(),
-						),
-					)
-					.returning({ id: people.id });
-				if (filled.length > 0) filledContact.phone = phone;
-			}
+			// nothing and report success.
+			const overwritten = await tx
+				.update(people)
+				.set({ email, phone })
+				.where(
+					and(
+						eq(people.id, personId),
+						isNull(people.userId),
+						heldByGuestRowsOnly(),
+					),
+				)
+				.returning({ id: people.id });
+			if (email && overwritten.length > 0) written = { personId, email };
 		} else {
 			if (preferredName) {
 				// Deduped onto an EXISTING Person: the insert above never ran, so seed
@@ -2189,12 +2171,6 @@ export async function applyConvertGuestToMember(
 				slotIds: movedSlots.map((s) => s.id),
 				createdMembership,
 				createdPerson,
-				// What convert filled on the Person, so an undo takes back exactly that
-				// (H1 of #1155). Absent when it filled nothing, and on every record
-				// from before #1124.
-				...(Object.keys(filledContact).length > 0
-					? { filled: filledContact }
-					: {}),
 				...(reactivatedFrom ? { reactivatedFrom } : {}),
 				...(demotedFrom ? { demotedFrom } : {}),
 				...(closedOfficerPositions.length > 0
@@ -2557,14 +2533,6 @@ type ConversionRecord = {
 	 * row that was an ordinary member already.
 	 */
 	demotedFrom?: "admin";
-	/**
-	 * The email and phone convert FILLED onto the Person (#1124, H1 of #1155), as
-	 * written, so an undo clears exactly those and only while they still hold that
-	 * value. Absent when convert filled nothing and on every record from before
-	 * #1124; for those the old convert minted the Person carrying the guest's
-	 * contact, which `createdPerson: true` says.
-	 */
-	filled?: { email?: string; phone?: string };
 };
 
 /**
@@ -2617,20 +2585,6 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
 	const demotedFrom =
 		d.demotedFrom === "admin" ? ("admin" as const) : undefined;
 	if (d.demotedFrom !== undefined && demotedFrom === undefined) return null;
-	// `filled` is ABSENT or well-formed, never half-readable: a present key that
-	// does not parse would read as "filled nothing" and leave a stale address on
-	// a member's Person, which is the bug it exists to prevent.
-	let filled: { email?: string; phone?: string } | undefined;
-	if (d.filled !== undefined) {
-		const f = d.filled as Record<string, unknown> | null;
-		if (!f || typeof f !== "object" || Array.isArray(f)) return null;
-		if (f.email !== undefined && typeof f.email !== "string") return null;
-		if (f.phone !== undefined && typeof f.phone !== "string") return null;
-		filled = {
-			...(typeof f.email === "string" ? { email: f.email } : {}),
-			...(typeof f.phone === "string" ? { phone: f.phone } : {}),
-		};
-	}
 	return {
 		personId: d.personId,
 		slotIds: d.slotIds.filter((s): s is string => typeof s === "string"),
@@ -2638,7 +2592,6 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
 		createdPerson: d.createdPerson,
 		reactivatedFrom,
 		demotedFrom,
-		filled,
 	};
 }
 
@@ -2715,11 +2668,10 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
  * `applyMemberRemove` also writes and the CSV importer reads (#855). Without it
  * the Person is held by no club and named by no removal, so a roster CSV
  * carrying the Person's email skips the row on every import, in this club too
- * (#875). Since #1124 the undo also takes back the address convert filled, so
- * for a convert made after it there is usually no address left to skip on; the
- * record stays because a Person whose address an officer edited since, or one
- * from a record written before #1124, still carries one. An undo that keeps a
- * reused membership releases nothing and names nobody.
+ * (#875). The undo leaves the Person's contact exactly as convert set it, so
+ * that CSV row still matches the Person; clearing it would make the import
+ * create a second Person for the same human. An undo that keeps a reused
+ * membership releases nothing and names nobody.
  */
 export async function applyUndoGuestConversion(
 	input: UndoConversionInput,
@@ -2949,20 +2901,12 @@ export async function applyUndoGuestConversion(
 			})
 			.where(eq(guests.id, input.guestId));
 
-		// Take back the contact convert FILLED onto that Person, now that the
-		// membership is gone and the Person is guest-only again (H1 of #1155). A
-		// recorded fill is cleared only while it still holds the value convert
-		// wrote; a record from before #1124 (`createdPerson: true`) is one the old
-		// convert minted carrying the guest's contact, so whatever contact that
-		// Person holds goes back to the name-only shape the backfill gives a guest.
-		// Both only while nobody has signed in as them. After this the guest's
-		// address, corrected or not, is filled again by the next convert.
-		if (record.createdPerson) {
-			await revertGuestContactFill(tx, memberPersonId, { any: true });
-		} else if (record.filled) {
-			await revertGuestContactFill(tx, memberPersonId, record.filled);
-		}
-		// And if the guest's Person STILL holds a membership (a convert that reused
+		// Undo does not touch the Person's contact. Convert SETS it from the guest
+		// row, so the next convert sets it again from the guest row as it is then; and
+		// leaving it makes the undoing club's own roster CSV still find the Person the
+		// convert minted (#875), instead of creating a second one for the same human.
+		//
+		// If the guest's Person STILL holds a membership (a convert that reused
 		// one, or a row the backfill pointed at a member's Person), point the guest
 		// at a fresh name-only Person instead (H2 of #1155), so the next convert
 		// cannot adopt that member.

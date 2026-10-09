@@ -52,35 +52,42 @@ membership on the guest's own Person. It inserts no `people` row and records
 `createdPerson: false`, which is still written so that code from before #1124 can read the
 record.
 
-While the Person is still guest-only, and before the membership insert, convert writes three
-things onto it, each in its own UPDATE with its conditions in that UPDATE's own WHERE:
+While the Person is still guest-only and unbound, and before the membership insert, convert
+writes two things onto it, each in its own UPDATE with its conditions in that UPDATE's own
+WHERE:
 
 - **Name and goes-by name**, overwritten from the guest row, a cleared goes-by name included. The
   Person was minted at capture time, and an officer's later correction lives only on the guest
   row; the membership carries it, and `people.name` and `people.preferred_name` are the fallback
-  every other club reads. Unbound and guest-only Persons only. This is the fourth behavior
-  change the spec did not list: a Person made by `createGuestRecord` no longer goes stale when
-  an officer renames the guest, which the old convert avoided only because it created the Person
-  at convert time.
-- **Email and phone**, copied from the guest row into fields that are blank, under three
-  conditions: the Person is not signed in, the field is blank, and the Person is held by guest
-  rows only. That last predicate reads false the moment the membership exists, so the copy runs
-  before the membership insert.
+  every other club reads. This is the fourth behavior change the spec did not list: a Person made
+  by `createGuestRecord` no longer goes stale when an officer renames the guest, which the old
+  convert avoided only because it created the Person at convert time.
+- **Email and phone**, SET from the guest row's current values, a cleared one included. The
+  Person owns their contact and a club is its custodian, which includes fixing a typo, until the
+  person signs in or speaks for themselves; so convert sets a guest-only, unbound Person's contact
+  from the guest row, and a bound or member Person keeps its own. This deviates from the letter
+  of the issue ("only into fields that are null"). A fill left a typo'd address on a Person that
+  holds a membership after an undo, a correction on the guest and a second convert, and the bind
+  rule lets whoever owns the typo sign in to it. Clearing the address at undo instead was tried
+  and rejected: it stops the undoing club's own roster CSV matching the Person convert minted
+  (#875), which then creates a second Person for the same human in the same club.
+
+The conditions are that nobody has signed in as the Person and that it is held by guest rows only.
+The second reads false the moment the membership exists, so the writes run before the membership
+insert.
 
 This refines ADR-0029's "guest conversion never writes an EXISTING Person's address": the Person
-here is the guest's own, name-only and unbound, exactly what a fresh Person was before. A matched
-Person (a member of this club) is still never written. The dedupe-hit path is otherwise
-unchanged, and the accepted residual is that such a human has two Persons until a superadmin
-merge. It now locks BOTH Persons, the guest's and the matched one, in id order before it writes.
+here is the guest's own, unbound and held by guest rows alone, exactly what a fresh Person was
+before. A matched Person (a member of this club) is still never written. The dedupe-hit path is
+otherwise unchanged, and the accepted residual is that such a human has two Persons until a
+superadmin merge. It now locks BOTH Persons, the guest's and the matched one, in id order before
+it writes.
 
-**Convert records what it filled** (`filled: { email?, phone? }` on the `member_add` record).
-Undo clears each field back to null, but only while the Person is still unbound and the field
-still holds the value convert wrote. Without it, undoing a convert made on a typo'd address,
-correcting the guest, and converting again adopted the same Person with the old address still on
-it, and the bind rule lets whoever owns that address sign in to a Person that now holds a
-membership. A record from before #1124 (`createdPerson: true`) was minted by the old convert
-carrying the guest's contact, so its undo clears whatever contact that Person holds, under the
-same unbound condition and only while no club holds them as a member.
+**Undo leaves the contact alone.** It takes back nothing convert wrote: the next convert sets the
+contact again from the guest row as it is then, and an undone Person keeps the address its own
+club's roster CSV will look for. Undo resolves the Person through the membership row's CURRENT
+`person_id`, not the activity record, because a merge since may have deleted the Person the
+record names.
 
 **After an undo or an unlink, a guest never keeps a member's Person.** The backfill points a
 converted or linked guest at its membership's Person. If that Person still holds ANY membership
@@ -91,9 +98,7 @@ shape. Left alone, the next convert would adopt the member's Person, take the re
 before #759, attach another club's Person. A link (#635) is the other direction: it points the
 guest at the member's Person, as a converted guest does, and takes back the guest's old Person
 when nothing else references it. A collapse of two memberships carries `guests.person_id` along
-with `converted_membership_id`. Undo resolves the Person through the membership row's CURRENT
-`person_id`, not the activity record, because a merge since may have deleted the Person the
-record names.
+with `converted_membership_id`.
 
 ### Contact (implemented in #1125, recorded here)
 

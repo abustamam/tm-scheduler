@@ -16,10 +16,7 @@ import {
 } from "#/lib/guest-profile";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { toStoredPhone } from "#/lib/phone";
-import {
-	heldByGuestRowsOnly,
-	unreferencedUnboundPerson,
-} from "./account-link-logic";
+import { unreferencedUnboundPerson } from "./account-link-logic";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import type { UpdateGuestProfileInput } from "./guest-pipeline-schemas";
@@ -225,67 +222,6 @@ export async function separateGuestFromMemberPerson(
 		.set({ personId: fresh })
 		.where(eq(guests.id, guestId));
 	return fresh;
-}
-
-/** What an undo puts back (#1124). */
-export type GuestContactToRevert =
-	/** Convert's own record of what it filled: each is cleared only while it
-	 *  still holds the value convert wrote. */
-	| { email?: string; phone?: string; any?: undefined }
-	/** A record from before #1124: the old convert minted the Person carrying
-	 *  the guest's contact, so whatever contact it holds now is cleared. */
-	| { any: true; email?: undefined; phone?: undefined };
-
-/**
- * Undo's half of convert's contact fill (#1124): clear email and phone back to
- * null on the Person convert put them on, so a re-convert fills again from the
- * guest row as it is NOW.
- *
- * Without this an undo of a convert made on a typo'd address, then a fix to the
- * guest's address, then a second convert, adopted the same Person with the old
- * address still on it, and `rosterPermitsBind` let whoever owns the old address
- * bind to a Person that now holds a membership.
- *
- * Each UPDATE carries its own conditions: the Person is unbound
- * (`isNull(people.userId)`: an address on a signed-in Person is its account's),
- * is held by guest rows only (`heldByGuestRowsOnly()`: call it AFTER the
- * membership is deleted, and a Person that is a member somewhere keeps what that
- * club recorded), and, for a recorded fill, still holds the value convert
- * wrote (`eq(people.email, …)`: an officer who edited it since has made it
- * theirs). It is one of the two named waivers of `people.email` writes in
- * `person-email-writers.guard.test.ts`.
- */
-export async function revertGuestContactFill(
-	tx: DbOrTx,
-	personId: string,
-	revert: GuestContactToRevert,
-): Promise<void> {
-	if (revert.any || revert.email !== undefined) {
-		await tx
-			.update(people)
-			.set({ email: null })
-			.where(
-				and(
-					eq(people.id, personId),
-					isNull(people.userId),
-					heldByGuestRowsOnly(),
-					revert.any ? undefined : eq(people.email, revert.email as string),
-				),
-			);
-	}
-	if (revert.any || revert.phone !== undefined) {
-		await tx
-			.update(people)
-			.set({ phone: null })
-			.where(
-				and(
-					eq(people.id, personId),
-					isNull(people.userId),
-					heldByGuestRowsOnly(),
-					revert.any ? undefined : eq(people.phone, revert.phone as string),
-				),
-			);
-	}
 }
 
 /**

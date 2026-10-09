@@ -35,7 +35,6 @@ import {
 import {
 	CONVERT_NAME_CLASH_MESSAGE,
 	UNDO_MEMBER_HAS_ACCOUNT_MESSAGE,
-	UNDO_NO_RECORD_MESSAGE,
 } from "#/lib/guest-convert";
 import { toStoredPhone } from "#/lib/phone";
 import {
@@ -58,7 +57,6 @@ const {
 	ensureGuestPerson,
 	GUEST_NOT_IN_CLUB_MESSAGE,
 	RECORD_CHANGED_MESSAGE,
-	revertGuestContactFill,
 } = await import("#/server/guests-logic");
 const {
 	applyConvertGuestToMember,
@@ -624,53 +622,63 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			expect(res.rosterConflict).toBe("shared_address");
 		});
 
-		it("keeps an email the Person already has, and still fills the blank phone", async () => {
-			const kept = `kept-${randomUUID()}@example.com`;
+		it("OVERWRITES a guest-only Person's stale address and phone with the guest row's (a club fixes typos)", async () => {
+			const email = `now-${randomUUID()}@example.com`;
 			const rawPhone = uniquePhone();
-			const { guestId, personId } = await newGuest(uniq("Has Email"), {
-				email: `typed-${randomUUID()}@example.com`,
+			const { guestId, personId } = await newGuest(uniq("Has Old Contact"), {
+				email,
 				phone: rawPhone,
 			});
+			// What the Person carries from an earlier convert or a legacy mint: stale.
 			await testDb
 				.update(people)
-				.set({ email: kept })
+				.set({
+					email: `old-${randomUUID()}@example.com`,
+					phone: "+15550009999",
+				})
 				.where(eq(people.id, personId));
 
 			await convert(guestId);
 
 			const p = await personRow(personId);
-			expect(p?.email).toBe(kept);
+			expect(p?.email).toBe(email);
 			expect(p?.phone).toBe(toStoredPhone(rawPhone, "1"));
 		});
 
-		it("keeps a phone the Person already has, and still fills the blank email", async () => {
-			const keptPhone = toStoredPhone(uniquePhone(), "1");
-			const email = `fill-${randomUUID()}@example.com`;
-			const { guestId, personId } = await newGuest(uniq("Has Phone"), {
-				email,
-				phone: uniquePhone(),
-			});
+		it("a contact the guest row no longer has is CLEARED on the guest-only Person", async () => {
+			const { guestId, personId } = await newGuest(uniq("Cleared Contact"));
+			// The Person still holds contact the officer has since removed from the guest.
 			await testDb
 				.update(people)
-				.set({ phone: keptPhone })
+				.set({
+					email: `gone-${randomUUID()}@example.com`,
+					phone: "+15550008888",
+				})
 				.where(eq(people.id, personId));
 
 			await convert(guestId);
 
 			const p = await personRow(personId);
-			expect(p?.phone).toBe(keptPhone);
-			expect(p?.email).toBe(email);
+			expect(p?.email).toBeNull();
+			expect(p?.phone).toBeNull();
 		});
 
-		it("copies nothing onto, and renames nothing on, a Person somebody has signed in as", async () => {
+		it("leaves a signed-in Person's contact and name alone", async () => {
 			const { guestId, personId } = await newGuest(uniq("Bound Guest"), {
 				email: `bound-${randomUUID()}@example.com`,
 				phone: uniquePhone(),
 			});
 			const theirName = uniq("Their Own Name");
+			const theirEmail = `theirs-${randomUUID()}@example.com`;
 			await testDb
 				.update(people)
-				.set({ userId: await makeUser(), name: theirName, preferredName: "T" })
+				.set({
+					userId: await makeUser(),
+					name: theirName,
+					preferredName: "T",
+					email: theirEmail,
+					phone: "+15550007777",
+				})
 				.where(eq(people.id, personId));
 
 			await convert(guestId);
@@ -678,17 +686,22 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			// The address on a bound Person is its account's, and the guest book is an
 			// anonymous form. The name is theirs too: the guest row's does not replace it.
 			const p = await personRow(personId);
-			expect(p?.email).toBeNull();
-			expect(p?.phone).toBeNull();
+			expect(p?.email).toBe(theirEmail);
+			expect(p?.phone).toBe("+15550007777");
 			expect(p?.name).toBe(theirName);
 			expect(p?.preferredName).toBe("T");
 		});
 
-		it("copies nothing onto a Person that is already a member somewhere else", async () => {
+		it("leaves a Person that is already a member somewhere else exactly as it is", async () => {
 			// A merge can leave a guest row pointing at a member's Person. What that
-			// club recorded stays; the guest row's contact is not theirs to add.
+			// club recorded stays; the guest row's contact is not theirs to set.
 			const otherClub = await makeClub();
-			const memberPerson = await makePerson({ name: uniq("Elsewhere Member") });
+			const memberEmail = `member-${randomUUID()}@example.com`;
+			const memberPerson = await makePerson({
+				name: uniq("Elsewhere Member"),
+				email: memberEmail,
+				phone: "+15550006666",
+			});
 			await testDb.insert(members).values({
 				clubId: otherClub,
 				personId: memberPerson,
@@ -715,11 +728,10 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			expect(held.map((h) => h.clubId).sort()).toEqual(
 				[otherClub, seed.clubId].sort(),
 			);
-			// ...and nothing is copied onto it, and its name is not replaced by the
-			// guest row's.
+			// ...and its contact and name are not replaced by the guest row's.
 			const p = await personRow(memberPerson);
-			expect(p?.email).toBeNull();
-			expect(p?.phone).toBeNull();
+			expect(p?.email).toBe(memberEmail);
+			expect(p?.phone).toBe("+15550006666");
 			expect(p?.name).toBe(memberName);
 			expect(p?.preferredName).toBeNull();
 		});
@@ -761,8 +773,6 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			expect(after.convertedMembershipId).toBeNull();
 			expect(after.personId).toBe(res.personId);
 			expect(await peopleNamed(name)).toHaveLength(1);
-			// And what convert filled is taken back: the Person is name-only again.
-			expect((await personRow(res.personId))?.email).toBeNull();
 		});
 
 		it("undoing it leaves the Person and the guest row, and the guest returns to following_up (AC8)", async () => {
@@ -1122,7 +1132,6 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 		personId: string;
 		createdMembership: boolean;
 		createdPerson: boolean;
-		filled?: unknown;
 	}) {
 		await testDb.insert(activityLog).values({
 			clubId: seed.clubId,
@@ -1137,7 +1146,6 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 				slotIds: [],
 				createdMembership: opts.createdMembership,
 				createdPerson: opts.createdPerson,
-				...(opts.filled === undefined ? {} : { filled: opts.filled }),
 			},
 		});
 	}
@@ -1182,7 +1190,7 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 	// -----------------------------------------------------------------------
 	// H1: undo reverses what convert filled.
 	// -----------------------------------------------------------------------
-	describe("undo takes back exactly what convert filled (H1)", () => {
+	describe("convert sets the contact, undo leaves it, a corrected re-convert is right (H1)", () => {
 		it("a typo'd address does not stay on a member's Person: convert, undo, correct, convert again", async () => {
 			const name = uniq("Typo Guest");
 			const typo = `typo-${randomUUID()}@example.test`;
@@ -1193,8 +1201,9 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			expect((await personRow(personId))?.email).toBe(typo);
 
 			await undo(guestId);
-			// The Person is name-only again, not holding an address the guest no longer has.
-			expect((await personRow(personId))?.email).toBeNull();
+			// Undo leaves the contact as convert set it (#875): the undoing club's own
+			// roster CSV still finds this Person by that address.
+			expect((await personRow(personId))?.email).toBe(typo);
 
 			await applyUpdateGuest({
 				clubId: seed.clubId,
@@ -1204,7 +1213,8 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			});
 			const second = await convert(guestId);
 
-			// The same Person, now a member, carrying the CORRECTED address.
+			// The same Person, now a member, carrying the CORRECTED address: convert
+			// sets it from the guest row, it does not fill only a blank.
 			expect(second.personId).toBe(personId);
 			expect((await personRow(personId))?.email).toBe(fixed);
 			// End to end through the bind rule: whoever owns the typo cannot sign in to
@@ -1220,7 +1230,7 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			);
 		});
 
-		it("the same for a record from BEFORE #1124 (createdPerson: true): the Person the old convert minted goes back to name-only", async () => {
+		it("the same for a record from BEFORE #1124 (createdPerson: true): the Person the old convert minted carries the corrected address", async () => {
 			const name = uniq("Legacy Typo");
 			const typo = `legacy-typo-${randomUUID()}@example.test`;
 			const fixed = `legacy-fixed-${randomUUID()}@example.test`;
@@ -1232,10 +1242,10 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 
 			const undone = await undo(guestId);
 			expect(undone.membershipDeleted).toBe(true);
+			// Undo does not touch the contact, and the guest still names the Person.
 			const after = await personRow(personId);
-			expect(after?.email).toBeNull();
-			expect(after?.phone).toBeNull();
-			// Its name is untouched, and the guest still names it.
+			expect(after?.email).toBe(typo);
+			expect(after?.phone).toBe("+15550001111");
 			expect(after?.name).toBe(name);
 			expect((await guestRow(guestId)).personId).toBe(personId);
 
@@ -1248,54 +1258,45 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			const second = await convert(guestId);
 
 			expect(second.personId).toBe(personId);
-			expect((await personRow(personId))?.email).toBe(fixed);
+			const p = await personRow(personId);
+			expect(p?.email).toBe(fixed);
+			// The guest row has no phone (the correction omitted it), so neither has
+			// the Person: a stale number from the old convert does not survive.
+			expect(p?.phone).toBeNull();
 			const typoOwner = await makeUser(typo);
 			expect(await bindVerifiedPerson({ personId, userId: typoOwner })).toBe(
 				false,
 			);
 		});
 
-		it("clears a field only while it still holds what convert wrote", async () => {
-			const email = `kept-${randomUUID()}@example.test`;
-			const { guestId, personId } = await newGuest(uniq("Edited Since"), {
-				email,
-				phone: uniquePhone(),
+		it("a guest whose address was cleared after an undo: the re-convert clears it on the Person", async () => {
+			const name = uniq("Cleared After Undo");
+			const { guestId, personId } = await newGuest(name, {
+				email: `will-clear-${randomUUID()}@example.test`,
 			});
 			await convert(guestId);
-			// An officer corrects the member's address on the member page afterwards.
-			const theirs = `theirs-${randomUUID()}@example.test`;
-			await testDb
-				.update(people)
-				.set({ email: theirs })
-				.where(eq(people.id, personId));
-
 			await undo(guestId);
+			await applyUpdateGuest({ clubId: seed.clubId, guestId, name });
 
-			const p = await personRow(personId);
-			// The address is theirs now and stays; the phone convert wrote still
-			// matched, so it went.
-			expect(p?.email).toBe(theirs);
-			expect(p?.phone).toBeNull();
+			await convert(guestId);
+
+			expect((await personRow(personId))?.email).toBeNull();
 		});
 
-		it("a phone an officer changed since is left alone too, while the unchanged address still goes", async () => {
-			const email = `still-${randomUUID()}@example.test`;
-			const { guestId, personId } = await newGuest(uniq("Phone Edited"), {
+		it("an undo leaves the contact convert set, so the undoing club's CSV still matches it", async () => {
+			const email = `kept-${randomUUID()}@example.test`;
+			const rawPhone = uniquePhone();
+			const { guestId, personId } = await newGuest(uniq("Undo Keeps"), {
 				email,
-				phone: uniquePhone(),
+				phone: rawPhone,
 			});
 			await convert(guestId);
-			const theirs = toStoredPhone(uniquePhone(), "1");
-			await testDb
-				.update(people)
-				.set({ phone: theirs })
-				.where(eq(people.id, personId));
 
 			await undo(guestId);
 
 			const p = await personRow(personId);
-			expect(p?.phone).toBe(theirs);
-			expect(p?.email).toBeNull();
+			expect(p?.email).toBe(email);
+			expect(p?.phone).toBe(toStoredPhone(rawPhone, "1"));
 		});
 
 		it("undoes a conversion of a guest whose person_id is null (the old container's row) without minting a Person", async () => {
@@ -1337,86 +1338,6 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			expect(row.stage).toBe("following_up");
 			expect(row.personId).toBeNull();
 			expect(await peopleNamed(name)).toHaveLength(1);
-		});
-
-		it("revertGuestContactFill clears only an unbound, guest-held Person, and only a matching value", async () => {
-			const revert = (
-				personId: string,
-				what: Parameters<typeof revertGuestContactFill>[2],
-			) =>
-				testDb.transaction((tx) => revertGuestContactFill(tx, personId, what));
-			const holdsEmail = async (email: string) => {
-				const { guestId, personId } = await newGuest(uniq("Revert Target"));
-				await testDb
-					.update(people)
-					.set({ email, phone: "+15550002222" })
-					.where(eq(people.id, personId));
-				return { guestId, personId };
-			};
-
-			// Control: a recorded fill that still matches IS cleared.
-			const e1 = `r1-${randomUUID()}@example.test`;
-			const a = await holdsEmail(e1);
-			await revert(a.personId, { email: e1, phone: "+15550002222" });
-			expect((await personRow(a.personId))?.email).toBeNull();
-			expect((await personRow(a.personId))?.phone).toBeNull();
-
-			// A different value: untouched.
-			const b = await holdsEmail(`r2-${randomUUID()}@example.test`);
-			await revert(b.personId, { email: "someone-else@example.test" });
-			expect((await personRow(b.personId))?.email).not.toBeNull();
-
-			// Signed in: untouched, in either mode.
-			const c = await holdsEmail(`r3-${randomUUID()}@example.test`);
-			await testDb
-				.update(people)
-				.set({ userId: await makeUser() })
-				.where(eq(people.id, c.personId));
-			await revert(c.personId, { any: true });
-			expect((await personRow(c.personId))?.email).not.toBeNull();
-			expect((await personRow(c.personId))?.phone).not.toBeNull();
-
-			// A member of some club: untouched, in either mode.
-			const d = await holdsEmail(`r4-${randomUUID()}@example.test`);
-			const otherClub = await makeClub();
-			await testDb.insert(members).values({
-				clubId: otherClub,
-				personId: d.personId,
-				name: "Held Elsewhere",
-			});
-			await revert(d.personId, { any: true });
-			expect((await personRow(d.personId))?.email).not.toBeNull();
-			expect((await personRow(d.personId))?.phone).not.toBeNull();
-
-			// The legacy mode clears whatever is there on a Person that qualifies.
-			const f = await holdsEmail(`r5-${randomUUID()}@example.test`);
-			await revert(f.personId, { any: true });
-			expect((await personRow(f.personId))?.email).toBeNull();
-			expect((await personRow(f.personId))?.phone).toBeNull();
-		});
-
-		it("refuses a record whose filled key is half-readable, rather than reading it as 'filled nothing'", async () => {
-			for (const bad of ["x", [], { email: 5 }, { phone: {} }]) {
-				const { guestId, personId } = await newGuest(uniq("Bad Record"));
-				const [m] = await testDb
-					.insert(members)
-					.values({ clubId: seed.clubId, personId, name: uniq("Bad Record M") })
-					.returning({ id: members.id });
-				if (!m) throw new Error("fixture");
-				await testDb
-					.update(guests)
-					.set({ stage: "joined", convertedMembershipId: m.id })
-					.where(eq(guests.id, guestId));
-				await plantConversionRecord({
-					guestId,
-					membershipId: m.id,
-					personId,
-					createdMembership: true,
-					createdPerson: false,
-					filled: bad,
-				});
-				await expect(undo(guestId)).rejects.toThrow(UNDO_NO_RECORD_MESSAGE);
-			}
 		});
 	});
 

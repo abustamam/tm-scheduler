@@ -71,15 +71,12 @@ const WAIVERS: Record<
 		 *  `eq(people.userId, …)` in the statement itself, so it can only ever
 		 *  move the address of the Person bound to the confirming account. */
 		requiresBoundToUser?: boolean;
-		/** Convert's copy of a guest's address (#1124): its UPDATE must carry
-		 *  `isNull(people.email)` (fill a blank, never overwrite) and
-		 *  `heldByGuestRowsOnly(` or `unboundGuestOnlyPerson(` (the Person is held by guest
-		 *  rows only), in the statement itself. */
-		requiresGuestFill?: boolean;
-		/** Undo's take-back of that fill (#1124): its UPDATE may only write NULL,
-		 *  and must carry `heldByGuestRowsOnly(` and `eq(people.email,` (the fill
-		 *  convert recorded must still be what is there) in the statement itself. */
-		requiresGuestRevert?: boolean;
+		/** Convert's overwrite of a guest-only Person's contact from the guest row
+		 *  (#1124): its UPDATE must carry `heldByGuestRowsOnly(` or
+		 *  `unboundGuestOnlyPerson(` (the Person is held by guest rows only: no
+		 *  membership, so a member keeps what their club recorded), in the statement
+		 *  itself, beside the `isNull(people.userId)` every club-side writer carries. */
+		requiresGuestOnly?: boolean;
 	}
 > = {
 	// A member changing their OWN sign-in address (#1091, ADR-0030). The new
@@ -100,33 +97,25 @@ const WAIVERS: Record<
 		requiresUnlinkedGuard: true,
 		requiresSoleHolder: true,
 	},
-	// Convert-to-member's copy of a guest's address onto the guest's OWN Person
-	// (#1124, ADR-0031). Club-reachable (an officer's click), and the only writer
-	// whose Person has NO membership yet, so `soleHoldingClub`, which demands a
-	// vouching membership, cannot be its predicate. Its own three, all in the
-	// statement: unbound, blank, and held by guest rows only. The last must be
-	// evaluated BEFORE the membership insert, which is why the statement sits in
-	// the no-match branch ahead of it.
+	// Convert-to-member's OVERWRITE of a guest-only Person's contact from the guest
+	// row (#1124, ADR-0031). Club-reachable (an officer's click). The Person owns
+	// their contact and a club is its custodian, which includes fixing a typo, until
+	// the person signs in or speaks for themselves, so this SETS the address from the
+	// guest row as it is now, a cleared one included, rather than filling a blank:
+	// a fill left a typo'd address on a Person that holds a membership after an undo
+	// and a correction, and clearing it at undo instead broke the undoing club's own
+	// roster CSV (#875). It is the only writer whose Person has NO membership yet, so
+	// `soleHoldingClub`, which demands a vouching membership, cannot be its
+	// predicate. Its own two, both in the statement: unbound, and held by guest rows
+	// only. The second must be evaluated BEFORE the membership insert, which is why
+	// the statement sits in the no-match branch ahead of it.
 	"server/guest-pipeline-logic.ts": {
 		fn: "applyConvertGuestToMember",
 		sites: 1,
 		reason:
-			"convert fills a blank address on the guest's own guest-only Person from the guest row (#1124)",
+			"convert sets a guest-only, unbound Person's address from the guest row, so a club can fix a typo until the person speaks (#1124)",
 		requiresUnlinkedGuard: true,
-		requiresGuestFill: true,
-	},
-	// Undo's take-back of that fill (#1124, H1 of #1155). It only ever writes NULL,
-	// and only onto a Person nobody has signed in as, who no club holds as a member,
-	// and, for a recorded fill, whose address is still the one convert wrote. The
-	// legacy shape (a record from before #1124) omits the value test at run time and
-	// keeps the other two; both spell `eq(people.email,` in the one statement.
-	"server/guests-logic.ts": {
-		fn: "revertGuestContactFill",
-		sites: 1,
-		reason:
-			"undo clears the address convert filled on the guest's own Person back to null (#1124)",
-		requiresUnlinkedGuard: true,
-		requiresGuestRevert: true,
+		requiresGuestOnly: true,
 	},
 	// The CSV importer's fill-only address (#907). Club-reachable.
 	"server/import-members-logic.ts": {
@@ -475,20 +464,19 @@ describe("the matcher itself", () => {
 		).toBe(1);
 	});
 
-	it("reads convert's guest-fill UPDATE as one email write with its predicates (#1124)", () => {
-		// The waiver for `applyConvertGuestToMember` holds the statement to three
+	it("reads convert's overwrite UPDATE as one email write with its predicates (#1124)", () => {
+		// The waiver for `applyConvertGuestToMember` holds the statement to two
 		// tokens, and it can only do that if `emailWriteStatements` hands it the
 		// whole statement: `.where(...)` and `.returning(...)` included, and the
-		// phone statement beside it NOT counted, since its SET carries no email.
+		// phone-only statement beside it NOT counted, since its SET carries no email.
 		const src = `
-			const filled = await tx
+			const overwritten = await tx
 				.update(people)
-				.set({ email })
+				.set({ email, phone })
 				.where(
 					and(
 						eq(people.id, personId),
 						isNull(people.userId),
-						isNull(people.email),
 						heldByGuestRowsOnly(),
 					),
 				)
@@ -502,37 +490,9 @@ describe("the matcher itself", () => {
 		const stmts = emailWriteStatements(src);
 		expect(stmts).toHaveLength(1);
 		expect(stmts[0]).toMatch(/isNull\(\s*people\.userId\s*\)/);
-		expect(stmts[0]).toMatch(/isNull\(\s*people\.email\s*\)/);
 		expect(stmts[0]).toMatch(
 			/heldByGuestRowsOnly\(\)|unboundGuestOnlyPerson\(\)/,
 		);
-	});
-
-	it("reads undo's take-back as one email write, and the phone one beside it as none (#1124)", () => {
-		const src = `
-			await tx
-				.update(people)
-				.set({ email: null })
-				.where(
-					and(
-						eq(people.id, personId),
-						isNull(people.userId),
-						heldByGuestRowsOnly(),
-						revert.any ? undefined : eq(people.email, revert.email as string),
-					),
-				);
-			await tx
-				.update(people)
-				.set({ phone: null })
-				.where(and(eq(people.id, personId), isNull(people.userId)));
-		`;
-		expect(emailWriteSites(src)).toEqual(["update(people) setting email"]);
-		const stmts = emailWriteStatements(src);
-		expect(stmts).toHaveLength(1);
-		expect(stmts[0]).toMatch(/\.set\(\s*\{\s*email:\s*null\s*\}\s*\)/);
-		expect(stmts[0]).toMatch(/isNull\(\s*people\.userId\s*\)/);
-		expect(stmts[0]).toMatch(/heldByGuestRowsOnly\(\)/);
-		expect(stmts[0]).toMatch(/eq\(\s*people\.email\s*,/);
 	});
 
 	it("flags raw SQL however it is written or executed", () => {
@@ -664,8 +624,7 @@ describe("people.email writers (verified identity address)", () => {
 				waiver.requiresUnlinkedGuard ||
 				waiver.requiresSoleHolder ||
 				waiver.requiresBoundToUser ||
-				waiver.requiresGuestFill ||
-				waiver.requiresGuestRevert
+				waiver.requiresGuestOnly
 			) {
 				expect(
 					stmts,
@@ -694,34 +653,12 @@ describe("people.email writers (verified identity address)", () => {
 							`a club may change an address only while it is the Person's sole holder (#907)`,
 					).toMatch(/soleHoldingClub\(/);
 				}
-				if (waiver.requiresGuestFill) {
-					expect(
-						stmt,
-						`${key}'s people.email write must carry isNull(people.email) in the STATEMENT — ` +
-							`it may only FILL a blank, never overwrite an address on file (#1124)`,
-					).toMatch(/isNull\(\s*people\.email\s*\)/);
+				if (waiver.requiresGuestOnly) {
 					expect(
 						stmt,
 						`${key}'s people.email write must carry heldByGuestRowsOnly() or unboundGuestOnlyPerson() in the ` +
 							`STATEMENT — a Person already held as a member keeps what that club recorded (#1124)`,
 					).toMatch(/heldByGuestRowsOnly\(\)|unboundGuestOnlyPerson\(\)/);
-				}
-				if (waiver.requiresGuestRevert) {
-					expect(
-						stmt,
-						`${key}'s people.email write must only set the address to NULL — an undo ` +
-							`takes a fill back and never writes one (#1124)`,
-					).toMatch(/\.set\(\s*\{\s*email:\s*null\s*\}\s*\)/);
-					expect(
-						stmt,
-						`${key}'s people.email write must carry heldByGuestRowsOnly() in the STATEMENT — ` +
-							`a Person a club holds as a member keeps what that club recorded (#1124)`,
-					).toMatch(/heldByGuestRowsOnly\(\)/);
-					expect(
-						stmt,
-						`${key}'s people.email write must carry eq(people.email, …) in the STATEMENT — ` +
-							`an address an officer has since changed is theirs, not convert's (#1124)`,
-					).toMatch(/eq\(\s*people\.email\s*,/);
 				}
 			}
 		}
