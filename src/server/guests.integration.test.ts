@@ -11,7 +11,7 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guests, meetings, members, roleSlots } from "#/db/schema";
+import { guests, meetings, members, people, roleSlots } from "#/db/schema";
 import { MEETING_LOCKED_MESSAGE } from "#/lib/meeting-lifecycle";
 import { projectGrid } from "#/lib/season-grid-view";
 import {
@@ -20,6 +20,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -71,9 +72,10 @@ describe.skipIf(!hasTestDb)("guest assignment (#151)", () => {
 			.select({
 				clubId: guests.clubId,
 				name: guests.name,
-				email: guests.email,
+				email: people.email,
 			})
 			.from(guests)
+			.innerJoin(people, eq(people.id, guests.personId))
 			.where(eq(guests.id, res.guestId))
 			.limit(1);
 		expect(g).toMatchObject({
@@ -86,7 +88,12 @@ describe.skipIf(!hasTestDb)("guest assignment (#151)", () => {
 	it("assigns an EXISTING club guest without creating a duplicate", async () => {
 		const [existing] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: "Nadia Visitor" })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: "Nadia Visitor" },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 
 		await applyAssignGuestToSlot({
@@ -105,7 +112,12 @@ describe.skipIf(!hasTestDb)("guest assignment (#151)", () => {
 	it("offers a lost guest for adding attendance using their existing record", async () => {
 		const [returning] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: "Returning Visitor", stage: "lost" })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: "Returning Visitor", stage: "lost" },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		if (!returning) throw new Error("Failed to seed returning guest");
 
@@ -144,7 +156,9 @@ describe.skipIf(!hasTestDb)("guest assignment (#151)", () => {
 	it("rejects a row holding BOTH a member and a guest (DB check constraint)", async () => {
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: "Both" })
+			.values(
+				await withGuestPerson({ clubId: seed.clubId, name: "Both" }, testDb),
+			)
 			.returning({ id: guests.id });
 
 		await expect(
@@ -225,7 +239,12 @@ describe.skipIf(!hasTestDb)("guest assignment (#151)", () => {
 	it("refuses a completed meeting, and leaves the slot alone", async () => {
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: "Locked-Out Lou" })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: "Locked-Out Lou" },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		// biome-ignore lint/style/noNonNullAssertion: insert returns a row
 		const guestId = g!.id;

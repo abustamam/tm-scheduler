@@ -36,6 +36,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 import { readsOf, statementsDuring } from "#/test/query-spy";
 
@@ -231,11 +232,16 @@ describe.skipIf(!hasTestDb)("assign_roles (#809)", () => {
 	): Promise<string> {
 		const [row] = await testDb
 			.insert(guests)
-			.values({
-				clubId,
-				name,
-				...(convertedMembershipId ? { convertedMembershipId } : {}),
-			})
+			.values(
+				await withGuestPerson(
+					{
+						clubId,
+						name,
+						...(convertedMembershipId ? { convertedMembershipId } : {}),
+					},
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		// biome-ignore lint/style/noNonNullAssertion: insert returns a row
 		return row!.id;

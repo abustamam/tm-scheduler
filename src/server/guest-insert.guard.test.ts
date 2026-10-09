@@ -6,13 +6,14 @@
  * Person has to exist first. `createGuestRecord` mints both in one transaction,
  * which is what keeps a failed guest insert from leaving an orphan Person behind
  * and a successful one from leaving a guest with no Person. A sixth hand-written
- * `.insert(guests)` is the way the column goes back to being null on new rows,
- * and nothing at runtime would say so: the column is nullable until #1125.
+ * `.insert(guests)` would also skip the one place a guest's email and phone are
+ * written onto that Person (#1125: the `guests` columns are dead), and nothing at
+ * runtime would say so. The column has been NOT NULL since #1125, so a missing
+ * Person is now a loud error; a Person with no contact is not.
  *
  * The scan covers every non-test source under `src/` and `scripts/`. Test files
- * and `src/test/` are exempt on purpose: a fixture may insert a guest directly,
- * including one with a null `person_id`, which is how the old container's rows
- * and `ensureGuestPerson`'s repair are exercised.
+ * and `src/test/` are exempt on purpose: a fixture inserts a guest directly,
+ * through `withGuestPerson` in `src/test/db.ts`, which mints its Person first.
  *
  * It is matched by SHAPE, like `person-email-writers.guard.test.ts`, because the
  * obvious spellings are not the only ones: the table through an aliased or

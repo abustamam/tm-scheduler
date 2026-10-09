@@ -42,6 +42,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -448,13 +449,18 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 		const phone = "+15551234567";
 		const [contactful] = await testDb
 			.insert(guests)
-			.values({
-				clubId: seed.clubId,
-				name: "Contactful Guest",
-				email,
-				phone,
-				stage: "prospect",
-			})
+			.values(
+				await withGuestPerson(
+					{
+						clubId: seed.clubId,
+						name: "Contactful Guest",
+						email,
+						phone,
+						stage: "prospect",
+					},
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 
 		// `record_guest_book` needs a meeting whose club-local day has ARRIVED, or

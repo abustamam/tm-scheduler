@@ -16,6 +16,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -75,7 +76,12 @@ describe.skipIf(!hasTestDb)("loadAwardCandidates (#510)", () => {
 	it("lists table topics speakers, members and guests alike", async () => {
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: "Okafor, Chidi" })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: "Okafor, Chidi" },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		await testDb.insert(tableTopicsSpeakers).values([
 			{ meetingId: seed.meetingId, memberId: seed.memberId, sortOrder: 0 },
@@ -115,12 +121,17 @@ describe.skipIf(!hasTestDb)("loadAwardCandidates (#510)", () => {
 	it("returns no contact details on any candidate", async () => {
 		const [g] = await testDb
 			.insert(guests)
-			.values({
-				clubId: seed.clubId,
-				name: "Rivera, Ana",
-				email: "ana@example.com",
-				phone: "+15551234567",
-			})
+			.values(
+				await withGuestPerson(
+					{
+						clubId: seed.clubId,
+						name: "Rivera, Ana",
+						email: "ana@example.com",
+						phone: "+15551234567",
+					},
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		await testDb
 			.insert(tableTopicsSpeakers)

@@ -34,6 +34,7 @@ import {
 	seedClub,
 	seedPerson,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -136,7 +137,12 @@ describe.skipIf(!hasTestDb)("loadEvaluatorPairings (#709)", () => {
 	async function addGuest(name: string): Promise<string> {
 		const [row] = await testDb
 			.insert(guests)
-			.values({ clubId: seeded.clubId, name: `${name} ${run}` })
+			.values(
+				await withGuestPerson(
+					{ clubId: seeded.clubId, name: `${name} ${run}` },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		if (!row) throw new Error("guest insert failed");
 		return row.id;

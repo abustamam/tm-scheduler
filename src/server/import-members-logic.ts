@@ -8,7 +8,7 @@
  * non-blank email → new person), then upsert the Membership for (club, person).
  * People are global (club-less); memberships are the per-club roster row.
  */
-import { and, desc, eq, exists, isNull, ne, sql } from "drizzle-orm";
+import { and, desc, eq, exists, isNull, ne, not, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import { activityLog, members, people } from "#/db/schema";
@@ -23,6 +23,7 @@ import {
 } from "#/lib/members-import-plan";
 import { toStoredPhone } from "#/lib/phone";
 import {
+	identityIgnoredGuestPerson,
 	normalizedEmail,
 	normalizeEmail,
 	soleHoldingClub,
@@ -86,6 +87,15 @@ export interface ImportStats {
  * `member_remove` naming them was written in THIS club (#855), and `nobody`
  * (refused) otherwise. Derived here, in the same statement as the other two
  * arms, so preview and commit read one snapshot of it.
+ *
+ * **A guest's Person is not a candidate** (#1125, `identityIgnoredGuestPerson`):
+ * a guest's contact lives on their Person, so an address typed on a club's guest
+ * book is on a `people` row nobody holds. Left in, a roster row carrying that
+ * address would match it, be refused as `nobody`, and be SKIPPED outright
+ * (no Person, no membership): a returning guest who joined could not be imported.
+ * Left out, the row inserts its own Person, as it did before guests had one. A
+ * Person that shows a past as a member (a Customer ID, a join date, a removal
+ * on record) is still a candidate; see the predicate.
  */
 export async function loadPersonCandidates(
 	clubId: string,
@@ -153,7 +163,8 @@ export async function loadPersonCandidates(
 		.leftJoin(
 			members,
 			and(eq(members.personId, people.id), eq(members.clubId, clubId)),
-		);
+		)
+		.where(not(identityIgnoredGuestPerson()));
 	return rows.map(
 		({ userId, heldHere, heldElsewhere, releasedHere, ...p }) => ({
 			...p,
@@ -204,7 +215,14 @@ export async function loadAddressHolders(
 			userId: people.userId,
 		})
 		.from(people)
-		.where(sql`${address} = any(${sql.param(wanted)}::text[])`);
+		// A guest's Person carries an address a visitor typed, and holds nobody out
+		// of a sign-in (#1125; `countsAsHolder` is false for it).
+		.where(
+			and(
+				sql`${address} = any(${sql.param(wanted)}::text[])`,
+				not(identityIgnoredGuestPerson()),
+			),
+		);
 	for (const r of rows) {
 		const list = holders.get(r.address) ?? [];
 		list.push({ id: r.personId, linked: r.userId !== null });

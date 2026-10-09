@@ -44,6 +44,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -333,7 +334,12 @@ describe.skipIf(!hasTestDb)("cancel_meeting / restore_meeting (#1057)", () => {
 			.returning({ id: roleSlots.id });
 		const [guest] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: "Visiting Vera" })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: "Visiting Vera" },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		if (!speakerSlot || !guest) throw new Error("fixture insert failed");
 

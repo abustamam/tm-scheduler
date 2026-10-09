@@ -1571,7 +1571,11 @@ export const guests = pgTable(
 		// Person's `preferred_name` is the fallback, and a convert carries this one
 		// onto it. Guests hold role slots and get nudged like anyone else.
 		preferredName: text("preferred_name"),
-		// Optional contact — a guest may be assigned with just a name.
+		// DEAD since #1125: a guest's email and phone live on their Person
+		// (`people.email` / `people.phone`), and nothing reads or writes these two
+		// columns. Kept for one release so the old container, still running during
+		// the deploy swap, never reads a dropped column; #1126 drops them.
+		// `guest-contact-columns.guard.test.ts` fails on any reference.
 		email: text("email"),
 		phone: text("phone"),
 		// Pipeline lifecycle stage (#208 / ADR-0018). Defaults to `prospect`.
@@ -1599,10 +1603,9 @@ export const guests = pgTable(
 		// `guests` is the per-club guest RECORD (stage, kind, home club, who
 		// introduced them), as `members` is the per-club membership.
 		//
-		// NULLABLE ON PURPOSE for this release: while a deploy swaps containers
-		// the old one still inserts guests without it, and `ensureGuestPerson`
-		// repairs such a row on its next convert. #1125 re-backfills and sets
-		// NOT NULL.
+		// NOT NULL since #1125, whose migration re-backfilled every guest the old
+		// container wrote during #1124's deploy swap. `createGuestRecord` is the
+		// only inserter and always mints or names the Person first.
 		//
 		// RESTRICT, so a Person delete that forgot its guests fails loudly instead
 		// of silently deleting visit, role and speech history. NOT unique with
@@ -1610,9 +1613,11 @@ export const guests = pgTable(
 		// member Person (#635), and a partial unique index on
 		// `converted_membership_id IS NULL` would abort a member delete, whose
 		// `SET NULL` clears them all at once. Uniqueness is checked in code.
-		personId: uuid("person_id").references(() => people.id, {
-			onDelete: "restrict",
-		}),
+		personId: uuid("person_id")
+			.notNull()
+			.references(() => people.id, {
+				onDelete: "restrict",
+			}),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at").defaultNow().notNull(),
 	},

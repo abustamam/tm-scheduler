@@ -52,14 +52,18 @@ function urlFor(database: string): string {
 	return url.toString();
 }
 
-/** A copy of `drizzle/` whose journal stops just before 0116. */
-function migrationsBefore0116(): string {
+/**
+ * A copy of `drizzle/` whose journal stops just before 0116, or (`inclusive`)
+ * just after it: #1125's 0117 moves the contact this test asserts is NOT there
+ * after 0116, so "applies 0116 and nothing else" needs a folder that ends at it.
+ */
+function migrationsBefore0116(inclusive = false): string {
 	const journal = JSON.parse(
 		readFileSync(join(MIGRATIONS, "meta/_journal.json"), "utf8"),
 	) as { entries: JournalEntry[] };
 	const at = journal.entries.findIndex((e) => e.tag === TAG);
 	expect(at, `${TAG} is not in the journal`).toBeGreaterThan(0);
-	const before = journal.entries.slice(0, at);
+	const before = journal.entries.slice(0, inclusive ? at + 1 : at);
 	const dir = mkdtempSync(join(tmpdir(), "tm-0116-"));
 	mkdirSync(join(dir, "meta"));
 	for (const e of before) {
@@ -74,6 +78,7 @@ function migrationsBefore0116(): string {
 
 let pool: pg.Pool;
 let partialDir: string;
+let throughDir: string;
 
 describe.skipIf(!hasTestDb)("migration 0116: guests.person_id", () => {
 	beforeAll(async () => {
@@ -102,11 +107,13 @@ describe.skipIf(!hasTestDb)("migration 0116: guests.person_id", () => {
 		}
 		pool = new pg.Pool({ connectionString: urlFor(SCRATCH_DB) });
 		partialDir = migrationsBefore0116();
+		throughDir = migrationsBefore0116(true);
 	}, 60_000);
 
 	afterAll(async () => {
 		await pool?.end();
 		if (partialDir) rmSync(partialDir, { recursive: true, force: true });
+		if (throughDir) rmSync(throughDir, { recursive: true, force: true });
 		const admin = new pg.Client({
 			connectionString: process.env.TEST_DATABASE_URL,
 		});
@@ -181,8 +188,8 @@ describe.skipIf(!hasTestDb)("migration 0116: guests.person_id", () => {
 			`select count(*)::int as n from people`,
 		);
 
-		// The real folder: applies 0116 and nothing else.
-		await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS });
+		// The real files, the folder ending at 0116: applies 0116 and nothing else.
+		await migrate(drizzle(pool), { migrationsFolder: throughDir });
 
 		const rows = await pool.query<{
 			id: string;

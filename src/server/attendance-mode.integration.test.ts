@@ -19,6 +19,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -72,7 +73,12 @@ describe.skipIf(!hasTestDb)("attendance mode (#1049)", () => {
 	async function newGuest(name: string): Promise<string> {
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: `${name} ${suffix}` })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: `${name} ${suffix}` },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		return g!.id;
 	}
@@ -222,7 +228,12 @@ describe.skipIf(!hasTestDb)("attendance mode (#1049)", () => {
 		const email = `returning-${suffix}@test.example`;
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: `Rita ${suffix}`, email })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: `Rita ${suffix}`, email },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		await addGuestPresent({
 			meetingId: seed.meetingId,

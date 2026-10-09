@@ -5,11 +5,12 @@
  * `TEST_DATABASE_URL` so tests never accidentally touch dev/prod data.
  */
 import { randomUUID } from "node:crypto";
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, notExists, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "#/db/schema";
 import {
 	clubs,
+	guests,
 	meetings,
 	members,
 	people,
@@ -125,6 +126,125 @@ export async function memberEmail(memberId: string): Promise<string | null> {
 		.where(eq(members.id, memberId));
 	if (!row) throw new Error(`memberEmail: no membership ${memberId}`);
 	return row.email;
+}
+
+// ---------------------------------------------------------------------------
+// Guest fixtures (#1125). A guest is a Person (ADR-0031): `guests.person_id` is
+// NOT NULL, and the guest's email and phone live on that Person. A fixture that
+// used to insert `{ clubId, name, email, phone }` straight into `guests` now goes
+// through `withGuestPerson`, which mints the Person (carrying the contact) first.
+// ---------------------------------------------------------------------------
+
+/** The test client or a transaction on it. */
+export type TestConn = typeof testDb | TestTx;
+
+/** What a guest fixture may hand over: a `guests` insert, contact included. */
+export type GuestFixtureInput = Omit<typeof guests.$inferInsert, "personId"> & {
+	/** An EXISTING Person (a converted guest's member Person). Its contact is
+	 *  left alone: a guest row never writes a member's. */
+	personId?: string;
+	/** The name of the Person minted for this guest, when it must differ from the
+	 *  guest's own (a test that counts `people` by name). Never reaches the row. */
+	personName?: string;
+};
+
+/** The same row as the `guests` insert takes it: a Person, no contact columns. */
+export type GuestFixtureRow<T extends GuestFixtureInput> = Omit<
+	T,
+	"email" | "phone" | "personId" | "personName"
+> & { personId: string };
+
+/**
+ * A guest fixture with its Person: inserts the Person (name, and the email and
+ * phone the row carried) and returns the row ready for `insert(guests)`.
+ * Persons are club-less, so `cleanup` removes the ones this club's guests name.
+ */
+export async function withGuestPerson<T extends GuestFixtureInput>(
+	row: T,
+	conn: TestConn = testDb,
+): Promise<GuestFixtureRow<T>> {
+	const [out] = await withGuestPersons([row], conn);
+	if (!out) throw new Error("withGuestPerson: no row");
+	return out;
+}
+
+/** {@link withGuestPerson} for several rows, in ONE insert of the Persons. */
+export async function withGuestPersons<T extends GuestFixtureInput>(
+	rows: T[],
+	conn: TestConn = testDb,
+): Promise<GuestFixtureRow<T>[]> {
+	const named = rows.filter((r) => !r.personId);
+	const minted =
+		named.length === 0
+			? []
+			: await conn
+					.insert(people)
+					.values(
+						named.map((r) => ({
+							name: r.personName ?? r.name,
+							preferredName: r.preferredName ?? null,
+							email: r.email ?? null,
+							phone: r.phone ?? null,
+						})),
+					)
+					.returning({ id: people.id });
+	let next = 0;
+	return rows.map((r) => {
+		const {
+			email: _email,
+			phone: _phone,
+			personName: _personName,
+			personId,
+			...rest
+		} = r;
+		const id = personId ?? minted[next++]?.id;
+		if (!id) throw new Error("withGuestPersons: a Person was not created");
+		return { ...rest, personId: id } as GuestFixtureRow<T>;
+	});
+}
+
+/**
+ * Set a guest's email and/or phone, as a fixture. They are the guest's PERSON's
+ * (#1125), so this writes `people`, with no predicate: it is a test helper, the
+ * way `setMemberEmail` is, and one of the waived test-side writers in
+ * `person-email-writers.guard.test.ts`. A field left out is left alone.
+ */
+export async function setGuestContact(
+	guestId: string,
+	contact: { email?: string | null; phone?: string | null },
+	conn: TestConn = testDb,
+): Promise<void> {
+	const [g] = await conn
+		.select({
+			personId: guests.personId,
+			email: people.email,
+			phone: people.phone,
+		})
+		.from(guests)
+		.innerJoin(people, eq(people.id, guests.personId))
+		.where(eq(guests.id, guestId));
+	if (!g) throw new Error(`setGuestContact: no guest ${guestId}`);
+	await conn
+		.update(people)
+		.set({
+			email: contact.email === undefined ? g.email : contact.email,
+			phone: contact.phone === undefined ? g.phone : contact.phone,
+		})
+		.where(eq(people.id, g.personId));
+}
+
+/** A guest's contact as the app reads it: the Person's (#1125), for assertions. */
+export async function guestContactOf(
+	guestId: string,
+	conn: TestConn = testDb,
+): Promise<{ email: string | null; phone: string | null }> {
+	const [row] = await conn
+		.select({ email: people.email, phone: people.phone })
+		.from(guests)
+		.innerJoin(people, eq(people.id, guests.personId))
+		.where(eq(guests.id, guestId));
+	if (!row) throw new Error(`guestContactOf: no guest ${guestId}`);
+	return row;
 }
 
 /** Insert a minimal club fixture and return the ids. */
@@ -278,12 +398,43 @@ export async function cleanup(
 		.from(members)
 		.where(eq(members.clubId, clubId));
 	const personIds = [...new Set(memberPeople.map((m) => m.personId))];
+	// A guest is a Person too (#1125), and its row cascades with the club while
+	// the Person does not. Collected before the cascade, deleted after it, and
+	// only when no other club's guest row (or membership) still names it.
+	const guestPeople = await testDb
+		.selectDistinct({ personId: guests.personId })
+		.from(guests)
+		.where(eq(guests.clubId, clubId));
+	const guestPersonIds = guestPeople
+		.map((g) => g.personId)
+		.filter((id) => !personIds.includes(id));
 
 	// club cascade removes meetings, role_slots, role_definitions, members
 	await testDb.delete(clubs).where(eq(clubs.id, clubId));
 	// people are club-less; delete the ones this club's members belonged to
 	if (personIds.length > 0) {
 		await testDb.delete(people).where(inArray(people.id, personIds));
+	}
+	if (guestPersonIds.length > 0) {
+		await testDb
+			.delete(people)
+			.where(
+				and(
+					inArray(people.id, guestPersonIds),
+					notExists(
+						testDb
+							.select({ one: sql`1` })
+							.from(guests)
+							.where(eq(guests.personId, people.id)),
+					),
+					notExists(
+						testDb
+							.select({ one: sql`1` })
+							.from(members)
+							.where(eq(members.personId, people.id)),
+					),
+				),
+			);
 	}
 	// delete test users
 	if (userIds.length > 0) {

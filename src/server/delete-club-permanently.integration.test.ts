@@ -45,7 +45,13 @@ import {
 	user,
 	verification,
 } from "#/db/schema";
-import { hasTestDb, openBlockingTx, testDb, waitForLockWait } from "#/test/db";
+import {
+	hasTestDb,
+	openBlockingTx,
+	testDb,
+	waitForLockWait,
+	withGuestPerson,
+} from "#/test/db";
 
 const flags = vi.hoisted(() => ({
 	failUserDelete: false,
@@ -292,7 +298,12 @@ describe.skipIf(!hasTestDb)("deleteClubPermanently (#914)", () => {
 
 		const [guest] = await testDb
 			.insert(guests)
-			.values({ clubId: a, name: "Guest", email: `g-${suffix}@test.example` })
+			.values(
+				await withGuestPerson(
+					{ clubId: a, name: "Guest", email: `g-${suffix}@test.example` },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		await testDb
 			.insert(meetingTemplates)
@@ -355,7 +366,10 @@ describe.skipIf(!hasTestDb)("deleteClubPermanently (#914)", () => {
 		const res = await deleteClubPermanently(f.a, `  ${f.nameA}  `);
 		expect(res).toEqual({
 			clubName: f.nameA,
-			peopleDeleted: 1,
+			// The sole-club member's Person, and the guest's own (#1125 fixtures give
+			// every guest the Person production always gives it, which is guest-only
+			// and goes with the club).
+			peopleDeleted: 2,
 			peopleKept: 1,
 			usersDeleted: 1,
 			usersKept: 0,

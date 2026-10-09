@@ -27,6 +27,7 @@ import {
 	seedPerson,
 	testDb,
 	waitForLockWait,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -54,7 +55,9 @@ describe.skipIf(!hasTestDb)(
 		async function seedGuest(clubId: string, name: string): Promise<string> {
 			const [row] = await testDb
 				.insert(guests)
-				.values({ clubId, name: `${name} ${run}` })
+				.values(
+					await withGuestPerson({ clubId, name: `${name} ${run}` }, testDb),
+				)
 				.returning({ id: guests.id });
 			if (!row) throw new Error("failed to seed guest");
 			return row.id;

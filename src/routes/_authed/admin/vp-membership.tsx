@@ -696,9 +696,10 @@ function GuestRow({
 									    "a@b.com?bcc=x&subject=y" would otherwise become live
 									    mailto HEADERS — the reader's own client would silently
 									    blind-copy a third party on a message they thought was
-									    private. The two free-text writers of `guests.email` are
-									    validated in the same change; rows written before that
-									    persist, so both halves are needed. */}
+									    private. The two free-text writers of a guest's address
+									    (now `people.email`, #1125) are validated in the same
+									    change; rows written before that persist, so both halves
+									    are needed. */}
 									{/* `data-slot="wa-email"` + `text-primary`, matching the phone
 									    link beside it. Third instance of the same pair: the
 									    unlayered `a { color }` rule in styles.css beats any

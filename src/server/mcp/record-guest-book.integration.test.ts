@@ -20,6 +20,7 @@ import {
 	mcpPendingPlans,
 	meetingAttendance,
 	meetings,
+	people,
 } from "#/db/schema";
 import type { PendingEntry } from "#/lib/guest-book-pending";
 import {
@@ -28,6 +29,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -84,8 +86,9 @@ describe.skipIf(!hasTestDb)(
 
 		async function guestRows() {
 			return testDb
-				.select({ id: guests.id, name: guests.name, email: guests.email })
+				.select({ id: guests.id, name: guests.name, email: people.email })
 				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
 				.where(eq(guests.clubId, seed.clubId));
 		}
 
@@ -186,12 +189,17 @@ describe.skipIf(!hasTestDb)(
 		// --- AC2: the preview writes ONE pending row and nothing else --------
 
 		it("previews without writing, naming the meeting and classifying each line", async () => {
-			await testDb.insert(guests).values({
-				clubId: seed.clubId,
-				name: "Rita Vance",
-				email: "rita@example.com",
-				stage: "prospect",
-			});
+			await testDb.insert(guests).values(
+				await withGuestPerson(
+					{
+						clubId: seed.clubId,
+						name: "Rita Vance",
+						email: "rita@example.com",
+						stage: "prospect",
+					},
+					testDb,
+				),
+			);
 
 			const p = (await call({
 				clubId: seed.clubId,
@@ -386,13 +394,18 @@ describe.skipIf(!hasTestDb)(
 			// `phone_name_disagree` that name is by construction different from
 			// what the model transcribed. The caller no longer resolves an
 			// ambiguity either way, so a count is the whole message it can use.
-			await testDb.insert(guests).values({
-				clubId: seed.clubId,
-				name: "Samir Patel",
-				phone: "+15551234567",
-				email: "samir@example.com",
-				stage: "prospect",
-			});
+			await testDb.insert(guests).values(
+				await withGuestPerson(
+					{
+						clubId: seed.clubId,
+						name: "Samir Patel",
+						phone: "+15551234567",
+						email: "samir@example.com",
+						stage: "prospect",
+					},
+					testDb,
+				),
+			);
 
 			const p = (await call({
 				clubId: seed.clubId,
@@ -499,12 +512,17 @@ describe.skipIf(!hasTestDb)(
 			// The positional `resolve` map stops existing the moment the row is
 			// written: the confirm page holds answers per ENTRY, because dropping a
 			// line renumbers every position after it.
-			await testDb.insert(guests).values({
-				clubId: seed.clubId,
-				name: "Samir Patel",
-				phone: "+15551234567",
-				stage: "prospect",
-			});
+			await testDb.insert(guests).values(
+				await withGuestPerson(
+					{
+						clubId: seed.clubId,
+						name: "Samir Patel",
+						phone: "+15551234567",
+						stage: "prospect",
+					},
+					testDb,
+				),
+			);
 			const p = (await call({
 				clubId: seed.clubId,
 				meetingDate: pastMeetingDate,

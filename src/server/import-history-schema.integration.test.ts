@@ -44,6 +44,7 @@ import {
 	seedClub,
 	seedPerson,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -119,7 +120,12 @@ describe.skipIf(!hasTestDb)("#1046 import-history schema", () => {
 	): Promise<string> {
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId, name: `Guest ${RUN}`, ...over })
+			.values(
+				await withGuestPerson(
+					{ clubId, name: `Guest ${RUN}`, ...over },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		return g.id;
 	}
@@ -563,7 +569,9 @@ describe.skipIf(!hasTestDb)("#1046 import-history schema", () => {
 				.where(eq(clubs.id, doomed.clubId));
 
 			const res = await deleteClubPermanently(doomed.clubId, "Test Club");
-			expect(res.peopleDeleted).toBe(2);
+			// The club's two members' Persons, and the guest's own (#1125 fixtures give
+			// every guest the Person production always gives it).
+			expect(res.peopleDeleted).toBe(3);
 			const left = await testDb
 				.select({ id: speeches.id })
 				.from(speeches)

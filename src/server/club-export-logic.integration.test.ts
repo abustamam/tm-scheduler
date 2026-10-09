@@ -41,6 +41,7 @@ import {
 	seedClub,
 	setMemberPhone,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -106,12 +107,17 @@ async function seedExportClub(tag: string): Promise<Seeded> {
 
 	const [guest] = await testDb
 		.insert(guests)
-		.values({
-			clubId: club.clubId,
-			name: `${tag} Guest`,
-			email: `guest-${randomUUID()}@test.example`,
-			phone: "+14155550199",
-		})
+		.values(
+			await withGuestPerson(
+				{
+					clubId: club.clubId,
+					name: `${tag} Guest`,
+					email: `guest-${randomUUID()}@test.example`,
+					phone: "+14155550199",
+				},
+				testDb,
+			),
+		)
 		.returning({ id: guests.id });
 
 	// Two meetings on the SAME club-local date (2026-03-09, Chicago is UTC-5 by
@@ -705,7 +711,12 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 			.where(inArray(clubs.id, [own.clubId]));
 		const [guest] = await testDb
 			.insert(guests)
-			.values({ clubId: own.clubId, name: `Pipeline Guest ${RUN}` })
+			.values(
+				await withGuestPerson(
+					{ clubId: own.clubId, name: `Pipeline Guest ${RUN}` },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		const day = 86_400_000;
 		const [attended, heldRole, spoke, cancelled, future, missed, excused] =

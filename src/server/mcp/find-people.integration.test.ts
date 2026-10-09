@@ -26,6 +26,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -70,13 +71,18 @@ describe.skipIf(!hasTestDb)("find_people (#773 D4)", () => {
 			.set({ preferredName: "Rash" })
 			.where(eq(members.id, seed.adminMemberId));
 
-		await testDb.insert(guests).values({
-			clubId: seed.clubId,
-			name: "Jonathan Vance",
-			preferredName: "Jono",
-			email: "jonathan@example.com",
-			stage: "prospect",
-		});
+		await testDb.insert(guests).values(
+			await withGuestPerson(
+				{
+					clubId: seed.clubId,
+					name: "Jonathan Vance",
+					preferredName: "Jono",
+					email: "jonathan@example.com",
+					stage: "prospect",
+				},
+				testDb,
+			),
+		);
 	});
 
 	afterEach(async () => {

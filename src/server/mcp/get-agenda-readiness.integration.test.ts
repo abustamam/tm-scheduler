@@ -30,6 +30,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -293,13 +294,18 @@ describe.skipIf(!hasTestDb)("get_agenda readiness (#963)", () => {
 	it("a guest holder's gap carries the display name and no contact detail", async () => {
 		const [guest] = await testDb
 			.insert(guests)
-			.values({
-				clubId: seed.clubId,
-				name: "Gina Guest",
-				email: "gina.guest@example.com",
-				phone: "+15557654321",
-				stage: "prospect",
-			})
+			.values(
+				await withGuestPerson(
+					{
+						clubId: seed.clubId,
+						name: "Gina Guest",
+						email: "gina.guest@example.com",
+						phone: "+15557654321",
+						stage: "prospect",
+					},
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		await testDb
 			.update(roleSlots)

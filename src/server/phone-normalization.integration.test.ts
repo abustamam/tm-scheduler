@@ -19,6 +19,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -95,8 +96,9 @@ describe.skipIf(!hasTestDb)("phone normalize-on-write (#295)", () => {
 			actorMemberId: null,
 		});
 		const [g] = await testDb
-			.select({ phone: guests.phone })
+			.select({ phone: people.phone })
 			.from(guests)
+			.innerJoin(people, eq(people.id, guests.personId))
 			.where(eq(guests.clubId, club.clubId));
 		expect(g.phone).toBe("+14155552671");
 	});
@@ -104,12 +106,17 @@ describe.skipIf(!hasTestDb)("phone normalize-on-write (#295)", () => {
 	it("converting a guest to a member carries the phone across as E.164", async () => {
 		const [g] = await testDb
 			.insert(guests)
-			.values({
-				clubId: club.clubId,
-				name: "Convert Guest",
-				phone: "415-555-2671",
-				stage: "prospect",
-			})
+			.values(
+				await withGuestPerson(
+					{
+						clubId: club.clubId,
+						name: "Convert Guest",
+						phone: "415-555-2671",
+						stage: "prospect",
+					},
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		await applyConvertGuestToMember({
 			clubId: club.clubId,

@@ -29,6 +29,7 @@ import {
 	seedClub,
 	seedPerson,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 import type {
 	FeedbackRoleChoice,
@@ -256,7 +257,12 @@ describe.skipIf(!hasTestDb)("leaveFeedbackLogic (#984)", () => {
 		const s = await liveMeeting();
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: s.clubId, name: "Visiting Val" })
+			.values(
+				await withGuestPerson(
+					{ clubId: s.clubId, name: "Visiting Val" },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		await testDb
 			.update(roleSlots)
@@ -278,7 +284,12 @@ describe.skipIf(!hasTestDb)("leaveFeedbackLogic (#984)", () => {
 		);
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: s.clubId, name: "Visiting Val" })
+			.values(
+				await withGuestPerson(
+					{ clubId: s.clubId, name: "Visiting Val" },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		const [tt] = await testDb
 			.insert(tableTopicsSpeakers)
@@ -398,7 +409,12 @@ describe.skipIf(!hasTestDb)("loadFeedbackTargetsPublic (#984)", () => {
 			.returning({ id: roleDefinitions.id });
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: s.clubId, name: "Visiting Val" })
+			.values(
+				await withGuestPerson(
+					{ clubId: s.clubId, name: "Visiting Val" },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		const sam = await addMember(s.clubId, "Sam Speaker");
 		// Speaker 1 is a guest, Speaker 2 a member, Speaker 3 open.

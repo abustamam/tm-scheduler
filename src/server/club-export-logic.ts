@@ -484,14 +484,16 @@ export async function loadClubExport(
 				.select({
 					id: guests.id,
 					name: guests.name,
-					email: guests.email,
-					phone: guests.phone,
+					// A guest's contact lives on their Person (#1125).
+					email: people.email,
+					phone: people.phone,
 					stage: guests.stage,
 					kind: guests.kind,
 					homeClub: guests.homeClub,
 					introducedByMemberId: members.id,
 				})
 				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
 				// Only a member of THIS club is named as the introducer.
 				.leftJoin(members, memberOfClub(guests.introducedByMemberId))
 				.where(eq(guests.clubId, clubId));

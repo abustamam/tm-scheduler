@@ -39,9 +39,11 @@ export function createMinutesEmailPort(): MinutesEmailPort {
 				.orderBy(asc(members.name));
 
 			const guestRows = await db
-				.select({ name: guests.name, email: guests.email })
+				// A guest's address is their Person's (#1125).
+				.select({ name: guests.name, email: people.email })
 				.from(meetingAttendance)
 				.innerJoin(guests, eq(guests.id, meetingAttendance.guestId))
+				.innerJoin(people, eq(people.id, guests.personId))
 				.where(
 					and(
 						eq(meetingAttendance.meetingId, meetingId),

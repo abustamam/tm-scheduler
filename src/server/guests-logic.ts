@@ -1,7 +1,7 @@
 // Guest-assignment DB logic (#151), split out from `guests.ts` (a createServerFn
 // module the guard test forbids from exporting db-touching functions).
 // Integration-testable by mocking `#/db`.
-import { and, asc, eq, inArray, isNull, not } from "drizzle-orm";
+import { and, asc, eq, inArray, not } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	guests,
@@ -60,18 +60,33 @@ export type NewGuestRecord = Omit<typeof guests.$inferInsert, "personId"> & {
 };
 
 /**
- * The name-only Person a guest gets: the migration's backfill shape, and the one
- * `createGuestRecord` and `ensureGuestPerson` both mint. Contact is not on it
- * (#1125 moves it, and an address typed on the anonymous guest book is nobody's
- * sign-in key until a member vouches for it).
+ * The Person a new guest gets: its name, goes-by name and (since #1125) the
+ * contact the visitor gave. A guest's email and phone live on their Person, not
+ * on the `guests` row, and this is the one place a fresh Person is given them.
+ *
+ * The contact is the visitor's own and nobody's sign-in key until a member
+ * vouches for it: `bindVerifiedPerson` needs a membership, and the importer and
+ * the new-club lookup ignore a guest-only Person (`identityIgnoredGuestPerson`).
+ * `separateGuestFromMemberPerson` mints one with NO contact, the shape the
+ * #1124 backfill gave a guest.
  */
-async function mintNameOnlyPerson(
+async function mintGuestPerson(
 	tx: DbOrTx,
-	guest: { name: string; preferredName?: string | null },
+	guest: {
+		name: string;
+		preferredName?: string | null;
+		email?: string | null;
+		phone?: string | null;
+	},
 ): Promise<string> {
 	const [person] = await tx
 		.insert(people)
-		.values({ name: guest.name, preferredName: guest.preferredName ?? null })
+		.values({
+			name: guest.name,
+			preferredName: guest.preferredName ?? null,
+			email: guest.email ?? null,
+			phone: guest.phone ?? null,
+		})
 		.returning({ id: people.id });
 	if (!person) throw new Error("Failed to create person.");
 	return person.id;
@@ -94,8 +109,10 @@ export const GUEST_NOT_IN_CLUB_MESSAGE = "Guest not found in this club.";
  * pointing at it, in one transaction. `guest-insert.guard.test.ts` fails on any
  * other insert into the guests table in non-test source, comments included.
  *
- * A guest's email and phone are still written to the `guests` row here; moving
- * them onto the Person is #1125.
+ * A guest's email and phone are written onto the fresh Person, and NOT onto the
+ * `guests` row (#1125): the columns are dead until #1126 drops them. When the
+ * caller names an EXISTING Person (`personId`) its contact is left exactly as it
+ * is: that Person's contact is its own, and a guest row never writes a member's.
  *
  * Always opens `conn.transaction`: given the pooled client that is the
  * transaction the two inserts need, and given a caller's transaction it is a
@@ -115,9 +132,10 @@ export async function createGuestRecord(
 	conn: DbOrTx,
 	input: NewGuestRecord,
 ): Promise<{ id: string; created: boolean }> {
-	const { personId: existingPersonId, ...row } = input;
+	const { personId: existingPersonId, email, phone, ...row } = input;
 	return conn.transaction(async (tx) => {
-		const personId = existingPersonId ?? (await mintNameOnlyPerson(tx, row));
+		const personId =
+			existingPersonId ?? (await mintGuestPerson(tx, { ...row, email, phone }));
 		const [guest] = await tx
 			.insert(guests)
 			.values({ ...row, personId })
@@ -142,52 +160,6 @@ export async function createGuestRecord(
 		if (!existingPersonId) await discardMintedPerson(tx, personId);
 		return { id: row.id, created: false };
 	});
-}
-
-/**
- * The guest's Person, creating one when `person_id` is null (#1124).
- *
- * A null can only come from the OLD container during the deploy swap that
- * shipped the column, or from a test fixture that inserts directly. The Person
- * has the shape the migration's backfill gave everyone else: name only. Convert,
- * and #1127's link and separate, call this before they rely on a Person.
- *
- * The caller holds the guest row `FOR UPDATE`, which is what makes the
- * check-then-set safe; the UPDATE still carries `person_id IS NULL` so that a
- * second writer that got there first is read, not overwritten.
- */
-export async function ensureGuestPerson(
-	tx: DbOrTx,
-	guestId: string,
-): Promise<string> {
-	const [guest] = await tx
-		.select({
-			personId: guests.personId,
-			name: guests.name,
-			preferredName: guests.preferredName,
-		})
-		.from(guests)
-		.where(eq(guests.id, guestId))
-		.limit(1);
-	if (!guest) throw new Error("Guest not found.");
-	if (guest.personId) return guest.personId;
-
-	const minted = await mintNameOnlyPerson(tx, guest);
-	const set = await tx
-		.update(guests)
-		.set({ personId: minted })
-		.where(and(eq(guests.id, guestId), isNull(guests.personId)))
-		.returning({ id: guests.id });
-	if (set.length > 0) return minted;
-	// Lost the race: someone set it between the read and the write. Theirs wins.
-	await discardMintedPerson(tx, minted);
-	const [now] = await tx
-		.select({ personId: guests.personId })
-		.from(guests)
-		.where(eq(guests.id, guestId))
-		.limit(1);
-	if (!now?.personId) throw new Error("Failed to create person.");
-	return now.personId;
 }
 
 /**
@@ -308,7 +280,7 @@ export async function separateGuestFromMemberPerson(
 		.where(eq(members.personId, guest.personId))
 		.limit(1);
 	if (!held) return null;
-	const fresh = await mintNameOnlyPerson(tx, guest);
+	const fresh = await mintGuestPerson(tx, guest);
 	await tx
 		.update(guests)
 		.set({ personId: fresh })
@@ -332,10 +304,12 @@ export async function listClubGuests(clubId: string) {
 			id: guests.id,
 			name: guests.name,
 			stage: guests.stage,
-			email: guests.email,
-			phone: guests.phone,
+			// A guest's contact lives on their Person (#1125).
+			email: people.email,
+			phone: people.phone,
 		})
 		.from(guests)
+		.innerJoin(people, eq(people.id, guests.personId))
 		.where(
 			and(
 				eq(guests.clubId, clubId),

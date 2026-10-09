@@ -44,6 +44,7 @@ import {
 	seedClub,
 	seedPerson,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -946,7 +947,9 @@ describe.skipIf(!hasTestDb)("speech log evaluators (#681)", () => {
 		guestName = `Jane Visitor ${run}`;
 		const [guest] = await testDb
 			.insert(guests)
-			.values({ clubId: club.clubId, name: guestName })
+			.values(
+				await withGuestPerson({ clubId: club.clubId, name: guestName }, testDb),
+			)
 			.returning({ id: guests.id });
 		guestId = guest.id;
 	});

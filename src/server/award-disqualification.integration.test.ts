@@ -40,6 +40,7 @@ import {
 	seedClub,
 	seedPerson,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -142,7 +143,12 @@ describe.skipIf(!hasTestDb)("award writer vs disqualification (#786)", () => {
 	const newGuest = async (name: string, email?: string) => {
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name, email: email ?? null })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name, email: email ?? null },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		return g.id;
 	};

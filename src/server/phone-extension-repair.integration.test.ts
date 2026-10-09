@@ -24,6 +24,7 @@ import {
 	seedPerson,
 	setMemberPhone,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 import { loadRosterWithContact } from "./meeting-contacts-logic";
 
@@ -83,11 +84,20 @@ describe.skipIf(!hasTestDb)("0112 repairs stored phone extensions", () => {
 		personIds.push(...Object.values(seeded));
 		const [guest] = await testDb
 			.insert(guests)
-			.values({ clubId: club.clubId, name: "G", phone: WITH_EXT })
+			// `guests.person_id` is NOT NULL (#1125). The phone stays on the dead
+			// `guests.phone` column on purpose: migration 0112 repaired THAT column, and
+			// this test runs its statements as they were.
+			.values({
+				...(await withGuestPerson({ clubId: club.clubId, name: "G" })),
+				phone: WITH_EXT,
+			})
 			.returning({ id: guests.id });
 		const [guestDom] = await testDb
 			.insert(guests)
-			.values({ clubId: club.clubId, name: "G2", phone: DOMESTIC_EXT })
+			.values({
+				...(await withGuestPerson({ clubId: club.clubId, name: "G2" })),
+				phone: DOMESTIC_EXT,
+			})
 			.returning({ id: guests.id });
 		const [helper] = await testDb
 			.insert(clubCharterHelpers)

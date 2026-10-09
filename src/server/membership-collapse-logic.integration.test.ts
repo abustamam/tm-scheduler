@@ -55,6 +55,7 @@ import {
 	seedPerson,
 	testDb,
 	waitForLockWait,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -460,7 +461,12 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		const absorbedId = await addMembership({ name: "Absorbed" });
 		const [guest] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: "Invited Guest" })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: "Invited Guest" },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		if (!guest) throw new Error("Failed to insert guest");
 		const [inv] = await testDb
@@ -491,11 +497,16 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		const absorbedId = await addMembership({ name: "Absorbed" });
 		const [guest] = await testDb
 			.insert(guests)
-			.values({
-				clubId: seed.clubId,
-				name: "Introduced Guest",
-				introducedByMemberId: absorbedId,
-			})
+			.values(
+				await withGuestPerson(
+					{
+						clubId: seed.clubId,
+						name: "Introduced Guest",
+						introducedByMemberId: absorbedId,
+					},
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		if (!guest) throw new Error("Failed to insert guest");
 

@@ -56,34 +56,48 @@ const BINDER_FN = "bindVerifiedPerson";
  * whole files, so a second `update(people).set({ email })` added anywhere inside
  * a waived file was silently exempt — the same over-capture shape, one level up.
  */
-const WAIVERS: Record<
-	string,
-	{
-		fn: string;
-		sites: number;
-		reason: string;
-		/** Its UPDATE must carry `isNull(people.userId)` in the statement itself. */
-		requiresUnlinkedGuard?: boolean;
-		/** A CLUB-side writer (#907): its UPDATE must also carry the sole-holder
-		 *  predicate, `soleHoldingClub(...)`, in the statement itself. */
-		requiresSoleHolder?: boolean;
-		/** The member's own change (#1091): its UPDATE must carry
-		 *  `eq(people.userId, …)` in the statement itself, so it can only ever
-		 *  move the address of the Person bound to the confirming account. */
-		requiresBoundToUser?: boolean;
-		/** Convert's fill of a PRISTINE guest Person's contact from the guest row
-		 *  (#1124): its UPDATE must carry `pristineGuestPerson(` in the statement
-		 *  itself, which is the one definition of "nobody has signed in, no
-		 *  membership, no history, no other guest row, no contact or roster-identity
-		 *  column, no removal on record". It stands in for `isNull(people.userId)`:
-		 *  the function holds it, and a source test below pins that it does. */
-		requiresPristineGuestPerson?: boolean;
-	}
-> = {
+const WAIVERS: Array<{
+	/** The file, keyed relative to `src/`. A file may carry SEVERAL waivers
+	 *  (#1125: `guest-pipeline-logic.ts` has three), each held to its own
+	 *  function's body and to its own `sites`. */
+	file: string;
+	fn: string;
+	sites: number;
+	reason: string;
+	/** Its UPDATE must carry `isNull(people.userId)` in the statement itself. */
+	requiresUnlinkedGuard?: boolean;
+	/** A CLUB-side writer (#907): its UPDATE must also carry the sole-holder
+	 *  predicate, `soleHoldingClub(...)`, in the statement itself. */
+	requiresSoleHolder?: boolean;
+	/** The member's own change (#1091): its UPDATE must carry
+	 *  `eq(people.userId, …)` in the statement itself, so it can only ever
+	 *  move the address of the Person bound to the confirming account. */
+	requiresBoundToUser?: boolean;
+	/** Convert's fill of a PRISTINE guest Person's contact from the guest row
+	 *  (#1124): its UPDATE must carry `pristineGuestPerson(` in the statement
+	 *  itself, which is the one definition of "nobody has signed in, no
+	 *  membership, no history, no other guest row, no contact or roster-identity
+	 *  column, no removal on record". It stands in for `isNull(people.userId)`:
+	 *  the function holds it, and a source test below pins that it does. */
+	requiresPristineGuestPerson?: boolean;
+	/** An officer's edit of a GUEST's contact (#1125): its UPDATE must carry
+	 *  `guestContactWritable(` in the statement itself, which is the one
+	 *  definition of "nobody has signed in, no club holds them as a member, and
+	 *  this club holds a guest row on them". It stands in for
+	 *  `isNull(people.userId)` and `soleHoldingClub`, which are the MEMBER-side
+	 *  rule (a guest row never counts as a holder); a source test below pins that
+	 *  the function holds the unbound and no-membership arms. */
+	requiresGuestContactWritable?: boolean;
+	/** The anonymous guest book's fill of a blank guest contact (#1125): its
+	 *  UPDATE must carry `guestContactFillable(`, the writable rule plus "no
+	 *  OTHER club holds a guest row on them" and "no past as a member". */
+	requiresGuestContactFillable?: boolean;
+}> = [
 	// A member changing their OWN sign-in address (#1091, ADR-0030). The new
 	// address was just proved by a link to its inbox; the write runs in the
 	// same transaction that moves `user.email`.
-	"server/account-email-change-logic.ts": {
+	{
+		file: "server/account-email-change-logic.ts",
 		fn: "confirmEmailChange",
 		sites: 1,
 		reason:
@@ -91,35 +105,69 @@ const WAIVERS: Record<
 		requiresBoundToUser: true,
 	},
 	// The officer's typo repair (#907). Club-reachable, so both predicates.
-	"server/members-logic.ts": {
+	{
+		file: "server/members-logic.ts",
 		fn: "applyMemberEdit",
 		sites: 1,
 		reason: "roster edit, unbound sole-holder Persons only",
 		requiresUnlinkedGuard: true,
 		requiresSoleHolder: true,
 	},
-	// Convert-to-member's fill of a PRISTINE guest Person's contact from the guest
-	// row (#1124, ADR-0031; the maintainer's option A of 2026-10-09). Club-reachable
-	// (an officer's click). The Person is one the guest row names that nobody has
-	// signed in as, that holds no membership, owns nothing, is named by no other guest
-	// row, carries no contact or roster-identity column and has no removal on record:
-	// the only kind of Person a convert may adopt. Any other gets a fresh Person (an
-	// INSERT, which the matcher exempts) and is left as it is. So the statement can
-	// only ever write a Person nobody has a claim on, and what it writes is a fill of
-	// a blank. It is the only writer whose Person has NO membership yet, so
+	// Convert-to-member's adopt of a PRISTINE guest Person (#1124, ADR-0031; the
+	// maintainer's option A of 2026-10-09). Club-reachable (an officer's click). The
+	// Person is one the guest row names that nobody has signed in as, that holds no
+	// membership, owns nothing, is named by no other guest row, carries no
+	// roster-identity column and has no removal on record: the only kind of Person a
+	// convert may adopt. Any other gets a fresh Person (an INSERT, which the matcher
+	// exempts) and is left as it is. So the statement can only ever write a Person
+	// nobody has a claim on. Since #1125 its email and phone are the Person's OWN,
+	// written by a guest writer, so it re-writes them in their canonical spelling
+	// rather than filling a blank; a guest's contact no longer says the Person was a
+	// member's. It is the only writer whose Person has NO membership yet, so
 	// `soleHoldingClub`, which demands a vouching membership, cannot be its
 	// predicate; its predicate is `pristineGuestPerson(guestId)`, in the statement's
 	// own WHERE, which reads false the moment the membership exists (so the UPDATE
 	// runs before the membership insert) and which includes `user_id IS NULL`.
-	"server/guest-pipeline-logic.ts": {
+	{
+		file: "server/guest-pipeline-logic.ts",
 		fn: "applyConvertGuestToMember",
 		sites: 1,
 		reason:
-			"convert fills the blank contact of a PRISTINE guest Person from the guest row; any other Person gets a fresh one (#1124, option A)",
+			"convert adopts a PRISTINE guest Person, keeping the contact it carries; any other Person gets a fresh one (#1124, option A)",
 		requiresPristineGuestPerson: true,
 	},
+	// An officer correcting a GUEST's contact (#1125, ADR-0031), written to the
+	// Person the guest row names. Club-reachable. The Person owns their contact and
+	// clubs are custodians until the person speaks for themselves, so the statement
+	// carries `guestContactWritable(clubId)`: nobody has signed in as them, no club
+	// holds them as a member, and THIS club holds a guest row on them. It is NOT
+	// `soleHoldingClub`: a guest row is never a holder, so a guest row in another
+	// club neither blocks this write nor is blocked by it. A write that matches no
+	// row is a refusal, and the edit (the name too) rolls back.
+	{
+		file: "server/guest-pipeline-logic.ts",
+		fn: "applyUpdateGuest",
+		sites: 1,
+		reason:
+			"an officer's correction of a guest's contact, on guest-only unbound Persons their club holds a guest row on (#1125)",
+		requiresGuestContactWritable: true,
+	},
+	// The anonymous guest book filling a returning guest's BLANK email or phone
+	// (#1125). The book has no session, so the rule is stricter than the officer's:
+	// `guestContactFillable(clubId)` is the writable rule plus "no OTHER club holds a
+	// guest row on them" and "no past as a member". Fill-only in the SET itself
+	// (`coalesce`), so a value already there is never replaced.
+	{
+		file: "server/guest-pipeline-logic.ts",
+		fn: "fillBlankGuestContact",
+		sites: 1,
+		reason:
+			"the public guest book's fill of a blank guest contact, only on a Person this club alone holds and that was never a member (#1125)",
+		requiresGuestContactFillable: true,
+	},
 	// The CSV importer's fill-only address (#907). Club-reachable.
-	"server/import-members-logic.ts": {
+	{
+		file: "server/import-members-logic.ts",
 		fn: "importPeopleAndMembers",
 		sites: 1,
 		reason: "CSV fill of a blank address, unbound sole-holder Persons only",
@@ -128,8 +176,16 @@ const WAIVERS: Record<
 	},
 	// A test fixture helper: never shipped, never reachable from the app. It
 	// stands in for every fixture that used to write `members.email`.
-	"test/db.ts": {
+	{
+		file: "test/db.ts",
 		fn: "setMemberEmail",
+		sites: 1,
+		reason: "test fixture helper, not shipped",
+	},
+	// The same, for a GUEST's contact, which is its Person's since #1125.
+	{
+		file: "test/db.ts",
+		fn: "setGuestContact",
 		sites: 1,
 		reason: "test fixture helper, not shipped",
 	},
@@ -138,7 +194,8 @@ const WAIVERS: Record<
 	// `isNull(people.userId)` in the same statement so a sign-in mid-edit cannot
 	// leave a linked Person holding a typed address. NOT held to the sole-holder
 	// rule: a superadmin is the one person who may repair a shared Person.
-	"server/onboarding-logic.ts": {
+	{
+		file: "server/onboarding-logic.ts",
 		fn: "updateUnclaimedAdminEmail",
 		sites: 1,
 		reason: "superadmin console, first-admin bootstrap repair",
@@ -156,12 +213,13 @@ const WAIVERS: Record<
 	},
 	// Merges two Person rows; only ever FILLS a null keeper address
 	// (`keeper.email ?? absorbed.email`), never moves a set one.
-	"server/people-merge-logic.ts": {
+	{
+		file: "server/people-merge-logic.ts",
 		fn: "mergePeople",
 		sites: 1,
 		reason: "superadmin merge, fill-only on the keeper",
 	},
-};
+];
 
 /** Every `.ts` source under `ROOTS`, recursively, excluding tests. */
 function sources(): Array<{ key: string; text: string }> {
@@ -320,6 +378,22 @@ function emailWriteStatements(source: string): string[] {
 		if (/\bemail\b/.test(set)) out.push(body);
 	}
 	return out;
+}
+
+/**
+ * One top-level function's own source: from `function <fn>` to the closing `}` at
+ * column 0 (the formatter indents everything inside). A file may hold several
+ * waived writers, each with its own predicate, so a waiver is checked against ITS
+ * function and never against a sibling that happens to be in the same file.
+ * Empty when the function is not found.
+ */
+function functionBody(source: string, fn: string): string {
+	const start = new RegExp(
+		`(?:^|\\n)(?:export )?(?:async )?function ${fn}\\b`,
+	).exec(source);
+	if (!start) return "";
+	const end = source.indexOf("\n}\n", start.index + 1);
+	return source.slice(start.index, end === -1 ? undefined : end + 3);
 }
 
 /**
@@ -498,9 +572,14 @@ describe("the matcher itself", () => {
 			"";
 		expect(fn, "pristineGuestPerson is gone or renamed").not.toBe("");
 		expect(fn).toMatch(/isNull\(\s*people\.userId\s*\)/);
-		expect(fn).toMatch(/isNull\(\s*people\.email\s*\)/);
-		expect(fn).toMatch(/isNull\(\s*people\.phone\s*\)/);
 		expect(fn).toMatch(/\.from\(\s*holding\s*\)/);
+		// Contact is deliberately NOT one of its conditions (#1125): a guest's own
+		// email and phone are on its Person, so testing them would make every guest
+		// with an address read as a former member and no convert would ever adopt.
+		// The roster-identity columns and the removal arm are what remain.
+		expect(withoutComments(fn)).not.toMatch(/people\.(email|phone)\b/);
+		expect(fn).toMatch(/isNull\(\s*people\.customerId\s*\)/);
+		expect(fn).toMatch(/releasedPersonSubquery\(\)/);
 	});
 
 	it("flags raw SQL however it is written or executed", () => {
@@ -528,7 +607,7 @@ describe("people.email writers (verified identity address)", () => {
 	it("is written only by the bind and the named waivers", () => {
 		const offenders: string[] = [];
 		for (const { key, text } of sources()) {
-			if (WAIVERS[key] || key === BINDER_FILE) continue;
+			if (WAIVERS.some((w) => w.file === key) || key === BINDER_FILE) continue;
 			for (const hit of emailWriteSites(text)) offenders.push(`${key}: ${hit}`);
 		}
 		expect(
@@ -602,12 +681,26 @@ describe("people.email writers (verified identity address)", () => {
 
 	it("names every waiver, so a silent exemption cannot accrete", () => {
 		const byKey = new Map(sources().map((s) => [s.key, s.text]));
-		for (const [key, waiver] of Object.entries(WAIVERS)) {
+		// A file may carry several waivers (#1125), so the file's TOTAL is the sum of
+		// its waivers' sites, and each waiver is then held to its own function.
+		const totals = new Map<string, number>();
+		for (const w of WAIVERS) {
+			totals.set(w.file, (totals.get(w.file) ?? 0) + w.sites);
+		}
+		for (const [key, total] of totals) {
 			const text = byKey.get(key);
 			expect(
 				text,
 				`${key} is waived but no longer exists — drop the waiver`,
 			).toBeDefined();
+			expect(
+				emailWriteSites(text ?? ""),
+				`${key} now has more people.email write sites than its waivers allow`,
+			).toHaveLength(total);
+		}
+		for (const waiver of WAIVERS) {
+			const key = waiver.file;
+			const text = byKey.get(key) ?? "";
 			expect(
 				waiver.reason.length,
 				`${key} has an empty waiver reason`,
@@ -617,22 +710,30 @@ describe("people.email writers (verified identity address)", () => {
 				`${key}'s waiver names ${waiver.fn}, which is not in the file`,
 			).toMatch(new RegExp(`function ${waiver.fn}\\b`));
 			// Per-COUNT, not per-file: a second write site added to a waived file
-			// would otherwise ride in on the first one's exemption.
+			// would otherwise ride in on the first one's exemption. And per FUNCTION:
+			// one file may now hold several writers with different predicates, so each
+			// waiver is checked against its own function's body, never a sibling's.
+			const body = functionBody(text, waiver.fn);
+			expect(body, `${key}: ${waiver.fn}'s body could not be sliced`).not.toBe(
+				"",
+			);
 			expect(
-				emailWriteSites(text ?? ""),
-				`${key} now has more people.email write sites than its waiver allows`,
+				emailWriteSites(body),
+				`${waiver.fn} (${key}) has a different number of people.email write sites than its waiver says`,
 			).toHaveLength(waiver.sites);
 
-			// Every email-writing statement in the file, not merely the first
+			// Every email-writing statement in the function, not merely the first
 			// `update(people)` — `applyMemberEdit` writes the phone and the goes-by
 			// name to the same table, and checking the first statement would check
 			// the wrong one.
-			const stmts = emailWriteStatements(text ?? "");
+			const stmts = emailWriteStatements(body);
 			if (
 				waiver.requiresUnlinkedGuard ||
 				waiver.requiresSoleHolder ||
 				waiver.requiresBoundToUser ||
-				waiver.requiresPristineGuestPerson
+				waiver.requiresPristineGuestPerson ||
+				waiver.requiresGuestContactWritable ||
+				waiver.requiresGuestContactFillable
 			) {
 				expect(
 					stmts,
@@ -665,11 +766,55 @@ describe("people.email writers (verified identity address)", () => {
 					expect(
 						stmt,
 						`${key}'s people.email write must carry pristineGuestPerson(...) in the STATEMENT — ` +
-							`a Person that was ever a member, signed in, owns history or already has contact ` +
+							`a Person that was ever a member, signed in or owns history ` +
 							`is not the guest's to re-key (#1124)`,
 					).toMatch(/pristineGuestPerson\(/);
 				}
+				if (waiver.requiresGuestContactWritable) {
+					expect(
+						stmt,
+						`${key}'s people.email write must carry guestContactWritable(...) in the STATEMENT — ` +
+							`an officer may correct a guest's contact only while nobody has signed in as them, ` +
+							`no club holds them as a member, and this club holds a guest row on them (#1125)`,
+					).toMatch(/guestContactWritable\(/);
+				}
+				if (waiver.requiresGuestContactFillable) {
+					expect(
+						stmt,
+						`${key}'s people.email write must carry guestContactFillable(...) in the STATEMENT — ` +
+							`the anonymous guest book may fill a blank only on a Person this club alone holds ` +
+							`and that was never a member (#1125)`,
+					).toMatch(/guestContactFillable\(/);
+				}
 			}
 		}
+	});
+
+	it("guestContactWritable carries the arms the waivers lean on", () => {
+		// The waivers name the predicate, not its conditions, so the function's own
+		// source is what must hold them: unbound and no membership (through
+		// `unboundGuestOnlyPerson`, which says both) and a guest row of THIS club.
+		const src = readFileSync(join(SERVER_DIR, "account-link-logic.ts"), "utf8");
+		const writable = withoutComments(functionBody(src, "guestContactWritable"));
+		expect(writable, "guestContactWritable is gone or renamed").not.toBe("");
+		expect(writable).toMatch(/unboundGuestOnlyPerson\(\)/);
+		expect(writable).toMatch(/clubGuestRow\.clubId\s*,\s*clubId/);
+		const unbound = withoutComments(
+			functionBody(src, "unboundGuestOnlyPerson"),
+		);
+		expect(unbound).toMatch(/isNull\(\s*people\.userId\s*\)/);
+		expect(unbound).toMatch(/notExists\(/);
+		expect(unbound).toMatch(/\.from\(\s*holding\s*\)/);
+		// It is deliberately NOT the member-side rule.
+		expect(writable).not.toMatch(/soleHoldingClub/);
+
+		const fillable = withoutComments(functionBody(src, "guestContactFillable"));
+		expect(fillable, "guestContactFillable is gone or renamed").not.toBe("");
+		expect(fillable).toMatch(/guestContactWritable\(\s*clubId\s*\)/);
+		expect(fillable).toMatch(/ne\(\s*otherClubGuestRow\.clubId\s*,\s*clubId/);
+		expect(fillable).toMatch(/noMemberHistory\(\)/);
+		const history = withoutComments(functionBody(src, "noMemberHistory"));
+		expect(history).toMatch(/releasedPersonSubquery\(\)/);
+		expect(history).toMatch(/isNull\(\s*people\.customerId\s*\)/);
 	});
 });

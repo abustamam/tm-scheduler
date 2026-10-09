@@ -37,6 +37,10 @@ import {
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
 import { isAtMeetingNow } from "#/lib/guest-book-window";
 import {
+	GUEST_CONTACT_REFUSAL_MESSAGES,
+	type GuestContactRefusal,
+} from "#/lib/guest-contact";
+import {
 	CONVERT_NAME_CLASH_MESSAGE,
 	isStrandedConvertedGuest,
 	LINK_ALREADY_JOINED_MESSAGE,
@@ -60,6 +64,10 @@ import {
 	toStoredPhone,
 } from "#/lib/phone";
 import {
+	guestContactFillable,
+	guestContactRefusalFor,
+	guestContactRefusalSql,
+	guestContactWritable,
 	normalizedEmail,
 	pristineGuestPerson,
 	rosterConflictFor,
@@ -78,7 +86,6 @@ import {
 	createGuestRecord,
 	deleteAbandonedGuestPerson,
 	deleteGuestPersonIfUnreferenced,
-	ensureGuestPerson,
 	RECORD_CHANGED_MESSAGE,
 	separateGuestFromMemberPerson,
 } from "./guests-logic";
@@ -157,12 +164,20 @@ async function holdsMembership(
 	return Boolean(row);
 }
 
-/** The guest row `findGuestByContact` resolves: identity + the dedup keys. */
+/**
+ * The guest row `findGuestByContact` resolves: identity + the dedup keys.
+ *
+ * `email` and `phone` are the guest's PERSON's (#1125): a guest's contact lives
+ * on `people`, and every read of it joins `guests.person_id`. `personId` rides
+ * along for the one caller that writes (the public fill in `captureGuestVisit`)
+ * and is absent on a candidate a caller synthesised.
+ */
 type GuestContactRow = {
 	id: string;
 	name: string;
 	email: string | null;
 	phone: string | null;
+	personId?: string;
 };
 
 /**
@@ -312,18 +327,29 @@ async function findGuestMatch(
 	conn: DbOrTx,
 	clubId: string,
 	input: GuestMatchInput,
-	opts?: { excludeGuestId?: string },
+	opts?: { excludeGuestId?: string; excludePersonId?: string },
 ): Promise<GuestMatch> {
 	const cols = {
 		id: guests.id,
 		name: guests.name,
-		email: guests.email,
-		phone: guests.phone,
+		// The Person's contact (#1125); the match stays scoped to THIS club's guest
+		// rows, so a Person another club also holds is found only through this
+		// club's own row.
+		email: people.email,
+		phone: people.phone,
+		personId: guests.personId,
 		createdAt: guests.createdAt,
 	};
-	const scope = opts?.excludeGuestId
-		? and(eq(guests.clubId, clubId), ne(guests.id, opts.excludeGuestId))
-		: eq(guests.clubId, clubId);
+	// `excludePersonId`: another guest row on the SAME Person is not another
+	// human (several converted guest rows can share one member Person, #635), so
+	// an edit's clash check must not count it.
+	const scope = and(
+		eq(guests.clubId, clubId),
+		opts?.excludeGuestId ? ne(guests.id, opts.excludeGuestId) : undefined,
+		opts?.excludePersonId
+			? ne(guests.personId, opts.excludePersonId)
+			: undefined,
+	);
 	const order = [asc(guests.createdAt), asc(guests.id)] as const;
 
 	const email = input.email?.trim() || null;
@@ -335,7 +361,8 @@ async function findGuestMatch(
 			...(await conn
 				.select(cols)
 				.from(guests)
-				.where(and(scope, sql`lower(${guests.email}) = ${email.toLowerCase()}`))
+				.innerJoin(people, eq(people.id, guests.personId))
+				.where(and(scope, sql`lower(${people.email}) = ${email.toLowerCase()}`))
 				.orderBy(...order)
 				.limit(1)),
 		);
@@ -345,10 +372,11 @@ async function findGuestMatch(
 			...(await conn
 				.select(cols)
 				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
 				.where(
 					and(
 						scope,
-						sql`regexp_replace(coalesce(${guests.phone}, ''), '[^0-9]', '', 'g') = ${digits}`,
+						sql`regexp_replace(coalesce(${people.phone}, ''), '[^0-9]', '', 'g') = ${digits}`,
 					),
 				)
 				.orderBy(...order)
@@ -377,7 +405,7 @@ export async function findGuestForContact(
 	conn: DbOrTx,
 	clubId: string,
 	input: GuestMatchInput,
-	opts?: { excludeGuestId?: string },
+	opts?: { excludeGuestId?: string; excludePersonId?: string },
 ): Promise<GuestContactRow | undefined> {
 	const match = await findGuestMatch(conn, clubId, input, opts);
 	return match.outcome === "matched" ? match.guest : undefined;
@@ -399,11 +427,14 @@ export async function loadGuestMatchCandidates(
 		.select({
 			id: guests.id,
 			name: guests.name,
-			email: guests.email,
-			phone: guests.phone,
+			// The Person's contact (#1125).
+			email: people.email,
+			phone: people.phone,
+			personId: guests.personId,
 			createdAt: guests.createdAt,
 		})
 		.from(guests)
+		.innerJoin(people, eq(people.id, guests.personId))
 		.where(eq(guests.clubId, clubId))
 		.orderBy(asc(guests.createdAt), asc(guests.id));
 }
@@ -655,6 +686,42 @@ export async function captureGuestVisit(
 	}
 }
 
+/**
+ * The public guest book's fill of a returning guest's BLANK email or phone
+ * (#1125). A guest's contact lives on their Person, so this writes
+ * `people.email` / `people.phone`, and only under `guestContactFillable(clubId)`
+ * in the UPDATE's own WHERE: the Person is guest-only, nobody has signed in as
+ * them, no club holds them as a member, and no OTHER club holds a guest row on
+ * them. The book has no session (the club link is the credential), so it may not
+ * put an address on a Person another club, or any membership, reaches. Where the
+ * predicate refuses, nothing is written and the visit is still recorded.
+ *
+ * Fill-only, as it always was: a value already there is kept, and the SQL says so
+ * itself (`coalesce`), so a Person edited since the match was read is not
+ * overwritten. The caller holds the club write lock, which is what keeps this
+ * guest row pointing at the same Person (every writer of `guests.person_id`
+ * takes it first); the Person is then locked `FOR UPDATE`, the protocol's second
+ * step (ADR-0031), so a contact edit or a convert of this Person waits.
+ */
+async function fillBlankGuestContact(
+	tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+	clubId: string,
+	existing: GuestContactRow,
+	contact: { email: string | null; phone: string | null },
+): Promise<void> {
+	const fillsEmail = existing.email === null && contact.email !== null;
+	const fillsPhone = existing.phone === null && contact.phone !== null;
+	if ((!fillsEmail && !fillsPhone) || !existing.personId) return;
+	await lockPersonsInOrder(tx, forUpdate(existing.personId));
+	await tx
+		.update(people)
+		.set({
+			email: sql`coalesce(${people.email}, ${contact.email})`,
+			phone: sql`coalesce(${people.phone}, ${contact.phone})`,
+		})
+		.where(and(eq(people.id, existing.personId), guestContactFillable(clubId)));
+}
+
 /** `captureGuestVisit`'s transaction — split out only so the deadlock
  *  translation wraps every statement in it at once. */
 function captureInTransaction(
@@ -692,14 +759,7 @@ function captureInTransaction(
 			await lockOpenClub(tx, input.clubId, "share");
 			// Fill in contact the returning guest supplied but we didn't have; keep
 			// their name and stage untouched.
-			await tx
-				.update(guests)
-				.set({
-					email: existing.email ?? email,
-					phone: existing.phone ?? phone,
-					updatedAt: new Date(),
-				})
-				.where(eq(guests.id, guestId));
+			await fillBlankGuestContact(tx, input.clubId, existing, { email, phone });
 		} else {
 			// Throttle the CREATE path only. Both statements run inside this
 			// transaction, behind a lock on the club row — a count taken OUTSIDE
@@ -782,6 +842,7 @@ export interface PipelineGuestRow {
 	name: string;
 	/** What they're called, when it isn't the first token of `name` (#486). */
 	preferredName: string | null;
+	/** The guest's PERSON's address (#1125): a guest's contact lives on `people`. */
 	email: string | null;
 	/**
 	 * DISPLAY phone: E.164 where it can be derived, otherwise the stored value
@@ -791,7 +852,7 @@ export interface PipelineGuestRow {
 	 */
 	phone: string | null;
 	/**
-	 * The `guests.phone` column byte-for-byte — what the edit dialog prefills.
+	 * The Person's phone byte-for-byte (#1125) — what the edit dialog prefills.
 	 *
 	 * Coalescing is a country-code GUESS, so `"415-555-2671 x12"` displays as
 	 * `"+1415555267112"`. Prefilling the dialog with the guess shows the VPM a
@@ -807,6 +868,16 @@ export interface PipelineGuestRow {
 	 * accidentally harmless. See `loadMemberProfile` for the same split.
 	 */
 	phoneRaw: string | null;
+	/**
+	 * Why an officer of this club may NOT change this guest's email or phone, or
+	 * null when they may (#1125, `guestContactWritable`). The first of "signed in",
+	 * "a member here", "a member of another club" that applies. The Edit guest
+	 * dialog reads it to show the contact read-only with the matching sentence
+	 * (`GUEST_CONTACT_REFUSAL_MESSAGES`), so the refusal `applyUpdateGuest` throws
+	 * is normally never reached from the UI. The READ form of the writer's own
+	 * WHERE, never the gate.
+	 */
+	contactRefusal: GuestContactRefusal | null;
 	stage: GuestStage;
 	convertedMembershipId: string | null;
 	/**
@@ -994,13 +1065,17 @@ export async function loadGuestPipeline(
 					id: guests.id,
 					name: guests.name,
 					preferredName: guests.preferredName,
-					email: guests.email,
-					phone: guests.phone,
+					// A guest's contact lives on their Person (#1125), and so does the
+					// answer to "may this club change it".
+					email: people.email,
+					phone: people.phone,
+					contactRefusal: guestContactRefusalSql(clubId),
 					stage: guests.stage,
 					convertedMembershipId: guests.convertedMembershipId,
 					createdAt: guests.createdAt,
 				})
 				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
 				.where(eq(guests.clubId, clubId))
 				.orderBy(asc(guests.name)),
 			loadGuestVisitSummaries(db, clubId, tz),
@@ -1134,6 +1209,7 @@ export async function loadGuestPipeline(
 			phone: coalesceToE164(r.phone, cc),
 			// The column verbatim, for the edit dialog. See `PipelineGuestRow.phoneRaw`.
 			phoneRaw: r.phone,
+			contactRefusal: r.contactRefusal ?? null,
 			stage: r.stage,
 			convertedMembershipId: r.convertedMembershipId,
 			linkReversible: reversible.has(r.id),
@@ -1171,53 +1247,150 @@ export interface UpdateGuestInput {
  * the Membership that convert-to-member created is a separate row, edited on the
  * roster.
  *
+ * **Where each field goes (#1125, ADR-0031).** The name and goes-by name stay on
+ * the guest row, per club like `members.name`. The email and phone are the
+ * PERSON's, so they are written to `people`, and only under
+ * `guestContactWritable(clubId)` in that UPDATE's own WHERE: the Person is
+ * guest-only (nobody has signed in as them, no club has them as a member) and
+ * this club holds a guest row on them. The fix then shows in every club that
+ * holds a guest row on the Person, because it is one person with one address.
+ * The Person owns their contact and clubs are custodians until the person speaks
+ * for themselves (the maintainer, 2026-10-07).
+ *
+ * A submitted email and phone that equal what is stored write nothing: a form
+ * that only fixes a NAME resends the contact it displayed, and that must work for
+ * a guest whose Person is a member's. When they differ and the write matches no
+ * row, the whole edit (the name too) rolls back and one message says why, the
+ * first that applies: signed in, a member here, a member of another club
+ * (`GUEST_CONTACT_REFUSAL_MESSAGES`). The pipeline row carries the same reason
+ * (`contactRefusal`) so the dialog shows the contact read-only and this is
+ * normally never reached from it.
+ *
+ * Lock protocol (ADR-0031): the club's write lock, then the Person `FOR UPDATE`;
+ * the guest row is written last. Every writer of `guests.person_id` takes the club
+ * lock first, so the Person read before the Person lock is the Person locked.
+ *
  * The edit is REFUSED when the new phone/email already belongs to a different
  * club guest. `captureGuestVisit` dedups on exactly those two keys, so allowing
  * the collision would leave two rows matching one submission — the returning
  * visitor's history would then split across them depending on which row the
  * lookup happened to pick. Create can silently reuse the match; an edit cannot
  * (that would be a merge, and merging two visit histories is not this path's
- * job), so it fails with a message naming the other guest.
+ * job), so it fails with a message naming the other guest. Another guest row on
+ * the SAME Person is not another human, so it never clashes.
  */
 export async function applyUpdateGuest(
 	input: UpdateGuestInput,
 ): Promise<{ ok: true }> {
 	const name = input.name.trim();
 	if (!name) throw new Error("A guest name is required.");
-	const [guest] = await db
-		.select({ id: guests.id })
-		.from(guests)
-		.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
-		.limit(1);
-	if (!guest) throw new Error("Guest not found in this club.");
 
 	const cc = await loadClubDefaultCountryCode(input.clubId);
 	const email = input.email?.trim() || null;
 	const phone = toStoredPhone(input.phone, cc);
 
-	const clash = await findGuestForContact(
-		db,
-		input.clubId,
-		{ name, email, phone },
-		{ excludeGuestId: input.guestId },
-	);
-	if (clash) {
-		throw new Error(
-			`Another guest in this club (${clash.name}) already has that phone number or email.`,
-		);
-	}
+	try {
+		return await db.transaction(async (tx) => {
+			// 1. The club write lock, before any row lock (ADR-0031).
+			await lockClubForWrite(tx, input.clubId);
 
-	await db
-		.update(guests)
-		.set({
-			name,
-			preferredName: input.preferredName?.trim() || null,
-			email,
-			phone,
-			updatedAt: new Date(),
-		})
-		.where(eq(guests.id, input.guestId));
-	return { ok: true as const };
+			// 2. The Person, locked. Read first to learn WHICH Person; the club lock
+			//    is what keeps that answer true until the Person lock is held.
+			const [peek] = await tx
+				.select({ personId: guests.personId })
+				.from(guests)
+				.where(
+					and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)),
+				)
+				.limit(1);
+			if (!peek) throw new Error("Guest not found in this club.");
+			await lockPersonsInOrder(tx, forUpdate(peek.personId));
+
+			const [guest] = await tx
+				.select({
+					personId: guests.personId,
+					email: people.email,
+					phone: people.phone,
+				})
+				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
+				.where(
+					and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)),
+				)
+				.limit(1);
+			if (!guest) throw new Error("Guest not found in this club.");
+			if (guest.personId !== peek.personId)
+				throw new Error(RECORD_CHANGED_MESSAGE);
+
+			const clash = await findGuestForContact(
+				tx,
+				input.clubId,
+				{ name, email, phone },
+				{ excludeGuestId: input.guestId, excludePersonId: guest.personId },
+			);
+			if (clash) {
+				throw new Error(
+					`Another guest in this club (${clash.name}) already has that phone number or email.`,
+				);
+			}
+
+			// 3. The contact, on the Person, only when it differs from what is stored.
+			//    The stored phone is compared both as stored and as `toStoredPhone`
+			//    would store it, so a legacy value that was never normalized does not
+			//    read as a change on a form that only fixed a name.
+			const sameEmail = email === (guest.email?.trim() || null);
+			const storedPhone = guest.phone ?? null;
+			const samePhone =
+				phone === storedPhone || phone === toStoredPhone(storedPhone, cc);
+			if (!sameEmail || !samePhone) {
+				const written = await tx
+					.update(people)
+					.set({ email, phone })
+					.where(
+						and(
+							eq(people.id, guest.personId),
+							guestContactWritable(input.clubId),
+						),
+					)
+					.returning({ id: people.id });
+				if (written.length === 0) {
+					// Zero rows: the predicate refused. Say WHY from the same definition
+					// the board shows; a Person the predicate no longer matches for
+					// another reason (the guest moved, the Person is gone) is "changed".
+					// Throwing rolls back the whole edit, the name included.
+					const refusal = await guestContactRefusalFor(
+						guest.personId,
+						input.clubId,
+						tx,
+					);
+					throw new Error(
+						refusal
+							? GUEST_CONTACT_REFUSAL_MESSAGES[refusal]
+							: RECORD_CHANGED_MESSAGE,
+					);
+				}
+			}
+
+			// 4. The guest row: name and goes-by name, per club.
+			await tx
+				.update(guests)
+				.set({
+					name,
+					preferredName: input.preferredName?.trim() || null,
+					updatedAt: new Date(),
+				})
+				.where(
+					and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)),
+				);
+			return { ok: true as const };
+		});
+	} catch (err) {
+		// The writers that lock this club take its write lock first; a 40P01 is a
+		// cycle through one that does not. Nothing was written (the transaction
+		// rolled back), so say "try again", not the driver's `Failed query: …`.
+		if (isDeadlock(err)) throw new Error(CLUB_BUSY_MESSAGE, { cause: err });
+		throw err;
+	}
 }
 
 export interface DeleteGuestInput {
@@ -1591,8 +1764,27 @@ export async function lockClubConverts(
 }
 
 /**
- * What a convert reads off the guest row: the name, the goes-by name, the
- * address and phone it would write to the Person, and the digits it dedupes on.
+ * A Person's contact, for convert (#1125): a guest's email and phone are on the
+ * Person its row names, so a convert reads them there. The caller holds the
+ * Person, which is what keeps them from changing under it (a contact edit takes
+ * it `FOR UPDATE`).
+ */
+async function contactOfPerson(
+	tx: DbOrTx,
+	personId: string,
+): Promise<{ email: string | null; phone: string | null }> {
+	const [row] = await tx
+		.select({ email: people.email, phone: people.phone })
+		.from(people)
+		.where(eq(people.id, personId))
+		.limit(1);
+	return row ?? { email: null, phone: null };
+}
+
+/**
+ * What a convert reads off the guest row and its Person: the name, the goes-by
+ * name, the address and phone it would write to the Person, and the digits it
+ * dedupes on.
  */
 function convertIdentity(
 	guest: {
@@ -1707,9 +1899,9 @@ async function matchClubMemberPerson(
  *
  * Transactional: (1) dedup the Person by email→phone-with-name-agreement (link
  * an existing Person of THIS club, else adopt the guest's own Person if it is
- * PRISTINE (`pristineGuestPerson`), filling its blank contact from the guest
- * row, and otherwise mint a fresh one carrying the guest row's values — see the
- * step-1 comment for why a bare phone match is not enough); (2) create the Membership for this club (`clubRole: member`,
+ * PRISTINE (`pristineGuestPerson`), which already carries the guest's own
+ * contact (#1125), and otherwise mint a fresh one carrying the guest's values —
+ * see the step-1 comment for why a bare phone match is not enough); (2) create the Membership for this club (`clubRole: member`,
  * `joinedAt: today`) — or reuse the person's existing membership so we never
  * violate one-membership-per-person-per-club, REACTIVATING that row when it had
  * lapsed (#501) — and writing its `club_role` back down to `member` when it was
@@ -1770,7 +1962,10 @@ export async function applyConvertGuestToMember(
 		const peekMatch = await matchClubMemberPerson(
 			tx,
 			input.clubId,
-			convertIdentity(peek, cc),
+			convertIdentity(
+				{ ...peek, ...(await contactOfPerson(tx, peek.personId)) },
+				cc,
+			),
 		);
 		// NO KEY UPDATE: a convert MAY delete a Person, but only the guest's old one
 		// when the guest was not pristine, and then `deleteGuestPersonIfUnreferenced`
@@ -1797,14 +1992,18 @@ export async function applyConvertGuestToMember(
 			.limit(1)
 			.for("update");
 		if (!guest) throw new Error("Guest not found in this club.");
-		if ((guest.personId ?? null) !== (peek.personId ?? null)) {
+		if (guest.personId !== peek.personId) {
 			throw new Error(RECORD_CHANGED_MESSAGE);
 		}
 		if (guest.stage === "joined") {
 			throw new Error("This guest has already been converted to a member.");
 		}
 
-		const identity = convertIdentity(guest, cc);
+		// The contact is the guest's Person's (#1125), read under the Person lock.
+		const identity = convertIdentity(
+			{ ...guest, ...(await contactOfPerson(tx, guest.personId)) },
+			cc,
+		);
 		const { name, preferredName, email, phone } = identity;
 		let personId = await matchClubMemberPerson(tx, input.clubId, identity);
 		// The same answer the unlocked read gave, or the Persons locked above are
@@ -1830,13 +2029,16 @@ export async function applyConvertGuestToMember(
 			// had pointed at somebody else's. Writing the guest row's values onto those
 			// re-keyed a real person, and let an address typed on the anonymous guest
 			// book become the sign-in key of a Person with history.
-			const guestPersonId = await ensureGuestPerson(tx, input.guestId);
+			const guestPersonId = guest.personId;
 			// The guest row is the officer's current word on who this is: the Person
 			// was minted at capture time with the name then typed, and an officer's
-			// correction since (a renamed guest, a goes-by name set or CLEARED, a fixed
-			// address) lives only on the guest row. The membership is about to carry it,
-			// and the Person is the fallback every other club reads, so it follows. The
-			// contact is blank by the predicate, so this fills it.
+			// correction since (a renamed guest, a goes-by name set or CLEARED) lives
+			// only on the guest row. The membership is about to carry it, and the
+			// Person is the fallback every other club reads, so it follows. The
+			// contact needs no carrying: since #1125 it IS the Person's, written by
+			// the guest writers, so `email` and `phone` here are the Person's own in
+			// their canonical spelling (trimmed, E.164) and the statement changes no
+			// address a guest writer had not already put there.
 			//
 			// The predicate is in the statement's own WHERE, and the statement matching
 			// a row IS the decision: a sign-in, a membership or a second guest row that

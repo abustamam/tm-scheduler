@@ -42,7 +42,7 @@ import {
 	user,
 } from "#/db/schema";
 import { DCP_GOALS } from "#/lib/dcp";
-import { hasTestDb, testDb } from "#/test/db";
+import { hasTestDb, testDb, withGuestPerson } from "#/test/db";
 import { statementsDuring } from "#/test/query-spy";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -257,12 +257,17 @@ async function makeMember(
 async function makeGuest(clubId: string, name: string) {
 	const [row] = await testDb
 		.insert(guests)
-		.values({
-			clubId,
-			name,
-			email: `${name}@guest.example`,
-			phone: `${name}-phone`,
-		})
+		.values(
+			await withGuestPerson(
+				{
+					clubId,
+					name,
+					email: `${name}@guest.example`,
+					phone: `${name}-phone`,
+				},
+				testDb,
+			),
+		)
 		.returning({ id: guests.id });
 	if (!row) throw new Error("guest");
 	return row.id;

@@ -42,6 +42,7 @@ import {
 	seedPerson,
 	testDb,
 	waitForLockWait,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -125,7 +126,12 @@ describe.skipIf(!hasTestDb)("vote table constraints (#510)", () => {
 	it("lets a guest and a member both vote — the NULL arbiters do not collide", async () => {
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: "Nguyen, Thanh" })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: "Nguyen, Thanh" },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		await testDb.insert(meetingVotes).values([
 			{
@@ -145,7 +151,12 @@ describe.skipIf(!hasTestDb)("vote table constraints (#510)", () => {
 	it("rejects a vote that is both a member and a guest", async () => {
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: "Ada Byron" })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: "Ada Byron" },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		await expect(
 			testDb.insert(meetingVotes).values({
@@ -414,7 +425,12 @@ describe.skipIf(!hasTestDb)("castVote (#510)", () => {
 	it("lets a guest vote", async () => {
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: "Silva, Marco" })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: "Silva, Marco" },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		// castVote now requires the guest to have actually joined THIS meeting's
 		// ballot (#510 follow-up review finding 1a) — a bare club-scoped guest row
@@ -440,7 +456,12 @@ describe.skipIf(!hasTestDb)("castVote (#510)", () => {
 		// cap bounded nothing as a result.
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: "Haddad, Layla" })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: "Haddad, Layla" },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		await expect(
 			castVote(ballot({ voter: { kind: "guest", id: g.id } })),
@@ -461,7 +482,12 @@ describe.skipIf(!hasTestDb)("castVote (#510)", () => {
 		try {
 			const [otherGuest] = await testDb
 				.insert(guests)
-				.values({ clubId: other.clubId, name: "Silva, Marco" })
+				.values(
+					await withGuestPerson(
+						{ clubId: other.clubId, name: "Silva, Marco" },
+						testDb,
+					),
+				)
 				.returning({ id: guests.id });
 			await expect(
 				castVote(ballot({ voter: { kind: "guest", id: otherGuest.id } })),
@@ -691,7 +717,7 @@ describe.skipIf(!hasTestDb)("castVote: device-bound change (#765)", () => {
 	async function joinedGuest(name: string) {
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name })
+			.values(await withGuestPerson({ clubId: seed.clubId, name }, testDb))
 			.returning({ id: guests.id });
 		await testDb
 			.insert(meetingBallotGuests)
@@ -1372,12 +1398,17 @@ describe.skipIf(!hasTestDb)("ballot and tally reads (#510)", () => {
 	});
 
 	it("carries no contact details", async () => {
-		await testDb.insert(guests).values({
-			clubId: seed.clubId,
-			name: "Haddad, Layla",
-			email: "layla@example.com",
-			phone: "+15559876543",
-		});
+		await testDb.insert(guests).values(
+			await withGuestPerson(
+				{
+					clubId: seed.clubId,
+					name: "Haddad, Layla",
+					email: "layla@example.com",
+					phone: "+15559876543",
+				},
+				testDb,
+			),
+		);
 		await open("best_speaker");
 		const b = await loadBallot(seed.meetingId);
 		expect(JSON.stringify(b)).not.toContain("layla@example.com");
@@ -1692,7 +1723,12 @@ describe.skipIf(!hasTestDb)("joinBallotAsGuest (#510)", () => {
 		it("reuses a club guest not yet on this meeting's ballot — e.g. one recorded from Table Topics", async () => {
 			const [preexisting] = await testDb
 				.insert(guests)
-				.values({ clubId: seed.clubId, name: "Silva, Marco" })
+				.values(
+					await withGuestPerson(
+						{ clubId: seed.clubId, name: "Silva, Marco" },
+						testDb,
+					),
+				)
 				.returning({ id: guests.id, name: guests.name });
 
 			const joined = await joinBallotAsGuest({
@@ -1749,7 +1785,12 @@ describe.skipIf(!hasTestDb)("joinBallotAsGuest (#510)", () => {
 		it("a reuse match NOT yet linked to this meeting still consumes cap headroom, and is refused once full", async () => {
 			const [preexisting] = await testDb
 				.insert(guests)
-				.values({ clubId: seed.clubId, name: "Okonkwo, Chidi" })
+				.values(
+					await withGuestPerson(
+						{ clubId: seed.clubId, name: "Okonkwo, Chidi" },
+						testDb,
+					),
+				)
 				.returning({ id: guests.id, name: guests.name });
 
 			for (let i = 0; i < 60; i++) {
@@ -1790,12 +1831,17 @@ describe.skipIf(!hasTestDb)("joinBallotAsGuest (#510)", () => {
 		it("does not reuse a CONVERTED guest — typing their name mints a fresh identity instead", async () => {
 			const [converted] = await testDb
 				.insert(guests)
-				.values({
-					clubId: seed.clubId,
-					name: "Fischer, Anna",
-					stage: "joined",
-					convertedMembershipId: seed.adminMemberId,
-				})
+				.values(
+					await withGuestPerson(
+						{
+							clubId: seed.clubId,
+							name: "Fischer, Anna",
+							stage: "joined",
+							convertedMembershipId: seed.adminMemberId,
+						},
+						testDb,
+					),
+				)
 				.returning({ id: guests.id });
 
 			const joined = await joinBallotAsGuest({
@@ -2426,7 +2472,12 @@ describe.skipIf(!hasTestDb)("candidate disqualification (#723)", () => {
 	it("the guest and write-in unique indexes refuse a second ruling too", async () => {
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: "Visiting Speaker" })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: "Visiting Speaker" },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		const guestRow = {
 			meetingId: seed.meetingId,
@@ -2641,7 +2692,12 @@ describe.skipIf(!hasTestDb)("candidate disqualification (#723)", () => {
 	it("deleting a guest takes their ruling with it", async () => {
 		const [g] = await testDb
 			.insert(guests)
-			.values({ clubId: seed.clubId, name: "Visiting Speaker" })
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: "Visiting Speaker" },
+					testDb,
+				),
+			)
 			.returning({ id: guests.id });
 		await rule({ kind: "guest", id: g.id });
 		expect(await myRulings()).toHaveLength(1);
