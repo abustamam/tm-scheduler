@@ -10,6 +10,7 @@ import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	clubs,
+	guests,
 	members,
 	pathEnrollments,
 	pathLevelProgress,
@@ -21,7 +22,10 @@ import {
 	type KeeperCandidate,
 	pickKeeper,
 } from "#/lib/person-identity";
-import { guestOnlyPerson, normalizedEmail } from "#/server/account-link-logic";
+import {
+	normalizedEmail,
+	unboundGuestOnlyPerson,
+} from "#/server/account-link-logic";
 import { checkMergeBlocks } from "#/server/people-merge-logic";
 
 // A transaction handle (or the base db) — both expose the query builder we use.
@@ -198,6 +202,7 @@ export interface MergePreview {
 		collapsed: number;
 		speeches: number;
 		enrollments: number;
+		guests: number;
 	};
 }
 
@@ -257,6 +262,11 @@ export async function getMergePreview(
 		.select({ n: sql<number>`count(*)::int` })
 		.from(speeches)
 		.where(eq(speeches.personId, absorbedId));
+	// The guest records a real merge re-points (#1124), in any club.
+	const [guestCount] = await db
+		.select({ n: sql<number>`count(*)::int` })
+		.from(guests)
+		.where(eq(guests.personId, absorbedId));
 
 	return {
 		block: checkMergeBlocks(keeper, absorbed),
@@ -267,6 +277,7 @@ export async function getMergePreview(
 			collapsed,
 			speeches: speechCount?.n ?? 0,
 			enrollments: await countMovingEnrollments(keeperId, absorbedId),
+			guests: guestCount?.n ?? 0,
 		},
 	};
 }
@@ -393,7 +404,7 @@ async function decorate(
 		db
 			.select({ id: people.id })
 			.from(people)
-			.where(and(inArray(people.id, ids), guestOnlyPerson())),
+			.where(and(inArray(people.id, ids), unboundGuestOnlyPerson())),
 	]);
 	const guestOnlyIds = new Set(guestOnlyRows.map((r) => r.id));
 

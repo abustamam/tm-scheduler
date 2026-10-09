@@ -73,9 +73,13 @@ const WAIVERS: Record<
 		requiresBoundToUser?: boolean;
 		/** Convert's copy of a guest's address (#1124): its UPDATE must carry
 		 *  `isNull(people.email)` (fill a blank, never overwrite) and
-		 *  `guestHeldOnly(` or `guestOnlyPerson(` (the Person is held by guest
+		 *  `heldByGuestRowsOnly(` or `unboundGuestOnlyPerson(` (the Person is held by guest
 		 *  rows only), in the statement itself. */
 		requiresGuestFill?: boolean;
+		/** Undo's take-back of that fill (#1124): its UPDATE may only write NULL,
+		 *  and must carry `heldByGuestRowsOnly(` and `eq(people.email,` (the fill
+		 *  convert recorded must still be what is there) in the statement itself. */
+		requiresGuestRevert?: boolean;
 	}
 > = {
 	// A member changing their OWN sign-in address (#1091, ADR-0030). The new
@@ -110,6 +114,19 @@ const WAIVERS: Record<
 			"convert fills a blank address on the guest's own guest-only Person from the guest row (#1124)",
 		requiresUnlinkedGuard: true,
 		requiresGuestFill: true,
+	},
+	// Undo's take-back of that fill (#1124, H1 of #1155). It only ever writes NULL,
+	// and only onto a Person nobody has signed in as, who no club holds as a member,
+	// and, for a recorded fill, whose address is still the one convert wrote. The
+	// legacy shape (a record from before #1124) omits the value test at run time and
+	// keeps the other two; both spell `eq(people.email,` in the one statement.
+	"server/guests-logic.ts": {
+		fn: "revertGuestContactFill",
+		sites: 1,
+		reason:
+			"undo clears the address convert filled on the guest's own Person back to null (#1124)",
+		requiresUnlinkedGuard: true,
+		requiresGuestRevert: true,
 	},
 	// The CSV importer's fill-only address (#907). Club-reachable.
 	"server/import-members-logic.ts": {
@@ -472,7 +489,7 @@ describe("the matcher itself", () => {
 						eq(people.id, personId),
 						isNull(people.userId),
 						isNull(people.email),
-						guestHeldOnly(),
+						heldByGuestRowsOnly(),
 					),
 				)
 				.returning({ id: people.id });
@@ -486,7 +503,36 @@ describe("the matcher itself", () => {
 		expect(stmts).toHaveLength(1);
 		expect(stmts[0]).toMatch(/isNull\(\s*people\.userId\s*\)/);
 		expect(stmts[0]).toMatch(/isNull\(\s*people\.email\s*\)/);
-		expect(stmts[0]).toMatch(/guest(?:HeldOnly|OnlyPerson)\(\)/);
+		expect(stmts[0]).toMatch(
+			/heldByGuestRowsOnly\(\)|unboundGuestOnlyPerson\(\)/,
+		);
+	});
+
+	it("reads undo's take-back as one email write, and the phone one beside it as none (#1124)", () => {
+		const src = `
+			await tx
+				.update(people)
+				.set({ email: null })
+				.where(
+					and(
+						eq(people.id, personId),
+						isNull(people.userId),
+						heldByGuestRowsOnly(),
+						revert.any ? undefined : eq(people.email, revert.email as string),
+					),
+				);
+			await tx
+				.update(people)
+				.set({ phone: null })
+				.where(and(eq(people.id, personId), isNull(people.userId)));
+		`;
+		expect(emailWriteSites(src)).toEqual(["update(people) setting email"]);
+		const stmts = emailWriteStatements(src);
+		expect(stmts).toHaveLength(1);
+		expect(stmts[0]).toMatch(/\.set\(\s*\{\s*email:\s*null\s*\}\s*\)/);
+		expect(stmts[0]).toMatch(/isNull\(\s*people\.userId\s*\)/);
+		expect(stmts[0]).toMatch(/heldByGuestRowsOnly\(\)/);
+		expect(stmts[0]).toMatch(/eq\(\s*people\.email\s*,/);
 	});
 
 	it("flags raw SQL however it is written or executed", () => {
@@ -618,7 +664,8 @@ describe("people.email writers (verified identity address)", () => {
 				waiver.requiresUnlinkedGuard ||
 				waiver.requiresSoleHolder ||
 				waiver.requiresBoundToUser ||
-				waiver.requiresGuestFill
+				waiver.requiresGuestFill ||
+				waiver.requiresGuestRevert
 			) {
 				expect(
 					stmts,
@@ -655,9 +702,26 @@ describe("people.email writers (verified identity address)", () => {
 					).toMatch(/isNull\(\s*people\.email\s*\)/);
 					expect(
 						stmt,
-						`${key}'s people.email write must carry guestHeldOnly() or guestOnlyPerson() in the ` +
+						`${key}'s people.email write must carry heldByGuestRowsOnly() or unboundGuestOnlyPerson() in the ` +
 							`STATEMENT — a Person already held as a member keeps what that club recorded (#1124)`,
-					).toMatch(/guest(?:HeldOnly|OnlyPerson)\(\)/);
+					).toMatch(/heldByGuestRowsOnly\(\)|unboundGuestOnlyPerson\(\)/);
+				}
+				if (waiver.requiresGuestRevert) {
+					expect(
+						stmt,
+						`${key}'s people.email write must only set the address to NULL — an undo ` +
+							`takes a fill back and never writes one (#1124)`,
+					).toMatch(/\.set\(\s*\{\s*email:\s*null\s*\}\s*\)/);
+					expect(
+						stmt,
+						`${key}'s people.email write must carry heldByGuestRowsOnly() in the STATEMENT — ` +
+							`a Person a club holds as a member keeps what that club recorded (#1124)`,
+					).toMatch(/heldByGuestRowsOnly\(\)/);
+					expect(
+						stmt,
+						`${key}'s people.email write must carry eq(people.email, …) in the STATEMENT — ` +
+							`an address an officer has since changed is theirs, not convert's (#1124)`,
+					).toMatch(/eq\(\s*people\.email\s*,/);
 				}
 			}
 		}

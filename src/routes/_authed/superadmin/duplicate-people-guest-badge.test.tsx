@@ -9,12 +9,15 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
 
-const { searchPeople } = vi.hoisted(() => ({ searchPeople: vi.fn() }));
+const { searchPeople, previewMerge } = vi.hoisted(() => ({
+	searchPeople: vi.fn(),
+	previewMerge: vi.fn(),
+}));
 
 vi.mock("#/server/people", () => ({
 	listDuplicatePeopleFn: vi.fn(),
 	mergePeopleFn: vi.fn(),
-	previewMerge: vi.fn(),
+	previewMerge,
 	searchPeople,
 }));
 vi.mock("sonner", () => ({
@@ -95,5 +98,43 @@ describe("the merge tool's Guest badge (#1124)", () => {
 		expect(searchPeople).toHaveBeenCalledWith({ data: "search" });
 		expect(badgesOnRow("Search Guest")).toEqual(["Guest"]);
 		expect(badgesOnRow("Search Member")).toEqual([]);
+	});
+
+	it("the merge preview says how many guest records move (L4)", async () => {
+		previewMerge.mockResolvedValueOnce({
+			block: null,
+			keeper: person("p-member", "Member Vera"),
+			absorbed: person("p-guest", "Visitor Vera", { guestOnly: true }),
+			movedCounts: {
+				memberships: 1,
+				collapsed: 0,
+				speeches: 2,
+				enrollments: 3,
+				guests: 4,
+			},
+		});
+		await renderConsole([
+			{
+				email: "shared@example.com",
+				people: [
+					person("p-member", "Member Vera", {
+						clubs: ["Downtown"],
+						linked: true,
+					}),
+					person("p-guest", "Visitor Vera", { guestOnly: true }),
+				],
+			},
+		]);
+
+		fireEvent.click(screen.getByRole("button", { name: /merge into keeper/i }));
+
+		const sentence = await screen.findByText(
+			(_, el) =>
+				el?.tagName === "P" && (el.textContent ?? "").includes("guest record"),
+		);
+		expect(sentence.textContent).toContain("4 guest records");
+		expect(sentence.textContent).toContain("1 membership");
+		expect(sentence.textContent).toContain("2 speeches");
+		expect(sentence.textContent).toContain("3 enrollments");
 	});
 });

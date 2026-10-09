@@ -1523,11 +1523,12 @@ export const officerTrainingRecords = pgTable(
 // Guests — club-scoped visitors who can be assigned to a role slot (#151) and
 // tracked through the VP-Membership pipeline (#208, ADR-0018).
 //
-// A guest is NOT a member: no Person, no login, no Pathways, no roster/officer
-// presence, and no `members` status (guests would otherwise leak into some
-// roster/season/picker views and vanish from others). It is a lightweight,
-// durable identity (name + optional contact) scoped to one club, so it reappears
-// as an assignable option in later meetings. A role slot references a guest via
+// A guest is NOT a member: no login, no Pathways, no roster/officer presence, and
+// no `members` status (guests would otherwise leak into some roster/season/picker
+// views and vanish from others). It IS a Person (#1124, ADR-0031): the row is the
+// per-club guest record, a durable identity (name + optional contact) scoped to
+// one club so it reappears as an assignable option in later meetings, and
+// `person_id` names the human. A role slot references a guest via
 // `role_slots.assigned_guest_id`, mutually exclusive with `assigned_member_id`.
 //
 // Adjacent to Person/Membership (ADR-0008). Promotion-to-member (ADR-0018): a
@@ -1566,8 +1567,9 @@ export const guests = pgTable(
 			.notNull()
 			.references(() => clubs.id, { onDelete: "cascade" }),
 		name: text("name").notNull(),
-		// A guest has no Person, so their "goes by" name lives here (#486). Guests
-		// hold role slots and get nudged like anyone else.
+		// The name this club calls the guest by (#486), per club like `name`; the
+		// Person's `preferred_name` is the fallback, and a convert carries this one
+		// onto it. Guests hold role slots and get nudged like anyone else.
 		preferredName: text("preferred_name"),
 		// Optional contact — a guest may be assigned with just a name.
 		email: text("email"),

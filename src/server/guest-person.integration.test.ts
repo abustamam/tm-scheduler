@@ -26,9 +26,17 @@ import {
 	guests,
 	meetings,
 	members,
+	pathEnrollments,
+	pathwaysPaths,
 	people,
+	speeches,
 	user,
 } from "#/db/schema";
+import {
+	CONVERT_NAME_CLASH_MESSAGE,
+	UNDO_MEMBER_HAS_ACCOUNT_MESSAGE,
+	UNDO_NO_RECORD_MESSAGE,
+} from "#/lib/guest-convert";
 import { toStoredPhone } from "#/lib/phone";
 import {
 	cleanup,
@@ -37,26 +45,39 @@ import {
 	type SeededClub,
 	seedClub,
 	seedPerson,
+	type TestTx,
 	testDb,
 	waitForLockWait,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { createGuestRecord, ensureGuestPerson, RECORD_CHANGED_MESSAGE } =
-	await import("#/server/guests-logic");
-const { applyAssignGuestToSlot } = await import("#/server/guests-logic");
+const {
+	applyAssignGuestToSlot,
+	createGuestRecord,
+	ensureGuestPerson,
+	GUEST_NOT_IN_CLUB_MESSAGE,
+	RECORD_CHANGED_MESSAGE,
+	revertGuestContactFill,
+} = await import("#/server/guests-logic");
 const {
 	applyConvertGuestToMember,
+	applyDeleteGuest,
+	applyLinkGuestToMember,
 	applyUndoGuestConversion,
+	applyUnlinkGuestFromMember,
+	applyUpdateGuest,
 	captureGuestVisit,
 } = await import("#/server/guest-pipeline-logic");
+const { bindVerifiedPerson } = await import("#/server/account-link-logic");
+const { collapseMemberships } = await import(
+	"#/server/membership-collapse-logic"
+);
 const { addGuestPresent } = await import("#/server/minutes-logic");
 const { joinBallotAsGuest } = await import("#/server/voting-logic");
 const { mergePeople } = await import("#/server/people-merge-logic");
-const { searchPeopleForMerge, listDuplicatePeople } = await import(
-	"#/server/people-logic"
-);
+const { searchPeopleForMerge, listDuplicatePeople, getMergePreview } =
+	await import("#/server/people-logic");
 const { deleteClubPermanently } = await import("#/server/onboarding-logic");
 const { lockClubForWrite } = await import("#/server/club-write-lock");
 const { recordGuestBookTool } = await import(
@@ -102,6 +123,7 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 	let extraClubs: string[] = [];
 	let extraPeople: string[] = [];
 	let extraUsers: string[] = [];
+	let extraPaths: string[] = [];
 	// Guest Persons, collected before the club cascade deletes the rows naming them.
 	let guestPersons: string[] = [];
 
@@ -130,12 +152,12 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 		return id;
 	}
 
-	async function makeUser() {
+	async function makeUser(email?: string) {
 		const id = randomUUID();
 		await testDb.insert(user).values({
 			id,
 			name: "U",
-			email: `u-${id}@test.example`,
+			email: email ?? `u-${id}@test.example`,
 			emailVerified: true,
 		});
 		extraUsers.push(id);
@@ -171,6 +193,7 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 		extraClubs = [];
 		extraPeople = [];
 		extraUsers = [];
+		extraPaths = [];
 		guestPersons = [];
 	});
 
@@ -196,6 +219,11 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 				.delete(people)
 				.where(eq(people.id, id))
 				.catch(() => {});
+		}
+		if (extraPaths.length > 0) {
+			await testDb
+				.delete(pathwaysPaths)
+				.where(inArray(pathwaysPaths.id, extraPaths));
 		}
 		if (extraUsers.length > 0) {
 			await testDb.delete(user).where(inArray(user.id, extraUsers));
@@ -373,6 +401,68 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			guestPersons.push(...(await peopleNamed(name)).map((p) => p.id));
 		});
 
+		it("a replay that names a Person leaves THAT Person alone", async () => {
+			const name = uniq("Named Replay");
+			const personId = await makePerson({ name });
+			const id = randomUUID();
+			await createGuestRecord(testDb, {
+				id,
+				clubId: seed.clubId,
+				name,
+				personId,
+			});
+			const replay = await createGuestRecord(testDb, {
+				id,
+				clubId: seed.clubId,
+				name,
+				personId,
+			});
+			expect(replay).toEqual({ id, created: false });
+			// The Person was the caller's, not minted for the replay: it stays.
+			expect(await personRow(personId)).toBeDefined();
+		});
+
+		it("refuses a client id that names ANOTHER club's guest, and mints nothing (L2)", async () => {
+			const clubB = await makeClub();
+			const theirs = await newGuest(uniq("Their Guest"), {}, clubB);
+			const name = uniq("Squatter");
+
+			await expect(
+				createGuestRecord(testDb, {
+					id: theirs.guestId,
+					clubId: seed.clubId,
+					name,
+				}),
+			).rejects.toThrow(GUEST_NOT_IN_CLUB_MESSAGE);
+
+			// Nothing was minted for the refusal, and the other club's row is untouched.
+			expect(await peopleNamed(name)).toHaveLength(0);
+			const g = await guestRow(theirs.guestId);
+			expect(g.clubId).toBe(clubB);
+			expect(g.personId).toBe(theirs.personId);
+		});
+
+		it("addGuestPresent refuses another club's guest id instead of attaching it (L2)", async () => {
+			const clubB = await makeClub();
+			const theirs = await newGuest(uniq("Elsewhere Guest"), {}, clubB);
+
+			await expect(
+				addGuestPresent({
+					meetingId: seed.meetingId,
+					id: theirs.guestId,
+					newGuest: { name: uniq("Same Id") },
+				}),
+			).rejects.toThrow(GUEST_NOT_IN_CLUB_MESSAGE);
+
+			// The foreign guest was not recorded present at this club's meeting.
+			const { meetingAttendance } = await import("#/db/schema");
+			const rows = await testDb
+				.select({ id: meetingAttendance.id })
+				.from(meetingAttendance)
+				.where(eq(meetingAttendance.guestId, theirs.guestId));
+			expect(rows).toHaveLength(0);
+		});
+
 		it("points at a Person the caller names instead of minting one", async () => {
 			const name = uniq("Existing Human");
 			const personId = await makePerson({ name });
@@ -395,6 +485,12 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			const { guestId, personId } = await newGuest(name);
 			expect(await ensureGuestPerson(testDb, guestId)).toBe(personId);
 			expect(await peopleNamed(name)).toHaveLength(1);
+		});
+
+		it("refuses a guest that does not exist", async () => {
+			await expect(ensureGuestPerson(testDb, randomUUID())).rejects.toThrow(
+				"Guest not found.",
+			);
 		});
 
 		it("creates a name-and-goes-by Person for a null person_id, once", async () => {
@@ -566,23 +662,26 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			expect(p?.email).toBe(email);
 		});
 
-		it("copies nothing onto a Person somebody has signed in as", async () => {
+		it("copies nothing onto, and renames nothing on, a Person somebody has signed in as", async () => {
 			const { guestId, personId } = await newGuest(uniq("Bound Guest"), {
 				email: `bound-${randomUUID()}@example.com`,
 				phone: uniquePhone(),
 			});
+			const theirName = uniq("Their Own Name");
 			await testDb
 				.update(people)
-				.set({ userId: await makeUser() })
+				.set({ userId: await makeUser(), name: theirName, preferredName: "T" })
 				.where(eq(people.id, personId));
 
 			await convert(guestId);
 
 			// The address on a bound Person is its account's, and the guest book is an
-			// anonymous form.
+			// anonymous form. The name is theirs too: the guest row's does not replace it.
 			const p = await personRow(personId);
 			expect(p?.email).toBeNull();
 			expect(p?.phone).toBeNull();
+			expect(p?.name).toBe(theirName);
+			expect(p?.preferredName).toBe("T");
 		});
 
 		it("copies nothing onto a Person that is already a member somewhere else", async () => {
@@ -595,9 +694,11 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 				personId: memberPerson,
 				name: "Elsewhere Member",
 			});
+			const memberName = (await personRow(memberPerson))?.name;
 			const { id: guestId } = await createGuestRecord(testDb, {
 				clubId: seed.clubId,
 				name: uniq("Guest Of A Member"),
+				preferredName: "Gom",
 				email: `elsewhere-${randomUUID()}@example.com`,
 				phone: uniquePhone(),
 				personId: memberPerson,
@@ -614,10 +715,13 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			expect(held.map((h) => h.clubId).sort()).toEqual(
 				[otherClub, seed.clubId].sort(),
 			);
-			// ...and nothing is copied onto it.
+			// ...and nothing is copied onto it, and its name is not replaced by the
+			// guest row's.
 			const p = await personRow(memberPerson);
 			expect(p?.email).toBeNull();
 			expect(p?.phone).toBeNull();
+			expect(p?.name).toBe(memberName);
+			expect(p?.preferredName).toBeNull();
 		});
 
 		it("creates the Person first for a guest whose person_id is null, then converts (AC7)", async () => {
@@ -643,6 +747,22 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 				.from(members)
 				.where(eq(members.id, res.membershipId));
 			expect(m?.personId).toBe(res.personId);
+
+			// AC8, from this very convert: undoing it leaves the Person ensure created
+			// and the guest row, and the guest goes back to following_up on it.
+			const undone = await applyUndoGuestConversion({
+				clubId: seed.clubId,
+				guestId: g.id,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect(undone.membershipDeleted).toBe(true);
+			const after = await guestRow(g.id);
+			expect(after.stage).toBe("following_up");
+			expect(after.convertedMembershipId).toBeNull();
+			expect(after.personId).toBe(res.personId);
+			expect(await peopleNamed(name)).toHaveLength(1);
+			// And what convert filled is taken back: the Person is name-only again.
+			expect((await personRow(res.personId))?.email).toBeNull();
 		});
 
 		it("undoing it leaves the Person and the guest row, and the guest returns to following_up (AC8)", async () => {
@@ -829,45 +949,6 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 			expect((await guestRow(b.guestId)).personId).toBe(a.personId);
 		});
 
-		it("a guest-book capture racing mergePeople on the same club and Person completes (AC13)", async () => {
-			// The scenario the issue names, driven for real: both take the club write
-			// lock first, so one waits for the other, in either order, and neither is
-			// ever the victim of a deadlock.
-			const clubB = await makeClub();
-			const name = uniq("Racing Guest");
-			const email = `race-${randomUUID()}@example.com`;
-			const keeper = await newGuest(uniq("Race Keeper"), {}, clubB);
-			const absorbed = await newGuest(name, { email });
-
-			const outcomes = await Promise.allSettled([
-				captureGuestVisit({ clubId: seed.clubId, name, email }),
-				mergePeople({
-					keeperPersonId: keeper.personId,
-					absorbedPersonId: absorbed.personId,
-				}),
-			]);
-
-			for (const o of outcomes) {
-				if (o.status === "rejected") {
-					const msg = (o.reason as Error).message;
-					// The only refusals that are not a bug: the club was busy, or the
-					// merge saw its set of clubs move under it.
-					expect(msg).toMatch(
-						new RegExp(`${RECORD_CHANGED_MESSAGE}|busy right now`),
-					);
-					expect(msg).not.toMatch(/deadlock/i);
-				}
-			}
-			// The merge, at least, landed: it is the one with nothing to wait for
-			// once the capture's transaction is done.
-			expect(outcomes[1].status).toBe("fulfilled");
-			// And the capture found the same human whichever order they ran in.
-			const capture = outcomes[0];
-			if (capture.status === "fulfilled") {
-				expect(capture.value.guestId).toBe(absorbed.guestId);
-			}
-		});
-
 		it("refuses a merge whose clubs changed after it read them", async () => {
 			const clubB = await makeClub();
 			const a = await newGuest(uniq("Moved A"));
@@ -1025,6 +1106,1052 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 					[member, false],
 				].sort(),
 			);
+		});
+	});
+
+	// =======================================================================
+	// The review round of #1155. Every case below starts from the STATE THE BUG
+	// LEAVES BEHIND (a backfilled row, a record written before #1124, a Person a
+	// merge moved), not only from a fresh capture then convert.
+	// =======================================================================
+
+	/** A `member_add` record as convert writes it, or as it wrote it before #1124. */
+	async function plantConversionRecord(opts: {
+		guestId: string;
+		membershipId: string;
+		personId: string;
+		createdMembership: boolean;
+		createdPerson: boolean;
+		filled?: unknown;
+	}) {
+		await testDb.insert(activityLog).values({
+			clubId: seed.clubId,
+			actorMemberId: seed.adminMemberId,
+			action: "member_add",
+			targetType: "member",
+			targetId: opts.membershipId,
+			detail: {
+				name: "Planted",
+				fromGuestId: opts.guestId,
+				personId: opts.personId,
+				slotIds: [],
+				createdMembership: opts.createdMembership,
+				createdPerson: opts.createdPerson,
+				...(opts.filled === undefined ? {} : { filled: opts.filled }),
+			},
+		});
+	}
+
+	/**
+	 * What the OLD convert left behind, as the backfill read it: a Person it minted
+	 * carrying the guest's contact, a membership on it, a guest row pointing at that
+	 * Person and that membership, and a record saying it created both.
+	 */
+	async function legacyConvertedGuest(name: string, email: string) {
+		const personId = await makePerson({ name, email, phone: "+15550001111" });
+		const [m] = await testDb
+			.insert(members)
+			.values({ clubId: seed.clubId, personId, name })
+			.returning({ id: members.id });
+		if (!m) throw new Error("fixture");
+		const { id: guestId } = await createGuestRecord(testDb, {
+			clubId: seed.clubId,
+			name,
+			email,
+			stage: "joined",
+			convertedMembershipId: m.id,
+			personId,
+		});
+		await plantConversionRecord({
+			guestId,
+			membershipId: m.id,
+			personId,
+			createdMembership: true,
+			createdPerson: true,
+		});
+		return { guestId, personId, membershipId: m.id };
+	}
+
+	const undo = (guestId: string) =>
+		applyUndoGuestConversion({
+			clubId: seed.clubId,
+			guestId,
+			actorMemberId: seed.adminMemberId,
+		});
+
+	// -----------------------------------------------------------------------
+	// H1: undo reverses what convert filled.
+	// -----------------------------------------------------------------------
+	describe("undo takes back exactly what convert filled (H1)", () => {
+		it("a typo'd address does not stay on a member's Person: convert, undo, correct, convert again", async () => {
+			const name = uniq("Typo Guest");
+			const typo = `typo-${randomUUID()}@example.test`;
+			const fixed = `fixed-${randomUUID()}@example.test`;
+			const { guestId, personId } = await newGuest(name, { email: typo });
+			const first = await convert(guestId);
+			expect(first.personId).toBe(personId);
+			expect((await personRow(personId))?.email).toBe(typo);
+
+			await undo(guestId);
+			// The Person is name-only again, not holding an address the guest no longer has.
+			expect((await personRow(personId))?.email).toBeNull();
+
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name,
+				email: fixed,
+			});
+			const second = await convert(guestId);
+
+			// The same Person, now a member, carrying the CORRECTED address.
+			expect(second.personId).toBe(personId);
+			expect((await personRow(personId))?.email).toBe(fixed);
+			// End to end through the bind rule: whoever owns the typo cannot sign in to
+			// a Person that now holds a membership, and the real address can.
+			const typoOwner = await makeUser(typo);
+			expect(await bindVerifiedPerson({ personId, userId: typoOwner })).toBe(
+				false,
+			);
+			expect((await personRow(personId))?.userId).toBeNull();
+			const realOwner = await makeUser(fixed);
+			expect(await bindVerifiedPerson({ personId, userId: realOwner })).toBe(
+				true,
+			);
+		});
+
+		it("the same for a record from BEFORE #1124 (createdPerson: true): the Person the old convert minted goes back to name-only", async () => {
+			const name = uniq("Legacy Typo");
+			const typo = `legacy-typo-${randomUUID()}@example.test`;
+			const fixed = `legacy-fixed-${randomUUID()}@example.test`;
+			const { guestId, personId } = await legacyConvertedGuest(name, typo);
+			// The state the old convert leaves: the member's Person carries the guest's
+			// contact, the guest row points at it (the backfill), and it has a membership.
+			expect((await personRow(personId))?.email).toBe(typo);
+			expect((await personRow(personId))?.phone).toBe("+15550001111");
+
+			const undone = await undo(guestId);
+			expect(undone.membershipDeleted).toBe(true);
+			const after = await personRow(personId);
+			expect(after?.email).toBeNull();
+			expect(after?.phone).toBeNull();
+			// Its name is untouched, and the guest still names it.
+			expect(after?.name).toBe(name);
+			expect((await guestRow(guestId)).personId).toBe(personId);
+
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name,
+				email: fixed,
+			});
+			const second = await convert(guestId);
+
+			expect(second.personId).toBe(personId);
+			expect((await personRow(personId))?.email).toBe(fixed);
+			const typoOwner = await makeUser(typo);
+			expect(await bindVerifiedPerson({ personId, userId: typoOwner })).toBe(
+				false,
+			);
+		});
+
+		it("clears a field only while it still holds what convert wrote", async () => {
+			const email = `kept-${randomUUID()}@example.test`;
+			const { guestId, personId } = await newGuest(uniq("Edited Since"), {
+				email,
+				phone: uniquePhone(),
+			});
+			await convert(guestId);
+			// An officer corrects the member's address on the member page afterwards.
+			const theirs = `theirs-${randomUUID()}@example.test`;
+			await testDb
+				.update(people)
+				.set({ email: theirs })
+				.where(eq(people.id, personId));
+
+			await undo(guestId);
+
+			const p = await personRow(personId);
+			// The address is theirs now and stays; the phone convert wrote still
+			// matched, so it went.
+			expect(p?.email).toBe(theirs);
+			expect(p?.phone).toBeNull();
+		});
+
+		it("a phone an officer changed since is left alone too, while the unchanged address still goes", async () => {
+			const email = `still-${randomUUID()}@example.test`;
+			const { guestId, personId } = await newGuest(uniq("Phone Edited"), {
+				email,
+				phone: uniquePhone(),
+			});
+			await convert(guestId);
+			const theirs = toStoredPhone(uniquePhone(), "1");
+			await testDb
+				.update(people)
+				.set({ phone: theirs })
+				.where(eq(people.id, personId));
+
+			await undo(guestId);
+
+			const p = await personRow(personId);
+			expect(p?.phone).toBe(theirs);
+			expect(p?.email).toBeNull();
+		});
+
+		it("undoes a conversion of a guest whose person_id is null (the old container's row) without minting a Person", async () => {
+			// An old-container guest converted by the old container: no person_id on
+			// the guest, a membership on a Person the old convert minted, and the
+			// pre-#1124 record. Nothing for the guest to be separated from.
+			const name = uniq("Old On Old");
+			const personId = await makePerson({
+				name,
+				email: `old-${randomUUID()}@example.test`,
+			});
+			const [m] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId, name })
+				.returning({ id: members.id });
+			if (!m) throw new Error("fixture");
+			const [g] = await testDb
+				.insert(guests)
+				.values({
+					clubId: seed.clubId,
+					name,
+					stage: "joined",
+					convertedMembershipId: m.id,
+				})
+				.returning({ id: guests.id });
+			if (!g) throw new Error("fixture");
+			await plantConversionRecord({
+				guestId: g.id,
+				membershipId: m.id,
+				personId,
+				createdMembership: true,
+				createdPerson: true,
+			});
+
+			const undone = await undo(g.id);
+
+			expect(undone.membershipDeleted).toBe(true);
+			const row = await guestRow(g.id);
+			expect(row.stage).toBe("following_up");
+			expect(row.personId).toBeNull();
+			expect(await peopleNamed(name)).toHaveLength(1);
+		});
+
+		it("revertGuestContactFill clears only an unbound, guest-held Person, and only a matching value", async () => {
+			const revert = (
+				personId: string,
+				what: Parameters<typeof revertGuestContactFill>[2],
+			) =>
+				testDb.transaction((tx) => revertGuestContactFill(tx, personId, what));
+			const holdsEmail = async (email: string) => {
+				const { guestId, personId } = await newGuest(uniq("Revert Target"));
+				await testDb
+					.update(people)
+					.set({ email, phone: "+15550002222" })
+					.where(eq(people.id, personId));
+				return { guestId, personId };
+			};
+
+			// Control: a recorded fill that still matches IS cleared.
+			const e1 = `r1-${randomUUID()}@example.test`;
+			const a = await holdsEmail(e1);
+			await revert(a.personId, { email: e1, phone: "+15550002222" });
+			expect((await personRow(a.personId))?.email).toBeNull();
+			expect((await personRow(a.personId))?.phone).toBeNull();
+
+			// A different value: untouched.
+			const b = await holdsEmail(`r2-${randomUUID()}@example.test`);
+			await revert(b.personId, { email: "someone-else@example.test" });
+			expect((await personRow(b.personId))?.email).not.toBeNull();
+
+			// Signed in: untouched, in either mode.
+			const c = await holdsEmail(`r3-${randomUUID()}@example.test`);
+			await testDb
+				.update(people)
+				.set({ userId: await makeUser() })
+				.where(eq(people.id, c.personId));
+			await revert(c.personId, { any: true });
+			expect((await personRow(c.personId))?.email).not.toBeNull();
+			expect((await personRow(c.personId))?.phone).not.toBeNull();
+
+			// A member of some club: untouched, in either mode.
+			const d = await holdsEmail(`r4-${randomUUID()}@example.test`);
+			const otherClub = await makeClub();
+			await testDb.insert(members).values({
+				clubId: otherClub,
+				personId: d.personId,
+				name: "Held Elsewhere",
+			});
+			await revert(d.personId, { any: true });
+			expect((await personRow(d.personId))?.email).not.toBeNull();
+			expect((await personRow(d.personId))?.phone).not.toBeNull();
+
+			// The legacy mode clears whatever is there on a Person that qualifies.
+			const f = await holdsEmail(`r5-${randomUUID()}@example.test`);
+			await revert(f.personId, { any: true });
+			expect((await personRow(f.personId))?.email).toBeNull();
+			expect((await personRow(f.personId))?.phone).toBeNull();
+		});
+
+		it("refuses a record whose filled key is half-readable, rather than reading it as 'filled nothing'", async () => {
+			for (const bad of ["x", [], { email: 5 }, { phone: {} }]) {
+				const { guestId, personId } = await newGuest(uniq("Bad Record"));
+				const [m] = await testDb
+					.insert(members)
+					.values({ clubId: seed.clubId, personId, name: uniq("Bad Record M") })
+					.returning({ id: members.id });
+				if (!m) throw new Error("fixture");
+				await testDb
+					.update(guests)
+					.set({ stage: "joined", convertedMembershipId: m.id })
+					.where(eq(guests.id, guestId));
+				await plantConversionRecord({
+					guestId,
+					membershipId: m.id,
+					personId,
+					createdMembership: true,
+					createdPerson: false,
+					filled: bad,
+				});
+				await expect(undo(guestId)).rejects.toThrow(UNDO_NO_RECORD_MESSAGE);
+			}
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// H2: after an undo or unlink the guest no longer names a member's Person.
+	// -----------------------------------------------------------------------
+	describe("after an undo or unlink a guest never keeps a member's Person (H2)", () => {
+		it("a backfilled converted row whose membership was REUSED: undo re-points the guest, and a re-convert makes a NEW membership", async () => {
+			const name = uniq("Reuse Member");
+			const memberPerson = await makePerson({ name });
+			// A lapsed ADMIN: the reuse branch would wake it and demote it.
+			const [m0] = await testDb
+				.insert(members)
+				.values({
+					clubId: seed.clubId,
+					personId: memberPerson,
+					name,
+					clubRole: "admin",
+					status: "inactive",
+				})
+				.returning({ id: members.id });
+			if (!m0) throw new Error("fixture");
+			// The backfill's shape: the guest row names the member's Person.
+			const { id: guestId } = await createGuestRecord(testDb, {
+				clubId: seed.clubId,
+				name,
+				stage: "joined",
+				convertedMembershipId: m0.id,
+				personId: memberPerson,
+			});
+			await plantConversionRecord({
+				guestId,
+				membershipId: m0.id,
+				personId: memberPerson,
+				createdMembership: false,
+				createdPerson: false,
+			});
+
+			const undone = await undo(guestId);
+
+			// The membership was convert's REUSE, so it stands, untouched...
+			expect(undone.membershipDeleted).toBe(false);
+			// ...and the guest no longer names its Person: a fresh name-only one.
+			const g = await guestRow(guestId);
+			expect(g.personId).not.toBe(memberPerson);
+			guestPersons.push(g.personId as string);
+			const fresh = await personRow(g.personId as string);
+			expect(fresh?.name).toBe(name);
+			expect(fresh?.email).toBeNull();
+			expect(g.stage).toBe("following_up");
+
+			// A re-convert under the SAME name now meets the #617 refusal instead of
+			// quietly reusing the member's row.
+			await expect(convert(guestId)).rejects.toThrow(
+				CONVERT_NAME_CLASH_MESSAGE,
+			);
+			// Rename the guest and it creates a NEW membership on the fresh Person.
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name: uniq("Entirely Different"),
+			});
+			const res = await convert(guestId);
+			expect(res.membershipId).not.toBe(m0.id);
+			expect(res.personId).toBe(g.personId);
+			expect(res.reactivated).toBe(false);
+			// The lapsed admin was not woken or demoted.
+			const [still] = await testDb
+				.select({ status: members.status, clubRole: members.clubRole })
+				.from(members)
+				.where(eq(members.id, m0.id));
+			expect(still).toEqual({ status: "inactive", clubRole: "admin" });
+		});
+
+		it("a linked guest unlinked: the guest gets a fresh Person, and a re-convert does not land on the member", async () => {
+			const stem = uniq("Linked");
+			const { guestId, personId: guestsOwn } = await newGuest(stem);
+
+			await applyLinkGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				memberId: seed.memberId,
+				actorMemberId: seed.adminMemberId,
+			});
+			// L5: the link points the guest at the member's Person, as a convert does,
+			// and the guest's own Person, named by nobody now, is taken back.
+			const linked = await guestRow(guestId);
+			expect(linked.personId).toBe(seed.personId);
+			expect(await personRow(guestsOwn)).toBeUndefined();
+
+			await applyUnlinkGuestFromMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			const unlinked = await guestRow(guestId);
+			expect(unlinked.personId).not.toBe(seed.personId);
+			guestPersons.push(unlinked.personId as string);
+			expect((await personRow(unlinked.personId as string))?.name).toBe(stem);
+			// The member's Person is still theirs, untouched.
+			expect(await personRow(seed.personId)).toBeDefined();
+
+			const res = await convert(guestId);
+			expect(res.membershipId).not.toBe(seed.memberId);
+			expect(res.personId).toBe(unlinked.personId);
+		});
+
+		it("the pre-#759 cross-club shape: a convert that attached ANOTHER club's Person is undone, and the guest lets go of it", async () => {
+			const otherClub = await makeClub();
+			const strangersPerson = await makePerson({ name: uniq("Strangers") });
+			await testDb.insert(members).values({
+				clubId: otherClub,
+				personId: strangersPerson,
+				name: "Strangers",
+			});
+			// Before #759 the dedupe was global: this club's convert attached the
+			// stranger's Person and gave it a membership HERE. The backfill then
+			// pointed the guest at it.
+			const name = uniq("Pre759 Guest");
+			const [mx] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId: strangersPerson, name })
+				.returning({ id: members.id });
+			if (!mx) throw new Error("fixture");
+			const { id: guestId } = await createGuestRecord(testDb, {
+				clubId: seed.clubId,
+				name,
+				stage: "joined",
+				convertedMembershipId: mx.id,
+				personId: strangersPerson,
+			});
+			await plantConversionRecord({
+				guestId,
+				membershipId: mx.id,
+				personId: strangersPerson,
+				createdMembership: true,
+				createdPerson: false,
+			});
+
+			const undone = await undo(guestId);
+			expect(undone.membershipDeleted).toBe(true);
+			const g = await guestRow(guestId);
+			// This club's membership is gone, but the stranger's Person still holds
+			// the OTHER club's, so the guest must not keep naming it.
+			expect(g.personId).not.toBe(strangersPerson);
+			guestPersons.push(g.personId as string);
+			expect((await personRow(g.personId as string))?.name).toBe(name);
+
+			const res = await convert(guestId);
+			expect(res.personId).toBe(g.personId);
+			const held = await testDb
+				.select({ clubId: members.clubId })
+				.from(members)
+				.where(eq(members.personId, strangersPerson));
+			// The stranger's Person was not attached to this club again.
+			expect(held.map((h) => h.clubId)).toEqual([otherClub]);
+		});
+
+		it("an undo that deletes the membership of a guest-only Person leaves the guest on it", async () => {
+			const { guestId, personId } = await newGuest(uniq("Stays Put"));
+			await convert(guestId);
+
+			await undo(guestId);
+
+			// The Person holds no membership once it is undone, so there is nothing to
+			// separate from: no Person is minted.
+			expect((await guestRow(guestId)).personId).toBe(personId);
+		});
+
+		it("a link leaves the guest's old Person alone while something else still references it", async () => {
+			const otherClub = await makeClub();
+			const { guestId, personId: guestsOwn } = await newGuest(uniq("Shared"));
+			await createGuestRecord(testDb, {
+				clubId: otherClub,
+				name: uniq("Shared Elsewhere"),
+				personId: guestsOwn,
+			});
+
+			await applyLinkGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				memberId: seed.memberId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			expect((await guestRow(guestId)).personId).toBe(seed.personId);
+			// Another club's guest row still names it: kept.
+			expect(await personRow(guestsOwn)).toBeDefined();
+		});
+
+		it("linking a guest that already names the member's Person (the backfill's shape) deletes nothing", async () => {
+			const { id: guestId } = await createGuestRecord(testDb, {
+				clubId: seed.clubId,
+				name: uniq("Already Theirs"),
+				personId: seed.personId,
+			});
+
+			await applyLinkGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				memberId: seed.memberId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			expect((await guestRow(guestId)).personId).toBe(seed.personId);
+			expect(await personRow(seed.personId)).toBeDefined();
+		});
+
+		it("collapsing two memberships carries a converted guest's person_id to the keeper's Person (L5)", async () => {
+			const keeperPerson = await makePerson({ name: uniq("Collapse Keeper") });
+			const absorbedPerson = await makePerson({ name: uniq("Collapse Gone") });
+			const [keeper] = await testDb
+				.insert(members)
+				.values({
+					clubId: seed.clubId,
+					personId: keeperPerson,
+					name: "Collapse Keeper",
+				})
+				.returning({ id: members.id });
+			const [absorbed] = await testDb
+				.insert(members)
+				.values({
+					clubId: seed.clubId,
+					personId: absorbedPerson,
+					name: "Collapse Gone",
+				})
+				.returning({ id: members.id });
+			if (!keeper || !absorbed) throw new Error("fixture");
+			// One converted guest that IS the absorbed member's Person, and one that
+			// names some other Person (one convert deduped past).
+			const { id: consistent } = await createGuestRecord(testDb, {
+				clubId: seed.clubId,
+				name: uniq("Consistent"),
+				stage: "joined",
+				convertedMembershipId: absorbed.id,
+				personId: absorbedPerson,
+			});
+			const { id: residual, created } = await createGuestRecord(testDb, {
+				clubId: seed.clubId,
+				name: uniq("Residual"),
+				stage: "joined",
+				convertedMembershipId: absorbed.id,
+			});
+			expect(created).toBe(true);
+			const residualPerson = (await guestRow(residual)).personId as string;
+			guestPersons.push(residualPerson);
+
+			await testDb.transaction((tx) =>
+				collapseMemberships(tx, seed.clubId, keeper.id, absorbed.id),
+			);
+
+			const c = await guestRow(consistent);
+			expect(c.convertedMembershipId).toBe(keeper.id);
+			expect(c.personId).toBe(keeperPerson);
+			const r = await guestRow(residual);
+			expect(r.convertedMembershipId).toBe(keeper.id);
+			// Its own Person is its own: not swapped for the keeper's.
+			expect(r.personId).toBe(residualPerson);
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// L1: undo reads the Person the membership names NOW.
+	// -----------------------------------------------------------------------
+	describe("undo after a merge (L1)", () => {
+		it("refuses to delete the membership of a signed-in Person the guest's Person was merged into", async () => {
+			const { guestId, personId } = await newGuest(uniq("Merged Away"));
+			const res = await convert(guestId);
+			expect(res.personId).toBe(personId);
+			// A superadmin merges the guest's Person into somebody who has an account.
+			const keeper = await makePerson({
+				name: uniq("Has Account"),
+				userId: await makeUser(),
+			});
+			await mergePeople({ keeperPersonId: keeper, absorbedPersonId: personId });
+			// The record still names the Person the merge deleted.
+			expect(await personRow(personId)).toBeUndefined();
+
+			await expect(undo(guestId)).rejects.toThrow(
+				UNDO_MEMBER_HAS_ACCOUNT_MESSAGE,
+			);
+
+			// Nothing was deleted: the signed-in member still has their membership.
+			const [m] = await testDb
+				.select({ personId: members.personId })
+				.from(members)
+				.where(eq(members.id, res.membershipId));
+			expect(m?.personId).toBe(keeper);
+		});
+
+		it("undoes against the keeper when it is unbound, and names the keeper in the removal record", async () => {
+			const { guestId, personId } = await newGuest(uniq("Merged Quietly"));
+			const res = await convert(guestId);
+			const keeper = await makePerson({ name: uniq("Plain Keeper") });
+			await mergePeople({ keeperPersonId: keeper, absorbedPersonId: personId });
+
+			const undone = await undo(guestId);
+
+			expect(undone.membershipDeleted).toBe(true);
+			const [log] = await testDb
+				.select({ detail: activityLog.detail })
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.clubId, seed.clubId),
+						eq(activityLog.action, "member_remove"),
+						eq(activityLog.targetId, res.membershipId),
+					),
+				);
+			// The Person the importer reads off the release is one that still exists.
+			expect((log?.detail as { personId?: string })?.personId).toBe(keeper);
+			expect(await personRow(keeper)).toBeDefined();
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// M1: convert carries an officer's edits to the name.
+	// -----------------------------------------------------------------------
+	describe("convert carries the officer's name and goes-by edits onto the Person (M1)", () => {
+		it("a guest renamed and with its goes-by name CLEARED after capture: the Person follows", async () => {
+			const original = uniq("Robbert Smiht");
+			// What the guest book and the confirm flow do: a guest and its Person, the
+			// goes-by name on both.
+			const { id: guestId } = await createGuestRecord(testDb, {
+				clubId: seed.clubId,
+				name: original,
+				preferredName: "Bobby",
+			});
+			const personId = (await guestRow(guestId)).personId as string;
+			guestPersons.push(personId);
+			expect((await personRow(personId))?.preferredName).toBe("Bobby");
+
+			const corrected = uniq("Roberta Smithe");
+			await applyUpdateGuest({ clubId: seed.clubId, guestId, name: corrected });
+			const res = await convert(guestId);
+
+			expect(res.personId).toBe(personId);
+			const p = await personRow(personId);
+			expect(p?.name).toBe(corrected);
+			// Cleared, not resurrected: the membership says nothing and the Person
+			// is its fallback, so a stale "Bobby" here would greet them as Bobby.
+			expect(p?.preferredName).toBeNull();
+			const [m] = await testDb
+				.select({ name: members.name, preferredName: members.preferredName })
+				.from(members)
+				.where(eq(members.id, res.membershipId));
+			expect(m).toEqual({ name: corrected, preferredName: null });
+		});
+
+		it("a goes-by name an officer SETS after capture reaches the Person too", async () => {
+			const name = uniq("Robert Smith");
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name,
+			});
+			const personId = (await guestRow(guestId)).personId as string;
+			guestPersons.push(personId);
+			expect((await personRow(personId))?.preferredName).toBeNull();
+
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name,
+				preferredName: "Bob",
+			});
+			await convert(guestId);
+
+			expect((await personRow(personId))?.preferredName).toBe("Bob");
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// M2: deleting a guest deletes its Person, when nothing else names it.
+	// -----------------------------------------------------------------------
+	describe("deleting a guest takes its Person with it (M2)", () => {
+		const del = (guestId: string) =>
+			applyDeleteGuest({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+		it("deletes the Person of a mistaken guest", async () => {
+			const { guestId, personId } = await newGuest(uniq("Spam Visitor"));
+
+			await del(guestId);
+
+			expect(
+				await testDb.select().from(guests).where(eq(guests.id, guestId)),
+			).toHaveLength(0);
+			expect(await personRow(personId)).toBeUndefined();
+		});
+
+		it("keeps a Person another club's guest row still names", async () => {
+			const otherClub = await makeClub();
+			const { guestId, personId } = await newGuest(uniq("Seen Elsewhere"));
+			await createGuestRecord(testDb, {
+				clubId: otherClub,
+				name: uniq("Seen Elsewhere"),
+				personId,
+			});
+
+			await del(guestId);
+
+			expect(await personRow(personId)).toBeDefined();
+		});
+
+		it("keeps a Person somebody has signed in as", async () => {
+			const { guestId, personId } = await newGuest(uniq("Has Login"));
+			await testDb
+				.update(people)
+				.set({ userId: await makeUser() })
+				.where(eq(people.id, personId));
+
+			await del(guestId);
+
+			expect(await personRow(personId)).toBeDefined();
+		});
+
+		it("keeps a Person a club holds as a member", async () => {
+			const { guestId, personId } = await newGuest(uniq("Is A Member"));
+			const otherClub = await makeClub();
+			await testDb.insert(members).values({
+				clubId: otherClub,
+				personId,
+				name: "Is A Member",
+			});
+
+			await del(guestId);
+
+			expect(await personRow(personId)).toBeDefined();
+		});
+
+		it("keeps a Person that owns a speech, whose delete would cascade it away", async () => {
+			const { guestId, personId } = await newGuest(uniq("Has A Speech"));
+			await testDb
+				.insert(speeches)
+				.values({ personId, title: uniq("Ice Breaker") });
+
+			await del(guestId);
+
+			expect(await personRow(personId)).toBeDefined();
+		});
+
+		it("keeps a Person with a Pathways enrolment", async () => {
+			const { guestId, personId } = await newGuest(uniq("Enrolled"));
+			const [path] = await testDb
+				.insert(pathwaysPaths)
+				.values({ courseCode: `1124-${randomUUID()}`, name: "Path" })
+				.returning({ id: pathwaysPaths.id });
+			if (!path) throw new Error("fixture");
+			extraPaths.push(path.id);
+			await testDb
+				.insert(pathEnrollments)
+				.values({ personId, pathId: path.id });
+
+			await del(guestId);
+
+			expect(await personRow(personId)).toBeDefined();
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// M3: a club delete never takes a signed-in Person.
+	// -----------------------------------------------------------------------
+	describe("deleting a club keeps a signed-in guest-only Person and its account (M3)", () => {
+		it("a Person with an account held only by a guest row of the deleted club survives, and its account is not queued", async () => {
+			const archivedName = uniq("Doomed Signed In");
+			const doomed = await makeClub(archivedName, true);
+			const signedIn = await newGuest(uniq("Signed In Guest"), {}, doomed);
+			const plain = await newGuest(uniq("Plain Guest"), {}, doomed);
+			const accountId = await makeUser();
+			await testDb
+				.update(people)
+				.set({ userId: accountId })
+				.where(eq(people.id, signedIn.personId));
+
+			const res = await deleteClubPermanently(doomed, archivedName);
+
+			expect(await personRow(signedIn.personId)).toBeDefined();
+			expect(await personRow(plain.personId)).toBeUndefined();
+			// The account was not queued for deletion with the Person: it is intact.
+			const accounts = await testDb
+				.select({ id: user.id })
+				.from(user)
+				.where(eq(user.id, accountId));
+			expect(accounts).toHaveLength(1);
+			expect(res.usersDeleted).toBe(0);
+			expect(res.peopleDeleted).toBe(1);
+			expect(res.peopleKept).toBe(1);
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// L3: convert locks the matched member's Person together with the guest's.
+	// -----------------------------------------------------------------------
+	describe("the dedupe-hit path locks both Persons up front (L3)", () => {
+		it("parks on the matched Person's lock BEFORE it takes the guest row", async () => {
+			const email = `hit-${randomUUID()}@example.test`;
+			const matched = await makePerson({ name: uniq("Matched Member"), email });
+			await testDb.insert(members).values({
+				clubId: seed.clubId,
+				personId: matched,
+				name: uniq("Matched Member Row"),
+			});
+			const { guestId } = await newGuest(uniq("Hits A Member"), { email });
+
+			// A writer that holds the matched Person (the roster edit's lock) ...
+			const holder = await openBlockingTx(async (tx) => {
+				await tx
+					.select({ id: people.id })
+					.from(people)
+					.where(eq(people.id, matched))
+					.for("update");
+			});
+			const racing = convert(guestId).then(
+				(r) => r,
+				(e: Error) => e,
+			);
+			await waitForLockWait("people", holder.pid);
+
+			// ... and the convert, parked behind it, must not yet hold the guest row.
+			// Taking the Persons one at a time as it reaches them would park it here
+			// with the guest row held, the first half of a deadlock with a convert
+			// that took the same two Persons the other way round.
+			await testDb.transaction(async (tx) => {
+				const free = await tx
+					.select({ id: guests.id })
+					.from(guests)
+					.where(eq(guests.id, guestId))
+					.for("update", { noWait: true });
+				expect(free).toHaveLength(1);
+			});
+
+			await holder.commit();
+			const res = await racing;
+			expect(res).not.toBeInstanceOf(Error);
+			expect((res as { personId: string }).personId).toBe(matched);
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// L4: a merge of guest rows is visible.
+	// -----------------------------------------------------------------------
+	describe("a merge of guest-only Persons is visible (L4)", () => {
+		it("counts the moved guest rows, audits the club they were in, and the preview says so", async () => {
+			const clubB = await makeClub();
+			const keeper = await newGuest(uniq("Audit Keeper"));
+			const absorbed = await newGuest(uniq("Audit Absorbed"), {}, clubB);
+
+			const preview = await getMergePreview(keeper.personId, absorbed.personId);
+			expect(preview.movedCounts.guests).toBe(1);
+
+			const res = await mergePeople({
+				keeperPersonId: keeper.personId,
+				absorbedPersonId: absorbed.personId,
+			});
+
+			expect(res.movedCounts.guests).toBe(1);
+			expect(res.movedCounts.memberships).toBe(0);
+			// One audit row, in the club whose guest record moved.
+			const audit = await testDb
+				.select({ clubId: activityLog.clubId, detail: activityLog.detail })
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.action, "member_merge"),
+						eq(activityLog.targetId, keeper.personId),
+					),
+				);
+			expect(audit.map((a) => a.clubId)).toEqual([clubB]);
+			expect(
+				(audit[0]?.detail as { movedCounts: { guests: number } }).movedCounts
+					.guests,
+			).toBe(1);
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// Every new read-then-lock refusal, driven by a writer that moves the row.
+	// -----------------------------------------------------------------------
+	describe("the read-then-lock refusals (ADR-0031)", () => {
+		/**
+		 * Run `op` while another transaction holds the guest row and, on commit,
+		 * changes what the row or its membership names. `op` read the old values
+		 * unlocked, parks on the row lock, and must refuse on the re-read.
+		 */
+		async function raced(
+			guestId: string,
+			move: (tx: TestTx) => Promise<void>,
+			op: () => Promise<unknown>,
+		) {
+			const blocker = await openBlockingTx(async (tx) => {
+				await tx.execute(
+					sql`select id from guests where id = ${guestId} for update`,
+				);
+				await move(tx);
+			});
+			const racing = op().then(
+				() => null,
+				(e: Error) => e,
+			);
+			await waitForLockWait("guests", blocker.pid);
+			await blocker.commit();
+			return racing;
+		}
+
+		const movePerson =
+			(guestId: string, personId: string) => async (tx: TestTx) => {
+				await tx.update(guests).set({ personId }).where(eq(guests.id, guestId));
+			};
+
+		it("undo refuses when the guest's Person moved", async () => {
+			const { guestId } = await newGuest(uniq("Undo Race"));
+			await convert(guestId);
+			const other = await makePerson();
+			const err = await raced(guestId, movePerson(guestId, other), () =>
+				undo(guestId),
+			);
+			expect(err?.message).toBe(RECORD_CHANGED_MESSAGE);
+			// Nothing was undone.
+			expect((await guestRow(guestId)).stage).toBe("joined");
+		});
+
+		it("undo refuses when the membership's Person moved", async () => {
+			const { guestId } = await newGuest(uniq("Undo Member Race"));
+			const res = await convert(guestId);
+			const other = await makePerson();
+			const err = await raced(
+				guestId,
+				async (tx) => {
+					await tx
+						.update(members)
+						.set({ personId: other })
+						.where(eq(members.id, res.membershipId));
+				},
+				() => undo(guestId),
+			);
+			expect(err?.message).toBe(RECORD_CHANGED_MESSAGE);
+			expect((await guestRow(guestId)).stage).toBe("joined");
+		});
+
+		it("link refuses when the guest's Person moved", async () => {
+			const { guestId } = await newGuest(uniq("Link Race"));
+			const other = await makePerson();
+			const err = await raced(guestId, movePerson(guestId, other), () =>
+				applyLinkGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					memberId: seed.memberId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			);
+			expect(err?.message).toBe(RECORD_CHANGED_MESSAGE);
+			expect((await guestRow(guestId)).convertedMembershipId).toBeNull();
+		});
+
+		it("link refuses when the member's Person moved", async () => {
+			const { guestId } = await newGuest(uniq("Link Member Race"));
+			const other = await makePerson();
+			const err = await raced(
+				guestId,
+				async (tx) => {
+					await tx
+						.update(members)
+						.set({ personId: other })
+						.where(eq(members.id, seed.memberId));
+				},
+				() =>
+					applyLinkGuestToMember({
+						clubId: seed.clubId,
+						guestId,
+						memberId: seed.memberId,
+						actorMemberId: seed.adminMemberId,
+					}),
+			);
+			expect(err?.message).toBe(RECORD_CHANGED_MESSAGE);
+			expect((await guestRow(guestId)).convertedMembershipId).toBeNull();
+		});
+
+		it("unlink refuses when the guest's Person moved", async () => {
+			const { guestId } = await newGuest(uniq("Unlink Race"));
+			await applyLinkGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				memberId: seed.memberId,
+				actorMemberId: seed.adminMemberId,
+			});
+			const other = await makePerson();
+			const err = await raced(guestId, movePerson(guestId, other), () =>
+				applyUnlinkGuestFromMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			);
+			expect(err?.message).toBe(RECORD_CHANGED_MESSAGE);
+			expect((await guestRow(guestId)).convertedMembershipId).toBe(
+				seed.memberId,
+			);
+		});
+
+		it("delete refuses when the guest's Person moved", async () => {
+			const { guestId } = await newGuest(uniq("Delete Race"));
+			const other = await makePerson();
+			const err = await raced(guestId, movePerson(guestId, other), () =>
+				applyDeleteGuest({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			);
+			expect(err?.message).toBe(RECORD_CHANGED_MESSAGE);
+			// Still there, and so are both Persons.
+			expect((await guestRow(guestId)).personId).toBe(other);
+		});
+
+		it("convert refuses when the member it would match changed between the reads", async () => {
+			const email = `match-${randomUUID()}@example.test`;
+			const { guestId } = await newGuest(uniq("Match Race"), { email });
+			const matched = await makePerson({ name: uniq("Late Member"), email });
+			// The matching member appears while the convert waits on the guest row.
+			const err = await raced(
+				guestId,
+				async (tx) => {
+					await tx.insert(members).values({
+						clubId: seed.clubId,
+						personId: matched,
+						name: uniq("Late Member Row"),
+					});
+				},
+				() => convert(guestId),
+			);
+			expect(err?.message).toBe(RECORD_CHANGED_MESSAGE);
+			expect((await guestRow(guestId)).stage).not.toBe("joined");
 		});
 	});
 });

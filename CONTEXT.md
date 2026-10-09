@@ -97,7 +97,7 @@ the nouns in `src/db/schema.ts`.
   and NOT a `members` status. Created ONLY through `createGuestRecord` (Person and row in one
   transaction; `guest-insert.guard.test.ts`). `person_id` is nullable until #1125, so
   `ensureGuestPerson` repairs a null. A Person held by guest rows only is **guest-only**
-  (`guestOnlyPerson()`), and the superadmin merge tool labels it "Guest". A slot references at most one
+  (`unboundGuestOnlyPerson()`), and the superadmin merge tool labels it "Guest". A slot references at most one
   assignee — a member (`assigned_member_id`) OR a guest (`assigned_guest_id`), never both
   (enforced in logic + a DB check constraint). Guests never appear in the member roster/picker;
   guest-held slots render the name with a subtle "· Guest" marker and count as filled. Admin-only
@@ -123,9 +123,11 @@ the nouns in `src/db/schema.ts`.
   admin pipeline view lives at `/admin/vp-membership`; the assign-guest picker excludes `joined`
   and `lost` guests (`stage in (prospect, following_up)`). Convert with no member of THIS club
   to match puts the membership on the **guest's own Person** (#1124): no `people` row is
-  inserted, `createdPerson` is `false`, and the guest's blank email/phone are copied onto that
-  Person before the membership insert, only while it is unbound and held by guest rows only.
-  Undo keeps that Person and the guest row.
+  inserted, `createdPerson` is `false`, and before the membership insert the guest row's name
+  and goes-by name overwrite the Person's and its blank email/phone are copied onto it, only
+  while it is unbound and held by guest rows only. The record names what was filled, and undo
+  takes exactly that back (while the value is unchanged and the Person unbound); a guest whose
+  Person still holds a membership after an undo or unlink is pointed at a fresh name-only one.
 - **Guest book** — the public, no-auth capture front door (ADR-0018, absorbing #239):
   `/club/:clubId/guest-book`, escaping the member-identity shell. A visitor self-enters
   name + optional email/phone; the server **creates-or-finds** the guest (dedup club-scoped, by

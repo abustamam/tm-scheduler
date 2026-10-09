@@ -290,13 +290,21 @@ There is no per-club copy; `members.email` was dropped by migration 0109.
 | the roster edit (`applyMemberEdit`) | `isNull(people.userId)` AND `soleHoldingClub(clubId)`, in the UPDATE's own WHERE |
 | the CSV importer's fill (`importPeopleAndMembers`) | the same two, plus the address is blank |
 | the member's own address change (`confirmEmailChange`, ADR-0030) | the new address was just proved by its link, and `eq(people.userId, …)` for the confirming account is in the UPDATE's own WHERE |
+| convert's fill of the guest's own Person (`applyConvertGuestToMember`, #1124, ADR-0031) | `isNull(people.userId)`, `isNull(people.email)` and `heldByGuestRowsOnly()`, in the UPDATE's own WHERE, before the membership insert |
+| undo's take-back of that fill (`revertGuestContactFill`, #1124) | `isNull(people.userId)` and `heldByGuestRowsOnly()` in the WHERE, and for a recorded fill `eq(people.email, <what convert wrote>)`; it only ever writes null |
 | the superadmin first-admin repair, `mergePeople` | their named waivers |
 | a plain INSERT of a brand-new Person | always — a fresh row is nobody's yet |
 
 **Guest conversion never writes an existing Person's address** (#907 review). The
 guest book is an anonymous public form; a fill would let anyone who knows a
 member's name and phone put their own address on that member's Person and take
-the account with one magic link. Only a FRESH Person carries the guest's address.
+the account with one magic link. A Person a convert MATCHED on this club's roster
+is never written. The one address convert does write is the guest's own on the
+guest's OWN Person (#1124): the Person the guest row names, which is name-only,
+unbound and held by guest rows only until the convert makes it a member, and
+which is exactly what the FRESH Person the old convert minted was. Undo takes the
+fill back, so a typo'd address cannot stay on a Person that now holds a
+membership.
 
 Non-null on a LINKED Person means verified; on an unlinked one it is what the one
 club that held them typed. That is why a club may write it only while it is the
@@ -368,12 +376,15 @@ column to itself.
 `person-email-writers.guard.test.ts` (every writer, matched by SHAPE — a SET that
 is not an inline object literal is refused outright, comments are stripped, the
 table is resolved through its local binding, upserts and raw SQL count; each
-club-side writer must carry `isNull(people.userId)` AND `soleHoldingClub(`),
+club-side writer must carry `isNull(people.userId)` AND `soleHoldingClub(`; the two
+guest-Person writers carry `heldByGuestRowsOnly()` instead of the sole-holder test),
 `roster-obstacle.guard.test.ts` (the complement),
 `account-link-logic.integration.test.ts` (each arm killed independently),
 `member-email-ownership.integration.test.ts`,
 `account-invite-logic.integration.test.ts`,
-`guest-convert-email.integration.test.ts` and
+`guest-convert-email.integration.test.ts`,
+`guest-person.integration.test.ts` (the guest's Person: the convert fill's
+predicates, its undo, and the lock order) and
 `person-email-migration.integration.test.ts`.
 
 ### Still open, and deliberately so

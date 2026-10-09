@@ -707,12 +707,17 @@ const UUID_RE =
  * - Persons with Pathways progress credited to this club;
  * - Persons this club holds as GUESTS (#1124), whose `guests` rows the cascade
  *   is about to delete. A guest-only Person has no membership and no activity
- *   entry, so the guest row is the only thing that names them.
+ *   entry, so the guest row is the only thing that names them. Those named
+ *   ONLY that way come back separately (`guestOnlyIds`): one of them who has
+ *   signed in is somebody's account and is kept.
  *
  * Whether each one is then deleted is decided after the cascade, under lock,
  * by whether they hold a membership anywhere.
  */
-async function personsOfClub(tx: Tx, clubId: string): Promise<string[]> {
+async function personsOfClub(
+	tx: Tx,
+	clubId: string,
+): Promise<{ personIds: string[]; guestOnlyIds: Set<string> }> {
 	const current = await tx
 		.selectDistinct({ personId: members.personId })
 		.from(members)
@@ -741,12 +746,28 @@ async function personsOfClub(tx: Tx, clubId: string): Promise<string[]> {
 		.from(guests)
 		.where(eq(guests.clubId, clubId));
 	const ids = new Set<string>();
-	for (const r of [...current, ...removed, ...credited, ...asGuest]) {
-		if (typeof r.personId === "string" && UUID_RE.test(r.personId)) {
-			ids.add(r.personId.toLowerCase());
+	const named = new Set<string>();
+	const add = (into: Set<string>, id: unknown) => {
+		if (typeof id === "string" && UUID_RE.test(id)) into.add(id.toLowerCase());
+	};
+	for (const r of [...current, ...removed, ...credited]) {
+		add(ids, r.personId);
+		add(named, r.personId);
+	}
+	// A Person only a guest row of this club names (#1124): never a member here,
+	// never removed, no progress credited. The caller deletes such a Person only
+	// if nobody has signed in as them.
+	const guestOnlyIds = new Set<string>();
+	for (const r of asGuest) {
+		add(ids, r.personId);
+		if (
+			typeof r.personId === "string" &&
+			!named.has(r.personId.toLowerCase())
+		) {
+			add(guestOnlyIds, r.personId);
 		}
 	}
-	return [...ids];
+	return { personIds: [...ids], guestOnlyIds };
 }
 
 /**
@@ -849,7 +870,9 @@ function isForeignKeyViolation(err: unknown): boolean {
  *    history still points at another club (`personsWithOtherClubHistory`, which
  *    counts a guest row there too; such a Person is kept so that club's record
  *    survives). A guest-only Person whose only guest rows were this club's goes
- *    with it. A membership another club adds
+ *    with it, unless somebody has signed in as them: that is an account, and a
+ *    Person this club never held as a member is not its to delete. A membership
+ *    another club adds
  *    concurrently either committed first (and is seen, so the Person is kept) or
  *    blocks on the lock and then fails its FK. A Person with no membership left
  *    is deleted, and their speeches, path enrollments and everything under those
@@ -884,7 +907,7 @@ export async function deleteClubPermanently(
 			throw new Error("The name doesn't match.");
 		}
 
-		const personIds = await personsOfClub(tx, clubId);
+		const { personIds, guestOnlyIds } = await personsOfClub(tx, clubId);
 		// LOCK ORDER: the club's Persons BEFORE its memberships (#906). The
 		// `delete clubs` below cascades to every membership, so it takes the
 		// membership rows; locking the Persons after it was membership-then-Person,
@@ -932,6 +955,12 @@ export async function deleteClubPermanently(
 			const keep = new Set([
 				...stillMembers.map((r) => r.personId),
 				...(await personsWithOtherClubHistory(tx, personIds)),
+				// A Person this club knew ONLY as a guest and who has signed in is
+				// somebody's account, not a guest-only Person (M3 of #1155): deleting
+				// them would take the account with it and queue its deletion below.
+				...locked
+					.filter((p) => p.userId && guestOnlyIds.has(p.id))
+					.map((p) => p.id),
 			]);
 			const doomed = locked.filter((p) => !keep.has(p.id));
 			peopleKept = locked.length - doomed.length;

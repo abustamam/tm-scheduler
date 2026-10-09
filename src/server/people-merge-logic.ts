@@ -126,6 +126,8 @@ export interface MergePeopleResult {
 		collapsed: number;
 		speeches: number;
 		enrollments: number;
+		/** absorbed guest rows re-pointed to the keeper, in any club (#1124). */
+		guests: number;
 	};
 }
 
@@ -246,10 +248,14 @@ export async function mergePeople(
 		// 1b. Guest rows (#1124): a Person delete that forgot them fails on the
 		//     RESTRICT key, so they move to the keeper here, before step 4. They are
 		//     the guest RECORDS and stay per club; only whose they are changes.
-		await tx
+		//     Every club whose guest record moved is "affected" too, so a merge of
+		//     guest-only Persons is attributable to the clubs it touched.
+		const guestsMoved = await tx
 			.update(guests)
 			.set({ personId: keeper.id })
-			.where(eq(guests.personId, absorbed.id));
+			.where(eq(guests.personId, absorbed.id))
+			.returning({ id: guests.id, clubId: guests.clubId });
+		for (const g of guestsMoved) affectedClubIds.add(g.clubId);
 
 		// 2. Speeches (person-scoped, no unique) → keeper.
 		const spMoved = await tx
@@ -302,14 +308,17 @@ export async function mergePeople(
 
 		// 6. Audit: one member_merge row per affected club, attributed to the
 		//    superadmin who ran the merge (impersonated_by; actor_member_id is null
-		//    — the superadmin holds no membership in the club). A merge where NEITHER
-		//    person has a membership writes NO audit row: activity_log.club_id is NOT
-		//    NULL, so there is no club to attribute the merge to — intentional/OK.
+		//    — the superadmin holds no membership in the club). An affected club is
+		//    one the absorbed Person held a membership in OR a guest record in
+		//    (#1124). A merge where the absorbed Person had neither writes NO audit
+		//    row: activity_log.club_id is NOT NULL, so there is no club to attribute
+		//    it to — and a Person no club names has nothing a club could miss.
 		const movedCounts = {
 			memberships: repointed,
 			collapsed,
 			speeches: spMoved.length,
 			enrollments: enMoved,
+			guests: guestsMoved.length,
 		};
 		for (const clubId of affectedClubIds) {
 			await tx.insert(activityLog).values({

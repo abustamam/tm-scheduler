@@ -21,7 +21,11 @@
  * take it for a different reason: `leaveFeedbackLogic` (its per-club caps)
  * and `collapseMemberships`, so a feedback note cannot land on a membership
  * mid-merge and be cascaded away by its DELETE. `mergePeople` takes every club
- * it will collapse in up front, in id order, before its first write. Taking this
+ * either Person holds, as a member OR as a guest (#1124), in id order, before it
+ * locks a Person or writes anything. Writers that touch a guest's Person (a
+ * convert, an undo, a link or unlink, a guest delete) take it before they lock
+ * the Person, the first step of ADR-0031's lock protocol: club write lock, then
+ * `people` rows `FOR UPDATE` in id order, then `guests` rows. Taking this
  * lock before the first row lock serialises those writers per club, so the row
  * locks behind it are only ever contended by one of them at a time and the
  * order they take them in stops mattering between them. It ORDERS the rows; it

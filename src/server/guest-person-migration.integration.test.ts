@@ -238,6 +238,26 @@ describe.skipIf(!hasTestDb)("migration 0116: guests.person_id", () => {
 		expect(byId.get(converted.id)?.converted_membership_id).toBe(memberRow.id);
 		expect(byId.get(stranded.id)?.converted_membership_id).toBeNull();
 
+		// The foreign key is RESTRICT (a Person delete that forgot a guest fails
+		// loudly instead of cascading its visit, role and speech history away), the
+		// column is still nullable until #1125, and the index exists.
+		const fk = await pool.query<{ confdeltype: string }>(
+			`select confdeltype from pg_constraint
+			  where conname = 'guests_person_id_people_id_fk'
+			    and conrelid = 'guests'::regclass`,
+		);
+		expect(fk.rows[0]?.confdeltype).toBe("r");
+		const col = await pool.query<{ is_nullable: string }>(
+			`select is_nullable from information_schema.columns
+			  where table_name = 'guests' and column_name = 'person_id'`,
+		);
+		expect(col.rows[0]?.is_nullable).toBe("YES");
+		const idx = await pool.query(
+			`select 1 from pg_indexes
+			  where tablename = 'guests' and indexname = 'guests_person_idx'`,
+		);
+		expect(idx.rowCount).toBe(1);
+
 		// A temp table lives as long as its pooled session, so the migration drops
 		// the one it used. Looked up by name across the session's temp schemas.
 		const leftover = await pool.query(

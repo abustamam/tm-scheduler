@@ -287,10 +287,19 @@ export async function collapseMemberships(
 		.where(eq(projectCompletionMarks.markedByMemberId, absorbedId));
 
 	// 9. guests.converted_membership_id — no member-unique; re-point all so the
-	//    "guest became this membership" history survives the collapse.
+	//    "guest became this membership" history survives the collapse. A converted
+	//    guest IS its membership's Person (#1124, ADR-0031), so one whose
+	//    `person_id` is the ABSORBED membership's Person follows to the keeper's in
+	//    the same statement: left behind, the guest names a Person that no longer
+	//    holds the membership it joined, and an undo or unlink would then reason
+	//    about the wrong human. A guest that names some other Person (one convert
+	//    deduped past) keeps it; it is that guest's own.
 	await tx
 		.update(guests)
-		.set({ convertedMembershipId: keeperId })
+		.set({
+			convertedMembershipId: keeperId,
+			personId: sql`case when ${guests.personId} = ${absorbed.personId} then ${keeper.personId}::uuid else ${guests.personId} end`,
+		})
 		.where(eq(guests.convertedMembershipId, absorbedId));
 	// 9b. guests.introduced_by_member_id (#1046) — nullable attribution, no
 	//    member-unique; re-point all, or the absorbed row's delete SETs NULL and

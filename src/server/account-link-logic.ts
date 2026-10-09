@@ -26,7 +26,14 @@ import {
 } from "drizzle-orm";
 import { type AnyPgColumn, alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
-import { guests, members, people, user } from "#/db/schema";
+import {
+	guests,
+	members,
+	pathEnrollments,
+	people,
+	speeches,
+	user,
+} from "#/db/schema";
 
 /**
  * One spelling of "normalise an address", for the SQL side. **Exported: use it
@@ -64,8 +71,11 @@ const otherPeople = alias(people, "other_people");
 const holding = alias(members, "holding_member");
 const vouching = alias(members, "vouching_member");
 const otherHolding = alias(members, "other_holding_member");
-/** Aliased `guests`, for `guestHeldOnly`'s correlated subquery (#802). */
+/** Aliased `guests`, `speeches` and `path_enrollments`, for the guest-Person
+ *  predicates' correlated subqueries (#802). */
 const heldGuest = alias(guests, "held_guest");
+const ownedSpeech = alias(speeches, "owned_speech");
+const enrolment = alias(pathEnrollments, "person_enrolment");
 /** The binding account, re-read INSIDE the bind's own statement (#1091
  *  review). Aliased so it always renders qualified (#802). */
 const bindingAccount = alias(user, "binding_account");
@@ -198,16 +208,16 @@ export function soleHoldingClub(clubId: string): SQL {
  * member, and at least one club has them as a guest. Both arms are correlated on
  * `people.id`, for use inside a statement over `people`.
  *
+ * It says NOTHING about a sign-in account: a Person somebody has signed in as
+ * can still satisfy it. That is why the writers of `people.email` spell
+ * `isNull(people.userId)` beside it, in the statement itself, and why
+ * `unboundGuestOnlyPerson` exists for the readers that want both.
+ *
  * Evaluate it BEFORE a membership is inserted for the Person, not after: the
  * moment convert adds one, this reads false, and an UPDATE that carries it
  * quietly matches no row.
- *
- * This is the membership-and-guest half of `guestOnlyPerson`. A writer whose
- * statement must carry `isNull(people.userId)` in its own text (the
- * `person-email-writers.guard.test.ts` waivers) spells that token itself and
- * uses this for the rest, so neither predicate is hidden behind the other.
  */
-export function guestHeldOnly(): SQL {
+export function heldByGuestRowsOnly(): SQL {
 	return and(
 		notExists(
 			db
@@ -225,12 +235,49 @@ export function guestHeldOnly(): SQL {
 }
 
 /**
- * A guest-only Person (#1124, ADR-0031): nobody has signed in as them, no club
- * has them as a member, and at least one has them as a guest. The superadmin
- * merge tool labels such a Person "Guest" so a duplicate can be repaired.
+ * An UNBOUND guest-only Person (#1124, ADR-0031): nobody has signed in as them
+ * (`user_id IS NULL`) AND {@link heldByGuestRowsOnly}. The superadmin merge tool
+ * labels such a Person "Guest" so a duplicate can be repaired.
  */
-export function guestOnlyPerson(): SQL {
-	return and(isNull(people.userId), guestHeldOnly()) as SQL;
+export function unboundGuestOnlyPerson(): SQL {
+	return and(isNull(people.userId), heldByGuestRowsOnly()) as SQL;
+}
+
+/**
+ * An unbound Person nothing references any more (#1124): no sign-in account, no
+ * membership, no guest row, and nothing the Person owns that a delete would
+ * cascade away (a speech or a Pathways enrolment). The one condition under
+ * which deleting a guest's Person loses nothing; a guest delete and a link carry
+ * it in the DELETE's own WHERE.
+ */
+export function unreferencedUnboundPerson(): SQL {
+	return and(
+		isNull(people.userId),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(holding)
+				.where(eq(holding.personId, people.id)),
+		),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(heldGuest)
+				.where(eq(heldGuest.personId, people.id)),
+		),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(ownedSpeech)
+				.where(eq(ownedSpeech.personId, people.id)),
+		),
+		notExists(
+			db
+				.select({ one: sql`1` })
+				.from(enrolment)
+				.where(eq(enrolment.personId, people.id)),
+		),
+	) as SQL;
 }
 
 /** Why a club-side writer may not change a Person's address. */

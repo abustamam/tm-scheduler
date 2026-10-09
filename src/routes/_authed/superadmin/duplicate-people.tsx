@@ -428,7 +428,9 @@ function MergeConfirm({
 						Moves {totalMemberships} membership
 						{totalMemberships === 1 ? "" : "s"}, {preview.movedCounts.speeches}{" "}
 						speech
-						{preview.movedCounts.speeches === 1 ? "" : "es"}, and{" "}
+						{preview.movedCounts.speeches === 1 ? "" : "es"},{" "}
+						{preview.movedCounts.guests} guest record
+						{preview.movedCounts.guests === 1 ? "" : "s"}, and{" "}
 						{preview.movedCounts.enrollments} enrollment
 						{preview.movedCounts.enrollments === 1 ? "" : "s"} to the keeper.
 						This can't be undone.

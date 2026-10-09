@@ -60,9 +60,10 @@ import {
 	toStoredPhone,
 } from "#/lib/phone";
 import {
-	guestHeldOnly,
+	heldByGuestRowsOnly,
 	normalizedEmail,
 	rosterConflictFor,
+	unboundGuestOnlyPerson,
 } from "./account-link-logic";
 import { logActivity } from "./activity";
 import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
@@ -70,8 +71,12 @@ import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { assertClubNotArchived } from "./guards";
 import {
 	createGuestRecord,
+	deleteGuestPersonIfUnreferenced,
 	ensureGuestPerson,
+	lockPersonsInOrder,
 	RECORD_CHANGED_MESSAGE,
+	revertGuestContactFill,
+	separateGuestFromMemberPerson,
 } from "./guests-logic";
 import { closeOpenOfficerTerms } from "./officers-logic";
 import { isDeadlock } from "./pg-errors";
@@ -111,7 +116,8 @@ export function normalizePhone(phone: string | null | undefined): string {
  * club-scoped. A number shared by more than a handful of humans is a shared
  * line or bad data, not a dedup signal, so the tail is worthless anyway. Rows
  * are ordered oldest-first, and overrunning the cap only ever means "no match"
- * — which creates a fresh Person, the recoverable direction (ADR-0008).
+ * — which adopts the guest's own Person (it created a fresh one before #1124),
+ * the recoverable direction (ADR-0008).
  */
 const PHONE_CANDIDATE_LIMIT = 50;
 
@@ -1246,18 +1252,33 @@ export async function applyDeleteGuest(
 	input: DeleteGuestInput,
 ): Promise<DeleteGuestResult> {
 	return db.transaction(async (tx) => {
+		// The lock protocol (ADR-0031): the club write lock, then the guest's Person,
+		// then the guest row, because the guest's Person goes with it when nothing
+		// else references it (M2 of #1155).
+		await lockClubForWrite(tx, input.clubId);
+		const [peek] = await tx
+			.select({ personId: guests.personId })
+			.from(guests)
+			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
+			.limit(1);
+		await lockPersonsInOrder(tx, [peek?.personId]);
+
 		const [guest] = await tx
 			.select({
 				id: guests.id,
 				name: guests.name,
 				stage: guests.stage,
 				convertedMembershipId: guests.convertedMembershipId,
+				personId: guests.personId,
 			})
 			.from(guests)
 			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
 			.limit(1)
 			.for("update");
 		if (!guest) throw new Error("Guest not found in this club.");
+		if ((guest.personId ?? null) !== (peek?.personId ?? null)) {
+			throw new Error(RECORD_CHANGED_MESSAGE);
+		}
 		// Same correction as `applySetGuestStage` (#618), and this one's message was
 		// actively misleading: it told the admin to "remove them from the roster
 		// instead" — advice they had already followed, which is precisely how the
@@ -1314,6 +1335,13 @@ export async function applyDeleteGuest(
 			});
 		}
 		await tx.delete(guests).where(eq(guests.id, input.guestId));
+		// A guest is a Person (#1124): the Person goes with the guest, unless
+		// something else still names it: another club's guest row, a membership, a
+		// sign-in, a speech or an enrolment. Without this every mistaken or spam
+		// guest left a name behind that no club can see and no delete reaches.
+		if (guest.personId) {
+			await deleteGuestPersonIfUnreferenced(tx, guest.personId);
+		}
 		return { ok: true as const, slotsReopened };
 	});
 }
@@ -1521,6 +1549,118 @@ export async function lockClubConverts(
 }
 
 /**
+ * What a convert reads off the guest row: the name, the goes-by name, the
+ * address and phone it would write to the Person, and the digits it dedupes on.
+ */
+function convertIdentity(
+	guest: {
+		name: string;
+		preferredName: string | null;
+		email: string | null;
+		phone: string | null;
+	},
+	cc: string,
+) {
+	const name = guest.name.trim();
+	// A "goes by" name recorded while they were a guest survives the promotion
+	// (#486) — it was true of the human, not of the guest row.
+	const preferredName = guest.preferredName?.trim() || null;
+	const email = guest.email?.trim() || null;
+	// Re-standardize to E.164 on the way into `people` (#295) — the guest
+	// row may predate normalize-on-write; the digits form (dedup) follows it.
+	const phone = toStoredPhone(guest.phone, cc);
+	return { name, preferredName, email, phone, digits: normalizePhone(phone) };
+}
+
+/**
+ * The Person of THIS club's roster a convert dedupes the guest onto, or null
+ * (#759, #488): email, then a phone whose name agrees. Read twice by
+ * `applyConvertGuestToMember`, once before it locks the Persons and once under
+ * the locks, so it takes the transaction and nothing it has locked.
+ *
+ * 1. Person dedup (email → phone+name → none). People are global
+ *    (club-less), so both arms match only a Person THIS club already
+ *    holds (#759) — an unscoped match reached across every club, and
+ *    attaching a stranger's Person here denies them sign-in.
+ *
+ *    Email leads because it identifies ONE human. Phone does not: a shared
+ *    household or work number is ordinary in a guest book (a member brings
+ *    their spouse, both write the same mobile), and matching on it alone
+ *    fused the two — taking the newcomer's future speeches and Pathways
+ *    enrollments onto the wrong Person, since all three FKs are
+ *    Person-scoped. So a phone match must also agree on the name (#488).
+ *
+ *    When neither qualifies the caller adopts the guest's OWN Person rather
+ *    than a best guess: ADR-0008 treats dedupe/merge as a later deliberate
+ *    action, and the superadmin merge tool exists to fuse two Persons after the
+ *    fact. Under-matching is visible and reversible; over-matching is neither.
+ */
+async function matchClubMemberPerson(
+	tx: DbOrTx,
+	clubId: string,
+	who: { name: string; email: string | null; digits: string },
+): Promise<string | null> {
+	const { name, email, digits } = who;
+	let personId: string | null = null;
+	// Oldest-first and tie-broken on id: a bare `limit(1)` over two matching
+	// rows is a Postgres coin flip, so which human a guest converted onto was
+	// not even stable across runs. `findGuestByContact` already does this.
+	const order = [asc(people.createdAt), asc(people.id)] as const;
+	if (email) {
+		// Take TWO, not one. ADR-0008's precedence says to match on email only
+		// when it "resolves to exactly one person", and to "never auto-merge on
+		// an email shared by 2+ distinct people (guards against fusing spouses /
+		// shared family emails)". A family address is real — `listDuplicatePeople`
+		// exists because of it — and matching the oldest of two would be the same
+		// household fusion #488 fixes for phone numbers, just on the key this
+		// change promoted to go first. The CSV importer already honours this
+		// (its `ambiguous` stat); the convert path did not.
+		// Matches the Person's one address (#907), and only a Person THIS club
+		// already holds (#759) — that is the INNER join's doing. Without it a
+		// guest typed with a stranger's address attached that stranger's Person
+		// to this club. A Person no club holds is refused too. A refused match
+		// falls through to the caller's adopt-the-guest's-Person arm, which is safe
+		// here as it is not in the importer: a guest carries no Customer ID to
+		// collide with.
+		const candidates = await tx
+			.selectDistinct({ id: people.id, createdAt: people.createdAt })
+			.from(people)
+			.innerJoin(
+				members,
+				and(eq(members.personId, people.id), eq(members.clubId, clubId)),
+			)
+			.where(sql`${normalizedEmail(people.email)} = ${email.toLowerCase()}`)
+			.orderBy(...order)
+			.limit(2);
+		if (candidates.length === 1) personId = candidates[0]?.id ?? null;
+	}
+	if (!personId && digits) {
+		// Every phone match is a CANDIDATE, not a result — scan them for one
+		// whose name agrees rather than taking the first row and hoping.
+		//
+		// Club-scoped for the reason the email arm is (#759): this had no scope
+		// at all, so a guest carrying a stranger's phone and name attached the
+		// stranger's Person to this club. One row per Person by construction —
+		// `members_club_person_unique` — so the join cannot fan out.
+		const candidates = await tx
+			.select({ id: people.id, name: people.name })
+			.from(people)
+			.innerJoin(
+				members,
+				and(eq(members.personId, people.id), eq(members.clubId, clubId)),
+			)
+			.where(
+				sql`regexp_replace(coalesce(${people.phone}, ''), '[^0-9]', '', 'g') = ${digits}`,
+			)
+			.orderBy(...order)
+			.limit(PHONE_CANDIDATE_LIMIT);
+		const match = candidates.find((p) => namesAgree(p.name, name));
+		if (match) personId = match.id;
+	}
+	return personId;
+}
+
+/**
  * Convert-to-member (ADR-0018): promote a guest into a club Membership.
  *
  * Transactional: (1) dedup the Person by email→phone-with-name-agreement (link
@@ -1542,17 +1682,18 @@ export async function applyConvertGuestToMember(
 	input: ConvertGuestInput,
 ): Promise<ConvertGuestResult> {
 	const cc = await loadClubDefaultCountryCode(input.clubId);
-	// The FRESH Person this convert created with an address, for the
-	// shared-address check after commit (see the end).
+	// The Person this convert FILLED an address on, for the shared-address check
+	// after commit (see the end).
 	let written: { personId: string; email: string } | null = null;
 
 	const result = await db.transaction(async (tx) => {
 		// Serialize every convert in this CLUB, not just this guest (#759 review).
 		// The dedup below matches only a Person whose roster row here is
 		// COMMITTED, so two different guest cards for one visitor converted at
-		// once each saw nothing, each minted a Person, and the unique index could
-		// not collide across two new person ids — a duplicate roster row. Before
-		// #759 both matched one global Person and the index caught it.
+		// once each saw nothing, each minted a Person (before #1124; each guest
+		// card now adopts its OWN Person), and the unique index could not collide
+		// across two new person ids — a duplicate roster row. Before #759 both
+		// matched one global Person and the index caught it.
 		//
 		// BEFORE the guest lock, and that order is load-bearing. Taken after it,
 		// a convert waiting here held its guest row while it waited, and a slot
@@ -1562,40 +1703,45 @@ export async function applyConvertGuestToMember(
 		// on this lock — a deadlock with no retry. Waiting here holds nothing.
 		await lockClubConverts(tx, input.clubId);
 
-		// The lock protocol (ADR-0031): the club write lock, then the Person row,
-		// then the guest row. This and the convert lock above are both advisory and
-		// wait holding no row; what matters is that the club's write lock is taken
+		// The lock protocol (ADR-0031): the club write lock, then the Persons, then
+		// the guest row. This and the convert lock above are both advisory and wait
+		// holding no row; what matters is that the club's write lock is taken
 		// before any ROW lock, because `mergePeople` takes it and then both
-		// Persons, and a convert that locked the Person first would be the reverse.
+		// Persons, and a convert that locked a Person first would be the reverse.
 		//
-		// The Person is only known by reading the guest row, so it is READ without
-		// a lock, the locks are taken in protocol order, and the row is re-read
-		// under them (the read-then-lock rule). A Person that moved in between
+		// The Persons are only known by reading, so they are READ without a lock,
+		// locked in id order, and read again under the locks (the read-then-lock
+		// rule). TWO can be involved: the guest's own, and the member of THIS club
+		// the dedupe below may match instead, which the dedupe-hit path then writes
+		// (the goes-by seed and the phone fill). Locking the second one only when
+		// it is reached would take the Persons in whatever order the data happened
+		// to fall, so both are locked together first. Either moving in between
 		// refuses the convert, with nothing written.
 		await lockClubForWrite(tx, input.clubId);
 		const [peek] = await tx
-			.select({ personId: guests.personId })
+			.select()
 			.from(guests)
 			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
 			.limit(1);
-		if (peek?.personId) {
-			await tx
-				.select({ id: people.id })
-				.from(people)
-				.where(eq(people.id, peek.personId))
-				.for("update");
-		}
+		if (!peek) throw new Error("Guest not found in this club.");
+		const peekMatch = await matchClubMemberPerson(
+			tx,
+			input.clubId,
+			convertIdentity(peek, cc),
+		);
+		await lockPersonsInOrder(tx, [peek.personId, peekMatch]);
 
 		// Then lock the guest row, and re-check `stage` under that lock.
 		//
 		// The unique index (#489) only catches a double-add once both racers have
-		// resolved the SAME Person. Two concurrent converts of one CONTACTLESS
-		// guest — email and phone are both optional on the public book — each fall
-		// through to "create a fresh Person", so the two membership inserts carry
-		// DIFFERENT person_ids, the index never fires, and the club gets two roster
-		// rows plus two Person rows for one human. Serializing on the guest row is
-		// what actually closes that, and it is also what makes the `stage` check
-		// mean anything: read outside the transaction it was a stale snapshot.
+		// resolved the SAME Person. Before #1124 two concurrent converts of one
+		// CONTACTLESS guest — email and phone are both optional on the public book —
+		// each created a fresh Person, so the two membership inserts carried
+		// DIFFERENT person_ids and the club got two roster rows plus two Person rows
+		// for one human. Both now adopt the guest's own Person and would collide on
+		// the index, but serializing on the guest row is still what closes it
+		// without a raw violation, and it is what makes the `stage` check mean
+		// anything: read outside the transaction it was a stale snapshot.
 		const [guest] = await tx
 			.select()
 			.from(guests)
@@ -1603,100 +1749,19 @@ export async function applyConvertGuestToMember(
 			.limit(1)
 			.for("update");
 		if (!guest) throw new Error("Guest not found in this club.");
-		if ((guest.personId ?? null) !== (peek?.personId ?? null)) {
+		if ((guest.personId ?? null) !== (peek.personId ?? null)) {
 			throw new Error(RECORD_CHANGED_MESSAGE);
 		}
 		if (guest.stage === "joined") {
 			throw new Error("This guest has already been converted to a member.");
 		}
 
-		const name = guest.name.trim();
-		// A "goes by" name recorded while they were a guest survives the promotion
-		// (#486) — it was true of the human, not of the guest row.
-		const preferredName = guest.preferredName?.trim() || null;
-		const email = guest.email?.trim() || null;
-		// Re-standardize to E.164 on the way into `people` (#295) — the guest
-		// row may predate normalize-on-write; the digits form (dedup) follows it.
-		const phone = toStoredPhone(guest.phone, cc);
-		const digits = normalizePhone(phone);
-		// 1. Person dedup (email → phone+name → create). People are global
-		//    (club-less), so both arms match only a Person THIS club already
-		//    holds (#759) — an unscoped match reached across every club, and
-		//    attaching a stranger's Person here denies them sign-in.
-		//
-		//    Email leads because it identifies ONE human. Phone does not: a shared
-		//    household or work number is ordinary in a guest book (a member brings
-		//    their spouse, both write the same mobile), and matching on it alone
-		//    fused the two — taking the newcomer's future speeches and Pathways
-		//    enrollments onto the wrong Person, since all three FKs are
-		//    Person-scoped. So a phone match must also agree on the name (#488).
-		//
-		//    When neither qualifies, a FRESH Person is the right answer rather than
-		//    a best guess: ADR-0008 treats dedupe/merge as a later deliberate
-		//    action, and the superadmin merge tool
-		//    exists to fuse two Persons after the fact. Under-matching is visible
-		//    and reversible; over-matching is neither.
-		let personId: string | null = null;
-		// Oldest-first and tie-broken on id: a bare `limit(1)` over two matching
-		// rows is a Postgres coin flip, so which human a guest converted onto was
-		// not even stable across runs. `findGuestByContact` already does this.
-		const order = [asc(people.createdAt), asc(people.id)] as const;
-		if (email) {
-			// Take TWO, not one. ADR-0008's precedence says to match on email only
-			// when it "resolves to exactly one person", and to "never auto-merge on
-			// an email shared by 2+ distinct people (guards against fusing spouses /
-			// shared family emails)". A family address is real — `listDuplicatePeople`
-			// exists because of it — and matching the oldest of two would be the same
-			// household fusion #488 fixes for phone numbers, just on the key this
-			// change promoted to go first. The CSV importer already honours this
-			// (its `ambiguous` stat); the convert path did not.
-			// Matches the Person's one address (#907), and only a Person THIS club
-			// already holds (#759) — that is the INNER join's doing. Without it a
-			// guest typed with a stranger's address attached that stranger's Person
-			// to this club. A Person no club holds is refused too. A refused match
-			// falls through to the fresh-Person arm below, which is safe here as it
-			// is not in the importer: a guest carries no Customer ID to collide with.
-			const candidates = await tx
-				.selectDistinct({ id: people.id, createdAt: people.createdAt })
-				.from(people)
-				.innerJoin(
-					members,
-					and(
-						eq(members.personId, people.id),
-						eq(members.clubId, input.clubId),
-					),
-				)
-				.where(sql`${normalizedEmail(people.email)} = ${email.toLowerCase()}`)
-				.orderBy(...order)
-				.limit(2);
-			if (candidates.length === 1) personId = candidates[0]?.id ?? null;
-		}
-		if (!personId && digits) {
-			// Every phone match is a CANDIDATE, not a result — scan them for one
-			// whose name agrees rather than taking the first row and hoping.
-			//
-			// Club-scoped for the reason the email arm is (#759): this had no scope
-			// at all, so a guest carrying a stranger's phone and name attached the
-			// stranger's Person to this club. One row per Person by construction —
-			// `members_club_person_unique` — so the join cannot fan out.
-			const candidates = await tx
-				.select({ id: people.id, name: people.name })
-				.from(people)
-				.innerJoin(
-					members,
-					and(
-						eq(members.personId, people.id),
-						eq(members.clubId, input.clubId),
-					),
-				)
-				.where(
-					sql`regexp_replace(coalesce(${people.phone}, ''), '[^0-9]', '', 'g') = ${digits}`,
-				)
-				.orderBy(...order)
-				.limit(PHONE_CANDIDATE_LIMIT);
-			const match = candidates.find((p) => namesAgree(p.name, name));
-			if (match) personId = match.id;
-		}
+		const identity = convertIdentity(guest, cc);
+		const { name, preferredName, email, phone } = identity;
+		let personId = await matchClubMemberPerson(tx, input.clubId, identity);
+		// The same answer the unlocked read gave, or the Persons locked above are
+		// not the Persons this convert is about to write.
+		if (personId !== peekMatch) throw new Error(RECORD_CHANGED_MESSAGE);
 		// Whether THIS conversion minted the row, as opposed to deduping onto one
 		// that already existed. Recorded in step 5 because an undo must never
 		// delete a Person or a membership it did not create (#618) — and nothing
@@ -1705,12 +1770,30 @@ export async function applyConvertGuestToMember(
 		// With the guest's own Person (#1124, ADR-0031) there is no longer a fresh
 		// Person for convert to create: no match means the membership goes on the
 		// guest's Person, which the guest row already points at. That Person is
-		// therefore never `createdPerson`, and undo never touches it. The key stays
-		// in the record: a record without it is refused as unreplayable.
+		// therefore never `createdPerson`, and undo never deletes it. The key is
+		// still written, as `false`: code from before #1124 refuses a record that
+		// lacks it as unreplayable, and this is what lets a revert of this change
+		// keep every convert's Undo button.
 		const createdPerson = false;
 		let createdMembership = false;
+		// The fields this convert FILLED on the Person, recorded in step 5 so an
+		// undo can take back exactly those and nothing else (H1 of #1155).
+		const filledContact: { email?: string; phone?: string } = {};
 		if (!personId) {
 			personId = await ensureGuestPerson(tx, input.guestId);
+			// The guest row is the officer's current word on who this is: the Person
+			// was minted at capture time with the name then typed, and an officer's
+			// correction since (a renamed guest, a goes-by name set or CLEARED) lives
+			// only on the guest row. The membership is about to carry it, and the
+			// Person is the fallback every other club reads (`people.name`,
+			// `people.preferred_name`), so it follows. Only while the Person is still
+			// the guest's alone (`unboundGuestOnlyPerson()`, which reads false the
+			// moment the membership below exists): a Person who is a member
+			// somewhere, or signed in, keeps the name they have.
+			await tx
+				.update(people)
+				.set({ name, preferredName })
+				.where(and(eq(people.id, personId), unboundGuestOnlyPerson()));
 			// The guest's contact goes onto that Person as the Person becomes a
 			// member (it was name-only until now; #1125 moves the rest). Three
 			// conditions, each in the statement's own WHERE so a sign-in or a second
@@ -1720,11 +1803,11 @@ export async function applyConvertGuestToMember(
 			//    on a bound Person is its account's;
 			//  - the field is blank (`isNull(people.email)`): contact already on file
 			//    was typed by somebody with more standing than the guest book;
-			//  - they are held by guest rows only (`guestHeldOnly()`): a Person who
-			//    is already a member somewhere keeps whatever that club recorded.
+			//  - they are held by guest rows only (`heldByGuestRowsOnly()`): a Person
+			//    who is already a member somewhere keeps whatever that club recorded.
 			//
-			// BEFORE the membership insert below, because `guestHeldOnly()` reads
-			// false the moment this convert adds one, and the UPDATE would match
+			// BEFORE the membership insert below, because `heldByGuestRowsOnly()`
+			// reads false the moment this convert adds one, and the UPDATE would match
 			// nothing and report success. A phone-only guest is the same.
 			if (email) {
 				const filled = await tx
@@ -1735,14 +1818,17 @@ export async function applyConvertGuestToMember(
 							eq(people.id, personId),
 							isNull(people.userId),
 							isNull(people.email),
-							guestHeldOnly(),
+							heldByGuestRowsOnly(),
 						),
 					)
 					.returning({ id: people.id });
-				if (filled.length > 0) written = { personId, email };
+				if (filled.length > 0) {
+					written = { personId, email };
+					filledContact.email = email;
+				}
 			}
 			if (phone) {
-				await tx
+				const filled = await tx
 					.update(people)
 					.set({ phone })
 					.where(
@@ -1750,9 +1836,11 @@ export async function applyConvertGuestToMember(
 							eq(people.id, personId),
 							isNull(people.userId),
 							isNull(people.phone),
-							guestHeldOnly(),
+							heldByGuestRowsOnly(),
 						),
-					);
+					)
+					.returning({ id: people.id });
+				if (filled.length > 0) filledContact.phone = phone;
 			}
 		} else {
 			if (preferredName) {
@@ -1952,7 +2040,7 @@ export async function applyConvertGuestToMember(
 			//
 			// The check sits HERE, at the membership insert, not at the Person
 			// insert where #617 first proposed it. When it was written, a guest whose
-			// email deduped onto a Person from ANOTHER club skipped the fresh-Person
+			// email deduped onto a Person from ANOTHER club skipped the Person-creating
 			// path and could still add a duplicate name here; #759 club-scoped the
 			// dedup, so that route is closed, but the race branch below still
 			// reaches this insert with a Person it did not create. What must be
@@ -2006,10 +2094,12 @@ export async function applyConvertGuestToMember(
 				// is the author of.
 				//
 				// Since #759 the dedup above matches only a Person this club ALREADY
-				// holds, which takes the reuse branch; a fresh Person is invisible to
-				// every other transaction. So nothing ordinary reaches here any more
-				// — it would take the matched roster row being deleted and re-added
-				// between the dedup and the locked SELECT. Kept because the unique
+				// holds, which takes the reuse branch, and since #1124 a convert that
+				// adopts the guest's own Person does so under the club's write lock and
+				// the Person's row lock, so no second convert can be creating a
+				// membership for it. Nothing ordinary reaches here any more — it would
+				// take the matched roster row being deleted and re-added between the
+				// dedup and the locked SELECT. Kept because the unique
 				// index is still the guarantee and a raw violation would poison the
 				// transaction; its integration test went with the route to it.
 				//
@@ -2099,6 +2189,12 @@ export async function applyConvertGuestToMember(
 				slotIds: movedSlots.map((s) => s.id),
 				createdMembership,
 				createdPerson,
+				// What convert filled on the Person, so an undo takes back exactly that
+				// (H1 of #1155). Absent when it filled nothing, and on every record
+				// from before #1124.
+				...(Object.keys(filledContact).length > 0
+					? { filled: filledContact }
+					: {}),
 				...(reactivatedFrom ? { reactivatedFrom } : {}),
 				...(demotedFrom ? { demotedFrom } : {}),
 				...(closedOfficerPositions.length > 0
@@ -2192,7 +2288,27 @@ export async function applyLinkGuestToMember(
 	input: LinkGuestInput,
 ): Promise<LinkGuestResult> {
 	return db.transaction(async (tx) => {
-		// Lock the guest row first and re-read `stage` under it, for the reason
+		// The lock protocol (ADR-0031): the club write lock, then the Persons (the
+		// guest's, and the member's, whose Person the guest is about to take), then
+		// the guest row. Read without a lock, locked in id order, read again.
+		await lockClubForWrite(tx, input.clubId);
+		const [peek] = await tx
+			.select({ personId: guests.personId })
+			.from(guests)
+			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
+			.limit(1);
+		if (!peek) throw new Error("Guest not found in this club.");
+		const [member] = await tx
+			.select({ id: members.id, personId: members.personId })
+			.from(members)
+			.where(
+				and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
+			)
+			.limit(1);
+		if (!member) throw new Error(LINK_MEMBER_NOT_IN_CLUB_MESSAGE);
+		await lockPersonsInOrder(tx, [peek.personId, member.personId]);
+
+		// Lock the guest row and re-read `stage` under it, for the reason
 		// `applyConvertGuestToMember` documents: read outside the transaction it is
 		// a stale snapshot, and two concurrent links would both pass the check.
 		const [guest] = await tx
@@ -2202,21 +2318,26 @@ export async function applyLinkGuestToMember(
 			.limit(1)
 			.for("update");
 		if (!guest) throw new Error("Guest not found in this club.");
+		if ((guest.personId ?? null) !== (peek.personId ?? null)) {
+			throw new Error(RECORD_CHANGED_MESSAGE);
+		}
 		// A STRANDED guest (joined, pointer null — #618) is deliberately allowed
 		// through: their membership was removed from the roster, and pointing them
 		// at a member is the recovery. Only a live link is refused.
 		if (guest.stage === "joined" && guest.convertedMembershipId) {
 			throw new Error(LINK_ALREADY_JOINED_MESSAGE);
 		}
-
-		const [member] = await tx
-			.select({ id: members.id })
+		// The member is re-read under the Person locks: a merge that moved their
+		// membership to another Person while this waited would otherwise point the
+		// guest at a Person that no longer holds it.
+		const [memberNow] = await tx
+			.select({ personId: members.personId })
 			.from(members)
-			.where(
-				and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
-			)
+			.where(eq(members.id, input.memberId))
 			.limit(1);
-		if (!member) throw new Error(LINK_MEMBER_NOT_IN_CLUB_MESSAGE);
+		if (memberNow?.personId !== member.personId) {
+			throw new Error(RECORD_CHANGED_MESSAGE);
+		}
 
 		// `returning` is what makes this reversible. `role_slots` has a CHECK
 		// constraint keeping the two assignee columns mutually exclusive, so this
@@ -2230,14 +2351,23 @@ export async function applyLinkGuestToMember(
 			.returning({ id: roleSlots.id });
 		const slotIds = repointed.map((s) => s.id);
 
+		// A linked guest IS the member's Person, as a converted one is (#1124,
+		// ADR-0031, L5 of #1155): without this the next undo or unlink finds a
+		// guest Person unrelated to the human it just joined to. The guest's own
+		// Person, now named by nobody, is taken back when nothing else references
+		// it, so a link leaves no stranded identity behind.
 		await tx
 			.update(guests)
 			.set({
 				stage: "joined",
 				convertedMembershipId: input.memberId,
+				personId: member.personId,
 				updatedAt: new Date(),
 			})
 			.where(eq(guests.id, input.guestId));
+		if (guest.personId) {
+			await deleteGuestPersonIfUnreferenced(tx, guest.personId);
+		}
 
 		// `member_merge` rather than a new enum value: the action already exists
 		// (`schema.ts`), so this needs no migration, and `detail.fromGuestId` is
@@ -2282,6 +2412,27 @@ export async function applyUnlinkGuestFromMember(
 	input: UnlinkGuestInput,
 ): Promise<{ ok: true; slotIds: string[] }> {
 	return db.transaction(async (tx) => {
+		// The lock protocol (ADR-0031): the club write lock, then the Persons (the
+		// guest's, and the linked member's), then the guest row. See `applyUndo…`.
+		await lockClubForWrite(tx, input.clubId);
+		const [peek] = await tx
+			.select({
+				personId: guests.personId,
+				convertedMembershipId: guests.convertedMembershipId,
+			})
+			.from(guests)
+			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
+			.limit(1);
+		if (!peek) throw new Error("Guest not found in this club.");
+		const [peekMember] = peek.convertedMembershipId
+			? await tx
+					.select({ personId: members.personId })
+					.from(members)
+					.where(eq(members.id, peek.convertedMembershipId))
+					.limit(1)
+			: [];
+		await lockPersonsInOrder(tx, [peek.personId, peekMember?.personId]);
+
 		const [guest] = await tx
 			.select()
 			.from(guests)
@@ -2291,6 +2442,12 @@ export async function applyUnlinkGuestFromMember(
 		if (!guest) throw new Error("Guest not found in this club.");
 		if (!guest.convertedMembershipId) {
 			throw new Error(UNLINK_NOT_LINKED_MESSAGE);
+		}
+		if (
+			(guest.personId ?? null) !== (peek.personId ?? null) ||
+			guest.convertedMembershipId !== peek.convertedMembershipId
+		) {
+			throw new Error(RECORD_CHANGED_MESSAGE);
 		}
 
 		// The most recent link for this guest. Ordered newest-first and tie-broken
@@ -2342,6 +2499,10 @@ export async function applyUnlinkGuestFromMember(
 				updatedAt: new Date(),
 			})
 			.where(eq(guests.id, input.guestId));
+		// The unlinked member is still a member, so a guest still naming their Person
+		// is pointed at a fresh name-only one (H2 of #1155); otherwise the next
+		// convert adopts the member.
+		await separateGuestFromMemberPerson(tx, input.guestId);
 
 		await logActivity(tx, {
 			clubId: input.clubId,
@@ -2396,6 +2557,14 @@ type ConversionRecord = {
 	 * row that was an ordinary member already.
 	 */
 	demotedFrom?: "admin";
+	/**
+	 * The email and phone convert FILLED onto the Person (#1124, H1 of #1155), as
+	 * written, so an undo clears exactly those and only while they still hold that
+	 * value. Absent when convert filled nothing and on every record from before
+	 * #1124; for those the old convert minted the Person carrying the guest's
+	 * contact, which `createdPerson: true` says.
+	 */
+	filled?: { email?: string; phone?: string };
 };
 
 /**
@@ -2448,6 +2617,20 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
 	const demotedFrom =
 		d.demotedFrom === "admin" ? ("admin" as const) : undefined;
 	if (d.demotedFrom !== undefined && demotedFrom === undefined) return null;
+	// `filled` is ABSENT or well-formed, never half-readable: a present key that
+	// does not parse would read as "filled nothing" and leave a stale address on
+	// a member's Person, which is the bug it exists to prevent.
+	let filled: { email?: string; phone?: string } | undefined;
+	if (d.filled !== undefined) {
+		const f = d.filled as Record<string, unknown> | null;
+		if (!f || typeof f !== "object" || Array.isArray(f)) return null;
+		if (f.email !== undefined && typeof f.email !== "string") return null;
+		if (f.phone !== undefined && typeof f.phone !== "string") return null;
+		filled = {
+			...(typeof f.email === "string" ? { email: f.email } : {}),
+			...(typeof f.phone === "string" ? { phone: f.phone } : {}),
+		};
+	}
 	return {
 		personId: d.personId,
 		slotIds: d.slotIds.filter((s): s is string => typeof s === "string"),
@@ -2455,6 +2638,7 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
 		createdPerson: d.createdPerson,
 		reactivatedFrom,
 		demotedFrom,
+		filled,
 	};
 }
 
@@ -2530,14 +2714,43 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
  * `member_remove` names its Person in `detail.personId`, the release record
  * `applyMemberRemove` also writes and the CSV importer reads (#855). Without it
  * the Person is held by no club and named by no removal, so a roster CSV
- * carrying the guest's email skips the row on every import, in this club too
- * (#875). An undo that keeps a reused membership releases nothing and names
- * nobody.
+ * carrying the Person's email skips the row on every import, in this club too
+ * (#875). Since #1124 the undo also takes back the address convert filled, so
+ * for a convert made after it there is usually no address left to skip on; the
+ * record stays because a Person whose address an officer edited since, or one
+ * from a record written before #1124, still carries one. An undo that keeps a
+ * reused membership releases nothing and names nobody.
  */
 export async function applyUndoGuestConversion(
 	input: UndoConversionInput,
 ): Promise<UndoConversionResult> {
 	return db.transaction(async (tx) => {
+		// The lock protocol (ADR-0031): the club write lock, then the Persons, then
+		// the guest row, then (this path's own order, unchanged) the membership.
+		// Two Persons can be involved: the guest's, and the one the membership
+		// CURRENTLY names, which is not the Person in the activity record after a
+		// merge has deleted that one (L1 of #1155). Both are read without a lock,
+		// locked in id order, and read again under the locks; either moving
+		// refuses the undo with nothing written.
+		await lockClubForWrite(tx, input.clubId);
+		const [peek] = await tx
+			.select({
+				personId: guests.personId,
+				convertedMembershipId: guests.convertedMembershipId,
+			})
+			.from(guests)
+			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
+			.limit(1);
+		if (!peek) throw new Error("Guest not found in this club.");
+		const [peekMember] = peek.convertedMembershipId
+			? await tx
+					.select({ personId: members.personId })
+					.from(members)
+					.where(eq(members.id, peek.convertedMembershipId))
+					.limit(1)
+			: [];
+		await lockPersonsInOrder(tx, [peek.personId, peekMember?.personId]);
+
 		const [guest] = await tx
 			.select()
 			.from(guests)
@@ -2552,6 +2765,12 @@ export async function applyUndoGuestConversion(
 			throw new Error(UNDO_NOT_CONVERTED_MESSAGE);
 		}
 		const membershipId = guest.convertedMembershipId;
+		if (
+			(guest.personId ?? null) !== (peek.personId ?? null) ||
+			membershipId !== peek.convertedMembershipId
+		) {
+			throw new Error(RECORD_CHANGED_MESSAGE);
+		}
 
 		// Newest first and tie-broken on id, for the reason `findGuestByContact`
 		// documents. Scoped to the membership the guest currently points at, so a
@@ -2581,17 +2800,25 @@ export async function applyUndoGuestConversion(
 		// here is what actually serialises the two. Same reasoning as convert's
 		// lock on the guest row: read outside the lock, a check is a stale
 		// snapshot.
-		await tx
-			.select({ id: members.id })
+		const [membership] = await tx
+			.select({ id: members.id, personId: members.personId })
 			.from(members)
 			.where(eq(members.id, membershipId))
 			.limit(1)
 			.for("update");
+		if (!membership || membership.personId !== peekMember?.personId) {
+			throw new Error(RECORD_CHANGED_MESSAGE);
+		}
+		// The Person the membership names NOW. The record's `personId` is who it
+		// named when convert ran, and a merge since may have deleted that Person: an
+		// account check read off a deleted row finds no account and lets the undo
+		// delete the membership of somebody who has signed in.
+		const memberPersonId = membership.personId;
 
 		const [person] = await tx
 			.select({ userId: people.userId })
 			.from(people)
-			.where(eq(people.id, record.personId))
+			.where(eq(people.id, memberPersonId))
 			.limit(1);
 		if (person?.userId) throw new Error(UNDO_MEMBER_HAS_ACCOUNT_MESSAGE);
 
@@ -2643,14 +2870,14 @@ export async function applyUndoGuestConversion(
 			const [spoken] = await tx
 				.select({ n: count() })
 				.from(speeches)
-				.where(eq(speeches.personId, record.personId));
+				.where(eq(speeches.personId, memberPersonId));
 			if (Number(spoken?.n ?? 0) > 0) {
 				throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("speeches"));
 			}
 			const [enrolled] = await tx
 				.select({ n: count() })
 				.from(pathEnrollments)
-				.where(eq(pathEnrollments.personId, record.personId));
+				.where(eq(pathEnrollments.personId, memberPersonId));
 			if (Number(enrolled?.n ?? 0) > 0) {
 				throw new Error(
 					UNDO_MEMBER_HAS_HISTORY_MESSAGE("a Pathways enrolment"),
@@ -2722,6 +2949,25 @@ export async function applyUndoGuestConversion(
 			})
 			.where(eq(guests.id, input.guestId));
 
+		// Take back the contact convert FILLED onto that Person, now that the
+		// membership is gone and the Person is guest-only again (H1 of #1155). A
+		// recorded fill is cleared only while it still holds the value convert
+		// wrote; a record from before #1124 (`createdPerson: true`) is one the old
+		// convert minted carrying the guest's contact, so whatever contact that
+		// Person holds goes back to the name-only shape the backfill gives a guest.
+		// Both only while nobody has signed in as them. After this the guest's
+		// address, corrected or not, is filled again by the next convert.
+		if (record.createdPerson) {
+			await revertGuestContactFill(tx, memberPersonId, { any: true });
+		} else if (record.filled) {
+			await revertGuestContactFill(tx, memberPersonId, record.filled);
+		}
+		// And if the guest's Person STILL holds a membership (a convert that reused
+		// one, or a row the backfill pointed at a member's Person), point the guest
+		// at a fresh name-only Person instead (H2 of #1155), so the next convert
+		// cannot adopt that member.
+		await separateGuestFromMemberPerson(tx, input.guestId);
+
 		await logActivity(tx, {
 			clubId: input.clubId,
 			actorMemberId: input.actorMemberId,
@@ -2747,7 +2993,7 @@ export async function applyUndoGuestConversion(
 				undoneGuestId: input.guestId,
 				slotIds: record.slotIds,
 				membershipDeleted: record.createdMembership,
-				...(record.createdMembership ? { personId: record.personId } : {}),
+				...(record.createdMembership ? { personId: memberPersonId } : {}),
 				...(record.createdMembership
 					? {}
 					: {
