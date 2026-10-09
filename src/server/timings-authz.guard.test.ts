@@ -118,6 +118,15 @@ describe("capability resolution goes through the shared resolvers", () => {
 	});
 });
 
+/**
+ * The meeting-window call the writer makes: the write policy asked for the
+ * `record` class (#1137). `record` refuses a cancelled meeting and ACCEPTS a
+ * completed one, which is what a timing needs. Matched as a pattern so the
+ * options object after the class may wrap, and so that a different class does
+ * not satisfy it.
+ */
+const WINDOW_CALL = /assertMeetingAccepts\(\s*meeting\.status,\s*"record"/;
+
 describe("the writer runs every gate, in this order", () => {
 	function writerBody(): string {
 		const start = LOGIC_SOURCE.indexOf(
@@ -133,7 +142,7 @@ describe("the writer runs every gate, in this order", () => {
 	it("gates the archive, the meeting window, the ROW and the ACTOR", () => {
 		const body = writerBody();
 		expect(body).toContain("assertClubNotArchived(meeting.clubId)");
-		expect(body).toContain('meeting.status === "cancelled"');
+		expect(body).toMatch(WINDOW_CALL);
 		expect(body).toContain("isTimeableRole(slot)");
 		expect(body).toContain("resolveTimingActor({");
 	});
@@ -145,7 +154,7 @@ describe("the writer runs every gate, in this order", () => {
 		// of the takedown — the same ordering the agenda resolvers state.
 		const body = writerBody();
 		const archive = body.indexOf("assertClubNotArchived");
-		const cancelled = body.indexOf('meeting.status === "cancelled"');
+		const cancelled = body.search(WINDOW_CALL);
 		const timeable = body.indexOf("isTimeableRole(slot)");
 		const actor = body.indexOf("resolveTimingActor({");
 		expect(archive).toBeGreaterThan(-1);
@@ -163,6 +172,10 @@ describe("the writer runs every gate, in this order", () => {
 		// here would make this record unwritable at exactly the moment it is meant
 		// to be written.
 		expect(LOGIC_RAW).not.toContain("assertMeetingNotLocked");
+		// The write policy's own spelling of the same mistake: the `plan` class
+		// refuses a completed meeting too. Any class named `plan` here, whatever
+		// the options after it.
+		expect(LOGIC_RAW).not.toMatch(/assertMeetingAccepts\([^)]*"plan"/);
 	});
 
 	it("floors the overwrite as a PREDICATE, not a read-then-write", () => {

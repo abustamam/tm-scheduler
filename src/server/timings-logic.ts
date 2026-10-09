@@ -74,6 +74,7 @@ import {
 	roleSlots,
 	type timingGrantedViaEnum,
 } from "#/db/schema";
+import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { findTimerSlot, findTmodSlot } from "#/lib/meeting-roles";
 import { isTimeableRole, TimingNotRecordableError } from "#/lib/timeable-roles";
 import { logActivity } from "./activity";
@@ -308,11 +309,13 @@ export async function recordMeetingTiming(
 	// caller already has an error path, and accepting a write nobody can ever
 	// read is the worse failure.
 	await assertClubNotArchived(meeting.clubId);
-	// A COMPLETED meeting is fine — see the module header. A cancelled one is
-	// not: there was no meeting, so there is nothing that was timed.
-	if (meeting.status === "cancelled") {
-		throw new Error(MEETING_CANCELLED_MESSAGE);
-	}
+	// A timing is part of the minutes record, so this is the `record` write
+	// class (#1137): a COMPLETED meeting is fine — see the module header — and a
+	// cancelled one is not, because there was no meeting and nothing was timed.
+	// The sentence stays this module's own, not the policy's default.
+	assertMeetingAccepts(meeting.status, "record", {
+		messages: { cancelled: MEETING_CANCELLED_MESSAGE },
+	});
 
 	const slots = await loadMeetingSlots(meeting.id);
 	// Scoped to THIS meeting by construction: `loadMeetingSlots` only returns
