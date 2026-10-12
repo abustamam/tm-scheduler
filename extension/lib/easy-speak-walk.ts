@@ -104,8 +104,7 @@ export interface WalkStore {
 	/**
 	 * Read `keys`, let `fn` decide, and apply its write, all as one step no other tab can
 	 * slip into (one readwrite transaction in IndexedDB). `fn` returns what to write, or
-	 * `undefined` to write nothing. A write clears first when `clear` is set, then deletes
-	 * `delete`, then sets.
+	 * `undefined` to write nothing. A write clears first when `clear` is set, then sets.
 	 * Resolves true when a write was applied.
 	 */
 	transact(
@@ -117,8 +116,6 @@ export interface WalkStore {
 
 export interface TxWrite {
 	clear?: boolean;
-	/** Keys to remove (after `clear`, before `set`). */
-	delete?: string[];
 	set?: Record<string, unknown>;
 }
 
@@ -447,6 +444,12 @@ async function walk(
 		 * changed since), which a cached copy from an earlier run cannot answer.
 		 */
 		noCache?: boolean;
+		/**
+		 * Hold the fetched entry in this array instead of the store and `raw`, and never read the
+		 * store for it: a request whose answer is kept only if the whole batch it belongs to checks
+		 * out. The caller commits the entries (or drops them) once it knows.
+		 */
+		stage?: Entry[];
 		/** False drops the page from `raw` (an empty year's list says nothing a reader could use). */
 		keepRaw?: (value: T) => boolean;
 		parse: (body: string, doc: Document | null) => T;
@@ -465,7 +468,7 @@ async function walk(
 			}
 		};
 		const contact = isContactPage(spec.url);
-		const cached = spec.noCache ? undefined : ((await store.get(entryKey(spec.key))) as Entry | undefined);
+		const cached = spec.noCache || spec.stage ? undefined : ((await store.get(entryKey(spec.key))) as Entry | undefined);
 		let entry = cached;
 		let value: T;
 		if (!entry) {
@@ -529,6 +532,12 @@ async function walk(
 				fetchedAt: new Date(now()).toISOString(),
 				...(contact ? { parsed: value } : { body }),
 			};
+			if (spec.stage) {
+				spec.stage.push(entry);
+				done += 1;
+				progress(spec.label);
+				return value;
+			}
 			// The page and the session's count land together, and only if the lease is still ours: a
 			// response that outlived it must not overwrite the walker that took over.
 			const next: Session = { ...session, lastActivityAt: now(), pages: session.pages + 1 };
@@ -689,10 +698,11 @@ async function walk(
 	// ---- evaluations: best-effort, and mostly empty for a member
 	// The JSON endpoints answer for whoever the cookies are, and carry no page to read the viewer
 	// from, so the batch is fenced between two identity-checked HTML requests: `my_evaluations.php`
-	// before it and a fresh one after it. If the account changed in between, nothing of the batch
-	// is kept (not in the bundle, not in the store) and the walk ends.
+	// before it and a fresh one after it. The batch is STAGED: its requests (the list and every
+	// detail) are held in memory, not in the store and not in `raw`, until the closing check passes.
+	// If anything in the batch fails, nothing of it is kept anywhere. The cost, accepted: the batch
+	// is not resumable mid-way, a reload asks for the whole of it again.
 	const evaluations: EsEvaluation[] = [];
-	const evaluationKeys = ["evaluations-list"];
 	const exporterName = clubPage.viewer.name ?? clubPage.viewer.username ?? "";
 	try {
 		total += 3;
@@ -702,28 +712,28 @@ async function walk(
 			label: "my evaluations",
 			parse: (_b, doc) => (doc ? checkEvaluationsPage(doc) : null),
 		});
+		const staged: Entry[] = [];
 		const list = parseEvaluationList(
 			await page({
 				key: "evaluations-list",
 				url: get("api/v1/evaluations.php/my-evaluations"),
 				label: "evaluation list",
 				json: true,
+				stage: staged,
 				parse: (body) => parseJson(body, "evaluation data"),
 			}),
 		);
 		total += list.length;
 		const fetched: EsEvaluation[] = [];
 		for (const item of list) {
-			const key = `evaluation:${item.evaluation_id}`;
-			evaluationKeys.push(key);
 			fetched.push(
-				// The parse runs before the page is stored: a response the parser cannot read is
-				// never cached, so Resume asks for it again.
+				// The parse runs on the way in: a response the parser cannot read fails the batch.
 				await page({
-					key,
+					key: `evaluation:${item.evaluation_id}`,
 					url: get(`api/v1/evaluations.php/eval/${item.evaluation_id}`),
 					label: `evaluation ${item.evaluation_id}`,
 					json: true,
+					stage: staged,
 					parse: (body) => parseEvaluation(item, parseJson(body, "evaluation data"), exporterName),
 				}),
 			);
@@ -735,20 +745,14 @@ async function walk(
 			noCache: true,
 			parse: (_b, doc) => (doc ? checkEvaluationsPage(doc) : null),
 		});
+		// The batch is clean: only now does any of it reach `raw` and `evaluations`.
+		for (const e of staged) raw.push({ url: e.url, fetchedAt: e.fetchedAt, html: e.body ?? "" });
 		evaluations.push(...fetched);
 	} catch (err) {
-		if (err instanceof IdentityError) {
-			// Whatever of the batch is stored may be another account's: forget it.
-			const stored = (await Promise.all(evaluationKeys.map((k) => store.get(entryKey(k))))).filter((e) => e !== undefined);
-			const next: Session = { ...session, pages: Math.max(0, session.pages - stored.length) };
-			await fenced({ delete: evaluationKeys.map(entryKey), set: { [META]: next } });
-			session = next;
-		}
 		// Only a failed request, an error status, a page that is not signed in or an evaluation the
 		// parser cannot read is forgiven here. A TypeError is a bug and must surface, not become a
 		// quietly empty `evaluations`; a lost lease or another club or account ends the walk.
 		if (!(err instanceof WalkError) || err instanceof IdentityError) throw err;
-		evaluations.length = 0;
 		progress(`evaluations skipped: ${err.message}`);
 	}
 
@@ -853,7 +857,6 @@ export function idbStore(dbName = "gavelup-easy-speak-export"): WalkStore {
 						if (!write) return;
 						wrote = true;
 						if (write.clear) os.clear();
-						for (const k of write.delete ?? []) os.delete(k);
 						for (const [k, v] of Object.entries(write.set ?? {})) os.put(v, k);
 					};
 					if (pending === 0) decide();

@@ -4,6 +4,8 @@
  *
  *  - the batch is fenced between two identity-checked HTML requests (`my_evaluations.php` before,
  *    and again after): if the account changed in between, nothing of the batch is kept;
+ *  - the batch is staged in memory (fifth round): its entries reach the store, `raw` and
+ *    `evaluations` only if every request and the closing check succeed;
  *  - a detail the parser cannot read is a page-shape failure, never cached, so Resume asks again;
  *    a genuine bug in the parser still surfaces.
  * Run: cd extension && bunx vitest run lib/easy-speak-walk-evaluations.test.ts
@@ -30,6 +32,9 @@ const LIST = "/api/v1/evaluations.php/my-evaluations";
 const OTHERS_DETAIL = JSON.stringify({
 	evaluation: { responses: [{ field_type: "text", field_label: "Note", text_value: SECRET }] },
 });
+/** Store keys of the evaluation batch (the list and every detail); the HTML page before it is not part of it. */
+const evaluationEntries = (store: ReturnType<typeof memoryStore>) =>
+	[...store.data.keys()].filter((k) => /^page:evaluation(s-list|:)/.test(k));
 const pages = (store: ReturnType<typeof memoryStore>) => [...store.data.keys()].filter((k) => k.startsWith("page:"));
 
 /** The store keeps everything when the walk ends, as if the tab were reloaded just before the cleanup. */
@@ -86,17 +91,23 @@ describe("the evaluation requests are fenced on the account", () => {
 		expect(JSON.stringify(bundle)).not.toContain(SECRET);
 	});
 
-	it("asks the closing question of the site itself on a resume, even with every evaluation cached", async () => {
+	it("asks the site for the whole batch again on a resume, the closing question included", async () => {
 		const store = memoryStore();
 		keepAtEnd(store);
 		const c = clock();
 		const first = setup({ store, clock: c });
 		await first.run();
-		expect(store.data.has("page:evaluation:502")).toBe(true);
-		// The account changed after the batch was stored, before this run's only request.
+		// The batch is staged in memory: none of it was stored.
+		expect(evaluationEntries(store)).toEqual([]);
+		// The account changed after the batch, before this run's requests.
 		const second = setup({ store, clock: c, as: (_i, url) => (url.endsWith("/my_evaluations.php") ? other : FIXTURE_IDENTITY) });
 		await expect(second.run()).rejects.toThrow(/another account/);
-		expect(second.log.map((r) => new URL(r.url).pathname)).toEqual(["/my_evaluations.php"]);
+		expect(second.log.map((r) => new URL(r.url).pathname)).toEqual([
+			LIST,
+			"/api/v1/evaluations.php/eval/501",
+			"/api/v1/evaluations.php/eval/502",
+			"/my_evaluations.php",
+		]);
 	});
 
 	it("paces the closing request like any other: at least a second after the one before", async () => {
@@ -111,7 +122,7 @@ describe("the evaluation requests are fenced on the account", () => {
 describe("an evaluation the parser cannot read", () => {
 	const unreadable = (url: string) => (url.endsWith("/eval/501") ? JSON.stringify({ evaluation: { responses: [null] } }) : undefined);
 
-	it("is not cached, so Resume asks for it again and succeeds once the server is fixed", async () => {
+	it("is never stored, so Resume asks for it again and succeeds once the server is fixed", async () => {
 		const store = memoryStore();
 		keepAtEnd(store);
 		const c = clock();
@@ -147,5 +158,72 @@ describe("an evaluation the parser cannot read", () => {
 		});
 		await expect(setup({ store }).run()).rejects.toThrow(TypeError);
 		expect(store.data.has("page:evaluation:501")).toBe(false);
+	});
+});
+
+describe("the evaluation batch is staged in memory until the closing identity check passes", () => {
+	const DETAIL = (id: number) => `/api/v1/evaluations.php/eval/${id}`;
+
+	it("keeps nothing in the bundle or the store when the account switched mid-batch and a later detail fails", async () => {
+		const store = memoryStore();
+		keepAtEnd(store);
+		const flag = { on: false };
+		const s = setup({
+			store,
+			// The account switches at the first detail; the second detail then fails, so the closing
+			// identity check never runs.
+			as: (_i, url) => {
+				if (url.endsWith("/eval/501")) flag.on = true;
+				return flag.on ? other : FIXTURE_IDENTITY;
+			},
+			override: (url) => (flag.on && /\/eval\/\d+$/.test(url) ? OTHERS_DETAIL : undefined),
+			failOn: (url) => url.endsWith("/eval/502"),
+		});
+		const { bundle } = await s.run();
+		expect(s.progress.some((l) => /evaluations skipped/.test(l))).toBe(true);
+		expect(bundle.evaluations).toEqual([]);
+		expect(bundle.raw.filter((r) => r.url.includes("/api/v1/evaluations.php"))).toEqual([]);
+		expect(JSON.stringify(bundle)).not.toContain(SECRET);
+		expect(evaluationEntries(store)).toEqual([]);
+		expect(JSON.stringify([...store.data.entries()])).not.toContain(SECRET);
+	});
+
+	it("asks for the whole batch again after a partial one", async () => {
+		const store = memoryStore();
+		keepAtEnd(store);
+		const c = clock();
+		const first = setup({ store, clock: c, failOn: (url) => url.endsWith("/eval/502") });
+		const { bundle: partial } = await first.run();
+		expect(partial.evaluations).toEqual([]);
+		expect(evaluationEntries(store)).toEqual([]);
+
+		const second = setup({ store, clock: c });
+		const { bundle } = await second.run();
+		const asked = second.log.map((r) => new URL(r.url).pathname);
+		expect(asked).toEqual(expect.arrayContaining([LIST, DETAIL(501), DETAIL(502)]));
+		expect(bundle.evaluations.map((e) => e.esId).sort()).toEqual(["501", "502"]);
+	});
+
+	it("still exports the evaluations and their raw entries on the happy path, and stores no entry of them", async () => {
+		const store = memoryStore();
+		keepAtEnd(store);
+		const s = setup({ store });
+		const { bundle } = await s.run();
+		expect(bundle.evaluations.map((e) => e.esId).sort()).toEqual(["501", "502"]);
+		const rawPaths = bundle.raw.map((r) => new URL(r.url).pathname);
+		expect(rawPaths).toEqual(expect.arrayContaining([LIST, DETAIL(501), DETAIL(502)]));
+		expect(bundle.raw.find((r) => r.url.endsWith("/eval/501"))?.html).toContain("Clear structure");
+		expect(evaluationEntries(store)).toEqual([]);
+		// The closing check is the last request, and it is not in `raw` twice.
+		expect(new URL(s.log[s.log.length - 1].url).pathname).toBe("/my_evaluations.php");
+		expect(rawPaths.filter((p) => p === "/my_evaluations.php")).toHaveLength(1);
+	});
+
+	it("keeps an unreadable detail out of the batch as before: no evaluations, a note, the rest intact", async () => {
+		const s = setup({ failOn: (url) => url.endsWith("/eval/501") });
+		const { bundle } = await s.run();
+		expect(bundle.evaluations).toEqual([]);
+		expect(bundle.raw.filter((r) => r.url.includes("/api/v1/evaluations.php"))).toEqual([]);
+		expect(bundle.meetings).toHaveLength(3);
 	});
 });

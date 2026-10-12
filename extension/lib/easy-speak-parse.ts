@@ -842,12 +842,20 @@ export function parseEvaluation(
 	detail: unknown,
 	exporterName: string,
 ): EsEvaluation {
-	const d = (detail as EvalDetail)?.evaluation;
+	const d = (detail as EvalDetail | null)?.evaluation;
 	// The detail is another site's API answer: a shape it should not have is a page-shape failure
 	// the walk reports and does not cache, not a TypeError. A TypeError from here is a bug.
-	const responses = d?.responses ?? [];
+	// A 200 answer can still be an error object (`{"error": ...}`) or `null`: every real
+	// evaluation (see the fixtures) is an `evaluation` object with a `responses` list, which may
+	// be empty. Without them it is not an evaluation, and must not read as an empty one.
+	if (d === null || d === undefined || typeof d !== "object" || Array.isArray(d)) {
+		throw new PageShapeError("it has no evaluation object");
+	}
+	const responses = d.responses;
 	if (!Array.isArray(responses)) {
-		throw new PageShapeError("its responses are not a list");
+		throw new PageShapeError(
+			responses === undefined ? "it has no responses list" : "its responses are not a list",
+		);
 	}
 	if (responses.some((r) => r === null || typeof r !== "object")) {
 		throw new PageShapeError("one of its responses is not an object");

@@ -223,7 +223,6 @@ export function memoryStore(): WalkStore & { data: Map<string, unknown> } {
 			const write = fn(Object.fromEntries(keys.map((k) => [k, data.get(k)])));
 			if (!write) return false;
 			if (write.clear) data.clear();
-			for (const k of write.delete ?? []) data.delete(k);
 			for (const [k, v] of Object.entries(write.set ?? {})) data.set(k, JSON.parse(JSON.stringify(v)));
 			return true;
 		},

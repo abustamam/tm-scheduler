@@ -32,8 +32,8 @@ import {
 
 const at = (path: string) => `https://easy-speak.org/${path}`;
 const otherClub: Identity = { ...FIXTURE_IDENTITY, esClubId: "9090" };
-/** What the fixtures' evaluation batch stores: the list and its two submitted evaluations. */
-const EVALUATION_ENTRIES = 3;
+/** How many pages of the walk's first `n` requests reach the store: the evaluation batch (JSON under /api/) is staged in memory, and the closing fence is never stored. */
+const stored = (walk: { html: boolean }[], n: number) => walk.slice(0, n).filter((r) => r.html).length;
 const otherAccount: Identity = { ...FIXTURE_IDENTITY, username: "someoneelse" };
 
 /** The requests of one uninterrupted walk, in order. */
@@ -62,9 +62,9 @@ describe("every page is for the account and club that started the walk", () => {
 				expect(s.log).toHaveLength(i + 1);
 				// Nothing of the other identity's page is in the store, under any key, and the pages
 				// stored are exactly the ones fetched before it (the session's count agrees). The last
-				// request is the fence after the evaluation requests: it also takes those (the list and
-				// its two details) back out of the store.
-				const kept = i === walk.length - 1 ? i - EVALUATION_ENTRIES : i;
+				// request is the fence after the evaluation requests, which are staged in memory and so
+				// were never stored.
+				const kept = stored(walk, i);
 				expect(JSON.stringify([...store.data.entries()])).not.toContain(marker);
 				expect([...store.data.keys()].filter((k) => k.startsWith("page:"))).toHaveLength(kept);
 				expect((store.data.get("meta") as { pages: number }).pages).toBe(kept);
@@ -146,7 +146,8 @@ describe("a walker that lost the lease writes nothing", () => {
 	};
 
 	it("fails with a LeaseError and leaves the successor's session meta and pages as they were, whichever request outlived the lease", async () => {
-		const total = (await baseline()).length;
+		const walk = await baseline();
+		const total = walk.length;
 		// Not the last request: the fence after the evaluations stores nothing, so a walker that
 		// loses the lease there has nothing left to refuse (see the test below).
 		for (let at = 0; at < total - 1; at++) {
@@ -156,8 +157,9 @@ describe("a walker that lost the lease writes nothing", () => {
 			await expect(s.run(), `request ${at}`).rejects.toThrow(/took over this export/);
 			// The successor's meta is exactly what it wrote, not this walker's session.
 			expect(store.data.get("meta")).toEqual({ startedAt: 1, lastActivityAt: 1, pages: 0, identity: otherClub });
-			// Pages stored are the ones finished before the theft: none for the request in flight.
-			expect([...store.data.keys()].filter((k) => k.startsWith("page:"))).toHaveLength(at);
+			// Pages stored are the ones finished before the theft: none for the request in flight, and
+			// none of the staged evaluation requests.
+			expect([...store.data.keys()].filter((k) => k.startsWith("page:"))).toHaveLength(stored(walk, at));
 			expect(store.data.get("lease")).toMatchObject({ owner: "tab-b" });
 		}
 	});
