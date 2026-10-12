@@ -10,6 +10,12 @@
 // existence check, so re-vendoring the assets fails the build rather than
 // passing silently. If someone wants the wordmark back, that needs an approved
 // TI Trademark Use Request first — see docs/adr/0024-ti-trademark-safe-default.md.
+//
+// ONE sanctioned exception (ADR-0024, "Revisited — 2026-10-09 (meeting signs)",
+// #1167): `ToastmastersLogo3Color.svg` is vendored again for the printed meeting
+// sign only, on the Brand Manual v2.0 p.32 club-stationery basis. `SANCTIONED`
+// names that one asset and the one file allowed to reference it; any other file
+// named after a TI mark, or any other importer of the SVG, still fails.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,10 +28,13 @@ const ROOT = resolve(dirname(SELF), "../../..");
 const TI_MARK =
 	/Toastmasters(Wordmark|Logo)\w*\.(png|svg)|ToastmastersWordmark\b/;
 
-/** The ten official TI mark assets deleted from `src/assets/` by #380. */
+/**
+ * The official TI mark assets that stay out of the tree: ten were deleted from
+ * `src/assets/` by #380, and `ToastmastersLogo3Color.svg` is back by the
+ * `SANCTIONED` exception below, so nine remain.
+ */
 const DELETED_ASSETS = [
 	"ToastmastersLogo3Color.png",
-	"ToastmastersLogo3Color.svg",
 	"ToastmastersWordmarkBlack.png",
 	"ToastmastersWordmarkBlack.svg",
 	"ToastmastersWordmarkColor.png",
@@ -35,6 +44,17 @@ const DELETED_ASSETS = [
 	"ToastmastersWordmarkWhite.svg",
 	"ToastmastersWordmarkWhiteTight.png",
 ];
+
+/**
+ * The one asset ADR-0024's 2026-10-09 revisit (#1167) vendors again, mapped to
+ * the only files that may reference it: the printed meeting sign. Repo-relative
+ * paths, as `relative(ROOT, …)` yields them.
+ */
+const SANCTIONED: Record<string, string[]> = {
+	"src/assets/ToastmastersLogo3Color.svg": [
+		"src/components/agenda/meeting-sign.tsx",
+	],
+};
 
 /**
  * The shipped source trees. `docs/` is deliberately exempt: the ADR and the
@@ -75,8 +95,9 @@ describe("ADR-0024/#380: no vendored TI mark, anywhere in the shipped tree", () 
 
 	it("no file in src/ or extension/ is named after an official TI mark asset", () => {
 		const vendored = sourceFiles
-			.filter((abs) => TI_MARK.test(basename(abs)))
-			.map((abs) => relative(ROOT, abs));
+			.map((abs) => relative(ROOT, abs))
+			.filter((rel) => TI_MARK.test(basename(rel)))
+			.filter((rel) => !(rel in SANCTIONED));
 		expect(
 			vendored,
 			"Official Toastmasters International mark assets are back in the tree. " +
@@ -103,9 +124,16 @@ describe("ADR-0024/#380: no vendored TI mark, anywhere in the shipped tree", () 
 			// asserts an offender list is EMPTY, so a comment can only ever add a
 			// false offender — stripping would LOOSEN the guard, not harden it. That
 			// is the opposite direction from the "pattern must BE present" guards.
-			if (TI_MARK.test(readFileSync(abs, "utf8"))) {
-				offenders.push(relative(ROOT, abs));
-			}
+			const rel = relative(ROOT, abs);
+			const text = readFileSync(abs, "utf8");
+			if (!TI_MARK.test(text)) continue;
+			// A sanctioned file may name the sanctioned asset and nothing else:
+			// strip those names, and anything that still matches is an offender.
+			const allowed = Object.entries(SANCTIONED)
+				.filter(([, importers]) => importers.includes(rel))
+				.map(([asset]) => basename(asset));
+			const rest = allowed.reduce((t, name) => t.split(name).join(""), text);
+			if (TI_MARK.test(rest)) offenders.push(rel);
 		}
 		expect(
 			offenders,
@@ -113,5 +141,29 @@ describe("ADR-0024/#380: no vendored TI mark, anywhere in the shipped tree", () 
 				"ADR-0024 forbids reproducing the mark without an approved TI " +
 				"Trademark Use Request.",
 		).toEqual([]);
+	});
+
+	it("the sanctioned logo exists, and the sign that is allowed to use it still does (#1167)", () => {
+		// The exception cannot outlive the sign: if `meeting-sign.tsx` stops
+		// referencing the SVG, the asset is an unused vendored mark and fails here.
+		for (const [asset, importers] of Object.entries(SANCTIONED)) {
+			expect(existsSync(resolve(ROOT, asset)), `${asset} is missing`).toBe(
+				true,
+			);
+			for (const importer of importers) {
+				expect(
+					readFileSync(resolve(ROOT, importer), "utf8"),
+					`${importer} no longer references ${asset}; delete the asset and the SANCTIONED entry, or restore the reference.`,
+				).toContain(basename(asset));
+			}
+		}
+	});
+
+	it("the sanctioned exception is exactly one asset, and it is not one of the nine that stay deleted", () => {
+		expect(Object.keys(SANCTIONED)).toEqual([
+			"src/assets/ToastmastersLogo3Color.svg",
+		]);
+		expect(DELETED_ASSETS).toHaveLength(9);
+		expect(DELETED_ASSETS).not.toContain("ToastmastersLogo3Color.svg");
 	});
 });

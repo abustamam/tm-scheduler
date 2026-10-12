@@ -283,16 +283,20 @@ describe("no print route hand-rolls its own page CSS", () => {
 	// shared-constant convention exists to make hard.
 	//
 	// Comment-blind for the same reason as the discovery filter above.
-	it("only the Word of the Day poster asks for landscape", () => {
+	it("only the wall posters and signs ask for landscape", () => {
 		const landscape = ALL_ROUTES.filter((f) =>
 			/printPageCss\s*\(\s*["'`]landscape["'`]\s*\)/.test(readStripped(f)),
 		);
 		expect(
 			landscape,
-			"landscape is the poster's alone — it is one short word sized against " +
-				"the measure, which is the only content here that wants the long " +
+			"landscape is for the Word of the Day poster and the meeting sign " +
+				"(#1167) alone — each is a few big words sized against the " +
+				"measure, which is the only content here that wants the long " +
 				"edge. A row-per-line agenda or role sheet wants the other one.",
-		).toEqual(["club.$clubId_.meeting.$meetingId.word.tsx"]);
+		).toEqual([
+			"club.$clubId_.meeting.$meetingId.word.tsx",
+			"club.$clubId_.sign.tsx",
+		]);
 	});
 
 	it("the agenda and roles routes take the portrait default", () => {

@@ -41,6 +41,7 @@ import { Route as DotwellKnownSplatRouteImport } from './routes/[.]well-known.$'
 import { Route as ClubClubIdIndexRouteImport } from './routes/club.$clubId.index'
 import { Route as AuthedSuperadminIndexRouteImport } from './routes/_authed/superadmin/index'
 import { Route as AuthedMeetingsIndexRouteImport } from './routes/_authed/meetings.index'
+import { Route as ClubClubIdSignRouteImport } from './routes/club.$clubId_.sign'
 import { Route as ClubClubIdRolesRouteImport } from './routes/club.$clubId_.roles'
 import { Route as ClubClubIdGuestBookRouteImport } from './routes/club.$clubId_.guest-book'
 import { Route as ClubClubIdRolesGuideRouteImport } from './routes/club.$clubId.roles-guide'
@@ -249,6 +250,11 @@ const AuthedMeetingsIndexRoute = AuthedMeetingsIndexRouteImport.update({
   id: '/meetings/',
   path: '/meetings/',
   getParentRoute: () => AuthedRoute,
+} as any)
+const ClubClubIdSignRoute = ClubClubIdSignRouteImport.update({
+  id: '/club/$clubId_/sign',
+  path: '/club/$clubId/sign',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ClubClubIdRolesRoute = ClubClubIdRolesRouteImport.update({
   id: '/club/$clubId_/roles',
@@ -564,6 +570,7 @@ export interface FileRoutesByFullPath {
   '/club/$clubId/roles-guide': typeof ClubClubIdRolesGuideRoute
   '/club/$clubId/guest-book': typeof ClubClubIdGuestBookRoute
   '/club/$clubId/roles': typeof ClubClubIdRolesRoute
+  '/club/$clubId/sign': typeof ClubClubIdSignRoute
   '/meetings/': typeof AuthedMeetingsIndexRoute
   '/superadmin/': typeof AuthedSuperadminIndexRoute
   '/club/$clubId/': typeof ClubClubIdIndexRoute
@@ -643,6 +650,7 @@ export interface FileRoutesByTo {
   '/club/$clubId/roles-guide': typeof ClubClubIdRolesGuideRoute
   '/club/$clubId/guest-book': typeof ClubClubIdGuestBookRoute
   '/club/$clubId/roles': typeof ClubClubIdRolesRoute
+  '/club/$clubId/sign': typeof ClubClubIdSignRoute
   '/meetings': typeof AuthedMeetingsIndexRoute
   '/superadmin': typeof AuthedSuperadminIndexRoute
   '/club/$clubId': typeof ClubClubIdIndexRoute
@@ -726,6 +734,7 @@ export interface FileRoutesById {
   '/club/$clubId/roles-guide': typeof ClubClubIdRolesGuideRoute
   '/club/$clubId_/guest-book': typeof ClubClubIdGuestBookRoute
   '/club/$clubId_/roles': typeof ClubClubIdRolesRoute
+  '/club/$clubId_/sign': typeof ClubClubIdSignRoute
   '/_authed/meetings/': typeof AuthedMeetingsIndexRoute
   '/_authed/superadmin/': typeof AuthedSuperadminIndexRoute
   '/club/$clubId/': typeof ClubClubIdIndexRoute
@@ -809,6 +818,7 @@ export interface FileRouteTypes {
     | '/club/$clubId/roles-guide'
     | '/club/$clubId/guest-book'
     | '/club/$clubId/roles'
+    | '/club/$clubId/sign'
     | '/meetings/'
     | '/superadmin/'
     | '/club/$clubId/'
@@ -888,6 +898,7 @@ export interface FileRouteTypes {
     | '/club/$clubId/roles-guide'
     | '/club/$clubId/guest-book'
     | '/club/$clubId/roles'
+    | '/club/$clubId/sign'
     | '/meetings'
     | '/superadmin'
     | '/club/$clubId'
@@ -970,6 +981,7 @@ export interface FileRouteTypes {
     | '/club/$clubId/roles-guide'
     | '/club/$clubId_/guest-book'
     | '/club/$clubId_/roles'
+    | '/club/$clubId_/sign'
     | '/_authed/meetings/'
     | '/_authed/superadmin/'
     | '/club/$clubId/'
@@ -1023,6 +1035,7 @@ export interface RootRouteChildren {
   ApiPathwaysIngestRoute: typeof ApiPathwaysIngestRoute
   ClubClubIdGuestBookRoute: typeof ClubClubIdGuestBookRoute
   ClubClubIdRolesRoute: typeof ClubClubIdRolesRoute
+  ClubClubIdSignRoute: typeof ClubClubIdSignRoute
   ApiClubClubIdLogoRoute: typeof ApiClubClubIdLogoRoute
   ApiClubsClubIdExportZipRoute: typeof ApiClubsClubIdExportZipRoute
   ApiMeetingsIdMinutesPdfRoute: typeof ApiMeetingsIdMinutesPdfRoute
@@ -1262,6 +1275,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/meetings/'
       preLoaderRoute: typeof AuthedMeetingsIndexRouteImport
       parentRoute: typeof AuthedRoute
+    }
+    '/club/$clubId_/sign': {
+      id: '/club/$clubId_/sign'
+      path: '/club/$clubId/sign'
+      fullPath: '/club/$clubId/sign'
+      preLoaderRoute: typeof ClubClubIdSignRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/club/$clubId_/roles': {
       id: '/club/$clubId_/roles'
@@ -1746,6 +1766,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPathwaysIngestRoute: ApiPathwaysIngestRoute,
   ClubClubIdGuestBookRoute: ClubClubIdGuestBookRoute,
   ClubClubIdRolesRoute: ClubClubIdRolesRoute,
+  ClubClubIdSignRoute: ClubClubIdSignRoute,
   ApiClubClubIdLogoRoute: ApiClubClubIdLogoRoute,
   ApiClubsClubIdExportZipRoute: ApiClubsClubIdExportZipRoute,
   ApiMeetingsIdMinutesPdfRoute: ApiMeetingsIdMinutesPdfRoute,

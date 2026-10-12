@@ -65,6 +65,14 @@ describe("MeetingExportMenu (#541 D2)", () => {
 		);
 	});
 
+	it("offers Meeting signs (#1167), opening the club-level sign in a new tab", async () => {
+		await openMenu();
+		const signs = screen.getByRole("menuitem", { name: /meeting signs/i });
+		const link = signs.closest("a");
+		expect(link?.getAttribute("href")).toBe("/club/downtown/sign");
+		expect(link?.getAttribute("target")).toBe("_blank");
+	});
+
 	it("lists Present in the menu only when it is not the toolbar primary", async () => {
 		await openMenu({ presentIsPrimary: false });
 		const present = screen.getByRole("menuitem", { name: /present/i });
@@ -128,7 +136,7 @@ describe("MeetingExportMenu (#541 D2)", () => {
 		}
 	});
 
-	it("orders the menu items: Print agenda, Present, packet, per-meeting sheets, All role sheets", async () => {
+	it("orders the menu items: Print agenda, Present, packet, per-meeting sheets, All role sheets, Meeting signs", async () => {
 		await openMenu();
 		const items = screen.getAllByRole("menuitem").map((el) => el.textContent);
 		// The packet (#589) sits ABOVE the per-sheet list: it is the action most
@@ -140,6 +148,7 @@ describe("MeetingExportMenu (#541 D2)", () => {
 			"Print meeting packet…",
 			"This meeting's role sheets…",
 			"All role sheets",
+			"Meeting signs",
 		]);
 	});
 
@@ -158,6 +167,7 @@ describe("MeetingExportMenu (#541 D2)", () => {
 			"Print meeting packet…",
 			"This meeting's role sheets…",
 			"All role sheets",
+			"Meeting signs",
 			"Word poster",
 			"Download .pptx",
 		]);
