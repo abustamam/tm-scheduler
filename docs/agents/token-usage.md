@@ -79,8 +79,8 @@ spent more on cache writes and output, which do halve, so the Sonnet line differ
 | subagent context | the ~27% of cost on subagent calls over 300k on the Mac (~15% on Linux) | `scripts/implementer-context-guard.ts` (#1103) stops an `implementer` at 250k context: over the cap it allows only plain git and `SubagentHandback`, so it commits, pushes and hands back. Fix rounds go to a fresh `implementer`, not SendMessage |
 
 So the cut helps, but it is no halving, and the largest pool left is long-running subagents, which
-only the implementer cap above bounds. The weekly limit's weighting is not published, so these dollars are a proxy
-too. If the limit weights Opus more heavily than its list price does, the Sonnet line is worth more.
+only the implementer cap above bounds. The weekly limit's weighting is not published, so these
+dollars are a proxy too. If the limit weights Opus more heavily than its list price does, the Sonnet line is worth more.
 The `explorer` (Haiku) had almost nothing to replace here, with 3 `Explore` dispatches in nine
 days.
 

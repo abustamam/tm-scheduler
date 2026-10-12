@@ -9,6 +9,7 @@ import {
 	type HookInput,
 	isAllowedGit,
 	readContext,
+	shellWords,
 	subagentTranscriptPath,
 	TAIL_BYTES,
 } from "./implementer-context-guard";
@@ -59,7 +60,10 @@ describe("decide: who is capped", () => {
 	});
 	it("allows another agent type", () => {
 		expect(
-			decide(implementer("Read", undefined, { agent_type: "explorer" }), at(999_999)),
+			decide(
+				implementer("Read", undefined, { agent_type: "explorer" }),
+				at(999_999),
+			),
 		).toEqual({ allow: true });
 	});
 	it.each([
@@ -134,8 +138,15 @@ describe("git allowlist over the cap", () => {
 		"git diff --stat",
 		"git log --oneline -5",
 		"  git status",
+		`git commit -m 'feat: x' -m 'Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>'`,
+		`git commit -m "fix: a; b & c > d"`,
+		"git commit -m 'it'\\''s'",
+		"git log --oneline -n 5",
+		"git diff -- src/a.ts",
 	])("allows %s", (c) => {
-		expect(decide(implementer("Bash", c), at(260_000))).toEqual({ allow: true });
+		expect(decide(implementer("Bash", c), at(260_000))).toEqual({
+			allow: true,
+		});
 	});
 	it.each([
 		"git commit -m x && rm -rf y",
@@ -158,12 +169,80 @@ describe("git allowlist over the cap", () => {
 		"gitk",
 		"bun run test",
 		"echo git status",
+		"echo status",
+		"gitk status",
+		"git log --exec-path",
+		"git diff --output-indicator-new=+",
+		"git log -1 --format='export const x = 1%x3b' '--output=src/a.ts'",
+		"git push '--receive-pack=touch pwned3' ../bare.git HEAD:refs/heads/x",
+		'git diff "--no-index" a b',
+		"git diff --no-ind a b",
+		"git log --outp=f",
+		"git push --rec=x",
+		"git push --e=x",
+		"git log \\--output=f",
+		"git log --out'put'=f",
+		"git commit --no-verify -m x",
+		"git commit --no-v -m x",
+		"git commit -m 'unterminated",
+		"git commit -m x \\",
+		'git commit -m "$HOME"',
+		'git commit -m "`id`"',
+		'git commit -m "$(id)"',
+		"git log {--output=f,}",
+		"git log --oneline (ls)",
+		"FOO=1 git status",
+		"git commit -m x; ls",
+		"git commit -m x & ls",
+		"git commit -m x > f",
+		"git commit -m x < f",
 	])("denies %s", (c) => {
 		expect(decide(implementer("Bash", c), at(260_000)).allow).toBe(false);
 	});
 	it("isAllowedGit agrees with decide", () => {
 		expect(isAllowedGit("git status")).toBe(true);
 		expect(isAllowedGit("git status; ls")).toBe(false);
+	});
+});
+
+describe("shellWords", () => {
+	it("splits like a shell and removes quotes", () => {
+		expect(shellWords(`git commit -m 'a b' "c d" e\\ f g"h"`)).toEqual([
+			"git",
+			"commit",
+			"-m",
+			"a b",
+			"c d",
+			"e f",
+			"gh",
+		]);
+	});
+	it("keeps an empty quoted word", () => {
+		expect(shellWords("git commit -m ''")).toEqual(["git", "commit", "-m", ""]);
+	});
+	it("treats metacharacters inside single quotes as data", () => {
+		expect(shellWords("a '; & | < > $( ` ( ) { }'")).toEqual([
+			"a",
+			"; & | < > $( ` ( ) { }",
+		]);
+	});
+	it("refuses an unquoted metacharacter", () => {
+		for (const c of [
+			";",
+			"&",
+			"|",
+			"<",
+			">",
+			"(",
+			")",
+			"{",
+			"}",
+			"\n",
+			"`",
+			"$",
+		]) {
+			expect(shellWords(`a ${c} b`)).toBeNull();
+		}
 	});
 });
 
@@ -177,7 +256,10 @@ describe("subagentTranscriptPath", () => {
 
 describe("readContext", () => {
 	it("returns the LAST usage line's context (100k then 260k -> 260k)", () => {
-		const p = write("last.jsonl", `${usageLine(100_000)}\n${usageLine(260_000)}\n`);
+		const p = write(
+			"last.jsonl",
+			`${usageLine(100_000)}\n${usageLine(260_000)}\n`,
+		);
 		expect(readContext(p)).toBe(260_000);
 	});
 	it("ignores a truncated final line", () => {
@@ -188,7 +270,10 @@ describe("readContext", () => {
 		expect(readContext(p)).toBe(100_000);
 	});
 	it("reads a final line with no trailing newline", () => {
-		const p = write("nonl.jsonl", `${usageLine(100_000)}\n${usageLine(260_000)}`);
+		const p = write(
+			"nonl.jsonl",
+			`${usageLine(100_000)}\n${usageLine(260_000)}`,
+		);
 		expect(readContext(p)).toBe(260_000);
 	});
 	it("skips non-assistant and usage-less lines after the usage line", () => {
@@ -196,7 +281,10 @@ describe("readContext", () => {
 			"mixed.jsonl",
 			[
 				usageLine(120_000),
-				JSON.stringify({ type: "user", message: { usage: { input_tokens: 9e6 } } }),
+				JSON.stringify({
+					type: "user",
+					message: { usage: { input_tokens: 9e6 } },
+				}),
 				JSON.stringify({ type: "assistant", message: { content: [] } }),
 				"",
 			].join("\n"),
@@ -212,7 +300,9 @@ describe("readContext", () => {
 	});
 	it("returns null for an empty file and for no usage lines", () => {
 		expect(readContext(write("empty.jsonl", ""))).toBeNull();
-		expect(readContext(write("none.jsonl", '{"type":"user"}\nnot json\n'))).toBeNull();
+		expect(
+			readContext(write("none.jsonl", '{"type":"user"}\nnot json\n')),
+		).toBeNull();
 	});
 	it("throws for a missing file", () => {
 		expect(() => readContext(join(tmp, "missing.jsonl"))).toThrow();
@@ -221,7 +311,10 @@ describe("readContext", () => {
 		const filler = `${JSON.stringify({ type: "user", text: "x".repeat(1000) })}\n`;
 		const body = filler.repeat(Math.ceil((TAIL_BYTES * 2) / filler.length));
 		// the old usage line sits before the tail window; the new one is inside it
-		const p = write("big.jsonl", `${usageLine(400_000)}\n${body}${usageLine(111_000)}\n`);
+		const p = write(
+			"big.jsonl",
+			`${usageLine(400_000)}\n${body}${usageLine(111_000)}\n`,
+		);
 		expect(readContext(p)).toBe(111_000);
 		// with no usage line in the tail at all, the old one is not found
 		const q = write("big2.jsonl", `${usageLine(400_000)}\n${body}`);
@@ -235,7 +328,7 @@ describe("spawned hook", () => {
 			input: stdin,
 			cwd: tmp,
 			encoding: "utf8",
-			env: { ...process.env, CONTEXT_CAP_TOKENS: "", ...env },
+			env: { ...process.env, ...env },
 		});
 	const input = (sessionName: string, extra: HookInput = {}) =>
 		JSON.stringify(
@@ -266,11 +359,6 @@ describe("spawned hook", () => {
 		expect(r.stdout).toBe("");
 		expect(r.stderr).toBe("");
 	});
-	it("CONTEXT_CAP_TOKENS overrides the cap; a bad value falls back to 250k", () => {
-		transcript("env", `${usageLine(30_000)}\n`);
-		expect(run(input("env"), { CONTEXT_CAP_TOKENS: "20000" }).stdout).not.toBe("");
-		expect(run(input("env"), { CONTEXT_CAP_TOKENS: "abc" }).stdout).toBe("");
-	});
 	it("allows SubagentHandback over the cap", () => {
 		transcript("handback", `${usageLine(260_000)}\n`);
 		const r = run(input("handback", { tool_name: "SubagentHandback" }));
@@ -280,7 +368,10 @@ describe("spawned hook", () => {
 	it.each([
 		["a missing file", () => input("nonexistent")],
 		["an empty file", () => (transcript("emptyf", ""), input("emptyf"))],
-		["no usage lines", () => (transcript("nousage", '{"type":"user"}\n'), input("nousage"))],
+		[
+			"no usage lines",
+			() => (transcript("nousage", '{"type":"user"}\n'), input("nousage")),
+		],
 		["malformed stdin", () => "{not json"],
 		["empty stdin", () => ""],
 	])("fails open for %s: exit 0, empty stdout, one stderr line", (_n, make) => {
