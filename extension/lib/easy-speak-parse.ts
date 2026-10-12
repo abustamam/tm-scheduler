@@ -24,13 +24,11 @@ import type {
 	ParsedSpeechRow,
 	RequestFormInfo,
 } from "./easy-speak-bundle";
+import { norm } from "./easy-speak-text";
 
 type El = Element;
 
 // ------------------------------------------------------------------ helpers
-
-const norm = (s: string | null | undefined): string =>
-	(s ?? "").replace(/[\s ]+/g, " ").trim();
 
 const text = (el: El | null | undefined): string => norm(el?.textContent);
 
@@ -371,10 +369,11 @@ const RADIO_PLAN: Record<string, EsAttendance["plan"]> = {
 
 function parseAttendance(doc: Document): {
 	attendance: EsAttendance[];
-	guests: EsMeeting["guests"];
+	/** Every guest-section row; `signal` says the person replied or was recorded. */
+	guests: (EsMeeting["guests"][number] & { signal: boolean })[];
 } {
 	const attendance: EsAttendance[] = [];
-	const guests: EsMeeting["guests"] = [];
+	const guests: (EsMeeting["guests"][number] & { signal: boolean })[] = [];
 	for (const h of Array.from(doc.querySelectorAll("th.thTop > h3"))) {
 		const section =
 			ATTENDANCE_SECTIONS[text(h).replace(/\s*\(.*$/, "").trim()];
@@ -410,7 +409,7 @@ function parseAttendance(doc: Document): {
 					state.record !== null ||
 					state.plan === "attending" ||
 					state.plan === "tentative";
-				if (signal) guests.push({ who, category: section });
+				guests.push({ who, category: section, signal });
 			}
 		}
 	}
@@ -548,7 +547,17 @@ export function parseMeeting(
 	const venue = venueBlock(doc);
 	const place = venue.Venue;
 	const wotd = venue["Word of the Day"] ? text(venue["Word of the Day"]) : "";
-	const { attendance, guests } = parseAttendance(doc);
+	const parsed = parseAttendance(doc);
+	const attendance = parsed.attendance;
+	const roles = parseRoles(doc);
+	// A guest-section person is a guest of this meeting if they replied, were
+	// recorded, or hold a role in it (a guest who is Toastmaster has not "replied").
+	const holders = new Set(
+		roles.map((r) => r.holder?.esUserId).filter((id): id is string => !!id),
+	);
+	const guests = parsed.guests
+		.filter((g) => g.signal || (g.who.esUserId !== null && holders.has(g.who.esUserId)))
+		.map(({ who, category }) => ({ who, category }));
 	return {
 		esMeetingId,
 		startsAt,
@@ -561,7 +570,7 @@ export function parseMeeting(
 		theme: venue["Meeting Theme"] ? nullIfBlank(text(venue["Meeting Theme"])) : null,
 		wordOfTheDay: /^(|Not Yet Chosen)$/i.test(wotd) ? null : wotd,
 		manager: parseManager(doc),
-		roles: parseRoles(doc),
+		roles,
 		attendance,
 		guests,
 		awards: parseAwards(doc),

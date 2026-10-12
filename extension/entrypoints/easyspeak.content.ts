@@ -1,8 +1,8 @@
-import { EASY_SPEAK_MATCHES } from "../lib/easy-speak-bundle";
+import { EASY_SPEAK_MATCHES } from "../lib/easy-speak-hosts";
 import {
 	idbStore,
 	type Progress,
-	readSession,
+	resumeState,
 	runExport,
 } from "../lib/easy-speak-walk";
 
@@ -25,14 +25,16 @@ export default defineContentScript({
 		if (!document.querySelector("#portal-left-panel span.name a")) return;
 
 		const store = idbStore();
-		const existing = await readSession(store, Date.now());
+		// One id per page load: the lease that keeps a second tab from walking too.
+		const owner = crypto.randomUUID();
+		const resume = await resumeState(store, owner, Date.now());
 
 		const ui = await createShadowRootUi(ctx, {
 			name: "gavelup-easy-speak-export",
 			position: "inline",
 			anchor: "body",
 			onMount: (container) => {
-				container.appendChild(buildWidget(existing !== null));
+				container.appendChild(buildWidget(resume.kind === "auto" || resume.kind === "manual"));
 			},
 		});
 		ui.mount();
@@ -77,6 +79,7 @@ export default defineContentScript({
 						parseHtml: (html) =>
 							new DOMParser().parseFromString(html, "text/html"),
 						store,
+						owner,
 						sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 						now: Date.now,
 						onProgress,
@@ -99,12 +102,13 @@ export default defineContentScript({
 			}
 			btn.addEventListener("click", start);
 
-			// A reload mid-walk: pick up at once. A stale session waits for the button.
-			if (hasSession) {
-				void readSession(store, Date.now()).then((s) => {
-					if (s && Date.now() - s.lastActivityAt < 2 * 60 * 1000) void start();
-					else setStatus(`An unfinished export is stored (${s?.pages ?? 0} pages).`);
-				});
+			// A reload mid-walk: pick up at once. A stale session waits for the button,
+			// and so does a store another tab is walking right now.
+			if (resume.kind === "auto") void start();
+			else if (resume.kind === "manual") {
+				setStatus(`An unfinished export is stored (${resume.session.pages} pages).`);
+			} else if (resume.kind === "elsewhere") {
+				setStatus("Another Easy-Speak tab is exporting this club right now.");
 			}
 			return root;
 		}

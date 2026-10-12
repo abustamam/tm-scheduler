@@ -182,6 +182,25 @@ describe("an upcoming meeting (t=644360)", () => {
 		expect(m?.attendance.length).toBeGreaterThan(m?.guests.length ?? 0);
 	});
 
+	it("keeps a guest-section person who holds a role, even with no reply and no recorded attendance", () => {
+		const html = readFixture("meeting-upcoming.html");
+		// Reese is listed under Guest Speaker with an Unknown reply: not a guest on her own.
+		expect(upcoming()?.guests.map((g) => g.who.name)).not.toContain("Reese Thistledown");
+		// Make Reese the Toastmaster (the role table's link; the attendance rows keep their own).
+		const at = html.indexOf(">Toastmaster</a>");
+		const held =
+			html.slice(0, at) +
+			html
+				.slice(at)
+				.replace("privmsg.php?mode=post&amp;u=900026')\">Zephyr Ashlowe", "privmsg.php?mode=post&amp;u=900018')\">Reese Thistledown");
+		expect(held).not.toBe(html);
+		const m = parseMeeting(parseHtml(held), "644360", TZ);
+		expect(m?.roles.find((r) => r.role === "Toastmaster")?.holder).toEqual({ esUserId: "900018", name: "Reese Thistledown" });
+		expect(m?.guests).toContainEqual({ who: { esUserId: "900018", name: "Reese Thistledown" }, category: "guest_speaker" });
+		// Exactly one more guest than before, and the replied ones are all still there.
+		expect(m?.guests).toHaveLength((upcoming()?.guests.length ?? 0) + 1);
+	});
+
 	it("reads a Tentative reply", () => {
 		const html = readFixture("meeting-upcoming.html").replace(/(<img name="attend_image1\[\d+\]">)\s*Attending/, "$1 Tentative");
 		const m = parseMeeting(parseHtml(html), "644360", TZ);

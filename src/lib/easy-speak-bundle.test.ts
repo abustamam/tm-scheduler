@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { isContactPage } from "../../extension/lib/easy-speak-bundle";
 import {
 	parseClubData,
 	parseMeeting,
@@ -11,6 +12,7 @@ import {
 import {
 	type EasySpeakBundleV1,
 	easySpeakBundleV1Schema,
+	isContactPageUrl,
 } from "./easy-speak-bundle";
 
 /**
@@ -67,9 +69,39 @@ describe("easySpeakBundleV1Schema", () => {
 
 	it("never carries memberlist.php or clubdata.php in raw", () => {
 		const b = easySpeakBundleV1Schema.parse(load());
-		expect(b.raw.some((r) => /\/(memberlist|clubdata)\.php/.test(r.url))).toBe(
-			false,
-		);
+		expect(b.raw.some((r) => isContactPage(r.url))).toBe(false);
+	});
+
+	it.each([
+		"https://easy-speak.org/memberlist.php",
+		"https://easy-speak.org/clubdata.php",
+		"https://easy-speak.org/clubdata.php?tab=officers",
+		"https://easy-speak.org/memberlist.php#page2",
+		"memberlist.php",
+		"https://easy-speak.org/MemberList.php",
+	])("rejects a raw page whose url is the contact page %s", (url) => {
+		const b = load();
+		const bad = { ...b, raw: [...b.raw, { ...b.raw[0], url }] };
+		const parsed = easySpeakBundleV1Schema.safeParse(bad);
+		expect(parsed.success).toBe(false);
+		expect(parsed.error?.issues[0]?.path).toEqual(["raw", b.raw.length, "url"]);
+	});
+
+	it("uses the extension's rule: both copies agree on every url", () => {
+		for (const url of [
+			"https://easy-speak.org/memberlist.php",
+			"https://easy-speak.org/clubdata.php?x=1",
+			"https://easy-speak.org/clubdata.php#tab_history",
+			"memberlist.php",
+			"https://easy-speak.org/MemberList.php",
+			"https://easy-speak.org/meeting_list.php#POST mode=roles&start_year=2026",
+			"https://easy-speak.org/view_meeting.php?t=1",
+			"https://easy-speak.org/xmemberlist.php",
+			"https://easy-speak.org/memberlist.php.bak",
+			"https://easy-speak.org/memberchart.php?chart=8",
+		]) {
+			expect(isContactPageUrl(url), url).toBe(isContactPage(url));
+		}
 	});
 
 	it("accepts a bundle with every list empty (a member export can be nearly empty)", () => {

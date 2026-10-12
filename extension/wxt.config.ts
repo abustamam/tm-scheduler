@@ -1,6 +1,6 @@
 import { defineConfig } from "wxt";
 import { BASECAMP_MATCHES } from "./lib/basecamp-hosts";
-import { EASY_SPEAK_MATCHES } from "./lib/easy-speak-bundle";
+import { EASY_SPEAK_MATCHES } from "./lib/easy-speak-hosts";
 
 // Target GavelUp server. Prod (unset) → gavelup.app. Dev → set WXT_GAVELUP_URL,
 // e.g. `WXT_GAVELUP_URL=http://localhost:3000 bun run dev`. The value is also

@@ -15,6 +15,16 @@ import { z } from "zod";
  * the field. Every one of those is a thing the real pages do not give.
  */
 
+/**
+ * The two pages whose HTML carries phone numbers (`memberlist.php`,
+ * `clubdata.php`). The extension never stores their HTML in `raw`; the importer
+ * refuses a bundle that does. The same rule is `isContactPage` in
+ * `extension/lib/easy-speak-bundle.ts`; the bundle test fails if they disagree.
+ */
+export function isContactPageUrl(url: string): boolean {
+	return /(?:^|\/)(?:memberlist|clubdata)\.php(?:[?#/]|$)/i.test(url);
+}
+
 /** A person as Easy-Speak names them. `esUserId` is null when the page links no profile. */
 export const esPersonRefSchema = z.object({
 	esUserId: z.string().nullable(),
@@ -181,11 +191,17 @@ export const easySpeakBundleV1Schema = z.object({
 	 * `clubdata.php`: their HTML carries phone numbers.
 	 */
 	raw: z.array(
-		z.object({
-			url: z.string(),
-			fetchedAt: z.iso.datetime({ offset: true }),
-			html: z.string(),
-		}),
+		z
+			.object({
+				url: z.string(),
+				fetchedAt: z.iso.datetime({ offset: true }),
+				html: z.string(),
+			})
+			.refine((page) => !isContactPageUrl(page.url), {
+				path: ["url"],
+				message:
+					"raw must not hold memberlist.php or clubdata.php: their HTML carries phone numbers",
+			}),
 	),
 });
 

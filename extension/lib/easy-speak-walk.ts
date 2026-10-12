@@ -19,12 +19,14 @@
  *    login form, say), aborts the walk with a message naming it. The store keeps
  *    what was fetched, so pressing Resume costs nothing already done. The one
  *    exception is evaluations, which are best-effort (a member sees only their
- *    own, usually none).
+ *    own, usually none). Only a failed request, an error status or a page that
+ *    is not signed in is forgiven there; a bug in a parser still aborts.
+ *  - One walker per club store. A lease (owner id, expiry, renewed before every
+ *    request) keeps a second tab from starting a second walk beside the first.
  */
 import {
 	type AssembleInput,
 	type EasySpeakBundleV1,
-	EASY_SPEAK_ORIGIN,
 	type EsEvaluation,
 	type EsRawPage,
 	type ParsedSpeechRow,
@@ -33,6 +35,7 @@ import {
 	bundleFileName,
 	isContactPage,
 } from "./easy-speak-bundle";
+import { EASY_SPEAK_ORIGIN } from "./easy-speak-hosts";
 import {
 	parseClubData,
 	parseEsClubId,
@@ -51,13 +54,31 @@ import {
 export const MIN_GAP_MS = 1000;
 /** A stored session older than this is not resumed: the club has moved on. */
 export const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
-/** Stop walking back through years after this many empty ones in a row (once a meeting has been seen). */
-const EMPTY_YEARS_TO_STOP = 2;
-const EARLIEST_YEAR = 2004;
+/** A reload within this long of the last page picks the walk up at once; older waits for the Resume button. */
+export const AUTO_RESUME_WINDOW_MS = 2 * 60 * 1000;
+/** The lease is renewed before every request; a walker that goes quiet for this long has lost it. */
+export const LEASE_TTL_MS = 60 * 1000;
+/**
+ * The meeting list is walked year by year, newest first, down to this year, with
+ * no early stop: a club can have a gap of years in its history, and stopping at
+ * the first empty stretch would silently drop everything before it. Easy-Speak
+ * offers no earliest-year picker to bound it (its start and end years are free
+ * text inputs), so this is the floor.
+ */
+export const EARLIEST_MEETING_YEAR = 2004;
 
 export interface WalkStore {
 	get(key: string): Promise<unknown | undefined>;
 	set(key: string, value: unknown): Promise<void>;
+	/**
+	 * Read, decide and write one key as a single step no other tab can slip into
+	 * (one readwrite transaction in IndexedDB). `fn` returns the value to store, or
+	 * `undefined` to leave the key as it is; the result is what the key holds after.
+	 */
+	update(
+		key: string,
+		fn: (current: unknown | undefined) => unknown | undefined,
+	): Promise<unknown | undefined>;
 	clear(): Promise<void>;
 }
 
@@ -77,6 +98,8 @@ export interface WalkDeps {
 	onProgress?: (p: Progress) => void;
 	/** Test seam; the real walk never goes below one second. */
 	minGapMs?: number;
+	/** Identifies this walker in the lease. A fresh random id per page load. */
+	owner: string;
 }
 
 export interface Progress {
@@ -113,9 +136,97 @@ export async function readSession(
 	return s;
 }
 
+/** A failure of the walk itself (a request, a status, a sign-in): it names the page and can be retried. */
 class WalkError extends Error {}
+/** Another walker holds, or took, the lease. Never a best-effort failure. */
+class LeaseError extends Error {}
+
+interface Lease {
+	owner: string;
+	expiresAt: number;
+}
+const LEASE = "lease";
+
+/** A JSON endpoint that answers 200 with something else (a login page) is a not-signed-in failure. */
+function parseJson(body: string, what: string): unknown {
+	try {
+		return JSON.parse(body) as unknown;
+	} catch {
+		throw new WalkError(`${what} was not JSON. Sign in to Easy-Speak, then press Resume.`);
+	}
+}
+
+const asLease = (v: unknown): Lease | undefined => v as Lease | undefined;
+
+/** True when a different walker holds a lease that has not expired. */
+function heldByOther(l: Lease | undefined, owner: string, now: number): boolean {
+	return !!l && l.owner !== owner && l.expiresAt > now;
+}
+
+/** Take the lease, or renew ours. False when someone else's is still live. */
+export async function acquireLease(
+	store: WalkStore,
+	owner: string,
+	now: number,
+): Promise<boolean> {
+	const after = asLease(
+		await store.update(LEASE, (cur) =>
+			heldByOther(asLease(cur), owner, now)
+				? undefined
+				: ({ owner, expiresAt: now + LEASE_TTL_MS } satisfies Lease),
+		),
+	);
+	return after?.owner === owner;
+}
+
+/** Give the lease up, if it is still ours. */
+export async function releaseLease(store: WalkStore, owner: string): Promise<void> {
+	await store.update(LEASE, (cur) =>
+		asLease(cur)?.owner === owner ? ({ owner, expiresAt: 0 } satisfies Lease) : undefined,
+	);
+}
+
+export type ResumeState =
+	| { kind: "none" }
+	/** An unfinished export from a reload moments ago: start it. */
+	| { kind: "auto"; session: Session }
+	/** An older unfinished export: wait for the Resume button. */
+	| { kind: "manual"; session: Session }
+	/** Another tab is walking right now. */
+	| { kind: "elsewhere"; session: Session | null };
+
+/** What a freshly loaded page should do about an export in the store. */
+export async function resumeState(
+	store: WalkStore,
+	owner: string,
+	now: number,
+): Promise<ResumeState> {
+	const session = await readSession(store, now);
+	if (heldByOther(asLease(await store.get(LEASE)), owner, now)) {
+		return { kind: "elsewhere", session };
+	}
+	if (!session) return { kind: "none" };
+	return now - session.lastActivityAt < AUTO_RESUME_WINDOW_MS
+		? { kind: "auto", session }
+		: { kind: "manual", session };
+}
 
 export async function runExport(
+	deps: WalkDeps,
+): Promise<{ bundle: EasySpeakBundleV1; fileName: string }> {
+	if (!(await acquireLease(deps.store, deps.owner, deps.now()))) {
+		throw new LeaseError(
+			"Another Easy-Speak tab is already running this export. Wait for it, or close it, then press Resume.",
+		);
+	}
+	try {
+		return await walk(deps);
+	} finally {
+		await releaseLease(deps.store, deps.owner);
+	}
+}
+
+async function walk(
 	deps: WalkDeps,
 ): Promise<{ bundle: EasySpeakBundleV1; fileName: string }> {
 	const { store, now } = deps;
@@ -127,6 +238,8 @@ export async function runExport(
 		session = existing;
 	} else {
 		await store.clear();
+		// `clear` took the lease with everything else; nobody else can hold it, we just did.
+		await acquireLease(store, deps.owner, now());
 		session = { startedAt: now(), lastActivityAt: now(), pages: 0 };
 		await store.set(META, session);
 	}
@@ -149,6 +262,8 @@ export async function runExport(
 		/** Shown in `raw` instead of `url`, for a POST whose parameters are not in the URL. */
 		rawUrl?: string;
 		json?: boolean;
+		/** False drops the page from `raw` (an empty year's list says nothing a reader could use). */
+		keepRaw?: (value: T) => boolean;
 		parse: (body: string, doc: Document | null) => T;
 	}): Promise<T> {
 		const contact = isContactPage(spec.url);
@@ -159,6 +274,11 @@ export async function runExport(
 			const wait = lastStart + gap - now();
 			if (wait > 0) await deps.sleep(wait);
 			lastStart = now();
+			// The heartbeat. It fails only if another tab's lease is live: ours lapsed
+			// (a suspended tab) and they took over.
+			if (!(await acquireLease(store, deps.owner, now()))) {
+				throw new LeaseError("Another Easy-Speak tab took over this export.");
+			}
 			progress(spec.label);
 			let res: FetchResponseLike;
 			try {
@@ -199,7 +319,7 @@ export async function runExport(
 			const body = entry.body ?? "";
 			value = spec.parse(body, spec.json ? null : deps.parseHtml(body));
 		}
-		if (!contact && entry.body !== undefined) {
+		if (!contact && entry.body !== undefined && (spec.keepRaw?.(value) ?? true)) {
 			raw.push({ url: entry.url, fetchedAt: entry.fetchedAt, html: entry.body });
 		}
 		done += 1;
@@ -243,10 +363,9 @@ export async function runExport(
 	// ---- every meeting: walk the list year by year, newest first, back to the first
 	const meetingIds: string[] = [];
 	const thisYear = new Date(now()).getUTCFullYear();
-	let emptyRun = 0;
-	for (let year = thisYear + 1; year >= EARLIEST_YEAR; year--) {
+	for (let year = thisYear + 1; year >= EARLIEST_MEETING_YEAR; year--) {
 		total += 1;
-		const ids = await page({
+		const ids = await page<string[]>({
 			key: `list:${year}`,
 			url: get("meeting_list.php"),
 			rawUrl: get(
@@ -264,11 +383,10 @@ export async function runExport(
 					end_year: String(year),
 				}).toString(),
 			},
+			keepRaw: (ids) => ids.length > 0,
 			parse: (_b, doc) => (doc ? parseMeetingList(doc) : []),
 		});
 		for (const id of ids) if (!meetingIds.includes(id)) meetingIds.push(id);
-		emptyRun = ids.length === 0 ? emptyRun + 1 : 0;
-		if (meetingIds.length > 0 && emptyRun >= EMPTY_YEARS_TO_STOP) break;
 	}
 	if (meetingIds.length === 0) {
 		throw new WalkError("Easy-Speak's meeting list showed no meetings for this club.");
@@ -359,7 +477,7 @@ export async function runExport(
 				url: get("api/v1/evaluations.php/my-evaluations"),
 				label: "evaluation list",
 				json: true,
-				parse: (body) => JSON.parse(body) as unknown,
+				parse: (body) => parseJson(body, "evaluation data"),
 			}),
 		);
 		total += list.length;
@@ -369,15 +487,19 @@ export async function runExport(
 				url: get(`api/v1/evaluations.php/eval/${item.evaluation_id}`),
 				label: `evaluation ${item.evaluation_id}`,
 				json: true,
-				parse: (body) => JSON.parse(body) as unknown,
+				parse: (body) => parseJson(body, "evaluation data"),
 			});
 			evaluations.push(
 				parseEvaluation(item, detail, clubPage.viewer.name ?? clubPage.viewer.username ?? ""),
 			);
 		}
 	} catch (err) {
+		// Only a failed request, an error status or a page that is not signed in is
+		// forgiven here. A TypeError from a parser is a bug and must surface, not
+		// become a quietly empty `evaluations`; a lost lease ends the walk.
+		if (!(err instanceof WalkError)) throw err;
 		evaluations.length = 0;
-		progress(`evaluations skipped: ${(err as Error).message}`);
+		progress(`evaluations skipped: ${err.message}`);
 	}
 
 	const input: AssembleInput = {
@@ -439,6 +561,31 @@ export function idbStore(dbName = "gavelup-easy-speak-export"): WalkStore {
 		get: (key) => run("readonly", (s) => s.get(key)),
 		set: async (key, value) => {
 			await run("readwrite", (s) => s.put(value, key));
+		},
+		update: async (key, fn) => {
+			const db = await open();
+			try {
+				return await new Promise<unknown | undefined>((resolve, reject) => {
+					const tx = db.transaction("kv", "readwrite");
+					const os = tx.objectStore("kv");
+					const get = os.get(key);
+					let result: unknown;
+					get.onsuccess = () => {
+						const next = fn(get.result);
+						if (next === undefined) {
+							result = get.result;
+						} else {
+							result = next;
+							os.put(next, key);
+						}
+					};
+					tx.oncomplete = () => resolve(result);
+					tx.onerror = () => reject(tx.error);
+					tx.onabort = () => reject(tx.error);
+				});
+			} finally {
+				db.close();
+			}
 		},
 		clear: async () => {
 			await run("readwrite", (s) => s.clear());

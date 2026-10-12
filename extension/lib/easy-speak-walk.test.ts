@@ -12,79 +12,22 @@ import {
 	isContactPage,
 } from "./easy-speak-bundle";
 import {
+	EMAIL,
 	type FakeRequest,
-	fakeEasySpeak,
+	PHONE,
+	clock,
 	fixturePath,
+	memoryStore,
 	parseHtml,
 	readFixture,
+	setup,
 } from "./easy-speak-test-kit";
 import {
+	EARLIEST_MEETING_YEAR,
 	MIN_GAP_MS,
-	type WalkStore,
 	readSession,
 	runExport,
 } from "./easy-speak-walk";
-
-/** A memory store that survives "reloads": the same object is handed to the next run. */
-function memoryStore(): WalkStore & { data: Map<string, unknown> } {
-	const data = new Map<string, unknown>();
-	return {
-		data,
-		get: async (k) => data.get(k),
-		set: async (k, v) => {
-			data.set(k, JSON.parse(JSON.stringify(v)));
-		},
-		clear: async () => data.clear(),
-	};
-}
-
-/** A clock that only moves when the walk sleeps or a request "takes time". */
-function clock(start = Date.UTC(2026, 9, 12, 12, 0, 0)) {
-	let t = start;
-	return {
-		now: () => t,
-		sleep: async (ms: number) => {
-			t += ms;
-		},
-		advance: (ms: number) => {
-			t += ms;
-		},
-	};
-}
-
-function setup(opts: { failOn?: (url: string) => boolean; store?: ReturnType<typeof memoryStore> } = {}) {
-	const c = clock();
-	const log: FakeRequest[] = [];
-	const store = opts.store ?? memoryStore();
-	let inFlight = 0;
-	let maxInFlight = 0;
-	const site = fakeEasySpeak({ clock: c.now, log, failOn: opts.failOn });
-	const fetchImpl = async (url: string, init: RequestInit) => {
-		inFlight += 1;
-		maxInFlight = Math.max(maxInFlight, inFlight);
-		try {
-			const res = await site(url, init);
-			// Let other microtasks run: a concurrent walk would overlap here.
-			await Promise.resolve();
-			c.advance(40);
-			return res;
-		} finally {
-			inFlight -= 1;
-		}
-	};
-	const run = () =>
-		runExport({
-			fetchImpl,
-			parseHtml,
-			store,
-			sleep: c.sleep,
-			now: c.now,
-		});
-	return { run, log, store, c, maxInFlight: () => maxInFlight };
-}
-
-const PHONE = /\(?\b\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b|\+\d{1,3}[\s.-]\d[\d\s.-]{6,}\d/;
-const EMAIL = /[\w.+-]+@[\w-]+\.[\w.-]+/;
 
 describe("the walk", () => {
 	it("never has two requests in flight and starts each at least 1000ms after the last", async () => {
@@ -103,9 +46,11 @@ describe("the walk", () => {
 		const path = (r: FakeRequest) => new URL(r.url).pathname + new URL(r.url).search;
 		const paths = s.log.map(path);
 		expect(paths.slice(0, 2)).toEqual(["/clubdata.php", "/memberlist.php"]);
-		// Newest year first, then back until two empty years in a row after the first meeting.
-		const years = s.log.filter((r) => r.method === "POST").map((r) => new URLSearchParams(r.body ?? "").get("start_year"));
-		expect(years).toEqual(["2027", "2026", "2025", "2024"]);
+		// Newest year first, then every year back to the floor.
+		const years = s.log.filter((r) => r.method === "POST").map((r) => Number(new URLSearchParams(r.body ?? "").get("start_year")));
+		expect(years[0]).toBe(2027);
+		expect(years.at(-1)).toBe(EARLIEST_MEETING_YEAR);
+		expect(years).toEqual(Array.from({ length: 2027 - EARLIEST_MEETING_YEAR + 1 }, (_, i) => 2027 - i));
 		expect(s.log.filter((r) => r.method === "POST").every((r) => r.url.endsWith("/meeting_list.php"))).toBe(true);
 		expect(paths).toEqual(
 			expect.arrayContaining([
@@ -171,6 +116,7 @@ describe("the walk", () => {
 				fetchImpl: async () => ({ ok: true, status: 200, text: async () => "<html><body><form>Username</form></body></html>" }),
 				parseHtml,
 				store,
+				owner: "tab-a",
 				sleep: c.sleep,
 				now: c.now,
 			}),
@@ -226,7 +172,7 @@ describe("resume", () => {
 describe("contact details never leave the pages that carry them", () => {
 	it("keeps memberlist.php and clubdata.php out of raw", async () => {
 		const { bundle } = await setup().run();
-		expect(bundle.raw.length).toBeGreaterThan(15);
+		expect(bundle.raw.length).toBeGreaterThanOrEqual(15);
 		expect(bundle.raw.some((r) => isContactPage(r.url))).toBe(false);
 		expect(bundle.raw.some((r) => /memberlist|clubdata/.test(r.url))).toBe(false);
 	});

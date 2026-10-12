@@ -135,12 +135,16 @@ null` for them) or anyone's evaluations but their own (`evaluations: []` is a va
 1. Sign in to Easy-Speak and open any page of your club (not a popup). A small **Export this club for
    GavelUp** widget appears bottom-right.
 2. Click it. It walks the club one request at a time with a 1 second gap, so a 100-meeting club takes
-   a few minutes. Progress shows as pages done / total.
+   a few minutes. Progress shows as pages done / total. The meeting list is read year by year back to
+   2004 (Easy-Speak has no earliest-year picker), so a club with a gap in its history is not cut
+   short; that is about two dozen extra requests.
 3. It downloads `easy-speak-<club number>-<yyyy-mm-dd>.json`.
 
 - **Reload or failure mid-walk:** every page is written to the page's IndexedDB as it arrives. Reload
   within two minutes and it carries on by itself; later, or after an error, press **Resume export**.
-  Pages already fetched are not requested again. A stored session is dropped after 12 hours and when
+  Pages already fetched are not requested again. Only one tab walks at a time: a lease in the store
+  (renewed before every request, a minute of silence frees it) stops a second tab starting
+  a second walk, and it is released when the walk ends or fails. A stored session is dropped after 12 hours and when
   the export finishes. IndexedDB, not `storage.local`, because a club's raw pages outgrow its quota
   and `unlimitedStorage` would be a second new permission.
 - **Permissions:** the one new entry is the host `https://easy-speak.org/*`. No other permission.

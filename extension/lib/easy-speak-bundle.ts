@@ -9,10 +9,7 @@
  * it, and `src/lib/easy-speak-bundle.test.ts` parses that file with the schema.
  */
 
-/** Every Easy-Speak host the export runs on. The one new host permission (#1047). */
-export const EASY_SPEAK_MATCHES = ["https://easy-speak.org/*"] as const;
-
-export const EASY_SPEAK_ORIGIN = "https://easy-speak.org";
+import { norm } from "./easy-speak-text";
 
 export interface EsPersonRef {
 	esUserId: string | null;
@@ -162,12 +159,15 @@ export interface AssembleInput {
 	raw: EsRawPage[];
 }
 
-/** The two pages whose HTML carries phone numbers. They are parsed and never stored in `raw`. */
+/**
+ * The two pages whose HTML carries phone numbers. They are parsed and never
+ * stored in `raw`. The same rule, character for character, is `isContactPageUrl`
+ * in `src/lib/easy-speak-bundle.ts` (which the importer validates `raw` with);
+ * `src/lib/easy-speak-bundle.test.ts` fails if the two ever disagree.
+ */
 export function isContactPage(url: string): boolean {
-	return /\/(?:memberlist|clubdata)\.php(?:[?#]|$)/.test(url);
+	return /(?:^|\/)(?:memberlist|clubdata)\.php(?:[?#/]|$)/i.test(url);
 }
-
-const norm = (s: string) => s.replace(/[\s ]+/g, " ").trim();
 
 /**
  * Match each agenda speech to its speech-list row: same holder, same meeting

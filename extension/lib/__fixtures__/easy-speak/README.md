@@ -7,7 +7,7 @@ markup the parsers read, and rewritten: every person name, Easy-Speak username a
 phone number and email, the club's name, number, venue, address, district and web address, and the
 online-meeting link are replaced with fakes. `fake-names.json` is the only list of names that may
 appear; `easy-speak-fixtures.test.ts` fails if any other name, a person id outside `900001-900999`,
-or a phone outside `(555) 010-xxxx` shows up in a fixture. Do not copy a saved page in as it is.
+or a phone outside `(555) 010-xxxx` shows up in a fixture. A name in plain text (an introduction, a theme, an unlinked chart cell) is caught the same way: every run of two or more capitalised words must be a fake name or a phrase in `non-person-phrases.json` (headings, roles, Pathways projects, the fixture club's fake places, speech titles). Never add a person's name there. Do not copy a saved page in as it is.
 
 | File | Source |
 | --- | --- |
@@ -16,6 +16,7 @@ or a phone outside `(555) 010-xxxx` shows up in a fixture. Do not copy a saved p
 | `speech-request-intro.html` | **Hand-edited.** The saved page was a blank new-request form; the speech id, title and introduction were filled in |
 | `chart-7-visitors-introduced.html` | **Hand-built.** A member sees this chart with a header and no rows; the row shape is a guess |
 | `my-evaluations.html`, `my-evaluations.json`, `evaluation-501.json`, `evaluation-502.json` | **Hand-built** from the page's own script (`/api/v1/evaluations.php/...`); the saved page's list was empty |
+| `non-person-phrases.json` | The allow-list for the plain-text name guard: non-person phrases only |
 | `bundle.expected.json` | Produced by `easy-speak-walk.test.ts` from the files above; parsed with the zod schema in `src/lib/easy-speak-bundle.test.ts` |
 
 Hand edits inside the saved pages: one guest per category has a reply, one role is vacant, the viewer
