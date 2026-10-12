@@ -45,6 +45,7 @@
  */
 import { createHash } from "node:crypto";
 import { and, asc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
+import { z } from "zod";
 import { db } from "#/db";
 import {
 	clubImports,
@@ -1214,3 +1215,17 @@ export async function applyEasySpeakImport(input: {
 	});
 	return { report };
 }
+
+// ---------------------------------------------------------------------------
+// Server-fn inputs (kept here: history-import.ts may export only server fns)
+// ---------------------------------------------------------------------------
+
+export const importClubSchema = z.object({ clubId: z.string().uuid() });
+export const uploadImportSchema = importClubSchema.extend({
+	/** The bundle's JSON text, as read from the file. The logic enforces the cap. */
+	text: z.string().min(1, "Choose a file to upload."),
+});
+export const importRunSchema = importClubSchema.extend({
+	importId: z.string().uuid(),
+	resolutions: resolutionsSchema.optional(),
+});
