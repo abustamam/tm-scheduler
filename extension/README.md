@@ -154,8 +154,10 @@ null` for them) or anyone's evaluations but their own (`evaluations: []` is a va
   (one `clubdata.php` request); merely browsing makes no request for it unless an export is stored.
   A walker that lost the lease (a slow request, a suspended tab) writes nothing: every write checks
   the lease in the same step. A page that is not the page it should be (an error page where the
-  member list belongs) stops the walk and is not kept, rather than reading as an empty list. A stored session is dropped after 12 hours and when
-  the export finishes. IndexedDB, not `storage.local`, because a club's raw pages outgrow its quota
+  member list belongs) stops the walk and is not kept, rather than reading as an empty list. A stored session is never resumed after 12 hours,
+  and its cached pages are deleted the next time an Easy-Speak page loads or a walk starts (in one
+  step that checks no other tab holds the lease, so an active walk is never erased); the store is
+  emptied when the export finishes. IndexedDB, not `storage.local`, because a club's raw pages outgrow its quota
   and `unlimitedStorage` would be a second new permission.
 - **Permissions:** the one new entry is the host `https://easy-speak.org/*`. No other permission.
 - **Contact details:** `memberlist.php` and `clubdata.php` are parsed for names, status and the club's

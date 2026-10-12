@@ -305,7 +305,17 @@ export function localToInstant(
 }
 
 const TITLE_RE =
-	/(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})\s+at\s+(\d{1,2}):(\d{2})\s*([ap]m)(?:\s+([A-Za-z]+\/[A-Za-z_/]+))?/i;
+	/(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})\s+at\s+(\d{1,2}):(\d{2})\s*([ap]m)(?:\s+([A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)+))?/i;
+
+/** True when the runtime knows `tz` as an IANA zone (an unknown one throws a RangeError). */
+function isKnownZone(tz: string): boolean {
+	try {
+		new Intl.DateTimeFormat("en-US", { timeZone: tz });
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 function parseTitle(
 	doc: Document,
@@ -324,7 +334,8 @@ function parseTitle(
 			Number(m[1]),
 			hour,
 			Number(m[5]),
-			m[7] ?? clubTimezone,
+			// A zone the title names wins; one this runtime does not know is no better than none.
+			m[7] && isKnownZone(m[7]) ? m[7] : clubTimezone,
 		);
 	}
 	return null;

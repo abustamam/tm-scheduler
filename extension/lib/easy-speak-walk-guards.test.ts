@@ -22,6 +22,7 @@ import {
 	type Identity,
 	type ResumeState,
 	acquireLease,
+	discardExpiredSession,
 	followResume,
 	releaseLease,
 	resumeState,
@@ -520,5 +521,85 @@ describe("a reload mid-walk picks the export up once the previous load's lease r
 
 	it("the lease lapses in twenty seconds, not a minute", () => {
 		expect(LEASE_TTL_MS).toBe(20_000);
+	});
+});
+
+describe("an abandoned export's cached pages are deleted once its twelve hours are up", () => {
+	const NOW = Date.UTC(2026, 9, 12, 12, 0, 0);
+	const stored = async (agoMs: number) => {
+		const store = memoryStore();
+		await store.set("meta", {
+			startedAt: NOW - agoMs,
+			lastActivityAt: NOW - agoMs,
+			pages: 7,
+			identity: FIXTURE_IDENTITY,
+		});
+		await store.set("page:memberlist", { url: "u", fetchedAt: "t", body: "<html></html>" });
+		return store;
+	};
+
+	it("empties the store when the session is expired and no lease is held", async () => {
+		const store = await stored(SESSION_TTL_MS + 1);
+		expect(await discardExpiredSession(store, "me", NOW)).toBe(true);
+		expect(store.data.size).toBe(0);
+	});
+
+	it("empties it when the only lease is expired, or is its own", async () => {
+		const store = await stored(SESSION_TTL_MS + 1);
+		await store.set("lease", { owner: "other", expiresAt: NOW - 1 });
+		expect(await discardExpiredSession(store, "me", NOW)).toBe(true);
+		expect(store.data.size).toBe(0);
+		const own = await stored(SESSION_TTL_MS + 1);
+		await own.set("lease", { owner: "me", expiresAt: NOW + 5000 });
+		expect(await discardExpiredSession(own, "me", NOW)).toBe(true);
+		expect(own.data.size).toBe(0);
+	});
+
+	it("deletes nothing while another walker's lease is live, however old the session looks", async () => {
+		const store = await stored(SESSION_TTL_MS + 1);
+		await store.set("lease", { owner: "other", expiresAt: NOW + 5000 });
+		expect(await discardExpiredSession(store, "me", NOW)).toBe(false);
+		expect([...store.data.keys()].sort()).toEqual(["lease", "meta", "page:memberlist"]);
+	});
+
+	it("leaves a session inside the twelve hours alone, the limit itself included", async () => {
+		const store = await stored(SESSION_TTL_MS);
+		expect(await discardExpiredSession(store, "me", NOW)).toBe(false);
+		expect(store.data.size).toBe(2);
+	});
+
+	it("does nothing to an empty store", async () => {
+		const store = memoryStore();
+		expect(await discardExpiredSession(store, "me", NOW)).toBe(false);
+	});
+
+	it("goes when a walk starts too (the walk's own fenced clear): an expired export's pages are gone even if the new walk fails at once", async () => {
+		const store = memoryStore();
+		const h = setup({ store, throwOn: () => true });
+		await store.set("meta", {
+			startedAt: h.c.now() - SESSION_TTL_MS - 5000,
+			lastActivityAt: h.c.now() - SESSION_TTL_MS - 5000,
+			pages: 1,
+			identity: FIXTURE_IDENTITY,
+		});
+		await store.set("page:stale-leftover", { url: "u", fetchedAt: "t", body: "old" });
+		await expect(h.run()).rejects.toThrow();
+		expect(store.data.has("page:stale-leftover")).toBe(false);
+	});
+
+	it("a walk that cannot take the lease deletes nothing", async () => {
+		const store = memoryStore();
+		const h = setup({ store, owner: "tab-b" });
+		await store.set("meta", {
+			startedAt: h.c.now() - SESSION_TTL_MS - 5000,
+			lastActivityAt: h.c.now() - SESSION_TTL_MS - 5000,
+			pages: 1,
+			identity: FIXTURE_IDENTITY,
+		});
+		await store.set("page:kept", { url: "u", fetchedAt: "t", body: "mid-walk" });
+		await store.set("lease", { owner: "tab-a", expiresAt: h.c.now() + 5000 });
+		await expect(h.run()).rejects.toThrow(/already running/);
+		expect(store.data.has("page:kept")).toBe(true);
+		expect(store.data.has("meta")).toBe(true);
 	});
 });

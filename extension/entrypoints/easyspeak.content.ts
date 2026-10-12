@@ -2,6 +2,7 @@ import { EASY_SPEAK_MATCHES } from "../lib/easy-speak-hosts";
 import {
 	followResume,
 	freshIdentity,
+	discardExpiredSession,
 	identityAtLoad,
 	idbStore,
 	type Identity,
@@ -42,6 +43,12 @@ export default defineContentScript({
 		// does not already show it, the button press asks.
 		let identity: Identity | null = null;
 		let resume: ResumeState = { kind: "none" };
+		try {
+			// An abandoned export past its twelve hours is deleted, unless a walker still holds the lease.
+			await discardExpiredSession(store, owner, Date.now());
+		} catch {
+			// Best effort: a failed cleanup must not stop the page's button.
+		}
 		try {
 			identity = await identityAtLoad(document, store, Date.now(), fetchImpl, parseHtml, sleep);
 			if (identity) resume = await resumeState(store, owner, Date.now(), identity);

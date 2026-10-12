@@ -244,6 +244,26 @@ export async function readSession(
 	return s;
 }
 
+/**
+ * Empty the store of an abandoned export: a session older than SESSION_TTL_MS that
+ * no walker holds the lease for. The check and the clear are one transaction, so a
+ * walker that renews its lease cannot be wiped (a live lease held by anyone but
+ * `owner` leaves everything as it is; a fresh or absent session is untouched too).
+ * Resolves true when the store was emptied.
+ */
+export async function discardExpiredSession(
+	store: WalkStore,
+	owner: string,
+	now: number,
+): Promise<boolean> {
+	return store.transact([META, LEASE], (cur) => {
+		const s = cur[META] as Session | undefined;
+		if (!s || now - s.lastActivityAt <= SESSION_TTL_MS) return undefined;
+		if (heldByOther(asLease(cur[LEASE]), owner, now)) return undefined;
+		return { clear: true };
+	});
+}
+
 /** A failure of the walk itself (a request, a status, a sign-in): it names the page and can be retried. */
 class WalkError extends Error {}
 /** Another walker holds, or took, the lease. Never a best-effort failure. */
@@ -372,6 +392,9 @@ export function followResume(initial: ResumeState, deps: FollowDeps): { cancel: 
 export async function runExport(
 	deps: WalkDeps,
 ): Promise<{ bundle: EasySpeakBundleV1; fileName: string }> {
+	// No cleanup call here: `walk` reads an expired session as none and starts fresh with its
+	// own fenced clear, after taking the lease below, so an expired export's pages go when a walk
+	// starts (a test pins it), and never from under another walker's live lease.
 	if (!(await acquireLease(deps.store, deps.owner, deps.now()))) {
 		throw new LeaseError(
 			"Another Easy-Speak tab is already running this export. Wait for it, or close it, then press Resume.",

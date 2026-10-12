@@ -101,6 +101,36 @@ describe("an upcoming meeting (t=644360)", () => {
 		expect(parseMeeting(parseHtml(html), "644360", null)?.startsAt).toBe("2026-10-13T19:00:00");
 	});
 
+	describe("the timezone named in the title", () => {
+		const withZone = (zone: string) =>
+			parseMeeting(
+				parseHtml(
+					readFixture("meeting-upcoming.html").replace(
+						" at 7:00 pm America/Los_Angeles",
+						` at 7:00 pm ${zone}`,
+					),
+				),
+				"644360",
+				TZ,
+			)?.startsAt;
+
+		it.each([
+			// UTC-5 all year, so 7:00 pm on 2026-10-13 is midnight UTC the next day.
+			["Etc/GMT+5", "2026-10-14T00:00:00.000Z"],
+			// Haiti observes DST: EDT (UTC-4) on 2026-10-13.
+			["America/Port-au-Prince", "2026-10-13T23:00:00.000Z"],
+			// Three segments; Argentina is UTC-3 all year.
+			["America/Argentina/Buenos_Aires", "2026-10-13T22:00:00.000Z"],
+			["America/Los_Angeles", "2026-10-14T02:00:00.000Z"],
+		])("reads %s in full, not a prefix of it", (zone, instant) => {
+			expect(withZone(zone)).toBe(instant);
+		});
+
+		it("falls back to the club's timezone for a zone this runtime does not know", () => {
+			expect(withZone("Not/AZone")).toBe("2026-10-14T02:00:00.000Z");
+		});
+	});
+
 	it("has 3 speakers, each with a Pathways path, level, project and timing", () => {
 		const speakers = upcoming()?.roles.filter((r) => /Speaker$/.test(r.role)) ?? [];
 		expect(speakers.map((r) => r.role)).toEqual(["1st Speaker", "2nd Speaker", "3rd Speaker"]);
