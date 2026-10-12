@@ -321,8 +321,18 @@ import { createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { AgendaCopies } from "./src/components/agenda/agenda-copies";
 const fx = window.__fixture;
+// A browser that is not drawing frames (a background tab, a tool with no visible
+// pane) never delivers a ResizeObserver callback, and one old enough has no
+// ResizeObserver at all. Both are stood in for here, BEFORE anything mounts.
+if (fx.resizeObserver === "inert") {
+	window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+} else if (fx.resizeObserver === "absent") {
+	delete window.ResizeObserver;
+}
 const root = createRoot(document.getElementById("root"));
 const wait = (ms) => new Promise((ok) => setTimeout(ok, ms));
+const frame = () => new Promise((ok) => requestAnimationFrame(() => ok()));
+const copySheets = () => [...document.querySelectorAll(".agenda-page:not([data-agenda-blank])")];
 const read = () => {
 	const sheets = [...document.querySelectorAll(".agenda-page")];
 	return {
@@ -330,8 +340,15 @@ const read = () => {
 		blanks: sheets.filter((s) => s.hasAttribute("data-agenda-blank")).length,
 	};
 };
+async function until(done, what) {
+	const t0 = Date.now();
+	while (!done()) {
+		if (Date.now() - t0 > 8000) throw new Error("never saw " + what);
+		await wait(10);
+	}
+}
 // Settled = nothing changed for ${QUIET_MS}ms. FitPage flows after the fonts
-// resolve and AgendaCopies hears it on a frame, so there is no one event to await.
+// resolve and AgendaCopies hears it, so there is no one event to await.
 async function settle() {
 	let last = "";
 	let since = Date.now();
@@ -343,12 +360,37 @@ async function settle() {
 		await wait(25);
 	}
 }
+// The quiet window must not start until the stack is the REQUESTED layout's:
+// on a busy runner React's commit and FitPage's font-gated flow can take longer
+// than ${QUIET_MS}ms, and the PREVIOUS layout's stable DOM would be read instead.
+async function show(layout) {
+	const before = new Set(copySheets());
+	root.render(createElement(AgendaCopies, { ...fx.props, layout, copies: fx.copies, duplex: fx.duplex }));
+	// A layout switch replaces every sheet; the first draw has none to replace.
+	await until(() => {
+		const now = copySheets();
+		return now.length > 0 && now.every((s) => !before.has(s));
+	}, layout + "'s sheets");
+	await document.fonts.ready;
+	await frame();
+	await frame();
+	await settle();
+}
 window.__result = (async () => {
 	const stages = [];
 	for (const layout of fx.layouts) {
-		root.render(createElement(AgendaCopies, { ...fx.props, layout, copies: fx.copies, duplex: fx.duplex }));
-		await settle();
+		await show(layout);
 		stages.push({ layout, ...read() });
+	}
+	// A sheet that grows with NO change to the DOM or an inline style under the
+	// stack, as a logo or a late font does: only a ResizeObserver on the CURRENT
+	// sheets can hear it.
+	if (fx.growCss) {
+		const style = document.createElement("style");
+		style.textContent = fx.growCss;
+		document.head.append(style);
+		await settle();
+		stages.push({ layout: fx.layouts[fx.layouts.length - 1], ...read() });
 	}
 	for (const s of [...document.querySelectorAll("script")]) s.remove();
 	return { stages, html: document.documentElement.outerHTML };
@@ -521,11 +563,21 @@ async function realFitPageCopies(
 	rowCount: number,
 	copies: number,
 	duplex: boolean,
+	options: {
+		/** `inert`: observes nothing, ever (a browser drawing no frames).
+		 *  `absent`: no ResizeObserver exists. Default: Chrome's own. */
+		resizeObserver?: "native" | "inert" | "absent";
+		/** CSS added to the document once the last layout settled, to grow the
+		 *  sheets without touching the DOM or an inline style under the stack. */
+		growCss?: string;
+	} = {},
 ): Promise<{ stages: CopiesStage[]; printedPages: number }> {
 	const fixture = {
 		layouts,
 		copies,
 		duplex,
+		resizeObserver: options.resizeObserver ?? "native",
+		growCss: options.growCss ?? null,
 		props: {
 			header,
 			roles: [{ label: "Toastmaster", name: "Lee P." }],
@@ -693,7 +745,18 @@ describe.skipIf(!hasChrome)(
 			// Rows enough that the grid flows (its scale would fall under
 			// `MIN_FIT_SCALE`) onto two pages, and the editorial layout, which is
 			// taller for the same rows, onto three.
-			const LONG = 54;
+			//
+			// MEASURED (macOS, 2026-10-12, one copy, the harness's offline fallback
+			// fonts), sheet height by row count. Grid: fits one page up to 37 rows,
+			// flows from 38, is on two pages through 57 (2052px) and on three by 60
+			// (2133px). Editorial: 2 pages from 31 rows, 3 pages from 48 (2146px; 45
+			// is 2028px) through 75. Both hold from 48 to 57 rows, so 52 sits in the
+			// middle, ~180px (about 5 rows) clear of the nearer page boundary. A
+			// runner whose fontconfig picks a different fallback face has to move a
+			// layout by that much to break it, and each case asserts its own page
+			// counts, so if one does, it fails naming the precondition rather than
+			// passing for the wrong reason.
+			const LONG = 52;
 
 			it("a grid agenda that flows to 2 pages gets no blank between copies", async () => {
 				const { stages, printedPages } = await realFitPageCopies(
@@ -751,6 +814,58 @@ describe.skipIf(!hasChrome)(
 				expect(editorial?.blanks).toBe(2);
 				// 3 + blank + 3 + blank + 3
 				expect(printedPages).toBe(11);
+			});
+
+			// A browser that draws no frames (a tab opened in the background, a tool
+			// with no visible pane) never delivers a ResizeObserver callback. On a
+			// fresh load of `?layout=grid&copies=3&duplex=1` the copies are measured
+			// once, at mount, before `FitPage` flows them, and the count stayed at
+			// the grid's nominal 1: a blank after every copy (#1181, as reported).
+			it("a flowing grid gets no blank even when no ResizeObserver callback ever arrives", async () => {
+				const { stages, printedPages } = await realFitPageCopies(
+					["grid"],
+					LONG,
+					3,
+					true,
+					{ resizeObserver: "inert" },
+				);
+				expect(stages[0]?.heights.map(sheetPages)).toEqual([2, 2, 2]);
+				expect(stages[0]?.blanks).toBe(0);
+				expect(printedPages).toBe(6);
+			});
+
+			// The `typeof ResizeObserver === "undefined"` branch.
+			it("a flowing grid gets no blank in a browser with no ResizeObserver", async () => {
+				const { stages, printedPages } = await realFitPageCopies(
+					["grid"],
+					LONG,
+					3,
+					true,
+					{ resizeObserver: "absent" },
+				);
+				expect(stages[0]?.heights.map(sheetPages)).toEqual([2, 2, 2]);
+				expect(stages[0]?.blanks).toBe(0);
+				expect(printedPages).toBe(6);
+			});
+
+			// The sheets the ResizeObserver hears must be the CURRENT ones. After a
+			// layout switch replaced every sheet, a sheet that then grows with no
+			// mutation under the stack (a logo or a late font loading) can only be
+			// heard by an observer re-armed on the new sheets.
+			it("a sheet that grows after a layout switch is still heard", async () => {
+				const { stages } = await realFitPageCopies(
+					["editorial", "grid"],
+					LONG,
+					3,
+					true,
+					{ growCss: "[data-fit-inner]{padding-bottom:1100px}" },
+				);
+				const [, grid, grown] = stages;
+				expect(grid?.heights.map(sheetPages)).toEqual([2, 2, 2]);
+				expect(grid?.blanks).toBe(0);
+				// 1100px more puts each copy on a third page, which is odd.
+				expect(grown?.heights.map(sheetPages)).toEqual([3, 3, 3]);
+				expect(grown?.blanks).toBe(2);
 			});
 
 			it("without duplex a one-page grid is never padded", async () => {

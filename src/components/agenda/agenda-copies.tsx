@@ -150,16 +150,27 @@ export function AgendaCopies({
 					: next,
 			);
 		};
-		// `FitPage` drops a sheet's fixed height after the fonts load, so a sheet
-		// can grow well after mount. A ResizeObserver per sheet hears that.
+		// Three ways a copy's page count changes after this first measurement
+		// (#1181), and each needs its own way of hearing it.
 		//
-		// The sheets it must hear are the CURRENT ones, not the ones present when
-		// this effect ran (#1181): switching layout between two layouts with the
-		// same page count (editorial <-> grid) swaps every `.agenda-page` for a
-		// new element without changing `count` or `nominal`, so an observer armed
-		// once was left watching detached nodes and the count stayed at the old
-		// layout's, placing blanks for pages the new layout does not print.
-		const resizes =
+		// `FitPage` FLOWING a sheet is an inline-style change after the fonts load.
+		// A MutationObserver hears that as a microtask, and reading `offsetHeight`
+		// lays the page out on the spot, so no frame is needed. That matters: a
+		// ResizeObserver is only delivered on a rendered frame, and a tab that is
+		// not being drawn (opened in the background, or driven through a hidden
+		// pane) never gets the callback. Measured on a fresh load of
+		// `?layout=grid&copies=3&duplex=1`: the sheets grew from 1056px to 1852px
+		// and the count stayed at the grid's nominal 1, so every copy kept a blank.
+		//
+		// A layout SWITCH between two layouts with the same page count
+		// (editorial <-> grid) replaces every `.agenda-page` with a new element
+		// without changing `count` or `nominal`: the mutation re-measures, and
+		// `sync` points the ResizeObserver at the new sheets, since an observer
+		// armed once was left watching detached nodes.
+		//
+		// A sheet that GROWS with no mutation under the stack (a logo or a late
+		// font) is heard by the ResizeObserver, where there is one.
+		const sheetResizeObserver =
 			typeof ResizeObserver === "undefined"
 				? null
 				: new ResizeObserver(measure);
@@ -168,25 +179,30 @@ export function AgendaCopies({
 			const current = new Set<Element>(sheetsNow());
 			for (const el of watched) {
 				if (current.has(el)) continue;
-				resizes?.unobserve(el);
+				sheetResizeObserver?.unobserve(el);
 				watched.delete(el);
 			}
 			for (const el of current) {
 				if (watched.has(el)) continue;
-				resizes?.observe(el);
+				sheetResizeObserver?.observe(el);
 				watched.add(el);
 			}
 		};
 		sync();
 		measure();
-		const swaps = new MutationObserver(() => {
+		const sheetMutationObserver = new MutationObserver(() => {
 			sync();
 			measure();
 		});
-		swaps.observe(root, { childList: true, subtree: true });
+		sheetMutationObserver.observe(root, {
+			childList: true,
+			subtree: true,
+			attributes: true,
+			attributeFilter: ["style"],
+		});
 		return () => {
-			resizes?.disconnect();
-			swaps.disconnect();
+			sheetResizeObserver?.disconnect();
+			sheetMutationObserver.disconnect();
 		};
 	}, [count, nominal]);
 
