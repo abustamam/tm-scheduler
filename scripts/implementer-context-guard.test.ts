@@ -53,6 +53,14 @@ const implementer = (
 const at = (n: number) => () => n;
 
 const ALLOWED_GIT: string[] = [
+	"git log -S foo",
+	"git commit -mSe",
+	"git diff -S foo",
+	"git log -h",
+	"git add -h",
+	"git add -u",
+	"git commit -i -m x",
+	"git commit --amend --no-edit --no-gpg-sign",
 	"git log a#b",
 	'git commit -m "a \"quoted\" b"',
 	'git commit -m "back\\slash"',
@@ -86,6 +94,28 @@ const ALLOWED_GIT: string[] = [
 ];
 
 const DENIED_GIT: string[] = [
+	"git commit --allow-empty -e -m x",
+	"git commit --allow-empty -ae -m x",
+	"git commit --edit -m x",
+	"git add --edit",
+	"git add -e",
+	"git add -p",
+	"git add -pu",
+	"git add -i",
+	"git add --patch",
+	"git add --interactive",
+	"git commit --interactive",
+	"git diff --ext-diff",
+	"git diff --textconv",
+	"git diff --ext",
+	"git commit --amend --no-edit --no-post-rewrite",
+	"git commit --allow-empty -S -m x",
+	"git commit -aS -m x",
+	"git commit -S -m x",
+	"git commit --gpg-sign -m x",
+	"git commit --gpg-sign=key -m x",
+	"git log --help",
+	"git commit --hel",
 	'git log -1 --format=format:changed "--out\\\nput=src/a.ts"',
 	"git log -1 --format=x --out\\\nput=src/a.ts",
 	"git log --out'put'\\\n=f",

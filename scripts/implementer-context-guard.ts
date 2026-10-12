@@ -14,6 +14,11 @@
  * runs a command or writes a file (judged on the words after quote removal), and `SubagentHandback`, the tool a subagent returns
  * its result with. Everything else is denied.
  *
+ * Threat model: this stops an implementer from carrying on past the cap; it is
+ * not a sandbox against a hostile agent. Options that need config already in
+ * place (core.editor, diff.external, GIT_* env) are refused because they are
+ * cheap to refuse, not because the hook claims completeness.
+ *
  * Fails open, like scripts/agent-model-guard.ts: malformed input, a missing or
  * empty transcript, no usage line, or a thrown error exits 0 with empty stdout
  * and one stderr line. Known limit: it counts the last assistant turn's usage,
@@ -61,7 +66,28 @@ const DANGEROUS_OPTS = [
 	"upload-pack",
 	"exec",
 	"no-verify",
+	// launch an editor, pager, man page, gpg or another program, or skip a hook
+	"edit",
+	"ext-diff",
+	"textconv",
+	"no-post-rewrite",
+	"gpg-sign",
+	"help",
+	"patch",
+	"interactive",
 ];
+
+/**
+ * Short flags refused per subcommand, with the flags that take an argument
+ * (scanning a combined word stops there, so `-mn` is a message `n`). `-S` is the
+ * gpg-sign flag for `commit` but a harmless pickaxe for `log` and `diff`; `-n`
+ * is `--no-verify` for `commit` but `--max-count` for `log`. `-h` only prints
+ * usage for every allowed subcommand, so it stays allowed.
+ */
+const SHORT_DENY: Record<string, { deny: string; takesArg: string }> = {
+	commit: { deny: "neS", takesArg: "mFCct" },
+	add: { deny: "epi", takesArg: "" },
+};
 
 export function denyReason(context: number, cap: number): string {
 	return `Context cap: ${Math.floor(context / 1000)}k >= ${Math.floor(cap / 1000)}k. Commit and push with git, then stop and return your handoff (Branch, Done with real test counts, Next, Gotchas) with the SubagentHandback tool. A fresh implementer continues from it.`;
@@ -146,24 +172,28 @@ export function isAllowedGit(command: string): boolean {
 	const sub = words[subIndex];
 	if (sub === undefined || !GIT_SUBCOMMANDS.has(sub)) return false;
 	if (words.some(isDangerousOption)) return false;
-	if (sub === "commit" && words.slice(subIndex + 1).some(hasShortN)) {
+	const short = SHORT_DENY[sub];
+	if (
+		short &&
+		words
+			.slice(subIndex + 1)
+			.some((w) => hasShortFlag(w, short.deny, short.takesArg))
+	) {
 		return false;
 	}
 	return true;
 }
 
 /**
- * `git commit -n` is `--no-verify`. True for a short-flag word (one `-`, not
- * `--`) that carries `n`, alone or combined (`-an`, `-nm`). Scanning stops at
- * the first flag that takes an argument (`-m -F -C -c -t`), so `-mn` (message
- * `n`) is not misread. `-n` is `--max-count` for `git log`, so this is applied
- * to `commit` only.
+ * True for a short-flag word (one `-`, not `--`) carrying a flag in `deny`,
+ * alone or combined (`-an`, `-nm`); scanning stops at the first flag in
+ * `takesArg`, whose argument is the rest of the word.
  */
-function hasShortN(word: string): boolean {
+function hasShortFlag(word: string, deny: string, takesArg: string): boolean {
 	if (!/^-[^-]/.test(word)) return false;
 	for (const c of word.slice(1)) {
-		if (c === "n") return true;
-		if ("mFCct".includes(c)) return false;
+		if (deny.includes(c)) return true;
+		if (takesArg.includes(c)) return false;
 	}
 	return false;
 }
