@@ -411,6 +411,233 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 		});
 	});
 
+	// #1157: an address typed on the public guest book has no session behind it,
+	// so it is this club's unconfirmed note on the guest row (`guests.book_email`),
+	// never `people.email` (a Person's sign-in key).
+	describe("an unconfirmed guest-book address stays on the guest row (#1157)", () => {
+		async function emailsOf(guestId: string) {
+			const [r] = await testDb
+				.select({ bookEmail: guests.bookEmail, personEmail: people.email })
+				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
+				.where(eq(guests.id, guestId));
+			if (!r) throw new Error(`no guest ${guestId}`);
+			return r;
+		}
+
+		// protects=a guest-book entry's address lands on guests.book_email and the Person's email stays NULL;
+		// fails_when=the capture create writes the typed address to people.email (a sign-in key nobody vouched for);
+		// no_claim=convert and sign-in; this is the write only, through the real captureGuestVisit on a test DB.
+		it("a new guest's address is held on the guest row, not on the Person (AC 1)", async () => {
+			const email = `book-${randomUUID()}@example.com`;
+			const res = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Casey Book",
+				email,
+			});
+			expect(res.created).toBe(true);
+			expect(await emailsOf(res.guestId)).toEqual({
+				bookEmail: email,
+				personEmail: null,
+			});
+		});
+
+		// protects=a second entry with a book_email address records a visit on the SAME card, none new;
+		// fails_when=the matcher ignores guests.book_email, so a returning guest becomes a second prospect;
+		// no_claim=precedence between two cards (next test); phone is not supplied, so only the email arm can match.
+		it("a returning address matches the card that holds it as a book note (AC 2, book arm)", async () => {
+			const email = `again-${randomUUID()}@example.com`;
+			const first = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Casey Book",
+				email,
+			});
+			const second = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Casey B.",
+				email: email.toUpperCase(),
+			});
+			expect(second.created).toBe(false);
+			expect(second.guestId).toBe(first.guestId);
+			const rows = await testDb
+				.select({ id: guests.id })
+				.from(guests)
+				.where(eq(guests.clubId, seed.clubId));
+			expect(rows).toHaveLength(1);
+		});
+
+		// protects=an address an officer vouched (people.email) still matches its card;
+		// fails_when=the email arm was narrowed to book_email only, orphaning every officer-typed address;
+		// no_claim=precedence; the vouched address is seeded with the test-side setGuestContact helper.
+		it("a returning address matches the card that holds it as a vouched address (AC 2, vouched arm)", async () => {
+			const email = `vouched-${randomUUID()}@example.com`;
+			const guestId = await seedGuest(seed.clubId, "Vera Vouched");
+			await setGuestContact(guestId, { email });
+			const res = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Vera V.",
+				email,
+			});
+			expect(res.created).toBe(false);
+			expect(res.guestId).toBe(guestId);
+		});
+
+		// protects=when an OLDER card's book_email and a NEWER card's people.email both equal the address, the visit lands on the vouched card;
+		// fails_when=the matcher takes the oldest card of either kind, so an unconfirmed note outranks a vouched address;
+		// no_claim=the order within one kind (oldest createdAt then id), which the existing dedup tests cover.
+		it("a vouched card outranks an older card that only holds the address as a note (AC 2, precedence)", async () => {
+			const email = `both-${randomUUID()}@example.com`;
+			const noteCard = await seedGuest(seed.clubId, "Note Holder");
+			await testDb
+				.update(guests)
+				.set({
+					bookEmail: email,
+					createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+				})
+				.where(eq(guests.id, noteCard));
+			const vouchedCard = await seedGuest(seed.clubId, "Vouched Holder");
+			await setGuestContact(vouchedCard, { email });
+
+			const res = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Someone",
+				email,
+			});
+			expect(res.created).toBe(false);
+			expect(res.guestId).toBe(vouchedCard);
+		});
+
+		// protects=a phone+name match onto a card with no address records the typed address as book_email only;
+		// fails_when=fillBlankGuestContact fills people.email on the matched card;
+		// no_claim=the email-arm match; this card is found by phone and name, and has no email of either kind.
+		it("a phone+name match fills a blank book_email and leaves people.email NULL (AC 3, fill)", async () => {
+			const phone = uniquePhone();
+			const guestId = await seedGuest(seed.clubId, "Pat Phone");
+			await setGuestContact(guestId, { phone: toStoredPhone(phone, "1") });
+			const email = `fill-${randomUUID()}@example.com`;
+
+			const res = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Pat Phone",
+				phone,
+				email,
+			});
+			expect(res.created).toBe(false);
+			expect(res.guestId).toBe(guestId);
+			expect(await emailsOf(guestId)).toEqual({
+				bookEmail: email,
+				personEmail: null,
+			});
+		});
+
+		// protects=a second, different address never replaces the first book_email (fill-only);
+		// fails_when=the fill UPDATE loses its IS NULL predicate and the latest anonymous typist wins;
+		// no_claim=which of two addresses is right; only that the first one is kept.
+		it("never overwrites an existing book_email (AC 3, kept)", async () => {
+			const phone = uniquePhone();
+			const first = `first-${randomUUID()}@example.com`;
+			const guestId = await seedGuest(seed.clubId, "Pat Phone");
+			await setGuestContact(guestId, { phone: toStoredPhone(phone, "1") });
+			await testDb
+				.update(guests)
+				.set({ bookEmail: first })
+				.where(eq(guests.id, guestId));
+
+			await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Pat Phone",
+				phone,
+				email: `second-${randomUUID()}@example.com`,
+			});
+			expect(await emailsOf(guestId)).toEqual({
+				bookEmail: first,
+				personEmail: null,
+			});
+		});
+
+		// protects=a card whose Person already has a vouched address takes no book_email from the book;
+		// fails_when=the book writes a note beside (or over) an address an officer vouched;
+		// no_claim=that the vouched address is correct.
+		it("writes nothing when the Person already has a vouched address (AC 3, vouched)", async () => {
+			const phone = uniquePhone();
+			const vouched = `officer-${randomUUID()}@example.com`;
+			const guestId = await seedGuest(seed.clubId, "Pat Phone");
+			await setGuestContact(guestId, {
+				phone: toStoredPhone(phone, "1"),
+				email: vouched,
+			});
+
+			await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Pat Phone",
+				phone,
+				email: `stranger-${randomUUID()}@example.com`,
+			});
+			expect(await emailsOf(guestId)).toEqual({
+				bookEmail: null,
+				personEmail: vouched,
+			});
+		});
+	});
+
+	describe("an officer's Edit guest save and the book note (#1157)", () => {
+		async function bookEmailOf(guestId: string) {
+			const [r] = await testDb
+				.select({ bookEmail: guests.bookEmail, personEmail: people.email })
+				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
+				.where(eq(guests.id, guestId));
+			return r!;
+		}
+
+		// protects=an officer saving an address clears the note and writes people.email;
+		// fails_when=the save leaves book_email behind, so the stale unconfirmed copy keeps matching and prompting;
+		// no_claim=that the saved address belongs to the guest; the officer vouches it.
+		it("saving a non-null email writes people.email and clears book_email (AC 9)", async () => {
+			const guestId = await seedGuest(seed.clubId, "Edit Me");
+			await testDb
+				.update(guests)
+				.set({ bookEmail: "typed@example.com" })
+				.where(eq(guests.id, guestId));
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name: "Edit Me",
+				email: "vouched@example.com",
+			});
+			expect(await bookEmailOf(guestId)).toEqual({
+				bookEmail: null,
+				personEmail: "vouched@example.com",
+			});
+		});
+
+		// protects=a save that leaves the email omitted or blank keeps the note;
+		// fails_when=every Edit guest save (a name fix) drops the unconfirmed address;
+		// no_claim=email-field clearing of a vouched address; no vouched address exists here.
+		it("a save that leaves the email blank keeps book_email (AC 9)", async () => {
+			const guestId = await seedGuest(seed.clubId, "Edit Me");
+			await testDb
+				.update(guests)
+				.set({ bookEmail: "typed@example.com" })
+				.where(eq(guests.id, guestId));
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name: "Edit Me Too",
+			});
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name: "Edit Me Too",
+				email: "   ",
+			});
+			expect(await bookEmailOf(guestId)).toEqual({
+				bookEmail: "typed@example.com",
+				personEmail: null,
+			});
+		});
+	});
+
 	/**
 	 * #858: the archive gate is read UNDER the club lock, not only before the
 	 * transaction.
