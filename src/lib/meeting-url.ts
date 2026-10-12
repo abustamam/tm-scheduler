@@ -88,9 +88,12 @@ export function nextCalendarDate(date: string): string {
  * Local 00:00 is normally it. Where DST skips local midnight (America/Santiago
  * 2026-09-06, America/Havana 2026-03-08: 00:00 jumps to 01:00) 00:00 names no
  * instant, and `zonedWallTimeToUtc` resolves the gap BACKWARD, to 23:00 on the
- * previous date. Using that as the day's start makes two days' windows overlap
- * by an hour. So when the resolved instant is not on `date`, walk forward a
- * minute at a time (transitions land on whole minutes) to the first one that is.
+ * previous date. Taking that as the day's start makes the windows still tile
+ * (the previous date's `end` is the same call), but the previous date's
+ * 23:00-24:00 hour is counted in this date's window, so a meeting on the 5th
+ * at 23:30 resolves to the 6th. So when the resolved instant is not on `date`,
+ * walk forward a minute at a time (transitions land on whole minutes) to the
+ * first one that is.
  */
 function localDayStart(date: string, timeZone: string): Date {
 	const midnight = zonedWallTimeToUtc(`${date}T00:00`, timeZone);
