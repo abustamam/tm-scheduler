@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	buildMeetingNavItems,
+	collectMeetingsAfter,
 	defaultMeetingNavLinkProps,
 	deriveMeetingNavItems,
 } from "./meeting-nav";
@@ -216,5 +219,113 @@ describe("defaultMeetingNavLinkProps", () => {
 			to: "/club/$clubId/meeting/$meetingId",
 			params: { clubId: "koala-tm", meetingId: "2026-07-09" },
 		});
+	});
+});
+
+describe("collectMeetingsAfter (#1158)", () => {
+	const NOW = new Date("2026-10-12T12:00:00Z");
+
+	/** An archive page source over `rows`, newest first, like `listPastMeetings`. */
+	function archive(rows: { id: string; scheduledAt: string }[], size: number) {
+		const desc = [...rows].sort((a, b) =>
+			b.scheduledAt.localeCompare(a.scheduledAt),
+		);
+		const calls: number[] = [];
+		const fetchPage = async (offset: number) => {
+			calls.push(offset);
+			const slice = desc.slice(offset, offset + size);
+			return { meetings: slice, hasMore: offset + size < desc.length };
+		};
+		return { fetchPage, calls };
+	}
+
+	const A = { id: "A", scheduledAt: "2026-09-24T23:00:00Z" };
+	const B = { id: "B", scheduledAt: "2026-10-08T23:00:00Z" };
+	const C = { id: "C", scheduledAt: "2026-10-22T23:00:00Z" };
+
+	it("fills the gap so a strip viewed from the completed meeting reaches the unfinished one and the upcoming one", async () => {
+		// A completed, B past-but-unfinished, C upcoming. Past archive holds A and B.
+		const { fetchPage } = archive([A, B], 100);
+		const gap = await collectMeetingsAfter(A.scheduledAt, NOW, fetchPage, 100);
+
+		const items = deriveMeetingNavItems(
+			{ id: "A", scheduledAt: A.scheduledAt },
+			[],
+			[{ ...C, openSlots: 2 }],
+			TZ,
+			gap.map((m) => ({ ...m, openSlots: 0 })),
+		);
+		expect(items.map((i) => i.meetingId)).toEqual(["A", "B", "C"]);
+	});
+
+	it("shows all three from B and from C as well, without duplicates", async () => {
+		const { fetchPage } = archive([A, B], 100);
+		for (const [viewed, before] of [
+			[B, [A]],
+			[C, [A, B]],
+		] as const) {
+			const gap = await collectMeetingsAfter(
+				viewed.scheduledAt,
+				NOW,
+				fetchPage,
+				100,
+			);
+			const items = deriveMeetingNavItems(
+				{ id: viewed.id, scheduledAt: viewed.scheduledAt },
+				[],
+				[{ ...C, openSlots: 0 }],
+				TZ,
+				// The backward window plus the gap, overlapping on purpose.
+				[...before, ...gap, ...before].map((m) => ({ ...m, openSlots: 0 })),
+			);
+			expect(items.map((i) => i.meetingId)).toEqual(["A", "B", "C"]);
+		}
+	});
+
+	it("fetches nothing when the viewed meeting is not in the past", async () => {
+		const { fetchPage, calls } = archive([A, B], 100);
+		const gap = await collectMeetingsAfter(C.scheduledAt, NOW, fetchPage, 100);
+		expect(gap).toEqual([]);
+		expect(calls).toEqual([]);
+	});
+
+	it("keeps paging until it reaches the viewed meeting, since the archive is newest first", async () => {
+		const rows = Array.from({ length: 5 }, (_, i) => ({
+			id: `m${i}`,
+			scheduledAt: `2026-0${i + 1}-07T19:00:00Z`,
+		}));
+		const { fetchPage, calls } = archive(rows, 2);
+		const gap = await collectMeetingsAfter(
+			rows[1]?.scheduledAt ?? "",
+			NOW,
+			fetchPage,
+			2,
+		);
+		// m4, m3, m2 and the viewed m1 itself (the strip dedupes it).
+		expect(gap.map((m) => m.id)).toEqual(["m4", "m3", "m2", "m1"]);
+		expect(calls).toEqual([0, 2]);
+	});
+
+	it("stops paging when the archive runs out", async () => {
+		const { fetchPage, calls } = archive([A, B], 1);
+		const gap = await collectMeetingsAfter(
+			"2020-01-01T00:00:00Z",
+			NOW,
+			fetchPage,
+			1,
+		);
+		expect(gap.map((m) => m.id)).toEqual(["B", "A"]);
+		expect(calls).toEqual([0, 1]);
+	});
+});
+
+describe("meeting page loader wiring (#1158)", () => {
+	it("feeds the gap into the strip's past window", () => {
+		const src = readFileSync(
+			resolve(__dirname, "../routes/club.$clubId.meeting.$meetingId.tsx"),
+			"utf8",
+		);
+		expect(src).toMatch(/collectMeetingsAfter\(/);
+		expect(src).toMatch(/\[\.\.\.\(past\?\.meetings \?\? \[\]\), \.\.\.gap\]/);
 	});
 });

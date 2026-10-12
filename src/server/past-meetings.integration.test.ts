@@ -75,6 +75,32 @@ describe.skipIf(!hasTestDb)("loadPastMeetings (#375)", () => {
 		expect(page.hasMore).toBe(false);
 	});
 
+	it("lists a past-but-unfinished meeting after a completed one, so the nav strip can bridge to the upcoming list (#1158)", async () => {
+		const day = 24 * 60 * 60 * 1000;
+		const a = await addMeeting(
+			seed.clubId,
+			new Date(Date.now() - 30 * day).toISOString(),
+			{ status: "completed" },
+		);
+		// Past, never closed out: in neither `before = A` nor `scheduledAt >= now`.
+		const b = await addMeeting(
+			seed.clubId,
+			new Date(Date.now() - 10 * day).toISOString(),
+			{ status: "scheduled" },
+		);
+
+		const page = await loadPastMeetings({ clubId: seed.clubId });
+
+		// Newest first, and the unfinished one precedes the completed one; the
+		// seeded upcoming fixture meeting stays on the other side of now.
+		expect(page.meetings.map((m) => m.id)).toEqual([b, a]);
+		expect(page.meetings.map((m) => m.status)).toEqual([
+			"scheduled",
+			"completed",
+		]);
+		expect(page.meetings.map((m) => m.id)).not.toContain(seed.meetingId);
+	});
+
 	it("excludes cancelled meetings", async () => {
 		const held = await addMeeting(seed.clubId, "2026-01-07T19:00:00Z");
 		const scrapped = await addMeeting(seed.clubId, "2026-01-14T19:00:00Z", {

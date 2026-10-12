@@ -107,7 +107,7 @@ import {
 	meetingPhase,
 	resolveMeetingViewer,
 } from "#/lib/meeting-lifecycle";
-import { deriveMeetingNavItems } from "#/lib/meeting-nav";
+import { collectMeetingsAfter, deriveMeetingNavItems } from "#/lib/meeting-nav";
 import {
 	canSeeMeetingReadiness,
 	meetingReadiness,
@@ -176,6 +176,9 @@ import { getVoteTally } from "#/server/voting";
 
 // Anonymous (non-shell) visitors never load minutes — this hidden default keeps
 // the loader's return shape uniform without a server call or any PII fetch.
+/** Rows per archive page when the nav strip closes the past-but-after gap (#1158). */
+const NAV_GAP_PAGE_SIZE = 100;
+
 const EMPTY_MINUTES = {
 	visible: false,
 	canEdit: false,
@@ -230,13 +233,31 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 			},
 		}).catch(() => null);
 
+		// The gap between the viewed meeting and the upcoming list (#1158): past
+		// (`< now`) yet AFTER the viewed one, so neither the backward window nor
+		// `listUpcomingMeetings` has it. Filled from the same archive loader rather
+		// than by moving the past/upcoming split at now (#393). Non-fatal.
+		const gap = await collectMeetingsAfter(
+			data.meeting.scheduledAt,
+			new Date(),
+			(offset) =>
+				listPastMeetings({
+					data: {
+						clubId: context.clubUuid,
+						limit: NAV_GAP_PAGE_SIZE,
+						offset,
+					},
+				}),
+			NAV_GAP_PAGE_SIZE,
+		).catch(() => []);
+
 		const upcoming = await upcomingPromise;
 		const navItems = deriveMeetingNavItems(
 			data.meeting,
 			data.slots,
 			upcoming,
 			data.timezone,
-			past?.meetings ?? [],
+			[...(past?.meetings ?? []), ...gap],
 		);
 
 		// Minutes (ADR-0014 / #152) — ONLY for a signed-in member (shell); an anon
