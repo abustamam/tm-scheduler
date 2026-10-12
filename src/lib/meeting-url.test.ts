@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { utcToZonedWallTime } from "./datetime";
 import {
 	localDateKey,
 	localDayRange,
@@ -114,6 +115,55 @@ describe("localDayRange", () => {
 		// Midnight CDT (UTC-5) on 07-21 → 05:00Z; next midnight → 05:00Z on 07-22.
 		expect(start.toISOString()).toBe("2026-07-21T05:00:00.000Z");
 		expect(end.toISOString()).toBe("2026-07-22T05:00:00.000Z");
+	});
+
+	// #1145: where DST skips local midnight the day starts at the first instant
+	// that exists (01:00 local), not at 23:00 the night before.
+	describe("when DST skips local midnight (#1145)", () => {
+		it.each([
+			// [zone, previous date, changeover date, instant of 01:00 local on it]
+			[
+				"America/Santiago",
+				"2026-09-05",
+				"2026-09-06",
+				"2026-09-06T04:00:00.000Z",
+			],
+			[
+				"America/Havana",
+				"2026-03-07",
+				"2026-03-08",
+				"2026-03-08T05:00:00.000Z",
+			],
+		])("%s %s ends and %s starts at 01:00 local", (tz, prevDate, date, firstInstant) => {
+			const { start } = localDayRange(date, tz);
+			expect(start.toISOString()).toBe(firstInstant);
+			expect(utcToZonedWallTime(start, tz)).toBe(`${date}T01:00`);
+			expect(localDayRange(prevDate, tz).end.toISOString()).toBe(firstInstant);
+		});
+
+		it("leaves a zone whose DST change is at another hour alone", () => {
+			const { start } = localDayRange("2026-03-08", CHICAGO);
+			expect(utcToZonedWallTime(start, CHICAGO)).toBe("2026-03-08T00:00");
+		});
+
+		// `end` of day N and `start` of day N+1 are one computation, so tiling
+		// alone cannot fail; the window must also START ON its own local date.
+		it.each([
+			["America/Santiago", "2026-09-02"],
+			["America/Havana", "2026-03-04"],
+			[CHICAGO, "2026-03-04"],
+		])("%s: every day of the changeover week starts on its own date and tiles (from %s)", (tz, from) => {
+			let date = from;
+			for (let i = 0; i < 8; i++) {
+				const next = nextCalendarDate(date);
+				const a = localDayRange(date, tz);
+				const b = localDayRange(next, tz);
+				expect(localDateKey(a.start, tz)).toBe(date);
+				expect(localDateKey(new Date(a.end.getTime() - 1), tz)).toBe(date);
+				expect(a.end.getTime()).toBe(b.start.getTime());
+				date = next;
+			}
+		});
 	});
 });
 
