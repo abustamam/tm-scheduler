@@ -1,5 +1,5 @@
-import { Link, useRouterState } from "@tanstack/react-router";
-import { ChevronRight, LogOut, Menu, Network } from "lucide-react";
+import { Link, useRouter, useRouterState } from "@tanstack/react-router";
+import { ChevronRight, Eye, LogOut, Menu, Network } from "lucide-react";
 import {
 	type ComponentType,
 	type ReactNode,
@@ -8,6 +8,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import { BrandMark } from "#/components/brand-mark";
 import { ClubSwitcher } from "#/components/club/club-switcher";
 import {
@@ -17,6 +18,7 @@ import {
 import { ImpersonationBanner } from "#/components/club/impersonation-banner";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { ThemeToggle } from "#/components/club/theme-toggle";
+import { ViewAsBanner } from "#/components/club/view-as-banner";
 import { Sheet, SheetContent, SheetTitle } from "#/components/ui/sheet";
 import { Toaster } from "#/components/ui/sonner";
 import {
@@ -44,6 +46,8 @@ import {
 	officerRank,
 } from "#/lib/officers";
 import { shellStickyVars } from "#/lib/shell-sticky-offset";
+import type { ViewAs } from "#/lib/view-as";
+import { setViewAs } from "#/server/auth-context";
 
 /** An area in the nav: `label` is the area as people say it ("C3"). */
 export interface AreaNavEntry {
@@ -78,6 +82,9 @@ export interface AppShellProps {
 		expiresAt: string | Date;
 		mode: "read_only" | "read_write";
 	} | null;
+	/** "Preview as member" is on (#1113). `isOfficer` and the role label already
+	 *  describe the downgraded context; this is only what the banner needs. */
+	viewAs: ViewAs | null;
 	searchGrants: {
 		hasOffice: boolean;
 		isOfficer: boolean;
@@ -111,6 +118,12 @@ export interface ShellContext {
 		expiresAt: string | Date;
 		mode: "read_only" | "read_write";
 	} | null;
+	/** `getAuthContext().viewAs` (#1113). A mount site that forgot it would drop the
+	 *  banner AND the button (an admin in preview is no longer `isOfficer`),
+	 *  leaving no way out of the preview. Typed optional only so the older fixtures
+	 *  that build a context by hand keep compiling;
+	 *  `view-as-wiring.guard.test.ts` is what pins that every mount passes it. */
+	viewAs?: ViewAs | null;
 	/** The `getAuthContext()` result's current Area Director terms (#1119). */
 	areas?: readonly AreaNavEntry[];
 }
@@ -170,6 +183,7 @@ export function shellPropsFromContext(ctx: ShellContext): AppShellDisplayProps {
 		displayName,
 		initials,
 		impersonating,
+		viewAs: ctx.viewAs ?? null,
 		searchGrants: { hasOffice, isOfficer, isSuperadmin },
 	};
 }
@@ -214,12 +228,23 @@ export function AppShell({
 	displayName,
 	initials,
 	impersonating,
+	viewAs,
 	searchGrants,
 	onSignOut,
 	onExitImpersonation,
 	children,
 }: AppShellProps) {
 	const pathname = useRouterState({ select: (s) => s.location.pathname });
+	// Sign out clears the preview first (#1113), so the next person on this browser
+	// does not inherit it. Best effort: a failure here must never block sign-out.
+	async function handleSignOut() {
+		try {
+			await setViewAs({ data: { viewAs: null } });
+		} catch {
+			// Sign out regardless.
+		}
+		onSignOut();
+	}
 	// Mobile nav drawer (shown below `lg`; the sidebar is fixed at `lg+`).
 	const [navOpen, setNavOpen] = useState(false);
 	// Lets Escape clear open drawer-search results before closing the drawer.
@@ -239,7 +264,8 @@ export function AppShell({
 			displayName={displayName}
 			roleLabel={roleLabel}
 			initials={initials}
-			onSignOut={onSignOut}
+			onSignOut={handleSignOut}
+			canPreviewAsMember={isOfficer}
 			onNavigate={onNavigate}
 			showThemeToggle={showThemeToggle}
 			searchSlot={searchSlot}
@@ -255,7 +281,7 @@ export function AppShell({
 				// Where the sticky chrome ends, stated once (`shell-sticky-offset.ts`):
 				// the headers pin under the banner, and a pinned column (the meeting
 				// page's attendance rail) pins under both, impersonating or not.
-				style={shellStickyVars(impersonating != null)}
+				style={shellStickyVars(impersonating != null || viewAs != null)}
 			>
 				{/* Desktop sidebar (lg+). A fixed-height flex column and NOT itself a
 			    scroller — `SidebarInner` puts the scroller on its middle band so the
@@ -307,7 +333,17 @@ export function AppShell({
 				</Sheet>
 
 				<main className="flex min-w-0 flex-1 flex-col">
-					{impersonating ? (
+					{/* ONE banner slot (#1113): a preview over a superadmin session
+					    is the impersonation banner with a suffix and an "Exit
+					    preview", never two bars, so the sticky offset stays one
+					    banner high. */}
+					{viewAs != null ? (
+						<PreviewBanner
+							impersonating={impersonating}
+							clubName={clubName}
+							onExitImpersonation={onExitImpersonation}
+						/>
+					) : impersonating ? (
 						<ImpersonationBanner
 							clubName={clubName}
 							expiresAt={impersonating.expiresAt}
@@ -376,6 +412,63 @@ export function AppShell({
 	);
 }
 
+/** Ends the preview and re-runs the loaders, so the admin UI is back without a
+ *  manual reload (#1113). `useRouter` lives here, not in `AppShell`, so the shell
+ *  only needs a router once a preview is on or on offer. */
+function usePreviewToggle() {
+	const router = useRouter();
+	return async (next: ViewAs | null) => {
+		try {
+			await setViewAs({ data: { viewAs: next } });
+			await router.invalidate();
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't change the preview.",
+			);
+		}
+	};
+}
+
+function PreviewBanner({
+	impersonating,
+	clubName,
+	onExitImpersonation,
+}: {
+	impersonating: AppShellProps["impersonating"];
+	clubName: string;
+	onExitImpersonation: () => void;
+}) {
+	const toggle = usePreviewToggle();
+	const exitPreview = () => void toggle(null);
+	if (impersonating) {
+		return (
+			<ImpersonationBanner
+				clubName={clubName}
+				expiresAt={impersonating.expiresAt}
+				mode={impersonating.mode}
+				onExit={onExitImpersonation}
+				onExitPreview={exitPreview}
+			/>
+		);
+	}
+	return <ViewAsBanner onExit={exitPreview} />;
+}
+
+function PreviewAsMemberButton() {
+	const toggle = usePreviewToggle();
+	return (
+		<button
+			type="button"
+			onClick={() => void toggle("member")}
+			title="Preview as member"
+			className="flex size-7 items-center justify-center rounded-md text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--surface-strong)] hover:text-[var(--sea-ink)]"
+		>
+			<Eye className="size-4" aria-hidden />
+			<span className="sr-only">Preview as member</span>
+		</button>
+	);
+}
+
 function SidebarInner({
 	clubName,
 	clubNumber,
@@ -386,6 +479,7 @@ function SidebarInner({
 	roleLabel,
 	initials,
 	onSignOut,
+	canPreviewAsMember,
 	onNavigate,
 	showThemeToggle,
 	searchSlot,
@@ -399,6 +493,8 @@ function SidebarInner({
 	roleLabel: string;
 	initials: string;
 	onSignOut: () => void;
+	/** An effective admin who is not already previewing (#1113). */
+	canPreviewAsMember: boolean;
 	onNavigate?: () => void;
 	showThemeToggle?: boolean;
 	/** Global search rendered below the brand (mobile drawer only, #221). */
@@ -452,6 +548,7 @@ function SidebarInner({
 				</div>
 				<div className="ml-auto flex shrink-0 items-center gap-1">
 					{showThemeToggle ? <ThemeToggle /> : null}
+					{canPreviewAsMember ? <PreviewAsMemberButton /> : null}
 					<button
 						type="button"
 						onClick={onSignOut}

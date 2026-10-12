@@ -1,11 +1,16 @@
 import { createServerFn } from "@tanstack/react-start";
-import { getCookie, setCookie } from "@tanstack/react-start/server";
+import {
+	deleteCookie,
+	getCookie,
+	setCookie,
+} from "@tanstack/react-start/server";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import type { AreaNavEntry } from "#/components/app-shell";
 import { db } from "#/db";
 import { clubs, user as userTable } from "#/db/schema";
 import { ACTIVE_CLUB_COOKIE, resolveActiveClubId } from "#/lib/active-club";
+import { applyViewAs, parseViewAs, VIEW_AS_COOKIE } from "#/lib/view-as";
 import { loadCurrentAreasForUser } from "./area-terms-logic";
 import {
 	countArchivedClubMemberships,
@@ -31,6 +36,15 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 	async () => {
 		const user = await getSessionUser();
 		if (!user) {
+			// A lapsed session cannot call `setViewAs`, so the preview cookie it left
+			// behind is cleared here (#1113): the next person on this browser must not
+			// inherit it. Only when present, so an ordinary anonymous load sets nothing.
+			try {
+				if (getCookie(VIEW_AS_COOKIE))
+					deleteCookie(VIEW_AS_COOKIE, { path: "/" });
+			} catch {
+				// Off a request context (tests): nothing to clear.
+			}
 			return {
 				user: null,
 				clubs: [] as const,
@@ -39,6 +53,7 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 				officerPositions: [] as const,
 				isSuperadmin: false,
 				impersonating: null,
+				viewAs: null,
 				archivedClubCount: 0,
 				areas: [] as AreaNavEntry[],
 			};
@@ -188,22 +203,36 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 
 		const areas = await areasRead;
 
-		return {
-			// `personName ?? user.name` — the roster name wins, and the Better-Auth
-			// column is the last resort rather than the first source (#707). Never
-			// reorder these: `user.name` is `""` in production, and `""` is a
-			// perfectly good non-null value, so `user.name ?? personName` would
-			// silently reinstate the bug for everyone while both suites stay green.
-			user: { id: user.id, name: personName ?? user.name, email: user.email },
-			clubs: myClubs,
-			currentMemberId,
-			activeClubId,
-			officerPositions,
-			isSuperadmin,
-			impersonating,
-			archivedClubCount,
-			areas,
-		};
+		// "Preview as member" (#1113): a cookie that DROPS the viewer's club authority
+		// from this context (`applyViewAs`), after the impersonation injection above so a
+		// superadmin's session club downgrades too. Ignored unless there is authority
+		// to drop. getCookie can throw off a request context (tests) — tolerate that.
+		let viewAsCookie: string | undefined;
+		try {
+			viewAsCookie = getCookie(VIEW_AS_COOKIE);
+		} catch {
+			viewAsCookie = undefined;
+		}
+
+		return applyViewAs(
+			{
+				// `personName ?? user.name` — the roster name wins, and the Better-Auth
+				// column is the last resort rather than the first source (#707). Never
+				// reorder these: `user.name` is `""` in production, and `""` is a
+				// perfectly good non-null value, so `user.name ?? personName` would
+				// silently reinstate the bug for everyone while both suites stay green.
+				user: { id: user.id, name: personName ?? user.name, email: user.email },
+				clubs: myClubs,
+				currentMemberId,
+				activeClubId,
+				officerPositions,
+				isSuperadmin,
+				impersonating,
+				archivedClubCount,
+				areas,
+			},
+			parseViewAs(viewAsCookie),
+		);
 	},
 );
 
@@ -258,5 +287,32 @@ export const setActiveClub = createServerFn({ method: "POST" })
 			sameSite: "lax",
 			maxAge: 60 * 60 * 24 * 365,
 		});
+		return { ok: true as const };
+	});
+
+/**
+ * Turn "Preview as member" (#1113) on or off. A cookie with no `maxAge`, so it
+ * lasts until the browser closes and survives reloads and new tabs. Same session
+ * gate as `setActiveClub` for turning it ON; turning it OFF needs none. It deliberately does NOT check authority: `applyViewAs`
+ * ignores the cookie for anyone with nothing to drop, and the only server
+ * readers of it can only REMOVE data (`view-as-allowlist.guard.test.ts`).
+ */
+export const setViewAs = createServerFn({ method: "POST" })
+	.validator((input: unknown) =>
+		z.object({ viewAs: z.enum(["member"]).nullable() }).parse(input),
+	)
+	.handler(async ({ data }) => {
+		if (data.viewAs) {
+			// Only TURNING ON needs a session. Clearing must work without one, so a
+			// lapsed session can still be signed out of (#1113).
+			await requireUser();
+			setCookie(VIEW_AS_COOKIE, data.viewAs, {
+				path: "/",
+				httpOnly: true,
+				sameSite: "lax",
+			});
+		} else {
+			deleteCookie(VIEW_AS_COOKIE, { path: "/" });
+		}
 		return { ok: true as const };
 	});

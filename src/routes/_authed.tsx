@@ -31,6 +31,7 @@ export const Route = createFileRoute("/_authed")({
 			officerPositions: ctx.officerPositions,
 			isSuperadmin: ctx.isSuperadmin,
 			impersonating: ctx.impersonating,
+			viewAs: ctx.viewAs,
 			archivedClubCount: ctx.archivedClubCount,
 			areas: ctx.areas,
 		};
@@ -47,6 +48,7 @@ function WorkspaceLayout() {
 		officerPositions,
 		isSuperadmin,
 		impersonating,
+		viewAs,
 		archivedClubCount,
 		areas,
 	} = Route.useRouteContext();
@@ -119,6 +121,7 @@ function WorkspaceLayout() {
 		officerPositions,
 		isSuperadmin,
 		impersonating,
+		viewAs,
 		areas,
 	});
 

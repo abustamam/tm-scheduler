@@ -580,7 +580,7 @@ describe.skipIf(!hasChrome)(
 			// The fixture sets the properties by calling `shellStickyVars`
 			// itself, so this is the half it cannot see: that the shell does too.
 			expect(readSource(SHELL)).toContain(
-				"style={shellStickyVars(impersonating != null)}",
+				"style={shellStickyVars(impersonating != null || viewAs != null)}",
 			);
 			expect(cls.header).toContain(`top-(${SHELL_BANNER_OFFSET_VAR})`);
 			expect(railTopClass()).toContain(`var(${SHELL_PINNED_TOP_VAR},6rem)`);

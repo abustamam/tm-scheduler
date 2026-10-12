@@ -1,8 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getCookie } from "@tanstack/react-start/server";
 import { z } from "zod";
 import { ATTENDANCE_MODES } from "#/lib/attendance-mode";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { MEETING_UPDATE_FIELDS } from "#/lib/meeting-limits";
+import { parseViewAs, VIEW_AS_COOKIE } from "#/lib/view-as";
 import { isReadableClub } from "./club-readable-logic";
 import {
 	getMembership,
@@ -27,6 +29,7 @@ import {
 	setAward,
 	setMemberPresence,
 } from "./minutes-logic";
+import { minutesAccess } from "./view-as-logic";
 
 const uuid = z.string().uuid();
 
@@ -97,9 +100,23 @@ export const getMinutes = createServerFn({ method: "GET" })
 			(await getActiveImpersonation(sessionUser.id, clubId))?.mode ===
 				"read_write";
 		if (!membership && !impersonatingRW) return empty;
-		const canEdit = membership?.clubRole === "admin" || impersonatingRW;
+		// "Preview as member" (#1113) drops `canEdit`, and with it the admin's look at
+		// the minutes of a meeting that is not completed. Read for ANY caller: it can
+		// only remove access, which a plain member never had.
+		// getCookie can throw off a request context (tests): no cookie, no preview.
+		let asMember = false;
+		try {
+			asMember = parseViewAs(getCookie(VIEW_AS_COOKIE)) === "member";
+		} catch {
+			asMember = false;
+		}
 		const status = await getMeetingStatus(meetingId);
-		const visible = canEdit || status === "completed";
+		const { canEdit, visible } = minutesAccess({
+			isAdmin: membership?.clubRole === "admin",
+			impersonatingReadWrite: impersonatingRW,
+			asMember,
+			status,
+		});
 		if (!visible) return empty;
 		const [data, program] = await Promise.all([
 			loadMinutes(meetingId),

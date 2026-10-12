@@ -276,6 +276,15 @@ const COVERED: Record<string, { who: Who; url: (f: Fixture) => string }> = {
 	},
 };
 
+/**
+ * The pages swept with "Preview as member" on (#1113): a nav page and the meeting
+ * page, the two kinds that read the downgraded context.
+ */
+const PREVIEW_PATHS = (f: Fixture) => [
+	"/roster",
+	`/club/${f.slug}/meeting/${f.pastMeetingId}`,
+];
+
 /** Full paths deliberately not swept, each with the reason. */
 const EXCLUDED: Record<string, string> = {
 	"/superadmin":
@@ -651,6 +660,9 @@ describe("route hydration gate (#1000)", () => {
 		let clientRuntime: { timeZone: string; locale: string; now: number };
 		let sessionCreatedAt: Date | null = null;
 		const results = new Map<string, RouteResult>();
+		// The admin's pages again with "Preview as member" on (#1113), kept apart
+		// from `results` so the one-result-per-COVERED-route count above holds.
+		const previewResults: RouteResult[] = [];
 
 		beforeAll(async () => {
 			fixture = await seedFixture(instant);
@@ -700,6 +712,20 @@ describe("route hydration gate (#1000)", () => {
 					for (const [fullPath, route] of mine) {
 						if (route.who !== "admin") continue;
 						results.set(fullPath, await b.sweep(base, route.url(fixture)));
+					}
+					// One browser, signed in as the stored admin, with the preview
+					// cookie set the way the server would (path `/`). The server reads
+					// it by name, so a script-set copy exercises the same SSR path.
+					if (index === 0) {
+						await b.evaluate(
+							'document.cookie = "view_as=member; path=/"; document.cookie',
+						);
+						for (const path of PREVIEW_PATHS(fixture)) {
+							previewResults.push(await b.sweep(base, path));
+						}
+						await b.evaluate(
+							'document.cookie = "view_as=; path=/; max-age=0"; document.cookie',
+						);
 					}
 				};
 				await Promise.all(
@@ -807,6 +833,24 @@ describe("route hydration gate (#1000)", () => {
 			expect(r?.text).toContain("Area H1");
 			expect(r?.text).toContain("Jul 1");
 			expect(r?.text).toContain("not yet");
+		});
+
+		it("an admin's pages render and hydrate with Preview as member on (#1113)", () => {
+			if (ONLY.length) return;
+			expect(previewResults.length).toBe(PREVIEW_PATHS(fixture).length);
+			for (const r of previewResults) {
+				// Not redirected: these are member pages, so the admin guards are
+				// not what is being asked.
+				expect(r.landed, `${r.path} redirected`).toBe(r.path);
+				expect(r.hydrated, `${r.path} never hydrated`).toBe(true);
+				// The cookie reached the SSR render: the banner is in the page.
+				expect(r.text, `${r.path} has no preview banner`).toContain(
+					"Previewing as a member",
+				);
+				expect(r.mismatches.map((m) => describeMismatch(r.path, m))).toEqual(
+					[],
+				);
+			}
 		});
 
 		it("hydrates every route without a mismatch", () => {
