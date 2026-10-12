@@ -215,6 +215,9 @@ const COVERED: Record<string, { who: Who; url: (f: Fixture) => string }> = {
 		url: (f) => `/club/${f.slug}/guest-book`,
 	},
 	"/club/$clubId/roles": { who: "admin", url: (f) => `/club/${f.slug}/roles` },
+	// Public, but reached from the officer's Print & export menu like its
+	// `/roles` and print siblings, so swept the same way they are (#1167).
+	"/club/$clubId/sign": { who: "admin", url: (f) => `/club/${f.slug}/sign` },
 	"/club/$clubId/meeting/$meetingId": {
 		who: "admin",
 		url: (f) => `/club/${f.slug}/meeting/${f.pastMeetingId}`,

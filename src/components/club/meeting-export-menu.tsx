@@ -6,6 +6,7 @@ import {
 	FileDown,
 	Presentation,
 	Printer,
+	Signpost,
 	Sparkles,
 } from "lucide-react";
 import { useRef, useState } from "react";
@@ -138,6 +139,19 @@ export function MeetingExportMenu({
 						>
 							<ClipboardList />
 							All role sheets
+						</Link>
+					</DropdownMenuItem>
+					{/* Club-level printable MEETING sign (#1167): the logo, the club's
+					    name and an optional arrow, for taping up on the way in. */}
+					<DropdownMenuItem asChild>
+						<Link
+							to="/club/$clubId/sign"
+							params={{ clubId: clubSlug }}
+							target="_blank"
+							rel="noopener noreferrer"
+						>
+							<Signpost />
+							Meeting signs
 						</Link>
 					</DropdownMenuItem>
 					{/* Word of the Day wall poster. Hidden when the meeting has no word

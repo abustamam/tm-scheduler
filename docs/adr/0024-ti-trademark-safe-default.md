@@ -247,3 +247,27 @@ permits a *club-uploaded* image at runtime, never a TI mark committed to the tre
 proposed: p.12 forbids placing the logo on colors outside the brand palette (so the mark *costs*
 palette freedom rather than granting it), and using TI's palette *without* the mark only increases
 the affiliation confusion the #256 disclaimer exists to manage. GavelUp keeps its own palette.
+
+## Revisited — 2026-10-09 (meeting signs)
+
+**Decision 3 is narrowed for one asset on one surface (#1167).** `src/assets/ToastmastersLogo3Color.svg`
+(the globe-and-banner mark, restored unchanged from `68c72e0^`) is vendored again, for the printed
+meeting sign (`src/components/agenda/meeting-sign.tsx`, route `/club/$clubId/sign`) only. A club's
+meeting signage, taped up on the way to the room, is the authorized club use in Brand Manual v2.0
+p.32 ("Clubs … stationery, bulletins … and similar items"), and every club makes these signs by hand
+today; GavelUp already knows the club's name and can print one in a click.
+
+**Decided by** the maintainer, 2026-10-09.
+
+**The residual risk is accepted, not removed.** The p.34 "rehosting" concern from the 2026-07-31
+revisit (Brand Manual v2.0) applies: the file is now served as a static asset of the app and
+committed to a public repo. That is the price of one-click signs, and it is taken knowingly.
+
+**Decisions 1, 2 and 4 stand for every other surface.** The agenda, deck, `.pptx`, Word poster and
+role sheets still render only the club's own uploaded logo; "Toastmasters" stays nominative text;
+decision 4's trigger (money changing hands) is unchanged. The other nine deleted assets stay deleted.
+
+**The exception is enforced, not just written down.** `ti-wordmark.guard.test.ts` carries a
+`SANCTIONED` map: the one SVG may exist and may be referenced only from `meeting-sign.tsx`; any other
+file named after a TI mark, or any other importer of the SVG, still fails, and so does the sign
+dropping its reference (so the exception cannot outlive the sign).

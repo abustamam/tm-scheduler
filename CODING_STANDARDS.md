@@ -182,8 +182,8 @@ Ten coverage traps this repo has actually hit, all worth checking when a number 
   stylesheet and `PRINT_PAGE_CSS` is `printPageCss()`; its print rules are byte-identical to what they
   always were, and its only screen addition, `SCREEN_FIT_CSS` (#964), reads the sheet size from
   `--sheet-w` / `--sheet-h` so it stays orientation-independent. A route
-  that needs the other orientation calls the function — only the Word of the Day poster does, because
-  it is one short word sized against the measure and wants the sheet's long edge. Everything else
+  that needs the other orientation calls the function — only the Word of the Day poster and the meeting sign (#1167) do, because
+  each is a few big words sized against the measure and wants the sheet's long edge. Everything else
   keeps importing the constant, and **the shared `@page` rule is never flipped** to suit one surface.
   The guard test now mechanises that rather than trusting the prose: it asserts the default is still
   `letter portrait`, that the landscape variant differs in the `@page` rule and **nowhere else**, that
