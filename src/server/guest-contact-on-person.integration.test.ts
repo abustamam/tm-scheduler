@@ -769,7 +769,7 @@ describe.skipIf(!hasTestDb)(
 				return captureGuestVisit({ clubId: seed.clubId, name, phone, email });
 			}
 
-			it("fills a blank email on a guest-only, unbound Person only this club holds", async () => {
+			it("fills a blank book_email on a guest-only, unbound Person only this club holds", async () => {
 				const name = uniq("Returning");
 				const phone = uniquePhone();
 				const { guestId, personId } = await newGuest(name, {
@@ -781,7 +781,10 @@ describe.skipIf(!hasTestDb)(
 
 				expect(res.guestId).toBe(guestId);
 				expect(res.created).toBe(false);
-				expect((await personRow(personId))?.email).toBe(email);
+				// An address typed on the book is the club's unconfirmed note on the
+				// guest row, never the Person's (#1157).
+				expect((await guestRow(guestId)).bookEmail).toBe(email);
+				expect((await personRow(personId))?.email).toBeNull();
 			});
 
 			it("never replaces a value that is already there", async () => {
@@ -802,7 +805,7 @@ describe.skipIf(!hasTestDb)(
 				const clubB = await makeClub();
 				const name = uniq("Seen Elsewhere");
 				const phone = uniquePhone();
-				const { personId } = await newGuest(name, {
+				const { guestId, personId } = await newGuest(name, {
 					phone: toStoredPhone(phone, "1"),
 				});
 				await guestOn(personId, clubB);
@@ -810,13 +813,14 @@ describe.skipIf(!hasTestDb)(
 				await revisit(name, phone, address("nope"));
 
 				expect((await personRow(personId))?.email).toBeNull();
+				expect((await guestRow(guestId)).bookEmail).toBeNull();
 			});
 
 			it("writes nothing when the Person holds a membership", async () => {
 				const clubB = await makeClub();
 				const name = uniq("Is A Member");
 				const phone = uniquePhone();
-				const { personId } = await newGuest(name, {
+				const { guestId, personId } = await newGuest(name, {
 					phone: toStoredPhone(phone, "1"),
 				});
 				await member(clubB, personId);
@@ -825,12 +829,13 @@ describe.skipIf(!hasTestDb)(
 
 				expect(res.created).toBe(false);
 				expect((await personRow(personId))?.email).toBeNull();
+				expect((await guestRow(guestId)).bookEmail).toBeNull();
 			});
 
 			it("writes nothing when somebody has signed in as the Person", async () => {
 				const name = uniq("Bound");
 				const phone = uniquePhone();
-				const { personId } = await newGuest(name, {
+				const { guestId, personId } = await newGuest(name, {
 					phone: toStoredPhone(phone, "1"),
 				});
 				await testDb
@@ -841,12 +846,13 @@ describe.skipIf(!hasTestDb)(
 				await revisit(name, phone, address("nope"));
 
 				expect((await personRow(personId))?.email).toBeNull();
+				expect((await guestRow(guestId)).bookEmail).toBeNull();
 			});
 
 			it("writes nothing on a removed member's Person, even when its email is blank", async () => {
 				const name = uniq("Former Member");
 				const phone = uniquePhone();
-				const { personId } = await newGuest(name, {
+				const { guestId, personId } = await newGuest(name, {
 					phone: toStoredPhone(phone, "1"),
 				});
 				await released(personId, seed.clubId);
@@ -854,6 +860,7 @@ describe.skipIf(!hasTestDb)(
 				await revisit(name, phone, address("mallory"));
 
 				expect((await personRow(personId))?.email).toBeNull();
+				expect((await guestRow(guestId)).bookEmail).toBeNull();
 			});
 		});
 
@@ -1098,7 +1105,14 @@ describe.skipIf(!hasTestDb)(
 		// A link takes the guest's contact with its Person; an unlink gives it back.
 		// -----------------------------------------------------------------------
 		describe("link then unlink keeps the guest's own contact", () => {
-			it("the contact the link abandoned is restored onto the Person the unlink mints", async () => {
+			// protects=an unlink restoring the address a link recorded as the club's
+			//   unconfirmed note on the guest row (an officer re-confirms it), never as the
+			//   fresh Person's sign-in address, and the phone going back to the Person;
+			// fails_when=the unlink writes the recorded email to the minted Person, loses
+			//   it, or drops the phone;
+			// no_claim=the guest-book capture and convert paths (their own suites); the
+			//   link and unlink run for real, the actor is the seeded admin member.
+			it("the address the link abandoned comes back as an unconfirmed note, the phone onto the Person the unlink mints (#1157)", async () => {
 				const name = uniq("Link Me");
 				const email = address("link");
 				const phone = "+15550007002";
@@ -1130,10 +1144,21 @@ describe.skipIf(!hasTestDb)(
 					actorMemberId: seed.adminMemberId,
 				});
 
-				expect(await guestContactOf(g.guestId)).toEqual({ email, phone });
+				// The Person minted here has the phone and NO address; the address is the
+				// guest row's note.
+				expect(await guestContactOf(g.guestId)).toEqual({
+					email: null,
+					phone,
+				});
 				const now = await guestRow(g.guestId);
 				expect(now.personId).not.toBe(memberPerson);
 				extraPeople.push(now.personId);
+				expect((await personRow(now.personId))?.email).toBeNull();
+				const [note] = await testDb
+					.select({ bookEmail: guests.bookEmail })
+					.from(guests)
+					.where(eq(guests.id, g.guestId));
+				expect(note?.bookEmail).toBe(email);
 				// The member's own Person was never written.
 				expect((await personRow(memberPerson))?.email).not.toBe(email);
 			});

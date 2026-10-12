@@ -97,5 +97,35 @@ never-auto-merge-on-a-shared-email.
   deleted: restoring #756's pre-migration addresses would now write unverified sign-in keys. A rollback restores `people.email` only where
   `user_id` is still null: an address a bind has since verified is never overwritten.
 
+## Amendment (#1157): a vouched contact, and a club's unconfirmed note
+
+A **vouched** contact is a Person fact: an address typed by a club officer under a session,
+or proved by a magic link. `people.email` holds only those.
+
+An address typed **without a session** (the public guest book, whose only credential is the
+club link) is **a club's note on its own guest row**, `guests.book_email`. It is the club's
+unconfirmed record of what a visitor wrote down, and nothing more:
+
+- It matches guest cards (dedup), so a returning visitor lands on their card; a card whose
+  vouched address matches wins over one whose note does.
+- It addresses the minutes email draft an officer reviews and sends (ADR-0028), and shows on
+  the VP Membership card flagged **Unconfirmed**.
+- It is never a Person fact and never a sign-in key. No writer of `people` reads it (merge,
+  link, undo convert, cross-club attach, the sign-in bind), and a convert never reads it into
+  the new member's identity, so it plays no part in which existing member a convert matches.
+- It becomes a Person fact **only when an officer confirms it**, at convert (the officer is
+  shown it, told where it came from, and picks "use this address" or "leave it off") or in
+  the Edit guest dialog. The officer's write clears the note.
+
+The phone is not split: it is not a sign-in key, so it stays on the Person.
+
+This is not the `guests.email` that #1177 dropped. That column was a second copy of the
+Person's address, kept in step with it; `book_email` is the only place an unvouched address
+lives, and it is one-way (note to Person, by an officer, never back).
+
+Migration 0119 moves the addresses the guest book had already put on guest-only Persons
+(never signed in, no membership in any club) onto their guest rows and clears them from the
+Person. A Person with no guest row keeps its address: there is no card to carry it.
+
 Supersedes #756's split of the address into a verified `people.email` and a per-club
 `members.email` vouch, and ADR-0008's per-club contact copies.

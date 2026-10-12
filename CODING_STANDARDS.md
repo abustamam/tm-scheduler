@@ -290,19 +290,21 @@ There is no per-club copy; `members.email` was dropped by migration 0109.
 | the roster edit (`applyMemberEdit`) | `isNull(people.userId)` AND `soleHoldingClub(clubId)`, in the UPDATE's own WHERE |
 | the CSV importer's fill (`importPeopleAndMembers`) | the same two, plus the address is blank |
 | the member's own address change (`confirmEmailChange`, ADR-0030) | the new address was just proved by its link, and `eq(people.userId, …)` for the confirming account is in the UPDATE's own WHERE |
-| convert's adopt of a PRISTINE guest Person (`applyConvertGuestToMember`, #1124, ADR-0031) | `pristineGuestPerson(guestId)` in the UPDATE's own WHERE, before the membership insert: unbound, no membership of any status, no speech/enrolment/helper row, no other guest row, no roster-identity column, no `member_remove` on record (contact is NOT a condition since #1125). It re-writes the Person's own contact in canonical form, not a fill. Any other Person gets a fresh one |
+| convert's adopt of a PRISTINE guest Person (`applyConvertGuestToMember`, #1124, ADR-0031) | `pristineGuestPerson(guestId)` in the UPDATE's own WHERE, before the membership insert: unbound, no membership of any status, no speech/enrolment/helper row, no other guest row, no roster-identity column, no `member_remove` on record (contact is NOT a condition since #1125). It re-writes the Person's own phone in canonical form and its email only when that is a vouched address already on the Person or the officer's `confirmedEmail` for this convert (#1157); never `guests.book_email`. Not a fill. Any other Person gets a fresh one |
 | an officer's edit of a GUEST's contact (`applyUpdateGuest`, #1125, ADR-0031) | `guestContactWritable(clubId)` in the UPDATE's own WHERE: unbound, no membership in any club, no past as a member (`noMemberHistory()`), and THIS club holds a guest row on the Person. Any club holding a guest row may correct a guest-only Person; a refused write rolls the whole edit back with the first reason (signed in, a member here, elsewhere, a former member). NOT `soleHoldingClub`: a guest row is never a holder |
-| the public guest book's blank fill (`fillBlankGuestContact`, `captureGuestVisit`, #1125) | `guestContactFillable(clubId)` in the UPDATE's own WHERE: the writable rule, no guest row in any OTHER club, and no past as a member; fill-only in the SET (`coalesce`) |
+| the public guest book (`captureGuestVisit`, `fillBlankGuestContact`, #1125, #1157) | **never.** An address typed without a session is the guest row's note, `guests.book_email` (next row). Its blank PHONE fill writes `people.phone` under `guestContactFillable(clubId)` in the UPDATE's own WHERE: the writable rule, no guest row in any OTHER club, no past as a member; fill-only in the SET (`coalesce`) |
 | the superadmin first-admin repair, `mergePeople` | their named waivers |
 | Separate (`applySeparateGuest`, #1127) | a plain INSERT of a fresh Person: the shared Person's email and phone are copied only when it is guest-only (`identityIgnoredGuestPerson()`) |
 | a plain INSERT of a brand-new Person (`createGuestRecord` carries the guest's contact onto the Person it mints) | always — a fresh row is nobody's yet |
+| **not `people.email`:** `guests.book_email`, the club's unconfirmed note (#1157, ADR-0029 amendment) | written by `captureInTransaction` (create) and `fillBlankGuestContact` (fill-only, under `guestContactFillable(clubId)` in the UPDATE's own WHERE), cleared to NULL by convert's confirmed write and by `applyUpdateGuest` saving a non-null address, restored from a link's record by an unlink. No writer of `people` reads it; the convert's identity never contains it (an officer's `confirmedEmail` is the only way it becomes a Person fact). `guest-book-email.guard.test.ts` counts every `bookEmail` key |
 
 **Guest conversion never writes an existing Person's address** (#907 review). The
 guest book is an anonymous public form; a fill would let anyone who knows a
 member's name and phone put their own address on that member's Person and take
 the account with one magic link. A Person a convert MATCHED on this club's roster
-is never written. The one address convert does write is the guest's own on the
-guest's OWN Person, and only when that Person is PRISTINE (#1124, the maintainer's
+is never written. The one address convert does write is the guest's own vouched address,
+or the officer's `confirmedEmail` for this convert, on the guest's OWN Person,
+and only when that Person is PRISTINE (#1124, the maintainer's
 ruling of 2026-10-09): nobody has signed in as them, no membership in any club
 (any status), no speech, enrolment or charter-helper row, no other guest row,
 none of the roster-identity columns (`customer_id`, `basecamp_user_id`,
@@ -324,7 +326,8 @@ somebody else's, and copying it would put another human's address on a membershi
 (a wrong-person sign-in key). An unlink points the guest at a fresh Person when its
 Person holds a membership, carrying the contact the link recorded in its
 `member_merge` activity detail (`guestContact`; the activity feed never returns
-`detail` whole). The record is dropped once the unlink used it, and when the guest is
+`detail` whole): the phone goes onto the fresh Person, the recorded email back onto
+the guest row as its unconfirmed note (`guests.book_email`, fill-only). The record is dropped once the unlink used it, and when the guest is
 deleted, converted, or re-linked. Undo does not touch the contact, so the undoing club's own roster
 CSV still matches the Person (#875).
 
@@ -423,6 +426,8 @@ held to its own function's body),
 own-contact rule, link and unlink, and migration 0117 through the real runner),
 `guest-contact-drop-migration.integration.test.ts` (migration 0118's catch-up diffed against
 `guests_contact_backup`, and the dropped columns, through the real runner),
+`guest-book-email.guard.test.ts` (the note never reaches a `people` write, is written only by the named sites, and never enters the convert's identity) and
+`guest-book-email-migration.integration.test.ts` (migration 0119's two data statements through the real runner: a guest-only Person moved, a member's, a former member's, a signed-in and a guest-less Person's untouched),
 `roster-obstacle.guard.test.ts` (the complement),
 `account-link-logic.integration.test.ts` (each arm killed independently),
 `member-email-ownership.integration.test.ts`,

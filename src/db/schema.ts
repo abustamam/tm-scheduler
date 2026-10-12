@@ -1640,6 +1640,16 @@ export const guests = pgTable(
 			.references(() => people.id, {
 				onDelete: "restrict",
 			}),
+		// An address typed WITHOUT an officer's session (#1157, ADR-0029): the
+		// public guest book has none. It is this club's unconfirmed note on its own
+		// guest row, never a Person fact and never a sign-in key. It matches guest
+		// cards (dedup) and addresses the minutes email draft; it reaches
+		// `people.email` only when an officer confirms it, at convert or in the Edit
+		// guest dialog, and the officer's write clears it here. Nothing that writes
+		// `people` reads it (`guest-book-email.guard.test.ts`).
+		// The phone is not split the same way: it is not a sign-in key, so it stays
+		// on the Person.
+		bookEmail: text("book_email"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at").defaultNow().notNull(),
 	},

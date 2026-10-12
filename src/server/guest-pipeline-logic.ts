@@ -71,6 +71,7 @@ import {
 	guestContactWritable,
 	identityIgnoredGuestPerson,
 	normalizedEmail,
+	normalizeEmail,
 	pristineGuestPerson,
 	rosterConflictFor,
 } from "./account-link-logic";
@@ -187,7 +188,15 @@ async function holdsMembership(
 type GuestKeys = {
 	id: string;
 	name: string;
+	/** The VOUCHED address: the Person's `people.email`. */
 	email: string | null;
+	/**
+	 * The guest row's own note (#1157): an address typed without an officer's
+	 * session. It matches this card, and is never a Person fact. Optional because a
+	 * candidate a caller synthesises (the guest-book plan's not-yet-created guests)
+	 * has none.
+	 */
+	bookEmail?: string | null;
 	phone: string | null;
 };
 
@@ -285,7 +294,12 @@ export function matchGuest<C extends GuestMatchCandidate>(
 
 	const email = input.email?.trim().toLowerCase() || null;
 	if (email) {
-		const byEmail = pool.find((c) => c.email?.trim().toLowerCase() === email);
+		// A card whose VOUCHED address matches outranks one whose book note does
+		// (#1157): the note is unconfirmed, so it only decides when no vouched
+		// card claims the address. Within each, the pool's order (oldest first).
+		const byEmail =
+			pool.find((c) => normalizeEmail(c.email) === email) ??
+			pool.find((c) => normalizeEmail(c.bookEmail) === email);
 		if (byEmail) return { outcome: "matched", via: "email", guest: byEmail };
 	}
 
@@ -350,6 +364,7 @@ async function findGuestMatch(
 		// rows, so a Person another club also holds is found only through this
 		// club's own row.
 		email: people.email,
+		bookEmail: guests.bookEmail,
 		phone: people.phone,
 		personId: guests.personId,
 		createdAt: guests.createdAt,
@@ -371,12 +386,24 @@ async function findGuestMatch(
 
 	const candidates: Array<GuestMatchCandidate & { personId: string }> = [];
 	if (email) {
+		// Two bounded lookups, one per arm, so `matchGuest`'s precedence has both
+		// to choose from (#1157): the vouched `people.email` and this club's own
+		// `guests.book_email` note. Each is the oldest row in its arm.
 		candidates.push(
 			...(await conn
 				.select(cols)
 				.from(guests)
 				.innerJoin(people, eq(people.id, guests.personId))
 				.where(and(scope, sql`lower(${people.email}) = ${email.toLowerCase()}`))
+				.orderBy(...order)
+				.limit(1)),
+			...(await conn
+				.select(cols)
+				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
+				.where(
+					and(scope, sql`lower(${guests.bookEmail}) = ${email.toLowerCase()}`),
+				)
 				.orderBy(...order)
 				.limit(1)),
 		);
@@ -441,8 +468,9 @@ export async function loadGuestMatchCandidates(
 		.select({
 			id: guests.id,
 			name: guests.name,
-			// The Person's contact (#1125).
+			// The Person's contact (#1125), and the card's own unconfirmed note.
 			email: people.email,
+			bookEmail: guests.bookEmail,
 			phone: people.phone,
 			personId: guests.personId,
 			createdAt: guests.createdAt,
@@ -702,19 +730,28 @@ export async function captureGuestVisit(
 
 /**
  * The public guest book's fill of a returning guest's BLANK email or phone
- * (#1125). A guest's contact lives on their Person, so this writes
- * `people.email` / `people.phone`, and only under `guestContactFillable(clubId)`
- * in the UPDATE's own WHERE: the Person is guest-only, nobody has signed in as
- * them, no club holds them as a member, and no OTHER club holds a guest row on
- * them. The book has no session (the club link is the credential), so it may not
- * put an address on a Person another club, or any membership, reaches. Where the
- * predicate refuses, nothing is written and the visit is still recorded.
+ * (#1125, #1157).
  *
- * Fill-only, as it always was: a value already there is kept, and the SQL says so
- * itself (`coalesce`), so a Person edited since the match was read is not
- * overwritten. The caller holds the club write lock, which is what keeps this
- * guest row pointing at the same Person (every writer of `guests.person_id`
- * takes it first); the Person is then locked `FOR UPDATE`, the protocol's second
+ * The PHONE goes on the Person (`people.phone`; it is not a sign-in key), only
+ * under `guestContactFillable(clubId)` in the UPDATE's own WHERE: the Person is
+ * guest-only, nobody has signed in as them, no club holds them as a member, and
+ * no OTHER club holds a guest row on them. The book has no session (the club
+ * link is the credential), so it may not put anything on a Person another club,
+ * or any membership, reaches. Where the predicate refuses, nothing is written
+ * and the visit is still recorded.
+ *
+ * The EMAIL never goes on the Person (#1157, ADR-0029): an address typed without
+ * a session is this club's unconfirmed note on its own guest row, so it fills
+ * `guests.book_email`. Fill-only and in the UPDATE's own WHERE: the row's note
+ * is NULL and the Person's `people.email` is NULL (a vouched address means the
+ * card needs no note, and a returning guest's second address must not replace the
+ * first). It also takes the same `guestContactFillable(clubId)` refusal as the
+ * phone, so a card whose Person a member, a signed-in account or another club
+ * holds is left alone: the book writes a note only on a guest's own card.
+ *
+ * Fill-only as it always was: a value already there is kept, and the SQL says so
+ * itself, so a row edited since the match was read is not overwritten. The Person
+ * is locked `FOR UPDATE` only when the phone is filled, the protocol's second
  * step (ADR-0031), so a contact edit or a convert of this Person waits.
  */
 async function fillBlankGuestContact(
@@ -723,16 +760,40 @@ async function fillBlankGuestContact(
 	existing: GuestContactRow,
 	contact: { email: string | null; phone: string | null },
 ): Promise<void> {
-	const fillsEmail = existing.email === null && contact.email !== null;
+	const fillsEmail =
+		existing.email === null &&
+		(existing.bookEmail ?? null) === null &&
+		contact.email !== null;
 	const fillsPhone = existing.phone === null && contact.phone !== null;
-	if ((!fillsEmail && !fillsPhone) || !existing.personId) return;
+	if (fillsEmail && contact.email) {
+		await tx
+			.update(guests)
+			.set({ bookEmail: contact.email })
+			.where(
+				and(
+					eq(guests.id, existing.id),
+					isNull(guests.bookEmail),
+					inArray(
+						guests.personId,
+						tx
+							.select({ id: people.id })
+							.from(people)
+							.where(
+								and(
+									eq(people.id, existing.personId),
+									isNull(people.email),
+									guestContactFillable(clubId),
+								),
+							),
+					),
+				),
+			);
+	}
+	if (!fillsPhone || !existing.personId) return;
 	await lockPersonsInOrder(tx, forUpdate(existing.personId));
 	await tx
 		.update(people)
-		.set({
-			email: sql`coalesce(${people.email}, ${contact.email})`,
-			phone: sql`coalesce(${people.phone}, ${contact.phone})`,
-		})
+		.set({ phone: sql`coalesce(${people.phone}, ${contact.phone})` })
 		.where(and(eq(people.id, existing.personId), guestContactFillable(clubId)));
 }
 
@@ -797,10 +858,13 @@ function captureInTransaction(
 			}
 			// The guest and their Person in one go (#1124): a failure on either
 			// insert leaves neither, so the public book cannot mint an orphan Person.
+			// The address is the visitor's own note, typed with no session: it goes on
+			// the guest row, never the Person (#1157).
 			const row = await createGuestRecord(tx, {
 				clubId: input.clubId,
 				name,
-				email,
+				email: null,
+				bookEmail: email,
 				phone,
 				stage: "prospect",
 			});
@@ -858,6 +922,14 @@ export interface PipelineGuestRow {
 	preferredName: string | null;
 	/** The guest's PERSON's address (#1125): a guest's contact lives on `people`. */
 	email: string | null;
+	/**
+	 * This card's UNCONFIRMED address (#1157): typed on the public guest book with
+	 * no officer's session. `email` stays the vouched one. The board shows it
+	 * with an Unconfirmed badge, and a convert asks an officer to confirm it.
+	 * `loadGuestPipeline` always sets it; optional only so a fixture that predates
+	 * it still types (absent reads as null).
+	 */
+	bookEmail?: string | null;
 	/**
 	 * DISPLAY phone: E.164 where it can be derived, otherwise the stored value
 	 * verbatim (`coalesceToE164`) — what the card's WhatsApp link reads.
@@ -1100,6 +1172,7 @@ export async function loadGuestPipeline(
 					// A guest's contact lives on their Person (#1125), and so does the
 					// answer to "may this club change it".
 					email: people.email,
+					bookEmail: guests.bookEmail,
 					phone: people.phone,
 					contactRefusal: guestContactRefusalSql(clubId),
 					stage: guests.stage,
@@ -1261,6 +1334,7 @@ export async function loadGuestPipeline(
 			name: r.name,
 			preferredName: r.preferredName,
 			email: r.email,
+			bookEmail: r.bookEmail,
 			// Coalesced to E.164 (#295) so the pipeline card's WhatsApp link is a
 			// valid full number even for rows written before normalize-on-write, and
 			// a digit-less value still reaches the UI — see `#/lib/phone`.
@@ -1463,12 +1537,15 @@ export async function applyUpdateGuest(
 				}
 			}
 
-			// 4. The guest row: name and goes-by name, per club.
+			// 4. The guest row: name and goes-by name, per club. A saved address is
+			//    an officer's, so the card's unconfirmed note is cleared with it
+			//    (#1157); a save that leaves the address blank leaves the note alone.
 			await tx
 				.update(guests)
 				.set({
 					name,
 					preferredName: input.preferredName?.trim() || null,
+					...(email !== null ? { bookEmail: null } : {}),
 					updatedAt: new Date(),
 				})
 				.where(
@@ -1768,6 +1845,13 @@ export interface ConvertGuestInput {
 	clubId: string;
 	guestId: string;
 	actorMemberId: string | null;
+	/**
+	 * The address an officer confirmed for this guest at convert (#1157): what
+	 * the guest said on the public guest book, vouched for by the officer. Absent
+	 * or null means "leave it off"; a tab opened before this field existed sends
+	 * nothing, so it fails closed.
+	 */
+	confirmedEmail?: string | null;
 }
 
 export interface ConvertGuestResult {
@@ -1910,6 +1994,36 @@ async function guestOwnContact(
 		.where(and(eq(people.id, personId), identityIgnoredGuestPerson()))
 		.limit(1);
 	return row ?? { email: null, phone: null };
+}
+
+/**
+ * The address a convert treats as THE GUEST'S (#1157, ADR-0029), from the two
+ * things an officer-vouched address can be: `vouched`, the guest Person's own
+ * `people.email` (typed under an officer's session or proved by a magic link),
+ * and `confirmedEmail`, what the officer confirmed in this very request.
+ *
+ * `guests.book_email`, the address typed on the public guest book with no
+ * session, is deliberately NOT a parameter: it is never read into the identity,
+ * so it is neither a sign-in key nor part of which existing member a convert
+ * matches. It reaches the Person only through `confirmedEmail`, and the officer is
+ * shown it first.
+ *
+ * With a vouched address the confirmation must be absent, null or the same
+ * address (after normalizing); anything else means the card changed under the
+ * officer's dialog, so the convert is refused with nothing written.
+ */
+function convertEmail(
+	vouched: string | null,
+	confirmedEmail: string | null | undefined,
+): { email: string | null; confirmedWritten: boolean } {
+	const confirmed = confirmedEmail?.trim() || null;
+	if (vouched) {
+		if (confirmed && normalizeEmail(confirmed) !== normalizeEmail(vouched)) {
+			throw new Error(RECORD_CHANGED_MESSAGE);
+		}
+		return { email: vouched, confirmedWritten: false };
+	}
+	return { email: confirmed, confirmedWritten: confirmed !== null };
 }
 
 /**
@@ -2090,11 +2204,16 @@ export async function applyConvertGuestToMember(
 			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
 			.limit(1);
 		if (!peek) throw new Error("Guest not found in this club.");
+		const peekOwn = await guestOwnContact(tx, peek.personId);
 		const peekMatch = await matchClubMemberPerson(
 			tx,
 			input.clubId,
 			convertIdentity(
-				{ ...peek, ...(await guestOwnContact(tx, peek.personId)) },
+				{
+					...peek,
+					...peekOwn,
+					email: convertEmail(peekOwn.email, input.confirmedEmail).email,
+				},
 				cc,
 			),
 		);
@@ -2135,11 +2254,21 @@ export async function applyConvertGuestToMember(
 		// record has no unlink left to serve.
 		await clearRecordedGuestContact(tx, input.clubId, input.guestId);
 		// The contact is the guest's Person's (#1125), read under the Person lock.
+		const own = await guestOwnContact(tx, guest.personId);
+		// The identity's address is the vouched one or the officer's confirmation,
+		// never the guest book's note (#1157). See `convertEmail`.
+		const { email: identityEmail, confirmedWritten } = convertEmail(
+			own.email,
+			input.confirmedEmail,
+		);
 		const identity = convertIdentity(
-			{ ...guest, ...(await guestOwnContact(tx, guest.personId)) },
+			{ ...guest, ...own, email: identityEmail },
 			cc,
 		);
 		const { name, preferredName, email, phone } = identity;
+		// Set only when this convert WRITES the confirmed address onto a Person; a
+		// matched member keeps the address it has (#907), so the note stays.
+		let clearBookEmail = false;
 		let personId = await matchClubMemberPerson(tx, input.clubId, identity);
 		// The same answer the unlocked read gave, or the Persons locked above are
 		// not the Persons this convert is about to write.
@@ -2171,9 +2300,10 @@ export async function applyConvertGuestToMember(
 			// only on the guest row. The membership is about to carry it, and the
 			// Person is the fallback every other club reads, so it follows. The
 			// contact needs no carrying: since #1125 it IS the Person's, written by
-			// the guest writers, so `email` and `phone` here are the Person's own in
-			// their canonical spelling (trimmed, E.164) and the statement changes no
-			// address a guest writer had not already put there.
+			// the guest writers, so `phone` here is the Person's own in its canonical
+			// spelling (trimmed, E.164). `email` is the vouched address, or the
+			// officer's `confirmedEmail` in this very request (#1157): this statement
+			// is where an address an officer confirmed first reaches the Person.
 			//
 			// The predicate is in the statement's own WHERE, and the statement matching
 			// a row IS the decision: a sign-in, a membership or a second guest row that
@@ -2213,6 +2343,7 @@ export async function applyConvertGuestToMember(
 				await deleteAbandonedGuestPerson(tx, guestPersonId);
 			}
 			if (email) written = { personId, email };
+			if (confirmedWritten) clearBookEmail = true;
 		} else {
 			if (preferredName) {
 				// Deduped onto an EXISTING Person: the insert above never ran, so seed
@@ -2517,6 +2648,9 @@ export async function applyConvertGuestToMember(
 			.set({
 				stage: "joined",
 				convertedMembershipId: membershipId,
+				// The officer's confirmed address now lives on the Person; the card's
+				// unconfirmed note is spent (#1157).
+				...(clearBookEmail ? { bookEmail: null } : {}),
 				updatedAt: new Date(),
 			})
 			.where(eq(guests.id, input.guestId));
@@ -2913,16 +3047,26 @@ export async function applyUnlinkGuestFromMember(
 			entry.detail as { guestContact?: { email?: unknown; phone?: unknown } }
 		).guestContact;
 		await clearRecordedGuestContact(tx, input.clubId, input.guestId);
+		// The recorded address goes back as the club's unconfirmed note on the guest
+		// row, never onto the fresh Person (#1157): an unlink does not vouch for an
+		// address, so an officer re-confirms it at convert or Edit guest. Fill-only
+		// (a note already on the row stays). The phone is not a sign-in key and
+		// stays on the Person.
+		const recordedEmail =
+			typeof recordedContact?.email === "string" ? recordedContact.email : null;
 		await separateGuestFromMemberPerson(tx, input.guestId, {
-			email:
-				typeof recordedContact?.email === "string"
-					? recordedContact.email
-					: null,
+			email: null,
 			phone:
 				typeof recordedContact?.phone === "string"
 					? recordedContact.phone
 					: null,
 		});
+		if (recordedEmail) {
+			await tx
+				.update(guests)
+				.set({ bookEmail: recordedEmail })
+				.where(and(eq(guests.id, input.guestId), isNull(guests.bookEmail)));
+		}
 
 		await logActivity(tx, {
 			clubId: input.clubId,

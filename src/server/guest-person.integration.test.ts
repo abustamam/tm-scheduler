@@ -280,7 +280,10 @@ describe.skipIf(!hasTestDb)("a guest is a Person (#1124)", () => {
 				email: "capture@example.com",
 			});
 			expect(created).toBe(true);
-			await expectGuestPerson(guestId, name, { email: "capture@example.com" });
+			// The typed address is the club's unconfirmed note on the guest row, not
+			// the Person's (#1157): the Person is minted with no email.
+			const captured = await expectGuestPerson(guestId, name);
+			expect(captured.bookEmail).toBe("capture@example.com");
 
 			// A returning visitor is the same guest and the same Person: no second.
 			const again = await captureGuestVisit({

@@ -1,5 +1,5 @@
 import { useRouter } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
 import {
@@ -76,6 +76,13 @@ export interface GuestEditFields {
 	/** What they're called, when it isn't the first token of `name` (#486). */
 	preferredName: string | null;
 	email: string | null;
+	/**
+	 * The card's UNCONFIRMED address (#1157): typed on the public guest book with
+	 * no officer's session. The email field never binds to it; the dialog shows
+	 * it beside the field with a "Use this address" button. OPTIONAL because the
+	 * meeting rail has no pipeline row.
+	 */
+	bookEmail?: string | null;
 	/**
 	 * The stored phone verbatim (the Person's, #1125) — never the display value.
 	 *
@@ -233,6 +240,12 @@ export function GuestEditDialog({
 			? (profileState.profile.contactRefusal ?? null)
 			: (guest.contactRefusal ?? null);
 
+	// The email field stays UNCONTROLLED (`FormData` reads it back), so "Use this
+	// address" writes through a ref. Nothing is saved until Save (#1157).
+	const emailRef = useRef<HTMLInputElement>(null);
+	const bookEmail = (guest.bookEmail ?? "").trim();
+	const showBookEmail = !(guest.email ?? "").trim() && bookEmail !== "";
+
 	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
 		const form = new FormData(e.currentTarget);
@@ -388,7 +401,11 @@ export function GuestEditDialog({
 					</div>
 					<div className="space-y-2">
 						<Label htmlFor={`guest-email-${guest.id}`}>Email</Label>
+						{/* Only the VOUCHED address: never prefilled from the guest book's
+						    note, so saving this form cannot vouch for an address by
+						    accident (#1157). */}
 						<Input
+							ref={emailRef}
 							id={`guest-email-${guest.id}`}
 							name="email"
 							type="email"
@@ -399,6 +416,28 @@ export function GuestEditDialog({
 								contactRefusal ? `guest-contact-locked-${guest.id}` : undefined
 							}
 						/>
+						{showBookEmail ? (
+							<div
+								data-slot="guest-book-email"
+								className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--sea-ink-soft)]"
+							>
+								<span className="min-w-0 break-all">
+									Typed on the public guest book (unconfirmed): {bookEmail}
+								</span>
+								{contactRefusal === null ? (
+									<Button
+										type="button"
+										variant="outline"
+										size="sm"
+										onClick={() => {
+											if (emailRef.current) emailRef.current.value = bookEmail;
+										}}
+									>
+										Use this address
+									</Button>
+								) : null}
+							</div>
+						) : null}
 					</div>
 					<div className="space-y-2">
 						<Label htmlFor={`guest-phone-${guest.id}`}>Phone</Label>

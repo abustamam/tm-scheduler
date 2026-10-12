@@ -180,6 +180,10 @@ export const deleteGuest = createServerFn({ method: "POST" })
 const convertSchema = z.object({
 	clubId: uuid,
 	guestId: uuid,
+	// The address the officer confirmed for a guest whose only address was typed on
+	// the public guest book (#1157). Absent or null leaves it off, so a tab opened
+	// before this field existed fails closed.
+	confirmedEmail: z.string().trim().email().max(200).nullable().optional(),
 });
 
 /**
@@ -205,6 +209,7 @@ export const convertGuestToMember = createServerFn({ method: "POST" })
 			clubId: data.clubId,
 			guestId: data.guestId,
 			actorMemberId: membership.id,
+			confirmedEmail: data.confirmedEmail,
 		});
 	});
 

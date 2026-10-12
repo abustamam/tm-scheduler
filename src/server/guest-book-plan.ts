@@ -416,7 +416,8 @@ export async function plan(
 				guestId: chosen.id,
 				via: "resolved",
 				matchedName: chosen.name === raw.name ? null : chosen.name,
-				minutesRecipient: !already && Boolean(chosen.email ?? email),
+				minutesRecipient:
+					!already && Boolean(chosen.email ?? chosen.bookEmail ?? email),
 				write: null,
 			};
 		}
@@ -486,7 +487,8 @@ export async function plan(
 			guestId: m.guest.id,
 			via: m.via,
 			matchedName: m.guest.name === raw.name ? null : m.guest.name,
-			minutesRecipient: !already && Boolean(m.guest.email ?? email),
+			minutesRecipient:
+				!already && Boolean(m.guest.email ?? m.guest.bookEmail ?? email),
 			write: null,
 		};
 	});

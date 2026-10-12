@@ -387,3 +387,67 @@ describe("GuestEditDialog — contact read-only (#1125)", () => {
 		expect(locked()).toBeNull();
 	});
 });
+
+describe("GuestEditDialog — the guest book's unconfirmed address (#1157)", () => {
+	const BOOK = "typed@example.com";
+	const emailField = () => screen.getByLabelText("Email") as HTMLInputElement;
+	const sent = () =>
+		(updateGuest.mock.calls[0]?.[0] as { data: Record<string, unknown> }).data;
+
+	function renderBook(over: Partial<GuestEditFields>) {
+		getGuestProfile.mockResolvedValue({ ...PROFILE, contactRefusal: null });
+		const onOpenChange = vi.fn();
+		render(
+			<GuestEditDialog
+				guest={{ ...GUEST, email: null, bookEmail: BOOK, ...over }}
+				clubId="c1"
+				open
+				onOpenChange={onOpenChange}
+				onSaved={vi.fn()}
+			/>,
+		);
+		return { onOpenChange };
+	}
+
+	// protects=the email input is empty for a card whose only address is the book note, the note is shown as unconfirmed, and a name-only save sends no email;
+	// fails_when=the field is prefilled from bookEmail, so any save vouches for an address nobody confirmed;
+	// no_claim=the server side of the clear (applyUpdateGuest's own test); getGuestProfile and updateGuest are mocked.
+	it("never prefills the email field from the book note, and says it is unconfirmed", async () => {
+		const { onOpenChange } = renderBook({});
+		await screen.findByLabelText("Kind");
+		expect(emailField().value).toBe("");
+		expect(
+			document.querySelector('[data-slot="guest-book-email"]')?.textContent,
+		).toContain(`Typed on the public guest book (unconfirmed): ${BOOK}`);
+		fireEvent.change(screen.getByLabelText("Name"), {
+			target: { value: "Nadia F." },
+		});
+		save();
+		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+		expect(sent()).not.toHaveProperty("email");
+	});
+
+	// protects="Use this address" copies the note into the field and writes nothing until Save, which then sends it as the email;
+	// fails_when=the button saves on click, or does not reach the field the form reads back;
+	// no_claim=that the address is right; the officer is the one vouching.
+	it("Use this address fills the field, and only Save sends it", async () => {
+		const { onOpenChange } = renderBook({});
+		await screen.findByLabelText("Kind");
+		fireEvent.click(screen.getByRole("button", { name: /use this address/i }));
+		expect(emailField().value).toBe(BOOK);
+		expect(updateGuest).not.toHaveBeenCalled();
+		save();
+		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+		expect(sent()).toMatchObject({ email: BOOK });
+	});
+
+	// protects=a card with a vouched address shows no note and no button, even if a stale book note remains;
+	// fails_when=the note panel renders whenever bookEmail is set;
+	// no_claim=none beyond protects.
+	it("shows nothing about the note when the card has a vouched address", async () => {
+		renderBook({ email: "vouched@example.com" });
+		await screen.findByLabelText("Kind");
+		expect(document.querySelector('[data-slot="guest-book-email"]')).toBeNull();
+		expect(emailField().value).toBe("vouched@example.com");
+	});
+});
