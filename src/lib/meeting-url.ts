@@ -82,14 +82,36 @@ export function nextCalendarDate(date: string): string {
 	return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
 }
 
-/** The UTC [start, end) window for a club-local calendar date. */
+/**
+ * The first instant that exists on the club-local calendar `date` (#1145).
+ *
+ * Local 00:00 is normally it. Where DST skips local midnight (America/Santiago
+ * 2026-09-06, America/Havana 2026-03-08: 00:00 jumps to 01:00) 00:00 names no
+ * instant, and `zonedWallTimeToUtc` resolves the gap BACKWARD, to 23:00 on the
+ * previous date. Using that as the day's start makes two days' windows overlap
+ * by an hour. So when the resolved instant is not on `date`, walk forward a
+ * minute at a time (transitions land on whole minutes) to the first one that is.
+ */
+function localDayStart(date: string, timeZone: string): Date {
+	const midnight = zonedWallTimeToUtc(`${date}T00:00`, timeZone);
+	if (localDateKey(midnight, timeZone) === date) return midnight;
+	// A real gap is at most a couple of hours; the cap only stops a runaway.
+	for (let minutes = 1; minutes <= 24 * 60; minutes++) {
+		const probe = new Date(midnight.getTime() + minutes * 60_000);
+		if (localDateKey(probe, timeZone) === date) return probe;
+	}
+	return midnight;
+}
+
+/** The UTC [start, end) window for a club-local calendar date. `end` is the
+ *  next date's start under the same rule, so consecutive days tile. */
 export function localDayRange(
 	date: string,
 	timeZone: string,
 ): { start: Date; end: Date } {
 	return {
-		start: zonedWallTimeToUtc(`${date}T00:00`, timeZone),
-		end: zonedWallTimeToUtc(`${nextCalendarDate(date)}T00:00`, timeZone),
+		start: localDayStart(date, timeZone),
+		end: localDayStart(nextCalendarDate(date), timeZone),
 	};
 }
 

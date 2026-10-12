@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { utcToZonedWallTime } from "./datetime";
 import {
 	localDateKey,
 	localDayRange,
@@ -114,6 +115,50 @@ describe("localDayRange", () => {
 		// Midnight CDT (UTC-5) on 07-21 → 05:00Z; next midnight → 05:00Z on 07-22.
 		expect(start.toISOString()).toBe("2026-07-21T05:00:00.000Z");
 		expect(end.toISOString()).toBe("2026-07-22T05:00:00.000Z");
+	});
+
+	// #1145: where DST skips local midnight the day starts at the first instant
+	// that exists (01:00 local), not at 23:00 the night before.
+	describe("when DST skips local midnight (#1145)", () => {
+		const wall = (d: Date, tz: string) => utcToZonedWallTime(d, tz);
+
+		it.each([
+			["America/Santiago", "2026-09-06"],
+			["America/Havana", "2026-03-08"],
+		])("%s %s starts at 01:00 local and the day before ends there", (tz, date) => {
+			const { start } = localDayRange(date, tz);
+			expect(wall(start, tz)).toBe(`${date}T01:00`);
+			const prev = new Date(
+				Date.UTC(
+					+date.slice(0, 4),
+					+date.slice(5, 7) - 1,
+					+date.slice(8, 10) - 1,
+				),
+			);
+			const prevDate = prev.toISOString().slice(0, 10);
+			expect(localDayRange(prevDate, tz).end.getTime()).toBe(start.getTime());
+		});
+
+		it("leaves a zone whose DST change is at another hour alone", () => {
+			const { start } = localDayRange("2026-03-08", CHICAGO);
+			expect(wall(start, CHICAGO)).toBe("2026-03-08T00:00");
+		});
+
+		it.each([
+			["America/Santiago", "2026-09-02"],
+			["America/Havana", "2026-03-04"],
+			[CHICAGO, "2026-03-04"],
+		])("%s: every day of the changeover week tiles (from %s)", (tz, from) => {
+			let date = from;
+			for (let i = 0; i < 8; i++) {
+				const next = nextCalendarDate(date);
+				const a = localDayRange(date, tz);
+				const b = localDayRange(next, tz);
+				expect(a.end.getTime()).toBe(b.start.getTime());
+				expect(a.start.getTime()).toBeLessThan(a.end.getTime());
+				date = next;
+			}
+		});
 	});
 });
 
