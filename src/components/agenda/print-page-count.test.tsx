@@ -23,19 +23,27 @@
  * greps in `print-page-reset.guard.test.ts`, which is why both files exist.
  * Do not read a passing count as evidence for a rule this cannot see.
  */
+import { spawn } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import type { Readable, Writable } from "node:stream";
+import { build } from "esbuild";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { PublicFooter } from "#/components/public-footer";
 import { AGENDA_LAYOUT_PAGES, AGENDA_LAYOUTS } from "#/lib/agenda-layouts";
 import { posterWordSize } from "#/lib/word-poster";
+import { stopChromeAndRemoveDir } from "#/test/chrome-teardown";
 import {
+	CHROME_ENV,
 	CHROME_TEST_TIMEOUT_MS,
 	findChrome,
 	measuredHeights,
 	printableDocument,
 	printedPageCount,
 } from "#/test/print-page-count";
-import { AgendaCopies, AgendaCopiesStack } from "./agenda-copies";
+import { AgendaCopies, AgendaCopiesStack, sheetPages } from "./agenda-copies";
 import { ClubRoleSheet, type RoleSheetEntry } from "./club-role-sheet";
 import {
 	type AgendaHeader,
@@ -131,21 +139,26 @@ const HANDOFF_DETAIL =
 	"Introduces the speech evaluators" +
 	"Anneliese Vandermeer-Castellanos & Konstantin Papadopoulos-Nakamura";
 
-const rows = Array.from({ length: 26 }, (_, i) => ({
-	who: i % 3 === 0 ? `Speaker ${i} · Someone Withalongname` : `Role ${i}`,
-	detail:
-		i % 5 === 4
-			? HANDOFF_DETAIL
-			: "A representative line of run-sheet detail for this beat",
-	minutes: i % 5 === 4 ? 0 : 5,
-	// `i % 3 === 0`, unnarrowed. Adding `&& i % 5 !== 4` to keep hand-off rows
-	// unmarked would ALSO have dropped the marks from i=9 and i=24, quietly
-	// shrinking the timing-trio axis this fixture covers — a fixture that gets
-	// weaker on one axis while growing on another is the trap in reverse.
-	marks: i % 3 === 0 ? { green: 4, yellow: 5, red: 6 } : null,
-	handoff: i % 5 === 4 ? true : undefined,
-	time: `7:${String(i).padStart(2, "0")}`,
-}));
+/** `n` run-sheet rows of the shape described above. */
+function agendaRows(n: number) {
+	return Array.from({ length: n }, (_, i) => ({
+		who: i % 3 === 0 ? `Speaker ${i} · Someone Withalongname` : `Role ${i}`,
+		detail:
+			i % 5 === 4
+				? HANDOFF_DETAIL
+				: "A representative line of run-sheet detail for this beat",
+		minutes: i % 5 === 4 ? 0 : 5,
+		// `i % 3 === 0`, unnarrowed. Adding `&& i % 5 !== 4` to keep hand-off rows
+		// unmarked would ALSO have dropped the marks from i=9 and i=24, quietly
+		// shrinking the timing-trio axis this fixture covers — a fixture that gets
+		// weaker on one axis while growing on another is the trap in reverse.
+		marks: i % 3 === 0 ? { green: 4, yellow: 5, red: 6 } : null,
+		handoff: i % 5 === 4 ? true : undefined,
+		time: `7:${String(i).padStart(2, "0")}`,
+	}));
+}
+
+const rows = agendaRows(26);
 
 const roleSheetRoles: RoleSheetEntry[] = Array.from({ length: 12 }, (_, i) => ({
 	id: String(i),
@@ -274,6 +287,325 @@ function posterHtml(word = "Ephemeral"): string {
 
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Copies measured under the REAL `FitPage` (#1181).
+//
+// `overflowingCopiesHtml` above fakes an overflowing sheet by swapping its box,
+// which is exactly why #1179 shipped green with a bug in the measuring: `FitPage`
+// decides to flow in an effect after the fonts load, and `AgendaCopies` has to
+// hear that sheet change height. Nothing static can exercise that, so this
+// bundles the real components, runs them in Chrome until they settle, and then
+// reads what they did.
+// ---------------------------------------------------------------------------
+
+const ROOT = resolve(__dirname, "..", "..", "..");
+
+/** How long the stack must hold still before a draw counts as settled. */
+const QUIET_MS = 400;
+
+/** One drawn state of the copies stack, read back once it had settled. */
+type CopiesStage = {
+	layout: AgendaLayout;
+	/** Each copy-sheet's rendered height in px, document order, blanks excluded. */
+	heights: number[];
+	blanks: number;
+};
+
+let copiesBundle = "";
+
+async function bundleCopiesEntry(): Promise<string> {
+	const out = await build({
+		stdin: {
+			contents: `
+import { createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { AgendaCopies } from "./src/components/agenda/agenda-copies";
+const fx = window.__fixture;
+// A browser that is not drawing frames (a background tab, a tool with no visible
+// pane) never delivers a ResizeObserver callback, and one old enough has no
+// ResizeObserver at all. Both are stood in for here, BEFORE anything mounts.
+if (fx.resizeObserver === "inert") {
+	window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+} else if (fx.resizeObserver === "absent") {
+	delete window.ResizeObserver;
+}
+const root = createRoot(document.getElementById("root"));
+const wait = (ms) => new Promise((ok) => setTimeout(ok, ms));
+const frame = () => new Promise((ok) => requestAnimationFrame(() => ok()));
+const copySheets = () => [...document.querySelectorAll(".agenda-page:not([data-agenda-blank])")];
+const read = () => {
+	const sheets = [...document.querySelectorAll(".agenda-page")];
+	return {
+		heights: sheets.filter((s) => !s.hasAttribute("data-agenda-blank")).map((s) => s.offsetHeight),
+		blanks: sheets.filter((s) => s.hasAttribute("data-agenda-blank")).length,
+	};
+};
+async function until(done, what) {
+	const t0 = Date.now();
+	while (!done()) {
+		if (Date.now() - t0 > 8000) throw new Error("never saw " + what);
+		await wait(10);
+	}
+}
+// Settled = nothing changed for ${QUIET_MS}ms. FitPage flows after the fonts
+// resolve and AgendaCopies hears it, so there is no one event to await.
+async function settle() {
+	let last = "";
+	let since = Date.now();
+	const t0 = since;
+	while (Date.now() - t0 < 8000) {
+		const now = JSON.stringify(read());
+		if (now !== last) { last = now; since = Date.now(); }
+		else if (Date.now() - since > ${QUIET_MS}) break;
+		await wait(25);
+	}
+}
+// The quiet window must not start until the stack is the REQUESTED layout's:
+// on a busy runner React's commit and FitPage's font-gated flow can take longer
+// than ${QUIET_MS}ms, and the PREVIOUS layout's stable DOM would be read instead.
+async function show(layout) {
+	const before = new Set(copySheets());
+	root.render(createElement(AgendaCopies, { ...fx.props, layout, copies: fx.copies, duplex: fx.duplex }));
+	// A layout switch replaces every sheet; the first draw has none to replace.
+	await until(() => {
+		const now = copySheets();
+		return now.length > 0 && now.every((s) => !before.has(s));
+	}, layout + "'s sheets");
+	await document.fonts.ready;
+	await frame();
+	await frame();
+	await settle();
+}
+window.__result = (async () => {
+	const stages = [];
+	for (const layout of fx.layouts) {
+		await show(layout);
+		stages.push({ layout, ...read() });
+	}
+	// A sheet that grows with NO change to the DOM or an inline style under the
+	// stack, as a logo or a late font does: only a ResizeObserver on the CURRENT
+	// sheets can hear it.
+	if (fx.growCss) {
+		const style = document.createElement("style");
+		style.textContent = fx.growCss;
+		document.head.append(style);
+		await settle();
+		stages.push({ layout: fx.layouts[fx.layouts.length - 1], ...read() });
+	}
+	for (const s of [...document.querySelectorAll("script")]) s.remove();
+	return { stages, html: document.documentElement.outerHTML };
+})();
+`,
+			resolveDir: ROOT,
+			loader: "ts",
+		},
+		bundle: true,
+		format: "iife",
+		platform: "browser",
+		write: false,
+		logLevel: "silent",
+		alias: { "#": join(ROOT, "src") },
+		define: { "process.env.NODE_ENV": '"production"' },
+	});
+	return out.outputFiles[0]?.text ?? "";
+}
+
+type CdpMessage = {
+	id?: number;
+	result?: Record<string, unknown>;
+	error?: unknown;
+};
+
+/**
+ * Run `expression` (a promise) in a real-time Chrome that has loaded `htmlPath`
+ * and return its value, over the DevTools protocol on a pipe.
+ *
+ * Real time, not `--dump-dom --virtual-time-budget`: virtual time draws almost
+ * no frames, and a ResizeObserver is only heard on a frame, so the very thing
+ * under test (a sheet growing after `FitPage` flows) never settled there.
+ */
+async function evaluateInChrome<T>(
+	htmlPath: string,
+	dir: string,
+	expression: string,
+): Promise<T> {
+	const chrome = findChrome();
+	if (!chrome) throw new Error("no chrome");
+	const proc = spawn(
+		chrome,
+		[
+			"--headless",
+			"--disable-gpu",
+			"--no-sandbox",
+			`--user-data-dir=${dir}`,
+			"--disable-extensions",
+			"--host-resolver-rules=MAP * ~NOTFOUND",
+			"--remote-debugging-pipe",
+			`file://${htmlPath}`,
+		],
+		{
+			stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
+			env: CHROME_ENV,
+			detached: true,
+		},
+	);
+	const toChrome = proc.stdio[3] as Writable;
+	const fromChrome = proc.stdio[4] as Readable;
+	const pending = new Map<number, (msg: CdpMessage) => void>();
+	let nextId = 0;
+	let buffered = "";
+	let died: Error | null = null;
+	const failAll = (err: Error) => {
+		died ??= err;
+		for (const settle of pending.values()) settle({ error: err.message });
+		pending.clear();
+	};
+	proc.on("error", (e) =>
+		failAll(new Error(`Chrome did not start: ${e.message}`)),
+	);
+	proc.on("exit", (code) =>
+		failAll(new Error(`Chrome exited early (${code})`)),
+	);
+	toChrome.on("error", (e) => failAll(e));
+	fromChrome.on("error", (e) => failAll(e));
+	fromChrome.on("data", (chunk: Buffer) => {
+		buffered += chunk.toString("utf8");
+		let nul = buffered.indexOf("\0");
+		while (nul !== -1) {
+			const msg = JSON.parse(buffered.slice(0, nul)) as CdpMessage;
+			buffered = buffered.slice(nul + 1);
+			if (msg.id !== undefined) {
+				pending.get(msg.id)?.(msg);
+				pending.delete(msg.id);
+			}
+			nul = buffered.indexOf("\0");
+		}
+	});
+	const send = (
+		method: string,
+		params: Record<string, unknown> = {},
+		sessionId?: string,
+	) =>
+		new Promise<CdpMessage>((ok) => {
+			if (died) return ok({ error: died.message });
+			const id = ++nextId;
+			pending.set(id, ok);
+			toChrome.write(`${JSON.stringify({ id, method, params, sessionId })}\0`);
+		});
+	const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+	try {
+		const run = (async () => {
+			let targetId: string | undefined;
+			for (let i = 0; i < 100 && !targetId; i++) {
+				const { result } = await send("Target.getTargets");
+				targetId = (
+					result?.targetInfos as
+						| { type: string; targetId: string; url: string }[]
+						| undefined
+				)?.find(
+					(t) => t.type === "page" && t.url.startsWith("file://"),
+				)?.targetId;
+				if (!targetId) await pause(50);
+			}
+			if (!targetId) throw new Error("Chrome opened no page");
+			const attached = await send("Target.attachToTarget", {
+				targetId,
+				flatten: true,
+			});
+			const sessionId = attached.result?.sessionId as string;
+			// Re-asked while the navigation still tears the context down.
+			let evaluated: CdpMessage = {};
+			for (let i = 0; i < 50; i++) {
+				evaluated = await send(
+					"Runtime.evaluate",
+					{ expression, awaitPromise: true, returnByValue: true },
+					sessionId,
+				);
+				const inner = evaluated.result?.result as
+					| { value?: unknown }
+					| undefined;
+				if (!evaluated.error && inner?.value !== undefined) break;
+				await pause(50);
+			}
+			const value = (evaluated.result?.result as { value?: T } | undefined)
+				?.value;
+			if (value === undefined) {
+				throw new Error(`the page returned ${JSON.stringify(evaluated)}`);
+			}
+			return value;
+		})();
+		const timeout = new Promise<never>((_, reject) => {
+			setTimeout(
+				() => reject(new Error("the page did not settle in 40s")),
+				40_000,
+			).unref();
+		});
+		return await Promise.race([run, timeout]);
+	} finally {
+		proc.removeAllListeners("exit");
+		died ??= new Error("done");
+		await stopChromeAndRemoveDir(proc, dir);
+	}
+}
+
+/**
+ * Mount `copies` agendas of `rowCount` rows in Chrome, drawing `layouts` one
+ * after another into the SAME stack (a layout switch is a re-render, as on the
+ * print route's tabs), and report what each draw settled to plus the pages the
+ * final document prints.
+ *
+ * The final count is taken from a script-free snapshot of the settled DOM: its
+ * inline styles are what `FitPage` left, so printing it is printing the page
+ * the person would have.
+ */
+async function realFitPageCopies(
+	layouts: AgendaLayout[],
+	rowCount: number,
+	copies: number,
+	duplex: boolean,
+	options: {
+		/** `inert`: observes nothing, ever (a browser drawing no frames).
+		 *  `absent`: no ResizeObserver exists. Default: Chrome's own. */
+		resizeObserver?: "native" | "inert" | "absent";
+		/** CSS added to the document once the last layout settled, to grow the
+		 *  sheets without touching the DOM or an inline style under the stack. */
+		growCss?: string;
+	} = {},
+): Promise<{ stages: CopiesStage[]; printedPages: number }> {
+	const fixture = {
+		layouts,
+		copies,
+		duplex,
+		resizeObserver: options.resizeObserver ?? "native",
+		growCss: options.growCss ?? null,
+		props: {
+			header,
+			roles: [{ label: "Toastmaster", name: "Lee P." }],
+			officers: [],
+			explainers: [],
+			rows: agendaRows(rowCount),
+			qrUrl: QR_URL,
+		},
+	};
+	const html = printableDocument(
+		PRINT_PAGE_CSS,
+		`<div id="root"></div>
+<script>window.__fixture = ${JSON.stringify(fixture).replace(/</g, "\\u003c")};</script>
+<script>${copiesBundle.replace(/<\/script/gi, "<\\/script")}</script>`,
+	);
+	const dir = mkdtempSync(join(tmpdir(), "copies-flow-"));
+	const htmlPath = join(dir, "page.html");
+	writeFileSync(htmlPath, html, "utf8");
+	const { stages, html: settled } = await evaluateInChrome<{
+		stages: CopiesStage[];
+		html: string;
+	}>(htmlPath, dir, "window.__result");
+	return {
+		stages,
+		printedPages: printedPageCount(`<!doctype html>${settled}`),
+	};
+}
+
 const hasChrome = findChrome() !== null;
 
 // The gate must never be able to skip itself into green in CI. Locally, no
@@ -398,6 +730,155 @@ describe.skipIf(!hasChrome)(
 					overflowingCopiesHtml(layout, [...per], duplex, tall),
 				),
 			).toBe(expected);
+		});
+
+		// #1181. The blank after a copy follows the pages `FitPage` REALLY made it
+		// print, and that has to survive the layout being switched under the stack.
+		// Every case below runs the real components in Chrome (see
+		// `realFitPageCopies`), so these are the cases #1179's box-swap tests could
+		// not see.
+		describe("copies measured under the real FitPage (#1181)", () => {
+			beforeAll(async () => {
+				copiesBundle = await bundleCopiesEntry();
+			});
+
+			// Rows enough that the grid flows (its scale would fall under
+			// `MIN_FIT_SCALE`) onto two pages, and the editorial layout, which is
+			// taller for the same rows, onto three.
+			//
+			// MEASURED (macOS, 2026-10-12, one copy, the harness's offline fallback
+			// fonts), sheet height by row count. Grid: fits one page up to 37 rows,
+			// flows from 38, is on two pages through 57 (2052px) and on three by 60
+			// (2133px). Editorial: 2 pages from 31 rows, 3 pages from 48 (2146px; 45
+			// is 2028px) through 75. Both hold from 48 to 57 rows, so 52 sits in the
+			// middle, ~180px (about 5 rows) clear of the nearer page boundary. A
+			// runner whose fontconfig picks a different fallback face has to move a
+			// layout by that much to break it, and each case asserts its own page
+			// counts, so if one does, it fails naming the precondition rather than
+			// passing for the wrong reason.
+			const LONG = 52;
+
+			it("a grid agenda that flows to 2 pages gets no blank between copies", async () => {
+				const { stages, printedPages } = await realFitPageCopies(
+					["grid"],
+					LONG,
+					3,
+					true,
+				);
+				const [grid] = stages;
+				// The precondition the case rests on: the sheet really flowed to 2 pages.
+				expect(grid?.heights.map(sheetPages)).toEqual([2, 2, 2]);
+				expect(grid?.blanks).toBe(0);
+				expect(printedPages).toBe(6);
+			});
+
+			it("a grid agenda that fits one page gets a blank after each copy but the last", async () => {
+				const { stages, printedPages } = await realFitPageCopies(
+					["grid"],
+					10,
+					3,
+					true,
+				);
+				const [grid] = stages;
+				expect(grid?.heights.map(sheetPages)).toEqual([1, 1, 1]);
+				expect(grid?.blanks).toBe(2);
+				expect(printedPages).toBe(5);
+			});
+
+			it("switching from a 3-page editorial to a 2-page grid drops the blanks", async () => {
+				const { stages, printedPages } = await realFitPageCopies(
+					["editorial", "grid"],
+					LONG,
+					3,
+					true,
+				);
+				const [editorial, grid] = stages;
+				expect(editorial?.heights.map(sheetPages)).toEqual([3, 3, 3]);
+				expect(editorial?.blanks).toBe(2);
+				expect(grid?.heights.map(sheetPages)).toEqual([2, 2, 2]);
+				expect(grid?.blanks).toBe(0);
+				expect(printedPages).toBe(6);
+			});
+
+			it("switching from a 2-page grid to a 3-page editorial adds the blanks", async () => {
+				const { stages, printedPages } = await realFitPageCopies(
+					["grid", "editorial"],
+					LONG,
+					3,
+					true,
+				);
+				const [grid, editorial] = stages;
+				expect(grid?.heights.map(sheetPages)).toEqual([2, 2, 2]);
+				expect(grid?.blanks).toBe(0);
+				expect(editorial?.heights.map(sheetPages)).toEqual([3, 3, 3]);
+				expect(editorial?.blanks).toBe(2);
+				// 3 + blank + 3 + blank + 3
+				expect(printedPages).toBe(11);
+			});
+
+			// A browser that draws no frames (a tab opened in the background, a tool
+			// with no visible pane) never delivers a ResizeObserver callback. On a
+			// fresh load of `?layout=grid&copies=3&duplex=1` the copies are measured
+			// once, at mount, before `FitPage` flows them, and the count stayed at
+			// the grid's nominal 1: a blank after every copy (#1181, as reported).
+			it("a flowing grid gets no blank even when no ResizeObserver callback ever arrives", async () => {
+				const { stages, printedPages } = await realFitPageCopies(
+					["grid"],
+					LONG,
+					3,
+					true,
+					{ resizeObserver: "inert" },
+				);
+				expect(stages[0]?.heights.map(sheetPages)).toEqual([2, 2, 2]);
+				expect(stages[0]?.blanks).toBe(0);
+				expect(printedPages).toBe(6);
+			});
+
+			// The `typeof ResizeObserver === "undefined"` branch.
+			it("a flowing grid gets no blank in a browser with no ResizeObserver", async () => {
+				const { stages, printedPages } = await realFitPageCopies(
+					["grid"],
+					LONG,
+					3,
+					true,
+					{ resizeObserver: "absent" },
+				);
+				expect(stages[0]?.heights.map(sheetPages)).toEqual([2, 2, 2]);
+				expect(stages[0]?.blanks).toBe(0);
+				expect(printedPages).toBe(6);
+			});
+
+			// The sheets the ResizeObserver hears must be the CURRENT ones. After a
+			// layout switch replaced every sheet, a sheet that then grows with no
+			// mutation under the stack (a logo or a late font loading) can only be
+			// heard by an observer re-armed on the new sheets.
+			it("a sheet that grows after a layout switch is still heard", async () => {
+				const { stages } = await realFitPageCopies(
+					["editorial", "grid"],
+					LONG,
+					3,
+					true,
+					{ growCss: "[data-fit-inner]{padding-bottom:1100px}" },
+				);
+				const [, grid, grown] = stages;
+				expect(grid?.heights.map(sheetPages)).toEqual([2, 2, 2]);
+				expect(grid?.blanks).toBe(0);
+				// 1100px more puts each copy on a third page, which is odd.
+				expect(grown?.heights.map(sheetPages)).toEqual([3, 3, 3]);
+				expect(grown?.blanks).toBe(2);
+			});
+
+			it("without duplex a one-page grid is never padded", async () => {
+				const { stages, printedPages } = await realFitPageCopies(
+					["grid"],
+					10,
+					3,
+					false,
+				);
+				expect(stages[0]?.heights.map(sheetPages)).toEqual([1, 1, 1]);
+				expect(stages[0]?.blanks).toBe(0);
+				expect(printedPages).toBe(3);
+			});
 		});
 
 		/**

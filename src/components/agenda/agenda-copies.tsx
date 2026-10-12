@@ -124,12 +124,14 @@ export function AgendaCopies({
 	useEffect(() => {
 		const root = stack.current;
 		if (!root) return;
-		const measure = () => {
-			const sheets = Array.from(
+		const sheetsNow = () =>
+			Array.from(
 				root.querySelectorAll<HTMLElement>(
 					".agenda-page:not([data-agenda-blank])",
 				),
 			);
+		const measure = () => {
+			const sheets = sheetsNow();
 			// Every copy is `nominal` sheets, in document order: a layout's sheet
 			// count does not change when its content overflows, only a sheet's height.
 			const next = Array.from({ length: count }, (_, i) => {
@@ -148,16 +150,60 @@ export function AgendaCopies({
 					: next,
 			);
 		};
+		// Three ways a copy's page count changes after this first measurement
+		// (#1181), and each needs its own way of hearing it.
+		//
+		// `FitPage` FLOWING a sheet is an inline-style change after the fonts load.
+		// A MutationObserver hears that as a microtask, and reading `offsetHeight`
+		// lays the page out on the spot, so no frame is needed. That matters: a
+		// ResizeObserver is only delivered on a rendered frame, and a tab that is
+		// not being drawn (opened in the background, or driven through a hidden
+		// pane) never gets the callback. Measured on a fresh load of
+		// `?layout=grid&copies=3&duplex=1`: the sheets grew from 1056px to 1852px
+		// and the count stayed at the grid's nominal 1, so every copy kept a blank.
+		//
+		// A layout SWITCH between two layouts with the same page count
+		// (editorial <-> grid) replaces every `.agenda-page` with a new element
+		// without changing `count` or `nominal`: the mutation re-measures, and
+		// `sync` points the ResizeObserver at the new sheets, since an observer
+		// armed once was left watching detached nodes.
+		//
+		// A sheet that GROWS with no mutation under the stack (a logo or a late
+		// font) is heard by the ResizeObserver, where there is one.
+		const sheetResizeObserver =
+			typeof ResizeObserver === "undefined"
+				? null
+				: new ResizeObserver(measure);
+		const watched = new Set<Element>();
+		const sync = () => {
+			const current = new Set<Element>(sheetsNow());
+			for (const el of watched) {
+				if (current.has(el)) continue;
+				sheetResizeObserver?.unobserve(el);
+				watched.delete(el);
+			}
+			for (const el of current) {
+				if (watched.has(el)) continue;
+				sheetResizeObserver?.observe(el);
+				watched.add(el);
+			}
+		};
+		sync();
 		measure();
-		if (typeof ResizeObserver === "undefined") return;
-		// `FitPage` drops a sheet's fixed height after the fonts load, so a sheet
-		// can grow well after mount.
-		const observer = new ResizeObserver(measure);
-		for (const sheet of root.querySelectorAll(
-			".agenda-page:not([data-agenda-blank])",
-		))
-			observer.observe(sheet);
-		return () => observer.disconnect();
+		const sheetMutationObserver = new MutationObserver(() => {
+			sync();
+			measure();
+		});
+		sheetMutationObserver.observe(root, {
+			childList: true,
+			subtree: true,
+			attributes: true,
+			attributeFilter: ["style"],
+		});
+		return () => {
+			sheetResizeObserver?.disconnect();
+			sheetMutationObserver.disconnect();
+		};
 	}, [count, nominal]);
 
 	const pagesPerCopy =
