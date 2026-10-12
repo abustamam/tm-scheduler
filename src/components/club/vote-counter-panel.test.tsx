@@ -839,6 +839,69 @@ describe("VoteCounterPanel ruling controls need a session (#752)", () => {
 	});
 });
 
+// #1153. `toggle` had an onSuccess and nothing rendering its error, so a
+// refused open/close (completed or cancelled meeting) looked like a no-op.
+describe("VoteCounterPanel open/close refusal (#1153)", () => {
+	afterEach(() => {
+		cleanup();
+		vi.clearAllMocks();
+	});
+
+	it("shows a refused open next to the toggled category only", async () => {
+		getVoteTally.mockResolvedValue(tally({}));
+		openVoteFn.mockRejectedValue(new Error("This meeting is cancelled."));
+		renderPanel();
+
+		const speaker = card("Best Speaker");
+		await userEvent.click(
+			await speaker.findByRole("button", { name: /Open voting/ }),
+		);
+		expect(await speaker.findByText("This meeting is cancelled.")).toBeTruthy();
+		expect(card("Best Evaluator").queryByText(/cancelled/)).toBeNull();
+		expect(card("Best Table Topics").queryByText(/cancelled/)).toBeNull();
+	});
+
+	it("shows a refused close next to the toggled category", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({ best_evaluator: category({ isOpen: true }) }),
+		);
+		closeVoteFn.mockRejectedValue(new Error("This meeting is completed."));
+		renderPanel();
+
+		const evaluator = card("Best Evaluator");
+		await userEvent.click(
+			await evaluator.findByRole("button", { name: /Close voting/ }),
+		);
+		expect(
+			await evaluator.findByText("This meeting is completed."),
+		).toBeTruthy();
+		expect(card("Best Speaker").queryByText(/completed/)).toBeNull();
+	});
+
+	it("clears the message when the counter tries again", async () => {
+		getVoteTally.mockResolvedValue(tally({}));
+		openVoteFn.mockRejectedValueOnce(new Error("This meeting is cancelled."));
+		let release: (v: unknown) => void = () => {};
+		openVoteFn.mockImplementationOnce(
+			() => new Promise((resolve) => (release = resolve)),
+		);
+		renderPanel();
+
+		const speaker = card("Best Speaker");
+		const open = await speaker.findByRole("button", { name: /Open voting/ });
+		await userEvent.click(open);
+		expect(await speaker.findByText("This meeting is cancelled.")).toBeTruthy();
+
+		// The second attempt is still in flight: the old message is already gone.
+		await userEvent.click(open);
+		expect(speaker.queryByText("This meeting is cancelled.")).toBeNull();
+		await act(async () => {
+			release({});
+		});
+		expect(openVoteFn).toHaveBeenCalledTimes(2);
+	});
+});
+
 // #982. A phone that never identified casts an anonymous ballot. "Who has
 // voted" must total EVERY ballot, and must not list the anonymous ones as
 // people.
