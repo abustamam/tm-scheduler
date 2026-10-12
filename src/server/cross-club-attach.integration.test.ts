@@ -898,6 +898,7 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 				clubId: victimClub.clubId,
 				guestId,
 				actorMemberId: victimClub.adminMemberId,
+				confirmedEmail: email,
 			});
 			personIds.push(converted.personId);
 			const undone = await applyUndoGuestConversion({
@@ -946,6 +947,7 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 				clubId: victimClub.clubId,
 				guestId,
 				actorMemberId: victimClub.adminMemberId,
+				confirmedEmail: email,
 			});
 			personIds.push(converted.personId);
 			const patched = await testDb
@@ -994,6 +996,7 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 				clubId: victimClub.clubId,
 				guestId,
 				actorMemberId: victimClub.adminMemberId,
+				confirmedEmail: email,
 			});
 			expect(converted.personId).toBe(lapsed);
 			const undone = await applyUndoGuestConversion({
@@ -1021,6 +1024,7 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 				clubId: attackerClub.clubId,
 				guestId,
 				actorMemberId: attackerClub.adminMemberId,
+				confirmedEmail: guest.email ?? null,
 			});
 		}
 
@@ -1108,6 +1112,7 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 				clubId: attackerClub.clubId,
 				guestId,
 				actorMemberId: attackerClub.adminMemberId,
+				confirmedEmail: email,
 			});
 			// Without the lock this never blocks: it mints a second Person at once.
 			await waitForLockWait("pg_advisory_xact_lock", first.pid);

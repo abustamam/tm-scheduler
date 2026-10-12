@@ -769,7 +769,7 @@ describe.skipIf(!hasTestDb)(
 				return captureGuestVisit({ clubId: seed.clubId, name, phone, email });
 			}
 
-			it("fills a blank email on a guest-only, unbound Person only this club holds", async () => {
+			it("fills a blank book_email on a guest-only, unbound Person only this club holds", async () => {
 				const name = uniq("Returning");
 				const phone = uniquePhone();
 				const { guestId, personId } = await newGuest(name, {
@@ -781,7 +781,10 @@ describe.skipIf(!hasTestDb)(
 
 				expect(res.guestId).toBe(guestId);
 				expect(res.created).toBe(false);
-				expect((await personRow(personId))?.email).toBe(email);
+				// An address typed on the book is the club's unconfirmed note on the
+				// guest row, never the Person's (#1157).
+				expect((await guestRow(guestId)).bookEmail).toBe(email);
+				expect((await personRow(personId))?.email).toBeNull();
 			});
 
 			it("never replaces a value that is already there", async () => {
