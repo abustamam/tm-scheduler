@@ -44,16 +44,7 @@
  * prunes it.
  */
 import { createHash } from "node:crypto";
-import {
-	and,
-	asc,
-	eq,
-	inArray,
-	isNotNull,
-	like,
-	or,
-	sql,
-} from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	clubImports,
@@ -103,7 +94,8 @@ const SOURCE = "easy_speak" as const;
 /** The upload cap (#1051): 50 MB of JSON text. */
 export const MAX_BUNDLE_BYTES = 50 * 1024 * 1024;
 
-export const IMPORT_NOT_FOUND_MESSAGE = "That import was not found for this club.";
+export const IMPORT_NOT_FOUND_MESSAGE =
+	"That import was not found for this club.";
 export const UNRESOLVED_PEOPLE_MESSAGE = (n: number) =>
 	`${n} ${n === 1 ? "person still needs" : "people still need"} a decision before this can be applied.`;
 export const INTRODUCER_NOT_IN_CLUB_MESSAGE =
@@ -268,7 +260,9 @@ export interface ImportListRow {
 }
 
 /** A club's stored imports, newest first, without parsing any bundle. */
-export async function listClubImports(clubId: string): Promise<ImportListRow[]> {
+export async function listClubImports(
+	clubId: string,
+): Promise<ImportListRow[]> {
 	const rows = await db
 		.select({
 			importId: clubImports.id,
@@ -495,7 +489,11 @@ export async function previewEasySpeakImport(input: {
 	const plan = buildImportPlan(stored.bundle, loaded.ctx);
 	const warnings: string[] = [];
 	const { club } = stored.bundle;
-	if (club.number && loaded.club.clubNumber && club.number !== loaded.club.clubNumber) {
+	if (
+		club.number &&
+		loaded.club.clubNumber &&
+		club.number !== loaded.club.clubNumber
+	) {
 		warnings.push(
 			`The bundle is for club ${club.number} ("${club.name}") but this club's number is ${loaded.club.clubNumber}.`,
 		);
@@ -593,13 +591,17 @@ async function writePeopleAndRoles(
 			newRoleDefinitions: [],
 		};
 
-		const [{ next } = { next: 0 }] = await tx
+		const [top] = await tx
 			.select({
-				next: sql<number>`coalesce(max(${roleDefinitions.sortOrder}), 0) + 10`,
+				max: sql<number>`coalesce(max(${roleDefinitions.sortOrder}), 0)`,
 			})
 			.from(roleDefinitions)
 			.where(eq(roleDefinitions.clubId, clubId));
-		let sortOrder = Number(next);
+		let sortOrder = Number(top?.max ?? 0);
+		const nextSortOrder = () => {
+			sortOrder += 10;
+			return sortOrder;
+		};
 		for (const def of plan.roleDefinitions) {
 			if (def.existingId) {
 				out.roleDefIds.set(def.planKey, def.existingId);
@@ -629,7 +631,7 @@ async function writePeopleAndRoles(
 								name: def.name,
 								category: "functionary",
 								defaultCount: 1,
-								sortOrder: (sortOrder += 10),
+								sortOrder: nextSortOrder(),
 								isSpeakerRole: false,
 								// A role the club ran in Easy-Speak, kept for history: it must
 								// not start generating an open slot on every new meeting.
@@ -781,8 +783,7 @@ async function applyMeeting(env: MeetingEnv, pm: PlanMeeting): Promise<void> {
 							),
 						);
 		const refOf = (kind: ImportRefKind, sourceId: string) =>
-			refRows.find((r) => r.kind === kind && r.sourceId === sourceId)
-				?.targetId;
+			refRows.find((r) => r.kind === kind && r.sourceId === sourceId)?.targetId;
 
 		// -- Role slots and their speeches -------------------------------------
 		const existingSlots = await tx
@@ -793,7 +794,8 @@ async function applyMeeting(env: MeetingEnv, pm: PlanMeeting): Promise<void> {
 		const slotIdByEsSlot = new Map<number, string>();
 		for (const ps of pm.slots) {
 			const roleDefinitionId = env.resolved.roleDefIds.get(ps.roleKey);
-			if (!roleDefinitionId) throw new Error(`No role definition for ${ps.label}.`);
+			if (!roleDefinitionId)
+				throw new Error(`No role definition for ${ps.label}.`);
 			const owner = ownerOf(env, ps.holderKey);
 			const refTarget = refOf("role_slot", ps.sourceId);
 			let slot =
@@ -885,7 +887,9 @@ async function applyMeeting(env: MeetingEnv, pm: PlanMeeting): Promise<void> {
 				await tx
 					.update(roleSlots)
 					.set({ speechId })
-					.where(and(eq(roleSlots.id, slot.id), sql`${roleSlots.speechId} is null`));
+					.where(
+						and(eq(roleSlots.id, slot.id), sql`${roleSlots.speechId} is null`),
+					);
 			}
 		}
 		// Evaluator -> the speaker slot it evaluates, once every slot exists.
@@ -1003,10 +1007,14 @@ async function applyMeeting(env: MeetingEnv, pm: PlanMeeting): Promise<void> {
 
 /** What a failed meeting says in the report: never the SQL, which carries names. */
 function describeFailure(err: unknown): string {
-	const message = err instanceof Error ? err.message : String(err);
+	const message = (err instanceof Error ? err.message : String(err)).replaceAll(
+		"\u0000",
+		"",
+	);
 	if (/^Failed query/u.test(message)) {
-		const cause = (err as { cause?: { message?: string; code?: string } }).cause;
-		return `Database error${cause?.code ? ` ${cause.code}` : ""}: ${(cause?.message ?? "the statement was refused").slice(0, 200)}`;
+		const cause = (err as { cause?: { message?: string; code?: string } })
+			.cause;
+		return `Database error${cause?.code ? ` ${cause.code}` : ""}: ${(cause?.message ?? "the statement was refused").replaceAll("\u0000", "").slice(0, 200)}`;
 	}
 	return message.slice(0, 300);
 }
@@ -1021,60 +1029,70 @@ async function loadFoundSourceIds(clubId: string): Promise<FoundSourceIds> {
 		);
 	const ids = (rows: Array<{ sourceId: string }>) =>
 		new Set(rows.map((r) => r.sourceId));
-	const [meeting, roleAssignment, speech, speechIntro, award, tableTopic, attendance] =
-		await Promise.all([
-			db
-				.select({ sourceId: importRefs.sourceId })
-				.from(importRefs)
-				.innerJoin(meetings, eq(meetings.id, importRefs.targetId))
-				.where(and(scope("meeting"), eq(meetings.status, "completed"))),
-			db
-				.select({ sourceId: importRefs.sourceId })
-				.from(importRefs)
-				.innerJoin(roleSlots, eq(roleSlots.id, importRefs.targetId))
-				.where(
-					and(
-						scope("role_slot"),
-						or(
-							isNotNull(roleSlots.assignedMemberId),
-							isNotNull(roleSlots.assignedGuestId),
-						),
+	const [
+		meeting,
+		roleAssignment,
+		speech,
+		speechIntro,
+		award,
+		tableTopic,
+		attendance,
+	] = await Promise.all([
+		db
+			.select({ sourceId: importRefs.sourceId })
+			.from(importRefs)
+			.innerJoin(meetings, eq(meetings.id, importRefs.targetId))
+			.where(and(scope("meeting"), eq(meetings.status, "completed"))),
+		db
+			.select({ sourceId: importRefs.sourceId })
+			.from(importRefs)
+			.innerJoin(roleSlots, eq(roleSlots.id, importRefs.targetId))
+			.where(
+				and(
+					scope("role_slot"),
+					or(
+						isNotNull(roleSlots.assignedMemberId),
+						isNotNull(roleSlots.assignedGuestId),
 					),
 				),
-			db
-				.select({ sourceId: importRefs.sourceId })
-				.from(importRefs)
-				.innerJoin(speeches, eq(speeches.id, importRefs.targetId))
-				.where(scope("speech")),
-			db
-				.select({ sourceId: importRefs.sourceId })
-				.from(importRefs)
-				.innerJoin(speeches, eq(speeches.id, importRefs.targetId))
-				.where(
-					and(
-						scope("speech"),
-						sql`btrim(coalesce(${speeches.introduction}, '')) <> ''`,
-					),
+			),
+		db
+			.select({ sourceId: importRefs.sourceId })
+			.from(importRefs)
+			.innerJoin(speeches, eq(speeches.id, importRefs.targetId))
+			.where(scope("speech")),
+		db
+			.select({ sourceId: importRefs.sourceId })
+			.from(importRefs)
+			.innerJoin(speeches, eq(speeches.id, importRefs.targetId))
+			.where(
+				and(
+					scope("speech"),
+					sql`btrim(coalesce(${speeches.introduction}, '')) <> ''`,
 				),
-			db
-				.select({ sourceId: importRefs.sourceId })
-				.from(importRefs)
-				.innerJoin(meetingAwards, eq(meetingAwards.id, importRefs.targetId))
-				.where(scope("award")),
-			db
-				.select({ sourceId: importRefs.sourceId })
-				.from(importRefs)
-				.innerJoin(
-					tableTopicsSpeakers,
-					eq(tableTopicsSpeakers.id, importRefs.targetId),
-				)
-				.where(scope("table_topic")),
-			db
-				.select({ sourceId: importRefs.sourceId })
-				.from(importRefs)
-				.innerJoin(meetingAttendance, eq(meetingAttendance.id, importRefs.targetId))
-				.where(and(scope("attendance"), eq(meetingAttendance.status, "present"))),
-		]);
+			),
+		db
+			.select({ sourceId: importRefs.sourceId })
+			.from(importRefs)
+			.innerJoin(meetingAwards, eq(meetingAwards.id, importRefs.targetId))
+			.where(scope("award")),
+		db
+			.select({ sourceId: importRefs.sourceId })
+			.from(importRefs)
+			.innerJoin(
+				tableTopicsSpeakers,
+				eq(tableTopicsSpeakers.id, importRefs.targetId),
+			)
+			.where(scope("table_topic")),
+		db
+			.select({ sourceId: importRefs.sourceId })
+			.from(importRefs)
+			.innerJoin(
+				meetingAttendance,
+				eq(meetingAttendance.id, importRefs.targetId),
+			)
+			.where(and(scope("attendance"), eq(meetingAttendance.status, "present"))),
+	]);
 	return {
 		meeting: ids(meeting),
 		roleAssignment: ids(roleAssignment),
@@ -1130,7 +1148,10 @@ export async function applyEasySpeakImport(input: {
 			await applyMeeting(env, pm);
 			appliedMeetings++;
 		} catch (err) {
-			failed.push({ esMeetingId: pm.esMeetingId, message: describeFailure(err) });
+			failed.push({
+				esMeetingId: pm.esMeetingId,
+				message: describeFailure(err),
+			});
 		}
 	}
 
@@ -1183,13 +1204,13 @@ export async function applyEasySpeakImport(input: {
 				reconciled: report.reconciled,
 				failedMeetings: report.meetings.failed.length,
 				counts: Object.fromEntries(
-					report.counts.map((c) => [c.key, { bundle: c.bundle, gavelup: c.gavelup }]),
+					report.counts.map((c) => [
+						c.key,
+						{ bundle: c.bundle, gavelup: c.gavelup },
+					]),
 				),
 			},
 		});
 	});
 	return { report };
 }
-
-/** Deleting a stored import is not offered; the bundle is kept for the life of the club. */
-export const _unused = like;

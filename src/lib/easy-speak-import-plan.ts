@@ -26,15 +26,13 @@
  * the thing it counts drift apart.
  */
 import { z } from "zod";
-import type { EasySpeakBundleV1, EsPersonRef } from "./easy-speak-bundle";
 import { zonedWallTimeToUtc } from "./datetime";
-import {
-	ownRoleDisplayName,
-	standardRoleKeyFor,
-} from "./easy-speak-roles";
+import type { EasySpeakBundleV1, EsPersonRef } from "./easy-speak-bundle";
+import { ownRoleDisplayName, standardRoleKeyFor } from "./easy-speak-roles";
 import { GUEST_KINDS, type GuestKind } from "./guest-profile";
 
-type EsGuestCategory = EasySpeakBundleV1["meetings"][number]["guests"][number]["category"];
+type EsGuestCategory =
+	EasySpeakBundleV1["meetings"][number]["guests"][number]["category"];
 
 // ---------------------------------------------------------------------------
 // Names
@@ -111,7 +109,11 @@ export const personResolutionSchema = z.discriminatedUnion("action", [
 	}),
 	z.object({
 		action: z.literal("skip"),
-		reason: z.string().trim().min(1, "Say why this person is skipped."),
+		reason: z
+			.string()
+			.trim()
+			.min(1, "Say why this person is skipped.")
+			.transform((r) => r.replaceAll("\u0000", "")),
 	}),
 ]);
 
@@ -329,7 +331,8 @@ export function buildImportPlan(
 		}
 	};
 	for (const { meeting } of past) {
-		for (const role of meeting.roles) if (role.holder) touch(role.holder, "roles");
+		for (const role of meeting.roles)
+			if (role.holder) touch(role.holder, "roles");
 		for (const row of meeting.attendance) touch(row.who, "attendance");
 		for (const g of meeting.guests) touch(g.who, "attendance", g.category);
 		for (const award of meeting.awards) touch(award.who, "awards");
@@ -430,7 +433,9 @@ export function buildImportPlan(
 			rejectedChoice,
 		});
 	}
-	people.sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
+	people.sort(
+		(a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key),
+	);
 	const unresolved = people.filter(
 		(p) => p.outcome.status === "ambiguous" || p.outcome.status === "unmatched",
 	);
@@ -472,8 +477,7 @@ export function buildImportPlan(
 	};
 
 	// -- Meetings --------------------------------------------------------------
-	const refMeeting = (esMeetingId: string) =>
-		refTarget("meeting", esMeetingId);
+	const refMeeting = (esMeetingId: string) => refTarget("meeting", esMeetingId);
 	const meetings: PlanMeeting[] = [];
 	for (const { meeting, at } of past) {
 		const refId = refMeeting(meeting.esMeetingId);
@@ -591,10 +595,7 @@ export function buildImportPlan(
 		evaluatorLinks: allSlots.filter((s) => s.evaluatesEsSlot !== null).length,
 		attendanceRecords: meetings.reduce((n, m) => n + m.attendance.length, 0),
 		awards: meetings.reduce((n, m) => n + m.awards.length, 0),
-		tableTopicsSpeakers: meetings.reduce(
-			(n, m) => n + m.tableTopics.length,
-			0,
-		),
+		tableTopicsSpeakers: meetings.reduce((n, m) => n + m.tableTopics.length, 0),
 		newGuests: people.filter(
 			(p) => p.outcome.status === "guest" && !p.outcome.guestId,
 		).length,
@@ -799,7 +800,7 @@ export function notImportedFromBundle(
 			what: "Unknown plan answers",
 			count: unknown,
 			reason:
-				"\"Unknown\" is the row-absent state already; kept in the stored bundle.",
+				'"Unknown" is the row-absent state already; kept in the stored bundle.',
 		});
 	}
 	if (superseded > 0) {
@@ -814,14 +815,16 @@ export function notImportedFromBundle(
 		rows.push({
 			what: "Meeting manager names",
 			count: managers,
-			reason: "GavelUp has no meeting-manager field; kept in the stored bundle.",
+			reason:
+				"GavelUp has no meeting-manager field; kept in the stored bundle.",
 		});
 	}
 	if (bundle.speechRequests.length > 0) {
 		rows.push({
 			what: "Speech requests",
 			count: bundle.speechRequests.length,
-			reason: "Imported by the speech-request queue (#1052), not by this import.",
+			reason:
+				"Imported by the speech-request queue (#1052), not by this import.",
 		});
 	}
 	if (bundle.mentors.length > 0) {
@@ -835,7 +838,8 @@ export function notImportedFromBundle(
 		rows.push({
 			what: "Written evaluations",
 			count: bundle.evaluations.length,
-			reason: "GavelUp has no home for written evaluations; kept in the stored bundle.",
+			reason:
+				"GavelUp has no home for written evaluations; kept in the stored bundle.",
 		});
 	}
 	return rows;
@@ -875,7 +879,11 @@ export function buildReconciliation(input: {
 	created: ImportReport["created"];
 }): ImportReport {
 	const { found } = input;
-	const expected = expectedFromBundle(input.bundle, input.now, input.clubTimezone);
+	const expected = expectedFromBundle(
+		input.bundle,
+		input.now,
+		input.clubTimezone,
+	);
 	const count = (
 		key: ReconciliationCount["key"],
 		label: string,
@@ -963,7 +971,11 @@ export function buildReconciliation(input: {
 		roleAssignmentsPerRole,
 		roleAssignmentsPerPerson,
 		speechesPerPerson,
-		notImported: notImportedFromBundle(input.bundle, input.now, input.clubTimezone),
+		notImported: notImportedFromBundle(
+			input.bundle,
+			input.now,
+			input.clubTimezone,
+		),
 		skippedPeople: input.skippedPeople,
 		created: input.created,
 		reconciled,
