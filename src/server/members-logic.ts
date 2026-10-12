@@ -636,6 +636,9 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 					.where(
 						and(
 							eq(roleSlots.id, s.id),
+							// Still held by THIS member at UPDATE time: the SELECT above is a snapshot, and
+							// a slot reassigned since must not lose its new holder or speech link.
+							eq(roleSlots.assignedMemberId, input.memberId),
 							meetingAcceptsWrite(
 								tx,
 								"plan",
@@ -840,6 +843,9 @@ export async function applyMemberRemove(input: RemoveInput) {
 				.where(
 					and(
 						eq(roleSlots.id, s.id),
+						// Still held by THIS member at UPDATE time: the SELECT above is a snapshot, and
+						// a slot reassigned since must not lose its new holder or speech link.
+						eq(roleSlots.assignedMemberId, input.memberId),
 						meetingAcceptsWrite(
 							tx,
 							"plan",

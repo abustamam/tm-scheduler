@@ -36,10 +36,12 @@ import {
 import {
 	cleanup,
 	hasTestDb,
+	openBlockingTx,
 	type SeededClub,
 	seedClub,
 	seedPerson,
 	testDb,
+	waitForLockWait,
 } from "#/test/db";
 
 // The #1154 suite at the bottom drives the real `members-logic` writers against
@@ -297,6 +299,34 @@ describe.skipIf(!hasTestDb)(
 					expect(row.assignedMemberId).toBeNull();
 					expect(row.status).toBe("open");
 					expect(await releasedSlotIds([scheduled])).toEqual([scheduled]);
+				});
+
+				it("leaves a slot alone that was reassigned to someone else after the writer read it", async () => {
+					// The writer SELECTs the victim's slots, then UPDATEs each. An officer
+					// reassigning the slot in between must not lose its new holder or
+					// speech. Real interleaving: a second transaction holds the slot's
+					// row lock with the reassignment uncommitted, the writer reads the
+					// old holder and parks on its UPDATE, then the reassignment commits.
+					const slotId = await heldSlotOn("scheduled");
+					const blocker = await openBlockingTx(async (tx) => {
+						await tx
+							.update(roleSlots)
+							.set({ assignedMemberId: seed.memberId })
+							.where(eq(roleSlots.id, slotId));
+					});
+					const writer = act();
+					try {
+						await waitForLockWait('update "role_slots"', blocker.pid);
+					} finally {
+						await blocker.commit();
+					}
+					await writer;
+					const row = await slotRow(slotId);
+					expect(row.assignedMemberId).toBe(seed.memberId);
+					expect(row.status).toBe("claimed");
+					expect(row.claimedAt).not.toBeNull();
+					expect(row.speechId).not.toBeNull();
+					expect(await releasedSlotIds([slotId])).toEqual([]);
 				});
 
 				it("logs a release only for the slots it released, in a mixed set", async () => {
