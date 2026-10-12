@@ -218,3 +218,36 @@ describe("defaultMeetingNavLinkProps", () => {
 		});
 	});
 });
+
+describe("the strip with the past-but-after gap (#1158)", () => {
+	// A completed, B past-but-unfinished, C upcoming. The route feeds the
+	// `before = viewed` window and the `after = viewed` gap in as `past`, so the
+	// two overlap on the viewed meeting and on nothing else.
+	const A = { id: "A", scheduledAt: "2026-09-24T23:00:00Z", openSlots: 0 };
+	const B = { id: "B", scheduledAt: "2026-10-08T23:00:00Z", openSlots: 3 };
+	const C = { id: "C", scheduledAt: "2026-10-22T23:00:00Z", openSlots: 2 };
+
+	it("shows A, B and C in order from A, B and C, each exactly once", () => {
+		const cases = [
+			{ viewed: A, before: [], gap: [A, B] },
+			{ viewed: B, before: [A], gap: [B] },
+			{ viewed: C, before: [A, B], gap: [] },
+		];
+		for (const { viewed, before, gap } of cases) {
+			const items = deriveMeetingNavItems(viewed, [], [C], TZ, [
+				...before,
+				...gap,
+			]);
+			expect(items.map((i) => i.meetingId)).toEqual(["A", "B", "C"]);
+			expect(items.filter((i) => i.isCurrent).map((i) => i.meetingId)).toEqual([
+				viewed.id,
+			]);
+		}
+	});
+
+	it("gives the unfinished past meeting no open-roles dot", () => {
+		const items = deriveMeetingNavItems(A, [], [C], TZ, [A, B]);
+		expect(items.find((i) => i.meetingId === "B")?.hasOpenRoles).toBe(false);
+		expect(items.find((i) => i.meetingId === "C")?.hasOpenRoles).toBe(true);
+	});
+});

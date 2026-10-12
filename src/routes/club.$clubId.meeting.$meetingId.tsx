@@ -222,13 +222,30 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 		// today, so paging back from a three-month-old meeting keeps going back
 		// instead of jumping to last week. Public like `listUpcomingMeetings`, so
 		// the anonymous visitor gets it too. Non-fatal: degrade to forward-only.
-		const past = await listPastMeetings({
-			data: {
-				clubId: context.clubUuid,
-				before: new Date(data.meeting.scheduledAt).toISOString(),
-				limit: 3,
-			},
-		}).catch(() => null);
+		//
+		// The gap (#1158): past (`< now`) yet AFTER the viewed meeting, which
+		// neither this window nor `listUpcomingMeetings` has. One `after` query
+		// against the same archive loader rather than moving the split at now
+		// (#393); nothing to fetch when the viewed meeting is not in the past.
+		// Both are non-fatal and run in parallel.
+		const viewedAt = new Date(data.meeting.scheduledAt);
+		const [past, gap] = await Promise.all([
+			listPastMeetings({
+				data: {
+					clubId: context.clubUuid,
+					before: viewedAt.toISOString(),
+					limit: 3,
+				},
+			}).catch(() => null),
+			viewedAt.getTime() < Date.now()
+				? listPastMeetings({
+						data: {
+							clubId: context.clubUuid,
+							after: viewedAt.toISOString(),
+						},
+					}).catch(() => null)
+				: null,
+		]);
 
 		const upcoming = await upcomingPromise;
 		const navItems = deriveMeetingNavItems(
@@ -236,7 +253,7 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 			data.slots,
 			upcoming,
 			data.timezone,
-			past?.meetings ?? [],
+			[...(past?.meetings ?? []), ...(gap?.meetings ?? [])],
 		);
 
 		// Minutes (ADR-0014 / #152) — ONLY for a signed-in member (shell); an anon

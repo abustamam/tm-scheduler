@@ -20,7 +20,9 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { loadPastMeetings } = await import("#/server/past-meetings-logic");
+const { loadPastMeetings, PAST_MEETINGS_DEFAULT_LIMIT } = await import(
+	"#/server/past-meetings-logic"
+);
 
 /** Insert a meeting for the seeded club and return its id. */
 async function addMeeting(
@@ -72,6 +74,83 @@ describe.skipIf(!hasTestDb)("loadPastMeetings (#375)", () => {
 		// The seeded fixture meeting is a week in the FUTURE — never in the archive.
 		expect(page.meetings.map((m) => m.id)).toEqual([recent, mid, old]);
 		expect(page.meetings.map((m) => m.id)).not.toContain(seed.meetingId);
+		expect(page.hasMore).toBe(false);
+	});
+
+	it("after: returns the past meetings from `after` up to now, oldest first, so the nav strip can bridge to the upcoming list (#1158)", async () => {
+		const day = 24 * 60 * 60 * 1000;
+		const at = (daysAgo: number) =>
+			new Date(Date.now() - daysAgo * day).toISOString();
+		const before = await addMeeting(seed.clubId, at(40), {
+			status: "completed",
+		});
+		const aAt = at(30);
+		const a = await addMeeting(seed.clubId, aAt, { status: "completed" });
+		const scrapped = await addMeeting(seed.clubId, at(20), {
+			status: "cancelled",
+		});
+		// Past, never closed out: in neither `before = A` nor `scheduledAt >= now`.
+		const b = await addMeeting(seed.clubId, at(10), { status: "scheduled" });
+		const other = await seedClub();
+		try {
+			const theirs = await addMeeting(other.clubId, at(15), {
+				status: "completed",
+			});
+
+			const page = await loadPastMeetings({
+				clubId: seed.clubId,
+				after: new Date(aAt),
+			});
+
+			const ids = page.meetings.map((m) => m.id);
+			// `>=` keeps the viewed meeting itself; the dedupe is the strip's job.
+			expect(ids).toEqual([a, b]);
+			expect(ids).not.toContain(before);
+			expect(ids).not.toContain(scrapped);
+			expect(ids).not.toContain(theirs);
+			// The seeded fixture meeting is a week in the FUTURE: still the
+			// upcoming list's, never this one's (#393).
+			expect(ids).not.toContain(seed.meetingId);
+			expect(page.hasMore).toBe(false);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	it("after: keeps the rows adjacent to `after` when the limit truncates, and reports hasMore", async () => {
+		const day = 24 * 60 * 60 * 1000;
+		const ids: string[] = [];
+		for (let i = 5; i >= 1; i--) {
+			ids.push(
+				await addMeeting(
+					seed.clubId,
+					new Date(Date.now() - i * day).toISOString(),
+				),
+			);
+		}
+		const page = await loadPastMeetings({
+			clubId: seed.clubId,
+			after: new Date(Date.now() - 10 * day),
+			limit: 2,
+		});
+		expect(page.meetings.map((m) => m.id)).toEqual(ids.slice(0, 2));
+		expect(page.hasMore).toBe(true);
+	});
+
+	it("after: with no limit returns more than the archive's default page, so a long gap is not cut short", async () => {
+		const day = 24 * 60 * 60 * 1000;
+		const total = PAST_MEETINGS_DEFAULT_LIMIT + 5;
+		for (let i = total; i >= 1; i--) {
+			await addMeeting(
+				seed.clubId,
+				new Date(Date.now() - i * day).toISOString(),
+			);
+		}
+		const page = await loadPastMeetings({
+			clubId: seed.clubId,
+			after: new Date(Date.now() - (total + 1) * day),
+		});
+		expect(page.meetings).toHaveLength(total);
 		expect(page.hasMore).toBe(false);
 	});
 
