@@ -133,9 +133,30 @@ function isDangerousOption(word: string): boolean {
 export function isAllowedGit(command: string): boolean {
 	const words = shellWords(command);
 	if (words === null || words[0] !== "git") return false;
-	const sub = words[1] === "-C" ? words[3] : words[1];
+	const subIndex = words[1] === "-C" ? 3 : 1;
+	const sub = words[subIndex];
 	if (sub === undefined || !GIT_SUBCOMMANDS.has(sub)) return false;
-	return !words.some(isDangerousOption);
+	if (words.some(isDangerousOption)) return false;
+	if (sub === "commit" && words.slice(subIndex + 1).some(hasShortN)) {
+		return false;
+	}
+	return true;
+}
+
+/**
+ * `git commit -n` is `--no-verify`. True for a short-flag word (one `-`, not
+ * `--`) that carries `n`, alone or combined (`-an`, `-nm`). Scanning stops at
+ * the first flag that takes an argument (`-m -F -C -c -t`), so `-mn` (message
+ * `n`) is not misread. `-n` is `--max-count` for `git log`, so this is applied
+ * to `commit` only.
+ */
+function hasShortN(word: string): boolean {
+	if (!/^-[^-]/.test(word)) return false;
+	for (const c of word.slice(1)) {
+		if (c === "n") return true;
+		if ("mFCct".includes(c)) return false;
+	}
+	return false;
 }
 
 /** The subagent's own transcript, or null when the input cannot name one. */
