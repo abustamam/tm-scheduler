@@ -58,7 +58,7 @@ const BINDER_FN = "bindVerifiedPerson";
  */
 const WAIVERS: Array<{
 	/** The file, keyed relative to `src/`. A file may carry SEVERAL waivers
-	 *  (#1125: `guest-pipeline-logic.ts` has three), each held to its own
+	 *  (#1125: `guest-pipeline-logic.ts` has two), each held to its own
 	 *  function's body and to its own `sites`. */
 	file: string;
 	fn: string;
@@ -88,10 +88,6 @@ const WAIVERS: Array<{
 	 *  rule (a guest row never counts as a holder); a source test below pins that
 	 *  the function holds the unbound and no-membership arms. */
 	requiresGuestContactWritable?: boolean;
-	/** The anonymous guest book's fill of a blank guest contact (#1125): its
-	 *  UPDATE must carry `guestContactFillable(`, the writable rule plus "no
-	 *  OTHER club holds a guest row on them" and "no past as a member". */
-	requiresGuestContactFillable?: boolean;
 }> = [
 	// A member changing their OWN sign-in address (#1091, ADR-0030). The new
 	// address was just proved by a link to its inbox; the write runs in the
@@ -152,19 +148,9 @@ const WAIVERS: Array<{
 			"an officer's correction of a guest's contact, on guest-only unbound Persons their club holds a guest row on (#1125)",
 		requiresGuestContactWritable: true,
 	},
-	// The anonymous guest book filling a returning guest's BLANK email or phone
-	// (#1125). The book has no session, so the rule is stricter than the officer's:
-	// `guestContactFillable(clubId)` is the writable rule plus "no OTHER club holds a
-	// guest row on them" and "no past as a member". Fill-only in the SET itself
-	// (`coalesce`), so a value already there is never replaced.
-	{
-		file: "server/guest-pipeline-logic.ts",
-		fn: "fillBlankGuestContact",
-		sites: 1,
-		reason:
-			"the public guest book's fill of a blank guest contact, only on a Person this club alone holds and that was never a member (#1125)",
-		requiresGuestContactFillable: true,
-	},
+	// The anonymous guest book does NOT appear here since #1157: an address typed
+	// without a session is a club's note on its own guest row (`guests.book_email`),
+	// never a `people.email` write. `guest-book-email.guard.test.ts` holds that.
 	// The CSV importer's fill-only address (#907). Club-reachable.
 	{
 		file: "server/import-members-logic.ts",
@@ -732,8 +718,7 @@ describe("people.email writers (verified identity address)", () => {
 				waiver.requiresSoleHolder ||
 				waiver.requiresBoundToUser ||
 				waiver.requiresPristineGuestPerson ||
-				waiver.requiresGuestContactWritable ||
-				waiver.requiresGuestContactFillable
+				waiver.requiresGuestContactWritable
 			) {
 				expect(
 					stmts,
@@ -777,14 +762,6 @@ describe("people.email writers (verified identity address)", () => {
 							`an officer may correct a guest's contact only while nobody has signed in as them, ` +
 							`no club holds them as a member, and this club holds a guest row on them (#1125)`,
 					).toMatch(/guestContactWritable\(/);
-				}
-				if (waiver.requiresGuestContactFillable) {
-					expect(
-						stmt,
-						`${key}'s people.email write must carry guestContactFillable(...) in the STATEMENT — ` +
-							`the anonymous guest book may fill a blank only on a Person this club alone holds ` +
-							`and that was never a member (#1125)`,
-					).toMatch(/guestContactFillable\(/);
 				}
 			}
 		}

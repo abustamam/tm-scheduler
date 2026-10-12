@@ -1445,6 +1445,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				clubId: seed.clubId,
 				guestId,
 				actorMemberId: seed.adminMemberId,
+				confirmedEmail: email,
 			});
 
 			expect(res.personId).toBe(byEmail);
@@ -1702,6 +1703,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 					clubId: seed.clubId,
 					guestId: byEmail.guestId,
 					actorMemberId: seed.adminMemberId,
+					confirmedEmail: email,
 				}),
 				applyConvertGuestToMember({
 					clubId: seed.clubId,
@@ -2121,6 +2123,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				clubId: seed.clubId,
 				guestId,
 				actorMemberId: seed.adminMemberId,
+				confirmedEmail: email,
 			});
 
 			// Reuse, not a second roster row — that half already held.
@@ -2187,6 +2190,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				clubId: seed.clubId,
 				guestId,
 				actorMemberId: seed.adminMemberId,
+				confirmedEmail: email,
 			});
 
 			const after = await loadPublicClubRoster(seed.clubId);
@@ -2215,6 +2219,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				clubId: seed.clubId,
 				guestId,
 				actorMemberId: seed.adminMemberId,
+				confirmedEmail: email,
 			});
 
 			const detail = await conversionDetail(guestId);
@@ -2244,6 +2249,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				clubId: seed.clubId,
 				guestId,
 				actorMemberId: seed.adminMemberId,
+				confirmedEmail: email,
 			});
 
 			expect(res.membershipId).toBe(m?.id);
@@ -2288,6 +2294,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				clubId: seed.clubId,
 				guestId,
 				actorMemberId: seed.adminMemberId,
+				confirmedEmail: email,
 			});
 			expect(await statusOf(membershipId)).toBe("active");
 
@@ -2322,6 +2329,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				clubId: seed.clubId,
 				guestId,
 				actorMemberId: seed.adminMemberId,
+				confirmedEmail: email,
 			});
 			// Rewrite the record into the pre-#501 shape, keeping every key #618
 			// needs. Deliberately NOT `stripRecord`, which removes those too and so
@@ -2417,6 +2425,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 					clubId: seed.clubId,
 					guestId,
 					actorMemberId: seed.adminMemberId,
+					confirmedEmail: email,
 				});
 				return { ...seeded, guestId, res };
 			}
@@ -2472,6 +2481,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 					clubId: seed.clubId,
 					guestId,
 					actorMemberId: seed.adminMemberId,
+					confirmedEmail: email,
 				});
 
 				expect(res.reactivated).toBe(true);
@@ -2512,6 +2522,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 					clubId: seed.clubId,
 					guestId,
 					actorMemberId: seed.adminMemberId,
+					confirmedEmail: email,
 				});
 
 				expect(res.membershipId).toBe(m?.id);
@@ -2549,6 +2560,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 					clubId: seed.clubId,
 					guestId,
 					actorMemberId: seed.adminMemberId,
+					confirmedEmail: email,
 				});
 
 				expect(res.demotedFrom).toBe("admin");
@@ -2601,6 +2613,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 					clubId: seed.clubId,
 					guestId,
 					actorMemberId: seed.adminMemberId,
+					confirmedEmail: email,
 				});
 
 				expect(res.membershipId).toBe(membershipId);
@@ -2722,6 +2735,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 					clubId: seed.clubId,
 					guestId,
 					actorMemberId: seed.adminMemberId,
+					confirmedEmail: email,
 				});
 				const [row] = await testDb
 					.select({ id: activityLog.id, detail: activityLog.detail })
@@ -3166,6 +3180,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				clubId: seed.clubId,
 				guestId,
 				actorMemberId: seed.adminMemberId,
+				confirmedEmail: "fran.reuse@example.com",
 			});
 			expect(res.membershipId).toBe(existing?.id);
 		});

@@ -245,11 +245,21 @@ function VpMembership() {
 	 * whether it worked, so the dialog stays open on a refusal (#617 refuses a
 	 * guest already on the roster) and the admin can pick the link instead.
 	 */
-	async function convert(guest: PipelineGuestRow): Promise<boolean> {
+	async function convert(
+		guest: PipelineGuestRow,
+		confirmedEmail?: string | null,
+	): Promise<boolean> {
 		setBusyId(guest.id);
 		try {
 			const res = await convertGuestToMember({
-				data: { clubId, guestId: guest.id },
+				// `confirmedEmail` is sent only when the officer was asked about an
+				// address typed on the public guest book (#1157): a card with a
+				// vouched address, or none, sends nothing, as it always did.
+				data: {
+					clubId,
+					guestId: guest.id,
+					...(confirmedEmail !== undefined ? { confirmedEmail } : {}),
+				},
 			});
 			// Convert reuses the person's existing membership in this club when
 			// there is one, and #501 made it WAKE that row when it had lapsed —
@@ -613,7 +623,10 @@ function GuestRow({
 	clubId: string;
 	busy: boolean;
 	onMove: (guestId: string, stage: ManualGuestStage) => void;
-	onConvert: (guest: PipelineGuestRow) => Promise<boolean>;
+	onConvert: (
+		guest: PipelineGuestRow,
+		confirmedEmail?: string | null,
+	) => Promise<boolean>;
 	/** The viewer's other admin/officer clubs (#1127). */
 	otherAdminClubs: OtherAdminClub[];
 	timezone: string;
@@ -650,7 +663,13 @@ function GuestRow({
 	// `mailto:` below is built here — and it must use the same trimmed string the
 	// gate tested, or `" a@b.com "` ships as `mailto: a@b.com `.
 	const hasPhone = (guest.phone ?? "").trim() !== "";
-	const email = (guest.email ?? "").trim();
+	// The VOUCHED address, else the card's unconfirmed note from the public guest
+	// book (#1157). The note is shown and linked like the address (a follow-up is
+	// a draft an officer sends), but flagged: nobody has confirmed it.
+	const vouchedEmail = (guest.email ?? "").trim();
+	const bookEmail = (guest.bookEmail ?? "").trim();
+	const email = vouchedEmail || bookEmail;
+	const unconfirmed = !vouchedEmail && bookEmail !== "";
 	const kindCaption = profile
 		? guestKindCaption(profile.kind, profile.homeClub)
 		: null;
@@ -734,6 +753,15 @@ function GuestRow({
 									>
 										{email}
 									</a>
+									{unconfirmed ? (
+										<span
+											data-slot="unconfirmed-email-badge"
+											title="Typed on the public guest book. Not confirmed by an officer."
+											className="shrink-0 rounded-full border border-[var(--line)] bg-[var(--foam)] px-2 py-0.5 text-xs font-semibold text-[var(--sea-ink-soft)]"
+										>
+											Unconfirmed
+										</span>
+									) : null}
 								</span>
 							) : null}
 						</div>
@@ -831,7 +859,10 @@ function GuestRowActions({
 	clubId: string;
 	busy: boolean;
 	onMove: (guestId: string, stage: ManualGuestStage) => void;
-	onConvert: (guest: PipelineGuestRow) => Promise<boolean>;
+	onConvert: (
+		guest: PipelineGuestRow,
+		confirmedEmail?: string | null,
+	) => Promise<boolean>;
 	otherAdminClubs: OtherAdminClub[];
 }) {
 	const router = useRouter();
@@ -1128,6 +1159,9 @@ function GuestRowActions({
 	);
 }
 
+/** A plain shape check; the server's `email()` is the authority. */
+const CONFIRM_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 /**
  * "Joined…": the one question behind what used to be two buttons — is this a
  * NEW member, or someone already on the roster?
@@ -1154,11 +1188,26 @@ function GuestJoinedDialog({
 	clubId: string;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	onConvert: (guest: PipelineGuestRow) => Promise<boolean>;
+	onConvert: (
+		guest: PipelineGuestRow,
+		confirmedEmail?: string | null,
+	) => Promise<boolean>;
 }) {
 	const router = useRouter();
 	const stranded = isStrandedConvertedGuest(guest);
-	const [step, setStep] = useState<"choose" | "link">("choose");
+	const [step, setStep] = useState<"choose" | "link" | "confirm">("choose");
+	// The address typed on the public guest book, when no officer has vouched for
+	// one (#1157): converting asks about it before it can become a sign-in
+	// address. A card with a vouched address, or none, converts as it always did.
+	const bookEmail = (guest.bookEmail ?? "").trim();
+	const needsEmailConfirm = !(guest.email ?? "").trim() && bookEmail !== "";
+	// No default: the officer picks one, so neither answer is a click-through.
+	const [emailChoice, setEmailChoice] = useState<"use" | "off" | null>(null);
+	const [emailInput, setEmailInput] = useState(bookEmail);
+	const confirmedEmail = emailInput.trim();
+	const emailChoiceReady =
+		emailChoice === "off" ||
+		(emailChoice === "use" && CONFIRM_EMAIL_PATTERN.test(confirmedEmail));
 	const [busy, setBusy] = useState(false);
 	const [query, setQuery] = useState("");
 	const [candidates, setCandidates] = useState<LinkCandidate[] | null>(null);
@@ -1171,6 +1220,8 @@ function GuestJoinedDialog({
 			setStep("choose");
 			setPicked(null);
 			setQuery("");
+			setEmailChoice(null);
+			setEmailInput(bookEmail);
 		}
 	}
 
@@ -1202,9 +1253,24 @@ function GuestJoinedDialog({
 		.sort((a, b) => Number(b.suggested) - Number(a.suggested));
 
 	async function onNewMember() {
+		if (needsEmailConfirm) {
+			setStep("confirm");
+			return;
+		}
 		setBusy(true);
 		try {
 			if (await onConvert(guest)) setOpen(false);
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function onConfirmedConvert() {
+		if (!emailChoiceReady) return;
+		setBusy(true);
+		try {
+			if (await onConvert(guest, emailChoice === "use" ? confirmedEmail : null))
+				setOpen(false);
 		} finally {
 			setBusy(false);
 		}
@@ -1283,6 +1349,75 @@ function GuestJoinedDialog({
 								</span>
 							</button>
 						</div>
+					</>
+				) : step === "confirm" ? (
+					<>
+						<DialogHeader>
+							<DialogTitle>Confirm {guest.name}'s email</DialogTitle>
+							<DialogDescription data-slot="unconfirmed-email-notice">
+								Typed on the public guest book — not confirmed. Ask {guest.name}{" "}
+								whether this is their address before using it to sign in.
+							</DialogDescription>
+						</DialogHeader>
+						<p
+							data-slot="unconfirmed-email-address"
+							className="break-all rounded-lg bg-[var(--surface-strong)] p-3 text-sm font-medium"
+						>
+							{bookEmail}
+						</p>
+						<fieldset className="flex flex-col gap-2">
+							<legend className="sr-only">What to do with this address</legend>
+							<label className="flex items-center gap-2 text-sm">
+								<input
+									type="radio"
+									name="convert-email-choice"
+									value="use"
+									checked={emailChoice === "use"}
+									disabled={busy}
+									onChange={() => setEmailChoice("use")}
+								/>
+								Use this address
+							</label>
+							{emailChoice === "use" ? (
+								<Input
+									type="email"
+									aria-label="Email address"
+									value={emailInput}
+									onChange={(e) => setEmailInput(e.target.value)}
+									disabled={busy}
+									autoComplete="off"
+								/>
+							) : null}
+							<label className="flex items-center gap-2 text-sm">
+								<input
+									type="radio"
+									name="convert-email-choice"
+									value="off"
+									checked={emailChoice === "off"}
+									disabled={busy}
+									onChange={() => setEmailChoice("off")}
+								/>
+								Leave it off for now
+							</label>
+						</fieldset>
+						<DialogFooter>
+							<Button
+								type="button"
+								variant="outline"
+								onClick={() => setStep("choose")}
+								disabled={busy}
+							>
+								Back
+							</Button>
+							<Button
+								type="button"
+								data-slot="convert-confirmed"
+								onClick={() => void onConfirmedConvert()}
+								disabled={busy || !emailChoiceReady}
+							>
+								{busy ? "Converting…" : "Convert"}
+							</Button>
+						</DialogFooter>
 					</>
 				) : (
 					<>

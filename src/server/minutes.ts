@@ -236,7 +236,12 @@ const addSpeakerSchema = z
 		newGuestId: uuid.optional(),
 		memberId: uuid.optional(),
 		guestId: uuid.optional(),
-		newGuest: newGuestSchema.optional(),
+		// Name only (#1157): the Table Topics capture sends a name and nothing else,
+		// and the self-asserted Ballot Counter that may reach this is not an officer
+		// who can vouch for an address. Zod strips an extra key, so one a stale tab
+		// still sends is dropped rather than stored. `addGuestSchema` (admin-only)
+		// keeps the wider `newGuestSchema`.
+		newGuest: z.object({ name: z.string().trim().min(1) }).optional(),
 		topic: MEETING_UPDATE_FIELDS.topic.optional(),
 		// Self-asserted Ballot Counter identity (#510) — see
 		// `requireVoteCounterCapability`. Omitted (or ignored) on the admin path.

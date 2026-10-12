@@ -5,7 +5,7 @@
 // `GET /api/meetings/$id/minutes/pdf?view=guests` and attaches it themselves.
 // Pure/DB logic only (no createServerFn) so the Start compiler strips it from
 // the client bundle when imported by the minutes-email server-fn handler.
-import { and, asc, eq, isNotNull } from "drizzle-orm";
+import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	guests,
@@ -39,8 +39,15 @@ export function createMinutesEmailPort(): MinutesEmailPort {
 				.orderBy(asc(members.name));
 
 			const guestRows = await db
-				// A guest's address is their Person's (#1125).
-				.select({ name: guests.name, email: people.email })
+				// A guest's address is their Person's (#1125), else the card's own
+				// unconfirmed note from the public guest book (#1157). This is a draft an
+				// officer reviews and sends (ADR-0028), not a sign-in key.
+				.select({
+					name: guests.name,
+					email: sql<
+						string | null
+					>`coalesce(${people.email}, ${guests.bookEmail})`,
+				})
 				.from(meetingAttendance)
 				.innerJoin(guests, eq(guests.id, meetingAttendance.guestId))
 				.innerJoin(people, eq(people.id, guests.personId))
