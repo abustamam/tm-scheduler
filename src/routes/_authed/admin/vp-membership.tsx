@@ -17,6 +17,10 @@ import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { GuestEditDialog } from "#/components/club/guest-edit-dialog";
+import {
+	GuestLinkDialog,
+	type OtherAdminClub,
+} from "#/components/club/guest-link-dialog";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
 import { PageContainer } from "#/components/page-container";
@@ -141,9 +145,6 @@ const NO_PROFILES: { rows: GuestProfileRow[]; brought: BroughtCount[] } = {
 	rows: [],
 	brought: [],
 };
-
-/** One of the viewer's OTHER clubs where they are an admin or an officer. */
-type OtherAdminClub = { clubId: string; name: string };
 
 /** Convert a guest; `confirmedEmail` is the officer's answer for an unconfirmed address (#1157). */
 type ConvertGuest = (
@@ -868,6 +869,7 @@ function GuestRowActions({
 	const router = useRouter();
 	const [joinedOpen, setJoinedOpen] = useState(false);
 	const [editOpen, setEditOpen] = useState(false);
+	const [linkOpen, setLinkOpen] = useState(false);
 	const [deleteOpen, setDeleteOpen] = useState(false);
 	const [ownBusy, setOwnBusy] = useState(false);
 	const busy = rowBusy || ownBusy;
@@ -901,13 +903,14 @@ function GuestRowActions({
 	const laneLabel = manualStage?.label ?? "Move to…";
 
 	// Across clubs (#1127). A converted guest (`stage` joined, stranded or not) is
-	// never the source of Add, so neither action is offered for one.
+	// never the source of Add, Link or Separate, so none is offered for one.
 	// "Add to" lists only the viewer's own clubs the Person is not in yet, which
 	// the server worked out (`addableTo`); the labels come from the club list.
 	const crossClubOpen = guest.stage !== "joined";
 	const addTargets = crossClubOpen
 		? otherAdminClubs.filter((c) => guest.addableTo?.includes(c.clubId))
 		: [];
+	const canLinkAcrossClubs = crossClubOpen && otherAdminClubs.length > 0;
 	const canSeparate = crossClubOpen && guest.sharedWithOtherClub === true;
 
 	/** Disable the row's controls while `work` runs, and toast if it throws. */
@@ -963,7 +966,8 @@ function GuestRowActions({
 		if (
 			!window.confirm(
 				`Separate ${guest.name} from the other clubs? They get a record of ` +
-					`their own here. The other clubs keep the person they had.`,
+					`their own here, with no email or phone. The other clubs keep the ` +
+					`person and contact they had.`,
 			)
 		) {
 			return;
@@ -1068,10 +1072,11 @@ function GuestRowActions({
 							Undo conversion
 						</DropdownMenuItem>
 					) : null}
-					{/* Across clubs (#1127): only an officer of 2+ clubs sees "Add to",
-					    and only for the clubs they run; "Separate" is for this club's
-					    admin whenever another club holds the same Person. */}
-					{addTargets.length > 0 || canSeparate ? (
+					{/* Across clubs (#1127, #1175): only an officer of 2+ clubs sees "Add
+					    to" and "Same person as…", and only for the clubs they run;
+					    "Separate" is for this club's admin whenever another club holds
+					    the same Person. */}
+					{addTargets.length > 0 || canLinkAcrossClubs || canSeparate ? (
 						<DropdownMenuSeparator />
 					) : null}
 					{addTargets.map((club) => (
@@ -1083,6 +1088,12 @@ function GuestRowActions({
 							Add to {club.name}
 						</DropdownMenuItem>
 					))}
+					{canLinkAcrossClubs ? (
+						<DropdownMenuItem onSelect={() => setLinkOpen(true)}>
+							<Link2 aria-hidden />
+							Same person as…
+						</DropdownMenuItem>
+					) : null}
 					{canSeparate ? (
 						<DropdownMenuItem onSelect={onSeparate}>
 							<Split aria-hidden />
@@ -1114,6 +1125,17 @@ function GuestRowActions({
 					onConvert={onConvert}
 				/>
 			)}
+
+			{canLinkAcrossClubs ? (
+				<GuestLinkDialog
+					guestId={guest.id}
+					guestName={guest.name}
+					clubId={clubId}
+					otherClubs={otherAdminClubs}
+					open={linkOpen}
+					onOpenChange={setLinkOpen}
+				/>
+			) : null}
 
 			{/* The SHARED dialog (#727) — the same component the meeting page's
 			    attendance rail opens from a guest's name. `PipelineGuestRow` is a

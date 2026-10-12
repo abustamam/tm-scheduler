@@ -15,6 +15,7 @@ const base = {
 	guestName: null,
 	guestLink: false,
 	unlinked: false,
+	crossClubLink: false,
 } satisfies Partial<ActivityEntry> as ActivityEntry;
 
 describe("formatActivity", () => {
@@ -256,6 +257,22 @@ describe("formatActivity", () => {
 		);
 		expect(formatActivity(mk("member_merge")).summary).toMatch(/merged/i);
 		expect(formatActivity(mk("member_remove")).summary).toMatch(/removed/i);
+	});
+
+	// protects=a cross-club link reads "linked <name> to the same person in another club" and names nothing of the other club, and is not worded as a member merge or a member link; fails_when=the crossClubLink arm is dropped (it would read "merged a duplicate member"); no_claim=the feed's mapping from detail (guest-cross-club integration test)
+	it("member_merge with crossClubLink reads as a cross-club guest link", () => {
+		const e = {
+			...base,
+			action: "member_merge",
+			targetType: "member",
+			roleName: null,
+			actorName: "Rasheed",
+			guestName: "Dana Visitor",
+			crossClubLink: true,
+		} as ActivityEntry;
+		expect(formatActivity(e).summary).toBe(
+			"linked Dana Visitor to the same person in another club",
+		);
 	});
 
 	describe("plan_set", () => {

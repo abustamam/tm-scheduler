@@ -13,9 +13,18 @@
  * `#/db` is mocked to the TEST_DATABASE_URL client; the suite skips without it.
  */
 import { randomUUID } from "node:crypto";
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guests, members, officerTerms, people, user } from "#/db/schema";
+import {
+	activityLog,
+	guests,
+	members,
+	officerTerms,
+	people,
+	user,
+} from "#/db/schema";
+import { formatActivity } from "#/lib/activity-format";
+import type { ActivityEntry } from "#/server/activity-feed";
 import {
 	cleanup,
 	hasTestDb,
@@ -36,10 +45,22 @@ const { CLUB_BUSY_MESSAGE, CLUB_WRITE_LOCK_NAMESPACE } = await import(
 const { NO_PERMISSION_MESSAGE, NOT_A_MEMBER_MESSAGE } = await import(
 	"#/server/guards"
 );
+const { loadActivity } = await import("#/server/activity-feed-logic");
 const {
 	applyAddGuestToClub,
+	applyConvertGuestToMember,
+	applyDeleteGuest,
+	applyLinkGuestAcrossClubs,
 	applySeparateGuest,
 	CLUB_SET_MOVED_MESSAGE,
+	GUEST_LINK_ALREADY_SAME_MESSAGE,
+	GUEST_LINK_BOTH_HAVE_HISTORY_MESSAGE,
+	GUEST_LINK_CHANGED_MESSAGE,
+	GUEST_LINK_EMAIL_DIFFERS_MESSAGE,
+	GUEST_LINK_NOT_GUEST_ONLY_MESSAGE,
+	GUEST_LINK_PHONE_DIFFERS_MESSAGE,
+	listGuestLinkCandidates,
+	previewGuestLink,
 	GUEST_ADD_ALREADY_THERE_MESSAGE,
 	GUEST_CROSS_CLUB_SAME_CLUB_MESSAGE,
 	GUEST_ALREADY_SEPARATE_MESSAGE,
@@ -47,6 +68,9 @@ const {
 	loadGuestPipeline,
 	loadOtherAdminClubs,
 } = await import("#/server/guest-pipeline-logic");
+const { GUEST_NOT_IN_CLUB_MESSAGE, RECORD_CHANGED_MESSAGE } = await import(
+	"#/server/guests-logic"
+);
 const { statementsDuring } = await import("#/test/query-spy");
 
 const uniq = () => randomUUID().slice(0, 8);
@@ -610,7 +634,8 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 
 	// -----------------------------------------------------------------------
 	describe("Separate from other clubs", () => {
-		it("gives the guest a fresh Person with its own name, copying contact from a guest-only Person", async () => {
+		// protects=a Separate on a shared guest-only Person gives the guest a fresh Person with its own name and NO email or phone, and leaves the shared Person and the other club's row alone; fails_when=the old contact copy returns (the fresh Person carries the shared email or phone); no_claim=nothing about Persons a member or a sign-in holds (the two tests below)
+		it("gives the guest a fresh Person with its own name and no contact, leaving the shared Person alone", async () => {
 			const email = `shared-${uniq()}@example.test`;
 			const g = await seedGuest(a.clubId, {
 				name: "Sam Shared",
@@ -638,6 +663,11 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			const fresh = await personRow(mine?.personId ?? "");
 			expect(fresh).toMatchObject({
 				name: "Sam Shared",
+				email: null,
+				phone: null,
+			});
+			// The shared Person keeps its contact, and the other club keeps the Person.
+			expect(await personRow(g.personId)).toMatchObject({
 				email,
 				phone: "+14155550155",
 			});
@@ -825,7 +855,8 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			expect(row?.personId).toBe(keeper.personId);
 		});
 
-		it("after an Add the shared guest-only Person's contact is copied", async () => {
+		// protects=after an Add, a Separate still copies nothing onto the fresh Person; fails_when=the contact copy returns for a Person an Add shared; no_claim=the Person Add shares is guest-only here, not a member's or a signed-in one's
+		it("after an Add the shared guest-only Person's contact is NOT copied (#1175)", async () => {
 			const email = `add-${uniq()}@example.test`;
 			const g = await seedGuest(a.clubId, { email, phone: null });
 			await applyAddGuestToClub({
@@ -843,7 +874,12 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				.select({ personId: guests.personId })
 				.from(guests)
 				.where(eq(guests.id, g.id));
-			expect((await personRow(row?.personId ?? ""))?.email).toBe(email);
+			expect(row?.personId).not.toBe(g.personId);
+			expect(await personRow(row?.personId ?? "")).toMatchObject({
+				email: null,
+				phone: null,
+			});
+			expect((await personRow(g.personId))?.email).toBe(email);
 		});
 	});
 
@@ -953,6 +989,790 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			});
 			const list = await loadOtherAdminClubs(userId, a.clubId);
 			expect(list.map((x) => x.clubId)).toEqual([c.clubId]);
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	describe("Link: Same person as… (#1175)", () => {
+		const norm = (v: string | null) => v?.trim().toLowerCase() || null;
+
+		/** Both Persons' stored contact as the link normalizes it. */
+		function basisOf(
+			me: { email?: string | null; phone?: string | null },
+			them: { email?: string | null; phone?: string | null },
+		) {
+			return {
+				thisEmail: norm(me.email ?? null),
+				thisPhone: (me.phone ?? "").replace(/\D/g, ""),
+				otherEmail: norm(them.email ?? null),
+				otherPhone: (them.phone ?? "").replace(/\D/g, ""),
+			};
+		}
+
+		/** The `expected` for a pair, built from the stored rows, for a link the preview refuses. */
+		async function handExpected(
+			absorbed: "this" | "other",
+			g: { personId: string },
+			o: { personId: string },
+		) {
+			return {
+				absorbed,
+				basis: basisOf(
+					(await personRow(g.personId)) ?? {},
+					(await personRow(o.personId)) ?? {},
+				),
+			};
+		}
+
+		const asOfficer = (
+			g: { id: string },
+			o: { id: string },
+			clubs = { clubId: a.clubId, otherClubId: b.clubId },
+		) => ({
+			userId: officer,
+			clubId: clubs.clubId,
+			guestId: g.id,
+			otherClubId: clubs.otherClubId,
+			otherGuestId: o.id,
+		});
+
+		async function preview(g: { id: string }, o: { id: string }) {
+			return previewGuestLink(asOfficer(g, o));
+		}
+
+		/** The `expected` the officer's own preview returned. */
+		async function expectedOf(g: { id: string }, o: { id: string }) {
+			const p = await preview(g, o);
+			if (!p.ok) throw new Error(`preview refused: ${p.message}`);
+			return p.expected;
+		}
+
+		async function link(g: { id: string }, o: { id: string }) {
+			return applyLinkGuestAcrossClubs({
+				...asOfficer(g, o),
+				expected: await expectedOf(g, o),
+			});
+		}
+
+		async function personOfGuest(guestId: string): Promise<string> {
+			const [row] = await testDb
+				.select({ personId: guests.personId })
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			return row?.personId ?? "";
+		}
+
+		async function linkLogRows(clubId: string) {
+			return testDb
+				.select()
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.clubId, clubId),
+						eq(activityLog.action, "member_merge"),
+					),
+				);
+		}
+
+		// -- the two sides and the keeper ----------------------------------
+		// protects=the acting card's guest row ends on the other club's Person, its old Person is deleted, the keeper Person's row and both guest names are untouched; fails_when=the keeper is the wrong Person, the old Person survives, or a column or name is written; no_claim=an other-club row's stage, visits and notes (not read by the link)
+		it("absorbs the acting guest into the other club's Person, writing nothing else", async () => {
+			const email = `keep-${uniq()}@example.test`;
+			const g = await seedGuest(a.clubId, { name: "Gina Acting" });
+			const o = await seedGuest(b.clubId, {
+				name: "Gina Other",
+				email,
+				phone: "+14155550177",
+			});
+			const keeperBefore = await personRow(o.personId);
+			await expect(link(g, o)).resolves.toEqual({ ok: true });
+			expect(await personOfGuest(g.id)).toBe(o.personId);
+			expect(await personOfGuest(o.id)).toBe(o.personId);
+			expect(await personRow(g.personId)).toBeNull();
+			expect(await personRow(o.personId)).toEqual(keeperBefore);
+			const names = await testDb
+				.select({ id: guests.id, name: guests.name })
+				.from(guests)
+				.where(inArray(guests.id, [g.id, o.id]));
+			expect(names.find((n) => n.id === g.id)?.name).toBe("Gina Acting");
+			expect(names.find((n) => n.id === o.id)?.name).toBe("Gina Other");
+		});
+
+		// protects=when only the other club's guest is absorbable, ITS row re-points to the acting side's Person and its Person is deleted; fails_when=the acting side is absorbed regardless, or the absorbable arm tests the wrong side; no_claim=none beyond protects
+		it("absorbs the OTHER club's guest when only it can be absorbed", async () => {
+			const email = `both-${uniq()}@example.test`;
+			const g = await seedGuest(a.clubId, { email, phone: "+14155550188" });
+			const o = await seedGuest(b.clubId, { email, phone: null });
+			const keeperBefore = await personRow(g.personId);
+			const p = await preview(g, o);
+			expect(p.ok && p.absorbed).toBe("other");
+			await link(g, o);
+			expect(await personOfGuest(o.id)).toBe(g.personId);
+			expect(await personOfGuest(g.id)).toBe(g.personId);
+			expect(await personRow(o.personId)).toBeNull();
+			expect(await personRow(g.personId)).toEqual(keeperBefore);
+		});
+
+		// protects=on a tie (both pristine, equal normalized email and phone, even typed differently) the ACTING card's guest is absorbed; fails_when=the tie-break flips to the other side, or the comparison is on raw instead of normalized values; no_claim=none beyond protects
+		it("absorbs the acting guest on a tie, comparing normalized email and phone", async () => {
+			const tag = uniq();
+			const g = await seedGuest(a.clubId, {
+				email: `Tie-${tag}@Example.test `,
+				phone: "+1 (415) 555-0199",
+			});
+			const o = await seedGuest(b.clubId, {
+				email: `tie-${tag}@example.test`,
+				phone: "+14155550199",
+			});
+			const p = await preview(g, o);
+			expect(p.ok && p.absorbed).toBe("this");
+			await link(g, o);
+			expect(await personOfGuest(g.id)).toBe(o.personId);
+			expect(await personRow(g.personId)).toBeNull();
+		});
+
+		// protects=a keeper Person a THIRD club already holds (an earlier Add) can be the target: A's pristine guest joins it and three clubs share it; fails_when=a keeper held elsewhere is refused or loses a holder; no_claim=none beyond protects
+		it("lets the keeper already be shared with a third club", async () => {
+			const g = await seedGuest(a.clubId);
+			const o = await seedGuest(b.clubId, {
+				email: `k-${uniq()}@example.test`,
+			});
+			const third = await seedGuest(c.clubId, { personId: o.personId });
+			await link(g, o);
+			const rows = await guestRowsOf(o.personId);
+			expect(rows.map((r) => r.id).sort()).toEqual(
+				[g.id, o.id, third.id].sort(),
+			);
+			expect(await personRow(g.personId)).toBeNull();
+		});
+
+		// -- refusals ----------------------------------------------------------
+		// protects=naming one club twice is refused by the preview as data and by the link as a throw, before anything is read; fails_when=the same-club row is dropped or reordered after a read; no_claim=none beyond protects
+		it("refuses the same club twice", async () => {
+			const g = await seedGuest(a.clubId);
+			const o = await seedGuest(a.clubId);
+			const same = { clubId: a.clubId, otherClubId: a.clubId };
+			await expect(previewGuestLink(asOfficer(g, o, same))).resolves.toEqual({
+				ok: false,
+				message: GUEST_CROSS_CLUB_SAME_CLUB_MESSAGE,
+			});
+			await expect(
+				applyLinkGuestAcrossClubs({
+					...asOfficer(g, o, same),
+					expected: { absorbed: "this", basis: basisOf({}, {}) },
+				}),
+			).rejects.toThrow(GUEST_CROSS_CLUB_SAME_CLUB_MESSAGE);
+			await expect(
+				listGuestLinkCandidates({
+					userId: officer,
+					clubId: a.clubId,
+					guestId: g.id,
+					otherClubId: a.clubId,
+					q: "",
+				}),
+			).rejects.toThrow(GUEST_CROSS_CLUB_SAME_CLUB_MESSAGE);
+		});
+
+		// protects=a guest id that is not in the club it is named under is not found, on either side, in the preview and the link; fails_when=the club scope of the read is dropped (a guest of a third club links); no_claim=none beyond protects
+		it("refuses a guest that is not in the club it is named under", async () => {
+			const g = await seedGuest(a.clubId);
+			const o = await seedGuest(b.clubId);
+			const elsewhere = await seedGuest(c.clubId);
+			for (const [mine, theirs] of [
+				[elsewhere, o],
+				[g, elsewhere],
+			] as const) {
+				await expect(preview(mine, theirs)).resolves.toEqual({
+					ok: false,
+					message: GUEST_NOT_IN_CLUB_MESSAGE,
+				});
+				await expect(
+					applyLinkGuestAcrossClubs({
+						...asOfficer(mine, theirs),
+						expected: { absorbed: "this", basis: basisOf({}, {}) },
+					}),
+				).rejects.toThrow(GUEST_NOT_IN_CLUB_MESSAGE);
+			}
+		});
+
+		// protects=a converted guest on either side is refused ("now a member") and nothing moves; fails_when=the converted check is dropped or only one side is checked; no_claim=the convert itself (the lifecycle tests)
+		it("refuses a converted guest on either side", async () => {
+			for (const convertedSide of ["this", "other"] as const) {
+				const g = await seedGuest(a.clubId, {
+					stage: convertedSide === "this" ? "joined" : "prospect",
+				});
+				const o = await seedGuest(b.clubId, {
+					stage: convertedSide === "other" ? "joined" : "prospect",
+				});
+				await expect(preview(g, o)).resolves.toEqual({
+					ok: false,
+					message: GUEST_NOW_MEMBER_MESSAGE,
+				});
+				await expect(
+					applyLinkGuestAcrossClubs({
+						...asOfficer(g, o),
+						expected: { absorbed: "this", basis: basisOf({}, {}) },
+					}),
+				).rejects.toThrow(GUEST_NOW_MEMBER_MESSAGE);
+				expect(await personOfGuest(g.id)).toBe(g.personId);
+				expect(await personOfGuest(o.id)).toBe(o.personId);
+			}
+		});
+
+		// protects=two guests already on one Person are told "Already the same person." and nothing is written; fails_when=a self-link deletes the Person both rows name; no_claim=the link's own reachability: its stale check (absorbed is null here) answers first, so the message is the preview's
+		it("refuses two guests that are already one person", async () => {
+			const g = await seedGuest(a.clubId);
+			const o = await seedGuest(b.clubId, { personId: g.personId });
+			await expect(preview(g, o)).resolves.toEqual({
+				ok: false,
+				message: GUEST_LINK_ALREADY_SAME_MESSAGE,
+			});
+			await expect(
+				applyLinkGuestAcrossClubs({
+					...asOfficer(g, o),
+					expected: { absorbed: "this", basis: basisOf({}, {}) },
+				}),
+			).rejects.toThrow();
+			expect(await personRow(g.personId)).not.toBeNull();
+			expect(await guestRowsOf(g.personId)).toHaveLength(2);
+		});
+
+		// protects=a Person a member holds, or somebody signed in as, is never linked, on either side; fails_when=the guest-only check is dropped (a member's Person would be re-pointed onto, or deleted from under, a roster row); no_claim=the preview and the link agree because the link is given the matching expected by hand
+		it("refuses a Person that is not guest-only: a member's, or a signed-in person's", async () => {
+			const member = await seedMember(c.clubId);
+			const signedIn = await seedUser(null);
+			for (const nonGuestPerson of [member.personId, signedIn.personId]) {
+				const bad = await seedGuest(a.clubId, { personId: nonGuestPerson });
+				const clean = await seedGuest(b.clubId);
+				// The clean side is absorbable (blank contact), so the guest-only check is
+				// what answers, not "no absorbable side".
+				await expect(preview(bad, clean)).resolves.toEqual({
+					ok: false,
+					message: GUEST_LINK_NOT_GUEST_ONLY_MESSAGE,
+				});
+				await expect(
+					applyLinkGuestAcrossClubs({
+						...asOfficer(bad, clean),
+						expected: await handExpected("other", bad, clean),
+					}),
+				).rejects.toThrow(GUEST_LINK_NOT_GUEST_ONLY_MESSAGE);
+				// And with the roles swapped.
+				const clean2 = await seedGuest(a.clubId);
+				const bad2 = await seedGuest(b.clubId, { personId: nonGuestPerson });
+				await expect(preview(clean2, bad2)).resolves.toEqual({
+					ok: false,
+					message: GUEST_LINK_NOT_GUEST_ONLY_MESSAGE,
+				});
+				expect(await personOfGuest(clean.id)).toBe(clean.personId);
+			}
+		});
+
+		// protects=with no absorbable side, differing emails say so (before phones); fails_when=the email arm of absorbable is dropped (a pristine side with a different address is absorbed and its address lost), or the message order changes; no_claim=the stale message answers first if the link is called, as the next test pins
+		it("refuses different email addresses when neither side can be absorbed", async () => {
+			const g = await seedGuest(a.clubId, {
+				email: `x-${uniq()}@example.test`,
+				phone: "+14155550101",
+			});
+			const o = await seedGuest(b.clubId, {
+				email: `y-${uniq()}@example.test`,
+				phone: "+14155550102",
+			});
+			await expect(preview(g, o)).resolves.toEqual({
+				ok: false,
+				message: GUEST_LINK_EMAIL_DIFFERS_MESSAGE,
+			});
+			expect(await personRow(g.personId)).not.toBeNull();
+			expect(await personRow(o.personId)).not.toBeNull();
+		});
+
+		// protects=equal emails but different phones say "Different phone numbers."; fails_when=the phone arm of absorbable is dropped (a pristine side with a different phone is absorbed and its phone lost); no_claim=none beyond protects
+		it("refuses different phone numbers when neither side can be absorbed", async () => {
+			const email = `p-${uniq()}@example.test`;
+			const g = await seedGuest(a.clubId, { email, phone: "+14155550101" });
+			const o = await seedGuest(b.clubId, { email, phone: "+14155550102" });
+			await expect(preview(g, o)).resolves.toEqual({
+				ok: false,
+				message: GUEST_LINK_PHONE_DIFFERS_MESSAGE,
+			});
+		});
+
+		// protects=two Persons that each carry history (here: each is held by a third club too) are refused with the superadmin message, and a link attempt writes nothing; fails_when=the pristine arm of absorbable is dropped (a Person other clubs hold is deleted from under them); no_claim=history here is a shared guest row, not a speech or enrolment (pristineGuestPerson's own tests cover those)
+		it("refuses when both records have history, and the three-club case is one of them", async () => {
+			const g = await seedGuest(a.clubId);
+			const o = await seedGuest(b.clubId);
+			await seedGuest(c.clubId, { personId: g.personId });
+			await seedGuest(c.clubId, { personId: o.personId });
+			await expect(preview(g, o)).resolves.toEqual({
+				ok: false,
+				message: GUEST_LINK_BOTH_HAVE_HISTORY_MESSAGE,
+			});
+			await expect(
+				applyLinkGuestAcrossClubs({
+					...asOfficer(g, o),
+					expected: { absorbed: "this", basis: basisOf({}, {}) },
+				}),
+			).rejects.toThrow(GUEST_LINK_CHANGED_MESSAGE);
+			expect(await personRow(g.personId)).not.toBeNull();
+			expect(await personRow(o.personId)).not.toBeNull();
+		});
+
+		// protects=a side held by a third club is not absorbable even when its contact is blank, so the OTHER side is absorbed instead and the third club keeps its Person; fails_when=the shared side is absorbed and its Person deleted from under club C; no_claim=none beyond protects
+		it("never absorbs a side a third club holds", async () => {
+			const g = await seedGuest(a.clubId);
+			const third = await seedGuest(c.clubId, { personId: g.personId });
+			const o = await seedGuest(b.clubId);
+			const p = await preview(g, o);
+			expect(p.ok && p.absorbed).toBe("other");
+			await link(g, o);
+			expect(await personOfGuest(o.id)).toBe(g.personId);
+			expect(await personOfGuest(third.id)).toBe(g.personId);
+			expect(await personRow(o.personId)).toBeNull();
+		});
+
+		// -- authorization --------------------------------------------------
+		// protects=an admin of only ONE of the two clubs is refused by the picker, the preview and the link, whichever club it is, and nothing moves; fails_when=any of the six `requireClubRole` calls on the Link path is dropped; no_claim=an elected officer's standing (Add's tests cover the shared gate)
+		it("refuses an admin of only one of the two clubs, on all three functions", async () => {
+			const g = await seedGuest(a.clubId);
+			const o = await seedGuest(b.clubId);
+			const base = { clubId: a.clubId, guestId: g.id, otherClubId: b.clubId };
+			for (const who of [onlyA, onlyB]) {
+				await expect(
+					listGuestLinkCandidates({ userId: who, ...base, q: "" }),
+				).rejects.toThrow(NOT_A_MEMBER_MESSAGE);
+				await expect(
+					previewGuestLink({ userId: who, ...base, otherGuestId: o.id }),
+				).rejects.toThrow(NOT_A_MEMBER_MESSAGE);
+				await expect(
+					applyLinkGuestAcrossClubs({
+						userId: who,
+						...base,
+						otherGuestId: o.id,
+						expected: { absorbed: "this", basis: basisOf({}, {}) },
+					}),
+				).rejects.toThrow(NOT_A_MEMBER_MESSAGE);
+			}
+			expect(await personOfGuest(g.id)).toBe(g.personId);
+			expect(await personRow(g.personId)).not.toBeNull();
+		});
+
+		// protects=a seat revoked in the OTHER club while the link waits for a club lock writes nothing; fails_when=the in-transaction re-ask for either club is dropped; no_claim=the up-front gate (it passed: the call got as far as the lock)
+		it("re-asks both seats once the locks are held", async () => {
+			for (const [revoke, label] of [
+				[officerMemberInB, "other club"],
+				[a.adminMemberId, "acting club"],
+			] as const) {
+				const g = await seedGuest(a.clubId);
+				const o = await seedGuest(b.clubId, {
+					email: `r-${uniq()}@example.test`,
+				});
+				const expected = await expectedOf(g, o);
+				const err = await parkedThen(
+					b.clubId,
+					() => applyLinkGuestAcrossClubs({ ...asOfficer(g, o), expected }),
+					async () => {
+						await testDb
+							.update(members)
+							.set({ status: "inactive" })
+							.where(eq(members.id, revoke));
+					},
+				);
+				expect(err?.message, label).toBe(NOT_A_MEMBER_MESSAGE);
+				expect(await personOfGuest(g.id)).toBe(g.personId);
+				expect(await personRow(g.personId)).not.toBeNull();
+				// Put the seat back for the next round.
+				await testDb
+					.update(members)
+					.set({ status: "active" })
+					.where(eq(members.id, revoke));
+			}
+		});
+
+		// -- the preview is what the link finds ----------------------------------
+		// protects=an edit to EITHER Person's email or phone between preview and link refuses with the stale message and writes nothing, even where the edit would make the link refuse for a conflict instead; fails_when=the stale comparison is dropped, compares only some of the four values, or runs after the other refusals; no_claim=an edit to a name (not compared, the link never reads it)
+		it("refuses a link whose records changed since the preview, before any other refusal", async () => {
+			const edits: Array<{
+				label: string;
+				edit: (
+					g: { personId: string },
+					o: { personId: string },
+					oEmail: string,
+				) => Promise<void>;
+			}> = [
+				{
+					label: "this email makes a conflict",
+					edit: async (g) => {
+						await testDb
+							.update(people)
+							.set({ email: "conflict-a@example.test" })
+							.where(eq(people.id, g.personId));
+					},
+				},
+				{
+					label: "other phone (absorbed side unchanged)",
+					edit: async (_g, o) => {
+						await testDb
+							.update(people)
+							.set({ phone: "+14155550123" })
+							.where(eq(people.id, o.personId));
+					},
+				},
+				{
+					label:
+						"this phone, becoming equal to the other's (absorbed unchanged)",
+					edit: async (g) => {
+						await testDb
+							.update(people)
+							.set({ phone: "+14155550166" })
+							.where(eq(people.id, g.personId));
+					},
+				},
+				{
+					label:
+						"this email, becoming equal to the other's (absorbed unchanged)",
+					edit: async (g, _o, oEmail) => {
+						await testDb
+							.update(people)
+							.set({ email: oEmail })
+							.where(eq(people.id, g.personId));
+					},
+				},
+				{
+					label: "other email",
+					edit: async (_g, o) => {
+						await testDb
+							.update(people)
+							.set({ email: `changed-${uniq()}@example.test` })
+							.where(eq(people.id, o.personId));
+					},
+				},
+			];
+			for (const { label, edit } of edits) {
+				const g = await seedGuest(a.clubId);
+				const oEmail = `s-${uniq()}@example.test`;
+				const o = await seedGuest(b.clubId, {
+					email: oEmail,
+					phone: "+14155550166",
+				});
+				const expected = await expectedOf(g, o);
+				await edit(g, o, oEmail);
+				await expect(
+					applyLinkGuestAcrossClubs({ ...asOfficer(g, o), expected }),
+					label,
+				).rejects.toThrow(GUEST_LINK_CHANGED_MESSAGE);
+				expect(await personOfGuest(g.id), label).toBe(g.personId);
+				expect(await personRow(g.personId), label).not.toBeNull();
+			}
+		});
+
+		// protects=a guest row that moved to another Person between the read and the locks is refused with RECORD_CHANGED, not linked on the old one; fails_when=the post-lock person_id comparison is dropped; no_claim=the club-set re-read (Add's tests cover the shared helper)
+		it("refuses with 'This record changed' when a guest row moved Persons while it waited", async () => {
+			const g = await seedGuest(a.clubId);
+			const o = await seedGuest(b.clubId, {
+				email: `m-${uniq()}@example.test`,
+			});
+			const expected = await expectedOf(g, o);
+			const other = await seedPerson({ name: "Moved To" });
+			extraPeople.push(other);
+			const err = await parkedThen(
+				b.clubId,
+				() => applyLinkGuestAcrossClubs({ ...asOfficer(g, o), expected }),
+				async () => {
+					await testDb
+						.update(guests)
+						.set({ personId: other })
+						.where(eq(guests.id, g.id));
+				},
+			);
+			expect(err?.message).toBe(RECORD_CHANGED_MESSAGE);
+			expect(await personOfGuest(g.id)).toBe(other);
+		});
+
+		// -- the audit row ----------------------------------------------------
+		// protects=exactly one activity row, in the ACTING club, naming the acting guest and nothing of the other club, credited to the officer's seat there, and the feed words it; fails_when=a second row, a row in the other club, an other-club id or name in `detail`, or a missing actor; no_claim=an impersonating superadmin's attribution (logActivity's own tests)
+		it("writes one audit row in the acting club with no other-club id or name", async () => {
+			const g = await seedGuest(a.clubId, { name: "Audit Acting" });
+			const o = await seedGuest(b.clubId, {
+				name: "Audit Other",
+				email: `au-${uniq()}@example.test`,
+			});
+			await link(g, o);
+			const rowsA = await linkLogRows(a.clubId);
+			expect(rowsA).toHaveLength(1);
+			expect(await linkLogRows(b.clubId)).toHaveLength(0);
+			expect(rowsA[0]?.actorMemberId).toBe(a.adminMemberId);
+			expect(rowsA[0]?.detail).toEqual({
+				change: "guest_cross_club_link",
+				guestId: g.id,
+				guestName: "Audit Acting",
+			});
+			const serialized = JSON.stringify(rowsA[0]);
+			for (const secret of [o.id, "Audit Other", b.clubId, o.personId]) {
+				expect(serialized).not.toContain(secret);
+			}
+			const feed = await loadActivity({ clubId: a.clubId });
+			const entry = feed.find((e) => e.action === "member_merge");
+			expect(entry).toMatchObject({
+				crossClubLink: true,
+				guestLink: false,
+				guestName: "Audit Acting",
+			});
+			expect(formatActivity(entry as ActivityEntry).summary).toBe(
+				"linked Audit Acting to the same person in another club",
+			);
+		});
+
+		// -- the read contracts -------------------------------------------------
+		// protects=the picker returns exactly {guestId,name,email,phone} per row, only the other club's unconverted guest-only Persons that are not this guest's own, filtered case-insensitively on name or email, `%` literal, by name, capped at 20; fails_when=a key (stage, notes, personId, …) is added, an excluded kind leaks in, the filter or cap or order changes; no_claim=the viewer sees names, emails and phones of the other club's guests by design (the dialog says so)
+		it("lists candidates with exactly the contract's keys, filtered and capped", async () => {
+			const g = await seedGuest(a.clubId);
+			const keep = await seedGuest(b.clubId, {
+				name: "Zed Candidate",
+				email: `zed-${uniq()}@Example.test`,
+				phone: "+14155550133",
+			});
+			const member = await seedMember(c.clubId);
+			await seedGuest(b.clubId, {
+				name: "Zed Member",
+				personId: member.personId,
+			});
+			const signedIn = await seedUser(null);
+			await seedGuest(b.clubId, {
+				name: "Zed Signed",
+				personId: signedIn.personId,
+			});
+			await seedGuest(b.clubId, { name: "Zed Converted", stage: "joined" });
+			await seedGuest(b.clubId, { name: "Zed Own", personId: g.personId });
+			await seedGuest(c.clubId, { name: "Zed Third Club" });
+			await seedGuest(b.clubId, { name: "100% Real" });
+
+			const ask = (q: string) =>
+				listGuestLinkCandidates({
+					userId: officer,
+					clubId: a.clubId,
+					guestId: g.id,
+					otherClubId: b.clubId,
+					q,
+				});
+			const zed = await ask("ZED");
+			expect(zed.map((r) => r.name)).toEqual(["Zed Candidate"]);
+			expect(Object.keys(zed[0] ?? {}).sort()).toEqual([
+				"email",
+				"guestId",
+				"name",
+				"phone",
+			]);
+			expect(zed[0]).toMatchObject({
+				guestId: keep.id,
+				phone: "+14155550133",
+			});
+			// By email, case-insensitively.
+			expect((await ask("EXAMPLE.TEST")).map((r) => r.name)).toEqual([
+				"Zed Candidate",
+			]);
+			// A typed % means itself.
+			expect((await ask("%")).map((r) => r.name)).toEqual(["100% Real"]);
+			// Ordered by name; empty q is the first 20.
+			for (let i = 0; i < 22; i++) {
+				await seedGuest(b.clubId, {
+					name: `Many ${String(i).padStart(2, "0")}`,
+				});
+			}
+			const all = await ask("");
+			expect(all).toHaveLength(20);
+			expect(all.map((r) => r.name)).toEqual(
+				[...all.map((r) => r.name)].sort((x, y) => x.localeCompare(y)),
+			);
+		});
+
+		// protects=the preview returns exactly the contract's keys, ok:true with the keeper Person's stored values and ok:false with only a message; fails_when=a key is added (the other club's stage, counts, ids) or the keeper's values are wrong; no_claim=none beyond protects
+		it("previews with exactly the contract's keys and the keeper's stored values", async () => {
+			const g = await seedGuest(a.clubId, { name: "Pre Acting" });
+			const o = await seedGuest(b.clubId, {
+				name: "Pre Other",
+				email: `Pre-${uniq()}@Example.test`,
+				phone: "+14155550144",
+			});
+			const keeper = await personRow(o.personId);
+			const p = await preview(g, o);
+			expect(Object.keys(p).sort()).toEqual([
+				"absorbed",
+				"email",
+				"expected",
+				"name",
+				"ok",
+				"phone",
+			]);
+			expect(p).toMatchObject({
+				ok: true,
+				absorbed: "this",
+				name: keeper?.name,
+				email: keeper?.email,
+				phone: keeper?.phone,
+			});
+			if (!p.ok) throw new Error("unreachable");
+			expect(Object.keys(p.expected).sort()).toEqual(["absorbed", "basis"]);
+			expect(Object.keys(p.expected.basis).sort()).toEqual([
+				"otherEmail",
+				"otherPhone",
+				"thisEmail",
+				"thisPhone",
+			]);
+			const refused = await preview(
+				await seedGuest(a.clubId, { email: "a1@example.test" }),
+				await seedGuest(b.clubId, { email: "b1@example.test" }),
+			);
+			expect(Object.keys(refused).sort()).toEqual(["message", "ok"]);
+		});
+
+		// -- Separate copies nothing after a Link -----------------------------------
+		// protects=after a Link, Separate gives the guest a fresh Person with null email and phone and leaves the shared Person's columns alone; fails_when=Separate copies the linked Person's contact; no_claim=none beyond protects
+		it("Separate after a Link copies no contact", async () => {
+			const g = await seedGuest(a.clubId, { name: "Sep Linked" });
+			const o = await seedGuest(b.clubId, {
+				email: `sep-${uniq()}@example.test`,
+				phone: "+14155550155",
+			});
+			await link(g, o);
+			const sharedBefore = await personRow(o.personId);
+			await applySeparateGuest({
+				userId: onlyA,
+				clubId: a.clubId,
+				guestId: g.id,
+			});
+			const fresh = await personRow(await personOfGuest(g.id));
+			expect(fresh).toMatchObject({
+				name: "Sep Linked",
+				email: null,
+				phone: null,
+			});
+			expect(await personOfGuest(g.id)).not.toBe(o.personId);
+			expect(await personRow(o.personId)).toEqual(sharedBefore);
+			expect(await personOfGuest(o.id)).toBe(o.personId);
+		});
+
+		// -- lifecycle on a linked pair -------------------------------------------
+		// protects=deleting one side of a linked pair leaves the shared Person (and the other card) alone; fails_when=the guest delete removes a Person another club's row still names; no_claim=delete's own tests (this only pins it on a pair Link produced)
+		it("delete on one side leaves the shared Person with the other", async () => {
+			const g = await seedGuest(a.clubId);
+			const o = await seedGuest(b.clubId, {
+				email: `d-${uniq()}@example.test`,
+			});
+			await link(g, o);
+			await applyDeleteGuest({
+				clubId: a.clubId,
+				guestId: g.id,
+				actorMemberId: a.adminMemberId,
+			});
+			expect(await personRow(o.personId)).not.toBeNull();
+			expect(await personOfGuest(o.id)).toBe(o.personId);
+		});
+
+		// protects=converting one side of a linked pair gives the converted guest a Person of its own (the shared one is not pristine) and leaves the other card, its contact and the shared Person exactly as they were; fails_when=a convert after a Link deletes, re-keys or locks the shared Person; no_claim=that the other card goes read-only: it does not, today, for an Added pair either, because convert never adopts a shared Person
+		it("convert on one side leaves the other card and the shared Person alone", async () => {
+			const email = `cv-${uniq()}@example.test`;
+			const g = await seedGuest(a.clubId, { name: "Conv Acting" });
+			const o = await seedGuest(b.clubId, { name: "Conv Other", email });
+			await link(g, o);
+			const sharedBefore = await personRow(o.personId);
+			await applyConvertGuestToMember({
+				clubId: a.clubId,
+				guestId: g.id,
+				actorMemberId: a.adminMemberId,
+				confirmedEmail: null,
+			});
+			expect(await personOfGuest(o.id)).toBe(o.personId);
+			expect(await personRow(o.personId)).toEqual(sharedBefore);
+			expect(await personOfGuest(g.id)).not.toBe(o.personId);
+			const row = (await loadGuestPipeline(b.clubId)).find(
+				(r) => r.id === o.id,
+			);
+			expect(row?.contactRefusal ?? null).toBeNull();
+		});
+
+		// protects=once somebody signs in as the shared Person, BOTH clubs' cards show the contact read-only ("signed in"); fails_when=a linked pair's second card stays editable after a bind; no_claim=the bind flow itself
+		it("binding a user to the shared Person makes both cards read-only", async () => {
+			const g = await seedGuest(a.clubId);
+			const o = await seedGuest(b.clubId, {
+				email: `sg-${uniq()}@example.test`,
+			});
+			await link(g, o);
+			const u = await seedUser(null);
+			await testDb
+				.update(people)
+				.set({ userId: u.userId })
+				.where(eq(people.id, o.personId));
+			const inA = (await loadGuestPipeline(a.clubId)).find(
+				(r) => r.id === g.id,
+			);
+			const inB = (await loadGuestPipeline(b.clubId)).find(
+				(r) => r.id === o.id,
+			);
+			expect(inA?.contactRefusal).toBe("signed_in");
+			expect(inB?.contactRefusal).toBe("signed_in");
+		});
+
+		// -- concurrency -----------------------------------------------------------
+		// protects=two sessions linking the same pair: exactly one succeeds, the other is refused with one of the known messages, and no guest row names a deleted Person; fails_when=the club or Person locks are dropped (both succeed, or a row is left on a deleted Person); no_claim=a deterministic interleaving: the sessions are started together and Postgres picks the order
+		it("two sessions linking the same pair: exactly one wins", async () => {
+			const g = await seedGuest(a.clubId);
+			const o = await seedGuest(b.clubId, {
+				email: `cc-${uniq()}@example.test`,
+			});
+			const expected = await expectedOf(g, o);
+			const results = await Promise.allSettled([
+				applyLinkGuestAcrossClubs({ ...asOfficer(g, o), expected }),
+				applyLinkGuestAcrossClubs({ ...asOfficer(g, o), expected }),
+			]);
+			expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+			const lost = results.find((r) => r.status === "rejected");
+			expect([
+				RECORD_CHANGED_MESSAGE,
+				CLUB_SET_MOVED_MESSAGE,
+				GUEST_LINK_CHANGED_MESSAGE,
+				GUEST_LINK_ALREADY_SAME_MESSAGE,
+			]).toContain((lost as PromiseRejectedResult).reason.message);
+			expect(await personOfGuest(g.id)).toBe(o.personId);
+			expect(await personRow(g.personId)).toBeNull();
+		});
+
+		// protects=a Link and an Add of the Person the Link absorbs, started together: no guest row ends on a deleted Person, and a refused side says why; fails_when=the Add's row lands on a Person the Link deleted; no_claim=which commits first (either order is allowed)
+		it("a Link racing an Add of the absorbed Person leaves no row on a deleted Person", async () => {
+			const g = await seedGuest(a.clubId);
+			const o = await seedGuest(b.clubId, {
+				email: `ra-${uniq()}@example.test`,
+			});
+			const expected = await expectedOf(g, o);
+			const [linked, added] = await Promise.allSettled([
+				applyLinkGuestAcrossClubs({ ...asOfficer(g, o), expected }),
+				applyAddGuestToClub({
+					userId: officer,
+					fromClubId: a.clubId,
+					guestId: g.id,
+					toClubId: b.clubId,
+				}),
+			]);
+			const allowed = [
+				GUEST_ADD_ALREADY_THERE_MESSAGE,
+				RECORD_CHANGED_MESSAGE,
+				CLUB_SET_MOVED_MESSAGE,
+				GUEST_LINK_CHANGED_MESSAGE,
+				GUEST_LINK_ALREADY_SAME_MESSAGE,
+			];
+			for (const r of [linked, added]) {
+				if (r.status === "rejected") {
+					expect(allowed).toContain(r.reason.message);
+				}
+			}
+			expect(
+				[linked, added].filter((r) => r.status === "fulfilled").length,
+			).toBeGreaterThanOrEqual(1);
+			const rows = await testDb
+				.select({ id: guests.id, personId: guests.personId })
+				.from(guests)
+				.where(inArray(guests.clubId, [a.clubId, b.clubId, c.clubId]));
+			for (const row of rows) {
+				expect(await personRow(row.personId), row.id).not.toBeNull();
+			}
 		});
 	});
 });
