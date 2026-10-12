@@ -37,6 +37,8 @@ import { logActivity } from "./activity";
 import { isReadableClub } from "./club-readable-logic";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { contactMethodAvailableSql } from "./contact-preference-logic";
+import { meetingAcceptsWrite } from "./meeting-write-gate";
+import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 import { collapseMemberships } from "./membership-collapse-logic";
 import {
 	currentOfficersByMember,
@@ -601,11 +603,8 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 			.set({ status: input.status })
 			.where(eq(members.id, input.memberId));
 		// Free up their upcoming roles so the VPE can re-fill them; past slots
-		// stay assigned (history preserved). No status filter, a cancelled
-		// future meeting included (#1057): its slots survive the cancel by design,
-		// and a restore must not hand the role back to an inactive member. This
-		// is its own UPDATE rather than `releaseSlotCore`, so the cancelled
-		// meeting's write guard does not apply to it — on purpose.
+		// and a completed meeting's slots stay assigned (history preserved).
+		// A cancelled future meeting is released too (#1057, #1154).
 		if (deactivating) {
 			const upcoming = await tx
 				.select({ id: roleSlots.id })
@@ -620,7 +619,13 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 			for (const s of upcoming) {
 				// Unlink any speech (speech_id → NULL); the speech persists
 				// Person-owned and unscheduled (ADR-0009 — never destroyed).
-				await tx
+				// The meeting's status rides in the UPDATE (#1154): `scheduledAt >= now` is an
+				// instant, `completeMeeting` closes by the club-local day, so a meeting completed
+				// this afternoon and scheduled for this evening matches the SELECT above. The
+				// UPDATE refuses it, so the release keeps its status, claimedAt and speechId.
+				// A cancelled future meeting is still released (#1057). The log follows
+				// RETURNING, so it names only the slots actually released.
+				const released = await tx
 					.update(roleSlots)
 					.set({
 						assignedMemberId: null,
@@ -628,7 +633,22 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 						claimedAt: null,
 						speechId: null,
 					})
-					.where(eq(roleSlots.id, s.id));
+					.where(
+						and(
+							eq(roleSlots.id, s.id),
+							// Still held by THIS member at UPDATE time: the SELECT above is a snapshot, and
+							// a slot reassigned since must not lose its new holder or speech link.
+							eq(roleSlots.assignedMemberId, input.memberId),
+							meetingAcceptsWrite(
+								tx,
+								"plan",
+								roleSlots.meetingId,
+								PLAN_ACCEPTING_CANCELLED,
+							),
+						),
+					)
+					.returning({ id: roleSlots.id });
+				if (released.length === 0) continue;
 				await logActivity(tx, {
 					clubId: input.clubId,
 					actorMemberId: input.actorMemberId,
@@ -791,8 +811,6 @@ export async function applyMemberRemove(input: RemoveInput) {
 	}
 
 	await db.transaction(async (tx) => {
-		// No status filter: a cancelled future meeting's slots are released too
-		// (#1057, see the docblock).
 		const upcoming = await tx
 			.select({ id: roleSlots.id })
 			.from(roleSlots)
@@ -806,7 +824,15 @@ export async function applyMemberRemove(input: RemoveInput) {
 		for (const s of upcoming) {
 			// Unlink any speech (speech_id → NULL); the speech persists
 			// Person-owned and unscheduled (ADR-0009 — never destroyed).
-			await tx
+			// The meeting's status rides in the UPDATE (#1154): `scheduledAt >= now` is an
+			// instant, `completeMeeting` closes by the club-local day, so a meeting completed
+			// this afternoon and scheduled for this evening matches the SELECT above. The
+			// UPDATE refuses it, so the release keeps its status, claimedAt and speechId.
+			// On remove, `assigned_member_id` of a completed slot is still cleared by the
+			// members FK (ON DELETE SET NULL); that is not this writer's doing.
+			// A cancelled future meeting is still released (#1057). The log follows
+			// RETURNING, so it names only the slots actually released.
+			const released = await tx
 				.update(roleSlots)
 				.set({
 					assignedMemberId: null,
@@ -814,7 +840,22 @@ export async function applyMemberRemove(input: RemoveInput) {
 					claimedAt: null,
 					speechId: null,
 				})
-				.where(eq(roleSlots.id, s.id));
+				.where(
+					and(
+						eq(roleSlots.id, s.id),
+						// Still held by THIS member at UPDATE time: the SELECT above is a snapshot, and
+						// a slot reassigned since must not lose its new holder or speech link.
+						eq(roleSlots.assignedMemberId, input.memberId),
+						meetingAcceptsWrite(
+							tx,
+							"plan",
+							roleSlots.meetingId,
+							PLAN_ACCEPTING_CANCELLED,
+						),
+					),
+				)
+				.returning({ id: roleSlots.id });
+			if (released.length === 0) continue;
 			await logActivity(tx, {
 				clubId: input.clubId,
 				actorMemberId: input.actorMemberId,
