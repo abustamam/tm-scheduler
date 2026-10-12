@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { effectiveAdminClubFor } from "./effective-admin";
 import { applyViewAs, parseViewAs } from "./view-as";
 
 describe("parseViewAs", () => {
@@ -72,9 +73,30 @@ describe("applyViewAs", () => {
 		expect(out.officerPositions).toEqual([]);
 	});
 
-	it("downgrades only the ACTIVE club", () => {
+	it("downgrades EVERY club, not just the active one", () => {
 		const out = applyViewAs(ctx({ activeClubId: "b" }), "member");
-		expect(out.clubs.map((c) => c.clubRole)).toEqual(["admin", "member"]);
+		expect(out.clubs.map((c) => c.clubRole)).toEqual(["member", "member"]);
+	});
+
+	it("honours an admin of B whose ACTIVE club is C, where they are a plain member", () => {
+		const out = applyViewAs(
+			ctx({
+				clubs: [club("b", "admin"), club("c", "member")],
+				activeClubId: "c",
+			}),
+			"member",
+		);
+		expect(out.viewAs).toBe("member");
+		expect(out.clubs.map((c) => c.clubRole)).toEqual(["member", "member"]);
+	});
+
+	it("leaves no club an explicit-id admin check would still grant (AC 8)", () => {
+		const out = applyViewAs(
+			ctx({ activeClubId: "a", officerPositions: ["president"] }),
+			"member",
+		);
+		expect(effectiveAdminClubFor(out, "b")).toBeUndefined();
+		expect(effectiveAdminClubFor(out, "a")).toBeUndefined();
 	});
 
 	it("downgrades a superadmin's injected session club like a stored admin", () => {

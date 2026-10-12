@@ -152,6 +152,10 @@ Status: Accepted. The app-wide "Preview as member" (a `view_as=member` cookie, `
 a **role** preview, not impersonation of a person: the viewer keeps their own identity and only their
 club authority (stored admin, elected office, or the superadmin session's injected admin role) is hidden
 from the auth context, so the nav, the route guards and the SSR render show the member view.
+The preview is per browser, not per club: it is honoured when the viewer has admin authority in ANY club,
+and then EVERY club is downgraded, so a guard asked about an explicit club id (`effectiveAdminClubFor`)
+cannot grant a club the viewer administers but is not acting in. A plain member of every club who sets the
+cookie by hand sees no change and no banner.
 
 It changes what is **shown**, never what a write **does**:
 
