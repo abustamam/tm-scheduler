@@ -2,25 +2,21 @@
 //
 // The guest card's cross-club menu items (#1127), at the level a reader sees:
 //
-//  - "Add to <club>" and "Same person as…" render only for a viewer who is an
-//    admin/officer of 2+ clubs, and "Add to" lists only the clubs the server said
-//    the Person can still be added to (`addableTo`).
+//  - "Add to <club>" renders only for a viewer who is an admin/officer of 2+
+//    clubs, and lists only the clubs the server said the Person can still be
+//    added to (`addableTo`).
 //  - "Separate from other clubs" renders when `sharedWithOtherClub` is true.
-//  - None of the three is offered for a converted guest.
-//  - The picker previews before it links, and sends the previewed values back.
+//  - Neither is offered for a converted guest.
 //
-// The server decides everything above again; this only pins what is DRAWN, and
-// that the confirm step hands the preview to the link. Pattern follows
+// The server decides everything above again; this only pins what is DRAWN.
+// Pattern follows
 // vp-membership.test.tsx: mock the server-fn module, stub `Route.useLoaderData`,
 // render `Route.options.component`.
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	addGuestToClub,
-	linkGuestAcrossClubs,
-	listGuestLinkCandidates,
 	type PipelineGuestRow,
-	previewGuestLink,
 	separateGuest,
 } from "#/server/guest-pipeline";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
@@ -33,10 +29,7 @@ vi.mock("#/server/guest-pipeline", () => ({
 	getGuestPipeline: vi.fn(),
 	getLinkCandidates: vi.fn(),
 	getOtherAdminClubs: vi.fn(),
-	linkGuestAcrossClubs: vi.fn(),
 	linkGuestToMember: vi.fn(),
-	listGuestLinkCandidates: vi.fn(),
-	previewGuestLink: vi.fn(),
 	recordGuestInvite: vi.fn(),
 	separateGuest: vi.fn(),
 	setGuestStage: vi.fn(),
@@ -126,16 +119,15 @@ const item = (name: RegExp | string) =>
 	screen.queryByRole("menuitem", { name });
 
 describe("guest card cross-club menu (#1127)", () => {
-	it("a viewer of ONE club sees none of the three", async () => {
+	it("a viewer of ONE club sees neither", async () => {
 		await renderRoute([guestRow()], []);
 		openMoreMenu("Ada Guest");
 		await screen.findByRole("menuitem", { name: "Edit" });
 		expect(item(/add to/i)).toBeNull();
-		expect(item(/same person as/i)).toBeNull();
 		expect(item(/separate from other clubs/i)).toBeNull();
 	});
 
-	it("an officer of 2+ clubs sees Add to for each addable club only, and Same person as…", async () => {
+	it("an officer of 2+ clubs sees Add to for each addable club only", async () => {
 		await renderRoute([guestRow({ addableTo: [OTHER_2] })], TWO_CLUBS);
 		openMoreMenu("Ada Guest");
 		expect(
@@ -143,7 +135,6 @@ describe("guest card cross-club menu (#1127)", () => {
 		).toBeTruthy();
 		// Already a guest at Harbor: not offered.
 		expect(item("Add to Harbor Speakers")).toBeNull();
-		expect(item(/same person as/i)).toBeTruthy();
 		// Not shared with another club: nothing to separate.
 		expect(item(/separate from other clubs/i)).toBeNull();
 	});
@@ -157,7 +148,6 @@ describe("guest card cross-club menu (#1127)", () => {
 			}),
 		).toBeTruthy();
 		expect(item(/add to/i)).toBeNull();
-		expect(item(/same person as/i)).toBeNull();
 	});
 
 	it("offers none of them for a converted guest", async () => {
@@ -175,7 +165,6 @@ describe("guest card cross-club menu (#1127)", () => {
 		openMoreMenu("Ada Guest");
 		await screen.findByRole("menuitem", { name: "Edit" });
 		expect(item(/add to/i)).toBeNull();
-		expect(item(/same person as/i)).toBeNull();
 		expect(item(/separate from other clubs/i)).toBeNull();
 	});
 
@@ -220,64 +209,5 @@ describe("guest card cross-club menu (#1127)", () => {
 			}),
 		);
 		expect(separateGuest).not.toHaveBeenCalled();
-	});
-
-	it("Same person as… previews the pick, then links with exactly what was previewed", async () => {
-		const shown = {
-			name: "Robert Lee",
-			preferredName: "Bob",
-			email: "rob@example.com",
-			phone: null,
-		};
-		vi.mocked(listGuestLinkCandidates).mockResolvedValue([
-			{
-				kind: "member",
-				id: "99999999-9999-4999-8999-999999999999",
-				name: "Robert Lee",
-				email: "rob@example.com",
-				phone: null,
-			},
-		]);
-		vi.mocked(previewGuestLink).mockResolvedValue(shown);
-		vi.mocked(linkGuestAcrossClubs).mockResolvedValue({ ok: true });
-		await renderRoute([guestRow()], [TWO_CLUBS[0] as never]);
-		openMoreMenu("Ada Guest");
-		fireEvent.click(
-			await screen.findByRole("menuitem", { name: /same person as/i }),
-		);
-
-		const pick = await screen.findByRole("button", { name: /Robert Lee/ });
-		expect(listGuestLinkCandidates).toHaveBeenCalledWith({
-			data: { clubId: CLUB, otherClubId: OTHER_1, q: "" },
-		});
-		fireEvent.click(pick);
-
-		// The confirm step shows the resulting name, goes-by, email and phone.
-		await screen.findByText("Bob");
-		expect(screen.getByText("rob@example.com")).toBeTruthy();
-		expect(previewGuestLink).toHaveBeenCalledWith({
-			data: {
-				clubId: CLUB,
-				guestId: GUEST,
-				otherClubId: OTHER_1,
-				otherId: "99999999-9999-4999-8999-999999999999",
-				otherKind: "member",
-			},
-		});
-		expect(linkGuestAcrossClubs).not.toHaveBeenCalled();
-
-		fireEvent.click(screen.getByRole("button", { name: "Link them" }));
-		await waitFor(() =>
-			expect(linkGuestAcrossClubs).toHaveBeenCalledWith({
-				data: {
-					clubId: CLUB,
-					guestId: GUEST,
-					otherClubId: OTHER_1,
-					otherId: "99999999-9999-4999-8999-999999999999",
-					otherKind: "member",
-					expected: shown,
-				},
-			}),
-		);
 	});
 });

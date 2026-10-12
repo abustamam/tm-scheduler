@@ -1,12 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { guestLinkPreviewSchema } from "#/lib/guest-link";
 import { requireClubAdminView, requireClubRole, requireUser } from "./guards";
 import {
 	applyAddGuestToClub,
 	applyConvertGuestToMember,
 	applyDeleteGuest,
-	applyLinkGuestAcrossClubs,
 	applyLinkGuestToMember,
 	applyRecordGuestInvite,
 	applySeparateGuest,
@@ -15,11 +13,9 @@ import {
 	applyUnlinkGuestFromMember,
 	applyUpdateGuest,
 	captureGuestVisit,
-	listGuestLinkCandidates as listGuestLinkCandidatesLogic,
 	loadGuestPipeline,
 	loadLinkCandidates,
 	loadOtherAdminClubs,
-	previewGuestLink as previewGuestLinkLogic,
 } from "./guest-pipeline-logic";
 import {
 	guestBookSchema,
@@ -34,8 +30,6 @@ import { loadNextMeetingSummary } from "./meetings-logic";
 export type {
 	CaptureGuestResult,
 	DeleteGuestResult,
-	GuestLinkCandidate,
-	GuestLinkPreview,
 	GuestStage,
 	LinkCandidate,
 	ManualGuestStage,
@@ -319,61 +313,10 @@ export const addGuestToClub = createServerFn({ method: "POST" })
 		return applyAddGuestToClub({ userId: currentUser.id, ...data });
 	});
 
-const crossClubRecordSchema = z.object({
-	clubId: uuid,
-	guestId: uuid,
-	otherClubId: uuid,
-	otherId: uuid,
-	otherKind: z.enum(["guest", "member"]),
-});
-
-const linkAcrossClubsSchema = crossClubRecordSchema.extend({
-	/** What the confirm step showed; the link recomputes it and refuses on a change. */
-	expected: guestLinkPreviewSchema,
-});
-
 /**
- * Say this club's guest and a guest or member of another club are one human
- * (#1127). AUTHED — admin of BOTH clubs, checked in the logic.
- */
-export const linkGuestAcrossClubs = createServerFn({ method: "POST" })
-	.validator((input: unknown) => linkAcrossClubsSchema.parse(input))
-	.handler(async ({ data }) => {
-		const currentUser = await requireUser();
-		return applyLinkGuestAcrossClubs({ userId: currentUser.id, ...data });
-	});
-
-/**
- * The confirm step of a link: the Person it would produce, name, goes-by name,
- * email and phone only (#1127). AUTHED — admin of BOTH clubs.
- */
-export const previewGuestLink = createServerFn({ method: "GET" })
-	.validator((input: unknown) => crossClubRecordSchema.parse(input))
-	.handler(async ({ data }) => {
-		const currentUser = await requireUser();
-		return previewGuestLinkLogic({ userId: currentUser.id, ...data });
-	});
-
-const linkCandidatesSchema = z.object({
-	clubId: uuid,
-	otherClubId: uuid,
-	q: z.string().max(100),
-});
-
-/**
- * The picker behind "Same person as…": guests and active members of the other
- * club, name, email and phone only (#1127). AUTHED — admin of BOTH clubs.
- */
-export const listGuestLinkCandidates = createServerFn({ method: "GET" })
-	.validator((input: unknown) => linkCandidatesSchema.parse(input))
-	.handler(async ({ data }) => {
-		const currentUser = await requireUser();
-		return listGuestLinkCandidatesLogic({ userId: currentUser.id, ...data });
-	});
-
-/**
- * Give this guest a Person of their own again (#1127): the undo of a wrong link.
- * AUTHED — admin of THIS club only, by the maintainer's decision.
+ * Give this guest a Person of their own again when another club holds the one
+ * they share (#1127). AUTHED — admin of THIS club only, by the maintainer's
+ * decision.
  */
 export const separateGuest = createServerFn({ method: "POST" })
 	.validator((input: unknown) => deleteGuestSchema.parse(input))
