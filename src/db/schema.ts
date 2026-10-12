@@ -947,8 +947,9 @@ export const membersEmailBackup = pgTable("members_email_backup", {
 //
 // TEMPORARY, and meant to be dropped, like the backups above. 0117 copies each
 // guest's email and phone onto the guest's Person where that Person is guest-only
-// and the field is blank, then migration 0118 (#1126) dropped the two columns. This holds every
-// guest's contact as the columns held it at that moment (a guest with neither
+// and the field is blank (migration 0118, #1126, later dropped the two columns,
+// after a catch-up that diffs against this table). This holds every guest's
+// contact as the columns held it at that moment (a guest with neither
 // field has no row), with the guest's club and Person, so a value the copy did
 // not write is recoverable by hand. A forensic copy, not a restore path (#1089).
 // One snapshot; nothing writes to it at runtime. Drop it (schema + a migration)

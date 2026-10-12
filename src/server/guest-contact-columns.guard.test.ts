@@ -2,18 +2,18 @@
  * Source guard: **nothing in shipped code reads or writes `guests.email` or
  * `guests.phone`** (#1125, ADR-0031).
  *
- * Since this change `schema.ts` does not declare the two columns at all: they
- * still exist in the database, dead, until #1126 drops them in SQL. So a Drizzle
+ * `schema.ts` does not declare the two columns at all (#1125 stopped declaring
+ * them and migration 0118, #1126, dropped them). So a Drizzle
  * reference no longer type-checks, and what this guard adds is raw SQL and an
  * `alias()`/`as` spelling that a cast could still get past.
  *
  * A guest's email and phone live on their Person (`people.email` / `people.phone`).
- * The two `guests` columns are kept for one release only so the old container,
- * still serving while a deploy swaps, never reads a column that was dropped; #1126
- * drops them. Until then they are dead: no reader and no writer. A reference that
- * crept back would read a value nothing updates any more (a stale address on a
- * card, in an export, in the minutes email recipient list), and nothing at runtime
- * would say so, because the column still exists and is simply never right.
+ * The two `guests` columns were kept for one release only so the old container,
+ * still serving while a deploy swaps, never read a column that was dropped, and
+ * migration 0118 (#1126) then dropped them. A reference that crept back would fail
+ * at runtime with a missing column, and it would be a second home for a contact
+ * that belongs on the Person (a stale address on a card, in an export, in the
+ * minutes email recipient list).
  *
  * ## What it scans, and the comment decision
  *
@@ -171,7 +171,7 @@ describe("guests.email and guests.phone have no readers and no writers", () => {
 			offenders,
 			`A guest's email and phone are their Person's (#1125): read and write ` +
 				`people.email / people.phone through guests.person_id. The guests ` +
-				`columns are dead until #1126 drops them.`,
+				`columns were dropped by migration 0118 (#1126).`,
 		).toEqual([]);
 	});
 });

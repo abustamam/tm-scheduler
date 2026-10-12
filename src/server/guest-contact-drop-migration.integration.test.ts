@@ -88,8 +88,12 @@ describe("the migration file's shape", () => {
 		expect(all[0]).toMatch(/"guests" IN ACCESS EXCLUSIVE MODE/);
 		expect(all[3]).toBe('ALTER TABLE "guests" DROP COLUMN "email";');
 		expect(all[4]).toBe('ALTER TABLE "guests" DROP COLUMN "phone";');
-		// Never touches the forensic copy 0117 made.
-		expect(all.join("\n")).not.toMatch(/guests_contact_backup/);
+		// The catch-up diffs against 0117's snapshot, on both fields, and never writes it.
+		const copies = all.filter((x) => x.startsWith('UPDATE "people"'));
+		for (const c of copies) expect(c).toMatch(/FROM "guests_contact_backup" b/);
+		expect(all.join("\n")).not.toMatch(
+			/(?:UPDATE|DELETE FROM|INSERT INTO) "guests_contact_backup"/,
+		);
 	});
 });
 
@@ -249,13 +253,72 @@ describe.skipIf(!hasTestDb)(
 				 values ($1, 'member_remove', 'member', $2, $3::jsonb)`,
 				[clubId, randomUUID(), JSON.stringify({ personId: removed })],
 			);
-			// Roster-identity columns disqualify a Person too.
-			const roster = await person("Roster");
-			await pool.query(
-				`update people set customer_id = 'PN-0118' where id = $1`,
-				[roster],
-			);
-			await guest(clubId, roster, { email: "roster@x.test" });
+			// Each roster-identity arm disqualifies a Person on its own, for both fields.
+			const armed: string[] = [];
+			for (const set of [
+				"customer_id = 'PN-0118'",
+				"basecamp_user_id = 'bc-0118'",
+				"original_join_date = '2015-03-01'",
+				"invited_at = now()",
+			]) {
+				const id = await person(`Roster ${set}`);
+				await pool.query(`update people set ${set} where id = $1`, [id]);
+				await guest(clubId, id, {
+					email: `roster-${armed.length}@x.test`,
+					phone: `+155500003${armed.length}`,
+				});
+				armed.push(id);
+			}
+			// --- Diffing against 0117's snapshot (`guests_contact_backup`).
+			const backup = async (
+				guestId: string,
+				club: string,
+				personId: string,
+				o: { email?: string; phone?: string },
+			) =>
+				pool.query(
+					`insert into guests_contact_backup (guest_id, club_id, person_id, email, phone)
+					 values ($1, $2, $3, $4, $5)`,
+					[guestId, club, personId, o.email ?? null, o.phone ?? null],
+				);
+			// (a) Cleared on the Person after 0117: the guest row still equals the
+			// backup, so the value must not come back.
+			const cleared = await person("Cleared");
+			const gCleared = await guest(clubId, cleared, {
+				email: "cleared@x.test",
+				phone: "+15550000041",
+			});
+			await backup(gCleared, clubId, cleared, {
+				email: "cleared@x.test",
+				phone: "+15550000041",
+			});
+			// (b) Re-pointed (separate / unlink / merge) to a fresh guest-only Person:
+			// the stale backed-up value is not copied onto it.
+			const oldHome = await person("Old Home", { email: "old-home@x.test" });
+			const fresh = await person("Fresh After Separate");
+			const gMoved = await guest(clubId, fresh, {
+				email: "old-home@x.test",
+				phone: "+15550000042",
+			});
+			await backup(gMoved, clubId, oldHome, {
+				email: "old-home@x.test",
+				phone: "+15550000042",
+			});
+			// (d) A value changed during the swap (differs from the backup) lands on a
+			// null field; the field that still equals the backup does not.
+			const changed = await person("Changed In Swap");
+			const gChanged = await guest(clubId, changed, {
+				email: "new-in-swap@x.test",
+				phone: "+15550000043",
+			});
+			await backup(gChanged, clubId, changed, {
+				email: "old-in-swap@x.test",
+				phone: "+15550000043",
+			});
+			// A field cleared on the guest row itself after the backup: nothing to copy.
+			const blanked = await person("Blanked");
+			const gBlanked = await guest(clubId, blanked, {});
+			await backup(gBlanked, clubId, blanked, { email: "was@x.test" });
 			// Two guest rows on one guest-only Person: the OLDEST row with the field wins.
 			const shared = await person("Shared Human");
 			await guest(clubId, shared, {
@@ -271,6 +334,7 @@ describe.skipIf(!hasTestDb)(
 			const backupBefore = await one<{ n: number }>(
 				`select count(*)::int as n from guests_contact_backup`,
 			);
+			expect(backupBefore.n).toBe(4);
 
 			// The real files, the folder ending at 0118: applies 0118 and nothing else.
 			await migrate(drizzle(pool), { migrationsFolder: throughDir });
@@ -294,7 +358,19 @@ describe.skipIf(!hasTestDb)(
 			expect(await read(memberPerson)).toEqual({ email: null, phone: null });
 			expect(await read(bound)).toEqual({ email: null, phone: null });
 			expect(await read(removed)).toEqual({ email: null, phone: null });
-			expect(await read(roster)).toEqual({ email: null, phone: null });
+			for (const id of armed)
+				expect(await read(id)).toEqual({ email: null, phone: null });
+			expect(await read(cleared)).toEqual({ email: null, phone: null });
+			expect(await read(fresh)).toEqual({ email: null, phone: null });
+			expect(await read(oldHome)).toEqual({
+				email: "old-home@x.test",
+				phone: null,
+			});
+			expect(await read(changed)).toEqual({
+				email: "new-in-swap@x.test",
+				phone: null,
+			});
+			expect(await read(blanked)).toEqual({ email: null, phone: null });
 			expect(await read(shared)).toEqual({
 				email: "older@x.test",
 				phone: "+15550000021",
