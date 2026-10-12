@@ -444,6 +444,81 @@ describe.skipIf(!hasTestDb)("edit a speech from the speech log (#1159)", () => {
 			});
 		});
 
+		it("clearing a catalog project clears the text derived from it, and keeps the introduction", async () => {
+			const { slotId } = await emptyMemberSlot(seed.memberId);
+			sessionUserId = seed.memberUserId;
+			await editSpeechFromLog({
+				data: {
+					slotId,
+					speakerDetails: { speechTitle: "A real title", projectId },
+				},
+			});
+			const linked = (await snapshot(slotId)).speech;
+			expect(linked?.projectId).toBe(projectId);
+			expect(linked?.projectName).toMatch(/^Ice Breaker/);
+			await testDb
+				.update(speeches)
+				.set({ introduction: "Keep this introduction" })
+				.where(eq(speeches.id, (await snapshot(slotId)).speechId as string));
+
+			// What the sheet sends after "Clear project" with the picker's text
+			// inputs hidden: the link is null and the free text is absent.
+			await editSpeechFromLog({
+				data: {
+					slotId,
+					speakerDetails: { speechTitle: "A real title", projectId: null },
+				},
+			});
+
+			const [row] = await testDb
+				.select({
+					projectId: speeches.projectId,
+					pathwayPath: speeches.pathwayPath,
+					projectName: speeches.projectName,
+					projectLevel: speeches.projectLevel,
+					introduction: speeches.introduction,
+				})
+				.from(speeches)
+				.where(eq(speeches.id, (await snapshot(slotId)).speechId as string));
+			expect(row).toEqual({
+				projectId: null,
+				pathwayPath: null,
+				projectName: null,
+				projectLevel: null,
+				introduction: "Keep this introduction",
+			});
+		});
+
+		it("hand-typed text survives a null projectId when the stored speech was never linked", async () => {
+			const { slotId, speechId } = await speakerSlot(seed.memberId, {
+				title: "Typed",
+			});
+			await testDb
+				.update(speeches)
+				.set({ pathwayPath: "Typed Path", projectName: "Typed Project" })
+				.where(eq(speeches.id, speechId as string));
+			sessionUserId = seed.memberUserId;
+
+			await editSpeechFromLog({
+				data: {
+					slotId,
+					speakerDetails: { speechTitle: "Typed", projectId: null },
+				},
+			});
+
+			const [row] = await testDb
+				.select({
+					pathwayPath: speeches.pathwayPath,
+					projectName: speeches.projectName,
+				})
+				.from(speeches)
+				.where(eq(speeches.id, speechId as string));
+			expect(row).toEqual({
+				pathwayPath: "Typed Path",
+				projectName: "Typed Project",
+			});
+		});
+
 		it('a field sent as "" is a deliberate clear, not a keep', async () => {
 			const { slotId, speechId } = await speakerSlot(seed.memberId, {
 				title: "Old title",
@@ -681,6 +756,26 @@ describe.skipIf(!hasTestDb)("edit a speech from the speech log (#1159)", () => {
 				data: { slotId, speakerDetails: { speechTitle: "Admin fixed it" } },
 			});
 			expect((await snapshot(slotId)).speech?.title).toBe("Admin fixed it");
+		});
+
+		it("a blank title plus a cleared project on a catalog-linked speech", async () => {
+			const { slotId } = await emptyMemberSlot(seed.memberId);
+			sessionUserId = seed.memberUserId;
+			await editSpeechFromLog({
+				data: { slotId, speakerDetails: { projectId } },
+			});
+			const before = await snapshot(slotId);
+			const logged = (await editLog()).length;
+			// Nothing left to save once the project is gone: refused, not unlinked.
+			await expect(
+				editSpeechFromLog({
+					data: { slotId, speakerDetails: { projectId: null } },
+				}),
+			).rejects.toThrow(
+				"Nothing to save. To remove a speech, use the meeting's agenda.",
+			);
+			expect(await snapshot(slotId)).toEqual(before);
+			expect(await editLog()).toHaveLength(logged);
 		});
 
 		it("a slot that does not exist", async () => {

@@ -49,6 +49,9 @@ async function readSlot(conn: Conn, slotId: string, lock: boolean) {
 			// Who OWNS the speech the slot points at (ADR-0009): it need not be the
 			// slot's holder, because a speech stays on a slot its holder left.
 			speechOwnerId: speeches.personId,
+			// Whether the stored speech is linked to a catalog project, which is what
+			// tells catalog-derived text from hand-typed (see `keepUnsent`).
+			speechProjectId: speeches.projectId,
 			// The fields the sheet may not have sent (see `keepUnsent`).
 			introduction: speeches.introduction,
 			pathwayPath: speeches.pathwayPath,
@@ -106,14 +109,28 @@ async function isSpeakerOfSpeech(
  * as blank and wipe history. A field the form sent as "" is a deliberate clear
  * and is not touched here (an absent key and `undefined` are the same on the
  * wire, which is why the sheet sends "" for a shown-but-empty input).
+ *
+ * One exception: when the stored speech is linked to a catalog project and the
+ * input unlinks it, the stored path, project and level were DERIVED from that
+ * project (`applyProjectDisplay`), not typed. Restoring them would leave the
+ * link gone and the old project's name on the agenda, print and reports, so an
+ * unsent field is cleared instead. Hand-typed text (no stored link) is kept.
  */
 function keepUnsent(input: SpeechInput, slot: Slot): SpeechInput {
+	const clearsCatalogProject =
+		slot.speechProjectId !== null && !input.projectId;
 	return {
 		...input,
 		introduction: input.introduction ?? slot.introduction ?? undefined,
-		pathwayPath: input.pathwayPath ?? slot.pathwayPath ?? undefined,
-		projectName: input.projectName ?? slot.projectName ?? undefined,
-		projectLevel: input.projectLevel ?? slot.projectLevel ?? undefined,
+		pathwayPath: clearsCatalogProject
+			? input.pathwayPath
+			: (input.pathwayPath ?? slot.pathwayPath ?? undefined),
+		projectName: clearsCatalogProject
+			? input.projectName
+			: (input.projectName ?? slot.projectName ?? undefined),
+		projectLevel: clearsCatalogProject
+			? input.projectLevel
+			: (input.projectLevel ?? slot.projectLevel ?? undefined),
 	};
 }
 
