@@ -259,9 +259,9 @@ today; GavelUp already knows the club's name and can print one in a click.
 
 **Decided by** the maintainer, 2026-10-09.
 
-**The residual risk is accepted, not removed.** The p.34 "rehosting" concern from the 2026-07-26
-revisit applies: the file is now served as a static asset of the app and committed to a public repo.
-That is the price of one-click signs, and it is taken knowingly.
+**The residual risk is accepted, not removed.** The p.34 "rehosting" concern from the 2026-07-31
+revisit (Brand Manual v2.0) applies: the file is now served as a static asset of the app and
+committed to a public repo. That is the price of one-click signs, and it is taken knowingly.
 
 **Decisions 1, 2 and 4 stand for every other surface.** The agenda, deck, `.pptx`, Word poster and
 role sheets still render only the club's own uploaded logo; "Toastmasters" stays nominative text;

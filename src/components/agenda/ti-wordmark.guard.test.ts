@@ -20,6 +20,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { readSource } from "#/test/guard-source";
 
 const SELF = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(SELF), "../../..");
@@ -151,10 +152,16 @@ describe("ADR-0024/#380: no vendored TI mark, anywhere in the shipped tree", () 
 				true,
 			);
 			for (const importer of importers) {
+				// Comment-blind, and an actual import: a comment that merely names the
+				// file must not keep the exception alive after the import is gone.
 				expect(
-					readFileSync(resolve(ROOT, importer), "utf8"),
-					`${importer} no longer references ${asset}; delete the asset and the SANCTIONED entry, or restore the reference.`,
-				).toContain(basename(asset));
+					readSource(resolve(ROOT, importer)),
+					`${importer} no longer imports ${asset}; delete the asset and the SANCTIONED entry, or restore the import.`,
+				).toMatch(
+					new RegExp(
+						`import\\s+\\w+\\s+from\\s+["'][^"']*${basename(asset).replace(/\./g, "\\.")}["']`,
+					),
+				);
 			}
 		}
 	});

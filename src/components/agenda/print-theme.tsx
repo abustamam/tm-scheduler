@@ -180,7 +180,7 @@ export const SCREEN_FIT_CSS = `
  * `orientation` is the ONLY thing a caller may vary, it defaults to portrait,
  * and it changes the `@page` rule and nothing else — so the agenda, the roles
  * sheet and the packet routes print exactly the page they printed before #718
- * and only the poster route passes anything. (#964 added `SCREEN_FIT_CSS`,
+ * and only the poster and meeting-sign routes pass anything. (#964 added `SCREEN_FIT_CSS`,
  * which is `@media screen` and orientation-independent, so neither half of
  * that changed; the rasterised print output was diffed identical.) See
  * `PageOrientation` above for why the poster is the one surface that differs

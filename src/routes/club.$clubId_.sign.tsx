@@ -7,10 +7,13 @@
 // it is public like `/roles`.
 //
 // Landscape, so it serves `printPageCss("landscape")` and centres its 1056px
-// sheet with an inline style on the wrapper, the way the Word poster route does
-// (not the portrait `SCREEN_FIT_CSS` path; see `printPageCss`'s docblock).
+// sheet with an inline style on the wrapper, the way the Word poster route does.
+// `MeetingSign` sets `--sheet-w` / `--sheet-h` on its `.agenda-page`, so
+// `SCREEN_FIT_CSS` (inside `printPageCss`) shrinks the sheet to fit a narrow
+// window: measured at 375px wide, the sheet renders 343px wide with a 16px gutter
+// and the page does not scroll sideways.
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { MeetingSign } from "#/components/agenda/meeting-sign";
+import { MeetingSign, type SignArrow } from "#/components/agenda/meeting-sign";
 import {
 	INK,
 	MUTED,
@@ -25,7 +28,7 @@ import {
 import { PublicFooter } from "#/components/public-footer";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 
-type SignSearch = { arrow?: "left" | "right"; chrome?: "none" };
+type SignSearch = { arrow?: NonNullable<SignArrow>; chrome?: "none" };
 
 const TABS = [
 	{ label: "No arrow", arrow: undefined },
@@ -66,7 +69,6 @@ function MeetingSignPage() {
 	const { clubId: clubIdParam } = Route.useParams();
 	const { club } = Route.useLoaderData();
 	const bare = chrome === "none";
-	const current = arrow ?? undefined;
 
 	return (
 		<div>
@@ -80,7 +82,7 @@ function MeetingSignPage() {
 							search={tab.arrow ? { arrow: tab.arrow } : {}}
 							style={{
 								...AGENDA_TAB_STYLE,
-								...(tab.arrow === current ? AGENDA_TAB_ACTIVE_STYLE : null),
+								...(tab.arrow === arrow ? AGENDA_TAB_ACTIVE_STYLE : null),
 							}}
 						>
 							{tab.label}
@@ -90,9 +92,9 @@ function MeetingSignPage() {
 				</PrintToolbar>
 			)}
 			<style>{printPageCss("landscape")}</style>
-			{/* The landscape sheet is 1056px wide, wider than most phone and some
-			    laptop viewports, so on SCREEN this leaves it flush left and the page
-			    scrolls sideways. Printing is unaffected: `@page` is 1056px too. */}
+			{/* The 1056px sheet is scaled down to the window by SCREEN_FIT_CSS on
+			    screen (see the header), and printing is unaffected: `@page` is
+			    1056px too. This wrapper only centres it when the window is wider. */}
 			<div
 				className="pgwrap"
 				style={{ display: "flex", justifyContent: "center" }}
