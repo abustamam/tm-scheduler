@@ -25,7 +25,7 @@ import {
 	readFixture,
 } from "./easy-speak-test-kit";
 
-const NOT_FIXTURES = ["fake-names.json", "bundle.expected.json", "non-person-phrases.json"];
+const NOT_FIXTURES = ["fake-names.json", "bundle.expected.json", "non-person-phrases.json", "contact-page-cases.json"];
 const files = readdirSync(fixturePath("."))
 	.filter((f) => /\.(html|json)$/.test(f) && !NOT_FIXTURES.includes(f));
 const htmlFiles = files.filter((f) => f.endsWith(".html"));
@@ -185,6 +185,12 @@ describe("fixtures contain no real phone numbers or emails", () => {
 			expect(re.test(sample)).toBe(true);
 			expect(re.test(sample)).toBe(true);
 		}
+	});
+
+	it("isContactPage answers the shared case table (src/lib/easy-speak-bundle.test.ts runs the same table over isContactPageUrl)", () => {
+		const cases: { url: string; expected: boolean }[] = JSON.parse(readFixture("contact-page-cases.json")).cases;
+		expect(cases.length).toBeGreaterThanOrEqual(15);
+		for (const { url, expected } of cases) expect(isContactPage(url), url).toBe(expected);
 	});
 
 	it("the contact pages are the ones the walk keeps out of raw", () => {

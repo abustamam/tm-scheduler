@@ -843,7 +843,16 @@ export function parseEvaluation(
 	exporterName: string,
 ): EsEvaluation {
 	const d = (detail as EvalDetail)?.evaluation;
-	const text = (d?.responses ?? [])
+	// The detail is another site's API answer: a shape it should not have is a page-shape failure
+	// the walk reports and does not cache, not a TypeError. A TypeError from here is a bug.
+	const responses = d?.responses ?? [];
+	if (!Array.isArray(responses)) {
+		throw new PageShapeError("its responses are not a list");
+	}
+	if (responses.some((r) => r === null || typeof r !== "object")) {
+		throw new PageShapeError("one of its responses is not an object");
+	}
+	const text = responses
 		.filter((r) => r.field_type === "text" && r.text_value)
 		.map((r) => `${r.field_label ?? ""}: ${r.text_value}`.trim())
 		.join("\n\n");

@@ -148,6 +148,7 @@ describe("the walk aborts on an unreadable page and never caches it", () => {
 		}
 		// The club page, member list, each year's list, three meetings, speeches, a request form, three charts.
 		expect(aborted).toBeGreaterThanOrEqual(20);
-		expect(forgiven).toBe(1);
+		// The evaluations page, and the same page asked again to fence the evaluation requests.
+		expect(forgiven).toBe(2);
 	});
 });

@@ -114,7 +114,7 @@ describe("the walk's error paths name what went wrong and keep what was fetched"
 	});
 });
 
-describe("evaluations are best-effort, but only for request and sign-in failures", () => {
+describe("evaluations are best-effort, but only for request and sign-in failures (the parser's own cases: easy-speak-walk-evaluations.test.ts)", () => {
 	it("gives [] when one evaluation's detail fails part-way through the list, not the ones before it", async () => {
 		const s = setup({ failOn: (url) => url.endsWith("/eval/502") });
 		const { bundle } = await s.run();
@@ -137,14 +137,6 @@ describe("evaluations are best-effort, but only for request and sign-in failures
 		});
 		const { bundle } = await s.run();
 		expect(bundle.evaluations).toEqual([]);
-	});
-
-	it("lets a bug in the evaluation parser surface instead of exporting an empty list", async () => {
-		// A `null` response row is a TypeError inside parseEvaluation, not a failed request.
-		const s = setup({
-			override: (url) => (url.endsWith("/eval/501") ? JSON.stringify({ evaluation: { responses: [null] } }) : undefined),
-		});
-		await expect(s.run()).rejects.toThrow(TypeError);
 	});
 });
 

@@ -1,14 +1,6 @@
-// @vitest-environment jsdom
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isContactPage } from "../../extension/lib/easy-speak-bundle";
-import {
-	parseClubData,
-	parseMeeting,
-	parseMemberList,
-	parseSpeechList,
-} from "../../extension/lib/easy-speak-parse";
 import {
 	type EasySpeakBundleV1,
 	easySpeakBundleV1Schema,
@@ -18,9 +10,14 @@ import {
 /**
  * The contract's two copies (#1047): the zod schema here, and the plain
  * TypeScript shape in `extension/lib/easy-speak-bundle.ts`. The extension's
- * parser tests PRODUCE this file from the committed fixtures; this test
+ * walk test PRODUCES this file from the committed fixtures; this test
  * parses it with the schema, so a change to either side that the other does
  * not follow fails here.
+ *
+ * Nothing under `src/` imports from `extension/`: the extension's tsconfig
+ * extends the generated, gitignored `.wxt/tsconfig.json`, which the root CI
+ * job never creates, so Vite cannot transform an extension .ts file there.
+ * The two sides meet through JSON fixtures and plain text reads only.
  */
 const FIXTURES = resolve(
 	__dirname,
@@ -28,8 +25,15 @@ const FIXTURES = resolve(
 );
 const EXPECTED = resolve(FIXTURES, "bundle.expected.json");
 
+const read = (name: string): string =>
+	readFileSync(resolve(FIXTURES, name), "utf8");
+
 const load = (): EasySpeakBundleV1 =>
 	JSON.parse(readFileSync(EXPECTED, "utf8"));
+
+const CONTACT_CASES: { url: string; expected: boolean }[] = JSON.parse(
+	read("contact-page-cases.json"),
+).cases;
 
 describe("easySpeakBundleV1Schema", () => {
 	it("accepts the bundle the extension's parsers produce from the fixtures", () => {
@@ -69,7 +73,7 @@ describe("easySpeakBundleV1Schema", () => {
 
 	it("never carries memberlist.php or clubdata.php in raw", () => {
 		const b = easySpeakBundleV1Schema.parse(load());
-		expect(b.raw.some((r) => isContactPage(r.url))).toBe(false);
+		expect(b.raw.some((r) => isContactPageUrl(r.url))).toBe(false);
 	});
 
 	it.each([
@@ -87,21 +91,28 @@ describe("easySpeakBundleV1Schema", () => {
 		expect(parsed.error?.issues[0]?.path).toEqual(["raw", b.raw.length, "url"]);
 	});
 
-	it("uses the extension's rule: both copies agree on every url", () => {
-		for (const url of [
-			"https://easy-speak.org/memberlist.php",
-			"https://easy-speak.org/clubdata.php?x=1",
-			"https://easy-speak.org/clubdata.php#tab_history",
-			"memberlist.php",
-			"https://easy-speak.org/MemberList.php",
-			"https://easy-speak.org/meeting_list.php#POST mode=roles&start_year=2026",
-			"https://easy-speak.org/view_meeting.php?t=1",
-			"https://easy-speak.org/xmemberlist.php",
-			"https://easy-speak.org/memberlist.php.bak",
-			"https://easy-speak.org/memberchart.php?chart=8",
-		]) {
-			expect(isContactPageUrl(url), url).toBe(isContactPage(url));
-		}
+	it.each(
+		CONTACT_CASES.map((c) => [c.url, c.expected] as const),
+	)("isContactPageUrl(%j) is %s, the case table the extension's isContactPage also answers", (url, expected) => {
+		expect(isContactPageUrl(url)).toBe(expected);
+	});
+
+	it("the case table has both answers and the edges the rule cares about", () => {
+		expect(CONTACT_CASES.some((c) => c.expected)).toBe(true);
+		expect(CONTACT_CASES.some((c) => !c.expected)).toBe(true);
+		expect(CONTACT_CASES.length).toBeGreaterThanOrEqual(15);
+	});
+
+	it("the extension's isContactPage and this isContactPageUrl are the same regex, read as text", () => {
+		const regexOf = (file: string): string => {
+			const text = readFileSync(resolve(__dirname, file), "utf8");
+			const m = text.match(/return (\/.*\/i)\.test\(url\);/);
+			expect(m, `${file}: the contact-page regex literal`).not.toBeNull();
+			return (m as RegExpMatchArray)[1];
+		};
+		expect(regexOf("../../extension/lib/easy-speak-bundle.ts")).toBe(
+			regexOf("./easy-speak-bundle.ts"),
+		);
 	});
 
 	it("accepts a bundle with every list empty (a member export can be nearly empty)", () => {
@@ -198,80 +209,5 @@ describe("easySpeakBundleV1Schema", () => {
 		expect(easySpeakBundleV1Schema.safeParse(mutate(load())).success).toBe(
 			false,
 		);
-	});
-});
-
-/**
- * The extension's own tests parse the fixtures with linkedom. Here the same
- * parsers read them with jsdom (a spec-compliant parser, like the browser's
- * DOMParser the content script uses), and must give the bundle's own sections.
- * Easy-Speak's markup is old and malformed; this is the check that the parsers
- * do not lean on one DOM implementation's habits.
- */
-describe("the extension's parsers under a spec-compliant DOM", () => {
-	const doc = (name: string) =>
-		new DOMParser().parseFromString(
-			readFileSync(resolve(FIXTURES, name), "utf8"),
-			"text/html",
-		);
-	const expected = load();
-	const TZ = expected.club.timezone;
-
-	it("read the club, the member list and the speech list as the bundle has them", () => {
-		expect(parseClubData(doc("club-data.html"))).toEqual({
-			number: expected.club.number,
-			name: expected.club.name,
-			timezone: TZ,
-		});
-		expect(parseMemberList(doc("member-list.html")).people).toEqual(
-			expected.people.map(({ joined: _joined, ...p }) => p),
-		);
-		const requests = (rs: typeof expected.speechRequests) =>
-			rs.map(
-				({
-					esSpeechId,
-					who,
-					path,
-					project,
-					requestedOn,
-					preferred,
-					scheduledOn,
-					status,
-				}) => ({
-					esSpeechId,
-					who,
-					path,
-					project,
-					requestedOn,
-					preferred,
-					scheduledOn,
-					status,
-				}),
-			);
-		expect(
-			requests(parseSpeechList(doc("speech-list.html")).map((r) => r.request)),
-		).toEqual(requests(expected.speechRequests));
-	});
-
-	it.each([
-		["644360", "meeting-upcoming.html"],
-		["644304", "meeting-completed.html"],
-		["644363", "meeting-table-topics.html"],
-	])("read meeting %s as the bundle has it", (id, file) => {
-		const want = expected.meetings.find((m) => m.esMeetingId === id);
-		// The bundle links an agenda speech to its speech-list row (id, introduction);
-		// a single page cannot.
-		const unlinked = {
-			...want,
-			roles: want?.roles.map((r) =>
-				r.speech
-					? {
-							...r,
-							speech: { ...r.speech, esSpeechId: null, introduction: null },
-						}
-					: r,
-			),
-		};
-		expect(parseMeeting(doc(file), id, TZ)).toEqual(unlinked);
 	});
 });

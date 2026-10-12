@@ -32,6 +32,8 @@ import {
 
 const at = (path: string) => `https://easy-speak.org/${path}`;
 const otherClub: Identity = { ...FIXTURE_IDENTITY, esClubId: "9090" };
+/** What the fixtures' evaluation batch stores: the list and its two submitted evaluations. */
+const EVALUATION_ENTRIES = 3;
 const otherAccount: Identity = { ...FIXTURE_IDENTITY, username: "someoneelse" };
 
 /** The requests of one uninterrupted walk, in order. */
@@ -59,10 +61,13 @@ describe("every page is for the account and club that started the walk", () => {
 				// It stopped on that page: nothing was asked for after it.
 				expect(s.log).toHaveLength(i + 1);
 				// Nothing of the other identity's page is in the store, under any key, and the pages
-				// stored are exactly the ones fetched before it (the session's count agrees).
+				// stored are exactly the ones fetched before it (the session's count agrees). The last
+				// request is the fence after the evaluation requests: it also takes those (the list and
+				// its two details) back out of the store.
+				const kept = i === walk.length - 1 ? i - EVALUATION_ENTRIES : i;
 				expect(JSON.stringify([...store.data.entries()])).not.toContain(marker);
-				expect([...store.data.keys()].filter((k) => k.startsWith("page:"))).toHaveLength(i);
-				expect((store.data.get("meta") as { pages: number }).pages).toBe(i);
+				expect([...store.data.keys()].filter((k) => k.startsWith("page:"))).toHaveLength(kept);
+				expect((store.data.get("meta") as { pages: number }).pages).toBe(kept);
 			}
 			// Every HTML page the walk fetches was tried: the club page, lists, meetings, charts, the evaluations page.
 			expect(checked).toBeGreaterThanOrEqual(19);
@@ -95,12 +100,16 @@ describe("every page is for the account and club that started the walk", () => {
 		});
 	}
 
-	it("leaves a walk of one identity alone: the same account and club throughout asks for each page once", async () => {
+	it("leaves a walk of one identity alone: the same account and club throughout asks for each page once, but for the evaluations fence", async () => {
 		const s = setup({ as: FIXTURE_IDENTITY });
 		const { bundle } = await s.run();
 		expect(bundle.meetings).toHaveLength(3);
 		const urls = s.log.map((r) => `${r.method} ${r.url} ${r.body ?? ""}`);
-		expect(new Set(urls).size).toBe(urls.length);
+		// One page is asked twice on purpose: the evaluations page opens and closes the evaluation
+		// requests, which carry no page to check the account on.
+		const twice = urls.filter((u, i) => urls.indexOf(u) !== i);
+		expect(twice).toEqual([`GET ${at("my_evaluations.php")} `]);
+		expect(new Set(urls).size).toBe(urls.length - 1);
 	});
 
 	it("accepts a signed-in page that shows no club id (it cannot be another club's)", async () => {
@@ -138,7 +147,9 @@ describe("a walker that lost the lease writes nothing", () => {
 
 	it("fails with a LeaseError and leaves the successor's session meta and pages as they were, whichever request outlived the lease", async () => {
 		const total = (await baseline()).length;
-		for (let at = 0; at < total; at++) {
+		// Not the last request: the fence after the evaluations stores nothing, so a walker that
+		// loses the lease there has nothing left to refuse (see the test below).
+		for (let at = 0; at < total - 1; at++) {
 			const store = memoryStore();
 			const c = clock();
 			const s = setup({ store, clock: c, override: theft(store, c, at) });
@@ -149,6 +160,16 @@ describe("a walker that lost the lease writes nothing", () => {
 			expect([...store.data.keys()].filter((k) => k.startsWith("page:"))).toHaveLength(at);
 			expect(store.data.get("lease")).toMatchObject({ owner: "tab-b" });
 		}
+	});
+
+	it("writes nothing and hands back the finished bundle when the lease is lost during the closing evaluations fence", async () => {
+		const total = (await baseline()).length;
+		const store = memoryStore();
+		const c = clock();
+		const { bundle } = await setup({ store, clock: c, override: theft(store, c, total - 1) }).run();
+		expect(bundle.evaluations).toHaveLength(2);
+		expect(store.data.get("meta")).toEqual({ startedAt: 1, lastActivityAt: 1, pages: 0, identity: otherClub });
+		expect(store.data.get("lease")).toMatchObject({ owner: "tab-b" });
 	});
 
 	it("does not even clear the store when the lease was lost before the walk began", async () => {

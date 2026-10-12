@@ -1,0 +1,25 @@
+{
+	"comment": "url -> is it one of the two contact pages (memberlist.php, clubdata.php). The extension's isContactPage and src/lib/easy-speak-bundle.ts's isContactPageUrl must both give `expected` for every row.",
+	"cases": [
+		{ "url": "https://easy-speak.org/memberlist.php", "expected": true },
+		{ "url": "https://easy-speak.org/clubdata.php", "expected": true },
+		{ "url": "https://easy-speak.org/clubdata.php?tab=officers", "expected": true },
+		{ "url": "https://easy-speak.org/clubdata.php?x=1", "expected": true },
+		{ "url": "https://easy-speak.org/clubdata.php#tab_history", "expected": true },
+		{ "url": "https://easy-speak.org/memberlist.php#page2", "expected": true },
+		{ "url": "https://easy-speak.org/memberlist.php/", "expected": true },
+		{ "url": "memberlist.php", "expected": true },
+		{ "url": "/clubdata.php", "expected": true },
+		{ "url": "https://easy-speak.org/MemberList.php", "expected": true },
+		{ "url": "https://easy-speak.org/CLUBDATA.PHP?a=b", "expected": true },
+		{ "url": "https://easy-speak.org/meeting_list.php#POST mode=roles&start_year=2026", "expected": false },
+		{ "url": "https://easy-speak.org/view_meeting.php?t=1", "expected": false },
+		{ "url": "https://easy-speak.org/view_meeting.php?next=memberlist.php", "expected": false },
+		{ "url": "https://easy-speak.org/xmemberlist.php", "expected": false },
+		{ "url": "https://easy-speak.org/memberlist.php.bak", "expected": false },
+		{ "url": "https://easy-speak.org/memberlist.phps", "expected": false },
+		{ "url": "https://easy-speak.org/memberchart.php?chart=8", "expected": false },
+		{ "url": "https://easy-speak.org/clubdata.html", "expected": false },
+		{ "url": "", "expected": false }
+	]
+}
