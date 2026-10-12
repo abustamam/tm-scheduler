@@ -139,6 +139,9 @@ const pastMeetingsInput = z.object({
 	clubId: uuid,
 	/** ISO instant; rows STRICTLY before it. Defaults to now. */
 	before: z.string().min(1).optional(),
+	/** ISO instant; rows at or after it, oldest first (#1158). Still `< now`
+	 *  unless `before` says otherwise. */
+	after: z.string().min(1).optional(),
 	limit: z.number().int().positive().max(100).optional(),
 	offset: z.number().int().min(0).optional(),
 });
@@ -164,6 +167,7 @@ export const listPastMeetings = createServerFn({ method: "GET" })
 		loadPastMeetings({
 			clubId: data.clubId,
 			before: data.before ? new Date(data.before) : undefined,
+			after: data.after ? new Date(data.after) : undefined,
 			limit: data.limit,
 			offset: data.offset,
 		}),

@@ -107,7 +107,7 @@ import {
 	meetingPhase,
 	resolveMeetingViewer,
 } from "#/lib/meeting-lifecycle";
-import { collectMeetingsAfter, deriveMeetingNavItems } from "#/lib/meeting-nav";
+import { deriveMeetingNavItems } from "#/lib/meeting-nav";
 import {
 	canSeeMeetingReadiness,
 	meetingReadiness,
@@ -176,9 +176,6 @@ import { getVoteTally } from "#/server/voting";
 
 // Anonymous (non-shell) visitors never load minutes — this hidden default keeps
 // the loader's return shape uniform without a server call or any PII fetch.
-/** Rows per archive page when the nav strip closes the past-but-after gap (#1158). */
-const NAV_GAP_PAGE_SIZE = 100;
-
 const EMPTY_MINUTES = {
 	visible: false,
 	canEdit: false,
@@ -225,31 +222,30 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 		// today, so paging back from a three-month-old meeting keeps going back
 		// instead of jumping to last week. Public like `listUpcomingMeetings`, so
 		// the anonymous visitor gets it too. Non-fatal: degrade to forward-only.
-		const past = await listPastMeetings({
-			data: {
-				clubId: context.clubUuid,
-				before: new Date(data.meeting.scheduledAt).toISOString(),
-				limit: 3,
-			},
-		}).catch(() => null);
-
-		// The gap between the viewed meeting and the upcoming list (#1158): past
-		// (`< now`) yet AFTER the viewed one, so neither the backward window nor
-		// `listUpcomingMeetings` has it. Filled from the same archive loader rather
-		// than by moving the past/upcoming split at now (#393). Non-fatal.
-		const gap = await collectMeetingsAfter(
-			data.meeting.scheduledAt,
-			new Date(),
-			(offset) =>
-				listPastMeetings({
-					data: {
-						clubId: context.clubUuid,
-						limit: NAV_GAP_PAGE_SIZE,
-						offset,
-					},
-				}),
-			NAV_GAP_PAGE_SIZE,
-		).catch(() => []);
+		//
+		// The gap (#1158): past (`< now`) yet AFTER the viewed meeting, which
+		// neither this window nor `listUpcomingMeetings` has. One `after` query
+		// against the same archive loader rather than moving the split at now
+		// (#393); nothing to fetch when the viewed meeting is not in the past.
+		// Both are non-fatal and run in parallel.
+		const viewedAt = new Date(data.meeting.scheduledAt);
+		const [past, gap] = await Promise.all([
+			listPastMeetings({
+				data: {
+					clubId: context.clubUuid,
+					before: viewedAt.toISOString(),
+					limit: 3,
+				},
+			}).catch(() => null),
+			viewedAt.getTime() < Date.now()
+				? listPastMeetings({
+						data: {
+							clubId: context.clubUuid,
+							after: viewedAt.toISOString(),
+						},
+					}).catch(() => null)
+				: null,
+		]);
 
 		const upcoming = await upcomingPromise;
 		const navItems = deriveMeetingNavItems(
@@ -257,7 +253,7 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 			data.slots,
 			upcoming,
 			data.timezone,
-			[...(past?.meetings ?? []), ...gap],
+			[...(past?.meetings ?? []), ...(gap?.meetings ?? [])],
 		);
 
 		// Minutes (ADR-0014 / #152) — ONLY for a signed-in member (shell); an anon

@@ -70,43 +70,6 @@ export function buildMeetingNavItems(
 	}));
 }
 
-/** Pages fetched per strip load when closing the gap (see `collectMeetingsAfter`). */
-const MAX_GAP_PAGES = 5;
-
-/**
- * The past meetings AFTER the viewed one (#1158) — the gap `listUpcomingMeetings`
- * (`scheduledAt >= now`) and the backward window (`before` = the viewed meeting)
- * both miss. Viewing Sep 24 with an unfinished Oct 8 and an upcoming Oct 22, the
- * strip jumped Sep 24 -> Oct 22 without this.
- *
- * `fetchPage` reads the club's past meetings the way the archive does: newest
- * first, strictly before now, `offset` rows in. Newest-first means the rows
- * nearest the viewed meeting arrive LAST, so keep paging until a page reaches
- * the viewed meeting (or runs out, or hits `MAX_GAP_PAGES`). A viewed meeting
- * that is not in the past has no gap, so nothing is fetched.
- */
-export async function collectMeetingsAfter<
-	T extends { scheduledAt: Date | string },
->(
-	viewedAt: Date | string,
-	now: Date,
-	fetchPage: (offset: number) => Promise<{ meetings: T[]; hasMore: boolean }>,
-	pageSize: number,
-): Promise<T[]> {
-	const viewed = toMillis(viewedAt);
-	if (viewed >= now.getTime()) return [];
-	const collected: T[] = [];
-	for (let page = 0; page < MAX_GAP_PAGES; page++) {
-		const { meetings, hasMore } = await fetchPage(page * pageSize);
-		for (const m of meetings) {
-			if (toMillis(m.scheduledAt) >= viewed) collected.push(m);
-		}
-		const last = meetings[meetings.length - 1];
-		if (!hasMore || !last || toMillis(last.scheduledAt) <= viewed) break;
-	}
-	return collected;
-}
-
 /**
  * Derive the meeting nav-strip items for a loaded meeting page. Centralizes the
  * "the current meeting's own open-role count (from its loaded agenda) overrides

@@ -13,7 +13,7 @@
 // lists until midnight. Listing = which side of now; `isMeetingOver` = is the
 // planning window closed. See the note on `isMeetingOver` in
 // `src/lib/meeting-lifecycle.ts`.
-import { and, asc, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, meetingAttendance, meetings, roleSlots } from "#/db/schema";
 import { deriveMeetingNumber } from "#/lib/meeting-number";
@@ -70,10 +70,21 @@ export interface PastMeetingsPage {
  * `before` defaults to now (the archive). The meeting page passes the viewed
  * meeting's own instant so the nav strip pages backwards from THERE rather than
  * from today.
+ *
+ * `after` (#1158) turns the query into the window `[after, before)` returned
+ * OLDEST first, `before` still defaulting to now. The nav strip uses it for the
+ * past-but-after-the-viewed-meeting gap that neither `before = viewed` nor
+ * `listUpcomingMeetings` (`>= now`) covers. Ascending, so a truncated page
+ * keeps the rows adjacent to `after` and `hasMore` reports the rest; with no
+ * `limit` the page is `PAST_MEETINGS_MAX_LIMIT` long (two years of weekly
+ * meetings), not `PAST_MEETINGS_DEFAULT_LIMIT`, because a strip with a hole in
+ * it is the bug being fixed. The split at now (#393) is unchanged.
  */
 export async function loadPastMeetings(input: {
 	clubId: string;
 	before?: Date;
+	/** Inclusive lower bound; switches the order to oldest first (see above). */
+	after?: Date;
 	limit?: number;
 	offset?: number;
 }): Promise<PastMeetingsPage> {
@@ -86,7 +97,11 @@ export async function loadPastMeetings(input: {
 
 	const before = input.before ?? new Date();
 	const limit = Math.min(
-		Math.max(input.limit ?? PAST_MEETINGS_DEFAULT_LIMIT, 1),
+		Math.max(
+			input.limit ??
+				(input.after ? PAST_MEETINGS_MAX_LIMIT : PAST_MEETINGS_DEFAULT_LIMIT),
+			1,
+		),
 		PAST_MEETINGS_MAX_LIMIT,
 	);
 	const offset = Math.max(input.offset ?? 0, 0);
@@ -115,11 +130,14 @@ export async function loadPastMeetings(input: {
 			and(
 				eq(meetings.clubId, input.clubId),
 				lt(meetings.scheduledAt, before),
+				input.after ? gte(meetings.scheduledAt, input.after) : undefined,
 				ne(meetings.status, "cancelled"),
 			),
 		)
 		.groupBy(meetings.id)
-		.orderBy(desc(meetings.scheduledAt))
+		.orderBy(
+			input.after ? asc(meetings.scheduledAt) : desc(meetings.scheduledAt),
+		)
 		.limit(limit + 1)
 		.offset(offset);
 
