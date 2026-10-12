@@ -1,7 +1,12 @@
 import { EASY_SPEAK_MATCHES } from "../lib/easy-speak-hosts";
 import {
+	currentIdentity,
+	followResume,
 	idbStore,
+	type Identity,
 	type Progress,
+	type ResumeState,
+	releaseLease,
 	resumeState,
 	runExport,
 } from "../lib/easy-speak-walk";
@@ -27,7 +32,24 @@ export default defineContentScript({
 		const store = idbStore();
 		// One id per page load: the lease that keeps a second tab from walking too.
 		const owner = crypto.randomUUID();
-		const resume = await resumeState(store, owner, Date.now());
+		const fetchImpl = (url: string, init: RequestInit) => fetch(url, init);
+		const parseHtml = (html: string) =>
+			new DOMParser().parseFromString(html, "text/html");
+		// Which club and account this is, read from the live page (never from the store),
+		// so an export left by another club or account is not resumed here.
+		let identity: Identity | null = null;
+		let resume: ResumeState = { kind: "none" };
+		try {
+			identity = await currentIdentity(document, fetchImpl, parseHtml);
+			resume = await resumeState(store, owner, Date.now(), identity);
+		} catch {
+			// Unreadable identity: no resume; pressing the button reports why.
+		}
+		// A reload's old lease is not ours: give it up as the page goes (best effort; the
+		// re-check below covers the case where this never completes).
+		window.addEventListener("pagehide", () => {
+			void releaseLease(store, owner).catch(() => {});
+		});
 
 		const ui = await createShadowRootUi(ctx, {
 			name: "gavelup-easy-speak-export",
@@ -73,13 +95,14 @@ export default defineContentScript({
 			async function start() {
 				btn.disabled = true;
 				setStatus("Starting...");
+				follower?.cancel();
 				try {
 					const { bundle, fileName } = await runExport({
-						fetchImpl: (url, init) => fetch(url, init),
-						parseHtml: (html) =>
-							new DOMParser().parseFromString(html, "text/html"),
+						fetchImpl,
+						parseHtml,
 						store,
 						owner,
+						identity: await currentIdentity(document, fetchImpl, parseHtml),
 						sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 						now: Date.now,
 						onProgress,
@@ -102,13 +125,33 @@ export default defineContentScript({
 			}
 			btn.addEventListener("click", start);
 
-			// A reload mid-walk: pick up at once. A stale session waits for the button,
-			// and so does a store another tab is walking right now.
-			if (resume.kind === "auto") void start();
-			else if (resume.kind === "manual") {
-				setStatus(`An unfinished export is stored (${resume.session.pages} pages).`);
-			} else if (resume.kind === "elsewhere") {
-				setStatus("Another Easy-Speak tab is exporting this club right now.");
+			// A reload mid-walk: pick up at once. A stale session waits for the button.
+			// A lease another load holds is re-checked when it runs out: it is this tab's own
+			// previous load unless a tab really is walking and renewing it.
+			let follower: { cancel: () => void } | undefined;
+			function react(state: ResumeState) {
+				if (state.kind === "auto") {
+					void start();
+				} else if (state.kind === "manual") {
+					btn.textContent = "Resume export";
+					setStatus(`An unfinished export is stored (${state.session.pages} pages).`);
+				} else if (state.kind === "elsewhere") {
+					setStatus(
+						"Another Easy-Speak tab is exporting this club right now.\nThis tab will check again when it stops.",
+					);
+				}
+			}
+			react(resume);
+			if (resume.kind === "elsewhere" && identity) {
+				follower = followResume(resume, {
+					store,
+					owner,
+					identity,
+					now: Date.now,
+					setTimer: (fn, ms) => setTimeout(fn, ms),
+					clearTimer: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+					onState: react,
+				});
 			}
 			return root;
 		}

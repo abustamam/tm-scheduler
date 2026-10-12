@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { DOMParser } from "linkedom";
 import { norm } from "./easy-speak-text";
-import { runExport, type WalkStore } from "./easy-speak-walk";
+import { type Identity, identityFromDoc, runExport, type WalkStore } from "./easy-speak-walk";
 
 const DIR = new URL("./__fixtures__/easy-speak/", import.meta.url);
 
@@ -223,14 +223,21 @@ export function clock(start = Date.UTC(2026, 9, 12, 12, 0, 0)) {
 
 export type FakeSiteOptions = Omit<Parameters<typeof fakeEasySpeak>[0], "clock" | "log">;
 
+/** Who the fixtures are signed in as: the club and account the walk exports by default. */
+export const FIXTURE_IDENTITY: Identity = (() => {
+	const id = identityFromDoc(fixtureDoc("club-data.html"));
+	if (!id) throw new Error("club-data.html shows no club id or username");
+	return id;
+})();
+
 /** One walker over the fake site. `owner` names it in the lease; a second harness on the same `store` is a second tab. */
-export function setup(opts: FakeSiteOptions & { store?: ReturnType<typeof memoryStore>; owner?: string; clock?: ReturnType<typeof clock> } = {}) {
+export function setup(opts: FakeSiteOptions & { store?: ReturnType<typeof memoryStore>; owner?: string; clock?: ReturnType<typeof clock>; identity?: Identity } = {}) {
 	const c = opts.clock ?? clock();
 	const log: FakeRequest[] = [];
 	const store = opts.store ?? memoryStore();
 	let inFlight = 0;
 	let maxInFlight = 0;
-	const { store: _s, owner: _o, clock: _c, ...siteOpts } = opts;
+	const { store: _s, owner: _o, clock: _c, identity: _i, ...siteOpts } = opts;
 	const site = fakeEasySpeak({ clock: c.now, log, ...siteOpts });
 	const fetchImpl = async (url: string, init: RequestInit) => {
 		inFlight += 1;
@@ -245,14 +252,17 @@ export function setup(opts: FakeSiteOptions & { store?: ReturnType<typeof memory
 			inFlight -= 1;
 		}
 	};
+	const progress: string[] = [];
 	const run = () =>
 		runExport({
 			fetchImpl,
 			parseHtml,
 			store,
 			owner: opts.owner ?? "tab-a",
+			identity: opts.identity ?? FIXTURE_IDENTITY,
+			onProgress: (p) => progress.push(p.label),
 			sleep: c.sleep,
 			now: c.now,
 		});
-	return { run, log, store, c, maxInFlight: () => maxInFlight };
+	return { run, log, store, c, progress, maxInFlight: () => maxInFlight };
 }

@@ -23,6 +23,10 @@
  *    is not signed in is forgiven there; a bug in a parser still aborts.
  *  - One walker per club store. A lease (owner id, expiry, renewed before every
  *    request) keeps a second tab from starting a second walk beside the first.
+ *  - A stored export belongs to the club and Easy-Speak account that started it. The
+ *    store is shared by every easy-speak.org tab, so a resume under a different club
+ *    or account would mix the first one's pages into the second one's bundle; it
+ *    discards the old export and starts fresh instead.
  */
 import {
 	type AssembleInput,
@@ -56,8 +60,17 @@ export const MIN_GAP_MS = 1000;
 export const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 /** A reload within this long of the last page picks the walk up at once; older waits for the Resume button. */
 export const AUTO_RESUME_WINDOW_MS = 2 * 60 * 1000;
-/** The lease is renewed before every request; a walker that goes quiet for this long has lost it. */
-export const LEASE_TTL_MS = 60 * 1000;
+/**
+ * The lease is renewed before every request; a walker that goes quiet for this long
+ * has lost it. A reload leaves the previous load's lease live for up to this long
+ * (the new load has a new owner id), so it is also the longest a reload waits to
+ * resume. Twenty seconds: a request that hangs longer than that lets the lease lapse,
+ * which costs nothing but this walker stopping (it names the takeover) if a second
+ * tab started meanwhile; pressing Resume carries on from the store.
+ */
+export const LEASE_TTL_MS = 20 * 1000;
+/** A re-check after a lease runs out waits this long past its expiry, so it lands on the far side of it. */
+export const LEASE_RECHECK_SLACK_MS = 250;
 /**
  * The meeting list is walked year by year, newest first, down to this year, with
  * no early stop: a club can have a gap of years in its history, and stopping at
@@ -88,6 +101,51 @@ interface FetchResponseLike {
 	text(): Promise<string>;
 }
 
+/** Who is exporting what: the Easy-Speak club and the signed-in account. */
+export interface Identity {
+	esClubId: string;
+	username: string;
+}
+
+const sameIdentity = (a: Identity | undefined, b: Identity): boolean =>
+	!!a && a.esClubId === b.esClubId && a.username === b.username;
+
+/**
+ * The identity a page shows: the club id every club page links and the viewer's
+ * username. Null when either is missing (a popup, a login form).
+ */
+export function identityFromDoc(doc: Document): Identity | null {
+	const esClubId = parseEsClubId(doc);
+	const username = parseViewer(doc).username;
+	return esClubId && username ? { esClubId, username } : null;
+}
+
+/**
+ * The current identity, without trusting the store: from the page the user is on
+ * when it shows both, else from a fresh `clubdata.php` request.
+ */
+export async function currentIdentity(
+	liveDoc: Document,
+	fetchImpl: WalkDeps["fetchImpl"],
+	parseHtml: (html: string) => Document,
+): Promise<Identity> {
+	const live = identityFromDoc(liveDoc);
+	if (live) return live;
+	let body: string;
+	try {
+		const res = await fetchImpl(`${EASY_SPEAK_ORIGIN}/clubdata.php`, { credentials: "include" });
+		if (!res.ok) throw new Error(`status ${res.status}`);
+		body = await res.text();
+	} catch (err) {
+		throw new WalkError(`Could not read which club and account this is: ${(err as Error).message}`);
+	}
+	const fetched = identityFromDoc(parseHtml(body));
+	if (!fetched) {
+		throw new WalkError("Could not read which club and account this is. Sign in to Easy-Speak, then try again.");
+	}
+	return fetched;
+}
+
 export interface WalkDeps {
 	fetchImpl: (url: string, init: RequestInit) => Promise<FetchResponseLike>;
 	parseHtml: (html: string) => Document;
@@ -100,6 +158,8 @@ export interface WalkDeps {
 	minGapMs?: number;
 	/** Identifies this walker in the lease. A fresh random id per page load. */
 	owner: string;
+	/** The club and account exporting now, read from the live page, never from the store. */
+	identity: Identity;
 }
 
 export interface Progress {
@@ -112,6 +172,8 @@ export interface Session {
 	startedAt: number;
 	lastActivityAt: number;
 	pages: number;
+	/** The club and account that started this export; another identity never resumes it. */
+	identity: Identity;
 }
 
 interface Entry {
@@ -193,22 +255,70 @@ export type ResumeState =
 	/** An older unfinished export: wait for the Resume button. */
 	| { kind: "manual"; session: Session }
 	/** Another tab is walking right now. */
-	| { kind: "elsewhere"; session: Session | null };
+	| { kind: "elsewhere"; session: Session | null; leaseExpiresAt: number };
 
-/** What a freshly loaded page should do about an export in the store. */
+/**
+ * What a freshly loaded page should do about an export in the store. A stored
+ * export of another club or account is not this page's to resume: it counts as
+ * none (the walk discards it).
+ */
 export async function resumeState(
 	store: WalkStore,
 	owner: string,
 	now: number,
+	identity: Identity,
 ): Promise<ResumeState> {
-	const session = await readSession(store, now);
-	if (heldByOther(asLease(await store.get(LEASE)), owner, now)) {
-		return { kind: "elsewhere", session };
+	const stored = await readSession(store, now);
+	const session = stored && sameIdentity(stored.identity, identity) ? stored : null;
+	const lease = asLease(await store.get(LEASE));
+	if (lease && heldByOther(lease, owner, now)) {
+		return { kind: "elsewhere", session, leaseExpiresAt: lease.expiresAt };
 	}
 	if (!session) return { kind: "none" };
 	return now - session.lastActivityAt < AUTO_RESUME_WINDOW_MS
 		? { kind: "auto", session }
 		: { kind: "manual", session };
+}
+
+export interface FollowDeps {
+	store: WalkStore;
+	owner: string;
+	identity: Identity;
+	now: () => number;
+	/** Test seam for `setTimeout`. */
+	setTimer: (fn: () => void, ms: number) => unknown;
+	clearTimer: (handle: unknown) => void;
+	onState: (state: ResumeState) => void;
+}
+
+/**
+ * A reload leaves the previous load's lease live for up to LEASE_TTL_MS, and the
+ * new load has a new owner id, so its first look says "elsewhere". Look again just
+ * after that lease would run out; if it was renewed (a tab really is walking) look
+ * again after the new expiry. Calls `onState` with every later state. Stops at the
+ * first state that is not "elsewhere", or on `cancel`.
+ */
+export function followResume(initial: ResumeState, deps: FollowDeps): { cancel: () => void } {
+	let handle: unknown;
+	let cancelled = false;
+	const arm = (state: ResumeState) => {
+		if (cancelled || state.kind !== "elsewhere") return;
+		const delay = Math.max(0, state.leaseExpiresAt - deps.now()) + LEASE_RECHECK_SLACK_MS;
+		handle = deps.setTimer(async () => {
+			if (cancelled) return;
+			const next = await resumeState(deps.store, deps.owner, deps.now(), deps.identity);
+			if (cancelled) return;
+			deps.onState(next);
+			arm(next);
+		}, delay);
+	};
+	arm(initial);
+	return {
+		cancel: () => {
+			cancelled = true;
+			if (handle !== undefined) deps.clearTimer(handle);
+		},
+	};
 }
 
 export async function runExport(
@@ -234,13 +344,20 @@ async function walk(
 
 	const existing = await readSession(store, now());
 	let session: Session;
-	if (existing) {
+	if (existing && sameIdentity(existing.identity, deps.identity)) {
 		session = existing;
 	} else {
+		if (existing) {
+			deps.onProgress?.({
+				done: 0,
+				total: 0,
+				label: "Discarding an unfinished export of another club or Easy-Speak account; starting fresh.",
+			});
+		}
 		await store.clear();
 		// `clear` took the lease with everything else; nobody else can hold it, we just did.
 		await acquireLease(store, deps.owner, now());
-		session = { startedAt: now(), lastActivityAt: now(), pages: 0 };
+		session = { startedAt: now(), lastActivityAt: now(), pages: 0, identity: deps.identity };
 		await store.set(META, session);
 	}
 
@@ -252,7 +369,9 @@ async function walk(
 
 	/**
 	 * Fetch (or read back) one page, parse it, and store it. `contact` pages keep
-	 * only the parsed value.
+	 * only the parsed value. `parse` runs BEFORE the page is stored: a page it
+	 * rejects (it throws a WalkError) is never cached, so Resume asks for it again
+	 * instead of failing on the same bad copy forever.
 	 */
 	async function page<T>(spec: {
 		key: string;
@@ -350,14 +469,15 @@ async function walk(
 		label: "member list",
 		parse: (_b, doc) => {
 			if (!doc) throw new WalkError("memberlist.php was not HTML.");
-			return parseMemberList(doc);
+			const parsed = parseMemberList(doc);
+			if (parsed.pages > 1) {
+				throw new WalkError(
+					`The member list has ${parsed.pages} pages; the export reads one. Ask for this to be added.`,
+				);
+			}
+			return parsed;
 		},
 	});
-	if (memberPage.pages > 1) {
-		throw new WalkError(
-			`The member list has ${memberPage.pages} pages; the export reads one. Ask for this to be added.`,
-		);
-	}
 	const tz = clubPage.club.timezone;
 
 	// ---- every meeting: walk the list year by year, newest first, back to the first
@@ -399,9 +519,12 @@ async function walk(
 			key: `meeting:${id}`,
 			url: get(`view_meeting.php?t=${id}`),
 			label: `meeting ${i + 1} of ${meetingIds.length}`,
-			parse: (_b, doc) => (doc ? parseMeeting(doc, id, tz) : null),
+			parse: (_b, doc) => {
+				const parsed = doc ? parseMeeting(doc, id, tz) : null;
+				if (!parsed) throw new WalkError(`Meeting ${id} is not a readable meeting page.`);
+				return parsed;
+			},
 		});
-		if (!m) throw new WalkError(`Meeting ${id} is not a readable meeting page.`);
 		meetings.push(m);
 	}
 

@@ -13,6 +13,7 @@ import {
 } from "./easy-speak-bundle";
 import {
 	EMAIL,
+	FIXTURE_IDENTITY,
 	type FakeRequest,
 	PHONE,
 	clock,
@@ -117,6 +118,7 @@ describe("the walk", () => {
 				parseHtml,
 				store,
 				owner: "tab-a",
+				identity: FIXTURE_IDENTITY,
 				sleep: c.sleep,
 				now: c.now,
 			}),

@@ -143,8 +143,12 @@ null` for them) or anyone's evaluations but their own (`evaluations: []` is a va
 - **Reload or failure mid-walk:** every page is written to the page's IndexedDB as it arrives. Reload
   within two minutes and it carries on by itself; later, or after an error, press **Resume export**.
   Pages already fetched are not requested again. Only one tab walks at a time: a lease in the store
-  (renewed before every request, a minute of silence frees it) stops a second tab starting
-  a second walk, and it is released when the walk ends or fails. A stored session is dropped after 12 hours and when
+  (renewed before every request, twenty seconds of silence frees it) stops a second tab starting
+  a second walk, and it is released when the walk ends or fails. A reload releases it as the page
+  goes; if that does not complete, the new page shows "another tab is exporting" and checks again
+  when the lease runs out, then carries on by itself. A stored export belongs to the club and
+  Easy-Speak account that started it: switch club or account and the old one is discarded and the walk
+  starts fresh, never mixed in. A stored session is dropped after 12 hours and when
   the export finishes. IndexedDB, not `storage.local`, because a club's raw pages outgrow its quota
   and `unlimitedStorage` would be a second new permission.
 - **Permissions:** the one new entry is the host `https://easy-speak.org/*`. No other permission.
