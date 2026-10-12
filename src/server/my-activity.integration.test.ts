@@ -341,12 +341,18 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 		const log = (await loadMySpeechLog(userId, 6)).rows;
 		expect(log[0]).toEqual({
 			slotId: inA.speechSlotId,
+			memberId: inA.memberId,
 			scheduledAt: inA.speechAt,
 			roleName: "Speaker A",
 			speechTitle: "Speech in A",
 			projectName: "Project A",
 			pathwayPath: "Path A",
 			projectLevel: "Level A",
+			// What the speech-log edit sheet prefills (#1159).
+			projectId: null,
+			minMinutes: null,
+			maxMinutes: null,
+			presentationUrl: null,
 			// Resolved through the evaluator self-join, not the speaker's row.
 			evaluators: [{ name: "Evaluator Human A", isGuest: false }],
 			hasEvaluatorSlot: true,

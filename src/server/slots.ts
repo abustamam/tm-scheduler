@@ -2,13 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import {
-	meetings,
-	members,
-	roleDefinitions,
-	roleSlots,
-	speeches,
-} from "#/db/schema";
+import { meetings, members, roleDefinitions, roleSlots } from "#/db/schema";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { logActivity } from "./activity";
 import {
@@ -37,6 +31,7 @@ import {
 	speakerDetailsSchema,
 	speakerDetailsUpdateSchema,
 } from "./speaker-details-schema";
+import { speechDetails } from "./speech-log-edit-logic";
 import {
 	requestWriteActorWithProof,
 	requireSessionActor,
@@ -416,21 +411,6 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 
 		return { ok: true as const };
 	});
-
-/** The two speech fields `updateSpeakerDetails` logs before and after (#763).
- *  A slot with no speech reads as both null. */
-async function speechDetails(
-	conn: Pick<typeof db, "select">,
-	speechId: string | null,
-): Promise<{ title: string | null; projectId: string | null }> {
-	if (!speechId) return { title: null, projectId: null };
-	const [row] = await conn
-		.select({ title: speeches.title, projectId: speeches.projectId })
-		.from(speeches)
-		.where(eq(speeches.id, speechId))
-		.limit(1);
-	return { title: row?.title ?? null, projectId: row?.projectId ?? null };
-}
 
 // No `actorMemberId` on the wire (#396): the agenda-editor guard already knows
 // who the caller is — the session's admin membership, or the self-asserted TMOD

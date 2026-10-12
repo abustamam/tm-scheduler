@@ -18,6 +18,7 @@ import {
 import { showWriteError } from "#/components/write-error-toast";
 import { speechWindowInputError } from "#/lib/speech-window";
 import { updateSpeakerDetails } from "#/server/slots";
+import { editSpeechFromLog } from "#/server/speeches";
 
 type SpeechSlot = {
 	id: string;
@@ -40,10 +41,15 @@ export function EditSpeechSheet({
 	slot,
 	onOpenChange,
 	onSaved,
+	writer = "agenda",
 }: {
 	slot: SpeechSlot | null;
 	onOpenChange: (open: boolean) => void;
 	onSaved: () => void | Promise<void>;
+	/** Which server fn saves (#1159). `agenda` (default) is `updateSpeakerDetails`:
+	 *  open meetings only, a blank save unlinks. `speech-log` is `editSpeechFromLog`:
+	 *  completed meetings too, never unlinks. The sheet chooses; no fn is a prop. */
+	writer?: "agenda" | "speech-log";
 }) {
 	const [busy, setBusy] = useState(false);
 	const [projectId, setProjectId] = useState<string | null>(null);
@@ -85,7 +91,9 @@ export function EditSpeechSheet({
 		}
 		setBusy(true);
 		try {
-			await updateSpeakerDetails({
+			const save =
+				writer === "speech-log" ? editSpeechFromLog : updateSpeakerDetails;
+			await save({
 				data: {
 					slotId: slot.id,
 					speakerDetails: {

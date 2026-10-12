@@ -2343,11 +2343,32 @@ export async function editSlotSpeech(
 		input?: SpeechInput;
 	},
 ): Promise<void> {
-	const { content, hasContent } = normalizeSpeech(args.input);
+	const { hasContent } = normalizeSpeech(args.input);
 	if (!hasContent) {
 		if (args.currentSpeechId) await unlinkSlotSpeech(conn, args.slotId);
 		return;
 	}
+	await updateOrAttachSlotSpeech(conn, args);
+}
+
+/**
+ * The non-blank half of `editSlotSpeech` (#1159): update the slot's existing
+ * speech in place, or create one owned by `personId` and link it. It can never
+ * unlink, so a caller that must not remove a speech (the speech-log edit,
+ * `applySpeechLogEdit`) reaches this and not `editSlotSpeech`, and the writer
+ * guard reads that out of the call graph. Blank input (no content) is the
+ * caller's to refuse first: it is treated as an update of nothing here.
+ */
+export async function updateOrAttachSlotSpeech(
+	conn: DbOrTx,
+	args: {
+		slotId: string;
+		personId: string;
+		currentSpeechId: string | null;
+		input?: SpeechInput;
+	},
+): Promise<void> {
+	const { content } = normalizeSpeech(args.input);
 	if (args.currentSpeechId) {
 		const values = await applyProjectDisplay(conn, content);
 		await conn

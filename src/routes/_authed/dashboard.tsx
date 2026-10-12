@@ -17,6 +17,7 @@ import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resour
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
 import { PathwaysProgress } from "#/components/pathways/pathways-progress";
 import { SpeechLogDate } from "#/components/speech-log-date";
+import { SpeechLogEditButton } from "#/components/speech-log-edit";
 import { SpeechLogToggle } from "#/components/speech-log-toggle";
 import { effectiveAdminClubFor } from "#/lib/effective-admin";
 import { formatMeetingDate } from "#/lib/format";
@@ -320,7 +321,11 @@ function Dashboard() {
 												{evaluatorLabel ? ` · ${evaluatorLabel}` : ""}
 											</div>
 										</div>
-										<SpeechStatePill state={state} />
+										<div className="flex items-center gap-1">
+											<SpeechStatePill state={state} />
+											{/* Every row here is the viewer's own speech. */}
+											<SpeechLogEditButton row={l} />
+										</div>
 									</div>
 								);
 							})

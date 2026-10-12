@@ -43,8 +43,12 @@ vi.mock("#/server/progress-marks", () => ({
 }));
 vi.mock("#/server/speeches", () => ({
 	archiveSpeech: vi.fn(),
+	editSpeechFromLog: vi.fn(),
 	rescheduleSpeech: vi.fn(),
 }));
+// The speech log's edit sheet (#1159) reaches these through the route.
+vi.mock("#/server/project-picker", () => ({ getProjectOptions: vi.fn() }));
+vi.mock("#/server/slots", () => ({ updateSpeakerDetails: vi.fn() }));
 vi.mock("sonner", () => ({
 	toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }));
@@ -89,6 +93,7 @@ async function renderRoute(
 		clubs: [{ clubId: CLUB_ID, name: "Club", clubNumber: "1", clubRole }],
 		activeClubId: CLUB_ID,
 		officerPositions: [],
+		authUser: { id: "viewer-user" },
 		impersonating: null,
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
