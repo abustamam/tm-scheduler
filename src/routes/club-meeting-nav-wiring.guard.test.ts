@@ -38,6 +38,13 @@ describe("meeting page → date strip gap wiring (#1158)", () => {
 		expect(gapCall).not.toMatch(/\bbefore\b/);
 	});
 
+	it("passes no limit or offset in the gap call, so the loader's own bound applies", () => {
+		// A small `limit` (or an `offset`) cuts the window short and the strip
+		// skips the unfinished meeting again: the bug this guard exists for.
+		expect(gapCall).not.toMatch(/\blimit\b/);
+		expect(gapCall).not.toMatch(/\boffset\b/);
+	});
+
 	it("runs the gap beside the backward window and feeds both into the strip", () => {
 		expect(src).toMatch(/Promise\.all\(\[\s*listPastMeetings/);
 		expect(src).toMatch(
