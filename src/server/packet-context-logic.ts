@@ -16,11 +16,13 @@
 import { eq } from "drizzle-orm";
 import { db } from "#/db";
 import {
+	clubs,
 	meetings,
 	meetingVoteSessions,
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
+import { isAgendaLayout } from "#/lib/agenda-layouts";
 import type { PacketContext } from "#/lib/meeting-packet";
 import { isReadableClubForMeeting } from "#/server/club-readable-logic";
 
@@ -30,6 +32,7 @@ const EMPTY: PacketContext = {
 	roles: [],
 	usesDigitalVoting: false,
 	hasWord: false,
+	defaultPrintLayout: "grid",
 };
 
 export async function loadPacketContext(
@@ -66,8 +69,12 @@ export async function loadPacketContext(
 			.where(eq(meetingVoteSessions.meetingId, meetingId))
 			.limit(1),
 		db
-			.select({ word: meetings.wordOfTheDay })
+			.select({
+				word: meetings.wordOfTheDay,
+				layout: clubs.defaultPrintLayout,
+			})
 			.from(meetings)
+			.innerJoin(clubs, eq(clubs.id, meetings.clubId))
 			.where(eq(meetings.id, meetingId))
 			.limit(1),
 	]);
@@ -75,5 +82,10 @@ export async function loadPacketContext(
 		roles: roleRows.map((r) => ({ key: r.key, name: r.name })),
 		usesDigitalVoting: voteRows.length > 0,
 		hasWord: Boolean(meetingRow?.word?.trim()),
+		// The same fallback the print route's redirect uses, so a value the
+		// column should never hold cannot reach the dialog's radio.
+		defaultPrintLayout: isAgendaLayout(meetingRow?.layout)
+			? meetingRow.layout
+			: "grid",
 	};
 }

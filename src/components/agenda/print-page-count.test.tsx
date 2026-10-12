@@ -26,6 +26,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { PublicFooter } from "#/components/public-footer";
+import { AGENDA_LAYOUT_PAGES, AGENDA_LAYOUTS } from "#/lib/agenda-layouts";
 import { posterWordSize } from "#/lib/word-poster";
 import {
 	CHROME_TEST_TIMEOUT_MS,
@@ -34,6 +35,7 @@ import {
 	printableDocument,
 	printedPageCount,
 } from "#/test/print-page-count";
+import { AgendaCopies } from "./agenda-copies";
 import { ClubRoleSheet, type RoleSheetEntry } from "./club-role-sheet";
 import {
 	type AgendaHeader,
@@ -175,6 +177,26 @@ function agendaHtml(layout: AgendaLayout): string {
 	);
 }
 
+function copiesHtml(
+	layout: AgendaLayout,
+	copies: number,
+	duplex: boolean,
+): string {
+	return renderToStaticMarkup(
+		<AgendaCopies
+			copies={copies}
+			duplex={duplex}
+			layout={layout}
+			header={header}
+			roles={[{ label: "Toastmaster", name: "Lee P." }]}
+			officers={[]}
+			explainers={[]}
+			rows={rows}
+			qrUrl={QR_URL}
+		/>,
+	);
+}
+
 function pages(css: string, html: string): number {
 	return printedPageCount(printableDocument(css, html));
 }
@@ -248,6 +270,37 @@ describe.skipIf(!hasChrome)(
 			["timing", 2],
 		] as const)("agenda · %s prints %i page(s)", (layout, expected) => {
 			expect(pages(PRINT_PAGE_CSS, agendaHtml(layout))).toBe(expected);
+		});
+
+		// #1166: `AGENDA_LAYOUT_PAGES` is what decides whether a duplex run puts a
+		// blank between copies, so it must be what the layouts really print. Read
+		// against the same measured counts as above, for every layout in the list.
+		it("AGENDA_LAYOUT_PAGES is each layout's real page count", () => {
+			expect(Object.keys(AGENDA_LAYOUT_PAGES).sort()).toEqual(
+				[...AGENDA_LAYOUTS].sort(),
+			);
+			for (const layout of AGENDA_LAYOUTS) {
+				expect(pages(PRINT_PAGE_CSS, agendaHtml(layout)), layout).toBe(
+					AGENDA_LAYOUT_PAGES[layout],
+				);
+			}
+		});
+
+		// #1166, acceptance criterion 6. Measured, not derived: the copies sit in a
+		// wrapper the single-copy page does not have, and the blank is a sheet of
+		// its own, so only a browser can say they paginate to what the issue says.
+		it.each([
+			["grid", 3, true, 5],
+			["editorial", 3, true, 5],
+			["timing", 3, true, 6],
+			["spacious", 3, true, 6],
+			["grid", 3, false, 3],
+			["timing", 3, false, 6],
+			["grid", 1, true, 1],
+		] as const)("%s x%i copies, duplex=%s prints %i pages", (layout, copies, duplex, expected) => {
+			expect(pages(PRINT_PAGE_CSS, copiesHtml(layout, copies, duplex))).toBe(
+				expected,
+			);
 		});
 
 		/**

@@ -1,12 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
+	AGENDA_COPIES,
+	clampAgendaCopies,
 	clampPosterCopies,
+	DEFAULT_AGENDA_COPIES,
 	DEFAULT_WORD_POSTER_COPIES,
 	defaultPacketSelection,
 	PACKET_PIECES,
 	packetPageCount,
 	WORD_POSTER_COPIES,
 } from "./meeting-packet";
+
+const ROLE_KEYS_SIX = [
+	"toastmaster",
+	"timer",
+	"ah-counter",
+	"grammarian",
+	"ballot-counter",
+	"general-evaluator",
+] as const;
 
 /** A club running everything, so each test turns exactly one thing off. */
 const ALL_ROLES = [
@@ -24,6 +36,7 @@ const ctx = (
 		roles: ALL_ROLES,
 		usesDigitalVoting: false,
 		hasWord: true,
+		defaultPrintLayout: "grid",
 		...over,
 	});
 
@@ -130,6 +143,54 @@ describe("packetPageCount", () => {
 	it("bounds the total through the same clamp the renderer uses", () => {
 		expect(packetPageCount(["word-poster"], 9999)).toBe(WORD_POSTER_COPIES.max);
 	});
+
+	// #1166: a blank after every page but the last, so n pages become 2n - 1.
+	describe("duplex", () => {
+		it("adds nothing to an empty packet", () => {
+			expect(packetPageCount([], 3, true)).toBe(0);
+			expect(packetPageCount(["word-poster"], 0, true)).toBe(0);
+		});
+
+		it("adds nothing to a single page: there is no next sheet to separate", () => {
+			expect(packetPageCount(["timer"], 3, true)).toBe(1);
+			expect(packetPageCount(["word-poster"], 1, true)).toBe(1);
+		});
+
+		it("puts a blank between sheets: two sheets are three pages", () => {
+			expect(packetPageCount(["timer", "grammarian"], 3, true)).toBe(3);
+		});
+
+		it("counts blanks between poster copies too, and is off unless asked", () => {
+			// 3 posters + 6 sheets = 9 pages, 17 with blanks (the issue's AC5).
+			const six = ROLE_KEYS_SIX;
+			expect(packetPageCount(["word-poster", ...six], 3, true)).toBe(17);
+			expect(packetPageCount(["word-poster", ...six], 3)).toBe(9);
+			expect(packetPageCount(["word-poster", ...six], 3, false)).toBe(9);
+		});
+
+		it("bounds the whole packet at 35 pages: 18 content pages, 2n - 1", () => {
+			const everything = PACKET_PIECES.map((p) => p.key);
+			expect(packetPageCount(everything, 99999, true)).toBe(35);
+		});
+	});
+});
+
+describe("clampAgendaCopies (#1166)", () => {
+	it("floors, then clamps into 0..60", () => {
+		expect(clampAgendaCopies(2.7)).toBe(2);
+		expect(clampAgendaCopies(75)).toBe(AGENDA_COPIES.max);
+		expect(clampAgendaCopies(60)).toBe(60);
+		expect(clampAgendaCopies(-4)).toBe(AGENDA_COPIES.min);
+		expect(clampAgendaCopies(0)).toBe(0);
+	});
+
+	it("reads an empty field (NaN) as the default, not as zero", () => {
+		expect(clampAgendaCopies(Number.NaN)).toBe(DEFAULT_AGENDA_COPIES);
+		expect(clampAgendaCopies(Number.POSITIVE_INFINITY)).toBe(
+			DEFAULT_AGENDA_COPIES,
+		);
+		expect(DEFAULT_AGENDA_COPIES).toBe(20);
+	});
 });
 
 describe("PACKET_PIECES", () => {
@@ -158,6 +219,7 @@ describe("defaultPacketSelection with unkeyed roles", () => {
 				roles: [{ key: null, name: "Timer" }],
 				usesDigitalVoting: false,
 				hasWord: false,
+				defaultPrintLayout: "grid",
 			}),
 		).toEqual(["timer"]);
 	});
@@ -168,6 +230,7 @@ describe("defaultPacketSelection with unkeyed roles", () => {
 				roles: [{ key: null, name: "ah-COUNTER" }],
 				usesDigitalVoting: false,
 				hasWord: false,
+				defaultPrintLayout: "grid",
 			}),
 		).toEqual(["ah-counter"]);
 	});
@@ -180,6 +243,7 @@ describe("defaultPacketSelection with unkeyed roles", () => {
 				roles: [{ key: "timer", name: "Timekeeper" }],
 				usesDigitalVoting: false,
 				hasWord: false,
+				defaultPrintLayout: "grid",
 			}),
 		).toEqual(["timer"]);
 	});
@@ -195,6 +259,7 @@ describe("defaultPacketSelection with unkeyed roles", () => {
 					roles: [{ key: null, name }],
 					usesDigitalVoting: false,
 					hasWord: false,
+					defaultPrintLayout: "grid",
 				}),
 				name,
 			).toEqual(["toastmaster"]);
@@ -205,6 +270,7 @@ describe("defaultPacketSelection with unkeyed roles", () => {
 				roles: [{ key: null, name: "Toastmaster Evaluator" }],
 				usesDigitalVoting: false,
 				hasWord: false,
+				defaultPrintLayout: "grid",
 			}),
 		).toEqual([]);
 	});
@@ -215,6 +281,7 @@ describe("defaultPacketSelection with unkeyed roles", () => {
 				roles: [{ key: null, name: "Joke Master" }],
 				usesDigitalVoting: false,
 				hasWord: false,
+				defaultPrintLayout: "grid",
 			}),
 		).toEqual([]);
 	});

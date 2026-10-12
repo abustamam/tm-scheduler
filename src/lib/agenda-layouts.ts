@@ -40,6 +40,20 @@ export const AGENDA_LAYOUT_HINTS: Record<AgendaLayout, string> = {
 	spacious: "Two pages, larger type",
 };
 
+/**
+ * How many sheets each layout prints (#1166). The printed-copies rule reads it:
+ * a one-page layout needs a blank back between copies on a duplex printer, a
+ * two-page layout already ends on a back. `print-page-count.test.tsx` measures
+ * each layout in a real browser and asserts it equals this, so the rule cannot
+ * drift from the layouts.
+ */
+export const AGENDA_LAYOUT_PAGES: Record<AgendaLayout, 1 | 2> = {
+	grid: 1,
+	editorial: 1,
+	timing: 2,
+	spacious: 2,
+};
+
 /** The print toolbar's marker on the club default's tab (#1069). */
 export const CLUB_DEFAULT_LABEL = "Club default";
 

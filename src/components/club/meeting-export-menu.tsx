@@ -215,6 +215,8 @@ export function MeetingExportMenu({
 					open
 					onOpenChange={setPacketOpen}
 					dbMeetingId={dbMeetingId}
+					clubSlug={clubSlug}
+					meetingId={meetingId}
 				/>
 			) : null}
 			<Dialog open={sheetsOpen} onOpenChange={setSheetsOpen}>
