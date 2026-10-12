@@ -234,7 +234,7 @@ export function ImportHistoryPanel({
 						.
 					</p>
 					{data.warnings.map((w) => (
-						<p key={w} className="text-sm text-amber-700" role="status">
+						<p key={w} className="text-sm text-amber-700">
 							{w}
 						</p>
 					))}
@@ -285,7 +285,7 @@ export function ImportHistoryPanel({
 					/>
 
 					{!data.canApply ? (
-						<p className="text-sm text-muted-foreground" role="status">
+						<p className="text-sm text-muted-foreground">
 							{data.unresolvedCount}{" "}
 							{data.unresolvedCount === 1 ? "person needs" : "people need"} a
 							decision before this can be applied.
