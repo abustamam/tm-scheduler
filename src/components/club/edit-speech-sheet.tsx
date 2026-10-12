@@ -18,6 +18,7 @@ import {
 import { showWriteError } from "#/components/write-error-toast";
 import { speechWindowInputError } from "#/lib/speech-window";
 import { updateSpeakerDetails } from "#/server/slots";
+import { editSpeechFromLog } from "#/server/speeches";
 
 type SpeechSlot = {
 	id: string;
@@ -40,10 +41,15 @@ export function EditSpeechSheet({
 	slot,
 	onOpenChange,
 	onSaved,
+	writer = "agenda",
 }: {
 	slot: SpeechSlot | null;
 	onOpenChange: (open: boolean) => void;
 	onSaved: () => void | Promise<void>;
+	/** Which server fn saves (#1159). `agenda` (default) is `updateSpeakerDetails`:
+	 *  open meetings only, a blank save unlinks. `speech-log` is `editSpeechFromLog`:
+	 *  completed meetings too, never unlinks. The sheet chooses; no fn is a prop. */
+	writer?: "agenda" | "speech-log";
 }) {
 	const [busy, setBusy] = useState(false);
 	const [projectId, setProjectId] = useState<string | null>(null);
@@ -83,22 +89,30 @@ export function EditSpeechSheet({
 			toast.error(windowError);
 			return;
 		}
+		// Free text is sent as typed; when `projectId` is set the server overwrites
+		// all three from the catalog (#418). The picker HIDES these inputs for a
+		// member with a path, so on the speech-log writer an input that is not on
+		// the form is left out (the server keeps what is stored) and one that is
+		// there but empty is sent as "" (a deliberate clear). The agenda writer
+		// keeps its behaviour: empty is undefined.
+		const freeText = (name: string) => {
+			if (writer === "speech-log" && !form.has(name)) return undefined;
+			const value = String(form.get(name) ?? "").trim();
+			return value || (writer === "speech-log" ? "" : undefined);
+		};
 		setBusy(true);
 		try {
-			await updateSpeakerDetails({
+			const save =
+				writer === "speech-log" ? editSpeechFromLog : updateSpeakerDetails;
+			await save({
 				data: {
 					slotId: slot.id,
 					speakerDetails: {
 						speechTitle:
 							String(form.get("speechTitle") ?? "").trim() || undefined,
-						// Free text is sent as typed; when `projectId` is set the server
-						// overwrites all three from the catalog (#418).
-						pathwayPath:
-							String(form.get("pathwayPath") ?? "").trim() || undefined,
-						projectName:
-							String(form.get("projectName") ?? "").trim() || undefined,
-						projectLevel:
-							String(form.get("projectLevel") ?? "").trim() || undefined,
+						pathwayPath: freeText("pathwayPath"),
+						projectName: freeText("projectName"),
+						projectLevel: freeText("projectLevel"),
 						projectId,
 						minMinutes,
 						maxMinutes,

@@ -12,6 +12,8 @@ import {
 	requireMembership,
 	requireUser,
 } from "./guards";
+import { speakerDetailsUpdateSchema } from "./speaker-details-schema";
+import { applySpeechLogEdit } from "./speech-log-edit-logic";
 import {
 	attachSpeechToOpenSlot,
 	listUnscheduledSpeeches,
@@ -94,4 +96,27 @@ export const rescheduleSpeech = createServerFn({ method: "POST" })
 				actorMemberId: membership.id,
 			}),
 		);
+	});
+
+const editSpeechFromLogSchema = z.object({
+	slotId: uuid,
+	// The same TRUNCATING schema the agenda sheet uses: the sheet prefills and
+	// resubmits every field, so a value stored before #522's caps must not block
+	// an edit to the others.
+	speakerDetails: speakerDetailsUpdateSchema,
+});
+
+/** Edit a delivered speech's details from the speech log, on a completed
+ *  meeting too (#1159). The speaker, or an admin or officer of the club the
+ *  speech was given at. Never unlinks: a blank form is refused. AUTHED. */
+export const editSpeechFromLog = createServerFn({ method: "POST" })
+	.validator((input: unknown) => editSpeechFromLogSchema.parse(input))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		await applySpeechLogEdit({
+			slotId: data.slotId,
+			actorUserId: user.id,
+			speakerDetails: data.speakerDetails,
+		});
+		return { ok: true as const };
 	});

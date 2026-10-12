@@ -40,12 +40,19 @@ export interface SpeechLogEvaluator {
 
 export interface SpeechLogRow {
 	slotId: string;
+	/** The speaker's member id (the slot's assignee); the edit sheet's picker
+	 *  offers THEIR paths (#1159). Null only if the slot was released. */
+	memberId: string | null;
 	scheduledAt: Date;
 	roleName: string;
 	speechTitle: string | null;
 	projectName: string | null;
 	pathwayPath: string | null;
 	projectLevel: string | null;
+	projectId: string | null;
+	minMinutes: number | null;
+	maxMinutes: number | null;
+	presentationUrl: string | null;
 	/** Held evaluators of this speech, member or guest, ordered by name. */
 	evaluators: SpeechLogEvaluator[];
 	/** True when at least one evaluator slot points at this speech, held or not. */
@@ -111,12 +118,17 @@ export async function loadSpeechLog(
 	const query = db
 		.select({
 			slotId: roleSlots.id,
+			memberId: roleSlots.assignedMemberId,
 			scheduledAt: meetings.scheduledAt,
 			roleName: roleDefinitions.name,
 			speechTitle: speeches.title,
 			projectName: speeches.projectName,
 			pathwayPath: speeches.pathwayPath,
 			projectLevel: speeches.projectLevel,
+			projectId: speeches.projectId,
+			minMinutes: speeches.minMinutes,
+			maxMinutes: speeches.maxMinutes,
+			presentationUrl: speeches.presentationUrl,
 			status: roleSlots.status,
 		})
 		.from(roleSlots)

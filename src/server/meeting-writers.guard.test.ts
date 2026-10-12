@@ -549,12 +549,18 @@ const MEETING_WRITERS: Record<string, Entry> = {
 		refusedBy: [
 			"src/server/slots-logic.ts#claimSlotCore",
 			"src/server/slots.ts#updateSpeakerDetails",
+			"src/server/speech-log-edit-logic.ts#applySpeechLogEdit",
 		],
 		overrides: {
 			cancelled: {
 				accept: true,
 				reason:
 					"Only claimSlotCore's early check accepts cancelled (PLAN_ACCEPTING_CANCELLED, for order), and its UPDATE's meetingAcceptsWrite refuses it before the speech is attached.",
+			},
+			completed: {
+				accept: true,
+				reason:
+					"applySpeechLogEdit backfills a delivered speech's details after close-out (#1159), under the meeting row lock. A cancelled meeting still refuses.",
 			},
 		},
 	},

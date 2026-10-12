@@ -24,6 +24,7 @@ import {
 import { PageContainer } from "#/components/page-container";
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
 import { PathwaysProgress } from "#/components/pathways/pathways-progress";
+import { SpeechLogEditButton } from "#/components/speech-log-edit";
 import { SpeechLogToggle } from "#/components/speech-log-toggle";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
@@ -66,6 +67,7 @@ import {
 	speechLogEvaluatorLabel,
 	validateSpeechLogSearch,
 } from "#/lib/speech-log";
+import { mayShowSpeechLogEdit } from "#/lib/speech-log-edit";
 import {
 	SPEECH_SCHEDULE_STATE_LABELS,
 	type SpeechScheduleState,
@@ -236,7 +238,7 @@ function MemberDetail() {
 		now,
 		timezone,
 	} = Route.useLoaderData();
-	const { activeClubId, clubs, officerPositions, impersonating } =
+	const { activeClubId, clubs, officerPositions, impersonating, authUser } =
 		Route.useRouteContext();
 	const clubId = activeClubId;
 	// Club-role management is admin-only: the viewer must be an effective admin
@@ -245,6 +247,14 @@ function MemberDetail() {
 		clubs,
 		activeClubId,
 		officerPositions,
+	});
+
+	// The speech log's edit pencil (#1159): an admin or officer of this club, or
+	// the speaker. A prediction; `applySpeechLogEdit` is the gate.
+	const showSpeechEdit = mayShowSpeechLogEdit({
+		viewerIsAdmin,
+		viewerUserId: authUser.id,
+		memberUserId: member?.userId ?? null,
 	});
 
 	if (!member) {
@@ -389,7 +399,12 @@ function MemberDetail() {
 												.join(" · ")}
 										</div>
 									</div>
-									<SpeechStatePill state={state} />
+									<div className="flex items-center gap-1">
+										<SpeechStatePill state={state} />
+										{showSpeechEdit ? (
+											<SpeechLogEditButton row={l} timezone={timezone} />
+										) : null}
+									</div>
 								</div>
 							);
 						})
