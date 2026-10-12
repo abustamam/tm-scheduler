@@ -11,7 +11,7 @@ import { renderPacketPdf } from "#/server/packet-pdf-logic";
 /**
  * GET /api/meetings/$id/packet.pdf — the whole night's paper in one file (#589).
  *
- * `?piece=timer&piece=grammarian&…&copies=3`. Repeated `piece` params rather
+ * `?piece=timer&piece=grammarian&…&copies=3&duplex=1`. Repeated `piece` params rather
  * than a comma list so a stale bookmark with an unknown piece degrades to
  * printing the rest, and so the URL says what it contains when someone reads it
  * out of a browser history.
@@ -41,6 +41,11 @@ export const Route = createFileRoute("/api/meetings/$id/packet/pdf")({
 				const copies =
 					raw == null ? DEFAULT_WORD_POSTER_COPIES : Number.parseInt(raw, 10);
 
+				// Only the literal "1" turns it on (#1166): `?duplex=true` or an empty
+				// value is a stale or hostile URL, and padding a packet with blanks
+				// nobody asked for costs paper.
+				const duplex = url.searchParams.get("duplex") === "1";
+
 				if (selection.length === 0) {
 					return new Response("Nothing selected for the packet.", {
 						status: 400,
@@ -59,7 +64,12 @@ export const Route = createFileRoute("/api/meetings/$id/packet/pdf")({
 
 				let rendered: Awaited<ReturnType<typeof renderPacketPdf>>;
 				try {
-					rendered = await renderPacketPdf(meetingId, selection, copies);
+					rendered = await renderPacketPdf(
+						meetingId,
+						selection,
+						copies,
+						duplex,
+					);
 				} catch (err) {
 					// An unshaped framework stack trace on a public route is not the
 					// 500 we want, and the page-ceiling throw lands here too.

@@ -1,4 +1,5 @@
 import { ROLE_SHEETS, type RoleSheetKey } from "#/data/role-sheets";
+import type { AgendaLayout } from "#/lib/agenda-layouts";
 import { isTmodRoleName, TMOD_ROLE_KEY } from "#/lib/meeting-roles";
 
 /**
@@ -45,6 +46,19 @@ export const DEFAULT_WORD_POSTER_COPIES = 3;
  */
 export const WORD_POSTER_COPIES = { min: 0, max: 12 } as const;
 
+/** How many copies of the printed agenda the dialog starts at: one per
+ *  attendee, which for the clubs this is built for is about twenty. */
+export const DEFAULT_AGENDA_COPIES = 20;
+
+/**
+ * Bounds on the agenda copy count (#1166). 0 means "no agendas". The cap is the
+ * print page's own (`/print?copies=`), not a render-cost bound: the agenda is
+ * printed by the browser, not rendered here, but a copy count in a URL is
+ * still input, and 60 sheets of a one-pager is already a ream's worth of
+ * "more than a meeting needs".
+ */
+export const AGENDA_COPIES = { min: 0, max: 60 } as const;
+
 /** Every piece that can go in a packet. Role sheets by key, plus the poster. */
 export type PacketPieceKey = RoleSheetKey | "word-poster";
 
@@ -85,6 +99,9 @@ export interface PacketContext {
 	usesDigitalVoting: boolean;
 	/** True when the meeting has a Word of the Day to print. */
 	hasWord: boolean;
+	/** The club's default agenda layout (#1166), which the dialog's layout radio
+	 *  starts on. "grid" when the column holds something it should not. */
+	defaultPrintLayout: AgendaLayout;
 }
 
 /**
@@ -189,8 +206,24 @@ export function clampPosterCopies(n: number): number {
 }
 
 /**
+ * Clamp a requested agenda copy count into 0..60 (#1166). Mirrors
+ * `clampPosterCopies`: an empty field (NaN) is the default rather than 0, so a
+ * person who clears the box to retype does not silently turn the agendas off.
+ */
+export function clampAgendaCopies(n: number): number {
+	if (!Number.isFinite(n)) return DEFAULT_AGENDA_COPIES;
+	return Math.min(
+		AGENDA_COPIES.max,
+		Math.max(AGENDA_COPIES.min, Math.floor(n)),
+	);
+}
+
+/**
  * How many PAGES a selection produces — the packet's whole render cost, since
  * every piece is exactly one page.
+ *
+ * With `duplex`, a blank page follows every page except the last, so `n`
+ * content pages become `2n - 1` (#1166). Zero stays zero.
  *
  * Exported so the endpoint can bound the work before doing it, rather than
  * discovering the cost by paying it.
@@ -198,10 +231,12 @@ export function clampPosterCopies(n: number): number {
 export function packetPageCount(
 	selection: readonly PacketPieceKey[],
 	posterCopies: number,
+	duplex = false,
 ): number {
 	const sheets = selection.filter((k) => k !== "word-poster").length;
 	const posters = selection.includes("word-poster")
 		? clampPosterCopies(posterCopies)
 		: 0;
-	return sheets + posters;
+	const content = sheets + posters;
+	return duplex && content > 0 ? 2 * content - 1 : content;
 }

@@ -7,6 +7,7 @@ import {
 	redirect,
 } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { AgendaCopies } from "#/components/agenda/agenda-copies";
 import {
 	type AgendaExplainer,
 	type AgendaLayout,
@@ -15,6 +16,7 @@ import {
 } from "#/components/agenda/meeting-agenda-print";
 import { OfflineBadge } from "#/components/agenda/offline-badge";
 import {
+	MUTED,
 	PRINT_PAGE_CSS,
 	PrintButton,
 	PrintToolbar,
@@ -49,6 +51,7 @@ import { APP_LOCALE } from "#/lib/format";
 import { inRoomMeetingPayload } from "#/lib/in-room-meeting-payload";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { meetingHubUrlFor } from "#/lib/meeting-hub";
+import { AGENDA_COPIES } from "#/lib/meeting-packet";
 import { meetingPdfBasename } from "#/lib/pdf-filename";
 import { getClubLogoMeta } from "#/server/club-logo";
 import { getPublicMeetingByKey } from "#/server/meetings";
@@ -63,7 +66,12 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 	{
 		validateSearch: (
 			search: Record<string, unknown>,
-		): { layout?: AgendaLayout; chrome?: "none" } => ({
+		): {
+			layout?: AgendaLayout;
+			chrome?: "none";
+			copies?: number;
+			duplex?: 1;
+		} => ({
 			// No default here (#1069). A missing, empty or unknown layout is
 			// `undefined`, and the LOADER redirects it to the club's own default,
 			// which only the loader can know. Defaulting here is what hard-coded
@@ -72,6 +80,11 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 			// `chrome=none` is the clean shareable view (#334): no layout selector,
 			// offline badge, or timing banner — just the agenda + a Print button.
 			chrome: search.chrome === "none" ? "none" : undefined,
+			// How many copies to print, and whether to pad for a duplex printer
+			// (#1166), both set by the packet dialog. Parsed here and read by the
+			// component only: see the note on `loaderDeps` below.
+			copies: parseCopies(search.copies),
+			duplex: parseDuplex(search.duplex),
 		}),
 		// NO `loaderDeps`, deliberately (#1069 review). TanStack builds a match's
 		// id from the route, the path AND `JSON.stringify(loaderDeps)`, and SSR
@@ -106,6 +119,9 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 							? club.defaultPrintLayout
 							: "grid",
 						chrome: search.chrome === "none" ? "none" : undefined,
+						// A bare URL that still names a copy count keeps it (#1166).
+						copies: parseCopies(search.copies),
+						duplex: parseDuplex(search.duplex),
 					},
 				});
 			}
@@ -171,6 +187,27 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 	},
 );
 
+/**
+ * `?copies=` (#1166): a whole number of agendas, 2..60. Anything that is not a
+ * finite number, or floors below 1, means "one" and is `undefined`, so the URL
+ * `/print?layout=grid` and `?copies=abc` render identically. The router
+ * JSON-parses a numeric value, so this takes a number or a string.
+ */
+function parseCopies(raw: unknown): number | undefined {
+	const n = Number(raw);
+	if (!Number.isFinite(n)) return undefined;
+	const whole = Math.min(AGENDA_COPIES.max, Math.floor(n));
+	return whole < 1 ? undefined : whole;
+}
+
+/** `?duplex=1` (#1166), and only that: the packet PDF turns on for the literal
+ *  `1` alone, so a URL that pads the HTML but not the PDF must not exist. The
+ *  router JSON-parses the `1` in the URL to a number before this sees it; the
+ *  string is for a caller that bypasses the parser. */
+function parseDuplex(raw: unknown): 1 | undefined {
+	return raw === "1" || raw === 1 ? 1 : undefined;
+}
+
 /** "6:45 – 7:45 PM": drop the meridiem from the start when it matches the end's. */
 function timeRange(startsAt: Date, endsAt: Date, timeZone: string): string {
 	const fmt = (d: Date) =>
@@ -190,7 +227,12 @@ function timeRange(startsAt: Date, endsAt: Date, timeZone: string): string {
 }
 
 function PrintAgenda() {
-	const { layout: searchLayout, chrome } = Route.useSearch();
+	const {
+		layout: searchLayout,
+		chrome,
+		copies: requestedCopies,
+		duplex,
+	} = Route.useSearch();
 	const { clubId: clubIdParam, meetingId } = Route.useParams();
 	// Clean shareable view: hide the editing chrome, keep only the Print button.
 	const bare = chrome === "none";
@@ -203,6 +245,12 @@ function PrintAgenda() {
 	// rendering one that can't scan.
 	const [origin, setOrigin] = useState<string | null>(null);
 	useEffect(() => setOrigin(window.location.origin), []);
+	// Extra copies draw only after mount (#1166). The server HTML, and the page
+	// the service worker serves for ANY `?copies=` URL offline, hold exactly one
+	// agenda, so the first client render must too or it will not hydrate.
+	const [mounted, setMounted] = useState(false);
+	useEffect(() => setMounted(true), []);
+	const copies = mounted ? (requestedCopies ?? 1) : 1;
 	const {
 		meeting,
 		slots,
@@ -330,7 +378,16 @@ function PrintAgenda() {
 								key={l.id}
 								to="/club/$clubId/meeting/$meetingId/print"
 								params={{ clubId: clubIdParam, meetingId }}
-								search={{ layout: l.id }}
+								// Switching layout keeps the packet's copy count and duplex
+								// flag (#1166), so the person printing does not lose them.
+								// Written only after mount, like the copies themselves: the
+								// first render must match the HTML the service worker cached
+								// for `?layout=X`, which carries neither.
+								search={{
+									layout: l.id,
+									copies: mounted ? requestedCopies : undefined,
+									duplex: mounted ? duplex : undefined,
+								}}
 								style={{
 									...AGENDA_TAB_STYLE,
 									...(l.id === layout ? AGENDA_TAB_ACTIVE_STYLE : null),
@@ -363,6 +420,16 @@ function PrintAgenda() {
 						label="Copy shareable link"
 					/>
 				)}
+				{copies > 1 ? (
+					// So the person printing knows the copies are already in the page
+					// and not to ask the browser for more.
+					<span
+						data-testid="print-copies-note"
+						style={{ fontSize: 13, color: MUTED }}
+					>
+						{copies} copies
+					</span>
+				) : null}
 				<PrintButton />
 				{/* The "Available offline" pill lives in the toolbar, not over the
 				    agenda (#361). Mounted here it also gives the genuinely-offline
@@ -393,15 +460,32 @@ function PrintAgenda() {
 				</div>
 			) : null}
 			<style>{PRINT_PAGE_CSS}</style>
-			<MeetingAgendaPrint
-				layout={layout}
-				header={header}
-				roles={roles}
-				officers={officers}
-				explainers={explainers}
-				rows={rows}
-				qrUrl={qrUrl || undefined}
-			/>
+			{/* One copy is the bare agenda, as it always was; only more than one
+			    goes through the repeater. Also keeps the disclaimer guard's
+			    `<MeetingAgendaPrint` in this file (#381). */}
+			{copies > 1 ? (
+				<AgendaCopies
+					copies={copies}
+					duplex={duplex === 1}
+					layout={layout}
+					header={header}
+					roles={roles}
+					officers={officers}
+					explainers={explainers}
+					rows={rows}
+					qrUrl={qrUrl || undefined}
+				/>
+			) : (
+				<MeetingAgendaPrint
+					layout={layout}
+					header={header}
+					roles={roles}
+					officers={officers}
+					explainers={explainers}
+					rows={rows}
+					qrUrl={qrUrl || undefined}
+				/>
+			)}
 		</div>
 	);
 }

@@ -26,6 +26,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { PublicFooter } from "#/components/public-footer";
+import { AGENDA_LAYOUT_PAGES, AGENDA_LAYOUTS } from "#/lib/agenda-layouts";
 import { posterWordSize } from "#/lib/word-poster";
 import {
 	CHROME_TEST_TIMEOUT_MS,
@@ -34,6 +35,7 @@ import {
 	printableDocument,
 	printedPageCount,
 } from "#/test/print-page-count";
+import { AgendaCopies, AgendaCopiesStack } from "./agenda-copies";
 import { ClubRoleSheet, type RoleSheetEntry } from "./club-role-sheet";
 import {
 	type AgendaHeader,
@@ -175,6 +177,69 @@ function agendaHtml(layout: AgendaLayout): string {
 	);
 }
 
+function copiesHtml(
+	layout: AgendaLayout,
+	copies: number,
+	duplex: boolean,
+): string {
+	return renderToStaticMarkup(
+		<AgendaCopies
+			copies={copies}
+			duplex={duplex}
+			layout={layout}
+			header={header}
+			roles={[{ label: "Toastmaster", name: "Lee P." }]}
+			officers={[]}
+			explainers={[]}
+			rows={rows}
+			qrUrl={QR_URL}
+		/>,
+	);
+}
+
+/**
+ * The copies stack with each copy's PHYSICAL page count stated, and chosen
+ * sheets made taller than a page.
+ *
+ * `FitPage` lets a long agenda flow onto extra pages, but its flow branch is
+ * set by an effect that no static render runs (see the note above the
+ * contest-agenda test). So the overflow is reproduced the way that test
+ * reproduces it: the sheet's fixed height and clip are swapped for a taller,
+ * unclipped box, which the browser paginates exactly as it does a flowing one.
+ * `tall` maps a non-blank sheet's index (document order) to its height in px.
+ */
+function overflowingCopiesHtml(
+	layout: AgendaLayout,
+	pagesPerCopy: number[],
+	duplex: boolean,
+	tall: Record<number, number>,
+): string {
+	let n = -1;
+	return renderToStaticMarkup(
+		<AgendaCopiesStack
+			pagesPerCopy={pagesPerCopy}
+			duplex={duplex}
+			layout={layout}
+			header={header}
+			roles={[{ label: "Toastmaster", name: "Lee P." }]}
+			officers={[]}
+			explainers={[]}
+			rows={rows}
+			qrUrl={QR_URL}
+		/>,
+	).replace(
+		/(<div class="agenda-page"(?! data-agenda-blank)[^>]*style=")([^"]*)"/g,
+		(_m, head: string, style: string) => {
+			n++;
+			const h = tall[n];
+			if (h === undefined) return `${head}${style}"`;
+			return `${head}${style
+				.replace("height:1056px", `height:${h}px`)
+				.replace("overflow:hidden", "overflow:visible")}"`;
+		},
+	);
+}
+
 function pages(css: string, html: string): number {
 	return printedPageCount(printableDocument(css, html));
 }
@@ -248,6 +313,91 @@ describe.skipIf(!hasChrome)(
 			["timing", 2],
 		] as const)("agenda · %s prints %i page(s)", (layout, expected) => {
 			expect(pages(PRINT_PAGE_CSS, agendaHtml(layout))).toBe(expected);
+		});
+
+		// #1166: `AGENDA_LAYOUT_PAGES` is what decides whether a duplex run puts a
+		// blank between copies, so it must be what the layouts really print. Read
+		// against the same measured counts as above, for every layout in the list.
+		it("AGENDA_LAYOUT_PAGES is each layout's real page count", () => {
+			expect(Object.keys(AGENDA_LAYOUT_PAGES).sort()).toEqual(
+				[...AGENDA_LAYOUTS].sort(),
+			);
+			for (const layout of AGENDA_LAYOUTS) {
+				expect(pages(PRINT_PAGE_CSS, agendaHtml(layout)), layout).toBe(
+					AGENDA_LAYOUT_PAGES[layout],
+				);
+			}
+		});
+
+		// #1166, acceptance criterion 6. Measured, not derived: the copies sit in a
+		// wrapper the single-copy page does not have, and the blank is a sheet of
+		// its own, so only a browser can say they paginate to what the issue says.
+		it.each([
+			["grid", 3, true, 5],
+			["editorial", 3, true, 5],
+			["timing", 3, true, 6],
+			["spacious", 3, true, 6],
+			["grid", 3, false, 3],
+			["timing", 3, false, 6],
+			["grid", 1, true, 1],
+		] as const)("%s x%i copies, duplex=%s prints %i pages", (layout, copies, duplex, expected) => {
+			expect(pages(PRINT_PAGE_CSS, copiesHtml(layout, copies, duplex))).toBe(
+				expected,
+			);
+		});
+
+		// #1166 review: a copy that OVERFLOWS its nominal page count. The blank
+		// follows the pages a copy really prints, not the layout's nominal count.
+		it.each([
+			// [label, layout, pages per copy, duplex, tall sheets, expected pages]
+			// A one-page layout whose copy 1 flows onto a second page: 2 + 1, and NO
+			// blank, because copy 2 already starts on a front.
+			[
+				"one-page layout, copy 1 overflows",
+				"grid",
+				[2, 1],
+				true,
+				{ 0: 1800 },
+				3,
+			],
+			// …and with the nominal count it would have padded: 2 + blank + 1.
+			[
+				"one-page layout, copy 2 overflows",
+				"grid",
+				[1, 2],
+				true,
+				{ 1: 1800 },
+				4,
+			],
+			// A two-page layout whose second sheet flows to two pages: 1 + 2 = 3, odd,
+			// so a blank, then the next copy's 2.
+			[
+				"two-page layout overflows to 3",
+				"timing",
+				[3, 2],
+				true,
+				{ 1: 1800 },
+				6,
+			],
+			// Even though it overflows, 2 + 2 = 4 is even: no blank, and the next copy's
+			// first sheet (also flowing) starts on a fresh page: 4 + 3. (Measured: that
+			// needs no rule of ours, since `.agenda-page { break-inside: avoid }` moves
+			// a box that cannot stay whole to the top of the next page.)
+			[
+				"two-page layout, even overflow, next copy flows too",
+				"timing",
+				[4, 3],
+				true,
+				{ 0: 1800, 1: 1800, 2: 1800 },
+				7,
+			],
+		] as const)("duplex copies that overflow: %s prints %i pages", (_label, layout, per, duplex, tall, expected) => {
+			expect(
+				pages(
+					PRINT_PAGE_CSS,
+					overflowingCopiesHtml(layout, [...per], duplex, tall),
+				),
+			).toBe(expected);
 		});
 
 		/**

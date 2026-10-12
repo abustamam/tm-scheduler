@@ -8,7 +8,9 @@
  * render the real document and count `/Count` out of the page tree, the same
  * technique `role-sheet-layout.test.ts` uses for the one-page guarantee.
  */
+import { Document, Page, renderToBuffer } from "@react-pdf/renderer";
 import { eq } from "drizzle-orm";
+import { createElement as h } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ROLE_SHEETS } from "#/data/role-sheets";
 import { clubs, meetings, meetingVoteSessions } from "#/db/schema";
@@ -27,7 +29,12 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { renderPacketPdf } = await import("#/server/packet-pdf-logic");
+const { renderPacketPdf, withDuplexBlanks } = await import(
+	"#/server/packet-pdf-logic"
+);
+const { Route: packetRoute } = await import(
+	"#/routes/api/meetings.$id.packet.pdf"
+);
 const { loadPacketContext } = await import("#/server/packet-context-logic");
 
 /** Pages in a rendered PDF, read out of the page tree rather than trusted. */
@@ -38,6 +45,39 @@ function pageCount(bytes: Uint8Array): number {
 	if (m == null) throw new Error("no /Count in the PDF page tree");
 	return Number(m[1]);
 }
+
+/** The MediaBox of every page, in document order, read out of the PDF. */
+function mediaBoxes(bytes: Uint8Array): string[] {
+	return [
+		...Buffer.from(bytes)
+			.toString("latin1")
+			.matchAll(/\/MediaBox\s*\[([^\]]+)\]/g),
+	].map((m) => (m[1] as string).trim().replace(/\s+/g, " "));
+}
+
+// No database: this is about the blank's SHAPE. Every packet page is portrait
+// today, so the render-level test below cannot tell "copied the previous page's
+// orientation" from "always portrait". A landscape page can.
+describe("duplex blanks copy the page before them (#1166)", () => {
+	it("a blank after a landscape page is landscape, after a portrait page portrait", async () => {
+		const pages = withDuplexBlanks([
+			h(Page, { key: "a", size: "LETTER", orientation: "landscape" }),
+			h(Page, { key: "b", size: "LETTER" }),
+			h(Page, { key: "c", size: "LETTER", orientation: "landscape" }),
+		]);
+		expect(pages).toHaveLength(5);
+		const buf = await renderToBuffer(
+			h(Document, {}, ...pages) as Parameters<typeof renderToBuffer>[0],
+		);
+		expect(mediaBoxes(new Uint8Array(buf))).toEqual([
+			"0 0 792 612",
+			"0 0 792 612",
+			"0 0 612 792",
+			"0 0 612 792",
+			"0 0 792 612",
+		]);
+	});
+});
 
 describe.skipIf(!hasTestDb)("meeting packet (#589)", () => {
 	let seed: SeededClub;
@@ -156,6 +196,101 @@ describe.skipIf(!hasTestDb)("meeting packet (#589)", () => {
 		expect(ceiling).toBe(18);
 		const out = await renderPacketPdf(seed.meetingId, everything, 99999);
 		expect(pageCount(out?.bytes as Uint8Array)).toBe(ceiling);
+		// Double-sided adds a blank after every page but the last: 2n - 1.
+		const duplex = await renderPacketPdf(
+			seed.meetingId,
+			everything,
+			99999,
+			true,
+		);
+		expect(pageCount(duplex?.bytes as Uint8Array)).toBe(2 * ceiling - 1);
+	});
+
+	// #1166. A blank after every page but the last, so a duplex printer does not
+	// put one sheet on the back of the next.
+	describe("duplex (#1166)", () => {
+		it("two sheets print as sheet, blank, sheet; without duplex, two pages", async () => {
+			const two = ["timer", "grammarian"] as const;
+			const plain = await renderPacketPdf(seed.meetingId, [...two], 1);
+			expect(pageCount(plain?.bytes as Uint8Array)).toBe(2);
+			const duplex = await renderPacketPdf(seed.meetingId, [...two], 1, true);
+			expect(pageCount(duplex?.bytes as Uint8Array)).toBe(3);
+			expect(duplex?.pages).toBe(3);
+		});
+
+		it("poster x3 plus six sheets is 17 pages: blanks between poster copies too", async () => {
+			const everything = PACKET_PIECES.map((p) => p.key);
+			const out = await renderPacketPdf(seed.meetingId, everything, 3, true);
+			expect(pageCount(out?.bytes as Uint8Array)).toBe(17);
+			expect(out?.pages).toBe(17);
+		});
+
+		it("puts no blank after the last page, and none in a one-page packet", async () => {
+			const one = await renderPacketPdf(seed.meetingId, ["timer"], 1, true);
+			expect(pageCount(one?.bytes as Uint8Array)).toBe(1);
+			// Alternating content, blank, content, … ending on content: with the
+			// poster first (landscape or not), every odd-indexed page is a blank.
+			const out = await renderPacketPdf(
+				seed.meetingId,
+				["word-poster", "timer"],
+				2,
+				true,
+			);
+			expect(pageCount(out?.bytes as Uint8Array)).toBe(5);
+		});
+
+		it("every blank has the size and orientation of the page before it", async () => {
+			const everything = PACKET_PIECES.map((p) => p.key);
+			const out = await renderPacketPdf(seed.meetingId, everything, 3, true);
+			const boxes = mediaBoxes(out?.bytes as Uint8Array);
+			expect(boxes).toHaveLength(17);
+			// Odd indexes are the blanks (content pages sit at 0, 2, 4, …).
+			for (let i = 1; i < boxes.length; i += 2) {
+				expect(boxes[i], `blank page ${i}`).toBe(boxes[i - 1]);
+			}
+			// And the blanks really are there: a box list for a packet with no
+			// blanks would pass the loop above vacuously only if it were empty.
+			expect(boxes.filter((_, i) => i % 2 === 1)).toHaveLength(8);
+		});
+	});
+
+	// The endpoint, since `?duplex=1` is parsed there and nowhere else.
+	describe("GET /api/meetings/:id/packet/pdf?duplex (#1166)", () => {
+		async function get(query: string): Promise<Response> {
+			const handlers = (
+				packetRoute.options as unknown as {
+					server: {
+						handlers: {
+							GET: (ctx: {
+								params: { id: string };
+								request: Request;
+							}) => Promise<Response>;
+						};
+					};
+				}
+			).server.handlers;
+			return handlers.GET({
+				params: { id: seed.meetingId },
+				request: new Request(
+					`http://localhost/api/meetings/${seed.meetingId}/packet/pdf?${query}`,
+				),
+			});
+		}
+		const pagesOf = async (res: Response) =>
+			pageCount(new Uint8Array(await res.arrayBuffer()));
+
+		it("duplex=1 returns sheet, blank, sheet; absent returns two pages", async () => {
+			const base = "piece=timer&piece=grammarian";
+			expect(await pagesOf(await get(`${base}&duplex=1`))).toBe(3);
+			expect(await pagesOf(await get(base))).toBe(2);
+		});
+
+		it("only the literal 1 turns it on", async () => {
+			const base = "piece=timer&piece=grammarian";
+			for (const v of ["true", "0", "", "yes"]) {
+				expect(await pagesOf(await get(`${base}&duplex=${v}`)), v).toBe(2);
+			}
+		});
 	});
 
 	it("clamps an absurd copy count instead of rendering it", async () => {
@@ -196,6 +331,19 @@ describe.skipIf(!hasTestDb)(
 			expect(ctx.roles.some((r) => r.name === "Timer")).toBe(true);
 			expect(defaultPacketSelection({ ...ctx, hasWord: false })).toContain(
 				"timer",
+			);
+		});
+
+		it("returns the club's default agenda layout (#1166)", async () => {
+			expect((await loadPacketContext(seed.meetingId)).defaultPrintLayout).toBe(
+				"grid",
+			);
+			await testDb
+				.update(clubs)
+				.set({ defaultPrintLayout: "timing" })
+				.where(eq(clubs.id, seed.clubId));
+			expect((await loadPacketContext(seed.meetingId)).defaultPrintLayout).toBe(
+				"timing",
 			);
 		});
 
@@ -290,6 +438,7 @@ describe.skipIf(!hasTestDb)("an archived club's packet (#589)", () => {
 			roles: [],
 			usesDigitalVoting: false,
 			hasWord: false,
+			defaultPrintLayout: "grid",
 		});
 		// …and the rule over it therefore ticks nothing, so the dialog cannot
 		// offer a download of a club that has been taken down.

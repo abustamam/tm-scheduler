@@ -18,10 +18,13 @@ import {
 	createRootRoute,
 	createRoute,
 	createRouter,
+	defaultParseSearch,
+	defaultStringifySearch,
 	isRedirect,
 	RouterProvider,
 } from "@tanstack/react-router";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("#/server/meetings", () => ({ getPublicMeetingByKey: vi.fn() }));
@@ -453,4 +456,192 @@ describe("Print agenda route — a bare URL reuses the data cached for ?layout=X
 			}
 		});
 	}
+});
+
+// ---------------------------------------------------------------------------
+// Copies and double-sided blanks for the meeting packet (#1166).
+// ---------------------------------------------------------------------------
+
+describe("Print agenda route — ?copies and ?duplex (#1166)", () => {
+	it("floors a decimal and keeps a whole number", () => {
+		expect(validateSearch({ layout: "grid", copies: "2.7" }).copies).toBe(2);
+		expect(validateSearch({ layout: "grid", copies: "20" }).copies).toBe(20);
+		// The router JSON-parses a numeric value before this ever sees it.
+		expect(validateSearch({ layout: "grid", copies: 20 }).copies).toBe(20);
+	});
+
+	it("clamps above 60 to 60", () => {
+		expect(validateSearch({ layout: "grid", copies: "999" }).copies).toBe(60);
+	});
+
+	it("treats junk, zero, negatives and a fraction below one as one copy (undefined)", () => {
+		for (const raw of ["abc", "0", "-3", "0.9", "", "Infinity", undefined]) {
+			expect(
+				validateSearch({ layout: "grid", copies: raw }).copies,
+				String(raw),
+			).toBeUndefined();
+		}
+	});
+
+	it("duplex is on for the literal 1 only, the contract the PDF endpoint keeps", () => {
+		for (const raw of ["1", 1]) {
+			expect(validateSearch({ duplex: raw }).duplex, String(raw)).toBe(1);
+		}
+		for (const raw of ["0", 0, "true", "", true, false, 2, undefined]) {
+			expect(
+				validateSearch({ duplex: raw }).duplex,
+				String(raw),
+			).toBeUndefined();
+		}
+	});
+
+	// Through the router's own query parser rather than a hand-built object: it
+	// JSON-decodes `duplex=1` to the number 1 and `duplex=true` to a boolean
+	// BEFORE `validateSearch` runs, which is what a pre-decoded fixture hides.
+	it("a real URL query string parses to the same values", () => {
+		const parsed = (qs: string) =>
+			validateSearch(defaultParseSearch(qs) as Record<string, unknown>);
+		expect(parsed("?layout=grid&copies=20&duplex=1")).toMatchObject({
+			layout: "grid",
+			copies: 20,
+			duplex: 1,
+		});
+		expect(
+			parsed("?layout=grid&copies=999&duplex=true").duplex,
+		).toBeUndefined();
+		expect(parsed("?layout=grid&copies=999").copies).toBe(60);
+		expect(parsed("?layout=grid&copies=2.7").copies).toBe(2);
+		expect(parsed("?layout=grid&copies=abc").copies).toBeUndefined();
+		// And what a tab link writes round-trips as the literal the PDF expects.
+		expect(defaultStringifySearch({ layout: "grid", duplex: 1 })).toBe(
+			"?layout=grid&duplex=1",
+		);
+	});
+
+	it("a bare URL's redirect keeps copies and duplex", async () => {
+		mockClub("grid");
+		const { thrown } = await loadWithSearch({ copies: 3, duplex: 1 });
+		// biome-ignore lint/suspicious/noExplicitAny: redirect options
+		expect((thrown as any).options.search).toEqual({
+			layout: "grid",
+			chrome: undefined,
+			copies: 3,
+			duplex: 1,
+		});
+	});
+
+	it("a valid layout with copies renders without a redirect and the loader ignores them", async () => {
+		mockClub("grid");
+		const { result, thrown } = await loadWithSearch({
+			layout: "grid",
+			copies: 20,
+			duplex: 1,
+		});
+		expect(thrown).toBeUndefined();
+		// Nothing about the copies reaches the dehydrated payload: it is the same
+		// one `?layout=grid` alone produces.
+		expect(Object.keys(result)).not.toContain("copies");
+		expect(Object.keys(result)).not.toContain("duplex");
+	});
+});
+
+describe("Print agenda route — copies draw after mount (#1166)", () => {
+	function buildRouter(search: Record<string, unknown>) {
+		vi.spyOn(Route, "useSearch").mockReturnValue(
+			// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
+			{ layout: "grid", ...search } as any,
+		);
+		vi.spyOn(Route, "useParams").mockReturnValue({
+			clubId: "downtown",
+			meetingId: "2026-07-31",
+			// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
+		} as any);
+		vi.spyOn(Route, "useLoaderData").mockReturnValue({
+			...meetingData(),
+			tableTopicsMinSeconds: null,
+			tableTopicsMaxSeconds: null,
+			template: null,
+			logoUrl: null,
+			defaultPrintLayout: "grid",
+			printedLayout: "grid",
+			// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
+		} as any);
+		const Component = Route.options.component as () => React.ReactElement;
+		return createRouter({
+			routeTree: createRootRoute({ component: () => <Component /> }),
+			history: createMemoryHistory({ initialEntries: ["/"] }),
+		});
+	}
+
+	const sheets = (root: ParentNode) =>
+		root.querySelectorAll(".agenda-page:not([data-testid])").length;
+	const blanks = (root: ParentNode) =>
+		root.querySelectorAll("[data-testid=agenda-blank-sheet]").length;
+
+	afterEach(cleanup);
+
+	it("the server HTML holds exactly one agenda however many copies are asked for", async () => {
+		const router = buildRouter({ copies: 20, duplex: 1 });
+		await router.load();
+		const html = renderToString(<RouterProvider router={router} />);
+		const doc = new DOMParser().parseFromString(html, "text/html");
+		expect(sheets(doc)).toBe(1);
+		expect(blanks(doc)).toBe(0);
+		expect(doc.querySelector("[data-testid=print-copies-note]")).toBeNull();
+	});
+
+	it("after mount it draws all the copies, with a blank between each for a one-page layout", async () => {
+		render(<RouterProvider router={buildRouter({ copies: 3, duplex: 1 })} />);
+		await waitFor(() => expect(sheets(document)).toBe(3), { timeout: 10_000 });
+		expect(blanks(document)).toBe(2);
+		expect(screen.getByTestId("print-copies-note").textContent).toBe(
+			"3 copies",
+		);
+	});
+
+	it("draws no blanks without duplex, and no note for a single copy", async () => {
+		render(<RouterProvider router={buildRouter({ copies: 3 })} />);
+		await waitFor(() => expect(sheets(document)).toBe(3), { timeout: 10_000 });
+		expect(blanks(document)).toBe(0);
+		cleanup();
+		render(<RouterProvider router={buildRouter({})} />);
+		await waitFor(
+			() =>
+				expect(document.querySelector("[data-print-toolbar]")).not.toBeNull(),
+			{ timeout: 10_000 },
+		);
+		expect(sheets(document)).toBe(1);
+		expect(screen.queryByTestId("print-copies-note")).toBeNull();
+	});
+
+	it("the layout tabs keep copies and duplex", async () => {
+		render(<RouterProvider router={buildRouter({ copies: 3, duplex: 1 })} />);
+		await waitFor(() => expect(screen.getByText("Editorial")).toBeTruthy(), {
+			timeout: 10_000,
+		});
+		const href = screen
+			.getByText("Editorial")
+			.closest("a")
+			?.getAttribute("href");
+		expect(href).toContain("layout=editorial");
+		expect(href).toContain("copies=3");
+		// The literal 1, never `true`: the PDF endpoint only honours `1`.
+		expect(href).toContain("duplex=1");
+		expect(href).not.toContain("duplex=true");
+	});
+
+	it("the server-rendered tab links carry neither: they must match the cached HTML (#1166)", async () => {
+		const router = buildRouter({ copies: 20, duplex: 1 });
+		await router.load();
+		const html = renderToString(<RouterProvider router={router} />);
+		const doc = new DOMParser().parseFromString(html, "text/html");
+		const hrefs = [...doc.querySelectorAll("a[href*='layout=']")].map(
+			(a) => a.getAttribute("href") ?? "",
+		);
+		expect(hrefs.length).toBeGreaterThanOrEqual(4);
+		for (const href of hrefs) {
+			expect(href).not.toContain("copies");
+			expect(href).not.toContain("duplex");
+		}
+	});
 });

@@ -18,8 +18,8 @@
  * Server-only: touches `#/db` and react-pdf, so no client route may import it.
  * The client picker reads `#/lib/meeting-packet`, which is pure.
  */
-import { Document, renderToBuffer } from "@react-pdf/renderer";
-import { createElement as h } from "react";
+import { Document, Page, renderToBuffer } from "@react-pdf/renderer";
+import { createElement as h, isValidElement, type ReactNode } from "react";
 import {
 	clampPosterCopies,
 	PACKET_PIECES,
@@ -42,7 +42,8 @@ import { buildWordPosterPage } from "#/server/word-poster-layout";
  *
  * The bound is arithmetic, not a check: `clampPosterCopies` caps the poster at
  * `WORD_POSTER_COPIES.max` (12) and the pieces are a closed set of six sheets,
- * so a packet cannot exceed 18 pages however hostile the query string. An
+ * so a packet cannot exceed 18 content pages, or 35 with `duplex` (a blank after
+ * every page but the last: 2 * 18 - 1), however hostile the query string. An
  * explicit `MAX_PACKET_PAGES` guard was written here first and removed — it was
  * unreachable, which a test proved by failing to trip it, and an unreachable
  * guard is worse than none: it reads as the thing keeping the render bounded
@@ -54,6 +55,37 @@ export interface RenderedPacket {
 	clubName: string;
 	date: string;
 	pages: number;
+}
+
+/**
+ * A blank page after every page except the last (#1166), for a packet printed
+ * double-sided: without them the Timer's log lands on the back of the
+ * Ah-Counter's sheet. Not after the last, which has no next sheet to separate.
+ *
+ * Each blank takes its size and orientation from the page BEFORE it, read off
+ * that page's own props rather than assumed, so a blank back is never a
+ * different shape from the sheet it backs.
+ */
+export function withDuplexBlanks(pages: ReactNode[]): ReactNode[] {
+	const out: ReactNode[] = [];
+	pages.forEach((page, i) => {
+		out.push(page);
+		if (i === pages.length - 1) return;
+		const props = isValidElement<{
+			size?: "LETTER";
+			orientation?: "portrait" | "landscape";
+		}>(page)
+			? page.props
+			: {};
+		out.push(
+			h(Page, {
+				key: `blank-${i}`,
+				size: props.size ?? "LETTER",
+				orientation: props.orientation,
+			}),
+		);
+	});
+	return out;
 }
 
 /**
@@ -69,6 +101,7 @@ export async function renderPacketPdf(
 	meetingId: string,
 	selection: readonly PacketPieceKey[],
 	posterCopies: number,
+	duplex = false,
 ): Promise<RenderedPacket | null> {
 	if (!(await isReadableClubForMeeting(meetingId))) return null;
 
@@ -93,7 +126,7 @@ export async function renderPacketPdf(
 		wanted.has(k),
 	);
 
-	const pages = packetPageCount(sheetKeys, copies);
+	const pages = packetPageCount(sheetKeys, copies, duplex);
 	if (pages === 0) return null;
 
 	const fill = await loadRoleSheetFill(meetingId);
@@ -132,7 +165,11 @@ export async function renderPacketPdf(
 	}
 
 	const buf = await renderToBuffer(
-		h(Document, {}, ...children) as Parameters<typeof renderToBuffer>[0],
+		h(
+			Document,
+			{},
+			...(duplex ? withDuplexBlanks(children) : children),
+		) as Parameters<typeof renderToBuffer>[0],
 	);
 	return {
 		bytes: new Uint8Array(buf),
