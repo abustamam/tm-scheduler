@@ -1,7 +1,8 @@
 import { EASY_SPEAK_MATCHES } from "../lib/easy-speak-hosts";
 import {
-	currentIdentity,
 	followResume,
+	freshIdentity,
+	identityAtLoad,
 	idbStore,
 	type Identity,
 	type Progress,
@@ -35,13 +36,15 @@ export default defineContentScript({
 		const fetchImpl = (url: string, init: RequestInit) => fetch(url, init);
 		const parseHtml = (html: string) =>
 			new DOMParser().parseFromString(html, "text/html");
-		// Which club and account this is, read from the live page (never from the store),
-		// so an export left by another club or account is not resumed here.
+		const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+		// Which club and account this is, so an export left by another club or account is not
+		// resumed here. Browsing makes no request for it: with nothing stored, and a page that
+		// does not already show it, the button press asks.
 		let identity: Identity | null = null;
 		let resume: ResumeState = { kind: "none" };
 		try {
-			identity = await currentIdentity(document, fetchImpl, parseHtml);
-			resume = await resumeState(store, owner, Date.now(), identity);
+			identity = await identityAtLoad(document, store, Date.now(), fetchImpl, parseHtml, sleep);
+			if (identity) resume = await resumeState(store, owner, Date.now(), identity);
 		} catch {
 			// Unreadable identity: no resume; pressing the button reports why.
 		}
@@ -102,8 +105,10 @@ export default defineContentScript({
 						parseHtml,
 						store,
 						owner,
-						identity: await currentIdentity(document, fetchImpl, parseHtml),
-						sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+						// Asked of the server now, not read off this page, which may be hours old: the
+						// user may have switched club or account in another tab since it loaded.
+						identity: await freshIdentity(fetchImpl, parseHtml, sleep),
+						sleep,
 						now: Date.now,
 						onProgress,
 					});

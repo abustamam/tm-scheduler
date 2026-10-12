@@ -8,10 +8,8 @@ import { describe, expect, it } from "vitest";
 import {
 	FIXTURE_IDENTITY,
 	clock,
-	fixtureDoc,
 	meetingListOf,
 	memoryStore,
-	parseHtml,
 	readFixture,
 	setup,
 } from "./easy-speak-test-kit";
@@ -24,9 +22,7 @@ import {
 	type Identity,
 	type ResumeState,
 	acquireLease,
-	currentIdentity,
 	followResume,
-	identityFromDoc,
 	releaseLease,
 	resumeState,
 } from "./easy-speak-walk";
@@ -236,8 +232,9 @@ describe("one walker at a time", () => {
 			},
 		});
 		await expect(s.run()).rejects.toThrow(/took over this export/);
-		// The thief's lease is not released by the loser.
+		// The thief's lease is not released by the loser, and the page that was in flight is not stored.
 		expect(store.data.get("lease")).toMatchObject({ owner: "tab-b" });
+		expect(store.data.has("page:speeches")).toBe(false);
 		expect(s.log.map((r) => new URL(r.url).pathname)).not.toContain("/api/v1/evaluations.php/my-evaluations");
 	});
 
@@ -390,44 +387,6 @@ describe("a stored export belongs to the club and account that started it", () =
 		});
 	});
 
-	describe("currentIdentity", () => {
-		const fetchNever = async () => {
-			throw new Error("must not fetch");
-		};
-
-		it("reads the live page without a request when it shows the club and the account", async () => {
-			expect(await currentIdentity(fixtureDoc("club-data.html"), fetchNever, parseHtml)).toEqual(FIXTURE_IDENTITY);
-		});
-
-		it("asks clubdata.php afresh when the live page lacks the club id", async () => {
-			const urls: string[] = [];
-			const live = parseHtml("<html><body><span class='name'><a>someone</a></span></body></html>");
-			const id = await currentIdentity(
-				live,
-				async (url) => {
-					urls.push(url);
-					return { ok: true, status: 200, text: async () => readFixture("club-data.html") };
-				},
-				parseHtml,
-			);
-			expect(urls).toEqual([at("clubdata.php")]);
-			expect(id).toEqual(FIXTURE_IDENTITY);
-		});
-
-		it("says so when it cannot tell which club and account this is", async () => {
-			const live = parseHtml("<html><body></body></html>");
-			await expect(
-				currentIdentity(live, async () => ({ ok: false, status: 500, text: async () => "" }), parseHtml),
-			).rejects.toThrow(/Could not read which club and account/);
-			await expect(
-				currentIdentity(live, async () => ({ ok: true, status: 200, text: async () => "<html><body><form>Username</form></body></html>" }), parseHtml),
-			).rejects.toThrow(/Could not read which club and account/);
-		});
-
-		it("identityFromDoc is null for a login page", () => {
-			expect(identityFromDoc(parseHtml("<html><body><form>Username</form></body></html>"))).toBeNull();
-		});
-	});
 });
 
 describe("an unreadable page is rejected before it is cached", () => {

@@ -148,7 +148,13 @@ null` for them) or anyone's evaluations but their own (`evaluations: []` is a va
   goes; if that does not complete, the new page shows "another tab is exporting" and checks again
   when the lease runs out, then carries on by itself. A stored export belongs to the club and
   Easy-Speak account that started it: switch club or account and the old one is discarded and the walk
-  starts fresh, never mixed in. A stored session is dropped after 12 hours and when
+  starts fresh, never mixed in. The same check runs on every page the walk fetches: switch club or
+  account in another tab mid-walk and the walk stops at the next page, stores nothing of it and
+  tells you to switch back and press Resume. The press asks Easy-Speak who you are right then
+  (one `clubdata.php` request); merely browsing makes no request for it unless an export is stored.
+  A walker that lost the lease (a slow request, a suspended tab) writes nothing: every write checks
+  the lease in the same step. A page that is not the page it should be (an error page where the
+  member list belongs) stops the walk and is not kept, rather than reading as an empty list. A stored session is dropped after 12 hours and when
   the export finishes. IndexedDB, not `storage.local`, because a club's raw pages outgrow its quota
   and `unlimitedStorage` would be a second new permission.
 - **Permissions:** the one new entry is the host `https://easy-speak.org/*`. No other permission.

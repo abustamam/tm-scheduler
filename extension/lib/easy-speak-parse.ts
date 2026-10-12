@@ -28,6 +28,19 @@ import { norm } from "./easy-speak-text";
 
 type El = Element;
 
+/**
+ * The page is not the page it should be: the structure a parser reads is absent
+ * (an error page, a login form, a different page served for the URL). Distinct from
+ * a page that has the structure and genuinely nothing in it, which parses to an
+ * empty result. The walk turns this into a WalkError naming the page, inside
+ * `parse`, so the page is never cached.
+ */
+export class PageShapeError extends Error {}
+
+function requireShape(found: unknown, what: string): void {
+	if (!found) throw new PageShapeError(`it does not show ${what}`);
+}
+
 // ------------------------------------------------------------------ helpers
 
 const text = (el: El | null | undefined): string => norm(el?.textContent);
@@ -158,7 +171,10 @@ function labelValue(doc: Document, label: string): El | null {
 
 /** Name, number and timezone only. The page's contact rows and officer phone numbers are not read. */
 export function parseClubData(doc: Document): ParsedClub {
-	const num = /\d+/.exec(text(labelValue(doc, "Club Number")));
+	// The Name and Club Number rows are on every club's page, filled or not.
+	const numberCell = labelValue(doc, "Club Number");
+	requireShape(numberCell && labelValue(doc, "Name"), "the club's Club Number and Name rows");
+	const num = /\d+/.exec(text(numberCell));
 	// The cell reads "PST (GMT-8 hrs) Ignoring Daylight-saving time<br>America/Los_Angeles": the zone name abuts the word before it.
 	const tz =
 		/(?:Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Europe|Indian|Pacific|Etc)\/[A-Za-z0-9_+-]+(?:\/[A-Za-z0-9_+-]+)?/.exec(
@@ -180,6 +196,8 @@ export interface ParsedMemberList {
 
 /** Name, status and id from each row. The phone and email columns are never read. */
 export function parseMemberList(doc: Document): ParsedMemberList {
+	// The member table's column headers are there whether or not it has a row.
+	requireShape(doc.querySelector('table.forumline th[id^="l_column_"]'), "the member list table");
 	const people: Omit<EsPerson, "joined">[] = [];
 	for (const status of Array.from(
 		doc.querySelectorAll('span[id^="email_status_"]'),
@@ -194,6 +212,10 @@ export function parseMemberList(doc: Document): ParsedMemberList {
 			status: text(status),
 		});
 	}
+	// Rows with no readable member at all is a page whose rows are not these: not an empty club.
+	if (people.length === 0 && doc.querySelector('span[id^="email_status_"]')) {
+		throw new PageShapeError("none of its member rows has a readable profile link");
+	}
 	const pg = /Page\s+(\d+)\s+of\s+(\d+)/.exec(norm(doc.body?.textContent));
 	return { people, pages: pg ? Number(pg[2]) : 1 };
 }
@@ -201,6 +223,8 @@ export function parseMemberList(doc: Document): ParsedMemberList {
 // ------------------------------------------------------------------ meeting list
 
 export function parseMeetingList(doc: Document): string[] {
+	// The date-range form is on the page for a year with no meetings too.
+	requireShape(doc.querySelector('input[name="start_year"]'), "the meeting list's date-range form");
 	const ids: string[] = [];
 	for (const a of Array.from(doc.querySelectorAll("table.forumline a"))) {
 		const m = /view_meeting\.php\?t=(\d+)/.exec(a.getAttribute("href") ?? "");
@@ -600,6 +624,7 @@ export function parseSpeechList(doc: Document): ParsedSpeechRow[] {
 		/Information on Speeches/.test(text(th)),
 	);
 	const table = closest(head ?? null, "table");
+	requireShape(table, "the speech list table");
 	if (!table) return [];
 	const out: ParsedSpeechRow[] = [];
 	for (const tr of ownRows(table)) {
@@ -664,6 +689,7 @@ export function parseSpeechList(doc: Document): ParsedSpeechRow[] {
 
 /** The request form for one speech: its title and, if the viewer may see it, the introduction. */
 export function parseRequestForm(doc: Document): RequestFormInfo {
+	requireShape(doc.querySelector('input[name="cached_speech"]'), "the speech request form");
 	const val = (name: string) =>
 		norm(doc.querySelector(`input[name="${name}"]`)?.getAttribute("value"));
 	const title = text(doc.querySelector("#speech_title")) || val("cached_title");
@@ -685,6 +711,42 @@ function dataRows(doc: Document): El[] {
 	);
 }
 
+/**
+ * A member chart's own table: the `forumline` table whose first header is "Name"
+ * and which carries every header in `headers`. Present with a header row and no
+ * data rows is a chart with nothing in it (chart 7 for a member); absent is some
+ * other page.
+ */
+function requireChartTable(doc: Document, headers: string[], opts: { meetingColumns?: boolean } = {}): void {
+	const found = Array.from(doc.querySelectorAll("table.forumline")).some((t) => {
+		const ths = Array.from(t.querySelectorAll("th"));
+		const names = ths.map((th) => text(th));
+		if (names[0] !== "Name") return false;
+		if (!headers.every((h) => names.includes(h))) return false;
+		return !opts.meetingColumns || ths.some((th) => findLink(th, /view_meeting\.php\?t=\d+/));
+	});
+	requireShape(found, "the member chart's table");
+}
+
+/** Chart 1, "Role History": kept only as a raw page, so only its shape is checked. */
+export function checkRoleHistory(doc: Document): null {
+	requireChartTable(doc, ["Last role"]);
+	return null;
+}
+
+/** Chart 4, "Roles by member": kept only as a raw page, so only its shape is checked. */
+export function checkRolesByMember(doc: Document): null {
+	// One column per meeting, each headed by a link to it.
+	requireChartTable(doc, [], { meetingColumns: true });
+	return null;
+}
+
+/** The evaluations page: kept only as a raw page, so only its shape is checked. */
+export function checkEvaluationsPage(doc: Document): null {
+	requireShape(doc.querySelector("#eval-list"), "the evaluations list");
+	return null;
+}
+
 export interface ParsedMentors {
 	mentors: EsMentor[];
 	joined: Map<string, string>;
@@ -692,6 +754,7 @@ export interface ParsedMentors {
 
 /** Chart 8, "Mentoring": member, joined date, wants a mentee, mentor, mentees. */
 export function parseMentoring(doc: Document): ParsedMentors {
+	requireChartTable(doc, ["Wants Mentee?", "Mentor"]);
 	const mentors: EsMentor[] = [];
 	const joined = new Map<string, string>();
 	for (const tr of dataRows(doc)) {
@@ -716,6 +779,7 @@ export function parseMentoring(doc: Document): ParsedMentors {
 export function parseVisitorsIntroduced(
 	doc: Document,
 ): { visitor: EsPersonRef; introducedBy: EsPersonRef }[] {
+	requireChartTable(doc, ["Visitors"]);
 	const out: { visitor: EsPersonRef; introducedBy: EsPersonRef }[] = [];
 	for (const tr of dataRows(doc)) {
 		const tds = cells(tr);

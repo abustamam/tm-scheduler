@@ -26,7 +26,12 @@
  *  - A stored export belongs to the club and Easy-Speak account that started it. The
  *    store is shared by every easy-speak.org tab, so a resume under a different club
  *    or account would mix the first one's pages into the second one's bundle; it
- *    discards the old export and starts fresh instead.
+ *    discards the old export and starts fresh instead. And the same check runs on
+ *    every page the walk fetches: the user can switch club or account in another
+ *    tab mid-walk, and the next request would carry the new cookies.
+ *  - Every write to the store is fenced on still holding the lease, in one atomic
+ *    step with the write: a walker whose request outlived its lease (or whose tab
+ *    was suspended) while another tab took over writes nothing.
  */
 import {
 	type AssembleInput,
@@ -41,6 +46,10 @@ import {
 } from "./easy-speak-bundle";
 import { EASY_SPEAK_ORIGIN } from "./easy-speak-hosts";
 import {
+	PageShapeError,
+	checkEvaluationsPage,
+	checkRoleHistory,
+	checkRolesByMember,
 	parseClubData,
 	parseEsClubId,
 	parseEvaluation,
@@ -92,7 +101,22 @@ export interface WalkStore {
 		key: string,
 		fn: (current: unknown | undefined) => unknown | undefined,
 	): Promise<unknown | undefined>;
+	/**
+	 * Read `keys`, let `fn` decide, and apply its write, all as one step no other tab can
+	 * slip into (one readwrite transaction in IndexedDB). `fn` returns what to write, or
+	 * `undefined` to write nothing. A write clears first when `clear` is set, then sets.
+	 * Resolves true when a write was applied.
+	 */
+	transact(
+		keys: string[],
+		fn: (current: Record<string, unknown | undefined>) => TxWrite | undefined,
+	): Promise<boolean>;
 	clear(): Promise<void>;
+}
+
+export interface TxWrite {
+	clear?: boolean;
+	set?: Record<string, unknown>;
 }
 
 interface FetchResponseLike {
@@ -121,16 +145,15 @@ export function identityFromDoc(doc: Document): Identity | null {
 }
 
 /**
- * The current identity, without trusting the store: from the page the user is on
- * when it shows both, else from a fresh `clubdata.php` request.
+ * Ask the live server who this is: one `clubdata.php` request, then a wait of
+ * `MIN_GAP_MS`, so whatever request comes next keeps the walk's one-second gap.
+ * Never reads the page the user has had open for who knows how long.
  */
-export async function currentIdentity(
-	liveDoc: Document,
+export async function freshIdentity(
 	fetchImpl: WalkDeps["fetchImpl"],
 	parseHtml: (html: string) => Document,
+	sleep: (ms: number) => Promise<void>,
 ): Promise<Identity> {
-	const live = identityFromDoc(liveDoc);
-	if (live) return live;
 	let body: string;
 	try {
 		const res = await fetchImpl(`${EASY_SPEAK_ORIGIN}/clubdata.php`, { credentials: "include" });
@@ -138,12 +161,35 @@ export async function currentIdentity(
 		body = await res.text();
 	} catch (err) {
 		throw new WalkError(`Could not read which club and account this is: ${(err as Error).message}`);
+	} finally {
+		await sleep(MIN_GAP_MS);
 	}
 	const fetched = identityFromDoc(parseHtml(body));
 	if (!fetched) {
 		throw new WalkError("Could not read which club and account this is. Sign in to Easy-Speak, then try again.");
 	}
 	return fetched;
+}
+
+/**
+ * The identity a freshly loaded page needs to decide about resuming. Browsing
+ * Easy-Speak must not cost it a request: a page that already shows the club and
+ * the account answers from itself, and with no export in the store there is
+ * nothing to decide, so nothing is asked (the button press resolves it). Only a
+ * stored export on a page that lacks them earns the one `clubdata.php` request.
+ */
+export async function identityAtLoad(
+	liveDoc: Document,
+	store: WalkStore,
+	now: number,
+	fetchImpl: WalkDeps["fetchImpl"],
+	parseHtml: (html: string) => Document,
+	sleep: (ms: number) => Promise<void>,
+): Promise<Identity | null> {
+	const live = identityFromDoc(liveDoc);
+	if (live) return live;
+	if (!(await readSession(store, now))) return null;
+	return freshIdentity(fetchImpl, parseHtml, sleep);
 }
 
 export interface WalkDeps {
@@ -202,6 +248,8 @@ export async function readSession(
 class WalkError extends Error {}
 /** Another walker holds, or took, the lease. Never a best-effort failure. */
 class LeaseError extends Error {}
+/** A page of another club or account. Never a best-effort failure either: it ends the walk. */
+class IdentityError extends WalkError {}
 
 interface Lease {
 	owner: string;
@@ -342,6 +390,14 @@ async function walk(
 	const { store, now } = deps;
 	const gap = deps.minGapMs ?? MIN_GAP_MS;
 
+	/** Write to the store only while this walker still holds the lease, in the same atomic step. */
+	async function fenced(write: TxWrite): Promise<void> {
+		const wrote = await store.transact([LEASE], (cur) =>
+			asLease(cur[LEASE])?.owner === deps.owner ? write : undefined,
+		);
+		if (!wrote) throw new LeaseError("Another Easy-Speak tab took over this export.");
+	}
+
 	const existing = await readSession(store, now());
 	let session: Session;
 	if (existing && sameIdentity(existing.identity, deps.identity)) {
@@ -354,11 +410,13 @@ async function walk(
 				label: "Discarding an unfinished export of another club or Easy-Speak account; starting fresh.",
 			});
 		}
-		await store.clear();
-		// `clear` took the lease with everything else; nobody else can hold it, we just did.
-		await acquireLease(store, deps.owner, now());
 		session = { startedAt: now(), lastActivityAt: now(), pages: 0, identity: deps.identity };
-		await store.set(META, session);
+		// Empty the store and take the lease again (the clear took it with everything else), as one
+		// step that only happens if the lease is still ours.
+		await fenced({
+			clear: true,
+			set: { [LEASE]: { owner: deps.owner, expiresAt: now() + LEASE_TTL_MS } satisfies Lease, [META]: session },
+		});
 	}
 
 	let lastStart = Number.NEGATIVE_INFINITY;
@@ -385,6 +443,19 @@ async function walk(
 		keepRaw?: (value: T) => boolean;
 		parse: (body: string, doc: Document | null) => T;
 	}): Promise<T> {
+		/** `spec.parse`, with a page that is not the expected page named by its label. */
+		const parsePage = (body: string, doc: Document | null): T => {
+			try {
+				return spec.parse(body, doc);
+			} catch (err) {
+				if (err instanceof PageShapeError) {
+					throw new WalkError(
+						`${spec.label} is not the Easy-Speak page it should be (${err.message}). Press Resume to ask for it again.`,
+					);
+				}
+				throw err;
+			}
+		};
 		const contact = isContactPage(spec.url);
 		const cached = (await store.get(entryKey(spec.key))) as Entry | undefined;
 		let entry = cached;
@@ -418,25 +489,43 @@ async function walk(
 			}
 			const body = await res.text();
 			const doc = spec.json ? null : deps.parseHtml(body);
-			if (doc && parseViewer(doc).username === null) {
-				throw new WalkError(
-					`${spec.label} is not a signed-in Easy-Speak page. Sign in to Easy-Speak, then press Resume.`,
-				);
+			if (doc) {
+				// Who this response is for, BEFORE anything of it is parsed or stored: the cookies
+				// are whatever the user's browser holds now, which may not be who started the walk.
+				const viewer = parseViewer(doc).username;
+				if (viewer === null) {
+					throw new WalkError(
+						`${spec.label} is not a signed-in Easy-Speak page. Sign in to Easy-Speak, then press Resume.`,
+					);
+				}
+				if (viewer !== deps.identity.username) {
+					throw new IdentityError(
+						`Easy-Speak is now signed in as another account than the one this export started with (${spec.label}). Switch back to that account, then press Resume.`,
+					);
+				}
+				const clubId = parseEsClubId(doc);
+				if (clubId !== null && clubId !== deps.identity.esClubId) {
+					throw new IdentityError(
+						`Easy-Speak is now showing another club than the one this export started with (${spec.label}). Switch back to that club, then press Resume.`,
+					);
+				}
 			}
-			value = spec.parse(body, doc);
+			value = parsePage(body, doc);
 			entry = {
 				url: spec.rawUrl ?? spec.url,
 				fetchedAt: new Date(now()).toISOString(),
 				...(contact ? { parsed: value } : { body }),
 			};
-			await store.set(entryKey(spec.key), entry);
-			session = { ...session, lastActivityAt: now(), pages: session.pages + 1 };
-			await store.set(META, session);
+			// The page and the session's count land together, and only if the lease is still ours: a
+			// response that outlived it must not overwrite the walker that took over.
+			const next: Session = { ...session, lastActivityAt: now(), pages: session.pages + 1 };
+			await fenced({ set: { [entryKey(spec.key)]: entry, [META]: next } });
+			session = next;
 		} else if (contact) {
 			value = entry.parsed as T;
 		} else {
 			const body = entry.body ?? "";
-			value = spec.parse(body, spec.json ? null : deps.parseHtml(body));
+			value = parsePage(body, spec.json ? null : deps.parseHtml(body));
 		}
 		if (!contact && entry.body !== undefined && (spec.keepRaw?.(value) ?? true)) {
 			raw.push({ url: entry.url, fetchedAt: entry.fetchedAt, html: entry.body });
@@ -557,13 +646,13 @@ async function walk(
 		key: "chart:1",
 		url: get("memberchart.php?chart=1"),
 		label: "role history",
-		parse: () => null,
+		parse: (_b, doc) => (doc ? checkRoleHistory(doc) : null),
 	});
 	await page({
 		key: "chart:4",
 		url: get("memberchart.php?chart=4"),
 		label: "roles by member",
-		parse: () => null,
+		parse: (_b, doc) => (doc ? checkRolesByMember(doc) : null),
 	});
 	const visitorsIntroduced = await page({
 		key: "chart:7",
@@ -592,7 +681,7 @@ async function walk(
 			key: "evaluations-page",
 			url: get("my_evaluations.php"),
 			label: "my evaluations",
-			parse: () => null,
+			parse: (_b, doc) => (doc ? checkEvaluationsPage(doc) : null),
 		});
 		const list = parseEvaluationList(
 			await page({
@@ -619,8 +708,8 @@ async function walk(
 	} catch (err) {
 		// Only a failed request, an error status or a page that is not signed in is
 		// forgiven here. A TypeError from a parser is a bug and must surface, not
-		// become a quietly empty `evaluations`; a lost lease ends the walk.
-		if (!(err instanceof WalkError)) throw err;
+		// become a quietly empty `evaluations`; a lost lease or another club or account ends the walk.
+		if (!(err instanceof WalkError) || err instanceof IdentityError) throw err;
 		evaluations.length = 0;
 		progress(`evaluations skipped: ${err.message}`);
 	}
@@ -645,7 +734,9 @@ async function walk(
 		raw,
 	};
 	const bundle = assembleBundle(input);
-	await store.clear();
+	// Clean up only what is still ours. A walker that lost the lease at the last moment has a
+	// complete bundle (every page was checked as it came in) and must not empty the new owner's store.
+	await store.transact([LEASE], (cur) => (asLease(cur[LEASE])?.owner === deps.owner ? { clear: true } : undefined));
 	return { bundle, fileName: bundleFileName(bundle) };
 }
 
@@ -703,6 +794,39 @@ export function idbStore(dbName = "gavelup-easy-speak-export"): WalkStore {
 						}
 					};
 					tx.oncomplete = () => resolve(result);
+					tx.onerror = () => reject(tx.error);
+					tx.onabort = () => reject(tx.error);
+				});
+			} finally {
+				db.close();
+			}
+		},
+		transact: async (keys, fn) => {
+			const db = await open();
+			try {
+				return await new Promise<boolean>((resolve, reject) => {
+					const tx = db.transaction("kv", "readwrite");
+					const os = tx.objectStore("kv");
+					const current: Record<string, unknown> = {};
+					let pending = keys.length;
+					let wrote = false;
+					const decide = () => {
+						const write = fn(current);
+						if (!write) return;
+						wrote = true;
+						if (write.clear) os.clear();
+						for (const [k, v] of Object.entries(write.set ?? {})) os.put(v, k);
+					};
+					if (pending === 0) decide();
+					for (const key of keys) {
+						const get = os.get(key);
+						get.onsuccess = () => {
+							current[key] = get.result;
+							pending -= 1;
+							if (pending === 0) decide();
+						};
+					}
+					tx.oncomplete = () => resolve(wrote);
 					tx.onerror = () => reject(tx.error);
 					tx.onabort = () => reject(tx.error);
 				});

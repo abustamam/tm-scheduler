@@ -101,6 +101,14 @@ export function meetingListOf(ids: string[]): string {
 	return doc.toString();
 }
 
+/** A page of the fixtures as the server would send it to another account or club. */
+export function asIdentity(html: string, who: Identity): string {
+	return html
+		.replaceAll(FIXTURE_IDENTITY.username, who.username)
+		.replaceAll(`c=${FIXTURE_IDENTITY.esClubId}`, `c=${who.esClubId}`)
+		.replaceAll(`name="cached_club" value="${FIXTURE_IDENTITY.esClubId}"`, `name="cached_club" value="${who.esClubId}"`);
+}
+
 /** A request form for a speech that has no introduction yet. */
 export function blankRequestForm(speechId: string): string {
 	return readFixture("speech-request-intro.html")
@@ -131,6 +139,12 @@ export function fakeEasySpeak(opts: {
 	extraMeetings?: Record<string, string>;
 	/** Throw instead of answering, for the request this matches (a network failure). */
 	throwOn?: (url: string) => boolean;
+	/**
+	 * Who the site answers as (the cookies the browser sends): every page shows this club and
+	 * account. A function is asked per request with its 0-based position, for a switch mid-walk.
+	 * Default: the fixtures' own.
+	 */
+	as?: Identity | ((requestIndex: number, url: string) => Identity);
 }) {
 	const meetings: Record<string, string> = {
 		"644360": "meeting-upcoming.html",
@@ -144,15 +158,17 @@ export function fakeEasySpeak(opts: {
 		"7": "chart-7-visitors-introduced.html",
 		"8": "chart-8-mentors.html",
 	};
-	const page = (body: string) => ({
-		ok: true,
-		status: 200,
-		text: async () => body,
-	});
 	return async (url: string, init: RequestInit) => {
 		const method = init.method ?? "GET";
 		const body = typeof init.body === "string" ? init.body : null;
+		const requestIndex = opts.log.length;
 		opts.log.push({ url, method, body, startedAt: opts.clock() });
+		const who = typeof opts.as === "function" ? opts.as(requestIndex, url) : opts.as;
+		const page = (html: string) => ({
+			ok: true,
+			status: 200,
+			text: async () => (who ? asIdentity(html, who) : html),
+		});
 		if (opts.throwOn?.(url)) throw new Error("Failed to fetch");
 		if (opts.failOn?.(url)) return { ok: false, status: 500, text: async () => "" };
 		const forced = opts.override?.(url, init);
@@ -203,6 +219,13 @@ export function memoryStore(): WalkStore & { data: Map<string, unknown> } {
 			if (next !== undefined) data.set(k, JSON.parse(JSON.stringify(next)));
 			return data.get(k);
 		},
+		transact: async (keys, fn) => {
+			const write = fn(Object.fromEntries(keys.map((k) => [k, data.get(k)])));
+			if (!write) return false;
+			if (write.clear) data.clear();
+			for (const [k, v] of Object.entries(write.set ?? {})) data.set(k, JSON.parse(JSON.stringify(v)));
+			return true;
+		},
 		clear: async () => data.clear(),
 	};
 }
@@ -238,7 +261,9 @@ export function setup(opts: FakeSiteOptions & { store?: ReturnType<typeof memory
 	let inFlight = 0;
 	let maxInFlight = 0;
 	const { store: _s, owner: _o, clock: _c, identity: _i, ...siteOpts } = opts;
-	const site = fakeEasySpeak({ clock: c.now, log, ...siteOpts });
+	// The default site answers as whoever the walker says it is; a test that wants the two to
+	// differ (the user switched account mid-walk) passes `as`.
+	const site = fakeEasySpeak({ clock: c.now, log, as: opts.identity, ...siteOpts });
 	const fetchImpl = async (url: string, init: RequestInit) => {
 		inFlight += 1;
 		maxInFlight = Math.max(maxInFlight, inFlight);
