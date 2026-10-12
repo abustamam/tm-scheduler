@@ -218,9 +218,8 @@ describe.skipIf(!hasTestDb)(
 					)
 				).book_email;
 			const snapshot = async () => ({
-				people: (
-					await pool.query(`select id, email from people order by id`)
-				).rows,
+				people: (await pool.query(`select id, email from people order by id`))
+					.rows,
 				guests: (
 					await pool.query(`select id, book_email from guests order by id`)
 				).rows,

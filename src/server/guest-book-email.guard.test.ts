@@ -113,13 +113,13 @@ function peopleWriteStatements(src: string): string[] {
  * read of the column (`guests.bookEmail`, `r.bookEmail`, ...) or a type, with the
  * top-level function it sits in.
  */
-function noteWrites(
-	src: string,
-): Array<{ fn: string; value: string }> {
+function noteWrites(src: string): Array<{ fn: string; value: string }> {
 	const out: Array<{ fn: string; value: string }> = [];
 	for (const m of src.matchAll(/\bbookEmail\s*:\s*([^,}\n]+)/g)) {
 		const value = (m[1] ?? "").trim();
-		if (/^(?:guests\.bookEmail|[a-z]\w*\.bookEmail|string\b|text\()/.test(value)) {
+		if (
+			/^(?:guests\.bookEmail|[a-z]\w*\.bookEmail|string\b|text\()/.test(value)
+		) {
 			continue;
 		}
 		const before = src.slice(0, m.index);
@@ -152,7 +152,10 @@ const pipeline = files.find(
 describe("guests.book_email never reaches a Person (#1157)", () => {
 	it("scans real source", () => {
 		expect(files.length).toBeGreaterThan(200);
-		expect(pipeline, "guest-pipeline-logic.ts moved or was renamed").toBeTruthy();
+		expect(
+			pipeline,
+			"guest-pipeline-logic.ts moved or was renamed",
+		).toBeTruthy();
 	});
 
 	it("no statement that writes `people` names the note", () => {
@@ -165,7 +168,9 @@ describe("guests.book_email never reaches a Person (#1157)", () => {
 		for (const f of files) {
 			for (const stmt of peopleWriteStatements(f.text)) {
 				if (NOTE.test(stmt)) {
-					offenders.push(`${f.file}: ${stmt.replace(/\s+/g, " ").slice(0, 120)}`);
+					offenders.push(
+						`${f.file}: ${stmt.replace(/\s+/g, " ").slice(0, 120)}`,
+					);
 				}
 			}
 		}

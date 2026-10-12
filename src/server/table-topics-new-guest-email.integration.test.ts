@@ -79,12 +79,15 @@ describe.skipIf(!hasTestDb)(
 		// fails_when=the schema accepts newGuest.email again and writes it to the Person (a sign-in key) or the guest row;
 		// no_claim=the admin-only minutes add-guest path, which keeps its email; the session is faked, the validator, handler and DB write are real.
 		it("drops an email sent with the new guest instead of storing it (AC 4)", async () => {
-			const data = {
-				meetingId: seed.meetingId,
-				newGuest: { name: "Topics Guest", email: "extra@example.com" },
-			} as unknown as Parameters<typeof addTableTopics>[0]["data"];
+			// An extra key is outside the schema's input type; a stale tab still sends it.
+			const call = {
+				data: {
+					meetingId: seed.meetingId,
+					newGuest: { name: "Topics Guest", email: "extra@example.com" },
+				},
+			} as unknown as Parameters<typeof addTableTopics>[0];
 
-			await addTableTopics({ data });
+			await addTableTopics(call);
 
 			const [speaker] = await testDb
 				.select({ guestId: tableTopicsSpeakers.guestId })

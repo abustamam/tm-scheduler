@@ -779,7 +779,9 @@ async function fillBlankGuestContact(
 						tx
 							.select({ id: people.id })
 							.from(people)
-							.where(and(eq(people.id, existing.personId), isNull(people.email))),
+							.where(
+								and(eq(people.id, existing.personId), isNull(people.email)),
+							),
 					),
 				),
 			);
