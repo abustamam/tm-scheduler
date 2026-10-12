@@ -14,12 +14,13 @@
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { members, people, user } from "#/db/schema";
+import { guests, members, people, user } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	setGuestContact,
 	testDb,
 } from "#/test/db";
 
@@ -28,6 +29,8 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const { captureGuestVisit, applyConvertGuestToMember } = await import(
 	"./guest-pipeline-logic"
 );
+const { linkPersonToUser } = await import("./account-link-logic");
+const { RECORD_CHANGED_MESSAGE } = await import("./guests-logic");
 
 describe.skipIf(!hasTestDb)(
 	"guest convert fills a blank address only (#907)",
@@ -151,6 +154,189 @@ describe.skipIf(!hasTestDb)(
 
 			expect(res.personId).toBe(p.personId);
 			expect(await emailOf(p.personId)).toBeNull();
+		});
+	},
+);
+
+/**
+ * #1157: an address typed on the public guest book is the club's unconfirmed
+ * note on the guest row (`guests.book_email`). Convert uses it only when an
+ * officer confirms it (`confirmedEmail`), and it never steers a convert onto an
+ * existing member.
+ */
+describe.skipIf(!hasTestDb)(
+	"convert and the unconfirmed guest-book address (#1157)",
+	() => {
+		let club: SeededClub;
+		let userIds: string[];
+		let strayPeople: string[];
+		let n: string;
+
+		beforeEach(async () => {
+			club = await seedClub();
+			userIds = [];
+			strayPeople = [];
+			n = randomUUID().slice(0, 8);
+		});
+		afterEach(async () => {
+			await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
+			if (userIds.length > 0) {
+				await testDb.delete(user).where(inArray(user.id, userIds));
+			}
+			if (strayPeople.length > 0) {
+				await testDb.delete(people).where(inArray(people.id, strayPeople));
+			}
+		});
+
+		async function bookGuest(name: string, email: string) {
+			const { guestId } = await captureGuestVisit({
+				clubId: club.clubId,
+				name,
+				email,
+			});
+			return guestId;
+		}
+
+		async function personEmail(personId: string): Promise<string | null> {
+			const [row] = await testDb
+				.select({ email: people.email })
+				.from(people)
+				.where(eq(people.id, personId));
+			return row?.email ?? null;
+		}
+
+		async function bookEmailOf(guestId: string): Promise<string | null> {
+			const [row] = await testDb
+				.select({ bookEmail: guests.bookEmail })
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			return row?.bookEmail ?? null;
+		}
+
+		/** A verified account whose address is `email`. */
+		async function accountFor(email: string): Promise<string> {
+			const id = randomUUID();
+			await testDb
+				.insert(user)
+				.values({ id, name: `Acct ${n}`, email, emailVerified: true });
+			userIds.push(id);
+			return id;
+		}
+
+		// protects=converting a guest whose only address is the book note, with no confirmation, makes a member Person with no email, so an account with that address links nothing;
+		// fails_when=convertIdentity reads guests.book_email, so the unconfirmed address becomes the new member's sign-in key;
+		// no_claim=the confirmed path (next test); the account is a seeded user row, not a real magic-link sign-in.
+		it("converts without confirmation: the member Person has no email and nothing links (AC 5)", async () => {
+			const email = `note-${n}@test.example`;
+			const guestId = await bookGuest(`Noted ${n}`, email);
+
+			const res = await applyConvertGuestToMember({
+				clubId: club.clubId,
+				guestId,
+				actorMemberId: club.adminMemberId,
+			});
+
+			expect(await personEmail(res.personId)).toBeNull();
+			expect(await bookEmailOf(guestId)).toBe(email);
+			const { linkedPersonIds } = await linkPersonToUser(
+				await accountFor(email),
+			);
+			expect(linkedPersonIds).toEqual([]);
+		});
+
+		// protects=a confirmedEmail is written to the member Person, clears the note, and then links exactly that Person;
+		// fails_when=confirmedEmail is ignored, or is written but the note is left behind;
+		// no_claim=that the officer asked the guest; the confirmation is an input here.
+		it("converts with confirmedEmail: written to the Person, note cleared, links that Person (AC 6)", async () => {
+			const email = `note-${n}@test.example`;
+			const guestId = await bookGuest(`Confirmed ${n}`, email);
+
+			const res = await applyConvertGuestToMember({
+				clubId: club.clubId,
+				guestId,
+				actorMemberId: club.adminMemberId,
+				confirmedEmail: email,
+			});
+
+			expect(await personEmail(res.personId)).toBe(email);
+			expect(await bookEmailOf(guestId)).toBeNull();
+			const { linkedPersonIds } = await linkPersonToUser(
+				await accountFor(email),
+			);
+			expect(linkedPersonIds).toEqual([res.personId]);
+		});
+
+		// protects=a confirmedEmail that disagrees with the guest's vouched address is refused and nothing is written;
+		// fails_when=the officer's field overrides an address another officer already vouched, or the convert half-writes before throwing;
+		// no_claim=a confirmedEmail equal to the vouched address (accepted, not tested separately here).
+		it("refuses a confirmedEmail that differs from the vouched address, writing nothing (AC 7)", async () => {
+			const name = `Vouched ${n}`;
+			const guestId = await bookGuest(name, `typed-${n}@test.example`);
+			const vouched = `vouched-${n}@test.example`;
+			await setGuestContact(guestId, { email: vouched });
+			const membersBefore = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.clubId, club.clubId));
+
+			await expect(
+				applyConvertGuestToMember({
+					clubId: club.clubId,
+					guestId,
+					actorMemberId: club.adminMemberId,
+					confirmedEmail: `other-${n}@test.example`,
+				}),
+			).rejects.toThrow(RECORD_CHANGED_MESSAGE);
+
+			const membersAfter = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.clubId, club.clubId));
+			expect(membersAfter).toHaveLength(membersBefore.length);
+			const [g] = await testDb
+				.select({ stage: guests.stage, personId: guests.personId })
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			expect(g?.stage).not.toBe("joined");
+			expect(await personEmail(g!.personId)).toBe(vouched);
+		});
+
+		// protects=a guest whose book note equals an existing member's address is NOT deduped onto that member: a new Person is minted, the member's lapsed row stays lapsed;
+		// fails_when=matchClubMemberPerson is fed the book note, so a stranger's typed address attaches them to (and reactivates) someone else's membership;
+		// no_claim=dedup by a confirmed or vouched address, nor by phone+name (existing #488 tests).
+		it("a book note equal to a member's address never dedups onto that member (AC 8)", async () => {
+			const email = `member-${n}@test.example`;
+			const [m] = await testDb
+				.insert(people)
+				.values({ name: `Existing ${n}`, email })
+				.returning({ id: people.id });
+			strayPeople.push(m!.id);
+			const [mem] = await testDb
+				.insert(members)
+				.values({
+					clubId: club.clubId,
+					personId: m!.id,
+					name: `Existing ${n}`,
+					status: "inactive",
+				})
+				.returning({ id: members.id });
+			const guestId = await bookGuest(`Stranger ${n}`, email);
+
+			const res = await applyConvertGuestToMember({
+				clubId: club.clubId,
+				guestId,
+				actorMemberId: club.adminMemberId,
+			});
+
+			expect(res.personId).not.toBe(m!.id);
+			expect(res.membershipId).not.toBe(mem!.id);
+			expect(res.reactivated).toBe(false);
+			const [after] = await testDb
+				.select({ status: members.status })
+				.from(members)
+				.where(eq(members.id, mem!.id));
+			expect(after?.status).toBe("inactive");
+			expect(await personEmail(m!.id)).toBe(email);
 		});
 	},
 );
