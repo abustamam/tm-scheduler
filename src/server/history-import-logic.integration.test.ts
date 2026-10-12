@@ -1,0 +1,647 @@
+/**
+ * The Easy-Speak history import, end to end against the test database (#1051).
+ *
+ * The bundle is the extension's "B fixture" with an injected clock, so the
+ * numbers are the fixture's: at 2026-10-12 one meeting is past, at 2026-10-20
+ * two are. Each test is one acceptance criterion of the issue.
+ *
+ * Run with:
+ *   bunx vitest run src/server/history-import-logic.integration.test.ts
+ * (a bootstrapped worktree has its own database; without one this skips.)
+ */
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { and, count, eq, inArray, isNull, type SQL } from "drizzle-orm";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	activityLog,
+	clubImports,
+	clubs,
+	guests,
+	importRefs,
+	meetingAttendance,
+	meetingAwards,
+	meetings,
+	members,
+	people,
+	roleDefinitions,
+	roleSlots,
+	speeches,
+	tableTopicsSpeakers,
+	user,
+} from "#/db/schema";
+import type { EasySpeakBundleV1 } from "#/lib/easy-speak-bundle";
+import type { PersonResolution } from "#/lib/easy-speak-import-plan";
+import {
+	cleanup,
+	hasTestDb,
+	type SeededClub,
+	seedClub,
+	testDb,
+} from "#/test/db";
+
+vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+
+// One seam to make a meeting's transaction fail AFTER it has written: the hook
+// runs where the real lock is taken, at the top of each meeting's transaction.
+const lockHook = vi.hoisted(() => ({
+	run: null as null | ((tx: unknown, call: number) => Promise<void>),
+	calls: 0,
+}));
+vi.mock("./club-write-lock", async (importOriginal) => {
+	const real = await importOriginal<typeof import("./club-write-lock")>();
+	return {
+		...real,
+		lockClubForWrite: async (
+			tx: Parameters<typeof real.lockClubForWrite>[0],
+			clubId: string,
+			timeout?: string,
+		) => {
+			await real.lockClubForWrite(tx, clubId, timeout);
+			lockHook.calls += 1;
+			await lockHook.run?.(tx, lockHook.calls);
+		},
+	};
+});
+
+const logic = await import("./history-import-logic");
+
+const FIXTURE = resolve(
+	__dirname,
+	"../../extension/lib/__fixtures__/easy-speak/bundle.expected.json",
+);
+const NOW = new Date("2026-10-12T12:00:00Z");
+const NOW_TWO_PAST = new Date("2026-10-20T12:00:00Z");
+
+/** Roster names the fixture's people are matched to; Avery Alderfinch is left off. */
+const ROSTER_NAMES = [
+	"Elliot Tansley",
+	"Zéphyr Ashlowe",
+	"Elliot Dovecott",
+	"Elliot Dovecott",
+	"Parker Vexford",
+	"Zephyr Ironvale",
+	"Jules Valewood",
+	"Kai Larkspur",
+	"Wren Mistlewood",
+	"Umber Yarrowby",
+	"Dana Vexford",
+	"Casey Foxglade",
+	"Blair Yarrowby",
+	"Morgan Ravenscar",
+	"Lane Stonebrook",
+];
+
+/** The fixture, its 2nd Speaker a guest speaker so a guest owns a speech. */
+function bundleText(): string {
+	const bundle = JSON.parse(readFileSync(FIXTURE, "utf8")) as EasySpeakBundleV1;
+	const yael = { esUserId: "900025", name: "Yael Saltmarsh" };
+	const past = bundle.meetings.find((m) => m.esMeetingId === "644304");
+	const slot = past?.roles.find((r) => r.role === "2nd Speaker");
+	if (!past || !slot) throw new Error("fixture changed");
+	slot.holder = yael;
+	past.guests.push({ who: yael, category: "guest_speaker" });
+	return JSON.stringify(bundle);
+}
+
+describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
+	let seed: SeededClub;
+	let superadminId: string;
+	const extraUsers: string[] = [];
+
+	beforeEach(async () => {
+		lockHook.run = null;
+		lockHook.calls = 0;
+		seed = await seedClub();
+		superadminId = randomUUID();
+		await testDb.insert(user).values({
+			id: superadminId,
+			name: "Super",
+			email: `super-${superadminId}@test.example`,
+			emailVerified: true,
+			isSuperadmin: true,
+		});
+		extraUsers.push(superadminId);
+		await testDb
+			.update(clubs)
+			.set({ timezone: "America/Los_Angeles" })
+			.where(eq(clubs.id, seed.clubId));
+		for (const name of ROSTER_NAMES) {
+			const [person] = await testDb
+				.insert(people)
+				.values({ name })
+				.returning({ id: people.id });
+			await testDb.insert(members).values({
+				clubId: seed.clubId,
+				personId: person?.id as string,
+				name,
+				clubRole: "member",
+				status: "active",
+			});
+		}
+	});
+
+	afterEach(async () => {
+		lockHook.run = null;
+		// Roster people are club-less: `cleanup` removes the ones the club's members
+		// belonged to, after the cascade.
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+		await testDb.delete(user).where(inArray(user.id, extraUsers.splice(0)));
+	});
+
+	async function upload(text = bundleText()) {
+		return logic.storeEasySpeakBundle({
+			clubId: seed.clubId,
+			uploadedByUserId: superadminId,
+			text,
+		});
+	}
+
+	/** Every person the plan could not place becomes a guest, and the second Dovecott stays a different person. */
+	async function resolveAll(importId: string, now = NOW) {
+		const preview = await logic.previewEasySpeakImport({
+			clubId: seed.clubId,
+			importId,
+			now,
+		});
+		const dovecott = preview.roster.find((m) => m.name === "Elliot Dovecott")
+			?.memberId as string;
+		const resolutions: Record<string, PersonResolution> = {};
+		for (const p of preview.people) {
+			if (p.status === "ambiguous") {
+				resolutions[p.key] = { action: "member", memberId: dovecott };
+			} else if (p.status === "unmatched") {
+				resolutions[p.key] = { action: "guest", kind: "visitor" };
+			}
+		}
+		return { preview, resolutions };
+	}
+
+	async function apply(
+		importId: string,
+		resolutions: Record<string, PersonResolution>,
+		now = NOW,
+	) {
+		return logic.applyEasySpeakImport({
+			clubId: seed.clubId,
+			importId,
+			superadminUserId: superadminId,
+			resolutions,
+			now,
+		});
+	}
+
+	/** Row counts of everything an apply may write, scoped to this club. */
+	async function counts() {
+		const clubMeetings = await testDb
+			.select({ id: meetings.id })
+			.from(meetings)
+			.where(eq(meetings.clubId, seed.clubId));
+		const meetingIds = clubMeetings.map((m) => m.id);
+		const inMeetings = async (table: typeof meetingAttendance) => {
+			if (meetingIds.length === 0) return 0;
+			const [row] = await testDb
+				.select({ n: count() })
+				.from(table)
+				.where(inArray(table.meetingId, meetingIds));
+			return Number(row?.n ?? 0);
+		};
+		const one = async (table: typeof guests, where: SQL | undefined) => {
+			const [row] = await testDb
+				.select({ n: count() })
+				.from(table)
+				.where(where);
+			return Number(row?.n ?? 0);
+		};
+		const guestRows = await testDb
+			.select({ personId: guests.personId })
+			.from(guests)
+			.where(eq(guests.clubId, seed.clubId));
+		const memberRows = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.clubId, seed.clubId));
+		const personIds = [
+			...new Set([...guestRows, ...memberRows].map((r) => r.personId)),
+		];
+		return {
+			meetings: meetingIds.length,
+			roleSlots: await inMeetings(
+				roleSlots as unknown as typeof meetingAttendance,
+			),
+			meetingAttendance: await inMeetings(meetingAttendance),
+			meetingAwards: await inMeetings(
+				meetingAwards as unknown as typeof meetingAttendance,
+			),
+			tableTopicsSpeakers: await inMeetings(
+				tableTopicsSpeakers as unknown as typeof meetingAttendance,
+			),
+			speeches: personIds.length
+				? await one(
+						speeches as unknown as typeof guests,
+						inArray(speeches.personId, personIds),
+					)
+				: 0,
+			guestSpeeches: await one(
+				speeches as unknown as typeof guests,
+				inArray(
+					speeches.guestId,
+					guestRows.length
+						? (
+								await testDb
+									.select({ id: guests.id })
+									.from(guests)
+									.where(eq(guests.clubId, seed.clubId))
+							).map((g) => g.id)
+						: [randomUUID()],
+				),
+			),
+			guests: guestRows.length,
+			people: personIds.length,
+			roleDefinitions: await one(
+				roleDefinitions as unknown as typeof guests,
+				eq(roleDefinitions.clubId, seed.clubId),
+			),
+			importRefs: await one(
+				importRefs as unknown as typeof guests,
+				eq(importRefs.clubId, seed.clubId),
+			),
+		};
+	}
+
+	it("refuses an upload that is not JSON, not a bundle, or too big, with a sentence", async () => {
+		await expect(upload("not json")).rejects.toThrow(/not valid JSON/);
+		await expect(upload("{}")).rejects.toThrow(logic.BundleRefusal);
+		await expect(
+			upload("x".repeat(logic.MAX_BUNDLE_BYTES + 1)),
+		).rejects.toThrow(/limit is 50\.0 MB/);
+		const [{ n } = { n: 0 }] = await testDb
+			.select({ n: count() })
+			.from(clubImports)
+			.where(eq(clubImports.clubId, seed.clubId));
+		expect(Number(n)).toBe(0);
+	});
+
+	it("refuses a NUL escape instead of letting the insert abort", async () => {
+		const bundle = JSON.parse(bundleText()) as EasySpeakBundleV1;
+		bundle.club.name = "Bad\u0000Name";
+		await expect(upload(JSON.stringify(bundle))).rejects.toThrow(/NUL/);
+	});
+
+	it("stores the same bundle once per club", async () => {
+		const first = await upload();
+		const again = await upload();
+		expect(again).toMatchObject({ importId: first.importId, reused: true });
+		expect(await logic.listClubImports(seed.clubId)).toHaveLength(1);
+	});
+
+	it("refuses to apply while a person is unresolved, and writes nothing", async () => {
+		const stored = await upload();
+		const before = await counts();
+		const preview = await logic.previewEasySpeakImport({
+			clubId: seed.clubId,
+			importId: stored.importId,
+			now: NOW,
+		});
+		expect(preview.canApply).toBe(false);
+		expect(preview.unresolvedCount).toBe(2);
+		await expect(apply(stored.importId, {})).rejects.toThrow(
+			logic.UNRESOLVED_PEOPLE_MESSAGE(2),
+		);
+		expect(await counts()).toEqual(before);
+	});
+
+	it("after an apply every reconciliation count is equal", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		const { report } = await apply(stored.importId, resolutions);
+		expect(report.counts.length).toBeGreaterThan(0);
+		for (const c of report.counts) {
+			expect(c.gavelup, c.key).toBe(c.bundle);
+			expect(c.missing, c.key).toEqual([]);
+		}
+		expect(report.meetings.failed).toEqual([]);
+		expect(report.reconciled).toBe(true);
+		// The numbers are the fixture's, not merely self-consistent.
+		const by = Object.fromEntries(report.counts.map((c) => [c.key, c.bundle]));
+		expect(by.meetings).toBe(1);
+		expect(by.role_assignments).toBe(14);
+		expect(by.speeches).toBe(2);
+		expect(by.awards).toBe(3);
+		// Stored with the row, and listed as reconciled.
+		expect((await logic.listClubImports(seed.clubId))[0]?.reconciled).toBe(
+			true,
+		);
+		const stored2 = await logic.loadImportReport({ clubId: seed.clubId });
+		expect(stored2?.report.reconciled).toBe(true);
+		expect(report.notImported.length).toBeGreaterThan(0);
+	});
+
+	it("applying twice adds zero rows anywhere", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await apply(stored.importId, resolutions);
+		const afterFirst = await counts();
+		expect(afterFirst.meetings).toBe(2); // the seeded one and the imported one
+		expect(afterFirst.roleSlots).toBeGreaterThan(0);
+		const second = await apply(stored.importId, resolutions);
+		expect(await counts()).toEqual(afterFirst);
+		expect(second.report.reconciled).toBe(true);
+	});
+
+	it("imports only past meetings, all completed, and never a future one", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await apply(stored.importId, resolutions);
+		const rows = await testDb
+			.select({
+				at: meetings.scheduledAt,
+				status: meetings.status,
+				theme: meetings.theme,
+			})
+			.from(meetings)
+			.where(
+				and(
+					eq(meetings.clubId, seed.clubId),
+					eq(meetings.theme, "Coming of Age"),
+				),
+			);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.status).toBe("completed");
+		const all = await testDb
+			.select({ at: meetings.scheduledAt, status: meetings.status })
+			.from(meetings)
+			.where(eq(meetings.clubId, seed.clubId));
+		const imported = all.filter(
+			(m) => m.at.toISOString() === "2026-09-23T02:00:00.000Z",
+		);
+		expect(imported).toHaveLength(1);
+		expect(
+			all.some((m) => m.at.toISOString() === "2026-10-14T02:00:00.000Z"),
+		).toBe(false);
+		expect(
+			all.some((m) => m.at.toISOString() === "2026-10-28T02:00:00.000Z"),
+		).toBe(false);
+	});
+
+	it("links each evaluator slot to the speaker slot it evaluates", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await apply(stored.importId, resolutions);
+		const refs = await testDb
+			.select({ sourceId: importRefs.sourceId, targetId: importRefs.targetId })
+			.from(importRefs)
+			.where(
+				and(
+					eq(importRefs.clubId, seed.clubId),
+					eq(importRefs.kind, "role_assignment"),
+				),
+			);
+		const slotOf = (sourceId: string) =>
+			refs.find((r) => r.sourceId === sourceId)?.targetId as string;
+		const evaluator = async (sourceId: string) => {
+			const [row] = await testDb
+				.select({ evaluates: roleSlots.evaluatesSlotId })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, slotOf(sourceId)));
+			return row?.evaluates;
+		};
+		expect(await evaluator("644304:13")).toBe(slotOf("644304:3"));
+		expect(await evaluator("644304:14")).toBe(slotOf("644304:4"));
+	});
+
+	it("gives a guest speaker's speech a guest_id and no person_id, and a member's the reverse", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await apply(stored.importId, resolutions);
+		const rows = await testDb
+			.select({
+				title: speeches.title,
+				personId: speeches.personId,
+				guestId: speeches.guestId,
+			})
+			.from(speeches)
+			.where(
+				inArray(speeches.title, [
+					"Make Your Impact",
+					"The Career I Never Expected",
+				]),
+			);
+		const mine = rows.filter((r) => r.guestId !== null || r.personId !== null);
+		const guestSpeech = mine.find(
+			(r) => r.title === "The Career I Never Expected",
+		);
+		const memberSpeech = mine.find((r) => r.title === "Make Your Impact");
+		expect(guestSpeech?.guestId).not.toBeNull();
+		expect(guestSpeech?.personId).toBeNull();
+		expect(memberSpeech?.personId).not.toBeNull();
+		expect(memberSpeech?.guestId).toBeNull();
+		// The guest owns the speech on a slot assigned to that very guest.
+		const [slot] = await testDb
+			.select({
+				guestId: roleSlots.assignedGuestId,
+				memberId: roleSlots.assignedMemberId,
+			})
+			.from(roleSlots)
+			.innerJoin(speeches, eq(roleSlots.speechId, speeches.id))
+			.where(eq(speeches.guestId, guestSpeech?.guestId as string));
+		expect(slot?.guestId).toBe(guestSpeech?.guestId);
+		expect(slot?.memberId).toBeNull();
+	});
+
+	it("imports guests at stage lost, and no person is left a duplicate of a member", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await apply(stored.importId, resolutions);
+		const rows = await testDb
+			.select({ stage: guests.stage })
+			.from(guests)
+			.where(eq(guests.clubId, seed.clubId));
+		expect(rows.length).toBeGreaterThan(0);
+		expect(rows.every((g) => g.stage === "lost")).toBe(true);
+	});
+
+	it("records who introduced a visitor, as a member of THIS club", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await apply(stored.importId, resolutions);
+		const rows = await testDb
+			.select({
+				name: guests.name,
+				introducer: guests.introducedByMemberId,
+			})
+			.from(guests)
+			.where(
+				and(
+					eq(guests.clubId, seed.clubId),
+					eq(guests.name, "Elliot Lindenhurst"),
+				),
+			);
+		expect(rows).toHaveLength(1);
+		const [introducer] = await testDb
+			.select({ clubId: members.clubId, name: members.name })
+			.from(members)
+			.where(eq(members.id, rows[0]?.introducer as string));
+		expect(introducer).toEqual({
+			clubId: seed.clubId,
+			name: "Elliot Dovecott",
+		});
+	});
+
+	it("logs history_imported against the club, attributed to the superadmin", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await apply(stored.importId, resolutions);
+		const [row] = await testDb
+			.select({
+				action: activityLog.action,
+				impersonatedBy: activityLog.impersonatedBy,
+			})
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, seed.clubId),
+					eq(activityLog.action, "history_imported"),
+				),
+			);
+		expect(row?.impersonatedBy).toBe(superadminId);
+	});
+
+	it("a meeting whose apply throws leaves no rows for it, is in the report, and its neighbour still lands", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId, NOW_TWO_PAST);
+		// Call 1 is the setup transaction, 2 the first meeting, 3 the second. Fail
+		// the second AFTER it has begun writing: a check no new role slot can pass.
+		lockHook.run = async (tx, call) => {
+			if (call !== 3) return;
+			await (tx as { execute: (q: unknown) => Promise<unknown> }).execute(
+				(await import("drizzle-orm")).sql.raw(
+					"ALTER TABLE role_slots ADD CONSTRAINT zz_import_test_fail CHECK (false) NOT VALID",
+				),
+			);
+		};
+		const { report } = await apply(stored.importId, resolutions, NOW_TWO_PAST);
+		lockHook.run = null;
+		expect(report.meetings.failed.map((f) => f.esMeetingId)).toEqual([
+			"644360",
+		]);
+		expect(report.reconciled).toBe(false);
+		const rows = await testDb
+			.select({ at: meetings.scheduledAt })
+			.from(meetings)
+			.where(eq(meetings.clubId, seed.clubId));
+		const instants = rows.map((r) => r.at.toISOString());
+		expect(instants).toContain("2026-09-23T02:00:00.000Z");
+		expect(instants).not.toContain("2026-10-14T02:00:00.000Z");
+		const refs = await testDb
+			.select({ sourceId: importRefs.sourceId })
+			.from(importRefs)
+			.where(
+				and(eq(importRefs.clubId, seed.clubId), eq(importRefs.kind, "meeting")),
+			);
+		expect(refs.map((r) => r.sourceId)).toEqual(["644304"]);
+		// The report says which count lost the failed meeting's records.
+		const meetingsCount = report.counts.find((c) => c.key === "meetings");
+		expect(meetingsCount?.missing).toEqual(["644360"]);
+	});
+
+	it("a failure message carries no NUL and no SQL", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		lockHook.run = async (tx, call) => {
+			if (call !== 2) return;
+			await (tx as { execute: (q: unknown) => Promise<unknown> }).execute(
+				(await import("drizzle-orm")).sql.raw(
+					"ALTER TABLE role_slots ADD CONSTRAINT zz_import_test_fail CHECK (false) NOT VALID",
+				),
+			);
+		};
+		const { report } = await apply(stored.importId, resolutions);
+		lockHook.run = null;
+		const message = report.meetings.failed[0]?.message ?? "";
+		expect(message).not.toContain("\u0000");
+		expect(message).not.toMatch(/insert into/i);
+		expect(await counts()).toMatchObject({ meetings: 1 });
+	});
+
+	it("validatedIntroducerId accepts this club's member and refuses another club's", async () => {
+		const other = await seedClub();
+		try {
+			await expect(
+				testDb.transaction((tx) =>
+					logic.validatedIntroducerId(tx, seed.clubId, seed.memberId),
+				),
+			).resolves.toBe(seed.memberId);
+			await expect(
+				testDb.transaction((tx) =>
+					logic.validatedIntroducerId(tx, seed.clubId, other.memberId),
+				),
+			).rejects.toThrow(logic.INTRODUCER_NOT_IN_CLUB_MESSAGE);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	it("a resolution naming another club's member leaves the person unresolved", async () => {
+		const other = await seedClub();
+		try {
+			const stored = await upload();
+			const { resolutions } = await resolveAll(stored.importId);
+			const unresolved = Object.entries(resolutions).find(
+				([, r]) => r.action === "member",
+			)?.[0] as string;
+			const preview = await logic.previewEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				now: NOW,
+				resolutions: {
+					...resolutions,
+					[unresolved]: { action: "member", memberId: other.memberId },
+				},
+			});
+			const person = preview.people.find((p) => p.key === unresolved);
+			expect(person?.status).toBe("ambiguous");
+			expect(person?.rejectedChoice).toBe(other.memberId);
+			expect(preview.canApply).toBe(false);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	it("loadImportReport never returns another club's report", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await apply(stored.importId, resolutions);
+		const other = await seedClub();
+		try {
+			expect(
+				await logic.loadImportReport({
+					clubId: other.clubId,
+					importId: stored.importId,
+				}),
+			).toBeNull();
+			expect(await logic.loadImportReport({ clubId: other.clubId })).toBeNull();
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	it("refuses an archived club", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, seed.clubId));
+		await expect(apply(stored.importId, resolutions)).rejects.toThrow(
+			/archived/i,
+		);
+		expect(
+			await testDb
+				.select({ id: meetings.id })
+				.from(meetings)
+				.where(and(eq(meetings.clubId, seed.clubId), isNull(meetings.theme))),
+		).toHaveLength(1);
+	});
+});
