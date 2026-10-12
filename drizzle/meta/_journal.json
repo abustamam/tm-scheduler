@@ -827,6 +827,13 @@
       "when": 1791575038884,
       "tag": "0117_superb_nova",
       "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1791817154787,
+      "tag": "0118_drop_guest_contact",
+      "breakpoints": true
     }
   ]
 }

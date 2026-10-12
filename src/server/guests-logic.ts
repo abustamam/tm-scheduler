@@ -116,7 +116,7 @@ export const GUEST_NOT_IN_CLUB_MESSAGE = "Guest not found in this club.";
  * other insert into the guests table in non-test source, comments included.
  *
  * A guest's email and phone are written onto the fresh Person, and NOT onto the
- * `guests` row (#1125): the columns are dead until #1126 drops them. When the
+ * `guests` row (#1125): the columns were dropped by migration 0118 (#1126). When the
  * caller names an EXISTING Person (`personId`) its contact is left exactly as it
  * is: that Person's contact is its own, and a guest row never writes a member's.
  *

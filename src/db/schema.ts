@@ -947,8 +947,9 @@ export const membersEmailBackup = pgTable("members_email_backup", {
 //
 // TEMPORARY, and meant to be dropped, like the backups above. 0117 copies each
 // guest's email and phone onto the guest's Person where that Person is guest-only
-// and the field is blank, then #1126 drops the two columns. This holds every
-// guest's contact as the columns held it at that moment (a guest with neither
+// and the field is blank (migration 0118, #1126, later dropped the two columns,
+// after a catch-up that diffs against this table). This holds every guest's
+// contact as the columns held it at that moment (a guest with neither
 // field has no row), with the guest's club and Person, so a value the copy did
 // not write is recoverable by hand. A forensic copy, not a restore path (#1089).
 // One snapshot; nothing writes to it at runtime. Drop it (schema + a migration)
@@ -1596,13 +1597,9 @@ export const guests = pgTable(
 		// onto it. Guests hold role slots and get nudged like anyone else.
 		preferredName: text("preferred_name"),
 		// A guest's email and phone live on their Person (`people.email` /
-		// `people.phone`, #1125). The `guests.email` and `guests.phone` columns still
-		// EXIST in the database and are deliberately NOT declared here: they are dead,
-		// kept for one release so the old container, still serving during the deploy
-		// swap, never reads a dropped column, and #1126 drops them in SQL. Declaring
-		// them would let a whole-row `select().from(guests)` or an insert name them;
-		// leaving them out is what makes "nothing reads or writes them" true of the
-		// code. `guest-contact-columns.guard.test.ts` fails on any reference.
+		// `people.phone`, #1125). The `guests.email` and `guests.phone` columns were
+		// dropped by migration 0118 (#1126), after 0117 copied them onto the Person.
+		// `guest-contact-columns.guard.test.ts` fails on any reference to them.
 		// Pipeline lifecycle stage (#208 / ADR-0018). Defaults to `prospect`.
 		stage: guestStageEnum("stage").notNull().default("prospect"),
 		// Set once, on convert-to-member: the Membership this guest became. The

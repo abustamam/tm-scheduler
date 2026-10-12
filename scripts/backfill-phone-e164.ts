@@ -21,8 +21,8 @@
  *   convert-to-member dedups AGAINST are all E.164.
  * - There is no `members.phone` pass (dropped in #906) and no `guests.phone` pass
  *   (#1125): a member's and a guest's phone are both their Person's, which is
- *   the pass above. The `guests.phone` column is dead and not in `schema.ts`; #1126
- *   drops it. A guest row's old per-club copy was normalized with its club's own
+ *   the pass above. The `guests.phone` column is not in `schema.ts`; migration 0118
+ *   (#1126) dropped it. A guest row's old per-club copy was normalized with its club's own
  *   country code, which this script no longer does; the copy 0117 made onto the
  *   Person is as stored, and the Person pass applies the app default to it.
  *

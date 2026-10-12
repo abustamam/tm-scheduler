@@ -176,8 +176,9 @@ back the guest's old Person when nothing else references it. A collapse of two m
 
 The Person owns their contact; clubs are custodians until the person speaks for themselves.
 A guest's email and phone live on, and are edited through, their Person. `guests.email` and
-`guests.phone` still exist in the database, dead, for one release (the old container never reads
-a dropped column) and #1126 drops them in SQL. They are deliberately NOT declared in `schema.ts`
+`guests.phone` were kept in the database, dead, for one release (the old container never reads
+a dropped column) and migration 0118 (#1126) dropped them in SQL, after a catch-up copy of what
+the old container wrote past 0117's snapshot. They are not declared in `schema.ts`
 (so no code can name them, and a whole-row read cannot carry them), and
 `guest-contact-columns.guard.test.ts` scans `src/` and `scripts/` for raw references. Migration
 0117 re-backfills any guest with no Person, snapshots every guest contact (with its club and

@@ -339,9 +339,9 @@ paths that match `people` by address globally ignore a guest-only Person
 map, `findBestPersonByEmail`). `mergePeople` never takes the merged Person's email or phone from a guest-only side
 when the merged Person will hold a membership or carries member history, whichever
 side the superadmin kept (the other side's value, or blank). `guests.email` and
-`guests.phone` still exist in the database, dead, and are deliberately NOT declared
-in `schema.ts` until #1126 drops them in SQL (`guest-contact-columns.guard.test.ts`
-scans `src/` and `scripts/` for raw references).
+`guests.phone` were dropped by migration 0118 (#1126) and are not declared in
+`schema.ts` (`guest-contact-columns.guard.test.ts` scans `src/` and `scripts/` for raw
+references).
 
 Non-null on a LINKED Person means verified; on an unlinked one it is what the one
 club that held them typed. That is why a club may write it only while it is the
@@ -417,10 +417,12 @@ club-side writer must carry `isNull(people.userId)` AND `soleHoldingClub(`; conv
 adopt of a pristine guest Person carries `pristineGuestPerson(` instead; the guest-side
 writers carry `guestContactWritable(` and `guestContactFillable(`, and each waiver is
 held to its own function's body),
-`guest-contact-columns.guard.test.ts` (no reference to the dead guest columns),
+`guest-contact-columns.guard.test.ts` (no reference to the dropped guest columns),
 `guest-contact-on-person.integration.test.ts` and `guest-contact-migration.integration.test.ts`
 (the predicates and their refusal, the writers, the identity paths, convert's
 own-contact rule, link and unlink, and migration 0117 through the real runner),
+`guest-contact-drop-migration.integration.test.ts` (migration 0118's catch-up diffed against
+`guests_contact_backup`, and the dropped columns, through the real runner),
 `roster-obstacle.guard.test.ts` (the complement),
 `account-link-logic.integration.test.ts` (each arm killed independently),
 `member-email-ownership.integration.test.ts`,

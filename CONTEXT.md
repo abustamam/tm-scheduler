@@ -95,7 +95,7 @@ the nouns in `src/db/schema.ts`.
   and `people.name` is the fallback; **email and phone are the Person's** (#1125): written
   through `createGuestRecord`, an officer's edit (`guestContactWritable`) or the guest book's
   blank fill (`guestContactFillable`), and read by joining `guests.person_id`. The `guests.email`
-  and `guests.phone` columns are dead, no longer declared in `schema.ts`, until #1126 drops them. A guest is **not** a Membership: no login, no Pathways, no roster/officer presence,
+  and `guests.phone` columns were dropped by migration 0118 (#1126). A guest is **not** a Membership: no login, no Pathways, no roster/officer presence,
   and NOT a `members` status. Created ONLY through `createGuestRecord` (Person and row in one
   transaction; `guest-insert.guard.test.ts`). `person_id` is NOT NULL (#1125). A Person held by guest rows only is **guest-only**
   (`unboundGuestOnlyPerson()`), and the superadmin merge tool labels it "Guest". A slot references at most one
