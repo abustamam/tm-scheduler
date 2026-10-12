@@ -1,0 +1,1195 @@
+/**
+ * Easy-Speak import: store a bundle, preview it, apply it, and keep the
+ * reconciliation report (#1051, part of #1054).
+ *
+ * The planning rules are pure and live in `#/lib/easy-speak-import-plan`; this
+ * module reads what the club holds, hands it to the planner, and writes what the
+ * plan says. It has NO session of its own: `history-import.ts` runs the
+ * superadmin gate before it calls anything here, and the MCP tool authorises a
+ * club admin before it calls {@link loadImportReport}.
+ *
+ * ## Apply rules
+ *
+ * - **Insert what is missing, never overwrite.** A row an `import_refs` entry
+ *   already names is left exactly as it is, so a re-run changes nothing a human
+ *   edited since, and a guest converted to a member after the first run is not
+ *   pointed back at the guest row. The one "update" is filling a blank: an
+ *   existing meeting's empty theme, Word of the Day, venue or join link takes the
+ *   bundle's value. A meeting already on the calendar at the same instant is
+ *   ADOPTED (given a ref) rather than duplicated, and a role slot someone already
+ *   holds there stays theirs.
+ * - **One transaction per meeting, in date order.** A meeting that throws is
+ *   rolled back whole, skipped and reported; its neighbours still land. People
+ *   and role definitions are written first, in their own transaction, because
+ *   every meeting needs them and each is idempotent by ref or by name.
+ * - **A guest's speech belongs to that guest.** A speech is owned by the Person
+ *   (member) or by the guest who holds the slot it sits on, never by one and
+ *   attached to the other's slot. Converting or linking a guest later leaves the
+ *   speech on the guest row, exactly as it leaves the guest's attendance and
+ *   awards: guest history stays guest history (see the PR for #1051).
+ * - **The introducer is validated where it is written.** `guests.introduced_by_member_id`
+ *   has no database check that the member belongs to the guest's club, so
+ *   {@link validatedIntroducerId} asks, and throws, before any guest row names one.
+ *
+ * ## Where the report lives
+ *
+ * `club_imports` has no report column and this issue carries no migration, so the
+ * apply stores `{ resolutions, report }` under the reserved top-level key
+ * `importState` of the row's `bundle` jsonb. The bundle schema strips unknown
+ * keys, so a stored bundle still parses as the bundle it was, and the hash is of
+ * the uploaded text, never of the row. A dedicated column would be cleaner.
+ *
+ * `club_imports.bundle` keeps every guest's name until the club itself is deleted
+ * (the row cascades from the club). That is the stated retention; nothing here
+ * prunes it.
+ */
+import { createHash } from "node:crypto";
+import {
+	and,
+	asc,
+	eq,
+	inArray,
+	isNotNull,
+	like,
+	or,
+	sql,
+} from "drizzle-orm";
+import { db } from "#/db";
+import {
+	clubImports,
+	clubs,
+	guests,
+	importRefs,
+	meetingAttendance,
+	meetingAttendancePlan,
+	meetingAwards,
+	meetings,
+	members,
+	roleDefinitions,
+	roleSlots,
+	speeches,
+	tableTopicsSpeakers,
+} from "#/db/schema";
+import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
+import {
+	type EasySpeakBundleV1,
+	easySpeakBundleV1Schema,
+} from "#/lib/easy-speak-bundle";
+import {
+	buildImportPlan,
+	buildReconciliation,
+	type FoundSourceIds,
+	type ImportPlan,
+	type ImportReport,
+	type PersonResolution,
+	type PlanContext,
+	type PlanCounts,
+	type PlanMeeting,
+	type PlanPerson,
+	type PlanRosterMember,
+	resolutionsSchema,
+} from "#/lib/easy-speak-import-plan";
+import { type ImportRefKind, importRefKindSchema } from "#/lib/import-refs";
+import { normalizePresentationUrl } from "#/lib/presentation-url";
+import { ROLE_TEMPLATE } from "#/lib/role-template";
+import { logActivity } from "./activity";
+import { lockClubForWrite } from "./club-write-lock";
+import { createGuestRecord } from "./guests-logic";
+
+type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+const SOURCE = "easy_speak" as const;
+
+/** The upload cap (#1051): 50 MB of JSON text. */
+export const MAX_BUNDLE_BYTES = 50 * 1024 * 1024;
+
+export const IMPORT_NOT_FOUND_MESSAGE = "That import was not found for this club.";
+export const UNRESOLVED_PEOPLE_MESSAGE = (n: number) =>
+	`${n} ${n === 1 ? "person still needs" : "people still need"} a decision before this can be applied.`;
+export const INTRODUCER_NOT_IN_CLUB_MESSAGE =
+	"The member who introduced this guest is not in this club.";
+
+const megabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+
+// ---------------------------------------------------------------------------
+// Upload
+// ---------------------------------------------------------------------------
+
+/** What an upload refusal says, for a toast. */
+export class BundleRefusal extends Error {}
+
+export interface StoredImport {
+	importId: string;
+	/** True when the same bundle (by hash) was already stored for this club. */
+	reused: boolean;
+	appliedAt: Date | null;
+}
+
+/**
+ * Validate an uploaded bundle with `easy-speak-bundle.ts` and store it in
+ * `club_imports`. The same hash for the same club is the same row.
+ *
+ * The raw TEXT is what is hashed, and the parsed JSON (not zod's output, which
+ * drops keys the schema does not know) is what is stored, so the row keeps the
+ * bundle exactly as it was exported.
+ */
+export async function storeEasySpeakBundle(input: {
+	clubId: string;
+	uploadedByUserId: string;
+	text: string;
+}): Promise<StoredImport> {
+	const bytes = Buffer.byteLength(input.text, "utf8");
+	if (bytes > MAX_BUNDLE_BYTES) {
+		throw new BundleRefusal(
+			`That file is ${megabytes(bytes)}; the limit is ${megabytes(MAX_BUNDLE_BYTES)}.`,
+		);
+	}
+	// A `\u0000` escape parses fine and then aborts the jsonb insert: refuse it
+	// here with a sentence instead of a database error.
+	if (/\\u0000/iu.test(input.text)) {
+		throw new BundleRefusal("That bundle contains NUL characters.");
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(input.text);
+	} catch {
+		throw new BundleRefusal("That file is not valid JSON.");
+	}
+	const check = easySpeakBundleV1Schema.safeParse(parsed);
+	if (!check.success) {
+		const issue = check.error.issues[0];
+		const where = issue?.path.length ? ` (at ${issue.path.join(".")})` : "";
+		throw new BundleRefusal(
+			`That is not an Easy-Speak bundle: ${issue?.message ?? "invalid"}${where}.`,
+		);
+	}
+	const bundleSha256 = createHash("sha256").update(input.text).digest("hex");
+
+	const [club] = await db
+		.select({ archivedAt: clubs.archivedAt })
+		.from(clubs)
+		.where(eq(clubs.id, input.clubId))
+		.limit(1);
+	if (!club) throw new Error("Club not found.");
+
+	const find = () =>
+		db
+			.select({ id: clubImports.id, appliedAt: clubImports.appliedAt })
+			.from(clubImports)
+			.where(
+				and(
+					eq(clubImports.clubId, input.clubId),
+					eq(clubImports.bundleSha256, bundleSha256),
+				),
+			)
+			.limit(1);
+	const [existing] = await find();
+	if (existing) {
+		return {
+			importId: existing.id,
+			reused: true,
+			appliedAt: existing.appliedAt,
+		};
+	}
+	const [inserted] = await db
+		.insert(clubImports)
+		.values({
+			clubId: input.clubId,
+			source: SOURCE,
+			bundle: parsed,
+			bundleSha256,
+			uploadedByUserId: input.uploadedByUserId,
+		})
+		.onConflictDoNothing()
+		.returning({ id: clubImports.id });
+	if (inserted) {
+		return { importId: inserted.id, reused: false, appliedAt: null };
+	}
+	// Lost a race with the same upload: it is the row now.
+	const [raced] = await find();
+	if (!raced) throw new Error("Could not store the bundle.");
+	return { importId: raced.id, reused: true, appliedAt: raced.appliedAt };
+}
+
+// ---------------------------------------------------------------------------
+// Reading a stored import
+// ---------------------------------------------------------------------------
+
+interface ImportState {
+	resolutions: Record<string, PersonResolution>;
+	report: ImportReport | null;
+}
+
+async function loadStoredBundle(
+	clubId: string,
+	importId: string,
+): Promise<{
+	bundle: EasySpeakBundleV1;
+	bundleSha256: string;
+	appliedAt: Date | null;
+	state: ImportState;
+}> {
+	const [row] = await db
+		.select({
+			bundle: clubImports.bundle,
+			bundleSha256: clubImports.bundleSha256,
+			appliedAt: clubImports.appliedAt,
+		})
+		.from(clubImports)
+		.where(and(eq(clubImports.id, importId), eq(clubImports.clubId, clubId)))
+		.limit(1);
+	if (!row) throw new Error(IMPORT_NOT_FOUND_MESSAGE);
+	const bundle = easySpeakBundleV1Schema.parse(row.bundle);
+	const rawState = (row.bundle as { importState?: unknown }).importState;
+	return {
+		bundle,
+		bundleSha256: row.bundleSha256,
+		appliedAt: row.appliedAt,
+		state: parseImportState(rawState),
+	};
+}
+
+function parseImportState(raw: unknown): ImportState {
+	const state = (raw ?? {}) as { resolutions?: unknown; report?: unknown };
+	const resolutions = resolutionsSchema.safeParse(state.resolutions ?? {});
+	return {
+		resolutions: resolutions.success ? resolutions.data : {},
+		report: (state.report as ImportReport | undefined) ?? null,
+	};
+}
+
+export interface ImportListRow {
+	importId: string;
+	createdAt: Date;
+	appliedAt: Date | null;
+	clubName: string | null;
+	meetings: number;
+	reconciled: boolean | null;
+}
+
+/** A club's stored imports, newest first, without parsing any bundle. */
+export async function listClubImports(clubId: string): Promise<ImportListRow[]> {
+	const rows = await db
+		.select({
+			importId: clubImports.id,
+			createdAt: clubImports.createdAt,
+			appliedAt: clubImports.appliedAt,
+			clubName: sql<string | null>`${clubImports.bundle} -> 'club' ->> 'name'`,
+			meetings: sql<number>`coalesce(jsonb_array_length(${clubImports.bundle} -> 'meetings'), 0)`,
+			reconciled: sql<
+				string | null
+			>`${clubImports.bundle} -> 'importState' -> 'report' ->> 'reconciled'`,
+		})
+		.from(clubImports)
+		.where(eq(clubImports.clubId, clubId))
+		.orderBy(sql`${clubImports.createdAt} desc`);
+	return rows.map((r) => ({
+		...r,
+		meetings: Number(r.meetings),
+		reconciled: r.reconciled === null ? null : r.reconciled === "true",
+	}));
+}
+
+/**
+ * The stored reconciliation report of an import in THIS club, or null when it
+ * has not been applied. The club is part of the lookup, so an import id from
+ * another club is simply not found.
+ */
+export async function loadImportReport(input: {
+	clubId: string;
+	importId?: string;
+}): Promise<{
+	importId: string;
+	appliedAt: Date;
+	report: ImportReport;
+} | null> {
+	const [row] = await db
+		.select({
+			importId: clubImports.id,
+			appliedAt: clubImports.appliedAt,
+			report: sql<unknown>`${clubImports.bundle} -> 'importState' -> 'report'`,
+		})
+		.from(clubImports)
+		.where(
+			and(
+				eq(clubImports.clubId, input.clubId),
+				isNotNull(clubImports.appliedAt),
+				input.importId ? eq(clubImports.id, input.importId) : undefined,
+			),
+		)
+		.orderBy(sql`${clubImports.appliedAt} desc`)
+		.limit(1);
+	if (!row?.appliedAt || !row.report) return null;
+	return {
+		importId: row.importId,
+		appliedAt: row.appliedAt,
+		report: row.report as ImportReport,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Plan context
+// ---------------------------------------------------------------------------
+
+interface LoadedContext {
+	ctx: PlanContext;
+	/** membership -> Person, for the speeches a member owns. */
+	personByMember: Map<string, string>;
+	club: {
+		name: string;
+		clubNumber: string | null;
+		archivedAt: Date | null;
+		defaultMeetingMinutes: number;
+	};
+}
+
+async function loadPlanContext(
+	clubId: string,
+	now: Date,
+	resolutions: Record<string, PersonResolution>,
+): Promise<LoadedContext> {
+	const [club] = await db
+		.select({
+			name: clubs.name,
+			clubNumber: clubs.clubNumber,
+			timezone: clubs.timezone,
+			archivedAt: clubs.archivedAt,
+			defaultMeetingMinutes: clubs.defaultMeetingMinutes,
+		})
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	if (!club) throw new Error("Club not found.");
+
+	const [roster, defs, guestRows, meetingRows, refs] = await Promise.all([
+		db
+			.select({
+				memberId: members.id,
+				personId: members.personId,
+				name: members.name,
+			})
+			.from(members)
+			.where(eq(members.clubId, clubId))
+			.orderBy(asc(members.name)),
+		db
+			.select({
+				id: roleDefinitions.id,
+				key: roleDefinitions.key,
+				name: roleDefinitions.name,
+			})
+			.from(roleDefinitions)
+			.where(eq(roleDefinitions.clubId, clubId)),
+		db.select({ id: guests.id }).from(guests).where(eq(guests.clubId, clubId)),
+		db
+			.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
+			.from(meetings)
+			.where(eq(meetings.clubId, clubId)),
+		db
+			.select({
+				kind: importRefs.kind,
+				sourceId: importRefs.sourceId,
+				targetId: importRefs.targetId,
+			})
+			.from(importRefs)
+			.where(
+				and(
+					eq(importRefs.clubId, clubId),
+					eq(importRefs.source, SOURCE),
+					inArray(importRefs.kind, ["person", "guest", "meeting"]),
+				),
+			),
+	]);
+
+	return {
+		ctx: {
+			now,
+			clubTimezone: club.timezone,
+			roster: roster.map((m) => ({ memberId: m.memberId, name: m.name })),
+			roleDefinitions: defs,
+			guestIds: new Set(guestRows.map((g) => g.id)),
+			existingMeetings: meetingRows.map((m) => ({
+				id: m.id,
+				scheduledAt: m.scheduledAt,
+			})),
+			refs,
+			resolutions,
+		},
+		personByMember: new Map(roster.map((m) => [m.memberId, m.personId])),
+		club,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Preview
+// ---------------------------------------------------------------------------
+
+export interface ImportPreviewPerson {
+	key: string;
+	name: string;
+	esUserId: string | null;
+	status: PlanPerson["outcome"]["status"];
+	/** For `member`: how it was matched. For `guest`: why it is a guest. */
+	via: string | null;
+	memberId: string | null;
+	kind: string | null;
+	reason: string | null;
+	candidates: PlanRosterMember[];
+	rejectedChoice: string | null;
+	appearances: PlanPerson["appearances"];
+}
+
+export interface ImportPreview {
+	importId: string;
+	appliedAt: string | null;
+	bundleClub: { name: string; number: string | null };
+	club: { name: string; number: string | null };
+	warnings: string[];
+	counts: PlanCounts;
+	people: ImportPreviewPerson[];
+	roleDefinitions: Array<{
+		planKey: string;
+		name: string;
+		isNew: boolean;
+		standardKey: string | null;
+		labels: string[];
+	}>;
+	futureMeetings: ImportPlan["futureMeetings"];
+	roster: PlanRosterMember[];
+	unresolvedCount: number;
+	canApply: boolean;
+	savedResolutions: Record<string, PersonResolution>;
+	report: ImportReport | null;
+}
+
+function previewPerson(p: PlanPerson): ImportPreviewPerson {
+	const o = p.outcome;
+	return {
+		key: p.key,
+		name: p.name,
+		esUserId: p.esUserId,
+		status: o.status,
+		via: o.status === "member" || o.status === "guest" ? o.via : null,
+		memberId: o.status === "member" ? o.memberId : null,
+		kind: o.status === "guest" ? o.kind : null,
+		reason: o.status === "skipped" ? o.reason : null,
+		candidates: o.status === "ambiguous" ? o.candidates : [],
+		rejectedChoice: p.rejectedChoice,
+		appearances: p.appearances,
+	};
+}
+
+/** The preview a superadmin confirms: the plan, summarised, plus any stored report. */
+export async function previewEasySpeakImport(input: {
+	clubId: string;
+	importId: string;
+	resolutions?: Record<string, PersonResolution>;
+	now?: Date;
+}): Promise<ImportPreview> {
+	const stored = await loadStoredBundle(input.clubId, input.importId);
+	const resolutions = { ...stored.state.resolutions, ...input.resolutions };
+	const loaded = await loadPlanContext(
+		input.clubId,
+		input.now ?? new Date(),
+		resolutions,
+	);
+	const plan = buildImportPlan(stored.bundle, loaded.ctx);
+	const warnings: string[] = [];
+	const { club } = stored.bundle;
+	if (club.number && loaded.club.clubNumber && club.number !== loaded.club.clubNumber) {
+		warnings.push(
+			`The bundle is for club ${club.number} ("${club.name}") but this club's number is ${loaded.club.clubNumber}.`,
+		);
+	}
+	if (isClubArchived(loaded.club)) warnings.push(CLUB_ARCHIVED_MESSAGE);
+	return {
+		importId: input.importId,
+		appliedAt: stored.appliedAt?.toISOString() ?? null,
+		bundleClub: { name: club.name, number: club.number },
+		club: { name: loaded.club.name, number: loaded.club.clubNumber },
+		warnings,
+		counts: plan.counts,
+		people: plan.people.map(previewPerson),
+		roleDefinitions: plan.roleDefinitions.map((d) => ({
+			planKey: d.planKey,
+			name: d.name,
+			isNew: !d.existingId,
+			standardKey: d.standardKey,
+			labels: d.labels,
+		})),
+		futureMeetings: plan.futureMeetings,
+		roster: loaded.ctx.roster,
+		unresolvedCount: plan.unresolved.length,
+		canApply: plan.canApply,
+		savedResolutions: stored.state.resolutions,
+		report: stored.state.report,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Apply
+// ---------------------------------------------------------------------------
+
+/** `club_id` and `source` are fixed; the kind is checked against `IMPORT_REF_KINDS`. */
+async function putRef(
+	tx: Tx,
+	clubId: string,
+	kind: ImportRefKind,
+	sourceId: string,
+	targetId: string,
+): Promise<void> {
+	await tx
+		.insert(importRefs)
+		.values({
+			clubId,
+			source: SOURCE,
+			kind: importRefKindSchema.parse(kind),
+			sourceId,
+			targetId,
+		})
+		.onConflictDoNothing();
+}
+
+/**
+ * The member id a guest may name as its introducer, or a refusal. The column has
+ * no database check that the member is in the guest's club, so this is the check:
+ * it asks, in the transaction that is about to write.
+ */
+export async function validatedIntroducerId(
+	tx: Tx,
+	clubId: string,
+	memberId: string,
+): Promise<string> {
+	const [row] = await tx
+		.select({ id: members.id })
+		.from(members)
+		.where(and(eq(members.id, memberId), eq(members.clubId, clubId)))
+		.limit(1);
+	if (!row) throw new Error(INTRODUCER_NOT_IN_CLUB_MESSAGE);
+	return row.id;
+}
+
+type Owner = { memberId: string } | { guestId: string } | null;
+
+interface Resolved {
+	members: Map<string, string>;
+	guests: Map<string, string>;
+	roleDefIds: Map<string, string>;
+	newGuests: number;
+	newRoleDefinitions: string[];
+}
+
+/** People, then role definitions: everything every meeting needs, written once. */
+async function writePeopleAndRoles(
+	clubId: string,
+	plan: ImportPlan,
+): Promise<Resolved> {
+	return db.transaction(async (tx) => {
+		await lockClubForWrite(tx, clubId);
+		const out: Resolved = {
+			members: new Map(),
+			guests: new Map(),
+			roleDefIds: new Map(),
+			newGuests: 0,
+			newRoleDefinitions: [],
+		};
+
+		const [{ next } = { next: 0 }] = await tx
+			.select({
+				next: sql<number>`coalesce(max(${roleDefinitions.sortOrder}), 0) + 10`,
+			})
+			.from(roleDefinitions)
+			.where(eq(roleDefinitions.clubId, clubId));
+		let sortOrder = Number(next);
+		for (const def of plan.roleDefinitions) {
+			if (def.existingId) {
+				out.roleDefIds.set(def.planKey, def.existingId);
+				continue;
+			}
+			const seed = def.standardKey
+				? ROLE_TEMPLATE.find((r) => r.key === def.standardKey)
+				: undefined;
+			const [created] = await tx
+				.insert(roleDefinitions)
+				.values(
+					seed
+						? {
+								clubId,
+								name: seed.name,
+								category: seed.category,
+								defaultCount: seed.defaultCount,
+								sortOrder: seed.sortOrder,
+								isSpeakerRole: seed.isSpeakerRole,
+								description: seed.description,
+								beforeNotes: seed.beforeNotes,
+								duringNotes: seed.duringNotes,
+								key: seed.key,
+							}
+						: {
+								clubId,
+								name: def.name,
+								category: "functionary",
+								defaultCount: 1,
+								sortOrder: (sortOrder += 10),
+								isSpeakerRole: false,
+								// A role the club ran in Easy-Speak, kept for history: it must
+								// not start generating an open slot on every new meeting.
+								standing: false,
+							},
+				)
+				.returning({ id: roleDefinitions.id });
+			if (!created) throw new Error("Could not create a role definition.");
+			out.roleDefIds.set(def.planKey, created.id);
+			out.newRoleDefinitions.push(def.name);
+		}
+
+		const introducerOf = new Map<string, string>();
+		for (const intro of plan.introductions) {
+			if (introducerOf.has(intro.visitorKey)) continue;
+			introducerOf.set(intro.visitorKey, intro.introducerKey);
+		}
+		const byKey = new Map(plan.people.map((p) => [p.key, p]));
+
+		for (const person of plan.people) {
+			const o = person.outcome;
+			if (o.status === "member") {
+				out.members.set(person.key, o.memberId);
+				await putRef(tx, clubId, "person", person.key, o.memberId);
+			} else if (o.status === "guest") {
+				if (o.guestId) {
+					out.guests.set(person.key, o.guestId);
+					continue;
+				}
+				let introducedByMemberId: string | null = null;
+				const introducer = byKey.get(introducerOf.get(person.key) ?? "");
+				if (introducer?.outcome.status === "member") {
+					introducedByMemberId = await validatedIntroducerId(
+						tx,
+						clubId,
+						introducer.outcome.memberId,
+					);
+				}
+				const created = await createGuestRecord(tx, {
+					clubId,
+					name: person.name,
+					kind: o.kind,
+					homeClub: null,
+					introducedByMemberId,
+					// History is not a pipeline: a name from years of Easy-Speak lists must
+					// not land in VP Membership's prospects.
+					stage: "lost",
+				});
+				out.guests.set(person.key, created.id);
+				out.newGuests++;
+				await putRef(tx, clubId, "guest", person.key, created.id);
+			}
+		}
+		return out;
+	});
+}
+
+interface MeetingEnv {
+	clubId: string;
+	lengthMinutes: number;
+	resolved: Resolved;
+	personByMember: Map<string, string>;
+}
+
+const ownerOf = (env: MeetingEnv, key: string | null): Owner => {
+	if (!key) return null;
+	const memberId = env.resolved.members.get(key);
+	if (memberId) return { memberId };
+	const guestId = env.resolved.guests.get(key);
+	if (guestId) return { guestId };
+	return null;
+};
+
+/** One meeting, in its own transaction: all of it, or none of it. */
+async function applyMeeting(env: MeetingEnv, pm: PlanMeeting): Promise<void> {
+	const { clubId } = env;
+	await db.transaction(async (tx) => {
+		await lockClubForWrite(tx, clubId);
+
+		// -- The meeting row --------------------------------------------------
+		const joinUrl = normalizePresentationUrl(pm.joinUrl);
+		let meetingId: string;
+		if (pm.existingMeetingId) {
+			const [m] = await tx
+				.select()
+				.from(meetings)
+				.where(
+					and(
+						eq(meetings.id, pm.existingMeetingId),
+						eq(meetings.clubId, clubId),
+					),
+				)
+				.limit(1)
+				.for("update");
+			if (!m) throw new Error("The meeting this import points at is gone.");
+			meetingId = m.id;
+			await tx
+				.update(meetings)
+				.set({
+					status: "completed",
+					location: m.location ?? pm.venue,
+					joinUrl: m.joinUrl ?? joinUrl,
+					theme: m.theme ?? pm.theme,
+					wordOfTheDay: m.wordOfTheDay ?? pm.wordOfTheDay,
+				})
+				.where(eq(meetings.id, m.id));
+		} else {
+			const [created] = await tx
+				.insert(meetings)
+				.values({
+					clubId,
+					scheduledAt: pm.scheduledAt,
+					lengthMinutes: env.lengthMinutes,
+					status: "completed",
+					location: pm.venue,
+					joinUrl,
+					theme: pm.theme,
+					wordOfTheDay: pm.wordOfTheDay,
+				})
+				.returning({ id: meetings.id });
+			if (!created) throw new Error("Could not create the meeting.");
+			meetingId = created.id;
+		}
+		await putRef(tx, clubId, "meeting", pm.esMeetingId, meetingId);
+
+		// -- Refs this meeting already has ------------------------------------
+		const sourceIds = [
+			...pm.slots.map((s) => s.sourceId),
+			...pm.slots.flatMap((s) => (s.speech ? [s.speech.sourceId] : [])),
+			...pm.attendance.map((a) => a.sourceId),
+			...pm.awards.map((a) => a.sourceId),
+			...pm.tableTopics.map((t) => t.sourceId),
+		];
+		const refRows =
+			sourceIds.length === 0
+				? []
+				: await tx
+						.select({
+							kind: importRefs.kind,
+							sourceId: importRefs.sourceId,
+							targetId: importRefs.targetId,
+						})
+						.from(importRefs)
+						.where(
+							and(
+								eq(importRefs.clubId, clubId),
+								eq(importRefs.source, SOURCE),
+								inArray(importRefs.sourceId, sourceIds),
+							),
+						);
+		const refOf = (kind: ImportRefKind, sourceId: string) =>
+			refRows.find((r) => r.kind === kind && r.sourceId === sourceId)
+				?.targetId;
+
+		// -- Role slots and their speeches -------------------------------------
+		const existingSlots = await tx
+			.select()
+			.from(roleSlots)
+			.where(eq(roleSlots.meetingId, meetingId));
+		const used = new Set<string>();
+		const slotIdByEsSlot = new Map<number, string>();
+		for (const ps of pm.slots) {
+			const roleDefinitionId = env.resolved.roleDefIds.get(ps.roleKey);
+			if (!roleDefinitionId) throw new Error(`No role definition for ${ps.label}.`);
+			const owner = ownerOf(env, ps.holderKey);
+			const refTarget = refOf("role_slot", ps.sourceId);
+			let slot =
+				existingSlots.find((s) => s.id === refTarget && !used.has(s.id)) ??
+				existingSlots.find(
+					(s) =>
+						!used.has(s.id) &&
+						s.roleDefinitionId === roleDefinitionId &&
+						s.slotIndex === ps.slotIndex,
+				);
+			const assignment = owner
+				? "memberId" in owner
+					? { assignedMemberId: owner.memberId, assignedGuestId: null }
+					: { assignedMemberId: null, assignedGuestId: owner.guestId }
+				: { assignedMemberId: null, assignedGuestId: null };
+			if (!slot) {
+				const [created] = await tx
+					.insert(roleSlots)
+					.values({
+						meetingId,
+						roleDefinitionId,
+						slotIndex: ps.slotIndex,
+						status: owner ? "confirmed" : "open",
+						...assignment,
+					})
+					.returning();
+				if (!created) throw new Error("Could not create a role slot.");
+				slot = created;
+			} else if (
+				owner &&
+				slot.assignedMemberId === null &&
+				slot.assignedGuestId === null
+			) {
+				const [updated] = await tx
+					.update(roleSlots)
+					.set({ status: "confirmed", ...assignment })
+					.where(eq(roleSlots.id, slot.id))
+					.returning();
+				slot = updated ?? slot;
+			}
+			used.add(slot.id);
+			slotIdByEsSlot.set(ps.esSlot, slot.id);
+			await putRef(tx, clubId, "role_slot", ps.sourceId, slot.id);
+
+			// A speech sits on the slot of the one who owns it: a member's on a slot
+			// that member holds, a guest's on a slot that guest holds, and never the
+			// other way about. A slot someone else already holds gets no speech.
+			const holds =
+				owner &&
+				("memberId" in owner
+					? slot.assignedMemberId === owner.memberId
+					: slot.assignedGuestId === owner.guestId);
+			if (ps.speech && owner && holds && !slot.speechId) {
+				let speechId = refOf("speech", ps.speech.sourceId);
+				if (speechId) {
+					const [kept] = await tx
+						.select({ id: speeches.id })
+						.from(speeches)
+						.where(eq(speeches.id, speechId))
+						.limit(1);
+					if (!kept) speechId = undefined;
+				}
+				if (!speechId) {
+					let ownerColumns: { personId: string } | { guestId: string };
+					if ("memberId" in owner) {
+						const personId = env.personByMember.get(owner.memberId);
+						if (!personId) throw new Error("A member has no Person.");
+						ownerColumns = { personId };
+					} else {
+						ownerColumns = { guestId: owner.guestId };
+					}
+					const [created] = await tx
+						.insert(speeches)
+						.values({
+							...ownerColumns,
+							title: ps.speech.title,
+							introduction: ps.speech.introduction,
+							pathwayPath: ps.speech.path,
+							projectName: ps.speech.project,
+							projectLevel: ps.speech.level,
+							minMinutes: ps.speech.minMinutes,
+							maxMinutes: ps.speech.maxMinutes,
+						})
+						.returning({ id: speeches.id });
+					if (!created) throw new Error("Could not create a speech.");
+					speechId = created.id;
+					await putRef(tx, clubId, "speech", ps.speech.sourceId, speechId);
+				}
+				await tx
+					.update(roleSlots)
+					.set({ speechId })
+					.where(and(eq(roleSlots.id, slot.id), sql`${roleSlots.speechId} is null`));
+			}
+		}
+		// Evaluator -> the speaker slot it evaluates, once every slot exists.
+		for (const ps of pm.slots) {
+			if (ps.evaluatesEsSlot === null) continue;
+			const evaluator = slotIdByEsSlot.get(ps.esSlot);
+			const speaker = slotIdByEsSlot.get(ps.evaluatesEsSlot);
+			if (!evaluator || !speaker) continue;
+			await tx
+				.update(roleSlots)
+				.set({ evaluatesSlotId: speaker })
+				.where(
+					and(
+						eq(roleSlots.id, evaluator),
+						sql`${roleSlots.evaluatesSlotId} is null`,
+					),
+				);
+		}
+
+		// -- Attendance, and the plan answers a record does not supersede ------
+		for (const a of pm.attendance) {
+			const owner = ownerOf(env, a.personKey);
+			if (!owner) continue;
+			const where =
+				"memberId" in owner
+					? and(
+							eq(meetingAttendance.meetingId, meetingId),
+							eq(meetingAttendance.memberId, owner.memberId),
+						)
+					: and(
+							eq(meetingAttendance.meetingId, meetingId),
+							eq(meetingAttendance.guestId, owner.guestId),
+						);
+			await tx
+				.insert(meetingAttendance)
+				.values({
+					meetingId,
+					status: "present",
+					mode: a.mode,
+					...("memberId" in owner
+						? { memberId: owner.memberId }
+						: { guestId: owner.guestId }),
+				})
+				.onConflictDoNothing();
+			const [row] = await tx
+				.select({ id: meetingAttendance.id })
+				.from(meetingAttendance)
+				.where(where)
+				.limit(1);
+			if (row) await putRef(tx, clubId, "attendance", a.sourceId, row.id);
+		}
+		for (const p of pm.plans) {
+			const owner = ownerOf(env, p.personKey);
+			// The plan table is keyed on a membership: a guest has no plan row.
+			if (!owner || !("memberId" in owner)) continue;
+			await tx
+				.insert(meetingAttendancePlan)
+				.values({ memberId: owner.memberId, meetingId, status: p.status })
+				.onConflictDoNothing();
+		}
+
+		// -- Awards, Table Topics -----------------------------------------------
+		for (const a of pm.awards) {
+			const owner = ownerOf(env, a.personKey);
+			if (!owner) continue;
+			await tx
+				.insert(meetingAwards)
+				.values({
+					meetingId,
+					category: a.category,
+					...("memberId" in owner
+						? { memberId: owner.memberId }
+						: { guestId: owner.guestId }),
+				})
+				.onConflictDoNothing();
+			const [row] = await tx
+				.select({ id: meetingAwards.id })
+				.from(meetingAwards)
+				.where(
+					and(
+						eq(meetingAwards.meetingId, meetingId),
+						eq(meetingAwards.category, a.category),
+					),
+				)
+				.limit(1);
+			if (row) await putRef(tx, clubId, "award", a.sourceId, row.id);
+		}
+		for (const t of pm.tableTopics) {
+			const owner = ownerOf(env, t.personKey);
+			if (!owner) continue;
+			const existing = refOf("table_topic", t.sourceId);
+			if (existing) {
+				const [kept] = await tx
+					.select({ id: tableTopicsSpeakers.id })
+					.from(tableTopicsSpeakers)
+					.where(eq(tableTopicsSpeakers.id, existing))
+					.limit(1);
+				if (kept) continue;
+			}
+			const [row] = await tx
+				.insert(tableTopicsSpeakers)
+				.values({
+					meetingId,
+					topic: t.topic,
+					sortOrder: t.sortOrder,
+					...("memberId" in owner
+						? { memberId: owner.memberId }
+						: { guestId: owner.guestId }),
+				})
+				.returning({ id: tableTopicsSpeakers.id });
+			if (row) await putRef(tx, clubId, "table_topic", t.sourceId, row.id);
+		}
+	});
+}
+
+/** What a failed meeting says in the report: never the SQL, which carries names. */
+function describeFailure(err: unknown): string {
+	const message = err instanceof Error ? err.message : String(err);
+	if (/^Failed query/u.test(message)) {
+		const cause = (err as { cause?: { message?: string; code?: string } }).cause;
+		return `Database error${cause?.code ? ` ${cause.code}` : ""}: ${(cause?.message ?? "the statement was refused").slice(0, 200)}`;
+	}
+	return message.slice(0, 300);
+}
+
+/** The source ids an apply left behind, read back from the database, by what qualifies. */
+async function loadFoundSourceIds(clubId: string): Promise<FoundSourceIds> {
+	const scope = (kind: ImportRefKind) =>
+		and(
+			eq(importRefs.clubId, clubId),
+			eq(importRefs.source, SOURCE),
+			eq(importRefs.kind, kind),
+		);
+	const ids = (rows: Array<{ sourceId: string }>) =>
+		new Set(rows.map((r) => r.sourceId));
+	const [meeting, roleAssignment, speech, speechIntro, award, tableTopic, attendance] =
+		await Promise.all([
+			db
+				.select({ sourceId: importRefs.sourceId })
+				.from(importRefs)
+				.innerJoin(meetings, eq(meetings.id, importRefs.targetId))
+				.where(and(scope("meeting"), eq(meetings.status, "completed"))),
+			db
+				.select({ sourceId: importRefs.sourceId })
+				.from(importRefs)
+				.innerJoin(roleSlots, eq(roleSlots.id, importRefs.targetId))
+				.where(
+					and(
+						scope("role_slot"),
+						or(
+							isNotNull(roleSlots.assignedMemberId),
+							isNotNull(roleSlots.assignedGuestId),
+						),
+					),
+				),
+			db
+				.select({ sourceId: importRefs.sourceId })
+				.from(importRefs)
+				.innerJoin(speeches, eq(speeches.id, importRefs.targetId))
+				.where(scope("speech")),
+			db
+				.select({ sourceId: importRefs.sourceId })
+				.from(importRefs)
+				.innerJoin(speeches, eq(speeches.id, importRefs.targetId))
+				.where(
+					and(
+						scope("speech"),
+						sql`btrim(coalesce(${speeches.introduction}, '')) <> ''`,
+					),
+				),
+			db
+				.select({ sourceId: importRefs.sourceId })
+				.from(importRefs)
+				.innerJoin(meetingAwards, eq(meetingAwards.id, importRefs.targetId))
+				.where(scope("award")),
+			db
+				.select({ sourceId: importRefs.sourceId })
+				.from(importRefs)
+				.innerJoin(
+					tableTopicsSpeakers,
+					eq(tableTopicsSpeakers.id, importRefs.targetId),
+				)
+				.where(scope("table_topic")),
+			db
+				.select({ sourceId: importRefs.sourceId })
+				.from(importRefs)
+				.innerJoin(meetingAttendance, eq(meetingAttendance.id, importRefs.targetId))
+				.where(and(scope("attendance"), eq(meetingAttendance.status, "present"))),
+		]);
+	return {
+		meeting: ids(meeting),
+		roleAssignment: ids(roleAssignment),
+		speech: ids(speech),
+		speechWithIntroduction: ids(speechIntro),
+		award: ids(award),
+		tableTopic: ids(tableTopic),
+		attendance: ids(attendance),
+	};
+}
+
+export interface ApplyResult {
+	report: ImportReport;
+}
+
+/**
+ * Apply a stored bundle to its club. The caller has proved the superadmin.
+ *
+ * Refused while any person is unresolved, and for an archived club. Re-running is
+ * safe: see the module header. Returns the stored report.
+ */
+export async function applyEasySpeakImport(input: {
+	clubId: string;
+	importId: string;
+	/** The superadmin the change is attributed to. */
+	superadminUserId: string;
+	resolutions?: Record<string, PersonResolution>;
+	now?: Date;
+}): Promise<ApplyResult> {
+	const now = input.now ?? new Date();
+	const stored = await loadStoredBundle(input.clubId, input.importId);
+	const resolutions = { ...stored.state.resolutions, ...input.resolutions };
+	const loaded = await loadPlanContext(input.clubId, now, resolutions);
+	if (isClubArchived(loaded.club)) throw new Error(CLUB_ARCHIVED_MESSAGE);
+	const plan = buildImportPlan(stored.bundle, loaded.ctx);
+	if (!plan.canApply) {
+		throw new Error(UNRESOLVED_PEOPLE_MESSAGE(plan.unresolved.length));
+	}
+
+	const resolved = await writePeopleAndRoles(input.clubId, plan);
+	const env: MeetingEnv = {
+		clubId: input.clubId,
+		lengthMinutes: loaded.club.defaultMeetingMinutes,
+		resolved,
+		personByMember: loaded.personByMember,
+	};
+	const failed: Array<{ esMeetingId: string; message: string }> = [];
+	let appliedMeetings = 0;
+	for (const pm of [...plan.meetings].sort(
+		(a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime(),
+	)) {
+		try {
+			await applyMeeting(env, pm);
+			appliedMeetings++;
+		} catch (err) {
+			failed.push({ esMeetingId: pm.esMeetingId, message: describeFailure(err) });
+		}
+	}
+
+	const found = await loadFoundSourceIds(input.clubId);
+	const report = buildReconciliation({
+		bundle: stored.bundle,
+		bundleSha256: stored.bundleSha256,
+		now,
+		clubTimezone: loaded.ctx.clubTimezone,
+		found,
+		failed,
+		appliedMeetings,
+		skippedPeople: plan.people.flatMap((p) =>
+			p.outcome.status === "skipped"
+				? [{ key: p.key, name: p.name, reason: p.outcome.reason }]
+				: [],
+		),
+		created: {
+			guests: resolved.newGuests,
+			roleDefinitions: resolved.newRoleDefinitions,
+		},
+	});
+
+	const importState = JSON.stringify({ resolutions, report });
+	await db.transaction(async (tx) => {
+		await tx
+			.update(clubImports)
+			.set({
+				appliedAt: now,
+				bundle: sql`${clubImports.bundle} || jsonb_build_object('importState', ${importState}::jsonb)`,
+			})
+			.where(
+				and(
+					eq(clubImports.id, input.importId),
+					eq(clubImports.clubId, input.clubId),
+				),
+			);
+		await logActivity(tx, {
+			clubId: input.clubId,
+			actorMemberId: null,
+			// The superadmin is memberless in the club: attributed through the
+			// impersonation column, as every other superadmin write is.
+			impersonatedBy: input.superadminUserId,
+			action: "history_imported",
+			targetType: "club",
+			targetId: input.clubId,
+			detail: {
+				importId: input.importId,
+				source: SOURCE,
+				reconciled: report.reconciled,
+				failedMeetings: report.meetings.failed.length,
+				counts: Object.fromEntries(
+					report.counts.map((c) => [c.key, { bundle: c.bundle, gavelup: c.gavelup }]),
+				),
+			},
+		});
+	});
+	return { report };
+}
+
+/** Deleting a stored import is not offered; the bundle is kept for the life of the club. */
+export const _unused = like;
