@@ -1,8 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getCookie } from "@tanstack/react-start/server";
 import { z } from "zod";
 import { parsePastCount } from "#/lib/season-grid-view";
+import { parseViewAs, VIEW_AS_COOKIE } from "#/lib/view-as";
 import { canManageClub, requireClubViewAccess, requireUser } from "./guards";
 import { loadPublicSeasonGrid, loadSeasonGrid } from "./season-grid-logic";
+import { seasonGridIncludesOutreach } from "./view-as-logic";
 
 const seasonGridInput = z.object({
 	clubId: z.string().uuid(),
@@ -43,10 +46,14 @@ export const getSeasonGrid = createServerFn({ method: "GET" })
 		const user = await requireUser();
 		await requireClubViewAccess(user.id, data.clubId);
 		const isAdmin = await canManageClub(user.id, data.clubId);
+		// "Preview as member" (#1113): read for ANY caller and ANY club, with no
+		// authority check. It can only remove the outreach set, which a plain member
+		// never gets anyway.
+		const asMember = parseViewAs(getCookie(VIEW_AS_COOKIE)) === "member";
 		return loadSeasonGrid({
 			...data,
 			includeContact: true,
-			includeOutreach: isAdmin,
+			includeOutreach: seasonGridIncludesOutreach(isAdmin, asMember),
 		});
 	});
 

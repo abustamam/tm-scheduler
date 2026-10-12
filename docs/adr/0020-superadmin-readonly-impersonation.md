@@ -145,3 +145,23 @@ cases are pinned in `impersonation.integration.test.ts`.
 `requireSuperadmin` (the console) is unaffected and remains the way to inspect an archived club. The
 canonical list of archive enforcement points is `isClubArchived` (`src/lib/club-archive.ts`); the
 takedown decision itself is ADR-0016.
+
+## Amendment — "Preview as member" composes with a session and never reaches a write guard (#1113, 2026-10-12)
+
+Status: Accepted. The app-wide "Preview as member" (a `view_as=member` cookie, `src/lib/view-as.ts`) is
+a **role** preview, not impersonation of a person: the viewer keeps their own identity and only their
+club authority (stored admin, elected office, or the superadmin session's injected admin role) is hidden
+from the auth context, so the nav, the route guards and the SSR render show the member view.
+
+It changes what is **shown**, never what a write **does**:
+
+- It composes with both session modes. A superadmin in "View as this club" or "Act as admin" can preview
+  as a member; the shell then renders the one impersonation banner with a "previewing as a member"
+  suffix and an "Exit preview" button. Exit on that banner (`endImpersonation`) ends both.
+- No write guard, `canManageClub`, `meeting-authz-logic.ts` resolver or MCP tool reads the cookie. Only
+  `auth-context.ts`, `season-grid.ts`, `minutes.ts` and `impersonation.ts` reference it, and
+  `view-as-allowlist.guard.test.ts` fails when any other file under `src/server/` does. The two data
+  downgrades (season-grid outreach, `getMinutes` `canEdit`) can only remove data a plain member
+  never had, so their wrappers apply the cookie for any caller and any club.
+- `getMeeting.canManage` stays the real answer (#663): the server releases roles with the session's real
+  authority, so a downgraded flag would make the decline confirm promise the wrong outcome.

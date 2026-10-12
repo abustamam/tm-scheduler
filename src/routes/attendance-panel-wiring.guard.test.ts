@@ -98,11 +98,11 @@ describe("attendance panel route wiring (PR 2)", () => {
 		expect(src).toContain('phase === "upcoming"');
 		// `effectiveCanManage`, never bare `canManage` — #320 drops management
 		// everywhere it gates admin UI, including preview-as-member. The TMOD arm
-		// (#576) carries its own `!previewAsMember` for the same reason: an officer
-		// previewing as a member who ALSO holds the slot would otherwise keep the
-		// panel through the preview and defeat the point of it.
+		// (#576) carries NO preview term since #1113: it is the viewer's own slot,
+		// which previewing does not change, so a member in your seat sees the panel
+		// and so do you.
 		expect(src).toContain(
-			"const runsThisMeeting = effectiveCanManage || (isTmod && !previewAsMember)",
+			"const runsThisMeeting = effectiveCanManage || isTmod",
 		);
 	});
 

@@ -5,7 +5,6 @@ import {
 	CalendarX,
 	ClipboardList,
 	Clock,
-	Eye,
 	ListChecks,
 	Loader2,
 	Lock,
@@ -400,8 +399,10 @@ function MeetingView() {
 	const [lifecycleAction, setLifecycleAction] =
 		useState<LifecycleAction | null>(null);
 	const lifecycleBusy = lifecycleAction !== null;
-	// #320: an admin can preview the page as a non-admin member sees it.
-	const [previewAsMember, setPreviewAsMember] = useState(false);
+	// #320, made app-wide by #1113: the shell's "Preview as member" (a cookie, so it
+	// survives navigation and reload) is what the page reads. `authCtx` is null for
+	// an anonymous visitor, who has nothing to preview.
+	const previewAsMember = authCtx?.viewAs === "member";
 	const [lineupOpen, setLineupOpen] = useState(false);
 	// Cancel (#1057): the confirm before the write, and the notice sheet after
 	// it. Two flags because the sheet outlives the confirm — it opens on arrival
@@ -602,6 +603,9 @@ function MeetingView() {
 		now,
 	});
 	// #320: previewing-as-member drops management everywhere it gates admin UI.
+	// `canManage` itself stays the server's real answer (#663,
+	// `decline-release-wiring.guard.test.ts`): the server releases roles with the
+	// session's real authority, so a downgraded flag would promise the wrong outcome.
 	const effectiveCanManage = canManage && !previewAsMember;
 	// The "Before the meeting" panel (#963): a club admin (`canManage`, so not an
 	// elected officer who lacks the admin role) who is not previewing as a member
@@ -648,7 +652,9 @@ function MeetingView() {
 	// display authority only: every write re-verifies against the slot server-side
 	// (`resolveActor`), and the ladder they render comes from `getTmodPanelData`,
 	// which does its own check.
-	const runsThisMeeting = effectiveCanManage || (isTmod && !previewAsMember);
+	// #1113: the TMOD arm is the viewer's OWN slot, which previewing does not
+	// change, so a member in your seat sees these controls and so do you.
+	const runsThisMeeting = effectiveCanManage || isTmod;
 	// Lineup blast (#1024): club admins, officers and this meeting's Toastmaster.
 	// A stored admin is known here; an officer is not (`canManage` is
 	// `clubRole === "admin"` only), so a signed-in member or a self-identified
@@ -660,14 +666,17 @@ function MeetingView() {
 			getLineupBlastAccess({
 				data: { meetingId: meeting.id, selfMemberId: myId },
 			}),
-		enabled: !effectiveCanManage && !previewAsMember && (isSignedIn || isTmod),
+		enabled:
+			!effectiveCanManage &&
+			(!previewAsMember || isTmod) &&
+			(isSignedIn || isTmod),
 	});
 	// Never on a cancelled meeting (#1057): there is no lineup to blast, and the
 	// loader refuses the draft with `MEETING_CANCELLED_MESSAGE` anyway.
 	const canLineupBlast =
 		!cancelled &&
 		(effectiveCanManage ||
-			(!previewAsMember && lineupAccess?.allowed === true));
+			((!previewAsMember || isTmod) && lineupAccess?.allowed === true));
 	const showPlanPanel = runsThisMeeting && phase === "upcoming";
 	// An officer already has `plan` on the payload; only the non-officer TMOD
 	// needs the extra round trip, and only while the panel is actually shown.
@@ -1835,21 +1844,6 @@ function MeetingView() {
 				clubId={clubUuid}
 				show={source === "anon" && member !== null}
 			/>
-			{previewAsMember ? (
-				<div className="flex items-center justify-between gap-3 rounded-xl border border-primary/40 bg-primary/10 px-4 py-3 text-sm font-medium text-primary">
-					<span className="flex items-center gap-2">
-						<Eye className="size-4 shrink-0" aria-hidden />
-						Previewing as a member — management controls are hidden.
-					</span>
-					<Button
-						size="sm"
-						variant="outline"
-						onClick={() => setPreviewAsMember(false)}
-					>
-						Exit preview
-					</Button>
-				</div>
-			) : null}
 			{!online && shell ? (
 				<div className="flex items-center gap-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm font-medium text-warning-foreground">
 					<WifiOff className="size-4 shrink-0" aria-hidden />
@@ -2138,29 +2132,6 @@ function MeetingView() {
 						meetingId={meeting.id}
 						selfMemberId={myId}
 					/>
-				) : null}
-				{/* Preview-as-member survives as a SIBLING of the toolbar (review
-				    decision): capability preserved, not folded into the toolbar's
-				    props — PR 2 reshapes the officer surface and will revisit.
-				    Gated on `effectiveCanManage`, the same flag the toolbar gets, so
-				    the toggle hides itself once preview is on — the way back out is
-				    the "Exit preview" control in the banner above (line ~726), not
-				    this button. This used to spell the condition out as
-				    `canManage && !previewAsMember` under a comment claiming it was
-				    deliberately NOT effectiveCanManage; that is the verbatim
-				    definition of effectiveCanManage (line 374), so the comment
-				    described a distinction the code never made. */}
-				{effectiveCanManage ? (
-					<div className="flex flex-wrap items-center gap-2 pt-1">
-						<Button
-							size="sm"
-							variant="ghost"
-							onClick={() => setPreviewAsMember(true)}
-						>
-							<Eye className="size-4" />
-							Preview as member
-						</Button>
-					</div>
 				) : null}
 			</header>
 
