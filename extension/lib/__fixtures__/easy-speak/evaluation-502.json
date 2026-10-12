@@ -1,0 +1,21 @@
+{
+  "evaluation": {
+    "evaluation_id": 502,
+    "evaluator_name": "Avery Alderfinch",
+    "submitted_date": "2026-09-16T03:00:00Z",
+    "responses": [
+      {
+        "field_type": "text",
+        "field_label": "What went well",
+        "text_value": "Great gestures.",
+        "numeric_value": null
+      },
+      {
+        "field_type": "grade",
+        "field_label": "Content",
+        "numeric_value": 5,
+        "text_value": "Strong opening"
+      }
+    ]
+  }
+}
