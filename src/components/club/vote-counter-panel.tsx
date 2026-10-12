@@ -382,6 +382,16 @@ export function VoteCounterPanel({
 								)}
 							</Button>
 						</div>
+						{/* A refused open/close (a completed or cancelled meeting) used to
+						    say NOTHING: the button re-enabled and the card looked
+						    unchanged. `toggle` is ONE mutation shared by every card, so
+						    its error renders only on the category it was fired for; the
+						    next attempt resets it. */}
+						{toggle.isError && toggle.variables?.category === category ? (
+							<p className="mt-2 text-xs font-medium text-destructive">
+								{(toggle.error as Error).message}
+							</p>
+						) : null}
 
 						<p className="mt-2 text-sm text-muted-foreground">
 							{total} {total === 1 ? "vote" : "votes"} in
