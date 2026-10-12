@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { ImportHistoryPanel } from "#/components/club/import-history-panel";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -116,6 +117,7 @@ function ClubDetail() {
 				<>
 					<ViewAsPanel clubId={clubId} clubName={club.name} />
 					<ActAsAdminPanel clubId={clubId} clubName={club.name} />
+					<ImportHistoryPanel clubId={clubId} clubName={club.name} />
 				</>
 			)}
 
