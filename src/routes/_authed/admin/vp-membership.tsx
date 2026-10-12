@@ -145,6 +145,12 @@ const NO_PROFILES: { rows: GuestProfileRow[]; brought: BroughtCount[] } = {
 /** One of the viewer's OTHER clubs where they are an admin or an officer. */
 type OtherAdminClub = { clubId: string; name: string };
 
+/** Convert a guest; `confirmedEmail` is the officer's answer for an unconfirmed address (#1157). */
+type ConvertGuest = (
+	guest: PipelineGuestRow,
+	confirmedEmail?: string | null,
+) => Promise<boolean>;
+
 const NO_OTHER_CLUBS: OtherAdminClub[] = [];
 
 const STAGES: { id: GuestStage; label: string; blurb: string; tone: string }[] =
@@ -623,10 +629,7 @@ function GuestRow({
 	clubId: string;
 	busy: boolean;
 	onMove: (guestId: string, stage: ManualGuestStage) => void;
-	onConvert: (
-		guest: PipelineGuestRow,
-		confirmedEmail?: string | null,
-	) => Promise<boolean>;
+	onConvert: ConvertGuest;
 	/** The viewer's other admin/officer clubs (#1127). */
 	otherAdminClubs: OtherAdminClub[];
 	timezone: string;
@@ -859,10 +862,7 @@ function GuestRowActions({
 	clubId: string;
 	busy: boolean;
 	onMove: (guestId: string, stage: ManualGuestStage) => void;
-	onConvert: (
-		guest: PipelineGuestRow,
-		confirmedEmail?: string | null,
-	) => Promise<boolean>;
+	onConvert: ConvertGuest;
 	otherAdminClubs: OtherAdminClub[];
 }) {
 	const router = useRouter();
@@ -1188,10 +1188,7 @@ function GuestJoinedDialog({
 	clubId: string;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	onConvert: (
-		guest: PipelineGuestRow,
-		confirmedEmail?: string | null,
-	) => Promise<boolean>;
+	onConvert: ConvertGuest;
 }) {
 	const router = useRouter();
 	const stranded = isStrandedConvertedGuest(guest);

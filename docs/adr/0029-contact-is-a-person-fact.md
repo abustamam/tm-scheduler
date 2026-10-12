@@ -112,7 +112,7 @@ unconfirmed record of what a visitor wrote down, and nothing more:
   the VP Membership card flagged **Unconfirmed**.
 - It is never a Person fact and never a sign-in key. No writer of `people` reads it (merge,
   link, undo convert, cross-club attach, the sign-in bind), and a convert never reads it into
-  the new member's identity: it cannot steer the convert onto an existing member either.
+  the new member's identity, so it plays no part in which existing member a convert matches.
 - It becomes a Person fact **only when an officer confirms it**, at convert (the officer is
   shown it, told where it came from, and picks "use this address" or "leave it off") or in
   the Edit guest dialog. The officer's write clears the note.

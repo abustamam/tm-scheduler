@@ -14,7 +14,7 @@
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guests, members, people, user } from "#/db/schema";
+import { guests, members, people, roleSlots, user } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -161,8 +161,8 @@ describe.skipIf(!hasTestDb)(
 /**
  * #1157: an address typed on the public guest book is the club's unconfirmed
  * note on the guest row (`guests.book_email`). Convert uses it only when an
- * officer confirms it (`confirmedEmail`), and it never steers a convert onto an
- * existing member.
+ * officer confirms it (`confirmedEmail`), and it plays no part in which existing
+ * member a convert matches.
  */
 describe.skipIf(!hasTestDb)(
 	"convert and the unconfirmed guest-book address (#1157)",
@@ -301,8 +301,8 @@ describe.skipIf(!hasTestDb)(
 			expect(await personEmail(g!.personId)).toBe(vouched);
 		});
 
-		// protects=a guest whose book note equals an existing member's address is NOT deduped onto that member: a new Person is minted, the member's lapsed row stays lapsed;
-		// fails_when=matchClubMemberPerson is fed the book note, so a stranger's typed address attaches them to (and reactivates) someone else's membership;
+		// protects=a guest whose book note equals an existing member's address is NOT deduped onto that member: a new Person is minted, the member's lapsed row stays lapsed, and a slot held by that member is not re-pointed;
+		// fails_when=matchClubMemberPerson is fed the book note, so a convert matches the existing member by the unconfirmed address (the membership is reused, reactivated, or its slot moved);
 		// no_claim=dedup by a confirmed or vouched address, nor by phone+name (existing #488 tests).
 		it("a book note equal to a member's address never dedups onto that member (AC 8)", async () => {
 			const email = `member-${n}@test.example`;
@@ -320,7 +320,12 @@ describe.skipIf(!hasTestDb)(
 					status: "inactive",
 				})
 				.returning({ id: members.id });
-			const guestId = await bookGuest(`Stranger ${n}`, email);
+			// A slot the existing member holds: the convert must leave it where it is.
+			await testDb
+				.update(roleSlots)
+				.set({ assignedMemberId: mem!.id, status: "confirmed" })
+				.where(eq(roleSlots.id, club.slotId));
+			const guestId = await bookGuest(`Visitor ${n}`, email);
 
 			const res = await applyConvertGuestToMember({
 				clubId: club.clubId,
@@ -337,6 +342,48 @@ describe.skipIf(!hasTestDb)(
 				.where(eq(members.id, mem!.id));
 			expect(after?.status).toBe("inactive");
 			expect(await personEmail(m!.id)).toBe(email);
+			const [slot] = await testDb
+				.select({
+					memberId: roleSlots.assignedMemberId,
+					guestId: roleSlots.assignedGuestId,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, club.slotId));
+			expect(slot).toEqual({ memberId: mem!.id, guestId: null });
+		});
+
+		// protects=a convert whose confirmedEmail leads onto an existing member (by phone and name) writes NO address to that member and leaves the guest's note as it was;
+		// fails_when=the matched-member branch writes the confirmation onto the member's Person, or clears the note though nothing was written;
+		// no_claim=the new-Person branches (AC 5, AC 6); the match is by phone+name, seeded here.
+		it("a confirmedEmail that dedups onto an existing member writes no email and keeps the note", async () => {
+			const name = `Roster ${n}`;
+			const phone = `+1415${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+			const [m] = await testDb
+				.insert(people)
+				.values({ name, phone })
+				.returning({ id: people.id });
+			strayPeople.push(m!.id);
+			await testDb
+				.insert(members)
+				.values({ clubId: club.clubId, personId: m!.id, name });
+			const typed = `typed-${n}@test.example`;
+			const { guestId } = await captureGuestVisit({
+				clubId: club.clubId,
+				name,
+				phone,
+				email: typed,
+			});
+
+			const res = await applyConvertGuestToMember({
+				clubId: club.clubId,
+				guestId,
+				actorMemberId: club.adminMemberId,
+				confirmedEmail: typed,
+			});
+
+			expect(res.personId).toBe(m!.id);
+			expect(await personEmail(m!.id)).toBeNull();
+			expect(await bookEmailOf(guestId)).toBe(typed);
 		});
 	},
 );

@@ -12,10 +12,11 @@
  * 1. NO STATEMENT THAT WRITES `people` NAMES THE NOTE. An `update(people)` or
  *    `insert(people)` (or the raw SQL for either) whose text reaches `bookEmail` /
  *    `book_email` is the whole bug.
- * 2. THE NOTE IS WRITTEN IN FOUR PLACES AND NO OTHER: the capture's create and its
+ * 2. THE NOTE IS WRITTEN IN FIVE PLACES AND NO OTHER: the capture's create and its
  *    fill-only fill write the typed address; the officer's two writes (convert,
- *    Edit guest) clear it with NULL. A fifth writer is a decision, so it fails here
- *    until it is named.
+ *    Edit guest) clear it with NULL; an unlink restores a recorded address as a
+ *    note. Every `bookEmail` key counts, whatever its value; a sixth writer is a
+ *    decision, so it fails here until it is named.
  * 3. THE CONVERT NEVER READS IT. Its identity (`convertEmail`, `convertIdentity`,
  *    `matchClubMemberPerson`, `guestOwnContact`) is the vouched address or the
  *    officer's confirmation; the one mention of the column in
@@ -108,27 +109,107 @@ function peopleWriteStatements(src: string): string[] {
 	return out;
 }
 
+/** Calls whose argument is a write: a key inside any of them is never a read. */
+const WRITE_CALLS = new Set([
+	"set",
+	"values",
+	"update",
+	"insert",
+	"onConflictDoUpdate",
+	"createGuestRecord",
+]);
+
 /**
- * Each place that WRITES the note: a `bookEmail:` property whose value is not a
- * read of the column (`guests.bookEmail`, `r.bookEmail`, ...) or a type, with the
- * top-level function it sits in.
+ * Every place the source NAMES the note as an object key (`bookEmail: v`, the
+ * shorthand `{ bookEmail }`, or a quoted `"bookEmail": v`), whatever the value is,
+ * with the top-level function it sits in and the calls it is nested inside. A
+ * value-shaped exemption would let `{ bookEmail: other.bookEmail }` or
+ * `createGuestRecord(tx, { bookEmail: input.bookEmail })` through, so a key is a
+ * write unless it is one of the shapes that cannot write: the column itself
+ * (`guests.bookEmail`), a row mapper's copy (`r.bookEmail`) or the schema's column
+ * declaration, each outside every write call. Components (`.tsx`) are not
+ * scanned for writes: they reach the database only through a server function,
+ * whose schema is what this guard reads.
  */
-function noteWrites(src: string): Array<{ fn: string; value: string }> {
-	const out: Array<{ fn: string; value: string }> = [];
-	for (const m of src.matchAll(/\bbookEmail\s*:\s*([^,}\n]+)/g)) {
-		const value = (m[1] ?? "").trim();
-		if (
-			/^(?:guests\.bookEmail|[a-z]\w*\.bookEmail|string\b|text\()/.test(value)
-		) {
+function noteKeys(
+	src: string,
+): Array<{ fn: string; value: string; calls: string[]; read: boolean }> {
+	const out: Array<{
+		fn: string;
+		value: string;
+		calls: string[];
+		read: boolean;
+	}> = [];
+	// Open brackets, each with the callee name for a `(`; strings and templates
+	// are skipped so a bracket inside one cannot unbalance the stack.
+	const stack: string[] = [];
+	let fn = "(top level)";
+	let i = 0;
+	while (i < src.length) {
+		const c = src[i] as string;
+		if (c === '"' || c === "'" || c === "`") {
+			let j = i + 1;
+			while (j < src.length && src[j] !== c) j += src[j] === "\\" ? 2 : 1;
+			i = j + 1;
 			continue;
 		}
-		const before = src.slice(0, m.index);
-		const fns = [
-			...before.matchAll(/(?:^|\n)(?:export )?(?:async )?function (\w+)/g),
-		];
-		out.push({ fn: fns.at(-1)?.[1] ?? "(top level)", value });
+		if (c === "(") {
+			const callee = /(\w+)\s*$/.exec(src.slice(Math.max(0, i - 60), i));
+			stack.push(callee?.[1] ?? "");
+		} else if (c === "{" || c === "[") {
+			stack.push("");
+		} else if (c === ")" || c === "}" || c === "]") {
+			stack.pop();
+		} else if (c === "\n") {
+			const decl = /^(?:export )?(?:async )?function (\w+)/.exec(
+				src.slice(i + 1, i + 80),
+			);
+			if (decl) fn = decl[1] as string;
+		}
+		if (c === "b" && src.startsWith("bookEmail", i) && src[i - 1] !== ".") {
+			const after = /^bookEmail\s*(:|(?=[,}]))\s*([^,}\n]*)/.exec(
+				src.slice(i, i + 200),
+			);
+			if (after) {
+				const value =
+					after[1] === ":" ? (after[2] ?? "").trim() : "(shorthand)";
+				const calls = stack.filter(Boolean);
+				const inWrite = calls.some((k) => WRITE_CALLS.has(k));
+				out.push({
+					fn,
+					value,
+					calls,
+					// The column projected (`guests.bookEmail`), a row mapper's copy
+					// (`r.bookEmail`) and the schema's own column declaration cannot
+					// write unless they sit inside a write call.
+					read:
+						!inWrite &&
+						(value === "guests.bookEmail" ||
+							value === "r.bookEmail" ||
+							/^text\(/.test(value)),
+				});
+			}
+		}
+		i++;
+	}
+	// A quoted key, `{ "bookEmail": v }`, is a write the scan above cannot see as
+	// an identifier; count it too, with no call context.
+	for (const m of src.matchAll(/["']bookEmail["']\s*:\s*([^,}\n]*)/g)) {
+		out.push({
+			fn: "(quoted key)",
+			value: m[1]?.trim() ?? "",
+			calls: [],
+			read: false,
+		});
 	}
 	return out;
+}
+
+/** The sites that write the note: every key that is not a read shape. */
+function noteWrites(src: string): Array<{ fn: string; value: string }> {
+	return noteKeys(src)
+		.filter((k) => !k.read)
+		.map(({ fn, value }) => ({ fn, value }));
 }
 
 /** Text of a top-level function, from its `function` line to the closing `}`. */
@@ -151,6 +232,11 @@ const pipeline = files.find(
 
 describe("guests.book_email never reaches a Person (#1157)", () => {
 	it("scans real source", () => {
+		// protects=the other tests in this file reading the real server source, not
+		//   an empty or moved tree (a guard over zero files is always green);
+		// fails_when=fewer than 200 source files are read, or
+		//   guest-pipeline-logic.ts is not among them;
+		// no_claim=anything about what the source says; the tests below do that.
 		expect(files.length).toBeGreaterThan(200);
 		expect(
 			pipeline,
@@ -177,15 +263,17 @@ describe("guests.book_email never reaches a Person (#1157)", () => {
 		expect(offenders, "a people write reads the guest book's note").toEqual([]);
 	});
 
-	it("the note is written only by the capture (create, fill) and the officer's two clears", () => {
-		// protects=a fifth writer of `book_email` not being added without a decision;
-		// fails_when=the note is written anywhere but captureInTransaction (create),
+	it("the note is written only by the capture (create, fill), the officer's two clears and the unlink restore", () => {
+		// protects=a sixth writer of `book_email` not being added without a decision;
+		// fails_when=a `bookEmail` key (any value, shorthand included) in a `.ts` file appears in a
+		//   write position anywhere but captureInTransaction (create),
 		//   fillBlankGuestContact (fill-only), applyUpdateGuest and
-		//   applyConvertGuestToMember (both NULL), or `book_email` appears in
-		//   source outside the schema;
-		// no_claim=that each write is correct; the integration tests do that.
+		//   applyConvertGuestToMember (both NULL) and applyUnlinkGuestFromMember
+		//   (restore), or `book_email` appears in source outside the schema;
+		// no_claim=that each write is correct (the integration tests do that); an
+		//   object built elsewhere and spread into a write is not seen.
 		const writes: string[] = [];
-		for (const f of files) {
+		for (const f of files.filter((x) => x.file.endsWith(".ts"))) {
 			for (const w of noteWrites(f.text)) {
 				writes.push(`${f.file} :: ${w.fn} :: ${w.value}`);
 			}
@@ -196,6 +284,7 @@ describe("guests.book_email never reaches a Person (#1157)", () => {
 				"src/server/guest-pipeline-logic.ts :: applyUpdateGuest :: null",
 				"src/server/guest-pipeline-logic.ts :: captureInTransaction :: email",
 				"src/server/guest-pipeline-logic.ts :: fillBlankGuestContact :: contact.email",
+				"src/server/guest-pipeline-logic.ts :: applyUnlinkGuestFromMember :: recordedEmail",
 			].sort(),
 		);
 		const rawColumn = files
@@ -208,7 +297,7 @@ describe("guests.book_email never reaches a Person (#1157)", () => {
 
 	it("the convert never reads the note into the identity", () => {
 		// protects=an address nobody vouched for becoming the new member's sign-in
-		// key, or steering the convert onto an existing member;
+		// key, or playing any part in which existing member a convert matches;
 		// fails_when=bookEmail appears in the identity helpers, or anywhere in
 		//   applyConvertGuestToMember but its one NULL clear;
 		// no_claim=that the officer's confirmedEmail is handled right (the
@@ -253,8 +342,29 @@ describe("guests.book_email never reaches a Person (#1157)", () => {
 		).toEqual([]);
 		expect(
 			noteWrites(
-				"function a() { tx.set({ bookEmail: x }); r = { bookEmail: guests.bookEmail, y: 1 }; }",
+				"\nfunction a() { tx.set({ bookEmail: x }); r = { bookEmail: guests.bookEmail, y: 1 }; }",
 			),
 		).toEqual([{ fn: "a", value: "x" }]);
+		// A value shaped like a read is still a write inside a write call, and a
+		// shorthand key is one too.
+		expect(
+			noteWrites(
+				"\nfunction b() { tx.update(guests).set({ bookEmail: o.bookEmail }); }",
+			),
+		).toEqual([{ fn: "b", value: "o.bookEmail" }]);
+		expect(
+			noteWrites(
+				"\nfunction c() { return createGuestRecord(tx, { bookEmail: input.bookEmail }); }",
+			),
+		).toEqual([{ fn: "c", value: "input.bookEmail" }]);
+		expect(
+			noteWrites("\nfunction d() { tx.insert(guests).values({ bookEmail }); }"),
+		).toEqual([{ fn: "d", value: "(shorthand)" }]);
+		// The read shapes are not writes.
+		expect(
+			noteWrites(
+				"\nfunction e() { db.select({ bookEmail: guests.bookEmail }).from(guests); return rows.map((r) => ({ bookEmail: r.bookEmail })); }",
+			),
+		).toEqual([]);
 	});
 });

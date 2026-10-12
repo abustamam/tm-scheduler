@@ -449,9 +449,7 @@ export async function plan(
 						(c): GuestBookCandidate => ({
 							guestId: c.id,
 							name: c.name,
-							// The vouched address, else the card's unconfirmed note (#1157): an
-							// address is what tells two same-name guests apart.
-							email: c.email ?? c.bookEmail ?? null,
+							email: c.email ?? null,
 							phone: c.phone ?? null,
 						}),
 					),

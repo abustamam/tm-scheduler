@@ -139,8 +139,8 @@ describe.skipIf(!hasTestDb)(
 			return row;
 		};
 
-		// protects=the data statements move ONLY a guest-only Person's address (to every guest row naming it) and leave a member's, a signed-in non-member's, and a guest-less Person's untouched;
-		// fails_when=a WHERE arm is dropped (the membership or user_id exclusion, or the guest-row requirement), so a vouched or guest-less address is wiped or copied;
+		// protects=the data statements move ONLY a guest-only Person's address (the codebase's own definition: no user, no membership, no roster-identity column, no removal on record) to every guest row naming it, and leave a member's, a former member's, a signed-in non-member's, and a guest-less Person's untouched;
+		// fails_when=a WHERE arm is dropped (the membership, user_id, roster-identity or removal exclusion, or the guest-row requirement), so a vouched or guest-less address is wiped or copied;
 		// no_claim=the app code (separate tests); the statements run on a scratch database seeded by raw SQL, and a second run of them is shown to change nothing.
 		it("moves only the guest-only Person's address, and a re-run changes nothing (AC 13)", async () => {
 			const clubA = randomUUID();
@@ -196,6 +196,34 @@ describe.skipIf(!hasTestDb)(
 			const gSignedIn = await guest(clubA, signedIn);
 			// Shape 4: no guest row and no membership, with an email: no card to carry it.
 			const lone = await person("Lone", { email: "l@x.test" });
+			// Former members: no membership now, but each carries the past the
+			// codebase's own rule (`identityIgnoredGuestPerson`) reads, and a guest
+			// row. An officer vouched for these addresses; they stay.
+			const formerColumns: Array<[string, string, unknown]> = [
+				["customer_id", "Former Customer", "C-0119"],
+				["basecamp_user_id", "Former Basecamp", "B-0119"],
+				["original_join_date", "Former Joined", new Date("2020-01-01")],
+				["invited_at", "Former Invited", new Date("2021-01-01")],
+			];
+			const formers: Array<{ person: string; guest: string; email: string }> =
+				[];
+			for (const [column, name, value] of formerColumns) {
+				const email = `${column}@x.test`;
+				const id = (
+					await one<{ id: string }>(
+						`insert into people (name, email, ${column}) values ($1, $2, $3) returning id`,
+						[name, email, value],
+					)
+				).id;
+				formers.push({ person: id, guest: await guest(clubA, id), email });
+			}
+			const removed = await person("Former Removed", { email: "r@x.test" });
+			const gRemoved = await guest(clubA, removed);
+			await pool.query(
+				`insert into activity_log (club_id, action, target_type, detail)
+				 values ($1, 'member_remove', 'member', $2::jsonb)`,
+				[clubA, JSON.stringify({ personId: removed })],
+			);
 
 			const dataStatements = statements().filter((s) => /^UPDATE /.test(s));
 			expect(dataStatements).toHaveLength(2);
@@ -238,11 +266,61 @@ describe.skipIf(!hasTestDb)(
 			expect(await emailOf(signedIn)).toBe("s@x.test");
 			expect(await noteOf(gSignedIn)).toBeNull();
 			expect(await emailOf(lone)).toBe("l@x.test");
+			// Former members: unchanged.
+			for (const f of formers) {
+				expect(await emailOf(f.person)).toBe(f.email);
+				expect(await noteOf(f.guest)).toBeNull();
+			}
+			expect(await emailOf(removed)).toBe("r@x.test");
+			expect(await noteOf(gRemoved)).toBeNull();
 
 			// Idempotent: running both data statements again changes nothing.
 			const after = await snapshot();
 			for (const s of dataStatements) await pool.query(s);
 			expect(await snapshot()).toEqual(after);
+		}, 120_000);
+
+		// protects=the clear touching only a Person whose address a guest row already holds as its note;
+		// fails_when=the clear drops its copied-note requirement, so a Person whose guest row did not receive the copy loses its address with no note anywhere;
+		// no_claim=how a copy comes to be missing (a guest row added between the two statements); the clear statement is run alone here on rows seeded to each side of the condition.
+		it("clears a Person's address only once a guest row holds it as the note", async () => {
+			await migrate(drizzle(pool), { migrationsFolder: throughDir });
+			const club = randomUUID();
+			await pool.query(
+				`insert into clubs (id, name, slug) values ($1, '0119 Clear Club', $2)`,
+				[club, `club-0119-clear-${club}`],
+			);
+			const seeded = async (email: string, note: string | null) => {
+				const person = (
+					await one<{ id: string }>(
+						`insert into people (name, email) values ('Clear Case', $1) returning id`,
+						[email],
+					)
+				).id;
+				await pool.query(
+					`insert into guests (club_id, name, person_id, book_email) values ($1, 'G', $2, $3)`,
+					[club, person, note],
+				);
+				return person;
+			};
+			const copied = await seeded("copied@x.test", "copied@x.test");
+			const notCopied = await seeded("kept@x.test", null);
+			const otherNote = await seeded("other@x.test", "different@x.test");
+
+			const clear = statements().filter((s) => /^UPDATE "people"/.test(s));
+			expect(clear).toHaveLength(1);
+			await pool.query(clear[0] as string);
+
+			const emailOf = async (id: string) =>
+				(
+					await one<{ email: string | null }>(
+						`select email from people where id = $1`,
+						[id],
+					)
+				).email;
+			expect(await emailOf(copied)).toBeNull();
+			expect(await emailOf(notCopied)).toBe("kept@x.test");
+			expect(await emailOf(otherNote)).toBe("other@x.test");
 		}, 120_000);
 	},
 );

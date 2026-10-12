@@ -571,7 +571,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				clubId: seed.clubId,
 				name: "Pat Phone",
 				phone,
-				email: `stranger-${randomUUID()}@example.com`,
+				email: `typed-${randomUUID()}@example.com`,
 			});
 			expect(await emailsOf(guestId)).toEqual({
 				bookEmail: null,

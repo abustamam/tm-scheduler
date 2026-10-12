@@ -12,7 +12,13 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guests, meetings, people, tableTopicsSpeakers } from "#/db/schema";
+import {
+	guests,
+	meetingAwards,
+	meetings,
+	people,
+	tableTopicsSpeakers,
+} from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -52,10 +58,10 @@ vi.mock("#/lib/auth", () => ({
 	},
 }));
 
-const { addTableTopics } = await import("./minutes");
+const { addTableTopics, setMinutesAward } = await import("./minutes");
 
 describe.skipIf(!hasTestDb)(
-	"Table Topics new guest carries a name only (#1157)",
+	"A new guest from Table Topics or an award carries a name only (#1157)",
 	() => {
 		let seed: SeededClub;
 
@@ -105,6 +111,41 @@ describe.skipIf(!hasTestDb)(
 				.where(eq(guests.id, speaker?.guestId as string));
 			expect(row).toEqual({
 				name: "Topics Guest",
+				bookEmail: null,
+				personEmail: null,
+			});
+		});
+
+		// protects=an award's new guest called with an email ends with Person.email NULL and guests.book_email NULL, matching the award picker's name-only UI;
+		// fails_when=the award schema accepts newGuest.email again and writes it to the Person (a sign-in key) or the guest row;
+		// no_claim=the award's disqualification and vote-counter gates; the session is faked, the validator, handler and DB write are real.
+		it("an award's new guest takes a name only (the award path matches its UI)", async () => {
+			const call = {
+				data: {
+					meetingId: seed.meetingId,
+					category: "best_speaker",
+					newGuest: { name: "Award Guest", email: "extra@example.com" },
+				},
+			} as unknown as Parameters<typeof setMinutesAward>[0];
+
+			await setMinutesAward(call);
+
+			const [award] = await testDb
+				.select({ guestId: meetingAwards.guestId })
+				.from(meetingAwards)
+				.where(eq(meetingAwards.meetingId, seed.meetingId));
+			expect(award?.guestId).toBeTruthy();
+			const [row] = await testDb
+				.select({
+					name: guests.name,
+					bookEmail: guests.bookEmail,
+					personEmail: people.email,
+				})
+				.from(guests)
+				.innerJoin(people, eq(people.id, guests.personId))
+				.where(eq(guests.id, award?.guestId as string));
+			expect(row).toEqual({
+				name: "Award Guest",
 				bookEmail: null,
 				personEmail: null,
 			});
