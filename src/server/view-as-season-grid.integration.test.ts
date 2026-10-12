@@ -44,7 +44,7 @@ describe.skipIf(!hasTestDb)("season grid in a preview", () => {
 			clubId: seed.clubId,
 			count: 8,
 			includeContact: true,
-			includeOutreach: seasonGridIncludesOutreach(isAdmin, asMember),
+			includeOutreach: seasonGridIncludesOutreach({ isAdmin, asMember }),
 		});
 	}
 

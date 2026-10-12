@@ -3,12 +3,20 @@ import { minutesAccess, seasonGridIncludesOutreach } from "./view-as-logic";
 
 describe("seasonGridIncludesOutreach", () => {
 	it("an admin gets it, and loses it in a preview", () => {
-		expect(seasonGridIncludesOutreach(true, false)).toBe(true);
-		expect(seasonGridIncludesOutreach(true, true)).toBe(false);
+		expect(seasonGridIncludesOutreach({ isAdmin: true, asMember: false })).toBe(
+			true,
+		);
+		expect(seasonGridIncludesOutreach({ isAdmin: true, asMember: true })).toBe(
+			false,
+		);
 	});
 	it("a member never gets it, preview or not", () => {
-		expect(seasonGridIncludesOutreach(false, false)).toBe(false);
-		expect(seasonGridIncludesOutreach(false, true)).toBe(false);
+		expect(
+			seasonGridIncludesOutreach({ isAdmin: false, asMember: false }),
+		).toBe(false);
+		expect(seasonGridIncludesOutreach({ isAdmin: false, asMember: true })).toBe(
+			false,
+		);
 	});
 });
 

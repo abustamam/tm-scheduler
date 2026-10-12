@@ -3,12 +3,14 @@
 // `createServerFn` wrappers do (`view-as-allowlist.guard.test.ts`). A preview
 // can only REMOVE data here, so the wrappers apply it for any caller and any club.
 
+import type { MeetingStatus } from "#/lib/meeting-lifecycle";
+
 /** Admin-only outreach data on the season grid: a member never gets it. */
-export function seasonGridIncludesOutreach(
-	isAdmin: boolean,
-	asMember: boolean,
-): boolean {
-	return isAdmin && !asMember;
+export function seasonGridIncludesOutreach(input: {
+	isAdmin: boolean;
+	asMember: boolean;
+}): boolean {
+	return input.isAdmin && !input.asMember;
 }
 
 /**
@@ -20,7 +22,7 @@ export function minutesAccess(input: {
 	isAdmin: boolean;
 	impersonatingReadWrite: boolean;
 	asMember: boolean;
-	status: string | null | undefined;
+	status: MeetingStatus | null | undefined;
 }): { canEdit: boolean; visible: boolean } {
 	const canEdit =
 		(input.isAdmin || input.impersonatingReadWrite) && !input.asMember;

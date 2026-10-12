@@ -26,8 +26,14 @@ describe("view-as wiring (#1113)", () => {
 	});
 
 	it("_authed.tsx passes it into shellPropsFromContext", () => {
-		const call = AUTHED.slice(AUTHED.indexOf("shellPropsFromContext({"));
-		expect(call.slice(0, call.indexOf("});"))).toContain("viewAs,");
+		const start = AUTHED.indexOf("shellPropsFromContext({");
+		expect(start, "shellPropsFromContext({ not found").toBeGreaterThanOrEqual(
+			0,
+		);
+		const call = AUTHED.slice(start);
+		const end = call.indexOf("});");
+		expect(end, "end of the call not found").toBeGreaterThanOrEqual(0);
+		expect(call.slice(0, end)).toContain("viewAs,");
 	});
 
 	it("the other two mounts spread the whole auth context", () => {
@@ -43,5 +49,38 @@ describe("view-as wiring (#1113)", () => {
 		expect(readSource("src/components/app-shell.tsx")).toContain(
 			"viewAs: ctx.viewAs ?? null,",
 		);
+	});
+
+	// The server-fn half (#1113). `season-grid-logic` and `minutes-logic` are
+	// pure and tested with an explicit `asMember`; what no behavioural test sees
+	// is the WRAPPER feeding the cookie into them, since none sets one. Delete the
+	// argument and every suite stays green while the preview stops hiding data.
+	describe("the data wrappers feed the cookie into the decision", () => {
+		function exportSlice(path: string, name: string): string {
+			const src = readSource(path);
+			const start = src.indexOf(`export const ${name} =`);
+			expect(start, `${name} not found in ${path}`).toBeGreaterThanOrEqual(0);
+			const rest = src.slice(start + 1);
+			const next = rest.indexOf("\nexport const ");
+			const body = next === -1 ? rest : rest.slice(0, next);
+			expect(body.length).toBeGreaterThan(0);
+			return body;
+		}
+		const COOKIE_READ =
+			/asMember\s*=\s*parseViewAs\(\s*getCookie\(VIEW_AS_COOKIE\)\s*\)\s*===\s*"member"/;
+
+		it("getSeasonGrid: includeOutreach takes asMember", () => {
+			const body = exportSlice("src/server/season-grid.ts", "getSeasonGrid");
+			expect(body).toMatch(COOKIE_READ);
+			expect(body).toMatch(
+				/includeOutreach:\s*seasonGridIncludesOutreach\(\{[^}]*\basMember\b[^}]*\}\)/,
+			);
+		});
+
+		it("getMinutes: the cookie read feeds minutesAccess", () => {
+			const body = exportSlice("src/server/minutes.ts", "getMinutes");
+			expect(body).toMatch(COOKIE_READ);
+			expect(body).toMatch(/minutesAccess\(\{[^}]*\basMember\b[^}]*\}\)/);
+		});
 	});
 });

@@ -22,16 +22,14 @@ export function ImpersonationBanner({
 	expiresAt,
 	mode = "read_only",
 	onExit,
-	previewingAsMember = false,
 	onExitPreview,
 }: {
 	clubName: string;
 	expiresAt: Date | string;
 	mode?: "read_only" | "read_write";
 	onExit: () => void;
-	/** "Preview as member" is also on (#1113): this stays the ONE banner, with a
-	 *  suffix and a second button that ends only the preview. */
-	previewingAsMember?: boolean;
+	/** "Preview as member" is also on (#1113) when this is given: this stays the
+	 *  ONE banner, with a suffix and a second button that ends only the preview. */
 	onExitPreview?: () => void;
 }) {
 	const expiryMs = (
@@ -69,13 +67,13 @@ export function ImpersonationBanner({
 					</>
 				)}
 			</span>
-			{previewingAsMember ? (
+			{onExitPreview ? (
 				<span className="shrink-0">· previewing as a member</span>
 			) : null}
 			<span className="ml-auto shrink-0 tabular-nums opacity-90">
 				{remaining > 0 ? `expires in ${formatRemaining(remaining)}` : "expired"}
 			</span>
-			{previewingAsMember && onExitPreview ? (
+			{onExitPreview ? (
 				<button
 					type="button"
 					onClick={onExitPreview}

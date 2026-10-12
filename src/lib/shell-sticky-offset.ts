@@ -29,7 +29,7 @@ export const SHELL_BANNER_OFFSET_VAR = "--shell-banner-offset";
 export const SHELL_PINNED_TOP_VAR = "--shell-pinned-top";
 
 /** The shell banner's height (impersonation or preview): its `h-9`. */
-export const IMPERSONATION_BANNER_HEIGHT = "2.25rem";
+export const SHELL_BANNER_HEIGHT = "2.25rem";
 
 /**
  * How far below the top of the sticky stack a pinned column sits: the
@@ -38,7 +38,7 @@ export const IMPERSONATION_BANNER_HEIGHT = "2.25rem";
 export const PINNED_BELOW_HEADER = "6rem";
 
 export function shellStickyVars(bannerShowing: boolean): CSSProperties {
-	const banner = bannerShowing ? IMPERSONATION_BANNER_HEIGHT : "0px";
+	const banner = bannerShowing ? SHELL_BANNER_HEIGHT : "0px";
 	return {
 		[SHELL_BANNER_OFFSET_VAR]: banner,
 		[SHELL_PINNED_TOP_VAR]: `calc(${banner} + ${PINNED_BELOW_HEADER})`,

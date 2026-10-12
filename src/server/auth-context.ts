@@ -36,6 +36,15 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 	async () => {
 		const user = await getSessionUser();
 		if (!user) {
+			// A lapsed session cannot call `setViewAs`, so the preview cookie it left
+			// behind is cleared here (#1113): the next person on this browser must not
+			// inherit it. Only when present, so an ordinary anonymous load sets nothing.
+			try {
+				if (getCookie(VIEW_AS_COOKIE))
+					deleteCookie(VIEW_AS_COOKIE, { path: "/" });
+			} catch {
+				// Off a request context (tests): nothing to clear.
+			}
 			return {
 				user: null,
 				clubs: [] as const,
@@ -284,7 +293,7 @@ export const setActiveClub = createServerFn({ method: "POST" })
 /**
  * Turn "Preview as member" (#1113) on or off. A cookie with no `maxAge`, so it
  * lasts until the browser closes and survives reloads and new tabs. Same session
- * gate as `setActiveClub`. It deliberately does NOT check authority: `applyViewAs`
+ * gate as `setActiveClub` for turning it ON; turning it OFF needs none. It deliberately does NOT check authority: `applyViewAs`
  * ignores the cookie for anyone with nothing to drop, and the only server
  * readers of it can only REMOVE data (`view-as-allowlist.guard.test.ts`).
  */
@@ -293,8 +302,10 @@ export const setViewAs = createServerFn({ method: "POST" })
 		z.object({ viewAs: z.enum(["member"]).nullable() }).parse(input),
 	)
 	.handler(async ({ data }) => {
-		await requireUser();
 		if (data.viewAs) {
+			// Only TURNING ON needs a session. Clearing must work without one, so a
+			// lapsed session can still be signed out of (#1113).
+			await requireUser();
 			setCookie(VIEW_AS_COOKIE, data.viewAs, {
 				path: "/",
 				httpOnly: true,

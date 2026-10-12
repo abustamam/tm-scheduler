@@ -49,11 +49,17 @@ export const getSeasonGrid = createServerFn({ method: "GET" })
 		// "Preview as member" (#1113): read for ANY caller and ANY club, with no
 		// authority check. It can only remove the outreach set, which a plain member
 		// never gets anyway.
-		const asMember = parseViewAs(getCookie(VIEW_AS_COOKIE)) === "member";
+		// getCookie can throw off a request context (tests): no cookie, no preview.
+		let asMember = false;
+		try {
+			asMember = parseViewAs(getCookie(VIEW_AS_COOKIE)) === "member";
+		} catch {
+			asMember = false;
+		}
 		return loadSeasonGrid({
 			...data,
 			includeContact: true,
-			includeOutreach: seasonGridIncludesOutreach(isAdmin, asMember),
+			includeOutreach: seasonGridIncludesOutreach({ isAdmin, asMember }),
 		});
 	});
 

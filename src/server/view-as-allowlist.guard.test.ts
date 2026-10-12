@@ -13,15 +13,17 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const ROOT = "src/server";
+/** Everything that can decide a write: the server, and the API routes (the MCP
+ *  endpoint is one: a preview arm there would reach a write). */
+const ROOTS = ["src/server", "src/routes/api"];
 
 /** The only server files that may know about the preview, and why. */
 const ALLOWED = new Set([
-	"auth-context.ts", // applies it to the context; `setViewAs` sets it
-	"season-grid.ts", // `getSeasonGrid` drops the outreach set
-	"minutes.ts", // `getMinutes` drops `canEdit`
-	"impersonation.ts", // `endImpersonation` deletes it
-	"view-as-allowlist.guard.test.ts", // this file names what it looks for
+	"src/server/auth-context.ts", // applies it to the context; `setViewAs` sets it
+	"src/server/season-grid.ts", // `getSeasonGrid` drops the outreach set
+	"src/server/minutes.ts", // `getMinutes` drops `canEdit`
+	"src/server/impersonation.ts", // `endImpersonation` deletes it
+	"src/server/view-as-allowlist.guard.test.ts", // this file names what it looks for
 ]);
 
 /** What marks a reader: the constant, the module, or the literal cookie name. */
@@ -38,10 +40,10 @@ function files(dir: string): string[] {
 }
 
 describe("view-as allowlist (#1113)", () => {
-	it("no file under src/server/ outside the allowlist reads the preview", () => {
-		const offenders = files(ROOT)
+	it("no file under src/server/ or src/routes/api/ outside the allowlist reads the preview", () => {
+		const offenders = ROOTS.flatMap(files)
 			.filter((f) => /\.tsx?$/.test(f))
-			.filter((f) => !ALLOWED.has(f.slice(ROOT.length + 1)))
+			.filter((f) => !ALLOWED.has(f))
 			.filter((f) => {
 				const src = readFileSync(f, "utf8");
 				return MARKERS.some((m) => m.test(src));
@@ -53,7 +55,7 @@ describe("view-as allowlist (#1113)", () => {
 		const stale = [...ALLOWED]
 			.filter((f) => !f.endsWith(".guard.test.ts"))
 			.filter((f) => {
-				const src = readFileSync(join(ROOT, f), "utf8");
+				const src = readFileSync(f, "utf8");
 				return !MARKERS.some((m) => m.test(src));
 			});
 		expect(stale).toEqual([]);

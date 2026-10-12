@@ -103,7 +103,13 @@ export const getMinutes = createServerFn({ method: "GET" })
 		// "Preview as member" (#1113) drops `canEdit`, and with it the admin's look at
 		// the minutes of a meeting that is not completed. Read for ANY caller: it can
 		// only remove access, which a plain member never had.
-		const asMember = parseViewAs(getCookie(VIEW_AS_COOKIE)) === "member";
+		// getCookie can throw off a request context (tests): no cookie, no preview.
+		let asMember = false;
+		try {
+			asMember = parseViewAs(getCookie(VIEW_AS_COOKIE)) === "member";
+		} catch {
+			asMember = false;
+		}
 		const status = await getMeetingStatus(meetingId);
 		const { canEdit, visible } = minutesAccess({
 			isAdmin: membership?.clubRole === "admin",

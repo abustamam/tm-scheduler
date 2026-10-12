@@ -613,9 +613,8 @@ function MeetingView() {
 	// ready. The three flags go in as themselves: `canManage` and not
 	// `effectiveCanManage`, because the helper owns the preview rule, and
 	// `isTmod` survives preview on purpose (the TMOD arm is the viewer's own
-	// slot, which previewing does not change), which differs from
-	// `runsThisMeeting` below: that one drops the TMOD arm in preview. `now` is
-	// this render's one clock;
+	// slot, which previewing does not change), and so does the TMOD arm of
+	// `runsThisMeeting` below (#1113). `now` is this render's one clock;
 	// the helpers read none of their own. `meeting-readiness-wiring.guard.test.ts`
 	// holds all of it, since a component test injects its own props.
 	const readiness =

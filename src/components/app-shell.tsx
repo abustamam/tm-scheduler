@@ -265,7 +265,7 @@ export function AppShell({
 			roleLabel={roleLabel}
 			initials={initials}
 			onSignOut={handleSignOut}
-			canPreviewAsMember={isOfficer && viewAs == null}
+			canPreviewAsMember={isOfficer}
 			onNavigate={onNavigate}
 			showThemeToggle={showThemeToggle}
 			searchSlot={searchSlot}
@@ -447,7 +447,6 @@ function PreviewBanner({
 				expiresAt={impersonating.expiresAt}
 				mode={impersonating.mode}
 				onExit={onExitImpersonation}
-				previewingAsMember
 				onExitPreview={exitPreview}
 			/>
 		);
