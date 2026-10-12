@@ -1144,7 +1144,7 @@ describe("VP Membership guest card — unconfirmed guest-book address (#1157)", 
 	it("flags the note as Unconfirmed, and only when no address is vouched", async () => {
 		await renderRoute([bookOnly()]);
 		const link = screen.getByRole("link", { name: BOOK }) as HTMLAnchorElement;
-		expect(link.getAttribute("href")).toBe(`mailto:${BOOK}`);
+		expect(link.getAttribute("href")).toBe("mailto:typed@example.com");
 		const badge = document.querySelector(
 			'[data-slot="unconfirmed-email-badge"]',
 		);
