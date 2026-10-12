@@ -74,7 +74,7 @@ export function MeetingPacketDialog({
 	});
 
 	const [selection, setSelection] = useState<PacketPieceKey[] | null>(null);
-	const [copies, setCopies] = useState(DEFAULT_WORD_POSTER_COPIES);
+	const [posterCopies, setPosterCopies] = useState(DEFAULT_WORD_POSTER_COPIES);
 	// NaN while the field is empty, which `clampAgendaCopies` reads as the
 	// default rather than as 0: clearing the box to retype must not switch the
 	// agendas off.
@@ -109,7 +109,8 @@ export function MeetingPacketDialog({
 
 	const params = new URLSearchParams();
 	for (const key of chosen) params.append("piece", key);
-	if (chosen.includes("word-poster")) params.set("copies", String(copies));
+	if (chosen.includes("word-poster"))
+		params.set("copies", String(posterCopies));
 	if (duplex) params.set("duplex", "1");
 	const href = `/api/meetings/${dbMeetingId}/packet/pdf?${params.toString()}`;
 
@@ -123,15 +124,23 @@ export function MeetingPacketDialog({
 	if (duplex) agendaParams.set("duplex", "1");
 	const agendaHref = `/club/${encodeURIComponent(clubSlug)}/meeting/${encodeURIComponent(meetingId)}/print?${agendaParams.toString()}`;
 
-	const wantsPdf = chosen.length > 0;
 	const wantsAgendas = agendaCopies > 0;
-	const label = wantsPdf
-		? wantsAgendas
-			? "Download packet + open agendas"
-			: "Download packet"
-		: wantsAgendas
-			? "Open agendas"
-			: "Nothing selected";
+	// What one click does, and so what the button says.
+	const mode: "both" | "pdf" | "agendas" | "none" =
+		chosen.length > 0
+			? wantsAgendas
+				? "both"
+				: "pdf"
+			: wantsAgendas
+				? "agendas"
+				: "none";
+	const LABELS = {
+		both: "Download packet + open agendas",
+		pdf: "Download packet",
+		agendas: "Open agendas",
+		none: "Nothing selected",
+	} as const;
+	const label = LABELS[mode];
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -140,8 +149,8 @@ export function MeetingPacketDialog({
 					<DialogTitle>Print meeting packet</DialogTitle>
 				</DialogHeader>
 				<DialogDescription className="px-1 text-xs">
-					One PDF with everything for the night. Ticked from what this meeting
-					runs — change anything you like.
+					One PDF of role sheets and posters, and the agendas to print beside
+					it. Ticked from what this meeting runs — change anything you like.
 				</DialogDescription>
 
 				{ctx.isPending ? (
@@ -175,8 +184,8 @@ export function MeetingPacketDialog({
 									type="number"
 									min={WORD_POSTER_COPIES.min}
 									max={WORD_POSTER_COPIES.max}
-									value={copies}
-									onChange={(e) => setCopies(Number(e.target.value))}
+									value={posterCopies}
+									onChange={(e) => setPosterCopies(Number(e.target.value))}
 									className="h-9 w-20"
 								/>
 								<span className="text-xs text-muted-foreground">
@@ -251,12 +260,12 @@ export function MeetingPacketDialog({
 					</div>
 				)}
 
-				{ctx.isPending || (!wantsPdf && !wantsAgendas) ? (
+				{ctx.isPending || mode === "none" ? (
 					<Button disabled className="mt-2">
 						<FileDown />
 						{ctx.isPending ? "Working it out…" : label}
 					</Button>
-				) : wantsPdf ? (
+				) : mode !== "agendas" ? (
 					<Button asChild className="mt-2">
 						{/* A plain anchor, not a fetch: the browser owns the download, so a
 						    slow render shows browser progress rather than a dead dialog.
@@ -266,7 +275,7 @@ export function MeetingPacketDialog({
 							href={href}
 							download
 							onClick={() => {
-								if (wantsAgendas)
+								if (mode === "both")
 									window.open(agendaHref, "_blank", "noopener,noreferrer");
 							}}
 						>

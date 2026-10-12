@@ -18,6 +18,8 @@ import {
 	createRootRoute,
 	createRoute,
 	createRouter,
+	defaultParseSearch,
+	defaultStringifySearch,
 	isRedirect,
 	RouterProvider,
 } from "@tanstack/react-router";
@@ -481,16 +483,39 @@ describe("Print agenda route — ?copies and ?duplex (#1166)", () => {
 		}
 	});
 
-	it("duplex is on for 1 (string, parsed number, or the true a Link writes) and off otherwise", () => {
-		for (const raw of ["1", 1, true]) {
-			expect(validateSearch({ duplex: raw }).duplex, String(raw)).toBe(true);
+	it("duplex is on for the literal 1 only, the contract the PDF endpoint keeps", () => {
+		for (const raw of ["1", 1]) {
+			expect(validateSearch({ duplex: raw }).duplex, String(raw)).toBe(1);
 		}
-		for (const raw of ["0", 0, "true", "", false, undefined]) {
+		for (const raw of ["0", 0, "true", "", true, false, 2, undefined]) {
 			expect(
 				validateSearch({ duplex: raw }).duplex,
 				String(raw),
 			).toBeUndefined();
 		}
+	});
+
+	// Through the router's own query parser rather than a hand-built object: it
+	// JSON-decodes `duplex=1` to the number 1 and `duplex=true` to a boolean
+	// BEFORE `validateSearch` runs, which is what a pre-decoded fixture hides.
+	it("a real URL query string parses to the same values", () => {
+		const parsed = (qs: string) =>
+			validateSearch(defaultParseSearch(qs) as Record<string, unknown>);
+		expect(parsed("?layout=grid&copies=20&duplex=1")).toMatchObject({
+			layout: "grid",
+			copies: 20,
+			duplex: 1,
+		});
+		expect(
+			parsed("?layout=grid&copies=999&duplex=true").duplex,
+		).toBeUndefined();
+		expect(parsed("?layout=grid&copies=999").copies).toBe(60);
+		expect(parsed("?layout=grid&copies=2.7").copies).toBe(2);
+		expect(parsed("?layout=grid&copies=abc").copies).toBeUndefined();
+		// And what a tab link writes round-trips as the literal the PDF expects.
+		expect(defaultStringifySearch({ layout: "grid", duplex: 1 })).toBe(
+			"?layout=grid&duplex=1",
+		);
 	});
 
 	it("a bare URL's redirect keeps copies and duplex", async () => {
@@ -501,7 +526,7 @@ describe("Print agenda route — ?copies and ?duplex (#1166)", () => {
 			layout: "grid",
 			chrome: undefined,
 			copies: 3,
-			duplex: true,
+			duplex: 1,
 		});
 	});
 
@@ -556,7 +581,7 @@ describe("Print agenda route — copies draw after mount (#1166)", () => {
 	afterEach(cleanup);
 
 	it("the server HTML holds exactly one agenda however many copies are asked for", async () => {
-		const router = buildRouter({ copies: 20, duplex: true });
+		const router = buildRouter({ copies: 20, duplex: 1 });
 		await router.load();
 		const html = renderToString(<RouterProvider router={router} />);
 		const doc = new DOMParser().parseFromString(html, "text/html");
@@ -566,9 +591,7 @@ describe("Print agenda route — copies draw after mount (#1166)", () => {
 	});
 
 	it("after mount it draws all the copies, with a blank between each for a one-page layout", async () => {
-		render(
-			<RouterProvider router={buildRouter({ copies: 3, duplex: true })} />,
-		);
+		render(<RouterProvider router={buildRouter({ copies: 3, duplex: 1 })} />);
 		await waitFor(() => expect(sheets(document)).toBe(3), { timeout: 10_000 });
 		expect(blanks(document)).toBe(2);
 		expect(screen.getByTestId("print-copies-note").textContent).toBe(
@@ -592,9 +615,7 @@ describe("Print agenda route — copies draw after mount (#1166)", () => {
 	});
 
 	it("the layout tabs keep copies and duplex", async () => {
-		render(
-			<RouterProvider router={buildRouter({ copies: 3, duplex: true })} />,
-		);
+		render(<RouterProvider router={buildRouter({ copies: 3, duplex: 1 })} />);
 		await waitFor(() => expect(screen.getByText("Editorial")).toBeTruthy(), {
 			timeout: 10_000,
 		});
@@ -604,6 +625,23 @@ describe("Print agenda route — copies draw after mount (#1166)", () => {
 			?.getAttribute("href");
 		expect(href).toContain("layout=editorial");
 		expect(href).toContain("copies=3");
-		expect(href).toContain("duplex");
+		// The literal 1, never `true`: the PDF endpoint only honours `1`.
+		expect(href).toContain("duplex=1");
+		expect(href).not.toContain("duplex=true");
+	});
+
+	it("the server-rendered tab links carry neither: they must match the cached HTML (#1166)", async () => {
+		const router = buildRouter({ copies: 20, duplex: 1 });
+		await router.load();
+		const html = renderToString(<RouterProvider router={router} />);
+		const doc = new DOMParser().parseFromString(html, "text/html");
+		const hrefs = [...doc.querySelectorAll("a[href*='layout=']")].map(
+			(a) => a.getAttribute("href") ?? "",
+		);
+		expect(hrefs.length).toBeGreaterThanOrEqual(4);
+		for (const href of hrefs) {
+			expect(href).not.toContain("copies");
+			expect(href).not.toContain("duplex");
+		}
 	});
 });

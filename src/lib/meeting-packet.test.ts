@@ -178,7 +178,9 @@ describe("packetPageCount", () => {
 describe("clampAgendaCopies (#1166)", () => {
 	it("floors, then clamps into 0..60", () => {
 		expect(clampAgendaCopies(2.7)).toBe(2);
-		expect(clampAgendaCopies(75)).toBe(AGENDA_COPIES.max);
+		// The literal beside the constant: only the literal can fail if the cap moves.
+		expect(clampAgendaCopies(75)).toBe(60);
+		expect(AGENDA_COPIES.max).toBe(60);
 		expect(clampAgendaCopies(60)).toBe(60);
 		expect(clampAgendaCopies(-4)).toBe(AGENDA_COPIES.min);
 		expect(clampAgendaCopies(0)).toBe(0);

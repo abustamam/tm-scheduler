@@ -70,7 +70,7 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 			layout?: AgendaLayout;
 			chrome?: "none";
 			copies?: number;
-			duplex?: true;
+			duplex?: 1;
 		} => ({
 			// No default here (#1069). A missing, empty or unknown layout is
 			// `undefined`, and the LOADER redirects it to the club's own default,
@@ -200,10 +200,12 @@ function parseCopies(raw: unknown): number | undefined {
 	return whole < 1 ? undefined : whole;
 }
 
-/** `?duplex=1` (#1166). The router JSON-parses `1` to a number, and a link it
- *  built itself writes `true`; the string is what a hand-typed URL carries. */
-function parseDuplex(raw: unknown): true | undefined {
-	return raw === "1" || raw === 1 || raw === true ? true : undefined;
+/** `?duplex=1` (#1166), and only that: the packet PDF turns on for the literal
+ *  `1` alone, so a URL that pads the HTML but not the PDF must not exist. The
+ *  router JSON-parses the `1` in the URL to a number before this sees it; the
+ *  string is for a caller that bypasses the parser. */
+function parseDuplex(raw: unknown): 1 | undefined {
+	return raw === "1" || raw === 1 ? 1 : undefined;
 }
 
 /** "6:45 – 7:45 PM": drop the meridiem from the start when it matches the end's. */
@@ -378,7 +380,14 @@ function PrintAgenda() {
 								params={{ clubId: clubIdParam, meetingId }}
 								// Switching layout keeps the packet's copy count and duplex
 								// flag (#1166), so the person printing does not lose them.
-								search={{ layout: l.id, copies: requestedCopies, duplex }}
+								// Written only after mount, like the copies themselves: the
+								// first render must match the HTML the service worker cached
+								// for `?layout=X`, which carries neither.
+								search={{
+									layout: l.id,
+									copies: mounted ? requestedCopies : undefined,
+									duplex: mounted ? duplex : undefined,
+								}}
 								style={{
 									...AGENDA_TAB_STYLE,
 									...(l.id === layout ? AGENDA_TAB_ACTIVE_STYLE : null),
@@ -457,7 +466,7 @@ function PrintAgenda() {
 			{copies > 1 ? (
 				<AgendaCopies
 					copies={copies}
-					duplex={duplex === true}
+					duplex={duplex === 1}
 					layout={layout}
 					header={header}
 					roles={roles}
