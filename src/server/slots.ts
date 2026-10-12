@@ -26,12 +26,12 @@ import {
 	editSlotSpeech,
 	reassignSlotCore,
 	releaseSlotCore,
+	writeSpeakerDetails,
 } from "./slots-logic";
 import {
 	speakerDetailsSchema,
 	speakerDetailsUpdateSchema,
 } from "./speaker-details-schema";
-import { speechDetails } from "./speech-log-edit-logic";
 import {
 	requestWriteActorWithProof,
 	requireSessionActor,
@@ -376,36 +376,19 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 			throw new Error("Assign a member before adding speech details.");
 		}
 		await db.transaction(async (tx) => {
-			const before = await speechDetails(tx, slot.speechId);
-			await editSlotSpeech(tx, {
-				slotId: data.slotId,
-				personId: slot.personId as string,
-				currentSpeechId: slot.speechId,
-				input: data.speakerDetails,
-			});
-			// Re-read through the SLOT: an edit can create a speech (none before)
-			// or unlink one (blank input), so the after-speech is not necessarily
-			// the one we started with.
-			const [after] = await tx
-				.select({ speechId: roleSlots.speechId })
-				.from(roleSlots)
-				.where(eq(roleSlots.id, data.slotId))
-				.limit(1);
-			const afterSpeechId = after?.speechId ?? null;
-			await logActivity(tx, {
+			await writeSpeakerDetails(tx, {
 				clubId: slot.clubId,
 				actorMemberId,
-				action: "meeting_edit",
-				targetType: "meeting",
-				targetId: slot.meetingId,
-				detail: {
-					change: "speaker_details",
-					slotId: data.slotId,
-					speechId: afterSpeechId ?? slot.speechId,
-					before,
-					after: await speechDetails(tx, afterSpeechId),
-					proof: "session",
-				},
+				meetingId: slot.meetingId,
+				slotId: data.slotId,
+				currentSpeechId: slot.speechId,
+				write: () =>
+					editSlotSpeech(tx, {
+						slotId: data.slotId,
+						personId: slot.personId as string,
+						currentSpeechId: slot.speechId,
+						input: data.speakerDetails,
+					}),
 			});
 		});
 

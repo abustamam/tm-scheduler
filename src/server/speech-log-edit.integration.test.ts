@@ -398,6 +398,77 @@ describe.skipIf(!hasTestDb)("edit a speech from the speech log (#1159)", () => {
 			await editSpeechFromLog({ data: { ...withProject(), slotId } });
 
 			expect((await snapshot(slotId)).speech?.projectId).toBe(projectId);
+			// Logged as the slot's holder, the speaker arm's actor.
+			const log = await editLog();
+			expect(log).toHaveLength(1);
+			expect(log[0]?.actorMemberId).toBe(former.memberId);
+		});
+
+		it("a title-only edit keeps the free-text path, project, level and introduction the form did not send", async () => {
+			const { slotId, speechId } = await speakerSlot(seed.memberId, {
+				title: "Old title",
+			});
+			await testDb
+				.update(speeches)
+				.set({
+					introduction: "Introduce me kindly",
+					pathwayPath: "Typed Path",
+					projectName: "Typed Project",
+					projectLevel: "Level 2",
+				})
+				.where(eq(speeches.id, speechId as string));
+			await setStatus("completed");
+			sessionUserId = seed.memberUserId;
+
+			// The sheet sends only the title (the picker hides the rest).
+			await editSpeechFromLog({
+				data: { slotId, speakerDetails: { speechTitle: "New title" } },
+			});
+
+			const [row] = await testDb
+				.select({
+					title: speeches.title,
+					introduction: speeches.introduction,
+					pathwayPath: speeches.pathwayPath,
+					projectName: speeches.projectName,
+					projectLevel: speeches.projectLevel,
+				})
+				.from(speeches)
+				.where(eq(speeches.id, speechId as string));
+			expect(row).toEqual({
+				title: "New title",
+				introduction: "Introduce me kindly",
+				pathwayPath: "Typed Path",
+				projectName: "Typed Project",
+				projectLevel: "Level 2",
+			});
+		});
+
+		it('a field sent as "" is a deliberate clear, not a keep', async () => {
+			const { slotId, speechId } = await speakerSlot(seed.memberId, {
+				title: "Old title",
+			});
+			await testDb
+				.update(speeches)
+				.set({ pathwayPath: "Typed Path", projectName: "Typed Project" })
+				.where(eq(speeches.id, speechId as string));
+			sessionUserId = seed.memberUserId;
+
+			await editSpeechFromLog({
+				data: {
+					slotId,
+					speakerDetails: { speechTitle: "Old title", pathwayPath: "" },
+				},
+			});
+
+			const [row] = await testDb
+				.select({
+					pathwayPath: speeches.pathwayPath,
+					projectName: speeches.projectName,
+				})
+				.from(speeches)
+				.where(eq(speeches.id, speechId as string));
+			expect(row).toEqual({ pathwayPath: null, projectName: "Typed Project" });
 		});
 
 		it("also works on a scheduled meeting, and a second edit replaces the first project", async () => {
@@ -578,6 +649,38 @@ describe.skipIf(!hasTestDb)("edit a speech from the speech log (#1159)", () => {
 				"Nothing to save. To remove a speech, use the meeting's agenda.",
 			);
 			expect((await snapshot(slotId)).speechId).toBe(speechId);
+		});
+
+		it("the holder of a slot whose speech belongs to someone else (guest re-linked from Alice to Bob)", async () => {
+			// Alice's speech stays on the slot when the guest is unlinked
+			// (`guest-pipeline-logic` keeps `speechId`); re-linking the slot to Bob
+			// leaves a plain-member holder pointing at a speech he does not own.
+			// Seeded directly: the speech is owned by the club admin's Person.
+			const { slotId } = await speakerSlot(seed.adminMemberId, {
+				title: "Alice's speech",
+			});
+			await testDb
+				.update(roleSlots)
+				.set({ assignedMemberId: seed.memberId })
+				.where(eq(roleSlots.id, slotId));
+			await setStatus("completed");
+			const before = await snapshot(slotId);
+			sessionUserId = seed.memberUserId;
+			await expectRefusedUntouched(
+				slotId,
+				before,
+				editSpeechFromLog({
+					data: { slotId, speakerDetails: { speechTitle: "Bob rewrote it" } },
+				}),
+				NO_PERMISSION_MESSAGE,
+			);
+
+			// An admin still may, through the admin arm.
+			sessionUserId = seed.adminUserId;
+			await editSpeechFromLog({
+				data: { slotId, speakerDetails: { speechTitle: "Admin fixed it" } },
+			});
+			expect((await snapshot(slotId)).speech?.title).toBe("Admin fixed it");
 		});
 
 		it("a slot that does not exist", async () => {

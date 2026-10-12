@@ -2326,6 +2326,65 @@ export async function releaseSlotCore(
 	return { clubId: slot.clubId };
 }
 
+/** The two speech fields the speaker-details writers log before and after
+ *  (#763). A slot with no speech reads as both null. */
+export async function speechDetails(
+	conn: DbOrTx,
+	speechId: string | null,
+): Promise<{ title: string | null; projectId: string | null }> {
+	if (!speechId) return { title: null, projectId: null };
+	const [row] = await conn
+		.select({ title: speeches.title, projectId: speeches.projectId })
+		.from(speeches)
+		.where(eq(speeches.id, speechId))
+		.limit(1);
+	return { title: row?.title ?? null, projectId: row?.projectId ?? null };
+}
+
+/**
+ * The shared body of the two speaker-details writers (`updateSpeakerDetails`,
+ * `applySpeechLogEdit`): read the speech's before-details, run `write`, re-read
+ * through the SLOT (an edit can create a speech, or unlink one) and log one
+ * `meeting_edit` with the same detail either way. The writer is the parameter,
+ * so what each caller may do (unlink or not) stays its own and visible at the
+ * call. Runs in the caller's transaction.
+ */
+export async function writeSpeakerDetails(
+	conn: DbOrTx,
+	args: {
+		clubId: string;
+		actorMemberId: string | null;
+		meetingId: string;
+		slotId: string;
+		currentSpeechId: string | null;
+		write: () => Promise<void>;
+	},
+): Promise<void> {
+	const before = await speechDetails(conn, args.currentSpeechId);
+	await args.write();
+	const [after] = await conn
+		.select({ speechId: roleSlots.speechId })
+		.from(roleSlots)
+		.where(eq(roleSlots.id, args.slotId))
+		.limit(1);
+	const afterSpeechId = after?.speechId ?? null;
+	await logActivity(conn, {
+		clubId: args.clubId,
+		actorMemberId: args.actorMemberId,
+		action: "meeting_edit",
+		targetType: "meeting",
+		targetId: args.meetingId,
+		detail: {
+			change: "speaker_details",
+			slotId: args.slotId,
+			speechId: afterSpeechId ?? args.currentSpeechId,
+			before,
+			after: await speechDetails(conn, afterSpeechId),
+			proof: "session",
+		},
+	});
+}
+
 /**
  * Edit the speech attached to a speaker slot (the "Edit speech" flow):
  *  - real content + slot already has a speech → update that speech in place.

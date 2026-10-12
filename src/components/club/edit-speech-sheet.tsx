@@ -89,6 +89,17 @@ export function EditSpeechSheet({
 			toast.error(windowError);
 			return;
 		}
+		// Free text is sent as typed; when `projectId` is set the server overwrites
+		// all three from the catalog (#418). The picker HIDES these inputs for a
+		// member with a path, so on the speech-log writer an input that is not on
+		// the form is left out (the server keeps what is stored) and one that is
+		// there but empty is sent as "" (a deliberate clear). The agenda writer
+		// keeps its behaviour: empty is undefined.
+		const freeText = (name: string) => {
+			if (writer === "speech-log" && !form.has(name)) return undefined;
+			const value = String(form.get(name) ?? "").trim();
+			return value || (writer === "speech-log" ? "" : undefined);
+		};
 		setBusy(true);
 		try {
 			const save =
@@ -99,14 +110,9 @@ export function EditSpeechSheet({
 					speakerDetails: {
 						speechTitle:
 							String(form.get("speechTitle") ?? "").trim() || undefined,
-						// Free text is sent as typed; when `projectId` is set the server
-						// overwrites all three from the catalog (#418).
-						pathwayPath:
-							String(form.get("pathwayPath") ?? "").trim() || undefined,
-						projectName:
-							String(form.get("projectName") ?? "").trim() || undefined,
-						projectLevel:
-							String(form.get("projectLevel") ?? "").trim() || undefined,
+						pathwayPath: freeText("pathwayPath"),
+						projectName: freeText("projectName"),
+						projectLevel: freeText("projectLevel"),
 						projectId,
 						minMinutes,
 						maxMinutes,
