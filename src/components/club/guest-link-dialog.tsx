@@ -33,14 +33,15 @@ function errorMessage(err: unknown, fallback: string): string {
 }
 
 /**
- * "Same person as…" (#1127): say that this club's guest and a guest or member of
- * another club the officer runs are one human.
+ * "Same person as…" (#1127): say that this club's guest and a guest of another
+ * club the officer runs are one human.
  *
- * Three steps in one dialog. PICK a record from the other club (name, email and
- * phone only, never its stage or history: clubs stay blind); CONFIRM against the
- * Person the link would produce, which is `previewGuestLink`'s four values and
- * nothing else; then LINK, which sends those same four values back so the server
- * can refuse if they changed in between. The other record's Person is kept.
+ * Three steps in one dialog. PICK a guest of the other club (name, email and
+ * phone only, never its stage or history: clubs stay blind); CONFIRM against
+ * `previewGuestLink`'s answer, which is the kept record as it is (a link writes
+ * none of it) and this guest's own email and phone, and nothing else; then LINK,
+ * which sends that same answer back so the server can refuse if it changed in
+ * between. The other guest's Person is kept.
  */
 export function GuestLinkDialog({
 	guestId,
@@ -118,7 +119,6 @@ export function GuestLinkDialog({
 					guestId,
 					otherClubId,
 					otherId: candidate.id,
-					otherKind: candidate.kind,
 				},
 			});
 			setPicked(candidate);
@@ -140,7 +140,6 @@ export function GuestLinkDialog({
 					guestId,
 					otherClubId,
 					otherId: picked.id,
-					otherKind: picked.kind,
 					expected: preview,
 				},
 			});
@@ -176,22 +175,29 @@ export function GuestLinkDialog({
 						<p>
 							Link <span className="font-medium">{guestName}</span> to{" "}
 							<span className="font-medium">{picked.name}</span> at{" "}
-							{otherClubName}? They will be one person:
+							{otherClubName}? They become one person. The record at{" "}
+							{otherClubName} stays exactly as it is:
 						</p>
 						<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-lg bg-[var(--surface-strong)] p-3">
 							<dt className="text-[var(--sea-ink-soft)]">Name</dt>
-							<dd className="font-medium">{preview.name}</dd>
-							{preview.preferredName ? (
+							<dd className="font-medium">{preview.kept.name}</dd>
+							{preview.kept.preferredName ? (
 								<>
 									<dt className="text-[var(--sea-ink-soft)]">Goes by</dt>
-									<dd>{preview.preferredName}</dd>
+									<dd>{preview.kept.preferredName}</dd>
 								</>
 							) : null}
 							<dt className="text-[var(--sea-ink-soft)]">Email</dt>
-							<dd>{preview.email ?? "None"}</dd>
+							<dd>{preview.kept.email ?? "None"}</dd>
 							<dt className="text-[var(--sea-ink-soft)]">Phone</dt>
-							<dd>{preview.phone ?? "None"}</dd>
+							<dd>{preview.kept.phone ?? "None"}</dd>
 						</dl>
+						<p className="text-[var(--sea-ink-soft)]">
+							{guestName}'s own email and phone (
+							{preview.own.email ?? "no email"},{" "}
+							{preview.own.phone ?? "no phone"}) are kept aside, and come back
+							if you separate them later.
+						</p>
 						<DialogFooter>
 							<Button
 								type="button"
@@ -251,7 +257,7 @@ export function GuestLinkDialog({
 						) : (
 							<ul className="flex max-h-[40svh] flex-col gap-2 overflow-y-auto">
 								{candidates.map((c) => (
-									<li key={`${c.kind}:${c.id}`}>
+									<li key={c.id}>
 										<button
 											type="button"
 											disabled={busy}
@@ -266,9 +272,6 @@ export function GuestLinkDialog({
 													{[c.email, c.phone].filter(Boolean).join(" · ") ||
 														"No contact"}
 												</span>
-											</span>
-											<span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-xs font-semibold">
-												{c.kind === "member" ? "Member" : "Guest"}
 											</span>
 										</button>
 									</li>

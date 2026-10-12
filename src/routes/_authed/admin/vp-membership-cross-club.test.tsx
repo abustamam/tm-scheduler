@@ -224,14 +224,16 @@ describe("guest card cross-club menu (#1127)", () => {
 
 	it("Same person as… previews the pick, then links with exactly what was previewed", async () => {
 		const shown = {
-			name: "Robert Lee",
-			preferredName: "Bob",
-			email: "rob@example.com",
-			phone: null,
+			kept: {
+				name: "Robert Lee",
+				preferredName: "Bob",
+				email: "rob@example.com",
+				phone: null,
+			},
+			own: { email: "ada@example.com", phone: "+14155552671" },
 		};
 		vi.mocked(listGuestLinkCandidates).mockResolvedValue([
 			{
-				kind: "member",
 				id: "99999999-9999-4999-8999-999999999999",
 				name: "Robert Lee",
 				email: "rob@example.com",
@@ -252,16 +254,18 @@ describe("guest card cross-club menu (#1127)", () => {
 		});
 		fireEvent.click(pick);
 
-		// The confirm step shows the resulting name, goes-by, email and phone.
+		// The confirm step shows the kept record as it is, and the guest's own contact.
 		await screen.findByText("Bob");
 		expect(screen.getByText("rob@example.com")).toBeTruthy();
+		expect(screen.getByText(/kept aside/).textContent).toContain(
+			"+14155552671",
+		);
 		expect(previewGuestLink).toHaveBeenCalledWith({
 			data: {
 				clubId: CLUB,
 				guestId: GUEST,
 				otherClubId: OTHER_1,
 				otherId: "99999999-9999-4999-8999-999999999999",
-				otherKind: "member",
 			},
 		});
 		expect(linkGuestAcrossClubs).not.toHaveBeenCalled();
@@ -274,7 +278,6 @@ describe("guest card cross-club menu (#1127)", () => {
 					guestId: GUEST,
 					otherClubId: OTHER_1,
 					otherId: "99999999-9999-4999-8999-999999999999",
-					otherKind: "member",
 					expected: shown,
 				},
 			}),

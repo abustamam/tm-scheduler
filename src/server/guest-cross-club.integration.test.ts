@@ -66,6 +66,7 @@ const {
 	GUEST_LINK_NOT_FOUND_MESSAGE,
 	GUEST_LINK_SAME_PERSON_MESSAGE,
 	GUEST_LINK_SIGNED_IN_MESSAGE,
+	GUEST_LINK_TARGET_NOT_GUEST_MESSAGE,
 	GUEST_LINK_STALE_MESSAGE,
 	GUEST_NOW_MEMBER_MESSAGE,
 	GUEST_SEPARATE_FIRST_MESSAGE,
@@ -74,9 +75,7 @@ const {
 	loadOtherAdminClubs,
 	previewGuestLink,
 } = await import("#/server/guest-pipeline-logic");
-const { guestLinkResult, mergePeople } = await import(
-	"#/server/people-merge-logic"
-);
+const { mergePeople } = await import("#/server/people-merge-logic");
 const { statementsDuring } = await import("#/test/query-spy");
 
 const uniq = () => randomUUID().slice(0, 8);
@@ -649,7 +648,7 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 	describe("Same person as…", () => {
 		async function preview(
 			guestId: string,
-			other: { id: string; kind: "guest" | "member" },
+			other: { id: string },
 			userId = officer,
 		) {
 			return previewGuestLink({
@@ -658,13 +657,12 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				guestId,
 				otherClubId: a.clubId,
 				otherId: other.id,
-				otherKind: other.kind,
 			});
 		}
 
 		async function link(
 			guestId: string,
-			other: { id: string; kind: "guest" | "member" },
+			other: { id: string },
 			expected: Awaited<ReturnType<typeof preview>>,
 			userId = officer,
 		) {
@@ -674,46 +672,56 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				guestId,
 				otherClubId: a.clubId,
 				otherId: other.id,
-				otherKind: other.kind,
 				expected,
 			});
 		}
 
-		it("links B's guest to A's guest: one Person, B's old Person gone, contact filled only where blank", async () => {
+		it("links B's guest to A's guest: one Person, B's old Person gone, and the kept record is exactly as it was", async () => {
+			const keeperEmail = `rob-${uniq()}@example.test`;
 			const keeper = await seedGuest(a.clubId, {
 				name: "Robert Lee",
-				email: `rob-${uniq()}@example.test`,
+				email: keeperEmail,
 				phone: null,
 			});
+			const mineEmail = `bob-${uniq()}@example.test`;
 			const mine = await seedGuest(b.clubId, {
 				name: "Bob Lee",
-				email: `bob-${uniq()}@example.test`,
+				email: mineEmail,
 				phone: "+14155550100",
 			});
+			await testDb
+				.update(people)
+				.set({
+					preferredName: "Bob",
+					preferredContact: "sms",
+					contactPreferenceBy: "officer",
+				})
+				.where(eq(people.id, mine.personId));
 			const keeperBefore = await personRow(keeper.personId);
 
-			const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
-			// The keeper's own email wins; the blank phone is filled from B's.
+			const shown = await preview(mine.id, { id: keeper.id });
+			// The kept record as it is (a blank phone stays blank), and this guest's
+			// own contact, recorded for a Separate.
 			expect(shown).toEqual({
-				name: "Robert Lee",
-				preferredName: null,
-				email: keeperBefore?.email,
-				phone: "+14155550100",
+				kept: {
+					name: "Robert Lee",
+					preferredName: null,
+					email: keeperEmail,
+					phone: null,
+				},
+				own: { email: mineEmail, phone: "+14155550100" },
 			});
-			await expect(
-				link(mine.id, { id: keeper.id, kind: "guest" }, shown),
-			).resolves.toEqual({ ok: true });
+			await expect(link(mine.id, { id: keeper.id }, shown)).resolves.toEqual({
+				ok: true,
+			});
 
 			expect(
 				(await guestRowsOf(keeper.personId)).map((r) => r.clubId).sort(),
 			).toEqual([a.clubId, b.clubId].sort());
 			expect(await personRow(mine.personId)).toBeNull();
-			const merged = await personRow(keeper.personId);
-			expect(merged).toMatchObject({
-				name: "Robert Lee",
-				email: keeperBefore?.email,
-				phone: "+14155550100",
-			});
+			// Every field of the kept Person is as it was: nothing was filled from the
+			// absorbed side, its goes-by name and contact preference included.
+			expect(await personRow(keeper.personId)).toEqual(keeperBefore);
 			// Each club keeps its own spelling.
 			const [bRow] = await testDb
 				.select({ name: guests.name })
@@ -722,94 +730,135 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			expect(bRow?.name).toBe("Bob Lee");
 		});
 
-		it("adopts the absorbed goes-by name only when the keeper has none", async () => {
-			const keeper = await seedGuest(a.clubId, { name: "Robert Lee" });
-			const mine = await seedGuest(b.clubId, { name: "Bob Lee" });
-			await testDb
-				.update(people)
-				.set({ preferredName: "Bob" })
-				.where(eq(people.id, mine.personId));
-			const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
-			expect(shown.preferredName).toBe("Bob");
-			await link(mine.id, { id: keeper.id, kind: "guest" }, shown);
-			expect((await personRow(keeper.personId))?.preferredName).toBe("Bob");
-		});
-
-		it("links B's guest to A's MEMBER: re-points, and the member's blank contact stays blank", async () => {
-			const member = await seedMember(a.clubId, { email: null, phone: null });
+		it("a guest-only keeper with a blank phone stays blank, and its blank goes-by name and preference too", async () => {
+			const keeper = await seedGuest(a.clubId, { name: "Robert", phone: null });
 			const mine = await seedGuest(b.clubId, {
-				name: "Mem Ber",
-				email: `mem-${uniq()}@example.test`,
-				phone: "+14155550111",
-			});
-			const shown = await preview(mine.id, {
-				id: member.memberId,
-				kind: "member",
-			});
-			// The member's contact is never written: blank stays blank.
-			expect(shown.email).toBeNull();
-			expect(shown.phone).toBeNull();
-			await link(mine.id, { id: member.memberId, kind: "member" }, shown);
-
-			const [row] = await testDb
-				.select({ personId: guests.personId })
-				.from(guests)
-				.where(eq(guests.id, mine.id));
-			expect(row?.personId).toBe(member.personId);
-			expect(await personRow(mine.personId)).toBeNull();
-			const kept = await personRow(member.personId);
-			expect(kept?.email).toBeNull();
-			expect(kept?.phone).toBeNull();
-		});
-
-		it("leaves a member's existing contact exactly as it was", async () => {
-			const memberEmail = `m-${uniq()}@example.test`;
-			const member = await seedMember(a.clubId, {
-				email: memberEmail,
-				phone: null,
-			});
-			const mine = await seedGuest(b.clubId, {
-				email: `g-${uniq()}@example.test`,
-				phone: "+14155550122",
-			});
-			const shown = await preview(mine.id, {
-				id: member.memberId,
-				kind: "member",
-			});
-			await link(mine.id, { id: member.memberId, kind: "member" }, shown);
-			const kept = await personRow(member.personId);
-			expect(kept?.email).toBe(memberEmail);
-			expect(kept?.phone).toBeNull();
-		});
-
-		it("never writes the contact of a signed-in keeper, email or phone", async () => {
-			// The keeper holds no membership, so it is not "a member"; only the
-			// signed-in check keeps its blank email and phone blank.
-			const keeper = await seedGuest(a.clubId, { email: null, phone: null });
-			const signedIn = await seedUser(null);
-			await testDb
-				.update(people)
-				.set({ userId: null })
-				.where(eq(people.id, signedIn.personId));
-			await testDb
-				.update(people)
-				.set({ userId: signedIn.userId })
-				.where(eq(people.id, keeper.personId));
-			const mine = await seedGuest(b.clubId, {
-				email: `abs-${uniq()}@example.test`,
+				name: "Bobby",
 				phone: "+14155550133",
 			});
-			const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
-			expect(shown.phone).toBeNull();
-			expect(shown.email).toBeNull();
-			await link(mine.id, { id: keeper.id, kind: "guest" }, shown);
-			const kept = await personRow(keeper.personId);
-			expect(kept?.phone).toBeNull();
-			expect(kept?.email).toBeNull();
 			await testDb
 				.update(people)
-				.set({ userId: null })
-				.where(eq(people.id, keeper.personId));
+				.set({
+					preferredName: "Bob",
+					preferredContact: "sms",
+					contactPreferenceBy: "officer",
+				})
+				.where(eq(people.id, mine.personId));
+			const shown = await preview(mine.id, { id: keeper.id });
+			expect(shown.kept.phone).toBeNull();
+			expect(shown.kept.preferredName).toBeNull();
+			await link(mine.id, { id: keeper.id }, shown);
+			const kept = await personRow(keeper.personId);
+			expect(kept?.phone).toBeNull();
+			expect(kept?.preferredName).toBeNull();
+			expect(kept?.preferredContact).toBeNull();
+			expect(kept?.contactPreferenceBy).toBeNull();
+		});
+
+		describe("only a GUEST whose Person is guest-only is a target", () => {
+			const stub = {
+				kept: { name: "x", preferredName: null, email: null, phone: null },
+				own: { email: null, phone: null },
+			};
+
+			async function refusedEverywhere(
+				mine: { id: string },
+				target: { id: string },
+				message: string,
+			) {
+				await expect(preview(mine.id, target)).rejects.toThrow(message);
+				await expect(link(mine.id, target, stub)).rejects.toThrow(message);
+			}
+
+			it("a MEMBER of the other club is not a target: its id names no guest there", async () => {
+				const member = await seedMember(a.clubId);
+				const mine = await seedGuest(b.clubId);
+				await refusedEverywhere(
+					mine,
+					{ id: member.memberId },
+					GUEST_LINK_NOT_FOUND_MESSAGE,
+				);
+				expect(await personRow(mine.personId)).not.toBeNull();
+			});
+
+			it("a guest whose Person holds a membership elsewhere", async () => {
+				const keeper = await seedGuest(a.clubId);
+				const mine = await seedGuest(b.clubId);
+				await testDb.insert(members).values({
+					clubId: c.clubId,
+					personId: keeper.personId,
+					name: "Member Elsewhere",
+					clubRole: "member",
+					status: "active",
+				});
+				await refusedEverywhere(
+					mine,
+					keeper,
+					GUEST_LINK_TARGET_NOT_GUEST_MESSAGE,
+				);
+				expect(await personRow(mine.personId)).not.toBeNull();
+			});
+
+			it("a guest whose Person is signed in", async () => {
+				const keeper = await seedGuest(a.clubId);
+				const signedIn = await seedUser(null);
+				await testDb
+					.update(people)
+					.set({ userId: null })
+					.where(eq(people.id, signedIn.personId));
+				await testDb
+					.update(people)
+					.set({ userId: signedIn.userId })
+					.where(eq(people.id, keeper.personId));
+				const mine = await seedGuest(b.clubId);
+				await refusedEverywhere(
+					mine,
+					keeper,
+					GUEST_LINK_TARGET_NOT_GUEST_MESSAGE,
+				);
+				await testDb
+					.update(people)
+					.set({ userId: null })
+					.where(eq(people.id, keeper.personId));
+			});
+
+			it("a guest whose Person was a member (a removal names it)", async () => {
+				const keeper = await seedGuest(a.clubId);
+				const mine = await seedGuest(b.clubId);
+				await testDb.insert(activityLog).values({
+					clubId: a.clubId,
+					actorMemberId: null,
+					action: "member_remove",
+					targetType: "member",
+					detail: { personId: keeper.personId },
+				});
+				await refusedEverywhere(
+					mine,
+					keeper,
+					GUEST_LINK_TARGET_NOT_GUEST_MESSAGE,
+				);
+			});
+
+			it("is checked under the locks too: a membership that appears while the link waits refuses it", async () => {
+				const keeper = await seedGuest(a.clubId);
+				const mine = await seedGuest(b.clubId);
+				const shown = await preview(mine.id, { id: keeper.id });
+				const err = await parkedThen(
+					b.clubId,
+					() => link(mine.id, { id: keeper.id }, shown),
+					async () => {
+						await testDb.insert(members).values({
+							clubId: a.clubId,
+							personId: keeper.personId,
+							name: "Late Member",
+							clubRole: "member",
+							status: "active",
+						});
+					},
+				);
+				expect(err?.message).toBe(GUEST_LINK_TARGET_NOT_GUEST_MESSAGE);
+				expect(await personRow(mine.personId)).not.toBeNull();
+			});
 		});
 
 		it("is refused when this guest's Person holds a membership", async () => {
@@ -822,32 +871,38 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				clubRole: "member",
 				status: "inactive",
 			});
-			await expect(
-				preview(mine.id, { id: keeper.id, kind: "guest" }),
-			).rejects.toThrow(GUEST_LINK_HAS_MEMBERSHIP_MESSAGE);
+			await expect(preview(mine.id, { id: keeper.id })).rejects.toThrow(
+				GUEST_LINK_HAS_MEMBERSHIP_MESSAGE,
+			);
 			await expect(
 				link(
 					mine.id,
-					{ id: keeper.id, kind: "guest" },
-					{ name: "x", preferredName: null, email: null, phone: null },
+					{ id: keeper.id },
+					{
+						kept: { name: "x", preferredName: null, email: null, phone: null },
+						own: { email: null, phone: null },
+					},
 				),
 			).rejects.toThrow(GUEST_LINK_HAS_MEMBERSHIP_MESSAGE);
 			expect(await personRow(mine.personId)).not.toBeNull();
 		});
 
 		describe("a guest's Person with a history of its own is not absorbed (#1127 review)", () => {
-			const stub = { name: "x", preferredName: null, email: null, phone: null };
+			const stub = {
+				kept: { name: "x", preferredName: null, email: null, phone: null },
+				own: { email: null, phone: null },
+			};
 
 			async function refuseAndWriteNothing(
 				mine: { id: string; personId: string },
 				keeper: { id: string; personId: string },
 			) {
-				await expect(
-					preview(mine.id, { id: keeper.id, kind: "guest" }),
-				).rejects.toThrow(GUEST_LINK_HAS_HISTORY_MESSAGE);
-				await expect(
-					link(mine.id, { id: keeper.id, kind: "guest" }, stub),
-				).rejects.toThrow(GUEST_LINK_HAS_HISTORY_MESSAGE);
+				await expect(preview(mine.id, { id: keeper.id })).rejects.toThrow(
+					GUEST_LINK_HAS_HISTORY_MESSAGE,
+				);
+				await expect(link(mine.id, { id: keeper.id }, stub)).rejects.toThrow(
+					GUEST_LINK_HAS_HISTORY_MESSAGE,
+				);
 				// Nothing moved: both Persons stand and each guest row is on its own.
 				expect(await personRow(mine.personId)).not.toBeNull();
 				expect(await personRow(keeper.personId)).not.toBeNull();
@@ -942,10 +997,10 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			it("the history is checked under the locks too: one that appears while the link waits refuses it", async () => {
 				const keeper = await seedGuest(a.clubId);
 				const mine = await seedGuest(b.clubId);
-				const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
+				const shown = await preview(mine.id, { id: keeper.id });
 				const err = await parkedThen(
 					b.clubId,
-					() => link(mine.id, { id: keeper.id, kind: "guest" }, shown),
+					() => link(mine.id, { id: keeper.id }, shown),
 					async () => {
 						await testDb
 							.insert(speeches)
@@ -957,115 +1012,15 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			});
 		});
 
-		describe("a member's or signed-in keeper keeps its goes-by name and contact preference", () => {
-			async function setPrefs(
-				personId: string,
-				prefs: {
-					preferredName?: string | null;
-					preferredContact?: "sms" | "email" | null;
-					contactPreferenceBy?: "member" | "officer" | null;
-				},
-			) {
-				await testDb.update(people).set(prefs).where(eq(people.id, personId));
-			}
-
-			it("a MEMBER keeper's blank goes-by name and blank preference stay blank", async () => {
-				const member = await seedMember(a.clubId);
-				const mine = await seedGuest(b.clubId, { name: "Bobby" });
-				await setPrefs(mine.personId, {
-					preferredName: "Bob",
-					preferredContact: "sms",
-					contactPreferenceBy: "officer",
-				});
-				const shown = await preview(mine.id, {
-					id: member.memberId,
-					kind: "member",
-				});
-				expect(shown.preferredName).toBeNull();
-				await link(mine.id, { id: member.memberId, kind: "member" }, shown);
-				const kept = await personRow(member.personId);
-				expect(kept?.preferredName).toBeNull();
-				expect(kept?.preferredContact).toBeNull();
-				expect(kept?.contactPreferenceBy).toBeNull();
-			});
-
-			it("a MEMBER keeper's own preference is not replaced either", async () => {
-				const member = await seedMember(a.clubId);
-				await setPrefs(member.personId, {
-					preferredName: "Mem",
-					preferredContact: "email",
-					contactPreferenceBy: "member",
-				});
-				const mine = await seedGuest(b.clubId);
-				await setPrefs(mine.personId, {
-					preferredName: "Other",
-					preferredContact: "sms",
-					contactPreferenceBy: "member",
-				});
-				const shown = await preview(mine.id, {
-					id: member.memberId,
-					kind: "member",
-				});
-				await link(mine.id, { id: member.memberId, kind: "member" }, shown);
-				const kept = await personRow(member.personId);
-				expect(kept?.preferredName).toBe("Mem");
-				expect(kept?.preferredContact).toBe("email");
-			});
-
-			it("a GUEST-ONLY keeper fills its blank goes-by name and preference from the absorbed side", async () => {
-				const keeper = await seedGuest(a.clubId, { name: "Robert" });
-				const mine = await seedGuest(b.clubId, { name: "Bobby" });
-				await setPrefs(mine.personId, {
-					preferredName: "Bob",
-					preferredContact: "sms",
-					contactPreferenceBy: "officer",
-				});
-				const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
-				expect(shown.preferredName).toBe("Bob");
-				await link(mine.id, { id: keeper.id, kind: "guest" }, shown);
-				const merged = await personRow(keeper.personId);
-				expect(merged?.preferredName).toBe("Bob");
-				expect(merged?.preferredContact).toBe("sms");
-			});
-
-			it("a SIGNED-IN keeper keeps its own, too", async () => {
-				const keeper = await seedGuest(a.clubId);
-				const signedIn = await seedUser(null);
-				await testDb
-					.update(people)
-					.set({ userId: null })
-					.where(eq(people.id, signedIn.personId));
-				await testDb
-					.update(people)
-					.set({ userId: signedIn.userId })
-					.where(eq(people.id, keeper.personId));
-				const mine = await seedGuest(b.clubId);
-				await setPrefs(mine.personId, {
-					preferredName: "Abs",
-					preferredContact: "sms",
-					contactPreferenceBy: "officer",
-				});
-				const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
-				await link(mine.id, { id: keeper.id, kind: "guest" }, shown);
-				const kept = await personRow(keeper.personId);
-				expect(kept?.preferredName).toBeNull();
-				expect(kept?.preferredContact).toBeNull();
-				await testDb
-					.update(people)
-					.set({ userId: null })
-					.where(eq(people.id, keeper.personId));
-			});
-		});
-
 		it("re-reads the clubs that hold the Persons once they are locked: a club that appeared while it waited for a Person refuses it", async () => {
 			const keeper = await seedGuest(a.clubId);
 			const mine = await seedGuest(b.clubId);
-			const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
+			const shown = await preview(mine.id, { id: keeper.id });
 			const err = await clubAppearsWhileParkedOnPerson(
 				keeper.personId,
 				c.clubId,
 				"for update",
-				() => link(mine.id, { id: keeper.id, kind: "guest" }, shown),
+				() => link(mine.id, { id: keeper.id }, shown),
 			);
 			expect(err?.message).toBe(CLUB_BUSY_MESSAGE);
 			expect(await personRow(mine.personId)).not.toBeNull();
@@ -1092,7 +1047,6 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				guestId: mine.id,
 				otherClubId: b.clubId,
 				otherId: keeper.id,
-				otherKind: "guest",
 			});
 			await applyLinkGuestAcrossClubs({
 				userId: su.userId,
@@ -1100,7 +1054,6 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				guestId: mine.id,
 				otherClubId: b.clubId,
 				otherId: keeper.id,
-				otherKind: "guest",
 				expected: shown,
 			});
 			const rows = await testDb
@@ -1128,8 +1081,8 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 					name: "Bob Lee",
 					...over.mineContact,
 				});
-				const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
-				await link(mine.id, { id: keeper.id, kind: "guest" }, shown);
+				const shown = await preview(mine.id, { id: keeper.id });
+				await link(mine.id, { id: keeper.id }, shown);
 				return { keeper, mine };
 			}
 
@@ -1140,10 +1093,10 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 					keeperContact: { email: keeperEmail, phone: null },
 					mineContact: { email: mineEmail, phone: "+14155550188" },
 				});
-				// The merged Person holds the keeper's email and the filled phone.
+				// The kept Person is as it was: nothing of this guest's was filled in.
 				expect(await personRow(keeper.personId)).toMatchObject({
 					email: keeperEmail,
-					phone: "+14155550188",
+					phone: null,
 				});
 
 				await applySeparateGuest({
@@ -1206,8 +1159,8 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 						contactPreferenceBy: "officer",
 					})
 					.where(eq(people.id, mine.personId));
-				const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
-				await link(mine.id, { id: keeper.id, kind: "guest" }, shown);
+				const shown = await preview(mine.id, { id: keeper.id });
+				await link(mine.id, { id: keeper.id }, shown);
 				await applySeparateGuest({
 					userId: onlyB,
 					clubId: b.clubId,
@@ -1325,8 +1278,8 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 					actorMemberId: a.adminMemberId,
 				});
 				const second = await seedGuest(a.clubId, { name: "Second Keeper" });
-				const shown = await preview(mine.id, { id: second.id, kind: "guest" });
-				await link(mine.id, { id: second.id, kind: "guest" }, shown);
+				const shown = await preview(mine.id, { id: second.id });
+				await link(mine.id, { id: second.id }, shown);
 				expect(await recordsFor(mine.id)).toBe(1);
 			});
 
@@ -1456,8 +1409,11 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			await expect(
 				link(
 					mine.id,
-					{ id: keeper.id, kind: "guest" },
-					{ name: "x", preferredName: null, email: null, phone: null },
+					{ id: keeper.id },
+					{
+						kept: { name: "x", preferredName: null, email: null, phone: null },
+						own: { email: null, phone: null },
+					},
 				),
 			).rejects.toThrow(GUEST_LINK_SIGNED_IN_MESSAGE);
 			await testDb
@@ -1470,14 +1426,17 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			const keeper = await seedGuest(a.clubId);
 			const mine = await seedGuest(b.clubId);
 			await seedGuest(c.clubId, { personId: mine.personId });
-			await expect(
-				preview(mine.id, { id: keeper.id, kind: "guest" }),
-			).rejects.toThrow(GUEST_SEPARATE_FIRST_MESSAGE);
+			await expect(preview(mine.id, { id: keeper.id })).rejects.toThrow(
+				GUEST_SEPARATE_FIRST_MESSAGE,
+			);
 			await expect(
 				link(
 					mine.id,
-					{ id: keeper.id, kind: "guest" },
-					{ name: "x", preferredName: null, email: null, phone: null },
+					{ id: keeper.id },
+					{
+						kept: { name: "x", preferredName: null, email: null, phone: null },
+						own: { email: null, phone: null },
+					},
 				),
 			).rejects.toThrow(GUEST_SEPARATE_FIRST_MESSAGE);
 			expect(await guestRowsOf(mine.personId)).toHaveLength(2);
@@ -1486,55 +1445,58 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 		it("is refused when both already share a Person", async () => {
 			const keeper = await seedGuest(a.clubId);
 			const mine = await seedGuest(b.clubId, { personId: keeper.personId });
-			await expect(
-				preview(mine.id, { id: keeper.id, kind: "guest" }),
-			).rejects.toThrow(GUEST_LINK_SAME_PERSON_MESSAGE);
+			await expect(preview(mine.id, { id: keeper.id })).rejects.toThrow(
+				GUEST_LINK_SAME_PERSON_MESSAGE,
+			);
 		});
 
 		it("is refused when the other Person is already a guest here", async () => {
 			const keeper = await seedGuest(a.clubId);
 			await seedGuest(b.clubId, { personId: keeper.personId });
 			const mine = await seedGuest(b.clubId);
-			await expect(
-				preview(mine.id, { id: keeper.id, kind: "guest" }),
-			).rejects.toThrow(GUEST_LINK_ALREADY_HERE_MESSAGE);
+			await expect(preview(mine.id, { id: keeper.id })).rejects.toThrow(
+				GUEST_LINK_ALREADY_HERE_MESSAGE,
+			);
 		});
 
 		it("is refused for a converted guest on either side", async () => {
 			const keeper = await seedGuest(a.clubId, { stage: "joined" });
 			const mine = await seedGuest(b.clubId);
-			await expect(
-				preview(mine.id, { id: keeper.id, kind: "guest" }),
-			).rejects.toThrow(GUEST_NOW_MEMBER_MESSAGE);
+			await expect(preview(mine.id, { id: keeper.id })).rejects.toThrow(
+				GUEST_NOW_MEMBER_MESSAGE,
+			);
 			const other = await seedGuest(a.clubId);
 			const converted = await seedGuest(b.clubId, { stage: "joined" });
-			await expect(
-				preview(converted.id, { id: other.id, kind: "guest" }),
-			).rejects.toThrow(GUEST_NOW_MEMBER_MESSAGE);
+			await expect(preview(converted.id, { id: other.id })).rejects.toThrow(
+				GUEST_NOW_MEMBER_MESSAGE,
+			);
 		});
 
 		it("is refused for a record that is not in the other club", async () => {
 			const mine = await seedGuest(b.clubId);
 			const inC = await seedGuest(c.clubId);
-			await expect(
-				preview(mine.id, { id: inC.id, kind: "guest" }),
-			).rejects.toThrow(GUEST_LINK_NOT_FOUND_MESSAGE);
+			await expect(preview(mine.id, { id: inC.id })).rejects.toThrow(
+				GUEST_LINK_NOT_FOUND_MESSAGE,
+			);
 			const memberOfC = await seedMember(c.clubId);
 			await expect(
-				preview(mine.id, { id: memberOfC.memberId, kind: "member" }),
+				preview(mine.id, { id: memberOfC.memberId }),
 			).rejects.toThrow(GUEST_LINK_NOT_FOUND_MESSAGE);
 		});
 
 		it("refuses an admin of only ONE of the two clubs, on every action, whichever one", async () => {
 			const keeper = await seedGuest(a.clubId);
 			const mine = await seedGuest(b.clubId);
-			const stub = { name: "x", preferredName: null, email: null, phone: null };
+			const stub = {
+				kept: { name: "x", preferredName: null, email: null, phone: null },
+				own: { email: null, phone: null },
+			};
 			for (const userId of [onlyA, onlyB]) {
 				await expect(
-					preview(mine.id, { id: keeper.id, kind: "guest" }, userId),
+					preview(mine.id, { id: keeper.id }, userId),
 				).rejects.toThrow(NOT_A_MEMBER_MESSAGE);
 				await expect(
-					link(mine.id, { id: keeper.id, kind: "guest" }, stub, userId),
+					link(mine.id, { id: keeper.id }, stub, userId),
 				).rejects.toThrow(NOT_A_MEMBER_MESSAGE);
 				await expect(
 					listGuestLinkCandidates({
@@ -1551,28 +1513,57 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 		it("refuses a single-club admin before it waits for any lock", async () => {
 			const keeper = await seedGuest(a.clubId);
 			const mine = await seedGuest(b.clubId);
-			const stub = { name: "x", preferredName: null, email: null, phone: null };
+			const stub = {
+				kept: { name: "x", preferredName: null, email: null, phone: null },
+				own: { email: null, phone: null },
+			};
 			for (const userId of [onlyA, onlyB]) {
 				await refusedWithoutWaiting(
 					b.clubId,
-					() => link(mine.id, { id: keeper.id, kind: "guest" }, stub, userId),
+					() => link(mine.id, { id: keeper.id }, stub, userId),
 					NOT_A_MEMBER_MESSAGE,
 				);
 			}
 		});
 
+		it.each([
+			["the kept record's name", "keeper", { name: "Renamed Keeper" }],
+			["the kept record's goes-by name", "keeper", { preferredName: "Kay" }],
+			["the kept record's email", "keeper", { email: "new@example.test" }],
+			["the kept record's phone", "keeper", { phone: "+14155550177" }],
+			["this guest's own email", "mine", { email: "changed@example.test" }],
+			["this guest's own phone", "mine", { phone: "+14155550166" }],
+		] as const)("refuses a link when %s changed after the preview", async (_n, who, change) => {
+			const keeper = await seedGuest(a.clubId, { name: "Robert Lee" });
+			const mine = await seedGuest(b.clubId, {
+				email: `m-${uniq()}@example.test`,
+				phone: "+14155550155",
+			});
+			const shown = await preview(mine.id, { id: keeper.id });
+			await testDb
+				.update(people)
+				.set(change)
+				.where(
+					eq(people.id, who === "keeper" ? keeper.personId : mine.personId),
+				);
+			await expect(link(mine.id, { id: keeper.id }, shown)).rejects.toThrow(
+				GUEST_LINK_STALE_MESSAGE,
+			);
+			expect(await personRow(mine.personId)).not.toBeNull();
+		});
+
 		it("refuses a link whose preview no longer matches, and writes nothing", async () => {
 			const keeper = await seedGuest(a.clubId, { phone: null });
 			const mine = await seedGuest(b.clubId, { phone: "+14155550144" });
-			const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
+			const shown = await preview(mine.id, { id: keeper.id });
 			// Somebody gives the keeper a phone after the officer looked.
 			await testDb
 				.update(people)
 				.set({ phone: "+14155550199" })
 				.where(eq(people.id, keeper.personId));
-			await expect(
-				link(mine.id, { id: keeper.id, kind: "guest" }, shown),
-			).rejects.toThrow(GUEST_LINK_STALE_MESSAGE);
+			await expect(link(mine.id, { id: keeper.id }, shown)).rejects.toThrow(
+				GUEST_LINK_STALE_MESSAGE,
+			);
 			expect(await personRow(mine.personId)).not.toBeNull();
 			expect(await guestRowsOf(keeper.personId)).toHaveLength(1);
 		});
@@ -1581,10 +1572,10 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			for (const revoke of [officerMemberInB, a.adminMemberId]) {
 				const keeper = await seedGuest(a.clubId);
 				const mine = await seedGuest(b.clubId);
-				const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
+				const shown = await preview(mine.id, { id: keeper.id });
 				const err = await parkedThen(
 					b.clubId,
-					() => link(mine.id, { id: keeper.id, kind: "guest" }, shown),
+					() => link(mine.id, { id: keeper.id }, shown),
 					async () => {
 						await testDb
 							.update(members)
@@ -1604,10 +1595,10 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 		it("refuses with 'This record changed' when a Person gains a club while it waits", async () => {
 			const keeper = await seedGuest(a.clubId);
 			const mine = await seedGuest(b.clubId);
-			const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
+			const shown = await preview(mine.id, { id: keeper.id });
 			const err = await parkedThen(
 				b.clubId,
-				() => link(mine.id, { id: keeper.id, kind: "guest" }, shown),
+				() => link(mine.id, { id: keeper.id }, shown),
 				async () => {
 					await seedGuest(c.clubId, { personId: keeper.personId });
 				},
@@ -1619,8 +1610,8 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 		it("the audit row names the officer and is written for this club only", async () => {
 			const keeper = await seedGuest(a.clubId);
 			const mine = await seedGuest(b.clubId);
-			const shown = await preview(mine.id, { id: keeper.id, kind: "guest" });
-			await link(mine.id, { id: keeper.id, kind: "guest" }, shown);
+			const shown = await preview(mine.id, { id: keeper.id });
+			await link(mine.id, { id: keeper.id }, shown);
 			const rows = await testDb.execute<{
 				club_id: string;
 				actor_member_id: string | null;
@@ -1638,27 +1629,33 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 
 	// -----------------------------------------------------------------------
 	describe("the picker and the preview carry exactly the contract's fields", () => {
-		it("candidates: {kind, id, name, email, phone}; unconverted guests and active members; case-insensitive on name or email; ordered by name", async () => {
+		it("candidates: {id, name, email, phone}; only unconverted guests whose Person is guest-only; case-insensitive on name or email; ordered by name", async () => {
 			await seedGuest(a.clubId, {
 				name: "Zed Zebra",
 				email: `zed-${uniq()}@example.test`,
 			});
 			await seedGuest(a.clubId, { name: "Amy Alpha", email: null });
+			await seedGuest(a.clubId, {
+				name: "Mid Guest",
+				email: "mid@example.test",
+			});
 			await seedGuest(a.clubId, { name: "Joined Jo", stage: "joined" });
-			const inactive = await seedMember(a.clubId);
+			// A member of the club is never listed, and nor is a guest whose Person is
+			// a member's somewhere or has signed in: a link onto either is refused.
+			const mem = await seedMember(a.clubId);
 			await testDb
 				.update(members)
-				.set({ status: "inactive" })
-				.where(eq(members.id, inactive.memberId));
-			await testDb
-				.update(members)
-				.set({ name: "Lapsed Lou" })
-				.where(eq(members.id, inactive.memberId));
-			const mem = await seedMember(a.clubId, { email: "mid@example.test" });
-			await testDb
-				.update(members)
-				.set({ name: "Mid Member" })
+				.set({ name: "Plain Member" })
 				.where(eq(members.id, mem.memberId));
+			await seedGuest(a.clubId, {
+				name: "Guest On Member",
+				personId: mem.personId,
+			});
+			const signedIn = await seedUser(null);
+			await seedGuest(a.clubId, {
+				name: "Signed In Guest",
+				personId: signedIn.personId,
+			});
 			await seedGuest(b.clubId, { name: "Other Clubs Guest" });
 
 			const all = await listGuestLinkCandidates({
@@ -1668,16 +1665,10 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				q: "",
 			});
 			const names = all.map((r) => r.name);
-			expect(names).toContain("Amy Alpha");
-			expect(names).toContain("Mid Member");
-			expect(names).toContain("Zed Zebra");
-			expect(names).not.toContain("Joined Jo");
-			expect(names).not.toContain("Lapsed Lou");
-			expect(names).not.toContain("Other Clubs Guest");
-			expect(names).toEqual([...names].sort((x, y) => x.localeCompare(y)));
+			expect(names).toEqual(["Amy Alpha", "Mid Guest", "Zed Zebra"]);
 			for (const row of all) {
 				expect(Object.keys(row).sort()).toEqual(
-					["email", "id", "kind", "name", "phone"].sort(),
+					["email", "id", "name", "phone"].sort(),
 				);
 			}
 
@@ -1687,7 +1678,7 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				otherClubId: a.clubId,
 				q: "MID@EXAMPLE",
 			});
-			expect(byEmail.map((r) => r.name)).toEqual(["Mid Member"]);
+			expect(byEmail.map((r) => r.name)).toEqual(["Mid Guest"]);
 			const byName = await listGuestLinkCandidates({
 				userId: officer,
 				clubId: b.clubId,
@@ -1720,7 +1711,7 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			expect(rows).toHaveLength(20);
 		});
 
-		it("preview: exactly {name, preferredName, email, phone}", async () => {
+		it("preview: exactly the kept record's four fields and this guest's own email and phone", async () => {
 			const keeper = await seedGuest(a.clubId);
 			const mine = await seedGuest(b.clubId);
 			const shown = await previewGuestLink({
@@ -1729,37 +1720,12 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				guestId: mine.id,
 				otherClubId: a.clubId,
 				otherId: keeper.id,
-				otherKind: "guest",
 			});
-			expect(Object.keys(shown).sort()).toEqual(
+			expect(Object.keys(shown).sort()).toEqual(["kept", "own"]);
+			expect(Object.keys(shown.kept).sort()).toEqual(
 				["email", "name", "phone", "preferredName"].sort(),
 			);
-		});
-
-		it("guestLinkResult: a non-guest-only keeper keeps its own contact, blank or not; a guest-only keeper fills blanks", () => {
-			const absorbed = {
-				preferredName: "Abs",
-				email: "abs@example.test",
-				phone: "+1000",
-			};
-			const keeper = {
-				name: "Keep",
-				preferredName: null,
-				email: null,
-				phone: "+2000",
-			};
-			expect(guestLinkResult(keeper, absorbed, true)).toEqual({
-				name: "Keep",
-				preferredName: "Abs",
-				email: "abs@example.test",
-				phone: "+2000",
-			});
-			expect(guestLinkResult(keeper, absorbed, false)).toEqual({
-				name: "Keep",
-				preferredName: null,
-				email: null,
-				phone: "+2000",
-			});
+			expect(Object.keys(shown.own).sort()).toEqual(["email", "phone"]);
 		});
 	});
 

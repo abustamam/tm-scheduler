@@ -105,7 +105,6 @@ import {
 import { closeOpenOfficerTerms } from "./officers-logic";
 import {
 	clubsHoldingPersons,
-	guestLinkResult,
 	isGuestOnlyPerson,
 	mergePeople,
 	readGuestLinkRecord,
@@ -3554,8 +3553,10 @@ export const GUEST_LINK_SIGNED_IN_MESSAGE =
 	"This person has signed in. A superadmin has to merge them.";
 export const GUEST_LINK_HAS_HISTORY_MESSAGE =
 	"This person has a history of their own (a past membership, speeches or Pathways progress). A superadmin has to merge them.";
+export const GUEST_LINK_TARGET_NOT_GUEST_MESSAGE =
+	"That person is a member, has signed in, or was a member. Only a guest can be linked to; a superadmin can merge them.";
 export const GUEST_LINK_NOT_FOUND_MESSAGE =
-	"That record is not in the other club.";
+	"That guest is not in the other club.";
 /** The clubs holding these Persons moved while a cross-club action took its locks. */
 export const CLUB_SET_MOVED_MESSAGE = CLUB_BUSY_MESSAGE;
 export const GUEST_CROSS_CLUB_SAME_CLUB_MESSAGE = "Pick a different club.";
@@ -3781,31 +3782,24 @@ export async function applyAddGuestToClub(
 	});
 }
 
-export type GuestLinkOtherKind = "guest" | "member";
-
 export interface GuestLinkInput {
 	userId: string;
 	clubId: string;
 	guestId: string;
 	otherClubId: string;
+	/** A GUEST of the other club. A member is never a target (#1127). */
 	otherId: string;
-	otherKind: GuestLinkOtherKind;
 }
 
 export type { GuestLinkPreview };
 
 interface LinkSides {
 	guest: NonNullable<Awaited<ReturnType<typeof readGuestOf>>>;
-	other: {
-		kind: GuestLinkOtherKind;
-		id: string;
-		personId: string;
-		/** Set for a guest, unset for a member. */
-		stage: GuestStage | null;
-	};
+	other: NonNullable<Awaited<ReturnType<typeof readGuestOf>>>;
 }
 
-/** Both records, in their own clubs. A missing one is "not in that club". */
+/** Both guests, each in its own club. A missing one is "not in that club": a
+ *  member's id names no guest, so it lands here. */
 async function readLinkSides(
 	conn: DbOrTx,
 	input: Omit<GuestLinkInput, "userId">,
@@ -3813,56 +3807,18 @@ async function readLinkSides(
 ): Promise<LinkSides> {
 	const guest = await readGuestOf(conn, input.clubId, input.guestId);
 	if (!guest) throw new Error(GUEST_NOT_IN_CLUB_MESSAGE);
-	if (input.otherKind === "guest") {
-		const other = await readGuestOf(conn, input.otherClubId, input.otherId);
-		if (!other) throw new Error(GUEST_LINK_NOT_FOUND_MESSAGE);
-		if (lock) {
-			// Both guest rows, in id order, as the protocol's third step.
-			await conn
-				.select({ id: guests.id })
-				.from(guests)
-				.where(inArray(guests.id, [guest.id, other.id]))
-				.orderBy(guests.id)
-				.for("update");
-		}
-		return {
-			guest,
-			other: {
-				kind: "guest",
-				id: other.id,
-				personId: other.personId,
-				stage: other.stage,
-			},
-		};
-	}
-	const [member] = await conn
-		.select({ id: members.id, personId: members.personId })
-		.from(members)
-		.where(
-			and(
-				eq(members.id, input.otherId),
-				eq(members.clubId, input.otherClubId),
-				eq(members.status, "active"),
-			),
-		)
-		.limit(1);
-	if (!member) throw new Error(GUEST_LINK_NOT_FOUND_MESSAGE);
+	const other = await readGuestOf(conn, input.otherClubId, input.otherId);
+	if (!other) throw new Error(GUEST_LINK_NOT_FOUND_MESSAGE);
 	if (lock) {
+		// Both guest rows, in id order, as the protocol's third step.
 		await conn
 			.select({ id: guests.id })
 			.from(guests)
-			.where(eq(guests.id, guest.id))
+			.where(inArray(guests.id, [guest.id, other.id]))
+			.orderBy(guests.id)
 			.for("update");
 	}
-	return {
-		guest,
-		other: {
-			kind: "member",
-			id: member.id,
-			personId: member.personId,
-			stage: null,
-		},
-	};
+	return { guest, other };
 }
 
 /**
@@ -3872,6 +3828,10 @@ async function readLinkSides(
  *
  * - either record is a converted guest (never the source of a link);
  * - both already share a Person;
+ * - the OTHER guest's Person is not guest-only (`isGuestOnlyPerson`): it holds a
+ *   membership, somebody has signed in as it, or it was a member's. A link never
+ *   writes the kept record, and a member's or a signed-in person's is not an
+ *   officer-of-a-guest's-club to touch (ADR-0029);
  * - this guest's Person holds ANY membership, or is bound to a sign-in: those
  *   are the superadmin's `mergePeople`;
  * - this guest's Person has a guest row in any club but this one;
@@ -3892,6 +3852,9 @@ async function linkRefusal(
 	}
 	if (sides.guest.personId === sides.other.personId) {
 		return GUEST_LINK_SAME_PERSON_MESSAGE;
+	}
+	if (!(await isGuestOnlyPerson(conn, sides.other.personId))) {
+		return GUEST_LINK_TARGET_NOT_GUEST_MESSAGE;
 	}
 	const [held] = await conn
 		.select({ id: members.id })
@@ -3939,7 +3902,11 @@ async function linkRefusal(
 	return null;
 }
 
-/** The keeper Person as the merge would leave it: the preview's four values. */
+/**
+ * What a link shows and what it recomputes: the kept record exactly as it is
+ * (the link writes none of it), and this guest's own email and phone, which the
+ * link records so a Separate can give them back.
+ */
 async function linkProjection(
 	conn: DbOrTx,
 	sides: LinkSides,
@@ -3957,17 +3924,21 @@ async function linkProjection(
 	const absorbed = rows.find((r) => r.id === sides.guest.personId);
 	const keeper = rows.find((r) => r.id === sides.other.personId);
 	if (!absorbed || !keeper) throw new Error(GUEST_LINK_NOT_FOUND_MESSAGE);
-	return guestLinkResult(
-		keeper,
-		absorbed,
-		await isGuestOnlyPerson(conn, keeper.id),
-	);
+	return {
+		kept: {
+			name: keeper.name,
+			preferredName: keeper.preferredName,
+			email: keeper.email,
+			phone: keeper.phone,
+		},
+		own: { email: absorbed.email, phone: absorbed.phone },
+	};
 }
 
 /**
- * The confirm step of a link: the Person the two records would become, as
- * name, goes-by name, email and phone, and nothing else. NOT `getMergePreview`,
- * whose decoration lists every membership's club and global history counts.
+ * The confirm step of a link: the kept record as it is, and this guest's own
+ * email and phone, and nothing else. NOT `getMergePreview`, whose decoration lists
+ * every membership's club and global history counts.
  */
 export async function previewGuestLink(
 	input: GuestLinkInput,
@@ -3976,21 +3947,20 @@ export async function previewGuestLink(
 	const sides = await readLinkSides(db, input);
 	const refusal = await linkRefusal(db, input.clubId, sides);
 	if (refusal) throw new Error(refusal);
-	const p = await linkProjection(db, sides);
-	return {
-		name: p.name,
-		preferredName: p.preferredName,
-		email: p.email,
-		phone: p.phone,
-	};
+	return linkProjection(db, sides);
 }
 
 /**
- * Say that this club's guest and a guest or member of another club the officer
- * runs are the same human. The OTHER record's Person is kept and this guest's is
- * absorbed (`mergePeople`, `mode: "guest-link"`, in this transaction): every
+ * Say that this club's guest and a guest of another club the officer runs are the
+ * same human. The OTHER guest's Person is kept, exactly as it is, and this guest's
+ * is absorbed (`mergePeople`, `mode: "guest-link"`, in this transaction): every
  * guest row of the absorbed Person re-points to the keeper, and the absorbed
- * Person is deleted. Each club's own `guests.name` is unchanged.
+ * Person is deleted. Nothing is copied onto the kept record. Each club's own
+ * `guests.name` is unchanged.
+ *
+ * The audit row is written for THIS guest's club only, and deliberately not for the
+ * kept record's: a club's feed would otherwise show that another club's officer
+ * linked one of its people, and clubs stay blind to each other's people.
  *
  * `expected` is what the officer was shown; it is recomputed under the locks and
  * the link is refused if it differs, so the officer confirms what is written.
@@ -4029,6 +3999,9 @@ export async function applyLinkGuestAcrossClubs(
 		) {
 			throw new Error(GUEST_LINK_STALE_MESSAGE);
 		}
+		// The merge writes its audit row for THIS guest's club only (the absorbed
+		// Person's guest rows are all here, `linkRefusal`). None goes to the kept
+		// record's club, on purpose: clubs stay blind to each other's people.
 		// A newer link supersedes any record an older one left for this guest.
 		await clearRecordedGuestContact(tx, clubId, sides.guest.id);
 		await mergePeople(
@@ -4211,7 +4184,6 @@ export async function loadOtherAdminClubs(
 }
 
 export interface GuestLinkCandidate {
-	kind: GuestLinkOtherKind;
 	id: string;
 	name: string;
 	email: string | null;
@@ -4224,9 +4196,12 @@ function likeContains(q: string): string {
 }
 
 /**
- * The picker behind "Same person as…": up to 20 unconverted guests and active
- * members of `otherClubId`, by name, name/email/phone only. A case-insensitive
- * substring of `q` on the name or email filters them; an empty `q` is the first 20.
+ * The picker behind "Same person as…": up to 20 unconverted GUESTS of
+ * `otherClubId`, by name, name/email/phone only. Only a guest whose Person is
+ * guest-only (`identityIgnoredGuestPerson`) is listed, since a link onto any other
+ * is refused (`linkRefusal`) and a picker should not offer what will be refused.
+ * A case-insensitive substring of `q` on the name or email filters them; an empty
+ * `q` is the first 20.
  */
 export async function listGuestLinkCandidates(input: {
 	userId: string;
@@ -4237,52 +4212,25 @@ export async function listGuestLinkCandidates(input: {
 	await requireAdminOfBothClubs(input.userId, input.clubId, input.otherClubId);
 	const q = input.q.trim();
 	const pattern = q ? likeContains(q) : null;
-	const [guestRows, memberRows] = await Promise.all([
-		db
-			.select({
-				id: guests.id,
-				name: guests.name,
-				email: people.email,
-				phone: people.phone,
-			})
-			.from(guests)
-			.innerJoin(people, eq(people.id, guests.personId))
-			.where(
-				and(
-					eq(guests.clubId, input.otherClubId),
-					ne(guests.stage, "joined"),
-					pattern
-						? or(ilike(guests.name, pattern), ilike(people.email, pattern))
-						: undefined,
-				),
-			)
-			.orderBy(asc(guests.name), asc(guests.id))
-			.limit(GUEST_LINK_CANDIDATE_LIMIT),
-		db
-			.select({
-				id: members.id,
-				name: members.name,
-				email: people.email,
-				phone: people.phone,
-			})
-			.from(members)
-			.innerJoin(people, eq(people.id, members.personId))
-			.where(
-				and(
-					eq(members.clubId, input.otherClubId),
-					eq(members.status, "active"),
-					pattern
-						? or(ilike(members.name, pattern), ilike(people.email, pattern))
-						: undefined,
-				),
-			)
-			.orderBy(asc(members.name), asc(members.id))
-			.limit(GUEST_LINK_CANDIDATE_LIMIT),
-	]);
-	const all: GuestLinkCandidate[] = [
-		...guestRows.map((r) => ({ kind: "guest" as const, ...r })),
-		...memberRows.map((r) => ({ kind: "member" as const, ...r })),
-	];
-	all.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
-	return all.slice(0, GUEST_LINK_CANDIDATE_LIMIT);
+	return db
+		.select({
+			id: guests.id,
+			name: guests.name,
+			email: people.email,
+			phone: people.phone,
+		})
+		.from(guests)
+		.innerJoin(people, eq(people.id, guests.personId))
+		.where(
+			and(
+				eq(guests.clubId, input.otherClubId),
+				ne(guests.stage, "joined"),
+				identityIgnoredGuestPerson(),
+				pattern
+					? or(ilike(guests.name, pattern), ilike(people.email, pattern))
+					: undefined,
+			),
+		)
+		.orderBy(asc(guests.name), asc(guests.id))
+		.limit(GUEST_LINK_CANDIDATE_LIMIT);
 }

@@ -324,7 +324,6 @@ const crossClubRecordSchema = z.object({
 	guestId: uuid,
 	otherClubId: uuid,
 	otherId: uuid,
-	otherKind: z.enum(["guest", "member"]),
 });
 
 const linkAcrossClubsSchema = crossClubRecordSchema.extend({
@@ -361,8 +360,8 @@ const linkCandidatesSchema = z.object({
 });
 
 /**
- * The picker behind "Same person as…": guests and active members of the other
- * club, name, email and phone only (#1127). AUTHED — admin of BOTH clubs.
+ * The picker behind "Same person as…": the other club's guests (never members),
+ * name, email and phone only (#1127). AUTHED — admin of BOTH clubs.
  */
 export const listGuestLinkCandidates = createServerFn({ method: "GET" })
 	.validator((input: unknown) => linkCandidatesSchema.parse(input))
