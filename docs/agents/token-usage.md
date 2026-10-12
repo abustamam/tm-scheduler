@@ -76,10 +76,10 @@ spent more on cache writes and output, which do halve, so the Sonnet line differ
 | wave agents on Sonnet | Opus subagent dollars: Mac fall 21% ($325 → $258 of $541 total), Linux 34% ($274 → $181 of $351) | Mac ~12%, Linux ~26%; **pooled ~18%** ($160 of $892) |
 | CLAUDE.md 56.7 KB → 15.1 KB | ~10k tokens off every call, a scenario: reads 2.4% + cold writes 0.7% on the Mac, 2.2% + 1.0% on Linux | ~3% |
 | handoff instead of resuming stale sessions | main-thread calls after a gap of over an hour: 4.4% of cost on the Mac, 3.4% on Linux; the whole call, not only its rebuild | under 4.4% |
-| subagent context | the ~27% of cost on subagent calls over 300k on the Mac (~15% on Linux) | none yet: `implementer.md` asks for a small context and nothing caps it |
+| subagent context | the ~27% of cost on subagent calls over 300k on the Mac (~15% on Linux) | `scripts/implementer-context-guard.ts` (#1103) stops an `implementer` at 250k context: over the cap it allows only plain git and `SubagentHandback`, so it commits, pushes and hands back. Fix rounds go to a fresh `implementer`, not SendMessage |
 
 So the cut helps, but it is no halving, and the largest pool left is long-running subagents, which
-no rule here bounds. The weekly limit's weighting is not published, so these dollars are a proxy
+only the implementer cap above bounds. The weekly limit's weighting is not published, so these dollars are a proxy
 too. If the limit weights Opus more heavily than its list price does, the Sonnet line is worth more.
 The `explorer` (Haiku) had almost nothing to replace here, with 3 `Explore` dispatches in nine
 days.

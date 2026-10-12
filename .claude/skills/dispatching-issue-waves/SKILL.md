@@ -169,7 +169,12 @@ Merging is the serial half.
 
 1. `/review-pr N` for **every** PR in the wave, dispatched together. Where one prints a
    risk-category hint, run gstack `/review` in that PR's worktree as well.
-2. Send back what the reviews found.
+2. Send back what the reviews found. Review findings, and every handback, go to a **fresh**
+   `implementer`, briefed with the issue, the worktree, the branch, the findings and the
+   previous handoff. Never SendMessage an implementer that has done work: it re-reads its whole
+   history on every call, and `scripts/implementer-context-guard.ts` stops one at 250k context
+   to hand back. One exception: a dispatch that came back empty with zero tool uses may be
+   retried by SendMessage, because it carries almost no history.
 3. **Read the fix diff before merging it — you, not an agent.** The reviewers saw the diff as
    it was dispatched; the commits answering them are gated by nothing, and CI only proves the
    tests still pass. Every other step here can be delegated, and this is why the merge button
