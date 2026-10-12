@@ -118,6 +118,43 @@ button and no error, which looks identical to the extension not being installed.
 _(The toolbar icon opens the extension's Options page for one-time token/server setup — the
 sync itself happens from the in-page widget.)_
 
+## Easy-Speak export (#1047)
+
+A second mode, beside the Base Camp sync, for the club-migration work (#1054). **Internal only**,
+the same as the Pathways mode above: unlisted, run by the maintainer or an officer of the
+maintainer's clubs. Easy-Speak has no export, so this reads the club in *your own signed-in
+session* and saves it as one file. It posts nothing: uploading the file is a separate step, done by
+a superadmin.
+
+**A member account is enough.** A member sees every meeting (roles, holders, Pathways projects,
+evaluators, attendance, guests, theme, venue, join link, manager, and on past meetings the awards and
+recorded attendance), every member's speech requests, the member charts, the member list and the club
+details. A member does **not** see other people's speech introductions (the bundle has `introduction:
+null` for them) or anyone's evaluations but their own (`evaluations: []` is a valid bundle).
+
+1. Sign in to Easy-Speak and open any page of your club (not a popup). A small **Export this club for
+   GavelUp** widget appears bottom-right.
+2. Click it. It walks the club one request at a time with a 1 second gap, so a 100-meeting club takes
+   a few minutes. Progress shows as pages done / total.
+3. It downloads `easy-speak-<club number>-<yyyy-mm-dd>.json`.
+
+- **Reload or failure mid-walk:** every page is written to the page's IndexedDB as it arrives. Reload
+  within two minutes and it carries on by itself; later, or after an error, press **Resume export**.
+  Pages already fetched are not requested again. A stored session is dropped after 12 hours and when
+  the export finishes. IndexedDB, not `storage.local`, because a club's raw pages outgrow its quota
+  and `unlimitedStorage` would be a second new permission.
+- **Permissions:** the one new entry is the host `https://easy-speak.org/*`. No other permission.
+- **Contact details:** `memberlist.php` and `clubdata.php` are parsed for names, status and the club's
+  facts, and never stored (not in `raw`, and the resume store keeps only the parsed result). The
+  `people` and `club` sections hold no phone number or email.
+- **The bundle** is `gavelup.easy-speak-bundle` v1. The canonical contract is the zod schema in
+  `src/lib/easy-speak-bundle.ts`; `lib/easy-speak-bundle.ts` is the extension's own TypeScript copy,
+  and `lib/__fixtures__/easy-speak/bundle.expected.json` (produced by the extension's tests, parsed
+  by a root test with the schema) keeps the two from drifting. Each fetched page's HTML is also kept
+  in `raw`, so a parser bug can be fixed later from the file.
+- **Fixtures** are saved pages rewritten with fake names; read `lib/__fixtures__/easy-speak/README.md`
+  before adding one. This repo is public.
+
 ## Manual smoke test (do before sharing a build)
 
 - [ ] Load unpacked (Chrome) / temporary add-on (Firefox) with no errors.
@@ -128,3 +165,7 @@ sync itself happens from the in-page widget.)_
 - [ ] Off a Paths Progress page (GUID not seen), the widget says to open Paths Progress.
 - [ ] Bad/revoked token → the widget shows the server's error; unreachable server → a network error.
 - [ ] Firefox: repeat the above on the `firefox-mv2` build.
+- [ ] Easy-Speak export: on a signed-in Easy-Speak club page, **Export this club for GavelUp** appears;
+      a run downloads one JSON file whose `meetings` count equals the meeting list's count, whose past
+      meetings have `awards`, and (if you have a speech of your own with an introduction) whose
+      `introduction` for it is non-empty. Reload mid-walk: it resumes.

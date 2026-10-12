@@ -1,0 +1,27 @@
+{
+  "evaluation": {
+    "evaluation_id": 501,
+    "evaluator_name": "Dana Vexford",
+    "submitted_date": "2026-09-23T04:10:00Z",
+    "responses": [
+      {
+        "field_type": "text",
+        "field_label": "What went well",
+        "text_value": "Clear structure and a confident close.",
+        "numeric_value": null
+      },
+      {
+        "field_type": "text",
+        "field_label": "What to improve",
+        "text_value": "Slow down in the middle.",
+        "numeric_value": null
+      },
+      {
+        "field_type": "grade",
+        "field_label": "Content",
+        "numeric_value": 5,
+        "text_value": "Strong opening"
+      }
+    ]
+  }
+}

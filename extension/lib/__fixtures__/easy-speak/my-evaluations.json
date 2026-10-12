@@ -1,0 +1,34 @@
+{
+  "evaluations": [
+    {
+      "evaluation_id": 501,
+      "direction": "received",
+      "status": "submitted",
+      "meeting_date": "2026-09-22",
+      "speech_title": "Make Your Impact",
+      "average_grade": 4.5,
+      "evaluator_name": "Dana Vexford",
+      "speaker_name": "Avery Alderfinch"
+    },
+    {
+      "evaluation_id": 502,
+      "direction": "given",
+      "status": "submitted",
+      "meeting_date": "2026-09-15",
+      "speech_title": "Fixture Garden Tour",
+      "average_grade": null,
+      "evaluator_name": "Avery Alderfinch",
+      "speaker_name": "Casey Oakenshaw"
+    },
+    {
+      "evaluation_id": 503,
+      "direction": "given",
+      "status": "draft",
+      "meeting_date": "2026-10-06",
+      "speech_title": "Unfinished",
+      "average_grade": null,
+      "evaluator_name": "Avery Alderfinch",
+      "speaker_name": "Casey Oakenshaw"
+    }
+  ]
+}

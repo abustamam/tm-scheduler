@@ -1,5 +1,6 @@
 import { defineConfig } from "wxt";
 import { BASECAMP_MATCHES } from "./lib/basecamp-hosts";
+import { EASY_SPEAK_MATCHES } from "./lib/easy-speak-bundle";
 
 // Target GavelUp server. Prod (unset) → gavelup.app. Dev → set WXT_GAVELUP_URL,
 // e.g. `WXT_GAVELUP_URL=http://localhost:3000 bun run dev`. The value is also
@@ -14,7 +15,9 @@ export default defineConfig({
 		description:
 			"Sync your club's Base Camp Pathways progress into GavelUp in one click.",
 		permissions: ["storage", "activeTab"],
-		host_permissions: [...BASECAMP_MATCHES, gavelupOrigin],
+		// Easy-Speak (#1047) is the one new host; no new permission. Its export
+		// stores pages in IndexedDB rather than asking for `unlimitedStorage`.
+		host_permissions: [...BASECAMP_MATCHES, ...EASY_SPEAK_MATCHES, gavelupOrigin],
 		// Toolbar icon with NO popup — clicking it opens the Options page
 		// (see background.ts). WXT maps `action` → `browser_action` for Firefox MV2.
 		action: {},
