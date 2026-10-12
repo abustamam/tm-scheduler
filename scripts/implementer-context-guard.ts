@@ -70,9 +70,11 @@ export function denyReason(context: number, cap: number): string {
 /**
  * Split a command into its words the way a POSIX shell would (single quotes,
  * double quotes, backslashes), or null when it contains anything that could run
- * a second command or expand into other words: an UNQUOTED `; & | < > ( ) { }`
- * or newline, a backtick or `$` anywhere but inside single quotes, or an
- * unterminated quote. Quoted text is data, so `-m 'a; b <c@d>'` is fine.
+ * a second command or expand into other words: an UNQUOTED `; & | < > ( ) { }
+ * * ? [`, newline, or word-leading `~` or `#`; a backtick or `$` anywhere but
+ * inside single quotes; a backslash-newline outside single quotes; or an
+ * unterminated quote. Quoted text is data, so `-m 'a; b <c@d>'` is fine. The
+ * output must equal bash's argv for the same text (the differential test).
  */
 export function shellWords(command: string): string[] | null {
 	const words: string[] = [];
@@ -89,8 +91,13 @@ export function shellWords(command: string): string[] | null {
 		if (c === "$" || c === "`") return null;
 		if (quote === '"') {
 			if (c === '"') quote = null;
-			else if (c === "\\" && '"\\'.includes(command[i + 1] ?? "")) {
-				cur += command[++i];
+			else if (c === "\\") {
+				const n = command[i + 1] ?? "";
+				// bash deletes a backslash-newline (a line continuation) even in
+				// double quotes, so `"--out\<newline>put"` is `--output`.
+				if (n === "\n" || n === "\r") return null;
+				if (n === '"' || n === "\\") cur += command[++i];
+				else cur += c;
 			} else cur += c;
 			continue;
 		}
@@ -103,8 +110,10 @@ export function shellWords(command: string): string[] | null {
 			cur += n;
 			i++;
 			inWord = true;
-		} else if (/[;&|<>(){}\n\r]/.test(c)) {
-			return null;
+		} else if (/[;&|<>(){}*?[\n\r]/.test(c)) {
+			return null; // operators, brace expansion, globs
+		} else if ((c === "~" || c === "#") && !inWord) {
+			return null; // tilde expansion, a comment
 		} else if (c === " " || c === "\t") {
 			if (inWord) words.push(cur);
 			cur = "";

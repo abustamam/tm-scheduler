@@ -52,6 +52,105 @@ const implementer = (
 });
 const at = (n: number) => () => n;
 
+const ALLOWED_GIT: string[] = [
+	"git log a#b",
+	'git commit -m "a \"quoted\" b"',
+	'git commit -m "back\\slash"',
+	'git commit -m "keep \n literal"',
+	"git commit -m 'a'\"b\"c",
+	"git commit -m a\\ b",
+	'git commit -m "it\'s"',
+	"git log 'a\"b'",
+	"git commit -m ''",
+	"git commit -m 'multi\nline'",
+	'git commit -m "x"',
+	"git push origin HEAD",
+	"git status",
+	"git -C some/dir status",
+	"git add -A",
+	"git diff --stat",
+	"git log --oneline -5",
+	"  git status",
+	`git commit -m 'feat: x' -m 'Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>'`,
+	`git commit -m "fix: a; b & c > d"`,
+	"git commit -m 'it'\\''s'",
+	"git log --oneline -n 5",
+	"git diff -- src/a.ts",
+	"git log -n 5",
+	"git commit --amend --no-edit",
+	"git -C -nope commit -m x",
+	"git commit -m 'no n flag'",
+	"git commit -mn",
+	"git commit -am x",
+	"git -C dir commit -m x",
+];
+
+const DENIED_GIT: string[] = [
+	'git log -1 --format=format:changed "--out\\\nput=src/a.ts"',
+	"git log -1 --format=x --out\\\nput=src/a.ts",
+	"git log --out'put'\\\n=f",
+	'git push "--receive-\\\npack=touch pwned" ../bare.git HEAD:x',
+	"git push --receive-\\\npack=touch ../b HEAD",
+	'git log "--out\\\rput=f"',
+	"git log *.ts",
+	"git log a?b",
+	"git log [a]",
+	"git add ~/x",
+	"git status #c",
+	"git commit -m x && rm -rf y",
+	"git push; ls",
+	"git log | head",
+	'git commit -m "$(cat f)"',
+	"git commit -m `cat f`",
+	"git status\nrm -rf y",
+	"git log > out.txt",
+	"git log < in.txt",
+	"git diff --no-index <(echo a) b",
+	"git diff --no-index a b",
+	"git diff =(echo a) b",
+	"git push --receive-pack=x",
+	"git push --upload-pack x",
+	"git diff --output=f",
+	"git log --exec=x",
+	"git -C dir -c core.pager=x log",
+	"git checkout main",
+	"gitk",
+	"bun run test",
+	"echo git status",
+	"echo status",
+	"git commit -n -m x",
+	"git commit -an -m x",
+	"git commit -nm x",
+	"git commit -m x -n",
+	"git -C dir commit -n -m x",
+	"gitk status",
+	"git log --exec-path",
+	"git diff --output-indicator-new=+",
+	"git log -1 --format='export const x = 1%x3b' '--output=src/a.ts'",
+	"git push '--receive-pack=touch pwned3' ../bare.git HEAD:refs/heads/x",
+	'git diff "--no-index" a b',
+	"git diff --no-ind a b",
+	"git log --outp=f",
+	"git push --rec=x",
+	"git push --e=x",
+	"git log \\--output=f",
+	"git log --out'put'=f",
+	"git commit --no-verify -m x",
+	"git commit --no-v -m x",
+	"git commit -m 'unterminated",
+	"git commit -m x \\",
+	'git commit -m "$HOME"',
+	'git commit -m "`id`"',
+	'git commit -m "$(id)"',
+	"git log {--output=f,}",
+	"git log --oneline (ls)",
+	"FOO=1 git status",
+	"git commit -m x; ls",
+	"git commit -m x & ls",
+	"git commit -m x > f",
+	"git commit -m x < f",
+];
+
 describe("decide: who is capped", () => {
 	it("allows a main-thread call (no agent_type)", () => {
 		const i = implementer("Read");
@@ -129,86 +228,12 @@ describe("decide: the cap", () => {
 });
 
 describe("git allowlist over the cap", () => {
-	it.each([
-		'git commit -m "x"',
-		"git push origin HEAD",
-		"git status",
-		"git -C some/dir status",
-		"git add -A",
-		"git diff --stat",
-		"git log --oneline -5",
-		"  git status",
-		`git commit -m 'feat: x' -m 'Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>'`,
-		`git commit -m "fix: a; b & c > d"`,
-		"git commit -m 'it'\\''s'",
-		"git log --oneline -n 5",
-		"git diff -- src/a.ts",
-		"git log -n 5",
-		"git commit --amend --no-edit",
-		"git -C -nope commit -m x",
-		"git commit -m 'no n flag'",
-		"git commit -mn",
-		"git commit -am x",
-		"git -C dir commit -m x",
-	])("allows %s", (c) => {
+	it.each(ALLOWED_GIT)("allows %s", (c) => {
 		expect(decide(implementer("Bash", c), at(260_000))).toEqual({
 			allow: true,
 		});
 	});
-	it.each([
-		"git commit -m x && rm -rf y",
-		"git push; ls",
-		"git log | head",
-		'git commit -m "$(cat f)"',
-		"git commit -m `cat f`",
-		"git status\nrm -rf y",
-		"git log > out.txt",
-		"git log < in.txt",
-		"git diff --no-index <(echo a) b",
-		"git diff --no-index a b",
-		"git diff =(echo a) b",
-		"git push --receive-pack=x",
-		"git push --upload-pack x",
-		"git diff --output=f",
-		"git log --exec=x",
-		"git -C dir -c core.pager=x log",
-		"git checkout main",
-		"gitk",
-		"bun run test",
-		"echo git status",
-		"echo status",
-		"git commit -n -m x",
-		"git commit -an -m x",
-		"git commit -nm x",
-		"git commit -m x -n",
-		"git -C dir commit -n -m x",
-		"gitk status",
-		"git log --exec-path",
-		"git diff --output-indicator-new=+",
-		"git log -1 --format='export const x = 1%x3b' '--output=src/a.ts'",
-		"git push '--receive-pack=touch pwned3' ../bare.git HEAD:refs/heads/x",
-		'git diff "--no-index" a b',
-		"git diff --no-ind a b",
-		"git log --outp=f",
-		"git push --rec=x",
-		"git push --e=x",
-		"git log \\--output=f",
-		"git log --out'put'=f",
-		"git commit --no-verify -m x",
-		"git commit --no-v -m x",
-		"git commit -m 'unterminated",
-		"git commit -m x \\",
-		'git commit -m "$HOME"',
-		'git commit -m "`id`"',
-		'git commit -m "$(id)"',
-		"git log {--output=f,}",
-		"git log --oneline (ls)",
-		"FOO=1 git status",
-		"git commit -m x; ls",
-		"git commit -m x & ls",
-		"git commit -m x > f",
-		"git commit -m x < f",
-	])("denies %s", (c) => {
+	it.each(DENIED_GIT)("denies %s", (c) => {
 		expect(decide(implementer("Bash", c), at(260_000)).allow).toBe(false);
 	});
 	it("isAllowedGit agrees with decide", () => {
@@ -255,6 +280,76 @@ describe("shellWords", () => {
 		]) {
 			expect(shellWords(`a ${c} b`)).toBeNull();
 		}
+	});
+});
+
+describe("shellWords agrees with bash", () => {
+	const bashOk = spawnSync("bash", ["--version"]).status === 0;
+	if (!bashOk) {
+		console.warn("bash not found: skipping the shellWords differential test");
+	}
+	const dir = mkdtempSync(join(tmpdir(), "icg bash "));
+	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+	// files for a glob to match, so an accepted glob would disagree with bash
+	for (const f of ["x.ts", "a", "ab", "a1", "--output=x"]) {
+		writeFileSync(join(dir, f), "");
+	}
+	/** bash's argv for `command`, via printf, from an empty directory. */
+	const bashArgv = (command: string): string[] => {
+		const r = spawnSync("bash", ["-c", `printf '%s\\0' ${command}`], {
+			cwd: dir,
+			encoding: "utf8",
+			env: { PATH: process.env.PATH ?? "", HOME: dir },
+		});
+		expect(r.status, command).toBe(0);
+		const out = r.stdout.split("\0");
+		out.pop(); // the text after the last NUL
+		return out;
+	};
+	const agree = (command: string) => {
+		const words = shellWords(command);
+		if (words === null) return false;
+		expect(words, JSON.stringify(command)).toEqual(bashArgv(command));
+		return true;
+	};
+
+	it.skipIf(!bashOk)("agrees on every accepted corpus command", () => {
+		const corpus = [...ALLOWED_GIT, ...DENIED_GIT];
+		const accepted = corpus.filter(agree);
+		// the corpus must keep exercising the tokenizer, not only its refusals
+		expect(accepted.length).toBeGreaterThan(40);
+	});
+
+	it.skipIf(!bashOk)("agrees on seeded random strings", () => {
+		const alphabet = [
+			"a",
+			"b",
+			" ",
+			"\t",
+			"'",
+			'"',
+			"\\",
+			"-",
+			"=",
+			"\n",
+			"\r",
+			"#",
+			"~",
+			":",
+			"%",
+		];
+		let seed = 1103;
+		const rand = (n: number) => {
+			seed = (seed * 1664525 + 1013904223) >>> 0;
+			return seed % n;
+		};
+		let accepted = 0;
+		for (let k = 0; k < 300; k++) {
+			let c = "x ";
+			for (let n = rand(10); n >= 0; n--) c += alphabet[rand(alphabet.length)];
+			if (agree(c)) accepted++;
+		}
+		expect(accepted).toBeGreaterThan(25);
 	});
 });
 
