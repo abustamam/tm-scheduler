@@ -1109,3 +1109,133 @@ describe("VP Membership guest card — Joined… dialog details", () => {
 		).toBeTruthy();
 	});
 });
+
+/**
+ * #1157: an address typed on the public guest book is the card's UNCONFIRMED
+ * note (`bookEmail`). The card flags it; converting asks the officer about it,
+ * with no default answer, and sends what they decided as `confirmedEmail`.
+ */
+describe("VP Membership guest card — unconfirmed guest-book address (#1157)", () => {
+	const BOOK = "typed@example.com";
+	const bookOnly = () =>
+		guestRow({ email: null, bookEmail: BOOK, name: "Noted Guest" });
+
+	async function openConfirm() {
+		vi.mocked(convertGuestToMember).mockResolvedValue({
+			ok: true,
+			membershipId: "44444444-4444-4444-8444-444444444444",
+			personId: "55555555-5555-4555-8555-555555555555",
+			closedOfficerPositions: [],
+			reactivated: false,
+			// biome-ignore lint/suspicious/noExplicitAny: the server fn's wrapped return type
+		} as any);
+		await renderRoute([bookOnly()]);
+		openLaneMenu("Noted Guest");
+		fireEvent.click(await screen.findByRole("menuitem", { name: /joined/i }));
+		fireEvent.click(await screen.findByRole("button", { name: /new member/i }));
+		await screen.findByText(/not confirmed\. Ask Noted Guest/);
+	}
+	const convertButton = () =>
+		screen.getByRole("button", { name: "Convert" }) as HTMLButtonElement;
+
+	// protects=a card with only a book note shows the address as a mailto link with an Unconfirmed badge; a card with a vouched address shows no badge;
+	// fails_when=the note is shown as if confirmed, or the badge appears on a vouched card;
+	// no_claim=the dialog (next tests); the loader is stubbed with the row.
+	it("flags the note as Unconfirmed, and only when no address is vouched", async () => {
+		await renderRoute([bookOnly()]);
+		const link = screen.getByRole("link", { name: BOOK }) as HTMLAnchorElement;
+		expect(link.getAttribute("href")).toBe(`mailto:${BOOK}`);
+		const badge = document.querySelector(
+			'[data-slot="unconfirmed-email-badge"]',
+		);
+		expect(badge?.textContent).toBe("Unconfirmed");
+		expect(badge?.getAttribute("title")).toBe(
+			"Typed on the public guest book. Not confirmed by an officer.",
+		);
+		cleanup();
+
+		await renderRoute([guestRow({ bookEmail: "stale@example.com" })]);
+		expect(
+			document.querySelector('[data-slot="unconfirmed-email-badge"]'),
+		).toBeNull();
+		expect(screen.getByRole("link", { name: "ada@example.com" })).toBeTruthy();
+	});
+
+	// protects=the confirm step shows the address and the unconfirmed sentence, keeps Convert disabled until a radio is chosen, and sends confirmedEmail equal to the (editable) input;
+	// fails_when=the radios default to an answer, Convert is enabled early, or the input is not what is sent;
+	// no_claim=what the server does with it (guest-convert-email.integration.test.ts); convertGuestToMember is mocked.
+	it("asks first, with no default, and sends the address the officer confirmed", async () => {
+		await openConfirm();
+		expect(
+			document.querySelector('[data-slot="unconfirmed-email-address"]')
+				?.textContent,
+		).toBe(BOOK);
+		expect(
+			document.querySelector('[data-slot="unconfirmed-email-notice"]')
+				?.textContent,
+		).toContain("Typed on the public guest book — not confirmed.");
+		expect(
+			(screen.getByLabelText("Use this address") as HTMLInputElement).checked,
+		).toBe(false);
+		expect(
+			(screen.getByLabelText("Leave it off for now") as HTMLInputElement)
+				.checked,
+		).toBe(false);
+		expect(convertButton().disabled).toBe(true);
+
+		fireEvent.click(screen.getByLabelText("Use this address"));
+		const input = (await screen.findByLabelText(
+			"Email address",
+		)) as HTMLInputElement;
+		expect(input.value).toBe(BOOK);
+		fireEvent.change(input, { target: { value: "not-an-address" } });
+		expect(convertButton().disabled).toBe(true);
+		fireEvent.change(input, { target: { value: "fixed@example.com" } });
+		expect(convertButton().disabled).toBe(false);
+		fireEvent.click(convertButton());
+
+		await waitFor(() =>
+			expect(convertGuestToMember).toHaveBeenCalledWith({
+				data: expect.objectContaining({ confirmedEmail: "fixed@example.com" }),
+			}),
+		);
+	});
+
+	// protects="Leave it off for now" enables Convert and sends confirmedEmail null;
+	// fails_when=leaving it off sends the note anyway, or sends nothing (which an old server reads the same, but the contract is an explicit null);
+	// no_claim=none beyond protects.
+	it("sends confirmedEmail null when the officer leaves it off", async () => {
+		await openConfirm();
+		fireEvent.click(screen.getByLabelText("Leave it off for now"));
+		expect(convertButton().disabled).toBe(false);
+		fireEvent.click(convertButton());
+		await waitFor(() =>
+			expect(convertGuestToMember).toHaveBeenCalledWith({
+				data: expect.objectContaining({ confirmedEmail: null }),
+			}),
+		);
+	});
+
+	// protects=a card with a vouched address converts in one click and sends no confirmedEmail key;
+	// fails_when=the question is asked, or a confirmedEmail is sent, for an address an officer already vouched;
+	// no_claim=none beyond protects.
+	it("does not ask, and sends no confirmedEmail, when the address is vouched", async () => {
+		vi.mocked(convertGuestToMember).mockResolvedValue({
+			ok: true,
+			membershipId: "44444444-4444-4444-8444-444444444444",
+			personId: "55555555-5555-4555-8555-555555555555",
+			closedOfficerPositions: [],
+			reactivated: false,
+			// biome-ignore lint/suspicious/noExplicitAny: the server fn's wrapped return type
+		} as any);
+		await renderRoute([guestRow({ bookEmail: "stale@example.com" })]);
+		openLaneMenu("Ada Guest");
+		fireEvent.click(await screen.findByRole("menuitem", { name: /joined/i }));
+		fireEvent.click(await screen.findByRole("button", { name: /new member/i }));
+		await waitFor(() => expect(convertGuestToMember).toHaveBeenCalled());
+		const sent = vi.mocked(convertGuestToMember).mock.calls[0]?.[0] as {
+			data: Record<string, unknown>;
+		};
+		expect(sent.data).not.toHaveProperty("confirmedEmail");
+	});
+});
