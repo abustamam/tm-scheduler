@@ -124,12 +124,14 @@ export function AgendaCopies({
 	useEffect(() => {
 		const root = stack.current;
 		if (!root) return;
-		const measure = () => {
-			const sheets = Array.from(
+		const sheetsNow = () =>
+			Array.from(
 				root.querySelectorAll<HTMLElement>(
 					".agenda-page:not([data-agenda-blank])",
 				),
 			);
+		const measure = () => {
+			const sheets = sheetsNow();
 			// Every copy is `nominal` sheets, in document order: a layout's sheet
 			// count does not change when its content overflows, only a sheet's height.
 			const next = Array.from({ length: count }, (_, i) => {
@@ -148,16 +150,44 @@ export function AgendaCopies({
 					: next,
 			);
 		};
-		measure();
-		if (typeof ResizeObserver === "undefined") return;
 		// `FitPage` drops a sheet's fixed height after the fonts load, so a sheet
-		// can grow well after mount.
-		const observer = new ResizeObserver(measure);
-		for (const sheet of root.querySelectorAll(
-			".agenda-page:not([data-agenda-blank])",
-		))
-			observer.observe(sheet);
-		return () => observer.disconnect();
+		// can grow well after mount. A ResizeObserver per sheet hears that.
+		//
+		// The sheets it must hear are the CURRENT ones, not the ones present when
+		// this effect ran (#1181): switching layout between two layouts with the
+		// same page count (editorial <-> grid) swaps every `.agenda-page` for a
+		// new element without changing `count` or `nominal`, so an observer armed
+		// once was left watching detached nodes and the count stayed at the old
+		// layout's, placing blanks for pages the new layout does not print.
+		const resizes =
+			typeof ResizeObserver === "undefined"
+				? null
+				: new ResizeObserver(measure);
+		const watched = new Set<Element>();
+		const sync = () => {
+			const current = new Set<Element>(sheetsNow());
+			for (const el of watched) {
+				if (current.has(el)) continue;
+				resizes?.unobserve(el);
+				watched.delete(el);
+			}
+			for (const el of current) {
+				if (watched.has(el)) continue;
+				resizes?.observe(el);
+				watched.add(el);
+			}
+		};
+		sync();
+		measure();
+		const swaps = new MutationObserver(() => {
+			sync();
+			measure();
+		});
+		swaps.observe(root, { childList: true, subtree: true });
+		return () => {
+			resizes?.disconnect();
+			swaps.disconnect();
+		};
 	}, [count, nominal]);
 
 	const pagesPerCopy =
