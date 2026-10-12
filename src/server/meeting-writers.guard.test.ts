@@ -469,14 +469,24 @@ const MEETING_WRITERS: Record<string, Entry> = {
 
 	// -- member removal, merge, recurrence
 	"src/server/members-logic.ts#applyMemberRemove": {
-		class: "exempt",
-		reason:
-			"Releases a removed member's slots on future meetings, a cancelled one included on purpose (#1057): a slot held by someone who left has to open up. It filters by date, not by status. A follow-up for the completed-earlier-today case is #1154.",
+		class: "plan",
+		overrides: {
+			cancelled: {
+				accept: true,
+				reason:
+					"Releases a removed member's slots on a cancelled future meeting on purpose (#1057): a slot held by someone who left has to open up, or a restore puts it on the live agenda. The UPDATE's own meetingAcceptsWrite refuses a completed meeting (#1154).",
+			},
+		},
 	},
 	"src/server/members-logic.ts#applySetMemberStatus": {
-		class: "exempt",
-		reason:
-			"Releases an inactivated member's slots on future meetings, a cancelled one included on purpose (#1057). It filters by date, not by status.",
+		class: "plan",
+		overrides: {
+			cancelled: {
+				accept: true,
+				reason:
+					"Releases an inactivated member's slots on a cancelled future meeting on purpose (#1057). The UPDATE's own meetingAcceptsWrite refuses a completed meeting (#1154).",
+			},
+		},
 	},
 	"src/server/membership-collapse-logic.ts#collapseMemberships": {
 		class: "exempt",

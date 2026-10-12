@@ -38,6 +38,7 @@ import { isReadableClub } from "./club-readable-logic";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { contactMethodAvailableSql } from "./contact-preference-logic";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
+import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 import { collapseMemberships } from "./membership-collapse-logic";
 import {
 	currentOfficersByMember,
@@ -618,11 +619,11 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 			for (const s of upcoming) {
 				// Unlink any speech (speech_id → NULL); the speech persists
 				// Person-owned and unscheduled (ADR-0009 — never destroyed).
-				// The meeting's status rides in the UPDATE (#1154): `scheduledAt >= now`
-				// is an instant, `completeMeeting` closes by the club-local day, so a
-				// meeting completed this afternoon and scheduled for this evening matches
-				// the SELECT above and must not have its finished lineup rewritten. A
-				// cancelled future meeting is still released (#1057). The log follows
+				// The meeting's status rides in the UPDATE (#1154): `scheduledAt >= now` is an
+				// instant, `completeMeeting` closes by the club-local day, so a meeting completed
+				// this afternoon and scheduled for this evening matches the SELECT above. The
+				// UPDATE refuses it, so the release keeps its status, claimedAt and speechId.
+				// A cancelled future meeting is still released (#1057). The log follows
 				// RETURNING, so it names only the slots actually released.
 				const released = await tx
 					.update(roleSlots)
@@ -635,9 +636,12 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 					.where(
 						and(
 							eq(roleSlots.id, s.id),
-							meetingAcceptsWrite(tx, "plan", roleSlots.meetingId, {
-								accept: ["cancelled"],
-							}),
+							meetingAcceptsWrite(
+								tx,
+								"plan",
+								roleSlots.meetingId,
+								PLAN_ACCEPTING_CANCELLED,
+							),
 						),
 					)
 					.returning({ id: roleSlots.id });
@@ -817,11 +821,13 @@ export async function applyMemberRemove(input: RemoveInput) {
 		for (const s of upcoming) {
 			// Unlink any speech (speech_id → NULL); the speech persists
 			// Person-owned and unscheduled (ADR-0009 — never destroyed).
-			// The meeting's status rides in the UPDATE (#1154): `scheduledAt >= now`
-			// is an instant, `completeMeeting` closes by the club-local day, so a
-			// meeting completed this afternoon and scheduled for this evening matches
-			// the SELECT above and must not have its finished lineup rewritten. A
-			// cancelled future meeting is still released (#1057). The log follows
+			// The meeting's status rides in the UPDATE (#1154): `scheduledAt >= now` is an
+			// instant, `completeMeeting` closes by the club-local day, so a meeting completed
+			// this afternoon and scheduled for this evening matches the SELECT above. The
+			// UPDATE refuses it, so the release keeps its status, claimedAt and speechId.
+			// On remove, `assigned_member_id` of a completed slot is still cleared by the
+			// members FK (ON DELETE SET NULL); that is not this writer's doing.
+			// A cancelled future meeting is still released (#1057). The log follows
 			// RETURNING, so it names only the slots actually released.
 			const released = await tx
 				.update(roleSlots)
@@ -834,9 +840,12 @@ export async function applyMemberRemove(input: RemoveInput) {
 				.where(
 					and(
 						eq(roleSlots.id, s.id),
-						meetingAcceptsWrite(tx, "plan", roleSlots.meetingId, {
-							accept: ["cancelled"],
-						}),
+						meetingAcceptsWrite(
+							tx,
+							"plan",
+							roleSlots.meetingId,
+							PLAN_ACCEPTING_CANCELLED,
+						),
 					),
 				)
 				.returning({ id: roleSlots.id });

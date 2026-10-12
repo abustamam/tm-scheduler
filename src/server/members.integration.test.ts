@@ -7,16 +7,17 @@
  * add helper was named after `addMember` when that fn was public; #630 deleted
  * that fn and renamed the helper.
  *
- * BE HONEST ABOUT WHAT THIS FILE IS. `insertRosterMember` writes the member row
- * and the `member_add` row itself, and the case below then asserts those same
- * rows exist — so it asserts that `testDb.insert` inserts, and would pass with
- * every production seam deleted. No production code is imported here. That
- * predates #630 (`addMemberPublic` on `main` hand-rolled the identical two
- * inserts); it is recorded rather than fixed because the fix is to drive the
- * real seam the way `public-writers-archive-gate.integration.test.ts` does
- * — `vi.mock("#/db", …)` plus a dynamic import — which is a rewrite, not a
- * removal. See `TODOS/remove-self-add-630.md`. Do NOT read the `member_add`
- * assertion as pinning `applyBulkImport`: nothing links them.
+ * BE HONEST ABOUT WHAT THE FIRST TWO SUITES ARE. `insertRosterMember` writes
+ * the member row and the `member_add` row itself, and the case below then
+ * asserts those same rows exist: it asserts that `testDb.insert` inserts, and
+ * would pass with every production seam deleted. That predates #630
+ * (`addMemberPublic` on `main` hand-rolled the identical two inserts). Do NOT
+ * read the `member_add` assertion as pinning `applyBulkImport`: nothing links
+ * them.
+ *
+ * The LAST suite (#1154, releasing a member's slots) is different: it
+ * `vi.mock`s `#/db` onto `testDb` and drives the real `applySetMemberStatus`
+ * and `applyMemberRemove` from `members-logic`.
  *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://test:test@localhost:5433/tm_test \
@@ -24,7 +25,14 @@
  */
 import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { activityLog, meetings, members, people, roleSlots } from "#/db/schema";
+import {
+	activityLog,
+	meetings,
+	members,
+	people,
+	roleSlots,
+	speeches,
+} from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -34,8 +42,8 @@ import {
 	testDb,
 } from "#/test/db";
 
-// The release tests below drive the real `members-logic` writers against the
-// test database. The two tests above never touch production code (see the
+// The #1154 suite at the bottom drives the real `members-logic` writers against
+// the test database. The earlier suites never touch production code (see the
 // header), so the swap is invisible to them.
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
@@ -185,9 +193,15 @@ describe.skipIf(!hasTestDb)(
 				})
 				.returning({ id: meetings.id });
 			if (!meeting) throw new Error("Failed to insert meeting");
+			const [speech] = await testDb
+				.insert(speeches)
+				.values({ personId: victimPersonId, title: "Held speech" })
+				.returning({ id: speeches.id });
+			if (!speech) throw new Error("Failed to insert speech");
 			const [slot] = await testDb
 				.insert(roleSlots)
 				.values({
+					speechId: speech.id,
 					meetingId: meeting.id,
 					roleDefinitionId: seed.roleDefinitionId,
 					status: "claimed",
@@ -205,6 +219,7 @@ describe.skipIf(!hasTestDb)(
 					status: roleSlots.status,
 					assignedMemberId: roleSlots.assignedMemberId,
 					claimedAt: roleSlots.claimedAt,
+					speechId: roleSlots.speechId,
 				})
 				.from(roleSlots)
 				.where(eq(roleSlots.id, id));
@@ -243,23 +258,24 @@ describe.skipIf(!hasTestDb)(
 			});
 		};
 
-		for (const [label, act] of [
-			["deactivating the member", deactivate],
-			["removing the member", remove],
+		for (const [label, act, keepsTitle] of [
+			["deactivating the member", deactivate, "keeps the holder on"],
+			["removing the member", remove, "does not release"],
 		] as const) {
 			describe(label, () => {
-				it("leaves a slot on a completed meeting scheduled later today assigned", async () => {
+				it(`${keepsTitle} a slot on a completed meeting scheduled later today`, async () => {
 					const completed = await heldSlotOn("completed");
 					await act();
 					const row = await slotRow(completed);
-					// The writer left it alone: still claimed, claim time intact. On a
-					// REMOVE the holder column goes null by the members FK (ON DELETE SET
-					// NULL), which is not this writer's doing; the claim fields are.
+					// The writer left it alone: still claimed, claim time and speech
+					// intact. On a REMOVE the holder column goes null by the members FK
+					// (ON DELETE SET NULL), which is not this writer's doing.
 					if (label === "deactivating the member") {
 						expect(row.assignedMemberId).toBe(victimId);
 					}
 					expect(row.status).toBe("claimed");
 					expect(row.claimedAt).not.toBeNull();
+					expect(row.speechId).not.toBeNull();
 					expect(await releasedSlotIds([completed])).toEqual([]);
 				});
 
@@ -270,6 +286,7 @@ describe.skipIf(!hasTestDb)(
 					expect(row.assignedMemberId).toBeNull();
 					expect(row.status).toBe("open");
 					expect(row.claimedAt).toBeNull();
+					expect(row.speechId).toBeNull();
 					expect(await releasedSlotIds([cancelled])).toEqual([cancelled]);
 				});
 
