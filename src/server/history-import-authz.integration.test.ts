@@ -92,6 +92,10 @@ describe.skipIf(!hasTestDb)("history-import.ts authorization (#1051)", () => {
 			(fns.importEasySpeakSpeechRequests as Fn)({
 				data: { clubId, importId: randomUUID() },
 			}),
+		importEasySpeakMentors: () =>
+			(fns.importEasySpeakMentors as Fn)({
+				data: { clubId, importId: randomUUID() },
+			}),
 	});
 
 	beforeEach(async () => {
@@ -123,6 +127,7 @@ describe.skipIf(!hasTestDb)("history-import.ts authorization (#1051)", () => {
 		"previewEasySpeakImport",
 		"applyEasySpeakImport",
 		"importEasySpeakSpeechRequests",
+		"importEasySpeakMentors",
 	])("%s refuses a signed-in non-superadmin", async (name) => {
 		await expect(calls(seed.clubId)[name]?.()).rejects.toThrow(
 			NO_PERMISSION_MESSAGE,
@@ -225,5 +230,26 @@ describe.skipIf(!hasTestDb)("history-import.ts authorization (#1051)", () => {
 		await expect(
 			calls(seed.clubId).importEasySpeakSpeechRequests?.(),
 		).rejects.toThrow(/not found/i);
+	});
+
+	it("refuses the mentor import under a read-only impersonation, and imports under none (#1053)", async () => {
+		sessionUserId = superadminId;
+		await testDb.insert(impersonationSessions).values({
+			superadminUserId: superadminId,
+			clubId: seed.clubId,
+			mode: "read_only",
+			expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+		});
+		await expect(calls(seed.clubId).importEasySpeakMentors?.()).rejects.toThrow(
+			/read-only impersonation/i,
+		);
+		// Without the session the same call gets past the gate and fails on the
+		// unknown import id: the gate, not the harness, refused above.
+		await testDb
+			.delete(impersonationSessions)
+			.where(eq(impersonationSessions.superadminUserId, superadminId));
+		await expect(calls(seed.clubId).importEasySpeakMentors?.()).rejects.toThrow(
+			/not found/i,
+		);
 	});
 });

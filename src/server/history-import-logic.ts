@@ -106,9 +106,9 @@ import { importPlanAnswers } from "./attendance-plan-logic";
 import { lockClubForWrite } from "./club-write-lock";
 import { createGuestRecord } from "./guests-logic";
 
-type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+export type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
-const SOURCE = "easy_speak" as const;
+export const SOURCE = "easy_speak" as const;
 
 /**
  * The archive gate, re-read INSIDE a write transaction, right after the club
@@ -116,7 +116,10 @@ const SOURCE = "easy_speak" as const;
  * writes for minutes, one transaction per meeting, and the club can be archived
  * between any two of them. An archived club takes no more writes (ADR-0016).
  */
-async function assertClubNotArchivedTx(tx: Tx, clubId: string): Promise<void> {
+export async function assertClubNotArchivedTx(
+	tx: Tx,
+	clubId: string,
+): Promise<void> {
 	const [club] = await tx
 		.select({ archivedAt: clubs.archivedAt })
 		.from(clubs)
@@ -263,7 +266,7 @@ interface ImportState {
 	report: ImportReport | null;
 }
 
-async function loadStoredBundle(
+export async function loadStoredBundle(
 	clubId: string,
 	importId: string,
 ): Promise<{
@@ -614,7 +617,7 @@ export async function previewEasySpeakImport(input: {
 // ---------------------------------------------------------------------------
 
 /** `club_id` and `source` are fixed; the kind is checked against `IMPORT_REF_KINDS`. */
-async function putRef(
+export async function putRef(
 	tx: Tx,
 	clubId: string,
 	kind: ImportRefKind,
@@ -1433,7 +1436,7 @@ export interface ApplyResult {
  * at a time. It TRIES the lock and refuses at once rather than waiting, because
  * the holder keeps a pooled connection for its whole run. Held until `tx` ends.
  */
-async function takeImportLock(tx: Tx, clubId: string): Promise<void> {
+export async function takeImportLock(tx: Tx, clubId: string): Promise<void> {
 	const taken = await tx.execute<{ ok: boolean }>(
 		sql`select pg_try_advisory_xact_lock(hashtextextended(${`history-import:${clubId}`}, 0)) as ok`,
 	);
@@ -1812,8 +1815,11 @@ export const importRunSchema = importClubSchema.extend({
 	importId: z.string().uuid(),
 	resolutions: resolutionsSchema.optional(),
 });
-/** The speech-request step names the stored import it reads, nothing else. */
-export const importSpeechRequestsSchema = importClubSchema.extend({
+/**
+ * A step that reads one stored import (the speech-request step, the mentor step)
+ * names the club and the import, nothing else.
+ */
+export const storedImportSchema = importClubSchema.extend({
 	importId: z.string().uuid(),
 });
 /** An apply names the preview it confirms: see {@link planFingerprint}. */

@@ -95,6 +95,14 @@ describe("mentorship stays off every public surface (#939)", () => {
 			"server/orientation-logic.ts",
 			// Re-points pairings on a member merge; returns none of them.
 			"server/membership-collapse-logic.ts",
+			// The superadmin-only Easy-Speak mentor step (#1053): it writes the
+			// pairings the bundle names and returns bundle names and counts, never
+			// a stored pairing. Its one caller is `importEasySpeakMentors`
+			// (requireSuperadmin, `history-import-authz.guard.test.ts`). It is its
+			// own module because `history-import-logic.ts` is also imported by
+			// `mcp/tools/get-import-report.ts`, which officers can reach; the next
+			// test pins that nothing but `history-import.ts` imports this one.
+			"server/mentor-import-logic.ts",
 		]);
 		const readers = walk(SRC)
 			.map((abs) => relative(SRC, abs))
@@ -110,6 +118,25 @@ describe("mentorship stays off every public surface (#939)", () => {
 				/\bmentorships\b/.test(readFileSync(resolve(SRC, f), "utf8")),
 			);
 		expect(readers.sort()).toEqual([...TABLE_READERS].sort());
+	});
+
+	it("only history-import.ts imports the Easy-Speak mentor step, and history-import-logic.ts does not touch pairings", () => {
+		const importers = walk(SRC)
+			.map((abs) => relative(SRC, abs))
+			.filter(
+				(f) =>
+					/\.tsx?$/.test(f) &&
+					!f.includes(".test.") &&
+					f !== "server/mentor-import-logic.ts",
+			)
+			.filter((f) =>
+				/mentor-import-logic/.test(readFileSync(resolve(SRC, f), "utf8")),
+			);
+		expect(importers).toEqual(["server/history-import.ts"]);
+		// The file officers can reach (the MCP import report) names no pairing.
+		expect(
+			readFileSync(resolve(SRC, "server/history-import-logic.ts"), "utf8"),
+		).not.toMatch(/mentorship/i);
 	});
 
 	it("every mentorship server fn takes a session", () => {

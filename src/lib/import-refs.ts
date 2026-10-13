@@ -21,6 +21,7 @@ export const IMPORT_REF_KINDS = [
 	"table_topic",
 	"attendance",
 	"speech_request",
+	"mentor_pair",
 ] as const;
 
 export const importRefKindSchema = z.enum(IMPORT_REF_KINDS);

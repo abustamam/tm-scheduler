@@ -3,9 +3,10 @@ import { Loader2, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
-import type {
-	ImportReport,
-	PersonResolution,
+import {
+	type ImportReport,
+	type PersonResolution,
+	personKeyOf,
 } from "#/lib/easy-speak-import-plan";
 import { GUEST_KIND_LABELS, GUEST_KINDS } from "#/lib/guest-profile";
 import {
@@ -14,6 +15,7 @@ import {
 } from "#/lib/import-bundle-limit";
 import {
 	applyEasySpeakImport,
+	importEasySpeakMentors,
 	importEasySpeakSpeechRequests,
 	listEasySpeakImports,
 	previewEasySpeakImport,
@@ -176,6 +178,30 @@ export function ImportHistoryPanel({
 		onError: (err) =>
 			toast.error(
 				err instanceof Error ? err.message : "Speech request import failed.",
+			),
+	});
+
+	// The mentor-pair step (#1053): same shape, its own button and result.
+	const [mentorsResult, setMentorsResult] = useState<{
+		importId: string;
+		result: Awaited<ReturnType<typeof importEasySpeakMentors>>;
+	} | null>(null);
+	const importMentors = useMutation({
+		mutationFn: () =>
+			importEasySpeakMentors({
+				data: { clubId, importId: importId as string },
+			}),
+		onSuccess: (result) => {
+			setMentorsResult({ importId: importId as string, result });
+			toast.success(
+				result.imported === 0
+					? "No new mentor pairs to import."
+					: `Imported ${result.imported} mentor ${result.imported === 1 ? "pair" : "pairs"}.`,
+			);
+		},
+		onError: (err) =>
+			toast.error(
+				err instanceof Error ? err.message : "Mentor pair import failed.",
 			),
 	});
 
@@ -411,6 +437,38 @@ export function ImportHistoryPanel({
 							<SpeechRequestsResult result={requestsResult.result} />
 						) : null}
 					</div>
+
+					<div className="space-y-1" data-testid="mentors-step">
+						<h3 className="text-sm font-bold">Mentor pairs</h3>
+						<p className="text-sm text-muted-foreground">
+							Adds the bundle's mentor and mentee pairs as mentoring pairings in
+							this club. Run it after applying the import: both people are
+							matched to the people it resolved, and a pair with someone it did
+							not resolve is skipped and listed. Running it again adds nothing
+							already there.
+						</p>
+						<Button
+							type="button"
+							size="sm"
+							variant="outline"
+							disabled={!data.appliedAt || importMentors.isPending}
+							onClick={() => importMentors.mutate()}
+						>
+							{importMentors.isPending ? (
+								<Loader2 className="size-4 animate-spin" />
+							) : (
+								"Import mentor pairs"
+							)}
+						</Button>
+						{!data.appliedAt ? (
+							<p className="text-sm text-muted-foreground">
+								Apply the import before importing mentor pairs.
+							</p>
+						) : null}
+						{mentorsResult?.importId === importId ? (
+							<MentorsResult result={mentorsResult.result} />
+						) : null}
+					</div>
 				</div>
 			) : null}
 		</section>
@@ -435,6 +493,72 @@ function SpeechRequestsResult({
 			<Count label="Skipped: no matching member" n={result.skippedNoMember} />
 			<Count label="Skipped: unknown status" n={result.skippedUnknownStatus} />
 		</dl>
+	);
+}
+
+const MENTOR_SKIP_LABELS: Record<
+	Awaited<
+		ReturnType<typeof importEasySpeakMentors>
+	>["skipped"][number]["reason"],
+	string
+> = {
+	mentee_unresolved: "the import never matched the mentee to a member",
+	mentor_unresolved: "the import never matched the mentor to a member",
+	neither_unresolved: "the import never matched either of them to a member",
+	mentee_not_member: "the mentee is not an active member",
+	mentor_not_member: "the mentor is not an active member",
+	neither_not_member: "neither is an active member",
+	neither_member:
+		"one was never matched to a member and the other is not an active member",
+	same_person: "mentor and mentee are the same member",
+};
+
+function MentorsResult({
+	result,
+}: {
+	result: Awaited<ReturnType<typeof importEasySpeakMentors>>;
+}) {
+	return (
+		<div className="space-y-2" data-testid="mentors-result">
+			<dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-3">
+				<Count label="Rows in the bundle" n={result.total} />
+				<Count label="Pairs in the bundle" n={result.pairs} />
+				<Count label="Imported" n={result.imported} />
+				<Count label="Already imported" n={result.alreadyImported} />
+				<Count label="Already paired" n={result.alreadyPaired} />
+				<Count label="Skipped" n={result.skipped.length} />
+				<Count label="No mentor named" n={result.noMentor} />
+			</dl>
+			{result.skipped.length > 0 ? (
+				<div className="space-y-1" data-testid="mentors-skipped">
+					<h4 className="text-sm font-medium">Pairs not imported</h4>
+					<ul className="list-disc space-y-0.5 pl-5 text-sm">
+						{result.skipped.map((p, i) => (
+							<li
+								// The same pair can be listed twice, so the row's position is part of the key.
+								// biome-ignore lint/suspicious/noArrayIndexKey: a read-only list with no stable id
+								key={`${i}:${personKeyOf(p.mentee)}>${personKeyOf(p.mentor)}`}
+							>
+								{p.mentee.name} (mentee) with {p.mentor.name} (mentor):{" "}
+								{MENTOR_SKIP_LABELS[p.reason]}
+							</li>
+						))}
+					</ul>
+				</div>
+			) : null}
+			{result.wantsMenteeNotImported.length > 0 ? (
+				<div className="space-y-1" data-testid="mentors-wants-mentee">
+					<h4 className="text-sm font-medium">
+						"Wants Mentee?" not imported ({result.wantsMenteeNotImported.length}
+						)
+					</h4>
+					<p className="text-sm text-muted-foreground">
+						Mentoring has no field for it, so it is not carried over:{" "}
+						{result.wantsMenteeNotImported.map((p) => p.name).join(", ")}.
+					</p>
+				</div>
+			) : null}
+		</div>
 	);
 }
 

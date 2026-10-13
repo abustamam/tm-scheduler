@@ -438,14 +438,13 @@ describe.skipIf(!hasTestDb)("speech-request import (#1052)", () => {
 	});
 
 	it("validates the server-fn input: a club id and an import id", () => {
-		const ok = logic.importSpeechRequestsSchema.safeParse({
+		const ok = logic.storedImportSchema.safeParse({
 			clubId: randomUUID(),
 			importId: randomUUID(),
 		});
 		expect(ok.success).toBe(true);
 		expect(
-			logic.importSpeechRequestsSchema.safeParse({ clubId: randomUUID() })
-				.success,
+			logic.storedImportSchema.safeParse({ clubId: randomUUID() }).success,
 		).toBe(false);
 	});
 });
