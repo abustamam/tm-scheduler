@@ -936,7 +936,7 @@ const FILE_DESCRIPTIONS: Record<
 	"pathways.csv":
 		"One row per Pathways enrollment of this club's current (active) members. current_level is the highest level Toastmasters has approved as complete (empty if none); status is archived for a path the member is no longer working on.",
 	"guests.csv":
-		"One row per guest, with contact details. kind is visitor, visiting_toastmaster (a Toastmaster from another club, attending) or guest_speaker (one who spoke); home_club is a visiting Toastmaster's own club. visits counts the meetings of this club the guest attended, held a role at or spoke at Table Topics, not counting cancelled meetings or ones still to come, the same count the guest pipeline shows; first_visit is the earliest of them.",
+		"One row per guest, with contact details. kind is visitor (a guest) or visiting_toastmaster (a Toastmaster from another club); home_club is a visiting Toastmaster's own club. visits counts the meetings of this club the guest attended, held a role at or spoke at Table Topics, not counting cancelled meetings or ones still to come, the same count the guest pipeline shows; first_visit is the earliest of them.",
 	"awards.csv": "One row per meeting award.",
 	"dues.csv":
 		"One row per member per dues period: every active member, plus any past member with a recorded payment or waiver. status is paid, waived or unpaid.",

@@ -121,11 +121,29 @@ describe("buildImportPlan on the B fixture", () => {
 		expect(plan.canApply).toBe(false);
 	});
 
+	// protects=Easy-Speak's "Guest Speaker" section imports as `visiting_toastmaster`
+	// (#1208), as does its other-club visitor, and a plain visitor stays `visitor`;
+	// fails_when=a guest speaker maps to a kind that is not ours (the retired
+	// `guest_speaker`) or to `visitor`;
+	// no_claim=the kind is the plan's; whether the apply writes it is the history
+	// import integration test's, and the stored bundle's categories are
+	// Easy-Speak's own strings in a fixture file.
 	it("makes a person only in guest categories a guest, with the kind the category gives", () => {
-		const plan = buildImportPlan(withGuestSpeaker(), ctx());
+		const bundle = withGuestSpeaker();
+		bundle.meetings
+			.find((m) => m.esMeetingId === "644304")
+			?.guests.push({
+				who: { esUserId: "900099", name: "Quin Otherclub" },
+				category: "visitor_other_club",
+			});
+		const plan = buildImportPlan(bundle, ctx());
+		expect(outcomeOf(plan, "900099")).toMatchObject({
+			status: "guest",
+			kind: "visiting_toastmaster",
+		});
 		expect(outcomeOf(plan, "900025")).toMatchObject({
 			status: "guest",
-			kind: "guest_speaker",
+			kind: "visiting_toastmaster",
 			via: "category",
 		});
 		expect(outcomeOf(plan, "900060")).toMatchObject({

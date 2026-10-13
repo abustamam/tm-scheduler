@@ -97,9 +97,6 @@ describe("checkVpmFeatures", () => {
 		expect(
 			checkVpmFeatures(vpm({ captions: ["Guest speaker, Seaport Speakers"] })),
 		).toMatch(/"Visiting Toastmaster" caption/);
-		expect(
-			checkVpmFeatures(vpm({ captions: ["Visiting Toastmaster, Bayview"] })),
-		).toMatch(/"Guest speaker" caption/);
 	});
 
 	it("does not take the label in prose for a caption", () => {
@@ -166,16 +163,14 @@ describe("checkAgendaFeatures", () => {
 	it("passes a roster naming a visiting Toastmaster", () => {
 		expect(
 			checkAgendaFeatures(
-				"<span>Imani Clarke · Visiting Toastmaster, Bayview</span>",
+				"<span>Imani Clarke · Guest</span>",
 			),
 		).toBeNull();
 	});
 
-	it("fails when the only guest is a Visitor, who is captioned just 'Guest'", () => {
+	it("fails when no guest is on the agenda", () => {
 		expect(
-			checkAgendaFeatures(
-				"<span>Ben Carter · Guest</span><p>Guest speaker</p>",
-			),
-		).toMatch(/no guest kind caption/);
+			checkAgendaFeatures("<span>Ben Carter</span><p>Guest speaker</p>"),
+		).toMatch(/no guest marker/);
 	});
 });

@@ -324,8 +324,13 @@ export function instantOf(startsAt: string, clubTimezone: string): Date {
 }
 
 function kindForCategories(categories: EsGuestCategory[]): GuestKind {
-	if (categories.includes("guest_speaker")) return "guest_speaker";
-	if (categories.includes("visitor_other_club")) return "visiting_toastmaster";
+	// Easy-Speak's "Guest Speaker" section is a Toastmaster from another club who
+	// spoke: a visiting Toastmaster here (#1208), not a kind of its own.
+	if (
+		categories.includes("guest_speaker") ||
+		categories.includes("visitor_other_club")
+	)
+		return "visiting_toastmaster";
 	return "visitor";
 }
 

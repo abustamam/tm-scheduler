@@ -15,20 +15,16 @@ export const HOME_CLUB_TOO_LONG_MESSAGE = "That club name is too long.";
  * The `guest_kind` enum's values (#1046), restated here because this module is
  * client-safe and `#/db/schema` is not something a dialog should import.
  * `guest-profile.test.ts` holds the two lists equal, so a value added to the
- * database enum fails a test instead of being unselectable.
+ * database enum fails a test instead of being unselectable. The stored value
+ * `visitor` is historical: it reads "Guest" everywhere it is labelled (#1208).
  */
-export const GUEST_KINDS = [
-	"visitor",
-	"visiting_toastmaster",
-	"guest_speaker",
-] as const;
+export const GUEST_KINDS = ["visitor", "visiting_toastmaster"] as const;
 
 export type GuestKind = (typeof GUEST_KINDS)[number];
 
 export const GUEST_KIND_LABELS: Record<GuestKind, string> = {
-	visitor: "Visitor",
+	visitor: "Guest",
 	visiting_toastmaster: "Visiting Toastmaster",
-	guest_speaker: "Guest speaker",
 };
 
 /** The three #1046 columns, as every read and write of them carries them. */
@@ -78,8 +74,8 @@ export function profileFieldsChanged(
 }
 
 /**
- * "Guest speaker, Laguna Speakers #1234" — how a non-visitor guest is described
- * next to their name. Null for a Visitor, who needs no caption.
+ * "Visiting Toastmaster, Laguna Speakers #1234" — how a non-visitor guest is
+ * described next to their name. Null for a plain Guest, who needs no caption.
  */
 export function guestKindCaption(
 	kind: GuestKind,

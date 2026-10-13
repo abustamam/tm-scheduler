@@ -359,7 +359,9 @@ describe.skipIf(!hasTestDb)("#1046 import-history schema", () => {
 
 	describe("speeches-logic", () => {
 		it("listUnscheduledSpeeches never lists a guest's speech, scoped or not", async () => {
-			const guestId = await makeGuest(a.clubId, { kind: "guest_speaker" });
+			const guestId = await makeGuest(a.clubId, {
+				kind: "visiting_toastmaster",
+			});
 			const g = await guestSpeech(guestId);
 			const p = await personSpeech(a.personId);
 			for (const filter of [
@@ -474,7 +476,9 @@ describe.skipIf(!hasTestDb)("#1046 import-history schema", () => {
 
 			const meetingId = await pastMeeting(a.clubId);
 			const defId = await speakerDef(a.clubId);
-			const guestId = await makeGuest(a.clubId, { kind: "guest_speaker" });
+			const guestId = await makeGuest(a.clubId, {
+				kind: "visiting_toastmaster",
+			});
 			const g = await guestSpeech(guestId, { projectId: project.id });
 			const p = await personSpeech(a.personId, {
 				projectId: project.id,
@@ -550,7 +554,9 @@ describe.skipIf(!hasTestDb)("#1046 import-history schema", () => {
 			const doomed = await seedClub();
 			extraClubIds.push(doomed.clubId);
 			extraUserIds.push(doomed.adminUserId, doomed.memberUserId);
-			const guestId = await makeGuest(doomed.clubId, { kind: "guest_speaker" });
+			const guestId = await makeGuest(doomed.clubId, {
+				kind: "visiting_toastmaster",
+			});
 			const g = await guestSpeech(guestId);
 			const defId = await speakerDef(doomed.clubId);
 			await testDb.insert(roleSlots).values({
@@ -587,7 +593,9 @@ describe.skipIf(!hasTestDb)("#1046 import-history schema", () => {
 			const doomed = await seedClub();
 			extraClubIds.push(doomed.clubId);
 			extraUserIds.push(doomed.adminUserId, doomed.memberUserId);
-			const otherGuest = await makeGuest(b.clubId, { kind: "guest_speaker" });
+			const otherGuest = await makeGuest(b.clubId, {
+				kind: "visiting_toastmaster",
+			});
 			const g = await guestSpeech(otherGuest);
 			await testDb.insert(roleSlots).values({
 				meetingId: b.meetingId,
@@ -615,7 +623,9 @@ describe.skipIf(!hasTestDb)("#1046 import-history schema", () => {
 
 	describe("guest-pipeline-logic: applyDeleteGuest", () => {
 		it("refuses a guest who owns a speech, and deletes nothing", async () => {
-			const guestId = await makeGuest(a.clubId, { kind: "guest_speaker" });
+			const guestId = await makeGuest(a.clubId, {
+				kind: "visiting_toastmaster",
+			});
 			const g = await guestSpeech(guestId);
 			const [slot] = await testDb
 				.insert(roleSlots)
@@ -699,7 +709,7 @@ describe.skipIf(!hasTestDb)("#1046 import-history schema", () => {
 			const defId = await speakerDef(club.clubId);
 			const guestId = await makeGuest(club.clubId, {
 				name: `Visiting ${RUN}`,
-				kind: "guest_speaker",
+				kind: "visiting_toastmaster",
 				homeClub: "Laguna Speakers #1234",
 				introducedByMemberId: club.memberId,
 			});
@@ -748,7 +758,7 @@ describe.skipIf(!hasTestDb)("#1046 import-history schema", () => {
 			expect(files["guests.csv"].rows).toContainEqual(
 				expect.objectContaining({
 					guest_id: guestId,
-					kind: "guest_speaker",
+					kind: "visiting_toastmaster",
 					home_club: "Laguna Speakers #1234",
 					introduced_by_member_id: club.memberId,
 				}),

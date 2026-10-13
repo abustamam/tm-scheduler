@@ -1575,13 +1575,14 @@ export const guestStageEnum = pgEnum("guest_stage", [
 
 // What kind of non-member a guest row is (#1046, CONTEXT.md "Guest kind").
 // `visitor` is every guest the app has ever had: someone checking the club out,
-// the one the VP-Membership funnel exists for. The other two are Toastmasters
-// from ANOTHER club, who are guests here but never prospects: one who attends,
-// and one who speaks. Imported history (#1054) is where they first appear.
+// the one the VP-Membership funnel exists for. It is labelled "Guest"; the stored
+// value is historical. `visiting_toastmaster` is a Toastmaster from ANOTHER club:
+// a guest here but never a prospect, attending or speaking. A guest speaker is
+// not a kind (#1208): it is a guest who holds a speech. Imported history (#1054)
+// is where visiting Toastmasters first appear.
 export const guestKindEnum = pgEnum("guest_kind", [
 	"visitor",
 	"visiting_toastmaster",
-	"guest_speaker",
 ]);
 
 export const guests = pgTable(

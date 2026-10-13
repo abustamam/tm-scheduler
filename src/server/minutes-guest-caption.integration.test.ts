@@ -35,7 +35,7 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const { loadMinutes } = await import("./minutes-logic");
 
 type GuestProfile = {
-	kind: "visitor" | "visiting_toastmaster" | "guest_speaker";
+	kind: "visitor" | "visiting_toastmaster";
 	homeClub: string | null;
 };
 
@@ -93,9 +93,9 @@ describe.skipIf(!hasTestDb)("loadMinutes guest caption (#1080)", () => {
 		return m.guests.find((g) => g.guestId === guestId);
 	}
 
-	it("captions a guest speaker present by attendance row with their home club", async () => {
+	it("captions a visiting Toastmaster present by attendance row with their home club", async () => {
 		const guestId = await newGuest("Ben Carter", {
-			kind: "guest_speaker",
+			kind: "visiting_toastmaster",
 			homeClub: "Downtown Toastmasters",
 		});
 		await markPresent(guestId);
@@ -105,7 +105,7 @@ describe.skipIf(!hasTestDb)("loadMinutes guest caption (#1080)", () => {
 			guestId,
 			name: "Ben Carter",
 			fromRole: false,
-			caption: "Guest speaker, Downtown Toastmasters",
+			caption: "Visiting Toastmaster, Downtown Toastmasters",
 		});
 		// The kind and home club are read only to build the caption, never
 		// carried on the row.
@@ -128,9 +128,9 @@ describe.skipIf(!hasTestDb)("loadMinutes guest caption (#1080)", () => {
 		});
 	});
 
-	it("captions a guest who only spoke at Table Topics (fromRole, #374)", async () => {
+	it("captions a visiting Toastmaster who only spoke at Table Topics (fromRole, #374)", async () => {
 		const guestId = await newGuest("Topics Only", {
-			kind: "guest_speaker",
+			kind: "visiting_toastmaster",
 			homeClub: "Laguna Speakers #1234",
 		});
 		await speakAtTableTopics(guestId);
@@ -139,7 +139,7 @@ describe.skipIf(!hasTestDb)("loadMinutes guest caption (#1080)", () => {
 			guestId,
 			name: "Topics Only",
 			fromRole: true,
-			caption: "Guest speaker, Laguna Speakers #1234",
+			caption: "Visiting Toastmaster, Laguna Speakers #1234",
 		});
 	});
 
@@ -182,13 +182,13 @@ describe.skipIf(!hasTestDb)("loadMinutes guest caption (#1080)", () => {
 
 	it("holds a home club with line breaks and runs of whitespace to ONE line", async () => {
 		const guestId = await newGuest("Multi Line", {
-			kind: "guest_speaker",
+			kind: "visiting_toastmaster",
 			homeClub: "Downtown\n  Toastmasters\t\t#1234\r\n",
 		});
 		await markPresent(guestId);
 
 		expect((await guestRow(guestId))?.caption).toBe(
-			"Guest speaker, Downtown Toastmasters #1234",
+			"Visiting Toastmaster, Downtown Toastmasters #1234",
 		);
 	});
 
@@ -201,7 +201,7 @@ describe.skipIf(!hasTestDb)("loadMinutes guest caption (#1080)", () => {
 		});
 		await holdSlot(viaSlot);
 		const viaTopics = await newGuest("Via Topics", {
-			kind: "guest_speaker",
+			kind: "visiting_toastmaster",
 			homeClub: "Harbour   Orators",
 		});
 		await speakAtTableTopics(viaTopics);
@@ -210,7 +210,7 @@ describe.skipIf(!hasTestDb)("loadMinutes guest caption (#1080)", () => {
 			"Visiting Toastmaster, Laguna Speakers",
 		);
 		expect((await guestRow(viaTopics))?.caption).toBe(
-			"Guest speaker, Harbour Orators",
+			"Visiting Toastmaster, Harbour Orators",
 		);
 	});
 
@@ -218,7 +218,7 @@ describe.skipIf(!hasTestDb)("loadMinutes guest caption (#1080)", () => {
 		// `loadMinutes` lists such a guest ONCE, as explicitly present; the
 		// caption must ride on the row that wins, not only on the one it beats.
 		const guestId = await newGuest("Both Ways", {
-			kind: "guest_speaker",
+			kind: "visiting_toastmaster",
 			homeClub: "Downtown Toastmasters",
 		});
 		await holdSlot(guestId);
@@ -231,7 +231,7 @@ describe.skipIf(!hasTestDb)("loadMinutes guest caption (#1080)", () => {
 				guestId,
 				name: "Both Ways",
 				fromRole: false,
-				caption: "Guest speaker, Downtown Toastmasters",
+				caption: "Visiting Toastmaster, Downtown Toastmasters",
 			},
 		]);
 	});

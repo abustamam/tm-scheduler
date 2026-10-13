@@ -62,7 +62,7 @@ const GUEST: GuestEditFields = {
 };
 
 const PROFILE = {
-	kind: "guest_speaker" as const,
+	kind: "visiting_toastmaster" as const,
 	homeClub: "Laguna Speakers",
 	introducedByMemberId: "m1",
 	contactRefusal: null,
@@ -129,7 +129,7 @@ describe("GuestEditDialog — profile load states", () => {
 		getGuestProfile.mockResolvedValue(PROFILE);
 		renderDialog();
 		const kind = (await screen.findByLabelText("Kind")) as HTMLSelectElement;
-		expect(kind.value).toBe("guest_speaker");
+		expect(kind.value).toBe("visiting_toastmaster");
 		expect((screen.getByLabelText("Home club") as HTMLInputElement).value).toBe(
 			"Laguna Speakers",
 		);
@@ -142,7 +142,25 @@ describe("GuestEditDialog — profile load states", () => {
 		).toBeTruthy();
 	});
 
-	it("hides the home club for a Visitor", async () => {
+	// protects=the Kind select offers exactly two options, "Guest" (stored
+	// `visitor`) and "Visiting Toastmaster", in that order (#1208);
+	// fails_when=a third option (the retired guest speaker) comes back, or the
+	// visitor option reads "Visitor";
+	// no_claim=the saved value, which the "profile is written" tests cover; the
+	// options come from `GUEST_KINDS` and `GUEST_KIND_LABELS`, not stubs.
+	it("lists the two kinds, labelled Guest and Visiting Toastmaster", async () => {
+		getGuestProfile.mockResolvedValue(PROFILE);
+		renderDialog();
+		const kind = (await screen.findByLabelText("Kind")) as HTMLSelectElement;
+		expect(
+			Array.from(kind.options).map((o) => [o.value, o.textContent]),
+		).toEqual([
+			["visitor", "Guest"],
+			["visiting_toastmaster", "Visiting Toastmaster"],
+		]);
+	});
+
+	it("hides the home club for a Guest", async () => {
 		getGuestProfile.mockResolvedValue(PROFILE);
 		renderDialog();
 		const kind = await screen.findByLabelText("Kind");
