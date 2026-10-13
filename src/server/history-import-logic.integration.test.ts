@@ -1126,6 +1126,65 @@ EXECUTE FUNCTION zz_claim_slot()`),
 		expect(by("awards")?.gavelup).toBe(2);
 	});
 
+	it("an award or a role slot someone else holds gets no ref, so clearing it lets the bundle's holder in on the next run", async () => {
+		const existing = await seedMeetingAt(FIRST_AT, "completed");
+		const stored = await upload();
+		const { preview, resolutions } = await resolveAll(stored.importId);
+		const key = preview.roleDefinitions.find((d) =>
+			d.labels.includes("Toastmaster"),
+		)?.standardKey as string;
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seed.clubId,
+				name: "Toastmaster",
+				category: "functionary",
+				key,
+			})
+			.returning({ id: roleDefinitions.id });
+		const [bobsSlot] = await testDb
+			.insert(roleSlots)
+			.values({
+				meetingId: existing,
+				roleDefinitionId: def?.id as string,
+				slotIndex: 0,
+				status: "confirmed",
+				assignedMemberId: seed.memberId,
+			})
+			.returning({ id: roleSlots.id });
+		const [bobsAward] = await testDb
+			.insert(meetingAwards)
+			.values({
+				meetingId: existing,
+				category: "best_speaker",
+				memberId: seed.memberId,
+			})
+			.returning({ id: meetingAwards.id });
+		await apply(stored.importId, resolutions);
+		expect(
+			(await refsOfKind("award")).map((r) => r.sourceId),
+		).not.toContain("644304:best_speaker");
+		expect((await refsOfKind("role_slot")).map((r) => r.sourceId)).not.toContain(
+			"644304:1",
+		);
+		// An officer clears Bob's award and seat; the next run is not "deleted since".
+		await testDb
+			.delete(meetingAwards)
+			.where(eq(meetingAwards.id, bobsAward?.id as string));
+		await testDb
+			.update(roleSlots)
+			.set({ assignedMemberId: null, status: "open" })
+			.where(eq(roleSlots.id, bobsSlot?.id as string));
+		const { report } = await apply(stored.importId, resolutions);
+		expect(
+			report.notImported.find((r) => r.what.startsWith("Deleted in GavelUp")),
+		).toBeUndefined();
+		const by = (k: string) => report.counts.find((c) => c.key === k);
+		expect(by("awards")?.missing).toEqual([]);
+		expect(by("role_assignments")?.missing).toEqual([]);
+		expect(report.reconciled).toBe(true);
+	});
+
 	// -- Client text and jsonb --------------------------------------------------
 
 	it("refuses a bundle with an unpaired surrogate, with a sentence", async () => {

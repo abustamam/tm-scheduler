@@ -1043,7 +1043,16 @@ async function applyMeeting(
 			}
 			used.add(slot.id);
 			slotIdByEsSlot.set(ps.esSlot, slot.id);
-			await putRef(tx, clubId, "role_slot", ps.sourceId, slot.id);
+			// The ref is only written for a slot that is the bundle's: held by the
+			// bundle's holder, or empty where the bundle has none. A slot someone else
+			// holds is theirs; a ref to it would turn its later deletion into "the
+			// import's role deleted" and the bundle's holder would never be seated.
+			const slotIsBundles = owner
+				? sameOwner(owner, slot.assignedMemberId, slot.assignedGuestId)
+				: slot.assignedMemberId === null && slot.assignedGuestId === null;
+			if (slotIsBundles) {
+				await putRef(tx, clubId, "role_slot", ps.sourceId, slot.id);
+			}
 
 			// A speech sits on the slot of the one who owns it: a member's on a slot
 			// that member holds, a guest's on a slot that guest holds, and never the
@@ -1195,7 +1204,11 @@ async function applyMeeting(
 				})
 				.onConflictDoNothing();
 			const [row] = await tx
-				.select({ id: meetingAwards.id })
+				.select({
+					id: meetingAwards.id,
+					memberId: meetingAwards.memberId,
+					guestId: meetingAwards.guestId,
+				})
 				.from(meetingAwards)
 				.where(
 					and(
@@ -1204,7 +1217,12 @@ async function applyMeeting(
 					),
 				)
 				.limit(1);
-			if (row) await putRef(tx, clubId, "award", a.sourceId, row.id);
+			// A ref says "the import made this row". An award someone else holds is
+			// not that: written, it would read as the import's own award deleted the
+			// moment an officer clears it, and Alice's would never come back.
+			if (row && sameOwner(owner, row.memberId, row.guestId)) {
+				await putRef(tx, clubId, "award", a.sourceId, row.id);
+			}
 		}
 		for (const t of pm.tableTopics) {
 			if (isTombstoned(env, t.personKey)) {
