@@ -21,6 +21,7 @@ import {
 	guests,
 	importRefs,
 	meetingAttendance,
+	meetingAttendancePlan,
 	meetingAwards,
 	meetings,
 	members,
@@ -238,6 +239,9 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 				roleSlots as unknown as typeof meetingAttendance,
 			),
 			meetingAttendance: await inMeetings(meetingAttendance),
+			meetingAttendancePlan: await inMeetings(
+				meetingAttendancePlan as unknown as typeof meetingAttendance,
+			),
 			meetingAwards: await inMeetings(
 				meetingAwards as unknown as typeof meetingAttendance,
 			),
@@ -346,16 +350,100 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 		expect(report.notImported.length).toBeGreaterThan(0);
 	});
 
-	it("applying twice adds zero rows anywhere", async () => {
+	/** Rows in the club's activity log, by action. */
+	async function activityCount(action?: string) {
+		const [row] = await testDb
+			.select({ n: count() })
+			.from(activityLog)
+			.where(
+				action
+					? and(
+							eq(activityLog.clubId, seed.clubId),
+							eq(activityLog.action, action as "history_imported"),
+						)
+					: eq(activityLog.clubId, seed.clubId),
+			);
+		return Number(row?.n ?? 0);
+	}
+
+	it("applying twice adds zero data rows anywhere, and exactly one activity row per apply", async () => {
 		const stored = await upload();
 		const { resolutions } = await resolveAll(stored.importId);
+		const activityBefore = await activityCount();
 		await apply(stored.importId, resolutions);
+		// One history_imported row for the apply, and not one plan_set (or any other
+		// action) per row it wrote.
+		expect(await activityCount()).toBe(activityBefore + 1);
 		const afterFirst = await counts();
 		expect(afterFirst.meetings).toBe(2); // the seeded one and the imported one
 		expect(afterFirst.roleSlots).toBeGreaterThan(0);
 		const second = await apply(stored.importId, resolutions);
 		expect(await counts()).toEqual(afterFirst);
+		expect(await activityCount()).toBe(activityBefore + 2);
+		expect(await activityCount("history_imported")).toBe(2);
 		expect(second.report.reconciled).toBe(true);
+	});
+
+	it("writes the plan answers that have no record, and the Table Topics speakers, of the past meetings", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId, NOW_ALL_PAST);
+		const activityBefore = await activityCount();
+		const before = await counts();
+		await apply(stored.importId, resolutions, NOW_ALL_PAST);
+
+		// Derived from the bundle's rows (a plan answer with no record, once per
+		// person) and the people who resolve to MEMBERS (a guest has no plan row).
+		const bundle = JSON.parse(bundleText()) as EasySpeakBundleV1;
+		const decided = await logic.previewEasySpeakImport({
+			clubId: seed.clubId,
+			importId: stored.importId,
+			now: NOW_ALL_PAST,
+			resolutions,
+		});
+		const memberOf = new Map(
+			decided.people
+				.filter((p) => p.status === "member")
+				.map((p) => [p.key, p.memberId as string]),
+		);
+		const seen = new Set<string>();
+		const expected = new Set<string>();
+		for (const row of bundle.meetings.find((m) => m.esMeetingId === "644360")
+			?.attendance ?? []) {
+			const key = `es:${row.who.esUserId}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			const memberId = memberOf.get(key);
+			if (row.record || !memberId) continue;
+			if (row.plan === "attending") expected.add(`${memberId}:coming`);
+			if (row.plan === "not_attending") expected.add(`${memberId}:not_coming`);
+		}
+		expect(expected.size).toBeGreaterThan(0);
+		const planRows = await testDb
+			.select({
+				memberId: meetingAttendancePlan.memberId,
+				status: meetingAttendancePlan.status,
+			})
+			.from(meetingAttendancePlan)
+			.innerJoin(meetings, eq(meetings.id, meetingAttendancePlan.meetingId))
+			.where(eq(meetings.clubId, seed.clubId));
+		expect(new Set(planRows.map((r) => `${r.memberId}:${r.status}`))).toEqual(
+			expected,
+		);
+		expect((await counts()).meetingAttendancePlan).toBe(
+			before.meetingAttendancePlan + expected.size,
+		);
+
+		// Meeting 644363's two Table Topics speakers.
+		const topics = bundle.meetings.find(
+			(m) => m.esMeetingId === "644363",
+		)?.tableTopics;
+		expect(topics).toHaveLength(2);
+		expect((await counts()).tableTopicsSpeakers).toBe(
+			before.tableTopicsSpeakers + 2,
+		);
+
+		// And none of it was logged one row at a time.
+		expect(await activityCount()).toBe(activityBefore + 1);
 	});
 
 	it("imports only past meetings, all completed, and never a future one", async () => {
@@ -391,6 +479,25 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 		expect(
 			all.some((m) => m.at.toISOString() === "2026-10-28T02:00:00.000Z"),
 		).toBe(false);
+	});
+
+	it("every imported meeting is completed and in the past, when all of them are", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId, NOW_ALL_PAST);
+		const { report } = await apply(stored.importId, resolutions, NOW_ALL_PAST);
+		expect(report.meetings.applied).toBe(3);
+		const imported = await testDb
+			.select({ at: meetings.scheduledAt, status: meetings.status })
+			.from(importRefs)
+			.innerJoin(meetings, eq(meetings.id, importRefs.targetId))
+			.where(
+				and(eq(importRefs.clubId, seed.clubId), eq(importRefs.kind, "meeting")),
+			);
+		expect(imported).toHaveLength(3);
+		for (const m of imported) {
+			expect(m.status).toBe("completed");
+			expect(m.at.getTime()).toBeLessThan(NOW_ALL_PAST.getTime());
+		}
 	});
 
 	it("links each evaluator slot to the speaker slot it evaluates", async () => {
