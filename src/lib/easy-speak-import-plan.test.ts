@@ -7,7 +7,10 @@ import {
 	type PlanContext,
 	type PlanRosterMember,
 	personKeyOf,
+	isJsonbSafeText,
 	personResolutionSchema,
+	resolutionsSchema,
+	scrubJsonbText,
 } from "./easy-speak-import-plan";
 
 /**
@@ -389,5 +392,43 @@ describe("personKeyOf", () => {
 		expect(personKeyOf({ esUserId: null, name: " Zéphyr  Ash " })).toBe(
 			"name:zephyr ash",
 		);
+	});
+});
+
+describe("text that has to survive a jsonb column", () => {
+	it("a resolution key or a skip reason with NUL or an unpaired surrogate is refused, and an overlong reason too", () => {
+		const skip = { action: "skip", reason: "left the club" } as const;
+		expect(resolutionsSchema.safeParse({ "es:1": skip }).success).toBe(true);
+		expect(resolutionsSchema.safeParse({ "a\u0000b": skip }).success).toBe(
+			false,
+		);
+		expect(resolutionsSchema.safeParse({ "a\ud800b": skip }).success).toBe(
+			false,
+		);
+		expect(
+			personResolutionSchema.safeParse({ action: "skip", reason: "x\ud800" })
+				.success,
+		).toBe(false);
+		expect(
+			personResolutionSchema.safeParse({
+				action: "skip",
+				reason: "x".repeat(501),
+			}).success,
+		).toBe(false);
+		expect(
+			personResolutionSchema.safeParse({
+				action: "skip",
+				reason: "x".repeat(500),
+			}).success,
+		).toBe(true);
+	});
+
+	it("keeps a paired surrogate (an emoji) and scrubs a lone one", () => {
+		expect(isJsonbSafeText("ok \u{1F600}")).toBe(true);
+		expect(isJsonbSafeText("bad \ud800")).toBe(false);
+		expect(isJsonbSafeText("bad \udc00 low")).toBe(false);
+		expect(scrubJsonbText("a\u0000b\ud800c")).toBe("ab\uFFFDc");
+		// A cut that splits a pair leaves a lone high surrogate: scrubbed, not stored.
+		expect(scrubJsonbText("ab\u{1F600}", 3)).toBe("ab\uFFFD");
 	});
 });

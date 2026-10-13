@@ -75,6 +75,7 @@ import {
 	type FoundSourceIds,
 	type ImportPlan,
 	type ImportReport,
+	isJsonbSafeText,
 	leftAloneReason,
 	MEETING_LEFT_ALONE,
 	type Omission,
@@ -85,6 +86,7 @@ import {
 	type PlanPerson,
 	type PlanRosterMember,
 	resolutionsSchema,
+	scrubJsonbText,
 } from "#/lib/easy-speak-import-plan";
 import { type ImportRefKind, importRefKindSchema } from "#/lib/import-refs";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
@@ -113,6 +115,18 @@ const megabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 // ---------------------------------------------------------------------------
 // Upload
 // ---------------------------------------------------------------------------
+
+/** Every string and key in a parsed JSON value can be kept in a jsonb column. */
+function allTextIsJsonbSafe(value: unknown): boolean {
+	if (typeof value === "string") return isJsonbSafeText(value);
+	if (Array.isArray(value)) return value.every(allTextIsJsonbSafe);
+	if (value && typeof value === "object") {
+		return Object.entries(value).every(
+			([k, v]) => isJsonbSafeText(k) && allTextIsJsonbSafe(v),
+		);
+	}
+	return true;
+}
 
 /** What an upload refusal says, for a toast. */
 export class BundleRefusal extends Error {}
@@ -153,6 +167,12 @@ export async function storeEasySpeakBundle(input: {
 		parsed = JSON.parse(input.text);
 	} catch {
 		throw new BundleRefusal("That file is not valid JSON.");
+	}
+	// An unpaired surrogate escape parses fine, then aborts the jsonb insert.
+	if (!allTextIsJsonbSafe(parsed)) {
+		throw new BundleRefusal(
+			"That bundle contains text that cannot be stored (an unpaired surrogate).",
+		);
 	}
 	const check = easySpeakBundleV1Schema.safeParse(parsed);
 	if (!check.success) {
@@ -488,7 +508,10 @@ export async function previewEasySpeakImport(input: {
 	now?: Date;
 }): Promise<ImportPreview> {
 	const stored = await loadStoredBundle(input.clubId, input.importId);
-	const resolutions = { ...stored.state.resolutions, ...input.resolutions };
+	const resolutions = resolutionsSchema.parse({
+		...stored.state.resolutions,
+		...input.resolutions,
+	});
 	const loaded = await loadPlanContext(
 		input.clubId,
 		input.now ?? new Date(),
@@ -1163,17 +1186,16 @@ async function applyMeeting(
 }
 
 /** What a failed meeting says in the report: never the SQL, which carries names. */
-function describeFailure(err: unknown): string {
-	const message = (err instanceof Error ? err.message : String(err)).replaceAll(
-		"\u0000",
-		"",
-	);
+export function describeFailure(err: unknown): string {
+	const message = err instanceof Error ? err.message : String(err);
 	if (/^Failed query/u.test(message)) {
 		const cause = (err as { cause?: { message?: string; code?: string } })
 			.cause;
-		return `Database error${cause?.code ? ` ${cause.code}` : ""}: ${(cause?.message ?? "the statement was refused").replaceAll("\u0000", "").slice(0, 200)}`;
+		return scrubJsonbText(
+			`Database error${cause?.code ? ` ${cause.code}` : ""}: ${scrubJsonbText(cause?.message ?? "the statement was refused", 200)}`,
+		);
 	}
-	return message.slice(0, 300);
+	return scrubJsonbText(message, 300);
 }
 
 /** Who the bundle says holds a role slot or won an award, by the ref's source id. */
@@ -1183,8 +1205,7 @@ interface ExpectedHolders {
 }
 
 const sameOwner = (a: Owner, member: string | null, guest: string | null) =>
-	a !== null &&
-	("memberId" in a ? a.memberId === member : a.guestId === guest);
+	a !== null && ("memberId" in a ? a.memberId === member : a.guestId === guest);
 
 /**
  * The source ids an apply left behind, read back from the database, by what
@@ -1315,7 +1336,13 @@ export async function applyEasySpeakImport(input: {
 }): Promise<ApplyResult> {
 	const now = input.now ?? new Date();
 	const stored = await loadStoredBundle(input.clubId, input.importId);
-	const resolutions = { ...stored.state.resolutions, ...input.resolutions };
+	// The server fn parses these too; the logic does not trust its caller, because
+	// a NUL or an unpaired surrogate in a key or a reason aborts the jsonb write
+	// AFTER the meetings have landed.
+	const resolutions = resolutionsSchema.parse({
+		...stored.state.resolutions,
+		...input.resolutions,
+	});
 	const loaded = await loadPlanContext(input.clubId, now, resolutions);
 	if (isClubArchived(loaded.club)) throw new Error(CLUB_ARCHIVED_MESSAGE);
 	const plan = buildImportPlan(stored.bundle, loaded.ctx);

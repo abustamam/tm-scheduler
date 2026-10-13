@@ -32,7 +32,10 @@ import {
 	user,
 } from "#/db/schema";
 import type { EasySpeakBundleV1 } from "#/lib/easy-speak-bundle";
-import type { PersonResolution } from "#/lib/easy-speak-import-plan";
+import {
+	isJsonbSafeText,
+	type PersonResolution,
+} from "#/lib/easy-speak-import-plan";
 import {
 	cleanup,
 	hasTestDb,
@@ -958,6 +961,59 @@ EXECUTE FUNCTION zz_claim_slot()`),
 		// And the others, held by who the bundle says, still reconcile.
 		expect(by("role_assignments")?.gavelup).toBe(13);
 		expect(by("awards")?.gavelup).toBe(2);
+	});
+
+	// -- Client text and jsonb --------------------------------------------------
+
+	it("refuses a bundle with an unpaired surrogate, with a sentence", async () => {
+		const bundle = JSON.parse(bundleText()) as EasySpeakBundleV1;
+		bundle.club.name = "Bad\ud800Name";
+		await expect(upload(JSON.stringify(bundle))).rejects.toThrow(
+			/cannot be stored/,
+		);
+	});
+
+	it.each([
+		["a NUL in a key", { "a\u0000b": { action: "skip", reason: "x" } }],
+		[
+			"a lone surrogate in a key",
+			{ "a\ud800b": { action: "skip", reason: "x" } },
+		],
+		[
+			"a lone surrogate in a reason",
+			{ "es:1": { action: "skip", reason: "x\ud800" } },
+		],
+		[
+			"an overlong reason",
+			{ "es:1": { action: "skip", reason: "x".repeat(501) } },
+		],
+	] as const)("an apply with %s is refused before it writes anything", async (_label, bad) => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		const before = await counts();
+		await expect(
+			apply(stored.importId, {
+				...resolutions,
+				...(bad as Record<string, PersonResolution>),
+			}),
+		).rejects.toThrow();
+		expect(await counts()).toEqual(before);
+		const [row] = await testDb
+			.select({ appliedAt: clubImports.appliedAt })
+			.from(clubImports)
+			.where(eq(clubImports.id, stored.importId));
+		expect(row?.appliedAt).toBeNull();
+	});
+
+	it("a failure message cut through an emoji or carrying a lone surrogate is still storable", () => {
+		const cut = logic.describeFailure(
+			new Error(`${"x".repeat(299)}\u{1F600} tail`),
+		);
+		expect(isJsonbSafeText(cut)).toBe(true);
+		expect(cut.length).toBeLessThanOrEqual(300);
+		expect(
+			isJsonbSafeText(logic.describeFailure(new Error("a\ud800b\u0000"))),
+		).toBe(true);
 	});
 
 	// -- D2: a row a human deleted is never re-made (#1196 review) ----------------

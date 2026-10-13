@@ -102,6 +102,33 @@ export interface PlanContext {
 	resolutions?: Readonly<Record<string, PersonResolution>>;
 }
 
+// ---------------------------------------------------------------------------
+// Text that has to survive a jsonb column
+// ---------------------------------------------------------------------------
+
+const LONE_SURROGATE =
+	/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+
+/**
+ * Whether Postgres can keep this text in a `jsonb` value: no NUL (`\u0000`) and
+ * no unpaired UTF-16 surrogate. Either one makes the whole statement fail, so
+ * text a client chose is checked before it is bound, never after.
+ */
+export function isJsonbSafeText(text: string): boolean {
+	return !text.includes("\u0000") && !LONE_SURROGATE.test(text);
+}
+
+/** `text` with NUL removed and each unpaired surrogate replaced by U+FFFD, cut to `max` first. */
+export function scrubJsonbText(text: string, max = Number.POSITIVE_INFINITY) {
+	return text
+		.slice(0, max)
+		.replaceAll("\u0000", "")
+		.replace(new RegExp(LONE_SURROGATE.source, "gu"), "\uFFFD");
+}
+
+const MAX_RESOLUTION_KEY = 300;
+const MAX_SKIP_REASON = 500;
+
 /** A human's answer for one person the plan could not place. */
 export const personResolutionSchema = z.discriminatedUnion("action", [
 	z.object({ action: z.literal("member"), memberId: z.string().uuid() }),
@@ -113,15 +140,29 @@ export const personResolutionSchema = z.discriminatedUnion("action", [
 		action: z.literal("skip"),
 		reason: z
 			.string()
-			.trim()
-			.min(1, "Say why this person is skipped.")
-			.transform((r) => r.replaceAll("\u0000", "")),
+			.transform((r) => r.replaceAll("\u0000", "").trim())
+			.pipe(
+				z
+					.string()
+					.min(1, "Say why this person is skipped.")
+					.max(MAX_SKIP_REASON, "Keep the reason under 500 characters.")
+					.refine(
+						isJsonbSafeText,
+						"That reason has a character that cannot be stored.",
+					),
+			),
 	}),
 ]);
 
 export type PersonResolution = z.infer<typeof personResolutionSchema>;
 
-export const resolutionsSchema = z.record(z.string(), personResolutionSchema);
+export const resolutionsSchema = z.record(
+	z
+		.string()
+		.max(MAX_RESOLUTION_KEY)
+		.refine(isJsonbSafeText, "That person key cannot be stored."),
+	personResolutionSchema,
+);
 
 // ---------------------------------------------------------------------------
 // The plan
