@@ -86,7 +86,7 @@ describe.skipIf(!hasTestDb)("history-import.ts authorization (#1051)", () => {
 			}),
 		applyEasySpeakImport: () =>
 			(fns.applyEasySpeakImport as Fn)({
-				data: { clubId, importId: randomUUID() },
+				data: { clubId, importId: randomUUID(), planHash: "0".repeat(64) },
 			}),
 	});
 

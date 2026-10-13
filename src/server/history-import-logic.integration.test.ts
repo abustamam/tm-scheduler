@@ -1016,6 +1016,73 @@ EXECUTE FUNCTION zz_claim_slot()`),
 		).toBe(true);
 	});
 
+	// -- Apply is tied to its preview, and serial per club ------------------------
+
+	it("two applies at once mint each guest and meeting once", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		const [a, b] = await Promise.all([
+			apply(stored.importId, resolutions),
+			apply(stored.importId, resolutions),
+		]);
+		expect(a.report.reconciled && b.report.reconciled).toBe(true);
+		const rows = await testDb
+			.select({ id: meetings.id })
+			.from(meetings)
+			.where(
+				and(
+					eq(meetings.clubId, seed.clubId),
+					eq(meetings.scheduledAt, FIRST_AT),
+				),
+			);
+		expect(rows).toHaveLength(1);
+		const guestRows = await testDb
+			.select({ name: guests.name })
+			.from(guests)
+			.where(eq(guests.clubId, seed.clubId));
+		expect(guestRows.length).toBeGreaterThan(0);
+		expect(new Set(guestRows.map((g) => g.name)).size).toBe(guestRows.length);
+		expect(guestRows.length).toBe((await refsOfKind("guest")).length);
+	});
+
+	it("refuses an apply whose plan has moved since the preview, and accepts one that has not", async () => {
+		const stored = await upload();
+		const { preview, resolutions } = await resolveAll(stored.importId);
+		expect(preview.planHash).toMatch(/^[0-9a-f]{64}$/);
+		// Someone creates a cancelled meeting at the bundle's instant after the preview.
+		const blocker = await seedMeetingAt(FIRST_AT, "cancelled");
+		const before = await counts();
+		await expect(
+			logic.applyEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				superadminUserId: superadminId,
+				resolutions,
+				planHash: preview.planHash,
+				now: NOW,
+			}),
+		).rejects.toThrow(logic.PLAN_CHANGED_MESSAGE);
+		expect(await counts()).toEqual(before);
+		// A fresh preview names the new plan, and that one applies.
+		const fresh = await logic.previewEasySpeakImport({
+			clubId: seed.clubId,
+			importId: stored.importId,
+			resolutions,
+			now: NOW,
+		});
+		expect(fresh.planHash).not.toBe(preview.planHash);
+		const { report } = await logic.applyEasySpeakImport({
+			clubId: seed.clubId,
+			importId: stored.importId,
+			superadminUserId: superadminId,
+			resolutions,
+			planHash: fresh.planHash,
+			now: NOW,
+		});
+		expect(report.meetings.applied).toBe(0);
+		expect((await meetingRow(blocker))?.status).toBe("cancelled");
+	});
+
 	// -- D2: a row a human deleted is never re-made (#1196 review) ----------------
 
 	it("a guest deleted since the import is not re-created, nor is their Person, attendance or role", async () => {

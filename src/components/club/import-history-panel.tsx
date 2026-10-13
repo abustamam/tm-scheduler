@@ -120,7 +120,12 @@ export function ImportHistoryPanel({
 	const apply = useMutation({
 		mutationFn: () =>
 			applyEasySpeakImport({
-				data: { clubId, importId: importId as string, resolutions },
+				data: {
+					clubId,
+					importId: importId as string,
+					resolutions,
+					planHash: preview.data?.planHash ?? "",
+				},
 			}),
 		onSuccess: (result) => {
 			toast.success(

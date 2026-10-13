@@ -3,6 +3,7 @@ import type { z } from "zod";
 import { requireSuperadmin, requireUser } from "./guards";
 import {
 	applyEasySpeakImport as applyEasySpeakImportLogic,
+	importApplySchema,
 	importClubSchema,
 	importRunSchema,
 	listClubImports as listClubImportsLogic,
@@ -71,7 +72,7 @@ export const previewEasySpeakImport = createServerFn({ method: "POST" })
 
 /** Apply a stored bundle. Refused while anyone is unresolved and under read-only impersonation. */
 export const applyEasySpeakImport = createServerFn({ method: "POST" })
-	.validator((input: unknown) => parse(importRunSchema, input))
+	.validator((input: unknown) => parse(importApplySchema, input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
 		await requireSuperadmin(currentUser.id);
@@ -84,5 +85,6 @@ export const applyEasySpeakImport = createServerFn({ method: "POST" })
 			importId: data.importId,
 			superadminUserId: currentUser.id,
 			resolutions: data.resolutions,
+			planHash: data.planHash,
 		});
 	});

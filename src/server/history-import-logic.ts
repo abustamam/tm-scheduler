@@ -107,6 +107,8 @@ export const IMPORT_NOT_FOUND_MESSAGE =
 	"That import was not found for this club.";
 export const UNRESOLVED_PEOPLE_MESSAGE = (n: number) =>
 	`${n} ${n === 1 ? "person still needs" : "people still need"} a decision before this can be applied.`;
+export const PLAN_CHANGED_MESSAGE =
+	"The club or the bundle changed since this preview. Preview again before applying.";
 export const INTRODUCER_NOT_IN_CLUB_MESSAGE =
 	"The member who introduced this guest is not in this club.";
 
@@ -462,6 +464,8 @@ export interface ImportPreviewPerson {
 
 export interface ImportPreview {
 	importId: string;
+	/** Fingerprint of this plan: an apply that carries it is refused if the plan has moved. */
+	planHash: string;
 	appliedAt: string | null;
 	bundleClub: { name: string; number: string | null };
 	club: { name: string; number: string | null };
@@ -500,6 +504,34 @@ function previewPerson(p: PlanPerson): ImportPreviewPerson {
 	};
 }
 
+/**
+ * A fingerprint of what an apply would DO: who each person resolves to, which
+ * role definitions exist, and what happens to each meeting. An apply that carries
+ * the hash of the preview it confirmed is refused when its own plan, computed
+ * under the import lock, hashes differently (a roster, a meeting or a ref moved
+ * in between).
+ */
+export function planFingerprint(plan: ImportPlan): string {
+	return createHash("sha256")
+		.update(
+			JSON.stringify({
+				people: plan.people.map((p) => [p.key, p.outcome]),
+				roleDefinitions: plan.roleDefinitions.map((d) => [
+					d.planKey,
+					d.existingId,
+				]),
+				meetings: plan.meetings.map((m) => [
+					m.esMeetingId,
+					m.action,
+					m.existingMeetingId,
+					m.skip?.kind ?? null,
+				]),
+				counts: plan.counts,
+			}),
+		)
+		.digest("hex");
+}
+
 /** The preview a superadmin confirms: the plan, summarised, plus any stored report. */
 export async function previewEasySpeakImport(input: {
 	clubId: string;
@@ -532,6 +564,7 @@ export async function previewEasySpeakImport(input: {
 	if (isClubArchived(loaded.club)) warnings.push(CLUB_ARCHIVED_MESSAGE);
 	return {
 		importId: input.importId,
+		planHash: planFingerprint(plan),
 		appliedAt: stored.appliedAt?.toISOString() ?? null,
 		bundleClub: { name: club.name, number: club.number },
 		club: { name: loaded.club.name, number: loaded.club.clubNumber },
@@ -1332,6 +1365,29 @@ export async function applyEasySpeakImport(input: {
 	/** The superadmin the change is attributed to. */
 	superadminUserId: string;
 	resolutions?: Record<string, PersonResolution>;
+	/** The `planHash` of the preview the superadmin confirmed; a plan that has moved is refused. */
+	planHash?: string;
+	now?: Date;
+}): Promise<ApplyResult> {
+	// ONE apply per club at a time, held for the whole run by a transaction that
+	// does nothing else. The per-meeting transactions take the club write lock
+	// themselves, so this is a DIFFERENT key (a bigint, `history-import:<club>`):
+	// it makes a second apply wait, then plan against what the first left, instead
+	// of both planning the same new guests and meetings and minting them twice.
+	return db.transaction(async (guard) => {
+		await guard.execute(
+			sql`select pg_advisory_xact_lock(hashtext(${`history-import:${input.clubId}`}))`,
+		);
+		return applyUnderImportLock(input);
+	});
+}
+
+async function applyUnderImportLock(input: {
+	clubId: string;
+	importId: string;
+	superadminUserId: string;
+	resolutions?: Record<string, PersonResolution>;
+	planHash?: string;
 	now?: Date;
 }): Promise<ApplyResult> {
 	const now = input.now ?? new Date();
@@ -1348,6 +1404,12 @@ export async function applyEasySpeakImport(input: {
 	const plan = buildImportPlan(stored.bundle, loaded.ctx);
 	if (!plan.canApply) {
 		throw new Error(UNRESOLVED_PEOPLE_MESSAGE(plan.unresolved.length));
+	}
+	if (
+		input.planHash !== undefined &&
+		input.planHash !== planFingerprint(plan)
+	) {
+		throw new Error(PLAN_CHANGED_MESSAGE);
 	}
 
 	const resolved = await writePeopleAndRoles(input.clubId, plan);
@@ -1472,4 +1534,8 @@ export const uploadImportSchema = importClubSchema.extend({
 export const importRunSchema = importClubSchema.extend({
 	importId: z.string().uuid(),
 	resolutions: resolutionsSchema.optional(),
+});
+/** An apply names the preview it confirms: see {@link planFingerprint}. */
+export const importApplySchema = importRunSchema.extend({
+	planHash: z.string().length(64, "Preview again before applying."),
 });
