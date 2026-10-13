@@ -27,12 +27,15 @@ import {
 	guestInvites,
 	guests,
 	meetingAttendance,
+	meetingCandidateDisqualifications,
 	meetings,
 	memberDues,
 	members,
 	officerTerms,
+	officerTrainingRecords,
 	pathEnrollments,
 	people,
+	roleFeedbackNotes,
 	roleSlots,
 	speeches,
 	speechRequests,
@@ -80,6 +83,7 @@ import {
 	rosterConflictFor,
 } from "./account-link-logic";
 import { logActivity } from "./activity";
+import { memberHasAttendancePlanRows } from "./attendance-plan-logic";
 import {
 	CLUB_BUSY_MESSAGE,
 	forUpdate,
@@ -104,6 +108,7 @@ import {
 	RECORD_CHANGED_MESSAGE,
 	separateGuestFromMemberPerson,
 } from "./guests-logic";
+import { memberHasMentorship } from "./mentorship-logic";
 import { closeOpenOfficerTerms } from "./officers-logic";
 import { clubsHoldingPersons } from "./people-merge-logic";
 import { isDeadlock } from "./pg-errors";
@@ -3426,6 +3431,47 @@ export async function applyUndoGuestConversion(
 			.where(eq(speechRequests.membershipId, membershipId));
 		if (Number(requested?.n ?? 0) > 0) {
 			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("speech requests"));
+		}
+
+		// The rest of the tables whose foreign key to `members` is ON DELETE
+		// CASCADE (#1202). The delete below would take every row silently, and
+		// none of them is something the conversion creates or moves (only
+		// `role_slots` is, and it is SET NULL and handled above), so ANY row is
+		// the member's own history. Like dues, terms and requests, these run
+		// whether or not the conversion created the membership. The list is kept
+		// complete by the FK drift guard in `guest-undo-cascade.integration.test.ts`:
+		// a new cascading key fails it until a check lands here or the test
+		// records why none is needed.
+		if (await memberHasMentorship(tx, membershipId)) {
+			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("a mentorship"));
+		}
+		const [trained] = await tx
+			.select({ n: count() })
+			.from(officerTrainingRecords)
+			.where(eq(officerTrainingRecords.membershipId, membershipId));
+		if (Number(trained?.n ?? 0) > 0) {
+			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("officer training"));
+		}
+		const [noted] = await tx
+			.select({ n: count() })
+			.from(roleFeedbackNotes)
+			.where(eq(roleFeedbackNotes.recipientMemberId, membershipId));
+		if (Number(noted?.n ?? 0) > 0) {
+			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("feedback notes"));
+		}
+		if (await memberHasAttendancePlanRows(tx, membershipId)) {
+			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("RSVPs"));
+		}
+		const [ruledOut] = await tx
+			.select({ n: count() })
+			.from(meetingCandidateDisqualifications)
+			.where(
+				eq(meetingCandidateDisqualifications.candidateMemberId, membershipId),
+			);
+		if (Number(ruledOut?.n ?? 0) > 0) {
+			throw new Error(
+				UNDO_MEMBER_HAS_HISTORY_MESSAGE("a candidate disqualification"),
+			);
 		}
 
 		if (record.createdMembership) {

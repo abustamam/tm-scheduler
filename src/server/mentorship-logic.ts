@@ -22,7 +22,7 @@
 // the rule the app already applies to club members (`getMemberProfile` and
 // `listClubMembers` return every member's contact to any active member of the
 // club, behind `requireClubViewAccess`), not a new one.
-import { and, asc, eq, inArray, isNull, notExists, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, notExists, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
@@ -453,6 +453,29 @@ async function activePairingsFor(
 			phone: coalesceToE164(r.otherPhone, cc),
 		},
 	}));
+}
+
+/**
+ * Whether the membership is in ANY pairing, as mentor or mentee, ended or not.
+ * An existence check: it returns no pairing data. Its caller is the gated
+ * guest-conversion undo, which runs it inside its own transaction (`conn`) to
+ * refuse before a cascading delete takes the pairings (#1202).
+ */
+export async function memberHasMentorship(
+	conn: DbOrTx,
+	membershipId: string,
+): Promise<boolean> {
+	const rows = await conn
+		.select({ id: mentorships.id })
+		.from(mentorships)
+		.where(
+			or(
+				eq(mentorships.mentorMemberId, membershipId),
+				eq(mentorships.menteeMemberId, membershipId),
+			),
+		)
+		.limit(1);
+	return rows.length > 0;
 }
 
 /**

@@ -1,0 +1,296 @@
+/**
+ * DB-backed tests for #1202: undoing a guest conversion deletes the membership
+ * the conversion created, and every table whose foreign key to `members` is
+ * ON DELETE CASCADE loses its rows in the same statement. `applyUndoGuestConversion`
+ * therefore refuses when any of them holds a row for the membership.
+ *
+ * Beside `guest-pipeline.integration.test.ts` (which covers the older refusals:
+ * roles, dues, officer terms, speech requests, speeches, enrolments) rather than
+ * in it, to keep this issue to one cited source file.
+ *
+ * `#/db` is mocked to the TEST_DATABASE_URL client; the suite skips when unset.
+ */
+import { randomUUID } from "node:crypto";
+import { eq, inArray, sql } from "drizzle-orm";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	guests,
+	meetingAttendancePlan,
+	meetingCandidateDisqualifications,
+	members,
+	mentorships,
+	officerTrainingRecords,
+	people,
+	roleFeedbackNotes,
+} from "#/db/schema";
+import {
+	UNDO_MEMBER_HAS_HISTORY_MESSAGE,
+	UNDO_NOT_CONVERTED_MESSAGE,
+} from "#/lib/guest-convert";
+import {
+	cleanup,
+	hasTestDb,
+	type SeededClub,
+	seedClub,
+	testDb,
+	withGuestPerson,
+} from "#/test/db";
+
+vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+
+const { applyConvertGuestToMember, applyUndoGuestConversion } = await import(
+	"#/server/guest-pipeline-logic"
+);
+
+describe.skipIf(!hasTestDb)(
+	"undo guest conversion: cascading history (#1202)",
+	() => {
+		let seed: SeededClub;
+		let strayPeople: string[] = [];
+
+		beforeEach(async () => {
+			seed = await seedClub();
+			strayPeople = [];
+		});
+
+		afterEach(async () => {
+			await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+			if (strayPeople.length > 0) {
+				await testDb.delete(people).where(inArray(people.id, strayPeople));
+			}
+		});
+
+		/** Through the real convert: the undo replays the record convert writes. */
+		async function converted(name: string) {
+			const [g] = await testDb
+				.insert(guests)
+				.values(await withGuestPerson({ clubId: seed.clubId, name }, testDb))
+				.returning({ id: guests.id });
+			if (!g) throw new Error("Failed to seed guest");
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId: g.id,
+				actorMemberId: seed.adminMemberId,
+			});
+			strayPeople.push(res.personId);
+			return { guestId: g.id, ...res };
+		}
+
+		function undo(guestId: string) {
+			return applyUndoGuestConversion({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+		}
+
+		/** Nothing was deleted: the membership is there and the guest is still converted. */
+		async function expectMembershipSurvives(
+			guestId: string,
+			membershipId: string,
+		) {
+			const [member] = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.id, membershipId));
+			expect(member?.id).toBe(membershipId);
+			const [guest] = await testDb
+				.select({ convertedMembershipId: guests.convertedMembershipId })
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			expect(guest?.convertedMembershipId).toBe(membershipId);
+		}
+
+		it("undoes cleanly when the membership has none of that history", async () => {
+			const { guestId, membershipId } = await converted("Clean Undo");
+			const res = await undo(guestId);
+			expect(res.membershipDeleted).toBe(true);
+			const [gone] = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.id, membershipId));
+			expect(gone).toBeUndefined();
+		});
+
+		it.each([
+			"mentor",
+			"mentee",
+		] as const)("refuses when the member is a %s in a pairing, and keeps the pairing", async (side) => {
+			const { guestId, membershipId } = await converted(`Paired ${side}`);
+			const [pairing] = await testDb
+				.insert(mentorships)
+				.values({
+					clubId: seed.clubId,
+					mentorMemberId: side === "mentor" ? membershipId : seed.memberId,
+					menteeMemberId: side === "mentor" ? seed.memberId : membershipId,
+				})
+				.returning({ id: mentorships.id });
+			if (!pairing) throw new Error("Failed to seed mentorship");
+
+			await expect(undo(guestId)).rejects.toThrow(
+				UNDO_MEMBER_HAS_HISTORY_MESSAGE("a mentorship"),
+			);
+
+			await expectMembershipSurvives(guestId, membershipId);
+			const [stillThere] = await testDb
+				.select({ id: mentorships.id })
+				.from(mentorships)
+				.where(eq(mentorships.id, pairing.id));
+			expect(stillThere?.id).toBe(pairing.id);
+		});
+
+		it("refuses when the member has an officer training record, and keeps it", async () => {
+			const { guestId, membershipId } = await converted("Trained Undo");
+			const [record] = await testDb
+				.insert(officerTrainingRecords)
+				.values({
+					membershipId,
+					position: "president",
+					programYear: 2026,
+					period: 1,
+				})
+				.returning({ id: officerTrainingRecords.id });
+			if (!record) throw new Error("Failed to seed training record");
+
+			await expect(undo(guestId)).rejects.toThrow(
+				UNDO_MEMBER_HAS_HISTORY_MESSAGE("officer training"),
+			);
+
+			await expectMembershipSurvives(guestId, membershipId);
+			const [stillThere] = await testDb
+				.select({ id: officerTrainingRecords.id })
+				.from(officerTrainingRecords)
+				.where(eq(officerTrainingRecords.id, record.id));
+			expect(stillThere?.id).toBe(record.id);
+		});
+
+		it("refuses when the member has received a feedback note, and keeps it", async () => {
+			const { guestId, membershipId } = await converted("Noted Undo");
+			const [note] = await testDb
+				.insert(roleFeedbackNotes)
+				.values({
+					clubId: seed.clubId,
+					meetingId: seed.meetingId,
+					recipientMemberId: membershipId,
+					roleLabel: "Speaker",
+					wentWell: "A clear opening.",
+				})
+				.returning({ id: roleFeedbackNotes.id });
+			if (!note) throw new Error("Failed to seed feedback note");
+
+			await expect(undo(guestId)).rejects.toThrow(
+				UNDO_MEMBER_HAS_HISTORY_MESSAGE("feedback notes"),
+			);
+
+			await expectMembershipSurvives(guestId, membershipId);
+			const [stillThere] = await testDb
+				.select({ id: roleFeedbackNotes.id })
+				.from(roleFeedbackNotes)
+				.where(eq(roleFeedbackNotes.id, note.id));
+			expect(stillThere?.id).toBe(note.id);
+		});
+
+		it("refuses when the member has an RSVP (convert writes none), and keeps it", async () => {
+			const { guestId, membershipId } = await converted("RSVP Undo");
+			const [rsvp] = await testDb
+				.insert(meetingAttendancePlan)
+				.values({
+					memberId: membershipId,
+					meetingId: seed.meetingId,
+					status: "coming",
+				})
+				.returning({ id: meetingAttendancePlan.id });
+			if (!rsvp) throw new Error("Failed to seed RSVP");
+
+			await expect(undo(guestId)).rejects.toThrow(
+				UNDO_MEMBER_HAS_HISTORY_MESSAGE("RSVPs"),
+			);
+
+			await expectMembershipSurvives(guestId, membershipId);
+			const [stillThere] = await testDb
+				.select({ id: meetingAttendancePlan.id })
+				.from(meetingAttendancePlan)
+				.where(eq(meetingAttendancePlan.id, rsvp.id));
+			expect(stillThere?.id).toBe(rsvp.id);
+		});
+
+		it("refuses when the member was ruled out as a candidate, and keeps the record", async () => {
+			// Not one of the four the brief named: the drift guard below found it.
+			const { guestId, membershipId } = await converted("Disqualified Undo");
+			const [dq] = await testDb
+				.insert(meetingCandidateDisqualifications)
+				.values({
+					meetingId: seed.meetingId,
+					category: "best_speaker",
+					candidateMemberId: membershipId,
+					reason: "Was not in the room.",
+				})
+				.returning({ id: meetingCandidateDisqualifications.id });
+			if (!dq) throw new Error("Failed to seed disqualification");
+
+			await expect(undo(guestId)).rejects.toThrow(
+				UNDO_MEMBER_HAS_HISTORY_MESSAGE("a candidate disqualification"),
+			);
+
+			await expectMembershipSurvives(guestId, membershipId);
+			const [stillThere] = await testDb
+				.select({ id: meetingCandidateDisqualifications.id })
+				.from(meetingCandidateDisqualifications)
+				.where(eq(meetingCandidateDisqualifications.id, dq.id));
+			expect(stillThere?.id).toBe(dq.id);
+		});
+
+		it("still refuses a guest that was never converted", async () => {
+			const [g] = await testDb
+				.insert(guests)
+				.values(
+					await withGuestPerson(
+						{ clubId: seed.clubId, name: `Never ${randomUUID()}` },
+						testDb,
+					),
+				)
+				.returning({ id: guests.id });
+			if (!g) throw new Error("Failed to seed guest");
+			await expect(undo(g.id)).rejects.toThrow(UNDO_NOT_CONVERTED_MESSAGE);
+		});
+
+		it("FK drift guard: every ON DELETE CASCADE foreign key to `members` is handled by the undo", async () => {
+			// The undo's final `delete(members)` silently removes the rows of every
+			// table in this set. A new cascading key to `members` fails this test
+			// until someone adds a refusal to `applyUndoGuestConversion` and lists it
+			// here, or writes down below why it needs none. `confdeltype = 'c'` is
+			// CASCADE; the SET NULL keys keep their rows, so they are not data loss
+			// here and not this guard's business.
+			const HANDLED = new Set([
+				// The refusals that predate #1202.
+				"member_dues.membership_id",
+				"officer_terms.membership_id",
+				"speech_requests.membership_id",
+				// #1202.
+				"mentorships.mentor_member_id",
+				"mentorships.mentee_member_id",
+				"officer_training_records.membership_id",
+				"role_feedback_notes.recipient_member_id",
+				"meeting_attendance_plan.member_id",
+				"meeting_candidate_disqualifications.candidate_member_id",
+			]);
+
+			const result = await testDb.execute(sql`
+			SELECT con.conrelid::regclass::text AS tbl, a.attname AS col
+			FROM pg_constraint con
+			CROSS JOIN LATERAL unnest(con.conkey) AS ck(attnum)
+			JOIN pg_attribute a
+				ON a.attrelid = con.conrelid AND a.attnum = ck.attnum
+			WHERE con.contype = 'f'
+				AND con.confrelid = 'members'::regclass
+				AND con.confdeltype = 'c'`);
+			const actual = new Set(
+				(result.rows as { tbl: string; col: string }[]).map(
+					(r) => `${r.tbl}.${r.col}`,
+				),
+			);
+
+			expect([...actual].sort()).toEqual([...HANDLED].sort());
+		});
+	},
+);

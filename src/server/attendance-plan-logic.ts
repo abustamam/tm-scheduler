@@ -22,6 +22,24 @@ type DbOrTx =
 	| typeof db
 	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
+/**
+ * Whether the member has ANY RSVP row. An existence check: it returns no plan
+ * data. Its caller is the gated guest-conversion undo, which runs it inside its
+ * own transaction (`conn`) to refuse before a cascading delete takes the RSVPs
+ * (#1202).
+ */
+export async function memberHasAttendancePlanRows(
+	conn: DbOrTx,
+	memberId: string,
+): Promise<boolean> {
+	const rows = await conn
+		.select({ meetingId: meetingAttendancePlan.meetingId })
+		.from(meetingAttendancePlan)
+		.where(eq(meetingAttendancePlan.memberId, memberId))
+		.limit(1);
+	return rows.length > 0;
+}
+
 // DERIVED from the Postgres enum, never hand-listed — see the same warning in
 // `./activity.ts`. #510 hit exactly this from the other side: a hand-listed
 // union that duplicated `activity_action` drifted from the database, and only
