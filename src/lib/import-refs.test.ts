@@ -5,7 +5,7 @@ import { IMPORT_REF_KINDS, importRefKindSchema } from "./import-refs";
 // holds what it writes to this list; this one holds the list to the issue, so
 // a kind cannot be dropped or renamed without a failing test saying so.
 describe("import_refs kinds", () => {
-	it("is exactly the issue's eight kinds plus the speech-request (#1052) and mentor-pair (#1053) kinds", () => {
+	it("is exactly the issue's eight kinds plus the speech-request (#1052) mentor-pair (#1053) and willing-to-mentor (#1204) kinds", () => {
 		expect([...IMPORT_REF_KINDS]).toEqual([
 			"meeting",
 			"speech",
@@ -17,6 +17,7 @@ describe("import_refs kinds", () => {
 			"attendance",
 			"speech_request",
 			"mentor_pair",
+			"willing_to_mentor",
 		]);
 	});
 

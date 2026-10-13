@@ -22,6 +22,7 @@ export const IMPORT_REF_KINDS = [
 	"attendance",
 	"speech_request",
 	"mentor_pair",
+	"willing_to_mentor",
 ] as const;
 
 export const importRefKindSchema = z.enum(IMPORT_REF_KINDS);
