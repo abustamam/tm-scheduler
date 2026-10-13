@@ -97,7 +97,12 @@ const ALLOWED: { file: string; kind: Write["kind"]; contains: string }[] = [
 		kind: "values",
 		contains: "ROLE_TEMPLATE",
 	},
-	{ file: "src/db/seed.ts", kind: "values", contains: "ROLE_TEMPLATE" },
+	// Seeding — a fixture club's roles (dev seed via `src/db/seed.ts`, #1198).
+	{
+		file: "src/db/fixtures/helpers.ts",
+		kind: "values",
+		contains: "ROLE_TEMPLATE",
+	},
 	// Seeding — a STANDARD role minted back into a club that lacks it
 	// (`materializeTemplateRoles`, #910): the stock guide, by key.
 	{
@@ -122,7 +127,7 @@ const ALLOWED: { file: string; kind: Write["kind"]; contains: string }[] = [
 const TEMPLATE_READERS = new Set([
 	"src/lib/role-template.ts", // the definition
 	"src/server/onboarding-logic.ts", // seeding: new club
-	"src/db/seed.ts", // seeding: dev data
+	"src/db/fixtures/helpers.ts", // seeding: a fixture club (dev seed, #1198)
 	"scripts/import-agendas-logic.ts", // seeding: Vote Counter backfill
 	"src/server/meeting-templates-logic.ts", // seeding: a minted standard role (#910)
 	"src/server/history-import-logic.ts", // seeding: standard roles an import needs (#1051)
