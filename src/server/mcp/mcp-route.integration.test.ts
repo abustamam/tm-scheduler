@@ -196,6 +196,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"edit_agenda",
 			"find_people",
 			"get_agenda",
+			"get_import_report",
 			"get_lineup_blast",
 			"get_my_feedback",
 			"list_meetings",
@@ -509,6 +510,8 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			// #987. It returns only the caller's own role-feedback notes and reads
 			// no guest row; in the sweep because the sweep is derived.
 			toolsCall("get_my_feedback"),
+			// #1051. Returns a stored reconciliation report (names only) or NOT_FOUND.
+			toolsCall("get_import_report", { clubId: seed.clubId }),
 			// #808. It reads no guest and writes no guest, so on the face of it
 			// it cannot leak one — which is exactly the reasoning that would keep
 			// it out of a HAND-WRITTEN sweep and is why the sweep is derived. It

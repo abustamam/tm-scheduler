@@ -490,6 +490,62 @@ export async function clearPlanStatus(
 	return { ok: true as const, cleared: true };
 }
 
+/**
+ * Fill in a past meeting's plan answers from an import (#1051, D3 of #1196): a
+ * bulk fill-if-ABSENT, and nothing else.
+ *
+ * It is not `setPlanStatus` in a loop, for two reasons that are the whole point:
+ * it LOGS NOTHING (a history import of hundreds of answers must not write one
+ * `plan_set` row per answer into the club's activity feed; the import logs one
+ * `history_imported` row for itself), and it never overwrites. A row that is
+ * already there, whatever its rung — a member's own answer, an officer's ask — is
+ * left exactly as it is (`ON CONFLICT DO NOTHING`), so re-running an import, or
+ * importing over a meeting people have since touched, changes nothing.
+ *
+ * Gated like every other writer here: a cancelled meeting is refused by the
+ * class policy, and so is a scheduled one (it has no lock and no log, so it is
+ * only for a meeting nobody decides plans on any more); a completed one is
+ * the one thing ACCEPTED, because a past meeting is the only thing a history
+ * import writes. The caller (`history-import-logic.ts`,
+ * superadmin only) decides which meetings and which members; this function
+ * trusts its `memberId`s to be members of the meeting's club, exactly as
+ * `setPlanStatus` does.
+ *
+ * Returns how many rows it inserted.
+ */
+export const IMPORT_PLAN_STATUS_MESSAGE =
+	"Plan answers can only be imported into a completed meeting.";
+
+export async function importPlanAnswers(
+	database: DbOrTx,
+	args: {
+		meetingId: string;
+		answers: ReadonlyArray<{ memberId: string; status: AttendancePlanStatus }>;
+	},
+): Promise<{ inserted: number }> {
+	if (args.answers.length === 0) return { inserted: 0 };
+	const status = await meetingStatusOf(database, args.meetingId);
+	if (status !== null) {
+		assertMeetingAccepts(status, "plan", PLAN_SEAM_WRITE_OPTIONS);
+		// This path takes no `lockMemberAttendance` and logs nothing, which is only
+		// safe on a meeting nobody is deciding plans for any more: the class policy
+		// also lets a scheduled meeting through, so a completed one is named here.
+		if (status !== "completed") throw new Error(IMPORT_PLAN_STATUS_MESSAGE);
+	}
+	const written = await database
+		.insert(meetingAttendancePlan)
+		.values(
+			args.answers.map((a) => ({
+				memberId: a.memberId,
+				meetingId: args.meetingId,
+				status: a.status,
+			})),
+		)
+		.onConflictDoNothing()
+		.returning({ id: meetingAttendancePlan.id });
+	return { inserted: written.length };
+}
+
 /** The advisory-lock key `lockMemberAttendance` takes. Exported so the race
  *  test can hold the SAME key. */
 export function memberAttendanceLockKey(

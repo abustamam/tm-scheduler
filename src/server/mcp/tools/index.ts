@@ -19,6 +19,7 @@ import { cancelMeetingTool } from "./cancel-meeting";
 import { editAgendaTool } from "./edit-agenda";
 import { findPeopleTool } from "./find-people";
 import { getAgendaTool } from "./get-agenda";
+import { getImportReportTool } from "./get-import-report";
 import { getLineupBlastTool } from "./get-lineup-blast";
 import { getMyFeedbackTool } from "./get-my-feedback";
 import { listMeetingsTool } from "./list-meetings";
@@ -32,6 +33,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	listMeetingsTool,
 	getAgendaTool,
 	getLineupBlastTool,
+	getImportReportTool,
 	getMyFeedbackTool,
 	findPeopleTool,
 	recordGuestBookTool,

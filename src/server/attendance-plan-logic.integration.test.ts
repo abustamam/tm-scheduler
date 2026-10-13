@@ -7,13 +7,20 @@
  */
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { activityLog, meetingAttendancePlan, members } from "#/db/schema";
+import {
+	activityLog,
+	meetingAttendancePlan,
+	meetings,
+	members,
+} from "#/db/schema";
 import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
 import {
 	ASSERTED_OVERWRITE_MESSAGE,
 	CLEARABLE_ASK,
 	clearPlanStatus,
 	getPlanStatus,
+	IMPORT_PLAN_STATUS_MESSAGE,
+	importPlanAnswers,
 	listNotComingForMeetings,
 	listNotComingWithNames,
 	listPlanForMeetings,
@@ -1034,5 +1041,118 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 				]);
 			});
 		});
+	});
+});
+
+describe.skipIf(!hasTestDb)("importPlanAnswers (#1051)", () => {
+	let club: SeededClub;
+	beforeEach(async () => {
+		club = await seedClub();
+		// A history import writes a PAST meeting.
+		await testDb
+			.update(meetings)
+			.set({ status: "completed" })
+			.where(eq(meetings.id, club.meetingId));
+	});
+	afterEach(async () => {
+		await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
+	});
+
+	const rows = () =>
+		testDb
+			.select({
+				memberId: meetingAttendancePlan.memberId,
+				status: meetingAttendancePlan.status,
+			})
+			.from(meetingAttendancePlan)
+			.where(eq(meetingAttendancePlan.meetingId, club.meetingId));
+	const logged = async () =>
+		(
+			await testDb
+				.select({ id: activityLog.id })
+				.from(activityLog)
+				.where(eq(activityLog.clubId, club.clubId))
+		).length;
+
+	it("fills every answer into a COMPLETED meeting and logs nothing", async () => {
+		const before = await logged();
+		const result = await importPlanAnswers(testDb, {
+			meetingId: club.meetingId,
+			answers: [
+				{ memberId: club.memberId, status: "coming" },
+				{ memberId: club.adminMemberId, status: "not_coming" },
+			],
+		});
+		expect(result).toEqual({ inserted: 2 });
+		expect(
+			(await rows()).sort((a, b) => a.status.localeCompare(b.status)),
+		).toEqual(
+			[
+				{ memberId: club.memberId, status: "coming" },
+				{ memberId: club.adminMemberId, status: "not_coming" },
+			].sort((a, b) => a.status.localeCompare(b.status)),
+		);
+		// The point of the seam function: no plan_set per answer.
+		expect(await logged()).toBe(before);
+	});
+
+	it("never overwrites a row that is already there, whatever its rung", async () => {
+		await testDb.insert(meetingAttendancePlan).values([
+			{ memberId: club.memberId, meetingId: club.meetingId, status: "coming" },
+			{
+				memberId: club.adminMemberId,
+				meetingId: club.meetingId,
+				status: "reached_out",
+			},
+		]);
+		const result = await importPlanAnswers(testDb, {
+			meetingId: club.meetingId,
+			answers: [
+				{ memberId: club.memberId, status: "not_coming" },
+				{ memberId: club.adminMemberId, status: "not_coming" },
+			],
+		});
+		expect(result).toEqual({ inserted: 0 });
+		const byMember = new Map((await rows()).map((r) => [r.memberId, r.status]));
+		expect(byMember.get(club.memberId)).toBe("coming");
+		expect(byMember.get(club.adminMemberId)).toBe("reached_out");
+	});
+
+	it("refuses a cancelled meeting, writing nothing", async () => {
+		await testDb
+			.update(meetings)
+			.set({ status: "cancelled" })
+			.where(eq(meetings.id, club.meetingId));
+		await expect(
+			importPlanAnswers(testDb, {
+				meetingId: club.meetingId,
+				answers: [{ memberId: club.memberId, status: "coming" }],
+			}),
+		).rejects.toThrow();
+		expect(await rows()).toEqual([]);
+	});
+
+	it("refuses a scheduled meeting, writing nothing", async () => {
+		await testDb
+			.update(meetings)
+			.set({ status: "scheduled" })
+			.where(eq(meetings.id, club.meetingId));
+		await expect(
+			importPlanAnswers(testDb, {
+				meetingId: club.meetingId,
+				answers: [{ memberId: club.memberId, status: "coming" }],
+			}),
+		).rejects.toThrow(IMPORT_PLAN_STATUS_MESSAGE);
+		expect(await rows()).toEqual([]);
+	});
+
+	it("is a no-op, with no query, for no answers", async () => {
+		await testDb
+			.update(meetings)
+			.set({ status: "cancelled" })
+			.where(eq(meetings.id, club.meetingId));
+		await expect(
+			importPlanAnswers(testDb, { meetingId: club.meetingId, answers: [] }),
+		).resolves.toEqual({ inserted: 0 });
 	});
 });

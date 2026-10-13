@@ -256,10 +256,36 @@ const MEETING_WRITERS: Record<string, Entry> = {
 		},
 	},
 
+	// The Easy-Speak import's bulk fill-if-absent (#1051, D3 of #1196): the seam refuses
+	// a cancelled meeting itself and ACCEPTS a completed one, because a past meeting
+	// is all a history import writes.
+	"src/server/attendance-plan-logic.ts#importPlanAnswers": {
+		class: "plan",
+		overrides: {
+			completed: {
+				accept: true,
+				reason: PLAN_SEAM_COMPLETED,
+				refusedBy: [],
+				exemptCallers: {
+					"src/server/history-import-logic.ts#applyMeeting":
+						"Superadmin-only, and the meeting it writes into is a past one it created as completed or adopted because it was already completed (a scheduled, cancelled or rescheduled meeting is skipped and reported), so a completed meeting is exactly what it is meant to reach.",
+				},
+			},
+		},
+	},
+
 	// -- availability (#1135)
 	"src/server/availability-logic.ts#releaseSlotsAndMarkUnavailable": {
 		class: "plan",
 	},
+
+	// -- Easy-Speak history import (#1051)
+	// Superadmin-only (requireSuperadmin). Creates a past meeting as completed (no
+	// status to refuse yet) or ADOPTS an existing one only when it is already
+	// completed, under FOR NO KEY UPDATE and through the record class; it never
+	// writes a meeting's status, and a scheduled, cancelled or rescheduled meeting
+	// is left as it is and reported (D1 of #1196).
+	"src/server/history-import-logic.ts#applyMeeting": { class: "record" },
 
 	// -- club-level agendas: no meeting involved
 	"src/server/club-agendas-logic.ts#adoptStandardAgenda": {
