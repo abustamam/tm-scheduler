@@ -20,8 +20,8 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-	members,
 	meetings,
+	members,
 	roleDefinitions,
 	roleSlots,
 	speeches,
@@ -67,6 +67,8 @@ const fns = await import("./speech-requests");
 const { NO_PERMISSION_MESSAGE } = await import("./guards");
 const {
 	NOT_YOUR_REQUEST_MESSAGE,
+	updateSpeechRequest,
+	withdrawSpeechRequest,
 	REQUEST_NOT_FOUND_MESSAGE,
 	REQUEST_NOT_OPEN_MESSAGE,
 	REQUEST_SLOT_WRONG_CLUB_MESSAGE,
@@ -100,6 +102,7 @@ describe.skipIf(!hasTestDb)("speech requests (#1052)", () => {
 	let member2: { userId: string; personId: string; memberId: string };
 	const extraUserIds: string[] = [];
 	let slotCounter = 0;
+	let meetingCounter = 0;
 
 	async function addMember(
 		clubId: string,
@@ -130,7 +133,15 @@ describe.skipIf(!hasTestDb)("speech requests (#1052)", () => {
 	) {
 		const [row] = await testDb
 			.insert(meetings)
-			.values({ clubId, status, scheduledAt })
+			// A club holds one meeting per instant; the counter keeps two made in the
+			// same millisecond apart.
+			.values({
+				clubId,
+				status,
+				scheduledAt: new Date(
+					scheduledAt.getTime() + ++meetingCounter * 60_000,
+				),
+			})
 			.returning({ id: meetings.id });
 		if (!row) throw new Error("meeting insert failed");
 		return row.id;
@@ -198,6 +209,7 @@ describe.skipIf(!hasTestDb)("speech requests (#1052)", () => {
 
 	beforeEach(async () => {
 		slotCounter = 0;
+		meetingCounter = 0;
 		seed = await seedClub();
 		other = await seedClub();
 		member2 = await addMember(seed.clubId, "Second Member");
@@ -419,6 +431,67 @@ describe.skipIf(!hasTestDb)("speech requests (#1052)", () => {
 				title: "Admin's, edited",
 			});
 			expect(edited.title).toBe("Admin's, edited");
+		});
+
+		describe("the write's own ownership predicate (a stale ownership read)", () => {
+			/**
+			 * A connection whose ownership SELECT reads the row as the attacker's, as it
+			 * would if a membership merge re-pointed `membership_id` between the check
+			 * and the write. The check then passes; only the UPDATE's own
+			 * `membership_id` predicate stands between the attacker and the row.
+			 */
+			function staleReadConn(staleRow: object) {
+				return new Proxy(testDb, {
+					get(target, prop) {
+						if (prop === "select") {
+							return () => ({
+								from: () => ({
+									where: () => ({ limit: async () => [staleRow] }),
+								}),
+							});
+						}
+						const value = Reflect.get(target, prop, target);
+						return typeof value === "function" ? value.bind(target) : value;
+					},
+				}) as unknown as typeof testDb;
+			}
+
+			it("an edit that passed a stale check still cannot write the victim's row", async () => {
+				const id = await insertRequest(seed.memberId, { title: "Original" });
+				const stale = {
+					...(await requestRow(id)),
+					membershipId: member2.memberId,
+				};
+				await expect(
+					updateSpeechRequest(staleReadConn(stale), {
+						requestId: id,
+						actorMembershipId: member2.memberId,
+						fields: {
+							title: "Hijacked",
+							path: null,
+							projectName: null,
+							introduction: null,
+							preferredDates: [],
+						},
+					}),
+				).rejects.toThrow(REQUEST_NOT_OPEN_MESSAGE);
+				expect((await requestRow(id)).title).toBe("Original");
+			});
+
+			it("a withdraw that passed a stale check still cannot withdraw the victim's row", async () => {
+				const id = await insertRequest(seed.memberId, { title: "Original" });
+				const stale = {
+					...(await requestRow(id)),
+					membershipId: member2.memberId,
+				};
+				await expect(
+					withdrawSpeechRequest(staleReadConn(stale), {
+						requestId: id,
+						actorMembershipId: member2.memberId,
+					}),
+				).rejects.toThrow(REQUEST_NOT_OPEN_MESSAGE);
+				expect((await requestRow(id)).status).toBe("open");
+			});
 		});
 
 		it("a member of another club is refused and the row is untouched", async () => {
