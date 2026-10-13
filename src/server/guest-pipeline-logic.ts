@@ -35,6 +35,7 @@ import {
 	people,
 	roleSlots,
 	speeches,
+	speechRequests,
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { GUEST_CROSS_CLUB_LINK_CHANGE } from "#/lib/activity-format";
@@ -3413,6 +3414,18 @@ export async function applyUndoGuestConversion(
 			.where(eq(officerTerms.membershipId, membershipId));
 		if (Number(terms?.n ?? 0) > 0) {
 			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("an officer term"));
+		}
+
+		// ANY status, withdrawn included: `speech_requests.membership_id` is ON
+		// DELETE CASCADE (#1052), so the delete below would silently take every
+		// request the member ever queued, and a withdrawn one is still their
+		// record. Checked unconditionally, like dues and terms above.
+		const [requested] = await tx
+			.select({ n: count() })
+			.from(speechRequests)
+			.where(eq(speechRequests.membershipId, membershipId));
+		if (Number(requested?.n ?? 0) > 0) {
+			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("speech requests"));
 		}
 
 		if (record.createdMembership) {

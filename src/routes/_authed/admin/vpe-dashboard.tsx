@@ -3,6 +3,7 @@ import { Check, ChevronRight, Circle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
+import { SpeechRequestQueue } from "#/components/club/speech-request-queue";
 import { PageContainer } from "#/components/page-container";
 import {
 	ATTENDANCE_LAPSE,
@@ -50,6 +51,10 @@ import type {
 	OverdueMemberRow,
 	SpeakerRotationRow,
 } from "#/server/reporting-logic";
+import {
+	getSpeechRequestQueue,
+	type SpeechQueueRow,
+} from "#/server/speech-requests";
 
 export const Route = createFileRoute("/_authed/admin/vpe-dashboard")({
 	beforeLoad: ({ context }) => {
@@ -67,6 +72,7 @@ export const Route = createFileRoute("/_authed/admin/vpe-dashboard")({
 				pairings: [],
 				proximity: [] as LevelProximityRow[],
 				orientation: [] as OrientationRosterRow[],
+				speechRequests: [] as SpeechQueueRow[],
 				timezone: undefined as string | undefined,
 				now: Date.now(),
 				clubName: "",
@@ -75,15 +81,23 @@ export const Route = createFileRoute("/_authed/admin/vpe-dashboard")({
 				nextMeeting: null as LevelNudgeMeeting | null,
 			};
 		}
-		const [rotation, overdue, lapse, pairings, proximity, orientation] =
-			await Promise.all([
-				getSpeakerRotation({ data: { clubId: club.clubId } }),
-				getOverdueMembers({ data: { clubId: club.clubId } }),
-				getAttendanceLapse({ data: { clubId: club.clubId } }),
-				getEvaluatorPairings({ data: { clubId: club.clubId } }),
-				getLevelProximity({ data: { clubId: club.clubId } }),
-				getOrientationRoster({ data: { clubId: club.clubId } }),
-			]);
+		const [
+			rotation,
+			overdue,
+			lapse,
+			pairings,
+			proximity,
+			orientation,
+			speechRequests,
+		] = await Promise.all([
+			getSpeakerRotation({ data: { clubId: club.clubId } }),
+			getOverdueMembers({ data: { clubId: club.clubId } }),
+			getAttendanceLapse({ data: { clubId: club.clubId } }),
+			getEvaluatorPairings({ data: { clubId: club.clubId } }),
+			getLevelProximity({ data: { clubId: club.clubId } }),
+			getOrientationRoster({ data: { clubId: club.clubId } }),
+			getSpeechRequestQueue({ data: { clubId: club.clubId } }),
+		]);
 		return {
 			rotation,
 			overdue,
@@ -92,6 +106,8 @@ export const Route = createFileRoute("/_authed/admin/vpe-dashboard")({
 			proximity: proximity.rows,
 			// New members in orientation (#942), longest first.
 			orientation,
+			// Members' open speech requests (#1052), longest-waiting speaker first.
+			speechRequests,
 			// The club's zone, for EVERY date on this page that names a day. The
 			// Booked marker passed none and printed the server's day, so a
 			// booking at 23:30 club time read as the next day (#898).
@@ -130,6 +146,7 @@ function VpeDashboard() {
 		pairings,
 		proximity,
 		orientation,
+		speechRequests,
 		timezone,
 		now,
 		clubId,
@@ -336,6 +353,25 @@ function VpeDashboard() {
 							nudge={nudge}
 						/>
 					))
+				)}
+			</Section>
+
+			{/* Speech requests (#1052): what members asked to give, with the dates
+			    that suit them. Above the rotation because it is the other half of
+			    the same decision: the rotation says who is due, this says who asked. */}
+			<Section
+				id="speech-requests"
+				title="Speech requests"
+				subtitle="Open requests, longest since the member last spoke first, then the oldest request. Schedule puts one into an open speaker slot."
+			>
+				{speechRequests.length === 0 ? (
+					<EmptyRow>No open speech requests.</EmptyRow>
+				) : (
+					<SpeechRequestQueue
+						clubId={clubId}
+						rows={speechRequests}
+						timezone={timezone}
+					/>
 				)}
 			</Section>
 

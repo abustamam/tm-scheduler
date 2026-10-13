@@ -25,6 +25,7 @@ import {
 	people,
 	roleSlots,
 	speeches,
+	speechRequests,
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
@@ -4209,6 +4210,42 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 					actorMemberId: seed.adminMemberId,
 				}),
 			).rejects.toThrow(UNDO_MEMBER_HAS_HISTORY_MESSAGE("speeches"));
+		});
+
+		it.each([
+			"open",
+			"withdrawn",
+		] as const)("refuses when the member has a %s speech request, and keeps the membership and the request (#1052)", async (status) => {
+			// `speech_requests.membership_id` is ON DELETE CASCADE: without this refusal
+			// the undo's membership delete would silently take the request with it.
+			const { guestId, membershipId } = await converted("Requester Undo");
+			const [request] = await testDb
+				.insert(speechRequests)
+				.values({
+					clubId: seed.clubId,
+					membershipId,
+					title: "An Ice Breaker",
+					status,
+				})
+				.returning({ id: speechRequests.id });
+			if (!request) throw new Error("Failed to seed speech request");
+			await expect(
+				applyUndoGuestConversion({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(UNDO_MEMBER_HAS_HISTORY_MESSAGE("speech requests"));
+			const [stillThere] = await testDb
+				.select({ id: speechRequests.id })
+				.from(speechRequests)
+				.where(eq(speechRequests.id, request.id));
+			expect(stillThere?.id).toBe(request.id);
+			const [member] = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.id, membershipId));
+			expect(member?.id).toBe(membershipId);
 		});
 
 		it("leaves a REUSED membership standing and still frees the guest", async () => {

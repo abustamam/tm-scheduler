@@ -44,6 +44,7 @@ import {
 	officerTrainingRecords,
 	roleFeedbackNotes,
 	roleSlots,
+	speechRequests,
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import {
@@ -799,6 +800,10 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			"mentorships.mentor_member_id",
 			"mentorships.mentee_member_id",
 			"mentorships.created_by_member_id",
+			// #1052 — the speech-request queue. ON DELETE CASCADE with no
+			// member-unique index, so it re-points plainly; without it a merge would
+			// delete every request the absorbed membership had queued.
+			"speech_requests.membership_id",
 		]);
 
 		const result = await testDb.execute(sql`
@@ -1290,6 +1295,28 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			await collapse(keeperId, absorbedId);
 			expect((await pairs())[0]?.createdBy).toBe(keeperId);
 		});
+	});
+
+	it("keeps the absorbed membership's speech requests, on the keeper (#1052)", async () => {
+		// `speech_requests.membership_id` is ON DELETE CASCADE: left alone, the
+		// final DELETE of the absorbed row would destroy the queue entry.
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+		await testDb.insert(speechRequests).values([
+			{ clubId: seed.clubId, membershipId: absorbedId, title: "Mine" },
+			{ clubId: seed.clubId, membershipId: keeperId, title: "Theirs" },
+		]);
+		await collapse(keeperId, absorbedId);
+		const rows = await testDb
+			.select({
+				membershipId: speechRequests.membershipId,
+				title: speechRequests.title,
+			})
+			.from(speechRequests)
+			.where(eq(speechRequests.clubId, seed.clubId));
+		expect(rows).toHaveLength(2);
+		expect(rows.every((r) => r.membershipId === keeperId)).toBe(true);
+		expect(rows.map((r) => r.title).sort()).toEqual(["Mine", "Theirs"]);
 	});
 
 	it("is a no-op when keeper === absorbed", async () => {

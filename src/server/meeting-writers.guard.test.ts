@@ -209,6 +209,9 @@ const PLAN_SEAM_COMPLETED =
 const OUTREACH_LOCKS =
 	"Refuses a completed meeting with assertMeetingNotLocked ahead of its role check, a per-status helper older than the class policy. It is not a class helper, so the guard cannot read it; a new caller that does the same has to be named here too.";
 
+const SPEECH_REQUEST_ROW =
+	"Writes a member's speech REQUEST (`speech_requests`, #1052): a row in a queue, swept only because `scheduled_slot_id` points at a role slot. It sets no `scheduled_slot_id` and writes no slot or meeting, so a meeting's status has no say in it.";
+
 /**
  * Every writer of a swept table, classified. Keyed `<path>#<name>`; built from
  * the four families' tables (#1135 slots, #1136 agenda and templates, #1137
@@ -286,6 +289,13 @@ const MEETING_WRITERS: Record<string, Entry> = {
 	// writes a meeting's status, and a scheduled, cancelled or rescheduled meeting
 	// is left as it is and reported (D1 of #1196).
 	"src/server/history-import-logic.ts#applyMeeting": { class: "record" },
+	// The speech-request step (#1052) writes queue rows (`speech_requests`), which
+	// are swept only because `scheduled_slot_id` points at a role slot. It writes
+	// no slot and never sets that column.
+	"src/server/history-import-logic.ts#importSpeechRequests": {
+		class: "exempt",
+		reason: SPEECH_REQUEST_ROW,
+	},
 
 	// -- club-level agendas: no meeting involved
 	"src/server/club-agendas-logic.ts#adoptStandardAgenda": {
@@ -658,6 +668,28 @@ const MEETING_WRITERS: Record<string, Entry> = {
 					"Its unlink of the speech's SOURCE slot accepts a cancelled meeting: moving a speech out of one is the documented move. The slot being written is refused by the record call.",
 			},
 		},
+	},
+
+	// -- speech requests (#1052)
+	"src/server/speech-requests-logic.ts#createSpeechRequest": {
+		class: "exempt",
+		reason: SPEECH_REQUEST_ROW,
+	},
+	"src/server/speech-requests-logic.ts#updateSpeechRequest": {
+		class: "exempt",
+		reason: SPEECH_REQUEST_ROW,
+	},
+	"src/server/speech-requests-logic.ts#withdrawSpeechRequest": {
+		class: "exempt",
+		reason: SPEECH_REQUEST_ROW,
+	},
+	// Fills a speaker slot, so it is a PLAN write: it refuses a cancelled or a
+	// completed meeting itself, before anything is written, and the slot write goes
+	// through attachSpeechToOpenSlot in the same transaction as the request's
+	// status and `scheduled_slot_id`. A refusal rolls both back and leaves the
+	// request open (speech-requests.integration.test.ts).
+	"src/server/speech-requests-logic.ts#scheduleSpeechRequest": {
+		class: "plan",
 	},
 
 	// -- timings (#1137)
@@ -2306,6 +2338,7 @@ const PINNED_SWEPT_TABLES = [
 	"meetings",
 	"roleFeedbackNotes",
 	"roleSlots",
+	"speechRequests",
 	"tableTopicsSpeakers",
 ];
 

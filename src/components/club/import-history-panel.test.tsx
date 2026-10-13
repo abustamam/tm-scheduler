@@ -20,6 +20,7 @@ const fns = vi.hoisted(() => ({
 	uploadEasySpeakBundle: vi.fn(),
 	previewEasySpeakImport: vi.fn(),
 	applyEasySpeakImport: vi.fn(),
+	importEasySpeakSpeechRequests: vi.fn(),
 }));
 vi.mock("#/server/history-import", () => fns);
 vi.mock("sonner", () => ({
@@ -77,11 +78,15 @@ const person = {
 
 const PLAN_HASH = "a".repeat(64);
 
-function previewFor(resolved: boolean, report: unknown = null) {
+function previewFor(
+	resolved: boolean,
+	report: unknown = null,
+	appliedAt: Date | null = null,
+) {
 	return {
 		importId: IMPORT,
 		planHash: PLAN_HASH,
-		appliedAt: null,
+		appliedAt,
 		bundleClub: { name: "Fixture Speakers", number: "9999" },
 		club: { name: "Test Club", number: null },
 		warnings: [],
@@ -249,5 +254,78 @@ describe("ImportHistoryPanel (#1051)", () => {
 		);
 		expect(read).not.toHaveBeenCalled();
 		expect(fns.uploadEasySpeakBundle).not.toHaveBeenCalled();
+	});
+
+	it("keeps Import speech requests disabled until the import is applied", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue(previewFor(false));
+		await openImport();
+		const button = (await screen.findByRole("button", {
+			name: "Import speech requests",
+		})) as HTMLButtonElement;
+		expect(button.disabled).toBe(true);
+		expect(screen.getByText("Apply the import first.")).toBeTruthy();
+		fireEvent.click(button);
+		expect(fns.importEasySpeakSpeechRequests).not.toHaveBeenCalled();
+	});
+
+	it("imports the speech requests once applied and shows each count", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue(
+			previewFor(true, null, new Date("2026-10-12T00:00:00Z")),
+		);
+		fns.importEasySpeakSpeechRequests.mockResolvedValue({
+			total: 29,
+			imported: 12,
+			alreadyImported: 3,
+			skippedScheduled: 5,
+			skippedCompleted: 4,
+			skippedUnknownStatus: 1,
+			skippedNoMember: 4,
+		});
+		await openImport();
+		const button = (await screen.findByRole("button", {
+			name: "Import speech requests",
+		})) as HTMLButtonElement;
+		await waitFor(() => expect(button.disabled).toBe(false));
+		expect(screen.queryByText("Apply the import first.")).toBeNull();
+
+		fireEvent.click(button);
+
+		await waitFor(() =>
+			expect(fns.importEasySpeakSpeechRequests).toHaveBeenCalledWith({
+				data: { clubId: CLUB, importId: IMPORT },
+			}),
+		);
+		const result = await screen.findByTestId("speech-requests-result");
+		const shown = Object.fromEntries(
+			[...result.querySelectorAll("dt")].map((dt) => [
+				dt.textContent,
+				dt.nextElementSibling?.textContent,
+			]),
+		);
+		expect(shown).toEqual({
+			"Requests in the bundle": "29",
+			Imported: "12",
+			"Already imported": "3",
+			"Skipped: scheduled": "5",
+			"Skipped: completed": "4",
+			"Skipped: no matching member": "4",
+			"Skipped: unknown status": "1",
+		});
+		expect(toast.success).toHaveBeenCalledWith("Imported 12 speech requests.");
+	});
+
+	it("reports a refusal from the server and shows no counts", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue(
+			previewFor(true, null, new Date("2026-10-12T00:00:00Z")),
+		);
+		fns.importEasySpeakSpeechRequests.mockRejectedValue(new Error("Nope."));
+		await openImport();
+		const button = (await screen.findByRole("button", {
+			name: "Import speech requests",
+		})) as HTMLButtonElement;
+		await waitFor(() => expect(button.disabled).toBe(false));
+		fireEvent.click(button);
+		await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Nope."));
+		expect(screen.queryByTestId("speech-requests-result")).toBeNull();
 	});
 });

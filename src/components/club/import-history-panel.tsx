@@ -14,6 +14,7 @@ import {
 } from "#/lib/import-bundle-limit";
 import {
 	applyEasySpeakImport,
+	importEasySpeakSpeechRequests,
 	listEasySpeakImports,
 	previewEasySpeakImport,
 	uploadEasySpeakBundle,
@@ -151,6 +152,31 @@ export function ImportHistoryPanel({
 			setConfirming(false);
 			toast.error(err instanceof Error ? err.message : "Import failed.");
 		},
+	});
+
+	// The speech-request queue step (#1052): its own button, after Apply, because
+	// it matches requesters to the people Apply resolved.
+	const [requestsResult, setRequestsResult] = useState<{
+		importId: string;
+		result: Awaited<ReturnType<typeof importEasySpeakSpeechRequests>>;
+	} | null>(null);
+	const importRequests = useMutation({
+		mutationFn: () =>
+			importEasySpeakSpeechRequests({
+				data: { clubId, importId: importId as string },
+			}),
+		onSuccess: (result) => {
+			setRequestsResult({ importId: importId as string, result });
+			toast.success(
+				result.imported === 0
+					? "No new speech requests to import."
+					: `Imported ${result.imported} speech ${result.imported === 1 ? "request" : "requests"}.`,
+			);
+		},
+		onError: (err) =>
+			toast.error(
+				err instanceof Error ? err.message : "Speech request import failed.",
+			),
 	});
 
 	const data = preview.data;
@@ -354,9 +380,61 @@ export function ImportHistoryPanel({
 					)}
 
 					{data.report ? <ReportView report={data.report} /> : null}
+
+					<div className="space-y-1" data-testid="speech-requests-step">
+						<h3 className="text-sm font-bold">Speech requests</h3>
+						<p className="text-sm text-muted-foreground">
+							Adds the bundle's open requests to this club's speech-request
+							queue. Run it after applying the import: requesters are matched to
+							the people it resolved. Running it again adds nothing already
+							there.
+						</p>
+						<Button
+							type="button"
+							size="sm"
+							variant="outline"
+							disabled={!data.appliedAt || importRequests.isPending}
+							onClick={() => importRequests.mutate()}
+						>
+							{importRequests.isPending ? (
+								<Loader2 className="size-4 animate-spin" />
+							) : (
+								"Import speech requests"
+							)}
+						</Button>
+						{!data.appliedAt ? (
+							<p className="text-sm text-muted-foreground">
+								Apply the import first.
+							</p>
+						) : null}
+						{requestsResult?.importId === importId ? (
+							<SpeechRequestsResult result={requestsResult.result} />
+						) : null}
+					</div>
 				</div>
 			) : null}
 		</section>
+	);
+}
+
+function SpeechRequestsResult({
+	result,
+}: {
+	result: Awaited<ReturnType<typeof importEasySpeakSpeechRequests>>;
+}) {
+	return (
+		<dl
+			className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-3"
+			data-testid="speech-requests-result"
+		>
+			<Count label="Requests in the bundle" n={result.total} />
+			<Count label="Imported" n={result.imported} />
+			<Count label="Already imported" n={result.alreadyImported} />
+			<Count label="Skipped: scheduled" n={result.skippedScheduled} />
+			<Count label="Skipped: completed" n={result.skippedCompleted} />
+			<Count label="Skipped: no matching member" n={result.skippedNoMember} />
+			<Count label="Skipped: unknown status" n={result.skippedUnknownStatus} />
+		</dl>
 	);
 }
 

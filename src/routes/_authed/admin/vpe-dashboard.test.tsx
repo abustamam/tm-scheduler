@@ -26,6 +26,7 @@ import {
 	render,
 	screen,
 	waitFor,
+	within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AttendanceLapseRow } from "#/lib/attendance-lapse";
@@ -41,6 +42,12 @@ vi.mock("#/server/reporting", () => ({
 	getAttendanceLapse: vi.fn(),
 	getEvaluatorPairings: vi.fn(),
 	getLevelProximity: vi.fn(),
+}));
+
+vi.mock("#/server/speech-requests", () => ({
+	getSpeechRequestQueue: vi.fn(),
+	getSchedulableSpeakerSlots: vi.fn(),
+	scheduleRequestedSpeech: vi.fn(),
 }));
 
 import { Route } from "./vpe-dashboard";
@@ -83,6 +90,7 @@ async function renderRoute(
 		proximity: extra.proximity ?? [],
 		// #942's section; this file asserts nothing about it.
 		orientation: [],
+		speechRequests: [],
 		timezone: extra.timezone,
 		// The instant the loader pins for tenure (#1017).
 		now: Date.parse("2026-09-15T12:00:00Z"),
@@ -269,8 +277,11 @@ describe("VPE dashboard — Close to a level (#898)", () => {
 		]) {
 			expect(screen.getByText(line)).toBeTruthy();
 		}
-		// PROJECTS, never speeches.
-		expect(screen.queryByText(/speech/i)).toBeNull();
+		// PROJECTS, never speeches: within the section, not the page, which now
+		// also carries the speech-request queue (#1052).
+		const section = document.getElementById("close-to-a-level");
+		expect(section).not.toBeNull();
+		expect(within(section as HTMLElement).queryByText(/speech/i)).toBeNull();
 	});
 
 	it("shows Speaking when a speaker slot is booked, and Not scheduled otherwise", async () => {

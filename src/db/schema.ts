@@ -2921,6 +2921,71 @@ export const speeches = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Speech requests (#1052, epic #1054): a member asks for a speech with up to
+// three preferred dates and the VPE schedules from the queue.
+//
+// A request is NOT a speech: it holds what the member typed, and `Schedule`
+// copies it into a Person-owned `speeches` row and a speaker slot. `status` is
+// stored (unlike a speech's, which is derived) because "withdrawn" has no other
+// trace. `scheduled_slot_id` is where the request went; the slot being deleted
+// leaves the request `scheduled` with no slot, which the queue does not show.
+// ---------------------------------------------------------------------------
+
+export const speechRequestStatusEnum = pgEnum("speech_request_status", [
+	"open",
+	"scheduled",
+	"withdrawn",
+]);
+
+export const speechRequests = pgTable(
+	"speech_requests",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		// The requester's membership in `club_id`, checked in the write path. A
+		// membership merge re-points it (`membership-collapse-logic.ts`).
+		membershipId: uuid("membership_id")
+			.notNull()
+			.references(() => members.id, { onDelete: "cascade" }),
+		title: text("title"),
+		path: text("path"),
+		projectId: uuid("project_id").references(() => pathwaysProjects.id, {
+			onDelete: "set null",
+		}),
+		projectName: text("project_name"),
+		introduction: text("introduction"),
+		// Club-local calendar dates, at most three, in the order the member gave them.
+		preferredDates: date("preferred_dates", { mode: "string" })
+			.array()
+			.notNull()
+			.default(sql`'{}'::date[]`),
+		status: speechRequestStatusEnum("status").notNull().default("open"),
+		scheduledSlotId: uuid("scheduled_slot_id").references(() => roleSlots.id, {
+			onDelete: "set null",
+		}),
+		// The speech Schedule made from this request. A re-schedule reuses it when it
+		// is on no slot, so one ask is one speech. SET NULL: deleting the speech
+		// leaves the request, which then makes a new one.
+		speechId: uuid("speech_id").references(() => speeches.id, {
+			onDelete: "set null",
+		}),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(t) => [
+		index("speech_requests_club_status_idx").on(t.clubId, t.status),
+		index("speech_requests_membership_idx").on(t.membershipId),
+		check(
+			"speech_requests_max_three_dates",
+			sql`cardinality(${t.preferredDates}) <= 3`,
+		),
+	],
+);
+
+// ---------------------------------------------------------------------------
 // Pathways progress (count-based mirror of Base Camp — spec 2026-07-06).
 // Paths are upserted from sync data (course_code + name); per-person per-level
 // counts + `approved` mirror Base Camp's /api/bcm/progress. Base Camp is the

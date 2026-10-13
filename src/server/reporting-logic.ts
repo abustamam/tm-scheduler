@@ -73,7 +73,7 @@ export type {
 export type { OrientationRosterRow } from "#/lib/orientation-roster";
 
 /** A slot only counts as "held" once it's claimed or confirmed. */
-const HELD_SLOT_STATUSES = ["claimed", "confirmed"] as const;
+export const HELD_SLOT_STATUSES = ["claimed", "confirmed"] as const;
 
 /** Default "overdue" window: no role of any kind in this many days. */
 export const DEFAULT_OVERDUE_DAYS = 60;

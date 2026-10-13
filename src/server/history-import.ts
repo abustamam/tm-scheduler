@@ -6,6 +6,8 @@ import {
 	importApplySchema,
 	importClubSchema,
 	importRunSchema,
+	importSpeechRequests as importSpeechRequestsLogic,
+	importSpeechRequestsSchema,
 	listClubImports as listClubImportsLogic,
 	previewEasySpeakImport as previewEasySpeakImportLogic,
 	storeEasySpeakBundle as storeEasySpeakBundleLogic,
@@ -92,5 +94,23 @@ export const applyEasySpeakImport = createServerFn({ method: "POST" })
 			superadminUserId: currentUser.id,
 			resolutions: data.resolutions,
 			planHash: data.planHash,
+		});
+	});
+
+/**
+ * Import the stored bundle's open speech requests into the club's queue (#1052).
+ * A step of its own, after Apply: it matches requesters to the people Apply
+ * resolved. Idempotent. Refused under read-only impersonation.
+ */
+export const importEasySpeakSpeechRequests = createServerFn({ method: "POST" })
+	.validator((input: unknown) => parse(importSpeechRequestsSchema, input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireSuperadmin(currentUser.id);
+		await assertNotReadOnlyImpersonation(currentUser.id);
+		return importSpeechRequestsLogic({
+			clubId: data.clubId,
+			importId: data.importId,
+			superadminUserId: currentUser.id,
 		});
 	});

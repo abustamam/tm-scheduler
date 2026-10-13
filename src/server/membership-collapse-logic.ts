@@ -33,6 +33,7 @@ import {
 	projectCompletionMarks,
 	roleFeedbackNotes,
 	roleSlots,
+	speechRequests,
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { earliestDate } from "#/lib/person-identity";
@@ -556,6 +557,15 @@ export async function collapseMemberships(
 		.update(mentorships)
 		.set({ createdByMemberId: keeperId })
 		.where(eq(mentorships.createdByMemberId, absorbedId));
+
+	// 18. speech_requests.membership_id (#1052) — ON DELETE CASCADE, so without
+	//     this the merge destroys every speech the absorbed membership had asked
+	//     for. No unique index carries the member (a member may queue several
+	//     requests, open or not), so a plain re-point cannot collide.
+	await tx
+		.update(speechRequests)
+		.set({ membershipId: keeperId })
+		.where(eq(speechRequests.membershipId, absorbedId));
 
 	// --- Delete the now-empty absorbed membership --------------------------
 	await tx.delete(members).where(eq(members.id, absorbedId));

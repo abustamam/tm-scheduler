@@ -39,6 +39,12 @@ vi.mock("#/server/reporting", () => ({
 	getEvaluatorPairings: vi.fn(),
 }));
 
+vi.mock("#/server/speech-requests", () => ({
+	getSpeechRequestQueue: vi.fn(),
+	getSchedulableSpeakerSlots: vi.fn(),
+	scheduleRequestedSpeech: vi.fn(),
+}));
+
 import { Route } from "./vpe-dashboard";
 
 afterEach(() => {
@@ -91,6 +97,7 @@ async function renderRoute(pairings: EvaluatorPairingRow[]) {
 		proximity: [],
 		// #942's section; this file asserts nothing about it.
 		orientation: [],
+		speechRequests: [],
 		// The instant the loader pins for tenure (#1017).
 		now: Date.parse("2026-09-15T12:00:00Z"),
 		clubName: "Harbor City Speakers",
