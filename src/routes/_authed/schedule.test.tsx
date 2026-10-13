@@ -15,6 +15,7 @@ import {
 	defaultStringifySearch,
 } from "@tanstack/react-router";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SeasonGridData } from "#/server/season-grid";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
@@ -264,14 +265,17 @@ describe("the next-meeting link button (#1146)", () => {
 	const search = { view: "members", count: 8 } as const;
 
 	// protects=a plain member (context has no clubs, so no officer role) sees a
-	// "Copy next-meeting link" button that copies <origin>/club/<slug>/next;
-	// fails_when=the button is officer-only, is missing, or builds the sign-up
-	// sheet path `/club/<slug>` instead of the `/next` permalink;
+	// "Copy next-meeting link" button that copies <origin>/club/<slug>/next and
+	// toasts the next-meeting text;
+	// fails_when=the button is officer-only, is missing, builds the sign-up
+	// sheet path `/club/<slug>` instead of the `/next` permalink, or toasts the
+	// default text;
 	// no_claim=the loader data and route context are mocked, so this does not
 	// prove the real loader returns a slug or that the /next route resolves.
 	it("renders for a plain member and copies the /next permalink", async () => {
 		const writeText = vi.fn(async (_: string) => {});
 		vi.stubGlobal("navigator", { clipboard: { writeText } });
+		const success = vi.spyOn(toast, "success");
 		try {
 			await renderPage(search, { ...gridData, clubSlug: "harbor" });
 			fireEvent.click(
@@ -281,10 +285,16 @@ describe("the next-meeting link button (#1146)", () => {
 			expect(writeText).toHaveBeenCalledWith(
 				`${window.location.origin}/club/harbor/next`,
 			);
+			await waitFor(() =>
+				expect(success).toHaveBeenCalledWith(
+					"Link copied: it always opens the next meeting",
+				),
+			);
 			expect(
 				screen.getByRole("button", { name: "Copy sign-up sheet link" }),
 			).toBeTruthy();
 		} finally {
+			success.mockRestore();
 			vi.unstubAllGlobals();
 		}
 	});
