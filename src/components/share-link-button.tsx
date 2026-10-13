@@ -13,10 +13,13 @@ import { Button } from "#/components/ui/button";
 export function ShareLinkButton({
 	path,
 	label = "Copy share link",
+	successMessage = "Link copied — paste it to share",
 	className,
 }: {
 	path: string;
 	label?: string;
+	/** The toast shown after a successful copy. */
+	successMessage?: string;
 	className?: string;
 }) {
 	const [copied, setCopied] = useState(false);
@@ -27,7 +30,7 @@ export function ShareLinkButton({
 		try {
 			await navigator.clipboard.writeText(url);
 			setCopied(true);
-			toast.success("Link copied — paste it to share");
+			toast.success(successMessage);
 			setTimeout(() => setCopied(false), 2000);
 		} catch {
 			toast.error("Couldn't copy — your browser blocked clipboard access");

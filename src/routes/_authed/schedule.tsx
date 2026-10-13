@@ -90,10 +90,17 @@ function SeasonGridPage() {
 					Sign-up sheet
 				</h1>
 				{data?.clubSlug ? (
-					<ShareLinkButton
-						path={`/club/${data.clubSlug}`}
-						label="Copy sign-up sheet link"
-					/>
+					<div className="flex flex-wrap gap-2">
+						<ShareLinkButton
+							path={`/club/${data.clubSlug}`}
+							label="Copy sign-up sheet link"
+						/>
+						<ShareLinkButton
+							path={`/club/${data.clubSlug}/next`}
+							label="Copy next-meeting link"
+							successMessage="Link copied: it always opens the next meeting"
+						/>
+					</div>
 				) : null}
 			</div>
 			{/* Cancelled meetings (#1057), officers only — the loader asks for
