@@ -54,7 +54,6 @@ import {
 	guests,
 	importRefs,
 	meetingAttendance,
-	meetingAttendancePlan,
 	meetingAwards,
 	meetings,
 	members,
@@ -97,6 +96,7 @@ import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
 import { logActivity } from "./activity";
+import { importPlanAnswers } from "./attendance-plan-logic";
 import { lockClubForWrite } from "./club-write-lock";
 import { createGuestRecord } from "./guests-logic";
 
@@ -1156,15 +1156,18 @@ async function applyMeeting(
 				.limit(1);
 			if (row) await putRef(tx, clubId, "attendance", a.sourceId, row.id);
 		}
+		// The plan table is keyed on a membership: a guest has no plan row. The seam
+		// fills only what is absent and logs nothing (D3 of #1196).
+		const planAnswers: Array<{
+			memberId: string;
+			status: (typeof pm.plans)[number]["status"];
+		}> = [];
 		for (const p of pm.plans) {
 			const owner = ownerOf(env, p.personKey);
-			// The plan table is keyed on a membership: a guest has no plan row.
 			if (!owner || !("memberId" in owner)) continue;
-			await tx
-				.insert(meetingAttendancePlan)
-				.values({ memberId: owner.memberId, meetingId, status: p.status })
-				.onConflictDoNothing();
+			planAnswers.push({ memberId: owner.memberId, status: p.status });
 		}
+		await importPlanAnswers(tx, { meetingId, answers: planAnswers });
 
 		// -- Awards, Table Topics -----------------------------------------------
 		for (const a of pm.awards) {
