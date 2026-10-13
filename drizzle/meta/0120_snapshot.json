@@ -1,5 +1,5 @@
 {
-  "id": "2b23c85e-983e-41f9-84bb-321704c4a822",
+  "id": "bba66a7e-b541-42f5-88e4-55ef78f53dfc",
   "prevId": "e8b20168-e88e-4fc9-8fd9-0d9c0c0a5891",
   "version": "7",
   "dialect": "postgresql",
@@ -8886,6 +8886,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "speech_id": {
+          "name": "speech_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -8978,6 +8984,19 @@
           "tableTo": "role_slots",
           "columnsFrom": [
             "scheduled_slot_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "speech_requests_speech_id_speeches_id_fk": {
+          "name": "speech_requests_speech_id_speeches_id_fk",
+          "tableFrom": "speech_requests",
+          "tableTo": "speeches",
+          "columnsFrom": [
+            "speech_id"
           ],
           "columnsTo": [
             "id"

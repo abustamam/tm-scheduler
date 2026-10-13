@@ -13,7 +13,18 @@
 //     actor's own). A club admin is NOT the owner; an officer cannot edit a
 //     member's words, only schedule them.
 //   - queue + schedule: a club admin (the VPE is one; ADR-0008).
-import { and, asc, desc, eq, inArray, lt, max, ne, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	desc,
+	eq,
+	inArray,
+	lt,
+	max,
+	ne,
+	notExists,
+	sql,
+} from "drizzle-orm";
 import { db } from "#/db";
 import {
 	clubs,
@@ -172,6 +183,25 @@ export async function createSpeechRequest(
 	});
 }
 
+/** Run `fn` in a transaction on `conn`, which is the pool or an open transaction (a savepoint). */
+function transactionOn<T>(conn: Conn, fn: (tx: Tx) => Promise<T>): Promise<T> {
+	return (conn as typeof db).transaction(fn);
+}
+
+/**
+ * Take the request's row lock (`for update`) for the rest of the transaction.
+ * Every write that decides on `speechRequestIsOpen` / `speechRequestIsLive` does
+ * this FIRST and decides in a LATER statement; see `updateSpeechRequest`.
+ */
+async function lockRequestRow(tx: Tx, requestId: string): Promise<void> {
+	const [locked] = await tx
+		.select({ id: speechRequests.id })
+		.from(speechRequests)
+		.where(eq(speechRequests.id, requestId))
+		.for("update");
+	if (!locked) throw new Error(REQUEST_NOT_FOUND_MESSAGE);
+}
+
 /**
  * The request, once the actor is shown to own it. `actorMembershipId` is null for
  * a memberless impersonation session, which owns nothing.
@@ -210,31 +240,42 @@ export async function updateSpeechRequest(
 		args.requestId,
 		args.actorMembershipId,
 	);
-	// Ownership is in the WHERE as well as in the check above: the check gives the
-	// right sentence, the predicate is what a concurrent withdraw or schedule
-	// cannot slip past.
-	const [row] = await conn
-		.update(speechRequests)
-		.set({
-			title: args.fields.title,
-			path: args.fields.path,
-			projectName: args.fields.projectName,
-			introduction: args.fields.introduction,
-			preferredDates: args.fields.preferredDates,
-			// A scheduled request whose slot is gone is open again; say so on the row.
-			status: "open",
-			scheduledSlotId: null,
-		})
-		.where(
-			and(
-				eq(speechRequests.id, args.requestId),
-				eq(speechRequests.membershipId, owned.membershipId),
-				speechRequestIsOpen,
-			),
-		)
-		.returning(REQUEST_COLUMNS);
-	if (!row) throw new Error(REQUEST_NOT_OPEN_MESSAGE);
-	return row;
+	// Lock the row, THEN write, in one transaction. A single UPDATE whose WHERE
+	// holds `speechRequestIsOpen` (a subquery over role_slots) that waits on the
+	// row lock re-checks the WHERE against the NEW row version but evaluates the
+	// subquery with the snapshot it took BEFORE the wait. A VPE re-scheduling a
+	// released request, committing while this edit waits, fills a new slot the old
+	// snapshot cannot see: the request reads "no longer live", the edit resets it
+	// to open with no slot while the slot holds the speech. Once the lock is ours
+	// the UPDATE does not wait, and a new statement takes a new snapshot.
+	// Ownership stays in the WHERE as well as in the check above: the check gives
+	// the right sentence, the predicate is what a concurrent withdraw, schedule or
+	// merge cannot slip past.
+	return transactionOn(conn, async (tx) => {
+		await lockRequestRow(tx, args.requestId);
+		const [row] = await tx
+			.update(speechRequests)
+			.set({
+				title: args.fields.title,
+				path: args.fields.path,
+				projectName: args.fields.projectName,
+				introduction: args.fields.introduction,
+				preferredDates: args.fields.preferredDates,
+				// A scheduled request whose slot is gone is open again; say so on the row.
+				status: "open",
+				scheduledSlotId: null,
+			})
+			.where(
+				and(
+					eq(speechRequests.id, args.requestId),
+					eq(speechRequests.membershipId, owned.membershipId),
+					speechRequestIsOpen,
+				),
+			)
+			.returning(REQUEST_COLUMNS);
+		if (!row) throw new Error(REQUEST_NOT_OPEN_MESSAGE);
+		return row;
+	});
 }
 
 /** Withdraw the requester's own OPEN request (including a scheduled one whose slot is gone). */
@@ -247,18 +288,22 @@ export async function withdrawSpeechRequest(
 		args.requestId,
 		args.actorMembershipId,
 	);
-	const rows = await conn
-		.update(speechRequests)
-		.set({ status: "withdrawn" })
-		.where(
-			and(
-				eq(speechRequests.id, args.requestId),
-				eq(speechRequests.membershipId, owned.membershipId),
-				speechRequestIsOpen,
-			),
-		)
-		.returning({ id: speechRequests.id });
-	if (rows.length === 0) throw new Error(REQUEST_NOT_OPEN_MESSAGE);
+	// Lock first, as `updateSpeechRequest` does and for the same reason.
+	await transactionOn(conn, async (tx) => {
+		await lockRequestRow(tx, args.requestId);
+		const rows = await tx
+			.update(speechRequests)
+			.set({ status: "withdrawn" })
+			.where(
+				and(
+					eq(speechRequests.id, args.requestId),
+					eq(speechRequests.membershipId, owned.membershipId),
+					speechRequestIsOpen,
+				),
+			)
+			.returning({ id: speechRequests.id });
+		if (rows.length === 0) throw new Error(REQUEST_NOT_OPEN_MESSAGE);
+	});
 }
 
 export interface MySpeechRequest extends SpeechRequestRow {
@@ -448,12 +493,7 @@ export async function scheduleSpeechRequest(
 	return conn.transaction(async (tx) => {
 		// The request row lock serialises this against a withdraw, an edit or
 		// another Schedule.
-		const [locked] = await tx
-			.select({ id: speechRequests.id })
-			.from(speechRequests)
-			.where(eq(speechRequests.id, args.requestId))
-			.for("update");
-		if (!locked) throw new Error(REQUEST_NOT_FOUND_MESSAGE);
+		await lockRequestRow(tx, args.requestId);
 		// READ the request in a SECOND statement. A `for update` that waited on a
 		// concurrent Schedule returns the row's committed columns, but evaluates
 		// every subquery in its select list against the snapshot it took BEFORE the
@@ -464,6 +504,7 @@ export async function scheduleSpeechRequest(
 			.select({
 				...REQUEST_COLUMNS,
 				projectId: speechRequests.projectId,
+				speechId: speechRequests.speechId,
 				live: speechRequestIsLive,
 			})
 			.from(speechRequests)
@@ -517,30 +558,64 @@ export async function scheduleSpeechRequest(
 			.limit(1);
 		if (!owner) throw new Error(REQUEST_NOT_FOUND_MESSAGE);
 
-		const [speech] = await tx
-			.insert(speeches)
-			.values({
-				personId: owner.personId,
-				// `speeches.title` is NOT NULL; an untitled request becomes the app's
-				// own "TBA" stand-in, which every reader already treats as unset.
-				title: request.title ?? TBA_SPEECH_TITLE,
-				introduction: request.introduction,
-				pathwayPath: request.path,
-				projectName: request.projectName,
-				projectId: request.projectId,
-			})
-			.returning({ id: speeches.id });
-		if (!speech) throw new Error("Could not create the speech.");
+		const fields = {
+			// `speeches.title` is NOT NULL; an untitled request becomes the app's
+			// own "TBA" stand-in, which every reader already treats as unset.
+			title: request.title ?? TBA_SPEECH_TITLE,
+			introduction: request.introduction,
+			pathwayPath: request.path,
+			projectName: request.projectName,
+			projectId: request.projectId,
+		};
+		// A re-schedule of a request that was scheduled before REUSES the speech its
+		// first Schedule made, when that speech is on no slot: release and reassign
+		// leave it unattached, and a second speech would leave the member with two
+		// copies of one ask. A speech still on a slot (a cancelled meeting's slot
+		// keeps it as history) is left where it is and a new one is made.
+		let speechId: string | null = null;
+		if (request.speechId) {
+			const [reusable] = await tx
+				.select({ id: speeches.id })
+				.from(speeches)
+				.where(
+					and(
+						eq(speeches.id, request.speechId),
+						eq(speeches.personId, owner.personId),
+						notExists(
+							tx
+								.select({ one: sql`1` })
+								.from(roleSlots)
+								.where(eq(roleSlots.speechId, request.speechId)),
+						),
+					),
+				)
+				.for("update");
+			if (reusable) {
+				await tx
+					.update(speeches)
+					.set(fields)
+					.where(eq(speeches.id, reusable.id));
+				speechId = reusable.id;
+			}
+		}
+		if (speechId === null) {
+			const [speech] = await tx
+				.insert(speeches)
+				.values({ personId: owner.personId, ...fields })
+				.returning({ id: speeches.id });
+			if (!speech) throw new Error("Could not create the speech.");
+			speechId = speech.id;
+		}
 
 		await attachSpeechToOpenSlot(tx, {
-			speechId: speech.id,
+			speechId,
 			slotId: args.slotId,
 			actorMemberId: args.actorMemberId,
 		});
 
 		const updated = await tx
 			.update(speechRequests)
-			.set({ status: "scheduled", scheduledSlotId: args.slotId })
+			.set({ status: "scheduled", scheduledSlotId: args.slotId, speechId })
 			// Compare-and-swap on the status read under the row lock, NOT on the
 			// "open" predicate: a request being re-scheduled into the very slot it
 			// held before is LIVE again once the attach above has filled it, so the
@@ -553,6 +628,6 @@ export async function scheduleSpeechRequest(
 			)
 			.returning({ id: speechRequests.id });
 		if (updated.length === 0) throw new Error(REQUEST_NOT_OPEN_MESSAGE);
-		return { speechId: speech.id, slotId: args.slotId };
+		return { speechId, slotId: args.slotId };
 	});
 }

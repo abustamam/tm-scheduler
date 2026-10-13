@@ -20,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	clubs,
 	impersonationSessions,
 	meetings,
 	members,
@@ -69,9 +70,7 @@ vi.mock("#/lib/auth", () => ({
 const fns = await import("./speech-requests");
 const { releaseSlotCore, reassignSlotCore } = await import("./slots-logic");
 const { loadSpeakerRotation } = await import("./reporting-logic");
-const { NO_PERMISSION_MESSAGE, NOT_A_MEMBER_MESSAGE } = await import(
-	"./guards"
-);
+const { NO_PERMISSION_MESSAGE } = await import("./guards");
 const {
 	NOT_YOUR_REQUEST_MESSAGE,
 	updateSpeechRequest,
@@ -1020,12 +1019,45 @@ describe.skipIf(!hasTestDb)("speech requests (#1052)", () => {
 			expect(rows.map((r) => r.title)).toEqual(["Mine"]);
 		});
 
-		it("a non-member with NO session is still refused", async () => {
+		// /me loads this beside the commitments in one Promise.all: a refusal here
+		// takes the whole page down. The fn lists the caller's OWN rows, so anyone
+		// who owns none in the club reads [] and learns nothing about it.
+		it("a user with no membership in the club lists nothing, and sees none of its rows", async () => {
+			await insertRequest(other.memberId, {
+				clubId: other.clubId,
+				title: "Theirs",
+			});
 			sessionUserId = other.memberUserId;
-			await expect(mine()).rejects.toThrow(NOT_A_MEMBER_MESSAGE);
+			await expect(mine(seed.clubId)).resolves.toEqual([]);
+			// The control: asked for their own club they get their own row, so the
+			// empty answer above is about the club asked for.
+			expect((await mine(other.clubId)).map((r) => r.title)).toEqual([
+				"Theirs",
+			]);
 		});
 
-		it("a session on ANOTHER club does not open this one", async () => {
+		it("a LAPSED member lists nothing instead of refusing", async () => {
+			const lapsed = await addMember(seed.clubId, "Lapsed", "inactive");
+			await insertRequest(lapsed.memberId, { title: "Old ask" });
+			sessionUserId = lapsed.userId;
+			await expect(mine()).resolves.toEqual([]);
+			// The same person, active again, reads it: the empty answer is the status.
+			await testDb
+				.update(members)
+				.set({ status: "active" })
+				.where(eq(members.id, lapsed.memberId));
+			expect((await mine()).map((r) => r.title)).toEqual(["Old ask"]);
+		});
+
+		it("an ARCHIVED club lists nothing instead of refusing (as loadMyCommitments leaves an archived club out)", async () => {
+			await testDb
+				.update(clubs)
+				.set({ archivedAt: new Date() })
+				.where(eq(clubs.id, seed.clubId));
+			await expect(mine()).resolves.toEqual([]);
+		});
+
+		it("a session on ANOTHER club does not open this one: it lists nothing", async () => {
 			await testDb.insert(impersonationSessions).values({
 				superadminUserId: superadminId,
 				clubId: other.clubId,
@@ -1033,7 +1065,12 @@ describe.skipIf(!hasTestDb)("speech requests (#1052)", () => {
 				expiresAt: GRANT(),
 			});
 			sessionUserId = superadminId;
-			await expect(mine()).rejects.toThrow(NOT_A_MEMBER_MESSAGE);
+			await expect(mine()).resolves.toEqual([]);
+		});
+
+		it("is still refused with no session at all", async () => {
+			sessionUserId = null;
+			await expect(mine()).rejects.toThrow(/signed in/i);
 		});
 	});
 
@@ -1240,6 +1277,151 @@ describe.skipIf(!hasTestDb)("speech requests (#1052)", () => {
 			await expect(schedule(id, other2)).rejects.toThrow(
 				REQUEST_NOT_OPEN_MESSAGE,
 			);
+		});
+
+		// -------------------------------------------------------------------
+		// A write that WAITED on the request row decides on a fresh snapshot.
+		// -------------------------------------------------------------------
+		it.each([
+			"edit",
+			"withdraw",
+		] as const)("an %s that waited on the request lock re-reads liveness AFTER it: the re-schedule's new slot is seen, the write refused, the request stays live", async (kind) => {
+			const { id, slotId } = await scheduled();
+			await causes[0]?.[1](slotId); // released: scheduled but not live
+			const fresh = await openSlot();
+			// A re-Schedule that has filled a new slot and not yet committed, holding the row.
+			const rescheduler = await openBlockingTx(async (tx) => {
+				await tx
+					.select({ id: speechRequests.id })
+					.from(speechRequests)
+					.where(eq(speechRequests.id, id))
+					.for("update");
+				await tx
+					.update(roleSlots)
+					.set({ assignedMemberId: seed.memberId, status: "claimed" })
+					.where(eq(roleSlots.id, fresh));
+				await tx
+					.update(speechRequests)
+					.set({ status: "scheduled", scheduledSlotId: fresh })
+					.where(eq(speechRequests.id, id));
+			});
+			const attempt =
+				kind === "edit"
+					? () =>
+							call(fns.editSpeechRequest, { requestId: id, title: "Reworded" })
+					: () => call(fns.withdrawMySpeechRequest, { requestId: id });
+			let outcome: Promise<string | null> | undefined;
+			try {
+				outcome = attempt().then(
+					() => null,
+					(e: unknown) => (e instanceof Error ? e.message : String(e)),
+				);
+				// Parked on the row, BEHIND the re-Schedule. Matches both the
+				// locking select and, were there none, the UPDATE itself.
+				await waitForLockWait("speech_requests", rescheduler.pid);
+			} finally {
+				await rescheduler.commit();
+			}
+			expect(await outcome).toBe(REQUEST_NOT_OPEN_MESSAGE);
+			expect(await requestRow(id)).toMatchObject({
+				title: "Mine",
+				status: "scheduled",
+				scheduledSlotId: fresh,
+			});
+			const [held] = await testDb
+				.select({ assigned: roleSlots.assignedMemberId })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, fresh));
+			expect(held?.assigned).toBe(seed.memberId);
+		});
+
+		// -------------------------------------------------------------------
+		// One ask is one speech: a re-Schedule reuses the speech the first made.
+		// -------------------------------------------------------------------
+		it("Schedule records the speech it made on the request", async () => {
+			const { id } = await scheduled();
+			const [speech] = await speechesOf(seed.personId);
+			expect((await requestRow(id)).speechId).toBe(speech?.id);
+		});
+
+		it.each([causes[0], causes[1], causes[2]] as Array<
+			[string, (slotId: string) => Promise<void>]
+		>)("when %s, scheduling again REUSES the same speech, updated from the request: one speech, not two", async (_label, cause) => {
+			const { id, slotId } = await scheduled();
+			const [first] = await speechesOf(seed.personId);
+			await cause(slotId);
+			await call(fns.editSpeechRequest, {
+				requestId: id,
+				title: "Reworded",
+				path: "Presentation Mastery",
+			});
+			const fresh = await openSlot();
+			sessionUserId = seed.adminUserId;
+			const result = await schedule(id, fresh);
+			expect(result.speechId).toBe(first?.id);
+			const all = await speechesOf(seed.personId);
+			expect(all.map((sp) => sp.id)).toEqual([first?.id]);
+			expect(all[0]).toMatchObject({
+				title: "Reworded",
+				pathwayPath: "Presentation Mastery",
+			});
+			expect(await requestRow(id)).toMatchObject({
+				speechId: first?.id,
+				scheduledSlotId: fresh,
+			});
+			const [slot] = await testDb
+				.select({ speechId: roleSlots.speechId })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, fresh));
+			expect(slot?.speechId).toBe(first?.id);
+		});
+
+		it("when the meeting is cancelled the speech stays on its slot as history, so scheduling again makes a NEW speech", async () => {
+			const { id, slotId } = await scheduled();
+			const [first] = await speechesOf(seed.personId);
+			await causes[3]?.[1](slotId);
+			const fresh = await openSlot();
+			sessionUserId = seed.adminUserId;
+			const result = await schedule(id, fresh);
+			expect(result.speechId).not.toBe(first?.id);
+			expect(await speechesOf(seed.personId)).toHaveLength(2);
+			expect(await requestRow(id)).toMatchObject({ speechId: result.speechId });
+			const [old] = await testDb
+				.select({ speechId: roleSlots.speechId })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, slotId));
+			expect(old?.speechId).toBe(first?.id);
+		});
+
+		it("a speech that is not the requester's own is never reused or rewritten, whatever the link says", async () => {
+			const [theirs] = await testDb
+				.insert(speeches)
+				.values({ personId: member2.personId, title: "Not yours" })
+				.returning({ id: speeches.id });
+			const id = await insertRequest(seed.memberId, {
+				title: "Mine",
+				speechId: theirs?.id,
+			});
+			const slotId = await openSlot();
+			sessionUserId = seed.adminUserId;
+			const result = await schedule(id, slotId);
+			expect(result.speechId).not.toBe(theirs?.id);
+			const [untouched] = await speechesOf(member2.personId);
+			expect(untouched).toMatchObject({ id: theirs?.id, title: "Not yours" });
+			expect(await speechesOf(seed.personId)).toHaveLength(1);
+		});
+
+		it("a speech that was deleted is not reused: the request lost the link, and a new one is made", async () => {
+			const { id, slotId } = await scheduled();
+			const [first] = await speechesOf(seed.personId);
+			await causes[0]?.[1](slotId);
+			await testDb.delete(speeches).where(eq(speeches.id, first?.id as string));
+			expect((await requestRow(id)).speechId).toBeNull();
+			const fresh = await openSlot();
+			sessionUserId = seed.adminUserId;
+			const result = await schedule(id, fresh);
+			expect(result.speechId).not.toBe(first?.id);
+			expect(await speechesOf(seed.personId)).toHaveLength(1);
 		});
 	});
 

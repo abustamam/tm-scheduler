@@ -2965,6 +2965,12 @@ export const speechRequests = pgTable(
 		scheduledSlotId: uuid("scheduled_slot_id").references(() => roleSlots.id, {
 			onDelete: "set null",
 		}),
+		// The speech Schedule made from this request. A re-schedule reuses it when it
+		// is on no slot, so one ask is one speech. SET NULL: deleting the speech
+		// leaves the request, which then makes a new one.
+		speechId: uuid("speech_id").references(() => speeches.id, {
+			onDelete: "set null",
+		}),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
