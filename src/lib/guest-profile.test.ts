@@ -43,19 +43,31 @@ describe("GUEST_KINDS", () => {
 describe("updateGuestProfileSchema", () => {
 	const base = { clubId: randomUUID(), guestId: randomUUID() };
 
-	// protects=a write of the retired `guest_speaker` kind is refused at the
-	// schema (#1208), so no caller can store a value the enum no longer has;
-	// fails_when=the schema accepts `guest_speaker` (it would then 500 at the
-	// database, or be stored if the enum value returned);
-	// no_claim=the database's own refusal, which the integration test covers.
-	it("rejects the retired guest_speaker kind", () => {
-		const result = updateGuestProfileSchema.safeParse({
+	// protects=a tab opened before #1208 still saves: it sends the retired
+	// `guest_speaker`, which the schema reads as `visiting_toastmaster` (input
+	// alias, one release), so the save is stored as the kind the row was folded to;
+	// fails_when=the schema refuses `guest_speaker` (an open tab's save would fail
+	// across the deploy), or lets the old value through unmapped (it would then 500
+	// at the database, which no longer has it), or starts accepting any string;
+	// no_claim=the database's own refusal of `guest_speaker`, which the
+	// integration test covers; the alias is input-only, nothing reads it back.
+	it("reads the retired guest_speaker as visiting_toastmaster, and still refuses an unknown kind", () => {
+		const parsed = updateGuestProfileSchema.parse({
 			...base,
 			kind: "guest_speaker",
 			homeClub: "Laguna Speakers",
 			introducedByMemberId: null,
 		});
-		expect(result.success).toBe(false);
+		expect(parsed.kind).toBe("visiting_toastmaster");
+		expect(parsed.homeClub).toBe("Laguna Speakers");
+		expect(
+			updateGuestProfileSchema.safeParse({
+				...base,
+				kind: "member",
+				homeClub: null,
+				introducedByMemberId: null,
+			}).success,
+		).toBe(false);
 	});
 
 	it("accepts all three fields, trimming the home club", () => {

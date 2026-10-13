@@ -1,3 +1,4 @@
+import { GUEST_KIND_LABELS } from "./guest-profile";
 import { listRoles } from "./list-roles";
 
 /** A role definition's shape needed to generate slots. */
@@ -141,8 +142,9 @@ export type RosterEntry = {
 };
 
 /** Subtle marker appended to a guest assignee's name everywhere it renders
- *  (#151), e.g. "Ben Carter · Guest". */
-export const GUEST_MARKER = "Guest";
+ *  (#151), e.g. "Ben Carter · Guest". It is the label of the `visitor` kind
+ *  (#1208: "Visitor" and "Guest" are one word), so the two cannot drift. */
+export const GUEST_MARKER = GUEST_KIND_LABELS.visitor;
 
 /** Format an assignee's display name, appending the guest marker when the
  *  assignee is a non-member guest. Null name → null (caller shows "open").

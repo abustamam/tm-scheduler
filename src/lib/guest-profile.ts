@@ -22,6 +22,18 @@ export const GUEST_KINDS = ["visitor", "visiting_toastmaster"] as const;
 
 export type GuestKind = (typeof GUEST_KINDS)[number];
 
+/**
+ * Reads the retired `guest_speaker` kind as `visiting_toastmaster` (#1208) and
+ * passes every other value through for the schema to judge. INPUT ONLY: the
+ * database and every output carry two kinds. It exists for data and tabs that
+ * predate the fold: an import decision saved in `club_imports` before the
+ * deploy, and a browser tab opened before it that still sends the old value.
+ * Delete it, and its two call sites, one release after #1208 ships.
+ */
+export function readLegacyGuestKind(value: unknown): unknown {
+	return value === "guest_speaker" ? "visiting_toastmaster" : value;
+}
+
 export const GUEST_KIND_LABELS: Record<GuestKind, string> = {
 	visitor: "Guest",
 	visiting_toastmaster: "Visiting Toastmaster",

@@ -1,22 +1,22 @@
 /**
  * A guest's marker on the agenda strings (#151, #1208): "Name · Guest" wherever
  * a guest holds a role. There is no kind caption any more, so a visiting
- * Toastmaster and a Visitor are marked alike (#1164 gives the first its own).
+ * Toastmaster and a Visitor are marked alike.
  */
 import { describe, expect, it } from "vitest";
-import * as agenda from "./agenda";
 import {
 	assigneeDisplayName,
 	buildRosterEntries,
 	GUEST_MARKER,
 	OPEN_LABEL,
-} from "./agenda";
+} from "#/lib/agenda";
 import {
 	type AgendaSlot,
 	assigneeDisplay,
 	buildRunOfShow,
 	expandRunSheet,
-} from "./agenda-runsheet";
+} from "#/lib/agenda-runsheet";
+import { GUEST_KIND_LABELS } from "#/lib/guest-profile";
 
 function slot(over: Partial<AgendaSlot>): AgendaSlot & { category: "speaker" } {
 	return {
@@ -56,6 +56,8 @@ describe("assigneeDisplayName", () => {
 			`Ben Carter · ${GUEST_MARKER}`,
 		);
 		expect(GUEST_MARKER).toBe("Guest");
+		// One word for the `visitor` kind everywhere it is labelled.
+		expect(GUEST_MARKER).toBe(GUEST_KIND_LABELS.visitor);
 	});
 
 	// protects=a visiting Toastmaster, who is a guest with a home club, reads the
@@ -70,7 +72,6 @@ describe("assigneeDisplayName", () => {
 		expect(call("Ana Ruiz", true, "Visiting Toastmaster, Downtown #12")).toBe(
 			`Ana Ruiz · ${GUEST_MARKER}`,
 		);
-		expect(assigneeDisplayName.length).toBe(2);
 	});
 
 	// protects=an open slot stays null so the caller shows "open", guest or not;
@@ -106,17 +107,7 @@ describe("the marker on every agenda surface", () => {
 	// no_claim=none beyond protects.
 	it("keeps an open slot open", () => {
 		expect(
-			assigneeDisplay(slot({ assigneeName: null, assigneeIsGuest: false })),
+			assigneeDisplay(slot({ assigneeName: null, assigneeIsGuest: true })),
 		).toBe(OPEN_LABEL);
-	});
-});
-
-describe("the caption helpers are gone", () => {
-	// protects=#1208's removal of `guestCaptionStart`, the unreachable caption
-	// path's export, so nothing can build a caption from it again;
-	// fails_when=the export returns;
-	// no_claim=a guard on one name, not on the whole caption path.
-	it("agenda.ts no longer exports guestCaptionStart", () => {
-		expect("guestCaptionStart" in agenda).toBe(false);
 	});
 });

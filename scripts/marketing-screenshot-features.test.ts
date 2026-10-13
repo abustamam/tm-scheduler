@@ -63,7 +63,7 @@ function vpm(opts: VpmOptions = {}): string {
 	const { lane = true, more = true, resend = true } = opts;
 	const captions = opts.captions ?? [
 		"Visiting Toastmaster, Bayview",
-		"Guest speaker, Seaport Speakers",
+		"Visiting Toastmaster, Seaport Speakers",
 	];
 	return `<main><div id="guest-pipeline">${captions
 		.map((c) => `<div data-slot="guest-kind-caption" class="x">${c}</div>`)
@@ -95,14 +95,14 @@ describe("checkVpmFeatures", () => {
 
 	it("fails when a guest kind has no caption, naming it", () => {
 		expect(
-			checkVpmFeatures(vpm({ captions: ["Guest speaker, Seaport Speakers"] })),
+			checkVpmFeatures(vpm({ captions: ["Guest"] })),
 		).toMatch(/"Visiting Toastmaster" caption/);
 	});
 
 	it("does not take the label in prose for a caption", () => {
 		const html = vpm({ captions: [] }).replace(
 			"</div></main>",
-			"<p>Visiting Toastmaster, Guest speaker</p></div></main>",
+			"<p>Visiting Toastmaster, Seaport Speakers</p></div></main>",
 		);
 		expect(checkVpmFeatures(html)).toMatch(/shows no "Visiting Toastmaster"/);
 	});
@@ -152,10 +152,10 @@ describe("checkVpmHydrated", () => {
 });
 
 describe("checkAgendaFeatures", () => {
-	it("passes a roster naming a guest speaker", () => {
+	it("passes a roster naming a guest among members", () => {
 		expect(
 			checkAgendaFeatures(
-				"<span>Theo Marchetti · Guest speaker, Seaport Speakers</span>",
+				"<span>Ana Ruiz</span><span>Theo Marchetti · Guest</span>",
 			),
 		).toBeNull();
 	});

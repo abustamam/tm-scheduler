@@ -149,7 +149,7 @@ function Tour() {
 						<Shot
 							src="/landing/tour-agenda.png"
 							sheet
-							alt="A printed GavelUp agenda for Harbor City Speakers, a sample club: the meeting's roles laid out on one page, with a guest speaker and a visiting Toastmaster each named for what they are."
+							alt="A printed GavelUp agenda for Harbor City Speakers, a sample club: the meeting's roles laid out on one page, with each guest's name followed by · Guest."
 						/>
 					}
 				>
@@ -213,7 +213,7 @@ function Tour() {
 							<Shot
 								src="/landing/tour-vpm.png"
 								height={900}
-								alt="GavelUp's VP Membership guest pipeline for Harbor City Speakers, a sample club: guests in lanes, a visiting Toastmaster and a guest speaker named for what they are, and a one-tap invite to the next meeting, or Resend invite for a guest already asked."
+								alt="GavelUp's VP Membership guest pipeline for Harbor City Speakers, a sample club: guests in lanes, a visiting Toastmaster captioned with their home club, and a one-tap invite to the next meeting, or Resend invite for a guest already asked."
 							/>
 						</div>
 					}

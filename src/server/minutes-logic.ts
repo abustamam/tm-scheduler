@@ -438,7 +438,7 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 			name: sql<string | null>`coalesce(${ttMember.name}, ${ttGuest.name})`,
 			topic: tableTopicsSpeakers.topic,
 			sortOrder: tableTopicsSpeakers.sortOrder,
-			// A guest speaker's kind and home club, read only for the Guests
+			// A guest's kind and home club, read only for the Guests
 			// group's `caption` (#1080); `MinutesTableTopicsRow` does not carry them.
 			guestKind: ttGuest.kind,
 			guestHomeClub: ttGuest.homeClub,

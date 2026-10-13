@@ -29,7 +29,11 @@ import { z } from "zod";
 import { zonedWallTimeToUtc } from "./datetime";
 import type { EasySpeakBundleV1, EsPersonRef } from "./easy-speak-bundle";
 import { ownRoleDisplayName, standardRoleKeyFor } from "./easy-speak-roles";
-import { GUEST_KINDS, type GuestKind } from "./guest-profile";
+import {
+	GUEST_KINDS,
+	type GuestKind,
+	readLegacyGuestKind,
+} from "./guest-profile";
 
 type EsGuestCategory =
 	EasySpeakBundleV1["meetings"][number]["guests"][number]["category"];
@@ -134,7 +138,11 @@ export const personResolutionSchema = z.discriminatedUnion("action", [
 	z.object({ action: z.literal("member"), memberId: z.string().uuid() }),
 	z.object({
 		action: z.literal("guest"),
-		kind: z.enum(GUEST_KINDS).default("visitor"),
+		// A decision saved before #1208 can hold `guest_speaker`; reading it as
+		// `visiting_toastmaster` keeps the rest of the saved map from being dropped.
+		kind: z
+			.preprocess(readLegacyGuestKind, z.enum(GUEST_KINDS))
+			.default("visitor"),
 	}),
 	z.object({
 		action: z.literal("skip"),

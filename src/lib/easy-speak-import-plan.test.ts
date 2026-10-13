@@ -427,6 +427,38 @@ describe("personResolutionSchema", () => {
 	});
 });
 
+describe("a resolutions map saved before #1208", () => {
+	// protects=an officer's saved import decisions survive the deploy: a stored
+	// map holding the retired `guest_speaker` kind still parses, every entry kept,
+	// the old one read as `visiting_toastmaster` (`parseImportState` returns {} for
+	// the whole map when the schema fails, which would silently wipe them all);
+	// fails_when=the retired kind fails validation, or the map loses an entry;
+	// no_claim=the database read in `parseImportState`, which just feeds the stored
+	// jsonb to this schema; the stored value is not rewritten.
+	it("keeps every entry and reads guest_speaker as visiting_toastmaster", () => {
+		const memberId = "2f0f4f5e-6d8b-4c1e-9d0a-1b2c3d4e5f60";
+		const stored = {
+			"es:1": { action: "member", memberId },
+			"es:2": { action: "guest", kind: "guest_speaker" },
+			"es:3": { action: "guest", kind: "visitor" },
+			"es:4": { action: "skip", reason: "left the club" },
+		};
+		const parsed = resolutionsSchema.safeParse(stored);
+		expect(parsed.success).toBe(true);
+		expect(parsed.data).toEqual({
+			...stored,
+			"es:2": { action: "guest", kind: "visiting_toastmaster" },
+		});
+	});
+
+	it("still refuses a kind that never existed", () => {
+		expect(
+			personResolutionSchema.safeParse({ action: "guest", kind: "vip" })
+				.success,
+		).toBe(false);
+	});
+});
+
 describe("personKeyOf", () => {
 	it("keys by Easy-Speak id, else the folded name", () => {
 		expect(personKeyOf({ esUserId: "1", name: "A B" })).toBe("es:1");

@@ -561,13 +561,15 @@ describe.skipIf(!hasTestDb)("the guest_kind enum (#1208)", () => {
 		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
 	});
 
-	// protects=the database holds exactly two guest kinds, in order, after
-	// #1208's migration; a `db:push`-synced test database matches the schema, so
-	// this proves the schema and the enum agree, not the migration's rewrite of
-	// old rows (that is the PR body's dev-database check);
+	// protects=the database holds exactly two guest kinds, in order, once #1208's
+	// migration has run (CI builds this database with `db:migrate`: 0104 adds
+	// `guest_speaker`, 0121 removes it; a worktree's database is `db:push`-synced
+	// from schema.ts and never had it), so on both this proves the final enum, not
+	// the migration's rewrite of old rows (that is the PR body's scratch-database
+	// check);
 	// fails_when=`guest_speaker` is back in the enum, or a kind is added unnoticed;
-	// no_claim=what a database migrated from the old enum holds: this one never
-	// had `guest_speaker`.
+	// no_claim=what a database holds that migrated through 0121 with rows of the old
+	// kind in it: neither build has any.
 	it("has exactly the values visitor and visiting_toastmaster", async () => {
 		const { rows } = await testDb.execute<{ value: string }>(
 			sql`select unnest(enum_range(null::guest_kind))::text as value`,
@@ -582,7 +584,7 @@ describe.skipIf(!hasTestDb)("the guest_kind enum (#1208)", () => {
 	// default), so a capture path that omits it stays a plain Guest;
 	// fails_when=the default is dropped (insert fails) or becomes another kind;
 	// no_claim=the default survives the migration's drop and recreate of the
-	// type, which the dev-database run covers.
+	// type, which the PR body's scratch-database run covers.
 	it("gives a guest written with no kind the visitor kind", async () => {
 		const [row] = await testDb
 			.insert(guests)
@@ -599,7 +601,8 @@ describe.skipIf(!hasTestDb)("the guest_kind enum (#1208)", () => {
 	// protects=nothing can write the retired `guest_speaker` value any more: the
 	// database refuses it, whatever the application layer does;
 	// fails_when=the enum value is restored;
-	// no_claim=the application schema's own refusal, held in guest-profile.test.ts.
+	// no_claim=the application schema, which reads the old value as
+	// `visiting_toastmaster` on input only (guest-profile.test.ts).
 	it("refuses a guest_speaker row", async () => {
 		const withPerson = await withGuestPerson(
 			{ clubId: seed.clubId, name: `Retired ${randomUUID()}` },

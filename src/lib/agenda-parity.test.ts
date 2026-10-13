@@ -1553,17 +1553,18 @@ describe("speech-slot time agreement — deck ⇄ run sheet (#394)", () => {
 
 /**
  * A guest holding a role reads "Name · Guest" on the deck and on every print
- * surface, character for character. #1059's kind caption (and its one stated
+ * surface, character for character. The earlier kind caption (and its one stated
  * print/deck difference) is gone: a visiting Toastmaster and a Visitor are
- * marked alike until #1164 gives the visiting Toastmaster a marker of its own.
+ * marked alike, and the expectation here changes if the visiting Toastmaster is
+ * ever given a marker of its own.
  */
 describe("guest marker — print ⇄ deck (#1208)", () => {
-	const guestSpeaker: AgendaSlot = {
+	const guestHolder: AgendaSlot = {
 		...speaker2,
 		assigneeName: "Ben Carter",
 		assigneeIsGuest: true,
 	};
-	const slots = FULL.map((s) => (s.id === speaker2.id ? guestSpeaker : s));
+	const slots = FULL.map((s) => (s.id === speaker2.id ? guestHolder : s));
 	const config: RunOfShowConfig = { geIntroducesFunctionaries: false };
 
 	const deckSpeaker = (() => {
