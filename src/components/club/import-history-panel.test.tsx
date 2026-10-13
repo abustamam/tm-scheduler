@@ -373,7 +373,20 @@ describe("ImportHistoryPanel (#1051)", () => {
 					reason: "mentee_unresolved",
 				},
 			],
-			wantsMenteeNotImported: [{ esUserId: "9", name: "Wanda Wants" }],
+			willing: {
+				set: 3,
+				alreadyWilling: 2,
+				skipped: [
+					{
+						person: { esUserId: "9", name: "Wanda Wants" },
+						reason: "unresolved",
+					},
+					{
+						person: { esUserId: "4", name: "Lapsed Lee" },
+						reason: "not_member",
+					},
+				],
+			},
 		});
 		const consoleError = vi
 			.spyOn(console, "error")
@@ -393,10 +406,9 @@ describe("ImportHistoryPanel (#1051)", () => {
 		);
 		const result = await screen.findByTestId("mentors-result");
 		const shown = Object.fromEntries(
-			[...result.querySelectorAll("dt")].map((dt) => [
-				dt.textContent,
-				dt.nextElementSibling?.textContent,
-			]),
+			[...(result.querySelector("dl")?.querySelectorAll("dt") ?? [])].map(
+				(dt) => [dt.textContent, dt.nextElementSibling?.textContent],
+			),
 		);
 		expect(shown).toEqual({
 			"Rows in the bundle": "6",
@@ -418,8 +430,22 @@ describe("ImportHistoryPanel (#1051)", () => {
 		// React warns on a duplicate key; none may have been logged.
 		expect(consoleError).not.toHaveBeenCalled();
 		consoleError.mockRestore();
-		expect(screen.getByTestId("mentors-wants-mentee").textContent).toContain(
-			"Wanda Wants",
+		const willing = Object.fromEntries(
+			[...screen.getByTestId("mentors-willing").querySelectorAll("dt")].map(
+				(dt) => [dt.textContent, dt.nextElementSibling?.textContent],
+			),
+		);
+		expect(willing).toEqual({
+			"Now willing to mentor": "3",
+			"Already willing": "2",
+			"Not matched to a member": "2",
+		});
+		const willingSkipped = screen.getByTestId("mentors-willing-skipped");
+		expect(willingSkipped.textContent).toContain(
+			"Wanda Wants: the import never matched them to a member",
+		);
+		expect(willingSkipped.textContent).toContain(
+			"Lapsed Lee: not an active member",
 		);
 		expect(toast.success).toHaveBeenCalledWith("Imported 2 mentor pairs.");
 	});
@@ -436,7 +462,7 @@ describe("ImportHistoryPanel (#1051)", () => {
 			alreadyImported: 1,
 			alreadyPaired: 0,
 			skipped: [],
-			wantsMenteeNotImported: [],
+			willing: { set: 0, alreadyWilling: 0, skipped: [] },
 		});
 		await openImport();
 		const button = (await screen.findByRole("button", {
@@ -446,7 +472,7 @@ describe("ImportHistoryPanel (#1051)", () => {
 		fireEvent.click(button);
 		await screen.findByTestId("mentors-result");
 		expect(screen.queryByTestId("mentors-skipped")).toBeNull();
-		expect(screen.queryByTestId("mentors-wants-mentee")).toBeNull();
+		expect(screen.queryByTestId("mentors-willing-skipped")).toBeNull();
 		expect(toast.success).toHaveBeenCalledWith(
 			"No new mentor pairs to import.",
 		);

@@ -582,23 +582,170 @@ describe.skipIf(!hasTestDb)("mentor-pair import (#1053)", () => {
 		expect(await pairings()).toHaveLength(0);
 	});
 
-	it("reports 'Wants Mentee?' as not imported and writes no member flag", async () => {
+	async function willingOf(memberId: string): Promise<boolean> {
+		const [m] = await testDb
+			.select({ willing: members.willingToMentor })
+			.from(members)
+			.where(eq(members.id, memberId));
+		return m?.willing as boolean;
+	}
+
+	async function flagAudits() {
+		return testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, seed.clubId),
+					eq(activityLog.action, "member_edit"),
+				),
+			);
+	}
+
+	it("'Wants Mentee?' turns the row's member willing to mentor, audited to the superadmin (#1204 AC1)", async () => {
 		const a = await resolvedMember("1");
-		await resolvedMember("2");
+		const b = await resolvedMember("2");
 		const importId = await storeBundle([
 			row("1", null, true),
 			row("2", null, false),
-			row("5", "1", true),
 		]);
 
 		const result = await run(importId);
 
-		expect(result.wantsMenteeNotImported).toEqual([person("1"), person("5")]);
-		const [m] = await testDb
-			.select({ willing: members.willingToMentor })
-			.from(members)
+		expect(result.willing).toEqual({ set: 1, alreadyWilling: 0, skipped: [] });
+		expect(await willingOf(a)).toBe(true);
+		expect(await willingOf(b)).toBe(false);
+		const audits = await flagAudits();
+		expect(audits).toHaveLength(1);
+		expect(audits[0]).toMatchObject({
+			targetType: "member",
+			targetId: a,
+			actorMemberId: null,
+			impersonatedBy: superadminId,
+		});
+		expect(audits[0]?.detail).toMatchObject({
+			willingToMentor: true,
+			importId,
+		});
+	});
+
+	it("'Wants Mentee?' counts the member on a row WITH a mentor, not the mentor (#1204)", async () => {
+		const mentee = await resolvedMember("1");
+		const mentor = await resolvedMember("2");
+		const importId = await storeBundle([row("1", "2", true)]);
+
+		const result = await run(importId);
+
+		expect(result.imported).toBe(1);
+		expect(result.willing.set).toBe(1);
+		expect(await willingOf(mentee)).toBe(true);
+		expect(await willingOf(mentor)).toBe(false);
+	});
+
+	it("a second run reports them as already willing and writes no new audit entry (#1204 AC2)", async () => {
+		const a = await resolvedMember("1");
+		const importId = await storeBundle([row("1", null, true)]);
+		await run(importId);
+
+		const again = await run(importId);
+
+		expect(again.willing).toEqual({ set: 0, alreadyWilling: 1, skipped: [] });
+		expect(await willingOf(a)).toBe(true);
+		expect(await flagAudits()).toHaveLength(1);
+	});
+
+	it("leaves a member who is already willing alone and counts them", async () => {
+		const a = await resolvedMember("1");
+		await testDb
+			.update(members)
+			.set({ willingToMentor: true })
 			.where(eq(members.id, a));
-		expect(m?.willing).toBe(false);
+		const importId = await storeBundle([row("1", null, true)]);
+
+		const result = await run(importId);
+
+		expect(result.willing).toEqual({ set: 0, alreadyWilling: 1, skipped: [] });
+		expect(await flagAudits()).toHaveLength(0);
+	});
+
+	it("lists an unresolved or inactive member and writes nothing for them (#1204 AC3)", async () => {
+		const lapsed = await resolvedMember("1", "inactive");
+		const importId = await storeBundle([
+			row("1", null, true),
+			row("9", null, true),
+		]);
+
+		const result = await run(importId);
+
+		expect(result.willing).toEqual({
+			set: 0,
+			alreadyWilling: 0,
+			skipped: [
+				{ person: person("1"), reason: "not_member" },
+				{ person: person("9"), reason: "unresolved" },
+			],
+		});
+		expect(await willingOf(lapsed)).toBe(false);
+		expect(await flagAudits()).toHaveLength(0);
+	});
+
+	it("never sets willing_to_mentor to false (#1204 AC4)", async () => {
+		const willing = await resolvedMember("1");
+		const other = await resolvedMember("2");
+		await testDb
+			.update(members)
+			.set({ willingToMentor: true })
+			.where(eq(members.id, willing));
+		// Row 1 says "No", row 2 says nothing about 1: neither may clear it.
+		const importId = await storeBundle([
+			row("1", null, false),
+			row("2", "1", false),
+		]);
+
+		const result = await run(importId);
+
+		expect(result.willing).toEqual({ set: 0, alreadyWilling: 0, skipped: [] });
+		expect(await willingOf(willing)).toBe(true);
+		expect(await willingOf(other)).toBe(false);
+	});
+
+	it("a member listed on two rows is set once, then counted as already willing", async () => {
+		const a = await resolvedMember("1");
+		const importId = await storeBundle([
+			row("1", null, true),
+			row("1", null, true),
+		]);
+
+		const result = await run(importId);
+
+		expect(result.willing).toEqual({ set: 1, alreadyWilling: 1, skipped: [] });
+		expect(await willingOf(a)).toBe(true);
+		expect(await flagAudits()).toHaveLength(1);
+	});
+
+	it("lists a member who lapses while the step runs, and writes nothing for them", async () => {
+		const a = await resolvedMember("1");
+		const importId = await storeBundle([row("1", null, true)]);
+		const lapse = await openBlockingTx(async (tx) => {
+			await tx
+				.update(members)
+				.set({ status: "inactive" })
+				.where(eq(members.id, a));
+		});
+		const running = run(importId);
+		try {
+			await waitForLockWait("for update", lapse.pid);
+		} finally {
+			await lapse.commit();
+		}
+		const result = await running;
+
+		expect(result.willing).toEqual({
+			set: 0,
+			alreadyWilling: 0,
+			skipped: [{ person: person("1"), reason: "not_member" }],
+		});
+		expect(await willingOf(a)).toBe(false);
 	});
 
 	it("is refused at once while an apply holds the club's import lock, and writes nothing", async () => {
@@ -680,7 +827,9 @@ describe.skipIf(!hasTestDb)("mentor-pair import (#1053)", () => {
 				pairs: 2,
 				imported: 1,
 				skipped: 1,
-				wantsMenteeNotImported: 1,
+				willingSet: 0,
+				willingAlready: 0,
+				willingSkipped: 1,
 			},
 		});
 	});

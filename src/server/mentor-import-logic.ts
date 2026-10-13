@@ -87,11 +87,33 @@ export interface MentorImportResult {
 	/** Each pair that was not written, with who and why. */
 	skipped: MentorPairSkip[];
 	/**
-	 * Members whose row says "Wants Mentee?". NOT imported: #939 has no field for
-	 * a member asking for a mentor (`members.willing_to_mentor` is the opposite
-	 * direction and the member's own to set), and this step adds no column.
+	 * What "Wants Mentee?" did (#1204). The flag means the row's member is open to
+	 * taking on a mentee: `members.willing_to_mentor` (#939).
 	 */
-	wantsMenteeNotImported: EsPerson[];
+	willing: WillingResult;
+}
+
+/** Why a "Wants Mentee?" row did not set anyone's flag. */
+export type WillingSkipReason = "unresolved" | "not_member";
+
+export interface WillingSkip {
+	person: EsPerson;
+	reason: WillingSkipReason;
+}
+
+/**
+ * Rows with `wantsMentee` fall into exactly one bucket, one per DISTINCT member
+ * (a member listed twice counts once, as already willing the second time):
+ * `set + alreadyWilling + skipped.length`. The step only ever sets the flag to
+ * true, never to false.
+ */
+export interface WillingResult {
+	/** Members whose `willing_to_mentor` this run turned on. */
+	set: number;
+	/** Members already willing (an earlier run, or they set it themselves). */
+	alreadyWilling: number;
+	/** Rows naming someone who is not an active member now, listed. */
+	skipped: WillingSkip[];
 }
 
 /** Where one side of a pair stands against the club's people. */
@@ -152,6 +174,8 @@ async function lockedActiveIds(
  *   active pairing keep it, and it is remembered.
  * - Each pairing written is audited like `createMentorship`'s (a `member_edit`),
  *   beside the step's one `history_imported` summary.
+ * - A row with "Wants Mentee?" turns the row's member's `willing_to_mentor` on
+ *   (#1204), audited as a `member_edit` per member changed; never off.
  * - One transaction under the club write lock and the apply's own per-club lock.
  */
 export async function importMentorPairs(input: {
@@ -230,9 +254,7 @@ export async function importMentorPairs(input: {
 			alreadyImported: 0,
 			alreadyPaired: 0,
 			skipped: [],
-			wantsMenteeNotImported: rows
-				.filter((r) => r.wantsMentee)
-				.map((r) => r.mentee),
+			willing: { set: 0, alreadyWilling: 0, skipped: [] },
 		};
 		for (const row of rows) {
 			const mentor = row.mentor;
@@ -323,6 +345,68 @@ export async function importMentorPairs(input: {
 			});
 		}
 
+		// "Wants Mentee?": the row's member is open to taking on a mentee. Only ever
+		// turns the flag ON. The column cannot tell a member who turned it off in
+		// GavelUp from one who never set it, and the flag is the member's own
+		// Easy-Speak statement, so it is imported. Idempotent: already true IS the
+		// idempotency, so there is no import_refs kind.
+		const seenSkipped = new Set<string>();
+		for (const row of rows) {
+			if (!row.wantsMentee) continue;
+			const who = row.mentee;
+			const side = sideOf(who);
+			if (side.state !== "active") {
+				const key = personKeyOf(who);
+				if (!seenSkipped.has(key)) {
+					seenSkipped.add(key);
+					result.willing.skipped.push({
+						person: who,
+						reason: side.state === "unresolved" ? "unresolved" : "not_member",
+					});
+				}
+				continue;
+			}
+			// Lock the row and trust only what the lock shows: an admin may have
+			// lapsed the member since the snapshot above.
+			const [current] = await tx
+				.select({
+					status: members.status,
+					willing: members.willingToMentor,
+				})
+				.from(members)
+				.where(and(eq(members.clubId, input.clubId), eq(members.id, side.id)))
+				.for("update");
+			if (!current || current.status !== "active") {
+				const key = personKeyOf(who);
+				if (!seenSkipped.has(key)) {
+					seenSkipped.add(key);
+					result.willing.skipped.push({ person: who, reason: "not_member" });
+				}
+				continue;
+			}
+			if (current.willing) {
+				result.willing.alreadyWilling++;
+				continue;
+			}
+			await tx
+				.update(members)
+				.set({ willingToMentor: true })
+				.where(eq(members.id, side.id));
+			result.willing.set++;
+			await logActivity(tx, {
+				clubId: input.clubId,
+				actorMemberId: null,
+				impersonatedBy: input.superadminUserId,
+				action: "member_edit",
+				targetType: "member",
+				targetId: side.id,
+				detail: {
+					willingToMentor: true,
+					importId: input.importId,
+				},
+			});
+		}
+
 		await logActivity(tx, {
 			clubId: input.clubId,
 			actorMemberId: null,
@@ -342,7 +426,9 @@ export async function importMentorPairs(input: {
 					alreadyImported: result.alreadyImported,
 					alreadyPaired: result.alreadyPaired,
 					skipped: result.skipped.length,
-					wantsMenteeNotImported: result.wantsMenteeNotImported.length,
+					willingSet: result.willing.set,
+					willingAlready: result.willing.alreadyWilling,
+					willingSkipped: result.willing.skipped.length,
 				},
 			},
 		});

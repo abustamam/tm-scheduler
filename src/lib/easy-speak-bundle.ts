@@ -168,8 +168,19 @@ export const easySpeakBundleV1Schema = z.object({
 	speechRequests: z.array(speechRequestSchema),
 	mentors: z.array(
 		z.object({
+			/**
+			 * The mentoring chart row's MEMBER (its "Name" column), whose mentor is
+			 * `mentor`. Named `mentee` for the pair it makes, but a row with no
+			 * mentor is still a row of this member.
+			 */
 			mentee: esPersonRefSchema,
+			/** The row's "Mentor" column; null when it names none. */
 			mentor: esPersonRefSchema.nullable(),
+			/**
+			 * The row's "Wants Mentee?" column: this member is open to taking on a
+			 * mentee (GavelUp's `members.willing_to_mentor`), NOT that they are
+			 * asking for a mentor.
+			 */
 			wantsMentee: z.boolean(),
 		}),
 	),

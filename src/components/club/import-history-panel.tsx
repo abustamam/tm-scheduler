@@ -442,10 +442,11 @@ export function ImportHistoryPanel({
 						<h3 className="text-sm font-bold">Mentor pairs</h3>
 						<p className="text-sm text-muted-foreground">
 							Adds the bundle's mentor and mentee pairs as mentoring pairings in
-							this club. Run it after applying the import: both people are
-							matched to the people it resolved, and a pair with someone it did
-							not resolve is skipped and listed. Running it again adds nothing
-							already there.
+							this club, and marks each member whose row says "Wants Mentee?" as
+							willing to mentor (it never turns that off). Run it after applying
+							the import: both people are matched to the people it resolved, and
+							a pair with someone it did not resolve is skipped and listed.
+							Running it again adds nothing already there.
 						</p>
 						<Button
 							type="button"
@@ -513,6 +514,16 @@ const MENTOR_SKIP_LABELS: Record<
 	same_person: "mentor and mentee are the same member",
 };
 
+const WILLING_SKIP_LABELS: Record<
+	Awaited<
+		ReturnType<typeof importEasySpeakMentors>
+	>["willing"]["skipped"][number]["reason"],
+	string
+> = {
+	unresolved: "the import never matched them to a member",
+	not_member: "not an active member",
+};
+
 function MentorsResult({
 	result,
 }: {
@@ -546,16 +557,29 @@ function MentorsResult({
 					</ul>
 				</div>
 			) : null}
-			{result.wantsMenteeNotImported.length > 0 ? (
-				<div className="space-y-1" data-testid="mentors-wants-mentee">
+			<dl
+				className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-3"
+				data-testid="mentors-willing"
+			>
+				<Count label="Now willing to mentor" n={result.willing.set} />
+				<Count label="Already willing" n={result.willing.alreadyWilling} />
+				<Count
+					label="Not matched to a member"
+					n={result.willing.skipped.length}
+				/>
+			</dl>
+			{result.willing.skipped.length > 0 ? (
+				<div className="space-y-1" data-testid="mentors-willing-skipped">
 					<h4 className="text-sm font-medium">
-						"Wants Mentee?" not imported ({result.wantsMenteeNotImported.length}
-						)
+						"Wants Mentee?" not imported ({result.willing.skipped.length})
 					</h4>
-					<p className="text-sm text-muted-foreground">
-						Mentoring has no field for it, so it is not carried over:{" "}
-						{result.wantsMenteeNotImported.map((p) => p.name).join(", ")}.
-					</p>
+					<ul className="list-disc space-y-0.5 pl-5 text-sm">
+						{result.willing.skipped.map((p) => (
+							<li key={personKeyOf(p.person)}>
+								{p.person.name}: {WILLING_SKIP_LABELS[p.reason]}
+							</li>
+						))}
+					</ul>
 				</div>
 			) : null}
 		</div>
