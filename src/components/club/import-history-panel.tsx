@@ -25,6 +25,9 @@ import {
 const selectClass =
 	"h-8 rounded-md border border-[var(--line)] bg-background px-2 text-sm";
 
+/** A calendar day, UTC, as an ISO date: no runtime-resolved locale or zone. */
+const isoDay = (d: Date | string) => new Date(d).toISOString().slice(0, 10);
+
 type Choice = "member" | "guest" | "skip";
 
 /** A person's local decision, before it is a `PersonResolution`. */
@@ -195,9 +198,9 @@ export function ImportHistoryPanel({
 								{row.clubName ?? "Bundle"}, {row.meetings} meetings
 							</Button>
 							<span className="self-center text-muted-foreground">
-								uploaded {new Date(row.createdAt).toLocaleDateString()}
+								uploaded {isoDay(row.createdAt)}
 								{row.appliedAt
-									? `, applied ${new Date(row.appliedAt).toLocaleDateString()}${
+									? `, applied ${isoDay(row.appliedAt)}${
 											row.reconciled === false ? " (with differences)" : ""
 										}`
 									: ", not applied"}
