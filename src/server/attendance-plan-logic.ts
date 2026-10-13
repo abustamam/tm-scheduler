@@ -503,14 +503,19 @@ export async function clearPlanStatus(
  * importing over a meeting people have since touched, changes nothing.
  *
  * Gated like every other writer here: a cancelled meeting is refused by the
- * class policy, and a completed one is ACCEPTED, because a past meeting is the
- * only thing a history import writes. The caller (`history-import-logic.ts`,
+ * class policy, and so is a scheduled one (it has no lock and no log, so it is
+ * only for a meeting nobody decides plans on any more); a completed one is
+ * the one thing ACCEPTED, because a past meeting is the only thing a history
+ * import writes. The caller (`history-import-logic.ts`,
  * superadmin only) decides which meetings and which members; this function
  * trusts its `memberId`s to be members of the meeting's club, exactly as
  * `setPlanStatus` does.
  *
  * Returns how many rows it inserted.
  */
+export const IMPORT_PLAN_STATUS_MESSAGE =
+	"Plan answers can only be imported into a completed meeting.";
+
 export async function importPlanAnswers(
 	database: DbOrTx,
 	args: {
@@ -522,6 +527,10 @@ export async function importPlanAnswers(
 	const status = await meetingStatusOf(database, args.meetingId);
 	if (status !== null) {
 		assertMeetingAccepts(status, "plan", PLAN_SEAM_WRITE_OPTIONS);
+		// This path takes no `lockMemberAttendance` and logs nothing, which is only
+		// safe on a meeting nobody is deciding plans for any more: the class policy
+		// also lets a scheduled meeting through, so a completed one is named here.
+		if (status !== "completed") throw new Error(IMPORT_PLAN_STATUS_MESSAGE);
 	}
 	const written = await database
 		.insert(meetingAttendancePlan)

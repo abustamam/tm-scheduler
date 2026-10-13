@@ -19,6 +19,7 @@ import {
 	CLEARABLE_ASK,
 	clearPlanStatus,
 	getPlanStatus,
+	IMPORT_PLAN_STATUS_MESSAGE,
 	importPlanAnswers,
 	listNotComingForMeetings,
 	listNotComingWithNames,
@@ -1128,6 +1129,20 @@ describe.skipIf(!hasTestDb)("importPlanAnswers (#1051)", () => {
 				answers: [{ memberId: club.memberId, status: "coming" }],
 			}),
 		).rejects.toThrow();
+		expect(await rows()).toEqual([]);
+	});
+
+	it("refuses a scheduled meeting, writing nothing", async () => {
+		await testDb
+			.update(meetings)
+			.set({ status: "scheduled" })
+			.where(eq(meetings.id, club.meetingId));
+		await expect(
+			importPlanAnswers(testDb, {
+				meetingId: club.meetingId,
+				answers: [{ memberId: club.memberId, status: "coming" }],
+			}),
+		).rejects.toThrow(IMPORT_PLAN_STATUS_MESSAGE);
 		expect(await rows()).toEqual([]);
 	});
 
