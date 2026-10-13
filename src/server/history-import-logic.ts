@@ -1172,7 +1172,10 @@ async function applyMeeting(
 			if (row) await putRef(tx, clubId, "attendance", a.sourceId, row.id);
 		}
 		// The plan table is keyed on a membership: a guest has no plan row. The seam
-		// fills only what is absent and logs nothing (D3 of #1196).
+		// fills only what is absent and logs nothing (D3 of #1196). Plan answers
+		// carry no import ref, so they are written only on the FIRST apply of a
+		// meeting (it is created or adopted now): on a re-run ("update") an answer
+		// a human has since cleared would otherwise come back.
 		const planAnswers: Array<{
 			memberId: string;
 			status: (typeof pm.plans)[number]["status"];
@@ -1182,7 +1185,9 @@ async function applyMeeting(
 			if (!owner || !("memberId" in owner)) continue;
 			planAnswers.push({ memberId: owner.memberId, status: p.status });
 		}
-		await importPlanAnswers(tx, { meetingId, answers: planAnswers });
+		if (pm.action !== "update") {
+			await importPlanAnswers(tx, { meetingId, answers: planAnswers });
+		}
 
 		// -- Awards, Table Topics -----------------------------------------------
 		for (const a of pm.awards) {

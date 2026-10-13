@@ -1370,6 +1370,26 @@ EXECUTE FUNCTION zz_claim_slot()`),
 		expect(await counts()).toEqual(before);
 	});
 
+	it("a plan answer a human cleared since the import does not come back on a re-run", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId, NOW_ALL_PAST);
+		await apply(stored.importId, resolutions, NOW_ALL_PAST);
+		const rows = () =>
+			testDb
+				.select({ id: meetingAttendancePlan.id })
+				.from(meetingAttendancePlan)
+				.innerJoin(meetings, eq(meetings.id, meetingAttendancePlan.meetingId))
+				.where(eq(meetings.clubId, seed.clubId));
+		const written = await rows();
+		expect(written.length).toBeGreaterThan(1);
+		const [cleared] = written;
+		await testDb
+			.delete(meetingAttendancePlan)
+			.where(eq(meetingAttendancePlan.id, cleared?.id as string));
+		await apply(stored.importId, resolutions, NOW_ALL_PAST);
+		expect(await rows()).toHaveLength(written.length - 1);
+	});
+
 	// -- D2: a row a human deleted is never re-made (#1196 review) ----------------
 
 	it("a guest deleted since the import is not re-created, nor is their Person, attendance or role", async () => {
