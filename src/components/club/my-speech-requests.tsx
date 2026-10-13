@@ -1,6 +1,6 @@
 import { useRouter } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -202,6 +202,7 @@ function RequestForm({
 		),
 	);
 	const [busy, setBusy] = useState(false);
+	const uid = useId();
 
 	async function submit(e: React.FormEvent) {
 		e.preventDefault();
@@ -223,35 +224,39 @@ function RequestForm({
 
 	return (
 		<form onSubmit={submit} className="space-y-2 rounded-lg border p-3">
-			<label className="block text-sm">
+			<label htmlFor={`${uid}-title`} className="block text-sm">
 				<span className="font-medium">Speech title</span>
 				<Input
+					id={`${uid}-title`}
 					value={title}
 					maxLength={SPEAKER_LIMITS.speechTitle}
 					onChange={(e) => setTitle(e.target.value)}
 				/>
 			</label>
 			<div className="grid gap-2 sm:grid-cols-2">
-				<label className="block text-sm">
+				<label htmlFor={`${uid}-path`} className="block text-sm">
 					<span className="font-medium">Path</span>
 					<Input
+						id={`${uid}-path`}
 						value={path}
 						maxLength={SPEAKER_LIMITS.pathwayPath}
 						onChange={(e) => setPath(e.target.value)}
 					/>
 				</label>
-				<label className="block text-sm">
+				<label htmlFor={`${uid}-project`} className="block text-sm">
 					<span className="font-medium">Project</span>
 					<Input
+						id={`${uid}-project`}
 						value={projectName}
 						maxLength={SPEAKER_LIMITS.projectName}
 						onChange={(e) => setProjectName(e.target.value)}
 					/>
 				</label>
 			</div>
-			<label className="block text-sm">
+			<label htmlFor={`${uid}-intro`} className="block text-sm">
 				<span className="font-medium">Introduction</span>
 				<Textarea
+					id={`${uid}-intro`}
 					value={introduction}
 					maxLength={SPEAKER_LIMITS.introduction}
 					onChange={(e) => setIntroduction(e.target.value)}
