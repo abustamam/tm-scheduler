@@ -1,45 +1,31 @@
-import { randomUUID } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
-import { slotLabel } from "#/lib/agenda";
-import type { AttendanceMode } from "#/lib/attendance-mode";
+import { eq, inArray } from "drizzle-orm";
 import { currentProgramYear } from "#/lib/dcp";
-import {
-	defaultClubRoleForOffices,
-	type OfficerPosition,
-} from "#/lib/officers";
-import {
-	availableContactMethods,
-	type ContactMethod,
-} from "#/lib/preferred-contact";
-import { ROLE_TEMPLATE } from "#/lib/role-template";
 import { createGuestRecord } from "#/server/guests-logic";
-import { createMentorship } from "#/server/mentorship-logic";
 import { seedPathwaysCatalog } from "../../scripts/pathways-catalog-seed.ts";
 import { seedGlobalTemplates } from "../../scripts/seed-global-templates.ts";
+import {
+	buildFixtureClub,
+	fixtureRosterEmails,
+} from "./fixtures/club-fixture.ts";
+import {
+	dayAt,
+	enrollPath,
+	ensureFixtureUser,
+	fillMeeting,
+	insertFixtureClub,
+	joinedAgo,
+	joinedThisYear,
+} from "./fixtures/helpers.ts";
 import { db } from "./index.ts";
 import {
 	clubs,
 	dcpGoalProgress,
 	dcpScoreboards,
 	duesPeriods,
-	guestInvites,
 	guests,
-	meetingAttendance,
-	meetings,
 	memberDues,
 	members,
-	officerTerms,
-	pathEnrollments,
-	pathLevelProgress,
-	pathwaysPaths,
-	pathwaysProjects,
 	people,
-	projectCompletionMarks,
-	roleDefinitions,
-	roleFeedbackNotes,
-	roleSlots,
-	speeches,
-	user,
 } from "./schema.ts";
 
 // Env (DATABASE_URL) is loaded via `tsx --env-file=.env.local` (see db:seed).
@@ -54,112 +40,9 @@ const ADMIN_EMAIL =
 const SUPERADMIN_EMAIL =
 	process.env.SEED_SUPERADMIN_EMAIL ?? "superadmin@example.com";
 
-async function upsertUser(name: string, email: string) {
-	const [row] = await db
-		.insert(user)
-		.values({ id: randomUUID(), name, email, emailVerified: true })
-		.onConflictDoUpdate({ target: user.email, set: { name } })
-		.returning({ id: user.id });
-	return row.id;
-}
-
-/** A meeting time `days` from now (negative = past) at `hour` local. */
-function dayAt(days: number, hour: number) {
-	const d = new Date();
-	d.setDate(d.getDate() + days);
-	d.setHours(hour, 0, 0, 0);
-	return d;
-}
-
-/** A join date `years`/`months` before today (for realistic tenure spread). */
-/**
- * A distinct, dial-safe fictional number per seeded person.
- *
- * Every seeded person needs one because `NudgeButtons` renders the WhatsApp
- * draft ONLY when a phone is present. Seeding none — as this file did until
- * #576 — meant the tap-to-nudge affordance the meeting page is built around
- * could not be exercised locally at all: every row fell back to Email, and a
- * WhatsApp-specific regression (a malformed `wa.me` URL, platform detection,
- * the `data-slot="wa-phone"` link-colour exclusion) would reach production
- * without anyone having seen it. Found by /qa on v1.15.0.0.
- *
- * Uses the +1 202 555 0100-0199 block, which is reserved for fiction, so a
- * mis-sent draft during local testing cannot reach a real person. Deterministic
- * by index, so a re-seed does not reshuffle who has which number.
- */
-function seedPhone(index: number): string {
-	return `+1202555${String(100 + index).padStart(4, "0")}`;
-}
-
-function joinedAgo(years: number, months = 0) {
-	const d = new Date();
-	d.setFullYear(d.getFullYear() - years);
-	d.setMonth(d.getMonth() - months);
-	return d;
-}
-
-/** A join date `daysAgo` in the past (kept within the current program year for
- *  the DCP new-member count). */
-function joinedThisYear(daysAgo: number) {
-	return dayAt(-daysAgo, 12);
-}
-
-interface RosterEntry {
-	name: string;
-	email: string;
-	/** Omitted ⇒ a generated fictional number (see `seedPhone`). Set it only to
-	 *  seed a SPECIFIC shape — a missing number, a local format needing the
-	 *  club's dialing code — since the default already covers the common case. */
-	phone?: string | null;
-	officerPosition?: OfficerPosition;
-	joinedAt?: Date;
-	status?: "active" | "inactive";
-	/** How officers should reach this person, and who chose it (#1093, #1110):
-	 *  ONE field so the method and its provenance cannot be seeded apart. The
-	 *  writers refuse a method whose data is missing, so every seeded phone and
-	 *  email keeps the method it names available. Omitted ⇒ no preference. */
-	contactPreference?: { method: ContactMethod; by: "member" | "officer" };
-	/** Offered as a mentor (#939). Omitted ⇒ false, the column default. */
-	willingToMentor?: boolean;
-}
-
-interface MeetingSpec {
-	scheduledAt: Date;
-	theme: string;
-	location: string;
-	// Optional so a meeting can be seeded with NO Word of the Day. The column is
-	// nullable and the insert passes this straight through, so `undefined` lands
-	// as NULL — which is the only way to reach the empty state on the poster,
-	// print and present surfaces from seed data (#492).
-	wordOfTheDay?: string;
-	wodDefinition?: string;
-	wodExample?: string;
-	reminders?: string;
-	status?: "scheduled" | "completed" | "cancelled";
-}
-
-interface SeededClub {
-	clubId: string;
-	memberByName: Map<string, string>;
-	personByName: Map<string, string>;
-	defs: (typeof roleDefinitions)["$inferSelect"][];
-	meetings: {
-		meetingId: string;
-		theme: string;
-		slots: (typeof roleSlots)["$inferSelect"][];
-	}[];
-}
-
-/**
- * A seeded meeting by its theme. A club's meetings are inserted in list order,
- * so an index points at whatever sits there today; a theme keeps pointing at
- * the meeting it names when one is added or moved, and a typo throws.
- */
-function meetingByTheme(club: SeededClub, theme: string) {
-	const meeting = club.meetings.find((m) => m.theme === theme);
-	if (!meeting) throw new Error(`Seed: no meeting themed "${theme}"`);
-	return meeting;
-}
+// The fixture helpers and the Harbor City club live in `./fixtures/`, where a
+// transaction can reach them (#1198). This file keeps the reset, MCF and the
+// script wrapper, and calls them.
 
 /**
  * Delete any existing club(s) with this name (cascades to meetings/slots/role
@@ -227,449 +110,18 @@ async function resetClubByName(name: string, rosterEmails: string[]) {
 }
 
 /**
- * Seed one club end to end: the club row + profile, its roster (each member is a
- * Person linked to a sign-in account — ADR-0008 Phase B), open officer terms, the
- * standard role-definition template, and a set of meetings each pre-populated
- * with empty role slots. Returns handles the caller can use to wire up claims.
+ * Seed one club end to end: reset any club of the same name, then insert it with
+ * its roster, open officer terms, the standard role-definition template and a
+ * set of meetings each pre-populated with empty role slots.
  */
-async function seedClub(opts: {
-	name: string;
-	slug: string;
-	clubNumber: string;
-	district?: string;
-	mission?: string;
-	meetingSchedule?: string;
-	/** #367 — TRUE puts the General Evaluator, not the Toastmaster of the Day, on
-	 *  the functionary-intro beat. Omitted ⇒ the column default (false), i.e. the
-	 *  standard flow. Set it here so at least one seeded club exercises the MCF
-	 *  variant locally and in CI. */
-	geIntroducesFunctionaries?: boolean;
-	roster: RosterEntry[];
-	meetings: MeetingSpec[];
-}): Promise<SeededClub> {
+async function seedClub(
+	opts: Parameters<typeof insertFixtureClub>[1],
+): ReturnType<typeof insertFixtureClub> {
 	await resetClubByName(
 		opts.name,
 		opts.roster.map((r) => r.email),
 	);
-
-	const [club] = await db
-		.insert(clubs)
-		.values({
-			name: opts.name,
-			slug: opts.slug,
-			clubNumber: opts.clubNumber,
-			district: opts.district,
-			mission: opts.mission,
-			meetingSchedule: opts.meetingSchedule,
-			geIntroducesFunctionaries: opts.geIntroducesFunctionaries ?? false,
-		})
-		.returning({ id: clubs.id });
-
-	// Upsert a sign-in account per roster email (idempotent across clubs).
-	const userIdByEmail = new Map<string, string>();
-	for (const r of opts.roster) {
-		userIdByEmail.set(r.email, await upsertUser(r.name, r.email));
-	}
-
-	// People carry the auth link (people.user_id); memberships carry the per-club
-	// role, DEFAULTED from office (President / VP Education ⇒ admin).
-	const insertedPeople = await db
-		.insert(people)
-		.values(
-			opts.roster.map((r, i) => {
-				const phone = r.phone === undefined ? seedPhone(i) : r.phone;
-				// The two real writers refuse a method whose data is missing
-				// (`contactMethodAvailableSql`); this insert is neither of them, so it
-				// holds itself to the same rule rather than seed a preference every
-				// reader would show as "no preference".
-				const method = r.contactPreference?.method;
-				if (
-					method &&
-					!availableContactMethods({ email: r.email, phone }).includes(method)
-				) {
-					throw new Error(
-						`Seed: ${r.name} prefers ${method} but has no ${method === "email" ? "email" : "phone number"} to use it with`,
-					);
-				}
-				return {
-					name: r.name,
-					email: r.email,
-					phone,
-					preferredContact: method ?? null,
-					contactPreferenceBy: r.contactPreference?.by ?? null,
-					userId: userIdByEmail.get(r.email)!,
-				};
-			}),
-		)
-		.returning({ id: people.id, name: people.name });
-	const personByName = new Map(insertedPeople.map((p) => [p.name, p.id]));
-
-	const insertedMembers = await db
-		.insert(members)
-		.values(
-			opts.roster.map((r) => ({
-				clubId: club.id,
-				personId: personByName.get(r.name)!,
-				name: r.name,
-				status: r.status ?? "active",
-				willingToMentor: r.willingToMentor ?? false,
-				joinedAt: r.joinedAt ?? joinedAgo(2),
-				clubRole: defaultClubRoleForOffices(
-					r.officerPosition ? [r.officerPosition] : [],
-				),
-			})),
-		)
-		.returning({ id: members.id, name: members.name });
-	const memberByName = new Map(insertedMembers.map((m) => [m.name, m.id]));
-
-	// Office(s) live in officer_terms (#100): open a current term per seeded office.
-	const officerTermRows = opts.roster
-		.filter((r) => r.officerPosition)
-		.map((r) => ({
-			membershipId: memberByName.get(r.name)!,
-			position: r.officerPosition!,
-			termStart: new Date(),
-		}));
-	if (officerTermRows.length > 0) {
-		await db.insert(officerTerms).values(officerTermRows);
-	}
-
-	const defs = await db
-		.insert(roleDefinitions)
-		.values(ROLE_TEMPLATE.map((r) => ({ ...r, clubId: club.id })))
-		.returning();
-
-	const meetingsOut: SeededClub["meetings"] = [];
-	for (const ms of opts.meetings) {
-		const [meeting] = await db
-			.insert(meetings)
-			.values({
-				clubId: club.id,
-				scheduledAt: ms.scheduledAt,
-				theme: ms.theme,
-				location: ms.location,
-				wordOfTheDay: ms.wordOfTheDay,
-				wodDefinition: ms.wodDefinition,
-				wodExample: ms.wodExample,
-				reminders: ms.reminders,
-				status: ms.status ?? "scheduled",
-			})
-			.returning({ id: meetings.id });
-		const slotRows = defs.flatMap((def) =>
-			Array.from({ length: def.defaultCount }, (_, i) => ({
-				meetingId: meeting.id,
-				roleDefinitionId: def.id,
-				slotIndex: i,
-			})),
-		);
-		const slots = await db.insert(roleSlots).values(slotRows).returning();
-		meetingsOut.push({ meetingId: meeting.id, theme: ms.theme, slots });
-	}
-
-	return {
-		clubId: club.id,
-		memberByName,
-		personByName,
-		defs,
-		meetings: meetingsOut,
-	};
-}
-
-/** Claim a slot for a member (assigned + status=claimed). */
-async function claimSlot(slotId: string, memberId: string, when: Date) {
-	await db
-		.update(roleSlots)
-		.set({ assignedMemberId: memberId, status: "claimed", claimedAt: when })
-		.where(eq(roleSlots.id, slotId));
-}
-
-/** Point an evaluator slot at the speaker slot it evaluates. */
-async function linkEvaluator(evalSlotId: string, speakerSlotId: string) {
-	await db
-		.update(roleSlots)
-		.set({ evaluatesSlotId: speakerSlotId })
-		.where(eq(roleSlots.id, evalSlotId));
-}
-
-/** The meeting's slot for `roleName` (`slotIndex` 0 = "Speaker 1"). Throws, so
- *  a renamed role in `ROLE_TEMPLATE` fails the seed instead of seeding nothing. */
-function slotOf(
-	m: SeededClub["meetings"][number],
-	defs: SeededClub["defs"],
-	roleName: string,
-	slotIndex = 0,
-) {
-	const def = defs.find((d) => d.name === roleName);
-	const slot = m.slots.find(
-		(s) => s.roleDefinitionId === def?.id && s.slotIndex === slotIndex,
-	);
-	if (!slot)
-		throw new Error(`Seed: no slot ${slotIndex} for role "${roleName}"`);
-	return slot;
-}
-
-/** Claim a slot for a non-member guest (#151): `assigned_guest_id`, never both
- *  assignees (the table's check). */
-async function claimSlotForGuest(slotId: string, guestId: string, when: Date) {
-	await db
-		.update(roleSlots)
-		.set({ assignedGuestId: guestId, status: "claimed", claimedAt: when })
-		.where(eq(roleSlots.id, slotId));
-}
-
-interface SpeechSpec {
-	title: string;
-	pathwayPath: string;
-	projectName: string;
-	projectLevel: string;
-	minMinutes: number;
-	maxMinutes: number;
-}
-
-/** A rotating pool of realistic speeches drawn on for speaker slots. */
-const SPEECH_POOL: SpeechSpec[] = [
-	{
-		title: "Finding My Voice",
-		pathwayPath: "Dynamic Leadership",
-		projectName: "Ice Breaker",
-		projectLevel: "Level 1",
-		minMinutes: 4,
-		maxMinutes: 6,
-	},
-	{
-		title: "Lessons From the Trail",
-		pathwayPath: "Presentation Mastery",
-		projectName: "Researching and Presenting",
-		projectLevel: "Level 2",
-		minMinutes: 5,
-		maxMinutes: 7,
-	},
-	{
-		title: "The Case for Curiosity",
-		pathwayPath: "Motivational Strategies",
-		projectName: "Understanding Your Communication Style",
-		projectLevel: "Level 1",
-		minMinutes: 4,
-		maxMinutes: 6,
-	},
-	{
-		title: "Why We Tell Stories",
-		pathwayPath: "Engaging Humor",
-		projectName: "Know Your Sense of Humor",
-		projectLevel: "Level 1",
-		minMinutes: 5,
-		maxMinutes: 7,
-	},
-	{
-		title: "Leading Without a Title",
-		pathwayPath: "Strategic Relationships",
-		projectName: "Understanding Emotional Intelligence",
-		projectLevel: "Level 3",
-		minMinutes: 5,
-		maxMinutes: 7,
-	},
-	{
-		title: "Data That Persuades",
-		pathwayPath: "Presentation Mastery",
-		projectName: "Persuasive Speaking",
-		projectLevel: "Level 3",
-		minMinutes: 5,
-		maxMinutes: 7,
-	},
-	{
-		title: "From Nervous to Natural",
-		pathwayPath: "Dynamic Leadership",
-		projectName: "Introduction to Toastmasters Mentoring",
-		projectLevel: "Level 2",
-		minMinutes: 5,
-		maxMinutes: 7,
-	},
-	{
-		title: "The Two-Minute Pitch",
-		pathwayPath: "Motivational Strategies",
-		projectName: "Connect with Your Audience",
-		projectLevel: "Level 2",
-		minMinutes: 4,
-		maxMinutes: 6,
-	},
-	{
-		title: "A Toast to Beginnings",
-		pathwayPath: "Leadership Development",
-		projectName: "Ice Breaker",
-		projectLevel: "Level 1",
-		minMinutes: 4,
-		maxMinutes: 6,
-	},
-	{
-		title: "Managing the Room",
-		pathwayPath: "Strategic Relationships",
-		projectName: "Leading in Difficult Situations",
-		projectLevel: "Level 4",
-		minMinutes: 5,
-		maxMinutes: 7,
-	},
-];
-
-/**
- * Fill a meeting's roles by rotating through `assignees` in template order.
- * Claims the first `count` slots; attaches a pooled speech to each claimed
- * speaker slot; links each evaluator slot to the matching speaker slot. Members
- * cycle so nobody is double-booked while there are enough distinct assignees.
- */
-async function fillMeeting(
-	m: SeededClub["meetings"][number],
-	defs: SeededClub["defs"],
-	assignees: string[],
-	memberByName: Map<string, string>,
-	personByName: Map<string, string>,
-	opts: { count: number; when: Date; speechCursor: { i: number } },
-) {
-	const templateOrder = new Map(ROLE_TEMPLATE.map((r, i) => [r.name, i]));
-	const defById = new Map(defs.map((d) => [d.id, d]));
-	// Slots in canonical agenda order: role-template order, then slot index.
-	const ordered = [...m.slots].sort((a, b) => {
-		const da = templateOrder.get(defById.get(a.roleDefinitionId)!.name) ?? 99;
-		const dbi = templateOrder.get(defById.get(b.roleDefinitionId)!.name) ?? 99;
-		return da - dbi || a.slotIndex - b.slotIndex;
-	});
-
-	const speakerDefId = defs.find((d) => d.name === "Speaker")!.id;
-	const evaluatorDefId = defs.find((d) => d.name === "Evaluator")!.id;
-
-	let ai = 0;
-	for (const slot of ordered.slice(0, opts.count)) {
-		const assigneeName = assignees[ai % assignees.length];
-		ai++;
-		await claimSlot(slot.id, memberByName.get(assigneeName)!, opts.when);
-
-		if (slot.roleDefinitionId === speakerDefId) {
-			const spec = SPEECH_POOL[opts.speechCursor.i % SPEECH_POOL.length];
-			opts.speechCursor.i++;
-			const [sp] = await db
-				.insert(speeches)
-				.values({ personId: personByName.get(assigneeName)!, ...spec })
-				.returning({ id: speeches.id });
-			await db
-				.update(roleSlots)
-				.set({ speechId: sp!.id })
-				.where(eq(roleSlots.id, slot.id));
-		}
-	}
-
-	// Pair evaluator slots (in order) to speaker slots, whether or not claimed.
-	const evalSlots = ordered
-		.filter((s) => s.roleDefinitionId === evaluatorDefId)
-		.sort((a, b) => a.slotIndex - b.slotIndex);
-	const speakerSlots = ordered
-		.filter((s) => s.roleDefinitionId === speakerDefId)
-		.sort((a, b) => a.slotIndex - b.slotIndex);
-	for (let i = 0; i < evalSlots.length; i++) {
-		if (speakerSlots[i])
-			await linkEvaluator(evalSlots[i].id, speakerSlots[i].id);
-	}
-}
-
-/** Enroll a person in a path (by course code) with per-level progress rows. */
-async function enrollPath(
-	clubId: string,
-	personId: string,
-	courseCode: string,
-	name: string,
-	levels: {
-		level: number;
-		completed: number;
-		total: number;
-		approved: boolean;
-	}[],
-	approvedAt: Date,
-) {
-	const [path] = await db
-		.insert(pathwaysPaths)
-		.values({ courseCode, name, status: "current", sortOrder: 0 })
-		.onConflictDoUpdate({ target: pathwaysPaths.courseCode, set: { name } })
-		.returning({ id: pathwaysPaths.id });
-	const [enr] = await db
-		.insert(pathEnrollments)
-		.values({ personId, pathId: path!.id })
-		.onConflictDoNothing({
-			target: [pathEnrollments.personId, pathEnrollments.pathId],
-		})
-		.returning({ id: pathEnrollments.id });
-	const enrollmentId =
-		enr?.id ??
-		(
-			await db
-				.select({ id: pathEnrollments.id })
-				.from(pathEnrollments)
-				.where(
-					and(
-						eq(pathEnrollments.personId, personId),
-						eq(pathEnrollments.pathId, path!.id),
-					),
-				)
-				.limit(1)
-		)[0]!.id;
-	await db.insert(pathLevelProgress).values(
-		levels.map((lv) => ({
-			enrollmentId,
-			level: lv.level,
-			completed: lv.completed,
-			total: lv.total,
-			approved: lv.approved,
-			// First-observed completion facts (ADR-0022) — stamped on approved
-			// levels so DCP education-goal derivation (#245) has data to work with.
-			completedAt: lv.approved ? approvedAt : null,
-			creditedClubId: lv.approved ? clubId : null,
-		})),
-	);
-}
-
-/**
- * Declare a path by hand (#417) and mark some of its catalog projects complete
- * (#419): an enrollment with NO `path_level_progress` rows, which is what puts
- * it on the catalog branch — levels counted from `pathways_projects` against
- * the marks, so "what is left" can be named. Needs the catalog seeded first.
- * The enrollment insert has no onConflict: it relies on `seedClub` having just
- * inserted the person fresh, so no enrollment for this path can exist yet.
- */
-async function declarePathWithMarks(
-	personId: string,
-	markedByMemberId: string,
-	courseCode: string,
-	level: number,
-	markedProjectNames: string[],
-) {
-	const [path] = await db
-		.select({ id: pathwaysPaths.id })
-		.from(pathwaysPaths)
-		.where(eq(pathwaysPaths.courseCode, courseCode))
-		.limit(1);
-	if (!path) throw new Error(`Pathways catalog has no path ${courseCode}`);
-	const [enr] = await db
-		.insert(pathEnrollments)
-		.values({ personId, pathId: path.id })
-		.returning({ id: pathEnrollments.id });
-	const projects = await db
-		.select({ id: pathwaysProjects.id, name: pathwaysProjects.name })
-		.from(pathwaysProjects)
-		.where(
-			and(
-				eq(pathwaysProjects.pathId, path.id),
-				eq(pathwaysProjects.level, level),
-			),
-		);
-	const idByName = new Map(projects.map((p) => [p.name, p.id]));
-	await db.insert(projectCompletionMarks).values(
-		markedProjectNames.map((name) => {
-			const projectId = idByName.get(name);
-			if (!projectId) {
-				throw new Error(
-					`Pathways catalog ${courseCode} has no Level ${level} project "${name}"`,
-				);
-			}
-			return { enrollmentId: enr!.id, projectId, markedByMemberId };
-		}),
-	);
+	return insertFixtureClub(db, opts);
 }
 
 async function main() {
@@ -681,9 +133,15 @@ async function main() {
 	await seedPathwaysCatalog();
 
 	// A platform superadmin who belongs to no club (for console + impersonation).
-	await upsertUser("Platform Superadmin", SUPERADMIN_EMAIL);
+	await ensureFixtureUser(db, "Platform Superadmin", SUPERADMIN_EMAIL);
 
-	const py = currentProgramYear();
+	// "Now" and the club's zone, fixed once so every date below agrees. MCF takes
+	// the column default zone; its meetings are 7 PM there.
+	const now = new Date();
+	const TZ = "America/Chicago";
+	const at = (days: number, hour: number) => dayAt(now, TZ, days, hour);
+
+	const py = currentProgramYear(now);
 
 	// ---------------------------------------------------------------------------
 	// Club 1 — MCF: a full, lively club. ~16 active members + a complete officer
@@ -692,6 +150,8 @@ async function main() {
 	// screen has realistic data.
 	// ---------------------------------------------------------------------------
 	const mcf = await seedClub({
+		now,
+		timeZone: TZ,
 		name: "MCF",
 		slug: "mcf-toastmasters",
 		clubNumber: "28677176",
@@ -709,109 +169,109 @@ async function main() {
 				name: "Rasheed Bustamam",
 				email: ADMIN_EMAIL,
 				officerPosition: "vp_education",
-				joinedAt: joinedAgo(3),
+				joinedAt: joinedAgo(now, 3),
 			},
 			{
 				name: "Jordan Patel",
 				email: "jordan@example.com",
 				officerPosition: "president",
-				joinedAt: joinedAgo(4),
+				joinedAt: joinedAgo(now, 4),
 			},
 			{
 				name: "Maya Thompson",
 				email: "maya@example.com",
 				officerPosition: "vp_membership",
-				joinedAt: joinedAgo(2, 6),
+				joinedAt: joinedAgo(now, 2, 6),
 			},
 			{
 				name: "Diego Fuentes",
 				email: "diego@example.com",
 				officerPosition: "vp_public_relations",
-				joinedAt: joinedAgo(2),
+				joinedAt: joinedAgo(now, 2),
 			},
 			{
 				name: "Schinthia Islam",
 				email: "schinthia@example.com",
 				officerPosition: "secretary",
-				joinedAt: joinedAgo(1, 8),
+				joinedAt: joinedAgo(now, 1, 8),
 			},
 			{
 				name: "Grace Kim",
 				email: "grace@example.com",
 				officerPosition: "treasurer",
-				joinedAt: joinedAgo(5),
+				joinedAt: joinedAgo(now, 5),
 			},
 			{
 				name: "Tomás Vega",
 				email: "tomas@example.com",
 				officerPosition: "sergeant_at_arms",
-				joinedAt: joinedAgo(1),
+				joinedAt: joinedAgo(now, 1),
 			},
 			{
 				name: "Bill Nakamura",
 				email: "bill@example.com",
 				officerPosition: "immediate_past_president",
-				joinedAt: joinedAgo(6),
+				joinedAt: joinedAgo(now, 6),
 			},
 			// Members
 			{
 				name: "Alex Rivera",
 				email: "alex@example.com",
-				joinedAt: joinedThisYear(11),
+				joinedAt: joinedThisYear(now, TZ, 11),
 			},
 			{
 				name: "Sam Chen",
 				email: "sam@example.com",
-				joinedAt: joinedThisYear(9),
+				joinedAt: joinedThisYear(now, TZ, 9),
 			},
 			{
 				name: "Aisha Bello",
 				email: "aisha@example.com",
-				joinedAt: joinedAgo(0, 10),
+				joinedAt: joinedAgo(now, 0, 10),
 			},
 			{
 				name: "Leo Martins",
 				email: "leo@example.com",
-				joinedAt: joinedAgo(2, 2),
+				joinedAt: joinedAgo(now, 2, 2),
 			},
 			{
 				name: "Hannah Cohen",
 				email: "hannah@example.com",
-				joinedAt: joinedAgo(1, 3),
+				joinedAt: joinedAgo(now, 1, 3),
 			},
 			{
 				name: "Noah Weber",
 				email: "noah@example.com",
-				joinedAt: joinedThisYear(6),
+				joinedAt: joinedThisYear(now, TZ, 6),
 			},
 			{
 				name: "Chloe Dubois",
 				email: "chloe@example.com",
-				joinedAt: joinedAgo(0, 7),
+				joinedAt: joinedAgo(now, 0, 7),
 			},
 			{
 				name: "Ravi Anand",
 				email: "ravi@example.com",
-				joinedAt: joinedThisYear(4),
+				joinedAt: joinedThisYear(now, TZ, 4),
 			},
 			// Inactive (didn't renew) — hidden from the active roster, still on record
 			{
 				name: "Frank Osei",
 				email: "frank@example.com",
 				status: "inactive",
-				joinedAt: joinedAgo(3, 4),
+				joinedAt: joinedAgo(now, 3, 4),
 			},
 			{
 				name: "Linda Park",
 				email: "linda@example.com",
 				status: "inactive",
-				joinedAt: joinedAgo(4),
+				joinedAt: joinedAgo(now, 4),
 			},
 		],
 		meetings: [
 			// Past (completed) — fully run, drive speech history + role recency
 			{
-				scheduledAt: dayAt(-21, 19),
+				scheduledAt: at(-21, 19),
 				theme: "Momentum",
 				location: "Community Hall, Room B",
 				wordOfTheDay: "Galvanize",
@@ -820,7 +280,7 @@ async function main() {
 				status: "completed",
 			},
 			{
-				scheduledAt: dayAt(-14, 19),
+				scheduledAt: at(-14, 19),
 				theme: "Breaking Barriers",
 				location: "Community Hall, Room B",
 				wordOfTheDay: "Tenacious",
@@ -829,7 +289,7 @@ async function main() {
 				status: "completed",
 			},
 			{
-				scheduledAt: dayAt(-7, 19),
+				scheduledAt: at(-7, 19),
 				theme: "The Power of Story",
 				location: "Community Hall, Room B",
 				wordOfTheDay: "Evocative",
@@ -839,7 +299,7 @@ async function main() {
 			},
 			// Upcoming (scheduled) — varying fill drives the sign-up sheet
 			{
-				scheduledAt: dayAt(4, 19),
+				scheduledAt: at(4, 19),
 				theme: "New Beginnings",
 				location: "Community Hall, Room B",
 				wordOfTheDay: "Resilient",
@@ -850,7 +310,7 @@ async function main() {
 					"Bring a guest.\nConfirm your Pathways project before you speak.",
 			},
 			{
-				scheduledAt: dayAt(11, 19),
+				scheduledAt: at(11, 19),
 				theme: "Stories That Stick",
 				location: "Community Hall, Room B",
 				wordOfTheDay: "Vivid",
@@ -858,7 +318,7 @@ async function main() {
 				wodExample: "Vivid detail makes an ordinary story memorable.",
 			},
 			{
-				scheduledAt: dayAt(18, 19),
+				scheduledAt: at(18, 19),
 				theme: "Finding Your Voice",
 				location: "Community Hall, Room B",
 				wordOfTheDay: "Authentic",
@@ -866,7 +326,7 @@ async function main() {
 				wodExample: "An authentic delivery beats a polished but hollow one.",
 			},
 			{
-				scheduledAt: dayAt(25, 19),
+				scheduledAt: at(25, 19),
 				theme: "Leadership in Action",
 				location: "Community Hall, Room B",
 				wordOfTheDay: "Decisive",
@@ -905,61 +365,68 @@ async function main() {
 
 	// Past meetings: fully claimed (all 12 slots), with speeches.
 	await fillMeeting(
+		db,
 		mcf.meetings[0],
 		mcf.defs,
 		rotate(pool, 0),
 		mcf.memberByName,
 		mcf.personByName,
-		{ count: 12, when: dayAt(-24, 12), speechCursor },
+		{ count: 12, when: at(-24, 12), speechCursor },
 	);
 	await fillMeeting(
+		db,
 		mcf.meetings[1],
 		mcf.defs,
 		rotate(pool, 4),
 		mcf.memberByName,
 		mcf.personByName,
-		{ count: 12, when: dayAt(-17, 12), speechCursor },
+		{ count: 12, when: at(-17, 12), speechCursor },
 	);
 	await fillMeeting(
+		db,
 		mcf.meetings[2],
 		mcf.defs,
 		rotate(pool, 8),
 		mcf.memberByName,
 		mcf.personByName,
-		{ count: 12, when: dayAt(-10, 12), speechCursor },
+		{ count: 12, when: at(-10, 12), speechCursor },
 	);
 	// Upcoming meetings: decreasing fill (10, 7, 4, 1 of 12) → open slots on the sheet.
 	await fillMeeting(
+		db,
 		mcf.meetings[3],
 		mcf.defs,
 		rotate(pool, 2),
 		mcf.memberByName,
 		mcf.personByName,
-		{ count: 10, when: dayAt(-2, 12), speechCursor },
+		{ count: 10, when: at(-2, 12), speechCursor },
 	);
 	await fillMeeting(
+		db,
 		mcf.meetings[4],
 		mcf.defs,
 		rotate(pool, 6),
 		mcf.memberByName,
 		mcf.personByName,
-		{ count: 7, when: dayAt(-1, 12), speechCursor },
+		{ count: 7, when: at(-1, 12), speechCursor },
 	);
 	await fillMeeting(
+		db,
 		mcf.meetings[5],
 		mcf.defs,
 		rotate(pool, 10),
 		mcf.memberByName,
 		mcf.personByName,
-		{ count: 4, when: dayAt(-1, 12), speechCursor },
+		{ count: 4, when: at(-1, 12), speechCursor },
 	);
 	await fillMeeting(
+		db,
 		mcf.meetings[6],
 		mcf.defs,
 		rotate(pool, 3),
 		mcf.memberByName,
 		mcf.personByName,
-		{ count: 1, when: dayAt(0, 12), speechCursor },
+		{ count: 1, when: at(0, 12), speechCursor },
 	);
 
 	// Pathways — enroll members with a spread of progress (drives the roster
@@ -973,10 +440,10 @@ async function main() {
 		approved: boolean,
 	) => ({ level, completed, total, approved });
 	await enrollPath(
+		db,
 		mcf.clubId,
 		person("Rasheed Bustamam"),
 		"8706",
-		"Dynamic Leadership",
 		[
 			L(1, 5, 5, true),
 			L(2, 4, 4, true),
@@ -984,71 +451,71 @@ async function main() {
 			L(4, 3, 3, true),
 			L(5, 1, 4, false),
 		],
-		joinedAgo(0, 2),
+		joinedAgo(now, 0, 2),
 	);
 	await enrollPath(
+		db,
 		mcf.clubId,
 		person("Jordan Patel"),
 		"8701",
-		"Presentation Mastery",
 		[L(1, 5, 5, true), L(2, 4, 4, true), L(3, 2, 4, false)],
-		joinedAgo(0, 3),
+		joinedAgo(now, 0, 3),
 	);
 	await enrollPath(
+		db,
 		mcf.clubId,
 		person("Grace Kim"),
 		"8700",
-		"Motivational Strategies",
 		[L(1, 5, 5, true), L(2, 4, 4, true), L(3, 4, 4, true), L(4, 1, 3, false)],
-		joinedAgo(0, 4),
+		joinedAgo(now, 0, 4),
 	);
 	await enrollPath(
+		db,
 		mcf.clubId,
 		person("Leo Martins"),
 		"8711",
-		"Engaging Humor",
 		[L(1, 5, 5, true), L(2, 3, 4, false)],
-		joinedAgo(0, 1),
+		joinedAgo(now, 0, 1),
 	);
 	await enrollPath(
+		db,
 		mcf.clubId,
 		person("Hannah Cohen"),
 		"8705",
-		"Strategic Relationships",
 		[L(1, 5, 5, true), L(2, 2, 4, false)],
-		joinedAgo(0, 2),
+		joinedAgo(now, 0, 2),
 	);
 	await enrollPath(
+		db,
 		mcf.clubId,
 		person("Aisha Bello"),
 		"8701",
-		"Presentation Mastery",
 		[L(1, 5, 5, true), L(2, 1, 4, false)],
-		joinedAgo(0, 1),
+		joinedAgo(now, 0, 1),
 	);
 	await enrollPath(
+		db,
 		mcf.clubId,
 		person("Alex Rivera"),
 		"8706",
-		"Dynamic Leadership",
 		[L(1, 3, 5, false)],
-		joinedAgo(0, 0),
+		joinedAgo(now, 0, 0),
 	);
 	await enrollPath(
+		db,
 		mcf.clubId,
 		person("Sam Chen"),
 		"8700",
-		"Motivational Strategies",
 		[L(1, 2, 5, false)],
-		joinedAgo(0, 0),
+		joinedAgo(now, 0, 0),
 	);
 	await enrollPath(
+		db,
 		mcf.clubId,
 		person("Diego Fuentes"),
 		"8702",
-		"Leadership Development",
 		[L(1, 5, 5, true), L(2, 4, 4, true), L(3, 3, 4, false)],
-		joinedAgo(0, 5),
+		joinedAgo(now, 0, 5),
 	);
 
 	// DCP scoreboard for the current program year — a started, partly-met board.
@@ -1117,7 +584,7 @@ async function main() {
 		.values({
 			clubId: mcf.clubId,
 			label: "2026 Apr 1 renewal",
-			dueDate: dayAt(-30, 0),
+			dueDate: at(-30, 0),
 			defaultAmountCents: 4500,
 		})
 		.returning({ id: duesPeriods.id });
@@ -1141,435 +608,47 @@ async function main() {
 			duesPeriodId: mcfDues!.id,
 			status: "paid" as const,
 			amountCents: 4500,
-			paidAt: dayAt(-33, 10),
+			paidAt: at(-33, 10),
 		})),
 	);
 
 	// ---------------------------------------------------------------------------
 	// Club 2 — Harbor City Speakers: a distinct roster + officers + meetings, so
 	// multi-club flows (club switcher, superadmin console, impersonation across a
-	// club you don't belong to) are realistic. Lightly filled.
-	// ---------------------------------------------------------------------------
-	const harbor = await seedClub({
-		name: "Harbor City Speakers",
-		slug: "harbor-city-speakers",
-		clubNumber: "01234567",
-		district: "District 4",
-		meetingSchedule: "Every Tuesday, 6:30–7:45 PM",
-		roster: [
-			{
-				name: "Dana Okafor",
-				email: "dana@example.com",
-				officerPosition: "president",
-				joinedAt: joinedAgo(3),
-				// A member's own choice, and a method outside the default pair.
-				contactPreference: { method: "call", by: "member" },
-				willingToMentor: true,
-			},
-			{
-				name: "Priya Nair",
-				email: "priya@example.com",
-				officerPosition: "vp_education",
-				joinedAt: joinedAgo(2),
-				willingToMentor: true,
-			},
-			{
-				// Marcus, Nina and Omar are on the VPE's "Close to a level" list, which
-				// is what `/tour`'s VP Education shot shows. They carry three different
-				// preferences, two of them set by an officer (#1110), so the nudge
-				// draft leads with each person's own channel (#1105).
-				name: "Marcus Lee",
-				email: "marcus@example.com",
-				joinedAt: joinedAgo(1),
-				contactPreference: { method: "whatsapp", by: "member" },
-			},
-			{
-				name: "Nina Petrov",
-				email: "nina@example.com",
-				joinedAt: joinedAgo(0, 8),
-				contactPreference: { method: "email", by: "officer" },
-			},
-			{
-				name: "Omar Haddad",
-				email: "omar@example.com",
-				joinedAt: joinedThisYear(10),
-				contactPreference: { method: "sms", by: "officer" },
-			},
-			{
-				// Harbor's VP Membership (#901): `/tour`'s officers stop signs in as
-				// this person for the guest-pipeline shot.
-				name: "Sofia Reyes",
-				email: "sofia@example.com",
-				officerPosition: "vp_membership",
-				joinedAt: joinedAgo(1, 6),
-			},
-			{
-				// The second new member, with no mentor yet (Omar is the paired one),
-				// so the mentorship screens have both shapes. Last in the roster:
-				// `seedPhone` is by roster index, so nobody above is renumbered.
-				name: "Camille Roy",
-				email: "camille@example.com",
-				joinedAt: joinedThisYear(4),
-			},
-		],
-		meetings: [
-			{
-				scheduledAt: dayAt(3, 18),
-				theme: "Coastal Voices",
-				location: "Harbor Library, Meeting Room 2",
-				wordOfTheDay: "Buoyant",
-			},
-			{
-				scheduledAt: dayAt(10, 18),
-				theme: "Tides of Change",
-				location: "Harbor Library, Meeting Room 2",
-				wordOfTheDay: "Momentum",
-			},
-			// QA fixtures (#492). Harbor is the sparse club — its first two meetings
-			// already carry a word with no definition or example, which is why the
-			// awkward shapes live here rather than in MCF, whose data should stay
-			// realistic for demos. These three exist so the Word of the Day poster,
-			// the print layouts and the projected deck can be checked in a browser
-			// without hand-editing the database. Do not "tidy" them into ordinary
-			// meetings; each one is the only seed route to a branch.
-			{
-				// No Word of the Day at all → the poster's empty state, and the
-				// meeting page's "Word poster" button must NOT render.
-				scheduledAt: dayAt(17, 18),
-				theme: "Open Floor",
-				location: "Harbor Library, Meeting Room 2",
-			},
-			{
-				// 14 characters, and the widest real word measured at that length —
-				// exercises the third size bucket near its limit.
-				scheduledAt: dayAt(24, 18),
-				theme: "Saying Less",
-				location: "Harbor Library, Meeting Room 2",
-				wordOfTheDay: "Cumbersomeness",
-				wodDefinition: "the quality of being awkward to carry, use, or say",
-				wodExample: "He trimmed the cumbersomeness out of his opening line.",
-			},
-			{
-				// All caps routes to the second size table, which is ~20-30% smaller
-				// because capitals run wider. Members really do type words this way.
-				scheduledAt: dayAt(31, 18),
-				theme: "Fleeting Moments",
-				location: "Harbor Library, Meeting Room 2",
-				wordOfTheDay: "EPHEMERAL",
-				wodDefinition: "lasting for a very short time",
-				wodExample: "The applause was ephemeral; the lesson was not.",
-			},
-			// Past meetings, last so the indices above stay put. Two held ones carry
-			// the history the newer screens read: how each person attended (in the
-			// room or on the call), and anonymous notes left for the people who
-			// served. The third was called off (#1084), so a list of past meetings
-			// has a cancelled row and `bun run marketing:screenshots` has one to skip.
-			{
-				scheduledAt: dayAt(-7, 18),
-				theme: "Safe Harbor",
-				location: "Harbor Library, Meeting Room 2",
-				wordOfTheDay: "Anchor",
-				wodDefinition: "to hold something firmly in place",
-				wodExample: "A good opening line anchors the whole speech.",
-				status: "completed",
-			},
-			{
-				scheduledAt: dayAt(-14, 18),
-				theme: "Rising Tide",
-				location: "Harbor Library, Meeting Room 2",
-				wordOfTheDay: "Swell",
-				wodDefinition: "to grow larger or stronger",
-				wodExample: "Applause began to swell as she finished.",
-				status: "completed",
-			},
-			{
-				scheduledAt: dayAt(-21, 18),
-				theme: "Storm Warning",
-				location: "Harbor Library, Meeting Room 2",
-				status: "cancelled",
-			},
-		],
-	});
-
+	// club you don't belong to) are realistic. Built by the fixture module, the
+	// same code the demo club uses (#1198); only the reset and the profile fields
+	// that are the dev seed's own stay here. Dana is its admin: a fictional member
+	// with a sign-in account, so a dev can sign in as her.
+	//
 	// `/tour`'s officers stop (#901) is captured from Harbor's VPE and VPM
 	// dashboards, and its agenda shot from Harbor's next meeting, by
-	// `bun run marketing:screenshots`, which checks each of the shapes below is
-	// on the page before it shoots (`marketing-screenshot-features.ts`). The
-	// invite that keeps the VPM shot's "Invited to …" line current is for the
-	// +10-day meeting, so a seed stays good for a week or more.
-	const harborPerson = (n: string) => harbor.personByName.get(n)!;
-	const harborMember = (n: string) => harbor.memberByName.get(n)!;
-
-	// Guests, one of each kind (#1046), two of them brought by a member (#1050).
-	// The visiting Toastmaster and the guest speaker take roles on the next
-	// meeting below, which is what puts a kind caption on the printed agenda
-	// (#1059). A Visitor reads exactly as before.
-	const harborGuests: { id: string; name: string }[] = [];
-	for (const g of [
-		{
-			name: "Lucia Moreno",
-			email: "lucia.moreno@example.com",
-			phone: seedPhone(50),
-			stage: "prospect" as const,
-			introducedByMemberId: harborMember("Marcus Lee"),
-		},
-		{
-			name: "Ethan Brooks",
-			email: "ethan.brooks@example.com",
-			phone: null,
-			stage: "following_up" as const,
-			introducedByMemberId: harborMember("Priya Nair"),
-		},
-		{
-			name: "Imani Clarke",
-			email: "imani.clarke@example.com",
-			phone: seedPhone(51),
-			kind: "visiting_toastmaster" as const,
-			homeClub: "Bayview",
-		},
-		{
-			name: "Theo Marchetti",
-			email: "theo.marchetti@example.com",
-			phone: seedPhone(52),
-			kind: "guest_speaker" as const,
-			homeClub: "Seaport Speakers",
-			introducedByMemberId: harborMember("Dana Okafor"),
-		},
-	]) {
-		const { id } = await createGuestRecord(db, { clubId: harbor.clubId, ...g });
-		harborGuests.push({ id, name: g.name });
-	}
-	const harborGuest = (n: string) => harborGuests.find((g) => g.name === n)!.id;
-
-	// The next meeting (+3 days): the one the print and present shots capture.
-	// Marcus and Omar are NOT on it, and nobody on "Close to a level" speaks: a
-	// row shows the nudge only while its member has no speaker slot ahead
-	// (`showsLevelNudge`), and Nina's row keeps its "Speaking" badge for contrast.
-	// Speaker 3 goes to the guest speaker, the Grammarian to the visiting
-	// Toastmaster, the Timer to the newest member.
-	const harborNext = meetingByTheme(harbor, "Coastal Voices");
-	const harborClaimedAt = dayAt(-1, 12);
-	await fillMeeting(
-		harborNext,
-		harbor.defs,
-		["Dana Okafor", "Priya Nair", "Sofia Reyes", "Nina Petrov"],
-		harbor.memberByName,
-		harbor.personByName,
-		{ count: 4, when: harborClaimedAt, speechCursor: { i: 3 } },
+	// `bun run marketing:screenshots`, which checks each of the shapes the fixture
+	// builds is on the page before it shoots (`marketing-screenshot-features.ts`).
+	// ---------------------------------------------------------------------------
+	const harborAdmin = { name: "Dana Okafor", email: "dana@example.com" };
+	await resetClubByName(
+		"Harbor City Speakers",
+		fixtureRosterEmails(harborAdmin.email),
 	);
-	await claimSlotForGuest(
-		slotOf(harborNext, harbor.defs, "Speaker", 2).id,
-		harborGuest("Theo Marchetti"),
-		harborClaimedAt,
-	);
-	await claimSlotForGuest(
-		slotOf(harborNext, harbor.defs, "Grammarian").id,
-		harborGuest("Imani Clarke"),
-		harborClaimedAt,
-	);
-	await claimSlot(
-		slotOf(harborNext, harbor.defs, "Timer").id,
-		harborMember("Camille Roy"),
-		harborClaimedAt,
-	);
-
-	// Two held past meetings (Omar and Camille had not joined for the older one).
-	const harborRecent = meetingByTheme(harbor, "Safe Harbor"); // 7 days ago
-	const harborOlder = meetingByTheme(harbor, "Rising Tide"); // 14 days ago
-	const harborPastPool = [
-		"Dana Okafor",
-		"Priya Nair",
-		"Marcus Lee",
-		"Nina Petrov",
-		"Sofia Reyes",
-	];
-	await fillMeeting(
-		harborRecent,
-		harbor.defs,
-		harborPastPool,
-		harbor.memberByName,
-		harbor.personByName,
-		{ count: 5, when: dayAt(-10, 12), speechCursor: { i: 0 } },
-	);
-	await fillMeeting(
-		harborOlder,
-		harbor.defs,
-		rotate(harborPastPool, 2),
-		harbor.memberByName,
-		harbor.personByName,
-		{ count: 5, when: dayAt(-17, 12), speechCursor: { i: 6 } },
-	);
-
-	// How each person attended (#1046): in the room or on the call. NULL means
-	// not recorded, so a few rows leave it out the way roll mode does today.
-	type Mode = AttendanceMode | null;
-	const presentMembers = (meetingId: string, rows: [string, Mode][]) =>
-		rows.map(([name, mode]) => ({
-			meetingId,
-			memberId: harborMember(name),
-			status: "present" as const,
-			mode,
-		}));
-	const presentGuests = (meetingId: string, rows: [string, Mode][]) =>
-		rows.map(([name, mode]) => ({
-			meetingId,
-			guestId: harborGuest(name),
-			status: "present" as const,
-			mode,
-		}));
-	await db.insert(meetingAttendance).values([
-		...presentMembers(harborRecent.meetingId, [
-			["Dana Okafor", "in_person"],
-			["Priya Nair", "in_person"],
-			["Marcus Lee", "in_person"],
-			["Nina Petrov", "online"],
-			["Omar Haddad", "in_person"],
-			["Sofia Reyes", "online"],
-		]),
-		...presentGuests(harborRecent.meetingId, [["Lucia Moreno", "in_person"]]),
-		...presentMembers(harborOlder.meetingId, [
-			["Dana Okafor", "in_person"],
-			["Priya Nair", "in_person"],
-			["Marcus Lee", "online"],
-			["Nina Petrov", "in_person"],
-			["Sofia Reyes", null],
-		]),
-		...presentGuests(harborOlder.meetingId, [
-			["Imani Clarke", "in_person"],
-			["Ethan Brooks", "online"],
-		]),
-	]);
-
-	// Anonymous notes for the people who served on the more recent of the two
-	// held meetings (#981). The recipient and the slot are read back from what
-	// `fillMeeting` actually claimed, not matched by hand to its round-robin, so
-	// reordering the pool cannot put a note on a role its recipient never held.
-	// No writer column exists, and `created_at` is the table's own day-granular
-	// default: neither is set here.
-	const recentSlots = await db
-		.select({
-			id: roleSlots.id,
-			memberId: roleSlots.assignedMemberId,
-			roleName: roleDefinitions.name,
-			slotIndex: roleSlots.slotIndex,
-			slotsUnordered: roleDefinitions.slotsUnordered,
-		})
-		.from(roleSlots)
-		.innerJoin(
-			roleDefinitions,
-			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
-		)
-		.where(eq(roleSlots.meetingId, harborRecent.meetingId));
-	const roleCounts = Object.fromEntries(
-		harbor.defs.map((d) => [d.name, d.defaultCount]),
-	);
-	const heldOnRecent = (roleName: string, slotIndex = 0) => {
-		const slot = recentSlots.find(
-			(x) => x.roleName === roleName && x.slotIndex === slotIndex,
-		);
-		if (!slot?.memberId) {
-			throw new Error(`Seed: nobody holds ${roleName} ${slotIndex + 1}`);
-		}
-		return {
-			clubId: harbor.clubId,
-			meetingId: harborRecent.meetingId,
-			recipientMemberId: slot.memberId,
-			roleSlotId: slot.id,
-			roleLabel: slotLabel(
-				{ roleName, slotIndex, slotsUnordered: slot.slotsUnordered },
-				roleCounts,
-			),
-		};
-	};
-	await db.insert(roleFeedbackNotes).values([
-		{
-			...heldOnRecent("Speaker", 0),
-			wentWell:
-				"The story about your first night on the ferry pulled everyone in.",
-			tryNext: "A longer pause before the ending would let it land.",
+	const harbor = await buildFixtureClub(db, {
+		name: "Harbor City Speakers",
+		slug: "harbor-city-speakers",
+		timeZone: TZ,
+		now,
+		admin: {
+			...harborAdmin,
+			userId: await ensureFixtureUser(db, harborAdmin.name, harborAdmin.email),
 		},
-		{
-			...heldOnRecent("Speaker", 0),
-			wentWell: "Great energy from the first sentence.",
-		},
-		{
-			...heldOnRecent("Speaker", 1),
-			wentWell: "Clear structure. I could follow every point.",
-		},
-		{
-			...heldOnRecent("Table Topics Master"),
-			wentWell: "Your questions made everyone want to answer.",
-			tryNext:
-				"Keep the introduction short so there is time for one more speaker.",
-		},
-	]);
-
-	// Mentorship (#939): Omar, a new member, is paired with Dana; Camille, the
-	// other new member, has no mentor yet. Through the pairing's own write path,
-	// the one a club admin's "Pair a mentor" uses, so a seeded pairing has passed
-	// the checks a real one does: both members active in this club, mentor and
-	// mentee different.
-	await createMentorship({
-		clubId: harbor.clubId,
-		mentorMemberId: harborMember("Dana Okafor"),
-		menteeMemberId: harborMember("Omar Haddad"),
-		focus: "new_member",
-		actorMemberId: harborMember("Priya Nair"),
 	});
-
-	// "Close to a level", catalog branch: a hand-declared path, 3 of Level 1's 4
-	// projects marked, so the row NAMES what is left ("1 left: …").
-	await declarePathWithMarks(
-		harborPerson("Marcus Lee"),
-		harborMember("Marcus Lee"),
-		"8706",
-		1,
-		[
-			"Ice Breaker",
-			"Writing a Speech with Purpose",
-			"Introduction to Vocal Variety and Body Language",
-		],
-	);
-	// A second "close" row, two projects short.
-	await declarePathWithMarks(
-		harborPerson("Omar Haddad"),
-		harborMember("Omar Haddad"),
-		"8700",
-		1,
-		["Ice Breaker", "Writing a Speech with Purpose"],
-	);
-	// Base Camp branch: Level 2 finished and not yet approved → an awaiting row.
-	await enrollPath(
-		harbor.clubId,
-		harborPerson("Nina Petrov"),
-		"8705",
-		"Strategic Relationships",
-		[L(1, 4, 4, true), L(2, 3, 3, false)],
-		joinedAgo(0, 3),
-	);
-
-	// Invites, by Harbor's VPM. Lucia is invited to the NEXT meeting, so her row
-	// reads "Resend invite" (#1041) with an "Invited to …" badge; Ethan is
-	// invited to the +10-day one, so his row still offers "Invite to …" for the
-	// next meeting. That one is what keeps the capture's DOM check and its
-	// upcoming-meeting check good for a week: once the next meeting has started,
-	// Lucia's line reads "Last invited to …".
-	await db.insert(guestInvites).values([
-		{
-			clubId: harbor.clubId,
-			guestId: harborGuest("Lucia Moreno"),
-			meetingId: harborNext.meetingId,
-			invitedByMemberId: harborMember("Sofia Reyes"),
-			invitedAt: dayAt(-2, 10),
-		},
-		{
-			clubId: harbor.clubId,
-			guestId: harborGuest("Ethan Brooks"),
-			meetingId: meetingByTheme(harbor, "Tides of Change").meetingId,
-			invitedByMemberId: harborMember("Sofia Reyes"),
-			invitedAt: dayAt(-1, 10),
-		},
-	]);
+	// The fixture club carries no Toastmasters number; the dev club keeps its own.
+	await db
+		.update(clubs)
+		.set({
+			clubNumber: "01234567",
+			district: "District 4",
+			meetingSchedule: "Every Tuesday, 6:30–7:45 PM",
+		})
+		.where(eq(clubs.id, harbor.clubId));
 
 	// Global agenda templates (#agenda-templates). Club-less, so they are seeded
 	// once for the whole install rather than per club, and the script is
@@ -1581,7 +660,7 @@ async function main() {
 		"  • MCF (mcf-toastmasters) — 16 active members, full officer team, 7 meetings, Pathways/DCP/guests/dues",
 	);
 	console.log(
-		"  • Harbor City Speakers (harbor-city-speakers) — Dana (President), Priya (VP Education), Sofia (VP Membership), 8 meetings (2 held, 1 cancelled), Pathways, 4 guests of 3 kinds, mentorship, feedback notes, attendance by mode",
+		"  • Harbor City Speakers (harbor-city-speakers) — Dana (President), Priya (VP Education), Sofia (VP Membership), 10 meetings (6 held, 4 upcoming), Pathways, 4 guests of 3 kinds, mentorship, feedback notes, minutes, dues, DCP",
 	);
 	console.log(`Admin sign-in email (MCF): ${ADMIN_EMAIL}`);
 	console.log(
