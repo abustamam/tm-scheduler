@@ -183,8 +183,8 @@ export type PlanPersonOutcome =
 	  }
 	| { status: "skipped"; reason: string }
 	/**
-	 * An earlier import named a row for this person and a human has since deleted
-	 * it: a tombstone. Nothing is created for them and nothing asks a human again
+	 * An earlier import created a guest for this person and a human has since
+	 * deleted it: a tombstone. Nothing is created for them and nothing asks a human again
 	 * (D2 of #1196).
 	 */
 	| { status: "deleted" }
@@ -504,10 +504,15 @@ export function buildImportPlan(
 				via: "ref",
 				guestId: guestRef,
 			};
-		} else if (memberRef || guestRef) {
-			// Named by an earlier import, and the row is gone: a human deleted it.
+		} else if (guestRef) {
+			// Named by an earlier import, and the guest row is gone: a human deleted a
+			// row the import itself created.
 			outcome = { status: "deleted" };
 		} else {
+			// A vanished MEMBER ref is NOT a tombstone (D4 of #1196): the import never
+			// made that member, so its absence says the membership was merged away or
+			// a convert was undone, not that anyone declined this person. The person
+			// is matched by name again, and asks a human if that finds nobody.
 			const exact = rosterByName.get(ref.name.trim()) ?? [];
 			const folded = rosterByFold.get(foldName(ref.name)) ?? [];
 			const candidates = exact.length > 0 ? exact : folded;

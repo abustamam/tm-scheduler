@@ -334,7 +334,7 @@ describe("buildImportPlan on the B fixture", () => {
 		expect(plan.counts.meetingsToCreate).toBe(0);
 	});
 
-	it("a person whose imported guest or member was deleted is a tombstone, never re-created or asked about (D2)", () => {
+	it("a person whose imported guest was deleted is a tombstone, never re-created or asked about (D2)", () => {
 		const base = buildImportPlan(withGuestSpeaker(), ctx());
 		expect(outcomeOf(base, "900025")).toMatchObject({ status: "guest" });
 		const gone = buildImportPlan(
@@ -352,7 +352,30 @@ describe("buildImportPlan on the B fixture", () => {
 				refs: [{ kind: "person", sourceId: "es:900036", targetId: "gone" }],
 			}),
 		);
-		expect(outcomeOf(memberGone, "900036")).toEqual({ status: "deleted" });
+		expect(outcomeOf(memberGone, "900036")).not.toEqual({ status: "deleted" });
+	});
+
+	it("a member ref whose member row is gone falls back to the name, and asks a human when the name finds nobody (D4)", () => {
+		const matched = buildImportPlan(
+			load(),
+			ctx({
+				refs: [{ kind: "person", sourceId: "es:900036", targetId: "gone" }],
+			}),
+		);
+		expect(outcomeOf(matched, "900036")).toEqual({
+			status: "member",
+			memberId: id(7),
+			via: "exact",
+		});
+		// Avery Alderfinch is on no roster: a stale ref changes nothing about that.
+		const asks = buildImportPlan(
+			load(),
+			ctx({
+				refs: [{ kind: "person", sourceId: "es:900001", targetId: "gone" }],
+			}),
+		);
+		expect(outcomeOf(asks, "900001")).toEqual({ status: "unmatched" });
+		expect(asks.unresolved.map((p) => p.key)).toContain("es:900001");
 	});
 
 	it("imports nothing from a meeting in the future, however the clock moves", () => {
