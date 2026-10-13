@@ -7,10 +7,19 @@
 // that same module is NOT stripped and drags `pg` → `Buffer` into the browser
 // (ReferenceError: Buffer is not defined). Keeping the db logic in this
 // never-client-imported module keeps `pg` server-side. See `auth-context.ts`.
-import { and, asc, eq, gte, inArray, isNull, ne, or } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { meetings, members, people, roleSlots } from "#/db/schema";
+import {
+	meetingAttendance,
+	meetingAwards,
+	meetings,
+	members,
+	people,
+	roleSlots,
+	tableTopicsSpeakers,
+} from "#/db/schema";
+import { pastAgendaRemoveRefusal } from "#/lib/member-remove";
 import {
 	OFFICER_POSITIONS,
 	type OfficerPosition,
@@ -792,8 +801,61 @@ export const removeSchema = z.object({
 });
 type RemoveInput = z.infer<typeof removeSchema> & RosterActor;
 
+type Executor = Pick<typeof db, "select">;
+
+/** A meeting whose agenda is already history (#1189): `completed`, or its time has
+ *  passed and it was not cancelled. Completing is a manual step, so a past meeting
+ *  often stays `scheduled`; its agenda prints the same names. A cancelled one
+ *  printed nothing, so it does not count. */
+function pastAgendaMeeting(now: Date) {
+	return or(
+		eq(meetings.status, "completed"),
+		and(lt(meetings.scheduledAt, now), ne(meetings.status, "cancelled")),
+	);
+}
+
+/** True when the member is the holder, attendee, Table Topics speaker or award
+ *  winner on a past meeting. Those four `member_id` keys are ON DELETE SET NULL, so
+ *  deleting the member blanks their name on a finished agenda and its minutes.
+ *  Votes, vote sessions and project marks also null out, but print no name there,
+ *  so they do not count (#1189). */
+async function memberOnPastAgenda(tx: Executor, memberId: string) {
+	const now = new Date();
+	const past = pastAgendaMeeting(now);
+	const [slot] = await tx
+		.select({ id: roleSlots.id })
+		.from(roleSlots)
+		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+		.where(and(eq(roleSlots.assignedMemberId, memberId), past))
+		.limit(1);
+	if (slot) return true;
+	const [attended] = await tx
+		.select({ id: meetingAttendance.id })
+		.from(meetingAttendance)
+		.innerJoin(meetings, eq(meetings.id, meetingAttendance.meetingId))
+		.where(and(eq(meetingAttendance.memberId, memberId), past))
+		.limit(1);
+	if (attended) return true;
+	const [spoke] = await tx
+		.select({ id: tableTopicsSpeakers.id })
+		.from(tableTopicsSpeakers)
+		.innerJoin(meetings, eq(meetings.id, tableTopicsSpeakers.meetingId))
+		.where(and(eq(tableTopicsSpeakers.memberId, memberId), past))
+		.limit(1);
+	if (spoke) return true;
+	const [won] = await tx
+		.select({ id: meetingAwards.id })
+		.from(meetingAwards)
+		.innerJoin(meetings, eq(meetings.id, meetingAwards.meetingId))
+		.where(and(eq(meetingAwards.memberId, memberId), past))
+		.limit(1);
+	return Boolean(won);
+}
+
 /** Remove a member: release their upcoming slots (logged) then delete them
- *  (availability cascades). A user-linked member can't be removed. "Upcoming"
+ *  (availability cascades). A user-linked member can't be removed, and neither can
+ *  one who appears on a past agenda (#1189): the foreign keys would blank their
+ *  name there, so an officer marks them inactive instead. "Upcoming"
  *  includes a CANCELLED future meeting (#1057): a slot left there would be
  *  `claimed` by nobody once the FK nulls the holder — unclaimable, per
  *  `membership-merge-lock.ts` — and a restore would put it on the live agenda. */
@@ -811,6 +873,19 @@ export async function applyMemberRemove(input: RemoveInput) {
 	}
 
 	await db.transaction(async (tx) => {
+		// Lock the member row first: a slot claimed on this member after the check
+		// below takes a KEY SHARE lock on it through the FK, so it waits for this
+		// transaction instead of slipping in between the check and the delete.
+		await tx
+			.select({ id: members.id })
+			.from(members)
+			.where(
+				and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
+			)
+			.for("update");
+		if (await memberOnPastAgenda(tx, input.memberId)) {
+			throw new Error(pastAgendaRemoveRefusal(member.name));
+		}
 		const upcoming = await tx
 			.select({ id: roleSlots.id })
 			.from(roleSlots)

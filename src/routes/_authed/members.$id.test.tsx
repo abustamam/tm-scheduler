@@ -40,7 +40,8 @@
 import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { editMember } from "#/server/members";
+import { pastAgendaRemoveRefusal } from "#/lib/member-remove";
+import { editMember, removeMember, setMemberStatus } from "#/server/members";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
 
 vi.mock("#/server/club", () => ({
@@ -595,5 +596,77 @@ describe("member profile — a former member's Pathways", () => {
 			},
 		);
 		expect(screen.getByText(WITHHELD)).toBeTruthy();
+	});
+});
+
+/**
+ * #1189: removal is refused for a member on a past agenda. The dialog shows the
+ * server's refusal in place, offers the existing deactivate action, and does not
+ * offer to retry the removal that cannot work.
+ */
+describe("member profile — remove dialog refusal (#1189)", () => {
+	async function openRemove() {
+		fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+		await screen.findByRole("heading", { name: "Remove Ada Member?" });
+	}
+
+	it("shows the refusal in the dialog and offers Mark inactive instead", async () => {
+		vi.mocked(removeMember).mockRejectedValue(
+			new Error(pastAgendaRemoveRefusal("Ada Member")),
+		);
+		await renderRoute();
+		await openRemove();
+
+		fireEvent.click(screen.getByRole("button", { name: "Remove member" }));
+
+		const alert = await screen.findByRole("alert");
+		expect(alert.textContent).toBe(pastAgendaRemoveRefusal("Ada Member"));
+		expect(
+			screen.getByRole("button", { name: "Mark inactive instead" }),
+		).toBeTruthy();
+		expect(
+			(
+				screen.getByRole("button", {
+					name: "Remove member",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(true);
+		expect(toast.error).not.toHaveBeenCalled();
+	});
+
+	it("Mark inactive instead sets the member inactive", async () => {
+		vi.mocked(removeMember).mockRejectedValue(
+			new Error(pastAgendaRemoveRefusal("Ada Member")),
+		);
+		vi.mocked(setMemberStatus).mockResolvedValue(
+			// biome-ignore lint/suspicious/noExplicitAny: server-fn return stub
+			{ ok: true } as any,
+		);
+		await renderRoute();
+		await openRemove();
+		fireEvent.click(screen.getByRole("button", { name: "Remove member" }));
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Mark inactive instead" }),
+		);
+
+		await vi.waitFor(() =>
+			expect(setMemberStatus).toHaveBeenCalledWith({
+				data: { clubId: CLUB_ID, memberId: MEMBER_ID, status: "inactive" },
+			}),
+		);
+	});
+
+	it("keeps another failure as a toast, with no deactivate offer", async () => {
+		vi.mocked(removeMember).mockRejectedValue(new Error("Member not found."));
+		await renderRoute();
+		await openRemove();
+
+		fireEvent.click(screen.getByRole("button", { name: "Remove member" }));
+
+		await vi.waitFor(() => expect(toast.error).toHaveBeenCalled());
+		expect(screen.queryByRole("alert")).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: "Mark inactive instead" }),
+		).toBeNull();
 	});
 });
