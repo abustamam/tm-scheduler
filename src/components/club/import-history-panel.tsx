@@ -443,7 +443,8 @@ export function ImportHistoryPanel({
 						<p className="text-sm text-muted-foreground">
 							Adds the bundle's mentor and mentee pairs as mentoring pairings in
 							this club, and marks each member whose row says "Wants Mentee?" as
-							willing to mentor (it never turns that off). Run it after applying
+							willing to mentor (it never turns that off, and a member it has
+							handled once is not changed by a re-run). Run it after applying
 							the import: both people are matched to the people it resolved, and
 							a pair with someone it did not resolve is skipped and listed.
 							Running it again adds nothing already there.
@@ -564,9 +565,10 @@ function MentorsResult({
 				<Count label="Now willing to mentor" n={result.willing.set} />
 				<Count label="Already willing" n={result.willing.alreadyWilling} />
 				<Count
-					label="Not matched to a member"
-					n={result.willing.skipped.length}
+					label="Handled by an earlier import"
+					n={result.willing.previouslyImported}
 				/>
+				<Count label="Not an active member" n={result.willing.skipped.length} />
 			</dl>
 			{result.willing.skipped.length > 0 ? (
 				<div className="space-y-1" data-testid="mentors-willing-skipped">

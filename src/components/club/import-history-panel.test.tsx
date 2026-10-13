@@ -376,6 +376,7 @@ describe("ImportHistoryPanel (#1051)", () => {
 			willing: {
 				set: 3,
 				alreadyWilling: 2,
+				previouslyImported: 4,
 				skipped: [
 					{
 						person: { esUserId: "9", name: "Wanda Wants" },
@@ -438,7 +439,8 @@ describe("ImportHistoryPanel (#1051)", () => {
 		expect(willing).toEqual({
 			"Now willing to mentor": "3",
 			"Already willing": "2",
-			"Not matched to a member": "2",
+			"Handled by an earlier import": "4",
+			"Not an active member": "2",
 		});
 		const willingSkipped = screen.getByTestId("mentors-willing-skipped");
 		expect(willingSkipped.textContent).toContain(
@@ -462,7 +464,12 @@ describe("ImportHistoryPanel (#1051)", () => {
 			alreadyImported: 1,
 			alreadyPaired: 0,
 			skipped: [],
-			willing: { set: 0, alreadyWilling: 0, skipped: [] },
+			willing: {
+				set: 0,
+				alreadyWilling: 0,
+				previouslyImported: 0,
+				skipped: [],
+			},
 		});
 		await openImport();
 		const button = (await screen.findByRole("button", {

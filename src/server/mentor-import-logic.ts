@@ -102,17 +102,31 @@ export interface WillingSkip {
 }
 
 /**
- * Rows with `wantsMentee` fall into exactly one bucket, one per DISTINCT member
- * (a member listed twice counts once, as already willing the second time):
- * `set + alreadyWilling + skipped.length`. The step only ever sets the flag to
- * true, never to false.
+ * What "Wants Mentee?" did, counted per ROW except `skipped`, which lists each
+ * PERSON once. Every row with `wantsMentee` lands in exactly one of `set`,
+ * `alreadyWilling` and `previouslyImported`, or its person is listed in
+ * `skipped`. So `set + alreadyWilling + previouslyImported + skipped.length`
+ * equals the number of `wantsMentee` rows minus the extra rows of people listed
+ * more than once in `skipped`. A member on two rows is counted twice: the first
+ * row sets the flag (or finds it on), the second finds the member already
+ * remembered and counts as `previouslyImported`. The step only ever sets the
+ * flag to true, never to false.
  */
 export interface WillingResult {
-	/** Members whose `willing_to_mentor` this run turned on. */
+	/** Rows whose member's `willing_to_mentor` this run turned on. */
 	set: number;
-	/** Members already willing (an earlier run, or they set it themselves). */
+	/**
+	 * Rows whose member was already willing (they set it themselves, or an admin
+	 * did). Remembered like `set`, so a later opt-out is not undone.
+	 */
 	alreadyWilling: number;
-	/** Rows naming someone who is not an active member now, listed. */
+	/**
+	 * Rows whose member this import already handled: by an earlier run (so a member
+	 * who has since turned the flag off is not turned back on), or by an earlier
+	 * row of THIS run. Not written, not audited.
+	 */
+	previouslyImported: number;
+	/** People who are not an active member now, each listed once. */
 	skipped: WillingSkip[];
 }
 
@@ -159,6 +173,98 @@ async function lockedActiveIds(
 }
 
 /**
+ * "Wants Mentee?": the row's member is open to taking on a mentee. Only ever
+ * turns the flag ON. The column cannot tell a member who turned it off in
+ * GavelUp from one who never set it, so every member the step handles is
+ * remembered (`import_refs` kind `willing_to_mentor`, `sourceId` and `targetId`
+ * both the MEMBER id, so a later bundle with different Easy-Speak ids cannot
+ * re-set it either) and is never touched again. The ref is written in this
+ * transaction, whether the step set the flag or found it already on.
+ */
+async function importWillingFlags(
+	tx: Tx,
+	ctx: {
+		clubId: string;
+		importId: string;
+		superadminUserId: string;
+		rows: EasySpeakBundleV1["mentors"];
+		sideOf: (who: EsPerson) => Side;
+		/** Member ids already remembered; grows as this run remembers more. */
+		done: Set<string>;
+		result: WillingResult;
+	},
+): Promise<void> {
+	const { result } = ctx;
+	const seenSkipped = new Set<string>();
+	// A person who is not an active member, listed once however many rows name them.
+	const skip = (who: EsPerson, reason: WillingSkipReason) => {
+		const key = personKeyOf(who);
+		if (seenSkipped.has(key)) return;
+		seenSkipped.add(key);
+		result.skipped.push({ person: who, reason });
+	};
+	for (const row of ctx.rows) {
+		if (!row.wantsMentee) continue;
+		const who = row.mentee;
+		const side = ctx.sideOf(who);
+		if (side.state !== "active") {
+			skip(who, side.state === "unresolved" ? "unresolved" : "not_member");
+			continue;
+		}
+		if (ctx.done.has(side.id)) {
+			result.previouslyImported++;
+			continue;
+		}
+		// Lock the row and trust only what the lock shows: an admin may have
+		// lapsed the member since the snapshot. NO KEY UPDATE, not UPDATE: it
+		// still excludes a concurrent edit of the row but not the KEY SHARE an
+		// admin's status-edit audit insert takes on the actor member (a deadlock).
+		const [current] = await tx
+			.select({
+				status: members.status,
+				willing: members.willingToMentor,
+			})
+			.from(members)
+			.where(and(eq(members.clubId, ctx.clubId), eq(members.id, side.id)))
+			.for("no key update");
+		if (!current || current.status !== "active") {
+			skip(who, "not_member");
+			continue;
+		}
+		await putRef(tx, ctx.clubId, "willing_to_mentor", side.id, side.id);
+		ctx.done.add(side.id);
+		if (current.willing) {
+			result.alreadyWilling++;
+			continue;
+		}
+		// The predicates are in the statement too, not only in the read above.
+		await tx
+			.update(members)
+			.set({ willingToMentor: true })
+			.where(
+				and(
+					eq(members.id, side.id),
+					eq(members.clubId, ctx.clubId),
+					eq(members.status, "active"),
+				),
+			);
+		result.set++;
+		await logActivity(tx, {
+			clubId: ctx.clubId,
+			actorMemberId: null,
+			impersonatedBy: ctx.superadminUserId,
+			action: "member_edit",
+			targetType: "member",
+			targetId: side.id,
+			detail: {
+				willingToMentor: true,
+				importId: ctx.importId,
+			},
+		});
+	}
+}
+
+/**
  * Import the stored bundle's mentor pairs as #939 mentorships. The caller has
  * proved the superadmin.
  *
@@ -175,7 +281,10 @@ async function lockedActiveIds(
  * - Each pairing written is audited like `createMentorship`'s (a `member_edit`),
  *   beside the step's one `history_imported` summary.
  * - A row with "Wants Mentee?" turns the row's member's `willing_to_mentor` on
- *   (#1204), audited as a `member_edit` per member changed; never off.
+ *   (#1204), audited as a `member_edit` per member changed; never off. Each
+ *   member handled is remembered (`import_refs` kind `willing_to_mentor`, keyed
+ *   on the member), so a re-run does not turn the flag back on for one who
+ *   turned it off since.
  * - One transaction under the club write lock and the apply's own per-club lock.
  */
 export async function importMentorPairs(input: {
@@ -204,13 +313,20 @@ export async function importMentorPairs(input: {
 				and(
 					eq(importRefs.clubId, input.clubId),
 					eq(importRefs.source, SOURCE),
-					inArray(importRefs.kind, ["person", "mentor_pair"]),
+					inArray(importRefs.kind, [
+						"person",
+						"mentor_pair",
+						"willing_to_mentor",
+					]),
 				),
 			);
 		const personRefs = new Map<string, string>();
 		const imported = new Set<string>();
+		// Member ids whose "Wants Mentee?" an earlier run (or row) already handled.
+		const willingDone = new Set<string>();
 		for (const ref of refs) {
 			if (ref.kind === "person") personRefs.set(ref.sourceId, ref.targetId);
+			else if (ref.kind === "willing_to_mentor") willingDone.add(ref.sourceId);
 			else imported.add(ref.sourceId);
 		}
 		const live = new Set(
@@ -254,7 +370,12 @@ export async function importMentorPairs(input: {
 			alreadyImported: 0,
 			alreadyPaired: 0,
 			skipped: [],
-			willing: { set: 0, alreadyWilling: 0, skipped: [] },
+			willing: {
+				set: 0,
+				alreadyWilling: 0,
+				previouslyImported: 0,
+				skipped: [],
+			},
 		};
 		for (const row of rows) {
 			const mentor = row.mentor;
@@ -345,67 +466,15 @@ export async function importMentorPairs(input: {
 			});
 		}
 
-		// "Wants Mentee?": the row's member is open to taking on a mentee. Only ever
-		// turns the flag ON. The column cannot tell a member who turned it off in
-		// GavelUp from one who never set it, and the flag is the member's own
-		// Easy-Speak statement, so it is imported. Idempotent: already true IS the
-		// idempotency, so there is no import_refs kind.
-		const seenSkipped = new Set<string>();
-		for (const row of rows) {
-			if (!row.wantsMentee) continue;
-			const who = row.mentee;
-			const side = sideOf(who);
-			if (side.state !== "active") {
-				const key = personKeyOf(who);
-				if (!seenSkipped.has(key)) {
-					seenSkipped.add(key);
-					result.willing.skipped.push({
-						person: who,
-						reason: side.state === "unresolved" ? "unresolved" : "not_member",
-					});
-				}
-				continue;
-			}
-			// Lock the row and trust only what the lock shows: an admin may have
-			// lapsed the member since the snapshot above.
-			const [current] = await tx
-				.select({
-					status: members.status,
-					willing: members.willingToMentor,
-				})
-				.from(members)
-				.where(and(eq(members.clubId, input.clubId), eq(members.id, side.id)))
-				.for("update");
-			if (!current || current.status !== "active") {
-				const key = personKeyOf(who);
-				if (!seenSkipped.has(key)) {
-					seenSkipped.add(key);
-					result.willing.skipped.push({ person: who, reason: "not_member" });
-				}
-				continue;
-			}
-			if (current.willing) {
-				result.willing.alreadyWilling++;
-				continue;
-			}
-			await tx
-				.update(members)
-				.set({ willingToMentor: true })
-				.where(eq(members.id, side.id));
-			result.willing.set++;
-			await logActivity(tx, {
-				clubId: input.clubId,
-				actorMemberId: null,
-				impersonatedBy: input.superadminUserId,
-				action: "member_edit",
-				targetType: "member",
-				targetId: side.id,
-				detail: {
-					willingToMentor: true,
-					importId: input.importId,
-				},
-			});
-		}
+		await importWillingFlags(tx, {
+			clubId: input.clubId,
+			importId: input.importId,
+			superadminUserId: input.superadminUserId,
+			rows,
+			sideOf,
+			done: willingDone,
+			result: result.willing,
+		});
 
 		await logActivity(tx, {
 			clubId: input.clubId,
@@ -428,6 +497,7 @@ export async function importMentorPairs(input: {
 					skipped: result.skipped.length,
 					willingSet: result.willing.set,
 					willingAlready: result.willing.alreadyWilling,
+					willingPreviouslyImported: result.willing.previouslyImported,
 					willingSkipped: result.willing.skipped.length,
 				},
 			},
