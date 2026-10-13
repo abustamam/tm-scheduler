@@ -39,6 +39,7 @@ import { logActivity } from "./activity";
 import { lockClubForWrite } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { requireMembership } from "./guards";
+import type { DbOrTx } from "./meeting-templates-logic";
 import { isSqlState, isUniqueViolation } from "./pg-errors";
 
 export const MENTORSHIP_SELF_MESSAGE = "A member can't mentor themselves.";
@@ -220,18 +221,29 @@ function translateDbRefusal(err: unknown): never {
 	throw err;
 }
 
-/** Pair a mentor with a mentee (an admin's write; the caller gates it). */
-export async function createMentorship(input: {
-	clubId: string;
-	mentorMemberId: string;
-	menteeMemberId: string;
-	focus: MentorshipFocus | null;
-	focusOther?: string | null;
-	actorMemberId: string | null;
-}): Promise<{ id: string }> {
+/**
+ * Pair a mentor with a mentee (an admin's write; the caller gates it).
+ *
+ * `conn` is the executor the write runs on. It defaults to the pooled client,
+ * which makes `conn.transaction` the transaction the lock, the check and the
+ * insert need; given a caller's transaction it is a savepoint inside it, so the
+ * pairing can see that caller's uncommitted club and members (the fixture
+ * builder, #1198) and rolls back with it. Every existing caller passes none.
+ */
+export async function createMentorship(
+	input: {
+		clubId: string;
+		mentorMemberId: string;
+		menteeMemberId: string;
+		focus: MentorshipFocus | null;
+		focusOther?: string | null;
+		actorMemberId: string | null;
+	},
+	conn: DbOrTx = db,
+): Promise<{ id: string }> {
 	const focusOtherValue = normalizeFocusOther(input.focus, input.focusOther);
 	try {
-		return await db.transaction(async (tx) => {
+		return await conn.transaction(async (tx) => {
 			await lockClubForWrite(tx, input.clubId);
 			await assertPairable(
 				tx,
