@@ -858,8 +858,9 @@ async function applyMeeting(
 		// -- The meeting row --------------------------------------------------
 		const joinUrl = normalizePresentationUrl(pm.joinUrl);
 		let meetingId: string;
+		let m: typeof meetings.$inferSelect | undefined;
 		if (pm.existingMeetingId) {
-			const [m] = await tx
+			[m] = await tx
 				.select()
 				.from(meetings)
 				.where(
@@ -871,6 +872,30 @@ async function applyMeeting(
 				.limit(1)
 				.for("no key update");
 			if (!m) throw new Error("The meeting this import points at is gone.");
+		} else {
+			// The plan said "create", but it was read before this lock: a person may
+			// have made a meeting at this instant since. Under the lock, D1 applies to
+			// it as it would have in the plan (adopt a completed one, leave any other
+			// alone) rather than minting a second meeting at the same instant.
+			const atInstant = await tx
+				.select()
+				.from(meetings)
+				.where(
+					and(
+						eq(meetings.clubId, clubId),
+						eq(meetings.scheduledAt, pm.scheduledAt),
+					),
+				)
+				.orderBy(meetings.createdAt, meetings.id)
+				.for("no key update");
+			m =
+				atInstant.find(
+					(x) =>
+						x.status === "completed" &&
+						x.scheduledAt.getTime() <= env.now.getTime(),
+				) ?? atInstant[0];
+		}
+		if (m) {
 			// D1 of #1196: a meeting that is not a completed one in the past is left
 			// exactly as it is. The plan said so too, but it was read before the
 			// lock, and a meeting can be cancelled or rescheduled in between.

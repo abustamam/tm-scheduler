@@ -35,6 +35,7 @@ import {
 import type { EasySpeakBundleV1 } from "#/lib/easy-speak-bundle";
 import {
 	isJsonbSafeText,
+	MEETING_LEFT_ALONE,
 	type PersonResolution,
 } from "#/lib/easy-speak-import-plan";
 import {
@@ -661,6 +662,48 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 		expect(meetingsCount?.missing).toEqual(["644360"]);
 	});
 
+	it.each([
+		["completed", true],
+		["cancelled", false],
+	] as const)("a %s meeting made at the bundle's instant while the apply was running is not duplicated (%s adopted)", async (status, adopted) => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		// Call 2 is the first meeting's transaction, right after it took the club
+		// write lock: a person's meeting lands in the window the plan could not see.
+		let raced = "";
+		lockHook.run = async (tx, call) => {
+			if (call !== 2) return;
+			const [row] = await (tx as typeof testDb)
+				.insert(meetings)
+				.values({ clubId: seed.clubId, scheduledAt: FIRST_AT, status })
+				.returning({ id: meetings.id });
+			raced = row?.id as string;
+		};
+		const { report } = await apply(stored.importId, resolutions);
+		lockHook.run = null;
+		const rows = await testDb
+			.select({ id: meetings.id, status: meetings.status })
+			.from(meetings)
+			.where(
+				and(
+					eq(meetings.clubId, seed.clubId),
+					eq(meetings.scheduledAt, FIRST_AT),
+				),
+			);
+		expect(rows).toEqual([{ id: raced, status }]);
+		const ref = (await refsOfKind("meeting")).find(
+			(r) => r.sourceId === "644304",
+		);
+		expect(ref?.targetId).toBe(adopted ? raced : undefined);
+		if (adopted) {
+			expect(report.meetings.applied).toBe(1);
+		} else {
+			expect(
+				report.notImported.some((r) => r.what === MEETING_LEFT_ALONE),
+			).toBe(true);
+		}
+	});
+
 	it("a failure message carries no NUL and no SQL", async () => {
 		const stored = await upload();
 		const { resolutions } = await resolveAll(stored.importId);
@@ -1161,12 +1204,12 @@ EXECUTE FUNCTION zz_claim_slot()`),
 			})
 			.returning({ id: meetingAwards.id });
 		await apply(stored.importId, resolutions);
-		expect(
-			(await refsOfKind("award")).map((r) => r.sourceId),
-		).not.toContain("644304:best_speaker");
-		expect((await refsOfKind("role_slot")).map((r) => r.sourceId)).not.toContain(
-			"644304:1",
+		expect((await refsOfKind("award")).map((r) => r.sourceId)).not.toContain(
+			"644304:best_speaker",
 		);
+		expect(
+			(await refsOfKind("role_slot")).map((r) => r.sourceId),
+		).not.toContain("644304:1");
 		// An officer clears Bob's award and seat; the next run is not "deleted since".
 		await testDb
 			.delete(meetingAwards)
