@@ -32,13 +32,6 @@
  */
 
 import { eq } from "drizzle-orm";
-import { slotLabel } from "#/lib/agenda";
-import type { AttendanceMode } from "#/lib/attendance-mode";
-import { utcToZonedWallTime } from "#/lib/datetime";
-import { currentProgramYear } from "#/lib/dcp";
-import { createGuestRecord } from "#/server/guests-logic";
-import type { DbOrTx } from "#/server/meeting-templates-logic";
-import { createMentorship } from "#/server/mentorship-logic";
 import {
 	dcpGoalProgress,
 	dcpScoreboards,
@@ -51,7 +44,14 @@ import {
 	roleFeedbackNotes,
 	roleSlots,
 	tableTopicsSpeakers,
-} from "../schema.ts";
+} from "#/db/schema";
+import { slotLabel } from "#/lib/agenda";
+import type { AttendanceMode } from "#/lib/attendance-mode";
+import { utcToZonedWallTime } from "#/lib/datetime";
+import { programYearForDate } from "#/lib/dcp";
+import { createGuestRecord } from "#/server/guests-logic";
+import type { DbOrTx } from "#/server/meeting-templates-logic";
+import { createMentorship } from "#/server/mentorship-logic";
 import {
 	assertCatalog,
 	claimSlot,
@@ -284,6 +284,22 @@ function holder(slots: HeldSlot[], roleName: string, slotIndex = 0) {
 		throw new Error(`Fixture: nobody holds ${roleName} ${slotIndex + 1}`);
 	}
 	return { slot, memberId: slot.memberId };
+}
+
+/**
+ * The DCP program year (July to June) the club is in on `now`: read off the
+ * club's own wall date, not the process's. `programYearForDate` reads the
+ * month and year in the process zone, so on a UTC server the evening of
+ * June 30 in Chicago (already July 1 in UTC) would land in the next year. The
+ * date is rebuilt from the club-local year and month at noon, a local date in
+ * any process zone, so only its month and year are read.
+ */
+export function clubProgramYear(now: Date, timeZone: string): number {
+	const [year, month] = utcToZonedWallTime(now, timeZone)
+		.split("T")[0]!
+		.split("-")
+		.map(Number) as [number, number];
+	return programYearForDate(new Date(year, month - 1, 15, 12));
 }
 
 /**
@@ -737,7 +753,7 @@ export async function buildFixtureClub(
 			.insert(dcpScoreboards)
 			.values({
 				clubId: harbor.clubId,
-				programYear: currentProgramYear(now),
+				programYear: clubProgramYear(now, timeZone),
 				baseMemberCount: 6,
 			})
 			.returning({ id: dcpScoreboards.id });

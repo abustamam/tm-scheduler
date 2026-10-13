@@ -127,16 +127,17 @@ async function seedClub(
 async function main() {
 	console.log("Seeding…");
 
-	// The Pathways catalog first: Harbor City's hand-declared paths below count
-	// against it, and `enrollPath` upserts into the same `pathways_paths` rows.
-	// Idempotent — the production container runs it on every boot.
+	// The Pathways catalog first: Harbor City's hand-declared paths below read
+	// it, and `enrollPath` throws `CATALOG_MISSING` when a path is absent rather
+	// than writing one. Idempotent — the production container runs it on every
+	// boot.
 	await seedPathwaysCatalog();
 
 	// A platform superadmin who belongs to no club (for console + impersonation).
 	await ensureFixtureUser(db, "Platform Superadmin", SUPERADMIN_EMAIL);
 
-	// "Now" and the club's zone, fixed once so every date below agrees. MCF takes
-	// the column default zone; its meetings are 7 PM there.
+	// "Now" and the club's zone, fixed once so every date below agrees. MCF and
+	// Harbor City both pass this zone explicitly; MCF's meetings are 7 PM there.
 	const now = new Date();
 	const TZ = "America/Chicago";
 	const at = (days: number, hour: number) => dayAt(now, TZ, days, hour);

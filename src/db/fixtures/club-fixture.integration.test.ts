@@ -35,9 +35,9 @@ import {
 	meetings,
 	memberDues,
 	members,
-	mentorships,
 	pathEnrollments,
 	pathwaysPaths,
+	pathwaysProjects,
 	people,
 	roleDefinitions,
 	roleSlots,
@@ -45,11 +45,10 @@ import {
 	user,
 } from "#/db/schema";
 import { utcToZonedWallTime } from "#/lib/datetime";
-import { currentProgramYear } from "#/lib/dcp";
 import { PATHWAYS_CATALOG } from "#/lib/pathways-catalog";
+import type { DbOrTx } from "#/server/meeting-templates-logic";
 import { loadFeedbackForUser } from "#/server/role-feedback-logic";
 import { cleanup, hasTestDb, testDb } from "#/test/db";
-import { seedPathwaysCatalog } from "../../../scripts/pathways-catalog-seed.ts";
 import {
 	buildFixtureClub,
 	FixtureError,
@@ -79,33 +78,40 @@ const CATALOG_CODES = ["8706", "8700", "8705", "8701"];
 const addedPathIds: string[] = [];
 
 /**
- * The fixture only READS the catalog. A test DB that lacks the paths it needs
- * gets just those paths, with their projects and no level rows (a level row
- * for a real path would change what the progress suites see), and this file
- * removes what it added: the Pathways suites run in parallel against the same
- * database and adopt or create these paths themselves.
+ * The fixture only READS the catalog. A test DB that lacks a path it needs gets
+ * that path with its projects and no level rows (a level row for a real path
+ * would change what the progress suites see). The insert is
+ * `onConflictDoNothing().returning(id)`, so `addedPathIds` holds exactly the
+ * rows THIS file created and `removeAddedCatalog` deletes only those: the
+ * Pathways suites run in parallel against the same database and may have
+ * inserted the same course code first, and that row is theirs.
  */
 async function ensureCatalog() {
-	const have = await testDb
-		.select({ code: pathwaysPaths.courseCode })
-		.from(pathwaysPaths)
-		.where(inArray(pathwaysPaths.courseCode, CATALOG_CODES));
-	const haveCodes = new Set(have.map((r) => r.code));
-	const missing = PATHWAYS_CATALOG.filter(
-		(p) => CATALOG_CODES.includes(p.courseCode) && !haveCodes.has(p.courseCode),
-	).map((p) => ({ ...p, levels: [] }));
-	if (missing.length === 0) return;
-	await seedPathwaysCatalog(missing);
-	const added = await testDb
-		.select({ id: pathwaysPaths.id })
-		.from(pathwaysPaths)
-		.where(
-			inArray(
-				pathwaysPaths.courseCode,
-				missing.map((p) => p.courseCode),
-			),
+	for (const path of PATHWAYS_CATALOG.filter((p) =>
+		CATALOG_CODES.includes(p.courseCode),
+	)) {
+		const [inserted] = await testDb
+			.insert(pathwaysPaths)
+			.values({
+				courseCode: path.courseCode,
+				name: path.name,
+				status: path.status,
+			})
+			.onConflictDoNothing({ target: pathwaysPaths.courseCode })
+			.returning({ id: pathwaysPaths.id });
+		if (!inserted) continue;
+		addedPathIds.push(inserted.id);
+		await testDb.insert(pathwaysProjects).values(
+			path.projects.map((project, sortOrder) => ({
+				pathId: inserted.id,
+				level: project.level,
+				name: project.name,
+				isRequired: project.isRequired,
+				series: project.series ?? null,
+				sortOrder,
+			})),
 		);
-	addedPathIds.push(...added.map((r) => r.id));
+	}
 }
 
 async function removeAddedCatalog() {
@@ -159,61 +165,89 @@ describe.skipIf(!hasTestDb)("Harbor City fixture club", () => {
 		return { clubId, userId, now };
 	}
 
-	// protects=a transaction that throws after the build leaves no row of the
-	//   club in any table, including the mentorship, which used to open its own
-	//   transaction and so could not even see the club;
-	// fails_when=any fixture write goes through a connection other than the one
-	//   it was given (it would commit, or be refused for naming a club that does
-	//   not exist yet), or a table is left holding a row of the club;
-	// no_claim=rows no table links to a club_id (people, accounts) are checked by
-	//   the fixture's own addresses and slug, not by a before/after count of
-	//   every table, which a parallel suite would disturb.
-	it("leaves no row behind when the transaction rolls back", async () => {
-		const tables = (
-			await testDb.execute<{ table_name: string }>(
-				sql`select table_name from information_schema.columns
-					where table_schema = 'public' and column_name = 'club_id'`,
+	/** Every base table of the public schema, with each row as JSON text. */
+	async function snapshotEveryTable(conn: DbOrTx) {
+		const names = (
+			await conn.execute<{ table_name: string }>(
+				sql`select table_name from information_schema.tables
+					where table_schema = 'public' and table_type = 'BASE TABLE'`,
 			)
 		).rows.map((r) => r.table_name);
-		expect(tables).toContain("mentorships");
-		expect(tables).toContain("meetings");
+		const rows = new Map<string, Set<string>>();
+		for (const name of names) {
+			const res = await conn.execute<{ r: string }>(
+				sql`select to_jsonb(t)::text as r from ${sql.identifier(name)} t`,
+			);
+			rows.set(name, new Set(res.rows.map((x) => x.r)));
+		}
+		return rows;
+	}
 
+	// protects=a transaction that throws after the build leaves nothing behind in
+	//   ANY table of the public schema, including the mentorship, which used to
+	//   open its own transaction and so could not even see the club;
+	// fails_when=any fixture write goes through a connection other than the one
+	//   it was given (it would commit, or be refused for naming a club that does
+	//   not exist yet), or any table keeps a row the build created;
+	// no_claim=NOT a before/after count of every table: test files run in
+	//   parallel against one database, so a global count moves for reasons of its
+	//   own. The rows the build created are identified instead, inside a
+	//   REPEATABLE READ transaction (other suites' commits are invisible there),
+	//   as the rows every public table holds with the build minus the rows it
+	//   holds once the build's savepoint is rolled back; after the outer
+	//   rollback each of those exact rows is looked for in the committed table.
+	//   It does not see a row a fixture write committed on another connection
+	//   that this snapshot cannot read, other than by finding it in the committed
+	//   tables afterwards, which it does by exact content.
+	it("leaves no row behind when the transaction rolls back", async () => {
 		const o = opts(new Date());
+		const created = new Map<string, string[]>();
 		let clubId = "";
 		await expect(
-			testDb.transaction(async (tx) => {
-				({ clubId } = await buildFixtureClub(tx, o));
-				// Not vacuous: the club and its mentorship are really there inside.
-				const inside = await tx
-					.select({ n: count() })
-					.from(mentorships)
-					.where(eq(mentorships.clubId, clubId));
-				expect(inside[0]?.n).toBe(1);
-				throw new Rollback();
-			}),
+			testDb.transaction(
+				async (tx) => {
+					let withBuild = new Map<string, Set<string>>();
+					await expect(
+						tx.transaction(async (sp) => {
+							({ clubId } = await buildFixtureClub(sp, o));
+							withBuild = await snapshotEveryTable(sp);
+							throw new Rollback();
+						}),
+					).rejects.toBeInstanceOf(Rollback);
+					// The savepoint is gone: this is the state before the build.
+					const before = await snapshotEveryTable(tx);
+					for (const [name, rows] of withBuild) {
+						const own = [...rows].filter((r) => !before.get(name)?.has(r));
+						if (own.length > 0) created.set(name, own);
+					}
+					throw new Rollback();
+				},
+				{ isolationLevel: "repeatable read" },
+			),
 		).rejects.toBeInstanceOf(Rollback);
 
-		for (const table of tables) {
-			const res = await testDb.execute<{ n: number }>(
-				sql`select count(*)::int as n from ${sql.identifier(table)} where club_id = ${clubId}`,
-			);
-			expect(res.rows[0]?.n, `${table} kept rows of the club`).toBe(0);
+		// Not vacuous: the build wrote to the tables this test is about, and to
+		// the many that carry no club_id of their own.
+		for (const t of [
+			"clubs",
+			"mentorships",
+			"meetings",
+			"role_slots",
+			"user",
+			"people",
+			"meeting_attendance",
+			"member_dues",
+			"dcp_goal_progress",
+		]) {
+			expect(created.has(t), `${t} gained no row inside the build`).toBe(true);
 		}
-		const [bySlug] = await testDb
-			.select({ n: count() })
-			.from(clubs)
-			.where(eq(clubs.slug, o.slug));
-		expect(bySlug?.n).toBe(0);
-		const [accounts] = await testDb
-			.select({ n: count() })
-			.from(user)
-			.where(inArray(user.email, FIXTURE_EMAILS));
-		expect(accounts?.n).toBe(0);
-		const [persons] = await testDb
-			.select({ n: count() })
-			.from(people)
-			.where(inArray(people.email, [...FIXTURE_EMAILS, ...GUEST_EMAILS]));
-		expect(persons?.n).toBe(0);
+		expect(clubId).not.toBe("");
+
+		const after = await snapshotEveryTable(testDb);
+		for (const [name, rows] of created) {
+			const kept = rows.filter((r) => after.get(name)?.has(r));
+			expect(kept, `${name} kept rows the build created`).toEqual([]);
+		}
 	});
 
 	// protects=what an officer opens between meetings (dues, minutes on every held
@@ -265,7 +299,7 @@ describe.skipIf(!hasTestDb)("Harbor City fixture club", () => {
 			.select({ id: dcpScoreboards.id, year: dcpScoreboards.programYear })
 			.from(dcpScoreboards)
 			.where(eq(dcpScoreboards.clubId, clubId));
-		expect(board?.year).toBe(currentProgramYear(now));
+		expect(board?.year).toBeTypeOf("number");
 		const goals = await testDb
 			.select({ key: dcpGoalProgress.goalKey })
 			.from(dcpGoalProgress)
@@ -464,6 +498,41 @@ describe.skipIf(!hasTestDb)("Harbor City fixture club", () => {
 		}
 	});
 
+	// protects=the DCP scoreboard is for the program year the CLUB is in: a
+	//   Chicago club on the evening of June 30 is still in the program year that
+	//   ends that day, though the server's clock (UTC) already reads July 1;
+	// fails_when=the year is computed from the process's own date: under TZ=UTC
+	//   the first instant below is July 1 there and would give 2026, not 2025;
+	// no_claim=two instants around one boundary in one zone; the rest of the
+	//   year, and zones ahead of UTC, are not exercised, and `board.year` is
+	//   compared with literals, not with `programYearForDate`.
+	it("takes the DCP program year from the club's wall date under TZ=UTC", async () => {
+		const priorTz = process.env.TZ;
+		process.env.TZ = "UTC";
+		try {
+			expect(new Date(2026, 6, 1, 12).getTimezoneOffset()).toBe(0);
+			const cases: [string, string, number][] = [
+				// 21:30 on June 30 in Chicago (CDT), 02:30 on July 1 in UTC.
+				["2026-07-01T02:30:00.000Z", "2026-06-30T21:30", 2025],
+				// 00:30 on July 1 in Chicago, 05:30 in UTC.
+				["2026-07-01T05:30:00.000Z", "2026-07-01T00:30", 2026],
+			];
+			for (const [instant, wall, year] of cases) {
+				const now = new Date(instant);
+				expect(utcToZonedWallTime(now, ZONE)).toBe(wall);
+				const { clubId } = await build(now);
+				const [board] = await testDb
+					.select({ year: dcpScoreboards.programYear })
+					.from(dcpScoreboards)
+					.where(eq(dcpScoreboards.clubId, clubId));
+				expect(board?.year, `program year at ${wall} in Chicago`).toBe(year);
+			}
+		} finally {
+			if (priorTz === undefined) delete process.env.TZ;
+			else process.env.TZ = priorTz;
+		}
+	});
+
 	// protects=an account that already exists at a fictional member's address
 	//   keeps its name, and the fixture links its new Person to that account;
 	// fails_when=the build upserts the account's name (the old seeder did);
@@ -532,6 +601,11 @@ describe.skipIf(!hasTestDb)("Harbor City fixture club", () => {
 					.from(user)
 					.where(inArray(user.email, FIXTURE_EMAILS));
 				expect(accounts?.n).toBe(0);
+				const [persons] = await tx
+					.select({ n: count() })
+					.from(people)
+					.where(inArray(people.email, [...FIXTURE_EMAILS, ...GUEST_EMAILS]));
+				expect(persons?.n).toBe(0);
 				const [catalog] = await tx.select({ n: count() }).from(pathwaysPaths);
 				expect(catalog?.n).toBe(0);
 				throw new Rollback();
@@ -543,8 +617,12 @@ describe.skipIf(!hasTestDb)("Harbor City fixture club", () => {
 	//   nothing from `scripts/`, which in production is a separate step;
 	// fails_when=a module-level statement calls `process.exit` or a script file is
 	//   imported from either fixture file;
-	// no_claim=a source scan, not a proof: it catches the import form used here
-	//   and a literal `process.exit`, not an exit reached through a helper.
+	// no_claim=`#/db` is mocked here, so this does NOT show that importing
+	//   `club-fixture.ts` is safe without a database: it loads `#/db` through
+	//   `guests-logic` and `mentorship-logic`, and the real `#/db` throws at
+	//   import without DATABASE_URL (only `helpers.ts` itself imports no `db`).
+	//   The source scan is not a proof either: it catches the import form used
+	//   here and a literal `process.exit`, not an exit reached through a helper.
 	it("is import-safe and imports nothing from scripts/", async () => {
 		const exit = vi.spyOn(process, "exit").mockImplementation((() => {
 			throw new Error("process.exit called");

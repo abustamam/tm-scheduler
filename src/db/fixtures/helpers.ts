@@ -16,22 +16,13 @@
  *  - **Nothing here runs on import, and nothing imports `scripts/`.** The old
  *    seed ran `main()` and `process.exit` when imported.
  *
- * This module imports no runtime `db`: `DbOrTx` is a type, so importing it
- * connects to nothing.
+ * This module itself imports no runtime `db`: `DbOrTx` is a type, so importing
+ * it connects to nothing. That is true of THIS file only: `./club-fixture.ts`
+ * also imports `guests-logic` and `mentorship-logic`, which import `#/db`, and
+ * that throws at import without `DATABASE_URL`.
  */
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
-import {
-	defaultClubRoleForOffices,
-	type OfficerPosition,
-} from "#/lib/officers";
-import {
-	availableContactMethods,
-	type ContactMethod,
-} from "#/lib/preferred-contact";
-import { ROLE_TEMPLATE } from "#/lib/role-template";
-import type { DbOrTx } from "#/server/meeting-templates-logic";
 import {
 	clubs,
 	meetings,
@@ -47,7 +38,18 @@ import {
 	roleSlots,
 	speeches,
 	user,
-} from "../schema.ts";
+} from "#/db/schema";
+import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
+import {
+	defaultClubRoleForOffices,
+	type OfficerPosition,
+} from "#/lib/officers";
+import {
+	availableContactMethods,
+	type ContactMethod,
+} from "#/lib/preferred-contact";
+import { ROLE_TEMPLATE } from "#/lib/role-template";
+import type { DbOrTx } from "#/server/meeting-templates-logic";
 
 /** A refusal the fixtures can name, so a caller can tell it from a bug. */
 export type FixtureErrorCode = "CATALOG_MISSING";
@@ -204,7 +206,7 @@ export interface SeededClub {
  */
 export function meetingByTheme(club: SeededClub, theme: string) {
 	const meeting = club.meetings.find((m) => m.theme === theme);
-	if (!meeting) throw new Error(`Seed: no meeting themed "${theme}"`);
+	if (!meeting) throw new Error(`Fixture: no meeting themed "${theme}"`);
 	return meeting;
 }
 
@@ -280,7 +282,7 @@ export async function insertFixtureClub(
 					!availableContactMethods({ email: r.email, phone }).includes(method)
 				) {
 					throw new Error(
-						`Seed: ${r.name} prefers ${method} but has no ${method === "email" ? "email" : "phone number"} to use it with`,
+						`Fixture: ${r.name} prefers ${method} but has no ${method === "email" ? "email" : "phone number"} to use it with`,
 					);
 				}
 				return {
@@ -405,7 +407,7 @@ export function slotOf(
 		(s) => s.roleDefinitionId === def?.id && s.slotIndex === slotIndex,
 	);
 	if (!slot)
-		throw new Error(`Seed: no slot ${slotIndex} for role "${roleName}"`);
+		throw new Error(`Fixture: no slot ${slotIndex} for role "${roleName}"`);
 	return slot;
 }
 
