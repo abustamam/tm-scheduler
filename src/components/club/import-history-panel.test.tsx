@@ -37,6 +37,7 @@ const counts = {
 	meetingsToCreate: 1,
 	meetingsToAdopt: 0,
 	meetingsToUpdate: 0,
+	meetingsToSkip: 2,
 	futureMeetingsSkipped: 2,
 	roleAssignments: 14,
 	speeches: 2,
@@ -73,9 +74,12 @@ const person = {
 	},
 };
 
+const PLAN_HASH = "a".repeat(64);
+
 function previewFor(resolved: boolean, report: unknown = null) {
 	return {
 		importId: IMPORT,
+		planHash: PLAN_HASH,
 		appliedAt: null,
 		bundleClub: { name: "Fixture Speakers", number: "9999" },
 		club: { name: "Test Club", number: null },
@@ -164,6 +168,7 @@ describe("ImportHistoryPanel (#1051)", () => {
 				).disabled,
 			).toBe(false),
 		);
+		expect(screen.getByText("Left as they are in GavelUp")).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Apply import" }));
 		fireEvent.click(await screen.findByRole("button", { name: "Yes, apply" }));
 		await waitFor(() => expect(fns.applyEasySpeakImport).toHaveBeenCalled());
@@ -172,6 +177,8 @@ describe("ImportHistoryPanel (#1051)", () => {
 				clubId: CLUB,
 				importId: IMPORT,
 				resolutions: { "es:900005": { action: "member", memberId: M2 } },
+				// The apply names the preview it confirms.
+				planHash: PLAN_HASH,
 			},
 		});
 	});
