@@ -158,10 +158,13 @@ const gridData: SeasonGridData = {
 	contacted: [],
 };
 
-async function renderPage(search: ReturnType<ValidateSearch>) {
+async function renderPage(
+	search: ReturnType<ValidateSearch>,
+	data: SeasonGridData = gridData,
+) {
 	const navigate = vi.fn();
 	vi.spyOn(Route, "useLoaderData").mockReturnValue({
-		data: gridData,
+		data,
 		cancelled: [],
 	} as never);
 	vi.spyOn(Route, "useSearch").mockReturnValue(search as never);
@@ -254,5 +257,49 @@ describe("the Show past control", () => {
 			count: "all",
 			past: 4,
 		});
+	});
+});
+
+describe("the next-meeting link button (#1146)", () => {
+	const search = { view: "members", count: 8 } as const;
+
+	// protects=a plain member (context has no clubs, so no officer role) sees a
+	// "Copy next-meeting link" button that copies <origin>/club/<slug>/next;
+	// fails_when=the button is officer-only, is missing, or builds the sign-up
+	// sheet path `/club/<slug>` instead of the `/next` permalink;
+	// no_claim=the loader data and route context are mocked, so this does not
+	// prove the real loader returns a slug or that the /next route resolves.
+	it("renders for a plain member and copies the /next permalink", async () => {
+		const writeText = vi.fn(async (_: string) => {});
+		vi.stubGlobal("navigator", { clipboard: { writeText } });
+		try {
+			await renderPage(search, { ...gridData, clubSlug: "harbor" });
+			fireEvent.click(
+				screen.getByRole("button", { name: "Copy next-meeting link" }),
+			);
+			await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+			expect(writeText).toHaveBeenCalledWith(
+				`${window.location.origin}/club/harbor/next`,
+			);
+			expect(
+				screen.getByRole("button", { name: "Copy sign-up sheet link" }),
+			).toBeTruthy();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	// protects=with no clubSlug in the loader data neither share button renders;
+	// fails_when=the new button is rendered without the `data?.clubSlug` guard
+	// (a link to `/club/null/next`) or the guard is dropped from the first one;
+	// no_claim=the null slug is a hand-built fixture, not a real club row.
+	it("renders neither button when the club has no slug", async () => {
+		await renderPage(search);
+		expect(
+			screen.queryByRole("button", { name: "Copy next-meeting link" }),
+		).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: "Copy sign-up sheet link" }),
+		).toBeNull();
 	});
 });
