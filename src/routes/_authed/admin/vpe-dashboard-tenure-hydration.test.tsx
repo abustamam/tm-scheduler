@@ -31,6 +31,12 @@ vi.mock("#/server/reporting", () => ({
 	getLevelProximity: vi.fn(),
 }));
 
+vi.mock("#/server/speech-requests", () => ({
+	getSpeechRequestQueue: vi.fn(),
+	getSchedulableSpeakerSlots: vi.fn(),
+	scheduleRequestedSpeech: vi.fn(),
+}));
+
 // A `Link` needs a router, and `renderToString` cannot wait for one to
 // resolve. The rows' hrefs are not what this file is about.
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -97,6 +103,7 @@ function page(loaderNow: number) {
 		pairings: [],
 		proximity: [],
 		orientation: [],
+		speechRequests: [],
 		timezone: CLUB_ZONE,
 		now: loaderNow,
 		clubName: "Downtown Club",

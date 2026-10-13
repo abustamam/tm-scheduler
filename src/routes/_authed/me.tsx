@@ -2,6 +2,7 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { CalendarDays, Loader2, Mic } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { MySpeechRequests } from "#/components/club/my-speech-requests";
 import { PageContainer } from "#/components/page-container";
 import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { Badge } from "#/components/ui/badge";
@@ -10,18 +11,29 @@ import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { navLabel } from "#/lib/nav-destinations";
 import { listMyCommitments } from "#/server/meetings";
 import { releaseSlot } from "#/server/slots";
+import {
+	getMySpeechRequests,
+	type MySpeechRequest,
+} from "#/server/speech-requests";
 
 export const Route = createFileRoute("/_authed/me")({
-	loader: async () => {
-		const commitments = await listMyCommitments();
-		return { commitments };
+	loader: async ({ context }) => {
+		const clubId = context.activeClubId;
+		const [commitments, speechRequests] = await Promise.all([
+			listMyCommitments(),
+			// The active club's open and scheduled requests (#1052); none without a club.
+			clubId
+				? getMySpeechRequests({ data: { clubId } })
+				: Promise.resolve([] as MySpeechRequest[]),
+		]);
+		return { commitments, speechRequests };
 	},
 	component: MyCommitments,
 });
 
 function MyCommitments() {
-	const { commitments } = Route.useLoaderData();
-	const { currentMemberId } = Route.useRouteContext();
+	const { commitments, speechRequests } = Route.useLoaderData();
+	const { currentMemberId, activeClubId } = Route.useRouteContext();
 	const router = useRouter();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 
@@ -93,6 +105,10 @@ function MyCommitments() {
 						))}
 					</ul>
 				</div>
+			) : null}
+
+			{activeClubId ? (
+				<MySpeechRequests clubId={activeClubId} requests={speechRequests} />
 			) : null}
 
 			{commitments.length === 0 ? (

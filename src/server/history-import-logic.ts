@@ -60,6 +60,7 @@ import {
 	roleDefinitions,
 	roleSlots,
 	speeches,
+	speechRequests,
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
@@ -84,6 +85,7 @@ import {
 	type PlanMeeting,
 	type PlanPerson,
 	type PlanRosterMember,
+	personKeyOf,
 	resolutionsSchema,
 	scrubJsonbText,
 } from "#/lib/easy-speak-import-plan";
@@ -95,6 +97,10 @@ import { type ImportRefKind, importRefKindSchema } from "#/lib/import-refs";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
+import {
+	clipImportedText,
+	normalizePreferredDates,
+} from "#/lib/speech-requests";
 import { logActivity } from "./activity";
 import { importPlanAnswers } from "./attendance-plan-logic";
 import { lockClubForWrite } from "./club-write-lock";
@@ -1597,6 +1603,192 @@ async function applyUnderImportLock(input: {
 }
 
 // ---------------------------------------------------------------------------
+// Speech requests (#1052): a step of its own, after the history is applied
+// ---------------------------------------------------------------------------
+
+export const IMPORT_NOT_APPLIED_MESSAGE =
+	"Apply the import before importing its speech requests: they are matched to the people it resolved.";
+
+/** What the speech-request step did, by outcome. The counts sum to `total`. */
+export interface SpeechRequestImportResult {
+	/** Requests in the bundle. */
+	total: number;
+	/** Rows this run created. */
+	imported: number;
+	/** Already imported by an earlier run (a row a human has since withdrawn or deleted stays that way). */
+	alreadyImported: number;
+	/** Left to the meeting history: Easy-Speak had already put them on a date. */
+	skippedScheduled: number;
+	/** Left to the meeting history: the speech was given. */
+	skippedCompleted: number;
+	/** A status this importer does not know. */
+	skippedUnknownStatus: number;
+	/** The requester is not a member this import resolved (a guest, skipped, or removed since). */
+	skippedNoMember: number;
+}
+
+/**
+ * The source id of one request. Easy-Speak's own id when the page had one; else
+ * a hash of what identifies the ask (who, when, what), numbered when the same
+ * ask appears twice, so a re-run reproduces the same ids in the same order.
+ */
+function speechRequestSourceId(
+	request: EasySpeakBundleV1["speechRequests"][number],
+	seen: Map<string, number>,
+): string {
+	if (request.esSpeechId) return request.esSpeechId;
+	const identity = [
+		personKeyOf(request.who),
+		request.requestedOn ?? "",
+		request.title ?? "",
+		request.path ?? "",
+		request.project ?? "",
+		request.preferred.join(","),
+	].join("|");
+	const nth = (seen.get(identity) ?? 0) + 1;
+	seen.set(identity, nth);
+	const hash = createHash("sha256").update(identity).digest("hex").slice(0, 32);
+	return `anon:${hash}:${nth}`;
+}
+
+/**
+ * Import the stored bundle's OPEN speech requests as queue rows. The caller has
+ * proved the superadmin.
+ *
+ * - `requested` becomes an open request. `scheduled` and `completed` are skipped
+ *   (the meeting history carries them) and counted.
+ * - The requester must resolve through the `person` refs the import's apply
+ *   wrote, to a member who is still in the club; anyone else is skipped, counted.
+ * - Idempotent through `import_refs` kind `speech_request`: a second run adds
+ *   nothing, and a request someone withdrew or deleted since is not brought back.
+ * - One transaction under the club write lock and the apply's own per-club lock,
+ *   so it never interleaves with an apply or another run: all or nothing.
+ */
+export async function importSpeechRequests(input: {
+	clubId: string;
+	importId: string;
+	/** The superadmin the change is attributed to. */
+	superadminUserId: string;
+	now?: Date;
+}): Promise<SpeechRequestImportResult> {
+	const now = input.now ?? new Date();
+	const stored = await loadStoredBundle(input.clubId, input.importId);
+	if (!stored.appliedAt) throw new Error(IMPORT_NOT_APPLIED_MESSAGE);
+	const requests = stored.bundle.speechRequests;
+
+	return db.transaction(async (tx) => {
+		const taken = await tx.execute<{ ok: boolean }>(
+			sql`select pg_try_advisory_xact_lock(hashtextextended(${`history-import:${input.clubId}`}, 0)) as ok`,
+		);
+		if (!taken.rows[0]?.ok) throw new Error(IMPORT_RUNNING_MESSAGE);
+		await lockClubForWrite(tx, input.clubId);
+		await assertClubNotArchivedTx(tx, input.clubId);
+
+		const refs = await tx
+			.select({
+				kind: importRefs.kind,
+				sourceId: importRefs.sourceId,
+				targetId: importRefs.targetId,
+			})
+			.from(importRefs)
+			.where(
+				and(
+					eq(importRefs.clubId, input.clubId),
+					eq(importRefs.source, SOURCE),
+					inArray(importRefs.kind, ["person", "speech_request"]),
+				),
+			);
+		const personRefs = new Map<string, string>();
+		const imported = new Set<string>();
+		for (const ref of refs) {
+			if (ref.kind === "person") personRefs.set(ref.sourceId, ref.targetId);
+			else imported.add(ref.sourceId);
+		}
+		const live = new Set(
+			(
+				await tx
+					.select({ id: members.id })
+					.from(members)
+					.where(eq(members.clubId, input.clubId))
+			).map((m) => m.id),
+		);
+
+		const result: SpeechRequestImportResult = {
+			total: requests.length,
+			imported: 0,
+			alreadyImported: 0,
+			skippedScheduled: 0,
+			skippedCompleted: 0,
+			skippedUnknownStatus: 0,
+			skippedNoMember: 0,
+		};
+		const seen = new Map<string, number>();
+		for (const request of requests) {
+			// The id is taken for EVERY request, skipped or not, so an unkeyed
+			// request's number does not depend on which of its twins were skipped.
+			const sourceId = speechRequestSourceId(request, seen);
+			const status = request.status.trim().toLowerCase();
+			if (status === "scheduled") {
+				result.skippedScheduled++;
+				continue;
+			}
+			if (status === "completed") {
+				result.skippedCompleted++;
+				continue;
+			}
+			if (status !== "requested") {
+				result.skippedUnknownStatus++;
+				continue;
+			}
+			const memberId = personRefs.get(personKeyOf(request.who));
+			if (!memberId || !live.has(memberId)) {
+				result.skippedNoMember++;
+				continue;
+			}
+			if (imported.has(sourceId)) {
+				result.alreadyImported++;
+				continue;
+			}
+			const [row] = await tx
+				.insert(speechRequests)
+				.values({
+					clubId: input.clubId,
+					membershipId: memberId,
+					title: clipImportedText(request.title, "title"),
+					path: clipImportedText(request.path, "path"),
+					projectName: clipImportedText(request.project, "projectName"),
+					introduction: clipImportedText(request.introduction, "introduction"),
+					preferredDates: normalizePreferredDates(request.preferred),
+					createdAt: request.requestedOn
+						? new Date(`${request.requestedOn}T12:00:00.000Z`)
+						: now,
+				})
+				.returning({ id: speechRequests.id });
+			if (!row) throw new Error("Could not create a speech request.");
+			await putRef(tx, input.clubId, "speech_request", sourceId, row.id);
+			imported.add(sourceId);
+			result.imported++;
+		}
+
+		await logActivity(tx, {
+			clubId: input.clubId,
+			actorMemberId: null,
+			impersonatedBy: input.superadminUserId,
+			action: "history_imported",
+			targetType: "club",
+			targetId: input.clubId,
+			detail: {
+				importId: input.importId,
+				source: SOURCE,
+				step: "speech_requests",
+				counts: result,
+			},
+		});
+		return result;
+	});
+}
+
+// ---------------------------------------------------------------------------
 // Server-fn inputs (kept here: history-import.ts may export only server fns)
 // ---------------------------------------------------------------------------
 
@@ -1608,6 +1800,10 @@ export const uploadImportSchema = importClubSchema.extend({
 export const importRunSchema = importClubSchema.extend({
 	importId: z.string().uuid(),
 	resolutions: resolutionsSchema.optional(),
+});
+/** The speech-request step names the stored import it reads, nothing else. */
+export const importSpeechRequestsSchema = importClubSchema.extend({
+	importId: z.string().uuid(),
 });
 /** An apply names the preview it confirms: see {@link planFingerprint}. */
 export const importApplySchema = importRunSchema.extend({

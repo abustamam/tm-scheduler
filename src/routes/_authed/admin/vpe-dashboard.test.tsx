@@ -43,6 +43,12 @@ vi.mock("#/server/reporting", () => ({
 	getLevelProximity: vi.fn(),
 }));
 
+vi.mock("#/server/speech-requests", () => ({
+	getSpeechRequestQueue: vi.fn(),
+	getSchedulableSpeakerSlots: vi.fn(),
+	scheduleRequestedSpeech: vi.fn(),
+}));
+
 import { Route } from "./vpe-dashboard";
 
 afterEach(() => {
@@ -83,6 +89,7 @@ async function renderRoute(
 		proximity: extra.proximity ?? [],
 		// #942's section; this file asserts nothing about it.
 		orientation: [],
+		speechRequests: [],
 		timezone: extra.timezone,
 		// The instant the loader pins for tenure (#1017).
 		now: Date.parse("2026-09-15T12:00:00Z"),

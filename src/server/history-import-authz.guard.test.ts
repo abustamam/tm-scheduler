@@ -21,6 +21,7 @@ const EXPECTED_FNS = [
 	"uploadEasySpeakBundle",
 	"previewEasySpeakImport",
 	"applyEasySpeakImport",
+	"importEasySpeakSpeechRequests",
 ];
 
 /** The local names imported from `./history-import-logic`, aliases resolved, schemas left out. */
@@ -49,7 +50,7 @@ describe("history-import.ts server fns are superadmin-only (#1051)", () => {
 		expect(DECLARATIONS.map((d) => d.name).sort()).toEqual(
 			[...EXPECTED_FNS].sort(),
 		);
-		expect(LOGIC_NAMES).toHaveLength(4);
+		expect(LOGIC_NAMES).toHaveLength(5);
 	});
 
 	for (const declaration of DECLARATIONS) {
@@ -88,6 +89,7 @@ describe("history-import.ts server fns are superadmin-only (#1051)", () => {
 	it.each([
 		["uploadEasySpeakBundle", "storeEasySpeakBundleLogic"],
 		["applyEasySpeakImport", "applyEasySpeakImportLogic"],
+		["importEasySpeakSpeechRequests", "importSpeechRequestsLogic"],
 	])("%s checks for a read-only impersonation session before it writes (%s)", (name, logicCall) => {
 		const declaration = DECLARATIONS.find((d) => d.name === name);
 		const handler =
@@ -118,6 +120,7 @@ describe("history-import.ts server fns are superadmin-only (#1051)", () => {
 			"uploadEasySpeakBundle",
 			"previewEasySpeakImport",
 			"applyEasySpeakImport",
+			"importEasySpeakSpeechRequests",
 		]) {
 			expect(DECLARATIONS.find((d) => d.name === name)?.method, name).toBe(
 				"POST",

@@ -29,6 +29,12 @@ vi.mock("#/server/reporting", () => ({
 	getOrientationRoster: vi.fn(),
 }));
 
+vi.mock("#/server/speech-requests", () => ({
+	getSpeechRequestQueue: vi.fn(),
+	getSchedulableSpeakerSlots: vi.fn(),
+	scheduleRequestedSpeech: vi.fn(),
+}));
+
 import { Route } from "./vpe-dashboard";
 
 afterEach(() => {
@@ -80,6 +86,7 @@ async function renderRoute(
 		pairings: [],
 		proximity: [],
 		orientation,
+		speechRequests: [],
 		timezone: "America/Chicago",
 		clubName: "Downtown Club",
 		clubId: "11111111-1111-4111-8111-111111111111",
