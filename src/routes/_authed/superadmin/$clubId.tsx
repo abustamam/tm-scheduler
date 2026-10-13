@@ -9,9 +9,8 @@ import {
 	Trash2,
 	Undo2,
 } from "lucide-react";
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { toast } from "sonner";
-import { ImportHistoryPanel } from "#/components/club/import-history-panel";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -38,6 +37,14 @@ export const Route = createFileRoute("/_authed/superadmin/$clubId")({
 // UTC server and a browser in Tokyo disagreed and React threw the server markup
 // away. UTC rather than the club's zone because the platform console's club
 // detail carries no zone, and the list and the detail must date one club alike.
+// Loaded when a superadmin opens it, so the page (and its tests) do not pull in
+// the import's server fns until then.
+const ImportHistoryPanel = lazy(() =>
+	import("#/components/club/import-history-panel").then((m) => ({
+		default: m.ImportHistoryPanel,
+	})),
+);
+
 const dateFmt = new Intl.DateTimeFormat("en-US", {
 	year: "numeric",
 	month: "short",
@@ -117,7 +124,7 @@ function ClubDetail() {
 				<>
 					<ViewAsPanel clubId={clubId} clubName={club.name} />
 					<ActAsAdminPanel clubId={clubId} clubName={club.name} />
-					<ImportHistoryPanel clubId={clubId} clubName={club.name} />
+					<ImportHistoryDisclosure clubId={clubId} clubName={club.name} />
 				</>
 			)}
 
@@ -129,6 +136,42 @@ function ClubDetail() {
 				onDeleted={setDeleted}
 			/>
 		</PageContainer>
+	);
+}
+
+/**
+ * The Easy-Speak import (#1051) behind a button: the panel loads the club's
+ * stored imports and builds previews, so nothing of that runs until a
+ * superadmin asks for it.
+ */
+function ImportHistoryDisclosure({
+	clubId,
+	clubName,
+}: {
+	clubId: string;
+	clubName: string;
+}) {
+	const [open, setOpen] = useState(false);
+	if (open) {
+		return (
+			<Suspense
+				fallback={<p className="text-sm text-muted-foreground">Loading...</p>}
+			>
+				<ImportHistoryPanel clubId={clubId} clubName={clubName} />
+			</Suspense>
+		);
+	}
+	return (
+		<section className="max-w-xl space-y-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4">
+			<h2 className="text-sm font-bold">Import Easy-Speak history</h2>
+			<p className="text-sm text-muted-foreground">
+				Bring this club's past meetings, roles, speeches and attendance in from
+				an Easy-Speak export.
+			</p>
+			<Button type="button" size="sm" onClick={() => setOpen(true)}>
+				Open the import
+			</Button>
+		</section>
 	);
 }
 
