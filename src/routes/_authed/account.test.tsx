@@ -52,6 +52,13 @@ vi.mock("#/server/contact-preference", () => ({
 vi.mock("#/server/meetings", () => ({
 	listMyCommitments: vi.fn(),
 }));
+// `/me` shows the speech-request card (#1052); its server fns reach `#/db`.
+vi.mock("#/server/speech-requests", () => ({
+	getMySpeechRequests: vi.fn(),
+	submitSpeechRequest: vi.fn(),
+	editSpeechRequest: vi.fn(),
+	withdrawMySpeechRequest: vi.fn(),
+}));
 vi.mock("#/server/slots", () => ({
 	releaseSlot: vi.fn(),
 }));

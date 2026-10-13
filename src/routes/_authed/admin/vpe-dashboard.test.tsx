@@ -26,6 +26,7 @@ import {
 	render,
 	screen,
 	waitFor,
+	within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AttendanceLapseRow } from "#/lib/attendance-lapse";
@@ -276,8 +277,11 @@ describe("VPE dashboard — Close to a level (#898)", () => {
 		]) {
 			expect(screen.getByText(line)).toBeTruthy();
 		}
-		// PROJECTS, never speeches.
-		expect(screen.queryByText(/speech/i)).toBeNull();
+		// PROJECTS, never speeches: within the section, not the page, which now
+		// also carries the speech-request queue (#1052).
+		const section = document.getElementById("close-to-a-level");
+		expect(section).not.toBeNull();
+		expect(within(section as HTMLElement).queryByText(/speech/i)).toBeNull();
 	});
 
 	it("shows Speaking when a speaker slot is booked, and Not scheduled otherwise", async () => {
