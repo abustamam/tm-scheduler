@@ -1176,8 +1176,26 @@ function describeFailure(err: unknown): string {
 	return message.slice(0, 300);
 }
 
-/** The source ids an apply left behind, read back from the database, by what qualifies. */
-async function loadFoundSourceIds(clubId: string): Promise<FoundSourceIds> {
+/** Who the bundle says holds a role slot or won an award, by the ref's source id. */
+interface ExpectedHolders {
+	slots: Map<string, Owner>;
+	awards: Map<string, Owner>;
+}
+
+const sameOwner = (a: Owner, member: string | null, guest: string | null) =>
+	a !== null &&
+	("memberId" in a ? a.memberId === member : a.guestId === guest);
+
+/**
+ * The source ids an apply left behind, read back from the database, by what
+ * qualifies. A role assignment counts only when the slot is held by the person
+ * the bundle names, and an award only when that person holds it: a slot someone
+ * else already held, or an award already given to another, is a difference.
+ */
+async function loadFoundSourceIds(
+	clubId: string,
+	expected: ExpectedHolders,
+): Promise<FoundSourceIds> {
 	const scope = (kind: ImportRefKind) =>
 		and(
 			eq(importRefs.clubId, clubId),
@@ -1201,7 +1219,11 @@ async function loadFoundSourceIds(clubId: string): Promise<FoundSourceIds> {
 			.innerJoin(meetings, eq(meetings.id, importRefs.targetId))
 			.where(and(scope("meeting"), eq(meetings.status, "completed"))),
 		db
-			.select({ sourceId: importRefs.sourceId })
+			.select({
+				sourceId: importRefs.sourceId,
+				member: roleSlots.assignedMemberId,
+				guest: roleSlots.assignedGuestId,
+			})
 			.from(importRefs)
 			.innerJoin(roleSlots, eq(roleSlots.id, importRefs.targetId))
 			.where(
@@ -1229,7 +1251,11 @@ async function loadFoundSourceIds(clubId: string): Promise<FoundSourceIds> {
 				),
 			),
 		db
-			.select({ sourceId: importRefs.sourceId })
+			.select({
+				sourceId: importRefs.sourceId,
+				member: meetingAwards.memberId,
+				guest: meetingAwards.guestId,
+			})
 			.from(importRefs)
 			.innerJoin(meetingAwards, eq(meetingAwards.id, importRefs.targetId))
 			.where(scope("award")),
@@ -1252,10 +1278,18 @@ async function loadFoundSourceIds(clubId: string): Promise<FoundSourceIds> {
 	]);
 	return {
 		meeting: ids(meeting),
-		roleAssignment: ids(roleAssignment),
+		roleAssignment: ids(
+			roleAssignment.filter((r) =>
+				sameOwner(expected.slots.get(r.sourceId) ?? null, r.member, r.guest),
+			),
+		),
 		speech: ids(speech),
 		speechWithIntroduction: ids(speechIntro),
-		award: ids(award),
+		award: ids(
+			award.filter((r) =>
+				sameOwner(expected.awards.get(r.sourceId) ?? null, r.member, r.guest),
+			),
+		),
 		tableTopic: ids(tableTopic),
 		attendance: ids(attendance),
 	};
@@ -1327,7 +1361,18 @@ export async function applyEasySpeakImport(input: {
 		}
 	}
 
-	const found = await loadFoundSourceIds(input.clubId);
+	const expected: ExpectedHolders = { slots: new Map(), awards: new Map() };
+	for (const pm of plan.meetings) {
+		for (const ps of pm.slots) {
+			const owner = ownerOf(env, ps.holderKey);
+			if (owner) expected.slots.set(ps.sourceId, owner);
+		}
+		for (const a of pm.awards) {
+			const owner = ownerOf(env, a.personKey);
+			if (owner) expected.awards.set(a.sourceId, owner);
+		}
+	}
+	const found = await loadFoundSourceIds(input.clubId, expected);
 	const report = buildReconciliation({
 		bundle: stored.bundle,
 		bundleSha256: stored.bundleSha256,

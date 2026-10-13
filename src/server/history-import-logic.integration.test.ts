@@ -920,6 +920,46 @@ EXECUTE FUNCTION zz_claim_slot()`),
 		expect(toastmaster?.member).not.toBeNull();
 	});
 
+	it("reports a role slot held by someone else, and an award given to someone else, as differences", async () => {
+		const existing = await seedMeetingAt(FIRST_AT, "completed");
+		const stored = await upload();
+		const { preview, resolutions } = await resolveAll(stored.importId);
+		const key = preview.roleDefinitions.find((d) =>
+			d.labels.includes("Toastmaster"),
+		)?.standardKey as string;
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seed.clubId,
+				name: "Toastmaster",
+				category: "functionary",
+				key,
+			})
+			.returning({ id: roleDefinitions.id });
+		// Bob holds the Toastmaster slot; the bundle says Parker Vexford.
+		await testDb.insert(roleSlots).values({
+			meetingId: existing,
+			roleDefinitionId: def?.id as string,
+			slotIndex: 0,
+			status: "confirmed",
+			assignedMemberId: seed.memberId,
+		});
+		// The best-speaker award is already someone else's.
+		await testDb.insert(meetingAwards).values({
+			meetingId: existing,
+			category: "best_speaker",
+			memberId: seed.memberId,
+		});
+		const { report } = await apply(stored.importId, resolutions);
+		const by = (k: string) => report.counts.find((c) => c.key === k);
+		expect(by("role_assignments")?.missing).toEqual(["644304:1"]);
+		expect(by("awards")?.missing).toEqual(["644304:best_speaker"]);
+		expect(report.reconciled).toBe(false);
+		// And the others, held by who the bundle says, still reconcile.
+		expect(by("role_assignments")?.gavelup).toBe(13);
+		expect(by("awards")?.gavelup).toBe(2);
+	});
+
 	// -- D2: a row a human deleted is never re-made (#1196 review) ----------------
 
 	it("a guest deleted since the import is not re-created, nor is their Person, attendance or role", async () => {
