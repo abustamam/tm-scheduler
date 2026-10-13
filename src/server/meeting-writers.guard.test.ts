@@ -261,6 +261,13 @@ const MEETING_WRITERS: Record<string, Entry> = {
 		class: "plan",
 	},
 
+	// -- Easy-Speak history import (#1051)
+	"src/server/history-import-logic.ts#applyMeeting": {
+		class: "exempt",
+		reason:
+			"Creates or fills PAST meetings from an Easy-Speak bundle, in a superadmin-only server fn behind requireSuperadmin and the read-only impersonation refusal. The meeting is written as completed from the start and every row carries an import_refs entry, so a re-run inserts only what is missing; a meeting's status does not decide a historical import.",
+	},
+
 	// -- club-level agendas: no meeting involved
 	"src/server/club-agendas-logic.ts#adoptStandardAgenda": {
 		class: "exempt",

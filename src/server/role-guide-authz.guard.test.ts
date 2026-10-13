@@ -105,6 +105,13 @@ const ALLOWED: { file: string; kind: Write["kind"]; contains: string }[] = [
 		kind: "values",
 		contains: "beforeNotes: stock?.beforeNotes ?? null",
 	},
+	// Seeding — the standard roles an Easy-Speak import (#1051) needs and the
+	// club lacks, copied from ROLE_TEMPLATE; superadmin-only.
+	{
+		file: "src/server/history-import-logic.ts",
+		kind: "values",
+		contains: "seed.beforeNotes",
+	},
 ];
 
 /**
@@ -118,6 +125,7 @@ const TEMPLATE_READERS = new Set([
 	"src/db/seed.ts", // seeding: dev data
 	"scripts/import-agendas-logic.ts", // seeding: Vote Counter backfill
 	"src/server/meeting-templates-logic.ts", // seeding: a minted standard role (#910)
+	"src/server/history-import-logic.ts", // seeding: standard roles an import needs (#1051)
 ]);
 
 describe("role guide writers (#933)", () => {

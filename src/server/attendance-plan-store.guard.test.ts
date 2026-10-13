@@ -155,6 +155,9 @@ describe("planned-attendance store", () => {
 			// The membership merge de-dups with raw SQL before re-pointing; that
 			// two-statement dance has no seam function and does not want one.
 			if (f.endsWith("membership-collapse-logic.ts")) return false;
+			// The Easy-Speak import (#1051) fills a past meeting's plan answers in bulk,
+			// only where there is no record, and must not log one plan_set per answer.
+			if (f.endsWith("history-import-logic.ts")) return false;
 			// BOTH spellings: matching only the drizzle symbol would wave through
 			// `tx.execute(sql`… meeting_attendance_plan …`)`, which is precisely the
 			// bypass shape the waiver above exists to permit, and precisely the one
