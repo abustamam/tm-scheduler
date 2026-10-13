@@ -1282,8 +1282,27 @@ EXECUTE FUNCTION zz_claim_slot()`),
 
 	it("refuses an apply whose plan has moved since the preview, and accepts one that has not", async () => {
 		const stored = await upload();
-		const { preview, resolutions } = await resolveAll(stored.importId);
+		const { resolutions } = await resolveAll(stored.importId);
+		// The preview a superadmin confirms is the one made WITH the resolutions
+		// (resolveAll's own preview ran before them, so its hash is of a plan that
+		// could not apply at all).
+		const preview = await logic.previewEasySpeakImport({
+			clubId: seed.clubId,
+			importId: stored.importId,
+			resolutions,
+			now: NOW,
+		});
 		expect(preview.planHash).toMatch(/^[0-9a-f]{64}$/);
+		// With nothing changed, a second preview names the same plan: this is the
+		// hash an unchanged apply would be held to, so the refusal below is the
+		// blocker's doing and nothing else's.
+		const again = await logic.previewEasySpeakImport({
+			clubId: seed.clubId,
+			importId: stored.importId,
+			resolutions,
+			now: NOW,
+		});
+		expect(again.planHash).toBe(preview.planHash);
 		// Someone creates a cancelled meeting at the bundle's instant after the preview.
 		const blocker = await seedMeetingAt(FIRST_AT, "cancelled");
 		const before = await counts();
@@ -1316,6 +1335,39 @@ EXECUTE FUNCTION zz_claim_slot()`),
 		});
 		expect(report.meetings.applied).toBe(0);
 		expect((await meetingRow(blocker))?.status).toBe("cancelled");
+	});
+
+	it("refuses an apply when only a created meeting's instant has moved since the preview", async () => {
+		// A wall-clock start (no offset) is read in the club's zone.
+		const bundle = JSON.parse(bundleText()) as EasySpeakBundleV1;
+		const first = bundle.meetings.find((m) => m.esMeetingId === "644304");
+		if (!first) throw new Error("fixture changed");
+		first.startsAt = "2026-09-22T19:00:00";
+		const stored = await upload(JSON.stringify(bundle));
+		const { resolutions } = await resolveAll(stored.importId);
+		const preview = await logic.previewEasySpeakImport({
+			clubId: seed.clubId,
+			importId: stored.importId,
+			resolutions,
+			now: NOW,
+		});
+		// The club's timezone changes: the same meeting is created, at another instant.
+		await testDb
+			.update(clubs)
+			.set({ timezone: "America/New_York" })
+			.where(eq(clubs.id, seed.clubId));
+		const before = await counts();
+		await expect(
+			logic.applyEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				superadminUserId: superadminId,
+				resolutions,
+				planHash: preview.planHash,
+				now: NOW,
+			}),
+		).rejects.toThrow(logic.PLAN_CHANGED_MESSAGE);
+		expect(await counts()).toEqual(before);
 	});
 
 	// -- D2: a row a human deleted is never re-made (#1196 review) ----------------

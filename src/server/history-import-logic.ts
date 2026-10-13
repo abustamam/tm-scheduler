@@ -426,7 +426,10 @@ async function loadPlanContext(
 				status: meetings.status,
 			})
 			.from(meetings)
-			.where(eq(meetings.clubId, clubId)),
+			.where(eq(meetings.clubId, clubId))
+			// Two meetings at one instant are chosen between by position (the first
+			// adoptable, else the first blocker), so the order must not be the heap's.
+			.orderBy(meetings.createdAt, meetings.id),
 		db
 			.select({
 				kind: importRefs.kind,
@@ -535,6 +538,7 @@ export function planFingerprint(plan: ImportPlan): string {
 		roleDefinitions: plan.roleDefinitions.map((d) => [d.planKey, d.existingId]),
 		meetings: plan.meetings.map((m) => [
 			m.esMeetingId,
+			m.scheduledAt.toISOString(),
 			m.action,
 			m.existingMeetingId,
 			m.skip?.kind ?? null,
