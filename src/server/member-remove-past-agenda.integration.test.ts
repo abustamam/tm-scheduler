@@ -21,10 +21,12 @@ import { pastAgendaRemoveRefusal } from "#/lib/member-remove";
 import {
 	cleanup,
 	hasTestDb,
+	openBlockingTx,
 	type SeededClub,
 	seedClub,
 	seedPerson,
 	testDb,
+	waitForLockWait,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -289,5 +291,49 @@ describe.skipIf(!hasTestDb)("remove a member on a past agenda (#1189)", () => {
 			.where(eq(roleSlots.id, upcomingSlot));
 		expect(slot?.assignedMemberId).toBe(leaver);
 		expect(slot?.status).toBe("claimed");
+	});
+
+	it("refuses when a past slot is claimed by a concurrent transaction after the removal started", async () => {
+		// Protects: the check and the delete are one atomic step. A slot inserted for
+		// the member takes a KEY SHARE lock on the member row through the FK; the
+		// removal's `for update` select waits on it, then re-reads the committed slot.
+		// Fails when: the lock is dropped. The removal's check then runs on the
+		// pre-commit snapshot (sees no slot), the delete waits out the FK lock, and
+		// ON DELETE SET NULL blanks the holder the other transaction just committed.
+		const leaver = await seedLeaver();
+		const meetingId = await seedMeeting("completed", -7);
+		let slotId = "";
+		const claimer = await openBlockingTx(async (tx) => {
+			const [s] = await tx
+				.insert(roleSlots)
+				.values({
+					meetingId,
+					roleDefinitionId: club.roleDefinitionId,
+					status: "claimed",
+					assignedMemberId: leaver,
+				})
+				.returning({ id: roleSlots.id });
+			slotId = s.id;
+		});
+		const outcome = remove(leaver).then(
+			() => null,
+			(e: unknown) => e,
+		);
+		try {
+			await waitForLockWait("for update", claimer.pid);
+		} finally {
+			await claimer.commit();
+			await outcome;
+		}
+
+		const err = await outcome;
+		expect(err).toBeInstanceOf(Error);
+		expect((err as Error).message).toBe(pastAgendaRemoveRefusal("Leaving Lee"));
+		expect(await memberRowExists(leaver)).toBe(true);
+		const [slot] = await testDb
+			.select()
+			.from(roleSlots)
+			.where(eq(roleSlots.id, slotId));
+		expect(slot?.assignedMemberId).toBe(leaver);
 	});
 });

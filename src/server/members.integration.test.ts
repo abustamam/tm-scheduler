@@ -184,13 +184,17 @@ describe.skipIf(!hasTestDb)(
 			await testDb.delete(people).where(eq(people.id, victimPersonId));
 		});
 
-		/** A meeting one hour ahead in `status`, with a slot the victim holds. */
-		async function heldSlotOn(status: "scheduled" | "completed" | "cancelled") {
+		/** A meeting `offsetMs` from now (default one hour ahead) in `status`, with a
+		 *  slot the victim holds. */
+		async function heldSlotOn(
+			status: "scheduled" | "completed" | "cancelled",
+			offsetMs = 60 * 60 * 1000,
+		) {
 			const [meeting] = await testDb
 				.insert(meetings)
 				.values({
 					clubId: seed.clubId,
-					scheduledAt: new Date(Date.now() + 60 * 60 * 1000),
+					scheduledAt: new Date(Date.now() + offsetMs),
 					status,
 				})
 				.returning({ id: meetings.id });
@@ -267,14 +271,29 @@ describe.skipIf(!hasTestDb)(
 			describe(label, () => {
 				it(`${keepsTitle} a slot on a completed meeting scheduled later today`, async () => {
 					const completed = await heldSlotOn("completed");
+					if (label === "removing the member") {
+						// #1189: a completed meeting's agenda names the holder, so removal
+						// is refused outright instead of blanking it. The #1154 claim
+						// survives in stronger form: nothing at all changed.
+						await expect(act()).rejects.toThrow(/appears on past agendas/);
+						const row = await slotRow(completed);
+						expect(row.assignedMemberId).toBe(victimId);
+						expect(row.status).toBe("claimed");
+						expect(row.claimedAt).not.toBeNull();
+						expect(row.speechId).not.toBeNull();
+						expect(await releasedSlotIds([completed])).toEqual([]);
+						const [stillThere] = await testDb
+							.select({ id: members.id })
+							.from(members)
+							.where(eq(members.id, victimId));
+						expect(stillThere?.id).toBe(victimId);
+						return;
+					}
 					await act();
 					const row = await slotRow(completed);
-					// The writer left it alone: still claimed, claim time and speech
-					// intact. On a REMOVE the holder column goes null by the members FK
-					// (ON DELETE SET NULL), which is not this writer's doing.
-					if (label === "deactivating the member") {
-						expect(row.assignedMemberId).toBe(victimId);
-					}
+					// The writer left it alone: still claimed, holder, claim time and
+					// speech intact.
+					expect(row.assignedMemberId).toBe(victimId);
 					expect(row.status).toBe("claimed");
 					expect(row.claimedAt).not.toBeNull();
 					expect(row.speechId).not.toBeNull();
@@ -330,13 +349,20 @@ describe.skipIf(!hasTestDb)(
 				});
 
 				it("logs a release only for the slots it released, in a mixed set", async () => {
-					const completed = await heldSlotOn("completed");
 					const cancelled = await heldSlotOn("cancelled");
 					const scheduled = await heldSlotOn("scheduled");
+					// Removal is refused for a completed (or past scheduled) slot, so the
+					// set the remove path can see swaps it for a PAST CANCELLED slot: a
+					// meeting that printed nothing, which the writer must not release or
+					// log. Deactivation keeps the original completed slot.
+					const untouched =
+						label === "removing the member"
+							? await heldSlotOn("cancelled", -60 * 60 * 1000)
+							: await heldSlotOn("completed");
 					await act();
-					expect((await slotRow(completed)).status).toBe("claimed");
+					expect((await slotRow(untouched)).status).toBe("claimed");
 					expect(
-						(await releasedSlotIds([completed, cancelled, scheduled])).sort(),
+						(await releasedSlotIds([untouched, cancelled, scheduled])).sort(),
 					).toEqual([cancelled, scheduled].sort());
 				});
 			});
