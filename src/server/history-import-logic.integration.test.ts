@@ -12,7 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { and, count, eq, inArray, isNull, type SQL } from "drizzle-orm";
+import { and, count, eq, inArray, isNull, type SQL, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -788,6 +788,136 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 		expect(
 			report.notImported.find((r) => r.what.startsWith("Meetings left")),
 		).toMatchObject({ count: 1, sourceIds: ["644304"] });
+	});
+
+	// -- Role definitions seeded for history are not standing roles ---------------
+
+	it("every role definition the import creates is not a standing role, standard or club-own", async () => {
+		const stored = await upload();
+		const { preview, resolutions } = await resolveAll(stored.importId);
+		const created = preview.roleDefinitions.filter((d) => d.isNew);
+		expect(created.some((d) => d.standardKey)).toBe(true);
+		expect(created.some((d) => !d.standardKey)).toBe(true);
+		const seeded = await testDb
+			.select({ id: roleDefinitions.id })
+			.from(roleDefinitions)
+			.where(eq(roleDefinitions.clubId, seed.clubId));
+		await apply(stored.importId, resolutions);
+		const rows = await testDb
+			.select({
+				id: roleDefinitions.id,
+				name: roleDefinitions.name,
+				standing: roleDefinitions.standing,
+			})
+			.from(roleDefinitions)
+			.where(eq(roleDefinitions.clubId, seed.clubId));
+		const imported = rows.filter((r) => !seeded.some((x) => x.id === r.id));
+		expect(imported.length).toBe(created.length);
+		expect(imported.filter((r) => r.standing)).toEqual([]);
+	});
+
+	it("a standard role minted by someone else between the plan and the lock is reused, not a failed setup", async () => {
+		const stored = await upload();
+		const { preview, resolutions } = await resolveAll(stored.importId);
+		const std = preview.roleDefinitions.find((d) => d.isNew && d.standardKey);
+		const key = std?.standardKey as string;
+		let rival = "";
+		lockHook.run = async (_tx, call) => {
+			if (call !== 1) return;
+			const [row] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: seed.clubId,
+					name: "Rival",
+					category: "functionary",
+					key,
+				})
+				.returning({ id: roleDefinitions.id });
+			rival = row?.id as string;
+		};
+		const { report } = await apply(stored.importId, resolutions);
+		lockHook.run = null;
+		expect(report.meetings.failed).toEqual([]);
+		const rows = await testDb
+			.select({ id: roleDefinitions.id })
+			.from(roleDefinitions)
+			.where(
+				and(
+					eq(roleDefinitions.clubId, seed.clubId),
+					eq(roleDefinitions.key, key),
+				),
+			);
+		expect(rows.map((r) => r.id)).toEqual([rival]);
+		expect(report.created.roleDefinitions).not.toContain(std?.name);
+		expect(report.reconciled).toBe(true);
+	});
+
+	it("never overwrites a role slot someone claimed after the importer read it", async () => {
+		const existing = await seedMeetingAt(FIRST_AT, "completed");
+		const stored = await upload();
+		const { preview, resolutions } = await resolveAll(stored.importId);
+		const keyOf = (label: string) =>
+			preview.roleDefinitions.find((d) => d.labels.includes(label))
+				?.standardKey as string;
+		const slotIds: Record<string, string> = {};
+		for (const label of ["Toastmaster", "1st Speaker"]) {
+			const [def] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: seed.clubId,
+					name: label,
+					category: "functionary",
+					key: keyOf(label),
+				})
+				.returning({ id: roleDefinitions.id });
+			const [slot] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: existing,
+					roleDefinitionId: def?.id as string,
+					slotIndex: 0,
+					status: "open",
+				})
+				.returning({ id: roleSlots.id });
+			slotIds[label] = slot?.id as string;
+		}
+		// Inside the importer's own transaction, as it writes the Toastmaster's ref,
+		// a member claims the 1st Speaker slot it has already read as empty.
+		await testDb.execute(
+			sql.raw(`CREATE OR REPLACE FUNCTION zz_claim_slot() RETURNS trigger AS $$
+BEGIN
+  UPDATE role_slots SET assigned_member_id = '${seed.memberId}', status = 'confirmed' WHERE id = '${slotIds["1st Speaker"]}';
+  RETURN NEW;
+END $$ LANGUAGE plpgsql`),
+		);
+		await testDb.execute(
+			sql.raw(`CREATE TRIGGER zz_claim_slot AFTER INSERT ON import_refs
+FOR EACH ROW WHEN (NEW.kind = 'role_slot' AND NEW.source_id = '644304:1' AND NEW.club_id = '${seed.clubId}')
+EXECUTE FUNCTION zz_claim_slot()`),
+		);
+		try {
+			await apply(stored.importId, resolutions);
+		} finally {
+			await testDb.execute(
+				sql.raw("DROP TRIGGER zz_claim_slot ON import_refs"),
+			);
+			await testDb.execute(sql.raw("DROP FUNCTION zz_claim_slot()"));
+		}
+		const [claimed] = await testDb
+			.select({
+				member: roleSlots.assignedMemberId,
+				speechId: roleSlots.speechId,
+			})
+			.from(roleSlots)
+			.where(eq(roleSlots.id, slotIds["1st Speaker"] as string));
+		expect(claimed?.member).toBe(seed.memberId);
+		expect(claimed?.speechId).toBeNull();
+		// The Toastmaster slot the trigger did not touch took its holder.
+		const [toastmaster] = await testDb
+			.select({ member: roleSlots.assignedMemberId })
+			.from(roleSlots)
+			.where(eq(roleSlots.id, slotIds.Toastmaster as string));
+		expect(toastmaster?.member).not.toBeNull();
 	});
 
 	// -- D2: a row a human deleted is never re-made (#1196 review) ----------------

@@ -44,7 +44,7 @@
  * prunes it.
  */
 import { createHash } from "node:crypto";
-import { and, asc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { AnyPgColumn, PgTable } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
@@ -621,7 +621,10 @@ async function writePeopleAndRoles(
 			const seed = def.standardKey
 				? ROLE_TEMPLATE.find((r) => r.key === def.standardKey)
 				: undefined;
-			const [created] = await tx
+			// History is not the club's standing meeting shape: neither a standard
+			// role seeded for an old meeting nor a role the club once ran in
+			// Easy-Speak may start generating an open slot on every new meeting.
+			const [inserted] = await tx
 				.insert(roleDefinitions)
 				.values(
 					seed
@@ -636,6 +639,7 @@ async function writePeopleAndRoles(
 								beforeNotes: seed.beforeNotes,
 								duringNotes: seed.duringNotes,
 								key: seed.key,
+								standing: false,
 							}
 						: {
 								clubId,
@@ -644,15 +648,31 @@ async function writePeopleAndRoles(
 								defaultCount: 1,
 								sortOrder: nextSortOrder(),
 								isSpeakerRole: false,
-								// A role the club ran in Easy-Speak, kept for history: it must
-								// not start generating an open slot on every new meeting.
 								standing: false,
 							},
 				)
+				// Two imports (or an officer) minting the same standard key at once:
+				// `role_definitions_club_key_unique` settles it, and the loser reads the
+				// winner's row instead of failing the whole setup.
+				.onConflictDoNothing()
 				.returning({ id: roleDefinitions.id });
+			let created = inserted;
+			const minted = Boolean(inserted);
+			if (!created && seed) {
+				[created] = await tx
+					.select({ id: roleDefinitions.id })
+					.from(roleDefinitions)
+					.where(
+						and(
+							eq(roleDefinitions.clubId, clubId),
+							eq(roleDefinitions.key, seed.key),
+						),
+					)
+					.limit(1);
+			}
 			if (!created) throw new Error("Could not create a role definition.");
 			out.roleDefIds.set(def.planKey, created.id);
-			out.newRoleDefinitions.push(def.name);
+			if (minted) out.newRoleDefinitions.push(def.name);
 		}
 
 		const introducerOf = new Map<string, string>();
@@ -927,12 +947,29 @@ async function applyMeeting(
 				slot.assignedMemberId === null &&
 				slot.assignedGuestId === null
 			) {
+				// Only a slot that is STILL empty: a member or guest who claimed it since
+				// the read above keeps it, and the row is read again to say so.
 				const [updated] = await tx
 					.update(roleSlots)
 					.set({ status: "confirmed", ...assignment })
-					.where(eq(roleSlots.id, slot.id))
+					.where(
+						and(
+							eq(roleSlots.id, slot.id),
+							isNull(roleSlots.assignedMemberId),
+							isNull(roleSlots.assignedGuestId),
+						),
+					)
 					.returning();
-				slot = updated ?? slot;
+				if (updated) {
+					slot = updated;
+				} else {
+					const [current] = await tx
+						.select()
+						.from(roleSlots)
+						.where(eq(roleSlots.id, slot.id))
+						.limit(1);
+					slot = current ?? slot;
+				}
 			}
 			used.add(slot.id);
 			slotIdByEsSlot.set(ps.esSlot, slot.id);
