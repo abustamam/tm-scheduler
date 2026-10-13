@@ -16,11 +16,13 @@ import { z } from "zod";
 import { db } from "#/db";
 import { speechRequestFieldsSchema } from "#/lib/speech-requests";
 import {
+	NOT_A_MEMBER_MESSAGE,
 	requireClubAdminView,
 	requireClubRole,
 	requireMembership,
 	requireUser,
 } from "./guards";
+import { getActiveImpersonation } from "./impersonation-logic";
 import {
 	createSpeechRequest,
 	getSpeechRequestClubId,
@@ -75,8 +77,25 @@ export const getMySpeechRequests = createServerFn({ method: "GET" })
 	.validator((input: unknown) => parse(clubScoped, input))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		const membership = await requireMembership(user.id, data.clubId);
-		// A memberless impersonation session asked for nothing, so lists nothing.
+		let membership: Awaited<ReturnType<typeof requireMembership>>;
+		try {
+			membership = await requireMembership(user.id, data.clubId);
+		} catch (err) {
+			// A READ-ONLY impersonation session has no membership in the club it
+			// views, and `requireMembership` refuses it (only a read-write one resolves
+			// to a memberless admin). /me loads this inside its loader's Promise.all, so
+			// a throw here takes the whole page down: the session owns no requests and
+			// lists none. Anyone else with no membership is still refused.
+			if (
+				err instanceof Error &&
+				err.message === NOT_A_MEMBER_MESSAGE &&
+				(await getActiveImpersonation(user.id, data.clubId))
+			) {
+				return [];
+			}
+			throw err;
+		}
+		// A memberless (read-write) impersonation session asked for nothing, so lists nothing.
 		if (membership.id === null) return [];
 		return listMySpeechRequests(db, {
 			clubId: data.clubId,

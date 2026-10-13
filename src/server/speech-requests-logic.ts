@@ -13,7 +13,7 @@
 //     actor's own). A club admin is NOT the owner; an officer cannot edit a
 //     member's words, only schedule them.
 //   - queue + schedule: a club admin (the VPE is one; ADR-0008).
-import { and, asc, desc, eq, inArray, lt, max, ne } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, max, ne, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	clubs,
@@ -31,6 +31,8 @@ import {
 	sortSpeechQueue,
 } from "#/lib/speech-requests";
 import { TBA_SPEECH_TITLE } from "#/lib/speech-title";
+import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
+import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
 import {
 	attachSpeechToOpenSlot,
 	listOpenSpeakerSlots,
@@ -47,11 +49,49 @@ export const REQUEST_NOT_OPEN_MESSAGE =
 	"That request is no longer open: it was already scheduled or withdrawn.";
 export const REQUEST_SLOT_WRONG_CLUB_MESSAGE =
 	"That speaker slot is not in this club.";
+export const REQUEST_MEETING_PAST_MESSAGE =
+	"That meeting has already started or passed; pick an upcoming meeting.";
 
 /** Slots the queue's quick-sum reads; same set the speaker rotation counts as "held". */
 const HELD_SLOT_STATUSES = ["claimed", "confirmed"] as const;
 
 export type SpeechRequestStatus = "open" | "scheduled" | "withdrawn";
+
+// ---------------------------------------------------------------------------
+// "Live": the ONE definition of a scheduled request that still holds a slot
+// ---------------------------------------------------------------------------
+//
+// `status = 'scheduled'` is a write made once, at Schedule. Nothing in the slot
+// code (release, reassign, delete, a meeting cancel) writes back to
+// `speech_requests`, and the FK's `on delete set null` only clears the slot id.
+// So the stored status goes stale, and the request is DERIVED instead: a
+// scheduled request is live only while its slot is still held by its own
+// membership, on a meeting that was not cancelled. A scheduled request that is
+// not live behaves as OPEN everywhere (queue, /me, edit, withdraw, Schedule).
+//
+// Written as plain SQL text with a fixed alias for the inner tables and the
+// literal `"speech_requests"` as the outer reference: a drizzle column
+// interpolated into a hand-written subquery drops its table qualifier on a
+// single-table statement (an UPDATE), and the unqualified `status` / `id` would
+// then bind to the INNER tables. The literal qualifier is valid in a SELECT
+// (the table is not aliased) and in an UPDATE alike.
+const HELD_STATUSES_SQL = sql.raw(
+	HELD_SLOT_STATUSES.map((status) => `'${status}'`).join(", "),
+);
+const SLOT_STILL_HELD = sql`exists (
+	select 1 from role_slots rs
+	inner join meetings mt on mt.id = rs.meeting_id
+	where rs.id = "speech_requests"."scheduled_slot_id"
+		and rs.assigned_member_id = "speech_requests"."membership_id"
+		and rs.status in (${HELD_STATUSES_SQL})
+		and mt.status <> 'cancelled'
+)`;
+
+/** SQL: the request is scheduled AND its slot is still held by its member. */
+export const speechRequestIsLive = sql<boolean>`("speech_requests"."status" = 'scheduled' and ${SLOT_STILL_HELD})`;
+
+/** SQL: the request can be queued, edited, withdrawn or scheduled: open, or scheduled but no longer live. */
+export const speechRequestIsOpen = sql<boolean>`("speech_requests"."status" = 'open' or ("speech_requests"."status" = 'scheduled' and not ${SLOT_STILL_HELD}))`;
 
 export interface SpeechRequestRow {
 	id: string;
@@ -99,31 +139,41 @@ export async function getSpeechRequestClubId(
 
 /** Create a request for `membershipId`, which must be a membership of `clubId`. */
 export async function createSpeechRequest(
-	conn: Conn,
+	conn: typeof db,
 	args: { clubId: string; membershipId: string; fields: SpeechRequestFields },
 ): Promise<SpeechRequestRow> {
-	const [member] = await conn
-		.select({ id: members.id })
-		.from(members)
-		.where(
-			and(eq(members.id, args.membershipId), eq(members.clubId, args.clubId)),
-		)
-		.limit(1);
-	if (!member) throw new Error("You're not a member of this club.");
-	const [row] = await conn
-		.insert(speechRequests)
-		.values({
-			clubId: args.clubId,
-			membershipId: args.membershipId,
-			title: args.fields.title,
-			path: args.fields.path,
-			projectName: args.fields.projectName,
-			introduction: args.fields.introduction,
-			preferredDates: args.fields.preferredDates,
-		})
-		.returning(REQUEST_COLUMNS);
-	if (!row) throw new Error("Could not save the request.");
-	return row;
+	return conn.transaction(async (tx) => {
+		// The membership merge lock (#1035), SHARED, before anything else. A merge
+		// re-points `speech_requests.membership_id` and then DELETEs the absorbed
+		// membership, whose FK is ON DELETE CASCADE: an insert that lands between
+		// the two is not re-pointed and is deleted with it, so the member's ask
+		// vanishes after a success. With the lock the insert either finishes
+		// before the merge (and is re-pointed) or finds the membership gone and
+		// is refused with CLUB_BUSY_MESSAGE. See `membership-merge-lock.ts`.
+		await lockMembershipsAgainstMerge(tx, [args.membershipId]);
+		const [member] = await tx
+			.select({ id: members.id })
+			.from(members)
+			.where(
+				and(eq(members.id, args.membershipId), eq(members.clubId, args.clubId)),
+			)
+			.limit(1);
+		if (!member) throw new Error("You're not a member of this club.");
+		const [row] = await tx
+			.insert(speechRequests)
+			.values({
+				clubId: args.clubId,
+				membershipId: args.membershipId,
+				title: args.fields.title,
+				path: args.fields.path,
+				projectName: args.fields.projectName,
+				introduction: args.fields.introduction,
+				preferredDates: args.fields.preferredDates,
+			})
+			.returning(REQUEST_COLUMNS);
+		if (!row) throw new Error("Could not save the request.");
+		return row;
+	});
 }
 
 /**
@@ -147,7 +197,10 @@ async function loadOwnedRequest(
 	return row;
 }
 
-/** Edit the requester's own OPEN request. A scheduled or withdrawn one is history. */
+/**
+ * Edit the requester's own OPEN request (open, or scheduled but no longer live,
+ * which is edited back to open). A live scheduled or a withdrawn one is history.
+ */
 export async function updateSpeechRequest(
 	conn: Conn,
 	args: {
@@ -168,12 +221,15 @@ export async function updateSpeechRequest(
 			projectName: args.fields.projectName,
 			introduction: args.fields.introduction,
 			preferredDates: args.fields.preferredDates,
+			// A scheduled request whose slot is gone is open again; say so on the row.
+			status: "open",
+			scheduledSlotId: null,
 		})
 		.where(
 			and(
 				eq(speechRequests.id, args.requestId),
 				eq(speechRequests.membershipId, args.actorMembershipId as string),
-				eq(speechRequests.status, "open"),
+				speechRequestIsOpen,
 			),
 		)
 		.returning(REQUEST_COLUMNS);
@@ -181,7 +237,7 @@ export async function updateSpeechRequest(
 	return row;
 }
 
-/** Withdraw the requester's own OPEN request. */
+/** Withdraw the requester's own OPEN request (including a scheduled one whose slot is gone). */
 export async function withdrawSpeechRequest(
 	conn: Conn,
 	args: { requestId: string; actorMembershipId: string | null },
@@ -194,7 +250,7 @@ export async function withdrawSpeechRequest(
 			and(
 				eq(speechRequests.id, args.requestId),
 				eq(speechRequests.membershipId, args.actorMembershipId as string),
-				eq(speechRequests.status, "open"),
+				speechRequestIsOpen,
 			),
 		)
 		.returning({ id: speechRequests.id });
@@ -204,11 +260,17 @@ export async function withdrawSpeechRequest(
 export interface MySpeechRequest extends SpeechRequestRow {
 	/** The meeting a scheduled request landed on, or null (open, or the slot is gone). */
 	scheduledFor: Date | null;
+	/** It was scheduled and the slot is no longer its member's (released, reassigned, deleted, cancelled): it is open again. */
+	backInQueue: boolean;
 	/** The club's zone, for the day `scheduledFor` falls on. */
 	timezone: string;
 }
 
-/** The member's open and scheduled requests, newest first. Withdrawn ones are not listed. */
+/**
+ * The member's open and scheduled requests, newest first. Withdrawn ones are not
+ * listed. A scheduled request that is no longer live is returned as OPEN, with
+ * `backInQueue` set, so the page can say so.
+ */
 export async function listMySpeechRequests(
 	conn: Conn,
 	args: { clubId: string; membershipId: string },
@@ -218,6 +280,7 @@ export async function listMySpeechRequests(
 			...REQUEST_COLUMNS,
 			scheduledFor: meetings.scheduledAt,
 			timezone: clubs.timezone,
+			live: speechRequestIsLive,
 		})
 		.from(speechRequests)
 		.innerJoin(clubs, eq(clubs.id, speechRequests.clubId))
@@ -231,7 +294,17 @@ export async function listMySpeechRequests(
 			),
 		)
 		.orderBy(desc(speechRequests.createdAt), asc(speechRequests.id));
-	return rows;
+	return rows.map(({ live, ...row }) => {
+		const backInQueue = row.status === "scheduled" && !live;
+		if (!backInQueue) return { ...row, backInQueue: false };
+		return {
+			...row,
+			status: "open" as const,
+			scheduledSlotId: null,
+			scheduledFor: null,
+			backInQueue: true,
+		};
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -298,7 +371,7 @@ async function lastSpokeByMember(
 }
 
 /**
- * The club's open requests, ordered for the VPE: the member who has gone longest
+ * The club's open requests (a scheduled one whose slot is gone included), ordered for the VPE: the member who has gone longest
  * since their last speech first (never-spoken before anyone who has), then the
  * oldest request. Only ACTIVE members' requests are listed: Schedule needs an
  * active membership to put the speaker in a slot.
@@ -325,7 +398,7 @@ export async function listSpeechRequestQueue(
 		.where(
 			and(
 				eq(speechRequests.clubId, clubId),
-				eq(speechRequests.status, "open"),
+				speechRequestIsOpen,
 				eq(members.status, "active"),
 			),
 		)
@@ -380,6 +453,7 @@ export async function scheduleSpeechRequest(
 			.select({
 				...REQUEST_COLUMNS,
 				projectId: speechRequests.projectId,
+				live: speechRequestIsLive,
 			})
 			.from(speechRequests)
 			.where(eq(speechRequests.id, args.requestId))
@@ -387,22 +461,44 @@ export async function scheduleSpeechRequest(
 		if (!request || request.clubId !== args.clubId) {
 			throw new Error(REQUEST_NOT_FOUND_MESSAGE);
 		}
-		if (request.status !== "open") throw new Error(REQUEST_NOT_OPEN_MESSAGE);
+		// Open, or scheduled into a slot its member no longer holds (released,
+		// reassigned, deleted, cancelled): that one is open again and may be
+		// scheduled afresh. A LIVE scheduled or a withdrawn request is refused.
+		if (
+			!(
+				request.status === "open" ||
+				(request.status === "scheduled" && !request.live)
+			)
+		) {
+			throw new Error(REQUEST_NOT_OPEN_MESSAGE);
+		}
 
-		const [slot] = await tx
-			.select({ clubId: meetings.clubId, meetingStatus: meetings.status })
+		const [located] = await tx
+			.select({ meetingId: roleSlots.meetingId })
 			.from(roleSlots)
-			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 			.where(eq(roleSlots.id, args.slotId))
 			.limit(1);
-		if (!slot) throw new Error("Speaker slot not found.");
+		if (!located) throw new Error("Speaker slot not found.");
+		// The meeting row, locked, BEFORE its status is read: the sibling plan
+		// writers do the same (`lockMeetingForSlotEdit`), so a cancel or a complete
+		// that lands between this check and the slot write waits for this
+		// transaction instead of slipping a speech onto a cancelled meeting. The
+		// lock covers the status UPDATE; the attach beneath reads and writes the
+		// slot while it is held.
+		const slot = await lockMeetingForSlotEdit(tx, located.meetingId);
 		if (slot.clubId !== request.clubId) {
 			throw new Error(REQUEST_SLOT_WRONG_CLUB_MESSAGE);
 		}
 		// A requested speech is a PLAN: it goes on an upcoming meeting. A cancelled
 		// meeting never happened and a completed one is history, so both refuse here
 		// (the reschedule path beneath accepts a completed one as a record write).
-		assertMeetingAccepts(slot.meetingStatus, "plan");
+		assertMeetingAccepts(slot.status, "plan");
+		// And a meeting whose time has passed is history even while its status still
+		// reads `scheduled` (nobody has completed it yet). Same instant the
+		// Schedule picker lists by (`listOpenSpeakerSlots`: `scheduledAt >= now`).
+		if (slot.scheduledAt.getTime() < Date.now()) {
+			throw new Error(REQUEST_MEETING_PAST_MESSAGE);
+		}
 
 		const [owner] = await tx
 			.select({ personId: members.personId })
@@ -435,10 +531,14 @@ export async function scheduleSpeechRequest(
 		const updated = await tx
 			.update(speechRequests)
 			.set({ status: "scheduled", scheduledSlotId: args.slotId })
+			// Compare-and-swap on the status read under the row lock, NOT on the
+			// "open" predicate: a request being re-scheduled into the very slot it
+			// held before is LIVE again once the attach above has filled it, so the
+			// open predicate would refuse its own legitimate write.
 			.where(
 				and(
 					eq(speechRequests.id, args.requestId),
-					eq(speechRequests.status, "open"),
+					eq(speechRequests.status, request.status),
 				),
 			)
 			.returning({ id: speechRequests.id });

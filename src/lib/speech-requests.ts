@@ -19,6 +19,10 @@ export const MAX_PREFERRED_DATES = 3;
 /** Shown wherever a request has no title (Easy-Speak lets a member ask without one). */
 export const UNTITLED_REQUEST_LABEL = "Untitled";
 
+/** Shown on /me for a request whose scheduled slot was released, moved or cancelled (#1052). */
+export const BACK_IN_QUEUE_NOTICE =
+	"Your scheduled slot is no longer yours (released, reassigned or cancelled): you're back in the queue.";
+
 const CALENDAR_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** True for a real calendar day written `YYYY-MM-DD` (rejects `2026-02-31`). */

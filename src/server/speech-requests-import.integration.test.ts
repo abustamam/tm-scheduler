@@ -82,7 +82,10 @@ describe.skipIf(!hasTestDb)("speech-request import (#1052)", () => {
 	});
 
 	/** A club member the import's apply is taken to have resolved from `es`. */
-	async function resolvedMember(es: string): Promise<string> {
+	async function resolvedMember(
+		es: string,
+		status: "active" | "inactive" = "active",
+	): Promise<string> {
 		const [person] = await testDb
 			.insert(people)
 			.values({ name: `Person ${es}` })
@@ -94,7 +97,7 @@ describe.skipIf(!hasTestDb)("speech-request import (#1052)", () => {
 				personId: person?.id as string,
 				name: `Person ${es}`,
 				clubRole: "member",
-				status: "active",
+				status,
 			})
 			.returning({ id: members.id });
 		await testDb.insert(importRefs).values({
@@ -264,6 +267,35 @@ describe.skipIf(!hasTestDb)("speech-request import (#1052)", () => {
 				),
 			);
 		expect(refs.map((r) => r.sourceId)).toEqual(["k1"]);
+	});
+
+	it("skips a requester who resolved to a FORMER member, counted with the unresolved ones, and imports once they are active again", async () => {
+		await resolvedMember("1");
+		const former = await resolvedMember("2", "inactive");
+		const importId = await storeBundle([
+			request({ es: "1", esSpeechId: "k1" }),
+			request({ es: "2", esSpeechId: "k2" }),
+		]);
+
+		const result = await run(importId);
+
+		expect(result).toMatchObject({ imported: 1, skippedNoMember: 1 });
+		// No invisible row: the former member has nothing in the table.
+		expect(
+			(await rows()).filter((r) => r.membershipId === former),
+		).toHaveLength(0);
+
+		// Skipped, not remembered: it imports once the membership is active.
+		await testDb
+			.update(members)
+			.set({ status: "active" })
+			.where(eq(members.id, former));
+		const again = await run(importId);
+		expect(again).toMatchObject({
+			imported: 1,
+			alreadyImported: 1,
+			skippedNoMember: 0,
+		});
 	});
 
 	it("refuses an import that has not been applied", async () => {

@@ -20,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	impersonationSessions,
 	meetings,
 	members,
 	roleDefinitions,
@@ -31,10 +32,12 @@ import {
 import {
 	cleanup,
 	hasTestDb,
+	openBlockingTx,
 	type SeededClub,
 	seedClub,
 	seedPerson,
 	testDb,
+	waitForLockWait,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -64,12 +67,16 @@ vi.mock("#/lib/auth", () => ({
 }));
 
 const fns = await import("./speech-requests");
-const { NO_PERMISSION_MESSAGE } = await import("./guards");
+const { releaseSlotCore, reassignSlotCore } = await import("./slots-logic");
+const { NO_PERMISSION_MESSAGE, NOT_A_MEMBER_MESSAGE } = await import(
+	"./guards"
+);
 const {
 	NOT_YOUR_REQUEST_MESSAGE,
 	updateSpeechRequest,
 	withdrawSpeechRequest,
 	REQUEST_NOT_FOUND_MESSAGE,
+	REQUEST_MEETING_PAST_MESSAGE,
 	REQUEST_NOT_OPEN_MESSAGE,
 	REQUEST_SLOT_WRONG_CLUB_MESSAGE,
 } = await import("./speech-requests-logic");
@@ -198,6 +205,23 @@ describe.skipIf(!hasTestDb)("speech requests (#1052)", () => {
 			.returning({ id: speechRequests.id });
 		if (!row) throw new Error("request insert failed");
 		return row.id;
+	}
+
+	/**
+	 * A request in the state Schedule leaves: `scheduled`, pointing at a slot the
+	 * member holds on an upcoming meeting. LIVE, unlike a bare `status:
+	 * "scheduled"` row, which has no slot behind it.
+	 */
+	async function insertLiveScheduledRequest(memberId: string) {
+		const slotId = await openSlot();
+		await testDb
+			.update(roleSlots)
+			.set({ assignedMemberId: memberId, status: "claimed" })
+			.where(eq(roleSlots.id, slotId));
+		return insertRequest(memberId, {
+			status: "scheduled",
+			scheduledSlotId: slotId,
+		});
 	}
 
 	async function speechesOf(personId: string) {
@@ -512,7 +536,14 @@ describe.skipIf(!hasTestDb)("speech requests (#1052)", () => {
 			"scheduled",
 			"withdrawn",
 		] as const)("a %s request can no longer be edited or withdrawn", async (status) => {
-			const id = await insertRequest(seed.memberId, { title: "Done", status });
+			const id =
+				status === "scheduled"
+					? await insertLiveScheduledRequest(seed.memberId)
+					: await insertRequest(seed.memberId, { status });
+			await testDb
+				.update(speechRequests)
+				.set({ title: "Done" })
+				.where(eq(speechRequests.id, id));
 			await expect(
 				call(fns.editSpeechRequest, { requestId: id, title: "Late" }),
 			).rejects.toThrow(REQUEST_NOT_OPEN_MESSAGE);
@@ -582,7 +613,7 @@ describe.skipIf(!hasTestDb)("speech requests (#1052)", () => {
 			const lapsed = await addMember(seed.clubId, "Lapsed", "inactive");
 			const open = await insertRequest(seed.memberId);
 			await insertRequest(member2.memberId, { status: "withdrawn" });
-			await insertRequest(member2.memberId, { status: "scheduled" });
+			await insertLiveScheduledRequest(member2.memberId);
 			await insertRequest(lapsed.memberId);
 			sessionUserId = seed.adminUserId;
 			expect((await queue()).map((r) => r.id)).toEqual([open]);
@@ -803,6 +834,336 @@ describe.skipIf(!hasTestDb)("speech requests (#1052)", () => {
 				clubId: seed.clubId,
 			});
 			expect(mine.map((r) => r.id)).toEqual([id]);
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	describe("/me under an impersonation session (#1052)", () => {
+		let superadminId: string;
+		const GRANT = () => new Date(Date.now() + 60 * 60 * 1000);
+
+		beforeEach(async () => {
+			superadminId = randomUUID();
+			await testDb.insert(user).values({
+				id: superadminId,
+				name: "Super",
+				email: `super-${superadminId}@test.example`,
+				emailVerified: true,
+				isSuperadmin: true,
+			});
+			extraUserIds.push(superadminId);
+			await insertRequest(seed.memberId, { title: "Mine" });
+		});
+
+		const mine = (clubId = seed.clubId) =>
+			call<RequestRow[]>(fns.getMySpeechRequests, { clubId });
+
+		it.each([
+			["read_only", null],
+			["read_write", "Looking into a support request"],
+		] as const)("a %s session on the club lists nothing instead of refusing, so /me still loads", async (mode, reason) => {
+			await testDb.insert(impersonationSessions).values({
+				superadminUserId: superadminId,
+				clubId: seed.clubId,
+				mode,
+				reason,
+				expiresAt: GRANT(),
+			});
+			sessionUserId = superadminId;
+			await expect(mine()).resolves.toEqual([]);
+		});
+
+		it("a real member still gets their own requests (the control)", async () => {
+			const rows = await mine();
+			expect(rows.map((r) => r.title)).toEqual(["Mine"]);
+		});
+
+		it("a non-member with NO session is still refused", async () => {
+			sessionUserId = other.memberUserId;
+			await expect(mine()).rejects.toThrow(NOT_A_MEMBER_MESSAGE);
+		});
+
+		it("a session on ANOTHER club does not open this one", async () => {
+			await testDb.insert(impersonationSessions).values({
+				superadminUserId: superadminId,
+				clubId: other.clubId,
+				mode: "read_only",
+				expiresAt: GRANT(),
+			});
+			sessionUserId = superadminId;
+			await expect(mine()).rejects.toThrow(NOT_A_MEMBER_MESSAGE);
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	describe("a scheduled request is live only while its slot is held (#1052)", () => {
+		type QueueRow = { id: string };
+		type MineRow = RequestRow & {
+			backInQueue: boolean;
+			scheduledFor: Date | null;
+		};
+		const schedule = (requestId: string, slotId: string) =>
+			call<{ speechId: string; slotId: string }>(fns.scheduleRequestedSpeech, {
+				requestId,
+				slotId,
+			});
+		const queueIds = async () => {
+			sessionUserId = seed.adminUserId;
+			const rows = await call<QueueRow[]>(fns.getSpeechRequestQueue, {
+				clubId: seed.clubId,
+			});
+			sessionUserId = seed.memberUserId;
+			return rows.map((r) => r.id);
+		};
+		const mine = () =>
+			call<MineRow[]>(fns.getMySpeechRequests, { clubId: seed.clubId });
+
+		/** A request scheduled into a fresh slot by the admin; the session ends as the member. */
+		async function scheduled() {
+			const id = await insertRequest(seed.memberId, { title: "Mine" });
+			const slotId = await openSlot();
+			// The member also holds ANOTHER speaker slot, as a member with a busy
+			// term does: "the slot is gone" must be about THE request's slot, not
+			// about the member holding nothing.
+			const heldElsewhere = await openSlot();
+			await testDb
+				.update(roleSlots)
+				.set({ assignedMemberId: seed.memberId, status: "claimed" })
+				.where(eq(roleSlots.id, heldElsewhere));
+			sessionUserId = seed.adminUserId;
+			await schedule(id, slotId);
+			sessionUserId = seed.memberUserId;
+			return { id, slotId };
+		}
+
+		const causes: Array<[string, (slotId: string) => Promise<void>]> = [
+			[
+				"the slot is released",
+				async (slotId) => {
+					await releaseSlotCore(testDb, {
+						slotId,
+						actorMemberId: seed.adminMemberId,
+						proof: "session",
+					});
+				},
+			],
+			[
+				"the slot is reassigned to another member",
+				async (slotId) => {
+					await reassignSlotCore(testDb, {
+						slotId,
+						memberId: member2.memberId,
+						actorMemberId: seed.adminMemberId,
+						proof: "session",
+					});
+				},
+			],
+			[
+				"the slot is deleted",
+				async (slotId) => {
+					await testDb.delete(roleSlots).where(eq(roleSlots.id, slotId));
+				},
+			],
+			[
+				"the meeting is cancelled",
+				async (slotId) => {
+					const [slot] = await testDb
+						.select({ meetingId: roleSlots.meetingId })
+						.from(roleSlots)
+						.where(eq(roleSlots.id, slotId));
+					await testDb
+						.update(meetings)
+						.set({ status: "cancelled" })
+						.where(eq(meetings.id, slot?.meetingId as string));
+				},
+			],
+		];
+
+		it("a LIVE one is not in the queue and can be neither edited nor withdrawn (the control)", async () => {
+			const { id, slotId } = await scheduled();
+			expect(await queueIds()).not.toContain(id);
+			const [row] = await mine();
+			expect(row).toMatchObject({
+				id,
+				status: "scheduled",
+				scheduledSlotId: slotId,
+				backInQueue: false,
+			});
+			expect(row?.scheduledFor).toBeInstanceOf(Date);
+			await expect(
+				call(fns.editSpeechRequest, { requestId: id, title: "x" }),
+			).rejects.toThrow(REQUEST_NOT_OPEN_MESSAGE);
+			await expect(
+				call(fns.withdrawMySpeechRequest, { requestId: id }),
+			).rejects.toThrow(REQUEST_NOT_OPEN_MESSAGE);
+			expect((await requestRow(id)).status).toBe("scheduled");
+		});
+
+		it.each(
+			causes,
+		)("when %s the request is back in the VPE's queue and on /me as open", async (_label, cause) => {
+			const { id, slotId } = await scheduled();
+			await cause(slotId);
+			expect(await queueIds()).toContain(id);
+			const [row] = await mine();
+			expect(row).toMatchObject({
+				id,
+				status: "open",
+				scheduledSlotId: null,
+				scheduledFor: null,
+				backInQueue: true,
+			});
+		});
+
+		it.each(
+			causes,
+		)("when %s the member can withdraw it", async (_label, cause) => {
+			const { id, slotId } = await scheduled();
+			await cause(slotId);
+			await call(fns.withdrawMySpeechRequest, { requestId: id });
+			expect((await requestRow(id)).status).toBe("withdrawn");
+			expect(await queueIds()).not.toContain(id);
+			expect(await mine()).toEqual([]);
+		});
+
+		it.each(
+			causes,
+		)("when %s the member can edit it, and it is an ordinary open request again", async (_label, cause) => {
+			const { id, slotId } = await scheduled();
+			await cause(slotId);
+			await call(fns.editSpeechRequest, { requestId: id, title: "Reworded" });
+			const row = await requestRow(id);
+			expect(row).toMatchObject({
+				title: "Reworded",
+				status: "open",
+				scheduledSlotId: null,
+			});
+			const [listed] = await mine();
+			expect(listed).toMatchObject({ id, status: "open", backInQueue: false });
+		});
+
+		it.each(
+			causes,
+		)("when %s the VPE can schedule it again into a new slot", async (_label, cause) => {
+			const { id, slotId } = await scheduled();
+			await cause(slotId);
+			const fresh = await openSlot();
+			sessionUserId = seed.adminUserId;
+			await schedule(id, fresh);
+			const row = await requestRow(id);
+			expect(row).toMatchObject({
+				status: "scheduled",
+				scheduledSlotId: fresh,
+			});
+			sessionUserId = seed.memberUserId;
+			const [listed] = await mine();
+			expect(listed).toMatchObject({
+				id,
+				status: "scheduled",
+				backInQueue: false,
+			});
+		});
+
+		it("a released slot can take the same request again (it is live the moment it is refilled)", async () => {
+			const { id, slotId } = await scheduled();
+			await causes[0]?.[1](slotId);
+			sessionUserId = seed.adminUserId;
+			await schedule(id, slotId);
+			expect(await requestRow(id)).toMatchObject({
+				status: "scheduled",
+				scheduledSlotId: slotId,
+			});
+			const [slot] = await testDb
+				.select()
+				.from(roleSlots)
+				.where(eq(roleSlots.id, slotId));
+			expect(slot?.assignedMemberId).toBe(seed.memberId);
+		});
+
+		it("a slot that still names the member but is no longer held is not live", async () => {
+			const { id, slotId } = await scheduled();
+			await testDb
+				.update(roleSlots)
+				.set({ status: "open" })
+				.where(eq(roleSlots.id, slotId));
+			expect(await queueIds()).toContain(id);
+			const [row] = await mine();
+			expect(row).toMatchObject({ id, status: "open", backInQueue: true });
+		});
+
+		it("a LIVE request is refused a second Schedule", async () => {
+			const { id } = await scheduled();
+			const other2 = await openSlot();
+			sessionUserId = seed.adminUserId;
+			await expect(schedule(id, other2)).rejects.toThrow(
+				REQUEST_NOT_OPEN_MESSAGE,
+			);
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	describe("Schedule and the meeting's own state (#1052)", () => {
+		const schedule = (requestId: string, slotId: string) =>
+			call<{ speechId: string; slotId: string }>(fns.scheduleRequestedSpeech, {
+				requestId,
+				slotId,
+			});
+
+		async function expectNothingWritten(id: string, slotId: string) {
+			expect((await requestRow(id)).status).toBe("open");
+			const [slot] = await testDb
+				.select()
+				.from(roleSlots)
+				.where(eq(roleSlots.id, slotId));
+			expect(slot?.status).toBe("open");
+			expect(slot?.assignedMemberId).toBeNull();
+			expect(await speechesOf(seed.personId)).toEqual([]);
+		}
+
+		it("refuses a meeting whose time has passed even while its status still reads scheduled", async () => {
+			const id = await insertRequest(seed.memberId, { title: "Mine" });
+			const meetingId = await addMeeting(
+				seed.clubId,
+				"scheduled",
+				new Date(Date.now() - 2 * DAY),
+			);
+			const slotId = await addSpeakerSlot(meetingId, speakerRoleId);
+			sessionUserId = seed.adminUserId;
+			await expect(schedule(id, slotId)).rejects.toThrow(
+				REQUEST_MEETING_PAST_MESSAGE,
+			);
+			await expectNothingWritten(id, slotId);
+		});
+
+		it("takes the meeting lock before it reads the status: a cancel in flight is waited for, then refused", async () => {
+			const id = await insertRequest(seed.memberId, { title: "Mine" });
+			const meetingId = await addMeeting(
+				seed.clubId,
+				"scheduled",
+				new Date(Date.now() + 14 * DAY),
+			);
+			const slotId = await addSpeakerSlot(meetingId, speakerRoleId);
+			sessionUserId = seed.adminUserId;
+			// A cancel that has written but not committed, holding the meeting row.
+			const cancel = await openBlockingTx(async (tx) => {
+				await tx
+					.update(meetings)
+					.set({ status: "cancelled" })
+					.where(eq(meetings.id, meetingId));
+			});
+			let outcome: Promise<string | null> | undefined;
+			try {
+				outcome = schedule(id, slotId).then(
+					() => null,
+					(e: unknown) => (e instanceof Error ? e.message : String(e)),
+				);
+				// Schedule is parked on the meeting row, BEHIND the cancel.
+				await waitForLockWait("for no key update", cancel.pid);
+			} finally {
+				await cancel.commit();
+			}
+			expect(await outcome).toMatch(/cancelled/i);
+			await expectNothingWritten(id, slotId);
 		});
 	});
 });

@@ -28,6 +28,7 @@ import {
 	members,
 	roleDefinitions,
 	roleSlots,
+	speechRequests,
 } from "#/db/schema";
 import {
 	cleanup,
@@ -45,6 +46,7 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const { collapseMemberships } = await import("./membership-collapse-logic");
 const { claimSlotCore, reassignSlotCore } = await import("./slots-logic");
 const { castVote, openVote } = await import("./voting-logic");
+const { createSpeechRequest } = await import("./speech-requests-logic");
 const { CLUB_BUSY_MESSAGE } = await import("./club-write-lock");
 
 /**
@@ -269,6 +271,46 @@ describe.skipIf(!hasTestDb)(
 				// Only "no deadlock, no throw" is this test's claim: reassignment is
 				// not a writer the merge lock covers (see the PR), so where its
 				// holder ends up is not asserted here.
+			});
+		});
+
+		describe("speech request (#1052)", () => {
+			const fields = {
+				title: "Ice Breaker",
+				path: null,
+				projectName: null,
+				introduction: null,
+				preferredDates: [],
+			};
+			const requestsOf = (memberId: string) =>
+				testDb
+					.select({ id: speechRequests.id })
+					.from(speechRequests)
+					.where(eq(speechRequests.membershipId, memberId));
+
+			it("a request created between the re-point and the DELETE is refused, never cascade-deleted after a success", async () => {
+				const hold = await holdMembership(absorbedId);
+				const merge = startMerge(seed.clubId, keeperId, absorbedId);
+				await waitForLockWait('delete from "members"', hold.pid);
+
+				const create = track(
+					createSpeechRequest(testDb, {
+						clubId: seed.clubId,
+						membershipId: absorbedId,
+						fields,
+					}),
+				);
+				const createResult = outcome(create);
+				await settledOrBlocked(create, "pg_advisory", await merge.pid);
+
+				await hold.commit();
+				await merge.done;
+
+				// Refused before writing: the member is told to try again, not told yes
+				// and then silently deprived of the row.
+				expect(await createResult).toBe(CLUB_BUSY_MESSAGE);
+				expect(await requestsOf(absorbedId)).toEqual([]);
+				expect(await requestsOf(keeperId)).toEqual([]);
 			});
 		});
 

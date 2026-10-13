@@ -1623,7 +1623,7 @@ export interface SpeechRequestImportResult {
 	skippedCompleted: number;
 	/** A status this importer does not know. */
 	skippedUnknownStatus: number;
-	/** The requester is not a member this import resolved (a guest, skipped, or removed since). */
+	/** The requester is not an ACTIVE member this import resolved (a guest, skipped, removed or lapsed since). */
 	skippedNoMember: number;
 }
 
@@ -1658,7 +1658,8 @@ function speechRequestSourceId(
  * - `requested` becomes an open request. `scheduled` and `completed` are skipped
  *   (the meeting history carries them) and counted.
  * - The requester must resolve through the `person` refs the import's apply
- *   wrote, to a member who is still in the club; anyone else is skipped, counted.
+ *   wrote, to a member who is still ACTIVE in the club; anyone else (a former member
+ *   included) is skipped, counted.
  * - Idempotent through `import_refs` kind `speech_request`: a second run adds
  *   nothing, and a request someone withdrew or deleted since is not brought back.
  * - One transaction under the club write lock and the apply's own per-club lock,
@@ -1704,12 +1705,16 @@ export async function importSpeechRequests(input: {
 			if (ref.kind === "person") personRefs.set(ref.sourceId, ref.targetId);
 			else imported.add(ref.sourceId);
 		}
+		// ACTIVE members only: the queue lists only those, so a request imported for
+		// a former member would be an invisible row nobody can schedule or withdraw.
 		const live = new Set(
 			(
 				await tx
 					.select({ id: members.id })
 					.from(members)
-					.where(eq(members.clubId, input.clubId))
+					.where(
+						and(eq(members.clubId, input.clubId), eq(members.status, "active")),
+					)
 			).map((m) => m.id),
 		);
 

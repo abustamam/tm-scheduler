@@ -8,6 +8,7 @@ import { Textarea } from "#/components/ui/textarea";
 import { formatCalendarDay, formatMeetingDate } from "#/lib/format";
 import { SPEAKER_LIMITS } from "#/lib/speaker-limits";
 import {
+	BACK_IN_QUEUE_NOTICE,
 	MAX_PREFERRED_DATES,
 	UNTITLED_REQUEST_LABEL,
 } from "#/lib/speech-requests";
@@ -127,6 +128,14 @@ export function MySpeechRequests({
 								{r.path || r.projectName ? (
 									<div className="text-muted-foreground">
 										{[r.path, r.projectName].filter(Boolean).join(" · ")}
+									</div>
+								) : null}
+								{r.backInQueue ? (
+									<div
+										className="text-amber-700 dark:text-amber-400"
+										data-testid="request-back-in-queue"
+									>
+										{BACK_IN_QUEUE_NOTICE}
 									</div>
 								) : null}
 								<div className="text-muted-foreground">
