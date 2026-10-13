@@ -27,13 +27,13 @@ import {
 	createSpeechRequest,
 	getSpeechRequestClubId,
 	listMySpeechRequests,
-	listSchedulableSlots,
 	listSpeechRequestQueue,
 	REQUEST_NOT_FOUND_MESSAGE,
 	scheduleSpeechRequest,
 	updateSpeechRequest,
 	withdrawSpeechRequest,
 } from "./speech-requests-logic";
+import { listOpenSpeakerSlots } from "./speeches-logic";
 
 export type {
 	MySpeechRequest,
@@ -157,7 +157,7 @@ export const getSchedulableSpeakerSlots = createServerFn({ method: "GET" })
 	.handler(async ({ data }) => {
 		const user = await requireUser();
 		await requireClubAdminView(user.id, data.clubId);
-		return listSchedulableSlots(data.clubId);
+		return listOpenSpeakerSlots(db, data.clubId);
 	});
 
 /** Schedule any member's request into an open speaker slot. Club admin only. */

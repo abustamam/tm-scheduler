@@ -22,6 +22,7 @@ import {
 	roleDefinitions,
 	roleSlots,
 	speeches,
+	type speechRequestStatusEnum,
 	speechRequests,
 } from "#/db/schema";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
@@ -33,11 +34,8 @@ import {
 import { TBA_SPEECH_TITLE } from "#/lib/speech-title";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
 import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
-import {
-	attachSpeechToOpenSlot,
-	listOpenSpeakerSlots,
-	type OpenSpeakerSlot,
-} from "./speeches-logic";
+import { HELD_SLOT_STATUSES } from "./reporting-logic";
+import { attachSpeechToOpenSlot } from "./speeches-logic";
 
 type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 type Conn = typeof db | Tx;
@@ -52,10 +50,8 @@ export const REQUEST_SLOT_WRONG_CLUB_MESSAGE =
 export const REQUEST_MEETING_PAST_MESSAGE =
 	"That meeting has already started or passed; pick an upcoming meeting.";
 
-/** Slots the queue's quick-sum reads; same set the speaker rotation counts as "held". */
-const HELD_SLOT_STATUSES = ["claimed", "confirmed"] as const;
-
-export type SpeechRequestStatus = "open" | "scheduled" | "withdrawn";
+export type SpeechRequestStatus =
+	(typeof speechRequestStatusEnum.enumValues)[number];
 
 // ---------------------------------------------------------------------------
 // "Live": the ONE definition of a scheduled request that still holds a slot
@@ -209,7 +205,11 @@ export async function updateSpeechRequest(
 		fields: SpeechRequestFields;
 	},
 ): Promise<SpeechRequestRow> {
-	await loadOwnedRequest(conn, args.requestId, args.actorMembershipId);
+	const owned = await loadOwnedRequest(
+		conn,
+		args.requestId,
+		args.actorMembershipId,
+	);
 	// Ownership is in the WHERE as well as in the check above: the check gives the
 	// right sentence, the predicate is what a concurrent withdraw or schedule
 	// cannot slip past.
@@ -228,7 +228,7 @@ export async function updateSpeechRequest(
 		.where(
 			and(
 				eq(speechRequests.id, args.requestId),
-				eq(speechRequests.membershipId, args.actorMembershipId as string),
+				eq(speechRequests.membershipId, owned.membershipId),
 				speechRequestIsOpen,
 			),
 		)
@@ -242,14 +242,18 @@ export async function withdrawSpeechRequest(
 	conn: Conn,
 	args: { requestId: string; actorMembershipId: string | null },
 ): Promise<void> {
-	await loadOwnedRequest(conn, args.requestId, args.actorMembershipId);
+	const owned = await loadOwnedRequest(
+		conn,
+		args.requestId,
+		args.actorMembershipId,
+	);
 	const rows = await conn
 		.update(speechRequests)
 		.set({ status: "withdrawn" })
 		.where(
 			and(
 				eq(speechRequests.id, args.requestId),
-				eq(speechRequests.membershipId, args.actorMembershipId as string),
+				eq(speechRequests.membershipId, owned.membershipId),
 				speechRequestIsOpen,
 			),
 		)
@@ -325,16 +329,17 @@ export interface SpeechQueueRow extends QueueOrderable {
 }
 
 /**
- * Each member's most recent PAST speaker slot (non-cancelled, held), the same
- * definition the speaker rotation uses, so the two lists never disagree about
- * "last spoke".
+ * Each member's most recent PAST speaker slot (non-cancelled meeting, held
+ * status), as the date of that meeting. It is a second copy of the join
+ * `loadSpeakerRotation` aggregates (`HELD_SLOT_STATUSES` is the one shared
+ * constant); `speech-requests.integration.test.ts` runs both on one fixture and
+ * asserts they agree, which is what keeps the two from drifting.
  */
 async function lastSpokeByMember(
 	conn: Conn,
 	memberIds: string[],
 	now: Date,
 ): Promise<Map<string, Date>> {
-	if (memberIds.length === 0) return new Map();
 	const rows = await conn
 		.select({
 			memberId: roleSlots.assignedMemberId,
@@ -413,13 +418,6 @@ export async function listSpeechRequestQueue(
 	);
 }
 
-/** Open speaker slots a request can be scheduled into (the reschedule targets). */
-export async function listSchedulableSlots(
-	clubId: string,
-): Promise<OpenSpeakerSlot[]> {
-	return listOpenSpeakerSlots(db, clubId);
-}
-
 // ---------------------------------------------------------------------------
 // Schedule
 // ---------------------------------------------------------------------------
@@ -448,7 +446,20 @@ export async function scheduleSpeechRequest(
 	conn: typeof db = db,
 ): Promise<{ speechId: string; slotId: string }> {
 	return conn.transaction(async (tx) => {
-		// The request row lock serialises this against a withdraw or an edit.
+		// The request row lock serialises this against a withdraw, an edit or
+		// another Schedule.
+		const [locked] = await tx
+			.select({ id: speechRequests.id })
+			.from(speechRequests)
+			.where(eq(speechRequests.id, args.requestId))
+			.for("update");
+		if (!locked) throw new Error(REQUEST_NOT_FOUND_MESSAGE);
+		// READ the request in a SECOND statement. A `for update` that waited on a
+		// concurrent Schedule returns the row's committed columns, but evaluates
+		// every subquery in its select list against the snapshot it took BEFORE the
+		// wait, which cannot see the slot that Schedule filled: `live` would read
+		// false for a request that is live, and both would schedule it. A new
+		// statement takes a new snapshot, after the lock is ours.
 		const [request] = await tx
 			.select({
 				...REQUEST_COLUMNS,
@@ -456,8 +467,7 @@ export async function scheduleSpeechRequest(
 				live: speechRequestIsLive,
 			})
 			.from(speechRequests)
-			.where(eq(speechRequests.id, args.requestId))
-			.for("update");
+			.where(eq(speechRequests.id, args.requestId));
 		if (!request || request.clubId !== args.clubId) {
 			throw new Error(REQUEST_NOT_FOUND_MESSAGE);
 		}

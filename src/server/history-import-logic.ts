@@ -1429,6 +1429,18 @@ export interface ApplyResult {
 }
 
 /**
+ * The per-club history-import lock: ONE apply (or speech-request apply) per club
+ * at a time. It TRIES the lock and refuses at once rather than waiting, because
+ * the holder keeps a pooled connection for its whole run. Held until `tx` ends.
+ */
+async function takeImportLock(tx: Tx, clubId: string): Promise<void> {
+	const taken = await tx.execute<{ ok: boolean }>(
+		sql`select pg_try_advisory_xact_lock(hashtextextended(${`history-import:${clubId}`}, 0)) as ok`,
+	);
+	if (!taken.rows[0]?.ok) throw new Error(IMPORT_RUNNING_MESSAGE);
+}
+
+/**
  * Apply a stored bundle to its club. The caller has proved the superadmin.
  *
  * Refused while any person is unresolved, and for an archived club. Re-running is
@@ -1454,10 +1466,7 @@ export async function applyEasySpeakImport(input: {
 	// on a pool with no checkout timeout), so a queued apply would starve the run
 	// it is queued behind.
 	return db.transaction(async (guard) => {
-		const taken = await guard.execute<{ ok: boolean }>(
-			sql`select pg_try_advisory_xact_lock(hashtextextended(${`history-import:${input.clubId}`}, 0)) as ok`,
-		);
-		if (!taken.rows[0]?.ok) throw new Error(IMPORT_RUNNING_MESSAGE);
+		await takeImportLock(guard, input.clubId);
 		return applyUnderImportLock(input);
 	});
 }
@@ -1678,10 +1687,7 @@ export async function importSpeechRequests(input: {
 	const requests = stored.bundle.speechRequests;
 
 	return db.transaction(async (tx) => {
-		const taken = await tx.execute<{ ok: boolean }>(
-			sql`select pg_try_advisory_xact_lock(hashtextextended(${`history-import:${input.clubId}`}, 0)) as ok`,
-		);
-		if (!taken.rows[0]?.ok) throw new Error(IMPORT_RUNNING_MESSAGE);
+		await takeImportLock(tx, input.clubId);
 		await lockClubForWrite(tx, input.clubId);
 		await assertClubNotArchivedTx(tx, input.clubId);
 
