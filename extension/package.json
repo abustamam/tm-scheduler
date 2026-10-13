@@ -11,6 +11,7 @@
 		"postinstall": "wxt prepare"
 	},
 	"devDependencies": {
+		"linkedom": "0.18.12",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.10",
 		"wxt": "^0.20.27"
