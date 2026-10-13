@@ -335,7 +335,14 @@ describe.skipIf(!hasTestDb)(
 					});
 					const writer = act();
 					try {
-						await waitForLockWait('update "role_slots"', blocker.pid);
+						// Deactivate parks on its slot UPDATE; remove (#1189) locks the
+						// member's slots up front, so it parks on that `for update` select.
+						await waitForLockWait(
+							label === "removing the member"
+								? '"role_slots"%for update'
+								: 'update "role_slots"',
+							blocker.pid,
+						);
 					} finally {
 						await blocker.commit();
 					}
@@ -348,23 +355,33 @@ describe.skipIf(!hasTestDb)(
 					expect(await releasedSlotIds([slotId])).toEqual([]);
 				});
 
-				it("logs a release only for the slots it released, in a mixed set", async () => {
-					const cancelled = await heldSlotOn("cancelled");
-					const scheduled = await heldSlotOn("scheduled");
-					// Removal is refused for a completed (or past scheduled) slot, so the
-					// set the remove path can see swaps it for a PAST CANCELLED slot: a
-					// meeting that printed nothing, which the writer must not release or
-					// log. Deactivation keeps the original completed slot.
-					const untouched =
-						label === "removing the member"
-							? await heldSlotOn("cancelled", -60 * 60 * 1000)
-							: await heldSlotOn("completed");
-					await act();
-					expect((await slotRow(untouched)).status).toBe("claimed");
-					expect(
-						(await releasedSlotIds([untouched, cancelled, scheduled])).sort(),
-					).toEqual([cancelled, scheduled].sort());
-				});
+				it(
+					label === "removing the member"
+						? "releases and logs the upcoming slots and leaves a past cancelled one, in a mixed set"
+						: "logs a release only for the slots it released, in a mixed set",
+					async () => {
+						const cancelled = await heldSlotOn("cancelled");
+						const scheduled = await heldSlotOn("scheduled");
+						// Removal is refused for a completed (or past scheduled) slot, so the
+						// remove arm swaps it for a PAST CANCELLED slot: a meeting that printed
+						// nothing, which removal leaves alone. That slot is filtered out before
+						// the UPDATE, so this arm proves the upcoming-set filter, NOT the
+						// RETURNING-gated log. Under the meeting lock a slot removal selected can
+						// no longer be refused by its UPDATE, so removal's `released.length === 0`
+						// check is defensive only. Deactivate has its own copy, and its arm
+						// (a selected completed slot the UPDATE refuses) is what kills a mutation
+						// of that one.
+						const untouched =
+							label === "removing the member"
+								? await heldSlotOn("cancelled", -60 * 60 * 1000)
+								: await heldSlotOn("completed");
+						await act();
+						expect((await slotRow(untouched)).status).toBe("claimed");
+						expect(
+							(await releasedSlotIds([untouched, cancelled, scheduled])).sort(),
+						).toEqual([cancelled, scheduled].sort());
+					},
+				);
 			});
 		}
 	},

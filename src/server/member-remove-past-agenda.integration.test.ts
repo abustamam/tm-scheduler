@@ -5,7 +5,7 @@
  * member who is on a PAST meeting (completed, or time passed and not cancelled)
  * and points at "Mark inactive". The refusal runs before any write.
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, getTableName, inArray, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -17,7 +17,13 @@ import {
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
-import { pastAgendaRemoveRefusal } from "#/lib/member-remove";
+import {
+	isPastAgendaRemoveRefusal,
+	pastAgendaRemoveRefusal,
+} from "#/lib/member-remove";
+import { CLUB_BUSY_MESSAGE } from "#/server/club-write-lock";
+import { lockMeetingForSlotEdit } from "#/server/meeting-slot-lock";
+import { lockMembershipsAgainstMerge } from "#/server/membership-merge-lock";
 import {
 	cleanup,
 	hasTestDb,
@@ -115,9 +121,15 @@ describe.skipIf(!hasTestDb)("remove a member on a past agenda (#1189)", () => {
 	/** The refusal leaves the member, the log and the slot holder untouched. */
 	async function expectRefused(memberId: string, name: string) {
 		const logged = await activityCount();
-		await expect(remove(memberId)).rejects.toThrow(
-			pastAgendaRemoveRefusal(name),
+		const err = await remove(memberId).then(
+			() => null,
+			(e: unknown) => e,
 		);
+		expect(err).toBeInstanceOf(Error);
+		expect((err as Error).message).toBe(pastAgendaRemoveRefusal(name));
+		// The remove dialog offers "Mark inactive" off this match, so what the
+		// server really threw must be recognised by it.
+		expect(isPastAgendaRemoveRefusal((err as Error).message)).toBe(true);
 		expect(await memberRowExists(memberId)).toBe(true);
 		expect(await activityCount()).toBe(logged);
 	}
@@ -293,17 +305,44 @@ describe.skipIf(!hasTestDb)("remove a member on a past agenda (#1189)", () => {
 		expect(slot?.status).toBe("claimed");
 	});
 
-	it("refuses when a past slot is claimed by a concurrent transaction after the removal started", async () => {
-		// Protects: the check and the delete are one atomic step. A slot inserted for
-		// the member takes a KEY SHARE lock on the member row through the FK; the
-		// removal's `for update` select waits on it, then re-reads the committed slot.
-		// Fails when: the lock is dropped. The removal's check then runs on the
-		// pre-commit snapshot (sees no slot), the delete waits out the FK lock, and
-		// ON DELETE SET NULL blanks the holder the other transaction just committed.
+	/** Park `remove(leaver)` behind `blocker`, then let the blocker commit. */
+	async function removeParkedBehind(
+		blocker: { pid: number; commit: () => Promise<void> },
+		leaver: string,
+		match: string,
+	) {
+		const outcome = remove(leaver).then(
+			() => null,
+			(e: unknown) => e,
+		);
+		try {
+			await waitForLockWait(match, blocker.pid);
+		} finally {
+			await blocker.commit();
+			await outcome;
+		}
+		return outcome;
+	}
+
+	async function slotHolder(slotId: string) {
+		const [slot] = await testDb
+			.select()
+			.from(roleSlots)
+			.where(eq(roleSlots.id, slotId));
+		return slot;
+	}
+
+	it("refuses a past slot claimed through the merge lock while the removal waits", async () => {
+		// Protects: a claim (`claimSlotCore`) takes the membership merge lock SHARED
+		// first. The removal takes it EXCLUSIVE before any row lock, so it waits for
+		// the claim to commit and then sees the slot.
+		// Fails when: the removal skips that lock. It then reads before the claim
+		// commits, and ON DELETE SET NULL blanks the holder the claim just committed.
 		const leaver = await seedLeaver();
 		const meetingId = await seedMeeting("completed", -7);
 		let slotId = "";
 		const claimer = await openBlockingTx(async (tx) => {
+			await lockMembershipsAgainstMerge(tx, [leaver]);
 			const [s] = await tx
 				.insert(roleSlots)
 				.values({
@@ -315,25 +354,424 @@ describe.skipIf(!hasTestDb)("remove a member on a past agenda (#1189)", () => {
 				.returning({ id: roleSlots.id });
 			slotId = s.id;
 		});
-		const outcome = remove(leaver).then(
+		const err = await removeParkedBehind(
+			claimer,
+			leaver,
+			"pg_advisory_xact_lock",
+		);
+
+		expect(err).toBeInstanceOf(Error);
+		expect((err as Error).message).toBe(pastAgendaRemoveRefusal("Leaving Lee"));
+		expect(await memberRowExists(leaver)).toBe(true);
+		expect((await slotHolder(slotId))?.assignedMemberId).toBe(leaver);
+	});
+
+	it("stops, writing nothing, when a writer without the merge lock lands a row on an unheld meeting", async () => {
+		// Protects: a writer that does not take the merge lock (a reassignment, an
+		// attendance row) takes KEY SHARE on the member row through the FK, so the
+		// removal's member row lock waits for it. The meeting it landed on was not
+		// locked by the removal, so its status is not stable: the removal refuses to
+		// decide on it and answers CLUB_BUSY_MESSAGE.
+		// Fails when: the member row lock is dropped (the removal never parks), or
+		// the unheld-meeting check is dropped (it deletes, and SET NULL blanks the
+		// holder the other writer committed).
+		const leaver = await seedLeaver();
+		const meetingId = await seedMeeting("completed", -7);
+		let slotId = "";
+		const writer = await openBlockingTx(async (tx) => {
+			const [s] = await tx
+				.insert(roleSlots)
+				.values({
+					meetingId,
+					roleDefinitionId: club.roleDefinitionId,
+					status: "claimed",
+					assignedMemberId: leaver,
+				})
+				.returning({ id: roleSlots.id });
+			slotId = s.id;
+		});
+		const err = await removeParkedBehind(
+			writer,
+			leaver,
+			'"members"%for update',
+		);
+
+		expect(err).toBeInstanceOf(Error);
+		expect((err as Error).message).toBe(CLUB_BUSY_MESSAGE);
+		expect(await memberRowExists(leaver)).toBe(true);
+		expect((await slotHolder(slotId))?.assignedMemberId).toBe(leaver);
+	});
+
+	it("stops, writing nothing, when a writer lands an attendance row on an unheld meeting", async () => {
+		// Same wait as above through the other key kind: only the unheld-meeting
+		// check can stop this one (there is no slot to trip the slot check).
+		const leaver = await seedLeaver();
+		const meetingId = await seedMeeting("completed", -7);
+		const writer = await openBlockingTx(async (tx) => {
+			await tx
+				.insert(meetingAttendance)
+				.values({ meetingId, memberId: leaver, status: "present" });
+		});
+		const err = await removeParkedBehind(
+			writer,
+			leaver,
+			'"members"%for update',
+		);
+
+		expect((err as Error).message).toBe(CLUB_BUSY_MESSAGE);
+		expect(await memberRowExists(leaver)).toBe(true);
+		const rows = await testDb
+			.select()
+			.from(meetingAttendance)
+			.where(eq(meetingAttendance.meetingId, meetingId));
+		expect(rows[0]?.memberId).toBe(leaver);
+	});
+
+	it("stops, writing nothing, when a writer lands a second slot on a meeting the removal holds", async () => {
+		// The removal locked the member's slots before the member row, so a slot a
+		// writer adds in between is not locked: locking it now would take a slot lock
+		// AFTER the member row, against the lock order. It stops instead. Only the
+		// unheld-slot check can stop this (the meeting is held).
+		const leaver = await seedLeaver();
+		const meetingId = await seedMeeting("scheduled", 7);
+		const first = await holdSlot(meetingId, leaver);
+		let second = "";
+		const writer = await openBlockingTx(async (tx) => {
+			const [s] = await tx
+				.insert(roleSlots)
+				.values({
+					meetingId,
+					roleDefinitionId: club.roleDefinitionId,
+					status: "claimed",
+					assignedMemberId: leaver,
+				})
+				.returning({ id: roleSlots.id });
+			second = s.id;
+		});
+		const err = await removeParkedBehind(
+			writer,
+			leaver,
+			'"members"%for update',
+		);
+
+		expect((err as Error).message).toBe(CLUB_BUSY_MESSAGE);
+		expect(await memberRowExists(leaver)).toBe(true);
+		expect((await slotHolder(first))?.assignedMemberId).toBe(leaver);
+		expect((await slotHolder(second))?.assignedMemberId).toBe(leaver);
+	});
+
+	it("refuses a member who is a signed-in account", async () => {
+		const leaver = await seedLeaver();
+		await testDb
+			.update(people)
+			.set({ userId: club.memberUserId })
+			.where(eq(people.id, extraPeople[0] ?? ""));
+		const logged = await activityCount();
+
+		await expect(remove(leaver)).rejects.toThrow(
+			"That member is a signed-in account and can't be removed.",
+		);
+
+		expect(await memberRowExists(leaver)).toBe(true);
+		expect(await activityCount()).toBe(logged);
+	});
+
+	it("refuses when the member's account is linked while the removal waits", async () => {
+		// Protects: the sign-in check runs INSIDE the transaction, after the locks.
+		// Fails when: it runs before the transaction. An invite accepted in between
+		// then lets the now-signed-in member be removed.
+		const leaver = await seedLeaver();
+		const writer = await openBlockingTx(async (tx) => {
+			await tx.execute(
+				sql`select id from members where id = ${leaver} for key share`,
+			);
+			await tx
+				.update(people)
+				.set({ userId: club.memberUserId })
+				.where(eq(people.id, extraPeople[0] ?? ""));
+		});
+		const err = await removeParkedBehind(
+			writer,
+			leaver,
+			'"members"%for update',
+		);
+
+		expect((err as Error).message).toBe(
+			"That member is a signed-in account and can't be removed.",
+		);
+		expect(await memberRowExists(leaver)).toBe(true);
+	});
+
+	it("does not lock or wait on another club's meetings for a member that is not in this club", async () => {
+		// Protects: the in-club check comes before the first lock. A removal aimed at
+		// a member of another club answers "Member not found." without taking that
+		// club's merge lock or meeting rows.
+		// Fails when: the check is dropped. The removal then waits for the other
+		// club's meeting lock held below.
+		const other = await seedClub();
+		try {
+			const personId = await seedPerson({ name: "Elsewhere" });
+			extraPeople.push(personId);
+			const [foreign] = await testDb
+				.insert(members)
+				.values({ clubId: other.clubId, personId, name: "Elsewhere" })
+				.returning({ id: members.id });
+			const [fm] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: other.clubId,
+					scheduledAt: new Date(Date.now() + 7 * DAY),
+				})
+				.returning({ id: meetings.id });
+			await testDb.insert(roleSlots).values({
+				meetingId: fm.id,
+				roleDefinitionId: other.roleDefinitionId,
+				status: "claimed",
+				assignedMemberId: foreign.id,
+			});
+			const holder = await openBlockingTx(async (tx) => {
+				await lockMeetingForSlotEdit(tx, fm.id);
+			});
+			try {
+				let settled = false;
+				const outcome = remove(foreign.id).then(
+					() => {
+						settled = true;
+						return null;
+					},
+					(e: unknown) => {
+						settled = true;
+						return e;
+					},
+				);
+				await Promise.race([outcome, new Promise((r) => setTimeout(r, 1500))]);
+				expect(settled).toBe(true);
+				expect(((await outcome) as Error).message).toBe("Member not found.");
+			} finally {
+				await holder.commit();
+			}
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	it("refuses a slot whose meeting is completed while the removal waits (no nameless holder on a completed agenda)", async () => {
+		// Protects: the meeting row is locked BEFORE the check, so the status the
+		// check reads is the status the delete acts on. `applyCompleteMeeting` takes
+		// the same lock (`lockMeetingForSlotEdit`) and writes `completed`.
+		// Fails when: the removal does not lock the meeting. It then reads
+		// `scheduled`, releases or deletes around a meeting that completes next, and
+		// a completed agenda is left with a claimed role and no holder.
+		const leaver = await seedLeaver();
+		const meetingId = await seedMeeting("scheduled", 0.04); // later today
+		const slotId = await holdSlot(meetingId, leaver);
+		const completer = await openBlockingTx(async (tx) => {
+			await lockMeetingForSlotEdit(tx, meetingId);
+			await tx
+				.update(meetings)
+				.set({ status: "completed" })
+				.where(eq(meetings.id, meetingId));
+		});
+		const err = await removeParkedBehind(
+			completer,
+			leaver,
+			"for no key update",
+		);
+
+		expect((err as Error).message).toBe(pastAgendaRemoveRefusal("Leaving Lee"));
+		expect(await memberRowExists(leaver)).toBe(true);
+		const slot = await slotHolder(slotId);
+		expect(slot?.assignedMemberId).toBe(leaver);
+		expect(slot?.status).toBe("claimed");
+	});
+
+	it("refuses a slot whose meeting is rescheduled into the past while the removal waits", async () => {
+		// Same lock, other writer: a reschedule is a plain UPDATE of the meeting row,
+		// which conflicts with the removal's `for no key update` on it.
+		const leaver = await seedLeaver();
+		const meetingId = await seedMeeting("scheduled", 3);
+		const slotId = await holdSlot(meetingId, leaver);
+		const rescheduler = await openBlockingTx(async (tx) => {
+			await tx
+				.update(meetings)
+				.set({ scheduledAt: new Date(Date.now() - DAY) })
+				.where(eq(meetings.id, meetingId));
+		});
+		const err = await removeParkedBehind(
+			rescheduler,
+			leaver,
+			"for no key update",
+		);
+
+		expect((err as Error).message).toBe(pastAgendaRemoveRefusal("Leaving Lee"));
+		expect(await memberRowExists(leaver)).toBe(true);
+		expect((await slotHolder(slotId))?.assignedMemberId).toBe(leaver);
+	});
+
+	it("finishes beside an assign_roles-style batch without a deadlock", async () => {
+		// `assign_roles` locks the meeting, then its slots in id order, then assigns
+		// one to a member (FK KEY SHARE on the member row). The removal takes the
+		// meeting FIRST, so it queues behind that batch holding no row lock, and the
+		// batch is never waiting on a lock the removal holds. The first version took
+		// the member row first: it held it, wanted the batch's slot, and the batch
+		// wanted the member row: 40P01.
+		// Fails when: the removal locks the member row (or the slots) before the
+		// meeting: the removal never parks on the meeting lock, and the interleaving
+		// below deadlocks or times out.
+		const leaver = await seedLeaver();
+		const meetingId = await seedMeeting("scheduled", 7);
+		const held = await holdSlot(meetingId, leaver);
+		const [spare] = await testDb
+			.insert(roleSlots)
+			.values({
+				meetingId,
+				roleDefinitionId: club.roleDefinitionId,
+				status: "open",
+			})
+			.returning({ id: roleSlots.id });
+		const slotIds = [held, spare.id];
+
+		let proceed!: () => void;
+		const gate = new Promise<void>((r) => {
+			proceed = r;
+		});
+		let holdsLocks!: (pid: number) => void;
+		const holding = new Promise<number>((r) => {
+			holdsLocks = r;
+		});
+		const batch = testDb.transaction(async (tx) => {
+			const res = await tx.execute(sql`select pg_backend_pid() as pid`);
+			const pid = Number((res.rows[0] as { pid: number }).pid);
+			await lockMeetingForSlotEdit(tx, meetingId);
+			await tx
+				.select({ id: roleSlots.id })
+				.from(roleSlots)
+				.where(inArray(roleSlots.id, slotIds))
+				.orderBy(asc(roleSlots.id))
+				.for("update");
+			holdsLocks(pid);
+			await gate;
+			await tx
+				.update(roleSlots)
+				.set({ assignedMemberId: leaver, status: "claimed" })
+				.where(eq(roleSlots.id, spare.id));
+		});
+		const batchOutcome = batch.then(
+			() => null,
+			(e: unknown) => e,
+		);
+		const batchPid = await holding;
+		const removal = remove(leaver).then(
 			() => null,
 			(e: unknown) => e,
 		);
 		try {
-			await waitForLockWait("for update", claimer.pid);
+			await waitForLockWait("for no key update", batchPid);
 		} finally {
-			await claimer.commit();
-			await outcome;
+			proceed();
+		}
+		expect(await batchOutcome).toBeNull();
+		expect(await removal).toBeNull();
+
+		// The batch's assignment committed before the removal got its locks, so the
+		// removal saw and released both slots.
+		expect(await memberRowExists(leaver)).toBe(false);
+		for (const id of slotIds) {
+			const slot = await slotHolder(id);
+			expect(slot?.assignedMemberId).toBeNull();
+			expect(slot?.status).toBe("open");
+		}
+	});
+
+	it("treats a meeting starting exactly now as upcoming: released, not refused", async () => {
+		// One clock: past is `scheduledAt < now`, release is `scheduledAt >= now`,
+		// on the same `now`, so a meeting is on exactly one side. Fails when either
+		// comparison moves: `<=` refuses it, `>` neither refuses nor releases it,
+		// and the delete blanks a slot on a meeting that is about to start.
+		const leaver = await seedLeaver();
+		const at = new Date(Math.floor(Date.now() / 1000) * 1000);
+		const [m] = await testDb
+			.insert(meetings)
+			.values({ clubId: club.clubId, scheduledAt: at, status: "scheduled" })
+			.returning({ id: meetings.id });
+		const slotId = await holdSlot(m.id, leaver);
+
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(at);
+		try {
+			await remove(leaver);
+		} finally {
+			vi.useRealTimers();
 		}
 
-		const err = await outcome;
-		expect(err).toBeInstanceOf(Error);
-		expect((err as Error).message).toBe(pastAgendaRemoveRefusal("Leaving Lee"));
-		expect(await memberRowExists(leaver)).toBe(true);
-		const [slot] = await testDb
-			.select()
-			.from(roleSlots)
-			.where(eq(roleSlots.id, slotId));
-		expect(slot?.assignedMemberId).toBe(leaver);
+		expect(await memberRowExists(leaver)).toBe(false);
+		const slot = await slotHolder(slotId);
+		expect(slot?.status).toBe("open");
+		expect(slot?.assignedMemberId).toBeNull();
+	});
+
+	it("stops with a plain message when the member row is gone", async () => {
+		const leaver = await seedLeaver();
+		await remove(leaver);
+		await expect(remove(leaver)).rejects.toThrow("Member not found.");
+	});
+
+	it("covers every ON DELETE SET NULL key to members.id: checked or deliberately not", async () => {
+		// The checked list is hand-kept; this reads the database so a new table that
+		// names a member and nulls on delete cannot be forgotten silently. A key
+		// here must be in `PAST_AGENDA_MEMBER_KEYS` (blocks removal) or in
+		// CONSIDERED_NOT_BLOCKING below with a reason.
+		const { PAST_AGENDA_MEMBER_KEYS } = await import("#/server/members-logic");
+		const res = await testDb.execute(sql`
+			select cl.relname as "table", a.attname as "column"
+			from pg_constraint c
+			join pg_class cl on cl.oid = c.conrelid
+			join pg_attribute a on a.attrelid = c.conrelid and a.attnum = any(c.conkey)
+			where c.contype = 'f'
+			  and c.confrelid = 'public.members'::regclass
+			  and c.confdeltype = 'n'
+			order by 1, 2`);
+		const inDb = (res.rows as { table: string; column: string }[]).map(
+			(r) => `${r.table}.${r.column}`,
+		);
+		const checked = PAST_AGENDA_MEMBER_KEYS.map(
+			(k) => `${getTableName(k.table)}.${k.memberColumn.name}`,
+		);
+		const considered = Object.keys(CONSIDERED_NOT_BLOCKING);
+		const unaccounted = inDb.filter(
+			(k) => !checked.includes(k) && !considered.includes(k),
+		);
+		expect(unaccounted).toEqual([]);
+		// And neither list names a key the database no longer has.
+		expect(checked.filter((k) => !inDb.includes(k))).toEqual([]);
+		expect(considered.filter((k) => !inDb.includes(k))).toEqual([]);
 	});
 });
+
+/** Keys to `members.id` that null on delete and deliberately do NOT block a
+ *  removal, each with the reason. A key moves to `PAST_AGENDA_MEMBER_KEYS` when it
+ *  prints a name on an agenda. */
+const CONSIDERED_NOT_BLOCKING: Record<string, string> = {
+	"activity_log.actor_member_id": "audit trail, not on an agenda",
+	"club_action_items.owner_member_id":
+		"pending maintainer decision (#1189 review): minutes print the owner",
+	"guest_invites.invited_by_member_id": "invite provenance, not on an agenda",
+	"guests.converted_membership_id":
+		"the guest's own record points at who they became, not on an agenda",
+	"guests.introduced_by_member_id":
+		"shown on the guest record only, not on an agenda",
+	"meeting_candidate_disqualifications.disqualified_by_member_id":
+		"ballot audit, not on an agenda (#1189 brief: votes do not block)",
+	"meeting_timings.recorded_by_member_id":
+		"who keyed the timing in; the speaker's name is the slot's, not on an agenda",
+	"meeting_vote_sessions.opened_by_member_id":
+		"#1189 brief: vote sessions print no name on an agenda",
+	"meeting_votes.candidate_member_id":
+		"#1189 brief: votes print no name on an agenda",
+	"meeting_votes.voter_member_id":
+		"#1189 brief: votes print no name on an agenda",
+	"mentorships.created_by_member_id":
+		"provenance of a mentor pair, not on an agenda",
+	"project_completion_marks.marked_by_member_id":
+		"#1189 brief: project marks print no name on an agenda",
+};
