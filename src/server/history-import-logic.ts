@@ -126,6 +126,8 @@ export const UNRESOLVED_PEOPLE_MESSAGE = (n: number) =>
 	`${n} ${n === 1 ? "person still needs" : "people still need"} a decision before this can be applied.`;
 export const PLAN_CHANGED_MESSAGE =
 	"The club or the bundle changed since this preview. Preview again before applying.";
+export const IMPORT_RUNNING_MESSAGE =
+	"An import is already running for this club. Wait for it to finish, then preview again.";
 export const INTRODUCER_NOT_IN_CLUB_MESSAGE =
 	"The member who introduced this guest is not in this club.";
 
@@ -1387,12 +1389,17 @@ export async function applyEasySpeakImport(input: {
 	// ONE apply per club at a time, held for the whole run by a transaction that
 	// does nothing else. The per-meeting transactions take the club write lock
 	// themselves, so this is a DIFFERENT key (a bigint, `history-import:<club>`):
-	// it makes a second apply wait, then plan against what the first left, instead
-	// of both planning the same new guests and meetings and minting them twice.
+	// a second apply is refused at once instead of both planning the same new
+	// guests and meetings and minting them twice. It TRIES the lock rather than
+	// waiting on it: this transaction holds a pooled connection for the whole run
+	// and the work inside opens more (#806: a wait with no timeout is a self-DoS
+	// on a pool with no checkout timeout), so a queued apply would starve the run
+	// it is queued behind.
 	return db.transaction(async (guard) => {
-		await guard.execute(
-			sql`select pg_advisory_xact_lock(hashtext(${`history-import:${input.clubId}`}))`,
+		const taken = await guard.execute<{ ok: boolean }>(
+			sql`select pg_try_advisory_xact_lock(hashtextextended(${`history-import:${input.clubId}`}, 0)) as ok`,
 		);
+		if (!taken.rows[0]?.ok) throw new Error(IMPORT_RUNNING_MESSAGE);
 		return applyUnderImportLock(input);
 	});
 }

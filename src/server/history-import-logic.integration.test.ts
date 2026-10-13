@@ -1181,14 +1181,23 @@ EXECUTE FUNCTION zz_claim_slot()`),
 
 	// -- Apply is tied to its preview, and serial per club ------------------------
 
-	it("two applies at once mint each guest and meeting once", async () => {
+	it("a second apply started while one is running is refused at once, and mints nothing twice", async () => {
 		const stored = await upload();
 		const { resolutions } = await resolveAll(stored.importId);
-		const [a, b] = await Promise.all([
-			apply(stored.importId, resolutions),
-			apply(stored.importId, resolutions),
-		]);
-		expect(a.report.reconciled && b.report.reconciled).toBe(true);
+		let second: unknown = "never ran";
+		// The first apply is inside its first meeting's transaction (it holds the
+		// import lock and a pooled connection): start the second one from there.
+		lockHook.run = async (_tx, call) => {
+			if (call !== 1) return;
+			second = await apply(stored.importId, resolutions).then(
+				() => "applied",
+				(err: unknown) => err,
+			);
+		};
+		const first = await apply(stored.importId, resolutions);
+		expect(first.report.reconciled).toBe(true);
+		expect(second).toBeInstanceOf(Error);
+		expect((second as Error).message).toBe(logic.IMPORT_RUNNING_MESSAGE);
 		const rows = await testDb
 			.select({ id: meetings.id })
 			.from(meetings)
@@ -1206,6 +1215,10 @@ EXECUTE FUNCTION zz_claim_slot()`),
 		expect(guestRows.length).toBeGreaterThan(0);
 		expect(new Set(guestRows.map((g) => g.name)).size).toBe(guestRows.length);
 		expect(guestRows.length).toBe((await refsOfKind("guest")).length);
+		// Once the first has finished the lock is free again.
+		lockHook.run = null;
+		const again = await apply(stored.importId, resolutions);
+		expect(again.report.reconciled).toBe(true);
 	});
 
 	it("refuses an apply whose plan has moved since the preview, and accepts one that has not", async () => {
