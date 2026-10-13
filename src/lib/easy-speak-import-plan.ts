@@ -81,6 +81,8 @@ export interface PlanRef {
 export interface PlanExistingMeeting {
 	id: string;
 	scheduledAt: Date;
+	/** `meetings.status`: only a `completed` meeting may be adopted or updated (D1 of #1196). */
+	status: string;
 }
 
 export interface PlanContext {
@@ -139,6 +141,12 @@ export type PlanPersonOutcome =
 			guestId: string | null;
 	  }
 	| { status: "skipped"; reason: string }
+	/**
+	 * An earlier import named a row for this person and a human has since deleted
+	 * it: a tombstone. Nothing is created for them and nothing asks a human again
+	 * (D2 of #1196).
+	 */
+	| { status: "deleted" }
 	| { status: "ambiguous"; candidates: PlanRosterMember[] }
 	| { status: "unmatched" };
 
@@ -193,12 +201,21 @@ export interface PlanSlot {
 	evaluatesEsSlot: number | null;
 }
 
+/** Why a past meeting is left alone: see {@link MeetingDisposition}. */
+export type MeetingSkipKind = "exists" | "deleted";
+
 export interface PlanMeeting {
 	esMeetingId: string;
 	scheduledAt: Date;
-	/** How the apply finds the row: by ref, by an existing meeting at the same instant, or new. */
-	action: "update" | "adopt" | "create";
+	/**
+	 * How the apply finds the row: by ref, by an existing COMPLETED meeting at the
+	 * same instant, or new. `skip` writes nothing: a meeting at that instant is
+	 * not a completed one, or an earlier import's meeting has been deleted since.
+	 */
+	action: "update" | "adopt" | "create" | "skip";
 	existingMeetingId: string | null;
+	/** Set only for `skip`. */
+	skip: { kind: MeetingSkipKind; reason: string } | null;
 	venue: string | null;
 	joinUrl: string | null;
 	theme: string | null;
@@ -231,6 +248,8 @@ export interface PlanCounts {
 	meetingsToCreate: number;
 	meetingsToAdopt: number;
 	meetingsToUpdate: number;
+	/** Past meetings left alone: a non-completed meeting is there, or a human deleted the imported one. */
+	meetingsToSkip: number;
 	futureMeetingsSkipped: number;
 	roleAssignments: number;
 	speeches: number;
@@ -293,12 +312,85 @@ interface Seen {
 	onMemberList: boolean;
 }
 
+/** Why an existing meeting is left as it is: the report says it in these words. */
+export function leftAloneReason(status: string): string {
+	return status === "completed"
+		? "Exists in GavelUp, not imported: its date is now in the future."
+		: `Exists in GavelUp, not imported: a ${status} meeting is already at this time.`;
+}
+
 /** Build the plan. Never touches a database: everything it needs is in `ctx`. */
 export function buildImportPlan(
 	bundle: EasySpeakBundleV1,
 	ctx: PlanContext,
 ): ImportPlan {
-	const { past, future } = pastMeetings(bundle, ctx.now, ctx.clubTimezone);
+	const { past: allPast, future } = pastMeetings(
+		bundle,
+		ctx.now,
+		ctx.clubTimezone,
+	);
+	const refTarget = (kind: string, key: string) =>
+		ctx.refs.find((r) => r.kind === kind && r.sourceId === key)?.targetId ??
+		null;
+
+	// -- What each past meeting meets in the club (D1, D2 of #1196) ---------------
+	// An existing meeting is adopted or updated ONLY when it is already a
+	// completed one in the past; anything else at that instant (scheduled,
+	// cancelled) is left exactly as it is and reported, because writing "completed"
+	// onto it would un-cancel it, freeze a meeting nobody closed, or complete a
+	// rescheduled future one. An earlier import's meeting that a human has since
+	// deleted is not re-created.
+	const dispositionOf = (esMeetingId: string, at: Date) => {
+		const refId = refTarget("meeting", esMeetingId);
+		const referenced = refId
+			? ctx.existingMeetings.find((m) => m.id === refId)
+			: undefined;
+		const acceptable = (m: PlanExistingMeeting) =>
+			m.status === "completed" && m.scheduledAt.getTime() <= ctx.now.getTime();
+		const left = (m: PlanExistingMeeting) => ({
+			action: "skip" as const,
+			existing: null,
+			skip: {
+				kind: "exists" as const,
+				reason: leftAloneReason(m.status),
+			},
+		});
+		if (refId && !referenced) {
+			return {
+				action: "skip" as const,
+				existing: null,
+				skip: {
+					kind: "deleted" as const,
+					reason: "Deleted in GavelUp since import: not created again.",
+				},
+			};
+		}
+		if (referenced) {
+			return acceptable(referenced)
+				? { action: "update" as const, existing: referenced, skip: null }
+				: left(referenced);
+		}
+		const atInstant = ctx.existingMeetings.filter(
+			(m) => m.scheduledAt.getTime() === at.getTime(),
+		);
+		const adoptable = atInstant.find(acceptable);
+		if (adoptable) {
+			return { action: "adopt" as const, existing: adoptable, skip: null };
+		}
+		const blocker = atInstant[0];
+		if (blocker) return left(blocker);
+		return { action: "create" as const, existing: null, skip: null };
+	};
+	const dispositions = new Map(
+		allPast.map(({ meeting, at }) => [
+			meeting.esMeetingId,
+			dispositionOf(meeting.esMeetingId, at),
+		]),
+	);
+	// A meeting that is left alone names nobody: its people need no decision.
+	const past = allPast.filter(
+		({ meeting }) => dispositions.get(meeting.esMeetingId)?.action !== "skip",
+	);
 
 	// -- Who the imported records name ---------------------------------------
 	const memberListIds = new Set(bundle.people.map((p) => p.esUserId));
@@ -353,9 +445,6 @@ export function buildImportPlan(
 		rosterByFold.set(fold, [...(rosterByFold.get(fold) ?? []), m]);
 	}
 	const rosterIds = new Set(ctx.roster.map((m) => m.memberId));
-	const refTarget = (kind: string, key: string) =>
-		ctx.refs.find((r) => r.kind === kind && r.sourceId === key)?.targetId ??
-		null;
 
 	const people: PlanPerson[] = [];
 	for (const [key, entry] of seen) {
@@ -374,6 +463,9 @@ export function buildImportPlan(
 				via: "ref",
 				guestId: guestRef,
 			};
+		} else if (memberRef || guestRef) {
+			// Named by an earlier import, and the row is gone: a human deleted it.
+			outcome = { status: "deleted" };
 		} else {
 			const exact = rosterByName.get(ref.name.trim()) ?? [];
 			const folded = rosterByFold.get(foldName(ref.name)) ?? [];
@@ -477,17 +569,30 @@ export function buildImportPlan(
 	};
 
 	// -- Meetings --------------------------------------------------------------
-	const refMeeting = (esMeetingId: string) => refTarget("meeting", esMeetingId);
 	const meetings: PlanMeeting[] = [];
-	for (const { meeting, at } of past) {
-		const refId = refMeeting(meeting.esMeetingId);
-		const existingAtInstant = ctx.existingMeetings.find(
-			(m) => m.scheduledAt.getTime() === at.getTime(),
-		);
-		const referenced = refId
-			? ctx.existingMeetings.find((m) => m.id === refId)
-			: undefined;
-		const existing = referenced ?? existingAtInstant;
+	for (const { meeting, at } of allPast) {
+		const disposition = dispositions.get(meeting.esMeetingId);
+		if (!disposition) continue;
+		if (disposition.action === "skip") {
+			meetings.push({
+				esMeetingId: meeting.esMeetingId,
+				scheduledAt: at,
+				action: "skip",
+				existingMeetingId: null,
+				skip: disposition.skip,
+				venue: null,
+				joinUrl: null,
+				theme: null,
+				wordOfTheDay: null,
+				slots: [],
+				attendance: [],
+				plans: [],
+				awards: [],
+				tableTopics: [],
+			});
+			continue;
+		}
+		const existing = disposition.existing;
 		const perRole = new Map<string, number>();
 		const slots: PlanSlot[] = [...meeting.roles]
 			.sort((a, b) => a.slot - b.slot)
@@ -552,8 +657,9 @@ export function buildImportPlan(
 		meetings.push({
 			esMeetingId: meeting.esMeetingId,
 			scheduledAt: at,
-			action: referenced ? "update" : existingAtInstant ? "adopt" : "create",
+			action: disposition.action,
 			existingMeetingId: existing?.id ?? null,
+			skip: null,
 			venue: meeting.venue,
 			joinUrl: meeting.joinUrl,
 			theme: meeting.theme,
@@ -586,6 +692,7 @@ export function buildImportPlan(
 		meetingsToCreate: meetings.filter((m) => m.action === "create").length,
 		meetingsToAdopt: meetings.filter((m) => m.action === "adopt").length,
 		meetingsToUpdate: meetings.filter((m) => m.action === "update").length,
+		meetingsToSkip: meetings.filter((m) => m.action === "skip").length,
 		futureMeetingsSkipped: future.length,
 		roleAssignments: allSlots.filter((s) => s.holderKey).length,
 		speeches: allSlots.filter((s) => s.speech && s.holderKey).length,
@@ -685,6 +792,37 @@ export interface FoundSourceIds {
 	attendance: ReadonlySet<string>;
 }
 
+/** The kinds of record an apply can leave out on purpose, named as `FoundSourceIds` names them. */
+export type OmissionKind =
+	| "meeting"
+	| "roleAssignment"
+	| "speech"
+	| "award"
+	| "tableTopic"
+	| "attendance";
+
+/**
+ * A record the apply left out ON PURPOSE (an existing meeting it must not touch,
+ * a row a human deleted since an earlier import). The reconciliation does not
+ * expect it, and the report lists it with its `what` and `reason` and the source
+ * id, so "not imported" is stated rather than read off a count that does not add up.
+ */
+export interface Omission {
+	kind: OmissionKind;
+	/** The `import_refs` source id; for `meeting`, the Easy-Speak meeting id. */
+	sourceId: string;
+	what: string;
+	reason: string;
+}
+
+export const DELETED_SINCE_IMPORT = {
+	what: "Deleted in GavelUp since import",
+	reason:
+		"A person deleted this in GavelUp after an earlier import, so it was not created again.",
+} as const;
+
+export const MEETING_LEFT_ALONE = "Meetings left as they are in GavelUp";
+
 /** The bundle's records the reconciliation counts, with the keys the apply writes refs under. */
 export interface ExpectedRecords {
 	meetings: string[];
@@ -706,8 +844,12 @@ export function expectedFromBundle(
 	bundle: EasySpeakBundleV1,
 	now: Date,
 	clubTimezone: string,
+	/** Meetings the apply left alone: none of their records are expected. */
+	leftAlone: ReadonlySet<string> = new Set(),
 ): ExpectedRecords {
-	const { past } = pastMeetings(bundle, now, clubTimezone);
+	const past = pastMeetings(bundle, now, clubTimezone).past.filter(
+		({ meeting }) => !leftAlone.has(meeting.esMeetingId),
+	);
 	const out: ExpectedRecords = {
 		meetings: [],
 		roleAssignments: [],
@@ -764,8 +906,12 @@ export function notImportedFromBundle(
 	bundle: EasySpeakBundleV1,
 	now: Date,
 	clubTimezone: string,
+	leftAlone: ReadonlySet<string> = new Set(),
 ): NotImportedRow[] {
-	const { future, past } = pastMeetings(bundle, now, clubTimezone);
+	const { future, past: allPast } = pastMeetings(bundle, now, clubTimezone);
+	const past = allPast.filter(
+		({ meeting }) => !leftAlone.has(meeting.esMeetingId),
+	);
 	const rows: NotImportedRow[] = [];
 	const cap = (ids: string[]) => ids.slice(0, NOT_IMPORTED_ID_CAP);
 	if (future.length > 0) {
@@ -845,6 +991,27 @@ export function notImportedFromBundle(
 	return rows;
 }
 
+/** The omissions, one row per cause, with the source ids that were left out. */
+function omissionRows(omissions: Omission[]): NotImportedRow[] {
+	const rows = new Map<string, NotImportedRow>();
+	for (const o of omissions) {
+		const { what } = o;
+		const key = `${what}\u0000${o.reason}`;
+		const row = rows.get(key) ?? {
+			what,
+			count: 0,
+			reason: o.reason,
+			sourceIds: [],
+		};
+		row.count++;
+		if ((row.sourceIds?.length ?? 0) < NOT_IMPORTED_ID_CAP) {
+			row.sourceIds?.push(o.sourceId);
+		}
+		rows.set(key, row);
+	}
+	return [...rows.values()];
+}
+
 function breakdown(
 	expected: Array<{ key: string; label: string }>,
 	found: (key: string) => number,
@@ -877,13 +1044,37 @@ export function buildReconciliation(input: {
 	appliedMeetings: number;
 	skippedPeople: ImportReport["skippedPeople"];
 	created: ImportReport["created"];
+	/** What the apply left out on purpose; not expected, and listed under "not imported". */
+	omissions?: Omission[];
 }): ImportReport {
 	const { found } = input;
-	const expected = expectedFromBundle(
+	const omissions = input.omissions ?? [];
+	const leftAlone = new Set(
+		omissions.filter((o) => o.kind === "meeting").map((o) => o.sourceId),
+	);
+	const omitted = (kind: OmissionKind) =>
+		new Set(omissions.filter((o) => o.kind === kind).map((o) => o.sourceId));
+	const full = expectedFromBundle(
 		input.bundle,
 		input.now,
 		input.clubTimezone,
+		leftAlone,
 	);
+	const noRole = omitted("roleAssignment");
+	const noSpeech = omitted("speech");
+	const noAward = omitted("award");
+	const noTopic = omitted("tableTopic");
+	const noAttendance = omitted("attendance");
+	const expected: ExpectedRecords = {
+		...full,
+		roleAssignments: full.roleAssignments.filter(
+			(r) => !noRole.has(r.sourceId),
+		),
+		speeches: full.speeches.filter((sp) => !noSpeech.has(sp.sourceId)),
+		awards: full.awards.filter((id) => !noAward.has(id)),
+		tableTopics: full.tableTopics.filter((id) => !noTopic.has(id)),
+		attendance: full.attendance.filter((a) => !noAttendance.has(a.sourceId)),
+	};
 	const count = (
 		key: ReconciliationCount["key"],
 		label: string,
@@ -971,11 +1162,15 @@ export function buildReconciliation(input: {
 		roleAssignmentsPerRole,
 		roleAssignmentsPerPerson,
 		speechesPerPerson,
-		notImported: notImportedFromBundle(
-			input.bundle,
-			input.now,
-			input.clubTimezone,
-		),
+		notImported: [
+			...notImportedFromBundle(
+				input.bundle,
+				input.now,
+				input.clubTimezone,
+				leftAlone,
+			),
+			...omissionRows(omissions),
+		],
 		skippedPeople: input.skippedPeople,
 		created: input.created,
 		reconciled,

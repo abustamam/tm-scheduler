@@ -45,6 +45,7 @@
  */
 import { createHash } from "node:crypto";
 import { and, asc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
+import type { AnyPgColumn, PgTable } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
 import {
@@ -70,9 +71,13 @@ import {
 import {
 	buildImportPlan,
 	buildReconciliation,
+	DELETED_SINCE_IMPORT,
 	type FoundSourceIds,
 	type ImportPlan,
 	type ImportReport,
+	leftAloneReason,
+	MEETING_LEFT_ALONE,
+	type Omission,
 	type PersonResolution,
 	type PlanContext,
 	type PlanCounts,
@@ -82,6 +87,7 @@ import {
 	resolutionsSchema,
 } from "#/lib/easy-speak-import-plan";
 import { type ImportRefKind, importRefKindSchema } from "#/lib/import-refs";
+import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
 import { logActivity } from "./activity";
@@ -376,7 +382,11 @@ async function loadPlanContext(
 			.where(eq(roleDefinitions.clubId, clubId)),
 		db.select({ id: guests.id }).from(guests).where(eq(guests.clubId, clubId)),
 		db
-			.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
+			.select({
+				id: meetings.id,
+				scheduledAt: meetings.scheduledAt,
+				status: meetings.status,
+			})
 			.from(meetings)
 			.where(eq(meetings.clubId, clubId)),
 		db
@@ -402,10 +412,7 @@ async function loadPlanContext(
 			roster: roster.map((m) => ({ memberId: m.memberId, name: m.name })),
 			roleDefinitions: defs,
 			guestIds: new Set(guestRows.map((g) => g.id)),
-			existingMeetings: meetingRows.map((m) => ({
-				id: m.id,
-				scheduledAt: m.scheduledAt,
-			})),
+			existingMeetings: meetingRows,
 			refs,
 			resolutions,
 		},
@@ -572,6 +579,8 @@ type Owner = { memberId: string } | { guestId: string } | null;
 interface Resolved {
 	members: Map<string, string>;
 	guests: Map<string, string>;
+	/** Person keys an earlier import named and a human has since deleted (D2). */
+	deleted: Set<string>;
 	roleDefIds: Map<string, string>;
 	newGuests: number;
 	newRoleDefinitions: string[];
@@ -587,6 +596,7 @@ async function writePeopleAndRoles(
 		const out: Resolved = {
 			members: new Map(),
 			guests: new Map(),
+			deleted: new Set(),
 			roleDefIds: new Map(),
 			newGuests: 0,
 			newRoleDefinitions: [],
@@ -657,6 +667,8 @@ async function writePeopleAndRoles(
 			if (o.status === "member") {
 				out.members.set(person.key, o.memberId);
 				await putRef(tx, clubId, "person", person.key, o.memberId);
+			} else if (o.status === "deleted") {
+				out.deleted.add(person.key);
 			} else if (o.status === "guest") {
 				if (o.guestId) {
 					out.guests.set(person.key, o.guestId);
@@ -692,6 +704,7 @@ async function writePeopleAndRoles(
 
 interface MeetingEnv {
 	clubId: string;
+	now: Date;
 	lengthMinutes: number;
 	resolved: Resolved;
 	personByMember: Map<string, string>;
@@ -706,9 +719,45 @@ const ownerOf = (env: MeetingEnv, key: string | null): Owner => {
 	return null;
 };
 
+/** A person an earlier import named and a human has since deleted (D2): nothing of theirs is written. */
+const isTombstoned = (env: MeetingEnv, key: string | null): boolean =>
+	key !== null && env.resolved.deleted.has(key);
+
+/** Which of `ids` still name a row of `column`'s table: a ref to a row that is gone is a tombstone. */
+async function stillThere(
+	tx: Tx,
+	column: AnyPgColumn,
+	ids: string[],
+): Promise<Set<string>> {
+	if (ids.length === 0) return new Set();
+	const rows = await tx
+		.select({ id: column })
+		.from(column.table as PgTable)
+		.where(inArray(column, ids));
+	return new Set(rows.map((r) => String(r.id)));
+}
+
+/** What one meeting's transaction did: written, or left alone, and what it left out on purpose. */
+interface MeetingOutcome {
+	applied: boolean;
+	omissions: Omission[];
+}
+
 /** One meeting, in its own transaction: all of it, or none of it. */
-async function applyMeeting(env: MeetingEnv, pm: PlanMeeting): Promise<void> {
+async function applyMeeting(
+	env: MeetingEnv,
+	pm: PlanMeeting,
+): Promise<MeetingOutcome> {
 	const { clubId } = env;
+	const omissions: Omission[] = [];
+	const omit = (
+		kind: Omission["kind"],
+		sourceId: string,
+		cause: { what: string; reason: string } = DELETED_SINCE_IMPORT,
+	) => {
+		omissions.push({ kind, sourceId, ...cause });
+	};
+	let applied = true;
 	await db.transaction(async (tx) => {
 		await lockClubForWrite(tx, clubId);
 
@@ -726,13 +775,29 @@ async function applyMeeting(env: MeetingEnv, pm: PlanMeeting): Promise<void> {
 					),
 				)
 				.limit(1)
-				.for("update");
+				.for("no key update");
 			if (!m) throw new Error("The meeting this import points at is gone.");
+			// D1 of #1196: a meeting that is not a completed one in the past is left
+			// exactly as it is. The plan said so too, but it was read before the
+			// lock, and a meeting can be cancelled or rescheduled in between.
+			if (
+				m.status !== "completed" ||
+				m.scheduledAt.getTime() > env.now.getTime()
+			) {
+				omit("meeting", pm.esMeetingId, {
+					what: MEETING_LEFT_ALONE,
+					reason: leftAloneReason(m.status),
+				});
+				applied = false;
+				return;
+			}
+			// A completed meeting accepts record writes (the guard's `record` class).
+			assertMeetingAccepts(m.status, "record");
 			meetingId = m.id;
+			// Fill a blank, nothing else: the status is not ours to change.
 			await tx
 				.update(meetings)
 				.set({
-					status: "completed",
 					location: m.location ?? pm.venue,
 					joinUrl: m.joinUrl ?? joinUrl,
 					theme: m.theme ?? pm.theme,
@@ -740,6 +805,8 @@ async function applyMeeting(env: MeetingEnv, pm: PlanMeeting): Promise<void> {
 				})
 				.where(eq(meetings.id, m.id));
 		} else {
+			// Created as a completed past meeting from the start: it never passes
+			// through a status a writer would refuse.
 			const [created] = await tx
 				.insert(meetings)
 				.values({
@@ -785,6 +852,25 @@ async function applyMeeting(env: MeetingEnv, pm: PlanMeeting): Promise<void> {
 						);
 		const refOf = (kind: ImportRefKind, sourceId: string) =>
 			refRows.find((r) => r.kind === kind && r.sourceId === sourceId)?.targetId;
+		const targetsOf = (kind: ImportRefKind) =>
+			refRows.filter((r) => r.kind === kind).map((r) => r.targetId);
+		// A ref whose row is gone: a human deleted it since the import. Never re-made.
+		const keptSpeeches = await stillThere(tx, speeches.id, targetsOf("speech"));
+		const keptAttendance = await stillThere(
+			tx,
+			meetingAttendance.id,
+			targetsOf("attendance"),
+		);
+		const keptAwards = await stillThere(
+			tx,
+			meetingAwards.id,
+			targetsOf("award"),
+		);
+		const keptTopics = await stillThere(
+			tx,
+			tableTopicsSpeakers.id,
+			targetsOf("table_topic"),
+		);
 
 		// -- Role slots and their speeches -------------------------------------
 		const existingSlots = await tx
@@ -799,6 +885,17 @@ async function applyMeeting(env: MeetingEnv, pm: PlanMeeting): Promise<void> {
 				throw new Error(`No role definition for ${ps.label}.`);
 			const owner = ownerOf(env, ps.holderKey);
 			const refTarget = refOf("role_slot", ps.sourceId);
+			const holderDeleted = isTombstoned(env, ps.holderKey);
+			if (refTarget && !existingSlots.some((s) => s.id === refTarget)) {
+				// This role slot was imported and has been deleted since.
+				if (ps.holderKey) omit("roleAssignment", ps.sourceId);
+				if (ps.holderKey && ps.speech) omit("speech", ps.speech.sourceId);
+				continue;
+			}
+			if (holderDeleted) {
+				omit("roleAssignment", ps.sourceId);
+				if (ps.speech) omit("speech", ps.speech.sourceId);
+			}
 			let slot =
 				existingSlots.find((s) => s.id === refTarget && !used.has(s.id)) ??
 				existingSlots.find(
@@ -850,16 +947,14 @@ async function applyMeeting(env: MeetingEnv, pm: PlanMeeting): Promise<void> {
 					? slot.assignedMemberId === owner.memberId
 					: slot.assignedGuestId === owner.guestId);
 			if (ps.speech && owner && holds && !slot.speechId) {
-				let speechId = refOf("speech", ps.speech.sourceId);
-				if (speechId) {
-					const [kept] = await tx
-						.select({ id: speeches.id })
-						.from(speeches)
-						.where(eq(speeches.id, speechId))
-						.limit(1);
-					if (!kept) speechId = undefined;
-				}
-				if (!speechId) {
+				const speechRef = refOf("speech", ps.speech.sourceId);
+				let speechId: string | undefined;
+				if (speechRef && !keptSpeeches.has(speechRef)) {
+					// The imported speech was deleted since: not written again.
+					omit("speech", ps.speech.sourceId);
+				} else if (speechRef) {
+					speechId = speechRef;
+				} else {
 					let ownerColumns: { personId: string } | { guestId: string };
 					if ("memberId" in owner) {
 						const personId = env.personByMember.get(owner.memberId);
@@ -885,12 +980,17 @@ async function applyMeeting(env: MeetingEnv, pm: PlanMeeting): Promise<void> {
 					speechId = created.id;
 					await putRef(tx, clubId, "speech", ps.speech.sourceId, speechId);
 				}
-				await tx
-					.update(roleSlots)
-					.set({ speechId })
-					.where(
-						and(eq(roleSlots.id, slot.id), sql`${roleSlots.speechId} is null`),
-					);
+				if (speechId) {
+					await tx
+						.update(roleSlots)
+						.set({ speechId })
+						.where(
+							and(
+								eq(roleSlots.id, slot.id),
+								sql`${roleSlots.speechId} is null`,
+							),
+						);
+				}
 			}
 		}
 		// Evaluator -> the speaker slot it evaluates, once every slot exists.
@@ -912,8 +1012,17 @@ async function applyMeeting(env: MeetingEnv, pm: PlanMeeting): Promise<void> {
 
 		// -- Attendance, and the plan answers a record does not supersede ------
 		for (const a of pm.attendance) {
+			if (isTombstoned(env, a.personKey)) {
+				omit("attendance", a.sourceId);
+				continue;
+			}
 			const owner = ownerOf(env, a.personKey);
 			if (!owner) continue;
+			const attendanceRef = refOf("attendance", a.sourceId);
+			if (attendanceRef && !keptAttendance.has(attendanceRef)) {
+				omit("attendance", a.sourceId);
+				continue;
+			}
 			const where =
 				"memberId" in owner
 					? and(
@@ -954,8 +1063,17 @@ async function applyMeeting(env: MeetingEnv, pm: PlanMeeting): Promise<void> {
 
 		// -- Awards, Table Topics -----------------------------------------------
 		for (const a of pm.awards) {
+			if (isTombstoned(env, a.personKey)) {
+				omit("award", a.sourceId);
+				continue;
+			}
 			const owner = ownerOf(env, a.personKey);
 			if (!owner) continue;
+			const awardRef = refOf("award", a.sourceId);
+			if (awardRef && !keptAwards.has(awardRef)) {
+				omit("award", a.sourceId);
+				continue;
+			}
 			await tx
 				.insert(meetingAwards)
 				.values({
@@ -979,16 +1097,16 @@ async function applyMeeting(env: MeetingEnv, pm: PlanMeeting): Promise<void> {
 			if (row) await putRef(tx, clubId, "award", a.sourceId, row.id);
 		}
 		for (const t of pm.tableTopics) {
+			if (isTombstoned(env, t.personKey)) {
+				omit("tableTopic", t.sourceId);
+				continue;
+			}
 			const owner = ownerOf(env, t.personKey);
 			if (!owner) continue;
-			const existing = refOf("table_topic", t.sourceId);
-			if (existing) {
-				const [kept] = await tx
-					.select({ id: tableTopicsSpeakers.id })
-					.from(tableTopicsSpeakers)
-					.where(eq(tableTopicsSpeakers.id, existing))
-					.limit(1);
-				if (kept) continue;
+			const topicRef = refOf("table_topic", t.sourceId);
+			if (topicRef) {
+				if (!keptTopics.has(topicRef)) omit("tableTopic", t.sourceId);
+				continue;
 			}
 			const [row] = await tx
 				.insert(tableTopicsSpeakers)
@@ -1004,6 +1122,7 @@ async function applyMeeting(env: MeetingEnv, pm: PlanMeeting): Promise<void> {
 			if (row) await putRef(tx, clubId, "table_topic", t.sourceId, row.id);
 		}
 	});
+	return { applied, omissions };
 }
 
 /** What a failed meeting says in the report: never the SQL, which carries names. */
@@ -1136,18 +1255,33 @@ export async function applyEasySpeakImport(input: {
 	const resolved = await writePeopleAndRoles(input.clubId, plan);
 	const env: MeetingEnv = {
 		clubId: input.clubId,
+		now,
 		lengthMinutes: loaded.club.defaultMeetingMinutes,
 		resolved,
 		personByMember: loaded.personByMember,
 	};
 	const failed: Array<{ esMeetingId: string; message: string }> = [];
+	const omissions: Omission[] = [];
 	let appliedMeetings = 0;
 	for (const pm of [...plan.meetings].sort(
 		(a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime(),
 	)) {
+		if (pm.action === "skip" && pm.skip) {
+			omissions.push({
+				kind: "meeting",
+				sourceId: pm.esMeetingId,
+				what:
+					pm.skip.kind === "deleted"
+						? DELETED_SINCE_IMPORT.what
+						: MEETING_LEFT_ALONE,
+				reason: pm.skip.reason,
+			});
+			continue;
+		}
 		try {
-			await applyMeeting(env, pm);
-			appliedMeetings++;
+			const outcome = await applyMeeting(env, pm);
+			omissions.push(...outcome.omissions);
+			if (outcome.applied) appliedMeetings++;
 		} catch (err) {
 			failed.push({
 				esMeetingId: pm.esMeetingId,
@@ -1174,6 +1308,7 @@ export async function applyEasySpeakImport(input: {
 			guests: resolved.newGuests,
 			roleDefinitions: resolved.newRoleDefinitions,
 		},
+		omissions,
 	});
 
 	const importState = JSON.stringify({ resolutions, report });

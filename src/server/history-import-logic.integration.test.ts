@@ -73,6 +73,10 @@ const FIXTURE = resolve(
 );
 const NOW = new Date("2026-10-12T12:00:00Z");
 const NOW_TWO_PAST = new Date("2026-10-20T12:00:00Z");
+/** All three of the fixture's meetings are past: 644360 has plan answers, 644363 Table Topics. */
+const NOW_ALL_PAST = new Date("2026-11-01T12:00:00Z");
+/** The fixture's first meeting, as an instant. */
+const FIRST_AT = new Date("2026-09-23T02:00:00.000Z");
 
 /** Roster names the fixture's people are matched to; Avery Alderfinch is left off. */
 const ROSTER_NAMES = [
@@ -643,5 +647,239 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 				.from(meetings)
 				.where(and(eq(meetings.clubId, seed.clubId), isNull(meetings.theme))),
 		).toHaveLength(1);
+	});
+
+	// -- D1: an existing meeting at the same instant (#1196 review) ----------------
+
+	async function seedMeetingAt(
+		at: Date,
+		status: "scheduled" | "cancelled" | "completed",
+	): Promise<string> {
+		const [row] = await testDb
+			.insert(meetings)
+			.values({ clubId: seed.clubId, scheduledAt: at, status })
+			.returning({ id: meetings.id });
+		return row?.id as string;
+	}
+
+	async function meetingRow(id: string) {
+		const [row] = await testDb
+			.select({
+				status: meetings.status,
+				at: meetings.scheduledAt,
+				theme: meetings.theme,
+			})
+			.from(meetings)
+			.where(eq(meetings.id, id));
+		return row;
+	}
+
+	async function slotsOf(meetingId: string) {
+		const rows = await testDb
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.where(eq(roleSlots.meetingId, meetingId));
+		return rows.length;
+	}
+
+	async function refsOfKind(kind: string) {
+		return testDb
+			.select({ sourceId: importRefs.sourceId, targetId: importRefs.targetId })
+			.from(importRefs)
+			.where(
+				and(
+					eq(importRefs.clubId, seed.clubId),
+					eq(importRefs.kind, kind as "meeting"),
+				),
+			);
+	}
+
+	it("adopts an existing COMPLETED meeting at the same instant, fills its blanks and keeps its status", async () => {
+		const existing = await seedMeetingAt(FIRST_AT, "completed");
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		const { report } = await apply(stored.importId, resolutions);
+		expect(await meetingRow(existing)).toMatchObject({
+			status: "completed",
+			theme: "Coming of Age",
+		});
+		expect((await refsOfKind("meeting")).map((r) => r.targetId)).toEqual([
+			existing,
+		]);
+		expect(await slotsOf(existing)).toBe(14);
+		expect(report.reconciled).toBe(true);
+		expect(report.meetings.applied).toBe(1);
+	});
+
+	it.each([
+		"cancelled",
+		"scheduled",
+	] as const)("leaves a %s meeting at the same instant exactly as it is and lists it as not imported", async (status) => {
+		const existing = await seedMeetingAt(FIRST_AT, status);
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		const before = await counts();
+		const { report } = await apply(stored.importId, resolutions);
+		expect(await meetingRow(existing)).toMatchObject({
+			status,
+			theme: null,
+		});
+		expect(await slotsOf(existing)).toBe(0);
+		expect(await refsOfKind("meeting")).toEqual([]);
+		const after = await counts();
+		expect(after.meetings).toBe(before.meetings);
+		expect(after.meetingAttendance).toBe(before.meetingAttendance);
+		expect(after.meetingAwards).toBe(before.meetingAwards);
+		expect(after.roleSlots).toBe(before.roleSlots);
+		const row = report.notImported.find((r) =>
+			r.what.startsWith("Meetings left as they are"),
+		);
+		expect(row).toMatchObject({ count: 1, sourceIds: ["644304"] });
+		expect(row?.reason).toContain(status);
+		expect(report.meetings.applied).toBe(0);
+		// What was left alone is not counted as a difference.
+		expect(report.counts.find((c) => c.key === "meetings")).toMatchObject({
+			bundle: 0,
+			missing: [],
+		});
+	});
+
+	it("a meeting that was rescheduled into the future after the import is skipped on a re-run, untouched", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await apply(stored.importId, resolutions);
+		const [{ targetId = "" } = {}] = await refsOfKind("meeting");
+		const later = new Date("2026-12-01T02:00:00.000Z");
+		await testDb
+			.update(meetings)
+			.set({ scheduledAt: later, status: "scheduled" })
+			.where(eq(meetings.id, targetId));
+		const before = await counts();
+		const { report } = await apply(stored.importId, resolutions);
+		expect(await meetingRow(targetId)).toMatchObject({
+			status: "scheduled",
+			at: later,
+		});
+		expect(await counts()).toEqual(before);
+		expect(
+			report.notImported.find((r) => r.what.startsWith("Meetings left")),
+		).toMatchObject({ count: 1, sourceIds: ["644304"] });
+	});
+
+	it("a meeting cancelled between the plan and the lock is not completed by the apply", async () => {
+		const existing = await seedMeetingAt(FIRST_AT, "completed");
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		// Call 1 is the setup transaction, 2 the meeting's: flip it under the lock's feet.
+		lockHook.run = async (tx, call) => {
+			if (call !== 2) return;
+			await (tx as { execute: (q: unknown) => Promise<unknown> }).execute(
+				(await import("drizzle-orm")).sql.raw(
+					`update meetings set status = 'cancelled' where id = '${existing}'`,
+				),
+			);
+		};
+		const { report } = await apply(stored.importId, resolutions);
+		lockHook.run = null;
+		expect(await meetingRow(existing)).toMatchObject({ status: "cancelled" });
+		expect(await slotsOf(existing)).toBe(0);
+		expect(await refsOfKind("meeting")).toEqual([]);
+		expect(report.meetings.applied).toBe(0);
+		expect(
+			report.notImported.find((r) => r.what.startsWith("Meetings left")),
+		).toMatchObject({ count: 1, sourceIds: ["644304"] });
+	});
+
+	// -- D2: a row a human deleted is never re-made (#1196 review) ----------------
+
+	it("a guest deleted since the import is not re-created, nor is their Person, attendance or role", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await apply(stored.importId, resolutions);
+		const guestRefs = await refsOfKind("guest");
+		expect(guestRefs.length).toBeGreaterThan(0);
+		const victim = guestRefs.find((r) => r.sourceId === "es:900025");
+		expect(victim).toBeDefined();
+		await testDb
+			.delete(guests)
+			.where(eq(guests.id, victim?.targetId as string));
+		const before = await counts();
+		const { report } = await apply(stored.importId, resolutions);
+		const after = await counts();
+		expect(after.guests).toBe(before.guests);
+		expect(after.people).toBe(before.people);
+		expect(after.meetingAttendance).toBe(before.meetingAttendance);
+		expect(after.guestSpeeches).toBe(before.guestSpeeches);
+		expect(after.roleSlots).toBe(before.roleSlots);
+		const row = report.notImported.find((r) =>
+			r.what.startsWith("Deleted in GavelUp"),
+		);
+		expect(row?.count).toBeGreaterThan(0);
+		expect(row?.sourceIds).toContain("644304:4");
+		expect(report.created.guests).toBe(0);
+	});
+
+	it("an imported meeting deleted since is not re-created", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await apply(stored.importId, resolutions);
+		const [{ targetId = "" } = {}] = await refsOfKind("meeting");
+		await testDb.delete(meetings).where(eq(meetings.id, targetId));
+		const before = await counts();
+		const { report } = await apply(stored.importId, resolutions);
+		expect(await counts()).toMatchObject({
+			meetings: before.meetings,
+			meetingAttendance: before.meetingAttendance,
+			roleSlots: before.roleSlots,
+		});
+		expect(
+			report.notImported.find((r) => r.what.startsWith("Deleted in GavelUp")),
+		).toMatchObject({ count: 1, sourceIds: ["644304"] });
+	});
+
+	it("a role slot deleted since the import is not re-created, and its holder's role is listed as not imported", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await apply(stored.importId, resolutions);
+		const slotRef = (await refsOfKind("role_slot")).find(
+			(r) => r.sourceId === "644304:3",
+		);
+		await testDb
+			.delete(roleSlots)
+			.where(eq(roleSlots.id, slotRef?.targetId as string));
+		const before = await counts();
+		const { report } = await apply(stored.importId, resolutions);
+		expect((await counts()).roleSlots).toBe(before.roleSlots);
+		const row = report.notImported.find((r) =>
+			r.what.startsWith("Deleted in GavelUp"),
+		);
+		expect(row?.sourceIds).toContain("644304:3");
+	});
+
+	it("a Table Topics speaker, an attendance row, an award and a speech deleted since the import are not re-inserted", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId, NOW_ALL_PAST);
+		await apply(stored.importId, resolutions, NOW_ALL_PAST);
+		const target = async (kind: string) =>
+			(await refsOfKind(kind))[0]?.targetId as string;
+		await testDb
+			.delete(tableTopicsSpeakers)
+			.where(eq(tableTopicsSpeakers.id, await target("table_topic")));
+		await testDb
+			.delete(meetingAttendance)
+			.where(eq(meetingAttendance.id, await target("attendance")));
+		await testDb
+			.delete(meetingAwards)
+			.where(eq(meetingAwards.id, await target("award")));
+		const speechRef = await target("speech");
+		await testDb.delete(speeches).where(eq(speeches.id, speechRef));
+		const before = await counts();
+		const { report } = await apply(stored.importId, resolutions, NOW_ALL_PAST);
+		expect(await counts()).toEqual(before);
+		const row = report.notImported.find((r) =>
+			r.what.startsWith("Deleted in GavelUp"),
+		);
+		expect(row?.count).toBe(4);
+		expect(report.reconciled).toBe(true);
 	});
 });

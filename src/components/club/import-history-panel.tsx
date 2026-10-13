@@ -248,6 +248,10 @@ export function ImportHistoryPanel({
 						<Count label="Adopted meetings" n={data.counts.meetingsToAdopt} />
 						<Count label="Updated meetings" n={data.counts.meetingsToUpdate} />
 						<Count
+							label="Left as they are in GavelUp"
+							n={data.counts.meetingsToSkip}
+						/>
+						<Count
 							label="Future meetings skipped"
 							n={data.counts.futureMeetingsSkipped}
 						/>

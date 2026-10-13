@@ -213,18 +213,20 @@ describe("buildImportPlan on the B fixture", () => {
 		expect(slot?.speech?.sourceId).toBe("1472117");
 	});
 
-	it("adopts a meeting already at the same instant ", () => {
-		const at = new Date("2026-09-23T02:00:00.000Z");
+	const AT = new Date("2026-09-23T02:00:00.000Z");
+	const existing = (
+		over: Partial<PlanContext["existingMeetings"][number]> = {},
+	): PlanContext["existingMeetings"][number] => ({
+		id: "m-1",
+		scheduledAt: AT,
+		status: "completed",
+		...over,
+	});
+
+	it("adopts a COMPLETED meeting already at the same instant", () => {
 		const adopt = buildImportPlan(
 			load(),
-			ctx({
-				existingMeetings: [
-					{
-						id: "m-1",
-						scheduledAt: at,
-					} as PlanContext["existingMeetings"][number],
-				],
-			}),
+			ctx({ existingMeetings: [existing()] }),
 		);
 		expect(adopt.meetings[0]).toMatchObject({
 			action: "adopt",
@@ -232,6 +234,122 @@ describe("buildImportPlan on the B fixture", () => {
 		});
 		expect(adopt.counts.meetingsToAdopt).toBe(1);
 		expect(adopt.counts.meetingsToCreate).toBe(0);
+	});
+
+	it.each([
+		"scheduled",
+		"cancelled",
+	])("skips a %s meeting at the same instant and says so (D1)", (status) => {
+		const plan = buildImportPlan(
+			load(),
+			ctx({ existingMeetings: [existing({ status })] }),
+		);
+		const m = plan.meetings[0];
+		expect(m).toMatchObject({
+			action: "skip",
+			existingMeetingId: null,
+			slots: [],
+			attendance: [],
+			awards: [],
+		});
+		expect(m?.skip?.kind).toBe("exists");
+		expect(m?.skip?.reason).toContain(status);
+		expect(plan.counts).toMatchObject({
+			meetingsToSkip: 1,
+			meetingsToAdopt: 0,
+			meetingsToCreate: 0,
+			roleAssignments: 0,
+		});
+		// Nobody it names is asked about: only the visitors-introduced chart is left.
+		expect(plan.people.every((p) => p.appearances.roles === 0)).toBe(true);
+		expect(plan.people.every((p) => p.appearances.attendance <= 1)).toBe(true);
+	});
+
+	it("prefers a completed meeting at the instant over a cancelled one", () => {
+		const plan = buildImportPlan(
+			load(),
+			ctx({
+				existingMeetings: [
+					existing({ id: "m-x", status: "cancelled" }),
+					existing({ id: "m-2" }),
+				],
+			}),
+		);
+		expect(plan.meetings[0]).toMatchObject({
+			action: "adopt",
+			existingMeetingId: "m-2",
+		});
+	});
+
+	it("updates a ref'd completed meeting, and skips one that was rescheduled into the future or is no longer completed", () => {
+		const refs = [{ kind: "meeting", sourceId: "644304", targetId: "m-1" }];
+		expect(
+			buildImportPlan(load(), ctx({ refs, existingMeetings: [existing()] }))
+				.meetings[0]?.action,
+		).toBe("update");
+		const future = buildImportPlan(
+			load(),
+			ctx({
+				refs,
+				existingMeetings: [
+					existing({
+						scheduledAt: new Date("2026-11-01T02:00:00Z"),
+						status: "scheduled",
+					}),
+				],
+			}),
+		);
+		expect(future.meetings[0]?.action).toBe("skip");
+		expect(future.meetings[0]?.existingMeetingId).toBeNull();
+		const reopened = buildImportPlan(
+			load(),
+			ctx({ refs, existingMeetings: [existing({ status: "cancelled" })] }),
+		);
+		expect(reopened.meetings[0]?.action).toBe("skip");
+		// Completed but dated after the clock: also left alone.
+		const later = buildImportPlan(
+			load(),
+			ctx({
+				refs,
+				existingMeetings: [
+					existing({ scheduledAt: new Date("2026-11-01T02:00:00Z") }),
+				],
+			}),
+		);
+		expect(later.meetings[0]?.skip?.reason).toContain("future");
+	});
+
+	it("never re-creates a meeting an earlier import made and a human deleted (D2)", () => {
+		const plan = buildImportPlan(
+			load(),
+			ctx({
+				refs: [{ kind: "meeting", sourceId: "644304", targetId: "gone" }],
+			}),
+		);
+		expect(plan.meetings[0]).toMatchObject({ action: "skip" });
+		expect(plan.meetings[0]?.skip?.kind).toBe("deleted");
+		expect(plan.counts.meetingsToCreate).toBe(0);
+	});
+
+	it("a person whose imported guest or member was deleted is a tombstone, never re-created or asked about (D2)", () => {
+		const base = buildImportPlan(withGuestSpeaker(), ctx());
+		expect(outcomeOf(base, "900025")).toMatchObject({ status: "guest" });
+		const gone = buildImportPlan(
+			withGuestSpeaker(),
+			ctx({
+				refs: [{ kind: "guest", sourceId: "es:900025", targetId: "gone" }],
+			}),
+		);
+		expect(outcomeOf(gone, "900025")).toEqual({ status: "deleted" });
+		expect(gone.unresolved.map((p) => p.key)).not.toContain("es:900025");
+		expect(gone.counts.newGuests).toBe(base.counts.newGuests - 1);
+		const memberGone = buildImportPlan(
+			load(),
+			ctx({
+				refs: [{ kind: "person", sourceId: "es:900036", targetId: "gone" }],
+			}),
+		);
+		expect(outcomeOf(memberGone, "900036")).toEqual({ status: "deleted" });
 	});
 
 	it("imports nothing from a meeting in the future, however the clock moves", () => {
