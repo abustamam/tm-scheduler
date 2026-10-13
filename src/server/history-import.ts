@@ -5,6 +5,8 @@ import {
 	applyEasySpeakImport as applyEasySpeakImportLogic,
 	importApplySchema,
 	importClubSchema,
+	importMentorPairs as importMentorPairsLogic,
+	importMentorPairsSchema,
 	importRunSchema,
 	importSpeechRequests as importSpeechRequestsLogic,
 	importSpeechRequestsSchema,
@@ -109,6 +111,24 @@ export const importEasySpeakSpeechRequests = createServerFn({ method: "POST" })
 		await requireSuperadmin(currentUser.id);
 		await assertNotReadOnlyImpersonation(currentUser.id);
 		return importSpeechRequestsLogic({
+			clubId: data.clubId,
+			importId: data.importId,
+			superadminUserId: currentUser.id,
+		});
+	});
+
+/**
+ * Import the stored bundle's mentor pairs as pairings (#1053). A step of its
+ * own, after Apply: it matches both people to those Apply resolved. Idempotent.
+ * Refused under read-only impersonation.
+ */
+export const importEasySpeakMentors = createServerFn({ method: "POST" })
+	.validator((input: unknown) => parse(importMentorPairsSchema, input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireSuperadmin(currentUser.id);
+		await assertNotReadOnlyImpersonation(currentUser.id);
+		return importMentorPairsLogic({
 			clubId: data.clubId,
 			importId: data.importId,
 			superadminUserId: currentUser.id,

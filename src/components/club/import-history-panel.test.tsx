@@ -21,6 +21,7 @@ const fns = vi.hoisted(() => ({
 	previewEasySpeakImport: vi.fn(),
 	applyEasySpeakImport: vi.fn(),
 	importEasySpeakSpeechRequests: vi.fn(),
+	importEasySpeakMentors: vi.fn(),
 }));
 vi.mock("#/server/history-import", () => fns);
 vi.mock("sonner", () => ({
@@ -327,5 +328,120 @@ describe("ImportHistoryPanel (#1051)", () => {
 		fireEvent.click(button);
 		await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Nope."));
 		expect(screen.queryByTestId("speech-requests-result")).toBeNull();
+	});
+
+	it("keeps Import mentor pairs disabled until the import is applied", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue(previewFor(false));
+		await openImport();
+		const button = (await screen.findByRole("button", {
+			name: "Import mentor pairs",
+		})) as HTMLButtonElement;
+		expect(button.disabled).toBe(true);
+		expect(
+			screen.getByText("Apply the import before importing mentor pairs."),
+		).toBeTruthy();
+		fireEvent.click(button);
+		expect(fns.importEasySpeakMentors).not.toHaveBeenCalled();
+	});
+
+	it("imports the mentor pairs once applied, shows each count and lists every skipped pair and the unmapped flag", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue(
+			previewFor(true, null, new Date("2026-10-12T00:00:00Z")),
+		);
+		fns.importEasySpeakMentors.mockResolvedValue({
+			total: 6,
+			pairs: 4,
+			noMentor: 2,
+			imported: 2,
+			alreadyImported: 1,
+			alreadyPaired: 0,
+			skipped: [
+				{
+					mentee: { esUserId: "7", name: "Maya Mentee" },
+					mentor: { esUserId: "8", name: "Omar Mentor" },
+					reason: "mentor_not_member",
+				},
+			],
+			wantsMenteeNotImported: [{ esUserId: "9", name: "Wanda Wants" }],
+		});
+		await openImport();
+		const button = (await screen.findByRole("button", {
+			name: "Import mentor pairs",
+		})) as HTMLButtonElement;
+		await waitFor(() => expect(button.disabled).toBe(false));
+
+		fireEvent.click(button);
+
+		await waitFor(() =>
+			expect(fns.importEasySpeakMentors).toHaveBeenCalledWith({
+				data: { clubId: CLUB, importId: IMPORT },
+			}),
+		);
+		const result = await screen.findByTestId("mentors-result");
+		const shown = Object.fromEntries(
+			[...result.querySelectorAll("dt")].map((dt) => [
+				dt.textContent,
+				dt.nextElementSibling?.textContent,
+			]),
+		);
+		expect(shown).toEqual({
+			"Rows in the bundle": "6",
+			"Pairs in the bundle": "4",
+			Imported: "2",
+			"Already imported": "1",
+			"Already paired": "0",
+			Skipped: "1",
+			"No mentor named": "2",
+		});
+		expect(screen.getByTestId("mentors-skipped").textContent).toContain(
+			"Maya Mentee (mentee) with Omar Mentor (mentor): the mentor is not an active member",
+		);
+		expect(screen.getByTestId("mentors-wants-mentee").textContent).toContain(
+			"Wanda Wants",
+		);
+		expect(toast.success).toHaveBeenCalledWith("Imported 2 mentor pairs.");
+	});
+
+	it("shows no skipped list when nothing was skipped, and reports a refusal with no counts", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue(
+			previewFor(true, null, new Date("2026-10-12T00:00:00Z")),
+		);
+		fns.importEasySpeakMentors.mockResolvedValueOnce({
+			total: 1,
+			pairs: 1,
+			noMentor: 0,
+			imported: 0,
+			alreadyImported: 1,
+			alreadyPaired: 0,
+			skipped: [],
+			wantsMenteeNotImported: [],
+		});
+		await openImport();
+		const button = (await screen.findByRole("button", {
+			name: "Import mentor pairs",
+		})) as HTMLButtonElement;
+		await waitFor(() => expect(button.disabled).toBe(false));
+		fireEvent.click(button);
+		await screen.findByTestId("mentors-result");
+		expect(screen.queryByTestId("mentors-skipped")).toBeNull();
+		expect(screen.queryByTestId("mentors-wants-mentee")).toBeNull();
+		expect(toast.success).toHaveBeenCalledWith(
+			"No new mentor pairs to import.",
+		);
+	});
+
+	it("reports a mentor-step refusal from the server", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue(
+			previewFor(true, null, new Date("2026-10-12T00:00:00Z")),
+		);
+		fns.importEasySpeakMentors.mockRejectedValue(new Error("Nope."));
+		await openImport();
+		const button = (await screen.findByRole("button", {
+			name: "Import mentor pairs",
+		})) as HTMLButtonElement;
+		await waitFor(() => expect(button.disabled).toBe(false));
+		fireEvent.click(button);
+		await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Nope."));
+		expect(screen.queryByTestId("mentors-result")).toBeNull();
 	});
 });

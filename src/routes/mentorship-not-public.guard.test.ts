@@ -95,6 +95,11 @@ describe("mentorship stays off every public surface (#939)", () => {
 			"server/orientation-logic.ts",
 			// Re-points pairings on a member merge; returns none of them.
 			"server/membership-collapse-logic.ts",
+			// The superadmin-only Easy-Speak mentor step (#1053): it writes the
+			// pairings the bundle names and returns bundle names and counts, never
+			// a stored pairing. Its one caller is `importEasySpeakMentors`
+			// (requireSuperadmin, `history-import-authz.guard.test.ts`).
+			"server/history-import-logic.ts",
 		]);
 		const readers = walk(SRC)
 			.map((abs) => relative(SRC, abs))

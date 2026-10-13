@@ -57,6 +57,7 @@ import {
 	meetingAwards,
 	meetings,
 	members,
+	mentorships,
 	roleDefinitions,
 	roleSlots,
 	speeches,
@@ -1615,6 +1616,9 @@ async function applyUnderImportLock(input: {
 // Speech requests (#1052): a step of its own, after the history is applied
 // ---------------------------------------------------------------------------
 
+export const MENTORS_NOT_APPLIED_MESSAGE =
+	"Apply the import before importing its mentor pairs: they are matched to the people it resolved.";
+
 export const IMPORT_NOT_APPLIED_MESSAGE =
 	"Apply the import before importing its speech requests: they are matched to the people it resolved.";
 
@@ -1800,6 +1804,226 @@ export async function importSpeechRequests(input: {
 }
 
 // ---------------------------------------------------------------------------
+// Mentor pairs (#1053): a step of its own, after the history is applied
+// ---------------------------------------------------------------------------
+
+type EsPerson = EasySpeakBundleV1["mentors"][number]["mentee"];
+
+/** Why one bundle pair was not written. Only its own pair is blocked (AC2). */
+export type MentorPairSkipReason =
+	| "mentee_not_member"
+	| "mentor_not_member"
+	| "neither_member"
+	| "same_person";
+
+export interface MentorPairSkip {
+	mentee: EsPerson;
+	mentor: EsPerson;
+	reason: MentorPairSkipReason;
+}
+
+/**
+ * What the mentor step did. `imported + alreadyImported + alreadyPaired +
+ * skipped.length` equals `pairs`; `pairs + noMentor` equals `total`.
+ */
+export interface MentorImportResult {
+	/** Rows in the bundle's mentoring chart. */
+	total: number;
+	/** Rows naming a mentor: the pairs the step is meant to write. */
+	pairs: number;
+	/** Rows with no mentor: nothing to pair (the member is only asking for one). */
+	noMentor: number;
+	/** Pairs this run created. */
+	imported: number;
+	/** Already imported by an earlier run (a pairing a human has since ended or deleted stays that way). */
+	alreadyImported: number;
+	/** The two already had an ACTIVE pairing, made by hand; it is left as it is and remembered. */
+	alreadyPaired: number;
+	/** Each pair that was not written, with who and why. */
+	skipped: MentorPairSkip[];
+	/**
+	 * Members whose row says "Wants Mentee?". NOT imported: #939 has no field for
+	 * a member asking for a mentor (`members.willing_to_mentor` is the opposite
+	 * direction and the member's own to set), and this step adds no column.
+	 */
+	wantsMenteeNotImported: EsPerson[];
+}
+
+/**
+ * Import the stored bundle's mentor pairs as #939 mentorships. The caller has
+ * proved the superadmin.
+ *
+ * - Each row with a mentor becomes one ACTIVE pairing with no focus. Both people
+ *   must resolve through the `person` refs the import's apply wrote to members
+ *   still ACTIVE in the club (a mentorship may only join active members); a pair
+ *   with an unresolved side is skipped and LISTED, and its neighbours still land.
+ * - Idempotent through `import_refs` kind `mentor_pair`: a second run adds
+ *   nothing, and a pairing someone ended or deleted since is not brought back.
+ *   Two people who already have an active pairing keep it, and it is remembered.
+ * - One transaction under the club write lock and the apply's own per-club lock.
+ */
+export async function importMentorPairs(input: {
+	clubId: string;
+	importId: string;
+	/** The superadmin the change is attributed to. */
+	superadminUserId: string;
+}): Promise<MentorImportResult> {
+	const stored = await loadStoredBundle(input.clubId, input.importId);
+	if (!stored.appliedAt) throw new Error(MENTORS_NOT_APPLIED_MESSAGE);
+	const rows = stored.bundle.mentors;
+
+	return db.transaction(async (tx) => {
+		await takeImportLock(tx, input.clubId);
+		await lockClubForWrite(tx, input.clubId);
+		await assertClubNotArchivedTx(tx, input.clubId);
+
+		const refs = await tx
+			.select({
+				kind: importRefs.kind,
+				sourceId: importRefs.sourceId,
+				targetId: importRefs.targetId,
+			})
+			.from(importRefs)
+			.where(
+				and(
+					eq(importRefs.clubId, input.clubId),
+					eq(importRefs.source, SOURCE),
+					inArray(importRefs.kind, ["person", "mentor_pair"]),
+				),
+			);
+		const personRefs = new Map<string, string>();
+		const imported = new Set<string>();
+		for (const ref of refs) {
+			if (ref.kind === "person") personRefs.set(ref.sourceId, ref.targetId);
+			else imported.add(ref.sourceId);
+		}
+		const live = new Set(
+			(
+				await tx
+					.select({ id: members.id })
+					.from(members)
+					.where(
+						and(eq(members.clubId, input.clubId), eq(members.status, "active")),
+					)
+			).map((m) => m.id),
+		);
+		// The active pairings the club already has, any focus: the partial unique
+		// indexes would refuse a duplicate with no focus, and a pairing an admin
+		// made by hand with a focus is the same pairing to this import.
+		const active = new Map<string, string>();
+		for (const row of await tx
+			.select({
+				id: mentorships.id,
+				mentor: mentorships.mentorMemberId,
+				mentee: mentorships.menteeMemberId,
+			})
+			.from(mentorships)
+			.where(
+				and(eq(mentorships.clubId, input.clubId), isNull(mentorships.endedAt)),
+			)) {
+			active.set(`${row.mentor}:${row.mentee}`, row.id);
+		}
+
+		const result: MentorImportResult = {
+			total: rows.length,
+			pairs: 0,
+			noMentor: 0,
+			imported: 0,
+			alreadyImported: 0,
+			alreadyPaired: 0,
+			skipped: [],
+			wantsMenteeNotImported: rows
+				.filter((r) => r.wantsMentee)
+				.map((r) => r.mentee),
+		};
+		for (const row of rows) {
+			if (!row.mentor) {
+				result.noMentor++;
+				continue;
+			}
+			result.pairs++;
+			const menteeId = personRefs.get(personKeyOf(row.mentee));
+			const mentorId = personRefs.get(personKeyOf(row.mentor));
+			const menteeLive = menteeId !== undefined && live.has(menteeId);
+			const mentorLive = mentorId !== undefined && live.has(mentorId);
+			const skip = (reason: MentorPairSkipReason) =>
+				result.skipped.push({
+					mentee: row.mentee,
+					mentor: row.mentor as EsPerson,
+					reason,
+				});
+			if (!menteeLive || !mentorLive) {
+				skip(
+					!menteeLive && !mentorLive
+						? "neither_member"
+						: menteeLive
+							? "mentor_not_member"
+							: "mentee_not_member",
+				);
+				continue;
+			}
+			if (menteeId === mentorId) {
+				skip("same_person");
+				continue;
+			}
+			const sourceId = `${personKeyOf(row.mentee)}>${personKeyOf(row.mentor)}`;
+			if (imported.has(sourceId)) {
+				result.alreadyImported++;
+				continue;
+			}
+			const pairKey = `${mentorId}:${menteeId}`;
+			const existing = active.get(pairKey);
+			if (existing) {
+				await putRef(tx, input.clubId, "mentor_pair", sourceId, existing);
+				imported.add(sourceId);
+				result.alreadyPaired++;
+				continue;
+			}
+			const [made] = await tx
+				.insert(mentorships)
+				.values({
+					clubId: input.clubId,
+					mentorMemberId: mentorId as string,
+					menteeMemberId: menteeId as string,
+					focus: null,
+					createdByMemberId: null,
+				})
+				.returning({ id: mentorships.id });
+			if (!made) throw new Error("Could not create a mentorship.");
+			await putRef(tx, input.clubId, "mentor_pair", sourceId, made.id);
+			imported.add(sourceId);
+			active.set(pairKey, made.id);
+			result.imported++;
+		}
+
+		await logActivity(tx, {
+			clubId: input.clubId,
+			actorMemberId: null,
+			impersonatedBy: input.superadminUserId,
+			action: "history_imported",
+			targetType: "club",
+			targetId: input.clubId,
+			detail: {
+				importId: input.importId,
+				source: SOURCE,
+				step: "mentors",
+				counts: {
+					total: result.total,
+					pairs: result.pairs,
+					noMentor: result.noMentor,
+					imported: result.imported,
+					alreadyImported: result.alreadyImported,
+					alreadyPaired: result.alreadyPaired,
+					skipped: result.skipped.length,
+					wantsMenteeNotImported: result.wantsMenteeNotImported.length,
+				},
+			},
+		});
+		return result;
+	});
+}
+
+// ---------------------------------------------------------------------------
 // Server-fn inputs (kept here: history-import.ts may export only server fns)
 // ---------------------------------------------------------------------------
 
@@ -1816,6 +2040,8 @@ export const importRunSchema = importClubSchema.extend({
 export const importSpeechRequestsSchema = importClubSchema.extend({
 	importId: z.string().uuid(),
 });
+/** The mentor step, like the speech-request step, names the stored import it reads. */
+export const importMentorPairsSchema = importSpeechRequestsSchema;
 /** An apply names the preview it confirms: see {@link planFingerprint}. */
 export const importApplySchema = importRunSchema.extend({
 	planHash: z.string().length(64, "Preview again before applying."),
