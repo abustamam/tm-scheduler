@@ -22,6 +22,7 @@ import {
 	user,
 } from "#/db/schema";
 import type { EasySpeakBundleV1 } from "#/lib/easy-speak-bundle";
+import { personKeyOf } from "#/lib/easy-speak-import-plan";
 import {
 	cleanup,
 	hasTestDb,
@@ -29,11 +30,13 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	waitForLockWait,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const logic = await import("./history-import-logic");
+const mentors = await import("./mentor-import-logic");
 
 const FIXTURE = resolve(
 	__dirname,
@@ -124,7 +127,7 @@ describe.skipIf(!hasTestDb)("mentor-pair import (#1053)", () => {
 	}
 
 	function run(importId: string) {
-		return logic.importMentorPairs({
+		return mentors.importMentorPairs({
 			clubId: seed.clubId,
 			importId,
 			superadminUserId: superadminId,
@@ -212,17 +215,17 @@ describe.skipIf(!hasTestDb)("mentor-pair import (#1053)", () => {
 			{
 				mentee: person("8"),
 				mentor: person("2"),
-				reason: "mentee_not_member",
+				reason: "mentee_unresolved",
 			},
 			{
 				mentee: person("3"),
 				mentor: person("9"),
-				reason: "mentor_not_member",
+				reason: "mentor_unresolved",
 			},
 			{
 				mentee: person("8"),
 				mentor: person("9"),
-				reason: "neither_member",
+				reason: "neither_unresolved",
 			},
 		]);
 		expect(await pairings()).toHaveLength(1);
@@ -272,9 +275,51 @@ describe.skipIf(!hasTestDb)("mentor-pair import (#1053)", () => {
 
 		expect(result.skipped.map((s) => s.reason)).toEqual([
 			"mentee_not_member",
-			"neither_member",
+			"neither_not_member",
 		]);
 		expect(await pairings()).toHaveLength(0);
+	});
+
+	it("tells a person the import never matched from one who is no longer an active member, and names the mixed case", async () => {
+		await resolvedMember("1");
+		await resolvedMember("2", "inactive");
+		const importId = await storeBundle([
+			// Mentee has no person ref (unresolved); mentor is a lapsed member.
+			row("7", "2"),
+			// Mentee is a lapsed member; mentor has no ref.
+			row("2", "7"),
+			// Mentee is fine; mentor has no ref.
+			row("1", "7"),
+		]);
+
+		const result = await run(importId);
+
+		expect(result.skipped.map((s) => s.reason)).toEqual([
+			"neither_member",
+			"neither_member",
+			"mentor_unresolved",
+		]);
+		expect(await pairings()).toHaveLength(0);
+	});
+
+	it("reports an already-imported pair as imported, not skipped, after one of the two has lapsed", async () => {
+		await resolvedMember("1");
+		const mentor = await resolvedMember("2");
+		const importId = await storeBundle([row("1", "2")]);
+		expect((await run(importId)).imported).toBe(1);
+
+		await testDb
+			.update(members)
+			.set({ status: "inactive" })
+			.where(eq(members.id, mentor));
+		const again = await run(importId);
+
+		expect(again).toMatchObject({
+			imported: 0,
+			alreadyImported: 1,
+			skipped: [],
+		});
+		expect(await pairings()).toHaveLength(1);
 	});
 
 	it("skips a stale person ref that points at no membership", async () => {
@@ -375,6 +420,168 @@ describe.skipIf(!hasTestDb)("mentor-pair import (#1053)", () => {
 		expect(await pairings()).toHaveLength(1);
 	});
 
+	it("a pair listed twice that a hand-made pairing already covers is counted alreadyPaired once, then alreadyImported", async () => {
+		const a = await resolvedMember("1");
+		const b = await resolvedMember("2");
+		await testDb
+			.insert(mentorships)
+			.values({ clubId: seed.clubId, mentorMemberId: b, menteeMemberId: a });
+		const importId = await storeBundle([row("1", "2"), row("1", "2")]);
+
+		const result = await run(importId);
+
+		expect(result).toMatchObject({
+			pairs: 2,
+			imported: 0,
+			alreadyPaired: 1,
+			alreadyImported: 1,
+		});
+		expect(await pairings()).toHaveLength(1);
+	});
+
+	it("matches a person keyed by name when Easy-Speak gave no id", async () => {
+		const mentee = await resolvedMember("1");
+		const named = { esUserId: null, name: "Zephyr  Ash" };
+		const mentor = await resolvedMember("2");
+		await testDb.insert(importRefs).values({
+			clubId: seed.clubId,
+			source: "easy_speak",
+			kind: "person",
+			sourceId: personKeyOf(named),
+			targetId: mentor,
+		});
+		const importId = await storeBundle([
+			{ mentee: person("1"), mentor: named, wantsMentee: false },
+		]);
+
+		const result = await run(importId);
+
+		expect(result).toMatchObject({ imported: 1, skipped: [] });
+		const [stored] = await pairings();
+		expect([stored?.mentorMemberId, stored?.menteeMemberId]).toEqual([
+			mentor,
+			mentee,
+		]);
+		const refs = await testDb
+			.select({ sourceId: importRefs.sourceId })
+			.from(importRefs)
+			.where(
+				and(
+					eq(importRefs.clubId, seed.clubId),
+					eq(importRefs.kind, "mentor_pair"),
+				),
+			);
+		expect(refs.map((r) => r.sourceId)).toEqual([`es:1>${personKeyOf(named)}`]);
+	});
+
+	it("one human keyed by id in one row and by name in another makes one pairing: the second row is alreadyPaired and the run does not abort", async () => {
+		const mentee = await resolvedMember("1");
+		await resolvedMember("2");
+		const byName = { esUserId: null, name: "Person 1" };
+		await testDb.insert(importRefs).values({
+			clubId: seed.clubId,
+			source: "easy_speak",
+			kind: "person",
+			sourceId: personKeyOf(byName),
+			targetId: mentee,
+		});
+		const importId = await storeBundle([
+			row("1", "2"),
+			{ mentee: byName, mentor: person("2"), wantsMentee: false },
+		]);
+
+		const result = await run(importId);
+
+		expect(result).toMatchObject({
+			pairs: 2,
+			imported: 1,
+			alreadyPaired: 1,
+			alreadyImported: 0,
+			skipped: [],
+		});
+		expect(await pairings()).toHaveLength(1);
+		// Both source ids are remembered, so a re-run adds and counts nothing new.
+		const again = await run(importId);
+		expect(again).toMatchObject({ imported: 0, alreadyImported: 2 });
+		expect(await pairings()).toHaveLength(1);
+	});
+
+	it("audits each pairing it writes as createMentorship does, beside the step's summary", async () => {
+		const a = await resolvedMember("1");
+		const b = await resolvedMember("2");
+		const c = await resolvedMember("3");
+		await testDb
+			.insert(mentorships)
+			.values({ clubId: seed.clubId, mentorMemberId: c, menteeMemberId: b });
+		const importId = await storeBundle([
+			row("1", "2"),
+			// Already paired by hand: nothing created, so nothing audited.
+			row("2", "3"),
+		]);
+
+		await run(importId);
+
+		const [made] = await testDb
+			.select({ id: mentorships.id })
+			.from(mentorships)
+			.where(
+				and(
+					eq(mentorships.clubId, seed.clubId),
+					eq(mentorships.menteeMemberId, a),
+				),
+			);
+		const entries = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, seed.clubId),
+					eq(activityLog.action, "member_edit"),
+				),
+			);
+		expect(entries).toHaveLength(1);
+		expect(entries[0]).toMatchObject({
+			targetType: "member",
+			targetId: a,
+			actorMemberId: null,
+			impersonatedBy: superadminId,
+		});
+		expect(entries[0]?.detail).toEqual({
+			mentorship: "created",
+			mentorshipId: made?.id,
+			mentorMemberId: b,
+			menteeMemberId: a,
+			focus: null,
+			focusOther: null,
+			importId,
+		});
+	});
+
+	it("takes FOR SHARE on both members like createMentorship: a member lapsing mid-run is skipped, not paired", async () => {
+		await resolvedMember("1");
+		const mentor = await resolvedMember("2");
+		const importId = await storeBundle([row("1", "2")]);
+		// An admin is lapsing the mentor right now: their row is locked and not yet
+		// committed, so the run's snapshot still reads the mentor as active.
+		const lapse = await openBlockingTx(async (tx) => {
+			await tx
+				.update(members)
+				.set({ status: "inactive" })
+				.where(eq(members.id, mentor));
+		});
+		const running = run(importId);
+		try {
+			await waitForLockWait("for share", lapse.pid);
+		} finally {
+			await lapse.commit();
+		}
+		const result = await running;
+
+		expect(result.skipped.map((s) => s.reason)).toEqual(["mentor_not_member"]);
+		expect(result.imported).toBe(0);
+		expect(await pairings()).toHaveLength(0);
+	});
+
 	it("reports 'Wants Mentee?' as not imported and writes no member flag", async () => {
 		const a = await resolvedMember("1");
 		await resolvedMember("2");
@@ -418,7 +625,7 @@ describe.skipIf(!hasTestDb)("mentor-pair import (#1053)", () => {
 		const importId = await storeBundle([row("1", "2")], null);
 
 		await expect(run(importId)).rejects.toThrow(
-			logic.MENTORS_NOT_APPLIED_MESSAGE,
+			mentors.MENTORS_NOT_APPLIED_MESSAGE,
 		);
 		expect(await pairings()).toHaveLength(0);
 	});
@@ -430,12 +637,12 @@ describe.skipIf(!hasTestDb)("mentor-pair import (#1053)", () => {
 		const other = await seedClub();
 		try {
 			await expect(
-				logic.importMentorPairs({
+				mentors.importMentorPairs({
 					clubId: other.clubId,
 					importId,
 					superadminUserId: superadminId,
 				}),
-			).rejects.toThrow();
+			).rejects.toThrow(logic.IMPORT_NOT_FOUND_MESSAGE);
 			const stray = await testDb
 				.select()
 				.from(mentorships)
@@ -480,13 +687,13 @@ describe.skipIf(!hasTestDb)("mentor-pair import (#1053)", () => {
 
 	it("validates the server-fn input: a club id and an import id", () => {
 		expect(
-			logic.importMentorPairsSchema.safeParse({
+			logic.storedImportSchema.safeParse({
 				clubId: randomUUID(),
 				importId: randomUUID(),
 			}).success,
 		).toBe(true);
 		expect(
-			logic.importMentorPairsSchema.safeParse({ clubId: randomUUID() }).success,
+			logic.storedImportSchema.safeParse({ clubId: randomUUID() }).success,
 		).toBe(false);
 	});
 });

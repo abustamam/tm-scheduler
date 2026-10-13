@@ -3,9 +3,10 @@ import { Loader2, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
-import type {
-	ImportReport,
-	PersonResolution,
+import {
+	type ImportReport,
+	type PersonResolution,
+	personKeyOf,
 } from "#/lib/easy-speak-import-plan";
 import { GUEST_KIND_LABELS, GUEST_KINDS } from "#/lib/guest-profile";
 import {
@@ -501,9 +502,14 @@ const MENTOR_SKIP_LABELS: Record<
 	>["skipped"][number]["reason"],
 	string
 > = {
+	mentee_unresolved: "the import never matched the mentee to a member",
+	mentor_unresolved: "the import never matched the mentor to a member",
+	neither_unresolved: "the import never matched either of them to a member",
 	mentee_not_member: "the mentee is not an active member",
 	mentor_not_member: "the mentor is not an active member",
-	neither_member: "neither is an active member",
+	neither_not_member: "neither is an active member",
+	neither_member:
+		"one was never matched to a member and the other is not an active member",
 	same_person: "mentor and mentee are the same member",
 };
 
@@ -527,9 +533,11 @@ function MentorsResult({
 				<div className="space-y-1" data-testid="mentors-skipped">
 					<h4 className="text-sm font-medium">Pairs not imported</h4>
 					<ul className="list-disc space-y-0.5 pl-5 text-sm">
-						{result.skipped.map((p) => (
+						{result.skipped.map((p, i) => (
 							<li
-								key={`${p.mentee.esUserId ?? p.mentee.name}>${p.mentor.esUserId ?? p.mentor.name}`}
+								// The same pair can be listed twice, so the row's position is part of the key.
+								// biome-ignore lint/suspicious/noArrayIndexKey: a read-only list with no stable id
+								key={`${i}:${personKeyOf(p.mentee)}>${personKeyOf(p.mentor)}`}
 							>
 								{p.mentee.name} (mentee) with {p.mentor.name} (mentor):{" "}
 								{MENTOR_SKIP_LABELS[p.reason]}

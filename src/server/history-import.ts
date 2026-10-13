@@ -5,17 +5,16 @@ import {
 	applyEasySpeakImport as applyEasySpeakImportLogic,
 	importApplySchema,
 	importClubSchema,
-	importMentorPairs as importMentorPairsLogic,
-	importMentorPairsSchema,
 	importRunSchema,
 	importSpeechRequests as importSpeechRequestsLogic,
-	importSpeechRequestsSchema,
 	listClubImports as listClubImportsLogic,
 	previewEasySpeakImport as previewEasySpeakImportLogic,
+	storedImportSchema,
 	storeEasySpeakBundle as storeEasySpeakBundleLogic,
 	uploadImportSchema,
 } from "./history-import-logic";
 import { getActiveImpersonationForUser } from "./impersonation-logic";
+import { importMentorPairs as importMentorPairsLogic } from "./mentor-import-logic";
 
 // The Easy-Speak history import (#1051): superadmin only. EVERY fn here runs
 // `requireUser()` then `requireSuperadmin()` before it touches the logic
@@ -105,7 +104,7 @@ export const applyEasySpeakImport = createServerFn({ method: "POST" })
  * resolved. Idempotent. Refused under read-only impersonation.
  */
 export const importEasySpeakSpeechRequests = createServerFn({ method: "POST" })
-	.validator((input: unknown) => parse(importSpeechRequestsSchema, input))
+	.validator((input: unknown) => parse(storedImportSchema, input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
 		await requireSuperadmin(currentUser.id);
@@ -123,7 +122,7 @@ export const importEasySpeakSpeechRequests = createServerFn({ method: "POST" })
  * Refused under read-only impersonation.
  */
 export const importEasySpeakMentors = createServerFn({ method: "POST" })
-	.validator((input: unknown) => parse(importMentorPairsSchema, input))
+	.validator((input: unknown) => parse(storedImportSchema, input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
 		await requireSuperadmin(currentUser.id);

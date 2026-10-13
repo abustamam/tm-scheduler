@@ -361,9 +361,23 @@ describe("ImportHistoryPanel (#1051)", () => {
 					mentor: { esUserId: "8", name: "Omar Mentor" },
 					reason: "mentor_not_member",
 				},
+				// The same unresolved pair twice: the list's React keys must not collide.
+				{
+					mentee: { esUserId: null, name: "Una Unmatched" },
+					mentor: { esUserId: "8", name: "Omar Mentor" },
+					reason: "mentee_unresolved",
+				},
+				{
+					mentee: { esUserId: null, name: "Una Unmatched" },
+					mentor: { esUserId: "8", name: "Omar Mentor" },
+					reason: "mentee_unresolved",
+				},
 			],
 			wantsMenteeNotImported: [{ esUserId: "9", name: "Wanda Wants" }],
 		});
+		const consoleError = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => {});
 		await openImport();
 		const button = (await screen.findByRole("button", {
 			name: "Import mentor pairs",
@@ -390,12 +404,20 @@ describe("ImportHistoryPanel (#1051)", () => {
 			Imported: "2",
 			"Already imported": "1",
 			"Already paired": "0",
-			Skipped: "1",
+			Skipped: "3",
 			"No mentor named": "2",
 		});
-		expect(screen.getByTestId("mentors-skipped").textContent).toContain(
+		const skipped = screen.getByTestId("mentors-skipped");
+		expect(skipped.textContent).toContain(
 			"Maya Mentee (mentee) with Omar Mentor (mentor): the mentor is not an active member",
 		);
+		expect(skipped.querySelectorAll("li")).toHaveLength(3);
+		expect(skipped.textContent).toContain(
+			"Una Unmatched (mentee) with Omar Mentor (mentor): the import never matched the mentee to a member",
+		);
+		// React warns on a duplicate key; none may have been logged.
+		expect(consoleError).not.toHaveBeenCalled();
+		consoleError.mockRestore();
 		expect(screen.getByTestId("mentors-wants-mentee").textContent).toContain(
 			"Wanda Wants",
 		);

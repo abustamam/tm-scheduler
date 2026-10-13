@@ -25,23 +25,27 @@ const EXPECTED_FNS = [
 	"importEasySpeakMentors",
 ];
 
-/** The local names imported from `./history-import-logic`, aliases resolved, schemas left out. */
+/** The logic modules history-import.ts calls into; the mentor step has its own (#1053). */
+const LOGIC_MODULES = ["history-import-logic", "mentor-import-logic"];
+
+/** The local names imported from the logic modules, aliases resolved, schemas left out. */
 function logicCallNames(source: string): string[] {
-	const imported =
-		/import\s*\{([^}]*)\}\s*from\s*"\.\/history-import-logic"/.exec(
-			source,
-		)?.[1];
-	if (!imported) {
-		throw new Error(
-			"history-import.ts no longer imports from ./history-import-logic. Re-point this guard rather than deleting it.",
-		);
-	}
-	return imported
-		.split(",")
-		.map((part) => part.trim())
-		.filter(Boolean)
-		.map((part) => part.split(/\s+as\s+/).pop() as string)
-		.filter((name) => !name.endsWith("Schema"));
+	return LOGIC_MODULES.flatMap((module) => {
+		const imported = new RegExp(
+			`import\\s*\\{([^}]*)\\}\\s*from\\s*"\\./${module}"`,
+		).exec(source)?.[1];
+		if (!imported) {
+			throw new Error(
+				`history-import.ts no longer imports from ./${module}. Re-point this guard rather than deleting it.`,
+			);
+		}
+		return imported
+			.split(",")
+			.map((part) => part.trim())
+			.filter(Boolean)
+			.map((part) => part.split(/\s+as\s+/).pop() as string)
+			.filter((name) => !name.endsWith("Schema"));
+	});
 }
 
 const LOGIC_NAMES = logicCallNames(SOURCE);
@@ -76,7 +80,7 @@ describe("history-import.ts server fns are superadmin-only (#1051)", () => {
 			})).filter((call) => call.at !== -1);
 			expect(
 				calls.map((c) => c.name),
-				"the handler calls no history-import-logic function",
+				"the handler calls no logic function",
 			).not.toHaveLength(0);
 			for (const call of calls) {
 				expect(
@@ -131,7 +135,7 @@ describe("history-import.ts server fns are superadmin-only (#1051)", () => {
 		}
 	});
 
-	it("reaches the database only through history-import-logic", () => {
+	it("reaches the database only through the logic modules", () => {
 		expect(SOURCE).not.toMatch(/from\s+"#\/db/);
 	});
 });
