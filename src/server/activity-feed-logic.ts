@@ -14,6 +14,7 @@ import {
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
+import { GUEST_CROSS_CLUB_LINK_CHANGE } from "#/lib/activity-format";
 
 export const listActivitySchema = z.object({
 	clubId: z.string().uuid(),
@@ -75,6 +76,14 @@ export interface ActivityEntry {
 	 * silently falls back to the member↔member wording.
 	 */
 	guestLink: boolean;
+	/**
+	 * member_merge → true when this entry is a cross-club guest link (#1175,
+	 * `detail.change === "guest_cross_club_link"`). `guestLink` stays false for it:
+	 * that is the guest↔member link of #635, a different event. Optional so a
+	 * hand-built entry that predates it still type-checks; `loadActivity` always
+	 * sets it.
+	 */
+	crossClubLink?: boolean;
 	/** member_merge → set when the entry REVERSED a link (#635). */
 	unlinked: boolean;
 }
@@ -222,6 +231,7 @@ export async function loadActivity(
 			status: d.status ?? null,
 			guestName: d.guestName ?? null,
 			guestLink: Boolean(d.fromGuestId || d.unlinkedGuestId),
+			crossClubLink: d.change === GUEST_CROSS_CLUB_LINK_CHANGE,
 			unlinked: Boolean(d.unlinkedGuestId),
 		};
 	});

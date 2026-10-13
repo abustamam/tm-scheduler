@@ -9,11 +9,13 @@ import {
 	desc,
 	eq,
 	gte,
+	ilike,
 	inArray,
 	isNotNull,
 	isNull,
 	min,
 	ne,
+	or,
 	type SQL,
 	sql,
 } from "drizzle-orm";
@@ -35,6 +37,7 @@ import {
 	speeches,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import { GUEST_CROSS_CLUB_LINK_CHANGE } from "#/lib/activity-format";
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
 import { isAtMeetingNow } from "#/lib/guest-book-window";
 import {
@@ -3874,6 +3877,387 @@ export async function applyAddGuestToClub(
 	});
 }
 
+// ---------------------------------------------------------------------------
+// Link: "Same person as…" (#1175)
+// ---------------------------------------------------------------------------
+//
+// Two guests that ALREADY exist, one in each club the officer runs, are one
+// human. A link records NO state: it points one guest row at the other's Person
+// (the state Add already produces) and deletes the Person that row left, and it
+// is refused whenever that would lose anything. So nothing needs undoing: Separate
+// is the way back, and it copies no contact.
+//
+// Which Person survives is automatic. A side is ABSORBABLE when its Person is
+// pristine for its own guest (no history, held by that one guest row only) and
+// its email and phone each are blank or equal to the other Person's, so absorbing
+// it drops nothing. Both absorbable: the acting card's guest is the one absorbed.
+
+export const GUEST_LINK_CHANGED_MESSAGE =
+	"These records changed. Review the link again.";
+export const GUEST_LINK_ALREADY_SAME_MESSAGE = "Already the same person.";
+export const GUEST_LINK_NOT_GUEST_ONLY_MESSAGE =
+	"Only a guest who is not a member and has not signed in can be linked.";
+export const GUEST_LINK_EMAIL_DIFFERS_MESSAGE =
+	"Different email addresses. Fix one first.";
+export const GUEST_LINK_PHONE_DIFFERS_MESSAGE =
+	"Different phone numbers. Fix one first.";
+export const GUEST_LINK_ALREADY_HERE_MESSAGE =
+	"That person is already a guest or a member of this club.";
+export const GUEST_LINK_BOTH_HAVE_HISTORY_MESSAGE =
+	"Both records have history. A superadmin can merge them.";
+
+/** Most candidates the picker returns. */
+export const GUEST_LINK_CANDIDATE_LIMIT = 20;
+
+/** Both Persons' contact as a link compares it: normalized, never shown. */
+export interface GuestLinkBasis {
+	thisEmail: string | null;
+	thisPhone: string;
+	otherEmail: string | null;
+	otherPhone: string;
+}
+
+/** What a preview promised and the link must still find true under its locks. */
+export interface GuestLinkExpected {
+	absorbed: "this" | "other";
+	/** Which Person survives and which is deleted: a record that moved Persons
+	 *  since the preview is a different link, even when `absorbed` still reads the same. */
+	keeperPersonId: string;
+	absorbedPersonId: string;
+	basis: GuestLinkBasis;
+}
+
+export type GuestLinkPreview =
+	| {
+			ok: true;
+			absorbed: "this" | "other";
+			/** The keeper Person's stored values, which the link leaves unchanged. */
+			name: string;
+			email: string | null;
+			phone: string | null;
+			expected: GuestLinkExpected;
+	  }
+	| { ok: false; message: string };
+
+export interface GuestLinkCandidate {
+	guestId: string;
+	name: string;
+	email: string | null;
+	phone: string | null;
+}
+
+type GuestLinkGuest = NonNullable<Awaited<ReturnType<typeof readGuestOf>>>;
+
+interface GuestLinkSide {
+	guest: GuestLinkGuest;
+	person: {
+		name: string;
+		email: string | null;
+		phone: string | null;
+		guestOnly: boolean;
+		pristine: boolean;
+	};
+	/** This side's Person already has a guest row or an active seat in the OTHER
+	 *  side's club: where it would land if the other side were absorbed into it. */
+	hereInOtherClub: boolean;
+}
+
+type GuestLinkDecision =
+	| {
+			ok: true;
+			absorbed: "this" | "other";
+			expected: GuestLinkExpected;
+			keeper: GuestLinkSide;
+	  }
+	| { ok: false; message: string };
+
+async function loadGuestLinkSide(
+	conn: DbOrTx,
+	guest: GuestLinkGuest,
+	otherClubId: string,
+): Promise<GuestLinkSide> {
+	const [row] = await conn
+		.select({
+			name: people.name,
+			email: people.email,
+			phone: people.phone,
+			guestOnly: sql<boolean>`${identityIgnoredGuestPerson()}`,
+			pristine: sql<boolean>`${pristineGuestPerson(guest.id)}`,
+		})
+		.from(people)
+		.where(eq(people.id, guest.personId))
+		.limit(1);
+	if (!row) throw new Error(RECORD_CHANGED_MESSAGE);
+	return {
+		guest,
+		person: {
+			name: row.name,
+			email: row.email,
+			phone: row.phone,
+			guestOnly: Boolean(row.guestOnly),
+			pristine: Boolean(row.pristine),
+		},
+		hereInOtherClub: await personIsHereAlready(
+			conn,
+			guest.personId,
+			otherClubId,
+		),
+	};
+}
+
+/**
+ * The link's decision from both sides as read, in the refusal table's order:
+ * a changed preview, a converted guest, one Person already, a Person that is not
+ * guest-only, no absorbable side, then a keeper Person already held in the
+ * absorbed guest's club. `expected` is null for a preview, which
+ * has nothing to compare against. Pure: the caller read the sides under whatever
+ * locks it holds.
+ */
+function decideGuestLink(
+	self: GuestLinkSide,
+	other: GuestLinkSide,
+	expected: GuestLinkExpected | null,
+): GuestLinkDecision {
+	const basis: GuestLinkBasis = {
+		thisEmail: normalizeEmail(self.person.email),
+		thisPhone: normalizePhone(self.person.phone),
+		otherEmail: normalizeEmail(other.person.email),
+		otherPhone: normalizePhone(other.person.phone),
+	};
+	const selfAbsorbable =
+		self.person.pristine &&
+		(basis.thisEmail === null || basis.thisEmail === basis.otherEmail) &&
+		(basis.thisPhone === "" || basis.thisPhone === basis.otherPhone);
+	const otherAbsorbable =
+		other.person.pristine &&
+		(basis.otherEmail === null || basis.otherEmail === basis.thisEmail) &&
+		(basis.otherPhone === "" || basis.otherPhone === basis.thisPhone);
+	// The acting card's guest is absorbed on a tie.
+	const absorbed: "this" | "other" | null = selfAbsorbable
+		? "this"
+		: otherAbsorbable
+			? "other"
+			: null;
+
+	if (
+		expected &&
+		(expected.absorbed !== absorbed ||
+			expected.keeperPersonId !==
+				(absorbed === "this" ? other : self).guest.personId ||
+			expected.absorbedPersonId !==
+				(absorbed === "this" ? self : other).guest.personId ||
+			expected.basis.thisEmail !== basis.thisEmail ||
+			expected.basis.thisPhone !== basis.thisPhone ||
+			expected.basis.otherEmail !== basis.otherEmail ||
+			expected.basis.otherPhone !== basis.otherPhone)
+	) {
+		return { ok: false, message: GUEST_LINK_CHANGED_MESSAGE };
+	}
+	if (self.guest.stage === "joined" || other.guest.stage === "joined") {
+		return { ok: false, message: GUEST_NOW_MEMBER_MESSAGE };
+	}
+	if (self.guest.personId === other.guest.personId) {
+		return { ok: false, message: GUEST_LINK_ALREADY_SAME_MESSAGE };
+	}
+	if (!self.person.guestOnly || !other.person.guestOnly) {
+		return { ok: false, message: GUEST_LINK_NOT_GUEST_ONLY_MESSAGE };
+	}
+	if (absorbed === null) {
+		if (basis.thisEmail !== basis.otherEmail) {
+			return { ok: false, message: GUEST_LINK_EMAIL_DIFFERS_MESSAGE };
+		}
+		if (basis.thisPhone !== basis.otherPhone) {
+			return { ok: false, message: GUEST_LINK_PHONE_DIFFERS_MESSAGE };
+		}
+		return { ok: false, message: GUEST_LINK_BOTH_HAVE_HISTORY_MESSAGE };
+	}
+	const [absorbedSide, keeper] =
+		absorbed === "this" ? [self, other] : [other, self];
+	// The absorbed guest's club would then hold the keeper's Person twice when it
+	// already has a card on it (Add put one there): one card per Person per club.
+	if (keeper.hereInOtherClub) {
+		return { ok: false, message: GUEST_LINK_ALREADY_HERE_MESSAGE };
+	}
+	return {
+		ok: true,
+		absorbed,
+		expected: {
+			absorbed,
+			keeperPersonId: keeper.guest.personId,
+			absorbedPersonId: absorbedSide.guest.personId,
+			basis,
+		},
+		keeper,
+	};
+}
+
+export interface GuestLinkInput {
+	userId: string;
+	clubId: string;
+	guestId: string;
+	otherClubId: string;
+	otherGuestId: string;
+}
+
+/**
+ * What linking would leave, and the refusal if it would not. A read: no locks, and
+ * the link re-decides under its own, so this is what the officer is SHOWN and the
+ * `expected` the link must find still true. Admin of both clubs, asked before
+ * anything is read. Returns the keeper Person's stored name, email and phone
+ * (unchanged by the link) and nothing of the other club's record.
+ */
+export async function previewGuestLink(
+	input: GuestLinkInput,
+): Promise<GuestLinkPreview> {
+	const { userId, clubId, guestId, otherClubId, otherGuestId } = input;
+	if (clubId === otherClubId) {
+		return { ok: false, message: GUEST_CROSS_CLUB_SAME_CLUB_MESSAGE };
+	}
+	await requireAdminOfBothClubs(userId, clubId, otherClubId);
+	const [mine, theirs] = await Promise.all([
+		readGuestOf(db, clubId, guestId),
+		readGuestOf(db, otherClubId, otherGuestId),
+	]);
+	if (!mine || !theirs) {
+		return { ok: false, message: GUEST_NOT_IN_CLUB_MESSAGE };
+	}
+	const decision = decideGuestLink(
+		await loadGuestLinkSide(db, mine, otherClubId),
+		await loadGuestLinkSide(db, theirs, clubId),
+		null,
+	);
+	if (!decision.ok) return decision;
+	return {
+		ok: true,
+		absorbed: decision.absorbed,
+		name: decision.keeper.person.name,
+		email: decision.keeper.person.email,
+		phone: decision.keeper.person.phone,
+		expected: decision.expected,
+	};
+}
+
+/**
+ * The picker behind "Same person as…": up to 20 of `otherClubId`'s unconverted
+ * guests whose Person is guest-only and is not this guest's own, by name. A
+ * case-insensitive substring of `q` filters on the guest's name or the Person's
+ * email; an empty `q` is the first 20. Name, email and phone only: nothing of the
+ * other club's stage, visits, invites or notes.
+ */
+export async function listGuestLinkCandidates(input: {
+	userId: string;
+	clubId: string;
+	guestId: string;
+	otherClubId: string;
+	q: string;
+}): Promise<GuestLinkCandidate[]> {
+	const { userId, clubId, guestId, otherClubId } = input;
+	await requireAdminOfBothClubs(userId, clubId, otherClubId);
+	const mine = await readGuestOf(db, clubId, guestId);
+	if (!mine) throw new Error(GUEST_NOT_IN_CLUB_MESSAGE);
+	const q = input.q.trim();
+	// A `%`, `_` or `\` typed into the box means itself.
+	const pattern = q ? `%${q.replace(/[\\%_]/g, "\\$&")}%` : null;
+	return db
+		.select({
+			guestId: guests.id,
+			name: guests.name,
+			email: people.email,
+			phone: people.phone,
+		})
+		.from(guests)
+		.innerJoin(people, eq(people.id, guests.personId))
+		.where(
+			and(
+				eq(guests.clubId, otherClubId),
+				ne(guests.stage, "joined"),
+				ne(guests.personId, mine.personId),
+				identityIgnoredGuestPerson(),
+				pattern
+					? or(ilike(guests.name, pattern), ilike(people.email, pattern))
+					: undefined,
+			),
+		)
+		.orderBy(asc(guests.name), asc(guests.id))
+		.limit(GUEST_LINK_CANDIDATE_LIMIT);
+}
+
+/**
+ * Say that this club's guest and `otherGuestId` of the other club are one human.
+ * One of the two guest rows is pointed at the other's Person and the Person it
+ * left is deleted; no `people` column, name, stage, visit, invite or note changes.
+ * Admin of BOTH clubs, asked up front and again under the locks.
+ *
+ * LOCKS (ADR-0031, the order Add and Separate take): every club holding either
+ * Person, in id order; both Persons `FOR UPDATE` (one is deleted, and "pristine"
+ * must not move under it); the club set re-read; both guest rows `FOR UPDATE`;
+ * the officer's standing; then the decision, with the preview's `expected`
+ * compared FIRST, so a record edited since the preview says "changed" even when
+ * the edit would now make the link refuse for a conflict.
+ */
+export async function applyLinkGuestAcrossClubs(
+	input: GuestLinkInput & { expected: GuestLinkExpected },
+): Promise<{ ok: true }> {
+	const { userId, clubId, guestId, otherClubId, otherGuestId } = input;
+	await requireAdminOfBothClubs(userId, clubId, otherClubId);
+	return db.transaction(async (tx) => {
+		const peekMine = await readGuestOf(tx, clubId, guestId);
+		const peekTheirs = await readGuestOf(tx, otherClubId, otherGuestId);
+		if (!peekMine || !peekTheirs) throw new Error(GUEST_NOT_IN_CLUB_MESSAGE);
+		const personIds = [peekMine.personId, peekTheirs.personId];
+		const named = [clubId, otherClubId];
+		const before = await clubsToLock(tx, personIds, named);
+		await lockClubs(tx, before);
+		await lockPersonsInOrder(tx, forUpdate(...personIds));
+		await assertClubSetHeld(tx, before, personIds, named);
+		const mine = await readGuestOf(tx, clubId, guestId, true);
+		const theirs = await readGuestOf(tx, otherClubId, otherGuestId, true);
+		if (
+			!mine ||
+			!theirs ||
+			mine.personId !== peekMine.personId ||
+			theirs.personId !== peekTheirs.personId
+		) {
+			throw new Error(RECORD_CHANGED_MESSAGE);
+		}
+		await assertStillAdminOfBothClubs(tx, userId, clubId, otherClubId);
+		const actor = await getMembership(userId, clubId, tx);
+
+		const self = await loadGuestLinkSide(tx, mine, otherClubId);
+		const other = await loadGuestLinkSide(tx, theirs, clubId);
+		const decision = decideGuestLink(self, other, input.expected);
+		if (!decision.ok) throw new Error(decision.message);
+
+		const [absorbedSide, keeperSide] =
+			decision.absorbed === "this" ? [self, other] : [other, self];
+		await tx
+			.update(guests)
+			.set({ personId: keeperSide.guest.personId, updatedAt: new Date() })
+			.where(eq(guests.id, absorbedSide.guest.id));
+		// The absorbed Person was pristine, so nothing references it now. A Person
+		// that survives is a link that did not do what it says: roll it back.
+		if (
+			!(await deleteGuestPersonIfUnreferenced(tx, absorbedSide.guest.personId))
+		) {
+			throw new Error(RECORD_CHANGED_MESSAGE);
+		}
+		// `member_merge` rather than a new enum value (no migration; #635 shares it).
+		// The acting club only, and nothing of the other club: no id, no name.
+		await logActivity(tx, {
+			clubId,
+			actorMemberId: actor?.id ?? null,
+			action: "member_merge",
+			targetType: "member",
+			detail: {
+				change: GUEST_CROSS_CLUB_LINK_CHANGE,
+				guestId: mine.id,
+				guestName: mine.name,
+			},
+		});
+		return { ok: true as const };
+	});
+}
+
 export interface SeparateGuestInput {
 	userId: string;
 	clubId: string;
@@ -3881,31 +4265,15 @@ export interface SeparateGuestInput {
 }
 
 /**
- * Is `personId` a guest-only Person (`identityIgnoredGuestPerson`: nobody has
- * signed in as them, no membership, a guest row somewhere, and never a member)?
- * The only Person a Separate copies a contact from.
- */
-async function isGuestOnlyPerson(
-	conn: DbOrTx,
-	personId: string,
-): Promise<boolean> {
-	const [row] = await conn
-		.select({ id: people.id })
-		.from(people)
-		.where(and(eq(people.id, personId), identityIgnoredGuestPerson()))
-		.limit(1);
-	return Boolean(row);
-}
-
-/**
- * Give this guest a Person of its own again: a fresh Person with its own name, and
- * its row re-points to it. Admin of THIS club only. The other clubs' rows keep the
- * Person.
+ * Give this guest a Person of its own again: a fresh Person with its own name and
+ * goes-by name, and its row re-points to it. Admin of THIS club only. The other
+ * clubs' rows keep the Person.
  *
- * Email and phone are copied to the fresh Person ONLY when the shared Person is
- * guest-only (`isGuestOnlyPerson`: nobody has signed in as them, no membership,
- * and never a member). A member's address is the roster's, and a signed-in
- * person's is theirs: neither is ever copied onto a guest's Person.
+ * **No contact is copied, ever** (#1175): the fresh Person's email and phone are
+ * null, and the shared Person is not touched. A wrong Add or Link must not leave
+ * another club's contact on this club's guest, and the contact belongs to the
+ * Person the other clubs still hold. The officer types it again here if they have
+ * it.
  */
 export async function applySeparateGuest(
 	input: SeparateGuestInput,
@@ -3918,9 +4286,9 @@ export async function applySeparateGuest(
 		const named = [clubId];
 		const before = await clubsToLock(tx, [peek.personId], named);
 		await lockClubs(tx, before);
-		// `FOR UPDATE`, not `NO KEY UPDATE`: the contact it copies depends on whether
-		// any club holds the Person as a member, and only this lock refuses the key
-		// share a member attach needs, so that answer cannot move under it.
+		// `FOR UPDATE`, not `NO KEY UPDATE`, as before #1175: "held by another club"
+		// is read under it, and only this lock refuses the key share a member attach
+		// needs, so that answer cannot move under the re-point.
 		await lockPersonsInOrder(tx, forUpdate(peek.personId));
 		await assertClubSetHeld(tx, before, [peek.personId], named);
 		const guest = await readGuestOf(tx, clubId, guestId, true);
@@ -3933,19 +4301,13 @@ export async function applySeparateGuest(
 		if (!(await personIsHeldElsewhere(tx, guest.personId, clubId))) {
 			throw new Error(GUEST_ALREADY_SEPARATE_MESSAGE);
 		}
-		const [shared] = await tx
-			.select({ email: people.email, phone: people.phone })
-			.from(people)
-			.where(eq(people.id, guest.personId))
-			.limit(1);
-		const copyContact = await isGuestOnlyPerson(tx, guest.personId);
 		const [fresh] = await tx
 			.insert(people)
 			.values({
 				name: guest.name,
 				preferredName: guest.preferredName,
-				email: copyContact ? (shared?.email ?? null) : null,
-				phone: copyContact ? (shared?.phone ?? null) : null,
+				email: null,
+				phone: null,
 			})
 			.returning({ id: people.id });
 		if (!fresh) throw new Error("Failed to create person.");

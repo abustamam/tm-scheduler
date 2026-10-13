@@ -1,10 +1,12 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireClubAdminView, requireClubRole, requireUser } from "./guards";
+import type { GuestLinkExpected } from "./guest-pipeline-logic";
 import {
 	applyAddGuestToClub,
 	applyConvertGuestToMember,
 	applyDeleteGuest,
+	applyLinkGuestAcrossClubs,
 	applyLinkGuestToMember,
 	applyRecordGuestInvite,
 	applySeparateGuest,
@@ -13,9 +15,11 @@ import {
 	applyUnlinkGuestFromMember,
 	applyUpdateGuest,
 	captureGuestVisit,
+	listGuestLinkCandidates as listGuestLinkCandidatesLogic,
 	loadGuestPipeline,
 	loadLinkCandidates,
 	loadOtherAdminClubs,
+	previewGuestLink as previewGuestLinkLogic,
 } from "./guest-pipeline-logic";
 import {
 	guestBookSchema,
@@ -30,6 +34,9 @@ import { loadNextMeetingSummary } from "./meetings-logic";
 export type {
 	CaptureGuestResult,
 	DeleteGuestResult,
+	GuestLinkCandidate,
+	GuestLinkExpected,
+	GuestLinkPreview,
 	GuestStage,
 	LinkCandidate,
 	ManualGuestStage,
@@ -328,4 +335,68 @@ export const separateGuest = createServerFn({ method: "POST" })
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
 		return applySeparateGuest({ userId: currentUser.id, ...data });
+	});
+
+const guestLinkSchema = z.object({
+	clubId: uuid,
+	guestId: uuid,
+	otherClubId: uuid,
+	otherGuestId: uuid,
+});
+
+/** Declared once, so the link's `expected` is parsed in the shape the preview
+ *  returns it in (`GuestLinkExpected`, which the `satisfies` ties to this). */
+const guestLinkExpectedSchema = z.object({
+	absorbed: z.enum(["this", "other"]),
+	keeperPersonId: uuid,
+	absorbedPersonId: uuid,
+	basis: z.object({
+		thisEmail: z.string().nullable(),
+		thisPhone: z.string(),
+		otherEmail: z.string().nullable(),
+		otherPhone: z.string(),
+	}),
+}) satisfies z.ZodType<GuestLinkExpected>;
+
+/**
+ * The picker behind "Same person as…" (#1175): up to 20 of the other club's
+ * guests by name, email and phone only. AUTHED — admin of BOTH clubs
+ * (`requireAdminOfBothClubs` in the logic). The session's user is the actor.
+ */
+export const listGuestLinkCandidates = createServerFn({ method: "GET" })
+	.validator((input: unknown) =>
+		guestLinkSchema
+			.omit({ otherGuestId: true })
+			.extend({ q: z.string().max(200) })
+			.parse(input),
+	)
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		return listGuestLinkCandidatesLogic({ userId: currentUser.id, ...data });
+	});
+
+/**
+ * What linking two guests would leave, or why it cannot (#1175). AUTHED — admin
+ * of BOTH clubs. A read: nothing is written.
+ */
+export const previewGuestLink = createServerFn({ method: "GET" })
+	.validator((input: unknown) => guestLinkSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		return previewGuestLinkLogic({ userId: currentUser.id, ...data });
+	});
+
+/**
+ * Link this club's guest to one of the other club's: one Person, kept by the
+ * side that can absorb the other (#1175). AUTHED — admin of BOTH clubs, asked
+ * again under the locks. `expected` is what the preview returned; a record that
+ * changed since is refused.
+ */
+export const linkGuestAcrossClubs = createServerFn({ method: "POST" })
+	.validator((input: unknown) =>
+		guestLinkSchema.extend({ expected: guestLinkExpectedSchema }).parse(input),
+	)
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		return applyLinkGuestAcrossClubs({ userId: currentUser.id, ...data });
 	});

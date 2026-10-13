@@ -1,5 +1,12 @@
 import type { ActivityEntry } from "#/server/activity-feed";
 
+/**
+ * `detail.change` of the `member_merge` row a cross-club guest link writes
+ * (#1175). The feed (`activity-feed-logic.ts`) reads it into `crossClubLink`, and
+ * this file words it. One spelling, so the writer and the reader cannot drift.
+ */
+export const GUEST_CROSS_CLUB_LINK_CHANGE = "guest_cross_club_link";
+
 export interface FormattedActivity {
 	actor: string;
 	summary: string;
@@ -100,7 +107,11 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 			// merge, and a guest↔member LINK (#635), which reuses the enum value so
 			// it needs no migration. `guestLink` is the discriminator rather than
 			// `guestName`, so a blank name cannot make a link read as a merge.
-			if (entry.guestLink) {
+			if (entry.crossClubLink) {
+				// #1175: a guest linked to the same person in another club. The acting
+				// club's row only; it names no record of the other club.
+				summary = `linked ${entry.guestName ?? "a guest"} to the same person in another club`;
+			} else if (entry.guestLink) {
 				const who = entry.guestName ?? "a guest";
 				summary = entry.unlinked
 					? `unlinked ${who} from their member record`
