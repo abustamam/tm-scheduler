@@ -10,7 +10,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -25,6 +25,7 @@ import type { EasySpeakBundleV1 } from "#/lib/easy-speak-bundle";
 import {
 	cleanup,
 	hasTestDb,
+	openBlockingTx,
 	type SeededClub,
 	seedClub,
 	testDb,
@@ -296,6 +297,27 @@ describe.skipIf(!hasTestDb)("speech-request import (#1052)", () => {
 			alreadyImported: 1,
 			skippedNoMember: 0,
 		});
+	});
+
+	it("is refused at once while an apply holds the club's import lock, and writes nothing", async () => {
+		await resolvedMember("1");
+		const importId = await storeBundle([
+			request({ es: "1", esSpeechId: "k1" }),
+		]);
+		// An apply in flight: the same per-club advisory key, held and uncommitted.
+		const apply = await openBlockingTx(async (tx) => {
+			await tx.execute(
+				sql`select pg_advisory_xact_lock(hashtextextended(${`history-import:${seed.clubId}`}, 0))`,
+			);
+		});
+		try {
+			await expect(run(importId)).rejects.toThrow(logic.IMPORT_RUNNING_MESSAGE);
+		} finally {
+			await apply.commit();
+		}
+		expect(await rows()).toHaveLength(0);
+		// And once the apply is done, the same call goes through.
+		expect((await run(importId)).imported).toBe(1);
 	});
 
 	it("refuses an import that has not been applied", async () => {

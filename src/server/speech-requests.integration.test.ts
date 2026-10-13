@@ -68,6 +68,7 @@ vi.mock("#/lib/auth", () => ({
 
 const fns = await import("./speech-requests");
 const { releaseSlotCore, reassignSlotCore } = await import("./slots-logic");
+const { loadSpeakerRotation } = await import("./reporting-logic");
 const { NO_PERMISSION_MESSAGE, NOT_A_MEMBER_MESSAGE } = await import(
 	"./guards"
 );
@@ -567,7 +568,11 @@ describe.skipIf(!hasTestDb)("speech requests (#1052)", () => {
 
 	// -----------------------------------------------------------------------
 	describe("the VPE's queue", () => {
-		type QueueRow = { id: string; memberName: string };
+		type QueueRow = {
+			id: string;
+			memberName: string;
+			lastSpokeAt: Date | null;
+		};
 		const queue = () =>
 			call<QueueRow[]>(fns.getSpeechRequestQueue, { clubId: seed.clubId });
 
@@ -607,6 +612,143 @@ describe.skipIf(!hasTestDb)("speech requests (#1052)", () => {
 				longAgoSpeaker,
 				recentSpeaker,
 			]);
+		});
+
+		/**
+		 * One speaker slot for the member, `daysFromNow` days away (negative = past),
+		 * on a meeting and a slot in the given statuses. Returns the meeting's instant.
+		 */
+		async function speakerSlot(
+			memberId: string,
+			daysFromNow: number,
+			opts: {
+				meetingStatus?: "scheduled" | "cancelled" | "completed";
+				slotStatus?: "open" | "claimed" | "confirmed";
+			} = {},
+		): Promise<Date> {
+			const meetingId = await addMeeting(
+				seed.clubId,
+				opts.meetingStatus ?? "completed",
+				new Date(Date.now() + daysFromNow * DAY),
+			);
+			const slotId = await addSpeakerSlot(meetingId, speakerRoleId);
+			await testDb
+				.update(roleSlots)
+				.set({
+					assignedMemberId: memberId,
+					status: opts.slotStatus ?? "claimed",
+				})
+				.where(eq(roleSlots.id, slotId));
+			const [m] = await testDb
+				.select({ at: meetings.scheduledAt })
+				.from(meetings)
+				.where(eq(meetings.id, meetingId));
+			if (!m) throw new Error("meeting missing");
+			return m.at;
+		}
+
+		describe("last spoke ignores what is not a past, held, non-cancelled speaker slot", () => {
+			const lastSpoke = async (memberId: string) => {
+				sessionUserId = seed.adminUserId;
+				const row = (await queue()).find(
+					(r) => r.id === requestIds.get(memberId),
+				);
+				return row?.lastSpokeAt ?? null;
+			};
+			const requestIds = new Map<string, string>();
+			beforeEach(async () => {
+				requestIds.clear();
+				requestIds.set(seed.memberId, await insertRequest(seed.memberId));
+			});
+
+			it("control: a past held slot on a completed meeting is the last spoke", async () => {
+				const at = await speakerSlot(seed.memberId, -30);
+				expect(await lastSpoke(seed.memberId)).toEqual(at);
+			});
+
+			it("a FUTURE held slot is not a speech yet", async () => {
+				const older = await speakerSlot(seed.memberId, -100);
+				await speakerSlot(seed.memberId, 20, { meetingStatus: "scheduled" });
+				expect(await lastSpoke(seed.memberId)).toEqual(older);
+			});
+
+			it("a future held slot alone leaves the member never-spoken", async () => {
+				await speakerSlot(seed.memberId, 20, { meetingStatus: "scheduled" });
+				expect(await lastSpoke(seed.memberId)).toBeNull();
+			});
+
+			it("a CANCELLED meeting's held slot never happened", async () => {
+				const older = await speakerSlot(seed.memberId, -100);
+				await speakerSlot(seed.memberId, -10, { meetingStatus: "cancelled" });
+				expect(await lastSpoke(seed.memberId)).toEqual(older);
+			});
+
+			it("a past slot that is merely open (not held) is not a speech", async () => {
+				const older = await speakerSlot(seed.memberId, -100);
+				await speakerSlot(seed.memberId, -10, { slotStatus: "open" });
+				expect(await lastSpoke(seed.memberId)).toEqual(older);
+			});
+
+			it("a confirmed slot counts, like a claimed one", async () => {
+				const at = await speakerSlot(seed.memberId, -10, {
+					slotStatus: "confirmed",
+				});
+				expect(await lastSpoke(seed.memberId)).toEqual(at);
+			});
+
+			it("a past held slot in a NON-speaker role is not a speech", async () => {
+				const [timer] = await testDb
+					.insert(roleDefinitions)
+					.values({
+						clubId: seed.clubId,
+						name: "Timer",
+						category: "functionary",
+						isSpeakerRole: false,
+					})
+					.returning({ id: roleDefinitions.id });
+				if (!timer) throw new Error("role insert failed");
+				const meetingId = await addMeeting(
+					seed.clubId,
+					"completed",
+					new Date(Date.now() - 10 * DAY),
+				);
+				const slotId = await addSpeakerSlot(meetingId, timer.id);
+				await testDb
+					.update(roleSlots)
+					.set({ assignedMemberId: seed.memberId, status: "claimed" })
+					.where(eq(roleSlots.id, slotId));
+				expect(await lastSpoke(seed.memberId)).toBeNull();
+			});
+
+			it("agrees with the speaker rotation, member by member, on one mixed fixture", async () => {
+				const m3 = await addMember(seed.clubId, "Third Member");
+				// seed.memberId: a valid old spoke plus every kind of decoy.
+				const mine = await speakerSlot(seed.memberId, -100);
+				await speakerSlot(seed.memberId, 20, { meetingStatus: "scheduled" });
+				await speakerSlot(seed.memberId, -10, { meetingStatus: "cancelled" });
+				await speakerSlot(seed.memberId, -5, { slotStatus: "open" });
+				// member2: one valid spoke, newer.
+				const theirs = await speakerSlot(member2.memberId, -20);
+				// m3: only decoys, so never-spoken on both sides.
+				await speakerSlot(m3.memberId, -3, { meetingStatus: "cancelled" });
+				requestIds.set(member2.memberId, await insertRequest(member2.memberId));
+				requestIds.set(m3.memberId, await insertRequest(m3.memberId));
+
+				const rotation = new Map(
+					(await loadSpeakerRotation(seed.clubId)).map((r) => [
+						r.memberId,
+						r.lastSpokenAt,
+					]),
+				);
+				for (const [memberId, expected] of [
+					[seed.memberId, mine],
+					[member2.memberId, theirs],
+					[m3.memberId, null],
+				] as const) {
+					expect(rotation.get(memberId) ?? null).toEqual(expected);
+					expect(await lastSpoke(memberId)).toEqual(rotation.get(memberId));
+				}
+			});
 		});
 
 		it("lists only OPEN requests of ACTIVE members", async () => {
@@ -1164,6 +1306,48 @@ describe.skipIf(!hasTestDb)("speech requests (#1052)", () => {
 			}
 			expect(await outcome).toMatch(/cancelled/i);
 			await expectNothingWritten(id, slotId);
+		});
+
+		it("a Schedule that waited on the request lock re-reads liveness AFTER it: the winner's slot is seen, the loser refused, one speech", async () => {
+			const id = await insertRequest(seed.memberId, { title: "Mine" });
+			const first = await openSlot();
+			const second = await openSlot();
+			sessionUserId = seed.adminUserId;
+			// The winning Schedule, written and not yet committed, holding the row.
+			const winner = await openBlockingTx(async (tx) => {
+				await tx
+					.select({ id: speechRequests.id })
+					.from(speechRequests)
+					.where(eq(speechRequests.id, id))
+					.for("update");
+				await tx
+					.update(roleSlots)
+					.set({ assignedMemberId: seed.memberId, status: "claimed" })
+					.where(eq(roleSlots.id, first));
+				await tx
+					.update(speechRequests)
+					.set({ status: "scheduled", scheduledSlotId: first })
+					.where(eq(speechRequests.id, id));
+			});
+			let outcome: Promise<string | null> | undefined;
+			try {
+				outcome = schedule(id, second).then(
+					() => null,
+					(e: unknown) => (e instanceof Error ? e.message : String(e)),
+				);
+				// Parked on the request's `for update`, BEHIND the winner.
+				await waitForLockWait("for update", winner.pid);
+			} finally {
+				await winner.commit();
+			}
+			expect(await outcome).toBe(REQUEST_NOT_OPEN_MESSAGE);
+			expect(await speechesOf(seed.personId)).toHaveLength(0);
+			expect((await requestRow(id)).scheduledSlotId).toBe(first);
+			const [loserSlot] = await testDb
+				.select({ status: roleSlots.status })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, second));
+			expect(loserSlot?.status).toBe("open");
 		});
 	});
 });
