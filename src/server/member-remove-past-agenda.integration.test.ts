@@ -9,6 +9,7 @@ import { and, asc, eq, getTableName, inArray, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
+	clubActionItems,
 	meetingAttendance,
 	meetingAwards,
 	meetings,
@@ -716,12 +717,259 @@ describe.skipIf(!hasTestDb)("remove a member on a past agenda (#1189)", () => {
 		await expect(remove(leaver)).rejects.toThrow("Member not found.");
 	});
 
+	// Action items (#1189, maintainer decision: minutes are part of the meeting's
+	// record). An item has no meeting; the minutes of meeting P print it, with its
+	// owner, when createdAt <= P.scheduledAt and it is open at that instant. So an
+	// owner blocks removal when a PAST meeting falls inside the item's open window.
+	async function seedItem(
+		ownerId: string,
+		createdOffsetDays: number,
+		resolvedOffsetDays: number | null,
+	) {
+		const [item] = await testDb
+			.insert(clubActionItems)
+			.values({
+				clubId: club.clubId,
+				text: "Book the venue",
+				ownerMemberId: ownerId,
+				createdAt: new Date(Date.now() + createdOffsetDays * DAY),
+				...(resolvedOffsetDays === null
+					? {}
+					: {
+							resolvedAt: new Date(Date.now() + resolvedOffsetDays * DAY),
+							resolution: "done" as const,
+						}),
+			})
+			.returning({ id: clubActionItems.id });
+		return item.id;
+	}
+
+	async function itemOwner(itemId: string) {
+		const [row] = await testDb
+			.select({ ownerMemberId: clubActionItems.ownerMemberId })
+			.from(clubActionItems)
+			.where(eq(clubActionItems.id, itemId));
+		return row?.ownerMemberId ?? null;
+	}
+
+	it("refuses an owner of an open action item that a COMPLETED past meeting's minutes print", async () => {
+		const leaver = await seedLeaver();
+		await seedMeeting("completed", -7);
+		const itemId = await seedItem(leaver, -30, null);
+
+		await expectRefused(leaver, "Leaving Lee");
+
+		expect(await itemOwner(itemId)).toBe(leaver);
+	});
+
+	it("refuses an owner whose item is open at a past meeting that is still `scheduled`", async () => {
+		const leaver = await seedLeaver();
+		await seedMeeting("scheduled", -3);
+		const itemId = await seedItem(leaver, -30, null);
+
+		await expectRefused(leaver, "Leaving Lee");
+
+		expect(await itemOwner(itemId)).toBe(leaver);
+	});
+
+	it("refuses an owner whose item was closed only AFTER the past meeting", async () => {
+		// Closed at -2, meeting at -7: the item was open at that meeting, so its
+		// minutes print the owner even though the item is closed now.
+		const leaver = await seedLeaver();
+		await seedMeeting("completed", -7);
+		const itemId = await seedItem(leaver, -30, -2);
+
+		await expectRefused(leaver, "Leaving Lee");
+
+		expect(await itemOwner(itemId)).toBe(leaver);
+	});
+
+	it("removes an owner whose item was closed BEFORE the only past meeting (closed items print no owner)", async () => {
+		const leaver = await seedLeaver();
+		await seedMeeting("completed", -7);
+		const itemId = await seedItem(leaver, -30, -20);
+
+		await remove(leaver);
+
+		expect(await memberRowExists(leaver)).toBe(false);
+		expect(await itemOwner(itemId)).toBeNull();
+	});
+
+	it("removes an owner whose item was created AFTER the only past meeting", async () => {
+		const leaver = await seedLeaver();
+		await seedMeeting("completed", -7);
+		const itemId = await seedItem(leaver, -2, null);
+
+		await remove(leaver);
+
+		expect(await memberRowExists(leaver)).toBe(false);
+		expect(await itemOwner(itemId)).toBeNull();
+	});
+
+	it("treats an item closed exactly at a past meeting's instant as closed there", async () => {
+		// `openAsOf`: resolved exactly at the instant counts as closed.
+		const leaver = await seedLeaver();
+		const meetingId = await seedMeeting("completed", -7);
+		const [m] = await testDb
+			.select({ at: meetings.scheduledAt })
+			.from(meetings)
+			.where(eq(meetings.id, meetingId));
+		await testDb.insert(clubActionItems).values({
+			clubId: club.clubId,
+			text: "Book the venue",
+			ownerMemberId: leaver,
+			createdAt: new Date(m.at.getTime() - 30 * DAY),
+			resolvedAt: m.at,
+			resolution: "done",
+		});
+
+		await remove(leaver);
+
+		expect(await memberRowExists(leaver)).toBe(false);
+	});
+
+	it("removes an owner whose item is open only across upcoming and past CANCELLED meetings", async () => {
+		const leaver = await seedLeaver();
+		await seedMeeting("cancelled", -7);
+		await seedMeeting("scheduled", 7);
+		const itemId = await seedItem(leaver, -30, null);
+
+		await remove(leaver);
+
+		expect(await memberRowExists(leaver)).toBe(false);
+		// The item survives with no owner, as `ON DELETE SET NULL` leaves it.
+		expect(await itemOwner(itemId)).toBeNull();
+		const rows = await testDb
+			.select({ id: clubActionItems.id })
+			.from(clubActionItems)
+			.where(eq(clubActionItems.id, itemId));
+		expect(rows).toHaveLength(1);
+	});
+
+	it("ignores another club's past meeting inside the item's window", async () => {
+		// Minutes are per club: a meeting of ANOTHER club prints none of this club's
+		// action items. Fails when the window join is not scoped to the club.
+		const other = await seedClub();
+		try {
+			await testDb.insert(meetings).values({
+				clubId: other.clubId,
+				scheduledAt: new Date(Date.now() - 7 * DAY),
+				status: "completed",
+			});
+			const leaver = await seedLeaver();
+			const itemId = await seedItem(leaver, -30, null);
+
+			await remove(leaver);
+
+			expect(await memberRowExists(leaver)).toBe(false);
+			expect(await itemOwner(itemId)).toBeNull();
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	it("removes an owner of an open item when the club has only its upcoming meeting", async () => {
+		const leaver = await seedLeaver();
+		const itemId = await seedItem(leaver, -30, null);
+
+		await remove(leaver);
+
+		expect(await memberRowExists(leaver)).toBe(false);
+		expect(await itemOwner(itemId)).toBeNull();
+	});
+
+	it("refuses an item's owner when a meeting in the item's window is completed while the removal waits", async () => {
+		// Protects: the meetings an action item's minutes print on are locked before
+		// the check, though no row names them. Fails when only meetings the member is
+		// on (slots, attendance, ...) are locked: the removal then reads `scheduled`
+		// and deletes around a meeting that completes next.
+		const leaver = await seedLeaver();
+		const meetingId = await seedMeeting("scheduled", 0.04); // later today
+		const itemId = await seedItem(leaver, -30, null);
+		const completer = await openBlockingTx(async (tx) => {
+			await lockMeetingForSlotEdit(tx, meetingId);
+			await tx
+				.update(meetings)
+				.set({ status: "completed" })
+				.where(eq(meetings.id, meetingId));
+		});
+		const err = await removeParkedBehind(
+			completer,
+			leaver,
+			"for no key update",
+		);
+
+		expect((err as Error).message).toBe(pastAgendaRemoveRefusal("Leaving Lee"));
+		expect(await memberRowExists(leaver)).toBe(true);
+		expect(await itemOwner(itemId)).toBe(leaver);
+	});
+
+	it("stops, writing nothing, when an owned item is reopened while the removal waits", async () => {
+		// Protects: the removal locks the member's action items. A reopen widens the
+		// item's window to the past meeting, so deciding before it commits would
+		// delete the owner of an item the minutes now print.
+		// Fails when: the item lock is dropped (the removal never parks on it).
+		const leaver = await seedLeaver();
+		const meetingId = await seedMeeting("completed", -7);
+		const itemId = await seedItem(leaver, -30, -20);
+		const reopener = await openBlockingTx(async (tx) => {
+			await tx
+				.update(clubActionItems)
+				.set({ resolvedAt: null, resolution: null })
+				.where(eq(clubActionItems.id, itemId));
+		});
+		const err = await removeParkedBehind(
+			reopener,
+			leaver,
+			'"club_action_items"%for update',
+		);
+
+		// The reopened item now reaches the past meeting, which this removal did not
+		// hold: it stops rather than judge it.
+		expect((err as Error).message).toBe(CLUB_BUSY_MESSAGE);
+		expect(await memberRowExists(leaver)).toBe(true);
+		expect(await itemOwner(itemId)).toBe(leaver);
+		expect(meetingId).toBeTruthy();
+	});
+
+	it("stops, writing nothing, when a writer gives the member a new action item while the removal waits", async () => {
+		// Only the unheld-item check can stop this: no meeting or slot is involved.
+		// The new item's FK takes KEY SHARE on the member row, so the removal's member
+		// row lock waits for it.
+		const leaver = await seedLeaver();
+		let itemId = "";
+		const writer = await openBlockingTx(async (tx) => {
+			const [item] = await tx
+				.insert(clubActionItems)
+				.values({
+					clubId: club.clubId,
+					text: "Book the venue",
+					ownerMemberId: leaver,
+					// Created far ahead so no meeting falls in its window: the
+					// meeting check cannot be what stops the removal.
+					createdAt: new Date(Date.now() + 3650 * DAY),
+				})
+				.returning({ id: clubActionItems.id });
+			itemId = item.id;
+		});
+		const err = await removeParkedBehind(
+			writer,
+			leaver,
+			'"members"%for update',
+		);
+
+		expect((err as Error).message).toBe(CLUB_BUSY_MESSAGE);
+		expect(await memberRowExists(leaver)).toBe(true);
+		expect(await itemOwner(itemId)).toBe(leaver);
+	});
+
 	it("covers every ON DELETE SET NULL key to members.id: checked or deliberately not", async () => {
 		// The checked list is hand-kept; this reads the database so a new table that
 		// names a member and nulls on delete cannot be forgotten silently. A key
-		// here must be in `PAST_AGENDA_MEMBER_KEYS` (blocks removal) or in
+		// here must be in `PAST_AGENDA_MEMBER_KEYS` or `PAST_AGENDA_TIME_WINDOW_KEYS` (blocks removal) or in
 		// CONSIDERED_NOT_BLOCKING below with a reason.
-		const { PAST_AGENDA_MEMBER_KEYS } = await import("#/server/members-logic");
+		const { PAST_AGENDA_MEMBER_KEYS, PAST_AGENDA_TIME_WINDOW_KEYS } =
+			await import("#/server/members-logic");
 		const res = await testDb.execute(sql`
 			select cl.relname as "table", a.attname as "column"
 			from pg_constraint c
@@ -734,9 +982,10 @@ describe.skipIf(!hasTestDb)("remove a member on a past agenda (#1189)", () => {
 		const inDb = (res.rows as { table: string; column: string }[]).map(
 			(r) => `${r.table}.${r.column}`,
 		);
-		const checked = PAST_AGENDA_MEMBER_KEYS.map(
-			(k) => `${getTableName(k.table)}.${k.memberColumn.name}`,
-		);
+		const checked = [
+			...PAST_AGENDA_MEMBER_KEYS,
+			...PAST_AGENDA_TIME_WINDOW_KEYS,
+		].map((k) => `${getTableName(k.table)}.${k.memberColumn.name}`);
 		const considered = Object.keys(CONSIDERED_NOT_BLOCKING);
 		const unaccounted = inDb.filter(
 			(k) => !checked.includes(k) && !considered.includes(k),
@@ -753,8 +1002,6 @@ describe.skipIf(!hasTestDb)("remove a member on a past agenda (#1189)", () => {
  *  prints a name on an agenda. */
 const CONSIDERED_NOT_BLOCKING: Record<string, string> = {
 	"activity_log.actor_member_id": "audit trail, not on an agenda",
-	"club_action_items.owner_member_id":
-		"pending maintainer decision (#1189 review): minutes print the owner",
 	"guest_invites.invited_by_member_id": "invite provenance, not on an agenda",
 	"guests.converted_membership_id":
 		"the guest's own record points at who they became, not on an agenda",

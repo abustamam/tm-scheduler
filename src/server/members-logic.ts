@@ -7,10 +7,11 @@
 // that same module is NOT stripped and drags `pg` → `Buffer` into the browser
 // (ReferenceError: Buffer is not defined). Keeping the db logic in this
 // never-client-imported module keeps `pg` server-side. See `auth-context.ts`.
-import { and, asc, eq, gte, inArray, isNull, ne, or } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import {
+	clubActionItems,
 	meetingAttendance,
 	meetingAwards,
 	meetings,
@@ -814,7 +815,8 @@ type RemoveInput = z.infer<typeof removeSchema> & RosterActor;
  *  `member-remove-past-agenda.integration.test.ts` reads the database for every
  *  such key and fails on one that is neither here nor in its "considered" list.
  *  Votes, vote sessions and project marks also null out, but print no name on an
- *  agenda, so they are not here. */
+ *  agenda, so they are not here. Action items are not here either: they carry no
+ *  meeting column, so they have their own list just below. */
 export const PAST_AGENDA_MEMBER_KEYS = [
 	{
 		table: roleSlots,
@@ -838,6 +840,25 @@ export const PAST_AGENDA_MEMBER_KEYS = [
 	},
 ] as const;
 
+/** Keys to `members.id` that print a name on a past agenda but have NO meeting
+ *  column (#1189, maintainer decision: minutes are part of the meeting's record).
+ *  `club_action_items` is "deliberately NOT owned by a meeting" (schema.ts), so the
+ *  meeting is derived from time exactly as the minutes derive it: an item is printed,
+ *  with its owner, in the minutes of every meeting `P` of its club with
+ *  `createdAt <= P.scheduledAt` and (`resolvedAt` null or `resolvedAt >
+ *  P.scheduledAt`) (`openAsOf`, `loadActionItemsForMinutes`). A CLOSED item prints its
+ *  text only, never its owner, so it prints a name only in those windows. The owner
+ *  therefore blocks removal when any such `P` is a past agenda meeting
+ *  (`isPastAgendaMeeting`, the same definition as above). The sweep test checks
+ *  this list alongside `PAST_AGENDA_MEMBER_KEYS`. The row caps on the minutes' lists
+ *  are ignored: refusing is the safe direction. */
+export const PAST_AGENDA_TIME_WINDOW_KEYS = [
+	{
+		table: clubActionItems,
+		memberColumn: clubActionItems.ownerMemberId,
+	},
+] as const;
+
 /** A meeting whose agenda is already history (#1189): `completed`, or its time has
  *  passed and it was not cancelled. Completing is a manual step, so a past meeting
  *  often stays `scheduled`; its agenda prints the same names. A cancelled one
@@ -855,10 +876,12 @@ function isPastAgendaMeeting(
 	);
 }
 
-/** Every meeting the member appears on through the keys above, and every slot
- *  they hold, read fresh. Slots come back in id order, the order `assign_roles`
- *  locks slots in. */
-async function memberFootprint(tx: Tx, memberId: string) {
+/** Every meeting the member appears on through the keys above (plus every meeting
+ *  of the club whose minutes print an action item they own, see
+ *  `PAST_AGENDA_TIME_WINDOW_KEYS`), every slot they hold and every action item they
+ *  own, read fresh. Slots and items come back in id order, the order they are
+ *  locked in. */
+async function memberFootprint(tx: Tx, memberId: string, clubId: string) {
 	const meetingIds = new Set<string>();
 	for (const key of PAST_AGENDA_MEMBER_KEYS) {
 		const rows = await tx
@@ -867,12 +890,34 @@ async function memberFootprint(tx: Tx, memberId: string) {
 			.where(eq(key.memberColumn, memberId));
 		for (const r of rows) meetingIds.add(r.meetingId);
 	}
+	// Action items have no meeting: join on the minutes' own window (`openAsOf`).
+	const windowed = await tx
+		.selectDistinct({ id: meetings.id })
+		.from(meetings)
+		.innerJoin(
+			clubActionItems,
+			and(
+				eq(clubActionItems.ownerMemberId, memberId),
+				gte(meetings.scheduledAt, clubActionItems.createdAt),
+				or(
+					isNull(clubActionItems.resolvedAt),
+					lt(meetings.scheduledAt, clubActionItems.resolvedAt),
+				),
+			),
+		)
+		.where(eq(meetings.clubId, clubId));
+	for (const r of windowed) meetingIds.add(r.id);
 	const slots = await tx
 		.select({ id: roleSlots.id, meetingId: roleSlots.meetingId })
 		.from(roleSlots)
 		.where(eq(roleSlots.assignedMemberId, memberId))
 		.orderBy(asc(roleSlots.id));
-	return { meetingIds, slots };
+	const items = await tx
+		.select({ id: clubActionItems.id })
+		.from(clubActionItems)
+		.where(eq(clubActionItems.ownerMemberId, memberId))
+		.orderBy(asc(clubActionItems.id));
+	return { meetingIds, slots, itemIds: items.map((i) => i.id) };
 }
 
 /** Remove a member: release their upcoming slots (logged) then delete them
@@ -886,8 +931,18 @@ async function memberFootprint(tx: Tx, memberId: string) {
  *  LOCK ORDER (#1189), the one the other writers already use; none is reversed:
  *
  *    membership merge lock (exclusive) → meeting rows, ascending id (FOR NO KEY
- *    UPDATE) → the member's slot rows, id order (FOR UPDATE) → member row (FOR UPDATE)
+ *    UPDATE) → the member's slot rows, id order (FOR UPDATE) → the member's action
+ *    items, id order (FOR UPDATE) → member row (FOR UPDATE)
  *
+ *  - Action items (#1189): an item has no meeting, so the meetings read and locked
+ *    are every meeting of the club inside the window of an item the member owns
+ *    (`PAST_AGENDA_TIME_WINDOW_KEYS`), future and cancelled ones included, because a
+ *    completion, restore or reschedule would make one of them a past agenda. The item
+ *    writers (`updateActionItem`, resolve, reopen) are single statements that take the
+ *    item row, then the FK's KEY SHARE on the member row: the same order as here, so
+ *    no cycle. Locking the items stops a reopen (which widens an item's window) from
+ *    landing between the check and the delete. A meeting INSERTED into an item's
+ *    window after the read is not serialised (as for any new meeting).
  *  - Merge (`collapseMemberships`): takes the same advisory key exclusive first, so a
  *    removal and a merge of one member never overlap. Claims (`claimSlotCore`), votes
  *    and speech requests take it shared first, so they queue behind a removal holding
@@ -921,7 +976,7 @@ export async function applyMemberRemove(input: RemoveInput) {
 
 		// Meetings first, in ascending id. The status and time they return are stable
 		// until this transaction ends.
-		const seen = await memberFootprint(tx, input.memberId);
+		const seen = await memberFootprint(tx, input.memberId, input.clubId);
 		const meetingById = new Map<
 			string,
 			Awaited<ReturnType<typeof lockMeetingForSlotEdit>>
@@ -940,6 +995,15 @@ export async function applyMemberRemove(input: RemoveInput) {
 				.orderBy(asc(roleSlots.id))
 				.for("update")
 		).map((s) => s.id);
+		// Then the action items they own, in id order.
+		const heldItemIds = (
+			await tx
+				.select({ id: clubActionItems.id })
+				.from(clubActionItems)
+				.where(eq(clubActionItems.ownerMemberId, input.memberId))
+				.orderBy(asc(clubActionItems.id))
+				.for("update")
+		).map((i) => i.id);
 		// Last, the member row itself.
 		const [locked] = await tx
 			.select({
@@ -965,7 +1029,7 @@ export async function applyMemberRemove(input: RemoveInput) {
 
 		// ONE clock for both the refusal and the release.
 		const now = new Date();
-		const current = await memberFootprint(tx, input.memberId);
+		const current = await memberFootprint(tx, input.memberId, input.clubId);
 		// Refuse first, on any meeting this transaction holds.
 		for (const meetingId of current.meetingIds) {
 			const meeting = meetingById.get(meetingId);
@@ -976,9 +1040,11 @@ export async function applyMemberRemove(input: RemoveInput) {
 		// A row landed on a meeting, or a slot was taken, that this transaction does
 		// not hold. Its status is not stable, so do not decide on it.
 		const heldSlots = new Set(heldSlotIds);
+		const heldItems = new Set(heldItemIds);
 		if (
 			[...current.meetingIds].some((id) => !meetingById.has(id)) ||
-			current.slots.some((s) => !heldSlots.has(s.id))
+			current.slots.some((s) => !heldSlots.has(s.id)) ||
+			current.itemIds.some((id) => !heldItems.has(id))
 		) {
 			throw new Error(CLUB_BUSY_MESSAGE);
 		}
