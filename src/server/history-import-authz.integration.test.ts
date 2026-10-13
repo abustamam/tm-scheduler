@@ -149,6 +149,32 @@ describe.skipIf(!hasTestDb)("history-import.ts authorization (#1051)", () => {
 		);
 	});
 
+	it("refuses an upload under a read-only impersonation, and stores nothing; without it the upload reaches the logic", async () => {
+		sessionUserId = superadminId;
+		await testDb.insert(impersonationSessions).values({
+			superadminUserId: superadminId,
+			clubId: seed.clubId,
+			mode: "read_only",
+			expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+		});
+		await expect(calls(seed.clubId).uploadEasySpeakBundle?.()).rejects.toThrow(
+			/read-only impersonation/i,
+		);
+		// Without the session the same call gets past the gate and the LOGIC refuses
+		// the empty object: the gate, not the harness, refused above.
+		await testDb
+			.delete(impersonationSessions)
+			.where(eq(impersonationSessions.superadminUserId, superadminId));
+		await expect(calls(seed.clubId).uploadEasySpeakBundle?.()).rejects.toThrow(
+			/not an Easy-Speak bundle/i,
+		);
+		const [row] = await testDb
+			.select({ n: count() })
+			.from(clubImports)
+			.where(eq(clubImports.clubId, seed.clubId));
+		expect(Number(row?.n)).toBe(0);
+	});
+
 	it("refuses apply under a read-only impersonation, and applies under none", async () => {
 		sessionUserId = superadminId;
 		await testDb.insert(impersonationSessions).values({

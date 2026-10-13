@@ -12,6 +12,7 @@ import {
 	screen,
 	waitFor,
 } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fns = vi.hoisted(() => ({
@@ -230,5 +231,23 @@ describe("ImportHistoryPanel (#1051)", () => {
 		expect(screen.getByText("1472117")).toBeTruthy();
 		expect(screen.getByText(/644360: boom/)).toBeTruthy();
 		expect(screen.getByText(/Mentors: 7/)).toBeTruthy();
+	});
+
+	it("refuses a file over the cap by its size, before it reads the file or calls the server", async () => {
+		fns.listEasySpeakImports.mockResolvedValue([]);
+		renderPanel();
+		const input = await screen.findByLabelText("Easy-Speak bundle");
+		const file = new File(["{}"], "bundle.json", { type: "application/json" });
+		// The literal, not the constant: a test relative to the constant cannot fail.
+		Object.defineProperty(file, "size", { value: 60 * 1024 * 1024 });
+		const read = vi.spyOn(file, "text");
+		fireEvent.change(input, { target: { files: [file] } });
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith(
+				"That file is 60.0 MB; the limit is 50.0 MB.",
+			),
+		);
+		expect(read).not.toHaveBeenCalled();
+		expect(fns.uploadEasySpeakBundle).not.toHaveBeenCalled();
 	});
 });

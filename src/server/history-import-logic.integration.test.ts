@@ -281,7 +281,8 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 		await expect(upload("not json")).rejects.toThrow(/not valid JSON/);
 		await expect(upload("{}")).rejects.toThrow(logic.BundleRefusal);
 		await expect(
-			upload("x".repeat(logic.MAX_BUNDLE_BYTES + 1)),
+			// The literal, not the constant: a test relative to the constant cannot fail.
+			upload("x".repeat(50 * 1024 * 1024 + 1)),
 		).rejects.toThrow(/limit is 50\.0 MB/);
 		const [{ n } = { n: 0 }] = await testDb
 			.select({ n: count() })
@@ -650,6 +651,61 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 				.from(meetings)
 				.where(and(eq(meetings.clubId, seed.clubId), isNull(meetings.theme))),
 		).toHaveLength(1);
+	});
+
+	it("refuses to store an upload for an archived club", async () => {
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, seed.clubId));
+		await expect(upload()).rejects.toThrow(/archived/i);
+		expect(
+			await testDb
+				.select({ id: clubImports.id })
+				.from(clubImports)
+				.where(eq(clubImports.clubId, seed.clubId)),
+		).toHaveLength(0);
+	});
+
+	/** Archive the club inside the transaction a lock call opens, the way a concurrent superadmin would. */
+	const archiveOnLockCall = (target: (call: number) => boolean) => {
+		lockHook.run = async (tx, call) => {
+			if (!target(call)) return;
+			await (tx as { execute: (q: unknown) => Promise<unknown> }).execute(
+				sql.raw(
+					`update clubs set archived_at = now() where id = '${seed.clubId}'`,
+				),
+			);
+		};
+	};
+
+	it("a club archived after the up-front check stops the setup transaction, and nothing is written", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		const before = await counts();
+		archiveOnLockCall((call) => call === 1);
+		await expect(apply(stored.importId, resolutions)).rejects.toThrow(
+			/archived/i,
+		);
+		lockHook.run = null;
+		expect(await counts()).toEqual(before);
+	});
+
+	it("a club archived between two meetings stops every later meeting, which land in the report as failed", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId, NOW_TWO_PAST);
+		const before = await counts();
+		// Call 1 is the setup transaction; archive from the first meeting's on.
+		archiveOnLockCall((call) => call >= 2);
+		const { report } = await apply(stored.importId, resolutions, NOW_TWO_PAST);
+		lockHook.run = null;
+		expect(report.meetings.applied).toBe(0);
+		expect(report.meetings.failed).toHaveLength(2);
+		for (const f of report.meetings.failed) {
+			expect(f.message).toMatch(/archived/i);
+		}
+		expect((await counts()).meetings).toBe(before.meetings);
+		expect((await counts()).roleSlots).toBe(before.roleSlots);
 	});
 
 	// -- D1: an existing meeting at the same instant (#1196 review) ----------------

@@ -22,7 +22,15 @@ import { getActiveImpersonationForUser } from "./impersonation-logic";
 // createServerFns (server-modules.guard.test.ts).
 
 const READ_ONLY_IMPERSONATION_MESSAGE =
-	"A read-only impersonation session cannot apply an import. End it, or start an Act as admin session.";
+	"A read-only impersonation session cannot upload or apply an import. End it, or start an Act as admin session.";
+
+/** Upload and apply both write club data; a read-only impersonation session writes none. */
+async function assertNotReadOnlyImpersonation(userId: string): Promise<void> {
+	const impersonation = await getActiveImpersonationForUser(userId);
+	if (impersonation?.mode === "read_only") {
+		throw new Error(READ_ONLY_IMPERSONATION_MESSAGE);
+	}
+}
 
 function parse<S extends z.ZodType>(schema: S, input: unknown): z.output<S> {
 	const result = schema.safeParse(input);
@@ -41,12 +49,13 @@ export const listEasySpeakImports = createServerFn({ method: "GET" })
 		return listClubImportsLogic(data.clubId);
 	});
 
-/** Store an uploaded bundle (validated, size-capped, deduplicated by hash). */
+/** Store an uploaded bundle (validated, size-capped, deduplicated by hash). Refused under read-only impersonation. */
 export const uploadEasySpeakBundle = createServerFn({ method: "POST" })
 	.validator((input: unknown) => parse(uploadImportSchema, input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
 		await requireSuperadmin(currentUser.id);
+		await assertNotReadOnlyImpersonation(currentUser.id);
 		return storeEasySpeakBundleLogic({
 			clubId: data.clubId,
 			uploadedByUserId: currentUser.id,
@@ -76,10 +85,7 @@ export const applyEasySpeakImport = createServerFn({ method: "POST" })
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
 		await requireSuperadmin(currentUser.id);
-		const impersonation = await getActiveImpersonationForUser(currentUser.id);
-		if (impersonation?.mode === "read_only") {
-			throw new Error(READ_ONLY_IMPERSONATION_MESSAGE);
-		}
+		await assertNotReadOnlyImpersonation(currentUser.id);
 		return applyEasySpeakImportLogic({
 			clubId: data.clubId,
 			importId: data.importId,

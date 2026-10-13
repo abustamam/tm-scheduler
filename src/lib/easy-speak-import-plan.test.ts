@@ -4,10 +4,10 @@ import { describe, expect, it } from "vitest";
 import type { EasySpeakBundleV1 } from "./easy-speak-bundle";
 import {
 	buildImportPlan,
+	isJsonbSafeText,
 	type PlanContext,
 	type PlanRosterMember,
 	personKeyOf,
-	isJsonbSafeText,
 	personResolutionSchema,
 	resolutionsSchema,
 	scrubJsonbText,

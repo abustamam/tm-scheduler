@@ -9,6 +9,10 @@ import type {
 } from "#/lib/easy-speak-import-plan";
 import { GUEST_KIND_LABELS, GUEST_KINDS } from "#/lib/guest-profile";
 import {
+	bundleTooBigMessage,
+	MAX_BUNDLE_BYTES,
+} from "#/lib/import-bundle-limit";
+import {
 	applyEasySpeakImport,
 	listEasySpeakImports,
 	previewEasySpeakImport,
@@ -100,8 +104,15 @@ export function ImportHistoryPanel({
 	};
 
 	const upload = useMutation({
-		mutationFn: async (file: File) =>
-			uploadEasySpeakBundle({ data: { clubId, text: await file.text() } }),
+		mutationFn: async (file: File) => {
+			// Refuse before reading: file.text() would pull the whole file into memory.
+			if (file.size > MAX_BUNDLE_BYTES) {
+				throw new Error(bundleTooBigMessage(file.size));
+			}
+			return uploadEasySpeakBundle({
+				data: { clubId, text: await file.text() },
+			});
+		},
 		onSuccess: (stored) => {
 			toast.success(
 				stored.reused

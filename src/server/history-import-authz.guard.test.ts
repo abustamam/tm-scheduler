@@ -85,12 +85,32 @@ describe("history-import.ts server fns are superadmin-only (#1051)", () => {
 		});
 	}
 
-	it("apply checks for a read-only impersonation session before it writes", () => {
-		const apply = DECLARATIONS.find((d) => d.name === "applyEasySpeakImport");
-		const handler = apply?.body.slice(apply.body.indexOf(".handler(")) ?? "";
-		const check = handler.indexOf('impersonation?.mode === "read_only"');
+	it.each([
+		["uploadEasySpeakBundle", "storeEasySpeakBundleLogic"],
+		["applyEasySpeakImport", "applyEasySpeakImportLogic"],
+	])("%s checks for a read-only impersonation session before it writes (%s)", (name, logicCall) => {
+		const declaration = DECLARATIONS.find((d) => d.name === name);
+		const handler =
+			declaration?.body.slice(declaration.body.indexOf(".handler(")) ?? "";
+		const gate = handler.indexOf("await requireSuperadmin(currentUser.id);");
+		const check = handler.indexOf(
+			"await assertNotReadOnlyImpersonation(currentUser.id);",
+		);
 		expect(check, "the read-only check is gone").toBeGreaterThan(-1);
-		expect(check).toBeLessThan(handler.search(/\bapplyEasySpeakImportLogic\(/));
+		expect(check).toBeGreaterThan(gate);
+		expect(check).toBeLessThan(
+			handler.search(new RegExp(`\\b${logicCall}\\(`)),
+		);
+	});
+
+	it("the read-only check refuses a read_only session and only that", () => {
+		const helper =
+			/async function assertNotReadOnlyImpersonation[\s\S]*?\n}\n/.exec(
+				SOURCE,
+			)?.[0];
+		expect(helper, "the helper is gone").toBeDefined();
+		expect(helper).toContain("getActiveImpersonationForUser(userId)");
+		expect(helper).toContain('impersonation?.mode === "read_only"');
 	});
 
 	it("takes the upload and the decisions by POST: a GET would put them in the URL", () => {

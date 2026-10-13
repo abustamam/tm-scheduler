@@ -88,6 +88,10 @@ import {
 	resolutionsSchema,
 	scrubJsonbText,
 } from "#/lib/easy-speak-import-plan";
+import {
+	bundleTooBigMessage,
+	MAX_BUNDLE_BYTES,
+} from "#/lib/import-bundle-limit";
 import { type ImportRefKind, importRefKindSchema } from "#/lib/import-refs";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
@@ -100,8 +104,21 @@ type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
 const SOURCE = "easy_speak" as const;
 
-/** The upload cap (#1051): 50 MB of JSON text. */
-export const MAX_BUNDLE_BYTES = 50 * 1024 * 1024;
+/**
+ * The archive gate, re-read INSIDE a write transaction, right after the club
+ * write lock: `applyEasySpeakImport` checks it once up front, but an apply
+ * writes for minutes, one transaction per meeting, and the club can be archived
+ * between any two of them. An archived club takes no more writes (ADR-0016).
+ */
+async function assertClubNotArchivedTx(tx: Tx, clubId: string): Promise<void> {
+	const [club] = await tx
+		.select({ archivedAt: clubs.archivedAt })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	if (!club) throw new Error("Club not found.");
+	if (isClubArchived(club)) throw new Error(CLUB_ARCHIVED_MESSAGE);
+}
 
 export const IMPORT_NOT_FOUND_MESSAGE =
 	"That import was not found for this club.";
@@ -111,8 +128,6 @@ export const PLAN_CHANGED_MESSAGE =
 	"The club or the bundle changed since this preview. Preview again before applying.";
 export const INTRODUCER_NOT_IN_CLUB_MESSAGE =
 	"The member who introduced this guest is not in this club.";
-
-const megabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 
 // ---------------------------------------------------------------------------
 // Upload
@@ -155,9 +170,7 @@ export async function storeEasySpeakBundle(input: {
 }): Promise<StoredImport> {
 	const bytes = Buffer.byteLength(input.text, "utf8");
 	if (bytes > MAX_BUNDLE_BYTES) {
-		throw new BundleRefusal(
-			`That file is ${megabytes(bytes)}; the limit is ${megabytes(MAX_BUNDLE_BYTES)}.`,
-		);
+		throw new BundleRefusal(bundleTooBigMessage(bytes));
 	}
 	// A `\u0000` escape parses fine and then aborts the jsonb insert: refuse it
 	// here with a sentence instead of a database error.
@@ -192,6 +205,7 @@ export async function storeEasySpeakBundle(input: {
 		.where(eq(clubs.id, input.clubId))
 		.limit(1);
 	if (!club) throw new Error("Club not found.");
+	if (isClubArchived(club)) throw new Error(CLUB_ARCHIVED_MESSAGE);
 
 	const find = () =>
 		db
@@ -512,24 +526,20 @@ function previewPerson(p: PlanPerson): ImportPreviewPerson {
  * in between).
  */
 export function planFingerprint(plan: ImportPlan): string {
-	return createHash("sha256")
-		.update(
-			JSON.stringify({
-				people: plan.people.map((p) => [p.key, p.outcome]),
-				roleDefinitions: plan.roleDefinitions.map((d) => [
-					d.planKey,
-					d.existingId,
-				]),
-				meetings: plan.meetings.map((m) => [
-					m.esMeetingId,
-					m.action,
-					m.existingMeetingId,
-					m.skip?.kind ?? null,
-				]),
-				counts: plan.counts,
-			}),
-		)
-		.digest("hex");
+	// Built apart from the hash call: `meeting-writers.guard.test.ts` reads any
+	// `.update(` that names `meetings` as a database write.
+	const canonical = JSON.stringify({
+		people: plan.people.map((p) => [p.key, p.outcome]),
+		roleDefinitions: plan.roleDefinitions.map((d) => [d.planKey, d.existingId]),
+		meetings: plan.meetings.map((m) => [
+			m.esMeetingId,
+			m.action,
+			m.existingMeetingId,
+			m.skip?.kind ?? null,
+		]),
+		counts: plan.counts,
+	});
+	return createHash("sha256").update(canonical).digest("hex");
 }
 
 /** The preview a superadmin confirms: the plan, summarised, plus any stored report. */
@@ -649,6 +659,7 @@ async function writePeopleAndRoles(
 ): Promise<Resolved> {
 	return db.transaction(async (tx) => {
 		await lockClubForWrite(tx, clubId);
+		await assertClubNotArchivedTx(tx, clubId);
 		const out: Resolved = {
 			members: new Map(),
 			guests: new Map(),
@@ -836,6 +847,7 @@ async function applyMeeting(
 	let applied = true;
 	await db.transaction(async (tx) => {
 		await lockClubForWrite(tx, clubId);
+		await assertClubNotArchivedTx(tx, clubId);
 
 		// -- The meeting row --------------------------------------------------
 		const joinUrl = normalizePresentationUrl(pm.joinUrl);
