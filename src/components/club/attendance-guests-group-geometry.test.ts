@@ -135,7 +135,7 @@ describe("guests-group geometry harness availability", () => {
 const HOME_CLUB = "Downtown Toastmasters International Club "
 	.repeat(4)
 	.slice(0, GUEST_TEXT_MAX);
-const CAPTION = `Guest speaker, ${HOME_CLUB}`;
+const CAPTION = `Visiting Toastmaster, ${HOME_CLUB}`;
 /** A caption that fits beside everything, even on the rail. */
 const SHORT_CAPTION = "Visiting Toastmaster";
 const NAME = "Nadia Farouk";

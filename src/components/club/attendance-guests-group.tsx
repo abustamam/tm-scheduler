@@ -192,9 +192,9 @@ export function AttendanceGuestsGroup({
 							</span>
 						)}
 						{g.caption ? (
-							/* The guest's kind caption (#1080) — "Guest speaker, Downtown
+							/* The guest's kind caption (#1080) — "Visiting Toastmaster, Downtown
 							 * Toastmasters" — beside the name, so the rail describes a guest
-							 * the way the agenda does (#1059). The string is `loadMinutes`'s,
+							 * the way the minutes do (#1059; the agenda no longer captions, #1208). The string is `loadMinutes`'s,
 							 * already one line; nothing is formatted here. OUTSIDE the name
 							 * control above: that control's accessible name is the PERSON,
 							 * and a club's name is not part of who to tap. Absent for a

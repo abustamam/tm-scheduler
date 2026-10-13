@@ -1548,33 +1548,23 @@ describe("speech-slot time agreement — deck ⇄ run sheet (#394)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// A guest's kind caption, print ⇄ deck (#1059)
+// A guest's marker, print ⇄ deck (#1208)
 // ---------------------------------------------------------------------------
 
 /**
- * The ONE stated difference between print and deck.
- *
- * Since #1059 a guest holding a role reads "Name · Guest speaker, <home club>".
- * The deck shows that string whole. So does every print surface, EXCEPT the
- * run-of-show rows of the grid and timing layouts: there the name shares its
- * line with other copy, no one-line box is safe across font metrics (see
- * `MarkerInPlaceOfCaption` in `meeting-agenda-print.tsx`), and the row prints a
- * Visitor's "Name · Guest" instead — in the DOM as on paper, nothing hidden.
- *
- * Stated exactly rather than loosened: on those two rows the printed holder is
- * the deck's string with the caption replaced by the marker, and everywhere
- * else — the editorial and spacious rows, and the roster on all four layouts —
- * it is the deck's string character for character.
+ * A guest holding a role reads "Name · Guest" on the deck and on every print
+ * surface, character for character. The earlier kind caption (and its one stated
+ * print/deck difference) is gone: a visiting Toastmaster and a Visitor are
+ * marked alike, and the expectation here changes if the visiting Toastmaster is
+ * ever given a marker of its own.
  */
-describe("guest caption — print ⇄ deck (#1059)", () => {
-	const CAPTION = "Guest speaker, Downtown Toastmasters";
-	const guestSpeaker: AgendaSlot = {
+describe("guest marker — print ⇄ deck (#1208)", () => {
+	const guestHolder: AgendaSlot = {
 		...speaker2,
 		assigneeName: "Ben Carter",
 		assigneeIsGuest: true,
-		assigneeGuestCaption: CAPTION,
 	};
-	const slots = FULL.map((s) => (s.id === speaker2.id ? guestSpeaker : s));
+	const slots = FULL.map((s) => (s.id === speaker2.id ? guestHolder : s));
 	const config: RunOfShowConfig = { geIntroducesFunctionaries: false };
 
 	const deckSpeaker = (() => {
@@ -1633,27 +1623,16 @@ describe("guest caption — print ⇄ deck (#1059)", () => {
 			.replace(/&#x27;/g, "'");
 	}
 
-	it("projects the whole caption on the deck", () => {
-		expect(deckSpeaker).toBe(`Ben Carter · ${CAPTION}`);
+	const deck = `Ben Carter · ${GUEST_MARKER}`;
+
+	it("projects the marker on the deck", () => {
+		expect(deckSpeaker).toBe(deck);
 	});
 
-	const deck = `Ben Carter · ${CAPTION}`;
-	const marker = deck.replace(` · ${CAPTION}`, ` · ${GUEST_MARKER}`);
-
-	for (const layout of ["editorial", "spacious"] as const)
-		it(`${layout}: the run-of-show row prints the deck's string exactly`, () => {
-			expect(printedText(layout)).toContain(`Speaker 2 · ${deck}`);
-		});
-
-	for (const layout of ["grid", "timing"] as const)
-		it(`${layout}: the run-of-show row prints the deck's string with the caption replaced by "${GUEST_MARKER}"`, () => {
-			const text = printedText(layout);
-			expect(text).toContain(`Speaker 2 · ${marker}`);
-			expect(text).not.toContain(`Speaker 2 · ${deck}`);
-		});
-
 	for (const layout of ["editorial", "spacious", "grid", "timing"] as const)
-		it(`${layout}: the roster prints the deck's string exactly`, () => {
-			expect(printedText(layout)).toContain(`Speaker 2${deck}`);
+		it(`${layout}: the run-of-show row and the roster print the deck's string exactly`, () => {
+			const text = printedText(layout);
+			expect(text).toContain(`Speaker 2 · ${deck}`);
+			expect(text).toContain(`Speaker 2${deck}`);
 		});
 });

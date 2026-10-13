@@ -13,6 +13,7 @@ import {
 	GUEST_KINDS,
 	GUEST_TEXT_MAX,
 	HOME_CLUB_TOO_LONG_MESSAGE,
+	readLegacyGuestKind,
 } from "#/lib/guest-profile";
 
 const uuid = z.string().uuid();
@@ -98,7 +99,10 @@ export const updateGuestProfileSchema = z
 	.object({
 		clubId: uuid,
 		guestId: uuid,
-		kind: z.enum(GUEST_KINDS),
+		// `guest_speaker` is accepted as an INPUT alias for `visiting_toastmaster`
+		// (#1208) so a tab opened before the deploy does not fail its save; nothing
+		// stores or returns it.
+		kind: z.preprocess(readLegacyGuestKind, z.enum(GUEST_KINDS)),
 		homeClub: z.string().trim().nullable().optional(),
 		introducedByMemberId: uuid.nullable().optional(),
 	})

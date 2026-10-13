@@ -63,7 +63,7 @@ function vpm(opts: VpmOptions = {}): string {
 	const { lane = true, more = true, resend = true } = opts;
 	const captions = opts.captions ?? [
 		"Visiting Toastmaster, Bayview",
-		"Guest speaker, Seaport Speakers",
+		"Visiting Toastmaster, Seaport Speakers",
 	];
 	return `<main><div id="guest-pipeline">${captions
 		.map((c) => `<div data-slot="guest-kind-caption" class="x">${c}</div>`)
@@ -95,17 +95,14 @@ describe("checkVpmFeatures", () => {
 
 	it("fails when a guest kind has no caption, naming it", () => {
 		expect(
-			checkVpmFeatures(vpm({ captions: ["Guest speaker, Seaport Speakers"] })),
+			checkVpmFeatures(vpm({ captions: ["Guest"] })),
 		).toMatch(/"Visiting Toastmaster" caption/);
-		expect(
-			checkVpmFeatures(vpm({ captions: ["Visiting Toastmaster, Bayview"] })),
-		).toMatch(/"Guest speaker" caption/);
 	});
 
 	it("does not take the label in prose for a caption", () => {
 		const html = vpm({ captions: [] }).replace(
 			"</div></main>",
-			"<p>Visiting Toastmaster, Guest speaker</p></div></main>",
+			"<p>Visiting Toastmaster, Seaport Speakers</p></div></main>",
 		);
 		expect(checkVpmFeatures(html)).toMatch(/shows no "Visiting Toastmaster"/);
 	});
@@ -155,10 +152,10 @@ describe("checkVpmHydrated", () => {
 });
 
 describe("checkAgendaFeatures", () => {
-	it("passes a roster naming a guest speaker", () => {
+	it("passes a roster naming a guest among members", () => {
 		expect(
 			checkAgendaFeatures(
-				"<span>Theo Marchetti · Guest speaker, Seaport Speakers</span>",
+				"<span>Ana Ruiz</span><span>Theo Marchetti · Guest</span>",
 			),
 		).toBeNull();
 	});
@@ -166,16 +163,14 @@ describe("checkAgendaFeatures", () => {
 	it("passes a roster naming a visiting Toastmaster", () => {
 		expect(
 			checkAgendaFeatures(
-				"<span>Imani Clarke · Visiting Toastmaster, Bayview</span>",
+				"<span>Imani Clarke · Guest</span>",
 			),
 		).toBeNull();
 	});
 
-	it("fails when the only guest is a Visitor, who is captioned just 'Guest'", () => {
+	it("fails when no guest is on the agenda", () => {
 		expect(
-			checkAgendaFeatures(
-				"<span>Ben Carter · Guest</span><p>Guest speaker</p>",
-			),
-		).toMatch(/no guest kind caption/);
+			checkAgendaFeatures("<span>Ben Carter</span><p>Guest speaker</p>"),
+		).toMatch(/no guest marker/);
 	});
 });

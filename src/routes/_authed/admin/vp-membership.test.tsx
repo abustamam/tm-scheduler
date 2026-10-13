@@ -200,7 +200,7 @@ describe("VP Membership — kind, Brought by and Visitors introduced (#1050)", (
 				rows: [
 					{
 						guestId: ADA,
-						kind: "guest_speaker",
+						kind: "visiting_toastmaster",
 						homeClub: "Laguna Speakers",
 						introducedByMemberId: SAM,
 						introducedByName: "Sam Officer",
@@ -217,7 +217,7 @@ describe("VP Membership — kind, Brought by and Visitors introduced (#1050)", (
 			},
 		);
 		const ada = within(cardTextColumn("Ada Guest"));
-		expect(ada.getByText("Guest speaker, Laguna Speakers")).toBeTruthy();
+		expect(ada.getByText("Visiting Toastmaster, Laguna Speakers")).toBeTruthy();
 		expect(ada.getByText("Brought by Sam Officer")).toBeTruthy();
 		// A Visitor gets no caption, but still their introducer.
 		const ben = cardTextColumn("Ben Visitor");

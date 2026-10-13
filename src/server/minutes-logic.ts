@@ -102,9 +102,10 @@ export interface MinutesGuestRow {
 	 *  `MinutesMemberRow.mode`. */
 	mode?: AttendanceMode | null;
 	/**
-	 * The guest's kind caption (#1080) — "Guest speaker, Downtown Toastmasters"
-	 * — from `guestKindCaption`, the one formatter the agenda uses (#1059), so
-	 * the roll-mode Guests group and the agenda describe a guest alike. Held to
+	 * The guest's kind caption (#1080) — "Visiting Toastmaster, Downtown
+	 * Toastmasters" — from `guestKindCaption`, the one formatter the minutes and
+	 * VP Membership share (the agenda stopped captioning in #1208), so the
+	 * roll-mode Guests group and the minutes describe a guest alike. Held to
 	 * ONE line here (see `oneLineGuestCaption`), so every reader gets the same
 	 * string. A Visitor has no caption, and `loadMinutes` OMITS the key rather
 	 * than writing null, the way it does `mode`. Optional for the reason `mode`
@@ -286,8 +287,7 @@ export async function getMeetingStatus(
  *
  * NOT a second formatter — the words are `guestKindCaption`'s, and only the
  * whitespace is touched. A home club is free text and may carry line breaks
- * (#1081), and this string sits inside a badge that is one line by design; the
- * agenda collapses the same way in `assigneeDisplayName` (`#/lib/agenda`).
+ * (#1081), and this string sits inside a badge that is one line by design.
  * Done HERE, where the row is built, so the rail, the offline snapshot and
  * anything else reading the row get the identical string. Null for a Visitor,
  * and for a caption that collapses to nothing.
@@ -438,7 +438,7 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 			name: sql<string | null>`coalesce(${ttMember.name}, ${ttGuest.name})`,
 			topic: tableTopicsSpeakers.topic,
 			sortOrder: tableTopicsSpeakers.sortOrder,
-			// A guest speaker's kind and home club, read only for the Guests
+			// A guest's kind and home club, read only for the Guests
 			// group's `caption` (#1080); `MinutesTableTopicsRow` does not carry them.
 			guestKind: ttGuest.kind,
 			guestHomeClub: ttGuest.homeClub,

@@ -28,7 +28,6 @@ import {
 	speeches,
 } from "#/db/schema";
 import { resolveEvaluatorLinks } from "#/lib/agenda";
-import { guestKindCaption } from "#/lib/guest-profile";
 
 /** The pool or a transaction on it. Spelled out rather than imported from
  *  `meeting-templates-logic`, which would pull that module into every reader
@@ -86,10 +85,6 @@ export async function loadMeetingSlots(
 			assigneeName: sql<
 				string | null
 			>`coalesce(${assignee.name}, ${guestAssignee.name})`,
-			// A guest holder's kind and home club (#1046), read only to build
-			// `assigneeGuestCaption` below and then dropped from the row.
-			assigneeGuestKind: guestAssignee.kind,
-			assigneeGuestHomeClub: guestAssignee.homeClub,
 			speechTitle: speeches.title,
 			pathwayPath: speeches.pathwayPath,
 			projectName: speeches.projectName,
@@ -113,27 +108,12 @@ export async function loadMeetingSlots(
 		.where(eq(roleSlots.meetingId, meetingId))
 		.orderBy(asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex));
 
-	// Flag guest-held slots so every read path can render the "· Guest" marker,
-	// and caption a non-visitor guest (#1059) — "Guest speaker, Downtown
-	// Toastmasters" — through the one formatter VP Membership uses. Null for a
-	// member, an open slot and a Visitor, who all read exactly as before.
-	//
-	// A Visiting Toastmaster is not captioned either, for now: "Visiting
-	// Toastmaster, <home club>" repeated on every row they hold crowded the
-	// printed agenda, and a short marker with a legend is the planned
-	// replacement. They read as "· Guest", like a Visitor.
-	const rowsWithGuestFlag = rows.map(
-		({ assigneeGuestKind, assigneeGuestHomeClub, ...r }) => ({
-			...r,
-			assigneeIsGuest: r.assigneeGuestId != null,
-			assigneeGuestCaption:
-				r.assigneeGuestId != null &&
-				assigneeGuestKind != null &&
-				assigneeGuestKind !== "visiting_toastmaster"
-					? guestKindCaption(assigneeGuestKind, assigneeGuestHomeClub)
-					: null,
-		}),
-	);
+	// Flag guest-held slots so every read path can render the "· Guest" marker.
+	// A visiting Toastmaster and a Visitor both read "Name · Guest" (#1208).
+	const rowsWithGuestFlag = rows.map((r) => ({
+		...r,
+		assigneeIsGuest: r.assigneeGuestId != null,
+	}));
 
 	// Resolve which speaker each evaluator slot evaluates.
 	return resolveEvaluatorLinks(rowsWithGuestFlag);

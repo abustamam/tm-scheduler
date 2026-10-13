@@ -15,6 +15,7 @@
  *     the screenshot is taken from. `NudgeButtons` renders nothing until it
  *     has mounted and the dashboard knows the browser's origin.
  */
+import { GUEST_MARKER } from "#/lib/agenda";
 import { GUEST_KIND_LABELS } from "#/lib/guest-profile";
 import {
 	sliceById,
@@ -91,10 +92,9 @@ export function checkVpmFeatures(html: string): string | null {
 	const captions = [
 		...section.matchAll(/data-slot="guest-kind-caption"[^>]*>([^<]*)</g),
 	].map((m) => m[1] ?? "");
-	for (const kind of ["visiting_toastmaster", "guest_speaker"] as const) {
-		if (!captions.some((c) => c.startsWith(GUEST_KIND_LABELS[kind]))) {
-			return `#${VPM_SECTION_ID} shows no "${GUEST_KIND_LABELS[kind]}" caption. Re-seed (bun run db:seed).`;
-		}
+	const label = GUEST_KIND_LABELS.visiting_toastmaster;
+	if (!captions.some((c) => c.startsWith(label))) {
+		return `#${VPM_SECTION_ID} shows no "${label}" caption. Re-seed (bun run db:seed).`;
 	}
 	return null;
 }
@@ -119,18 +119,13 @@ export function checkVpmHydrated(html: string): string | null {
 }
 
 /**
- * The printed agenda: a guest who is a visiting Toastmaster or a guest speaker
- * holds a role, so the roster names their kind (#1059). Read from the fetched
- * HTML of `/print`. A caption is "Name · Guest speaker, Home club", and a
- * Visitor's is "Name · Guest", which does not count.
+ * The printed agenda: a guest who holds a role is marked "Name · Guest" (#151).
+ * Since #1208 every guest, a visiting Toastmaster included, reads that way, so
+ * the marker is what this looks for. Read from the fetched HTML of `/print`.
  */
 export function checkAgendaFeatures(html: string): string | null {
-	const labels = [
-		GUEST_KIND_LABELS.visiting_toastmaster,
-		GUEST_KIND_LABELS.guest_speaker,
-	];
-	if (!labels.some((label) => html.includes(` · ${label}`))) {
-		return `the printed agenda shows no guest kind caption (${labels.join(" or ")}): no visiting Toastmaster or guest speaker holds a role on it. Re-seed (bun run db:seed).`;
+	if (!html.includes(` · ${GUEST_MARKER}`)) {
+		return `the printed agenda shows no guest marker ("Name · ${GUEST_MARKER}"): no guest holds a role on it. Re-seed (bun run db:seed).`;
 	}
 	return null;
 }

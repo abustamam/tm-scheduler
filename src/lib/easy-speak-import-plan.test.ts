@@ -121,11 +121,29 @@ describe("buildImportPlan on the B fixture", () => {
 		expect(plan.canApply).toBe(false);
 	});
 
+	// protects=Easy-Speak's "Guest Speaker" section imports as `visiting_toastmaster`
+	// (#1208), as does its other-club visitor, and a plain visitor stays `visitor`;
+	// fails_when=a guest speaker maps to a kind that is not ours (the retired
+	// `guest_speaker`) or to `visitor`;
+	// no_claim=the kind is the plan's; whether the apply writes it is the history
+	// import integration test's, and the stored bundle's categories are
+	// Easy-Speak's own strings in a fixture file.
 	it("makes a person only in guest categories a guest, with the kind the category gives", () => {
-		const plan = buildImportPlan(withGuestSpeaker(), ctx());
+		const bundle = withGuestSpeaker();
+		bundle.meetings
+			.find((m) => m.esMeetingId === "644304")
+			?.guests.push({
+				who: { esUserId: "900099", name: "Quin Otherclub" },
+				category: "visitor_other_club",
+			});
+		const plan = buildImportPlan(bundle, ctx());
+		expect(outcomeOf(plan, "900099")).toMatchObject({
+			status: "guest",
+			kind: "visiting_toastmaster",
+		});
 		expect(outcomeOf(plan, "900025")).toMatchObject({
 			status: "guest",
-			kind: "guest_speaker",
+			kind: "visiting_toastmaster",
 			via: "category",
 		});
 		expect(outcomeOf(plan, "900060")).toMatchObject({
@@ -406,6 +424,38 @@ describe("personResolutionSchema", () => {
 			action: "guest",
 			kind: "visitor",
 		});
+	});
+});
+
+describe("a resolutions map saved before #1208", () => {
+	// protects=an officer's saved import decisions survive the deploy: a stored
+	// map holding the retired `guest_speaker` kind still parses, every entry kept,
+	// the old one read as `visiting_toastmaster` (`parseImportState` returns {} for
+	// the whole map when the schema fails, which would silently wipe them all);
+	// fails_when=the retired kind fails validation, or the map loses an entry;
+	// no_claim=the database read in `parseImportState`, which just feeds the stored
+	// jsonb to this schema; the stored value is not rewritten.
+	it("keeps every entry and reads guest_speaker as visiting_toastmaster", () => {
+		const memberId = "2f0f4f5e-6d8b-4c1e-9d0a-1b2c3d4e5f60";
+		const stored = {
+			"es:1": { action: "member", memberId },
+			"es:2": { action: "guest", kind: "guest_speaker" },
+			"es:3": { action: "guest", kind: "visitor" },
+			"es:4": { action: "skip", reason: "left the club" },
+		};
+		const parsed = resolutionsSchema.safeParse(stored);
+		expect(parsed.success).toBe(true);
+		expect(parsed.data).toEqual({
+			...stored,
+			"es:2": { action: "guest", kind: "visiting_toastmaster" },
+		});
+	});
+
+	it("still refuses a kind that never existed", () => {
+		expect(
+			personResolutionSchema.safeParse({ action: "guest", kind: "vip" })
+				.success,
+		).toBe(false);
 	});
 });
 

@@ -26,7 +26,7 @@ vi.mock("#/server/guests", () => ({
 
 import { AttendanceGuestsGroup } from "#/components/club/attendance-guests-group";
 
-const CAPTION = "Guest speaker, Downtown Toastmasters";
+const CAPTION = "Visiting Toastmaster, Downtown Toastmasters";
 
 /** The capability an officer arrives with (#727): the permission AND the
  *  stored fields the dialog would prefill from. Only its PRESENCE matters
@@ -78,7 +78,7 @@ describe("AttendanceGuestsGroup guest kind caption (#1080)", () => {
 	// never registers; every component suite in this repo carries this line.
 	afterEach(() => cleanup());
 
-	it("reads 'Guest speaker, <home club>' beside a guest who holds a role (criterion 1)", () => {
+	it("reads 'Visiting Toastmaster, <home club>' beside a guest who holds a role (criterion 1)", () => {
 		renderGuests([
 			{ guestId: "g1", name: "Nadia Farouk", fromRole: true, caption: CAPTION },
 		]);

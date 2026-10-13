@@ -391,9 +391,9 @@ export async function buildFixtureClub(
 		const member = (n: string) => harbor.memberByName.get(n)!;
 
 		// Guests, one of each kind (#1046), two of them brought by a member (#1050).
-		// The visiting Toastmaster and the guest speaker take roles on the next
-		// meeting below, which is what puts a kind caption on the printed agenda
-		// (#1059). A Visitor reads exactly as before.
+		// The visiting Toastmasters take roles on the next meeting below, which
+		// puts the "· Guest" marker on the printed agenda (#151, #1208). A guest
+		// speaker is a guest holding a speech, so they are one of these.
 		const guestIds = new Map<string, string>();
 		for (const g of [
 			{
@@ -421,7 +421,7 @@ export async function buildFixtureClub(
 				name: "Theo Marchetti",
 				email: "theo.marchetti@example.com",
 				phone: seedPhone(52),
-				kind: "guest_speaker" as const,
+				kind: "visiting_toastmaster" as const,
 				homeClub: "Seaport Speakers",
 				introducedByMemberId: member(adminName),
 			},

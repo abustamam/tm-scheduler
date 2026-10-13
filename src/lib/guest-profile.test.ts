@@ -12,6 +12,7 @@ import {
 } from "#/server/guest-pipeline-schemas";
 import {
 	countBroughtByMember,
+	GUEST_KIND_LABELS,
 	GUEST_KINDS,
 	GUEST_TEXT_MAX,
 	guestKindCaption,
@@ -24,23 +25,63 @@ describe("GUEST_KINDS", () => {
 	it("is exactly the database enum's values, in order", () => {
 		expect([...GUEST_KINDS]).toEqual(guestKindEnum.enumValues);
 	});
+
+	// protects=the two kinds a guest can have, and the labels every select and
+	// caption reads them by: the stored value `visitor` reads "Guest" (#1208);
+	// fails_when=`guest_speaker` is selectable again, or `visitor` reads "Visitor";
+	// no_claim=the labels' placement in the dialog and import preview, which their
+	// own component tests cover.
+	it("is two kinds, and the stored visitor value reads 'Guest'", () => {
+		expect([...GUEST_KINDS]).toEqual(["visitor", "visiting_toastmaster"]);
+		expect(GUEST_KIND_LABELS).toEqual({
+			visitor: "Guest",
+			visiting_toastmaster: "Visiting Toastmaster",
+		});
+	});
 });
 
 describe("updateGuestProfileSchema", () => {
 	const base = { clubId: randomUUID(), guestId: randomUUID() };
+
+	// protects=a tab opened before #1208 still saves: it sends the retired
+	// `guest_speaker`, which the schema reads as `visiting_toastmaster` (input
+	// alias, one release), so the save is stored as the kind the row was folded to;
+	// fails_when=the schema refuses `guest_speaker` (an open tab's save would fail
+	// across the deploy), or lets the old value through unmapped (it would then 500
+	// at the database, which no longer has it), or starts accepting any string;
+	// no_claim=the database's own refusal of `guest_speaker`, which the
+	// integration test covers; the alias is input-only, nothing reads it back.
+	it("reads the retired guest_speaker as visiting_toastmaster, and still refuses an unknown kind", () => {
+		const parsed = updateGuestProfileSchema.parse({
+			...base,
+			kind: "guest_speaker",
+			homeClub: "Laguna Speakers",
+			introducedByMemberId: null,
+		});
+		expect(parsed.kind).toBe("visiting_toastmaster");
+		expect(parsed.homeClub).toBe("Laguna Speakers");
+		expect(
+			updateGuestProfileSchema.safeParse({
+				...base,
+				kind: "member",
+				homeClub: null,
+				introducedByMemberId: null,
+			}).success,
+		).toBe(false);
+	});
 
 	it("accepts all three fields, trimming the home club", () => {
 		const introducer = randomUUID();
 		expect(
 			updateGuestProfileSchema.parse({
 				...base,
-				kind: "guest_speaker",
+				kind: "visiting_toastmaster",
 				homeClub: "  Laguna Speakers  ",
 				introducedByMemberId: introducer,
 			}),
 		).toEqual({
 			...base,
-			kind: "guest_speaker",
+			kind: "visiting_toastmaster",
 			homeClub: "Laguna Speakers",
 			introducedByMemberId: introducer,
 		});
@@ -106,16 +147,18 @@ describe("normalizeHomeClub", () => {
 	});
 
 	it("trims it, and a blank one is null", () => {
-		expect(normalizeHomeClub("guest_speaker", "  Downtown  ")).toBe("Downtown");
+		expect(normalizeHomeClub("visiting_toastmaster", "  Downtown  ")).toBe(
+			"Downtown",
+		);
 		expect(normalizeHomeClub("visiting_toastmaster", "   ")).toBeNull();
 		expect(normalizeHomeClub("visiting_toastmaster", null)).toBeNull();
 	});
 });
 
 describe("guestKindCaption", () => {
-	it("reads 'Guest speaker, <home club>'", () => {
-		expect(guestKindCaption("guest_speaker", "Laguna Speakers")).toBe(
-			"Guest speaker, Laguna Speakers",
+	it("reads 'Visiting Toastmaster, <home club>'", () => {
+		expect(guestKindCaption("visiting_toastmaster", "Laguna Speakers")).toBe(
+			"Visiting Toastmaster, Laguna Speakers",
 		);
 	});
 
@@ -158,7 +201,7 @@ describe("countBroughtByMember", () => {
 
 describe("profileFieldsChanged", () => {
 	const loaded = {
-		kind: "guest_speaker" as const,
+		kind: "visiting_toastmaster" as const,
 		homeClub: "Laguna",
 		introducedByMemberId: "m1",
 	};
@@ -177,9 +220,9 @@ describe("profileFieldsChanged", () => {
 	});
 
 	it("is true when any one of the three changed", () => {
-		expect(
-			profileFieldsChanged(loaded, { ...loaded, kind: "visiting_toastmaster" }),
-		).toBe(true);
+		expect(profileFieldsChanged(loaded, { ...loaded, kind: "visitor" })).toBe(
+			true,
+		);
 		expect(profileFieldsChanged(loaded, { ...loaded, homeClub: "Other" })).toBe(
 			true,
 		);

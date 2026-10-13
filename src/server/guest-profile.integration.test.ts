@@ -107,12 +107,12 @@ describe.skipIf(!hasTestDb)(
 			await applyUpdateGuestProfile({
 				clubId: seed.clubId,
 				guestId,
-				kind: "guest_speaker",
+				kind: "visiting_toastmaster",
 				homeClub: "Laguna Speakers #1234",
 				introducedByMemberId: seed.memberId,
 			});
 			expect(await stored(guestId)).toEqual({
-				kind: "guest_speaker",
+				kind: "visiting_toastmaster",
 				homeClub: "Laguna Speakers #1234",
 				introducedByMemberId: seed.memberId,
 			});
@@ -215,7 +215,7 @@ describe.skipIf(!hasTestDb)(
 				const write = applyUpdateGuestProfile({
 					clubId: seed.clubId,
 					guestId,
-					kind: "guest_speaker",
+					kind: "visiting_toastmaster",
 					homeClub: "Elsewhere",
 					introducedByMemberId: departing.id,
 				});
@@ -309,7 +309,7 @@ describe.skipIf(!hasTestDb)(
 				applyUpdateGuestProfile({
 					clubId: seed.clubId,
 					guestId,
-					kind: "guest_speaker",
+					kind: "visiting_toastmaster",
 					homeClub: "x".repeat(121),
 				}),
 			).rejects.toThrow(HOME_CLUB_TOO_LONG_MESSAGE);
@@ -321,7 +321,7 @@ describe.skipIf(!hasTestDb)(
 			await applyUpdateGuestProfile({
 				clubId: seed.clubId,
 				guestId,
-				kind: "guest_speaker",
+				kind: "visiting_toastmaster",
 				homeClub: `${"x".repeat(120)}   `,
 			});
 			expect((await stored(guestId))?.homeClub).toHaveLength(120);
@@ -338,7 +338,7 @@ describe.skipIf(!hasTestDb)(
 				applyUpdateGuestProfile({
 					clubId: seed.clubId,
 					guestId,
-					kind: "guest_speaker",
+					kind: "visiting_toastmaster",
 					homeClub: "Elsewhere",
 					introducedByMemberId: other.memberId,
 				}),
@@ -411,7 +411,7 @@ describe.skipIf(!hasTestDb)(
 				applyUpdateGuestProfile({
 					clubId: seed.clubId,
 					guestId: theirs,
-					kind: "guest_speaker",
+					kind: "visiting_toastmaster",
 					introducedByMemberId: seed.memberId,
 				}),
 			).rejects.toThrow(/not found in this club/);
@@ -549,3 +549,73 @@ describe.skipIf(!hasTestDb)(
 		});
 	},
 );
+
+describe.skipIf(!hasTestDb)("the guest_kind enum (#1208)", () => {
+	let seed: SeededClub;
+
+	beforeEach(async () => {
+		seed = await seedClub();
+	});
+
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	// protects=the database holds exactly two guest kinds, in order, once #1208's
+	// migration has run (CI builds this database with `db:migrate`: 0104 adds
+	// `guest_speaker`, 0121 removes it; a worktree's database is `db:push`-synced
+	// from schema.ts and never had it), so on both this proves the final enum, not
+	// the migration's rewrite of old rows (that is the PR body's scratch-database
+	// check);
+	// fails_when=`guest_speaker` is back in the enum, or a kind is added unnoticed;
+	// no_claim=what a database holds that migrated through 0121 with rows of the old
+	// kind in it: neither build has any.
+	it("has exactly the values visitor and visiting_toastmaster", async () => {
+		const { rows } = await testDb.execute<{ value: string }>(
+			sql`select unnest(enum_range(null::guest_kind))::text as value`,
+		);
+		expect(rows.map((r) => r.value)).toEqual([
+			"visitor",
+			"visiting_toastmaster",
+		]);
+	});
+
+	// protects=a guest row written with no kind is a `visitor` (the column's
+	// default), so a capture path that omits it stays a plain Guest;
+	// fails_when=the default is dropped (insert fails) or becomes another kind;
+	// no_claim=the default survives the migration's drop and recreate of the
+	// type, which the PR body's scratch-database run covers.
+	it("gives a guest written with no kind the visitor kind", async () => {
+		const [row] = await testDb
+			.insert(guests)
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: `No Kind ${randomUUID()}` },
+					testDb,
+				),
+			)
+			.returning({ kind: guests.kind });
+		expect(row?.kind).toBe("visitor");
+	});
+
+	// protects=nothing can write the retired `guest_speaker` value any more: the
+	// database refuses it, whatever the application layer does;
+	// fails_when=the enum value is restored;
+	// no_claim=the application schema, which reads the old value as
+	// `visiting_toastmaster` on input only (guest-profile.test.ts).
+	it("refuses a guest_speaker row", async () => {
+		const withPerson = await withGuestPerson(
+			{ clubId: seed.clubId, name: `Retired ${randomUUID()}` },
+			testDb,
+		);
+		await expect(
+			testDb.execute(
+				sql`insert into guests (club_id, name, person_id, kind) values (${seed.clubId}, ${withPerson.name}, ${withPerson.personId}, 'guest_speaker')`,
+			),
+		).rejects.toThrow();
+		const { rows } = await testDb.execute<{ n: number }>(
+			sql`select count(*)::int as n from guests where club_id = ${seed.clubId}`,
+		);
+		expect(rows[0]?.n).toBe(0);
+	});
+});
