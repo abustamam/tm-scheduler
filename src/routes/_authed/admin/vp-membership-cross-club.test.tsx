@@ -17,7 +17,9 @@
 // vp-membership.test.tsx: mock the server-fn module, stub `Route.useLoaderData`,
 // render `Route.options.component`.
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GuestLinkDialog } from "#/components/club/guest-link-dialog";
 import {
 	addGuestToClub,
 	linkGuestAcrossClubs,
@@ -240,6 +242,8 @@ describe("guest card cross-club menu (#1127)", () => {
 	};
 	const EXPECTED = {
 		absorbed: "this" as const,
+		keeperPersonId: "55555555-5555-4555-8555-555555555555",
+		absorbedPersonId: "66666666-6666-4666-8666-666666666666",
 		basis: {
 			thisEmail: null,
 			thisPhone: "",
@@ -248,9 +252,13 @@ describe("guest card cross-club menu (#1127)", () => {
 		},
 	};
 
-	async function openLinkConfirm() {
+	async function openLinkConfirm(
+		clubs: { clubId: string; name: string }[] = [
+			TWO_CLUBS[0] as (typeof TWO_CLUBS)[0],
+		],
+	) {
 		vi.mocked(listGuestLinkCandidates).mockResolvedValue([CANDIDATE]);
-		await renderRoute([guestRow()], [TWO_CLUBS[0] as (typeof TWO_CLUBS)[0]]);
+		await renderRoute([guestRow()], clubs);
 		openMoreMenu("Ada Guest");
 		fireEvent.click(
 			await screen.findByRole("menuitem", { name: /same person as/i }),
@@ -312,5 +320,121 @@ describe("guest card cross-club menu (#1127)", () => {
 		).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
 		expect(linkGuestAcrossClubs).not.toHaveBeenCalled();
+	});
+
+	// protects=with 2+ other admin clubs the dialog offers a club select, searches the club picked there, and previews and links against THAT club; fails_when=the select is not rendered, its change is ignored, or the first club is still sent; no_claim=the one-club label (the tests above)
+	it("with 2+ other admin clubs, searches, previews and links the club picked in the select", async () => {
+		vi.mocked(previewGuestLink).mockResolvedValue({
+			ok: true,
+			absorbed: "this",
+			name: "Ada Other",
+			email: "ada@other.example",
+			phone: null,
+			expected: EXPECTED,
+		});
+		vi.mocked(linkGuestAcrossClubs).mockResolvedValue({ ok: true });
+		vi.mocked(listGuestLinkCandidates).mockResolvedValue([CANDIDATE]);
+		await renderRoute([guestRow()], TWO_CLUBS);
+		openMoreMenu("Ada Guest");
+		fireEvent.click(
+			await screen.findByRole("menuitem", { name: /same person as/i }),
+		);
+		const select = (await screen.findByLabelText(
+			"Club to search",
+		)) as HTMLSelectElement;
+		expect(
+			Array.from(select.options).map((o) => [o.value, o.textContent]),
+		).toEqual([
+			[OTHER_1, "Harbor Speakers"],
+			[OTHER_2, "Hilltop Speakers"],
+		]);
+		expect(select.value).toBe(OTHER_1);
+		await screen.findByText("Ada Other", {}, { timeout: 3000 });
+		fireEvent.change(select, { target: { value: OTHER_2 } });
+		await waitFor(
+			() =>
+				expect(listGuestLinkCandidates).toHaveBeenLastCalledWith({
+					data: {
+						clubId: CLUB,
+						guestId: GUEST,
+						otherClubId: OTHER_2,
+						q: "",
+					},
+				}),
+			{ timeout: 3000 },
+		);
+		fireEvent.click(
+			await screen.findByText("Ada Other", {}, { timeout: 3000 }),
+		);
+		await waitFor(() =>
+			expect(previewGuestLink).toHaveBeenCalledWith({
+				data: {
+					clubId: CLUB,
+					guestId: GUEST,
+					otherClubId: OTHER_2,
+					otherGuestId: CANDIDATE.guestId,
+				},
+			}),
+		);
+		fireEvent.click(await screen.findByRole("button", { name: "Link" }));
+		await waitFor(() =>
+			expect(linkGuestAcrossClubs).toHaveBeenCalledWith({
+				data: {
+					clubId: CLUB,
+					guestId: GUEST,
+					otherClubId: OTHER_2,
+					otherGuestId: CANDIDATE.guestId,
+					expected: EXPECTED,
+				},
+			}),
+		);
+	});
+
+	// protects=when the chosen club leaves the list, the dialog falls back to the first club left and searches that one; fails_when=the resync effect is dropped (the picker keeps searching a club the viewer no longer runs); no_claim=how the list shrinks in the real route (a refetch after a seat change)
+	it("falls back to the first club when the chosen one leaves the list", async () => {
+		vi.mocked(listGuestLinkCandidates).mockResolvedValue([CANDIDATE]);
+		function Host() {
+			const [clubs, setClubs] = useState(TWO_CLUBS);
+			return (
+				<>
+					<button
+						type="button"
+						onClick={() => setClubs([TWO_CLUBS[0] as (typeof TWO_CLUBS)[0]])}
+					>
+						shrink
+					</button>
+					<GuestLinkDialog
+						guestId={GUEST}
+						guestName="Ada Guest"
+						clubId={CLUB}
+						otherClubs={clubs}
+						open
+						onOpenChange={() => {}}
+					/>
+				</>
+			);
+		}
+		await renderUnderMemoryRouter(<Host />);
+		const select = (await screen.findByLabelText(
+			"Club to search",
+		)) as HTMLSelectElement;
+		fireEvent.change(select, { target: { value: OTHER_2 } });
+		expect(select.value).toBe(OTHER_2);
+		fireEvent.click(
+			screen.getByRole("button", { name: "shrink", hidden: true }),
+		);
+		expect(await screen.findByText("From Harbor Speakers")).toBeTruthy();
+		await waitFor(
+			() =>
+				expect(listGuestLinkCandidates).toHaveBeenLastCalledWith({
+					data: {
+						clubId: CLUB,
+						guestId: GUEST,
+						otherClubId: OTHER_1,
+						q: "",
+					},
+				}),
+			{ timeout: 3000 },
+		);
 	});
 });

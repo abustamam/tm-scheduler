@@ -53,6 +53,7 @@ const {
 	applyLinkGuestAcrossClubs,
 	applySeparateGuest,
 	CLUB_SET_MOVED_MESSAGE,
+	GUEST_LINK_ALREADY_HERE_MESSAGE,
 	GUEST_LINK_ALREADY_SAME_MESSAGE,
 	GUEST_LINK_BOTH_HAVE_HISTORY_MESSAGE,
 	GUEST_LINK_CHANGED_MESSAGE,
@@ -1009,6 +1010,14 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			};
 		}
 
+		/** An `expected` no stored pair matches, for links refused before or by the stale check. */
+		const ANY_EXPECTED = {
+			absorbed: "this" as const,
+			keeperPersonId: "00000000-0000-4000-8000-000000000001",
+			absorbedPersonId: "00000000-0000-4000-8000-000000000002",
+			basis: basisOf({}, {}),
+		};
+
 		/** The `expected` for a pair, built from the stored rows, for a link the preview refuses. */
 		async function handExpected(
 			absorbed: "this" | "other",
@@ -1017,6 +1026,8 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 		) {
 			return {
 				absorbed,
+				keeperPersonId: absorbed === "this" ? o.personId : g.personId,
+				absorbedPersonId: absorbed === "this" ? g.personId : o.personId,
 				basis: basisOf(
 					(await personRow(g.personId)) ?? {},
 					(await personRow(o.personId)) ?? {},
@@ -1159,7 +1170,7 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			await expect(
 				applyLinkGuestAcrossClubs({
 					...asOfficer(g, o, same),
-					expected: { absorbed: "this", basis: basisOf({}, {}) },
+					expected: ANY_EXPECTED,
 				}),
 			).rejects.toThrow(GUEST_CROSS_CLUB_SAME_CLUB_MESSAGE);
 			await expect(
@@ -1189,7 +1200,7 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				await expect(
 					applyLinkGuestAcrossClubs({
 						...asOfficer(mine, theirs),
-						expected: { absorbed: "this", basis: basisOf({}, {}) },
+						expected: ANY_EXPECTED,
 					}),
 				).rejects.toThrow(GUEST_NOT_IN_CLUB_MESSAGE);
 			}
@@ -1211,7 +1222,7 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				await expect(
 					applyLinkGuestAcrossClubs({
 						...asOfficer(g, o),
-						expected: { absorbed: "this", basis: basisOf({}, {}) },
+						expected: await handExpected("this", g, o),
 					}),
 				).rejects.toThrow(GUEST_NOW_MEMBER_MESSAGE);
 				expect(await personOfGuest(g.id)).toBe(g.personId);
@@ -1219,7 +1230,7 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			}
 		});
 
-		// protects=two guests already on one Person are told "Already the same person." and nothing is written; fails_when=a self-link deletes the Person both rows name; no_claim=the link's own reachability: its stale check (absorbed is null here) answers first, so the message is the preview's
+		// protects=two guests already on one Person are told "Already the same person." and nothing is written; fails_when=a self-link deletes the Person both rows name; no_claim=the link answering "Already the same person." itself: its stale check (absorbed is null here) answers first with GUEST_LINK_CHANGED_MESSAGE, so only the preview says it
 		it("refuses two guests that are already one person", async () => {
 			const g = await seedGuest(a.clubId);
 			const o = await seedGuest(b.clubId, { personId: g.personId });
@@ -1230,9 +1241,9 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			await expect(
 				applyLinkGuestAcrossClubs({
 					...asOfficer(g, o),
-					expected: { absorbed: "this", basis: basisOf({}, {}) },
+					expected: ANY_EXPECTED,
 				}),
-			).rejects.toThrow();
+			).rejects.toThrow(GUEST_LINK_CHANGED_MESSAGE);
 			expect(await personRow(g.personId)).not.toBeNull();
 			expect(await guestRowsOf(g.personId)).toHaveLength(2);
 		});
@@ -1309,7 +1320,7 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			await expect(
 				applyLinkGuestAcrossClubs({
 					...asOfficer(g, o),
-					expected: { absorbed: "this", basis: basisOf({}, {}) },
+					expected: ANY_EXPECTED,
 				}),
 			).rejects.toThrow(GUEST_LINK_CHANGED_MESSAGE);
 			expect(await personRow(g.personId)).not.toBeNull();
@@ -1327,6 +1338,109 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			expect(await personOfGuest(o.id)).toBe(g.personId);
 			expect(await personOfGuest(third.id)).toBe(g.personId);
 			expect(await personRow(o.personId)).toBeNull();
+		});
+
+		// protects=a Link never leaves one club with two guest cards on one Person: the keeper Person already held in the absorbed guest's club (Add put a card there) is refused by the preview and the link, whichever side is absorbed; fails_when=the already-here check is dropped (the absorbed row is re-pointed onto the keeper Person beside the card already on it); no_claim=the active-member arm of the shared rule (Add's tests pin it)
+		it("refuses when the keeper Person already has a card in the absorbed guest's club", async () => {
+			// absorbed = this: B's Bob (Person Q) was Added to A; A has a blank duplicate.
+			const bob = await seedGuest(b.clubId, { name: "Bob" });
+			await applyAddGuestToClub({
+				userId: officer,
+				fromClubId: b.clubId,
+				guestId: bob.id,
+				toClubId: a.clubId,
+			});
+			const dupe = await seedGuest(a.clubId, { name: "Bob dupe" });
+			const p = await preview(dupe, bob);
+			expect(p).toEqual({
+				ok: false,
+				message: GUEST_LINK_ALREADY_HERE_MESSAGE,
+			});
+			await expect(
+				applyLinkGuestAcrossClubs({
+					...asOfficer(dupe, bob),
+					expected: await handExpected("this", dupe, bob),
+				}),
+			).rejects.toThrow(GUEST_LINK_ALREADY_HERE_MESSAGE);
+			expect(await personOfGuest(dupe.id)).toBe(dupe.personId);
+			expect(await personRow(dupe.personId)).not.toBeNull();
+			expect(await guestRowsOf(bob.personId)).toHaveLength(2);
+
+			// absorbed = other: A's Ann (Person P) was Added to B; B has a blank duplicate.
+			const ann = await seedGuest(a.clubId, { name: "Ann" });
+			await applyAddGuestToClub({
+				userId: officer,
+				fromClubId: a.clubId,
+				guestId: ann.id,
+				toClubId: b.clubId,
+			});
+			const annDupe = await seedGuest(b.clubId, { name: "Ann dupe" });
+			await expect(preview(ann, annDupe)).resolves.toEqual({
+				ok: false,
+				message: GUEST_LINK_ALREADY_HERE_MESSAGE,
+			});
+			await expect(
+				applyLinkGuestAcrossClubs({
+					...asOfficer(ann, annDupe),
+					expected: await handExpected("other", ann, annDupe),
+				}),
+			).rejects.toThrow(GUEST_LINK_ALREADY_HERE_MESSAGE);
+			expect(await personOfGuest(annDupe.id)).toBe(annDupe.personId);
+			expect(await personRow(annDupe.personId)).not.toBeNull();
+			expect(await guestRowsOf(ann.personId)).toHaveLength(2);
+		});
+
+		// protects=a preview is tied to WHICH Person survives, not only to which side is absorbed: after another officer links the keeper's guest onto a third Person, the original submit is refused as changed; fails_when=keeperPersonId / absorbedPersonId are dropped from the comparison (the submit would attach the guest to the third club's Person); no_claim=the contact basis comparison (the edits test pins it)
+		it("refuses a submit whose keeper Person was itself absorbed by another link since the preview", async () => {
+			await makeAdmin(officerPersonId, c.clubId);
+			const ga = await seedGuest(a.clubId);
+			const gb = await seedGuest(b.clubId);
+			const gc = await seedGuest(c.clubId);
+			const expected = await expectedOf(ga, gb);
+			expect(expected.keeperPersonId).toBe(gb.personId);
+			// Another officer links B's guest and C's: B's Person is absorbed into C's.
+			const bc = { clubId: b.clubId, otherClubId: c.clubId };
+			const second = await previewGuestLink(asOfficer(gb, gc, bc));
+			if (!second.ok) throw new Error(second.message);
+			await applyLinkGuestAcrossClubs({
+				...asOfficer(gb, gc, bc),
+				expected: second.expected,
+			});
+			expect(await personOfGuest(gb.id)).toBe(gc.personId);
+			await expect(
+				applyLinkGuestAcrossClubs({ ...asOfficer(ga, gb), expected }),
+			).rejects.toThrow(GUEST_LINK_CHANGED_MESSAGE);
+			expect(await personOfGuest(ga.id)).toBe(ga.personId);
+			expect(await personRow(ga.personId)).not.toBeNull();
+		});
+
+		// protects=a preview is tied to the Person that would be deleted too: when the acting guest was linked and separated since the preview (a different, equally pristine Person), the submit is refused as changed; fails_when=absorbedPersonId is dropped from the comparison; no_claim=the keeper side (the test above)
+		it("refuses a submit whose absorbed Person was replaced by another since the preview", async () => {
+			await makeAdmin(officerPersonId, c.clubId);
+			const ga = await seedGuest(a.clubId);
+			const gb = await seedGuest(b.clubId);
+			const gc = await seedGuest(c.clubId);
+			const expected = await expectedOf(ga, gb);
+			expect(expected.absorbedPersonId).toBe(ga.personId);
+			const ac = { clubId: a.clubId, otherClubId: c.clubId };
+			const second = await previewGuestLink(asOfficer(ga, gc, ac));
+			if (!second.ok) throw new Error(second.message);
+			await applyLinkGuestAcrossClubs({
+				...asOfficer(ga, gc, ac),
+				expected: second.expected,
+			});
+			await applySeparateGuest({
+				userId: officer,
+				clubId: a.clubId,
+				guestId: ga.id,
+			});
+			const fresh = await personOfGuest(ga.id);
+			expect(fresh).not.toBe(ga.personId);
+			await expect(
+				applyLinkGuestAcrossClubs({ ...asOfficer(ga, gb), expected }),
+			).rejects.toThrow(GUEST_LINK_CHANGED_MESSAGE);
+			expect(await personOfGuest(ga.id)).toBe(fresh);
+			expect(await personOfGuest(gb.id)).toBe(gb.personId);
 		});
 
 		// -- authorization --------------------------------------------------
@@ -1347,7 +1461,7 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 						userId: who,
 						...base,
 						otherGuestId: o.id,
-						expected: { absorbed: "this", basis: basisOf({}, {}) },
+						expected: ANY_EXPECTED,
 					}),
 				).rejects.toThrow(NOT_A_MEMBER_MESSAGE);
 			}
@@ -1610,7 +1724,12 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				phone: keeper?.phone,
 			});
 			if (!p.ok) throw new Error("unreachable");
-			expect(Object.keys(p.expected).sort()).toEqual(["absorbed", "basis"]);
+			expect(Object.keys(p.expected).sort()).toEqual([
+				"absorbed",
+				"absorbedPersonId",
+				"basis",
+				"keeperPersonId",
+			]);
 			expect(Object.keys(p.expected.basis).sort()).toEqual([
 				"otherEmail",
 				"otherPhone",
@@ -1733,6 +1852,8 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			]).toContain((lost as PromiseRejectedResult).reason.message);
 			expect(await personOfGuest(g.id)).toBe(o.personId);
 			expect(await personRow(g.personId)).toBeNull();
+			expect(await linkLogRows(a.clubId)).toHaveLength(1);
+			expect(await linkLogRows(b.clubId)).toHaveLength(0);
 		});
 
 		// protects=a Link and an Add of the Person the Link absorbs, started together: no guest row ends on a deleted Person, and a refused side says why; fails_when=the Add's row lands on a Person the Link deleted; no_claim=which commits first (either order is allowed)
@@ -1764,8 +1885,8 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				}
 			}
 			expect(
-				[linked, added].filter((r) => r.status === "fulfilled").length,
-			).toBeGreaterThanOrEqual(1);
+				[linked, added].filter((r) => r.status === "fulfilled"),
+			).toHaveLength(1);
 			const rows = await testDb
 				.select({ id: guests.id, personId: guests.personId })
 				.from(guests)

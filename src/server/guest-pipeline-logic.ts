@@ -3901,6 +3901,8 @@ export const GUEST_LINK_EMAIL_DIFFERS_MESSAGE =
 	"Different email addresses. Fix one first.";
 export const GUEST_LINK_PHONE_DIFFERS_MESSAGE =
 	"Different phone numbers. Fix one first.";
+export const GUEST_LINK_ALREADY_HERE_MESSAGE =
+	"That person is already a guest or a member of this club.";
 export const GUEST_LINK_BOTH_HAVE_HISTORY_MESSAGE =
 	"Both records have history. A superadmin can merge them.";
 
@@ -3918,6 +3920,10 @@ export interface GuestLinkBasis {
 /** What a preview promised and the link must still find true under its locks. */
 export interface GuestLinkExpected {
 	absorbed: "this" | "other";
+	/** Which Person survives and which is deleted: a record that moved Persons
+	 *  since the preview is a different link, even when `absorbed` still reads the same. */
+	keeperPersonId: string;
+	absorbedPersonId: string;
 	basis: GuestLinkBasis;
 }
 
@@ -3951,6 +3957,9 @@ interface GuestLinkSide {
 		guestOnly: boolean;
 		pristine: boolean;
 	};
+	/** This side's Person already has a guest row or an active seat in the OTHER
+	 *  side's club: where it would land if the other side were absorbed into it. */
+	hereInOtherClub: boolean;
 }
 
 type GuestLinkDecision =
@@ -3965,6 +3974,7 @@ type GuestLinkDecision =
 async function loadGuestLinkSide(
 	conn: DbOrTx,
 	guest: GuestLinkGuest,
+	otherClubId: string,
 ): Promise<GuestLinkSide> {
 	const [row] = await conn
 		.select({
@@ -3987,13 +3997,19 @@ async function loadGuestLinkSide(
 			guestOnly: Boolean(row.guestOnly),
 			pristine: Boolean(row.pristine),
 		},
+		hereInOtherClub: await personIsHereAlready(
+			conn,
+			guest.personId,
+			otherClubId,
+		),
 	};
 }
 
 /**
  * The link's decision from both sides as read, in the refusal table's order:
  * a changed preview, a converted guest, one Person already, a Person that is not
- * guest-only, then no absorbable side. `expected` is null for a preview, which
+ * guest-only, no absorbable side, then a keeper Person already held in the
+ * absorbed guest's club. `expected` is null for a preview, which
  * has nothing to compare against. Pure: the caller read the sides under whatever
  * locks it holds.
  */
@@ -4026,6 +4042,10 @@ function decideGuestLink(
 	if (
 		expected &&
 		(expected.absorbed !== absorbed ||
+			expected.keeperPersonId !==
+				(absorbed === "this" ? other : self).guest.personId ||
+			expected.absorbedPersonId !==
+				(absorbed === "this" ? self : other).guest.personId ||
 			expected.basis.thisEmail !== basis.thisEmail ||
 			expected.basis.thisPhone !== basis.thisPhone ||
 			expected.basis.otherEmail !== basis.otherEmail ||
@@ -4051,11 +4071,23 @@ function decideGuestLink(
 		}
 		return { ok: false, message: GUEST_LINK_BOTH_HAVE_HISTORY_MESSAGE };
 	}
+	const [absorbedSide, keeper] =
+		absorbed === "this" ? [self, other] : [other, self];
+	// The absorbed guest's club would then hold the keeper's Person twice when it
+	// already has a card on it (Add put one there): one card per Person per club.
+	if (keeper.hereInOtherClub) {
+		return { ok: false, message: GUEST_LINK_ALREADY_HERE_MESSAGE };
+	}
 	return {
 		ok: true,
 		absorbed,
-		expected: { absorbed, basis },
-		keeper: absorbed === "this" ? other : self,
+		expected: {
+			absorbed,
+			keeperPersonId: keeper.guest.personId,
+			absorbedPersonId: absorbedSide.guest.personId,
+			basis,
+		},
+		keeper,
 	};
 }
 
@@ -4090,8 +4122,8 @@ export async function previewGuestLink(
 		return { ok: false, message: GUEST_NOT_IN_CLUB_MESSAGE };
 	}
 	const decision = decideGuestLink(
-		await loadGuestLinkSide(db, mine),
-		await loadGuestLinkSide(db, theirs),
+		await loadGuestLinkSide(db, mine, otherClubId),
+		await loadGuestLinkSide(db, theirs, clubId),
 		null,
 	);
 	if (!decision.ok) return decision;
@@ -4191,8 +4223,8 @@ export async function applyLinkGuestAcrossClubs(
 		await assertStillAdminOfBothClubs(tx, userId, clubId, otherClubId);
 		const actor = await getMembership(userId, clubId, tx);
 
-		const self = await loadGuestLinkSide(tx, mine);
-		const other = await loadGuestLinkSide(tx, theirs);
+		const self = await loadGuestLinkSide(tx, mine, otherClubId);
+		const other = await loadGuestLinkSide(tx, theirs, clubId);
 		const decision = decideGuestLink(self, other, input.expected);
 		if (!decision.ok) throw new Error(decision.message);
 

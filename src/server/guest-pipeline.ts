@@ -348,6 +348,8 @@ const guestLinkSchema = z.object({
  *  returns it in (`GuestLinkExpected`, which the `satisfies` ties to this). */
 const guestLinkExpectedSchema = z.object({
 	absorbed: z.enum(["this", "other"]),
+	keeperPersonId: uuid,
+	absorbedPersonId: uuid,
 	basis: z.object({
 		thisEmail: z.string().nullable(),
 		thisPhone: z.string(),
