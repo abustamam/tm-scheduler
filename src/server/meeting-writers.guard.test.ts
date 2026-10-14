@@ -128,7 +128,7 @@
  *  - **A plan writer loses its refusal:** `applyAddRoleSlot` drops its
  *    `assertMeetingAccepts` (2); asks `"record"` in code (2); the map says
  *    `record` (2).
- *  - **A new caller of a `refusedBy` writer:** `clearAward` gains a caller that
+ *  - **A new caller of a `refusedBy` writer:** `deleteAwardRow` gains a caller that
  *    refuses nothing (2).
  *  - **A registered wrapper is renamed:** `assertMinutesMeetingRecordable` (3),
  *    and the first hop of the `ensureAgendaDraft` chain (3).

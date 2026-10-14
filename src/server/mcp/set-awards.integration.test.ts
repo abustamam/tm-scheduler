@@ -26,6 +26,7 @@ import {
 	people,
 } from "#/db/schema";
 import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
+import { MEETING_LOCKED_MESSAGE } from "#/lib/meeting-lifecycle";
 import {
 	cleanup,
 	hasTestDb,
@@ -37,7 +38,9 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { setAwardsTool } = await import("#/server/mcp/tools/set-awards");
+const { setAwardsTool, recordRefusalItem } = await import(
+	"#/server/mcp/tools/set-awards"
+);
 const { McpError } = await import("#/server/mcp/errors");
 const { hashApiToken } = await import("#/server/api-tokens-logic");
 const { listVoteSessions } = await import("#/server/voting-logic");
@@ -335,7 +338,7 @@ describe.skipIf(!hasTestDb)("set_awards (#1172)", () => {
 	it("refuses a member ruled out of the category, with the reason", async () => {
 		// protects=the #786 disqualification gate holds on this surface, naming the reason
 		// fails_when=a ruled-out member is recorded, or the reason is dropped
-		// no_claim=ruled out of ONE category only; the same member is not shown refused in another
+		// no_claim=none beyond protects; that a ruling is scoped to its category is the different-category case below
 		await testDb.insert(meetingCandidateDisqualifications).values({
 			meetingId: seed.meetingId,
 			category: "best_speaker",
@@ -517,6 +520,122 @@ describe.skipIf(!hasTestDb)("set_awards (#1172)", () => {
 			["DUPLICATE_AWARD_CATEGORY", 1],
 		]);
 		expect(await awardRows()).toHaveLength(0);
+	});
+
+	it("refuses a ruled-out candidate and leaves an existing winner of that category untouched", async () => {
+		// protects=a refused set changes nothing: the recorded winner and its updated_at survive
+		// fails_when=the old winner is cleared, replaced, or its updated_at moves before the refusal
+		// no_claim=none beyond protects
+		await call({
+			meetingId: seed.meetingId,
+			awards: [{ category: "best_speaker", memberId: seed.adminMemberId }],
+		});
+		const [before] = await awardRows();
+		await testDb.insert(meetingCandidateDisqualifications).values({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			candidateMemberId: seed.memberId,
+			reason: "Spoke over time",
+		});
+		await new Promise((r) => setTimeout(r, 20));
+
+		const { blocking } = await blocked({
+			meetingId: seed.meetingId,
+			awards: [{ category: "best_speaker", memberId: seed.memberId }],
+		});
+
+		expect(blocking).toHaveLength(1);
+		expect(blocking[0]).toMatchObject({ code: "AWARD_RULED_OUT" });
+		const rows = await awardRows();
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.memberId).toBe(seed.adminMemberId);
+		expect(rows[0]?.updatedAt.getTime()).toBe(before?.updatedAt.getTime());
+	});
+
+	describe("a row whose member was deleted", () => {
+		async function recordThenDeleteWinner(): Promise<void> {
+			const gone = await addMember(seed.clubId, "Soon Deleted");
+			await call({
+				meetingId: seed.meetingId,
+				awards: [{ category: "best_speaker", memberId: gone }],
+			});
+			// `member_id` is ON DELETE SET NULL: the row stays and names nobody.
+			await testDb.delete(members).where(eq(members.id, gone));
+		}
+
+		it("is removed by a clear, which reports a clear and not unchanged", async () => {
+			// protects=a row naming nobody is still a row: clear deletes it and says it cleared
+			// fails_when=the clear reports unchanged and leaves the empty row behind
+			// no_claim=how the member came to be deleted; a hard delete is the fixture
+			await recordThenDeleteWinner();
+			const [row] = await awardRows();
+			expect(row).toMatchObject({ memberId: null, guestId: null });
+
+			const res = (await call({
+				meetingId: seed.meetingId,
+				awards: [{ category: "best_speaker", clear: true }],
+			})) as Applied;
+
+			expect(res.plan).toEqual([
+				{
+					category: "best_speaker",
+					from: "none",
+					to: "none",
+					unchanged: false,
+				},
+			]);
+			expect(res.summary).toBe("Cleared 1.");
+			expect(await awardRows()).toHaveLength(0);
+		});
+
+		it("can be given a new winner", async () => {
+			// protects=an empty row is replaced by the upsert like any other
+			// fails_when=the row stays empty or the call is refused
+			// no_claim=none beyond protects
+			await recordThenDeleteWinner();
+			await call({
+				meetingId: seed.meetingId,
+				awards: [{ category: "best_speaker", memberId: seed.memberId }],
+			});
+			const rows = await awardRows();
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.memberId).toBe(seed.memberId);
+		});
+	});
+
+	it("shows a winner whose name is empty as that winner, so setting the same one is unchanged", async () => {
+		// protects=existence of a winner comes from the id column, not from a truthy name
+		// fails_when=an empty-named winner reads as none and is rewritten as a change
+		// no_claim=none beyond protects
+		const blank = await addMember(seed.clubId, "");
+		await call({
+			meetingId: seed.meetingId,
+			awards: [{ category: "best_speaker", memberId: blank }],
+		});
+
+		const res = (await call({
+			meetingId: seed.meetingId,
+			awards: [{ category: "best_speaker", memberId: blank }],
+		})) as Applied;
+
+		expect(res.plan[0]).toMatchObject({ unchanged: true });
+		expect(res.plan[0]?.from).toBe(" (member)");
+	});
+
+	describe("recordRefusalItem", () => {
+		it("maps each refused status to its own code and sentence", () => {
+			// protects=the blocking item is chosen from the policy's refused status
+			// fails_when=completed reads as the cancelled sentence, or the reverse
+			// no_claim=the completed arm is unreachable through the tool today: the record class accepts it
+			expect(recordRefusalItem("cancelled")).toEqual({
+				code: "MEETING_CANCELLED",
+				message: MEETING_CANCELLED_MESSAGE,
+			});
+			expect(recordRefusalItem("completed")).toEqual({
+				code: "MEETING_LOCKED",
+				message: MEETING_LOCKED_MESSAGE,
+			});
+		});
 	});
 
 	describe("the input schema", () => {

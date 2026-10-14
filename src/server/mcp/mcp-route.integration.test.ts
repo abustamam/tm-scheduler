@@ -515,6 +515,11 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 					{ category: "best_speaker", guestId: contactful!.id },
 				],
 			}),
+			// #1172. AFTER `set_awards`, so `awards` carries the contactful guest as a
+			// winner: the first `get_agenda` above ran before any award existed, and
+			// a sweep of an empty `awards` proves nothing about a guest winner. Still
+			// before `cancel_meeting`, which freezes the meeting.
+			toolsCall("get_agenda", { meetingId: seed.meetingId }),
 			// #1024. It reads slot holders by NAME through `loadMeetingSlots`, never
 			// a guest row, so it cannot leak one today; it is here because the sweep
 			// is derived, and the day the draft grows a holder's contact this fails.
@@ -556,11 +561,15 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			toolsCall("restore_meeting", { meetingId: seed.meetingId }),
 		];
 		const rawByTool = new Map<string, string>();
+		const bodyByTool = new Map<string, unknown>();
 		for (const call of calls) {
-			const { raw } = await readToolResult(
+			const { raw, body } = await readToolResult(
 				await handleMcpRequest(mcpRequest(call, { token: adminToken })),
 			);
+			// A later call to the same tool replaces the earlier one: the second
+			// `get_agenda` (after `set_awards`) is the one asserted on below.
 			rawByTool.set(call.params.name, raw);
+			bodyByTool.set(call.params.name, body);
 			expect(raw, `${call.params.name} leaked a raw email`).not.toContain(
 				email,
 			);
@@ -578,6 +587,44 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			rawByTool.get("cancel_meeting"),
 			"cancel_meeting's notice must name the guest holding a role",
 		).toContain("Contactful Guest");
+
+		// The positive half for `set_awards` and the awards in `get_agenda` (#1172,
+		// AC14): the call APPLIED, and its plan and the swept `awards` both name
+		// the guest as the winner. Without this, a call that was refused (a
+		// blocking item carries no winner) or an `awards` that was empty would
+		// pass the no-contact assertions above for the wrong reason.
+		expect(
+			bodyByTool.get("set_awards"),
+			"set_awards must have applied, or the sweep saw no guest winner",
+		).toMatchObject({
+			applied: true,
+			plan: [
+				{
+					category: "best_speaker",
+					from: "none",
+					to: "Contactful Guest (guest)",
+					unchanged: false,
+				},
+			],
+		});
+		expect(
+			bodyByTool.get("get_agenda"),
+			"the get_agenda swept after set_awards must carry the guest as a winner",
+		).toMatchObject({
+			awards: [
+				{
+					category: "best_speaker",
+					winner: {
+						kind: "guest",
+						// biome-ignore lint/style/noNonNullAssertion: insert returns a row
+						id: contactful!.id,
+						name: "Contactful Guest",
+					},
+				},
+				{ category: "best_evaluator", winner: null },
+				{ category: "best_table_topics", winner: null },
+			],
+		});
 
 		// DERIVED completeness, the `mcp-authz.guard.test.ts` pattern: a
 		// hand-written list cannot fail for the case it exists to catch. #809

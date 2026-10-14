@@ -11,9 +11,9 @@
  *     bunx vitest run src/server/mcp/get-agenda-awards.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { apiTokens, guests, meetingAwards } from "#/db/schema";
+import { apiTokens, guests, meetingAwards, members, people } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -155,5 +155,51 @@ describe.skipIf(!hasTestDb)("get_agenda awards (#1172)", () => {
 		const raw = JSON.stringify(out);
 		expect(raw).not.toContain("raw.winner@example.com");
 		expect(raw).not.toContain("5557654321");
+	});
+
+	it("reads a row whose member was deleted as no winner, and a blank-named winner as a winner", async () => {
+		// protects=an award row naming nobody reads null; a winner with an empty name is still shown
+		// fails_when=the deleted-member row reads as a winner, or the blank-named winner reads as none
+		// no_claim=none beyond protects
+		const [person] = await testDb
+			.insert(people)
+			.values({ name: "Blank" })
+			.returning({ id: people.id });
+		const [blank] = await testDb
+			.insert(members)
+			.values({
+				clubId: seed.clubId,
+				// biome-ignore lint/style/noNonNullAssertion: insert returns a row
+				personId: person!.id,
+				name: "",
+				status: "active",
+			})
+			.returning({ id: members.id });
+		await testDb.insert(meetingAwards).values([
+			{
+				meetingId: seed.meetingId,
+				category: "best_speaker",
+				memberId: seed.memberId,
+			},
+			{
+				meetingId: seed.meetingId,
+				category: "best_evaluator",
+				// biome-ignore lint/style/noNonNullAssertion: insert returns a row
+				memberId: blank!.id,
+			},
+		]);
+		// ON DELETE SET NULL: the best_speaker row stays, naming nobody.
+		await testDb.delete(members).where(eq(members.id, seed.memberId));
+
+		const out = await getAgenda();
+		expect(out.awards).toEqual([
+			{ category: "best_speaker", winner: null },
+			{
+				category: "best_evaluator",
+				// biome-ignore lint/style/noNonNullAssertion: insert returns a row
+				winner: { kind: "member", id: blank!.id, name: "" },
+			},
+			{ category: "best_table_topics", winner: null },
+		]);
 	});
 });

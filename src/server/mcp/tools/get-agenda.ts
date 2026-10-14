@@ -30,10 +30,9 @@
  * only an `edit_agenda` apply stores it.
  */
 import { eq } from "drizzle-orm";
-import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
-import { guests, meetingAwards, meetings, members } from "#/db/schema";
+import { meetings } from "#/db/schema";
 import { agendaRunSheet } from "#/lib/agenda-run-sheet";
 import { isMeetingLocked } from "#/lib/meeting-lifecycle";
 import {
@@ -43,7 +42,12 @@ import {
 import { readAgendaSnapshot } from "#/server/meeting-agenda-edit-logic";
 import { resolveMeetingNumber } from "#/server/meeting-number-logic";
 import { loadMeetingSlots } from "#/server/meeting-slots-logic";
-import { AWARD_CATEGORIES, type AwardCategory } from "#/server/minutes-logic";
+import {
+	AWARD_CATEGORIES,
+	type AwardCategory,
+	type AwardWinner,
+	loadAwardRows,
+} from "#/server/minutes-logic";
 import { authorizeTokenForMeeting } from "../authz-logic";
 import { McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
@@ -51,48 +55,21 @@ import { clubLocalParts } from "./list-meetings";
 
 const inputSchema = { meetingId: z.string().uuid() };
 
-/** One category's recorded winner. A guest is a name only, never a contact. */
-type AwardWinner =
-	| { kind: "member" | "guest"; id: string; name: string }
-	| { kind: "writeIn"; id: null; name: string }
-	| null;
-
 /**
  * The meeting's three awards, always in `AWARD_CATEGORIES` order, with `winner:
  * null` for a category nobody has been recorded for (#1172). A write-in
  * winner (#582) reads `{kind: "writeIn", id: null}`: it has no row to point at.
+ * A row whose member was hard-deleted names nobody, so it reads `winner: null`
+ * too. Read through the same reader `set_awards` plans against.
  */
 async function loadAwards(
 	meetingId: string,
-): Promise<{ category: AwardCategory; winner: AwardWinner }[]> {
-	const awMember = alias(members, "aw_member");
-	const awGuest = alias(guests, "aw_guest");
-	const rows = await db
-		.select({
-			category: meetingAwards.category,
-			memberId: meetingAwards.memberId,
-			guestId: meetingAwards.guestId,
-			writeInName: meetingAwards.writeInName,
-			memberName: awMember.name,
-			guestName: awGuest.name,
-		})
-		.from(meetingAwards)
-		.leftJoin(awMember, eq(awMember.id, meetingAwards.memberId))
-		.leftJoin(awGuest, eq(awGuest.id, meetingAwards.guestId))
-		.where(eq(meetingAwards.meetingId, meetingId));
-	const byCategory = new Map(rows.map((r) => [r.category, r]));
-	return AWARD_CATEGORIES.map((category) => {
-		const r = byCategory.get(category);
-		let winner: AwardWinner = null;
-		if (r?.memberId && r.memberName) {
-			winner = { kind: "member", id: r.memberId, name: r.memberName };
-		} else if (r?.guestId && r.guestName) {
-			winner = { kind: "guest", id: r.guestId, name: r.guestName };
-		} else if (r?.writeInName) {
-			winner = { kind: "writeIn", id: null, name: r.writeInName };
-		}
-		return { category, winner };
-	});
+): Promise<{ category: AwardCategory; winner: AwardWinner | null }[]> {
+	const rows = await loadAwardRows(db, meetingId);
+	return AWARD_CATEGORIES.map((category) => ({
+		category,
+		winner: rows.get(category)?.winner ?? null,
+	}));
 }
 
 export const getAgendaTool: McpToolDefinition = {

@@ -97,8 +97,12 @@ export type DisqualifiedIndex = Record<
 /** Build that index for one meeting. One indexed read; see the type above. */
 export async function loadDisqualifications(
 	meetingId: string,
+	// A caller already inside its own transaction reads through it (#1172), so
+	// the answer is the one under the locks that transaction holds. Every other
+	// caller reads on the global client, as before.
+	conn: typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0] = db,
 ): Promise<DisqualifiedIndex> {
-	const rows = await db
+	const rows = await conn
 		.select({
 			category: meetingCandidateDisqualifications.category,
 			memberId: meetingCandidateDisqualifications.candidateMemberId,

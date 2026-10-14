@@ -117,8 +117,9 @@ export type McpBlockingCode =
 	 * `applyMeetingMetaPatch` refuses again in its own conditional UPDATE.
 	 *
 	 * `set_awards` (#1172) raises it too, with `MEETING_CANCELLED_MESSAGE`. It
-	 * does not raise `MEETING_LOCKED`: a completed meeting is where awards are
-	 * recorded.
+	 * raises `MEETING_LOCKED` only for a status the "record" write class refuses
+	 * besides cancelled, which is none today: a completed meeting is where
+	 * awards are recorded.
 	 */
 	| "MEETING_CANCELLED"
 	/**

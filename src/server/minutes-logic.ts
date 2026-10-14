@@ -41,6 +41,7 @@ import {
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { findGuestForContact } from "./guest-pipeline-logic";
 import { createGuestRecord } from "./guests-logic";
+import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
 
 export type AttendanceStatus = "present" | "absent" | "excused";
 export type AwardCategory =
@@ -49,11 +50,11 @@ export type AwardCategory =
 	| "best_table_topics";
 
 /** The award categories, in display order. */
-export const AWARD_CATEGORIES: AwardCategory[] = [
+export const AWARD_CATEGORIES = [
 	"best_speaker",
 	"best_evaluator",
 	"best_table_topics",
-];
+] as const satisfies readonly AwardCategory[];
 
 /** Contact fields for a brand-new club guest (name required, contact optional). */
 export type NewGuestInput = {
@@ -1103,6 +1104,14 @@ export async function setAward(input: {
 		let candidate: { kind: "member" | "guest" | "writeIn"; id: string };
 		if (input.memberId) {
 			await requireMemberInMeetingClub(input.memberId, clubId);
+			// The membership merge lock (#1035), SHARED, before the first row lock
+			// and after the check above (which locks nothing, and says its own
+			// sentence for an id that was never a member): a merge absorbing this
+			// member must not `on delete set null` the award this is about to
+			// record, which would leave a row naming nobody under a success. A
+			// member absorbed while this waited is refused with `CLUB_BUSY_MESSAGE`.
+			// The guest and write-in arms reference no membership.
+			await lockMembershipsAgainstMerge(tx, [input.memberId]);
 			memberId = input.memberId;
 			candidate = { kind: "member", id: memberId };
 		} else if (input.guestId || input.newGuest) {
@@ -1148,6 +1157,62 @@ export async function setAward(input: {
 			writeInName,
 		});
 	});
+}
+
+/**
+ * What a `meeting_awards` row names, for display and for comparing by identity.
+ * A guest is a name only, never a contact. A write-in (#582) has no row to
+ * point at, so its `id` is null.
+ */
+export type AwardWinner =
+	| { kind: "member" | "guest"; id: string; name: string }
+	| { kind: "writeIn"; id: null; name: string };
+
+/**
+ * Every category's `meeting_awards` row, read through `conn`: ONE reader for
+ * `get_agenda` and `set_awards` (#1172), which used to carry a copy each.
+ *
+ * Row EXISTENCE is reported apart from the winner, because the two differ: a
+ * member hard-deleted while an award names them leaves the row with all three
+ * winner columns null (`member_id` is `ON DELETE SET NULL`). That row has no
+ * winner to show (`winner: null`) but is still a row, and a clear has to be
+ * able to delete it. A category with no row is absent from the map.
+ *
+ * Presence is decided by the id columns, not by the joined name, so a winner
+ * whose name is the empty string is still a winner.
+ */
+export async function loadAwardRows(
+	conn: AwardConn,
+	meetingId: string,
+): Promise<Map<AwardCategory, { winner: AwardWinner | null }>> {
+	const awMember = alias(members, "aw_member");
+	const awGuest = alias(guests, "aw_guest");
+	const rows = await conn
+		.select({
+			category: meetingAwards.category,
+			memberId: meetingAwards.memberId,
+			guestId: meetingAwards.guestId,
+			writeInName: meetingAwards.writeInName,
+			memberName: awMember.name,
+			guestName: awGuest.name,
+		})
+		.from(meetingAwards)
+		.leftJoin(awMember, eq(awMember.id, meetingAwards.memberId))
+		.leftJoin(awGuest, eq(awGuest.id, meetingAwards.guestId))
+		.where(eq(meetingAwards.meetingId, meetingId));
+	const out = new Map<AwardCategory, { winner: AwardWinner | null }>();
+	for (const r of rows) {
+		let winner: AwardWinner | null = null;
+		if (r.memberId !== null) {
+			winner = { kind: "member", id: r.memberId, name: r.memberName ?? "" };
+		} else if (r.guestId !== null) {
+			winner = { kind: "guest", id: r.guestId, name: r.guestName ?? "" };
+		} else if (r.writeInName !== null) {
+			winner = { kind: "writeIn", id: null, name: r.writeInName };
+		}
+		out.set(r.category, { winner });
+	}
+	return out;
 }
 
 /** Clear an award category for a meeting. */

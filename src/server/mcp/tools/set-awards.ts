@@ -23,9 +23,10 @@
  *
  * ## What it refuses, and why each
  *
- *  - A CANCELLED meeting. A COMPLETED one is accepted: minutes are written
- *    after the meeting, which is the "record" write class
- *    (`assertMeetingAccepts(status, "record")`).
+ *  - A meeting the "record" write class refuses: a CANCELLED one today. A
+ *    COMPLETED one is accepted, because minutes are written after the meeting.
+ *    `meetingRefusal(status, "record")` says which status refused, and the
+ *    blocking item is chosen from that, never from a thrown sentence.
  *  - A category whose digital vote is still open, for a set AND a clear. The
  *    Ballot Counter owns the winner until the vote closes; a winner written
  *    under an open ballot is overwritten by, or contradicts, the tap that
@@ -38,14 +39,28 @@
  *  - A write-in winner. The input has no write-in arm. Reads show an existing
  *    one (`get_agenda`), and `{clear: true}` removes it.
  *
- * ## The check-then-write window is accepted
+ * ## Locks, in order, and what they close
  *
- * Disqualification is read on the global client before the transaction, and a
- * vote can open between the read of its session and the write. That is the
- * trade `setAward` documents (`minutes-logic.ts`, "CHECK-THEN-WRITE"): a ruling
- * committed in the window is missed because a statement inside the transaction
- * would see the same thing under READ COMMITTED, and both sides of the window
- * are human taps. No lock is added for it here either.
+ *  1. The membership merge lock (#1035), SHARED, on every member the input
+ *     names, BEFORE any row lock (`membership-merge-lock.ts` documents the
+ *     order). A merge absorbing a winner would otherwise `on delete set null`
+ *     the row recorded under it and leave a winner naming nobody under a
+ *     success. A member absorbed while this waited is refused with
+ *     `CLUB_BUSY_MESSAGE`. Only ids that exist are locked: an unknown id is
+ *     the `NOT_A_MEMBER` item below, and the lock helper would refuse it as
+ *     absorbed.
+ *  2. The meeting row, `FOR NO KEY UPDATE`.
+ *
+ * Under those, the rulings and the open-vote check are RACE-FREE, because both
+ * are read through the transaction AFTER the meeting lock: `openVote` and
+ * `disqualifyCandidate` / `undoDisqualification` take `FOR SHARE` on the
+ * meeting row, which conflicts with this lock, so one of them either committed
+ * before this read or waits until this commits.
+ *
+ * What remains is the web `setAward`, which takes no meeting lock: a winner it
+ * records between this read of `from` and the write is overwritten (last write
+ * wins), and the plan's `from` can be stale for that reason. Both sides are
+ * human taps, and the next `get_agenda` shows what is there.
  *
  * ## The club comes from the MEETING
  *
@@ -53,21 +68,28 @@
  * none (`mcp-authz.guard.test.ts`).
  */
 import { and, eq, inArray } from "drizzle-orm";
-import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
-import { guests, meetingAwards, members } from "#/db/schema";
+import { guests, members } from "#/db/schema";
 import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
-import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
+import {
+	assertMeetingAccepts,
+	type FrozenMeetingStatus,
+	MEETING_LOCKED_MESSAGE,
+	meetingRefusal,
+} from "#/lib/meeting-lifecycle";
 import {
 	disqualificationFor,
 	loadDisqualifications,
 } from "#/server/award-candidates-logic";
 import { lockMeetingForSlotEdit } from "#/server/meeting-slot-lock";
+import { lockMembershipsAgainstMerge } from "#/server/membership-merge-lock";
 import {
 	AWARD_CATEGORIES,
 	type AwardCategory,
+	type AwardWinner,
 	deleteAwardRow,
+	loadAwardRows,
 	upsertAwardRow,
 } from "#/server/minutes-logic";
 import { listVoteSessions } from "#/server/voting-logic";
@@ -75,11 +97,7 @@ import { authorizeTokenForMeeting } from "../authz-logic";
 import { type McpBlockingItem, McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
 
-const awardCategory = z.enum([
-	"best_speaker",
-	"best_evaluator",
-	"best_table_topics",
-]);
+const awardCategory = z.enum(AWARD_CATEGORIES);
 
 const awardSchema = z.union([
 	z.object({ category: awardCategory, memberId: z.string().uuid() }).strict(),
@@ -118,16 +136,34 @@ function targetOf(a: Award): Target {
 	return null;
 }
 
-/** What a category's row held when the call locked the meeting. */
-interface CurrentWinner {
-	kind: "member" | "guest" | "writeIn";
-	/** The member or guest id; null for a write-in. */
-	id: string | null;
-	name: string;
+/**
+ * The blocking item for a status the "record" class refuses. Exhaustive over
+ * the frozen statuses: a status added to the type fails the build here rather
+ * than falling through to a sentence that names the wrong state.
+ */
+export function recordRefusalItem(
+	refused: FrozenMeetingStatus,
+): McpBlockingItem {
+	switch (refused) {
+		case "cancelled":
+			return {
+				code: "MEETING_CANCELLED",
+				message: MEETING_CANCELLED_MESSAGE,
+			};
+		case "completed":
+			// Unreachable while the "record" class accepts a completed meeting; here
+			// so the day it stops, the caller reads the class's own sentence rather
+			// than an INTERNAL error.
+			return { code: "MEETING_LOCKED", message: MEETING_LOCKED_MESSAGE };
+		default: {
+			const unreachable: never = refused;
+			throw new Error(`Unhandled refused status: ${String(unreachable)}`);
+		}
+	}
 }
 
 /** One plan line's `from` / `to`: names only, never contact details. */
-function describeWinner(w: { kind: string; name: string } | null): string {
+function describeWinner(w: AwardWinner | null): string {
 	return w
 		? `${w.name} (${w.kind === "writeIn" ? "write-in" : w.kind})`
 		: "none";
@@ -152,31 +188,37 @@ export const setAwardsTool: McpToolDefinition = {
 	handler: async (input, ctx) => {
 		const args = z.object(inputSchema).parse(input);
 		const { club } = await authorizeTokenForMeeting(ctx, args.meetingId);
-		// Read before the transaction opens, as `setAward` does: it needs nothing
-		// from it, and a second pooled connection taken while this one holds the
-		// meeting lock is how a pool runs dry.
-		const disqualified = await loadDisqualifications(args.meetingId);
+		const memberIds = [
+			...new Set(
+				args.awards.flatMap((a) => ("memberId" in a ? [a.memberId] : [])),
+			),
+		];
 
 		return db.transaction(async (tx) => {
 			const blocking: McpBlockingItem[] = [];
 
+			// Lock order: the membership merge lock, then the meeting row. Only
+			// members that exist are locked: see the header. A plain read, so it
+			// takes no row lock ahead of the lock it is looked up for.
+			const existing =
+				memberIds.length === 0
+					? []
+					: await tx
+							.select({ id: members.id })
+							.from(members)
+							.where(inArray(members.id, memberIds));
+			await lockMembershipsAgainstMerge(
+				tx,
+				existing.map((r) => r.id),
+			);
+
 			const meeting = await lockMeetingForSlotEdit(tx, args.meetingId);
-			// The write class's own refusal (`MEETING_WRITE_POLICY.record`), not a
-			// status check of this tool's: a status the policy starts refusing is
-			// refused here too. It throws, and a refusal is a blocking item in this
-			// tool, collected with the rest. Anything but the cancelled sentence
-			// (an unknown status fails closed) is not ours to swallow.
-			try {
-				assertMeetingAccepts(meeting.status, "record");
-			} catch (e) {
-				if (!(e instanceof Error) || e.message !== MEETING_CANCELLED_MESSAGE) {
-					throw e;
-				}
-				blocking.push({
-					code: "MEETING_CANCELLED",
-					message: MEETING_CANCELLED_MESSAGE,
-				});
-			}
+			// The write class's own policy, not a status check of this tool's: a
+			// status the policy starts refusing is refused here too, with the
+			// sentence for THAT status. `meetingRefusal` throws on a status it has
+			// never heard of (fail closed), which the tool layer reports as INTERNAL.
+			const refused = meetingRefusal(meeting.status, "record");
+			if (refused !== null) blocking.push(recordRefusalItem(refused));
 
 			// Decided from the input alone: two instructions about one category
 			// means one of them was a mistake, and applying the later one silently
@@ -195,11 +237,6 @@ export const setAwardsTool: McpToolDefinition = {
 				});
 			}
 
-			const memberIds = [
-				...new Set(
-					args.awards.flatMap((a) => ("memberId" in a ? [a.memberId] : [])),
-				),
-			];
 			const guestIds = [
 				...new Set(
 					args.awards.flatMap((a) => ("guestId" in a ? [a.guestId] : [])),
@@ -236,7 +273,9 @@ export const setAwardsTool: McpToolDefinition = {
 			const memberById = new Map(memberRows.map((r) => [r.id, r]));
 			const guestById = new Map(guestRows.map((r) => [r.id, r]));
 
+			// Both read through `tx`, AFTER the meeting lock: see the header.
 			const votes = await listVoteSessions(args.meetingId, tx);
+			const disqualified = await loadDisqualifications(args.meetingId, tx);
 
 			for (const [index, a] of args.awards.entries()) {
 				const label = CATEGORY_LABELS[a.category];
@@ -304,7 +343,15 @@ export const setAwardsTool: McpToolDefinition = {
 				);
 			}
 
-			const current = await loadCurrentWinners(tx, args.meetingId);
+			// The enforcement, apart from the explanation above: it throws for any
+			// status the class refuses, so a refusal the switch in
+			// `recordRefusalItem` or the blocking item missed still stops the call
+			// before a write, as an INTERNAL error rather than a silent success. It
+			// is the call `meeting-writers.guard.test.ts` reads as this tool's
+			// "record" refusal. With `blocking` empty it cannot throw.
+			assertMeetingAccepts(meeting.status, "record");
+
+			const current = await loadAwardRows(tx, args.meetingId);
 
 			const plan: {
 				category: AwardCategory;
@@ -318,7 +365,8 @@ export const setAwardsTool: McpToolDefinition = {
 
 			for (const a of args.awards) {
 				const target = targetOf(a);
-				const from = current.get(a.category) ?? null;
+				const row = current.get(a.category);
+				const from = row?.winner ?? null;
 				const to = target
 					? {
 							kind: target.kind,
@@ -333,9 +381,11 @@ export const setAwardsTool: McpToolDefinition = {
 					: null;
 
 				// Compared by identity, never by name: two people can share one.
+				// A clear is unchanged only when there is NO row: a row naming nobody
+				// (its member was deleted) is still a row, and the clear removes it.
 				const same = to
 					? from !== null && from.kind === to.kind && from.id === to.id
-					: from === null;
+					: row === undefined;
 				plan.push({
 					category: a.category,
 					from: describeWinner(from),
@@ -385,44 +435,3 @@ export const setAwardsTool: McpToolDefinition = {
 		});
 	},
 };
-
-/**
- * Each category's current winner, read inside the transaction. Null (absent)
- * for an unrecorded category, and for a row whose member was deleted
- * (`member_id` is `ON DELETE SET NULL`), which names nobody.
- */
-async function loadCurrentWinners(
-	tx: Parameters<Parameters<(typeof db)["transaction"]>[0]>[0],
-	meetingId: string,
-): Promise<Map<AwardCategory, CurrentWinner>> {
-	const awMember = alias(members, "aw_member");
-	const awGuest = alias(guests, "aw_guest");
-	const rows = await tx
-		.select({
-			category: meetingAwards.category,
-			memberId: meetingAwards.memberId,
-			guestId: meetingAwards.guestId,
-			writeInName: meetingAwards.writeInName,
-			memberName: awMember.name,
-			guestName: awGuest.name,
-		})
-		.from(meetingAwards)
-		.leftJoin(awMember, eq(awMember.id, meetingAwards.memberId))
-		.leftJoin(awGuest, eq(awGuest.id, meetingAwards.guestId))
-		.where(eq(meetingAwards.meetingId, meetingId));
-	const out = new Map<AwardCategory, CurrentWinner>();
-	for (const r of rows) {
-		if (r.memberId && r.memberName) {
-			out.set(r.category, {
-				kind: "member",
-				id: r.memberId,
-				name: r.memberName,
-			});
-		} else if (r.guestId && r.guestName) {
-			out.set(r.category, { kind: "guest", id: r.guestId, name: r.guestName });
-		} else if (r.writeInName) {
-			out.set(r.category, { kind: "writeIn", id: null, name: r.writeInName });
-		}
-	}
-	return out;
-}
