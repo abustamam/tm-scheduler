@@ -38,6 +38,7 @@ import {
 	MAX_LOGO_KB,
 } from "#/lib/club-logo-limits";
 import { clubLogoUrl } from "#/lib/club-logo-url";
+import { REBUILD_CONFIRM } from "#/lib/demo-club-copy";
 import {
 	effectiveAdminClub,
 	effectiveAdminClubFor,
@@ -67,6 +68,7 @@ import {
 	loadClubAgendaSettings,
 	loadClubCharter,
 	loadClubTimezoneSettings,
+	resetDemoClubFromClub,
 	updateClubAgendaSettings,
 	updateClubProfile,
 	updateClubTimezone,
@@ -390,6 +392,54 @@ const PromoTemplateEditor = lazy(() =>
 		default: m.PromoTemplateEditor,
 	})),
 );
+
+/**
+ * The demo club's reset card (#1200). Rendered only when the loader's club row
+ * has `isDemo`, which is DISPLAY only: `resetDemoClubFromClub` refuses a club that
+ * is not the demo club and a caller who is not its admin, whatever this page
+ * shows. The warning is the one the superadmin console confirms with.
+ *
+ * The reset deletes this club and builds a new one, so the club the page is
+ * showing stops existing. `/` is where the active-club cookie falls back to the
+ * presenter's new demo club, as in the club switcher.
+ */
+function DemoResetCard({ clubId }: { clubId: string }) {
+	const router = useRouter();
+	const [busy, setBusy] = useState(false);
+
+	async function onReset() {
+		if (busy || !window.confirm(REBUILD_CONFIRM)) return;
+		setBusy(true);
+		try {
+			await resetDemoClubFromClub({ data: { clubId } });
+			toast.success("Rebuilt the demo club.");
+			await router.navigate({ to: "/", replace: true });
+			// After the navigation, never before: invalidating first would re-run
+			// this page's loaders for the club that no longer exists.
+			await router.invalidate();
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't rebuild the demo club.",
+			);
+			setBusy(false);
+		}
+	}
+
+	return (
+		<section
+			aria-labelledby="demo-reset-heading"
+			className="space-y-3 rounded-xl border border-dashed border-[var(--line)] bg-[var(--foam)] p-4"
+		>
+			<h2 id="demo-reset-heading" className="text-sm font-bold">
+				Demo club
+			</h2>
+			<p className="text-sm text-muted-foreground">{REBUILD_CONFIRM}</p>
+			<Button type="button" variant="outline" onClick={onReset} disabled={busy}>
+				{busy ? <Loader2 className="size-4 animate-spin" /> : "Reset demo club"}
+			</Button>
+		</section>
+	);
+}
 
 function ClubSettings() {
 	const { adminClub, impersonating } = Route.useRouteContext();
@@ -1076,6 +1126,8 @@ function ClubSettings() {
 					</p>
 				)}
 			</section>
+
+			{profile?.isDemo ? <DemoResetCard clubId={adminClub.clubId} /> : null}
 		</PageContainer>
 	);
 }

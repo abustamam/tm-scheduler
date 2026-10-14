@@ -13,6 +13,7 @@ import {
 	prepareMemberInvite,
 } from "./account-invite-logic";
 import type { RosterObstacle } from "./account-link-logic";
+import { isDemoClub } from "./demo-club-flag";
 import { requireClubRole, requireUser } from "./guards";
 
 // The post-verification landing that finishes linking the picked Person to the
@@ -39,7 +40,13 @@ export const inviteMember = createServerFn({ method: "POST" })
 	.handler(
 		async ({
 			data,
-		}): Promise<{ outcome: InvitePrepOutcome; obstacle?: RosterObstacle }> => {
+		}): Promise<{
+			outcome: InvitePrepOutcome;
+			obstacle?: RosterObstacle;
+			/** The demo club sends no mail (#1200): the invite was prepared and
+			 *  stamped like any other, and nothing was sent. */
+			notSent?: "demo";
+		}> => {
 			const user = await requireUser();
 			await requireClubRole(user.id, data.clubId, ["admin"]);
 
@@ -50,6 +57,14 @@ export const inviteMember = createServerFn({ method: "POST" })
 			// still a refusal on the new client rather than a success.
 			if (prep.outcome !== "ready") {
 				return { outcome: prep.outcome, obstacle: prep.obstacle };
+			}
+
+			// Read AFTER the refusals above, so a missing email or a roster conflict
+			// still says what it is in the demo club. Not a send at all: the roster
+			// would otherwise say "Invite sent." about an address that cannot
+			// receive it.
+			if (await isDemoClub(db, data.clubId)) {
+				return { outcome: "ready", notSent: "demo" };
 			}
 
 			const request = getRequest();
@@ -80,6 +95,9 @@ export interface BulkInviteResult {
 	 *  the retry — which is why the count has to reach the admin rather than
 	 *  aborting the run and looking like nothing was sent. */
 	failed: number;
+	/** Set in the demo club (#1200): the members who would have been sent an
+	 *  invite were prepared and stamped, and no mail went out, so `sent` is 0. */
+	notSent?: "demo";
 }
 
 /**
@@ -110,6 +128,7 @@ export const inviteAllMembers = createServerFn({ method: "POST" })
 				),
 			);
 
+		const demo = await isDemoClub(db, data.clubId);
 		const request = getRequest();
 		const result: BulkInviteResult = {
 			sent: 0,
@@ -118,6 +137,7 @@ export const inviteAllMembers = createServerFn({ method: "POST" })
 			rosterConflict: 0,
 			recentlyInvited: 0,
 			failed: 0,
+			...(demo ? { notSent: "demo" as const } : {}),
 		};
 		for (const row of rows) {
 			const prep = await prepareMemberInvite({
@@ -148,6 +168,9 @@ export const inviteAllMembers = createServerFn({ method: "POST" })
 			// did — it would have thrown on the first such row and aborted the
 			// whole bulk send.
 			if (prep.outcome !== "ready" || !prep.email) continue;
+			// The demo club sends no mail (#1200). The member is prepared and stamped
+			// like any other, so the roster reads "invited"; only the send is skipped.
+			if (demo) continue;
 			// One failing send must not abort the run. `prepareMemberInvite` has
 			// ALREADY stamped `invited_at` by this point, so an unguarded throw on
 			// row 17 of 60 left 16 links delivered, row 17 marked invited but never

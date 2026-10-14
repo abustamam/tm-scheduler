@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { db } from "#/db";
 import {
 	assertGeChangeAllowed,
 	isClubAgendaAdopted,
@@ -24,6 +25,8 @@ import {
 	getPublicClubProfile,
 	resolvePublicClubIdentifier,
 } from "./clubs-logic";
+import { isDemoClub } from "./demo-club-flag";
+import { resetDemoClub } from "./demo-reset-logic";
 import { requireClubRole, requireClubViewAccess, requireUser } from "./guards";
 
 const uuid = z.string().uuid();
@@ -35,13 +38,38 @@ export const getClubByIdentifier = createServerFn({ method: "GET" })
 	.handler(async ({ data }) => resolvePublicClubIdentifier(data));
 
 /** The club's free-text profile fields (district / mission / meeting schedule)
- *  for the settings form. AUTHED — any active member of the club. */
+ *  for the settings form, plus `isDemo` (#1200): the page shows the demo club's
+ *  reset card from it, which is display only, the server's check is the one that
+ *  counts (`resetDemoClubFromClub`). AUTHED — any active member of the club. */
 export const getClubProfileSettings = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
 	.handler(async ({ data: clubId }) => {
 		const currentUser = await requireUser();
 		await requireClubViewAccess(currentUser.id, clubId);
-		return getClubProfile(clubId);
+		const profile = await getClubProfile(clubId);
+		if (!profile) return null;
+		return { ...profile, isDemo: await isDemoClub(db, clubId) };
+	});
+
+const resetDemoClubSchema = z.object({ clubId: uuid });
+
+/** Delete the demo club and build it again from the fixture, from inside it
+ *  (#1200): on a presenting laptop the presenter is signed in as the demo
+ *  account, not as a superadmin. AUTHED — requires admin club role in `clubId`.
+ *
+ *  `expectClubId` makes the logic refuse (`NOT_DEMO_CLUB`) unless `clubId` IS the
+ *  demo club, so an admin of a real club who calls this deletes nothing. The
+ *  actor is re-checked inside the logic's transaction, after its locks. */
+export const resetDemoClubFromClub = createServerFn({ method: "POST" })
+	.validator((input: unknown) => resetDemoClubSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
+		return resetDemoClub({
+			now: new Date(),
+			actor: { kind: "clubAdmin", userId: currentUser.id },
+			expectClubId: data.clubId,
+		});
 	});
 
 /** The club's public-facing profile (district / mission / meeting schedule) for
