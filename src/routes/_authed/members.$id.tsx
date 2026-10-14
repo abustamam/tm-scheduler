@@ -46,6 +46,7 @@ import { effectiveAdminClub } from "#/lib/effective-admin";
 import { APP_LOCALE, formatDayMonth, formatMeetingDate } from "#/lib/format";
 import { mailtoHref } from "#/lib/mailto";
 import { phoneEditPayload } from "#/lib/member-edit-phone";
+import { isPastAgendaRemoveRefusal } from "#/lib/member-remove";
 import { formatTenure } from "#/lib/members";
 import {
 	OFFICER_POSITIONS,
@@ -859,6 +860,9 @@ function MemberActions({
 	const navigate = useNavigate();
 	const [editOpen, setEditOpen] = useState(false);
 	const [removeOpen, setRemoveOpen] = useState(false);
+	// The server's refusal, shown in the dialog itself (#1189) so the officer can
+	// take the alternative it names without losing the page.
+	const [removeRefusal, setRemoveRefusal] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const isLinkedAccount = Boolean(member.userId);
 	// The server refuses the whole edit if the field is sent while this is set.
@@ -869,6 +873,7 @@ function MemberActions({
 
 	async function onToggleStatus() {
 		const next = isInactive ? "active" : "inactive";
+		setRemoveOpen(false);
 		setBusy(true);
 		try {
 			await setMemberStatus({
@@ -949,6 +954,7 @@ function MemberActions({
 	}
 
 	async function onRemove() {
+		setRemoveRefusal(null);
 		setBusy(true);
 		try {
 			await removeMember({
@@ -959,7 +965,10 @@ function MemberActions({
 			await navigate({ to: "/roster" });
 			await router.invalidate();
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+			const message =
+				err instanceof Error ? err.message : "Something went wrong.";
+			if (isPastAgendaRemoveRefusal(message)) setRemoveRefusal(message);
+			else toast.error(message);
 		} finally {
 			setBusy(false);
 		}
@@ -985,7 +994,10 @@ function MemberActions({
 					variant="outline"
 					size="sm"
 					className="border-[var(--line)] text-[var(--danger,#b4232a)] hover:bg-[rgba(180,35,42,.08)]"
-					onClick={() => setRemoveOpen(true)}
+					onClick={() => {
+						setRemoveRefusal(null);
+						setRemoveOpen(true);
+					}}
 				>
 					Remove
 				</Button>
@@ -1164,16 +1176,26 @@ function MemberActions({
 							Their upcoming roles will be released. This can't be undone.
 						</DialogDescription>
 					</DialogHeader>
+					{removeRefusal ? (
+						<p role="alert" className="text-sm text-[var(--danger,#b4232a)]">
+							{removeRefusal}
+						</p>
+					) : null}
 					<DialogFooter>
 						<DialogClose asChild>
 							<Button type="button" variant="outline" disabled={busy}>
 								Cancel
 							</Button>
 						</DialogClose>
+						{removeRefusal && !isInactive ? (
+							<Button type="button" disabled={busy} onClick={onToggleStatus}>
+								Mark inactive instead
+							</Button>
+						) : null}
 						<Button
 							type="button"
 							variant="destructive"
-							disabled={busy}
+							disabled={busy || removeRefusal !== null}
 							onClick={onRemove}
 						>
 							{busy ? "Removing…" : "Remove member"}

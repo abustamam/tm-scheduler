@@ -7,10 +7,20 @@
 // that same module is NOT stripped and drags `pg` → `Buffer` into the browser
 // (ReferenceError: Buffer is not defined). Keeping the db logic in this
 // never-client-imported module keeps `pg` server-side. See `auth-context.ts`.
-import { and, asc, eq, gte, inArray, isNull, ne, or } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { meetings, members, people, roleSlots } from "#/db/schema";
+import {
+	clubActionItems,
+	meetingAttendance,
+	meetingAwards,
+	meetings,
+	members,
+	people,
+	roleSlots,
+	tableTopicsSpeakers,
+} from "#/db/schema";
+import { pastAgendaRemoveRefusal } from "#/lib/member-remove";
 import {
 	OFFICER_POSITIONS,
 	type OfficerPosition,
@@ -35,11 +45,17 @@ import {
 } from "./account-link-logic";
 import { logActivity } from "./activity";
 import { isReadableClub } from "./club-readable-logic";
+import { CLUB_BUSY_MESSAGE } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { contactMethodAvailableSql } from "./contact-preference-logic";
+import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
 import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 import { collapseMemberships } from "./membership-collapse-logic";
+import {
+	lockMembershipForMerge,
+	lockMembershipsAgainstMerge,
+} from "./membership-merge-lock";
 import {
 	currentOfficersByMember,
 	currentOfficersFor,
@@ -120,8 +136,11 @@ export async function loadPublicClubRoster(
  * merge/remove guards that must not destroy a member who can sign in (ADR-0008
  * Phase B — the auth link moved off the membership row onto the Person).
  */
-async function personHasAccount(personId: string): Promise<boolean> {
-	const [row] = await db
+async function personHasAccount(
+	personId: string,
+	conn: Pick<typeof db, "select"> = db,
+): Promise<boolean> {
+	const [row] = await conn
 		.select({ userId: people.userId })
 		.from(people)
 		.where(eq(people.id, personId))
@@ -588,6 +607,13 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 	const deactivating =
 		current.status === "active" && input.status === "inactive";
 	await db.transaction(async (tx) => {
+		// The membership merge lock (#1035), SHARED, before any row lock or write
+		// (#1189): the global rule, see `applyMemberRemove`. A removal holds it
+		// EXCLUSIVE for its whole transaction, so the two never interleave. Without
+		// it this UPDATE took the member row, then the member's slots, while the
+		// removal took the slots, then the member row: 40P01. A member the removal
+		// deleted while this waited is refused with `CLUB_BUSY_MESSAGE`.
+		await lockMembershipsAgainstMerge(tx, [input.memberId]);
 		// Guardrail (#187): deactivating an admin must not strand the club with
 		// zero active admins — that would silently bypass the demote guard.
 		if (deactivating && current.clubRole === "admin") {
@@ -792,46 +818,359 @@ export const removeSchema = z.object({
 });
 type RemoveInput = z.infer<typeof removeSchema> & RosterActor;
 
+const SIGNED_IN_REMOVE_MESSAGE =
+	"That member is a signed-in account and can't be removed.";
+
+/** The foreign keys to `members.id` that print a name on an agenda and are
+ *  ON DELETE SET NULL, so deleting the member blanks that name on a finished
+ *  agenda and its minutes (#1189). One row per key: the table, its member column,
+ *  and the column naming the meeting. The sweep test in
+ *  `member-remove-past-agenda.integration.test.ts` reads the database for every
+ *  such key and fails on one that is neither here nor in its "considered" list.
+ *  Votes, vote sessions and project marks also null out, but print no name on an
+ *  agenda, so they are not here. Action items are not here either: they carry no
+ *  meeting column, so they have their own list just below. */
+export const PAST_AGENDA_MEMBER_KEYS = [
+	{
+		table: roleSlots,
+		memberColumn: roleSlots.assignedMemberId,
+		meetingColumn: roleSlots.meetingId,
+	},
+	{
+		table: meetingAttendance,
+		memberColumn: meetingAttendance.memberId,
+		meetingColumn: meetingAttendance.meetingId,
+	},
+	{
+		table: tableTopicsSpeakers,
+		memberColumn: tableTopicsSpeakers.memberId,
+		meetingColumn: tableTopicsSpeakers.meetingId,
+	},
+	{
+		table: meetingAwards,
+		memberColumn: meetingAwards.memberId,
+		meetingColumn: meetingAwards.meetingId,
+	},
+] as const;
+
+/** Keys to `members.id` that print a name on a past agenda but have NO meeting
+ *  column (#1189, maintainer decision: minutes are part of the meeting's record).
+ *  `club_action_items` is "deliberately NOT owned by a meeting" (schema.ts), so the
+ *  meeting is derived from time exactly as the minutes derive it: an item is printed,
+ *  with its owner, in the minutes of every meeting `P` of its club with
+ *  `createdAt <= P.scheduledAt` and (`resolvedAt` null or `resolvedAt >
+ *  P.scheduledAt`) (`openAsOf`, `loadActionItemsForMinutes`). A CLOSED item prints its
+ *  text only, never its owner, so it prints a name only in those windows. The owner
+ *  therefore blocks removal when any such `P` is a past agenda meeting
+ *  (`isPastAgendaMeeting`, the same definition as above). The sweep test checks
+ *  this list alongside `PAST_AGENDA_MEMBER_KEYS`. The row caps on the minutes' lists
+ *  are ignored: refusing is the safe direction. */
+export const PAST_AGENDA_TIME_WINDOW_KEYS = [
+	{
+		table: clubActionItems,
+		memberColumn: clubActionItems.ownerMemberId,
+	},
+] as const;
+
+/** A meeting whose agenda is already history (#1189): `completed`, or its time has
+ *  passed and it was not cancelled. Completing is a manual step, so a past meeting
+ *  often stays `scheduled`; its agenda prints the same names. A cancelled one
+ *  printed nothing, so it does not count. `now` is the caller's ONE clock: the
+ *  release below uses `>= now` on the same value, so a meeting is on exactly one
+ *  side of the line. */
+function isPastAgendaMeeting(
+	meeting: { status: string; scheduledAt: Date },
+	now: Date,
+): boolean {
+	return (
+		meeting.status === "completed" ||
+		(meeting.scheduledAt.getTime() < now.getTime() &&
+			meeting.status !== "cancelled")
+	);
+}
+
+/** Every meeting the member appears on through the keys above, plus every meeting
+ *  of the club whose minutes print an action item they own (see
+ *  `PAST_AGENDA_TIME_WINDOW_KEYS`). Plain reads: no lock is taken. */
+async function footprintMeetingIds(tx: Tx, memberId: string, clubId: string) {
+	const meetingIds = new Set<string>();
+	for (const key of PAST_AGENDA_MEMBER_KEYS) {
+		const rows = await tx
+			.select({ meetingId: key.meetingColumn })
+			.from(key.table)
+			.where(eq(key.memberColumn, memberId));
+		for (const r of rows) meetingIds.add(r.meetingId);
+	}
+	// Action items have no meeting: join on the minutes' own window (`openAsOf`).
+	const windowed = await tx
+		.selectDistinct({ id: meetings.id })
+		.from(meetings)
+		.innerJoin(
+			clubActionItems,
+			and(
+				eq(clubActionItems.ownerMemberId, memberId),
+				gte(meetings.scheduledAt, clubActionItems.createdAt),
+				or(
+					isNull(clubActionItems.resolvedAt),
+					lt(meetings.scheduledAt, clubActionItems.resolvedAt),
+				),
+			),
+		)
+		.where(eq(meetings.clubId, clubId));
+	for (const r of windowed) meetingIds.add(r.id);
+	return meetingIds;
+}
+
+/** The footprint above, plus every slot the member holds and every action item
+ *  they own, read fresh. Slots and items come back in id order, the order they
+ *  are locked in. */
+async function memberFootprint(tx: Tx, memberId: string, clubId: string) {
+	const meetingIds = await footprintMeetingIds(tx, memberId, clubId);
+	const slots = await tx
+		.select({ id: roleSlots.id, meetingId: roleSlots.meetingId })
+		.from(roleSlots)
+		.where(eq(roleSlots.assignedMemberId, memberId))
+		.orderBy(asc(roleSlots.id));
+	const items = await tx
+		.select({ id: clubActionItems.id })
+		.from(clubActionItems)
+		.where(eq(clubActionItems.ownerMemberId, memberId))
+		.orderBy(asc(clubActionItems.id));
+	return { meetingIds, slots, itemIds: items.map((i) => i.id) };
+}
+
+/** Does the member look to be on a past agenda right now? Plain reads, no lock of
+ *  any kind (the early refusal in `applyMemberRemove`). A meeting's status can
+ *  change right after, which is why a member this finds NOT on one still goes
+ *  through the locked path; a wrong "yes" here is the safe direction. */
+async function appearsOnPastAgenda(
+	tx: Tx,
+	memberId: string,
+	clubId: string,
+	now: Date,
+): Promise<boolean> {
+	const ids = [...(await footprintMeetingIds(tx, memberId, clubId))];
+	if (ids.length === 0) return false;
+	const rows = await tx
+		.select({ status: meetings.status, scheduledAt: meetings.scheduledAt })
+		.from(meetings)
+		.where(inArray(meetings.id, ids));
+	return rows.some((m) => isPastAgendaMeeting(m, now));
+}
+
 /** Remove a member: release their upcoming slots (logged) then delete them
- *  (availability cascades). A user-linked member can't be removed. "Upcoming"
+ *  (availability cascades). A user-linked member can't be removed, and neither can
+ *  one who appears on a past agenda (#1189): the foreign keys would blank their
+ *  name there, so an officer marks them inactive instead. "Upcoming"
  *  includes a CANCELLED future meeting (#1057): a slot left there would be
  *  `claimed` by nobody once the FK nulls the holder — unclaimable, per
- *  `membership-merge-lock.ts` — and a restore would put it on the live agenda. */
+ *  `membership-merge-lock.ts` — and a restore would put it on the live agenda.
+ *
+ *  THE GLOBAL LOCK RULE (#1189, maintainer decision 2026-10-13): **the membership
+ *  merge lock first.** A writer that can hold a row lock on one of a member's rows
+ *  and then ask for a meeting, slot or member lock takes the merge lock before ANY
+ *  row lock, SHARED; the removal takes it EXCLUSIVE, so the two can never interleave.
+ *
+ *    removal: [unlocked early refusal] → merge lock (exclusive) → meeting rows,
+ *    ascending id (FOR NO KEY UPDATE) → the member's slot rows, id order (FOR
+ *    UPDATE) → the member's action items, id order (FOR UPDATE) → member row (FOR
+ *    UPDATE) → releases, delete
+ *
+ *  Takes the merge lock first (shared): `claimSlotCore`, `castVote` and the
+ *  candidate write in `voting-logic.ts`, `createSpeechRequest` and, since #1189,
+ *  `scheduleSpeechRequest` (its request-row lock, then the meeting, then
+ *  cascade-deleted by the removal's DELETE: 40P01 without it) and
+ *  `applySetMemberStatus`. Deactivate is the case that needs it: its member-row
+ *  UPDATE, then the member's slots, against the removal's slots, then member row
+ *  (40P01 without it). Reactivate touches no slots; it takes the lock too, harmlessly,
+ *  so both directions share one path. Exclusive: `collapseMemberships` (the absorbed
+ *  member) and this function.
+ *
+ *  Do NOT take it, and cannot deadlock with the removal, because each asks for the
+ *  slot or the meeting BEFORE the member row (the removal's order) and none
+ *  holds a row the removal's DELETE cascades into while it waits: `reassignSlotCore`
+ *  and `releaseSlotCore` (slot row only: NEITHER takes a meeting lock, the meeting's
+ *  status rides in their UPDATE through `meetingAcceptsWrite`), `rescheduleSpeech`
+ *  (`attachSpeechToOpenSlot`: slot rows, then the FK on the new holder), the guest
+ *  convert and link (guest-held slots re-pointed at the member: the FK is their only
+ *  touch), the minutes writers (attendance, Table Topics, awards: an insert or
+ *  update, the FK KEY SHARE last) and the action-item writers (item row, then the
+ *  FK). If one of them lands a row on the member first, the removal's member-row
+ *  lock waits for it, re-reads, and stops with CLUB_BUSY_MESSAGE when the row is on
+ *  a meeting or slot it does not hold; if the removal is first the writer waits on
+ *  the member row and then fails its FK check. A writer that takes a meeting lock
+ *  takes it FIRST, before any of the member's rows: complete, reopen, cancel,
+ *  restore, digital voting, `assign_roles` (its batch calls the reassign and release
+ *  cores under that lock), the slot add, remove and move writers,
+ *  `backfillMissingRoleSlots`, the template conversion and the speech-log edit. Each
+ *  takes the meeting lock before it locks a slot or writes a row naming a member.
+ *
+ *  Known exceptions, which DO form a cycle with the removal and can deadlock (40P01,
+ *  a retryable error, no data is lost). They are not fixed here: the same cycles exist
+ *  without this change, because the old plain DELETE locked the member row and then
+ *  cascaded into the rows these writers hold.
+ *  - Undoing a guest conversion: the member row FOR UPDATE, then the member's slots.
+ *  - Unlinking a guest: the guest row FOR UPDATE, then the member's slots (the guest's
+ *    `converted_membership_id` is SET NULL by the delete).
+ *  - `setMentorshipFocus`: the mentorship row FOR UPDATE, then the members FOR SHARE.
+ *  - A full-year dues payment: an existing `member_dues` row (the upsert), then an
+ *    INSERT that needs KEY SHARE on the member.
+ *  - `releaseSlotsAndMarkUnavailable`: one bulk slot UPDATE with no ORDER BY, so two
+ *    of them over overlapping slots can take the rows in different orders, and one
+ *    that holds slots the removal wants is a cycle.
+ *
+ *  Not covered, by design: a meeting INSERTED into an action item's window, or a
+ *  meeting RESCHEDULED into it from outside, after the second footprint read below
+ *  (neither is a meeting this transaction holds, so neither is serialised; the
+ *  second read catches the ones that commit before it).
+ *
+ *  - Early refusal: before any lock the member's footprint is read with plain
+ *    selects. On a past agenda it refuses at once, so a long-tenured member, or one
+ *    owning an old open action item (every later meeting of the club is in its
+ *    window), never costs the club a lock per meeting just to be told no. A wrong
+ *    refusal there is the safe direction (the member really was on one a moment
+ *    ago). A member who looks removable proceeds and is judged again under the locks.
+ *  - Action items (#1189): an item has no meeting, so the meetings read and locked
+ *    are every meeting of the club inside the window of an item the member owns
+ *    (`PAST_AGENDA_TIME_WINDOW_KEYS`), future and cancelled ones included, because a
+ *    completion, restore or reschedule would make one of them a past agenda. The item
+ *    writers (`updateActionItem`, resolve, reopen) are single statements that take the
+ *    item row, then the FK's KEY SHARE on the member row: the same order as here, so
+ *    no cycle. Locking the items stops a reopen (which widens an item's window) from
+ *    landing between the check and the delete.
+ *  - Holding the meeting rows is what makes the status the check reads the status the
+ *    delete acts on: a completion, cancellation or restore waits for this transaction,
+ *    or has committed before it. A reschedule is a plain UPDATE of the meeting row,
+ *    which also waits on that row lock.
+ *  - `assign_roles` locks slots in id order, then assigns one to a member (the FK takes
+ *    KEY SHARE on the member row). The member row is therefore last here: no lock is
+ *    requested after it that a writer holding a KEY SHARE on it could be sitting on.
+ *    Taking it BEFORE the slot locks deadlocks with `assign_roles` (and is what #1031
+ *    backed out of the merge).
+ *  - The member row lock is what stops a writer that does not take the merge lock (a
+ *    reassignment, an attendance row) from landing a row between the check and the
+ *    delete: its FK KEY SHARE waits for the lock. If one landed first on a meeting this
+ *    transaction does not hold, the removal stops with CLUB_BUSY_MESSAGE rather than
+ *    judge a meeting whose status can still change. */
 export async function applyMemberRemove(input: RemoveInput) {
-	const [member] = await db
-		.select()
-		.from(members)
-		.where(
-			and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
-		);
-	if (!member) throw new Error("Member not found.");
-	// A member whose Person can sign in (people.user_id) can't be removed.
-	if (await personHasAccount(member.personId)) {
-		throw new Error("That member is a signed-in account and can't be removed.");
-	}
-
 	await db.transaction(async (tx) => {
-		const upcoming = await tx
-			.select({ id: roleSlots.id })
-			.from(roleSlots)
-			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+		const [inClub] = await tx
+			.select({
+				id: members.id,
+				name: members.name,
+				personId: members.personId,
+			})
+			.from(members)
 			.where(
-				and(
-					eq(roleSlots.assignedMemberId, input.memberId),
-					gte(meetings.scheduledAt, new Date()),
-				),
+				and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
 			);
+		if (!inClub) throw new Error("Member not found.");
+
+		// The early refusal: NO lock of any kind yet. The same two refusals as the
+		// locked path below, in the same order, so the answer is identical.
+		if (await personHasAccount(inClub.personId, tx)) {
+			throw new Error(SIGNED_IN_REMOVE_MESSAGE);
+		}
+		if (
+			await appearsOnPastAgenda(tx, input.memberId, input.clubId, new Date())
+		) {
+			throw new Error(pastAgendaRemoveRefusal(inClub.name));
+		}
+
+		await lockMembershipForMerge(tx, input.memberId);
+
+		// Meetings first, in ascending id. The status and time they return are stable
+		// until this transaction ends.
+		const seen = await memberFootprint(tx, input.memberId, input.clubId);
+		const meetingById = new Map<
+			string,
+			Awaited<ReturnType<typeof lockMeetingForSlotEdit>>
+		>();
+		for (const meetingId of [...seen.meetingIds].sort()) {
+			meetingById.set(meetingId, await lockMeetingForSlotEdit(tx, meetingId));
+		}
+		// Then the member's slots, in id order. After the meeting locks the holder of a
+		// slot on a held meeting cannot change; a claim for ANOTHER member does not
+		// touch these.
+		const heldSlotIds = (
+			await tx
+				.select({ id: roleSlots.id })
+				.from(roleSlots)
+				.where(eq(roleSlots.assignedMemberId, input.memberId))
+				.orderBy(asc(roleSlots.id))
+				.for("update")
+		).map((s) => s.id);
+		// Then the action items they own, in id order.
+		const heldItemIds = (
+			await tx
+				.select({ id: clubActionItems.id })
+				.from(clubActionItems)
+				.where(eq(clubActionItems.ownerMemberId, input.memberId))
+				.orderBy(asc(clubActionItems.id))
+				.for("update")
+		).map((i) => i.id);
+		// Last, the member row itself.
+		const [locked] = await tx
+			.select({
+				id: members.id,
+				name: members.name,
+				personId: members.personId,
+			})
+			.from(members)
+			.where(
+				and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
+			)
+			.for("update");
+		if (!locked) throw new Error("Member not found.");
+		// A member whose Person can sign in (people.user_id) can't be removed. Read
+		// inside the transaction, after the locks: an invite accepted before this
+		// point is seen. (Accepting writes `people`, not `members`, so it does not
+		// wait on these locks; the window that remains is the delete below.)
+		if (await personHasAccount(locked.personId, tx)) {
+			throw new Error(SIGNED_IN_REMOVE_MESSAGE);
+		}
+
+		// ONE clock for both the refusal and the release.
+		const now = new Date();
+		const current = await memberFootprint(tx, input.memberId, input.clubId);
+		// Refuse first, on any meeting this transaction holds.
+		for (const meetingId of current.meetingIds) {
+			const meeting = meetingById.get(meetingId);
+			if (meeting && isPastAgendaMeeting(meeting, now)) {
+				throw new Error(pastAgendaRemoveRefusal(locked.name));
+			}
+		}
+		// A row landed on a meeting, or a slot was taken, that this transaction does
+		// not hold. Its status is not stable, so do not decide on it.
+		const heldSlots = new Set(heldSlotIds);
+		const heldItems = new Set(heldItemIds);
+		if (
+			[...current.meetingIds].some((id) => !meetingById.has(id)) ||
+			current.slots.some((s) => !heldSlots.has(s.id)) ||
+			current.itemIds.some((id) => !heldItems.has(id))
+		) {
+			throw new Error(CLUB_BUSY_MESSAGE);
+		}
+
+		// Upcoming: scheduled at or after `now`, on a meeting held above.
+		const upcoming = current.slots.filter((s) => {
+			const meeting = meetingById.get(s.meetingId);
+			return (
+				meeting !== undefined && meeting.scheduledAt.getTime() >= now.getTime()
+			);
+		});
 		for (const s of upcoming) {
 			// Unlink any speech (speech_id → NULL); the speech persists
 			// Person-owned and unscheduled (ADR-0009 — never destroyed).
-			// The meeting's status rides in the UPDATE (#1154): `scheduledAt >= now` is an
-			// instant, `completeMeeting` closes by the club-local day, so a meeting completed
-			// this afternoon and scheduled for this evening matches the SELECT above. The
-			// UPDATE refuses it, so the release keeps its status, claimedAt and speechId.
-			// On remove, `assigned_member_id` of a completed slot is still cleared by the
-			// members FK (ON DELETE SET NULL); that is not this writer's doing.
-			// A cancelled future meeting is still released (#1057). The log follows
-			// RETURNING, so it names only the slots actually released.
+			// A completed meeting never reaches here: it is a past agenda, refused above,
+			// under the meeting lock that keeps it from completing in between. The status
+			// still rides in the UPDATE (`meetingAcceptsWrite`) as the writers' guard
+			// requires. A cancelled future meeting is still released (#1057). The log
+			// follows RETURNING, so it names only the slots actually released.
+			// `released.length === 0` below is DEFENSIVE: the meeting and slot locks held
+			// here mean this UPDATE cannot lose to a status change or a reassignment, and
+			// no test can reach it (a mutation of that line survives). Deactivate's copy
+			// of the guard is reachable and is tested.
 			const released = await tx
 				.update(roleSlots)
 				.set({
@@ -843,8 +1182,7 @@ export async function applyMemberRemove(input: RemoveInput) {
 				.where(
 					and(
 						eq(roleSlots.id, s.id),
-						// Still held by THIS member at UPDATE time: the SELECT above is a snapshot, and
-						// a slot reassigned since must not lose its new holder or speech link.
+						// Still held by THIS member at UPDATE time.
 						eq(roleSlots.assignedMemberId, input.memberId),
 						meetingAcceptsWrite(
 							tx,
@@ -865,13 +1203,11 @@ export async function applyMemberRemove(input: RemoveInput) {
 				detail: { fromMemberId: input.memberId },
 			});
 		}
-		// RETURNING, scoped to id AND club, and checked. The read above is outside
-		// this transaction, so a concurrent removal of the same row can land in
-		// between; a delete that removes nothing must not log a removal. The log
-		// row is the release record the CSV importer trusts (#855), and a stale
-		// second removal writing it would make this club the Person's releaser
-		// after another club had since removed them. Throwing rolls back the
-		// slot releases above with it.
+		// RETURNING, scoped to id AND club, and checked: a delete that removes nothing
+		// must not log a removal. The log row is the release record the CSV importer
+		// trusts (#855), and a stale second removal writing it would make this club the
+		// Person's releaser after another club had since removed them. Throwing rolls
+		// back the slot releases above with it.
 		const [deleted] = await tx
 			.delete(members)
 			.where(
@@ -890,7 +1226,7 @@ export async function applyMemberRemove(input: RemoveInput) {
 			// removal is the LATEST naming them (`loadPersonCandidates`). Only an
 			// unlinked Person gets here (`personHasAccount` above), which is exactly
 			// the kind that rule is about. App-written, never client text.
-			detail: { name: member.name, personId: deleted.personId },
+			detail: { name: locked.name, personId: deleted.personId },
 		});
 	});
 	return { ok: true as const };

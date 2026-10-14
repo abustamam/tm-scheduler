@@ -712,7 +712,10 @@ describe.skipIf(!hasTestDb)("cross-club attach gate (#759)", () => {
 				(e: unknown) => e,
 			);
 			try {
-				await waitForLockWait('delete from "members"', first.pid);
+				// #1189: the removal now takes the member row's lock (a `for update`
+				// select, last of its locks), so that is where the stale second removal
+				// parks, not on the delete.
+				await waitForLockWait('"members"%for update', first.pid);
 				await removeFrom(attackerClub.clubId, p);
 			} finally {
 				// Released on every path: a blocker left open keeps its row lock and
