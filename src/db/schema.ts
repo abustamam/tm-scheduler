@@ -1051,8 +1051,18 @@ export const members = pgTable(
 		// DEFAULT false in migration 0103 backfills every existing row with
 		// false, which is exactly right here (unlike 0102's `now()` trap).
 		willingToMentor: boolean("willing_to_mentor").notNull().default(false),
+		// The mentor's short bio (#945), shown ONLY on the Find a mentor page to
+		// active members of the same club, never public. Per club, because a
+		// membership is per club. Written only by the member
+		// (`setMyMentorBio`); null is "no bio yet". 1-500 characters or null,
+		// held by `members_mentor_bio_len_check`.
+		mentorBio: text("mentor_bio"),
 	},
 	(t) => [
+		check(
+			"members_mentor_bio_len_check",
+			sql`${t.mentorBio} is null or char_length(${t.mentorBio}) between 1 and 500`,
+		),
 		index("members_club_idx").on(t.clubId),
 		index("members_person_idx").on(t.personId),
 		// One membership per person per club (#489). Several paths assert this in
@@ -1349,6 +1359,72 @@ export const mentorships = pgTable(
 		uniqueIndex("mentorships_active_nofocus_unique")
 			.on(t.mentorMemberId, t.menteeMemberId)
 			.where(sql`${t.endedAt} is null and ${t.focus} is null`),
+	],
+);
+
+// A mentee's request for a mentor (#945, CONTEXT.md "Mentorship"). Part A of
+// the feature adds the table; nothing writes it until the request flow (#1209).
+// Written by the mentee (request, withdraw), the mentor (accept, decline) and
+// an admin acting for the mentor; read by those parties only, in-app. Never
+// public (`mentorship-not-public.guard.test.ts`). Accepting creates a
+// `mentorships` row, named by `mentorship_id`. A decided request is kept as
+// history.
+//
+// Both member columns belong to `club_id`, checked in the WRITE PATH, for the
+// drizzle-kit reason recorded on `mentorships` above.
+// ---------------------------------------------------------------------------
+
+export const mentorshipRequestStatusEnum = pgEnum("mentorship_request_status", [
+	"pending",
+	"accepted",
+	"declined",
+	"withdrawn",
+]);
+
+export const mentorshipRequests = pgTable(
+	"mentorship_requests",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		menteeMemberId: uuid("mentee_member_id")
+			.notNull()
+			.references(() => members.id, { onDelete: "cascade" }),
+		mentorMemberId: uuid("mentor_member_id")
+			.notNull()
+			.references(() => members.id, { onDelete: "cascade" }),
+		focus: mentorshipFocusEnum("focus").notNull().default("new_member"),
+		// Free text, only alongside `focus = 'other'`.
+		focusOther: text("focus_other"),
+		status: mentorshipRequestStatusEnum("status").notNull().default("pending"),
+		// The pairing an accepted request created.
+		mentorshipId: uuid("mentorship_id").references(() => mentorships.id, {
+			onDelete: "set null",
+		}),
+		// Who accepted or declined: the mentor, or the admin acting for them.
+		decidedByMemberId: uuid("decided_by_member_id").references(
+			() => members.id,
+			{ onDelete: "set null" },
+		),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		decidedAt: timestamp("decided_at"),
+	},
+	(t) => [
+		index("mentorship_requests_club_idx").on(t.clubId),
+		index("mentorship_requests_mentor_idx").on(t.mentorMemberId),
+		check(
+			"mentorship_requests_not_self_check",
+			sql`${t.menteeMemberId} <> ${t.mentorMemberId}`,
+		),
+		check(
+			"mentorship_requests_focus_other_check",
+			sql`${t.focusOther} is null or ${t.focus} = 'other'`,
+		),
+		// One pending request per mentee; withdrawing or declining frees it.
+		uniqueIndex("mentorship_requests_one_pending_unique")
+			.on(t.menteeMemberId)
+			.where(sql`${t.status} = 'pending'`),
 	],
 );
 

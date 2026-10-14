@@ -5,7 +5,9 @@ import { MemberContactLinks } from "#/components/members/member-contact-links";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { Textarea } from "#/components/ui/textarea";
 import {
+	MENTOR_BIO_MAX,
 	MENTORSHIP_FOCUS_LABELS,
 	MENTORSHIP_FOCUS_OTHER_MAX,
 	MENTORSHIP_FOCUSES,
@@ -32,6 +34,10 @@ import type {
 
 export const MENTORING_HEADING = "Mentoring";
 export const WILLING_TO_MENTOR_LABEL = "I'm willing to mentor another member";
+export const MENTOR_BIO_LABEL = "Your mentor bio";
+export const MENTOR_BIO_PLACEHOLDER =
+	"What you can help with: Pathways, contests, leadership, evaluations…";
+export const FIND_A_MENTOR_LABEL = "Find a mentor";
 export const YOUR_MENTORS_HEADING = "Your mentors";
 export const YOUR_MENTEES_HEADING = "Your mentees";
 export const MEMBER_MENTORING_HEADING = "Member mentoring";
@@ -90,9 +96,12 @@ function PartyLine({ row }: { row: MentorshipPartyRow }) {
 export function MentorshipCard({
 	view,
 	onToggleWilling,
+	onSaveBio,
 }: {
 	view: MyMentorshipsView | null;
 	onToggleWilling: (willing: boolean) => Promise<void>;
+	/** Saves the member's own mentor bio (#945); blank clears it. */
+	onSaveBio: (bio: string) => Promise<void>;
 }) {
 	const [busy, setBusy] = useState(false);
 	const checkboxId = useId();
@@ -156,11 +165,90 @@ export function MentorshipCard({
 						{WILLING_TO_MENTOR_LABEL}
 					</label>
 					<div className="text-xs text-[var(--sea-ink-soft)]">
-						Your VP Education sees who is available when pairing members.
+						Members can find you on Find a mentor; your VP Education sees you
+						when pairing.
 					</div>
 				</div>
 			</div>
+			{view.willingToMentor ? (
+				// Keyed on the saved text, so a save (or a reload that brings in a
+				// bio from another tab) resets the draft to what is stored.
+				<MentorBioEditor
+					key={view.mentorBio ?? ""}
+					saved={view.mentorBio}
+					onSave={onSaveBio}
+				/>
+			) : null}
+			<div className="border-t border-[var(--line)] px-5 py-3 text-xs">
+				<Link to="/mentors" className="font-semibold">
+					{FIND_A_MENTOR_LABEL}
+				</Link>
+			</div>
 		</section>
+	);
+}
+
+/**
+ * The mentor bio box (#945): shown while "willing to mentor" is checked. The
+ * bio is KEPT when the flag is unchecked, so this only hides. The counter
+ * counts the same way the server does (JavaScript string length).
+ */
+function MentorBioEditor({
+	saved,
+	onSave,
+}: {
+	saved: string | null;
+	onSave: (bio: string) => Promise<void>;
+}) {
+	const [draft, setDraft] = useState(saved ?? "");
+	const [busy, setBusy] = useState(false);
+	const fieldId = useId();
+	const changed = draft.trim() !== (saved ?? "");
+	const tooLong = draft.trim().length > MENTOR_BIO_MAX;
+
+	async function save() {
+		setBusy(true);
+		try {
+			await onSave(draft.trim());
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<div className="border-t border-[var(--line)] px-5 py-3">
+			<Label htmlFor={fieldId} className="text-sm font-semibold">
+				{MENTOR_BIO_LABEL}
+			</Label>
+			<Textarea
+				id={fieldId}
+				value={draft}
+				onChange={(e) => setDraft(e.currentTarget.value)}
+				placeholder={MENTOR_BIO_PLACEHOLDER}
+				rows={3}
+				className="mt-1.5"
+			/>
+			<div className="mt-1.5 flex items-center justify-between gap-3">
+				<span
+					className={
+						tooLong
+							? "text-xs font-semibold text-destructive"
+							: "text-xs text-[var(--sea-ink-soft)]"
+					}
+					data-slot="mentor-bio-count"
+				>
+					{draft.trim().length}/{MENTOR_BIO_MAX}
+				</span>
+				<Button
+					size="sm"
+					disabled={busy || !changed || tooLong}
+					onClick={() => void save()}
+				>
+					{busy ? <Loader2 className="animate-spin" aria-hidden /> : null}
+					Save
+				</Button>
+			</div>
+		</div>
 	);
 }
 

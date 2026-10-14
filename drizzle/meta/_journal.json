@@ -862,6 +862,13 @@
       "when": 1791948722751,
       "tag": "0122_demo_club",
       "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1791997628784,
+      "tag": "0123_chief_expediter",
+      "breakpoints": true
     }
   ]
 }

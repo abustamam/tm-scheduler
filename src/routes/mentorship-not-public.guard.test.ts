@@ -85,11 +85,38 @@ describe("mentorship stays off every public surface (#939)", () => {
 		});
 	}
 
+	// Both tables, in both spellings: the SQL name and the drizzle identifier
+	// (#945). `\bmentorships\b` alone read straight past `mentorshipRequests`,
+	// so a new reader of the request table would have passed. `\b` after the
+	// plural keeps `mentorshipsFoo` out and the singular `mentorship` (a module
+	// name) out of it.
+	const MENTORSHIP_TABLES =
+		/\b(?:mentorships|mentorship_requests|mentorshipRequests)\b/;
+
+	it("the table pattern names both tables in both spellings, and no look-alike", () => {
+		for (const hit of [
+			"from(mentorships)",
+			"FROM mentorships m",
+			"mentorship_requests",
+			"insert(mentorshipRequests)",
+		]) {
+			expect(MENTORSHIP_TABLES.test(hit), hit).toBe(true);
+		}
+		for (const miss of [
+			"mentorship-logic",
+			"mentorshipsFoo",
+			"mentorshipRequestsFoo",
+			"MentorshipCard",
+		]) {
+			expect(MENTORSHIP_TABLES.test(miss), miss).toBe(false);
+		}
+	});
+
 	// The server side of the same boundary. A public route could still leak a
 	// pairing through a SESSION-LESS server fn in some other module that
 	// reads the table, so the table itself may be touched only by the logic
 	// modules whose every caller is gated (the merge only re-points rows).
-	it("only the gated logic modules touch the mentorships table", () => {
+	it("only the gated logic modules touch the mentorships and mentorship_requests tables", () => {
 		const TABLE_READERS = new Set([
 			"server/mentorship-logic.ts",
 			"server/orientation-logic.ts",
@@ -115,7 +142,7 @@ describe("mentorship stays off every public surface (#939)", () => {
 					f !== "routeTree.gen.ts",
 			)
 			.filter((f) =>
-				/\bmentorships\b/.test(readFileSync(resolve(SRC, f), "utf8")),
+				MENTORSHIP_TABLES.test(readFileSync(resolve(SRC, f), "utf8")),
 			);
 		expect(readers.sort()).toEqual([...TABLE_READERS].sort());
 	});

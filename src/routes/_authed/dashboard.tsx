@@ -37,6 +37,7 @@ import { listMyCommitments } from "#/server/meetings";
 import {
 	getMyMentorships,
 	listClubMentorships,
+	setMyMentorBio,
 	setMyWillingToMentor,
 } from "#/server/mentorship";
 import {
@@ -481,6 +482,11 @@ function Dashboard() {
 									setMyWillingToMentor({
 										data: { clubId: activeClubId, willing },
 									}),
+								)
+							}
+							onSaveBio={(bio) =>
+								mutateAndReload(() =>
+									setMyMentorBio({ data: { clubId: activeClubId, bio } }),
 								)
 							}
 						/>

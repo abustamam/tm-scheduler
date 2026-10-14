@@ -251,6 +251,21 @@ the nouns in `src/db/schema.ts`.
   keeps a mentee off the unpaired list) only while BOTH parties are active members: deactivating
   one leaves the row untouched and dormant, and reactivating restores it, while an admin cannot
   create or re-focus a pairing with an inactive party.
+  **Mentor bio and Find a mentor** (#945): `members.mentor_bio`, 1-500 characters or null, is the
+  mentor's own short bio, written only by the member from the Mentoring card (shown while "willing
+  to mentor" is checked, and kept when it is unchecked) and shown ONLY on **Find a mentor**
+  (`/mentors`). That page lists the club's ACTIVE willing members other than the viewer, by name,
+  each with the bio and how many people they mentor now (active pairings, any focus, both parties
+  active). There is no cap: a full mentor turns "willing" off. Every active member of the club may
+  browse it; it is never public and carries no contact details. A **mentor request**
+  (`mentorship_requests`, #945; the flow is Part B, #1209, and nothing writes the table yet) is a
+  mentee's pick of a mentor: `status` is `pending`, `accepted`, `declined` or `withdrawn`, with
+  the `focus` the mentee chose (default `new_member`), ONE pending request per mentee (a partial
+  unique index), and decided requests kept as history. Accepting creates the pairing
+  (`mentorship_id`). A member merge keeps requests on the keeper like pairings: a request between
+  the two merged memberships is dropped, and when both have a pending request as mentee the
+  absorbed one becomes `withdrawn`. The merge keeps the keeper's bio, else the absorbed one's.
+  Undoing a guest conversion refuses when the membership has any request, as for a pairing.
 - **`club_memberships`** — legacy auth-only link (signed-in `user` ↔ club) that today still
   resolves `club_role` in the auth path; being absorbed into Membership (ADR-0008, follow-up
   to #64). Not the roster.

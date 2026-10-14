@@ -175,7 +175,7 @@ export function orientationItems(facts: OrientationFacts): OrientationItem[] {
 		{
 			key: "get-a-mentor",
 			label: "Get a mentor",
-			hint: "Your VP Education pairs you with an experienced member.",
+			hint: "Choose a mentor, or your VP Education will pair you.",
 			done: hasNewMemberMentor(facts),
 			selfTick: false,
 		},

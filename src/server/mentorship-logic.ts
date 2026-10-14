@@ -22,12 +22,23 @@
 // the rule the app already applies to club members (`getMemberProfile` and
 // `listClubMembers` return every member's contact to any active member of the
 // club, behind `requireClubViewAccess`), not a new one.
-import { and, asc, eq, inArray, isNull, notExists, or, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	eq,
+	inArray,
+	isNull,
+	ne,
+	notExists,
+	or,
+	sql,
+} from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
-import { members, mentorships, people } from "#/db/schema";
+import { members, mentorshipRequests, mentorships, people } from "#/db/schema";
 import {
+	MENTOR_BIO_MAX,
 	MENTORSHIP_FOCUS_OTHER_MAX,
 	MENTORSHIP_FOCUSES,
 	type MentorCandidate,
@@ -92,6 +103,22 @@ export const setMentorshipFocusSchema = z
 export const setWillingToMentorSchema = z
 	.object({ clubId: uuid, willing: z.boolean() })
 	.strict();
+/**
+ * The member's own mentor bio (#945): the club and the text, nothing that names
+ * a member. Empty (after trimming) clears it.
+ */
+export const setMyMentorBioSchema = z
+	.object({ clubId: uuid, bio: z.string().trim().max(MENTOR_BIO_MAX) })
+	.strict();
+
+/** A willing mentor on the Find a mentor page (#945). No contact details. */
+export interface MentorListing {
+	memberId: string;
+	name: string;
+	mentorBio: string | null;
+	/** Active pairings, any focus, with them as the mentor. */
+	activeMenteeCount: number;
+}
 
 type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
@@ -114,6 +141,8 @@ export interface MentorshipRow {
 
 export interface MyMentorships {
 	willingToMentor: boolean;
+	/** The caller's mentor bio (#945), or null. Kept when the flag is off. */
+	mentorBio: string | null;
 	/** Active pairings where the caller is the mentee. */
 	mentors: MentorshipRow[];
 	/** Active pairings where the caller is the mentor. */
@@ -173,6 +202,33 @@ export async function setMyWillingToMentor(input: {
 		.set({ willingToMentor: input.willing })
 		.where(eq(members.id, id));
 	return { willingToMentor: input.willing };
+}
+
+/**
+ * Set or clear the mentor bio on the caller's OWN membership (#945). The row
+ * is resolved from the session, as the flag's is; the input names no member.
+ * Blank after trimming stores null. Logs `member_edit` so a read-write
+ * impersonation leaves `impersonated_by`.
+ */
+export async function setMyMentorBio(input: {
+	userId: string;
+	clubId: string;
+	bio: string;
+}): Promise<{ mentorBio: string | null }> {
+	const id = await ownMembershipId(input.userId, input.clubId);
+	const mentorBio = input.bio.trim() === "" ? null : input.bio.trim();
+	await db.transaction(async (tx) => {
+		await tx.update(members).set({ mentorBio }).where(eq(members.id, id));
+		await logActivity(tx, {
+			clubId: input.clubId,
+			actorMemberId: id,
+			action: "member_edit",
+			targetType: "member",
+			targetId: id,
+			detail: { mentorBio: mentorBio === null ? "cleared" : "set" },
+		});
+	});
+	return { mentorBio };
 }
 
 // ---------------------------------------------------------------------------
@@ -464,11 +520,16 @@ async function activePairingsFor(
 export const MENTORSHIP_MEMBER_FKS = [
 	"mentorships.mentor_member_id",
 	"mentorships.mentee_member_id",
+	// A request cascades off the member the same way (#945). `memberHasMentorship`
+	// counts it, so this one refusal covers both tables.
+	"mentorship_requests.mentor_member_id",
+	"mentorship_requests.mentee_member_id",
 ];
 
 /**
- * Whether the membership is in ANY pairing, as mentor or mentee, ended or not.
- * An existence check: it returns no pairing data. Its caller is the gated
+ * Whether the membership is in ANY pairing or mentor request, as mentor or
+ * mentee, ended or decided or not. An existence check: it returns no pairing
+ * data. Its caller is the gated
  * guest-conversion undo, which runs it inside its own transaction (`conn`) to
  * refuse before a cascading delete takes the pairings (#1202).
  */
@@ -486,7 +547,19 @@ export async function memberHasMentorship(
 			),
 		)
 		.limit(1);
-	return rows.length > 0;
+	if (rows.length > 0) return true;
+	// Requests cascade off the membership too (#945), any status.
+	const requests = await conn
+		.select({ id: mentorshipRequests.id })
+		.from(mentorshipRequests)
+		.where(
+			or(
+				eq(mentorshipRequests.mentorMemberId, membershipId),
+				eq(mentorshipRequests.menteeMemberId, membershipId),
+			),
+		)
+		.limit(1);
+	return requests.length > 0;
 }
 
 /**
@@ -497,7 +570,11 @@ export async function loadMyMentorships(
 	membershipId: string,
 ): Promise<MyMentorships | null> {
 	const [row] = await db
-		.select({ clubId: members.clubId, willing: members.willingToMentor })
+		.select({
+			clubId: members.clubId,
+			willing: members.willingToMentor,
+			bio: members.mentorBio,
+		})
 		.from(members)
 		.where(eq(members.id, membershipId))
 		.limit(1);
@@ -507,7 +584,12 @@ export async function loadMyMentorships(
 		activePairingsFor(membershipId, "mentee", cc),
 		activePairingsFor(membershipId, "mentor", cc),
 	]);
-	return { willingToMentor: row.willing, mentors, mentees };
+	return {
+		willingToMentor: row.willing,
+		mentorBio: row.bio,
+		mentors,
+		mentees,
+	};
 }
 
 /**
@@ -629,4 +711,52 @@ export async function loadClubMentorships(
 		unpaired,
 		willing,
 	};
+}
+
+/**
+ * The Find a mentor page's list (#945): the club's ACTIVE members who said they
+ * are willing to mentor, other than the caller, by name. Each carries the bio
+ * and how many people they mentor now (active pairings, any focus, with the
+ * mentee also active, as everywhere else a pairing counts). No contact details:
+ * the member page already shows those to club members. Takes the membership
+ * the READ GATE resolved, never an id from input, and writes nothing.
+ */
+export async function listMentors(
+	clubId: string,
+	callerMembershipId: string,
+): Promise<MentorListing[]> {
+	const count = db
+		.select({
+			mentorId: mentorships.mentorMemberId,
+			n: sql<number>`count(*)::int`.as("n"),
+		})
+		.from(mentorships)
+		.innerJoin(menteeM, eq(menteeM.id, mentorships.menteeMemberId))
+		.where(and(isNull(mentorships.endedAt), eq(menteeM.status, "active")))
+		.groupBy(mentorships.mentorMemberId)
+		.as("mentee_counts");
+	const rows = await db
+		.select({
+			memberId: members.id,
+			name: members.name,
+			mentorBio: members.mentorBio,
+			n: count.n,
+		})
+		.from(members)
+		.leftJoin(count, eq(count.mentorId, members.id))
+		.where(
+			and(
+				eq(members.clubId, clubId),
+				eq(members.status, "active"),
+				eq(members.willingToMentor, true),
+				ne(members.id, callerMembershipId),
+			),
+		)
+		.orderBy(asc(members.name), asc(members.id));
+	return rows.map((r) => ({
+		memberId: r.memberId,
+		name: r.name,
+		mentorBio: r.mentorBio,
+		activeMenteeCount: r.n ?? 0,
+	}));
 }

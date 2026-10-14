@@ -39,6 +39,7 @@ import {
 	meetingVotes,
 	memberDues,
 	members,
+	mentorshipRequests,
 	mentorships,
 	officerTerms,
 	officerTrainingRecords,
@@ -800,6 +801,15 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			"mentorships.mentor_member_id",
 			"mentorships.mentee_member_id",
 			"mentorships.created_by_member_id",
+			// #945 — mentor requests. `mentee_member_id` and `mentor_member_id` are
+			// ON DELETE CASCADE and the mentee sits inside the one-pending partial
+			// unique index, so they re-point via delete-then-withdraw-then-update,
+			// and a keeper↔absorbed request is dropped rather than turned into a
+			// request to oneself. `decided_by_member_id` is nullable attribution
+			// and re-points plainly.
+			"mentorship_requests.mentee_member_id",
+			"mentorship_requests.mentor_member_id",
+			"mentorship_requests.decided_by_member_id",
 			// #1052 — the speech-request queue. ON DELETE CASCADE with no
 			// member-unique index, so it re-points plainly; without it a merge would
 			// delete every request the absorbed membership had queued.
@@ -1294,6 +1304,142 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			});
 			await collapse(keeperId, absorbedId);
 			expect((await pairs())[0]?.createdBy).toBe(keeperId);
+		});
+	});
+
+	describe("mentor requests (#945)", () => {
+		const requests = async () =>
+			(
+				await testDb
+					.select()
+					.from(mentorshipRequests)
+					.where(eq(mentorshipRequests.clubId, seed.clubId))
+			).map((r) => ({
+				mentee: r.menteeMemberId,
+				mentor: r.mentorMemberId,
+				status: r.status,
+				decidedBy: r.decidedByMemberId,
+				decidedAt: r.decidedAt,
+			}));
+		const req = (
+			mentee: string,
+			mentor: string,
+			status: "pending" | "accepted" | "declined" | "withdrawn" = "pending",
+			decidedBy: string | null = null,
+		) => ({
+			clubId: seed.clubId,
+			menteeMemberId: mentee,
+			mentorMemberId: mentor,
+			status,
+			decidedByMemberId: decidedBy,
+		});
+
+		// protects=a merge keeps every request the absorbed membership sent or
+		// received (as mentee, as mentor, as the one who decided), now on the
+		// keeper, and drops the keeper<->absorbed request, which would otherwise
+		// be a request to oneself;
+		// fails_when=the absorbed row's requests are cascade-deleted with it, an
+		// FK is left pointing at a deleted row, or the self-request trips
+		// `mentorship_requests_not_self_check` and rolls the whole merge back;
+		// no_claim=the pending-uniqueness case (next test); the pairing flow
+		// that creates requests, which is Part B
+		it("re-points the absorbed member's requests to the keeper and drops the keeper<->absorbed one", async () => {
+			const keeperId = await addMembership({ name: "Keeper" });
+			const absorbedId = await addMembership({ name: "Absorbed" });
+			const otherId = await addMembership({ name: "Other" });
+			const thirdId = await addMembership({ name: "Third" });
+			await testDb.insert(mentorshipRequests).values([
+				// As mentee, decided by `other`.
+				req(absorbedId, otherId, "declined", otherId),
+				// As mentor, decided by the absorbed member themself.
+				req(thirdId, absorbedId, "accepted", absorbedId),
+				// Between the two: dropped, in both directions and any status.
+				req(keeperId, absorbedId, "pending"),
+				req(absorbedId, keeperId, "withdrawn"),
+			]);
+			await collapse(keeperId, absorbedId);
+			const after = await requests();
+			expect(after).toHaveLength(2);
+			expect(
+				after.find((r) => r.mentor === otherId && r.status === "declined"),
+			).toMatchObject({ mentee: keeperId, decidedBy: otherId });
+			expect(
+				after.find((r) => r.mentee === thirdId && r.status === "accepted"),
+			).toMatchObject({ mentor: keeperId, decidedBy: keeperId });
+		});
+
+		// protects=a merge of two memberships that each have a PENDING request as
+		// mentee completes, leaving the keeper's pending request and the
+		// absorbed one withdrawn (decided_at stamped), so the one-pending index
+		// still holds;
+		// fails_when=the absorbed pending request is re-pointed as is (the unique
+		// index rolls the whole merge back), is deleted, or the keeper's is the
+		// one withdrawn;
+		// no_claim=an absorbed pending request with NO keeper pending request
+		// (it stays pending: the second half of this test)
+		it("keeps at most one pending request per mentee: the absorbed one is withdrawn", async () => {
+			const keeperId = await addMembership({ name: "Keeper" });
+			const absorbedId = await addMembership({ name: "Absorbed" });
+			const mentorA = await addMembership({ name: "Mentor A" });
+			const mentorB = await addMembership({ name: "Mentor B" });
+			await testDb
+				.insert(mentorshipRequests)
+				.values([req(keeperId, mentorA), req(absorbedId, mentorB)]);
+			await collapse(keeperId, absorbedId);
+			const after = await requests();
+			expect(after).toHaveLength(2);
+			expect(after.filter((r) => r.status === "pending")).toHaveLength(1);
+			const kept = after.find((r) => r.status === "pending");
+			expect(kept?.mentor).toBe(mentorA);
+			const withdrawn = after.find((r) => r.status === "withdrawn");
+			expect(withdrawn).toMatchObject({ mentee: keeperId, mentor: mentorB });
+			expect(withdrawn?.decidedAt).toBeInstanceOf(Date);
+
+			// The other half: the keeper has none, so the absorbed one is not
+			// withdrawn, just moved.
+			const keeper2 = await addMembership({ name: "Keeper 2" });
+			const absorbed2 = await addMembership({ name: "Absorbed 2" });
+			await testDb.insert(mentorshipRequests).values([req(absorbed2, mentorA)]);
+			await collapse(keeper2, absorbed2);
+			const moved = (await requests()).find((r) => r.mentee === keeper2);
+			expect(moved).toMatchObject({ status: "pending", mentor: mentorA });
+			expect(moved?.decidedAt).toBeNull();
+		});
+
+		// protects=the keeper's mentor bio survives a merge, and the absorbed
+		// one's fills a keeper with none;
+		// fails_when=the absorbed bio overwrites the keeper's, or a keeper with
+		// no bio loses the one the absorbed membership wrote;
+		// no_claim=that the two are joined or edited: neither bio is combined
+		it("keeps the keeper's mentor bio, else takes the absorbed one's", async () => {
+			const bioOf = async (id: string) =>
+				(
+					await testDb
+						.select({ b: members.mentorBio })
+						.from(members)
+						.where(eq(members.id, id))
+				)[0]?.b;
+			const k1 = await addMembership({ name: "K1" });
+			const a1 = await addMembership({ name: "A1" });
+			await testDb
+				.update(members)
+				.set({ mentorBio: "Keeper words" })
+				.where(eq(members.id, k1));
+			await testDb
+				.update(members)
+				.set({ mentorBio: "Absorbed words" })
+				.where(eq(members.id, a1));
+			await collapse(k1, a1);
+			expect(await bioOf(k1)).toBe("Keeper words");
+
+			const k2 = await addMembership({ name: "K2" });
+			const a2 = await addMembership({ name: "A2" });
+			await testDb
+				.update(members)
+				.set({ mentorBio: "Only absorbed" })
+				.where(eq(members.id, a2));
+			await collapse(k2, a2);
+			expect(await bioOf(k2)).toBe("Only absorbed");
 		});
 	});
 

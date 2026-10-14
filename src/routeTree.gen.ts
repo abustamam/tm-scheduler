@@ -33,6 +33,7 @@ import { Route as AuthedScheduleRouteImport } from './routes/_authed/schedule'
 import { Route as AuthedRosterRouteImport } from './routes/_authed/roster'
 import { Route as AuthedOfficersRouteImport } from './routes/_authed/officers'
 import { Route as AuthedNextRouteImport } from './routes/_authed/next'
+import { Route as AuthedMentorsRouteImport } from './routes/_authed/mentors'
 import { Route as AuthedMeRouteImport } from './routes/_authed/me'
 import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
 import { Route as AuthedActivityRouteImport } from './routes/_authed/activity'
@@ -209,6 +210,11 @@ const AuthedOfficersRoute = AuthedOfficersRouteImport.update({
 const AuthedNextRoute = AuthedNextRouteImport.update({
   id: '/next',
   path: '/next',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedMentorsRoute = AuthedMentorsRouteImport.update({
+  id: '/mentors',
+  path: '/mentors',
   getParentRoute: () => AuthedRoute,
 } as any)
 const AuthedMeRoute = AuthedMeRouteImport.update({
@@ -531,6 +537,7 @@ export interface FileRoutesByFullPath {
   '/activity': typeof AuthedActivityRoute
   '/dashboard': typeof AuthedDashboardRoute
   '/me': typeof AuthedMeRoute
+  '/mentors': typeof AuthedMentorsRoute
   '/next': typeof AuthedNextRoute
   '/officers': typeof AuthedOfficersRoute
   '/roster': typeof AuthedRosterRoute
@@ -613,6 +620,7 @@ export interface FileRoutesByTo {
   '/activity': typeof AuthedActivityRoute
   '/dashboard': typeof AuthedDashboardRoute
   '/me': typeof AuthedMeRoute
+  '/mentors': typeof AuthedMentorsRoute
   '/next': typeof AuthedNextRoute
   '/officers': typeof AuthedOfficersRoute
   '/roster': typeof AuthedRosterRoute
@@ -695,6 +703,7 @@ export interface FileRoutesById {
   '/_authed/activity': typeof AuthedActivityRoute
   '/_authed/dashboard': typeof AuthedDashboardRoute
   '/_authed/me': typeof AuthedMeRoute
+  '/_authed/mentors': typeof AuthedMentorsRoute
   '/_authed/next': typeof AuthedNextRoute
   '/_authed/officers': typeof AuthedOfficersRoute
   '/_authed/roster': typeof AuthedRosterRoute
@@ -779,6 +788,7 @@ export interface FileRouteTypes {
     | '/activity'
     | '/dashboard'
     | '/me'
+    | '/mentors'
     | '/next'
     | '/officers'
     | '/roster'
@@ -861,6 +871,7 @@ export interface FileRouteTypes {
     | '/activity'
     | '/dashboard'
     | '/me'
+    | '/mentors'
     | '/next'
     | '/officers'
     | '/roster'
@@ -942,6 +953,7 @@ export interface FileRouteTypes {
     | '/_authed/activity'
     | '/_authed/dashboard'
     | '/_authed/me'
+    | '/_authed/mentors'
     | '/_authed/next'
     | '/_authed/officers'
     | '/_authed/roster'
@@ -1218,6 +1230,13 @@ declare module '@tanstack/react-router' {
       path: '/next'
       fullPath: '/next'
       preLoaderRoute: typeof AuthedNextRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/mentors': {
+      id: '/_authed/mentors'
+      path: '/mentors'
+      fullPath: '/mentors'
+      preLoaderRoute: typeof AuthedMentorsRouteImport
       parentRoute: typeof AuthedRoute
     }
     '/_authed/me': {
@@ -1646,6 +1665,7 @@ interface AuthedRouteChildren {
   AuthedActivityRoute: typeof AuthedActivityRoute
   AuthedDashboardRoute: typeof AuthedDashboardRoute
   AuthedMeRoute: typeof AuthedMeRoute
+  AuthedMentorsRoute: typeof AuthedMentorsRoute
   AuthedNextRoute: typeof AuthedNextRoute
   AuthedOfficersRoute: typeof AuthedOfficersRoute
   AuthedRosterRoute: typeof AuthedRosterRoute
@@ -1678,6 +1698,7 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedActivityRoute: AuthedActivityRoute,
   AuthedDashboardRoute: AuthedDashboardRoute,
   AuthedMeRoute: AuthedMeRoute,
+  AuthedMentorsRoute: AuthedMentorsRoute,
   AuthedNextRoute: AuthedNextRoute,
   AuthedOfficersRoute: AuthedOfficersRoute,
   AuthedRosterRoute: AuthedRosterRoute,

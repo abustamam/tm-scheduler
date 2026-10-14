@@ -9,11 +9,16 @@
 //    nothing.
 //  - `setMyWillingToMentor`: the member's own row only. The logic resolves it
 //    from the session (`ownMembershipId`); the input names no member.
+//  - `setMyMentorBio` (#945): the same, for the member's own mentor bio.
+//  - `listMentors` (#945): the Find a mentor page's list. Member-level read
+//    gate, answered from the GATE's membership; a read-only impersonator has
+//    none and is refused. Writes nothing.
 //  - `createMentorship` / `endMentorship` / `setMentorshipFocus`: admin writes
 //    about other people, `requireClubRole(…, ["admin"])`.
 // `mentorship-authz.guard.test.ts` pins each gate before its call.
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { MENTORS_MEMBERS_ONLY_MESSAGE } from "#/lib/mentorship";
 import {
 	requireClubAdminView,
 	requireClubRole,
@@ -25,11 +30,14 @@ import {
 	createMentorshipSchema,
 	endMentorship as endMentorshipDb,
 	endMentorshipSchema,
+	listMentors as listMentorsDb,
 	loadClubMentorships as loadClubMentorshipsDb,
 	loadMemberMentorships as loadMemberMentorshipsDb,
 	loadMyMentorships as loadMyMentorshipsDb,
 	setMentorshipFocus as setMentorshipFocusDb,
 	setMentorshipFocusSchema,
+	setMyMentorBio as setMyMentorBioDb,
+	setMyMentorBioSchema,
 	setMyWillingToMentor as setMyWillingToMentorDb,
 	setWillingToMentorSchema,
 } from "./mentorship-logic";
@@ -38,6 +46,7 @@ export type {
 	ClubMentorshipRow,
 	ClubMentorships,
 	MemberMentorships,
+	MentorListing,
 	MentorshipParty,
 	MentorshipRow,
 	MyMentorships,
@@ -82,6 +91,23 @@ export const setMyWillingToMentor = createServerFn({ method: "POST" })
 	.handler(async ({ data }) => {
 		const user = await requireUser();
 		return setMyWillingToMentorDb({ ...data, userId: user.id });
+	});
+
+export const setMyMentorBio = createServerFn({ method: "POST" })
+	.validator((i: unknown) => setMyMentorBioSchema.parse(i))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		return setMyMentorBioDb({ ...data, userId: user.id });
+	});
+
+/** The club's willing mentors, for the Find a mentor page. Members only. */
+export const listMentors = createServerFn({ method: "GET" })
+	.validator((i: unknown) => clubScoped.parse(i))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		const access = await requireClubViewAccess(user.id, data.clubId);
+		if (!access.membership) throw new Error(MENTORS_MEMBERS_ONLY_MESSAGE);
+		return listMentorsDb(data.clubId, access.membership.id);
 	});
 
 export const createMentorship = createServerFn({ method: "POST" })
