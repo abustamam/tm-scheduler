@@ -7,6 +7,7 @@
 // meeting-schedule are optional free-text profile fields: each renders in its
 // designated slot when set and is omitted gracefully (no empty label) when not.
 import { QRCodeSVG } from "qrcode.react";
+import { useState } from "react";
 import {
 	type RosterEntry,
 	rosterGridPositions,
@@ -110,6 +111,34 @@ type Props = {
 	 *  about to flow onto extra pages (#1225). Threaded to Editorial, Grid and both
 	 *  Spacious sheets; Timing is the fallback, so it never receives it. */
 	onWouldFlow?: () => void;
+	/** The density the print starts at (#1226). Absent is `regular`, which is what
+	 *  the route always wants: `MeetingAgendaPrint` climbs to `compact` itself, and
+	 *  only when a sheet would otherwise flow. A seam for the tests, which need to
+	 *  see each density without first building an agenda that overflows. */
+	initialDensity?: PrintDensity;
+};
+
+/**
+ * How tightly a layout packs its run of show (#1226).
+ *
+ * `regular` is the layout as it has always printed. `compact` is the same
+ * layout with the same declared type sizes and every string intact, minus the
+ * vertical whitespace: a lead beat's detail beside its title, a 0-minute
+ * hand-off folded into the beat it introduces, halved row padding, and (on
+ * Editorial) a full-width run of show. `MeetingAgendaPrint` moves from one to
+ * the other only when a sheet reports it would flow, so an agenda that fits
+ * prints exactly as before.
+ */
+export type PrintDensity = "regular" | "compact";
+
+/** What each layout receives: the public props minus what the switch consumes,
+ *  plus the density and the key that makes a sheet measure again at a new one. */
+type LayoutProps = Omit<Props, "layout" | "explainers" | "initialDensity"> & {
+	density: PrintDensity;
+	/** `FitPage` measures once per mount (`print-theme.tsx`), so a new density,
+	 *  or a new agenda, has to be a new mount. Suffixed per sheet by the layout:
+	 *  two sheets of one layout may not share a key. */
+	fitKey: string;
 };
 
 /** The (V) key (#1164) for a sheet, or undefined. Decided per SHEET from what
@@ -649,6 +678,145 @@ function HandoffBand({
 	);
 }
 
+/** A hand-off that has been folded into the beat it introduces (#1226), as that
+ *  beat's first line: the same italic muted `who · detail` as `HandoffBand`, with
+ *  no elbow and no band padding, so it costs one text line and nothing else.
+ *  `who`, the separator and `detail` stay three nodes for the reason the band
+ *  gives. `data-row-handoff` is a test hook, the `data-row-time` convention. */
+function FoldedHandoff({
+	row,
+	fontSize,
+	padding,
+	nameTheGroup = false,
+	spine,
+}: {
+	row: TimelineRow;
+	fontSize: number;
+	padding: string;
+	nameTheGroup?: boolean;
+	/** The beat's spine colour, for a layout whose spine is on the cell and not
+	 *  on the block the line sits in. */
+	spine?: string;
+}) {
+	return (
+		<div
+			data-row-handoff=""
+			style={{
+				padding,
+				...(spine ? { borderLeft: `4px solid ${spine}` } : {}),
+				fontSize,
+				lineHeight: 1.35,
+				color: MUTED,
+				fontStyle: "italic",
+			}}
+		>
+			<span>{row.who}</span>
+			<span style={{ opacity: 0.55 }}>{" · "}</span>
+			<span style={{ whiteSpace: "pre-line" }}>
+				{row.detail}
+				{nameTheGroup ? introducedSuffix(row.introduces ?? []) : ""}
+			</span>
+		</div>
+	);
+}
+
+/** One entry of a run of show as a layout prints it. */
+type RowItem<T> = {
+	/** The row or group, as it was before folding. */
+	entry: T;
+	/** Its index in the list it came from: the React key, never the stripe. */
+	index: number;
+	/** The hand-offs folded into this entry as its first lines, in order. */
+	folded: TimelineRow[];
+};
+
+/**
+ * The rows a layout prints at `density` (#1226).
+ *
+ * `regular` is every entry as it is, untouched. `compact` folds each run of
+ * hand-offs into the NEXT entry, unless that entry is a section or there is none:
+ * then they keep their own bands, because a hand-off introducing a section's
+ * segment is not introducing a beat that can carry it. A hand-off is always an
+ * entry of its own (`groupByPresenter` refuses it in both directions), which is
+ * why one function serves both the flat rows of Grid and Timing and the groups of
+ * the narrative.
+ */
+function foldHandoffs<T>(
+	entries: readonly T[],
+	rowOf: (entry: T) => TimelineRow,
+	density: PrintDensity,
+): RowItem<T>[] {
+	if (density === "regular")
+		return entries.map((entry, index) => ({ entry, index, folded: [] }));
+	const out: RowItem<T>[] = [];
+	let pending: { entry: T; index: number }[] = [];
+	const flush = () => {
+		for (const p of pending) out.push({ ...p, folded: [] });
+		pending = [];
+	};
+	entries.forEach((entry, index) => {
+		const row = rowOf(entry);
+		if (row.handoff) {
+			pending.push({ entry, index });
+			return;
+		}
+		if (row.section) {
+			flush();
+			out.push({ entry, index, folded: [] });
+			return;
+		}
+		out.push({ entry, index, folded: pending.map((p) => rowOf(p.entry)) });
+		pending = [];
+	});
+	flush();
+	return out;
+}
+
+/** A run-of-show row's box (#1226). At `regular` it is the one flex row it has
+ *  always been, `rowStyle` and `chrome` on the same element in that order. At
+ *  `compact` it is a block that carries the chrome (stripe, rule, highlight) and
+ *  opens with the hand-offs folded into the beat, then the flex row of cells. */
+function RowShell({
+	compact,
+	folded,
+	foldedPadding,
+	spine,
+	nameTheGroup,
+	chrome,
+	rowStyle,
+	children,
+}: {
+	compact: boolean;
+	folded: TimelineRow[];
+	foldedPadding: string;
+	/** The spine colour, when the layout draws it on the cell (Grid). */
+	spine?: string;
+	nameTheGroup?: boolean;
+	chrome: Pick<React.CSSProperties, "background" | "borderBottom">;
+	rowStyle?: React.CSSProperties;
+	children: React.ReactNode;
+}) {
+	if (!compact)
+		return (
+			<div style={{ display: "flex", ...rowStyle, ...chrome }}>{children}</div>
+		);
+	return (
+		<div data-row-block="" style={chrome}>
+			{folded.map((h, hi) => (
+				<FoldedHandoff
+					key={rowKey(h, hi)}
+					row={h}
+					fontSize={10}
+					padding={foldedPadding}
+					nameTheGroup={nameTheGroup}
+					spine={spine}
+				/>
+			))}
+			<div style={{ display: "flex", ...rowStyle }}>{children}</div>
+		</div>
+	);
+}
+
 /** A run-of-show row's React key, for all three places that render the rows.
  *  Position IS the identity: the list is rebuilt wholesale and never reordered,
  *  and no combination of fields is unique. `${time}-${who}` was, until #363 —
@@ -732,10 +900,13 @@ function RunNarrative({
 	scale,
 	timingColors,
 	nameTheGroup,
+	density = "regular",
 }: {
 	rows: TimelineRow[];
 	scale: "sm" | "lg";
 	timingColors?: boolean;
+	/** `compact` (#1226): see `PrintDensity`. Declared type sizes are the same. */
+	density?: PrintDensity;
 	/**
 	 * Print group hand-offs' members (#578) — see `HandoffBand`.
 	 *
@@ -748,7 +919,9 @@ function RunNarrative({
 	nameTheGroup?: boolean;
 }) {
 	const lg = scale === "lg";
+	const compact = density === "compact";
 	const groups = groupByPresenter(rows);
+	const items = foldHandoffs(groups, (g) => g.rows[0], density);
 	// Sizes live in `lib/` because on this surface they are only half the story —
 	// `FitPage` scales the sheet, so what prints is these times PAGE_H/height, and
 	// `print-density.test.tsx` needs both in one assertion to gate the real thing.
@@ -775,7 +948,7 @@ function RunNarrative({
 	};
 	return (
 		<div>
-			{groups.map((g, gi) => {
+			{items.map(({ entry: g, index: gi, folded }, k) => {
 				const lead = g.rows[0];
 				// A hand-off is always alone in its group (`sameRun` refuses it in both
 				// directions), so this branch renders the whole group.
@@ -793,7 +966,15 @@ function RunNarrative({
 							key={rowKey(lead, gi)}
 							row={lead}
 							fontSize={lg ? 11 : 9.5}
-							padding={lg ? "6px 0 4px 0" : "5px 0 3px 0"}
+							padding={
+								compact
+									? lg
+										? "3px 0 2px 0"
+										: "2.5px 0 1.5px 0"
+									: lg
+										? "6px 0 4px 0"
+										: "5px 0 3px 0"
+							}
 						/>
 					);
 				if (lead.handoff)
@@ -809,13 +990,31 @@ function RunNarrative({
 				return (
 					<div
 						key={rowKey(lead, gi)}
+						{...(compact ? { "data-row-block": "" } : {})}
 						style={{
 							borderLeft: `4px solid ${beatColor(g)}`,
 							background: isHighlighted(g) ? MINT : undefined,
-							padding: lg ? "11px 0 11px 15px" : "3px 0 3px 11px",
-							borderBottom: gi < groups.length - 1 ? HAIR : undefined,
+							padding: compact
+								? lg
+									? "4px 0 4px 15px"
+									: "1px 0 1px 11px"
+								: lg
+									? "11px 0 11px 15px"
+									: "3px 0 3px 11px",
+							borderBottom: k < items.length - 1 ? HAIR : undefined,
 						}}
 					>
+						{/* A hand-off folded into this beat (#1226): its first lines, in
+						    order, past the stamp column so the stamps stay one column. */}
+						{folded.map((h, hi) => (
+							<FoldedHandoff
+								key={rowKey(h, hi)}
+								row={h}
+								fontSize={lg ? 11.5 : 10}
+								padding={lg ? "0 0 2px 64px" : "0 0 1px 54px"}
+								nameTheGroup={nameTheGroup}
+							/>
+						))}
 						<div style={{ display: "flex" }}>
 							{/* Test hook only — nothing renders off it. It marks the clock-stamp
 							    cells so the suite can assert "a hand-off repeats no clock stamp"
@@ -866,6 +1065,24 @@ function RunNarrative({
 										timingColors={timingColors}
 										size={lg ? 11 : 10}
 									/>
+									{/* Compact (#1226): the lead's detail rides the title's line,
+									    after the marks, instead of a line of its own. A list of
+									    holders keeps the long form: title, the holders, then the
+									    detail beneath, because the names are what this row is for.
+									    The detail's own size and weight, not the title's. */}
+									{compact && !multiHolder(lead) && lead.detail ? (
+										<span
+											style={{
+												fontSize: type.detail,
+												fontWeight: 400,
+												color: MUTED,
+												whiteSpace: "pre-line",
+											}}
+										>
+											{" · "}
+											{lead.detail}
+										</span>
+									) : null}
 								</div>
 								{multiHolder(lead) ? (
 									// Two to a row, matching the roles grid above: joined as
@@ -893,14 +1110,19 @@ function RunNarrative({
 								) : null}
 							</div>
 						</div>
-						<div style={{ display: "flex", marginTop: 1 }}>
-							<div style={{ flex: "none", width: stampWidth }} />
-							<div style={detail}>{lead.detail}</div>
-						</div>
+						{compact && !multiHolder(lead) ? null : (
+							<div style={{ display: "flex", marginTop: 1 }}>
+								<div style={{ flex: "none", width: stampWidth }} />
+								<div style={detail}>{lead.detail}</div>
+							</div>
+						)}
 						{g.rows.slice(1).map((r, i) => (
 							<div
 								key={rowKey(r, i)}
-								style={{ display: "flex", marginTop: lg ? 4 : 3 }}
+								style={{
+									display: "flex",
+									marginTop: compact ? (lg ? 2 : 1) : lg ? 4 : 3,
+								}}
 							>
 								<div data-row-time={r.time} style={stamp}>
 									{r.time}
@@ -1012,9 +1234,31 @@ function EditorialLayout({
 	rows,
 	qrUrl,
 	onWouldFlow,
-}: Omit<Props, "layout" | "explainers">) {
+	density,
+	fitKey,
+}: LayoutProps) {
+	const compact = density === "compact";
+	// The run of show, in the right column at `regular` and full-width below the
+	// top at `compact` (#1226): at 506px it wraps, and the left column under the
+	// officers is blank for the rest of the sheet.
+	const runOfShow = (
+		<>
+			<div
+				style={{
+					display: "flex",
+					justifyContent: "space-between",
+					alignItems: "baseline",
+					margin: "10px 0 6px",
+				}}
+			>
+				<Kick>Run of Show</Kick>
+				<TimingLegend rows={rows} />
+			</div>
+			<RunNarrative rows={rows} scale="sm" timingColors density={density} />
+		</>
+	);
 	return (
-		<FitPage onWouldFlow={onWouldFlow}>
+		<FitPage key={fitKey} onWouldFlow={onWouldFlow}>
 			<HeaderBand header={header} />
 			{/* date strip */}
 			<div
@@ -1041,7 +1285,12 @@ function EditorialLayout({
 			</div>
 
 			<div
-				style={{ display: "flex", gap: 22, padding: "14px 38px 0", flex: 1 }}
+				style={{
+					display: "flex",
+					gap: 22,
+					padding: "14px 38px 0",
+					flex: compact ? "none" : 1,
+				}}
 			>
 				{/* left rail — officers + venue */}
 				<div style={{ flex: "none", width: 212 }}>
@@ -1152,20 +1401,12 @@ function EditorialLayout({
 					<div style={{ marginBottom: 4 }}>
 						<RolesRoster roles={roles} variant="plain" />
 					</div>
-					<div
-						style={{
-							display: "flex",
-							justifyContent: "space-between",
-							alignItems: "baseline",
-							margin: "10px 0 6px",
-						}}
-					>
-						<Kick>Run of Show</Kick>
-						<TimingLegend rows={rows} />
-					</div>
-					<RunNarrative rows={rows} scale="sm" timingColors />
+					{compact ? null : runOfShow}
 				</div>
 			</div>
+			{compact ? (
+				<div style={{ padding: "0 38px", flex: 1 }}>{runOfShow}</div>
+			) : null}
 
 			<DarkFooter
 				left="Guests are always welcome — speak to any officer about getting involved."
@@ -1266,10 +1507,14 @@ function GridLayout({
 	rows,
 	qrUrl,
 	onWouldFlow,
-}: Omit<Props, "layout" | "explainers">) {
+	density,
+	fitKey,
+}: LayoutProps) {
 	const legend = sheetLegend({ roles, rows });
+	const compact = density === "compact";
+	const gridItems = foldHandoffs(rows, (r) => r, density);
 	return (
-		<FitPage onWouldFlow={onWouldFlow}>
+		<FitPage key={fitKey} onWouldFlow={onWouldFlow}>
 			{/* header */}
 			<div
 				style={{
@@ -1364,7 +1609,7 @@ function GridLayout({
 						overflow: "hidden",
 					}}
 				>
-					{rows.map((r, i) =>
+					{gridItems.map(({ entry: r, index: i, folded }, k) =>
 						// This layout's language is a ruled, zebra-striped table, so the
 						// band keeps the stripe and the rule and goes quiet instead:
 						// no spine, no stamp, italic type, half the row padding.
@@ -1385,7 +1630,7 @@ function GridLayout({
 								key={rowKey(r, i)}
 								row={r}
 								fontSize={10}
-								padding="6px 10px 4px 10px"
+								padding={compact ? "3px 10px 2px 10px" : "6px 10px 4px 10px"}
 							/>
 						) : r.handoff ? (
 							<HandoffBand
@@ -1394,21 +1639,24 @@ function GridLayout({
 								fontSize={10}
 								padding="2px 12px 2px 68px"
 								chrome={{
-									background: i % 2 === 1 ? "#fafdfb" : "#fff",
-									borderBottom: i < rows.length - 1 ? HAIR : undefined,
+									background: k % 2 === 1 ? "#fafdfb" : "#fff",
+									borderBottom: k < gridItems.length - 1 ? HAIR : undefined,
 								}}
 							/>
 						) : (
-							<div
+							<RowShell
 								key={rowKey(r, i)}
-								style={{
-									display: "flex",
+								compact={compact}
+								folded={folded}
+								foldedPadding="1px 12px 0 64px"
+								spine={beatColor(r)}
+								chrome={{
 									background: isHighlighted(r)
 										? MINT
-										: i % 2 === 1
+										: k % 2 === 1
 											? "#fafdfb"
 											: "#fff",
-									borderBottom: i < rows.length - 1 ? HAIR : undefined,
+									borderBottom: k < gridItems.length - 1 ? HAIR : undefined,
 								}}
 							>
 								{/* Test hook — see `RunNarrative`'s note on `data-row-time`. */}
@@ -1418,7 +1666,7 @@ function GridLayout({
 										flex: "none",
 										width: 60,
 										borderLeft: `4px solid ${beatColor(r)}`,
-										padding: "4px 0 4px 10px",
+										padding: compact ? "2px 0 2px 10px" : "4px 0 4px 10px",
 										fontSize: 10.5,
 										fontWeight: 700,
 										color: INK,
@@ -1426,7 +1674,19 @@ function GridLayout({
 								>
 									{r.time}
 								</div>
-								<div style={{ flex: 1, padding: "4px 12px 4px 8px" }}>
+								<div
+									style={{
+										flex: 1,
+										padding: compact ? "2px 12px 2px 8px" : "4px 12px 4px 8px",
+										// The line box of this cell is sized by the cell's OWN
+										// font, which is the page's 16px: the two spans inside
+										// declare 10.5 and 10 but cannot shrink the strut, so a
+										// one-line row stood 22px tall for 13px of text. Compact
+										// gives the cell the size of the text it holds. No
+										// declared size changes.
+										...(compact && { fontSize: 10.5, lineHeight: 1.3 }),
+									}}
+								>
 									<span style={{ fontSize: 10.5, fontWeight: 700 }}>
 										{r.who}.
 									</span>{" "}
@@ -1446,13 +1706,13 @@ function GridLayout({
 											flex: "none",
 											display: "flex",
 											alignItems: "center",
-											padding: "4px 12px 4px 0",
+											padding: compact ? "2px 12px 2px 0" : "4px 12px 4px 0",
 										}}
 									>
 										<TimingTrio marks={r.marks} size={9.5} />
 									</div>
 								) : null}
-							</div>
+							</RowShell>
 						),
 					)}
 				</div>
@@ -1698,14 +1958,16 @@ function SpaciousLayout({
 	rows,
 	qrUrl,
 	onWouldFlow,
-}: Omit<Props, "layout" | "explainers">) {
+	density,
+	fitKey,
+}: LayoutProps) {
 	// Page 1 carries the roster, page 2 the run of show; each decides for itself.
 	const page1Legend = sheetLegend({ roles });
 	const page2Legend = sheetLegend({ rows });
 	return (
 		<TwoPage>
 			{/* PAGE 1 */}
-			<FitPage onWouldFlow={onWouldFlow}>
+			<FitPage key={`1${fitKey}`} onWouldFlow={onWouldFlow}>
 				<div
 					style={{
 						background: `linear-gradient(125deg, ${LAGOON}, ${INK})`,
@@ -1935,7 +2197,7 @@ function SpaciousLayout({
 			</FitPage>
 
 			{/* PAGE 2 */}
-			<FitPage onWouldFlow={onWouldFlow}>
+			<FitPage key={`2${fitKey}`} onWouldFlow={onWouldFlow}>
 				<div
 					style={{
 						padding: "34px 52px 0",
@@ -1963,7 +2225,12 @@ function SpaciousLayout({
 					</div>
 
 					<div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-						<RunNarrative rows={rows} scale="lg" nameTheGroup />
+						<RunNarrative
+							rows={rows}
+							scale="lg"
+							nameTheGroup
+							density={density}
+						/>
 					</div>
 
 					{/* #721 retired the paper "Tonight's Votes" box that used to sit
@@ -2038,14 +2305,19 @@ function TimingLayout({
 	explainers,
 	rows,
 	qrUrl,
-}: Omit<Props, "layout">) {
+	onWouldFlow,
+	density,
+	fitKey,
+}: LayoutProps & Pick<Props, "explainers">) {
 	// Page 1 carries the roster, page 2 the timing table; each decides for itself.
 	const page1Legend = sheetLegend({ roles });
 	const page2Legend = sheetLegend({ rows });
+	const compact = density === "compact";
+	const timingItems = foldHandoffs(rows, (r) => r, density);
 	return (
 		<TwoPage>
 			{/* PAGE 1 — roles, signals, officers, explainers */}
-			<FitPage>
+			<FitPage key={`1${fitKey}`} onWouldFlow={onWouldFlow}>
 				<div
 					style={{
 						display: "flex",
@@ -2274,7 +2546,7 @@ function TimingLayout({
 			</FitPage>
 
 			{/* PAGE 2 — detailed timing table */}
-			<FitPage>
+			<FitPage key={`2${fitKey}`} onWouldFlow={onWouldFlow}>
 				<div
 					style={{
 						padding: "28px 44px 0",
@@ -2338,7 +2610,7 @@ function TimingLayout({
 							overflow: "hidden",
 						}}
 					>
-						{rows.map((r, i) => {
+						{timingItems.map(({ entry: r, index: i, folded }, k) => {
 							// The one place with a real column header, so the band keeps the
 							// table's stripe and rule and spans the Role + Segment columns
 							// as one line — starting at 58px, the Role column's own edge —
@@ -2354,7 +2626,9 @@ function TimingLayout({
 										key={rowKey(r, i)}
 										row={r}
 										fontSize={10}
-										padding="6px 12px 4px 12px"
+										padding={
+											compact ? "3px 12px 2px 12px" : "6px 12px 4px 12px"
+										}
 									/>
 								);
 							if (r.handoff)
@@ -2365,8 +2639,9 @@ function TimingLayout({
 										fontSize={10}
 										padding="3px 12px 3px 58px"
 										chrome={{
-											background: i % 2 === 1 ? "#fafdfb" : "#fff",
-											borderBottom: i < rows.length - 1 ? HAIR : undefined,
+											background: k % 2 === 1 ? "#fafdfb" : "#fff",
+											borderBottom:
+												k < timingItems.length - 1 ? HAIR : undefined,
 										}}
 										// Two-page layout: the speakers can be overleaf (#578).
 										nameTheGroup
@@ -2386,16 +2661,22 @@ function TimingLayout({
 							const role = r.roleLabel ?? r.who;
 							const name = r.holder ?? "";
 							return (
-								<div
+								<RowShell
 									key={rowKey(r, i)}
-									style={{
-										display: "flex",
+									compact={compact}
+									folded={folded}
+									foldedPadding="1px 12px 0 58px"
+									// Two-page layout: the speakers can be overleaf (#578).
+									nameTheGroup
+									rowStyle={{
 										alignItems: "center",
-										padding: "4px 12px",
-										borderBottom: i < rows.length - 1 ? HAIR : undefined,
+										padding: compact ? "2px 12px" : "4px 12px",
+									}}
+									chrome={{
+										borderBottom: k < timingItems.length - 1 ? HAIR : undefined,
 										background: isHighlighted(r)
 											? MINT
-											: i % 2 === 1
+											: k % 2 === 1
 												? "#fafdfb"
 												: "#fff",
 									}}
@@ -2477,7 +2758,7 @@ function TimingLayout({
 											</>
 										) : null}
 									</div>
-								</div>
+								</RowShell>
 							);
 						})}
 					</div>
@@ -2657,51 +2938,43 @@ export function MeetingAgendaPrint({
 	rows,
 	qrUrl,
 	onWouldFlow,
+	initialDensity = "regular",
 }: Props) {
+	// The density ladder (#1226): `regular` -> `compact` -> the caller's own
+	// `onWouldFlow` (the print route's fallback to Timing, #1225). Climbed one
+	// rung per decision, and only when a sheet reports it would flow, so an agenda
+	// that fits never leaves `regular`.
+	const [density, setDensity] = useState<PrintDensity>(initialDensity);
+	// A new layout or a new agenda starts the climb again. Adjusted during render,
+	// not in an effect, so no frame is drawn at the old density. `epoch` feeds the
+	// sheets' keys: a sheet measures once per mount, and a new agenda at the SAME
+	// density has to be measured too.
+	const [seen, setSeen] = useState({ layout, rows, epoch: 0 });
+	if (seen.layout !== layout || seen.rows !== rows) {
+		setSeen({ layout, rows, epoch: seen.epoch + 1 });
+		setDensity("regular");
+	}
+	const common = {
+		header,
+		roles,
+		officers,
+		rows,
+		qrUrl,
+		density,
+		fitKey: `${seen.epoch}:${density}`,
+		// Any sheet that would flow moves the WHOLE layout down a rung, so a
+		// two-sheet layout's sheets always match. At `compact` the caller is told.
+		onWouldFlow:
+			density === "regular" ? () => setDensity("compact") : onWouldFlow,
+	};
 	switch (layout) {
 		case "editorial":
-			return (
-				<EditorialLayout
-					header={header}
-					roles={roles}
-					officers={officers}
-					rows={rows}
-					qrUrl={qrUrl}
-					onWouldFlow={onWouldFlow}
-				/>
-			);
+			return <EditorialLayout {...common} />;
 		case "grid":
-			return (
-				<GridLayout
-					header={header}
-					roles={roles}
-					officers={officers}
-					rows={rows}
-					qrUrl={qrUrl}
-					onWouldFlow={onWouldFlow}
-				/>
-			);
+			return <GridLayout {...common} />;
 		case "spacious":
-			return (
-				<SpaciousLayout
-					header={header}
-					roles={roles}
-					officers={officers}
-					rows={rows}
-					qrUrl={qrUrl}
-					onWouldFlow={onWouldFlow}
-				/>
-			);
+			return <SpaciousLayout {...common} />;
 		default:
-			return (
-				<TimingLayout
-					header={header}
-					roles={roles}
-					officers={officers}
-					explainers={explainers}
-					rows={rows}
-					qrUrl={qrUrl}
-				/>
-			);
+			return <TimingLayout {...common} explainers={explainers} />;
 	}
 }
