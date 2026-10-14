@@ -106,6 +106,10 @@ type Props = {
 	// (see its own file-header note) and renders a smaller copy inline in its
 	// hand-rolled officer footer instead.
 	qrUrl?: string;
+	/** Told when a one-sheet or Spacious sheet is too long to scale legibly and is
+	 *  about to flow onto extra pages (#1225). Threaded to Editorial, Grid and both
+	 *  Spacious sheets; Timing is the fallback, so it never receives it. */
+	onWouldFlow?: () => void;
 };
 
 /** The (V) key (#1164) for a sheet, or undefined. Decided per SHEET from what
@@ -1007,9 +1011,10 @@ function EditorialLayout({
 	officers,
 	rows,
 	qrUrl,
+	onWouldFlow,
 }: Omit<Props, "layout" | "explainers">) {
 	return (
-		<FitPage>
+		<FitPage onWouldFlow={onWouldFlow}>
 			<HeaderBand header={header} />
 			{/* date strip */}
 			<div
@@ -1260,10 +1265,11 @@ function GridLayout({
 	officers,
 	rows,
 	qrUrl,
+	onWouldFlow,
 }: Omit<Props, "layout" | "explainers">) {
 	const legend = sheetLegend({ roles, rows });
 	return (
-		<FitPage>
+		<FitPage onWouldFlow={onWouldFlow}>
 			{/* header */}
 			<div
 				style={{
@@ -1691,6 +1697,7 @@ function SpaciousLayout({
 	officers,
 	rows,
 	qrUrl,
+	onWouldFlow,
 }: Omit<Props, "layout" | "explainers">) {
 	// Page 1 carries the roster, page 2 the run of show; each decides for itself.
 	const page1Legend = sheetLegend({ roles });
@@ -1698,7 +1705,7 @@ function SpaciousLayout({
 	return (
 		<TwoPage>
 			{/* PAGE 1 */}
-			<FitPage>
+			<FitPage onWouldFlow={onWouldFlow}>
 				<div
 					style={{
 						background: `linear-gradient(125deg, ${LAGOON}, ${INK})`,
@@ -1928,7 +1935,7 @@ function SpaciousLayout({
 			</FitPage>
 
 			{/* PAGE 2 */}
-			<FitPage>
+			<FitPage onWouldFlow={onWouldFlow}>
 				<div
 					style={{
 						padding: "34px 52px 0",
@@ -2649,6 +2656,7 @@ export function MeetingAgendaPrint({
 	explainers,
 	rows,
 	qrUrl,
+	onWouldFlow,
 }: Props) {
 	switch (layout) {
 		case "editorial":
@@ -2659,6 +2667,7 @@ export function MeetingAgendaPrint({
 					officers={officers}
 					rows={rows}
 					qrUrl={qrUrl}
+					onWouldFlow={onWouldFlow}
 				/>
 			);
 		case "grid":
@@ -2669,6 +2678,7 @@ export function MeetingAgendaPrint({
 					officers={officers}
 					rows={rows}
 					qrUrl={qrUrl}
+					onWouldFlow={onWouldFlow}
 				/>
 			);
 		case "spacious":
@@ -2679,6 +2689,7 @@ export function MeetingAgendaPrint({
 					officers={officers}
 					rows={rows}
 					qrUrl={qrUrl}
+					onWouldFlow={onWouldFlow}
 				/>
 			);
 		default:

@@ -10,12 +10,15 @@ import { useEffect, useState } from "react";
 import { AgendaCopies } from "#/components/agenda/agenda-copies";
 import {
 	type AgendaExplainer,
+	type AgendaHeader,
 	type AgendaLayout,
+	type AgendaOfficer,
 	type AgendaRoleEntry,
 	MeetingAgendaPrint,
 } from "#/components/agenda/meeting-agenda-print";
 import { OfflineBadge } from "#/components/agenda/offline-badge";
 import {
+	INK,
 	MUTED,
 	PRINT_PAGE_CSS,
 	PrintButton,
@@ -34,6 +37,7 @@ import { ShareLinkButton } from "#/components/share-link-button";
 import { buildRosterEntries } from "#/lib/agenda";
 import {
 	AGENDA_LAYOUT_LABELS,
+	AGENDA_LAYOUT_PAGES,
 	AGENDA_LAYOUTS,
 	CLUB_DEFAULT_LABEL,
 	isAgendaLayout,
@@ -44,7 +48,7 @@ import {
 	resolveAgendaRows,
 } from "#/lib/agenda-runsheet";
 import { buildAgendaSharePath } from "#/lib/agenda-share-url";
-import { buildTimeline } from "#/lib/agenda-timing";
+import { buildTimeline, type TimelineRow } from "#/lib/agenda-timing";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { APP_LOCALE } from "#/lib/format";
@@ -245,12 +249,7 @@ function PrintAgenda() {
 	// rendering one that can't scan.
 	const [origin, setOrigin] = useState<string | null>(null);
 	useEffect(() => setOrigin(window.location.origin), []);
-	// Extra copies draw only after mount (#1166). The server HTML, and the page
-	// the service worker serves for ANY `?copies=` URL offline, hold exactly one
-	// agenda, so the first client render must too or it will not hydrate.
-	const [mounted, setMounted] = useState(false);
-	useEffect(() => setMounted(true), []);
-	const copies = mounted ? (requestedCopies ?? 1) : 1;
+	const loaderData = Route.useLoaderData();
 	const {
 		meeting,
 		slots,
@@ -270,7 +269,7 @@ function PrintAgenda() {
 		defaultPrintLayout,
 		printedLayout,
 		cancelled,
-	} = Route.useLoaderData();
+	} = loaderData;
 	// Online, the loader redirects a URL naming no layout, so `searchLayout` is
 	// set. Offline, a bare `/…/print` is answered from the page cached for
 	// `?layout=X` and hydrates against ITS data: draw the layout that HTML was
@@ -364,6 +363,109 @@ function PrintAgenda() {
 	};
 
 	return (
+		<PrintAgendaView
+			layout={layout}
+			source={loaderData}
+			bare={bare}
+			requestedCopies={requestedCopies}
+			duplex={duplex}
+			clubId={clubIdParam}
+			meetingId={meetingId}
+			defaultPrintLayout={defaultPrintLayout}
+			cancelled={cancelled}
+			flexBanner={
+				flexBanner
+					? { message: flexBanner, over: flex.status === "over" }
+					: null
+			}
+			header={header}
+			roles={roles}
+			officers={officers}
+			explainers={explainers}
+			rows={rows}
+			qrUrl={qrUrl || undefined}
+		/>
+	);
+}
+
+/**
+ * The words in the toolbar when a layout was swapped for Timing (#1225): which
+ * layout the club picked, what it promised, and what it is getting instead.
+ */
+export function fallbackNotice(layout: AgendaLayout): string {
+	const n = AGENDA_LAYOUT_PAGES[layout];
+	const timing = AGENDA_LAYOUT_PAGES.timing;
+	return `This agenda is too long for ${AGENDA_LAYOUT_LABELS[layout]} on ${n} ${n === 1 ? "page" : "pages"}. Showing Timing (${timing} ${timing === 1 ? "page" : "pages"}) instead.`;
+}
+
+export type PrintAgendaViewProps = {
+	/** The layout the URL asked for. */
+	layout: AgendaLayout;
+	/** The loader's data object. A new one means a new agenda, so a fallback
+	 *  decided for the old one no longer stands. */
+	source: unknown;
+	bare: boolean;
+	requestedCopies: number | undefined;
+	duplex: 1 | undefined;
+	clubId: string;
+	meetingId: string;
+	defaultPrintLayout: string | null;
+	cancelled: boolean;
+	flexBanner: { message: string; over: boolean } | null;
+	header: AgendaHeader;
+	roles: AgendaRoleEntry[];
+	officers: AgendaOfficer[];
+	explainers: AgendaExplainer[];
+	rows: TimelineRow[];
+	qrUrl: string | undefined;
+};
+
+/**
+ * The toolbar and the sheets, with the one-sheet promise (#1225): a layout
+ * whose sheet is too long to scale legibly would FLOW onto extra pages, and a
+ * club printing "Grid, 1 page" must not get two. When one of its sheets says so
+ * (`onWouldFlow`), this renders Timing instead, for this render only, and the
+ * toolbar says why. The active tab stays the one the person picked, and the
+ * club's saved default is never written.
+ *
+ * `fellBackFrom` starts `null` so the server render and hydration are the
+ * requested layout, exactly as before; the fallback is decided by the
+ * post-mount measurement. It is dropped when the requested layout or the agenda
+ * changes, so that layout is measured again from scratch (`FitPage` measures
+ * once per mount, and Timing's own sheets are never given `onWouldFlow`).
+ */
+export function PrintAgendaView({
+	layout,
+	source,
+	bare,
+	requestedCopies,
+	duplex,
+	clubId,
+	meetingId,
+	defaultPrintLayout,
+	cancelled,
+	flexBanner,
+	header,
+	roles,
+	officers,
+	explainers,
+	rows,
+	qrUrl,
+}: PrintAgendaViewProps) {
+	// Extra copies draw only after mount (#1166). The server HTML, and the page
+	// the service worker serves for ANY `?copies=` URL offline, hold exactly one
+	// agenda, so the first client render must too or it will not hydrate.
+	const [mounted, setMounted] = useState(false);
+	useEffect(() => setMounted(true), []);
+	const copies = mounted ? (requestedCopies ?? 1) : 1;
+	const [fellBackFrom, setFellBackFrom] = useState<AgendaLayout | null>(null);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `layout` and `source` are the triggers, not values the effect reads
+	useEffect(() => setFellBackFrom(null), [layout, source]);
+	const effectiveLayout: AgendaLayout =
+		fellBackFrom === layout ? "timing" : layout;
+	const onWouldFlow = () => setFellBackFrom(layout);
+
+	return (
 		<div>
 			{/* #1057: marked on screen (the toolbar) and on paper (the fixed
 			    watermark, which no layout measures). */}
@@ -377,7 +479,7 @@ function PrintAgenda() {
 							<Link
 								key={l.id}
 								to="/club/$clubId/meeting/$meetingId/print"
-								params={{ clubId: clubIdParam, meetingId }}
+								params={{ clubId, meetingId }}
 								// Switching layout keeps the packet's copy count and duplex
 								// flag (#1166), so the person printing does not lose them.
 								// Written only after mount, like the copies themselves: the
@@ -414,9 +516,22 @@ function PrintAgenda() {
 						))}
 					</div>
 				)}
+				{bare || fellBackFrom !== layout ? null : (
+					<output
+						data-testid="print-fallback-notice"
+						style={{
+							flexBasis: "100%",
+							textAlign: "right",
+							fontSize: 13,
+							color: INK,
+						}}
+					>
+						{fallbackNotice(layout)}
+					</output>
+				)}
 				{bare ? null : (
 					<ShareLinkButton
-						path={buildAgendaSharePath(clubIdParam, meetingId, layout)}
+						path={buildAgendaSharePath(clubId, meetingId, layout)}
 						label="Copy shareable link"
 					/>
 				)}
@@ -452,11 +567,11 @@ function PrintAgenda() {
 						borderRadius: 8,
 						fontSize: 13,
 						textAlign: "center",
-						background: flex.status === "over" ? "#fbeaea" : "#eef2f7",
-						color: flex.status === "over" ? "#8a1c1c" : "#41546b",
+						background: flexBanner.over ? "#fbeaea" : "#eef2f7",
+						color: flexBanner.over ? "#8a1c1c" : "#41546b",
 					}}
 				>
-					{flexBanner}
+					{flexBanner.message}
 				</div>
 			) : null}
 			<style>{PRINT_PAGE_CSS}</style>
@@ -467,23 +582,25 @@ function PrintAgenda() {
 				<AgendaCopies
 					copies={copies}
 					duplex={duplex === 1}
-					layout={layout}
+					layout={effectiveLayout}
+					onWouldFlow={onWouldFlow}
 					header={header}
 					roles={roles}
 					officers={officers}
 					explainers={explainers}
 					rows={rows}
-					qrUrl={qrUrl || undefined}
+					qrUrl={qrUrl}
 				/>
 			) : (
 				<MeetingAgendaPrint
-					layout={layout}
+					layout={effectiveLayout}
+					onWouldFlow={onWouldFlow}
 					header={header}
 					roles={roles}
 					officers={officers}
 					explainers={explainers}
 					rows={rows}
-					qrUrl={qrUrl || undefined}
+					qrUrl={qrUrl}
 				/>
 			)}
 		</div>

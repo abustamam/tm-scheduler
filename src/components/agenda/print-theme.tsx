@@ -440,14 +440,24 @@ type SheetStyle = React.CSSProperties & Record<`--${string}`, string>;
 export function FitPage({
 	children,
 	orientation = "portrait",
+	onWouldFlow,
 }: {
 	children: React.ReactNode;
 	/** The sheet this page is measured and clipped against. Portrait unless the
 	 *  route also serves `printPageCss("landscape")` — the two have to agree, or
 	 *  the sheet is a different shape from the page box it prints into. */
 	orientation?: PageOrientation;
+	/** Called once, right after this sheet decides to FLOW (the scale it needs is
+	 *  under `MIN_FIT_SCALE`), so a caller that promised a page count can react
+	 *  (#1225). Absent: the sheet flows and nobody is told, as before. */
+	onWouldFlow?: () => void;
 }) {
 	const innerRef = useRef<HTMLDivElement>(null);
+	// The latest callback, read when the measurement lands rather than listed as
+	// an effect dependency: a caller passing an inline arrow would otherwise
+	// re-run the measuring effect on every render.
+	const onWouldFlowRef = useRef(onWouldFlow);
+	onWouldFlowRef.current = onWouldFlow;
 	const [fit, setFit] = useState<number | null>(null);
 	/** Set when the content is too long to scale legibly — see MIN_FIT_SCALE.
 	 *  The sheet then drops its fixed height and paginates instead. */
@@ -469,8 +479,12 @@ export function FitPage({
 			// rather than one unreadable one.
 			// The measured height is kept: it is what the flowing sheet renders at,
 			// and the screen fit needs it (see SHEET_H_VAR).
-			if (scale < MIN_FIT_SCALE) setFlowHeight(h);
-			else setFit(scale);
+			if (scale < MIN_FIT_SCALE) {
+				setFlowHeight(h);
+				// After the state, so a caller that swaps this layout out (#1225)
+				// does so with the decision already made.
+				onWouldFlowRef.current?.();
+			} else setFit(scale);
 		};
 		const fonts = (
 			document as Document & { fonts?: { ready: Promise<unknown> } }
