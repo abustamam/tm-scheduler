@@ -48,6 +48,8 @@ export type AgendaSlot = {
 	assigneeName: string | null;
 	/** True when the assignee is a non-member guest (#151) — renders "· Guest". */
 	assigneeIsGuest?: boolean;
+	/** True when that guest is a visiting Toastmaster (#1164) — renders "(V)". */
+	assigneeIsVisitingToastmaster?: boolean;
 	speechTitle: string | null;
 	projectLevel: string | null;
 	minMinutes: number | null;
@@ -58,14 +60,20 @@ export type AgendaSlot = {
 	evaluates: { speakerName: string | null } | null;
 };
 
-/** A slot's rendered assignee name (with the "· Guest" marker for guests, #151),
- *  or the OPEN placeholder when unassigned. */
+/** A slot's rendered assignee name (with the "· Guest" marker for guests, #151,
+ *  or "(V)" for a visiting Toastmaster, #1164), or the OPEN placeholder when
+ *  unassigned. */
 export function assigneeDisplay(slot: {
 	assigneeName: string | null;
 	assigneeIsGuest?: boolean;
+	assigneeIsVisitingToastmaster?: boolean;
 }): string {
 	return (
-		assigneeDisplayName(slot.assigneeName, slot.assigneeIsGuest) ?? OPEN_LABEL
+		assigneeDisplayName(
+			slot.assigneeName,
+			slot.assigneeIsGuest,
+			slot.assigneeIsVisitingToastmaster,
+		) ?? OPEN_LABEL
 	);
 }
 
@@ -1702,7 +1710,7 @@ function groupRoleNames(beat: Beat, slots: AgendaSlot[]): string[] {
 /**
  * The people to INTRODUCE at a hand-off: assigned holders of `role`, under the
  * display name every other surface uses, IN THE ORDER THEY ARE ABOUT TO APPEAR
- * (#585). Guests keep the "· Guest" marker `assigneeDisplayName` gives them
+ * (#585). Guests keep the "· Guest" marker (or "(V)") `assigneeDisplayName` gives them
  * everywhere else — the marker is the point at a hand-off, since it tells the
  * Toastmaster who they are welcoming.
  *
@@ -1741,7 +1749,13 @@ export function introducedNames(slots: AgendaSlot[], role: BeatRole): string[] {
 	);
 	return [...matching]
 		.sort((a, b) => a.slotIndex - b.slotIndex)
-		.map((s) => assigneeDisplayName(s.assigneeName, s.assigneeIsGuest))
+		.map((s) =>
+			assigneeDisplayName(
+				s.assigneeName,
+				s.assigneeIsGuest,
+				s.assigneeIsVisitingToastmaster,
+			),
+		)
 		.filter((n): n is string => n != null);
 }
 
@@ -1792,7 +1806,13 @@ export function pairedEvaluatorNames(
 				matchesRole(s, EVALUATOR_ROLE.roleKey, EVALUATOR_ROLE.roleName),
 		)
 		.sort((a, b) => a.slotIndex - b.slotIndex)
-		.map((s) => assigneeDisplayName(s.assigneeName, s.assigneeIsGuest))
+		.map((s) =>
+			assigneeDisplayName(
+				s.assigneeName,
+				s.assigneeIsGuest,
+				s.assigneeIsVisitingToastmaster,
+			),
+		)
 		.filter((n): n is string => n != null);
 }
 

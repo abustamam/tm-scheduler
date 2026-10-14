@@ -146,16 +146,40 @@ export type RosterEntry = {
  *  (#1208: "Visitor" and "Guest" are one word), so the two cannot drift. */
 export const GUEST_MARKER = GUEST_KIND_LABELS.visitor;
 
-/** Format an assignee's display name, appending the guest marker when the
- *  assignee is a non-member guest. Null name → null (caller shows "open").
- *  A visiting Toastmaster and a Visitor both read "Name · Guest" (#1208). */
+/** The short marker a visiting Toastmaster carries on every agenda surface
+ *  (#1164): "Jane Doe (V)". Any other guest keeps "· Guest". The home club is
+ *  deliberately not on the agenda (it stays in the minutes guest list). */
+export const VISITING_TOASTMASTER_MARKER = "(V)";
+
+/** The one-line key for `VISITING_TOASTMASTER_MARKER`, shown only on a sheet,
+ *  slide or screen that actually shows a (V). */
+export const VISITING_TOASTMASTER_LEGEND = "(V) Visiting Toastmaster";
+
+/** Format an assignee's display name. A member reads as the bare name; a
+ *  visiting Toastmaster as `Name (V)`; any other guest as `Name · Guest`.
+ *  Null name → null (caller shows "open"). `isVisitingToastmaster` only matters
+ *  for a guest, so a member row can never carry the marker (#1164). */
 export function assigneeDisplayName(
 	name: string | null,
 	isGuest?: boolean,
+	isVisitingToastmaster?: boolean,
 ): string | null {
 	if (!name) return null;
-	return isGuest ? `${name} · ${GUEST_MARKER}` : name;
+	if (!isGuest) return name;
+	return isVisitingToastmaster
+		? `${name} ${VISITING_TOASTMASTER_MARKER}`
+		: `${name} · ${GUEST_MARKER}`;
 }
+
+/** Whether a rendered name, or a line that joins names ("Role: Ann, Jane (V) &
+ *  Bo"), carries the (V) marker. Read off the string because rows reach print
+ *  and the deck through builders that no longer hold the slot (#1164). The
+ *  marker closes a name: it is followed by the end of the text or by a name
+ *  separator (", ", " & ", " and ", " · "), so a quoted title ending "(V)” " is not one. */
+export function carriesVisitingMarker(text: string): boolean {
+	return VISITING_MARKER_TOKEN.test(text);
+}
+const VISITING_MARKER_TOKEN = / \(V\)(?=$|,| &| and\b| ·)/;
 
 /** Minimal slot shape needed to order the meeting-roles roster. */
 export type RosterSlot = {
@@ -166,6 +190,8 @@ export type RosterSlot = {
 	assigneeName: string | null;
 	/** True when the assignee is a non-member guest (#151) — renders "· Guest". */
 	assigneeIsGuest?: boolean;
+	/** True when that guest is a visiting Toastmaster (#1164) — renders "(V)". */
+	assigneeIsVisitingToastmaster?: boolean;
 	/** See `role_definitions.slots_unordered` (#624). The roster collapses such
 	 *  a role into one entry naming every holder; callers that omit the flag get
 	 *  one numbered entry per slot, as before. */
@@ -194,7 +220,13 @@ function collapsedRosterEntry(
 	group: readonly RosterSlot[],
 ): RosterEntry {
 	const names = group
-		.map((g) => assigneeDisplayName(g.assigneeName, g.assigneeIsGuest))
+		.map((g) =>
+			assigneeDisplayName(
+				g.assigneeName,
+				g.assigneeIsGuest,
+				g.assigneeIsVisitingToastmaster,
+			),
+		)
 		.filter((n): n is string => n != null);
 	if (names.length === 0)
 		return { label: roleName, name: null, holderCount: 0 };
@@ -248,7 +280,11 @@ export function buildRosterEntries<T extends RosterSlot>(
 				slot: s,
 				entry: {
 					label: slotLabel(s, roleCounts),
-					name: assigneeDisplayName(s.assigneeName, s.assigneeIsGuest),
+					name: assigneeDisplayName(
+						s.assigneeName,
+						s.assigneeIsGuest,
+						s.assigneeIsVisitingToastmaster,
+					),
 				},
 			});
 			continue;

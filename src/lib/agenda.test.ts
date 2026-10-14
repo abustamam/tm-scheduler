@@ -5,6 +5,7 @@ import {
 	buildRoleCounts,
 	buildRosterEntries,
 	buildShortCodes,
+	carriesVisitingMarker,
 	formatLastServed,
 	generateSlotRows,
 	OPEN_LABEL,
@@ -16,6 +17,8 @@ import {
 	slotLabel,
 	suggestFills,
 	summarizeAgenda,
+	VISITING_TOASTMASTER_LEGEND,
+	VISITING_TOASTMASTER_MARKER,
 } from "./agenda";
 
 const rosterSlot = (
@@ -1130,5 +1133,66 @@ describe("suggestFills — propose members for open slots by role recency (#58)"
 			roleRecency: recency,
 		});
 		expect(out).toEqual([{ slotId: "s1", memberId: null, lastServedAt: null }]);
+	});
+});
+
+describe("the visiting Toastmaster marker (#1164)", () => {
+	// protects=a member reads as the bare name, even if the visiting flag is set on
+	// a row that is not a guest's;
+	// fails_when=the flag alone adds "(V)" to a member, or a member gains "· Guest";
+	// no_claim=none beyond protects.
+	it("leaves a member's name bare", () => {
+		expect(assigneeDisplayName("Jane Doe", false, false)).toBe("Jane Doe");
+		expect(assigneeDisplayName("Jane Doe", false, true)).toBe("Jane Doe");
+		expect(assigneeDisplayName("Jane Doe")).toBe("Jane Doe");
+	});
+
+	// protects=a visiting Toastmaster reads "Name (V)";
+	// fails_when=it reads "· Guest", carries a home club, or loses the space;
+	// no_claim=which guests the loader flags: the integration test pins that.
+	it("marks a visiting Toastmaster (V)", () => {
+		expect(assigneeDisplayName("Jane Doe", true, true)).toBe("Jane Doe (V)");
+		expect(VISITING_TOASTMASTER_MARKER).toBe("(V)");
+		expect(VISITING_TOASTMASTER_LEGEND).toBe("(V) Visiting Toastmaster");
+	});
+
+	// protects=any other guest keeps "· Guest";
+	// fails_when=the (V) path swallows the plain guest, or the default flips;
+	// no_claim=none beyond protects.
+	it("keeps '· Guest' for every other guest", () => {
+		expect(assigneeDisplayName("Jane Doe", true, false)).toBe(
+			"Jane Doe · Guest",
+		);
+		expect(assigneeDisplayName("Jane Doe", true)).toBe("Jane Doe · Guest");
+	});
+
+	// protects=a rendered name, and a line that joins names, are recognised as
+	// carrying the marker: alone, before a separator, and at the end of a list;
+	// fails_when=the check looks only at the end of the string, so a joined line
+	// such as "Introduces: Jane (V) & Bo" prints no legend, or is matched by
+	// `includes` so "(V)ictor" does;
+	// no_claim=a NAME typed to end in " (V)" is indistinguishable from the marker.
+	it("recognises the marker on a name and on a joined line", () => {
+		expect(carriesVisitingMarker("Jane Doe (V)")).toBe(true);
+		expect(carriesVisitingMarker("Speaker 1 · Jane Doe (V)")).toBe(true);
+		expect(carriesVisitingMarker("Ann Lee, Jane Doe (V) & Bo Chen")).toBe(true);
+		expect(carriesVisitingMarker("Jane Doe (V) and Bo Chen")).toBe(true);
+		expect(carriesVisitingMarker("Evaluator: Jane Doe (V) · asks for")).toBe(
+			true,
+		);
+	});
+
+	// protects=nothing else reads as the marker: members, "· Guest", a bare "(V)",
+	// a word starting "(V", a marker mid-word, and a quoted title ending "(V)";
+	// fails_when=the check is `includes("(V)")`, or drops the leading space, or
+	// accepts a closing quote as a name boundary;
+	// no_claim=none beyond protects.
+	it("does not mistake other text for the marker", () => {
+		expect(carriesVisitingMarker("Jane Doe")).toBe(false);
+		expect(carriesVisitingMarker("Jane Doe · Guest")).toBe(false);
+		expect(carriesVisitingMarker("(V)")).toBe(false);
+		expect(carriesVisitingMarker("Jane (V)ictor")).toBe(false);
+		expect(carriesVisitingMarker("Jane(V)")).toBe(false);
+		expect(carriesVisitingMarker("Speech Title: “Eat well (V)”")).toBe(false);
 	});
 });

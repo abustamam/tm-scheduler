@@ -3,6 +3,7 @@
 // this descriptor, so copy/layout never drifts between them. Pure + unit-tested.
 
 import { APP_LOCALE } from "#/lib/format";
+import { carriesVisitingMarker, VISITING_TOASTMASTER_LEGEND } from "./agenda";
 import type { LegendEntry } from "./agenda-runsheet";
 import { introducedSuffix, OPEN_LABEL } from "./agenda-runsheet";
 import type { HandoffTarget, Slide } from "./agenda-slides";
@@ -11,7 +12,8 @@ export type LineRole = "head" | "name" | "strong" | "muted" | "spacer";
 /** One rendered line. `text` is absent for `spacer`. */
 export type Line = { role: LineRole; text?: string };
 
-export type Body =
+/** What a slide body says, before the (V) key is decided. */
+type BodyCore =
 	| { form: "centered"; lines: Line[] }
 	| {
 			form: "bullets";
@@ -61,6 +63,12 @@ export type Body =
 			 *  Mona"), or `null` when the club runs no Grammarian (#354). */
 			presenter: string | null;
 	  };
+
+/** A slide body plus the key for its (V) marker (#1164). `legend` is
+ *  `VISITING_TOASTMASTER_LEGEND` when a name on THIS slide carries the marker,
+ *  else null, in which case the body renders exactly as it did before. Both
+ *  renderers draw it as one muted line at the foot of the body. */
+export type Body = BodyCore & { legend: string | null };
 
 /**
  * One role on the next-meeting slide (#932). `names` and `open` are separate so
@@ -204,10 +212,37 @@ export function footerDate(d: Date, tz: string): string {
 	return fmtDate(d, tz, false);
 }
 
-const content = (header: string, body: Body): SlideLayout => ({
+/** The text of a body that can hold an assignee's name — what the (V) key is
+ *  decided from. Free text a person typed (a Table Topics note, a definition,
+ *  award categories) is left out, so only a rendered NAME can ask for the key. */
+function nameBearingText(body: BodyCore): string[] {
+	switch (body.form) {
+		case "centered":
+			return body.lines.flatMap((l) => (l.text ? [l.text] : []));
+		case "bullets":
+			return body.items;
+		case "numbered":
+			return [];
+		case "word":
+			return body.presenter ? [body.presenter] : [];
+		case "roster":
+			return [
+				...(body.toastmaster ? [body.toastmaster.names ?? ""] : []),
+				...body.rows.map((r) => r.names ?? ""),
+				body.filled ?? "",
+			];
+	}
+}
+
+const content = (header: string, core: BodyCore): SlideLayout => ({
 	chrome: "content",
 	header,
-	body,
+	body: {
+		...core,
+		legend: nameBearingText(core).some(carriesVisitingMarker)
+			? VISITING_TOASTMASTER_LEGEND
+			: null,
+	},
 });
 
 /** Functionaries with a holder. An open role is dropped from the projected list
@@ -669,7 +704,7 @@ function rosterRow(role: NextMeetingRole): RosterRow {
  *   3. otherwise: the open roles collapse into one "Still open" line that names
  *      every one of them, and the filled roles into the other.
  */
-function rosterBody(slide: NextMeetingSlide): Body {
+function rosterBody(slide: NextMeetingSlide): BodyCore {
 	const at = slide.scheduledAt;
 	const when = [
 		fmtDate(at, slide.timezone, true),

@@ -246,6 +246,21 @@ function renderContent(
 	});
 	if (layout.body.form === "roster") renderRoster(pptx, s, layout.body);
 	else renderBody(s, layout.body);
+	// The (V) key (#1164), the same text the screen deck carries. It sits in the
+	// gap `SLIDE_BODY_BOTTOM_PCT` leaves between the body's floor and the footer
+	// band (0.47in on this frame), so it overlaps neither.
+	if (layout.body.legend) {
+		s.addText(layout.body.legend, {
+			x: INSET,
+			y: H - FOOT_H - 0.36,
+			w: W - 2 * INSET,
+			h: 0.28,
+			align: "left",
+			valign: "middle",
+			fontSize: 12,
+			color: MUTED,
+		});
+	}
 	s.addShape(pptx.ShapeType.rect, {
 		x: 0,
 		y: H - FOOT_H,

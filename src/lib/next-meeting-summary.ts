@@ -73,7 +73,11 @@ export function summarizeRoles(slots: readonly SummarySlot[]): {
 			g = { label: s.roleName, names: [], openCount: 0, tm: isToastmaster(s) };
 			groups.set(s.roleDefinitionId, g);
 		}
-		const name = assigneeDisplayName(s.assigneeName, s.assigneeIsGuest);
+		const name = assigneeDisplayName(
+			s.assigneeName,
+			s.assigneeIsGuest,
+			s.assigneeIsVisitingToastmaster,
+		);
 		if (name) g.names.push(name);
 		else g.openCount += 1;
 	}

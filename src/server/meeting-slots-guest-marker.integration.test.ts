@@ -1,10 +1,11 @@
 /**
- * `loadMeetingSlots` marks a guest holder as a guest and nothing more (#1208).
+ * `loadMeetingSlots` marks a guest holder as a guest and carries no caption
+ * (#1208, #1164).
  *
  * The one loader the meeting page, the print route and the deck read slots
- * through. Since #1208 it carries no kind caption: a visiting Toastmaster and a
- * Visitor are both just guests, and both read "Name · Guest" through
- * `assigneeDisplay` (#1164 will mark the first apart).
+ * through. It carries no kind caption or home club: a Visitor reads
+ * "Name · Guest" through `assigneeDisplay` and a visiting Toastmaster "Name (V)"
+ * (the flag itself is pinned in `meeting-slots-visiting-marker.integration`).
  */
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -63,17 +64,31 @@ describe.skipIf(!hasTestDb)("loadMeetingSlots guest marker", () => {
 	}
 
 	// protects=a visiting Toastmaster (with or without a home club) and a Visitor
-	// (even with a leftover home club) both come out of the loader as a guest with
-	// no caption, and both display as "Ben Carter · Guest";
+	// (even with a leftover home club) all come out of the loader as a guest with
+	// no caption, no raw kind and no home club, and display as "Ben Carter (V)" and
+	// "Ben Carter · Guest" respectively;
 	// fails_when=a kind caption comes back on a row, or the raw kind and home club
-	// are carried through, or either kind loses the guest flag;
+	// are carried through, or either kind loses the guest flag, or a home club makes
+	// a Visitor read "(V)";
 	// no_claim=the print and deck layouts; `agenda-parity.test.ts` pins those from
 	// in-memory slots.
-	it("reads a visiting Toastmaster and a Visitor alike: a guest, no caption", async () => {
-		for (const values of [
-			{ kind: "visiting_toastmaster" as const, homeClub: "Downtown TM" },
-			{ kind: "visiting_toastmaster" as const, homeClub: null },
-			{ kind: "visitor" as const, homeClub: "Leftover Club" },
+	it("reads a visiting Toastmaster as (V) and a Visitor as a guest, with no caption", async () => {
+		for (const { values, display } of [
+			{
+				values: {
+					kind: "visiting_toastmaster" as const,
+					homeClub: "Downtown TM",
+				},
+				display: "Ben Carter (V)",
+			},
+			{
+				values: { kind: "visiting_toastmaster" as const, homeClub: null },
+				display: "Ben Carter (V)",
+			},
+			{
+				values: { kind: "visitor" as const, homeClub: "Leftover Club" },
+				display: "Ben Carter · Guest",
+			},
 		]) {
 			const slot = await holdSlotAsGuest(values);
 			expect(slot?.assigneeIsGuest, JSON.stringify(values)).toBe(true);
@@ -81,7 +96,7 @@ describe.skipIf(!hasTestDb)("loadMeetingSlots guest marker", () => {
 			expect(slot).not.toHaveProperty("assigneeGuestKind");
 			expect(slot).not.toHaveProperty("assigneeGuestHomeClub");
 			expect(slot && assigneeDisplay(slot), JSON.stringify(values)).toBe(
-				"Ben Carter · Guest",
+				display,
 			);
 		}
 	});

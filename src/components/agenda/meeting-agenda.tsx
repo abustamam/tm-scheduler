@@ -39,10 +39,12 @@ import {
 } from "#/components/ui/sheet";
 import { showWriteError } from "#/components/write-error-toast";
 import {
+	assigneeDisplayName,
 	buildRoleCounts,
 	slotAccessibleLabel,
 	slotLabel,
 	summarizeAgenda,
+	VISITING_TOASTMASTER_LEGEND,
 } from "#/lib/agenda";
 import { evaluatorFormBrief } from "#/lib/evaluator-form";
 import { isMeetingCancelled } from "#/lib/meeting-cancellation-notice";
@@ -306,6 +308,11 @@ export function MeetingAgenda({
 		viewer.canAssign &&
 		slots.some((s) => s.status === "open");
 	const speakerSlots = slots.filter((s) => s.isSpeakerRole);
+	// A visiting Toastmaster reads "Name (V)" on screen as on paper, so the key
+	// shows once, under the list, whenever one holds a slot (#1164).
+	const showsVisitingMarker = slots.some(
+		(s) => s.assigneeIsGuest && s.assigneeIsVisitingToastmaster,
+	);
 	// The paired evaluator lineup, for the same ↑↓ reorder speakers get. Pairing
 	// is positional (Evaluator N evaluates Speaker N), so reordering evaluators
 	// is how a manager decides who evaluates whom. `pairedRoleIds` holds the
@@ -668,12 +675,25 @@ export function MeetingAgenda({
 
 													{slot.assigneeName ? (
 														<p className="text-sm text-muted-foreground">
-															{slot.assigneeName}
-															{slot.assigneeIsGuest ? (
-																<span className="ml-1 rounded bg-muted px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-																	Guest
-																</span>
-															) : null}
+															{slot.assigneeIsGuest &&
+															slot.assigneeIsVisitingToastmaster ? (
+																// The same "Name (V)" string print and the deck
+																// carry (#1164); the legend sits under the list.
+																assigneeDisplayName(
+																	slot.assigneeName,
+																	true,
+																	true,
+																)
+															) : (
+																<>
+																	{slot.assigneeName}
+																	{slot.assigneeIsGuest ? (
+																		<span className="ml-1 rounded bg-muted px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+																			Guest
+																		</span>
+																	) : null}
+																</>
+															)}
 															{isMine ? (
 																<span className="text-primary"> (you)</span>
 															) : null}
@@ -1038,6 +1058,12 @@ export function MeetingAgenda({
 					) : null}
 				</section>
 			))}
+
+			{showsVisitingMarker ? (
+				<p className="text-xs text-muted-foreground">
+					{VISITING_TOASTMASTER_LEGEND}
+				</p>
+			) : null}
 
 			{viewer.canManageSpeakers && speakerSlots.length === 0 ? (
 				<section className="space-y-2">

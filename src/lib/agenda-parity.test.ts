@@ -1095,7 +1095,13 @@ describe("golden output — properties of the run sheet itself (#450)", () => {
 	const rostered = (slots: AgendaSlot[]): Set<string> =>
 		new Set(
 			slots
-				.map((s) => assigneeDisplayName(s.assigneeName, s.assigneeIsGuest))
+				.map((s) =>
+					assigneeDisplayName(
+						s.assigneeName,
+						s.assigneeIsGuest,
+						s.assigneeIsVisitingToastmaster,
+					),
+				)
 				.filter((n): n is string => n !== null),
 		);
 
@@ -1552,87 +1558,104 @@ describe("speech-slot time agreement — deck ⇄ run sheet (#394)", () => {
 // ---------------------------------------------------------------------------
 
 /**
- * A guest holding a role reads "Name · Guest" on the deck and on every print
- * surface, character for character. The earlier kind caption (and its one stated
- * print/deck difference) is gone: a visiting Toastmaster and a Visitor are
- * marked alike, and the expectation here changes if the visiting Toastmaster is
- * ever given a marker of its own.
+ * A guest holding a role reads "Name · Guest", and a visiting Toastmaster
+ * "Name (V)" (#1164), on the deck and on every print surface, character for
+ * character. The home club is on neither: the minutes keep it.
+ *
+ * protects=print and deck carry the identical string for the same slot, for both
+ * kinds of guest (the first is #1208's, the second #1164's);
+ * fails_when=a surface formats the guest itself, drops the flag, or one side
+ * prints "(V)" where the other prints "· Guest";
+ * no_claim=a defect on BOTH sides (both reading a wrong flag) passes: the loader
+ * integration test and agenda-guest-marker.test.ts pin the string itself.
  */
-describe("guest marker — print ⇄ deck (#1208)", () => {
-	const guestHolder: AgendaSlot = {
-		...speaker2,
-		assigneeName: "Ben Carter",
-		assigneeIsGuest: true,
-	};
-	const slots = FULL.map((s) => (s.id === speaker2.id ? guestHolder : s));
-	const config: RunOfShowConfig = { geIntroducesFunctionaries: false };
+const GUEST_MARKER_CASES = [
+	{
+		label: "guest marker — print ⇄ deck (#1208)",
+		flags: { assigneeIsGuest: true, assigneeIsVisitingToastmaster: false },
+		deck: `Ben Carter · ${GUEST_MARKER}`,
+	},
+	{
+		label: "visiting Toastmaster marker — print ⇄ deck (#1164)",
+		flags: { assigneeIsGuest: true, assigneeIsVisitingToastmaster: true },
+		deck: "Ben Carter (V)",
+	},
+] as const;
 
-	const deckSpeaker = (() => {
-		const speech = buildSlideDeck({
-			meeting,
-			club,
-			slots,
-			ballotUrl: BALLOT_URL,
-			...config,
-		}).filter((s) => s.kind === "speech");
-		const last = speech[speech.length - 1];
-		return last?.kind === "speech" ? last.speaker : null;
-	})();
+for (const { label, flags, deck } of GUEST_MARKER_CASES)
+	describe(label, () => {
+		const guestHolder: AgendaSlot = {
+			...speaker2,
+			assigneeName: "Ben Carter",
+			...flags,
+		};
+		const slots = FULL.map((s) => (s.id === speaker2.id ? guestHolder : s));
+		const config: RunOfShowConfig = { geIntroducesFunctionaries: false };
 
-	/** The page's text, tags stripped — what a reader of the sheet sees, and
-	 *  what a hidden copy of the caption would still contribute. */
-	function printedText(layout: AgendaLayout): string {
-		const rows = buildTimeline(
-			expandRunSheet(slots, buildRunOfShow(config)),
-			meeting.scheduledAt,
-			club.timezone,
-		);
-		const html = renderToStaticMarkup(
-			createElement(MeetingAgendaPrint, {
-				layout,
-				header: {
-					clubName: club.name,
-					logoUrl: null,
-					clubNumber: null,
-					district: null,
-					mission: null,
-					meetingSchedule: null,
-					dateLong: "Thursday, June 25, 2026",
-					dateShort: "Thu · Jun 25, 2026",
-					timeRange: "6:45 – 7:45 PM",
-					theme: null,
-					wordOfTheDay: null,
-					location: null,
-					announcements: null,
-					meetingNumber: null,
-				},
-				// The fixtures' categories are the roster's four, typed as the
-				// run sheet's wider `string`.
-				roles: buildRosterEntries(
-					slots as Parameters<typeof buildRosterEntries>[0],
-				),
-				officers: [],
-				explainers: [],
-				rows,
-			}),
-		);
-		return html
-			.replace(/<[^>]+>/g, "")
-			.replace(/&amp;/g, "&")
-			.replace(/&quot;/g, '"')
-			.replace(/&#x27;/g, "'");
-	}
+		const deckSpeaker = (() => {
+			const speech = buildSlideDeck({
+				meeting,
+				club,
+				slots,
+				ballotUrl: BALLOT_URL,
+				...config,
+			}).filter((s) => s.kind === "speech");
+			const last = speech[speech.length - 1];
+			return last?.kind === "speech" ? last.speaker : null;
+		})();
 
-	const deck = `Ben Carter · ${GUEST_MARKER}`;
+		/** The page's text, tags stripped — what a reader of the sheet sees, and
+		 *  what a hidden copy of the caption would still contribute. */
+		function printedText(layout: AgendaLayout): string {
+			const rows = buildTimeline(
+				expandRunSheet(slots, buildRunOfShow(config)),
+				meeting.scheduledAt,
+				club.timezone,
+			);
+			const html = renderToStaticMarkup(
+				createElement(MeetingAgendaPrint, {
+					layout,
+					header: {
+						clubName: club.name,
+						logoUrl: null,
+						clubNumber: null,
+						district: null,
+						mission: null,
+						meetingSchedule: null,
+						dateLong: "Thursday, June 25, 2026",
+						dateShort: "Thu · Jun 25, 2026",
+						timeRange: "6:45 – 7:45 PM",
+						theme: null,
+						wordOfTheDay: null,
+						location: null,
+						announcements: null,
+						meetingNumber: null,
+					},
+					// The fixtures' categories are the roster's four, typed as the
+					// run sheet's wider `string`.
+					roles: buildRosterEntries(
+						slots as Parameters<typeof buildRosterEntries>[0],
+					),
+					officers: [],
+					explainers: [],
+					rows,
+				}),
+			);
+			return html
+				.replace(/<[^>]+>/g, "")
+				.replace(/&amp;/g, "&")
+				.replace(/&quot;/g, '"')
+				.replace(/&#x27;/g, "'");
+		}
 
-	it("projects the marker on the deck", () => {
-		expect(deckSpeaker).toBe(deck);
-	});
-
-	for (const layout of ["editorial", "spacious", "grid", "timing"] as const)
-		it(`${layout}: the run-of-show row and the roster print the deck's string exactly`, () => {
-			const text = printedText(layout);
-			expect(text).toContain(`Speaker 2 · ${deck}`);
-			expect(text).toContain(`Speaker 2${deck}`);
+		it("projects the marker on the deck", () => {
+			expect(deckSpeaker).toBe(deck);
 		});
-});
+
+		for (const layout of ["editorial", "spacious", "grid", "timing"] as const)
+			it(`${layout}: the run-of-show row and the roster print the deck's string exactly`, () => {
+				const text = printedText(layout);
+				expect(text).toContain(`Speaker 2 · ${deck}`);
+				expect(text).toContain(`Speaker 2${deck}`);
+			});
+	});

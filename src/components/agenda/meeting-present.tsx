@@ -652,6 +652,17 @@ function ContentSlide({
 					) : (
 						<BodyView body={layout.body} />
 					)}
+					{/* The (V) key (#1164): inside the measured box, below the body and
+					    its note/detail, so a crowded slide shrinks rather than
+					    running the key into the footer. Null on a slide with no (V). */}
+					{layout.body.legend ? (
+						<div
+							className="mt-[2cqw] text-[1.7cqw] leading-snug"
+							style={{ color: MUTED }}
+						>
+							{layout.body.legend}
+						</div>
+					) : null}
 				</div>
 			</div>
 			{/* The footer's height and side inset come from the same module the
