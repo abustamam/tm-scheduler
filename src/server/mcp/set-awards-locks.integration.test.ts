@@ -17,6 +17,10 @@
  *    delete set null` leaves a row naming nobody under a success; with it the
  *    writer waits for the merge and is refused with `CLUB_BUSY_MESSAGE`. The
  *    web `setAward` has the same gap and is covered the same way.
+ * 3. A member of ANOTHER club is never locked: a merge holding that
+ *    membership's exclusive lock does not park the call, which answers
+ *    `NOT_A_MEMBER` at once (a shared lock on it could cycle with a merge that
+ *    collapses clubs in order).
  *
  * Each case carries its card: protects / fails_when / no_claim.
  */
@@ -29,6 +33,7 @@ import {
 	meetingCandidateDisqualifications,
 	meetingVoteSessions,
 	members,
+	people,
 } from "#/db/schema";
 import {
 	cleanup,
@@ -51,6 +56,9 @@ const { collapseMemberships } = await import(
 );
 const { setAward } = await import("#/server/minutes-logic");
 const { CLUB_BUSY_MESSAGE } = await import("#/server/club-write-lock");
+const { lockMembershipForMerge } = await import(
+	"#/server/membership-merge-lock"
+);
 
 const inFlight: Promise<unknown>[] = [];
 const openHolds: Array<{ commit: () => Promise<void> }> = [];
@@ -67,40 +75,24 @@ const outcome = (p: Promise<unknown>) =>
 		(e: unknown) => e,
 	);
 
-/** Resolve once `subject` settled OR a statement matching `match` is parked behind `blockedBy`. */
-async function settledOrBlocked(
-	subject: Promise<unknown>,
-	match: string,
-	blockedBy: number,
-): Promise<void> {
-	let settled = false;
-	subject.then(
-		() => {
-			settled = true;
-		},
-		() => {
-			settled = true;
-		},
-	);
-	const deadline = Date.now() + 10_000;
-	while (Date.now() < deadline) {
-		if (settled) return;
-		const res = await testDb.execute(sql`
-			select pid from pg_stat_activity
-			where datname = current_database()
-			  and state = 'active' and wait_event_type = 'Lock'
-			  and query ilike ${`%${match}%`}
-			  and ${blockedBy} = any(pg_blocking_pids(pid))
-			limit 1`);
-		if (res.rows.length > 0) return;
-		await new Promise((r) => setTimeout(r, 25));
-	}
-	throw new Error("the writer neither finished nor parked behind the holder");
+/**
+ * `takeAdvisoryLockWithin` throws `CLUB_BUSY_MESSAGE` with the 55P03 on `cause`
+ * when the 5s lock timeout runs out, and `lockMembershipsAgainstMerge` throws
+ * the same message with NO cause when the membership is gone after the wait.
+ * The message alone cannot tell them apart, the cause can.
+ */
+function expectAbsorbedRefusalNotTimeout(err: unknown): void {
+	expect((err as Error).cause).toBeUndefined();
 }
 
 describe.skipIf(!hasTestDb)("set_awards locks (#1172)", () => {
 	let seed: SeededClub;
 	let token: string;
+	// Club-less Person rows a test seeded: `cleanup` finds a Person only
+	// through a surviving membership or guest row, and a merge deletes the
+	// membership and (deliberately) leaves the Person.
+	let extraPersonIds: string[] = [];
+	let otherSeed: SeededClub | null = null;
 
 	const call = (args: Record<string, unknown>) =>
 		setAwardsTool.handler(args, { rawToken: token });
@@ -126,6 +118,17 @@ describe.skipIf(!hasTestDb)("set_awards locks (#1172)", () => {
 			.delete(apiTokens)
 			.where(inArray(apiTokens.userId, [seed.adminUserId, seed.memberUserId]));
 		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+		if (otherSeed) {
+			await cleanup(otherSeed.clubId, [
+				otherSeed.adminUserId,
+				otherSeed.memberUserId,
+			]);
+			otherSeed = null;
+		}
+		if (extraPersonIds.length > 0) {
+			await testDb.delete(people).where(inArray(people.id, extraPersonIds));
+			extraPersonIds = [];
+		}
 	});
 
 	/** A call parked on the meeting row behind a `FOR SHARE` holder that wrote `work`. */
@@ -212,6 +215,7 @@ describe.skipIf(!hasTestDb)("set_awards locks (#1172)", () => {
 			const personId = await seedPerson({
 				name: `Absorbed ${randomUUID()}`,
 			});
+			extraPersonIds.push(personId);
 			const [row] = await testDb
 				.insert(members)
 				.values({
@@ -247,10 +251,15 @@ describe.skipIf(!hasTestDb)("set_awards locks (#1172)", () => {
 			// Past every re-point: the DELETE is the merge's last statement.
 			await waitForLockWait('delete from "members"', hold.pid);
 
+			const mergePid = await pid;
 			const running = writer();
 			inFlight.push(running);
 			const settled = outcome(running);
-			await settledOrBlocked(running, "pg_advisory", await pid);
+			// The writer MUST be parked on the merge's shared-lock statement
+			// before the merge commits. Accepting "settled" here let a writer that
+			// ran out the 5s lock timeout (the same `CLUB_BUSY_MESSAGE`) pass as
+			// the post-merge refusal.
+			await waitForLockWait("pg_advisory", mergePid);
 
 			await hold.commit();
 			await merge;
@@ -270,6 +279,7 @@ describe.skipIf(!hasTestDb)("set_awards locks (#1172)", () => {
 
 			expect(result).toBeInstanceOf(Error);
 			expect((result as Error).message).toBe(CLUB_BUSY_MESSAGE);
+			expectAbsorbedRefusalNotTimeout(result);
 			expect(await awardRows()).toEqual([]);
 		});
 
@@ -287,7 +297,42 @@ describe.skipIf(!hasTestDb)("set_awards locks (#1172)", () => {
 
 			expect(result).toBeInstanceOf(Error);
 			expect((result as Error).message).toBe(CLUB_BUSY_MESSAGE);
+			expectAbsorbedRefusalNotTimeout(result);
 			expect(await awardRows()).toEqual([]);
 		});
+	});
+
+	it("never takes the merge lock on a member of another club, and answers NOT_A_MEMBER", async () => {
+		// protects=only the meeting's own club's members are locked, so a foreign id cannot start a lock cycle with a merge that collapses clubs in order
+		// fails_when=the pre-read has no club filter: the call parks on the foreign membership's merge lock until the 5s timeout and answers CLUB_BUSY_MESSAGE
+		// no_claim=a same-club cycle: argued in the tool's header (one exclusive lock per club, under the club write lock)
+		otherSeed = await seedClub();
+		const foreignId = otherSeed.memberId;
+		const hold = await openHold(async (tx) => {
+			await lockMembershipForMerge(tx, foreignId);
+		});
+
+		const running = call({
+			meetingId: seed.meetingId,
+			awards: [{ category: "best_speaker", memberId: foreignId }],
+		});
+		inFlight.push(running);
+		const settled = outcome(running);
+		const raced = await Promise.race([
+			settled,
+			new Promise<"parked">((r) => setTimeout(() => r("parked"), 3_000)),
+		]);
+
+		// Still holding: the answer came while the merge lock was held.
+		expect(raced).not.toBe("parked");
+		expect(raced).toBeInstanceOf(McpError);
+		const blocking = (
+			(raced as InstanceType<typeof McpError>).detail as {
+				blocking: { code: string }[];
+			}
+		).blocking;
+		expect(blocking.map((b) => b.code)).toEqual(["NOT_A_MEMBER"]);
+		expect(await awardRows()).toHaveLength(0);
+		await hold.commit();
 	});
 });

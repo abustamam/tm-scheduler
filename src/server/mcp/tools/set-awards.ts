@@ -46,12 +46,36 @@
  *     order). A merge absorbing a winner would otherwise `on delete set null`
  *     the row recorded under it and leave a winner naming nobody under a
  *     success. A member absorbed while this waited is refused with
- *     `CLUB_BUSY_MESSAGE`. Only ids that exist are locked: an unknown id is
- *     the `NOT_A_MEMBER` item below, and the lock helper would refuse it as
- *     absorbed.
+ *     `CLUB_BUSY_MESSAGE`. Only ids of THIS meeting's club that exist are
+ *     locked: an unknown id, or a member of another club, is the
+ *     `NOT_A_MEMBER` item below (and the lock helper would refuse an unknown
+ *     one as absorbed).
  *  2. The meeting row, `FOR NO KEY UPDATE`.
  *
- * Under those, the rulings and the open-vote check are RACE-FREE, because both
+ * WHY ONLY THE MEETING'S CLUB. A merge collapses the absorbed Person's
+ * memberships club by club and holds every exclusive lock to commit
+ * (`mergePeople`, `collapseMemberships`). Shared locks on another club's
+ * members, taken in uuid order before the club check, can cycle with it: clubs
+ * A < B, absorbed memberships X (in A) and Y (in B) with Y < X by uuid. The tool
+ * holds Y shared and waits for X, which the merge holds, while the merge waits
+ * for Y in club B. A foreign or unknown id is never locked here, so that edge
+ * does not exist and the call answers `NOT_A_MEMBER` without waiting.
+ *
+ * WITHIN the meeting's club no cycle is possible, so the uuid order need not
+ * match the merge's. `collapseMemberships` takes the club write lock, then the
+ * exclusive lock on the ABSORBED membership only (never the keeper's), and
+ * `members_club_person_unique` allows one membership per Person per club: one
+ * merge holds exactly one exclusive membership lock in this club. The club
+ * write lock is held to commit, so no second merge holds an exclusive lock in
+ * the same club at the same time. This tool takes no club write lock and holds
+ * only shared advisory locks while it waits here. A cycle needs the merge to
+ * wait for a lock this tool holds, and the only lock the merge asks for in this
+ * club is its one exclusive lock: if this tool holds it shared, the merge waits
+ * for this tool, which needs no lock the merge holds in this club (the other
+ * member ids are not that merge's, and a second merge cannot hold one while
+ * this one has the club) and runs on to its commit.
+ *
+ * Under the meeting lock, the rulings and the open-vote check are RACE-FREE, because both
  * are read through the transaction AFTER the meeting lock: `openVote` and
  * `disqualifyCandidate` / `undoDisqualification` take `FOR SHARE` on the
  * meeting row, which conflicts with this lock, so one of them either committed
@@ -198,15 +222,23 @@ export const setAwardsTool: McpToolDefinition = {
 			const blocking: McpBlockingItem[] = [];
 
 			// Lock order: the membership merge lock, then the meeting row. Only
-			// members that exist are locked: see the header. A plain read, so it
-			// takes no row lock ahead of the lock it is looked up for.
+			// members of THIS meeting's club that exist are locked: see the
+			// header. A plain read, so it takes no row lock ahead of the lock it
+			// is looked up for. `club.clubId` is the meeting's club (a meeting's
+			// `club_id` is never rewritten), the same value `meeting.clubId` has
+			// under the lock below.
 			const existing =
 				memberIds.length === 0
 					? []
 					: await tx
 							.select({ id: members.id })
 							.from(members)
-							.where(inArray(members.id, memberIds));
+							.where(
+								and(
+									inArray(members.id, memberIds),
+									eq(members.clubId, club.clubId),
+								),
+							);
 			await lockMembershipsAgainstMerge(
 				tx,
 				existing.map((r) => r.id),
