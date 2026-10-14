@@ -57,10 +57,8 @@ import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
 import { guests, meetingAwards, members } from "#/db/schema";
-import {
-	isMeetingCancelled,
-	MEETING_CANCELLED_MESSAGE,
-} from "#/lib/meeting-cancellation-notice";
+import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
+import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import {
 	disqualificationFor,
 	loadDisqualifications,
@@ -163,7 +161,17 @@ export const setAwardsTool: McpToolDefinition = {
 			const blocking: McpBlockingItem[] = [];
 
 			const meeting = await lockMeetingForSlotEdit(tx, args.meetingId);
-			if (isMeetingCancelled(meeting.status)) {
+			// The write class's own refusal (`MEETING_WRITE_POLICY.record`), not a
+			// status check of this tool's: a status the policy starts refusing is
+			// refused here too. It throws, and a refusal is a blocking item in this
+			// tool, collected with the rest. Anything but the cancelled sentence
+			// (an unknown status fails closed) is not ours to swallow.
+			try {
+				assertMeetingAccepts(meeting.status, "record");
+			} catch (e) {
+				if (!(e instanceof Error) || e.message !== MEETING_CANCELLED_MESSAGE) {
+					throw e;
+				}
 				blocking.push({
 					code: "MEETING_CANCELLED",
 					message: MEETING_CANCELLED_MESSAGE,

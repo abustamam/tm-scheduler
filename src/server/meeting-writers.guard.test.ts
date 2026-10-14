@@ -544,9 +544,12 @@ const MEETING_WRITERS: Record<string, Entry> = {
 		class: "record",
 		refusedBy: ["src/server/minutes.ts#addTableTopics"],
 	},
-	"src/server/minutes-logic.ts#clearAward": {
+	"src/server/minutes-logic.ts#deleteAwardRow": {
 		class: "record",
-		refusedBy: ["src/server/minutes.ts#clearMinutesAward"],
+		refusedBy: [
+			"src/server/minutes.ts#clearMinutesAward",
+			"src/server/mcp/tools/set-awards.ts#setAwardsTool",
+		],
 	},
 	"src/server/minutes-logic.ts#moveTableTopicsSpeaker": {
 		class: "record",
@@ -560,9 +563,12 @@ const MEETING_WRITERS: Record<string, Entry> = {
 		class: "record",
 		refusedBy: ["src/server/minutes.ts#removeTableTopics"],
 	},
-	"src/server/minutes-logic.ts#setAward": {
+	"src/server/minutes-logic.ts#upsertAwardRow": {
 		class: "record",
-		refusedBy: ["src/server/minutes.ts#setMinutesAward"],
+		refusedBy: [
+			"src/server/minutes.ts#setMinutesAward",
+			"src/server/mcp/tools/set-awards.ts#setAwardsTool",
+		],
 	},
 	"src/server/minutes-logic.ts#setMemberPresence": {
 		class: "record",
