@@ -606,6 +606,74 @@ async function realFitPageCopies(
 	};
 }
 
+const FLIP_MIN = 30;
+const FLIP_MAX = 90;
+
+type ParityFlip = {
+	/** A row count where Grid prints 2 pages and Editorial 1, or null. */
+	rows: number | null;
+	/** Every row count measured: `rows: grid height (pages), editorial height (pages)`. */
+	table: string;
+};
+
+/**
+ * The row count at which Grid flows onto 2 pages while Editorial still fits 1, in
+ * THIS browser (#1230). Both layouts' page counts only grow with the row count, so
+ * the first row where each flows is found by binary search over
+ * `FLIP_MIN`..`FLIP_MAX`, one Chrome launch per probe, both layouts drawn in each.
+ * The band between the two is where the page parity differs; its middle is the
+ * answer, the farthest from either edge. A face that moves a layout by a row or two
+ * then changes the answer, not the verdict. An empty band is `rows: null` with the
+ * measured table, for the caller to fail on.
+ */
+async function findParityFlip(): Promise<ParityFlip> {
+	const seen = new Map<number, { grid: number; editorial: number }>();
+	const probe = async (rows: number) => {
+		const known = seen.get(rows);
+		if (known) return known;
+		const { stages } = await realFitPageCopies(
+			["grid", "editorial"],
+			rows,
+			1,
+			false,
+		);
+		const grid = stages[0]?.heights[0] ?? 0;
+		const editorial = stages[1]?.heights[0] ?? 0;
+		const m = { grid, editorial };
+		seen.set(rows, m);
+		return m;
+	};
+	const firstFlowing = async (layout: "grid" | "editorial") => {
+		let lo = FLIP_MIN;
+		let hi = FLIP_MAX;
+		while (lo < hi) {
+			const mid = Math.floor((lo + hi) / 2);
+			if (sheetPages((await probe(mid))[layout]) >= 2) hi = mid;
+			else lo = mid + 1;
+		}
+		return lo;
+	};
+	const grid = await firstFlowing("grid");
+	const editorial = await firstFlowing("editorial");
+	let rows: number | null = null;
+	if (editorial - 1 >= grid) {
+		const mid = Math.floor((grid + editorial - 1) / 2);
+		const m = await probe(mid);
+		if (sheetPages(m.grid) === 2 && sheetPages(m.editorial) === 1) rows = mid;
+	}
+	const table = [...seen.entries()]
+		.sort(([a], [b]) => a - b)
+		.map(
+			([n, m]) =>
+				`${n} rows: grid ${m.grid}px (${sheetPages(m.grid)}p), editorial ${m.editorial}px (${sheetPages(m.editorial)}p)`,
+		)
+		.join("\n");
+	return {
+		rows,
+		table: `${table}\nGrid first flows at ${grid} rows, Editorial at ${editorial}`,
+	};
+}
+
 const hasChrome = findChrome() !== null;
 
 // The gate must never be able to skip itself into green in CI. Locally, no
@@ -740,7 +808,9 @@ describe.skipIf(!hasChrome)(
 		describe("copies measured under the real FitPage (#1181)", () => {
 			beforeAll(async () => {
 				copiesBundle = await bundleCopiesEntry();
-			});
+				// About a dozen Chrome launches (a binary search), at ~1.3s each.
+				flip = await findParityFlip();
+			}, 120_000);
 
 			// Rows enough that the grid flows (its scale would fall under
 			// `MIN_FIT_SCALE`) onto two pages.
@@ -766,21 +836,50 @@ describe.skipIf(!hasChrome)(
 			// two-page Grid at any row count. Grid/Editorial pages, swept 30 to 100 at
 			// even row counts (and 49 to 59 at odd ones): 2/1 for 52 to 56, 2/2 for 57
 			// to 82, 3/2 for 84 to 88, then 3/3.
-			// LONG = 52 is the first row count where Grid flows, 8px over the cliff:
-			// enough for the cases below, which only need Grid on TWO pages, and they
-			// assert it. It is NOT enough for a case that needs Editorial on one page
-			// AND Grid on two: that is `FLIP` below.
-			const LONG = 52;
+			// LONG = 60: Grid is 1641px on a Mac, 177px over the cliff, and still two
+			// pages (Grid is on two pages from 52 through 82 rows). Chosen for margin, not
+			// as the first row count that flows: Linux CI's fallback face lays out about
+			// 0.945 of a Mac's height (run 38634218891), which put the Mac-cliff fixture
+			// of 52 rows (1472px) under the cliff there, Grid on ONE page, and failed
+			// every case below that needs it to flow. 60 rows is about 1551px on Linux,
+			// still 87px over. The cases only need Grid on TWO pages, and they assert it.
+			// "A sheet that grows" adds 1100px: 1641 + 1100 is about 2740, three pages
+			// (2114 < h <= 3170), on a Mac and on Linux.
+			const LONG = 60;
 
 			// Rows where the layouts' page PARITY differs: Grid on 2 pages (even, no
 			// blank after a duplex copy), Editorial on 1 (odd, a blank after every copy
-			// but the last). 54 sits mid-window (52 to 56): Grid 1510px is 46px (about
-			// two rows, ~20px each) over the 1464 cliff, and Editorial's one-page limit
-			// is 56 rows (57 flows at 1465px), so 54 is three rows (~60px) under it.
-			// A runner whose fallback face moves a layout by about two rows breaks the
-			// precondition, and each case asserts its own page counts, so it fails
-			// naming the precondition rather than passing for the wrong reason.
-			const FLIP = 54;
+			// but the last). That band is narrow and the two layouts' faces move it by
+			// different amounts: 52 to 56 rows on a Mac (Grid flows at 52, Editorial at
+			// 57), about 56 to 61 on Linux, where everything is 0.945 of a Mac's height.
+			// No ONE row count sits well inside both (a Mac wants Grid over 1584px for a
+			// 120px margin, which only 58 rows reach, and Editorial flows at 57), so the
+			// count is MEASURED in whatever browser runs the suite: `findParityFlip`
+			// binary-searches 30 to 90 rows for the first row where Grid flows and the
+			// first where Editorial does, and takes the middle of the rows between. If
+			// the band is empty the suite FAILS with the measured table. It never skips.
+			let flip: ParityFlip | null = null;
+			const flipRows = (): number => {
+				if (!flip?.rows) {
+					throw new Error(
+						`no row count in ${FLIP_MIN} to ${FLIP_MAX} has Grid on 2 pages and Editorial on 1 in this browser. Measured:\n${flip?.table ?? "(not measured)"}`,
+					);
+				}
+				return flip.rows;
+			};
+
+			// protects=the precondition of the two switch cases below: in THIS browser
+			//   some row count prints Grid on 2 pages and Editorial on 1
+			// fails_when=none does (a face or layout change moved the bands apart), and
+			//   then the measured table says where each layout flowed, instead of the
+			//   switch cases passing about nothing or being skipped
+			// no_claim=which row count it is: that differs per browser (52 to 56 on a Mac)
+			it("some row count has a 2-page grid next to a 1-page editorial", () => {
+				expect(
+					flip?.rows,
+					`rows ${FLIP_MIN} to ${FLIP_MAX}:\n${flip?.table ?? "(not measured)"}`,
+				).toBeTypeOf("number");
+			});
 
 			it("a grid agenda that flows to 2 pages gets no blank between copies", async () => {
 				const { stages, printedPages } = await realFitPageCopies(
@@ -813,7 +912,7 @@ describe.skipIf(!hasChrome)(
 			// and back (odd to even, even to odd), on `LONG` rows. The compact density
 			// made Editorial fit one page there, so Editorial never out-paginates Grid
 			// again (see the table above); the same parity flip is now Editorial on 1
-			// page and Grid on 2, on `FLIP` rows. What they protect is unchanged: after
+			// page and Grid on 2, on `flipRows()` rows, measured per browser (see above). What they protect is unchanged: after
 			// a layout switch under a duplex stack, the blank after each copy is
 			// recomputed from the pages `FitPage` REALLY made, in both directions.
 
@@ -823,12 +922,13 @@ describe.skipIf(!hasChrome)(
 			// fails_when=the stack keeps the old layout's page counts after the switch
 			//   (the blanks stay: 2 where 0 is right, 6 pages become 8), or measures
 			//   once at mount and never again
-			// no_claim=that Editorial is 1 page and Grid 2 on any other face or row count
-			//   (each stage asserts its own preconditions); the grid that grows later
+			// no_claim=that the row count is the same in any other browser (it is chosen per
+			//   browser, `findParityFlip`; each stage asserts its own preconditions); the
+			//   grid that grows later
 			it("switching from a 1-page editorial to a 2-page grid drops the blanks", async () => {
 				const { stages, printedPages } = await realFitPageCopies(
 					["editorial", "grid"],
-					FLIP,
+					flipRows(),
 					3,
 					true,
 				);
@@ -849,11 +949,12 @@ describe.skipIf(!hasChrome)(
 			// fails_when=the stack keeps the old layout's page counts after the switch
 			//   (no blanks where 2 are needed: 3 pages instead of 5), or measures once
 			//   at mount and never again
-			// no_claim=that Grid is 2 pages and Editorial 1 on any other face or row count
+			// no_claim=that the row count is the same in any other browser (it is chosen per
+			//   browser, `findParityFlip`)
 			it("switching from a 2-page grid to a 1-page editorial adds the blanks", async () => {
 				const { stages, printedPages } = await realFitPageCopies(
 					["grid", "editorial"],
-					FLIP,
+					flipRows(),
 					3,
 					true,
 				);

@@ -40,12 +40,7 @@ import {
 	thrAgendaLong,
 } from "#/test/thr-agenda-fixture";
 
-export type FixtureId =
-	| "thr"
-	| "thrLong"
-	| "mcf"
-	| "contestDense14"
-	| "contestDense16";
+export type FixtureId = "thr" | "thrLong" | "mcf" | `contestDense${number}`;
 
 export type Step =
 	| { kind: "tab"; layout: AgendaLayout }
@@ -97,7 +92,7 @@ declare global {
 
 const GUESTS = { veena: "Guest", david: "Guest" };
 
-const FIXTURES = {
+const STATIC_FIXTURES = {
 	thr: (() => {
 		const { roles, rows } = thrAgenda(GUESTS);
 		return {
@@ -125,20 +120,27 @@ const FIXTURES = {
 		explainers: MCF_EXPLAINERS,
 		rows: MCF_ROWS,
 	},
-	// The seeded speech-contest template at 14 contestants with long member names
-	// (`print-compact-fixtures.ts`): too long for Grid, Editorial and Spacious even
-	// at the compact density (#1226), and still two Timing sheets.
-	contestDense14: {
-		...printCompactAgenda("contestDense14"),
-		explainers: [],
-	},
-	// Sixteen contestants: Timing's own page 2 (1500px natural on a Mac) is over the
-	// flow cliff, so Timing itself overflows. A club that CHOSE Timing must get no
-	// fallback notice for it (#1226).
-	contestDense16: {
-		...printCompactAgenda("contestDense16"),
-		explainers: [],
-	},
+};
+
+type Fixture = (typeof STATIC_FIXTURES)[keyof typeof STATIC_FIXTURES];
+
+/** `contestDenseN` is the seeded speech-contest template at N contestants with
+ *  long member names (`print-compact-fixtures.ts`); any N works. */
+const dense = new Map<FixtureId, Fixture>();
+const fixtureOf = (id: FixtureId): Fixture => {
+	if (!id.startsWith("contestDense"))
+		return STATIC_FIXTURES[id as keyof typeof STATIC_FIXTURES];
+	// Cached: the route's reset effect is keyed on the rows' identity, so a fresh
+	// array on every render would reset it forever.
+	let f = dense.get(id);
+	if (!f) {
+		f = {
+			...printCompactAgenda(id as `contestDense${number}`),
+			explainers: [],
+		};
+		dense.set(id, f);
+	}
+	return f;
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -214,7 +216,7 @@ function snapshot(step: string): Snapshot {
 /** The agenda the route renders. Context, because the route component is built
  *  once per scenario and a "new loader data" step has to reach it. */
 const AgendaCtx = createContext<{
-	f: (typeof FIXTURES)[FixtureId];
+	f: Fixture;
 	source: object;
 } | null>(null);
 
@@ -257,7 +259,7 @@ function Harness({ scenario }: { scenario: Scenario }) {
 	// The loader's data object: a new agenda is a new object, as in the app.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the fixture is the trigger
 	const source = useMemo(() => ({}), [fixture]);
-	const f = FIXTURES[fixture];
+	const f = fixtureOf(fixture);
 	const rootRoute = useMemo(() => createRootRoute(), []);
 	const router = useMemo(() => {
 		const print = createRoute({
@@ -299,7 +301,7 @@ async function run(scenario: Scenario): Promise<Snapshot[]> {
 	const root = createRoot(host);
 	const out: Snapshot[] = [];
 	if (scenario.mode === "bare") {
-		const f = FIXTURES[scenario.fixture];
+		const f = fixtureOf(scenario.fixture);
 		root.render(<MeetingAgendaPrint layout={scenario.search.layout} {...f} />);
 		await settle();
 		out.push(snapshot("bare"));

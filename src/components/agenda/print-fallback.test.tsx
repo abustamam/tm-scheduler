@@ -36,7 +36,7 @@
  *
  *   fixture               grid  editorial  spacious p2  timing p2  Timing sheets
  *   contestDense14 (mac)  1563  1604       1668         1384       1056 + 1384
- *   contestDense16 (mac)  1672  (n/a)      (n/a)        1500       Timing flows too
+ *   contestDense20 (mac)  (n/a) (n/a)      (n/a)        1712       Timing flows too
  *   THR (macOS)           regular 1565 / 1478 / 1744 (compact fits all three)
  *   thrAgendaLong (macOS) regular 1729 / 1649 / 1903 (compact fits all three, AC 2)
  *
@@ -48,7 +48,11 @@
  * three layouts: each by 99px or more on a Mac. `contestDense16` (the fixture
  * `print-compact.test.tsx` climbs with) is too long for Timing's two sheets (page 2
  * natural 1500 > 1464), which would flow a third page, so this suite uses 14: Timing
- * page 2 is 1384, 80px under the cliff. Timing's own overflow is #1227.
+ * page 2 is 1384, 80px under the cliff. Timing's own overflow is #1227. The one test
+ * that NEEDS Timing over the cliff uses `contestDense20`, not 16: 1500 was only 36px
+ * over on a Mac and Linux CI's face is 0.945 of a Mac's (run 38634218891: the same
+ * fixture measured 1418, 46px UNDER the cliff, and the control failed). 20 is 1712 on
+ * a Mac, 248px over, about 1618 on Linux.
  *
  * The Linux CI face differs from a Mac's, so every number above may shift there;
  * every geometry assertion carries the measured heights in its message.
@@ -196,8 +200,8 @@ for (const layout of AGENDA_LAYOUTS) {
 }
 // Timing overflows Timing at compact on this fixture; asked for Timing, nothing
 // may be said about a fallback.
-sc("timing16:timing", "contestDense16", "timing");
-sc("timing16:timing:bare", "contestDense16", "timing", { mode: "bare" });
+sc("timing20:timing", "contestDense20", "timing");
+sc("timing20:timing:bare", "contestDense20", "timing", { mode: "bare" });
 sc("long:grid:copies", LONG, "grid", { copies: 3, duplex: 1 });
 sc("long:grid:chrome-none", LONG, "grid", { chrome: "none" });
 // Editorial's fallback OVERWRITES `fellBackFrom` (grid -> editorial), so this
@@ -357,19 +361,21 @@ describe.skipIf(!hasChrome)(
 		//   or the control stops overflowing (then the test proves nothing)
 		// no_claim=how Timing prints once it flows (a third sheet, #1227), or that Linux
 		//   CI's face overflows by the same margin: the control's message carries the
-		//   numbers this machine saw
+		//   numbers this machine saw. The fixture is contestDense20 (Timing page 2: 1712 on
+		//   a Mac, 248px over the 1464 cliff; about 1618 on Linux at its 0.945 ratio, still
+		//   154px over), chosen so the control survives that face (16 was 1500 / 1418)
 		it("a chosen Timing that overflows at compact shows no fallback notice", () => {
 			const cliff = (PAGE_H - 2) / MIN_FIT_SCALE;
-			const bare = first("timing16:timing:bare");
+			const bare = first("timing20:timing:bare");
 			const tallest = Math.max(...bare.natural);
 			expect(
 				tallest,
-				`timing contestDense16 natural=${tallest} cliff=${cliff} (the control must overflow)`,
+				`timing contestDense20 natural=${tallest} cliff=${cliff} (the control must overflow)`,
 			).toBeGreaterThan(cliff);
-			const s = first("timing16:timing");
-			expect(s.notice, `timing contestDense16 ${nat(s)}`).toBeNull();
-			expect(s.timing, `timing contestDense16 ${nat(s)}`).toBe(true);
-			expect(s.activeTab, `timing contestDense16 ${nat(s)}`).toBe(
+			const s = first("timing20:timing");
+			expect(s.notice, `timing contestDense20 ${nat(s)}`).toBeNull();
+			expect(s.timing, `timing contestDense20 ${nat(s)}`).toBe(true);
+			expect(s.activeTab, `timing contestDense20 ${nat(s)}`).toBe(
 				AGENDA_LAYOUT_LABELS.timing,
 			);
 		});
