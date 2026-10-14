@@ -432,7 +432,9 @@ export type PrintAgendaViewProps = {
  * requested layout, exactly as before; the fallback is decided by the
  * post-mount measurement. It is dropped when the requested layout or the agenda
  * changes, so that layout is measured again from scratch (`FitPage` measures
- * once per mount, and Timing's own sheets are never given `onWouldFlow`).
+ * once per mount). `MeetingAgendaPrint` hands Timing `onWouldFlow` only to
+ * climb to `compact`; at `compact` Timing's sheets get `undefined` and never
+ * forward it, so a Timing that overflows does not report a fallback (#1226).
  */
 export function PrintAgendaView({
 	layout,

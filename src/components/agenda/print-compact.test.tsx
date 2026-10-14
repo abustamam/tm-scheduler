@@ -437,15 +437,20 @@ describe("the density ladder", () => {
 			expect(told).not.toHaveBeenCalled();
 		});
 
-		// protects=compact that still flows hands the decision to the caller
-		// fails_when=the caller is never told at compact, or is told at regular
+		// protects=compact that still flows hands the decision to the caller, in the
+		//   layouts that have a fallback to hand it to; Timing IS the fallback, so a
+		//   Timing sheet still too long at compact keeps today's flow and says nothing
+		//   (otherwise the route announces a fallback "from Timing to Timing")
+		// fails_when=the caller is never told at compact, or is told at regular, or
+		//   (timing) the caller is told at compact, or Timing never climbs to compact
 		// no_claim=what the route does with it (print-fallback.test.tsx)
-		it(`${layout}: a sheet still flowing at compact tells the caller`, () => {
+		it(`${layout}: a sheet still flowing at compact ${layout === "timing" ? "does not tell the caller" : "tells the caller"}`, () => {
 			stubHeights({ regular: 3000, compact: 3000 });
 			const told = vi.fn();
 			const { container } = render(view(layout, { onWouldFlow: told }));
 			expect(isCompact(container)).toBe(true);
-			expect(told).toHaveBeenCalled();
+			if (layout === "timing") expect(told).not.toHaveBeenCalled();
+			else expect(told).toHaveBeenCalled();
 		});
 	}
 
@@ -487,6 +492,11 @@ describe("the density ladder", () => {
 		expect(isCompact(container)).toBe(false);
 	});
 
+	// protects=a layout switch climbs again from regular: the density decided for
+	//   Grid is not carried into Editorial
+	// fails_when=the density outlives the layout it was decided for (the switch does
+	//   not reset it), so Editorial opens compact although it fits at regular
+	// no_claim=that Editorial is remeasured (the layout's own component remounts it)
 	it("a new layout returns to regular", () => {
 		const spy = stubHeights({ regular: 3000, compact: 1000 });
 		const { container, rerender } = render(view("grid"));
@@ -615,9 +625,8 @@ describe.skipIf(!hasChrome)(
 		// no_claim=Editorial on an agenda that fits (print-density.test.tsx)
 		it("compact Editorial on thrAgendaLong prints its detail at or above the floor", () => {
 			const s = climb("thrLong", "editorial");
-			const tallest = Math.max(...s.sheets.map((x) => x.natural));
-			const raw = (PAGE_H - 2) / tallest;
-			const scale = raw < MIN_FIT_SCALE ? 1 : Math.min(1, raw);
+			expect(s.sheets, nat(s)).toHaveLength(1);
+			const { scale } = s.sheets[0];
 			const pt = pxToPt(RUN_NARRATIVE_TYPE.sm.detail * scale);
 			expect(s.compact, nat(s)).toBe(true);
 			expect(pt, `printed detail ${pt}pt ${nat(s)}`).toBeGreaterThanOrEqual(

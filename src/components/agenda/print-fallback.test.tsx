@@ -194,6 +194,10 @@ for (const layout of AGENDA_LAYOUTS) {
 	sc(`mcf:${layout}`, "mcf", layout);
 	sc(`mcf:${layout}:bare`, "mcf", layout, { mode: "bare" });
 }
+// Timing overflows Timing at compact on this fixture; asked for Timing, nothing
+// may be said about a fallback.
+sc("timing16:timing", "contestDense16", "timing");
+sc("timing16:timing:bare", "contestDense16", "timing", { mode: "bare" });
 sc("long:grid:copies", LONG, "grid", { copies: 3, duplex: 1 });
 sc("long:grid:chrome-none", LONG, "grid", { chrome: "none" });
 // Editorial's fallback OVERWRITES `fellBackFrom` (grid -> editorial), so this
@@ -343,6 +347,31 @@ describe.skipIf(!hasChrome)(
 				const s = first(`mcf:${layout}`);
 				expect(s.notice, `${layout} ${nat(s)}`).toBeNull();
 			}
+		});
+
+		// protects=a club that CHOSE Timing, with an agenda too long even for Timing at
+		//   compact, gets no fallback notice and keeps Timing (Timing is the fallback; it
+		//   has nowhere to fall back to, and its overflow is #1227)
+		// fails_when=Timing's sheets are given `onWouldFlow` at compact, so the route
+		//   announces "too long for Timing on 2 pages. Showing Timing (2 pages) instead",
+		//   or the control stops overflowing (then the test proves nothing)
+		// no_claim=how Timing prints once it flows (a third sheet, #1227), or that Linux
+		//   CI's face overflows by the same margin: the control's message carries the
+		//   numbers this machine saw
+		it("a chosen Timing that overflows at compact shows no fallback notice", () => {
+			const cliff = (PAGE_H - 2) / MIN_FIT_SCALE;
+			const bare = first("timing16:timing:bare");
+			const tallest = Math.max(...bare.natural);
+			expect(
+				tallest,
+				`timing contestDense16 natural=${tallest} cliff=${cliff} (the control must overflow)`,
+			).toBeGreaterThan(cliff);
+			const s = first("timing16:timing");
+			expect(s.notice, `timing contestDense16 ${nat(s)}`).toBeNull();
+			expect(s.timing, `timing contestDense16 ${nat(s)}`).toBe(true);
+			expect(s.activeTab, `timing contestDense16 ${nat(s)}`).toBe(
+				AGENDA_LAYOUT_LABELS.timing,
+			);
 		});
 
 		// protects=an agenda that fits renders exactly as before

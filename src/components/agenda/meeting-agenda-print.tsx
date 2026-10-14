@@ -108,8 +108,10 @@ type Props = {
 	// hand-rolled officer footer instead.
 	qrUrl?: string;
 	/** Told when a one-sheet or Spacious sheet is too long to scale legibly and is
-	 *  about to flow onto extra pages (#1225). Threaded to Editorial, Grid and both
-	 *  Spacious sheets; Timing is the fallback, so it never receives it. */
+	 *  about to flow onto extra pages (#1225), once it has also been tried at
+	 *  `compact` (#1226). Threaded to Editorial, Grid and both Spacious sheets.
+	 *  Timing receives it only to climb to `compact`; at `compact` its sheets are
+	 *  given `undefined`, never this callback, because Timing is the fallback. */
 	onWouldFlow?: () => void;
 	/** The density the print starts at (#1226). Absent is `regular`, which is what
 	 *  the route always wants: `MeetingAgendaPrint` climbs to `compact` itself, and
@@ -2963,9 +2965,16 @@ export function MeetingAgendaPrint({
 		density,
 		fitKey: `${seen.epoch}:${density}`,
 		// Any sheet that would flow moves the WHOLE layout down a rung, so a
-		// two-sheet layout's sheets always match. At `compact` the caller is told.
+		// two-sheet layout's sheets always match. At `compact` the caller is told,
+		// except for Timing: it IS the fallback, so a Timing sheet still too long at
+		// compact keeps today's flow (until #1227) whatever the caller passed, or the
+		// route would announce a fallback "from Timing to Timing".
 		onWouldFlow:
-			density === "regular" ? () => setDensity("compact") : onWouldFlow,
+			density === "regular"
+				? () => setDensity("compact")
+				: layout === "timing"
+					? undefined
+					: onWouldFlow,
 	};
 	switch (layout) {
 		case "editorial":

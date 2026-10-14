@@ -40,7 +40,12 @@ import {
 	thrAgendaLong,
 } from "#/test/thr-agenda-fixture";
 
-export type FixtureId = "thr" | "thrLong" | "mcf" | "contestDense14";
+export type FixtureId =
+	| "thr"
+	| "thrLong"
+	| "mcf"
+	| "contestDense14"
+	| "contestDense16";
 
 export type Step =
 	| { kind: "tab"; layout: AgendaLayout }
@@ -125,6 +130,13 @@ const FIXTURES = {
 	// at the compact density (#1226), and still two Timing sheets.
 	contestDense14: {
 		...printCompactAgenda("contestDense14"),
+		explainers: [],
+	},
+	// Sixteen contestants: Timing's own page 2 (1500px natural on a Mac) is over the
+	// flow cliff, so Timing itself overflows. A club that CHOSE Timing must get no
+	// fallback notice for it (#1226).
+	contestDense16: {
+		...printCompactAgenda("contestDense16"),
 		explainers: [],
 	},
 };
