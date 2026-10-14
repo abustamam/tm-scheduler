@@ -743,20 +743,44 @@ describe.skipIf(!hasChrome)(
 			});
 
 			// Rows enough that the grid flows (its scale would fall under
-			// `MIN_FIT_SCALE`) onto two pages, and the editorial layout, which is
-			// taller for the same rows, onto three.
+			// `MIN_FIT_SCALE`) onto two pages.
 			//
-			// MEASURED (macOS, 2026-10-12, one copy, the harness's offline fallback
-			// fonts), sheet height by row count. Grid: fits one page up to 37 rows,
-			// flows from 38, is on two pages through 57 (2052px) and on three by 60
-			// (2133px). Editorial: 2 pages from 31 rows, 3 pages from 48 (2146px; 45
-			// is 2028px) through 75. Both hold from 48 to 57 rows, so 52 sits in the
-			// middle, ~180px (about 5 rows) clear of the nearer page boundary. A
-			// runner whose fontconfig picks a different fallback face has to move a
-			// layout by that much to break it, and each case asserts its own page
-			// counts, so if one does, it fails naming the precondition rather than
-			// passing for the wrong reason.
+			// MEASURED (macOS, 2026-10-14, one copy, the harness's offline fallback
+			// fonts, with the compact density of #1226 in place), sheet height by row
+			// count. Cliff = (1056 - 2) / 0.72 = 1464px: a sheet whose natural height
+			// is under it SCALES onto one page, over it FLOWS and is as tall as its
+			// content.
+			//   rows   grid         editorial
+			//   49-51  1056 (1p)    1056 (1p)
+			//   52     1472 (2p)    1056 (1p)
+			//   53     1491 (2p)    1056 (1p)
+			//   54     1510 (2p)    1056 (1p)
+			//   55     1542 (2p)    1056 (1p)
+			//   56     1557 (2p)    1056 (1p)
+			//   57     1576 (2p)    1465 (2p)
+			//   58     1603 (2p)    1485 (2p)
+			//   84     2144 (3p)    1991 (2p)
+			// Grid is on two pages from 52 through 82 rows. Compact moved Editorial's
+			// limits (it was 2 pages from 31 rows and 3 from 48 before #1226): it now
+			// holds one page through 56 rows and never has three pages next to a
+			// two-page Grid at any row count. Grid/Editorial pages, swept 30 to 100 at
+			// even row counts (and 49 to 59 at odd ones): 2/1 for 52 to 56, 2/2 for 57
+			// to 82, 3/2 for 84 to 88, then 3/3.
+			// LONG = 52 is the first row count where Grid flows, 8px over the cliff:
+			// enough for the cases below, which only need Grid on TWO pages, and they
+			// assert it. It is NOT enough for a case that needs Editorial on one page
+			// AND Grid on two: that is `FLIP` below.
 			const LONG = 52;
+
+			// Rows where the layouts' page PARITY differs: Grid on 2 pages (even, no
+			// blank after a duplex copy), Editorial on 1 (odd, a blank after every copy
+			// but the last). 54 sits mid-window (52 to 56): Grid 1510px is 46px (about
+			// two rows, ~20px each) over the 1464 cliff, and Editorial's one-page limit
+			// is 56 rows (57 flows at 1465px), so 54 is three rows (~60px) under it.
+			// A runner whose fallback face moves a layout by about two rows breaks the
+			// precondition, and each case asserts its own page counts, so it fails
+			// naming the precondition rather than passing for the wrong reason.
+			const FLIP = 54;
 
 			it("a grid agenda that flows to 2 pages gets no blank between copies", async () => {
 				const { stages, printedPages } = await realFitPageCopies(
@@ -785,35 +809,61 @@ describe.skipIf(!hasChrome)(
 				expect(printedPages).toBe(5);
 			});
 
-			it("switching from a 3-page editorial to a 2-page grid drops the blanks", async () => {
+			// #1226 rewrote these two. They were "a 3-page editorial to a 2-page grid"
+			// and back (odd to even, even to odd), on `LONG` rows. The compact density
+			// made Editorial fit one page there, so Editorial never out-paginates Grid
+			// again (see the table above); the same parity flip is now Editorial on 1
+			// page and Grid on 2, on `FLIP` rows. What they protect is unchanged: after
+			// a layout switch under a duplex stack, the blank after each copy is
+			// recomputed from the pages `FitPage` REALLY made, in both directions.
+
+			// protects=a switch to a layout with an EVEN page count drops the blanks the
+			//   odd one needed: they follow the pages FitPage really made the new layout
+			//   print, not the ones the old layout printed
+			// fails_when=the stack keeps the old layout's page counts after the switch
+			//   (the blanks stay: 2 where 0 is right, 6 pages become 8), or measures
+			//   once at mount and never again
+			// no_claim=that Editorial is 1 page and Grid 2 on any other face or row count
+			//   (each stage asserts its own preconditions); the grid that grows later
+			it("switching from a 1-page editorial to a 2-page grid drops the blanks", async () => {
 				const { stages, printedPages } = await realFitPageCopies(
 					["editorial", "grid"],
-					LONG,
+					FLIP,
 					3,
 					true,
 				);
 				const [editorial, grid] = stages;
-				expect(editorial?.heights.map(sheetPages)).toEqual([3, 3, 3]);
+				// Preconditions: Editorial fits one page (odd), so every copy but the last
+				// is followed by a blank (3 copies: 2 blanks) ...
+				expect(editorial?.heights.map(sheetPages)).toEqual([1, 1, 1]);
 				expect(editorial?.blanks).toBe(2);
+				// ... and Grid flowed to two (even): the 2 blanks are gone.
 				expect(grid?.heights.map(sheetPages)).toEqual([2, 2, 2]);
 				expect(grid?.blanks).toBe(0);
+				// 3 copies of 2 pages, nothing between them.
 				expect(printedPages).toBe(6);
 			});
 
-			it("switching from a 2-page grid to a 3-page editorial adds the blanks", async () => {
+			// protects=a switch to a layout with an ODD page count adds the blanks the
+			//   even one did not need
+			// fails_when=the stack keeps the old layout's page counts after the switch
+			//   (no blanks where 2 are needed: 3 pages instead of 5), or measures once
+			//   at mount and never again
+			// no_claim=that Grid is 2 pages and Editorial 1 on any other face or row count
+			it("switching from a 2-page grid to a 1-page editorial adds the blanks", async () => {
 				const { stages, printedPages } = await realFitPageCopies(
 					["grid", "editorial"],
-					LONG,
+					FLIP,
 					3,
 					true,
 				);
 				const [grid, editorial] = stages;
 				expect(grid?.heights.map(sheetPages)).toEqual([2, 2, 2]);
 				expect(grid?.blanks).toBe(0);
-				expect(editorial?.heights.map(sheetPages)).toEqual([3, 3, 3]);
+				expect(editorial?.heights.map(sheetPages)).toEqual([1, 1, 1]);
 				expect(editorial?.blanks).toBe(2);
-				// 3 + blank + 3 + blank + 3
-				expect(printedPages).toBe(11);
+				// 1 + blank + 1 + blank + 1
+				expect(printedPages).toBe(5);
 			});
 
 			// A browser that draws no frames (a tab opened in the background, a tool

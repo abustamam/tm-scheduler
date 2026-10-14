@@ -31,6 +31,7 @@ import {
 	MCF_ROLES,
 	MCF_ROWS,
 } from "#/test/mcf-agenda-fixture";
+import { printCompactAgenda } from "#/test/print-compact-fixtures";
 import {
 	THR_EXPLAINERS,
 	THR_HEADER,
@@ -39,7 +40,7 @@ import {
 	thrAgendaLong,
 } from "#/test/thr-agenda-fixture";
 
-export type FixtureId = "thr" | "thrLong" | "mcf";
+export type FixtureId = "thr" | "thrLong" | "mcf" | "contestDense14";
 
 export type Step =
 	| { kind: "tab"; layout: AgendaLayout }
@@ -118,6 +119,13 @@ const FIXTURES = {
 		officers: MCF_OFFICERS,
 		explainers: MCF_EXPLAINERS,
 		rows: MCF_ROWS,
+	},
+	// The seeded speech-contest template at 14 contestants with long member names
+	// (`print-compact-fixtures.ts`): too long for Grid, Editorial and Spacious even
+	// at the compact density (#1226), and still two Timing sheets.
+	contestDense14: {
+		...printCompactAgenda("contestDense14"),
+		explainers: [],
 	},
 };
 
