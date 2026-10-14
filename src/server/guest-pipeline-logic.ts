@@ -111,7 +111,12 @@ import {
 	RECORD_CHANGED_MESSAGE,
 	separateGuestFromMemberPerson,
 } from "./guests-logic";
-import { MENTORSHIP_MEMBER_FKS, memberHasMentorship } from "./mentorship-logic";
+import {
+	MENTOR_REQUEST_MEMBER_FKS,
+	MENTORSHIP_MEMBER_FKS,
+	memberHasMentorRequest,
+	memberHasMentorship,
+} from "./mentorship-logic";
 import { closeOpenOfficerTerms } from "./officers-logic";
 import { clubsHoldingPersons } from "./people-merge-logic";
 import { isDeadlock } from "./pg-errors";
@@ -3272,6 +3277,13 @@ export const UNDO_CASCADE_CHECKS: UndoCascadeCheck[] = [
 		label: "a mentorship",
 		scope: "created",
 		has: memberHasMentorship,
+	},
+	{
+		// ANY status: a decided request is still the member's record (#945).
+		columns: MENTOR_REQUEST_MEMBER_FKS,
+		label: "a mentor request",
+		scope: "created",
+		has: memberHasMentorRequest,
 	},
 	{
 		columns: ["officer_training_records.membership_id"],

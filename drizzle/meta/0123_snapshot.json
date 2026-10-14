@@ -1,5 +1,5 @@
 {
-  "id": "cd89cdd0-33e0-4825-b3fb-5fa48dc64f93",
+  "id": "6414b13b-a3c5-4fd1-bcc7-03d44ddd7d20",
   "prevId": "3de207db-c84a-4869-8bac-b92ad5bf176e",
   "version": "7",
   "dialect": "postgresql",
@@ -5382,6 +5382,12 @@
         "mentor_bio": {
           "name": "mentor_bio",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "mentor_listed_at": {
+          "name": "mentor_listed_at",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false
         }

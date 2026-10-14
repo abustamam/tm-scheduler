@@ -291,6 +291,29 @@ describe.skipIf(!hasTestDb)("setMyMentorBio (#945)", () => {
 		expect(await bioOf(s.memberId)).toBe(fits);
 	});
 
+	// protects=the 500 ceiling is a stated number, not an accident of a refactor,
+	// and a bio with a NUL character is refused by the schema with a clear
+	// message (Postgres text cannot hold NUL and the write would 500), while the
+	// same text without it passes;
+	// fails_when=MENTOR_BIO_MAX drifts from 500 (the migration's check is a
+	// literal 500), or the NUL refinement is dropped;
+	// no_claim=what the form shows for the refusal (it shows the server's message)
+	it("pins the 500 ceiling and refuses a NUL character", () => {
+		expect(MENTOR_BIO_MAX).toBe(500);
+		const parse = (bio: string) =>
+			logic.setMyMentorBioSchema.safeParse({ clubId: randomUUID(), bio });
+		expect(parse("Pathways help").success).toBe(true);
+		for (const bad of ["Path\u0000ways", "\u0000", "ok \u0000"]) {
+			const res = parse(bad);
+			expect(res.success, JSON.stringify(bad)).toBe(false);
+			if (!res.success) {
+				expect(res.error.issues.map((i) => i.message)).toContain(
+					logic.MENTOR_BIO_NUL_MESSAGE,
+				);
+			}
+		}
+	});
+
 	// protects=an empty or whitespace-only bio clears it to null (never an
 	// empty string, which the DB check refuses), and the text is stored trimmed;
 	// fails_when=the empty string reaches the column, or the stored text keeps

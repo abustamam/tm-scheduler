@@ -35,6 +35,9 @@ import type {
 export const MENTORING_HEADING = "Mentoring";
 export const WILLING_TO_MENTOR_LABEL = "I'm willing to mentor another member";
 export const MENTOR_BIO_LABEL = "Your mentor bio";
+export const MENTOR_UNLISTED_NOTICE =
+	"You're marked as willing to mentor from your club's records, but members can't find you yet.";
+export const MENTOR_CONFIRM_LABEL = "Show me on Find a mentor";
 export const MENTOR_BIO_PLACEHOLDER =
 	"What you can help with: Pathways, contests, leadership, evaluations…";
 export const FIND_A_MENTOR_LABEL = "Find a mentor";
@@ -170,6 +173,23 @@ export function MentorshipCard({
 					</div>
 				</div>
 			</div>
+			{view.willingToMentor && !view.mentorListed ? (
+				// Willing, but the member never said so themselves (the Easy-Speak
+				// import set it): hidden from Find a mentor until they confirm, and
+				// confirming is the same call as ticking the box.
+				<div className="border-t border-[var(--line)] px-5 py-3 text-xs">
+					<p className="text-[var(--sea-ink-soft)]">{MENTOR_UNLISTED_NOTICE}</p>
+					<Button
+						size="sm"
+						className="mt-2"
+						disabled={busy}
+						onClick={() => void toggle(true)}
+					>
+						{busy ? <Loader2 className="animate-spin" aria-hidden /> : null}
+						{MENTOR_CONFIRM_LABEL}
+					</Button>
+				</div>
+			) : null}
 			{view.willingToMentor ? (
 				// Keyed on the saved text, so a save (or a reload that brings in a
 				// bio from another tab) resets the draft to what is stored.
@@ -225,6 +245,9 @@ function MentorBioEditor({
 				value={draft}
 				onChange={(e) => setDraft(e.currentTarget.value)}
 				placeholder={MENTOR_BIO_PLACEHOLDER}
+				// Read-only while a save is in flight: the editor remounts on the
+				// saved text when it lands, which would drop anything typed meanwhile.
+				readOnly={busy}
 				rows={3}
 				className="mt-1.5"
 			/>

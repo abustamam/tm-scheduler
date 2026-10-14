@@ -1406,6 +1406,112 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			expect(moved?.decidedAt).toBeNull();
 		});
 
+		// protects=the merge's order of two statements: the keeper<->absorbed
+		// request is DELETED before the pending-uniqueness withdraw looks for a
+		// keeper pending request. Here the keeper's ONLY pending request is TO the
+		// absorbed membership (about to be deleted), and the absorbed membership
+		// has its own pending request: that one must stay PENDING, re-pointed to
+		// the keeper, not be withdrawn because of a request that no longer exists;
+		// fails_when=the withdraw UPDATE runs before the DELETE (the absorbed
+		// request is withdrawn and the merged member has no pending request);
+		// no_claim=the both-pending case (the previous test)
+		it("does not withdraw the absorbed pending request because of a keeper request to the absorbed one", async () => {
+			const keeperId = await addMembership({ name: "Keeper" });
+			const absorbedId = await addMembership({ name: "Absorbed" });
+			const mentorB = await addMembership({ name: "Mentor B" });
+			await testDb
+				.insert(mentorshipRequests)
+				.values([req(keeperId, absorbedId), req(absorbedId, mentorB)]);
+			await collapse(keeperId, absorbedId);
+			const after = await requests();
+			expect(after).toHaveLength(1);
+			expect(after[0]).toMatchObject({
+				mentee: keeperId,
+				mentor: mentorB,
+				status: "pending",
+				decidedAt: null,
+			});
+		});
+
+		// protects=`mentor_listed_at` follows the willing flag through a merge
+		// (the keeper's if the keeper is willing and listed, else the absorbed
+		// one's if it is, else null), and a merge never PUBLISHES a bio its owner
+		// had hidden: a listed side's bio is only ever taken from a listed side;
+		// fails_when=the column is dropped, an unlisted side lists the merged
+		// member, or a hidden (unlisted) bio becomes visible because the other
+		// side was listed;
+		// no_claim=the Find a mentor page (list-mentors / mentor-listing tests)
+		it.each([
+			{
+				name: "keeper and absorbed both listed: the keeper's listing and bio",
+				k: { willing: true, listed: 1, bio: "K" },
+				a: { willing: true, listed: 2, bio: "A" },
+				want: { willing: true, listed: 1, bio: "K" },
+			},
+			{
+				name: "keeper unlisted (imported), absorbed listed: the absorbed one's",
+				k: { willing: true, listed: null, bio: "Hidden K" },
+				a: { willing: true, listed: 2, bio: "A" },
+				want: { willing: true, listed: 2, bio: "A" },
+			},
+			{
+				name: "keeper listed without a bio, absorbed unlisted with one: the hidden bio stays hidden",
+				k: { willing: true, listed: 1, bio: null },
+				a: { willing: true, listed: null, bio: "Hidden A" },
+				want: { willing: true, listed: 1, bio: null },
+			},
+			{
+				name: "keeper listed without a bio, absorbed listed with one: the absorbed bio fills",
+				k: { willing: true, listed: 1, bio: null },
+				a: { willing: true, listed: 2, bio: "A" },
+				want: { willing: true, listed: 1, bio: "A" },
+			},
+			{
+				name: "keeper not willing (so not listed), absorbed listed",
+				k: { willing: false, listed: null, bio: "Off K" },
+				a: { willing: true, listed: 2, bio: "A" },
+				want: { willing: true, listed: 2, bio: "A" },
+			},
+			{
+				name: "nobody listed: null, and the keeper's hidden bio is kept",
+				k: { willing: true, listed: null, bio: "Hidden K" },
+				a: { willing: true, listed: null, bio: "Hidden A" },
+				want: { willing: true, listed: null, bio: "Hidden K" },
+			},
+		])("merges mentor_listed_at and the bio: $name", async ({ k, a, want }) => {
+			const stamp = (n: number | null) =>
+				n === null ? null : new Date(Date.UTC(2026, 0, n));
+			const keeperId = await addMembership({ name: "Keeper" });
+			const absorbedId = await addMembership({ name: "Absorbed" });
+			for (const [id, side] of [
+				[keeperId, k],
+				[absorbedId, a],
+			] as const) {
+				await testDb
+					.update(members)
+					.set({
+						willingToMentor: side.willing,
+						mentorListedAt: stamp(side.listed),
+						mentorBio: side.bio,
+					})
+					.where(eq(members.id, id));
+			}
+			await collapse(keeperId, absorbedId);
+			const [row] = await testDb
+				.select({
+					willing: members.willingToMentor,
+					listedAt: members.mentorListedAt,
+					bio: members.mentorBio,
+				})
+				.from(members)
+				.where(eq(members.id, keeperId));
+			expect(row).toEqual({
+				willing: want.willing,
+				listedAt: stamp(want.listed),
+				bio: want.bio,
+			});
+		});
+
 		// protects=the keeper's mentor bio survives a merge, and the absorbed
 		// one's fills a keeper with none;
 		// fails_when=the absorbed bio overwrites the keeper's, or a keeper with

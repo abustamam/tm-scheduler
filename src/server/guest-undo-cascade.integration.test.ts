@@ -22,6 +22,7 @@ import {
 	meetingAttendancePlan,
 	meetingCandidateDisqualifications,
 	members,
+	mentorshipRequests,
 	mentorships,
 	officerTrainingRecords,
 	people,
@@ -143,6 +144,44 @@ describe.skipIf(!hasTestDb)(
 				.from(mentorships)
 				.where(eq(mentorships.id, pairing.id));
 			expect(stillThere?.id).toBe(pairing.id);
+		});
+
+		// protects=a mentor request, either side and any status, refuses the undo
+		// with its OWN label ("a mentor request", not "a mentorship") and keeps
+		// the request, because the membership delete would cascade it away;
+		// fails_when=the request lookup is dropped from the undo's checks (the
+		// membership and its requests are deleted), or the refusal reuses the
+		// pairing's label;
+		// no_claim=the reuse path (the test below), where nothing is deleted
+		it.each([
+			["mentor", "pending"],
+			["mentee", "declined"],
+		] as const)("refuses when the member is the %s of a %s mentor request, naming the request", async (side, status) => {
+			const { guestId, membershipId } = await converted(`Asked ${side}`);
+			const [request] = await testDb
+				.insert(mentorshipRequests)
+				.values({
+					clubId: seed.clubId,
+					mentorMemberId: side === "mentor" ? membershipId : seed.memberId,
+					menteeMemberId: side === "mentor" ? seed.memberId : membershipId,
+					status,
+				})
+				.returning({ id: mentorshipRequests.id });
+			if (!request) throw new Error("Failed to seed mentor request");
+
+			const refusal = await undo(guestId).then(
+				() => "",
+				(e: Error) => e.message,
+			);
+			expect(refusal).toBe(UNDO_MEMBER_HAS_HISTORY_MESSAGE("a mentor request"));
+			expect(refusal).not.toBe(UNDO_MEMBER_HAS_HISTORY_MESSAGE("a mentorship"));
+
+			await expectMembershipSurvives(guestId, membershipId);
+			const [stillThere] = await testDb
+				.select({ id: mentorshipRequests.id })
+				.from(mentorshipRequests)
+				.where(eq(mentorshipRequests.id, request.id));
+			expect(stillThere?.id).toBe(request.id);
 		});
 
 		it("refuses when the member has an officer training record, and keeps it", async () => {

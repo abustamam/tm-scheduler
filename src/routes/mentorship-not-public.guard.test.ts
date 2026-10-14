@@ -93,6 +93,13 @@ describe("mentorship stays off every public surface (#939)", () => {
 	const MENTORSHIP_TABLES =
 		/\b(?:mentorships|mentorship_requests|mentorshipRequests)\b/;
 
+	// protects=the pattern the table-reader guard scans with matches the
+	// mentorships and mentorship_requests tables in their SQL and drizzle
+	// spellings, and nothing that merely starts with them;
+	// fails_when=`\bmentorships\b` alone comes back (it read straight past
+	// `mentorshipRequests`), or the pattern grows loose enough to match a module
+	// name or a look-alike;
+	// no_claim=that any file reads the tables: the next test lists the readers
 	it("the table pattern names both tables in both spellings, and no look-alike", () => {
 		for (const hit of [
 			"from(mentorships)",

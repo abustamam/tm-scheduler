@@ -78,17 +78,17 @@ function MentorsPage() {
 							<h2 className="text-base font-bold text-[var(--sea-ink)]">
 								{m.name}
 							</h2>
-							<p className="mt-1 text-xs text-[var(--sea-ink-soft)]">
-								{menteeCountText(m.activeMenteeCount)}
-							</p>
 							<p
 								className={
 									m.mentorBio
-										? "mt-2 text-sm whitespace-pre-wrap"
-										: "mt-2 text-sm text-[var(--sea-ink-soft)]"
+										? "mt-1 text-sm whitespace-pre-wrap"
+										: "mt-1 text-sm text-[var(--sea-ink-soft)]"
 								}
 							>
 								{m.mentorBio ?? NO_BIO_TEXT}
+							</p>
+							<p className="mt-2 text-xs text-[var(--sea-ink-soft)]">
+								{menteeCountText(m.activeMenteeCount)}
 							</p>
 						</li>
 					))}

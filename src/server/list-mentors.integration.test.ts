@@ -57,6 +57,8 @@ async function addMember(
 		willing?: boolean;
 		status?: "active" | "inactive";
 		bio?: string | null;
+		/** Confirmed by the member (`mentor_listed_at`); defaults to `willing`. */
+		listed?: boolean;
 	},
 ) {
 	const [person] = await testDb
@@ -77,6 +79,7 @@ async function addMember(
 			status: opts.status ?? "active",
 			willingToMentor: opts.willing ?? true,
 			mentorBio: opts.bio ?? null,
+			mentorListedAt: (opts.listed ?? opts.willing ?? true) ? new Date() : null,
 		})
 		.returning({ id: members.id });
 	if (!m) throw new Error("fixture");
@@ -132,7 +135,7 @@ describe.skipIf(!hasTestDb)("listMentors (#945)", () => {
 		const s = await seed();
 		await testDb
 			.update(members)
-			.set({ willingToMentor: true })
+			.set({ willingToMentor: true, mentorListedAt: new Date() })
 			.where(eq(members.id, s.memberId));
 		const abe = await addMember(s.clubId, { name: "Abe Archer" });
 		const mine = await logic.listMentors(s.clubId, s.memberId);
@@ -176,6 +179,62 @@ describe.skipIf(!hasTestDb)("listMentors (#945)", () => {
 		expect(byId.get(lone)?.activeMenteeCount).toBe(0);
 		// Another mentor's pairings do not leak into Maya's count.
 		expect(byId.get(coach)?.activeMenteeCount).toBe(1);
+	});
+
+	// protects=activeMenteeCount counts PEOPLE: one mentee paired with the same
+	// mentor under two foci is one person, not two;
+	// fails_when=the count goes back to count(*) of pairings, so "Mentoring 2
+	// people" appears for one mentee;
+	// no_claim=the singular/plural wording (mentors.test.tsx)
+	it("counts a mentee paired under two foci once", async () => {
+		const s = await seed();
+		const maya = await addMember(s.clubId, { name: "Maya Mentor" });
+		const m1 = await addMember(s.clubId, { name: "Mentee 1", willing: false });
+		const m2 = await addMember(s.clubId, { name: "Mentee 2", willing: false });
+		await pair(s.clubId, maya, m1, { focus: "new_member" });
+		await pair(s.clubId, maya, m1, { focus: "contest" });
+		const list = await logic.listMentors(s.clubId, s.memberId);
+		expect(list.find((m) => m.memberId === maya)?.activeMenteeCount).toBe(1);
+		await pair(s.clubId, maya, m2, { focus: "contest" });
+		const again = await logic.listMentors(s.clubId, s.memberId);
+		expect(again.find((m) => m.memberId === maya)?.activeMenteeCount).toBe(2);
+	});
+
+	// protects=the bio is shown ONLY on Find a mentor: the admin's per-member
+	// payload (`loadMemberMentorships`, also what a read-only impersonation
+	// reads) carries no bio and no listing state, though the member's own view
+	// still does, and the admin willing list still names an unlisted member;
+	// fails_when=the admin payload spreads the member's own view again, so a
+	// bio or `mentorListed` reaches an admin;
+	// no_claim=who may call the admin read (the authz guard test)
+	it("keeps the bio out of the admin payload", async () => {
+		const s = await seed();
+		const bea = await addMember(s.clubId, {
+			name: "Bea Bio",
+			bio: "Private-ish words.",
+			listed: false,
+		});
+		const admin = await logic.loadMemberMentorships({
+			clubId: s.clubId,
+			memberId: bea,
+		});
+		expect(admin).not.toBeNull();
+		expect(Object.keys(admin ?? {}).sort()).toEqual([
+			"candidates",
+			"mentees",
+			"mentors",
+			"willingToMentor",
+		]);
+		expect(JSON.stringify(admin)).not.toContain("Private-ish");
+		const own = await logic.loadMyMentorships(bea);
+		expect(own).toMatchObject({
+			mentorBio: "Private-ish words.",
+			mentorListed: false,
+		});
+		// Admin pairing views are unchanged: an unlisted willing member is still
+		// willing there.
+		const club = await logic.loadClubMentorships(s.clubId);
+		expect(club.willing.map((w) => w.id)).toContain(bea);
 	});
 
 	// protects=each row carries the bio the mentor wrote (null when none) and

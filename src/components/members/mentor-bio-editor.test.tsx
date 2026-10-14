@@ -6,7 +6,7 @@
  * callback its Save fires. (`mentorship-cards.test.tsx` holds the rest of the
  * card.)
  */
-import { cleanup, screen } from "@testing-library/react";
+import { act, cleanup, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
@@ -21,6 +21,7 @@ afterEach(cleanup);
 const view = (over: Partial<MyMentorshipsView> = {}): MyMentorshipsView => ({
 	willingToMentor: true,
 	mentorBio: null,
+	mentorListed: true,
 	mentors: [],
 	mentees: [],
 	...over,
@@ -92,6 +93,39 @@ describe("the mentor bio box (#945)", () => {
 		expect(
 			screen.getByRole("button", { name: "Save" }).hasAttribute("disabled"),
 		).toBe(true);
+	});
+
+	// protects=while a save is in flight the bio box is read-only and Save is
+	// off, so nothing can be typed that the remount on the saved text would then
+	// drop; once the save lands the box is editable again;
+	// fails_when=the textarea stays editable during a save (text typed meanwhile
+	// is shown, then silently lost when the editor remounts on the new bio), or
+	// stays locked after the save;
+	// no_claim=the remount itself, which is what makes a save reset the draft
+	it("locks the box while a save is in flight", async () => {
+		const user = userEvent.setup();
+		let finish: () => void = () => {};
+		const onSaveBio = vi.fn(
+			(_bio: string) =>
+				new Promise<undefined>((done) => {
+					finish = () => done(undefined);
+				}),
+		);
+		await renderCard(view({ mentorBio: "Old" }), onSaveBio);
+		const box = screen.getByLabelText(MENTOR_BIO_LABEL) as HTMLTextAreaElement;
+		await user.type(box, " more");
+		await user.click(screen.getByRole("button", { name: "Save" }));
+		expect(onSaveBio).toHaveBeenCalledWith("Old more");
+
+		expect(box.readOnly).toBe(true);
+		await user.type(box, " lost");
+		expect(box.value).toBe("Old more");
+		expect(
+			screen.getByRole("button", { name: "Save" }).hasAttribute("disabled"),
+		).toBe(true);
+
+		await act(async () => finish());
+		expect(box.readOnly).toBe(false);
 	});
 
 	// protects=the card links to the Find a mentor page;

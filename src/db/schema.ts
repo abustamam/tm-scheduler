@@ -1057,6 +1057,13 @@ export const members = pgTable(
 		// (`setMyMentorBio`); null is "no bio yet". 1-500 characters or null,
 		// held by `members_mentor_bio_len_check`.
 		mentorBio: text("mentor_bio"),
+		// When the MEMBER confirmed they are findable on Find a mentor (#945):
+		// set by `setMyWillingToMentor(true)` or saving a bio, cleared when they
+		// turn willing off. The Easy-Speak import sets `willing_to_mentor` without
+		// the member acting and never sets this, so an imported flag stays off the
+		// page (and off request targets) until the member confirms. Admin pairing
+		// views ignore it and read `willing_to_mentor` alone. Null = not listed.
+		mentorListedAt: timestamp("mentor_listed_at"),
 	},
 	(t) => [
 		check(

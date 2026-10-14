@@ -25,8 +25,10 @@
 import {
 	and,
 	asc,
+	countDistinct,
 	eq,
 	inArray,
+	isNotNull,
 	isNull,
 	ne,
 	notExists,
@@ -63,6 +65,8 @@ export const MENTORSHIP_DUPLICATE_MESSAGE =
 export const MENTORSHIP_NOT_FOUND_MESSAGE =
 	"That mentorship isn't in this club.";
 export const MENTORSHIP_ENDED_MESSAGE = "That mentorship has already ended.";
+export const MENTOR_BIO_NUL_MESSAGE =
+	"A mentor bio can't contain a null character. Remove it and try again.";
 export const MENTORSHIP_NOT_YOURS_MESSAGE =
 	"Only the member can change their own willing-to-mentor setting.";
 
@@ -108,7 +112,17 @@ export const setWillingToMentorSchema = z
  * a member. Empty (after trimming) clears it.
  */
 export const setMyMentorBioSchema = z
-	.object({ clubId: uuid, bio: z.string().trim().max(MENTOR_BIO_MAX) })
+	.object({
+		clubId: uuid,
+		bio: z
+			.string()
+			.trim()
+			.max(MENTOR_BIO_MAX)
+			// Postgres text cannot hold NUL; the write would 500 instead of refusing.
+			.refine((b) => !b.includes("\u0000"), {
+				message: MENTOR_BIO_NUL_MESSAGE,
+			}),
+	})
 	.strict();
 
 /** A willing mentor on the Find a mentor page (#945). No contact details. */
@@ -139,17 +153,32 @@ export interface MentorshipRow {
 	member: MentorshipParty;
 }
 
-export interface MyMentorships {
+/** What a pairing view carries for anyone: the flag and the active pairings. */
+export interface MentorshipLists {
 	willingToMentor: boolean;
-	/** The caller's mentor bio (#945), or null. Kept when the flag is off. */
-	mentorBio: string | null;
-	/** Active pairings where the caller is the mentee. */
+	/** Active pairings where the subject is the mentee. */
 	mentors: MentorshipRow[];
-	/** Active pairings where the caller is the mentor. */
+	/** Active pairings where the subject is the mentor. */
 	mentees: MentorshipRow[];
 }
 
-export interface MemberMentorships extends MyMentorships {
+/** The member's OWN view: the lists plus their bio and listing (#945). */
+export interface MyMentorships extends MentorshipLists {
+	/** The caller's mentor bio (#945), or null. Kept when the flag is off. */
+	mentorBio: string | null;
+	/**
+	 * Whether Find a mentor lists the caller: willing AND `mentor_listed_at` set.
+	 * False for a flag the Easy-Speak import set that the member has not confirmed.
+	 */
+	mentorListed: boolean;
+}
+
+/**
+ * An admin's (or read-only impersonator's) view of one member. Carries NO bio
+ * and no listing state: the bio is shown only on Find a mentor (#945), and the
+ * admin pairing views see every willing member regardless of listing.
+ */
+export interface MemberMentorships extends MentorshipLists {
 	/** Active members of the club offered as a mentor, willing first. */
 	candidates: MentorCandidate[];
 }
@@ -190,7 +219,25 @@ export async function ownMembershipId(
 	return membership.id;
 }
 
-/** Set or clear "willing to mentor" on the caller's OWN membership. */
+/**
+ * Who Find a mentor lists, and who may be the target of a request (#945,
+ * #1209): willing AND listed. `mentor_listed_at` is set only by the member's own
+ * act (`setMyWillingToMentor(true)`, saving a bio), never by the Easy-Speak
+ * import, so a flag the import set stays off the page until the member confirms
+ * it. Admin pairing views read `willing_to_mentor` alone and are unchanged.
+ */
+export function listedMentorWhere() {
+	return and(
+		eq(members.willingToMentor, true),
+		isNotNull(members.mentorListedAt),
+	);
+}
+
+/**
+ * Set or clear "willing to mentor" on the caller's OWN membership. Turning it
+ * on is the member's confirmation, so it lists them (`mentor_listed_at`, kept if
+ * already set); turning it off clears the listing.
+ */
 export async function setMyWillingToMentor(input: {
 	userId: string;
 	clubId: string;
@@ -199,7 +246,12 @@ export async function setMyWillingToMentor(input: {
 	const id = await ownMembershipId(input.userId, input.clubId);
 	await db
 		.update(members)
-		.set({ willingToMentor: input.willing })
+		.set({
+			willingToMentor: input.willing,
+			mentorListedAt: input.willing
+				? sql`coalesce(${members.mentorListedAt}, now())`
+				: null,
+		})
 		.where(eq(members.id, id));
 	return { willingToMentor: input.willing };
 }
@@ -207,8 +259,11 @@ export async function setMyWillingToMentor(input: {
 /**
  * Set or clear the mentor bio on the caller's OWN membership (#945). The row
  * is resolved from the session, as the flag's is; the input names no member.
- * Blank after trimming stores null. Logs `member_edit` so a read-write
- * impersonation leaves `impersonated_by`.
+ * Blank after trimming stores null. Saving a bio while willing is the
+ * member's confirmation, so it lists them (`mentor_listed_at`, kept if already
+ * set); with the flag off it lists nobody. Logs `member_edit` against the
+ * member's own membership. A read-write impersonator never reaches here:
+ * `ownMembershipId` refuses a memberless actor.
  */
 export async function setMyMentorBio(input: {
 	userId: string;
@@ -218,7 +273,13 @@ export async function setMyMentorBio(input: {
 	const id = await ownMembershipId(input.userId, input.clubId);
 	const mentorBio = input.bio.trim() === "" ? null : input.bio.trim();
 	await db.transaction(async (tx) => {
-		await tx.update(members).set({ mentorBio }).where(eq(members.id, id));
+		await tx
+			.update(members)
+			.set({
+				mentorBio,
+				mentorListedAt: sql`case when ${members.willingToMentor} then coalesce(${members.mentorListedAt}, now()) else ${members.mentorListedAt} end`,
+			})
+			.where(eq(members.id, id));
 		await logActivity(tx, {
 			clubId: input.clubId,
 			actorMemberId: id,
@@ -520,16 +581,17 @@ async function activePairingsFor(
 export const MENTORSHIP_MEMBER_FKS = [
 	"mentorships.mentor_member_id",
 	"mentorships.mentee_member_id",
-	// A request cascades off the member the same way (#945). `memberHasMentorship`
-	// counts it, so this one refusal covers both tables.
+];
+
+/** The same for `mentorship_requests` (#945), which cascades off the member alike. */
+export const MENTOR_REQUEST_MEMBER_FKS = [
 	"mentorship_requests.mentor_member_id",
 	"mentorship_requests.mentee_member_id",
 ];
 
 /**
- * Whether the membership is in ANY pairing or mentor request, as mentor or
- * mentee, ended or decided or not. An existence check: it returns no pairing
- * data. Its caller is the gated
+ * Whether the membership is in ANY pairing, as mentor or mentee, ended or not.
+ * An existence check: it returns no pairing data. Its caller is the gated
  * guest-conversion undo, which runs it inside its own transaction (`conn`) to
  * refuse before a cascading delete takes the pairings (#1202).
  */
@@ -547,8 +609,18 @@ export async function memberHasMentorship(
 			),
 		)
 		.limit(1);
-	if (rows.length > 0) return true;
-	// Requests cascade off the membership too (#945), any status.
+	return rows.length > 0;
+}
+
+/**
+ * Whether the membership sent or received ANY mentor request, any status
+ * (#945). The undo refuses on it separately from a pairing so the admin reads
+ * what is actually there.
+ */
+export async function memberHasMentorRequest(
+	conn: DbOrTx,
+	membershipId: string,
+): Promise<boolean> {
 	const requests = await conn
 		.select({ id: mentorshipRequests.id })
 		.from(mentorshipRequests)
@@ -574,6 +646,7 @@ export async function loadMyMentorships(
 			clubId: members.clubId,
 			willing: members.willingToMentor,
 			bio: members.mentorBio,
+			listedAt: members.mentorListedAt,
 		})
 		.from(members)
 		.where(eq(members.id, membershipId))
@@ -587,6 +660,7 @@ export async function loadMyMentorships(
 	return {
 		willingToMentor: row.willing,
 		mentorBio: row.bio,
+		mentorListed: row.willing && row.listedAt !== null,
 		mentors,
 		mentees,
 	};
@@ -622,7 +696,13 @@ export async function loadMemberMentorships(input: {
 			),
 	]);
 	if (!mine) return null;
-	return { ...mine, candidates: orderMentorCandidates(pool, row.id) };
+	// Pick the fields: the member's own bio and listing are not the admin's.
+	return {
+		willingToMentor: mine.willingToMentor,
+		mentors: mine.mentors,
+		mentees: mine.mentees,
+		candidates: orderMentorCandidates(pool, row.id),
+	};
 }
 
 const mentorM = alias(members, "mentor_m");
@@ -715,7 +795,7 @@ export async function loadClubMentorships(
 
 /**
  * The Find a mentor page's list (#945): the club's ACTIVE members who said they
- * are willing to mentor, other than the caller, by name. Each carries the bio
+ * are willing to mentor AND are listed (`listedMentorWhere`), other than the caller, by name. Each carries the bio
  * and how many people they mentor now (active pairings, any focus, with the
  * mentee also active, as everywhere else a pairing counts). No contact details:
  * the member page already shows those to club members. Takes the membership
@@ -728,7 +808,8 @@ export async function listMentors(
 	const count = db
 		.select({
 			mentorId: mentorships.mentorMemberId,
-			n: sql<number>`count(*)::int`.as("n"),
+			// People, not pairings: one mentee paired under two foci counts once.
+			n: countDistinct(mentorships.menteeMemberId).as("n"),
 		})
 		.from(mentorships)
 		.innerJoin(menteeM, eq(menteeM.id, mentorships.menteeMemberId))
@@ -748,7 +829,7 @@ export async function listMentors(
 			and(
 				eq(members.clubId, clubId),
 				eq(members.status, "active"),
-				eq(members.willingToMentor, true),
+				listedMentorWhere(),
 				ne(members.id, callerMembershipId),
 			),
 		)

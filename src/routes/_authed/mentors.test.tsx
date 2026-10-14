@@ -48,7 +48,7 @@ async function renderPage(data: Loaded) {
 
 describe("/mentors (#945)", () => {
 	// protects=each willing mentor is one card with their name, their bio (or
-	// "No bio yet") and how many people they mentor now, with the singular and
+	// "No bio yet") and how many people they mentor now, in that order, with the singular and
 	// plural right and a mentor with none reading "Not mentoring anyone yet";
 	// no email or phone appears;
 	// fails_when=a card drops its bio or count, "1 people" reads wrong, or a
@@ -92,6 +92,17 @@ describe("/mentors (#945)", () => {
 		expect(within(bea).getByText("No bio yet")).toBeTruthy();
 		expect(within(bea).getByText("Mentoring 3 people now")).toBeTruthy();
 		expect(within(cy).getByText("Not mentoring anyone yet")).toBeTruthy();
+		// Order inside a card: name, then the bio (or "No bio yet"), then the
+		// "Mentoring ..." line.
+		for (const [card, name, bio, count] of [
+			[abe, "Abe Archer", "Pathways and evaluations.", "Mentoring 1 person"],
+			[bea, "Bea Bell", "No bio yet", "Mentoring 3 people"],
+		] as const) {
+			const text = card?.textContent ?? "";
+			expect(text.indexOf(name), name).toBe(0);
+			expect(text.indexOf(bio), bio).toBeGreaterThan(text.indexOf(name));
+			expect(text.indexOf(count), count).toBeGreaterThan(text.indexOf(bio));
+		}
 		expect(document.body.textContent).not.toMatch(/@|null/);
 	});
 

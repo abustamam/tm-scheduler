@@ -141,6 +141,16 @@ export async function collapseMemberships(
 		}
 	}
 
+	// The mentor listing's side: whichever membership is willing AND listed (#945).
+	const isListedMentor = (m: typeof keeper) =>
+		m.willingToMentor && m.mentorListedAt !== null;
+	const listedSide = isListedMentor(keeper)
+		? keeper
+		: isListedMentor(absorbed)
+			? absorbed
+			: null;
+	const otherSide = listedSide === keeper ? absorbed : keeper;
+
 	// --- Reconcile the surviving keeper row --------------------------------
 	// club_role: higher wins (admin > member). status: active if EITHER is
 	// active. joined_at: earliest known. preferred_name: keeper's, filling a
@@ -162,10 +172,19 @@ export async function collapseMemberships(
 			// #939: willing to mentor if EITHER row said so. The flag is the
 			// member's own statement, and one human said it on one of the two.
 			willingToMentor: keeper.willingToMentor || absorbed.willingToMentor,
-			// #945: the mentor bio is the member's own words, per membership: the
-			// keeper's wins, and the absorbed one's fills a null (not a blank: the
-			// column holds null or 1-500 characters).
-			mentorBio: keeper.mentorBio ?? absorbed.mentorBio,
+			// #945: the listing and the bio. `mentor_listed_at` is the member's own
+			// confirmation that they are findable, and it follows the willing flag:
+			// the keeper's if the keeper is willing and listed, else the absorbed
+			// one's if that is, else null. A merge must not PUBLISH a bio its owner
+			// had hidden (unlisted, or willing off), so a listed side's bio is
+			// taken from a listed side only; with nobody listed the bio is hidden
+			// anyway and the keeper's, else the absorbed one's, is kept (not a
+			// blank: the column holds null or 1-500 characters).
+			mentorListedAt: listedSide?.mentorListedAt ?? null,
+			mentorBio: listedSide
+				? (listedSide.mentorBio ??
+					(isListedMentor(otherSide) ? otherSide.mentorBio : null))
+				: (keeper.mentorBio ?? absorbed.mentorBio),
 		})
 		.where(eq(members.id, keeperId));
 

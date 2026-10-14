@@ -20,6 +20,8 @@ import {
 	ClubMentoringCard,
 	type ClubMentoringView,
 	MEMBER_MENTORING_HEADING,
+	MENTOR_CONFIRM_LABEL,
+	MENTOR_UNLISTED_NOTICE,
 	MENTORING_HEADING,
 	type MemberMentorshipsView,
 	MentorshipAdminPanel,
@@ -89,6 +91,7 @@ describe("MentorshipCard, the member's own (#939)", () => {
 	it("shows mentors and mentees with name, focus and contact", async () => {
 		const view: MyMentorshipsView = {
 			mentorBio: null,
+			mentorListed: true,
 			willingToMentor: false,
 			mentors: [party({ name: "Maya Mentor" })],
 			mentees: [
@@ -133,6 +136,7 @@ describe("MentorshipCard, the member's own (#939)", () => {
 			<MentorshipCard
 				view={{
 					mentorBio: null,
+					mentorListed: true,
 					willingToMentor: false,
 					mentors: [],
 					mentees: [],
@@ -153,6 +157,7 @@ describe("MentorshipCard, the member's own (#939)", () => {
 			<MentorshipCard
 				view={{
 					mentorBio: null,
+					mentorListed: true,
 					willingToMentor: false,
 					mentors: [],
 					mentees: [],
@@ -167,11 +172,60 @@ describe("MentorshipCard, the member's own (#939)", () => {
 		expect(onToggleWilling).toHaveBeenCalledWith(true);
 	});
 
+	// protects=a member whose willing flag the import set (willing, not listed)
+	// sees the "can't find you yet" line and a "Show me on Find a mentor" button
+	// that fires onToggleWilling(true) (the confirm path), while a listed member
+	// and a member who is not willing see neither;
+	// fails_when=the notice shows for a listed or unwilling member, the button is
+	// missing, or it fires something other than the willing=true confirmation;
+	// no_claim=that the server lists them (mentor-listing.integration.test.ts)
+	it("offers to list a willing member Find a mentor cannot show yet", async () => {
+		const user = userEvent.setup();
+		const onToggleWilling = vi.fn(async () => undefined);
+		const base = {
+			mentorBio: null,
+			mentors: [],
+			mentees: [],
+		};
+		await renderInRouter(
+			<MentorshipCard
+				view={{ ...base, willingToMentor: true, mentorListed: false }}
+				onToggleWilling={onToggleWilling}
+				onSaveBio={vi.fn()}
+			/>,
+		);
+		expect(screen.getByText(MENTOR_UNLISTED_NOTICE)).toBeTruthy();
+		await user.click(
+			screen.getByRole("button", { name: MENTOR_CONFIRM_LABEL }),
+		);
+		expect(onToggleWilling).toHaveBeenCalledTimes(1);
+		expect(onToggleWilling).toHaveBeenCalledWith(true);
+		cleanup();
+		for (const view of [
+			{ ...base, willingToMentor: true, mentorListed: true },
+			{ ...base, willingToMentor: false, mentorListed: false },
+		]) {
+			await renderInRouter(
+				<MentorshipCard
+					view={view}
+					onToggleWilling={vi.fn()}
+					onSaveBio={vi.fn()}
+				/>,
+			);
+			expect(screen.queryByText(MENTOR_UNLISTED_NOTICE)).toBeNull();
+			expect(
+				screen.queryByRole("button", { name: MENTOR_CONFIRM_LABEL }),
+			).toBeNull();
+			cleanup();
+		}
+	});
+
 	it("never reads as the charter club mentor", async () => {
 		const { container } = await renderInRouter(
 			<MentorshipCard
 				view={{
 					mentorBio: null,
+					mentorListed: true,
 					willingToMentor: true,
 					mentors: [party()],
 					mentees: [party({ name: "Nia" })],
@@ -233,7 +287,6 @@ describe("ClubMentoringCard, the admin's list (#939)", () => {
 
 describe("MentorshipAdminPanel, the member page (#939)", () => {
 	const view: MemberMentorshipsView = {
-		mentorBio: null,
 		willingToMentor: false,
 		mentors: [party({ id: "pair-1", name: "Maya Mentor" })],
 		mentees: [],
