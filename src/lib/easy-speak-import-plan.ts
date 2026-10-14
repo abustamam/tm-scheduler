@@ -16,6 +16,14 @@
  *   choice: a member, a guest, or a skip with a reason.
  * - **Roles.** `EASY_SPEAK_ROLE_MAP` names the standard roles; anything else
  *   becomes a role definition of the club's own.
+ * - **People who are on a list only** (#1203). The member list, the mentor chart
+ *   (both columns) and the speech requesters are people too: the mentor and
+ *   speech-request steps find a person only through the `person` ref an apply
+ *   wrote. They go through the same matching, but a person seen ONLY there is
+ *   matched to the roster and never made: no match leaves them unmatched, they do
+ *   not block the apply, and the later steps report them unresolved. Only a
+ *   meeting appearance makes a guest. An AMBIGUOUS name from a list asks the same
+ *   decision as one from a meeting, except that a guest is not on offer.
  * - **Meetings.** Past meetings only, each imported as `completed`. A future
  *   meeting keeps the live schedule and is listed, not written.
  *
@@ -210,8 +218,20 @@ export interface PlanPerson {
 		awards: number;
 		tableTopics: number;
 		introducedBy: number;
+		/** The bundle's member list (`bundle.people`). */
+		memberList: number;
+		/** The mentoring chart, as the row's member or as its mentor. */
+		mentorChart: number;
+		/** The speech-request queue, as the requester. */
+		speechRequests: number;
 		guestCategories: EsGuestCategory[];
 	};
+	/**
+	 * Named only by the member list, the mentor chart or the speech requests, never
+	 * by a meeting. Such a person is matched to the roster and never created, and
+	 * stays unmatched without blocking the apply (#1203).
+	 */
+	listOnly: boolean;
 	outcome: PlanPersonOutcome;
 	/** A chosen member id the roster does not hold: shown, and the person stays unresolved. */
 	rejectedChoice: string | null;
@@ -313,7 +333,10 @@ export interface PlanCounts {
 
 export interface ImportPlan {
 	people: PlanPerson[];
-	/** Persons that still need a human: ambiguous or unmatched. */
+	/**
+	 * Persons that still need a human: ambiguous, or unmatched with a meeting
+	 * appearance. An unmatched person who is on a list only is not here.
+	 */
 	unresolved: PlanPerson[];
 	roleDefinitions: PlanRoleDefinitionPlan[];
 	meetings: PlanMeeting[];
@@ -466,6 +489,9 @@ export function buildImportPlan(
 					awards: 0,
 					tableTopics: 0,
 					introducedBy: 0,
+					memberList: 0,
+					mentorChart: 0,
+					speechRequests: 0,
 					guestCategories: [],
 				},
 			};
@@ -488,6 +514,19 @@ export function buildImportPlan(
 		touch(intro.visitor, "attendance", "visitor");
 		touch(intro.introducedBy, "introducedBy");
 	}
+	// The lists (#1203). After the meetings, so a person a meeting names keeps the
+	// reference the meeting gave. A club's whole bundle is read here, not only its
+	// past meetings: a request or a chart row does not belong to a meeting.
+	for (const row of bundle.people) {
+		touch({ esUserId: row.esUserId, name: row.name }, "memberList");
+	}
+	for (const row of bundle.mentors) {
+		touch(row.mentee, "mentorChart");
+		if (row.mentor) touch(row.mentor, "mentorChart");
+	}
+	for (const request of bundle.speechRequests) {
+		touch(request.who, "speechRequests");
+	}
 
 	// -- Resolve them ----------------------------------------------------------
 	const rosterByName = new Map<string, PlanRosterMember[]>();
@@ -503,6 +542,14 @@ export function buildImportPlan(
 	const people: PlanPerson[] = [];
 	for (const [key, entry] of seen) {
 		const { ref, appearances } = entry;
+		// A person no meeting names: matched, never created (#1203).
+		const listOnly =
+			appearances.roles +
+				appearances.attendance +
+				appearances.awards +
+				appearances.tableTopics +
+				appearances.introducedBy ===
+			0;
 		let outcome: PlanPersonOutcome = { status: "unmatched" };
 		let rejectedChoice: string | null = null;
 
@@ -552,7 +599,14 @@ export function buildImportPlan(
 			// Only a person the rules could not place takes a human's answer: an
 			// automatic match is not overridable from here.
 			if (outcome.status === "ambiguous" || outcome.status === "unmatched") {
-				const choice = ctx.resolutions?.[key];
+				// A person on a list only is never made a guest, and with no roster
+				// match there is nothing to decide, so a saved choice is not read.
+				const saved = ctx.resolutions?.[key];
+				const choice =
+					listOnly &&
+					(outcome.status === "unmatched" || saved?.action === "guest")
+						? undefined
+						: saved;
 				if (choice?.action === "member") {
 					if (rosterIds.has(choice.memberId)) {
 						outcome = {
@@ -580,6 +634,7 @@ export function buildImportPlan(
 			esUserId: ref.esUserId,
 			name: ref.name,
 			appearances,
+			listOnly,
 			outcome,
 			rejectedChoice,
 		});
@@ -588,7 +643,9 @@ export function buildImportPlan(
 		(a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key),
 	);
 	const unresolved = people.filter(
-		(p) => p.outcome.status === "ambiguous" || p.outcome.status === "unmatched",
+		(p) =>
+			p.outcome.status === "ambiguous" ||
+			(p.outcome.status === "unmatched" && !p.listOnly),
 	);
 
 	// -- Role definitions ------------------------------------------------------
