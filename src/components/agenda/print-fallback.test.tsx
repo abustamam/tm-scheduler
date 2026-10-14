@@ -14,10 +14,10 @@
  *   · jsdom, with `scrollHeight` stubbed: `FitPage` calls `onWouldFlow` exactly
  *     when it flows. That is the wiring; it cannot say a real agenda flows.
  *   · Chrome, with `FitPage`'s REAL measuring effect (a client React root, after
- *     fonts load): `thrAgendaLong`'s Grid, Editorial and Spacious really flow on
- *     the base code (the `bare` control below measures that, and a fixture that
- *     does not flow would make every other assertion here vacuous), and through
- *     `PrintAgendaView` they end on Timing's two 1056px sheets. `renderToStaticMarkup`
+ *     fonts load): `contestDense14`'s Grid, Editorial and Spacious really flow even
+ *     at the compact density (#1226; the `bare` control below measures that, and a
+ *     fixture that does not flow would make every other assertion here vacuous), and
+ *     through `PrintAgendaView` they end on Timing's two 1056px sheets. `renderToStaticMarkup`
  *     never runs that effect, which is how #1179 passed and #1181 shipped.
  *
  * Harness: `src/test/client-bundle-chrome.ts` bundles
@@ -29,20 +29,35 @@
  * height in its message so a failure on either machine says what it saw.
  *
  * AC 0, measured in this harness (cliff = `(1056 - 2) / 0.72 = 1464px`, natural
- * `[data-fit-inner].scrollHeight` of the tallest sheet):
+ * `[data-fit-inner].scrollHeight` of the tallest sheet). #1226 added a compact
+ * density that every layout tries before it falls back, so a `bare` measurement
+ * below is the layout AT COMPACT, and an agenda only reaches Timing if it still
+ * flows there:
  *
- *   fixture      grid  editorial  spacious p2  timing p2   Timing sheets
- *   THR (macOS)  1565  1478       1744         1249        1056 + 1056
- *   THR (Linux)  Editorial FITS on CI's pinned face (under 1464), Grid and
- *                Spacious flowed; run 38616788625 failed on it.
- *   thrAgendaLong (macOS)
- *                1729  1649       1903         1317        1056 + 1056
+ *   fixture               grid  editorial  spacious p2  timing p2  Timing sheets
+ *   contestDense14 (mac)  1563  1604       1668         1384       1056 + 1384
+ *   contestDense20 (mac)  (n/a) (n/a)      (n/a)        1712       Timing flows too
+ *   THR (macOS)           regular 1565 / 1478 / 1744 (compact fits all three)
+ *   thrAgendaLong (macOS) regular 1729 / 1649 / 1903 (compact fits all three, AC 2)
  *
- * So plain THR is not a safe control: Editorial crosses the cliff on a Mac and
- * fits on Linux. `thrAgendaLong` (a 4th speaker/evaluator pair and 3 more roster
- * roles) crosses it in all three layouts by 185px or more on a Mac and still
- * fits Timing on two sheets (Timing's own overflow is #1227). MCF fits every
- * layout: grid 1343, editorial 1175, spacious page 2 1345, Timing 1056.
+ * Why `contestDense14`: `thrAgendaLong` was the #1225 fixture, but its overflow is
+ * mostly vertical whitespace, which compact removes, so it now FITS Grid and
+ * Editorial on one sheet and Spacious on two (`print-compact.test.tsx`, #1226 AC 2).
+ * It can no longer prove the fallback. The seeded speech-contest template with long
+ * member names (`print-compact-fixtures.ts`) stays over the cliff at compact in all
+ * three layouts: each by 99px or more on a Mac. `contestDense16` (the fixture
+ * `print-compact.test.tsx` climbs with) is too long for Timing's two sheets (page 2
+ * natural 1500 > 1464), which would flow a third page, so this suite uses 14: Timing
+ * page 2 is 1384, 80px under the cliff. Timing's own overflow is #1227. The one test
+ * that NEEDS Timing over the cliff uses `contestDense20`, not 16: 1500 was only 36px
+ * over on a Mac and Linux CI's face is 0.945 of a Mac's (run 38634218891: the same
+ * fixture measured 1418, 46px UNDER the cliff, and the control failed). 20 is 1712 on
+ * a Mac, 248px over, about 1618 on Linux.
+ *
+ * The Linux CI face differs from a Mac's, so every number above may shift there;
+ * every geometry assertion carries the measured heights in its message.
+ * MCF fits every layout: grid 1343, editorial 1175, spacious page 2 1345,
+ * Timing 1056.
  */
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -151,6 +166,9 @@ describe("print fallback harness availability", () => {
 	});
 });
 
+/** The long agenda every fallback scenario uses. */
+const LONG = "contestDense14" as const;
+
 const SCENARIOS: Scenario[] = [];
 let results: Record<string, Snapshot[]> = {};
 
@@ -175,29 +193,33 @@ for (const layout of AGENDA_LAYOUTS) {
 	// Plain THR only reports: it flows on a Mac's fallback face and Editorial fits
 	// on CI's, so nothing may assert that it flows. Its heights go in messages.
 	sc(`thr:${layout}:bare`, "thr", layout, { mode: "bare" });
-	sc(`long:${layout}`, "thrLong", layout);
-	sc(`long:${layout}:bare`, "thrLong", layout, { mode: "bare" });
+	sc(`long:${layout}`, LONG, layout);
+	sc(`long:${layout}:bare`, LONG, layout, { mode: "bare" });
 	sc(`mcf:${layout}`, "mcf", layout);
 	sc(`mcf:${layout}:bare`, "mcf", layout, { mode: "bare" });
 }
-sc("long:grid:copies", "thrLong", "grid", { copies: 3, duplex: 1 });
-sc("long:grid:chrome-none", "thrLong", "grid", { chrome: "none" });
+// Timing overflows Timing at compact on this fixture; asked for Timing, nothing
+// may be said about a fallback.
+sc("timing20:timing", "contestDense20", "timing");
+sc("timing20:timing:bare", "contestDense20", "timing", { mode: "bare" });
+sc("long:grid:copies", LONG, "grid", { copies: 3, duplex: 1 });
+sc("long:grid:chrome-none", LONG, "grid", { chrome: "none" });
 // Editorial's fallback OVERWRITES `fellBackFrom` (grid -> editorial), so this
 // path comes back to Grid whether or not the reset effect runs.
-sc("long:grid:via-editorial", "thrLong", "grid", {
+sc("long:grid:via-editorial", LONG, "grid", {
 	steps: [
 		{ kind: "tab", layout: "editorial" },
 		{ kind: "tab", layout: "grid" },
 	],
 });
 // Timing never falls back, so `fellBackFrom` is only cleared by the reset effect.
-sc("long:grid:via-timing", "thrLong", "grid", {
+sc("long:grid:via-timing", LONG, "grid", {
 	steps: [
 		{ kind: "tab", layout: "timing" },
 		{ kind: "tab", layout: "grid" },
 	],
 });
-sc("long:grid:new-agenda", "thrLong", "grid", {
+sc("long:grid:new-agenda", LONG, "grid", {
 	steps: [{ kind: "fixture", fixture: "mcf" }],
 });
 
@@ -241,14 +263,18 @@ describe.skipIf(!hasChrome)(
 			);
 		}, 120_000);
 
-		// protects=the fixture used below really flows on the code as it stood, on THIS
-		//   machine's fallback face, and Timing is what holds it
-		// fails_when=thrAgendaLong stops crossing the cliff (a fixture or layout change,
-		//   or a different face), which would turn every fallback assertion into a pass
-		//   about nothing; or Timing no longer holds it on two 1056px sheets
-		// no_claim=anything about the fallback; this renders `MeetingAgendaPrint` alone.
-		//   Plain THR's heights ride in the message only: Editorial fits on Linux CI
-		it("control: thrAgendaLong flows in Grid, Editorial and Spacious with no fallback", () => {
+		// protects=the fixture used below really flows at COMPACT, the last density a layout
+		//   tries before it falls back (#1226), on THIS machine's fallback face, in
+		//   Grid, Editorial and Spacious each, and Timing is what holds it on two sheets
+		// fails_when=contestDense14 stops crossing the cliff in ANY of the three (a fixture
+		//   or layout change, a tighter compact, or a different face), which would turn
+		//   that layout's fallback assertions into a pass about nothing; or Timing no
+		//   longer holds it on two 1056px sheets (it would at 16 contestants: page 2
+		//   1500). thrAgendaLong is not this fixture: it fits at compact (#1226 AC 2)
+		// no_claim=anything about the fallback; this renders `MeetingAgendaPrint` alone,
+		//   which climbs to compact and then flows. Plain THR's heights ride in the
+		//   message only: Editorial fits on Linux CI
+		it("control: contestDense14 still flows at compact in Grid, Editorial and Spacious with no fallback", () => {
 			const cliff = (PAGE_H - 2) / MIN_FIT_SCALE;
 			for (const layout of ["grid", "editorial", "spacious"] as const) {
 				const s = first(`long:${layout}:bare`);
@@ -290,7 +316,7 @@ describe.skipIf(!hasChrome)(
 		//   on a sheet that is not exactly one page tall
 		// no_claim=Timing's own overflow (#1227), or the printed PDF's page count
 		for (const layout of ["grid", "editorial", "spacious"] as const) {
-			it(`${layout} on thrAgendaLong falls back to two 1056px Timing sheets`, () => {
+			it(`${layout} on contestDense14 falls back to two 1056px Timing sheets`, () => {
 				const s = first(`long:${layout}`);
 				expect(s.pages, `${layout} ${nat(s)}`).toEqual([PAGE_H, PAGE_H]);
 				expect(s.timing, `${layout} ${nat(s)}`).toBe(true);
@@ -325,6 +351,33 @@ describe.skipIf(!hasChrome)(
 				const s = first(`mcf:${layout}`);
 				expect(s.notice, `${layout} ${nat(s)}`).toBeNull();
 			}
+		});
+
+		// protects=a club that CHOSE Timing, with an agenda too long even for Timing at
+		//   compact, gets no fallback notice and keeps Timing (Timing is the fallback; it
+		//   has nowhere to fall back to, and its overflow is #1227)
+		// fails_when=Timing's sheets are given `onWouldFlow` at compact, so the route
+		//   announces "too long for Timing on 2 pages. Showing Timing (2 pages) instead",
+		//   or the control stops overflowing (then the test proves nothing)
+		// no_claim=how Timing prints once it flows (a third sheet, #1227), or that Linux
+		//   CI's face overflows by the same margin: the control's message carries the
+		//   numbers this machine saw. The fixture is contestDense20 (Timing page 2: 1712 on
+		//   a Mac, 248px over the 1464 cliff; about 1618 on Linux at its 0.945 ratio, still
+		//   154px over), chosen so the control survives that face (16 was 1500 / 1418)
+		it("a chosen Timing that overflows at compact shows no fallback notice", () => {
+			const cliff = (PAGE_H - 2) / MIN_FIT_SCALE;
+			const bare = first("timing20:timing:bare");
+			const tallest = Math.max(...bare.natural);
+			expect(
+				tallest,
+				`timing contestDense20 natural=${tallest} cliff=${cliff} (the control must overflow)`,
+			).toBeGreaterThan(cliff);
+			const s = first("timing20:timing");
+			expect(s.notice, `timing contestDense20 ${nat(s)}`).toBeNull();
+			expect(s.timing, `timing contestDense20 ${nat(s)}`).toBe(true);
+			expect(s.activeTab, `timing contestDense20 ${nat(s)}`).toBe(
+				AGENDA_LAYOUT_LABELS.timing,
+			);
 		});
 
 		// protects=an agenda that fits renders exactly as before
@@ -367,27 +420,33 @@ describe.skipIf(!hasChrome)(
 		});
 
 		// protects=a tab switch away and back measures the requested layout again (AC 8)
-		// fails_when=Grid is not mounted and measured exactly once on return, or Editorial
-		//   is not measured on its own
+		// fails_when=Grid is not mounted and measured on return (a stale count from before
+		//   the switch is reused, or its density starts at compact instead of climbing from
+		//   regular), or Editorial is not measured on its own
 		// no_claim=that the reset effect works: Editorial's fallback OVERWRITES
 		//   `fellBackFrom`, so this path returns to Grid with the effect removed too.
 		//   "via Timing" below is the one that tests the reset
 		it("a tab switch away and back re-measures the layout", () => {
 			const id = "long:grid:via-editorial";
 			expect(at(id, 0).notice, nat(at(id, 0))).toBe(NOTICE.grid);
-			// Editorial is measured on its own and falls back on its own.
-			expect(at(id, 1).reads.editorial, nat(at(id, 1))).toBe(1);
+			// Editorial is measured on its own and falls back on its own. A layout is
+			// read TWICE per visit: the density ladder measures it at regular, remounts
+			// its sheet and measures again at compact (#1226 item 1), then falls back.
+			expect(at(id, 1).reads.editorial, nat(at(id, 1))).toBe(2);
 			expect(at(id, 1).notice, nat(at(id, 1))).toBe(NOTICE.editorial);
 			expect(at(id, 1).activeTab, nat(at(id, 1))).toBe("Editorial");
-			// Back on Grid: its FitPage mounts and measures once more.
-			expect(at(id, 2).reads.grid, nat(at(id, 2))).toBe(1);
+			// Back on Grid: its FitPage mounts and climbs the ladder again from regular:
+			// two reads (regular, then compact), not the stale count from the first visit.
+			expect(at(id, 2).reads.grid, nat(at(id, 2))).toBe(2);
 			expect(at(id, 2).notice, nat(at(id, 2))).toBe(NOTICE.grid);
 			expect(at(id, 2).pages, nat(at(id, 2))).toEqual([PAGE_H, PAGE_H]);
 		});
 
 		// protects=the fallback does not outlive the layout it was decided for (AC 8)
 		// fails_when=returning to Grid after Timing goes straight to Timing, never mounting
-		//   or measuring Grid (the reset effect is missing or does not watch `layout`)
+		//   or measuring Grid (the reset effect is missing or does not watch `layout`), or
+		//   Grid is measured only once on return (the density ladder did not restart at
+		//   regular, so a stale compact density skipped the regular measurement)
 		// no_claim=that the second measurement agrees with the first (same agenda).
 		//   Unlike the Editorial path above, nothing overwrites `fellBackFrom` here:
 		//   Timing never falls back, so only the reset effect clears it
@@ -397,8 +456,9 @@ describe.skipIf(!hasChrome)(
 			expect(at(id, 1).notice, nat(at(id, 1))).toBeNull();
 			expect(at(id, 1).activeTab, nat(at(id, 1))).toBe("Timing");
 			expect(at(id, 1).reads.grid ?? 0, nat(at(id, 1))).toBe(0);
-			// Back on Grid: mounted and measured afresh, exactly once (then falls back again).
-			expect(at(id, 2).reads.grid, nat(at(id, 2))).toBe(1);
+			// Back on Grid: mounted and measured afresh, from regular: two reads (regular,
+			// then compact, #1226 item 1), then it falls back again.
+			expect(at(id, 2).reads.grid, nat(at(id, 2))).toBe(2);
 			expect(at(id, 2).notice, nat(at(id, 2))).toBe(NOTICE.grid);
 			expect(at(id, 2).pages, nat(at(id, 2))).toEqual([PAGE_H, PAGE_H]);
 		});
