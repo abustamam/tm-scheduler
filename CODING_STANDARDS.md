@@ -465,7 +465,9 @@ filter `status = 'not_coming'`, and one asking "who was contacted?" must filter
 `status = 'reached_out'` (the officer-only rung) — testing for a row now silently counts all
 three. `src/server/attendance-plan-logic.ts` is the seam: `getPlanStatus`,
 `listPlanForMeetings`, `listNotComingWithNames`, `listNotComingForMeetings`,
-`listReachedOutForMeeting`, `listComingForMeeting`, `setPlanStatus`, `clearPlanStatus`. Add a
+`listReachedOutForMeeting`, `listComingForMeeting`, `memberHasAttendancePlanRows` (a count-free
+existence check for the guest-conversion undo's cascade refusal), `setPlanStatus`,
+`clearPlanStatus`. Add a
 function there rather than an inline query — the seam is where the actor attribution and the
 two status predicates live, and an inline query bypasses both while still typechecking.
 

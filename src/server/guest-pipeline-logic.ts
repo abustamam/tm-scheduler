@@ -19,7 +19,7 @@ import {
 	type SQL,
 	sql,
 } from "drizzle-orm";
-import { union } from "drizzle-orm/pg-core";
+import { type PgColumn, type PgTable, union } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import {
 	activityLog,
@@ -27,12 +27,15 @@ import {
 	guestInvites,
 	guests,
 	meetingAttendance,
+	meetingCandidateDisqualifications,
 	meetings,
 	memberDues,
 	members,
 	officerTerms,
+	officerTrainingRecords,
 	pathEnrollments,
 	people,
+	roleFeedbackNotes,
 	roleSlots,
 	speeches,
 	speechRequests,
@@ -81,6 +84,10 @@ import {
 } from "./account-link-logic";
 import { logActivity } from "./activity";
 import {
+	ATTENDANCE_PLAN_MEMBER_FK,
+	memberHasAttendancePlanRows,
+} from "./attendance-plan-logic";
+import {
 	CLUB_BUSY_MESSAGE,
 	forUpdate,
 	lockClubForWrite,
@@ -104,6 +111,7 @@ import {
 	RECORD_CHANGED_MESSAGE,
 	separateGuestFromMemberPerson,
 } from "./guests-logic";
+import { MENTORSHIP_MEMBER_FKS, memberHasMentorship } from "./mentorship-logic";
 import { closeOpenOfficerTerms } from "./officers-logic";
 import { clubsHoldingPersons } from "./people-merge-logic";
 import { isDeadlock } from "./pg-errors";
@@ -3188,6 +3196,116 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
 }
 
 /**
+ * Whether `table` holds a row whose `column` is the member. An existence check
+ * (no count, no row data) for the cascade checks below.
+ */
+function hasRowFor(table: PgTable, column: PgColumn) {
+	return async (tx: DbOrTx, memberId: string): Promise<boolean> => {
+		const rows = await tx
+			.select({ v: column })
+			.from(table)
+			.where(eq(column, memberId))
+			.limit(1);
+		return rows.length > 0;
+	};
+}
+
+export type UndoCascadeCheck = {
+	/** Every `table.column` this check covers: a foreign key to `members.id` with ON DELETE CASCADE. */
+	columns: string[];
+	/** What the refusal says the member has (`UNDO_MEMBER_HAS_HISTORY_MESSAGE`). */
+	label: string;
+	/**
+	 * `always`: refuses on every path (the older dues, terms and requests checks).
+	 * `created`: refuses only when the undo will delete a membership the conversion
+	 * created (`record.createdMembership`). On the reuse/reactivate path the undo
+	 * deletes nothing, so a row there is not at risk and refusing would be false.
+	 */
+	scope: "always" | "created";
+	has: (tx: DbOrTx, memberId: string) => Promise<boolean>;
+};
+
+/**
+ * The refusals `applyUndoGuestConversion` makes for history that its final
+ * `delete(members)` would cascade away (#1202), in the order they run. The FK
+ * drift guard in `guest-undo-cascade.integration.test.ts` compares THIS list's
+ * `columns` with `pg_constraint`'s ON DELETE CASCADE keys to `members.id`, so a
+ * key can no longer be "handled" on paper without a refusal behind it: a new
+ * cascading key fails the test until an entry lands here or the test's waiver
+ * map records why it needs none.
+ *
+ * Labels are what the admin reads. `role_feedback_notes` is private to its
+ * recipient, so its label is generic and must not name feedback.
+ */
+export const UNDO_CASCADE_CHECKS: UndoCascadeCheck[] = [
+	{
+		columns: ["member_dues.membership_id"],
+		label: "dues records",
+		scope: "always",
+		has: hasRowFor(memberDues, memberDues.membershipId),
+	},
+	{
+		// ANY term, open or CLOSED, and the closed half is load-bearing since #805.
+		// Convert's wake-up ends the open terms a lapsed membership was carrying,
+		// and `officer_terms` rows are closed rather than deleted (#100), so a
+		// membership convert wrote to that way still carries a row here. That is
+		// what makes the close safe to write with nothing to reverse it: every
+		// conversion it touches was already refused by this check before the close
+		// existed, and still is, so an undo can never half-reverse one. Narrowing
+		// this to OPEN terms would quietly break that;
+		// `guest-convert-privilege.integration.test.ts` fails you first.
+		columns: ["officer_terms.membership_id"],
+		label: "an officer term",
+		scope: "always",
+		has: hasRowFor(officerTerms, officerTerms.membershipId),
+	},
+	{
+		// ANY status, withdrawn included: a withdrawn request is still the
+		// member's record (#1052).
+		columns: ["speech_requests.membership_id"],
+		label: "speech requests",
+		scope: "always",
+		has: hasRowFor(speechRequests, speechRequests.membershipId),
+	},
+	{
+		columns: MENTORSHIP_MEMBER_FKS,
+		label: "a mentorship",
+		scope: "created",
+		has: memberHasMentorship,
+	},
+	{
+		columns: ["officer_training_records.membership_id"],
+		label: "officer training",
+		scope: "created",
+		has: hasRowFor(officerTrainingRecords, officerTrainingRecords.membershipId),
+	},
+	{
+		// Private to the recipient (readable only by them, after the meeting): the
+		// label must not tell an admin that feedback exists.
+		columns: ["role_feedback_notes.recipient_member_id"],
+		label: "other records",
+		scope: "created",
+		has: hasRowFor(roleFeedbackNotes, roleFeedbackNotes.recipientMemberId),
+	},
+	{
+		// Every status, `reached_out` (an officer's outreach record) included.
+		columns: [ATTENDANCE_PLAN_MEMBER_FK],
+		label: "RSVPs or outreach",
+		scope: "created",
+		has: memberHasAttendancePlanRows,
+	},
+	{
+		columns: ["meeting_candidate_disqualifications.candidate_member_id"],
+		label: "a candidate disqualification",
+		scope: "created",
+		has: hasRowFor(
+			meetingCandidateDisqualifications,
+			meetingCandidateDisqualifications.candidateMemberId,
+		),
+	},
+];
+
+/**
  * Undo a convert-to-member (#618): the reverse of `applyConvertGuestToMember`.
  *
  * Convert is otherwise a one-way door. Its button is the only filled control on
@@ -3232,6 +3350,11 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
  * member holds BEYOND the ones the conversion moved all block it — each is
  * something a delete would destroy, and the merge tool is the right instrument
  * once any is true.
+ *
+ * Dues, officer terms and speech requests refuse on every path. The rest of the
+ * cascading `members` keys (`UNDO_CASCADE_CHECKS`, #1202) refuse ONLY when the
+ * conversion created the membership, because only then does the undo delete a
+ * row they hang off: on the reuse/reactivate path nothing cascades.
  *
  * Speeches and Pathways enrolments are checked ONLY when the conversion created
  * the membership. They hang off `people`, not `members`, so removing a membership
@@ -3391,41 +3514,16 @@ export async function applyUndoGuestConversion(
 			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("roles"));
 		}
 
-		const [dues] = await tx
-			.select({ n: count() })
-			.from(memberDues)
-			.where(eq(memberDues.membershipId, membershipId));
-		if (Number(dues?.n ?? 0) > 0) {
-			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("dues records"));
-		}
-
-		// ANY term, open or CLOSED — and the closed half is load-bearing since
-		// #805. Convert's wake-up ends the open terms a lapsed membership was
-		// carrying, and `officer_terms` rows are closed rather than deleted
-		// (#100), so a membership convert wrote to that way still carries a row
-		// here. That is what makes the close safe to write with nothing to
-		// reverse it: every conversion it touches was already refused by this
-		// check before the close existed, and still is, so an undo can never
-		// half-reverse one. Narrowing this to OPEN terms would quietly break that
-		// — `guest-convert-privilege.integration.test.ts` fails you first.
-		const [terms] = await tx
-			.select({ n: count() })
-			.from(officerTerms)
-			.where(eq(officerTerms.membershipId, membershipId));
-		if (Number(terms?.n ?? 0) > 0) {
-			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("an officer term"));
-		}
-
-		// ANY status, withdrawn included: `speech_requests.membership_id` is ON
-		// DELETE CASCADE (#1052), so the delete below would silently take every
-		// request the member ever queued, and a withdrawn one is still their
-		// record. Checked unconditionally, like dues and terms above.
-		const [requested] = await tx
-			.select({ n: count() })
-			.from(speechRequests)
-			.where(eq(speechRequests.membershipId, membershipId));
-		if (Number(requested?.n ?? 0) > 0) {
-			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("speech requests"));
+		// Every table whose foreign key to `members` is ON DELETE CASCADE (#1202),
+		// from the one list the FK drift guard reads. The delete below would take
+		// each row silently, so a row here refuses the undo and nothing is deleted.
+		for (const check of UNDO_CASCADE_CHECKS) {
+			// `created` scope: on the reuse/reactivate path the undo deletes no
+			// membership, so nothing cascades and the row is not at risk.
+			if (check.scope === "created" && !record.createdMembership) continue;
+			if (await check.has(tx, membershipId)) {
+				throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE(check.label));
+			}
 		}
 
 		if (record.createdMembership) {
