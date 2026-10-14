@@ -13,10 +13,21 @@ import {
 	CLUB_NUMBER_MAX,
 	CLUB_NUMBER_PATTERN,
 } from "#/lib/club-charter";
-import { listConsoleClubs, provisionClub } from "#/server/onboarding";
+import {
+	getDemoClubConsole,
+	listConsoleClubs,
+	provisionClub,
+	resetDemoClubFromConsole,
+} from "#/server/onboarding";
 
 export const Route = createFileRoute("/_authed/superadmin/")({
-	loader: () => listConsoleClubs(),
+	loader: async () => {
+		const [list, demo] = await Promise.all([
+			listConsoleClubs(),
+			getDemoClubConsole(),
+		]);
+		return { ...list, demo };
+	},
 	component: SuperadminConsole,
 });
 
@@ -37,7 +48,7 @@ const selectClass =
 	"flex h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
 
 function SuperadminConsole() {
-	const { clubs, zones, defaultZone } = Route.useLoaderData();
+	const { clubs, zones, defaultZone, demo } = Route.useLoaderData();
 	const router = useRouter();
 
 	return (
@@ -53,6 +64,8 @@ function SuperadminConsole() {
 				</p>
 			</div>
 
+			<DemoClubCard demo={demo} onChanged={() => router.invalidate()} />
+
 			<CreateClubForm
 				zones={zones}
 				defaultZone={defaultZone}
@@ -61,7 +74,10 @@ function SuperadminConsole() {
 
 			<div className="space-y-3">
 				<div className="flex items-center justify-between gap-2">
-					<h2 className="text-sm font-bold">All clubs ({clubs.length})</h2>
+					{/* The demo club is listed but not counted: it is not a club on the platform. */}
+					<h2 className="text-sm font-bold">
+						All clubs ({clubs.filter((c) => !c.isDemo).length})
+					</h2>
 					<div className="flex items-center gap-4">
 						<Link
 							to="/superadmin/areas"
@@ -111,6 +127,11 @@ function SuperadminConsole() {
 													{CHARTER_STATUS_LABEL.chartering}
 												</span>
 											) : null}
+											{club.isDemo ? (
+												<span className="ml-2 inline-block rounded-full bg-[var(--sand)] px-2 py-0.5 text-xs font-semibold text-[var(--sea-ink-soft)] uppercase tracking-[0.04em]">
+													Demo
+												</span>
+											) : null}
 											{club.archivedAt ? (
 												<span className="ml-2 inline-block rounded-full bg-[var(--sand)] px-2 py-0.5 text-xs font-semibold text-[var(--sea-ink-soft)] uppercase tracking-[0.04em]">
 													Archived
@@ -153,6 +174,74 @@ function SuperadminConsole() {
 				)}
 			</div>
 		</PageContainer>
+	);
+}
+
+/** What the confirm says before a rebuild (#1199). */
+const REBUILD_CONFIRM =
+	"Rebuilding deletes everything in the demo club, including people you added by hand, and builds it fresh. Their accounts are kept. Use @example.com addresses for anyone you add during a demo.";
+
+type DemoConsole = Awaited<ReturnType<typeof getDemoClubConsole>>;
+
+/**
+ * The demo club (#1199): build it, or rebuild it from the fixture. Three states
+ * — not configured (the button is disabled and names the env var), not built,
+ * built. The built date is formatted in UTC like the list's (#1017): a relative
+ * "5 minutes ago" would differ between the server render and the hydrated page.
+ */
+function DemoClubCard({
+	demo,
+	onChanged,
+}: {
+	demo: DemoConsole;
+	onChanged: () => void;
+}) {
+	const [busy, setBusy] = useState(false);
+	const built = demo.club;
+
+	async function onReset() {
+		if (built && !window.confirm(REBUILD_CONFIRM)) return;
+		setBusy(true);
+		try {
+			await resetDemoClubFromConsole();
+			toast.success(built ? "Rebuilt the demo club." : "Built the demo club.");
+			onChanged();
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't build the demo club.",
+			);
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<section
+			aria-label="Demo club"
+			className="space-y-2 rounded-xl border border-dashed border-[var(--line)] bg-[var(--foam)] p-4"
+		>
+			<h2 className="text-sm font-bold">Demo club</h2>
+			<p className="text-sm text-muted-foreground">
+				{demo.configured
+					? "A made-up club for presenter-led demos. It sends no mail and keeps no guest data."
+					: "Not configured: set DEMO_ACCOUNT_EMAIL"}
+			</p>
+			<Button
+				type="button"
+				size="sm"
+				variant={built ? "outline" : "default"}
+				disabled={!demo.configured || busy}
+				onClick={onReset}
+			>
+				{busy ? (
+					<Loader2 className="size-4 animate-spin" />
+				) : built ? (
+					`Rebuild demo club (built ${dateFmt.format(new Date(built.builtAt))})`
+				) : (
+					"Build demo club"
+				)}
+			</Button>
+		</section>
 	);
 }
 

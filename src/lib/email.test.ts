@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { sendEmail } from "./email";
+import { isReservedRecipient, sendEmail } from "./email";
 
 afterEach(() => {
 	vi.unstubAllEnvs();
@@ -35,7 +35,7 @@ describe("sendEmail", () => {
 			);
 
 		await sendEmail({
-			to: "member@example.com",
+			to: "member@club.org",
 			subject: "Subj",
 			html: "<p>H</p>",
 			text: "T",
@@ -49,7 +49,7 @@ describe("sendEmail", () => {
 		const body = JSON.parse(init?.body as string);
 		expect(body).toMatchObject({
 			from: "GavelUp <noreply@gavelup.app>",
-			to: "member@example.com",
+			to: "member@club.org",
 			subject: "Subj",
 			html: "<p>H</p>",
 			text: "T",
@@ -202,5 +202,106 @@ describe("sendEmail", () => {
 		await expect(
 			sendEmail({ to: "a@b.com", subject: "S", html: "<p></p>", text: "t" }),
 		).rejects.toThrow("Failed to send email.");
+	});
+});
+
+// protects=an address that cannot exist (RFC 2606 / 6761) is never classed
+//   deliverable, and a real one never classed reserved;
+// fails_when=a reserved domain, a subdomain of one, or a reserved TLD is
+//   reported deliverable, or a look-alike (example.com.evil.io, myexample.com,
+//   example.co) is reported reserved;
+// no_claim=nothing about the transport; this is the predicate alone.
+describe("isReservedRecipient", () => {
+	it.each([
+		"a@example.com",
+		"a@example.net",
+		"a@example.org",
+		"A@EXAMPLE.COM",
+		"a@mail.example.com",
+		"a@deep.sub.example.org",
+		"a@club.example",
+		"a@club.test",
+		"a@club.invalid",
+		"a@club.localhost",
+		"a@localhost",
+		"Demo <a@example.com>",
+	])("treats %s as reserved", (address) => {
+		expect(isReservedRecipient(address)).toBe(true);
+	});
+
+	it.each([
+		"a@gavelup.app",
+		"a@club.org",
+		"a@myexample.com",
+		"a@example.com.evil.io",
+		"a@example.co",
+		"a@testing.io",
+		"not-an-address",
+		"a@",
+	])("treats %s as deliverable", (address) => {
+		expect(isReservedRecipient(address)).toBe(false);
+	});
+});
+
+// protects=no mail leaves for a reserved address (the demo club, #1199) while a
+//   real recipient is still served;
+// fails_when=a reserved recipient reaches the provider, a real one is dropped,
+//   or a mixed list sends the reserved address along with the real one;
+// no_claim=fetch is mocked, so what Resend does with the request is not
+//   exercised; the demo club's own call sites are not walked here.
+describe("sendEmail: reserved recipients", () => {
+	const message = { subject: "S", html: "<p></p>", text: "t" };
+
+	it("makes no transport call for a reserved address and logs no address", async () => {
+		vi.stubEnv("RESEND_API_KEY", "re_test");
+		const fetchSpy = vi.spyOn(globalThis, "fetch");
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+		await sendEmail({ to: "priya@example.com", ...message });
+
+		expect(fetchSpy).not.toHaveBeenCalled();
+		const logged = logSpy.mock.calls.flat().join(" ");
+		expect(logged).toContain("[email] dropped: reserved recipient domain");
+		expect(logged).not.toContain("priya");
+	});
+
+	it("makes exactly one transport call for a real address", async () => {
+		vi.stubEnv("RESEND_API_KEY", "re_test");
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response("{}", { status: 200 }));
+
+		await sendEmail({ to: "real@club.org", ...message });
+
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("sends a mixed list once, to the real address only", async () => {
+		vi.stubEnv("RESEND_API_KEY", "re_test");
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response("{}", { status: 200 }));
+
+		await sendEmail({
+			to: ["priya@example.com", "real@club.org", "x@club.test"],
+			...message,
+		});
+
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		const body = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
+		expect(body.to).toEqual(["real@club.org"]);
+	});
+
+	it("still prints a reserved address in the dev log when no key is set", async () => {
+		vi.stubEnv("RESEND_API_KEY", "");
+		const fetchSpy = vi.spyOn(globalThis, "fetch");
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+		await sendEmail({ to: "priya@example.com", ...message });
+
+		expect(fetchSpy).not.toHaveBeenCalled();
+		const logged = logSpy.mock.calls.flat().join(" ");
+		expect(logged).toContain("priya@example.com");
+		expect(logged).not.toContain("dropped");
 	});
 });

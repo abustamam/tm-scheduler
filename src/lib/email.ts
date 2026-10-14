@@ -19,6 +19,39 @@ export interface SendEmailParams {
 }
 
 /**
+ * Domains RFC 2606 / 6761 reserve for documentation and tests: nothing there is
+ * ever deliverable, and the fixture club's people (#1198) live on them. The demo
+ * club (#1199) is made of such addresses, so the transport drops them rather
+ * than send a real provider a message for an address that cannot exist.
+ */
+const RESERVED_SECOND_LEVEL = ["example.com", "example.net", "example.org"];
+const RESERVED_TLDS = ["example", "test", "invalid", "localhost"];
+
+/**
+ * True when `address` is on a reserved domain: `example.com`, `.net` or `.org`
+ * and any subdomain of them, or any name ending `.example`, `.test`,
+ * `.invalid` or `.localhost` (or equal to one). Case-insensitive; an address
+ * with no `@` is not reserved.
+ */
+export function isReservedRecipient(address: string): boolean {
+	const at = address.lastIndexOf("@");
+	if (at < 0) return false;
+	// "Name <a@b.example>" keeps its closing bracket after the domain.
+	const domain = address
+		.slice(at + 1)
+		.replace(/[>\s]+$/u, "")
+		.toLowerCase();
+	if (!domain) return false;
+	for (const d of RESERVED_SECOND_LEVEL) {
+		if (domain === d || domain.endsWith(`.${d}`)) return true;
+	}
+	for (const tld of RESERVED_TLDS) {
+		if (domain === tld || domain.endsWith(`.${tld}`)) return true;
+	}
+	return false;
+}
+
+/**
  * Provider-agnostic email transport. Sends via Resend when RESEND_API_KEY is
  * set; otherwise logs to the console (dev). Throws on send failure — callers
  * (e.g. Better-Auth's sendMagicLink) rely on the throw surfacing a clean error.
@@ -52,9 +85,25 @@ export async function sendEmail({
 		return;
 	}
 
+	// A reserved address (the demo club's people) is never sent to. Dropped
+	// per recipient, so a mixed list still reaches the real addresses.
+	const recipients = Array.isArray(to) ? to : [to];
+	const deliverable = recipients.filter((a) => !isReservedRecipient(a));
+	if (deliverable.length === 0) {
+		console.log("[email] dropped: reserved recipient domain");
+		return;
+	}
+	const sendTo = Array.isArray(to) ? deliverable : to;
+
 	// Only include `reply_to` in the body when present, so a send without one
 	// produces a byte-identical request to before the field existed.
-	const body: Record<string, unknown> = { from, to, subject, html, text };
+	const body: Record<string, unknown> = {
+		from,
+		to: sendTo,
+		subject,
+		html,
+		text,
+	};
 	if (replyTo) {
 		body.reply_to = replyTo;
 	}

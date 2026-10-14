@@ -26,6 +26,8 @@ vi.mock("#/server/onboarding", () => ({
 	updateConsoleAdminEmail: vi.fn(),
 	deleteConsoleClub: vi.fn(),
 	listConsoleClubs: vi.fn(),
+	getDemoClubConsole: vi.fn(),
+	resetDemoClubFromConsole: vi.fn(),
 	provisionClub,
 	revertConsoleClubToChartering,
 }));
@@ -52,6 +54,7 @@ async function renderConsole(
 		clubs,
 		zones: ["America/Chicago", "UTC"],
 		defaultZone: "America/Chicago",
+		demo: { configured: false, club: null },
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
 	const Page = ConsoleRoute.options.component as () => React.ReactElement;

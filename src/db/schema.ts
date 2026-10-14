@@ -510,9 +510,17 @@ export const clubs = pgTable(
 			.default("chartered"),
 		charteredAt: date("chartered_at", { mode: "string" }),
 		archivedAt: timestamp("archived_at"),
+		// The demo club (#1199, part of #1114): made-up people, built and rebuilt
+		// from the superadmin console, sends no mail and keeps no guest data. At
+		// most one row may be true (`clubs_single_demo_unique`). Only
+		// `resetDemoClub` sets it and nothing unsets it.
+		isDemo: boolean("is_demo").notNull().default(false),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 	},
 	(t) => [
+		uniqueIndex("clubs_single_demo_unique")
+			.on(t.isDemo)
+			.where(sql`${t.isDemo}`),
 		// The Table Topics window's invariants, in the database (#679).
 		//
 		// They already hold in zod on the write path and are re-checked by

@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { revertClubToChartering } from "./club-charter-logic";
+import { getDemoClubState, resetDemoClub } from "./demo-reset-logic";
 import { requireSuperadmin, requireUser } from "./guards";
 import {
 	archiveClub,
@@ -98,3 +99,27 @@ export const revertConsoleClubToChartering = createServerFn({ method: "POST" })
 		await requireSuperadmin(currentUser.id);
 		return revertClubToChartering(data);
 	});
+
+/** The demo club card (#1199): is `DEMO_ACCOUNT_EMAIL` set, and when was the demo
+ *  club last built. SUPERADMIN-only. */
+export const getDemoClubConsole = createServerFn({ method: "GET" }).handler(
+	async () => {
+		const currentUser = await requireUser();
+		await requireSuperadmin(currentUser.id);
+		return getDemoClubState();
+	},
+);
+
+/** Build the demo club, or delete it and build it again from the fixture
+ *  (#1199). SUPERADMIN-only; the logic re-checks the flag inside its
+ *  transaction. */
+export const resetDemoClubFromConsole = createServerFn({
+	method: "POST",
+}).handler(async () => {
+	const currentUser = await requireUser();
+	await requireSuperadmin(currentUser.id);
+	return resetDemoClub({
+		now: new Date(),
+		actor: { kind: "superadmin", userId: currentUser.id },
+	});
+});

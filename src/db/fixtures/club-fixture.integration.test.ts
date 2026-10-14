@@ -48,7 +48,7 @@ import { utcToZonedWallTime } from "#/lib/datetime";
 import { PATHWAYS_CATALOG } from "#/lib/pathways-catalog";
 import type { DbOrTx } from "#/server/meeting-templates-logic";
 import { loadFeedbackForUser } from "#/server/role-feedback-logic";
-import { cleanup, hasTestDb, testDb } from "#/test/db";
+import { cleanup, hasTestDb, openBlockingTx, testDb } from "#/test/db";
 import {
 	buildFixtureClub,
 	FixtureError,
@@ -148,6 +148,22 @@ describe.skipIf(!hasTestDb)("Harbor City fixture club", () => {
 			await testDb.delete(user).where(inArray(user.id, userIds));
 		}
 	}
+
+	// Both this suite and `demo-reset-logic.integration.test.ts` (#1199) build the
+	// fixture club, whose roster addresses are FIXED and which each suite deletes
+	// around its tests. Run in parallel they would delete each other's rows, so
+	// each holds this advisory lock for the whole suite. The key pair must match
+	// the other file's. It is declared first so its release runs last.
+	let releaseFixtureAddressLock: (() => Promise<void>) | undefined;
+	beforeAll(async () => {
+		const holder = await openBlockingTx(async (tx) => {
+			await tx.execute(sql`select pg_advisory_xact_lock(1199, 1)`);
+		});
+		releaseFixtureAddressLock = holder.commit;
+	}, 180_000);
+	afterAll(async () => {
+		await releaseFixtureAddressLock?.();
+	});
 
 	beforeAll(ensureCatalog);
 	// After-hooks unwind last-defined first: the club rows go before the paths.
