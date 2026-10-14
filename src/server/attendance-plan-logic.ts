@@ -23,6 +23,13 @@ type DbOrTx =
 	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
 /**
+ * The `table.column` of this table's cascading foreign key to `members`, as the
+ * guest-conversion undo's FK drift guard spells it (`UNDO_CASCADE_CHECKS`). Here
+ * so the table's name stays inside the seam (`attendance-plan-store.guard.test.ts`).
+ */
+export const ATTENDANCE_PLAN_MEMBER_FK = "meeting_attendance_plan.member_id";
+
+/**
  * Whether the member has ANY RSVP row. An existence check: it returns no plan
  * data. Its caller is the gated guest-conversion undo, which runs it inside its
  * own transaction (`conn`) to refuse before a cascading delete takes the RSVPs

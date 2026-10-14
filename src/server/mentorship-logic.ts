@@ -456,6 +456,17 @@ async function activePairingsFor(
 }
 
 /**
+ * The `table.column` spellings of this table's two cascading foreign keys to
+ * `members`, as the guest-conversion undo's FK drift guard names them
+ * (`UNDO_CASCADE_CHECKS`). Here so the table's name stays inside the gated
+ * logic modules (`mentorship-not-public.guard.test.ts`).
+ */
+export const MENTORSHIP_MEMBER_FKS = [
+	"mentorships.mentor_member_id",
+	"mentorships.mentee_member_id",
+];
+
+/**
  * Whether the membership is in ANY pairing, as mentor or mentee, ended or not.
  * An existence check: it returns no pairing data. Its caller is the gated
  * guest-conversion undo, which runs it inside its own transaction (`conn`) to

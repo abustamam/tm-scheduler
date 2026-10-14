@@ -8,6 +8,10 @@
  * roles, dues, officer terms, speech requests, speeches, enrolments) rather than
  * in it, to keep this issue to one cited source file.
  *
+ * The refusals added by #1202 run only when the undo will delete a membership
+ * the conversion created. On the reuse/reactivate path nothing is deleted, so
+ * nothing cascades and they must not refuse (a test below pins that).
+ *
  * `#/db` is mocked to the TEST_DATABASE_URL client; the suite skips when unset.
  */
 import { randomUUID } from "node:crypto";
@@ -38,9 +42,11 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { applyConvertGuestToMember, applyUndoGuestConversion } = await import(
-	"#/server/guest-pipeline-logic"
-);
+const {
+	UNDO_CASCADE_CHECKS,
+	applyConvertGuestToMember,
+	applyUndoGuestConversion,
+} = await import("#/server/guest-pipeline-logic");
 
 describe.skipIf(!hasTestDb)(
 	"undo guest conversion: cascading history (#1202)",
@@ -178,9 +184,14 @@ describe.skipIf(!hasTestDb)(
 				.returning({ id: roleFeedbackNotes.id });
 			if (!note) throw new Error("Failed to seed feedback note");
 
-			await expect(undo(guestId)).rejects.toThrow(
-				UNDO_MEMBER_HAS_HISTORY_MESSAGE("feedback notes"),
+			// Role feedback notes are readable only by their recipient, so the refusal
+			// the admin reads must not reveal that any exist.
+			const refusal = await undo(guestId).then(
+				() => "",
+				(e: Error) => e.message,
 			);
+			expect(refusal).toBe(UNDO_MEMBER_HAS_HISTORY_MESSAGE("other records"));
+			expect(refusal).not.toMatch(/feedback|note/i);
 
 			await expectMembershipSurvives(guestId, membershipId);
 			const [stillThere] = await testDb
@@ -190,20 +201,25 @@ describe.skipIf(!hasTestDb)(
 			expect(stillThere?.id).toBe(note.id);
 		});
 
-		it("refuses when the member has an RSVP (convert writes none), and keeps it", async () => {
-			const { guestId, membershipId } = await converted("RSVP Undo");
+		it.each([
+			"coming",
+			"reached_out",
+		] as const)("refuses when the member has a %s RSVP row (convert writes none), and keeps it", async (status) => {
+			const { guestId, membershipId } = await converted(`RSVP ${status} Undo`);
 			const [rsvp] = await testDb
 				.insert(meetingAttendancePlan)
 				.values({
 					memberId: membershipId,
 					meetingId: seed.meetingId,
-					status: "coming",
+					status,
 				})
 				.returning({ id: meetingAttendancePlan.id });
 			if (!rsvp) throw new Error("Failed to seed RSVP");
 
+			// Every status counts, `reached_out` (an officer's outreach) included, so the
+			// label says so.
 			await expect(undo(guestId)).rejects.toThrow(
-				UNDO_MEMBER_HAS_HISTORY_MESSAGE("RSVPs"),
+				UNDO_MEMBER_HAS_HISTORY_MESSAGE("RSVPs or outreach"),
 			);
 
 			await expectMembershipSurvives(guestId, membershipId);
@@ -240,6 +256,84 @@ describe.skipIf(!hasTestDb)(
 			expect(stillThere?.id).toBe(dq.id);
 		});
 
+		it("a conversion onto a REUSED lapsed membership undoes with an RSVP and a mentorship on it, and they survive", async () => {
+			// Option A (#1202): the refusals guard the delete, and on the reuse path the
+			// undo deletes nothing, so nothing cascades. A lapsed member's old history
+			// is not at risk and must not block the undo.
+			const email = `lapsed-${randomUUID()}@example.com`;
+			const [person] = await testDb
+				.insert(people)
+				.values({ name: "Lapsed Reuse", email })
+				.returning({ id: people.id });
+			if (!person) throw new Error("Failed to seed person");
+			strayPeople.push(person.id);
+			const [lapsed] = await testDb
+				.insert(members)
+				.values({
+					clubId: seed.clubId,
+					personId: person.id,
+					name: "Lapsed Reuse",
+					status: "inactive",
+				})
+				.returning({ id: members.id });
+			if (!lapsed) throw new Error("Failed to seed lapsed membership");
+			const [rsvp] = await testDb
+				.insert(meetingAttendancePlan)
+				.values({
+					memberId: lapsed.id,
+					meetingId: seed.meetingId,
+					status: "coming",
+				})
+				.returning({ id: meetingAttendancePlan.id });
+			const [pairing] = await testDb
+				.insert(mentorships)
+				.values({
+					clubId: seed.clubId,
+					mentorMemberId: seed.memberId,
+					menteeMemberId: lapsed.id,
+				})
+				.returning({ id: mentorships.id });
+			if (!rsvp || !pairing) throw new Error("Failed to seed history");
+
+			const [g] = await testDb
+				.insert(guests)
+				.values(
+					await withGuestPerson(
+						{ clubId: seed.clubId, name: "Lapsed Reuse Guest" },
+						testDb,
+					),
+				)
+				.returning({ id: guests.id });
+			if (!g) throw new Error("Failed to seed guest");
+			const guestId = g.id;
+			await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+				confirmedEmail: email,
+			});
+
+			const res = await undo(guestId);
+
+			// The reused row was never this conversion's to delete; the undo put the lapse back.
+			expect(res.membershipDeleted).toBe(false);
+			const [member] = await testDb
+				.select({ status: members.status })
+				.from(members)
+				.where(eq(members.id, lapsed.id));
+			expect(member?.status).toBe("inactive");
+			const [rsvpLeft] = await testDb
+				.select({ id: meetingAttendancePlan.id })
+				.from(meetingAttendancePlan)
+				.where(eq(meetingAttendancePlan.id, rsvp.id));
+			expect(rsvpLeft?.id).toBe(rsvp.id);
+			const [pairingLeft] = await testDb
+				.select({ id: mentorships.id })
+				.from(mentorships)
+				.where(eq(mentorships.id, pairing.id));
+			expect(pairingLeft?.id).toBe(pairing.id);
+		});
+
 		it("still refuses a guest that was never converted", async () => {
 			const [g] = await testDb
 				.insert(guests)
@@ -254,26 +348,32 @@ describe.skipIf(!hasTestDb)(
 			await expect(undo(g.id)).rejects.toThrow(UNDO_NOT_CONVERTED_MESSAGE);
 		});
 
-		it("FK drift guard: every ON DELETE CASCADE foreign key to `members` is handled by the undo", async () => {
+		it("FK drift guard: every ON DELETE CASCADE foreign key to `members` has a refusal in UNDO_CASCADE_CHECKS, or a written waiver", async () => {
 			// The undo's final `delete(members)` silently removes the rows of every
-			// table in this set. A new cascading key to `members` fails this test
-			// until someone adds a refusal to `applyUndoGuestConversion` and lists it
-			// here, or writes down below why it needs none. `confdeltype = 'c'` is
-			// CASCADE; the SET NULL keys keep their rows, so they are not data loss
-			// here and not this guard's business.
-			const HANDLED = new Set([
-				// The refusals that predate #1202.
-				"member_dues.membership_id",
-				"officer_terms.membership_id",
-				"speech_requests.membership_id",
-				// #1202.
-				"mentorships.mentor_member_id",
-				"mentorships.mentee_member_id",
-				"officer_training_records.membership_id",
-				"role_feedback_notes.recipient_member_id",
-				"meeting_attendance_plan.member_id",
-				"meeting_candidate_disqualifications.candidate_member_id",
-			]);
+			// table in this set. The list compared here is the one the undo LOOPS OVER,
+			// so a key cannot pass on paper without a refusal behind it. A new cascading
+			// key to `members` fails this test until an entry lands in
+			// `UNDO_CASCADE_CHECKS`, or the key is listed in WAIVED with the reason it
+			// needs no refusal. `confdeltype = 'c'` is CASCADE; SET NULL keys keep
+			// their rows, so they are not data loss here.
+			const WAIVED: Record<string, string> = {
+				// "table.column": "one-line reason a delete of the member loses nothing of value",
+			};
+
+			for (const [key, reason] of Object.entries(WAIVED)) {
+				expect(
+					reason.trim().length,
+					`waiver ${key} needs a reason`,
+				).toBeGreaterThan(0);
+			}
+			const checked = UNDO_CASCADE_CHECKS.flatMap((c) => c.columns);
+			expect(
+				checked.filter((k) => k in WAIVED),
+				"a key is both checked and waived",
+			).toEqual([]);
+			expect(new Set(checked).size, "a key is checked twice").toBe(
+				checked.length,
+			);
 
 			const result = await testDb.execute(sql`
 			SELECT con.conrelid::regclass::text AS tbl, a.attname AS col
@@ -290,7 +390,9 @@ describe.skipIf(!hasTestDb)(
 				),
 			);
 
-			expect([...actual].sort()).toEqual([...HANDLED].sort());
+			expect([...actual].sort()).toEqual(
+				[...checked, ...Object.keys(WAIVED)].sort(),
+			);
 		});
 	},
 );

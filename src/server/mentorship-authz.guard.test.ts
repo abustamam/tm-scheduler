@@ -150,6 +150,7 @@ describe("mentorship server fns (#939)", () => {
 			"loadMemberMentorships",
 			"loadClubMentorships",
 			"activePairingsFor",
+			"memberHasMentorship",
 		]) {
 			const body = logicFnBody(fn);
 			expect(body, fn).not.toMatch(/\.(insert|update|delete)\(/);
