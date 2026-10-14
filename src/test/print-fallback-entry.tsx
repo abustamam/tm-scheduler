@@ -22,6 +22,7 @@ import {
 	type AgendaLayout,
 	MeetingAgendaPrint,
 } from "#/components/agenda/meeting-agenda-print";
+import { AGENDA_LAYOUT_LABELS } from "#/lib/agenda-layouts";
 import { PrintAgendaView } from "#/routes/club.$clubId_.meeting.$meetingId.print";
 import {
 	MCF_EXPLAINERS,
@@ -35,24 +36,27 @@ import {
 	THR_HEADER,
 	THR_OFFICERS,
 	thrAgenda,
+	thrAgendaLong,
 } from "#/test/thr-agenda-fixture";
 
-export type FixtureId = "thr" | "mcf";
+export type FixtureId = "thr" | "thrLong" | "mcf";
 
 export type Step =
 	| { kind: "tab"; layout: AgendaLayout }
 	| { kind: "fixture"; fixture: FixtureId };
 
+/** The URL's query, as the print route parses it. */
+export type ScenarioSearch = {
+	layout: AgendaLayout;
+	copies?: number;
+	duplex?: 1;
+	chrome?: "none";
+};
+
 export type Scenario = {
 	id: string;
 	fixture: FixtureId;
-	/** The URL's query, as the print route parses it. */
-	search: {
-		layout: AgendaLayout;
-		copies?: number;
-		duplex?: 1;
-		chrome?: "none";
-	};
+	search: ScenarioSearch;
 	/** `bare` renders `MeetingAgendaPrint` alone, with no view and no fallback: the
 	 *  control that shows what the same agenda did before this change. */
 	mode: "view" | "bare";
@@ -63,15 +67,18 @@ export type Snapshot = {
 	step: string;
 	/** Every `.agenda-page` that is not a blank duplex filler, by `offsetHeight`. */
 	pages: number[];
+	/** The same sheets' natural height, `[data-fit-inner].scrollHeight`: what
+	 *  `FitPage` weighs against the flow cliff. */
+	natural: number[];
 	blanks: number;
 	/** "Run of Show — Detailed Timing" is on Timing's page 2 and on no other layout. */
 	timing: boolean;
 	notice: string | null;
 	/** The tab drawn as active (the layout the person picked), or null in `bare`. */
 	activeTab: string | null;
-	/** Reads of a sheet's `[data-fit-inner].scrollHeight` since the last snapshot:
-	 *  `FitPage`'s measurement, once per mount. */
-	reads: number;
+	/** `FitPage` measurements (reads of a sheet's `[data-fit-inner].scrollHeight`)
+	 *  since the last snapshot, by the layout the measured sheet belongs to. */
+	reads: Partial<Record<AgendaLayout, number>>;
 };
 
 declare global {
@@ -82,11 +89,23 @@ declare global {
 	}
 }
 
+const GUESTS = { veena: "Guest", david: "Guest" };
+
 const FIXTURES = {
 	thr: (() => {
-		const { roles, rows } = thrAgenda({ veena: "Guest", david: "Guest" });
+		const { roles, rows } = thrAgenda(GUESTS);
 		return {
 			header: THR_HEADER,
+			roles,
+			officers: THR_OFFICERS,
+			explainers: THR_EXPLAINERS,
+			rows,
+		};
+	})(),
+	thrLong: (() => {
+		const { header, roles, rows } = thrAgendaLong(GUESTS);
+		return {
+			header,
 			roles,
 			officers: THR_OFFICERS,
 			explainers: THR_EXPLAINERS,
@@ -115,38 +134,60 @@ async function settle() {
 	}
 }
 
-let reads = 0;
+/** Which layout a sheet belongs to, from what it prints. Verified by the `bare`
+ *  scenarios, each of which must see only its own layout's measurements. */
+function layoutOf(sheet: Element | null): AgendaLayout {
+	const text = sheet?.textContent ?? "";
+	if (text.includes("Detailed Timing") || text.includes("Timing Signals"))
+		return "timing";
+	// Grid and Editorial put the roster and the run of show on ONE sheet; only
+	// Editorial prints the club mission. Spacious splits them across two.
+	if (text.includes("Meeting Roles") && text.includes("Run of Show"))
+		return text.includes("Club Mission") ? "editorial" : "grid";
+	return "spacious";
+}
+
+let reads: Partial<Record<AgendaLayout, number>> = {};
 const scrollHeight = Object.getOwnPropertyDescriptor(
 	Element.prototype,
 	"scrollHeight",
 );
+let counting = true;
 Object.defineProperty(Element.prototype, "scrollHeight", {
 	configurable: true,
 	get(this: Element) {
-		if (this.hasAttribute("data-fit-inner")) reads++;
+		if (counting && this.hasAttribute("data-fit-inner")) {
+			const l = layoutOf(this.closest(".agenda-page"));
+			reads[l] = (reads[l] ?? 0) + 1;
+		}
 		return scrollHeight?.get?.call(this) ?? 0;
 	},
 });
 
 function snapshot(step: string): Snapshot {
 	const sheets = [...document.querySelectorAll<HTMLElement>(".agenda-page")];
-	const active = [...document.querySelectorAll<HTMLElement>("a")].find(
-		(a) => a.style.background !== "",
-	);
+	const active = document.querySelector<HTMLElement>('a[aria-current="page"]');
+	const measured = reads;
+	reads = {};
+	// Reading the natural height below is not a FitPage measurement.
+	counting = false;
+	const real = sheets.filter((s) => !s.hasAttribute("data-agenda-blank"));
 	const out: Snapshot = {
 		step,
-		pages: sheets
-			.filter((s) => !s.hasAttribute("data-agenda-blank"))
-			.map((s) => s.offsetHeight),
+		pages: real.map((s) => s.offsetHeight),
+		natural: real.map(
+			(s) =>
+				s.querySelector<HTMLElement>("[data-fit-inner]")?.scrollHeight ?? 0,
+		),
 		blanks: sheets.filter((s) => s.hasAttribute("data-agenda-blank")).length,
 		timing: document.body.textContent?.includes("Detailed Timing") ?? false,
 		notice:
 			document.querySelector('[data-testid="print-fallback-notice"]')
 				?.textContent ?? null,
 		activeTab: active?.textContent?.replace(/Club default$/, "") ?? null,
-		reads,
+		reads: measured,
 	};
-	reads = 0;
+	counting = true;
 	return out;
 }
 
@@ -157,12 +198,7 @@ const AgendaCtx = createContext<{
 	source: object;
 } | null>(null);
 
-type HarnessSearch = {
-	layout: AgendaLayout;
-	copies?: number;
-	duplex?: 1;
-	chrome?: "none";
-};
+type HarnessSearch = ScenarioSearch;
 
 /** The route's component: what `PrintAgenda` does with loader data, minus the
  *  loader, which is what `AgendaCtx` stands in for. */
@@ -256,9 +292,7 @@ async function run(scenario: Scenario): Promise<Snapshot[]> {
 	for (const step of scenario.steps) {
 		if (step.kind === "tab") {
 			const tab = [...document.querySelectorAll<HTMLElement>("a")].find((a) =>
-				a.textContent?.startsWith(
-					step.layout[0]?.toUpperCase() + step.layout.slice(1),
-				),
+				a.textContent?.startsWith(AGENDA_LAYOUT_LABELS[step.layout]),
 			);
 			if (!tab) throw new Error(`no ${step.layout} tab`);
 			tab.click();

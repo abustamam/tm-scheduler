@@ -14,7 +14,7 @@
  *   · jsdom, with `scrollHeight` stubbed: `FitPage` calls `onWouldFlow` exactly
  *     when it flows. That is the wiring; it cannot say a real agenda flows.
  *   · Chrome, with `FitPage`'s REAL measuring effect (a client React root, after
- *     fonts load): the THR fixture's Grid, Editorial and Spacious really flow on
+ *     fonts load): `thrAgendaLong`'s Grid, Editorial and Spacious really flow on
  *     the base code (the `bare` control below measures that, and a fixture that
  *     does not flow would make every other assertion here vacuous), and through
  *     `PrintAgendaView` they end on Timing's two 1056px sheets. `renderToStaticMarkup`
@@ -23,14 +23,26 @@
  * Harness: `src/test/client-bundle-chrome.ts` bundles
  * `src/test/print-fallback-entry.tsx`, which runs every scenario in ONE launch.
  * Same caveat as every browser-backed suite here: no webfont resolves, so the
- * heights are this machine's fallback face's, not the deployed page's.
+ * heights are this machine's fallback face's, not the deployed page's. CI (Linux)
+ * pins a DIFFERENT fallback face from a Mac, so the same markup measures
+ * differently there; every geometry assertion below carries the measured natural
+ * height in its message so a failure on either machine says what it saw.
  *
- * AC 0 (measured on `main`, this harness, macOS `chrome-headless-shell`): THR as
- * it stands already crosses the cliff `(1056 - 2) / 0.72 = 1464px` in all three
- * layouts, so no longer variant of the fixture was needed. Natural sheet height:
- * grid 1565, editorial 1478, spacious page 2 1744, Timing page 2 1249 (fits, on
- * two sheets). MCF fits every layout: grid 1343, editorial 1175, spacious page 2
- * 1345, Timing 1056.
+ * AC 0, measured in this harness (cliff = `(1056 - 2) / 0.72 = 1464px`, natural
+ * `[data-fit-inner].scrollHeight` of the tallest sheet):
+ *
+ *   fixture      grid  editorial  spacious p2  timing p2   Timing sheets
+ *   THR (macOS)  1565  1478       1744         1249        1056 + 1056
+ *   THR (Linux)  Editorial FITS on CI's pinned face (under 1464), Grid and
+ *                Spacious flowed; run 38616788625 failed on it.
+ *   thrAgendaLong (macOS)
+ *                1729  1649       1903         1317        1056 + 1056
+ *
+ * So plain THR is not a safe control: Editorial crosses the cliff on a Mac and
+ * fits on Linux. `thrAgendaLong` (a 4th speaker/evaluator pair and 3 more roster
+ * roles) crosses it in all three layouts by 185px or more on a Mac and still
+ * fits Timing on two sheets (Timing's own overflow is #1227). MCF fits every
+ * layout: grid 1343, editorial 1175, spacious page 2 1345, Timing 1056.
  */
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -40,7 +52,11 @@ import {
 	AGENDA_LAYOUTS,
 } from "#/lib/agenda-layouts";
 import { runClientEntry } from "#/test/client-bundle-chrome";
-import type { Scenario, Snapshot } from "#/test/print-fallback-entry";
+import type {
+	Scenario,
+	ScenarioSearch,
+	Snapshot,
+} from "#/test/print-fallback-entry";
 import { CHROME_TEST_TIMEOUT_MS, findChrome } from "#/test/print-page-count";
 import type { AgendaLayout } from "./meeting-agenda-print";
 import { FitPage, MIN_FIT_SCALE, PAGE_H, PRINT_PAGE_CSS } from "./print-theme";
@@ -122,6 +138,9 @@ describe("FitPage onWouldFlow", () => {
 const hasChrome = findChrome() !== null;
 
 describe("print fallback harness availability", () => {
+	// protects=a CI run cannot go green with the Chrome scenarios silently skipped
+	// fails_when=CI is set and no browser is found (the suite below skips whole)
+	// no_claim=that the browser found is the right version, or that a local run has one
 	it("has a browser to measure with when running in CI", () => {
 		if (!process.env.CI) return;
 		expect(
@@ -139,11 +158,8 @@ const sc = (
 	id: string,
 	fixture: Scenario["fixture"],
 	layout: AgendaLayout,
-	rest: Partial<Pick<Scenario, "steps" | "mode">> & {
-		copies?: number;
-		duplex?: 1;
-		chrome?: "none";
-	} = {},
+	rest: Partial<Pick<Scenario, "steps" | "mode">> &
+		Omit<ScenarioSearch, "layout"> = {},
 ) => {
 	const { steps, mode, ...search } = rest;
 	SCENARIOS.push({
@@ -156,26 +172,32 @@ const sc = (
 };
 
 for (const layout of AGENDA_LAYOUTS) {
-	sc(`thr:${layout}`, "thr", layout);
+	// Plain THR only reports: it flows on a Mac's fallback face and Editorial fits
+	// on CI's, so nothing may assert that it flows. Its heights go in messages.
 	sc(`thr:${layout}:bare`, "thr", layout, { mode: "bare" });
+	sc(`long:${layout}`, "thrLong", layout);
+	sc(`long:${layout}:bare`, "thrLong", layout, { mode: "bare" });
 	sc(`mcf:${layout}`, "mcf", layout);
 	sc(`mcf:${layout}:bare`, "mcf", layout, { mode: "bare" });
 }
-sc("thr:grid:copies", "thr", "grid", { copies: 3, duplex: 1 });
-sc("thr:grid:chrome-none", "thr", "grid", { chrome: "none" });
-sc("thr:grid:tabs", "thr", "grid", {
+sc("long:grid:copies", "thrLong", "grid", { copies: 3, duplex: 1 });
+sc("long:grid:chrome-none", "thrLong", "grid", { chrome: "none" });
+// Editorial's fallback OVERWRITES `fellBackFrom` (grid -> editorial), so this
+// path comes back to Grid whether or not the reset effect runs.
+sc("long:grid:via-editorial", "thrLong", "grid", {
 	steps: [
 		{ kind: "tab", layout: "editorial" },
 		{ kind: "tab", layout: "grid" },
 	],
 });
-sc("thr:grid:via-timing", "thr", "grid", {
+// Timing never falls back, so `fellBackFrom` is only cleared by the reset effect.
+sc("long:grid:via-timing", "thrLong", "grid", {
 	steps: [
 		{ kind: "tab", layout: "timing" },
 		{ kind: "tab", layout: "grid" },
 	],
 });
-sc("thr:grid:new-agenda", "thr", "grid", {
+sc("long:grid:new-agenda", "thrLong", "grid", {
 	steps: [{ kind: "fixture", fixture: "mcf" }],
 });
 
@@ -190,11 +212,17 @@ const at = (id: string, i: number): Snapshot => {
 	return s;
 };
 
-const NOTICE: Record<"grid" | "editorial", string> = {
+const NOTICE: Record<"grid" | "editorial" | "spacious", string> = {
 	grid: "This agenda is too long for Grid on 1 page. Showing Timing (2 pages) instead.",
 	editorial:
 		"This agenda is too long for Editorial on 1 page. Showing Timing (2 pages) instead.",
+	spacious:
+		"This agenda is too long for Spacious on 2 pages. Showing Timing (2 pages) instead.",
 };
+
+/** What a failing assertion should say: the natural heights this machine's face
+ *  gave, so a Linux CI failure reports Linux numbers. */
+const nat = (s: Snapshot) => `natural=[${s.natural.join(", ")}]`;
 
 describe.skipIf(!hasChrome)(
 	"print fallback, FitPage's real effect in Chrome",
@@ -213,18 +241,48 @@ describe.skipIf(!hasChrome)(
 			);
 		}, 120_000);
 
-		// protects=the fixture used below really flows on the code as it stood
-		// fails_when=THR stops crossing the cliff (a fixture or layout change), which
-		//   would turn every fallback assertion into a pass about nothing
-		// no_claim=anything about the fallback; this renders `MeetingAgendaPrint` alone
-		it("control: the THR fixture flows in Grid, Editorial and Spacious with no fallback", () => {
+		// protects=the fixture used below really flows on the code as it stood, on THIS
+		//   machine's fallback face, and Timing is what holds it
+		// fails_when=thrAgendaLong stops crossing the cliff (a fixture or layout change,
+		//   or a different face), which would turn every fallback assertion into a pass
+		//   about nothing; or Timing no longer holds it on two 1056px sheets
+		// no_claim=anything about the fallback; this renders `MeetingAgendaPrint` alone.
+		//   Plain THR's heights ride in the message only: Editorial fits on Linux CI
+		it("control: thrAgendaLong flows in Grid, Editorial and Spacious with no fallback", () => {
 			const cliff = (PAGE_H - 2) / MIN_FIT_SCALE;
 			for (const layout of ["grid", "editorial", "spacious"] as const) {
-				const tallest = Math.max(...first(`thr:${layout}:bare`).pages);
-				expect(tallest, layout).toBeGreaterThan(cliff);
+				const s = first(`long:${layout}:bare`);
+				const tallest = Math.max(...s.natural);
+				expect(
+					tallest,
+					`${layout} natural=${tallest} cliff=${cliff} (plain THR ${nat(first(`thr:${layout}:bare`))})`,
+				).toBeGreaterThan(cliff);
 			}
-			// ... and Timing is the one that holds it on two sheets.
-			expect(first("thr:timing:bare").pages).toEqual([PAGE_H, PAGE_H]);
+			// ... and Timing is the one that holds it on two sheets, each under the cliff.
+			const timing = first("long:timing:bare");
+			const timingTallest = Math.max(...timing.natural);
+			expect(timing.pages, `timing ${nat(timing)}`).toEqual([PAGE_H, PAGE_H]);
+			expect(
+				timingTallest,
+				`timing natural=${timingTallest} cliff=${cliff}`,
+			).toBeLessThan(cliff);
+		});
+
+		// protects=the layout attribution of a measurement, which AC 8's counts rest on
+		// fails_when=a sheet's read is filed under another layout's key, or a layout is
+		//   never measured at all (its key is missing)
+		// no_claim=how many times a sheet is read per measurement (AC 8 pins that)
+		it("bare: a measurement lands only under its own layout", () => {
+			for (const fixture of ["long", "mcf"]) {
+				for (const layout of AGENDA_LAYOUTS) {
+					const s = first(`${fixture}:${layout}:bare`);
+					expect(
+						Object.keys(s.reads),
+						`${fixture} ${layout} reads=${JSON.stringify(s.reads)}`,
+					).toEqual([layout]);
+					expect(s.reads[layout], `${fixture} ${layout}`).toBeGreaterThan(0);
+				}
+			}
 		});
 
 		// protects=a one-sheet or Spacious layout that would flow ends on Timing's two sheets
@@ -232,49 +290,58 @@ describe.skipIf(!hasChrome)(
 		//   on a sheet that is not exactly one page tall
 		// no_claim=Timing's own overflow (#1227), or the printed PDF's page count
 		for (const layout of ["grid", "editorial", "spacious"] as const) {
-			it(`${layout} on the THR fixture falls back to two 1056px Timing sheets`, () => {
-				const s = first(`thr:${layout}`);
-				expect(s.pages).toEqual([PAGE_H, PAGE_H]);
-				expect(s.timing).toBe(true);
-				expect(s.blanks).toBe(0);
+			it(`${layout} on thrAgendaLong falls back to two 1056px Timing sheets`, () => {
+				const s = first(`long:${layout}`);
+				expect(s.pages, `${layout} ${nat(s)}`).toEqual([PAGE_H, PAGE_H]);
+				expect(s.timing, `${layout} ${nat(s)}`).toBe(true);
+				expect(s.blanks, `${layout} ${nat(s)}`).toBe(0);
 				// The tab the person picked stays the active one.
-				expect(s.activeTab).toBe(AGENDA_LAYOUT_LABELS[layout]);
+				expect(s.activeTab, `${layout} ${nat(s)}`).toBe(
+					AGENDA_LAYOUT_LABELS[layout],
+				);
 			});
 		}
 
 		// protects=the notice's exact words, shown only after a fallback
-		// fails_when=the words drift, name the wrong layout or page count, or show
-		//   when nothing fell back (Timing asked for, or an agenda that fits)
+		// fails_when=the words drift, name the wrong layout or page count
 		// no_claim=how the line looks in the toolbar at narrow widths
 		it("says why, in the specified words", () => {
-			expect(first("thr:grid").notice).toBe(NOTICE.grid);
-			expect(first("thr:editorial").notice).toBe(NOTICE.editorial);
-			expect(first("thr:spacious").notice).toBe(
-				"This agenda is too long for Spacious on 2 pages. Showing Timing (2 pages) instead.",
-			);
+			for (const layout of ["grid", "editorial", "spacious"] as const) {
+				const s = first(`long:${layout}`);
+				expect(s.notice, `${layout} ${nat(s)}`).toBe(NOTICE[layout]);
+			}
 		});
 
+		// protects=no notice when nothing fell back: Timing asked for, or an agenda that fits
+		// fails_when=the notice shows for Timing (which has nowhere to fall back to) or
+		//   for MCF, which fits every layout
+		// no_claim=that the notice is absent after a fallback was reset (the tab and
+		//   new-agenda scenarios below)
 		it("shows no notice when nothing fell back", () => {
-			expect(first("thr:timing").notice).toBeNull();
-			expect(first("thr:timing").pages).toEqual([PAGE_H, PAGE_H]);
+			const timing = first("long:timing");
+			expect(timing.notice, `timing ${nat(timing)}`).toBeNull();
+			expect(timing.pages, `timing ${nat(timing)}`).toEqual([PAGE_H, PAGE_H]);
 			for (const layout of AGENDA_LAYOUTS) {
-				expect(first(`mcf:${layout}`).notice, layout).toBeNull();
+				const s = first(`mcf:${layout}`);
+				expect(s.notice, `${layout} ${nat(s)}`).toBeNull();
 			}
 		});
 
 		// protects=an agenda that fits renders exactly as before
 		// fails_when=a fallback, a notice, or a different sheet count or height appears
 		//   for MCF, which fits every layout
-		// no_claim=THR-length agendas (above)
+		// no_claim=long agendas (above)
 		for (const layout of AGENDA_LAYOUTS) {
 			it(`${layout} on the MCF fixture is unchanged`, () => {
 				const s = first(`mcf:${layout}`);
-				expect(s.notice).toBeNull();
-				expect(s.pages).toEqual(first(`mcf:${layout}:bare`).pages);
-				expect(s.pages).toEqual(
+				expect(s.notice, `${layout} ${nat(s)}`).toBeNull();
+				expect(s.pages, `${layout} ${nat(s)}`).toEqual(
+					first(`mcf:${layout}:bare`).pages,
+				);
+				expect(s.pages, `${layout} ${nat(s)}`).toEqual(
 					Array.from({ length: AGENDA_LAYOUT_PAGES[layout] }, () => PAGE_H),
 				);
-				expect(s.timing).toBe(layout === "timing");
+				expect(s.timing, `${layout} ${nat(s)}`).toBe(layout === "timing");
 			});
 		}
 
@@ -282,48 +349,58 @@ describe.skipIf(!hasChrome)(
 		// fails_when=the copies count Grid's one sheet (odd), padding blanks between
 		//   Timing's two-sheet copies
 		// no_claim=the packet PDF, which is built by a different route
-		it("copies=3 duplex on the THR grid is 3 copies of 2 sheets and no blanks", () => {
-			const s = first("thr:grid:copies");
-			expect(s.pages).toEqual(Array.from({ length: 6 }, () => PAGE_H));
-			expect(s.blanks).toBe(0);
-			expect(s.timing).toBe(true);
+		it("copies=3 duplex on the long grid is 3 copies of 2 sheets and no blanks", () => {
+			const s = first("long:grid:copies");
+			expect(s.pages, nat(s)).toEqual(Array.from({ length: 6 }, () => PAGE_H));
+			expect(s.blanks, nat(s)).toBe(0);
+			expect(s.timing, nat(s)).toBe(true);
 		});
 
 		// protects=chrome=none (no toolbar) switches silently
 		// fails_when=the notice renders without a toolbar, or the bare view still flows
 		// no_claim=the toolbar of the full view, covered above
 		it("chrome=none falls back with no notice", () => {
-			const s = first("thr:grid:chrome-none");
-			expect(s.pages).toEqual([PAGE_H, PAGE_H]);
-			expect(s.timing).toBe(true);
-			expect(s.notice).toBeNull();
+			const s = first("long:grid:chrome-none");
+			expect(s.pages, nat(s)).toEqual([PAGE_H, PAGE_H]);
+			expect(s.timing, nat(s)).toBe(true);
+			expect(s.notice, nat(s)).toBeNull();
 		});
 
-		// protects=a tab switch away and back measures the requested layout again
-		// fails_when=the fallback outlives the layout it was decided for: Grid goes
-		//   straight to Timing without ever being drawn or measured again
-		// no_claim=that the second measurement agrees with the first (same agenda)
+		// protects=a tab switch away and back measures the requested layout again (AC 8)
+		// fails_when=Grid is not mounted and measured exactly once on return, or Editorial
+		//   is not measured on its own
+		// no_claim=that the reset effect works: Editorial's fallback OVERWRITES
+		//   `fellBackFrom`, so this path returns to Grid with the effect removed too.
+		//   "via Timing" below is the one that tests the reset
 		it("a tab switch away and back re-measures the layout", () => {
-			const id = "thr:grid:tabs";
-			expect(at(id, 0).notice).toBe(NOTICE.grid);
+			const id = "long:grid:via-editorial";
+			expect(at(id, 0).notice, nat(at(id, 0))).toBe(NOTICE.grid);
 			// Editorial is measured on its own and falls back on its own.
-			expect(at(id, 1).notice).toBe(NOTICE.editorial);
-			expect(at(id, 1).activeTab).toBe("Editorial");
-			expect(at(id, 2).notice).toBe(NOTICE.grid);
-			expect(at(id, 2).reads).toBeGreaterThan(0);
-			expect(at(id, 2).pages).toEqual([PAGE_H, PAGE_H]);
+			expect(at(id, 1).reads.editorial, nat(at(id, 1))).toBe(1);
+			expect(at(id, 1).notice, nat(at(id, 1))).toBe(NOTICE.editorial);
+			expect(at(id, 1).activeTab, nat(at(id, 1))).toBe("Editorial");
+			// Back on Grid: its FitPage mounts and measures once more.
+			expect(at(id, 2).reads.grid, nat(at(id, 2))).toBe(1);
+			expect(at(id, 2).notice, nat(at(id, 2))).toBe(NOTICE.grid);
+			expect(at(id, 2).pages, nat(at(id, 2))).toEqual([PAGE_H, PAGE_H]);
 		});
 
+		// protects=the fallback does not outlive the layout it was decided for (AC 8)
+		// fails_when=returning to Grid after Timing goes straight to Timing, never mounting
+		//   or measuring Grid (the reset effect is missing or does not watch `layout`)
+		// no_claim=that the second measurement agrees with the first (same agenda).
+		//   Unlike the Editorial path above, nothing overwrites `fellBackFrom` here:
+		//   Timing never falls back, so only the reset effect clears it
 		it("returning to a layout after Timing measures it again, not remembers the fallback", () => {
-			const id = "thr:grid:via-timing";
-			// Timing is its own layout: no notice, and nothing to measure again.
-			expect(at(id, 1).notice).toBeNull();
-			expect(at(id, 1).activeTab).toBe("Timing");
-			expect(at(id, 1).reads).toBe(0);
-			// Back on Grid: it is mounted and measured afresh (then falls back again).
-			expect(at(id, 2).reads).toBeGreaterThan(0);
-			expect(at(id, 2).notice).toBe(NOTICE.grid);
-			expect(at(id, 2).pages).toEqual([PAGE_H, PAGE_H]);
+			const id = "long:grid:via-timing";
+			// Timing is its own layout: no notice, and Grid is not measured while it shows.
+			expect(at(id, 1).notice, nat(at(id, 1))).toBeNull();
+			expect(at(id, 1).activeTab, nat(at(id, 1))).toBe("Timing");
+			expect(at(id, 1).reads.grid ?? 0, nat(at(id, 1))).toBe(0);
+			// Back on Grid: mounted and measured afresh, exactly once (then falls back again).
+			expect(at(id, 2).reads.grid, nat(at(id, 2))).toBe(1);
+			expect(at(id, 2).notice, nat(at(id, 2))).toBe(NOTICE.grid);
+			expect(at(id, 2).pages, nat(at(id, 2))).toEqual([PAGE_H, PAGE_H]);
 		});
 
 		// protects=a new agenda does not inherit the old one's fallback
@@ -331,12 +408,12 @@ describe.skipIf(!hasChrome)(
 		//   previous (long) one fell back
 		// no_claim=how the loader hands over new data (a router concern)
 		it("new agenda data drops the fallback", () => {
-			const id = "thr:grid:new-agenda";
-			expect(at(id, 0).timing).toBe(true);
+			const id = "long:grid:new-agenda";
+			expect(at(id, 0).timing, nat(at(id, 0))).toBe(true);
 			const after = at(id, 1);
-			expect(after.timing).toBe(false);
-			expect(after.notice).toBeNull();
-			expect(after.pages).toEqual([PAGE_H]);
+			expect(after.timing, nat(after)).toBe(false);
+			expect(after.notice, nat(after)).toBeNull();
+			expect(after.pages, nat(after)).toEqual([PAGE_H]);
 		});
 	},
 );

@@ -58,6 +58,39 @@ export const THR_EXPLAINERS = [
 	["Grammarian", "Introduces a Word of the Day."],
 ].map(([role, description]) => ({ role, description }));
 
+const beat = (
+	roleLabel: string,
+	holder: string | null,
+	detail: string,
+	time: string,
+	marks: TimelineRow["marks"] = null,
+): TimelineRow => ({
+	who: holder ? `${roleLabel} · ${holder}` : roleLabel,
+	roleLabel,
+	holder,
+	detail,
+	minutes: 1,
+	marks,
+	time,
+});
+const handoff = (
+	roleLabel: string,
+	holder: string,
+	detail: string,
+): TimelineRow => ({
+	...beat(roleLabel, holder, detail, ""),
+	minutes: 0,
+	handoff: true,
+});
+const section = (title: string): TimelineRow => ({
+	who: title,
+	detail: "",
+	minutes: 0,
+	marks: null,
+	section: true,
+	time: "",
+});
+
 /** Holders as the agenda prints them, given what follows a guest's name. */
 export function thrAgenda(captions: { veena: string; david: string }): {
 	roles: AgendaRoleEntry[];
@@ -68,38 +101,6 @@ export function thrAgenda(captions: { veena: string; david: string }): {
 	const LAYLA = "Layla Grace Stansfield";
 	const ESRA = "Esra Saleh";
 
-	const beat = (
-		roleLabel: string,
-		holder: string | null,
-		detail: string,
-		time: string,
-		marks: TimelineRow["marks"] = null,
-	): TimelineRow => ({
-		who: holder ? `${roleLabel} · ${holder}` : roleLabel,
-		roleLabel,
-		holder,
-		detail,
-		minutes: 1,
-		marks,
-		time,
-	});
-	const handoff = (
-		roleLabel: string,
-		holder: string,
-		detail: string,
-	): TimelineRow => ({
-		...beat(roleLabel, holder, detail, ""),
-		minutes: 0,
-		handoff: true,
-	});
-	const section = (title: string): TimelineRow => ({
-		who: title,
-		detail: "",
-		minutes: 0,
-		marks: null,
-		section: true,
-		time: "",
-	});
 	const TM = "Toastmaster of the Day";
 	const TTM = "Table Topics Master";
 	const GE = "General Evaluator";
@@ -239,5 +240,107 @@ export function thrAgenda(captions: { veena: string; david: string }): {
 			),
 			beat("President", null, "Adjourns", "1:29"),
 		],
+	};
+}
+
+/** "12:44" + 7 → "12:51". Blank (a handoff or a section) stays blank. */
+function shiftClock(time: string, minutes: number): string {
+	if (!time) return time;
+	const [h = "0", m = "0"] = time.split(":");
+	const total = ((Number(h) % 12) * 60 + Number(m) + minutes) % 720;
+	const h12 = Math.floor(total / 60) || 12;
+	return `${h12}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/** Extra speaker / evaluator pairs `thrAgendaLong` adds to THR's three. */
+const LONG_PAIRS = [
+	{
+		speaker: "Priya Raman",
+		evaluator: "Marcus Bell",
+		detail: '"Ice Breaker" · Level 1',
+	},
+];
+
+/** Roles a fuller club also fills, which appear on the roster and not as a beat. */
+const LONG_EXTRA_ROLES: AgendaRoleEntry[] = [
+	{ label: "Ballot Counter", name: "Sana Qureshi" },
+	{ label: "Hospitality", name: "Tomas Idowu" },
+	{ label: "Photographer", name: null },
+];
+
+/**
+ * THR's agenda with a fourth speaker / evaluator pair and three more roster-only
+ * roles, in the same shape: the longer agenda a club with a full roster prints. THR as it
+ * stands sits so near `FitPage`'s flow cliff (`(PAGE_H - 2) / MIN_FIT_SCALE` =
+ * 1464px) that WHICH side Editorial lands on depends on the machine's fallback
+ * face (it flows on macOS, fits on Linux CI's pinned one), so a test of what
+ * happens to an agenda that flows needs this one: it flows in Grid, Editorial
+ * and Spacious on both, and still fits Timing on its two sheets. Timing's own
+ * overflow is #1227.
+ */
+export function thrAgendaLong(captions: { veena: string; david: string }): {
+	header: AgendaHeader;
+	roles: AgendaRoleEntry[];
+	rows: TimelineRow[];
+} {
+	const { roles: baseRoles, rows: baseRows } = thrAgenda(captions);
+	const k = LONG_PAIRS.length;
+	const TM = "Toastmaster of the Day";
+	const LAYLA = "Layla Grace Stansfield";
+	const eval3 = { green: 2, yellow: 2.5, red: 3 };
+
+	const roles: AgendaRoleEntry[] = [];
+	for (const r of baseRoles) {
+		roles.push(r);
+		if (r.label === "Evaluator 3") {
+			LONG_PAIRS.forEach((p, i) => {
+				roles.push({ label: `Speaker ${4 + i}`, name: p.speaker });
+				roles.push({ label: `Evaluator ${4 + i}`, name: p.evaluator });
+			});
+		}
+	}
+
+	const rows: TimelineRow[] = [];
+	let offset = 0;
+	for (const r of baseRows) {
+		rows.push({ ...r, time: shiftClock(r.time, offset) });
+		if (r.roleLabel === "Speaker 3") {
+			LONG_PAIRS.forEach((p, i) => {
+				rows.push(
+					handoff(
+						TM,
+						LAYLA,
+						`Introduces the Evaluator: ${p.evaluator} · asks for the speech objectives and timing`,
+					),
+					beat(
+						`Speaker ${4 + i}`,
+						p.speaker,
+						p.detail,
+						shiftClock(r.time, offset + 7 * (i + 1)),
+					),
+				);
+			});
+			offset += 7 * k;
+		}
+		if (r.roleLabel === "Evaluator 3") {
+			LONG_PAIRS.forEach((p, i) => {
+				rows.push(
+					beat(
+						`Evaluator ${4 + i}`,
+						p.evaluator,
+						`Evaluates ${p.speaker}`,
+						shiftClock(r.time, offset + 3 * (i + 1)),
+						eval3,
+					),
+				);
+			});
+			offset += 3 * k;
+		}
+	}
+	roles.push(...LONG_EXTRA_ROLES);
+	return {
+		header: { ...THR_HEADER, timeRange: "12:00 – 1:40 PM" },
+		roles,
+		rows,
 	};
 }

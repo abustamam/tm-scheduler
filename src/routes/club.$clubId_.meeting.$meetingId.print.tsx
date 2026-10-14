@@ -480,6 +480,8 @@ export function PrintAgendaView({
 								key={l.id}
 								to="/club/$clubId/meeting/$meetingId/print"
 								params={{ clubId, meetingId }}
+								// The tab the person picked, whatever is drawn instead (#1225).
+								aria-current={l.id === layout ? "page" : undefined}
 								// Switching layout keeps the packet's copy count and duplex
 								// flag (#1166), so the person printing does not lose them.
 								// Written only after mount, like the copies themselves: the
