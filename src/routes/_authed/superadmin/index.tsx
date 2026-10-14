@@ -13,6 +13,7 @@ import {
 	CLUB_NUMBER_MAX,
 	CLUB_NUMBER_PATTERN,
 } from "#/lib/club-charter";
+import { REBUILD_CONFIRM } from "#/lib/demo-club-copy";
 import {
 	getDemoClubConsole,
 	listConsoleClubs,
@@ -176,10 +177,6 @@ function SuperadminConsole() {
 		</PageContainer>
 	);
 }
-
-/** What the confirm says before a rebuild (#1199). */
-const REBUILD_CONFIRM =
-	"Rebuilding deletes everything in the demo club, including people you added by hand, and builds it fresh. Their accounts are kept. Use @example.com addresses for anyone you add during a demo.";
 
 type DemoConsole = Awaited<ReturnType<typeof getDemoClubConsole>>;
 

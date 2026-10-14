@@ -31,6 +31,7 @@ import { Label } from "#/components/ui/label";
 import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { clubExportUrl, exportLinkAllowed } from "#/lib/club-export-url";
+import { DEMO_INVITE_NOT_SENT } from "#/lib/demo-club-copy";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { type InviteState, inviteStateOf } from "#/lib/invite-state";
 import { formatTenure } from "#/lib/members";
@@ -698,7 +699,9 @@ function RowInviteControl({
 		setBusy(true);
 		try {
 			const res = await inviteMember({ data: { clubId, memberId } });
-			if (res.outcome === "no_email") {
+			if (res.notSent === "demo") {
+				toast.info(DEMO_INVITE_NOT_SENT);
+			} else if (res.outcome === "no_email") {
 				toast.error("Add an email for this member first.");
 			} else if (res.outcome === "roster_conflict") {
 				// The one refusal an unqualified success toast used to hide (#756
@@ -773,8 +776,14 @@ function InviteAllDialog({
 		setBusy(true);
 		try {
 			const res = await inviteAllMembers({ data: { clubId } });
+			// The demo club sends no mail (#1200); say so instead of "Sent 0 invites.",
+			// and keep the skip counts, which are still true there.
+			const head =
+				res.notSent === "demo"
+					? DEMO_INVITE_NOT_SENT
+					: `Sent ${res.sent} invite${res.sent === 1 ? "" : "s"}.`;
 			const summary =
-				`Sent ${res.sent} invite${res.sent === 1 ? "" : "s"}.` +
+				head +
 				(res.noEmail > 0 ? ` ${res.noEmail} skipped (no email).` : "") +
 				(res.rosterConflict > 0
 					? ` ${res.rosterConflict} skipped (another club's roster has a different email).`

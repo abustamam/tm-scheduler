@@ -432,6 +432,7 @@ export async function loadAreaHealth(
 			clubName: clubs.name,
 			clubNumber: clubs.clubNumber,
 			archivedAt: clubs.archivedAt,
+			isDemo: clubs.isDemo,
 		})
 		.from(areaClubs)
 		.leftJoin(clubs, eq(clubs.id, areaClubs.clubId))
@@ -448,10 +449,16 @@ export async function loadAreaHealth(
 			// and number the area stored, and as "not on GavelUp", the same as a club
 			// that never joined. The payload must not say it was archived, or the
 			// takedown itself would be disclosed to every Area Director.
+			//
+			// The demo club (#1200) is never live: it holds made-up people, so its
+			// numbers are not a real club's health. Placement is refused too
+			// (`areas-logic.ts`), which leaves this for a row placed before the
+			// refusal or by hand.
 			const live =
 				row.clubId !== null &&
 				row.clubName !== null &&
-				!isClubArchived({ archivedAt: row.archivedAt });
+				!isClubArchived({ archivedAt: row.archivedAt }) &&
+				!row.isDemo;
 			const status: ClubHealthStatus = live ? "on_gavelup" : "not_on_gavelup";
 			return {
 				areaClubId: row.areaClubId,

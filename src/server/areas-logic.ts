@@ -72,6 +72,7 @@ export const DIRECTOR_NOT_VERIFIED_MESSAGE =
 	"That account can't be made Area Director: its email isn't verified";
 export const ARCHIVED_CLUB_MESSAGE =
 	"An archived club can't be placed in an area";
+export const DEMO_CLUB_MESSAGE = "The demo club can't be placed in an area";
 export const CLUB_NUMBER_CHANGED_MESSAGE =
 	"That club's number changed. Try again";
 export const ASSIGN_TARGET_GONE_MESSAGE =
@@ -227,11 +228,17 @@ async function lockClubRow(
 			name: clubs.name,
 			clubNumber: clubs.clubNumber,
 			archivedAt: clubs.archivedAt,
+			isDemo: clubs.isDemo,
 		})
 		.from(clubs)
 		.where(eq(clubs.id, clubId))
 		.for("update");
 	if (!club) throw new Error("Club not found");
+	// Read off the locked row, so a flag set a moment ago cannot slip through a
+	// check made before it. Refused whatever `allowArchived` says: the demo club
+	// is rebuilt by delete-and-create, and `area_clubs.club_id` is ON DELETE SET
+	// NULL, so a placed one would leave an orphaned row on every rebuild (#1200).
+	if (club.isDemo) throw new Error(DEMO_CLUB_MESSAGE);
 	if (club.archivedAt && !opts.allowArchived) {
 		throw new Error(ARCHIVED_CLUB_MESSAGE);
 	}
@@ -601,7 +608,11 @@ export async function getConsoleArea(
 						})
 						.from(clubs)
 						.where(
-							and(inArray(clubs.clubNumber, numbers), isNull(clubs.archivedAt)),
+							and(
+								inArray(clubs.clubNumber, numbers),
+								isNull(clubs.archivedAt),
+								eq(clubs.isDemo, false),
+							),
 						)
 				).flatMap((c) =>
 					c.clubNumber && !placedThisYear.has(c.id)
@@ -631,7 +642,7 @@ export async function getConsoleArea(
 		await db
 			.select({ id: clubs.id, name: clubs.name, clubNumber: clubs.clubNumber })
 			.from(clubs)
-			.where(isNull(clubs.archivedAt))
+			.where(and(isNull(clubs.archivedAt), eq(clubs.isDemo, false)))
 			.orderBy(asc(clubs.name))
 	).filter((c) => !placedThisYear.has(c.id));
 
