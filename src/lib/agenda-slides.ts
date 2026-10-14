@@ -13,10 +13,11 @@ import {
 	HANDOFF_ROLES,
 	hasAnyFunctionaryRole,
 	hasAnyReportingFunctionaryRole,
-	introducedNames,
+	introducedSlots,
 	matchesRole,
 	numbered,
 	orderEvaluators,
+	visitingFlag,
 } from "./agenda-runsheet";
 import type { BeatTiming } from "./agenda-template-slides";
 import type {
@@ -131,8 +132,16 @@ export type HandoffTarget =
 	| "the General Evaluator"
 	| "the speech evaluators";
 
-/** One projected slide. Date formatting is deferred to the renderer. */
-export type Slide =
+/** One projected slide. Date formatting is deferred to the renderer.
+ *
+ *  `visiting` (#1164) is true when a name this slide SHOWS is a visiting
+ *  Toastmaster's "Name (V)", so the slide owes the room the (V) key. The
+ *  builder sets it from the slots it names, and only for names the layout
+ *  renders (`generalEvaluation` shows no holder, so it never carries it); the
+ *  layout reads it and never looks at the text. Absent, not `false`, otherwise. */
+export type Slide = SlideShape & { visiting?: true };
+
+type SlideShape =
 	| {
 			kind: "title";
 			clubName: string;
@@ -425,7 +434,9 @@ const byRole = (slots: AgendaSlot[], role: RoleRef) =>
  *  follows through to the slide the way it follows through to the printed row. */
 function holder(slots: AgendaSlot[], role: RoleRef): LegendEntry | null {
 	const [s] = byRole(slots, role);
-	return s ? { role: s.roleName, name: assigneeDisplay(s) } : null;
+	return s
+		? { role: s.roleName, name: assigneeDisplay(s), ...visitingFlag(s) }
+		: null;
 }
 
 /**
@@ -447,10 +458,19 @@ function pushHandoff(
 	// reason — a sixth hand-off added without names should be a type error, not a
 	// slide that silently omits the people, which is the bug this closed. A `= []`
 	// here would have disarmed that from the one place it is constructed.
-	toNames: string[],
+	toSlots: AgendaSlot[],
 ): void {
 	if (from != null && present)
-		deck.push({ kind: "handoff", from, to, toLabel, toNames });
+		deck.push({
+			kind: "handoff",
+			from,
+			to,
+			toLabel,
+			// The names AND the (V) key come from the same slots, so the slide cannot
+			// show a "(V)" the key does not cover (#1164).
+			toNames: toSlots.map((s) => assigneeDisplay(s)),
+			...visitingFlag(from, ...toSlots),
+		});
 }
 
 const SPEECH_ORDINALS = [
@@ -564,7 +584,11 @@ export function buildSlideDeck({
 	// slide. An enabled-but-unclaimed role still has a slot and still renders, as
 	// the open placeholder.
 	if (tmOwner) {
-		deck.push({ kind: "toastmaster", name: tmOwner.name });
+		deck.push({
+			kind: "toastmaster",
+			name: tmOwner.name,
+			...visitingFlag(tmOwner),
+		});
 	}
 
 	const themeText = meeting.theme?.trim() || null;
@@ -602,8 +626,11 @@ export function buildSlideDeck({
 							? {
 									role: grammarian[0].roleName,
 									name: assigneeDisplay(grammarian[0]),
+									...visitingFlag(grammarian[0]),
 								}
 							: null,
+					// Only the presenter is a person on this slide.
+					...visitingFlag(grammarian[0]),
 				}
 			: null;
 
@@ -667,10 +694,11 @@ export function buildSlideDeck({
 			"the General Evaluator",
 			generalEvaluator.length > 0 && anyFunctionary,
 			`the ${geLabel}`,
-			introducedNames(slots, HANDOFF_ROLES.generalEvaluator),
+			introducedSlots(slots, HANDOFF_ROLES.generalEvaluator),
 		);
 	}
 	if (introOwner != null && anyFunctionary) {
+		const team = buildLegend(slots);
 		deck.push({
 			kind: "functionaryIntro",
 			// The CLUB's name for the role, per `holder` — the same rule the deck's
@@ -679,7 +707,9 @@ export function buildSlideDeck({
 			// "General Evaluator" over the Toastmaster who is covering.
 			owner: introOwner.role,
 			name: introOwner.name,
-			team: buildLegend(slots),
+			team,
+			// The layout shows the owner and the FILLED team members.
+			...visitingFlag(introOwner, ...team),
 		});
 	}
 
@@ -736,6 +766,7 @@ export function buildSlideDeck({
 				projectLevel: s.projectLevel,
 				time: speechTime(s),
 				link: s.presentationUrl ?? null,
+				...visitingFlag(s),
 			});
 		});
 		deck.push({
@@ -744,6 +775,8 @@ export function buildSlideDeck({
 			hasTimer,
 			caller: tmOwner,
 			ballotUrl,
+			// Nominees and the caller line are both names on this slide.
+			...visitingFlag(tmOwner, ...speakers),
 		});
 	}
 
@@ -753,7 +786,7 @@ export function buildSlideDeck({
 		"the Table Topics Master",
 		ttOwner != null,
 		`the ${ttmLabel}`,
-		introducedNames(slots, HANDOFF_ROLES.tableTopicsMaster),
+		introducedSlots(slots, HANDOFF_ROLES.tableTopicsMaster),
 	);
 	if (ttOwner) {
 		deck.push({
@@ -782,12 +815,14 @@ export function buildSlideDeck({
 			word: wodWord,
 			definition: wodWord ? wodDefinition : null,
 			notes: tableTopicsNoteLines(meeting.tableTopicsNotes),
+			...visitingFlag(ttOwner),
 		});
 		deck.push({
 			kind: "voteTableTopics",
 			hasTimer,
 			caller: ttOwner,
 			ballotUrl,
+			...visitingFlag(ttOwner),
 		});
 	}
 
@@ -802,7 +837,7 @@ export function buildSlideDeck({
 		"the General Evaluator",
 		generalEvaluator.length > 0,
 		`the ${geLabel}`,
-		introducedNames(slots, HANDOFF_ROLES.generalEvaluator),
+		introducedSlots(slots, HANDOFF_ROLES.generalEvaluator),
 	);
 
 	const evaluators = orderEvaluators(byRole(slots, ROLE.evaluator), slots);
@@ -826,6 +861,7 @@ export function buildSlideDeck({
 				evaluator: assigneeDisplay(s),
 				speaker: s.evaluates?.speakerName ?? null,
 				time: beatTiming(runOfShow, "evaluation"),
+				...visitingFlag(s),
 			});
 		});
 		deck.push({
@@ -837,6 +873,7 @@ export function buildSlideDeck({
 			// Evaluator. The first only rewrites copy (`hasTimer`, above).
 			caller: geOwner,
 			ballotUrl,
+			...visitingFlag(geOwner, ...evaluators),
 		});
 	}
 
@@ -855,6 +892,7 @@ export function buildSlideDeck({
 			owner: geOwner.role,
 			name: geOwner.name,
 			time: beatTiming(runOfShow, "evaluatorEvaluation"),
+			...visitingFlag(geOwner),
 		});
 	}
 
@@ -863,11 +901,13 @@ export function buildSlideDeck({
 	// to call on, and the team lists the same subset so the slide never names
 	// someone with no report.
 	if (geOwner != null && hasAnyReportingFunctionaryRole(slots)) {
+		const reporting = buildReportingLegend(slots);
 		deck.push({
 			kind: "functionaryReports",
 			owner: geOwner.role,
 			name: geOwner.name,
-			team: buildReportingLegend(slots),
+			team: reporting,
+			...visitingFlag(geOwner, ...reporting),
 		});
 	}
 
@@ -944,5 +984,6 @@ export function nextMeetingSlide(
 		toastmaster: next.toastmaster,
 		roles: next.roles,
 		signupUrl,
+		...visitingFlag(next.toastmaster, ...next.roles),
 	};
 }

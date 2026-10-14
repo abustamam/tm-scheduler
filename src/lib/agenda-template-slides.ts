@@ -56,7 +56,7 @@
  * — they are meeting-level text the club typed, not a beat, so they would
  * otherwise be silently dropped from a contest.
  */
-import type { AgendaRow } from "./agenda-runsheet";
+import { type AgendaRow, visitingFlag } from "./agenda-runsheet";
 import {
 	type ClubForDeck,
 	type MeetingForDeck,
@@ -240,6 +240,9 @@ export function buildTemplateSlideDeck({
 			// Once, on the segment — see `notesRow` above.
 			notes:
 				row === notesRow ? tableTopicsNoteLines(meeting.tableTopicsNotes) : [],
+			// The holder rides in `label` (the header), not the body, so the (V) key
+			// is the ROW's flag, set from the slot (#1164).
+			...visitingFlag(row),
 		});
 	}
 

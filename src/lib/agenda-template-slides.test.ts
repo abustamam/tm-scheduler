@@ -23,7 +23,7 @@ import type { ClubForDeck, MeetingForDeck, Slide } from "./agenda-slides";
 import type { TemplateRoleRow } from "./agenda-template-rows";
 import { buildTemplateSlideDeck } from "./agenda-template-slides";
 import { CONTEST_TEMPLATE } from "./contest-template";
-import { slideName } from "./slide-layout";
+import { slideLayout, slideName } from "./slide-layout";
 import { formatTableTopicsTiming } from "./table-topics-limits";
 
 const meeting: MeetingForDeck = {
@@ -673,5 +673,77 @@ describe("What's on tap for next meeting on the templated deck (#932)", () => {
 			JSON.stringify(build()),
 		);
 		expect(kinds(build())).not.toContain("nextMeeting");
+	});
+});
+
+// The (V) key on a templated deck (#1164): a template slide's holder sits in its
+// HEADER ("Contestant 1 · Jane Doe (V)"), so the key is the ROW's flag, set from
+// the slot by `toRow`, never read back off the text.
+describe("the (V) key on a templated deck (#1164)", () => {
+	const visiting = (i: number, name: string): AgendaSlot => ({
+		...contestant(i, name),
+		assigneeIsGuest: true,
+		assigneeIsVisitingToastmaster: true,
+	});
+	const legends = (rows: AgendaRow[], tableTopicsNotes: string | null = null) =>
+		buildTemplateSlideDeck({
+			meeting: { ...meeting, tableTopicsNotes },
+			club,
+			rows,
+		}).flatMap((slide) => {
+			const l = slideLayout(slide, null);
+			return l.chrome === "content" && slide.kind === "templateBeat"
+				? [{ header: l.header, legend: l.body.legend }]
+				: [];
+		});
+
+	// protects=a visiting Toastmaster holding a contest role gets the legend on
+	// that role's slides, whose header names them, and a member, a Visitor or a
+	// member whose own name ends " (V)" gets none;
+	// fails_when=the legend is decided from the slide's body text (the header holds
+	// the name), or from any " (V)" in the label;
+	// no_claim=none beyond protects.
+	it("shows the legend on the visiting contestant's slides, and only theirs", () => {
+		const withVisitor = legends(
+			contestRows([visiting(0, "Jane Doe"), contestant(1, "Ann Lee")]),
+		);
+		const visitorSlides = withVisitor.filter((l) =>
+			l.header.includes("Jane Doe (V)"),
+		);
+		expect(visitorSlides.length).toBeGreaterThan(0);
+		for (const l of visitorSlides) expect(l.legend, l.header).not.toBeNull();
+		for (const l of withVisitor.filter((l) => !l.header.includes("(V)")))
+			expect(l.legend, l.header).toBeNull();
+
+		const lookalike = legends(
+			contestRows([contestant(0, "Pat Lee (V)"), contestant(1, "Ann Lee")]),
+		);
+		expect(lookalike.some((l) => l.header.includes("Pat Lee (V)"))).toBe(true);
+		expect(lookalike.every((l) => l.legend === null)).toBe(true);
+	});
+
+	// protects=a Table Topics note a club typed ("greet our guest (V)") never asks
+	// for the key, while the same slide for a visiting master still does;
+	// fails_when=the key is read from the note lines;
+	// no_claim=none beyond protects.
+	it("is not asked for by a note that contains (V), and is by a visiting master", () => {
+		const ttRow = (who: string, visiting?: true): AgendaRow =>
+			({
+				who,
+				roleLabel: "Table Topics",
+				holder: who,
+				roleKey: "table_topics_master",
+				slotId: "t1",
+				detail: "",
+				minutes: 10,
+				marks: null,
+				...(visiting ? { visiting } : {}),
+			}) as AgendaRow;
+		const note = "Please greet our guest (V)";
+		const noFlag = legends([ttRow("Table Topics · Ann Lee")], note);
+		expect(noFlag).toHaveLength(1);
+		expect(noFlag[0]?.legend).toBeNull();
+		const flagged = legends([ttRow("Table Topics · Jane Doe (V)", true)], note);
+		expect(flagged[0]?.legend).not.toBeNull();
 	});
 });

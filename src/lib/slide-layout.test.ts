@@ -1464,45 +1464,57 @@ describe("the (V) key on a deck slide (#1164)", () => {
 		if (l.chrome !== "content") throw new Error("expected a content slide");
 		return l.body.legend;
 	};
-	const tableTopics = (master: string) =>
-		slideLayout(
-			{
-				kind: "tableTopics",
-				master,
-				timing: "1–2 minutes per speaker",
-				word: "Momentum",
-				definition: "impetus gained by a moving object",
-				notes: [],
-			},
-			null,
-		);
+	const tableTopicsSlide = (master: string): Slide => ({
+		kind: "tableTopics",
+		master,
+		timing: "1–2 minutes per speaker",
+		word: "Momentum",
+		definition: "impetus gained by a moving object",
+		notes: [],
+	});
+	const speechSlide = (over: Partial<Slide & { kind: "speech" }>): Slide => ({
+		kind: "speech",
+		label: "First Speech",
+		speaker: "Jane Doe",
+		title: null,
+		projectLevel: null,
+		time: "5–7 minutes",
+		link: null,
+		...over,
+	});
+	const nextMeeting = (
+		roles: { label: string; names: string[]; openCount: number }[],
+		visiting?: true,
+	): Slide => ({
+		kind: "nextMeeting",
+		scheduledAt: new Date("2026-07-09T23:45:00Z"),
+		timezone: "America/Chicago",
+		location: null,
+		theme: null,
+		meetingNumber: null,
+		toastmaster: { label: "Toastmaster", names: ["Ann Lee"], openCount: 0 },
+		roles,
+		signupUrl: null,
+		...(visiting ? { visiting } : {}),
+	});
 
-	// protects=a slide that names a visiting Toastmaster carries the one-line key,
-	// whichever body form it is (centered, bullets, the roster) and wherever in the
-	// line the name falls (alone, after a role, inside a joined list);
-	// fails_when=the key is missing from a form, or the same slide with a member or
-	// a "· Guest" visitor shows it;
-	// no_claim=in-memory slide descriptors stand in for `buildSlideDeck`; the
-	// renderers drawing the line are covered in deck-to-pptx.test.ts and the
-	// present-view test.
-	it("is set on a slide that names a (V), and only then", () => {
-		expect(legendOf({ kind: "toastmaster", name: "Jane Doe (V)" })).toBe(
-			VISITING_TOASTMASTER_LEGEND,
-		);
+	// protects=the key is decided by the slide's own `visiting` flag, whichever body
+	// form it is (centered, bullets, the roster) and however the name is laid out;
+	// fails_when=the flag is ignored (no legend on a flagged slide) or a slide
+	// without it (a member, a "· Guest" visitor) shows one;
+	// no_claim=in-memory slide descriptors stand in for `buildSlideDeck`, which
+	// sets the flag from the slots (agenda-parity.test.ts); the renderers drawing
+	// the line are covered in deck-to-pptx.test.ts and the present-view test.
+	it("is set on a flagged slide, and only then", () => {
+		expect(
+			legendOf({ kind: "toastmaster", name: "Jane Doe (V)", visiting: true }),
+		).toBe(VISITING_TOASTMASTER_LEGEND);
 		expect(legendOf({ kind: "toastmaster", name: "Jane Doe" })).toBeNull();
 		expect(
 			legendOf({ kind: "toastmaster", name: "Jane Doe · Guest" }),
 		).toBeNull();
 		expect(
-			legendOf({
-				kind: "speech",
-				label: "First Speech",
-				speaker: "Jane Doe (V)",
-				title: null,
-				projectLevel: null,
-				time: "5–7 minutes",
-				link: null,
-			}),
+			legendOf(speechSlide({ speaker: "Jane Doe (V)", visiting: true })),
 		).toBe(VISITING_TOASTMASTER_LEGEND);
 		expect(
 			legendOf({
@@ -1511,73 +1523,109 @@ describe("the (V) key on a deck slide (#1164)", () => {
 				to: "the speakers",
 				toLabel: "the speakers",
 				toNames: ["Bo Chen", "Jane Doe (V)"],
-			}),
-		).toBe(VISITING_TOASTMASTER_LEGEND);
-		// The next-meeting roster: a (V) inside a joined list, and none.
-		expect(
-			legendOf({
-				kind: "nextMeeting",
-				scheduledAt: new Date("2026-07-09T23:45:00Z"),
-				timezone: "America/Chicago",
-				location: null,
-				theme: null,
-				meetingNumber: null,
-				toastmaster: { label: "Toastmaster", names: ["Ann Lee"], openCount: 0 },
-				roles: [
-					{
-						label: "Speaker",
-						names: ["Bo Chen", "Jane Doe (V)"],
-						openCount: 0,
-					},
-				],
-				signupUrl: null,
+				visiting: true,
 			}),
 		).toBe(VISITING_TOASTMASTER_LEGEND);
 		expect(
-			legendOf({
-				kind: "nextMeeting",
-				scheduledAt: new Date("2026-07-09T23:45:00Z"),
-				timezone: "America/Chicago",
-				location: null,
-				theme: null,
-				meetingNumber: null,
-				toastmaster: { label: "Toastmaster", names: ["Ann Lee"], openCount: 0 },
-				roles: [{ label: "Speaker", names: ["Bo Chen"], openCount: 1 }],
-				signupUrl: null,
-			}),
+			legendOf(
+				nextMeeting(
+					[
+						{
+							label: "Speaker",
+							names: ["Bo Chen", "Jane Doe (V)"],
+							openCount: 0,
+						},
+					],
+					true,
+				),
+			),
+		).toBe(VISITING_TOASTMASTER_LEGEND);
+		expect(
+			legendOf(
+				nextMeeting([{ label: "Speaker", names: ["Bo Chen"], openCount: 1 }]),
+			),
 		).toBeNull();
 	});
 
-	// protects=free text a person typed does not ask for the key: a speech title or
-	// a Table Topics definition that happens to end in " (V)" is not a name;
-	// fails_when=the key is decided from every string on the slide, so a title
-	// such as "Vitamins (V)" prints a legend for a visitor who is not there;
-	// no_claim=a NAME typed with a trailing " (V)" is indistinguishable from the
-	// marker by design: the key is read off the rendered string.
-	it("is not set by a speech title or a definition", () => {
+	// protects=text a person typed never asks for the key: a name ending " (V)" with
+	// no flag, a speech title, a Table Topics definition and a template note that
+	// contain " (V)" all print no legend;
+	// fails_when=the key is decided by scanning the slide's strings for " (V)",
+	// which is what this replaced: "Vitamin (V), mineral" and a member named
+	// "Pat Lee (V)" then print a legend for a visitor who is not there;
+	// no_claim=none: the rendered marker is not read at all.
+	it("is not asked for by a string that merely contains (V)", () => {
+		expect(legendOf({ kind: "toastmaster", name: "Pat Lee (V)" })).toBeNull();
 		expect(
-			legendOf({
-				kind: "speech",
-				label: "First Speech",
-				speaker: "Jane Doe",
-				title: "Eat well (V)",
-				projectLevel: null,
-				time: "5–7 minutes",
-				link: null,
-			}),
+			legendOf(
+				speechSlide({
+					speaker: "Pat Lee (V)",
+					title: "Vitamin (V), mineral, or placebo?",
+				}),
+			),
 		).toBeNull();
-		const tt = tableTopics("Ann Lee");
+		expect(legendOf(speechSlide({ title: "Eat well (V)" }))).toBeNull();
+		const tt = slideLayout(tableTopicsSlide("Ann Lee"), null);
 		if (tt.chrome !== "content") throw new Error("expected content");
 		expect(tt.body.legend).toBeNull();
+		const withDefinition = slideLayout(
+			{
+				...tableTopicsSlide("Ann Lee"),
+				definition: "a shorthand (V) for visiting",
+			} as Slide,
+			null,
+		);
+		if (withDefinition.chrome !== "content")
+			throw new Error("expected content");
+		expect(withDefinition.body.legend).toBeNull();
+		expect(
+			legendOf({
+				kind: "templateBeat",
+				notes: ["Please greet our guest (V)"],
+				label: "Welcome",
+				detail: null,
+				minutes: 2,
+				timing: null,
+			}),
+		).toBeNull();
+		expect(
+			legendOf(
+				nextMeeting([
+					{ label: "Speaker", names: ["Pat Lee (V)"], openCount: 0 },
+				]),
+			),
+		).toBeNull();
+	});
+
+	// protects=a template beat's holder sits in the slide HEADER ("Contestant 1 ·
+	// Jane Doe (V)"), and the flag still earns the legend there;
+	// fails_when=the legend is read from the body only;
+	// no_claim=the template path building the flag: agenda-template-slides.test.ts.
+	it("is set on a template beat whose header names the visitor", () => {
+		const beat = {
+			kind: "templateBeat" as const,
+			notes: [],
+			label: "Contestant 1 · Jane Doe (V)",
+			detail: null,
+			minutes: 3,
+			timing: null,
+		};
+		expect(legendOf(beat)).toBeNull();
+		expect(legendOf({ ...beat, visiting: true })).toBe(
+			VISITING_TOASTMASTER_LEGEND,
+		);
 	});
 
 	// protects=the Table Topics slide keeps its definition note AND gains the key
-	// when its master is a (V): the two lines are separate fields, neither
+	// when its master is flagged: the two lines are separate fields, neither
 	// replacing the other;
 	// fails_when=the legend overwrites `note`, or `note` is dropped to make room;
 	// no_claim=whether the two fit one slide: slide-fit measures that in a browser.
 	it("keeps the Table Topics note beside the key", () => {
-		const l = tableTopics("Jane Doe (V)");
+		const l = slideLayout(
+			{ ...tableTopicsSlide("Jane Doe (V)"), visiting: true },
+			null,
+		);
 		if (l.chrome !== "content" || l.body.form !== "bullets")
 			throw new Error("expected bullets");
 		expect(l.body.items[0]).toBe("Table Topic Master: Jane Doe (V)");

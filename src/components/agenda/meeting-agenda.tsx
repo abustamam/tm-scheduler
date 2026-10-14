@@ -39,9 +39,10 @@ import {
 } from "#/components/ui/sheet";
 import { showWriteError } from "#/components/write-error-toast";
 import {
-	assigneeDisplayName,
 	buildRoleCounts,
+	isVisitingSlot,
 	slotAccessibleLabel,
+	slotAssigneeDisplay,
 	slotLabel,
 	summarizeAgenda,
 	VISITING_TOASTMASTER_LEGEND,
@@ -310,9 +311,7 @@ export function MeetingAgenda({
 	const speakerSlots = slots.filter((s) => s.isSpeakerRole);
 	// A visiting Toastmaster reads "Name (V)" on screen as on paper, so the key
 	// shows once, under the list, whenever one holds a slot (#1164).
-	const showsVisitingMarker = slots.some(
-		(s) => s.assigneeIsGuest && s.assigneeIsVisitingToastmaster,
-	);
+	const showsVisitingMarker = slots.some(isVisitingSlot);
 	// The paired evaluator lineup, for the same ↑↓ reorder speakers get. Pairing
 	// is positional (Evaluator N evaluates Speaker N), so reordering evaluators
 	// is how a manager decides who evaluates whom. `pairedRoleIds` holds the
@@ -675,25 +674,9 @@ export function MeetingAgenda({
 
 													{slot.assigneeName ? (
 														<p className="text-sm text-muted-foreground">
-															{slot.assigneeIsGuest &&
-															slot.assigneeIsVisitingToastmaster ? (
-																// The same "Name (V)" string print and the deck
-																// carry (#1164); the legend sits under the list.
-																assigneeDisplayName(
-																	slot.assigneeName,
-																	true,
-																	true,
-																)
-															) : (
-																<>
-																	{slot.assigneeName}
-																	{slot.assigneeIsGuest ? (
-																		<span className="ml-1 rounded bg-muted px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-																			Guest
-																		</span>
-																	) : null}
-																</>
-															)}
+															{/* The same string print and the deck carry: "Name",
+															    "Name · Guest" or "Name (V)" (#1164). */}
+															{slotAssigneeDisplay(slot)}
 															{isMine ? (
 																<span className="text-primary"> (you)</span>
 															) : null}

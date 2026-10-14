@@ -2,8 +2,8 @@
 // renderers — meeting-present.tsx (screen) and deck-to-pptx.ts (.pptx) — consume
 // this descriptor, so copy/layout never drifts between them. Pure + unit-tested.
 
+import { VISITING_TOASTMASTER_LEGEND } from "#/lib/agenda";
 import { APP_LOCALE } from "#/lib/format";
-import { carriesVisitingMarker, VISITING_TOASTMASTER_LEGEND } from "./agenda";
 import type { LegendEntry } from "./agenda-runsheet";
 import { introducedSuffix, OPEN_LABEL } from "./agenda-runsheet";
 import type { HandoffTarget, Slide } from "./agenda-slides";
@@ -212,37 +212,18 @@ export function footerDate(d: Date, tz: string): string {
 	return fmtDate(d, tz, false);
 }
 
-/** The text of a body that can hold an assignee's name — what the (V) key is
- *  decided from. Free text a person typed (a Table Topics note, a definition,
- *  award categories) is left out, so only a rendered NAME can ask for the key. */
-function nameBearingText(body: BodyCore): string[] {
-	switch (body.form) {
-		case "centered":
-			return body.lines.flatMap((l) => (l.text ? [l.text] : []));
-		case "bullets":
-			return body.items;
-		case "numbered":
-			return [];
-		case "word":
-			return body.presenter ? [body.presenter] : [];
-		case "roster":
-			return [
-				...(body.toastmaster ? [body.toastmaster.names ?? ""] : []),
-				...body.rows.map((r) => r.names ?? ""),
-				body.filled ?? "",
-			];
-	}
-}
-
-const content = (header: string, core: BodyCore): SlideLayout => ({
+/** A content slide. The (V) key is decided by the SLIDE's own flag
+ *  (`Slide.visiting`, set by the builder from the slots it names), never by
+ *  scanning the text below: a speech title or a quoted theme can end in " (V)",
+ *  and a template slide's holder sits in its HEADER, not its body (#1164). */
+const contentSlide = (
+	header: string,
+	core: BodyCore,
+	visiting: boolean | undefined,
+): SlideLayout => ({
 	chrome: "content",
 	header,
-	body: {
-		...core,
-		legend: nameBearingText(core).some(carriesVisitingMarker)
-			? VISITING_TOASTMASTER_LEGEND
-			: null,
-	},
+	body: { ...core, legend: visiting ? VISITING_TOASTMASTER_LEGEND : null },
 });
 
 /** Functionaries with a holder. An open role is dropped from the projected list
@@ -332,6 +313,8 @@ export function slideLayout(
 	slide: Slide,
 	clubLogoUrl: string | null,
 ): SlideLayout {
+	const page = (header: string, core: BodyCore) =>
+		contentSlide(header, core, slide.visiting);
 	switch (slide.kind) {
 		case "title": {
 			const sub: Line[] = [];
@@ -352,7 +335,7 @@ export function slideLayout(
 			};
 		}
 		case "toastmaster":
-			return content("Toastmaster", {
+			return page("Toastmaster", {
 				form: "centered",
 				lines: [head(slide.name)],
 			});
@@ -362,7 +345,7 @@ export function slideLayout(
 			// hand-off band names them — including the "— open —" placeholder for an
 			// enabled-but-unclaimed role, since suppressing it here would drop a cue
 			// the printed agenda keeps.
-			return content(HANDOFF_HEADER[slide.to] ?? "Hand-off", {
+			return page(HANDOFF_HEADER[slide.to] ?? "Hand-off", {
 				form: "centered",
 				lines: [
 					head(`${slide.from.role} · ${slide.from.name}`),
@@ -388,7 +371,7 @@ export function slideLayout(
 			if (slide.theme && slide.word) lines.push(SPACER);
 			if (slide.word)
 				lines.push(head("Word of the Day:"), head(`“${slide.word}”`));
-			return content("Toastmaster Intro", { form: "centered", lines });
+			return page("Toastmaster Intro", { form: "centered", lines });
 		}
 		case "functionaryIntro": {
 			// The header names the segment, not its owner: the owner varies by club
@@ -403,7 +386,7 @@ export function slideLayout(
 					),
 				);
 			}
-			return content("Functionaries", { form: "centered", lines });
+			return page("Functionaries", { form: "centered", lines });
 		}
 		case "functionaryReports":
 			// The owner comes off the slide, exactly as `functionaryIntro`'s does:
@@ -411,7 +394,7 @@ export function slideLayout(
 			// Day at a club that runs no GE (#363). Hardcoding "General Evaluator:"
 			// here is what made a Toastmaster-covered slide announce a role nobody
 			// in the room held.
-			return content("Functionary Reports", {
+			return page("Functionary Reports", {
 				form: "centered",
 				lines: [
 					head(`${slide.owner}:`),
@@ -420,7 +403,7 @@ export function slideLayout(
 				],
 			});
 		case "wordOfDay":
-			return content("Word of the Day", {
+			return page("Word of the Day", {
 				form: "word",
 				word: slide.word,
 				definition: slide.definition,
@@ -432,7 +415,7 @@ export function slideLayout(
 			if (slide.title) items.push(`Speech Title: “${slide.title}”`);
 			if (slide.projectLevel) items.push(`Project: ${slide.projectLevel}`);
 			items.push(`Time: ${slide.time}`);
-			return content(slide.label, {
+			return page(slide.label, {
 				form: "bullets",
 				items,
 				link: slide.link,
@@ -455,7 +438,7 @@ export function slideLayout(
 				head("Please Vote for Best Speaker:"),
 				...slide.names.map(name),
 			);
-			return content("Vote for Best Speaker", { form: "centered", lines });
+			return page("Vote for Best Speaker", { form: "centered", lines });
 		}
 		case "tableTopics": {
 			const items = [
@@ -466,7 +449,7 @@ export function slideLayout(
 			// Last, so the definition below it reads as belonging to it — and so the
 			// word is the line the room's eye ends on for the whole segment (#355).
 			if (slide.word) items.push(`Word of the Day: “${slide.word}”`);
-			return content("Table Topics", {
+			return page("Table Topics", {
 				form: "bullets",
 				items,
 				link: null,
@@ -485,14 +468,14 @@ export function slideLayout(
 			if (slide.caller) lines.push(callerLine(slide.caller));
 			if (slide.hasTimer) lines.push(head("Ask for Table Topics times."));
 			lines.push(head("Please Vote for Best Table Topics Speaker:"));
-			return content("Vote for Best Table Topics Speaker", {
+			return page("Vote for Best Table Topics Speaker", {
 				form: "centered",
 				lines,
 			});
 		}
 		case "evaluatorEvaluation":
 			// Owner off the slide, for the same reason as the reports slide above.
-			return content("Evaluation of the Evaluators", {
+			return page("Evaluation of the Evaluators", {
 				form: "centered",
 				lines: [
 					head(`${slide.owner}:`),
@@ -521,7 +504,7 @@ export function slideLayout(
 			// disambiguated independently. That is why #446 left this alone: it is a
 			// copy decision, and it was taken deliberately rather than smuggled into
 			// a one-string bug fix.
-			return content(slide.label, { form: "centered", lines });
+			return page(slide.label, { form: "centered", lines });
 		}
 		case "voteEvaluator": {
 			// The Best-Evaluator vote beat's fallback, likewise.
@@ -537,7 +520,7 @@ export function slideLayout(
 			// three evaluators put four consecutive identical cells in the
 			// jump-to-slide grid — `slideName` renders this header verbatim — and
 			// the one that was actually the vote could only be found by counting.
-			return content("Vote for Best Evaluator", { form: "centered", lines });
+			return page("Vote for Best Evaluator", { form: "centered", lines });
 		}
 		case "generalEvaluation":
 			// The header names the SEGMENT; this line names the ROLE giving it — the
@@ -545,7 +528,7 @@ export function slideLayout(
 			// that runs no GE (#363). The holder's name is deliberately not shown:
 			// this slide has never named them, and the run sheet's matching row
 			// already does — so the slide carries no `name` to show.
-			return content("General Evaluation", {
+			return page("General Evaluation", {
 				form: "centered",
 				lines: [
 					head(slide.owner),
@@ -554,7 +537,7 @@ export function slideLayout(
 				],
 			});
 		case "awards":
-			return content("Award Presentation", {
+			return page("Award Presentation", {
 				form: "numbered",
 				items: slide.categories,
 			});
@@ -563,7 +546,7 @@ export function slideLayout(
 			// slide is up while the President turns to whoever is visiting, and a
 			// list built from the recorded guests would silently leave out anyone
 			// who simply walked in.
-			return content("Guest Comments", {
+			return page("Guest Comments", {
 				form: "centered",
 				lines: [
 					head("We’d love to hear from our guests."),
@@ -571,7 +554,7 @@ export function slideLayout(
 				],
 			});
 		case "reminders":
-			return content("Announcements", {
+			return page("Announcements", {
 				form: "centered",
 				lines: slide.text
 					.split("\n")
@@ -615,7 +598,7 @@ export function slideLayout(
 				// would say nothing about how long it runs.
 				items.push(`Time: ${slide.minutes} min`);
 			}
-			return content(slide.label, {
+			return page(slide.label, {
 				form: "bullets",
 				items,
 				link: null,
@@ -626,7 +609,7 @@ export function slideLayout(
 			});
 		}
 		case "nextMeeting":
-			return content("What’s on tap for next meeting", rosterBody(slide));
+			return page("What’s on tap for next meeting", rosterBody(slide));
 		case "thankYou":
 			return {
 				chrome: "splash",

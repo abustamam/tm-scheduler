@@ -22,6 +22,7 @@ import {
 	assigneeDisplayName,
 	buildRosterEntries,
 	GUEST_MARKER,
+	VISITING_TOASTMASTER_LEGEND,
 } from "./agenda";
 import type {
 	AgendaRow,
@@ -41,9 +42,12 @@ import {
 	type ClubForDeck,
 	type HandoffTarget,
 	type MeetingForDeck,
+	nextMeetingSlide,
 	type Slide,
 } from "./agenda-slides";
 import { buildTimeline } from "./agenda-timing";
+import { summarizeRoles } from "./next-meeting-summary";
+import { slideLayout } from "./slide-layout";
 
 /** A segment of the meeting that BOTH renderings are expected to show. */
 type Section =
@@ -1659,3 +1663,226 @@ for (const { label, flags, deck } of GUEST_MARKER_CASES)
 				expect(text).toContain(`Speaker 2${deck}`);
 			});
 	});
+
+// ---------------------------------------------------------------------------
+// The (V) legend is decided by the slot, on the deck and on print (#1164)
+// ---------------------------------------------------------------------------
+
+/**
+ * protects=the legend appears on a surface exactly when that surface shows a
+ * visiting Toastmaster's "(V)", for every role a visitor can hold: on every
+ * deck slide, and on the editorial and grid print sheets;
+ * fails_when=a role's slide names the visitor with no legend, a slide carries the
+ * legend with no (V) on it, or a free-text string that merely CONTAINS " (V)"
+ * (a speech title, a theme, a member's own name) asks for one: the legend was
+ * decided from the rendered text, not the slot, before this;
+ * no_claim=print legend placement and fit (visiting-legend-print-fit.test.tsx);
+ * the print count is height-estimated, not a flowed print (the #1181 caveat).
+ */
+describe("the (V) legend follows the slot, deck and print (#1164)", () => {
+	const config: RunOfShowConfig = { geIntroducesFunctionaries: false };
+	const MARKER = / \(V\)/;
+	const LEGEND = VISITING_TOASTMASTER_LEGEND;
+
+	const visitor = (s: AgendaSlot): AgendaSlot => ({
+		...s,
+		assigneeIsGuest: true,
+		assigneeIsVisitingToastmaster: true,
+	});
+	const swap = (slots: AgendaSlot[], id: string, to: AgendaSlot) =>
+		slots.map((s) => (s.id === id ? to : s));
+
+	/** Every deck slide's layout, with its legend stripped from the JSON so the
+	 *  legend's own "(V)" is never counted as a marker. */
+	function deckLegends(
+		slots: AgendaSlot[],
+		m: MeetingForDeck = meeting,
+	): { kind: string; legend: boolean; marker: boolean; json: string }[] {
+		return buildSlideDeck({
+			meeting: m,
+			club,
+			slots,
+			ballotUrl: BALLOT_URL,
+			...config,
+		}).map((slide) => {
+			const l = slideLayout(slide, null);
+			const bare =
+				l.chrome === "content"
+					? { ...l, body: { ...l.body, legend: null } }
+					: l;
+			const json = JSON.stringify(bare);
+			return {
+				kind: slide.kind,
+				legend: l.chrome === "content" && l.body.legend !== null,
+				marker: MARKER.test(json),
+				json,
+			};
+		});
+	}
+
+	function printText(slots: AgendaSlot[], layout: AgendaLayout): string {
+		const rows = buildTimeline(
+			expandRunSheet(slots, buildRunOfShow(config)),
+			meeting.scheduledAt,
+			club.timezone,
+		);
+		const html = renderToStaticMarkup(
+			createElement(MeetingAgendaPrint, {
+				layout,
+				header: {
+					clubName: club.name,
+					logoUrl: null,
+					clubNumber: null,
+					district: null,
+					mission: null,
+					meetingSchedule: null,
+					dateLong: "Thursday, June 25, 2026",
+					dateShort: "Thu · Jun 25, 2026",
+					timeRange: "6:45 – 7:45 PM",
+					theme: null,
+					wordOfTheDay: null,
+					location: null,
+					announcements: null,
+					meetingNumber: null,
+				},
+				roles: buildRosterEntries(
+					slots as Parameters<typeof buildRosterEntries>[0],
+				),
+				officers: [],
+				explainers: [],
+				rows,
+			}),
+		);
+		return html
+			.replace(/<[^>]+>/g, "")
+			.replace(/&amp;/g, "&")
+			.replace(/&quot;/g, '"')
+			.replace(/&#x27;/g, "'");
+	}
+	/** The page's (V) markers with the legend line removed, and whether the
+	 *  legend line is there. */
+	function printMarkers(slots: AgendaSlot[], layout: AgendaLayout) {
+		const text = printText(slots, layout);
+		const legend = text.includes(LEGEND);
+		return { legend, marker: MARKER.test(text.split(LEGEND).join("")) };
+	}
+
+	const assigned = FULL.filter((s) => s.assigneeName);
+
+	it("puts the legend on exactly the deck slides that name a visitor, whichever role they hold", () => {
+		let withLegend = 0;
+		for (const s of assigned) {
+			const slides = deckLegends(swap(FULL, s.id, visitor(s)));
+			for (const d of slides) {
+				expect(d.legend, `${s.roleName}: ${d.kind}`).toBe(d.marker);
+				if (d.legend) withLegend += 1;
+			}
+		}
+		// Anchor: the loop exercised slides that DO carry the legend.
+		expect(withLegend).toBeGreaterThan(assigned.length);
+		// And with nobody visiting, no slide asks for one.
+		for (const d of deckLegends(FULL)) expect(d.legend).toBe(false);
+	});
+
+	for (const layout of ["editorial", "grid"] as const)
+		it(`${layout}: the legend is on the sheet exactly when it shows a (V), for every role`, () => {
+			let withLegend = 0;
+			for (const s of assigned) {
+				const m = printMarkers(swap(FULL, s.id, visitor(s)), layout);
+				expect(m.legend, `${s.roleName}`).toBe(m.marker);
+				if (m.legend) withLegend += 1;
+			}
+			expect(withLegend).toBeGreaterThan(0);
+			expect(printMarkers(FULL, layout)).toEqual({
+				legend: false,
+				marker: false,
+			});
+		});
+
+	// Free text and look-alike names: the strings that made the regex lie.
+	it("asks for no legend from a speech title, a theme or a member's own (V)", () => {
+		const cases: { label: string; slots: AgendaSlot[]; m?: MeetingForDeck }[] =
+			[
+				{
+					label: "speech title",
+					slots: swap(FULL, speaker2.id, {
+						...speaker2,
+						speechTitle: "Vitamin (V), mineral, or placebo?",
+					}),
+				},
+				{
+					label: "quoted theme",
+					slots: FULL,
+					m: { ...meeting, theme: "Me (V), you" },
+				},
+				{
+					label: "member named Pat Lee (V)",
+					slots: swap(FULL, speaker2.id, {
+						...speaker2,
+						assigneeName: "Pat Lee (V)",
+					}),
+				},
+				{
+					label: "member named Pat Lee (V) as the Timer",
+					slots: swap(FULL, timer.id, {
+						...timer,
+						assigneeName: "Pat Lee (V)",
+					}),
+				},
+			];
+		for (const c of cases) {
+			const decks = deckLegends(c.slots, c.m);
+			// Non-vacuous: the text IS on a slide.
+			expect(
+				decks.some((d) => MARKER.test(d.json)),
+				`${c.label}: the (V) text is on the deck`,
+			).toBe(true);
+			expect(
+				decks.filter((d) => d.legend),
+				`${c.label}: deck`,
+			).toEqual([]);
+			for (const layout of ["editorial", "grid"] as const)
+				expect(
+					printMarkers(c.slots, layout).legend,
+					`${c.label}: ${layout}`,
+				).toBe(false);
+		}
+	});
+
+	// protects=the next-meeting slide's legend comes from the next meeting's SLOTS
+	// via summarizeRoles, the same way the other slides do;
+	// fails_when=the slide scans the rendered roster for " (V)", or the summary
+	// drops the flag;
+	// no_claim=the in-room payload carrying the flag: in-room-meeting-payload tests.
+	it("shows the legend on the next-meeting slide only for a visiting holder", () => {
+		const next = (slots: AgendaSlot[]) => {
+			const summary = summarizeRoles(
+				slots.map((s) => ({ ...s, roleDefinitionId: s.roleKey ?? s.id })),
+			);
+			const slide = nextMeetingSlide(
+				{
+					scheduledAt: new Date("2026-07-09T23:45:00Z"),
+					location: null,
+					theme: null,
+					meetingNumber: null,
+					urlKey: "2026-07-09",
+					...summary,
+				},
+				club.timezone,
+				null,
+			);
+			if (!slide) throw new Error("no slide");
+			const l = slideLayout(slide, null);
+			if (l.chrome !== "content") throw new Error("expected content");
+			return l.body.legend;
+		};
+		expect(next(swap(FULL, speaker2.id, visitor(speaker2)))).toBe(LEGEND);
+		expect(next(swap(FULL, tmod.id, visitor(tmod)))).toBe(LEGEND);
+		expect(next(FULL)).toBeNull();
+		expect(
+			next(
+				swap(FULL, speaker2.id, { ...speaker2, assigneeName: "Pat Lee (V)" }),
+			),
+		).toBeNull();
+	});
+});

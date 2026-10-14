@@ -139,6 +139,10 @@ export type RosterEntry = {
 	 *  since a club's role names and the guest marker both contain the
 	 *  separators a parser would key on. */
 	holders?: string[];
+	/** True when a holder this entry names is a visiting Toastmaster (#1164), so
+	 *  the sheet that prints it owes the reader the (V) key. Carried from the
+	 *  slot, never read back off `name`. Absent (not `false`) otherwise. */
+	visiting?: true;
 };
 
 /** Subtle marker appended to a guest assignee's name everywhere it renders
@@ -171,27 +175,48 @@ export function assigneeDisplayName(
 		: `${name} · ${GUEST_MARKER}`;
 }
 
-/** Whether a rendered name, or a line that joins names ("Role: Ann, Jane (V) &
- *  Bo"), carries the (V) marker. Read off the string because rows reach print
- *  and the deck through builders that no longer hold the slot (#1164). The
- *  marker closes a name: it is followed by the end of the text or by a name
- *  separator (", ", " & ", " and ", " · "), so a quoted title ending "(V)” " is not one. */
-export function carriesVisitingMarker(text: string): boolean {
-	return VISITING_MARKER_TOKEN.test(text);
-}
-const VISITING_MARKER_TOKEN = / \(V\)(?=$|,| &| and\b| ·)/;
-
-/** Minimal slot shape needed to order the meeting-roles roster. */
-export type RosterSlot = {
-	roleName: string;
-	slotIndex: number;
-	category: "leadership" | "speaker" | "evaluator" | "functionary";
-	isSpeakerRole: boolean;
+/** The three slot fields that decide how an assignee is named. Every surface
+ *  that holds a slot reads them through `slotAssigneeDisplay` / `isVisitingSlot`
+ *  rather than passing the triple by hand (#1164). */
+export type AssigneeFields = {
 	assigneeName: string | null;
 	/** True when the assignee is a non-member guest (#151) — renders "· Guest". */
 	assigneeIsGuest?: boolean;
 	/** True when that guest is a visiting Toastmaster (#1164) — renders "(V)". */
 	assigneeIsVisitingToastmaster?: boolean;
+};
+
+/** A slot's rendered assignee name, or null when it has none. */
+export function slotAssigneeDisplay(slot: AssigneeFields): string | null {
+	return assigneeDisplayName(
+		slot.assigneeName,
+		slot.assigneeIsGuest,
+		slot.assigneeIsVisitingToastmaster,
+	);
+}
+
+/**
+ * Whether this slot renders as "Name (V)": a NAMED guest who is a visiting
+ * Toastmaster. This is what every (V) legend is decided from (#1164) — the
+ * slot, never the rendered text, because a speech title, a theme or a member's
+ * own name can all end in " (V)" without anyone being a visiting Toastmaster.
+ * It is exactly the condition under which `assigneeDisplayName` appends the
+ * marker, so a legend can never be asked for by a name that does not show one.
+ */
+export function isVisitingSlot(slot: AssigneeFields): boolean {
+	return (
+		!!slot.assigneeName &&
+		slot.assigneeIsGuest === true &&
+		slot.assigneeIsVisitingToastmaster === true
+	);
+}
+
+/** Minimal slot shape needed to order the meeting-roles roster. */
+export type RosterSlot = AssigneeFields & {
+	roleName: string;
+	slotIndex: number;
+	category: "leadership" | "speaker" | "evaluator" | "functionary";
+	isSpeakerRole: boolean;
 	/** See `role_definitions.slots_unordered` (#624). The roster collapses such
 	 *  a role into one entry naming every holder; callers that omit the flag get
 	 *  one numbered entry per slot, as before. */
@@ -220,13 +245,7 @@ function collapsedRosterEntry(
 	group: readonly RosterSlot[],
 ): RosterEntry {
 	const names = group
-		.map((g) =>
-			assigneeDisplayName(
-				g.assigneeName,
-				g.assigneeIsGuest,
-				g.assigneeIsVisitingToastmaster,
-			),
-		)
+		.map((g) => slotAssigneeDisplay(g))
 		.filter((n): n is string => n != null);
 	if (names.length === 0)
 		return { label: roleName, name: null, holderCount: 0 };
@@ -235,6 +254,7 @@ function collapsedRosterEntry(
 		name: listRoles(names),
 		holders: names,
 		holderCount: names.length,
+		...(group.some(isVisitingSlot) ? { visiting: true as const } : {}),
 	};
 }
 
@@ -280,11 +300,8 @@ export function buildRosterEntries<T extends RosterSlot>(
 				slot: s,
 				entry: {
 					label: slotLabel(s, roleCounts),
-					name: assigneeDisplayName(
-						s.assigneeName,
-						s.assigneeIsGuest,
-						s.assigneeIsVisitingToastmaster,
-					),
+					name: slotAssigneeDisplay(s),
+					...(isVisitingSlot(s) ? { visiting: true as const } : {}),
 				},
 			});
 			continue;

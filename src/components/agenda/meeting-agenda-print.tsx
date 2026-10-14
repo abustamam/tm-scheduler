@@ -8,7 +8,6 @@
 // designated slot when set and is omitted gracefully (no empty label) when not.
 import { QRCodeSVG } from "qrcode.react";
 import {
-	carriesVisitingMarker,
 	type RosterEntry,
 	rosterGridPositions,
 	VISITING_TOASTMASTER_LEGEND,
@@ -112,25 +111,18 @@ type Props = {
 /** The (V) key (#1164) for a sheet, or undefined. Decided per SHEET from what
  *  that sheet actually renders: a two-sheet layout shows the roster on one and
  *  the run of show on the other, so each asks only about what it carries.
- *  Read off the rendered strings (`carriesVisitingMarker`), because the roster
- *  and the rows reach the page without the slot that produced them. */
+ *  Read from the `visiting` flag the roster entries and rows carry from their
+ *  slots, never from the rendered text: a speech title, a note line or a
+ *  member's own name can end in " (V)" without anyone being a visiting
+ *  Toastmaster. */
 function sheetLegend(shown: {
 	roles?: readonly AgendaRoleEntry[];
 	rows?: readonly TimelineRow[];
 }): string | undefined {
-	const inRoles = (shown.roles ?? []).some((r) =>
-		(r.holders ?? (r.name ? [r.name] : [])).some(carriesVisitingMarker),
-	);
-	const inRows = (shown.rows ?? []).some((r) =>
-		[
-			r.who,
-			r.holder ?? "",
-			r.detail,
-			...(r.holders ?? []),
-			...(r.introduces ?? []),
-		].some(carriesVisitingMarker),
-	);
-	return inRoles || inRows ? VISITING_TOASTMASTER_LEGEND : undefined;
+	const shows =
+		(shown.roles ?? []).some((r) => r.visiting) ||
+		(shown.rows ?? []).some((r) => r.visiting);
+	return shows ? VISITING_TOASTMASTER_LEGEND : undefined;
 }
 
 /** minutes (e.g. 6.5) → "6:30" for the timing marks. Shared with the grace

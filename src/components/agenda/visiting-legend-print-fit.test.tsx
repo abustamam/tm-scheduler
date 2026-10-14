@@ -125,7 +125,10 @@ const SHEET_HAS: Record<
 
 /** The same agenda with each named person marked "(V)" wherever the roster or a
  *  row names them — what `assigneeDisplayName` produces for the same slots, applied
- *  to the fixture's already-rendered strings. */
+ *  to the fixture's already-rendered strings — and `visiting: true` on every entry
+ *  that changed, which is what the loaders set from the slot and what the sheet's
+ *  legend is decided from (#1164): the harness stands in for a visiting slot, so
+ *  it must set the flag the slot would. */
 function markVisiting(
 	agenda: Agenda,
 	names: readonly string[],
@@ -133,23 +136,31 @@ function markVisiting(
 ): Agenda {
 	const mark = (text: string) =>
 		names.reduce((t, n) => t.split(n).join(`${n} (V)`), text);
+	const flagged = <T extends object>(before: T, after: T) =>
+		JSON.stringify(before) === JSON.stringify(after)
+			? after
+			: { ...after, visiting: true as const };
 	return {
 		roles: where.roles
-			? agenda.roles.map((r) => ({
-					...r,
-					name: r.name == null ? null : mark(r.name),
-					...(r.holders ? { holders: r.holders.map(mark) } : {}),
-				}))
+			? agenda.roles.map((r) =>
+					flagged(r, {
+						...r,
+						name: r.name == null ? null : mark(r.name),
+						...(r.holders ? { holders: r.holders.map(mark) } : {}),
+					}),
+				)
 			: agenda.roles,
 		rows: where.rows
-			? agenda.rows.map((r) => ({
-					...r,
-					who: mark(r.who),
-					detail: mark(r.detail),
-					...(r.holder != null ? { holder: mark(r.holder) } : {}),
-					...(r.holders ? { holders: r.holders.map(mark) } : {}),
-					...(r.introduces ? { introduces: r.introduces.map(mark) } : {}),
-				}))
+			? agenda.rows.map((r) =>
+					flagged(r, {
+						...r,
+						who: mark(r.who),
+						detail: mark(r.detail),
+						...(r.holder != null ? { holder: mark(r.holder) } : {}),
+						...(r.holders ? { holders: r.holders.map(mark) } : {}),
+						...(r.introduces ? { introduces: r.introduces.map(mark) } : {}),
+					}),
+				)
 			: agenda.rows,
 	};
 }
@@ -344,6 +355,15 @@ describe("the fixtures", () => {
 			}
 			expect(rowText(fx.agenda)).not.toContain("(V)");
 			expect(rosterText(fx.agenda)).not.toContain("(V)");
+			// And the flag follows the text: set where a (V) was written, absent from
+			// the base fixture, so a legend decided from the flag is decided by the
+			// same entries the (V) was put on.
+			expect(fx.agenda.roles.some((r) => r.visiting)).toBe(false);
+			expect(fx.agenda.rows.some((r) => r.visiting)).toBe(false);
+			expect(
+				[...both.roles, ...both.rows].filter((e) => e.visiting).length,
+				`${f}: nothing was flagged`,
+			).toBeGreaterThan(0);
 		}
 	});
 });

@@ -162,12 +162,16 @@ export const IN_ROOM_NEXT_MEETING_ROLE_FIELDS = [
 	"label",
 	"names",
 	"openCount",
+	/** True when a holder is a visiting Toastmaster (#1164), so /present can
+	 *  print its "(V)" legend. A boolean the rendered "(V)" already shows. */
+	"visiting",
 ] as const;
 
 const pickRole = (r: NextMeetingRole): NextMeetingRole => ({
 	label: r.label,
 	names: [...r.names],
 	openCount: r.openCount,
+	...(r.visiting ? { visiting: true as const } : {}),
 });
 
 /**

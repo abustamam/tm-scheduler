@@ -1,4 +1,9 @@
-import { assigneeDisplayName, OPEN_LABEL } from "./agenda";
+import {
+	type AssigneeFields,
+	isVisitingSlot,
+	OPEN_LABEL,
+	slotAssigneeDisplay,
+} from "./agenda";
 import {
 	buildTemplateRows,
 	refreshTableTopicsMarks,
@@ -28,7 +33,7 @@ export type TimingMarks = { green: number; yellow: number; red: number };
  * The minimal slot shape the run-of-show needs. The real slots returned by
  * `loadMeetingDetail` (src/server/meetings.ts) structurally satisfy this.
  */
-export type AgendaSlot = {
+export type AgendaSlot = AssigneeFields & {
 	id: string;
 	roleName: string;
 	/** Stable, rename-proof identity of the role this slot belongs to (#368) —
@@ -45,11 +50,6 @@ export type AgendaSlot = {
 	 *  standard meeting, which keeps numbering as before. */
 	slotsUnordered?: boolean;
 	slotIndex: number;
-	assigneeName: string | null;
-	/** True when the assignee is a non-member guest (#151) — renders "· Guest". */
-	assigneeIsGuest?: boolean;
-	/** True when that guest is a visiting Toastmaster (#1164) — renders "(V)". */
-	assigneeIsVisitingToastmaster?: boolean;
 	speechTitle: string | null;
 	projectLevel: string | null;
 	minMinutes: number | null;
@@ -63,18 +63,27 @@ export type AgendaSlot = {
 /** A slot's rendered assignee name (with the "· Guest" marker for guests, #151,
  *  or "(V)" for a visiting Toastmaster, #1164), or the OPEN placeholder when
  *  unassigned. */
-export function assigneeDisplay(slot: {
-	assigneeName: string | null;
-	assigneeIsGuest?: boolean;
-	assigneeIsVisitingToastmaster?: boolean;
-}): string {
-	return (
-		assigneeDisplayName(
-			slot.assigneeName,
-			slot.assigneeIsGuest,
-			slot.assigneeIsVisitingToastmaster,
-		) ?? OPEN_LABEL
-	);
+export function assigneeDisplay(slot: AssigneeFields): string {
+	return slotAssigneeDisplay(slot) ?? OPEN_LABEL;
+}
+
+/** Whether `x` stands for a visiting Toastmaster: a slot that renders as
+ *  "Name (V)", or something already built from one that carries the flag
+ *  (a `LegendEntry`, a `NextMeetingRole`, an `AgendaRow`) (#1164). */
+function standsForVisiting(x: AssigneeFields | { visiting?: true }): boolean {
+	return "assigneeName" in x ? isVisitingSlot(x) : x.visiting === true;
+}
+
+/** `{ visiting: true }` when any of `from` stands for a visiting Toastmaster,
+ *  else nothing — spread into a row, entry or slide so the field is ABSENT (not
+ *  `false`) on the overwhelming majority that have none, and every existing
+ *  whole-object comparison stays byte-identical (#1164). */
+export function visitingFlag(
+	...from: readonly (AssigneeFields | { visiting?: true } | null | undefined)[]
+): { visiting?: true } {
+	return from.some((x) => x != null && standsForVisiting(x))
+		? { visiting: true }
+		: {};
 }
 
 /** One rendered agenda row (no clock time yet — buildTimeline adds it). */
@@ -174,6 +183,20 @@ export type AgendaRow = {
 	 * prints a name. Absent on section and event rows.
 	 */
 	holders?: string[];
+	/**
+	 * True when a holder this row names (`holder` / `holders`) is a visiting
+	 * Toastmaster (#1164), so the sheet that prints the row owes the reader the
+	 * (V) key. Carried from the slot, never read back off the rendered strings:
+	 * a speech title, a club's own note line or a member's name can all END in
+	 * " (V)" without anyone being a visiting Toastmaster. Absent, not `false`,
+	 * on every other row.
+	 *
+	 * Holders only, by design. A name in `detail` or `introduces` ("Introduces
+	 * the Table Topics Master: Jane (V)") belongs to somebody who also holds
+	 * their own row, and every sheet that shows the one shows the other, so the
+	 * holder rows already ask for the key on that sheet.
+	 */
+	visiting?: true;
 	detail: string;
 	minutes: number; // duration this row contributes to the running clock
 	marks: TimingMarks | null;
@@ -238,7 +261,13 @@ export type AgendaRow = {
 };
 
 /** A functionary/uncovered role shown in the header legend. */
-export type LegendEntry = { role: string; name: string };
+export type LegendEntry = {
+	role: string;
+	name: string;
+	/** True when `name` is a visiting Toastmaster's "Name (V)" (#1164), from the
+	 *  slot that produced it. Absent otherwise. */
+	visiting?: true;
+};
 
 /** A standard role a beat can bind to: the immutable `role_definitions.key`
  *  (#368) plus the canonical display name used as a fallback for slots that
@@ -764,6 +793,7 @@ export function reportingFunctionarySlots(slots: AgendaSlot[]): AgendaSlot[] {
 const toLegendEntry = (s: AgendaSlot): LegendEntry => ({
 	role: s.roleName,
 	name: assigneeDisplay(s),
+	...visitingFlag(s),
 });
 
 /** Every functionary this club runs, for the header legend and the deck's
@@ -1710,7 +1740,7 @@ function groupRoleNames(beat: Beat, slots: AgendaSlot[]): string[] {
 /**
  * The people to INTRODUCE at a hand-off: assigned holders of `role`, under the
  * display name every other surface uses, IN THE ORDER THEY ARE ABOUT TO APPEAR
- * (#585). Guests keep the "· Guest" marker (or "(V)") `assigneeDisplayName` gives them
+ * (#585). Guests keep the "· Guest" marker (or "(V)") `slotAssigneeDisplay` gives them
  * everywhere else — the marker is the point at a hand-off, since it tells the
  * Toastmaster who they are welcoming.
  *
@@ -1744,19 +1774,21 @@ function groupRoleNames(beat: Beat, slots: AgendaSlot[]): string[] {
  * against the following rows, never across surfaces.
  */
 export function introducedNames(slots: AgendaSlot[], role: BeatRole): string[] {
-	const matching = slots.filter((s) =>
-		matchesRole(s, role.roleKey, role.roleName),
-	);
-	return [...matching]
+	return introducedSlots(slots, role).map((s) => assigneeDisplay(s));
+}
+
+/** The slots `introducedNames` names, in the same order: the assigned holders of
+ *  `role`. Separate so the deck's hand-off slide can ask the SLOTS whether one
+ *  of the people it introduces is a visiting Toastmaster (#1164) instead of
+ *  reading the answer back off their rendered names. */
+export function introducedSlots(
+	slots: AgendaSlot[],
+	role: BeatRole,
+): AgendaSlot[] {
+	return slots
+		.filter((s) => matchesRole(s, role.roleKey, role.roleName))
 		.sort((a, b) => a.slotIndex - b.slotIndex)
-		.map((s) =>
-			assigneeDisplayName(
-				s.assigneeName,
-				s.assigneeIsGuest,
-				s.assigneeIsVisitingToastmaster,
-			),
-		)
-		.filter((n): n is string => n != null);
+		.filter((s) => slotAssigneeDisplay(s) != null);
 }
 
 /**
@@ -1799,21 +1831,49 @@ export function pairedEvaluatorNames(
 	speakerSlotId: string,
 	slots: AgendaSlot[],
 ): string[] {
+	return pairedEvaluatorSlots(speakerSlotId, slots)
+		.map((s) => slotAssigneeDisplay(s))
+		.filter((n): n is string => n != null);
+}
+
+/** The slots `pairedEvaluatorNames` renders, in the same order, so a row that
+ *  names them can ask the SLOTS whether one is a visiting Toastmaster (#1164). */
+export function pairedEvaluatorSlots(
+	speakerSlotId: string,
+	slots: AgendaSlot[],
+): AgendaSlot[] {
 	return slots
 		.filter(
 			(s) =>
 				s.evaluatesSlotId === speakerSlotId &&
 				matchesRole(s, EVALUATOR_ROLE.roleKey, EVALUATOR_ROLE.roleName),
 		)
-		.sort((a, b) => a.slotIndex - b.slotIndex)
-		.map((s) =>
-			assigneeDisplayName(
-				s.assigneeName,
-				s.assigneeIsGuest,
-				s.assigneeIsVisitingToastmaster,
-			),
-		)
-		.filter((n): n is string => n != null);
+		.sort((a, b) => a.slotIndex - b.slotIndex);
+}
+
+/**
+ * The slots whose names `resolveDetailTokens` splices into `detail` (#1164):
+ * every `{names:role}` and, with `pairedEvaluator`, every `{evaluator:paired}`.
+ * Read off the same tokens and the same lookups the resolver uses, so a row's
+ * `visiting` flag is decided by who the detail NAMES, never by scanning the
+ * resolved text for " (V)".
+ */
+export function detailTokenSlots(
+	detail: string,
+	slots: AgendaSlot[],
+	pairedEvaluator?: AgendaSlot[],
+): AgendaSlot[] {
+	if (!detail.includes("{")) return [];
+	const named: AgendaSlot[] = [];
+	for (const m of detail.matchAll(DETAIL_TOKEN_RE)) {
+		if (m[3] != null) {
+			const role = NAMES_ROLES.find((r) => r.roleKey === m[3]);
+			if (role) named.push(...introducedSlots(slots, role));
+		} else if (m[0] === PAIRED_EVALUATOR_TOKEN && pairedEvaluator) {
+			named.push(...pairedEvaluator);
+		}
+	}
+	return named;
 }
 
 /**
@@ -2070,6 +2130,7 @@ export function expandRunSheet(
 								: preamble.roleName,
 							roleLabel: preambleOwner?.roleName ?? preamble.roleName,
 							holder: preambleOwner ? assigneeDisplay(preambleOwner) : null,
+							...visitingFlag(preambleOwner),
 							roleKey: preamble.roleKey,
 							// NULL, and not either slot that made this row (#732). It is
 							// not the speaker's turn — the speech row below is — and it is
@@ -2125,6 +2186,7 @@ export function expandRunSheet(
 						// The same two halves, unjoined (#463) — see `AgendaRow.roleLabel`.
 						roleLabel: numbered(s.roleName, i, multi),
 						holder: assigneeDisplay(s),
+						...visitingFlag(s),
 						roleKey: owner.roleKey,
 						// One row per slot, so this row is about exactly this one (#732).
 						slotId: s.id,
@@ -2145,6 +2207,7 @@ export function expandRunSheet(
 						// The same two halves, unjoined (#463) — see `AgendaRow.roleLabel`.
 						roleLabel: numbered(s.roleName, i, multi),
 						holder: assigneeDisplay(s),
+						...visitingFlag(s),
 						roleKey: owner.roleKey,
 						// This evaluator's own slot — NOT `s.evaluatesSlotId`, which is
 						// the speech being evaluated. `orderEvaluators` only reorders the
@@ -2196,6 +2259,7 @@ export function expandRunSheet(
 						// Unjoined halves (#463).
 						roleLabel: s.roleName,
 						holder: assigneeDisplay(s),
+						...visitingFlag(s),
 						roleKey: owner.roleKey,
 						// One row per matching slot, so this row is about this one (#732).
 						slotId: s.id,
