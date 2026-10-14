@@ -61,14 +61,13 @@ async function renderConsole(
 const button = () =>
 	screen.getByRole("button", { name: /build demo club|rebuild demo club/i });
 
-// protects=the card tells a superadmin which of three states the demo club is in
-//   and only offers the action when it can work: no env var disables the button
-//   and says which one; built shows when it was built;
-// fails_when=the button is enabled without DEMO_ACCOUNT_EMAIL, the missing-var
-//   text is absent, or a built club still reads "Build";
-// no_claim=the loader's data is stubbed; the server fns are covered by the
-//   integration suites.
 describe("the demo club card (#1199)", () => {
+	// protects=with no DEMO_ACCOUNT_EMAIL the card disables its button and names
+	//   the variable to set, so the action is only offered when it can work;
+	// fails_when=the button is enabled without the variable, the missing-variable
+	//   text is absent, or the label is not "Build demo club";
+	// no_claim=the loader's data is stubbed; the server fns are covered by the
+	//   integration suites.
 	it("is disabled and names the env var when it is not configured", async () => {
 		await renderConsole({ configured: false, club: null });
 
@@ -79,6 +78,11 @@ describe("the demo club card (#1199)", () => {
 		expect(button().textContent).toBe("Build demo club");
 	});
 
+	// protects=an unbuilt, configured demo club offers Build and runs it at once,
+	//   since there is nothing to delete and so nothing to confirm;
+	// fails_when=the build asks for a confirm, never reaches the server fn, or the
+	//   button is disabled;
+	// no_claim=the loader's data and the server fn are stubbed.
 	it("offers Build when configured and not built, with no confirm", async () => {
 		const confirm = vi.spyOn(window, "confirm");
 		resetDemoClubFromConsole.mockResolvedValue({ clubId: "x" });
@@ -93,6 +97,14 @@ describe("the demo club card (#1199)", () => {
 		expect(confirm).not.toHaveBeenCalled();
 	});
 
+	// protects=a built demo club reads "Rebuild" with its absolute built date, and
+	//   deleting what is in it is confirmed first, in words that say people added
+	//   by hand go and their accounts stay;
+	// fails_when=a built club still reads "Build", the confirm is skipped or its
+	//   text drifts from the promise, a declined confirm still sends the rebuild,
+	//   or an accepted one does not;
+	// no_claim=the loader's data and the server fn are stubbed; the date is
+	//   absolute UTC on purpose, so it cannot differ between server and client.
 	it("offers Rebuild with the built date, and confirms before deleting", async () => {
 		const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
 		await renderConsole({

@@ -895,7 +895,10 @@ export interface DeleteClubCoreResult {
  * its Persons and sign-in accounts by the rules in `deleteClubPermanently`'s
  * header, step 2 onward.
  *
- * `keepUserIds`: an account listed there is kept exactly as a superadmin is — the
+ * `keepUser`: a predicate over the account, run on the `FOR UPDATE`-locked
+ * `user` rows this delete is about to remove — NOT on a list the caller built
+ * beforehand, which a sign-in binding a Person in between would make stale. An
+ * account it returns true for is kept exactly as a superadmin is — the
  * user row, its sessions, its tokens and its pending verifications — whatever
  * else is true of it. Its Person rows held only by this club are still deleted,
  * so only the club's record of them goes. `deleteClubPermanently` passes none.
@@ -903,9 +906,9 @@ export interface DeleteClubCoreResult {
 export async function deleteClubCore(
 	tx: Tx,
 	clubId: string,
-	opts: { keepUserIds: readonly string[] },
+	opts: { keepUser?: (account: { id: string; email: string }) => boolean } = {},
 ): Promise<DeleteClubCoreResult> {
-	const keepIds = new Set(opts.keepUserIds);
+	const keepUser = opts.keepUser ?? (() => false);
 	const { personIds, guestOnlyIds } = await personsOfClub(tx, clubId);
 	// LOCK ORDER: the club's Persons BEFORE its memberships (#906). The
 	// `delete clubs` below cascades to every membership, so it takes the
@@ -1010,7 +1013,7 @@ export async function deleteClubCore(
 			...owners.map((r) => r.id),
 		]);
 		for (const u of lockedUsers) {
-			if (u.isSuperadmin || keepUsers.has(u.id) || keepIds.has(u.id)) {
+			if (u.isSuperadmin || keepUsers.has(u.id) || keepUser(u)) {
 				usersKept++;
 				continue;
 			}
@@ -1080,7 +1083,7 @@ export async function deleteClubPermanently(
 			throw new Error("The name doesn't match.");
 		}
 
-		const core = await deleteClubCore(tx, clubId, { keepUserIds: [] });
+		const core = await deleteClubCore(tx, clubId);
 		return { clubName: club.name, ...core };
 	});
 

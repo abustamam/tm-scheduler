@@ -2,7 +2,12 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { db } from "#/db";
 import { isDemoClub } from "./demo-club-flag";
-import { requireClubAdminView, requireClubRole, requireUser } from "./guards";
+import {
+	assertClubNotArchived,
+	requireClubAdminView,
+	requireClubRole,
+	requireUser,
+} from "./guards";
 import type { GuestLinkExpected } from "./guest-pipeline-logic";
 import {
 	applyAddGuestToClub,
@@ -62,7 +67,10 @@ export const submitGuestBook = createServerFn({ method: "POST" })
 	.handler(async ({ data }) => {
 		// The demo club keeps no guest data (#1199): answer as a success and write
 		// nothing, so a presenter can fill the form on stage and nobody's name or
-		// number is stored. Officer-entered guests go through other writers.
+		// number is stored. Officer-entered guests go through other writers, and
+		// `captureGuestVisit` stays as it was: they share it. The archive refusal
+		// comes first, so an archived demo club answers as every archived club does.
+		await assertClubNotArchived(data.clubId);
 		if (await isDemoClub(db, data.clubId)) {
 			return { ok: true as const, created: true };
 		}

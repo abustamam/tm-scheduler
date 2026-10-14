@@ -86,14 +86,20 @@ export async function sendEmail({
 	}
 
 	// A reserved address (the demo club's people) is never sent to. Dropped
-	// per recipient, so a mixed list still reaches the real addresses.
-	const recipients = Array.isArray(to) ? to : [to];
+	// per recipient, so a mixed list still reaches the real addresses. A single
+	// string may itself be a comma-separated list ("a@x.org, b@example.com"), so
+	// it is split first: tested whole, its domain is only the LAST address's and
+	// a real recipient would be dropped with a reserved one.
+	const recipients = (Array.isArray(to) ? to : to.split(","))
+		.map((a) => a.trim())
+		.filter((a) => a !== "");
 	const deliverable = recipients.filter((a) => !isReservedRecipient(a));
 	if (deliverable.length === 0) {
 		console.log("[email] dropped: reserved recipient domain");
 		return;
 	}
-	const sendTo = Array.isArray(to) ? deliverable : to;
+	// Untouched input goes through byte for byte; only a drop reshapes it.
+	const sendTo = deliverable.length === recipients.length ? to : deliverable;
 
 	// Only include `reply_to` in the body when present, so a send without one
 	// produces a byte-identical request to before the field existed.

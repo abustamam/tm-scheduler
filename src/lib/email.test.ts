@@ -205,13 +205,13 @@ describe("sendEmail", () => {
 	});
 });
 
-// protects=an address that cannot exist (RFC 2606 / 6761) is never classed
-//   deliverable, and a real one never classed reserved;
-// fails_when=a reserved domain, a subdomain of one, or a reserved TLD is
-//   reported deliverable, or a look-alike (example.com.evil.io, myexample.com,
-//   example.co) is reported reserved;
-// no_claim=nothing about the transport; this is the predicate alone.
 describe("isReservedRecipient", () => {
+	// protects=an address that cannot exist (RFC 2606 / 6761) is classed reserved:
+	//   the three example domains and their subdomains, the reserved TLDs, any case,
+	//   and a "Name <addr>" form;
+	// fails_when=a reserved domain, a subdomain of one, or a reserved TLD is
+	//   reported deliverable;
+	// no_claim=nothing about the transport; this is the predicate alone.
 	it.each([
 		"a@example.com",
 		"a@example.net",
@@ -229,6 +229,11 @@ describe("isReservedRecipient", () => {
 		expect(isReservedRecipient(address)).toBe(true);
 	});
 
+	// protects=a real address is never classed reserved, including look-alikes of a
+	//   reserved domain, so real mail is not dropped;
+	// fails_when=a look-alike (example.com.evil.io, myexample.com, example.co,
+	//   testing.io) or a malformed value is reported reserved;
+	// no_claim=a malformed value is "not reserved", not "valid".
 	it.each([
 		"a@gavelup.app",
 		"a@club.org",
@@ -243,15 +248,14 @@ describe("isReservedRecipient", () => {
 	});
 });
 
-// protects=no mail leaves for a reserved address (the demo club, #1199) while a
-//   real recipient is still served;
-// fails_when=a reserved recipient reaches the provider, a real one is dropped,
-//   or a mixed list sends the reserved address along with the real one;
-// no_claim=fetch is mocked, so what Resend does with the request is not
-//   exercised; the demo club's own call sites are not walked here.
 describe("sendEmail: reserved recipients", () => {
 	const message = { subject: "S", html: "<p></p>", text: "t" };
 
+	// protects=no mail leaves for a reserved address (the demo club, #1199), and
+	//   the drop's log line carries no address;
+	// fails_when=a reserved recipient reaches the provider, or the log names it;
+	// no_claim=fetch is mocked, so what Resend does with a request is not
+	//   exercised; the demo club's own call sites are not walked here.
 	it("makes no transport call for a reserved address and logs no address", async () => {
 		vi.stubEnv("RESEND_API_KEY", "re_test");
 		const fetchSpy = vi.spyOn(globalThis, "fetch");
@@ -265,6 +269,9 @@ describe("sendEmail: reserved recipients", () => {
 		expect(logged).not.toContain("priya");
 	});
 
+	// protects=a real address is still sent to, once;
+	// fails_when=the reserved-address drop swallows ordinary mail, or sends twice;
+	// no_claim=fetch is mocked.
 	it("makes exactly one transport call for a real address", async () => {
 		vi.stubEnv("RESEND_API_KEY", "re_test");
 		const fetchSpy = vi
@@ -276,6 +283,11 @@ describe("sendEmail: reserved recipients", () => {
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
 	});
 
+	// protects=a list holding reserved and real addresses is sent once, to the real
+	//   ones only;
+	// fails_when=a reserved address rides along, or the real one is dropped with
+	//   it, or two calls are made;
+	// no_claim=fetch is mocked.
 	it("sends a mixed list once, to the real address only", async () => {
 		vi.stubEnv("RESEND_API_KEY", "re_test");
 		const fetchSpy = vi
@@ -292,6 +304,10 @@ describe("sendEmail: reserved recipients", () => {
 		expect(body.to).toEqual(["real@club.org"]);
 	});
 
+	// protects=with no API key the dev log still prints the whole message, reserved
+	//   address included, so a developer sees the magic link;
+	// fails_when=the drop is applied before the dev branch and the link is lost;
+	// no_claim=fetch is mocked.
 	it("still prints a reserved address in the dev log when no key is set", async () => {
 		vi.stubEnv("RESEND_API_KEY", "");
 		const fetchSpy = vi.spyOn(globalThis, "fetch");
@@ -303,5 +319,57 @@ describe("sendEmail: reserved recipients", () => {
 		const logged = logSpy.mock.calls.flat().join(" ");
 		expect(logged).toContain("priya@example.com");
 		expect(logged).not.toContain("dropped");
+	});
+
+	// protects=a comma-separated string of recipients is judged address by address,
+	//   so a real one is not dropped because the LAST address is reserved, and a
+	//   reserved one is not sent because the last is real;
+	// fails_when=the string is tested whole (its domain is only the last
+	//   address's), so the real recipient is dropped or the reserved one rides along;
+	// no_claim=fetch is mocked; a display name that contains a comma is not
+	//   supported by any caller.
+	it("judges each address of a comma-joined string", async () => {
+		vi.stubEnv("RESEND_API_KEY", "re_test");
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response("{}", { status: 200 }));
+
+		await sendEmail({ to: "real@club.org, fake@example.com", ...message });
+		await sendEmail({ to: "fake@example.com, real@club.org", ...message });
+
+		expect(fetchSpy).toHaveBeenCalledTimes(2);
+		for (const call of fetchSpy.mock.calls) {
+			expect(JSON.parse(call[1]?.body as string).to).toEqual(["real@club.org"]);
+		}
+	});
+
+	// protects=a comma-joined string whose every address is reserved sends nothing;
+	// fails_when=the last address alone is tested and a reserved first one is sent;
+	// no_claim=fetch is mocked.
+	it("drops a comma-joined string of only reserved addresses", async () => {
+		vi.stubEnv("RESEND_API_KEY", "re_test");
+		const fetchSpy = vi.spyOn(globalThis, "fetch");
+		vi.spyOn(console, "log").mockImplementation(() => {});
+
+		await sendEmail({ to: "a@club.test, b@example.com", ...message });
+
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	// protects=a comma-joined string of only real addresses goes through byte for
+	//   byte, not reshaped into an array;
+	// fails_when=untouched input is rewritten;
+	// no_claim=fetch is mocked.
+	it("passes a comma-joined string of real addresses through unchanged", async () => {
+		vi.stubEnv("RESEND_API_KEY", "re_test");
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response("{}", { status: 200 }));
+
+		await sendEmail({ to: "a@club.org, b@club.org", ...message });
+
+		expect(JSON.parse(fetchSpy.mock.calls[0][1]?.body as string).to).toBe(
+			"a@club.org, b@club.org",
+		);
 	});
 });

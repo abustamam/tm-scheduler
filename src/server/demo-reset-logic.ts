@@ -7,17 +7,17 @@
 // DB logic only: the session and superadmin gates live in `onboarding.ts`, and
 // this module may not be imported by a client route (see server-modules.guard).
 
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "#/db";
+import { user } from "#/db/auth-schema";
 import { buildFixtureClub } from "#/db/fixtures/club-fixture";
 import { clubs, guests, members, officerTerms, people } from "#/db/schema";
 import { isReservedRecipient } from "#/lib/email";
-import { user } from "../db/auth-schema";
 import {
 	CLUB_WRITE_LOCK_TIMEOUT,
+	lockClubForWrite,
 	takeAdvisoryLockWithin,
 } from "./club-write-lock";
-import { isDemoClub } from "./demo-club-flag";
 import { assertStillClubAdmin } from "./guards";
 import type { DbOrTx } from "./meeting-templates-logic";
 import {
@@ -42,6 +42,7 @@ export const DEMO_LOCK_KEY = "demo-club";
 export type DemoErrorCode =
 	| "NOT_CONFIGURED"
 	| "ACCOUNT_IN_REAL_CLUB"
+	| "ADDRESS_IN_REAL_CLUB"
 	| "ACCOUNT_IS_SUPERADMIN"
 	| "NOT_DEMO_CLUB"
 	| "NOT_AUTHORIZED";
@@ -50,6 +51,8 @@ const DEMO_ERROR_MESSAGES: Record<DemoErrorCode, string> = {
 	NOT_CONFIGURED: "Set DEMO_ACCOUNT_EMAIL before building the demo club.",
 	ACCOUNT_IN_REAL_CLUB:
 		"The demo account belongs to a real club. Use an account that is in no other club.",
+	ADDRESS_IN_REAL_CLUB:
+		"A person at the demo account's address is already in a real club. Use an address that is in no other club.",
 	ACCOUNT_IS_SUPERADMIN:
 		"The demo account is a superadmin. Use an account that is not.",
 	NOT_DEMO_CLUB: "That club is not the demo club.",
@@ -78,8 +81,6 @@ export function parseDemoAccountEmail(
 	if (email === "" || /[\s,]/u.test(email)) return null;
 	return email;
 }
-
-export { isDemoClub };
 
 export interface DemoClubState {
 	/** `DEMO_ACCOUNT_EMAIL` is set to a usable address. */
@@ -160,6 +161,49 @@ export async function resetDemoClub(
 			if (demoUser.isSuperadmin) throw new DemoError("ACCOUNT_IS_SUPERADMIN");
 		}
 
+		// The same refusal for a Person at the demo address that has no account yet:
+		// `people.email` is not unique, so the fixture would insert a SECOND Person
+		// at the address and the real member's first sign-in would find two and bind
+		// neither (`linkPersonToUser`).
+		const unboundMemberships = await tx
+			.select({ id: members.id })
+			.from(members)
+			.innerJoin(people, eq(people.id, members.personId))
+			.innerJoin(clubs, eq(clubs.id, members.clubId))
+			.where(
+				and(
+					sql`lower(${people.email}) = ${email}`,
+					isNull(people.userId),
+					eq(clubs.isDemo, false),
+				),
+			);
+		const unboundGuestRows = await tx
+			.select({ id: guests.id })
+			.from(guests)
+			.innerJoin(people, eq(people.id, guests.personId))
+			.innerJoin(clubs, eq(clubs.id, guests.clubId))
+			.where(
+				and(
+					sql`lower(${people.email}) = ${email}`,
+					isNull(people.userId),
+					eq(clubs.isDemo, false),
+				),
+			);
+		if (unboundMemberships.length > 0 || unboundGuestRows.length > 0) {
+			throw new DemoError("ADDRESS_IN_REAL_CLUB");
+		}
+
+		// Lock order matches every other club writer (#925): the club write lock,
+		// THEN the club row. A guest conversion holds the former while it waits for
+		// the latter, so taking the row first deadlocks with it. There is at most
+		// one demo club and the rebuild lock above is held, so the id read here is
+		// the id the row lock below finds.
+		const [named] = await tx
+			.select({ id: clubs.id })
+			.from(clubs)
+			.where(eq(clubs.isDemo, true))
+			.limit(1);
+		if (named) await lockClubForWrite(tx, named.id);
 		const [existing] = await tx
 			.select({ id: clubs.id })
 			.from(clubs)
@@ -172,12 +216,9 @@ export async function resetDemoClub(
 		await assertActorStillAuthorized(tx, opts.actor, existing?.id ?? null);
 
 		if (existing) {
-			const keepUserIds = await accountsToKeep(
-				tx,
-				existing.id,
-				demoUser?.id ?? null,
-			);
-			await deleteClubCore(tx, existing.id, { keepUserIds });
+			await deleteClubCore(tx, existing.id, {
+				keepUser: demoKeepRule(email),
+			});
 		}
 
 		const { clubId } = await buildFixtureClub(tx, {
@@ -225,41 +266,20 @@ async function assertActorStillAuthorized(
 }
 
 /**
- * Accounts a rebuild must not delete: the demo account, and every user linked to
- * one of the club's Persons (a member, or a guest who signed in) whose address is
- * not on a reserved domain. Only the fixture's own `@example.com`-style accounts
- * are the demo club's to remove.
+ * Which accounts a rebuild must not delete, decided by `deleteClubCore` on the
+ * `FOR UPDATE`-locked users of the Persons it is deleting: the demo account, and
+ * any account whose address is deliverable (not on a reserved domain). Only the
+ * fixture's own `@example.com`-style accounts are the demo club's to remove.
+ *
+ * It is a predicate and not a list because a list is read before the locks: a
+ * real person added to the club by hand can click their magic link while the
+ * rebuild is queued, and the sign-in then binds their Person to their account
+ * after the list was made. The predicate sees the binding the lock saw.
  */
-async function accountsToKeep(
-	tx: DbOrTx,
-	clubId: string,
-	demoUserId: string | null,
-): Promise<string[]> {
-	// Two plain reads and an `inArray`: a hand-written correlated subquery in
-	// `sql` can drop its qualifiers and match every row.
-	const memberPersons = await tx
-		.select({ id: members.personId })
-		.from(members)
-		.where(eq(members.clubId, clubId));
-	const guestPersons = await tx
-		.select({ id: guests.personId })
-		.from(guests)
-		.where(eq(guests.clubId, clubId));
-	const personIds = [
-		...new Set(
-			[...memberPersons, ...guestPersons].flatMap((r) => (r.id ? [r.id] : [])),
-		),
-	];
-	const linked =
-		personIds.length === 0
-			? []
-			: await tx
-					.selectDistinct({ id: user.id, email: user.email })
-					.from(people)
-					.innerJoin(user, eq(user.id, people.userId))
-					.where(inArray(people.id, personIds));
-	const keep = new Set<string>();
-	for (const u of linked) if (!isReservedRecipient(u.email)) keep.add(u.id);
-	if (demoUserId) keep.add(demoUserId);
-	return [...keep];
+export function demoKeepRule(
+	demoEmail: string,
+): (account: { id: string; email: string }) => boolean {
+	return (account) =>
+		account.email.trim().toLowerCase() === demoEmail ||
+		!isReservedRecipient(account.email);
 }

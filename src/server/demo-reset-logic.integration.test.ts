@@ -36,6 +36,7 @@ import {
 import type { buildFixtureClub as BuildFixtureClub } from "#/db/fixtures/club-fixture";
 import { fixtureRosterEmails } from "#/db/fixtures/club-fixture";
 import {
+	activityLog,
 	apiTokens,
 	clubs,
 	guests,
@@ -62,6 +63,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	waitForLockWait,
 } from "#/test/db";
 
 const RUN = vi.hoisted(() => Math.random().toString(36).slice(2, 8));
@@ -155,7 +157,9 @@ vi.mock("#/db/fixtures/club-fixture", async (importOriginal) => {
 
 const { DEMO_LOCK_KEY, DEMO_LOCK_NAMESPACE, DemoError, resetDemoClub } =
 	await import("./demo-reset-logic");
-const { CLUB_BUSY_MESSAGE } = await import("./club-write-lock");
+const { CLUB_BUSY_MESSAGE, lockClubForWrite } = await import(
+	"./club-write-lock"
+);
 const { deleteClubCore } = await import("./onboarding-logic");
 
 const DEMO_EMAIL = `demo-${RUN}@test.example`;
@@ -577,6 +581,162 @@ describe.skipIf(!hasTestDb)("resetDemoClub (#1199)", () => {
 		expect(stillMembers).toEqual([]);
 	});
 
+	// protects=the keep rule is decided on the users the delete has LOCKED, not on
+	//   a list read before: a real person added by hand to the demo club who signs
+	//   in while the rebuild waits (their Person is bound to their account only
+	//   after the rebuild started) keeps the account;
+	// fails_when=the keep decision is made before the Persons are locked, so the
+	//   account bound in between is not in it and is deleted with the club;
+	// no_claim=the bind is an UPDATE of `people.user_id` committed while the rebuild
+	//   waits on the Person's lock, standing in for `linkPersonToUser`; the sign-in
+	//   path itself is the auth suites' claim.
+	it("keeps a real account whose Person is bound to it mid-rebuild", async () => {
+		const first = await reset();
+		const lateUser = await makeUser({ email: realEmail("late") });
+		const latePerson = await makePerson(null, realEmail("late"));
+		await join(first.clubId, latePerson);
+		const held: {
+			tx?: Parameters<Parameters<typeof testDb.transaction>[0]>[0];
+		} = {};
+		const holder = await openBlockingTx(async (tx) => {
+			held.tx = tx;
+			await tx
+				.select({ id: people.id })
+				.from(people)
+				.where(eq(people.id, latePerson))
+				.for("update");
+		});
+		let released = false;
+		try {
+			const rebuilding = reset();
+			// Surface a failure of the rebuild at the await below, not as unhandled.
+			rebuilding.catch(() => {});
+			await waitForLockWait("for no key update", holder.pid);
+			// The sign-in's bind, committed while the rebuild is waiting.
+			if (!held.tx) throw new Error("holder transaction not open");
+			await held.tx
+				.update(people)
+				.set({ userId: lateUser })
+				.where(eq(people.id, latePerson));
+			await holder.commit();
+			released = true;
+			await rebuilding;
+		} finally {
+			if (!released) await holder.commit();
+		}
+
+		expect(await exists("user", lateUser)).toBe(true);
+		expect(await exists("people", latePerson)).toBe(false);
+	});
+
+	// protects=the keep rule covers every Person the delete removes, not only
+	//   current members and guests: a former member (removed, so no membership row)
+	//   whose Person is bound to a real account keeps the account;
+	// fails_when=the accounts kept are those of the club's members and guests, so a
+	//   removed member's real account is deleted with the club;
+	// no_claim=the former member is found through the `member_remove` activity row,
+	//   one of the paths `personsOfClub` reads; the other paths share the code that
+	//   decides on the locked users.
+	it("keeps the real account of a former member the club removed", async () => {
+		const first = await reset();
+		const formerUser = await makeUser({ email: realEmail("former") });
+		const formerPerson = await makePerson(formerUser, realEmail("former"));
+		await testDb.insert(activityLog).values({
+			clubId: first.clubId,
+			action: "member_remove",
+			targetType: "member",
+			detail: { personId: formerPerson },
+		});
+
+		await reset();
+
+		expect(await exists("user", formerUser)).toBe(true);
+	});
+
+	// protects=a reserved-address account is still the demo club's to remove, whoever
+	//   it is bound to: the rule is "not reserved", not "everything";
+	// fails_when=the predicate keeps every account, so the fictional accounts pile
+	//   up across rebuilds;
+	// no_claim=the stand-in builder's one fictional account stands for the fixture's.
+	it("still deletes the fictional account of the previous build", async () => {
+		await demoAccount();
+		await reset();
+		const fake = await userByEmail(`stub-${RUN}@example.com`);
+		expect(fake).not.toBeNull();
+
+		await reset();
+
+		expect(fake && (await exists("user", fake))).toBe(false);
+	});
+
+	// protects=a Person at the demo address that has no account yet, already in a
+	//   real club as a member, is refused (the fixture would add a second Person at
+	//   the address and the real member's first sign-in would bind neither);
+	// fails_when=the reset proceeds and builds the demo club, or the real club is
+	//   touched, or the refusal is a different code;
+	// no_claim=the member case is the one run; the guest case is the next test.
+	it("refuses ADDRESS_IN_REAL_CLUB for an unbound member Person at the demo address", async () => {
+		const realClub = await makeRealClub();
+		const person = await makePerson(null, DEMO_EMAIL);
+		await join(realClub, person);
+
+		await expect(reset()).rejects.toMatchObject({
+			code: "ADDRESS_IN_REAL_CLUB",
+		});
+
+		expect(await demoClubs()).toEqual([]);
+		expect(await exists("people", person)).toBe(true);
+	});
+
+	// protects=the same refusal when the unbound Person at the demo address is a
+	//   real club's guest, and none when the Person sits in no real club;
+	// fails_when=a guest row is not counted, or a Person in no club blocks the
+	//   build;
+	// no_claim=a Person the demo club itself holds at that address is not a real
+	//   club's and is not covered here.
+	it("refuses ADDRESS_IN_REAL_CLUB for an unbound guest Person, and not for one in no club", async () => {
+		const realClub = await makeRealClub();
+		const person = await makePerson(null, DEMO_EMAIL);
+		await testDb.insert(guests).values({
+			clubId: realClub,
+			name: "G",
+			personId: person,
+		});
+
+		await expect(reset()).rejects.toMatchObject({
+			code: "ADDRESS_IN_REAL_CLUB",
+		});
+
+		await testDb.delete(guests).where(eq(guests.personId, person));
+		await expect(reset()).resolves.toMatchObject({});
+	});
+
+	// protects=the rebuild takes the demo club's write lock before its row lock, the
+	//   order every other club writer uses, so a guest conversion (write lock, then
+	//   row) and a rebuild cannot deadlock;
+	// fails_when=the rebuild goes straight to the club row and does not queue
+	//   behind a holder of the club write lock;
+	// no_claim=the holder takes the row lock after the write lock, as a conversion
+	//   does; the real conversion path is the guest suites' claim.
+	it("queues behind the demo club's write lock and finishes without a deadlock", async () => {
+		const first = await reset();
+		const holder = await openBlockingTx(async (tx) => {
+			await lockClubForWrite(tx, first.clubId);
+		});
+		let released = false;
+		try {
+			const rebuilding = reset();
+			rebuilding.catch(() => {});
+			await waitForLockWait("pg_advisory_xact_lock", holder.pid);
+			released = true;
+			await holder.commit();
+			const second = await rebuilding;
+			expect(second.clubId).not.toBe(first.clubId);
+		} finally {
+			if (!released) await holder.commit();
+		}
+	});
+
 	// protects=a rebuild deletes the club flagged `is_demo` and no other: a real
 	//   club that predates the demo club is found first by an unfiltered read, so
 	//   only the `is_demo` predicate keeps it out of the delete;
@@ -772,7 +932,7 @@ describe.skipIf(!hasTestDb)("resetDemoClub (#1199)", () => {
 	});
 });
 
-describe.skipIf(!hasTestDb)("deleteClubCore keepUserIds (#1199)", () => {
+describe.skipIf(!hasTestDb)("deleteClubCore keepUser (#1199)", () => {
 	afterEach(teardown);
 
 	async function twoPersonClub() {
@@ -793,17 +953,19 @@ describe.skipIf(!hasTestDb)("deleteClubCore keepUserIds (#1199)", () => {
 		return { clubId, keepUser, dropUser, keepPerson, dropPerson };
 	}
 
-	// protects=an account named in keepUserIds survives the club delete with its
-	//   session while its Person (held only by this club) is deleted, and the
-	//   club's other accounts are deleted as before;
-	// fails_when=the kept account is deleted, its Person is kept, or the list
-	//   keeps accounts it does not name;
+	// protects=an account the keepUser predicate accepts survives the club delete
+	//   with its session while its Person (held only by this club) is deleted, and
+	//   the club's other accounts are deleted as before;
+	// fails_when=the kept account is deleted, its Person is kept, or the predicate
+	//   keeps accounts it does not accept;
 	// no_claim=the existing delete rules are the #914 suite's, run unmodified.
-	it("keeps a named account and its session, still deleting its Person", async () => {
+	it("keeps an account the predicate accepts and its session, still deleting its Person", async () => {
 		const f = await twoPersonClub();
 
 		await testDb.transaction((tx) =>
-			deleteClubCore(tx, f.clubId, { keepUserIds: [f.keepUser] }),
+			deleteClubCore(tx, f.clubId, {
+				keepUser: (account) => account.id === f.keepUser,
+			}),
 		);
 
 		expect(await exists("clubs", f.clubId)).toBe(false);
@@ -818,16 +980,14 @@ describe.skipIf(!hasTestDb)("deleteClubCore keepUserIds (#1199)", () => {
 		expect(s).toHaveLength(1);
 	});
 
-	// protects=the control for the case above: with no keepUserIds both accounts
-	//   go, so the keep list is what held the account;
-	// fails_when=the first case would pass with an empty list;
+	// protects=the control for the case above: with no predicate both accounts
+	//   go, so the predicate is what held the account;
+	// fails_when=the first case would pass with no predicate;
 	// no_claim=none beyond protects.
-	it("deletes both accounts when keepUserIds is empty", async () => {
+	it("deletes both accounts when no predicate is given", async () => {
 		const f = await twoPersonClub();
 
-		await testDb.transaction((tx) =>
-			deleteClubCore(tx, f.clubId, { keepUserIds: [] }),
-		);
+		await testDb.transaction((tx) => deleteClubCore(tx, f.clubId));
 
 		expect(await exists("user", f.keepUser)).toBe(false);
 		expect(await exists("user", f.dropUser)).toBe(false);
@@ -951,6 +1111,45 @@ describe.skipIf(!hasTestDb)(
 
 			expect(await leaveFeedbackLogic(note(real))).toEqual({ ok: true });
 			expect(await notesFor(real.meetingId)).toHaveLength(1);
+		});
+
+		// protects=an archived demo club refuses the public guest book as every
+		//   archived club does, instead of answering success;
+		// fails_when=the demo early return runs before the archive refusal;
+		// no_claim=the refusal's wording; officer flows are not touched.
+		it("refuses a guest-book submission on an archived demo club", async () => {
+			const demo = await liveClub(true);
+			await testDb
+				.update(clubs)
+				.set({ archivedAt: new Date() })
+				.where(eq(clubs.id, demo.clubId));
+
+			await expect(
+				book(demo.clubId, `vera-arch-${RUN}@club.org`),
+			).rejects.toThrow(/archived/i);
+			expect(await guestsOf(demo.clubId)).toEqual([]);
+		});
+
+		// protects=an archived demo club refuses anonymous feedback instead of
+		//   answering success;
+		// fails_when=the demo early return runs before the archive refusal;
+		// no_claim=the refusal's wording.
+		it("refuses anonymous feedback on an archived demo club", async () => {
+			const { leaveFeedbackLogic } = await import("./role-feedback-logic");
+			const demo = await liveClub(true);
+			await testDb
+				.update(clubs)
+				.set({ archivedAt: new Date() })
+				.where(eq(clubs.id, demo.clubId));
+
+			await expect(
+				leaveFeedbackLogic({
+					meetingId: demo.meetingId,
+					target: { kind: "slot" as const, id: demo.slotId },
+					wentWell: "Clear signals",
+				}),
+			).rejects.toThrow(/archived/i);
+			expect(await notesFor(demo.meetingId)).toEqual([]);
 		});
 
 		// protects=what an officer writes on the demo club is stored as before: a guest

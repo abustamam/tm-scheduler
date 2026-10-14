@@ -666,12 +666,14 @@ async function leaveFeedbackUnmapped(
 	if (!owner) throw new Error(FEEDBACK_MEETING_NOT_FOUND_MESSAGE);
 	const clubId = owner.clubId;
 
-	// The demo club keeps nothing (#1199): answer as a success and store no note.
-	// Before the caps, so a presenter's rehearsal spends no sender budget either.
-	if (await isDemoClub(db, clubId)) return { ok: true };
-
 	// The pre-check (step 3). Not the gate — step 4 is.
 	await assertClubNotArchived(clubId);
+
+	// The demo club keeps nothing (#1199): answer as a success and store no note.
+	// After the archive refusal (an archived demo club answers like any archived
+	// club) and before the caps, so a presenter's rehearsal spends no sender
+	// budget either.
+	if (await isDemoClub(db, clubId)) return { ok: true };
 	const at = now();
 	const { closesAt } = await admitNote(db, input, at);
 	if (
