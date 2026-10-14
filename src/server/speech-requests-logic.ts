@@ -491,6 +491,26 @@ export async function scheduleSpeechRequest(
 	conn: typeof db = db,
 ): Promise<{ speechId: string; slotId: string }> {
 	return conn.transaction(async (tx) => {
+		// The membership merge lock (#1035), SHARED, before the request row or the
+		// meeting is locked (#1189, "the merge lock first", see `applyMemberRemove`).
+		// A removal of the requester holds the meeting and its DELETE cascades to this
+		// request row (`membership_id` is ON DELETE CASCADE), while this locked the
+		// request row and then asked for the meeting: 40P01. With the lock the removal
+		// and this Schedule never interleave. The membership is read with a plain
+		// select, since the lock has to come first; a merge that re-pointed the request
+		// before we got here has deleted the old membership, which the lock refuses
+		// with CLUB_BUSY_MESSAGE, and one that has not cannot start while we hold it.
+		const [asked] = await tx
+			.select({
+				membershipId: speechRequests.membershipId,
+				clubId: speechRequests.clubId,
+			})
+			.from(speechRequests)
+			.where(eq(speechRequests.id, args.requestId));
+		if (!asked || asked.clubId !== args.clubId) {
+			throw new Error(REQUEST_NOT_FOUND_MESSAGE);
+		}
+		await lockMembershipsAgainstMerge(tx, [asked.membershipId]);
 		// The request row lock serialises this against a withdraw, an edit or
 		// another Schedule.
 		await lockRequestRow(tx, args.requestId);

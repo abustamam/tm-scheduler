@@ -16,6 +16,7 @@ import {
 	members,
 	people,
 	roleSlots,
+	speechRequests,
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import {
@@ -24,7 +25,10 @@ import {
 } from "#/lib/member-remove";
 import { CLUB_BUSY_MESSAGE } from "#/server/club-write-lock";
 import { lockMeetingForSlotEdit } from "#/server/meeting-slot-lock";
-import { lockMembershipsAgainstMerge } from "#/server/membership-merge-lock";
+import {
+	lockMembershipForMerge,
+	lockMembershipsAgainstMerge,
+} from "#/server/membership-merge-lock";
 import {
 	cleanup,
 	hasTestDb,
@@ -961,6 +965,311 @@ describe.skipIf(!hasTestDb)("remove a member on a past agenda (#1189)", () => {
 		expect((err as Error).message).toBe(CLUB_BUSY_MESSAGE);
 		expect(await memberRowExists(leaver)).toBe(true);
 		expect(await itemOwner(itemId)).toBe(leaver);
+	});
+
+	// ---- "The merge lock first": the second review round (#1189) ----
+
+	/** Did `err` come from Postgres reporting a deadlock (40P01)? Walks the cause chain. */
+	function isDeadlock(err: unknown): boolean {
+		for (let e: unknown = err, depth = 0; e && depth < 5; depth++) {
+			const o = e as { code?: string; message?: string; cause?: unknown };
+			if (o.code === "40P01" || /deadlock detected/i.test(o.message ?? "")) {
+				return true;
+			}
+			e = o.cause;
+		}
+		return false;
+	}
+
+	/**
+	 * Park a removal of `leaver` at its action-item lock, AFTER it holds the
+	 * member's meetings and slots and BEFORE it takes the member row: the exact
+	 * window the round-1 order left open. `blockerItem` is an item the leaver owns,
+	 * held by a transaction we control. Returns the removal's backend pid, the
+	 * promise of its outcome and the blocker.
+	 */
+	async function removalParkedAtItems(leaver: string) {
+		const itemId = await seedItem(leaver, -1, null);
+		const blocker = await openBlockingTx(async (tx) => {
+			await tx
+				.select({ id: clubActionItems.id })
+				.from(clubActionItems)
+				.where(eq(clubActionItems.id, itemId))
+				.for("update");
+		});
+		const outcome = remove(leaver).then(
+			() => null,
+			(e: unknown) => e,
+		);
+		const removalPid = await waitForLockWait(
+			'"club_action_items"%for update',
+			blocker.pid,
+		);
+		return { blocker, outcome, removalPid, itemId };
+	}
+
+	it("deactivate and remove of one member both finish, with no deadlock", async () => {
+		// Protects: deactivate takes the membership merge lock SHARED before it writes
+		// anything. The removal (parked below holding the member's meetings and slots)
+		// holds it EXCLUSIVE, so deactivate waits for the whole removal. Without it
+		// deactivate updated the member row FIRST, then asked for the slot the removal
+		// holds, while the removal's next lock is that member row: 40P01.
+		// Fails when: deactivate's lock is dropped (a deadlock is raised for one of
+		// the two) or the removal stops taking the lock exclusive.
+		const leaver = await seedLeaver();
+		const meetingId = await seedMeeting("scheduled", 7);
+		const slotId = await holdSlot(meetingId, leaver);
+		const { applySetMemberStatus } = await import("#/server/members-logic");
+
+		const { blocker, outcome, removalPid } = await removalParkedAtItems(leaver);
+		const deactivation = applySetMemberStatus({
+			clubId: club.clubId,
+			memberId: leaver,
+			status: "inactive",
+			actorMemberId: club.adminMemberId,
+		}).then(
+			() => null,
+			(e: unknown) => e,
+		);
+		try {
+			// Blocked BY the removal: on the merge lock when protected, on the slot
+			// it holds when not.
+			await waitForLockWait("", removalPid);
+		} finally {
+			await blocker.commit();
+		}
+		const removalErr = await outcome;
+		const deactivateErr = await deactivation;
+
+		expect(isDeadlock(removalErr)).toBe(false);
+		expect(isDeadlock(deactivateErr)).toBe(false);
+		// The removal won, completely; deactivate then found the member gone.
+		expect(removalErr).toBeNull();
+		expect((deactivateErr as Error).message).toBe(CLUB_BUSY_MESSAGE);
+		expect(await memberRowExists(leaver)).toBe(false);
+		const slot = await slotHolder(slotId);
+		expect(slot?.assignedMemberId).toBeNull();
+		expect(slot?.status).toBe("open");
+	});
+
+	it("reactivating a member also queues behind a removal of that member", async () => {
+		// Same lock, other direction of the status change: an inactive member with an
+		// upcoming slot is removed while a reactivation waits.
+		const leaver = await seedLeaver();
+		await testDb
+			.update(members)
+			.set({ status: "inactive" })
+			.where(eq(members.id, leaver));
+		const meetingId = await seedMeeting("scheduled", 7);
+		await holdSlot(meetingId, leaver);
+		const { applySetMemberStatus } = await import("#/server/members-logic");
+
+		const { blocker, outcome, removalPid } = await removalParkedAtItems(leaver);
+		const reactivation = applySetMemberStatus({
+			clubId: club.clubId,
+			memberId: leaver,
+			status: "active",
+			actorMemberId: club.adminMemberId,
+		}).then(
+			() => null,
+			(e: unknown) => e,
+		);
+		try {
+			await waitForLockWait("pg_advisory_xact_lock_shared", removalPid);
+		} finally {
+			await blocker.commit();
+		}
+		expect(await outcome).toBeNull();
+		expect((await reactivation) as Error).toHaveProperty(
+			"message",
+			CLUB_BUSY_MESSAGE,
+		);
+		expect(await memberRowExists(leaver)).toBe(false);
+	});
+
+	it("scheduling the member's speech request and removing the member both finish, with no deadlock", async () => {
+		// Protects: `scheduleSpeechRequest` takes the merge lock SHARED before it locks
+		// the request row or the meeting. The removal holds the meeting and its DELETE
+		// cascades to that request row (ON DELETE CASCADE). Without the lock, Schedule
+		// held the request row and waited for the meeting, and the removal then
+		// waited for the row: 40P01.
+		// Fails when: Schedule's lock is dropped, or comes after the request row lock.
+		const leaver = await seedLeaver();
+		const meetingId = await seedMeeting("scheduled", 7);
+		// The leaver's footprint on that meeting, so the removal holds it.
+		await testDb
+			.insert(meetingAttendance)
+			.values({ meetingId, memberId: leaver, status: "present" });
+		const [target] = await testDb
+			.insert(roleSlots)
+			.values({
+				meetingId,
+				roleDefinitionId: club.roleDefinitionId,
+				status: "open",
+			})
+			.returning({ id: roleSlots.id });
+		const [request] = await testDb
+			.insert(speechRequests)
+			.values({
+				clubId: club.clubId,
+				membershipId: leaver,
+				title: "Ice Breaker",
+			})
+			.returning({ id: speechRequests.id });
+		const { scheduleSpeechRequest } = await import(
+			"#/server/speech-requests-logic"
+		);
+
+		const { blocker, outcome, removalPid } = await removalParkedAtItems(leaver);
+		const scheduling = scheduleSpeechRequest({
+			requestId: request.id,
+			slotId: target.id,
+			clubId: club.clubId,
+			actorMemberId: club.adminMemberId,
+		}).then(
+			() => null,
+			(e: unknown) => e,
+		);
+		try {
+			await waitForLockWait("", removalPid);
+		} finally {
+			await blocker.commit();
+		}
+		const removalErr = await outcome;
+		const scheduleErr = await scheduling;
+
+		expect(isDeadlock(removalErr)).toBe(false);
+		expect(isDeadlock(scheduleErr)).toBe(false);
+		expect(removalErr).toBeNull();
+		// The request went with the member (cascade); Schedule found it gone.
+		expect((scheduleErr as Error).message).toBe(CLUB_BUSY_MESSAGE);
+		expect(await memberRowExists(leaver)).toBe(false);
+		const left = await testDb
+			.select({ id: speechRequests.id })
+			.from(speechRequests)
+			.where(eq(speechRequests.id, request.id));
+		expect(left).toHaveLength(0);
+		expect((await slotHolder(target.id))?.status).toBe("open");
+	});
+
+	it("scheduling a request for a request of another club is still refused as not found, before any lock", async () => {
+		// Protects: the unlocked read that finds the requester for the lock keeps the
+		// old answer for a request that is not this club's.
+		const leaver = await seedLeaver();
+		const [request] = await testDb
+			.insert(speechRequests)
+			.values({ clubId: club.clubId, membershipId: leaver })
+			.returning({ id: speechRequests.id });
+		const { scheduleSpeechRequest } = await import(
+			"#/server/speech-requests-logic"
+		);
+		const holder = await openBlockingTx(async (tx) => {
+			await lockMembershipForMerge(tx, leaver);
+		});
+		try {
+			await expect(
+				scheduleSpeechRequest({
+					requestId: request.id,
+					slotId: request.id,
+					clubId: "00000000-0000-4000-8000-000000000000",
+					actorMemberId: null,
+				}),
+			).rejects.toThrow("That speech request was not found.");
+		} finally {
+			await holder.commit();
+		}
+	});
+
+	/** True if `p` settles within `ms`. */
+	async function settlesWithin(p: Promise<unknown>, ms: number) {
+		let settled = false;
+		void p.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		await Promise.race([p, new Promise((r) => setTimeout(r, ms))]).catch(
+			() => {},
+		);
+		return settled;
+	}
+
+	it("refuses a member with past history at once, taking no merge lock and no meeting lock", async () => {
+		// Protects: the early refusal runs on plain reads before ANY lock. Another
+		// transaction holds everything the locked path would ask for (the merge lock
+		// exclusive, the past meeting, the member's slot, the member row) and the
+		// refusal still comes back immediately, with the same text the locked path
+		// gives.
+		// Fails when: the early refusal is dropped: the removal then waits for the
+		// merge lock held below, and gives up after its 5 s lock timeout with
+		// CLUB_BUSY_MESSAGE.
+		const leaver = await seedLeaver();
+		const pastMeeting = await seedMeeting("completed", -7);
+		await holdSlot(pastMeeting, leaver);
+		const holder = await openBlockingTx(async (tx) => {
+			await lockMembershipForMerge(tx, leaver);
+			await lockMeetingForSlotEdit(tx, pastMeeting);
+			await tx
+				.select({ id: roleSlots.id })
+				.from(roleSlots)
+				.where(eq(roleSlots.assignedMemberId, leaver))
+				.for("update");
+			await tx
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.id, leaver))
+				.for("update");
+		});
+		try {
+			const outcome = remove(leaver).then(
+				() => null,
+				(e: unknown) => e,
+			);
+			expect(await settlesWithin(outcome, 1500)).toBe(true);
+			const early = (await outcome) as Error;
+			expect(early.message).toBe(pastAgendaRemoveRefusal("Leaving Lee"));
+			expect(isPastAgendaRemoveRefusal(early.message)).toBe(true);
+		} finally {
+			await holder.commit();
+		}
+		expect(await memberRowExists(leaver)).toBe(true);
+
+		// The locked path (a meeting completed while the removal waits) gives the
+		// identical error for an identically named member.
+		const other = await seedLeaver();
+		const meetingId = await seedMeeting("scheduled", 0.04);
+		await holdSlot(meetingId, other);
+		const completer = await openBlockingTx(async (tx) => {
+			await lockMeetingForSlotEdit(tx, meetingId);
+			await tx
+				.update(meetings)
+				.set({ status: "completed" })
+				.where(eq(meetings.id, meetingId));
+		});
+		const locked = (await removeParkedBehind(
+			completer,
+			other,
+			"for no key update",
+		)) as Error;
+		expect(locked.message).toBe(pastAgendaRemoveRefusal("Leaving Lee"));
+	});
+
+	it("a signed-in member on a past agenda gets the signed-in refusal, as the locked path gives", async () => {
+		// The early refusal keeps the locked path's order: the account check first.
+		const leaver = await seedLeaver();
+		await testDb
+			.update(people)
+			.set({ userId: club.memberUserId })
+			.where(eq(people.id, extraPeople[0] ?? ""));
+		await holdSlot(await seedMeeting("completed", -7), leaver);
+
+		await expect(remove(leaver)).rejects.toThrow(
+			"That member is a signed-in account and can't be removed.",
+		);
+		expect(await memberRowExists(leaver)).toBe(true);
 	});
 
 	it("covers every ON DELETE SET NULL key to members.id: checked or deliberately not", async () => {
