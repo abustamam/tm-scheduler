@@ -105,6 +105,7 @@ describe("sidebar per role", () => {
 			"Dues",
 			"Action items",
 			"My dashboard",
+			"Find a mentor",
 			"My roles",
 			"Account settings",
 			"Resources",
@@ -118,7 +119,7 @@ describe("sidebar per role", () => {
 		const labels = visibleLinkLabels();
 		expect(labels).not.toContain("Officer home");
 		expect(labels.slice(0, 10)).toContain("Action items");
-		expect(labels).toHaveLength(14);
+		expect(labels).toHaveLength(15);
 	});
 
 	it("shows a plain member Meetings and Me, with no empty group headers", () => {
@@ -128,7 +129,7 @@ describe("sidebar per role", () => {
 		expect(screen.queryByText("Officers")).toBeNull();
 		expect(screen.queryByRole("button", { name: /setup/i })).toBeNull();
 		expect(screen.queryByText("Platform")).toBeNull();
-		expect(visibleLinkLabels()).toHaveLength(9);
+		expect(visibleLinkLabels()).toHaveLength(10);
 	});
 
 	it("adds Platform for a superadmin", () => {
@@ -207,8 +208,8 @@ describe("Area Director entries (#1119)", () => {
 				.queryAllByRole("link")
 				.filter((a) => /^Area /.test(a.textContent ?? "")),
 		).toHaveLength(0);
-		// The registered entries are unchanged (control): a plain member's nine.
-		expect(visibleLinkLabels()).toHaveLength(9);
+		// The registered entries are unchanged (control): a plain member's ten.
+		expect(visibleLinkLabels()).toHaveLength(10);
 	});
 
 	it("marks the entry current on its own page and no other", () => {

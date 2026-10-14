@@ -31,6 +31,18 @@ export const MENTORSHIP_FOCUS_LABELS: Record<MentorshipFocus, string> = {
 export const MENTORSHIP_FOCUS_OTHER_MAX = 80;
 
 /**
+ * Longest mentor bio (#945), counted as JavaScript string length (UTF-16
+ * units). The database check counts code points, which is never larger, so
+ * input that passes here never trips it.
+ */
+export const MENTOR_BIO_MAX = 500;
+
+/** What `listMentors` refuses a caller with no membership of their own (a
+ *  read-only impersonation), and what the page then says. */
+export const MENTORS_MEMBERS_ONLY_MESSAGE =
+	"Find a mentor is for club members.";
+
+/**
  * How a pairing's focus reads in a list: the free text for `other` when there
  * is some, the label otherwise, and null for a pairing with no focus.
  */

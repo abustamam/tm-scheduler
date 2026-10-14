@@ -862,6 +862,13 @@
       "when": 1791948722751,
       "tag": "0122_demo_club",
       "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1792003308776,
+      "tag": "0123_complete_silvermane",
+      "breakpoints": true
     }
   ]
 }

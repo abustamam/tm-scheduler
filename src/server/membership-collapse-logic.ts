@@ -27,6 +27,7 @@ import {
 	meetingVotes,
 	memberDues,
 	members,
+	mentorshipRequests,
 	mentorships,
 	officerTerms,
 	officerTrainingRecords,
@@ -140,6 +141,16 @@ export async function collapseMemberships(
 		}
 	}
 
+	// The mentor listing's side: whichever membership is willing AND listed (#945).
+	const isListedMentor = (m: typeof keeper) =>
+		m.willingToMentor && m.mentorListedAt !== null;
+	const listedSide = isListedMentor(keeper)
+		? keeper
+		: isListedMentor(absorbed)
+			? absorbed
+			: null;
+	const otherSide = listedSide === keeper ? absorbed : keeper;
+
 	// --- Reconcile the surviving keeper row --------------------------------
 	// club_role: higher wins (admin > member). status: active if EITHER is
 	// active. joined_at: earliest known. preferred_name: keeper's, filling a
@@ -161,6 +172,19 @@ export async function collapseMemberships(
 			// #939: willing to mentor if EITHER row said so. The flag is the
 			// member's own statement, and one human said it on one of the two.
 			willingToMentor: keeper.willingToMentor || absorbed.willingToMentor,
+			// #945: the listing and the bio. `mentor_listed_at` is the member's own
+			// confirmation that they are findable, and it follows the willing flag:
+			// the keeper's if the keeper is willing and listed, else the absorbed
+			// one's if that is, else null. A merge must not PUBLISH a bio its owner
+			// had hidden (unlisted, or willing off), so a listed side's bio is
+			// taken from a listed side only; with nobody listed the bio is hidden
+			// anyway and the keeper's, else the absorbed one's, is kept (not a
+			// blank: the column holds null or 1-500 characters).
+			mentorListedAt: listedSide?.mentorListedAt ?? null,
+			mentorBio: listedSide
+				? (listedSide.mentorBio ??
+					(isListedMentor(otherSide) ? otherSide.mentorBio : null))
+				: (keeper.mentorBio ?? absorbed.mentorBio),
 		})
 		.where(eq(members.id, keeperId));
 
@@ -557,6 +581,50 @@ export async function collapseMemberships(
 		.update(mentorships)
 		.set({ createdByMemberId: keeperId })
 		.where(eq(mentorships.createdByMemberId, absorbedId));
+
+	// 17b. mentorship_requests (#945) — mentee_member_id and mentor_member_id
+	//     are ON DELETE CASCADE (decided_by_member_id is SET NULL), so without
+	//     this a merge silently destroys every request the absorbed membership
+	//     sent or received. Same constraints as the pairings above:
+	//
+	//     a. A request BETWEEN the keeper and the absorbed membership, either
+	//        direction and any status, would become a request to themselves and
+	//        violate `mentorship_requests_not_self_check`. It says nothing once
+	//        the two are one person, so it is deleted.
+	//     b. `mentorship_requests_one_pending_unique` allows one PENDING request
+	//        per mentee. If the keeper and the absorbed membership each have one
+	//        as mentee, the re-point would violate it and roll back the WHOLE
+	//        collapse. The keeper's stays; the absorbed one becomes `withdrawn`
+	//        (a status the mentee could have chosen, so history stays honest),
+	//        stamped `decided_at`. It is kept, not deleted, as every decided
+	//        request is.
+	await tx.execute(sql`
+		DELETE FROM mentorship_requests
+		WHERE (mentor_member_id = ${absorbedId} AND mentee_member_id = ${keeperId})
+			OR (mentor_member_id = ${keeperId} AND mentee_member_id = ${absorbedId})`);
+	await tx.execute(sql`
+		UPDATE mentorship_requests
+		SET status = 'withdrawn', decided_at = now()
+		WHERE status = 'pending'
+			AND mentee_member_id = ${absorbedId}
+			AND EXISTS (
+				SELECT 1 FROM mentorship_requests k
+				WHERE k.status = 'pending' AND k.mentee_member_id = ${keeperId}
+			)`);
+	await tx
+		.update(mentorshipRequests)
+		.set({ menteeMemberId: keeperId })
+		.where(eq(mentorshipRequests.menteeMemberId, absorbedId));
+	await tx
+		.update(mentorshipRequests)
+		.set({ mentorMemberId: keeperId })
+		.where(eq(mentorshipRequests.mentorMemberId, absorbedId));
+	//     decided_by_member_id is nullable attribution in no unique index, so it
+	//     re-points plainly.
+	await tx
+		.update(mentorshipRequests)
+		.set({ decidedByMemberId: keeperId })
+		.where(eq(mentorshipRequests.decidedByMemberId, absorbedId));
 
 	// 18. speech_requests.membership_id (#1052) — ON DELETE CASCADE, so without
 	//     this the merge destroys every speech the absorbed membership had asked

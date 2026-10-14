@@ -30,8 +30,9 @@ export const ORIENTATION_LEARN_LABEL = "Learn how Pathways works";
  * club's own records (a path, a speaker slot, another slot, an active
  * new-member mentorship) and carry a link to the place that does the thing
  * instead: ticking them by hand would be the unverifiable self-report the
- * checklist is built to avoid. "Get a mentor" (#939) has no link — an admin
- * makes the pairing — and once done it names the mentor and how to reach them.
+ * checklist is built to avoid. "Get a mentor" (#939) links to Find a mentor
+ * (#945), where the member picks one; the VP Education can still pair them.
+ * Once done it names the mentor and how to reach them.
  */
 export function OrientationChecklist({
 	view,
@@ -220,7 +221,11 @@ function ItemAction({ item }: { item: OrientationItem }) {
 				</Link>
 			);
 		case "get-a-mentor":
-			// An admin makes the pairing; there is nothing for the member to open.
-			return null;
+			// The member can choose (#945); an admin can still make the pairing.
+			return (
+				<Link to="/mentors" className={ACTION_CLASS}>
+					Find a mentor
+				</Link>
+			);
 	}
 }

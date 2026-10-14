@@ -307,6 +307,9 @@ export async function insertFixtureClub(
 				name: r.name,
 				status: r.status ?? "active",
 				willingToMentor: r.willingToMentor ?? false,
+				// A fixture member who is willing chose it themselves, so they are
+				// listed on Find a mentor (#945); the DB refuses a listing without it.
+				mentorListedAt: r.willingToMentor ? opts.now : null,
 				joinedAt: r.joinedAt ?? joinedAgo(opts.now, 2),
 				clubRole: defaultClubRoleForOffices(
 					r.officerPosition ? [r.officerPosition] : [],

@@ -20,6 +20,9 @@ import {
 	ClubMentoringCard,
 	type ClubMentoringView,
 	MEMBER_MENTORING_HEADING,
+	MENTOR_CONFIRM_LABEL,
+	MENTOR_SAVE_AND_LIST_LABEL,
+	MENTOR_UNLISTED_NOTICE,
 	MENTORING_HEADING,
 	type MemberMentorshipsView,
 	MentorshipAdminPanel,
@@ -77,13 +80,19 @@ const party = (
 describe("MentorshipCard, the member's own (#939)", () => {
 	it("renders nothing without a payload", async () => {
 		const { container } = await renderInRouter(
-			<MentorshipCard view={null} onToggleWilling={vi.fn()} />,
+			<MentorshipCard
+				view={null}
+				onToggleWilling={vi.fn()}
+				onSaveBio={vi.fn()}
+			/>,
 		);
 		expect(container.querySelector("section")).toBeNull();
 	});
 
 	it("shows mentors and mentees with name, focus and contact", async () => {
 		const view: MyMentorshipsView = {
+			mentorBio: null,
+			mentorListed: true,
 			willingToMentor: false,
 			mentors: [party({ name: "Maya Mentor" })],
 			mentees: [
@@ -101,7 +110,11 @@ describe("MentorshipCard, the member's own (#939)", () => {
 			],
 		};
 		const { container } = await renderInRouter(
-			<MentorshipCard view={view} onToggleWilling={vi.fn()} />,
+			<MentorshipCard
+				view={view}
+				onToggleWilling={vi.fn()}
+				onSaveBio={vi.fn()}
+			/>,
 		);
 		expect(screen.getByText(MENTORING_HEADING)).toBeTruthy();
 		expect(screen.getByText(YOUR_MENTORS_HEADING)).toBeTruthy();
@@ -122,8 +135,15 @@ describe("MentorshipCard, the member's own (#939)", () => {
 	it("omits a list with nothing in it", async () => {
 		const { container } = await renderInRouter(
 			<MentorshipCard
-				view={{ willingToMentor: false, mentors: [], mentees: [] }}
+				view={{
+					mentorBio: null,
+					mentorListed: true,
+					willingToMentor: false,
+					mentors: [],
+					mentees: [],
+				}}
 				onToggleWilling={vi.fn()}
+				onSaveBio={vi.fn()}
 			/>,
 		);
 		expect(container.querySelector('[data-list="mentors"]')).toBeNull();
@@ -136,8 +156,15 @@ describe("MentorshipCard, the member's own (#939)", () => {
 		const onToggleWilling = vi.fn(async () => undefined);
 		await renderInRouter(
 			<MentorshipCard
-				view={{ willingToMentor: false, mentors: [], mentees: [] }}
+				view={{
+					mentorBio: null,
+					mentorListed: true,
+					willingToMentor: false,
+					mentors: [],
+					mentees: [],
+				}}
 				onToggleWilling={onToggleWilling}
+				onSaveBio={vi.fn()}
 			/>,
 		);
 		const box = screen.getByLabelText(WILLING_TO_MENTOR_LABEL);
@@ -146,15 +173,105 @@ describe("MentorshipCard, the member's own (#939)", () => {
 		expect(onToggleWilling).toHaveBeenCalledWith(true);
 	});
 
+	// protects=a member whose willing flag the import set (willing, not listed)
+	// sees the "can't find you yet" line and a "Show me on Find a mentor" button
+	// that fires onToggleWilling(true) (the confirm path), while a listed member
+	// and a member who is not willing see neither;
+	// fails_when=the notice shows for a listed or unwilling member, the button is
+	// missing, or it fires something other than the willing=true confirmation;
+	// no_claim=that the server lists them (mentor-listing.integration.test.ts)
+	it("offers to list a willing member Find a mentor cannot show yet", async () => {
+		const user = userEvent.setup();
+		const onToggleWilling = vi.fn(async () => undefined);
+		const base = {
+			mentorBio: null,
+			mentors: [],
+			mentees: [],
+		};
+		await renderInRouter(
+			<MentorshipCard
+				view={{ ...base, willingToMentor: true, mentorListed: false }}
+				onToggleWilling={onToggleWilling}
+				onSaveBio={vi.fn()}
+			/>,
+		);
+		expect(screen.getByText(MENTOR_UNLISTED_NOTICE)).toBeTruthy();
+		await user.click(
+			screen.getByRole("button", { name: MENTOR_CONFIRM_LABEL }),
+		);
+		expect(onToggleWilling).toHaveBeenCalledTimes(1);
+		expect(onToggleWilling).toHaveBeenCalledWith(true);
+		cleanup();
+		for (const view of [
+			{ ...base, willingToMentor: true, mentorListed: true },
+			{ ...base, willingToMentor: false, mentorListed: false },
+		]) {
+			await renderInRouter(
+				<MentorshipCard
+					view={view}
+					onToggleWilling={vi.fn()}
+					onSaveBio={vi.fn()}
+				/>,
+			);
+			expect(screen.queryByText(MENTOR_UNLISTED_NOTICE)).toBeNull();
+			expect(
+				screen.queryByRole("button", { name: MENTOR_CONFIRM_LABEL }),
+			).toBeNull();
+			cleanup();
+		}
+	});
+
+	// protects=the bio editor of a willing member who is not listed yet says that
+	// saving lists them ("Save and show me on Find a mentor"), because
+	// setMyMentorBio publishes a willing member; a listed member's button stays
+	// "Save"; the label click still sends the bio;
+	// fails_when=an unlisted member's Save is a plain "Save" (a silent publish),
+	// or a listed member's button claims to list them;
+	// no_claim=that the server lists them on save (mentor-bio.integration.test.ts)
+	it("labels the bio Save as listing the member while they are unlisted", async () => {
+		const user = userEvent.setup();
+		const onSaveBio = vi.fn(async () => undefined);
+		const base = { mentorBio: null, mentors: [], mentees: [] };
+		await renderInRouter(
+			<MentorshipCard
+				view={{ ...base, willingToMentor: true, mentorListed: false }}
+				onToggleWilling={vi.fn()}
+				onSaveBio={onSaveBio}
+			/>,
+		);
+		expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+		await user.type(screen.getByRole("textbox"), "Contests");
+		await user.click(
+			screen.getByRole("button", { name: MENTOR_SAVE_AND_LIST_LABEL }),
+		);
+		expect(onSaveBio).toHaveBeenCalledWith("Contests");
+		cleanup();
+
+		await renderInRouter(
+			<MentorshipCard
+				view={{ ...base, willingToMentor: true, mentorListed: true }}
+				onToggleWilling={vi.fn()}
+				onSaveBio={vi.fn()}
+			/>,
+		);
+		expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: MENTOR_SAVE_AND_LIST_LABEL }),
+		).toBeNull();
+	});
+
 	it("never reads as the charter club mentor", async () => {
 		const { container } = await renderInRouter(
 			<MentorshipCard
 				view={{
+					mentorBio: null,
+					mentorListed: true,
 					willingToMentor: true,
 					mentors: [party()],
 					mentees: [party({ name: "Nia" })],
 				}}
 				onToggleWilling={vi.fn()}
+				onSaveBio={vi.fn()}
 			/>,
 		);
 		expect(container.textContent?.toLowerCase()).not.toContain("club mentor");

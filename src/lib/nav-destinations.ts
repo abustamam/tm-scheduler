@@ -8,6 +8,7 @@ import {
 	Flag,
 	GraduationCap,
 	Grid3x3,
+	Handshake,
 	History,
 	LayoutGrid,
 	List,
@@ -246,6 +247,14 @@ export const NAV_DESTINATIONS = [
 		group: "me",
 		grant: "everyone",
 		icon: LayoutGrid,
+	},
+	{
+		key: "find-a-mentor",
+		to: "/mentors",
+		label: "Find a mentor",
+		group: "me",
+		grant: "everyone",
+		icon: Handshake,
 	},
 	{
 		key: "my-roles",

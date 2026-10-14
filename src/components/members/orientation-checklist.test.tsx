@@ -175,12 +175,19 @@ describe("OrientationChecklist (#940)", () => {
 		).toBeNull();
 	});
 
-	it("Get a mentor has no action while undone, and names nobody", async () => {
+	// protects=the undone "Get a mentor" item has exactly one link, to /mentors
+	// labelled Find a mentor, and still shows no mentor's name or contact;
+	// fails_when=the link is dropped or points elsewhere, a second link appears,
+	// or an undone item starts naming a mentor;
+	// no_claim=the done state, which lists the mentors (the tests after this)
+	it("Get a mentor links to Find a mentor while undone, and names nobody", async () => {
 		const { container } = await renderCard(facts());
 		await screen.findByText(ORIENTATION_HEADING);
 		const li = container.querySelector('li[data-item="get-a-mentor"]');
 		expect(li?.getAttribute("data-done")).toBe("false");
-		expect(li?.querySelector("a")).toBeNull();
+		const link = li?.querySelector('a[href="/mentors"]');
+		expect(link?.textContent).toContain("Find a mentor");
+		expect(li?.querySelectorAll("a").length).toBe(1);
 		expect(li?.querySelector('[data-slot="mentor-contacts"]')).toBeNull();
 	});
 
