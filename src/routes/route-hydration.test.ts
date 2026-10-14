@@ -160,6 +160,7 @@ const COVERED: Record<string, { who: Who; url: (f: Fixture) => string }> = {
 	"/activity": { who: "admin", url: () => "/activity" },
 	"/dashboard": { who: "admin", url: () => "/dashboard" },
 	"/me": { who: "admin", url: () => "/me" },
+	"/mentors": { who: "admin", url: () => "/mentors" },
 	"/officers": { who: "admin", url: () => "/officers" },
 	"/roster": { who: "admin", url: () => "/roster" },
 	"/schedule": { who: "admin", url: () => "/schedule" },

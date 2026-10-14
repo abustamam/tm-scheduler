@@ -1378,6 +1378,8 @@ const CONSIDERED_NOT_BLOCKING: Record<string, string> = {
 		"#1189 brief: votes print no name on an agenda",
 	"mentorships.created_by_member_id":
 		"provenance of a mentor pair, not on an agenda",
+	"mentorship_requests.decided_by_member_id":
+		"who decided a mentor request, not on an agenda",
 	"project_completion_marks.marked_by_member_id":
 		"#1189 brief: project marks print no name on an agenda",
 };

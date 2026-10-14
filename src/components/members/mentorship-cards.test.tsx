@@ -77,13 +77,18 @@ const party = (
 describe("MentorshipCard, the member's own (#939)", () => {
 	it("renders nothing without a payload", async () => {
 		const { container } = await renderInRouter(
-			<MentorshipCard view={null} onToggleWilling={vi.fn()} />,
+			<MentorshipCard
+				view={null}
+				onToggleWilling={vi.fn()}
+				onSaveBio={vi.fn()}
+			/>,
 		);
 		expect(container.querySelector("section")).toBeNull();
 	});
 
 	it("shows mentors and mentees with name, focus and contact", async () => {
 		const view: MyMentorshipsView = {
+			mentorBio: null,
 			willingToMentor: false,
 			mentors: [party({ name: "Maya Mentor" })],
 			mentees: [
@@ -101,7 +106,11 @@ describe("MentorshipCard, the member's own (#939)", () => {
 			],
 		};
 		const { container } = await renderInRouter(
-			<MentorshipCard view={view} onToggleWilling={vi.fn()} />,
+			<MentorshipCard
+				view={view}
+				onToggleWilling={vi.fn()}
+				onSaveBio={vi.fn()}
+			/>,
 		);
 		expect(screen.getByText(MENTORING_HEADING)).toBeTruthy();
 		expect(screen.getByText(YOUR_MENTORS_HEADING)).toBeTruthy();
@@ -122,8 +131,14 @@ describe("MentorshipCard, the member's own (#939)", () => {
 	it("omits a list with nothing in it", async () => {
 		const { container } = await renderInRouter(
 			<MentorshipCard
-				view={{ willingToMentor: false, mentors: [], mentees: [] }}
+				view={{
+					mentorBio: null,
+					willingToMentor: false,
+					mentors: [],
+					mentees: [],
+				}}
 				onToggleWilling={vi.fn()}
+				onSaveBio={vi.fn()}
 			/>,
 		);
 		expect(container.querySelector('[data-list="mentors"]')).toBeNull();
@@ -136,8 +151,14 @@ describe("MentorshipCard, the member's own (#939)", () => {
 		const onToggleWilling = vi.fn(async () => undefined);
 		await renderInRouter(
 			<MentorshipCard
-				view={{ willingToMentor: false, mentors: [], mentees: [] }}
+				view={{
+					mentorBio: null,
+					willingToMentor: false,
+					mentors: [],
+					mentees: [],
+				}}
 				onToggleWilling={onToggleWilling}
+				onSaveBio={vi.fn()}
 			/>,
 		);
 		const box = screen.getByLabelText(WILLING_TO_MENTOR_LABEL);
@@ -150,11 +171,13 @@ describe("MentorshipCard, the member's own (#939)", () => {
 		const { container } = await renderInRouter(
 			<MentorshipCard
 				view={{
+					mentorBio: null,
 					willingToMentor: true,
 					mentors: [party()],
 					mentees: [party({ name: "Nia" })],
 				}}
 				onToggleWilling={vi.fn()}
+				onSaveBio={vi.fn()}
 			/>,
 		);
 		expect(container.textContent?.toLowerCase()).not.toContain("club mentor");
@@ -210,6 +233,7 @@ describe("ClubMentoringCard, the admin's list (#939)", () => {
 
 describe("MentorshipAdminPanel, the member page (#939)", () => {
 	const view: MemberMentorshipsView = {
+		mentorBio: null,
 		willingToMentor: false,
 		mentors: [party({ id: "pair-1", name: "Maya Mentor" })],
 		mentees: [],

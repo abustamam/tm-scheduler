@@ -77,6 +77,18 @@ const FNS: { fn: string; gate: RegExp; logic: string; write: boolean }[] = [
 		write: true,
 	},
 	{
+		fn: "setMyMentorBio",
+		gate: SELF,
+		logic: "setMyMentorBioDb",
+		write: true,
+	},
+	{
+		fn: "listMentors",
+		gate: MEMBER_READ,
+		logic: "listMentorsDb",
+		write: false,
+	},
+	{
 		fn: "createMentorship",
 		gate: ADMIN_WRITE,
 		logic: "createMentorshipDb",
@@ -149,6 +161,7 @@ describe("mentorship server fns (#939)", () => {
 			"loadMyMentorships",
 			"loadMemberMentorships",
 			"loadClubMentorships",
+			"listMentors",
 			"activePairingsFor",
 			"memberHasMentorship",
 		]) {

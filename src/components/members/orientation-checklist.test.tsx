@@ -175,12 +175,14 @@ describe("OrientationChecklist (#940)", () => {
 		).toBeNull();
 	});
 
-	it("Get a mentor has no action while undone, and names nobody", async () => {
+	it("Get a mentor links to Find a mentor while undone, and names nobody", async () => {
 		const { container } = await renderCard(facts());
 		await screen.findByText(ORIENTATION_HEADING);
 		const li = container.querySelector('li[data-item="get-a-mentor"]');
 		expect(li?.getAttribute("data-done")).toBe("false");
-		expect(li?.querySelector("a")).toBeNull();
+		const link = li?.querySelector('a[href="/mentors"]');
+		expect(link?.textContent).toContain("Find a mentor");
+		expect(li?.querySelectorAll("a").length).toBe(1);
 		expect(li?.querySelector('[data-slot="mentor-contacts"]')).toBeNull();
 	});
 
