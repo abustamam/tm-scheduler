@@ -73,8 +73,13 @@ const person = {
 		awards: 0,
 		tableTopics: 0,
 		introducedBy: 0,
+		memberList: 0,
+		mentorChart: 0,
+		speechRequests: 0,
 		guestCategories: [],
 	},
+	listOnly: false,
+	needsDecision: true,
 };
 
 const PLAN_HASH = "a".repeat(64);
@@ -498,5 +503,89 @@ describe("ImportHistoryPanel (#1051)", () => {
 		fireEvent.click(button);
 		await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Nope."));
 		expect(screen.queryByTestId("mentors-result")).toBeNull();
+	});
+});
+
+describe("people named only by the lists (#1203)", () => {
+	const listAppearances = {
+		roles: 0,
+		attendance: 0,
+		awards: 0,
+		tableTopics: 0,
+		introducedBy: 0,
+		memberList: 0,
+		mentorChart: 0,
+		speechRequests: 0,
+		guestCategories: [],
+	};
+	const listPerson = (over: Record<string, unknown>) => ({
+		...person,
+		listOnly: true,
+		...over,
+	});
+
+	it("shows an unmatched list-only person as information, not a decision, and leaves Apply on", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue({
+			...previewFor(true),
+			people: [
+				listPerson({
+					key: "es:900100",
+					name: "Pat Pending",
+					status: "unmatched",
+					candidates: [],
+					needsDecision: false,
+					appearances: { ...listAppearances, mentorChart: 1 },
+				}),
+				listPerson({
+					key: "es:900101",
+					name: "Quinn Quartz",
+					status: "member",
+					via: "exact",
+					memberId: M1,
+					candidates: [],
+					needsDecision: false,
+					appearances: { ...listAppearances, memberList: 1 },
+				}),
+			],
+		});
+		await openImport();
+		const info = await screen.findByTestId("list-only-people");
+		expect(info.textContent).toContain("1 on the member list");
+		expect(screen.getByTestId("list-only-es:900100").textContent).toContain(
+			"Pat Pending: in the mentor chart",
+		);
+		expect(screen.queryByTestId("resolve-es:900100")).toBeNull();
+		expect(screen.queryByText("People to decide")).toBeNull();
+		expect(
+			(
+				(await screen.findByRole("button", {
+					name: "Apply import",
+				})) as HTMLButtonElement
+			).disabled,
+		).toBe(false);
+	});
+
+	it("asks for an ambiguous list-only person but does not offer a guest", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue({
+			...previewFor(false),
+			people: [
+				listPerson({
+					appearances: { ...listAppearances, speechRequests: 1 },
+					needsDecision: true,
+				}),
+			],
+		});
+		await openImport();
+		const select = (await screen.findByLabelText(
+			"What to do with Elliot Dovecott",
+		)) as HTMLSelectElement;
+		expect([...select.options].map((o) => o.value)).toEqual([
+			"",
+			"member",
+			"skip",
+		]);
+		expect(screen.getByTestId("resolve-es:900005").textContent).toContain(
+			"in the speech requests",
+		);
 	});
 });

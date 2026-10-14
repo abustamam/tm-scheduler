@@ -16,6 +16,14 @@
  *   choice: a member, a guest, or a skip with a reason.
  * - **Roles.** `EASY_SPEAK_ROLE_MAP` names the standard roles; anything else
  *   becomes a role definition of the club's own.
+ * - **People who are on a list only** (#1203). The member list, the mentor chart
+ *   (both columns) and the speech requesters are people too: the mentor and
+ *   speech-request steps find a person only through the `person` ref an apply
+ *   wrote. They go through the same matching, but a person seen ONLY there is
+ *   matched to the roster and never made: no match leaves them unmatched, they do
+ *   not block the apply, and the later steps report them unresolved. Only a
+ *   meeting appearance makes a guest. An AMBIGUOUS name from a list asks the same
+ *   decision as one from a meeting, except that a guest is not on offer.
  * - **Meetings.** Past meetings only, each imported as `completed`. A future
  *   meeting keeps the live schedule and is listed, not written.
  *
@@ -210,8 +218,20 @@ export interface PlanPerson {
 		awards: number;
 		tableTopics: number;
 		introducedBy: number;
+		/** The bundle's member list (`bundle.people`). */
+		memberList: number;
+		/** The mentoring chart, as the row's member or as its mentor. */
+		mentorChart: number;
+		/** The speech-request queue, as the requester. */
+		speechRequests: number;
 		guestCategories: EsGuestCategory[];
 	};
+	/**
+	 * Named only by the member list, the mentor chart or the speech requests, never
+	 * by a meeting. Such a person is matched to the roster and never created, and
+	 * stays unmatched without blocking the apply (#1203).
+	 */
+	listOnly: boolean;
 	outcome: PlanPersonOutcome;
 	/** A chosen member id the roster does not hold: shown, and the person stays unresolved. */
 	rejectedChoice: string | null;
@@ -313,7 +333,10 @@ export interface PlanCounts {
 
 export interface ImportPlan {
 	people: PlanPerson[];
-	/** Persons that still need a human: ambiguous or unmatched. */
+	/**
+	 * Persons that still need a human: ambiguous, or unmatched with a meeting
+	 * appearance. An unmatched person who is on a list only is not here.
+	 */
 	unresolved: PlanPerson[];
 	roleDefinitions: PlanRoleDefinitionPlan[];
 	meetings: PlanMeeting[];
@@ -364,6 +387,30 @@ interface Seen {
 	ref: EsPersonRef;
 	appearances: PlanPerson["appearances"];
 	onMemberList: boolean;
+	/**
+	 * Every spelling the records gave this key, case and spacing aside. A name-only
+	 * key folds accents away, so two spellings ("José", "Jose") share one key: the
+	 * exact-name matcher must not pick one of them for both.
+	 */
+	spellings: Set<string>;
+}
+
+/** A spelling that keeps its accents: the fold's own key throws them away. */
+function spellingOf(name: string): string {
+	return name.normalize("NFC").replace(/\s+/gu, " ").trim().toLowerCase();
+}
+
+/**
+ * Whether a person needs a human before the apply: an ambiguous match, or an
+ * unmatched one that a meeting names. A person on a list only is matched when the
+ * roster has them and otherwise left alone (#1203). The one rule the plan's
+ * `unresolved` and the preview's `needsDecision` both read.
+ */
+export function needsDecision(p: PlanPerson): boolean {
+	return (
+		p.outcome.status === "ambiguous" ||
+		(p.outcome.status === "unmatched" && !p.listOnly)
+	);
 }
 
 /** Why an existing meeting is left as it is: the report says it in these words. */
@@ -460,17 +507,22 @@ export function buildImportPlan(
 			entry = {
 				ref,
 				onMemberList: ref.esUserId ? memberListIds.has(ref.esUserId) : false,
+				spellings: new Set(),
 				appearances: {
 					roles: 0,
 					attendance: 0,
 					awards: 0,
 					tableTopics: 0,
 					introducedBy: 0,
+					memberList: 0,
+					mentorChart: 0,
+					speechRequests: 0,
 					guestCategories: [],
 				},
 			};
 			seen.set(key, entry);
 		}
+		entry.spellings.add(spellingOf(ref.name));
 		entry.appearances[field]++;
 		if (category && !entry.appearances.guestCategories.includes(category)) {
 			entry.appearances.guestCategories.push(category);
@@ -488,6 +540,19 @@ export function buildImportPlan(
 		touch(intro.visitor, "attendance", "visitor");
 		touch(intro.introducedBy, "introducedBy");
 	}
+	// The lists (#1203). After the meetings, so a person a meeting names keeps the
+	// reference the meeting gave. A club's whole bundle is read here, not only its
+	// past meetings: a request or a chart row does not belong to a meeting.
+	for (const row of bundle.people) {
+		touch({ esUserId: row.esUserId, name: row.name }, "memberList");
+	}
+	for (const row of bundle.mentors) {
+		touch(row.mentee, "mentorChart");
+		if (row.mentor) touch(row.mentor, "mentorChart");
+	}
+	for (const request of bundle.speechRequests) {
+		touch(request.who, "speechRequests");
+	}
 
 	// -- Resolve them ----------------------------------------------------------
 	const rosterByName = new Map<string, PlanRosterMember[]>();
@@ -503,6 +568,14 @@ export function buildImportPlan(
 	const people: PlanPerson[] = [];
 	for (const [key, entry] of seen) {
 		const { ref, appearances } = entry;
+		// A person no meeting names: matched, never created (#1203).
+		const listOnly =
+			appearances.roles +
+				appearances.attendance +
+				appearances.awards +
+				appearances.tableTopics +
+				appearances.introducedBy ===
+			0;
 		let outcome: PlanPersonOutcome = { status: "unmatched" };
 		let rejectedChoice: string | null = null;
 
@@ -526,17 +599,21 @@ export function buildImportPlan(
 			// made that member, so its absence says the membership was merged away or
 			// a convert was undone, not that anyone declined this person. The person
 			// is matched by name again, and asks a human if that finds nobody.
-			const exact = rosterByName.get(ref.name.trim()) ?? [];
+			// Two spellings under one name-only key (José / Jose) cannot take the exact
+			// pass: it would match the first spelling and hand the second its member.
+			// The fold's candidates go to a human, or to nobody if the roster has none.
+			const collided = !ref.esUserId && entry.spellings.size > 1;
+			const exact = collided ? [] : (rosterByName.get(ref.name.trim()) ?? []);
 			const folded = rosterByFold.get(foldName(ref.name)) ?? [];
 			const candidates = exact.length > 0 ? exact : folded;
 			const first = candidates[0];
-			if (candidates.length === 1 && first) {
+			if (candidates.length === 1 && first && !collided) {
 				outcome = {
 					status: "member",
 					memberId: first.memberId,
 					via: exact.length > 0 ? "exact" : "folded",
 				};
-			} else if (candidates.length > 1) {
+			} else if (candidates.length > 1 || (collided && first)) {
 				outcome = { status: "ambiguous", candidates };
 			} else if (
 				appearances.guestCategories.length > 0 &&
@@ -552,7 +629,14 @@ export function buildImportPlan(
 			// Only a person the rules could not place takes a human's answer: an
 			// automatic match is not overridable from here.
 			if (outcome.status === "ambiguous" || outcome.status === "unmatched") {
-				const choice = ctx.resolutions?.[key];
+				// A person on a list only is never made a guest, and with no roster
+				// match there is nothing to decide, so a saved choice is not read.
+				const saved = ctx.resolutions?.[key];
+				const choice =
+					listOnly &&
+					(outcome.status === "unmatched" || saved?.action === "guest")
+						? undefined
+						: saved;
 				if (choice?.action === "member") {
 					if (rosterIds.has(choice.memberId)) {
 						outcome = {
@@ -580,6 +664,7 @@ export function buildImportPlan(
 			esUserId: ref.esUserId,
 			name: ref.name,
 			appearances,
+			listOnly,
 			outcome,
 			rejectedChoice,
 		});
@@ -587,9 +672,7 @@ export function buildImportPlan(
 	people.sort(
 		(a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key),
 	);
-	const unresolved = people.filter(
-		(p) => p.outcome.status === "ambiguous" || p.outcome.status === "unmatched",
-	);
+	const unresolved = people.filter(needsDecision);
 
 	// -- Role definitions ------------------------------------------------------
 	const defsByKey = new Map(

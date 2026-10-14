@@ -78,6 +78,7 @@ import {
 	isJsonbSafeText,
 	leftAloneReason,
 	MEETING_LEFT_ALONE,
+	needsDecision,
 	type Omission,
 	type PersonResolution,
 	type PlanContext,
@@ -488,6 +489,10 @@ export interface ImportPreviewPerson {
 	candidates: PlanRosterMember[];
 	rejectedChoice: string | null;
 	appearances: PlanPerson["appearances"];
+	/** On the member list, the mentor chart or the speech requests only: matched, never created (#1203). */
+	listOnly: boolean;
+	/** Whether the apply waits for a human's answer on this person. */
+	needsDecision: boolean;
 }
 
 export interface ImportPreview {
@@ -529,6 +534,8 @@ function previewPerson(p: PlanPerson): ImportPreviewPerson {
 		candidates: o.status === "ambiguous" ? o.candidates : [],
 		rejectedChoice: p.rejectedChoice,
 		appearances: p.appearances,
+		listOnly: p.listOnly,
+		needsDecision: needsDecision(p),
 	};
 }
 
@@ -668,7 +675,7 @@ interface Resolved {
 }
 
 /** People, then role definitions: everything every meeting needs, written once. */
-async function writePeopleAndRoles(
+export async function writePeopleAndRoles(
 	clubId: string,
 	plan: ImportPlan,
 ): Promise<Resolved> {
@@ -776,6 +783,9 @@ async function writePeopleAndRoles(
 					out.guests.set(person.key, o.guestId);
 					continue;
 				}
+				// The plan never makes a guest of a person no meeting names (#1203);
+				// this is the second lock on that door.
+				if (person.listOnly) continue;
 				let introducedByMemberId: string | null = null;
 				const introducer = byKey.get(introducerOf.get(person.key) ?? "");
 				if (introducer?.outcome.status === "member") {

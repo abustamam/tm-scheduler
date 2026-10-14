@@ -406,6 +406,280 @@ describe("buildImportPlan on the B fixture", () => {
 	});
 });
 
+describe("people the lists name and no meeting does (#1203)", () => {
+	// Avery Alderfinch matches nobody and the roster has two Elliot Dovecotts, both
+	// from a meeting: settle them so the only things left to decide are under test.
+	const SKIP_AVERY = {
+		"es:900001": { action: "skip", reason: "Not a member." },
+		"es:900005": { action: "member", memberId: id(3) },
+	} as const;
+	const person = (plan: ReturnType<typeof buildImportPlan>, esUserId: string) =>
+		plan.people.find((p) => p.key === `es:${esUserId}`);
+
+	it("matches a member-list, mentor-chart and requester person to the roster", () => {
+		const roster = [
+			...ROSTER,
+			{ memberId: id(20), name: "Casey Winterbourne" }, // member list + mentor chart
+			{ memberId: id(21), name: "Avery Ivybridge" }, // a mentor, and nothing else
+			{ memberId: id(22), name: "Xan Tansley" }, // a requester, and nothing else
+		];
+		const plan = buildImportPlan(
+			load(),
+			ctx({ roster, resolutions: SKIP_AVERY }),
+		);
+		expect(person(plan, "900029")).toMatchObject({
+			listOnly: true,
+			outcome: { status: "member", memberId: id(20), via: "exact" },
+			appearances: { memberList: 1, mentorChart: 1, speechRequests: 0 },
+		});
+		expect(person(plan, "900027")).toMatchObject({
+			listOnly: true,
+			outcome: { status: "member", memberId: id(21), via: "exact" },
+			appearances: { memberList: 0, mentorChart: 1, speechRequests: 0 },
+		});
+		expect(person(plan, "900050")).toMatchObject({
+			listOnly: true,
+			outcome: { status: "member", memberId: id(22), via: "exact" },
+			appearances: { speechRequests: 1 },
+		});
+		// A meeting's person is not list-only, whatever else names them.
+		expect(person(plan, "900057")?.listOnly).toBe(false);
+		expect(person(plan, "900057")?.appearances.mentorChart).toBe(1);
+	});
+
+	it("matches a list-only person by folded name and by an earlier import's ref", () => {
+		const roster = [
+			...ROSTER,
+			{ memberId: id(20), name: "casey WINTERBOURNE" },
+			{ memberId: id(23), name: "Someone Else" },
+		];
+		const plan = buildImportPlan(
+			load(),
+			ctx({
+				roster,
+				resolutions: SKIP_AVERY,
+				refs: [{ kind: "person", sourceId: "es:900033", targetId: id(23) }],
+			}),
+		);
+		expect(person(plan, "900029")?.outcome).toMatchObject({
+			status: "member",
+			via: "folded",
+		});
+		expect(person(plan, "900033")?.outcome).toMatchObject({
+			status: "member",
+			memberId: id(23),
+			via: "ref",
+		});
+	});
+
+	it("leaves a list-only person with no roster match unmatched: never a guest, never blocking", () => {
+		const before = buildImportPlan(load(), ctx({ resolutions: SKIP_AVERY }));
+		const unmatched = before.people.filter(
+			(p) => p.listOnly && p.outcome.status === "unmatched",
+		);
+		expect(unmatched.map((p) => p.name)).toEqual(
+			expect.arrayContaining(["Avery Ivybridge", "Casey Winterbourne"]),
+		);
+		expect(before.unresolved).toEqual([]);
+		expect(before.canApply).toBe(true);
+		// None of them is a guest to create, however they are named.
+		expect(before.counts.newGuests).toBe(
+			buildImportPlan(
+				{ ...load(), people: [], mentors: [], speechRequests: [] },
+				ctx({ resolutions: SKIP_AVERY }),
+			).counts.newGuests,
+		);
+	});
+
+	it("does not read a saved decision for an unmatched list-only person, nor a guest choice for an ambiguous one", () => {
+		const roster = [
+			...ROSTER,
+			{ memberId: id(30), name: "Gray Ashlowe" },
+			{ memberId: id(31), name: "Gray Ashlowe" },
+		];
+		const plan = buildImportPlan(
+			load(),
+			ctx({
+				roster,
+				resolutions: {
+					...SKIP_AVERY,
+					// unmatched, list-only: nothing to decide
+					"es:900029": { action: "guest", kind: "visitor" },
+					"es:900027": { action: "member", memberId: id(1) },
+					// ambiguous, list-only: a guest is not on offer
+					"es:900033": { action: "guest", kind: "visitor" },
+				},
+			}),
+		);
+		expect(person(plan, "900029")?.outcome.status).toBe("unmatched");
+		expect(person(plan, "900027")?.outcome.status).toBe("unmatched");
+		expect(person(plan, "900033")?.outcome.status).toBe("ambiguous");
+		expect(plan.unresolved.map((p) => p.key)).toEqual(["es:900033"]);
+		expect(plan.canApply).toBe(false);
+	});
+
+	it("asks for an ambiguous list-only name the way it asks for a meeting's", () => {
+		const roster = [
+			...ROSTER,
+			{ memberId: id(30), name: "Gray Ashlowe" },
+			{ memberId: id(31), name: "Gray Ashlowe" },
+		];
+		const asks = buildImportPlan(
+			load(),
+			ctx({ roster, resolutions: SKIP_AVERY }),
+		);
+		const gray = person(asks, "900033");
+		expect(gray?.listOnly).toBe(true);
+		expect(gray?.outcome).toMatchObject({ status: "ambiguous" });
+		expect(asks.unresolved.map((p) => p.key)).toContain("es:900033");
+		expect(asks.canApply).toBe(false);
+
+		const answered = buildImportPlan(
+			load(),
+			ctx({
+				roster,
+				resolutions: {
+					...SKIP_AVERY,
+					"es:900033": { action: "member", memberId: id(31) },
+				},
+			}),
+		);
+		expect(person(answered, "900033")?.outcome).toMatchObject({
+			status: "member",
+			memberId: id(31),
+			via: "chosen",
+		});
+		expect(answered.canApply).toBe(true);
+
+		const skipped = buildImportPlan(
+			load(),
+			ctx({
+				roster,
+				resolutions: {
+					...SKIP_AVERY,
+					"es:900033": { action: "skip", reason: "Left the club." },
+				},
+			}),
+		);
+		expect(person(skipped, "900033")?.outcome.status).toBe("skipped");
+		expect(skipped.canApply).toBe(true);
+	});
+
+	it("does not let two spellings of one name-only key share an exact match", () => {
+		// "José Silva" and "Jose Silva" fold to one key. The roster holds only José,
+		// so the exact pass would match the chart's José and hand him Jose's request.
+		const bundle = load();
+		bundle.mentors.push({
+			mentee: { esUserId: null, name: "José Silva" },
+			mentor: null,
+			wantsMentee: false,
+		});
+		bundle.speechRequests.push({
+			...bundle.speechRequests[0],
+			esSpeechId: "sr-jose",
+			who: { esUserId: null, name: "Jose Silva" },
+		} as EasySpeakBundleV1["speechRequests"][number]);
+		const roster = [...ROSTER, { memberId: id(50), name: "José Silva" }];
+		const plan = buildImportPlan(
+			bundle,
+			ctx({ roster, resolutions: SKIP_AVERY }),
+		);
+		const silva = plan.people.find((p) => p.key === "name:jose silva");
+		expect(silva?.outcome).toMatchObject({ status: "ambiguous" });
+		expect(
+			silva?.outcome.status === "ambiguous" && silva.outcome.candidates,
+		).toEqual([{ memberId: id(50), name: "José Silva" }]);
+		expect(plan.unresolved.map((p) => p.key)).toContain("name:jose silva");
+		expect(plan.canApply).toBe(false);
+
+		// With both spellings on the roster the human sees both, not the first match.
+		const both = buildImportPlan(
+			bundle,
+			ctx({
+				roster: [...roster, { memberId: id(51), name: "Jose Silva" }],
+				resolutions: SKIP_AVERY,
+			}),
+		);
+		const bothOutcome = both.people.find(
+			(p) => p.key === "name:jose silva",
+		)?.outcome;
+		expect(
+			bothOutcome?.status === "ambiguous" &&
+				bothOutcome.candidates.map((c) => c.memberId).sort(),
+		).toEqual([id(50), id(51)]);
+
+		// A roster with neither spelling leaves them unmatched, never a guess.
+		const none = buildImportPlan(bundle, ctx({ resolutions: SKIP_AVERY }));
+		expect(
+			none.people.find((p) => p.key === "name:jose silva")?.outcome,
+		).toEqual({
+			status: "unmatched",
+		});
+		expect(none.canApply).toBe(true);
+
+		// One spelling, case and spacing aside, still matches on its own.
+		const same = load();
+		same.mentors.push({
+			mentee: { esUserId: null, name: "José Silva" },
+			mentor: null,
+			wantsMentee: false,
+		});
+		same.speechRequests.push({
+			...same.speechRequests[0],
+			esSpeechId: "sr-jose",
+			who: { esUserId: null, name: "josé  silva" },
+		} as EasySpeakBundleV1["speechRequests"][number]);
+		const one = buildImportPlan(same, ctx({ roster, resolutions: SKIP_AVERY }));
+		expect(
+			one.people.find((p) => p.key === "name:jose silva")?.outcome,
+		).toMatchObject({
+			status: "member",
+			memberId: id(50),
+		});
+	});
+
+	it("applies the same rule when a meeting and a list spell a name differently", () => {
+		const bundle = load();
+		const past = bundle.meetings.find((m) => m.esMeetingId === "644304");
+		const slot = past?.roles.find((r) => r.role === "2nd Speaker");
+		if (!past || !slot) throw new Error("fixture changed");
+		slot.holder = { esUserId: null, name: "José Silva" };
+		bundle.mentors.push({
+			mentee: { esUserId: null, name: "Jose Silva" },
+			mentor: null,
+			wantsMentee: false,
+		});
+		const roster = [...ROSTER, { memberId: id(50), name: "José Silva" }];
+		const plan = buildImportPlan(
+			bundle,
+			ctx({ roster, resolutions: SKIP_AVERY }),
+		);
+		const silva = plan.people.find((p) => p.key === "name:jose silva");
+		expect(silva?.listOnly).toBe(false);
+		expect(silva?.outcome).toMatchObject({ status: "ambiguous" });
+		expect(plan.canApply).toBe(false);
+	});
+
+	it("keys a person with no profile id by folded name, so a request finds the ref it needs", () => {
+		const bundle = load();
+		bundle.mentors.push({
+			mentee: { esUserId: null, name: "Nova  Quill" },
+			mentor: null,
+			wantsMentee: false,
+		});
+		const plan = buildImportPlan(
+			bundle,
+			ctx({
+				roster: [...ROSTER, { memberId: id(40), name: "Nova Quill" }],
+				resolutions: SKIP_AVERY,
+			}),
+		);
+		const nova = plan.people.find((p) => p.key === "name:nova quill");
+		expect(nova?.outcome).toMatchObject({ status: "member", memberId: id(40) });
+		expect(nova?.key).toBe(personKeyOf({ esUserId: null, name: "Nova Quill" }));
+	});
+});
+
 describe("personResolutionSchema", () => {
 	it("needs a reason to skip, and strips NUL from it", () => {
 		expect(

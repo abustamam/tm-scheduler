@@ -351,13 +351,13 @@ export function ImportHistoryPanel({
 					) : null}
 
 					<PeopleToResolve
-						people={data.people.filter(
-							(p) => p.status === "ambiguous" || p.status === "unmatched",
-						)}
+						people={data.people.filter((p) => p.needsDecision)}
 						roster={data.roster}
 						drafts={drafts}
 						setDraft={setDraft}
 					/>
+
+					<ListOnlyPeople people={data.people} />
 
 					{!data.canApply ? (
 						<p className="text-sm text-muted-foreground">
@@ -620,6 +620,7 @@ function PeopleToResolve({
 				{people.map((p) => {
 					const d = drafts[p.key] ?? EMPTY_DRAFT;
 					const a = p.appearances;
+					const fromLists = listAppearances(a);
 					return (
 						<li
 							key={p.key}
@@ -634,6 +635,10 @@ function PeopleToResolve({
 										: "is not on the roster"}
 									; {a.roles} roles, {a.attendance} attendance, {a.awards}{" "}
 									awards, {a.tableTopics} Table Topics
+									{fromLists.length > 0 ? `, ${fromLists.join(", ")}` : ""}
+									{p.listOnly
+										? ". Named by no meeting: it can only be matched to a member or skipped"
+										: ""}
 								</span>
 							</div>
 							{p.rejectedChoice ? (
@@ -654,7 +659,7 @@ function PeopleToResolve({
 								>
 									<option value="">Choose...</option>
 									<option value="member">A member</option>
-									<option value="guest">A guest</option>
+									{p.listOnly ? null : <option value="guest">A guest</option>}
 									<option value="skip">Skip</option>
 								</select>
 								{d.choice === "member" ? (
@@ -727,6 +732,53 @@ function PeopleToResolve({
 					);
 				})}
 			</ul>
+		</div>
+	);
+}
+
+/** Where the member list, the mentor chart and the speech requests name a person. */
+function listAppearances(a: PreviewPeople[number]["appearances"]): string[] {
+	return [
+		a.memberList > 0 ? "on the member list" : null,
+		a.mentorChart > 0 ? "in the mentor chart" : null,
+		a.speechRequests > 0 ? "in the speech requests" : null,
+	].filter((x): x is string => x !== null);
+}
+
+/**
+ * People only the member list, the mentor chart or the speech requests name
+ * (#1203). They are matched to the roster and never created, so there is nothing
+ * to decide: this says who got a member and who did not, because the mentor and
+ * speech-request steps skip the second group.
+ */
+function ListOnlyPeople({ people }: { people: PreviewPeople }) {
+	const listOnly = people.filter((p) => p.listOnly);
+	if (listOnly.length === 0) return null;
+	const matched = listOnly.filter((p) => p.status === "member");
+	const unmatched = listOnly.filter((p) => p.status === "unmatched");
+	return (
+		<div className="space-y-1 text-sm" data-testid="list-only-people">
+			<h3 className="font-bold">People named only by the lists</h3>
+			<p className="text-muted-foreground">
+				{matched.length} on the member list, mentor chart or speech requests{" "}
+				{matched.length === 1 ? "matches" : "match"} a member and{" "}
+				{matched.length === 1 ? "gets" : "get"} a link for the mentor and
+				speech-request steps. No guest or member is created for the others.
+			</p>
+			{unmatched.length > 0 ? (
+				<details>
+					<summary className="cursor-pointer">
+						{unmatched.length} not on the roster, so the later steps skip them
+					</summary>
+					<ul className="list-disc pl-5">
+						{unmatched.map((p) => (
+							<li key={p.key} data-testid={`list-only-${p.key}`}>
+								{p.name}: {listAppearances(p.appearances).join(", ")}
+							</li>
+						))}
+					</ul>
+				</details>
+			) : null}
 		</div>
 	);
 }
