@@ -601,7 +601,11 @@ function ContentSlide({
 					// The gap under the rule is this box's TOP padding — the header
 					// element above ends at the rule.
 					paddingTop: cqw(SLIDE_HEADER_GAP_PCT),
-					paddingBottom: cqw(SLIDE_BODY_BOTTOM_PCT),
+					// With the (V) key below, the bottom padding moves to the key's own
+					// row, so this box ends where the key begins: `fitScale` then divides
+					// by the room the body really has, and a crowded slide shrinks rather
+					// than running into the key or the footer (#1164).
+					paddingBottom: layout.body.legend ? 0 : cqw(SLIDE_BODY_BOTTOM_PCT),
 				}}
 			>
 				<div ref={inner} className="w-full">
@@ -654,6 +658,25 @@ function ContentSlide({
 					)}
 				</div>
 			</div>
+			{/* The (V) key (#1164): one muted line directly above the footer, below any
+			    note or detail. A sibling of the measured body box, so the body is fitted
+			    to the space left above it. Null on a slide with no (V), which then
+			    renders exactly as it did. */}
+			{layout.body.legend ? (
+				<div
+					data-visiting-legend=""
+					className="shrink-0 text-[1.7cqw] leading-snug"
+					style={{
+						color: MUTED,
+						paddingLeft: cqw(SLIDE_INSET_PCT),
+						paddingRight: cqw(SLIDE_INSET_PCT),
+						paddingTop: cqw(1),
+						paddingBottom: cqw(SLIDE_BODY_BOTTOM_PCT),
+					}}
+				>
+					{layout.body.legend}
+				</div>
+			) : null}
 			{/* The footer's height and side inset come from the same module the
 			    header and body read (#724). It used to carry its own `h-[8.5cqw]`
 			    and `px-[5cqw]`, matching the .pptx's own two literals and matching

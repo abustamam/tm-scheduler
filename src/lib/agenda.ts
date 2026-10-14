@@ -139,6 +139,10 @@ export type RosterEntry = {
 	 *  since a club's role names and the guest marker both contain the
 	 *  separators a parser would key on. */
 	holders?: string[];
+	/** True when a holder this entry names is a visiting Toastmaster (#1164), so
+	 *  the sheet that prints it owes the reader the (V) key. Carried from the
+	 *  slot, never read back off `name`. Absent (not `false`) otherwise. */
+	visiting?: true;
 };
 
 /** Subtle marker appended to a guest assignee's name everywhere it renders
@@ -146,26 +150,73 @@ export type RosterEntry = {
  *  (#1208: "Visitor" and "Guest" are one word), so the two cannot drift. */
 export const GUEST_MARKER = GUEST_KIND_LABELS.visitor;
 
-/** Format an assignee's display name, appending the guest marker when the
- *  assignee is a non-member guest. Null name → null (caller shows "open").
- *  A visiting Toastmaster and a Visitor both read "Name · Guest" (#1208). */
+/** The short marker a visiting Toastmaster carries on every agenda surface
+ *  (#1164): "Jane Doe (V)". Any other guest keeps "· Guest". The home club is
+ *  deliberately not on the agenda (it stays in the minutes guest list). */
+export const VISITING_TOASTMASTER_MARKER = "(V)";
+
+/** The one-line key for `VISITING_TOASTMASTER_MARKER`, shown only on a sheet,
+ *  slide or screen that actually shows a (V). */
+export const VISITING_TOASTMASTER_LEGEND = "(V) Visiting Toastmaster";
+
+/** Format an assignee's display name. A member reads as the bare name; a
+ *  visiting Toastmaster as `Name (V)`; any other guest as `Name · Guest`.
+ *  Null name → null (caller shows "open"). `isVisitingToastmaster` only matters
+ *  for a guest, so a member row can never carry the marker (#1164). */
 export function assigneeDisplayName(
 	name: string | null,
 	isGuest?: boolean,
+	isVisitingToastmaster?: boolean,
 ): string | null {
 	if (!name) return null;
-	return isGuest ? `${name} · ${GUEST_MARKER}` : name;
+	if (!isGuest) return name;
+	return isVisitingToastmaster
+		? `${name} ${VISITING_TOASTMASTER_MARKER}`
+		: `${name} · ${GUEST_MARKER}`;
+}
+
+/** The three slot fields that decide how an assignee is named. Every surface
+ *  that holds a slot reads them through `slotAssigneeDisplay` / `isVisitingSlot`
+ *  rather than passing the triple by hand (#1164). */
+export type AssigneeFields = {
+	assigneeName: string | null;
+	/** True when the assignee is a non-member guest (#151) — renders "· Guest". */
+	assigneeIsGuest?: boolean;
+	/** True when that guest is a visiting Toastmaster (#1164) — renders "(V)". */
+	assigneeIsVisitingToastmaster?: boolean;
+};
+
+/** A slot's rendered assignee name, or null when it has none. */
+export function slotAssigneeDisplay(slot: AssigneeFields): string | null {
+	return assigneeDisplayName(
+		slot.assigneeName,
+		slot.assigneeIsGuest,
+		slot.assigneeIsVisitingToastmaster,
+	);
+}
+
+/**
+ * Whether this slot renders as "Name (V)": a NAMED guest who is a visiting
+ * Toastmaster. This is what every (V) legend is decided from (#1164) — the
+ * slot, never the rendered text, because a speech title, a theme or a member's
+ * own name can all end in " (V)" without anyone being a visiting Toastmaster.
+ * It is exactly the condition under which `assigneeDisplayName` appends the
+ * marker, so a legend can never be asked for by a name that does not show one.
+ */
+export function isVisitingSlot(slot: AssigneeFields): boolean {
+	return (
+		!!slot.assigneeName &&
+		slot.assigneeIsGuest === true &&
+		slot.assigneeIsVisitingToastmaster === true
+	);
 }
 
 /** Minimal slot shape needed to order the meeting-roles roster. */
-export type RosterSlot = {
+export type RosterSlot = AssigneeFields & {
 	roleName: string;
 	slotIndex: number;
 	category: "leadership" | "speaker" | "evaluator" | "functionary";
 	isSpeakerRole: boolean;
-	assigneeName: string | null;
-	/** True when the assignee is a non-member guest (#151) — renders "· Guest". */
-	assigneeIsGuest?: boolean;
 	/** See `role_definitions.slots_unordered` (#624). The roster collapses such
 	 *  a role into one entry naming every holder; callers that omit the flag get
 	 *  one numbered entry per slot, as before. */
@@ -194,7 +245,7 @@ function collapsedRosterEntry(
 	group: readonly RosterSlot[],
 ): RosterEntry {
 	const names = group
-		.map((g) => assigneeDisplayName(g.assigneeName, g.assigneeIsGuest))
+		.map((g) => slotAssigneeDisplay(g))
 		.filter((n): n is string => n != null);
 	if (names.length === 0)
 		return { label: roleName, name: null, holderCount: 0 };
@@ -203,6 +254,7 @@ function collapsedRosterEntry(
 		name: listRoles(names),
 		holders: names,
 		holderCount: names.length,
+		...(group.some(isVisitingSlot) ? { visiting: true as const } : {}),
 	};
 }
 
@@ -248,7 +300,8 @@ export function buildRosterEntries<T extends RosterSlot>(
 				slot: s,
 				entry: {
 					label: slotLabel(s, roleCounts),
-					name: assigneeDisplayName(s.assigneeName, s.assigneeIsGuest),
+					name: slotAssigneeDisplay(s),
+					...(isVisitingSlot(s) ? { visiting: true as const } : {}),
 				},
 			});
 			continue;

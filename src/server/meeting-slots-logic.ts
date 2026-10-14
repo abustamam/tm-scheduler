@@ -80,8 +80,13 @@ export async function loadMeetingSlots(
 			// "is mine" / roster flags. A guest assignee is carried separately.
 			assigneeId: assignee.id,
 			assigneeGuestId: guestAssignee.id,
+			// Only the kind, not a caption: it decides "(V)" vs "· Guest" (#1164). The
+			// raw value is folded into `assigneeIsVisitingToastmaster` below and not
+			// carried on the returned row.
+			assigneeGuestKind: guestAssignee.kind,
 			// The rendered assignee name resolves either source (#151); the caller
-			// pairs it with `assigneeIsGuest` to show the "· Guest" marker.
+			// pairs it with `assigneeIsGuest` / `assigneeIsVisitingToastmaster` to
+			// show the "· Guest" or "(V)" marker.
 			assigneeName: sql<
 				string | null
 			>`coalesce(${assignee.name}, ${guestAssignee.name})`,
@@ -108,11 +113,13 @@ export async function loadMeetingSlots(
 		.where(eq(roleSlots.meetingId, meetingId))
 		.orderBy(asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex));
 
-	// Flag guest-held slots so every read path can render the "· Guest" marker.
-	// A visiting Toastmaster and a Visitor both read "Name · Guest" (#1208).
-	const rowsWithGuestFlag = rows.map((r) => ({
+	// Flag guest-held slots so every read path can render the guest marker: a
+	// visiting Toastmaster reads "Name (V)" (#1164), any other guest "Name · Guest".
+	const rowsWithGuestFlag = rows.map(({ assigneeGuestKind, ...r }) => ({
 		...r,
 		assigneeIsGuest: r.assigneeGuestId != null,
+		assigneeIsVisitingToastmaster:
+			r.assigneeGuestId != null && assigneeGuestKind === "visiting_toastmaster",
 	}));
 
 	// Resolve which speaker each evaluator slot evaluates.

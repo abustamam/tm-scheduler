@@ -1,5 +1,6 @@
 import PptxGenJS from "pptxgenjs";
 import { describe, expect, it } from "vitest";
+import { VISITING_TOASTMASTER_LEGEND } from "./agenda";
 import type { AgendaSlot } from "./agenda-runsheet";
 import {
 	buildSlideDeck,
@@ -956,5 +957,58 @@ describe("content-slide geometry (#359, #724)", () => {
 				).toBeGreaterThan(0);
 			}
 		}
+	});
+});
+
+describe("the (V) key in the .pptx (#1164)", () => {
+	const deckFor = (visiting: boolean) => {
+		const slots = fullSlots.map((s) =>
+			s.id === "sp1"
+				? {
+						...s,
+						assigneeName: "Jane Doe",
+						assigneeIsGuest: visiting,
+						assigneeIsVisitingToastmaster: visiting,
+					}
+				: s,
+		);
+		const deck = buildSlideDeck({
+			meeting,
+			club,
+			slots,
+			ballotUrl: BALLOT_URL,
+			geIntroducesFunctionaries: false,
+		});
+		return { deck, pptx: deckToPptx(PptxGenJS, deck) };
+	};
+
+	// protects=the exported deck prints "(V) Visiting Toastmaster" on each slide that
+	// names a visiting Toastmaster, and on no other slide, and prints nothing of it
+	// when the same speaker is a member;
+	// fails_when=the .pptx drops the line the screen deck shows, or stamps it on a
+	// slide with no (V), or the member deck still carries it;
+	// no_claim=where the line sits against the footer band: that is checked by the
+	// shared spacing constants, not read back from pptxgenjs.
+	it("writes the legend on the slides that name a (V), and only those", () => {
+		const { deck, pptx } = deckFor(true);
+		const withLegend = deck
+			.map((s, i) => ({ s, text: slideText(pptx, i) }))
+			.filter(({ text }) => text.includes(VISITING_TOASTMASTER_LEGEND));
+		expect(withLegend.length).toBeGreaterThan(0);
+		for (const { text } of withLegend) expect(text).toContain("Jane Doe (V)");
+		// Every slide that names her carries the key (the speech and the vote).
+		const naming = deck
+			.map((_, i) => slideText(pptx, i))
+			.filter((t) => t.includes("Jane Doe (V)"));
+		expect(naming.length).toBeGreaterThanOrEqual(2);
+		expect(withLegend.length).toBe(naming.length);
+
+		const member = deckFor(false);
+		const memberText = member.deck
+			.map((_, i) => slideText(member.pptx, i))
+			.join("\n");
+		expect(memberText).toContain("Jane Doe");
+		expect(memberText).not.toContain(VISITING_TOASTMASTER_LEGEND);
+		expect(memberText).not.toContain("(V)");
 	});
 });

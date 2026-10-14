@@ -7,15 +7,19 @@ import {
 	buildShortCodes,
 	formatLastServed,
 	generateSlotRows,
+	isVisitingSlot,
 	OPEN_LABEL,
 	resolveAssignAction,
 	resolveEvaluatorLinks,
 	roleAbbrev,
 	rosterGridPositions,
 	slotAccessibleLabel,
+	slotAssigneeDisplay,
 	slotLabel,
 	suggestFills,
 	summarizeAgenda,
+	VISITING_TOASTMASTER_LEGEND,
+	VISITING_TOASTMASTER_MARKER,
 } from "./agenda";
 
 const rosterSlot = (
@@ -1130,5 +1134,118 @@ describe("suggestFills — propose members for open slots by role recency (#58)"
 			roleRecency: recency,
 		});
 		expect(out).toEqual([{ slotId: "s1", memberId: null, lastServedAt: null }]);
+	});
+});
+
+describe("the visiting Toastmaster marker (#1164)", () => {
+	// protects=a member reads as the bare name, even if the visiting flag is set on
+	// a row that is not a guest's;
+	// fails_when=the flag alone adds "(V)" to a member, or a member gains "· Guest";
+	// no_claim=none beyond protects.
+	it("leaves a member's name bare", () => {
+		expect(assigneeDisplayName("Jane Doe", false, false)).toBe("Jane Doe");
+		expect(assigneeDisplayName("Jane Doe", false, true)).toBe("Jane Doe");
+		expect(assigneeDisplayName("Jane Doe")).toBe("Jane Doe");
+	});
+
+	// protects=a visiting Toastmaster reads "Name (V)";
+	// fails_when=it reads "· Guest", carries a home club, or loses the space;
+	// no_claim=which guests the loader flags: the integration test pins that.
+	it("marks a visiting Toastmaster (V)", () => {
+		expect(assigneeDisplayName("Jane Doe", true, true)).toBe("Jane Doe (V)");
+		expect(VISITING_TOASTMASTER_MARKER).toBe("(V)");
+		expect(VISITING_TOASTMASTER_LEGEND).toBe("(V) Visiting Toastmaster");
+	});
+
+	// protects=any other guest keeps "· Guest";
+	// fails_when=the (V) path swallows the plain guest, or the default flips;
+	// no_claim=none beyond protects.
+	it("keeps '· Guest' for every other guest", () => {
+		expect(assigneeDisplayName("Jane Doe", true, false)).toBe(
+			"Jane Doe · Guest",
+		);
+		expect(assigneeDisplayName("Jane Doe", true)).toBe("Jane Doe · Guest");
+	});
+
+	// protects=whether a slot is a visiting Toastmaster is decided from the slot's
+	// own fields: a NAMED guest flagged visiting, and nothing else;
+	// fails_when=a member, an ordinary guest or an unassigned slot is reported as
+	// visiting, or a visiting guest is not;
+	// no_claim=none beyond protects.
+	it("decides 'visiting' from the slot, not the text", () => {
+		const visiting = {
+			assigneeName: "Jane Doe",
+			assigneeIsGuest: true,
+			assigneeIsVisitingToastmaster: true,
+		};
+		expect(isVisitingSlot(visiting)).toBe(true);
+		expect(isVisitingSlot({ ...visiting, assigneeIsGuest: false })).toBe(false);
+		expect(
+			isVisitingSlot({ ...visiting, assigneeIsVisitingToastmaster: false }),
+		).toBe(false);
+		expect(isVisitingSlot({ ...visiting, assigneeName: null })).toBe(false);
+		expect(isVisitingSlot({ assigneeName: "Jane Doe" })).toBe(false);
+		// A member whose own name ends " (V)" is not one.
+		expect(isVisitingSlot({ assigneeName: "Pat Lee (V)" })).toBe(false);
+	});
+
+	// protects=a slot's rendered name is the same string `assigneeDisplayName`
+	// builds from its three fields;
+	// fails_when=`slotAssigneeDisplay` drops the visiting field (a visiting
+	// Toastmaster reads "· Guest") or the guest field;
+	// no_claim=none beyond protects.
+	it("renders a slot through slotAssigneeDisplay", () => {
+		expect(
+			slotAssigneeDisplay({
+				assigneeName: "Jane Doe",
+				assigneeIsGuest: true,
+				assigneeIsVisitingToastmaster: true,
+			}),
+		).toBe("Jane Doe (V)");
+		expect(
+			slotAssigneeDisplay({ assigneeName: "Jane Doe", assigneeIsGuest: true }),
+		).toBe("Jane Doe · Guest");
+		expect(slotAssigneeDisplay({ assigneeName: "Jane Doe" })).toBe("Jane Doe");
+		expect(slotAssigneeDisplay({ assigneeName: null })).toBeNull();
+	});
+
+	// protects=a roster entry carries `visiting` exactly when a holder it names is
+	// a visiting Toastmaster, per slot and for a collapsed unordered role, and a
+	// member whose own name ends " (V)" does not set it;
+	// fails_when=the flag is read off `name` (a member called "Pat Lee (V)" sets
+	// it), dropped from the collapsed entry, or set on an ordinary guest;
+	// no_claim=what a layout does with the flag: the print and deck suites do.
+	it("flags a roster entry from its slots", () => {
+		const visiting = {
+			assigneeName: "Jane Doe",
+			assigneeIsGuest: true,
+			assigneeIsVisitingToastmaster: true,
+		};
+		const entries = buildRosterEntries([
+			rosterSlot("Toastmaster", 0, "leadership", false, "Pat Lee (V)"),
+			{ ...rosterSlot("Timer", 0, "functionary", false, null), ...visiting },
+			{
+				...rosterSlot("Grammarian", 0, "functionary", false, "Al Guest"),
+				assigneeIsGuest: true,
+			},
+		]);
+		expect(entries.map((e) => [e.label, e.visiting ?? false])).toEqual([
+			["Toastmaster", false],
+			["Timer", true],
+			["Grammarian", false],
+		]);
+		const collapsed = buildRosterEntries([
+			{
+				...rosterSlot("Contestant", 0, "speaker", true, "Bo Chen"),
+				slotsUnordered: true,
+			},
+			{
+				...rosterSlot("Contestant", 1, "speaker", true, null),
+				...visiting,
+				slotsUnordered: true,
+			},
+		]);
+		expect(collapsed).toHaveLength(1);
+		expect(collapsed[0]?.visiting).toBe(true);
 	});
 });

@@ -200,9 +200,9 @@ describe("MeetingAgenda capability gating", () => {
 			}),
 			[guestSlot],
 		);
-		expect(screen.getByText("Mentor Mike")).toBeTruthy();
-		// The "Guest" badge should render alongside the name.
-		expect(screen.getByText("Guest")).toBeTruthy();
+		// The name and its guest marker are one string, "Name · Guest", the same
+		// one print and the deck carry (#1164) — not a name plus a badge.
+		expect(screen.getByText("Mentor Mike · Guest")).toBeTruthy();
 	});
 
 	it("hides manager-only controls for a signed-in non-manager", () => {
@@ -1377,7 +1377,7 @@ describe("MeetingAgenda: a holder who said they can't make it (#764)", () => {
 			undefined,
 			{ unavailableMemberIds: ["m-held"] },
 		);
-		expect(screen.getByText("Guest Gail")).toBeTruthy();
+		expect(screen.getByText("Guest Gail · Guest")).toBeTruthy();
 		expect(screen.queryByRole("status")).toBeNull();
 	});
 

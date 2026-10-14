@@ -645,10 +645,15 @@ export function DarkFooter({
 	left,
 	right,
 	qrUrl,
+	legend,
 }: {
 	left: React.ReactNode;
 	right: React.ReactNode;
 	qrUrl?: string;
+	/** The (V) key (#1164), set only on a sheet that shows a (V). It leads the
+	 *  disclaimer paragraph in the same 7.5px type: no new element, and no new
+	 *  line unless the paragraph itself wraps. */
+	legend?: string;
 }) {
 	return (
 		<div
@@ -696,7 +701,9 @@ export function DarkFooter({
 							color: "rgba(255,255,255,0.5)",
 						}}
 					>
-						{TOASTMASTERS_DISCLAIMER}
+						{legend
+							? `${legend} · ${TOASTMASTERS_DISCLAIMER}`
+							: TOASTMASTERS_DISCLAIMER}
 					</p>
 				</div>
 				{qrUrl ? (

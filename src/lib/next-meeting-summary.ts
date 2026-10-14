@@ -14,7 +14,7 @@
  * reaches the served document, and the in-room payload guard under
  * `src/routes/` asserts over what ships.
  */
-import { assigneeDisplayName } from "./agenda";
+import { isVisitingSlot, slotAssigneeDisplay } from "./agenda";
 import { type AgendaSlot, matchesRole } from "./agenda-runsheet";
 
 /** One role on the next meeting, all its places together. */
@@ -25,6 +25,10 @@ export type NextMeetingRole = {
 	names: string[];
 	/** How many of its places are unclaimed. */
 	openCount: number;
+	/** True when one of `names` is a visiting Toastmaster's "Name (V)" (#1164),
+	 *  from the slot that produced it, so the slide can show the key. Absent
+	 *  otherwise. */
+	visiting?: true;
 };
 
 export type NextMeetingSummary = {
@@ -73,9 +77,10 @@ export function summarizeRoles(slots: readonly SummarySlot[]): {
 			g = { label: s.roleName, names: [], openCount: 0, tm: isToastmaster(s) };
 			groups.set(s.roleDefinitionId, g);
 		}
-		const name = assigneeDisplayName(s.assigneeName, s.assigneeIsGuest);
+		const name = slotAssigneeDisplay(s);
 		if (name) g.names.push(name);
 		else g.openCount += 1;
+		if (isVisitingSlot(s)) g.visiting = true;
 	}
 	let toastmaster: NextMeetingRole | null = null;
 	const roles: NextMeetingRole[] = [];

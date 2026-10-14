@@ -21,17 +21,20 @@
  *
  * Pure: no database access, so every branch here is reachable from a unit test.
  */
+import { slotAssigneeDisplay } from "./agenda";
 import {
 	type AgendaRow,
 	type AgendaSlot,
 	assigneeDisplay,
+	detailTokenSlots,
 	evaluatedSpeakerLabel,
 	introducedSuffix,
 	numbered,
 	OPEN_LABEL,
-	pairedEvaluatorNames,
+	pairedEvaluatorSlots,
 	resolveDetailTokens,
 	type TimingMarks,
+	visitingFlag,
 } from "./agenda-runsheet";
 import {
 	MAX_ROLE_REPEAT_SLOTS,
@@ -396,8 +399,14 @@ function toRow(
 	// Cap BEFORE resolving: the cap bounds what an officer TYPED, and resolution
 	// can legitimately expand a short token into a long list of holder names.
 	// Capping afterwards would truncate people's names instead of the input.
+	const rawDetail = capChars(row.detail ?? "", MAX_TEMPLATE_DETAIL_CHARS);
+	// The evaluators paired to this iteration's speech, as SLOTS: the token
+	// renders their names and `visiting` asks the slots (#1164).
+	const pairedSlots = blockSlot
+		? pairedEvaluatorSlots(blockSlot.id, allSlots)
+		: undefined;
 	const detail = resolveDetailTokens(
-		capChars(row.detail ?? "", MAX_TEMPLATE_DETAIL_CHARS),
+		rawDetail,
 		allSlots,
 		// A materialized beat's `{roles}` always carries its own group, so there
 		// is no Beat-side list to fall back to. An officer who types a bare
@@ -408,9 +417,20 @@ function toRow(
 		// 622a's promise and what `agenda-adoption-parity.test.ts` holds. Outside
 		// a repeat block there is no speech to pair with and the token correctly
 		// resolves to nothing.
-		blockSlot
-			? () => introducedSuffix(pairedEvaluatorNames(blockSlot.id, allSlots))
+		pairedSlots
+			? () =>
+					introducedSuffix(
+						pairedSlots
+							.map((s) => slotAssigneeDisplay(s))
+							.filter((n): n is string => n != null),
+					)
 			: undefined,
+	);
+	// Who the detail NAMES through its tokens, asked of the slots (#1164). A
+	// visiting Toastmaster named by `{names:role}` / `{evaluator:paired}` earns
+	// the legend on this row even when the row's own holder is a member.
+	const tokenVisiting = visitingFlag(
+		...detailTokenSlots(rawDetail, allSlots, pairedSlots),
 	);
 	const base = {
 		detail,
@@ -435,13 +455,18 @@ function toRow(
 			slotId: null,
 			section: true,
 			...base,
+			// No `visiting` here, deliberately: a row's flag means "this row, as
+			// rendered, shows a (V)", and no surface renders a section's `detail`
+			// (the print bands, the deck's `templateSection` and the run sheet read
+			// only `who`). A section note naming a visiting Toastmaster would ask
+			// for a legend on a sheet that prints no "(V)" (#1164).
 			marks: null,
 		};
 	}
 
 	if (row.kind === "event") {
 		// No owner, so no slot (#732).
-		return { who: label, slotId: null, ...base };
+		return { who: label, slotId: null, ...base, ...tokenVisiting };
 	}
 
 	// A role beat bound to NOBODY renders as a plain labelled beat — the same
@@ -460,7 +485,8 @@ function toRow(
 	// card — leaves the officer able to author an invisible row anyway, one
 	// select away, and asks them to learn a rule instead of removing it.
 	// The beat names no role, so it is bound to no slot either (#732).
-	if (row.roleKey == null) return { who: label, slotId: null, ...base };
+	if (row.roleKey == null)
+		return { who: label, slotId: null, ...base, ...tokenVisiting };
 	const role = rolesByKey.get(row.roleKey);
 	// A beat naming a role the template does not declare is dropped rather than
 	// rendered against an invented name. The seed is the only writer in Phase 1,
@@ -540,6 +566,16 @@ function toRow(
 		// Reuses `oneSlot`, which the speech/evaluator overrides below already
 		// gate on, so "this row is about one person" is asked once.
 		slotId: oneSlot?.id ?? null,
+		// The holder(s) this row names, or a visiting Toastmaster its detail names
+		// through a token (#1164). The speech title and "Evaluates X" overrides
+		// below replace the detail, so a token that no longer prints counts for
+		// nothing.
+		...visitingFlag(
+			...bound,
+			...(speechSlot?.speechTitle || evaluatedLabel
+				? []
+				: detailTokenSlots(rawDetail, allSlots, pairedSlots)),
+		),
 		...base,
 		// Slot-derived overrides, applied AFTER `base` so they win. Only ever set
 		// on a speaker or evaluator row bound to exactly one slot; every other row

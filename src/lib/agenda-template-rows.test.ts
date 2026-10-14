@@ -1201,3 +1201,178 @@ describe("refreshTableTopicsMarks (#679)", () => {
 		).toEqual({ green: 1, yellow: 1.5, red: 2 });
 	});
 });
+
+describe("the visiting-Toastmaster flag on a template row (#1164)", () => {
+	const visitor = (s: AgendaSlot): AgendaSlot => ({
+		...s,
+		assigneeIsGuest: true,
+		assigneeIsVisitingToastmaster: true,
+	});
+	const roles: TemplateRoleRow[] = [
+		...ROLES,
+		{
+			key: "table_topics_master",
+			name: "Table Topics Master",
+			isSpeakerRole: false,
+		},
+		{ key: "evaluator", name: "Evaluator", isSpeakerRole: false },
+	];
+	const ttm = (assignee: string | null, visiting: boolean) => {
+		const s = slot("table_topics_master", "Table Topics Master", 0, assignee);
+		return visiting ? visitor(s) : s;
+	};
+	const rowFor = (label: string, rows: ReturnType<typeof buildTemplateRows>) =>
+		rows.find((r) => r.who.startsWith(label));
+
+	// protects=a row is flagged `visiting` when its HOLDER is a visiting
+	// Toastmaster, and not when the holder is a member or a Visitor;
+	// fails_when=the flag is read from the rendered holder text, or set for a
+	// guest who is not a visiting Toastmaster;
+	// no_claim=the deck and print legends built from the flag: agenda-parity.test.ts.
+	it("flags the row its visiting holder sits on, and not a member's or a Visitor's", () => {
+		const beats = [
+			beat({
+				sortOrder: 0,
+				kind: "role",
+				label: "Contest briefing",
+				roleKey: "contest_chair",
+			}),
+		];
+		const flagged = buildTemplateRows(beats, roles, [
+			visitor(slot("contest_chair", "Contest Chair", 0, "Jane Doe")),
+		]);
+		expect(flagged[0]?.who).toBe("Contest briefing · Jane Doe (V)");
+		expect(flagged[0]?.visiting).toBe(true);
+		for (const s of [
+			slot("contest_chair", "Contest Chair", 0, "Pat Lee (V)"),
+			{
+				...slot("contest_chair", "Contest Chair", 0, "Jane Doe"),
+				assigneeIsGuest: true,
+				assigneeIsVisitingToastmaster: false,
+			},
+		]) {
+			const rows = buildTemplateRows(beats, roles, [s]);
+			expect(rows[0]?.visiting).toBeUndefined();
+		}
+	});
+
+	// protects=a row whose DETAIL names a visiting Toastmaster through
+	// `{names:role}` earns the flag though its own holder is a member: the (V) is
+	// printed in the detail line, so the legend must be on that sheet;
+	// fails_when=only the holder fields are consulted (the old post-pass), so the
+	// detail's "(V)" prints with no legend;
+	// no_claim=none beyond protects.
+	it("flags a row whose detail names the visitor through {names:role}", () => {
+		const beats = [
+			beat({
+				sortOrder: 0,
+				kind: "role",
+				label: "Contest briefing",
+				detail:
+					"Introduces the {role:table_topics_master}{names:table_topics_master}",
+				roleKey: "contest_chair",
+			}),
+		];
+		const withVisitor = buildTemplateRows(beats, roles, [
+			slot("contest_chair", "Contest Chair", 0, "Pat Lee"),
+			ttm("Jane Doe", true),
+		]);
+		expect(withVisitor[0]?.holder).toBe("Pat Lee");
+		expect(withVisitor[0]?.detail).toContain("Jane Doe (V)");
+		expect(withVisitor[0]?.visiting).toBe(true);
+		const withMember = buildTemplateRows(beats, roles, [
+			slot("contest_chair", "Contest Chair", 0, "Pat Lee"),
+			ttm("Jane Doe", false),
+		]);
+		expect(withMember[0]?.detail).toContain("Jane Doe");
+		expect(withMember[0]?.visiting).toBeUndefined();
+		// Free text with a literal "(V)" and no token is not a visiting Toastmaster.
+		const literal = buildTemplateRows(
+			[
+				beat({
+					sortOrder: 0,
+					kind: "event",
+					label: "Welcome",
+					detail: "Please greet our guest (V)",
+				}),
+			],
+			roles,
+			[ttm("Jane Doe", true)],
+		);
+		expect(literal[0]?.visiting).toBeUndefined();
+	});
+
+	// protects=`visiting` means "this row, as rendered, shows a (V)": a SECTION
+	// row's detail is rendered by no surface (the print bands, the deck's
+	// templateSection and the run sheet read only `who`), so a section note that
+	// names a visiting Toastmaster must not flag the row, or a sheet whose
+	// roster/rows show no (V) prints the key anyway. An event row and an unbound
+	// role row DO render their detail everywhere, so theirs still flag;
+	// fails_when=a section row takes `tokenVisiting` from its detail again;
+	// no_claim=none beyond protects.
+	it("does not flag a section row whose hidden note names the visitor, and still flags the event and unbound-role rows that print it", () => {
+		const detail = "{names:table_topics_master}";
+		const rows = buildTemplateRows(
+			[
+				beat({
+					sortOrder: 0,
+					kind: "section",
+					label: "ROUND ONE",
+					detail,
+				}),
+				beat({ sortOrder: 1, kind: "event", label: "Welcome", detail }),
+				beat({ sortOrder: 2, kind: "role", label: "Note", detail }),
+			],
+			roles,
+			[ttm("Jane Doe", true)],
+		);
+		const [section, event, unbound] = rows;
+		expect(section?.section).toBe(true);
+		expect(section?.visiting).toBeUndefined();
+		expect(event?.detail).toContain("Jane Doe (V)");
+		expect(event?.visiting).toBe(true);
+		expect(unbound?.detail).toContain("Jane Doe (V)");
+		expect(unbound?.visiting).toBe(true);
+	});
+
+	// protects=`{evaluator:paired}` on a speech preamble flags the row when the
+	// paired evaluator is a visiting Toastmaster, though the Toastmaster holding
+	// the row is a member;
+	// fails_when=the paired evaluator's slot is not consulted;
+	// no_claim=none beyond protects.
+	it("flags a preamble row whose paired evaluator is the visitor", () => {
+		const speaker = slot("contestant", "Contestant", 0, "Ann Speaker");
+		const evaluator: AgendaSlot = {
+			...visitor(slot("evaluator", "Evaluator", 0, "Jane Doe")),
+			evaluatesSlotId: speaker.id,
+		};
+		const beats = [
+			beat({
+				sortOrder: 0,
+				kind: "role",
+				label: "Preamble",
+				detail: "Introduces the evaluator{evaluator:paired}",
+				roleKey: "contest_chair",
+				repeatsRoleKey: "contestant",
+			}),
+		];
+		const rows = buildTemplateRows(beats, roles, [
+			slot("contest_chair", "Contest Chair", 0, "Pat Lee"),
+			speaker,
+			evaluator,
+		]);
+		const preamble = rowFor("Preamble", rows);
+		expect(preamble?.detail).toContain("Jane Doe (V)");
+		expect(preamble?.visiting).toBe(true);
+		const member = buildTemplateRows(beats, roles, [
+			slot("contest_chair", "Contest Chair", 0, "Pat Lee"),
+			speaker,
+			{
+				...evaluator,
+				assigneeIsGuest: false,
+				assigneeIsVisitingToastmaster: false,
+			},
+		]);
+		expect(rowFor("Preamble", member)?.visiting).toBeUndefined();
+	});
+});

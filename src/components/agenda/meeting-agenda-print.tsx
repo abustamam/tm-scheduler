@@ -7,7 +7,11 @@
 // meeting-schedule are optional free-text profile fields: each renders in its
 // designated slot when set and is omitted gracefully (no empty label) when not.
 import { QRCodeSVG } from "qrcode.react";
-import { type RosterEntry, rosterGridPositions } from "#/lib/agenda";
+import {
+	type RosterEntry,
+	rosterGridPositions,
+	VISITING_TOASTMASTER_LEGEND,
+} from "#/lib/agenda";
 import { groupByPresenter } from "#/lib/agenda-groups";
 import type { AgendaLayout } from "#/lib/agenda-layouts";
 import { RUN_NARRATIVE_TYPE } from "#/lib/agenda-print-type";
@@ -103,6 +107,23 @@ type Props = {
 	// hand-rolled officer footer instead.
 	qrUrl?: string;
 };
+
+/** The (V) key (#1164) for a sheet, or undefined. Decided per SHEET from what
+ *  that sheet actually renders: a two-sheet layout shows the roster on one and
+ *  the run of show on the other, so each asks only about what it carries.
+ *  Read from the `visiting` flag the roster entries and rows carry from their
+ *  slots, never from the rendered text: a speech title, a note line or a
+ *  member's own name can end in " (V)" without anyone being a visiting
+ *  Toastmaster. */
+function sheetLegend(shown: {
+	roles?: readonly AgendaRoleEntry[];
+	rows?: readonly TimelineRow[];
+}): string | undefined {
+	const shows =
+		(shown.roles ?? []).some((r) => r.visiting) ||
+		(shown.rows ?? []).some((r) => r.visiting);
+	return shows ? VISITING_TOASTMASTER_LEGEND : undefined;
+}
 
 /** minutes (e.g. 6.5) → "6:30" for the timing marks. Shared with the grace
  *  window (#357) so a mark and its window always read in the same units. */
@@ -1145,6 +1166,7 @@ function EditorialLayout({
 				left="Guests are always welcome — speak to any officer about getting involved."
 				right="toastmasters.org"
 				qrUrl={qrUrl}
+				legend={sheetLegend({ roles, rows })}
 			/>
 		</FitPage>
 	);
@@ -1239,6 +1261,7 @@ function GridLayout({
 	rows,
 	qrUrl,
 }: Omit<Props, "layout" | "explainers">) {
+	const legend = sheetLegend({ roles, rows });
 	return (
 		<FitPage>
 			{/* header */}
@@ -1438,6 +1461,7 @@ function GridLayout({
 				{officers.length > 0 ||
 				header.meetingSchedule ||
 				header.mission ||
+				legend ||
 				qrUrl ? (
 					<div
 						data-print-footer=""
@@ -1456,7 +1480,10 @@ function GridLayout({
 							color: "#fff",
 						}}
 					>
-						{officers.length > 0 || header.meetingSchedule || qrUrl ? (
+						{officers.length > 0 ||
+						header.meetingSchedule ||
+						legend ||
+						qrUrl ? (
 							<div
 								style={{
 									display: "flex",
@@ -1493,6 +1520,22 @@ function GridLayout({
 										gap: 8,
 									}}
 								>
+									{/* The (V) key (#1164), before "Meets" in the same type, so
+									    it rides this row rather than adding one to a sheet that
+									    has no headroom. */}
+									{legend ? (
+										<span
+											data-visiting-legend=""
+											style={{
+												fontSize: 9.5,
+												color: "rgba(255,255,255,.7)",
+												textAlign: "right",
+											}}
+										>
+											{legend}
+											{header.meetingSchedule ? " ·" : ""}
+										</span>
+									) : null}
 									{header.meetingSchedule ? (
 										<span
 											style={{
@@ -1649,6 +1692,9 @@ function SpaciousLayout({
 	rows,
 	qrUrl,
 }: Omit<Props, "layout" | "explainers">) {
+	// Page 1 carries the roster, page 2 the run of show; each decides for itself.
+	const page1Legend = sheetLegend({ roles });
+	const page2Legend = sheetLegend({ rows });
 	return (
 		<TwoPage>
 			{/* PAGE 1 */}
@@ -1773,7 +1819,10 @@ function SpaciousLayout({
 				    neither officers nor a meeting schedule on file would otherwise
 				    render no band at all on this sheet, and the QR would have
 				    nowhere to go on the very page this fixes. */}
-				{officers.length > 0 || header.meetingSchedule || qrUrl ? (
+				{officers.length > 0 ||
+				header.meetingSchedule ||
+				page1Legend ||
+				qrUrl ? (
 					<div
 						data-print-footer=""
 						style={{
@@ -1830,6 +1879,20 @@ function SpaciousLayout({
 										>
 											{header.meetingSchedule}
 										</div>
+									</div>
+								) : null}
+								{/* The (V) key (#1164): one line under the "Meets" block. */}
+								{page1Legend ? (
+									<div
+										data-visiting-legend=""
+										style={{
+											marginTop:
+												officers.length > 0 || header.meetingSchedule ? 8 : 0,
+											fontSize: 9.5,
+											color: "rgba(255,255,255,.7)",
+										}}
+									>
+										{page1Legend}
 									</div>
 								) : null}
 							</div>
@@ -1914,6 +1977,7 @@ function SpaciousLayout({
 					left="Guests are always welcome — speak to any officer about getting involved."
 					right="toastmasters.org"
 					qrUrl={qrUrl}
+					legend={page2Legend}
 				/>
 			</FitPage>
 		</TwoPage>
@@ -1968,6 +2032,9 @@ function TimingLayout({
 	rows,
 	qrUrl,
 }: Omit<Props, "layout">) {
+	// Page 1 carries the roster, page 2 the timing table; each decides for itself.
+	const page1Legend = sheetLegend({ roles });
+	const page2Legend = sheetLegend({ rows });
 	return (
 		<TwoPage>
 			{/* PAGE 1 — roles, signals, officers, explainers */}
@@ -2195,6 +2262,7 @@ function TimingLayout({
 					left="Page 1 of 2 · Officers & roles"
 					right="toastmasters.org"
 					qrUrl={qrUrl}
+					legend={page1Legend}
 				/>
 			</FitPage>
 
@@ -2423,6 +2491,7 @@ function TimingLayout({
 					left="Page 2 of 2 · Detailed run of show"
 					right={`${header.clubName}`}
 					qrUrl={qrUrl}
+					legend={page2Legend}
 				/>
 			</FitPage>
 		</TwoPage>
