@@ -202,6 +202,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"list_meetings",
 			"record_guest_book",
 			"restore_meeting",
+			"set_awards",
 			"upsert_agendas",
 			"whoami",
 		]);
@@ -501,6 +502,17 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				assignments: [
 					// biome-ignore lint/style/noNonNullAssertion: insert returns a row
 					{ slotId: seed.slotId, guestId: contactful!.id },
+				],
+			}),
+			// #1172. Records a GUEST winner, so its plan line names this guest
+			// ("<name> (guest)") through its own select rather than `toMcpGuest`:
+			// the sweep sees a contactful guest and would see a leaked address. It
+			// runs before `cancel_meeting`, which freezes the meeting to writes.
+			toolsCall("set_awards", {
+				meetingId: seed.meetingId,
+				awards: [
+					// biome-ignore lint/style/noNonNullAssertion: insert returns a row
+					{ category: "best_speaker", guestId: contactful!.id },
 				],
 			}),
 			// #1024. It reads slot holders by NAME through `loadMeetingSlots`, never

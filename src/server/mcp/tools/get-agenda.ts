@@ -30,9 +30,10 @@
  * only an `edit_agenda` apply stores it.
  */
 import { eq } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
-import { meetings } from "#/db/schema";
+import { guests, meetingAwards, meetings, members } from "#/db/schema";
 import { agendaRunSheet } from "#/lib/agenda-run-sheet";
 import { isMeetingLocked } from "#/lib/meeting-lifecycle";
 import {
@@ -42,12 +43,57 @@ import {
 import { readAgendaSnapshot } from "#/server/meeting-agenda-edit-logic";
 import { resolveMeetingNumber } from "#/server/meeting-number-logic";
 import { loadMeetingSlots } from "#/server/meeting-slots-logic";
+import { AWARD_CATEGORIES, type AwardCategory } from "#/server/minutes-logic";
 import { authorizeTokenForMeeting } from "../authz-logic";
 import { McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
 import { clubLocalParts } from "./list-meetings";
 
 const inputSchema = { meetingId: z.string().uuid() };
+
+/** One category's recorded winner. A guest is a name only, never a contact. */
+type AwardWinner =
+	| { kind: "member" | "guest"; id: string; name: string }
+	| { kind: "writeIn"; id: null; name: string }
+	| null;
+
+/**
+ * The meeting's three awards, always in `AWARD_CATEGORIES` order, with `winner:
+ * null` for a category nobody has been recorded for (#1172). A write-in
+ * winner (#582) reads `{kind: "writeIn", id: null}`: it has no row to point at.
+ */
+async function loadAwards(
+	meetingId: string,
+): Promise<{ category: AwardCategory; winner: AwardWinner }[]> {
+	const awMember = alias(members, "aw_member");
+	const awGuest = alias(guests, "aw_guest");
+	const rows = await db
+		.select({
+			category: meetingAwards.category,
+			memberId: meetingAwards.memberId,
+			guestId: meetingAwards.guestId,
+			writeInName: meetingAwards.writeInName,
+			memberName: awMember.name,
+			guestName: awGuest.name,
+		})
+		.from(meetingAwards)
+		.leftJoin(awMember, eq(awMember.id, meetingAwards.memberId))
+		.leftJoin(awGuest, eq(awGuest.id, meetingAwards.guestId))
+		.where(eq(meetingAwards.meetingId, meetingId));
+	const byCategory = new Map(rows.map((r) => [r.category, r]));
+	return AWARD_CATEGORIES.map((category) => {
+		const r = byCategory.get(category);
+		let winner: AwardWinner = null;
+		if (r?.memberId && r.memberName) {
+			winner = { kind: "member", id: r.memberId, name: r.memberName };
+		} else if (r?.guestId && r.guestName) {
+			winner = { kind: "guest", id: r.guestId, name: r.guestName };
+		} else if (r?.writeInName) {
+			winner = { kind: "writeIn", id: null, name: r.writeInName };
+		}
+		return { category, winner };
+	});
+}
 
 export const getAgendaTool: McpToolDefinition = {
 	name: "get_agenda",
@@ -61,7 +107,9 @@ export const getAgendaTool: McpToolDefinition = {
 			"it ends against the booked slot (`overByMinutes`, positive is over). " +
 			"Row ids from there are what edit_agenda takes. A `status` of " +
 			'"cancelled" means every write tool refuses this meeting until ' +
-			"restore_meeting puts it back. `readiness` lists what is still " +
+			"restore_meeting puts it back. `awards` is the three ribbon winners " +
+			"(best_speaker, best_evaluator, best_table_topics), each a member, " +
+			"guest or write-in name, or null when none is recorded. `readiness` lists what is still " +
 			"missing before an upcoming meeting (open or unconfirmed roles, " +
 			"theme, Word of the Day, Table Topics, speech details); it is null " +
 			"once the meeting is completed, cancelled or past.",
@@ -91,9 +139,10 @@ export const getAgendaTool: McpToolDefinition = {
 		// closed rather than rendering an agenda for nothing.
 		if (!meeting) throw new McpError("NOT_FOUND", "Meeting not found.");
 
-		const [slots, draft] = await Promise.all([
+		const [slots, draft, awards] = await Promise.all([
 			loadMeetingSlots(meeting.id),
 			readAgendaSnapshot(meeting.id),
+			loadAwards(meeting.id),
 		]);
 		const { date, time, weekday } = clubLocalParts(
 			meeting.scheduledAt,
@@ -140,6 +189,9 @@ export const getAgendaTool: McpToolDefinition = {
 				speechTitle: s.speechTitle,
 			})),
 			runSheet: draft ? agendaRunSheet(draft) : null,
+			// The recorded ribbon winners (#1172), so an assistant can tell whether
+			// they are already entered before it calls `set_awards`.
+			awards,
 			// What is still missing before an upcoming meeting (#963), derived by the
 			// function the meeting page's "Before the meeting" panel reads, from the
 			// SAME slot rows, so the two cannot disagree. Gaps carry a slot label and

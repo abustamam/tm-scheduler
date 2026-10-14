@@ -25,6 +25,7 @@ import { getMyFeedbackTool } from "./get-my-feedback";
 import { listMeetingsTool } from "./list-meetings";
 import { recordGuestBookTool } from "./record-guest-book";
 import { restoreMeetingTool } from "./restore-meeting";
+import { setAwardsTool } from "./set-awards";
 import { upsertAgendasTool } from "./upsert-agendas";
 import { whoamiTool } from "./whoami";
 
@@ -38,6 +39,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	findPeopleTool,
 	recordGuestBookTool,
 	assignRolesTool,
+	setAwardsTool,
 	upsertAgendasTool,
 	editAgendaTool,
 	cancelMeetingTool,

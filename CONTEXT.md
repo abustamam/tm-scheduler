@@ -552,7 +552,8 @@ the nouns in `src/db/schema.ts`.
   committed blank role sheets, which serve every club and so cannot adopt one club's rule.
 - **Award** — a meeting's ribbon winner (`meeting_awards`): Best Speaker, Best Evaluator, or Best
   Table Topics, each an optional member-or-guest (XOR). Set directly by an admin, or confirmed by
-  the Ballot Counter from a **Digital vote**. See ADR-0014.
+  the Ballot Counter from a **Digital vote**. See ADR-0014. The MCP `set_awards` tool writes through
+  the same row helpers as the minutes (`upsertAwardRow`, `deleteAwardRow`) and cannot record a write-in.
 - **Digital vote** — the QR-reachable public ballot (#510) for Best Speaker, Best Evaluator and
   Best Table Topics, run by whoever holds the meeting's **Vote Counter** slot (the "Ballot
   Counter" in the UI — the third capability role, see **Role name vs role key**). A **vote

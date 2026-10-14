@@ -14,7 +14,7 @@
  * mechanism that is already proven rather than re-deriving a subtly different
  * one. No tool hashes for itself.
  *
- * ## `assign_roles` is the exemption, and it is deliberate
+ * ## `assign_roles` and `set_awards` are the exemptions, and it is deliberate
  *
  * This header used to say EVERY write tool returns `{plan, planHash}`, which
  * was true when only `record_guest_book` existed and stopped being true at
@@ -23,6 +23,10 @@
  * every slot it names, so there is no window between the plan and the write
  * for a hash to detect. Its plan is the ACCOUNT of what happened rather than
  * something a human approves first.
+ *
+ * `set_awards` (#1172) is the second exemption, for the same reasons: at most
+ * three rows, every id from `get_agenda` or `find_people`, one transaction under
+ * the meeting's row lock, and a wrong winner is one tap to fix in the minutes.
  *
  * The rule that decides which shape a tool gets is stated in
  * `src/server/mcp/tools/assign-roles.ts`: a confirm page — and therefore a

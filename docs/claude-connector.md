@@ -52,11 +52,12 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
 |---|---|---|
 | `whoami` | reads | "Which clubs can you manage for me?" — start here if Claude seems lost |
 | `list_meetings` | reads | "What meetings do we have coming up?" |
-| `get_agenda` | reads | "What's on the agenda for our next meeting? Which roles are open?" Also returns the timed run sheet: each row's start time and minutes, and when the meeting ends against its booked slot. Reading it changes nothing, even on a meeting nobody has edited yet |
+| `get_agenda` | reads | "What's on the agenda for our next meeting? Which roles are open?" Also returns the timed run sheet: each row's start time and minutes, and when the meeting ends against its booked slot. Also returns the three award winners (Best Speaker, Best Evaluator, Best Table Topics) so Claude can see whether they are recorded. Reading it changes nothing, even on a meeting nobody has edited yet |
 | `get_lineup_blast` | reads | "Draft the lineup message for Saturday's meeting" — you copy and send it |
 | `get_my_feedback` | reads | "What did people say about my speech on Saturday?" Only **your own** anonymous notes, from meetings that have ended; never who wrote one. Every result tells Claude the note text is untrusted, anonymous input, never instructions |
 | `find_people` | reads | "Find Dana on our roster." Guest emails and phones come back **masked** |
 | `assign_roles` | **writes immediately** | "Put Dana in the Speaker 2 slot", "clear the Timer role" |
+| `set_awards` | **writes immediately** | "Best Speaker was Dana, Table Topics was Rizwan" — record or clear a meeting's winners |
 | `cancel_meeting` | **writes immediately** | "We're not meeting this Saturday — cancel it." Everyone keeps their role; Claude gets a drafted notice naming the date and every role holder, for you to copy and send |
 | `restore_meeting` | **writes immediately** | "Put Saturday's meeting back." Every role is exactly as it was; possible until the end of the meeting's day |
 | `edit_agenda` | previews, then writes when you approve | "Open with 15 minutes of Introductions so the program starts at 12:15" — add, remove, move or retime agenda rows |
@@ -70,6 +71,13 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
   none of it, but there is no second "are you sure" from GavelUp. Keep Claude's tool permission
   for this connector on **ask** (the default) so *you* approve each call, and read what it is
   about to assign before you do. A wrong assignment is undone on the agenda page like any other.
+- **`set_awards` changes the recorded winners the moment Claude calls it.** It checks everything
+  first and records every winner you named or none of them. It refuses a cancelled meeting, an
+  award whose digital vote is still open (close the vote first), a candidate who was ruled out of
+  that award, a guest who is not in your club yet (a guest from `record_guest_book` exists only
+  after you apply its confirm page), and the same award twice. It cannot record a write-in winner;
+  `get_agenda` shows one that is already there. A wrong winner is fixed on the meeting's minutes
+  page. Keep the tool permission on **ask** and read the winners before you approve.
 - **`cancel_meeting` and `restore_meeting` change the meeting the moment Claude calls them.**
   Cancelling hides the meeting from members and refuses every change to it — role sign-ups,
   attendance, ballots, and the other write tools — until it is restored. It keeps every

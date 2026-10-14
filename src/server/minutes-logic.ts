@@ -1140,21 +1140,13 @@ export async function setAward(input: {
 				`That candidate was ruled out of this award: ${ruledOut.reason}`,
 			);
 		}
-		await tx
-			.insert(meetingAwards)
-			.values({
-				meetingId: input.meetingId,
-				category: input.category,
-				memberId,
-				guestId,
-				writeInName,
-			})
-			.onConflictDoUpdate({
-				target: [meetingAwards.meetingId, meetingAwards.category],
-				// All three set every time, so switching a winner from a write-in to
-				// a roster name cannot leave both columns populated.
-				set: { memberId, guestId, writeInName, updatedAt: new Date() },
-			});
+		await upsertAwardRow(tx, {
+			meetingId: input.meetingId,
+			category: input.category,
+			memberId,
+			guestId,
+			writeInName,
+		});
 	});
 }
 
@@ -1163,7 +1155,54 @@ export async function clearAward(input: {
 	meetingId: string;
 	category: AwardCategory;
 }): Promise<void> {
-	await db
+	await deleteAwardRow(db, input);
+}
+
+/** Either the main db client or a drizzle transaction. */
+type AwardConn =
+	| typeof db
+	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+/**
+ * The `meeting_awards` upsert, shared by the minutes writer (`setAward`) and
+ * the MCP `set_awards` tool (#1172), so both write the row the same way. It
+ * checks nothing: the caller has resolved the winner and run the
+ * disqualification and membership checks that suit its own surface.
+ */
+export async function upsertAwardRow(
+	conn: AwardConn,
+	row: {
+		meetingId: string;
+		category: AwardCategory;
+		memberId: string | null;
+		guestId: string | null;
+		writeInName: string | null;
+	},
+): Promise<void> {
+	const { memberId, guestId, writeInName } = row;
+	await conn
+		.insert(meetingAwards)
+		.values({
+			meetingId: row.meetingId,
+			category: row.category,
+			memberId,
+			guestId,
+			writeInName,
+		})
+		.onConflictDoUpdate({
+			target: [meetingAwards.meetingId, meetingAwards.category],
+			// All three set every time, so switching a winner from a write-in to
+			// a roster name cannot leave both columns populated.
+			set: { memberId, guestId, writeInName, updatedAt: new Date() },
+		});
+}
+
+/** The `meeting_awards` delete behind `clearAward`, shared with `set_awards`. */
+export async function deleteAwardRow(
+	conn: AwardConn,
+	input: { meetingId: string; category: AwardCategory },
+): Promise<void> {
+	await conn
 		.delete(meetingAwards)
 		.where(
 			and(

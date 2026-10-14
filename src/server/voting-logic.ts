@@ -75,8 +75,11 @@ export type VoteSessionStates = Record<AwardCategory, VoteSessionState>;
 /** Every category's window state, whether or not a session row exists. */
 export async function listVoteSessions(
 	meetingId: string,
+	// A caller already inside its own transaction reads through it (#1172), so
+	// the answer is the answer for the state that transaction has locked.
+	conn: typeof db | Tx = db,
 ): Promise<VoteSessionStates> {
-	const rows = await db
+	const rows = await conn
 		.select()
 		.from(meetingVoteSessions)
 		.where(eq(meetingVoteSessions.meetingId, meetingId));
