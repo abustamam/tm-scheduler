@@ -138,9 +138,12 @@ describe.skipIf(!hasTestDb)("the demo club and areas (#1200)", () => {
 	});
 
 	// protects=the console's area detail never offers the demo club to place, nor
-	//   offers it as the link for a name-only row;
+	//   offers it as the link for a name-only row, while a real club IS offered
+	//   both ways (a positive control: an offer path that is simply broken, and
+	//   offers nothing, fails here);
 	// fails_when=the demo club is in `availableClubs` or a `linkOffer` (the admin
-	//   would pick it and meet the refusal);
+	//   would pick it and meet the refusal), or the real club with a matching
+	//   number is not offered;
 	// no_claim=the refusal itself, covered by the first test.
 	it("does not offer the demo club on the console's area page", async () => {
 		await withDemoClub(async ({ tx, demoClubId }) => {
@@ -149,20 +152,29 @@ describe.skipIf(!hasTestDb)("the demo club and areas (#1200)", () => {
 			const number = String(
 				Math.floor(10_000_000 + Math.random() * 89_999_999),
 			);
+			const realNumber = String(Number(number) + 1);
 			await tx
 				.update(clubs)
 				.set({ clubNumber: number })
 				.where(eq(clubs.id, demoClubId));
 			await tx
-				.insert(areaClubs)
-				.values({ areaId, name: "Typed By Hand", clubNumber: number });
+				.update(clubs)
+				.set({ clubNumber: realNumber })
+				.where(eq(clubs.id, real));
+			await tx.insert(areaClubs).values([
+				{ areaId, name: "Typed Demo", clubNumber: number },
+				{ areaId, name: "Typed Real", clubNumber: realNumber },
+			]);
 
 			const detail = await getConsoleArea(areaId);
 
 			const offered = detail.availableClubs.map((c) => c.id);
 			expect(offered).toContain(real);
 			expect(offered).not.toContain(demoClubId);
-			expect(detail.clubs.map((c) => c.linkOffer)).toEqual([null]);
+			const offerFor = (name: string) =>
+				detail.clubs.find((c) => c.name === name)?.linkOffer;
+			expect(offerFor("Typed Demo")).toBeNull();
+			expect(offerFor("Typed Real")).toMatchObject({ clubId: real });
 		});
 	});
 });

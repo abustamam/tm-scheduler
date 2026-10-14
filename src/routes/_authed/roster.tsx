@@ -776,15 +776,14 @@ function InviteAllDialog({
 		setBusy(true);
 		try {
 			const res = await inviteAllMembers({ data: { clubId } });
-			// The demo club sends no mail (#1200); say so instead of "Sent 0 invites."
-			if (res.notSent === "demo") {
-				toast.info(DEMO_INVITE_NOT_SENT);
-				onOpenChange(false);
-				await router.invalidate();
-				return;
-			}
+			// The demo club sends no mail (#1200); say so instead of "Sent 0 invites.",
+			// and keep the skip counts, which are still true there.
+			const head =
+				res.notSent === "demo"
+					? DEMO_INVITE_NOT_SENT
+					: `Sent ${res.sent} invite${res.sent === 1 ? "" : "s"}.`;
 			const summary =
-				`Sent ${res.sent} invite${res.sent === 1 ? "" : "s"}.` +
+				head +
 				(res.noEmail > 0 ? ` ${res.noEmail} skipped (no email).` : "") +
 				(res.rosterConflict > 0
 					? ` ${res.rosterConflict} skipped (another club's roster has a different email).`

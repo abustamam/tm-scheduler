@@ -26,7 +26,7 @@ import {
 	resolvePublicClubIdentifier,
 } from "./clubs-logic";
 import { isDemoClub } from "./demo-club-flag";
-import { resetDemoClub } from "./demo-reset-logic";
+import { DemoError, resetDemoClub } from "./demo-reset-logic";
 import { requireClubRole, requireClubViewAccess, requireUser } from "./guards";
 
 const uuid = z.string().uuid();
@@ -59,12 +59,18 @@ const resetDemoClubSchema = z.object({ clubId: uuid });
  *
  *  `expectClubId` makes the logic refuse (`NOT_DEMO_CLUB`) unless `clubId` IS the
  *  demo club, so an admin of a real club who calls this deletes nothing. The
- *  actor is re-checked inside the logic's transaction, after its locks. */
+ *  actor is re-checked inside the logic's transaction, after its locks. An
+ *  unlocked `isDemoClub` check comes first, so an admin of a real club takes no
+ *  demo lock and learns nothing about the operator's `DEMO_ACCOUNT_EMAIL`
+ *  config: the logic's config refusals run before its own `expectClubId` check. */
 export const resetDemoClubFromClub = createServerFn({ method: "POST" })
 	.validator((input: unknown) => resetDemoClubSchema.parse(input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
 		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
+		if (!(await isDemoClub(db, data.clubId))) {
+			throw new DemoError("NOT_DEMO_CLUB");
+		}
 		return resetDemoClub({
 			now: new Date(),
 			actor: { kind: "clubAdmin", userId: currentUser.id },

@@ -50,6 +50,10 @@ export const inviteMember = createServerFn({ method: "POST" })
 			const user = await requireUser();
 			await requireClubRole(user.id, data.clubId, ["admin"]);
 
+			// Read BEFORE preparing: a demo reset that commits between the two would
+			// delete the club, `isDemoClub` would then answer false for it, and the
+			// mail would go out.
+			const demo = await isDemoClub(db, data.clubId);
 			const prep = await prepareMemberInvite(data);
 			// `obstacle` rides along so the roster can name the one thing the admin
 			// can act on. An OLD client bundle ignores the extra field and falls into
@@ -59,11 +63,11 @@ export const inviteMember = createServerFn({ method: "POST" })
 				return { outcome: prep.outcome, obstacle: prep.obstacle };
 			}
 
-			// Read AFTER the refusals above, so a missing email or a roster conflict
+			// Decided AFTER the refusals above, so a missing email or a roster conflict
 			// still says what it is in the demo club. Not a send at all: the roster
 			// would otherwise say "Invite sent." about an address that cannot
 			// receive it.
-			if (await isDemoClub(db, data.clubId)) {
+			if (demo) {
 				return { outcome: "ready", notSent: "demo" };
 			}
 

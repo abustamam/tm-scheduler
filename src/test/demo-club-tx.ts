@@ -16,12 +16,23 @@
  * connection: a `db.transaction` inside it becomes a SAVEPOINT, advisory and row
  * locks are re-entrant, and a lock timeout or a blocked second writer cannot be
  * exercised here. Test those against `testDb` as the other suites do.
+ * A spy on the driver (`db.$client`: `statementsDuring`, `readsOf`) counts ZERO
+ * statements under `dbMock()`: the proxy hands the transaction's own client, not
+ * the pool's, so assert on rows instead of counting queries.
+ *
+ * The demo advisory lock. `resetDemoClub` takes it, then inserts its own
+ * `is_demo` row, which waits behind this transaction's uncommitted row at the
+ * unique index. A body that calls `resetDemoClub` waits on the lock in turn: a
+ * deadlock. So `withDemoClub` takes the SAME lock (the constants are imported,
+ * not copied) before it inserts, and the two serialize on it; the body's own
+ * reset re-takes it re-entrantly on this connection.
  *
  * Use:
  *   vi.mock("#/db", async () => (await import("#/test/demo-club-tx")).dbMock());
  *   await withDemoClub(async ({ tx, demoClubId }) => { ... });
  */
 import { randomUUID } from "node:crypto";
+import { sql } from "drizzle-orm";
 import { clubs } from "#/db/schema";
 import { type TestTx, testDb } from "./db";
 
@@ -57,6 +68,10 @@ export interface DemoClubCtx {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** The retry budget, kept under vitest's 15s `testTimeout` so this helper's own
+ *  error fires instead of the runner's. */
+const SLOT_WAIT_MS = 10_000;
+
 /**
  * Insert the `is_demo` club, run `body`, roll everything back. When the single
  * `is_demo` slot is taken by another suite's committed row, wait and try again.
@@ -64,11 +79,20 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export async function withDemoClub<T>(
 	body: (ctx: DemoClubCtx) => Promise<T>,
 ): Promise<T> {
-	for (let attempt = 0; attempt < 200; attempt++) {
+	// Dynamic: `demo-reset-logic` imports `#/db`, which a test mocks with
+	// `dbMock()` from this file, so a static import would be a cycle.
+	const { DEMO_LOCK_KEY, DEMO_LOCK_NAMESPACE } = await import(
+		"#/server/demo-reset-logic"
+	);
+	const deadline = Date.now() + SLOT_WAIT_MS;
+	while (Date.now() < deadline) {
 		let taken = false;
 		let result!: T;
 		try {
 			await testDb.transaction(async (tx) => {
+				await tx.execute(
+					sql`select pg_advisory_xact_lock(${DEMO_LOCK_NAMESPACE}::int4, hashtext(${DEMO_LOCK_KEY}))`,
+				);
 				const [row] = await tx
 					.insert(clubs)
 					.values({

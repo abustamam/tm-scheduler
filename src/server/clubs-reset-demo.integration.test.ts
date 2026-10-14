@@ -18,10 +18,10 @@
  *   bunx vitest run src/server/clubs-reset-demo.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { buildFixtureClub as BuildFixtureClub } from "#/db/fixtures/club-fixture";
-import { clubs, members, people, user } from "#/db/schema";
+import { clubs, members, people, session, user } from "#/db/schema";
 import { hasTestDb } from "#/test/db";
 import { type DemoClubCtx, withDemoClub } from "#/test/demo-club-tx";
 
@@ -168,13 +168,22 @@ describe.skipIf(!hasTestDb)("resetDemoClubFromClub (#1200)", () => {
 	//   the same account is its admin, still signed in (its user row kept);
 	// fails_when=the club is not rebuilt, the presenter is left in no club, or the
 	//   account is deleted with the old club;
-	// no_claim=the page's navigation (the component test); the builder is a stand-in
-	//   that writes the contract the logic relies on, not the Harbor City fixture.
+	// no_claim=the stand-in fixture builder (it writes the contract the logic relies
+	//   on, not the Harbor City fixture), and the `/` cookie fallback: a session row
+	//   surviving proves the account is kept, not that the browser's cookie still
+	//   resolves to it; the page's navigation is the component test.
 	it("lets the demo admin rebuild the demo club and leaves them its admin", async () => {
 		await withDemoClub(async ({ tx, demoClubId }) => {
 			vi.stubEnv("DEMO_ACCOUNT_EMAIL", DEMO_EMAIL);
 			const { demoAdmin } = await seed(tx, demoClubId);
 			h.sessionUserId = demoAdmin;
+			const sessionId = randomUUID();
+			await tx.insert(session).values({
+				id: sessionId,
+				token: `tok-${randomUUID()}`,
+				userId: demoAdmin,
+				expiresAt: new Date(Date.now() + 3_600_000),
+			});
 
 			const { clubId: fresh } = await reset({ data: { clubId: demoClubId } });
 
@@ -189,8 +198,13 @@ describe.skipIf(!hasTestDb)("resetDemoClubFromClub (#1200)", () => {
 				.select({ role: members.clubRole })
 				.from(members)
 				.innerJoin(people, eq(people.id, members.personId))
-				.where(eq(people.userId, demoAdmin));
+				.where(and(eq(people.userId, demoAdmin), eq(members.clubId, fresh)));
 			expect(memberships).toEqual([{ role: "admin" }]);
+			const sessions = await tx
+				.select({ id: session.id })
+				.from(session)
+				.where(eq(session.id, sessionId));
+			expect(sessions).toHaveLength(1);
 			const [account] = await tx
 				.select({ id: user.id })
 				.from(user)
@@ -221,12 +235,32 @@ describe.skipIf(!hasTestDb)("resetDemoClubFromClub (#1200)", () => {
 		});
 	});
 
+	// protects=an admin of a real club is refused NOT_DEMO_CLUB BEFORE the logic's
+	//   operator-config refusals and its locks, so with DEMO_ACCOUNT_EMAIL unset
+	//   they learn nothing about the config;
+	// fails_when=the unlocked `isDemoClub` pre-check in `resetDemoClubFromClub` is
+	//   removed: the logic then answers NOT_CONFIGURED ("Set DEMO_ACCOUNT_EMAIL…");
+	// no_claim=that no demo lock is taken (a lock is not observable on the one
+	//   shared connection `withDemoClub` uses).
+	it("answers NOT_DEMO_CLUB to a real-club admin even when the demo account is not configured", async () => {
+		await withDemoClub(async ({ tx, demoClubId }) => {
+			vi.stubEnv("DEMO_ACCOUNT_EMAIL", "");
+			const { realClubId, realAdmin } = await seed(tx, demoClubId);
+			h.sessionUserId = realAdmin;
+
+			await expect(
+				reset({ data: { clubId: realClubId } }),
+			).rejects.toMatchObject({ code: "NOT_DEMO_CLUB" });
+			expect(await clubExists(tx, demoClubId)).toBe(true);
+		});
+	});
+
 	// protects=a member who is not an admin of the demo club is refused with the
 	//   permission message before the logic runs, and an admin of ANOTHER club is
 	//   refused naming the demo club they are not in;
 	// fails_when=the gate is skipped, so either caller reaches the logic (the member
-	//   would then get NOT_AUTHORIZED, the outsider NOT_DEMO_CLUB's neighbour, a
-	//   rebuild), or the demo club is deleted;
+	//   would then get NOT_AUTHORIZED, the outsider something other than the
+	//   not-a-member message, and either could trigger a rebuild), or the demo club is deleted;
 	// no_claim=the order of the gate and the logic beyond these two refusals.
 	it("refuses a member who is not an admin, and an admin of another club", async () => {
 		await withDemoClub(async ({ tx, demoClubId }) => {

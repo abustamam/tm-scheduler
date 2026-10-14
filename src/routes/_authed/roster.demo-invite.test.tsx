@@ -132,8 +132,8 @@ describe("roster invite wording in the demo club (#1200)", () => {
 
 	// protects=the bulk send's toast says "Demo club: invite not sent." rather than
 	//   "Sent 0 invites.", and the real club's summary is unchanged;
-	// fails_when=the demo result reaches the count summary, or a real result reads
-	//   the demo wording;
+	// fails_when=the demo result reaches the count summary, a real result reads
+	//   the demo wording, or the demo toast drops the skipped-no-email count;
 	// no_claim=the server's counts; `inviteAllMembers` is a stub.
 	it("says the bulk invite was not sent for the demo club, and keeps the count summary otherwise", async () => {
 		vi.mocked(inviteAllMembers).mockResolvedValueOnce({
@@ -147,6 +147,23 @@ describe("roster invite wording in the demo club (#1200)", () => {
 		);
 		await waitFor(() =>
 			expect(toast.info).toHaveBeenCalledWith(DEMO_INVITE_NOT_SENT),
+		);
+		expect(toast.success).not.toHaveBeenCalled();
+
+		// The skip counts are still true in the demo club and stay in the toast.
+		vi.mocked(inviteAllMembers).mockResolvedValueOnce({
+			...BULK_BASE,
+			noEmail: 2,
+			notSent: "demo",
+		});
+		fireEvent.click(screen.getByRole("button", { name: /Invite all/ }));
+		fireEvent.click(
+			await screen.findByRole("button", { name: /^Send 1 invite/ }),
+		);
+		await waitFor(() =>
+			expect(toast.info).toHaveBeenCalledWith(
+				`${DEMO_INVITE_NOT_SENT} 2 skipped (no email).`,
+			),
 		);
 		expect(toast.success).not.toHaveBeenCalled();
 

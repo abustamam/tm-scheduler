@@ -156,18 +156,22 @@ describe.skipIf(!hasTestDb)("invites in the demo club (#1200)", () => {
 	});
 
 	// protects=the bulk send in the demo club sends nothing, reports `notSent`, and
-	//   counts no invite as sent;
-	// fails_when=any member is mailed, `notSent` is missing, or `sent` is not 0;
+	//   counts no invite as sent, while still stamping each member as invited (as
+	//   the single invite does);
+	// fails_when=any member is mailed, `notSent` is missing, `sent` is not 0, or a
+	//   member is left unstamped;
 	// no_claim=the per-member refusal counts, which the existing bulk suite owns.
 	it("inviteAllMembers sends nothing in the demo club and answers notSent", async () => {
 		await withDemoClub(async ({ tx, demoClubId }) => {
-			const { adminUserId } = await seedRoster(tx, demoClubId);
+			const { adminUserId, memberPersonId } = await seedRoster(tx, demoClubId);
 			h.sessionUserId = adminUserId;
+			expect(await invitedAt(tx, memberPersonId)).toBeNull();
 
 			const res = await inviteAll({ data: { clubId: demoClubId } });
 
 			expect(res).toMatchObject({ notSent: "demo", sent: 0, failed: 0 });
 			expect(h.signInMagicLink).not.toHaveBeenCalled();
+			expect(await invitedAt(tx, memberPersonId)).not.toBeNull();
 		});
 	});
 
