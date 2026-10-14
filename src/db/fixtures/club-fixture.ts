@@ -33,6 +33,7 @@
 
 import { eq } from "drizzle-orm";
 import {
+	clubs,
 	dcpGoalProgress,
 	dcpScoreboards,
 	duesPeriods,
@@ -84,6 +85,9 @@ export interface FixtureClubOptions {
 	/** The club's President and the presenter. `userId` is the sign-in account
 	 *  they already have; `null` builds the Person with none. */
 	admin: { name: string; email: string; userId: string | null };
+	/** Marks the club `clubs.is_demo` (#1199). Omitted ⇒ false. At most one club
+	 *  may carry it (`clubs_single_demo_unique`). */
+	isDemo?: boolean;
 }
 
 const MEETING_LOCATION = "Harbor Library, Meeting Room 2";
@@ -387,6 +391,14 @@ export async function buildFixtureClub(
 			roster,
 			meetings: meetingSpecs,
 		});
+		// `insertFixtureClub` (helpers.ts, shared with the dev seeder) does not take
+		// the flag, so it is set on the row it just wrote, in the same transaction.
+		if (opts.isDemo) {
+			await conn
+				.update(clubs)
+				.set({ isDemo: true })
+				.where(eq(clubs.id, harbor.clubId));
+		}
 		const person = (n: string) => harbor.personByName.get(n)!;
 		const member = (n: string) => harbor.memberByName.get(n)!;
 

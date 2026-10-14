@@ -48,6 +48,7 @@ import {
 	TABLE_TOPICS_SPEAKER_LABEL,
 } from "#/lib/role-feedback-input";
 import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
+import { isDemoClub } from "./demo-club-flag";
 import {
 	feedbackIpLimiter,
 	feedbackSenderMeetingCap,
@@ -667,6 +668,12 @@ async function leaveFeedbackUnmapped(
 
 	// The pre-check (step 3). Not the gate — step 4 is.
 	await assertClubNotArchived(clubId);
+
+	// The demo club keeps nothing (#1199): answer as a success and store no note.
+	// After the archive refusal (an archived demo club answers like any archived
+	// club) and before the caps, so a presenter's rehearsal spends no sender
+	// budget either.
+	if (await isDemoClub(db, clubId)) return { ok: true };
 	const at = now();
 	const { closesAt } = await admitNote(db, input, at);
 	if (

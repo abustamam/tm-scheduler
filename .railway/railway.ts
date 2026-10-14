@@ -20,7 +20,7 @@ export default defineRailway(() => {
     replicas: { "sfo": 1 },
     domains: ["gavelup.app"],
     networking: { privateNetworkEndpoint: "tm-scheduler" },
-    env: { BETTER_AUTH_SECRET: preserve(), BETTER_AUTH_URL: preserve(), DATABASE_URL: preserve(), EMAIL_FROM: preserve(), RESEND_API_KEY: preserve(), SUPERADMIN_EMAILS: preserve() },
+    env: { BETTER_AUTH_SECRET: preserve(), BETTER_AUTH_URL: preserve(), DATABASE_URL: preserve(), DEMO_ACCOUNT_EMAIL: preserve(), EMAIL_FROM: preserve(), RESEND_API_KEY: preserve(), SUPERADMIN_EMAILS: preserve() },
   });
 
   return project("tm-scheduler", {

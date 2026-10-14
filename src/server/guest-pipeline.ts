@@ -1,6 +1,13 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireClubAdminView, requireClubRole, requireUser } from "./guards";
+import { db } from "#/db";
+import { isDemoClub } from "./demo-club-flag";
+import {
+	assertClubNotArchived,
+	requireClubAdminView,
+	requireClubRole,
+	requireUser,
+} from "./guards";
 import type { GuestLinkExpected } from "./guest-pipeline-logic";
 import {
 	applyAddGuestToClub,
@@ -58,6 +65,15 @@ const uuid = z.string().uuid();
 export const submitGuestBook = createServerFn({ method: "POST" })
 	.validator((input: unknown) => guestBookSchema.parse(input))
 	.handler(async ({ data }) => {
+		// The demo club keeps no guest data (#1199): answer as a success and write
+		// nothing, so a presenter can fill the form on stage and nobody's name or
+		// number is stored. Officer-entered guests go through other writers, and
+		// `captureGuestVisit` stays as it was: they share it. The archive refusal
+		// comes first, so an archived demo club answers as every archived club does.
+		await assertClubNotArchived(data.clubId);
+		if (await isDemoClub(db, data.clubId)) {
+			return { ok: true as const, created: true };
+		}
 		const res = await captureGuestVisit({
 			clubId: data.clubId,
 			name: data.name,

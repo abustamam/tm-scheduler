@@ -83,6 +83,8 @@ export interface ConsoleClubRow {
 	/** Soft-archive timestamp (ADR-0016 / #186); null = active. Archived clubs
 	 *  stay listed in the console, marked archived, with an Unarchive action. */
 	archivedAt: Date | null;
+	/** The demo club (#1199). The console counts the rest and badges this one. */
+	isDemo: boolean;
 	firstAdmin: ConsoleAdmin | null;
 }
 
@@ -130,6 +132,7 @@ export async function listClubsForConsole(): Promise<ConsoleClubList> {
 			timezone: clubs.timezone,
 			createdAt: clubs.createdAt,
 			archivedAt: clubs.archivedAt,
+			isDemo: clubs.isDemo,
 		})
 		.from(clubs)
 		.orderBy(asc(clubs.createdAt));
@@ -176,6 +179,7 @@ export async function listClubsForConsole(): Promise<ConsoleClubList> {
 			memberCount: countByClub.get(c.id) ?? 0,
 			createdAt: c.createdAt,
 			archivedAt: c.archivedAt,
+			isDemo: c.isDemo,
 			firstAdmin: firstAdminByClub.get(c.id) ?? null,
 		})),
 		zones: CLUB_TIMEZONES,
@@ -875,6 +879,151 @@ function isForeignKeyViolation(err: unknown): boolean {
 	return false;
 }
 
+/** What `deleteClubCore` removed and kept, for the log line. */
+export interface DeleteClubCoreResult {
+	peopleDeleted: number;
+	peopleKept: number;
+	usersDeleted: number;
+	usersKept: number;
+}
+
+/**
+ * Everything `deleteClubPermanently` does after its gates (#914), as one
+ * function a second caller can run inside its own transaction (the demo club's
+ * rebuild, #1199). The CALLER owns the transaction, has locked the `clubs` row
+ * `FOR UPDATE`, and has decided the club may go; this deletes the club, then
+ * its Persons and sign-in accounts by the rules in `deleteClubPermanently`'s
+ * header, step 2 onward.
+ *
+ * `keepUser`: a predicate over the account, run on the `FOR UPDATE`-locked
+ * `user` rows this delete is about to remove — NOT on a list the caller built
+ * beforehand, which a sign-in binding a Person in between would make stale. An
+ * account it returns true for is kept exactly as a superadmin is — the
+ * user row, its sessions, its tokens and its pending verifications — whatever
+ * else is true of it. Its Person rows held only by this club are still deleted,
+ * so only the club's record of them goes. `deleteClubPermanently` passes none.
+ */
+export async function deleteClubCore(
+	tx: Tx,
+	clubId: string,
+	opts: { keepUser?: (account: { id: string; email: string }) => boolean } = {},
+): Promise<DeleteClubCoreResult> {
+	const keepUser = opts.keepUser ?? (() => false);
+	const { personIds, guestOnlyIds } = await personsOfClub(tx, clubId);
+	// LOCK ORDER: the club's Persons BEFORE its memberships (#906). The
+	// `delete clubs` below cascades to every membership, so it takes the
+	// membership rows; locking the Persons after it was membership-then-Person,
+	// the reverse of `applyMemberEdit` (Person, then membership), and the two
+	// deadlocked. Id order matches the lock the delete takes again below.
+	//
+	// `NO KEY UPDATE`, not `UPDATE`: it conflicts with the edit's
+	// `FOR UPDATE`, which is the ordering needed, but NOT with the key-share
+	// lock a membership insert in ANOTHER club takes on the same Person. So
+	// such an insert can still commit, and the `FOR UPDATE` taken below still
+	// waits for it and then sees the membership and keeps the Person — the
+	// race `delete-club-permanently.integration.test.ts` pins. A plain
+	// `FOR UPDATE` here would instead block that insert until the Person was
+	// deleted out from under it.
+	//
+	// No new membership in THIS club can appear between `personsOfClub` and
+	// the cascade: inserting one takes a FOR KEY SHARE lock on its club row,
+	// which the club `FOR UPDATE` above already blocks.
+	if (personIds.length > 0) {
+		await tx
+			.select({ id: people.id })
+			.from(people)
+			.where(inArray(people.id, personIds))
+			.orderBy(asc(people.id))
+			.for("no key update");
+	}
+
+	await tx.delete(clubs).where(eq(clubs.id, clubId));
+
+	let peopleDeleted = 0;
+	let peopleKept = 0;
+	const candidateUserIds = new Set<string>();
+	if (personIds.length > 0) {
+		// Sorted so two concurrent deletes sharing Persons lock in one order.
+		const locked = await tx
+			.select({ id: people.id, userId: people.userId })
+			.from(people)
+			.where(inArray(people.id, personIds))
+			.orderBy(asc(people.id))
+			.for("update");
+		const stillMembers = await tx
+			.selectDistinct({ personId: members.personId })
+			.from(members)
+			.where(inArray(members.personId, personIds));
+		const keep = new Set([
+			...stillMembers.map((r) => r.personId),
+			...(await personsWithOtherClubHistory(tx, personIds)),
+			// A Person this club knew ONLY as a guest keeps what a guest delete
+			// would keep (`unreferencedUnboundPerson()`): somebody who has signed in
+			// (M3 of #1155: deleting them takes the account with it and queues its
+			// deletion below), and one who owns a speech, an enrolment or a
+			// charter-helper row. A guest row here never made this club the owner of
+			// that history: a Person merged with a former member of another club is
+			// guest-only by the predicate and still has that club's record attached.
+			...(await keptGuestOnly(tx, locked, guestOnlyIds)),
+		]);
+		const doomed = locked.filter((p) => !keep.has(p.id));
+		peopleKept = locked.length - doomed.length;
+		peopleDeleted = doomed.length;
+		for (const p of doomed) if (p.userId) candidateUserIds.add(p.userId);
+		if (doomed.length > 0) {
+			const doomedIds = doomed.map((p) => p.id);
+			await tx
+				.delete(peopleEmailBackup)
+				.where(inArray(peopleEmailBackup.personId, doomedIds));
+			await tx.delete(people).where(inArray(people.id, doomedIds));
+		}
+	}
+
+	let usersDeleted = 0;
+	let usersKept = 0;
+	const userIds = [...candidateUserIds].sort();
+	if (userIds.length > 0) {
+		const lockedUsers = await tx
+			.select({
+				id: user.id,
+				email: user.email,
+				isSuperadmin: user.isSuperadmin,
+			})
+			.from(user)
+			.where(inArray(user.id, userIds))
+			.orderBy(asc(user.id))
+			.for("update");
+		// A surviving Person still bound to the account keeps it. That link is
+		// `people.user_id ON DELETE SET NULL`, so Postgres would not stop the
+		// delete; this check is the only thing that does.
+		const linked = await tx
+			.selectDistinct({ id: people.userId })
+			.from(people)
+			.where(inArray(people.userId, userIds));
+		// An account that registered an OAuth client keeps it: the client row
+		// CASCADES from `user`, so deleting the account would silently take a
+		// connector down with it. (`is_superadmin` is only reconciled at sign-in,
+		// so it is not a reliable stand-in for "operator".)
+		const owners = await tx
+			.selectDistinct({ id: oauthClient.userId })
+			.from(oauthClient)
+			.where(inArray(oauthClient.userId, userIds));
+		const keepUsers = new Set<string | null>([
+			...linked.map((r) => r.id),
+			...owners.map((r) => r.id),
+		]);
+		for (const u of lockedUsers) {
+			if (u.isSuperadmin || keepUsers.has(u.id) || keepUser(u)) {
+				usersKept++;
+				continue;
+			}
+			if (await deleteUserUnlessReferenced(tx, u)) usersDeleted++;
+			else usersKept++;
+		}
+	}
+	return { peopleDeleted, peopleKept, usersDeleted, usersKept };
+}
+
 /**
  * Permanently delete an ARCHIVED club and everything that is only that club's
  * (#914). Irreversible; only a database backup restore brings it back. The
@@ -934,126 +1083,8 @@ export async function deleteClubPermanently(
 			throw new Error("The name doesn't match.");
 		}
 
-		const { personIds, guestOnlyIds } = await personsOfClub(tx, clubId);
-		// LOCK ORDER: the club's Persons BEFORE its memberships (#906). The
-		// `delete clubs` below cascades to every membership, so it takes the
-		// membership rows; locking the Persons after it was membership-then-Person,
-		// the reverse of `applyMemberEdit` (Person, then membership), and the two
-		// deadlocked. Id order matches the lock the delete takes again below.
-		//
-		// `NO KEY UPDATE`, not `UPDATE`: it conflicts with the edit's
-		// `FOR UPDATE`, which is the ordering needed, but NOT with the key-share
-		// lock a membership insert in ANOTHER club takes on the same Person. So
-		// such an insert can still commit, and the `FOR UPDATE` taken below still
-		// waits for it and then sees the membership and keeps the Person — the
-		// race `delete-club-permanently.integration.test.ts` pins. A plain
-		// `FOR UPDATE` here would instead block that insert until the Person was
-		// deleted out from under it.
-		//
-		// No new membership in THIS club can appear between `personsOfClub` and
-		// the cascade: inserting one takes a FOR KEY SHARE lock on its club row,
-		// which the club `FOR UPDATE` above already blocks.
-		if (personIds.length > 0) {
-			await tx
-				.select({ id: people.id })
-				.from(people)
-				.where(inArray(people.id, personIds))
-				.orderBy(asc(people.id))
-				.for("no key update");
-		}
-
-		await tx.delete(clubs).where(eq(clubs.id, clubId));
-
-		let peopleDeleted = 0;
-		let peopleKept = 0;
-		const candidateUserIds = new Set<string>();
-		if (personIds.length > 0) {
-			// Sorted so two concurrent deletes sharing Persons lock in one order.
-			const locked = await tx
-				.select({ id: people.id, userId: people.userId })
-				.from(people)
-				.where(inArray(people.id, personIds))
-				.orderBy(asc(people.id))
-				.for("update");
-			const stillMembers = await tx
-				.selectDistinct({ personId: members.personId })
-				.from(members)
-				.where(inArray(members.personId, personIds));
-			const keep = new Set([
-				...stillMembers.map((r) => r.personId),
-				...(await personsWithOtherClubHistory(tx, personIds)),
-				// A Person this club knew ONLY as a guest keeps what a guest delete
-				// would keep (`unreferencedUnboundPerson()`): somebody who has signed in
-				// (M3 of #1155: deleting them takes the account with it and queues its
-				// deletion below), and one who owns a speech, an enrolment or a
-				// charter-helper row. A guest row here never made this club the owner of
-				// that history: a Person merged with a former member of another club is
-				// guest-only by the predicate and still has that club's record attached.
-				...(await keptGuestOnly(tx, locked, guestOnlyIds)),
-			]);
-			const doomed = locked.filter((p) => !keep.has(p.id));
-			peopleKept = locked.length - doomed.length;
-			peopleDeleted = doomed.length;
-			for (const p of doomed) if (p.userId) candidateUserIds.add(p.userId);
-			if (doomed.length > 0) {
-				const doomedIds = doomed.map((p) => p.id);
-				await tx
-					.delete(peopleEmailBackup)
-					.where(inArray(peopleEmailBackup.personId, doomedIds));
-				await tx.delete(people).where(inArray(people.id, doomedIds));
-			}
-		}
-
-		let usersDeleted = 0;
-		let usersKept = 0;
-		const userIds = [...candidateUserIds].sort();
-		if (userIds.length > 0) {
-			const lockedUsers = await tx
-				.select({
-					id: user.id,
-					email: user.email,
-					isSuperadmin: user.isSuperadmin,
-				})
-				.from(user)
-				.where(inArray(user.id, userIds))
-				.orderBy(asc(user.id))
-				.for("update");
-			// A surviving Person still bound to the account keeps it. That link is
-			// `people.user_id ON DELETE SET NULL`, so Postgres would not stop the
-			// delete; this check is the only thing that does.
-			const linked = await tx
-				.selectDistinct({ id: people.userId })
-				.from(people)
-				.where(inArray(people.userId, userIds));
-			// An account that registered an OAuth client keeps it: the client row
-			// CASCADES from `user`, so deleting the account would silently take a
-			// connector down with it. (`is_superadmin` is only reconciled at sign-in,
-			// so it is not a reliable stand-in for "operator".)
-			const owners = await tx
-				.selectDistinct({ id: oauthClient.userId })
-				.from(oauthClient)
-				.where(inArray(oauthClient.userId, userIds));
-			const keepUsers = new Set<string | null>([
-				...linked.map((r) => r.id),
-				...owners.map((r) => r.id),
-			]);
-			for (const u of lockedUsers) {
-				if (u.isSuperadmin || keepUsers.has(u.id)) {
-					usersKept++;
-					continue;
-				}
-				if (await deleteUserUnlessReferenced(tx, u)) usersDeleted++;
-				else usersKept++;
-			}
-		}
-
-		return {
-			clubName: club.name,
-			peopleDeleted,
-			peopleKept,
-			usersDeleted,
-			usersKept,
-		};
+		const core = await deleteClubCore(tx, clubId);
+		return { clubName: club.name, ...core };
 	});
 
 	// Counts only, no names: the club's own activity log went with it.
