@@ -565,6 +565,101 @@ describe("people the lists name and no meeting does (#1203)", () => {
 		expect(skipped.canApply).toBe(true);
 	});
 
+	it("does not let two spellings of one name-only key share an exact match", () => {
+		// "José Silva" and "Jose Silva" fold to one key. The roster holds only José,
+		// so the exact pass would match the chart's José and hand him Jose's request.
+		const bundle = load();
+		bundle.mentors.push({
+			mentee: { esUserId: null, name: "José Silva" },
+			mentor: null,
+			wantsMentee: false,
+		});
+		bundle.speechRequests.push({
+			...bundle.speechRequests[0],
+			esSpeechId: "sr-jose",
+			who: { esUserId: null, name: "Jose Silva" },
+		} as EasySpeakBundleV1["speechRequests"][number]);
+		const roster = [...ROSTER, { memberId: id(50), name: "José Silva" }];
+		const plan = buildImportPlan(
+			bundle,
+			ctx({ roster, resolutions: SKIP_AVERY }),
+		);
+		const silva = plan.people.find((p) => p.key === "name:jose silva");
+		expect(silva?.outcome).toMatchObject({ status: "ambiguous" });
+		expect(
+			silva?.outcome.status === "ambiguous" && silva.outcome.candidates,
+		).toEqual([{ memberId: id(50), name: "José Silva" }]);
+		expect(plan.unresolved.map((p) => p.key)).toContain("name:jose silva");
+		expect(plan.canApply).toBe(false);
+
+		// With both spellings on the roster the human sees both, not the first match.
+		const both = buildImportPlan(
+			bundle,
+			ctx({
+				roster: [...roster, { memberId: id(51), name: "Jose Silva" }],
+				resolutions: SKIP_AVERY,
+			}),
+		);
+		const bothOutcome = both.people.find(
+			(p) => p.key === "name:jose silva",
+		)?.outcome;
+		expect(
+			bothOutcome?.status === "ambiguous" &&
+				bothOutcome.candidates.map((c) => c.memberId).sort(),
+		).toEqual([id(50), id(51)]);
+
+		// A roster with neither spelling leaves them unmatched, never a guess.
+		const none = buildImportPlan(bundle, ctx({ resolutions: SKIP_AVERY }));
+		expect(
+			none.people.find((p) => p.key === "name:jose silva")?.outcome,
+		).toEqual({
+			status: "unmatched",
+		});
+		expect(none.canApply).toBe(true);
+
+		// One spelling, case and spacing aside, still matches on its own.
+		const same = load();
+		same.mentors.push({
+			mentee: { esUserId: null, name: "José Silva" },
+			mentor: null,
+			wantsMentee: false,
+		});
+		same.speechRequests.push({
+			...same.speechRequests[0],
+			esSpeechId: "sr-jose",
+			who: { esUserId: null, name: "josé  silva" },
+		} as EasySpeakBundleV1["speechRequests"][number]);
+		const one = buildImportPlan(same, ctx({ roster, resolutions: SKIP_AVERY }));
+		expect(
+			one.people.find((p) => p.key === "name:jose silva")?.outcome,
+		).toMatchObject({
+			status: "member",
+			memberId: id(50),
+		});
+	});
+
+	it("applies the same rule when a meeting and a list spell a name differently", () => {
+		const bundle = load();
+		const past = bundle.meetings.find((m) => m.esMeetingId === "644304");
+		const slot = past?.roles.find((r) => r.role === "2nd Speaker");
+		if (!past || !slot) throw new Error("fixture changed");
+		slot.holder = { esUserId: null, name: "José Silva" };
+		bundle.mentors.push({
+			mentee: { esUserId: null, name: "Jose Silva" },
+			mentor: null,
+			wantsMentee: false,
+		});
+		const roster = [...ROSTER, { memberId: id(50), name: "José Silva" }];
+		const plan = buildImportPlan(
+			bundle,
+			ctx({ roster, resolutions: SKIP_AVERY }),
+		);
+		const silva = plan.people.find((p) => p.key === "name:jose silva");
+		expect(silva?.listOnly).toBe(false);
+		expect(silva?.outcome).toMatchObject({ status: "ambiguous" });
+		expect(plan.canApply).toBe(false);
+	});
+
 	it("keys a person with no profile id by folded name, so a request finds the ref it needs", () => {
 		const bundle = load();
 		bundle.mentors.push({

@@ -25,7 +25,11 @@ import {
 	user,
 } from "#/db/schema";
 import type { EasySpeakBundleV1 } from "#/lib/easy-speak-bundle";
-import type { PersonResolution } from "#/lib/easy-speak-import-plan";
+import type {
+	ImportPlan,
+	PersonResolution,
+	PlanPerson,
+} from "#/lib/easy-speak-import-plan";
 import {
 	cleanup,
 	hasTestDb,
@@ -434,6 +438,65 @@ describe.skipIf(!hasTestDb)(
 			const settled = await snapshot();
 			await apply(stored.importId, resolutions);
 			expect(await snapshot()).toEqual(settled);
+		});
+
+		it("writePeopleAndRoles creates no guest for a list-only person, even one the plan calls a guest", async () => {
+			// The plan never produces this; the guard is the second lock on the door, so
+			// it is driven with a hand-built plan.
+			const person = (
+				key: string,
+				name: string,
+				listOnly: boolean,
+			): PlanPerson => ({
+				key,
+				esUserId: null,
+				name,
+				appearances: {
+					roles: listOnly ? 0 : 1,
+					attendance: 0,
+					awards: 0,
+					tableTopics: 0,
+					introducedBy: 0,
+					memberList: listOnly ? 1 : 0,
+					mentorChart: 0,
+					speechRequests: 0,
+					guestCategories: [],
+				},
+				listOnly,
+				outcome: {
+					status: "guest",
+					kind: "visitor",
+					via: "category",
+					guestId: null,
+				},
+				rejectedChoice: null,
+			});
+			const plan: ImportPlan = {
+				people: [
+					person("name:list only", "List Only", true),
+					person("name:on a meeting", "On A Meeting", false),
+				],
+				unresolved: [],
+				roleDefinitions: [],
+				meetings: [],
+				futureMeetings: [],
+				introductions: [],
+				counts: {} as ImportPlan["counts"],
+				canApply: true,
+			};
+			const before = await n(guests);
+			const resolved = await logic.writePeopleAndRoles(seed.clubId, plan);
+
+			// The control: a person a meeting names is still made a guest.
+			expect(await n(guests)).toBe(before + 1);
+			expect(resolved.newGuests).toBe(1);
+			expect(resolved.guests.has("name:on a meeting")).toBe(true);
+			expect(resolved.guests.has("name:list only")).toBe(false);
+			const names = await testDb
+				.select({ name: guests.name })
+				.from(guests)
+				.where(eq(guests.clubId, seed.clubId));
+			expect(names.map((g) => g.name)).toEqual(["On A Meeting"]);
 		});
 	},
 );

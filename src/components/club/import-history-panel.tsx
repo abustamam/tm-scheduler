@@ -620,6 +620,7 @@ function PeopleToResolve({
 				{people.map((p) => {
 					const d = drafts[p.key] ?? EMPTY_DRAFT;
 					const a = p.appearances;
+					const fromLists = listAppearances(a);
 					return (
 						<li
 							key={p.key}
@@ -634,9 +635,7 @@ function PeopleToResolve({
 										: "is not on the roster"}
 									; {a.roles} roles, {a.attendance} attendance, {a.awards}{" "}
 									awards, {a.tableTopics} Table Topics
-									{listAppearances(a).length > 0
-										? `, ${listAppearances(a).join(", ")}`
-										: ""}
+									{fromLists.length > 0 ? `, ${fromLists.join(", ")}` : ""}
 									{p.listOnly
 										? ". Named by no meeting: it can only be matched to a member or skipped"
 										: ""}

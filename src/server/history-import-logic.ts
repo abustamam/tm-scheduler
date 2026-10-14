@@ -78,6 +78,7 @@ import {
 	isJsonbSafeText,
 	leftAloneReason,
 	MEETING_LEFT_ALONE,
+	needsDecision,
 	type Omission,
 	type PersonResolution,
 	type PlanContext,
@@ -534,8 +535,7 @@ function previewPerson(p: PlanPerson): ImportPreviewPerson {
 		rejectedChoice: p.rejectedChoice,
 		appearances: p.appearances,
 		listOnly: p.listOnly,
-		needsDecision:
-			o.status === "ambiguous" || (o.status === "unmatched" && !p.listOnly),
+		needsDecision: needsDecision(p),
 	};
 }
 
@@ -675,7 +675,7 @@ interface Resolved {
 }
 
 /** People, then role definitions: everything every meeting needs, written once. */
-async function writePeopleAndRoles(
+export async function writePeopleAndRoles(
 	clubId: string,
 	plan: ImportPlan,
 ): Promise<Resolved> {

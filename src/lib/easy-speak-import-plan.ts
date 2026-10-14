@@ -387,6 +387,30 @@ interface Seen {
 	ref: EsPersonRef;
 	appearances: PlanPerson["appearances"];
 	onMemberList: boolean;
+	/**
+	 * Every spelling the records gave this key, case and spacing aside. A name-only
+	 * key folds accents away, so two spellings ("José", "Jose") share one key: the
+	 * exact-name matcher must not pick one of them for both.
+	 */
+	spellings: Set<string>;
+}
+
+/** A spelling that keeps its accents: the fold's own key throws them away. */
+function spellingOf(name: string): string {
+	return name.normalize("NFC").replace(/\s+/gu, " ").trim().toLowerCase();
+}
+
+/**
+ * Whether a person needs a human before the apply: an ambiguous match, or an
+ * unmatched one that a meeting names. A person on a list only is matched when the
+ * roster has them and otherwise left alone (#1203). The one rule the plan's
+ * `unresolved` and the preview's `needsDecision` both read.
+ */
+export function needsDecision(p: PlanPerson): boolean {
+	return (
+		p.outcome.status === "ambiguous" ||
+		(p.outcome.status === "unmatched" && !p.listOnly)
+	);
 }
 
 /** Why an existing meeting is left as it is: the report says it in these words. */
@@ -483,6 +507,7 @@ export function buildImportPlan(
 			entry = {
 				ref,
 				onMemberList: ref.esUserId ? memberListIds.has(ref.esUserId) : false,
+				spellings: new Set(),
 				appearances: {
 					roles: 0,
 					attendance: 0,
@@ -497,6 +522,7 @@ export function buildImportPlan(
 			};
 			seen.set(key, entry);
 		}
+		entry.spellings.add(spellingOf(ref.name));
 		entry.appearances[field]++;
 		if (category && !entry.appearances.guestCategories.includes(category)) {
 			entry.appearances.guestCategories.push(category);
@@ -573,17 +599,21 @@ export function buildImportPlan(
 			// made that member, so its absence says the membership was merged away or
 			// a convert was undone, not that anyone declined this person. The person
 			// is matched by name again, and asks a human if that finds nobody.
-			const exact = rosterByName.get(ref.name.trim()) ?? [];
+			// Two spellings under one name-only key (José / Jose) cannot take the exact
+			// pass: it would match the first spelling and hand the second its member.
+			// The fold's candidates go to a human, or to nobody if the roster has none.
+			const collided = !ref.esUserId && entry.spellings.size > 1;
+			const exact = collided ? [] : (rosterByName.get(ref.name.trim()) ?? []);
 			const folded = rosterByFold.get(foldName(ref.name)) ?? [];
 			const candidates = exact.length > 0 ? exact : folded;
 			const first = candidates[0];
-			if (candidates.length === 1 && first) {
+			if (candidates.length === 1 && first && !collided) {
 				outcome = {
 					status: "member",
 					memberId: first.memberId,
 					via: exact.length > 0 ? "exact" : "folded",
 				};
-			} else if (candidates.length > 1) {
+			} else if (candidates.length > 1 || (collided && first)) {
 				outcome = { status: "ambiguous", candidates };
 			} else if (
 				appearances.guestCategories.length > 0 &&
@@ -642,11 +672,7 @@ export function buildImportPlan(
 	people.sort(
 		(a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key),
 	);
-	const unresolved = people.filter(
-		(p) =>
-			p.outcome.status === "ambiguous" ||
-			(p.outcome.status === "unmatched" && !p.listOnly),
-	);
+	const unresolved = people.filter(needsDecision);
 
 	// -- Role definitions ------------------------------------------------------
 	const defsByKey = new Map(
