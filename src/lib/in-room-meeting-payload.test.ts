@@ -54,6 +54,36 @@ describe("the in-room next meeting keeps the (V) flag (#1164)", () => {
 		expect("visiting" in (out?.roles[1] ?? {})).toBe(false);
 	});
 
+	// protects=a role carrying a field OUTSIDE the allowlist (an id, an email: what
+	// a loader's row might hold beyond the summary type) does not reach the
+	// payload, on the toastmaster and on every role;
+	// fails_when=`pickRole` copies the role whole (`{ ...r }`) instead of naming
+	// the allowed fields;
+	// no_claim=none beyond protects.
+	it("drops a field that is not on the allowlist, on the toastmaster and on a role", () => {
+		const leaky = (label: string) =>
+			({
+				label,
+				names: ["Ann Lee"],
+				openCount: 0,
+				personId: "p-123",
+				email: "ann@example.com",
+			}) as NextMeetingSummary["roles"][number];
+		const out = inRoomNextMeeting(next([leaky("Timer")], leaky("Toastmaster")));
+		expect(out?.roles[0]).toEqual({
+			label: "Timer",
+			names: ["Ann Lee"],
+			openCount: 0,
+		});
+		expect(out?.toastmaster).toEqual({
+			label: "Toastmaster",
+			names: ["Ann Lee"],
+			openCount: 0,
+		});
+		expect(JSON.stringify(out)).not.toContain("p-123");
+		expect(JSON.stringify(out)).not.toContain("ann@example.com");
+	});
+
 	it("lists `visiting` among the allowed role fields, and no id or contact", () => {
 		expect([...IN_ROOM_NEXT_MEETING_ROLE_FIELDS]).toEqual([
 			"label",

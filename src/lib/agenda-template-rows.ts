@@ -455,7 +455,11 @@ function toRow(
 			slotId: null,
 			section: true,
 			...base,
-			...tokenVisiting,
+			// No `visiting` here, deliberately: a row's flag means "this row, as
+			// rendered, shows a (V)", and no surface renders a section's `detail`
+			// (the print bands, the deck's `templateSection` and the run sheet read
+			// only `who`). A section note naming a visiting Toastmaster would ask
+			// for a legend on a sheet that prints no "(V)" (#1164).
 			marks: null,
 		};
 	}

@@ -1302,6 +1302,39 @@ describe("the visiting-Toastmaster flag on a template row (#1164)", () => {
 		expect(literal[0]?.visiting).toBeUndefined();
 	});
 
+	// protects=`visiting` means "this row, as rendered, shows a (V)": a SECTION
+	// row's detail is rendered by no surface (the print bands, the deck's
+	// templateSection and the run sheet read only `who`), so a section note that
+	// names a visiting Toastmaster must not flag the row, or a sheet whose
+	// roster/rows show no (V) prints the key anyway. An event row and an unbound
+	// role row DO render their detail everywhere, so theirs still flag;
+	// fails_when=a section row takes `tokenVisiting` from its detail again;
+	// no_claim=none beyond protects.
+	it("does not flag a section row whose hidden note names the visitor, and still flags the event and unbound-role rows that print it", () => {
+		const detail = "{names:table_topics_master}";
+		const rows = buildTemplateRows(
+			[
+				beat({
+					sortOrder: 0,
+					kind: "section",
+					label: "ROUND ONE",
+					detail,
+				}),
+				beat({ sortOrder: 1, kind: "event", label: "Welcome", detail }),
+				beat({ sortOrder: 2, kind: "role", label: "Note", detail }),
+			],
+			roles,
+			[ttm("Jane Doe", true)],
+		);
+		const [section, event, unbound] = rows;
+		expect(section?.section).toBe(true);
+		expect(section?.visiting).toBeUndefined();
+		expect(event?.detail).toContain("Jane Doe (V)");
+		expect(event?.visiting).toBe(true);
+		expect(unbound?.detail).toContain("Jane Doe (V)");
+		expect(unbound?.visiting).toBe(true);
+	});
+
 	// protects=`{evaluator:paired}` on a speech preamble flags the row when the
 	// paired evaluator is a visiting Toastmaster, though the Toastmaster holding
 	// the row is a member;

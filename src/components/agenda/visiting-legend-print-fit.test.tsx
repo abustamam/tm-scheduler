@@ -27,6 +27,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { VISITING_TOASTMASTER_LEGEND } from "#/lib/agenda";
+import type { AgendaSlot } from "#/lib/agenda-runsheet";
+import { buildTemplateRows } from "#/lib/agenda-template-rows";
 import { meetingHubUrlFor } from "#/lib/meeting-hub";
 import {
 	MCF_EXPLAINERS,
@@ -365,6 +367,91 @@ describe("the fixtures", () => {
 				`${f}: nothing was flagged`,
 			).toBeGreaterThan(0);
 		}
+	});
+});
+
+describe("the (V) legend and a section's hidden note", () => {
+	// protects=a two-sheet layout prints the key only on the sheet that shows a
+	// (V): a SECTION band prints its title and never its note, so a note naming
+	// the visiting Toastmaster (who is on page one's roster) must not put a key on
+	// page two, which shows no (V);
+	// fails_when=a section row's `visiting` is set from its hidden detail, as
+	// be38104 did, so page two carries a legend over no "(V)";
+	// no_claim=none beyond protects. Static markup, no browser.
+	it.each([
+		"timing",
+		"spacious",
+	] as const)("prints the key once, on the roster sheet only, in the %s layout", (layout) => {
+		const visitor: AgendaSlot = {
+			id: "ttm-0",
+			roleName: "Table Topics Master",
+			roleKey: "table_topics_master",
+			category: "leadership",
+			isSpeakerRole: false,
+			slotIndex: 0,
+			assigneeName: "Jane Doe",
+			speechTitle: null,
+			projectLevel: null,
+			minMinutes: null,
+			maxMinutes: null,
+			evaluatesSlotId: null,
+			evaluates: null,
+			assigneeIsGuest: true,
+			assigneeIsVisitingToastmaster: true,
+		};
+		const rows = buildTemplateRows(
+			[
+				{
+					id: "b0",
+					sortOrder: 0,
+					kind: "section",
+					label: "ROUND ONE",
+					detail: "{names:table_topics_master}",
+					minutes: 0,
+					roleKey: null,
+					repeatsRoleKey: null,
+					flex: false,
+					handoff: false,
+					markGreen: null,
+					markYellow: null,
+					markRed: null,
+					clubGoverned: false,
+				},
+			],
+			[
+				{
+					key: "table_topics_master",
+					name: "Table Topics Master",
+					isSpeakerRole: false,
+				},
+			],
+			[visitor],
+		).map((r) => ({ ...r, time: "" }));
+		expect(rows[0]?.section).toBe(true);
+		const html = renderToStaticMarkup(
+			<MeetingAgendaPrint
+				layout={layout}
+				header={THR_HEADER}
+				roles={[
+					{
+						label: "Table Topics Master",
+						name: "Jane Doe (V)",
+						visiting: true,
+					},
+				]}
+				officers={THR_OFFICERS}
+				explainers={THR_EXPLAINERS}
+				rows={rows}
+				qrUrl={FIXTURES.thr.qr}
+			/>,
+		);
+		// The key sits on the first sheet, with the roster's (V), and the second
+		// sheet (the run of show, a section band and no (V)) carries none.
+		const sheets = html.split("agenda-page");
+		expect(sheets.length - 1).toBe(2);
+		expect(html.split(VISITING_TOASTMASTER_LEGEND).length - 1).toBe(1);
+		expect(sheets[1]).toContain(VISITING_TOASTMASTER_LEGEND);
+		expect(sheets[2]).not.toContain(VISITING_TOASTMASTER_LEGEND);
 	});
 });
 
