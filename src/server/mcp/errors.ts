@@ -115,6 +115,11 @@ export type McpBlockingCode =
 	 * this so the confirm page can explain it, the apply re-plans inside the club
 	 * lock and refuses with `AGENDA_MEETING_CANCELLED_IN_LOCK_MESSAGE`, and
 	 * `applyMeetingMetaPatch` refuses again in its own conditional UPDATE.
+	 *
+	 * `set_awards` (#1172) raises it too, with `MEETING_CANCELLED_MESSAGE`. It
+	 * raises `MEETING_LOCKED` only for a status the "record" write class refuses
+	 * besides cancelled, which is none today: a completed meeting is where
+	 * awards are recorded.
 	 */
 	| "MEETING_CANCELLED"
 	/**
@@ -130,10 +135,34 @@ export type McpBlockingCode =
 	| "MISSING_TIME"
 	/** The slot does not belong to the meeting the call names (#809). */
 	| "SLOT_NOT_IN_MEETING"
-	/** The member id is not an active roster member of this club (#809). */
+	/**
+	 * The member id is not an active roster member of this club (#809).
+	 * `set_awards` (#1172) raises it for a member of any status, the rule the
+	 * minutes writer applies to an award winner.
+	 */
 	| "NOT_A_MEMBER"
-	/** The guest id is not a guest of this club (#809). */
+	/**
+	 * The guest id is not a guest of this club (#809). `set_awards` (#1172)
+	 * raises it for a guest staged by `record_guest_book` whose confirm page has
+	 * not been applied: the row does not exist yet, and the tool never mints one.
+	 */
 	| "NOT_A_GUEST"
+	/**
+	 * The category's digital vote is still open (#1172). `set_awards` refuses a
+	 * set AND a clear: the Ballot Counter owns the winner until the vote closes.
+	 */
+	| "VOTE_OPEN"
+	/**
+	 * The candidate was ruled out of this award (#786, #1172). `set_awards`
+	 * reads the same disqualification index `setAward` does, so the tool and the
+	 * minutes page refuse the same names.
+	 */
+	| "AWARD_RULED_OUT"
+	/**
+	 * The same award category appears twice in one `set_awards` call (#1172).
+	 * Blocking rather than last-write-wins, for the reason `DUPLICATE_SLOT` is.
+	 */
+	| "DUPLICATE_AWARD_CATEGORY"
 	/**
 	 * The same slot appears twice in one call (#809).
 	 *

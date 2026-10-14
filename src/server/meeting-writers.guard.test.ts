@@ -128,7 +128,7 @@
  *  - **A plan writer loses its refusal:** `applyAddRoleSlot` drops its
  *    `assertMeetingAccepts` (2); asks `"record"` in code (2); the map says
  *    `record` (2).
- *  - **A new caller of a `refusedBy` writer:** `clearAward` gains a caller that
+ *  - **A new caller of a `refusedBy` writer:** `deleteAwardRow` gains a caller that
  *    refuses nothing (2).
  *  - **A registered wrapper is renamed:** `assertMinutesMeetingRecordable` (3),
  *    and the first hop of the `ensureAgendaDraft` chain (3).
@@ -544,9 +544,12 @@ const MEETING_WRITERS: Record<string, Entry> = {
 		class: "record",
 		refusedBy: ["src/server/minutes.ts#addTableTopics"],
 	},
-	"src/server/minutes-logic.ts#clearAward": {
+	"src/server/minutes-logic.ts#deleteAwardRow": {
 		class: "record",
-		refusedBy: ["src/server/minutes.ts#clearMinutesAward"],
+		refusedBy: [
+			"src/server/minutes.ts#clearMinutesAward",
+			"src/server/mcp/tools/set-awards.ts#setAwardsTool",
+		],
 	},
 	"src/server/minutes-logic.ts#moveTableTopicsSpeaker": {
 		class: "record",
@@ -560,9 +563,12 @@ const MEETING_WRITERS: Record<string, Entry> = {
 		class: "record",
 		refusedBy: ["src/server/minutes.ts#removeTableTopics"],
 	},
-	"src/server/minutes-logic.ts#setAward": {
+	"src/server/minutes-logic.ts#upsertAwardRow": {
 		class: "record",
-		refusedBy: ["src/server/minutes.ts#setMinutesAward"],
+		refusedBy: [
+			"src/server/minutes.ts#setMinutesAward",
+			"src/server/mcp/tools/set-awards.ts#setAwardsTool",
+		],
 	},
 	"src/server/minutes-logic.ts#setMemberPresence": {
 		class: "record",
