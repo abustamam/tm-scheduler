@@ -609,22 +609,32 @@ async function realFitPageCopies(
 const FLIP_MIN = 30;
 const FLIP_MAX = 90;
 
+type FlipLayout = "grid" | "editorial";
+
 type ParityFlip = {
-	/** A row count where Grid prints 2 pages and Editorial 1, or null. */
+	/** A row count where one layout prints 1 page and the other 2, or null. */
 	rows: number | null;
+	/** The layout on exactly 1 page at `rows` (null with `rows`). */
+	onePage: FlipLayout | null;
+	/** The layout on exactly 2 pages at `rows` (null with `rows`). */
+	twoPage: FlipLayout | null;
 	/** Every row count measured: `rows: grid height (pages), editorial height (pages)`. */
 	table: string;
 };
 
 /**
- * The row count at which Grid flows onto 2 pages while Editorial still fits 1, in
- * THIS browser (#1230). Both layouts' page counts only grow with the row count, so
- * the first row where each flows is found by binary search over
- * `FLIP_MIN`..`FLIP_MAX`, one Chrome launch per probe, both layouts drawn in each.
- * The band between the two is where the page parity differs; its middle is the
+ * A row count at which Grid and Editorial print on 1 page and 2 pages (either way
+ * round), in THIS browser (#1230). WHICH of them flows first depends on the browser's
+ * font face: a Mac flows Grid at 52 rows and Editorial at 57, Linux CI the other way
+ * round (Editorial at 53, Grid at 55), so the answer names both layouts. Both
+ * layouts' page counts only grow with the row count, so the first row where each
+ * flows is found by binary search over `FLIP_MIN`..`FLIP_MAX`, one Chrome launch per
+ * probe, both layouts drawn in each. The rows from the earlier first-flow row up to
+ * the row before the later one are where the page parity differs; its middle is the
  * answer, the farthest from either edge. A face that moves a layout by a row or two
- * then changes the answer, not the verdict. An empty band is `rows: null` with the
- * measured table, for the caller to fail on.
+ * then changes the answer, not the verdict. An empty band, or a probe that is not
+ * exactly 1 page and 2 pages, is `rows: null` with the measured table, for the
+ * caller to fail on.
  */
 async function findParityFlip(): Promise<ParityFlip> {
 	const seen = new Map<number, { grid: number; editorial: number }>();
@@ -643,7 +653,7 @@ async function findParityFlip(): Promise<ParityFlip> {
 		seen.set(rows, m);
 		return m;
 	};
-	const firstFlowing = async (layout: "grid" | "editorial") => {
+	const firstFlowing = async (layout: FlipLayout) => {
 		let lo = FLIP_MIN;
 		let hi = FLIP_MAX;
 		while (lo < hi) {
@@ -656,10 +666,24 @@ async function findParityFlip(): Promise<ParityFlip> {
 	const grid = await firstFlowing("grid");
 	const editorial = await firstFlowing("editorial");
 	let rows: number | null = null;
-	if (editorial - 1 >= grid) {
-		const mid = Math.floor((grid + editorial - 1) / 2);
+	let onePage: FlipLayout | null = null;
+	let twoPage: FlipLayout | null = null;
+	const first = Math.min(grid, editorial);
+	const last = Math.max(grid, editorial) - 1;
+	if (last >= first) {
+		const mid = Math.floor((first + last) / 2);
 		const m = await probe(mid);
-		if (sheetPages(m.grid) === 2 && sheetPages(m.editorial) === 1) rows = mid;
+		const g = sheetPages(m.grid);
+		const e = sheetPages(m.editorial);
+		if (g === 1 && e === 2) {
+			rows = mid;
+			onePage = "grid";
+			twoPage = "editorial";
+		} else if (g === 2 && e === 1) {
+			rows = mid;
+			onePage = "editorial";
+			twoPage = "grid";
+		}
 	}
 	const table = [...seen.entries()]
 		.sort(([a], [b]) => a - b)
@@ -670,6 +694,8 @@ async function findParityFlip(): Promise<ParityFlip> {
 		.join("\n");
 	return {
 		rows,
+		onePage,
+		twoPage,
 		table: `${table}\nGrid first flows at ${grid} rows, Editorial at ${editorial}`,
 	};
 }
@@ -847,38 +873,52 @@ describe.skipIf(!hasChrome)(
 			// (2114 < h <= 3170), on a Mac and on Linux.
 			const LONG = 60;
 
-			// Rows where the layouts' page PARITY differs: Grid on 2 pages (even, no
-			// blank after a duplex copy), Editorial on 1 (odd, a blank after every copy
-			// but the last). That band is narrow and the two layouts' faces move it by
-			// different amounts: 52 to 56 rows on a Mac (Grid flows at 52, Editorial at
-			// 57), about 56 to 61 on Linux, where everything is 0.945 of a Mac's height.
-			// No ONE row count sits well inside both (a Mac wants Grid over 1584px for a
-			// 120px margin, which only 58 rows reach, and Editorial flows at 57), so the
-			// count is MEASURED in whatever browser runs the suite: `findParityFlip`
-			// binary-searches 30 to 90 rows for the first row where Grid flows and the
-			// first where Editorial does, and takes the middle of the rows between. If
-			// the band is empty the suite FAILS with the measured table. It never skips.
+			// Rows where the layouts' page PARITY differs: one layout on 2 pages (even,
+			// no blank after a duplex copy), the other on 1 (odd, a blank after every
+			// copy but the last). WHICH layout is the 2-page one differs per browser,
+			// because the two layouts' faces move their flow points by different
+			// amounts: on a Mac Grid flows at 52 rows and Editorial at 57 (Grid 2,
+			// Editorial 1 at 52 to 56); on Linux CI (run 38640902515) Editorial flows
+			// at 53 and Grid at 55 (Editorial 2, Grid 1 at 53 to 54, a band only 2 rows
+			// wide). No ONE row count, or layout order, is right for both, so both are
+			// MEASURED in whatever browser runs the suite: `findParityFlip`
+			// binary-searches 30 to 90 rows for the first row where each layout flows
+			// and takes the middle of the rows between. The band is as narrow as 2 rows
+			// on Linux, which is fine because it is measured in the same browser that
+			// then runs the switch. If there is no such row the suite FAILS with the
+			// measured table. It never skips.
 			let flip: ParityFlip | null = null;
-			const flipRows = (): number => {
-				if (!flip?.rows) {
+			const flipCase = (): {
+				rows: number;
+				onePage: FlipLayout;
+				twoPage: FlipLayout;
+			} => {
+				if (!flip?.rows || !flip.onePage || !flip.twoPage) {
 					throw new Error(
-						`no row count in ${FLIP_MIN} to ${FLIP_MAX} has Grid on 2 pages and Editorial on 1 in this browser. Measured:\n${flip?.table ?? "(not measured)"}`,
+						`no row count in ${FLIP_MIN} to ${FLIP_MAX} has one of Grid/Editorial on 1 page and the other on 2 in this browser. Measured:\n${flip?.table ?? "(not measured)"}`,
 					);
 				}
-				return flip.rows;
+				return {
+					rows: flip.rows,
+					onePage: flip.onePage,
+					twoPage: flip.twoPage,
+				};
 			};
 
 			// protects=the precondition of the two switch cases below: in THIS browser
-			//   some row count prints Grid on 2 pages and Editorial on 1
+			//   some row count prints one of Grid/Editorial on 1 page and the other on 2
 			// fails_when=none does (a face or layout change moved the bands apart), and
 			//   then the measured table says where each layout flowed, instead of the
 			//   switch cases passing about nothing or being skipped
-			// no_claim=which row count it is: that differs per browser (52 to 56 on a Mac)
-			it("some row count has a 2-page grid next to a 1-page editorial", () => {
+			// no_claim=which layout is the 2-page one, or at what row count: both are
+			//   chosen per browser (Mac: Grid 2 / Editorial 1 at about 54; Linux CI run
+			//   38640902515: Editorial 2 / Grid 1 at 53 to 54)
+			it("some row count prints one of Grid/Editorial on 1 page and the other on 2", () => {
 				expect(
 					flip?.rows,
 					`rows ${FLIP_MIN} to ${FLIP_MAX}:\n${flip?.table ?? "(not measured)"}`,
 				).toBeTypeOf("number");
+				expect(flip?.onePage).not.toBe(flip?.twoPage);
 			});
 
 			it("a grid agenda that flows to 2 pages gets no blank between copies", async () => {
@@ -911,10 +951,12 @@ describe.skipIf(!hasChrome)(
 			// #1226 rewrote these two. They were "a 3-page editorial to a 2-page grid"
 			// and back (odd to even, even to odd), on `LONG` rows. The compact density
 			// made Editorial fit one page there, so Editorial never out-paginates Grid
-			// again (see the table above); the same parity flip is now Editorial on 1
-			// page and Grid on 2, on `flipRows()` rows, measured per browser (see above). What they protect is unchanged: after
-			// a layout switch under a duplex stack, the blank after each copy is
-			// recomputed from the pages `FitPage` REALLY made, in both directions.
+			// by a full page again (see the table above); the same parity flip is now a
+			// 1-page layout and a 2-page one, on `flipCase().rows` rows. Which of Grid
+			// and Editorial is which is measured per browser (see above). What they
+			// protect is unchanged: after a layout switch under a duplex stack, the
+			// blank after each copy is recomputed from the pages `FitPage` REALLY made,
+			// in both directions.
 
 			// protects=a switch to a layout with an EVEN page count drops the blanks the
 			//   odd one needed: they follow the pages FitPage really made the new layout
@@ -922,24 +964,26 @@ describe.skipIf(!hasChrome)(
 			// fails_when=the stack keeps the old layout's page counts after the switch
 			//   (the blanks stay: 2 where 0 is right, 6 pages become 8), or measures
 			//   once at mount and never again
-			// no_claim=that the row count is the same in any other browser (it is chosen per
-			//   browser, `findParityFlip`; each stage asserts its own preconditions); the
-			//   grid that grows later
-			it("switching from a 1-page editorial to a 2-page grid drops the blanks", async () => {
+			// no_claim=which of Grid/Editorial is the 1-page layout, or that the row
+			//   count is the same in any other browser (both are chosen per browser,
+			//   `findParityFlip`; each stage asserts its own preconditions); the grid
+			//   that grows later
+			it("switching from the 1-page layout to the 2-page layout drops the blanks", async () => {
+				const { rows, onePage, twoPage } = flipCase();
 				const { stages, printedPages } = await realFitPageCopies(
-					["editorial", "grid"],
-					flipRows(),
+					[onePage, twoPage],
+					rows,
 					3,
 					true,
 				);
-				const [editorial, grid] = stages;
-				// Preconditions: Editorial fits one page (odd), so every copy but the last
-				// is followed by a blank (3 copies: 2 blanks) ...
-				expect(editorial?.heights.map(sheetPages)).toEqual([1, 1, 1]);
-				expect(editorial?.blanks).toBe(2);
-				// ... and Grid flowed to two (even): the 2 blanks are gone.
-				expect(grid?.heights.map(sheetPages)).toEqual([2, 2, 2]);
-				expect(grid?.blanks).toBe(0);
+				const [one, two] = stages;
+				// Preconditions: the first layout fits one page (odd), so every copy but
+				// the last is followed by a blank (3 copies: 2 blanks) ...
+				expect(one?.heights.map(sheetPages)).toEqual([1, 1, 1]);
+				expect(one?.blanks).toBe(2);
+				// ... and the second flowed to two (even): the 2 blanks are gone.
+				expect(two?.heights.map(sheetPages)).toEqual([2, 2, 2]);
+				expect(two?.blanks).toBe(0);
 				// 3 copies of 2 pages, nothing between them.
 				expect(printedPages).toBe(6);
 			});
@@ -949,20 +993,22 @@ describe.skipIf(!hasChrome)(
 			// fails_when=the stack keeps the old layout's page counts after the switch
 			//   (no blanks where 2 are needed: 3 pages instead of 5), or measures once
 			//   at mount and never again
-			// no_claim=that the row count is the same in any other browser (it is chosen per
-			//   browser, `findParityFlip`)
-			it("switching from a 2-page grid to a 1-page editorial adds the blanks", async () => {
+			// no_claim=which of Grid/Editorial is the 2-page layout, or that the row
+			//   count is the same in any other browser (both are chosen per browser,
+			//   `findParityFlip`)
+			it("switching from the 2-page layout to the 1-page layout adds the blanks", async () => {
+				const { rows, onePage, twoPage } = flipCase();
 				const { stages, printedPages } = await realFitPageCopies(
-					["grid", "editorial"],
-					flipRows(),
+					[twoPage, onePage],
+					rows,
 					3,
 					true,
 				);
-				const [grid, editorial] = stages;
-				expect(grid?.heights.map(sheetPages)).toEqual([2, 2, 2]);
-				expect(grid?.blanks).toBe(0);
-				expect(editorial?.heights.map(sheetPages)).toEqual([1, 1, 1]);
-				expect(editorial?.blanks).toBe(2);
+				const [two, one] = stages;
+				expect(two?.heights.map(sheetPages)).toEqual([2, 2, 2]);
+				expect(two?.blanks).toBe(0);
+				expect(one?.heights.map(sheetPages)).toEqual([1, 1, 1]);
+				expect(one?.blanks).toBe(2);
 				// 1 + blank + 1 + blank + 1
 				expect(printedPages).toBe(5);
 			});
