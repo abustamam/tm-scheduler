@@ -13,6 +13,7 @@ import { user } from "#/db/auth-schema";
 import { buildFixtureClub } from "#/db/fixtures/club-fixture";
 import { clubs, guests, members, officerTerms, people } from "#/db/schema";
 import { isReservedRecipient } from "#/lib/email";
+import { normalizedEmail, normalizeEmail } from "./account-link-logic";
 import {
 	CLUB_WRITE_LOCK_TIMEOUT,
 	lockClubForWrite,
@@ -77,8 +78,10 @@ export function parseDemoAccountEmail(
 	raw: string | undefined | null,
 ): string | null {
 	if (raw == null) return null;
-	const email = raw.trim().toLowerCase();
-	if (email === "" || /[\s,]/u.test(email)) return null;
+	// The binder's own normalisation (`normalizeEmail`), so the address compared
+	// here is the address sign-in binds on.
+	const email = normalizeEmail(raw);
+	if (email == null || /[\s,]/u.test(email)) return null;
 	return email;
 }
 
@@ -142,7 +145,7 @@ export async function resetDemoClub(
 		const [demoUser] = await tx
 			.select({ id: user.id, isSuperadmin: user.isSuperadmin })
 			.from(user)
-			.where(sql`lower(${user.email}) = ${email}`)
+			.where(sql`${normalizedEmail(user.email)} = ${email}`)
 			.limit(1);
 		if (demoUser) {
 			const [inRealClub] = await tx
@@ -172,7 +175,7 @@ export async function resetDemoClub(
 			.innerJoin(clubs, eq(clubs.id, members.clubId))
 			.where(
 				and(
-					sql`lower(${people.email}) = ${email}`,
+					sql`${normalizedEmail(people.email)} = ${email}`,
 					isNull(people.userId),
 					eq(clubs.isDemo, false),
 				),
@@ -184,7 +187,7 @@ export async function resetDemoClub(
 			.innerJoin(clubs, eq(clubs.id, guests.clubId))
 			.where(
 				and(
-					sql`lower(${people.email}) = ${email}`,
+					sql`${normalizedEmail(people.email)} = ${email}`,
 					isNull(people.userId),
 					eq(clubs.isDemo, false),
 				),
@@ -280,6 +283,6 @@ export function demoKeepRule(
 	demoEmail: string,
 ): (account: { id: string; email: string }) => boolean {
 	return (account) =>
-		account.email.trim().toLowerCase() === demoEmail ||
+		normalizeEmail(account.email) === demoEmail ||
 		!isReservedRecipient(account.email);
 }

@@ -688,6 +688,29 @@ describe.skipIf(!hasTestDb)("resetDemoClub (#1199)", () => {
 		expect(await exists("people", person)).toBe(true);
 	});
 
+	// protects=the refusal compares addresses the way sign-in's binder does
+	//   (`normalizedEmail`: trimmed of ALL whitespace, lowercased), so an unbound
+	//   real member stored as "demo@...\t" (a pasted roster cell) is still refused;
+	//   with `lower()` alone the rebuild would add a second Person and the real
+	//   member's first sign-in would bind neither;
+	// fails_when=the member query goes back to `lower(people.email)`, and the
+	//   padded address no longer counts as the demo address;
+	// no_claim=the guest query shares the expression but is not separately pinned
+	//   here; the demo account's own `user.email` is better-auth's, stored
+	//   normalised, and is not padded.
+	it("refuses ADDRESS_IN_REAL_CLUB for an unbound member whose stored address is whitespace-padded", async () => {
+		const realClub = await makeRealClub();
+		const person = await makePerson(null, `${DEMO_EMAIL}\t`);
+		await join(realClub, person);
+
+		await expect(reset()).rejects.toMatchObject({
+			code: "ADDRESS_IN_REAL_CLUB",
+		});
+
+		expect(await demoClubs()).toEqual([]);
+		expect(await exists("people", person)).toBe(true);
+	});
+
 	// protects=the same refusal when the unbound Person at the demo address is a
 	//   real club's guest, and none when the Person sits in no real club;
 	// fails_when=a guest row is not counted, or a Person in no club blocks the
