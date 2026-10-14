@@ -980,30 +980,44 @@ async function appearsOnPastAgenda(
  *  candidate write in `voting-logic.ts`, `createSpeechRequest` and, since #1189,
  *  `scheduleSpeechRequest` (its request-row lock, then the meeting, then
  *  cascade-deleted by the removal's DELETE: 40P01 without it) and
- *  `applySetMemberStatus` (deactivate and reactivate: its member-row UPDATE, then
- *  the member's slots, against the removal's slots, then member row: 40P01 without
- *  it). Exclusive: `collapseMemberships` (the absorbed member) and this function.
+ *  `applySetMemberStatus`. Deactivate is the case that needs it: its member-row
+ *  UPDATE, then the member's slots, against the removal's slots, then member row
+ *  (40P01 without it). Reactivate touches no slots; it takes the lock too, harmlessly,
+ *  so both directions share one path. Exclusive: `collapseMemberships` (the absorbed
+ *  member) and this function.
  *
  *  Do NOT take it, and cannot deadlock with the removal, because each asks for the
  *  slot or the meeting BEFORE the member row (the removal's order) and none
  *  holds a row the removal's DELETE cascades into while it waits: `reassignSlotCore`
  *  and `releaseSlotCore` (slot row only: NEITHER takes a meeting lock, the meeting's
  *  status rides in their UPDATE through `meetingAcceptsWrite`), `rescheduleSpeech`
- *  (`attachSpeechToOpenSlot`: slot rows, then the FK on the new holder),
- *  `releaseSlotsAndMarkUnavailable` (an advisory attendance key, then the member's
- *  slots on one meeting, then a plan row), the guest convert and link (guest-held
- *  slots re-pointed at the member: the FK is their only touch), the minutes
- *  writers (attendance, Table Topics, awards: an insert or update, the FK KEY SHARE
- *  last) and the action-item writers (item row, then the FK). If one of them lands
- *  a row on the member first, the removal's member-row lock waits for it, re-reads,
- *  and stops with CLUB_BUSY_MESSAGE when the row is on a meeting or slot it does not
- *  hold; if the removal is first the writer waits on the member row and then fails
- *  its FK check. A writer that takes a meeting lock takes it FIRST, before any of
- *  the member's rows: complete, reopen, cancel, restore, digital voting,
- *  `assign_roles` (its batch calls the reassign and release cores under that
- *  lock), the slot add, remove and move writers, `backfillMissingRoleSlots`,
- *  the template conversion and the speech-log edit. Each takes the meeting lock
- *  before it locks a slot or writes a row naming a member.
+ *  (`attachSpeechToOpenSlot`: slot rows, then the FK on the new holder), the guest
+ *  convert and link (guest-held slots re-pointed at the member: the FK is their only
+ *  touch), the minutes writers (attendance, Table Topics, awards: an insert or
+ *  update, the FK KEY SHARE last) and the action-item writers (item row, then the
+ *  FK). If one of them lands a row on the member first, the removal's member-row
+ *  lock waits for it, re-reads, and stops with CLUB_BUSY_MESSAGE when the row is on
+ *  a meeting or slot it does not hold; if the removal is first the writer waits on
+ *  the member row and then fails its FK check. A writer that takes a meeting lock
+ *  takes it FIRST, before any of the member's rows: complete, reopen, cancel,
+ *  restore, digital voting, `assign_roles` (its batch calls the reassign and release
+ *  cores under that lock), the slot add, remove and move writers,
+ *  `backfillMissingRoleSlots`, the template conversion and the speech-log edit. Each
+ *  takes the meeting lock before it locks a slot or writes a row naming a member.
+ *
+ *  Known exceptions, which DO form a cycle with the removal and can deadlock (40P01,
+ *  a retryable error, no data is lost). They are not fixed here: the same cycles exist
+ *  without this change, because the old plain DELETE locked the member row and then
+ *  cascaded into the rows these writers hold.
+ *  - Undoing a guest conversion: the member row FOR UPDATE, then the member's slots.
+ *  - Unlinking a guest: the guest row FOR UPDATE, then the member's slots (the guest's
+ *    `converted_membership_id` is SET NULL by the delete).
+ *  - `setMentorshipFocus`: the mentorship row FOR UPDATE, then the members FOR SHARE.
+ *  - A full-year dues payment: an existing `member_dues` row (the upsert), then an
+ *    INSERT that needs KEY SHARE on the member.
+ *  - `releaseSlotsAndMarkUnavailable`: one bulk slot UPDATE with no ORDER BY, so two
+ *    of them over overlapping slots can take the rows in different orders, and one
+ *    that holds slots the removal wants is a cycle.
  *
  *  Not covered, by design: a meeting INSERTED into an action item's window, or a
  *  meeting RESCHEDULED into it from outside, after the second footprint read below

@@ -1152,10 +1152,25 @@ describe.skipIf(!hasTestDb)("remove a member on a past agenda (#1189)", () => {
 		expect((await slotHolder(target.id))?.status).toBe("open");
 	});
 
-	it("scheduling a request for a request of another club is still refused as not found, before any lock", async () => {
+	it("scheduling a request for a request of another club is refused as not found at once, before ANY lock", async () => {
 		// Protects: the unlocked read that finds the requester for the lock keeps the
-		// old answer for a request that is not this club's.
+		// old answer for a request that is not this club's, and gives it BEFORE the
+		// merge lock, the request row lock and the meeting lock. Another transaction
+		// holds all three (the merge lock exclusive, the request row, the meeting row)
+		// and the wrong-club call still comes back not-found immediately.
+		// Fails when: the club check moves behind the merge lock or the request row
+		// lock: the call then waits for the blocker and gives up after its 5 s lock
+		// timeout, so it has not settled within the bound below.
 		const leaver = await seedLeaver();
+		const meetingId = await seedMeeting("scheduled", 7);
+		const [slot] = await testDb
+			.insert(roleSlots)
+			.values({
+				meetingId,
+				roleDefinitionId: club.roleDefinitionId,
+				status: "open",
+			})
+			.returning({ id: roleSlots.id });
 		const [request] = await testDb
 			.insert(speechRequests)
 			.values({ clubId: club.clubId, membershipId: leaver })
@@ -1165,16 +1180,28 @@ describe.skipIf(!hasTestDb)("remove a member on a past agenda (#1189)", () => {
 		);
 		const holder = await openBlockingTx(async (tx) => {
 			await lockMembershipForMerge(tx, leaver);
+			await tx
+				.select({ id: speechRequests.id })
+				.from(speechRequests)
+				.where(eq(speechRequests.id, request.id))
+				.for("update");
+			await lockMeetingForSlotEdit(tx, meetingId);
 		});
 		try {
-			await expect(
-				scheduleSpeechRequest({
-					requestId: request.id,
-					slotId: request.id,
-					clubId: "00000000-0000-4000-8000-000000000000",
-					actorMemberId: null,
-				}),
-			).rejects.toThrow("That speech request was not found.");
+			const outcome = scheduleSpeechRequest({
+				requestId: request.id,
+				slotId: slot.id,
+				clubId: "00000000-0000-4000-8000-000000000000",
+				actorMemberId: null,
+			}).then(
+				() => null,
+				(e: unknown) => e,
+			);
+			expect(await settlesWithin(outcome, 1500)).toBe(true);
+			expect((await outcome) as Error).toHaveProperty(
+				"message",
+				"That speech request was not found.",
+			);
 		} finally {
 			await holder.commit();
 		}
@@ -1257,18 +1284,41 @@ describe.skipIf(!hasTestDb)("remove a member on a past agenda (#1189)", () => {
 		expect(locked.message).toBe(pastAgendaRemoveRefusal("Leaving Lee"));
 	});
 
-	it("a signed-in member on a past agenda gets the signed-in refusal, as the locked path gives", async () => {
-		// The early refusal keeps the locked path's order: the account check first.
+	it("a signed-in member on a past agenda gets the signed-in refusal at once, before any lock", async () => {
+		// Protects: the early signed-in check. It keeps the locked path's order (the
+		// account check first) AND runs before any lock: another transaction holds the
+		// merge lock exclusive and the member row, and the signed-in refusal still
+		// comes back immediately, not the past-agenda one and not a lock wait.
+		// Fails when: the early signed-in check is removed: the removal then gives the
+		// past-agenda refusal (the early past-agenda check is next), and if that is
+		// gone too it waits for the merge lock and gives up after its 5 s lock timeout.
 		const leaver = await seedLeaver();
 		await testDb
 			.update(people)
 			.set({ userId: club.memberUserId })
 			.where(eq(people.id, extraPeople[0] ?? ""));
 		await holdSlot(await seedMeeting("completed", -7), leaver);
-
-		await expect(remove(leaver)).rejects.toThrow(
-			"That member is a signed-in account and can't be removed.",
-		);
+		const holder = await openBlockingTx(async (tx) => {
+			await lockMembershipForMerge(tx, leaver);
+			await tx
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.id, leaver))
+				.for("update");
+		});
+		try {
+			const outcome = remove(leaver).then(
+				() => null,
+				(e: unknown) => e,
+			);
+			expect(await settlesWithin(outcome, 1500)).toBe(true);
+			expect((await outcome) as Error).toHaveProperty(
+				"message",
+				"That member is a signed-in account and can't be removed.",
+			);
+		} finally {
+			await holder.commit();
+		}
 		expect(await memberRowExists(leaver)).toBe(true);
 	});
 
