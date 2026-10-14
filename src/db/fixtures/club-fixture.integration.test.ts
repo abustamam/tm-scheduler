@@ -47,6 +47,7 @@ import {
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { PATHWAYS_CATALOG } from "#/lib/pathways-catalog";
 import type { DbOrTx } from "#/server/meeting-templates-logic";
+import { listMentors } from "#/server/mentorship-logic";
 import { loadFeedbackForUser } from "#/server/role-feedback-logic";
 import { cleanup, hasTestDb, openBlockingTx, testDb } from "#/test/db";
 import {
@@ -439,6 +440,41 @@ describe.skipIf(!hasTestDb)("Harbor City fixture club", () => {
 				),
 			);
 		expect(camilleAtHeld).toHaveLength(0);
+	});
+
+	// protects=the demo club and `db:seed` show Find a mentor with mentors on it
+	//   (#945): a fixture member who is willing carries `mentor_listed_at`, so
+	//   `listMentors` returns them to another member;
+	// fails_when=the fixture inserts `willing_to_mentor` without the listing (the
+	//   page is empty, a demo walk-through of "Find a mentor" shows nobody), or
+	//   lists a member who is not willing (the members CHECK refuses that row);
+	// no_claim=NOT which members are willing; only that every willing one is
+	//   listed and no unwilling one is, and that the page returns them.
+	it("lists every willing fixture member on Find a mentor", async () => {
+		const { clubId } = await build();
+		const rows = await testDb
+			.select({
+				id: members.id,
+				name: members.name,
+				willing: members.willingToMentor,
+				listedAt: members.mentorListedAt,
+			})
+			.from(members)
+			.where(eq(members.clubId, clubId));
+		const willing = rows.filter((r) => r.willing);
+		expect(willing.length).toBeGreaterThan(0);
+		expect(willing.every((r) => r.listedAt !== null)).toBe(true);
+		expect(
+			rows.filter((r) => !r.willing).every((r) => r.listedAt === null),
+		).toBe(true);
+
+		// A member who is not themselves a mentor sees every willing member.
+		const viewer = rows.find((r) => !r.willing);
+		expect(viewer).toBeDefined();
+		const listed = await listMentors(clubId, viewer!.id);
+		expect(listed.map((m) => m.memberId).sort()).toEqual(
+			willing.map((r) => r.id).sort(),
+		);
 	});
 
 	// protects=every meeting is 18:00 on the club's wall clock, on the date the

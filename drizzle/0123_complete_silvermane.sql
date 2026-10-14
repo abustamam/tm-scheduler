@@ -26,6 +26,7 @@ CREATE INDEX "mentorship_requests_club_idx" ON "mentorship_requests" USING btree
 CREATE INDEX "mentorship_requests_mentor_idx" ON "mentorship_requests" USING btree ("mentor_member_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "mentorship_requests_one_pending_unique" ON "mentorship_requests" USING btree ("mentee_member_id") WHERE "mentorship_requests"."status" = 'pending';--> statement-breakpoint
 ALTER TABLE "members" ADD CONSTRAINT "members_mentor_bio_len_check" CHECK ("members"."mentor_bio" is null or char_length("members"."mentor_bio") between 1 and 500);--> statement-breakpoint
+ALTER TABLE "members" ADD CONSTRAINT "members_mentor_listed_requires_willing_check" CHECK ("members"."mentor_listed_at" is null or "members"."willing_to_mentor");--> statement-breakpoint
 -- Backfill (#945): a member who turned "willing to mentor" on themselves before
 -- this column existed is listed now. A willing member the Easy-Speak mentor import
 -- touched (an import_refs row of kind 'willing_to_mentor' for them) stays unlisted

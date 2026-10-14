@@ -36,8 +36,11 @@ export const MENTORING_HEADING = "Mentoring";
 export const WILLING_TO_MENTOR_LABEL = "I'm willing to mentor another member";
 export const MENTOR_BIO_LABEL = "Your mentor bio";
 export const MENTOR_UNLISTED_NOTICE =
-	"You're marked as willing to mentor from your club's records, but members can't find you yet.";
+	"You're marked as willing to mentor, but members can't find you on Find a mentor yet.";
 export const MENTOR_CONFIRM_LABEL = "Show me on Find a mentor";
+/** The bio editor's Save for a willing member who is not listed yet: saving a
+ *  bio lists them (`setMyMentorBio`), so the button says so. */
+export const MENTOR_SAVE_AND_LIST_LABEL = "Save and show me on Find a mentor";
 export const MENTOR_BIO_PLACEHOLDER =
 	"What you can help with: Pathways, contests, leadership, evaluations…";
 export const FIND_A_MENTOR_LABEL = "Find a mentor";
@@ -197,6 +200,7 @@ export function MentorshipCard({
 					key={view.mentorBio ?? ""}
 					saved={view.mentorBio}
 					onSave={onSaveBio}
+					listsOnSave={!view.mentorListed}
 				/>
 			) : null}
 			<div className="border-t border-[var(--line)] px-5 py-3 text-xs">
@@ -216,9 +220,12 @@ export function MentorshipCard({
 function MentorBioEditor({
 	saved,
 	onSave,
+	listsOnSave,
 }: {
 	saved: string | null;
 	onSave: (bio: string) => Promise<void>;
+	/** Saving lists a member Find a mentor cannot show yet; the button says so. */
+	listsOnSave: boolean;
 }) {
 	const [draft, setDraft] = useState(saved ?? "");
 	const [busy, setBusy] = useState(false);
@@ -268,7 +275,7 @@ function MentorBioEditor({
 					onClick={() => void save()}
 				>
 					{busy ? <Loader2 className="animate-spin" aria-hidden /> : null}
-					Save
+					{listsOnSave ? MENTOR_SAVE_AND_LIST_LABEL : "Save"}
 				</Button>
 			</div>
 		</div>

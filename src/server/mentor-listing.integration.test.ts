@@ -168,6 +168,66 @@ describe.skipIf(!hasTestDb)("the mentor listing (#945)", () => {
 		expect(await listedIds(s.clubId, s.adminMemberId)).toEqual([s.memberId]);
 	});
 
+	// protects=the database itself refuses a listed member who is not willing, so
+	// a writer that forgets the pair (a merge, an import, a fixture) fails loudly
+	// instead of leaving a row a later "willing" flip would publish unconfirmed;
+	// fails_when=`members_mentor_listed_requires_willing_check` is dropped from
+	// the schema or the migration, or its predicate is loosened: the first two
+	// writes below succeed;
+	// no_claim=that every writer clears the pair: the setter, collapse and
+	// fixture tests above and beside this one do that
+	it("refuses a listing on a member who is not willing", async () => {
+		const s = await seed();
+		const unwilling = await addImportedWilling(s.clubId, "Una Unwilling");
+		await testDb
+			.update(members)
+			.set({ willingToMentor: false })
+			.where(eq(members.id, unwilling));
+
+		const refusedBy = async (write: Promise<unknown>) => {
+			const err = await write.then(
+				() => null,
+				(e: unknown) => e as { cause?: { constraint?: string } },
+			);
+			expect(err, "the write was refused").not.toBeNull();
+			return err?.cause?.constraint;
+		};
+
+		expect(
+			await refusedBy(
+				Promise.resolve(
+					testDb
+						.update(members)
+						.set({ mentorListedAt: new Date() })
+						.where(eq(members.id, unwilling)),
+				),
+			),
+		).toBe("members_mentor_listed_requires_willing_check");
+
+		// The other way round: a listed member cannot be turned unwilling alone.
+		const listed = await addImportedWilling(s.clubId, "Lena Listed");
+		await testDb
+			.update(members)
+			.set({ mentorListedAt: new Date() })
+			.where(eq(members.id, listed));
+		expect(
+			await refusedBy(
+				Promise.resolve(
+					testDb
+						.update(members)
+						.set({ willingToMentor: false })
+						.where(eq(members.id, listed)),
+				),
+			),
+		).toBe("members_mentor_listed_requires_willing_check");
+
+		expect(await stateOf(unwilling)).toEqual({
+			willing: false,
+			listedAt: null,
+		});
+		expect((await stateOf(listed))?.willing).toBe(true);
+	});
+
 	// protects=saving a bio while willing lists the member (writing the bio is
 	// the confirmation), and saving one while NOT willing lists nobody, so a
 	// later import setting the flag cannot publish it;
@@ -200,8 +260,9 @@ describe.skipIf(!hasTestDb)("the mentor listing (#945)", () => {
 	// protects=loadMyMentorships.mentorListed is true only for a willing member
 	// with a confirmation, so the card shows its confirm line for an imported
 	// flag and not for anyone else;
-	// fails_when=mentorListed reports willing alone, or listed for a member who
-	// turned off;
+	// fails_when=mentorListed reports willing alone, or stays true for a member
+	// who turned off (both columns cleared: the DB refuses a listed unwilling
+	// row, `members_mentor_listed_requires_willing_check`);
 	// no_claim=what the card renders (mentorship-cards.test.tsx)
 	it("reports mentorListed on the member's own view", async () => {
 		const s = await seed();
@@ -214,7 +275,7 @@ describe.skipIf(!hasTestDb)("the mentor listing (#945)", () => {
 		expect((await logic.loadMyMentorships(imported))?.mentorListed).toBe(true);
 		await testDb
 			.update(members)
-			.set({ willingToMentor: false })
+			.set({ willingToMentor: false, mentorListedAt: null })
 			.where(eq(members.id, imported));
 		expect((await logic.loadMyMentorships(imported))?.mentorListed).toBe(false);
 	});

@@ -21,6 +21,7 @@ import {
 	type ClubMentoringView,
 	MEMBER_MENTORING_HEADING,
 	MENTOR_CONFIRM_LABEL,
+	MENTOR_SAVE_AND_LIST_LABEL,
 	MENTOR_UNLISTED_NOTICE,
 	MENTORING_HEADING,
 	type MemberMentorshipsView,
@@ -218,6 +219,45 @@ describe("MentorshipCard, the member's own (#939)", () => {
 			).toBeNull();
 			cleanup();
 		}
+	});
+
+	// protects=the bio editor of a willing member who is not listed yet says that
+	// saving lists them ("Save and show me on Find a mentor"), because
+	// setMyMentorBio publishes a willing member; a listed member's button stays
+	// "Save"; the label click still sends the bio;
+	// fails_when=an unlisted member's Save is a plain "Save" (a silent publish),
+	// or a listed member's button claims to list them;
+	// no_claim=that the server lists them on save (mentor-bio.integration.test.ts)
+	it("labels the bio Save as listing the member while they are unlisted", async () => {
+		const user = userEvent.setup();
+		const onSaveBio = vi.fn(async () => undefined);
+		const base = { mentorBio: null, mentors: [], mentees: [] };
+		await renderInRouter(
+			<MentorshipCard
+				view={{ ...base, willingToMentor: true, mentorListed: false }}
+				onToggleWilling={vi.fn()}
+				onSaveBio={onSaveBio}
+			/>,
+		);
+		expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+		await user.type(screen.getByRole("textbox"), "Contests");
+		await user.click(
+			screen.getByRole("button", { name: MENTOR_SAVE_AND_LIST_LABEL }),
+		);
+		expect(onSaveBio).toHaveBeenCalledWith("Contests");
+		cleanup();
+
+		await renderInRouter(
+			<MentorshipCard
+				view={{ ...base, willingToMentor: true, mentorListed: true }}
+				onToggleWilling={vi.fn()}
+				onSaveBio={vi.fn()}
+			/>,
+		);
+		expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: MENTOR_SAVE_AND_LIST_LABEL }),
+		).toBeNull();
 	});
 
 	it("never reads as the charter club mentor", async () => {

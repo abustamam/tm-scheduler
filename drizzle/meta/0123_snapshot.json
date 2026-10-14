@@ -1,5 +1,5 @@
 {
-  "id": "6414b13b-a3c5-4fd1-bcc7-03d44ddd7d20",
+  "id": "94962fdf-d604-46c5-8c1f-6e62c4bdfad9",
   "prevId": "3de207db-c84a-4869-8bac-b92ad5bf176e",
   "version": "7",
   "dialect": "postgresql",
@@ -5480,6 +5480,10 @@
         "members_mentor_bio_len_check": {
           "name": "members_mentor_bio_len_check",
           "value": "\"members\".\"mentor_bio\" is null or char_length(\"members\".\"mentor_bio\") between 1 and 500"
+        },
+        "members_mentor_listed_requires_willing_check": {
+          "name": "members_mentor_listed_requires_willing_check",
+          "value": "\"members\".\"mentor_listed_at\" is null or \"members\".\"willing_to_mentor\""
         }
       },
       "isRLSEnabled": false

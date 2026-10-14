@@ -1070,6 +1070,14 @@ export const members = pgTable(
 			"members_mentor_bio_len_check",
 			sql`${t.mentorBio} is null or char_length(${t.mentorBio}) between 1 and 500`,
 		),
+		// Nobody is listed on Find a mentor without being willing (#945). Every
+		// writer sets and clears the pair together; the constraint makes a writer
+		// that forgets (a merge, an import, a fixture) fail loudly instead of
+		// leaving a hidden-but-listed row that a later "willing" flip publishes.
+		check(
+			"members_mentor_listed_requires_willing_check",
+			sql`${t.mentorListedAt} is null or ${t.willingToMentor}`,
+		),
 		index("members_club_idx").on(t.clubId),
 		index("members_person_idx").on(t.personId),
 		// One membership per person per club (#489). Several paths assert this in
