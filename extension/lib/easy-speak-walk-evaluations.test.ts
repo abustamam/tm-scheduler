@@ -103,6 +103,10 @@ describe("the evaluation requests are fenced on the account", () => {
 		const second = setup({ store, clock: c, as: (_i, url) => (url.endsWith("/my_evaluations.php") ? other : FIXTURE_IDENTITY) });
 		await expect(second.run()).rejects.toThrow(/another account/);
 		expect(second.log.map((r) => new URL(r.url).pathname)).toEqual([
+			// The request forms are staged, never stored, so a resume asks for them again, and for their fence.
+			"/request_speech.php",
+			"/request_speech.php",
+			"/tm_all_speeches.php",
 			LIST,
 			"/api/v1/evaluations.php/eval/501",
 			"/api/v1/evaluations.php/eval/502",

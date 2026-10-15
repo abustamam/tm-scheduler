@@ -33,14 +33,25 @@ import {
 const at = (path: string) => `https://easy-speak.org/${path}`;
 const otherClub: Identity = { ...FIXTURE_IDENTITY, esClubId: "9090" };
 /** How many pages of the walk's first `n` requests reach the store: the evaluation batch (JSON under /api/) is staged in memory, and the closing fence is never stored. */
-const stored = (walk: { html: boolean }[], n: number) => walk.slice(0, n).filter((r) => r.html).length;
+const stored = (walk: { stored: boolean }[], n: number) => walk.slice(0, n).filter((r) => r.stored).length;
 const otherAccount: Identity = { ...FIXTURE_IDENTITY, username: "someoneelse" };
 
-/** The requests of one uninterrupted walk, in order. */
+/**
+ * The requests of one uninterrupted walk, in order. `stored` is false for what never reaches the
+ * store: the API calls and the evaluations' closing check, the request forms (staged until their
+ * fence) and the speech list asked again as that fence. `viewerless` marks the request forms, which
+ * name no viewer and so cannot show an account switch until the fence.
+ */
 async function baseline() {
 	const s = setup();
 	await s.run();
-	return s.log.map((r) => ({ url: r.url, html: !new URL(r.url).pathname.startsWith("/api/") }));
+	const paths = s.log.map((r) => new URL(r.url).pathname);
+	return s.log.map((r, i) => {
+		const html = !paths[i].startsWith("/api/");
+		const viewerless = paths[i] === "/request_speech.php";
+		const fence = paths[i] === "/tm_all_speeches.php" && paths.indexOf(paths[i]) !== i;
+		return { url: r.url, html, viewerless, stored: html && !viewerless && !fence };
+	});
 }
 
 describe("every page is for the account and club that started the walk", () => {
@@ -54,6 +65,8 @@ describe("every page is for the account and club that started the walk", () => {
 			let checked = 0;
 			for (const [i, req] of walk.entries()) {
 				if (!req.html) continue;
+				// A request form names no viewer: another account is seen only at the fence (own test in easy-speak-walk.test.ts).
+				if (what === "account" && req.viewerless) continue;
 				checked += 1;
 				const store = memoryStore();
 				const s = setup({ store, as: (idx) => (idx >= i ? other : FIXTURE_IDENTITY) });
@@ -100,16 +113,16 @@ describe("every page is for the account and club that started the walk", () => {
 		});
 	}
 
-	it("leaves a walk of one identity alone: the same account and club throughout asks for each page once, but for the evaluations fence", async () => {
+	it("leaves a walk of one identity alone: the same account and club throughout asks for each page once, but for the two fences", async () => {
 		const s = setup({ as: FIXTURE_IDENTITY });
 		const { bundle } = await s.run();
 		expect(bundle.meetings).toHaveLength(3);
 		const urls = s.log.map((r) => `${r.method} ${r.url} ${r.body ?? ""}`);
-		// One page is asked twice on purpose: the evaluations page opens and closes the evaluation
-		// requests, which carry no page to check the account on.
+		// Two pages are asked twice on purpose: the speech list closes the request forms, and the
+		// evaluations page opens and closes the evaluation requests; neither batch can check the account itself.
 		const twice = urls.filter((u, i) => urls.indexOf(u) !== i);
-		expect(twice).toEqual([`GET ${at("my_evaluations.php")} `]);
-		expect(new Set(urls).size).toBe(urls.length - 1);
+		expect(twice).toEqual([`GET ${at("tm_all_speeches.php")} `, `GET ${at("my_evaluations.php")} `]);
+		expect(new Set(urls).size).toBe(urls.length - 2);
 	});
 
 	it("accepts a signed-in page that shows no club id (it cannot be another club's)", async () => {

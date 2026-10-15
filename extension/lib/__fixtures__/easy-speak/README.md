@@ -13,7 +13,7 @@ or a phone outside `(555) 010-xxxx` shows up in a fixture. A name in plain text 
 | --- | --- |
 | `meeting-list.html`, `meeting-upcoming.html`, `meeting-completed.html`, `speech-list.html`, `member-list.html`, `club-data.html`, `chart-1-role-history.html`, `chart-4-roles-by-member.html`, `chart-8-mentors.html` | Saved pages, cut down and anonymised |
 | `meeting-table-topics.html` | **Hand-built.** No saved meeting records Table Topics speakers; this is the empty block's markup with two rows added. The row shape is a guess |
-| `speech-request-intro.html` | **Hand-edited.** The saved page was a blank new-request form; the speech id, title and introduction were filled in |
+| `speech-request-intro.html` | A saved request-form popup, cut down and anonymised, then **hand-edited**: the saved page was a blank new-request form, so the speech id, title and introduction were filled in. The popup has no site header and names no viewer; only the hidden `cached_user` and `cached_club` inputs identify the session |
 | `chart-7-visitors-introduced.html` | **Hand-built.** A member sees this chart with a header and no rows; the row shape is a guess |
 | `my-evaluations.html`, `my-evaluations.json`, `evaluation-501.json`, `evaluation-502.json` | **Hand-built** from the page's own script (`/api/v1/evaluations.php/...`); the saved page's list was empty |
 | `non-person-phrases.json` | The allow-list for the plain-text name guard: non-person phrases only |
