@@ -142,7 +142,9 @@ null` for them) or anyone's evaluations but their own (`evaluations: []` is a va
 
 - **Reload or failure mid-walk:** every page is written to the page's IndexedDB as it arrives. Reload
   within two minutes and it carries on by itself; later, or after an error, press **Resume export**.
-  Pages already fetched are not requested again. Only one tab walks at a time: a lease in the store
+  Pages already fetched are not requested again. A 5xx (Cloudflare's 524 means Easy-Speak took over
+  100 seconds) or a failed request is asked once more after 30 seconds before the walk stops; any
+  other status is not. The lease is renewed through the pause, so another tab does not take over. Only one tab walks at a time: a lease in the store
   (renewed before every request, twenty seconds of silence frees it) stops a second tab starting
   a second walk, and it is released when the walk ends or fails. A reload releases it as the page
   goes; if that does not complete, the new page shows "another tab is exporting" and checks again

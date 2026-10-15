@@ -12,6 +12,7 @@ import {
 	resumeState,
 	runExport,
 } from "../lib/easy-speak-walk";
+import { type PageGlobal, pageFetch } from "../lib/page-fetch";
 
 /**
  * Easy-Speak export mode (#1047), the second mode beside the Base Camp sync.
@@ -20,7 +21,7 @@ import {
  *
  * Injects a small "Export this club for GavelUp" widget on a signed-in
  * easy-speak.org page. One click walks the club (sequentially, 1s between
- * requests, same-origin with the page's cookies) and downloads one JSON file.
+ * requests, same-origin with the page's cookies; `pageFetch`) and downloads one JSON file.
  * It posts nothing anywhere: upload is a later step, by a superadmin.
  */
 export default defineContentScript({
@@ -34,7 +35,8 @@ export default defineContentScript({
 		const store = idbStore();
 		// One id per page load: the lease that keeps a second tab from walking too.
 		const owner = crypto.randomUUID();
-		const fetchImpl = (url: string, init: RequestInit) => fetch(url, init);
+		// As the page, in Firefox too: its plain content-script fetch is answered 403.
+		const fetchImpl = pageFetch(globalThis as unknown as PageGlobal);
 		const parseHtml = (html: string) =>
 			new DOMParser().parseFromString(html, "text/html");
 		const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
