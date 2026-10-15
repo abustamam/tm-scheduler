@@ -12,9 +12,10 @@ claims that existed when it ran. It is not a schedule. Landing anything invalida
 
 ## The loop
 
-One stage per iteration, re-planned at the top of every iteration:
+**One stage per session.** CLAUDE.md's "One wave or one issue per session, then hand off" is the
+outer loop; this section is one turn of it, and each turn is a fresh session:
 
-1. `bun run batch:issues` — **every iteration**, not once at the start.
+1. `bun run batch:issues` — **once, at the start of the session.** Not again in this session.
 2. Take **only the first stage printed**: SERIAL's first issue, or the first WAVE.
 3. **If you took a WAVE and another WAVE follows it, widen before dispatching.** Re-run with
    `--max` set to the total of both. If they collapse into one wave, they never conflicted —
@@ -27,13 +28,21 @@ One stage per iteration, re-planned at the top of every iteration:
 5. Each agent opens its PR and **stops**: `gh pr create`, body carrying `Closes #N`, no merge.
 6. **From the main session**: review the wave's PRs, then land them one at a time — see
    **Landing the wave** below. The merge decision is the maintainer's, not an agent's.
-7. Run `/qa-only` once against the deployed app. Then go to 1.
+7. Run `/qa-only` once against the deployed app. Write the handoff (CLAUDE.md's format) and
+   **stop**. The next stage belongs to a new session, which starts again at 1.
 
-Step 1 is not a formality. Between stages the plan genuinely changes: a merge makes cited
-paths exist (an issue leaves CITED PATHS ARE MISSING), someone's worktree or PR claims an
-issue, `/triage` adds new `ready-for-agent` issues, and fan-in shifts as imports move.
-Executing waves 1→2→3 from one printout dispatches work against a checkout that no longer
-exists.
+Step 1 is not a formality, and the fresh session is what makes it fresh. Between stages the
+plan genuinely changes: a merge makes cited paths exist (an issue leaves CITED PATHS ARE
+MISSING), someone's worktree or PR claims an issue, `/triage` adds new `ready-for-agent`
+issues, and fan-in shifts as imports move. Executing waves 1→2→3 from one printout dispatches
+work against a checkout that no longer exists.
+
+Re-running it inside the same session is not the fix for that, because a printout only sees
+claims that already exist. On 2026-10-15 a session landed #1209, re-ran `batch:issues`, saw
+#1235 unclaimed and dispatched it; another session had picked #1235 minutes earlier and had
+not yet made its worktree. Two PRs for one issue (#1241, #1242), the second closed unmerged.
+Several sessions dispatch from this backlog at once; one stage each, then a handoff, keeps a
+session from reaching past the stage it was started for.
 
 ## What each section requires
 
@@ -41,8 +50,8 @@ exists.
 |---|---|---|
 | SERIAL | Touches a widely-imported file, or writes a migration | One at a time, merge between. The **order is meaningful** — it is dependency-sorted. |
 | WAVE n | Mutually file-disjoint | Dispatch together |
-| WAVE n — ⚠️ NOT DISPATCHABLE YET | An issue in it waits on a blocker still open on GitHub; the lines under the header say which and where: `SERIAL`, `WAVE n` (an earlier wave — or the same or a later one, which is also a DEPENDENCY VIOLATION), `already being worked`, `not batched` (in NEEDS A FILE PATH / CITED PATHS ARE MISSING), or `not in this plan` (open, but a different label or not requested) | Do not dispatch it, and **do not pair it with the stage holding the blocker** — sharing no files with that stage is not independence. Land the blocker, re-run. |
-| ALREADY BEING WORKED | A PR or live worktree names it | Do not dispatch. Re-run after it lands. |
+| WAVE n — ⚠️ NOT DISPATCHABLE YET | An issue in it waits on a blocker still open on GitHub; the lines under the header say which and where: `SERIAL`, `WAVE n` (an earlier wave — or the same or a later one, which is also a DEPENDENCY VIOLATION), `already being worked`, `not batched` (in NEEDS A FILE PATH / CITED PATHS ARE MISSING), or `not in this plan` (open, but a different label or not requested) | Do not dispatch it, and **do not pair it with the stage holding the blocker** — sharing no files with that stage is not independence. It is a later session's stage, once the blocker has landed. |
+| ALREADY BEING WORKED | A PR or live worktree names it | Do not dispatch. It is not this session's. |
 | NEEDS A FILE PATH | Body cites no file | Edit the issue body to name its files, then re-run. Do not guess and dispatch. |
 | CITED PATHS ARE MISSING HERE | Cites files this checkout lacks | `git pull --ff-only`, re-run. Still missing ⇒ the issue proposes a new file and needs one *existing* path too. |
 | ⚠️ DEPENDENCY VIOLATIONS | Could not be reordered | Sequence those by hand before dispatching |
@@ -191,6 +200,7 @@ Merging is the serial half.
 | Mistake | Consequence |
 |---|---|
 | Printing the plan once, then executing every wave from it | Later waves dispatched against a stale checkout and stale claims |
+| Re-running `batch:issues` after a stage lands and dispatching the next one in the same session | Races another session that has picked the issue but not yet made its worktree; two PRs for one issue (#1241, #1242) |
 | Number in the middle of the branch name | Branch claims nothing; the issue is handed out twice |
 | Anything appended after the number (`-wip`, `-v2`, `-retry`) | Same — reading stops at the first non-numeric trailing token |
 | Skipping the absent-paths line | Two agents in one wave edit the same file |
