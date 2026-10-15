@@ -144,7 +144,9 @@ describe("the walk aborts on an unreadable page and never caches it", () => {
 			await expect(s.run(), `request ${i} ${path}`).rejects.toThrow(/not the Easy-Speak page it should be|not a readable meeting page/);
 			aborted += 1;
 			expect(JSON.stringify([...store.data.values()])).not.toContain("Something went wrong");
-			expect([...store.data.keys()].filter((k) => k.startsWith("page:"))).toHaveLength(i);
+			// Request forms are staged and the speech list is asked again as their fence: neither is stored.
+			const storedBefore = walk.filter((q, j) => j < i && q !== "/request_speech.php" && !(q === "/tm_all_speeches.php" && j !== walk.indexOf(q))).length;
+			expect([...store.data.keys()].filter((k) => k.startsWith("page:"))).toHaveLength(storedBefore);
 		}
 		// The club page, member list, each year's list, three meetings, speeches, a request form, three charts.
 		expect(aborted).toBeGreaterThanOrEqual(20);

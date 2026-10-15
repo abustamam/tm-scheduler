@@ -473,6 +473,11 @@ async function walk(
 		 * out. The caller commits the entries (or drops them) once it knows.
 		 */
 		stage?: Entry[];
+		/**
+		 * The page may name no viewer (the request-form popup carries only hidden ids). It must then
+		 * parse as the page it should be, or it is taken for a login page; the caller fences the batch.
+		 */
+		noViewer?: boolean;
 		/** False drops the page from `raw` (an empty year's list says nothing a reader could use). */
 		keepRaw?: (value: T) => boolean;
 		parse: (body: string, doc: Document | null) => T;
@@ -490,6 +495,7 @@ async function walk(
 				throw err;
 			}
 		};
+		const signInMessage = `${spec.label} is not a signed-in Easy-Speak page. Sign in to Easy-Speak, then press Resume.`;
 		const contact = isContactPage(spec.url);
 		const cached = spec.noCache || spec.stage ? undefined : ((await store.get(entryKey(spec.key))) as Entry | undefined);
 		let entry = cached;
@@ -527,12 +533,8 @@ async function walk(
 				// Who this response is for, BEFORE anything of it is parsed or stored: the cookies
 				// are whatever the user's browser holds now, which may not be who started the walk.
 				const viewer = parseViewer(doc).username;
-				if (viewer === null) {
-					throw new WalkError(
-						`${spec.label} is not a signed-in Easy-Speak page. Sign in to Easy-Speak, then press Resume.`,
-					);
-				}
-				if (viewer !== deps.identity.username) {
+				if (viewer === null && !spec.noViewer) throw new WalkError(signInMessage);
+				if (viewer !== null && viewer !== deps.identity.username) {
 					throw new IdentityError(
 						`Easy-Speak is now signed in as another account than the one this export started with (${spec.label}). Switch back to that account, then press Resume.`,
 					);
@@ -544,7 +546,14 @@ async function walk(
 					);
 				}
 			}
-			value = parsePage(body, doc);
+			try {
+				value = parsePage(body, doc);
+			} catch (err) {
+				if (spec.noViewer && err instanceof WalkError && doc && parseViewer(doc).username === null) {
+					throw new WalkError(signInMessage);
+				}
+				throw err;
+			}
 			if (spec.noCache) {
 				done += 1;
 				progress(spec.label);
@@ -674,16 +683,35 @@ async function walk(
 	const formPaths = [
 		...new Set(speechRows.map((r) => r.requestFormPath).filter((p): p is string => !!p)),
 	];
-	total += formPaths.length;
+	total += formPaths.length + 1;
+	// The popup names no viewer, so the forms cannot show whose cookies answered. The batch is
+	// STAGED and fenced by one fresh identity-checked request after it: the speech list again (a
+	// page that names the viewer, and one the walk already parses). Unlike the evaluations, a
+	// failure here aborts the walk.
+	const stagedForms: Entry[] = [];
+	const fetchedForms: RequestFormInfo[] = [];
 	for (const [i, path] of formPaths.entries()) {
 		const form = await page({
 			key: `request:${path}`,
 			url: get(path),
 			label: `speech request ${i + 1} of ${formPaths.length}`,
+			noViewer: true,
+			stage: stagedForms,
 			parse: (_b, doc) => (doc ? parseRequestForm(doc) : null),
 		});
-		if (form?.esSpeechId) requestForms.set(form.esSpeechId, form);
+		if (form) fetchedForms.push(form);
 	}
+	if (formPaths.length > 0) {
+		await page({
+			key: "request-fence",
+			url: get("tm_all_speeches.php"),
+			label: "speech list (checking the account did not change)",
+			noCache: true,
+			parse: (_b, doc) => (doc ? parseSpeechList(doc) : []),
+		});
+	}
+	for (const e of stagedForms) raw.push({ url: e.url, fetchedAt: e.fetchedAt, html: e.body ?? "" });
+	for (const form of fetchedForms) if (form.esSpeechId) requestForms.set(form.esSpeechId, form);
 
 	// ---- member charts: role history and roles by member are kept only as raw
 	total += 4;

@@ -127,6 +127,57 @@ describe("the walk", () => {
 	});
 });
 
+describe("speech request forms (the popup shows no viewer)", () => {
+	const isRequest = (u: string) => u.includes("/request_speech.php");
+	const requestKeys = (store: { data: Map<string, unknown> }) => [...store.data.keys()].filter((k) => k.includes("request:"));
+	const loginPage = "<html><body><form>Username <input name=\"username\"> Password <input name=\"password\"></form></body></html>";
+
+	it("completes with a request form that names no viewer, and reads the introduction from it", async () => {
+		expect(readFixture("speech-request-intro.html")).not.toMatch(/Welcome|class="name"/);
+		const s = setup();
+		const { bundle } = await s.run();
+		expect(JSON.stringify(bundle)).toContain("grows tomatoes");
+	});
+
+	it("fails with the sign-in message when a login page is served for a request form", async () => {
+		const s = setup({ override: (u) => (isRequest(u) ? loginPage : undefined) });
+		await expect(s.run()).rejects.toThrow(/speech request 1 of \d+ is not a signed-in Easy-Speak page\. Sign in/);
+		expect(requestKeys(s.store)).toEqual([]);
+	});
+
+	it("ends the walk when the account changed by the closing check, and keeps none of the forms", async () => {
+		let listAsked = 0;
+		const s = setup({
+			as: (_i, url) => {
+				if (url.endsWith("/tm_all_speeches.php")) listAsked += 1;
+				return listAsked >= 2 ? { ...FIXTURE_IDENTITY, username: "someoneelse" } : FIXTURE_IDENTITY;
+			},
+		});
+		await expect(s.run()).rejects.toThrow(/signed in as another account/);
+		expect(requestKeys(s.store)).toEqual([]);
+	});
+
+	it("runs the closing check once, after every form, and not from the store", async () => {
+		const s = setup();
+		await s.run();
+		const urls = s.log.map((r) => new URL(r.url).pathname);
+		const lastForm = urls.lastIndexOf("/request_speech.php");
+		expect(urls.slice(lastForm + 1)[0]).toBe("/tm_all_speeches.php");
+		expect(urls.filter((u) => u === "/tm_all_speeches.php")).toHaveLength(2);
+	});
+
+	it("ends the walk when a request form belongs to another club", async () => {
+		const s = setup({
+			override: (u) =>
+				isRequest(u)
+					? readFixture("speech-request-intro.html").replace('name="cached_club" value="4242"', 'name="cached_club" value="9090"')
+					: undefined,
+		});
+		await expect(s.run()).rejects.toThrow(/another club/);
+		expect(requestKeys(s.store)).toEqual([]);
+	});
+});
+
 describe("resume", () => {
 	it("a reload mid-walk continues without re-fetching finished pages", async () => {
 		const store = memoryStore();
