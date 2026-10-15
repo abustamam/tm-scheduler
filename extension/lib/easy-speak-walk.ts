@@ -683,7 +683,7 @@ async function walk(
 	const formPaths = [
 		...new Set(speechRows.map((r) => r.requestFormPath).filter((p): p is string => !!p)),
 	];
-	total += formPaths.length + 1;
+	total += formPaths.length + (formPaths.length > 0 ? 1 : 0);
 	// The popup names no viewer, so the forms cannot show whose cookies answered. The batch is
 	// STAGED and fenced by one fresh identity-checked request after it: the speech list again (a
 	// page that names the viewer, and one the walk already parses). Unlike the evaluations, a
