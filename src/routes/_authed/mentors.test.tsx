@@ -20,7 +20,9 @@ const {
 	getMyMentorRequests,
 	requestMentor,
 	withdrawMentorRequest,
+	loadClubTimezoneSettings,
 } = vi.hoisted(() => ({
+	loadClubTimezoneSettings: vi.fn(),
 	listMentors: vi.fn(),
 	getMyMentorships: vi.fn(),
 	getMyMentorRequests: vi.fn(),
@@ -37,6 +39,9 @@ vi.mock("#/server/mentorship", () => ({
 	withdrawMentorRequest,
 }));
 
+// The loader reads the club's zone through this, which reaches `#/db`.
+vi.mock("#/server/clubs", () => ({ loadClubTimezoneSettings }));
+
 import { Route } from "./mentors";
 
 afterEach(() => {
@@ -47,6 +52,7 @@ afterEach(() => {
 
 type Loaded = {
 	clubId?: string;
+	timezone?: string;
 	mentors: {
 		memberId: string;
 		name: string;
@@ -63,6 +69,7 @@ type Loaded = {
 async function renderPage(data: Loaded) {
 	vi.spyOn(Route, "useLoaderData").mockReturnValue({
 		clubId: "club-1",
+		timezone: "UTC",
 		pairings: [],
 		request: null,
 		...data,
@@ -165,6 +172,7 @@ describe("/mentors (#945)", () => {
 		const refused = await loader({ context: { activeClubId: "club-1" } });
 		expect(refused).toEqual({
 			clubId: "club-1",
+			timezone: "UTC",
 			mentors: [],
 			refused: "Find a mentor is for club members.",
 			pairings: [],
@@ -275,6 +283,9 @@ describe("asking a mentor (#1209)", () => {
 			context: { activeClubId: string | null };
 		}) => Promise<Loaded>;
 		listMentors.mockResolvedValue([mentorMia]);
+		loadClubTimezoneSettings.mockResolvedValue({
+			timezone: "America/Los_Angeles",
+		});
 		getMyMentorships.mockResolvedValue({ mentors: [{ id: "p1" }] });
 		getMyMentorRequests.mockResolvedValue({
 			outgoing: outgoing("pending"),
@@ -283,12 +294,16 @@ describe("asking a mentor (#1209)", () => {
 		const ok = await loader({ context: { activeClubId: "club-1" } });
 		expect(ok.pairings).toEqual([{ id: "p1" }]);
 		expect(ok.request?.id).toBe("req-1");
+		expect(ok.timezone).toBe("America/Los_Angeles");
+		expect(loadClubTimezoneSettings).toHaveBeenCalledWith({ data: "club-1" });
+		loadClubTimezoneSettings.mockRejectedValue(new Error("boom"));
 		getMyMentorships.mockRejectedValue(new Error("boom"));
 		getMyMentorRequests.mockRejectedValue(new Error("boom"));
 		const degraded = await loader({ context: { activeClubId: "club-1" } });
 		expect(degraded.mentors).toEqual([mentorMia]);
 		expect(degraded.pairings).toEqual([]);
 		expect(degraded.request).toBeNull();
+		expect(degraded.timezone).toBe("UTC");
 	});
 
 	// protects=every card offers "Ask to mentor me"; the dialog defaults the
@@ -303,10 +318,9 @@ describe("asking a mentor (#1209)", () => {
 	// (nudge.test.ts); the loader data after the send is a stub
 	it("asks with a focus and then offers the mentor a draft", async () => {
 		const user = userEvent.setup();
-		requestMentor.mockResolvedValue({ requestId: "req-1" });
-		getMyMentorRequests.mockResolvedValue({
-			outgoing: outgoing("pending"),
-			incoming: [],
+		requestMentor.mockResolvedValue({
+			requestId: "req-1",
+			mentor: party("mia", "Mia Mentor"),
 		});
 		await renderPage({ refused: null, mentors: [mentorMia, mentorBo] });
 		const ask = within(cardOf("mia")).getByRole("button", {
@@ -333,6 +347,8 @@ describe("asking a mentor (#1209)", () => {
 				focusOther: "Humor",
 			},
 		});
+		// The draft rides on what requestMentor returned: no second read.
+		expect(getMyMentorRequests).not.toHaveBeenCalled();
 		await waitFor(() =>
 			expect(screen.getByText(/Request sent to Mia Mentor/)).toBeTruthy(),
 		);
@@ -344,10 +360,51 @@ describe("asking a mentor (#1209)", () => {
 			expect(hrefs.some((h) => h.startsWith("mailto:mia@example.org"))).toBe(
 				true,
 			);
-			expect(
-				hrefs.some((h) => decodeURIComponent(h).includes("(Contest)")),
-			).toBe(true);
+			expect(hrefs.some((h) => decodeURIComponent(h).includes("(Humor)"))).toBe(
+				true,
+			);
 		});
+	});
+
+	// protects=a mentor with neither phone nor email gets a fallback line after
+	// the send, not a "Let them know:" prompt with nothing under it;
+	// fails_when=the dialog says "Let them know:" with no buttons, or says
+	// nothing about how to reach them;
+	// no_claim=the loader refresh after the send (stubbed)
+	it("says so when the mentor has no contact to send the draft to", async () => {
+		const user = userEvent.setup();
+		requestMentor.mockResolvedValue({
+			requestId: "req-1",
+			mentor: { ...party("mia", "Mia Mentor"), email: null, phone: null },
+		});
+		await renderPage({ refused: null, mentors: [mentorMia] });
+		await user.click(screen.getByRole("button", { name: "Ask to mentor me" }));
+		const dialog = await screen.findByRole("dialog");
+		await user.click(
+			within(dialog).getByRole("button", { name: "Send request" }),
+		);
+		await within(dialog).findByText(/Request sent to Mia Mentor\./);
+		expect(dialog.textContent).not.toContain("Let them know");
+		expect(
+			dialog.querySelector('[data-slot="no-mentor-contact"]')?.textContent,
+		).toContain("no contact details");
+		expect(dialog.querySelectorAll("a")).toHaveLength(0);
+	});
+
+	// protects=the pending banner dates the request in the CLUB's zone, not UTC;
+	// fails_when=a request made at 02:00 UTC on Oct 10 reads "Oct 10" for a club
+	// in Los Angeles, where it is still Oct 9;
+	// no_claim=the loader reading the zone (the loader test)
+	it("dates the pending banner in the club's timezone", async () => {
+		await renderPage({
+			refused: null,
+			mentors: [mentorMia],
+			timezone: "America/Los_Angeles",
+			request: outgoing("pending", {
+				createdAt: new Date("2026-10-10T02:00:00Z"),
+			}),
+		});
+		expect(screen.getByText(/You asked Mia Mentor on Oct 9\./)).toBeTruthy();
 	});
 
 	// protects=a refused request (already waiting, not available) shows the

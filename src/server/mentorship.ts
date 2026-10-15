@@ -172,11 +172,16 @@ export const decideMentorRequest = createServerFn({ method: "POST" })
 	.validator((i: unknown) => decideMentorRequestSchema.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		const { actorMemberId } = await authorizeMentorRequestDecision(
+		const { actorMemberId, actingAs } = await authorizeMentorRequestDecision(
 			user.id,
 			data.requestId,
 		);
-		return decideMentorRequestDb({ ...data, actorMemberId });
+		return decideMentorRequestDb({
+			...data,
+			userId: user.id,
+			actingAs,
+			actorMemberId,
+		});
 	});
 
 export const createMentorship = createServerFn({ method: "POST" })

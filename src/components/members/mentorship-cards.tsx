@@ -23,6 +23,11 @@ import type {
 	MentorshipRow,
 	MyMentorships,
 } from "#/server/mentorship";
+import {
+	currentOrigin,
+	DecideButtons,
+	mentorRequestErrorText,
+} from "./mentor-request-shared";
 
 /**
  * Mentorship (#939): member-to-member pairings inside one club.
@@ -68,11 +73,6 @@ const SELECT =
 export const WELCOME_DRAFT_DAYS = 14;
 const WELCOME_DRAFT_MS = WELCOME_DRAFT_DAYS * 24 * 60 * 60 * 1000;
 
-/** Absolute origin for a draft's link; the welcome draft's text does not use it. */
-function currentOrigin(): string {
-	return typeof window === "undefined" ? "" : window.location.origin;
-}
-
 /** Name, focus and how to reach them. `welcome` adds the mentor's "say hi"
  *  draft to the mentee (#1209). */
 function PartyLine({
@@ -116,6 +116,7 @@ function PartyLine({
 						name={row.member.name}
 						phone={row.member.phone}
 						email={row.member.email}
+						preferredContact={row.member.preferredContact}
 						origin={currentOrigin()}
 					/>
 				</div>
@@ -339,12 +340,15 @@ export function ClubMentoringCard({
 	view,
 	pendingRequests = [],
 	onDecide,
+	timezone,
 }: {
 	view: ClubMentoringView | null;
 	/** Pending mentor requests (#1209), answered here on the mentor's behalf. */
 	pendingRequests?: readonly ClubPendingMentorRequest[];
 	/** Must reject on failure so the row keeps its buttons. */
 	onDecide?: (requestId: string, accept: boolean) => Promise<void>;
+	/** The club's zone, for the date on each pending request. */
+	timezone?: string;
 }) {
 	if (!view) return null;
 	const unpaired = [...view.unpaired].sort(
@@ -391,7 +395,11 @@ export function ClubMentoringCard({
 				</ul>
 			)}
 			{pendingRequests.length > 0 && onDecide ? (
-				<PendingRequestsList requests={pendingRequests} onDecide={onDecide} />
+				<PendingRequestsList
+					requests={pendingRequests}
+					onDecide={onDecide}
+					timezone={timezone}
+				/>
 			) : null}
 			<div className="border-t border-[var(--line)] px-5 py-3">
 				<h3 className="mb-1 text-xs font-bold tracking-[0.05em] text-[var(--sea-ink-soft)] uppercase">
@@ -445,13 +453,19 @@ export function ClubMentoringCard({
 }
 
 /** "Pending requests" on the admin's card: mentee → mentor, focus, date, and
- *  Accept / Decline on the mentor's behalf (#1209). */
+ *  Accept / Decline on the mentor's behalf (#1209). A request with an inactive
+ *  party offers Decline only: accept is refused, and declining clears it. */
+export const INACTIVE_PARTY_NOTE =
+	"A member here is no longer active, so this can only be declined.";
+
 function PendingRequestsList({
 	requests,
 	onDecide,
+	timezone,
 }: {
 	requests: readonly ClubPendingMentorRequest[];
 	onDecide: (requestId: string, accept: boolean) => Promise<void>;
+	timezone?: string;
 }) {
 	const [busy, setBusy] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -461,11 +475,7 @@ function PendingRequestsList({
 		try {
 			await onDecide(id, accept);
 		} catch (err) {
-			setError(
-				err instanceof Error && err.message
-					? err.message
-					: "Something went wrong. Try again.",
-			);
+			setError(mentorRequestErrorText(err));
 		} finally {
 			setBusy(null);
 		}
@@ -494,26 +504,23 @@ function PendingRequestsList({
 								<span className="text-[var(--sea-ink-soft)]"> asked </span>
 								<MemberLink {...r.mentor} />
 								<span className="ml-2 text-xs text-[var(--sea-ink-soft)]">
-									{focus} · {formatShortDate(r.createdAt, "UTC")}
+									{focus} · {formatShortDate(r.createdAt, timezone)}
 								</span>
+								{r.partyInactive ? (
+									<span
+										className="mt-0.5 block text-xs text-[var(--sea-ink-soft)]"
+										data-slot="inactive-party-note"
+									>
+										{INACTIVE_PARTY_NOTE}
+									</span>
+								) : null}
 							</span>
-							<span className="flex gap-2">
-								<Button
-									size="sm"
-									disabled={busy !== null}
-									onClick={() => void decide(r.id, true)}
-								>
-									Accept
-								</Button>
-								<Button
-									size="sm"
-									variant="outline"
-									disabled={busy !== null}
-									onClick={() => void decide(r.id, false)}
-								>
-									Decline
-								</Button>
-							</span>
+							<DecideButtons
+								busy={busy === r.id}
+								disabled={busy !== null}
+								canAccept={!r.partyInactive}
+								onDecide={(accept) => void decide(r.id, accept)}
+							/>
 						</li>
 					);
 				})}

@@ -12,13 +12,15 @@ import {
 	createRouter,
 	RouterProvider,
 } from "@tanstack/react-router";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ClubPendingMentorRequest } from "#/server/mentorship";
 import {
 	ClubMentoringCard,
 	type ClubMentoringView,
+	INACTIVE_PARTY_NOTE,
 	MEMBER_MENTORING_HEADING,
 	MENTOR_CONFIRM_LABEL,
 	MENTOR_SAVE_AND_LIST_LABEL,
@@ -74,6 +76,7 @@ const party = (
 		name: over.name ?? "Maya Mentor",
 		email: "maya@example.test",
 		phone: "+15555550100",
+		preferredContact: null,
 	},
 });
 
@@ -105,6 +108,7 @@ describe("MentorshipCard, the member's own (#939)", () => {
 						name: "Nia Newbie",
 						email: null,
 						phone: null,
+						preferredContact: null,
 					},
 				}),
 			],
@@ -412,5 +416,229 @@ describe("MentorshipAdminPanel, the member page (#939)", () => {
 		await renderPanel({ memberActive: false });
 		expect(screen.queryByLabelText("Add a mentor")).toBeNull();
 		expect(screen.getByText(/Reactivate Nia/)).toBeTruthy();
+	});
+});
+
+describe("MentorshipCard welcome draft window (#1209)", () => {
+	const NOW = new Date("2026-10-15T12:00:00Z").getTime();
+	const DAY = 24 * 60 * 60 * 1000;
+	const mentee = (name: string, startedAt: number) => ({
+		...party({
+			name,
+			member: {
+				id: `m-${name}`,
+				name,
+				email: `${name}@example.test`,
+				phone: null,
+				preferredContact: null,
+			},
+		}),
+		id: `p-${name}`,
+		startedAt: new Date(startedAt),
+	});
+
+	// protects=a mentee paired exactly 14 days ago still gets the mentor's
+	// say-hi draft, one millisecond later does not, and a brand-new one does;
+	// fails_when=the window is 13 days, off by a comparison (`<` for `<=`), or
+	// is judged against the wall clock instead of the `now` the loader pinned;
+	// no_claim=what the draft says (nudge.test.ts)
+	it("offers the draft through day 14 and not after", async () => {
+		const view: MyMentorshipsView = {
+			mentorBio: null,
+			mentorListed: true,
+			willingToMentor: true,
+			mentors: [],
+			mentees: [
+				mentee("edge", NOW - 14 * DAY),
+				mentee("late", NOW - 14 * DAY - 1),
+				mentee("fresh", NOW - 1000),
+			],
+		};
+		const { container } = await renderInRouter(
+			<MentorshipCard
+				view={view}
+				now={NOW}
+				onToggleWilling={vi.fn()}
+				onSaveBio={vi.fn()}
+			/>,
+		);
+		const has = (id: string) =>
+			container
+				.querySelector(`li[data-mentorship="${id}"]`)
+				?.querySelector('[data-slot="mentor-welcome"]') !== null;
+		expect(has("p-edge")).toBe(true);
+		expect(has("p-late")).toBe(false);
+		expect(has("p-fresh")).toBe(true);
+	});
+});
+
+describe("ClubMentoringCard pending requests (#1209)", () => {
+	const view: ClubMentoringView = { active: [], unpaired: [], willing: [] };
+	const pending = (
+		id: string,
+		over: Partial<ClubPendingMentorRequest> = {},
+	): ClubPendingMentorRequest => ({
+		id,
+		focus: "contest",
+		focusOther: null,
+		createdAt: new Date("2026-10-10T02:00:00Z"),
+		mentor: { id: "m-mia", name: "Mia Mentor" },
+		mentee: { id: `m-${id}`, name: "Sam Smith" },
+		partyInactive: false,
+		...over,
+	});
+
+	// protects=the admin's "Pending requests (n)" lists mentee asked mentor with
+	// the focus and the date in the CLUB's zone, and nothing when no answer
+	// handler is given;
+	// fails_when=the heading count, a name, the focus or the zone's date is
+	// wrong (02:00 UTC is still Oct 9 in Los Angeles), or a list with no handler
+	// shows buttons that do nothing;
+	// no_claim=which requests the server lists (the integration test)
+	it("lists each request with its date in the club's timezone", async () => {
+		const { container, rerender } = await renderInRouter(
+			<ClubMentoringCard
+				view={view}
+				pendingRequests={[pending("r1"), pending("r2")]}
+				onDecide={vi.fn()}
+				timezone="America/Los_Angeles"
+			/>,
+		);
+		expect(screen.getByText("Pending requests (2)")).toBeTruthy();
+		const rows = container.querySelectorAll("li[data-request]");
+		expect(rows).toHaveLength(2);
+		expect(rows[0]?.textContent).toContain("Sam Smith asked Mia Mentor");
+		expect(rows[0]?.textContent).toContain("Contest · Oct 9");
+		rerender(
+			<ClubMentoringCard view={view} pendingRequests={[pending("r1")]} />,
+		);
+		expect(screen.queryByText(/Pending requests/)).toBeNull();
+	});
+
+	// protects=Accept and Decline each call onDecide with the request's id and the
+	// matching boolean (an admin answering for the mentor);
+	// fails_when=the buttons are swapped, or name the wrong request;
+	// no_claim=that the server authorizes the admin (guard test)
+	it("Accept and Decline answer on the mentor's behalf", async () => {
+		const user = userEvent.setup();
+		const onDecide = vi.fn().mockResolvedValue(undefined);
+		await renderInRouter(
+			<ClubMentoringCard
+				view={view}
+				pendingRequests={[pending("r1"), pending("r2")]}
+				onDecide={onDecide}
+			/>,
+		);
+		const accepts = screen.getAllByRole("button", { name: "Accept" });
+		const declines = screen.getAllByRole("button", { name: "Decline" });
+		await user.click(accepts[1] as HTMLElement);
+		expect(onDecide).toHaveBeenLastCalledWith("r2", true);
+		await user.click(declines[0] as HTMLElement);
+		expect(onDecide).toHaveBeenLastCalledWith("r1", false);
+	});
+
+	// protects=while an answer is in flight every button is disabled and the
+	// answered row's Accept shows a spinner; it all comes back afterwards;
+	// fails_when=a second answer can start mid-flight, or the buttons stay
+	// disabled once it settles;
+	// no_claim=the server's own race handling (integration test)
+	it("disables the buttons while an answer is in flight", async () => {
+		const user = userEvent.setup();
+		let settle: () => void = () => {};
+		const onDecide = vi.fn(
+			() =>
+				new Promise<void>((resolve) => {
+					settle = resolve;
+				}),
+		);
+		const { container } = await renderInRouter(
+			<ClubMentoringCard
+				view={view}
+				pendingRequests={[pending("r1"), pending("r2")]}
+				onDecide={onDecide}
+			/>,
+		);
+		await user.click(
+			screen.getAllByRole("button", { name: "Accept" })[0] as HTMLElement,
+		);
+		for (const b of container.querySelectorAll("li[data-request] button")) {
+			expect((b as HTMLButtonElement).disabled).toBe(true);
+		}
+		expect(
+			container.querySelector('li[data-request="r1"] svg.animate-spin'),
+		).not.toBeNull();
+		expect(
+			container.querySelector('li[data-request="r2"] svg.animate-spin'),
+		).toBeNull();
+		settle();
+		await waitFor(() => {
+			for (const b of container.querySelectorAll("li[data-request] button")) {
+				expect((b as HTMLButtonElement).disabled).toBe(false);
+			}
+		});
+	});
+
+	// protects=a refused answer shows the server's message in an alert (or the
+	// generic fallback for a blank one) and the row keeps its buttons;
+	// fails_when=the error is swallowed or the row's buttons go away;
+	// no_claim=the wording of the server's refusals
+	it("shows a refusal in an alert and keeps the row", async () => {
+		const user = userEvent.setup();
+		const onDecide = vi
+			.fn()
+			.mockRejectedValueOnce(
+				new Error("That request has already been answered."),
+			)
+			.mockRejectedValueOnce(new Error(""));
+		await renderInRouter(
+			<ClubMentoringCard
+				view={view}
+				pendingRequests={[pending("r1")]}
+				onDecide={onDecide}
+			/>,
+		);
+		await user.click(screen.getByRole("button", { name: "Accept" }));
+		expect((await screen.findByRole("alert")).textContent).toBe(
+			"That request has already been answered.",
+		);
+		await user.click(screen.getByRole("button", { name: "Decline" }));
+		await waitFor(() =>
+			expect(screen.getByRole("alert").textContent).toBe(
+				"Something went wrong. Try again.",
+			),
+		);
+		expect(screen.getByRole("button", { name: "Accept" })).toBeTruthy();
+	});
+
+	// protects=a request with an inactive party offers Decline only, with the
+	// note why, so the admin can clear it; an all-active one offers both;
+	// fails_when=Accept is offered for a request the server refuses, or Decline
+	// is missing and the mentee's one slot cannot be freed;
+	// no_claim=that the reader flags the right requests (the integration test)
+	it("offers only Decline for a request with an inactive party", async () => {
+		const user = userEvent.setup();
+		const onDecide = vi.fn().mockResolvedValue(undefined);
+		const { container } = await renderInRouter(
+			<ClubMentoringCard
+				view={view}
+				pendingRequests={[
+					pending("r1", { partyInactive: true }),
+					pending("r2"),
+				]}
+				onDecide={onDecide}
+			/>,
+		);
+		const r1 = container.querySelector('li[data-request="r1"]') as HTMLElement;
+		const r2 = container.querySelector('li[data-request="r2"]') as HTMLElement;
+		expect(r1.textContent).toContain(INACTIVE_PARTY_NOTE);
+		expect(r1.textContent).not.toContain("Accept");
+		expect(r2.textContent).toContain("Accept");
+		expect(r2.textContent).not.toContain(INACTIVE_PARTY_NOTE);
+		await user.click(
+			[...r1.querySelectorAll("button")].find(
+				(b) => b.textContent === "Decline",
+			) as HTMLElement,
+		);
+		expect(onDecide).toHaveBeenCalledWith("r1", false);
 	});
 });

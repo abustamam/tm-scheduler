@@ -61,7 +61,8 @@ const ACTOR = /\{\s*\.\.\.data,\s*actorMemberId:\s*membership\.id\s*\}/;
 const DECIDE_GATE =
 	/authorizeMentorRequestDecision\(\s*user\.id,\s*data\.requestId,?\s*\)/;
 /** The actor the check resolved, spread after the input. */
-const DECIDE_ACTOR = /\{\s*\.\.\.data,\s*actorMemberId\s*\}/;
+const DECIDE_ACTOR =
+	/\{\s*\.\.\.data,\s*userId:\s*user\.id,\s*actingAs,\s*actorMemberId,?\s*\}/;
 
 const FNS: { fn: string; gate: RegExp; logic: string; write: boolean }[] = [
 	{
@@ -191,7 +192,7 @@ describe("mentorship server fns (#939)", () => {
 	it("an answer is attributed to the membership the check resolved, never input", () => {
 		const body = serverFnBody(MENTORSHIP, "decideMentorRequest");
 		expect(body).toMatch(
-			/const\s*\{\s*actorMemberId\s*\}\s*=\s*await\s+authorizeMentorRequestDecision\(/,
+			/const\s*\{\s*actorMemberId,\s*actingAs\s*\}\s*=\s*await\s+authorizeMentorRequestDecision\(/,
 		);
 		expect(body).toMatch(DECIDE_ACTOR);
 	});
@@ -260,6 +261,22 @@ describe("mentorship server fns (#939)", () => {
 		expect(pendingAt).toBeGreaterThan(rowAt);
 		expect(body).toMatch(/is no longer an active member/);
 		expect(body).toMatch(/insertMentorshipInTx\(\s*tx,/);
+	});
+
+	it("an answer re-checks the actor once the lock and the row are held", () => {
+		const body = logicFnBody("decideMentorRequest");
+		const rowAt = body.search(/\.for\("update"\)/);
+		const recheckAt = body.search(
+			/assertStillMayAnswer\(\s*tx,\s*input,\s*req\s*\)/,
+		);
+		const writeAt = body.search(/insertMentorshipInTx\(\s*tx,/);
+		expect(recheckAt).toBeGreaterThan(rowAt);
+		expect(writeAt).toBeGreaterThan(recheckAt);
+		const check = logicFnBody("assertStillMayAnswer");
+		expect(check).toMatch(
+			/assertStillClubAdmin\(\s*tx,\s*input\.userId,\s*req\.clubId\s*\)/,
+		);
+		expect(check).toMatch(/membership\.id !== req\.mentorMemberId/);
 	});
 
 	it("every server fn the module declares is covered above", () => {

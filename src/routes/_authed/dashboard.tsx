@@ -7,6 +7,7 @@ import {
 	FeedbackForYou,
 	feedbackOrEmpty,
 } from "#/components/feedback/feedback-for-you";
+import { answerThenReload } from "#/components/members/mentor-request-shared";
 import { MentorRequestsCard } from "#/components/members/mentor-requests-card";
 import {
 	ClubMentoringCard,
@@ -242,12 +243,16 @@ function Dashboard() {
 		}
 	}
 
-	// A mentor-request answer. Unlike `mutateAndReload` it REJECTS on failure:
-	// the cards show the message beside the row and keep its buttons, and
-	// `MentorRequestsCard` must not treat a refused Accept as accepted.
-	async function decideRequest(requestId: string, accept: boolean) {
-		await decideMentorRequest({ data: { requestId, accept } });
-		await router.invalidate();
+	// A mentor-request answer. Unlike `mutateAndReload` it REJECTS when the
+	// answer fails: the cards show the message beside the row and keep its
+	// buttons, and `MentorRequestsCard` must not treat a refused Accept as
+	// accepted. A reload that fails AFTER the answer landed does not reject
+	// (`answerThenReload`), so the welcome draft still shows.
+	function decideRequest(requestId: string, accept: boolean) {
+		return answerThenReload(
+			() => decideMentorRequest({ data: { requestId, accept } }),
+			() => router.invalidate(),
+		);
 	}
 
 	return (
@@ -523,12 +528,14 @@ function Dashboard() {
 						view={clubMentoring}
 						pendingRequests={clubPendingRequests ?? []}
 						onDecide={decideRequest}
+						timezone={timezone}
 					/>
 					{/* Mentor requests (#1209): renders only with a pending request
 					    addressed to this member. */}
 					<MentorRequestsCard
 						requests={mentorRequests?.incoming ?? []}
 						onDecide={decideRequest}
+						timezone={timezone}
 					/>
 
 					{/* Quick actions */}

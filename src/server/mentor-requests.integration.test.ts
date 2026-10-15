@@ -271,6 +271,8 @@ describe.skipIf(!hasTestDb)("requestMentor (#1209)", () => {
 		await logic.decideMentorRequest({
 			requestId: second.requestId,
 			accept: false,
+			userId: b.userId,
+			actingAs: "mentor",
 			actorMemberId: b.id,
 		});
 		await ask(a.id);
@@ -315,10 +317,12 @@ describe.skipIf(!hasTestDb)("decideMentorRequest (#1209)", () => {
 			mentor.userId,
 			requestId,
 		);
-		expect(auth).toEqual({ actorMemberId: mentor.id });
+		expect(auth).toEqual({ actorMemberId: mentor.id, actingAs: "mentor" });
 		const out = await logic.decideMentorRequest({
 			requestId,
 			accept: true,
+			userId: mentor.userId,
+			actingAs: auth.actingAs,
 			actorMemberId: auth.actorMemberId,
 		});
 		const pairs = await pairingsOf(mentor.id, s.memberId);
@@ -363,6 +367,8 @@ describe.skipIf(!hasTestDb)("decideMentorRequest (#1209)", () => {
 		await logic.decideMentorRequest({
 			requestId,
 			accept: true,
+			userId: s.adminUserId,
+			actingAs: auth.actingAs,
 			actorMemberId: auth.actorMemberId,
 		});
 		const [pair] = await pairingsOf(mentor.id, s.memberId);
@@ -381,6 +387,8 @@ describe.skipIf(!hasTestDb)("decideMentorRequest (#1209)", () => {
 		await logic.decideMentorRequest({
 			requestId: r2,
 			accept: false,
+			userId: s.adminUserId,
+			actingAs: "admin",
 			actorMemberId: s.adminMemberId,
 		});
 		const [declined] = await requestsOf(other.id);
@@ -402,6 +410,8 @@ describe.skipIf(!hasTestDb)("decideMentorRequest (#1209)", () => {
 		await logic.decideMentorRequest({
 			requestId,
 			accept: false,
+			userId: mentor.userId,
+			actingAs: "mentor",
 			actorMemberId: mentor.id,
 		});
 		const [req] = await requestsOf(s.memberId);
@@ -457,11 +467,15 @@ describe.skipIf(!hasTestDb)("decideMentorRequest (#1209)", () => {
 			logic.decideMentorRequest({
 				requestId,
 				accept: true,
+				userId: mentor.userId,
+				actingAs: "mentor",
 				actorMemberId: mentor.id,
 			}),
 			logic.decideMentorRequest({
 				requestId,
 				accept: true,
+				userId: s.adminUserId,
+				actingAs: "admin",
 				actorMemberId: s.adminMemberId,
 			}),
 		]);
@@ -491,6 +505,8 @@ describe.skipIf(!hasTestDb)("decideMentorRequest (#1209)", () => {
 		const out = await logic.decideMentorRequest({
 			requestId,
 			accept: true,
+			userId: mentor.userId,
+			actingAs: "mentor",
 			actorMemberId: mentor.id,
 		});
 		expect(out.mentorshipId).toBe(made.id);
@@ -518,6 +534,8 @@ describe.skipIf(!hasTestDb)("decideMentorRequest (#1209)", () => {
 			logic.decideMentorRequest({
 				requestId,
 				accept: true,
+				userId: mentor.userId,
+				actingAs: "mentor",
 				actorMemberId: mentor.id,
 			}),
 		).rejects.toThrow(`${"Member User"} is no longer an active member.`);
@@ -534,6 +552,8 @@ describe.skipIf(!hasTestDb)("decideMentorRequest (#1209)", () => {
 			logic.decideMentorRequest({
 				requestId,
 				accept: true,
+				userId: s.adminUserId,
+				actingAs: "admin",
 				actorMemberId: s.adminMemberId,
 			}),
 		).rejects.toThrow("Mia Mentor is no longer an active member.");
@@ -544,6 +564,8 @@ describe.skipIf(!hasTestDb)("decideMentorRequest (#1209)", () => {
 		await logic.decideMentorRequest({
 			requestId,
 			accept: false,
+			userId: s.adminUserId,
+			actingAs: "admin",
 			actorMemberId: s.adminMemberId,
 		});
 		expect((await requestsOf(s.memberId))[0]?.status).toBe("declined");
@@ -563,6 +585,8 @@ describe.skipIf(!hasTestDb)("decideMentorRequest (#1209)", () => {
 		await logic.decideMentorRequest({
 			requestId,
 			accept: true,
+			userId: mentor.userId,
+			actingAs: "mentor",
 			actorMemberId: mentor.id,
 		});
 		expect(await pairingsOf(mentor.id, s.memberId)).toHaveLength(1);
@@ -610,6 +634,8 @@ describe.skipIf(!hasTestDb)("withdrawMentorRequest (#1209)", () => {
 			logic.decideMentorRequest({
 				requestId,
 				accept: true,
+				userId: mentor.userId,
+				actingAs: "mentor",
 				actorMemberId: mentor.id,
 			}),
 		).rejects.toThrow("That request has already been answered.");
@@ -623,6 +649,8 @@ describe.skipIf(!hasTestDb)("withdrawMentorRequest (#1209)", () => {
 		await logic.decideMentorRequest({
 			requestId: second.requestId,
 			accept: false,
+			userId: mentor.userId,
+			actingAs: "mentor",
 			actorMemberId: mentor.id,
 		});
 		await expect(
@@ -727,11 +755,16 @@ describe.skipIf(!hasTestDb)("mentor request readers (#1209)", () => {
 				(r) => r.mentee.name,
 			),
 		).toEqual(["Member User"]);
+		// The admin list keeps it, flagged, so the admin can decline it (item 7).
 		expect(
-			(await logic.loadClubPendingMentorRequests(s.clubId)).map(
-				(r) => r.mentee.name,
-			),
-		).toEqual(["Member User"]);
+			(await logic.loadClubPendingMentorRequests(s.clubId)).map((r) => [
+				r.mentee.name,
+				r.partyInactive,
+			]),
+		).toEqual([
+			["Member User", false],
+			["Sam Smith", true],
+		]);
 
 		await testDb
 			.update(members)
@@ -775,5 +808,229 @@ describe.skipIf(!hasTestDb)("mentor request readers (#1209)", () => {
 		expect((await hint())?.hint).toBe(
 			"Choose a mentor, or your VP Education will pair you.",
 		);
+	});
+});
+
+describe.skipIf(!hasTestDb)("review fixes (#1209)", () => {
+	async function pending() {
+		const s = await seed();
+		const mentor = await addMember(s.clubId, {
+			name: "Mia Mentor",
+			preferredContact: "email",
+		});
+		const { requestId } = await logic.requestMentor({
+			userId: s.memberUserId,
+			clubId: s.clubId,
+			mentorMemberId: mentor.id,
+			focus: "contest",
+		});
+		return { s, mentor, requestId };
+	}
+
+	// protects=an admin demoted AFTER authorizing but BEFORE the decision runs
+	// (the window a queued club lock opens) is refused on accept and on decline,
+	// and nothing is written: no pairing, the request still pending;
+	// fails_when=the decision commits on the authorization made before the lock;
+	// no_claim=the lock queueing itself (the re-check is what is asserted)
+	it("refuses an admin who lost the role between authorizing and deciding", async () => {
+		const { s, mentor, requestId } = await pending();
+		const auth = await logic.authorizeMentorRequestDecision(
+			s.adminUserId,
+			requestId,
+		);
+		expect(auth.actingAs).toBe("admin");
+		await testDb
+			.update(members)
+			.set({ clubRole: "member" })
+			.where(eq(members.id, s.adminMemberId));
+		for (const accept of [true, false]) {
+			await expect(
+				logic.decideMentorRequest({
+					requestId,
+					accept,
+					userId: s.adminUserId,
+					actingAs: auth.actingAs,
+					actorMemberId: auth.actorMemberId,
+				}),
+			).rejects.toThrow(logic.MENTOR_REQUEST_NOT_ALLOWED_MESSAGE);
+		}
+		expect(await pairingsOf(mentor.id, s.memberId)).toHaveLength(0);
+		expect((await requestsOf(s.memberId))[0]?.status).toBe("pending");
+	});
+
+	// protects=a mentor deactivated after authorizing is refused the same way, and
+	// so is a mentor whose actor id is not the request's mentor;
+	// fails_when=an inactive mentor's accept commits, or a different member's id
+	// passes as the mentor;
+	// no_claim=the admin arm (the previous test)
+	it("refuses a mentor who went inactive between authorizing and deciding", async () => {
+		const { s, mentor, requestId } = await pending();
+		const auth = await logic.authorizeMentorRequestDecision(
+			mentor.userId,
+			requestId,
+		);
+		await expect(
+			logic.decideMentorRequest({
+				requestId,
+				accept: true,
+				userId: mentor.userId,
+				actingAs: "mentor",
+				actorMemberId: s.memberId,
+			}),
+		).rejects.toThrow(logic.MENTOR_REQUEST_NOT_ALLOWED_MESSAGE);
+		await testDb
+			.update(members)
+			.set({ status: "inactive" })
+			.where(eq(members.id, mentor.id));
+		await expect(
+			logic.decideMentorRequest({
+				requestId,
+				accept: false,
+				userId: mentor.userId,
+				actingAs: auth.actingAs,
+				actorMemberId: auth.actorMemberId,
+			}),
+		).rejects.toThrow(logic.MENTOR_REQUEST_NOT_ALLOWED_MESSAGE);
+		expect((await requestsOf(s.memberId))[0]?.status).toBe("pending");
+	});
+
+	// protects=when a newer NON-pending row exists (membership collapse can leave
+	// a withdrawn one), the mentee's outgoing request is still the pending one,
+	// so Withdraw shows;
+	// fails_when=outgoing is the newest row regardless of status;
+	// no_claim=which non-pending row wins when none is pending (latest, as before)
+	it("loadMyMentorRequests prefers a pending request over a newer answered one", async () => {
+		const { s, mentor, requestId } = await pending();
+		await testDb.insert(mentorshipRequests).values({
+			clubId: s.clubId,
+			menteeMemberId: s.memberId,
+			mentorMemberId: mentor.id,
+			focus: "leadership",
+			status: "withdrawn",
+			createdAt: new Date(Date.now() + 60_000),
+		});
+		const mine = await logic.loadMyMentorRequests(s.memberId);
+		expect(mine?.outgoing?.id).toBe(requestId);
+		expect(mine?.outgoing?.status).toBe("pending");
+	});
+
+	// protects=a focus note with a NUL is refused with a friendly message at the
+	// schema, before Postgres would 500 on it;
+	// fails_when=the NUL passes the schema;
+	// no_claim=other characters (any text is allowed)
+	it("refuses a NUL in the focus note", () => {
+		const parsed = logic.requestMentorSchema.safeParse({
+			clubId: randomUUID(),
+			mentorMemberId: randomUUID(),
+			focus: "other",
+			focusOther: "a\u0000b",
+		});
+		expect(parsed.success).toBe(false);
+		expect(parsed.error?.issues[0]?.message).toBe(
+			logic.MENTOR_FOCUS_OTHER_NUL_MESSAGE,
+		);
+	});
+
+	// protects=a request id that does not exist, one in a club the caller is not
+	// in, and a stranger's all answer withdraw with the same message;
+	// fails_when=a member of another club, or someone with no account there, is
+	// told anything different from "no such request";
+	// no_claim=the mentee's own withdraw (covered above)
+	it("withdraw answers a foreign club's request like a missing one", async () => {
+		const { requestId } = await pending();
+		const foreign = await seed();
+		for (const userId of [
+			foreign.memberUserId,
+			foreign.adminUserId,
+			randomUUID(),
+		]) {
+			await expect(
+				logic.withdrawMentorRequest({ userId, requestId }),
+			).rejects.toThrow(logic.MENTOR_REQUEST_NOT_YOURS_MESSAGE);
+		}
+	});
+
+	// protects=requestMentor hands back the mentor's contact (name, email, phone,
+	// effective preferred method) so the draft needs no second read;
+	// fails_when=the contact is missing, the raw column is returned, or it names
+	// someone other than the asked mentor;
+	// no_claim=the formatting of the draft (the component test)
+	it("requestMentor returns the mentor's contact", async () => {
+		const { mentor, s } = await pending();
+		const other = await addMember(s.clubId, {
+			name: "Ned Next",
+			phone: null,
+			preferredContact: null,
+		});
+		await logic.withdrawMentorRequest({
+			userId: s.memberUserId,
+			requestId: (await requestsOf(s.memberId))[0]?.id ?? "",
+		});
+		const out = await logic.requestMentor({
+			userId: s.memberUserId,
+			clubId: s.clubId,
+			mentorMemberId: mentor.id,
+		});
+		expect(out.mentor).toMatchObject({
+			id: mentor.id,
+			name: "Mia Mentor",
+			phone: "+15555550100",
+			preferredContact: "email",
+		});
+		expect(out.mentor.email).toContain("@test.example");
+		await logic.withdrawMentorRequest({
+			userId: s.memberUserId,
+			requestId: out.requestId,
+		});
+		const second = await logic.requestMentor({
+			userId: s.memberUserId,
+			clubId: s.clubId,
+			mentorMemberId: other.id,
+		});
+		expect(second.mentor.phone).toBeNull();
+		expect(second.mentor.preferredContact).toBeNull();
+	});
+
+	// protects=a mentor's "Your mentees" rows carry the mentee's EFFECTIVE
+	// preferred contact, judged on what the mentee has stored;
+	// fails_when=the field is absent or the raw column leaks through;
+	// no_claim=the welcome draft's text (the component test)
+	it("a pairing's other party carries preferredContact", async () => {
+		const s = await seed();
+		const mentor = await addMember(s.clubId, { name: "Mia Mentor" });
+		const mentee = await addMember(s.clubId, {
+			name: "Eli Mentee",
+			preferredContact: "sms",
+		});
+		await logic.createMentorship({
+			clubId: s.clubId,
+			mentorMemberId: mentor.id,
+			menteeMemberId: mentee.id,
+			focus: "new_member",
+			actorMemberId: s.adminMemberId,
+		});
+		const mine = await logic.loadMyMentorships(mentor.id);
+		expect(mine?.mentees[0]?.member.preferredContact).toBe("sms");
+	});
+
+	// protects=the admin's list keeps a pending request whose party went inactive,
+	// flagged, so it can be declined; an all-active one is unflagged;
+	// fails_when=the row vanishes (the mentee's slot stays taken with no way to
+	// clear it) or the flag is missing;
+	// no_claim=that accept works for it (it is refused, tests above)
+	it("the admin list flags a pending request with an inactive party", async () => {
+		const { s, mentor, requestId } = await pending();
+		const before = await logic.loadClubPendingMentorRequests(s.clubId);
+		expect(before.map((r) => [r.id, r.partyInactive])).toEqual([
+			[requestId, false],
+		]);
+		await testDb
+			.update(members)
+			.set({ status: "inactive" })
+			.where(eq(members.id, mentor.id));
+		const after = await logic.loadClubPendingMentorRequests(s.clubId);
+		expect(after.map((r) => [r.id, r.partyInactive])).toEqual([
+			[requestId, true],
+		]);
 	});
 });

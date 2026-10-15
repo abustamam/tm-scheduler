@@ -1,18 +1,19 @@
-import { HeartHandshake, Loader2 } from "lucide-react";
+import { HeartHandshake } from "lucide-react";
 import { useState } from "react";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
 import { Button } from "#/components/ui/button";
 import { formatShortDate } from "#/lib/format";
 import { mentorshipFocusText } from "#/lib/mentorship";
 import type { IncomingMentorRequest } from "#/server/mentorship";
+import {
+	currentOrigin,
+	DecideButtons,
+	MENTOR_REQUEST_FAILED_MESSAGE,
+	mentorRequestErrorText,
+} from "./mentor-request-shared";
 
 export const MENTOR_REQUESTS_HEADING = "Mentor requests";
-export const MENTOR_REQUEST_FAILED_MESSAGE = "Something went wrong. Try again.";
-
-/** Absolute origin for a draft's link; only read after a click, never in SSR. */
-function currentOrigin(): string {
-	return typeof window === "undefined" ? "" : window.location.origin;
-}
+export { MENTOR_REQUEST_FAILED_MESSAGE };
 
 /**
  * Pending mentor requests addressed to the member (#1209): each row names the
@@ -23,14 +24,19 @@ function currentOrigin(): string {
  * request the moment it is answered; it is not persisted.
  *
  * Presentational and controlled: the route owns the server call and the
- * reload. `onDecide` must reject on failure, so the row keeps its buttons.
+ * reload. `onDecide` must reject when the ANSWER failed, so the row keeps its
+ * buttons; a reload that fails after the answer landed is `onDecide`'s to
+ * swallow (see the dashboard), never a reason to hide the welcome draft.
+ * `timezone` is the club's, for the date on each row.
  */
 export function MentorRequestsCard({
 	requests,
 	onDecide,
+	timezone,
 }: {
 	requests: readonly IncomingMentorRequest[];
 	onDecide: (requestId: string, accept: boolean) => Promise<void>;
+	timezone?: string;
 }) {
 	const [accepted, setAccepted] = useState<IncomingMentorRequest[]>([]);
 	const [declined, setDeclined] = useState<ReadonlySet<string>>(new Set());
@@ -51,11 +57,7 @@ export function MentorRequestsCard({
 			if (accept) setAccepted((a) => [...a, request]);
 			else setDeclined((d) => new Set(d).add(request.id));
 		} catch (err) {
-			setError(
-				err instanceof Error && err.message
-					? err.message
-					: MENTOR_REQUEST_FAILED_MESSAGE,
-			);
+			setError(mentorRequestErrorText(err));
 		} finally {
 			setBusy(null);
 		}
@@ -94,29 +96,14 @@ export function MentorRequestsCard({
 									{r.mentee.name}
 								</span>
 								<span className="ml-2 text-xs text-[var(--sea-ink-soft)]">
-									{focus} · {formatShortDate(r.createdAt, "UTC")}
+									{focus} · {formatShortDate(r.createdAt, timezone)}
 								</span>
 							</div>
-							<div className="flex gap-2">
-								<Button
-									size="sm"
-									disabled={busy !== null}
-									onClick={() => void decide(r, true)}
-								>
-									{busy === r.id ? (
-										<Loader2 className="animate-spin" aria-hidden />
-									) : null}
-									Accept
-								</Button>
-								<Button
-									size="sm"
-									variant="outline"
-									disabled={busy !== null}
-									onClick={() => void decide(r, false)}
-								>
-									Decline
-								</Button>
-							</div>
+							<DecideButtons
+								busy={busy === r.id}
+								disabled={busy !== null}
+								onDecide={(accept) => void decide(r, accept)}
+							/>
 						</li>
 					);
 				})}

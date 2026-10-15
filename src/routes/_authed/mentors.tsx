@@ -2,6 +2,10 @@ import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 import { useId, useState } from "react";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
+import {
+	currentOrigin,
+	mentorRequestErrorText,
+} from "#/components/members/mentor-request-shared";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import {
@@ -27,6 +31,7 @@ import {
 	getMyMentorships,
 	listMentors,
 	type MentorListing,
+	type MentorRequestParty,
 	type MentorshipRow,
 	type OutgoingMentorRequest,
 	requestMentor,
@@ -37,7 +42,6 @@ const FIND_A_MENTOR_HEADING = "Find a mentor";
 const NO_MENTORS_MESSAGE =
 	"Nobody in your club has offered to mentor yet. Ask your VP Education.";
 const NO_BIO_TEXT = "No bio yet";
-const FAILED_MESSAGE = "Something went wrong. Try again.";
 
 /**
  * Find a mentor (#945, #1209): the club's members who said they are willing to
@@ -58,13 +62,22 @@ export const Route = createFileRoute("/_authed/mentors")({
 		const clubId = context.activeClubId;
 		if (!clubId) throw redirect({ to: "/dashboard" });
 		try {
-			const [mentors, mine, requests] = await Promise.all([
+			const [mentors, mine, requests, timezone] = await Promise.all([
 				listMentors({ data: { clubId } }),
 				getMyMentorships({ data: { clubId } }).catch(() => null),
 				getMyMentorRequests({ data: { clubId } }).catch(() => null),
+				// The club's zone, for the date on the pending banner. Imported
+				// here as the dashboard does; a failed read falls back to UTC.
+				import("#/server/clubs")
+					.then(({ loadClubTimezoneSettings }) =>
+						loadClubTimezoneSettings({ data: clubId }),
+					)
+					.then((settings) => settings.timezone)
+					.catch(() => "UTC"),
 			]);
 			return {
 				clubId,
+				timezone,
 				mentors,
 				refused: null as string | null,
 				pairings: mine?.mentors ?? ([] as MentorshipRow[]),
@@ -79,6 +92,7 @@ export const Route = createFileRoute("/_authed/mentors")({
 			) {
 				return {
 					clubId,
+					timezone: "UTC",
 					mentors: [] as MentorListing[],
 					refused: err.message,
 					pairings: [] as MentorshipRow[],
@@ -98,7 +112,8 @@ function menteeCountText(n: number): string {
 }
 
 function MentorsPage() {
-	const { clubId, mentors, refused, pairings, request } = Route.useLoaderData();
+	const { clubId, timezone, mentors, refused, pairings, request } =
+		Route.useLoaderData();
 	const pending = request?.status === "pending" ? request : null;
 	return (
 		<PageContainer className="space-y-5">
@@ -110,7 +125,7 @@ function MentorsPage() {
 					Members of your club who have offered to mentor.
 				</p>
 			</div>
-			<RequestStatus request={request} />
+			<RequestStatus request={request} timezone={timezone} />
 			{refused ? (
 				<p role="alert" className="text-sm">
 					{refused}
@@ -168,7 +183,13 @@ function MentorsPage() {
  * Withdraw; after a decline, the no-reason message. Accepted and withdrawn
  * ones say nothing here (a pairing shows as "Your mentor").
  */
-function RequestStatus({ request }: { request: OutgoingMentorRequest | null }) {
+function RequestStatus({
+	request,
+	timezone,
+}: {
+	request: OutgoingMentorRequest | null;
+	timezone: string;
+}) {
 	const router = useRouter();
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -190,9 +211,7 @@ function RequestStatus({ request }: { request: OutgoingMentorRequest | null }) {
 			await withdrawMentorRequest({ data: { requestId: pending.id } });
 			await router.invalidate();
 		} catch (err) {
-			setError(
-				err instanceof Error && err.message ? err.message : FAILED_MESSAGE,
-			);
+			setError(mentorRequestErrorText(err));
 		} finally {
 			setBusy(false);
 		}
@@ -204,7 +223,7 @@ function RequestStatus({ request }: { request: OutgoingMentorRequest | null }) {
 		>
 			<span>
 				You asked {pending.mentor.name} on{" "}
-				{formatShortDate(pending.createdAt, "UTC")}.
+				{formatShortDate(pending.createdAt, timezone)}.
 			</span>
 			<Button
 				size="sm"
@@ -226,6 +245,17 @@ function RequestStatus({ request }: { request: OutgoingMentorRequest | null }) {
 
 const SELECT =
 	"flex h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
+
+/** What the Ask dialog keeps once the request is stored. */
+interface SentRequest {
+	mentor: MentorRequestParty;
+	focus: MentorshipFocus;
+	focusOther: string | null;
+}
+
+/** Shown in place of the draft when the mentor has no phone or email on file. */
+export const NO_MENTOR_CONTACT_TEXT =
+	"They have no contact details on file, so tell them yourself that you asked.";
 
 /**
  * "Ask to mentor me": a focus choice, then, once sent, the draft the mentee
@@ -257,38 +287,39 @@ function AskToMentor({
 	const [focusOther, setFocusOther] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [sent, setSent] = useState(false);
-	// The request as just stored, read back for the mentor's contact. Held here,
-	// not taken from the loader: the draft must not wait on the page's reload.
-	const [draftFor, setDraftFor] = useState<OutgoingMentorRequest | null>(null);
+	// The mentor's contact as `requestMentor` returned it, with the focus just
+	// sent. Held here, not taken from the loader: the draft must not wait on the
+	// page's reload, nor on a second read.
+	const [draftFor, setDraftFor] = useState<SentRequest | null>(null);
 	const [error, setError] = useState<string | null>(null);
 
 	async function send() {
 		setBusy(true);
 		setError(null);
 		try {
-			await requestMentor({
+			const sentFocusOther =
+				focus === "other" ? focusOther.trim() || null : null;
+			const out = await requestMentor({
 				data: {
 					clubId,
 					mentorMemberId: mentor.memberId,
 					focus,
-					focusOther: focus === "other" ? focusOther.trim() || null : null,
+					focusOther: sentFocusOther,
 				},
 			});
-			const fresh = await getMyMentorRequests({ data: { clubId } }).catch(
-				() => null,
-			);
-			setDraftFor(
-				fresh?.outgoing?.status === "pending" &&
-					fresh.outgoing.mentor.id === mentor.memberId
-					? fresh.outgoing
-					: null,
-			);
+			setDraftFor({
+				mentor: out.mentor,
+				focus,
+				focusOther: sentFocusOther,
+			});
 			setSent(true);
-			await router.invalidate();
+			try {
+				await router.invalidate();
+			} catch {
+				// The request is stored; the page catches up on its next load.
+			}
 		} catch (err) {
-			setError(
-				err instanceof Error && err.message ? err.message : FAILED_MESSAGE,
-			);
+			setError(mentorRequestErrorText(err));
 		} finally {
 			setBusy(false);
 		}
@@ -315,12 +346,14 @@ function AskToMentor({
 						<DialogTitle>Ask {mentor.name} to mentor you</DialogTitle>
 						<DialogDescription>
 							{sent
-								? `Request sent to ${mentor.name}. Let them know:`
+								? draftFor && (draftFor.mentor.phone || draftFor.mentor.email)
+									? `Request sent to ${mentor.name}. Let them know:`
+									: `Request sent to ${mentor.name}.`
 								: "They can accept or decline. You can withdraw until they answer."}
 						</DialogDescription>
 					</DialogHeader>
 					{sent ? (
-						draftFor ? (
+						draftFor && (draftFor.mentor.phone || draftFor.mentor.email) ? (
 							<NudgeButtons
 								mode="mentorRequest"
 								name={draftFor.mentor.name}
@@ -331,9 +364,13 @@ function AskToMentor({
 									mentorshipFocusText(draftFor.focus, draftFor.focusOther) ??
 									MENTORSHIP_FOCUS_LABELS[draftFor.focus]
 								}
-								origin={window.location.origin}
+								origin={currentOrigin()}
 							/>
-						) : null
+						) : (
+							<p className="text-sm" data-slot="no-mentor-contact">
+								{NO_MENTOR_CONTACT_TEXT}
+							</p>
+						)
 					) : (
 						<div className="flex flex-col gap-2">
 							<Label htmlFor={`${ids}-focus`}>

@@ -141,3 +141,23 @@ describe("MentorRequestsCard (#1209)", () => {
 		await waitFor(() => expect(screen.queryByText("Sam Smith")).toBeNull());
 	});
 });
+
+describe("MentorRequestsCard date (#1209)", () => {
+	// protects=the row's date is in the club's zone passed in, not UTC;
+	// fails_when=02:00 UTC on Oct 10 reads "Oct 10" for a Los Angeles club;
+	// no_claim=that the dashboard passes the right zone (dashboard-wiring test)
+	it("dates a row in the timezone it is given", () => {
+		const { container } = render(
+			<MentorRequestsCard
+				requests={[
+					request("r1", "Sam Smith", {
+						createdAt: new Date("2026-10-10T02:00:00Z"),
+					}),
+				]}
+				onDecide={vi.fn()}
+				timezone="America/Los_Angeles"
+			/>,
+		);
+		expect(container.textContent).toContain("Contest · Oct 9");
+	});
+});
