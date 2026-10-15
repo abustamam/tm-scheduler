@@ -109,21 +109,41 @@ describe("unitsOf", () => {
 		expect(unitsOf([])).toEqual([]);
 	});
 
-	// protects=section-never-last end to end: pack units made from a run whose
-	//   sections fall where the greedy fill would otherwise close a sheet
-	// fails_when=any sheet's last entry is a section band
+	// protects=section-never-last end to end: entries with real heights (a thin band,
+	//   taller rows) are merged by `unitsOf`, packed by `paginate` at every capacity
+	//   from one row to the whole run, and no sheet's last entry is a band
+	// fails_when=a band is left a unit of its own, so the packer closes a sheet right
+	//   after it because the next row did not fit; the control proves the sweep
+	//   reaches that case (unmerged, some capacity DOES end a sheet on a band)
 	// no_claim=real heights (the Chrome test packs measured ones)
-	it("no sheet ends on a section band", () => {
-		// entries: 0 row, 1 section, 2 row, 3 row, 4 section, 5 row
-		const items = [row(0), head, row(1), row(2), head, row(3)];
-		const units = unitsOf(items);
-		const heights = [50, 50, 50, 50];
-		for (const cap of [50, 100, 120, 150]) {
-			const sheets = paginate(heights.slice(0, units.length), cap, cap);
-			for (const sheet of sheets) {
-				const lastEntry = units[sheet.at(-1) as number].at(-1) as number;
-				expect(items[lastEntry].head, `capacity ${cap}`).toBe(false);
-			}
-		}
+	it("no sheet ends on a section band, at any capacity", () => {
+		const items = [
+			row(0),
+			head,
+			row(1),
+			row(2),
+			head,
+			row(3),
+			row(3),
+			head,
+			row(4),
+			row(5),
+		];
+		const entryHeight = items.map((it) => (it.head ? 20 : 50));
+		const endsOnHead = (units: number[][]) => {
+			const heights = units.map((u) =>
+				u.reduce((a, i) => a + entryHeight[i], 0),
+			);
+			const failing: number[] = [];
+			for (let cap = 50; cap <= 400; cap += 5)
+				for (const sheet of paginate(heights, cap, cap)) {
+					const lastEntry = units[sheet.at(-1) as number].at(-1) as number;
+					if (items[lastEntry].head) failing.push(cap);
+				}
+			return failing;
+		};
+		expect(endsOnHead(unitsOf(items))).toEqual([]);
+		// Control: with every entry its own unit, the same sweep does end sheets on a band.
+		expect(endsOnHead(items.map((_, i) => [i])).length).toBeGreaterThan(0);
 	});
 });

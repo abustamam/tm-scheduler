@@ -115,7 +115,9 @@ type Props = {
 	 *  about to flow onto extra pages (#1225), once it has also been tried at
 	 *  `compact` (#1226). Threaded to Editorial, Grid and both Spacious sheets.
 	 *  Timing receives it only to climb to `compact`; at `compact` its sheets are
-	 *  given `undefined`, never this callback, because Timing is the fallback. */
+	 *  given `undefined`, never this callback, because Timing is the fallback: a
+	 *  Timing sheet still too long at compact paginates onto continuation sheets
+	 *  (#1227) instead of being told to the caller. */
 	onWouldFlow?: () => void;
 	/** The density the print starts at (#1226). Absent is `regular`, which is what
 	 *  the route always wants: `MeetingAgendaPrint` climbs to `compact` itself, and
@@ -2404,39 +2406,34 @@ function TimingTail({
 	marker?: boolean;
 }) {
 	return (
-		<>
-			{/* #721 — same as the spacious run of show above: the compact
-					    206px votes panel is gone and this block takes the full width
-					    rather than leaving a column of nothing beside it. */}
-			<div
-				{...(marker ? { "data-run-tail": "" } : {})}
-				style={{ marginTop: 18 }}
-			>
-				{announcementLines(header.announcements).length > 0 ? (
-					<AnnouncementsBlock text={header.announcements} />
-				) : (
-					<NotesBlock lines={4} />
-				)}
-			</div>
-		</>
+		// #721 — same as the spacious run of show above: the compact 206px votes
+		// panel is gone and this block takes the full width rather than leaving a
+		// column of nothing beside it.
+		<div {...(marker ? { "data-run-tail": "" } : {})} style={{ marginTop: 18 }}>
+			{announcementLines(header.announcements).length > 0 ? (
+				<AnnouncementsBlock text={header.announcements} />
+			) : (
+				<NotesBlock lines={4} />
+			)}
+		</div>
 	);
 }
 
 /** One entry of Timing's run of show: a section band, a hand-off band, or a
- *  row. `k` is its place in the whole run (the stripe), `last` whether it is
- *  the last thing in its box (no hairline under it). */
+ *  row. `stripe` is its place in the whole run (odd ones are tinted), `last`
+ *  whether it is the last thing in its box (no hairline under it). */
 function TimingEntry({
 	item,
-	k,
+	stripe,
 	last,
 	compact,
 }: {
 	item: RowItem<TimelineRow>;
-	k: number;
+	stripe: number;
 	last: boolean;
 	compact: boolean;
 }) {
-	const { entry: r, index: i, folded } = item;
+	const { entry: r, folded } = item;
 	// The one place with a real column header, so the band keeps the
 	// table's stripe and rule and spans the Role + Segment columns
 	// as one line — starting at 58px, the Role column's own edge —
@@ -2449,7 +2446,6 @@ function TimingEntry({
 	if (r.section)
 		return (
 			<SectionBand
-				key={rowKey(r, i)}
 				row={r}
 				fontSize={10}
 				padding={compact ? "3px 12px 2px 12px" : "6px 12px 4px 12px"}
@@ -2458,12 +2454,11 @@ function TimingEntry({
 	if (r.handoff)
 		return (
 			<HandoffBand
-				key={rowKey(r, i)}
 				row={r}
 				fontSize={10}
 				padding="3px 12px 3px 58px"
 				chrome={{
-					background: k % 2 === 1 ? "#fafdfb" : "#fff",
+					background: stripe % 2 === 1 ? "#fafdfb" : "#fff",
 					borderBottom: last ? undefined : HAIR,
 				}}
 				// Two-page layout: the speakers can be overleaf (#578).
@@ -2485,7 +2480,6 @@ function TimingEntry({
 	const name = r.holder ?? "";
 	return (
 		<RowShell
-			key={rowKey(r, i)}
 			compact={compact}
 			folded={folded}
 			foldedPadding="1px 12px 0 58px"
@@ -2497,7 +2491,11 @@ function TimingEntry({
 			}}
 			chrome={{
 				borderBottom: last ? undefined : HAIR,
-				background: isHighlighted(r) ? MINT : k % 2 === 1 ? "#fafdfb" : "#fff",
+				background: isHighlighted(r)
+					? MINT
+					: stripe % 2 === 1
+						? "#fafdfb"
+						: "#fff",
 			}}
 		>
 			{/* Test hook — see `RunNarrative`'s note on `data-row-time`. */}
@@ -2692,7 +2690,7 @@ function TimingRunSheet({
 		<TimingEntry
 			key={rowKey(items[p].entry, items[p].index)}
 			item={items[p]}
-			k={p}
+			stripe={p}
 			last={p === lastShown}
 			compact={compact}
 		/>
@@ -2718,7 +2716,7 @@ function TimingRunSheet({
 								<div
 									key={u}
 									data-unit=""
-									// \`flow-root\`, so a section band's top margin stays inside the
+									// `flow-root`, so a section band's top margin stays inside the
 									// unit and the unit's height is what it really costs.
 									style={{ display: "flow-root" }}
 								>
@@ -2743,7 +2741,7 @@ function TimingRunSheet({
  *  sheet width, both the whole run (every unit's height, and what is NOT a unit:
  *  title, table header, footer, tail) and an empty continuation sheet (its
  *  chrome). Rendered only while the answer is wanted, then unmounted. Reads
- *  after \`document.fonts.ready\`, the same wait \`FitPage\` makes, so the heights
+ *  after `document.fonts.ready`, the same wait `FitPage` makes, so the heights
  *  are the printed ones. */
 function TimingMeasure({
 	header,
@@ -2824,7 +2822,12 @@ function TimingMeasure({
 	};
 	return (
 		<>
-			<div ref={fullRef} aria-hidden="true" style={probe}>
+			<div
+				ref={fullRef}
+				data-paginate-probe=""
+				aria-hidden="true"
+				style={probe}
+			>
 				<TimingRunSheet
 					{...common}
 					unitIds={[...units.keys(), units.length]}
@@ -2832,7 +2835,12 @@ function TimingMeasure({
 					total={2}
 				/>
 			</div>
-			<div ref={emptyRef} aria-hidden="true" style={probe}>
+			<div
+				ref={emptyRef}
+				data-paginate-probe=""
+				aria-hidden="true"
+				style={probe}
+			>
 				<TimingRunSheet {...common} unitIds={[]} k={3} total={3} continued />
 			</div>
 		</>
@@ -2875,16 +2883,26 @@ function TimingLayout({
 	const timingItems = foldHandoffs(rows, (r) => r, density);
 	// A run still too long for sheet 2 at compact (#1227): its sheet 2 reported
 	// that it would flow, so the run is measured and packed onto sheet 2 and as
-	// many continuation sheets as it needs. Keyed, so a new density or agenda
-	// (`fitKey`) forgets both decisions, and the QR (its footer is 16px taller
-	// with one) measures again when it arrives.
+	// many continuation sheets as it needs. The plan is keyed by everything the
+	// measured heights are made of, so a change to any of it measures again
+	// instead of printing the old sheet plan: a new density or agenda (`fitKey`),
+	// the QR (its footer is 16px taller with one), and the header text the sheets
+	// print (announcements are the tail's whole height; the club name and date
+	// head every continuation sheet, the time range the title bar).
 	const [flowedKey, setFlowedKey] = useState<string | null>(null);
 	const [measured, setMeasured] = useState<{
 		key: string;
 		pages: number[][];
 	} | null>(null);
 	const flowed = compact && flowedKey === fitKey;
-	const planKey = `${fitKey}|${qrUrl ? "qr" : "noqr"}`;
+	const planKey = JSON.stringify([
+		fitKey,
+		Boolean(qrUrl),
+		header.announcements,
+		header.clubName,
+		header.dateLong,
+		header.timeRange,
+	]);
 	const pages = flowed && measured?.key === planKey ? measured.pages : null;
 	const total = pages ? 1 + pages.length : 2;
 	const units = flowed ? timingUnits(rows, timingItems) : [];
@@ -3352,8 +3370,8 @@ export function MeetingAgendaPrint({
 		// Any sheet that would flow moves the WHOLE layout down a rung, so a
 		// two-sheet layout's sheets always match. At `compact` the caller is told,
 		// except for Timing: it IS the fallback, so a Timing sheet still too long at
-		// compact keeps today's flow (until #1227) whatever the caller passed, or the
-		// route would announce a fallback "from Timing to Timing".
+		// compact is paginated by `TimingLayout` (#1227) whatever the caller passed,
+		// or the route would announce a fallback "from Timing to Timing".
 		onWouldFlow:
 			density === "regular"
 				? () => setDensity("compact")

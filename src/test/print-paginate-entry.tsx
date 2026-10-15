@@ -8,28 +8,30 @@
  *
  *   sheets   `MeetingAgendaPrint`, layout timing, no caller: every sheet's height,
  *            scale, footer, header, run-of-show text and the stamps it carries.
- *            Plus the reference: the SAME agenda at `compact`, read before any
- *            effect ran, i.e. the single flowing sheet 2 #1226 prints.
+ *            What it is compared against is NOT read here: it is the snapshot
+ *            main wrote (`print-paginate-main-ref.tsx`), because anything read
+ *            through this branch's own `TimingEntry` would move with it.
  *   copies   `AgendaCopies` (2 copies, duplex): the blank sheets in the DOM, each
  *            copy's sheets, and the settled markup, which the test prints to a PDF.
  */
-import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { AgendaCopies } from "#/components/agenda/agenda-copies";
 import { MeetingAgendaPrint } from "#/components/agenda/meeting-agenda-print";
+import { VISITING_TOASTMASTER_LEGEND } from "#/lib/agenda";
 import {
 	type PrintCompactFixtureId,
 	printCompactAgenda,
 } from "#/test/print-compact-fixtures";
+import { THR_HEADER, THR_OFFICERS, thrAgenda } from "#/test/thr-agenda-fixture";
 
 export type PaginateScenario = {
 	id: string;
 	kind: "sheets" | "copies";
-	fixture: PrintCompactFixtureId;
+	/** `thr`: the plain THR agenda (`thrAgenda`), which `print-compact-fixtures`
+	 *  has no id for (it has the overflow variant, `thrLong`). */
+	fixture: PrintCompactFixtureId | "thr";
 	/** Indices into the fixture's rows to mark as a visiting Toastmaster. */
 	visiting?: number[];
-	/** Whether the footer QR is wired (the route's `qrUrl`). Default yes. */
-	qr?: boolean;
 	/** The fixture's rows this many times over: a longer run than any one contest
 	 *  has, to reach a sheet count the fixtures alone cannot. */
 	repeat?: number;
@@ -59,10 +61,8 @@ export type PaginatedSheet = {
 
 export type SheetsSnapshot = {
 	sheets: PaginatedSheet[];
-	/** innerText of the box around the stamps on the single sheet 2 `compact` makes
-	 *  before anything paginates it (#1226's sheet). */
-	reference: string;
-	/** `FitPage`'s scale on page 2 in that reference, for context. */
+	/** How many timeline rows the scenario's agenda has (`a.rows.length`, sections
+	 *  and hand-offs included), for the failure messages. */
 	rows: number;
 };
 
@@ -105,8 +105,14 @@ async function settle() {
 	}
 }
 
+function baseAgenda(fixture: PaginateScenario["fixture"]) {
+	if (fixture !== "thr") return printCompactAgenda(fixture);
+	const { roles, rows } = thrAgenda({ veena: "Guest", david: "Guest" });
+	return { header: THR_HEADER, roles, officers: THR_OFFICERS, rows };
+}
+
 function agenda(s: PaginateScenario) {
-	const a = printCompactAgenda(s.fixture);
+	const a = baseAgenda(s.fixture);
 	const mark = new Set(s.visiting ?? []);
 	const rows = Array.from({ length: s.repeat ?? 1 }, () => a.rows)
 		.flat()
@@ -117,7 +123,7 @@ function agenda(s: PaginateScenario) {
 		officers: a.officers,
 		explainers: [],
 		rows,
-		qrUrl: s.qr === false ? undefined : QR,
+		qrUrl: QR,
 	};
 }
 
@@ -145,7 +151,7 @@ function report(sheet: HTMLElement): PaginatedSheet {
 		lastText: region?.lastElementChild
 			? deepLast(region.lastElementChild as HTMLElement)
 			: null,
-		legend: (footer?.innerText ?? "").includes("(V) Visiting Toastmaster"),
+		legend: (footer?.innerText ?? "").includes(VISITING_TOASTMASTER_LEGEND),
 		tail: sheet.querySelector("[data-run-tail]") !== null,
 	};
 }
@@ -160,36 +166,13 @@ function deepLast(el: HTMLElement): string {
 	return (entry?.innerText ?? cur.innerText ?? "").trim();
 }
 
-/** The compact sheet 2 before any effect, read the way `print-compact-entry`
- *  reads its text: `flushSync`, so FitPage's font wait has not resolved. The box
- *  is the nearest ancestor shared by every stamp. */
-function referenceText(s: PaginateScenario): string {
-	const a = agenda(s);
-	const root = createRoot(host());
-	flushSync(() =>
-		root.render(
-			<MeetingAgendaPrint layout="timing" {...a} initialDensity="compact" />,
-		),
-	);
-	const sheet = document.querySelectorAll<HTMLElement>(".agenda-page")[1];
-	const stamps = [...sheet.querySelectorAll<HTMLElement>("[data-row-time]")];
-	let box: HTMLElement | null = stamps[0]?.parentElement ?? null;
-	while (box && !stamps.every((st) => box?.contains(st)))
-		box = box.parentElement;
-	const out = box?.innerText ?? "";
-	root.unmount();
-	host().replaceChildren();
-	return out;
-}
-
 async function sheetsScenario(s: PaginateScenario): Promise<SheetsSnapshot> {
 	const a = agenda(s);
-	const reference = referenceText(s);
 	const root = createRoot(host());
 	root.render(<MeetingAgendaPrint layout="timing" {...a} />);
 	await settle();
 	const sheets = [...document.querySelectorAll<HTMLElement>(".agenda-page")];
-	const out = { sheets: sheets.map(report), reference, rows: a.rows.length };
+	const out = { sheets: sheets.map(report), rows: a.rows.length };
 	root.unmount();
 	return out;
 }
