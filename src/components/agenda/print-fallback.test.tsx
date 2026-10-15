@@ -355,23 +355,26 @@ describe.skipIf(!hasChrome)(
 
 		// protects=a club that CHOSE Timing, with an agenda too long even for Timing at
 		//   compact, gets no fallback notice and keeps Timing (Timing is the fallback; it
-		//   has nowhere to fall back to, and its overflow is #1227)
+		//   has nowhere to fall back to, and since #1227 it paginates instead)
 		// fails_when=Timing's sheets are given `onWouldFlow` at compact, so the route
 		//   announces "too long for Timing on 2 pages. Showing Timing (2 pages) instead",
-		//   or the control stops overflowing (then the test proves nothing)
-		// no_claim=how Timing prints once it flows (a third sheet, #1227), or that Linux
-		//   CI's face overflows by the same margin: the control's message carries the
-		//   numbers this machine saw. The fixture is contestDense20 (Timing page 2: 1712 on
-		//   a Mac, 248px over the 1464 cliff; about 1618 on Linux at its 0.945 ratio, still
-		//   154px over), chosen so the control survives that face (16 was 1500 / 1418)
+		//   or the control stops overflowing (then the test proves nothing): the control
+		//   is that Timing needed MORE than its two sheets, every one a full page
+		// no_claim=how the continuation sheets look (print-paginate.test.tsx), or that
+		//   Linux CI's face overflows by the same margin: the control's message carries
+		//   the numbers this machine saw. The fixture is contestDense20 (Timing page 2:
+		//   1712 on a Mac before #1227, 248px over the 1464 cliff; about 1618 on Linux at
+		//   its 0.945 ratio, still 154px over), chosen so the control survives that face
 		it("a chosen Timing that overflows at compact shows no fallback notice", () => {
-			const cliff = (PAGE_H - 2) / MIN_FIT_SCALE;
 			const bare = first("timing20:timing:bare");
-			const tallest = Math.max(...bare.natural);
 			expect(
-				tallest,
-				`timing contestDense20 natural=${tallest} cliff=${cliff} (the control must overflow)`,
-			).toBeGreaterThan(cliff);
+				bare.pages.length,
+				`timing contestDense20 ${nat(bare)} (the control must need more than 2 sheets)`,
+			).toBeGreaterThan(2);
+			expect(
+				bare.pages.every((h) => h === PAGE_H),
+				`timing contestDense20 ${nat(bare)} (every sheet one page tall)`,
+			).toBe(true);
 			const s = first("timing20:timing");
 			expect(s.notice, `timing contestDense20 ${nat(s)}`).toBeNull();
 			expect(s.timing, `timing contestDense20 ${nat(s)}`).toBe(true);

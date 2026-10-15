@@ -7,7 +7,7 @@
 // meeting-schedule are optional free-text profile fields: each renders in its
 // designated slot when set and is omitted gracefully (no empty label) when not.
 import { QRCodeSVG } from "qrcode.react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
 	type RosterEntry,
 	rosterGridPositions,
@@ -15,6 +15,7 @@ import {
 } from "#/lib/agenda";
 import { groupByPresenter } from "#/lib/agenda-groups";
 import type { AgendaLayout } from "#/lib/agenda-layouts";
+import { paginate, unitsOf } from "#/lib/agenda-paginate";
 import { RUN_NARRATIVE_TYPE } from "#/lib/agenda-print-type";
 import { introducedSuffix } from "#/lib/agenda-runsheet";
 import type { TimelineRow } from "#/lib/agenda-timing";
@@ -39,7 +40,10 @@ import {
 	MINT,
 	MUTED,
 	OPEN,
+	PAGE_H,
+	PAGE_W,
 	RED,
+	SANS,
 	SEAFOAM,
 	SERIF,
 	TEAL,
@@ -111,7 +115,9 @@ type Props = {
 	 *  about to flow onto extra pages (#1225), once it has also been tried at
 	 *  `compact` (#1226). Threaded to Editorial, Grid and both Spacious sheets.
 	 *  Timing receives it only to climb to `compact`; at `compact` its sheets are
-	 *  given `undefined`, never this callback, because Timing is the fallback. */
+	 *  given `undefined`, never this callback, because Timing is the fallback: a
+	 *  Timing sheet still too long at compact paginates onto continuation sheets
+	 *  (#1227) instead of being told to the caller. */
 	onWouldFlow?: () => void;
 	/** The density the print starts at (#1226). Absent is `regular`, which is what
 	 *  the route always wants: `MeetingAgendaPrint` climbs to `compact` itself, and
@@ -2300,6 +2306,566 @@ function BigThemeCard({
 const TIMING_ROLE_W = 190;
 const TIMING_MARKS_W = 110;
 
+/** The height a sheet's capacity keeps back when Timing is paginated (#1227).
+ *  `FitPage` leaves a sheet alone while its content is at most the page height,
+ *  and a measured sum of fractional heights can land a hair over; 2px is its own
+ *  "content == page height" guard, and a sheet that still overshoots by a pixel
+ *  scales by a rounding error instead of flowing. */
+const PAGINATE_SLACK_PX = 2;
+
+/** Timing page 2's title bar: the sheet's heading and the meeting's time range. */
+function TimingTitleBar({ header }: { header: AgendaHeader }) {
+	return (
+		<div
+			style={{
+				display: "flex",
+				alignItems: "baseline",
+				justifyContent: "space-between",
+				borderBottom: `3px solid ${TEAL}`,
+				paddingBottom: 11,
+				marginBottom: 14,
+			}}
+		>
+			<div style={{ font: `600 24px ${SERIF}`, color: INK }}>
+				Run of Show — Detailed Timing
+			</div>
+			<div style={{ fontSize: 11, color: MUTED, fontWeight: 600 }}>
+				{header.timeRange}
+			</div>
+		</div>
+	);
+}
+
+/** The run-of-show table's dark column header. Repeated on every continuation
+ *  sheet (#1227), so a row at the top of a later sheet still reads as a row of
+ *  the same table. */
+function TimingTableHead() {
+	return (
+		<div
+			style={{
+				display: "flex",
+				alignItems: "center",
+				background: INK,
+				color: "#fff",
+				borderRadius: "8px 8px 0 0",
+				padding: "7px 12px",
+				fontSize: 9,
+				textTransform: "uppercase",
+				letterSpacing: ".05em",
+				fontWeight: 800,
+			}}
+		>
+			<div style={{ flex: "none", width: 46 }}>Time</div>
+			<div style={{ flex: "none", width: TIMING_ROLE_W }}>Role</div>
+			<div style={{ flex: 1 }}>Segment</div>
+			<div
+				style={{
+					flex: "none",
+					width: TIMING_MARKS_W,
+					textAlign: "center",
+				}}
+			>
+				Green · Yellow · Red
+			</div>
+		</div>
+	);
+}
+
+/** The box the run-of-show rows sit in. `marker` (paginated sheets only) names
+ *  it for the tests: it is the region whose text is the run of show. */
+function TimingFrame({
+	marker,
+	children,
+}: {
+	marker?: boolean;
+	children: React.ReactNode;
+}) {
+	return (
+		<div
+			{...(marker ? { "data-run-of-show": "" } : {})}
+			style={{
+				border: "1px solid rgba(23,58,64,.12)",
+				borderTop: "none",
+				borderRadius: "0 0 8px 8px",
+				overflow: "hidden",
+			}}
+		>
+			{children}
+		</div>
+	);
+}
+
+/** The announcements (or, with none, the notes lines) under the run of show.
+ *  With `marker` it is the measured tail of a paginated run (#1227): it prints
+ *  once, under the last row. */
+function TimingTail({
+	header,
+	marker,
+}: {
+	header: AgendaHeader;
+	marker?: boolean;
+}) {
+	return (
+		// #721 — same as the spacious run of show above: the compact 206px votes
+		// panel is gone and this block takes the full width rather than leaving a
+		// column of nothing beside it.
+		<div {...(marker ? { "data-run-tail": "" } : {})} style={{ marginTop: 18 }}>
+			{announcementLines(header.announcements).length > 0 ? (
+				<AnnouncementsBlock text={header.announcements} />
+			) : (
+				<NotesBlock lines={4} />
+			)}
+		</div>
+	);
+}
+
+/** One entry of Timing's run of show: a section band, a hand-off band, or a
+ *  row. `stripe` is its place in the whole run (odd ones are tinted), `last`
+ *  whether it is the last thing in its box (no hairline under it). */
+function TimingEntry({
+	item,
+	stripe,
+	last,
+	compact,
+}: {
+	item: RowItem<TimelineRow>;
+	stripe: number;
+	last: boolean;
+	compact: boolean;
+}) {
+	const { entry: r, folded } = item;
+	// The one place with a real column header, so the band keeps the
+	// table's stripe and rule and spans the Role + Segment columns
+	// as one line — starting at 58px, the Role column's own edge —
+	// rather than filling four cells with a stampless echo of the
+	// row below it.
+	// A templated agenda's segment header, before the handoff arm.
+	// This layout splits `who` on " · " into a TIMING_ROLE_W Role column,
+	// so a section falling through would have its title parsed as
+	// a role/holder pair and stamped with a clock.
+	if (r.section)
+		return (
+			<SectionBand
+				row={r}
+				fontSize={10}
+				padding={compact ? "3px 12px 2px 12px" : "6px 12px 4px 12px"}
+			/>
+		);
+	if (r.handoff)
+		return (
+			<HandoffBand
+				row={r}
+				fontSize={10}
+				padding="3px 12px 3px 58px"
+				chrome={{
+					background: stripe % 2 === 1 ? "#fafdfb" : "#fff",
+					borderBottom: last ? undefined : HAIR,
+				}}
+				// Two-page layout: the speakers can be overleaf (#578).
+				nameTheGroup
+			/>
+		);
+	// The two halves come off the ROW now (#463), not out of a split.
+	// This used to be `r.who.split(" · ")`, and both directions of that
+	// split were wrong in general: since #445 the role half is the
+	// club's own free text, so a role named "Timer · Assistant" shifted
+	// text into the name column — while the holder half carries the
+	// separator too on a guest row ("Speaker 1 · Jane · Guest"), so a
+	// last-split broke that instead.
+	//
+	// The `??` fallback is for rows that carry no halves: event and
+	// section beats, whose `who` is a whole label with no holder. Those
+	// were never ambiguous, and splitting them was already a no-op.
+	const role = r.roleLabel ?? r.who;
+	const name = r.holder ?? "";
+	return (
+		<RowShell
+			compact={compact}
+			folded={folded}
+			foldedPadding="1px 12px 0 58px"
+			// Two-page layout: the speakers can be overleaf (#578).
+			nameTheGroup
+			rowStyle={{
+				alignItems: "center",
+				padding: compact ? "2px 12px" : "4px 12px",
+			}}
+			chrome={{
+				borderBottom: last ? undefined : HAIR,
+				background: isHighlighted(r)
+					? MINT
+					: stripe % 2 === 1
+						? "#fafdfb"
+						: "#fff",
+			}}
+		>
+			{/* Test hook — see `RunNarrative`'s note on `data-row-time`. */}
+			<div
+				data-row-time={r.time}
+				style={{
+					flex: "none",
+					width: 46,
+					fontSize: 11,
+					fontWeight: 800,
+					color: INK,
+				}}
+			>
+				{r.time}
+			</div>
+			<div
+				style={{
+					flex: "none",
+					width: TIMING_ROLE_W,
+					fontSize: 10.5,
+					fontWeight: name ? 700 : 600,
+					color: INK,
+				}}
+			>
+				{role}
+				{name ? (
+					<span style={{ fontWeight: 600, color: MUTED }}>
+						{" · "}
+						{name}
+					</span>
+				) : null}
+			</div>
+			<div
+				style={{
+					flex: 1,
+					fontSize: 10.5,
+					color: MUTED,
+					whiteSpace: "pre-line",
+				}}
+			>
+				{r.detail}
+			</div>
+			<div
+				style={{
+					flex: "none",
+					width: TIMING_MARKS_W,
+					display: "flex",
+					justifyContent: "center",
+					gap: 11,
+				}}
+			>
+				{r.marks ? (
+					<>
+						<span
+							style={{
+								fontSize: 10,
+								color: GREEN,
+								fontWeight: 700,
+							}}
+						>
+							{mark(r.marks.green)}
+						</span>
+						<span
+							style={{
+								fontSize: 10,
+								color: YELLOW,
+								fontWeight: 700,
+							}}
+						>
+							{mark(r.marks.yellow)}
+						</span>
+						<span style={{ fontSize: 10, color: RED, fontWeight: 700 }}>
+							{mark(r.marks.red)}
+						</span>
+					</>
+				) : null}
+			</div>
+		</RowShell>
+	);
+}
+
+/** The slim band that heads sheets 3..N of a paginated Timing (#1227): the club
+ *  and the date on the left, which page this is on the right. In `HeaderBand`'s
+ *  colours, at a fixed 44px so it costs every continuation sheet the same, and
+ *  one line each side whatever the club is called. */
+function TimingContinuationHeader({
+	header,
+	k,
+	total,
+}: {
+	header: AgendaHeader;
+	k: number;
+	total: number;
+}) {
+	return (
+		<div
+			data-continuation-header=""
+			style={{
+				height: 44,
+				boxSizing: "border-box",
+				background: `linear-gradient(125deg, ${LAGOON}, ${INK})`,
+				color: "#fff",
+				padding: "0 38px",
+				display: "flex",
+				alignItems: "center",
+				justifyContent: "space-between",
+				gap: 16,
+			}}
+		>
+			<div
+				style={{
+					minWidth: 0,
+					overflow: "hidden",
+					textOverflow: "ellipsis",
+					whiteSpace: "nowrap",
+					font: `600 15px ${SERIF}`,
+				}}
+			>
+				{[header.clubName, header.dateLong].filter(Boolean).join("  ·  ")}
+			</div>
+			<div
+				style={{
+					flex: "none",
+					whiteSpace: "nowrap",
+					fontSize: 11,
+					fontWeight: 700,
+					letterSpacing: ".03em",
+					color: SEAFOAM,
+				}}
+			>
+				{`Run of show, continued · Page ${k} of ${total}`}
+			</div>
+		</div>
+	);
+}
+
+type TimingRunSheetProps = {
+	header: AgendaHeader;
+	qrUrl?: string;
+	compact: boolean;
+	/** The whole run, folded (`foldHandoffs`). */
+	items: RowItem<TimelineRow>[];
+	/** Null: every entry and the tail on this one sheet, as Timing has always
+	 *  printed. Else the units (`unitsOf`: item positions) a paginated run is
+	 *  packed from, and `unitIds` the ones on THIS sheet; the id `units.length`
+	 *  is the tail. */
+	units: number[][] | null;
+	unitIds?: readonly number[];
+	/** This sheet's place in the sheets of the agenda, page 1 being the roster. */
+	k: number;
+	total: number;
+	/** Sheets 3..N: the slim header instead of the title bar. */
+	continued?: boolean;
+	/** Measuring only: draw the (V) key whether or not a row needs it, so the
+	 *  footer is measured at its tallest. */
+	forceLegend?: boolean;
+	marker?: boolean;
+};
+
+/** Timing's run-of-show sheet: page 2 as it has always been (`units` null), or
+ *  any sheet of a paginated run (#1227). The footer, QR included, is the same
+ *  `DarkFooter` on every one, and each decides its own (V) legend from the rows
+ *  it shows. */
+function TimingRunSheet({
+	header,
+	qrUrl,
+	compact,
+	items,
+	units,
+	unitIds,
+	k,
+	total,
+	continued,
+	forceLegend,
+	marker,
+}: TimingRunSheetProps) {
+	const ids = unitIds ?? [];
+	const shownUnits = units ? ids.filter((u) => u < units.length) : [];
+	const shown = units
+		? shownUnits.flatMap((u) => units[u])
+		: items.map((_, p) => p);
+	const lastShown = shown.at(-1);
+	const hasTail = units ? ids.includes(units.length) : true;
+	const legend =
+		forceLegend ||
+		sheetLegend({
+			rows: shown.flatMap((p) => [...items[p].folded, items[p].entry]),
+		})
+			? VISITING_TOASTMASTER_LEGEND
+			: undefined;
+	const entry = (p: number) => (
+		<TimingEntry
+			key={rowKey(items[p].entry, items[p].index)}
+			item={items[p]}
+			stripe={p}
+			last={p === lastShown}
+			compact={compact}
+		/>
+	);
+	return (
+		<>
+			{continued ? (
+				<TimingContinuationHeader header={header} k={k} total={total} />
+			) : null}
+			<div
+				style={{
+					padding: continued ? "16px 44px 0" : "28px 44px 0",
+					flex: 1,
+					display: "flex",
+					flexDirection: "column",
+				}}
+			>
+				{continued ? null : <TimingTitleBar header={header} />}
+				<TimingTableHead />
+				<TimingFrame marker={marker}>
+					{units
+						? shownUnits.map((u) => (
+								<div
+									key={u}
+									data-unit=""
+									// `flow-root`, so a section band's top margin stays inside the
+									// unit and the unit's height is what it really costs.
+									style={{ display: "flow-root" }}
+								>
+									{units[u].map(entry)}
+								</div>
+							))
+						: shown.map(entry)}
+				</TimingFrame>
+				{hasTail ? <TimingTail header={header} marker={marker} /> : null}
+			</div>
+			<DarkFooter
+				left={`Page ${k} of ${total} · Detailed run of show`}
+				right={`${header.clubName}`}
+				qrUrl={qrUrl}
+				legend={legend}
+			/>
+		</>
+	);
+}
+
+/** Where Timing's paginated run is measured (#1227): off-screen, at scale 1, at
+ *  sheet width, both the whole run (every unit's height, and what is NOT a unit:
+ *  title, table header, footer, tail) and an empty continuation sheet (its
+ *  chrome). Rendered only while the answer is wanted, then unmounted. Reads
+ *  after `document.fonts.ready`, the same wait `FitPage` makes, so the heights
+ *  are the printed ones. */
+function TimingMeasure({
+	header,
+	qrUrl,
+	compact,
+	items,
+	units,
+	onMeasured,
+}: {
+	header: AgendaHeader;
+	qrUrl?: string;
+	compact: boolean;
+	items: RowItem<TimelineRow>[];
+	units: number[][];
+	onMeasured: (pages: number[][]) => void;
+}) {
+	const fullRef = useRef<HTMLDivElement>(null);
+	const emptyRef = useRef<HTMLDivElement>(null);
+	const doneRef = useRef(onMeasured);
+	doneRef.current = onMeasured;
+	useEffect(() => {
+		let cancelled = false;
+		const measure = () => {
+			const full = fullRef.current;
+			const empty = emptyRef.current;
+			if (cancelled || !full || !empty) return;
+			const height = (el: Element) => el.getBoundingClientRect().height;
+			const unitHeights = [...full.querySelectorAll("[data-unit]")].map(height);
+			const tail = full.querySelector("[data-run-tail]");
+			// The tail's top margin sits outside its box, and is part of what it costs.
+			const tailHeight = tail
+				? height(tail) +
+					Number.parseFloat(getComputedStyle(tail).marginTop || "0")
+				: 0;
+			const used = unitHeights.reduce((a, b) => a + b, 0) + tailHeight;
+			const firstChrome = height(full) - used;
+			const restChrome = height(empty);
+			doneRef.current(
+				paginate(
+					[...unitHeights, tailHeight],
+					PAGE_H - firstChrome - PAGINATE_SLACK_PX,
+					PAGE_H - restChrome - PAGINATE_SLACK_PX,
+				),
+			);
+		};
+		const fonts = (
+			document as Document & { fonts?: { ready: Promise<unknown> } }
+		).fonts;
+		if (fonts?.ready) fonts.ready.then(measure);
+		else measure();
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+	const probe: React.CSSProperties = {
+		position: "absolute",
+		left: -99999,
+		top: 0,
+		visibility: "hidden",
+		pointerEvents: "none",
+		width: PAGE_W,
+		// What `PAGE_OUTER` gives a real sheet and every cell inherits: outside a
+		// sheet the probe would lay out in the page's own face, and measure heights
+		// no printed sheet has (33px rows came out 27px).
+		fontFamily: SANS,
+		color: INK,
+		display: "flex",
+		flexDirection: "column",
+	};
+	const common = {
+		header,
+		qrUrl,
+		compact,
+		items,
+		units,
+		forceLegend: true,
+		marker: true,
+	};
+	return (
+		<>
+			<div
+				ref={fullRef}
+				data-paginate-probe=""
+				aria-hidden="true"
+				style={probe}
+			>
+				<TimingRunSheet
+					{...common}
+					unitIds={[...units.keys(), units.length]}
+					k={2}
+					total={2}
+				/>
+			</div>
+			<div
+				ref={emptyRef}
+				data-paginate-probe=""
+				aria-hidden="true"
+				style={probe}
+			>
+				<TimingRunSheet {...common} unitIds={[]} k={3} total={3} continued />
+			</div>
+		</>
+	);
+}
+
+/** The units Timing's run is packed from (#1227): each folded entry's place in
+ *  its presenter group (`groupByPresenter`, on the rows as they were before
+ *  folding), with sections and unfolded hand-off bands marked as heads. */
+function timingUnits(
+	rows: readonly TimelineRow[],
+	items: readonly RowItem<TimelineRow>[],
+): number[][] {
+	const groupOf: number[] = [];
+	groupByPresenter([...rows]).forEach((g, gi) => {
+		for (const _ of g.rows) groupOf.push(gi);
+	});
+	return unitsOf(
+		items.map((it) => ({
+			group: groupOf[it.index] ?? it.index,
+			head: Boolean(it.entry.section || it.entry.handoff),
+		})),
+	);
+}
+
 function TimingLayout({
 	header,
 	roles,
@@ -2313,9 +2879,33 @@ function TimingLayout({
 }: LayoutProps & Pick<Props, "explainers">) {
 	// Page 1 carries the roster, page 2 the timing table; each decides for itself.
 	const page1Legend = sheetLegend({ roles });
-	const page2Legend = sheetLegend({ rows });
 	const compact = density === "compact";
 	const timingItems = foldHandoffs(rows, (r) => r, density);
+	// A run still too long for sheet 2 at compact (#1227): its sheet 2 reported
+	// that it would flow, so the run is measured and packed onto sheet 2 and as
+	// many continuation sheets as it needs. The plan is keyed by everything the
+	// measured heights are made of, so a change to any of it measures again
+	// instead of printing the old sheet plan: a new density or agenda (`fitKey`),
+	// the QR (its footer is 16px taller with one), and the header text the sheets
+	// print (announcements are the tail's whole height; the club name and date
+	// head every continuation sheet, the time range the title bar).
+	const [flowedKey, setFlowedKey] = useState<string | null>(null);
+	const [measured, setMeasured] = useState<{
+		key: string;
+		pages: number[][];
+	} | null>(null);
+	const flowed = compact && flowedKey === fitKey;
+	const planKey = JSON.stringify([
+		fitKey,
+		Boolean(qrUrl),
+		header.announcements,
+		header.clubName,
+		header.dateLong,
+		header.timeRange,
+	]);
+	const pages = flowed && measured?.key === planKey ? measured.pages : null;
+	const total = pages ? 1 + pages.length : 2;
+	const units = flowed ? timingUnits(rows, timingItems) : [];
 	return (
 		<TwoPage>
 			{/* PAGE 1 — roles, signals, officers, explainers */}
@@ -2540,250 +3130,63 @@ function TimingLayout({
 				    scale leaves alone does, including spacious page 2, which is long
 				    enough to take `FitPage`'s FLOW branch instead. */}
 				<DarkFooter
-					left="Page 1 of 2 · Officers & roles"
+					left={`Page 1 of ${total} · Officers & roles`}
 					right="toastmasters.org"
 					qrUrl={qrUrl}
 					legend={page1Legend}
 				/>
 			</FitPage>
 
-			{/* PAGE 2 — detailed timing table */}
-			<FitPage key={`2${fitKey}`} onWouldFlow={onWouldFlow}>
-				<div
-					style={{
-						padding: "28px 44px 0",
-						flex: 1,
-						display: "flex",
-						flexDirection: "column",
-					}}
-				>
-					<div
-						style={{
-							display: "flex",
-							alignItems: "baseline",
-							justifyContent: "space-between",
-							borderBottom: `3px solid ${TEAL}`,
-							paddingBottom: 11,
-							marginBottom: 14,
-						}}
+			{/* PAGE 2 (and, when the run is too long for one sheet at compact, the
+			    continuation sheets after it, #1227) — detailed timing table */}
+			{pages ? (
+				pages.map((unitIds, p) => (
+					<FitPage key={`p${unitIds.join("-")}|${planKey}`}>
+						<TimingRunSheet
+							header={header}
+							qrUrl={qrUrl}
+							compact={compact}
+							items={timingItems}
+							units={units}
+							unitIds={unitIds}
+							k={p + 2}
+							total={total}
+							continued={p > 0}
+							marker
+						/>
+					</FitPage>
+				))
+			) : (
+				<>
+					<FitPage
+						key={`2${fitKey}`}
+						// At compact this sheet is the last resort, so a sheet that still
+						// flows there is paginated (#1227) instead of told to the caller.
+						onWouldFlow={compact ? () => setFlowedKey(fitKey) : onWouldFlow}
 					>
-						<div style={{ font: `600 24px ${SERIF}`, color: INK }}>
-							Run of Show — Detailed Timing
-						</div>
-						<div style={{ fontSize: 11, color: MUTED, fontWeight: 600 }}>
-							{header.timeRange}
-						</div>
-					</div>
-
-					{/* table header */}
-					<div
-						style={{
-							display: "flex",
-							alignItems: "center",
-							background: INK,
-							color: "#fff",
-							borderRadius: "8px 8px 0 0",
-							padding: "7px 12px",
-							fontSize: 9,
-							textTransform: "uppercase",
-							letterSpacing: ".05em",
-							fontWeight: 800,
-						}}
-					>
-						<div style={{ flex: "none", width: 46 }}>Time</div>
-						<div style={{ flex: "none", width: TIMING_ROLE_W }}>Role</div>
-						<div style={{ flex: 1 }}>Segment</div>
-						<div
-							style={{
-								flex: "none",
-								width: TIMING_MARKS_W,
-								textAlign: "center",
-							}}
-						>
-							Green · Yellow · Red
-						</div>
-					</div>
-
-					<div
-						style={{
-							border: "1px solid rgba(23,58,64,.12)",
-							borderTop: "none",
-							borderRadius: "0 0 8px 8px",
-							overflow: "hidden",
-						}}
-					>
-						{timingItems.map(({ entry: r, index: i, folded }, k) => {
-							// The one place with a real column header, so the band keeps the
-							// table's stripe and rule and spans the Role + Segment columns
-							// as one line — starting at 58px, the Role column's own edge —
-							// rather than filling four cells with a stampless echo of the
-							// row below it.
-							// A templated agenda's segment header, before the handoff arm.
-							// This layout splits `who` on " · " into a TIMING_ROLE_W Role column,
-							// so a section falling through would have its title parsed as
-							// a role/holder pair and stamped with a clock.
-							if (r.section)
-								return (
-									<SectionBand
-										key={rowKey(r, i)}
-										row={r}
-										fontSize={10}
-										padding={
-											compact ? "3px 12px 2px 12px" : "6px 12px 4px 12px"
-										}
-									/>
-								);
-							if (r.handoff)
-								return (
-									<HandoffBand
-										key={rowKey(r, i)}
-										row={r}
-										fontSize={10}
-										padding="3px 12px 3px 58px"
-										chrome={{
-											background: k % 2 === 1 ? "#fafdfb" : "#fff",
-											borderBottom:
-												k < timingItems.length - 1 ? HAIR : undefined,
-										}}
-										// Two-page layout: the speakers can be overleaf (#578).
-										nameTheGroup
-									/>
-								);
-							// The two halves come off the ROW now (#463), not out of a split.
-							// This used to be `r.who.split(" · ")`, and both directions of that
-							// split were wrong in general: since #445 the role half is the
-							// club's own free text, so a role named "Timer · Assistant" shifted
-							// text into the name column — while the holder half carries the
-							// separator too on a guest row ("Speaker 1 · Jane · Guest"), so a
-							// last-split broke that instead.
-							//
-							// The `??` fallback is for rows that carry no halves: event and
-							// section beats, whose `who` is a whole label with no holder. Those
-							// were never ambiguous, and splitting them was already a no-op.
-							const role = r.roleLabel ?? r.who;
-							const name = r.holder ?? "";
-							return (
-								<RowShell
-									key={rowKey(r, i)}
-									compact={compact}
-									folded={folded}
-									foldedPadding="1px 12px 0 58px"
-									// Two-page layout: the speakers can be overleaf (#578).
-									nameTheGroup
-									rowStyle={{
-										alignItems: "center",
-										padding: compact ? "2px 12px" : "4px 12px",
-									}}
-									chrome={{
-										borderBottom: k < timingItems.length - 1 ? HAIR : undefined,
-										background: isHighlighted(r)
-											? MINT
-											: k % 2 === 1
-												? "#fafdfb"
-												: "#fff",
-									}}
-								>
-									{/* Test hook — see `RunNarrative`'s note on `data-row-time`. */}
-									<div
-										data-row-time={r.time}
-										style={{
-											flex: "none",
-											width: 46,
-											fontSize: 11,
-											fontWeight: 800,
-											color: INK,
-										}}
-									>
-										{r.time}
-									</div>
-									<div
-										style={{
-											flex: "none",
-											width: TIMING_ROLE_W,
-											fontSize: 10.5,
-											fontWeight: name ? 700 : 600,
-											color: INK,
-										}}
-									>
-										{role}
-										{name ? (
-											<span style={{ fontWeight: 600, color: MUTED }}>
-												{" · "}
-												{name}
-											</span>
-										) : null}
-									</div>
-									<div
-										style={{
-											flex: 1,
-											fontSize: 10.5,
-											color: MUTED,
-											whiteSpace: "pre-line",
-										}}
-									>
-										{r.detail}
-									</div>
-									<div
-										style={{
-											flex: "none",
-											width: TIMING_MARKS_W,
-											display: "flex",
-											justifyContent: "center",
-											gap: 11,
-										}}
-									>
-										{r.marks ? (
-											<>
-												<span
-													style={{
-														fontSize: 10,
-														color: GREEN,
-														fontWeight: 700,
-													}}
-												>
-													{mark(r.marks.green)}
-												</span>
-												<span
-													style={{
-														fontSize: 10,
-														color: YELLOW,
-														fontWeight: 700,
-													}}
-												>
-													{mark(r.marks.yellow)}
-												</span>
-												<span
-													style={{ fontSize: 10, color: RED, fontWeight: 700 }}
-												>
-													{mark(r.marks.red)}
-												</span>
-											</>
-										) : null}
-									</div>
-								</RowShell>
-							);
-						})}
-					</div>
-
-					{/* #721 — same as the spacious run of show above: the compact
-					    206px votes panel is gone and this block takes the full width
-					    rather than leaving a column of nothing beside it. */}
-					<div style={{ marginTop: 18 }}>
-						{announcementLines(header.announcements).length > 0 ? (
-							<AnnouncementsBlock text={header.announcements} />
-						) : (
-							<NotesBlock lines={4} />
-						)}
-					</div>
-				</div>
-
-				<DarkFooter
-					left="Page 2 of 2 · Detailed run of show"
-					right={`${header.clubName}`}
-					qrUrl={qrUrl}
-					legend={page2Legend}
-				/>
-			</FitPage>
+						<TimingRunSheet
+							header={header}
+							qrUrl={qrUrl}
+							compact={compact}
+							items={timingItems}
+							units={null}
+							k={2}
+							total={2}
+						/>
+					</FitPage>
+					{flowed ? (
+						<TimingMeasure
+							key={planKey}
+							header={header}
+							qrUrl={qrUrl}
+							compact={compact}
+							items={timingItems}
+							units={units}
+							onMeasured={(next) => setMeasured({ key: planKey, pages: next })}
+						/>
+					) : null}
+				</>
+			)}
 		</TwoPage>
 	);
 }
@@ -2967,8 +3370,8 @@ export function MeetingAgendaPrint({
 		// Any sheet that would flow moves the WHOLE layout down a rung, so a
 		// two-sheet layout's sheets always match. At `compact` the caller is told,
 		// except for Timing: it IS the fallback, so a Timing sheet still too long at
-		// compact keeps today's flow (until #1227) whatever the caller passed, or the
-		// route would announce a fallback "from Timing to Timing".
+		// compact is paginated by `TimingLayout` (#1227) whatever the caller passed,
+		// or the route would announce a fallback "from Timing to Timing".
 		onWouldFlow:
 			density === "regular"
 				? () => setDensity("compact")

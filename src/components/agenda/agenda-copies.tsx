@@ -84,7 +84,11 @@ export function AgendaCopiesStack({
 				// biome-ignore lint/suspicious/noArrayIndexKey: copies are identical and never reorder
 				<Fragment key={i}>
 					{i > 0 && blanks[i - 1] ? <BlankSheet /> : null}
-					<MeetingAgendaPrint {...agenda} />
+					{/* `display: contents`: the wrapper only names the copy's sheets, it
+					    draws no box and leaves the stack's flex layout as it was. */}
+					<div data-agenda-copy="" style={{ display: "contents" }}>
+						<MeetingAgendaPrint {...agenda} />
+					</div>
 				</Fragment>
 			))}
 		</div>
@@ -131,16 +135,22 @@ export function AgendaCopies({
 				),
 			);
 		const measure = () => {
-			const sheets = sheetsNow();
-			// Every copy is `nominal` sheets, in document order: a layout's sheet
-			// count does not change when its content overflows, only a sheet's height.
+			// Each copy's own sheets, counted in the copy (#1227): a layout's sheet
+			// count is `nominal` only until Timing paginates a run that is too long
+			// for two sheets, and then it is however many that took.
+			const copySheets = Array.from(
+				root.querySelectorAll<HTMLElement>("[data-agenda-copy]"),
+			).map((copy) =>
+				Array.from(copy.querySelectorAll<HTMLElement>(".agenda-page")),
+			);
 			const next = Array.from({ length: count }, (_, i) => {
-				let pages = 0;
-				for (let j = 0; j < nominal; j++) {
-					const sheet = sheets[i * nominal + j];
-					pages += sheet ? sheetPages(sheet.offsetHeight) : 1;
-				}
-				return pages;
+				const sheets = copySheets[i];
+				// No sheets yet for this copy: it is about to draw, and prints `nominal`.
+				if (!sheets || sheets.length === 0) return nominal as number;
+				return sheets.reduce(
+					(pages, sheet) => pages + sheetPages(sheet.offsetHeight),
+					0,
+				);
 			});
 			setMeasured((prev) =>
 				prev &&
