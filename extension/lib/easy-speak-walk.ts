@@ -17,7 +17,9 @@
  *    is never kept, in the store or in `raw`.
  *  - All or nothing: a page that fails, or is not the page it should be (the
  *    login form, say), aborts the walk with a message naming it. The store keeps
- *    what was fetched, so pressing Resume costs nothing already done. The one
+ *    what was fetched, so pressing Resume costs nothing already done. Before
+ *    that, a 5xx or a failed request is asked once more after `RETRY_WAIT_MS`:
+ *    Easy-Speak being slow for a moment should not stop a long walk. The one
  *    exception is evaluations, which are best-effort (a member sees only their
  *    own, usually none). Only a failed request, an error status or a page that
  *    is not signed in is forgiven there; a bug in a parser still aborts.
@@ -65,6 +67,12 @@ import {
 } from "./easy-speak-parse";
 
 export const MIN_GAP_MS = 1000;
+/**
+ * A 5xx (Cloudflare's 524: Easy-Speak took over 100s) or a failed request is usually
+ * Easy-Speak being slow for a moment. Over a 700-meeting walk one is likely, so the
+ * page is asked once more after this pause before the walk stops for Resume.
+ */
+export const RETRY_WAIT_MS = 30_000;
 /** A stored session older than this is not resumed: the club has moved on. */
 export const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 /** A reload within this long of the last page picks the walk up at once; older waits for the Resume button. */
@@ -495,31 +503,37 @@ async function walk(
 		let entry = cached;
 		let value: T;
 		if (!entry) {
-			const wait = lastStart + gap - now();
-			if (wait > 0) await deps.sleep(wait);
-			lastStart = now();
-			// The heartbeat. It fails only if another tab's lease is live: ours lapsed
-			// (a suspended tab) and they took over.
-			if (!(await acquireLease(store, deps.owner, now()))) {
-				throw new LeaseError("Another Easy-Speak tab took over this export.");
-			}
-			progress(spec.label);
 			let res: FetchResponseLike;
-			try {
-				res = await deps.fetchImpl(spec.url, {
-					credentials: "include",
-					...(spec.json ? { headers: { Accept: "application/json" } } : {}),
-					...spec.init,
-				});
-			} catch (err) {
-				throw new WalkError(
-					`Easy-Speak request failed (${spec.label}): ${(err as Error).message}`,
-				);
-			}
-			if (!res.ok) {
-				throw new WalkError(
-					`Easy-Speak returned ${res.status} for ${spec.label}.`,
-				);
+			// Twice at most: a 5xx or a failed request is asked again after RETRY_WAIT_MS; a 4xx is not.
+			for (let tries = 1; ; tries++) {
+				const wait = lastStart + gap - now();
+				if (wait > 0) await deps.sleep(wait);
+				lastStart = now();
+				// The heartbeat. It fails only if another tab's lease is live: ours lapsed
+				// (a suspended tab, a slow request, the retry's pause) and they took over.
+				if (!(await acquireLease(store, deps.owner, now()))) {
+					throw new LeaseError("Another Easy-Speak tab took over this export.");
+				}
+				progress(spec.label);
+				let failure: string | undefined;
+				try {
+					res = await deps.fetchImpl(spec.url, {
+						credentials: "include",
+						...(spec.json ? { headers: { Accept: "application/json" } } : {}),
+						...spec.init,
+					});
+				} catch (err) {
+					res = { ok: false, status: 0, text: async () => "" };
+					failure = `Easy-Speak request failed (${spec.label}): ${(err as Error).message}.`;
+				}
+				if (res.ok) break;
+				failure ??= `Easy-Speak returned ${res.status} for ${spec.label}.`;
+				if (res.status >= 400 && res.status < 500) throw new WalkError(failure);
+				if (tries >= 2) {
+					throw new WalkError(`${failure} Tried twice, ${RETRY_WAIT_MS / 1000}s apart.`);
+				}
+				progress(`${failure} Trying again in ${RETRY_WAIT_MS / 1000}s.`);
+				await deps.sleep(RETRY_WAIT_MS);
 			}
 			const body = await res.text();
 			const doc = spec.json ? null : deps.parseHtml(body);

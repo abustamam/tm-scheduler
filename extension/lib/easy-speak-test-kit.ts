@@ -131,6 +131,8 @@ export function fakeEasySpeak(opts: {
 	clock: () => number;
 	log: FakeRequest[];
 	failOn?: (url: string) => boolean;
+	/** The status a `failOn` request answers with. Default 500. */
+	failStatus?: number;
 	/** The body to answer a request with instead of the fixture (a 200). First non-undefined wins. */
 	override?: (url: string, init: RequestInit) => string | undefined;
 	/** The meeting list for a year, instead of "the fixture's list for 2026, empty otherwise". */
@@ -170,7 +172,7 @@ export function fakeEasySpeak(opts: {
 			text: async () => (who ? asIdentity(html, who) : html),
 		});
 		if (opts.throwOn?.(url)) throw new Error("Failed to fetch");
-		if (opts.failOn?.(url)) return { ok: false, status: 500, text: async () => "" };
+		if (opts.failOn?.(url)) return { ok: false, status: opts.failStatus ?? 500, text: async () => "" };
 		const forced = opts.override?.(url, init);
 		if (forced !== undefined) return page(forced);
 		const u = new URL(url);

@@ -26,6 +26,7 @@ import {
 import {
 	EARLIEST_MEETING_YEAR,
 	MIN_GAP_MS,
+	RETRY_WAIT_MS,
 	readSession,
 	runExport,
 } from "./easy-speak-walk";
@@ -216,5 +217,59 @@ describe("bundle.expected.json", () => {
 		const file = fixturePath("bundle.expected.json");
 		if (process.env.UPDATE_FIXTURES === "1") writeFileSync(file, json);
 		expect(readFileSync(file, "utf8")).toBe(json);
+	});
+});
+
+// A 700-meeting walk meets a slow Easy-Speak: Cloudflare answers 524 when it takes over 100s.
+describe("a slow Easy-Speak", () => {
+	const MEETING = "view_meeting.php?t=644363";
+	/** True for the first `n` requests that match, then false. */
+	const firstTimes = (n: number, suffix: string) => {
+		let hits = 0;
+		return (u: string) => u.endsWith(suffix) && hits++ < n;
+	};
+	const asked = (log: FakeRequest[], suffix: string) => log.filter((r) => r.url.endsWith(suffix));
+
+	it("asks a page that answered 524 once more, after a pause, and finishes", async () => {
+		const s = setup({ failOn: firstTimes(1, MEETING), failStatus: 524 });
+		const { bundle } = await s.run();
+		expect(bundle.meetings).toHaveLength(3);
+		const tries = asked(s.log, MEETING);
+		expect(tries).toHaveLength(2);
+		expect(tries[1].startedAt - tries[0].startedAt).toBeGreaterThanOrEqual(RETRY_WAIT_MS);
+		expect(s.progress.some((l) => /returned 524 .* Trying again in 30s\./.test(l))).toBe(true);
+	});
+
+	it("asks again after a request that failed outright", async () => {
+		const s = setup({ throwOn: firstTimes(1, MEETING) });
+		const { bundle } = await s.run();
+		expect(bundle.meetings).toHaveLength(3);
+		expect(asked(s.log, MEETING)).toHaveLength(2);
+	});
+
+	it("stops for Resume after the second 5xx, saying it tried twice", async () => {
+		const s = setup({ failOn: (u) => u.endsWith(MEETING), failStatus: 524 });
+		await expect(s.run()).rejects.toThrow(/returned 524 for .*Tried twice, 30s apart\./);
+		expect(asked(s.log, MEETING)).toHaveLength(2);
+	});
+
+	it("does not ask again after a 4xx: Easy-Speak answered, and the answer is no", async () => {
+		const s = setup({ failOn: (u) => u.endsWith(MEETING), failStatus: 403 });
+		await expect(s.run()).rejects.toThrow(/returned 403 for/);
+		expect(asked(s.log, MEETING)).toHaveLength(1);
+	});
+
+	it("does not ask again when another tab took the export over during the pause", async () => {
+		const store = memoryStore();
+		const c = clock();
+		const failOn = (u: string) => {
+			if (!u.endsWith(MEETING)) return false;
+			// Another tab takes the lease while this one waits to ask again.
+			store.data.set("lease", { owner: "tab-b", expiresAt: c.now() + RETRY_WAIT_MS * 10 });
+			return true;
+		};
+		const s = setup({ store, clock: c, failOn, failStatus: 524 });
+		await expect(s.run()).rejects.toThrow(/Another Easy-Speak tab took over/);
+		expect(asked(s.log, MEETING)).toHaveLength(1);
 	});
 });
