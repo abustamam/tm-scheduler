@@ -163,13 +163,20 @@ null` for them) or anyone's evaluations but their own (`evaluations: []` is a va
   and `unlimitedStorage` would be a second new permission.
 - **Permissions:** the one new entry is the host `https://easy-speak.org/*`. No other permission.
 - **Contact details:** `memberlist.php` and `clubdata.php` are parsed for names, status and the club's
-  facts, and never stored (not in `raw`, and the resume store keeps only the parsed result). The
+  facts, and never stored (not in the archive file, and the resume store keeps only the parsed result). The
   `people` and `club` sections hold no phone number or email.
 - **The bundle** is `gavelup.easy-speak-bundle` v1. The canonical contract is the zod schema in
   `src/lib/easy-speak-bundle.ts`; `lib/easy-speak-bundle.ts` is the extension's own TypeScript copy,
   and `lib/__fixtures__/easy-speak/bundle.expected.json` (produced by the extension's tests, parsed
-  by a root test with the schema) keeps the two from drifting. Each fetched page's HTML is also kept
-  in `raw`, so a parser bug can be fixed later from the file.
+  by a root test with the schema) keeps the two from drifting. The upload bundle's `raw` is `[]`
+  (it stays in the schema so an older export, which still carries pages, uploads if it fits the
+  50 MB cap). An export saves **two files**, the bundle first and then
+  `easy-speak-<club>-<date>-pages.json`, the archive. Upload only the bundle; keep the archive so a
+  parser bug can be fixed later from the pages. The archive is
+  `{ format: "gavelup.easy-speak-archive", version: 1, esClubId, exportedAt, pages: [{ url, fetchedAt, html }] }`;
+  `esClubId` and `exportedAt` match the bundle's `club.esClubId` and `exportedAt`. The split is the pure
+  `splitArchive` in `lib/easy-speak-bundle.ts`. The status line names both files; if the browser blocks
+  the second download, allow multiple downloads for the site and export again.
 - **Fixtures** are saved pages rewritten with fake names; read `lib/__fixtures__/easy-speak/README.md`
   before adding one. This repo is public.
 

@@ -82,13 +82,14 @@ describe("the evaluation requests are fenced on the account", () => {
 		await expect(first.run()).rejects.toThrow(/another account/);
 		flag.on = false;
 		const second = setup({ store, clock: first.c });
-		const { bundle } = await second.run();
+		const { bundle, archive } = await second.run();
 		const asked = second.log.map((r) => new URL(r.url).pathname);
 		expect(asked).toContain(LIST);
 		expect(asked).toContain("/api/v1/evaluations.php/eval/501");
 		expect(asked).not.toContain("/clubdata.php");
 		expect(bundle.evaluations.map((e) => e.esId).sort()).toEqual(["501", "502"]);
 		expect(JSON.stringify(bundle)).not.toContain(SECRET);
+		expect(JSON.stringify(archive)).not.toContain(SECRET);
 	});
 
 	it("asks the site for the whole batch again on a resume, the closing question included", async () => {
@@ -183,11 +184,13 @@ describe("the evaluation batch is staged in memory until the closing identity ch
 			override: (url) => (flag.on && /\/eval\/\d+$/.test(url) ? OTHERS_DETAIL : undefined),
 			failOn: (url) => url.endsWith("/eval/502"),
 		});
-		const { bundle } = await s.run();
+		const { bundle, archive } = await s.run();
 		expect(s.progress.some((l) => /evaluations skipped/.test(l))).toBe(true);
 		expect(bundle.evaluations).toEqual([]);
-		expect(bundle.raw.filter((r) => r.url.includes("/api/v1/evaluations.php"))).toEqual([]);
+		expect(archive.pages.length).toBeGreaterThan(0);
+		expect(archive.pages.filter((r) => r.url.includes("/api/v1/evaluations.php"))).toEqual([]);
 		expect(JSON.stringify(bundle)).not.toContain(SECRET);
+		expect(JSON.stringify(archive)).not.toContain(SECRET);
 		expect(evaluationEntries(store)).toEqual([]);
 		expect(JSON.stringify([...store.data.entries()])).not.toContain(SECRET);
 	});
@@ -212,11 +215,11 @@ describe("the evaluation batch is staged in memory until the closing identity ch
 		const store = memoryStore();
 		keepAtEnd(store);
 		const s = setup({ store });
-		const { bundle } = await s.run();
+		const { bundle, archive } = await s.run();
 		expect(bundle.evaluations.map((e) => e.esId).sort()).toEqual(["501", "502"]);
-		const rawPaths = bundle.raw.map((r) => new URL(r.url).pathname);
+		const rawPaths = archive.pages.map((r) => new URL(r.url).pathname);
 		expect(rawPaths).toEqual(expect.arrayContaining([LIST, DETAIL(501), DETAIL(502)]));
-		expect(bundle.raw.find((r) => r.url.endsWith("/eval/501"))?.html).toContain("Clear structure");
+		expect(archive.pages.find((r) => r.url.endsWith("/eval/501"))?.html).toContain("Clear structure");
 		expect(evaluationEntries(store)).toEqual([]);
 		// The closing check is the last request, and it is not in `raw` twice.
 		expect(new URL(s.log[s.log.length - 1].url).pathname).toBe("/my_evaluations.php");
@@ -225,9 +228,10 @@ describe("the evaluation batch is staged in memory until the closing identity ch
 
 	it("keeps an unreadable detail out of the batch as before: no evaluations, a note, the rest intact", async () => {
 		const s = setup({ failOn: (url) => url.endsWith("/eval/501") });
-		const { bundle } = await s.run();
+		const { bundle, archive } = await s.run();
 		expect(bundle.evaluations).toEqual([]);
-		expect(bundle.raw.filter((r) => r.url.includes("/api/v1/evaluations.php"))).toEqual([]);
+		expect(archive.pages.length).toBeGreaterThan(0);
+		expect(archive.pages.filter((r) => r.url.includes("/api/v1/evaluations.php"))).toEqual([]);
 		expect(bundle.meetings).toHaveLength(3);
 	});
 });

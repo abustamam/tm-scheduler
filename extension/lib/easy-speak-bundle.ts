@@ -253,3 +253,46 @@ export function bundleFileName(b: EasySpeakBundleV1): string {
 	const who = norm(b.club.number ?? b.club.esClubId).replace(/[^\w-]+/g, "-");
 	return `easy-speak-${who}-${b.exportedAt.slice(0, 10)}.json`;
 }
+
+/**
+ * The raw pages' own file (#1235). Easy-Speak's `view_meeting.php` HTML is most of an
+ * export's bytes (~195 MB for 771 meetings), and the importer never reads it, so it is saved
+ * next to the upload bundle instead of inside it. Pair the two by `esClubId` and `exportedAt`.
+ */
+export interface EasySpeakArchiveV1 {
+	format: "gavelup.easy-speak-archive";
+	version: 1;
+	esClubId: string;
+	exportedAt: string;
+	pages: EsRawPage[];
+}
+
+/** `easy-speak-<clubNumber>-<yyyy-mm-dd>-pages.json`, the bundle's name with `-pages` before the extension. */
+export function archiveFileName(b: EasySpeakBundleV1): string {
+	return bundleFileName(b).replace(/\.json$/, "-pages.json");
+}
+
+/**
+ * Split an assembled bundle into the file the importer takes (`raw: []`) and the archive that
+ * holds every page `raw` held. Pure: the pages are moved, not filtered, so the contact-page
+ * rule applied when they were collected holds for both files.
+ */
+export function splitArchive(full: EasySpeakBundleV1): {
+	bundle: EasySpeakBundleV1;
+	fileName: string;
+	archive: EasySpeakArchiveV1;
+	archiveFileName: string;
+} {
+	return {
+		bundle: { ...full, raw: [] },
+		fileName: bundleFileName(full),
+		archive: {
+			format: "gavelup.easy-speak-archive",
+			version: 1,
+			esClubId: full.club.esClubId,
+			exportedAt: full.exportedAt,
+			pages: full.raw,
+		},
+		archiveFileName: archiveFileName(full),
+	};
+}

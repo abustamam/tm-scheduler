@@ -43,7 +43,7 @@ import {
 	type ParsedSpeechRow,
 	type RequestFormInfo,
 	assembleBundle,
-	bundleFileName,
+	splitArchive,
 	isContactPage,
 } from "./easy-speak-bundle";
 import { EASY_SPEAK_ORIGIN } from "./easy-speak-hosts";
@@ -399,9 +399,12 @@ export function followResume(initial: ResumeState, deps: FollowDeps): { cancel: 
 	};
 }
 
+/** The upload bundle (`raw: []`) and the archive of raw pages, each with its file name (#1235). */
+export type ExportResult = ReturnType<typeof splitArchive>;
+
 export async function runExport(
 	deps: WalkDeps,
-): Promise<{ bundle: EasySpeakBundleV1; fileName: string }> {
+): Promise<ExportResult> {
 	// No cleanup call here: `walk` reads an expired session as none and starts fresh with its
 	// own fenced clear, after taking the lease below, so an expired export's pages go when a walk
 	// starts (a test pins it), and never from under another walker's live lease.
@@ -419,7 +422,7 @@ export async function runExport(
 
 async function walk(
 	deps: WalkDeps,
-): Promise<{ bundle: EasySpeakBundleV1; fileName: string }> {
+): Promise<ExportResult> {
 	const { store, now } = deps;
 	const gap = deps.minGapMs ?? MIN_GAP_MS;
 
@@ -853,7 +856,7 @@ async function walk(
 	// Clean up only what is still ours. A walker that lost the lease at the last moment has a
 	// complete bundle (every page was checked as it came in) and must not empty the new owner's store.
 	await store.transact([LEASE], (cur) => (asLease(cur[LEASE])?.owner === deps.owner ? { clear: true } : undefined));
-	return { bundle, fileName: bundleFileName(bundle) };
+	return splitArchive(bundle);
 }
 
 // ------------------------------------------------------------------ the real store

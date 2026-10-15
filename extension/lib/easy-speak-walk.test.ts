@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
 	type EasySpeakBundleV1,
 	isContactPage,
+	splitArchive,
 } from "./easy-speak-bundle";
 import {
 	EMAIL,
@@ -27,6 +28,7 @@ import {
 	EARLIEST_MEETING_YEAR,
 	MIN_GAP_MS,
 	RETRY_WAIT_MS,
+	type ExportResult,
 	readSession,
 	resumeState,
 	runExport,
@@ -200,14 +202,19 @@ describe("resume", () => {
 	});
 
 	it("a resumed walk produces the same bundle as an uninterrupted one", async () => {
-		const clean = (await setup().run()).bundle;
+		const cleanRun = await setup().run();
+		const clean = cleanRun.bundle;
 		const store = memoryStore();
 		const first = setup({ store, failOn: (u) => u.includes("memberchart.php?chart=7") });
 		await expect(first.run()).rejects.toThrow();
-		const resumed = (await setup({ store }).run()).bundle;
+		const resumedRun = await setup({ store }).run();
+		const resumed = resumedRun.bundle;
 		// exportedAt and fetchedAt come from the clock; everything else is the same.
 		const strip = (b: EasySpeakBundleV1) => ({ ...b, exportedAt: "", raw: b.raw.map((r) => ({ ...r, fetchedAt: "" })) });
 		expect(strip(resumed)).toEqual(strip(clean));
+		// the raw pages now live in the archive, so a resumed walk must match there too
+		const pages = (a: ExportResult["archive"]) => a.pages.map((r) => ({ ...r, fetchedAt: "" }));
+		expect(pages(resumedRun.archive)).toEqual(pages(cleanRun.archive));
 	});
 
 	it("does not resume a session that is over twelve hours old", async () => {
@@ -226,15 +233,16 @@ describe("resume", () => {
 
 describe("contact details never leave the pages that carry them", () => {
 	it("keeps memberlist.php and clubdata.php out of raw", async () => {
-		const { bundle } = await setup().run();
-		expect(bundle.raw.length).toBeGreaterThanOrEqual(15);
-		expect(bundle.raw.some((r) => isContactPage(r.url))).toBe(false);
+		const { bundle, archive } = await setup().run();
+		expect(archive.pages.length).toBeGreaterThanOrEqual(15);
+		expect(archive.pages.some((r) => isContactPage(r.url))).toBe(false);
+		expect(archive.pages.some((r) => /memberlist|clubdata/.test(r.url))).toBe(false);
 		expect(bundle.raw.some((r) => /memberlist|clubdata/.test(r.url))).toBe(false);
 	});
 
 	it("has no phone number or email in any raw page", async () => {
-		const { bundle } = await setup().run();
-		for (const r of bundle.raw) {
+		const { archive } = await setup().run();
+		for (const r of archive.pages) {
 			expect(r.html, r.url).not.toMatch(PHONE);
 			expect(r.html, r.url).not.toMatch(EMAIL);
 		}
@@ -355,5 +363,55 @@ describe("a slow Easy-Speak", () => {
 		const s = setup({ store, clock: c, failOn, failStatus: 524 });
 		await expect(s.run()).rejects.toThrow(/Another Easy-Speak tab took over/);
 		expect(asked(s.log, MEETING)).toHaveLength(1);
+	});
+});
+
+describe("the raw pages go to their own archive file (#1235)", () => {
+	it("the upload bundle carries no pages and the archive carries them all, paired by club and date", async () => {
+		const r = await setup().run();
+		expect(r.bundle.raw).toEqual([]);
+		expect(r.archive.format).toBe("gavelup.easy-speak-archive");
+		expect(r.archive.version).toBe(1);
+		expect(r.archive.esClubId).toBe(r.bundle.club.esClubId);
+		expect(r.archive.exportedAt).toBe(r.bundle.exportedAt);
+		expect(r.archive.pages.length).toBeGreaterThanOrEqual(15);
+		expect(r.archiveFileName).toBe(r.fileName.replace(/\.json$/, "-pages.json"));
+		expect(r.archiveFileName).not.toBe(r.fileName);
+	});
+
+	it("splitArchive moves the assembled pages unchanged: the archive is exactly the pre-change raw", async () => {
+		const r = await setup().run();
+		const before: EasySpeakBundleV1 = { ...r.bundle, raw: r.archive.pages };
+		const again = splitArchive(before);
+		expect(again.archive.pages).toBe(before.raw);
+		expect(again.bundle).toEqual({ ...before, raw: [] });
+		expect(again.fileName).toBe(r.fileName);
+		expect(again.archiveFileName).toBe(r.archiveFileName);
+	});
+
+	it("the upload bundle is the expected-bundle fixture's shape: raw is empty there too", () => {
+		const expected = JSON.parse(readFileSync(fixturePath("bundle.expected.json"), "utf8")) as EasySpeakBundleV1;
+		expect(expected.raw).toEqual([]);
+	});
+
+	it("a bundle for a club of hundreds of meetings is far under the 50 MB cap, however large the pages", async () => {
+		const r = await setup().run();
+		const meeting = r.bundle.meetings[0];
+		const big: EasySpeakBundleV1 = {
+			...r.bundle,
+			meetings: Array.from({ length: 800 }, (_, i) => ({ ...meeting, esMeetingId: String(i) })),
+			// 800 pages of 250 KB each is ~200 MB, the size the issue reports
+			raw: Array.from({ length: 800 }, (_, i) => ({
+				url: `https://easy-speak.org/view_meeting.php?id=${i}`,
+				fetchedAt: r.bundle.exportedAt,
+				html: "x".repeat(250_000),
+			})),
+		};
+		const split = splitArchive(big);
+		const uploadBytes = Buffer.byteLength(JSON.stringify(split.bundle));
+		const archiveBytes = Buffer.byteLength(JSON.stringify(split.archive));
+		console.log(`large club: upload bundle ${uploadBytes} bytes, archive ${archiveBytes} bytes`);
+		expect(archiveBytes).toBeGreaterThan(50 * 1024 * 1024);
+		expect(uploadBytes).toBeLessThan(5 * 1024 * 1024);
 	});
 });

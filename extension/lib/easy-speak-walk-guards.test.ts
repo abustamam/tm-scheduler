@@ -61,8 +61,8 @@ describe("walking back to the first meeting", () => {
 	});
 
 	it("keeps the lists of years with meetings in raw and leaves out the empty years", async () => {
-		const { bundle } = await setup().run();
-		const lists = bundle.raw.filter((r) => r.url.includes("meeting_list.php"));
+		const { archive } = await setup().run();
+		const lists = archive.pages.filter((r) => r.url.includes("meeting_list.php"));
 		expect(lists.map((r) => r.url)).toEqual([expect.stringContaining("start_year=2026")]);
 	});
 });
@@ -320,8 +320,9 @@ describe("a stored export belongs to the club and account that started it", () =
 			expect(JSON.stringify([...store.data.values()])).toContain(MARK);
 
 			const second = setup({ store, clock: first.c, identity: other });
-			const { bundle } = await second.run();
+			const { bundle, archive } = await second.run();
 			expect(JSON.stringify(bundle)).not.toContain(MARK);
+			expect(JSON.stringify(archive)).not.toContain(MARK);
 			// Everything was asked for again, the club page and the meeting included.
 			const paths = second.log.map((r) => r.url);
 			expect(paths).toContain(at("clubdata.php"));

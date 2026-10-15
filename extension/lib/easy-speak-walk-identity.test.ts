@@ -97,19 +97,17 @@ describe("every page is for the account and club that started the walk", () => {
 			const first = setup({ store, as: (_i, url) => (url.endsWith("view_meeting.php?t=644304") ? other : FIXTURE_IDENTITY) });
 			await expect(first.run()).rejects.toThrow(message);
 			const second = setup({ store, clock: first.c });
-			const { bundle } = await second.run();
+			const { bundle, archive } = await second.run();
 			const again = second.log.map((r) => r.url);
 			expect(again).toContain(at("view_meeting.php?t=644304"));
 			expect(again).not.toContain(at("clubdata.php"));
 			expect(again).not.toContain(at("view_meeting.php?t=644360"));
 			const whole = await setup().run();
 			// Same bundle, but for the clock: each page's fetch time and the export time.
-			const sans = (b: typeof bundle) => ({
-				...b,
-				exportedAt: "",
-				raw: b.raw.map((r) => ({ ...r, fetchedAt: "" })),
-			});
+			const sans = (b: typeof bundle) => ({ ...b, exportedAt: "" });
+			const pages = (a: typeof archive) => a.pages.map((r) => ({ ...r, fetchedAt: "" }));
 			expect(sans(bundle)).toEqual(sans(whole.bundle));
+			expect(pages(archive)).toEqual(pages(whole.archive));
 		});
 	}
 
@@ -133,8 +131,8 @@ describe("every page is for the account and club that started the walk", () => {
 							.replace(/view_meeting\.php\?c=\d+/g, "view_meeting.php?show=next")
 					: undefined,
 		});
-		const { bundle } = await s.run();
-		expect(bundle.raw.some((r) => r.url.endsWith("chart=1"))).toBe(true);
+		const { archive } = await s.run();
+		expect(archive.pages.some((r) => r.url.endsWith("chart=1"))).toBe(true);
 	});
 
 	it("identityFromDoc is null for a login page and reads the club and account of a club page", () => {

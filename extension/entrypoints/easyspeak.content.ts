@@ -109,7 +109,7 @@ export default defineContentScript({
 				setStatus("Starting...");
 				follower?.cancel();
 				try {
-					const { bundle, fileName } = await runExport({
+					const { bundle, fileName, archive, archiveFileName } = await runExport({
 						fetchImpl,
 						parseHtml,
 						store,
@@ -121,9 +121,13 @@ export default defineContentScript({
 						now: Date.now,
 						onProgress,
 					});
+					// The upload bundle first, so the file that matters lands even if the browser
+					// blocks the second download; the archive follows after a short pause.
 					download(fileName, JSON.stringify(bundle));
+					await sleep(500);
+					download(archiveFileName, JSON.stringify(archive));
 					setStatus(
-						`Saved ${fileName}\n${bundle.meetings.length} meetings, ${bundle.speechRequests.length} speeches, ${bundle.people.length} people.`,
+						`Saved ${fileName} (upload this one) and ${archiveFileName} (the raw pages; keep it, do not upload it). If only one file downloaded, allow multiple downloads for this site and press Export again.\n${bundle.meetings.length} meetings, ${bundle.speechRequests.length} speeches, ${bundle.people.length} people.`,
 						"#065f46",
 					);
 					btn.textContent = "Export this club for GavelUp";

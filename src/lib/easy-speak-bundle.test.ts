@@ -71,9 +71,26 @@ describe("easySpeakBundleV1Schema", () => {
 		expect(b.people.length).toBeGreaterThan(0);
 	});
 
-	it("never carries memberlist.php or clubdata.php in raw", () => {
+	it("the upload bundle carries no raw pages at all: they live in the archive file (#1235)", () => {
 		const b = easySpeakBundleV1Schema.parse(load());
-		expect(b.raw.some((r) => isContactPageUrl(r.url))).toBe(false);
+		expect(b.raw).toEqual([]);
+	});
+
+	it("an older bundle whose raw holds non-contact pages still parses", () => {
+		const b = load();
+		const old = {
+			...b,
+			raw: [
+				{
+					url: "https://easy-speak.org/view_meeting.php?t=1",
+					fetchedAt: "2026-01-01T00:00:00Z",
+					html: "<p></p>",
+				},
+			],
+		};
+		const parsed = easySpeakBundleV1Schema.safeParse(old);
+		expect(parsed.error?.issues ?? []).toEqual([]);
+		expect(parsed.success).toBe(true);
 	});
 
 	it.each([
@@ -85,7 +102,8 @@ describe("easySpeakBundleV1Schema", () => {
 		"https://easy-speak.org/MemberList.php",
 	])("rejects a raw page whose url is the contact page %s", (url) => {
 		const b = load();
-		const bad = { ...b, raw: [...b.raw, { ...b.raw[0], url }] };
+		const page = { url, fetchedAt: "2026-01-01T00:00:00Z", html: "<p></p>" };
+		const bad = { ...b, raw: [...b.raw, page] };
 		const parsed = easySpeakBundleV1Schema.safeParse(bad);
 		expect(parsed.success).toBe(false);
 		expect(parsed.error?.issues[0]?.path).toEqual(["raw", b.raw.length, "url"]);
