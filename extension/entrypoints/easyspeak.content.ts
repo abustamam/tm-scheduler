@@ -21,7 +21,7 @@ import { type PageGlobal, pageFetch } from "../lib/page-fetch";
  *
  * Injects a small "Export this club for GavelUp" widget on a signed-in
  * easy-speak.org page. One click walks the club (sequentially, 1s between
- * requests, same-origin with the page's cookies; `pageFetch`) and downloads one JSON file.
+ * requests, same-origin with the page's cookies; `pageFetch`) and downloads two JSON files (the bundle and its raw-pages archive).
  * It posts nothing anywhere: upload is a later step, by a superadmin.
  */
 export default defineContentScript({

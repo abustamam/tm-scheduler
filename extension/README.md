@@ -123,7 +123,8 @@ sync itself happens from the in-page widget.)_
 A second mode, beside the Base Camp sync, for the club-migration work (#1054). **Internal only**,
 the same as the Pathways mode above: unlisted, run by the maintainer or an officer of the
 maintainer's clubs. Easy-Speak has no export, so this reads the club in *your own signed-in
-session* and saves it as one file. It posts nothing: uploading the file is a separate step, done by
+session* and saves it as two files: the bundle (what gets uploaded) and, beside it, a `-pages.json` archive of
+the raw pages read. It posts nothing: uploading the bundle is a separate step, done by
 a superadmin.
 
 **A member account is enough.** A member sees every meeting (roles, holders, Pathways projects,
@@ -190,6 +191,7 @@ null` for them) or anyone's evaluations but their own (`evaluations: []` is a va
 - [ ] Bad/revoked token → the widget shows the server's error; unreachable server → a network error.
 - [ ] Firefox: repeat the above on the `firefox-mv2` build.
 - [ ] Easy-Speak export: on a signed-in Easy-Speak club page, **Export this club for GavelUp** appears;
-      a run downloads one JSON file whose `meetings` count equals the meeting list's count, whose past
+      a run downloads TWO files, the bundle and a `-pages.json` archive beside it (confirm both landed);
+      the bundle's `meetings` count equals the meeting list's count, whose past
       meetings have `awards`, and (if you have a speech of your own with an introduction) whose
       `introduction` for it is non-empty. Reload mid-walk: it resumes.

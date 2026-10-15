@@ -8,7 +8,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-	type EasySpeakBundleV1,
 	isContactPage,
 } from "./easy-speak-bundle";
 import {
@@ -22,6 +21,7 @@ import {
 	parseHtml,
 	readFixture,
 	setup,
+	stripClock,
 } from "./easy-speak-test-kit";
 import {
 	EARLIEST_MEETING_YEAR,
@@ -29,7 +29,6 @@ import {
 	RETRY_WAIT_MS,
 	readSession,
 	resumeState,
-	type ExportResult,
 	runExport,
 } from "./easy-speak-walk";
 
@@ -207,11 +206,7 @@ describe("resume", () => {
 		await expect(first.run()).rejects.toThrow();
 		const resumed = await setup({ store }).run();
 		// exportedAt and fetchedAt come from the clock; everything else is the same.
-		const strip = (r: ExportResult) => ({
-			bundle: { ...r.bundle, exportedAt: "" },
-			archive: { ...r.archive, exportedAt: "", pages: r.archive.pages.map((p) => ({ ...p, fetchedAt: "" })) },
-		});
-		expect(strip(resumed)).toEqual(strip(clean));
+		expect(stripClock(resumed)).toEqual(stripClock(clean));
 	});
 
 	it("does not resume a session that is over twelve hours old", async () => {
@@ -267,6 +262,25 @@ describe("contact details never leave the pages that carry them", () => {
 	});
 });
 
+/** The `raw` URLs bundle.expected.json held before #1235 moved them to the archive. */
+const PRE_CHANGE_RAW_URLS = [
+	"https://easy-speak.org/meeting_list.php#POST mode=roles&start_month=01&start_year=2026&end_month=12&end_year=2026",
+	"https://easy-speak.org/view_meeting.php?t=644363",
+	"https://easy-speak.org/view_meeting.php?t=644360",
+	"https://easy-speak.org/view_meeting.php?t=644304",
+	"https://easy-speak.org/tm_all_speeches.php",
+	"https://easy-speak.org/request_speech.php?mode=entertitle&s=1473688&u=900001",
+	"https://easy-speak.org/request_speech.php?mode=entertitle&s=1473689&u=900001",
+	"https://easy-speak.org/memberchart.php?chart=1",
+	"https://easy-speak.org/memberchart.php?chart=4",
+	"https://easy-speak.org/memberchart.php?chart=7",
+	"https://easy-speak.org/memberchart.php?chart=8",
+	"https://easy-speak.org/my_evaluations.php",
+	"https://easy-speak.org/api/v1/evaluations.php/my-evaluations",
+	"https://easy-speak.org/api/v1/evaluations.php/eval/501",
+	"https://easy-speak.org/api/v1/evaluations.php/eval/502",
+];
+
 describe("the archive file", () => {
 	it("leaves raw empty in the upload bundle", async () => {
 		const { bundle } = await setup().run();
@@ -280,16 +294,8 @@ describe("the archive file", () => {
 		expect(archive.exportedAt).toBe(bundle.exportedAt);
 		expect(archive.club).toEqual({ esClubId: bundle.club.esClubId, number: bundle.club.number });
 		expect(archiveFileName).toBe(fileName.replace(/\.json$/, "-pages.json"));
-		expect(archive.pages.length).toBeGreaterThanOrEqual(15);
+		expect(archive.pages.map((p) => p.url).sort()).toEqual([...PRE_CHANGE_RAW_URLS].sort());
 		expect(archive.pages.some((p) => /view_meeting\.php/.test(p.url) && p.html.length > 0)).toBe(true);
-	});
-
-	it("keeps a hundreds-of-meetings upload bundle far under MAX_BUNDLE_BYTES", async () => {
-		const { bundle } = await setup().run();
-		const meetings = Array.from({ length: 771 }, (_, i) => ({ ...bundle.meetings[i % bundle.meetings.length], esMeetingId: String(i) }));
-		const bytes = Buffer.byteLength(JSON.stringify({ ...bundle, meetings }));
-		// The server's MAX_BUNDLE_BYTES is 50 MB (src/lib/import-bundle-limit.ts); stay well under it.
-		expect(bytes).toBeLessThan((50 * 1024 * 1024) / 4);
 	});
 });
 

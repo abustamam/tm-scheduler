@@ -55,11 +55,19 @@ describe("the upload bundle without raw pages", () => {
 	});
 
 	it("a bundle of 771 meetings is far under the upload cap", () => {
-		const meetings = Array.from({ length: 771 }, (_, i) => ({
-			...expected.meetings[i % expected.meetings.length],
-			esMeetingId: String(i),
-		}));
-		const bytes = Buffer.byteLength(JSON.stringify({ ...expected, meetings }));
-		expect(bytes).toBeLessThan(MAX_BUNDLE_BYTES / 4);
+		// Every array that grows with club history is scaled by the same factor.
+		const factor = 771 / expected.meetings.length;
+		const scaled = Object.fromEntries(
+			Object.entries(expected).map(([key, value]) => {
+				if (!Array.isArray(value) || value.length === 0) return [key, value];
+				const length = Math.ceil(value.length * factor);
+				return [key, Array.from({ length }, (_, i) => value[i % value.length])];
+			}),
+		);
+		expect(scaled.meetings).toHaveLength(771);
+		const bytes = Buffer.byteLength(JSON.stringify(scaled));
+		// Absolute ceiling (12.5 MB), not a fraction of the constant it guards.
+		expect(bytes).toBeLessThan(12.5 * 1024 * 1024);
+		expect(bytes).toBeLessThan(MAX_BUNDLE_BYTES);
 	});
 });

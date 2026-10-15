@@ -20,6 +20,7 @@ import {
 	parseHtml,
 	readFixture,
 	setup,
+	stripClock,
 } from "./easy-speak-test-kit";
 import {
 	LEASE_TTL_MS,
@@ -104,11 +105,7 @@ describe("every page is for the account and club that started the walk", () => {
 			expect(again).not.toContain(at("view_meeting.php?t=644360"));
 			const whole = await setup().run();
 			// Same bundle, but for the clock: each page's fetch time and the export time.
-			const sans = (r: typeof whole) => ({
-				bundle: { ...r.bundle, exportedAt: "" },
-				archive: { ...r.archive, exportedAt: "", pages: r.archive.pages.map((p) => ({ ...p, fetchedAt: "" })) },
-			});
-			expect(sans(resumed)).toEqual(sans(whole));
+			expect(stripClock(resumed)).toEqual(stripClock(whole));
 		});
 	}
 
