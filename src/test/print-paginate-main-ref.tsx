@@ -31,7 +31,6 @@ export const MARKUP_FIXTURES: PrintCompactFixtureId[] = [
 /** The agendas that paginate, whose single compact sheet 2 on main is pinned
  *  as text (`reference`). */
 export const REFERENCE_FIXTURES = {
-	c16: "contestDense16",
 	rep1: "contestDense20",
 } as const satisfies Record<string, PrintCompactFixtureId>;
 

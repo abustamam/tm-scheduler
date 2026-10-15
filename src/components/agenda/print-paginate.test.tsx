@@ -25,15 +25,25 @@
  *
  * WHICH FIXTURE. The issue names the contest at seven contestants, ~58 rows. The
  * seeded template at seven is 27 rows here and fits two compact sheets (scale
- * 0.917), as `print-compact.test.tsx` already found, so it never paginates. The
- * sixteen-contestant one does, as #1226's tests use it: 45 rows, N = 3.
+ * 0.917), as `print-compact.test.tsx` already found, so it never paginates.
  *
- * MEASURED on macOS (headless shell 1234), contestDense16: sheet 2 holds 29 rows
- * at scale 1, one continuation sheet the other 16 rows and the notes, N = 3, all
- * sheets 1056px. contestDense20 (53 rows) is N = 3 as well; the fixtures stop at
- * 53 rows, so the EVEN variant below repeats the run (`repeat`) until a sheet count
- * of 4 appears. Which repeat gives an odd and which an even N is found at run time,
- * not assumed: Linux CI's face is shorter and moves them.
+ * Every Chrome scenario that MUST paginate uses contestDense20 (53 rows), not the
+ * sixteen-contestant one, because the margin differs by face. CI's Linux chrome
+ * measures ~0.945 of this machine's heights (print-fallback.test.tsx: 1712 here,
+ * ~1618 there, against a 1464 cliff). contestDense16 needed scale 0.729 on Linux
+ * (the first CI run of this PR), above MIN_FIT_SCALE 0.72, so it correctly did not
+ * paginate there and its assertions failed. contestDense20 is ~154px over the
+ * cliff on Linux (~248 here), so it paginates on both. A control test says so
+ * first, and `longSheets()` repeats the check where each test reads the sheets, so
+ * a face that ever fits it fails with "control did not paginate".
+ *
+ * MEASURED on macOS (headless shell 1234), contestDense20: N = 3, sheet 2 holds 29
+ * rows at scale 1 and the continuation sheet the other 21 plus the notes, all
+ * sheets 1056px. The fixtures stop at 53 rows, so the copies variants repeat the
+ * run (`repeat`): repeats 1..4 give N = 3, 5, 7, 8 here. Which repeat gives an
+ * odd and which an even N is found at run time over repeats 1..6, not assumed:
+ * Linux CI's face is shorter and moves them. The jsdom tests above stub every
+ * height, so they use the smaller contestDense16 and do not depend on a face.
  *
  * WHAT IT IS COMPARED AGAINST. Two committed files hold what Timing printed on
  * `main` at fa28dd4 (#1230, before this change), because a reference read through
@@ -487,7 +497,7 @@ const run = (scenarios: PaginateScenario[]) =>
 		{ scenarios },
 	);
 
-const REPEATS = [1, 2, 3, 4];
+const REPEATS = [1, 2, 3, 4, 5, 6];
 let first: Record<string, SheetsSnapshot | CopiesSnapshot> = {};
 let second: Record<string, SheetsSnapshot | CopiesSnapshot> = {};
 const sheetsAt = (id: string) => first[id] as SheetsSnapshot;
@@ -500,6 +510,24 @@ const nat = (s: SheetsSnapshot) =>
 			cont: x.continuation !== null,
 		})),
 	)}`;
+
+/** The contest every Chrome scenario that must paginate uses, and its scenario
+ *  id (`repeat` 1 is the fixture itself). It is the dense-20 one, not the 16:
+ *  see "WHICH FIXTURE". */
+const LONG_FIXTURE = "contestDense20" as const;
+const LONG = "rep1";
+
+/** The long contest's sheets, or a failure that names the real cause: this
+ *  machine's face fits the run on two compact sheets, so nothing paginated and
+ *  every assertion that follows would be about a layout that never happened. */
+function longSheets(): SheetsSnapshot {
+	const s = sheetsAt(LONG);
+	expect(
+		s.sheets.length,
+		`control did not paginate: ${LONG_FIXTURE} fits two compact sheets in this browser's face, so the scenario needs a longer fixture ${nat(s)}`,
+	).toBeGreaterThanOrEqual(3);
+	return s;
+}
 
 /** Which repeat of the dense-20 contest makes an odd N, and which an even N,
  *  both at least 3 sheets, in THIS browser. */
@@ -517,20 +545,19 @@ describe.skipIf(!hasChrome)(
 	() => {
 		beforeAll(async () => {
 			first = await run([
-				scenario("c16", "sheets", CONTEST),
 				scenario("thr", "sheets", "thr"),
 				scenario("thrLong", "sheets", "thrLong"),
 				scenario("mcf", "sheets", "mcf"),
 				...REPEATS.map((r) =>
-					scenario(`rep${r}`, "sheets", "contestDense20", { repeat: r }),
+					scenario(`rep${r}`, "sheets", LONG_FIXTURE, { repeat: r }),
 				),
 			]);
 			const { odd, even } = variants();
-			const c16 = sheetsAt("c16");
+			const long = sheetsAt(LONG);
 			// A visitor on each sheet in turn, found from where the rows landed.
-			const beats = beatIndices(printCompactAgenda(CONTEST).rows);
+			const beats = beatIndices(printCompactAgenda(LONG_FIXTURE).rows);
 			let at = 0;
-			const firstBeatOf = c16.sheets.map((s) => {
+			const firstBeatOf = long.sheets.map((s) => {
 				const idx = beats[at];
 				at += s.times.length;
 				return idx;
@@ -538,27 +565,39 @@ describe.skipIf(!hasChrome)(
 			second = await run([
 				...(odd !== undefined
 					? [
-							scenario("copiesOdd", "copies", "contestDense20", {
+							scenario("copiesOdd", "copies", LONG_FIXTURE, {
 								repeat: odd,
 							}),
 						]
 					: []),
 				...(even !== undefined
 					? [
-							scenario("copiesEven", "copies", "contestDense20", {
+							scenario("copiesEven", "copies", LONG_FIXTURE, {
 								repeat: even,
 							}),
 						]
 					: []),
-				...c16.sheets.map((s, i) =>
+				...long.sheets.map((s, i) =>
 					s.times.length > 0
-						? scenario(`visitor${i}`, "sheets", CONTEST, {
+						? scenario(`visitor${i}`, "sheets", LONG_FIXTURE, {
 								visiting: [firstBeatOf[i]],
 							})
-						: scenario(`visitor${i}`, "sheets", CONTEST),
+						: scenario(`visitor${i}`, "sheets", LONG_FIXTURE),
 				),
 			]);
 		}, 180_000);
+
+		// protects=the scenarios below test a REAL pagination: the long contest does
+		//   not fit two compact sheets in this browser's face, with room to spare
+		// fails_when=the face fits the run at MIN_FIT_SCALE or better (a taller face is
+		//   fine, a shorter one is the Linux CI case): then nothing paginates and the
+		//   message says "control did not paginate" instead of failing a later assertion
+		//   about continuation sheets that were never printed
+		// no_claim=how many sheets it needs (the next test)
+		it("control: the long contest paginates in this face", () => {
+			const s = longSheets();
+			expect(s.sheets.length, nat(s)).toBeGreaterThanOrEqual(3);
+		});
 
 		// protects=a contest too long for two compact sheets prints N >= 3 sheets, each
 		//   exactly one page tall (none flowed), each with its footer, sheets 3..N each
@@ -567,9 +606,9 @@ describe.skipIf(!hasChrome)(
 		//   footer, a continuation header is missing or says the wrong page, or sheets
 		//   1 and 2 grow one
 		// no_claim=that Linux CI's face needs exactly this many sheets (the message
-		//   carries this machine's numbers)
+		//   carries this machine's numbers: 3 here, estimated 3 on Linux)
 		it("a long contest: N >= 3 sheets, all a page tall, a footer on each, a header on 3..N", () => {
-			const s = sheetsAt("c16");
+			const s = longSheets();
 			const n = s.sheets.length;
 			expect(n, nat(s)).toBeGreaterThanOrEqual(3);
 			s.sheets.forEach((sheet, i) => {
@@ -599,7 +638,7 @@ describe.skipIf(!hasChrome)(
 		//   rounding drift of a few px), so continuation sheets print smaller than Timing
 		// no_claim=that the type is large enough (print-density.test.tsx)
 		it("no sheet is scaled below MIN_FIT_SCALE, and all but a rounding drift print at 1", () => {
-			const s = sheetsAt("c16");
+			const s = longSheets();
 			for (const [i, sheet] of s.sheets.entries()) {
 				expect(sheet.scale, `sheet ${i + 1} ${nat(s)}`).toBeGreaterThanOrEqual(
 					MIN_FIT_SCALE,
@@ -616,8 +655,8 @@ describe.skipIf(!hasChrome)(
 		//   a sheet is a section's title
 		// no_claim=that the groups are the ones a person would draw (groupByPresenter's)
 		it("no presenter group is split, and no sheet ends on a section band", () => {
-			const s = sheetsAt("c16");
-			const rows = printCompactAgenda(CONTEST).rows;
+			const s = longSheets();
+			const rows = printCompactAgenda(LONG_FIXTURE).rows;
 			const beats = beatIndices(rows);
 			const groupOfRow: number[] = [];
 			groupByPresenter(rows).forEach((g, gi) => {
@@ -660,7 +699,7 @@ describe.skipIf(!hasChrome)(
 		// fails_when=they repeat, or are on a sheet before the last
 		// no_claim=that they fit (the packer places them as a unit)
 		it("the tail is on the last sheet only", () => {
-			const s = sheetsAt("c16");
+			const s = longSheets();
 			expect(
 				s.sheets.map((x) => x.tail),
 				nat(s),
@@ -695,16 +734,10 @@ describe.skipIf(!hasChrome)(
 		//   shows on one side only)
 		// no_claim=that the strings are readable, or case (innerText follows
 		//   text-transform, so both sides are lower-cased)
-		for (const [id, fixture] of [
-			["c16", CONTEST],
-			["rep1", "contestDense20"],
-		] as const) {
+		for (const [id, fixture] of [[LONG, LONG_FIXTURE]] as const) {
 			it(`${id}: the same strings, as often, in the same order as main's single compact sheet`, () => {
-				const s = sheetsAt(id);
+				const s = longSheets();
 				expect(fixture).toBe(REFERENCE_FIXTURES[id]);
-				expect(s.sheets.length, `needs pagination ${nat(s)}`).toBeGreaterThan(
-					2,
-				);
 				const { rows } = printCompactAgenda(fixture);
 				const paginated = norm(s.sheets.map((x) => x.region ?? "").join(" "));
 				const reference = norm(referenceBaseline[id]);
@@ -761,14 +794,14 @@ describe.skipIf(!hasChrome)(
 		//   measured the footer without the key)
 		// no_claim=sheet 1 (the roster has no visitor here, so it never prints the key)
 		it("the legend is on exactly the sheet that shows a (V)", () => {
-			const c16 = sheetsAt("c16");
-			c16.sheets.forEach((sheet, i) => {
+			const long = sheetsAt(LONG);
+			long.sheets.forEach((sheet, i) => {
 				if (sheet.times.length === 0) return;
 				const v = second[`visitor${i}`] as SheetsSnapshot;
 				expect(
 					v.sheets.map((x) => x.times.length),
 					`visitor on sheet ${i + 1}: rows per sheet moved`,
-				).toEqual(c16.sheets.map((x) => x.times.length));
+				).toEqual(long.sheets.map((x) => x.times.length));
 				expect(
 					v.sheets.map((x) => x.legend),
 					`visitor on sheet ${i + 1}`,
@@ -776,8 +809,8 @@ describe.skipIf(!hasChrome)(
 				for (const x of v.sheets) expect(x.height).toBe(PAGE_H);
 			});
 			// And with no visitor, none.
-			expect(c16.sheets.map((x) => x.legend)).toEqual(
-				c16.sheets.map(() => false),
+			expect(long.sheets.map((x) => x.legend)).toEqual(
+				long.sheets.map(() => false),
 			);
 		});
 
@@ -788,8 +821,10 @@ describe.skipIf(!hasChrome)(
 			// fails_when=the stack assumes the layout's nominal two sheets per copy (so
 			//   an odd N gets no blank, or an even N gets one), or the DOM and the PDF
 			//   disagree (#1181)
-			// no_claim=what N is on another machine: it is measured here, and the
-			//   variant of each parity is found at run time
+			// no_claim=what N is on another machine: it is measured here (repeats 1..4
+			//   give 3, 5, 7, 8 on macOS; Linux's shorter face moves them, so repeats
+			//   1..6 are tried and the failure message lists each N), and the variant of
+			//   each parity is found at run time
 			for (const parity of ["odd", "even"] as const) {
 				it(`${parity} N: the blank follows the copy's own sheet count, and the PDF agrees`, () => {
 					const repeat = variants()[parity];
