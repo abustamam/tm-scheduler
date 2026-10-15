@@ -48,10 +48,21 @@ import {
 	orderMentorCandidates,
 } from "#/lib/mentorship";
 import { coalesceToE164 } from "#/lib/phone";
+import {
+	type ContactMethod,
+	effectivePreferredContact,
+} from "#/lib/preferred-contact";
 import { logActivity } from "./activity";
 import { lockClubForWrite } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
-import { requireMembership } from "./guards";
+import {
+	assertStillClubAdmin,
+	getMembership,
+	NO_PERMISSION_MESSAGE,
+	NOT_A_MEMBER_MESSAGE,
+	requireClubRole,
+	requireMembership,
+} from "./guards";
 import type { DbOrTx } from "./meeting-templates-logic";
 import { isSqlState, isUniqueViolation } from "./pg-errors";
 
@@ -69,6 +80,18 @@ export const MENTOR_BIO_NUL_MESSAGE =
 	"A mentor bio can't contain a null character. Remove it and try again.";
 export const MENTORSHIP_NOT_YOURS_MESSAGE =
 	"Only the member can change their own willing-to-mentor setting.";
+export const MENTOR_REQUEST_PENDING_MESSAGE =
+	"You already have a request waiting. Withdraw it to ask someone else.";
+export const MENTOR_REQUEST_ANSWERED_MESSAGE =
+	"That request has already been answered.";
+export const MENTOR_REQUEST_NOT_ALLOWED_MESSAGE =
+	"Only the mentor or an admin can answer this request.";
+export const MENTOR_REQUEST_NOT_YOURS_MESSAGE =
+	"Only the member who asked can withdraw a request.";
+export const MENTOR_FOCUS_OTHER_NUL_MESSAGE =
+	"A focus note can't contain a null character. Remove it and try again.";
+export const MENTOR_REQUEST_UNAVAILABLE_MESSAGE =
+	"That member isn't taking mentees right now.";
 
 const uuid = z.string().uuid();
 const focus = z.enum(MENTORSHIP_FOCUSES).nullable();
@@ -76,6 +99,10 @@ const focusOther = z
 	.string()
 	.trim()
 	.max(MENTORSHIP_FOCUS_OTHER_MAX)
+	// Postgres text cannot hold NUL; the write would 500 instead of refusing.
+	.refine((t) => !t.includes("\u0000"), {
+		message: MENTOR_FOCUS_OTHER_NUL_MESSAGE,
+	})
 	.nullable()
 	.optional();
 
@@ -102,6 +129,26 @@ export const endMentorshipSchema = z
 	.strict();
 export const setMentorshipFocusSchema = z
 	.object({ clubId: uuid, mentorshipId: uuid, focus, focusOther })
+	.strict();
+/**
+ * A mentor request (#1209): the club, the mentor and the focus. The mentee is
+ * the SESSION's own membership, never named in input. The focus defaults to
+ * `new_member`; a blank `other` text is none.
+ */
+export const requestMentorSchema = z
+	.object({
+		clubId: uuid,
+		mentorMemberId: uuid,
+		focus: z.enum(MENTORSHIP_FOCUSES).default("new_member"),
+		focusOther,
+	})
+	.strict();
+export const withdrawMentorRequestSchema = z
+	.object({ requestId: uuid })
+	.strict();
+/** The club is read off the request row, never taken from input. */
+export const decideMentorRequestSchema = z
+	.object({ requestId: uuid, accept: z.boolean() })
 	.strict();
 /** The member's own flag: the club and the value, nothing that names a member. */
 export const setWillingToMentorSchema = z
@@ -142,6 +189,8 @@ export interface MentorshipParty {
 	name: string;
 	email: string | null;
 	phone: string | null;
+	/** EFFECTIVE (`effectivePreferredContact`), never the raw column. */
+	preferredContact: ContactMethod | null;
 }
 
 export interface MentorshipRow {
@@ -198,6 +247,58 @@ export interface ClubMentorships {
 	unpaired: { id: string; name: string; inOrientation: boolean }[];
 	/** Active members who said they are willing to mentor. */
 	willing: { id: string; name: string }[];
+}
+
+/** One side of a request as the other side sees them: name and how to reach them. */
+export interface MentorRequestParty {
+	id: string;
+	name: string;
+	email: string | null;
+	phone: string | null;
+	/** EFFECTIVE (`effectivePreferredContact`), never the raw column. */
+	preferredContact: ContactMethod | null;
+}
+
+export type MentorRequestStatus =
+	(typeof mentorshipRequests.$inferSelect)["status"];
+
+/** The caller's own latest request as mentee, any status (#1209). */
+export interface OutgoingMentorRequest {
+	id: string;
+	status: MentorRequestStatus;
+	focus: MentorshipFocus;
+	focusOther: string | null;
+	createdAt: Date;
+	mentor: MentorRequestParty;
+}
+
+/** A pending request the caller, as mentor, may answer. */
+export interface IncomingMentorRequest {
+	id: string;
+	focus: MentorshipFocus;
+	focusOther: string | null;
+	createdAt: Date;
+	mentee: MentorRequestParty;
+}
+
+export interface MyMentorRequests {
+	outgoing: OutgoingMentorRequest | null;
+	incoming: IncomingMentorRequest[];
+}
+
+/** A pending request on the admin's list (#1209). Names only. */
+export interface ClubPendingMentorRequest {
+	id: string;
+	focus: MentorshipFocus;
+	focusOther: string | null;
+	createdAt: Date;
+	mentor: { id: string; name: string };
+	mentee: { id: string; name: string };
+	/**
+	 * A party is no longer an active member. Accept is refused, so the admin
+	 * list offers only Decline, which clears the request (#1209).
+	 */
+	partyInactive: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -339,6 +440,59 @@ function translateDbRefusal(err: unknown): never {
 }
 
 /**
+ * The pairing write itself: both parties checked, the row inserted, the
+ * activity logged. Runs on the caller's transaction, UNDER the club write lock
+ * the caller already took (`createMentorship`, and `decideMentorRequest` when a
+ * mentor accepts, #1209). Throws the raw unique violation; callers translate.
+ */
+async function insertMentorshipInTx(
+	tx: Tx,
+	input: {
+		clubId: string;
+		mentorMemberId: string;
+		menteeMemberId: string;
+		focus: MentorshipFocus | null;
+		focusOther: string | null;
+		actorMemberId: string | null;
+	},
+): Promise<{ id: string }> {
+	await assertPairable(
+		tx,
+		input.clubId,
+		input.mentorMemberId,
+		input.menteeMemberId,
+	);
+	const [row] = await tx
+		.insert(mentorships)
+		.values({
+			clubId: input.clubId,
+			mentorMemberId: input.mentorMemberId,
+			menteeMemberId: input.menteeMemberId,
+			focus: input.focus,
+			focusOther: input.focusOther,
+			createdByMemberId: input.actorMemberId,
+		})
+		.returning({ id: mentorships.id, startedAt: mentorships.startedAt });
+	if (!row) throw new Error("Mentorship insert returned no row.");
+	await logActivity(tx, {
+		clubId: input.clubId,
+		actorMemberId: input.actorMemberId,
+		action: "member_edit",
+		targetType: "member",
+		targetId: input.menteeMemberId,
+		detail: {
+			mentorship: "created",
+			mentorshipId: row.id,
+			mentorMemberId: input.mentorMemberId,
+			menteeMemberId: input.menteeMemberId,
+			focus: input.focus,
+			focusOther: input.focusOther,
+		},
+	});
+	return { id: row.id };
+}
+
+/**
  * Pair a mentor with a mentee (an admin's write; the caller gates it).
  *
  * `conn` is the executor the write runs on. It defaults to the pooled client,
@@ -362,40 +516,10 @@ export async function createMentorship(
 	try {
 		return await conn.transaction(async (tx) => {
 			await lockClubForWrite(tx, input.clubId);
-			await assertPairable(
-				tx,
-				input.clubId,
-				input.mentorMemberId,
-				input.menteeMemberId,
-			);
-			const [row] = await tx
-				.insert(mentorships)
-				.values({
-					clubId: input.clubId,
-					mentorMemberId: input.mentorMemberId,
-					menteeMemberId: input.menteeMemberId,
-					focus: input.focus,
-					focusOther: focusOtherValue,
-					createdByMemberId: input.actorMemberId,
-				})
-				.returning({ id: mentorships.id, startedAt: mentorships.startedAt });
-			if (!row) throw new Error("Mentorship insert returned no row.");
-			await logActivity(tx, {
-				clubId: input.clubId,
-				actorMemberId: input.actorMemberId,
-				action: "member_edit",
-				targetType: "member",
-				targetId: input.menteeMemberId,
-				detail: {
-					mentorship: "created",
-					mentorshipId: row.id,
-					mentorMemberId: input.mentorMemberId,
-					menteeMemberId: input.menteeMemberId,
-					focus: input.focus,
-					focusOther: focusOtherValue,
-				},
+			return insertMentorshipInTx(tx, {
+				...input,
+				focusOther: focusOtherValue,
 			});
-			return { id: row.id };
 		});
 	} catch (err) {
 		translateDbRefusal(err);
@@ -502,6 +626,405 @@ export async function setMentorshipFocus(input: {
 }
 
 // ---------------------------------------------------------------------------
+// Mentor requests (#1209)
+// ---------------------------------------------------------------------------
+
+/**
+ * The active pairing of one mentor and one mentee on one focus, if any. The
+ * partial unique index allows one; `requestMentor` reads it to refuse a request
+ * for a pairing that already exists, `decideMentorRequest` locks it to link it.
+ */
+async function findActivePairing(
+	tx: Tx,
+	key: {
+		mentorMemberId: string;
+		menteeMemberId: string;
+		focus: MentorshipFocus;
+	},
+	lock: boolean,
+): Promise<{ id: string } | undefined> {
+	const where = and(
+		eq(mentorships.mentorMemberId, key.mentorMemberId),
+		eq(mentorships.menteeMemberId, key.menteeMemberId),
+		eq(mentorships.focus, key.focus),
+		isNull(mentorships.endedAt),
+	);
+	const base = tx.select({ id: mentorships.id }).from(mentorships).where(where);
+	const [row] = lock ? await base.for("update").limit(1) : await base.limit(1);
+	return row;
+}
+
+/**
+ * Ask a listed mentor to mentor the CALLER (the mentee is the session's own
+ * membership). One transaction under the club write lock: the mentor is an
+ * active, willing AND listed member of the same club (`listedMentorWhere`, the
+ * same set Find a mentor shows), not the mentee, with no active pairing
+ * between them on that focus. The one-pending-per-mentee unique index is what
+ * refuses a second request, including two racing ones. Returns the mentor's
+ * contact so the mentee's draft needs no second read.
+ */
+export async function requestMentor(input: {
+	userId: string;
+	clubId: string;
+	mentorMemberId: string;
+	focus?: MentorshipFocus;
+	focusOther?: string | null;
+}): Promise<{ requestId: string; mentor: MentorRequestParty }> {
+	const menteeMemberId = await ownMembershipId(input.userId, input.clubId);
+	const focus = input.focus ?? "new_member";
+	const focusOtherValue = normalizeFocusOther(focus, input.focusOther);
+	const cc = await loadClubDefaultCountryCode(input.clubId);
+	try {
+		return await db.transaction(async (tx) => {
+			await lockClubForWrite(tx, input.clubId);
+			if (input.mentorMemberId === menteeMemberId) {
+				throw new Error(MENTORSHIP_SELF_MESSAGE);
+			}
+			const [mentor] = await tx
+				.select({
+					id: members.id,
+					name: members.name,
+					email: mentorPersonR.email,
+					phone: mentorPersonR.phone,
+					preferredContact: mentorPersonR.preferredContact,
+				})
+				.from(members)
+				.innerJoin(mentorPersonR, eq(mentorPersonR.id, members.personId))
+				.where(
+					and(
+						eq(members.id, input.mentorMemberId),
+						eq(members.clubId, input.clubId),
+						eq(members.status, "active"),
+						listedMentorWhere(),
+					),
+				)
+				.for("share", { of: members })
+				.limit(1);
+			if (!mentor) throw new Error(MENTOR_REQUEST_UNAVAILABLE_MESSAGE);
+			const paired = await findActivePairing(
+				tx,
+				{
+					mentorMemberId: input.mentorMemberId,
+					menteeMemberId,
+					focus,
+				},
+				false,
+			);
+			if (paired) throw new Error(MENTORSHIP_DUPLICATE_MESSAGE);
+			const [row] = await tx
+				.insert(mentorshipRequests)
+				.values({
+					clubId: input.clubId,
+					menteeMemberId,
+					mentorMemberId: input.mentorMemberId,
+					focus,
+					focusOther: focusOtherValue,
+				})
+				.returning({ id: mentorshipRequests.id });
+			if (!row) throw new Error("Mentor request insert returned no row.");
+			await logActivity(tx, {
+				clubId: input.clubId,
+				actorMemberId: menteeMemberId,
+				action: "member_edit",
+				targetType: "member",
+				targetId: menteeMemberId,
+				detail: {
+					mentorRequest: "created",
+					requestId: row.id,
+					mentorMemberId: input.mentorMemberId,
+					focus,
+					focusOther: focusOtherValue,
+				},
+			});
+			return {
+				requestId: row.id,
+				mentor: requestParty({ id: mentor.id, name: mentor.name }, mentor, cc),
+			};
+		});
+	} catch (err) {
+		if (isUniqueViolation(err)) {
+			throw new Error(MENTOR_REQUEST_PENDING_MESSAGE);
+		}
+		throw err;
+	}
+}
+
+/**
+ * The mentee takes their request back. Only the request's own mentee, and only
+ * while it is `pending`: the UPDATE carries both, so a decision that landed
+ * first (the row lock `decideMentorRequest` holds makes this wait for it)
+ * leaves zero rows and the refusal below. A missing request, one in a club the
+ * caller does not belong to, and someone else's all answer the same, so an id
+ * says nothing about whether it exists or whose it is.
+ */
+export async function withdrawMentorRequest(input: {
+	userId: string;
+	requestId: string;
+}): Promise<void> {
+	const [req] = await db
+		.select({
+			clubId: mentorshipRequests.clubId,
+			menteeMemberId: mentorshipRequests.menteeMemberId,
+		})
+		.from(mentorshipRequests)
+		.where(eq(mentorshipRequests.id, input.requestId))
+		.limit(1);
+	if (!req) throw new Error(MENTOR_REQUEST_NOT_YOURS_MESSAGE);
+	let own: string;
+	try {
+		own = await ownMembershipId(input.userId, req.clubId);
+	} catch (err) {
+		// Not a member of that club reads as "not yours", not as "no such club".
+		if (
+			err instanceof Error &&
+			(err.message === NOT_A_MEMBER_MESSAGE ||
+				err.message === MENTORSHIP_NOT_YOURS_MESSAGE)
+		) {
+			throw new Error(MENTOR_REQUEST_NOT_YOURS_MESSAGE);
+		}
+		throw err;
+	}
+	if (own !== req.menteeMemberId) {
+		throw new Error(MENTOR_REQUEST_NOT_YOURS_MESSAGE);
+	}
+	await db.transaction(async (tx) => {
+		const updated = await tx
+			.update(mentorshipRequests)
+			.set({
+				status: "withdrawn",
+				decidedAt: new Date(),
+				decidedByMemberId: own,
+			})
+			.where(
+				and(
+					eq(mentorshipRequests.id, input.requestId),
+					eq(mentorshipRequests.menteeMemberId, own),
+					eq(mentorshipRequests.status, "pending"),
+				),
+			)
+			.returning({ id: mentorshipRequests.id });
+		if (updated.length === 0) throw new Error(MENTOR_REQUEST_ANSWERED_MESSAGE);
+		await logActivity(tx, {
+			clubId: req.clubId,
+			actorMemberId: own,
+			action: "member_edit",
+			targetType: "member",
+			targetId: own,
+			detail: { mentorRequest: "withdrawn", requestId: input.requestId },
+		});
+	});
+}
+
+/** In which capacity the caller may answer: the request's mentor, or an admin. */
+export type MentorRequestActingAs = "mentor" | "admin";
+
+/**
+ * Who may answer a request: its mentor, or a club admin. The club and the
+ * mentor are read off the REQUEST row, never from input, so a caller cannot
+ * name a club they administer to answer someone else's. Anyone else, a
+ * request that does not exist and a club the caller is not in get the one
+ * message. Returns the membership id to record as the actor (null for a
+ * read-write impersonator, who has none) and the capacity, which
+ * `decideMentorRequest` re-checks under the lock.
+ */
+export async function authorizeMentorRequestDecision(
+	userId: string,
+	requestId: string,
+): Promise<{ actorMemberId: string | null; actingAs: MentorRequestActingAs }> {
+	const [req] = await db
+		.select({
+			clubId: mentorshipRequests.clubId,
+			mentorMemberId: mentorshipRequests.mentorMemberId,
+		})
+		.from(mentorshipRequests)
+		.where(eq(mentorshipRequests.id, requestId))
+		.limit(1);
+	if (!req) throw new Error(MENTOR_REQUEST_NOT_ALLOWED_MESSAGE);
+	const refuse = (err: unknown): never => {
+		if (
+			err instanceof Error &&
+			(err.message === NOT_A_MEMBER_MESSAGE ||
+				err.message === NO_PERMISSION_MESSAGE)
+		) {
+			throw new Error(MENTOR_REQUEST_NOT_ALLOWED_MESSAGE);
+		}
+		throw err;
+	};
+	let membership: Awaited<ReturnType<typeof requireMembership>>;
+	try {
+		membership = await requireMembership(userId, req.clubId);
+	} catch (err) {
+		return refuse(err);
+	}
+	if (membership.id !== null && membership.id === req.mentorMemberId) {
+		return { actorMemberId: membership.id, actingAs: "mentor" };
+	}
+	try {
+		const admin = await requireClubRole(userId, req.clubId, ["admin"]);
+		return { actorMemberId: admin.id, actingAs: "admin" };
+	} catch (err) {
+		return refuse(err);
+	}
+}
+
+/**
+ * Answer a request (the caller has authorized: `authorizeMentorRequestDecision`).
+ * One transaction: the club write lock, then the request row `FOR UPDATE`, so
+ * two answers (the mentor's and an admin's) take turns and the second finds it
+ * no longer `pending`. The actor is RE-CHECKED once both are held: authorizing
+ * ran before the lock, and an admin demoted, or a mentor deactivated, while
+ * queued on it must not commit. Accept pairs them on the request's focus with
+ * `actorMemberId` as creator, or links the identical active pairing an admin
+ * already made; it is refused while either party is not active. A mentor who
+ * stopped being listed after the request may still answer: the flag gates NEW
+ * requests only. Decline writes only the request.
+ */
+export async function decideMentorRequest(input: {
+	requestId: string;
+	accept: boolean;
+	userId: string;
+	actingAs: MentorRequestActingAs;
+	actorMemberId: string | null;
+}): Promise<{ status: "accepted" | "declined"; mentorshipId: string | null }> {
+	const [head] = await db
+		.select({ clubId: mentorshipRequests.clubId })
+		.from(mentorshipRequests)
+		.where(eq(mentorshipRequests.id, input.requestId))
+		.limit(1);
+	if (!head) throw new Error(MENTOR_REQUEST_ANSWERED_MESSAGE);
+	try {
+		return await db.transaction(async (tx) => {
+			await lockClubForWrite(tx, head.clubId);
+			const [req] = await tx
+				.select()
+				.from(mentorshipRequests)
+				.where(eq(mentorshipRequests.id, input.requestId))
+				.for("update")
+				.limit(1);
+			if (!req) throw new Error(MENTOR_REQUEST_ANSWERED_MESSAGE);
+			await assertStillMayAnswer(tx, input, req);
+			if (req.status !== "pending") {
+				throw new Error(MENTOR_REQUEST_ANSWERED_MESSAGE);
+			}
+			const decidedAt = new Date();
+			let mentorshipId: string | null = null;
+			if (input.accept) {
+				const parties = await tx
+					.select({
+						id: members.id,
+						name: members.name,
+						status: members.status,
+					})
+					.from(members)
+					.where(
+						and(
+							eq(members.clubId, req.clubId),
+							inArray(members.id, [req.mentorMemberId, req.menteeMemberId]),
+						),
+					)
+					.for("share");
+				if (parties.length !== 2) {
+					throw new Error(MENTORSHIP_MEMBER_NOT_FOUND_MESSAGE);
+				}
+				const gone = parties.find((p) => p.status !== "active");
+				if (gone)
+					throw new Error(`${gone.name} is no longer an active member.`);
+				const existing = await findActivePairing(
+					tx,
+					{
+						mentorMemberId: req.mentorMemberId,
+						menteeMemberId: req.menteeMemberId,
+						focus: req.focus,
+					},
+					true,
+				);
+				mentorshipId = existing
+					? existing.id
+					: (
+							await insertMentorshipInTx(tx, {
+								clubId: req.clubId,
+								mentorMemberId: req.mentorMemberId,
+								menteeMemberId: req.menteeMemberId,
+								focus: req.focus,
+								focusOther: req.focusOther,
+								actorMemberId: input.actorMemberId,
+							})
+						).id;
+			}
+			const status = input.accept ? "accepted" : "declined";
+			await tx
+				.update(mentorshipRequests)
+				.set({
+					status,
+					mentorshipId,
+					decidedByMemberId: input.actorMemberId,
+					decidedAt,
+				})
+				.where(eq(mentorshipRequests.id, req.id));
+			await logActivity(tx, {
+				clubId: req.clubId,
+				actorMemberId: input.actorMemberId,
+				action: "member_edit",
+				targetType: "member",
+				targetId: req.menteeMemberId,
+				detail: {
+					mentorRequest: status,
+					requestId: req.id,
+					mentorMemberId: req.mentorMemberId,
+					mentorshipId,
+				},
+			});
+			return { status, mentorshipId };
+		});
+	} catch (err) {
+		translateDbRefusal(err);
+	}
+}
+
+/**
+ * The actor's right to answer, asked again on the transaction that holds the
+ * club lock and the request row. An admin goes through `assertStillClubAdmin`
+ * (the repo's one re-check); the mentor must still be THE request's mentor,
+ * resolved from the session's user, active, in a club that is not archived.
+ */
+async function assertStillMayAnswer(
+	tx: Tx,
+	input: {
+		userId: string;
+		actingAs: MentorRequestActingAs;
+		actorMemberId: string | null;
+	},
+	req: { clubId: string; mentorMemberId: string },
+): Promise<void> {
+	const refused = () => new Error(MENTOR_REQUEST_NOT_ALLOWED_MESSAGE);
+	if (input.actingAs === "admin") {
+		try {
+			await assertStillClubAdmin(tx, input.userId, req.clubId);
+		} catch (err) {
+			if (
+				err instanceof Error &&
+				(err.message === NOT_A_MEMBER_MESSAGE ||
+					err.message === NO_PERMISSION_MESSAGE)
+			) {
+				throw refused();
+			}
+			throw err;
+		}
+		return;
+	}
+	const membership = await getMembership(input.userId, req.clubId, tx);
+	if (
+		!membership ||
+		membership.status !== "active" ||
+		membership.archivedAt !== null ||
+		membership.id !== req.mentorMemberId ||
+		membership.id !== input.actorMemberId
+	) {
+		throw refused();
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Reads (never write)
 // ---------------------------------------------------------------------------
 
@@ -544,6 +1067,7 @@ async function activePairingsFor(
 			otherName: other.name,
 			otherEmail: otherPerson.email,
 			otherPhone: otherPerson.phone,
+			otherPreferred: otherPerson.preferredContact,
 		})
 		.from(mentorships)
 		.innerJoin(other, eq(other.id, otherCol))
@@ -568,6 +1092,11 @@ async function activePairingsFor(
 			name: r.otherName,
 			email: r.otherEmail,
 			phone: coalesceToE164(r.otherPhone, cc),
+			// Judged on the STORED phone, as `requestParty` does.
+			preferredContact: effectivePreferredContact(r.otherPreferred, {
+				phone: r.otherPhone,
+				email: r.otherEmail,
+			}),
 		},
 	}));
 }
@@ -839,5 +1368,180 @@ export async function listMentors(
 		name: r.name,
 		mentorBio: r.mentorBio,
 		activeMenteeCount: r.n ?? 0,
+	}));
+}
+
+const mentorPersonR = alias(people, "request_mentor_person");
+const menteePersonR = alias(people, "request_mentee_person");
+
+function requestParty(
+	m: { id: string; name: string },
+	person: {
+		email: string | null;
+		phone: string | null;
+		preferredContact: ContactMethod | null;
+	},
+	cc: string | null,
+): MentorRequestParty {
+	return {
+		id: m.id,
+		name: m.name,
+		email: person.email,
+		phone: coalesceToE164(person.phone, cc),
+		// Judged on the STORED phone, the column the writers' WHERE reads.
+		preferredContact: effectivePreferredContact(person.preferredContact, {
+			phone: person.phone,
+			email: person.email,
+		}),
+	};
+}
+
+/**
+ * The caller's own requests (#1209): the latest one they made as mentee, any
+ * status (the mentor may have gone inactive since; the mentee must still be
+ * able to see and withdraw it, because it holds their one pending slot), and
+ * the pending ones addressed to them as mentor while BOTH parties are active.
+ * Contact comes from each party's Person, as every other pairing view's does.
+ * Takes the membership the READ GATE resolved, never an id from input. Writes
+ * nothing. Null when the membership does not exist.
+ */
+export async function loadMyMentorRequests(
+	membershipId: string,
+): Promise<MyMentorRequests | null> {
+	const [me] = await db
+		.select({ clubId: members.clubId })
+		.from(members)
+		.where(eq(members.id, membershipId))
+		.limit(1);
+	if (!me) return null;
+	const cc = await loadClubDefaultCountryCode(me.clubId);
+	const [outgoingRows, incomingRows] = await Promise.all([
+		db
+			.select({
+				id: mentorshipRequests.id,
+				status: mentorshipRequests.status,
+				focus: mentorshipRequests.focus,
+				focusOther: mentorshipRequests.focusOther,
+				createdAt: mentorshipRequests.createdAt,
+				mentorId: mentorM.id,
+				mentorName: mentorM.name,
+				person: {
+					email: mentorPersonR.email,
+					phone: mentorPersonR.phone,
+					preferredContact: mentorPersonR.preferredContact,
+				},
+			})
+			.from(mentorshipRequests)
+			.innerJoin(mentorM, eq(mentorM.id, mentorshipRequests.mentorMemberId))
+			.innerJoin(mentorPersonR, eq(mentorPersonR.id, mentorM.personId))
+			.where(eq(mentorshipRequests.menteeMemberId, membershipId))
+			// A pending row first: membership collapse can leave a newer withdrawn
+			// one, and the mentee must see (and be able to withdraw) the pending
+			// request that holds their slot.
+			.orderBy(
+				sql`(${mentorshipRequests.status} = 'pending') desc`,
+				sql`${mentorshipRequests.createdAt} desc`,
+				sql`${mentorshipRequests.id} desc`,
+			)
+			.limit(1),
+		db
+			.select({
+				id: mentorshipRequests.id,
+				focus: mentorshipRequests.focus,
+				focusOther: mentorshipRequests.focusOther,
+				createdAt: mentorshipRequests.createdAt,
+				menteeId: menteeM.id,
+				menteeName: menteeM.name,
+				person: {
+					email: menteePersonR.email,
+					phone: menteePersonR.phone,
+					preferredContact: menteePersonR.preferredContact,
+				},
+			})
+			.from(mentorshipRequests)
+			.innerJoin(menteeM, eq(menteeM.id, mentorshipRequests.menteeMemberId))
+			.innerJoin(mentorM, eq(mentorM.id, mentorshipRequests.mentorMemberId))
+			.innerJoin(menteePersonR, eq(menteePersonR.id, menteeM.personId))
+			.where(
+				and(
+					eq(mentorshipRequests.mentorMemberId, membershipId),
+					eq(mentorshipRequests.status, "pending"),
+					eq(menteeM.status, "active"),
+					eq(mentorM.status, "active"),
+				),
+			)
+			.orderBy(asc(mentorshipRequests.createdAt), asc(mentorshipRequests.id)),
+	]);
+	const [o] = outgoingRows;
+	return {
+		outgoing: o
+			? {
+					id: o.id,
+					status: o.status,
+					focus: o.focus,
+					focusOther: o.focusOther,
+					createdAt: o.createdAt,
+					mentor: requestParty(
+						{ id: o.mentorId, name: o.mentorName },
+						o.person,
+						cc,
+					),
+				}
+			: null,
+		incoming: incomingRows.map((r) => ({
+			id: r.id,
+			focus: r.focus,
+			focusOther: r.focusOther,
+			createdAt: r.createdAt,
+			mentee: requestParty(
+				{ id: r.menteeId, name: r.menteeName },
+				r.person,
+				cc,
+			),
+		})),
+	};
+}
+
+/**
+ * Every pending request in the club, oldest first, for an admin to answer on
+ * the mentor's behalf (#1209). One whose party is no longer active is kept and
+ * flagged (`partyInactive`): accept is refused for it, so the admin must be able
+ * to see and decline it rather than leave it holding the mentee's one slot.
+ * Names only. Writes nothing.
+ */
+export async function loadClubPendingMentorRequests(
+	clubId: string,
+): Promise<ClubPendingMentorRequest[]> {
+	const rows = await db
+		.select({
+			id: mentorshipRequests.id,
+			focus: mentorshipRequests.focus,
+			focusOther: mentorshipRequests.focusOther,
+			createdAt: mentorshipRequests.createdAt,
+			mentorId: mentorM.id,
+			mentorName: mentorM.name,
+			menteeId: menteeM.id,
+			menteeName: menteeM.name,
+			mentorStatus: mentorM.status,
+			menteeStatus: menteeM.status,
+		})
+		.from(mentorshipRequests)
+		.innerJoin(mentorM, eq(mentorM.id, mentorshipRequests.mentorMemberId))
+		.innerJoin(menteeM, eq(menteeM.id, mentorshipRequests.menteeMemberId))
+		.where(
+			and(
+				eq(mentorshipRequests.clubId, clubId),
+				eq(mentorshipRequests.status, "pending"),
+			),
+		)
+		.orderBy(asc(mentorshipRequests.createdAt), asc(mentorshipRequests.id));
+	return rows.map((r) => ({
+		id: r.id,
+		focus: r.focus,
+		focusOther: r.focusOther,
+		createdAt: r.createdAt,
+		mentor: { id: r.mentorId, name: r.mentorName },
+		mentee: { id: r.menteeId, name: r.menteeName },
+		partyInactive: r.mentorStatus !== "active" || r.menteeStatus !== "active",
 	}));
 }

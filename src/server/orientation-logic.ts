@@ -28,6 +28,7 @@ import { db } from "#/db";
 import {
 	meetings,
 	members,
+	mentorshipRequests,
 	mentorships,
 	pathEnrollments,
 	people,
@@ -133,67 +134,88 @@ export async function loadOrientationFactsForMembers(
 	const personIds = [...new Set(rows.map((r) => r.personId))];
 	const clubIds = [...new Set(rows.map((r) => r.clubId))];
 
-	const [paths, slots, pairings, countryCodes] = await Promise.all([
-		db
-			.select({ personId: pathEnrollments.personId, n: count() })
-			.from(pathEnrollments)
-			.where(
-				and(
-					inArray(pathEnrollments.personId, personIds),
-					isNull(pathEnrollments.archivedAt),
+	const [paths, slots, pairings, pendingRequests, countryCodes] =
+		await Promise.all([
+			db
+				.select({ personId: pathEnrollments.personId, n: count() })
+				.from(pathEnrollments)
+				.where(
+					and(
+						inArray(pathEnrollments.personId, personIds),
+						isNull(pathEnrollments.archivedAt),
+					),
+				)
+				.groupBy(pathEnrollments.personId),
+			// DISTINCT on the two facts the derivation reads, per member, so a
+			// long-standing member's slot history is at most six rows here, not
+			// hundreds.
+			db
+				.selectDistinct({
+					memberId: roleSlots.assignedMemberId,
+					isSpeakerRole: roleDefinitions.isSpeakerRole,
+					meetingStatus: meetings.status,
+				})
+				.from(roleSlots)
+				.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+				.innerJoin(
+					roleDefinitions,
+					eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+				)
+				.where(inArray(roleSlots.assignedMemberId, ids)),
+			// "Get a mentor" (#939): every pairing with one of these memberships as
+			// MENTEE, active or ended; `#/lib/orientation` decides which one counts.
+			// The mentor's contact is the same the mentee could already read on the
+			// mentor's member page (`getMemberProfile`, club members only).
+			db
+				.select({
+					menteeMemberId: mentorships.menteeMemberId,
+					focus: mentorships.focus,
+					endedAt: mentorships.endedAt,
+					mentorName: mentor.name,
+					mentorEmail: mentorPerson.email,
+					mentorPhone: mentorPerson.phone,
+				})
+				.from(mentorships)
+				.innerJoin(mentor, eq(mentor.id, mentorships.mentorMemberId))
+				.innerJoin(mentorPerson, eq(mentorPerson.id, mentor.personId))
+				// A pairing counts only while BOTH parties are active
+				// (`mentorship-logic.ts`); an inactive mentor's pairing is dormant
+				// and does not tick "Get a mentor". The mentee's own status is
+				// checked per row below.
+				.where(
+					and(
+						inArray(mentorships.menteeMemberId, ids),
+						eq(mentor.status, "active"),
+					),
+				)
+				.orderBy(asc(mentorships.startedAt), asc(mentorships.id)),
+			// A pending mentor request (#1209), so the "Get a mentor" hint can say who
+			// the member is waiting on. At most one per mentee (the unique index); an
+			// inactive mentor's request is hidden like their pairing.
+			db
+				.select({
+					menteeMemberId: mentorshipRequests.menteeMemberId,
+					mentorName: mentor.name,
+				})
+				.from(mentorshipRequests)
+				.innerJoin(mentor, eq(mentor.id, mentorshipRequests.mentorMemberId))
+				.where(
+					and(
+						inArray(mentorshipRequests.menteeMemberId, ids),
+						eq(mentorshipRequests.status, "pending"),
+						eq(mentor.status, "active"),
+					),
 				),
-			)
-			.groupBy(pathEnrollments.personId),
-		// DISTINCT on the two facts the derivation reads, per member, so a
-		// long-standing member's slot history is at most six rows here, not
-		// hundreds.
-		db
-			.selectDistinct({
-				memberId: roleSlots.assignedMemberId,
-				isSpeakerRole: roleDefinitions.isSpeakerRole,
-				meetingStatus: meetings.status,
-			})
-			.from(roleSlots)
-			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
-			.innerJoin(
-				roleDefinitions,
-				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
-			)
-			.where(inArray(roleSlots.assignedMemberId, ids)),
-		// "Get a mentor" (#939): every pairing with one of these memberships as
-		// MENTEE, active or ended; `#/lib/orientation` decides which one counts.
-		// The mentor's contact is the same the mentee could already read on the
-		// mentor's member page (`getMemberProfile`, club members only).
-		db
-			.select({
-				menteeMemberId: mentorships.menteeMemberId,
-				focus: mentorships.focus,
-				endedAt: mentorships.endedAt,
-				mentorName: mentor.name,
-				mentorEmail: mentorPerson.email,
-				mentorPhone: mentorPerson.phone,
-			})
-			.from(mentorships)
-			.innerJoin(mentor, eq(mentor.id, mentorships.mentorMemberId))
-			.innerJoin(mentorPerson, eq(mentorPerson.id, mentor.personId))
-			// A pairing counts only while BOTH parties are active
-			// (`mentorship-logic.ts`); an inactive mentor's pairing is dormant
-			// and does not tick "Get a mentor". The mentee's own status is
-			// checked per row below.
-			.where(
-				and(
-					inArray(mentorships.menteeMemberId, ids),
-					eq(mentor.status, "active"),
+			Promise.all(
+				clubIds.map(
+					async (id) => [id, await loadClubDefaultCountryCode(id)] as const,
 				),
-			)
-			.orderBy(asc(mentorships.startedAt), asc(mentorships.id)),
-		Promise.all(
-			clubIds.map(
-				async (id) => [id, await loadClubDefaultCountryCode(id)] as const,
 			),
-		),
-	]);
+		]);
 
+	const pendingMentor = new Map(
+		pendingRequests.map((r) => [r.menteeMemberId, r.mentorName]),
+	);
 	const pathCount = new Map(paths.map((p) => [p.personId, p.n]));
 	const cc = new Map(countryCodes);
 	const slotsBy = new Map<string, OrientationSlotFact[]>();
@@ -225,6 +247,7 @@ export async function loadOrientationFactsForMembers(
 				...p,
 				mentorPhone: coalesceToE164(p.mentorPhone, code),
 			})),
+			pendingMentorName: pendingMentor.get(row.id) ?? null,
 		});
 	}
 	return out;

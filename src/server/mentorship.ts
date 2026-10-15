@@ -13,6 +13,13 @@
 //  - `listMentors` (#945): the Find a mentor page's list. Member-level read
 //    gate, answered from the GATE's membership; a read-only impersonator has
 //    none and is refused. Writes nothing.
+//  - Mentor requests (#1209): `requestMentor` / `withdrawMentorRequest` are the
+//    caller's own (`requireUser`, the logic resolves their membership from the
+//    session). `decideMentorRequest` is the mentor's or an admin's:
+//    `authorizeMentorRequestDecision` reads the club and the mentor off the
+//    REQUEST row, never input, BEFORE the logic runs. `getMyMentorRequests`
+//    (member read gate, null without a membership) and
+//    `listClubPendingMentorRequests` (admin view gate) write nothing.
 //  - `createMentorship` / `endMentorship` / `setMentorshipFocus`: admin writes
 //    about other people, `requireClubRole(…, ["admin"])`.
 // `mentorship-authz.guard.test.ts` pins each gate before its call.
@@ -26,30 +33,44 @@ import {
 	requireUser,
 } from "./guards";
 import {
+	authorizeMentorRequestDecision,
 	createMentorship as createMentorshipDb,
 	createMentorshipSchema,
+	decideMentorRequest as decideMentorRequestDb,
+	decideMentorRequestSchema,
 	endMentorship as endMentorshipDb,
 	endMentorshipSchema,
 	listMentors as listMentorsDb,
 	loadClubMentorships as loadClubMentorshipsDb,
+	loadClubPendingMentorRequests as loadClubPendingMentorRequestsDb,
 	loadMemberMentorships as loadMemberMentorshipsDb,
+	loadMyMentorRequests as loadMyMentorRequestsDb,
 	loadMyMentorships as loadMyMentorshipsDb,
+	requestMentor as requestMentorDb,
+	requestMentorSchema,
 	setMentorshipFocus as setMentorshipFocusDb,
 	setMentorshipFocusSchema,
 	setMyMentorBio as setMyMentorBioDb,
 	setMyMentorBioSchema,
 	setMyWillingToMentor as setMyWillingToMentorDb,
 	setWillingToMentorSchema,
+	withdrawMentorRequest as withdrawMentorRequestDb,
+	withdrawMentorRequestSchema,
 } from "./mentorship-logic";
 
 export type {
 	ClubMentorshipRow,
 	ClubMentorships,
+	ClubPendingMentorRequest,
+	IncomingMentorRequest,
 	MemberMentorships,
 	MentorListing,
+	MentorRequestParty,
 	MentorshipParty,
 	MentorshipRow,
+	MyMentorRequests,
 	MyMentorships,
+	OutgoingMentorRequest,
 } from "./mentorship-logic";
 
 const clubScoped = z.object({ clubId: z.string().uuid() });
@@ -108,6 +129,59 @@ export const listMentors = createServerFn({ method: "GET" })
 		const access = await requireClubViewAccess(user.id, data.clubId);
 		if (!access.membership) throw new Error(MENTORS_MEMBERS_ONLY_MESSAGE);
 		return listMentorsDb(data.clubId, access.membership.id);
+	});
+
+/** The caller's latest request as mentee and the ones waiting on them as mentor. */
+export const getMyMentorRequests = createServerFn({ method: "GET" })
+	.validator((i: unknown) => clubScoped.parse(i))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		const access = await requireClubViewAccess(user.id, data.clubId);
+		if (!access.membership) return null;
+		return loadMyMentorRequestsDb(access.membership.id);
+	});
+
+/** Every pending request in the club, for an admin to answer for the mentor. */
+export const listClubPendingMentorRequests = createServerFn({ method: "GET" })
+	.validator((i: unknown) => clubScoped.parse(i))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		await requireClubAdminView(user.id, data.clubId);
+		return loadClubPendingMentorRequestsDb(data.clubId);
+	});
+
+/** Ask a listed mentor to mentor the caller. */
+export const requestMentor = createServerFn({ method: "POST" })
+	.validator((i: unknown) => requestMentorSchema.parse(i))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		return requestMentorDb({ ...data, userId: user.id });
+	});
+
+/** The mentee takes back their own pending request. */
+export const withdrawMentorRequest = createServerFn({ method: "POST" })
+	.validator((i: unknown) => withdrawMentorRequestSchema.parse(i))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		await withdrawMentorRequestDb({ ...data, userId: user.id });
+		return { ok: true as const };
+	});
+
+/** The mentor, or an admin for them, accepts or declines a request. */
+export const decideMentorRequest = createServerFn({ method: "POST" })
+	.validator((i: unknown) => decideMentorRequestSchema.parse(i))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		const { actorMemberId, actingAs } = await authorizeMentorRequestDecision(
+			user.id,
+			data.requestId,
+		);
+		return decideMentorRequestDb({
+			...data,
+			userId: user.id,
+			actingAs,
+			actorMemberId,
+		});
 	});
 
 export const createMentorship = createServerFn({ method: "POST" })

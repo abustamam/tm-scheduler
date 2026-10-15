@@ -258,11 +258,17 @@ the nouns in `src/db/schema.ts`.
   each with the bio and how many people they mentor now (active pairings, any focus, both parties
   active). There is no cap: a full mentor turns "willing" off. Every active member of the club may
   browse it; it is never public and carries no contact details. A **mentor request**
-  (`mentorship_requests`, #945; the flow is Part B, #1209, and nothing writes the table yet) is a
+  (`mentorship_requests`, #945, flow #1209) is a
   mentee's pick of a mentor: `status` is `pending`, `accepted`, `declined` or `withdrawn`, with
   the `focus` the mentee chose (default `new_member`), ONE pending request per mentee (a partial
-  unique index), and decided requests kept as history. Accepting creates the pairing
-  (`mentorship_id`). A member merge keeps requests on the keeper like pairings: a request between
+  unique index), and decided requests kept as history. A member asks a LISTED mentor of the same
+  club from Find a mentor; the mentee may withdraw while it is pending. The mentor, or an admin
+  for them, accepts or declines; the actor's right is re-checked under the club write lock.
+  Accepting creates the pairing (`mentorship_id`, or links the identical active one an admin
+  already made) and is refused while either party is inactive; declining writes only the request,
+  and an admin may decline one whose party went inactive. The app sends nothing: the mentee gets
+  a draft to send the mentor, and the mentor a "say hi" draft for a mentee paired in the last 14
+  days. A member merge keeps requests on the keeper like pairings: a request between
   the two merged memberships is dropped, and when both have a pending request as mentee the
   absorbed one becomes `withdrawn`. The merge keeps the keeper's bio, else the absorbed one's.
   Undoing a guest conversion refuses when the membership has any request, as for a pairing.

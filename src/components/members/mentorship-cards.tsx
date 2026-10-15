@@ -1,11 +1,13 @@
 import { Link } from "@tanstack/react-router";
 import { HeartHandshake, Loader2 } from "lucide-react";
 import { useId, useState } from "react";
+import { NudgeButtons } from "#/components/club/nudge-buttons";
 import { MemberContactLinks } from "#/components/members/member-contact-links";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { Textarea } from "#/components/ui/textarea";
+import { formatShortDate } from "#/lib/format";
 import {
 	MENTOR_BIO_MAX,
 	MENTORSHIP_FOCUS_LABELS,
@@ -16,10 +18,16 @@ import {
 } from "#/lib/mentorship";
 import type {
 	ClubMentorships,
+	ClubPendingMentorRequest,
 	MemberMentorships,
 	MentorshipRow,
 	MyMentorships,
 } from "#/server/mentorship";
+import {
+	currentOrigin,
+	DecideButtons,
+	mentorRequestErrorText,
+} from "./mentor-request-shared";
 
 /**
  * Mentorship (#939): member-to-member pairings inside one club.
@@ -61,8 +69,19 @@ const CARD =
 const SELECT =
 	"flex h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
 
-/** Name, focus and how to reach them. */
-function PartyLine({ row }: { row: MentorshipPartyRow }) {
+/** A mentee's "say hi" draft stays on offer for this long after the pairing. */
+export const WELCOME_DRAFT_DAYS = 14;
+const WELCOME_DRAFT_MS = WELCOME_DRAFT_DAYS * 24 * 60 * 60 * 1000;
+
+/** Name, focus and how to reach them. `welcome` adds the mentor's "say hi"
+ *  draft to the mentee (#1209). */
+function PartyLine({
+	row,
+	welcome = false,
+}: {
+	row: MentorshipPartyRow;
+	welcome?: boolean;
+}) {
 	const focus = mentorshipFocusText(row.focus, row.focusOther);
 	return (
 		<li
@@ -90,6 +109,18 @@ function PartyLine({ row }: { row: MentorshipPartyRow }) {
 					No contact on file.
 				</div>
 			)}
+			{welcome ? (
+				<div className="mt-1.5" data-slot="mentor-welcome">
+					<NudgeButtons
+						mode="mentorWelcome"
+						name={row.member.name}
+						phone={row.member.phone}
+						email={row.member.email}
+						preferredContact={row.member.preferredContact}
+						origin={currentOrigin()}
+					/>
+				</div>
+			) : null}
 		</li>
 	);
 }
@@ -101,10 +132,14 @@ function PartyLine({ row }: { row: MentorshipPartyRow }) {
  */
 export function MentorshipCard({
 	view,
+	now,
 	onToggleWilling,
 	onSaveBio,
 }: {
 	view: MyMentorshipsView | null;
+	/** The instant "started in the last 14 days" is judged against: the loader's
+	 *  pinned one, so the server and the browser agree. Defaults to the clock. */
+	now?: number;
 	onToggleWilling: (willing: boolean) => Promise<void>;
 	/** Saves the member's own mentor bio (#945); blank clears it. */
 	onSaveBio: (bio: string) => Promise<void>;
@@ -152,7 +187,14 @@ export function MentorshipCard({
 					</h3>
 					<ul className="m-0 list-none p-0" data-list="mentees">
 						{view.mentees.map((r) => (
-							<PartyLine key={r.id} row={r} />
+							<PartyLine
+								key={r.id}
+								row={r}
+								welcome={
+									(now ?? Date.now()) - r.startedAt.getTime() <=
+									WELCOME_DRAFT_MS
+								}
+							/>
 						))}
 					</ul>
 				</>
@@ -296,8 +338,17 @@ function MemberLink({ id, name }: { id: string; name: string }) {
  */
 export function ClubMentoringCard({
 	view,
+	pendingRequests = [],
+	onDecide,
+	timezone,
 }: {
 	view: ClubMentoringView | null;
+	/** Pending mentor requests (#1209), answered here on the mentor's behalf. */
+	pendingRequests?: readonly ClubPendingMentorRequest[];
+	/** Must reject on failure so the row keeps its buttons. */
+	onDecide?: (requestId: string, accept: boolean) => Promise<void>;
+	/** The club's zone, for the date on each pending request. */
+	timezone?: string;
 }) {
 	if (!view) return null;
 	const unpaired = [...view.unpaired].sort(
@@ -343,6 +394,13 @@ export function ClubMentoringCard({
 					})}
 				</ul>
 			)}
+			{pendingRequests.length > 0 && onDecide ? (
+				<PendingRequestsList
+					requests={pendingRequests}
+					onDecide={onDecide}
+					timezone={timezone}
+				/>
+			) : null}
 			<div className="border-t border-[var(--line)] px-5 py-3">
 				<h3 className="mb-1 text-xs font-bold tracking-[0.05em] text-[var(--sea-ink-soft)] uppercase">
 					No mentor yet ({unpaired.length})
@@ -391,6 +449,83 @@ export function ClubMentoringCard({
 				)}
 			</div>
 		</section>
+	);
+}
+
+/** "Pending requests" on the admin's card: mentee → mentor, focus, date, and
+ *  Accept / Decline on the mentor's behalf (#1209). A request with an inactive
+ *  party offers Decline only: accept is refused, and declining clears it. */
+export const INACTIVE_PARTY_NOTE =
+	"A member here is no longer active, so this can only be declined.";
+
+function PendingRequestsList({
+	requests,
+	onDecide,
+	timezone,
+}: {
+	requests: readonly ClubPendingMentorRequest[];
+	onDecide: (requestId: string, accept: boolean) => Promise<void>;
+	timezone?: string;
+}) {
+	const [busy, setBusy] = useState<string | null>(null);
+	const [error, setError] = useState<string | null>(null);
+	async function decide(id: string, accept: boolean) {
+		setBusy(id);
+		setError(null);
+		try {
+			await onDecide(id, accept);
+		} catch (err) {
+			setError(mentorRequestErrorText(err));
+		} finally {
+			setBusy(null);
+		}
+	}
+	return (
+		<div className="border-t border-[var(--line)] px-5 py-3">
+			<h3 className="mb-1 text-xs font-bold tracking-[0.05em] text-[var(--sea-ink-soft)] uppercase">
+				Pending requests ({requests.length})
+			</h3>
+			{error ? (
+				<p role="alert" className="mb-1 text-xs text-destructive">
+					{error}
+				</p>
+			) : null}
+			<ul className="m-0 list-none p-0" data-list="pending-requests">
+				{requests.map((r) => {
+					const focus = mentorshipFocusText(r.focus, r.focusOther);
+					return (
+						<li
+							key={r.id}
+							data-request={r.id}
+							className="flex flex-wrap items-center justify-between gap-2 py-1.5 text-sm"
+						>
+							<span>
+								<MemberLink {...r.mentee} />
+								<span className="text-[var(--sea-ink-soft)]"> asked </span>
+								<MemberLink {...r.mentor} />
+								<span className="ml-2 text-xs text-[var(--sea-ink-soft)]">
+									{focus} · {formatShortDate(r.createdAt, timezone)}
+								</span>
+								{r.partyInactive ? (
+									<span
+										className="mt-0.5 block text-xs text-[var(--sea-ink-soft)]"
+										data-slot="inactive-party-note"
+									>
+										{INACTIVE_PARTY_NOTE}
+									</span>
+								) : null}
+							</span>
+							<DecideButtons
+								busy={busy === r.id}
+								disabled={busy !== null}
+								canAccept={!r.partyInactive}
+								onDecide={(accept) => void decide(r.id, accept)}
+							/>
+						</li>
+					);
+				})}
+			</ul>
+		</div>
 	);
 }
 

@@ -36,7 +36,9 @@ export type NudgeMode =
 	| "arriving"
 	| "invite"
 	| "level"
-	| "orientation";
+	| "orientation"
+	| "mentorRequest"
+	| "mentorWelcome";
 
 interface NudgeInputBase {
 	name: string;
@@ -117,6 +119,19 @@ export type NudgeInput =
 			meetingDate?: string | null;
 			shareUrl?: string | null;
 	  })
+	// A mentee telling a mentor they asked (#1209), and the mentor's "say hi"
+	// after accepting. Neither mentions a meeting, so neither carries one.
+	| (Omit<NudgeInputBase, "meetingDate" | "shareUrl"> & {
+			mode: "mentorRequest";
+			/** The focus as it reads: the label, or the member's own `other` text. */
+			focusLabel: string;
+			/** Absolute origin, e.g. `https://gavelup.app`; builds the dashboard link. */
+			origin: string;
+	  })
+	| (Omit<NudgeInputBase, "meetingDate" | "shareUrl"> & {
+			mode: "mentorWelcome";
+			origin: string;
+	  })
 	| (NudgeInputBase & {
 			mode: "confirm" | "recruit";
 			/** The role being asked about. Role-specific asks stay on the slot
@@ -193,6 +208,12 @@ function messageFor(i: NudgeInput): string {
 	}
 	if (i.mode === "orientation") {
 		return orientationMessage(i, who);
+	}
+	if (i.mode === "mentorRequest") {
+		return `Hi ${who}, I've asked you to be my mentor in GavelUp (${i.focusLabel}). You can accept or decline on your dashboard: ${i.origin}/dashboard`;
+	}
+	if (i.mode === "mentorWelcome") {
+		return `Hi ${who}, I'd be glad to be your mentor! Want to grab a few minutes before or after our next meeting to say hi?`;
 	}
 	if (i.mode === "invite") {
 		const where = i.location?.trim() ? `, at ${i.location.trim()}` : "";
@@ -519,6 +540,8 @@ function subjectFor(i: NudgeInput): string {
 		const next = nextOrientationItem(i.items);
 		return next ? ORIENTATION_SUBJECTS[next] : "Your first weeks";
 	}
+	if (i.mode === "mentorRequest") return "Mentor request";
+	if (i.mode === "mentorWelcome") return "Mentoring";
 	if (i.mode === "invite") {
 		return `See you at ${i.clubName} on ${i.meetingDate}?`;
 	}

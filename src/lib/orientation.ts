@@ -78,6 +78,13 @@ export interface OrientationFacts {
 	slots: readonly OrientationSlotFact[];
 	/** Mentorships with this membership as mentee, active or ended (#939). */
 	menteePairings: readonly OrientationPairingFact[];
+	/**
+	 * The mentor this membership has a PENDING request with (#1209), when that
+	 * mentor is active. Optional: facts built without it read as none. It
+	 * changes the "Get a mentor" hint only; the item stays undone until a
+	 * pairing exists.
+	 */
+	pendingMentorName?: string | null;
 }
 
 export type OrientationItemKey =
@@ -175,7 +182,10 @@ export function orientationItems(facts: OrientationFacts): OrientationItem[] {
 		{
 			key: "get-a-mentor",
 			label: "Get a mentor",
-			hint: "Choose a mentor, or your VP Education will pair you.",
+			hint:
+				!hasNewMemberMentor(facts) && facts.pendingMentorName
+					? `Waiting for ${facts.pendingMentorName} to answer.`
+					: "Choose a mentor, or your VP Education will pair you.",
 			done: hasNewMemberMentor(facts),
 			selfTick: false,
 		},
