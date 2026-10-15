@@ -61,6 +61,17 @@ export type NudgeButtonsProps = NudgeButtonsBase &
 				meetingDate?: string | null;
 				shareUrl?: string | null;
 		  }
+		| {
+				/** A mentee's draft to the mentor they asked (#1209). No meeting. */
+				mode: "mentorRequest";
+				focusLabel: string;
+				origin: string;
+		  }
+		| {
+				/** A mentor's "say hi" to a mentee they accepted (#1209). No meeting. */
+				mode: "mentorWelcome";
+				origin: string;
+		  }
 		| (NudgeButtonsMeeting & NudgeButtonsMeetingArm)
 	);
 
@@ -162,59 +173,68 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 	// the other falling into the branch that reads `props.roleName` — which does not
 	// exist on it.
 	const nudge = buildNudge(
-		props.mode === "confirm" || props.mode === "recruit"
+		props.mode === "mentorRequest"
 			? {
 					...common,
-					meetingDate: props.meetingDate,
-					shareUrl: props.shareUrl,
 					mode: props.mode,
-					roleName: props.roleName,
-					// Carried on the SAME branch as `roleName`, for the same reason:
-					// these three fields exist together on the role arm and a spread of
-					// `props` would put the duty clause back in reach of a draft that
-					// names no role.
-					duties: props.duties,
-					evaluating: props.evaluating,
-					personalUrl: props.personalUrl,
-					guideUrl: props.guideUrl,
+					focusLabel: props.focusLabel,
+					origin: props.origin,
 				}
-			: props.mode === "invite"
-				? {
-						...common,
-						meetingDate: props.meetingDate,
-						shareUrl: props.shareUrl,
-						mode: props.mode,
-						clubName: props.clubName,
-						meetingTime: props.meetingTime,
-						location: props.location,
-					}
-				: props.mode === "level"
+			: props.mode === "mentorWelcome"
+				? { ...common, mode: props.mode, origin: props.origin }
+				: props.mode === "confirm" || props.mode === "recruit"
 					? {
 							...common,
 							meetingDate: props.meetingDate,
 							shareUrl: props.shareUrl,
 							mode: props.mode,
-							pathName: props.pathName,
-							level: props.level,
-							projectsLeft: props.projectsLeft,
-							projectNames: props.projectNames,
-							electivesToChoose: props.electivesToChoose,
+							roleName: props.roleName,
+							// Carried on the SAME branch as `roleName`, for the same reason:
+							// these three fields exist together on the role arm and a spread of
+							// `props` would put the duty clause back in reach of a draft that
+							// names no role.
+							duties: props.duties,
+							evaluating: props.evaluating,
+							personalUrl: props.personalUrl,
+							guideUrl: props.guideUrl,
 						}
-					: props.mode === "orientation"
+					: props.mode === "invite"
 						? {
 								...common,
 								meetingDate: props.meetingDate,
 								shareUrl: props.shareUrl,
 								mode: props.mode,
-								items: props.items,
-								origin: props.origin,
+								clubName: props.clubName,
+								meetingTime: props.meetingTime,
+								location: props.location,
 							}
-						: {
-								...common,
-								meetingDate: props.meetingDate,
-								shareUrl: props.shareUrl,
-								mode: props.mode,
-							},
+						: props.mode === "level"
+							? {
+									...common,
+									meetingDate: props.meetingDate,
+									shareUrl: props.shareUrl,
+									mode: props.mode,
+									pathName: props.pathName,
+									level: props.level,
+									projectsLeft: props.projectsLeft,
+									projectNames: props.projectNames,
+									electivesToChoose: props.electivesToChoose,
+								}
+							: props.mode === "orientation"
+								? {
+										...common,
+										meetingDate: props.meetingDate,
+										shareUrl: props.shareUrl,
+										mode: props.mode,
+										items: props.items,
+										origin: props.origin,
+									}
+								: {
+										...common,
+										meetingDate: props.meetingDate,
+										shareUrl: props.shareUrl,
+										mode: props.mode,
+									},
 	);
 
 	const callUrl = preferredContact === "call" ? telHref(phone) : null;

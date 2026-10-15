@@ -1312,3 +1312,54 @@ describe("buildNudge: Evaluator with a speaker set (#1163)", () => {
 		}
 	});
 });
+
+describe("buildNudge mentor drafts (#1209)", () => {
+	// protects=the mentee's draft to the mentor names the mentor and the focus as
+	// it reads, points at {origin}/dashboard, and reaches both channels: the
+	// WhatsApp link carries the text, the mailto carries it with the subject
+	// "Mentor request";
+	// fails_when=the focus label or dashboard link is dropped, the greeting uses
+	// the wrong person, or either channel is missing for a contact that has it;
+	// no_claim=that the message is sent (the app never sends), or how the buttons
+	// render (the component tests)
+	it("mentorRequest asks the mentor, in WhatsApp and mailto", () => {
+		const r = buildNudge({
+			mode: "mentorRequest",
+			name: "Mia Mentor",
+			phone: "+15555550111",
+			email: "mia@example.org",
+			focusLabel: "Contest",
+			origin: "https://gavelup.app",
+		});
+		const text =
+			"Hi Mia, I've asked you to be my mentor in GavelUp (Contest). You can accept or decline on your dashboard: https://gavelup.app/dashboard";
+		expect(r.message).toBe(text);
+		expect(r.whatsappUrl).toContain(encodeURIComponent(text));
+		expect(r.mailtoUrl).toMatch(/^mailto:mia@example\.org\?/);
+		expect(r.mailtoUrl).toContain("subject=Mentor%20request");
+		expect(r.mailtoUrl).toContain(encodeURIComponent(text));
+	});
+
+	// protects=the mentor's draft after accepting greets the mentee, offers a
+	// few minutes around the next meeting, carries no link or meeting date, and
+	// the mailto subject is "Mentoring";
+	// fails_when=the text mentions a meeting date or URL, or the subject is
+	// another mode's;
+	// no_claim=that the mentee is paired (the integration test)
+	it("mentorWelcome says hi to the mentee, in WhatsApp and mailto", () => {
+		const r = buildNudge({
+			mode: "mentorWelcome",
+			name: "Sam Smith",
+			phone: "+15555550122",
+			email: "sam@example.org",
+			origin: "https://gavelup.app",
+		});
+		const text =
+			"Hi Sam, I'd be glad to be your mentor! Want to grab a few minutes before or after our next meeting to say hi?";
+		expect(r.message).toBe(text);
+		expect(r.message).not.toContain("http");
+		expect(r.whatsappUrl).toContain(encodeURIComponent(text));
+		expect(r.mailtoUrl).toContain("subject=Mentoring");
+		expect(r.mailtoUrl).toContain(encodeURIComponent(text));
+	});
+});

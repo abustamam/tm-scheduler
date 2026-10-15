@@ -7,6 +7,7 @@ import {
 	FeedbackForYou,
 	feedbackOrEmpty,
 } from "#/components/feedback/feedback-for-you";
+import { MentorRequestsCard } from "#/components/members/mentor-requests-card";
 import {
 	ClubMentoringCard,
 	MentorshipCard,
@@ -35,8 +36,11 @@ import {
 import { listMySpeeches } from "#/server/club";
 import { listMyCommitments } from "#/server/meetings";
 import {
+	decideMentorRequest,
+	getMyMentorRequests,
 	getMyMentorships,
 	listClubMentorships,
+	listClubPendingMentorRequests,
 	setMyMentorBio,
 	setMyWillingToMentor,
 } from "#/server/mentorship";
@@ -75,6 +79,8 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			orientation,
 			mentorship,
 			clubMentoring,
+			mentorRequests,
+			clubPendingRequests,
 			timezone,
 		] = await Promise.all([
 			listMyCommitments(),
@@ -102,6 +108,15 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			// (`requireClubAdminView`), and a member never asks.
 			clubId && effectiveAdminClubFor(context, clubId)
 				? listClubMentorships({ data: { clubId } }).catch(() => null)
+				: Promise.resolve(null),
+			// Mentor requests (#1209): the ones waiting on this member as mentor.
+			// Caught to null like the card above.
+			clubId
+				? getMyMentorRequests({ data: { clubId } }).catch(() => null)
+				: Promise.resolve(null),
+			// The admins' list of every pending request, gated server-side.
+			clubId && effectiveAdminClubFor(context, clubId)
+				? listClubPendingMentorRequests({ data: { clubId } }).catch(() => null)
 				: Promise.resolve(null),
 			// The active club's zone, for the month on each Pathways win (#1017).
 			// Imported here, as club-settings imports its promo template, so the
@@ -133,6 +148,8 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			orientation,
 			mentorship,
 			clubMentoring,
+			mentorRequests,
+			clubPendingRequests,
 			timezone,
 			// The instant the speech log is read against, pinned HERE rather than
 			// sampled while rendering. One value is dehydrated with the loader data,
@@ -168,6 +185,8 @@ function Dashboard() {
 		orientation,
 		mentorship,
 		clubMentoring,
+		mentorRequests,
+		clubPendingRequests,
 		now,
 		timezone,
 	} = Route.useLoaderData();
@@ -221,6 +240,14 @@ function Dashboard() {
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
 		}
+	}
+
+	// A mentor-request answer. Unlike `mutateAndReload` it REJECTS on failure:
+	// the cards show the message beside the row and keep its buttons, and
+	// `MentorRequestsCard` must not treat a refused Accept as accepted.
+	async function decideRequest(requestId: string, accept: boolean) {
+		await decideMentorRequest({ data: { requestId, accept } });
+		await router.invalidate();
 	}
 
 	return (
@@ -477,6 +504,7 @@ function Dashboard() {
 					{activeClubId ? (
 						<MentorshipCard
 							view={mentorship}
+							now={now}
 							onToggleWilling={(willing) =>
 								mutateAndReload(() =>
 									setMyWillingToMentor({
@@ -491,7 +519,17 @@ function Dashboard() {
 							}
 						/>
 					) : null}
-					<ClubMentoringCard view={clubMentoring} />
+					<ClubMentoringCard
+						view={clubMentoring}
+						pendingRequests={clubPendingRequests ?? []}
+						onDecide={decideRequest}
+					/>
+					{/* Mentor requests (#1209): renders only with a pending request
+					    addressed to this member. */}
+					<MentorRequestsCard
+						requests={mentorRequests?.incoming ?? []}
+						onDecide={decideRequest}
+					/>
 
 					{/* Quick actions */}
 					<div className="flex flex-col gap-2">

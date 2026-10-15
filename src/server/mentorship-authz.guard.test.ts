@@ -15,6 +15,13 @@
  *    another row. `mentorship.integration.test.ts` exercises that resolution.
  *  - `createMentorship` / `endMentorship` / `setMentorshipFocus`: admin writes
  *    about other people, `requireClubRole(…, ["admin"])` BEFORE the logic.
+ *  - Mentor requests (#1209): `requestMentor` / `withdrawMentorRequest` are the
+ *    caller's own (SESSION user id to the logic, which resolves the mentee;
+ *    the schemas are `.strict()` and name no mentee). `decideMentorRequest`
+ *    calls `authorizeMentorRequestDecision(user.id, data.requestId)` BEFORE the
+ *    logic, and that reads the club and the mentor off the REQUEST row: the
+ *    input names neither. `getMyMentorRequests` is a member read gate,
+ *    `listClubPendingMentorRequests` the admin view gate.
  *  - Reads write nothing: no read fn reaches a write in the logic module.
  *
  * A `createServerFn` handler body is unreachable from vitest, so this reads
@@ -50,6 +57,11 @@ const MEMBER_READ = /requireClubViewAccess\(\s*user\.id,\s*data\.clubId\s*\)/;
 const SELF = /\{\s*\.\.\.data,\s*userId:\s*user\.id\s*\}/;
 /** The admin's own membership as the actor, spread after the input. */
 const ACTOR = /\{\s*\.\.\.data,\s*actorMemberId:\s*membership\.id\s*\}/;
+/** Answering a request: the logic-level check, keyed on the REQUEST id (#1209). */
+const DECIDE_GATE =
+	/authorizeMentorRequestDecision\(\s*user\.id,\s*data\.requestId,?\s*\)/;
+/** The actor the check resolved, spread after the input. */
+const DECIDE_ACTOR = /\{\s*\.\.\.data,\s*actorMemberId\s*\}/;
 
 const FNS: { fn: string; gate: RegExp; logic: string; write: boolean }[] = [
 	{
@@ -87,6 +99,36 @@ const FNS: { fn: string; gate: RegExp; logic: string; write: boolean }[] = [
 		gate: MEMBER_READ,
 		logic: "listMentorsDb",
 		write: false,
+	},
+	{
+		fn: "getMyMentorRequests",
+		gate: MEMBER_READ,
+		logic: "loadMyMentorRequestsDb",
+		write: false,
+	},
+	{
+		fn: "listClubPendingMentorRequests",
+		gate: ADMIN_READ,
+		logic: "loadClubPendingMentorRequestsDb",
+		write: false,
+	},
+	{
+		fn: "requestMentor",
+		gate: SELF,
+		logic: "requestMentorDb",
+		write: true,
+	},
+	{
+		fn: "withdrawMentorRequest",
+		gate: SELF,
+		logic: "withdrawMentorRequestDb",
+		write: true,
+	},
+	{
+		fn: "decideMentorRequest",
+		gate: DECIDE_GATE,
+		logic: "decideMentorRequestDb",
+		write: true,
 	},
 	{
 		fn: "createMentorship",
@@ -138,6 +180,88 @@ describe("mentorship server fns (#939)", () => {
 		expect(body).toMatch(/if\s*\(\s*!access\.membership\s*\)\s*return null/);
 	});
 
+	it("the requests read answers from the gate's membership, never input", () => {
+		const body = serverFnBody(MENTORSHIP, "getMyMentorRequests");
+		expect(body).toMatch(
+			/loadMyMentorRequestsDb\(\s*access\.membership\.id\s*\)/,
+		);
+		expect(body).toMatch(/if\s*\(\s*!access\.membership\s*\)\s*return null/);
+	});
+
+	it("an answer is attributed to the membership the check resolved, never input", () => {
+		const body = serverFnBody(MENTORSHIP, "decideMentorRequest");
+		expect(body).toMatch(
+			/const\s*\{\s*actorMemberId\s*\}\s*=\s*await\s+authorizeMentorRequestDecision\(/,
+		);
+		expect(body).toMatch(DECIDE_ACTOR);
+	});
+
+	it("the check reads the club and mentor off the request row, and admits the mentor or an admin", () => {
+		const body = logicFnBody("authorizeMentorRequestDecision");
+		expect(body).toMatch(/\.from\(mentorshipRequests\)/);
+		expect(body).toMatch(/eq\(mentorshipRequests\.id,\s*requestId\)/);
+		expect(body).toMatch(/requireMembership\(\s*userId,\s*req\.clubId\s*\)/);
+		expect(body).toMatch(/membership\.id === req\.mentorMemberId/);
+		expect(body).toMatch(
+			/requireClubRole\(\s*userId,\s*req\.clubId,\s*\["admin"\]\s*\)/,
+		);
+		// A missing request is refused with the same message as a stranger.
+		expect(body).toMatch(
+			/if\s*\(!req\)\s*throw new Error\(MENTOR_REQUEST_NOT_ALLOWED_MESSAGE\)/,
+		);
+	});
+
+	it("the request schemas are strict and name no mentee, and the decision names no club", () => {
+		for (const name of [
+			"requestMentorSchema",
+			"withdrawMentorRequestSchema",
+			"decideMentorRequestSchema",
+		]) {
+			const at = LOGIC.indexOf(`export const ${name}`);
+			expect(at, `${name} missing`).toBeGreaterThanOrEqual(0);
+			const end = LOGIC.indexOf(";", at);
+			expect(end, `${name}: end not found`).toBeGreaterThan(at);
+			const decl = LOGIC.slice(at, end);
+			expect(decl, name).toMatch(/\.strict\(\)/);
+			expect(decl, name).not.toMatch(/menteeMemberId/);
+			if (name !== "requestMentorSchema")
+				expect(decl, name).not.toMatch(/clubId/);
+		}
+	});
+
+	it("a request resolves its mentee from the session and asks only for a LISTED mentor, under the club lock", () => {
+		const body = logicFnBody("requestMentor");
+		expect(body).toMatch(
+			/ownMembershipId\(\s*input\.userId,\s*input\.clubId\s*\)/,
+		);
+		expect(body).toMatch(/listedMentorWhere\(\)/);
+		const lockAt = body.search(/lockClubForWrite\(/);
+		const insertAt = body.search(/\.insert\(mentorshipRequests\)/);
+		expect(lockAt).toBeGreaterThanOrEqual(0);
+		expect(insertAt).toBeGreaterThan(lockAt);
+	});
+
+	it("withdraw is one conditional UPDATE: the caller's own request, still pending", () => {
+		const body = logicFnBody("withdrawMentorRequest");
+		expect(body).toMatch(
+			/ownMembershipId\(\s*input\.userId,\s*req\.clubId\s*\)/,
+		);
+		expect(body).toMatch(/eq\(mentorshipRequests\.menteeMemberId,\s*own\)/);
+		expect(body).toMatch(/eq\(mentorshipRequests\.status,\s*"pending"\)/);
+	});
+
+	it("an answer takes the club lock, then the request row FOR UPDATE, and refuses once not pending", () => {
+		const body = logicFnBody("decideMentorRequest");
+		const lockAt = body.search(/lockClubForWrite\(/);
+		const rowAt = body.search(/\.for\("update"\)/);
+		const pendingAt = body.search(/req\.status !== "pending"/);
+		expect(lockAt).toBeGreaterThanOrEqual(0);
+		expect(rowAt).toBeGreaterThan(lockAt);
+		expect(pendingAt).toBeGreaterThan(rowAt);
+		expect(body).toMatch(/is no longer an active member/);
+		expect(body).toMatch(/insertMentorshipInTx\(\s*tx,/);
+	});
+
 	it("every server fn the module declares is covered above", () => {
 		const declared = [
 			...MENTORSHIP.matchAll(/export const (\w+) = createServerFn\(/g),
@@ -161,6 +285,8 @@ describe("mentorship server fns (#939)", () => {
 			"loadMyMentorships",
 			"loadMemberMentorships",
 			"loadClubMentorships",
+			"loadMyMentorRequests",
+			"loadClubPendingMentorRequests",
 			"listMentors",
 			"activePairingsFor",
 			"memberHasMentorship",
@@ -192,19 +318,29 @@ describe("mentorship server fns (#939)", () => {
 	});
 
 	it("every admin write logs through logActivity", () => {
+		// `createMentorship`'s insert and log live in `insertMentorshipInTx` (#1209),
+		// which it must call inside its own transaction.
 		for (const fn of [
-			"createMentorship",
+			"insertMentorshipInTx",
 			"endMentorship",
 			"setMentorshipFocus",
 		]) {
 			expect(logicFnBody(fn), fn).toMatch(/logActivity\(\s*tx,/);
 		}
+		expect(logicFnBody("createMentorship")).toMatch(
+			/insertMentorshipInTx\(\s*tx,/,
+		);
 	});
 
 	it("create checks the club, activity and self-pairing before inserting", () => {
 		const create = logicFnBody("createMentorship");
-		const checkAt = create.search(/assertPairable\(/);
-		const insertAt = create.search(/\.insert\(mentorships\)/);
+		expect(create).toMatch(/lockClubForWrite\(/);
+		expect(create.search(/insertMentorshipInTx\(/)).toBeGreaterThan(
+			create.search(/lockClubForWrite\(/),
+		);
+		const inserter = logicFnBody("insertMentorshipInTx");
+		const checkAt = inserter.search(/assertPairable\(/);
+		const insertAt = inserter.search(/\.insert\(mentorships\)/);
 		expect(checkAt).toBeGreaterThanOrEqual(0);
 		expect(insertAt).toBeGreaterThan(checkAt);
 		const pairable = logicFnBody("assertPairable");
