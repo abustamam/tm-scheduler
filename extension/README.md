@@ -123,7 +123,8 @@ sync itself happens from the in-page widget.)_
 A second mode, beside the Base Camp sync, for the club-migration work (#1054). **Internal only**,
 the same as the Pathways mode above: unlisted, run by the maintainer or an officer of the
 maintainer's clubs. Easy-Speak has no export, so this reads the club in *your own signed-in
-session* and saves it as one file. It posts nothing: uploading the file is a separate step, done by
+session* and saves it as two files: the bundle (what gets uploaded) and, beside it, a `-pages.json` archive of
+the raw pages read. It posts nothing: uploading the bundle is a separate step, done by
 a superadmin.
 
 **A member account is enough.** A member sees every meeting (roles, holders, Pathways projects,
@@ -163,13 +164,19 @@ null` for them) or anyone's evaluations but their own (`evaluations: []` is a va
   and `unlimitedStorage` would be a second new permission.
 - **Permissions:** the one new entry is the host `https://easy-speak.org/*`. No other permission.
 - **Contact details:** `memberlist.php` and `clubdata.php` are parsed for names, status and the club's
-  facts, and never stored (not in `raw`, and the resume store keeps only the parsed result). The
+  facts, and never stored (not in the archive, and the resume store keeps only the parsed result). The
   `people` and `club` sections hold no phone number or email.
 - **The bundle** is `gavelup.easy-speak-bundle` v1. The canonical contract is the zod schema in
   `src/lib/easy-speak-bundle.ts`; `lib/easy-speak-bundle.ts` is the extension's own TypeScript copy,
   and `lib/__fixtures__/easy-speak/bundle.expected.json` (produced by the extension's tests, parsed
-  by a root test with the schema) keeps the two from drifting. Each fetched page's HTML is also kept
-  in `raw`, so a parser bug can be fixed later from the file.
+  by a root test with the schema) keeps the two from drifting. `raw` is `[]` in the exported bundle.
+- **The archive** is a second file saved next to the bundle, `easy-speak-<club>-<date>-pages.json`:
+  `{ format: "gavelup.easy-speak-pages", version: 1, exportedAt, club: { esClubId, number }, pages: [{ url, fetchedAt, html }] }`.
+  It holds each fetched page's HTML (never `memberlist.php` or `clubdata.php`), so a parser bug can be
+  fixed later from the file. It is kept out of the bundle because a long-history club's pages reach
+  ~195 MB, over the 50 MB upload cap; the importer never reads it. `exportedAt` and `club` pair it with
+  its bundle. The bundle downloads first, so the file that matters lands even if the browser blocks the
+  second download; the status line names both files.
 - **Fixtures** are saved pages rewritten with fake names; read `lib/__fixtures__/easy-speak/README.md`
   before adding one. This repo is public.
 
@@ -184,6 +191,7 @@ null` for them) or anyone's evaluations but their own (`evaluations: []` is a va
 - [ ] Bad/revoked token → the widget shows the server's error; unreachable server → a network error.
 - [ ] Firefox: repeat the above on the `firefox-mv2` build.
 - [ ] Easy-Speak export: on a signed-in Easy-Speak club page, **Export this club for GavelUp** appears;
-      a run downloads one JSON file whose `meetings` count equals the meeting list's count, whose past
+      a run downloads TWO files, the bundle and a `-pages.json` archive beside it (confirm both landed);
+      the bundle's `meetings` count equals the meeting list's count, whose past
       meetings have `awards`, and (if you have a speech of your own with an introduction) whose
       `introduction` for it is non-empty. Reload mid-walk: it resumes.

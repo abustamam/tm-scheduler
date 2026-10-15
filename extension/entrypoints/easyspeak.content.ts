@@ -21,7 +21,7 @@ import { type PageGlobal, pageFetch } from "../lib/page-fetch";
  *
  * Injects a small "Export this club for GavelUp" widget on a signed-in
  * easy-speak.org page. One click walks the club (sequentially, 1s between
- * requests, same-origin with the page's cookies; `pageFetch`) and downloads one JSON file.
+ * requests, same-origin with the page's cookies; `pageFetch`) and downloads two JSON files (the bundle and its raw-pages archive).
  * It posts nothing anywhere: upload is a later step, by a superadmin.
  */
 export default defineContentScript({
@@ -109,7 +109,7 @@ export default defineContentScript({
 				setStatus("Starting...");
 				follower?.cancel();
 				try {
-					const { bundle, fileName } = await runExport({
+					const { bundle, fileName, archive, archiveFileName } = await runExport({
 						fetchImpl,
 						parseHtml,
 						store,
@@ -121,9 +121,12 @@ export default defineContentScript({
 						now: Date.now,
 						onProgress,
 					});
+					// The upload bundle first, so the file that matters lands even if the browser
+					// blocks a second automatic download.
 					download(fileName, JSON.stringify(bundle));
+					download(archiveFileName, JSON.stringify(archive));
 					setStatus(
-						`Saved ${fileName}\n${bundle.meetings.length} meetings, ${bundle.speechRequests.length} speeches, ${bundle.people.length} people.`,
+						`Saved ${fileName} (upload this one) and ${archiveFileName} (raw pages, keep it; if it is missing, your browser may have blocked the second download, so check its download prompt).\n${bundle.meetings.length} meetings, ${bundle.speechRequests.length} speeches, ${bundle.people.length} people.`,
 						"#065f46",
 					);
 					btn.textContent = "Export this club for GavelUp";

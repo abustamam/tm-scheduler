@@ -61,8 +61,8 @@ describe("walking back to the first meeting", () => {
 	});
 
 	it("keeps the lists of years with meetings in raw and leaves out the empty years", async () => {
-		const { bundle } = await setup().run();
-		const lists = bundle.raw.filter((r) => r.url.includes("meeting_list.php"));
+		const { archive } = await setup().run();
+		const lists = archive.pages.filter((r) => r.url.includes("meeting_list.php"));
 		expect(lists.map((r) => r.url)).toEqual([expect.stringContaining("start_year=2026")]);
 	});
 });

@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { DOMParser } from "linkedom";
 import { norm } from "./easy-speak-text";
-import { type Identity, identityFromDoc, runExport, type WalkStore } from "./easy-speak-walk";
+import { type ExportResult, type Identity, identityFromDoc, runExport, type WalkStore } from "./easy-speak-walk";
 
 const DIR = new URL("./__fixtures__/easy-speak/", import.meta.url);
 
@@ -293,3 +293,13 @@ export function setup(opts: FakeSiteOptions & { store?: ReturnType<typeof memory
 		});
 	return { run, log, store, c, progress, maxInFlight: () => maxInFlight };
 }
+
+/** An export result minus what the clock stamps: the export time and each page's fetch time. */
+export const stripClock = (r: ExportResult) => ({
+	bundle: { ...r.bundle, exportedAt: "" },
+	archive: {
+		...r.archive,
+		exportedAt: "",
+		pages: r.archive.pages.map((p) => ({ ...p, fetchedAt: "" })),
+	},
+});

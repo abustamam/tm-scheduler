@@ -8,7 +8,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-	type EasySpeakBundleV1,
 	isContactPage,
 } from "./easy-speak-bundle";
 import {
@@ -22,6 +21,7 @@ import {
 	parseHtml,
 	readFixture,
 	setup,
+	stripClock,
 } from "./easy-speak-test-kit";
 import {
 	EARLIEST_MEETING_YEAR,
@@ -200,14 +200,13 @@ describe("resume", () => {
 	});
 
 	it("a resumed walk produces the same bundle as an uninterrupted one", async () => {
-		const clean = (await setup().run()).bundle;
+		const clean = await setup().run();
 		const store = memoryStore();
 		const first = setup({ store, failOn: (u) => u.includes("memberchart.php?chart=7") });
 		await expect(first.run()).rejects.toThrow();
-		const resumed = (await setup({ store }).run()).bundle;
+		const resumed = await setup({ store }).run();
 		// exportedAt and fetchedAt come from the clock; everything else is the same.
-		const strip = (b: EasySpeakBundleV1) => ({ ...b, exportedAt: "", raw: b.raw.map((r) => ({ ...r, fetchedAt: "" })) });
-		expect(strip(resumed)).toEqual(strip(clean));
+		expect(stripClock(resumed)).toEqual(stripClock(clean));
 	});
 
 	it("does not resume a session that is over twelve hours old", async () => {
@@ -225,16 +224,17 @@ describe("resume", () => {
 });
 
 describe("contact details never leave the pages that carry them", () => {
-	it("keeps memberlist.php and clubdata.php out of raw", async () => {
-		const { bundle } = await setup().run();
-		expect(bundle.raw.length).toBeGreaterThanOrEqual(15);
-		expect(bundle.raw.some((r) => isContactPage(r.url))).toBe(false);
-		expect(bundle.raw.some((r) => /memberlist|clubdata/.test(r.url))).toBe(false);
+	it("keeps memberlist.php and clubdata.php out of both files", async () => {
+		const { bundle, archive } = await setup().run();
+		expect(archive.pages.length).toBeGreaterThanOrEqual(15);
+		expect(archive.pages.some((r) => isContactPage(r.url))).toBe(false);
+		expect(archive.pages.some((r) => /memberlist|clubdata/.test(r.url))).toBe(false);
+		expect(JSON.stringify(bundle)).not.toMatch(/memberlist\.php|clubdata\.php/);
 	});
 
-	it("has no phone number or email in any raw page", async () => {
-		const { bundle } = await setup().run();
-		for (const r of bundle.raw) {
+	it("has no phone number or email in any archived page", async () => {
+		const { archive } = await setup().run();
+		for (const r of archive.pages) {
 			expect(r.html, r.url).not.toMatch(PHONE);
 			expect(r.html, r.url).not.toMatch(EMAIL);
 		}
@@ -259,6 +259,43 @@ describe("contact details never leave the pages that carry them", () => {
 	it("gives the people and club sections no contact details", async () => {
 		const { bundle } = await setup().run();
 		expect(JSON.stringify([bundle.people, bundle.club])).not.toMatch(/555|@|\d{3}-\d{4}/);
+	});
+});
+
+/** The `raw` URLs bundle.expected.json held before #1235 moved them to the archive. */
+const PRE_CHANGE_RAW_URLS = [
+	"https://easy-speak.org/meeting_list.php#POST mode=roles&start_month=01&start_year=2026&end_month=12&end_year=2026",
+	"https://easy-speak.org/view_meeting.php?t=644363",
+	"https://easy-speak.org/view_meeting.php?t=644360",
+	"https://easy-speak.org/view_meeting.php?t=644304",
+	"https://easy-speak.org/tm_all_speeches.php",
+	"https://easy-speak.org/request_speech.php?mode=entertitle&s=1473688&u=900001",
+	"https://easy-speak.org/request_speech.php?mode=entertitle&s=1473689&u=900001",
+	"https://easy-speak.org/memberchart.php?chart=1",
+	"https://easy-speak.org/memberchart.php?chart=4",
+	"https://easy-speak.org/memberchart.php?chart=7",
+	"https://easy-speak.org/memberchart.php?chart=8",
+	"https://easy-speak.org/my_evaluations.php",
+	"https://easy-speak.org/api/v1/evaluations.php/my-evaluations",
+	"https://easy-speak.org/api/v1/evaluations.php/eval/501",
+	"https://easy-speak.org/api/v1/evaluations.php/eval/502",
+];
+
+describe("the archive file", () => {
+	it("leaves raw empty in the upload bundle", async () => {
+		const { bundle } = await setup().run();
+		expect(bundle.raw).toEqual([]);
+	});
+
+	it("holds the pages raw held before, and names the two files as a pair", async () => {
+		const { bundle, fileName, archive, archiveFileName } = await setup().run();
+		expect(archive.format).toBe("gavelup.easy-speak-pages");
+		expect(archive.version).toBe(1);
+		expect(archive.exportedAt).toBe(bundle.exportedAt);
+		expect(archive.club).toEqual({ esClubId: bundle.club.esClubId, number: bundle.club.number });
+		expect(archiveFileName).toBe(fileName.replace(/\.json$/, "-pages.json"));
+		expect(archive.pages.map((p) => p.url).sort()).toEqual([...PRE_CHANGE_RAW_URLS].sort());
+		expect(archive.pages.some((p) => /view_meeting\.php/.test(p.url) && p.html.length > 0)).toBe(true);
 	});
 });
 
