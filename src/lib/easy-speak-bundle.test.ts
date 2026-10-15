@@ -85,7 +85,9 @@ describe("easySpeakBundleV1Schema", () => {
 		"https://easy-speak.org/MemberList.php",
 	])("rejects a raw page whose url is the contact page %s", (url) => {
 		const b = load();
-		const bad = { ...b, raw: [...b.raw, { ...b.raw[0], url }] };
+		// The fixture's `raw` is `[]` since #1235, so the page is written out here.
+		const page = { url, fetchedAt: "2026-10-13T12:00:00.000Z", html: "x" };
+		const bad = { ...b, raw: [...b.raw, page] };
 		const parsed = easySpeakBundleV1Schema.safeParse(bad);
 		expect(parsed.success).toBe(false);
 		expect(parsed.error?.issues[0]?.path).toEqual(["raw", b.raw.length, "url"]);

@@ -122,7 +122,21 @@ export interface EasySpeakBundleV1 {
 	mentors: EsMentor[];
 	visitorsIntroduced: { visitor: EsPersonRef; introducedBy: EsPersonRef }[];
 	evaluations: EsEvaluation[];
+	/** Always `[]` in an exported upload bundle: the pages go to the archive file (`EsArchiveV1`). */
 	raw: EsRawPage[];
+}
+
+/**
+ * The second file an export saves: every fetched page's HTML, kept out of the upload bundle so
+ * the bundle fits the server's size cap. The importer never reads it; it exists so a parser bug
+ * can be fixed later from the file. `club` and `exportedAt` pair it with its bundle.
+ */
+export interface EsArchiveV1 {
+	format: "gavelup.easy-speak-pages";
+	version: 1;
+	exportedAt: string;
+	club: { esClubId: string; number: string | null };
+	pages: EsRawPage[];
 }
 
 /**
@@ -156,12 +170,13 @@ export interface AssembleInput {
 	mentors: EsMentor[];
 	visitorsIntroduced: EasySpeakBundleV1["visitorsIntroduced"];
 	evaluations: EsEvaluation[];
+	/** The pages for the archive file. The assembled bundle itself carries `raw: []`. */
 	raw: EsRawPage[];
 }
 
 /**
  * The two pages whose HTML carries phone numbers. They are parsed and never
- * stored in `raw`. The same rule, character for character, is `isContactPageUrl`
+ * stored in the archive (or in `raw`, in an old bundle). The same rule, character for character, is `isContactPageUrl`
  * in `src/lib/easy-speak-bundle.ts` (which the importer validates `raw` with);
  * `src/lib/easy-speak-bundle.test.ts` fails if the two ever disagree.
  */
@@ -244,7 +259,18 @@ export function assembleBundle(input: AssembleInput): EasySpeakBundleV1 {
 		mentors: input.mentors,
 		visitorsIntroduced: input.visitorsIntroduced,
 		evaluations: input.evaluations,
-		raw: input.raw,
+		raw: [],
+	};
+}
+
+/** The archive file for the same export: the pages `assembleBundle` leaves out of the bundle. */
+export function assembleArchive(input: AssembleInput): EsArchiveV1 {
+	return {
+		format: "gavelup.easy-speak-pages",
+		version: 1,
+		exportedAt: input.exportedAt,
+		club: { esClubId: input.club.esClubId, number: input.club.number },
+		pages: input.raw,
 	};
 }
 
@@ -252,4 +278,9 @@ export function assembleBundle(input: AssembleInput): EasySpeakBundleV1 {
 export function bundleFileName(b: EasySpeakBundleV1): string {
 	const who = norm(b.club.number ?? b.club.esClubId).replace(/[^\w-]+/g, "-");
 	return `easy-speak-${who}-${b.exportedAt.slice(0, 10)}.json`;
+}
+
+/** The archive's name: the bundle's name with `-pages` before the extension. */
+export function archiveFileName(b: EasySpeakBundleV1): string {
+	return bundleFileName(b).replace(/\.json$/, "-pages.json");
 }

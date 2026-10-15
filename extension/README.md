@@ -163,13 +163,19 @@ null` for them) or anyone's evaluations but their own (`evaluations: []` is a va
   and `unlimitedStorage` would be a second new permission.
 - **Permissions:** the one new entry is the host `https://easy-speak.org/*`. No other permission.
 - **Contact details:** `memberlist.php` and `clubdata.php` are parsed for names, status and the club's
-  facts, and never stored (not in `raw`, and the resume store keeps only the parsed result). The
+  facts, and never stored (not in the archive, and the resume store keeps only the parsed result). The
   `people` and `club` sections hold no phone number or email.
 - **The bundle** is `gavelup.easy-speak-bundle` v1. The canonical contract is the zod schema in
   `src/lib/easy-speak-bundle.ts`; `lib/easy-speak-bundle.ts` is the extension's own TypeScript copy,
   and `lib/__fixtures__/easy-speak/bundle.expected.json` (produced by the extension's tests, parsed
-  by a root test with the schema) keeps the two from drifting. Each fetched page's HTML is also kept
-  in `raw`, so a parser bug can be fixed later from the file.
+  by a root test with the schema) keeps the two from drifting. `raw` is `[]` in the exported bundle.
+- **The archive** is a second file saved next to the bundle, `easy-speak-<club>-<date>-pages.json`:
+  `{ format: "gavelup.easy-speak-pages", version: 1, exportedAt, club: { esClubId, number }, pages: [{ url, fetchedAt, html }] }`.
+  It holds each fetched page's HTML (never `memberlist.php` or `clubdata.php`), so a parser bug can be
+  fixed later from the file. It is kept out of the bundle because a long-history club's pages reach
+  ~195 MB, over the 50 MB upload cap; the importer never reads it. `exportedAt` and `club` pair it with
+  its bundle. The bundle downloads first, so the file that matters lands even if the browser blocks the
+  second download; the status line names both files.
 - **Fixtures** are saved pages rewritten with fake names; read `lib/__fixtures__/easy-speak/README.md`
   before adding one. This repo is public.
 

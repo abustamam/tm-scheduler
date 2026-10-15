@@ -29,6 +29,7 @@ import {
 	RETRY_WAIT_MS,
 	readSession,
 	resumeState,
+	type ExportResult,
 	runExport,
 } from "./easy-speak-walk";
 
@@ -200,13 +201,16 @@ describe("resume", () => {
 	});
 
 	it("a resumed walk produces the same bundle as an uninterrupted one", async () => {
-		const clean = (await setup().run()).bundle;
+		const clean = await setup().run();
 		const store = memoryStore();
 		const first = setup({ store, failOn: (u) => u.includes("memberchart.php?chart=7") });
 		await expect(first.run()).rejects.toThrow();
-		const resumed = (await setup({ store }).run()).bundle;
+		const resumed = await setup({ store }).run();
 		// exportedAt and fetchedAt come from the clock; everything else is the same.
-		const strip = (b: EasySpeakBundleV1) => ({ ...b, exportedAt: "", raw: b.raw.map((r) => ({ ...r, fetchedAt: "" })) });
+		const strip = (r: ExportResult) => ({
+			bundle: { ...r.bundle, exportedAt: "" },
+			archive: { ...r.archive, exportedAt: "", pages: r.archive.pages.map((p) => ({ ...p, fetchedAt: "" })) },
+		});
 		expect(strip(resumed)).toEqual(strip(clean));
 	});
 
@@ -225,16 +229,17 @@ describe("resume", () => {
 });
 
 describe("contact details never leave the pages that carry them", () => {
-	it("keeps memberlist.php and clubdata.php out of raw", async () => {
-		const { bundle } = await setup().run();
-		expect(bundle.raw.length).toBeGreaterThanOrEqual(15);
-		expect(bundle.raw.some((r) => isContactPage(r.url))).toBe(false);
-		expect(bundle.raw.some((r) => /memberlist|clubdata/.test(r.url))).toBe(false);
+	it("keeps memberlist.php and clubdata.php out of both files", async () => {
+		const { bundle, archive } = await setup().run();
+		expect(archive.pages.length).toBeGreaterThanOrEqual(15);
+		expect(archive.pages.some((r) => isContactPage(r.url))).toBe(false);
+		expect(archive.pages.some((r) => /memberlist|clubdata/.test(r.url))).toBe(false);
+		expect(JSON.stringify(bundle)).not.toMatch(/memberlist\.php|clubdata\.php/);
 	});
 
-	it("has no phone number or email in any raw page", async () => {
-		const { bundle } = await setup().run();
-		for (const r of bundle.raw) {
+	it("has no phone number or email in any archived page", async () => {
+		const { archive } = await setup().run();
+		for (const r of archive.pages) {
 			expect(r.html, r.url).not.toMatch(PHONE);
 			expect(r.html, r.url).not.toMatch(EMAIL);
 		}
@@ -259,6 +264,32 @@ describe("contact details never leave the pages that carry them", () => {
 	it("gives the people and club sections no contact details", async () => {
 		const { bundle } = await setup().run();
 		expect(JSON.stringify([bundle.people, bundle.club])).not.toMatch(/555|@|\d{3}-\d{4}/);
+	});
+});
+
+describe("the archive file", () => {
+	it("leaves raw empty in the upload bundle", async () => {
+		const { bundle } = await setup().run();
+		expect(bundle.raw).toEqual([]);
+	});
+
+	it("holds the pages raw held before, and names the two files as a pair", async () => {
+		const { bundle, fileName, archive, archiveFileName } = await setup().run();
+		expect(archive.format).toBe("gavelup.easy-speak-pages");
+		expect(archive.version).toBe(1);
+		expect(archive.exportedAt).toBe(bundle.exportedAt);
+		expect(archive.club).toEqual({ esClubId: bundle.club.esClubId, number: bundle.club.number });
+		expect(archiveFileName).toBe(fileName.replace(/\.json$/, "-pages.json"));
+		expect(archive.pages.length).toBeGreaterThanOrEqual(15);
+		expect(archive.pages.some((p) => /view_meeting\.php/.test(p.url) && p.html.length > 0)).toBe(true);
+	});
+
+	it("keeps a hundreds-of-meetings upload bundle far under MAX_BUNDLE_BYTES", async () => {
+		const { bundle } = await setup().run();
+		const meetings = Array.from({ length: 771 }, (_, i) => ({ ...bundle.meetings[i % bundle.meetings.length], esMeetingId: String(i) }));
+		const bytes = Buffer.byteLength(JSON.stringify({ ...bundle, meetings }));
+		// The server's MAX_BUNDLE_BYTES is 50 MB (src/lib/import-bundle-limit.ts); stay well under it.
+		expect(bytes).toBeLessThan((50 * 1024 * 1024) / 4);
 	});
 });
 
