@@ -41,6 +41,24 @@ describe("pageFetch", () => {
 		expect(await res.text()).toBe("global");
 	});
 
+	// Chrome: `content` is a named window property when the page has an element or frame of that name.
+	it("falls back when content.fetch is not a function (a form named content with a field named fetch)", async () => {
+		const calls: string[] = [];
+		const scope = { fetch: recorder("global", calls), content: { fetch: {} } } as unknown as PageGlobal;
+		expect(await (await pageFetch(scope)(URL_, INIT)).text()).toBe("global");
+	});
+
+	it("falls back when reading content throws (a cross-origin frame named content)", async () => {
+		const calls: string[] = [];
+		const scope = {
+			fetch: recorder("global", calls),
+			get content(): never {
+				throw new DOMException("Blocked a frame", "SecurityError");
+			},
+		} as unknown as PageGlobal;
+		expect(await (await pageFetch(scope)(URL_, INIT)).text()).toBe("global");
+	});
+
 	// A detached native fetch throws "Illegal invocation"; it must be called on its owner.
 	it("calls content.fetch on its owner", async () => {
 		const content = {

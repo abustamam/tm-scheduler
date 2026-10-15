@@ -17,6 +17,22 @@ export function pageFetch(
 	scope: PageGlobal,
 ): (url: string, init: RequestInit) => Promise<Response> {
 	// Called as methods, never detached: a bare `fetch` reference throws "Illegal invocation".
-	return (url, init) =>
-		scope.content?.fetch ? scope.content.fetch(url, init) : scope.fetch(url, init);
+	return (url, init) => {
+		const content = firefoxContent(scope);
+		return content ? content.fetch(url, init) : scope.fetch(url, init);
+	};
+}
+
+/**
+ * Firefox's `content`, or undefined. In Chrome `content` is a named window property when the
+ * page has an element or frame of that name: a form whose field is named `fetch` makes it a
+ * non-function, and a cross-origin frame makes reading it throw.
+ */
+function firefoxContent(scope: PageGlobal): { fetch: typeof fetch } | undefined {
+	try {
+		const content = scope.content;
+		return typeof content?.fetch === "function" ? (content as { fetch: typeof fetch }) : undefined;
+	} catch {
+		return undefined;
+	}
 }

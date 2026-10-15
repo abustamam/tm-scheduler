@@ -28,6 +28,7 @@ import {
 	MIN_GAP_MS,
 	RETRY_WAIT_MS,
 	readSession,
+	resumeState,
 	runExport,
 } from "./easy-speak-walk";
 
@@ -257,6 +258,38 @@ describe("a slow Easy-Speak", () => {
 		const s = setup({ failOn: (u) => u.endsWith(MEETING), failStatus: 403 });
 		await expect(s.run()).rejects.toThrow(/returned 403 for/);
 		expect(asked(s.log, MEETING)).toHaveLength(1);
+	});
+
+	// The pause is longer than the lease. A lapsed lease reads as "auto" to another open tab,
+	// which would start the walk itself, without the pause.
+	it("keeps the lease through the pause: another open tab still sees the walk as elsewhere", async () => {
+		const c = clock();
+		const store = memoryStore();
+		const seen: string[] = [];
+		const watched = {
+			...c,
+			sleep: async (ms: number) => {
+				await c.sleep(ms);
+				seen.push((await resumeState(store, "tab-b", c.now(), FIXTURE_IDENTITY)).kind);
+			},
+		};
+		const s = setup({ store, clock: watched, failOn: firstTimes(1, MEETING), failStatus: 524 });
+		await s.run();
+		expect(asked(s.log, MEETING)).toHaveLength(2);
+		expect(seen.length).toBeGreaterThan(0);
+		expect(seen.filter((k) => k !== "elsewhere")).toEqual([]);
+	});
+
+	it.each([302, 400, 429, 499, 600])("does not ask again after a %i", async (status) => {
+		const s = setup({ failOn: (u) => u.endsWith(MEETING), failStatus: status });
+		await expect(s.run()).rejects.toThrow(new RegExp(`returned ${status} for`));
+		expect(asked(s.log, MEETING)).toHaveLength(1);
+	});
+
+	it.each([500, 503, 599])("asks again after a %i", async (status) => {
+		const s = setup({ failOn: firstTimes(1, MEETING), failStatus: status });
+		await s.run();
+		expect(asked(s.log, MEETING)).toHaveLength(2);
 	});
 
 	it("does not ask again when another tab took the export over during the pause", async () => {

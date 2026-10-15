@@ -86,6 +86,8 @@ export const AUTO_RESUME_WINDOW_MS = 2 * 60 * 1000;
  * tab started meanwhile; pressing Resume carries on from the store.
  */
 export const LEASE_TTL_MS = 20 * 1000;
+/** How often the lease is renewed during the retry's pause: well inside LEASE_TTL_MS. */
+const RETRY_RENEW_MS = LEASE_TTL_MS / 2;
 /** A re-check after a lease runs out waits this long past its expiry, so it lands on the far side of it. */
 export const LEASE_RECHECK_SLACK_MS = 250;
 /**
@@ -515,25 +517,32 @@ async function walk(
 					throw new LeaseError("Another Easy-Speak tab took over this export.");
 				}
 				progress(spec.label);
-				let failure: string | undefined;
+				let failure: string;
 				try {
 					res = await deps.fetchImpl(spec.url, {
 						credentials: "include",
 						...(spec.json ? { headers: { Accept: "application/json" } } : {}),
 						...spec.init,
 					});
+					if (res.ok) break;
+					failure = `Easy-Speak returned ${res.status} for ${spec.label}.`;
+					if (res.status < 500 || res.status > 599) throw new WalkError(failure);
 				} catch (err) {
-					res = { ok: false, status: 0, text: async () => "" };
+					if (err instanceof WalkError) throw err;
 					failure = `Easy-Speak request failed (${spec.label}): ${(err as Error).message}.`;
 				}
-				if (res.ok) break;
-				failure ??= `Easy-Speak returned ${res.status} for ${spec.label}.`;
-				if (res.status >= 400 && res.status < 500) throw new WalkError(failure);
 				if (tries >= 2) {
 					throw new WalkError(`${failure} Tried twice, ${RETRY_WAIT_MS / 1000}s apart.`);
 				}
 				progress(`${failure} Trying again in ${RETRY_WAIT_MS / 1000}s.`);
-				await deps.sleep(RETRY_WAIT_MS);
+				// The pause is longer than LEASE_TTL_MS, so the lease is renewed through it: a lapsed
+				// lease reads as "auto" to another open tab, which would start the walk without the pause.
+				for (let left = RETRY_WAIT_MS; left > 0; left -= RETRY_RENEW_MS) {
+					if (!(await acquireLease(store, deps.owner, now()))) {
+						throw new LeaseError("Another Easy-Speak tab took over this export.");
+					}
+					await deps.sleep(Math.min(left, RETRY_RENEW_MS));
+				}
 			}
 			const body = await res.text();
 			const doc = spec.json ? null : deps.parseHtml(body);
