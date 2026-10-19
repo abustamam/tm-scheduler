@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -52,6 +52,7 @@ export function AbsentReleaseDialog({
 	// Held through Radix's ~200ms close animation, so the copy does not blank to
 	// "Mark undefined absent?" on every close (see `DeclineReleaseDialog`).
 	const [shown, setShown] = useState<PendingAbsent | null>(pending);
+	const releaseRef = useRef<HTMLButtonElement>(null);
 	useEffect(() => {
 		if (pending) setShown(pending);
 	}, [pending]);
@@ -65,7 +66,18 @@ export function AbsentReleaseDialog({
 		>
 			{/* No `max-h` / `overflow-*`: a dialog's height belongs to
 			 *  `DialogContent` (CODING_STANDARDS.md, #619). */}
-			<DialogContent>
+			<DialogContent
+				// Release roles is the default (#1256), focused HERE rather than by
+				// `autoFocus`: roll mode opens this from a dropdown item, and React's
+				// autoFocus runs before Radix's focus trap is listening, so when the
+				// closing menu hands focus back to its trigger the trap has no
+				// "last focused" to restore and lands on the first tabbable, Cancel.
+				// Focused in the trap's own mount event, Release is what it restores.
+				onOpenAutoFocus={(e) => {
+					e.preventDefault();
+					releaseRef.current?.focus();
+				}}
+			>
 				<DialogHeader>
 					<DialogTitle>Mark {shown?.name} absent?</DialogTitle>
 					<DialogDescription>
@@ -102,8 +114,8 @@ export function AbsentReleaseDialog({
 						Keep roles
 					</Button>
 					<Button
+						ref={releaseRef}
 						variant="destructive"
-						autoFocus
 						disabled={busy}
 						onClick={() => shown && onRelease(shown)}
 					>
