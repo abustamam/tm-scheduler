@@ -27,7 +27,6 @@ import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
 import { logActivity } from "./activity";
 import {
 	type AttendancePlanStatus,
-	getPlanStatus,
 	isMemberUnavailable,
 	lockMemberAttendance,
 	setPlanStatus,
@@ -1608,13 +1607,18 @@ export async function confirmSlotCore(args: {
 		// over it an unverified confirm is contradicting the member, and an
 		// outsider holding the link could otherwise undo any decline by
 		// confirming the role it left behind.
+		if (grant.via === "self" && proof === "asserted") {
+			// Held to commit, like the claim gate: a roll write or a releasing
+			// decline cannot slip between this read and the flip below.
+			await lockMemberAttendance(tx, slot.meetingId, grant.holderMemberId);
+		}
 		if (
 			grant.via === "self" &&
 			proof === "asserted" &&
-			(await getPlanStatus(tx, {
+			(await isMemberUnavailable(tx, {
 				memberId: grant.holderMemberId,
 				meetingId: slot.meetingId,
-			})) === "not_coming"
+			}))
 		) {
 			throw new Error(SIGN_IN_REQUIRED_MESSAGE);
 		}

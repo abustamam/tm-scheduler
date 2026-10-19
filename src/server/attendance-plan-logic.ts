@@ -696,6 +696,29 @@ export async function listUnavailableWithNames(
 }
 
 /**
+ * Members recorded `not_coming` in the PLAN, with names, ordered by name. The
+ * PUBLIC variant of `listUnavailableWithNames` (#1257): it ignores the roll, so
+ * a signed-out reader or a non-member cannot combine it with the public
+ * answers to infer who was marked Present or Absent (the roll is members-only).
+ */
+export async function listNotComingWithNames(
+	database: DbOrTx,
+	meetingId: string,
+): Promise<{ id: string; name: string }[]> {
+	return database
+		.select({ id: members.id, name: members.name })
+		.from(meetingAttendancePlan)
+		.innerJoin(members, eq(members.id, meetingAttendancePlan.memberId))
+		.where(
+			and(
+				eq(meetingAttendancePlan.meetingId, meetingId),
+				eq(meetingAttendancePlan.status, "not_coming"),
+			),
+		)
+		.orderBy(members.name);
+}
+
+/**
  * One member's answer to `listUnavailableWithNames`. Takes a `DbOrTx` so the
  * claim reads its own transaction.
  */

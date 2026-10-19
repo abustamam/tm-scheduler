@@ -51,7 +51,11 @@ describe("loadMeetingDetail contact gating (#37 PII)", () => {
 	// module tested only through a mirror cannot see its own wiring.
 	it("loadMeetingDetail actually reads the plan for unavailable members", () => {
 		expect(src).toContain(
-			"unavailableMembers=awaitlistUnavailableWithNames(db,meetingId)",
+			"unavailableMembers=viewerIsMember?awaitlistUnavailableWithNames(db,meetingId):awaitlistNotComingWithNames(db,meetingId)",
+		);
+		// The gate's own condition: dropping it hands the roll to every reader.
+		expect(src).toContain(
+			"viewerIsMember=!!(awaitgetMembership(currentUserId,meeting.clubId))",
 		);
 	});
 

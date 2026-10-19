@@ -253,12 +253,12 @@ const SLOT_FILL_BLANK: Record<
 					// the caller's proof or, with none, the session bound to the
 					// HOLDER — never "session" for any other signed-in member.
 					'const proof: WriteProof = grant.via === "officer" ? "session" : (args.proof ?? ((await sessionIsHolder(slot.clubId, args.sessionUserId, grant.holderMemberId,)) ? "session" : "asserted"));',
-					'if (grant.via === "self" && proof === "asserted" && (await getPlanStatus(tx, { memberId: grant.holderMemberId, meetingId: slot.meetingId, })) === "not_coming") { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
+					'if (grant.via === "self" && proof === "asserted") { await lockMemberAttendance(tx, slot.meetingId, grant.holderMemberId); } if (grant.via === "self" && proof === "asserted" && (await isMemberUnavailable(tx, { memberId: grant.holderMemberId, meetingId: slot.meetingId, }))) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
 					'demoteFrom: proof === "asserted" ? ASK_ONLY_PLAN_FLOOR : (args.planFloor ?? HOLDER_CONFIRM_PLAN_FLOOR),',
 				],
 				mustPrecede: [
 					[
-						'proof === "asserted" && (await getPlanStatus(',
+						'proof === "asserted" && (await isMemberUnavailable(',
 						".update(roleSlots)",
 					],
 				],

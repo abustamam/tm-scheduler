@@ -26,8 +26,8 @@ import {
 	speeches,
 } from "#/db/schema";
 import {
+	listNotComingWithNames,
 	listReachedOutForMeeting,
-	listUnavailableWithNames,
 } from "#/server/attendance-plan-logic";
 import {
 	cleanup,
@@ -80,10 +80,10 @@ async function getMeetingPublic(
 	// These call the REAL seam functions rather than re-writing their SQL.
 	// The rest of this file mirrors queries, which cannot catch a change in the
 	// module it mirrors; routing the planned-attendance reads through
-	// `attendance-plan-logic` means the unavailable (roll record over plan) /
-	// `status = 'reached_out'` filters under test here are the same code
-	// `loadMeetingDetail` runs, so weakening one fails this suite.
-	const unavailableMembers = await listUnavailableWithNames(testDb, meetingId);
+	// `attendance-plan-logic` means the plan-only `not_coming` list (the PUBLIC,
+	// no-session path of `loadMeetingDetail`) / `status = 'reached_out'` filters
+	// under test here are the same code it runs, so weakening one fails this suite.
+	const unavailableMembers = await listNotComingWithNames(testDb, meetingId);
 
 	// Contacted-for-this-meeting member ids (#340) — admin-only, same gate as
 	// roster. canManage defaults to false (the no-session mirror), so this
