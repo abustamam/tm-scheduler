@@ -418,13 +418,20 @@ describe.skipIf(!hasTestDb)("resetDemoClub (#1199)", () => {
 			slug: "gavelup-demo-club",
 			timezone: "America/Chicago",
 		});
-		const [admin] = await testDb
-			.select({ name: people.name, userId: people.userId })
+		// The fixture has more than one admin, so ask for the demo account's own
+		// membership instead of "an admin": no row order to depend on.
+		const demoMemberships = await testDb
+			.select({
+				name: people.name,
+				userId: people.userId,
+				clubRole: members.clubRole,
+			})
 			.from(members)
 			.innerJoin(people, eq(people.id, members.personId))
-			.where(and(eq(members.clubId, clubId), eq(members.clubRole, "admin")))
-			.limit(1);
-		expect(admin).toMatchObject({ name: "Demo Presenter", userId: demoUser });
+			.where(and(eq(members.clubId, clubId), eq(people.userId, demoUser)));
+		expect(demoMemberships).toEqual([
+			{ name: "Demo Presenter", userId: demoUser, clubRole: "admin" },
+		]);
 		const ms = await testDb
 			.select({ id: meetings.id })
 			.from(meetings)
@@ -464,15 +471,16 @@ describe.skipIf(!hasTestDb)("resetDemoClub (#1199)", () => {
 		]);
 		expect(await exists("user", demoUser)).toBe(true);
 		expect(await accountRows(demoUser)).toEqual({ sessions: 1, tokens: 1 });
-		const [admin] = await testDb
-			.select({ userId: people.userId })
+		// Not "an admin" (the fixture has more than one): the demo account's own
+		// membership.
+		const demoMemberships = await testDb
+			.select({ userId: people.userId, clubRole: members.clubRole })
 			.from(members)
 			.innerJoin(people, eq(people.id, members.personId))
 			.where(
-				and(eq(members.clubId, second.clubId), eq(members.clubRole, "admin")),
-			)
-			.limit(1);
-		expect(admin?.userId).toBe(demoUser);
+				and(eq(members.clubId, second.clubId), eq(people.userId, demoUser)),
+			);
+		expect(demoMemberships).toEqual([{ userId: demoUser, clubRole: "admin" }]);
 		// Priya's account was the previous build's; the new one is a different row.
 		const priyaAfter = await userByEmail("priya@example.com");
 		expect(priyaAfter).not.toBe(priyaBefore);
