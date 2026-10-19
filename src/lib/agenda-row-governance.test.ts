@@ -162,7 +162,7 @@ describe("isClubGovernable — which rows may be offered the control (#683)", ()
 // The projected deck.
 //
 // `beatTimingText` decides whether a row's span is quoted as the CLUB's rule
-// ("1:00–2:30", the hard cap, no grace) or as a graced qualifying window
+// ("1:00–2:30", green to the cap) or as a graced qualifying window
 // (±0:30 on a speech, floored at green on a Table Topics answer since #720).
 // It used to decide that from `segmentFor(row.roleKey)`, which cannot tell the
 // three Table Topics beats apart — so a timed vote row got the club's labelling.
@@ -218,12 +218,12 @@ describe("the projected deck quotes the club's rule on the governed row only (#6
 		return { rows, slideFor };
 	}
 
-	it("labels the GOVERNED row with the club's hard cap", () => {
+	it("labels the GOVERNED row with the club's cap + grace", () => {
 		const { rows, slideFor } = deckWithTimedVoteRow();
 		const governed = rows.find((r) => r.clubGoverned === true);
 		expect(governed, "the governed row must reach the rows").toBeTruthy();
 		const slide = governed && slideFor(governed);
-		// ABSOLUTE. The club's own span, green to red with no grace either side.
+		// ABSOLUTE. Green to red + 0:30 (#1258): the club's 2:30 cap plus the grace.
 		expect(slide?.timing?.qualifies).toBe("1:00–3:00");
 	});
 

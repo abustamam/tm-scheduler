@@ -63,12 +63,18 @@ describe("kind: speech", () => {
 	it("ignores a limits argument entirely", () => {
 		// A caller that passed the club's Table Topics window to a SPEECH row
 		// must not have that window applied — the speech grace is the rule.
-		expect(timerSignal(8 * MIN, SPEECH, "speech", { maxSeconds: 150 })).toBe(
-			"over",
-		);
-		expect(timerSignal(7 * MIN, SPEECH, "speech", { maxSeconds: 150 })).toBe(
-			"red",
-		);
+		expect(
+			timerSignal(8 * MIN, SPEECH, "speech", {
+				minSeconds: 60,
+				maxSeconds: 150,
+			}),
+		).toBe("over");
+		expect(
+			timerSignal(7 * MIN, SPEECH, "speech", {
+				minSeconds: 60,
+				maxSeconds: 150,
+			}),
+		).toBe("red");
 	});
 
 	it("handles a sub-grace window without inventing a negative boundary", () => {
@@ -129,14 +135,25 @@ describe("kind: tableTopics", () => {
 		expect(timerSignal(150_000, TT, "tableTopics", LIMITS)).toBe("red");
 	});
 
-	it("never reaches over when the club has stated no window", () => {
-		// `hasTableTopicsLimits` is what decides that a club HAS a window; with
-		// none there is no disqualification point to apply, and guessing one
-		// would enforce a rule the club never stated.
-		for (const at of [150_000, 180_001, 600_000, 3_600_000]) {
-			expect(timerSignal(at, TT, "tableTopics", null)).toBe("red");
-			expect(timerSignal(at, TT, "tableTopics")).toBe("red");
+	it("disqualifies a club with no stated window strictly after the standard red + 0:30", () => {
+		// #1258 option A: no stated limits means the standard 1:00-2:00 window,
+		// so red at 2:00 and over strictly after 2:30. Literal milliseconds.
+		const standard: TimingMarks = { green: 1, yellow: 1.5, red: 2 };
+		for (const limits of [null, undefined]) {
+			expect(timerSignal(119_999, standard, "tableTopics", limits)).toBe(
+				"yellow",
+			);
+			expect(timerSignal(120_000, standard, "tableTopics", limits)).toBe("red");
+			expect(timerSignal(150_000, standard, "tableTopics", limits)).toBe("red");
+			expect(timerSignal(150_001, standard, "tableTopics", limits)).toBe(
+				"over",
+			);
+			expect(timerSignal(3_600_000, standard, "tableTopics", limits)).toBe(
+				"over",
+			);
 		}
+		expect(timerSignal(150_000, standard, "tableTopics")).toBe("red");
+		expect(timerSignal(150_001, standard, "tableTopics")).toBe("over");
 	});
 
 	it("is under at every instant when the row carries no marks", () => {

@@ -299,8 +299,9 @@ describe("a club's own Table Topics window on the Timer sheet (#443)", () => {
 			"1:00",
 			"1:45",
 			"2:30",
-			// No ±30s grace: a club that states its own cap has stated a HARD one,
-			// and the deck beside this sheet projects "2:31+ disqualified".
+			// Green to red + 0:30 (#1258): the club's 2:30 cap plus the standard
+			// grace is 3:00, and the deck beside this sheet projects "3:01+
+			// disqualified".
 			"1:00–3:00",
 		]);
 		// The other three are the standard windows, untouched — a club states a

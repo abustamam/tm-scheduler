@@ -21,11 +21,15 @@
  *   opt-out, every timed segment is disqualified strictly after red + 0:30.
  *   Red is the club's own cap; the grace is the same grace.
  *
- * What `kind` still decides is whether the segment HAS a window at all: a
- * Table Topics clock with no stated limits never reaches `over` (below).
+ * What `kind` still decides is where the window comes from: a speech's own
+ * marks, or Table Topics' cap (the club's, else the standard 2:00).
  */
 import type { TimingMarks } from "./agenda-runsheet";
-import { tableTopicsLastQualifyingSeconds } from "./table-topics-limits";
+import {
+	resolveTableTopicsLimits,
+	type TableTopicsLimits,
+	tableTopicsLastQualifyingSeconds,
+} from "./table-topics-limits";
 import { TIMING_GRACE_MINUTES } from "./timing-window";
 
 /**
@@ -55,31 +59,29 @@ const MIN_MS = 60_000;
  * simply does not render a clock for such a row (#729 shows only marked rows),
  * so this is the defensive answer rather than the displayed one.
  *
- * `limits` is required in spirit for `kind: "tableTopics"` and optional in the
- * type, because a club that has stated no window genuinely has no
- * disqualification point — `hasTableTopicsLimits` is what decides that, and a
- * caller holding `null` there must get "no DQ" rather than a guessed one. With
- * no limits a Table Topics clock therefore tops out at `red` and never reaches
- * `over`, which is the honest answer: the club has not said when an answer
- * stops counting.
+ * `limits` is the club's stated Table Topics window, or null/undefined for a
+ * club that has stated none; that club runs the standard 1:00-2:00 window, so
+ * it is disqualified after 2:30 like everyone else (#1258). It is ignored for
+ * `kind: "speech"`. Nullable on purpose: "no stated limits" is a real state of
+ * a club, and `resolveTableTopicsLimits` is the one place it becomes a window.
  */
 export function timerSignal(
 	elapsed: number,
 	marks: TimingMarks | null | undefined,
 	kind: TimerKind,
-	limits?: { maxSeconds: number } | null,
+	limits?: TableTopicsLimits | null,
 ): TimerBand {
 	if (!marks) return "under";
 	// ONE rule (#1258): `over` begins strictly after red + 0:30. A speech reads
-	// it off its marks; Table Topics reads the club's cap through
-	// `tableTopicsLastQualifyingSeconds`, the same derivation the printed
-	// "2:31+ disqualified" comes from, and a club with no stated limits has no
-	// disqualification point at all.
+	// it off its marks; Table Topics reads the club's cap (else the standard
+	// one) through `tableTopicsLastQualifyingSeconds`, the same derivation the
+	// printed "2:31+ disqualified" comes from.
 	const over =
 		kind === "speech"
 			? elapsed > (marks.red + TIMING_GRACE_MINUTES) * MIN_MS
-			: limits != null &&
-				elapsed > tableTopicsLastQualifyingSeconds(limits) * 1000;
+			: elapsed >
+				tableTopicsLastQualifyingSeconds(resolveTableTopicsLimits(limits)) *
+					1000;
 	// Checked FIRST so the DQ decision cannot be shadowed by the red band below.
 	if (over) return "over";
 	if (elapsed >= marks.red * MIN_MS) return "red";

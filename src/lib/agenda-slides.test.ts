@@ -404,7 +404,7 @@ describe("buildSlideDeck table topics", () => {
 		const slide = build({ slots: [tt] }).find((s) => s.kind === "tableTopics");
 		expect(slide).toMatchObject({
 			master: "Rasheed Bustamam",
-			timing: "1–2 minutes per speaker",
+			timing: "1–2 minutes per speaker · 2:31+ disqualified",
 		});
 	});
 

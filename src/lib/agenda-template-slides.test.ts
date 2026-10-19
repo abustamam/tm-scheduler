@@ -462,7 +462,7 @@ describe("a club's own Table Topics window on the templated deck (#443)", () => 
 	});
 
 	it("leaves a club that has stated nothing on the STANDARD window", () => {
-		// The control. Without it, dropping the club's own hard cap unconditionally
+		// The control. Without it, dropping the club's own cap unconditionally
 		// would look identical to applying it only where a club has one.
 		//
 		// It said "the graced standard window", `0:30–2:30`, until #720: the marks

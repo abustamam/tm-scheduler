@@ -606,17 +606,20 @@ describe("one Table Topics disqualification point (#1258)", () => {
 	// cap's own arithmetic lives in `table-topics-limits.ts` alone. The clock
 	// (`timerSignal`) and the printed "N+ disqualified" both read
 	// `tableTopicsLastQualifyingSeconds`; a surface that does its own sum on a
-	// cap, in either operand order and under any variable name, is the second
-	// rule this guards against.
+	// cap, in either operand order, is the second rule this guards against.
+	// SCOPE, stated plainly: it recognises a cap by NAME (an identifier ending
+	// `Max`/`Cap`/`Limit` + `Seconds`/`Minutes`). A cap renamed to something
+	// else (`ceiling`, `n`) is not seen; the other tests below, which pin who
+	// may read the DQ helpers, are what catches that.
 	const HELPER = "src/lib/table-topics-limits.ts";
 	const files = () => walkSource("src").filter((f) => f !== HELPER);
 
 	it("nothing outside the helper module does arithmetic on a cap", () => {
-		// Any identifier ending `axSeconds`/`axMinutes`, on either side of an
-		// arithmetic operator (so `30 + maxSeconds`, `limits.maxSeconds + 31` and
-		// `tableTopicsMaxSeconds * 1000` all trip it).
+		// Any identifier ending Max/Cap/Limit + Seconds/Minutes, on either side of
+		// an arithmetic operator (so `30 + maxSeconds`, `limits.maxSeconds + 31`,
+		// `capSeconds + 30` and `tableTopicsMaxSeconds * 1000` all trip it).
 		const arithmetic =
-			/\b\w*[mM]ax(?:Seconds|Minutes)\b\s*[-+*/](?!=)|[-+*/]\s*[\w.]*[mM]ax(?:Seconds|Minutes)\b/;
+			/\b\w*(?:[mM]ax|[cC]ap|[lL]imit)(?:Seconds|Minutes)\b\s*[-+*/](?!=)|[-+*/]\s*[\w.]*(?:[mM]ax|[cC]ap|[lL]imit)(?:Seconds|Minutes)\b/;
 		const hits = files().filter((f) => arithmetic.test(readSource(f)));
 		expect(hits).toEqual([]);
 	});

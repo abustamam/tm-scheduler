@@ -65,7 +65,7 @@ describe("hasTableTopicsLimits", () => {
 		expect(hasTableTopicsLimits(fractional)).toBe(false);
 		expect(resolveTableTopicsMarks(fractional)).toEqual(TABLE_TOPICS_MARKS);
 		expect(formatTableTopicsTiming(fractional)).toBe(
-			TABLE_TOPICS_DEFAULT_TIMING,
+			`${TABLE_TOPICS_DEFAULT_TIMING} · 2:31+ disqualified`,
 		);
 	});
 
@@ -112,7 +112,9 @@ describe("hasTableTopicsLimits", () => {
 		// card — so the RENDER path falls back, not just the write path.
 		const huge = { minSeconds: 60, maxSeconds: 99999 };
 		expect(resolveTableTopicsMarks(huge)).toEqual(TABLE_TOPICS_MARKS);
-		expect(formatTableTopicsTiming(huge)).toBe(TABLE_TOPICS_DEFAULT_TIMING);
+		expect(formatTableTopicsTiming(huge)).toBe(
+			`${TABLE_TOPICS_DEFAULT_TIMING} · 2:31+ disqualified`,
+		);
 	});
 });
 
@@ -222,10 +224,13 @@ describe("TABLE_TOPICS_DEFAULT_TIMING", () => {
 });
 
 describe("formatTableTopicsTiming", () => {
-	it("falls back to the generic line when the club states nothing", () => {
-		expect(formatTableTopicsTiming(null)).toBe(TABLE_TOPICS_DEFAULT_TIMING);
+	it("prints the standard window with its DQ point when the club states nothing", () => {
+		// #1258 option A. Literal text: 2:00 red + 0:30 = 2:30, DQ from 2:31.
+		const standard = "1–2 minutes per speaker · 2:31+ disqualified";
+		expect(formatTableTopicsTiming(null)).toBe(standard);
+		expect(formatTableTopicsTiming(undefined)).toBe(standard);
 		expect(formatTableTopicsTiming({ minSeconds: 60, maxSeconds: null })).toBe(
-			TABLE_TOPICS_DEFAULT_TIMING,
+			standard,
 		);
 	});
 
@@ -296,7 +301,7 @@ describe("tableTopicsDqSeconds (#732)", () => {
 		// must not be read as if it could — `hasTableTopicsLimits` is that
 		// question, and `formatTableTopicsTiming` asks it first.
 		expect(formatTableTopicsTiming({ minSeconds: null, maxSeconds: 150 })).toBe(
-			TABLE_TOPICS_DEFAULT_TIMING,
+			`${TABLE_TOPICS_DEFAULT_TIMING} · 2:31+ disqualified`,
 		);
 		expect(tableTopicsDqSeconds({ maxSeconds: 150 })).toBe(181);
 	});

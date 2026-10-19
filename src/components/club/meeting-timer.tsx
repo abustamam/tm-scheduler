@@ -261,7 +261,7 @@ export type MeetingTimerProps = {
 	rows: readonly AgendaRow[];
 	/** The club's Table Topics window (#443), for the disqualification point.
 	 *  Null when the club has stated none, in which case a Table Topics clock
-	 *  has no DQ — see `timerSignal`. */
+	 *  runs the standard window and disqualifies after 2:30 — see `timerSignal`. */
 	tableTopicsLimits: TableTopicsLimits | null;
 	/** The meeting's slots, for the two `role_definitions` columns
 	 *  `isTimeableRole` reads. Omit to get #729's pure stopwatch: with no slot
@@ -518,7 +518,7 @@ function SegmentClock({
 	segment: TimerSegment;
 	state: TimerState;
 	now: number;
-	limits: { maxSeconds: number } | null;
+	limits: TableTopicsLimits | null;
 	outcome: RecordOutcome | undefined;
 	/** Whether this VIEWER may record at all. Separate from
 	 *  `segment.recordable`, which is about the ROW — a Timer looking at the

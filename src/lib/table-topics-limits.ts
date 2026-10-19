@@ -63,7 +63,8 @@ export const TABLE_TOPICS_MARKS: TimingMarks = {
 	red: 2,
 };
 
-/** What the deck says when the club has stated no limits of its own. */
+/** What the deck says about the speaker window when the club has stated no
+ *  limits of its own; `formatTableTopicsTiming` appends the DQ point. */
 export const TABLE_TOPICS_DEFAULT_TIMING = "1–2 minutes per speaker";
 
 /**
@@ -198,9 +199,10 @@ export function resolveTableTopicsMarks(
  * (`tableTopicsDqSeconds`) rather than stored, so it cannot drift from the cap
  * an admin edits. Since #1258 it is the 30-second grace of `timing-window.ts`
  * past the cap, like every other timed segment: "2:31+ disqualified" for a
- * 2:00 cap. (MCF's own paper sheet still says "2.3 min max, 2.31+
- * disqualified", which is a 2:18 cap plus the same grace, not the same fact as
- * this app's rule.) The cap is the club's; the grace is not.
+ * 2:00 cap. (MCF's paper sheet states the old 1-second rule, "2.3 min max,
+ * 2.31+ disqualified"; the app no longer follows it, #1258.) The cap is the
+ * club's; the grace is not. A club that has stated no limits gets the standard
+ * 1:00-2:00 window, so its DQ point is 2:31+ through the same derivation.
  *
  * Every surface that states a Table Topics qualifying span (the role sheet's
  * "Qualifies" cell, the templated deck, the printed agenda's key) derives it
@@ -211,10 +213,16 @@ export function resolveTableTopicsMarks(
 export function formatTableTopicsTiming(
 	limits: TableTopicsLimits | null | undefined,
 ): string {
-	if (!hasTableTopicsLimits(limits)) return TABLE_TOPICS_DEFAULT_TIMING;
+	const dq = formatSeconds(
+		tableTopicsDqSeconds(resolveTableTopicsLimits(limits)),
+	);
+	if (!hasTableTopicsLimits(limits)) {
+		// The standard window: the same disqualification point as a stated one,
+		// through the same derivation (#1258, option A).
+		return `${TABLE_TOPICS_DEFAULT_TIMING} · ${dq}+ disqualified`;
+	}
 	const min = formatSeconds(limits.minSeconds);
 	const max = formatSeconds(limits.maxSeconds);
-	const dq = formatSeconds(tableTopicsDqSeconds(limits));
 	return `${min} minimum · ${max} maximum · ${dq}+ disqualified`;
 }
 
@@ -224,6 +232,23 @@ export function formatTableTopicsTiming(
  * import it back; a test pins the two together.
  */
 export const TABLE_TOPICS_GRACE_SECONDS = 30;
+
+/**
+ * The limits a club's Table Topics runs under: its own when it has stated a
+ * usable window, else the standard window (`TABLE_TOPICS_MARKS`, 1:00-2:00).
+ * Every disqualification read goes through this first, so a club with no stated
+ * limits is disqualified strictly after the standard red + 0:30 (2:31+) rather
+ * than exempt (#1258, maintainer decision 2026-10-19).
+ */
+export function resolveTableTopicsLimits(
+	limits: TableTopicsLimits | null | undefined,
+): { minSeconds: number; maxSeconds: number } {
+	if (hasTableTopicsLimits(limits)) return limits;
+	return {
+		minSeconds: Math.round(TABLE_TOPICS_MARKS.green * 60),
+		maxSeconds: Math.round(TABLE_TOPICS_MARKS.red * 60),
+	};
+}
 
 /**
  * The last whole second at which a Table Topics answer still qualifies: the
