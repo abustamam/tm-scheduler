@@ -863,16 +863,21 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 			await logic.assertClubNotArchivedTx(tx, seed.clubId);
 			// A second connection, outside `tx`: its UPDATE must block on the
 			// gate's row lock, not slip in and commit.
-			await expect(
-				testDb.transaction(async (other) => {
+			const err = await testDb
+				.transaction(async (other) => {
 					await other.execute(sql.raw("set local lock_timeout = '300ms'"));
 					await other.execute(
 						sql.raw(
 							`update clubs set archived_at = now() where id = '${seed.clubId}'`,
 						),
 					);
-				}),
-			).rejects.toThrow();
+				})
+				.then(
+					() => null,
+					(e: unknown) => e as { code?: string; cause?: { code?: string } },
+				);
+			// 55P03 = lock_not_available: it was the row lock, not some other failure.
+			expect(err?.cause?.code ?? err?.code).toBe("55P03");
 		});
 		const [row] = await testDb
 			.select({ archivedAt: clubs.archivedAt })
