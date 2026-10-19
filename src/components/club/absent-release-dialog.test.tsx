@@ -72,6 +72,39 @@ describe("AbsentReleaseDialog (#1256)", () => {
 		expect(onRelease).toHaveBeenCalledTimes(1);
 	});
 
+	it("keeps Release roles focused when the menu that opened it hands focus back to its trigger", async () => {
+		// protects=Release roles is the focused default on the REAL open path: roll
+		//   mode opens this dialog from a dropdown item, and the closing menu returns
+		//   focus to its trigger after the dialog mounted (seen on prod 2026-10-19:
+		//   Cancel was focused, so Enter cancelled)
+		// fails_when=focus is left to `autoFocus` alone, so the focus trap sends the
+		//   stolen focus to the first tabbable (Cancel) instead of Release roles
+		// no_claim=a real browser's timing; the menu's focus return is simulated by
+		//   focusing an outside trigger after mount
+		const trigger = document.createElement("button");
+		trigger.textContent = "Record a different attendance";
+		document.body.append(trigger);
+		trigger.focus();
+		const { getByRole, rerender, onRelease, onKeep, onCancel } = mount({
+			pending: null,
+		});
+		rerender(
+			<AbsentReleaseDialog
+				pending={pending()}
+				onRelease={onRelease}
+				onKeep={onKeep}
+				onCancel={onCancel}
+			/>,
+		);
+		await new Promise((r) => setTimeout(r, 0));
+		trigger.focus();
+		await new Promise((r) => setTimeout(r, 0));
+		expect(document.activeElement).toBe(
+			getByRole("button", { name: "Release roles" }),
+		);
+		trigger.remove();
+	});
+
 	it("names every role, and a speech's title goes back to the member's queue", () => {
 		// protects=one line per role with the numbered label, and the speech line for
 		//   a slot that has a speech attached; none for a slot without
