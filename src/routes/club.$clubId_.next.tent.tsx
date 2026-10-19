@@ -88,6 +88,9 @@ function TentFace({
 				// The back face is turned half a turn: folded, it faces the far
 				// side of the table the right way up.
 				transform: flipped ? "rotate(180deg)" : undefined,
+				// The same dark bar on each face's bottom edge; the half turn
+				// mirrors it on the back, so the two faces are identical.
+				borderBottom: `6px solid ${INK}`,
 			}}
 		>
 			<div
@@ -136,8 +139,6 @@ function NextMeetingTentPage() {
 	const target = origin ? tentQrTarget(origin, club.slug) : "";
 	const sheet: SheetStyle = {
 		...PAGE_OUTER,
-		width: PAGE_W,
-		height: PAGE_H,
 		[SHEET_W_VAR]: `${PAGE_W}px`,
 		[SHEET_H_VAR]: `${PAGE_H}px`,
 		display: "flex",
@@ -175,16 +176,6 @@ function NextMeetingTentPage() {
 						}}
 					/>
 					<TentFace name={club.name} target={target} flipped={false} />
-					<div
-						style={{
-							position: "absolute",
-							left: 0,
-							right: 0,
-							bottom: 0,
-							height: 6,
-							background: INK,
-						}}
-					/>
 				</div>
 			</div>
 			<div className="no-print">

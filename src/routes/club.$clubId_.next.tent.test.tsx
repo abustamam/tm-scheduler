@@ -88,6 +88,10 @@ describe("next-meeting tent route: the sheet", () => {
 		]);
 		expect((faces[0] as HTMLElement).style.transform).toBe("rotate(180deg)");
 		expect((faces[1] as HTMLElement).style.transform).toBe("");
+		// Identical faces: the dark bar is on both.
+		for (const f of faces) {
+			expect((f as HTMLElement).style.borderBottom).toContain("6px solid");
+		}
 		const names = screen.getAllByTestId("tent-club-name");
 		expect(names).toHaveLength(2);
 		for (const n of names) expect(n.textContent).toBe("Downtown Toastmasters");
@@ -102,6 +106,18 @@ describe("next-meeting tent route: the sheet", () => {
 		for (const qr of screen.getAllByTestId("tent-qr")) {
 			expect(qr.getAttribute("data-value")).toBe(expected);
 		}
+	});
+
+	it("renders no QR until the origin is known (first paint)", async () => {
+		vi.spyOn(Route, "useLoaderData").mockReturnValue({
+			club: { name: "Downtown Toastmasters", slug: "downtown" },
+		} as never);
+		const Component = Route.options.component as () => React.ReactElement;
+		const { renderToString } = await import("react-dom/server");
+		// Server render runs no effects: the origin is still unknown.
+		const html = renderToString(<Component />);
+		expect(html).toContain("Downtown Toastmasters");
+		expect(html).not.toContain("tent-qr");
 	});
 
 	it("is one .agenda-page, so it prints as a single sheet", async () => {
