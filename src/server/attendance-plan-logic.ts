@@ -1,7 +1,8 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { db } from "#/db";
 import {
 	type attendancePlanStatusEnum,
+	meetingAttendance,
 	meetingAttendancePlan,
 	meetings,
 	members,
@@ -638,7 +639,68 @@ export async function getPlanStatus(
 	return row?.status ?? null;
 }
 
-/** Members marked `not_coming`, with names, for one meeting — ordered by name. */
+/**
+ * "Can this member take a role?" as one predicate over `members LEFT JOIN plan
+ * LEFT JOIN attendance` (#1257). The roll record wins when there is one,
+ * otherwise the plan: Absent is unavailable whatever the plan says, Present is
+ * available even after Not coming, and Excused (being retired, #1255) and no
+ * record both fall through to the plan.
+ */
+const unavailableNow = or(
+	eq(meetingAttendance.status, "absent"),
+	and(
+		or(
+			isNull(meetingAttendance.status),
+			ne(meetingAttendance.status, "present"),
+		),
+		eq(meetingAttendancePlan.status, "not_coming"),
+	),
+);
+
+function unavailableBase(database: DbOrTx, meetingId: string) {
+	return database
+		.select({ id: members.id, name: members.name })
+		.from(members)
+		.innerJoin(
+			meetings,
+			and(eq(meetings.id, meetingId), eq(meetings.clubId, members.clubId)),
+		)
+		.leftJoin(
+			meetingAttendancePlan,
+			and(
+				eq(meetingAttendancePlan.memberId, members.id),
+				eq(meetingAttendancePlan.meetingId, meetingId),
+			),
+		)
+		.leftJoin(
+			meetingAttendance,
+			and(
+				eq(meetingAttendance.memberId, members.id),
+				eq(meetingAttendance.meetingId, meetingId),
+			),
+		);
+}
+
+/**
+ * Members who cannot take a role at this meeting, with names, ordered by name:
+ * the roll record wins over the plan (see `unavailableNow`). Feeds the
+ * pickers' `unavailableMembers`.
+ */
+export async function listUnavailableWithNames(
+	database: DbOrTx,
+	meetingId: string,
+): Promise<{ id: string; name: string }[]> {
+	return unavailableBase(database, meetingId)
+		.where(unavailableNow)
+		.orderBy(members.name);
+}
+
+/**
+ * Members recorded `not_coming` in the PLAN, with names, ordered by name. The
+ * PUBLIC variant of `listUnavailableWithNames` (#1257): it ignores the roll, so
+ * a signed-out reader or a non-member cannot combine it with the public
+ * answers to infer who was marked Present or Absent (the roll is members-only).
+ */
 export async function listNotComingWithNames(
 	database: DbOrTx,
 	meetingId: string,
@@ -654,6 +716,20 @@ export async function listNotComingWithNames(
 			),
 		)
 		.orderBy(members.name);
+}
+
+/**
+ * One member's answer to `listUnavailableWithNames`. Takes a `DbOrTx` so the
+ * claim reads its own transaction.
+ */
+export async function isMemberUnavailable(
+	database: DbOrTx,
+	args: { memberId: string; meetingId: string },
+): Promise<boolean> {
+	const rows = await unavailableBase(database, args.meetingId)
+		.where(and(eq(members.id, args.memberId), unavailableNow))
+		.limit(1);
+	return rows.length > 0;
 }
 
 /** `not_coming` pairs across several meetings (season grid, recurrence check). */

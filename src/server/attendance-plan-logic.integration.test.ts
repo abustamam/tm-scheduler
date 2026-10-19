@@ -9,6 +9,7 @@ import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
+	meetingAttendance,
 	meetingAttendancePlan,
 	meetings,
 	members,
@@ -21,9 +22,10 @@ import {
 	getPlanStatus,
 	IMPORT_PLAN_STATUS_MESSAGE,
 	importPlanAnswers,
+	isMemberUnavailable,
 	listNotComingForMeetings,
-	listNotComingWithNames,
 	listPlanForMeetings,
+	listUnavailableWithNames,
 	SELF_SERVICE_RUNGS,
 	setPlanStatus,
 } from "#/server/attendance-plan-logic";
@@ -32,6 +34,7 @@ import {
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	seedPerson,
 	testDb,
 } from "#/test/db";
 
@@ -413,45 +416,79 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 		spy.mockRestore();
 	});
 
-	it("listNotComingWithNames returns only not_coming, ordered by name", async () => {
-		// Names chosen so alphabetical order is the OPPOSITE of insertion order —
-		// otherwise dropping the ORDER BY leaves this green. A `coming` member sits
-		// in the same fixture so the status filter and the ordering are pinned by
-		// one case; asserting against a single-member fixture could not see either.
-		await testDb
-			.update(members)
-			.set({ name: "Zoe Zander" })
-			.where(eq(members.id, club.memberId));
-		await testDb
-			.update(members)
-			.set({ name: "Aaron Abbott" })
-			.where(eq(members.id, club.adminMemberId));
-		for (const [memberId, status] of [
-			[club.memberId, "not_coming"],
-			[club.adminMemberId, "not_coming"],
-		] as const) {
-			await setPlanStatus(testDb, {
-				memberId,
-				meetingId: club.meetingId,
-				clubId: club.clubId,
-				status,
-				actorMemberId: memberId,
+	describe("unavailability: the roll record wins over the plan (#1257)", () => {
+		// One fresh member per case, so a case cannot ride on another's rows.
+		const CASES: [
+			string,
+			"absent" | "present" | "excused" | null,
+			"coming" | "not_coming" | null,
+			boolean,
+		][] = [
+			["absent, no plan", "absent", null, true],
+			["absent, coming", "absent", "coming", true],
+			["present, not_coming", "present", "not_coming", false],
+			["excused, not_coming", "excused", "not_coming", true],
+			["excused, no plan", "excused", null, false],
+			["no record, not_coming", null, "not_coming", true],
+			["no record, coming", null, "coming", false],
+		];
+
+		async function seedCase(
+			name: string,
+			record: "absent" | "present" | "excused" | null,
+			plan: "coming" | "not_coming" | null,
+		) {
+			const [m] = await testDb
+				.insert(members)
+				.values({
+					clubId: club.clubId,
+					personId: await seedPerson({ name }),
+					name,
+				})
+				.returning({ id: members.id });
+			if (!m) throw new Error("member insert failed");
+			if (record)
+				await testDb.insert(meetingAttendance).values({
+					memberId: m.id,
+					meetingId: club.meetingId,
+					status: record,
+				});
+			if (plan)
+				await testDb.insert(meetingAttendancePlan).values({
+					memberId: m.id,
+					meetingId: club.meetingId,
+					status: plan,
+				});
+			return m.id;
+		}
+
+		for (const [label, record, plan, expected] of CASES) {
+			it(`${label}: ${expected ? "unavailable" : "available"}`, async () => {
+				// protects=the decision table of #1257 for this row, through both the list and the single-member check; fails_when=the plan alone decides, or the record is ignored/inverted; no_claim=none beyond protects (real rows, real join)
+				const id = await seedCase(`Case ${label}`, record, plan);
+				const listed = (
+					await listUnavailableWithNames(testDb, club.meetingId)
+				).map((r) => r.id);
+				expect(listed.includes(id)).toBe(expected);
+				expect(
+					await isMemberUnavailable(testDb, {
+						memberId: id,
+						meetingId: club.meetingId,
+					}),
+				).toBe(expected);
 			});
 		}
-		const out = await listNotComingWithNames(testDb, club.meetingId);
-		expect(out.map((r) => r.name)).toEqual(["Aaron Abbott", "Zoe Zander"]);
 
-		// Flip the alphabetically-first member to `coming` and they must drop out —
-		// a row is no longer proof of absence.
-		await setPlanStatus(testDb, {
-			memberId: club.adminMemberId,
-			meetingId: club.meetingId,
-			clubId: club.clubId,
-			status: "coming",
-			actorMemberId: club.adminMemberId,
+		it("lists {id, name} ordered by name", async () => {
+			// protects=the shape and order the loader field kept; fails_when=ORDER BY dropped (insertion order is the opposite); no_claim=none beyond protects
+			const z = await seedCase("Zed Zulu", "absent", null);
+			const a = await seedCase("Abe Alpha", null, "not_coming");
+			const out = await listUnavailableWithNames(testDb, club.meetingId);
+			expect(out).toEqual([
+				{ id: a, name: "Abe Alpha" },
+				{ id: z, name: "Zed Zulu" },
+			]);
 		});
-		const after = await listNotComingWithNames(testDb, club.meetingId);
-		expect(after.map((r) => r.name)).toEqual(["Zoe Zander"]);
 	});
 
 	describe("status predicates", () => {

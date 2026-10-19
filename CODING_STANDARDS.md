@@ -460,11 +460,18 @@ condition at a time, an undo that leaves the contact alone, and the lock order) 
 `meeting_attendance_plan` holds one row per (member, meeting) carrying
 `reached_out | coming | not_coming`; **row absent = "no answer"**. It replaced the two
 presence-means-true tables `member_availability` and `meeting_outreach`, which are dropped.
-Row presence is therefore no longer the answer: a consumer asking "who is unavailable?" must
-filter `status = 'not_coming'`, and one asking "who was contacted?" must filter
+Row presence is therefore no longer the answer. "Who is unavailable?" is a different question
+since #1257: the ROLL wins over the plan (`meeting_attendance`: Absent is unavailable whatever the
+plan says, Present is available even after Not coming; Excused and no record fall through to the
+plan), via `listUnavailableWithNames` / `isMemberUnavailable`, for members only. The PUBLIC
+reader (signed out, or signed in but not a member of the club) gets the plan-only
+`listNotComingWithNames`, because the roll is members-only and a roll-aware list beside the
+public `answeredRungs` would let anyone read each member's Present/Absent
+(`loadMeetingDetail`'s `viewerIsMember` gate). One asking "who was contacted?" must filter
 `status = 'reached_out'` (the officer-only rung) — testing for a row now silently counts all
 three. `src/server/attendance-plan-logic.ts` is the seam: `getPlanStatus`,
-`listPlanForMeetings`, `listNotComingWithNames`, `listNotComingForMeetings`,
+`listPlanForMeetings`, `listNotComingWithNames` (plan-only, the public reader),
+`listUnavailableWithNames` and `isMemberUnavailable` (roll wins over plan, members only), `listNotComingForMeetings`,
 `listReachedOutForMeeting`, `listComingForMeeting`, `memberHasAttendancePlanRows` (a count-free
 existence check for the guest-conversion undo's cascade refusal), `setPlanStatus`,
 `clearPlanStatus`. Add a
@@ -580,7 +587,7 @@ plan mode and NOT roll. Four things do not carry over
 from the plan half of this section, and each is a place the symmetry misleads. **There is no single
 seam and no store guard.** `buildRollPanel` (`src/lib/roll-panel.ts`) is a sibling of
 `buildPlanPanel`, but on the server `meeting_attendance` is read and written from
-`minutes-logic.ts` (`loadMinutes`, `setMemberPresence`, `addGuestPresent`, `removeGuestPresent`,
+`attendance-plan-logic.ts` (the roll-wins unavailable reads, #1257) and `minutes-logic.ts` (`loadMinutes`, `setMemberPresence`, `addGuestPresent`, `removeGuestPresent`,
 `assertAttendanceRecordable`) and NAMED by seven other `*-logic.ts` modules besides. Do not trust
 that number: there is no `attendance-store.guard.test.ts` analogue to enforce it, which is the real
 point — "add it to the seam rather than inlining a query" is advice about the PLAN table only, and
