@@ -222,8 +222,8 @@ const SLOT_FILL_BLANK: Record<
 					// TMOD read through the caller's transaction, never the pool.
 					"const forSomeoneElse = args.actorMemberId !== args.memberId;",
 					'if (args.proof === "asserted") { if (forSomeoneElse && args.actorMemberId !== (await loadTmodMemberId(slot.meetingId, tx))) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
-					// Over the member's own decline: refused.
-					'if ((await getPlanStatus(tx, { memberId: args.memberId, meetingId: slot.meetingId, })) === "not_coming") { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
+					// Over the member's own decline, or an Absent on the roll: refused.
+					"if (await isMemberUnavailable(tx, { memberId: args.memberId, meetingId: slot.meetingId, })) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }",
 					"proof: args.proof,",
 				],
 				mustPrecede: [['if (args.proof === "asserted")', ".update(roleSlots)"]],

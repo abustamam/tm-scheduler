@@ -28,6 +28,7 @@ import { logActivity } from "./activity";
 import {
 	type AttendancePlanStatus,
 	getPlanStatus,
+	isMemberUnavailable,
 	lockMemberAttendance,
 	setPlanStatus,
 } from "./attendance-plan-logic";
@@ -1943,10 +1944,10 @@ export async function claimSlotCore(
 		// and the flip below and leave the role on a member who said no.
 		await lockMemberAttendance(tx, slot.meetingId, args.memberId);
 		if (
-			(await getPlanStatus(tx, {
+			await isMemberUnavailable(tx, {
 				memberId: args.memberId,
 				meetingId: slot.meetingId,
-			})) === "not_coming"
+			})
 		) {
 			throw new Error(SIGN_IN_REQUIRED_MESSAGE);
 		}

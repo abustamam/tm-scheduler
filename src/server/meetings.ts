@@ -24,8 +24,8 @@ import { officerPositionLabel } from "#/lib/officers";
 import { PROMO_LIMITS } from "#/lib/promo-template";
 import { WOD_FIELDS, WOD_UPDATE_FIELDS } from "#/lib/wod-limits";
 import {
-	listNotComingWithNames,
 	listPlanForMeetings,
+	listUnavailableWithNames,
 } from "./attendance-plan-logic";
 import {
 	isReadableClubForMeeting,
@@ -268,7 +268,7 @@ async function loadMeetingDetail(
 	// officer (with names, so the VPE can see who NOT to chase when filling open
 	// roles). `not_coming` only: a plan row is no longer proof of absence, and
 	// listing a member who just confirmed they are COMING is exactly backwards.
-	const unavailableMembers = await listNotComingWithNames(db, meetingId);
+	const unavailableMembers = await listUnavailableWithNames(db, meetingId);
 
 	const allRungs = (await listPlanForMeetings(db, [meetingId])).map(
 		({ memberId, status }) => ({ memberId, status }),

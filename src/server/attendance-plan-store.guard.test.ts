@@ -165,7 +165,7 @@ describe("planned-attendance store", () => {
 		expect(
 			offenders,
 			"`meeting_attendance_plan` is reached only through the seam. Use " +
-				"`getPlanStatus` / `listPlanForMeetings` / `listNotComingWithNames` / " +
+				"`getPlanStatus` / `listPlanForMeetings` / `listUnavailableWithNames` / " +
 				"`listNotComingForMeetings` / `listReachedOutForMeeting` / " +
 				"`listComingForMeeting` / `setPlanStatus` / " +
 				`\`clearPlanStatus\`, or add a new function to ${SEAM} — an inline query ` +
