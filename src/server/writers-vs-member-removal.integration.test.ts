@@ -9,14 +9,26 @@
  * starts. The merge lock is what keeps it out: it must be blocked BY THE REMOVAL
  * on an advisory lock (`waitForLockWait`), holding no row the removal needs.
  * Without the lock the writer takes its rows first, the removal's cascade then
- * asks for one of them, and Postgres aborts one of the two.
+ * asks for one of them, and Postgres aborts one of the two: with the lock
+ * removed each case fails with a real 40P01 (`isDeadlock`), not a timeout. The
+ * helper below waits for the writer to be blocked by the removal on ANY lock,
+ * releases the blocker, and then requires (1) no 40P01 on either side and (2)
+ * that the wait was an advisory one.
  *
  * Once the blocker lets go the removal commits and the writer, which woke up to
  * a member that is gone, is refused cleanly: no deadlock on either side.
  */
-import { eq, inArray } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { eq, inArray, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guests, members, mentorships, people } from "#/db/schema";
+import {
+	activityLog,
+	guests,
+	members,
+	mentorships,
+	people,
+	roleSlots,
+} from "#/db/schema";
 import { UNDO_NOT_CONVERTED_MESSAGE } from "#/lib/guest-convert";
 import {
 	cleanup,
@@ -50,6 +62,9 @@ vi.mock("#/lib/auth", () => ({
 
 const { CLUB_BUSY_MESSAGE } = await import("#/server/club-write-lock");
 const { isDeadlock } = await import("#/server/pg-errors");
+const { lockMembershipForMerge } = await import(
+	"#/server/membership-merge-lock"
+);
 const { applyMemberRemove } = await import("#/server/members-logic");
 
 async function settle(p: Promise<unknown>): Promise<unknown> {
@@ -95,24 +110,63 @@ describe.skipIf(!hasTestDb)("writers vs a member removal (#1217)", () => {
 	}
 
 	/**
-	 * Remove `leaver`, parked inside its DELETE: it holds the merge lock and the
-	 * member row, and waits on a mentorship row `blocker` holds.
+	 * Give `memberId` `n` slots in the seeded meeting; returns their ids ascending.
+	 * They are INSERTED in descending id order, so a sequential scan (the bulk
+	 * UPDATE in `releaseSlotsAndMarkUnavailable`) meets them in the opposite order
+	 * to the removal's `ORDER BY id`.
 	 */
-	async function removalParked(leaver: string) {
-		const [pairing] = await testDb
-			.insert(mentorships)
+	async function seedSlots(
+		holder: { memberId: string } | { guestId: string },
+		n: number,
+	) {
+		const ids = Array.from({ length: n }, () => randomUUID()).sort();
+		for (const id of [...ids].reverse()) {
+			await testDb.insert(roleSlots).values({
+				id,
+				meetingId: club.meetingId,
+				roleDefinitionId: club.roleDefinitionId,
+				status: "claimed",
+				assignedMemberId: "memberId" in holder ? holder.memberId : null,
+				assignedGuestId: "guestId" in holder ? holder.guestId : null,
+				claimedAt: new Date(),
+			});
+		}
+		return ids;
+	}
+
+	/**
+	 * Remove `leaver`, parked: it holds the merge lock and the member row (and its
+	 * slots, in id order), and waits on a row `blocker` holds. By default that is a
+	 * `activity_log` row the DELETE cascades into; `onSlot` parks it earlier, on the
+	 * member's lowest-id slot.
+	 */
+	async function removalParked(leaver: string, onSlot?: string) {
+		// The FIRST FK the DELETE cascades into (`activity_log`, by constraint
+		// order), so the removal is parked BEFORE it reaches the guest, dues and
+		// mentorship rows a writer holds: once the blocker lets go it asks for them.
+		const [entry] = await testDb
+			.insert(activityLog)
 			.values({
 				clubId: club.clubId,
-				mentorMemberId: club.adminMemberId,
-				menteeMemberId: leaver,
-				focus: "other",
+				actorMemberId: leaver,
+				action: "member_remove",
+				targetType: "member",
+				targetId: leaver,
 			})
-			.returning({ id: mentorships.id });
+			.returning({ id: activityLog.id });
 		const blocker = await openBlockingTx(async (tx) => {
+			if (onSlot) {
+				await tx
+					.select({ id: roleSlots.id })
+					.from(roleSlots)
+					.where(eq(roleSlots.id, onSlot))
+					.for("update");
+				return;
+			}
 			await tx
-				.select({ id: mentorships.id })
-				.from(mentorships)
-				.where(eq(mentorships.id, pairing.id))
+				.select({ id: activityLog.id })
+				.from(activityLog)
+				.where(eq(activityLog.id, entry.id))
 				.for("update");
 		});
 		const outcome = settle(
@@ -124,7 +178,10 @@ describe.skipIf(!hasTestDb)("writers vs a member removal (#1217)", () => {
 		);
 		let removalPid: number;
 		try {
-			removalPid = await waitForLockWait('delete from "members"', blocker.pid);
+			removalPid = await waitForLockWait(
+				onSlot ? "role_slots" : 'delete from "members"',
+				blocker.pid,
+			);
 		} catch (e) {
 			await blocker.commit();
 			await outcome;
@@ -133,18 +190,42 @@ describe.skipIf(!hasTestDb)("writers vs a member removal (#1217)", () => {
 		return { blocker, outcome, removalPid };
 	}
 
+	/** The lock wait of the first session blocked by `holderPid`. */
+	async function waitForBlockedBy(holderPid: number): Promise<string> {
+		const deadline = Date.now() + 10_000;
+		while (Date.now() < deadline) {
+			const res = await testDb.execute(sql`
+				select wait_event from pg_stat_activity
+				where datname = current_database() and state = 'active'
+				  and wait_event_type = 'Lock'
+				  and ${holderPid} = any(pg_blocking_pids(pid))
+				limit 1`);
+			const ev = (res.rows[0] as { wait_event?: string } | undefined)
+				?.wait_event;
+			if (ev) return ev;
+			await new Promise((r) => setTimeout(r, 25));
+		}
+		throw new Error(`nothing blocked by pid ${holderPid}`);
+	}
+
 	/**
-	 * Run `startWriter` while the removal is parked; return both outcomes after
-	 * proving the writer waited on an advisory lock held by the removal.
+	 * Run `startWriter` while the removal is parked; return the writer's outcome
+	 * after proving neither side deadlocked and the writer waited on an advisory
+	 * lock held by the removal.
 	 */
 	async function interleave(
 		leaver: string,
 		startWriter: () => Promise<unknown>,
+		onSlot?: string,
 	) {
-		const { blocker, outcome, removalPid } = await removalParked(leaver);
+		const { blocker, outcome, removalPid } = await removalParked(
+			leaver,
+			onSlot,
+		);
 		const writer = settle(startWriter());
+		let waitEvent: string;
 		try {
-			await waitForLockWait("pg_advisory_xact_lock", removalPid);
+			waitEvent = await waitForBlockedBy(removalPid);
 		} finally {
 			await blocker.commit();
 		}
@@ -152,6 +233,7 @@ describe.skipIf(!hasTestDb)("writers vs a member removal (#1217)", () => {
 		const writerErr = await writer;
 		expect(isDeadlock(removalErr)).toBe(false);
 		expect(isDeadlock(writerErr)).toBe(false);
+		expect(waitEvent).toBe("advisory");
 		expect(removalErr).toBeNull();
 		expect(await memberExists(leaver)).toBe(false);
 		return writerErr;
@@ -221,16 +303,23 @@ describe.skipIf(!hasTestDb)("writers vs a member removal (#1217)", () => {
 
 	it("releasing a member's slots and marking them unavailable queues behind the removal", async () => {
 		const leaver = await seedLeaver();
+		// Two slots, the removal parked on the lower id: it holds the meeting lock
+		// and wants slot[0] then slot[1]; the unordered bulk UPDATE meets slot[1]
+		// first, so without the merge lock it holds slot[1] and waits on slot[0].
+		const slots = await seedSlots({ memberId: leaver }, 2);
 		const { releaseSlotsAndMarkUnavailable } = await import(
 			"#/server/availability-logic"
 		);
-		const err = await interleave(leaver, () =>
-			releaseSlotsAndMarkUnavailable(testDb, {
-				memberId: leaver,
-				claimedActorMemberId: club.adminMemberId,
-				meetingId: club.meetingId,
-				clubId: club.clubId,
-			}),
+		const err = await interleave(
+			leaver,
+			() =>
+				releaseSlotsAndMarkUnavailable(testDb, {
+					memberId: leaver,
+					claimedActorMemberId: club.adminMemberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+				}),
+			slots[0],
 		);
 		expect((err as Error).message).toBe(CLUB_BUSY_MESSAGE);
 	});
@@ -249,6 +338,9 @@ describe.skipIf(!hasTestDb)("writers vs a member removal (#1217)", () => {
 				),
 			)
 			.returning({ id: guests.id });
+		// The guest holds two slots when linked: the link moves them to the member
+		// and records their ids, which is what the unlink's bulk slot UPDATE restores.
+		await seedSlots({ guestId: g.id }, 2);
 		await applyLinkGuestToMember({
 			clubId: club.clubId,
 			guestId: g.id,
@@ -292,5 +384,106 @@ describe.skipIf(!hasTestDb)("writers vs a member removal (#1217)", () => {
 		);
 		// The removal took the pointer away (SET NULL); the undo found nothing to undo.
 		expect((err as Error).message).toBe(UNDO_NOT_CONVERTED_MESSAGE);
+	});
+
+	it.each([
+		"mentee",
+		"mentor",
+	] as const)("setMentorshipFocus refuses a pairing a merge re-pointed on the %s side between its peek and its lock", async (side) => {
+		const old = await seedLeaver("Old Member");
+		const keeper = await seedLeaver("Keeper");
+		const [pairing] = await testDb
+			.insert(mentorships)
+			.values({
+				clubId: club.clubId,
+				mentorMemberId: side === "mentor" ? old : club.adminMemberId,
+				menteeMemberId: side === "mentee" ? old : club.adminMemberId,
+				focus: "contest",
+			})
+			.returning({ id: mentorships.id });
+		const { setMentorshipFocus } = await import("#/server/mentorship-logic");
+		// A merge of `mentee` holds the lock EXCLUSIVE; the writer peeks the pairing
+		// (old id on one side), then waits on the shared lock. The merge re-points the
+		// pairing to the keeper and commits, leaving the old member row in place.
+		const merge = await openBlockingTx(async (tx) => {
+			await lockMembershipForMerge(tx, old);
+			await tx
+				.update(mentorships)
+				.set(
+					side === "mentee"
+						? { menteeMemberId: keeper }
+						: { mentorMemberId: keeper },
+				)
+				.where(eq(mentorships.id, pairing.id));
+		});
+		const writer = settle(
+			setMentorshipFocus({
+				clubId: club.clubId,
+				mentorshipId: pairing.id,
+				focus: "leadership",
+				actorMemberId: club.adminMemberId,
+			}),
+		);
+		try {
+			await waitForLockWait("pg_advisory_xact_lock_shared", merge.pid);
+		} finally {
+			await merge.commit();
+		}
+		const err = await writer;
+		expect(err).toBeInstanceOf(Error);
+		expect((err as Error).message).toBe(CLUB_BUSY_MESSAGE);
+		const [row] = await testDb
+			.select({ focus: mentorships.focus })
+			.from(mentorships)
+			.where(eq(mentorships.id, pairing.id));
+		expect(row.focus).toBe("contest");
+	});
+
+	it("a removal that arrives after setMentorshipFocus holds its shared lock waits for it and neither deadlocks", async () => {
+		const leaver = await seedLeaver();
+		const [pairing] = await testDb
+			.insert(mentorships)
+			.values({
+				clubId: club.clubId,
+				mentorMemberId: club.adminMemberId,
+				menteeMemberId: leaver,
+				focus: "contest",
+			})
+			.returning({ id: mentorships.id });
+		const { setMentorshipFocus } = await import("#/server/mentorship-logic");
+		// Park the writer AFTER it took the shared lock: it waits on the pairing row.
+		const blocker = await openBlockingTx(async (tx) => {
+			await tx
+				.select({ id: mentorships.id })
+				.from(mentorships)
+				.where(eq(mentorships.id, pairing.id))
+				.for("update");
+		});
+		const writer = settle(
+			setMentorshipFocus({
+				clubId: club.clubId,
+				mentorshipId: pairing.id,
+				focus: "leadership",
+				actorMemberId: club.adminMemberId,
+			}),
+		);
+		const writerPid = await waitForLockWait("mentorships", blocker.pid);
+		const removal = settle(
+			applyMemberRemove({
+				clubId: club.clubId,
+				memberId: leaver,
+				actorMemberId: club.adminMemberId,
+			}),
+		);
+		try {
+			await waitForLockWait("pg_advisory_xact_lock", writerPid);
+		} finally {
+			await blocker.commit();
+		}
+		expect(await writer).toBeNull();
+		const removalErr = await removal;
+		expect(isDeadlock(removalErr)).toBe(false);
+		expect(removalErr).toBeNull();
+		expect(await memberExists(leaver)).toBe(false);
 	});
 });

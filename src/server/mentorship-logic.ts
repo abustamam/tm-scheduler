@@ -597,8 +597,10 @@ export async function setMentorshipFocus(input: {
 			// pairing row lock (#1217). A removal holds it EXCLUSIVE, then the
 			// member row, then cascades into this pairing; this writer used to hold
 			// the pairing and then ask `assertPairable` for the members FOR SHARE:
-			// 40P01. The ids are read unlocked (a pairing's two members never
-			// change), and checked again under the row lock.
+			// 40P01. The ids are read unlocked and checked again under the row lock:
+			// a merge (`collapseMemberships`, which re-points `MENTORSHIP_MEMBER_FKS`)
+			// can move either one between the peek and the lock, and then the locks
+			// above name the wrong members.
 			const [peek] = await tx
 				.select({
 					mentorMemberId: mentorships.mentorMemberId,

@@ -257,8 +257,15 @@ of BOTH clubs. A guest never links themselves.
 Every writer in this series that touches more than one of these takes them in this order:
 
 1. `lockClubForWrite` for every affected club, sorted by id;
-2. then the `people` rows, sorted by id, each at the strength below;
-3. then the `guests` rows (the row lock a path takes on the guest it changes).
+2. then the membership merge lock (`membership-merge-lock.ts`, #1035) for each membership the
+   path references, sorted by id: SHARED for a writer (unlink, #1217), EXCLUSIVE for a path that
+   deletes the membership (undo of a conversion, as a member removal does);
+3. then the `people` rows, sorted by id, each at the strength below;
+4. then the `guests` rows (the row lock a path takes on the guest it changes).
+
+The merge lock comes before any row lock because a member removal holds it EXCLUSIVE and then the
+member's rows, and a writer that held the guest row (or the member's slots) and then asked for one
+of those was one end of a 40P01 cycle with it (#1217).
 
 This extends the club-lock-first rule of #1010 (`src/server/club-write-lock.ts`). `mergePeople`
 used to lock both Persons before any club lock; #1124 reverses it, because a convert, a

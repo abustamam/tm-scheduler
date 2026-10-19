@@ -3415,8 +3415,9 @@ export async function applyUndoGuestConversion(
 	input: UndoConversionInput,
 ): Promise<UndoConversionResult> {
 	return db.transaction(async (tx) => {
-		// The lock protocol (ADR-0031): the club write lock, then the Persons, then
-		// the guest row, then (this path's own order, unchanged) the membership.
+		// The lock protocol (ADR-0031): the club write lock, then the membership
+		// merge lock EXCLUSIVE (this path deletes the membership, #1217), then the
+		// Persons, then the guest row, then the membership row.
 		// Two Persons can be involved: the guest's, and the one the membership
 		// CURRENTLY names, which is not the Person in the activity record after a
 		// merge has deleted that one (L1 of #1155). Both are read without a lock,

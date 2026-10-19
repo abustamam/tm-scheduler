@@ -29,10 +29,16 @@
  * LOCK ORDER. Every taker takes this lock BEFORE its first row lock:
  *
  *   merge:  club write lock → THIS (exclusive, absorbed id) → row locks
- *   writer: THIS (shared, each referenced member id, in id order) → row locks
+ *   writer: [club write lock →] THIS (shared, each referenced member id, in id
+ *           order) → row locks
  *
- * No covered writer takes the club write lock, so the merge's club → member
- * order is never reversed. A writer holds nothing when it waits here, so it
+ * Most covered writers take no club write lock. Two do, and take it FIRST, as
+ * the merge does: `setMentorshipFocus` and `applyUnlinkGuestFromMember` (#1217),
+ * so the club → member order is still never reversed. Undo of a guest
+ * conversion (`applyUndoGuestConversion`, #1217) takes the EXCLUSIVE half as a
+ * member removal does, because it deletes the membership; it is not a merge, and
+ * its order is club write lock → THIS (exclusive) → Persons → guest row. A
+ * writer holds nothing (or only the club write lock) when it waits here, so it
  * cannot be part of a cycle through the merge; the merge holds only advisory
  * locks when it waits here (inside `mergePeople`, also the Person rows and the
  * row locks of the clubs it has already collapsed — none of which a writer

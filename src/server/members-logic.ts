@@ -1005,19 +1005,15 @@ async function appearsOnPastAgenda(
  *  `backfillMissingRoleSlots`, the template conversion and the speech-log edit. Each
  *  takes the meeting lock before it locks a slot or writes a row naming a member.
  *
- *  Known exceptions, which DO form a cycle with the removal and can deadlock (40P01,
- *  a retryable error, no data is lost). They are not fixed here: the same cycles exist
- *  without this change, because the old plain DELETE locked the member row and then
- *  cascaded into the rows these writers hold.
- *  - Undoing a guest conversion: the member row FOR UPDATE, then the member's slots.
- *  - Unlinking a guest: the guest row FOR UPDATE, then the member's slots (the guest's
- *    `converted_membership_id` is SET NULL by the delete).
- *  - `setMentorshipFocus`: the mentorship row FOR UPDATE, then the members FOR SHARE.
- *  - A full-year dues payment: an existing `member_dues` row (the upsert), then an
- *    INSERT that needs KEY SHARE on the member.
- *  - `releaseSlotsAndMarkUnavailable`: one bulk slot UPDATE with no ORDER BY, so two
- *    of them over overlapping slots can take the rows in different orders, and one
- *    that holds slots the removal wants is a cycle.
+ *  These five writers used to form a cycle with the removal and deadlock (40P01), and
+ *  no longer do (#1217): each takes the membership merge lock before its first row lock
+ *  (`membership-merge-lock.ts`), which the removal holds EXCLUSIVE. Shared for unlinking a
+ *  guest, `setMentorshipFocus`, a full-year dues payment and
+ *  `releaseSlotsAndMarkUnavailable`; EXCLUSIVE for undoing a guest conversion, which
+ *  deletes the membership as this does.
+ *  `src/server/writers-vs-member-removal.integration.test.ts` reproduces each cycle.
+ *  The mentorship writers other than `setMentorshipFocus`, `undoDues` and `waiveDues`
+ *  take no such lock and are not covered.
  *
  *  Not covered, by design: a meeting INSERTED into an action item's window, or a
  *  meeting RESCHEDULED into it from outside, after the second footprint read below
