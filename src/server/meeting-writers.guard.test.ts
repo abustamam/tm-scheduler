@@ -278,8 +278,15 @@ const MEETING_WRITERS: Record<string, Entry> = {
 	},
 
 	// -- availability (#1135)
-	"src/server/availability-logic.ts#releaseSlotsAndMarkUnavailable": {
+	"src/server/availability-logic.ts#releaseHeldSlots": {
 		class: "plan",
+		refusedBy: [
+			"src/server/availability-logic.ts#releaseSlotsAndMarkUnavailable",
+		],
+		exemptCallers: {
+			"src/server/minutes.ts#setAttendance":
+				'The Absent release (#1256) asks for the RECORD class (`releaseHeldSlots` takes it as `writeClass`), not the plan one: the minutes record what happened, so a completed meeting is when an officer most needs it. `setAttendance` refuses by the record class itself (`assertMinutesMeetingRecordable`, which accepts scheduled and completed and refuses cancelled), and the UPDATE carries `meetingAcceptsWrite(tx, "record")` as well. The guard reads a literal class only, so it sees this writer as plan and the record caller as exempt.',
+		},
 	},
 
 	// -- Easy-Speak history import (#1051)

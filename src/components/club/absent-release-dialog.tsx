@@ -1,0 +1,121 @@
+import { useEffect, useState } from "react";
+import { Button } from "#/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "#/components/ui/dialog";
+
+/** One role the member holds: the NUMBERED label and, for a speaker slot with a
+ *  speech attached, its title. */
+export interface HeldRoleLine {
+	label: string;
+	speechTitle: string | null;
+}
+
+/** The pending Absent mark, or `null` when nothing is being confirmed. */
+export interface PendingAbsent {
+	memberId: string;
+	name: string;
+	/** Every role the loader says they hold. Never empty: a member the page sees
+	 *  holding nothing is written straight through, with no dialog (#1256). */
+	roles: HeldRoleLine[];
+}
+
+/**
+ * The step between roll mode's "Absent" chip and the roles going back to the
+ * open pool (#1256).
+ *
+ * Three answers, and each is a different write: Release roles (the default,
+ * focused) records Absent AND frees every role; Keep roles records Absent only,
+ * for the officer who is marking someone who will still be credited; Cancel
+ * writes nothing. The release has no undo from the meeting page, and the speech
+ * survives it, unscheduled, in the member's own queue (ADR-0009).
+ *
+ * Presentational, like `DeclineReleaseDialog`: the route owns the write, so
+ * this mounts in jsdom and its copy is assertable.
+ */
+export function AbsentReleaseDialog({
+	pending,
+	offline = false,
+	busy = false,
+	onRelease,
+	onKeep,
+	onCancel,
+}: {
+	pending: PendingAbsent | null;
+	/** The write will be queued, not sent: the release happens on reconnect. */
+	offline?: boolean;
+	busy?: boolean;
+	onRelease: (pending: PendingAbsent) => void;
+	onKeep: (pending: PendingAbsent) => void;
+	onCancel: () => void;
+}) {
+	// Held through Radix's ~200ms close animation, so the copy does not blank to
+	// "Mark undefined absent?" on every close (see `DeclineReleaseDialog`).
+	const [shown, setShown] = useState<PendingAbsent | null>(pending);
+	useEffect(() => {
+		if (pending) setShown(pending);
+	}, [pending]);
+
+	return (
+		<Dialog
+			open={pending !== null}
+			onOpenChange={(o) => {
+				if (!o && !busy) onCancel();
+			}}
+		>
+			{/* No `max-h` / `overflow-*`: a dialog's height belongs to
+			 *  `DialogContent` (CODING_STANDARDS.md, #619). */}
+			<DialogContent>
+				<DialogHeader>
+					<DialogTitle>Mark {shown?.name} absent?</DialogTitle>
+					<DialogDescription>
+						{shown?.name} holds{" "}
+						{shown?.roles.length === 1 ? "this role" : "these roles"} in this
+						meeting. Releasing frees {shown?.roles.length === 1 ? "it" : "them"}{" "}
+						for someone else, and we can't put{" "}
+						{shown?.roles.length === 1 ? "it" : "them"} back automatically.
+					</DialogDescription>
+				</DialogHeader>
+				<ul className="list-disc space-y-1 pl-5 text-sm">
+					{shown?.roles.map((r) => (
+						<li key={r.label}>
+							{r.speechTitle
+								? `${r.label} — '${r.speechTitle}' goes back to their queue`
+								: r.label}
+						</li>
+					))}
+				</ul>
+				{offline ? (
+					<p className="text-sm text-muted-foreground">
+						Roles will be released when you're back online.
+					</p>
+				) : null}
+				<DialogFooter>
+					<Button variant="outline" disabled={busy} onClick={onCancel}>
+						Cancel
+					</Button>
+					<Button
+						variant="outline"
+						disabled={busy}
+						onClick={() => shown && onKeep(shown)}
+					>
+						Keep roles
+					</Button>
+					<Button
+						variant="destructive"
+						autoFocus
+						disabled={busy}
+						onClick={() => shown && onRelease(shown)}
+					>
+						Release roles
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
+	);
+}

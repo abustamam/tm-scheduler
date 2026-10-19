@@ -56,6 +56,7 @@ import {
 	user,
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
+import { MEETING_LOCKED_MESSAGE } from "#/lib/meeting-lifecycle";
 import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
 import {
 	cleanup,
@@ -839,30 +840,66 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 		// BEFORE/AFTER pairs: a write that throws proves nothing on its own, since
 		// any broken fixture also throws. The "before" half is what fails if the
 		// gate is deleted.
-		it("refuses a release once the meeting's day has PASSED, though it is not completed", async () => {
-			// `assertMeetingNotLocked` is `status === "completed"` and nothing else,
-			// and clubs routinely never press Complete — so last month's meeting
-			// sits at "scheduled" forever while its nudge link stays in a chat
-			// scrollback. A release there erases who actually did what.
+		const DAY = 24 * 3600 * 1000;
+		async function moveIntoThePast() {
+			await testDb
+				.update(meetings)
+				.set({ scheduledAt: new Date(Date.now() - 30 * DAY) })
+				.where(eq(meetings.id, seed.meetingId));
+		}
+
+		it("an OFFICER releases once the meeting's day has PASSED (#1256), a scheduled meeting that was never completed", async () => {
+			// protects=the officer's release on a scheduled meeting whose day passed: the
+			//   slot is open and the rung is not_coming; the release is attributed to them
+			// fails_when=the window refusal runs before the actor is known (the pre-#1256
+			//   order), which refuses an officer exactly like a stale nudge link
+			// no_claim=self and TMOD are still refused (next two cases); a COMPLETED
+			//   meeting (last case)
+			// CHANGED from "refuses a release once the meeting's day has PASSED": that
+			// asserted the officer was refused, which #1256 §3 reverses. The roll turning
+			// out different from the plan is what the officer is correcting.
 			await holdSeededSlot();
 			sessionUserId = seed.adminUserId;
-			const args = {
+			await moveIntoThePast();
+
+			const result = await declinePlannedAttendance(testDb, {
 				memberId: seed.memberId,
 				claimedActorMemberId: seed.adminMemberId,
 				meetingId: seed.meetingId,
 				clubId: seed.clubId,
 				releaseHeldRoles: true,
+			});
+			expect(result.released).toBe(1);
+			const slot = await seededSlot();
+			expect(slot?.assignedMemberId).toBeNull();
+			expect(slot?.status).toBe("open");
+			expect((await planRows(seed.memberId, seed.meetingId))[0]?.status).toBe(
+				"not_coming",
+			);
+		});
+
+		it("a SELF answer is still refused once the meeting's day has PASSED (#1256)", async () => {
+			// protects=the stale-nudge-link refusal for the member's own answer: roles
+			//   stay assigned and no plan row is written
+			// fails_when=the window is dropped for every arm rather than only the officer
+			// no_claim=the before-the-day half is the officer-arm case above and the
+			//   "officer arm" block; this one asserts only the refusal
+			await holdSeededSlot();
+			sessionUserId = seed.memberUserId;
+			const args = {
+				memberId: seed.memberId,
+				claimedActorMemberId: seed.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: true,
 			};
+			// BEFORE half: the same call on a meeting in the future releases, so the
+			// refusal below is the window and not a broken fixture.
 			await expect(
 				declinePlannedAttendance(testDb, args),
 			).resolves.toMatchObject({ released: 1 });
-
-			// Put it back and move the meeting into the past.
 			await holdSeededSlot();
-			await testDb
-				.update(meetings)
-				.set({ scheduledAt: new Date(Date.now() - 30 * 24 * 3600 * 1000) })
-				.where(eq(meetings.id, seed.meetingId));
+			await moveIntoThePast();
 
 			await expect(declinePlannedAttendance(testDb, args)).rejects.toThrow(
 				RELEASE_AFTER_MEETING_MESSAGE,
@@ -872,10 +909,44 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 			expect(slot?.status).toBe("claimed");
 		});
 
-		it("refuses a release on a COMPLETED meeting", async () => {
-			// The lock the handler also carries, asserted here because the seam is
-			// reachable from a direct POST that never went through the handler's
-			// guard order.
+		it("a TMOD answering for their OWN row is still refused once the day has PASSED (#1256)", async () => {
+			// protects=the window on the TMOD arm: a Toastmaster is not an officer, so
+			//   their own release after the day is refused and their TMOD slot stays
+			// fails_when=the window skips every non-self actor, or `via` for a TMOD on
+			//   their own row is read as officer
+			// no_claim=a TMOD on SOMEONE ELSE's row never frees anything (the TMOD arm
+			//   block above)
+			const tmod = await addSignedInMember(seed.clubId, "Signed-in TMOD");
+			extraUserIds.push(tmod.userId);
+			const tmodSlotId = await addTmodSlot(seed, tmod.memberId);
+			sessionUserId = tmod.userId;
+			await moveIntoThePast();
+
+			await expect(
+				declinePlannedAttendance(testDb, {
+					memberId: tmod.memberId,
+					claimedActorMemberId: tmod.memberId,
+					meetingId: seed.meetingId,
+					clubId: seed.clubId,
+					releaseHeldRoles: true,
+				}),
+			).rejects.toThrow(RELEASE_AFTER_MEETING_MESSAGE);
+			const [held] = await testDb
+				.select({ assignedMemberId: roleSlots.assignedMemberId })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, tmodSlotId));
+			expect(held?.assignedMemberId).toBe(tmod.memberId);
+		});
+
+		it("an officer is refused on a COMPLETED meeting by the plan refusal, with the slot kept (#1256)", async () => {
+			// protects=a completed meeting still refuses the PLAN path for an officer
+			//   (roll Absent is the release there): the slot stays assigned
+			// fails_when=dropping the officer's window also drops the completed refusal
+			//   inside the release, so a completed meeting's roles are freed by Not coming
+			// no_claim=the refusal's wording is the lifecycle's, asserted by name
+			// CHANGED from "refuses a release on a COMPLETED meeting" expecting
+			// RELEASE_AFTER_MEETING_MESSAGE: an officer now skips that window, and what
+			// refuses is `assertMeetingAccepts(status, "plan")` (MEETING_LOCKED_MESSAGE).
 			await holdSeededSlot();
 			sessionUserId = seed.adminUserId;
 			await testDb
@@ -891,7 +962,7 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 					clubId: seed.clubId,
 					releaseHeldRoles: true,
 				}),
-			).rejects.toThrow(RELEASE_AFTER_MEETING_MESSAGE);
+			).rejects.toThrow(MEETING_LOCKED_MESSAGE);
 			expect((await seededSlot())?.assignedMemberId).toBe(seed.memberId);
 		});
 	});

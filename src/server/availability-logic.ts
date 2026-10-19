@@ -1,8 +1,9 @@
 import { and, eq } from "drizzle-orm";
 import type { db } from "#/db";
-import { meetings, roleSlots } from "#/db/schema";
+import { meetings, roleDefinitions, roleSlots, speeches } from "#/db/schema";
+import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
-import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
+import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
 import { logActivity } from "./activity";
 import { resolveActor } from "./attendance-actor-logic";
 import { lockMemberAttendance, setPlanStatus } from "./attendance-plan-logic";
@@ -11,6 +12,125 @@ import { meetingAcceptsWrite } from "./meeting-write-gate";
 import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
 
 type Database = typeof db;
+type Tx = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+/** One slot `releaseHeldSlots` freed: the NUMBERED agenda label ("Speaker 2")
+ *  and the title of the speech that was attached, which the release unlinks but
+ *  never deletes (ADR-0009). */
+export type ReleasedSlot = {
+	slotId: string;
+	label: string;
+	speechTitle: string | null;
+};
+
+/**
+ * Free every slot `memberId` holds in `meetingId`, inside the CALLER's
+ * transaction (#1256). The caller owns the locks and the authorization; this
+ * owns the statement.
+ *
+ * Frees only rows still assigned to the member AT EXECUTION TIME: the label and
+ * speech title are read first, but the UPDATE re-checks `assigned_member_id`,
+ * so a slot reassigned in between is neither freed nor reported. The class rides
+ * in the statement (#1135) so a meeting frozen after the caller's own check
+ * releases nothing.
+ *
+ * Labels are numbered off EVERY slot in the meeting plus
+ * `role_definitions.slots_unordered`, never off the member's own slots: filtering
+ * would turn "Evaluator 2" into "Evaluator" the moment the other holder's row
+ * was left out.
+ */
+export async function releaseHeldSlots(
+	tx: Tx,
+	args: {
+		meetingId: string;
+		memberId: string;
+		writeClass: "plan" | "record";
+		proof: WriteProof;
+		cause: "not_coming" | "absent";
+		/** The owning club and the credited actor, for the activity rows. */
+		clubId: string;
+		actorMemberId: string | null;
+	},
+): Promise<ReleasedSlot[]> {
+	const all = await tx
+		.select({
+			id: roleSlots.id,
+			assigneeId: roleSlots.assignedMemberId,
+			slotIndex: roleSlots.slotIndex,
+			roleName: roleDefinitions.name,
+			sortOrder: roleDefinitions.sortOrder,
+			slotsUnordered: roleDefinitions.slotsUnordered,
+			speechTitle: speeches.title,
+		})
+		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
+		.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
+		.where(eq(roleSlots.meetingId, args.meetingId));
+	const roleCounts = buildRoleCounts(all);
+	const before = new Map(
+		all
+			.filter((s) => s.assigneeId === args.memberId)
+			.map((s) => [s.id, s] as const),
+	);
+
+	const released = await tx
+		.update(roleSlots)
+		.set({
+			assignedMemberId: null,
+			assignedGuestId: null,
+			status: "open",
+			claimedAt: null,
+			speechId: null,
+		})
+		.where(
+			and(
+				eq(roleSlots.meetingId, args.meetingId),
+				eq(roleSlots.assignedMemberId, args.memberId),
+				meetingAcceptsWrite(tx, args.writeClass, roleSlots.meetingId),
+			),
+		)
+		.returning({ id: roleSlots.id });
+
+	const freed: (ReleasedSlot & { sortOrder: number; slotIndex: number })[] = [];
+	for (const row of released) {
+		const was = before.get(row.id);
+		// A slot assigned to the member between the read and the UPDATE (a claim
+		// that committed in the gap): freed, with a label worked out from the
+		// plain role name. Not reachable behind `lockMemberAttendance` for a
+		// claim, and still better than dropping the activity row.
+		freed.push({
+			slotId: row.id,
+			label: was ? slotLabel(was, roleCounts) : "A role",
+			speechTitle: was?.speechTitle ?? null,
+			sortOrder: was?.sortOrder ?? 0,
+			slotIndex: was?.slotIndex ?? 0,
+		});
+	}
+	freed.sort((a, b) => a.sortOrder - b.sortOrder || a.slotIndex - b.slotIndex);
+
+	for (const slot of freed) {
+		await logActivity(tx, {
+			clubId: args.clubId,
+			actorMemberId: args.actorMemberId,
+			action: "release",
+			targetType: "slot",
+			targetId: slot.slotId,
+			detail: {
+				fromMemberId: args.memberId,
+				proof: args.proof,
+				cause: args.cause,
+			},
+		});
+	}
+	return freed.map(({ slotId, label, speechTitle }) => ({
+		slotId,
+		label,
+		speechTitle,
+	}));
+}
 
 /**
  * Release every role a member holds in a meeting and record them `not_coming`,
@@ -91,7 +211,7 @@ export async function releaseSlotsAndMarkUnavailable(
 		 *  the harmless rung write beside it. */
 		via?: "nudge" | "manual";
 	},
-): Promise<{ released: number }> {
+): Promise<{ released: number; releasedSlots: ReleasedSlot[] }> {
 	// Takedown outranks every other reason to refuse (ADR-0016), so it runs
 	// before the ladder — an archived club must not answer differently for an
 	// authorized caller than for an unauthorized one.
@@ -142,26 +262,16 @@ export async function releaseSlotsAndMarkUnavailable(
 			.limit(1);
 		if (!meeting) throw new Error("Meeting not found.");
 		assertMeetingAccepts(meeting.status, "plan");
-		const released = await tx
-			.update(roleSlots)
-			.set({
-				assignedMemberId: null,
-				assignedGuestId: null,
-				status: "open",
-				claimedAt: null,
-				speechId: null,
-			})
-			.where(
-				and(
-					eq(roleSlots.meetingId, args.meetingId),
-					eq(roleSlots.assignedMemberId, args.memberId),
-					// The class rides in the statement too (#1135), so a meeting frozen
-					// AFTER the read above releases nothing, as `claimSlotCore`'s does.
-					meetingAcceptsWrite(tx, "plan", roleSlots.meetingId),
-				),
-			)
-			.returning({ id: roleSlots.id });
-		if (released.length === 0) {
+		const releasedSlots = await releaseHeldSlots(tx, {
+			meetingId: args.meetingId,
+			memberId: args.memberId,
+			writeClass: "plan",
+			proof,
+			cause: "not_coming",
+			clubId: args.clubId,
+			actorMemberId,
+		});
+		if (releasedSlots.length === 0) {
 			// Nothing released is ordinary (the member held nothing), and also what a
 			// freeze after the read leaves: tell them apart, so a locked or cancelled
 			// meeting is refused here rather than given a `not_coming` answer.
@@ -199,16 +309,6 @@ export async function releaseSlotsAndMarkUnavailable(
 			proof,
 		});
 
-		for (const slot of released) {
-			await logActivity(tx, {
-				clubId: args.clubId,
-				actorMemberId,
-				action: "release",
-				targetType: "slot",
-				targetId: slot.id,
-				detail: { fromMemberId: args.memberId, proof },
-			});
-		}
-		return { released: released.length };
+		return { released: releasedSlots.length, releasedSlots };
 	});
 }
