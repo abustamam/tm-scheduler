@@ -53,7 +53,7 @@ import {
 	effectivePreferredContact,
 } from "#/lib/preferred-contact";
 import { logActivity } from "./activity";
-import { lockClubForWrite } from "./club-write-lock";
+import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import {
 	assertStillClubAdmin,
@@ -64,6 +64,7 @@ import {
 	requireMembership,
 } from "./guards";
 import type { DbOrTx } from "./meeting-templates-logic";
+import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
 import { isSqlState, isUniqueViolation } from "./pg-errors";
 
 export const MENTORSHIP_SELF_MESSAGE = "A member can't mentor themselves.";
@@ -592,7 +593,41 @@ export async function setMentorshipFocus(input: {
 	try {
 		await db.transaction(async (tx) => {
 			await lockClubForWrite(tx, input.clubId);
+			// The membership merge lock (#1035), SHARED, on both members BEFORE the
+			// pairing row lock (#1217). A removal holds it EXCLUSIVE, then the
+			// member row, then cascades into this pairing; this writer used to hold
+			// the pairing and then ask `assertPairable` for the members FOR SHARE:
+			// 40P01. The ids are read unlocked and checked again under the row lock:
+			// a merge (`collapseMemberships`, which re-points `MENTORSHIP_MEMBER_FKS`)
+			// can move either one between the peek and the lock, and then the locks
+			// above name the wrong members.
+			const [peek] = await tx
+				.select({
+					mentorMemberId: mentorships.mentorMemberId,
+					menteeMemberId: mentorships.menteeMemberId,
+				})
+				.from(mentorships)
+				.where(
+					and(
+						eq(mentorships.id, input.mentorshipId),
+						eq(mentorships.clubId, input.clubId),
+					),
+				)
+				.limit(1);
+			if (peek) {
+				await lockMembershipsAgainstMerge(tx, [
+					peek.mentorMemberId,
+					peek.menteeMemberId,
+				]);
+			}
 			const row = await lockActivePairing(tx, input.clubId, input.mentorshipId);
+			if (
+				peek &&
+				(row.mentorMemberId !== peek.mentorMemberId ||
+					row.menteeMemberId !== peek.menteeMemberId)
+			) {
+				throw new Error(CLUB_BUSY_MESSAGE);
+			}
 			// Same check as a new pairing: both still in the club and ACTIVE. A
 			// pairing with a lapsed member is dormant (the reads hide it), and
 			// re-focusing it would be editing something nobody can see.

@@ -8,6 +8,7 @@ import { resolveActor } from "./attendance-actor-logic";
 import { lockMemberAttendance, setPlanStatus } from "./attendance-plan-logic";
 import { assertClubNotArchived } from "./guards";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
+import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
 
 type Database = typeof db;
 
@@ -111,6 +112,12 @@ export async function releaseSlotsAndMarkUnavailable(
 	// header. Before the transaction, so a refusal leaves nothing behind.
 	if (proof !== "session") throw new Error(SIGN_IN_REQUIRED_MESSAGE);
 	return database.transaction(async (tx) => {
+		// The membership merge lock (#1035), SHARED, before any other lock (#1217).
+		// The bulk UPDATE below has no ORDER BY, so with two slots it can lock them
+		// in the opposite order to a removal (which takes them in id order), and
+		// `setPlanStatus` key-shares the member row the removal holds: 40P01. A
+		// member removed meanwhile is refused with `CLUB_BUSY_MESSAGE`.
+		await lockMembershipsAgainstMerge(tx, [args.memberId]);
 		// Before the release, not before the `not_coming` write: an unverified
 		// claim that checked this member's answer must finish before we look for
 		// the roles to free, or its slot flips after we have looked.
