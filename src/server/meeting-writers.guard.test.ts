@@ -278,8 +278,14 @@ const MEETING_WRITERS: Record<string, Entry> = {
 	},
 
 	// -- availability (#1135)
-	"src/server/availability-logic.ts#releaseSlotsAndMarkUnavailable": {
+	"src/server/availability-logic.ts#releaseHeldSlotsForPlan": {
 		class: "plan",
+	},
+	// The Absent release (#1256) is a RECORD write: the minutes record what
+	// happened, so a completed meeting is when an officer most needs it. Its own
+	// writer, with the class as a literal in its UPDATE, so the guard reads it.
+	"src/server/availability-logic.ts#releaseHeldSlotsForRecord": {
+		class: "record",
 	},
 
 	// -- Easy-Speak history import (#1051)

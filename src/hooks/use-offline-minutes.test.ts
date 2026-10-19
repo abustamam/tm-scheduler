@@ -80,10 +80,11 @@ vi.mock("#/hooks/use-online-status", () => ({
 // hook's behaviour that has to be ABSENT after unmount (F7), and an absence is
 // not observable through the real sonner store.
 const toastErrorSpy = vi.fn();
+const toastSuccessSpy = vi.fn();
 vi.mock("sonner", () => ({
 	toast: {
 		error: (...args: unknown[]) => toastErrorSpy(...args),
-		success: vi.fn(),
+		success: (...args: unknown[]) => toastSuccessSpy(...args),
 		message: vi.fn(),
 	},
 }));
@@ -237,6 +238,7 @@ describe("useOfflineMinutes", () => {
 		setAttendanceSpy.mockClear();
 		saveSnapshotSpy.mockClear();
 		toastErrorSpy.mockClear();
+		toastSuccessSpy.mockClear();
 		QUEUED = [];
 		READ_FAILS = false;
 		READ_COUNT = 0;
@@ -364,6 +366,80 @@ describe("useOfflineMinutes", () => {
 		expect(result.current.syncError).toBeNull();
 		expect(onMutated).toHaveBeenCalledTimes(1);
 		expect(removeOpSpy).toHaveBeenCalledWith("meet-1", "op-1");
+	});
+
+	it("toasts what a drained Absent release freed, naming the member, once per op (#1256)", async () => {
+		// protects=the receipt for a queued release: "Released Speaker 2 and Timer
+		//   from Jane." from the labels the server reported at replay time, and the
+		//   agenda refresh that shows the open slots
+		// fails_when=the drain drops the server's labels, names the wrong member,
+		//   toasts per label instead of per op, or skips onMutated
+		// no_claim=the online write's toast (route); the real server's labels
+		//   (absent-release integration), `setAttendance` is mocked here
+		const onMutated = vi.fn(async () => {});
+		ONLINE = true;
+		QUEUED = [
+			{
+				type: "setAttendance",
+				opId: "op-rel",
+				queuedAt: 1,
+				memberId: "m1",
+				status: "absent",
+				releaseHeldRoles: true,
+				releaseSlotIds: ["slot-1", "slot-2"],
+			},
+		];
+		setAttendanceSpy.mockResolvedValueOnce({
+			ok: true,
+			released: [{ label: "Speaker 2" }, { label: "Timer" }],
+		} as never);
+		const minutes = {
+			members: [{ memberId: "m1", name: "Jane", status: "absent" }],
+			guests: [],
+		} as unknown as NonNullable<
+			Parameters<typeof useOfflineMinutes>[0]["minutes"]
+		>;
+		const { result } = renderHook(() =>
+			useOfflineMinutes({ meetingId: "meet-1", minutes, onMutated }),
+		);
+
+		await waitFor(
+			() =>
+				expect(toastSuccessSpy).toHaveBeenCalledWith(
+					"Released Speaker 2 and Timer from Jane.",
+				),
+			WAIT_OPTS,
+		);
+		await waitFor(() => expect(result.current.draining).toBe(false), WAIT_OPTS);
+		expect(toastSuccessSpy).toHaveBeenCalledTimes(1);
+		expect(onMutated).toHaveBeenCalled();
+	});
+
+	it("toasts nothing when a drained Absent release freed nothing (#1256)", async () => {
+		// protects=criterion 6's other half: a slot reassigned before the drain frees
+		//   nothing, and the officer is not told something was released
+		// fails_when=an empty `released` list still toasts "Released  from Jane."
+		// no_claim=none beyond protects
+		ONLINE = true;
+		QUEUED = [
+			{
+				type: "setAttendance",
+				opId: "op-rel",
+				queuedAt: 1,
+				memberId: "m1",
+				status: "absent",
+				releaseHeldRoles: true,
+				releaseSlotIds: ["slot-1", "slot-2"],
+			},
+		];
+		setAttendanceSpy.mockResolvedValueOnce({ ok: true, released: [] } as never);
+		const { result } = renderHook(() =>
+			useOfflineMinutes({ meetingId: "meet-1", onMutated: async () => {} }),
+		);
+
+		await waitFor(() => expect(setAttendanceSpy).toHaveBeenCalled(), WAIT_OPTS);
+		await waitFor(() => expect(result.current.draining).toBe(false), WAIT_OPTS);
+		expect(toastSuccessSpy).not.toHaveBeenCalled();
 	});
 
 	it("stamps each op with a distinct id", () => {

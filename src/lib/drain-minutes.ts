@@ -59,8 +59,10 @@ export type MinutesServerFns = {
 			memberId: string;
 			status: AttendanceStatus;
 			mode?: AttendanceMode;
+			releaseHeldRoles?: true;
+			releaseSlotIds?: string[];
 		};
-	}) => Promise<unknown>;
+	}) => Promise<{ released?: { label: string }[] } | null | undefined>;
 	addGuest: (args: {
 		data: {
 			meetingId: string;
@@ -126,21 +128,38 @@ export async function dispatchOp(
 	op: MinutesOp,
 	meetingId: string,
 	fns: MinutesServerFns,
-): Promise<void> {
+): Promise<DispatchOutcome | undefined> {
 	switch (op.type) {
-		case "setAttendance":
+		case "setAttendance": {
 			// `mode` forwarded as-is (#1049): `undefined` for an op queued before
 			// it existed, which the server reads as "leave the stored mode alone".
 			// An upsert either way, so the replay still converges.
-			await fns.setAttendance({
+			//
+			// `releaseHeldRoles` (#1256) rides only when the op carries it, and the
+			// server's answer is the ONE return value this function has: what the
+			// release actually freed at replay time, which the drain toasts. A replay
+			// of an already-applied op frees nothing and returns an empty list.
+			const ids = op.releaseSlotIds ?? [];
+			const releasing = op.releaseHeldRoles === true && ids.length > 0;
+			const result = await fns.setAttendance({
 				data: {
 					meetingId,
 					memberId: op.memberId,
 					status: op.status,
 					...withMode(op.mode),
+					...(releasing
+						? { releaseHeldRoles: true as const, releaseSlotIds: ids }
+						: {}),
 				},
 			});
-			return;
+			if (!releasing) return undefined;
+			return {
+				released: {
+					memberId: op.memberId,
+					labels: (result?.released ?? []).map((r) => r.label),
+				},
+			};
+		}
 
 		case "addGuest":
 			if (op.newGuest) {
@@ -166,11 +185,11 @@ export async function dispatchOp(
 					},
 				});
 			}
-			return;
+			return undefined;
 
 		case "removeGuest":
 			await fns.removeGuest({ data: { meetingId, guestId: op.guestId } });
-			return;
+			return undefined;
 
 		case "addTableTopics":
 			// Pass the client speaker-row id so remove/move ops queued after this one
@@ -189,11 +208,11 @@ export async function dispatchOp(
 					topic: op.topic,
 				},
 			});
-			return;
+			return undefined;
 
 		case "removeTableTopics":
 			await fns.removeTableTopics({ data: { meetingId, id: op.id } });
-			return;
+			return undefined;
 
 		case "moveTableTopics":
 			// `toIndex` is the ABSOLUTE destination and it is what makes this the one
@@ -208,7 +227,7 @@ export async function dispatchOp(
 					toIndex: op.toIndex,
 				},
 			});
-			return;
+			return undefined;
 
 		case "setAward":
 			await fns.setAward({
@@ -223,11 +242,11 @@ export async function dispatchOp(
 					newGuestId: op.newGuestId,
 				},
 			});
-			return;
+			return undefined;
 
 		case "clearAward":
 			await fns.clearAward({ data: { meetingId, category: op.category } });
-			return;
+			return undefined;
 
 		default: {
 			// Exhaustiveness guard — a new op type must extend this switch.
@@ -237,6 +256,11 @@ export async function dispatchOp(
 	}
 }
 
+/** What replaying one op reports back, for the ops that report anything. */
+export type DispatchOutcome = {
+	released: { memberId: string; labels: string[] };
+};
+
 /** Outcome of a drain pass. `remaining` is what is still queued afterwards. */
 export type DrainResult = {
 	/** How many ops were successfully replayed + removed this pass. */
@@ -245,6 +269,10 @@ export type DrainResult = {
 	remaining: MinutesOp[];
 	/** The error that stopped the drain, or undefined on full success. */
 	error?: unknown;
+	/** Roles freed by the Absent ops that drained (#1256), one entry per op whose
+	 *  release freed something, in drain order. Includes ops that drained BEFORE a
+	 *  later one failed: those releases happened and the officer is told. */
+	released: { memberId: string; labels: string[] }[];
 };
 
 /**
@@ -260,24 +288,39 @@ export async function drainMinutesQueue(params: {
 	meetingId: string;
 	ops: MinutesOp[];
 	/** Replay one op (typically `(op) => dispatchOp(op, meetingId, fns)`). */
-	dispatch: (op: MinutesOp) => Promise<void>;
+	dispatch: (op: MinutesOp) => Promise<DispatchOutcome | undefined>;
 	/** Remove one drained op from the durable queue by its `opId`. */
 	onOpDrained: (opId: string) => Promise<void>;
 }): Promise<DrainResult> {
 	const { ops, dispatch, onOpDrained } = params;
 	let drainedCount = 0;
+	const released: DrainResult["released"] = [];
 
 	for (let i = 0; i < ops.length; i++) {
 		const op = ops[i];
+		let outcome: DispatchOutcome | undefined;
 		try {
-			await dispatch(op);
+			outcome = await dispatch(op);
 		} catch (error) {
 			// Stop at the first failure: leave this op + all successors queued.
-			return { drainedCount, remaining: ops.slice(i), error };
+			return { drainedCount, remaining: ops.slice(i), error, released };
 		}
-		await onOpDrained(op.opId);
+		// Recorded BEFORE the queue removal: the release has happened either way,
+		// and a removal that throws must not swallow the officer's receipt for it.
+		if (outcome && outcome.released.labels.length > 0) {
+			released.push(outcome.released);
+		}
+		try {
+			await onOpDrained(op.opId);
+		} catch (error) {
+			// The write landed but the durable removal failed (IndexedDB): report
+			// it as the drain's error WITH the receipts collected so far, so the
+			// caller still toasts and refreshes. This op stays queued and replays
+			// (an upsert, so harmlessly) on the next pass.
+			return { drainedCount, remaining: ops.slice(i), error, released };
+		}
 		drainedCount += 1;
 	}
 
-	return { drainedCount, remaining: [], error: undefined };
+	return { drainedCount, remaining: [], error: undefined, released };
 }

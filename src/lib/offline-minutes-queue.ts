@@ -46,6 +46,22 @@ export type MinutesOp =
 			 * mode on anything else, and clears it itself.
 			 */
 			mode?: AttendanceMode;
+			/**
+			 * Free every role the member holds, in the same transaction as the Absent
+			 * write (#1256). Present ONLY as `true`, and only with `status: "absent"`:
+			 * an op queued before #1256, or one the officer answered "Keep roles" to,
+			 * has no such key and replays as a plain Absent that frees nothing. The
+			 * release is decided when the op DRAINS, against whoever holds the slots
+			 * then, so a slot reassigned in between is not freed.
+			 */
+			releaseHeldRoles?: true;
+			/**
+			 * The slot ids the officer confirmed in the dialog; present exactly when
+			 * `releaseHeldRoles` is. The replay frees only these, so a drain after the
+			 * member was given another role (by someone else, in the gap) leaves that
+			 * role alone. Replaces "whoever holds slots at drain time".
+			 */
+			releaseSlotIds?: string[];
 	  }
 	| {
 			type: "addGuest";

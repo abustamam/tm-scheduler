@@ -5,6 +5,7 @@ import { ATTENDANCE_MODES } from "#/lib/attendance-mode";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { MEETING_UPDATE_FIELDS } from "#/lib/meeting-limits";
 import { parseViewAs, VIEW_AS_COOKIE } from "#/lib/view-as";
+import type { ReleasedSlot } from "./availability-logic";
 import { isReadableClub } from "./club-readable-logic";
 import {
 	getMembership,
@@ -27,6 +28,7 @@ import {
 	removeGuestPresent,
 	removeTableTopicsSpeaker,
 	setAward,
+	setMemberAbsentReleasingRoles,
 	setMemberPresence,
 } from "./minutes-logic";
 import { minutesAccess } from "./view-as-logic";
@@ -148,10 +150,13 @@ async function assertMinutesMeetingRecordable(
 }
 
 /** Resolve the meeting's club and gate the caller to the club admin role. */
-async function gateAdmin(meetingId: string): Promise<void> {
+async function gateAdmin(meetingId: string): Promise<string | null> {
 	const currentUser = await requireUser();
 	const clubId = await getMeetingClubId(meetingId);
-	await requireClubRole(currentUser.id, clubId, ["admin"]);
+	const membership = await requireClubRole(currentUser.id, clubId, ["admin"]);
+	// The acting officer's member id, for the activity log. Null for an
+	// impersonating superadmin, whom `logActivity` stamps itself (#246).
+	return membership.impersonatedBy ? null : membership.id;
 }
 
 const setPresenceSchema = z
@@ -160,13 +165,37 @@ const setPresenceSchema = z
 		memberId: uuid,
 		status: attendanceStatus,
 		mode: attendanceMode.optional(),
+		// Free every role the member holds, in the same transaction as the Absent
+		// write (#1256). DEFAULT FALSE: a tab from before the deploy cannot send it,
+		// so it records Absent and frees nothing, the stale-tab rule of #663.
+		releaseHeldRoles: z.boolean().default(false),
+		// The slot ids the dialog LISTED, which is what the officer confirmed
+		// (#1256). Required and non-empty with `releaseHeldRoles`, refused without
+		// it: a replayed or stale release then frees only what was confirmed, never
+		// a role the member was given since.
+		releaseSlotIds: z.array(uuid).max(200).optional(),
 	})
 	// A mode on an absent/excused write is a contradiction — they were neither
 	// in the room nor on the call. Refused rather than silently dropped, so a
 	// client that sends one finds out (#1049). The logic clears it regardless.
 	.refine((d) => d.mode === undefined || d.status === "present", {
 		message: "Only a present attendee has an attendance mode.",
-	});
+	})
+	// Only Absent frees roles: Excused is being retired (#1255) and Present
+	// frees nothing. `false` is valid with every status.
+	.refine((d) => !d.releaseHeldRoles || d.status === "absent", {
+		message: "Only an absent attendee's roles can be released.",
+	})
+	.refine(
+		(d) =>
+			d.releaseHeldRoles
+				? d.releaseSlotIds !== undefined && d.releaseSlotIds.length > 0
+				: d.releaseSlotIds === undefined,
+		{
+			message:
+				"releaseSlotIds is required with releaseHeldRoles, and refused without it.",
+		},
+	);
 
 /** Set a member's presence status. ADMIN-ONLY — stays this way after #510: a
  *  Ballot Counter has no business editing the roster's attendance. Capability
@@ -174,11 +203,22 @@ const setPresenceSchema = z
 export const setAttendance = createServerFn({ method: "POST" })
 	.validator((input: unknown) => setPresenceSchema.parse(input))
 	.handler(async ({ data }) => {
-		await gateAdmin(data.meetingId);
+		const actorMemberId = await gateAdmin(data.meetingId);
 		await assertMinutesMeetingRecordable(data.meetingId);
 		await assertAttendanceRecordable(data.meetingId);
+		if (data.releaseHeldRoles) {
+			const released = await setMemberAbsentReleasingRoles(
+				{
+					meetingId: data.meetingId,
+					memberId: data.memberId,
+					releaseSlotIds: data.releaseSlotIds ?? [],
+				},
+				actorMemberId,
+			);
+			return { ok: true as const, released };
+		}
 		await setMemberPresence(data);
-		return { ok: true as const };
+		return { ok: true as const, released: [] as ReleasedSlot[] };
 	});
 
 const addGuestSchema = z

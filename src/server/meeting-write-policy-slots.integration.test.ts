@@ -1083,7 +1083,7 @@ describe.skipIf(!hasTestDb)(
 					);
 
 			it("the control: a scheduled meeting's role is released and the answer recorded", async () => {
-				expect(await release()).toEqual({ released: 1 });
+				expect(await release()).toMatchObject({ released: 1 });
 				expect(await heldSlot()).toMatchObject({
 					status: "open",
 					assignedMemberId: null,
@@ -1137,7 +1137,7 @@ describe.skipIf(!hasTestDb)(
 
 			it("a member holding nothing releases nothing and is still marked not_coming", async () => {
 				await testDb.delete(roleSlots).where(eq(roleSlots.id, heldSlotId));
-				expect(await release()).toEqual({ released: 0 });
+				expect(await release()).toEqual({ released: 0, releasedSlots: [] });
 				expect(await planRows()).toEqual([{ status: "not_coming" }]);
 			});
 		});

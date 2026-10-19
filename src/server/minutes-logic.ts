@@ -32,6 +32,11 @@ import { toStoredPhone } from "#/lib/phone";
 import { writeInKey, writeInNameSchema } from "#/lib/write-in-limits";
 import type { MinutesActionItems } from "./action-items-logic";
 import { loadActionItemsForMinutes } from "./action-items-logic";
+import { lockMemberAttendance } from "./attendance-plan-logic";
+import {
+	type ReleasedSlot,
+	releaseHeldSlotsForRecord,
+} from "./availability-logic";
 import {
 	type AwardCandidate,
 	disqualificationFor,
@@ -219,8 +224,13 @@ export interface MinutesData {
 }
 
 /** Resolve the club that owns a meeting (throws when the meeting is gone). */
-export async function getMeetingClubId(meetingId: string): Promise<string> {
-	const [row] = await db
+export async function getMeetingClubId(
+	meetingId: string,
+	/** A caller's transaction, so the read does not take a second pool
+	 *  connection while that transaction holds one (#1256). */
+	database: DbOrTx = db,
+): Promise<string> {
+	const [row] = await database
 		.select({ clubId: meetings.clubId })
 		.from(meetings)
 		.where(eq(meetings.id, meetingId))
@@ -789,8 +799,11 @@ async function resolveGuestId(
 export async function requireMemberInMeetingClub(
 	memberId: string,
 	clubId: string,
+	/** As `getMeetingClubId`'s: a caller's transaction, never a second pool
+	 *  connection beside it (#1256). */
+	database: DbOrTx = db,
 ) {
-	const [row] = await db
+	const [row] = await database
 		.select({ id: members.id })
 		.from(members)
 		.where(and(eq(members.id, memberId), eq(members.clubId, clubId)))
@@ -808,16 +821,25 @@ export async function requireMemberInMeetingClub(
  * client older than #1049 cannot erase a recorded mode on replay. Nothing here
  * ever supplies a default: an omitted mode on a new row is NULL.
  */
-export async function setMemberPresence(input: {
-	meetingId: string;
-	memberId: string;
-	status: AttendanceStatus;
-	mode?: AttendanceMode;
-}): Promise<void> {
-	const clubId = await getMeetingClubId(input.meetingId);
-	await requireMemberInMeetingClub(input.memberId, clubId);
+export async function setMemberPresence(
+	input: {
+		meetingId: string;
+		memberId: string;
+		status: AttendanceStatus;
+		mode?: AttendanceMode;
+	},
+	/** The caller's transaction, when the upsert must commit with something else
+	 *  (#1256: the Absent release). Omitted ⇒ the pool, one statement, as ever.
+	 *  With it, the club and membership reads run ON the transaction: never
+	 *  skipped (the cross-club check is this writer's own, whoever calls it), and
+	 *  never on the pool beside a held connection. */
+	tx?: DbOrTx,
+): Promise<void> {
+	const database = tx ?? db;
+	const clubId = await getMeetingClubId(input.meetingId, database);
+	await requireMemberInMeetingClub(input.memberId, clubId, database);
 	const mode = modeForStatus(input.status, input.mode);
-	await db
+	await (tx ?? db)
 		.insert(meetingAttendance)
 		.values({
 			meetingId: input.meetingId,
@@ -834,6 +856,61 @@ export async function setMemberPresence(input: {
 				updatedAt: new Date(),
 			},
 		});
+}
+
+/**
+ * Record a member ABSENT and free every role they hold in the meeting, in ONE
+ * transaction (#1256). The minutes record what happened, not who was first
+ * scheduled, so an officer marking someone not there frees their roles whenever
+ * they do it: before, during or after the meeting (write class `record`, which
+ * accepts a completed meeting).
+ *
+ * The attendance lock comes FIRST and covers both writes. An asserted claim
+ * (`lockMemberAttendance` + `isMemberUnavailable`) reads the roll behind that
+ * same lock, so with the upsert and the release under it a claim either ran
+ * before (and is freed with the rest) or runs after (and sees Absent). Taking it
+ * only for the release would leave a gap between the upsert committing and the
+ * lock being taken in which a claim re-takes a role that is then freed under it.
+ * The membership merge lock goes before it, as in every other writer that takes
+ * both (#1217).
+ *
+ * The planned answer is NOT touched: "said Coming, recorded Absent" stays
+ * visible. The caller has already passed the admin gate and the record-window
+ * checks; `proof` is "session" because that gate is a session.
+ */
+export async function setMemberAbsentReleasingRoles(
+	input: {
+		meetingId: string;
+		memberId: string;
+		/** The slots the officer was shown and confirmed (#1256). The ceiling of
+		 *  the release: a role given to the member since is not in it. */
+		releaseSlotIds: readonly string[];
+	},
+	actorMemberId: string | null,
+): Promise<ReleasedSlot[]> {
+	const clubId = await getMeetingClubId(input.meetingId);
+	await requireMemberInMeetingClub(input.memberId, clubId);
+	return db.transaction(async (tx) => {
+		await lockMembershipsAgainstMerge(tx, [input.memberId]);
+		await lockMemberAttendance(tx, input.meetingId, input.memberId);
+		await setMemberPresence(
+			{
+				meetingId: input.meetingId,
+				memberId: input.memberId,
+				status: "absent",
+			},
+			tx,
+		);
+		return releaseHeldSlotsForRecord(tx, {
+			meetingId: input.meetingId,
+			memberId: input.memberId,
+			slotIds: input.releaseSlotIds,
+			proof: "session",
+			cause: "absent",
+			clubId,
+			actorMemberId,
+		});
+	});
 }
 
 /**

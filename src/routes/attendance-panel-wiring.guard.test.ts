@@ -839,3 +839,92 @@ describe("attendance panel route wiring (PR 2)", () => {
 		expect(cls).toContain("lg:min-h-0");
 	});
 });
+
+describe("roll Absent release wiring (#1256)", () => {
+	const src = readSource(ROUTE);
+
+	/** One `async function <name>` body of the route, up to the next one, so an
+	 *  assertion cannot be satisfied by a neighbour. */
+	function body(name: string): string {
+		const at = src.indexOf(`async function ${name}(`);
+		expect(at, `${name} not found in the route`).toBeGreaterThan(-1);
+		const next = src.indexOf("\n\tasync function ", at + 1);
+		return src.slice(at, next === -1 ? src.length : next);
+	}
+
+	it("Absent on a role-holder opens the dialog and returns before any write", () => {
+		// protects=an officer tapping Absent on a member the page sees holding roles is
+		//   ASKED (setPendingAbsent), and no write runs in that branch; Release and
+		//   Keep are the two answers that write, with true and false
+		// fails_when=the branch is deleted or loses its `status === "absent"` /
+		//   non-empty-labels condition (every Absent then frees silently or never asks),
+		//   writes before asking, or Keep and Release are wired to the same answer
+		// no_claim=the dialog's copy and buttons (absent-release-dialog.test.tsx); a
+		//   source grep cannot show the dialog opens in a browser
+		const write = body("writeAttendance");
+		const gate = write.indexOf('status === "absent"');
+		const open = write.indexOf("setPendingAbsent(");
+		const ret = write.indexOf("return;", open);
+		const writeAt = write.indexOf("await writePresence(");
+		expect(gate).toBeGreaterThan(-1);
+		expect(write).toMatch(/held\.labels\.length\s*>\s*0/);
+		expect(open).toBeGreaterThan(gate);
+		expect(ret).toBeGreaterThan(open);
+		expect(writeAt).toBeGreaterThan(ret);
+
+		expect(src).toContain("onRelease={(p) => void confirmAbsent(p, true)}");
+		expect(src).toContain("onKeep={(p) => void confirmAbsent(p, false)}");
+		expect(src).toContain("onCancel={() => setPendingAbsent(null)}");
+		// The flag is only ever sent from the confirm, never from the plain path.
+		expect(write).not.toContain("releaseHeldRoles");
+	});
+
+	it("a member with no roles falls through to the direct write", () => {
+		// protects=criterion 9: the ask is keyed on the page's held-role map, so a
+		//   member absent from it (or Present/Excused) reaches `writePresence` at once
+		// fails_when=the ask becomes unconditional for Absent, which puts a dialog
+		//   with an empty role list in front of every roll tap
+		// no_claim=that the held-role map is right (held-role-labels.test.ts)
+		const write = body("writeAttendance");
+		expect(write).toContain("heldRolesByMember[memberId]");
+		expect(write).toMatch(
+			/if\s*\(status === "absent" && held && held\.labels\.length > 0\)/,
+		);
+		// The fall-through is the last statement: a write with no release arg.
+		expect(write.trimEnd()).toMatch(
+			/await writePresence\(memberId, status, mode\);\s*\}$/,
+		);
+	});
+	it("Release roles sends the listed slot ids, and the dialog cannot confirm during a write or a drain", () => {
+		// protects=H1 (the ids the dialog LISTED are what rides the write and the
+		//   queued op), S1 (the dialog's roles are the slot-keyed records, not a
+		//   label list zipped against a second filter by index), M2 (Release roles
+		//   is disabled while `mutate` would silently drop the write)
+		// fails_when=confirmAbsent sends the flag without `p.roles.map(r => r.slotId)`,
+		//   the queue op loses `releaseSlotIds`, the roles are rebuilt by index from
+		//   `own[i]`, or the dialog's `busy` loses `offlineMinutes.busy` /
+		//   `offlineMinutes.draining`
+		// no_claim=that the dialog really disables (absent-release-dialog.test.tsx)
+		const confirm = body("confirmAbsent");
+		expect(confirm).toContain(
+			"releaseHeldRoles ? p.roles.map((r) => r.slotId) : undefined",
+		);
+		const present = body("writePresence");
+		expect(present).toMatch(
+			/\{ releaseHeldRoles: true, releaseSlotIds \} as const/,
+		);
+		// Both the online call and the queued op spread the same `release`.
+		expect(present.match(/\.\.\.release,/g)?.length).toBe(2);
+
+		const write = body("writeAttendance");
+		expect(write).toContain("roles: heldRoleLinesByMember[memberId] ?? []");
+		expect(write).not.toContain("own[i]");
+		expect(src).toContain(
+			"const heldRoleLinesByMember = buildHeldRoleLines(slots)",
+		);
+
+		expect(src).toContain(
+			"busy={absentBusy || offlineMinutes.busy || offlineMinutes.draining}",
+		);
+	});
+});

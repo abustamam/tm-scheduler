@@ -219,15 +219,22 @@ export async function declinePlannedAttendance(
 	// an archived club cannot be probed through the differing errors of the checks
 	// after it (#544).
 	await assertClubNotArchived(args.clubId);
-	if (args.releaseHeldRoles) {
-		await assertReleasableWindow(database, args.meetingId);
-	}
 	const actor = await resolveActor({
 		clubId: args.clubId,
 		meetingId: args.meetingId,
 		memberId: args.memberId,
 		claimedActorMemberId: args.claimedActorMemberId,
 	});
+	// An officer has no window (#1256): marking someone Not coming and freeing
+	// their roles after the meeting day is what they do when the roll turned out
+	// differently from the plan. `self` and `tmod` keep the refusal (a stale
+	// nudge link), and a COMPLETED meeting still refuses the plan path inside
+	// the release itself: after Complete the panel is in roll mode, where roll
+	// Absent is the release. Asserted AFTER `resolveActor`, so the arm is known;
+	// `resolveActor` is a pure read, so a refusal still leaves nothing behind.
+	if (args.releaseHeldRoles && actor.via !== "officer") {
+		await assertReleasableWindow(database, args.meetingId);
+	}
 
 	// THE AUTHORIZATION LINE (#762, ADR-0026), and it is deliberately not the
 	// one below. Freeing a member's roles is destructive and has no undo —

@@ -22,6 +22,10 @@ import {
 } from "#/components/agenda/meeting-agenda";
 import { MeetingAnnouncements } from "#/components/agenda/meeting-announcements";
 import {
+	AbsentReleaseDialog,
+	type PendingAbsent,
+} from "#/components/club/absent-release-dialog";
+import {
 	DeclineReleaseDialog,
 	type PendingDecline,
 } from "#/components/club/decline-release-dialog";
@@ -58,8 +62,12 @@ import {
 import { Label } from "#/components/ui/label";
 import { WhatsNewBanner } from "#/components/whats-new-banner";
 import { showWriteError } from "#/components/write-error-toast";
-import { useOfflineMinutes } from "#/hooks/use-offline-minutes";
+import {
+	releasedToastMessage,
+	useOfflineMinutes,
+} from "#/hooks/use-offline-minutes";
 import { useOnlineStatus } from "#/hooks/use-online-status";
+import { buildHeldRoleLines } from "#/lib/absent-release-roles";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { applyFlex, resolveAgendaRows } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
@@ -484,6 +492,12 @@ function MeetingView() {
 	// cleared by the time the officer answers — the confirmed write would
 	// otherwise be the one write on this page guarded by nothing.
 	const [declineBusy, setDeclineBusy] = useState(false);
+	// Roll mode's Absent on a role-holder asks first (#1256). Same shape as the
+	// decline above, and for the same reason: the release has no undo.
+	const [pendingAbsent, setPendingAbsent] = useState<PendingAbsent | null>(
+		null,
+	);
+	const [absentBusy, setAbsentBusy] = useState(false);
 
 	// One club config drives both renderings of this meeting (#367).
 	const flex = applyFlex(
@@ -1106,6 +1120,9 @@ function MeetingView() {
 	// has to be told about all of them before all of them are freed. Also
 	// unfiltered, for the numbering reason `buildPanelRoleMap` gives.
 	const heldRolesByMember = buildHeldRoleLabels(slots);
+	// The same roles as RECORDS (#1256): slot id, label and speech title together,
+	// for the Absent dialog. Its ids are what the release sends.
+	const heldRoleLinesByMember = buildHeldRoleLines(slots);
 	// Derived here rather than carried as their own payload fields (#396 PR2
 	// task 6): both are redundant with data the payload already ships.
 	// `unavailableMembers` (public) already names who is `not_coming`;
@@ -1367,6 +1384,23 @@ function MeetingView() {
 	// hook is what keeps one `draining` flag over one persisted queue; two would
 	// race it and replay a stale status over a newer one with no error.
 	async function writeAttendance(memberId: string, status: AttendanceStatus) {
+		// #1256: Absent on a member the page sees holding roles asks first. A member
+		// holding none is written at once, as before. Like the decline's confirm,
+		// the page cannot see a slot claimed since it loaded, so the list is what
+		// the page KNOWS; the release itself frees whatever the member holds when
+		// the write runs.
+		const held = heldRolesByMember[memberId];
+		if (status === "absent" && held && held.labels.length > 0) {
+			setPendingAbsent({
+				memberId,
+				name:
+					held.name ??
+					panelRosterForMode.find((r) => r.id === memberId)?.name ??
+					"this member",
+				roles: heldRoleLinesByMember[memberId] ?? [],
+			});
+			return;
+		}
 		// #1049: which mode, if any, rides this write — `presenceWriteMode` says
 		// why. Read against the PROJECTED rows, so an offline tap sees the status
 		// the officer is looking at, not the stale loader's.
@@ -1389,20 +1423,72 @@ function MeetingView() {
 		memberId: string,
 		status: AttendanceStatus,
 		mode: AttendanceMode | undefined,
+		/** Only the Absent dialog's "Release roles" passes these (#1256): the slot
+		 *  ids it LISTED, which are the most the write may free. */
+		releaseSlotIds?: string[],
+		name = "this member",
 	) {
+		const release =
+			releaseSlotIds && releaseSlotIds.length > 0
+				? ({ releaseHeldRoles: true, releaseSlotIds } as const)
+				: {};
 		await offlineMinutes.mutate(
-			() =>
-				setAttendance({
-					data: { meetingId: meeting.id, memberId, status, ...withMode(mode) },
-				}),
+			async () => {
+				const result = await setAttendance({
+					data: {
+						meetingId: meeting.id,
+						memberId,
+						status,
+						...withMode(mode),
+						...release,
+					},
+				});
+				// The receipt for an ONLINE release: what the server actually freed,
+				// never what the dialog listed. Nothing when it freed nothing. The
+				// agenda refresh is the write's own `onMutated` (router.invalidate).
+				if (result.released.length > 0) {
+					toast.success(
+						releasedToastMessage(
+							name,
+							result.released.map((r) => r.label),
+						),
+					);
+				}
+				return result;
+			},
 			() => ({
 				type: "setAttendance",
 				...offlineMinutes.opMeta(),
 				memberId,
 				status,
 				...withMode(mode),
+				...release,
 			}),
 		);
+	}
+
+	async function confirmAbsent(p: PendingAbsent, releaseHeldRoles: boolean) {
+		// Stays open until the write resolves, both controls disabled, like the
+		// decline's confirm. The mode rides as `writeAttendance` computes it.
+		if (absentBusy) return;
+		setAbsentBusy(true);
+		try {
+			await writePresence(
+				p.memberId,
+				"absent",
+				presenceWriteMode({
+					status: "absent",
+					currentStatus: rollAttendance.find((a) => a.memberId === p.memberId)
+						?.status,
+					defaultMode: attendanceDefaultMode,
+				}),
+				releaseHeldRoles ? p.roles.map((r) => r.slotId) : undefined,
+				p.name,
+			);
+		} finally {
+			setAbsentBusy(false);
+			setPendingAbsent(null);
+		}
 	}
 
 	// The two guest handlers are lifted from <MeetingMinutes>'s AttendanceSection
@@ -2608,6 +2694,16 @@ function MeetingView() {
 			    strip both reach it through `writeRung`. Confirming calls
 			    `commitRung`, the same write every other rung takes, so the
 			    optimistic override, the rollback and the invalidate are unchanged. */}
+			{/* #1256. Roll mode's Absent on a role-holder. Release roles frees them in
+			    the same write; Keep roles records Absent alone; Cancel writes nothing. */}
+			<AbsentReleaseDialog
+				pending={pendingAbsent}
+				offline={!online}
+				busy={absentBusy || offlineMinutes.busy || offlineMinutes.draining}
+				onCancel={() => setPendingAbsent(null)}
+				onRelease={(p) => void confirmAbsent(p, true)}
+				onKeep={(p) => void confirmAbsent(p, false)}
+			/>
 			<DeclineReleaseDialog
 				pending={pendingDecline}
 				busy={declineBusy}

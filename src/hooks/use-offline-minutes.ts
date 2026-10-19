@@ -6,6 +6,7 @@ import {
 	drainMinutesQueue,
 	type MinutesServerFns,
 } from "#/lib/drain-minutes";
+import { listRoles } from "#/lib/list-roles";
 import {
 	enqueue,
 	type MinutesOp,
@@ -19,6 +20,13 @@ import {
 	raceWithDeadline,
 } from "#/lib/offline-write-deadline";
 import type { MinutesData } from "#/server/minutes-logic";
+
+/** The receipt for an Absent release (#1256): the online write and the drain
+ *  say the same sentence, so it lives here once. Names what was FREED, which for
+ *  a drained op is what the server reported at replay time. */
+export function releasedToastMessage(name: string, labels: string[]): string {
+	return `Released ${listRoles(labels)} from ${name}.`;
+}
 
 function errMessage(err: unknown): string {
 	return err instanceof Error ? err.message : "Something went wrong.";
@@ -99,7 +107,12 @@ export function useOfflineMinutes(input: {
 	// re-triggered on every parent re-render.
 	const onMutatedRef = useRef(input.onMutated);
 	onMutatedRef.current = input.onMutated;
+	// The roster the drain toast resolves a name from. The live loader data
+	// while online, the persisted snapshot otherwise; a ref so `runDrain` stays
+	// stable.
+	const minutesRef = useRef<MinutesData | null>(null);
 	const { meetingId, minutes } = input;
+	minutesRef.current = minutes ?? snapshot;
 
 	// The meeting an ASYNC CONTINUATION must re-check before it touches shared
 	// state, and the fix for the corruption the write deadline reopened.
@@ -320,11 +333,12 @@ export function useOfflineMinutes(input: {
 					// the auto-drain stops tight-looping (it gates on
 					// `!syncError`).
 					dispatch: async (op) => {
-						const raced = await raceWithDeadline(
-							dispatchOp(op, meetingId, fns),
-							ONLINE_WRITE_TIMEOUT_MS,
-						);
+						const work = dispatchOp(op, meetingId, fns);
+						const raced = await raceWithDeadline(work, ONLINE_WRITE_TIMEOUT_MS);
 						if (raced === "timeout") throw new Error(DRAIN_STALLED_MESSAGE);
+						// Settled, so this does not wait: the outcome `raceWithDeadline`
+						// drops (what an Absent release freed, #1256).
+						return work;
 					},
 					onOpDrained: async (opId) => {
 						await removeOp(meetingId, opId);
@@ -337,7 +351,20 @@ export function useOfflineMinutes(input: {
 						}
 					},
 				});
+				// What the drained Absent ops freed (#1256), told BEFORE the branch below
+				// because it is true on both of its arms: an op that released and then
+				// had a successor fail still released. One toast per op, the same copy
+				// as the online write.
+				for (const r of result.released) {
+					const name =
+						(minutesRef.current?.members ?? []).find(
+							(m) => m.memberId === r.memberId,
+						)?.name ?? "this member";
+					toast.success(releasedToastMessage(name, r.labels));
+				}
 				if (result.error) {
+					// The agenda must show the open slots even when a later op failed.
+					if (result.released.length > 0) await onMutatedRef.current();
 					// Stop-on-failure: the failed op + successors stay queued. The
 					// banner and the confirmation both DESCRIBE THIS MEETING'S QUEUE,
 					// so a drain that finishes after a hop keeps quiet rather than

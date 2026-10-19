@@ -230,8 +230,15 @@ describe("the decline seam gates on the ARM, not on a capability flag (#663)", (
 		// is what a pre-#663 client does, so newly rejecting it would break the
 		// stale tab in the other direction.
 		expect(SEAM).toContain("isMeetingOver(");
+		// #1256: an officer has no window (roll Absent frees on a completed
+		// meeting, so Not coming must not be stricter); self and TMOD keep it.
+		// The exemption reads `actor.via`, so the actor must be resolved first.
 		expect(SEAM).toMatch(
-			/if \(args\.releaseHeldRoles\) \{\s*await assertReleasableWindow\(/,
+			/if \(args\.releaseHeldRoles && actor\.via !== "officer"\) \{\s*await assertReleasableWindow\(/,
+		);
+		expect(SEAM.indexOf("resolveActor({")).toBeGreaterThan(-1);
+		expect(SEAM.indexOf("resolveActor({")).toBeLessThan(
+			SEAM.indexOf("await assertReleasableWindow("),
 		);
 	});
 
