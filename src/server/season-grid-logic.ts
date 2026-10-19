@@ -303,7 +303,7 @@ export async function loadSeasonGrid(input: {
 	// `?.trim() || DEFAULT_COUNTRY_CODE` reproduces `loadClubDefaultCountryCode`'s
 	// never-null contract (#397): a club that never set a code still has to
 	// produce one, so this stays a `||` (blank ⇒ default), not a `??`.
-	const active = allMemberRows.filter((m) => m.status !== "inactive");
+	const active = allMemberRows.filter((m) => m.status === "active");
 	let memberRows: SeasonGridMember[];
 	if (input.includeContact) {
 		const cc = club?.defaultCountryCode?.trim() || DEFAULT_COUNTRY_CODE;

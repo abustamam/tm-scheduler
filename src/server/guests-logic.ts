@@ -515,7 +515,7 @@ export interface IntroducerOption {
 	id: string;
 	name: string;
 	/** `inactive` members stay pickable — see `applyUpdateGuestProfile`. */
-	status: "active" | "inactive";
+	status: "active" | "inactive" | "former";
 }
 
 export interface GuestProfile extends GuestProfileFields {
@@ -553,7 +553,7 @@ function introducerOfClub(clubId: string) {
  * (#1050): the stored three, read fresh each time the dialog opens, and the
  * club's roster for the picker. Null when the guest is not in this club.
  *
- * The roster is EVERY membership row of this club, inactive included — the
+ * The roster is every membership row of this club except former ones (#1239), inactive included — the
  * same set `applyUpdateGuestProfile` accepts and `loadLinkCandidates` offers.
  */
 export async function loadGuestProfile(
@@ -573,11 +573,16 @@ export async function loadGuestProfile(
 		.limit(1);
 	if (!guest) return null;
 	const { personId, ...stored } = guest;
-	const roster = await db
+	const allMembers = await db
 		.select({ id: members.id, name: members.name, status: members.status })
 		.from(members)
 		.where(eq(members.clubId, clubId))
 		.orderBy(asc(members.name));
+	// A former member (#1239) is not pickable, unless they are the introducer
+	// already on file: dropping them would blank the field on the next save.
+	const roster = allMembers.filter(
+		(m) => m.status !== "former" || m.id === stored.introducedByMemberId,
+	);
 	return {
 		...stored,
 		roster,

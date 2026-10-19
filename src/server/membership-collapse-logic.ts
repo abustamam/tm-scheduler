@@ -151,6 +151,13 @@ export async function collapseMemberships(
 			: null;
 	const otherSide = listedSide === keeper ? absorbed : keeper;
 
+	const statuses = [keeper.status, absorbed.status];
+	const mergedStatus = statuses.includes("active")
+		? ("active" as const)
+		: statuses.includes("inactive")
+			? ("inactive" as const)
+			: ("former" as const);
+
 	// --- Reconcile the surviving keeper row --------------------------------
 	// club_role: higher wins (admin > member). status: active if EITHER is
 	// active. joined_at: earliest known. preferred_name: keeper's, filling a
@@ -163,10 +170,10 @@ export async function collapseMemberships(
 				keeper.clubRole === "admin" || absorbed.clubRole === "admin"
 					? "admin"
 					: "member",
-			status:
-				keeper.status === "active" || absorbed.status === "active"
-					? "active"
-					: "inactive",
+			// Active wins, then inactive (they may renew), then former (#1239).
+			status: mergedStatus,
+			endedAt:
+				mergedStatus === "former" ? (keeper.endedAt ?? absorbed.endedAt) : null,
 			joinedAt: earliestDate(keeper.joinedAt, absorbed.joinedAt),
 			preferredName: keeper.preferredName ?? absorbed.preferredName,
 			// #939: willing to mentor if EITHER row said so. The flag is the

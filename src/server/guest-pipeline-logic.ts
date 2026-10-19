@@ -2424,7 +2424,7 @@ export async function applyConvertGuestToMember(
 		// is: undo must be able to put the lapse back, and nothing readable after
 		// the fact distinguishes a membership convert reactivated from one that
 		// was active all along.
-		let reactivatedFrom: "inactive" | undefined;
+		let reactivatedFrom: "inactive" | "former" | undefined;
 		// The elevated `club_role` the wake-up wrote back DOWN, when it found one.
 		// Recorded for the same two reasons, plus a third: the roster needs to be
 		// able to restore it deliberately, and a demotion nothing recorded is one
@@ -2456,7 +2456,8 @@ export async function applyConvertGuestToMember(
 			// fails on the widening rather than letting this record a wrong prior
 			// state.
 			if (existingMembership.status !== "active") {
-				reactivatedFrom = "inactive";
+				reactivatedFrom =
+					existingMembership.status === "former" ? "former" : "inactive";
 				// The WAKE-UP IS A PRIVILEGE GRANT, and that is the half #501 missed.
 				// `members.status === 'active'` is the write-authorization gate itself
 				// — `requireMembership` sends a non-active membership to
@@ -2490,6 +2491,8 @@ export async function applyConvertGuestToMember(
 					.update(members)
 					.set({
 						status: "active",
+						// Reactivating a former member clears the end date (#1239).
+						endedAt: null,
 						...(demotedFrom ? { clubRole: "member" as const } : {}),
 					})
 					.where(eq(members.id, membershipId));
@@ -3134,12 +3137,12 @@ type ConversionRecord = {
 	createdPerson: boolean;
 	/**
 	 * The membership's status before convert reactivated it (#501).
-	 * `membership_status` is only (active, inactive), so `inactive` is the sole
-	 * reachable value — do NOT widen this to a status the enum cannot hold.
+	 * `inactive` and `former` (#1239) are the only values a membership can wake
+	 * from — do NOT widen this to a status the enum cannot hold.
 	 * Absent on a fresh membership, on reuse of an already-active one, and on
 	 * every record written before #501 shipped.
 	 */
-	reactivatedFrom?: "inactive";
+	reactivatedFrom?: "inactive" | "former";
 	/**
 	 * The `club_role` the wake-up wrote back down to `member` (#501 review).
 	 * `club_role` is only (admin, member) and `member` is the floor written to,
@@ -3193,7 +3196,9 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
 	// ternary is the parse, and the line under it is the only thing that can
 	// tell an omitted key from a value the enum cannot hold.
 	const reactivatedFrom =
-		d.reactivatedFrom === "inactive" ? ("inactive" as const) : undefined;
+		d.reactivatedFrom === "inactive" || d.reactivatedFrom === "former"
+			? d.reactivatedFrom
+			: undefined;
 	if (d.reactivatedFrom !== undefined && reactivatedFrom === undefined) {
 		return null;
 	}

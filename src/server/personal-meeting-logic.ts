@@ -277,8 +277,8 @@ export async function loadPublicPersonalMeetingView(args: {
 			and(eq(members.id, args.memberId), eq(members.clubId, meeting.clubId)),
 		)
 		.limit(1);
-	// Mirrors `requireMemberInClub`: present, in THIS club, and not inactive.
-	if (!member || member.status === "inactive") return null;
+	// Mirrors `requireMemberInClub`: present, in THIS club, and active.
+	if (!member || member.status !== "active") return null;
 
 	// The paired speaker slot, mirroring the join in `getMeeting`
 	// (`meetings.ts`, `loadMyCommitments`' sibling): holder name from a member

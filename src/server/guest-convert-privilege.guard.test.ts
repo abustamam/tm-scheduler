@@ -33,12 +33,18 @@ import { describe, expect, it } from "vitest";
 import { clubRoleEnum, membershipStatusEnum } from "#/db/schema";
 
 describe("enums convert's privilege handling infers from (#501)", () => {
-	it("membership_status is exactly (active, inactive)", () => {
+	it("membership_status is exactly (active, inactive, former)", () => {
+		// #1239 widened this on purpose: convert now reads the old status to record
+		// `reactivatedFrom` as `inactive` or `former`, so a fourth value fails here.
 		// Exact and ordered, not `toContain`: the claim is that `inactive` is the
 		// ONLY thing "not active" can mean, and a containment check would pass on
 		// an enum that had grown a third member — which is the only failure this
 		// file exists to catch.
-		expect(membershipStatusEnum.enumValues).toEqual(["active", "inactive"]);
+		expect(membershipStatusEnum.enumValues).toEqual([
+			"active",
+			"inactive",
+			"former",
+		]);
 	});
 
 	it("club_role is exactly (admin, member)", () => {

@@ -151,6 +151,16 @@ the nouns in `src/db/schema.ts`.
   and the "Planning a visit?" invitation on the public club page (#319), which is hidden from
   anyone who already has a club identity — signed-in **or** anonymous roster pick. The QR never
   needs regenerating because the route resolves the current meeting itself.
+- **Membership status** (`members.status`: `active | inactive | former`) — `inactive` = did not
+  renew this season: hidden from pickers, still on the roster under its own segment, may renew.
+  **`former`** (#1239) = the membership ENDED: on no roster segment, picker, dues list, DCP or
+  report count, season grid or officer list, but its history (past agendas, profile, speeches,
+  awards, exports) stays. `members.ended_at` is the club-local day it ended, or NULL when unknown
+  (imports); it clears on reactivation. A former member has exactly an inactive member's access.
+  Ending a membership closes every open officer term that day, in the same transaction as the
+  status (`applySetMemberStatus`); the admin reaches former members via the roster's "Former
+  members (N)" dialog (`listFormerMembers`). Test a status for **active**, never for "not
+  inactive" (`membership-status.guard.test.ts`).
 - **Convert-to-member** — the admin action that promotes a guest into a Membership (ADR-0018):
   dedup/link the Person (phone → email), create the club Membership (`clubRole: member`,
   `joinedAt` today) or reuse the person's existing one, re-point the guest's role-slot
