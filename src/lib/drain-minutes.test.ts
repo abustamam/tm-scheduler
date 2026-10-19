@@ -62,6 +62,7 @@ describe("dispatchOp", () => {
 			memberId: "m-alice",
 			status: "absent",
 			releaseHeldRoles: true,
+			releaseSlotIds: ["slot-a", "slot-b"],
 		};
 		const outcome = await dispatchOp(releasing, MEETING, fns);
 		expect(fns.setAttendance).toHaveBeenLastCalledWith({
@@ -70,6 +71,7 @@ describe("dispatchOp", () => {
 				memberId: "m-alice",
 				status: "absent",
 				releaseHeldRoles: true,
+				releaseSlotIds: ["slot-a", "slot-b"],
 			},
 		});
 		expect(outcome).toEqual({
@@ -87,6 +89,29 @@ describe("dispatchOp", () => {
 			-1,
 		)?.[0];
 		expect(call.data).not.toHaveProperty("releaseHeldRoles");
+		expect(call.data).not.toHaveProperty("releaseSlotIds");
+	});
+
+	it("never sends a bare releaseHeldRoles: an op without ids replays as a plain Absent", async () => {
+		// protects=H1: the replay's ceiling is the confirmed ids, so a flag with none
+		//   (or an empty list) must not reach the server, whose schema would refuse
+		//   it and whose meaning would be "free everything held"
+		// fails_when=`releaseHeldRoles` is forwarded on the flag alone
+		// no_claim=none beyond protects
+		const fns = fakeFns();
+		const op: MinutesOp = {
+			type: "setAttendance",
+			...meta(),
+			memberId: "m-alice",
+			status: "absent",
+			releaseHeldRoles: true,
+		};
+		expect(await dispatchOp(op, MEETING, fns)).toBeUndefined();
+		const call = (fns.setAttendance as ReturnType<typeof vi.fn>).mock.calls.at(
+			-1,
+		)?.[0];
+		expect(call.data).not.toHaveProperty("releaseHeldRoles");
+		expect(call.data).not.toHaveProperty("releaseSlotIds");
 	});
 
 	it("a replayed release that finds nothing to free reports an empty label list", async () => {
@@ -102,6 +127,7 @@ describe("dispatchOp", () => {
 			memberId: "m-alice",
 			status: "absent",
 			releaseHeldRoles: true,
+			releaseSlotIds: ["slot-a"],
 		};
 		expect(await dispatchOp(op, MEETING, fns)).toEqual({
 			released: { memberId: "m-alice", labels: [] },
@@ -394,6 +420,7 @@ describe("drainMinutesQueue", () => {
 		const seen: string[] = [];
 		const dispatch = vi.fn(async (op: MinutesOp) => {
 			seen.push(op.opId);
+			return undefined;
 		});
 		const q = fakeQueue(ops);
 
@@ -426,6 +453,7 @@ describe("drainMinutesQueue", () => {
 		const boom = new Error("network down");
 		const dispatch = vi.fn(async (op: MinutesOp) => {
 			if (op.opId === ops[1].opId) throw boom;
+			return undefined;
 		});
 		const q = fakeQueue(ops);
 
@@ -458,6 +486,7 @@ describe("drainMinutesQueue", () => {
 				failFirstOnce = false;
 				throw new Error("transient");
 			}
+			return undefined;
 		});
 		const q = fakeQueue(ops);
 
@@ -501,6 +530,7 @@ describe("drainMinutesQueue", () => {
 				memberId: "m-a",
 				status: "absent",
 				releaseHeldRoles: true,
+				releaseSlotIds: ["s1"],
 			},
 			{
 				type: "setAttendance",
@@ -508,6 +538,7 @@ describe("drainMinutesQueue", () => {
 				memberId: "m-b",
 				status: "absent",
 				releaseHeldRoles: true,
+				releaseSlotIds: ["s2"],
 			},
 			{ type: "removeTableTopics", ...meta(), id: "tt-x" },
 		];
@@ -532,5 +563,40 @@ describe("drainMinutesQueue", () => {
 		expect(result.drainedCount).toBe(2);
 		expect(result.remaining).toEqual([ops[2]]);
 		expect(result.released).toEqual([{ memberId: "m-a", labels: ["Timer"] }]);
+	});
+	it("a queue-removal failure is the drain's error, and the receipts collected so far survive it (L1)", async () => {
+		// protects=the IndexedDB removal throwing after a release landed returns
+		//   { error, released } instead of rejecting, so the hook still toasts what
+		//   was freed and refreshes the agenda; the op stays in `remaining`
+		// fails_when=the removal is not caught (drainMinutesQueue rejects and
+		//   `released` is lost), or `released` is dropped from that return
+		// no_claim=the toast and refresh themselves (use-offline-minutes.test.ts)
+		const ops: MinutesOp[] = [
+			{
+				type: "setAttendance",
+				...meta(),
+				memberId: "m-a",
+				status: "absent",
+				releaseHeldRoles: true,
+				releaseSlotIds: ["s1"],
+			},
+		];
+		const boom = new Error("IndexedDB is gone");
+
+		const result = await drainMinutesQueue({
+			meetingId: MEETING,
+			ops,
+			dispatch: async () => ({
+				released: { memberId: "m-a", labels: ["Timer"] },
+			}),
+			onOpDrained: async () => {
+				throw boom;
+			},
+		});
+
+		expect(result.error).toBe(boom);
+		expect(result.released).toEqual([{ memberId: "m-a", labels: ["Timer"] }]);
+		expect(result.drainedCount).toBe(0);
+		expect(result.remaining).toEqual(ops);
 	});
 });

@@ -55,6 +55,13 @@ export type MinutesOp =
 			 * then, so a slot reassigned in between is not freed.
 			 */
 			releaseHeldRoles?: true;
+			/**
+			 * The slot ids the officer confirmed in the dialog; present exactly when
+			 * `releaseHeldRoles` is. The replay frees only these, so a drain after the
+			 * member was given another role (by someone else, in the gap) leaves that
+			 * role alone. Replaces "whoever holds slots at drain time".
+			 */
+			releaseSlotIds?: string[];
 	  }
 	| {
 			type: "addGuest";

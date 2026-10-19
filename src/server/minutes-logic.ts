@@ -33,7 +33,10 @@ import { writeInKey, writeInNameSchema } from "#/lib/write-in-limits";
 import type { MinutesActionItems } from "./action-items-logic";
 import { loadActionItemsForMinutes } from "./action-items-logic";
 import { lockMemberAttendance } from "./attendance-plan-logic";
-import { type ReleasedSlot, releaseHeldSlots } from "./availability-logic";
+import {
+	type ReleasedSlot,
+	releaseHeldSlotsForRecord,
+} from "./availability-logic";
 import {
 	type AwardCandidate,
 	disqualificationFor,
@@ -818,11 +821,16 @@ export async function setMemberPresence(
 		mode?: AttendanceMode;
 	},
 	/** The caller's transaction, when the upsert must commit with something else
-	 *  (#1256: the Absent release). Omitted ⇒ the pool, one statement, as ever. */
+	 *  (#1256: the Absent release). Omitted ⇒ the pool, one statement, as ever.
+	 *  With it, the club and membership reads are SKIPPED: they would run on the
+	 *  pool while the transaction holds a connection, and the caller
+	 *  (`setMemberAbsentReleasingRoles`) has already made them. */
 	tx?: DbOrTx,
 ): Promise<void> {
-	const clubId = await getMeetingClubId(input.meetingId);
-	await requireMemberInMeetingClub(input.memberId, clubId);
+	if (!tx) {
+		const clubId = await getMeetingClubId(input.meetingId);
+		await requireMemberInMeetingClub(input.memberId, clubId);
+	}
 	const mode = modeForStatus(input.status, input.mode);
 	await (tx ?? db)
 		.insert(meetingAttendance)
@@ -864,7 +872,13 @@ export async function setMemberPresence(
  * checks; `proof` is "session" because that gate is a session.
  */
 export async function setMemberAbsentReleasingRoles(
-	input: { meetingId: string; memberId: string },
+	input: {
+		meetingId: string;
+		memberId: string;
+		/** The slots the officer was shown and confirmed (#1256). The ceiling of
+		 *  the release: a role given to the member since is not in it. */
+		releaseSlotIds: readonly string[];
+	},
 	actorMemberId: string | null,
 ): Promise<ReleasedSlot[]> {
 	const clubId = await getMeetingClubId(input.meetingId);
@@ -872,11 +886,18 @@ export async function setMemberAbsentReleasingRoles(
 	return db.transaction(async (tx) => {
 		await lockMembershipsAgainstMerge(tx, [input.memberId]);
 		await lockMemberAttendance(tx, input.meetingId, input.memberId);
-		await setMemberPresence({ ...input, status: "absent" }, tx);
-		return releaseHeldSlots(tx, {
+		await setMemberPresence(
+			{
+				meetingId: input.meetingId,
+				memberId: input.memberId,
+				status: "absent",
+			},
+			tx,
+		);
+		return releaseHeldSlotsForRecord(tx, {
 			meetingId: input.meetingId,
 			memberId: input.memberId,
-			writeClass: "record",
+			slotIds: input.releaseSlotIds,
 			proof: "session",
 			cause: "absent",
 			clubId,

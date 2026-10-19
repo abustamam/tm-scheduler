@@ -67,6 +67,7 @@ import {
 	useOfflineMinutes,
 } from "#/hooks/use-offline-minutes";
 import { useOnlineStatus } from "#/hooks/use-online-status";
+import { buildHeldRoleLines } from "#/lib/absent-release-roles";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { applyFlex, resolveAgendaRows } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
@@ -1119,6 +1120,9 @@ function MeetingView() {
 	// has to be told about all of them before all of them are freed. Also
 	// unfiltered, for the numbering reason `buildPanelRoleMap` gives.
 	const heldRolesByMember = buildHeldRoleLabels(slots);
+	// The same roles as RECORDS (#1256): slot id, label and speech title together,
+	// for the Absent dialog. Its ids are what the release sends.
+	const heldRoleLinesByMember = buildHeldRoleLines(slots);
 	// Derived here rather than carried as their own payload fields (#396 PR2
 	// task 6): both are redundant with data the payload already ships.
 	// `unavailableMembers` (public) already names who is `not_coming`;
@@ -1387,17 +1391,13 @@ function MeetingView() {
 		// the write runs.
 		const held = heldRolesByMember[memberId];
 		if (status === "absent" && held && held.labels.length > 0) {
-			const own = slots.filter((s) => s.assigneeId === memberId);
 			setPendingAbsent({
 				memberId,
 				name:
 					held.name ??
 					panelRosterForMode.find((r) => r.id === memberId)?.name ??
 					"this member",
-				roles: held.labels.map((label, i) => ({
-					label,
-					speechTitle: own[i]?.speechTitle ?? null,
-				})),
+				roles: heldRoleLinesByMember[memberId] ?? [],
 			});
 			return;
 		}
@@ -1423,13 +1423,15 @@ function MeetingView() {
 		memberId: string,
 		status: AttendanceStatus,
 		mode: AttendanceMode | undefined,
-		/** Only the Absent dialog's "Release roles" passes true (#1256). */
-		releaseHeldRoles = false,
+		/** Only the Absent dialog's "Release roles" passes these (#1256): the slot
+		 *  ids it LISTED, which are the most the write may free. */
+		releaseSlotIds?: string[],
 		name = "this member",
 	) {
-		const release = releaseHeldRoles
-			? ({ releaseHeldRoles: true } as const)
-			: {};
+		const release =
+			releaseSlotIds && releaseSlotIds.length > 0
+				? ({ releaseHeldRoles: true, releaseSlotIds } as const)
+				: {};
 		await offlineMinutes.mutate(
 			async () => {
 				const result = await setAttendance({
@@ -1480,7 +1482,7 @@ function MeetingView() {
 						?.status,
 					defaultMode: attendanceDefaultMode,
 				}),
-				releaseHeldRoles,
+				releaseHeldRoles ? p.roles.map((r) => r.slotId) : undefined,
 				p.name,
 			);
 		} finally {
@@ -2697,7 +2699,7 @@ function MeetingView() {
 			<AbsentReleaseDialog
 				pending={pendingAbsent}
 				offline={!online}
-				busy={absentBusy}
+				busy={absentBusy || offlineMinutes.busy || offlineMinutes.draining}
 				onCancel={() => setPendingAbsent(null)}
 				onRelease={(p) => void confirmAbsent(p, true)}
 				onKeep={(p) => void confirmAbsent(p, false)}

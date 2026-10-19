@@ -895,4 +895,36 @@ describe("roll Absent release wiring (#1256)", () => {
 			/await writePresence\(memberId, status, mode\);\s*\}$/,
 		);
 	});
+	it("Release roles sends the listed slot ids, and the dialog cannot confirm during a write or a drain", () => {
+		// protects=H1 (the ids the dialog LISTED are what rides the write and the
+		//   queued op), S1 (the dialog's roles are the slot-keyed records, not a
+		//   label list zipped against a second filter by index), M2 (Release roles
+		//   is disabled while `mutate` would silently drop the write)
+		// fails_when=confirmAbsent sends the flag without `p.roles.map(r => r.slotId)`,
+		//   the queue op loses `releaseSlotIds`, the roles are rebuilt by index from
+		//   `own[i]`, or the dialog's `busy` loses `offlineMinutes.busy` /
+		//   `offlineMinutes.draining`
+		// no_claim=that the dialog really disables (absent-release-dialog.test.tsx)
+		const confirm = body("confirmAbsent");
+		expect(confirm).toContain(
+			"releaseHeldRoles ? p.roles.map((r) => r.slotId) : undefined",
+		);
+		const present = body("writePresence");
+		expect(present).toMatch(
+			/\{ releaseHeldRoles: true, releaseSlotIds \} as const/,
+		);
+		// Both the online call and the queued op spread the same `release`.
+		expect(present.match(/\.\.\.release,/g)?.length).toBe(2);
+
+		const write = body("writeAttendance");
+		expect(write).toContain("roles: heldRoleLinesByMember[memberId] ?? []");
+		expect(write).not.toContain("own[i]");
+		expect(src).toContain(
+			"const heldRoleLinesByMember = buildHeldRoleLines(slots)",
+		);
+
+		expect(src).toContain(
+			"busy={absentBusy || offlineMinutes.busy || offlineMinutes.draining}",
+		);
+	});
 });

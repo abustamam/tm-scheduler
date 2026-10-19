@@ -47,6 +47,41 @@ describe("the Absent release wiring (#1256)", () => {
 		);
 	});
 
+	it("the release is capped by releaseSlotIds: required with the flag, refused without it, and the writer filters by them", () => {
+		// protects=H1: a replayed or stale release frees only the slots the officer
+		//   confirmed; the schema ties the ids to the flag both ways and the record
+		//   writer's UPDATE restricts to them
+		// fails_when=the ids-with-flag refinement is dropped (a bare flag frees
+		//   everything the member holds at replay time), or the UPDATE loses its
+		//   `inArray(roleSlots.id, ...)` filter
+		// no_claim=behaviour (absent-release.integration.test.ts replays for real)
+		const schema = MINUTES.slice(
+			MINUTES.indexOf("const setPresenceSchema"),
+			MINUTES.indexOf("export const setAttendance"),
+		);
+		expect(schema).toMatch(
+			/d\.releaseHeldRoles\s*\?\s*d\.releaseSlotIds\s*!==\s*undefined\s*&&\s*d\.releaseSlotIds\.length\s*>\s*0\s*:\s*d\.releaseSlotIds\s*===\s*undefined/,
+		);
+		const availability = readSource(
+			resolve(__dirname, "availability-logic.ts"),
+		);
+		const writer = functionBody(availability, "releaseHeldSlotsForRecord");
+		expect(writer).toContain("inArray(roleSlots.id, [...args.slotIds])");
+	});
+
+	it("setMemberPresence runs no club or membership read when it is handed a transaction", () => {
+		// protects=M1: inside the release's transaction the upsert issues no pool
+		//   query (`getMeetingClubId` / `requireMemberInMeetingClub` run on the pool
+		//   while the transaction holds a connection); the standalone path keeps them
+		// fails_when=the reads are un-gated again (they run per write, in the tx), or
+		//   the standalone path loses them
+		// no_claim=pool exhaustion itself, which needs concurrency
+		const body = functionBody(LOGIC, "setMemberPresence");
+		expect(body).toMatch(
+			/if\s*\(!tx\)\s*\{\s*const clubId = await getMeetingClubId\(input\.meetingId\);\s*await requireMemberInMeetingClub\(input\.memberId, clubId\);\s*\}/,
+		);
+	});
+
 	it("the Absent upsert and the release run in ONE transaction, after both locks, in that order", () => {
 		// protects=an asserted claim cannot re-take a freed role in a gap, and an
 		//   Absent write cannot commit while the release fails (or the reverse)
@@ -61,12 +96,12 @@ describe("the Absent release wiring (#1256)", () => {
 			"lockMembershipsAgainstMerge(tx",
 			"lockMemberAttendance(tx",
 			"setMemberPresence(",
-			"releaseHeldSlots(tx",
+			"releaseHeldSlotsForRecord(tx",
 		].map((needle) => body.indexOf(needle));
 		expect(order.every((i) => i >= 0)).toBe(true);
 		expect([...order].sort((a, b) => a - b)).toEqual(order);
 		// The upsert is handed the transaction, not left on the pool.
-		expect(body).toMatch(/setMemberPresence\([^)]*,\s*tx\s*\)/s);
+		expect(body).toMatch(/setMemberPresence\([^)]*,\s*tx,?\s*\)/s);
 		// And the handler reaches the writer instead of upserting then releasing.
 		const handler = MINUTES.slice(
 			MINUTES.indexOf("export const setAttendance"),

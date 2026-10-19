@@ -169,6 +169,11 @@ const setPresenceSchema = z
 		// write (#1256). DEFAULT FALSE: a tab from before the deploy cannot send it,
 		// so it records Absent and frees nothing, the stale-tab rule of #663.
 		releaseHeldRoles: z.boolean().default(false),
+		// The slot ids the dialog LISTED, which is what the officer confirmed
+		// (#1256). Required and non-empty with `releaseHeldRoles`, refused without
+		// it: a replayed or stale release then frees only what was confirmed, never
+		// a role the member was given since.
+		releaseSlotIds: z.array(uuid).max(200).optional(),
 	})
 	// A mode on an absent/excused write is a contradiction — they were neither
 	// in the room nor on the call. Refused rather than silently dropped, so a
@@ -180,7 +185,17 @@ const setPresenceSchema = z
 	// frees nothing. `false` is valid with every status.
 	.refine((d) => !d.releaseHeldRoles || d.status === "absent", {
 		message: "Only an absent attendee's roles can be released.",
-	});
+	})
+	.refine(
+		(d) =>
+			d.releaseHeldRoles
+				? d.releaseSlotIds !== undefined && d.releaseSlotIds.length > 0
+				: d.releaseSlotIds === undefined,
+		{
+			message:
+				"releaseSlotIds is required with releaseHeldRoles, and refused without it.",
+		},
+	);
 
 /** Set a member's presence status. ADMIN-ONLY — stays this way after #510: a
  *  Ballot Counter has no business editing the roster's attendance. Capability
@@ -193,7 +208,11 @@ export const setAttendance = createServerFn({ method: "POST" })
 		await assertAttendanceRecordable(data.meetingId);
 		if (data.releaseHeldRoles) {
 			const released = await setMemberAbsentReleasingRoles(
-				{ meetingId: data.meetingId, memberId: data.memberId },
+				{
+					meetingId: data.meetingId,
+					memberId: data.memberId,
+					releaseSlotIds: data.releaseSlotIds ?? [],
+				},
 				actorMemberId,
 			);
 			return { ok: true as const, released };

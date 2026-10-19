@@ -386,6 +386,7 @@ describe("useOfflineMinutes", () => {
 				memberId: "m1",
 				status: "absent",
 				releaseHeldRoles: true,
+				releaseSlotIds: ["slot-1", "slot-2"],
 			},
 		];
 		setAttendanceSpy.mockResolvedValueOnce({
@@ -428,6 +429,7 @@ describe("useOfflineMinutes", () => {
 				memberId: "m1",
 				status: "absent",
 				releaseHeldRoles: true,
+				releaseSlotIds: ["slot-1", "slot-2"],
 			},
 		];
 		setAttendanceSpy.mockResolvedValueOnce({ ok: true, released: [] } as never);

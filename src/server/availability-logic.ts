@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { db } from "#/db";
 import { meetings, roleDefinitions, roleSlots, speeches } from "#/db/schema";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
@@ -23,35 +23,9 @@ export type ReleasedSlot = {
 	speechTitle: string | null;
 };
 
-/**
- * Free every slot `memberId` holds in `meetingId`, inside the CALLER's
- * transaction (#1256). The caller owns the locks and the authorization; this
- * owns the statement.
- *
- * Frees only rows still assigned to the member AT EXECUTION TIME: the label and
- * speech title are read first, but the UPDATE re-checks `assigned_member_id`,
- * so a slot reassigned in between is neither freed nor reported. The class rides
- * in the statement (#1135) so a meeting frozen after the caller's own check
- * releases nothing.
- *
- * Labels are numbered off EVERY slot in the meeting plus
- * `role_definitions.slots_unordered`, never off the member's own slots: filtering
- * would turn "Evaluator 2" into "Evaluator" the moment the other holder's row
- * was left out.
- */
-export async function releaseHeldSlots(
-	tx: Tx,
-	args: {
-		meetingId: string;
-		memberId: string;
-		writeClass: "plan" | "record";
-		proof: WriteProof;
-		cause: "not_coming" | "absent";
-		/** The owning club and the credited actor, for the activity rows. */
-		clubId: string;
-		actorMemberId: string | null;
-	},
-): Promise<ReleasedSlot[]> {
+/** What both release writers share, read BEFORE their UPDATE: every slot in the
+ *  meeting, so labels are numbered off the whole meeting, and the member's own. */
+async function readHeldSlots(tx: Tx, meetingId: string, memberId: string) {
 	const all = await tx
 		.select({
 			id: roleSlots.id,
@@ -68,42 +42,56 @@ export async function releaseHeldSlots(
 			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
 		)
 		.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
-		.where(eq(roleSlots.meetingId, args.meetingId));
-	const roleCounts = buildRoleCounts(all);
-	const before = new Map(
-		all
-			.filter((s) => s.assigneeId === args.memberId)
-			.map((s) => [s.id, s] as const),
-	);
+		.where(eq(roleSlots.meetingId, meetingId));
+	return {
+		roleCounts: buildRoleCounts(all),
+		before: new Map(
+			all
+				.filter((s) => s.assigneeId === memberId)
+				.map((s) => [s.id, s] as const),
+		),
+	};
+}
 
-	const released = await tx
-		.update(roleSlots)
-		.set({
-			assignedMemberId: null,
-			assignedGuestId: null,
-			status: "open",
-			claimedAt: null,
-			speechId: null,
-		})
-		.where(
-			and(
-				eq(roleSlots.meetingId, args.meetingId),
-				eq(roleSlots.assignedMemberId, args.memberId),
-				meetingAcceptsWrite(tx, args.writeClass, roleSlots.meetingId),
-			),
-		)
-		.returning({ id: roleSlots.id });
+type HeldRead = Awaited<ReturnType<typeof readHeldSlots>>;
 
+/** The set both release UPDATEs write: the slot goes back to the open pool. The
+ *  speech row is unlinked, never deleted (ADR-0009). */
+const FREE_SLOT = {
+	assignedMemberId: null,
+	assignedGuestId: null,
+	status: "open",
+	claimedAt: null,
+	speechId: null,
+} as const;
+
+type ReleaseContext = {
+	meetingId: string;
+	memberId: string;
+	proof: WriteProof;
+	cause: "not_coming" | "absent";
+	/** The owning club and the credited actor, for the activity rows. */
+	clubId: string;
+	actorMemberId: string | null;
+};
+
+/** Label, order and log what an UPDATE's RETURNING rows actually freed. */
+async function reportFreed(
+	tx: Tx,
+	read: HeldRead,
+	released: { id: string }[],
+	args: ReleaseContext,
+): Promise<ReleasedSlot[]> {
 	const freed: (ReleasedSlot & { sortOrder: number; slotIndex: number })[] = [];
 	for (const row of released) {
-		const was = before.get(row.id);
+		const was = read.before.get(row.id);
 		// A slot assigned to the member between the read and the UPDATE (a claim
 		// that committed in the gap): freed, with a label worked out from the
 		// plain role name. Not reachable behind `lockMemberAttendance` for a
 		// claim, and still better than dropping the activity row.
 		freed.push({
 			slotId: row.id,
-			label: was ? slotLabel(was, roleCounts) : "A role",
+			label: was ? slotLabel(was, read.roleCounts) : "A role",
 			speechTitle: was?.speechTitle ?? null,
 			sortOrder: was?.sortOrder ?? 0,
 			slotIndex: was?.slotIndex ?? 0,
@@ -130,6 +118,65 @@ export async function releaseHeldSlots(
 		label,
 		speechTitle,
 	}));
+}
+
+/**
+ * Free every slot `memberId` holds in `meetingId`, under the PLAN write class,
+ * inside the CALLER's transaction. Not coming's release (#1135).
+ *
+ * The class is a literal in THIS statement, one writer per class, so the meeting
+ * writers guard can read it (a class passed as a parameter it cannot). The UPDATE
+ * re-checks `assigned_member_id`, so a slot reassigned since the read is neither
+ * freed nor reported. Labels come from `readHeldSlots`: numbered off every slot
+ * in the meeting, never off the member's own.
+ */
+export async function releaseHeldSlotsForPlan(
+	tx: Tx,
+	args: ReleaseContext,
+): Promise<ReleasedSlot[]> {
+	const read = await readHeldSlots(tx, args.meetingId, args.memberId);
+	const released = await tx
+		.update(roleSlots)
+		.set(FREE_SLOT)
+		.where(
+			and(
+				eq(roleSlots.meetingId, args.meetingId),
+				eq(roleSlots.assignedMemberId, args.memberId),
+				meetingAcceptsWrite(tx, "plan", roleSlots.meetingId),
+			),
+		)
+		.returning({ id: roleSlots.id });
+	return reportFreed(tx, read, released, args);
+}
+
+/**
+ * Free the slots `slotIds` that `memberId` STILL holds in `meetingId`, under the
+ * RECORD write class (#1256: roll Absent), inside the caller's transaction.
+ *
+ * `slotIds` is what the officer was shown and confirmed, and it is the ceiling:
+ * a replayed or stale release frees nothing the officer did not see, because a
+ * slot the member was given since is not in the list. The UPDATE still re-checks
+ * `assigned_member_id`, so a listed slot reassigned away is left alone too.
+ */
+export async function releaseHeldSlotsForRecord(
+	tx: Tx,
+	args: ReleaseContext & { slotIds: readonly string[] },
+): Promise<ReleasedSlot[]> {
+	if (args.slotIds.length === 0) return [];
+	const read = await readHeldSlots(tx, args.meetingId, args.memberId);
+	const released = await tx
+		.update(roleSlots)
+		.set(FREE_SLOT)
+		.where(
+			and(
+				inArray(roleSlots.id, [...args.slotIds]),
+				eq(roleSlots.meetingId, args.meetingId),
+				eq(roleSlots.assignedMemberId, args.memberId),
+				meetingAcceptsWrite(tx, "record", roleSlots.meetingId),
+			),
+		)
+		.returning({ id: roleSlots.id });
+	return reportFreed(tx, read, released, args);
 }
 
 /**
@@ -262,10 +309,9 @@ export async function releaseSlotsAndMarkUnavailable(
 			.limit(1);
 		if (!meeting) throw new Error("Meeting not found.");
 		assertMeetingAccepts(meeting.status, "plan");
-		const releasedSlots = await releaseHeldSlots(tx, {
+		const releasedSlots = await releaseHeldSlotsForPlan(tx, {
 			meetingId: args.meetingId,
 			memberId: args.memberId,
-			writeClass: "plan",
 			proof,
 			cause: "not_coming",
 			clubId: args.clubId,

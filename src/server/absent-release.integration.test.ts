@@ -181,13 +181,18 @@ describe.skipIf(!hasTestDb)("Absent releases held roles (#1256)", () => {
 		);
 	}
 
-	const absentWithRelease = () =>
+	/** The dialog listed Timer and Speaker 2; those ids are what the officer
+	 *  confirmed and what rides with the flag. */
+	const absentWithRelease = (
+		releaseSlotIds: string[] = [seed.slotId, speakerTwoId],
+	) =>
 		setAttendance({
 			data: {
 				meetingId: seed.meetingId,
 				memberId: seed.memberId,
 				status: "absent",
 				releaseHeldRoles: true,
+				releaseSlotIds,
 			},
 		});
 
@@ -324,10 +329,10 @@ describe.skipIf(!hasTestDb)("Absent releases held roles (#1256)", () => {
 		expect(await releaseRows()).toEqual([]);
 	});
 
-	it("a slot reassigned before the release runs is NOT freed, and is not reported", async () => {
-		// protects=criterion 6: the release is decided at execution (a queued op
-		//   drains later), against whoever holds the slot then; the result names only
-		//   what was freed
+	it("a LISTED slot reassigned before the release runs is NOT freed, and is not reported", async () => {
+		// protects=criterion 6: the release re-checks the holder at execution (a
+		//   queued op drains later), so a confirmed slot now held by someone else is
+		//   left alone; the result names only what was freed
 		// fails_when=the UPDATE drops `assigned_member_id = member`, or the labels
 		//   come from the pre-update read instead of the RETURNING rows
 		// no_claim=the toast text (use-offline-minutes test); the queue is simulated
@@ -347,6 +352,53 @@ describe.skipIf(!hasTestDb)("Absent releases held roles (#1256)", () => {
 		expect((await releaseRows()).map((r) => r.targetId)).toEqual([
 			speakerTwoId,
 		]);
+	});
+
+	it("a role given to the member after the confirm survives the replay (H1)", async () => {
+		// protects=H1's own scenario: release confirmed for slot A (Timer); the
+		//   member is later assigned slot B (Speaker 2's sibling); the replay frees
+		//   A's (already open) nothing and leaves B assigned
+		// fails_when=the replay frees by holder instead of by the confirmed ids
+		// no_claim=none beyond protects
+		const timerOnly = [seed.slotId];
+		await absentWithRelease(timerOnly);
+		expect((await slotRow(seed.slotId))?.assignedMemberId).toBeNull();
+		await testDb
+			.update(roleSlots)
+			.set({ assignedMemberId: seed.memberId, status: "claimed" })
+			.where(eq(roleSlots.id, speakerOneId));
+
+		const replay = await absentWithRelease(timerOnly);
+
+		expect(replay.released).toEqual([]);
+		expect((await slotRow(speakerOneId))?.assignedMemberId).toBe(seed.memberId);
+		// Speaker 2 was never in the list either.
+		expect((await slotRow(speakerTwoId))?.assignedMemberId).toBe(seed.memberId);
+	});
+
+	it("refuses releaseHeldRoles without releaseSlotIds, and releaseSlotIds without releaseHeldRoles", async () => {
+		// protects=the schema ties the ids to the flag both ways: a bare flag (which
+		//   would free whatever is held at replay time) is a refusal, as are ids
+		//   with no flag or an empty list
+		// fails_when=the refinement is dropped or only checks one direction
+		// no_claim=the guard test pins the schema text
+		const base = {
+			meetingId: seed.meetingId,
+			memberId: seed.memberId,
+			status: "absent" as const,
+		};
+		for (const data of [
+			{ ...base, releaseHeldRoles: true },
+			{ ...base, releaseHeldRoles: true, releaseSlotIds: [] },
+			{ ...base, releaseSlotIds: [seed.slotId] },
+			{ ...base, releaseHeldRoles: false, releaseSlotIds: [seed.slotId] },
+		]) {
+			await expect(attempt(() => setAttendance({ data }))).rejects.toThrow(
+				/releaseSlotIds is required with releaseHeldRoles/,
+			);
+		}
+		expect(await attendanceOf(seed.memberId)).toEqual([]);
+		expect((await slotRow(seed.slotId))?.assignedMemberId).toBe(seed.memberId);
 	});
 
 	it("replaying the release after the roles are gone frees nothing and still records Absent", async () => {
@@ -378,6 +430,7 @@ describe.skipIf(!hasTestDb)("Absent releases held roles (#1256)", () => {
 						memberId: seed.memberId,
 						status: "present",
 						releaseHeldRoles: true,
+						releaseSlotIds: [seed.slotId],
 					},
 				}),
 			),

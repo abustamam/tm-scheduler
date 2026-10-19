@@ -8,19 +8,14 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "#/components/ui/dialog";
-
-/** One role the member holds: the NUMBERED label and, for a speaker slot with a
- *  speech attached, its title. */
-export interface HeldRoleLine {
-	label: string;
-	speechTitle: string | null;
-}
+import type { HeldRoleLine } from "#/lib/absent-release-roles";
 
 /** The pending Absent mark, or `null` when nothing is being confirmed. */
 export interface PendingAbsent {
 	memberId: string;
 	name: string;
-	/** Every role the loader says they hold. Never empty: a member the page sees
+	/** Every role the loader says they hold, each with its slot id: the ids are
+	 *  what Release roles sends, so the release frees what was LISTED. Never empty: a member the page sees
 	 *  holding nothing is written straight through, with no dialog (#1256). */
 	roles: HeldRoleLine[];
 }
@@ -83,7 +78,7 @@ export function AbsentReleaseDialog({
 				</DialogHeader>
 				<ul className="list-disc space-y-1 pl-5 text-sm">
 					{shown?.roles.map((r) => (
-						<li key={r.label}>
+						<li key={r.slotId}>
 							{r.speechTitle
 								? `${r.label} — '${r.speechTitle}' goes back to their queue`
 								: r.label}

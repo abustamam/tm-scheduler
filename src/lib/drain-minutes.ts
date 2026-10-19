@@ -60,8 +60,9 @@ export type MinutesServerFns = {
 			status: AttendanceStatus;
 			mode?: AttendanceMode;
 			releaseHeldRoles?: true;
+			releaseSlotIds?: string[];
 		};
-	}) => Promise<unknown>;
+	}) => Promise<{ released?: { label: string }[] } | null | undefined>;
 	addGuest: (args: {
 		data: {
 			meetingId: string;
@@ -138,22 +139,24 @@ export async function dispatchOp(
 			// server's answer is the ONE return value this function has: what the
 			// release actually freed at replay time, which the drain toasts. A replay
 			// of an already-applied op frees nothing and returns an empty list.
+			const ids = op.releaseSlotIds ?? [];
+			const releasing = op.releaseHeldRoles === true && ids.length > 0;
 			const result = await fns.setAttendance({
 				data: {
 					meetingId,
 					memberId: op.memberId,
 					status: op.status,
 					...withMode(op.mode),
-					...(op.releaseHeldRoles ? { releaseHeldRoles: true as const } : {}),
+					...(releasing
+						? { releaseHeldRoles: true as const, releaseSlotIds: ids }
+						: {}),
 				},
 			});
-			if (!op.releaseHeldRoles) return undefined;
-			const released = (result as { released?: { label: string }[] } | null)
-				?.released;
+			if (!releasing) return undefined;
 			return {
 				released: {
 					memberId: op.memberId,
-					labels: (released ?? []).map((r) => r.label),
+					labels: (result?.released ?? []).map((r) => r.label),
 				},
 			};
 		}
@@ -285,9 +288,7 @@ export async function drainMinutesQueue(params: {
 	meetingId: string;
 	ops: MinutesOp[];
 	/** Replay one op (typically `(op) => dispatchOp(op, meetingId, fns)`). */
-	dispatch: (
-		op: MinutesOp,
-	) => Promise<DispatchOutcome | undefined> | Promise<void>;
+	dispatch: (op: MinutesOp) => Promise<DispatchOutcome | undefined>;
 	/** Remove one drained op from the durable queue by its `opId`. */
 	onOpDrained: (opId: string) => Promise<void>;
 }): Promise<DrainResult> {
@@ -299,7 +300,7 @@ export async function drainMinutesQueue(params: {
 		const op = ops[i];
 		let outcome: DispatchOutcome | undefined;
 		try {
-			outcome = (await dispatch(op)) ?? undefined;
+			outcome = await dispatch(op);
 		} catch (error) {
 			// Stop at the first failure: leave this op + all successors queued.
 			return { drainedCount, remaining: ops.slice(i), error, released };
@@ -309,7 +310,15 @@ export async function drainMinutesQueue(params: {
 		if (outcome && outcome.released.labels.length > 0) {
 			released.push(outcome.released);
 		}
-		await onOpDrained(op.opId);
+		try {
+			await onOpDrained(op.opId);
+		} catch (error) {
+			// The write landed but the durable removal failed (IndexedDB): report
+			// it as the drain's error WITH the receipts collected so far, so the
+			// caller still toasts and refreshes. This op stays queued and replays
+			// (an upsert, so harmlessly) on the next pass.
+			return { drainedCount, remaining: ops.slice(i), error, released };
+		}
 		drainedCount += 1;
 	}
 

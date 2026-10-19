@@ -17,8 +17,8 @@ function pending(over: Partial<PendingAbsent> = {}): PendingAbsent {
 		memberId: "m1",
 		name: "Ana Ruiz",
 		roles: [
-			{ label: "Speaker 2", speechTitle: "Ice Breaker" },
-			{ label: "Timer", speechTitle: null },
+			{ slotId: "s2", label: "Speaker 2", speechTitle: "Ice Breaker" },
+			{ slotId: "t1", label: "Timer", speechTitle: null },
 		],
 		...over,
 	};
