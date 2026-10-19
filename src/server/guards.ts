@@ -855,8 +855,12 @@ export async function requireMemberInClub(memberId: string, clubId: string) {
 	if (!member || member.clubId !== clubId) {
 		throw new Error("Member not found in this club.");
 	}
-	if (member.status === "inactive") {
-		throw new Error("That member is inactive — reactivate them first.");
+	if (member.status !== "active") {
+		throw new Error(
+			member.status === "former"
+				? "That member is no longer a member of this club."
+				: "That member is inactive — reactivate them first.",
+		);
 	}
 	return member;
 }

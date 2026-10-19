@@ -120,6 +120,7 @@ export const clubCharterStatusEnum = pgEnum("club_charter_status", [
 export const membershipStatusEnum = pgEnum("membership_status", [
 	"active",
 	"inactive",
+	"former",
 ]);
 export const meetingStatusEnum = pgEnum("meeting_status", [
 	"scheduled",
@@ -1017,6 +1018,10 @@ export const members = pgTable(
 		// from sign-up / roster / season / picker views, but their past role
 		// history is preserved (never deleted). Reactivating restores them.
 		status: membershipStatusEnum("status").notNull().default("active"),
+		// "former" (#1239) = the membership ENDED: on no roster segment, picker or
+		// count, history kept. `endedAt` is the day it ended in the club's
+		// timezone, or NULL when unknown (imports). Cleared on reactivation.
+		endedAt: date("ended_at", { mode: "string" }),
 		// Real join date from the Toastmasters membership export (seeded by
 		// scripts/import-members.ts). joinedAt = "Member of *this* Club Since"
 		// (per-club). First-ever TM join lives on people.originalJoinDate.

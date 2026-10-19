@@ -10,6 +10,8 @@ import {
 	applySetMemberStatus,
 	bulkImportSchema,
 	editSchema,
+	listFormerMembersSchema,
+	loadFormerMembers,
 	loadPublicClubRoster,
 	mergeSchema,
 	removeSchema,
@@ -76,7 +78,17 @@ export const removeMember = createServerFn({ method: "POST" })
 		return applyMemberRemove({ ...data, actorMemberId: membership.id });
 	});
 
-/** Toggle a roster member active/inactive (NOT deletion — see removeMember). */
+/** The club's former members (#1239). Admin-only: the gate here, not the
+ *  roster's hidden link, is the access control. */
+export const listFormerMembers = createServerFn({ method: "GET" })
+	.validator((i: unknown) => listFormerMembersSchema.parse(i))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		await requireClubRole(user.id, data.clubId, ["admin"]);
+		return loadFormerMembers(data.clubId);
+	});
+
+/** Set a roster member active / inactive / former (NOT deletion — see removeMember). */
 export const setMemberStatus = createServerFn({ method: "POST" })
 	.validator((i: unknown) => setStatusSchema.parse(i))
 	.handler(async ({ data }) => {

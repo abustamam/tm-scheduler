@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
-import { and, eq, isNull, ne } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { members, people } from "#/db/schema";
@@ -127,7 +127,7 @@ export const inviteAllMembers = createServerFn({ method: "POST" })
 			.where(
 				and(
 					eq(members.clubId, data.clubId),
-					ne(members.status, "inactive"),
+					eq(members.status, "active"),
 					isNull(people.userId),
 				),
 			);

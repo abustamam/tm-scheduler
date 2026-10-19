@@ -94,7 +94,7 @@ export async function currentOfficersForClub(
 	// Collect the active holders of each agenda office, names sorted.
 	const holders = new Map<OfficerPosition, string[]>();
 	for (const r of rows) {
-		if (r.status === "inactive") continue;
+		if (r.status !== "active") continue;
 		const list = holders.get(r.position) ?? [];
 		list.push(r.name);
 		holders.set(r.position, list);

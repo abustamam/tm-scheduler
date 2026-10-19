@@ -274,7 +274,7 @@ function MemberDetail() {
 	// none from the server. Say so quietly rather than showing the "no path set
 	// yet" empty state, which would be a claim about their record.
 	const pathwaysWithheld =
-		member.status === "inactive" &&
+		member.status !== "active" &&
 		!(clubId && viewerIsAdmin && exportLinkAllowed(impersonating, clubId));
 
 	// Identity, speech log, roles served and Pathways progress are all real.
@@ -323,11 +323,11 @@ function MemberDetail() {
 								Officer · full admin access
 							</Badge>
 						) : null}
-						{member.status === "inactive" ? (
+						{member.status !== "active" ? (
 							<>
 								<span className="size-1 rounded-full bg-[var(--sea-ink-soft)]" />
 								<span className="inline-flex items-center rounded-full border border-[var(--line)] bg-[var(--sand)] px-2.5 py-0.5 text-xs font-bold tracking-[0.03em] text-[var(--sea-ink-soft)] uppercase">
-									Inactive
+									{member.status === "former" ? "Former" : "Inactive"}
 								</span>
 							</>
 						) : null}
@@ -845,7 +845,7 @@ type ProfileMember = {
 	contactPreferenceRefusal: "member_set" | "multi_club" | null;
 	officerPositions: OfficerPosition[];
 	userId: string | null;
-	status: "active" | "inactive";
+	status: "active" | "inactive" | "former";
 	clubRole: "admin" | "member";
 };
 
@@ -870,10 +870,16 @@ function MemberActions({
 	// the member has signed in (#1110).
 	const preferenceLocked = member.contactPreferenceRefusal !== null;
 	const isInactive = member.status === "inactive";
+	const isFormer = member.status === "former";
+	const [endOpen, setEndOpen] = useState(false);
 
-	async function onToggleStatus() {
-		const next = isInactive ? "active" : "inactive";
+	function onToggleStatus() {
+		return onSetStatus(member.status === "active" ? "inactive" : "active");
+	}
+
+	async function onSetStatus(next: "active" | "inactive" | "former") {
 		setRemoveOpen(false);
+		setEndOpen(false);
 		setBusy(true);
 		try {
 			await setMemberStatus({
@@ -882,7 +888,9 @@ function MemberActions({
 			toast.success(
 				next === "inactive"
 					? `${member.name} marked inactive.`
-					: `${member.name} reactivated.`,
+					: next === "former"
+						? `${member.name}'s membership ended.`
+						: `${member.name} reactivated.`,
 			);
 			await router.invalidate();
 		} catch (err) {
@@ -979,14 +987,24 @@ function MemberActions({
 			<Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
 				Edit
 			</Button>
-			{!isLinkedAccount ? (
+			{!isLinkedAccount || isFormer ? (
 				<Button
 					variant="outline"
 					size="sm"
 					disabled={busy}
 					onClick={onToggleStatus}
 				>
-					{isInactive ? "Reactivate" : "Mark inactive"}
+					{isInactive || isFormer ? "Reactivate" : "Mark inactive"}
+				</Button>
+			) : null}
+			{!isFormer ? (
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={busy}
+					onClick={() => setEndOpen(true)}
+				>
+					End membership
 				</Button>
 			) : null}
 			{!isLinkedAccount ? (
@@ -1127,11 +1145,12 @@ function MemberActions({
 								</select>
 							)}
 						</div>
-						<fieldset className="space-y-2">
+						<fieldset className="space-y-2" disabled={isFormer}>
 							<legend className="font-medium text-sm">Offices held</legend>
 							<p className="text-muted-foreground text-xs">
-								A member can hold more than one office at once. Assigning any
-								office grants full club-admin access.
+								{isFormer
+									? "A former member can't hold an office. Reactivate them first."
+									: "A member can hold more than one office at once. Assigning any office grants full club-admin access."}
 							</p>
 							<div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
 								{OFFICER_POSITIONS.map((pos) => (
@@ -1164,6 +1183,33 @@ function MemberActions({
 							</Button>
 						</DialogFooter>
 					</form>
+				</DialogContent>
+			</Dialog>
+
+			{/* End membership confirm dialog (#1239) */}
+			<Dialog open={endOpen} onOpenChange={setEndOpen}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>End {member.name}'s membership?</DialogTitle>
+						<DialogDescription>
+							They leave the roster; their history stays.
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<DialogClose asChild>
+							<Button type="button" variant="outline" disabled={busy}>
+								Cancel
+							</Button>
+						</DialogClose>
+						<Button
+							type="button"
+							variant="destructive"
+							disabled={busy}
+							onClick={() => onSetStatus("former")}
+						>
+							{busy ? "Ending…" : "End membership"}
+						</Button>
+					</DialogFooter>
 				</DialogContent>
 			</Dialog>
 

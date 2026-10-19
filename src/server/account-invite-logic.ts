@@ -91,12 +91,20 @@ export async function prepareMemberInvite(input: {
 			id: members.id,
 			clubId: members.clubId,
 			personId: members.personId,
+			status: members.status,
 		})
 		.from(members)
 		.where(eq(members.id, input.memberId))
 		.limit(1);
 	if (!member || member.clubId !== input.clubId) {
 		throw new Error("Member not found in this club.");
+	}
+	// A former member (#1239) is not invited back by a stray click; the admin
+	// reactivates them first. Inactive members keep today's behaviour.
+	if (member.status === "former") {
+		throw new Error(
+			"That member's membership has ended — reactivate them before sending an invite.",
+		);
 	}
 
 	const [person] = await db

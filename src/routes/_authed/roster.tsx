@@ -53,13 +53,21 @@ import { cn } from "#/lib/utils";
 import { inviteAllMembers, inviteMember } from "#/server/account-invite";
 import { listClubMembers } from "#/server/club";
 import { listUpcomingMeetings } from "#/server/meetings";
-import { bulkImportMembers, mergeMembers } from "#/server/members";
+import {
+	bulkImportMembers,
+	listFormerMembers,
+	mergeMembers,
+	setMemberStatus,
+} from "#/server/members";
 import { listClubMemberPathways } from "#/server/pathways-read";
 import type { PathViewModel } from "#/server/pathways-read-logic";
 import {
 	commitMemberUpload,
 	previewMemberUpload,
 } from "#/server/upload-members";
+
+/** One row of `listFormerMembers` (#1239). */
+type FormerMemberItem = { id: string; name: string; endedAt: string | null };
 
 /** `?formerPathways=true`: an officer asked to see former members' Pathways. */
 type RosterSearch = { formerPathways?: true };
@@ -80,32 +88,58 @@ export const Route = createFileRoute("/_authed/roster")({
 				openRoles: 0,
 				pathways: {},
 				formerPathwaysRequested: false,
+				formerMembers: [] as FormerMemberItem[],
+				formerFailed: false,
 				// Nothing is dated without a club, so any fixed zone will do.
 				timezone: "UTC",
 				now: Date.now(),
 			};
 		}
-		const [members, upcoming, pathways, { timezone }] = await Promise.all([
-			listClubMembers({ data: clubId }),
-			listUpcomingMeetings({ data: clubId }),
-			// A request only: the server returns inactive members' paths just to an
-			// officer or admin, whatever the URL says.
-			listClubMemberPathways({
-				data: { clubId, includeFormer: deps.includeFormer },
-			}),
-			// Tenure is counted on the CLUB's calendar (#1017). Imported here, as
-			// club-settings imports its promo template, so the route module does
-			// not pull `#/server/clubs` (whose logic modules reach `#/db`) into
-			// everything that imports this page.
-			import("#/server/clubs").then(({ loadClubTimezoneSettings }) =>
-				loadClubTimezoneSettings({ data: clubId }),
-			),
-		]);
+		// The admin the server fn will actually serve: an effective admin, minus
+		// "View as this club" (a read-only session passes the client admin check
+		// but `listFormerMembers` refuses it). The component uses the same test.
+		const isAdmin =
+			!!context.clubs &&
+			!!effectiveAdminClub({
+				clubs: context.clubs,
+				activeClubId: clubId,
+				officerPositions: context.officerPositions ?? [],
+			}) &&
+			exportLinkAllowed(context.impersonating, clubId);
+		let formerFailed = false;
+		const [members, upcoming, pathways, { timezone }, formerMembers] =
+			await Promise.all([
+				listClubMembers({ data: clubId }),
+				listUpcomingMeetings({ data: clubId }),
+				// A request only: the server returns inactive members' paths just to an
+				// officer or admin, whatever the URL says.
+				listClubMemberPathways({
+					data: { clubId, includeFormer: deps.includeFormer },
+				}),
+				// Tenure is counted on the CLUB's calendar (#1017). Imported here, as
+				// club-settings imports its promo template, so the route module does
+				// not pull `#/server/clubs` (whose logic modules reach `#/db`) into
+				// everything that imports this page.
+				import("#/server/clubs").then(({ loadClubTimezoneSettings }) =>
+					loadClubTimezoneSettings({ data: clubId }),
+				),
+				// Admin-only list (#1239): the server fn is the gate. Only a user who
+				// will see the link asks, so a failure here is a real failure: it is
+				// flagged and shown on the link, never rendered as "(0)".
+				isAdmin
+					? listFormerMembers({ data: { clubId } }).catch(() => {
+							formerFailed = true;
+							return [] as FormerMemberItem[];
+						})
+					: Promise.resolve([] as FormerMemberItem[]),
+			]);
 		return {
 			members,
 			openRoles: upcoming[0]?.openSlots ?? 0,
 			pathways,
 			formerPathwaysRequested: deps.includeFormer,
+			formerMembers,
+			formerFailed,
 			timezone,
 			// Pinned here, not sampled while rendering, so the SSR pass and the
 			// hydration pass count tenure months from one instant (#1017).
@@ -182,7 +216,7 @@ interface RosterRow {
 	/** Account-invite state: none / invited (link sent) / joined (linked) (#266). */
 	inviteState: InviteState;
 	/** Roster membership status (renewal): active vs unrenewed/inactive. */
-	membershipStatus: "active" | "inactive";
+	membershipStatus: "active" | "inactive" | "former";
 	/** A former member whose Pathways this view does not show (#958). */
 	pathwayWithheld: boolean;
 	/** Compact label for the member's first synced Pathway, or null if none synced. */
@@ -232,9 +266,12 @@ function Roster() {
 		openRoles,
 		pathways,
 		formerPathwaysRequested,
+		formerMembers: formerList,
+		formerFailed,
 		timezone,
 		now,
 	} = Route.useLoaderData();
+	const formerMembers = formerList ?? [];
 	const clock = { now: new Date(now), timeZone: timezone };
 	const { clubs, activeClubId, officerPositions, impersonating } =
 		Route.useRouteContext();
@@ -261,6 +298,7 @@ function Roster() {
 	const [csvOpen, setCsvOpen] = useState(false);
 	const [inviteAllOpen, setInviteAllOpen] = useState(false);
 	const [addOpen, setAddOpen] = useState(false);
+	const [formerOpen, setFormerOpen] = useState(false);
 
 	// The invite control adds a wider trailing column (icon button + chevron) for
 	// managers; members see the original chevron-only layout. Fixed widths keep the
@@ -268,33 +306,40 @@ function Roster() {
 	const gridCols = canManage ? MANAGER_TABLE_GRID : TABLE_GRID;
 
 	// Identity, tenure, speeches, membership status and Pathways progress are all real.
-	const rows: RosterRow[] = members.map((m) => {
-		const joined = m.joinedAt ?? m.createdAt;
-		const pathwayWithheld = m.status === "inactive" && !showFormerPathways;
-		const tenure = formatTenure(joined, clock);
-		return {
-			id: m.id,
-			name: m.name,
-			initials: initialsOf(m.name),
-			tone: toneFromSeed(m.id),
-			tenure: m.officerPositions.length
-				? `${tenure} · ${m.officerPositions.map(officerPositionLabel).join(", ")}`
-				: tenure,
-			speeches: m.speeches,
-			email: m.email,
-			phone: m.phone,
-			preferredContact: m.preferredContact,
-			inviteState: inviteStateOf({ userId: m.userId, invitedAt: m.invitedAt }),
-			membershipStatus: m.status,
-			pathwayWithheld,
-			// The server already leaves a former member's paths out unless an
-			// officer opted in; this keeps the cell honest if it ever sends them.
-			pathwayLabel: pathwayWithheld
-				? null
-				: pathwayLabelFor(pathways[m.id] ?? []),
-			holdsOffice: m.officerPositions.length > 0,
-		};
-	});
+	// A former member (#1239) is on no segment; the server already leaves them
+	// out, and this keeps the view honest if one ever arrives.
+	const rows: RosterRow[] = members
+		.filter((m) => m.status !== "former")
+		.map((m) => {
+			const joined = m.joinedAt ?? m.createdAt;
+			const pathwayWithheld = m.status === "inactive" && !showFormerPathways;
+			const tenure = formatTenure(joined, clock);
+			return {
+				id: m.id,
+				name: m.name,
+				initials: initialsOf(m.name),
+				tone: toneFromSeed(m.id),
+				tenure: m.officerPositions.length
+					? `${tenure} · ${m.officerPositions.map(officerPositionLabel).join(", ")}`
+					: tenure,
+				speeches: m.speeches,
+				email: m.email,
+				phone: m.phone,
+				preferredContact: m.preferredContact,
+				inviteState: inviteStateOf({
+					userId: m.userId,
+					invitedAt: m.invitedAt,
+				}),
+				membershipStatus: m.status,
+				pathwayWithheld,
+				// The server already leaves a former member's paths out unless an
+				// officer opted in; this keeps the cell honest if it ever sends them.
+				pathwayLabel: pathwayWithheld
+					? null
+					: pathwayLabelFor(pathways[m.id] ?? []),
+				holdsOffice: m.officerPositions.length > 0,
+			};
+		});
 
 	// Active members first; inactive (unrenewed) sink to the bottom, greyed.
 	const sorted = [...rows].sort((a, b) => {
@@ -612,6 +657,31 @@ function Roster() {
 				Tip: click any member to open their profile, speech log and roles
 				served.
 			</p>
+
+			{servedAsAdmin ? (
+				<p className="mt-2 px-0.5 text-xs">
+					{formerFailed ? (
+						<span role="alert">Former members could not be loaded.</span>
+					) : (
+						<button
+							type="button"
+							className="underline"
+							onClick={() => setFormerOpen(true)}
+						>
+							Former members ({formerMembers.length})
+						</button>
+					)}
+				</p>
+			) : null}
+
+			{clubId && servedAsAdmin && !formerFailed ? (
+				<FormerMembersDialog
+					open={formerOpen}
+					onOpenChange={setFormerOpen}
+					clubId={clubId}
+					formerMembers={formerMembers}
+				/>
+			) : null}
 
 			{clubId ? (
 				<MergeMembersDialog
@@ -1735,5 +1805,93 @@ function SegmentChip({
 				{count}
 			</span>
 		</button>
+	);
+}
+
+/** The admin's list of former members (#1239), each with Reactivate. */
+function FormerMembersDialog({
+	open,
+	onOpenChange,
+	clubId,
+	formerMembers,
+}: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	clubId: string;
+	formerMembers: FormerMemberItem[];
+}) {
+	const router = useRouter();
+	const [busyId, setBusyId] = useState<string | null>(null);
+
+	async function reactivate(m: FormerMemberItem) {
+		setBusyId(m.id);
+		try {
+			await setMemberStatus({
+				data: { clubId, memberId: m.id, status: "active" },
+			});
+			toast.success(`${m.name} reactivated.`);
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusyId(null);
+		}
+	}
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent>
+				<DialogHeader>
+					<DialogTitle>Former members</DialogTitle>
+					<DialogDescription>
+						People whose membership ended. Their history stays; they are off the
+						roster.
+					</DialogDescription>
+				</DialogHeader>
+				{formerMembers.length === 0 ? (
+					<p className="text-sm text-[var(--sea-ink-soft)]">
+						No former members.
+					</p>
+				) : (
+					<ul className="divide-y divide-[var(--line)]">
+						{formerMembers.map((m) => (
+							<li
+								key={m.id}
+								className="flex items-center justify-between gap-3 py-2"
+							>
+								<div className="min-w-0">
+									<Link
+										to="/members/$id"
+										params={{ id: m.id }}
+										className="font-semibold"
+									>
+										{m.name}
+									</Link>
+									<div className="text-xs text-[var(--sea-ink-soft)]">
+										Ended {m.endedAt ?? "unknown"}
+									</div>
+								</div>
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									disabled={busyId !== null}
+									onClick={() => reactivate(m)}
+								>
+									Reactivate
+								</Button>
+							</li>
+						))}
+					</ul>
+				)}
+				<DialogFooter>
+					<DialogClose asChild>
+						<Button type="button" variant="outline">
+							Close
+						</Button>
+					</DialogClose>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 	);
 }

@@ -510,12 +510,16 @@ export const INTRODUCER_NOT_IN_CLUB_MESSAGE =
 export const GUEST_CANNOT_INTRODUCE_SELF_MESSAGE =
 	"A guest can't be recorded as having introduced themselves.";
 
+/** The refusal for naming a former member as a guest's new introducer (#1239). */
+export const INTRODUCER_FORMER_MESSAGE =
+	"That member's membership has ended, so they can't be recorded as a new introducer.";
+
 /** One member the "Introduced by" picker offers. */
 export interface IntroducerOption {
 	id: string;
 	name: string;
 	/** `inactive` members stay pickable — see `applyUpdateGuestProfile`. */
-	status: "active" | "inactive";
+	status: "active" | "inactive" | "former";
 }
 
 export interface GuestProfile extends GuestProfileFields {
@@ -553,8 +557,10 @@ function introducerOfClub(clubId: string) {
  * (#1050): the stored three, read fresh each time the dialog opens, and the
  * club's roster for the picker. Null when the guest is not in this club.
  *
- * The roster is EVERY membership row of this club, inactive included — the
- * same set `applyUpdateGuestProfile` accepts and `loadLinkCandidates` offers.
+ * The roster is every membership row of this club, inactive included, minus
+ * former ones (#1239) unless one is already this guest's introducer (dropping
+ * them would blank the field on the next save). `applyUpdateGuestProfile`
+ * refuses a NEW former introducer and keeps an on-file one.
  */
 export async function loadGuestProfile(
 	clubId: string,
@@ -573,11 +579,16 @@ export async function loadGuestProfile(
 		.limit(1);
 	if (!guest) return null;
 	const { personId, ...stored } = guest;
-	const roster = await db
+	const allMembers = await db
 		.select({ id: members.id, name: members.name, status: members.status })
 		.from(members)
 		.where(eq(members.clubId, clubId))
 		.orderBy(asc(members.name));
+	// A former member (#1239) is not pickable, unless they are the introducer
+	// already on file: dropping them would blank the field on the next save.
+	const roster = allMembers.filter(
+		(m) => m.status !== "former" || m.id === stored.introducedByMemberId,
+	);
 	return {
 		...stored,
 		roster,
@@ -626,11 +637,11 @@ export async function loadGuestProfiles(clubId: string): Promise<{
  *   the member exists somewhere; without this check an officer could record
  *   another club's member as the introducer, and the VP Membership view would
  *   then count a stranger's guests. "A member of this club" means any
- *   membership row with this `club_id`, INACTIVE INCLUDED — the rule
- *   `applyLinkGuestToMember` and its roster picker use. A former member who
- *   brought a guest last year still brought them; history an import carries
- *   in names people who have since lapsed. A guest's OWN converted membership
- *   is refused: nobody brings themselves.
+ *   membership row with this `club_id`, INACTIVE INCLUDED. A FORMER member
+ *   (#1239) is refused as a NEW introducer, but one already on file is kept:
+ *   a person who brought a guest last year still brought them, and an import
+ *   carries in names of people who have since left. A guest's OWN converted
+ *   membership is refused: nobody brings themselves.
  * - Null clears the introducer. Omitting it clears it too, like the contact
  *   fields on `applyUpdateGuest`.
  *
@@ -665,6 +676,7 @@ export async function applyUpdateGuestProfile(
 			.select({
 				id: guests.id,
 				convertedMembershipId: guests.convertedMembershipId,
+				introducedByMemberId: guests.introducedByMemberId,
 			})
 			.from(guests)
 			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
@@ -676,7 +688,7 @@ export async function applyUpdateGuestProfile(
 				throw new Error(GUEST_CANNOT_INTRODUCE_SELF_MESSAGE);
 			}
 			const [introducer] = await tx
-				.select({ id: members.id })
+				.select({ id: members.id, status: members.status })
 				.from(members)
 				.where(
 					and(
@@ -687,6 +699,14 @@ export async function applyUpdateGuestProfile(
 				.limit(1)
 				.for("share");
 			if (!introducer) throw new Error(INTRODUCER_NOT_IN_CLUB_MESSAGE);
+			// A former member (#1239) can stay the introducer already on file, but
+			// is not NEWLY chosen: the picker does not offer them.
+			if (
+				introducer.status === "former" &&
+				introducer.id !== guest.introducedByMemberId
+			) {
+				throw new Error(INTRODUCER_FORMER_MESSAGE);
+			}
 		}
 
 		await tx

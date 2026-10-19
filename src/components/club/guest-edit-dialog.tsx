@@ -515,7 +515,9 @@ export function GuestEditDialog({
 										<option key={m.id} value={m.id}>
 											{m.status === "inactive"
 												? `${m.name} (inactive)`
-												: m.name}
+												: m.status === "former"
+													? `${m.name} (former)`
+													: m.name}
 										</option>
 									))}
 								</select>

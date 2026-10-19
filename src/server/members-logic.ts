@@ -7,19 +7,33 @@
 // that same module is NOT stripped and drags `pg` → `Buffer` into the browser
 // (ReferenceError: Buffer is not defined). Keeping the db logic in this
 // never-client-imported module keeps `pg` server-side. See `auth-context.ts`.
-import { and, asc, eq, gte, inArray, isNull, lt, ne, or } from "drizzle-orm";
+import {
+	and,
+	asc,
+	eq,
+	gte,
+	inArray,
+	isNull,
+	lt,
+	ne,
+	or,
+	sql,
+} from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import {
 	clubActionItems,
+	clubs,
 	meetingAttendance,
 	meetingAwards,
 	meetings,
 	members,
+	officerTerms,
 	people,
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import { localDateKey } from "#/lib/meeting-url";
 import { pastAgendaRemoveRefusal } from "#/lib/member-remove";
 import {
 	OFFICER_POSITIONS,
@@ -120,7 +134,7 @@ export async function loadPublicClubRoster(
 			preferredName: members.preferredName,
 		})
 		.from(members)
-		.where(and(eq(members.clubId, clubId), ne(members.status, "inactive")))
+		.where(and(eq(members.clubId, clubId), eq(members.status, "active")))
 		.orderBy(asc(members.name));
 	const officers = await currentOfficersByMember(roster.map((m) => m.id));
 	return roster.map((m) => ({
@@ -478,6 +492,21 @@ export async function applyMemberEdit(input: EditInput) {
 					),
 				);
 		}
+		// A former member (#1239) holds no office: opening a term would put them
+		// back on the officers list and grant admin-adjacent access. Read under
+		// the row lock so an end-membership racing this edit cannot slip past.
+		if (input.officerPositions !== undefined) {
+			const [locked] = await tx
+				.select({ status: members.status })
+				.from(members)
+				.where(eq(members.id, input.memberId))
+				.for("update");
+			if (locked?.status === "former" && input.officerPositions.length > 0) {
+				throw new Error(
+					"A former member can't hold an office — reactivate them first.",
+				);
+			}
+		}
 		// The membership last — see LOCK ORDER above.
 		await tx.update(members).set(next).where(eq(members.id, input.memberId));
 		// Reconcile the office set only when the caller sent one (undefined = leave
@@ -560,7 +589,7 @@ async function personEmailObstacle(
 export const setStatusSchema = z.object({
 	clubId: z.string().uuid(),
 	memberId: z.string().uuid(),
-	status: z.enum(["active", "inactive"]),
+	status: z.enum(["active", "inactive", "former"]),
 });
 type SetStatusInput = z.infer<typeof setStatusSchema> & RosterActor;
 
@@ -597,15 +626,6 @@ type SetStatusInput = z.infer<typeof setStatusSchema> & RosterActor;
  *  and convert may not. If a third reactivation path ever appears, it has to
  *  choose one of these two meanings explicitly — and say which, here. */
 export async function applySetMemberStatus(input: SetStatusInput) {
-	const [current] = await db
-		.select()
-		.from(members)
-		.where(
-			and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
-		);
-	if (!current) throw new Error("Member not found.");
-	const deactivating =
-		current.status === "active" && input.status === "inactive";
 	await db.transaction(async (tx) => {
 		// The membership merge lock (#1035), SHARED, before any row lock or write
 		// (#1189): the global rule, see `applyMemberRemove`. A removal holds it
@@ -614,24 +634,81 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 		// removal took the slots, then the member row: 40P01. A member the removal
 		// deleted while this waited is refused with `CLUB_BUSY_MESSAGE`.
 		await lockMembershipsAgainstMerge(tx, [input.memberId]);
+		// The status is read HERE, under the row lock (#1239): two admins racing
+		// (end + reactivate) each decide from the state the other left, never
+		// from a stale pre-transaction read.
+		const [current] = await tx
+			.select()
+			.from(members)
+			.where(
+				and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
+			)
+			.for("update");
+		if (!current) throw new Error("Member not found.");
+		// Same → same (including former → former) is a no-op: no write, no log.
+		if (current.status === input.status) return;
+		const deactivating =
+			current.status === "active" && input.status === "inactive";
+		// Leaving the roster for good (#1239): same release of upcoming slots as
+		// going inactive, plus the end date and the open officer terms.
+		const ending = current.status !== "former" && input.status === "former";
+		const releasing = deactivating || ending;
+		const now = new Date();
 		// Guardrail (#187): deactivating an admin must not strand the club with
 		// zero active admins — that would silently bypass the demote guard.
-		if (deactivating && current.clubRole === "admin") {
+		if ((deactivating || ending) && current.clubRole === "admin") {
 			await assertKeepsAnActiveAdmin(
 				tx,
 				input.clubId,
 				input.memberId,
-				"You can't deactivate the club's last admin — promote another member to admin first.",
+				ending
+					? "You can't end the membership of the club's last admin — promote another member to admin first."
+					: "You can't deactivate the club's last admin — promote another member to admin first.",
 			);
+		}
+		// `ended_at` is the club-local day the membership ended; any move away from
+		// former clears it (#1239).
+		let endedAt: string | null = current.endedAt;
+		if (ending) {
+			const [club] = await tx
+				.select({ timezone: clubs.timezone })
+				.from(clubs)
+				.where(eq(clubs.id, input.clubId));
+			endedAt = localDateKey(now, club?.timezone || "UTC");
+		} else if (current.status === "former") {
+			endedAt = null;
 		}
 		await tx
 			.update(members)
-			.set({ status: input.status })
+			.set({ status: input.status, endedAt })
 			.where(eq(members.id, input.memberId));
+		if (ending) {
+			// Every open officer term closes today, in this transaction, so a
+			// failure here leaves the status unchanged. A term that has not begun
+			// yet ends when it starts, never before: a start on a later club-local
+			// day, or later today, both give `term_end = term_start`. Every other
+			// term ends at `now`, which is the club-local today's instant.
+			const open = await tx
+				.select({ id: officerTerms.id, termStart: officerTerms.termStart })
+				.from(officerTerms)
+				.where(
+					and(
+						eq(officerTerms.membershipId, input.memberId),
+						isNull(officerTerms.termEnd),
+					),
+				);
+			for (const t of open) {
+				const termEnd = t.termStart && t.termStart > now ? t.termStart : now;
+				await tx
+					.update(officerTerms)
+					.set({ termEnd, updatedAt: now })
+					.where(eq(officerTerms.id, t.id));
+			}
+		}
 		// Free up their upcoming roles so the VPE can re-fill them; past slots
 		// and a completed meeting's slots stay assigned (history preserved).
 		// A cancelled future meeting is released too (#1057, #1154).
-		if (deactivating) {
+		if (releasing) {
 			const upcoming = await tx
 				.select({ id: roleSlots.id })
 				.from(roleSlots)
@@ -694,6 +771,9 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 			detail: {
 				before: { status: current.status },
 				after: { status: input.status },
+				...(ending || current.status === "former"
+					? { endedAt: { before: current.endedAt, after: endedAt } }
+					: {}),
 			},
 		});
 	});
@@ -1342,4 +1422,25 @@ export async function applyBulkImport(
 		inserted: insertedIds.length,
 		skipped: preview.length - insertedIds.length,
 	};
+}
+
+export const listFormerMembersSchema = z.object({ clubId: z.string().uuid() });
+
+export interface FormerMemberRow {
+	id: string;
+	name: string;
+	/** Club-local `YYYY-MM-DD`, or null when the end date is unknown. */
+	endedAt: string | null;
+}
+
+/** The club's former members (#1239), newest end first, unknown dates last,
+ *  then by name. The caller's admin gate is `requireClubRole` in `members.ts`. */
+export async function loadFormerMembers(
+	clubId: string,
+): Promise<FormerMemberRow[]> {
+	return db
+		.select({ id: members.id, name: members.name, endedAt: members.endedAt })
+		.from(members)
+		.where(and(eq(members.clubId, clubId), eq(members.status, "former")))
+		.orderBy(sql`${members.endedAt} DESC NULLS LAST`, asc(members.name));
 }
