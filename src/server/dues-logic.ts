@@ -15,6 +15,7 @@ import { z } from "zod";
 import { db } from "#/db";
 import { duesPeriods, memberDues, members } from "#/db/schema";
 import { selectActivePeriodId } from "#/lib/dues";
+import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
 
 export type DuesStatus = "paid" | "waived";
 
@@ -397,6 +398,12 @@ export async function recordDuesPayment(
 		);
 	}
 	await db.transaction(async (tx) => {
+		// The membership merge lock (#1035), SHARED, before the first row lock
+		// (#1217). The first upsert may lock an existing `member_dues` row and the
+		// second INSERT key-shares the member; a removal holds the member row and
+		// cascades into `member_dues`: 40P01. A member removed meanwhile is refused
+		// with `CLUB_BUSY_MESSAGE`.
+		await lockMembershipsAgainstMerge(tx, [input.membershipId]);
 		await upsertDuesRow(
 			{
 				membershipId: input.membershipId,

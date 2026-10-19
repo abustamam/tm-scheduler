@@ -112,6 +112,10 @@ import {
 	separateGuestFromMemberPerson,
 } from "./guests-logic";
 import {
+	lockMembershipForMerge,
+	lockMembershipsAgainstMerge,
+} from "./membership-merge-lock";
+import {
 	MENTOR_REQUEST_MEMBER_FKS,
 	MENTORSHIP_MEMBER_FKS,
 	memberHasMentorRequest,
@@ -2973,6 +2977,12 @@ export async function applyUnlinkGuestFromMember(
 			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
 			.limit(1);
 		if (!peek) throw new Error("Guest not found in this club.");
+		// The membership merge lock (#1035), SHARED, before the guest row lock
+		// (#1217). A removal holds it EXCLUSIVE, then the member's slots, then
+		// needs this guest row (`converted_membership_id` is ON DELETE SET NULL);
+		// this writer held the guest row and then bulk-updated those slots: 40P01.
+		// The pointer is read unlocked here and compared again under the row lock.
+		await lockMembershipsAgainstMerge(tx, [peek.convertedMembershipId]);
 		const [peekMember] = peek.convertedMembershipId
 			? await tx
 					.select({ personId: members.personId })
@@ -3422,6 +3432,15 @@ export async function applyUndoGuestConversion(
 			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
 			.limit(1);
 		if (!peek) throw new Error("Guest not found in this club.");
+		// The membership merge lock (#1035), EXCLUSIVE, before the guest row lock
+		// (#1217): this path deletes the membership, as a removal does, so it takes
+		// the same lock the removal takes, in the same place. The removal holds it,
+		// then the slots, then the member row, then needs this guest row (SET NULL);
+		// this writer held the guest row and then the member row: 40P01. The pointer
+		// is read unlocked and compared again under the row lock.
+		if (peek.convertedMembershipId) {
+			await lockMembershipForMerge(tx, peek.convertedMembershipId);
+		}
 		const [peekMember] = peek.convertedMembershipId
 			? await tx
 					.select({ personId: members.personId })
