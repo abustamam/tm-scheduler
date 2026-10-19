@@ -1145,11 +1145,12 @@ function MemberActions({
 								</select>
 							)}
 						</div>
-						<fieldset className="space-y-2">
+						<fieldset className="space-y-2" disabled={isFormer}>
 							<legend className="font-medium text-sm">Offices held</legend>
 							<p className="text-muted-foreground text-xs">
-								A member can hold more than one office at once. Assigning any
-								office grants full club-admin access.
+								{isFormer
+									? "A former member can't hold an office. Reactivate them first."
+									: "A member can hold more than one office at once. Assigning any office grants full club-admin access."}
 							</p>
 							<div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
 								{OFFICER_POSITIONS.map((pos) => (

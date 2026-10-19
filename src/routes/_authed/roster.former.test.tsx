@@ -74,6 +74,11 @@ async function renderRoute(
 	members: ReturnType<typeof memberRow>[],
 	canManage: boolean,
 	formerMembers: { id: string; name: string; endedAt: string | null }[],
+	opts: {
+		officerPositions?: string[];
+		impersonating?: { mode: "read_only"; clubId: string } | null;
+		formerFailed?: boolean;
+	} = {},
 ) {
 	vi.spyOn(Route, "useRouteContext").mockReturnValue({
 		clubs: [
@@ -85,8 +90,8 @@ async function renderRoute(
 			},
 		],
 		activeClubId: CLUB_ID,
-		officerPositions: [],
-		impersonating: null,
+		officerPositions: opts.officerPositions ?? [],
+		impersonating: opts.impersonating ?? null,
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
 	vi.spyOn(Route, "useLoaderData").mockReturnValue({
@@ -95,6 +100,7 @@ async function renderRoute(
 		pathways: {},
 		formerPathwaysRequested: false,
 		formerMembers,
+		formerFailed: opts.formerFailed ?? false,
 		timezone: "UTC",
 		now: Date.parse("2026-09-15T12:00:00Z"),
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
@@ -129,6 +135,35 @@ describe("roster former members (#1239)", () => {
 		expect(screen.getByText("Former members (2)")).toBeTruthy();
 		cleanup();
 		await renderRoute([memberRow("Ada Active", "active")], false, former);
+		expect(screen.queryByText(/Former members \(/)).toBeNull();
+	});
+
+	// protects=an officer who is NOT a stored admin sees the link (the server fn admits an effective admin), and a "View as" read-only session does not;
+	// fails_when=the link keys off the stored role alone, or renders for a session the server refuses;
+	// no_claim=the server gate itself (members-former.integration.test.ts); the session shape is stubbed.
+	it("shows the link to an officer who is not an admin, not to a view-as session", async () => {
+		const former = [{ id: "a", name: "Fred Former", endedAt: "2024-01-01" }];
+		await renderRoute([memberRow("Ada Active", "active")], false, former, {
+			officerPositions: ["president"],
+		});
+		expect(screen.getByText("Former members (1)")).toBeTruthy();
+		cleanup();
+		await renderRoute([memberRow("Ada Active", "active")], true, former, {
+			impersonating: { mode: "read_only", clubId: CLUB_ID },
+		});
+		expect(screen.queryByText(/Former members \(/)).toBeNull();
+	});
+
+	// protects=a failed former-members load is shown as an error, never as "Former members (0)";
+	// fails_when=the failure is swallowed into an empty count;
+	// no_claim=that the loader sets formerFailed (stubbed here).
+	it("shows an error, not a zero count, when the list failed to load", async () => {
+		await renderRoute([memberRow("Ada Active", "active")], true, [], {
+			formerFailed: true,
+		});
+		expect(
+			screen.getByText("Former members could not be loaded."),
+		).toBeTruthy();
 		expect(screen.queryByText(/Former members \(/)).toBeNull();
 	});
 });

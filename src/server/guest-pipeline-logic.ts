@@ -2410,6 +2410,7 @@ export async function applyConvertGuestToMember(
 			.select({
 				id: members.id,
 				status: members.status,
+				endedAt: members.endedAt,
 				clubRole: members.clubRole,
 			})
 			.from(members)
@@ -2425,6 +2426,9 @@ export async function applyConvertGuestToMember(
 		// the fact distinguishes a membership convert reactivated from one that
 		// was active all along.
 		let reactivatedFrom: "inactive" | "former" | undefined;
+		// The `ended_at` a FORMER membership carried before convert cleared it
+		// (#1239), so undo can put the date back with the status.
+		let priorEndedAt: string | null = null;
 		// The elevated `club_role` the wake-up wrote back DOWN, when it found one.
 		// Recorded for the same two reasons, plus a third: the roster needs to be
 		// able to restore it deliberately, and a demotion nothing recorded is one
@@ -2450,14 +2454,15 @@ export async function applyConvertGuestToMember(
 			// can match the wrong human (#561), and the notice these flags drive is
 			// the admin's chance to notice.
 			//
-			// `membership_status` is only (active, inactive) — see `schema.ts` — so
-			// "not active" is `inactive` and nothing else. Do NOT widen this to a
-			// status the enum cannot hold; `guest-convert-privilege.guard.test.ts`
+			// `membership_status` is (active, inactive, former) — see `schema.ts` — so
+			// "not active" is `inactive` or `former` and nothing else. Do NOT widen
+			// this to a status the enum cannot hold; `guest-convert-privilege.guard.test.ts`
 			// fails on the widening rather than letting this record a wrong prior
 			// state.
 			if (existingMembership.status !== "active") {
 				reactivatedFrom =
 					existingMembership.status === "former" ? "former" : "inactive";
+				priorEndedAt = existingMembership.endedAt ?? null;
 				// The WAKE-UP IS A PRIVILEGE GRANT, and that is the half #501 missed.
 				// `members.status === 'active'` is the write-authorization gate itself
 				// — `requireMembership` sends a non-active membership to
@@ -2512,7 +2517,7 @@ export async function applyConvertGuestToMember(
 				//
 				// The office was already vacant everywhere THE GATE AND THE AGENDA
 				// look. Both of those readers drop an inactive holder:
-				// `currentOfficersForClub` skips `status === "inactive"`, so the
+				// `currentOfficersForClub` skips any status but `active`, so the
 				// printed agenda's officer grid has been showing the position as Open,
 				// and `loadOfficerSeats` filters on `status = 'active'`, so the COT
 				// seats behind DCP goal 9 never listed them. The club has been running
@@ -2719,6 +2724,8 @@ export async function applyConvertGuestToMember(
 				createdMembership,
 				createdPerson,
 				...(reactivatedFrom ? { reactivatedFrom } : {}),
+				// Present only for a former wake-up (#1239); null = date was unknown.
+				...(reactivatedFrom === "former" ? { priorEndedAt } : {}),
 				...(demotedFrom ? { demotedFrom } : {}),
 				...(closedOfficerPositions.length > 0
 					? { closedOfficerPositions }
@@ -2779,6 +2786,10 @@ export interface LinkGuestResult {
 	/** Slots re-pointed from the guest to the member — also recorded in the log. */
 	slotIds: string[];
 }
+
+/** The refusal for a link aimed at a former member (#1239). */
+export const LINK_MEMBER_FORMER_MESSAGE =
+	"That member's membership has ended — reactivate them before linking a guest to them.";
 
 /**
  * Link an EXISTING guest to an EXISTING roster member (#635) — a retroactive
@@ -2865,12 +2876,19 @@ export async function applyLinkGuestToMember(
 		// membership to another Person while this waited would otherwise point the
 		// guest at a Person that no longer holds it.
 		const [memberNow] = await tx
-			.select({ personId: members.personId })
+			.select({ personId: members.personId, status: members.status })
 			.from(members)
 			.where(eq(members.id, input.memberId))
 			.limit(1);
 		if (memberNow?.personId !== member.personId) {
 			throw new Error(RECORD_CHANGED_MESSAGE);
+		}
+		// A former member (#1239) is off the roster: linking would move the
+		// guest's slots, future ones included, onto someone who cannot hold them.
+		// Read here, under the Person locks, so an end-membership racing this
+		// link is seen.
+		if (memberNow.status === "former") {
+			throw new Error(LINK_MEMBER_FORMER_MESSAGE);
 		}
 
 		// `returning` is what makes this reversible. `role_slots` has a CHECK
@@ -3144,6 +3162,12 @@ type ConversionRecord = {
 	 */
 	reactivatedFrom?: "inactive" | "former";
 	/**
+	 * The `ended_at` the former membership carried before convert cleared it
+	 * (#1239); null = it was unknown. Absent on every record written before this
+	 * key existed, which undo restores as NULL.
+	 */
+	priorEndedAt?: string | null;
+	/**
 	 * The `club_role` the wake-up wrote back down to `member` (#501 review).
 	 * `club_role` is only (admin, member) and `member` is the floor written to,
 	 * so `admin` is the sole reachable value. Absent whenever `reactivatedFrom`
@@ -3205,12 +3229,15 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
 	const demotedFrom =
 		d.demotedFrom === "admin" ? ("admin" as const) : undefined;
 	if (d.demotedFrom !== undefined && demotedFrom === undefined) return null;
+	const priorEndedAt =
+		typeof d.priorEndedAt === "string" ? d.priorEndedAt : null;
 	return {
 		personId: d.personId,
 		slotIds: d.slotIds.filter((s): s is string => typeof s === "string"),
 		createdMembership: d.createdMembership,
 		createdPerson: d.createdPerson,
 		reactivatedFrom,
+		priorEndedAt,
 		demotedFrom,
 	};
 }
@@ -3632,6 +3659,10 @@ export async function applyUndoGuestConversion(
 				.update(members)
 				.set({
 					...(record.reactivatedFrom ? { status: record.reactivatedFrom } : {}),
+					// A former wake-up cleared `ended_at`; put the date back (#1239).
+					...(record.reactivatedFrom === "former"
+						? { endedAt: record.priorEndedAt ?? null }
+						: {}),
 					...(record.demotedFrom ? { clubRole: record.demotedFrom } : {}),
 				})
 				.where(eq(members.id, membershipId));
@@ -3742,7 +3773,9 @@ export async function loadLinkCandidates(input: {
 	const roster = await db
 		.select({ id: members.id, name: members.name })
 		.from(members)
-		.where(eq(members.clubId, input.clubId))
+		// A former member (#1239) is not a link target: `applyLinkGuestToMember`
+		// refuses one, so offering them here would be a dead end.
+		.where(and(eq(members.clubId, input.clubId), ne(members.status, "former")))
 		.orderBy(asc(members.name));
 
 	// Meetings where this guest holds a role. Empty is the common case for a

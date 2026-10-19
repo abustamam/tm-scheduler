@@ -62,11 +62,28 @@ const { loadPublicPersonalMeetingView } = await import(
 );
 const { getOverdueDues } = await import("#/server/dues-logic");
 const { countActiveMembers } = await import("#/server/dcp-logic");
-const { applyConvertGuestToMember, captureGuestVisit } = await import(
-	"#/server/guest-pipeline-logic"
+const {
+	applyConvertGuestToMember,
+	applyLinkGuestToMember,
+	applyUndoGuestConversion,
+	captureGuestVisit,
+	LINK_MEMBER_FORMER_MESSAGE,
+	loadLinkCandidates,
+} = await import("#/server/guest-pipeline-logic");
+const { applyMemberEdit } = await import("#/server/members-logic");
+const { prepareMemberInvite } = await import("#/server/account-invite-logic");
+const { applyUpdateGuestProfile, INTRODUCER_FORMER_MESSAGE, loadGuestProfile } =
+	await import("#/server/guests-logic");
+const { collapseMemberships } = await import(
+	"#/server/membership-collapse-logic"
 );
+const { loadMeetingSlots } = await import("#/server/meeting-slots-logic");
 
 type Status = "active" | "inactive" | "former";
+
+// 22:30 on 2026-03-09 in America/Chicago (CDT, UTC-5) but already 2026-03-10 in
+// UTC: the one instant where a UTC-formatted date and the club-local day differ.
+const FIXED_NOW = "2026-03-10T03:30:00.000Z";
 
 describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 	let seed: SeededClub;
@@ -130,15 +147,20 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 
 	describe("transition table", () => {
 		// protects=an active member's end sets status former, ended_at = club-local today, logs once;
-		// fails_when=ended_at is NULL/UTC-wrong, or no activity_log row is written;
-		// no_claim=the date near a timezone midnight (computed with the same helper).
-		it("active -> former sets ended_at to today and logs", async () => {
-			const id = await addMember("Ann Active");
-			await set(id, "former");
-			const row = await rowOf(id);
-			expect(row.status).toBe("former");
-			expect(row.endedAt).toBe(await clubToday());
-			expect(await statusLogCount(id)).toBe(1);
+		// fails_when=ended_at is NULL or the UTC date (2026-03-10), or no activity_log row is written;
+		// no_claim=none beyond protects; a fixed Date (only Date is faked) is 22:30 Chicago, 03:30 UTC next day.
+		it("active -> former sets ended_at to the club-local today and logs", async () => {
+			vi.useFakeTimers({ toFake: ["Date"], now: new Date(FIXED_NOW) });
+			try {
+				const id = await addMember("Ann Active");
+				await set(id, "former");
+				const row = await rowOf(id);
+				expect(row.status).toBe("former");
+				expect(row.endedAt).toBe("2026-03-09");
+				expect(await statusLogCount(id)).toBe(1);
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 
 		// protects=an inactive member's end also lands as former with ended_at;
@@ -213,30 +235,70 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 	});
 
 	describe("officer terms", () => {
-		// protects=ending a two-office member closes BOTH open terms today, and Reactivate opens none;
-		// fails_when=a term stays open, or reactivation reopens one;
-		// no_claim=a future-dated term (termStart after now) is clamped to its start in code only.
+		// protects=ending a two-office member closes BOTH open terms at the end instant, Reactivate opens none;
+		// fails_when=a term stays open, ends at another instant, or reactivation reopens one;
+		// no_claim=a fixed Date (only Date is faked) stands in for "now"; the club is America/Chicago.
 		it("closes every open term; reactivation opens none", async () => {
-			const id = await addMember("Olive Officer");
-			await openTerm(id, "president");
-			await openTerm(id, "treasurer");
-			await set(id, "former");
-			const terms = await testDb
-				.select()
-				.from(officerTerms)
-				.where(eq(officerTerms.membershipId, id));
-			expect(terms).toHaveLength(2);
-			for (const t of terms) {
-				expect(t.termEnd).not.toBeNull();
-				expect(localDateKey(t.termEnd as Date, "UTC")).toBe(await clubToday());
+			vi.useFakeTimers({ toFake: ["Date"], now: new Date(FIXED_NOW) });
+			try {
+				const id = await addMember("Olive Officer");
+				await openTerm(id, "president");
+				await openTerm(id, "treasurer");
+				await set(id, "former");
+				const terms = await testDb
+					.select()
+					.from(officerTerms)
+					.where(eq(officerTerms.membershipId, id));
+				expect(terms).toHaveLength(2);
+				for (const t of terms) {
+					expect(t.termEnd?.toISOString()).toBe(FIXED_NOW);
+				}
+				await set(id, "active");
+				const after = await testDb
+					.select()
+					.from(officerTerms)
+					.where(and(eq(officerTerms.membershipId, id)));
+				expect(after.every((t) => t.termEnd !== null)).toBe(true);
+				expect(after).toHaveLength(2);
+			} finally {
+				vi.useRealTimers();
 			}
-			await set(id, "active");
-			const after = await testDb
-				.select()
-				.from(officerTerms)
-				.where(and(eq(officerTerms.membershipId, id)));
-			expect(after.every((t) => t.termEnd !== null)).toBe(true);
-			expect(after).toHaveLength(2);
+		});
+
+		// protects=a term starting after today (a later club-local day, or later today) ends at its own start, never before it;
+		// fails_when=term_end lands before term_start, or a started term is not closed at "now";
+		// no_claim=a fixed Date stands in for now; "later today" is 22:30 Chicago on 2026-03-09.
+		it("a not-yet-started term ends at its start; a started one at now", async () => {
+			vi.useFakeTimers({ toFake: ["Date"], now: new Date(FIXED_NOW) });
+			try {
+				const id = await addMember("Fiona Future");
+				const mk = (
+					position: "president" | "treasurer" | "secretary",
+					at: string,
+				) =>
+					testDb
+						.insert(officerTerms)
+						.values({ membershipId: id, position, termStart: new Date(at) });
+				await mk("president", "2026-03-12T15:00:00.000Z"); // a later club-local day
+				await mk("treasurer", "2026-03-10T04:00:00.000Z"); // 23:00 Chicago, later today
+				await mk("secretary", "2026-03-01T15:00:00.000Z"); // already started
+				await set(id, "former");
+				const byPos = Object.fromEntries(
+					(
+						await testDb
+							.select()
+							.from(officerTerms)
+							.where(eq(officerTerms.membershipId, id))
+					).map((t) => [t.position, t.termEnd?.toISOString()]),
+				);
+				expect(byPos).toEqual({
+					president: "2026-03-12T15:00:00.000Z",
+					treasurer: "2026-03-10T04:00:00.000Z",
+					secretary: FIXED_NOW,
+				});
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 
 		// protects=ending is ONE transaction: a failing term close leaves status, ended_at and log untouched;
@@ -461,5 +523,261 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 					"former",
 			),
 		).toBe(true);
+	});
+
+	describe("fix round: refusals and restores", () => {
+		const newGuest = async (name = "Gus Guest") => {
+			const email = `g-${randomUUID()}@example.com`;
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name,
+				email,
+			});
+			return { guestId, email };
+		};
+
+		// protects=collapsing two memberships keeps the best status (active > inactive > former) and a former result keeps its ended_at;
+		// fails_when=a former row outranks an inactive one, or the merged former row loses its date;
+		// no_claim=the rest of the merge (slots, notes) is covered by the collapse suites.
+		it("collapseMemberships: active > inactive > former, endedAt kept", async () => {
+			const merge = async (a: Status, b: Status, aEnd?: string) => {
+				const keeper = await addMember(
+					`K ${a}`,
+					a,
+					aEnd ? { endedAt: aEnd } : {},
+				);
+				const absorbed = await addMember(
+					`A ${b}`,
+					b,
+					b === "former" ? { endedAt: "2021-05-05" } : {},
+				);
+				await testDb.transaction((tx) =>
+					collapseMemberships(tx, seed.clubId, keeper, absorbed),
+				);
+				return rowOf(keeper);
+			};
+			expect((await merge("former", "active", "2020-01-01")).status).toBe(
+				"active",
+			);
+			const inactive = await merge("former", "inactive", "2020-01-01");
+			expect(inactive.status).toBe("inactive");
+			expect(inactive.endedAt).toBeNull();
+			const former = await merge("former", "former", "2020-01-01");
+			expect(former.status).toBe("former");
+			expect(former.endedAt).toBe("2020-01-01");
+			const fallback = await merge("former", "former");
+			expect(fallback.endedAt).toBe("2021-05-05");
+		});
+
+		// protects=ending the club's last admin is refused, with the "end the membership" wording, and nothing changes;
+		// fails_when=the last admin can be ended, or the message still says "deactivate";
+		// no_claim=the inactive wording (covered by the existing deactivate tests).
+		it("refuses to end the last active admin", async () => {
+			await testDb
+				.update(members)
+				.set({ status: "inactive" })
+				.where(eq(members.id, seed.memberId));
+			await expect(set(seed.adminMemberId, "former")).rejects.toThrow(
+				/end the membership of the club's last admin/,
+			);
+			const row = await rowOf(seed.adminMemberId);
+			expect(row.status).toBe("active");
+			expect(row.endedAt).toBeNull();
+		});
+
+		// protects=undoing a conversion that woke a FORMER member puts back former AND the prior ended_at;
+		// fails_when=undo restores former with ended_at NULL, or a record without the key breaks undo;
+		// no_claim=the inactive branch (existing #501 tests).
+		it("undo restores former with its ended_at", async () => {
+			const { guestId, email } = await newGuest("Una Undo");
+			const personId = await seedPerson({ name: "Una Undo", email });
+			const [m] = await testDb
+				.insert(members)
+				.values({
+					clubId: seed.clubId,
+					personId,
+					name: "Una Undo",
+					status: "former",
+					endedAt: "2019-04-04",
+				})
+				.returning({ id: members.id });
+			await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+				confirmedEmail: email,
+			});
+			expect((await rowOf(m.id)).endedAt).toBeNull();
+			await applyUndoGuestConversion({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			const row = await rowOf(m.id);
+			expect(row.status).toBe("former");
+			expect(row.endedAt).toBe("2019-04-04");
+		});
+
+		// protects=a conversion record WITHOUT priorEndedAt (written before this key) restores former with ended_at NULL;
+		// fails_when=the missing key throws or restores a stale date;
+		// no_claim=how an old record is produced: the key is deleted from the log row by hand.
+		it("undo of an old record without priorEndedAt restores NULL", async () => {
+			const { guestId, email } = await newGuest("Olga Old");
+			const personId = await seedPerson({ name: "Olga Old", email });
+			const [m] = await testDb
+				.insert(members)
+				.values({
+					clubId: seed.clubId,
+					personId,
+					name: "Olga Old",
+					status: "former",
+					endedAt: "2018-08-08",
+				})
+				.returning({ id: members.id });
+			await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+				confirmedEmail: email,
+			});
+			await testDb.execute(
+				sql`UPDATE activity_log SET detail = detail - 'priorEndedAt' WHERE club_id = ${seed.clubId} AND action = 'member_add' AND detail ? 'priorEndedAt'`,
+			);
+			await applyUndoGuestConversion({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			const row = await rowOf(m.id);
+			expect(row.status).toBe("former");
+			expect(row.endedAt).toBeNull();
+		});
+
+		// protects=loadGuestProfile offers no former member as an introducer unless one is already on file;
+		// fails_when=a former member is pickable, or the on-file one vanishes from the roster;
+		// no_claim=the dialog's rendering.
+		it("loadGuestProfile keeps an on-file former introducer only", async () => {
+			const onFile = await addMember("Fay OnFile", "former");
+			const other = await addMember("Fred Other", "former");
+			const { guestId } = await newGuest();
+			await testDb.execute(
+				sql`UPDATE guests SET introduced_by_member_id = ${onFile} WHERE id = ${guestId}`,
+			);
+			const profile = await loadGuestProfile(seed.clubId, guestId);
+			const ids = profile?.roster.map((r) => r.id) ?? [];
+			expect(ids).toContain(onFile);
+			expect(ids).not.toContain(other);
+		});
+
+		// protects=a former member cannot be NEWLY recorded as a guest's introducer, but an on-file one survives a re-save;
+		// fails_when=the write accepts a new former introducer, or refuses re-saving the existing one;
+		// no_claim=inactive introducers (unchanged, pickable).
+		it("applyUpdateGuestProfile refuses a new former introducer", async () => {
+			const former = await addMember("Fern Former", "former");
+			const inactive = await addMember("Ivy Inactive", "inactive");
+			const { guestId } = await newGuest();
+			const save = (introducedByMemberId: string) =>
+				applyUpdateGuestProfile({
+					clubId: seed.clubId,
+					guestId,
+					kind: "visitor",
+					introducedByMemberId,
+				});
+			await expect(save(former)).rejects.toThrow(INTRODUCER_FORMER_MESSAGE);
+			await save(inactive);
+			await testDb.execute(
+				sql`UPDATE guests SET introduced_by_member_id = ${former} WHERE id = ${guestId}`,
+			);
+			await expect(save(former)).resolves.toEqual({ ok: true });
+		});
+
+		// protects=a former member is neither offered as a link target nor accepted by the link write, and no slot moves;
+		// fails_when=the picker lists them, or the write moves the guest's slots onto them;
+		// no_claim=inactive link targets (unchanged).
+		it("guest link: candidates omit former and the write refuses one", async () => {
+			const former = await addMember("Fran Former", "former");
+			const inactive = await addMember("Ina Lapsed", "inactive");
+			const { guestId } = await newGuest();
+			await testDb
+				.update(roleSlots)
+				.set({ assignedGuestId: guestId, assignedMemberId: null })
+				.where(eq(roleSlots.id, seed.slotId));
+			const candidates = (
+				await loadLinkCandidates({ clubId: seed.clubId, guestId })
+			).map((c) => c.id);
+			expect(candidates).toContain(inactive);
+			expect(candidates).not.toContain(former);
+			await expect(
+				applyLinkGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					memberId: former,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(LINK_MEMBER_FORMER_MESSAGE);
+			const [slot] = await testDb
+				.select()
+				.from(roleSlots)
+				.where(eq(roleSlots.id, seed.slotId));
+			expect(slot.assignedGuestId).toBe(guestId);
+			expect(slot.assignedMemberId).toBeNull();
+		});
+
+		// protects=a single invite to a former member is refused server-side;
+		// fails_when=prepareMemberInvite returns a sendable outcome for a former member;
+		// no_claim=the bulk path (its filter is pinned by the source scan).
+		it("prepareMemberInvite refuses a former member", async () => {
+			const id = await addMember("Ivo Former", "former");
+			await expect(
+				prepareMemberInvite({ clubId: seed.clubId, memberId: id }),
+			).rejects.toThrow(/membership has ended/);
+		});
+
+		// protects=an officer edit cannot open a term for a former member, but may send an empty set;
+		// fails_when=a term opens for a former member, or clearing offices is refused;
+		// no_claim=the form's disabled fieldset (UI).
+		it("applyMemberEdit refuses offices for a former member", async () => {
+			const id = await addMember("Otto Former", "former");
+			const edit = (officerPositions: ("president" | "treasurer")[]) =>
+				applyMemberEdit({
+					clubId: seed.clubId,
+					memberId: id,
+					name: "Otto Former",
+					officerPositions,
+					actorMemberId: seed.adminMemberId,
+				});
+			await expect(edit(["president"])).rejects.toThrow(/can't hold an office/);
+			expect(
+				await testDb
+					.select()
+					.from(officerTerms)
+					.where(eq(officerTerms.membershipId, id)),
+			).toHaveLength(0);
+			await expect(edit([])).resolves.toBeDefined();
+		});
+
+		// protects=a past meeting's agenda slot still renders a former member by name;
+		// fails_when=the slot's assignee name resolves to null once the member is former;
+		// no_claim=the printed agenda's layout; this is the shared slot loader the meeting page and print route read.
+		it("AC3: a past agenda still shows the former member's name", async () => {
+			const id = await addMember("Hugo Historic");
+			const [past] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: seed.clubId,
+					scheduledAt: new Date(Date.now() - 5 * 86400000),
+					theme: "Past",
+				} as typeof meetings.$inferInsert)
+				.returning({ id: meetings.id });
+			await testDb
+				.update(roleSlots)
+				.set({ meetingId: past.id, assignedMemberId: id, status: "claimed" })
+				.where(eq(roleSlots.id, seed.slotId));
+			await set(id, "former");
+			const slots = await loadMeetingSlots(past.id);
+			const held = slots.find((sl) => sl.id === seed.slotId);
+			expect(held?.assigneeName).toBe("Hugo Historic");
+			expect(held?.assigneeId).toBe(id);
+		});
 	});
 });

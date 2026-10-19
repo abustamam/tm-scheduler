@@ -89,18 +89,24 @@ export const Route = createFileRoute("/_authed/roster")({
 				pathways: {},
 				formerPathwaysRequested: false,
 				formerMembers: [] as FormerMemberItem[],
+				formerFailed: false,
 				// Nothing is dated without a club, so any fixed zone will do.
 				timezone: "UTC",
 				now: Date.now(),
 			};
 		}
+		// The admin the server fn will actually serve: an effective admin, minus
+		// "View as this club" (a read-only session passes the client admin check
+		// but `listFormerMembers` refuses it). The component uses the same test.
 		const isAdmin =
 			!!context.clubs &&
 			!!effectiveAdminClub({
 				clubs: context.clubs,
 				activeClubId: clubId,
 				officerPositions: context.officerPositions ?? [],
-			});
+			}) &&
+			exportLinkAllowed(context.impersonating, clubId);
+		let formerFailed = false;
 		const [members, upcoming, pathways, { timezone }, formerMembers] =
 			await Promise.all([
 				listClubMembers({ data: clubId }),
@@ -117,12 +123,14 @@ export const Route = createFileRoute("/_authed/roster")({
 				import("#/server/clubs").then(({ loadClubTimezoneSettings }) =>
 					loadClubTimezoneSettings({ data: clubId }),
 				),
-				// Admin-only list (#1239): the server fn is the gate; a refusal (an
-				// officer who is not a stored admin) just means no link.
+				// Admin-only list (#1239): the server fn is the gate. Only a user who
+				// will see the link asks, so a failure here is a real failure: it is
+				// flagged and shown on the link, never rendered as "(0)".
 				isAdmin
-					? listFormerMembers({ data: { clubId } }).catch(
-							() => [] as FormerMemberItem[],
-						)
+					? listFormerMembers({ data: { clubId } }).catch(() => {
+							formerFailed = true;
+							return [] as FormerMemberItem[];
+						})
 					: Promise.resolve([] as FormerMemberItem[]),
 			]);
 		return {
@@ -131,6 +139,7 @@ export const Route = createFileRoute("/_authed/roster")({
 			pathways,
 			formerPathwaysRequested: deps.includeFormer,
 			formerMembers,
+			formerFailed,
 			timezone,
 			// Pinned here, not sampled while rendering, so the SSR pass and the
 			// hydration pass count tenure months from one instant (#1017).
@@ -258,6 +267,7 @@ function Roster() {
 		pathways,
 		formerPathwaysRequested,
 		formerMembers: formerList,
+		formerFailed,
 		timezone,
 		now,
 	} = Route.useLoaderData();
@@ -648,19 +658,23 @@ function Roster() {
 				served.
 			</p>
 
-			{canManage ? (
+			{servedAsAdmin ? (
 				<p className="mt-2 px-0.5 text-xs">
-					<button
-						type="button"
-						className="underline"
-						onClick={() => setFormerOpen(true)}
-					>
-						Former members ({formerMembers.length})
-					</button>
+					{formerFailed ? (
+						<span role="alert">Former members could not be loaded.</span>
+					) : (
+						<button
+							type="button"
+							className="underline"
+							onClick={() => setFormerOpen(true)}
+						>
+							Former members ({formerMembers.length})
+						</button>
+					)}
 				</p>
 			) : null}
 
-			{clubId && canManage ? (
+			{clubId && servedAsAdmin && !formerFailed ? (
 				<FormerMembersDialog
 					open={formerOpen}
 					onOpenChange={setFormerOpen}
@@ -1839,7 +1853,7 @@ function FormerMembersDialog({
 						No former members.
 					</p>
 				) : (
-					<ul className="max-h-[50vh] divide-y divide-[var(--line)] overflow-y-auto">
+					<ul className="divide-y divide-[var(--line)]">
 						{formerMembers.map((m) => (
 							<li
 								key={m.id}
