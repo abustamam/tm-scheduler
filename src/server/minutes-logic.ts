@@ -224,8 +224,13 @@ export interface MinutesData {
 }
 
 /** Resolve the club that owns a meeting (throws when the meeting is gone). */
-export async function getMeetingClubId(meetingId: string): Promise<string> {
-	const [row] = await db
+export async function getMeetingClubId(
+	meetingId: string,
+	/** A caller's transaction, so the read does not take a second pool
+	 *  connection while that transaction holds one (#1256). */
+	database: DbOrTx = db,
+): Promise<string> {
+	const [row] = await database
 		.select({ clubId: meetings.clubId })
 		.from(meetings)
 		.where(eq(meetings.id, meetingId))
@@ -794,8 +799,11 @@ async function resolveGuestId(
 export async function requireMemberInMeetingClub(
 	memberId: string,
 	clubId: string,
+	/** As `getMeetingClubId`'s: a caller's transaction, never a second pool
+	 *  connection beside it (#1256). */
+	database: DbOrTx = db,
 ) {
-	const [row] = await db
+	const [row] = await database
 		.select({ id: members.id })
 		.from(members)
 		.where(and(eq(members.id, memberId), eq(members.clubId, clubId)))
@@ -822,15 +830,14 @@ export async function setMemberPresence(
 	},
 	/** The caller's transaction, when the upsert must commit with something else
 	 *  (#1256: the Absent release). Omitted ⇒ the pool, one statement, as ever.
-	 *  With it, the club and membership reads are SKIPPED: they would run on the
-	 *  pool while the transaction holds a connection, and the caller
-	 *  (`setMemberAbsentReleasingRoles`) has already made them. */
+	 *  With it, the club and membership reads run ON the transaction: never
+	 *  skipped (the cross-club check is this writer's own, whoever calls it), and
+	 *  never on the pool beside a held connection. */
 	tx?: DbOrTx,
 ): Promise<void> {
-	if (!tx) {
-		const clubId = await getMeetingClubId(input.meetingId);
-		await requireMemberInMeetingClub(input.memberId, clubId);
-	}
+	const database = tx ?? db;
+	const clubId = await getMeetingClubId(input.meetingId, database);
+	await requireMemberInMeetingClub(input.memberId, clubId, database);
 	const mode = modeForStatus(input.status, input.mode);
 	await (tx ?? db)
 		.insert(meetingAttendance)

@@ -69,17 +69,20 @@ describe("the Absent release wiring (#1256)", () => {
 		expect(writer).toContain("inArray(roleSlots.id, [...args.slotIds])");
 	});
 
-	it("setMemberPresence runs no club or membership read when it is handed a transaction", () => {
+	it("setMemberPresence runs its club and membership reads ON the transaction it is handed", () => {
 		// protects=M1: inside the release's transaction the upsert issues no pool
-		//   query (`getMeetingClubId` / `requireMemberInMeetingClub` run on the pool
-		//   while the transaction holds a connection); the standalone path keeps them
-		// fails_when=the reads are un-gated again (they run per write, in the tx), or
-		//   the standalone path loses them
+		//   query beside the held connection, AND the cross-club membership check
+		//   still runs for every caller (a tx is never a reason to skip it)
+		// fails_when=either read drops the `database` argument (back on the pool),
+		//   or the reads are gated on `!tx` (a tx-passing caller skips the check)
 		// no_claim=pool exhaustion itself, which needs concurrency
 		const body = functionBody(LOGIC, "setMemberPresence");
-		expect(body).toMatch(
-			/if\s*\(!tx\)\s*\{\s*const clubId = await getMeetingClubId\(input\.meetingId\);\s*await requireMemberInMeetingClub\(input\.memberId, clubId\);\s*\}/,
+		expect(body).toContain("const database = tx ?? db;");
+		expect(body).toContain("await getMeetingClubId(input.meetingId, database)");
+		expect(body).toContain(
+			"await requireMemberInMeetingClub(input.memberId, clubId, database)",
 		);
+		expect(body).not.toMatch(/if\s*\(!tx\)/);
 	});
 
 	it("the Absent upsert and the release run in ONE transaction, after both locks, in that order", () => {
