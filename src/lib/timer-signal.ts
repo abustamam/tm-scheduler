@@ -17,18 +17,19 @@
  * - a prepared SPEECH qualifies through `red + TIMING_GRACE_MINUTES` — the
  *   30-second Toastmasters grace (#357), which `timing-window.ts` owns and
  *   which nothing here restates;
- * - a TABLE TOPICS answer is disqualified at `tableTopicsDqSeconds(limits)`,
- *   one second past the club's own cap, which is a club rule and not a grace.
+ * - a TABLE TOPICS answer follows the SAME rule since #1258: one rule, no club
+ *   opt-out, every timed segment is disqualified strictly after red + 0:30.
+ *   Red is the club's own cap; the grace is the same grace.
  *
- * A caller that applied the speech grace to Table Topics would tell a club its
- * 2:45 answer still qualified against a 2:30 cap. That is the two-walls failure
- * `agenda-template-slides.ts` records, where a materialised meeting projected
- * "qualifies 0:30–3:00" beside a non-materialised one saying "2:31+
- * disqualified" — one club, two disqualification rules. Requiring `kind` is
- * what makes a caller state which rule it means instead of inheriting one.
+ * What `kind` still decides is where the window comes from: a speech's own
+ * marks, or Table Topics' cap (the club's, else the standard 2:00).
  */
 import type { TimingMarks } from "./agenda-runsheet";
-import { tableTopicsDqSeconds } from "./table-topics-limits";
+import {
+	resolveTableTopicsLimits,
+	type TableTopicsLimits,
+	tableTopicsLastQualifyingSeconds,
+} from "./table-topics-limits";
 import { TIMING_GRACE_MINUTES } from "./timing-window";
 
 /**
@@ -58,37 +59,29 @@ const MIN_MS = 60_000;
  * simply does not render a clock for such a row (#729 shows only marked rows),
  * so this is the defensive answer rather than the displayed one.
  *
- * `limits` is required in spirit for `kind: "tableTopics"` and optional in the
- * type, because a club that has stated no window genuinely has no
- * disqualification point — `hasTableTopicsLimits` is what decides that, and a
- * caller holding `null` there must get "no DQ" rather than a guessed one. With
- * no limits a Table Topics clock therefore tops out at `red` and never reaches
- * `over`, which is the honest answer: the club has not said when an answer
- * stops counting.
+ * `limits` is the club's stated Table Topics window, or null/undefined for a
+ * club that has stated none; that club runs the standard 1:00-2:00 window, so
+ * it is disqualified after 2:30 like everyone else (#1258). It is ignored for
+ * `kind: "speech"`. Nullable on purpose: "no stated limits" is a real state of
+ * a club, and `resolveTableTopicsLimits` is the one place it becomes a window.
  */
 export function timerSignal(
 	elapsed: number,
 	marks: TimingMarks | null | undefined,
 	kind: TimerKind,
-	limits?: { maxSeconds: number } | null,
+	limits?: TableTopicsLimits | null,
 ): TimerBand {
 	if (!marks) return "under";
-	// THE COMPARISONS ARE NOT THE SAME, and the asymmetry is the rule rather
-	// than a slip.
-	//
-	// A speech qualifies "from 0:30 before green THROUGH 0:30 after red"
-	// (`timing-window.ts`, #357) — the grace instant is still inside the window,
-	// so `over` begins STRICTLY AFTER it, and `qualifyingWindow`'s own
-	// `toMinutes` bound is inclusive for the same reason.
-	//
-	// `tableTopicsDqSeconds` is already "the FIRST disqualifying second" — the
-	// "2:31+" a club prints on its own sheet — so that instant is itself over,
-	// and the comparison is inclusive. Writing both the same way would move one
-	// club's boundary by a second in one direction or the other.
+	// ONE rule (#1258): `over` begins strictly after red + 0:30. A speech reads
+	// it off its marks; Table Topics reads the club's cap (else the standard
+	// one) through `tableTopicsLastQualifyingSeconds`, the same derivation the
+	// printed "2:31+ disqualified" comes from.
 	const over =
 		kind === "speech"
 			? elapsed > (marks.red + TIMING_GRACE_MINUTES) * MIN_MS
-			: limits != null && elapsed >= tableTopicsDqSeconds(limits) * 1000;
+			: elapsed >
+				tableTopicsLastQualifyingSeconds(resolveTableTopicsLimits(limits)) *
+					1000;
 	// Checked FIRST so the DQ decision cannot be shadowed by the red band below.
 	if (over) return "over";
 	if (elapsed >= marks.red * MIN_MS) return "red";

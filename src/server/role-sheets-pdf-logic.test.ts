@@ -259,7 +259,7 @@ describe("renderRoleSheetPdf bounds what the public route renders (#519)", () =>
 			"1:00",
 			"1:45",
 			"2:30",
-			"1:00–2:30",
+			"1:00–3:00",
 		]);
 		const says = sheetScripts(fill.roleNames, fill.tableTopicsLimits)
 			.timer.map((c) => c.say)

@@ -7,10 +7,8 @@
  * for — so every case here sits exactly on a transition, one millisecond below
  * it, or one millisecond above.
  *
- * The two DQ rules are asserted SEPARATELY and against each other. Conflating
- * them is the failure `agenda-template-slides.ts` records, so it is not enough
- * to prove Table Topics disqualifies at its cap: the same fixture has to prove
- * it does NOT wait for the speech grace.
+ * Table Topics disqualifies by the speech rule, red + 0:30 (#1258): one rule,
+ * no club opt-out.
  */
 import { describe, expect, it } from "vitest";
 import type { TimingMarks } from "./agenda-runsheet";
@@ -65,12 +63,18 @@ describe("kind: speech", () => {
 	it("ignores a limits argument entirely", () => {
 		// A caller that passed the club's Table Topics window to a SPEECH row
 		// must not have that window applied — the speech grace is the rule.
-		expect(timerSignal(8 * MIN, SPEECH, "speech", { maxSeconds: 150 })).toBe(
-			"over",
-		);
-		expect(timerSignal(7 * MIN, SPEECH, "speech", { maxSeconds: 150 })).toBe(
-			"red",
-		);
+		expect(
+			timerSignal(8 * MIN, SPEECH, "speech", {
+				minSeconds: 60,
+				maxSeconds: 150,
+			}),
+		).toBe("over");
+		expect(
+			timerSignal(7 * MIN, SPEECH, "speech", {
+				minSeconds: 60,
+				maxSeconds: 150,
+			}),
+		).toBe("red");
 	});
 
 	it("handles a sub-grace window without inventing a negative boundary", () => {
@@ -88,20 +92,40 @@ describe("kind: tableTopics", () => {
 	const LIMITS = { minSeconds: 60, maxSeconds: 150 };
 	const TT: TimingMarks = { green: 1, yellow: 1.75, red: 2.5 };
 
-	it("goes over AT the first disqualifying second, not one later", () => {
-		const dq = tableTopicsDqSeconds(LIMITS) * 1000;
-		expect(dq).toBe(151_000);
-		expect(timerSignal(dq - 1, TT, "tableTopics", LIMITS)).toBe("red");
-		expect(timerSignal(dq, TT, "tableTopics", LIMITS)).toBe("over");
+	it("is red AT red + 0:30 and over one millisecond after (#1258)", () => {
+		expect(timerSignal(150_000, TT, "tableTopics", LIMITS)).toBe("red");
+		expect(timerSignal(179_999, TT, "tableTopics", LIMITS)).toBe("red");
+		expect(timerSignal(180_000, TT, "tableTopics", LIMITS)).toBe("red");
+		expect(timerSignal(180_001, TT, "tableTopics", LIMITS)).toBe("over");
 	});
 
-	it("does NOT wait for the speech grace — the rules are different rules", () => {
-		// The failure this exists to rule out: at 2:45 a 2:30-cap club's answer is
-		// disqualified, and the speech rule would still call it red.
-		const at = 165_000; // 2:45
-		expect(timerSignal(at, TT, "tableTopics", LIMITS)).toBe("over");
-		expect(at).toBeLessThan((TT.red + TIMING_GRACE_MINUTES) * MIN);
-		expect(timerSignal(at, TT, "speech")).toBe("red");
+	it("1:00-2:00 club: red at 2:30.000, over at 2:30.001", () => {
+		const limits = { minSeconds: 60, maxSeconds: 120 };
+		const marks: TimingMarks = { green: 1, yellow: 1.5, red: 2 };
+		expect(timerSignal(150_000, marks, "tableTopics", limits)).toBe("red");
+		expect(timerSignal(150_001, marks, "tableTopics", limits)).toBe("over");
+	});
+
+	it("agrees with the printed DQ second for every cap", () => {
+		for (const maxSeconds of [90, 120, 150, 179]) {
+			const limits = { minSeconds: 30, maxSeconds };
+			const marks: TimingMarks = {
+				green: 0.5,
+				yellow: 1,
+				red: maxSeconds / 60,
+			};
+			const dq = tableTopicsDqSeconds(limits) * 1000;
+			expect(timerSignal(dq - 1000, marks, "tableTopics", limits)).toBe("red");
+			expect(timerSignal(dq, marks, "tableTopics", limits)).toBe("over");
+		}
+	});
+
+	it("behaves exactly like a speech with the same marks", () => {
+		for (const at of [0, 60_000, 150_000, 180_000, 180_001, 600_000]) {
+			expect(timerSignal(at, TT, "tableTopics", LIMITS)).toBe(
+				timerSignal(at, TT, "speech"),
+			);
+		}
 	});
 
 	it("shows the same green/yellow/red ladder below the cap", () => {
@@ -111,14 +135,25 @@ describe("kind: tableTopics", () => {
 		expect(timerSignal(150_000, TT, "tableTopics", LIMITS)).toBe("red");
 	});
 
-	it("never reaches over when the club has stated no window", () => {
-		// `hasTableTopicsLimits` is what decides that a club HAS a window; with
-		// none there is no disqualification point to apply, and guessing one
-		// would enforce a rule the club never stated.
-		for (const at of [150_000, 600_000, 3_600_000]) {
-			expect(timerSignal(at, TT, "tableTopics", null)).toBe("red");
-			expect(timerSignal(at, TT, "tableTopics")).toBe("red");
+	it("disqualifies a club with no stated window strictly after the standard red + 0:30", () => {
+		// #1258 option A: no stated limits means the standard 1:00-2:00 window,
+		// so red at 2:00 and over strictly after 2:30. Literal milliseconds.
+		const standard: TimingMarks = { green: 1, yellow: 1.5, red: 2 };
+		for (const limits of [null, undefined]) {
+			expect(timerSignal(119_999, standard, "tableTopics", limits)).toBe(
+				"yellow",
+			);
+			expect(timerSignal(120_000, standard, "tableTopics", limits)).toBe("red");
+			expect(timerSignal(150_000, standard, "tableTopics", limits)).toBe("red");
+			expect(timerSignal(150_001, standard, "tableTopics", limits)).toBe(
+				"over",
+			);
+			expect(timerSignal(3_600_000, standard, "tableTopics", limits)).toBe(
+				"over",
+			);
 		}
+		expect(timerSignal(150_000, standard, "tableTopics")).toBe("red");
+		expect(timerSignal(150_001, standard, "tableTopics")).toBe("over");
 	});
 
 	it("is under at every instant when the row carries no marks", () => {

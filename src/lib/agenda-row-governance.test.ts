@@ -35,7 +35,7 @@ import { isClubGovernable } from "./agenda-template-rows";
 import { buildTemplateSlideDeck } from "./agenda-template-slides";
 import { TABLE_TOPICS_ROLE_KEY } from "./table-topics-limits";
 
-/** MCF's own rule: 1:00–2:30, so "2:31+ disqualified". Chosen because every
+/** MCF's own window: 1:00–2:30, so (red + 0:30, #1258) "3:01+ disqualified". Chosen because every
  *  number it produces differs from the standard 1:00–2:00 window in at least
  *  one component — a fixture at the defaults cannot tell a live derivation from
  *  a frozen one. */
@@ -162,7 +162,7 @@ describe("isClubGovernable — which rows may be offered the control (#683)", ()
 // The projected deck.
 //
 // `beatTimingText` decides whether a row's span is quoted as the CLUB's rule
-// ("1:00–2:30", the hard cap, no grace) or as a graced qualifying window
+// ("1:00–2:30", green to the cap) or as a graced qualifying window
 // (±0:30 on a speech, floored at green on a Table Topics answer since #720).
 // It used to decide that from `segmentFor(row.roleKey)`, which cannot tell the
 // three Table Topics beats apart — so a timed vote row got the club's labelling.
@@ -218,13 +218,13 @@ describe("the projected deck quotes the club's rule on the governed row only (#6
 		return { rows, slideFor };
 	}
 
-	it("labels the GOVERNED row with the club's hard cap", () => {
+	it("labels the GOVERNED row with the club's cap + grace", () => {
 		const { rows, slideFor } = deckWithTimedVoteRow();
 		const governed = rows.find((r) => r.clubGoverned === true);
 		expect(governed, "the governed row must reach the rows").toBeTruthy();
 		const slide = governed && slideFor(governed);
-		// ABSOLUTE. The club's own span, green to red with no grace either side.
-		expect(slide?.timing?.qualifies).toBe("1:00–2:30");
+		// ABSOLUTE. Green to red + 0:30 (#1258): the club's 2:30 cap plus the grace.
+		expect(slide?.timing?.qualifies).toBe("1:00–3:00");
 	});
 
 	it("does NOT label the officer's vote row with it", () => {
@@ -241,7 +241,7 @@ describe("the projected deck quotes the club's rule on the governed row only (#6
 		// The PRE-FIX string, named so this cannot pass by coincidence: the club's
 		// cap is what the old `segmentFor`-only test produced here, and the
 		// officer's own marks are what it produced it FROM.
-		expect(slide?.timing?.qualifies).not.toBe("1:00–2:30");
+		expect(slide?.timing?.qualifies).not.toBe("1:00–3:00");
 		// 0:30 / 1:00 graced as a Table Topics answer: floored at green (#720),
 		// +0:30 at the top.
 		expect(slide?.timing?.qualifies).toBe("0:30–1:30");

@@ -3,7 +3,6 @@ import { TABLE_TOPICS_MARKS } from "./agenda-runsheet";
 import {
 	formatTableTopicsClock,
 	formatTableTopicsTiming,
-	formatTableTopicsWindow,
 	hasTableTopicsLimits,
 	MAX_TABLE_TOPICS_SECONDS,
 	MIN_BARE_SECONDS,
@@ -12,15 +11,22 @@ import {
 	refuseTableTopicsSeconds,
 	resolveTableTopicsMarks,
 	TABLE_TOPICS_DEFAULT_TIMING,
+	TABLE_TOPICS_GRACE_SECONDS,
 	TABLE_TOPICS_MESSAGES,
 	tableTopicsClockText,
 	tableTopicsDqSeconds,
+	tableTopicsLastQualifyingSeconds,
 	validateTableTopicsForm,
 } from "./table-topics-limits";
-import { formatTimingClock, qualifyingWindowForMarks } from "./timing-window";
+import {
+	formatTimingClock,
+	qualifyingWindowForMarks,
+	TIMING_GRACE_MINUTES,
+} from "./timing-window";
 
-/** MCF's printed rule: "1 min min, 2.3 min max, 2.31+ disqualified" — where
- *  "2.3 min" is how their sheet writes two minutes thirty. */
+/** MCF's window: 1:00 minimum, 2:30 maximum ("2.3 min" is how their paper sheet
+ *  writes two minutes thirty). Under the one rule (#1258) it disqualifies at
+ *  3:01, not at the paper's "2.31+". */
 const MCF = { minSeconds: 60, maxSeconds: 150 };
 
 describe("hasTableTopicsLimits", () => {
@@ -59,7 +65,7 @@ describe("hasTableTopicsLimits", () => {
 		expect(hasTableTopicsLimits(fractional)).toBe(false);
 		expect(resolveTableTopicsMarks(fractional)).toEqual(TABLE_TOPICS_MARKS);
 		expect(formatTableTopicsTiming(fractional)).toBe(
-			TABLE_TOPICS_DEFAULT_TIMING,
+			`${TABLE_TOPICS_DEFAULT_TIMING} · 2:31+ disqualified`,
 		);
 	});
 
@@ -106,7 +112,9 @@ describe("hasTableTopicsLimits", () => {
 		// card — so the RENDER path falls back, not just the write path.
 		const huge = { minSeconds: 60, maxSeconds: 99999 };
 		expect(resolveTableTopicsMarks(huge)).toEqual(TABLE_TOPICS_MARKS);
-		expect(formatTableTopicsTiming(huge)).toBe(TABLE_TOPICS_DEFAULT_TIMING);
+		expect(formatTableTopicsTiming(huge)).toBe(
+			`${TABLE_TOPICS_DEFAULT_TIMING} · 2:31+ disqualified`,
+		);
 	});
 });
 
@@ -190,25 +198,16 @@ describe("resolveTableTopicsMarks", () => {
 	});
 });
 
-describe("formatTableTopicsWindow", () => {
-	it("states the club's own window, with no ±30s speech grace", () => {
-		// ABSOLUTE. This is what the templated deck projects and what the Timer's
-		// role sheet prints, and the graced form of the same window — "0:30–3:00"
-		// — is what both said before #443's second cut.
-		expect(formatTableTopicsWindow(resolveTableTopicsMarks(MCF))).toBe(
-			"1:00–2:30",
+describe("the printed sentence and the qualifying window state one rule (#1258)", () => {
+	it("the window's upper bound is the last qualifying second; the sentence prints the next", () => {
+		// ABSOLUTE for MCF's 1:00-2:30: qualifies through 3:00, 3:01+ disqualified.
+		const w = qualifyingWindowForMarks(
+			resolveTableTopicsMarks(MCF),
+			"tableTopics",
 		);
-		expect(formatTableTopicsWindow(TABLE_TOPICS_MARKS)).toBe("1:00–2:00");
-	});
-
-	it("names the same two numbers the deck's sentence names", () => {
-		// The two surfaces state one rule in two shapes. Pinned together so
-		// whoever changes one gets a failure naming the other.
-		expect(formatTableTopicsTiming(MCF)).toContain("1:00 minimum");
-		expect(formatTableTopicsTiming(MCF)).toContain("2:30 maximum");
-		expect(formatTableTopicsWindow(resolveTableTopicsMarks(MCF))).toBe(
-			"1:00–2:30",
-		);
+		expect(w?.range).toBe("1:00–3:00");
+		expect(w?.toMinutes).toBe(tableTopicsLastQualifyingSeconds(MCF) / 60);
+		expect(formatTableTopicsTiming(MCF)).toContain("3:01+ disqualified");
 	});
 });
 
@@ -225,58 +224,74 @@ describe("TABLE_TOPICS_DEFAULT_TIMING", () => {
 });
 
 describe("formatTableTopicsTiming", () => {
-	it("falls back to the generic line when the club states nothing", () => {
-		expect(formatTableTopicsTiming(null)).toBe(TABLE_TOPICS_DEFAULT_TIMING);
+	it("prints the standard window with its DQ point when the club states nothing", () => {
+		// #1258 option A. Literal text: 2:00 red + 0:30 = 2:30, DQ from 2:31.
+		const standard = "1–2 minutes per speaker · 2:31+ disqualified";
+		expect(formatTableTopicsTiming(null)).toBe(standard);
+		expect(formatTableTopicsTiming(undefined)).toBe(standard);
 		expect(formatTableTopicsTiming({ minSeconds: 60, maxSeconds: null })).toBe(
-			TABLE_TOPICS_DEFAULT_TIMING,
+			standard,
 		);
 	});
 
 	it("states MCF's rule the way MCF's own agenda states it", () => {
-		// The whole point of the issue: the projector must stop contradicting the
-		// club's printed sheet.
+		// The cap is the club's; the disqualifying second is cap + 0:30 + 1s for
+		// every club (#1258).
 		expect(formatTableTopicsTiming(MCF)).toBe(
-			"1:00 minimum · 2:30 maximum · 2:31+ disqualified",
+			"1:00 minimum · 2:30 maximum · 3:01+ disqualified",
 		);
 	});
 
 	it("derives the disqualifying second from the cap, so they cannot drift", () => {
 		expect(formatTableTopicsTiming({ minSeconds: 30, maxSeconds: 119 })).toBe(
-			"0:30 minimum · 1:59 maximum · 2:00+ disqualified",
+			"0:30 minimum · 1:59 maximum · 2:30+ disqualified",
 		);
 		// The carry at a minute boundary — the case a naive `${mins}:${secs+1}`
 		// prints as "2:60".
 		expect(formatTableTopicsTiming({ minSeconds: 60, maxSeconds: 179 })).toBe(
-			"1:00 minimum · 2:59 maximum · 3:00+ disqualified",
+			"1:00 minimum · 2:59 maximum · 3:30+ disqualified",
 		);
 	});
 
 	it("pads seconds so a clock never reads 2:5", () => {
 		expect(formatTableTopicsTiming({ minSeconds: 65, maxSeconds: 125 })).toBe(
-			"1:05 minimum · 2:05 maximum · 2:06+ disqualified",
+			"1:05 minimum · 2:05 maximum · 2:36+ disqualified",
 		);
 	});
 });
 
 describe("tableTopicsDqSeconds (#732)", () => {
-	it("is one second past the cap", () => {
-		expect(tableTopicsDqSeconds(MCF)).toBe(151);
-		expect(tableTopicsDqSeconds({ maxSeconds: 0 })).toBe(1);
+	it("uses the one grace the speech rule uses (#1258)", () => {
+		// `table-topics-limits` cannot import `timing-window` (it would close a
+		// cycle), so the constant is restated there and pinned here.
+		expect(TABLE_TOPICS_GRACE_SECONDS).toBe(TIMING_GRACE_MINUTES * 60);
+	});
+
+	it("is one second past red + 0:30, the speech rule (#1258)", () => {
+		expect(tableTopicsDqSeconds(MCF)).toBe(181);
+		expect(tableTopicsDqSeconds({ maxSeconds: 120 })).toBe(151); // 2:31
+		expect(tableTopicsDqSeconds({ maxSeconds: 0 })).toBe(31);
 		// The minute boundary, where the NUMBER is unremarkable and only the
 		// rendering above has to carry.
-		expect(tableTopicsDqSeconds({ maxSeconds: 179 })).toBe(180);
+		expect(tableTopicsDqSeconds({ maxSeconds: 179 })).toBe(210);
 	});
 
 	it("is the same number the printed sentence prints", () => {
-		// The point of the export. Before it, a caller needing the number
-		// re-derived `maxSeconds + 1` beside the sentence, which is how one club
-		// came to have two disqualification rules stated on two surfaces. Driving
-		// the assertion from `tableTopicsDqSeconds` rather than from a literal is
-		// what makes this a check on ONE expression instead of two.
+		// Driving the assertion from `tableTopicsDqSeconds` rather than from a
+		// literal makes this a check on ONE expression instead of two.
 		for (const maxSeconds of [59, 60, 119, 150, 179, 599]) {
 			const dq = tableTopicsDqSeconds({ maxSeconds });
 			expect(formatTableTopicsTiming({ minSeconds: 30, maxSeconds })).toContain(
 				`${formatTableTopicsClock(dq)}+ disqualified`,
+			);
+		}
+	});
+
+	it("is one past the last qualifying second, which the clock reads", () => {
+		expect(tableTopicsLastQualifyingSeconds({ maxSeconds: 120 })).toBe(150);
+		for (const maxSeconds of [0, 59, 120, 599]) {
+			expect(tableTopicsDqSeconds({ maxSeconds })).toBe(
+				tableTopicsLastQualifyingSeconds({ maxSeconds }) + 1,
 			);
 		}
 	});
@@ -286,9 +301,9 @@ describe("tableTopicsDqSeconds (#732)", () => {
 		// must not be read as if it could — `hasTableTopicsLimits` is that
 		// question, and `formatTableTopicsTiming` asks it first.
 		expect(formatTableTopicsTiming({ minSeconds: null, maxSeconds: 150 })).toBe(
-			TABLE_TOPICS_DEFAULT_TIMING,
+			`${TABLE_TOPICS_DEFAULT_TIMING} · 2:31+ disqualified`,
 		);
-		expect(tableTopicsDqSeconds({ maxSeconds: 150 })).toBe(151);
+		expect(tableTopicsDqSeconds({ maxSeconds: 150 })).toBe(181);
 	});
 });
 
@@ -628,11 +643,9 @@ describe("tableTopicsClockText", () => {
 // ---------------------------------------------------------------------------
 // #720 — the eligibility window this module's numbers imply.
 //
-// The two derivations that reach a human are `formatTableTopicsWindow` (a club
-// with a stated cap: its own hard rule) and `qualifyingWindow(..., "tableTopics")`
-// (a club with none: the standard marks, floored at green). They agreed at the
-// TOP before this and disagreed at the BOTTOM, which is how "2:31+ disqualified"
-// came to sit beside "qualifies 0:30–2:30" for one club.
+// One derivation reaches a human since #1258: `qualifyingWindowForMarks(marks,
+// "tableTopics")`, for a club with a stated cap and one without alike, floored
+// at green and graced +0:30 above red.
 // ---------------------------------------------------------------------------
 describe("the eligibility window a club's Table Topics rule implies (#720)", () => {
 	it("floors at green for a club that has stated nothing", () => {
@@ -650,17 +663,11 @@ describe("the eligibility window a club's Table Topics rule implies (#720)", () 
 			qualifyingWindowForMarks(resolveTableTopicsMarks(MCF), "tableTopics")
 				?.range,
 		).toBe("1:00–3:00");
-		// The club's OWN hard window is the one the Timer's sheet and the templated
-		// deck print for such a club (`formatTableTopicsWindow`); this is the same
-		// floor stated by the other derivation, which is the property #720 needs.
-		expect(formatTableTopicsWindow(resolveTableTopicsMarks(MCF))).toBe(
-			"1:00–2:30",
-		);
 	});
 
 	it("never states a floor below the minimum a response must reach", () => {
 		// The rule in one sentence, over every window a club can state: the DQ
-		// second is one past the cap (`tableTopicsDqSeconds`) and the floor is the
+		// second is one past cap + grace (`tableTopicsDqSeconds`) and the floor is the
 		// minimum itself — no credit below green, at any configured window.
 		for (const limits of [
 			{ minSeconds: 45, maxSeconds: 120 },
@@ -672,7 +679,7 @@ describe("the eligibility window a club's Table Topics rule implies (#720)", () 
 			expect(w?.fromMinutes, JSON.stringify(limits)).toBe(
 				limits.minSeconds / 60,
 			);
-			expect(tableTopicsDqSeconds(limits)).toBe(limits.maxSeconds + 1);
+			expect(tableTopicsDqSeconds(limits)).toBe(limits.maxSeconds + 31);
 		}
 	});
 });

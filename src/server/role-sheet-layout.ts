@@ -46,7 +46,6 @@ import {
 import { TOASTMASTERS_DISCLAIMER } from "../lib/brand";
 import { cap } from "../lib/cap";
 import {
-	formatTableTopicsWindow,
 	hasTableTopicsLimits,
 	resolveTableTopicsMarks,
 	TABLE_TOPICS_ROLE_KEY,
@@ -56,6 +55,7 @@ import {
 	formatTimingClock,
 	graceRuleSentence,
 	qualifyingWindow,
+	qualifyingWindowForMarks,
 	segmentFor,
 } from "../lib/timing-window";
 import { WOD_LIMITS } from "../lib/wod-limits";
@@ -612,11 +612,11 @@ const STANDARD_TIMING_WINDOWS: {
  * from `resolveTableTopicsMarks` — the same function the agenda's marks come
  * from, so the sheet and the row beside it cannot disagree about the midpoint.
  *
- * Its "Qualifies" cell drops the ±30s grace, and that is the point rather than
- * an omission: a club that states its own cap has stated a HARD one ("2:30
- * maximum · 2:31+ disqualified" is what the deck projects and what MCF prints),
- * so a sheet saying the answer still qualifies at 3:00 would contradict the
- * agenda in the Timer's other hand.
+ * Its "Qualifies" cell is the same derivation as every other row's, with the
+ * Table Topics segment: green to red + 0:30 (#1258, one rule, no club opt-out).
+ * A club's own cap moves red; it does not change what "qualifies" means, so
+ * the cell agrees with the grace sentence printed under the table and with
+ * the "N+ disqualified" the deck states.
  *
  * The row for a club that has stated NOTHING used to keep the fully graced
  * standard window, `0:30–2:30`, on the ground that whether the standard Table
@@ -642,7 +642,7 @@ export function standardTimingRows(
 				formatTimingClock(own.green),
 				formatTimingClock(own.yellow),
 				formatTimingClock(own.red),
-				formatTableTopicsWindow(own),
+				qualifyingWindowForMarks(own, "tableTopics")?.range ?? "",
 			];
 		}
 		return [

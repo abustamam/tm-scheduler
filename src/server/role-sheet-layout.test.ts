@@ -299,9 +299,10 @@ describe("a club's own Table Topics window on the Timer sheet (#443)", () => {
 			"1:00",
 			"1:45",
 			"2:30",
-			// No ±30s grace: a club that states its own cap has stated a HARD one,
-			// and the deck beside this sheet projects "2:31+ disqualified".
-			"1:00–2:30",
+			// Green to red + 0:30 (#1258): the club's 2:30 cap plus the standard
+			// grace is 3:00, and the deck beside this sheet projects "3:01+
+			// disqualified".
+			"1:00–3:00",
 		]);
 		// The other three are the standard windows, untouched — a club states a
 		// Table Topics rule, not a speech rule.
@@ -365,7 +366,7 @@ describe("a club's own Table Topics window on the Timer sheet (#443)", () => {
 		// The TABLE half, pinned on the one cell the script does not also say —
 		// "2:30" alone would pass with the table reverted, since the spoken
 		// sentence carries it too, and the two halves are wired separately.
-		expect(words).toContain("1:00–2:30");
+		expect(words).toContain("1:00–3:00");
 		expect(words).not.toContain("0:30–2:30");
 		// The SPOKEN half.
 		expect(words).toContain("green at 1:00, yellow at 1:45, red at 2:30");
@@ -432,7 +433,7 @@ describe("Table Topics eligibility on the Timer sheet (#720)", () => {
 			...fill,
 			tableTopicsLimits: { minSeconds: 60, maxSeconds: 150 },
 		});
-		expect(words).toContain("1:00–2:30");
+		expect(words).toContain("1:00–3:00");
 		expect(words).toContain(
 			"A Table Topics response qualifies from green through 0:30 after red.",
 		);

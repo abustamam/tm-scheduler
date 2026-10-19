@@ -426,7 +426,7 @@ describe("a club's own Table Topics window on the templated deck (#443)", () => 
 			green: "1:00",
 			yellow: "1:45",
 			red: "2:30",
-			qualifies: "1:00–2:30",
+			qualifies: "1:00–3:00",
 		});
 		expect(beat?.timing?.qualifies).not.toBe("0:30–3:00");
 	});
@@ -444,7 +444,7 @@ describe("a club's own Table Topics window on the templated deck (#443)", () => 
 			green: "0:30",
 			yellow: "1:45",
 			red: "3:00",
-			qualifies: "0:30–3:00",
+			qualifies: "0:30–3:30",
 		});
 		// The pre-#679 projection, named so this cannot pass by coincidence.
 		expect(beat?.timing?.red).not.toBe("2:30");
@@ -456,13 +456,13 @@ describe("a club's own Table Topics window on the templated deck (#443)", () => 
 		// numbers the club stated.
 		const beat = tableTopicsBeat(CLUB);
 		expect(formatTableTopicsTiming(CLUB)).toBe(
-			"1:00 minimum · 2:30 maximum · 2:31+ disqualified",
+			"1:00 minimum · 2:30 maximum · 3:01+ disqualified",
 		);
-		expect(beat?.timing?.qualifies).toBe("1:00–2:30");
+		expect(beat?.timing?.qualifies).toBe("1:00–3:00");
 	});
 
 	it("leaves a club that has stated nothing on the STANDARD window", () => {
-		// The control. Without it, dropping the club's own hard cap unconditionally
+		// The control. Without it, dropping the club's own cap unconditionally
 		// would look identical to applying it only where a club has one.
 		//
 		// It said "the graced standard window", `0:30–2:30`, until #720: the marks

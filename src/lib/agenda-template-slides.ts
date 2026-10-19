@@ -66,13 +66,7 @@ import {
 } from "./agenda-slides";
 import type { NextMeetingSummary } from "./next-meeting-summary";
 import {
-	formatTableTopicsWindow,
-	hasTableTopicsLimits,
-	type TableTopicsLimits,
-} from "./table-topics-limits";
-import {
 	formatTimingClock,
-	type QualifyingWindow,
 	qualifyingWindowForMarks,
 	segmentFor,
 } from "./timing-window";
@@ -102,22 +96,12 @@ export type TemplateDeckInput = {
  * contest that window is not a courtesy — it IS the disqualification rule, so
  * the wall showing a different one from the paper is the worst case.
  *
- * The Table Topics segment is the one beat the grace does NOT govern once a
- * club has stated its own window (#443). Its cap is the club's rule — MCF's own
- * sheet says "2.31+ disqualified" — so applying the speech grace here projected
- * "qualifies 0:30–3:00" off a materialised meeting while the identical club's
- * unmaterialised meeting projected "2:31+ disqualified", one wall contradicting
- * the next with nothing but the agenda editor between them. `firstQualifyingWindow`
- * filters non-speaker rows for exactly this reason; this derivation did not,
- * and a comment in `table-topics-limits.ts` claimed that filter covered both.
- *
- * A club that has stated NOTHING is no longer left entirely alone, and #720 is
- * why. Its beat still carries the STANDARD marks and still prints a derived
- * window rather than the club's hard cap — but that window is now the Table
- * Topics one (floored at green, `1:00–2:30`) rather than the speech one
- * (`0:30–2:30`). "Whether the standard Table Topics window should be graced at
- * all" was the product question #679 declined to answer silently; #720 answered
- * it, and the answer is no.
+ * Table Topics is the one segment whose window FLOORS at green (#720: a response
+ * must reach the minimum to be eligible), and its upper bound is the same
+ * red + 0:30 as every other segment (#1258: one rule, no club opt-out). A
+ * club's own cap changes the row's marks (`refreshTableTopicsMarks` re-derives
+ * them), never the rule, so a governed row and an ungoverned one print through
+ * the same derivation and cannot project two disqualification rules.
  */
 export type BeatTiming = {
 	green: string;
@@ -127,53 +111,24 @@ export type BeatTiming = {
 	qualifies: string;
 };
 
-export function beatTimingText(
-	row: AgendaRow,
-	tableTopicsLimits?: TableTopicsLimits | null,
-): BeatTiming | null {
+export function beatTimingText(row: AgendaRow): BeatTiming | null {
 	if (!row.marks) return null;
 	// ONE derivation of "which segment is this row", shared with the Timer's
 	// sheet and the printed agenda's grace line (#720) — `segmentFor` is where
 	// the role key is matched, so this file no longer states that rule itself.
-	// It still decides the WINDOW's floor (Table Topics floors at green, a speech
-	// at green-0:30); what it no longer decides is whose rule is being quoted.
-	//
-	// That is the STORED marker's question now (#683). `segmentFor` reads only the
-	// role key, and the run of show gives three beats that key — so an officer who
-	// put timer marks on the Best Table Topics vote row had the wall announce
-	// their 0:30-1:00 as the club's disqualification rule, on a row the club's
-	// window does not govern and the refresh pass does not touch.
-	const segment = segmentFor(row.roleKey);
-	const ownRule =
-		row.clubGoverned === true && hasTableTopicsLimits(tableTopicsLimits);
-	// The segment travels into the derivation. A club that has stated nothing
-	// still projects a window here — the standard 1:00–2:00 marks — and it used
-	// to be the SPEECH window of those marks, "qualifies 0:30–2:30", telling the
-	// room a 31-second answer was eligible for the vote. The upper +0:30 is
-	// unchanged; only the floor moves, to green.
-	const window = ownRule ? null : qualifyingWindowForMarks(row.marks, segment);
-	if (!ownRule && !window) return null;
+	// The segment travels into the derivation: Table Topics floors at green
+	// (#720) and graces +0:30 above red like every other segment (#1258).
+	const window = qualifyingWindowForMarks(row.marks, segmentFor(row.roleKey));
+	if (!window) return null;
 	return {
 		green: formatTimingClock(row.marks.green),
 		yellow: formatTimingClock(row.marks.yellow),
 		red: formatTimingClock(row.marks.red),
 		// The ROW's marks, which for this segment are the club's CURRENT window
-		// since #679 — `resolveAgendaRows` re-derives them on the way here, so the
-		// wall and the paper the room is holding are the same derivation from the
-		// same source. This comment said "FROZEN marks, not the club's current
-		// columns" and stayed true only until that landed; the file was not touched
-		// by the change, so nothing prompted a re-read. Reading the row rather than
-		// the club columns is still the right call and is now also correct: it
-		// keeps this function a pure function of its argument.
-		//
-		// `ownRule` needs no marks-provenance test of its own, and since #683 that
-		// is a fact rather than a coincidence: the flag is written by
-		// `materialiseRunOfShow` on the one row `refreshTableTopicsMarks` then
-		// re-derives, so the rows this labels as the club's rule are exactly the
-		// rows whose marks the club actually wrote.
-		qualifies: ownRule
-			? formatTableTopicsWindow(row.marks)
-			: (window as QualifyingWindow).range,
+		// (`resolveAgendaRows` re-derives them on the way here), so the wall and
+		// the paper the room is holding are one derivation from one source.
+		// Reading the row keeps this function a pure function of its argument.
+		qualifies: window.range,
 	};
 }
 
@@ -230,13 +185,9 @@ export function buildTemplateSlideDeck({
 			label: row.who,
 			detail: row.detail.trim() || null,
 			minutes: row.minutes,
-			// The club's own columns, off the SAME `ClubForDeck` the standard deck
-			// reads them from — so the two decks state one disqualification rule
-			// between them rather than one each.
-			timing: beatTimingText(row, {
-				minSeconds: club.tableTopicsMinSeconds,
-				maxSeconds: club.tableTopicsMaxSeconds,
-			}),
+			// The row's marks already carry the club's window, so the two decks
+			// state one disqualification rule between them.
+			timing: beatTimingText(row),
 			// Once, on the segment — see `notesRow` above.
 			notes:
 				row === notesRow ? tableTopicsNoteLines(meeting.tableTopicsNotes) : [],
