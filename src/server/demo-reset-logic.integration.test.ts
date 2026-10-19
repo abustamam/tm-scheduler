@@ -419,12 +419,19 @@ describe.skipIf(!hasTestDb)("resetDemoClub (#1199)", () => {
 			timezone: "America/Chicago",
 		});
 		const [admin] = await testDb
-			.select({ name: people.name, userId: people.userId })
+			.select({
+				name: people.name,
+				userId: people.userId,
+				clubRole: members.clubRole,
+			})
 			.from(members)
 			.innerJoin(people, eq(people.id, members.personId))
-			.where(and(eq(members.clubId, clubId), eq(members.clubRole, "admin")))
-			.limit(1);
-		expect(admin).toMatchObject({ name: "Demo Presenter", userId: demoUser });
+			.where(and(eq(members.clubId, clubId), eq(people.userId, demoUser)));
+		expect(admin).toMatchObject({
+			name: "Demo Presenter",
+			userId: demoUser,
+			clubRole: "admin",
+		});
 		const ms = await testDb
 			.select({ id: meetings.id })
 			.from(meetings)
@@ -465,14 +472,13 @@ describe.skipIf(!hasTestDb)("resetDemoClub (#1199)", () => {
 		expect(await exists("user", demoUser)).toBe(true);
 		expect(await accountRows(demoUser)).toEqual({ sessions: 1, tokens: 1 });
 		const [admin] = await testDb
-			.select({ userId: people.userId })
+			.select({ userId: people.userId, clubRole: members.clubRole })
 			.from(members)
 			.innerJoin(people, eq(people.id, members.personId))
 			.where(
-				and(eq(members.clubId, second.clubId), eq(members.clubRole, "admin")),
-			)
-			.limit(1);
-		expect(admin?.userId).toBe(demoUser);
+				and(eq(members.clubId, second.clubId), eq(people.userId, demoUser)),
+			);
+		expect(admin).toMatchObject({ userId: demoUser, clubRole: "admin" });
 		// Priya's account was the previous build's; the new one is a different row.
 		const priyaAfter = await userByEmail("priya@example.com");
 		expect(priyaAfter).not.toBe(priyaBefore);
