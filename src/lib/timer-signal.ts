@@ -17,18 +17,14 @@
  * - a prepared SPEECH qualifies through `red + TIMING_GRACE_MINUTES` — the
  *   30-second Toastmasters grace (#357), which `timing-window.ts` owns and
  *   which nothing here restates;
- * - a TABLE TOPICS answer is disqualified at `tableTopicsDqSeconds(limits)`,
- *   one second past the club's own cap, which is a club rule and not a grace.
+ * - a TABLE TOPICS answer follows the SAME rule since #1258: one rule, no club
+ *   opt-out, every timed segment is disqualified strictly after red + 0:30.
+ *   Red is the club's own cap; the grace is the same grace.
  *
- * A caller that applied the speech grace to Table Topics would tell a club its
- * 2:45 answer still qualified against a 2:30 cap. That is the two-walls failure
- * `agenda-template-slides.ts` records, where a materialised meeting projected
- * "qualifies 0:30–3:00" beside a non-materialised one saying "2:31+
- * disqualified" — one club, two disqualification rules. Requiring `kind` is
- * what makes a caller state which rule it means instead of inheriting one.
+ * What `kind` still decides is whether the segment HAS a window at all: a
+ * Table Topics clock with no stated limits never reaches `over` (below).
  */
 import type { TimingMarks } from "./agenda-runsheet";
-import { tableTopicsDqSeconds } from "./table-topics-limits";
 import { TIMING_GRACE_MINUTES } from "./timing-window";
 
 /**
@@ -73,22 +69,11 @@ export function timerSignal(
 	limits?: { maxSeconds: number } | null,
 ): TimerBand {
 	if (!marks) return "under";
-	// THE COMPARISONS ARE NOT THE SAME, and the asymmetry is the rule rather
-	// than a slip.
-	//
-	// A speech qualifies "from 0:30 before green THROUGH 0:30 after red"
-	// (`timing-window.ts`, #357) — the grace instant is still inside the window,
-	// so `over` begins STRICTLY AFTER it, and `qualifyingWindow`'s own
-	// `toMinutes` bound is inclusive for the same reason.
-	//
-	// `tableTopicsDqSeconds` is already "the FIRST disqualifying second" — the
-	// "2:31+" a club prints on its own sheet — so that instant is itself over,
-	// and the comparison is inclusive. Writing both the same way would move one
-	// club's boundary by a second in one direction or the other.
-	const over =
-		kind === "speech"
-			? elapsed > (marks.red + TIMING_GRACE_MINUTES) * MIN_MS
-			: limits != null && elapsed >= tableTopicsDqSeconds(limits) * 1000;
+	// ONE rule (#1258): `over` begins strictly after red + the grace, the
+	// instant `qualifyingWindow`'s inclusive bound still counts as qualifying.
+	// `tableTopicsDqSeconds` is the same instant as a whole-second print ("2:31+").
+	const pastGrace = elapsed > (marks.red + TIMING_GRACE_MINUTES) * MIN_MS;
+	const over = kind === "speech" ? pastGrace : limits != null && pastGrace;
 	// Checked FIRST so the DQ decision cannot be shadowed by the red band below.
 	if (over) return "over";
 	if (elapsed >= marks.red * MIN_MS) return "red";

@@ -353,8 +353,8 @@ describe("the clock", () => {
 	});
 
 	it("uses the club's Table Topics cap, not the speech grace", async () => {
-		// 2:30 cap ⇒ disqualified at 2:31, thirty seconds before the speech rule
-		// would say so. Two clocks in one club must not answer to one rule.
+		// 2:30 cap ⇒ red through 3:00, disqualified from 3:01: the speech rule
+		// (#1258), one rule for every timed segment.
 		await mount([
 			row({
 				roleKey: "table_topics_master",
@@ -363,7 +363,7 @@ describe("the clock", () => {
 			}),
 		]);
 		await tap(screen.getByRole("button", { name: "Start" }));
-		await advance(150_000);
+		await advance(180_000);
 		expect(screen.getByText("Red")).toBeTruthy();
 		await advance(1000);
 		expect(screen.getByText("Over time")).toBeTruthy();

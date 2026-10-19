@@ -456,7 +456,7 @@ describe("a club's own Table Topics window on the templated deck (#443)", () => 
 		// numbers the club stated.
 		const beat = tableTopicsBeat(CLUB);
 		expect(formatTableTopicsTiming(CLUB)).toBe(
-			"1:00 minimum · 2:30 maximum · 2:31+ disqualified",
+			"1:00 minimum · 2:30 maximum · 3:01+ disqualified",
 		);
 		expect(beat?.timing?.qualifies).toBe("1:00–2:30");
 	});

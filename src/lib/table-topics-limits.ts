@@ -195,13 +195,13 @@ export function resolveTableTopicsMarks(
  *
  * Stated the way a club states it on its own printed agenda: the floor, the
  * cap, and the first disqualifying second. The DQ point is DERIVED as one
- * second past the cap rather than stored, so it cannot drift from the cap an
+ * second past cap + grace rather than stored, so it cannot drift from the cap an
  * admin edits — MCF's own sheet says "2.3 min max, 2.31+ disqualified", which
  * is the same fact twice.
  *
- * Note this is deliberately NOT the 30-second qualifying grace of
- * `timing-window.ts`. That rule is about prepared SPEECHES: a club's Table
- * Topics cap is its own rule and is stated as its own rule.
+ * Since #1258 the DQ point IS the 30-second grace of `timing-window.ts` past
+ * the cap, like every other timed segment: "2:31+ disqualified" for a 2:00
+ * cap. The cap is the club's; the grace is not.
  *
  * The ASYMMETRY that made that hard to hold is fixed at source since #720.
  * `qualifyingWindow` now takes a `TimingSegment`, and `"tableTopics"` drops the
@@ -228,15 +228,23 @@ export function formatTableTopicsTiming(
 }
 
 /**
+ * The grace past red, in seconds. `timing-window.ts` owns the rule
+ * (`TIMING_GRACE_MINUTES`) but imports this module, so this module cannot
+ * import it back; a test pins the two together.
+ */
+export const TABLE_TOPICS_GRACE_SECONDS = 30;
+
+/**
  * The first DISQUALIFYING second — the number behind the "2:31+" that
  * `formatTableTopicsTiming` above prints (#732).
  *
- * One second past the cap, derived rather than stored, for the reason
+ * One second past red + 0:30 (#1258: the speech rule; no club opt-out),
+ * derived rather than stored, for the reason
  * `formatTableTopicsTiming` states: the DQ point and the cap an admin edits are
  * the same fact, and storing both is how two walls come to contradict each
  * other. This export exists so that a caller needing the NUMBER — a clock
  * deciding whether a Table Topics speech disqualified — reads the same
- * expression the printed sentence does, instead of re-deriving `maxSeconds + 1`
+ * expression the printed sentence does, instead of re-deriving the arithmetic
  * beside it. That re-derivation is the failure `agenda-template-slides.ts`
  * records, where two surfaces stated two disqualification rules for one club.
  *
@@ -258,7 +266,7 @@ export function tableTopicsDqSeconds({
 }: {
 	maxSeconds: number;
 }): number {
-	return maxSeconds + 1;
+	return maxSeconds + TABLE_TOPICS_GRACE_SECONDS + 1;
 }
 
 /**

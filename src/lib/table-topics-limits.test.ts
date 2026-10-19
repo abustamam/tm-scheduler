@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TABLE_TOPICS_MARKS } from "./agenda-runsheet";
 import {
@@ -12,12 +14,17 @@ import {
 	refuseTableTopicsSeconds,
 	resolveTableTopicsMarks,
 	TABLE_TOPICS_DEFAULT_TIMING,
+	TABLE_TOPICS_GRACE_SECONDS,
 	TABLE_TOPICS_MESSAGES,
 	tableTopicsClockText,
 	tableTopicsDqSeconds,
 	validateTableTopicsForm,
 } from "./table-topics-limits";
-import { formatTimingClock, qualifyingWindowForMarks } from "./timing-window";
+import {
+	formatTimingClock,
+	qualifyingWindowForMarks,
+	TIMING_GRACE_MINUTES,
+} from "./timing-window";
 
 /** MCF's printed rule: "1 min min, 2.3 min max, 2.31+ disqualified" — where
  *  "2.3 min" is how their sheet writes two minutes thirty. */
@@ -236,35 +243,42 @@ describe("formatTableTopicsTiming", () => {
 		// The whole point of the issue: the projector must stop contradicting the
 		// club's printed sheet.
 		expect(formatTableTopicsTiming(MCF)).toBe(
-			"1:00 minimum · 2:30 maximum · 2:31+ disqualified",
+			"1:00 minimum · 2:30 maximum · 3:01+ disqualified",
 		);
 	});
 
 	it("derives the disqualifying second from the cap, so they cannot drift", () => {
 		expect(formatTableTopicsTiming({ minSeconds: 30, maxSeconds: 119 })).toBe(
-			"0:30 minimum · 1:59 maximum · 2:00+ disqualified",
+			"0:30 minimum · 1:59 maximum · 2:30+ disqualified",
 		);
 		// The carry at a minute boundary — the case a naive `${mins}:${secs+1}`
 		// prints as "2:60".
 		expect(formatTableTopicsTiming({ minSeconds: 60, maxSeconds: 179 })).toBe(
-			"1:00 minimum · 2:59 maximum · 3:00+ disqualified",
+			"1:00 minimum · 2:59 maximum · 3:30+ disqualified",
 		);
 	});
 
 	it("pads seconds so a clock never reads 2:5", () => {
 		expect(formatTableTopicsTiming({ minSeconds: 65, maxSeconds: 125 })).toBe(
-			"1:05 minimum · 2:05 maximum · 2:06+ disqualified",
+			"1:05 minimum · 2:05 maximum · 2:36+ disqualified",
 		);
 	});
 });
 
 describe("tableTopicsDqSeconds (#732)", () => {
-	it("is one second past the cap", () => {
-		expect(tableTopicsDqSeconds(MCF)).toBe(151);
-		expect(tableTopicsDqSeconds({ maxSeconds: 0 })).toBe(1);
+	it("uses the one grace the speech rule uses (#1258)", () => {
+		// `table-topics-limits` cannot import `timing-window` (it would close a
+		// cycle), so the constant is restated there and pinned here.
+		expect(TABLE_TOPICS_GRACE_SECONDS).toBe(TIMING_GRACE_MINUTES * 60);
+	});
+
+	it("is one second past red + 0:30, the speech rule (#1258)", () => {
+		expect(tableTopicsDqSeconds(MCF)).toBe(181);
+		expect(tableTopicsDqSeconds({ maxSeconds: 120 })).toBe(151); // 2:31
+		expect(tableTopicsDqSeconds({ maxSeconds: 0 })).toBe(31);
 		// The minute boundary, where the NUMBER is unremarkable and only the
 		// rendering above has to carry.
-		expect(tableTopicsDqSeconds({ maxSeconds: 179 })).toBe(180);
+		expect(tableTopicsDqSeconds({ maxSeconds: 179 })).toBe(210);
 	});
 
 	it("is the same number the printed sentence prints", () => {
@@ -288,7 +302,7 @@ describe("tableTopicsDqSeconds (#732)", () => {
 		expect(formatTableTopicsTiming({ minSeconds: null, maxSeconds: 150 })).toBe(
 			TABLE_TOPICS_DEFAULT_TIMING,
 		);
-		expect(tableTopicsDqSeconds({ maxSeconds: 150 })).toBe(151);
+		expect(tableTopicsDqSeconds({ maxSeconds: 150 })).toBe(181);
 	});
 });
 
@@ -672,7 +686,31 @@ describe("the eligibility window a club's Table Topics rule implies (#720)", () 
 			expect(w?.fromMinutes, JSON.stringify(limits)).toBe(
 				limits.minSeconds / 60,
 			);
-			expect(tableTopicsDqSeconds(limits)).toBe(limits.maxSeconds + 1);
+			expect(tableTopicsDqSeconds(limits)).toBe(limits.maxSeconds + 31);
 		}
+	});
+});
+
+describe("one Table Topics DQ point (#1258)", () => {
+	it("no source file re-derives it beside tableTopicsDqSeconds", () => {
+		const hits: string[] = [];
+		const walk = (dir: string) => {
+			for (const e of readdirSync(dir, { withFileTypes: true })) {
+				const p = join(dir, e.name);
+				if (e.isDirectory()) walk(p);
+				else if (/\.(ts|tsx)$/.test(e.name) && !/\.test\./.test(e.name)) {
+					if (
+						/maxSeconds\s*\+\s*\d|maxSeconds\s*\+\s*TABLE_TOPICS_GRACE/.test(
+							readFileSync(p, "utf8"),
+						)
+					)
+						hits.push(p);
+				}
+			}
+		};
+		walk(join(process.cwd(), "src"));
+		expect(hits.map((h) => h.replace(process.cwd(), ""))).toEqual([
+			"/src/lib/table-topics-limits.ts",
+		]);
 	});
 });

@@ -429,7 +429,7 @@ describe("buildSlideDeck table topics", () => {
 			ballotUrl: "https://example.test/ballot",
 		}).find((s) => s.kind === "tableTopics");
 		expect(slide).toMatchObject({
-			timing: "1:00 minimum · 2:30 maximum · 2:31+ disqualified",
+			timing: "1:00 minimum · 2:30 maximum · 3:01+ disqualified",
 		});
 
 		// The Timer's marks, through `resolveAgendaRows` — the seam the printed

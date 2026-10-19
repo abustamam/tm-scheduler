@@ -35,7 +35,7 @@ import { isClubGovernable } from "./agenda-template-rows";
 import { buildTemplateSlideDeck } from "./agenda-template-slides";
 import { TABLE_TOPICS_ROLE_KEY } from "./table-topics-limits";
 
-/** MCF's own rule: 1:00–2:30, so "2:31+ disqualified". Chosen because every
+/** MCF's own rule: 1:00–2:30, so "3:01+ disqualified". Chosen because every
  *  number it produces differs from the standard 1:00–2:00 window in at least
  *  one component — a fixture at the defaults cannot tell a live derivation from
  *  a frozen one. */
