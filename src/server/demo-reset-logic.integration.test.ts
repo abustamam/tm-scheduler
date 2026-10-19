@@ -418,8 +418,8 @@ describe.skipIf(!hasTestDb)("resetDemoClub (#1199)", () => {
 			slug: "gavelup-demo-club",
 			timezone: "America/Chicago",
 		});
-		// The fixture has more than one admin (Priya Nair too), so ask for the demo
-		// account's own membership instead of "an admin": no order to depend on.
+		// The fixture has more than one admin, so ask for the demo account's own
+		// membership instead of "an admin": no row order to depend on.
 		const demoMemberships = await testDb
 			.select({
 				name: people.name,
@@ -471,7 +471,8 @@ describe.skipIf(!hasTestDb)("resetDemoClub (#1199)", () => {
 		]);
 		expect(await exists("user", demoUser)).toBe(true);
 		expect(await accountRows(demoUser)).toEqual({ sessions: 1, tokens: 1 });
-		// Not "an admin" (the fixture has two): the demo account's own membership.
+		// Not "an admin" (the fixture has more than one): the demo account's own
+		// membership.
 		const demoMemberships = await testDb
 			.select({ userId: people.userId, clubRole: members.clubRole })
 			.from(members)
