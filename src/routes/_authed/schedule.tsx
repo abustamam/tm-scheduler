@@ -1,8 +1,9 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { CalendarX } from "lucide-react";
+import { CalendarX, Printer } from "lucide-react";
 import { SeasonGrid } from "#/components/club/season-grid";
 import { PageContainer } from "#/components/page-container";
 import { ShareLinkButton } from "#/components/share-link-button";
+import { Button } from "#/components/ui/button";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatMeetingDate } from "#/lib/format";
 import {
@@ -100,6 +101,15 @@ function SeasonGridPage() {
 							label="Copy next-meeting link"
 							successMessage="Link copied: it always opens the next meeting"
 						/>
+						<Button asChild variant="outline" size="sm">
+							<Link
+								to="/club/$clubId/next/tent"
+								params={{ clubId: data.clubSlug }}
+							>
+								<Printer className="size-4" aria-hidden />
+								Print table tent
+							</Link>
+						</Button>
 					</div>
 				) : null}
 			</div>

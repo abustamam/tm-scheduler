@@ -312,4 +312,18 @@ describe("the next-meeting link button (#1146)", () => {
 			screen.queryByRole("button", { name: "Copy sign-up sheet link" }),
 		).toBeNull();
 	});
+
+	// protects=the "Print table tent" link renders for a club with a slug and
+	// points at /club/<slug>/next/tent (#1210), and is absent without a slug;
+	// fails_when=the link is dropped, points elsewhere, or loses the
+	// `data?.clubSlug` guard (a link to `/club/null/next/tent`);
+	// no_claim=the loader data is mocked; the tent route itself is tested beside it.
+	it("links to the table tent only when the club has a slug", async () => {
+		await renderPage(search, { ...gridData, clubSlug: "harbor" });
+		const link = screen.getByRole("link", { name: "Print table tent" });
+		expect(link.getAttribute("href")).toBe("/club/harbor/next/tent");
+		cleanup();
+		await renderPage(search);
+		expect(screen.queryByRole("link", { name: "Print table tent" })).toBeNull();
+	});
 });
