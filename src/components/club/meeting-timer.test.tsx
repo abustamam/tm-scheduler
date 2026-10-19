@@ -352,7 +352,7 @@ describe("the clock", () => {
 		expect(screen.getByText("Over time")).toBeTruthy();
 	});
 
-	it("uses the club's Table Topics cap, not the speech grace", async () => {
+	it("puts red at the club's Table Topics cap and over 30 seconds later", async () => {
 		// 2:30 cap ⇒ red through 3:00, disqualified from 3:01: the speech rule
 		// (#1258), one rule for every timed segment.
 		await mount([

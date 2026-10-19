@@ -35,7 +35,7 @@ import { isClubGovernable } from "./agenda-template-rows";
 import { buildTemplateSlideDeck } from "./agenda-template-slides";
 import { TABLE_TOPICS_ROLE_KEY } from "./table-topics-limits";
 
-/** MCF's own rule: 1:00–2:30, so "3:01+ disqualified". Chosen because every
+/** MCF's own window: 1:00–2:30, so (red + 0:30, #1258) "3:01+ disqualified". Chosen because every
  *  number it produces differs from the standard 1:00–2:00 window in at least
  *  one component — a fixture at the defaults cannot tell a live derivation from
  *  a frozen one. */
@@ -224,7 +224,7 @@ describe("the projected deck quotes the club's rule on the governed row only (#6
 		expect(governed, "the governed row must reach the rows").toBeTruthy();
 		const slide = governed && slideFor(governed);
 		// ABSOLUTE. The club's own span, green to red with no grace either side.
-		expect(slide?.timing?.qualifies).toBe("1:00–2:30");
+		expect(slide?.timing?.qualifies).toBe("1:00–3:00");
 	});
 
 	it("does NOT label the officer's vote row with it", () => {
@@ -241,7 +241,7 @@ describe("the projected deck quotes the club's rule on the governed row only (#6
 		// The PRE-FIX string, named so this cannot pass by coincidence: the club's
 		// cap is what the old `segmentFor`-only test produced here, and the
 		// officer's own marks are what it produced it FROM.
-		expect(slide?.timing?.qualifies).not.toBe("1:00–2:30");
+		expect(slide?.timing?.qualifies).not.toBe("1:00–3:00");
 		// 0:30 / 1:00 graced as a Table Topics answer: floored at green (#720),
 		// +0:30 at the top.
 		expect(slide?.timing?.qualifies).toBe("0:30–1:30");

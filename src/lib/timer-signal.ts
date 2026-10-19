@@ -25,6 +25,7 @@
  * Table Topics clock with no stated limits never reaches `over` (below).
  */
 import type { TimingMarks } from "./agenda-runsheet";
+import { tableTopicsLastQualifyingSeconds } from "./table-topics-limits";
 import { TIMING_GRACE_MINUTES } from "./timing-window";
 
 /**
@@ -69,11 +70,16 @@ export function timerSignal(
 	limits?: { maxSeconds: number } | null,
 ): TimerBand {
 	if (!marks) return "under";
-	// ONE rule (#1258): `over` begins strictly after red + the grace, the
-	// instant `qualifyingWindow`'s inclusive bound still counts as qualifying.
-	// `tableTopicsDqSeconds` is the same instant as a whole-second print ("2:31+").
-	const pastGrace = elapsed > (marks.red + TIMING_GRACE_MINUTES) * MIN_MS;
-	const over = kind === "speech" ? pastGrace : limits != null && pastGrace;
+	// ONE rule (#1258): `over` begins strictly after red + 0:30. A speech reads
+	// it off its marks; Table Topics reads the club's cap through
+	// `tableTopicsLastQualifyingSeconds`, the same derivation the printed
+	// "2:31+ disqualified" comes from, and a club with no stated limits has no
+	// disqualification point at all.
+	const over =
+		kind === "speech"
+			? elapsed > (marks.red + TIMING_GRACE_MINUTES) * MIN_MS
+			: limits != null &&
+				elapsed > tableTopicsLastQualifyingSeconds(limits) * 1000;
 	// Checked FIRST so the DQ decision cannot be shadowed by the red band below.
 	if (over) return "over";
 	if (elapsed >= marks.red * MIN_MS) return "red";

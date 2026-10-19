@@ -560,41 +560,25 @@ describe("table topics limits wiring (#443)", () => {
 		).not.toMatch(/^import\s+"[^"]+";/m);
 	});
 
-	it("the templated deck states the club's rule, not the speech grace", () => {
-		// `beatTimingText` called `qualifyingWindowForMarks` with no filter, so a
-		// MATERIALISED meeting projected "qualifies 0:30–3:00" while the same
-		// club's unmaterialised meeting projected "2:31+ disqualified" — two
-		// disqualification rules, separated only by whether anyone had opened the
-		// agenda editor.
+	it("the templated deck derives the window through the segment, with no club special case", () => {
+		// One rule since #1258: a club's cap moves the row's marks, never what
+		// "qualifies" means, so the deck no longer chooses whose rule to quote.
 		const src = readSource("src/lib/agenda-template-slides.ts");
-		// Through `segmentFor` since #720, not a hand-written key match. That
-		// function is the ONE place the role key decides a timing segment — the
-		// Timer's sheet and the printed agenda's grace line read it too — so a
-		// literal comparison here would be a second statement of the rule, which
-		// is what put two disqualification rules on one club in the first place.
-		expect(src).toContain("segmentFor(row.roleKey)");
-		// WHOSE rule is being quoted is the STORED marker since #683, and no longer
-		// `segment === "tableTopics"`. `segmentFor` reads the role key alone, and
-		// the run of show gives three beats that key — so an officer who set timer
-		// marks on the Best Table Topics vote row had the wall announce their
-		// 0:30–1:00 as the club's disqualification rule. `segmentFor` still decides
-		// the window's FLOOR above, which is what the first assertion holds.
-		expect(src).toContain("row.clubGoverned === true");
+		// `segmentFor` is the ONE place the role key decides a timing segment (#720).
+		expect(src).toContain(
+			"qualifyingWindowForMarks(row.marks, segmentFor(row.roleKey))",
+		);
+		expect(
+			src,
+			"no second, club-specific qualifying window on the projected deck",
+		).not.toMatch(/formatTableTopicsWindow|ownRule|hasTableTopicsLimits/);
 		expect(
 			src,
 			"the deck must not restate which row the club's window governs",
 		).not.toContain("TABLE_TOPICS_ROLE_KEY");
-		// And the flag has to be DECLARED on the row type the seam returns, or the
-		// value rides an untyped property that any projection in `resolveAgendaRows`
-		// drops with every other gate green.
+		// And the flag has to be DECLARED on the row type the seam returns.
 		expect(readSource("src/lib/agenda-runsheet.ts")).toContain(
 			"clubGoverned?: true;",
-		);
-		expect(src).toContain("formatTableTopicsWindow(row.marks)");
-		// The club's own columns must reach it, off the same `ClubForDeck` the
-		// standard deck reads.
-		expect(src).toMatch(
-			/beatTimingText\(row, \{[\s\S]{0,120}minSeconds: club\.tableTopicsMinSeconds/,
 		);
 	});
 
@@ -614,5 +598,44 @@ describe("table topics limits wiring (#443)", () => {
 		expect(src).toMatch(
 			/tableTopicsMaxSeconds: club\?\.tableTopicsMaxSeconds \?\? null/,
 		);
+	});
+});
+
+describe("one Table Topics disqualification point (#1258)", () => {
+	// A segment is disqualified strictly after red + 0:30, and the Table Topics
+	// cap's own arithmetic lives in `table-topics-limits.ts` alone. The clock
+	// (`timerSignal`) and the printed "N+ disqualified" both read
+	// `tableTopicsLastQualifyingSeconds`; a surface that does its own sum on a
+	// cap, in either operand order and under any variable name, is the second
+	// rule this guards against.
+	const HELPER = "src/lib/table-topics-limits.ts";
+	const files = () => walkSource("src").filter((f) => f !== HELPER);
+
+	it("nothing outside the helper module does arithmetic on a cap", () => {
+		// Any identifier ending `axSeconds`/`axMinutes`, on either side of an
+		// arithmetic operator (so `30 + maxSeconds`, `limits.maxSeconds + 31` and
+		// `tableTopicsMaxSeconds * 1000` all trip it).
+		const arithmetic =
+			/\b\w*[mM]ax(?:Seconds|Minutes)\b\s*[-+*/](?!=)|[-+*/]\s*[\w.]*[mM]ax(?:Seconds|Minutes)\b/;
+		const hits = files().filter((f) => arithmetic.test(readSource(f)));
+		expect(hits).toEqual([]);
+	});
+
+	it("the grace constant and the DQ helpers are read only by their consumers", () => {
+		const readers = (name: string) =>
+			files().filter((f) => readSource(f).includes(name));
+		expect(readers("TABLE_TOPICS_GRACE_SECONDS")).toEqual([]);
+		expect(readers("tableTopicsLastQualifyingSeconds")).toEqual([
+			"src/lib/timer-signal.ts",
+		]);
+		expect(readers("tableTopicsDqSeconds")).toEqual([]);
+	});
+
+	it("no min-to-cap window formatter exists beside the qualifying window", () => {
+		expect(
+			[...files(), HELPER].filter((f) =>
+				/formatTableTopicsWindow/.test(readSource(f)),
+			),
+		).toEqual([]);
 	});
 });

@@ -907,8 +907,8 @@ function ClubSettings() {
 						Leave both blank to use the standard {TABLE_TOPICS_DEFAULT_TIMING}.
 						Set them and your agenda, the projected deck and the Timer's colour
 						marks and printed role sheet all switch to your club's own rule —
-						the green light at the minimum, red at the maximum, and anything
-						past the maximum disqualified.
+						the green light at the minimum, red at the maximum, and an answer
+						disqualified 30 seconds after red, like every other segment.
 					</p>
 					{/* The shared `Input`, not a bare `<input>`. The hand-rolled pair
 					    this replaces carried only `aria-invalid:border-destructive`, so

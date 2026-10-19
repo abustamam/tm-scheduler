@@ -426,7 +426,7 @@ describe("a club's own Table Topics window on the templated deck (#443)", () => 
 			green: "1:00",
 			yellow: "1:45",
 			red: "2:30",
-			qualifies: "1:00–2:30",
+			qualifies: "1:00–3:00",
 		});
 		expect(beat?.timing?.qualifies).not.toBe("0:30–3:00");
 	});
@@ -444,7 +444,7 @@ describe("a club's own Table Topics window on the templated deck (#443)", () => 
 			green: "0:30",
 			yellow: "1:45",
 			red: "3:00",
-			qualifies: "0:30–3:00",
+			qualifies: "0:30–3:30",
 		});
 		// The pre-#679 projection, named so this cannot pass by coincidence.
 		expect(beat?.timing?.red).not.toBe("2:30");
@@ -458,7 +458,7 @@ describe("a club's own Table Topics window on the templated deck (#443)", () => 
 		expect(formatTableTopicsTiming(CLUB)).toBe(
 			"1:00 minimum · 2:30 maximum · 3:01+ disqualified",
 		);
-		expect(beat?.timing?.qualifies).toBe("1:00–2:30");
+		expect(beat?.timing?.qualifies).toBe("1:00–3:00");
 	});
 
 	it("leaves a club that has stated nothing on the STANDARD window", () => {

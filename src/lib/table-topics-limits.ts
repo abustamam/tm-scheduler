@@ -194,28 +194,19 @@ export function resolveTableTopicsMarks(
  * comes through here.
  *
  * Stated the way a club states it on its own printed agenda: the floor, the
- * cap, and the first disqualifying second. The DQ point is DERIVED as one
- * second past cap + grace rather than stored, so it cannot drift from the cap an
- * admin edits — MCF's own sheet says "2.3 min max, 2.31+ disqualified", which
- * is the same fact twice.
+ * cap, and the first disqualifying second. The DQ point is DERIVED
+ * (`tableTopicsDqSeconds`) rather than stored, so it cannot drift from the cap
+ * an admin edits. Since #1258 it is the 30-second grace of `timing-window.ts`
+ * past the cap, like every other timed segment: "2:31+ disqualified" for a
+ * 2:00 cap. (MCF's own paper sheet still says "2.3 min max, 2.31+
+ * disqualified", which is a 2:18 cap plus the same grace, not the same fact as
+ * this app's rule.) The cap is the club's; the grace is not.
  *
- * Since #1258 the DQ point IS the 30-second grace of `timing-window.ts` past
- * the cap, like every other timed segment: "2:31+ disqualified" for a 2:00
- * cap. The cap is the club's; the grace is not.
- *
- * The ASYMMETRY that made that hard to hold is fixed at source since #720.
- * `qualifyingWindow` now takes a `TimingSegment`, and `"tableTopics"` drops the
- * grace BELOW green while keeping the +0:30 above red — so a surface deriving a
- * Table Topics window no longer has to be kept away from the derivation, it
- * just has to name its segment. Two rounds of filtering preceded that and
- * neither was the fix: `firstQualifyingWindow` skips every non-speaker row
- * (#357) so the printed agenda's EXAMPLE is a speech, and `beatTimingText` (the
- * TEMPLATED deck) had no filter at all, so a materialised meeting projected
- * "qualifies 0:30–3:00" beside a non-materialised one saying "2:31+
- * disqualified" — two disqualification rules for one club, differing only by
- * whether anyone had opened the agenda editor. `TABLE_TOPICS_ROLE_KEY` and
- * `formatTableTopicsWindow` below are what that derivation uses for a club with
- * a stated cap; a club with none now gets the segment-aware window.
+ * Every surface that states a Table Topics qualifying span (the role sheet's
+ * "Qualifies" cell, the templated deck, the printed agenda's key) derives it
+ * through `qualifyingWindowForMarks(marks, "tableTopics")`: green to red + 0:30.
+ * A club's own cap changes the marks, never the rule, so there is no separate
+ * "club's window" formatter.
  */
 export function formatTableTopicsTiming(
 	limits: TableTopicsLimits | null | undefined,
@@ -235,38 +226,32 @@ export function formatTableTopicsTiming(
 export const TABLE_TOPICS_GRACE_SECONDS = 30;
 
 /**
- * The first DISQUALIFYING second — the number behind the "2:31+" that
- * `formatTableTopicsTiming` above prints (#732).
+ * The last whole second at which a Table Topics answer still qualifies: the
+ * cap plus the grace (#1258). The ONE derivation of the disqualification
+ * point; `tableTopicsDqSeconds` (the printed "2:31+") and `timerSignal` (the
+ * live clock's `over`) both read it, so they cannot state two rules.
  *
- * One second past red + 0:30 (#1258: the speech rule; no club opt-out),
- * derived rather than stored, for the reason
- * `formatTableTopicsTiming` states: the DQ point and the cap an admin edits are
- * the same fact, and storing both is how two walls come to contradict each
- * other. This export exists so that a caller needing the NUMBER — a clock
- * deciding whether a Table Topics speech disqualified — reads the same
- * expression the printed sentence does, instead of re-deriving the arithmetic
- * beside it. That re-derivation is the failure `agenda-template-slides.ts`
- * records, where two surfaces stated two disqualification rules for one club.
- *
- * Reads the CAP alone, so a caller that has already narrowed through
- * `hasTableTopicsLimits` can pass its whole object straight in. It therefore
- * says nothing about whether the club HAS stated a window — ask
- * `hasTableTopicsLimits` first, as `formatTableTopicsTiming` does.
- *
- * An OBJECT rather than the bare `maxSeconds: number` that `tableTopicsClockText`
- * takes a few lines down, and the difference is deliberate. That one reads a
- * field the caller has already chosen; this one is the arithmetic that makes
- * the choice matter, and a bare number parameter would accept
- * `tableTopicsDqSeconds(limits.minSeconds)` silently — a disqualification
- * point one second past the FLOOR, printed with no type error and no test
- * failing unless someone happened to pin that club's sentence.
+ * Reads the CAP alone and says nothing about whether the club HAS stated a
+ * window; ask `hasTableTopicsLimits` first. An OBJECT rather than a bare
+ * number, so `lastQualifyingSeconds(limits.minSeconds)` is a type error rather
+ * than a disqualification point silently anchored on the floor.
  */
-export function tableTopicsDqSeconds({
+export function tableTopicsLastQualifyingSeconds({
 	maxSeconds,
 }: {
 	maxSeconds: number;
 }): number {
-	return maxSeconds + TABLE_TOPICS_GRACE_SECONDS + 1;
+	return maxSeconds + TABLE_TOPICS_GRACE_SECONDS;
+}
+
+/**
+ * The first DISQUALIFYING whole second, the number behind the "2:31+" that
+ * `formatTableTopicsTiming` prints (#732): one past
+ * `tableTopicsLastQualifyingSeconds`. Derived, not stored, so it moves with the
+ * cap an admin edits.
+ */
+export function tableTopicsDqSeconds(limits: { maxSeconds: number }): number {
+	return tableTopicsLastQualifyingSeconds(limits) + 1;
 }
 
 /**
@@ -318,30 +303,6 @@ export const TABLE_TOPICS_MESSAGES = {
  * role key, and worth knowing about separately when either string moves.
  */
 export const TABLE_TOPICS_ROLE_KEY = "table_topics_master";
-
-/**
- * The club's window as a plain span, e.g. "1:00–2:30".
- *
- * The same two numbers `formatTableTopicsTiming` states as a sentence, in the
- * shape a `QualifyingWindow.range` uses, so the templated deck can print the
- * club's rule in the slot where it used to print the speech grace.
- *
- * Takes MARKS rather than the stored seconds, and since #679 that is no longer
- * a compromise. The original reason was that a templated row rendered the marks
- * FROZEN into it, so re-deriving from the club's current columns here would
- * have made the wall disagree with the paper the room is holding — which
- * accepted a stale span to keep two surfaces consistent.
- * `refreshTableTopicsMarks` removed the staleness at its source, so on the
- * templated deck the marks this is handed are the club's current window and
- * both properties hold at once.
- *
- * Stated as "on the templated deck" rather than universally, because this is
- * also called with `resolveTableTopicsMarks(...)` output directly (the Timer's
- * role sheet), where the question does not arise.
- */
-export function formatTableTopicsWindow(marks: TimingMarks): string {
-	return `${formatSeconds(marks.green * 60)}–${formatSeconds(marks.red * 60)}`;
-}
 
 /**
  * "2:30" → 150, and null for anything that is not a clock.
