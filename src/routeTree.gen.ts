@@ -69,6 +69,7 @@ import { Route as AuthedAdminCharterRouteImport } from './routes/_authed/admin/c
 import { Route as AuthedAdminAgendasRouteImport } from './routes/_authed/admin/agendas'
 import { Route as AuthedAdminActionItemsRouteImport } from './routes/_authed/admin/action-items'
 import { Route as AuthedSuperadminAreasIndexRouteImport } from './routes/_authed/superadmin/areas.index'
+import { Route as ClubClubIdNextTentRouteImport } from './routes/club.$clubId_.next.tent'
 import { Route as ClubClubIdMeetingMeetingIdRouteImport } from './routes/club.$clubId.meeting.$meetingId'
 import { Route as ApiClubClubIdLogoRouteImport } from './routes/api/club.$clubId.logo'
 import { Route as AuthedSuperadminAreasAreaIdRouteImport } from './routes/_authed/superadmin/areas.$areaId'
@@ -394,6 +395,11 @@ const AuthedSuperadminAreasIndexRoute =
     path: '/areas/',
     getParentRoute: () => AuthedSuperadminRoute,
   } as any)
+const ClubClubIdNextTentRoute = ClubClubIdNextTentRouteImport.update({
+  id: '/club/$clubId_/next/tent',
+  path: '/club/$clubId/next/tent',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ClubClubIdMeetingMeetingIdRoute =
   ClubClubIdMeetingMeetingIdRouteImport.update({
     id: '/meeting/$meetingId',
@@ -586,6 +592,7 @@ export interface FileRoutesByFullPath {
   '/superadmin/areas/$areaId': typeof AuthedSuperadminAreasAreaIdRoute
   '/api/club/$clubId/logo': typeof ApiClubClubIdLogoRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
+  '/club/$clubId/next/tent': typeof ClubClubIdNextTentRoute
   '/superadmin/areas/': typeof AuthedSuperadminAreasIndexRoute
   '/api/clubs/$clubId/export/zip': typeof ApiClubsClubIdExportZipRoute
   '/api/meetings/$id/minutes/pdf': typeof ApiMeetingsIdMinutesPdfRoute
@@ -667,6 +674,7 @@ export interface FileRoutesByTo {
   '/superadmin/areas/$areaId': typeof AuthedSuperadminAreasAreaIdRoute
   '/api/club/$clubId/logo': typeof ApiClubClubIdLogoRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
+  '/club/$clubId/next/tent': typeof ClubClubIdNextTentRoute
   '/superadmin/areas': typeof AuthedSuperadminAreasIndexRoute
   '/api/clubs/$clubId/export/zip': typeof ApiClubsClubIdExportZipRoute
   '/api/meetings/$id/minutes/pdf': typeof ApiMeetingsIdMinutesPdfRoute
@@ -752,6 +760,7 @@ export interface FileRoutesById {
   '/_authed/superadmin/areas/$areaId': typeof AuthedSuperadminAreasAreaIdRoute
   '/api/club/$clubId/logo': typeof ApiClubClubIdLogoRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
+  '/club/$clubId_/next/tent': typeof ClubClubIdNextTentRoute
   '/_authed/superadmin/areas/': typeof AuthedSuperadminAreasIndexRoute
   '/api/clubs/$clubId/export/zip': typeof ApiClubsClubIdExportZipRoute
   '/api/meetings/$id/minutes/pdf': typeof ApiMeetingsIdMinutesPdfRoute
@@ -837,6 +846,7 @@ export interface FileRouteTypes {
     | '/superadmin/areas/$areaId'
     | '/api/club/$clubId/logo'
     | '/club/$clubId/meeting/$meetingId'
+    | '/club/$clubId/next/tent'
     | '/superadmin/areas/'
     | '/api/clubs/$clubId/export/zip'
     | '/api/meetings/$id/minutes/pdf'
@@ -918,6 +928,7 @@ export interface FileRouteTypes {
     | '/superadmin/areas/$areaId'
     | '/api/club/$clubId/logo'
     | '/club/$clubId/meeting/$meetingId'
+    | '/club/$clubId/next/tent'
     | '/superadmin/areas'
     | '/api/clubs/$clubId/export/zip'
     | '/api/meetings/$id/minutes/pdf'
@@ -1002,6 +1013,7 @@ export interface FileRouteTypes {
     | '/_authed/superadmin/areas/$areaId'
     | '/api/club/$clubId/logo'
     | '/club/$clubId/meeting/$meetingId'
+    | '/club/$clubId_/next/tent'
     | '/_authed/superadmin/areas/'
     | '/api/clubs/$clubId/export/zip'
     | '/api/meetings/$id/minutes/pdf'
@@ -1049,6 +1061,7 @@ export interface RootRouteChildren {
   ClubClubIdRolesRoute: typeof ClubClubIdRolesRoute
   ClubClubIdSignRoute: typeof ClubClubIdSignRoute
   ApiClubClubIdLogoRoute: typeof ApiClubClubIdLogoRoute
+  ClubClubIdNextTentRoute: typeof ClubClubIdNextTentRoute
   ApiClubsClubIdExportZipRoute: typeof ApiClubsClubIdExportZipRoute
   ApiMeetingsIdMinutesPdfRoute: typeof ApiMeetingsIdMinutesPdfRoute
   ApiMeetingsIdPacketPdfRoute: typeof ApiMeetingsIdPacketPdfRoute
@@ -1484,6 +1497,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedSuperadminAreasIndexRouteImport
       parentRoute: typeof AuthedSuperadminRoute
     }
+    '/club/$clubId_/next/tent': {
+      id: '/club/$clubId_/next/tent'
+      path: '/club/$clubId/next/tent'
+      fullPath: '/club/$clubId/next/tent'
+      preLoaderRoute: typeof ClubClubIdNextTentRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/club/$clubId/meeting/$meetingId': {
       id: '/club/$clubId/meeting/$meetingId'
       path: '/meeting/$meetingId'
@@ -1789,6 +1809,7 @@ const rootRouteChildren: RootRouteChildren = {
   ClubClubIdRolesRoute: ClubClubIdRolesRoute,
   ClubClubIdSignRoute: ClubClubIdSignRoute,
   ApiClubClubIdLogoRoute: ApiClubClubIdLogoRoute,
+  ClubClubIdNextTentRoute: ClubClubIdNextTentRoute,
   ApiClubsClubIdExportZipRoute: ApiClubsClubIdExportZipRoute,
   ApiMeetingsIdMinutesPdfRoute: ApiMeetingsIdMinutesPdfRoute,
   ApiMeetingsIdPacketPdfRoute: ApiMeetingsIdPacketPdfRoute,
