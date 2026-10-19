@@ -125,7 +125,11 @@ export async function assertClubNotArchivedTx(
 		.select({ archivedAt: clubs.archivedAt })
 		.from(clubs)
 		.where(eq(clubs.id, clubId))
-		.limit(1);
+		.limit(1)
+		// FOR SHARE: a plain read does not block `archiveClub`'s UPDATE, so the
+		// club could be archived after this check and before the transaction
+		// commits (#1206). The share lock makes the archive wait for us.
+		.for("share");
 	if (!club) throw new Error("Club not found.");
 	if (isClubArchived(club)) throw new Error(CLUB_ARCHIVED_MESSAGE);
 }

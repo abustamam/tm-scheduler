@@ -858,6 +858,34 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 		expect((await counts()).roleSlots).toBe(before.roleSlots);
 	});
 
+	it("the archive gate holds a share lock: an archive from another connection waits for the open transaction (#1206)", async () => {
+		await testDb.transaction(async (tx) => {
+			await logic.assertClubNotArchivedTx(tx, seed.clubId);
+			// A second connection, outside `tx`: its UPDATE must block on the
+			// gate's row lock, not slip in and commit.
+			const err = await testDb
+				.transaction(async (other) => {
+					await other.execute(sql.raw("set local lock_timeout = '300ms'"));
+					await other.execute(
+						sql.raw(
+							`update clubs set archived_at = now() where id = '${seed.clubId}'`,
+						),
+					);
+				})
+				.then(
+					() => null,
+					(e: unknown) => e as { code?: string; cause?: { code?: string } },
+				);
+			// 55P03 = lock_not_available: it was the row lock, not some other failure.
+			expect(err?.cause?.code ?? err?.code).toBe("55P03");
+		});
+		const [row] = await testDb
+			.select({ archivedAt: clubs.archivedAt })
+			.from(clubs)
+			.where(eq(clubs.id, seed.clubId));
+		expect(row?.archivedAt).toBeNull();
+	});
+
 	// -- D1: an existing meeting at the same instant (#1196 review) ----------------
 
 	async function seedMeetingAt(
