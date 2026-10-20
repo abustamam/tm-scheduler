@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ALLOW_LIST, generateFixture, newRewriteState, presetNumber, rewriteEasySpeakPage } from "../scripts/easy-speak-fixture-from-archive";
-import { FAKE_NAMES, fixturePath, fixtureViolations, parseHtml, readFixture, setup, stripClock } from "./easy-speak-test-kit";
+import { clock, FAKE_NAMES, fixturePath, fixtureViolations, parseHtml, readFixture, setup, stripClock } from "./easy-speak-test-kit";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/easy-speak-fixture-from-archive.ts", import.meta.url));
 
@@ -715,6 +715,7 @@ describe("the committed fixtures round-trip", () => {
 	 * id and number, phone, username, place, speech title and the join host become a made-up one, and the
 	 * generator must remove every one of them.
 	 */
+	const REAL_IDS = [...new Set(files.flatMap((f) => [...readFixture(f).matchAll(/[?&;](?:t|s)=(\d{4,})/g)].map((m) => m[1])))];
 	function deFake(html: string) {
 		let out = html;
 		const names: string[] = [];
@@ -738,10 +739,11 @@ describe("the committed fixtures round-trip", () => {
 			.replace(/\(555\) 010-(\d{4})/g, "(212) 555-$1");
 		// a meeting id (t=) and a speech id (s=) become invented ones, and each is a term the rewrite must remove
 		const ids: string[] = [];
-		out = out.replace(/(?<=[?&;](?:t|s)=)\d+/g, (id) => {
-			if (id.length >= 4) ids.push(`7${id}`); // a one-digit speech id is too short to be a term of its own
-			return `7${id}`;
-		});
+		// every id that appears as t= or s= in ANY committed page is replaced wherever it appears in this one (a form field too)
+		for (const id of REAL_IDS) {
+			if (new RegExp(`(?<!\\d)${id}(?!\\d)`).test(out)) ids.push(`7${id}`);
+			out = out.replace(new RegExp(`(?<!\\d)${id}(?!\\d)`, "g"), `7${id}`);
+		}
 		// an email, and data that sits only in an attribute, with short numbers among the long ones
 		const email = "zorvak.quillon@quorvakmail.example";
 		terms.push(email, "Zqattrdata");
@@ -761,8 +763,9 @@ describe("the committed fixtures round-trip", () => {
 
 	it.each(files)("%s: invented real values put back in are all gone, and the structure is the page's own", (f) => {
 		const d = deFake(readFixture(f));
-		const r = generateFixture(d.html, { contactPage: isContact(f), original: original(d.names, d.terms) });
+		const r = generateFixture(d.html, { contactPage: isContact(f), state: newRewriteState({ seed: f, dateShiftDays: 7 * 400 }), original: original(d.names, d.terms) });
 		expect(r.violations).toEqual([]);
+ttexpect(fixtureViolations(r.html, { contactPage: isContact(f) }), "the committed-fixture check on the generated page").toEqual([]);
 		expectNone(r.html, [...d.names, ...d.terms, ...d.ids]);
 		expect(r.html).not.toMatch(/7900\d{3}|7314159|2718281|\(212\) 555-/);
 		expectNoDigitSurvives(d.html, r.html, [], { page: true });
@@ -781,13 +784,13 @@ describe("the committed fixtures round-trip", () => {
 
 	/** The strings a rewrite replaces on purpose: a theme, a title, an introduction are the club's own words. */
 	const FREE_TEXT = new Set(["theme", "wordOfTheDay", "title", "introduction", "topic", "joinUrl", "project", "path", "venue"]);
-	/** The bundle with free text blanked and every name and long number replaced by the order it first appears in: two bundles are the same structure if these are equal. */
+	/** The bundle with free text blanked, dates and numbers blanked, and every name and id replaced by the order it first appears in: two bundles are the same structure if these are equal. */
 	function canon(bundle: unknown): string {
 		const seen = new Map<string, string>();
 		const tok = (m: string) => {
 			let t = seen.get(m);
 			if (!t) {
-				t = `<${seen.size}>`;
+				t = `<${base26(seen.size)}>`;
 				seen.set(m, t);
 			}
 			return t;
@@ -800,30 +803,47 @@ describe("the committed fixtures round-trip", () => {
 			return typeof v === "string" && FREE_TEXT.has(key) ? "*" : v;
 		};
 		const names = new RegExp([...FAKE_NAMES].sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g");
-		return JSON.stringify(blank(bundle)).replace(names, tok).replace(/\d{4,}/g, tok);
+		return JSON.stringify(blank(bundle))
+			.replace(/\d{4}-\d{2}-\d{2}(?:T[\d:.]+Z?)?/g, "<date>") // a shifted date is a different date by design
+			.replace(/\d+\.\d+/g, "#")
+			.replace(names, tok)
+			.replace(/\d{4,}/g, tok) // an id is its order of appearance
+			.replace(/\d+(?:\.\d+)?/g, "#"); // a level, a duration, a count is another number by design
 	}
 
 	it("the walk still runs, and finds the same meetings, people, roles, speeches and dates, with every id and person lining up across the rewritten pages", async () => {
-		const st = newRewriteState();
+		const SHIFT = 700;
+		const st = newRewriteState({ seed: "walk", dateShiftDays: SHIFT });
 		// the walker is signed in as the fixture club (4242); the de-faked club id's fake is that one
 		presetNumber(st, "7314159", "4242");
-		
 		const generated = new Map<string, string>();
+		const dFakes = new Map(files.map((f) => [f, deFake(readFixture(f))] as const));
+		const allIds = [...new Set([...dFakes.values()].flatMap((d) => d.ids))];
+		const allTerms = [...new Set([...dFakes.values()].flatMap((d) => [...d.names, ...d.terms]))];
 		for (const f of ["club-data.html", ...files.filter((x) => x !== "club-data.html")]) {
-			const r = generateFixture(deFake(readFixture(f)).html, { contactPage: isContact(f), state: st });
+			const d = dFakes.get(f) as ReturnType<typeof deFake>;
+			const r = generateFixture(d.html, { contactPage: isContact(f), state: st, original: { names: d.names, terms: [...d.terms, ...d.ids], clubIds: ["7314159", "2718281"], personIds: [] } });
 			expect(r.violations, f).toEqual([]);
+			// keeping a meeting id, a speech id, an email or a name goes red here
+			expectNone(r.html, [...d.ids, ...d.names, ...d.terms]);
 			generated.set(f, r.html);
 		}
-		const fake = (real: string) => st.numbers.get(real);
+		expect(allIds.length).toBeGreaterThan(5);
+		expect(allTerms.length).toBeGreaterThan(5);
+		const fake = (real: string) => st.numbers.get(`7${real}`);
 		const extraMeetings: Record<string, string> = {};
 		for (const [id, file] of [["644360", "meeting-upcoming.html"], ["644304", "meeting-completed.html"], ["644363", "meeting-table-topics.html"]]) {
 			const f = fake(id);
+			expect(f, `no fake for meeting ${id}`).toBeTruthy();
 			if (f) extraMeetings[f] = file;
 		}
 		const introId = fake("1473688");
+		expect(introId).toBeTruthy();
+		const shifted = Date.UTC(2026, 9, 12, 12, 0, 0) + SHIFT * 86400000;
 		const plain = stripClock(await setup().run()).bundle;
 		const again = stripClock(
 			await setup({
+				clock: clock(shifted),
 				read: (name) => generated.get(name) ?? readFixture(name),
 				extraMeetings,
 				override: (url) => {
@@ -850,6 +870,7 @@ describe("the second net with the real values", () => {
 	it("generateFixture is clean when the real value did not survive", () => {
 		const r = generateFixture(page(`<td>Rowan Tidewell</td>`), { original: { names: ["Rowan Tidewell"], terms: ["Tidewell"] } });
 		expect(r.violations).toEqual([]);
+ttexpect(fixtureViolations(r.html, { contactPage: isContact(f) }), "the committed-fixture check on the generated page").toEqual([]);
 	});
 });
 
