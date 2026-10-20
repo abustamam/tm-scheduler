@@ -1332,6 +1332,55 @@ export const bulkImportSchema = z.object({
 });
 type BulkImportInput = z.infer<typeof bulkImportSchema> & RosterActor;
 
+type MembersTx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+export interface RosterMemberInsert {
+	clubId: string;
+	name: string;
+	email: string | null;
+	/** Already stored-form (`toStoredPhone`). */
+	phone: string | null;
+	status: "active" | "former";
+	/** Club-local `YYYY-MM-DD`; null = unknown (a `former` member from an import). */
+	endedAt: string | null;
+	joinedAt: Date | null;
+	clubRole: "member" | "admin";
+	/** Start the new-member checklist (#940): only the one-row Quick add does. */
+	orientation: boolean;
+}
+
+/**
+ * Insert one new Person and their membership. The one place a roster row is
+ * made from a pasted or imported line: `applyBulkImport` and the Easy-Speak
+ * import (#1240) both call it, inside a transaction of their own. It logs
+ * nothing: the caller owns the `member_add` and who it is attributed to.
+ */
+export async function insertRosterMember(
+	tx: MembersTx,
+	input: RosterMemberInsert,
+): Promise<{ id: string; personId: string }> {
+	const [person] = await tx
+		.insert(people)
+		.values({ name: input.name, email: input.email, phone: input.phone })
+		.returning({ id: people.id });
+	if (!person) throw new Error("Failed to insert person.");
+	const [m] = await tx
+		.insert(members)
+		.values({
+			clubId: input.clubId,
+			personId: person.id,
+			name: input.name,
+			clubRole: input.clubRole,
+			status: input.status,
+			endedAt: input.endedAt,
+			...(input.joinedAt ? { joinedAt: input.joinedAt } : {}),
+			...(input.orientation ? {} : { orientationStartedAt: null }),
+		})
+		.returning({ id: members.id });
+	if (!m) throw new Error("Failed to insert member.");
+	return { id: m.id, personId: person.id };
+}
+
 export interface BulkImportResult {
 	skippedOfficerAssignments: number;
 	insertedIds: string[];
@@ -1383,26 +1432,19 @@ export async function applyBulkImport(
 			const phone = toStoredPhone(row.phone, cc);
 			// Each pasted row is a new person (ADR-0008); cross-club dedupe is the
 			// CSV importer's job, and buildImportPreview already drops in-club dupes.
-			const [person] = await tx
-				.insert(people)
-				.values({ name, email, phone })
-				.returning({ id: people.id });
-			if (!person) throw new Error("Failed to insert person.");
-			const [m] = await tx
-				.insert(members)
-				.values({
-					clubId: input.clubId,
-					personId: person.id,
-					name,
-					clubRole: "member",
-					// Leave the column to its DEFAULT now() only when asked; see
-					// `startOrientation` on the schema above.
-					...(input.startOrientation === true
-						? {}
-						: { orientationStartedAt: null }),
-				})
-				.returning({ id: members.id });
-			if (!m) throw new Error("Failed to insert member.");
+			const m = await insertRosterMember(tx, {
+				clubId: input.clubId,
+				name,
+				email,
+				phone,
+				status: "active",
+				endedAt: null,
+				joinedAt: null,
+				clubRole: "member",
+				// Leave the column to its DEFAULT now() only when asked; see
+				// `startOrientation` on the schema above.
+				orientation: input.startOrientation === true,
+			});
 			ids.push(m.id);
 			await logActivity(tx, {
 				clubId: input.clubId,

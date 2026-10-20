@@ -111,13 +111,16 @@ describe("buildImportPlan on the B fixture", () => {
 		).toEqual([id(3), id(4)]);
 	});
 
-	it("leaves a member-list name that is not on the roster unmatched, never a guest", () => {
+	it("creates a former member for a past person only a meeting names, and asks only about the ambiguous (#1240)", () => {
 		const plan = buildImportPlan(load(), ctx());
-		expect(outcomeOf(plan, "900001")?.status).toBe("unmatched");
-		expect(plan.unresolved.map((p) => p.key).sort()).toEqual([
-			"es:900001",
-			"es:900005",
-		]);
+		// Avery Alderfinch holds a role and is on no list and in no guest category.
+		expect(outcomeOf(plan, "900001")).toEqual({
+			status: "create",
+			membership: "former",
+			position: null,
+			joinedAt: null,
+		});
+		expect(plan.unresolved.map((p) => p.key)).toEqual(["es:900005"]);
 		expect(plan.canApply).toBe(false);
 	});
 
@@ -187,14 +190,14 @@ describe("buildImportPlan on the B fixture", () => {
 		expect(plan.canApply).toBe(false);
 	});
 
-	it("does not let an answer override an automatic match", () => {
+	it("lets a saved answer win over an automatic match (#1240 precedence 1)", () => {
 		const plan = buildImportPlan(
 			load(),
 			ctx({
 				resolutions: { "es:900057": { action: "skip", reason: "no" } },
 			}),
 		);
-		expect(outcomeOf(plan, "900057")).toMatchObject({ status: "member" });
+		expect(outcomeOf(plan, "900057")).toMatchObject({ status: "skipped" });
 	});
 
 	it("maps the roles to standard keys and gives the club's own roles their own definitions", () => {
@@ -373,7 +376,7 @@ describe("buildImportPlan on the B fixture", () => {
 		expect(outcomeOf(memberGone, "900036")).not.toEqual({ status: "deleted" });
 	});
 
-	it("a member ref whose member row is gone falls back to the name, and asks a human when the name finds nobody (D4)", () => {
+	it("a member ref whose member row is gone falls back to the name, and creates the person when the name finds nobody (D4)", () => {
 		const matched = buildImportPlan(
 			load(),
 			ctx({
@@ -392,8 +395,8 @@ describe("buildImportPlan on the B fixture", () => {
 				refs: [{ kind: "person", sourceId: "es:900001", targetId: "gone" }],
 			}),
 		);
-		expect(outcomeOf(asks, "900001")).toEqual({ status: "unmatched" });
-		expect(asks.unresolved.map((p) => p.key)).toContain("es:900001");
+		expect(outcomeOf(asks, "900001")).toMatchObject({ status: "create" });
+		expect(asks.unresolved.map((p) => p.key)).not.toContain("es:900001");
 	});
 
 	it("imports nothing from a meeting in the future, however the clock moves", () => {
@@ -472,14 +475,16 @@ describe("people the lists name and no meeting does (#1203)", () => {
 		});
 	});
 
-	it("leaves a list-only person with no roster match unmatched: never a guest, never blocking", () => {
+	it("leaves a chart-or-request-only person with no roster match unmatched: never a guest, never blocking", () => {
 		const before = buildImportPlan(load(), ctx({ resolutions: SKIP_AVERY }));
 		const unmatched = before.people.filter(
 			(p) => p.listOnly && p.outcome.status === "unmatched",
 		);
 		expect(unmatched.map((p) => p.name)).toEqual(
-			expect.arrayContaining(["Avery Ivybridge", "Casey Winterbourne"]),
+			expect.arrayContaining(["Avery Ivybridge"]),
 		);
+		// Casey Winterbourne is on the member list, so she is a member to create.
+		expect(unmatched.map((p) => p.name)).not.toContain("Casey Winterbourne");
 		expect(before.unresolved).toEqual([]);
 		expect(before.canApply).toBe(true);
 		// None of them is a guest to create, however they are named.
@@ -491,7 +496,7 @@ describe("people the lists name and no meeting does (#1203)", () => {
 		);
 	});
 
-	it("does not read a saved decision for an unmatched list-only person, nor a guest choice for an ambiguous one", () => {
+	it("does not read a saved decision for an unmatched chart-only person, nor a guest choice for a list-only one", () => {
 		const roster = [
 			...ROSTER,
 			{ memberId: id(30), name: "Gray Ashlowe" },
@@ -511,7 +516,7 @@ describe("people the lists name and no meeting does (#1203)", () => {
 				},
 			}),
 		);
-		expect(person(plan, "900029")?.outcome.status).toBe("unmatched");
+		expect(person(plan, "900029")?.outcome.status).toBe("create");
 		expect(person(plan, "900027")?.outcome.status).toBe("unmatched");
 		expect(person(plan, "900033")?.outcome.status).toBe("ambiguous");
 		expect(plan.unresolved.map((p) => p.key)).toEqual(["es:900033"]);

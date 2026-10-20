@@ -55,6 +55,11 @@ const preview = {
 		tableTopicsSpeakers: 0,
 		newGuests: 0,
 		newRoleDefinitions: 0,
+		linkedMembers: 0,
+		newActiveMembers: 0,
+		newOfficers: 0,
+		newFormerMembers: 0,
+		erasedAccounts: 0,
 	},
 	people: [
 		{
@@ -86,6 +91,7 @@ const preview = {
 	roleDefinitions: [],
 	futureMeetings: [],
 	roster: [{ memberId: M1, name: "Elliot Dovecott" }],
+	contacts: { emails: 0, phones: 0, warnings: [] },
 	unresolvedCount: 1,
 	canApply: false,
 	savedResolutions: {},

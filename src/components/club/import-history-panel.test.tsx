@@ -51,6 +51,11 @@ const counts = {
 	tableTopicsSpeakers: 0,
 	newGuests: 3,
 	newRoleDefinitions: 2,
+	linkedMembers: 0,
+	newActiveMembers: 0,
+	newOfficers: 0,
+	newFormerMembers: 0,
+	erasedAccounts: 0,
 };
 
 const person = {
@@ -104,6 +109,7 @@ function previewFor(
 			{ memberId: M1, name: "Elliot Dovecott" },
 			{ memberId: M2, name: "Elliot Dovecott" },
 		],
+		contacts: { emails: 0, phones: 0, warnings: [] },
 		unresolvedCount: resolved ? 0 : 1,
 		canApply: resolved,
 		savedResolutions: {},
@@ -189,6 +195,8 @@ describe("ImportHistoryPanel (#1051)", () => {
 				clubId: CLUB,
 				importId: IMPORT,
 				resolutions: { "es:900005": { action: "member", memberId: M2 } },
+				// No contacts pasted: an empty string rides along (#1240).
+				contacts: "",
 				// The apply names the preview it confirms.
 				planHash: PLAN_HASH,
 			},

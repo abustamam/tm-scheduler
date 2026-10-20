@@ -160,6 +160,16 @@ const WAIVERS: Array<{
 		requiresUnlinkedGuard: true,
 		requiresSoleHolder: true,
 	},
+	// The Easy-Speak importer's fill-only address (#1240). Superadmin-only.
+	{
+		file: "server/history-import-logic.ts",
+		fn: "fillMemberContact",
+		sites: 1,
+		reason:
+			"Easy-Speak contact fill of a blank address, unbound sole-holder Persons only (#1240)",
+		requiresUnlinkedGuard: true,
+		requiresSoleHolder: true,
+	},
 	// A test fixture helper: never shipped, never reachable from the app. It
 	// stands in for every fixture that used to write `members.email`.
 	{

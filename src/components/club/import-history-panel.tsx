@@ -75,6 +75,11 @@ export function ImportHistoryPanel({
 	const [importId, setImportId] = useState<string | null>(null);
 	const [drafts, setDrafts] = useState<Record<string, Draft>>({});
 	const [confirming, setConfirming] = useState(false);
+	// The optional pasted contacts (#1240). `contacts` is what is typed; the preview
+	// reads `contactsRead`, set when the box loses focus, so each keystroke is not
+	// a round trip. Sent with the preview and the apply, and kept nowhere else.
+	const [contacts, setContacts] = useState("");
+	const [contactsRead, setContactsRead] = useState("");
 
 	const imports = useQuery({
 		queryKey: ["easy-speak-imports", clubId],
@@ -88,10 +93,21 @@ export function ImportHistoryPanel({
 	}
 
 	const preview = useQuery({
-		queryKey: ["easy-speak-preview", clubId, importId, resolutions],
+		queryKey: [
+			"easy-speak-preview",
+			clubId,
+			importId,
+			resolutions,
+			contactsRead,
+		],
 		queryFn: () =>
 			previewEasySpeakImport({
-				data: { clubId, importId: importId as string, resolutions },
+				data: {
+					clubId,
+					importId: importId as string,
+					resolutions,
+					contacts: contactsRead,
+				},
 			}),
 		enabled: importId !== null,
 		retry: false,
@@ -138,6 +154,7 @@ export function ImportHistoryPanel({
 					clubId,
 					importId: importId as string,
 					resolutions,
+					contacts: contactsRead,
 					planHash: preview.data?.planHash ?? "",
 				},
 			}),
@@ -250,6 +267,25 @@ export function ImportHistoryPanel({
 				)}
 			</div>
 
+			<div className="space-y-1">
+				<label className="text-sm font-medium" htmlFor="import-contacts">
+					Contacts (optional)
+				</label>
+				<textarea
+					id="import-contacts"
+					className="min-h-20 w-full rounded-md border border-[var(--line)] bg-background p-2 text-sm"
+					placeholder="name, email, phone (one person per line)"
+					value={contacts}
+					onChange={(e) => setContacts(e.target.value)}
+					onBlur={() => setContactsRead(contacts)}
+				/>
+				<p className="text-xs text-muted-foreground">
+					Fills a blank email or phone on a member this import links or creates.
+					It is never kept by the import: only the values that land on a person
+					are.
+				</p>
+			</div>
+
 			{imports.data && imports.data.length > 0 ? (
 				<ul className="space-y-1 text-sm">
 					{imports.data.map((row) => (
@@ -347,6 +383,39 @@ export function ImportHistoryPanel({
 								.map((r) => r.name)
 								.join(", ")}
 							.
+						</p>
+					) : null}
+
+					<p className="text-sm" data-testid="import-people-summary">
+						Will link {data.counts.linkedMembers} existing{" "}
+						{data.counts.linkedMembers === 1 ? "member" : "members"}, create{" "}
+						{data.counts.newActiveMembers} active{" "}
+						{data.counts.newActiveMembers === 1 ? "member" : "members"} (
+						{data.counts.newOfficers}{" "}
+						{data.counts.newOfficers === 1 ? "officer" : "officers"}) and{" "}
+						{data.counts.newFormerMembers} former{" "}
+						{data.counts.newFormerMembers === 1 ? "member" : "members"}, add{" "}
+						{data.counts.newGuests}{" "}
+						{data.counts.newGuests === 1 ? "guest" : "guests"}, and skip{" "}
+						{data.counts.erasedAccounts} erased{" "}
+						{data.counts.erasedAccounts === 1 ? "account" : "accounts"}.
+					</p>
+					{data.contacts.warnings.length > 0 ? (
+						<ul
+							className="list-disc space-y-0.5 pl-5 text-sm text-amber-700"
+							data-testid="import-contact-warnings"
+						>
+							{data.contacts.warnings.map((w) => (
+								<li key={w}>{w}</li>
+							))}
+						</ul>
+					) : null}
+					{contactsRead.trim() !== "" ? (
+						<p className="text-sm text-muted-foreground">
+							Contacts will set {data.contacts.emails}{" "}
+							{data.contacts.emails === 1 ? "email" : "emails"} and{" "}
+							{data.contacts.phones}{" "}
+							{data.contacts.phones === 1 ? "phone" : "phones"}.
 						</p>
 					) : null}
 
@@ -857,11 +926,24 @@ function ReportView({ report }: { report: ImportReport }) {
 			) : null}
 			<p className="text-sm text-muted-foreground">
 				Created {report.created.guests} guests
+				{report.created.members
+					? `, ${report.created.members.active} active members (${report.created.members.officers} officers) and ${report.created.members.former} former members`
+					: ""}
 				{report.created.roleDefinitions.length > 0
 					? ` and the club roles ${report.created.roleDefinitions.join(", ")}`
 					: ""}
 				.
 			</p>
+			{report.contactNotes && report.contactNotes.length > 0 ? (
+				<div className="text-sm" data-testid="report-contact-notes">
+					<p className="font-medium">Contacts left out</p>
+					<ul className="list-disc pl-5">
+						{report.contactNotes.map((n) => (
+							<li key={n}>{n}</li>
+						))}
+					</ul>
+				</div>
+			) : null}
 		</div>
 	);
 }

@@ -57,6 +57,7 @@ import {
 	meetingAwards,
 	meetings,
 	members,
+	people,
 	roleDefinitions,
 	roleSlots,
 	speeches,
@@ -64,6 +65,7 @@ import {
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
+import { zonedWallTimeToUtc } from "#/lib/datetime";
 import {
 	type EasySpeakBundleV1,
 	easySpeakBundleV1Schema,
@@ -71,6 +73,7 @@ import {
 import {
 	buildImportPlan,
 	buildReconciliation,
+	type ContactFill,
 	DELETED_SINCE_IMPORT,
 	type FoundSourceIds,
 	type ImportPlan,
@@ -96,16 +99,23 @@ import {
 } from "#/lib/import-bundle-limit";
 import { type ImportRefKind, importRefKindSchema } from "#/lib/import-refs";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
+import { localDateKey } from "#/lib/meeting-url";
+import { toStoredPhone } from "#/lib/phone";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
+import { isValidEmail, parseRosterText } from "#/lib/roster-import";
 import {
 	clipImportedText,
 	normalizePreferredDates,
 } from "#/lib/speech-requests";
+import { soleHoldingClub } from "./account-link-logic";
 import { logActivity } from "./activity";
 import { importPlanAnswers } from "./attendance-plan-logic";
 import { lockClubForWrite } from "./club-write-lock";
+import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { createGuestRecord } from "./guests-logic";
+import { insertRosterMember } from "./members-logic";
+import { openOfficerTermIfAbsent } from "./officer-terms-logic";
 
 export type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
@@ -400,6 +410,7 @@ async function loadPlanContext(
 	clubId: string,
 	now: Date,
 	resolutions: Record<string, PersonResolution>,
+	contacts?: string,
 ): Promise<LoadedContext> {
 	const [club] = await db
 		.select({
@@ -464,6 +475,8 @@ async function loadPlanContext(
 		ctx: {
 			now,
 			clubTimezone: club.timezone,
+			contacts,
+			contactState: await loadContactState(clubId, contacts),
 			roster: roster.map((m) => ({ memberId: m.memberId, name: m.name })),
 			roleDefinitions: defs,
 			guestIds: new Set(guestRows.map((g) => g.id)),
@@ -473,6 +486,55 @@ async function loadPlanContext(
 		},
 		personByMember: new Map(roster.map((m) => [m.memberId, m.personId])),
 		club,
+	};
+}
+
+/**
+ * What the plan needs to place pasted contacts (#1240): what each roster member
+ * already holds, and who holds each pasted email. Read only when there are
+ * contacts, and only for the emails pasted.
+ */
+async function loadContactState(
+	clubId: string,
+	contacts: string | undefined,
+): Promise<PlanContext["contactState"]> {
+	if (!contacts || contacts.trim() === "") return undefined;
+	const emails = [
+		...new Set(
+			parseRosterText(contacts)
+				.map((r) => r.email.trim().toLowerCase())
+				.filter((e) => e !== "" && isValidEmail(e)),
+		),
+	];
+	const memberRows = await db
+		.select({
+			memberId: members.id,
+			personId: members.personId,
+			email: people.email,
+			phone: people.phone,
+		})
+		.from(members)
+		.innerJoin(people, eq(people.id, members.personId))
+		.where(eq(members.clubId, clubId));
+	const holders = new Map<string, Set<string>>();
+	for (let i = 0; i < emails.length; i += 1000) {
+		const rows = await db
+			.select({ id: people.id, email: people.email })
+			.from(people)
+			.where(inArray(sql`lower(${people.email})`, emails.slice(i, i + 1000)));
+		for (const r of rows) {
+			const key = (r.email ?? "").toLowerCase();
+			holders.set(key, (holders.get(key) ?? new Set()).add(r.id));
+		}
+	}
+	return {
+		members: new Map(
+			memberRows.map((m) => [
+				m.memberId,
+				{ personId: m.personId, email: m.email, phone: m.phone },
+			]),
+		),
+		emailHolders: holders,
 	};
 }
 
@@ -519,6 +581,8 @@ export interface ImportPreview {
 	futureMeetings: ImportPlan["futureMeetings"];
 	roster: PlanRosterMember[];
 	unresolvedCount: number;
+	/** What the pasted contacts would set, as counts, and the rows that set nothing (row numbers and names, never a value). */
+	contacts: { emails: number; phones: number; warnings: string[] };
 	canApply: boolean;
 	savedResolutions: Record<string, PersonResolution>;
 	report: ImportReport | null;
@@ -548,9 +612,10 @@ function previewPerson(p: PlanPerson): ImportPreviewPerson {
  * role definitions exist, and what happens to each meeting. An apply that carries
  * the hash of the preview it confirmed is refused when its own plan, computed
  * under the import lock, hashes differently (a roster, a meeting or a ref moved
- * in between).
+ * in between). The pasted contacts text is part of it (#1240): the same bundle
+ * with other contacts is another apply.
  */
-export function planFingerprint(plan: ImportPlan): string {
+export function planFingerprint(plan: ImportPlan, contacts = ""): string {
 	// Built apart from the hash call: `meeting-writers.guard.test.ts` reads any
 	// `.update(` that names `meetings` as a database write.
 	const canonical = JSON.stringify({
@@ -564,6 +629,7 @@ export function planFingerprint(plan: ImportPlan): string {
 			m.skip?.kind ?? null,
 		]),
 		counts: plan.counts,
+		contacts,
 	});
 	return createHash("sha256").update(canonical).digest("hex");
 }
@@ -573,6 +639,8 @@ export async function previewEasySpeakImport(input: {
 	clubId: string;
 	importId: string;
 	resolutions?: Record<string, PersonResolution>;
+	/** Pasted `name, email, phone` rows; read, never stored. */
+	contacts?: string;
 	now?: Date;
 }): Promise<ImportPreview> {
 	const stored = await loadStoredBundle(input.clubId, input.importId);
@@ -584,6 +652,7 @@ export async function previewEasySpeakImport(input: {
 		input.clubId,
 		input.now ?? new Date(),
 		resolutions,
+		input.contacts,
 	);
 	const plan = buildImportPlan(stored.bundle, loaded.ctx);
 	const warnings: string[] = [];
@@ -600,7 +669,7 @@ export async function previewEasySpeakImport(input: {
 	if (isClubArchived(loaded.club)) warnings.push(CLUB_ARCHIVED_MESSAGE);
 	return {
 		importId: input.importId,
-		planHash: planFingerprint(plan),
+		planHash: planFingerprint(plan, input.contacts),
 		appliedAt: stored.appliedAt?.toISOString() ?? null,
 		bundleClub: { name: club.name, number: club.number },
 		club: { name: loaded.club.name, number: loaded.club.clubNumber },
@@ -617,6 +686,11 @@ export async function previewEasySpeakImport(input: {
 		futureMeetings: plan.futureMeetings,
 		roster: loaded.ctx.roster,
 		unresolvedCount: plan.unresolved.length,
+		contacts: {
+			emails: plan.contactFills.filter((f) => f.email).length,
+			phones: plan.contactFills.filter((f) => f.phone).length,
+			warnings: plan.contactWarnings,
+		},
 		canApply: plan.canApply,
 		savedResolutions: stored.state.resolutions,
 		report: stored.state.report,
@@ -676,12 +750,107 @@ interface Resolved {
 	roleDefIds: Map<string, string>;
 	newGuests: number;
 	newRoleDefinitions: string[];
+	/** Members this apply made (#1240), and the Person of each. */
+	newMembers: { active: number; former: number; officers: number };
+	personByNewMember: Map<string, string>;
+	/** Contact values left blank at write time, by row and person: never a value. */
+	contactNotes: string[];
+}
+
+/** What the member-making part of the apply needs beyond the plan (#1240). */
+export interface WritePeopleOptions {
+	/** The superadmin each `member_add` is attributed to. */
+	superadminUserId?: string | null;
+	now?: Date;
+	/** The club's zone, for the day an officer term opens. */
+	timezone?: string | null;
+	/** The club's default country code, for a pasted phone. */
+	countryCode?: string | null;
+}
+
+/** Another Person (any club) already holds this email, case-insensitively. */
+async function emailHeldByOther(
+	tx: Tx,
+	email: string,
+	exceptPersonId: string | null,
+): Promise<boolean> {
+	const rows = await tx
+		.select({ id: people.id })
+		.from(people)
+		.where(eq(sql`lower(${people.email})`, email.toLowerCase()));
+	return rows.some((r) => r.id !== exceptPersonId);
+}
+
+/**
+ * Fill a LINKED member's blank email and phone from a contact row. Both updates
+ * carry the blank test in their own WHERE, so a value someone set since the
+ * preview is never overwritten, and a re-apply re-runs them harmlessly.
+ */
+async function fillMemberContact(
+	tx: Tx,
+	clubId: string,
+	memberId: string,
+	fill: ContactFill,
+	opts: WritePeopleOptions,
+	out: Resolved,
+): Promise<void> {
+	const [row] = await tx
+		.select({ personId: members.personId })
+		.from(members)
+		.where(and(eq(members.id, memberId), eq(members.clubId, clubId)))
+		.limit(1);
+	if (!row) return;
+	if (fill.email) {
+		if (await emailHeldByOther(tx, fill.email, row.personId)) {
+			out.contactNotes.push(
+				`The email in row ${fill.row} was taken since the preview; left blank for ${fill.name}.`,
+			);
+		} else {
+			const filled = await tx
+				.update(people)
+				.set({ email: fill.email })
+				.where(
+					and(
+						eq(people.id, row.personId),
+						isNull(people.userId),
+						soleHoldingClub(clubId),
+						or(isNull(people.email), eq(people.email, "")),
+					),
+				)
+				.returning({ id: people.id });
+			if (filled.length === 0) {
+				const [now] = await tx
+					.select({ email: people.email })
+					.from(people)
+					.where(eq(people.id, row.personId))
+					.limit(1);
+				if (now && !now.email) {
+					out.contactNotes.push(
+						`The email in row ${fill.row} was left blank for ${fill.name}: the person has a GavelUp account or belongs to another club, so it is theirs to add.`,
+					);
+				}
+			}
+		}
+	}
+	const phone = toStoredPhone(fill.phone, opts.countryCode);
+	if (phone) {
+		await tx
+			.update(people)
+			.set({ phone })
+			.where(
+				and(
+					eq(people.id, row.personId),
+					or(isNull(people.phone), eq(people.phone, "")),
+				),
+			);
+	}
 }
 
 /** People, then role definitions: everything every meeting needs, written once. */
 export async function writePeopleAndRoles(
 	clubId: string,
 	plan: ImportPlan,
+	opts: WritePeopleOptions = {},
 ): Promise<Resolved> {
 	return db.transaction(async (tx) => {
 		await lockClubForWrite(tx, clubId);
@@ -693,6 +862,9 @@ export async function writePeopleAndRoles(
 			roleDefIds: new Map(),
 			newGuests: 0,
 			newRoleDefinitions: [],
+			newMembers: { active: 0, former: 0, officers: 0 },
+			personByNewMember: new Map(),
+			contactNotes: [],
 		};
 
 		const [top] = await tx
@@ -774,12 +946,68 @@ export async function writePeopleAndRoles(
 			introducerOf.set(intro.visitorKey, intro.introducerKey);
 		}
 		const byKey = new Map(plan.people.map((p) => [p.key, p]));
+		const fillByKey = new Map<string, ContactFill>(
+			plan.contactFills.map((f) => [f.personKey, f]),
+		);
+
+		// Members first (#1240): everyone who has no member here and is on the member
+		// list or in a meeting. A retried apply never gets here for the same person:
+		// the plan resolved them through their `person` ref and they are `member`.
+		const timezone = opts.timezone ?? "UTC";
+		const day = localDateKey(opts.now ?? new Date(), timezone);
+		const termStart = zonedWallTimeToUtc(`${day}T00:00`, timezone);
+		for (const person of plan.people) {
+			const o = person.outcome;
+			if (o.status !== "create") continue;
+			const fill = fillByKey.get(person.key);
+			let email = fill?.email ?? null;
+			if (fill && email && (await emailHeldByOther(tx, email, null))) {
+				out.contactNotes.push(
+					`The email in row ${fill.row} was taken since the preview; left blank for ${person.name}.`,
+				);
+				email = null;
+			}
+			const joined = o.joinedAt ? new Date(`${o.joinedAt}T12:00:00Z`) : null;
+			const created = await insertRosterMember(tx, {
+				clubId,
+				name: person.name.trim(),
+				email,
+				phone: toStoredPhone(fill?.phone, opts.countryCode),
+				status: o.membership,
+				endedAt: null,
+				joinedAt: joined && !Number.isNaN(joined.getTime()) ? joined : null,
+				clubRole: o.position ? "admin" : "member",
+				orientation: false,
+			});
+			await logActivity(tx, {
+				clubId,
+				actorMemberId: null,
+				impersonatedBy: opts.superadminUserId ?? null,
+				action: "member_add",
+				targetType: "member",
+				targetId: created.id,
+				detail: { name: person.name.trim() },
+			});
+			if (o.position) {
+				await openOfficerTermIfAbsent(tx, created.id, o.position, termStart);
+				out.newMembers.officers++;
+			}
+			if (o.membership === "active") out.newMembers.active++;
+			else out.newMembers.former++;
+			out.members.set(person.key, created.id);
+			out.personByNewMember.set(created.id, created.personId);
+			await putRef(tx, clubId, "person", person.key, created.id);
+		}
 
 		for (const person of plan.people) {
 			const o = person.outcome;
 			if (o.status === "member") {
 				out.members.set(person.key, o.memberId);
 				await putRef(tx, clubId, "person", person.key, o.memberId);
+				const fill = fillByKey.get(person.key);
+				if (fill) {
+					await fillMemberContact(tx, clubId, o.memberId, fill, opts, out);
+				}
 			} else if (o.status === "deleted") {
 				out.deleted.add(person.key);
 			} else if (o.status === "guest") {
@@ -792,11 +1020,14 @@ export async function writePeopleAndRoles(
 				if (person.listOnly) continue;
 				let introducedByMemberId: string | null = null;
 				const introducer = byKey.get(introducerOf.get(person.key) ?? "");
-				if (introducer?.outcome.status === "member") {
+				const introducerMemberId = introducer
+					? out.members.get(introducer.key)
+					: undefined;
+				if (introducerMemberId) {
 					introducedByMemberId = await validatedIntroducerId(
 						tx,
 						clubId,
-						introducer.outcome.memberId,
+						introducerMemberId,
 					);
 				}
 				const created = await createGuestRecord(tx, {
@@ -1471,6 +1702,8 @@ export async function applyEasySpeakImport(input: {
 	resolutions?: Record<string, PersonResolution>;
 	/** The `planHash` of the preview the superadmin confirmed; a plan that has moved is refused. */
 	planHash?: string;
+	/** Pasted `name, email, phone` rows (#1240): placed on people, never stored by the import. */
+	contacts?: string;
 	now?: Date;
 }): Promise<ApplyResult> {
 	// ONE apply per club at a time, held for the whole run by a transaction that
@@ -1494,6 +1727,7 @@ async function applyUnderImportLock(input: {
 	superadminUserId: string;
 	resolutions?: Record<string, PersonResolution>;
 	planHash?: string;
+	contacts?: string;
 	now?: Date;
 }): Promise<ApplyResult> {
 	const now = input.now ?? new Date();
@@ -1505,7 +1739,12 @@ async function applyUnderImportLock(input: {
 		...stored.state.resolutions,
 		...input.resolutions,
 	});
-	const loaded = await loadPlanContext(input.clubId, now, resolutions);
+	const loaded = await loadPlanContext(
+		input.clubId,
+		now,
+		resolutions,
+		input.contacts,
+	);
 	if (isClubArchived(loaded.club)) throw new Error(CLUB_ARCHIVED_MESSAGE);
 	const plan = buildImportPlan(stored.bundle, loaded.ctx);
 	if (!plan.canApply) {
@@ -1513,18 +1752,26 @@ async function applyUnderImportLock(input: {
 	}
 	if (
 		input.planHash !== undefined &&
-		input.planHash !== planFingerprint(plan)
+		input.planHash !== planFingerprint(plan, input.contacts)
 	) {
 		throw new Error(PLAN_CHANGED_MESSAGE);
 	}
 
-	const resolved = await writePeopleAndRoles(input.clubId, plan);
+	const resolved = await writePeopleAndRoles(input.clubId, plan, {
+		superadminUserId: input.superadminUserId,
+		now,
+		timezone: loaded.ctx.clubTimezone,
+		countryCode: await loadClubDefaultCountryCode(input.clubId),
+	});
 	const env: MeetingEnv = {
 		clubId: input.clubId,
 		now,
 		lengthMinutes: loaded.club.defaultMeetingMinutes,
 		resolved,
-		personByMember: loaded.personByMember,
+		personByMember: new Map([
+			...loaded.personByMember,
+			...resolved.personByNewMember,
+		]),
 	};
 	const failed: Array<{ esMeetingId: string; message: string }> = [];
 	const omissions: Omission[] = [];
@@ -1584,9 +1831,14 @@ async function applyUnderImportLock(input: {
 		created: {
 			guests: resolved.newGuests,
 			roleDefinitions: resolved.newRoleDefinitions,
+			members: resolved.newMembers,
 		},
 		omissions,
 	});
+	// Rows that set nothing, or a value left blank: a row number and a person, never
+	// the email or the phone, because this report is stored.
+	const contactNotes = [...plan.contactWarnings, ...resolved.contactNotes];
+	if (contactNotes.length > 0) report.contactNotes = contactNotes;
 
 	const importState = JSON.stringify({ resolutions, report });
 	await db.transaction(async (tx) => {
@@ -1825,9 +2077,16 @@ export const uploadImportSchema = importClubSchema.extend({
 	/** The bundle's JSON text, as read from the file. The logic enforces the cap. */
 	text: z.string().min(1, "Choose a file to upload."),
 });
+/** The most pasted contact text a preview or an apply takes (#1240). */
+export const MAX_CONTACTS_CHARS = 200_000;
 export const importRunSchema = importClubSchema.extend({
 	importId: z.string().uuid(),
 	resolutions: resolutionsSchema.optional(),
+	/** Optional `name, email, phone` rows. Travels with the request; never stored by the import. */
+	contacts: z
+		.string()
+		.max(MAX_CONTACTS_CHARS, "Keep the contacts under 200 KB.")
+		.optional(),
 });
 /**
  * A step that reads one stored import (the speech-request step, the mentor step)

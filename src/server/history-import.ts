@@ -79,6 +79,7 @@ export const previewEasySpeakImport = createServerFn({ method: "POST" })
 			clubId: data.clubId,
 			importId: data.importId,
 			resolutions: data.resolutions,
+			contacts: data.contacts,
 		});
 	});
 
@@ -95,6 +96,7 @@ export const applyEasySpeakImport = createServerFn({ method: "POST" })
 			superadminUserId: currentUser.id,
 			resolutions: data.resolutions,
 			planHash: data.planHash,
+			contacts: data.contacts,
 		});
 	});
 

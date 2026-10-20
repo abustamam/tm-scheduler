@@ -318,9 +318,10 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 			now: NOW,
 		});
 		expect(preview.canApply).toBe(false);
-		expect(preview.unresolvedCount).toBe(2);
+		// Only the name two members share: everyone else resolves by rule (#1240).
+		expect(preview.unresolvedCount).toBe(1);
 		await expect(apply(stored.importId, {})).rejects.toThrow(
-			logic.UNRESOLVED_PEOPLE_MESSAGE(2),
+			logic.UNRESOLVED_PEOPLE_MESSAGE(1),
 		);
 		expect(await counts()).toEqual(before);
 	});
@@ -371,16 +372,19 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 		const stored = await upload();
 		const { resolutions } = await resolveAll(stored.importId);
 		const activityBefore = await activityCount();
-		await apply(stored.importId, resolutions);
-		// One history_imported row for the apply, and not one plan_set (or any other
-		// action) per row it wrote.
-		expect(await activityCount()).toBe(activityBefore + 1);
+		const first = await apply(stored.importId, resolutions);
+		// One history_imported row for the apply and one member_add per member it
+		// made (#1240), and not one plan_set (or any other action) per row it wrote.
+		const made = first.report.created.members;
+		const madeMembers = (made?.active ?? 0) + (made?.former ?? 0);
+		expect(madeMembers).toBeGreaterThan(0);
+		expect(await activityCount()).toBe(activityBefore + 1 + madeMembers);
 		const afterFirst = await counts();
 		expect(afterFirst.meetings).toBe(2); // the seeded one and the imported one
 		expect(afterFirst.roleSlots).toBeGreaterThan(0);
 		const second = await apply(stored.importId, resolutions);
 		expect(await counts()).toEqual(afterFirst);
-		expect(await activityCount()).toBe(activityBefore + 2);
+		expect(await activityCount()).toBe(activityBefore + 2 + madeMembers);
 		expect(await activityCount("history_imported")).toBe(2);
 		expect(second.report.reconciled).toBe(true);
 	});
@@ -390,7 +394,9 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 		const { resolutions } = await resolveAll(stored.importId, NOW_ALL_PAST);
 		const activityBefore = await activityCount();
 		const before = await counts();
-		await apply(stored.importId, resolutions, NOW_ALL_PAST);
+		const applied = await apply(stored.importId, resolutions, NOW_ALL_PAST);
+		const made = applied.report.created.members;
+		const madeMembers = (made?.active ?? 0) + (made?.former ?? 0);
 
 		// Derived from the bundle's rows (a plan answer with no record, once per
 		// person) and the people who resolve to MEMBERS (a guest has no plan row).
@@ -443,8 +449,9 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 			before.tableTopicsSpeakers + 2,
 		);
 
-		// And none of it was logged one row at a time.
-		expect(await activityCount()).toBe(activityBefore + 1);
+		// And none of it was logged one row at a time: the apply's own row and a
+		// member_add for each member it made (#1240).
+		expect(await activityCount()).toBe(activityBefore + 1 + madeMembers);
 	});
 
 	it("imports only past meetings, all completed, and never a future one", async () => {
