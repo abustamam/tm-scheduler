@@ -1240,4 +1240,30 @@ describe("round 3 (#1275): text, code and names", () => {
 			expect(Number(b.split(":")[0])).toBeGreaterThanOrEqual(1);
 		}
 	});
+
+	it("R3-7b. a real person called Topics is still found, but a phrase word shared with an allowed phrase is not a finding by itself", () => {
+		const v = (b: string, names: string[]) => fixtureViolations(page(b), { original: { names } }).join("\n");
+		expect(v(`<p>Table Topics Speakers</p>`, ["Rowan Topics"])).not.toMatch(/topics.*(?:real|original)|(?:real|original).*topics/i);
+		expect(v(`<p>Rowan Quillbright</p>`, ["Rowan Topics"])).toMatch(/rowan/i);
+	});
+
+	it("R3-1b. a supplementary-plane punctuation mark is not content: the scan counts code points, not UTF-16 units", () => {
+		const out = parseHtml(rewriteEasySpeakPage(page(`<td>Rowan \u{10100}</td>`))).querySelector("td")?.textContent ?? "";
+		expect(out).toMatch(/\u{10100}$/u);
+		expect(out).not.toMatch(/Rowan/);
+	});
+
+	it("R3-F3b. a fullwidth digit run is read as the digits it stands for and gets an ASCII fake", () => {
+		const out = parseHtml(rewriteEasySpeakPage(page(`<td>１２３４５６</td>`))).querySelector("td")?.textContent ?? "";
+		expect(out).toMatch(/^\d{6}$/);
+		expect(out).not.toBe("123456");
+	});
+
+	it("R3-F2b. a fullwidth or superscript digit in handler code is read as the digit it stands for and gets an ASCII fake", () => {
+		for (const h of ["f(４８２９１３)", "f(⁴⁸²⁹¹³)"]) {
+			const code = parseHtml(rewriteEasySpeakPage(page(`<a onclick="${h}">a</a>`))).querySelector("a")?.getAttribute("onclick") ?? "";
+			expect(code, h).toMatch(/^x\(\d{6}\)$/);
+			expect(code, h).not.toContain("482913");
+		}
+	});
 });
