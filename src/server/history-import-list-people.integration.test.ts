@@ -244,6 +244,11 @@ describe.skipIf(!hasTestDb)(
 			};
 		}
 
+		// protects=a member only the mentor chart and the speech requests name gets a
+		// person ref, and both later steps import their rows (now two each, because a
+		// member-list person is made a member too);
+		// fails_when=the ref is missing and a later step reports the person unresolved;
+		// no_claim=the made member's own fields are the one-upload suite's.
 		it("AC1: a member only the chart and the requests name gets a person ref, and both later steps import their rows", async () => {
 			const nova = await addMember(NOVA.name);
 			const orla = await addMember(ORLA.name);
@@ -273,29 +278,39 @@ describe.skipIf(!hasTestDb)(
 				importId: stored.importId,
 				superadminUserId: superadminId,
 			});
-			expect(mentored.imported).toBe(1);
+			// Nova's pair, and Ghost Pepper's: she is on the member list, so the apply
+			// made her a member (#1240).
+			expect(mentored.imported).toBe(2);
 			const pairs = await testDb
 				.select()
 				.from(mentorships)
 				.where(eq(mentorships.clubId, seed.clubId));
-			expect(pairs.map((p) => [p.mentorMemberId, p.menteeMemberId])).toEqual([
-				[orla, nova],
-			]);
+			// The second pair is Ghost Pepper's, whose id the apply mints, so the exact
+			// set cannot be spelled; the count pins it.
+			expect(pairs).toHaveLength(2);
+			expect(
+				pairs.map((p) => [p.mentorMemberId, p.menteeMemberId]),
+			).toContainEqual([orla, nova]);
 
 			const requested = await logic.importSpeechRequests({
 				clubId: seed.clubId,
 				importId: stored.importId,
 				superadminUserId: superadminId,
 			});
-			expect(requested.imported).toBe(1);
+			expect(requested.imported).toBe(2);
 			const rows = await testDb
 				.select({ membershipId: speechRequests.membershipId })
 				.from(speechRequests)
 				.where(eq(speechRequests.clubId, seed.clubId));
-			expect(rows).toEqual([{ membershipId: nova }]);
+			expect(rows).toHaveLength(2);
+			expect(rows).toContainEqual({ membershipId: nova });
 		});
 
-		it("AC2: a member-list-only person who matches nobody is not created and the later steps report them unresolved", async () => {
+		// protects=a member-list-only person who matches nobody is made a member, so
+		// the later mentor and speech-request steps find them;
+		// fails_when=the person is left unmatched and the steps report them unresolved;
+		// no_claim=the roster match of the other people is the test above.
+		it("AC2: a member-list-only person who matches nobody is made a member, so the later steps find them (#1240)", async () => {
 			await addMember(NOVA.name);
 			await addMember(ORLA.name);
 			const stored = await upload();
@@ -303,50 +318,39 @@ describe.skipIf(!hasTestDb)(
 
 			expect(preview.people.find((p) => p.key === "es:900202")).toMatchObject({
 				listOnly: true,
-				status: "unmatched",
+				status: "create",
 				needsDecision: false,
 			});
 			// Not a decision: it does not block, and no answer is asked for.
 			expect(resolutions["es:900202"]).toBeUndefined();
-			const answered = await logic.previewEasySpeakImport({
-				clubId: seed.clubId,
-				importId: stored.importId,
-				resolutions,
-				now: NOW,
-			});
-			expect(answered.canApply).toBe(true);
 
 			const before = await snapshot();
 			await apply(stored.importId, resolutions);
 
-			expect(await personRef(GHOST.esUserId)).toBeNull();
-			const named = await testDb
-				.select({ id: people.id })
-				.from(people)
-				.where(inArray(people.name, [GHOST.name]));
-			expect(named).toEqual([]);
-			// The guests made are the meetings' own, as without the lists.
-			expect((await snapshot()).guests - before.guests).toBe(
-				answered.counts.newGuests,
-			);
+			const [ghost] = await testDb
+				.select({ id: members.id, status: members.status })
+				.from(members)
+				.where(
+					and(eq(members.clubId, seed.clubId), eq(members.name, GHOST.name)),
+				);
+			expect(ghost?.status).toBe("active");
+			expect(await personRef(GHOST.esUserId)).toBe(ghost?.id);
+			// The members made are the meetings' own former members and the list's.
+			expect((await snapshot()).members).toBeGreaterThan(before.members);
 
 			const mentored = await mentorLogic.importMentorPairs({
 				clubId: seed.clubId,
 				importId: stored.importId,
 				superadminUserId: superadminId,
 			});
-			expect(mentored.skipped).toEqual([
-				expect.objectContaining({
-					mentee: GHOST,
-					reason: "mentee_unresolved",
-				}),
-			]);
+			expect(mentored.skipped).toEqual([]);
+			expect(mentored.imported).toBe(2);
 			const requested = await logic.importSpeechRequests({
 				clubId: seed.clubId,
 				importId: stored.importId,
 				superadminUserId: superadminId,
 			});
-			expect(requested).toMatchObject({ imported: 1, skippedNoMember: 1 });
+			expect(requested).toMatchObject({ imported: 2, skippedNoMember: 0 });
 		});
 
 		it("AC3: an ambiguous list-only name asks the decision a meeting's would, and blocks until it is answered", async () => {
@@ -426,13 +430,13 @@ describe.skipIf(!hasTestDb)(
 				importId: stored.importId,
 				superadminUserId: superadminId,
 			});
-			expect(mentored.imported).toBe(1);
+			expect(mentored.imported).toBe(2);
 			const requested = await logic.importSpeechRequests({
 				clubId: seed.clubId,
 				importId: stored.importId,
 				superadminUserId: superadminId,
 			});
-			expect(requested.imported).toBe(1);
+			expect(requested.imported).toBe(2);
 
 			// A third apply changes nothing at all.
 			const settled = await snapshot();
@@ -482,6 +486,9 @@ describe.skipIf(!hasTestDb)(
 				futureMeetings: [],
 				introductions: [],
 				counts: {} as ImportPlan["counts"],
+				contactFills: [],
+				contactWarnings: [],
+				notes: [],
 				canApply: true,
 			};
 			const before = await n(guests);

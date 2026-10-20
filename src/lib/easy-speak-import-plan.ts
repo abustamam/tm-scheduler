@@ -42,6 +42,8 @@ import {
 	type GuestKind,
 	readLegacyGuestKind,
 } from "./guest-profile";
+import { type OfficerPosition, parseOfficerPosition } from "./officers";
+import { isValidEmail, parseRosterText } from "./roster-import";
 
 type EsGuestCategory =
 	EasySpeakBundleV1["meetings"][number]["guests"][number]["category"];
@@ -110,8 +112,30 @@ export interface PlanContext {
 	existingMeetings: PlanExistingMeeting[];
 	/** `import_refs` for this club and source. */
 	refs: PlanRef[];
-	/** The human's choices, by person key. Read only for a person still unresolved. */
+	/**
+	 * Member ids the club removed (a `member_remove` activity row names them). A
+	 * `person` ref to one of them whose row is gone is a removal, not a merge: not
+	 * re-created. A merged-away member is not in it and is matched by name (D4).
+	 */
+	removedMemberIds?: ReadonlySet<string>;
+	/** The human's choices, by person key. They win over every automatic outcome but a tombstone. */
 	resolutions?: Readonly<Record<string, PersonResolution>>;
+	/**
+	 * The optional pasted contacts (`name, email, phone`, #1240). Read by the plan
+	 * only to say which person gets which value; never stored by the import.
+	 */
+	contacts?: string;
+	/**
+	 * What the roster members already hold, by member id, and which Persons (any
+	 * club) hold an email, by lower-cased email. Read only to place `contacts`.
+	 */
+	contactState?: {
+		members: ReadonlyMap<
+			string,
+			{ personId: string; email: string | null; phone: string | null }
+		>;
+		emailHolders: ReadonlyMap<string, ReadonlySet<string>>;
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +163,10 @@ export function scrubJsonbText(text: string, max = Number.POSITIVE_INFINITY) {
 }
 
 const MAX_RESOLUTION_KEY = 300;
+/** Easy-Speak's name for an account it erased, folded: see {@link foldName}. */
+const ERASED_ACCOUNT_NAME = "forgotten user";
+/** The member list's status for a member who has lapsed. */
+const INACTIVE_STATUS = /^\s*inactive member\s*$/iu;
 const MAX_SKIP_REASON = 500;
 
 /** A human's answer for one person the plan could not place. */
@@ -199,6 +227,22 @@ export type PlanPersonOutcome =
 	  }
 	| { status: "skipped"; reason: string }
 	/**
+	 * Nobody on the roster is this person, and they are on Easy-Speak's member list
+	 * or named by a meeting outside the guest categories: the apply makes them a
+	 * member (#1240). `former` has `ended_at` NULL, which means "unknown".
+	 */
+	| {
+			status: "create";
+			membership: "active" | "former";
+			position: OfficerPosition | null;
+			joinedAt: string | null;
+			/**
+			 * Name-only person keys that are this same human (their meeting
+			 * references): they resolve to the member made here.
+			 */
+			mergedKeys?: string[];
+	  }
+	/**
 	 * An earlier import created a guest for this person and a human has since
 	 * deleted it: a tombstone. Nothing is created for them and nothing asks a human again
 	 * (D2 of #1196).
@@ -235,6 +279,60 @@ export interface PlanPerson {
 	outcome: PlanPersonOutcome;
 	/** A chosen member id the roster does not hold: shown, and the person stays unresolved. */
 	rejectedChoice: string | null;
+}
+
+/** Why an erased Easy-Speak account ("Forgotten User") is skipped. */
+export const ERASED_ACCOUNT_REASON = "Erased Easy-Speak account";
+
+/**
+ * Why a name-only reference is left out of this import (a fold collision), each
+ * with the note the preview shows: one place, so a reason and its note stay in
+ * step. A note says what happened this time. Only a kind whose es: people become
+ * members on this apply (`namesakes`, `answered`, `rejected`) may say a later import
+ * matches or asks; `unavailable` (an es: person skipped, a guest or removed) promises
+ * nothing.
+ */
+export const DEFERRED_NAMESAKES_REASON =
+	"Deferred: the name matches more than one person on Easy-Speak's member list";
+export const DEFERRED_ANSWERED_REASON =
+	"Deferred: an answer is saved for a person with this name";
+export const DEFERRED_REJECTED_REASON =
+	"Deferred: the saved answer for this name no longer applies";
+export const DEFERRED_UNAVAILABLE_REASON =
+	"Deferred: the person on Easy-Speak's member list with this name is not a member here";
+const DEFERRALS = {
+	namesakes: {
+		reason: DEFERRED_NAMESAKES_REASON,
+		note: (name: string) =>
+			`${name}: the name matches more than one person on Easy-Speak's member list, so their meeting records are left out of this import; a later import will match or ask once those people are on the roster.`,
+	},
+	answered: {
+		reason: DEFERRED_ANSWERED_REASON,
+		note: (name: string) =>
+			`${name}: the name matches a person on Easy-Speak's member list who has a saved answer, so their meeting records are left out of this import; a later import will match them against the roster.`,
+	},
+	rejected: {
+		reason: DEFERRED_REJECTED_REASON,
+		note: (name: string) =>
+			`${name}: there is a saved answer for this name that no longer applies, and the name matches a person on Easy-Speak's member list, so their meeting records are left out of this import; a later import will match them against the roster.`,
+	},
+	unavailable: {
+		reason: DEFERRED_UNAVAILABLE_REASON,
+		note: (name: string) =>
+			`${name}: the name matches a person on Easy-Speak's member list who is skipped, a guest, removed or not a member here, so their meeting records are left out of this import.`,
+	},
+} as const;
+
+/** What one contact row sets on one person; blank means "leave as it is". */
+export interface ContactFill {
+	/** `PlanPerson.key` of the person it lands on. */
+	personKey: string;
+	/** For the warning text only: never the email or the phone. */
+	name: string;
+	/** Which pasted row (1-based, blank lines not counted). */
+	row: number;
+	email: string | null;
+	phone: string | null;
 }
 
 export interface PlanRoleDefinitionPlan {
@@ -329,6 +427,15 @@ export interface PlanCounts {
 	tableTopicsSpeakers: number;
 	newGuests: number;
 	newRoleDefinitions: number;
+	/** People who already have a member here: linked, never duplicated. */
+	linkedMembers: number;
+	/** Members the apply creates (#1240). */
+	newActiveMembers: number;
+	/** Of the active ones, the number who hold an office (and so become admins). */
+	newOfficers: number;
+	newFormerMembers: number;
+	/** People left out because Easy-Speak erased their account. */
+	erasedAccounts: number;
 }
 
 export interface ImportPlan {
@@ -344,6 +451,16 @@ export interface ImportPlan {
 	/** Guest -> introducer, from the chart of visitors introduced. */
 	introductions: Array<{ visitorKey: string; introducerKey: string }>;
 	counts: PlanCounts;
+	/** What the pasted contacts set, per person (#1240). */
+	contactFills: ContactFill[];
+	/** Rows that set nothing, or a value left blank, each naming the row and the person: never a value. */
+	contactWarnings: string[];
+	/**
+	 * Plain-language notes the preview shows beside its warnings: a person left out
+	 * of this import and why, a saved answer set aside. Each names the person,
+	 * never pasted text.
+	 */
+	notes: string[];
 	/** True when nothing is left for a human: apply is allowed. */
 	canApply: boolean;
 }
@@ -387,12 +504,21 @@ interface Seen {
 	ref: EsPersonRef;
 	appearances: PlanPerson["appearances"];
 	onMemberList: boolean;
+	/** The member list's row for this person (`bundle.people`), when it has one. */
+	listRow: { status: string; joined: string | null } | null;
 	/**
 	 * Every spelling the records gave this key, case and spacing aside. A name-only
 	 * key folds accents away, so two spellings ("José", "Jose") share one key: the
 	 * exact-name matcher must not pick one of them for both.
 	 */
 	spellings: Set<string>;
+	/**
+	 * A real meeting signal: a role, an award, Table Topics, an introducer link, a
+	 * guest category, or an attendance row with a record or an attending
+	 * reply (a tentative reply is never imported, so it names nobody). A guest-section row with no reply and no record is only a
+	 * line on the attendance list ("Unknown"): it names nobody.
+	 */
+	signalled: boolean;
 }
 
 /** A spelling that keeps its accents: the fold's own key throws them away. */
@@ -401,16 +527,13 @@ function spellingOf(name: string): string {
 }
 
 /**
- * Whether a person needs a human before the apply: an ambiguous match, or an
- * unmatched one that a meeting names. A person on a list only is matched when the
- * roster has them and otherwise left alone (#1203). The one rule the plan's
+ * Whether a person needs a human before the apply: an ambiguous match, and only
+ * that (#1240): nobody else needs asking, because a person the roster does not
+ * hold is created, a guest, or skipped by rule. The one rule the plan's
  * `unresolved` and the preview's `needsDecision` both read.
  */
 export function needsDecision(p: PlanPerson): boolean {
-	return (
-		p.outcome.status === "ambiguous" ||
-		(p.outcome.status === "unmatched" && !p.listOnly)
-	);
+	return p.outcome.status === "ambiguous";
 }
 
 /** Why an existing meeting is left as it is: the report says it in these words. */
@@ -495,11 +618,16 @@ export function buildImportPlan(
 
 	// -- Who the imported records name ---------------------------------------
 	const memberListIds = new Set(bundle.people.map((p) => p.esUserId));
+	const listRows = new Map(bundle.people.map((p) => [p.esUserId, p] as const));
 	const seen = new Map<string, Seen>();
 	const touch = (
 		ref: EsPersonRef,
 		field: keyof Omit<PlanPerson["appearances"], "guestCategories">,
 		category?: EsGuestCategory,
+		signal = field === "roles" ||
+			field === "awards" ||
+			field === "tableTopics" ||
+			field === "introducedBy",
 	) => {
 		const key = personKeyOf(ref);
 		let entry = seen.get(key);
@@ -507,7 +635,14 @@ export function buildImportPlan(
 			entry = {
 				ref,
 				onMemberList: ref.esUserId ? memberListIds.has(ref.esUserId) : false,
+				listRow: ref.esUserId
+					? (() => {
+							const row = listRows.get(ref.esUserId);
+							return row ? { status: row.status, joined: row.joined } : null;
+						})()
+					: null,
 				spellings: new Set(),
+				signalled: false,
 				appearances: {
 					roles: 0,
 					attendance: 0,
@@ -523,6 +658,7 @@ export function buildImportPlan(
 			seen.set(key, entry);
 		}
 		entry.spellings.add(spellingOf(ref.name));
+		if (signal || category) entry.signalled = true;
 		entry.appearances[field]++;
 		if (category && !entry.appearances.guestCategories.includes(category)) {
 			entry.appearances.guestCategories.push(category);
@@ -531,7 +667,14 @@ export function buildImportPlan(
 	for (const { meeting } of past) {
 		for (const role of meeting.roles)
 			if (role.holder) touch(role.holder, "roles");
-		for (const row of meeting.attendance) touch(row.who, "attendance");
+		for (const row of meeting.attendance) {
+			touch(
+				row.who,
+				"attendance",
+				undefined,
+				row.record !== null || row.plan === "attending",
+			);
+		}
 		for (const g of meeting.guests) touch(g.who, "attendance", g.category);
 		for (const award of meeting.awards) touch(award.who, "awards");
 		for (const tt of meeting.tableTopics) touch(tt.who, "tableTopics");
@@ -566,6 +709,7 @@ export function buildImportPlan(
 	const rosterIds = new Set(ctx.roster.map((m) => m.memberId));
 
 	const people: PlanPerson[] = [];
+	const notes: string[] = [];
 	for (const [key, entry] of seen) {
 		const { ref, appearances } = entry;
 		// A person no meeting names: matched, never created (#1203).
@@ -594,11 +738,15 @@ export function buildImportPlan(
 			// Named by an earlier import, and the guest row is gone: a human deleted a
 			// row the import itself created.
 			outcome = { status: "deleted" };
+		} else if (foldName(ref.name) === ERASED_ACCOUNT_NAME) {
+			// An erased Easy-Speak account is nobody: never matched, never asked about
+			// (#1236). Only a saved answer, below, can say otherwise.
+			outcome = { status: "skipped", reason: ERASED_ACCOUNT_REASON };
 		} else {
-			// A vanished MEMBER ref is NOT a tombstone (D4 of #1196): the import never
-			// made that member, so its absence says the membership was merged away or
-			// a convert was undone, not that anyone declined this person. The person
-			// is matched by name again, and asks a human if that finds nobody.
+			// A vanished MEMBER ref is a tombstone only when the club logged the
+			// member's removal (`member_remove`, below), except a convert undo that
+			// kept the membership. A merge logs none, so a merged-away member is
+			// matched by name again (D4 of #1196).
 			// Two spellings under one name-only key (José / Jose) cannot take the exact
 			// pass: it would match the first spelling and hand the second its member.
 			// The fold's candidates go to a human, or to nobody if the roster has none.
@@ -615,48 +763,93 @@ export function buildImportPlan(
 				};
 			} else if (candidates.length > 1 || (collided && first)) {
 				outcome = { status: "ambiguous", candidates };
-			} else if (
-				appearances.guestCategories.length > 0 &&
-				!entry.onMemberList
-			) {
+			} else if (memberRef && ctx.removedMemberIds?.has(memberRef)) {
+				// The ref names a member row that is gone, the club logged its removal
+				// and nobody on the roster is that person. Re-creating
+				// them would bring back a removed officer as an admin (#1240), so it is
+				// a tombstone, the way a vanished guest is.
+				outcome = { status: "deleted" };
+			} else if (entry.listRow) {
+				// Easy-Speak lists them as a member: that wins over a guest category.
+				const inactive = INACTIVE_STATUS.test(entry.listRow.status);
+				outcome = {
+					status: "create",
+					membership: inactive ? "former" : "active",
+					position: inactive
+						? null
+						: parseOfficerPosition(entry.listRow.status),
+					joinedAt: entry.listRow.joined,
+				};
+			} else if (appearances.guestCategories.length > 0) {
 				outcome = {
 					status: "guest",
 					kind: kindForCategories(appearances.guestCategories),
 					via: "category",
 					guestId: null,
 				};
+			} else if (entry.signalled) {
+				// A past person a meeting names (a real signal, not a bare attendance
+				// line) and nobody lists: a former member.
+				outcome = {
+					status: "create",
+					membership: "former",
+					position: null,
+					joinedAt: null,
+				};
 			}
-			// Only a person the rules could not place takes a human's answer: an
-			// automatic match is not overridable from here.
-			if (outcome.status === "ambiguous" || outcome.status === "unmatched") {
-				// A person on a list only is never made a guest, and with no roster
-				// match there is nothing to decide, so a saved choice is not read.
-				const saved = ctx.resolutions?.[key];
-				const choice =
-					listOnly &&
-					(outcome.status === "unmatched" || saved?.action === "guest")
-						? undefined
-						: saved;
-				if (choice?.action === "member") {
-					if (rosterIds.has(choice.memberId)) {
-						outcome = {
-							status: "member",
-							memberId: choice.memberId,
-							via: "chosen",
-						};
-					} else {
-						rejectedChoice = choice.memberId;
-					}
-				} else if (choice?.action === "guest") {
+			// else: named by the mentor chart or the speech requests only. Matched to
+			// the roster when it has them, otherwise left alone and not asked about
+			// (#1203).
+		}
+		// A saved answer wins over every automatic outcome but a tombstone (D2).
+		// A list-only person is never made a guest, and with no roster match and no
+		// row of the member list there is nothing to decide, so no answer is read.
+		if (outcome.status !== "deleted") {
+			const saved = ctx.resolutions?.[key];
+			if (
+				saved?.action === "guest" &&
+				guestRef &&
+				!ctx.guestIds.has(guestRef)
+			) {
+				// A guest the club deleted stays deleted, even beside a live member
+				// ref: the answer does not mint it again, and the preview says so.
+				notes.push(
+					`${ref.name}: the saved answer "guest" is set aside because the club deleted that guest; they stay a member.`,
+				);
+			}
+			const choice =
+				listOnly &&
+				(saved?.action === "guest" ||
+					(outcome.status === "unmatched" && saved !== undefined))
+					? undefined
+					: saved;
+			if (choice?.action === "member") {
+				if (rosterIds.has(choice.memberId)) {
 					outcome = {
-						status: "guest",
-						kind: choice.kind,
+						status: "member",
+						memberId: choice.memberId,
 						via: "chosen",
-						guestId: null,
 					};
-				} else if (choice?.action === "skip") {
-					outcome = { status: "skipped", reason: choice.reason };
+				} else {
+					rejectedChoice = choice.memberId;
 				}
+			} else if (
+				choice?.action === "guest" &&
+				guestRef &&
+				!ctx.guestIds.has(guestRef)
+			) {
+				// Set aside (noted above): the deleted guest stays deleted.
+			} else if (choice?.action === "guest") {
+				// A guest the ref already names stays that guest: a saved "guest" answer
+				// must not mint a second one on every re-apply.
+				outcome = {
+					status: "guest",
+					kind: choice.kind,
+					via: "chosen",
+					guestId: guestRef && ctx.guestIds.has(guestRef) ? guestRef : null,
+				};
+			} else if (choice?.action === "skip") {
+				outcome = { status: "skipped", reason: choice.reason };
 			}
 		}
 		people.push({
@@ -669,10 +862,115 @@ export function buildImportPlan(
 			rejectedChoice,
 		});
 	}
+	// A name-only reference (`name:<fold>`, a meeting's mention) beside `es:` people
+	// of the same folded name. E is every `es:` key of the name, whatever its
+	// outcome; N is the reference. N is LEFT ALONE when it resolved by its own ref or
+	// its own saved answer took effect, and when it is not a create, a name match
+	// or an ambiguity. Otherwise, one rule:
+	// A. Every E key is a roster member. U is the distinct members of E plus N's own
+	//    name candidates (its match, or its candidates). One member and no spelling
+	//    collision: N links to it. More, or a collision: N is `ambiguous` between U,
+	//    so the next import's question holds after a rename and no candidate is lost.
+	// B. Some E key is not a roster member. N that matched the roster by name, or is
+	//    ambiguous, is left alone (a correct match is never deferred). A creatable N:
+	//    one E that is an unmatched list-only person leaves it a create (that person
+	//    makes no Person); one E create with no saved answer on E or N is FOLDED (the
+	//    reference joins it: one Person, aliases stored); anything else is DEFERRED.
+	// DEFERRED is a non-blocking `skipped` outcome that imports nothing and writes no
+	// ref and no answer; the `es:` creates stay ordinary separate creates.
+	const answered = (p: PlanPerson) => ctx.resolutions?.[p.key] !== undefined;
+	const rosterById = new Map(ctx.roster.map((m) => [m.memberId, m] as const));
+	const peopleByFold = new Map<string, PlanPerson[]>();
+	for (const p of people) {
+		const fold = foldName(p.name);
+		peopleByFold.set(fold, [...(peopleByFold.get(fold) ?? []), p]);
+	}
+	const merged = new Set<PlanPerson>();
+	const defer = (p: PlanPerson, kind: keyof typeof DEFERRALS) => {
+		p.outcome = { status: "skipped", reason: DEFERRALS[kind].reason };
+		notes.push(DEFERRALS[kind].note(p.name));
+	};
+	for (const group of peopleByFold.values()) {
+		const esPeople = group.filter((p) => p.esUserId !== null);
+		const n = group.find((p) => p.esUserId === null);
+		if (!n || esPeople.length === 0) continue;
+		const nOutcome = n.outcome;
+		const nIsCreate = nOutcome.status === "create";
+		const nMatchedByName =
+			nOutcome.status === "member" &&
+			(nOutcome.via === "exact" || nOutcome.via === "folded");
+		const nAmbiguous = nOutcome.status === "ambiguous";
+		if (!nIsCreate && !nMatchedByName && !nAmbiguous) continue;
+		if (esPeople.every((e) => e.outcome.status === "member")) {
+			const ids = new Set<string>();
+			for (const e of esPeople) {
+				if (e.outcome.status === "member") ids.add(e.outcome.memberId);
+			}
+			if (nOutcome.status === "member") ids.add(nOutcome.memberId);
+			if (nOutcome.status === "ambiguous") {
+				for (const c of nOutcome.candidates) ids.add(c.memberId);
+			}
+			const collided = (seen.get(n.key)?.spellings.size ?? 0) > 1;
+			if (ids.size === 1 && !collided) {
+				if (nOutcome.status === "member") continue;
+				const [memberId] = ids;
+				if (memberId === undefined) continue;
+				n.outcome = { status: "member", memberId, via: "folded" };
+			} else {
+				// Every id is on the roster: a member outcome is only ever built from it.
+				const candidates = [...ids].flatMap((mid) => {
+					const m = rosterById.get(mid);
+					return m ? [m] : [];
+				});
+				n.outcome = { status: "ambiguous", candidates };
+			}
+			continue;
+		}
+		if (!nIsCreate) continue;
+		const only = esPeople.length === 1 ? esPeople[0] : undefined;
+		if (only?.outcome.status === "unmatched") continue;
+		if (only?.outcome.status === "create") {
+			if (answered(only)) {
+				defer(n, "answered");
+			} else if (answered(n)) {
+				defer(n, "rejected");
+			} else {
+				const mergedKeys = [n.key];
+				only.outcome = { ...only.outcome, mergedKeys };
+				only.appearances.roles += n.appearances.roles;
+				only.appearances.attendance += n.appearances.attendance;
+				only.appearances.awards += n.appearances.awards;
+				only.appearances.tableTopics += n.appearances.tableTopics;
+				only.appearances.introducedBy += n.appearances.introducedBy;
+				for (const c of n.appearances.guestCategories) {
+					if (!only.appearances.guestCategories.includes(c)) {
+						only.appearances.guestCategories.push(c);
+					}
+				}
+				only.listOnly = false;
+				merged.add(n);
+			}
+			continue;
+		}
+		const becomeMembers = esPeople.every(
+			(e) => e.outcome.status === "member" || e.outcome.status === "create",
+		);
+		defer(n, becomeMembers ? "namesakes" : "unavailable");
+	}
+	if (merged.size > 0) {
+		for (let i = people.length - 1; i >= 0; i--) {
+			const p = people[i];
+			if (p && merged.has(p)) people.splice(i, 1);
+		}
+	}
 	people.sort(
 		(a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key),
 	);
 	const unresolved = people.filter(needsDecision);
+	const { fills: contactFills, warnings: contactWarnings } = placeContacts(
+		ctx,
+		people,
+	);
 
 	// -- Role definitions ------------------------------------------------------
 	const defsByKey = new Map(
@@ -850,6 +1148,21 @@ export function buildImportPlan(
 		).length,
 		newRoleDefinitions: [...roleDefs.values()].filter((d) => !d.existingId)
 			.length,
+		linkedMembers: people.filter((p) => p.outcome.status === "member").length,
+		newActiveMembers: people.filter(
+			(p) => p.outcome.status === "create" && p.outcome.membership === "active",
+		).length,
+		newOfficers: people.filter(
+			(p) => p.outcome.status === "create" && p.outcome.position !== null,
+		).length,
+		newFormerMembers: people.filter(
+			(p) => p.outcome.status === "create" && p.outcome.membership === "former",
+		).length,
+		erasedAccounts: people.filter(
+			(p) =>
+				p.outcome.status === "skipped" &&
+				p.outcome.reason === ERASED_ACCOUNT_REASON,
+		).length,
 	};
 
 	return {
@@ -863,8 +1176,167 @@ export function buildImportPlan(
 		})),
 		introductions,
 		counts,
+		contactFills,
+		contactWarnings,
+		notes,
 		canApply: unresolved.length === 0,
 	};
+}
+
+// ---------------------------------------------------------------------------
+// Contacts (#1240)
+// ---------------------------------------------------------------------------
+
+const isBlank = (v: string | null | undefined) => !v || v.trim() === "";
+
+/**
+ * Place the pasted contact rows on the people the import creates or links. A row
+ * matches by the plan's own name matcher (exact, then case and accent folded)
+ * against those people only. A value is set only where the person has none; the
+ * warnings name the row and the person, never an email or a phone, because the
+ * report keeps them.
+ */
+function placeContacts(
+	ctx: PlanContext,
+	people: PlanPerson[],
+): { fills: ContactFill[]; warnings: string[] } {
+	const text = ctx.contacts ?? "";
+	if (text.trim() === "") return { fills: [], warnings: [] };
+	const rows = parseRosterText(text);
+	const state = ctx.contactState;
+	const rosterName = new Map(ctx.roster.map((m) => [m.memberId, m.name]));
+
+	interface Target {
+		/** One id per person who would receive a value: a member's, or a created person's key. */
+		id: string;
+		personKey: string;
+		name: string;
+		memberId: string | null;
+	}
+	const targets = new Map<string, Target>();
+	for (const p of people) {
+		const o = p.outcome;
+		if (o.status === "member") {
+			targets.set(`m:${o.memberId}`, {
+				id: `m:${o.memberId}`,
+				personKey: p.key,
+				name: rosterName.get(o.memberId) ?? p.name,
+				memberId: o.memberId,
+			});
+		} else if (o.status === "create") {
+			targets.set(`c:${p.key}`, {
+				id: `c:${p.key}`,
+				personKey: p.key,
+				name: p.name,
+				memberId: null,
+			});
+		}
+	}
+	const byExact = new Map<string, Target[]>();
+	const byFold = new Map<string, Target[]>();
+	for (const t of targets.values()) {
+		const exact = t.name.trim();
+		byExact.set(exact, [...(byExact.get(exact) ?? []), t]);
+		const fold = foldName(t.name);
+		byFold.set(fold, [...(byFold.get(fold) ?? []), t]);
+	}
+
+	const warnings: string[] = [];
+	const firstRow = new Map<
+		string,
+		{ target: Target; row: number; email: string | null; phone: string | null }
+	>();
+	rows.forEach((r, i) => {
+		const row = i + 1;
+		if (r.name.trim() === "") {
+			warnings.push(`Contact row ${row} has no name; it is applied to no one.`);
+			return;
+		}
+		const exact = byExact.get(r.name.trim()) ?? [];
+		const candidates =
+			exact.length > 0 ? exact : (byFold.get(foldName(r.name)) ?? []);
+		if (candidates.length === 0) {
+			warnings.push(
+				`Contact row ${row} matches no one being linked or created; it is applied to no one.`,
+			);
+			return;
+		}
+		const [target] = candidates;
+		if (candidates.length > 1 || !target) {
+			warnings.push(
+				`Contact row ${row} matches ${candidates.length} people; it is applied to no one.`,
+			);
+			return;
+		}
+		if (firstRow.has(target.id)) {
+			warnings.push(
+				`Contact row ${row} is a second row for ${target.name}; the first row is used and this one is ignored.`,
+			);
+			return;
+		}
+		let email: string | null = r.email.trim() === "" ? null : r.email.trim();
+		if (email && !isValidEmail(email)) {
+			warnings.push(
+				`The email in contact row ${row} is not valid; left blank for ${target.name}.`,
+			);
+			email = null;
+		}
+		firstRow.set(target.id, {
+			target,
+			row,
+			email,
+			phone: r.phone.trim() === "" ? null : r.phone.trim(),
+		});
+	});
+
+	// The same email on the rows of two different people goes to neither.
+	const owners = new Map<string, string[]>();
+	for (const [id, v] of firstRow) {
+		if (!v.email) continue;
+		const k = v.email.toLowerCase();
+		owners.set(k, [...(owners.get(k) ?? []), id]);
+	}
+	const fills: ContactFill[] = [];
+	for (const v of firstRow.values()) {
+		let email = v.email;
+		const emailKey = email?.toLowerCase() ?? "";
+		const memberState = v.target.memberId
+			? state?.members.get(v.target.memberId)
+			: undefined;
+		if (email && (owners.get(emailKey)?.length ?? 0) > 1) {
+			warnings.push(
+				`The email in contact row ${v.row} is also on another person's row; left blank for ${v.target.name}.`,
+			);
+			email = null;
+		} else if (email) {
+			const holders = state?.emailHolders.get(emailKey);
+			const heldByOther = holders
+				? [...holders].some((pid) => pid !== memberState?.personId)
+				: false;
+			if (heldByOther) {
+				warnings.push(
+					`An email in row ${v.row} already belongs to someone else; left blank for ${v.target.name}.`,
+				);
+				email = null;
+			}
+		}
+		let phone = v.phone;
+		// A linked member keeps what they have.
+		if (memberState) {
+			if (!isBlank(memberState.email)) email = null;
+			if (!isBlank(memberState.phone)) phone = null;
+		}
+		if (email || phone) {
+			fills.push({
+				personKey: v.target.personKey,
+				name: v.target.name,
+				row: v.row,
+				email,
+				phone,
+			});
+		}
+	}
+	return { fills, warnings };
 }
 
 // ---------------------------------------------------------------------------
@@ -918,7 +1390,17 @@ export interface ImportReport {
 	speechesPerPerson: ReconciliationBreakdownRow[];
 	notImported: NotImportedRow[];
 	skippedPeople: Array<{ key: string; name: string; reason: string }>;
-	created: { guests: number; roleDefinitions: string[] };
+	created: {
+		guests: number;
+		roleDefinitions: string[];
+		/** Members made from the member list and the meetings (#1240); absent on an older report. */
+		members?: { active: number; former: number; officers: number };
+	};
+	/**
+	 * What the pasted contacts did not do, each naming a row and a person, never
+	 * a value. Absent on an older report.
+	 */
+	contactNotes?: string[];
 	/** True only when every count matched and no meeting failed. */
 	reconciled: boolean;
 }
