@@ -327,7 +327,10 @@ export function fakeEasySpeak(opts: {
 	 * Default: the fixtures' own.
 	 */
 	as?: Identity | ((requestIndex: number, url: string) => Identity);
+	/** Where a fixture file's text comes from, instead of the committed file (the generator's round-trip test serves rewritten pages). */
+	read?: (file: string) => string;
 }) {
+	const read = opts.read ?? readFixture;
 	const meetings: Record<string, string> = {
 		"644360": "meeting-upcoming.html",
 		"644304": "meeting-completed.html",
@@ -357,30 +360,30 @@ export function fakeEasySpeak(opts: {
 		if (forced !== undefined) return page(forced);
 		const u = new URL(url);
 		const p = u.pathname;
-		if (p === "/clubdata.php") return page(readFixture("club-data.html"));
-		if (p === "/memberlist.php") return page(readFixture("member-list.html"));
+		if (p === "/clubdata.php") return page(read("club-data.html"));
+		if (p === "/memberlist.php") return page(read("member-list.html"));
 		if (p === "/meeting_list.php") {
 			const year = new URLSearchParams(body ?? "").get("start_year");
 			if (opts.listByYear) return page(opts.listByYear[year ?? ""] ?? emptyMeetingList());
-			return page(year === "2026" ? readFixture("meeting-list.html") : emptyMeetingList());
+			return page(year === "2026" ? read("meeting-list.html") : emptyMeetingList());
 		}
 		if (p === "/view_meeting.php") {
 			const file = meetings[u.searchParams.get("t") ?? ""];
-			if (file) return page(readFixture(file));
+			if (file) return page(read(file));
 		}
-		if (p === "/tm_all_speeches.php") return page(readFixture("speech-list.html"));
+		if (p === "/tm_all_speeches.php") return page(read("speech-list.html"));
 		if (p === "/request_speech.php") {
 			const s = u.searchParams.get("s") ?? "";
-			return page(s === "1473688" ? readFixture("speech-request-intro.html") : blankRequestForm(s));
+			return page(s === "1473688" ? read("speech-request-intro.html") : blankRequestForm(s));
 		}
 		if (p === "/memberchart.php") {
 			const file = charts[u.searchParams.get("chart") ?? ""];
-			if (file) return page(readFixture(file));
+			if (file) return page(read(file));
 		}
-		if (p === "/my_evaluations.php") return page(readFixture("my-evaluations.html"));
-		if (p === "/api/v1/evaluations.php/my-evaluations") return page(readFixture("my-evaluations.json"));
+		if (p === "/my_evaluations.php") return page(read("my-evaluations.html"));
+		if (p === "/api/v1/evaluations.php/my-evaluations") return page(read("my-evaluations.json"));
 		const ev = /^\/api\/v1\/evaluations\.php\/eval\/(\d+)$/.exec(p);
-		if (ev) return page(readFixture(`evaluation-${ev[1]}.json`));
+		if (ev) return page(read(`evaluation-${ev[1]}.json`));
 		return { ok: false, status: 404, text: async () => "not found" };
 	};
 }

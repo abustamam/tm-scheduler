@@ -29,8 +29,8 @@ the diff: it is the contract's only worked example.
 ## A live Easy-Speak failure ships its page
 
 A fix prompted by a live Easy-Speak failure commits the offending page in the same PR, with a test
-that fails without the fix (#1252). The page is **anonymised by hand**: a human replaces every name,
-id, username, phone, email and club detail, then reads every line before committing. The export's
+that fails without the fix (#1252). The page is **anonymised by the generator below, then read by a human**: every name,
+id, username, phone, email and club detail is replaced, and a person reads every line before committing. The export's
 `easy-speak-<club>-<date>-pages.json` archive is raw, so **never commit it or a page from it**.
 
 `fixtureViolations` (`easy-speak-test-kit.ts`) is a net, not a gate: it catches the shapes of real
@@ -46,4 +46,30 @@ await expect(r.run()).resolves.toBeDefined(); // fails without the fix
 parameters given, and runs the whole walk. Run `UPDATE_FIXTURES=1 bunx vitest run
 lib/easy-speak-walk.test.ts` only if the fixture changes `bundle.expected.json` on purpose.
 
-A deny-by-default fixture generator is tracked in #1272.
+## The fixture generator
+
+`extension/scripts/easy-speak-fixture-from-archive.ts` (#1272) turns a saved page into a fixture. It is
+**deny by default**: the page is parsed, and EVERY text node and attribute value is replaced with a
+fake unless it is on the allow-list (`ALLOW_LIST` in the script: menu labels, column headers, role
+names, button text, date shapes, the URL shapes the walker reads, with every person id, club id and
+username inside a URL replaced). Tags, tag names, attribute names and the document structure are never
+rewritten. The same real value becomes the same fake within one run, so a person's id in a link and in a
+table still line up. Then `fixtureViolations` runs over the output as a second net: if it reports
+anything, **nothing is written**, the violations are printed and the exit code is non-zero.
+
+Run it from `extension/`, on a page saved from a browser or taken out of the export's archive:
+
+```sh
+bun scripts/easy-speak-fixture-from-archive.ts saved.html lib/__fixtures__/easy-speak/<name>.html
+bun scripts/easy-speak-fixture-from-archive.ts --archive easy-speak-<club>-<date>-pages.json --page "meeting.php?t=123" <name>.html
+```
+
+`--contact-page` for the member list or the club page (the only pages that may carry a phone);
+`--real-name`, `--real-term`, `--real-club` and `--real-person-id` (repeatable) name real values for the
+second net to look for. **A human still reads the output before it is committed**: the generator is a
+net, not clearance. Look for text that is still real and not on the allow-list's intent; things it
+cannot know (a club number shorter than four digits written outside the "Club Number" row, a speech
+title that happens to be a public Pathways name) are for the reader. Free text (a theme, a title, an
+introduction) comes out as `redacted-N` or a fake name: the walker's structure is kept, not its
+wording. Add to the allow-list only what every club's page says, never a name, and never to make a page
+pass. Then add a row to the table above and write the test with `replay`.
