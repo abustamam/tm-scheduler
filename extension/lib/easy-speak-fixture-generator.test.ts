@@ -765,7 +765,7 @@ describe("the committed fixtures round-trip", () => {
 		const d = deFake(readFixture(f));
 		const r = generateFixture(d.html, { contactPage: isContact(f), state: newRewriteState({ seed: f, dateShiftDays: 7 * 400 }), original: original(d.names, d.terms) });
 		expect(r.violations).toEqual([]);
-ttexpect(fixtureViolations(r.html, { contactPage: isContact(f) }), "the committed-fixture check on the generated page").toEqual([]);
+		expect(fixtureViolations(r.html, { contactPage: isContact(f) }), "the committed-fixture check on the generated page").toEqual([]);
 		expectNone(r.html, [...d.names, ...d.terms, ...d.ids]);
 		expect(r.html).not.toMatch(/7900\d{3}|7314159|2718281|\(212\) 555-/);
 		expectNoDigitSurvives(d.html, r.html, [], { page: true });
@@ -870,7 +870,6 @@ describe("the second net with the real values", () => {
 	it("generateFixture is clean when the real value did not survive", () => {
 		const r = generateFixture(page(`<td>Rowan Tidewell</td>`), { original: { names: ["Rowan Tidewell"], terms: ["Tidewell"] } });
 		expect(r.violations).toEqual([]);
-ttexpect(fixtureViolations(r.html, { contactPage: isContact(f) }), "the committed-fixture check on the generated page").toEqual([]);
 	});
 });
 
