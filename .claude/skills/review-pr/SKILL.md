@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: Review an open pull request by number from the main checkout, with nothing checked out. Fetches the PR's branch, diffs it against origin/main, finds the originating issue, and runs the code-review skill's two axes (Standards, Spec) against that diff. Prints a risk-category hint when the diff touches an authorization, archive-gate, migration or service-worker path, and for a migration that changes data, whether the PR body carries a `## Prod check`. Use when the user says "review PR 682", "/review-pr 682", or wants a wave's PRs reviewed before merge.
+description: Review an open pull request by number from the main checkout, with nothing checked out. Fetches the PR's branch, diffs it against origin/main, finds the originating issue, and runs the code-review skill's two axes (Standards, Spec) against that diff. Prints a risk-category hint (and whether a `**Risk review**` record is on the PR) when the diff touches an authorization, archive-gate, migration or service-worker path, and for a migration that changes data, whether the PR body carries a `## Prod check`. Use when the user says "review PR 682", "/review-pr 682", or wants a wave's PRs reviewed before merge.
 ---
 
 # Review a PR
@@ -123,6 +123,32 @@ match": the loop prints `grep error: <file>`. A DDL-only result prints nothing a
 
 `src/test/prod-check-contract.guard.test.ts` runs the command above over fixtures and real
 migrations, and holds the heading to the three documents that name it.
+
+**Whether the risk review happened.** Whenever any row above matched, look for the record
+(`docs/agents/worktrees-and-landing.md`, "Risk review"): a comment or the PR body with a line
+that is exactly `**Risk review**`.
+
+```bash
+gh api --paginate repos/abustamam/tm-scheduler/issues/<N>/comments --jq '.[].body'
+```
+
+Search those comment bodies and the `body` from step 1 for a block starting at that line, and
+read its `Codex:` line. Print one more line:
+
+- **No such block:**
+
+  > No risk review recorded: run gstack `/review` in the PR's worktree before merging, then
+  > post the `**Risk review**` record.
+
+- **A block with `Codex: ran`:** `Risk review recorded (Codex: ran).`
+- **A block with `Codex: fell back`, or with no readable `Codex:` line:** flag it, do not pass it.
+
+  > Risk review recorded, but Codex fell back (or the record is unreadable). A real Codex pass
+  > is required for a risk category; re-run it.
+
+A hint only, like the `## Prod check` line: the merge decision is the maintainer's. The record
+is self-reported, so this checks that the review was claimed, not that it was good. Two risk
+categories have no path (see above); for them the maintainer decides whether the record is owed.
 
 ### 4. Run the two axes
 
