@@ -202,8 +202,9 @@ export const ALLOW_LIST = {
 	],
 	/** Kept only when they are the WHOLE text node (a one-letter heading, a separator). */
 	exactNodes: ["P", "O", "N", "M", "?", "<", ">", "|", "/", "&", "-", "x", "Page", "of"],
-	/** Month names are kept only inside an `<option>`; elsewhere "May" is somebody's surname. */
+	/** Month names are kept only inside an `<option>` of a month `<select>` (by its ORIGINAL name); elsewhere "May" is somebody's surname. */
 	optionOnly: MONTHS,
+	optionOnlySelects: ["month", "start_month", "end_month"],
 	/** A one-word field label whose value is the next text node ("Venue" then a bold place). It is never half of a person's name. */
 	valueLabels: ["Venue"],
 	weekdays: WEEKDAYS,
@@ -280,12 +281,13 @@ export const ALLOW_LIST = {
 		"onblur", "onchange", "oninput", "onsubmit", "onreset", "onkeydown", "onkeyup", "onkeypress", "onload", "onunload", "onerror", "onselect",
 		"onscroll",
 	],
-	/** Layout attributes whose value is a number, and the only values of one that stay (a literal list; any other number is mapped). */
+	/** Layout attributes whose value is a number. NO value stays: the walker reads none of them, so a number here is mapped like any other (a literal exception would be a place to hide digits). */
 	layoutAttributes: ["colspan", "rowspan", "size", "rows", "cols", "maxlength", "border", "cellpadding", "cellspacing", "width", "height"],
-	layoutNumbers: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "100%", "50%", "25%", "75%"],
-	/** The only values of a radio button that stay: the walker reads the attendance plan from them (1, 2, 3). */
-	radioValues: ["1", "2", "3"],
-	/** The pager ("Page 1 of 3") keeps its digits only when both are one of these. */
+	/** The only values of a radio button that stay, and only on `attendanceRadioField`: the walker reads the attendance plan from them (`RADIO_PLAN` in easy-speak-parse.ts: 1 and 6 attending, 2 not, 5 unknown). */
+	radioValues: ["1", "2", "5", "6"],
+	/** The ORIGINAL name of the attendance radios (`available[<person id>]`); a radio of any other field keeps nothing. */
+	attendanceRadioField: String.raw`^available\[\d+\]$`,
+	/** The pager ("Page 1 of 3") keeps its digits only inside the `.nav` element the walker reads, when the page is not past the count and both are one of these. */
 	pageNumbers: ["1", "2", "3", "4", "5", "6", "7", "8", "9"],
 	/** Attributes whose value is a colour: always emptied (a hex colour is a pattern, and a pattern is not a list). */
 	colorAttributes: ["color", "bgcolor", "text", "link", "vlink", "alink"],
@@ -357,8 +359,10 @@ const KNOWN_PARAMS = new Set([...PERSON_PARAMS, ...CLUB_PARAMS, ...NUMBER_PARAMS
 const CODE_WORDS = new Set(A.codeWords);
 const HANDLERS = new Set(A.handlerNames);
 const LAYOUT_ATTRS = new Set(A.layoutAttributes);
-const LAYOUT_NUMBERS = new Set(A.layoutNumbers);
 const PAGE_NUMBERS = new Set(A.pageNumbers);
+const RADIO_VALUES = new Set(A.radioValues);
+const ATTENDANCE_RADIO = new RegExp(A.attendanceRadioField);
+const MONTH_SELECTS = new Set(A.optionOnlySelects);
 const COLOR_ATTRS = new Set(A.colorAttributes);
 const VALUE_LABELS = new Set(A.valueLabels);
 const TAGS = new Set(A.tags);
@@ -394,7 +398,7 @@ const SCAN = new RegExp(
 );
 const UPPER = /^\p{Lu}/u;
 const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
-const ADJACENT = /^[\s ,.'’_-]*$/;
+const ADJACENT = /^[\s ,.'’_/-]*$/;
 const NAME_SHAPE = /^\p{Lu}[\p{L}\p{M}'’-]*(?:[\s ]+\p{Lu}[\p{L}\p{M}'’.-]*)+$/u;
 const BRACKET_WORDS = new Set(A.bracketWords);
 
@@ -1062,12 +1066,12 @@ function rewriteAttribute(st: RewriteState, ctx: AttrContext, name: string, rawV
 	const pattern = ENUMS.get(n);
 	if (pattern) return pattern.test(value.trim()) ? value : "";
 	if (COLOR_ATTRS.has(n)) return "";
-	if (LAYOUT_ATTRS.has(n)) return LAYOUT_NUMBERS.has(value.trim()) ? value : mapRunsIn(st, value.replace(/[^\d%]/g, ""));
+	if (LAYOUT_ATTRS.has(n)) return mapRunsIn(st, value.replace(/[^\d%]/g, ""));
 	if (n === "class") return value.split(/\s+/).filter(Boolean).map((c) => (CLASS_SET.has(c) ? c : "x")).join(" ");
 	if (URL_ATTRS.has(n)) return rewriteUrl(st, value);
 	if (HANDLERS.has(n) || /^\s*javascript:/i.test(value)) return rewriteCode(st, value.replace(/^\s*javascript:/i, ""));
 	if (n === "id" || n === "name" || n === "for") return rewriteIdent(st, value);
-	if (n === "value") return ctx.radio && A.radioValues.includes(value.trim()) ? value : rewriteFormValue(st, ctx.field, value);
+	if (n === "value") return ctx.radio && ATTENDANCE_RADIO.test(ctx.field) && RADIO_VALUES.has(value.trim()) ? value : rewriteFormValue(st, ctx.field, value);
 	if (n === "style") return "";
 	if (n === "srcdoc") return rewriteDocument(st, value);
 	if (n === "rel") return value.split(/\s+/).filter((t) => REL_VALUES.has(t.toLowerCase())).join(" ");
@@ -1268,13 +1272,15 @@ function textItems(st: RewriteState, groups: Map<Element | null, Node[]>): TextI
 			const t = text.replace(/[\s ]+/g, " ").trim();
 			if (t === "") continue;
 			const item: TextItem = { node: n, text: t, lead: text.match(/^[\s ]*/)?.[0] ?? "", trail: text.match(/[\s ]*$/)?.[0] ?? "", kind: "scrub", fixed: null, res: null, forceFirst: false, forceLast: false };
-			const pagerText = /^Page (\d{1,3}) of (\d{1,3})$/.exec((parent?.closest(".nav")?.textContent ?? parent?.textContent ?? "").replace(/[\s\xa0]+/g, " ").trim());
-			// the pager keeps its digits only as the two literal page numbers of `ALLOW_LIST.pageNumbers`; any other page count is mapped
-			const pager = !!pagerText && PAGE_NUMBERS.has(pagerText[1]) && PAGE_NUMBERS.has(pagerText[2]);
+			const nav = parent?.closest(".nav");
+			const pagerText = nav ? /^Page (\d{1,3}) of (\d{1,3})$/.exec((nav.textContent ?? "").replace(/[\s\xa0]+/g, " ").trim()) : null;
+			// the pager keeps its digits only inside `.nav`, as two of the literal page numbers of `ALLOW_LIST.pageNumbers`, the page not past the count; any other page text is mapped
+			const pager = !!pagerText && PAGE_NUMBERS.has(pagerText[1]) && PAGE_NUMBERS.has(pagerText[2]) && Number(pagerText[1]) <= Number(pagerText[2]);
+			const monthOption = tag === "option" && A.optionOnly.includes(t) && MONTH_SELECTS.has((parent?.closest("select")?.getAttribute("name") ?? "").trim().toLowerCase());
 			const link = parent?.closest("a") ?? null;
 			const linkAttrs = link ? `${link.getAttribute("href") ?? ""} ${link.getAttribute("onclick") ?? ""}` : "";
 			const decodedAttrs = decodeLoose(linkAttrs.replace(/&amp;/g, "&"));
-			if (pager || (tag === "option" && A.optionOnly.includes(t))) {
+			if (pager || monthOption) {
 				item.kind = "fixed";
 				item.fixed = t;
 			} else if (A.exactNodes.includes(t)) {

@@ -121,10 +121,11 @@ describe("leak shapes: every invented value is gone", () => {
 	});
 
 	it("a surname that is also a month is replaced; a month inside an option stays", () => {
-		const out = rewriteEasySpeakPage(page(`<td>May</td><td>June</td><select><option>May</option><option>June</option></select>`));
+		const out = rewriteEasySpeakPage(page(`<td>May</td><td>June</td><select name="start_month"><option>May</option><option>June</option></select>`));
 		expect(parseHtml(out).querySelectorAll("td").length).toBe(2);
 		for (const td of Array.from(parseHtml(out).querySelectorAll("td"))) expect(td.textContent).not.toMatch(/May|June/);
 		expect(out).toContain("<option>May</option>");
+		// ... but only in a month select: the same words in another select are names
 	});
 
 	it("a name written with entities is one fake name, not three", () => {
@@ -444,7 +445,7 @@ function expectNoDigitSurvives(input: string, out: string, allowed: string[] = [
 		/Timer 2 - Online/g,
 		// layout attributes keep their literal 0-12 and 100/75/50/25%; a radio keeps 1-3; a pager keeps a page number 1-9
 		/\b(?:colspan|rowspan|size|rows|cols|maxlength|border|cellpadding|cellspacing|width|height)(?:="|\n)(?:\d{1,2}|100%|75%|50%|25%)(?!\d)/gi,
-		/type="radio"[^>]*value="[1-3]"/gi,
+		/type="radio"[^>]*value="[1256]"/gi,
 		/\b[1-9]\/[1-9]\b/g,
 	];
 	const real = new Set(digitRuns(MARKUP.reduce((t, re) => t.replace(re, ""), input)));
@@ -1087,5 +1088,54 @@ describe("round 3 (#1275): dates", () => {
 	it("R3-6b. a date-shaped text that is not a date keeps neither its month nor its digits", () => {
 		const out = ptext(rewriteEasySpeakPage(page("<p>May 99, 2026</p><p>March 45, 2025</p>")));
 		expect(out.join("|")).not.toMatch(/May|March|99|45|2026|2025/);
+	});
+});
+
+describe("round 3 (#1275): a literal exception holds only in its own context", () => {
+	it("R3-3a. layout attributes keep no number anywhere: ten of them spell no phone, and a td's colspan is mapped too (20 seeds)", () => {
+		const html = page(`<div width="4" height="1" colspan="5" rowspan="5" size="5" rows="5" cols="0" maxlength="1" border="3" cellpadding="2"></div><table><tr><td colspan="5">x</td></tr></table>`);
+		for (let i = 0; i < 20; i++) {
+			const doc = parseHtml(rewriteEasySpeakPage(html, { state: newRewriteState({ seed: `l${i}` }) }));
+			const div = doc.querySelector("div");
+			const read = ["width", "height", "colspan", "rowspan", "size", "rows", "cols", "maxlength", "border", "cellpadding"].map((a) => div?.getAttribute(a) ?? "").join("");
+			expect(read, `seed ${i}`).not.toBe("4155550132");
+			expect(read.length).toBe(10);
+			expect(doc.querySelector("td")?.getAttribute("colspan"), `seed ${i}`).not.toBe("5");
+		}
+	});
+
+	it("R3-3b. a radio keeps its value only on an attendance field (available[id]); any other field's 1, 2, 3 is mapped", () => {
+		const other = page(["1", "2", "3"].map((v) => `<input name="speaker" type="radio" value="${v}">`).join(""));
+		for (let i = 0; i < 10; i++) {
+			const vals = Array.from(parseHtml(rewriteEasySpeakPage(other, { state: newRewriteState({ seed: `r${i}` }) })).querySelectorAll("input")).map((x) => x.getAttribute("value"));
+			expect(vals, `seed ${i}`).not.toContain("1");
+			expect(vals[1]).not.toBe("2");
+			expect(vals[2]).not.toBe("3");
+		}
+		const own = page(["1", "6", "2", "5"].map((v) => `<input name="available[123456]" type="radio" value="${v}">`).join(""));
+		const kept = Array.from(parseHtml(rewriteEasySpeakPage(own)).querySelectorAll("input")).map((x) => x.getAttribute("value"));
+		expect(kept).toEqual(["1", "6", "2", "5"]);
+	});
+
+	it("R3-3c. the pager keeps its digits only inside .nav and only when the page is not past the count (20 seeds)", () => {
+		const loose = page(`<p>Page 4 of 1</p><p>Page 5 of 5</p><p>Page 5 of 5</p><p>Page 1 of 3</p>`);
+		for (let i = 0; i < 20; i++) {
+			const out = rewriteEasySpeakPage(loose, { state: newRewriteState({ seed: `p${i}` }) });
+			expect(out, `seed ${i}`).not.toMatch(/Page 5 of 5|Page 1 of 3|Page 4 of 1/);
+			expect(Array.from(parseHtml(out).querySelectorAll("p")).map((p) => (p.textContent ?? "").replace(/\D/g, "")).join(""), `seed ${i}`).not.toBe("41555513");
+		}
+		const nav = (t: string) => rewriteEasySpeakPage(page(`<span class="nav">${t}</span>`));
+		expect(nav("Page 2 of 3")).toContain("Page 2 of 3");
+		expect(nav("Page 4 of 1")).not.toContain("Page 4 of 1");
+		expect(nav("Page 12 of 30")).not.toMatch(/12|30/);
+	});
+
+	it("R3-6. a month name stays only in a month select's options; a name with a punctuation-joined role word is replaced whole", () => {
+		const speaker = rewriteEasySpeakPage(page(`<select name="speaker"><option>May</option><option>June</option></select>`));
+		expect(speaker).not.toMatch(/May|June/);
+		const month = rewriteEasySpeakPage(page(`<select name="end_month"><option>May</option></select>`));
+		expect(month).toContain("<option>May</option>");
+		const slash = rewriteEasySpeakPage(page(`<p>Quillon/Time</p>`));
+		expect(slash).not.toMatch(/Quillon|Time/);
 	});
 });
