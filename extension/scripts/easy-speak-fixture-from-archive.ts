@@ -138,6 +138,8 @@ export const ALLOW_LIST = {
 	/** Month names are kept only inside an `<option>`; elsewhere "May" is somebody's surname. */
 	optionOnly: MONTHS,
 	/** A one- to three-digit number is kept only next to one of these (or as a whole text node): a count, never a house number. */
+	/** A one-word field label whose value is the next text node ("Venue" then a bold place). It is never half of a person's name. */
+	valueLabels: ["Venue"],
 	countLabels: ["Area", "District", "Hour", "Hours", "Mins", "min", "Days"],
 	weekdays: WEEKDAYS,
 	months: MONTHS,
@@ -290,6 +292,7 @@ const NUMBER_PARAMS = lowerSet(A.numberParams);
 const KNOWN_PARAMS = new Set([...PERSON_PARAMS, ...CLUB_PARAMS, ...NUMBER_PARAMS, ...Object.keys(A.paramValues), ...A.otherParams]);
 const CODE_WORDS = new Set(A.codeWords);
 const COUNT_LABELS = new Set(A.countLabels);
+const VALUE_LABELS = new Set(A.valueLabels);
 const TAGS = new Set(A.tags);
 const REL_VALUES = lowerSet(A.relValues);
 const HTTP_EQUIV = lowerSet(A.httpEquivValues);
@@ -511,10 +514,15 @@ function scrubDetailed(st: RewriteState, text: string, force: { first?: boolean;
 		const s = segs[j];
 		return !!s && !s.replaced && !s.small && COUNT_LABELS.has(text.slice(s.start, s.end)) && /^\s*$/.test(text.slice(from, to));
 	};
+	// a level ("#2-1 - Name", or "2 - Name" at the start of the text) is a one- or two-digit number in a fixed shape; it names no one
+	const levelAt: [number, number][] = [...text.matchAll(/(?<![\p{L}\d])#\d{1,2}-\d{1,2}(?!\d)/gu)].map((m) => [m.index ?? 0, (m.index ?? 0) + m[0].length]);
+	const lead = /^\s*\d{1,2}(?=\s+-\s)/.exec(text);
+	if (lead) levelAt.push([0, lead[0].length]);
 	segs.forEach((s, i) => {
 		if (!s.small) return;
 		const whole = text.trim() === text.slice(s.start, s.end);
-		const keep = whole || label(i - 1, segs[i - 1]?.end ?? 0, s.start) || label(i + 1, s.end, segs[i + 1]?.start ?? 0);
+		const inLevel = levelAt.some(([from, to]) => s.start >= from && s.end <= to);
+		const keep = whole || inLevel || label(i - 1, segs[i - 1]?.end ?? 0, s.start) || label(i + 1, s.end, segs[i + 1]?.start ?? 0);
 		if (!keep) {
 			s.replaced = true;
 			s.out = "0";
@@ -990,7 +998,9 @@ function swallowAcrossNodes(st: RewriteState, sequences: TextItem[][]) {
 			for (let k = 0; k + 1 < seq.length; k++) {
 				const [a, b] = [seq[k], seq[k + 1]];
 				if (lastEdge(a)?.replacedWord && firstEdge(b)?.kept && firstEdge(b)?.capital && firstEdge(b)?.single) changed = forceEdge(st, b, "first") || changed;
-				if (firstEdge(b)?.replacedWord && lastEdge(a)?.kept && lastEdge(a)?.capital && lastEdge(a)?.single) changed = forceEdge(st, a, "last") || changed;
+				// a field label ("Venue") followed by its value in another node stays; any other lone capitalised word before a replaced name is a plausible surname
+				const label = a.kind === "scrub" && VALUE_LABELS.has(a.text.replace(/[\s\u00a0]+/g, " ").trim());
+				if (!label && firstEdge(b)?.replacedWord && lastEdge(a)?.kept && lastEdge(a)?.capital && lastEdge(a)?.single) changed = forceEdge(st, a, "last") || changed;
 			}
 			if (!changed) break;
 		}
