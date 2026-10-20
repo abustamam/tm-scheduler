@@ -277,7 +277,8 @@ size:
   (`src/server/access-requests-logic.ts`, #866). Add the next public PII path here.
 
 `/review-pr` prints a hint when a changed path is on that list; a silent hint is not a clean bill.
-gstack's Codex passes fall back to a Claude subagent; do not install `codex`.
+gstack `/review` needs a real Codex pass, not a Claude-subagent fallback; record it as a
+`**Risk review**` PR comment (`docs/agents/worktrees-and-landing.md`, #1253).
 
 ### Shaping and pipelines
 

@@ -183,6 +183,8 @@ Merging is the serial half.
 
 1. `/review-pr N` for **every** PR in the wave, dispatched together. Where one prints a
    risk-category hint, run gstack `/review` in that PR's worktree as well.
+   When that review finishes, post the `**Risk review**` comment on the PR, or edit the existing
+   one in place on a re-run, never a second (`docs/agents/worktrees-and-landing.md`).
 2. Send back what the reviews found. Review findings, and every handback, go to a **fresh**
    `implementer`, briefed with the issue, the worktree, the branch, the findings and the
    previous handoff. Never SendMessage an implementer that has done work: it re-reads its whole

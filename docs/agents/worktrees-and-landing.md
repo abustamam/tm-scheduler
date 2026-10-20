@@ -102,6 +102,23 @@ fastest way to comply.
   one is user-owned (the rulesets API returns an empty-reason 422 on a `merge_queue` rule).
   `ci.yml` keeps its `merge_group:` trigger, inert today, so the queue is one setting away if the
   repo ever moves to an org.
+- **A risk-category PR carries a `**Risk review**` record** (#1253: the hint in CLAUDE.md's
+  "Which review" could be read and skipped, and nothing checked it happened). The record is one
+  PR comment, never a PR-body section, whose first line is exactly `**Risk review**`:
+
+  ```markdown
+  **Risk review**
+  - gstack `/review`: ran in the PR's worktree (<branch>), <n> findings, <fixed / filed / none>
+  - Codex: ran
+  ```
+
+  The Codex line is exactly one of `- Codex: ran` or `- Codex: fell back — <reason>`; any other
+  wording reads as unreadable and is flagged. The main session posts it when the review
+  finishes ("Landing the wave" step 1 in the dispatching skill), and on a re-run edits that
+  comment in place rather than adding a second. `/review-pr` step 3 reads it and prints the
+  result. It is a printed hint like the Prod check line: the merge decision stays the
+  maintainer's. gstack `/review` lives outside this repo, so this is where the posting
+  instruction lives.
 - **`--auto` needs the repo's "Allow auto-merge" setting, and its being OFF has no symptom
   until you try to land.** It was off here until 2026-09-07, so the Land step above did not
   work as written: `gh pr merge --squash --auto` fails with `GraphQL: Auto merge is not allowed
