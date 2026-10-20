@@ -55,15 +55,29 @@ export type MarksResult =
 	| { ok: true; marks: TimingMarks }
 	| { ok: false; message: string };
 
-/** 0 < green < yellow < red, each typed as `m:ss`. */
+/** A mark as typed, in seconds, or null. `m:ss` as the stopwatch writes it, OR
+ *  bare digits, because the phone's numeric keypad has no colon: the last two
+ *  digits are the seconds and anything before them the minutes ("500" is 5:00,
+ *  "1030" is 10:30, "45" is 0:45, "5" is 0:05). Seconds above 59 are refused
+ *  ("75" is not 1:15), never guessed at. */
+export function parseMark(text: string): number | null {
+	const t = text.trim();
+	const m = /^(\d{1,3})(\d{2})$/.exec(t) ?? /^()(\d{1,2})$/.exec(t);
+	if (!m) return parseStopwatch(t);
+	const sec = Number(m[2]);
+	if (sec > 59) return null;
+	return Number(m[1] || 0) * 60 + sec;
+}
+
+/** 0 < green < yellow < red, each typed as `m:ss` or bare digits. */
 export function validateMarks(fields: MarkFields): MarksResult {
-	const g = parseStopwatch(fields.green);
-	const y = parseStopwatch(fields.yellow);
-	const r = parseStopwatch(fields.red);
+	const g = parseMark(fields.green);
+	const y = parseMark(fields.yellow);
+	const r = parseMark(fields.red);
 	if (g === null || y === null || r === null) {
 		return {
 			ok: false,
-			message: "Enter each mark as minutes and seconds, like 5:00.",
+			message: "Enter each mark as minutes and seconds, like 5:00 or 500.",
 		};
 	}
 	if (g <= 0) return { ok: false, message: "Green must be after 0:00." };

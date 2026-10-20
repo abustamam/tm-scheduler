@@ -12,6 +12,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StandaloneTimer } from "./standalone-timer";
+import { parseMark, validateMarks } from "./timer-presets";
 
 const T0 = new Date("2026-10-19T12:00:00Z").getTime();
 let clock = T0;
@@ -48,6 +49,7 @@ beforeEach(() => {
 });
 afterEach(() => {
 	cleanup();
+	vi.restoreAllMocks();
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
 });
@@ -138,42 +140,111 @@ describe("validation", () => {
 		["descending marks", "3:00", "2:00", "1:00"],
 		["zero green", "0:00", "1:00", "2:00"],
 	] as const) {
-		it(`${label}: inline message, Start disabled, no run`, async () => {
+		it(`${label}: inline message, no clock, no run`, async () => {
 			render(<StandaloneTimer />);
 			await type(/^Green/, g);
 			await type(/^Yellow/, y);
 			await type(/^Red/, r);
 			expect(screen.getByRole("alert")).toBeTruthy();
-			const start = screen.getByRole("button", { name: "Start" });
-			expect((start as HTMLButtonElement).disabled).toBe(true);
-			await click(start);
-			expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+			// No clock card at all: nothing stale to read, nothing to start.
+			expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
+			expect(document.querySelector("[data-band]")).toBeNull();
+			expect(screen.queryByText(/Green \d/)).toBeNull();
 			expect(screen.queryByText(/Disqualified after/)).toBeNull();
 		});
 	}
 
 	it("text that is not m:ss is refused", async () => {
 		render(<StandaloneTimer />);
-		await type(/^Green/, "5");
+		await type(/^Green/, "abc");
 		expect(screen.getByRole("alert").textContent).toMatch(
 			/minutes and seconds/,
+		);
+	});
+
+	it("bare digits are accepted, so the numeric keypad can type a mark", async () => {
+		render(<StandaloneTimer />);
+		await type(/^Green/, "100");
+		await type(/^Yellow/, "130");
+		await type(/^Red/, "200");
+		expect(screen.queryByRole("alert")).toBeNull();
+		await click(screen.getByRole("button", { name: "Start" }));
+		await at(60 * 1000);
+		expect(band()).toBe("green");
+		await at(120 * 1000);
+		expect(band()).toBe("red");
+	});
+});
+
+describe("parseMark", () => {
+	it.each([
+		["500", 300],
+		["45", 45],
+		["5", 5],
+		["05", 5],
+		["1030", 630],
+		["5:00", 300],
+		["0:45", 45],
+		["  500 ", 300],
+	])("%s is %i seconds", (text, sec) => {
+		expect(parseMark(text)).toBe(sec);
+	});
+	it.each([
+		"75",
+		"560",
+		"",
+		"abc",
+		"5:7",
+		"1:2:3",
+		"123456",
+		"-5",
+	])("%s is refused", (text) => {
+		expect(parseMark(text)).toBeNull();
+	});
+	it("still rejects a non-ascending set typed as digits", () => {
+		expect(validateMarks({ green: "500", yellow: "400", red: "700" }).ok).toBe(
+			false,
 		);
 	});
 });
 
 describe("running", () => {
-	it("disables the fields while running and re-enables them when paused", async () => {
+	it("locks the fields and presets from Start until Reset", async () => {
+		render(<StandaloneTimer />);
+		const locked = () => [
+			...[/^Green/, /^Yellow/, /^Red/].map(
+				(l) => (screen.getByLabelText(l) as HTMLInputElement).disabled,
+			),
+			...["Ice Breaker", "Speech", "Table Topics", "Evaluation", "Custom"].map(
+				(n) => (preset(n) as HTMLButtonElement).disabled,
+			),
+		];
+		expect(locked().every((d) => !d)).toBe(true);
+		await click(screen.getByRole("button", { name: "Start" }));
+		expect(locked().every(Boolean)).toBe(true);
+		await at(1000);
+		await click(screen.getByRole("button", { name: "Pause" }));
+		expect(locked().every(Boolean)).toBe(true);
+		await click(screen.getByRole("button", { name: "Reset" }));
+		expect(locked().every((d) => !d)).toBe(true);
+	});
+
+	it("a preset tapped mid-speech changes nothing", async () => {
 		render(<StandaloneTimer />);
 		await click(screen.getByRole("button", { name: "Start" }));
-		for (const l of [/^Green/, /^Yellow/, /^Red/]) {
-			expect((screen.getByLabelText(l) as HTMLInputElement).disabled).toBe(
-				true,
-			);
-		}
-		await click(screen.getByRole("button", { name: "Pause" }));
-		expect((screen.getByLabelText(/^Green/) as HTMLInputElement).disabled).toBe(
-			false,
-		);
+		await at(310 * 1000);
+		expect(band()).toBe("green");
+		await click(preset("Table Topics"));
+		expect(field(/^Red/)).toBe("7:00");
+		expect(band()).toBe("green");
+	});
+
+	it("scrolls the colour block into view on Start", async () => {
+		const scroll = vi.fn();
+		Element.prototype.scrollIntoView = scroll;
+		render(<StandaloneTimer />);
+		await click(screen.getByRole("button", { name: "Start" }));
+		expect(scroll).toHaveBeenCalledTimes(1);
 	});
 
 	it("makes no network request", async () => {
@@ -204,7 +275,57 @@ describe("Show clock", () => {
 	});
 });
 
+describe("Show clock while not running", () => {
+	it("does not start an idle or paused clock", async () => {
+		render(<StandaloneTimer />);
+		await click(screen.getByLabelText("Show clock"));
+		await click(screen.getByLabelText("Show clock"));
+		expect(screen.getByRole("button", { name: "Start" })).toBeTruthy();
+		await click(screen.getByRole("button", { name: "Start" }));
+		await at(1000);
+		await click(screen.getByRole("button", { name: "Pause" }));
+		await click(screen.getByLabelText("Show clock"));
+		await click(screen.getByLabelText("Show clock"));
+		expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
+		await at(60 * 1000);
+		expect(document.querySelector("output")?.textContent).toBe("0:01");
+	});
+});
+
 describe("remembering", () => {
+	it.each([
+		[
+			"unknown selection",
+			{
+				selection: "nope",
+				fields: { green: "1:00", yellow: "2:00", red: "3:00" },
+				showClock: true,
+			},
+		],
+		[
+			"non-string field",
+			{
+				selection: "custom",
+				fields: { green: 1, yellow: "2:00", red: "3:00" },
+				showClock: true,
+			},
+		],
+		[
+			"non-boolean showClock",
+			{
+				selection: "custom",
+				fields: { green: "1:00", yellow: "2:00", red: "3:00" },
+				showClock: "yes",
+			},
+		],
+		["missing fields", { selection: "custom", showClock: true }],
+	])("rejects %s and falls back to the defaults", (_n, stored) => {
+		window.localStorage.setItem("gavelup:timer", JSON.stringify(stored));
+		render(<StandaloneTimer />);
+		expect(field(/^Green/)).toBe("5:00");
+		expect(preset("Speech").getAttribute("aria-pressed")).toBe("true");
+	});
+
 	it("restores the last selection and Show clock, and survives broken storage", async () => {
 		const first = render(<StandaloneTimer />);
 		await click(preset("Evaluation"));
@@ -226,7 +347,6 @@ describe("remembering", () => {
 		});
 		render(<StandaloneTimer />);
 		expect(field(/^Red/)).toBe("7:00");
-		vi.restoreAllMocks();
 	});
 
 	it("ignores malformed stored data", () => {

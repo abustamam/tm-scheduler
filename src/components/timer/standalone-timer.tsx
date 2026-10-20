@@ -67,6 +67,9 @@ export function StandaloneTimer() {
 	}, [loaded, selection, fields, showClock]);
 
 	const running = state.phase === "running";
+	// Marks are fixed from Start until Reset: running, paused or stopped.
+	const locked = state.phase !== "idle";
+	const clockRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
 		if (!running) return;
@@ -80,25 +83,31 @@ export function StandaloneTimer() {
 		stateRef.current = timerReducer(stateRef.current, action);
 		setState(stateRef.current);
 		setNow(Date.now());
+		// A phone held in landscape shows only a strip of page: bring the colour
+		// block, which holds Start/Pause/Reset, to fill the screen once it runs.
+		if (action.type === "start") {
+			clockRef.current?.scrollIntoView?.({
+				behavior: "smooth",
+				block: "start",
+			});
+		}
 	}, []);
 
 	const result = validateMarks(fields);
-	// Invalid marks keep the clock on the last valid set rather than inventing
-	// one; Start is disabled so nothing can run against them.
-	const lastValid = useRef(DEFAULT_PRESET.marks);
-	if (result.ok) lastValid.current = result.marks;
-	const marks = result.ok ? result.marks : lastValid.current;
-
-	const segment: TimerSegment = {
-		key: "standalone",
-		slotId: null,
-		roleLabel: "Timer",
-		holder: null,
-		marks,
-		kind: "speech",
-		recordable: false,
-		unrecordableReason: null,
-	};
+	// Invalid marks show no clock at all (never a stale set): Start cannot be
+	// reached, and the fields are only editable while idle.
+	const segment: TimerSegment | null = result.ok
+		? {
+				key: "standalone",
+				slotId: null,
+				roleLabel: "Timer",
+				holder: null,
+				marks: result.marks,
+				kind: "speech",
+				recordable: false,
+				unrecordableReason: null,
+			}
+		: null;
 
 	const pick = (next: Selection) => {
 		setSelection(next);
@@ -128,8 +137,9 @@ export function StandaloneTimer() {
 							key={p.id}
 							type="button"
 							aria-pressed={selection === p.id}
+							disabled={locked}
 							onClick={() => pick(p.id)}
-							className={`min-h-11 rounded-full border px-4 text-sm font-medium ${
+							className={`min-h-11 rounded-full border px-4 text-sm font-medium disabled:opacity-60 ${
 								selection === p.id
 									? "border-primary bg-primary text-primary-foreground"
 									: "border-[var(--line)]"
@@ -147,7 +157,7 @@ export function StandaloneTimer() {
 							<input
 								value={fields[key]}
 								onChange={(e) => edit(key, e.target.value)}
-								disabled={running}
+								disabled={locked}
 								inputMode="numeric"
 								autoComplete="off"
 								placeholder="m:ss"
@@ -179,18 +189,25 @@ export function StandaloneTimer() {
 				</label>
 			</div>
 
-			<SegmentClock
-				variant="screen"
-				segment={segment}
-				state={state}
-				now={now}
-				limits={null}
-				outcome={undefined}
-				canRecord={false}
-				showClock={showClock}
-				startDisabled={!result.ok}
-				onAction={dispatch}
-			/>
+			<div ref={clockRef}>
+				{segment ? (
+					<SegmentClock
+						variant="screen"
+						segment={segment}
+						state={state}
+						now={now}
+						limits={null}
+						outcome={undefined}
+						canRecord={false}
+						showClock={showClock}
+						onAction={dispatch}
+					/>
+				) : (
+					<p className="p-4 text-muted-foreground text-sm">
+						Fix the marks above to start the clock.
+					</p>
+				)}
+			</div>
 		</main>
 	);
 }

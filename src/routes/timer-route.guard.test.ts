@@ -14,7 +14,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const ENTRY = resolve(ROOT, "src/routes/timer.tsx");
 
 function resolveModule(spec: string, from: string): string | null {
-	const base = spec.startsWith("#/")
+	// `#/` and `@/` both map to src/ (tsconfig paths).
+	const base = /^[#@]\//.test(spec)
 		? resolve(ROOT, "src", spec.slice(2))
 		: spec.startsWith(".")
 			? resolve(dirname(from), spec)
@@ -69,7 +70,7 @@ describe("/timer is client-only (#1248)", () => {
 	it("reaches neither #/server nor #/db", () => {
 		const bad = [...specs].filter(
 			(s) =>
-				/^#\/(server|db)(\/|$)/.test(s) ||
+				/^[#@]\/(server|db)(\/|$)/.test(s) ||
 				/(^|\/)(server|db)\/[\w.-]+$/.test(s) ||
 				/@tanstack\/react-start/.test(s),
 		);
