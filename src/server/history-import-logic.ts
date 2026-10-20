@@ -661,7 +661,7 @@ function previewPerson(p: PlanPerson): ImportPreviewPerson {
  * the hash of the preview it confirmed is refused when its own plan, computed
  * under the import lock, hashes differently (a roster, a meeting or a ref moved
  * in between). The pasted contacts text is part of it (#1240): the same bundle
- * with other contacts is another apply.
+ * with other contacts is another apply, and so is who each row lands on.
  */
 export function planFingerprint(plan: ImportPlan, contacts = ""): string {
 	// Built apart from the hash call: `meeting-writers.guard.test.ts` reads any
@@ -678,6 +678,12 @@ export function planFingerprint(plan: ImportPlan, contacts = ""): string {
 		]),
 		counts: plan.counts,
 		contacts,
+		// Who each pasted row lands on and which fields it sets, never the values: a
+		// rename or a released email moves a row to another person under the same
+		// text. (The member a key resolves to is already in `people` above.)
+		contactFills: plan.contactFills
+			.map((f) => [f.personKey, f.email !== null, f.phone !== null])
+			.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
 	});
 	return createHash("sha256").update(canonical).digest("hex");
 }

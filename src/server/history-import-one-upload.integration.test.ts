@@ -615,6 +615,69 @@ describe.skipIf(!hasTestDb)(
 			).rejects.toThrow(logic.PLAN_CHANGED_MESSAGE);
 		});
 
+		// protects=the plan hash binds WHO each pasted row lands on: a rename between the
+		// preview and the apply that moves (here: removes) a row's recipient under the
+		// same pasted text and the same outcomes is refused as stale;
+		// fails_when=the fingerprint hashes the pasted text but not the computed fills;
+		// no_claim=a value is ever logged: the hash is the only place the fills go.
+		it("refuses an apply whose contact recipient changed under the same hash", async () => {
+			const stored = await upload();
+			const contacts = "Sam Same, sam.moved@contacts.example, 555-0150";
+			const shown = await preview(stored.importId, contacts);
+			expect(shown.contacts.emails).toBe(1);
+			await testDb
+				.update(members)
+				.set({ name: "Sam Renamed" })
+				.where(eq(members.id, samMemberId as string));
+			await expect(
+				apply(stored.importId, contacts, shown.planHash),
+			).rejects.toThrow(logic.PLAN_CHANGED_MESSAGE);
+		});
+
+		// protects=a row that MOVES to another person (same text, same outcomes, a rename
+		// swapped the names its match runs on) is refused as stale;
+		// fails_when=the fingerprint leaves out which person key each fill lands on;
+		// no_claim=the values, never hashed here or logged.
+		it("refuses an apply whose pasted row now lands on another person", async () => {
+			extraResolutions = {
+				[`es:${P(7)}`]: { action: "member", memberId: adaMemberId },
+			};
+			const stored = await upload();
+			// Phone only: the fields set stay the same wherever the row lands.
+			const contacts = "Ada Linked,, 555-0151";
+			const shown = await preview(stored.importId, contacts);
+			await testDb
+				.update(members)
+				.set({ name: "Ada Gone" })
+				.where(eq(members.id, adaMemberId));
+			await testDb
+				.update(members)
+				.set({ name: "Ada Linked" })
+				.where(eq(members.id, samMemberId as string));
+			await expect(
+				apply(stored.importId, contacts, shown.planHash),
+			).rejects.toThrow(logic.PLAN_CHANGED_MESSAGE);
+		});
+
+		// protects=an email released between the preview and the apply changes what a
+		// row sets (it was dropped as held, now it is set): refused as stale;
+		// fails_when=the fingerprint leaves out which fields each fill sets;
+		// no_claim=the in-transaction re-check, covered by its own test.
+		it("refuses an apply whose row sets an email it did not at preview", async () => {
+			const [holder] = await testDb
+				.insert(people)
+				.values({ name: "Holder", email: "released@contacts.example" })
+				.returning({ id: people.id });
+			const stored = await upload();
+			const contacts = "Mo Member, released@contacts.example, 555-0160";
+			const shown = await preview(stored.importId, contacts);
+			expect(shown.contacts.emails).toBe(0);
+			await testDb.delete(people).where(eq(people.id, holder?.id as string));
+			await expect(
+				apply(stored.importId, contacts, shown.planHash),
+			).rejects.toThrow(logic.PLAN_CHANGED_MESSAGE);
+		});
+
 		// protects=an email taken after the preview, inside the apply's own
 		// transaction, is left blank and the report says so, instead of two Persons
 		// holding one email;
