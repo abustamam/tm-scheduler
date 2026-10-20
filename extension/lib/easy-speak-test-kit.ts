@@ -4,6 +4,7 @@
  */
 import { readFileSync } from "node:fs";
 import { DOMParser } from "linkedom";
+import { stripCredentials } from "./easy-speak-parse";
 import { norm } from "./easy-speak-text";
 import { type ExportResult, type Identity, identityFromDoc, runExport, type WalkStore } from "./easy-speak-walk";
 
@@ -62,6 +63,59 @@ export function nameShapedRunsInJson(value: unknown): string[] {
 		else if (typeof v === "string") out.push(...(norm(v).match(NAME_SHAPED) ?? []).map((m) => m.trim()));
 	};
 	walk(value);
+	return out;
+}
+
+// ------------------------------------------------------------------ the anonymisation guard
+
+const fakeNames = JSON.parse(readFixture("fake-names.json")) as { names: string[]; usernames: string[] };
+const nonPersonPhrases = JSON.parse(readFixture("non-person-phrases.json")) as Record<string, string[] | string>;
+
+/** Every fake person name a fixture may carry, in the order `fake-names.json` lists them. */
+export const FAKE_NAMES: readonly string[] = fakeNames.names;
+/** The one username a fixture may carry. */
+export const FAKE_USERNAME: string = fakeNames.usernames[0];
+
+const FAKE_NAME_SET = new Set(FAKE_NAMES);
+const PHRASE_SET = new Set(
+	Object.entries(nonPersonPhrases)
+		.filter(([k]) => k !== "_about")
+		.flatMap(([, v]) => v as string[]),
+);
+
+/**
+ * What is wrong with a candidate fixture page, as plain sentences; `[]` means it may be committed.
+ * The same checks `easy-speak-fixtures.test.ts` runs over the committed pages (that file keeps its
+ * own copy; a test here runs this over every committed page to hold the two together): person links
+ * and the header name are fake, person ids are 900001-900999, one fake username, no leftover
+ * evaluator history, every name-shaped run is a fake name or an allowed phrase, phones are
+ * `(555) 010-xxxx`, no email. The fixture generator refuses to write a page this complains about.
+ */
+export function fixtureViolations(html: string): string[] {
+	const out: string[] = [];
+	const doc = parseHtml(html);
+	for (const a of Array.from(doc.querySelectorAll("a"))) {
+		const attrs = `${a.getAttribute("href") ?? ""} ${a.getAttribute("onclick") ?? ""}`;
+		if (!/[?&;]u=\d+/.test(attrs)) continue;
+		const t = stripCredentials(norm(a.textContent));
+		if (t === "" || /^(Request a Speech\.\.\.|Accept|TBA)$/.test(t)) continue;
+		if (!FAKE_NAME_SET.has(t)) out.push(`person link names someone who is not a fake name: "${t}"`);
+	}
+	const header = /Welcome back\s+(.+?)\s*\[/.exec(norm(doc.body?.textContent));
+	if (header && !FAKE_NAME_SET.has(stripCredentials(header[1]))) out.push(`header names "${header[1]}"`);
+	const ids = [...html.matchAll(/(?:[?&;]u=|attend_image1?\[|available\[|rec\[|available_|email_chk_\d+" name="rec\[)(\d+)/g)].map((m) => Number(m[1]));
+	for (const n of ids) if (n < 900_001 || n > 900_999) out.push(`person id ${n} is outside 900001-900999`);
+	if (/Accepted by|Previous Evaluators|I am NOT attending this meeting \(/.test(html)) out.push("leftover evaluator history");
+	for (const m of html.matchAll(/\[([A-Za-z0-9_]+)\]&nbsp;/g)) {
+		if (m[1] !== FAKE_USERNAME) out.push(`username "${m[1]}" is not ${FAKE_USERNAME}`);
+	}
+	for (const r of nameShapedRuns(parseHtml(html))) {
+		if (!FAKE_NAME_SET.has(r) && !PHRASE_SET.has(r)) out.push(`name-shaped text "${r}" is neither a fake name nor an allowed phrase`);
+	}
+	for (const m of html.match(new RegExp(PHONE.source, "g")) ?? []) {
+		if (!/^\(555\) 010-\d{4}$/.test(m)) out.push(`phone "${m}" is outside (555) 010-xxxx`);
+	}
+	if (EMAIL.test(html)) out.push("an email address");
 	return out;
 }
 
@@ -203,6 +257,38 @@ export function fakeEasySpeak(opts: {
 		if (ev) return page(readFixture(`evaluation-${ev[1]}.json`));
 		return { ok: false, status: 404, text: async () => "not found" };
 	};
+}
+
+// ------------------------------------------------------------------ replay
+
+/**
+ * Replay a live-site failure: serve the given fixture pages in place of the usual ones and
+ * return the walk harness (`run`, `log`, `store`...). Each key is a path, or a path with its
+ * query ("/request_speech.php?s=1473688"); a bare path answers every request to it, a key with
+ * a query only the requests that carry those parameters (others, like `mode`, may be there too). The value is a fixture file name. Every other URL is served as
+ * `fakeEasySpeak` serves it, so a regression test for a live bug is the offending page, anonymised
+ * by `scripts/easy-speak-fixture-from-archive.ts`, and a few lines:
+ *
+ *     const r = replay({ "/view_meeting.php?t=644360": "meeting-regression-123.html" });
+ *     expect((await r.run()).bundle.meetings...).
+ */
+export function replay(pages: Record<string, string>, opts: NonNullable<Parameters<typeof setup>[0]> = {}) {
+	const entries = Object.entries(pages).map(([key, file]) => {
+		const u = new URL(key, "https://easy-speak.org");
+		return { path: u.pathname, query: key.includes("?") ? u.searchParams : null, file };
+	});
+	const { override, ...rest } = opts;
+	return setup({
+		...rest,
+		override: (url, init) => {
+			const u = new URL(url);
+			// A query-carrying key is the more specific; it wins over a bare path.
+			const hit =
+				entries.find((e) => e.path === u.pathname && e.query !== null && [...e.query].every(([k, v]) => u.searchParams.get(k) === v)) ??
+				entries.find((e) => e.path === u.pathname && e.query === null);
+			return hit ? readFixture(hit.file) : override?.(url, init);
+		},
+	});
 }
 
 // ------------------------------------------------------------------ walk harness

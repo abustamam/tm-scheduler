@@ -25,3 +25,32 @@ is the 1st speaker of the upcoming meeting (so the speech list's own request lin
 
 `UPDATE_FIXTURES=1 bunx vitest run lib/easy-speak-walk.test.ts` rewrites `bundle.expected.json`. Read
 the diff: it is the contract's only worked example.
+
+## A live Easy-Speak failure ships its page
+
+A fix prompted by a live Easy-Speak failure commits the offending page, anonymised, in the same PR,
+with a test that fails without the fix (#1252). The export saves every page it fetched to
+`easy-speak-<club>-<date>-pages.json`; that archive is raw, so **never commit it or a page from it**.
+
+```bash
+cd extension
+bun scripts/easy-speak-fixture-from-archive.ts <archive.json> --list
+bun scripts/easy-speak-fixture-from-archive.ts <archive.json> --page <index|url-part> \
+    --out <name>.html [--name "Real Name"]... [--term "Real Club Name"]... [--dry-run]
+```
+
+The script strips scripts, styles and comments, swaps linked people, the viewer and the club for
+fakes and the guard's ranges, and runs the same checks as `easy-speak-fixtures.test.ts`
+(`fixtureViolations` in `easy-speak-test-kit.ts`). It refuses to write a page that fails them and
+prints what is left: name a person in plain text with `--name`, a club name, venue or address with
+`--term`. Never add an allow-list entry to make a page pass. Read the output before committing it,
+add a row to the table above, then write the test with `replay` from the test kit:
+
+```ts
+const r = replay({ "/request_speech.php?s=123": "speech-request-regression.html" });
+await expect(r.run()).resolves.toBeDefined(); // fails without the fix
+```
+
+`replay` serves the named fixtures in place of the usual pages, for a path or a path plus the query
+parameters given, and runs the whole walk. Run `UPDATE_FIXTURES=1 bunx vitest run
+lib/easy-speak-walk.test.ts` only if the fixture changes `bundle.expected.json` on purpose.
