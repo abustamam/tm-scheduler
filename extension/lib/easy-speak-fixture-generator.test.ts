@@ -409,6 +409,123 @@ describe("review round: every invented value is gone (#1275)", () => {
 	});
 });
 
+/** Digit runs as numbers (leading zeros do not make a run another run). */
+const digitRuns = (s: string): string[] => (s.match(/\d+/g) ?? []).map((r) => r.replace(/^0+(?=\d)/, ""));
+
+/**
+ * Decision B (#1275): no digit survives. Every digit run in `input` must be absent from `out`, whatever the
+ * markup it sat in; a fake phone (`(555) 010-xxxx`) is the contract's own placeholder and is not counted.
+ */
+function expectNoDigitSurvives(input: string, out: string, allowed: string[] = []) {
+	const real = new Set(digitRuns(input));
+	const ok = new Set(allowed.map((r) => r.replace(/^0+(?=\d)/, "")));
+	const left = digitRuns(everything(out).replace(/\(555\) 010-\d{4}/g, ""));
+	for (const r of left) expect(real.has(r) && !ok.has(r), `the digit run ${r} is still in the generated page`).toBe(false);
+}
+
+describe("round 2 (#1275, decision B): no digit survives", () => {
+	const cases: { name: string; body: string; words?: string[] }[] = [
+		{ name: "a phone split over table cells", body: "<table><tr><td>415</td><td>555</td><td>01</td><td>32</td></tr></table>" },
+		{ name: "a phone split over short divs", body: "<div>41</div><div>55</div><div>55</div><div>01</div><div>32</div>" },
+		{ name: "a phone concatenated in a handler", body: `<a href="#" onclick="go('41'+'55'+'55'+'01'+'32')">x</a>` },
+		{ name: "a phone as handler arguments", body: `<a href="#" onclick="go(4,1,5,5,5,5,0,1,9,9)">x</a>` },
+		{ name: "an unknown handler name", body: `<div onrowantidewell="0">x</div>`, words: ["rowan", "antidewell"] },
+		{ name: "window features", body: `<a href="#" onclick="window.open('x.php','_blank','quillon=yes,width=4155,height=5501')">x</a>`, words: ["quillon"] },
+		{ name: "map coordinates as an integer pair", body: `<a href="https://easy-speak.org/neardata.php?p=(7314159,2718281)">x</a>` },
+		{ name: "map coordinates, m=", body: `<a href="https://easy-speak.org/neardata.php?m=(37,-122),12">x</a>` },
+		{ name: "xNN counters", body: "<td>x41 x55 x55 x01 x99</td>" },
+		{ name: "percentages", body: "<td>415% 555% 019%</td>" },
+		{ name: "times", body: "<td>41:55 55:01</td>" },
+		{ name: "an invalid ISO date", body: "<td>2041-55-01</td>" },
+		{ name: "a timezone label", body: "<td>QUIL (GMT+12 hrs)</td>", words: ["quil"] },
+		{ name: "a level shape", body: "<td>#27-39</td>" },
+		{ name: "a leading level", body: "<td>27 - Name</td>" },
+		{ name: "a redacted-N look-alike", body: "<td>redacted-7391</td>" },
+		{ name: "a title, an id and a person link", body: `<a href="/profile.php?mode=viewprofile&amp;u=12345">Ab</a><div id="speech_900002" title="555">x</div>` },
+		{ name: "a house number beside a place", body: "<p>42 <b>Fixture Way</b></p>", words: ["fixture way"] },
+	];
+	it.each(cases)("$name", ({ body, words }) => {
+		const input = page(body);
+		const out = rewriteEasySpeakPage(input);
+		expectNoDigitSurvives(body, out);
+		expectNone(out, words ?? []);
+	});
+
+	it("a handler attribute name is a literal list, not a pattern; an unknown one is renamed like any unknown attribute", () => {
+		const out = rewriteEasySpeakPage(page(`<div onrowantidewell="x" onclick="go()" onmouseover="go()" onquillon="go()">x</div>`));
+		expectNone(out, ["rowan", "antidewell", "quillon"]);
+		const names = Array.from(parseHtml(out).querySelector("div")?.attributes ?? []).map((a) => a.name);
+		expect(names).toContain("onclick");
+		expect(names).toContain("onmouseover");
+		expect(names.filter((n) => /^data-x\d+$/.test(n)).length).toBe(2);
+	});
+
+	it("a real id that equals an assigned fake is rewritten, never kept, and the map stays one to one", () => {
+		const links = ["111111", "222222", "333333"].map((u) => `<a href="/profile.php?mode=viewprofile&amp;u=${u}">Ab</a>`).join("");
+		const body = `${links}<div id="speech_900002" data-k="900001"></div><a href="/view_meeting.php?t=900003">m</a>`;
+		const out = rewriteEasySpeakPage(page(body));
+		expectNoDigitSurvives(body, out);
+		const doc = parseHtml(out);
+		expect(doc.querySelector("div")?.getAttribute("id")).not.toMatch(/90000[123]/);
+		expect(doc.querySelector("a:last-of-type")?.getAttribute("href")).not.toMatch(/90000[123]/);
+	});
+
+	it("the digit map is one to one within a run and never maps a run to itself, whatever its length", () => {
+		const reals = Array.from({ length: 60 }, (_, i) => String(1000 + i * 37));
+		const body = reals.map((r) => `<td>${r}</td>`).join("") + `<td>007</td><td>7</td><td>0</td><td>00</td>`;
+		const out = rewriteEasySpeakPage(page(body));
+		const cells = Array.from(parseHtml(out).querySelectorAll("td")).map((t) => t.textContent ?? "");
+		expect(new Set(cells.slice(0, 60)).size, "one to one").toBe(60);
+		cells.forEach((c, i) => expect(c.length, `cell ${i} keeps its length`).toBe(i < 60 ? 4 : [3, 1, 1, 2][i - 60]));
+		expectNoDigitSurvives(body, out);
+		// the same real run is the same fake wherever it appears, however it is zero padded
+		const two = rewriteEasySpeakPage(page(`<td>31415</td><a href="/orgdata.php?c=031415">x</a><div id="r_31415"></div>`));
+		const fakes = [...two.matchAll(/\d{5,6}/g)].map((m) => m[0].replace(/^0+/, ""));
+		expect(new Set(fakes).size).toBe(1);
+	});
+
+	it("a real run equal to a fake an earlier page was given gets its own fake", () => {
+		const st = newRewriteState();
+		const a = rewriteEasySpeakPage(page(`<td>31415</td>`), { state: st });
+		const fakeOfA = parseHtml(a).querySelector("td")?.textContent ?? "";
+		const b = rewriteEasySpeakPage(page(`<td>${fakeOfA}</td><td>31415</td>`), { state: st });
+		const cells = Array.from(parseHtml(b).querySelectorAll("td")).map((t) => t.textContent ?? "");
+		expect(cells[0]).not.toBe(fakeOfA);
+		expect(cells[1]).toBe(fakeOfA);
+		expect(cells[0]).not.toBe(cells[1]);
+	});
+
+	it("attribute renames cannot swallow each other: data-quillon and data-x1 are two names", () => {
+		const out = rewriteEasySpeakPage(page(`<div data-quillon="a" data-x1="b" data-zed="c">x</div>`));
+		const names = Array.from(parseHtml(out).querySelector("div")?.attributes ?? []).map((a) => a.name);
+		expect(names.length).toBe(3);
+		expect(new Set(names).size).toBe(3);
+		expectNone(out, ["quillon", "zed"]);
+	});
+
+	it("a Venue label (a non-breaking space, then the place) stays; a person called Venue does not", () => {
+		const label = rewriteEasySpeakPage(page(`<span class="gen">Venue&#160;<b>Quillon Hall</b></span>`));
+		expect(label).toContain("Venue");
+		expectNone(label, ["quillon"]);
+		const plain = rewriteEasySpeakPage(page(`<td>Venue <b>Rowan Tidewell</b></td><td>Rowan <b>Venue</b></td>`));
+		expectNone(plain, ["rowan", "tidewell"]);
+		for (const td of Array.from(parseHtml(plain).querySelectorAll("td"))) expect(td.textContent, td.innerHTML).not.toMatch(/Venue/);
+	});
+
+	it("the evaluations JSON is hand-written: the generator refuses JSON input with a clear message", () => {
+		expect(() => rewriteEasySpeakPage(`{"evaluations":[{"speaker":"Rowan Tidewell"}]}`)).toThrow(/JSON/);
+		expect(() => generateFixture(`[{"a":1}]`)).toThrow(/JSON/);
+		const dir = mkdtempSync(join(tmpdir(), "es-json-"));
+		const input = join(dir, "eval.json");
+		const out = join(dir, "eval-out.json");
+		writeFileSync(input, `{"evaluations":[]}`);
+		const r = spawnSync("bun", [SCRIPT, input, out], { encoding: "utf8" });
+		expect(r.status).not.toBe(0);
+		expect(r.stderr).toMatch(/JSON/);
+		expect(existsSync(out)).toBe(false);
+	});
+});
+
 describe("pages that must not be corrupted", () => {
 	it('a surname "Small" leaves <small> intact', () => {
 		const out = rewriteEasySpeakPage(page(`<td><small>Fine print</small> Priya Small</td><small>Small</small>`));
