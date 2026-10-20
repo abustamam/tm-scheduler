@@ -715,6 +715,7 @@ export async function previewEasySpeakImport(input: {
 		);
 	}
 	if (isClubArchived(loaded.club)) warnings.push(CLUB_ARCHIVED_MESSAGE);
+	warnings.push(...plan.notes);
 	return {
 		importId: input.importId,
 		planHash: planFingerprint(plan, input.contacts),
@@ -1085,10 +1086,6 @@ export async function writePeopleAndRoles(
 							.where(and(eq(guests.id, o.guestId), eq(guests.clubId, clubId)));
 					}
 					out.guests.set(person.key, o.guestId);
-					for (const alias of o.mergedKeys ?? []) {
-						out.guests.set(alias, o.guestId);
-						await putRef(tx, clubId, "guest", alias, o.guestId);
-					}
 					continue;
 				}
 				// The plan never makes a guest of a person no meeting names (#1203);
@@ -1125,10 +1122,6 @@ export async function writePeopleAndRoles(
 				out.guests.set(person.key, created.id);
 				out.newGuests++;
 				await putRef(tx, clubId, "guest", person.key, created.id);
-				for (const alias of o.mergedKeys ?? []) {
-					out.guests.set(alias, created.id);
-					await putRef(tx, clubId, "guest", alias, created.id);
-				}
 			}
 		}
 		return out;

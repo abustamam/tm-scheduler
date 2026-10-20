@@ -488,6 +488,7 @@ describe.skipIf(!hasTestDb)(
 				counts: {} as ImportPlan["counts"],
 				contactFills: [],
 				contactWarnings: [],
+				notes: [],
 				canApply: true,
 			};
 			const before = await n(guests);

@@ -4,7 +4,10 @@ import { describe, expect, it } from "vitest";
 import type { EasySpeakBundleV1 } from "./easy-speak-bundle";
 import {
 	buildImportPlan,
+	DEFERRED_ANSWERED_REASON,
+	DEFERRED_NAMESAKES_REASON,
 	isJsonbSafeText,
+	needsDecision,
 	type PlanContext,
 	type PlanRosterMember,
 	personKeyOf,
@@ -178,7 +181,6 @@ describe("buildImportPlan on the B fixture", () => {
 		});
 		expect(outcomeOf(plan, "900001")).toMatchObject({ status: "skipped" });
 		expect(plan.unresolved).toEqual([]);
-		expect(plan.canApply).toBe(true);
 	});
 
 	it("does not take an answer naming a member who is not on the roster", () => {
@@ -474,30 +476,41 @@ describe("buildImportPlan on the B fixture", () => {
 			mergedKeys: [personKeyOf({ esUserId: null, name: "dupe person" })],
 		});
 		expect(dupes[0]?.appearances.roles).toBe(1);
-		expect(plan.unresolved.map((p) => p.name)).not.toContain("Dupe Person");
+		expect(plan.unresolved.map((p) => p.name)).not.toContain("dupe person");
 	});
 
+	const nameOnlyKey = personKeyOf({ esUserId: null, name: "dupe person" });
+	const DEFERRED = { status: "skipped" } as const;
+
 	// protects=two DISTINCT Easy-Speak ids with one name stay two creates (two
-	// namesakes), neither blocked nor merged;
-	// fails_when=the guard folds distinct ids together or marks them ambiguous;
-	// no_claim=what happens to a name-only reference beside two namesakes.
-	it("keeps two list entries with distinct ids and one name as two creates, and asks about the name-only reference", () => {
-		const bundle = dupeBundle(true);
-		const plan = buildImportPlan(bundle, ctx());
+	// namesakes), and the name-only reference is DEFERRED: not blocking, not an
+	// answer, nothing imported for it this time (the next preview asks, with both
+	// as candidates, once the namesakes are on the roster);
+	// fails_when=the reference is made ambiguous with no candidates (a dead end), merged onto one
+	// namesake, or left blocking the apply;
+	// no_claim=the apply and the next preview, the integration suite's.
+	it("defers a name-only reference beside two es: namesakes, blocking nothing", () => {
+		const plan = buildImportPlan(dupeBundle(true), ctx());
 		const dupes = dupesOf(plan);
-		const nameOnlyKey = personKeyOf({ esUserId: null, name: "dupe person" });
 		expect(dupes.map((d) => d.key).sort()).toEqual(
 			[nameOnlyKey, "es:900901", "es:900902"].sort(),
 		);
 		for (const d of dupes) {
 			if (d.key === nameOnlyKey) {
-				expect(d.outcome).toEqual({ status: "ambiguous", candidates: [] });
+				expect(d.outcome).toEqual({
+					status: "skipped",
+					reason: DEFERRED_NAMESAKES_REASON,
+				});
+				expect(needsDecision(d)).toBe(false);
 			} else {
 				expect(d.outcome.status).toBe("create");
 				expect(d.outcome).not.toHaveProperty("mergedKeys");
 			}
 		}
-		expect(plan.unresolved.map((p) => p.key)).toContain(nameOnlyKey);
+		expect(plan.unresolved.map((p) => p.key)).not.toContain(nameOnlyKey);
+		expect(plan.notes).toHaveLength(1);
+		expect(plan.notes[0]).toContain("dupe person");
+		expect(plan.notes[0]).toMatch(/more than one person/u);
 	});
 
 	// protects=an UNLISTED es: meeting holder is the one create a same-name name-only
@@ -524,10 +537,10 @@ describe("buildImportPlan on the B fixture", () => {
 	});
 
 	// protects=one listed plus one unlisted es: namesake is two humans: the name-only
-	// reference is asked about, not guessed onto the listed one;
+	// reference is deferred, not guessed onto the listed one;
 	// fails_when=the merge picks the single listed entry whatever else shares the name;
 	// no_claim=resolution of the ambiguity.
-	it("asks about a name-only reference beside a listed and an unlisted es: namesake", () => {
+	it("defers a name-only reference beside a listed and an unlisted es: namesake", () => {
 		const bundle = dupeBundle(false);
 		const past = bundle.meetings.find((m) => m.esMeetingId === "644304");
 		if (!past) throw new Error("fixture changed");
@@ -536,25 +549,25 @@ describe("buildImportPlan on the B fixture", () => {
 			slot: 1,
 			holder: { esUserId: "900903", name: "Dupe Person" },
 		});
-		const nameOnlyKey = personKeyOf({ esUserId: null, name: "dupe person" });
-		const dupes = dupesOf(buildImportPlan(bundle, ctx()));
+		const plan = buildImportPlan(bundle, ctx());
+		const dupes = dupesOf(plan);
 		expect(dupes).toHaveLength(3);
-		expect(dupes.find((d) => d.key === nameOnlyKey)?.outcome).toEqual({
-			status: "ambiguous",
-			candidates: [],
-		});
+		expect(dupes.find((d) => d.key === nameOnlyKey)?.outcome).toMatchObject(
+			DEFERRED,
+		);
 		for (const k of ["es:900901", "es:900903"]) {
 			const o = dupes.find((d) => d.key === k)?.outcome;
 			expect(o?.status).toBe("create");
 			expect(o).not.toHaveProperty("mergedKeys");
 		}
+		expect(plan.notes).toHaveLength(1);
 	});
 
-	// protects=a list-only es: target's saved "guest" answer applies once a merged
-	// name-only reference gives it meeting appearances, and keeps the aliases;
-	// fails_when=the answer is dropped during resolution and the merge flips listOnly;
-	// no_claim=the apply, in the integration suite.
-	it("applies a list-only target's saved guest answer after the merge", () => {
+	// protects=a saved answer on the one es: create keeps the fold off: the name-only
+	// reference is deferred, never merged under an answer that may mean "not this one";
+	// fails_when=the fold ignores a saved answer on the target;
+	// no_claim=the apply.
+	it("defers a name-only reference when the one es: create has a saved answer", () => {
 		const plan = buildImportPlan(
 			dupeBundle(false),
 			ctx({
@@ -562,14 +575,85 @@ describe("buildImportPlan on the B fixture", () => {
 			}),
 		);
 		const dupes = dupesOf(plan);
-		expect(dupes).toHaveLength(1);
-		expect(dupes[0]?.listOnly).toBe(false);
-		expect(dupes[0]?.outcome).toMatchObject({
-			status: "guest",
-			kind: "visitor",
-			via: "chosen",
-			mergedKeys: [personKeyOf({ esUserId: null, name: "dupe person" })],
+		expect(dupes).toHaveLength(2);
+		expect(dupes.find((d) => d.key === nameOnlyKey)?.outcome).toEqual({
+			status: "skipped",
+			reason: DEFERRED_ANSWERED_REASON,
 		});
+		const target = dupes.find((d) => d.key === "es:900901");
+		expect(target?.outcome.status).toBe("create");
+		expect(target?.outcome).not.toHaveProperty("mergedKeys");
+		expect(target?.listOnly).toBe(true);
+		expect(plan.notes).toHaveLength(1);
+		expect(plan.notes[0]).not.toMatch(/ask which person/u);
+	});
+
+	// protects=a saved answer on the NAME-ONLY key keeps its answered outcome and
+	// the es: create stays a plain create (nothing to fold, nothing deferred);
+	// fails_when=the answered key is overwritten, or merged away;
+	// no_claim=the apply.
+	it("keeps an answered name-only reference's outcome and folds nothing", () => {
+		const plan = buildImportPlan(
+			dupeBundle(false),
+			ctx({
+				resolutions: { [nameOnlyKey]: { action: "skip", reason: "Not them." } },
+			}),
+		);
+		const dupes = dupesOf(plan);
+		expect(dupes.find((d) => d.key === nameOnlyKey)?.outcome).toEqual({
+			status: "skipped",
+			reason: "Not them.",
+		});
+		expect(dupes.find((d) => d.key === "es:900901")?.outcome).toMatchObject({
+			status: "create",
+		});
+		expect(plan.notes).toEqual([]);
+	});
+
+	// protects=a name-only key whose answer failed (a member the roster does not
+	// hold) is a name-only key WITH an answer: the fold stays off and the es: create
+	// is not given its references;
+	// fails_when=only a key whose outcome changed counts as answered;
+	// no_claim=what the panel shows for the rejected choice.
+	it("treats a name-only key with a rejected saved answer as answered", () => {
+		const plan = buildImportPlan(
+			dupeBundle(false),
+			ctx({
+				resolutions: {
+					[nameOnlyKey]: { action: "member", memberId: id(999) },
+				},
+			}),
+		);
+		const dupes = dupesOf(plan);
+		expect(
+			dupes.find((d) => d.key === "es:900901")?.outcome,
+		).not.toHaveProperty("mergedKeys");
+		expect(dupes.find((d) => d.key === nameOnlyKey)?.outcome.status).toBe(
+			"create",
+		);
+	});
+
+	// protects=an es: create alone, and a name-only person alone, are plain creates
+	// with no note;
+	// fails_when=the deferral touches a group with nothing to fold;
+	// no_claim=the apply.
+	it("makes a plain create of an es: entry alone and of a name-only former member alone", () => {
+		const alone = dupeBundle(false);
+		const past = alone.meetings.find((m) => m.esMeetingId === "644304");
+		if (!past) throw new Error("fixture changed");
+		past.roles = [];
+		const plan = buildImportPlan(alone, ctx());
+		expect(dupesOf(plan).map((d) => d.outcome.status)).toEqual(["create"]);
+		expect(plan.notes).toEqual([]);
+		const names = dupeBundle(false);
+		names.people = [];
+		const plan2 = buildImportPlan(names, ctx());
+		expect(dupesOf(plan2)).toHaveLength(1);
+		expect(dupesOf(plan2)[0]?.outcome).toMatchObject({
+			status: "create",
+			membership: "former",
+		});
+		expect(plan2.notes).toEqual([]);
 	});
 
 	// protects=a saved "guest" answer uses the live guest a ref names even when the
@@ -616,6 +700,11 @@ describe("buildImportPlan on the B fixture", () => {
 			memberId: id(1),
 			via: "ref",
 		});
+		// The set-aside answer is shown, naming the person and nothing else.
+		const named = plan.people.find((p) => p.key === "es:900057")?.name;
+		expect(plan.notes).toHaveLength(1);
+		expect(plan.notes[0]).toContain(named as string);
+		expect(plan.notes[0]).toContain('the saved answer "guest" is set aside');
 	});
 
 	it("imports nothing from a meeting in the future, however the clock moves", () => {

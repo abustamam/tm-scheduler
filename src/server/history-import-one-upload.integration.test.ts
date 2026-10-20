@@ -1035,11 +1035,82 @@ describe.skipIf(!hasTestDb)(
 			expect(gia?.by).toBe(pia?.id);
 		});
 
-		// protects=a list-only es: person with a saved guest answer and a name-only
-		// meeting reference becomes one guest, the reference's key included;
-		// fails_when=the answer is dropped, or the alias has no guest ref;
-		// no_claim=the member case, the test above.
-		it("makes one guest of a list-only target and its alias on a saved guest answer", async () => {
+		const twinRef = personKeyOf({ esUserId: null, name: "dupe twin" });
+		const refForKey = async (key: string) =>
+			testDb
+				.select({ kind: importRefs.kind, targetId: importRefs.targetId })
+				.from(importRefs)
+				.where(
+					and(eq(importRefs.clubId, seed.clubId), eq(importRefs.sourceId, key)),
+				);
+		const twinsBundle = (b: EasySpeakBundleV1) => {
+			for (const n of [9, 10]) {
+				b.people.push({
+					esUserId: P(n),
+					name: "Dupe Twin",
+					status: "Member",
+					joined: null,
+				});
+			}
+			b.meetings[0]?.roles.push({
+				role: "Timekeeper Two",
+				slot: 9,
+				holder: { esUserId: null, name: "dupe twin" },
+			});
+		};
+
+		// protects=two es: namesakes plus a name-only meeting reference: the reference is
+		// DEFERRED (apply succeeds, nothing written for it: no member, guest, ref or saved
+		// answer, a preview note names it) and, with both namesakes now on the roster, the
+		// NEXT preview asks about it with both as real candidates;
+		// fails_when=the reference blocks the apply with no candidates, is guessed onto one
+		// namesake, or a ref or answer is stored for it;
+		// no_claim=a single namesake, the merge tests above.
+		it("defers a name-only reference beside two namesakes, then asks with both as candidates", async () => {
+			const stored = await upload(twinsBundle);
+			const first = await preview(stored.importId);
+			expect(first.people.find((p) => p.key === twinRef)).toMatchObject({
+				status: "skipped",
+				needsDecision: false,
+			});
+			expect(first.warnings.join("\n")).toMatch(/dupe twin.*more than one/u);
+			await apply(stored.importId);
+			const twins = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(
+					and(eq(members.clubId, seed.clubId), eq(members.name, "Dupe Twin")),
+				);
+			expect(twins).toHaveLength(2);
+			expect(await refForKey(twinRef)).toEqual([]);
+			const held = await testDb
+				.select({ id: roleSlots.id })
+				.from(roleSlots)
+				.where(
+					inArray(
+						roleSlots.assignedMemberId,
+						twins.map((t) => t.id),
+					),
+				);
+			expect(held).toEqual([]);
+			const second = await preview(stored.importId);
+			expect(second.savedResolutions[twinRef]).toBeUndefined();
+			const again = second.people.find((p) => p.key === twinRef);
+			expect(again).toMatchObject({
+				status: "ambiguous",
+				needsDecision: true,
+			});
+			expect(again?.candidates.map((c) => c.memberId).sort()).toEqual(
+				twins.map((t) => t.id).sort(),
+			);
+		});
+
+		// protects=a list-only es: person with a saved guest answer beside a name-only
+		// reference is no fold: the reference is deferred and nothing is minted for it
+		// (no guest, no alias ref), instead of a pending guest applied after a merge;
+		// fails_when=the answer is moved onto the merged reference and a guest or alias is made;
+		// no_claim=the single-target merge, covered above.
+		it("defers a name-only reference when the list-only target has a saved guest answer", async () => {
 			extraResolutions = {
 				[`es:${P(9)}`]: { action: "guest", kind: "visitor" },
 			};
@@ -1057,28 +1128,17 @@ describe.skipIf(!hasTestDb)(
 				});
 			});
 			await apply(stored.importId);
-			expect(await memberByName("Dupe Guesty")).toBeUndefined();
-			const rows = await testDb
+			expect(await memberByName("Dupe Guesty")).toBeDefined();
+			const minted = await testDb
 				.select({ id: guests.id })
 				.from(guests)
 				.where(
 					and(eq(guests.clubId, seed.clubId), eq(guests.name, "Dupe Guesty")),
 				);
-			expect(rows).toHaveLength(1);
-			const alias = await testDb
-				.select({ targetId: importRefs.targetId })
-				.from(importRefs)
-				.where(
-					and(
-						eq(importRefs.clubId, seed.clubId),
-						eq(importRefs.kind, "guest"),
-						eq(
-							importRefs.sourceId,
-							personKeyOf({ esUserId: null, name: "dupe guesty" }),
-						),
-					),
-				);
-			expect(alias).toEqual([{ targetId: rows[0]?.id }]);
+			expect(minted).toEqual([]);
+			expect(
+				await refForKey(personKeyOf({ esUserId: null, name: "dupe guesty" })),
+			).toEqual([]);
 		});
 
 		// protects=an existing address differing in case or by surrounding blanks

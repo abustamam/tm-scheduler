@@ -224,8 +224,6 @@ export type PlanPersonOutcome =
 			via: "ref" | "category" | "chosen";
 			/** Set when a ref already names the guest row. */
 			guestId: string | null;
-			/** Name-only keys merged into this guest (a list-only target's answer). */
-			mergedKeys?: string[];
 	  }
 	| { status: "skipped"; reason: string }
 	/**
@@ -285,6 +283,12 @@ export interface PlanPerson {
 
 /** Why an erased Easy-Speak account ("Forgotten User") is skipped. */
 export const ERASED_ACCOUNT_REASON = "Erased Easy-Speak account";
+
+/** Why a name-only reference is left out of this import (a fold collision). */
+export const DEFERRED_NAMESAKES_REASON =
+	"Deferred: the name matches more than one person on Easy-Speak's member list";
+export const DEFERRED_ANSWERED_REASON =
+	"Deferred: an answer is saved for a person with this name";
 
 /** What one contact row sets on one person; blank means "leave as it is". */
 export interface ContactFill {
@@ -418,6 +422,12 @@ export interface ImportPlan {
 	contactFills: ContactFill[];
 	/** Rows that set nothing, or a value left blank, each naming the row and the person: never a value. */
 	contactWarnings: string[];
+	/**
+	 * Plain-language notes the preview shows beside its warnings: a person left out
+	 * of this import and why, a saved answer set aside. Each names the person,
+	 * never pasted text.
+	 */
+	notes: string[];
 	/** True when nothing is left for a human: apply is allowed. */
 	canApply: boolean;
 }
@@ -646,10 +656,7 @@ export function buildImportPlan(
 	const rosterIds = new Set(ctx.roster.map((m) => m.memberId));
 
 	const people: PlanPerson[] = [];
-	const pendingGuests = new Map<
-		string,
-		Extract<PlanPersonOutcome, { status: "guest" }>
-	>();
+	const notes: string[] = [];
 	for (const [key, entry] of seen) {
 		const { ref, appearances } = entry;
 		// A person no meeting names: matched, never created (#1203).
@@ -662,10 +669,6 @@ export function buildImportPlan(
 			0;
 		let outcome: PlanPersonOutcome = { status: "unmatched" };
 		let rejectedChoice: string | null = null;
-		// A saved "guest" answer a list-only person could not use; applied after
-		// the fold merge if meeting references join them.
-		let pendingGuest: Extract<PlanPersonOutcome, { status: "guest" }> | null =
-			null;
 
 		const memberRef = refTarget("person", key);
 		const guestRef = refTarget("guest", key);
@@ -749,14 +752,6 @@ export function buildImportPlan(
 		// row of the member list there is nothing to decide, so no answer is read.
 		if (outcome.status !== "deleted") {
 			const saved = ctx.resolutions?.[key];
-			if (listOnly && saved?.action === "guest") {
-				pendingGuest = {
-					status: "guest",
-					kind: saved.kind,
-					via: "chosen",
-					guestId: guestRef && ctx.guestIds.has(guestRef) ? guestRef : null,
-				};
-			}
 			const choice =
 				listOnly &&
 				(saved?.action === "guest" ||
@@ -779,7 +774,10 @@ export function buildImportPlan(
 				!ctx.guestIds.has(guestRef)
 			) {
 				// A guest the club deleted stays deleted, even beside a live member
-				// ref: the answer does not mint it again.
+				// ref: the answer does not mint it again, and the preview says so.
+				notes.push(
+					`${ref.name}: the saved answer "guest" is set aside because the club deleted that guest; they stay a member.`,
+				);
 			} else if (choice?.action === "guest") {
 				// A guest the ref already names stays that guest: a saved "guest" answer
 				// must not mint a second one on every re-apply.
@@ -802,29 +800,51 @@ export function buildImportPlan(
 			outcome,
 			rejectedChoice,
 		});
-		if (pendingGuest) pendingGuests.set(key, pendingGuest);
 	}
 	// Creates folding to one name are one human or several (never two Persons for
-	// one human). In a folded-name group: EXACTLY ONE `es:` create (listed or not)
-	// takes the name-only references, which join its create so one Person is made
-	// and every key resolves to it. Two or more `es:` creates are namesakes: they
-	// stay creates and each name-only create is `ambiguous` with no candidates,
-	// for a human, not guessed onto either.
-	const createsByFold = new Map<string, PlanPerson[]>();
+	// one human). The fold is KEPT only when it is certain: a folded-name group
+	// with EXACTLY ONE `es:` create (listed or not) and no saved answer on that
+	// create or on any name-only key of the group. The name-only references then
+	// join that create, so one Person is made and every key resolves to it.
+	// Every other collision is DEFERRED, never blocked: two or more `es:` creates
+	// are namesakes, and a saved answer means a human already spoke about one of
+	// them. The name-only creates of such a group become a non-blocking `skipped`
+	// outcome that imports nothing and writes no ref and no answer; the `es:`
+	// creates stay ordinary separate creates. Once they are on the roster the
+	// next import's exact-name match gives the reference its real candidates.
+	const answered = (p: PlanPerson) => ctx.resolutions?.[p.key] !== undefined;
+	const peopleByFold = new Map<string, PlanPerson[]>();
 	for (const p of people) {
-		if (p.outcome.status !== "create") continue;
 		const fold = foldName(p.name);
-		createsByFold.set(fold, [...(createsByFold.get(fold) ?? []), p]);
+		peopleByFold.set(fold, [...(peopleByFold.get(fold) ?? []), p]);
 	}
 	const merged = new Set<PlanPerson>();
-	for (const group of createsByFold.values()) {
-		const esCreates = group.filter((p) => p.esUserId !== null);
-		const nameOnly = group.filter((p) => p.esUserId === null);
+	for (const group of peopleByFold.values()) {
+		const esCreates = group.filter(
+			(p) => p.esUserId !== null && p.outcome.status === "create",
+		);
+		const nameOnly = group.filter(
+			(p) =>
+				p.esUserId === null && p.outcome.status === "create" && !answered(p),
+		);
 		if (nameOnly.length === 0 || esCreates.length === 0) continue;
 		const target = esCreates[0];
-		if (esCreates.length > 1 || !target) {
+		// A folded name is ONE name-only key (`name:<fold>`), and a name-only create
+		// with an answer was filtered out above, so the group's answers that matter
+		// here are the target's own.
+		const anyAnswer = target !== undefined && answered(target);
+		if (esCreates.length > 1 || anyAnswer || !target) {
+			const reason =
+				esCreates.length > 1
+					? DEFERRED_NAMESAKES_REASON
+					: DEFERRED_ANSWERED_REASON;
 			for (const p of nameOnly) {
-				p.outcome = { status: "ambiguous", candidates: [] };
+				p.outcome = { status: "skipped", reason };
+				notes.push(
+					esCreates.length > 1
+						? `${p.name}: the name matches more than one person on Easy-Speak's member list, so their meeting records are left out this time and the next import will ask which person it is.`
+						: `${p.name}: the name matches a person on Easy-Speak's member list who has a saved answer, so their meeting records are left out this time and the next import will match them against the roster.`,
+				);
 			}
 			continue;
 		}
@@ -845,10 +865,6 @@ export function buildImportPlan(
 			merged.add(p);
 		}
 		target.listOnly = false;
-		// Now named by a meeting, so the saved "guest" answer a list-only person
-		// could not use applies.
-		const pending = pendingGuests.get(target.key);
-		if (pending) target.outcome = { ...pending, mergedKeys };
 	}
 	if (merged.size > 0) {
 		for (let i = people.length - 1; i >= 0; i--) {
@@ -1071,6 +1087,7 @@ export function buildImportPlan(
 		counts,
 		contactFills,
 		contactWarnings,
+		notes,
 		canApply: unresolved.length === 0,
 	};
 }
