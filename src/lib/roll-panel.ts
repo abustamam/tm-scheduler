@@ -24,7 +24,7 @@ import type { AttendanceStatus } from "#/server/minutes-logic";
 
 /** What the plan SUGGESTS for a member with no attendance row yet. `null` means
  *  the plan says nothing useful — `reached_out` is an ask, not an answer. */
-export type RollSuggestion = Extract<AttendanceStatus, "present" | "excused">;
+export type RollSuggestion = Extract<AttendanceStatus, "present" | "absent">;
 
 export interface RollRow {
 	id: string;
@@ -80,11 +80,11 @@ export interface RollCounts {
 	unmarked: number;
 }
 
-/** D3's mapping, in one place. `coming → Present?`, `not_coming → Excused?`,
+/** D3's mapping, in one place. `coming → Present?`, `not_coming → Absent?`,
  *  anything else → no suggestion. */
 function suggest(plan: PlanStatus | null): RollSuggestion | null {
 	if (plan === "coming") return "present";
-	if (plan === "not_coming") return "excused";
+	if (plan === "not_coming") return "absent";
 	return null;
 }
 

@@ -124,12 +124,12 @@ describe("plan mode and roll mode agree about who is coming", () => {
 					roleByMemberId,
 				}).rows[0];
 
-				// Coming in the rail ⇔ Present? in roll; Not coming ⇔ Excused?.
+				// Coming in the rail ⇔ Present? in roll; Not coming ⇔ Absent?.
 				const expected =
 					planRow?.status === "coming"
 						? "present"
 						: planRow?.status === "not_coming"
-							? "excused"
+							? "absent"
 							: null;
 				expect(rollRow?.suggestion).toBe(expected);
 				// And the qualifier survives the crossing.

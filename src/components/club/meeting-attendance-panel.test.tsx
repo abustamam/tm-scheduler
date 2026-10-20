@@ -915,6 +915,22 @@ describe("roll mode", () => {
 		expect(onSetAttendance).toHaveBeenCalledWith("m-abe", "present");
 	});
 
+	it('tapping an "Absent?" suggestion (plan: not coming) writes absent exactly once', () => {
+		const onSetAttendance = vi.fn();
+		const { getByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				plan={[{ memberId: "m-abe", status: "not_coming" as const }]}
+				onSetAttendance={onSetAttendance}
+			/>,
+		);
+		const abe = getByRole("button", { name: /Abe Nkemelu status/i });
+		expect(abe.textContent).toContain("Absent?");
+		fireEvent.click(abe);
+		expect(onSetAttendance).toHaveBeenCalledTimes(1);
+		expect(onSetAttendance).toHaveBeenCalledWith("m-abe", "absent");
+	});
+
 	it("F1: marks a suggestion row ABSENT in one menu interaction, with no false `present` first", async () => {
 		// THE reason this round exists, and an assertion that was previously
 		// unrepresentable — which is why four review rounds passed over the bug.
@@ -984,7 +1000,7 @@ describe("roll mode", () => {
 	});
 
 	it("offers the attendance statuses, not the plan rungs", async () => {
-		const { getByRole, findByRole } = render(
+		const { getByRole, findByRole, queryByRole } = render(
 			<MeetingAttendancePanel
 				{...rollProps}
 				attendance={[{ memberId: "m-bea", status: "present" }]}
@@ -997,8 +1013,8 @@ describe("roll mode", () => {
 		await userEvent.click(getByRole("button", { name: /Bea Osei status/i }));
 		await findByRole("menuitem", { name: "Present" });
 		getByRole("menuitem", { name: "Absent" });
-		getByRole("menuitem", { name: "Excused" });
-		expect(() => getByRole("menuitem", { name: "Coming" })).toThrow();
+		expect(queryByRole("menuitem", { name: "Excused" })).toBeNull();
+		expect(queryByRole("menuitem", { name: "Coming" })).toBeNull();
 	});
 
 	it("F3: announces the ANSWER, not just the member's name, on both chip shapes", () => {

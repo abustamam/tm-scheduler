@@ -341,7 +341,7 @@ describe.skipIf(!hasTestDb)("attendance mode (#1049)", () => {
 		expect(m.guests.find((g) => g.guestId === guestId)?.mode).toBe("in_person");
 		const { countsLine } = buildAttendanceSection(m);
 		expect(countsLine).toBe(
-			"Present: 2   Absent: 0   Excused: 0   Guests: 1   Attending incl. guests: 1 + 1 online, 1 not recorded",
+			"Present: 2   Absent: 0   Guests: 1   Attending incl. guests: 1 + 1 online, 1 not recorded",
 		);
 	});
 
@@ -358,7 +358,7 @@ describe.skipIf(!hasTestDb)("attendance mode (#1049)", () => {
 		});
 		const m = await loadMinutes(seed.meetingId);
 		expect(buildAttendanceSection(m).countsLine).toBe(
-			"Present: 2   Absent: 0   Excused: 0   Guests: 0",
+			"Present: 2   Absent: 0   Guests: 0",
 		);
 	});
 });

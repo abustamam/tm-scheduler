@@ -459,7 +459,9 @@ function AttendanceRecord({ minutes }: { minutes: MinutesData }) {
 			<div className="flex flex-wrap items-center gap-2">
 				<h3 className="font-semibold text-sm">Attendance</h3>
 				<Badge variant="secondary">{present} present</Badge>
-				<Badge variant="outline">{excused} excused</Badge>
+				{excused > 0 ? (
+					<Badge variant="outline">{excused} excused</Badge>
+				) : null}
 				<Badge variant="outline">{absent} absent</Badge>
 				<Badge variant="outline">{unmarked} unmarked</Badge>
 				<Badge variant="secondary">{guests} guests</Badge>

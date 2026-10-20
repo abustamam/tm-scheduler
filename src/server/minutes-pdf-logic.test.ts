@@ -58,11 +58,10 @@ describe("buildAttendanceSection (#218)", () => {
 		});
 
 		expect(section.countsLine).toBe(
-			"Present: 1   Absent: 1   Excused: 0   Unmarked: 2   Guests: 0",
+			"Present: 1   Absent: 1   Unmarked: 2   Guests: 0",
 		);
 		expect(section.rows).toEqual([
 			{ label: "Present", names: "Alice" },
-			{ label: "Excused", names: "—" },
 			{ label: "Absent", names: "Ben" },
 			{ label: "Unmarked", names: "Cara, Dev" },
 			{ label: "Guests", names: "—" },
@@ -78,7 +77,7 @@ describe("buildAttendanceSection (#218)", () => {
 		});
 
 		expect(section.countsLine).toBe(
-			"Present: 0   Absent: 0   Excused: 0   Unmarked: 2   Guests: 0",
+			"Present: 0   Absent: 0   Unmarked: 2   Guests: 0",
 		);
 		expect(section.rows.find((r) => r.label === "Absent")?.names).toBe("—");
 		expect(section.rows.find((r) => r.label === "Unmarked")?.names).toBe(
@@ -242,5 +241,18 @@ describe("buildTimingSection (#730)", () => {
 		// …and it did not cap them to nothing: both runs are still recognisable.
 		expect(row).toContain("R".repeat(MINUTES_RENDER_CAPS.roleName - 1));
 		expect(row).toContain("N".repeat(MINUTES_RENDER_CAPS.name - 1));
+	});
+});
+
+describe("buildAttendanceSection: Excused is retired from the roll (#1255)", () => {
+	it("prints the Excused count and row only when someone is excused", () => {
+		const members = [member("Alice", "present"), member("Ben", "excused")];
+		const section = buildAttendanceSection({
+			members,
+			guests: [],
+			counts: countsFor(members),
+		});
+		expect(section.countsLine).toContain("Excused: 1");
+		expect(section.rows.find((r) => r.label === "Excused")?.names).toBe("Ben");
 	});
 });

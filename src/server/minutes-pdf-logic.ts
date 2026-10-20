@@ -218,7 +218,8 @@ export function buildAttendanceSection(minutes: {
 		minutes.members.filter((m) => m.status === status);
 	const { present, absent, excused, unmarked, guests } = minutes.counts;
 	const countsLine =
-		`Present: ${present}   Absent: ${absent}   Excused: ${excused}   ` +
+		`Present: ${present}   Absent: ${absent}   ` +
+		(excused > 0 ? `Excused: ${excused}   ` : "") +
 		(unmarked > 0 ? `Unmarked: ${unmarked}   ` : "") +
 		`Guests: ${guests}`;
 	const split = formatModeSplit(minutesModeSplit(minutes));
@@ -227,7 +228,9 @@ export function buildAttendanceSection(minutes: {
 		: countsLine;
 	const rows = [
 		{ label: "Present", names: names(byStatus("present")) },
-		{ label: "Excused", names: names(byStatus("excused")) },
+		...(excused > 0
+			? [{ label: "Excused", names: names(byStatus("excused")) }]
+			: []),
 		{ label: "Absent", names: names(byStatus("absent")) },
 		...(unmarked > 0
 			? [{ label: "Unmarked", names: names(byStatus(null)) }]

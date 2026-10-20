@@ -61,7 +61,7 @@ describe("buildRollPanel", () => {
 		});
 		expect(by("m-bea")).toMatchObject({
 			status: null,
-			suggestion: "excused",
+			suggestion: "absent",
 		});
 		// `reached_out` is an ask, not an answer — it suggests nothing.
 		expect(by("m-cara")).toMatchObject({ status: null, suggestion: null });
