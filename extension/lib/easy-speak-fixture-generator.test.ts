@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ALLOW_LIST, generateFixture, newRewriteState, rewriteEasySpeakPage } from "../scripts/easy-speak-fixture-from-archive";
+import { ALLOW_LIST, generateFixture, newRewriteState, presetNumber, rewriteEasySpeakPage } from "../scripts/easy-speak-fixture-from-archive";
 import { FAKE_NAMES, fixturePath, fixtureViolations, parseHtml, readFixture, setup, stripClock } from "./easy-speak-test-kit";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/easy-speak-fixture-from-archive.ts", import.meta.url));
@@ -103,7 +103,8 @@ describe("leak shapes: every invented value is gone", () => {
 		);
 		expectNone(out, ["marlowe", "pennyfeather"]);
 		// the parameter NAMES are replaced too: a name can be one
-		expect(out).toContain('href="/x?x=x&amp;x=x&amp;k=1"');
+		expect(out).toMatch(/href="\/x\?x=x&amp;x=x&amp;k=\d+"/);
+		expect(out).not.toContain("k=1\"");
 	});
 
 	it("a venue named in a map link, a mailto: link, code that names someone, a text field", () => {
@@ -115,7 +116,8 @@ describe("leak shapes: every invented value is gone", () => {
 		);
 		expectNone(out, ["quillon", "rowan", "4455", "123456"]);
 		expect(parseHtml(out).querySelectorAll("a")[1].getAttribute("href")).toBe("#");
-		expect(out).toContain("portal.php?page=4&amp;n=");
+		expect(out).toMatch(/portal\.php\?page=\d&amp;n=/);
+		expect(out).not.toContain("page=4");
 	});
 
 	it("a surname that is also a month is replaced; a month inside an option stays", () => {
@@ -198,7 +200,7 @@ describe("leak shapes: every invented value is gone", () => {
 		);
 		expectNone(out, ["31415", "27182", "16180"]);
 		// zero padding keeps its width, and one real club is one fake club
-		expect(out).toMatch(/ClubReport\.aspx\?id=0000\d{4}/);
+		expect(out).toMatch(/ClubReport\.aspx\?id=0{3}\d{5}/);
 		const own = [...out.matchAll(/c=(\d+)/g)].map((m) => m[1]);
 		expect(own[0].replace(/^0+/, "")).toBe(own[1].replace(/^0+/, ""));
 	});
@@ -353,8 +355,11 @@ describe("review round: every invented value is gone (#1275)", () => {
 	it("9. a counter and a division are bounded: a long number or a word after the x or the Division is replaced", () => {
 		const out = rewriteEasySpeakPage(page(`<table><tr><td>x741</td><td>Division Quillon</td><td>x6</td><td>Division B</td><td>Area 12</td></tr></table>`));
 		expectNone(out, ["741", "quillon"]);
-		const tds = Array.from(parseHtml(out).querySelectorAll("td")).map((t) => t.textContent);
-		expect(tds.slice(2)).toEqual(["x6", "Division B", "Area 12"]);
+		const tds = Array.from(parseHtml(out).querySelectorAll("td")).map((t) => t.textContent ?? "");
+		expect(tds[2]).not.toMatch(/x6|6/);
+		expect(tds[3]).toBe("Division B");
+		expect(tds[4]).toMatch(/^Area \d{2}$/);
+		expect(tds[4]).not.toBe("Area 12");
 	});
 
 	it("10. entities are decoded, scrubbed and escaped again", () => {
@@ -534,24 +539,39 @@ describe("pages that must not be corrupted", () => {
 		expect(everything(out).replace(/<\/?small>/g, "")).not.toContain("priya");
 	});
 
-	it('a surname "May" leaves dates intact', () => {
+	it('a surname "May" is replaced, and a date stays a valid date: moved by whole weeks, so its weekday still fits', () => {
+		const st = newRewriteState({ seed: "dates", dateShiftDays: 7 * 100 });
 		const out = rewriteEasySpeakPage(
 			page(`<td class="maintitle">Tuesday 22nd September 2026 at 7:00 pm America/Los_Angeles</td><td>Noah May</td><td>May 2026</td><td>Sep 28 26, 2:43 pm</td><td>2025-05-05</td><td>(Actual meeting detail entered on 2026-10-01)</td>`),
+			{ state: st },
 		);
-		expect(out).toContain("Tuesday 22nd September 2026 at 7:00 pm America/Los_Angeles");
-		expect(out).toContain("May 2026");
-		expect(out).toContain("Sep 28 26, 2:43 pm");
-		expect(out).toContain("2025-05-05");
-		expect(out).toContain("2026-10-01");
-		expect(out).not.toMatch(/Noah|>May</);
+		const tds = Array.from(parseHtml(out).querySelectorAll("td")).map((t) => t.textContent ?? "");
+		// 700 days after Tuesday 22 September 2026 is Tuesday 22 August 2028; the time is another valid time
+		expect(tds[0]).toMatch(/^Tuesday 22nd August 2028 at (?:[1-9]|1[0-2]):[0-5]\d pm America\/Los_Angeles$/);
+		expect(tds[0]).not.toContain("7:00");
+		expect(tds[1]).not.toMatch(/Noah|May/);
+		expect(tds[2]).toBe("May 2028");
+		expect(tds[3]).toMatch(/^Aug 29 28, (?:[1-9]|1[0-2]):[0-5]\d pm$/);
+		expect(tds[4]).toBe("2027-04-05");
+		expect(tds[5]).toBe("(Actual meeting detail entered on 2028-09-02)");
+		expectNone(out, ["2026", "2025", "2:43", "7:00"]);
+	});
+
+	it("a date that is not a date is mapped digit by digit, and a shift of 0 is refused", () => {
+		expect(() => newRewriteState({ dateShiftDays: 0 })).toThrow(/must not be 0/);
+		const out = rewriteEasySpeakPage(page(`<td>31st February 2026</td><td>2026-13-45</td>`), { state: newRewriteState({ seed: "x" }) });
+		expectNoDigitSurvives("31 02 2026 2026 13 45", out);
 	});
 
 	it('a surname "Page" leaves ?page= and the pager intact', () => {
 		const out = rewriteEasySpeakPage(
 			page(`<a href="https://easy-speak.org/portal.php?page=4&amp;s=1">map</a><span class="nav">&nbsp;Page <b>1</b> of <b>3</b></span><td>Eli Page</td>`),
 		);
-		expect(out).toContain("portal.php?page=4&amp;s=1");
+		expect(out).toMatch(/portal\.php\?page=\d&amp;s=\d/);
+		expect(out).not.toContain("page=4");
+		// the pager's two numbers are literal allow-listed ones (1-9); a page count anywhere else is mapped
 		expect(out).toContain("Page <b>1</b> of <b>3</b>");
+		expectNoDigitSurvives("<p>Page 41 of 55</p>", rewriteEasySpeakPage(page(`<span class="nav">Page <b>41</b> of <b>55</b></span>`)));
 		expect(out).not.toContain("Eli");
 		expect(everything(out)).not.toMatch(/>page</);
 	});
@@ -575,13 +595,15 @@ describe("pages that must not be corrupted", () => {
 		expect(fixtureViolations(out)).toEqual([]);
 	});
 
-	it("keeps a Venue label and a level, so the page still parses", () => {
+	it("keeps a Venue label and the shape of a level, so the page still parses, with mapped digits", () => {
 		const out = rewriteEasySpeakPage(page(`<span class="gen">Venue&#160;<b><a href="javascript: void(0);">Quillon Hall</a></b></span><td>#2-1 - Effective Quillon</td><td>2 - Humor of Rowan</td>`));
 		expect(out).toContain("Venue");
 		expect(out).not.toContain("Quillon Hall");
 		const tds = Array.from(parseHtml(out).querySelectorAll("td")).map((t) => t.textContent ?? "");
-		expect(tds[0]).toMatch(/^#2-1 - /);
-		expect(tds[1]).toMatch(/^2 - /);
+		expect(tds[0]).toMatch(/^#\d+-\d+ - /);
+		expect(tds[1]).toMatch(/^\d+ - /);
+		expect(tds[0]).not.toMatch(/#2-1/);
+		expect(tds[1]).not.toMatch(/^2 /);
 		expect(out).not.toMatch(/Quillon|Rowan/);
 	});
 
@@ -591,11 +613,13 @@ describe("pages that must not be corrupted", () => {
 		expect(tags(rewriteEasySpeakPage(html))).toEqual(tags(html));
 	});
 
-	it("is deterministic and idempotent: a second pass changes nothing", () => {
-		const html = page(`<a href="/profile.php?mode=viewprofile&amp;u=555111">Rowan Tidewell</a><td>Sloane Brightmere</td>`);
-		expect(rewriteEasySpeakPage(html)).toBe(rewriteEasySpeakPage(html));
-		const once = rewriteEasySpeakPage(html);
-		expect(rewriteEasySpeakPage(once)).toBe(once);
+	it("is deterministic for one seed, differs for another, and a second pass keeps none of the first pass's digits either", () => {
+		const html = page(`<a href="/profile.php?mode=viewprofile&amp;u=555111">Rowan Tidewell</a><td>Sloane Brightmere</td><td>2026-10-01</td><a href="/orgdata.php?c=27182">c</a>`);
+		const run = (seed: string) => rewriteEasySpeakPage(html, { state: newRewriteState({ seed }) });
+		expect(run("a")).toBe(run("a"));
+		expect(run("a")).not.toBe(run("b"));
+		const once = run("a");
+		expectNoDigitSurvives(once.replace(/<!DOCTYPE[^>]*>/, ""), rewriteEasySpeakPage(once, { state: newRewriteState({ seed: "c" }) }), ["900001"]);
 	});
 
 	it("a run can share its state across pages, so a person keeps one fake", () => {
@@ -730,8 +754,8 @@ describe("the committed fixtures round-trip", () => {
 	it("the walk still runs, and finds the same meetings, people, roles, speeches and dates, with every id and person lining up across the rewritten pages", async () => {
 		const st = newRewriteState();
 		// the walker is signed in as the fixture club (4242); the de-faked club id's fake is that one
-		st.numbers.set("7314159", "4242");
-		st.nextNumber = 4243;
+		presetNumber(st, "7314159", "4242");
+		
 		const generated = new Map<string, string>();
 		for (const f of ["club-data.html", ...files.filter((x) => x !== "club-data.html")]) {
 			const r = generateFixture(deFake(readFixture(f)).html, { contactPage: isContact(f), state: st });

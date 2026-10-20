@@ -1,29 +1,42 @@
 /**
- * Turns a saved Easy-Speak page into a committable fixture (#1272). **Deny by default.**
+ * Turns a saved Easy-Speak page into a committable fixture (#1272). **Deny by default. No digit survives.**
  *
  * The whole document is parsed (doctype, comments and head included). EVERY text node, comment and
  * attribute value is replaced with a fake unless it is on the allow-list (`ALLOW_LIST`, the only list
  * that decides what survives, and every list in it is a LITERAL one: an exact host, an exact page
- * name, an exact word). A regex shape that keeps free-form text (any word, any digit run, any
- * subdomain) is not an allow-list, so the shapes that remain are bounded to a date, a time or a one-
- * or two-digit count. Tag names and attribute names are checked too: an unknown one is renamed.
+ * name, an exact word). A regex shape that keeps free-form text (any word, any subdomain) is not an
+ * allow-list. Tag names, attribute names and event-handler names are checked too: an unknown one is
+ * renamed.
+ *
+ * **Digits (decision B, #1275).** Every digit run, in text, an attribute value, a URL or a handler,
+ * is rewritten by one map: `fakeRun` is deterministic within one run (the same real run is the same
+ * fake, so a meeting id in a link and in a table still line up), keeps the run's length, is one to
+ * one, and never maps a run to itself or to any run the page itself carries. A date is shifted by a
+ * whole number of weeks (so a weekday still matches), a time becomes another valid time. Person ids
+ * become 900001-900999 (the second net's contract) and phones `(555) 010-xxxx`. Only a literal
+ * allow-listed string keeps its digits (`ALLOW_LIST.phrases`, `layoutNumbers`, `pageNumbers`): there
+ * is no shape rule that keeps a number because it is short or looks like a count, a level, a date
+ * or a coordinate. The page's own structure that needs a shape (`#2-1 - Project`, `Page 1 of 3`) keeps
+ * the shape and gets mapped digits: the walker needs consistency, not the real numbers.
+ *
  * Nothing here looks for a name, a phone or an email to remove (an earlier regex rewriter did, and
  * real data kept getting past it); what is not known to be safe is replaced, so a shape nobody
- * thought of is replaced too. A value that merely LOOKS like a fake (a 900xxx id, a fake name, club
- * 4242) is replaced like any other: nothing is trusted for resembling the fixtures.
- *
- * Fakes are deterministic within one run: the same real value maps to the same fake, so the
- * cross-references the walker follows (a person's id in a link and in a table) still line up.
+ * thought of is replaced too. A value that merely LOOKS like a fake (a 900xxx id, a fake name) is
+ * replaced like any other: nothing is trusted for resembling the fixtures.
  *
  * `fixtureViolations` (the test kit) then runs over the output as the second net. If it reports
  * anything the CLI writes nothing and exits non-zero. A pass is not clearance: a human still reads
  * every line of the output before it is committed (`__fixtures__/easy-speak/README.md`).
+ *
+ * The evaluations JSON is hand-written, not generated: this script refuses a JSON input (a clear
+ * message, exit 2) rather than guess at a structure it does not rewrite.
  *
  *   bun scripts/easy-speak-fixture-from-archive.ts <page.html> <out.html> [--contact-page]
  *   bun scripts/easy-speak-fixture-from-archive.ts --archive <pages.json> --page <url> <out.html>
  *
  * Run it from `extension/`. The input is raw member data: never commit it, never paste it anywhere.
  */
+import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { FAKE_NAMES, type FixtureCheckOptions, fixtureViolations, parseHtml, readFixture } from "../lib/easy-speak-test-kit";
@@ -33,7 +46,6 @@ import { FAKE_NAMES, type FixtureCheckOptions, fixtureViolations, parseHtml, rea
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const SP = String.raw`[\s ]+`;
 const L = String.raw`\p{L}\p{N}\p{M}`;
-const COLOR = "^#[0-9a-f]{3,8}[,;]?$";
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -50,30 +62,85 @@ const TZ = TIMEZONES.map(esc).join("|");
 const WEEKDAY = WEEKDAYS.join("|");
 const MONTH = MONTHS.join("|");
 const MONTH_SHORT = MONTH_ABBR.join("|");
+const YEAR = String.raw`(?:19|20)\d{2}`;
+/** The zone abbreviations the site prints before `(GMT+n hrs)`. A literal list: any other three letters are a word, not a zone. */
+const ZONE_ABBR = ["PST", "PDT", "MST", "MDT", "CST", "CDT", "EST", "EDT", "AKST", "AKDT", "HST", "UTC", "GMT", "BST", "CET", "CEST", "IST", "JST", "AEST", "AEDT", "NZST", "NZDT"];
+
+interface DateShape {
+	/** A regex source; its capture groups are what `render` reads. Month and weekday NAMES are only ever kept inside one of these. */
+	src: string;
+	/** The shape with its digits replaced: a date is shifted, a time is another time, any other number goes through `fakeRun`. */
+	render: (st: RewriteState, m: RegExpExecArray) => string;
+}
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : (["th", "st", "nd", "rd"][n % 10] ?? "th")}`;
 
 /**
- * Date, time and count shapes, as regex sources. Month and weekday NAMES are only ever kept inside
- * one of these. None of them can hold a name: a count is one or two digits, a division one letter, a
- * timezone one of the literal zones above.
+ * Date, time and zone shapes. Each keeps its WORDS (a month, a weekday, a zone) and replaces its numbers:
+ * none of them can hold a name (a count is digits, a zone is one of the literal abbreviations or zones above).
  */
-const SHAPES: readonly string[] = [
-	String.raw`(?:(?:${WEEKDAY})${SP})?\d{1,2}(?:st|nd|rd|th)${SP}(?:${MONTH})${SP}(?:19|20)\d{2}(?:${SP}at${SP}${TIME}(?:${SP}(?:${TZ}))?)?`,
-	String.raw`Every${SP}(?:${WEEKDAY})${SP}at${SP}${TIME}`,
-	String.raw`(?:${MONTH_SHORT})${SP}\d{2}${SP}\d{2},${SP}${TIME}`,
-	String.raw`(?:${MONTH})${SP}\d{1,2},?${SP}(?:19|20)\d{2}`,
-	String.raw`(?:${MONTH})${SP}(?:19|20)\d{2}`,
-	String.raw`(?:19|20)\d{2}-\d{2}-\d{2}`,
-	String.raw`(?:19|20)\d{2}-(?:19|20)\d{2}`,
-	String.raw`[A-Z]{3,4}${SP}\(GMT[+\-−]\d{1,2}${SP}hrs\)`,
-	String.raw`Division${SP}[A-Z]`,
-	TZ,
-	TIME,
-	String.raw`\d{1,2}(?:st|nd|rd|th)`,
-	String.raw`x\d{1,2}`,
-	String.raw`\d{1,3}%`,
-	// this generator's own placeholder word, so a second pass over its output changes nothing
-	String.raw`redacted-\d{1,4}`,
+const DATE_SHAPES: readonly DateShape[] = [
+	{
+		src: `(?:(${WEEKDAY})(${SP}))?(\\d{1,2})(?:st|nd|rd|th)(${SP})(${MONTH})(${SP})(${YEAR})(?:(${SP}at${SP})(${TIME})(?:(${SP})(${TZ}))?)?`,
+		render: (st, m) => {
+			const [raw, wd, sp1, day, sp2, month, sp3, year, at, time, sp4, tz] = m;
+			const sh = shiftDate(st, Number(year), MONTHS.indexOf(month) + 1, Number(day));
+			if (!sh) return mapRunsIn(st, raw);
+			return `${wd ? `${WEEKDAYS[(sh.dow + 6) % 7]}${sp1}` : ""}${ordinal(sh.d)}${sp2}${MONTHS[sh.m - 1]}${sp3}${sh.y}${at ? `${at}${fakeTime(st, time)}${tz ? `${sp4}${tz}` : ""}` : ""}`;
+		},
+	},
+	{
+		src: `Every(${SP})(${WEEKDAY})(${SP})at(${SP})(${TIME})`,
+		render: (st, m) => `Every${m[1]}${m[2]}${m[3]}at${m[4]}${fakeTime(st, m[5])}`,
+	},
+	{
+		src: `(${MONTH_SHORT})(${SP})(\\d{2})(${SP})(\\d{2}),(${SP})(${TIME})`,
+		render: (st, m) => {
+			const sh = shiftDate(st, 2000 + Number(m[5]), MONTH_ABBR.indexOf(m[1]) + 1, Number(m[3]));
+			if (!sh) return mapRunsIn(st, m[0]);
+			return `${MONTH_ABBR[sh.m - 1]}${m[2]}${pad2(sh.d)}${m[4]}${pad2(sh.y % 100)},${m[6]}${fakeTime(st, m[7])}`;
+		},
+	},
+	{
+		src: `(${MONTH})(${SP})(\\d{1,2})(,?)(${SP})(${YEAR})`,
+		render: (st, m) => {
+			const sh = shiftDate(st, Number(m[6]), MONTHS.indexOf(m[1]) + 1, Number(m[3]));
+			if (!sh) return mapRunsIn(st, m[0]);
+			return `${MONTHS[sh.m - 1]}${m[2]}${m[3].length === 2 ? pad2(sh.d) : sh.d}${m[4]}${m[5]}${sh.y}`;
+		},
+	},
+	{
+		src: `(${MONTH})(${SP})(${YEAR})`,
+		render: (st, m) => {
+			const sh = shiftDate(st, Number(m[3]), MONTHS.indexOf(m[1]) + 1, 15);
+			return sh ? `${MONTHS[sh.m - 1]}${m[2]}${sh.y}` : mapRunsIn(st, m[0]);
+		},
+	},
+	{
+		src: `(${YEAR})-(\\d{2})-(\\d{2})`,
+		render: (st, m) => {
+			const sh = shiftDate(st, Number(m[1]), Number(m[2]), Number(m[3]));
+			return sh ? `${sh.y}-${pad2(sh.m)}-${pad2(sh.d)}` : mapRunsIn(st, m[0]);
+		},
+	},
+	{
+		src: `(${YEAR})-(${YEAR})`,
+		render: (st, m) => {
+			const a = shiftDate(st, Number(m[1]), 6, 15);
+			const b = shiftDate(st, Number(m[2]), 6, 15);
+			return a && b ? `${a.y}-${b.y}` : mapRunsIn(st, m[0]);
+		},
+	},
+	{
+		src: `(${ZONE_ABBR.join("|")})(${SP})\\(GMT([+\\-−])(\\d{1,2})(${SP})hrs\\)`,
+		render: (st, m) => `${m[1]}${m[2]}(GMT${m[3]}${fakeRun(st, m[4])}${m[5]}hrs)`,
+	},
+	{ src: `(${TIME})`, render: (st, m) => fakeTime(st, m[1]) },
 ];
+/** Shapes with no number in them: kept as they are. */
+const KEEP_SHAPES: readonly string[] = [String.raw`Division${SP}[A-Z]`, TZ];
+const DATE_RES = DATE_SHAPES.map((d) => new RegExp(`^${d.src}$`, "u"));
 
 /**
  * Everything that may survive, in one place. A reviewer reads this object; nothing else decides.
@@ -104,7 +171,7 @@ export const ALLOW_LIST = {
 		"Inactive Member", "Guest Speaker", "Past Visitor", "Visitor", "Visitor From Another Club", "Past Member", "Did NOT Attend",
 		"Attended", "Attended Online", "Meeting Award Recipients", "Ribbon", "Award", "Recipient", "Best Speaker Award",
 		"Best Table Topics Award", "Best Evaluator Award", "Hide Speech Details", "Actual Meeting Roles", "Role", "CL", "Presenter",
-		"Toastmaster", "Joke Master", "Speaker", "Ah Master", "Grammarian", "Timer", "Timer 2 - Online", "Vote Counter", "Listener",
+		"Toastmaster", "Joke Master", "Speaker", "Ah Master", "Grammarian", "Timer", "Timer 2 - Online", ...[1, 2, 3, 4, 5, 6, 7, 8].flatMap((n) => [`${ordinal(n)} Speaker`, `${ordinal(n)} Evaluator`]), "Vote Counter", "Listener",
 		"Table Topic Master", "General Evaluator", "Evaluator", "Table Topics Speakers", "No speakers added yet",
 		"Click on a name to see Contact Details or on a role to see the Knowledgebase article", "Meeting Manager",
 		"Watch this meeting for changes", "E-mail meeting to a friend", "I am NOT attending this meeting", "Click here to join meeting",
@@ -137,17 +204,15 @@ export const ALLOW_LIST = {
 	exactNodes: ["P", "O", "N", "M", "?", "<", ">", "|", "/", "&", "-", "x", "Page", "of"],
 	/** Month names are kept only inside an `<option>`; elsewhere "May" is somebody's surname. */
 	optionOnly: MONTHS,
-	/** A one- to three-digit number is kept only next to one of these (or as a whole text node): a count, never a house number. */
 	/** A one-word field label whose value is the next text node ("Venue" then a bold place). It is never half of a person's name. */
 	valueLabels: ["Venue"],
-	countLabels: ["Area", "District", "Hour", "Hours", "Mins", "min", "Days"],
 	weekdays: WEEKDAYS,
 	months: MONTHS,
 	monthAbbreviations: MONTH_ABBR,
 	/** The only timezone names (a literal zone, never `Region/Anything`). */
 	timezones: TIMEZONES,
-	/** Date, time and count shapes (regex sources), bounded so none can hold a name. */
-	shapes: SHAPES,
+	/** Date, time and zone shapes (regex sources): their words stay, their numbers are replaced. None can hold a name. */
+	shapes: [...KEEP_SHAPES, ...DATE_SHAPES.map((d) => d.src)],
 	/** Comments that may stay (the markup's own section markers); every other comment is emptied. */
 	comments: ["start of Attendance", "End of Attendance", "start of Roles", "End of Roles", "Start of Table Topics Speakers", "End of Table Topics Speakers"],
 	/** CSS classes the walker's selectors can name. An unlisted class is renamed `x`: a class is a string a page can carry data in. */
@@ -207,7 +272,23 @@ export const ALLOW_LIST = {
 	],
 	/** String literals in a handler that stay (a window target) and the shape of a window-features string. */
 	codeStrings: ["_blank", "_self", "_parent", "_top"],
-	windowFeatures: "^[a-z]+=(?:yes|no|\\d{1,4})(?:,[a-z]+=(?:yes|no|\\d{1,4}))*$",
+	/** The names a `window.open` features string may carry (its values are `yes`, `no` or a mapped number). */
+	windowFeatureNames: ["width", "height", "left", "top", "scrollbars", "resizable", "toolbar", "menubar", "location", "status", "directories", "titlebar"],
+	/** Event-handler attribute names that stay. A LITERAL list: `on[a-z]+` would keep `onrowantidewell`. An unknown name is renamed `data-xN`. */
+	handlerNames: [
+		"onclick", "ondblclick", "onmouseover", "onmouseout", "onmouseenter", "onmouseleave", "onmousedown", "onmouseup", "onmousemove", "onfocus",
+		"onblur", "onchange", "oninput", "onsubmit", "onreset", "onkeydown", "onkeyup", "onkeypress", "onload", "onunload", "onerror", "onselect",
+		"onscroll",
+	],
+	/** Layout attributes whose value is a number, and the only values of one that stay (a literal list; any other number is mapped). */
+	layoutAttributes: ["colspan", "rowspan", "size", "rows", "cols", "maxlength", "border", "cellpadding", "cellspacing", "width", "height"],
+	layoutNumbers: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "100%", "50%", "25%", "75%"],
+	/** The only values of a radio button that stay: the walker reads the attendance plan from them (1, 2, 3). */
+	radioValues: ["1", "2", "3"],
+	/** The pager ("Page 1 of 3") keeps its digits only when both are one of these. */
+	pageNumbers: ["1", "2", "3", "4", "5", "6", "7", "8", "9"],
+	/** Attributes whose value is a colour: always emptied (a hex colour is a pattern, and a pattern is not a list). */
+	colorAttributes: ["color", "bgcolor", "text", "link", "vlink", "alink"],
 	/** HTML tags; an unknown (custom) tag name is replaced with `span`. */
 	tags: [
 		"html", "head", "body", "title", "meta", "link", "script", "style", "base", "a", "abbr", "acronym", "address", "area", "article", "aside",
@@ -229,27 +310,10 @@ export const ALLOW_LIST = {
 		type: "^(?:hidden|button|radio|submit|checkbox|text|password|textarea|select|reset)$",
 		align: "^(?:left|right|center|justify)$",
 		valign: "^(?:top|middle|bottom|baseline)$",
-		colspan: "^\\d{1,3}$",
-		rowspan: "^\\d{1,3}$",
-		size: "^\\d{1,3}$",
-		rows: "^\\d{1,3}$",
-		cols: "^\\d{1,3}$",
-		maxlength: "^\\d{1,4}$",
-		border: "^\\d{1,2}$",
-		cellpadding: "^\\d{1,3}$",
-		cellspacing: "^\\d{1,3}$",
-		width: "^\\d{1,4}%?$",
-		height: "^\\d{1,4}%?$",
 		wrap: "^(?:virtual|physical|off|soft|hard)$",
-		color: COLOR,
-		bgcolor: COLOR,
-		text: COLOR,
-		link: COLOR,
-		vlink: COLOR,
-		alink: COLOR,
-		target: "^_[a-z]+$",
+		target: "^_(?:blank|self|parent|top)$",
 		scope: "^(?:col|row|colgroup|rowgroup)$",
-		lang: "^[a-z]{2,3}(?:-[a-z]{2,4})?$",
+		lang: "^(?:en|en-us|en-gb|en-au|en-ca|fr|es|de)$",
 		dir: "^(?:ltr|rtl)$",
 		language: "^javascript$",
 		xmlns: "^http://www\\.w3\\.org/1999/xhtml$",
@@ -291,15 +355,19 @@ const CLUB_PARAMS = lowerSet(A.clubParams);
 const NUMBER_PARAMS = lowerSet(A.numberParams);
 const KNOWN_PARAMS = new Set([...PERSON_PARAMS, ...CLUB_PARAMS, ...NUMBER_PARAMS, ...Object.keys(A.paramValues), ...A.otherParams]);
 const CODE_WORDS = new Set(A.codeWords);
-const COUNT_LABELS = new Set(A.countLabels);
+const HANDLERS = new Set(A.handlerNames);
+const LAYOUT_ATTRS = new Set(A.layoutAttributes);
+const LAYOUT_NUMBERS = new Set(A.layoutNumbers);
+const PAGE_NUMBERS = new Set(A.pageNumbers);
+const COLOR_ATTRS = new Set(A.colorAttributes);
 const VALUE_LABELS = new Set(A.valueLabels);
 const TAGS = new Set(A.tags);
 const REL_VALUES = lowerSet(A.relValues);
 const HTTP_EQUIV = lowerSet(A.httpEquivValues);
 const META_CONTENTS = lowerSet(A.metaContents);
 const ENUMS = new Map(Object.entries(A.attributeEnums).map(([k, v]) => [k, new RegExp(v, "i")]));
-const ATTRIBUTE_NAMES = new Set([...A.attributeNames, ...ENUMS.keys()]);
-const WINDOW_FEATURES = new RegExp(A.windowFeatures);
+const ATTRIBUTE_NAMES = new Set([...A.attributeNames, ...ENUMS.keys(), ...A.layoutAttributes, ...A.colorAttributes]);
+const WINDOW_FEATURE_NAMES = new Set(A.windowFeatureNames);
 const URL_ATTRS = new Set(["href", "src", "action", "formaction", "poster", "background", "cite", "data", "longdesc", "codebase", "usemap"]);
 
 // ------------------------------------------------------------------ the text scrubber
@@ -309,7 +377,6 @@ const PHRASES = [...A.phrases].sort((a, b) => b.length - a.length);
 // A separator inside a number that is a phone: space, dot, slash, hyphen, the Unicode dashes and the non-breaking hyphen.
 const PHONE_SEP = String.raw`\s(). ‐-―−\-/`;
 const PHONE_SOURCE = String.raw`(?<![${L}])(?:\+|00)?\(?\d[\d${PHONE_SEP}]{5,}\d(?![${L}])`;
-const DATE_ONLY = /^(?:(?:19|20)\d{2}[\s‐-―−-]+\d{1,2}[\s‐-―−-]+\d{1,2}|(?:19|20)\d{2}[\s‐-―−-]+(?:19|20)\d{2})$/;
 /** Characters outside any real page: they bracket a fake phone while the text is scrubbed, so it is not scrubbed twice. */
 const OPEN = "";
 const CLOSE = "";
@@ -317,11 +384,11 @@ const CLOSE = "";
 const SCAN = new RegExp(
 	[
 		`(?<tok>${OPEN}[^${CLOSE}]*${CLOSE})`,
-		`(?<keep>(?<![${L}_])(?:${PHRASES.map(SPACE_WORDS).join("|")}|${SHAPES.join("|")})(?![${L}]))`,
+		`(?<keep>(?<![${L}_])(?:${PHRASES.map(SPACE_WORDS).join("|")}|${KEEP_SHAPES.join("|")})(?![${L}]))`,
+		...DATE_SHAPES.map((d, i) => `(?<date${i}>(?<![${L}_])(?:${d.src})(?![${L}]))`),
 		String.raw`(?<user>\[[^\[\]\s]{1,60}\])`,
 		`(?<phone>${PHONE_SOURCE})`,
-		`(?<big>(?<![${L}])\\d{4,}(?![${L}]))`,
-		`(?<small>(?<![${L}_])\\d{1,3}(?![${L}]))`,
+		`(?<digits>(?<![${L}_])\\d+(?![${L}]))`,
 	].join("|"),
 	"gu",
 );
@@ -337,30 +404,79 @@ export interface RewriteState {
 	words: Map<string, string>;
 	phones: Map<string, string>;
 	people: Map<string, string>;
+	/** Real run (no leading zeros) to its fake: one to one, the same length, never itself. */
 	numbers: Map<string, string>;
+	times: Map<string, string>;
+	/** Every run the pages of this run carry (no leading zeros): a fake is never one of them, so a fake never reads as real data. */
+	reserved: Set<string>;
+	/** Every number a fake has been given out as, so a second real run never gets the same fake. */
+	taken: Set<string>;
+	/** Seeds the digit map and the date shift. A fresh random one by default, so a fake cannot be worked back to its real value from the source. */
+	seed: string;
+	/** Every date is moved by this many days: a whole number of weeks, so a weekday still matches its date. */
+	dateShiftDays: number;
 	nextName: number;
 	nextPerson: number;
-	nextNumber: number;
 	nextPhone: number;
 	nextWord: number;
 }
 
-export function newRewriteState(): RewriteState {
+export interface RewriteStateOptions {
+	seed?: string;
+	/** Must not be 0 (that would keep every date). */
+	dateShiftDays?: number;
+}
+
+function hash32(s: string): number {
+	let h = 0x811c9dc5;
+	for (let i = 0; i < s.length; i++) {
+		h ^= s.charCodeAt(i);
+		h = Math.imul(h, 0x01000193);
+	}
+	return h >>> 0;
+}
+
+export function newRewriteState(opts: RewriteStateOptions = {}): RewriteState {
+	const seed = opts.seed ?? randomUUID();
+	const shift = opts.dateShiftDays ?? 7 * (60 + (hash32(`${seed}:shift`) % 240));
+	if (shift === 0) throw new Error("dateShiftDays must not be 0: it would keep every date");
 	return {
 		names: new Map(),
 		words: new Map(),
 		phones: new Map(),
 		people: new Map(),
 		numbers: new Map(),
+		times: new Map(),
+		reserved: new Set(),
+		taken: new Set(),
+		seed,
+		dateShiftDays: shift,
 		nextName: 0,
 		nextPerson: 900_001,
-		nextNumber: 4242,
 		nextPhone: 1,
-		nextWord: 1,
+		nextWord: 0,
+	};
+}
+
+/** Test hook: say that real run `real` is to become `fake` (the walker is signed in as one fixed club id). */
+export function presetNumber(st: RewriteState, real: string, fake: string) {
+	st.numbers.set(normRun(real), fake);
+	st.taken.add(fake);
+}
+
+/** Seeded, so one run is repeatable; mulberry32 over a hash of the seed and a label. */
+function rng(st: RewriteState, label: string): () => number {
+	let a = hash32(`${st.seed}|${label}`);
+	return () => {
+		a = (a + 0x6d2b79f5) | 0;
+		let t = Math.imul(a ^ (a >>> 15), 1 | a);
+		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 	};
 }
 
 const keyOf = (s: string) => s.replace(/[\s +]+/g, " ").trim().toLowerCase();
+const normRun = (r: string) => r.replace(/^0+(?=\d)/, "");
 
 function fakeName(st: RewriteState, core: string): string {
 	const k = keyOf(core);
@@ -372,11 +488,22 @@ function fakeName(st: RewriteState, core: string): string {
 	return next;
 }
 
+/** `aa`, `ab`, ... : a placeholder word carries no digit, so it can never be a real number that survived. */
+const letters = (n: number) => {
+	let out = "";
+	let k = n;
+	do {
+		out = String.fromCharCode(97 + (k % 26)) + out;
+		k = Math.floor(k / 26) - 1;
+	} while (k >= 0);
+	return out;
+};
+
 function fakeWord(st: RewriteState, core: string): string {
 	const k = keyOf(core);
 	const have = st.words.get(k);
 	if (have) return have;
-	const w = `redacted-${st.nextWord++}`;
+	const w = `redacted-${letters(st.nextWord++)}`;
 	st.words.set(k, w);
 	return w;
 }
@@ -391,35 +518,123 @@ function fakePhone(st: RewriteState, digits: string): string {
 	return p;
 }
 
-/** A person id: ANY id (a 900xxx one too) becomes the next id in 900001-900999, the same one every time. */
+/** A person id: ANY id (a 900xxx one too) becomes the next id in 900001-900999 that no page of the run carries, the same one every time. */
 function fakePerson(st: RewriteState, id: string): string {
 	if (!/^\d+$/.test(id)) return "x";
-	const key = String(Number(id));
+	const key = normRun(id);
 	const have = st.people.get(key);
 	if (have) return have;
-	const f = String(st.nextPerson++);
+	let f: string;
+	do f = String(st.nextPerson++);
+	while (st.reserved.has(f) || st.taken.has(f));
 	st.people.set(key, f);
+	st.taken.add(f);
 	return f;
 }
 
-/** A club id, a meeting id or any other long number: the same number, however it is zero-padded, gets one fake. */
-function fakeNumber(st: RewriteState, id: string): string {
-	if (!/^\d+$/.test(id)) return "x";
-	const key = String(Number(id));
-	let f = st.numbers.get(key);
-	if (!f) {
-		f = String(st.nextNumber++);
-		st.numbers.set(key, f);
+/**
+ * One digit run to one fake of the same length (no leading zero, unless it is one digit): the same real
+ * run is the same fake, two real runs never share one (while the length has room), a fake is never its own
+ * input and, while there is room, never a run any page of this run carries. A real run that happens to
+ * equal a fake given earlier is just another real run: it is rewritten like all the others.
+ */
+function chooseRun(st: RewriteState, key: string): string {
+	const n = key.length;
+	const r = rng(st, `run:${key}`);
+	const ok = (c: string, strict: boolean) => c !== key && !st.taken.has(c) && !(strict && st.reserved.has(c));
+	if (n <= 3) {
+		const lo = n === 1 ? 0 : 10 ** (n - 1);
+		const size = n === 1 ? 10 : 9 * 10 ** (n - 1);
+		const start = Math.floor(r() * size);
+		for (const strict of [true, false]) {
+			for (let i = 0; i < size; i++) {
+				const c = String(lo + ((start + i) % size));
+				if (ok(c, strict)) return c;
+			}
+		}
+		// every value of this length is taken: reuse one (never the input itself)
+		for (let i = 0; i < size; i++) {
+			const c = String(lo + ((start + i) % size));
+			if (c !== key) return c;
+		}
 	}
-	// a zero-padded input (00031415) keeps its width; an unpadded one never gains zeros
-	return /^0/.test(id) ? f.padStart(id.length, "0") : f;
+	const digits = (k: number) => Array.from({ length: k }, () => String(Math.floor(r() * 10))).join("");
+	for (const strict of [true, false]) {
+		for (let attempt = 0; attempt < 400; attempt++) {
+			const c = String(1 + Math.floor(r() * 9)) + digits(n - 1);
+			if (ok(c, strict)) return c;
+		}
+	}
+	throw new Error(`no fake left for a ${n}-digit run`);
 }
 
-/** A run of digits that is not a date or a count: a phone if it looks like one, else an id. */
+function fakeRun(st: RewriteState, run: string): string {
+	const key = normRun(run);
+	let f = st.numbers.get(key);
+	if (!f) {
+		f = chooseRun(st, key);
+		st.numbers.set(key, f);
+		st.taken.add(f);
+	}
+	// a zero-padded input (00031415) keeps its width; an unpadded one never gains zeros
+	return /^0/.test(run) && run.length > f.length ? f.padStart(run.length, "0") : f;
+}
+
+/** A club id, a meeting id, a count or any other number: the same number, however it is zero-padded, gets one fake. */
+function fakeNumber(st: RewriteState, id: string): string {
+	return /^\d+$/.test(id) ? fakeRun(st, id) : "x";
+}
+
+/** Every digit run in `s` replaced, the words and separators between them kept. */
+const mapRunsIn = (st: RewriteState, s: string) => s.replace(/\d+/g, (r) => fakeRun(st, r));
+
+/** A date moved by the run's shift; null when the numbers are not a real date. */
+function shiftDate(st: RewriteState, y: number, m: number, d: number): { y: number; m: number; d: number; dow: number } | null {
+	const t = Date.UTC(y, m - 1, d);
+	const dt = new Date(t);
+	if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+	const n = new Date(t + st.dateShiftDays * 86_400_000);
+	return { y: n.getUTCFullYear(), m: n.getUTCMonth() + 1, d: n.getUTCDate(), dow: n.getUTCDay() };
+}
+
+/** The first candidate (from a seeded start) that is not `input` and, if it can be, not a run the pages carry. */
+function pick(st: RewriteState, label: string, pool: string[], input: string): string {
+	const start = Math.floor(rng(st, label)() * pool.length);
+	for (const strict of [true, false]) {
+		for (let i = 0; i < pool.length; i++) {
+			const c = pool[(start + i) % pool.length];
+			if (normRun(c) !== normRun(input) && !(strict && st.reserved.has(normRun(c)))) return c;
+		}
+	}
+	return pool.find((c) => normRun(c) !== normRun(input)) ?? pool[0];
+}
+
+const HOURS_12 = Array.from({ length: 12 }, (_, i) => String(i + 1));
+const HOURS_24 = Array.from({ length: 24 }, (_, i) => String(i));
+const MINUTES = Array.from({ length: 60 }, (_, i) => pad2(i));
+
+/** A time of day, `7:30 pm`, becomes another valid time of the same shape: hour and minute are both different. */
+function fakeTime(st: RewriteState, raw: string): string {
+	const m = /^(\d{1,2}):(\d{2})([\s ]?[ap]m)?$/.exec(raw);
+	if (!m) return mapRunsIn(st, raw);
+	const [, h, mi, ap] = m;
+	const key = `${h}:${mi}`;
+	let f = st.times.get(key);
+	if (!f) {
+		const pool = (ap ? HOURS_12 : HOURS_24).filter((x) => x.length === h.length);
+		f = `${pick(st, `hour:${h}`, pool.length > 1 ? pool : HOURS_12, h)}:${pick(st, `minute:${mi}`, MINUTES, mi)}`;
+		st.times.set(key, f);
+	}
+	return `${f}${ap ?? ""}`;
+}
+
+/**
+ * A run of digits that is not part of a date or a time: a phone if it looks like one (the second net's
+ * `(555) 010-xxxx`), else an id or a count. Every run in it goes through `fakeRun`.
+ */
 function replaceDigits(st: RewriteState, text: string, isBare: boolean): string {
 	const digits = text.replace(/\D/g, "");
-	if (DATE_ONLY.test(text.trim())) return text;
-	if (digits.length < 7 || digits.length > 15) return isBare ? fakeNumber(st, digits) : fakePhone(st, digits);
+	if (digits.length < 7 || digits.length > 15) return mapRunsIn(st, text);
 	if (isBare && !/^0/.test(digits) && digits.length < 9) return fakeNumber(st, digits);
 	return fakePhone(st, digits.replace(/^1(\d{10})$/, "$1"));
 }
@@ -431,7 +646,7 @@ const firstWord = (s: string) => s.trim().split(/[\s '’-]+/)[0];
 interface Hit {
 	start: number;
 	end: number;
-	kind: "keep" | "repl" | "small";
+	kind: "keep" | "repl";
 	out: string;
 }
 
@@ -440,7 +655,6 @@ interface Seg {
 	end: number;
 	replaced: boolean;
 	out?: string;
-	small?: boolean;
 }
 
 /** What `scrubDetailed` knows about an edge of the text, so a neighbouring text node can be judged against it. */
@@ -471,8 +685,12 @@ function scanHits(st: RewriteState, text: string): Hit[] {
 		if (g.tok !== undefined || g.keep !== undefined) hits.push({ start, end, kind: "keep", out: raw });
 		else if (g.user !== undefined) hits.push({ start, end, kind: "repl", out: BRACKET_WORDS.has(raw) ? raw : `[${FAKE_USERNAME}]` });
 		else if (g.phone !== undefined) hits.push({ start, end, kind: "repl", out: replaceDigits(st, raw, /^\d+$/.test(raw)) });
-		else if (g.big !== undefined) hits.push({ start, end, kind: "repl", out: replaceDigits(st, raw, true) });
-		else hits.push({ start, end, kind: "small", out: raw });
+		else if (g.digits !== undefined) hits.push({ start, end, kind: "repl", out: fakeRun(st, raw) });
+		else {
+			const i = DATE_SHAPES.findIndex((_, k) => g[`date${k}`] !== undefined);
+			const parts = DATE_RES[i].exec(raw);
+			hits.push({ start, end, kind: "repl", out: parts ? DATE_SHAPES[i].render(st, parts) : mapRunsIn(st, raw) });
+		}
 	}
 	return hits;
 }
@@ -481,7 +699,7 @@ function scanHits(st: RewriteState, text: string): Hit[] {
  * Text with everything not on the allow-list replaced. Whitespace and punctuation between words are
  * kept. A one-word allowed phrase next to a replaced word run is replaced WITH it (`Timer, Dana`,
  * `dana Timer`: "Timer" is allowed, but a surname that is also a role must not survive on its own).
- * A one- to three-digit number stays only as a whole text node or next to a count label. `forceFirst`
+ * Every digit run is replaced. `forceFirst`
  * / `forceLast` replace a kept phrase at that edge too (`Marlowe <b>Timer</b>` is two text nodes).
  */
 function scrubDetailed(st: RewriteState, text: string, force: { first?: boolean; last?: boolean } = {}): Scrubbed {
@@ -505,29 +723,11 @@ function scrubDetailed(st: RewriteState, text: string, force: { first?: boolean;
 	};
 	for (const h of hits) {
 		gap(at, h.start);
-		segs.push({ start: h.start, end: h.end, replaced: h.kind === "repl", out: h.kind === "repl" ? h.out : undefined, small: h.kind === "small" });
+		segs.push({ start: h.start, end: h.end, replaced: h.kind === "repl", out: h.kind === "repl" ? h.out : undefined });
 		at = h.end;
 	}
 	gap(at, text.length);
 	segs.sort((x, y) => x.start - y.start);
-	const label = (j: number, from: number, to: number) => {
-		const s = segs[j];
-		return !!s && !s.replaced && !s.small && COUNT_LABELS.has(text.slice(s.start, s.end)) && /^\s*$/.test(text.slice(from, to));
-	};
-	// a level ("#2-1 - Name", or "2 - Name" at the start of the text) is a one- or two-digit number in a fixed shape; it names no one
-	const levelAt: [number, number][] = [...text.matchAll(/(?<![\p{L}\d])#\d{1,2}-\d{1,2}(?!\d)/gu)].map((m) => [m.index ?? 0, (m.index ?? 0) + m[0].length]);
-	const lead = /^\s*\d{1,2}(?=\s+-\s)/.exec(text);
-	if (lead) levelAt.push([0, lead[0].length]);
-	segs.forEach((s, i) => {
-		if (!s.small) return;
-		const whole = text.trim() === text.slice(s.start, s.end);
-		const inLevel = levelAt.some(([from, to]) => s.start >= from && s.end <= to);
-		const keep = whole || inLevel || label(i - 1, segs[i - 1]?.end ?? 0, s.start) || label(i + 1, s.end, segs[i + 1]?.start ?? 0);
-		if (!keep) {
-			s.replaced = true;
-			s.out = "0";
-		}
-	});
 	const kept = (s: Seg) => !s.replaced;
 	const slice = (s: Seg) => text.slice(s.start, s.end);
 	const oneWord = (s: Seg) => !/[\s ]/.test(slice(s).trim());
@@ -591,28 +791,26 @@ function decodeLoose(s: string): string {
 	}
 }
 
-/** One or two digits stay (a flag, a page, a month); a longer number is an id and is mapped. */
-function rewriteNumber(st: RewriteState, key: string, value: string): string {
+/** A number parameter (a page, a meeting, a speech, a year): every digit run is mapped, whatever its length. */
+function rewriteNumber(st: RewriteState, value: string): string {
 	if (!/^-?\d+$/.test(value)) return "x";
-	if (/year/.test(key) && /^(?:19|20)\d{2}$/.test(value)) return value;
-	if (/^-?\d{1,2}$/.test(value)) return value;
-	return fakeNumber(st, value.replace(/^-/, ""));
+	return `${value.startsWith("-") ? "-" : ""}${fakeNumber(st, value.replace(/^-/, ""))}`;
 }
 
 function rewriteParam(st: RewriteState, key: string, value: string, path: string): string {
 	const k = key.toLowerCase();
 	if (PERSON_PARAMS.has(k) || (k === "id" && !/ClubReport/i.test(path))) return fakePerson(st, value);
 	if (CLUB_PARAMS.has(k) || k === "id") return fakeNumber(st, value);
-	if (k === "p" || k === "m") return /^\(-?[\d.]+,-?[\d.]+\)(?:,\d{1,2})?$/.test(value) ? value.replace(/-?\d+\.\d+/g, "0.000000") : "x";
+	if (k === "p" || k === "m") return /^\(-?[\d.]+,-?[\d.]+\)(?:,\d{1,2})?$/.test(value) ? mapRunsIn(st, value) : "x";
 	if (k === "n") return encodeURIComponent(scrubText(st, decodeLoose(value)));
-	if (NUMBER_PARAMS.has(k)) return rewriteNumber(st, k, value);
+	if (NUMBER_PARAMS.has(k)) return rewriteNumber(st, value);
 	// only a name in KNOWN_PARAMS reaches here, and `__proto__` / `constructor` are not in it
 	return A.paramValues[k]?.includes(value) ? value : "x";
 }
 
 function rewritePathSegment(st: RewriteState, seg: string): string {
 	if (seg === "" || PAGE_NAMES.has(seg) || PATH_WORDS.has(seg)) return seg;
-	if (/^\d+$/.test(seg)) return seg.length <= 2 ? seg : fakeNumber(st, seg);
+	if (/^\d+$/.test(seg)) return fakeNumber(st, seg);
 	const ext = /\.(?:gif|png|jpe?g|svg|css|js|ico|json)$/i.exec(seg);
 	return ext ? `x${ext[0].toLowerCase()}` : "x";
 }
@@ -669,12 +867,24 @@ function decodeJsEscapes(s: string): string {
  * go through `rewriteUrl` (a URL) or `scrubText`; a bare word must be a known code word; every
  * number outside a string is a replaced id, or `0`.
  */
+/** A `window.open` features string (`width=800,scrollbars=yes`): literal feature names, `yes` / `no` or a number (mapped). Anything else is not one. */
+function windowFeatures(st: RewriteState, body: string): string | null {
+	const parts = body.split(",");
+	const out: string[] = [];
+	for (const part of parts) {
+		const m = /^([a-z]+)=(yes|no|\d+)$/.exec(part);
+		if (!m || !WINDOW_FEATURE_NAMES.has(m[1])) return null;
+		out.push(`${m[1]}=${/^\d+$/.test(m[2]) ? fakeRun(st, m[2]) : m[2]}`);
+	}
+	return out.join(",");
+}
+
 function rewriteCode(st: RewriteState, code: string): string {
 	const bare = (s: string) =>
 		s
 			.replace(/\\/g, "")
 			.replace(/[\p{L}_$][\p{L}\p{N}_$]*/gu, (w) => (CODE_WORDS.has(w) ? w : "x"))
-			.replace(/\d+/g, (d) => (d.length === 1 ? d : d.length >= 4 ? fakePerson(st, d) : "0"));
+			.replace(/\d+/g, (d) => fakeRun(st, d));
 	let out = "";
 	let pos = 0;
 	for (const m of code.matchAll(/(['"`])((?:(?!\1)[^\\]|\\[\s\S])*)\1/g)) {
@@ -682,7 +892,8 @@ function rewriteCode(st: RewriteState, code: string): string {
 		out += bare(code.slice(pos, idx));
 		const body = decodeJsEscapes(m[2]);
 		let inner: string;
-		if (A.codeStrings.includes(body) || WINDOW_FEATURES.test(body)) inner = body;
+		if (A.codeStrings.includes(body)) inner = body;
+		else if (windowFeatures(st, body) !== null) inner = windowFeatures(st, body) ?? "";
 		else if (/\.(?:php|html|aspx|cfm|cgi)(?:[?#]|$)|^https?:\/\//i.test(body)) inner = rewriteUrl(st, body);
 		else inner = scrubText(st, body);
 		out += `${m[1]}${inner.replace(/[\\'"`]/g, "")}${m[1]}`;
@@ -694,28 +905,36 @@ function rewriteCode(st: RewriteState, code: string): string {
 const FORM_PERSON = /user|member|person|speaker|uid|^rec\[/i;
 const PERSON_IN_ATTR = /((?<![A-Za-z])(?<!(?<!%[0-9a-f])[0-9])(?:u|[a-z_]*(?:user|member|person|uid)[a-z_]*)(?:=|%3[dD])|attend_image1?\[|available\[|rec\[|available_)(\d+)/gi;
 
-/** An `id`, `name` or `for`: the lowercase markup words stay, a person id inside is replaced, anything else goes through `scrubText`. */
-function rewriteIdent(st: RewriteState, v: string): string {
-	const withIds = v.replace(PERSON_IN_ATTR, (_m, pre: string, id: string) => `${pre}${fakePerson(st, id)}`);
-	const parts = withIds.split(/([_\-[\]\s]+)/);
+/** The lowercase markup words of an identifier stay; the rest of it goes through `scrubText`. */
+function identPart(st: RewriteState, v: string): string {
+	const parts = v.split(/([_\-[\]\s]+)/);
 	let i = 0;
 	let head = "";
 	for (; i < parts.length; i++) {
 		const p = parts[i];
-		const isFakePerson = /^\d+$/.test(p) && [...st.people.values()].includes(p);
-		if (i % 2 === 1 || p === "" || ID_WORD_SET.has(p.toLowerCase()) || /^\d{1,2}$/.test(p) || isFakePerson) head += p;
+		if (i % 2 === 1 || p === "" || ID_WORD_SET.has(p.toLowerCase())) head += p;
 		else break;
 	}
 	return head + scrubText(st, parts.slice(i).join(""));
 }
 
-/** A form field's value: a person id maps like the same id in a link, a club or other long number maps, one or two digits stay. */
+/** An `id`, `name` or `for`: a person id inside is replaced by its fake (the one the same id has in a link), the rest goes through `identPart`. */
+function rewriteIdent(st: RewriteState, v: string): string {
+	let out = "";
+	let last = 0;
+	for (const m of v.matchAll(PERSON_IN_ATTR)) {
+		const at = m.index ?? 0;
+		out += identPart(st, v.slice(last, at) + m[1]) + fakePerson(st, m[2]);
+		last = at + m[0].length;
+	}
+	return out + identPart(st, v.slice(last));
+}
+
+/** A form field's value: a person id maps like the same id in a link, any other number is mapped too. */
 function rewriteFormValue(st: RewriteState, field: string, value: string): string {
 	if (/^\d+$/.test(value)) {
-		if (/year/i.test(field) && /^(?:19|20)\d{2}$/.test(value)) return value;
-		if (/club/i.test(field)) return fakeNumber(st, value);
-		if (FORM_PERSON.test(field)) return fakePerson(st, value);
-		return value.length <= 2 ? value : fakeNumber(st, value);
+		if (FORM_PERSON.test(field) && !/club/i.test(field)) return fakePerson(st, value);
+		return fakeNumber(st, value);
 	}
 	return scrubText(st, value);
 }
@@ -723,6 +942,8 @@ function rewriteFormValue(st: RewriteState, field: string, value: string): strin
 interface AttrContext {
 	/** The field the value belongs to: the element's own ORIGINAL `name`, or an `<option>`'s select. */
 	field: string;
+	/** The element is `<input type="radio">` (by its ORIGINAL attributes). */
+	radio: boolean;
 }
 
 function rewriteAttribute(st: RewriteState, ctx: AttrContext, name: string, rawValue: string): string {
@@ -730,11 +951,13 @@ function rewriteAttribute(st: RewriteState, ctx: AttrContext, name: string, rawV
 	const n = name.toLowerCase();
 	const pattern = ENUMS.get(n);
 	if (pattern) return pattern.test(value.trim()) ? value : "";
+	if (COLOR_ATTRS.has(n)) return "";
+	if (LAYOUT_ATTRS.has(n)) return LAYOUT_NUMBERS.has(value.trim()) ? value : mapRunsIn(st, value.replace(/[^\d%]/g, ""));
 	if (n === "class") return value.split(/\s+/).filter(Boolean).map((c) => (CLASS_SET.has(c) ? c : "x")).join(" ");
 	if (URL_ATTRS.has(n)) return rewriteUrl(st, value);
-	if (/^on[a-z]+$/.test(n) || /^\s*javascript:/i.test(value)) return rewriteCode(st, value.replace(/^\s*javascript:/i, ""));
+	if (HANDLERS.has(n) || /^\s*javascript:/i.test(value)) return rewriteCode(st, value.replace(/^\s*javascript:/i, ""));
 	if (n === "id" || n === "name" || n === "for") return rewriteIdent(st, value);
-	if (n === "value") return rewriteFormValue(st, ctx.field, value);
+	if (n === "value") return ctx.radio && A.radioValues.includes(value.trim()) ? value : rewriteFormValue(st, ctx.field, value);
 	if (n === "style") return "";
 	if (n === "srcdoc") return rewriteDocument(st, value);
 	if (n === "rel") return value.split(/\s+/).filter((t) => REL_VALUES.has(t.toLowerCase())).join(" ");
@@ -794,7 +1017,7 @@ function phonesAcrossNodes(st: RewriteState, refs: TextRef[]) {
 		};
 		if (!m[0].includes("\n")) {
 			const digits = m[0].replace(/\D/g, "");
-			if (digits.length >= 7 && digits.length <= 15 && !DATE_ONLY.test(m[0])) add(s, e);
+			if (digits.length >= 7 && digits.length <= 15) add(s, e);
 			continue;
 		}
 		// Several blocks of digits run together; a phone is the longest plausible run of whole blocks.
@@ -935,7 +1158,9 @@ function textItems(st: RewriteState, groups: Map<Element | null, Node[]>): TextI
 			const t = text.replace(/[\s ]+/g, " ").trim();
 			if (t === "") continue;
 			const item: TextItem = { node: n, text: t, lead: text.match(/^[\s ]*/)?.[0] ?? "", trail: text.match(/[\s ]*$/)?.[0] ?? "", kind: "scrub", fixed: null, res: null, forceFirst: false, forceLast: false };
-			const pager = parent && /^Page \d{1,3} of \d{1,3}$/.test((parent.closest(".nav")?.textContent ?? parent.textContent ?? "").replace(/[\s ]+/g, " ").trim());
+			const pagerText = /^Page (\d{1,3}) of (\d{1,3})$/.exec((parent?.closest(".nav")?.textContent ?? parent?.textContent ?? "").replace(/[\s\xa0]+/g, " ").trim());
+			// the pager keeps its digits only as the two literal page numbers of `ALLOW_LIST.pageNumbers`; any other page count is mapped
+			const pager = !!pagerText && PAGE_NUMBERS.has(pagerText[1]) && PAGE_NUMBERS.has(pagerText[2]);
 			const link = parent?.closest("a") ?? null;
 			const linkAttrs = link ? `${link.getAttribute("href") ?? ""} ${link.getAttribute("onclick") ?? ""}` : "";
 			const decodedAttrs = decodeLoose(linkAttrs.replace(/&amp;/g, "&"));
@@ -1000,7 +1225,8 @@ function swallowAcrossNodes(st: RewriteState, sequences: TextItem[][]) {
 				const [a, b] = [seq[k], seq[k + 1]];
 				if (lastEdge(a)?.replacedWord && firstEdge(b)?.kept && firstEdge(b)?.capital && firstEdge(b)?.single) changed = forceEdge(st, b, "first") || changed;
 				// a field label ("Venue") followed by its value in another node stays; any other lone capitalised word before a replaced name is a plausible surname
-				const label = a.kind === "scrub" && VALUE_LABELS.has(a.text.replace(/[\s\u00a0]+/g, " ").trim());
+				// the label is followed by a non-breaking space ("Venue&nbsp;<b>…"); "Venue <b>Name</b>" with a plain space is a name
+				const label = a.kind === "scrub" && VALUE_LABELS.has(a.text.replace(/[\s\u00a0]+/g, " ").trim()) && a.trail.includes("\u00a0");
 				if (!label && firstEdge(b)?.replacedWord && lastEdge(a)?.kept && lastEdge(a)?.capital && lastEdge(a)?.single) changed = forceEdge(st, a, "last") || changed;
 			}
 			if (!changed) break;
@@ -1016,20 +1242,58 @@ function rewriteAttributes(st: RewriteState, doc: Document) {
 	for (const el of els) {
 		const original = snap.get(el) ?? [];
 		const field = tagOf(el) === "option" ? nameOf(el.closest("select")) : nameOf(el);
+		const radio = tagOf(el) === "input" && original.some((a) => a.name.toLowerCase() === "type" && a.value.trim().toLowerCase() === "radio");
+		// every original is taken off first and the finished list put back, so a renamed `data-x1` can never overwrite (or be
+		// removed with) an attribute that was already called `data-x1`
 		let renamed = 0;
-		for (const a of original) {
+		const finished = original.map((a) => {
 			const lower = a.name.toLowerCase();
-			const known = ATTRIBUTE_NAMES.has(lower) || /^on[a-z]+$/.test(lower);
+			const known = ATTRIBUTE_NAMES.has(lower) || HANDLERS.has(lower);
 			const name = known ? a.name : `data-x${++renamed}`;
 			// the parser writes an attribute value as it holds it, so a bare "&" would come out unescaped
-			el.setAttribute(name, rewriteAttribute(st, { field }, name, a.value).replace(/[\uE000\uE001]/g, "").replace(/&/g, "&amp;"));
-			if (name !== a.name) el.removeAttribute(a.name);
-		}
+			return [name, rewriteAttribute(st, { field, radio }, name, a.value).replace(/[\uE000\uE001]/g, "").replace(/&/g, "&amp;")] as const;
+		});
+		original.forEach((a, i) => {
+			if (finished[i][0] !== a.name) el.removeAttribute(a.name);
+		});
+		for (const [name, value] of finished) el.setAttribute(name, value);
 	}
 }
 
+/** Digits the markup itself always carries and the generator keeps as they are (an encoding name, a W3C url): not data, so not worth avoiding. */
+const MARKUP_DIGITS = [/utf-8/gi, /iso-8859-1/gi, /<!doctype[^>]*>/gi, /https?:\/\/www\.w3\.org\/[^\s"']*/gi, /-\/\/w3c\/\/dtd[^"']*/gi, /initial-scale=1/gi];
+
+/** Every digit run the page carries, so no fake is ever one of them. */
+function reserveRuns(st: RewriteState, doc: Document, html: string) {
+	const add = (t: string) => {
+		let u = t;
+		for (const re of MARKUP_DIGITS) u = u.replace(re, " ");
+		for (const r of u.match(/\d+/g) ?? []) st.reserved.add(normRun(r));
+	};
+	add(html);
+	const walk = (n: Node) => {
+		if (n.nodeType === 3 || n.nodeType === 8) add(n.nodeValue ?? "");
+		if (n.nodeType === 1) for (const a of Array.from((n as Element).attributes ?? [])) add(`${a.name} ${a.value}`);
+		for (const c of Array.from(n.childNodes ?? [])) walk(c);
+	};
+	walk(doc as unknown as Node);
+}
+
+/** A hand-written fixture, not a page: the evaluations JSON. */
+const looksLikeJson = (input: string) => {
+	const t = input.trim();
+	if (!/^[[{]/.test(t)) return false;
+	try {
+		JSON.parse(t);
+		return true;
+	} catch {
+		return false;
+	}
+};
+
 function rewriteDocument(st: RewriteState, html: string): string {
 	const doc = parseHtml(html);
+	reserveRuns(st, doc, html);
 	scrubDoctype(doc);
 	normalizeTags(doc);
 	mergeAdjacentText(doc);
@@ -1054,6 +1318,7 @@ function rewriteDocument(st: RewriteState, html: string): string {
 
 /** Saved page in, fixture page out. Pure: no file system. Throws only if fake-names.json runs out of names. */
 export function rewriteEasySpeakPage(html: string, opts: RewriteOptions = {}): string {
+	if (looksLikeJson(html)) throw new Error("the input is JSON, not an Easy-Speak page: the evaluations JSON fixtures are hand-written, this generator does not rewrite JSON");
 	return rewriteDocument(opts.state ?? newRewriteState(), html);
 }
 
@@ -1120,7 +1385,13 @@ function main(argv: string[]): number {
 		console.error("no output path");
 		return 2;
 	}
-	const result = generateFixture(input, { contactPage, original });
+	let result: GenerateResult;
+	try {
+		result = generateFixture(input, { contactPage, original });
+	} catch (e) {
+		console.error(e instanceof Error ? e.message : String(e));
+		return 2;
+	}
 	if (result.violations.length > 0) {
 		console.error("Nothing written. The output still carries:");
 		for (const v of result.violations) console.error(`  - ${v}`);
