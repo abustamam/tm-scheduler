@@ -606,7 +606,8 @@ function rewriteParam(st: RewriteState, key: string, value: string, path: string
 	if (k === "p" || k === "m") return /^\(-?[\d.]+,-?[\d.]+\)(?:,\d{1,2})?$/.test(value) ? value.replace(/-?\d+\.\d+/g, "0.000000") : "x";
 	if (k === "n") return encodeURIComponent(scrubText(st, decodeLoose(value)));
 	if (NUMBER_PARAMS.has(k)) return rewriteNumber(st, k, value);
-	return Object.hasOwn(A.paramValues, k) && A.paramValues[k].includes(value) ? value : "x";
+	// only a name in KNOWN_PARAMS reaches here, and `__proto__` / `constructor` are not in it
+	return A.paramValues[k]?.includes(value) ? value : "x";
 }
 
 function rewritePathSegment(st: RewriteState, seg: string): string {

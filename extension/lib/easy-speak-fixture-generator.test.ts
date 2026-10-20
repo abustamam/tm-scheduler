@@ -288,6 +288,34 @@ describe("review round: every invented value is gone (#1275)", () => {
 		expect(fixtureViolations(out)).toEqual([]);
 	});
 
+	it("6b. a decoded escape is judged as what it spells: an escaped URL is rewritten as a URL, an escaped allowed phrase stays", () => {
+		const out = rewriteEasySpeakPage(
+			page(`<a href="#" onclick="go('\\x68ttps://easy-speak.org/profile.php?mode=viewprofile&u=123456')">a</a><a href="#" onclick="go('\\u0054imer')">b</a>`),
+		);
+		expect(out).toContain("https://easy-speak.org/profile.php?mode=viewprofile&amp;u=");
+		expect(out).not.toContain("123456");
+		expect(out).toContain("('Timer')");
+		expect(fixtureViolations(out)).toEqual([]);
+	});
+
+	it("6c. a form value under an <option> is typed by its select's ORIGINAL name, even when that name is itself rewritten", () => {
+		const out = rewriteEasySpeakPage(
+			page(
+				`<a href="https://easy-speak.org/profile.php?mode=viewprofile&amp;u=567890">Rowan Tidewell</a>` +
+					`<select name="quillonuser"><option value="567890">x</option></select>`,
+			),
+		);
+		const doc = parseHtml(out);
+		const link = /u=(\d+)/.exec(doc.querySelector("a")?.getAttribute("href") ?? "")?.[1];
+		expect(link).toBeTruthy();
+		expect(doc.querySelector("option")?.getAttribute("value")).toBe(link);
+	});
+
+	it("6d. a query parameter named like an Object property does not throw and its value goes", () => {
+		const out = rewriteEasySpeakPage(page(`<a href="/index.php?constructor=Quillon&amp;__proto__=Quorvak&amp;hasownproperty=Zed&amp;tostring=Eli">a</a>`));
+		expectNone(out, ["Quillon", "Quorvak", "Zed", "Eli"]);
+	});
+
 	it("7. an allowed word does not survive next to a name, in another node, or inside a timezone", () => {
 		const out = rewriteEasySpeakPage(
 			page(
