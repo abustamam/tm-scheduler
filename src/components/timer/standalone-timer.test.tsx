@@ -41,6 +41,9 @@ const field = (label: RegExp) =>
 	(screen.getByLabelText(label) as HTMLInputElement).value;
 const preset = (name: string) => screen.getByRole("button", { name });
 
+// jsdom may not define it; plain assignment is not undone by restoreAllMocks.
+const originalScrollIntoView = Element.prototype.scrollIntoView;
+
 beforeEach(() => {
 	vi.useFakeTimers();
 	vi.setSystemTime(new Date(T0));
@@ -52,6 +55,7 @@ afterEach(() => {
 	vi.restoreAllMocks();
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
+	Element.prototype.scrollIntoView = originalScrollIntoView;
 });
 
 const PRESETS = [
@@ -245,6 +249,26 @@ describe("running", () => {
 		render(<StandaloneTimer />);
 		await click(screen.getByRole("button", { name: "Start" }));
 		expect(scroll).toHaveBeenCalledTimes(1);
+	});
+
+	it("Pause and Resume do not scroll again", async () => {
+		const scroll = vi.fn();
+		Element.prototype.scrollIntoView = scroll;
+		render(<StandaloneTimer />);
+		await click(screen.getByRole("button", { name: "Start" }));
+		await click(screen.getByRole("button", { name: "Pause" }));
+		await click(screen.getByRole("button", { name: "Resume" }));
+		expect(scroll).toHaveBeenCalledTimes(1);
+	});
+
+	it("scrolls only after Start has grown the block to full height (#1270)", async () => {
+		let classAtScroll = "";
+		Element.prototype.scrollIntoView = function (this: Element) {
+			classAtScroll = this.querySelector("[data-band]")?.className ?? "";
+		};
+		render(<StandaloneTimer />);
+		await click(screen.getByRole("button", { name: "Start" }));
+		expect(classAtScroll).toContain("min-h-svh");
 	});
 
 	it("makes no network request", async () => {

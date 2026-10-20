@@ -70,6 +70,16 @@ export function StandaloneTimer() {
 	// Marks are fixed from Start until Reset: running, paused or stopped.
 	const locked = state.phase !== "idle";
 	const clockRef = useRef<HTMLDivElement>(null);
+	const scrollOnStartRef = useRef(false);
+
+	// Once Start has grown the block to full height, scroll it into view: asked
+	// before that render, the browser clamps the target to the idle page's
+	// short scroll range and the block lands low on the screen.
+	useEffect(() => {
+		if (state.phase === "idle" || !scrollOnStartRef.current) return;
+		scrollOnStartRef.current = false;
+		clockRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+	}, [state.phase]);
 
 	useEffect(() => {
 		if (!running) return;
@@ -80,17 +90,16 @@ export function StandaloneTimer() {
 	useWakeLock(running);
 
 	const dispatch = useCallback((action: TimerAction) => {
+		const leavingIdle =
+			action.type === "start" && stateRef.current.phase === "idle";
 		stateRef.current = timerReducer(stateRef.current, action);
 		setState(stateRef.current);
 		setNow(Date.now());
 		// A phone held in landscape shows only a strip of page: bring the colour
 		// block, which holds Start/Pause/Reset, to fill the screen once it runs.
-		if (action.type === "start") {
-			clockRef.current?.scrollIntoView?.({
-				behavior: "smooth",
-				block: "start",
-			});
-		}
+		// Idle, the block is only as tall as its contents (#1270), so the scroll
+		// waits for the render that grows it (see the effect above).
+		if (leavingIdle) scrollOnStartRef.current = true;
 	}, []);
 
 	const result = validateMarks(fields);
