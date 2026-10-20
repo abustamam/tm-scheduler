@@ -32,6 +32,7 @@ import {
 	formatTimingClock,
 	qualifyingWindowForMarks,
 } from "#/lib/timing-window";
+import { cn } from "#/lib/utils";
 
 /** One timed row, reduced to what a clock needs. */
 export type TimerSegment = {
@@ -232,7 +233,11 @@ export function SegmentClock({
 			data-band={band}
 			className={
 				screen
-					? `flex ${state.phase === "idle" ? "" : "min-h-svh "}flex-col justify-center gap-4 p-4 transition-colors ${SCREEN_BG_CLASS[band]}`
+					? cn(
+							"flex flex-col justify-center gap-4 p-4 transition-colors",
+							state.phase !== "idle" && "min-h-svh",
+							SCREEN_BG_CLASS[band],
+						)
 					: "space-y-3 rounded-lg border border-[var(--line)] p-3"
 			}
 		>

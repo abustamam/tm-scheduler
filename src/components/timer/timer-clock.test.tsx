@@ -17,15 +17,16 @@ const SEGMENT: TimerSegment = {
 	kind: "speech",
 	recordable: false,
 	unrecordableReason: null,
-} as TimerSegment;
+} satisfies TimerSegment;
 
 const STATES: Record<string, TimerState> = {
 	idle: IDLE_TIMER,
 	running: { phase: "running", accumulatedMs: 0, startedAt: 1000 },
 	paused: { phase: "paused", accumulatedMs: 2000, startedAt: null },
+	stopped: { phase: "stopped", accumulatedMs: 2000, startedAt: null },
 };
 
-function container(variant: "card" | "screen", state: TimerState) {
+function bandClassName(variant: "card" | "screen", state: TimerState) {
 	const { container } = render(
 		<SegmentClock
 			segment={SEGMENT}
@@ -45,16 +46,20 @@ afterEach(cleanup);
 
 describe("screen variant height by phase", () => {
 	it("idle has no full-viewport min-height", () => {
-		expect(container("screen", STATES.idle)).not.toContain("min-h-svh");
+		expect(bandClassName("screen", STATES.idle)).not.toContain("min-h-svh");
 	});
-	it.each(["running", "paused"])("%s fills the viewport", (phase) => {
-		expect(container("screen", STATES[phase])).toContain("min-h-svh");
+	it.each([
+		"running",
+		"paused",
+		"stopped",
+	])("%s fills the viewport", (phase) => {
+		expect(bandClassName("screen", STATES[phase])).toContain("min-h-svh");
 	});
 });
 
 describe("card variant", () => {
 	it.each(Object.keys(STATES))("%s markup is unchanged", (phase) => {
-		expect(container("card", STATES[phase])).toBe(
+		expect(bandClassName("card", STATES[phase])).toBe(
 			"space-y-3 rounded-lg border border-[var(--line)] p-3",
 		);
 	});

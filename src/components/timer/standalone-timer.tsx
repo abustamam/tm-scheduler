@@ -90,14 +90,16 @@ export function StandaloneTimer() {
 	useWakeLock(running);
 
 	const dispatch = useCallback((action: TimerAction) => {
+		const leavingIdle =
+			action.type === "start" && stateRef.current.phase === "idle";
 		stateRef.current = timerReducer(stateRef.current, action);
 		setState(stateRef.current);
 		setNow(Date.now());
 		// A phone held in landscape shows only a strip of page: bring the colour
 		// block, which holds Start/Pause/Reset, to fill the screen once it runs.
 		// Idle, the block is only as tall as its contents (#1270), so the scroll
-		// waits for the render that grows it (see the effect below).
-		if (action.type === "start") scrollOnStartRef.current = true;
+		// waits for the render that grows it (see the effect above).
+		if (leavingIdle) scrollOnStartRef.current = true;
 	}, []);
 
 	const result = validateMarks(fields);
