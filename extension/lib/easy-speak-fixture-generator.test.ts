@@ -411,21 +411,33 @@ describe("pages that must not be corrupted", () => {
 		expect(everything(out)).not.toMatch(/>page</);
 	});
 
-	it("a person's fake is the same in a link and a table, and a fake already on the page is not reused", () => {
+	it("a person's fake is the same in a link and a table, and a name that looks like a fake is replaced like any other", () => {
+		// the generator hands out fakes from the front of the list, so a name from the back is "a fake by chance" only if it is trusted
+		const looksFake = FAKE_NAMES[FAKE_NAMES.length - 3];
 		const out = rewriteEasySpeakPage(
 			page(
 				`<a href="https://easy-speak.org/profile.php?mode=viewprofile&amp;u=555111">Rowan Tidewell, DTM</a><td>Rowan Tidewell</td>` +
-					`<a href="https://easy-speak.org/profile.php?mode=viewprofile&amp;u=555222">Sloane Brightmere</a><td>Avery Alderfinch</td>`,
+					`<a href="https://easy-speak.org/profile.php?mode=viewprofile&amp;u=555222">Sloane Brightmere</a><td>${looksFake}</td>`,
 			),
 		);
 		const links = Array.from(parseHtml(out).querySelectorAll("a")).map((a) => a.textContent ?? "");
-		expect(links[0].replace(/, DTM$/, "")).toBe(parseHtml(out).querySelectorAll("td")[0].textContent);
-		expect(new Set(links).size).toBe(2);
-		expect(out).toContain("Avery Alderfinch");
-		expect(links[0]).not.toContain("Avery Alderfinch");
-		expect(links[1]).not.toContain("Avery Alderfinch");
+		const cells = Array.from(parseHtml(out).querySelectorAll("td")).map((t) => t.textContent ?? "");
+		expect(links[0].replace(/, DTM$/, "")).toBe(cells[0]);
+		// nothing is trusted for resembling a fake: a fake-looking name was on the page, so it is rewritten too
+		expect(out).not.toContain(looksFake);
+		expect(new Set([links[0].replace(/, DTM$/, ""), links[1], cells[1]]).size).toBe(3);
 		expect(out).toContain(", DTM");
 		expect(fixtureViolations(out)).toEqual([]);
+	});
+
+	it("keeps a Venue label and a level, so the page still parses", () => {
+		const out = rewriteEasySpeakPage(page(`<span class="gen">Venue&#160;<b><a href="javascript: void(0);">Quillon Hall</a></b></span><td>#2-1 - Effective Quillon</td><td>2 - Humor of Rowan</td>`));
+		expect(out).toContain("Venue");
+		expect(out).not.toContain("Quillon Hall");
+		const tds = Array.from(parseHtml(out).querySelectorAll("td")).map((t) => t.textContent ?? "");
+		expect(tds[0]).toMatch(/^#2-1 - /);
+		expect(tds[1]).toMatch(/^2 - /);
+		expect(out).not.toMatch(/Quillon|Rowan/);
 	});
 
 	it("keeps tags, tag names and attribute names exactly", () => {
@@ -450,10 +462,21 @@ describe("pages that must not be corrupted", () => {
 });
 
 describe("the allow-list", () => {
-	it("holds no person's name and no word that is a plausible surname and a date", () => {
-		for (const p of ALLOW_LIST.phrases) {
+	it("no string anywhere in the list is a fake name, a word of one, or a plausible surname that is also a date or a common word", () => {
+		const strings: string[] = [];
+		const walk = (v: unknown, key: string) => {
+			if (key === "shapes" || key === "windowFeatures") return; // regex sources, not words
+			if (typeof v === "string") strings.push(v);
+			else if (Array.isArray(v)) for (const x of v) walk(x, key);
+			else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) walk(x, k);
+		};
+		walk(ALLOW_LIST, "");
+		expect(strings.length).toBeGreaterThan(200);
+		const fakeWords = new Set(FAKE_NAMES.filter((n) => !n.startsWith("Guest ")).flatMap((n) => n.split(/\s+/)));
+		for (const p of strings) {
+			expect(p, "an empty string matches everything").not.toBe("");
 			expect(FAKE_NAMES, p).not.toContain(p);
-			expect(p, "an empty phrase matches everything").not.toBe("");
+			expect(fakeWords.has(p), `${p} is a word of a fake name`).toBe(false);
 		}
 		for (const w of ["May", "Page", "Small", "March", "August", "April", "June"]) expect(ALLOW_LIST.phrases, w).not.toContain(w);
 		expect(new Set(ALLOW_LIST.phrases).size).toBe(ALLOW_LIST.phrases.length);
@@ -594,6 +617,21 @@ describe("the committed fixtures round-trip", () => {
 	});
 });
 
+describe("the second net with the real values", () => {
+	it("generateFixture reports a real term that survives the rewrite", () => {
+		// "Timer" is an allowed phrase, so it is kept; told it is somebody's real value, the net must say so
+		const r = generateFixture(page(`<td>Timer</td>`), { original: { terms: ["Timer"] } });
+		expect(r.html).toContain("Timer");
+		expect(r.violations.length).toBeGreaterThan(0);
+		expect(r.violations.join("\n")).toMatch(/Timer/);
+	});
+
+	it("generateFixture is clean when the real value did not survive", () => {
+		const r = generateFixture(page(`<td>Rowan Tidewell</td>`), { original: { names: ["Rowan Tidewell"], terms: ["Tidewell"] } });
+		expect(r.violations).toEqual([]);
+	});
+});
+
 describe("the command", () => {
 	const dir = mkdtempSync(join(tmpdir(), "es-fixture-"));
 	const run = (args: string[]) => spawnSync("bun", [SCRIPT, ...args], { encoding: "utf8" });
@@ -633,6 +671,16 @@ describe("the command", () => {
 		const none = join(dir, "arch-none.html");
 		expect(run(["--archive", archive, "--page", "easy-speak.org", none]).status).not.toBe(0);
 		expect(existsSync(none)).toBe(false);
+	});
+
+	it("exits non-zero and writes nothing when a --real-term survives the rewrite", () => {
+		const input = join(dir, "term.html");
+		const out = join(dir, "term-out.html");
+		writeFileSync(input, page(`<td>Timer</td>`));
+		const r = run([input, out, "--real-term", "Timer"]);
+		expect(r.status).not.toBe(0);
+		expect(r.stderr).toMatch(/Nothing written/);
+		expect(existsSync(out)).toBe(false);
 	});
 
 	it("passes the real values it was told about to the second net", () => {
