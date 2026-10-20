@@ -22,10 +22,14 @@ import {
 	members,
 	officerTerms,
 	people,
+	roleSlots,
 	user,
 } from "#/db/schema";
 import type { EasySpeakBundleV1 } from "#/lib/easy-speak-bundle";
-import type { PersonResolution } from "#/lib/easy-speak-import-plan";
+import {
+	type PersonResolution,
+	personKeyOf,
+} from "#/lib/easy-speak-import-plan";
 import {
 	cleanup,
 	hasTestDb,
@@ -57,6 +61,8 @@ vi.mock("./club-write-lock", async (importOriginal) => {
 });
 
 const logic = await import("./history-import-logic");
+const { applyMemberRemove } = await import("./members-logic");
+const { collapseMemberships } = await import("./membership-collapse-logic");
 
 const FIXTURE = resolve(
 	__dirname,
@@ -732,19 +738,191 @@ describe.skipIf(!hasTestDb)(
 			expect(row?.all).toContain("matches no one");
 		});
 
-		// protects=a member the club removed after the import made them is not
-		// re-created (nor re-made an admin with a term and a member_add) by a re-apply;
-		// fails_when=a vanished ref to an import-created member falls through to create;
-		// no_claim=a vanished ref to a member the import only linked is the D4 test.
-		it("does not re-create an imported officer the club removed", async () => {
+		// protects=a saved "guest" answer on a person whose member ref is still live
+		// (made a member by the first apply) mints ONE guest and Person across any
+		// number of re-applies;
+		// fails_when=the guest id is kept only when the automatic outcome is a guest,
+		// so every re-apply mints another (putRef is DO NOTHING);
+		// no_claim=the removal of the member row the answer leaves behind.
+		it("a saved guest answer beside a live member ref mints one guest across re-applies", async () => {
+			const stored = await upload();
+			await apply(stored.importId);
+			expect(await memberByName("Tom Pastmeeting")).toBeDefined();
+			extraResolutions = {
+				[`es:${P(4)}`]: { action: "guest", kind: "visitor" },
+			};
+			await apply(stored.importId);
+			await apply(stored.importId);
+			await apply(stored.importId);
+			const tom = await testDb
+				.select({ id: guests.id })
+				.from(guests)
+				.where(
+					and(
+						eq(guests.clubId, seed.clubId),
+						eq(guests.name, "Tom Pastmeeting"),
+					),
+				);
+			expect(tom).toHaveLength(1);
+			expect((await tally()).guests).toBe(2);
+		});
+
+		// protects=a saved guest answer whose KIND changed updates the stored guest's
+		// kind, so the preview, the answer and the record agree;
+		// fails_when=the kept guest id skips the write and the kind stays as first made;
+		// no_claim=an automatic (ref/category) outcome never rewrites a kind a human set.
+		it("a changed guest kind in the saved answer updates the stored guest", async () => {
+			extraResolutions = {
+				[`es:${P(5)}`]: { action: "guest", kind: "visitor" },
+			};
+			const stored = await upload();
+			await apply(stored.importId);
+			extraResolutions = {
+				[`es:${P(5)}`]: { action: "guest", kind: "visiting_toastmaster" },
+			};
+			await apply(stored.importId);
+			const rows = await testDb
+				.select({ kind: guests.kind })
+				.from(guests)
+				.where(
+					and(eq(guests.clubId, seed.clubId), eq(guests.name, "Gia Guest")),
+				);
+			expect(rows).toEqual([{ kind: "visiting_toastmaster" }]);
+		});
+
+		// protects=an imported officer removed through the real removal is a tombstone:
+		// the removal's own `member_remove` row, not a null actor, says so;
+		// fails_when=the tombstone is read from `member_add` rows with no actor;
+		// no_claim=a member the import only linked, the next tests.
+		it("does not re-create an imported officer removed through applyMemberRemove", async () => {
 			const stored = await upload();
 			await apply(stored.importId);
 			const pia = await memberByName("Pia President");
-			await testDb.delete(members).where(eq(members.id, pia?.id as string));
+			await applyMemberRemove({
+				clubId: seed.clubId,
+				memberId: pia?.id as string,
+				actorMemberId: null,
+			});
 			const before = await tally();
 			await apply(stored.importId);
 			expect(await memberByName("Pia President")).toBeUndefined();
 			expect(await tally()).toEqual(before);
+		});
+
+		// protects=a member the import only LINKED, then removed by the club, is not
+		// re-created either;
+		// fails_when=the tombstone is limited to members the import made;
+		// no_claim=a removal that the club logged elsewhere than applyMemberRemove.
+		it("does not re-create a linked officer the club removed", async () => {
+			const [person] = await testDb
+				.insert(people)
+				.values({ name: "Pia President", email: null })
+				.returning({ id: people.id });
+			extraPeople.push(person?.id as string);
+			await testDb.insert(members).values({
+				clubId: seed.clubId,
+				personId: person?.id as string,
+				name: "Pia President",
+				clubRole: "member",
+				status: "active",
+			});
+			const stored = await upload();
+			await apply(stored.importId);
+			const pia = await memberByName("Pia President");
+			expect(pia?.personId).toBe(person?.id);
+			await applyMemberRemove({
+				clubId: seed.clubId,
+				memberId: pia?.id as string,
+				actorMemberId: null,
+			});
+			await apply(stored.importId);
+			expect(await memberByName("Pia President")).toBeUndefined();
+		});
+
+		// protects=a linked member who was added under superadmin impersonation (a null
+		// actor) and later MERGED away is not a tombstone: the person is matched by name
+		// again (D4 of #1196), their history kept;
+		// fails_when=a null-actor member_add row is read as "the import made this";
+		// no_claim=what the merge does to the keeper's own history.
+		it("a null-actor member_add on a merged-away member is not a tombstone", async () => {
+			const stored = await upload();
+			await apply(stored.importId);
+			await testDb.insert(activityLog).values({
+				clubId: seed.clubId,
+				actorMemberId: null,
+				action: "member_add",
+				targetType: "member",
+				targetId: adaMemberId,
+				detail: { name: "Ada Linked" },
+			});
+			const [keeperPerson] = await testDb
+				.insert(people)
+				.values({ name: "Ada Keeper", email: null })
+				.returning({ id: people.id });
+			extraPeople.push(keeperPerson?.id as string);
+			const [keeper] = await testDb
+				.insert(members)
+				.values({
+					clubId: seed.clubId,
+					personId: keeperPerson?.id as string,
+					name: "Ada Keeper",
+					clubRole: "member",
+					status: "active",
+				})
+				.returning({ id: members.id });
+			await testDb.transaction((tx) =>
+				collapseMemberships(tx, seed.clubId, keeper?.id as string, adaMemberId),
+			);
+			await apply(stored.importId);
+			const back = await memberByName("Ada Linked");
+			expect(back).toBeDefined();
+		});
+
+		// protects=one list entry plus a name-only meeting reference of the same name
+		// make ONE member, and the reference resolves to it on this and every re-apply;
+		// fails_when=the reference is created apart, or its ref is not stored;
+		// no_claim=two namesakes with distinct ids, a plan test.
+		it("makes one member of a list entry and its name-only meeting reference", async () => {
+			const stored = await upload((b) => {
+				const past = b.meetings[0];
+				past?.roles.push({
+					role: "Timekeeper Two",
+					slot: 9,
+					holder: { esUserId: null, name: "pia president" },
+				});
+			});
+			await apply(stored.importId);
+			const piaId = (await memberByName("Pia President"))?.id as string;
+			const held = await testDb
+				.select({ id: roleSlots.id })
+				.from(roleSlots)
+				.where(eq(roleSlots.assignedMemberId, piaId));
+			expect(held.length).toBeGreaterThan(0);
+			await apply(stored.importId);
+			const rows = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(
+					and(
+						eq(members.clubId, seed.clubId),
+						eq(members.name, "Pia President"),
+					),
+				);
+			expect(rows).toHaveLength(1);
+			const alias = await testDb
+				.select({ targetId: importRefs.targetId })
+				.from(importRefs)
+				.where(
+					and(
+						eq(importRefs.clubId, seed.clubId),
+						eq(importRefs.kind, "person"),
+						eq(
+							importRefs.sourceId,
+							personKeyOf({ esUserId: null, name: "pia president" }),
+						),
+					),
+				);
+			expect(alias).toEqual([{ targetId: rows[0]?.id }]);
 		});
 
 		// protects=an existing address differing in case or by surrounding blanks

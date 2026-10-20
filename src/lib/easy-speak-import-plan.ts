@@ -113,10 +113,11 @@ export interface PlanContext {
 	/** `import_refs` for this club and source. */
 	refs: PlanRef[];
 	/**
-	 * Member ids an earlier apply of this import created. A `person` ref to one of
-	 * them whose row is gone is a removal by the club, not a merge: not re-created.
+	 * Member ids the club removed (a `member_remove` activity row names them). A
+	 * `person` ref to one of them whose row is gone is a removal, not a merge: not
+	 * re-created. A merged-away member is not in it and is matched by name (D4).
 	 */
-	importCreatedMemberIds?: ReadonlySet<string>;
+	removedMemberIds?: ReadonlySet<string>;
 	/** The human's choices, by person key. They win over every automatic outcome but a tombstone. */
 	resolutions?: Readonly<Record<string, PersonResolution>>;
 	/**
@@ -235,6 +236,11 @@ export type PlanPersonOutcome =
 			membership: "active" | "former";
 			position: OfficerPosition | null;
 			joinedAt: string | null;
+			/**
+			 * Name-only person keys that are this same human (their meeting
+			 * references): they resolve to the member made here.
+			 */
+			mergedKeys?: string[];
 	  }
 	/**
 	 * An earlier import created a guest for this person and a human has since
@@ -691,9 +697,9 @@ export function buildImportPlan(
 				};
 			} else if (candidates.length > 1 || (collided && first)) {
 				outcome = { status: "ambiguous", candidates };
-			} else if (memberRef && ctx.importCreatedMemberIds?.has(memberRef)) {
-				// The ref names a member row that is gone and nobody on the roster is
-				// that person: the club removed a member this import made. Re-creating
+			} else if (memberRef && ctx.removedMemberIds?.has(memberRef)) {
+				// The ref names a member row that is gone, the club logged its removal
+				// and nobody on the roster is that person. Re-creating
 				// them would bring back a removed officer as an admin (#1240), so it is
 				// a tombstone, the way a vanished guest is.
 				outcome = { status: "deleted" };
@@ -756,7 +762,7 @@ export function buildImportPlan(
 					status: "guest",
 					kind: choice.kind,
 					via: "chosen",
-					guestId: outcome.status === "guest" ? outcome.guestId : null,
+					guestId: guestRef && ctx.guestIds.has(guestRef) ? guestRef : null,
 				};
 			} else if (choice?.action === "skip") {
 				outcome = { status: "skipped", reason: choice.reason };
@@ -772,18 +778,50 @@ export function buildImportPlan(
 			rejectedChoice,
 		});
 	}
-	// Two pending creates under one folded name (an `es:` id on the member list
-	// and a name-only meeting reference) would make two Persons for one human.
-	// Neither is created: a person decides, with no candidates to offer.
+	// One list entry (an `es:` id on the member list) and name-only meeting
+	// references folding to the same name are one human: the references join the
+	// list entry's create, so one Person is made and every key resolves to it. Two
+	// DISTINCT `es:` ids with one name stay two creates (two namesakes), and then
+	// the name-only references are not guessed onto either.
 	const createsByFold = new Map<string, PlanPerson[]>();
 	for (const p of people) {
 		if (p.outcome.status !== "create") continue;
 		const fold = foldName(p.name);
 		createsByFold.set(fold, [...(createsByFold.get(fold) ?? []), p]);
 	}
+	const merged = new Set<PlanPerson>();
 	for (const group of createsByFold.values()) {
-		if (group.length < 2) continue;
-		for (const p of group) p.outcome = { status: "ambiguous", candidates: [] };
+		const listed = group.filter(
+			(p) => p.esUserId !== null && p.appearances.memberList > 0,
+		);
+		const nameOnly = group.filter((p) => p.esUserId === null);
+		const target = listed[0];
+		if (listed.length !== 1 || !target || nameOnly.length === 0) continue;
+		if (target.outcome.status !== "create") continue;
+		target.outcome = {
+			...target.outcome,
+			mergedKeys: nameOnly.map((p) => p.key).sort(),
+		};
+		for (const p of nameOnly) {
+			target.appearances.roles += p.appearances.roles;
+			target.appearances.attendance += p.appearances.attendance;
+			target.appearances.awards += p.appearances.awards;
+			target.appearances.tableTopics += p.appearances.tableTopics;
+			target.appearances.introducedBy += p.appearances.introducedBy;
+			for (const c of p.appearances.guestCategories) {
+				if (!target.appearances.guestCategories.includes(c)) {
+					target.appearances.guestCategories.push(c);
+				}
+			}
+			merged.add(p);
+		}
+		target.listOnly = false;
+	}
+	if (merged.size > 0) {
+		for (let i = people.length - 1; i >= 0; i--) {
+			const p = people[i];
+			if (p && merged.has(p)) people.splice(i, 1);
+		}
 	}
 	people.sort(
 		(a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key),

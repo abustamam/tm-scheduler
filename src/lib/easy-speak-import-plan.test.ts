@@ -419,17 +419,13 @@ describe("buildImportPlan on the B fixture", () => {
 		const refs = [{ kind: "person", sourceId: "es:900001", targetId: "gone" }];
 		const made = buildImportPlan(
 			load(),
-			ctx({ refs, importCreatedMemberIds: new Set(["gone"]) }),
+			ctx({ refs, removedMemberIds: new Set(["gone"]) }),
 		);
 		expect(outcomeOf(made, "900001")).toEqual({ status: "deleted" });
 		expect(made.unresolved.map((p) => p.key)).not.toContain("es:900001");
 	});
 
-	// protects=two pending creates under one folded name are both ambiguous, so one
-	// human does not become two Persons;
-	// fails_when=both are created;
-	// no_claim=which of them a person then picks.
-	it("marks two pending creates with one folded name ambiguous", () => {
+	const dupeBundle = (extraListed: boolean) => {
 		const bundle = load();
 		bundle.people = [
 			{
@@ -438,6 +434,16 @@ describe("buildImportPlan on the B fixture", () => {
 				status: "Member",
 				joined: null,
 			},
+			...(extraListed
+				? [
+						{
+							esUserId: "900902",
+							name: "Dupe Person",
+							status: "Member",
+							joined: null,
+						},
+					]
+				: []),
 		];
 		const past = bundle.meetings.find((m) => m.esMeetingId === "644304");
 		if (!past) throw new Error("fixture changed");
@@ -449,12 +455,72 @@ describe("buildImportPlan on the B fixture", () => {
 				holder: { esUserId: null, name: "dupe person" },
 			},
 		];
+		return bundle;
+	};
+	const dupesOf = (plan: ReturnType<typeof buildImportPlan>) =>
+		plan.people.filter((p) => p.name.toLowerCase() === "dupe person");
+
+	// protects=one list entry plus a name-only meeting reference folding to one name
+	// is one human: one create, the reference joined to it, never blocked;
+	// fails_when=both are created, or both are made ambiguous with no way out;
+	// no_claim=the writer's use of mergedKeys, the integration suite's.
+	it("merges a name-only reference into the one list entry that folds to its name", () => {
+		const plan = buildImportPlan(dupeBundle(false), ctx());
+		const dupes = dupesOf(plan);
+		expect(dupes).toHaveLength(1);
+		expect(dupes[0]?.key).toBe("es:900901");
+		expect(dupes[0]?.outcome).toMatchObject({
+			status: "create",
+			mergedKeys: [personKeyOf({ esUserId: null, name: "dupe person" })],
+		});
+		expect(dupes[0]?.appearances.roles).toBe(1);
+		expect(plan.unresolved.map((p) => p.name)).not.toContain("Dupe Person");
+	});
+
+	// protects=two DISTINCT Easy-Speak ids with one name stay two creates (two
+	// namesakes), neither blocked nor merged;
+	// fails_when=the guard folds distinct ids together or marks them ambiguous;
+	// no_claim=what happens to a name-only reference beside two namesakes.
+	it("keeps two list entries with distinct ids and one name as two creates", () => {
+		const bundle = dupeBundle(true);
 		const plan = buildImportPlan(bundle, ctx());
-		const dupes = plan.people.filter(
-			(p) => p.name.toLowerCase() === "dupe person",
+		const dupes = dupesOf(plan);
+		expect(dupes.map((d) => d.key).sort()).toEqual(
+			[
+				personKeyOf({ esUserId: null, name: "dupe person" }),
+				"es:900901",
+				"es:900902",
+			].sort(),
 		);
-		expect(dupes).toHaveLength(2);
-		for (const d of dupes) expect(d.outcome.status).toBe("ambiguous");
+		for (const d of dupes) {
+			expect(d.outcome.status).toBe("create");
+			expect(d.outcome).not.toHaveProperty("mergedKeys");
+		}
+		expect(plan.unresolved.map((p) => p.name)).not.toContain("Dupe Person");
+	});
+
+	// protects=a saved "guest" answer uses the live guest a ref names even when the
+	// person's member ref still names a live member;
+	// fails_when=the guest id is kept only when the automatic outcome is a guest;
+	// no_claim=the apply, covered by the integration suite.
+	it("a saved guest answer keeps the live guest ref beside a live member ref", () => {
+		const plan = buildImportPlan(
+			load(),
+			ctx({
+				refs: [
+					{ kind: "person", sourceId: "es:900057", targetId: id(1) },
+					{ kind: "guest", sourceId: "es:900057", targetId: "guest-1" },
+				],
+				guestIds: new Set(["guest-1"]),
+				resolutions: { "es:900057": { action: "guest", kind: "visitor" } },
+			}),
+		);
+		expect(outcomeOf(plan, "900057")).toEqual({
+			status: "guest",
+			kind: "visitor",
+			via: "chosen",
+			guestId: "guest-1",
+		});
 	});
 
 	it("imports nothing from a meeting in the future, however the clock moves", () => {

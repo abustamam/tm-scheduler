@@ -487,12 +487,15 @@ async function loadPlanContext(
 			),
 	]);
 
-	// Members an earlier apply created (its `member_add` has no actor): a ref to
-	// one of them that no longer names a row means the club removed that member.
+	// A `person` ref that names no row, for a member the club REMOVED: the removal
+	// logs `member_remove` against the member id (`applyMemberRemove`), which
+	// survives the delete. A merge logs nothing of the kind, so a merged-away
+	// member is matched by name again (D4 of #1196). A null `member_add` actor is
+	// NOT used: impersonated adds, bulk imports and a removed actor all have one.
 	const refMemberIds = refs
 		.filter((r) => r.kind === "person")
 		.map((r) => r.targetId);
-	const addedRows =
+	const removedRows =
 		refMemberIds.length === 0
 			? []
 			: await db
@@ -501,9 +504,8 @@ async function loadPlanContext(
 					.where(
 						and(
 							eq(activityLog.clubId, clubId),
-							eq(activityLog.action, "member_add"),
+							eq(activityLog.action, "member_remove"),
 							eq(activityLog.targetType, "member"),
-							isNull(activityLog.actorMemberId),
 							inArray(activityLog.targetId, refMemberIds),
 						),
 					);
@@ -511,8 +513,8 @@ async function loadPlanContext(
 		ctx: {
 			now,
 			clubTimezone: club.timezone,
-			importCreatedMemberIds: new Set(
-				addedRows.flatMap((r) => (r.targetId ? [r.targetId] : [])),
+			removedMemberIds: new Set(
+				removedRows.flatMap((r) => (r.targetId ? [r.targetId] : [])),
 			),
 			contacts,
 			contactState: await loadContactState(clubId, contacts),
@@ -1045,6 +1047,10 @@ export async function writePeopleAndRoles(
 			out.members.set(person.key, created.id);
 			out.personByNewMember.set(created.id, created.personId);
 			await putRef(tx, clubId, "person", person.key, created.id);
+			for (const alias of o.mergedKeys ?? []) {
+				// Its own ref is stored by the next apply, which matches it by name.
+				out.members.set(alias, created.id);
+			}
 		}
 
 		for (const person of plan.people) {
@@ -1060,6 +1066,14 @@ export async function writePeopleAndRoles(
 				out.deleted.add(person.key);
 			} else if (o.status === "guest") {
 				if (o.guestId) {
+					// The saved answer's kind is the stored guest's kind: a changed answer
+					// must not leave the preview and the record disagreeing.
+					if (o.via === "chosen") {
+						await tx
+							.update(guests)
+							.set({ kind: o.kind })
+							.where(and(eq(guests.id, o.guestId), eq(guests.clubId, clubId)));
+					}
 					out.guests.set(person.key, o.guestId);
 					continue;
 				}
