@@ -247,6 +247,16 @@ describe("running", () => {
 		expect(scroll).toHaveBeenCalledTimes(1);
 	});
 
+	it("scrolls only after Start has grown the block to full height (#1270)", async () => {
+		let classAtScroll = "";
+		Element.prototype.scrollIntoView = function (this: Element) {
+			classAtScroll = this.querySelector("[data-band]")?.className ?? "";
+		};
+		render(<StandaloneTimer />);
+		await click(screen.getByRole("button", { name: "Start" }));
+		expect(classAtScroll).toContain("min-h-svh");
+	});
+
 	it("makes no network request", async () => {
 		const fetchSpy = vi.fn();
 		vi.stubGlobal("fetch", fetchSpy);

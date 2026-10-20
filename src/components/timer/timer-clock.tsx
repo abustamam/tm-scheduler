@@ -232,7 +232,7 @@ export function SegmentClock({
 			data-band={band}
 			className={
 				screen
-					? `flex min-h-svh flex-col justify-center gap-4 p-4 transition-colors ${SCREEN_BG_CLASS[band]}`
+					? `flex ${state.phase === "idle" ? "" : "min-h-svh "}flex-col justify-center gap-4 p-4 transition-colors ${SCREEN_BG_CLASS[band]}`
 					: "space-y-3 rounded-lg border border-[var(--line)] p-3"
 			}
 		>
