@@ -306,6 +306,26 @@ describe("MeetingMinutes attendance moved to the panel", () => {
 		).toBeNull();
 	});
 
+	it("shows no Excused badge when nobody is excused (#1255)", () => {
+		const { queryByText } = render(
+			<MeetingMinutes
+				meetingId="m1"
+				minutes={{
+					...emptyMinutes,
+					counts: { ...emptyMinutes.counts, present: 2, absent: 1 },
+				}}
+				program={[]}
+				meetingPast={true}
+				meetingDayReached={true}
+				canEdit={false}
+				clubGuests={[]}
+				onMutated={() => {}}
+			/>,
+		);
+		expect(queryByText("2 present")).toBeTruthy();
+		expect(queryByText(/excused/i)).toBeNull();
+	});
+
 	it("points at the panel on the meeting day instead of recording anything", () => {
 		// The positive control for the negatives below: without it, a component
 		// that rendered nothing at all would pass them for the wrong reason.

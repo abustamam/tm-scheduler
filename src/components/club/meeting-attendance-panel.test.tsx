@@ -997,7 +997,7 @@ describe("roll mode", () => {
 		await userEvent.click(getByRole("button", { name: /Bea Osei status/i }));
 		await findByRole("menuitem", { name: "Present" });
 		getByRole("menuitem", { name: "Absent" });
-		getByRole("menuitem", { name: "Excused" });
+		expect(() => getByRole("menuitem", { name: "Excused" })).toThrow();
 		expect(() => getByRole("menuitem", { name: "Coming" })).toThrow();
 	});
 

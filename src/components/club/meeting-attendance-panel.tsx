@@ -90,7 +90,6 @@ const ROLL_LABELS: Record<AttendanceStatus, string> = {
 const ROLL_MENU: { label: string; status: AttendanceStatus }[] = [
 	{ label: "Present", status: "present" },
 	{ label: "Absent", status: "absent" },
-	{ label: "Excused", status: "excused" },
 ];
 
 /** Tailwind's `lg` breakpoint (`min-width: 1024px`) — kept as one literal so the
@@ -685,7 +684,7 @@ function RollChip({
 		// the plan — nobody answered. Same split plan mode's assumed Coming makes:
 		// the words ride the announcement, and the visible label is muted rather
 		// than lengthened, because the commit button's 140px is already measured
-		// against "Excused?".
+		// against the longest suggestion label.
 		const source = row.suggestionAssumed
 			? "their confirmed role suggests"
 			: "the plan suggests";
@@ -695,7 +694,7 @@ function RollChip({
 			// measured — see `AttendanceRow`'s trigger), so the two row shapes share
 			// the rail's one right edge and its one left edge. Split 32px for the
 			// chevron trigger, 4px of `gap-1`, and `flex-1` (140px) for the commit,
-			// whose widest label needs ~104px ("Excused?" plus the sm button's 26px of
+			// whose widest label needs ~104px ("Present?" plus the sm button's 26px of
 			// chrome). Sizing the pair inside the existing track rather than widening
 			// it is what keeps the icon cluster to its left from moving.
 			<div className="flex w-44 items-center gap-1">
