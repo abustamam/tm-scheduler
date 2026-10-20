@@ -199,10 +199,14 @@ describe("leak shapes: every invented value is gone", () => {
 			),
 		);
 		expectNone(out, ["31415", "27182", "16180"]);
-		// zero padding keeps its width, and one real club is one fake club
-		expect(out).toMatch(/ClubReport\.aspx\?id=0{3}\d{5}/);
+		// a zero-padded id keeps its width but NOT its zero prefix (round 3: the prefix is not copied), and is its own id:
+		// 27182 and 00027182 are two exact keys, so two different fakes
+		expect(out).toMatch(/ClubReport\.aspx\?id=\d{8}/);
+		expect(out).not.toMatch(/ClubReport\.aspx\?id=000/);
 		const own = [...out.matchAll(/c=(\d+)/g)].map((m) => m[1]);
-		expect(own[0].replace(/^0+/, "")).toBe(own[1].replace(/^0+/, ""));
+		expect(own[0]).toMatch(/^\d{5}$/);
+		expect(own[1]).toMatch(/^\d{8}$/);
+		expect(own[1]).not.toMatch(/^000/);
 	});
 
 	it("a real club's name and places never survive, whatever its words", () => {
@@ -515,24 +519,25 @@ describe("round 2 (#1275, decision B): no digit survives", () => {
 	it("the digit map is one to one within a run and never maps a run to itself, whatever its length", () => {
 		const reals = Array.from({ length: 60 }, (_, i) => String(1000 + i * 37));
 		const body = reals.map((r) => `<td>${r}</td>`).join("") + `<td>007</td><td>7</td><td>0</td><td>00</td>`;
+		// (a 1-3 digit run is fresh per occurrence now: it keeps its width and is never itself, the map is for 4+ digits)
 		const out = rewriteEasySpeakPage(page(body));
 		const cells = Array.from(parseHtml(out).querySelectorAll("td")).map((t) => t.textContent ?? "");
 		expect(new Set(cells.slice(0, 60)).size, "one to one").toBe(60);
 		cells.forEach((c, i) => expect(c.length, `cell ${i} keeps its length`).toBe(i < 60 ? 4 : [3, 1, 1, 2][i - 60]));
 		expectNoDigitSurvives(body, out);
-		// the same real run is the same fake wherever it appears, however it is zero padded
-		const two = rewriteEasySpeakPage(page(`<td>31415</td><a href="/orgdata.php?c=031415">x</a><div id="r_31415"></div>`));
-		const fakes = [...two.matchAll(/\d{5,6}/g)].map((m) => m[0].replace(/^0+/, ""));
+		// the same real run is the same fake wherever it appears
+		const two = rewriteEasySpeakPage(page(`<td>31415</td><a href="/orgdata.php?c=31415">x</a><div id="r_31415"></div>`));
+		const fakes = [...two.matchAll(/\d{5,6}/g)].map((m) => m[0]);
 		expect(new Set(fakes).size).toBe(1);
 	});
 
-	it("two different real runs never get one fake, even when the fakes of that length run short", () => {
-		const real = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
-		for (const seed of ["a", "b", "c", "d"]) {
-			const out = rewriteEasySpeakPage(page(real.map((r) => `<td>${r}</td>`).join("")), { state: newRewriteState({ seed }) });
-			const cells = Array.from(parseHtml(out).querySelectorAll("td")).map((t) => t.textContent ?? "");
-			expect(new Set(cells).size, `seed ${seed}: one to one`).toBe(real.length);
-			cells.forEach((c, i) => expect(c, `seed ${seed}: ${real[i]} is not kept`).not.toBe(real[i]));
+	it("two different real ids never get one fake, even in a one-digit id context (a derangement)", () => {
+		const real = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+		for (const seed of ["a", "b", "c", "d", "42"]) {
+			const out = rewriteEasySpeakPage(page(real.map((r) => `<a href="/view_meeting.php?t=${r}">m</a>`).join("")), { state: newRewriteState({ seed }) });
+			const ids = Array.from(parseHtml(out).querySelectorAll("a")).map((a) => /t=(\d+)/.exec(a.getAttribute("href") ?? "")?.[1] ?? "");
+			expect(new Set(ids).size, `seed ${seed}: one to one`).toBe(real.length);
+			ids.forEach((c, i) => expect(c, `seed ${seed}: ${real[i]} is not kept`).not.toBe(real[i]));
 		}
 	});
 
@@ -945,3 +950,89 @@ describe("the command", () => {
 
 import { readFileSync } from "node:fs";
 const readFileSync_ = (p: string) => readFileSync(p, "utf8");
+
+describe("round 3 (#1275): digits", () => {
+	const cellsOf = (html: string) => Array.from(parseHtml(html).querySelectorAll("td")).map((t) => t.textContent ?? "");
+
+	it("R3-D1. a 1-3 digit run outside an id context is fresh for every occurrence: no page-wide table, never itself, same width", () => {
+		const out = rewriteEasySpeakPage(page(`<table><tr>${"<td>5</td>".repeat(40)}</tr></table>`), { state: newRewriteState({ seed: "fresh" }) });
+		const cells = cellsOf(out);
+		expect(cells).toHaveLength(40);
+		expect(new Set(cells).size, "one real 5 is many different fakes").toBeGreaterThan(3);
+		for (const c of cells) expect(c).toMatch(/^[0-46-9]$/);
+		const wide = cellsOf(rewriteEasySpeakPage(page(`<table><tr>${"<td>417</td>".repeat(30)}</tr></table>`)));
+		expect(new Set(wide).size).toBeGreaterThan(5);
+		for (const c of wide) expect(c).toMatch(/^\d{3}$/);
+		for (const c of wide) expect(c).not.toBe("417");
+	});
+
+	it("R3-D1b. t=, s= and a club id are consistent inside their own context only: the same id is one fake, another context has its own table", () => {
+		const html = page(
+			`<a href="/view_meeting.php?t=5">a</a><a href="/view_meeting.php?t=5">b</a><a href="/request_speech.php?s=5">c</a><input type="hidden" name="t" value="5"><a href="/view_meeting.php?c=5">d</a><td>5</td>`,
+		);
+		let differs = false;
+		for (const seed of Array.from({ length: 30 }, (_, i) => `ctx${i}`)) {
+			const doc = parseHtml(rewriteEasySpeakPage(html, { state: newRewriteState({ seed }) }));
+			const get = (k: string) => [...doc.querySelectorAll("a")].map((a) => new RegExp(`[?&]${k}=(\\d+)`).exec(a.getAttribute("href") ?? "")?.[1]).filter(Boolean);
+			const t = get("t");
+			expect(t[0], `seed ${seed}: one t id, one fake`).toBe(t[1]);
+			expect(doc.querySelector("input")?.getAttribute("value")).toBe(t[0]);
+			expect(t[0]).not.toBe("5");
+			if (get("s")[0] !== t[0]) differs = true;
+		}
+		expect(differs, "t and s are separate contexts").toBe(true);
+	});
+
+	it("R3-4. public month option values do not decode a phone written one digit per cell (30 seeds)", () => {
+		const months = ["January", "February", "March", "April", "May", "June"].map((m, i) => `<option value="${i}">${m}</option>`).join("");
+		const phone = "4155550132";
+		const html = page(`<select name="month">${months}</select><table><tr>${[...phone].map((d) => `<td>${d}</td>`).join("")}</tr></table>`);
+		for (let i = 0; i < 30; i++) {
+			const doc = parseHtml(rewriteEasySpeakPage(html, { state: newRewriteState({ seed: `r4-${i}` }) }));
+			const inverse = new Map([...doc.querySelectorAll("option")].map((o, k) => [o.getAttribute("value") ?? "", String(k)] as const));
+			const recovered = cellsOf(doc.toString())
+				.map((c) => inverse.get(c) ?? "?")
+				.join("");
+			expect(recovered, `seed ${i}`).not.toBe(phone);
+		}
+	});
+
+	it("R3-D1c. a short id the walker cross-references keeps ONE fake per id and never merges two ids (the seed Codex used, 0-9)", () => {
+		const real = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+		const out = rewriteEasySpeakPage(page(real.map((r) => `<a href="/view_meeting.php?t=${r}">m</a>`).join("")), { state: newRewriteState({ seed: "42" }) });
+		const ids = Array.from(parseHtml(out).querySelectorAll("a")).map((a) => /t=(\d+)/.exec(a.getAttribute("href") ?? "")?.[1] ?? "");
+		expect(new Set(ids).size, "two ids became one fake").toBe(10);
+		ids.forEach((c, i) => expect(c).not.toBe(real[i]));
+		const three = ["100", "101", "102", "999"].map((r) => `<a href="/view_meeting.php?t=${r}">m</a>`).join("");
+		const o3 = Array.from(parseHtml(rewriteEasySpeakPage(page(three))).querySelectorAll("a")).map((a) => /t=(\d+)/.exec(a.getAttribute("href") ?? "")?.[1] ?? "");
+		expect(new Set(o3).size).toBe(4);
+		for (const c of o3) expect(c).toMatch(/^\d{3}$/);
+	});
+
+	it("R3-F5. a page with thousands of distinct 4-digit runs still gets one to one fakes (a deterministic walk, no give-up after 800 tries)", () => {
+		const reals = Array.from({ length: 8950 }, (_, i) => String(1000 + i));
+		const out = cellsOf(rewriteEasySpeakPage(page(`<table><tr>${reals.map((r) => `<td>${r}</td>`).join("")}</tr></table>`), { state: newRewriteState({ seed: "full" }) }));
+		expect(new Set(out).size).toBe(8950);
+		out.forEach((c, i) => expect(c).not.toBe(reals[i]));
+	});
+
+	it("R3-F5b. a space that is truly full fails explicitly instead of merging two ids", () => {
+		const full = newRewriteState({ seed: "fullest" });
+		for (let i = 0; i < 9000; i++) full.taken.add(String(1000 + i));
+		expect(() => rewriteEasySpeakPage(page("<td>5678</td>"), { state: full })).toThrow(/no fake left/);
+	});
+
+	it("R3-10. a zero prefix is not copied: the fake is allocated over the whole width", () => {
+		let wide = 0;
+		let narrow = 0;
+		for (let i = 0; i < 40; i++) {
+			const [a, b] = cellsOf(rewriteEasySpeakPage(page("<table><tr><td>00042</td><td>000</td></tr></table>"), { state: newRewriteState({ seed: `z${i}` }) }));
+			expect(a).toMatch(/^\d{5}$/);
+			expect(b).toMatch(/^\d{3}$/);
+			if (!a.startsWith("00")) wide++;
+			if (!b.startsWith("00")) narrow++;
+		}
+		expect(wide, "00042 keeps its 00 prefix").toBeGreaterThan(30);
+		expect(narrow, "000 keeps its 00 prefix").toBeGreaterThan(20);
+	});
+});

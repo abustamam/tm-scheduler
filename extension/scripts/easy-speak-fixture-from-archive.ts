@@ -404,13 +404,17 @@ export interface RewriteState {
 	words: Map<string, string>;
 	phones: Map<string, string>;
 	people: Map<string, string>;
-	/** Real run (no leading zeros) to its fake: one to one, the same length, never itself. */
+	/** A real run of 4+ digits (a run with a leading zero is keyed exactly) to its fake: one to one, the same width, never itself. */
 	numbers: Map<string, string>;
 	times: Map<string, string>;
 	/** Every run the pages of this run carry (no leading zeros): a fake is never one of them, so a fake never reads as real data. */
 	reserved: Set<string>;
 	/** Every number a fake has been given out as, so a second real run never gets the same fake. */
 	taken: Set<string>;
+	/** One seeded derangement per short-id context and width (`t:3`): see `shortId`. */
+	shortPerms: Map<string, number[]>;
+	/** How many fresh short numbers this run has drawn (each draw is its own seeded stream). */
+	fresh: number;
 	/** Seeds the digit map and the date shift. A fresh random one by default, so a fake cannot be worked back to its real value from the source. */
 	seed: string;
 	/** Every date is moved by this many days: a whole number of weeks, so a weekday still matches its date. */
@@ -449,6 +453,8 @@ export function newRewriteState(opts: RewriteStateOptions = {}): RewriteState {
 		times: new Map(),
 		reserved: new Set(),
 		taken: new Set(),
+		shortPerms: new Map(),
+		fresh: 0,
 		seed,
 		dateShiftDays: shift,
 		nextName: 0,
@@ -532,57 +538,108 @@ function fakePerson(st: RewriteState, id: string): string {
 	return f;
 }
 
-/**
- * One digit run to one fake of the same length (no leading zero, unless it is one digit): the same real
- * run is the same fake, two real runs never share one (while the length has room), a fake is never its own
- * input and, while there is room, never a run any page of this run carries. A real run that happens to
- * equal a fake given earlier is just another real run: it is rewritten like all the others.
- */
-function chooseRun(st: RewriteState, key: string): string {
-	const n = key.length;
-	const r = rng(st, `run:${key}`);
-	const ok = (c: string, strict: boolean) => c !== key && !st.taken.has(c) && !(strict && st.reserved.has(c));
-	if (n <= 3) {
-		const lo = n === 1 ? 0 : 10 ** (n - 1);
-		const size = n === 1 ? 10 : 9 * 10 ** (n - 1);
-		const start = Math.floor(r() * size);
-		for (const strict of [true, false]) {
-			for (let i = 0; i < size; i++) {
-				const c = String(lo + ((start + i) % size));
-				if (ok(c, strict)) return c;
-			}
+/** `0042` -> `0043`: the next run of the same width, wrapping to `lo`. */
+function nextRun(s: string, lo: string): string {
+	const a = s.split("");
+	for (let i = a.length - 1; i >= 0; i--) {
+		if (a[i] !== "9") {
+			a[i] = String(Number(a[i]) + 1);
+			return a.join("");
 		}
-		// every value of this length is taken: reuse one (never the input itself)
-		for (let i = 0; i < size; i++) {
-			const c = String(lo + ((start + i) % size));
-			if (c !== key) return c;
-		}
+		a[i] = "0";
 	}
-	const digits = (k: number) => Array.from({ length: k }, () => String(Math.floor(r() * 10))).join("");
-	for (const strict of [true, false]) {
-		for (let attempt = 0; attempt < 400; attempt++) {
-			const c = String(1 + Math.floor(r() * 9)) + digits(n - 1);
-			if (ok(c, strict)) return c;
-		}
-	}
-	throw new Error(`no fake left for a ${n}-digit run`);
+	return lo;
 }
 
-function fakeRun(st: RewriteState, run: string): string {
-	const key = normRun(run);
+/**
+ * A run of 4 or more digits to one fake of the same width: the same real run is the same fake (every page of a
+ * run), two real runs never share one, a fake is never its own input and, while there is room, never a run any
+ * page of this run carries. A run with a leading zero is allocated over the FULL width (its zero prefix is not
+ * copied) and keyed by its exact text. The start is seeded and the walk from it is deterministic, so a full
+ * space throws instead of looping or merging two ids.
+ */
+function chooseRun(st: RewriteState, key: string, lead: boolean): string {
+	const n = key.length;
+	const r = rng(st, `run:${key}`);
+	const lo = lead ? "0".repeat(n) : `1${"0".repeat(n - 1)}`;
+	const size = lead ? 10 ** n : 9 * 10 ** (n - 1);
+	const digits = (k: number) => Array.from({ length: k }, () => String(Math.floor(r() * 10))).join("");
+	const first = lead ? digits(n) : String(1 + Math.floor(r() * 9)) + digits(n - 1);
+	const ok = (c: string, strict: boolean) => c !== key && !st.taken.has(c) && !(strict && st.reserved.has(normRun(c)));
+	for (const strict of [true, false]) {
+		let c = first;
+		// the strict pass only looks nearby (a page that carries most of the space has no run to avoid)
+		const walk = Math.min(size, strict ? 2000 : 200_000);
+		for (let i = 0; i < walk; i++) {
+			if (ok(c, strict)) return c;
+			c = nextRun(c, lo);
+		}
+	}
+	throw new Error(`no fake left for a ${n}-digit run: the page carries more distinct ${n}-digit numbers than can be told apart`);
+}
+
+/**
+ * A 1-3 digit run in a context the walker cross-references (a `t=` meeting id, an `s=` speech id, a club id): one
+ * seeded DERANGEMENT per context and width, so the same short id is the same fake wherever THAT context carries
+ * it, two ids never share a fake, and no id maps to itself. It is not shared with any other context.
+ */
+function shortId(st: RewriteState, ctx: string, run: string): string {
+	const w = run.length;
+	const key = `${ctx}:${w}`;
+	let perm = st.shortPerms.get(key);
+	if (!perm) {
+		const size = 10 ** w;
+		const r = rng(st, `perm:${key}`);
+		let p: number[] = [];
+		for (let attempt = 0; attempt < 500; attempt++) {
+			p = Array.from({ length: size }, (_, i) => i);
+			for (let i = size - 1; i > 0; i--) {
+				const j = Math.floor(r() * (i + 1));
+				[p[i], p[j]] = [p[j], p[i]];
+			}
+			if (p.every((v, i) => v !== i)) break;
+			if (attempt === 499) throw new Error("no derangement found for a short id context");
+		}
+		perm = p;
+		st.shortPerms.set(key, perm);
+	}
+	return String(perm[Number(run)]).padStart(w, "0");
+}
+
+/** A 1-3 digit run outside an id context: a fresh value of the same width for EVERY occurrence, never itself. No page-wide map, so no table to decode a split phone from. */
+function freshShort(st: RewriteState, run: string): string {
+	const w = run.length;
+	// first a value no page of this run carries (so a fake never reads as real data), then any other one
+	for (const strict of [true, false]) {
+		for (let attempt = 0; attempt < 60; attempt++) {
+			const r = rng(st, `fresh:${st.fresh++}:${w}`);
+			const c = Array.from({ length: w }, () => String(Math.floor(r() * 10))).join("");
+			if (c !== run && !(strict && st.reserved.has(normRun(c)))) return c;
+		}
+	}
+	return String((Number(run) + 1) % 10 ** w).padStart(w, "0");
+}
+
+/**
+ * Any digit run. 1-3 digits: a consistent fake only inside an id context (`ctx`), a fresh one per occurrence
+ * everywhere else. 4 or more digits: the deterministic one to one map (`chooseRun`).
+ */
+function fakeRun(st: RewriteState, run: string, ctx?: string): string {
+	if (run.length <= 3) return ctx ? shortId(st, ctx, run) : freshShort(st, run);
+	const lead = /^0/.test(run);
+	const key = lead ? run : normRun(run);
 	let f = st.numbers.get(key);
 	if (!f) {
-		f = chooseRun(st, key);
+		f = chooseRun(st, key, lead);
 		st.numbers.set(key, f);
 		st.taken.add(f);
 	}
-	// a zero-padded input (00031415) keeps its width; an unpadded one never gains zeros
-	return /^0/.test(run) && run.length > f.length ? f.padStart(run.length, "0") : f;
+	return f;
 }
 
-/** A club id, a meeting id, a count or any other number: the same number, however it is zero-padded, gets one fake. */
-function fakeNumber(st: RewriteState, id: string): string {
-	return /^\d+$/.test(id) ? fakeRun(st, id) : "x";
+/** A club id, a meeting id, a count or any other number. `ctx` names an id context the walker cross-references (`t`, `s`, `club`). */
+function fakeNumber(st: RewriteState, id: string, ctx?: string): string {
+	return /^\d+$/.test(id) ? fakeRun(st, id, ctx) : "x";
 }
 
 /** Every digit run in `s` replaced, the words and separators between them kept. */
@@ -791,19 +848,22 @@ function decodeLoose(s: string): string {
 	}
 }
 
+/** The parameters whose short (1-3 digit) values the walker cross-references between pages: a meeting id and a speech id. A club id is the context `club`. */
+const ID_CONTEXTS = new Set(["t", "s"]);
+
 /** A number parameter (a page, a meeting, a speech, a year): every digit run is mapped, whatever its length. */
-function rewriteNumber(st: RewriteState, value: string): string {
+function rewriteNumber(st: RewriteState, value: string, ctx?: string): string {
 	if (!/^-?\d+$/.test(value)) return "x";
-	return `${value.startsWith("-") ? "-" : ""}${fakeNumber(st, value.replace(/^-/, ""))}`;
+	return `${value.startsWith("-") ? "-" : ""}${fakeNumber(st, value.replace(/^-/, ""), ctx)}`;
 }
 
 function rewriteParam(st: RewriteState, key: string, value: string, path: string): string {
 	const k = key.toLowerCase();
 	if (PERSON_PARAMS.has(k) || (k === "id" && !/ClubReport/i.test(path))) return fakePerson(st, value);
-	if (CLUB_PARAMS.has(k) || k === "id") return fakeNumber(st, value);
+	if (CLUB_PARAMS.has(k) || k === "id") return fakeNumber(st, value, "club");
 	if (k === "p" || k === "m") return /^\(-?[\d.]+,-?[\d.]+\)(?:,\d{1,2})?$/.test(value) ? mapRunsIn(st, value) : "x";
 	if (k === "n") return encodeURIComponent(scrubText(st, decodeLoose(value)));
-	if (NUMBER_PARAMS.has(k)) return rewriteNumber(st, value);
+	if (NUMBER_PARAMS.has(k)) return rewriteNumber(st, value, ID_CONTEXTS.has(k) ? k : undefined);
 	// only a name in KNOWN_PARAMS reaches here, and `__proto__` / `constructor` are not in it
 	return A.paramValues[k]?.includes(value) ? value : "x";
 }
@@ -934,7 +994,8 @@ function rewriteIdent(st: RewriteState, v: string): string {
 function rewriteFormValue(st: RewriteState, field: string, value: string): string {
 	if (/^\d+$/.test(value)) {
 		if (FORM_PERSON.test(field) && !/club/i.test(field)) return fakePerson(st, value);
-		return fakeNumber(st, value);
+		const f = field.trim().toLowerCase();
+		return fakeNumber(st, value, /club/i.test(f) ? "club" : ID_CONTEXTS.has(f) ? f : undefined);
 	}
 	return scrubText(st, value);
 }
