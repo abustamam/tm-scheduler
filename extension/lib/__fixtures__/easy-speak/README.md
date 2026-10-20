@@ -52,8 +52,13 @@ lib/easy-speak-walk.test.ts` only if the fixture changes `bundle.expected.json` 
 **deny by default**: the page is parsed, and EVERY text node and attribute value is replaced with a
 fake unless it is on the allow-list (`ALLOW_LIST` in the script: menu labels, column headers, role
 names, button text, date shapes, the URL shapes the walker reads, with every person id, club id and
-username inside a URL replaced). Tags, tag names, attribute names and the document structure are never
-rewritten. The same real value becomes the same fake within one run, so a person's id in a link and in a
+username inside a URL replaced; host, page name, query parameter and fragment are each checked against a
+literal list). **Names are data too**: a tag that is not a standard HTML tag becomes a `span`, an
+attribute name that is not on the allow-list becomes `data-xN`, and comments, the doctype and
+`srcdoc` are scrubbed like any text. The allow-list is literal: nothing is kept for resembling a fake
+(a name that looks like one of `fake-names.json` is replaced like any other), and a one- or two-digit
+number stays only as a whole text node, beside a count label or in a level (`#2-1 - `). The document
+structure is kept. The same real value becomes the same fake within one run, so a person's id in a link and in a
 table still line up. Then `fixtureViolations` runs over the output as a second net: if it reports
 anything, **nothing is written**, the violations are printed and the exit code is non-zero.
 
