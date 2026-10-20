@@ -659,6 +659,33 @@ describe.skipIf(!hasTestDb)(
 			).rejects.toThrow(logic.PLAN_CHANGED_MESSAGE);
 		});
 
+		// protects=the plan hash binds each pasted ROW's identity: two members swap names
+		// between the preview and the apply (both answered by id, so their outcomes do not
+		// move and each fill still has the same fields), the rows would swap recipients
+		// under the same hash, and the apply is refused as stale;
+		// fails_when=the fingerprint lists [personKey, hasEmail, hasPhone] without the row;
+		// no_claim=the values, never hashed here or logged.
+		it("refuses an apply whose two contact rows swapped recipients", async () => {
+			extraResolutions = {
+				[`es:${P(7)}`]: { action: "member", memberId: adaMemberId },
+			};
+			const stored = await upload();
+			const contacts = "Ada Linked,, 555-0151\nSam Same,, 555-0152";
+			const shown = await preview(stored.importId, contacts);
+			expect(shown.contacts.phones).toBe(2);
+			await testDb
+				.update(members)
+				.set({ name: "Sam Same" })
+				.where(eq(members.id, adaMemberId));
+			await testDb
+				.update(members)
+				.set({ name: "Ada Linked" })
+				.where(eq(members.id, samMemberId as string));
+			await expect(
+				apply(stored.importId, contacts, shown.planHash),
+			).rejects.toThrow(logic.PLAN_CHANGED_MESSAGE);
+		});
+
 		// protects=an email released between the preview and the apply changes what a
 		// row sets (it was dropped as held, now it is set): refused as stale;
 		// fails_when=the fingerprint leaves out which fields each fill sets;
@@ -1226,6 +1253,66 @@ describe.skipIf(!hasTestDb)(
 			expect(again?.candidates.map((c) => c.memberId).sort()).toEqual(
 				twins.map((t) => t.id).sort(),
 			);
+		});
+
+		// protects=an es: person resolved by ref to a member renamed since, plus an
+		// unrelated member who holds the old name: the reference is asked between BOTH,
+		// and nothing is written for it (no ref, no answer, no member) until a human
+		// answers;
+		// fails_when=a single es: member links the reference without N's own name match,
+		// or the post-pass writes anything for it;
+		// no_claim=the answer's own apply, the tests above.
+		it("asks between a renamed ref'd member and an unrelated member on the old name", async () => {
+			const seedMember = async (name: string) => {
+				const [person] = await testDb
+					.insert(people)
+					.values({ name })
+					.returning({ id: people.id });
+				extraPeople.push(person?.id as string);
+				const [member] = await testDb
+					.insert(members)
+					.values({
+						clubId: seed.clubId,
+						personId: person?.id as string,
+						name,
+						clubRole: "member",
+						status: "active",
+					})
+					.returning({ id: members.id });
+				return member?.id as string;
+			};
+			const renamed = await seedMember("Dupe Alpha Renamed");
+			const unrelated = await seedMember("Dupe Alpha");
+			await testDb.insert(importRefs).values({
+				clubId: seed.clubId,
+				source: "easy_speak",
+				kind: "person",
+				sourceId: `es:${P(9)}`,
+				targetId: renamed,
+			});
+			const key = personKeyOf({ esUserId: null, name: "dupe alpha" });
+			const stored = await upload((b) => {
+				b.people.push({
+					esUserId: P(9),
+					name: "Dupe Alpha",
+					status: "Member",
+					joined: null,
+				});
+				b.meetings[0]?.roles.push({
+					role: "Timekeeper Two",
+					slot: 9,
+					holder: { esUserId: null, name: "dupe alpha" },
+				});
+			});
+			const shown = await preview(stored.importId);
+			const asked = shown.people.find((p) => p.key === key);
+			expect(asked).toMatchObject({ status: "ambiguous", needsDecision: true });
+			expect(asked?.candidates.map((c) => c.memberId).sort()).toEqual(
+				[renamed, unrelated].sort(),
+			);
+			expect(shown.canApply).toBe(false);
+			expect(shown.savedResolutions[key]).toBeUndefined();
+			expect(await refForKey(key)).toEqual([]);
 		});
 
 		// protects=a single es: create with a saved answer on the es: key or on the

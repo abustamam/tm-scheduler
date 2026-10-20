@@ -183,6 +183,7 @@ describe("buildImportPlan on the B fixture", () => {
 		["unknown", "unknown", null],
 		["not_attending", "not_attending", null],
 		["no plan and no record", null, null],
+		["a tentative reply (never imported as attendance)", "tentative", null],
 	] as const)("does not create a former member from an unsignalled attendance row (%s)", (_label, planAnswer, record) => {
 		const plan = withAttendanceOnly(planAnswer, record);
 		expect(outcomeOf(plan, "900777")).toEqual({ status: "unmatched" });
@@ -192,7 +193,7 @@ describe("buildImportPlan on the B fixture", () => {
 		);
 	});
 
-	// protects=an attendance row with a record, or an attending / tentative reply, is
+	// protects=an attendance row with a record, or an attending reply, is
 	// a real meeting signal: the unlisted person is still a former member;
 	// fails_when=the signal test drops a kind of row;
 	// no_claim=the unsignalled rows, above.
@@ -200,7 +201,6 @@ describe("buildImportPlan on the B fixture", () => {
 		["a record", null, "attended"],
 		["an online record", null, "attended_online"],
 		["an attending reply", "attending", null],
-		["a tentative reply", "tentative", null],
 	] as const)("still creates a former member from %s", (_label, planAnswer, record) => {
 		const plan = withAttendanceOnly(planAnswer, record);
 		expect(outcomeOf(plan, "900777")).toMatchObject({
@@ -1374,7 +1374,7 @@ describe("a name-only reference beside es: people of the same name (#1240)", () 
 	// keeps its own outcome;
 	// fails_when=two keys are counted as two humans;
 	// no_claim=what its own outcome is.
-	it("leaves the reference alone when both es: keys are one member", () => {
+	it("links the reference to the one member both es: keys are", () => {
 		const plan = run(
 			nsBundle(["Jon Smith", "Jon Smith"], "jon smith"),
 			{
@@ -1385,7 +1385,11 @@ describe("a name-only reference beside es: people of the same name (#1240)", () 
 			},
 			[RN(0, "Jonathan Smith")],
 		);
-		expect(person(plan, N_KEY("jon smith"))?.outcome.status).toBe("create");
+		expect(person(plan, N_KEY("jon smith"))?.outcome).toEqual({
+			status: "member",
+			memberId: id(50),
+			via: "folded",
+		});
 		expect(plan.notes).toEqual([]);
 	});
 
@@ -1395,28 +1399,33 @@ describe("a name-only reference beside es: people of the same name (#1240)", () 
 	// fails_when=the reference is linked or asked about on partial information;
 	// no_claim=the later import.
 	it.each([
-		["a create", {}, "jon smith"],
+		["a create", {}, DEFERRED_NAMESAKES_REASON],
 		[
 			"skipped",
 			{ resolutions: { [ES(1)]: { action: "skip" as const, reason: "No." } } },
-			"jon smith",
+			DEFERRED_UNAVAILABLE_REASON,
 		],
-	])("defers a create beside one namesake on the roster and one who is %s", (_label, extra, holder) => {
+	])("defers a create beside one namesake on the roster and one who is %s", (_label, extra, reason) => {
 		const plan = run(
-			nsBundle(["Jon Smith", "Jon Smith"], holder),
+			nsBundle(["Jon Smith", "Jon Smith"], "jon smith"),
 			{
 				refs: [{ kind: "person", sourceId: ES(0), targetId: id(50) }],
 				...extra,
 			},
 			[RN(0, "Jonathan Smith")],
 		);
-		expect(person(plan, N_KEY(holder))?.outcome).toEqual({
+		expect(person(plan, N_KEY("jon smith"))?.outcome).toEqual({
 			status: "skipped",
-			reason: DEFERRED_NAMESAKES_REASON,
+			reason,
 		});
 	});
 
-	it("defers a reference that matched a roster member by name beside a namesake who is skipped", () => {
+	// protects=a reference that matched a roster member by name keeps that member
+	// when a namesake is not a roster member (skipped here): deferring a correct match
+	// dropped its history for good;
+	// fails_when=rule B defers a name-matched reference;
+	// no_claim=the namesake's own outcome.
+	it("keeps a reference that matched a roster member by name beside a namesake who is skipped", () => {
 		const plan = run(
 			nsBundle(["Jon Smith", "Jon Smith"], "jon smith"),
 			{
@@ -1426,9 +1435,11 @@ describe("a name-only reference beside es: people of the same name (#1240)", () 
 			[RN(0, "Jonathan Smith"), RN(2, "Jon Smith")],
 		);
 		expect(person(plan, N_KEY("jon smith"))?.outcome).toEqual({
-			status: "skipped",
-			reason: DEFERRED_NAMESAKES_REASON,
+			status: "member",
+			memberId: id(52),
+			via: "folded",
 		});
+		expect(plan.notes).toEqual([]);
 	});
 
 	// protects=a reference that resolved through its own ref, or whose own saved answer
@@ -1458,6 +1469,251 @@ describe("a name-only reference beside es: people of the same name (#1240)", () 
 			status: "skipped",
 			reason: "No.",
 		});
+	});
+
+	// -- Rule A: every es: key is a roster member --------------------------------
+	const candIds = (plan: ReturnType<typeof buildImportPlan>, key: string) => {
+		const o = person(plan, key)?.outcome;
+		return o?.status === "ambiguous"
+			? o.candidates.map((c) => c.memberId).sort()
+			: null;
+	};
+	const REF_A = {
+		kind: "person" as const,
+		sourceId: ES(0),
+		targetId: id(50),
+	};
+	const REF_B = {
+		kind: "person" as const,
+		sourceId: ES(1),
+		targetId: id(51),
+	};
+
+	// protects=an es: person renamed on the roster while another member holds the old
+	// name: the reference is asked between both, never silently the one by name;
+	// fails_when=a single es: member links the reference without looking at N's own match;
+	// no_claim=the integration suite's next preview.
+	it("asks between a renamed es: member and an unrelated member holding the old name", () => {
+		const plan = run(nsBundle(["Jon Smith"], "jon smith"), { refs: [REF_A] }, [
+			RN(0, "Jonathan Smith"),
+			RN(1, "Jon Smith"),
+		]);
+		expect(candIds(plan, N_KEY("jon smith"))).toEqual([id(50), id(51)]);
+		expect(plan.notes).toEqual([]);
+	});
+
+	// protects=N exactly matching C while the es: keys point at A and B: C stays a
+	// candidate;
+	// fails_when=the |E| >= 2 branch discards N's own exact match;
+	// no_claim=a human's answer.
+	it("asks among A, B and the member N matched exactly", () => {
+		const plan = run(
+			nsBundle(["Jon Smith", "Jon Smith"], "jon smith"),
+			{ refs: [REF_A, REF_B] },
+			[RN(0, "Jonathan Smith"), RN(1, "Jonny Smith"), RN(2, "Jon Smith")],
+		);
+		expect(candIds(plan, N_KEY("jon smith"))).toEqual([id(50), id(51), id(52)]);
+	});
+
+	// protects=N ambiguous between C and D keeps both beside the es: members;
+	// fails_when=N's own candidates are dropped;
+	// no_claim=a human's answer.
+	it("asks among A, B and both candidates N was already ambiguous between", () => {
+		const plan = run(
+			nsBundle(["Jon Smith", "Jon Smith"], "jon smith"),
+			{ refs: [REF_A, REF_B] },
+			[
+				RN(0, "Jonathan Smith"),
+				RN(1, "Jonny Smith"),
+				RN(2, "Jon Smith"),
+				RN(3, "Jon Smith"),
+			],
+		);
+		expect(candIds(plan, N_KEY("jon smith"))).toEqual([
+			id(50),
+			id(51),
+			id(52),
+			id(53),
+		]);
+	});
+
+	// protects=N's own candidates join U even when ONE es: member is the whole of E;
+	// fails_when=the single-member link ignores N's candidates;
+	// no_claim=the two-es: case.
+	it("asks between one es: member and the two members N was ambiguous between", () => {
+		const plan = run(nsBundle(["Jon Smith"], "jon smith"), { refs: [REF_A] }, [
+			RN(0, "Jonathan Smith"),
+			RN(2, "Jon Smith"),
+			RN(3, "Jon Smith"),
+		]);
+		expect(candIds(plan, N_KEY("jon smith"))).toEqual([id(50), id(52), id(53)]);
+	});
+
+	// protects=a reference whose spellings collided (José / Jose under one key) is not
+	// silently linked to the one es: member: it is asked;
+	// fails_when=the collision is ignored by the link;
+	// no_claim=what the roster holds under the spelling.
+	it("asks, not links, a collided-spelling reference beside one es: member", () => {
+		const bundle = nsBundle(["Jose Doe"], "José Doe");
+		bundle.meetings
+			.find((m) => m.esMeetingId === "644304")
+			?.roles.push({
+				role: "Grammarian",
+				slot: 9,
+				holder: { esUserId: null, name: "Jose Doe" },
+			});
+		const plan = run(bundle, { refs: [REF_A] }, [RN(0, "Joseph Doe")]);
+		expect(candIds(plan, N_KEY("jose doe"))).toEqual([id(50)]);
+	});
+
+	// protects=a reference that already matched the one member every es: key is keeps
+	// its own outcome (via exact), not rewritten to a fold link;
+	// fails_when=the single-member branch rewrites a name match;
+	// no_claim=none.
+	it("leaves a reference alone when it matched the one member the es: key is", () => {
+		const plan = run(nsBundle(["Jon Smith"], "Jon Smith"), { refs: [REF_A] }, [
+			RN(0, "Jon Smith"),
+		]);
+		expect(person(plan, N_KEY("Jon Smith"))?.outcome).toEqual({
+			status: "member",
+			memberId: id(50),
+			via: "exact",
+		});
+		expect(plan.notes).toEqual([]);
+	});
+
+	// protects=a saved member choice on the ambiguous reference stays chosen: the
+	// post-pass does not ask again;
+	// fails_when=the group overrides via: chosen;
+	// no_claim=none.
+	it("leaves a reference alone when its own member choice took effect", () => {
+		const plan = run(
+			nsBundle(["Jon Smith", "Jon Smith"], "jon smith"),
+			{
+				refs: [REF_A, REF_B],
+				resolutions: {
+					[N_KEY("jon smith")]: { action: "member", memberId: id(52) },
+				},
+			},
+			[
+				RN(0, "Jonathan Smith"),
+				RN(1, "Jonny Smith"),
+				RN(2, "Jon Smith"),
+				RN(3, "Jon Smith"),
+			],
+		);
+		expect(person(plan, N_KEY("jon smith"))?.outcome).toEqual({
+			status: "member",
+			memberId: id(52),
+			via: "chosen",
+		});
+		expect(plan.notes).toEqual([]);
+	});
+
+	// -- Rule B: some es: key is not a roster member ------------------------------
+	// protects=a reference that matches a roster member by name is left alone when the
+	// namesake is a tombstone or a guest (not only skipped): its history is not dropped;
+	// fails_when=rule B defers a name-matched reference;
+	// no_claim=the namesake's own outcome.
+	it.each([
+		[
+			"a tombstone",
+			{
+				refs: [
+					{ kind: "guest" as const, sourceId: ES(0), targetId: "gone-guest" },
+				],
+			},
+		],
+		[
+			"a guest",
+			{
+				resolutions: {
+					[ES(0)]: { action: "guest" as const, kind: "visitor" as const },
+				},
+			},
+		],
+	])("keeps a name-matched reference beside a namesake who is %s", (_label, over) => {
+		const plan = run(nsBundle(["Jon Smith"], "jon smith"), over, [
+			RN(2, "Jon Smith"),
+		]);
+		expect(person(plan, N_KEY("jon smith"))?.outcome).toEqual({
+			status: "member",
+			memberId: id(52),
+			via: "folded",
+		});
+		expect(plan.notes).toEqual([]);
+	});
+
+	// protects=an ambiguous reference beside a non-member namesake is left to its own
+	// question;
+	// fails_when=rule B touches an ambiguous N;
+	// no_claim=none.
+	it("leaves an ambiguous reference alone beside a namesake who is skipped", () => {
+		const plan = run(
+			nsBundle(["Jon Smith"], "jon smith"),
+			{ resolutions: { [ES(0)]: { action: "skip", reason: "No." } } },
+			[RN(2, "Jon Smith"), RN(3, "Jon Smith")],
+		);
+		expect(candIds(plan, N_KEY("jon smith"))).toEqual([id(52), id(53)]);
+		expect(plan.notes).toEqual([]);
+	});
+
+	// protects=an es: person named only by a list (never made a Person) leaves the
+	// creatable reference a create: nothing is deferred, no note;
+	// fails_when=an unmatched es: person defers the reference;
+	// no_claim=the apply.
+	it("leaves a creatable reference a create beside one unmatched es: person", () => {
+		const bundle = nsBundle([], "jon smith");
+		bundle.mentors.push({
+			mentee: { esUserId: ES(0).slice(3), name: "Jon Smith" },
+			mentor: null,
+			wantsMentee: false,
+		});
+		const plan = run(bundle);
+		expect(person(plan, ES(0))?.outcome).toEqual({ status: "unmatched" });
+		expect(person(plan, N_KEY("jon smith"))?.outcome.status).toBe("create");
+		expect(plan.notes).toEqual([]);
+	});
+
+	// protects=one es: create with no answer on it or the reference folds;
+	// fails_when=the fold is removed;
+	// no_claim=the apply's use of mergedKeys.
+	it("folds a creatable reference into the one es: create", () => {
+		const plan = run(nsBundle(["Jon Smith"], "jon smith"));
+		expect(person(plan, ES(0))?.outcome).toMatchObject({
+			status: "create",
+			mergedKeys: [N_KEY("jon smith")],
+		});
+		expect(person(plan, N_KEY("jon smith"))).toBeUndefined();
+		expect(plan.notes).toEqual([]);
+	});
+
+	// protects=an es: create plus a removed es: person is not two humans to promise a
+	// later match for: the note says only that the records are left out;
+	// fails_when=the namesakes note (which promises a later import) is used;
+	// no_claim=the wording beyond the promise.
+	it("defers with the unavailable note beside an es: create and a removed es: person", () => {
+		const plan = run(nsBundle(["Jon Smith", "Jon Smith"], "jon smith"), {
+			refs: [{ kind: "guest", sourceId: ES(1), targetId: "gone-guest" }],
+		});
+		expect(person(plan, N_KEY("jon smith"))?.outcome).toEqual({
+			status: "skipped",
+			reason: DEFERRED_UNAVAILABLE_REASON,
+		});
+		expect(plan.notes).toHaveLength(1);
+		expect(plan.notes[0]).not.toMatch(/later import/u);
+	});
+
+	// protects=the unavailable note promises nothing, the others that promise do so
+	// only where an es: person becomes a member this apply;
+	// fails_when=the unavailable note says a later import will match or ask;
+	// no_claim=none.
+	it("keeps the unavailable note free of any promise", () => {
+		const plan = run(nsBundle(["Jon Smith"], "jon smith"), {
+			resolutions: { [ES(0)]: { action: "skip", reason: "No." } },
+		});
+		expect(plan.notes[0]).toMatch(/left out of this import/u);
+		expect(plan.notes[0]).not.toMatch(/later import|will match|will ask/u);
 	});
 });
 

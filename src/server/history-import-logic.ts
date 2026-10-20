@@ -678,11 +678,12 @@ export function planFingerprint(plan: ImportPlan, contacts = ""): string {
 		]),
 		counts: plan.counts,
 		contacts,
-		// Who each pasted row lands on and which fields it sets, never the values: a
+		// Which pasted row lands on whom and which fields it sets, never the values: a
 		// rename or a released email moves a row to another person under the same
-		// text. (The member a key resolves to is already in `people` above.)
+		// text, and two renames can swap two rows' recipients while each key still
+		// sets the same fields, so the row number is part of each entry. (The member a key resolves to is already in `people` above.)
 		contactFills: plan.contactFills
-			.map((f) => [f.personKey, f.email !== null, f.phone !== null])
+			.map((f) => [f.row, f.personKey, f.email !== null, f.phone !== null])
 			.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
 	});
 	return createHash("sha256").update(canonical).digest("hex");

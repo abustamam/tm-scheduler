@@ -287,8 +287,10 @@ export const ERASED_ACCOUNT_REASON = "Erased Easy-Speak account";
 /**
  * Why a name-only reference is left out of this import (a fold collision), each
  * with the note the preview shows: one place, so a reason and its note stay in
- * step. A note names the person and never promises a question that will not
- * come: a later import matches or asks once the namesakes are on the roster.
+ * step. A note says what happened this time. Only a kind whose es: people become
+ * members on this apply (`namesakes`, `answered`, `rejected`) may say a later import
+ * matches or asks; `unavailable` (an es: person skipped, a guest or removed) promises
+ * nothing.
  */
 export const DEFERRED_NAMESAKES_REASON =
 	"Deferred: the name matches more than one person on Easy-Speak's member list";
@@ -317,7 +319,7 @@ const DEFERRALS = {
 	unavailable: {
 		reason: DEFERRED_UNAVAILABLE_REASON,
 		note: (name: string) =>
-			`${name}: the name matches a person on Easy-Speak's member list who is skipped, a guest or removed here, so their meeting records are left out of this import; a later import will match them against the roster.`,
+			`${name}: the name matches a person on Easy-Speak's member list who is skipped, a guest, removed or not a member here, so their meeting records are left out of this import.`,
 	},
 } as const;
 
@@ -512,8 +514,8 @@ interface Seen {
 	spellings: Set<string>;
 	/**
 	 * A real meeting signal: a role, an award, Table Topics, an introducer link, a
-	 * guest category, or an attendance row with a record or an attending /
-	 * tentative reply. A guest-section row with no reply and no record is only a
+	 * guest category, or an attendance row with a record or an attending
+	 * reply (a tentative reply is never imported, so it names nobody). A guest-section row with no reply and no record is only a
 	 * line on the attendance list ("Unknown"): it names nobody.
 	 */
 	signalled: boolean;
@@ -670,9 +672,7 @@ export function buildImportPlan(
 				row.who,
 				"attendance",
 				undefined,
-				row.record !== null ||
-					row.plan === "attending" ||
-					row.plan === "tentative",
+				row.record !== null || row.plan === "attending",
 			);
 		}
 		for (const g of meeting.guests) touch(g.who, "attendance", g.category);
@@ -863,18 +863,19 @@ export function buildImportPlan(
 		});
 	}
 	// A name-only reference (`name:<fold>`, a meeting's mention) beside `es:` people
-	// of the same folded name: one human or several, never two Persons for one
-	// human. E is every `es:` key of the name, whatever its outcome; N is the
-	// reference, and only a create (or, with namesakes, a name match) is touched:
-	// one that resolved by its own ref, or whose own answer took effect, is left.
-	// - |E| = 0: nothing to join.
-	// - |E| = 1: a create with no saved answer on it or on N is FOLDED (the
-	//   reference joins it: one Person, aliases stored); an es: person already a
-	//   roster member is LINKED to; anything else is DEFERRED.
-	// - |E| >= 2 are namesakes: when every one is a roster member (two or more
-	//   distinct) N is `ambiguous` between exactly those members, so the next
-	//   import's question holds even after a rename or for spelling variants; when
-	//   they collapse to one member N keeps its outcome; otherwise DEFERRED.
+	// of the same folded name. E is every `es:` key of the name, whatever its
+	// outcome; N is the reference. N is LEFT ALONE when it resolved by its own ref or
+	// its own saved answer took effect, and when it is not a create, a name match
+	// or an ambiguity. Otherwise, one rule:
+	// A. Every E key is a roster member. U is the distinct members of E plus N's own
+	//    name candidates (its match, or its candidates). One member and no spelling
+	//    collision: N links to it. More, or a collision: N is `ambiguous` between U,
+	//    so the next import's question holds after a rename and no candidate is lost.
+	// B. Some E key is not a roster member. N that matched the roster by name, or is
+	//    ambiguous, is left alone (a correct match is never deferred). A creatable N:
+	//    one E that is an unmatched list-only person leaves it a create (that person
+	//    makes no Person); one E create with no saved answer on E or N is FOLDED (the
+	//    reference joins it: one Person, aliases stored); anything else is DEFERRED.
 	// DEFERRED is a non-blocking `skipped` outcome that imports nothing and writes no
 	// ref and no answer; the `es:` creates stay ordinary separate creates.
 	const answered = (p: PlanPerson) => ctx.resolutions?.[p.key] !== undefined;
@@ -893,22 +894,43 @@ export function buildImportPlan(
 		const esPeople = group.filter((p) => p.esUserId !== null);
 		const n = group.find((p) => p.esUserId === null);
 		if (!n || esPeople.length === 0) continue;
-		const nIsCreate = n.outcome.status === "create";
+		const nOutcome = n.outcome;
+		const nIsCreate = nOutcome.status === "create";
 		const nMatchedByName =
-			n.outcome.status === "member" &&
-			(n.outcome.via === "exact" || n.outcome.via === "folded");
+			nOutcome.status === "member" &&
+			(nOutcome.via === "exact" || nOutcome.via === "folded");
+		const nAmbiguous = nOutcome.status === "ambiguous";
+		if (!nIsCreate && !nMatchedByName && !nAmbiguous) continue;
+		if (esPeople.every((e) => e.outcome.status === "member")) {
+			const ids = new Set<string>();
+			for (const e of esPeople) {
+				if (e.outcome.status === "member") ids.add(e.outcome.memberId);
+			}
+			if (nOutcome.status === "member") ids.add(nOutcome.memberId);
+			if (nOutcome.status === "ambiguous") {
+				for (const c of nOutcome.candidates) ids.add(c.memberId);
+			}
+			const collided = (seen.get(n.key)?.spellings.size ?? 0) > 1;
+			if (ids.size === 1 && !collided) {
+				if (nOutcome.status === "member") continue;
+				const [memberId] = ids;
+				if (memberId === undefined) continue;
+				n.outcome = { status: "member", memberId, via: "folded" };
+			} else {
+				// Every id is on the roster: a member outcome is only ever built from it.
+				const candidates = [...ids].flatMap((mid) => {
+					const m = rosterById.get(mid);
+					return m ? [m] : [];
+				});
+				n.outcome = { status: "ambiguous", candidates };
+			}
+			continue;
+		}
+		if (!nIsCreate) continue;
 		const only = esPeople.length === 1 ? esPeople[0] : undefined;
-		if (only) {
-			if (!nIsCreate) continue;
-			if (only.outcome.status === "member") {
-				n.outcome = {
-					status: "member",
-					memberId: only.outcome.memberId,
-					via: "folded",
-				};
-			} else if (only.outcome.status !== "create") {
-				defer(n, "unavailable");
-			} else if (answered(only)) {
+		if (only?.outcome.status === "unmatched") continue;
+		if (only?.outcome.status === "create") {
+			if (answered(only)) {
 				defer(n, "answered");
 			} else if (answered(n)) {
 				defer(n, "rejected");
@@ -930,24 +952,10 @@ export function buildImportPlan(
 			}
 			continue;
 		}
-		if (!nIsCreate && !nMatchedByName) continue;
-		const memberIds: string[] = [];
-		for (const e of esPeople) {
-			if (e.outcome.status === "member") memberIds.push(e.outcome.memberId);
-		}
-		if (memberIds.length === esPeople.length) {
-			const distinct = [...new Set(memberIds)];
-			if (distinct.length < 2) continue;
-			n.outcome = {
-				status: "ambiguous",
-				candidates: distinct.flatMap((mid) => {
-					const m = rosterById.get(mid);
-					return m ? [m] : [];
-				}),
-			};
-		} else {
-			defer(n, "namesakes");
-		}
+		const becomeMembers = esPeople.every(
+			(e) => e.outcome.status === "member" || e.outcome.status === "create",
+		);
+		defer(n, becomeMembers ? "namesakes" : "unavailable");
 	}
 	if (merged.size > 0) {
 		for (let i = people.length - 1; i >= 0; i--) {
