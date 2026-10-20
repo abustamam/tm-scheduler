@@ -592,26 +592,34 @@ describe("pages that must not be corrupted", () => {
 	});
 
 	it('a surname "May" is replaced, and a date stays a valid date: moved by whole weeks, so its weekday still fits', () => {
-		const st = newRewriteState({ seed: "dates", dateShiftDays: 7 * 100 });
+		const st = newRewriteState({ seed: "dates", now: Date.UTC(2026, 9, 12) });
 		const out = rewriteEasySpeakPage(
 			page(`<td class="maintitle">Tuesday 22nd September 2026 at 7:00 pm America/Los_Angeles</td><td>Noah May</td><td>May 2026</td><td>Sep 28 26, 2:43 pm</td><td>2025-05-05</td><td>(Actual meeting detail entered on 2026-10-01)</td>`),
 			{ state: st },
 		);
 		const tds = Array.from(parseHtml(out).querySelectorAll("td")).map((t) => t.textContent ?? "");
-		// 700 days after Tuesday 22 September 2026 is Tuesday 22 August 2028; the time is another valid time
-		expect(tds[0]).toMatch(/^Tuesday 22nd August 2028 at (?:[1-9]|1[0-2]):[0-5]\d pm America\/Los_Angeles$/);
+		// the weekday of the date still fits (a synthetic date is a whole number of weeks from where its real one sits), the time is another valid time
+		const m0 = /^(Tuesday) (\d{1,2})(?:st|nd|rd|th) (\w+) (\d{4}) at (?:[1-9]|1[0-2]):[0-5]\d pm America\/Los_Angeles$/.exec(tds[0]);
+		expect(m0, tds[0]).toBeTruthy();
+		const MONTHS_ = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+		expect(new Date(Date.UTC(Number(m0?.[4]), MONTHS_.indexOf(m0?.[3] ?? ""), Number(m0?.[2]))).getUTCDay()).toBe(2);
 		expect(tds[0]).not.toContain("7:00");
 		expect(tds[1]).not.toMatch(/Noah|May/);
-		// a month and year is the 15th: 700 days after 15 May 2026 is 15 April 2028
-		expect(tds[2]).toBe("April 2028");
-		expect(tds[3]).toMatch(/^Aug 28 28, (?:[1-9]|1[0-2]):[0-5]\d pm$/);
-		expect(tds[4]).toBe("2027-04-05");
-		expect(tds[5]).toBe("(Actual meeting detail entered on 2028-08-31)");
+		expect(tds[2]).toMatch(/^(?:January|February|March|April|May|June|July|August|September|October|November|December) \d{4}$/);
+		const m3 = /^(\w{3}) (\d{2}) (\d{2}), (?:[1-9]|1[0-2]):[0-5]\d pm$/.exec(tds[3]);
+		expect(m3, tds[3]).toBeTruthy();
+		expect(tds[4]).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+		expect(tds[5]).toMatch(/^\(Actual meeting detail entered on \d{4}-\d{2}-\d{2}\)$/);
+		// the same real date is one synthetic date wherever it is written: 2026-10-01 here, October 1, 2026 and 1st October 2026 there
+		const again = rewriteEasySpeakPage(page(`<td>2026-10-01</td><td>October 1, 2026</td><td>1st October 2026</td>`), { state: st });
+		const [iso, long, ord] = Array.from(parseHtml(again).querySelectorAll("td")).map((t) => t.textContent ?? "");
+		expect(iso).toBe(tds[5].replace(/^.*on |\)$/g, ""));
+		expect(new Date(`${long} UTC`).toISOString().slice(0, 10)).toBe(iso);
+		expect(new Date(`${ord.replace(/(\d)(?:st|nd|rd|th)/, "$1")} UTC`).toISOString().slice(0, 10)).toBe(iso);
 		expectNone(out, ["2026", "2025", "2:43", "7:00"]);
 	});
 
-	it("a date that is not a date is mapped digit by digit, and a shift of 0 is refused", () => {
-		expect(() => newRewriteState({ dateShiftDays: 0 })).toThrow(/must not be 0/);
+	it("a date that is not a date is scrubbed whole", () => {
 		const out = rewriteEasySpeakPage(page(`<td>31st February 2026</td><td>2026-13-45</td>`), { state: newRewriteState({ seed: "x" }) });
 		expectNoDigitSurvives("31 02 2026 2026 13 45", out);
 	});
@@ -778,7 +786,7 @@ describe("the committed fixtures round-trip", () => {
 
 	it.each(files)("%s: invented real values put back in are all gone, and the structure is the page's own", (f) => {
 		const d = deFake(readFixture(f));
-		const r = generateFixture(d.html, { contactPage: isContact(f), state: newRewriteState({ seed: f, dateShiftDays: 7 * 400 }), original: original(d.names, d.terms) });
+		const r = generateFixture(d.html, { contactPage: isContact(f), state: newRewriteState({ seed: f, now: Date.UTC(2026, 9, 12) }), original: original(d.names, d.terms) });
 		expect(r.violations).toEqual([]);
 		expect(fixtureViolations(r.html, { contactPage: isContact(f) }), "the committed-fixture check on the generated page").toEqual([]);
 		expectNone(r.html, [...d.names, ...d.terms, ...d.ids]);
@@ -827,8 +835,7 @@ describe("the committed fixtures round-trip", () => {
 	}
 
 	it("the walk still runs, and finds the same meetings, people, roles, speeches and dates, with every id and person lining up across the rewritten pages", async () => {
-		const SHIFT = 700;
-		const st = newRewriteState({ seed: "walk", dateShiftDays: SHIFT });
+		const st = newRewriteState({ seed: "walk", now: Date.UTC(2026, 9, 12, 12, 0, 0) });
 		// the walker is signed in as the fixture club (4242); the de-faked club id's fake is that one
 		presetNumber(st, "7314159", "4242");
 		const generated = new Map<string, string>();
@@ -854,7 +861,8 @@ describe("the committed fixtures round-trip", () => {
 		}
 		const introId = fake("1473688");
 		expect(introId).toBeTruthy();
-		const shifted = Date.UTC(2026, 9, 12, 12, 0, 0) + SHIFT * 86400000;
+		// a synthetic date can sit years away from its real one, so the walker's clock is set past all of them
+		const shifted = Date.UTC(2026, 9, 12, 12, 0, 0) + 9 * 365 * 86400000;
 		const plain = stripClock(await setup().run()).bundle;
 		const again = stripClock(
 			await setup({
@@ -1034,5 +1042,50 @@ describe("round 3 (#1275): digits", () => {
 		}
 		expect(wide, "00042 keeps its 00 prefix").toBeGreaterThan(30);
 		expect(narrow, "000 keeps its 00 prefix").toBeGreaterThan(20);
+	});
+});
+
+describe("round 3 (#1275): dates", () => {
+	const NOW = Date.UTC(2026, 9, 20);
+	const ptext = (html: string) => Array.from(parseHtml(html).querySelectorAll("p")).map((t) => t.textContent ?? "");
+	const dayOf = (s: string) => Math.floor(Date.parse(`${s} UTC`) / 86_400_000);
+
+	it("R3-5. one known real-to-fake date pair does not give another real date (40 seeds), and the order, the weekday and the side of today stay", () => {
+		const real = [dayOf("January 1, 1970"), dayOf("October 20, 2026")];
+		let recovered = 0;
+		for (let i = 0; i < 40; i++) {
+			const out = ptext(rewriteEasySpeakPage(page("<p>January 1, 1970</p><p>October 20, 2026</p>"), { state: newRewriteState({ seed: `d${i}`, now: NOW }) }));
+			const fake = out.map(dayOf);
+			expect(fake[0], `seed ${i}: the order`).toBeLessThan(fake[1]);
+			expect(((fake[0] - real[0]) % 7) + ((fake[1] - real[1]) % 7), `seed ${i}: whole weeks`).toBe(0);
+			expect(fake[0]).not.toBe(real[0]);
+			expect(fake[1]).not.toBe(real[1]);
+			// the offset a reader reads off the first (public) pair, applied to the second
+			if (fake[1] - (fake[0] - real[0]) === real[1]) recovered++;
+		}
+		expect(recovered, "the first pair's offset gave the second date").toBeLessThanOrEqual(2);
+	});
+
+	it("R3-5b. a date keeps its side of today: past stays past, future stays future, today does not stay today", () => {
+		for (let i = 0; i < 30; i++) {
+			const [past, future, today] = ptext(rewriteEasySpeakPage(page("<p>2026-09-22</p><p>2026-11-03</p><p>2026-10-20</p>"), { state: newRewriteState({ seed: `s${i}`, now: NOW }) })).map(dayOf);
+			expect(past, `seed ${i}`).toBeLessThan(Math.floor(NOW / 86_400_000));
+			expect(future, `seed ${i}`).toBeGreaterThan(Math.floor(NOW / 86_400_000));
+			expect(today).not.toBe(Math.floor(NOW / 86_400_000));
+		}
+	});
+
+	it("R3-5c. many dates in any order keep their order and are each their own date (room is never exhausted)", () => {
+		const days = Array.from({ length: 120 }, (_, i) => new Date(Date.UTC(2024, 0, 1) + ((i * 53) % 900) * 86_400_000).toISOString().slice(0, 10));
+		const uniq = [...new Set(days)];
+		const out = ptext(rewriteEasySpeakPage(page(uniq.map((d) => `<p>${d}</p>`).join("")), { state: newRewriteState({ seed: "many", now: NOW }) })).map(dayOf);
+		const order = uniq.map((d, i) => [dayOf(d), out[i]] as const).sort((a, b) => a[0] - b[0]);
+		for (let i = 1; i < order.length; i++) expect(order[i][1]).toBeGreaterThan(order[i - 1][1]);
+		expect(new Set(out).size).toBe(uniq.length);
+	});
+
+	it("R3-6b. a date-shaped text that is not a date keeps neither its month nor its digits", () => {
+		const out = ptext(rewriteEasySpeakPage(page("<p>May 99, 2026</p><p>March 45, 2025</p>")));
+		expect(out.join("|")).not.toMatch(/May|March|99|45|2026|2025/);
 	});
 });

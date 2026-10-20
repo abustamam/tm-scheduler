@@ -69,8 +69,8 @@ const ZONE_ABBR = ["PST", "PDT", "MST", "MDT", "CST", "CDT", "EST", "EDT", "AKST
 interface DateShape {
 	/** A regex source; its capture groups are what `render` reads. Month and weekday NAMES are only ever kept inside one of these. */
 	src: string;
-	/** The shape with its digits replaced: a date is shifted, a time is another time, any other number goes through `fakeRun`. */
-	render: (st: RewriteState, m: RegExpExecArray) => string;
+	/** The shape with its digits replaced: a date becomes a synthetic one, a time another time, any other number goes through `fakeRun`. `null`: it is date-shaped but not a date (`May 99, 2026`), so the WHOLE match is scrubbed. */
+	render: (st: RewriteState, m: RegExpExecArray) => string | null;
 }
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -86,7 +86,7 @@ const DATE_SHAPES: readonly DateShape[] = [
 		render: (st, m) => {
 			const [raw, wd, sp1, day, sp2, month, sp3, year, at, time, sp4, tz] = m;
 			const sh = shiftDate(st, Number(year), MONTHS.indexOf(month) + 1, Number(day));
-			if (!sh) return mapRunsIn(st, raw);
+			if (!sh) return null;
 			return `${wd ? `${WEEKDAYS[(sh.dow + 6) % 7]}${sp1}` : ""}${ordinal(sh.d)}${sp2}${MONTHS[sh.m - 1]}${sp3}${sh.y}${at ? `${at}${fakeTime(st, time)}${tz ? `${sp4}${tz}` : ""}` : ""}`;
 		},
 	},
@@ -98,7 +98,7 @@ const DATE_SHAPES: readonly DateShape[] = [
 		src: `(${MONTH_SHORT})(${SP})(\\d{2})(${SP})(\\d{2}),(${SP})(${TIME})`,
 		render: (st, m) => {
 			const sh = shiftDate(st, 2000 + Number(m[5]), MONTH_ABBR.indexOf(m[1]) + 1, Number(m[3]));
-			if (!sh) return mapRunsIn(st, m[0]);
+			if (!sh) return null;
 			return `${MONTH_ABBR[sh.m - 1]}${m[2]}${pad2(sh.d)}${m[4]}${pad2(sh.y % 100)},${m[6]}${fakeTime(st, m[7])}`;
 		},
 	},
@@ -106,7 +106,7 @@ const DATE_SHAPES: readonly DateShape[] = [
 		src: `(${MONTH})(${SP})(\\d{1,2})(,?)(${SP})(${YEAR})`,
 		render: (st, m) => {
 			const sh = shiftDate(st, Number(m[6]), MONTHS.indexOf(m[1]) + 1, Number(m[3]));
-			if (!sh) return mapRunsIn(st, m[0]);
+			if (!sh) return null;
 			return `${MONTHS[sh.m - 1]}${m[2]}${m[3].length === 2 ? pad2(sh.d) : sh.d}${m[4]}${m[5]}${sh.y}`;
 		},
 	},
@@ -114,14 +114,14 @@ const DATE_SHAPES: readonly DateShape[] = [
 		src: `(${MONTH})(${SP})(${YEAR})`,
 		render: (st, m) => {
 			const sh = shiftDate(st, Number(m[3]), MONTHS.indexOf(m[1]) + 1, 15);
-			return sh ? `${MONTHS[sh.m - 1]}${m[2]}${sh.y}` : mapRunsIn(st, m[0]);
+			return sh ? `${MONTHS[sh.m - 1]}${m[2]}${sh.y}` : null;
 		},
 	},
 	{
 		src: `(${YEAR})-(\\d{2})-(\\d{2})`,
 		render: (st, m) => {
 			const sh = shiftDate(st, Number(m[1]), Number(m[2]), Number(m[3]));
-			return sh ? `${sh.y}-${pad2(sh.m)}-${pad2(sh.d)}` : mapRunsIn(st, m[0]);
+			return sh ? `${sh.y}-${pad2(sh.m)}-${pad2(sh.d)}` : null;
 		},
 	},
 	{
@@ -129,7 +129,7 @@ const DATE_SHAPES: readonly DateShape[] = [
 		render: (st, m) => {
 			const a = shiftDate(st, Number(m[1]), 6, 15);
 			const b = shiftDate(st, Number(m[2]), 6, 15);
-			return a && b ? `${a.y}-${b.y}` : mapRunsIn(st, m[0]);
+			return a && b ? `${a.y}-${b.y}` : null;
 		},
 	},
 	{
@@ -417,8 +417,12 @@ export interface RewriteState {
 	fresh: number;
 	/** Seeds the digit map and the date shift. A fresh random one by default, so a fake cannot be worked back to its real value from the source. */
 	seed: string;
-	/** Every date is moved by this many days: a whole number of weeks, so a weekday still matches its date. */
-	dateShiftDays: number;
+	/** The real "today" (a day number): dates before it stay before it, dates after it stay after it. */
+	today: number;
+	/** Every real date this run has met (a day number) and the synthetic day it became, sorted by the real one; see `fakeDay`. */
+	dates: { real: number; fake: number; pivot?: boolean }[];
+	/** Every real date the pages of this run carry (a day number), so a synthetic date is never one of them. */
+	realDays: Set<number>;
 	nextName: number;
 	nextPerson: number;
 	nextPhone: number;
@@ -427,8 +431,8 @@ export interface RewriteState {
 
 export interface RewriteStateOptions {
 	seed?: string;
-	/** Must not be 0 (that would keep every date). */
-	dateShiftDays?: number;
+	/** The real "today" in ms; default `Date.now()`. Dates keep their side of it. */
+	now?: number;
 }
 
 function hash32(s: string): number {
@@ -442,8 +446,7 @@ function hash32(s: string): number {
 
 export function newRewriteState(opts: RewriteStateOptions = {}): RewriteState {
 	const seed = opts.seed ?? randomUUID();
-	const shift = opts.dateShiftDays ?? 7 * (60 + (hash32(`${seed}:shift`) % 240));
-	if (shift === 0) throw new Error("dateShiftDays must not be 0: it would keep every date");
+	const today = Math.floor((opts.now ?? Date.now()) / 86_400_000);
 	return {
 		names: new Map(),
 		words: new Map(),
@@ -456,7 +459,9 @@ export function newRewriteState(opts: RewriteStateOptions = {}): RewriteState {
 		shortPerms: new Map(),
 		fresh: 0,
 		seed,
-		dateShiftDays: shift,
+		today,
+		dates: [{ real: today, fake: today, pivot: true }],
+		realDays: new Set(),
 		nextName: 0,
 		nextPerson: 900_001,
 		nextPhone: 1,
@@ -645,12 +650,54 @@ function fakeNumber(st: RewriteState, id: string, ctx?: string): string {
 /** Every digit run in `s` replaced, the words and separators between them kept. */
 const mapRunsIn = (st: RewriteState, s: string) => s.replace(/\d+/g, (r) => fakeRun(st, r));
 
-/** A date moved by the run's shift; null when the numbers are not a real date. */
+/** How many weeks a first date, or one beyond all the others, may be moved at most. */
+const DATE_SPREAD_WEEKS = 260;
+
+/**
+ * A real day (days since 1970) to a synthetic one. NOT one shared offset: each distinct real date gets its own,
+ * so one known real-to-fake pair does not give another date. What is kept is only the order of the dates, their
+ * weekday (a whole number of weeks apart from where they sit) and their side of "today". The invariant that
+ * keeps room for any later date: between two known dates the fake gap is never smaller than the real gap, and
+ * both differ by a whole number of weeks. A new date goes between its neighbours at its real distance plus a
+ * random number of spare weeks; one beyond all of them, at most `DATE_SPREAD_WEEKS` further out.
+ */
+function fakeDay(st: RewriteState, day: number): number {
+	const same = st.dates.find((e) => e.real === day && !e.pivot);
+	if (same) return same.fake;
+	let at = 0;
+	while (at < st.dates.length && st.dates[at].real < day) at++;
+	let loIdx = at - 1;
+	let hi = st.dates[at];
+	if (hi && hi.real === day) {
+		// the pivot itself ("today"): it is only a bound
+		loIdx = at;
+		hi = st.dates[at + 1];
+	}
+	const lo = st.dates[loIdx];
+	const r = rng(st, `date:${day}`);
+	const spare = lo && hi ? Math.floor((hi.fake - lo.fake - (hi.real - lo.real)) / 7) : DATE_SPREAD_WEEKS;
+	const at0 = lo ? lo.fake + (day - lo.real) : (hi as { real: number; fake: number }).fake - ((hi as { real: number }).real - day);
+	const sign = lo ? 1 : -1;
+	// a start among the spare weeks, then the next ones, until the day is neither the real one nor another real date of the pages
+	const start = Math.floor(r() * (spare + 1));
+	let f = at0 + sign * 7 * start;
+	for (let k = 0; k <= spare; k++) {
+		const c = at0 + sign * 7 * ((start + k) % (spare + 1));
+		if (c !== day && !st.realDays.has(c)) {
+			f = c;
+			break;
+		}
+	}
+	st.dates.splice(loIdx + 1, 0, { real: day, fake: f });
+	return f;
+}
+
+/** A synthetic date for a real one; null when the numbers are not a real date. */
 function shiftDate(st: RewriteState, y: number, m: number, d: number): { y: number; m: number; d: number; dow: number } | null {
 	const t = Date.UTC(y, m - 1, d);
 	const dt = new Date(t);
 	if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
-	const n = new Date(t + st.dateShiftDays * 86_400_000);
+	const n = new Date(fakeDay(st, Math.floor(t / 86_400_000)) * 86_400_000);
 	return { y: n.getUTCFullYear(), m: n.getUTCMonth() + 1, d: n.getUTCDate(), dow: n.getUTCDay() };
 }
 
@@ -704,7 +751,8 @@ interface Hit {
 	start: number;
 	end: number;
 	kind: "keep" | "repl";
-	out: string;
+	/** The replacement; `undefined` for a "repl": the matched text is scrubbed as a word run. */
+	out: string | undefined;
 }
 
 interface Seg {
@@ -746,7 +794,8 @@ function scanHits(st: RewriteState, text: string): Hit[] {
 		else {
 			const i = DATE_SHAPES.findIndex((_, k) => g[`date${k}`] !== undefined);
 			const parts = DATE_RES[i].exec(raw);
-			hits.push({ start, end, kind: "repl", out: parts ? DATE_SHAPES[i].render(st, parts) : mapRunsIn(st, raw) });
+			// not a date after all (`May 99, 2026`): the whole match is scrubbed, its month word included
+			hits.push({ start, end, kind: "repl", out: (parts ? DATE_SHAPES[i].render(st, parts) : null) ?? undefined });
 		}
 	}
 	return hits;
@@ -1324,20 +1373,48 @@ function rewriteAttributes(st: RewriteState, doc: Document) {
 /** Digits the markup itself always carries and the generator keeps as they are (an encoding name, a W3C url): not data, so not worth avoiding. */
 const MARKUP_DIGITS = [/utf-8/gi, /iso-8859-1/gi, /<!doctype[^>]*>/gi, /https?:\/\/www\.w3\.org\/[^\s"']*/gi, /-\/\/w3c\/\/dtd[^"']*/gi, /initial-scale=1/gi];
 
+/** The real dates a text carries, as [year, month, day], per date shape that holds a whole date (see `DATE_SHAPES`). */
+function datesIn(t: string): [number, number, number][] {
+	const out: [number, number, number][] = [];
+	const add = (y: number, mo: number, d: number) => out.push([y, mo, d]);
+	for (const [i, pick] of [
+		[0, (m: RegExpMatchArray) => add(Number(m[7]), MONTHS.indexOf(m[5]) + 1, Number(m[3]))],
+		[2, (m: RegExpMatchArray) => add(2000 + Number(m[5]), MONTH_ABBR.indexOf(m[1]) + 1, Number(m[3]))],
+		[3, (m: RegExpMatchArray) => add(Number(m[6]), MONTHS.indexOf(m[1]) + 1, Number(m[3]))],
+		[4, (m: RegExpMatchArray) => add(Number(m[3]), MONTHS.indexOf(m[1]) + 1, 15)],
+		[5, (m: RegExpMatchArray) => add(Number(m[1]), Number(m[2]), Number(m[3]))],
+		[6, (m: RegExpMatchArray) => (add(Number(m[1]), 6, 15), add(Number(m[2]), 6, 15))],
+	] as [number, (m: RegExpMatchArray) => void][]) {
+		for (const m of t.matchAll(new RegExp(DATE_SHAPES[i].src, "giu"))) pick(m);
+	}
+	return out;
+}
+
 /** Every digit run the page carries, so no fake is ever one of them. */
 function reserveRuns(st: RewriteState, doc: Document, html: string) {
 	const add = (t: string) => {
 		let u = t;
 		for (const re of MARKUP_DIGITS) u = u.replace(re, " ");
 		for (const r of u.match(/\d+/g) ?? []) st.reserved.add(normRun(r));
+		for (const [y, mo, d] of datesIn(u)) {
+			const t = Date.UTC(y, mo - 1, d);
+			if (new Date(t).getUTCMonth() === mo - 1 && new Date(t).getUTCDate() === d) st.realDays.add(Math.floor(t / 86_400_000));
+		}
 	};
 	add(html);
+	// text and attributes too, in their decoded form
 	const walk = (n: Node) => {
 		if (n.nodeType === 3 || n.nodeType === 8) add(n.nodeValue ?? "");
 		if (n.nodeType === 1) for (const a of Array.from((n as Element).attributes ?? [])) add(`${a.name} ${a.value}`);
 		for (const c of Array.from(n.childNodes ?? [])) walk(c);
 	};
 	walk(doc as unknown as Node);
+	// Every real date of the page gets its synthetic day NOW, in the order that always leaves room: the dates before today
+	// from the latest backwards, the dates after it from the earliest forwards, each at the open end of what is known.
+	const known = new Set(st.dates.map((e) => e.real));
+	const fresh = [...st.realDays].filter((d) => !known.has(d));
+	for (const d of fresh.filter((x) => x < st.today).sort((a, b) => b - a)) fakeDay(st, d);
+	for (const d of fresh.filter((x) => x >= st.today).sort((a, b) => a - b)) fakeDay(st, d);
 }
 
 /** A hand-written fixture, not a page: the evaluations JSON. */
