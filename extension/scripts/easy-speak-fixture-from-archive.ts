@@ -433,6 +433,8 @@ export interface RewriteState {
 	taken: Set<string>;
 	/** One seeded derangement per short-id context and width (`t:3`): see `shortId`. */
 	shortPerms: Map<string, number[]>;
+	/** Widths whose strict (avoid the page's runs) walk already came up empty, keyed `width:reserved size`: see `chooseRun`. */
+	strictMisses: Set<string>;
 	/** How many fresh short numbers this run has drawn (each draw is its own seeded stream). */
 	fresh: number;
 	/** Seeds the digit map and the date shift. A fresh random one by default, so a fake cannot be worked back to its real value from the source. */
@@ -478,6 +480,7 @@ export function newRewriteState(opts: RewriteStateOptions = {}): RewriteState {
 		pageWords: new Set(),
 		taken: new Set(),
 		shortPerms: new Map(),
+		strictMisses: new Set(),
 		fresh: 0,
 		seed,
 		today,
@@ -598,15 +601,29 @@ function chooseRun(st: RewriteState, key: string, lead: boolean): string {
 	const size = lead ? 10 ** n : 9 * 10 ** (n - 1);
 	const digits = (k: number) => Array.from({ length: k }, () => String(Math.floor(r() * 10))).join("");
 	const first = lead ? digits(n) : String(1 + Math.floor(r() * 9)) + digits(n - 1);
-	const ok = (c: string, strict: boolean) => c !== key && !st.taken.has(c) && !(strict && st.reserved.has(normRun(c)));
+	const ok = (c: string, strict: boolean) => c !== key && !st.taken.has(c) && !(strict && st.reserved.has(lead ? normRun(c) : c));
+	// up to 15 digits the walk is integer arithmetic (a page carrying most of a width probes thousands of candidates
+	// per run, and string arithmetic made that seconds); a longer run walks its digits as a string
+	const exact = n <= 15;
+	const base = Number(lo);
+	// avoiding the page's runs is best effort (a fake equal to ANOTHER real run reveals nothing; it is never its own
+	// input and never a fake already given): once a strict walk at this width comes up empty, the width is crowded,
+	// so later runs skip it until a new page grows `reserved`, or a page carrying most of a width costs 2000 probes a run
+	const missKey = `${n}:${lead}:${st.reserved.size}`;
 	for (const strict of [true, false]) {
+		if (strict && st.strictMisses.has(missKey)) continue;
 		let c = first;
+		let k = exact ? Number(first) - base : 0;
 		// the strict pass only looks nearby (a page that carries most of the space has no run to avoid)
 		const walk = Math.min(size, strict ? 2000 : 200_000);
 		for (let i = 0; i < walk; i++) {
 			if (ok(c, strict)) return c;
-			c = nextRun(c, lo);
+			if (exact) {
+				k = (k + 1) % size;
+				c = String(base + k).padStart(n, "0");
+			} else c = nextRun(c, lo);
 		}
+		if (strict) st.strictMisses.add(missKey);
 	}
 	throw new Error(`no fake left for a ${n}-digit run: the page carries more distinct ${n}-digit numbers than can be told apart`);
 }
