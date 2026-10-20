@@ -125,26 +125,29 @@ match": the loop prints `grep error: <file>`. A DDL-only result prints nothing a
 migrations, and holds the heading to the three documents that name it.
 
 **Whether the risk review happened.** Whenever any row above matched, look for the record
-(`docs/agents/worktrees-and-landing.md`, "Risk review"): a comment or the PR body with a line
-that is exactly `**Risk review**`.
+(`docs/agents/worktrees-and-landing.md`, "Risk review"). It is a PR comment only; the PR body is
+not read.
 
 ```bash
-gh api --paginate repos/abustamam/tm-scheduler/issues/<N>/comments --jq '.[].body'
+gh api --paginate repos/abustamam/tm-scheduler/issues/<N>/comments --jq '.[] | {id, updated_at, body}'
 ```
 
-Search those comment bodies and the `body` from step 1 for a block starting at that line, and
-read its `Codex:` line. Print one more line:
+Consider only comments whose body's FIRST line is exactly `**Risk review**`, and read the Codex
+line within that same comment. It must be exactly one line, `- Codex: ran` or
+`- Codex: fell back — <reason>`. Print one more line:
 
-- **No such block:**
+- **No such comment:**
 
   > No risk review recorded: run gstack `/review` in the PR's worktree before merging, then
-  > post the `**Risk review**` record.
+  > post the `**Risk review**` comment.
 
-- **A block with `Codex: ran`:** `Risk review recorded (Codex: ran).`
-- **A block with `Codex: fell back`, or with no readable `Codex:` line:** flag it, do not pass it.
+- **Exactly one such comment, with `- Codex: ran`:** `Risk review recorded (Codex: ran).`
+- **Anything else** (a `fell back` line, a missing or malformed Codex line, anything other than
+  the pinned two forms, or more than one `**Risk review**` comment, since a re-run edits the
+  record in place and never adds a second): flag it, do not pass it.
 
-  > Risk review recorded, but Codex fell back (or the record is unreadable). A real Codex pass
-  > is required for a risk category; re-run it.
+  > Risk review recorded, but Codex fell back, or the record is unreadable or duplicated. Issue
+  > #1253 asks for a real Codex pass on a risk category; re-run it and edit the one record.
 
 A hint only, like the `## Prod check` line: the merge decision is the maintainer's. The record
 is self-reported, so this checks that the review was claimed, not that it was good. Two risk
