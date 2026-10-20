@@ -103,7 +103,7 @@ describe("leak shapes: every invented value is gone", () => {
 		);
 		expectNone(out, ["marlowe", "pennyfeather"]);
 		// the parameter NAMES are replaced too: a name can be one
-		expect(out).toContain('href="/x.php?x=x&amp;x=x&amp;k=1"');
+		expect(out).toContain('href="/x?x=x&amp;x=x&amp;k=1"');
 	});
 
 	it("a venue named in a map link, a mailto: link, code that names someone, a text field", () => {
@@ -219,6 +219,168 @@ describe("leak shapes: every invented value is gone", () => {
 	});
 });
 
+describe("review round: every invented value is gone (#1275)", () => {
+	it("1. URLs keep no subdomain, filename, parameter value, fragment or long number", () => {
+		const out = rewriteEasySpeakPage(
+			page(
+				`<a href="https://rowan.toastmasters.org/members/Quillon_Brackenby.php?show=quillonb&amp;sort=brackenby&amp;mode=Quillon&amp;go=Quorvak&amp;s=quorvak#quillon_brackenby">a</a>` +
+					`<a href="/x?t=74155501&amp;k=4155550&amp;r=4155551&amp;chart=4155552&amp;page=4155553&amp;ret=4155554&amp;z=4155555">b</a>` +
+					`<a href="https://rowan.example.test/quillon/brackenby">c</a><a href="https://quorvak.easy-speak.org/profile.php?mode=viewprofile&amp;u=1">d</a>` +
+					`<a href="/tm_all_speeches.php/Quillon/501/Rowan.gif">e</a>`,
+			),
+		);
+		expectNone(out, ["rowan", "quillon", "brackenby", "quorvak", "74155501", "4155550", "4155551", "4155552", "4155553", "4155554", "4155555", "/501/"]);
+		for (const a of Array.from(parseHtml(out).querySelectorAll("a"))) expect(a.getAttribute("href"), "no fragment survives").not.toMatch(/#./);
+	});
+
+	it("2. a comment or a doctype outside <html> is scrubbed too", () => {
+		const out = rewriteEasySpeakPage(
+			`<!-- rowan tidewell --><!DOCTYPE html PUBLIC "-//Zed Quorvak//EN" "http://quorvak.example/zed.dtd"><html><head></head><body><p>x</p></body></html>`,
+		);
+		expectNone(out, ["rowan", "tidewell", "zed", "quorvak"]);
+		expect(fixtureViolations(out)).toEqual([]);
+	});
+
+	it("3. an attribute NAME can carry data; unknown names are renamed, even constructor and __proto__", () => {
+		const out = rewriteEasySpeakPage(page(`<div data-rowan-tidewell="" data-person-123456="x" constructor="Quillon" __proto__="Quorvak" tostring="y"><rowan-tidewell>hi</rowan-tidewell></div>`));
+		expectNone(out, ["rowan", "tidewell", "123456", "quillon", "quorvak"]);
+		expect(fixtureViolations(out)).toEqual([]);
+	});
+
+	it("4. form values: the field name is read before it is rewritten, and a person id is one fake wherever it appears", () => {
+		const out = rewriteEasySpeakPage(
+			page(
+				`<form><input name="speech_owner" value="1234567"><input name="speech_note" value="0412345678"><input name="user" value="123"><input value="7654321" name="meeting_phone">` +
+					`<input name="speaker" value="567890"><select name="speaker"><option value="567891">x</option><option value="567890">y</option></select>` +
+					`<input name="cached_agenda" value="9988776"></form><a href="/profile.php?mode=viewprofile&amp;u=567890">n</a>`,
+			),
+		);
+		expectNone(out, ["1234567", "0412345678", "7654321", "567890", "567891", "9988776"]);
+		const doc = parseHtml(out);
+		const link = /u=(\d+)/.exec(doc.querySelector("a")?.getAttribute("href") ?? "")?.[1];
+		expect(link).toMatch(/^9000\d\d$/);
+		expect(doc.querySelector('input[name="speaker"]')?.getAttribute("value")).toBe(link);
+		expect(doc.querySelectorAll("option")[1].getAttribute("value")).toBe(link);
+		expect(doc.querySelector('input[name="user"]')?.getAttribute("value")).toMatch(/^9000\d\d$/);
+	});
+
+	it("5. a phone split across block elements, written with slashes, or in a handler; a house number", () => {
+		const out = rewriteEasySpeakPage(
+			page(
+				`<div>415</div><div>555</div><div>0199</div><p>020/7946/0018</p><a href="#" onclick="go(212-555-0147)">x</a><table><tr><td>742 Quorvak Lane</td></tr></table>` +
+					`<p>Call 618-555-0123</p>`,
+			),
+		);
+		expectNone(out, ["0199", "7946", "0018", "0147", "742", "quorvak", "0123"]);
+		const text = everything(out).replace(/\(555\) 010-\d{4}/g, "");
+		expect(text).not.toMatch(/\b(?:415|020|212|618|555)\b/);
+	});
+
+	it("6. JS string escapes are decoded before the handler is scanned", () => {
+		const out = rewriteEasySpeakPage(
+			page(
+				`<a href="#" onclick="alert('\\162\\157\\167\\141\\156\\100\\145\\170\\141\\155\\160\\154\\145\\056\\157\\162\\147')">a</a>` +
+					`<a href="#" onclick="go('\\x72\\x6f\\x77\\x61\\x6e')">b</a><a href="#" onclick="go('\\u0072\\u006f\\u0077\\u0061\\u006e')">c</a><a href="#" onclick="go('\\u{72}\\u{6f}wan')">d</a>`,
+			),
+		);
+		expectNone(out, ["rowan", "example.org"]);
+		expect(out).not.toMatch(/\\[0-7xu]/);
+		expect(fixtureViolations(out)).toEqual([]);
+	});
+
+	it("7. an allowed word does not survive next to a name, in another node, or inside a timezone", () => {
+		const out = rewriteEasySpeakPage(
+			page(
+				`<table><tr><td>Europe/Quillon_Brackenby</td><td>Asia/Rowanvale</td><td>America/Quorvak_Zed</td><td>Timer, Quillon</td><td>rowan Timer</td>` +
+					`<td><a href="/profile.php?mode=viewprofile&amp;u=123456">Quillon</a> <b>Mentor</b></td><td>Eli <b>Page</b></td><td>Zed <b>M</b></td></tr></table>`,
+			),
+		);
+		expectNone(out, ["quillon", "brackenby", "rowanvale", "quorvak", "zed", "eli", "rowan"]);
+		const tds = Array.from(parseHtml(out).querySelectorAll("td")).map((t) => t.textContent ?? "");
+		expect(tds[3], "Timer, Quillon").not.toContain("Timer");
+		expect(tds[4], "rowan Timer").not.toContain("Timer");
+		expect(tds[5], "linked name + Mentor").not.toContain("Mentor");
+		expect(tds[6], "Eli Page").not.toContain("Page");
+		expect(tds[7], "Zed M").not.toMatch(/(?:^|\s)M(?:\s|$)/);
+	});
+
+	it("8. a value that only resembles a fake is replaced like any other", () => {
+		const phrases = JSON.parse(readFixture("non-person-phrases.json")) as { speechTitlesAndThemes: string[]; fixturePlaces: string[] };
+		// the output draws its fakes from the front of the list, so names from the back cannot be one of them by chance
+		const LATE = FAKE_NAMES.slice(-2);
+		const title = phrases.speechTitlesAndThemes[0];
+		const place = phrases.fixturePlaces[0];
+		const out = rewriteEasySpeakPage(
+			page(
+				`<a href="/profile.php?mode=viewprofile&amp;u=900123">${LATE[0]}</a><table><tr><td>${LATE[1]}</td><td>${title}</td><td>${place}</td><td>(555) 010-0777</td><td>fixtureuser</td></tr></table>` +
+					`<a href="/orgdata.php?c=9999">x</a><a href="/orgdata.php?c=4242">y</a><a href="/profile.php?mode=viewprofile&amp;u=900124">z</a>`,
+			),
+		);
+		expectNone(out, ["900123", "900124", LATE[0], LATE[1], title, place, "0777", "c=9999", "fixtureuser"]);
+		const clubs = [...out.matchAll(/c=(\d+)/g)].map((m) => m[1]);
+		expect(new Set(clubs).size, "two real clubs are two fakes").toBe(2);
+		expect(clubs[1], "the real 4242 is not passed through").not.toBe("4242");
+	});
+
+	it("9. a counter and a division are bounded: a long number or a word after the x or the Division is replaced", () => {
+		const out = rewriteEasySpeakPage(page(`<table><tr><td>x741</td><td>Division Quillon</td><td>x6</td><td>Division B</td><td>Area 12</td></tr></table>`));
+		expectNone(out, ["741", "quillon"]);
+		const tds = Array.from(parseHtml(out).querySelectorAll("td")).map((t) => t.textContent);
+		expect(tds.slice(2)).toEqual(["x6", "Division B", "Area 12"]);
+	});
+
+	it("10. entities are decoded, scrubbed and escaped again", () => {
+		const out = rewriteEasySpeakPage(
+			page(
+				`<textarea>Timer &amp; Speaker</textarea><table><tr><td>Tom &amp; Jerry &lt;3</td></tr></table>` +
+					`<iframe srcdoc="&lt;p&gt;Hi Quillon &lt;b&gt;Timer&lt;/b&gt;&lt;/p&gt;"></iframe>`,
+			),
+		);
+		expect(out).not.toMatch(/&redacted|&[a-z]+-\d/);
+		expect(out).toContain("<textarea>Timer &amp; Speaker</textarea>");
+		expect(parseHtml(out).querySelector("td")?.textContent).toMatch(/ & /);
+		expectNone(out, ["quillon"]);
+		const srcdoc = parseHtml(out).querySelector("iframe")?.getAttribute("srcdoc") ?? "";
+		expect(srcdoc).toMatch(/<p>.*<b>.*<\/b>.*<\/p>/);
+	});
+
+	it("12. rel, http-equiv, a meta content type and the handler's own function names stay", () => {
+		const out = rewriteEasySpeakPage(
+			page(
+				`<a href="#" onclick="window.open('profile.php?mode=miniprofile&amp;u=1', '_blank')">a</a><a href="javascript: showStatus('Visitor');">v</a>`,
+				`<link rel="stylesheet" href="/images/x.css"><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">`,
+			),
+		);
+		expect(out).toContain('rel="stylesheet"');
+		expect(out).toContain('http-equiv="Content-Type"');
+		expect(out).toContain('content="text/html; charset=UTF-8"');
+		expect(out).toContain("window.open('profile.php?mode=miniprofile&amp;u=900001', '_blank')");
+		expect(out).toContain("showStatus('Visitor')");
+	});
+
+	it("A. a shared state gives a person the fake they already had; a fresh state does not", () => {
+		const link = (u: string, who: string) => `<a href="/profile.php?mode=viewprofile&amp;u=${u}">${who}</a>`;
+		const read = (html: string, i: number) => {
+			const a = parseHtml(html).querySelectorAll("a")[i];
+			return { name: a.textContent ?? "", id: /u=(\d+)/.exec(a.getAttribute("href") ?? "")?.[1] };
+		};
+		const st = newRewriteState();
+		const page1 = rewriteEasySpeakPage(page(link("555111", "Rowan Tidewell") + link("555222", "Sloane Brightmere")), { state: st });
+		const page2 = rewriteEasySpeakPage(page(link("555222", "Sloane Brightmere")), { state: st });
+		const fresh = rewriteEasySpeakPage(page(link("555222", "Sloane Brightmere")), { state: newRewriteState() });
+		expect(read(page1, 0)).not.toEqual(read(page1, 1));
+		expect(read(page2, 0)).toEqual(read(page1, 1));
+		expect(read(fresh, 0)).not.toEqual(read(page1, 1));
+	});
+
+	it("D. a surname Small is replaced as text, and <small> is left alone", () => {
+		const out = rewriteEasySpeakPage(page(`<small>Small</small>`));
+		const small = parseHtml(out).querySelector("small");
+		expect(small).not.toBeNull();
+		expect(small?.textContent).not.toBe("Small");
+	});
+});
+
 describe("pages that must not be corrupted", () => {
 	it('a surname "Small" leaves <small> intact', () => {
 		const out = rewriteEasySpeakPage(page(`<td><small>Fine print</small> Priya Small</td><small>Small</small>`));
@@ -306,29 +468,128 @@ describe("the allow-list", () => {
 describe("the committed fixtures round-trip", () => {
 	const files = readdirSync(fixturePath("")).filter((f) => f.endsWith(".html"));
 	const isContact = (f: string) => f === "club-data.html" || f === "member-list.html";
+	const base26 = (n: number) => {
+		let s = "";
+		let k = n;
+		do {
+			s = String.fromCharCode(97 + (k % 26)) + s;
+			k = Math.floor(k / 26);
+		} while (k > 0);
+		return s.padStart(3, "a");
+	};
+	const phrases = JSON.parse(readFixture("non-person-phrases.json")) as { fixturePlaces: string[]; speechTitlesAndThemes: string[] };
 
-	it.each(files)("%s comes out with nothing for fixtureViolations to report", (f) => {
-		const r = generateFixture(readFixture(f), { contactPage: isContact(f) });
+	/**
+	 * The committed pages are already fake, so running the generator over them proves nothing (an identity
+	 * function passes). This puts INVENTED real-looking values back in first: every fake name, person id, club
+	 * id and number, phone, username, place, speech title and the join host become a made-up one, and the
+	 * generator must remove every one of them.
+	 */
+	function deFake(html: string) {
+		let out = html;
+		const names: string[] = [];
+		[...FAKE_NAMES]
+			.map((n, i) => ({ n, i }))
+			.sort((a, b) => b.n.length - a.n.length)
+			.forEach(({ n, i }) => {
+				const b = base26(i);
+				const invented = `Zq${b}ovak Brack${b}enby`;
+				if (out.includes(n)) names.push(invented);
+				out = out.replaceAll(n, invented);
+			});
+		const terms = ["zorvakuser", "quorvakclub.zoom.us", "quorvakroom"];
+		out = out
+			.replaceAll("fixtureuser", "zorvakuser")
+			.replaceAll("fixture-speakers.example.test", "quorvakclub.zoom.us")
+			.replaceAll("/join/fixture", "/join/quorvakroom")
+			.replace(/\b900(\d{3})\b/g, "7900$1")
+			.replace(/(?<!\d)4242(?!\d)/g, "7314159")
+			.replace(/(?<![1-9])(0*)9999(?!\d)/g, "$12718281")
+			.replace(/\(555\) 010-(\d{4})/g, "(212) 555-$1");
+		[...phrases.fixturePlaces, ...phrases.speechTitlesAndThemes]
+			.sort((a, b) => b.length - a.length)
+			.forEach((p, i) => {
+				const invented = `zq${base26(i)} glen`;
+				if (out.includes(p)) terms.push(invented);
+				out = out.replaceAll(p, invented);
+			});
+		return { html: out, names, terms };
+	}
+	const original = (names: string[], terms: string[]) => ({ names, terms, clubIds: ["7314159", "2718281"], personIds: [] as string[] });
+
+	it.each(files)("%s: invented real values put back in are all gone, and the structure is the page's own", (f) => {
+		const d = deFake(readFixture(f));
+		const r = generateFixture(d.html, { contactPage: isContact(f), original: original(d.names, d.terms) });
 		expect(r.violations).toEqual([]);
-		// the structure is the committed page's own
+		expectNone(r.html, [...d.names, ...d.terms]);
+		expect(r.html).not.toMatch(/7900\d{3}|7314159|2718281|\(212\) 555-/);
 		const tags = (h: string) => [...parseHtml(h).querySelectorAll("*")].map((e) => e.tagName);
 		expect(tags(r.html)).toEqual(tags(readFixture(f)));
 	});
 
-	/** The strings a rewrite replaces with a fake on purpose: a theme, a title, an introduction are the club's own words. */
-	const FREE_TEXT = new Set(["theme", "wordOfTheDay", "title", "introduction", "topic", "joinUrl", "project", "path", "venue", "name", "manager", "esClubId", "number"]);
-	const blank = (v: unknown, key = ""): unknown => {
-		if (Array.isArray(v)) return v.map((x) => blank(x, key));
-		if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, blank(x, k)]));
-		return typeof v === "string" && FREE_TEXT.has(key) ? "*" : v;
-	};
+	it("the net sees what the rewrite missed: an identity rewrite of the de-faked pages is reported", () => {
+		// the guard of the round-trip above: were the generator a no-op, the second net would name the leftovers
+		for (const f of ["meeting-list.html", "club-data.html"]) {
+			const d = deFake(readFixture(f));
+			expect(fixtureViolations(d.html, { contactPage: isContact(f), original: original(d.names, d.terms) }).length, f).toBeGreaterThan(0);
+		}
+	});
 
-	it("the walk still runs, and finds the same meetings, people, roles, speeches and dates in the rewritten pages", async () => {
-		const rewritten = (name: string) => (name.endsWith(".html") ? generateFixture(readFixture(name), { contactPage: isContact(name) }).html : readFixture(name));
+	/** The strings a rewrite replaces on purpose: a theme, a title, an introduction are the club's own words. */
+	const FREE_TEXT = new Set(["theme", "wordOfTheDay", "title", "introduction", "topic", "joinUrl", "project", "path", "venue"]);
+	/** The bundle with free text blanked and every name and long number replaced by the order it first appears in: two bundles are the same structure if these are equal. */
+	function canon(bundle: unknown): string {
+		const seen = new Map<string, string>();
+		const tok = (m: string) => {
+			let t = seen.get(m);
+			if (!t) {
+				t = `<${seen.size}>`;
+				seen.set(m, t);
+			}
+			return t;
+		};
+		const blank = (v: unknown, key = ""): unknown => {
+			if (Array.isArray(v)) return v.map((x) => blank(x, key));
+			if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === "club" ? { ...(x as object), name: "*" } : blank(x, k)]));
+			return typeof v === "string" && FREE_TEXT.has(key) ? "*" : v;
+		};
+		const names = new RegExp([...FAKE_NAMES].sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g");
+		return JSON.stringify(blank(bundle)).replace(names, tok).replace(/\d{4,}/g, tok);
+	}
+
+	it("the walk still runs, and finds the same meetings, people, roles, speeches and dates, with every id and person lining up across the rewritten pages", async () => {
+		const st = newRewriteState();
+		// the walker is signed in as the fixture club (4242); the de-faked club id's fake is that one
+		st.numbers.set("7314159", "4242");
+		st.nextNumber = 4243;
+		const generated = new Map<string, string>();
+		for (const f of ["club-data.html", ...files.filter((x) => x !== "club-data.html")]) {
+			const r = generateFixture(deFake(readFixture(f)).html, { contactPage: isContact(f), state: st });
+			expect(r.violations, f).toEqual([]);
+			generated.set(f, r.html);
+		}
+		const fake = (real: string) => st.numbers.get(real);
+		const extraMeetings: Record<string, string> = {};
+		for (const [id, file] of [["644360", "meeting-upcoming.html"], ["644304", "meeting-completed.html"], ["644363", "meeting-table-topics.html"]]) {
+			const f = fake(id);
+			if (f) extraMeetings[f] = file;
+		}
+		const introId = fake("1473688");
 		const plain = stripClock(await setup().run()).bundle;
-		const again = stripClock(await setup({ read: rewritten }).run()).bundle;
+		const again = stripClock(
+			await setup({
+				read: (name) => generated.get(name) ?? readFixture(name),
+				extraMeetings,
+				override: (url) => {
+					const u = new URL(url);
+					return u.pathname === "/request_speech.php" && introId && u.searchParams.get("s") === introId ? generated.get("speech-request-intro.html") : undefined;
+				},
+			}).run(),
+		).bundle;
 		expect(again.meetings.length).toBe(plain.meetings.length);
-		expect(blank(again)).toEqual(blank(plain));
+		expect(again.people.length).toBe(plain.people.length);
+		writeFileSync(process.env.CANON_OUT ?? '/dev/null', JSON.stringify({ a: canon(plain), b: canon(again) }));
+		expect(canon(again)).toBe(canon(plain));
 	});
 });
 
