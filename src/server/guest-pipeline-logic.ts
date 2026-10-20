@@ -27,6 +27,7 @@ import {
 	guestInvites,
 	guests,
 	meetingAttendance,
+	meetingAwards,
 	meetingCandidateDisqualifications,
 	meetings,
 	memberDues,
@@ -3360,6 +3361,36 @@ export const UNDO_CASCADE_CHECKS: UndoCascadeCheck[] = [
 ];
 
 /**
+ * Rows that keep the member but would lose the NAME: foreign keys to
+ * `members.id` that are ON DELETE SET NULL and print a name on a meeting's
+ * agenda or minutes (#1213). Deleting the membership does not remove them, it
+ * leaves them nameless, so the undo refuses the same way it does for cascading
+ * history. Only when the undo deletes a membership the conversion created: the
+ * reuse path deletes nothing. Mirrors `PAST_AGENDA_MEMBER_KEYS` in
+ * `members-logic.ts` (role slots are already refused above).
+ */
+export const UNDO_NAME_BLANKING_CHECKS: UndoCascadeCheck[] = [
+	{
+		columns: ["meeting_attendance.member_id"],
+		label: "meeting attendance",
+		scope: "created",
+		has: hasRowFor(meetingAttendance, meetingAttendance.memberId),
+	},
+	{
+		columns: ["table_topics_speakers.member_id"],
+		label: "Table Topics turns",
+		scope: "created",
+		has: hasRowFor(tableTopicsSpeakers, tableTopicsSpeakers.memberId),
+	},
+	{
+		columns: ["meeting_awards.member_id"],
+		label: "meeting awards",
+		scope: "created",
+		has: hasRowFor(meetingAwards, meetingAwards.memberId),
+	},
+];
+
+/**
  * Undo a convert-to-member (#618): the reverse of `applyConvertGuestToMember`.
  *
  * Convert is otherwise a one-way door. Its button is the only filled control on
@@ -3581,7 +3612,10 @@ export async function applyUndoGuestConversion(
 		// Every table whose foreign key to `members` is ON DELETE CASCADE (#1202),
 		// from the one list the FK drift guard reads. The delete below would take
 		// each row silently, so a row here refuses the undo and nothing is deleted.
-		for (const check of UNDO_CASCADE_CHECKS) {
+		for (const check of [
+			...UNDO_CASCADE_CHECKS,
+			...UNDO_NAME_BLANKING_CHECKS,
+		]) {
 			// `created` scope: on the reuse/reactivate path the undo deletes no
 			// membership, so nothing cascades and the row is not at risk.
 			if (check.scope === "created" && !record.createdMembership) continue;
