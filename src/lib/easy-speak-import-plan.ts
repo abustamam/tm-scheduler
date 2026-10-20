@@ -284,13 +284,42 @@ export interface PlanPerson {
 /** Why an erased Easy-Speak account ("Forgotten User") is skipped. */
 export const ERASED_ACCOUNT_REASON = "Erased Easy-Speak account";
 
-/** Why a name-only reference is left out of this import (a fold collision). */
+/**
+ * Why a name-only reference is left out of this import (a fold collision), each
+ * with the note the preview shows: one place, so a reason and its note stay in
+ * step. A note names the person and never promises a question that will not
+ * come: a later import matches or asks once the namesakes are on the roster.
+ */
 export const DEFERRED_NAMESAKES_REASON =
 	"Deferred: the name matches more than one person on Easy-Speak's member list";
 export const DEFERRED_ANSWERED_REASON =
 	"Deferred: an answer is saved for a person with this name";
 export const DEFERRED_REJECTED_REASON =
 	"Deferred: the saved answer for this name no longer applies";
+export const DEFERRED_UNAVAILABLE_REASON =
+	"Deferred: the person on Easy-Speak's member list with this name is not a member here";
+const DEFERRALS = {
+	namesakes: {
+		reason: DEFERRED_NAMESAKES_REASON,
+		note: (name: string) =>
+			`${name}: the name matches more than one person on Easy-Speak's member list, so their meeting records are left out of this import; a later import will match or ask once those people are on the roster.`,
+	},
+	answered: {
+		reason: DEFERRED_ANSWERED_REASON,
+		note: (name: string) =>
+			`${name}: the name matches a person on Easy-Speak's member list who has a saved answer, so their meeting records are left out of this import; a later import will match them against the roster.`,
+	},
+	rejected: {
+		reason: DEFERRED_REJECTED_REASON,
+		note: (name: string) =>
+			`${name}: there is a saved answer for this name that no longer applies, and the name matches a person on Easy-Speak's member list, so their meeting records are left out of this import; a later import will match them against the roster.`,
+	},
+	unavailable: {
+		reason: DEFERRED_UNAVAILABLE_REASON,
+		note: (name: string) =>
+			`${name}: the name matches a person on Easy-Speak's member list who is skipped, a guest or removed here, so their meeting records are left out of this import; a later import will match them against the roster.`,
+	},
+} as const;
 
 /** What one contact row sets on one person; blank means "leave as it is". */
 export interface ContactFill {
@@ -833,77 +862,92 @@ export function buildImportPlan(
 			rejectedChoice,
 		});
 	}
-	// Creates folding to one name are one human or several (never two Persons for
-	// one human). The fold is KEPT only when it is certain: a folded-name group
-	// with EXACTLY ONE `es:` create (listed or not) and no saved answer on that
-	// create or on any name-only key of the group. The name-only references then
-	// join that create, so one Person is made and every key resolves to it.
-	// Every other collision is DEFERRED, never blocked: two or more `es:` creates
-	// are namesakes, and a saved answer means a human already spoke about one of
-	// them. The name-only creates of such a group become a non-blocking `skipped`
-	// outcome that imports nothing and writes no ref and no answer; the `es:`
-	// creates stay ordinary separate creates. Once they are on the roster the
-	// next import's exact-name match gives the reference its real candidates.
+	// A name-only reference (`name:<fold>`, a meeting's mention) beside `es:` people
+	// of the same folded name: one human or several, never two Persons for one
+	// human. E is every `es:` key of the name, whatever its outcome; N is the
+	// reference, and only a create (or, with namesakes, a name match) is touched:
+	// one that resolved by its own ref, or whose own answer took effect, is left.
+	// - |E| = 0: nothing to join.
+	// - |E| = 1: a create with no saved answer on it or on N is FOLDED (the
+	//   reference joins it: one Person, aliases stored); an es: person already a
+	//   roster member is LINKED to; anything else is DEFERRED.
+	// - |E| >= 2 are namesakes: when every one is a roster member (two or more
+	//   distinct) N is `ambiguous` between exactly those members, so the next
+	//   import's question holds even after a rename or for spelling variants; when
+	//   they collapse to one member N keeps its outcome; otherwise DEFERRED.
+	// DEFERRED is a non-blocking `skipped` outcome that imports nothing and writes no
+	// ref and no answer; the `es:` creates stay ordinary separate creates.
 	const answered = (p: PlanPerson) => ctx.resolutions?.[p.key] !== undefined;
+	const rosterById = new Map(ctx.roster.map((m) => [m.memberId, m] as const));
 	const peopleByFold = new Map<string, PlanPerson[]>();
 	for (const p of people) {
 		const fold = foldName(p.name);
 		peopleByFold.set(fold, [...(peopleByFold.get(fold) ?? []), p]);
 	}
 	const merged = new Set<PlanPerson>();
+	const defer = (p: PlanPerson, kind: keyof typeof DEFERRALS) => {
+		p.outcome = { status: "skipped", reason: DEFERRALS[kind].reason };
+		notes.push(DEFERRALS[kind].note(p.name));
+	};
 	for (const group of peopleByFold.values()) {
-		const esCreates = group.filter(
-			(p) => p.esUserId !== null && p.outcome.status === "create",
-		);
-		// A name-only create with a saved answer that took effect is no longer a
-		// create, so it is outside this list; one whose answer was rejected (a member
-		// the roster no longer holds) stays a create and is an answered key here.
-		const nameOnly = group.filter(
-			(p) => p.esUserId === null && p.outcome.status === "create",
-		);
-		if (nameOnly.length === 0 || esCreates.length === 0) continue;
-		const target = esCreates[0];
-		const targetAnswered = target !== undefined && answered(target);
-		const nameOnlyAnswered = nameOnly.some(answered);
-		if (esCreates.length > 1 || targetAnswered || nameOnlyAnswered || !target) {
-			for (const p of nameOnly) {
-				const [reason, note] =
-					esCreates.length > 1
-						? [
-								DEFERRED_NAMESAKES_REASON,
-								`${p.name}: the name matches more than one person on Easy-Speak's member list, so their meeting records are left out this time and the next import will ask which person it is.`,
-							]
-						: targetAnswered
-							? [
-									DEFERRED_ANSWERED_REASON,
-									`${p.name}: the name matches a person on Easy-Speak's member list who has a saved answer, so their meeting records are left out this time and the next import will match them against the roster.`,
-								]
-							: [
-									DEFERRED_REJECTED_REASON,
-									`${p.name}: there is a saved answer for this name that no longer applies, and the name matches a person on Easy-Speak's member list, so their meeting records are left out this time and the next import will match them against the roster.`,
-								];
-				p.outcome = { status: "skipped", reason };
-				notes.push(note);
+		const esPeople = group.filter((p) => p.esUserId !== null);
+		const n = group.find((p) => p.esUserId === null);
+		if (!n || esPeople.length === 0) continue;
+		const nIsCreate = n.outcome.status === "create";
+		const nMatchedByName =
+			n.outcome.status === "member" &&
+			(n.outcome.via === "exact" || n.outcome.via === "folded");
+		const only = esPeople.length === 1 ? esPeople[0] : undefined;
+		if (only) {
+			if (!nIsCreate) continue;
+			if (only.outcome.status === "member") {
+				n.outcome = {
+					status: "member",
+					memberId: only.outcome.memberId,
+					via: "folded",
+				};
+			} else if (only.outcome.status !== "create") {
+				defer(n, "unavailable");
+			} else if (answered(only)) {
+				defer(n, "answered");
+			} else if (answered(n)) {
+				defer(n, "rejected");
+			} else {
+				const mergedKeys = [n.key];
+				only.outcome = { ...only.outcome, mergedKeys };
+				only.appearances.roles += n.appearances.roles;
+				only.appearances.attendance += n.appearances.attendance;
+				only.appearances.awards += n.appearances.awards;
+				only.appearances.tableTopics += n.appearances.tableTopics;
+				only.appearances.introducedBy += n.appearances.introducedBy;
+				for (const c of n.appearances.guestCategories) {
+					if (!only.appearances.guestCategories.includes(c)) {
+						only.appearances.guestCategories.push(c);
+					}
+				}
+				only.listOnly = false;
+				merged.add(n);
 			}
 			continue;
 		}
-		if (target.outcome.status !== "create") continue;
-		const mergedKeys = nameOnly.map((p) => p.key).sort();
-		target.outcome = { ...target.outcome, mergedKeys };
-		for (const p of nameOnly) {
-			target.appearances.roles += p.appearances.roles;
-			target.appearances.attendance += p.appearances.attendance;
-			target.appearances.awards += p.appearances.awards;
-			target.appearances.tableTopics += p.appearances.tableTopics;
-			target.appearances.introducedBy += p.appearances.introducedBy;
-			for (const c of p.appearances.guestCategories) {
-				if (!target.appearances.guestCategories.includes(c)) {
-					target.appearances.guestCategories.push(c);
-				}
-			}
-			merged.add(p);
+		if (!nIsCreate && !nMatchedByName) continue;
+		const memberIds: string[] = [];
+		for (const e of esPeople) {
+			if (e.outcome.status === "member") memberIds.push(e.outcome.memberId);
 		}
-		target.listOnly = false;
+		if (memberIds.length === esPeople.length) {
+			const distinct = [...new Set(memberIds)];
+			if (distinct.length < 2) continue;
+			n.outcome = {
+				status: "ambiguous",
+				candidates: distinct.flatMap((mid) => {
+					const m = rosterById.get(mid);
+					return m ? [m] : [];
+				}),
+			};
+		} else {
+			defer(n, "namesakes");
+		}
 	}
 	if (merged.size > 0) {
 		for (let i = people.length - 1; i >= 0; i--) {

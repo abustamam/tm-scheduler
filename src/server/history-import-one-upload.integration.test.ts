@@ -1105,6 +1105,90 @@ describe.skipIf(!hasTestDb)(
 			);
 		});
 
+		// protects=two namesakes deferred and applied, then one renamed in the database:
+		// the next preview still asks which person the reference is, with BOTH member
+		// ids, instead of silently taking the one spelling that still matches;
+		// fails_when=the group counts only creates, or the exact pass picks the unrenamed one;
+		// no_claim=the first deferral, the test above.
+		it("still asks with both candidates after one deferred namesake is renamed", async () => {
+			const stored = await upload(twinsBundle);
+			await apply(stored.importId);
+			const twins = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(
+					and(eq(members.clubId, seed.clubId), eq(members.name, "Dupe Twin")),
+				);
+			expect(twins).toHaveLength(2);
+			await testDb
+				.update(members)
+				.set({ name: "Dupe Twin Renamed" })
+				.where(eq(members.id, twins[0]?.id as string));
+			const next = await preview(stored.importId);
+			const again = next.people.find((p) => p.key === twinRef);
+			expect(again).toMatchObject({ status: "ambiguous", needsDecision: true });
+			expect(again?.candidates.map((c) => c.memberId).sort()).toEqual(
+				twins.map((t) => t.id).sort(),
+			);
+		});
+
+		// protects=a single es: create with a saved answer on the es: key or on the
+		// name-only key is deferred and applied, and after that member is renamed the
+		// next preview LINKS the reference to them, so a later apply makes no second Person;
+		// fails_when=the reference is created apart once the member is no longer matched by name;
+		// no_claim=the namesake case, above.
+		it.each([
+			[
+				"the es: key",
+				(_key: string) => ({
+					[`es:${P(9)}`]: { action: "guest", kind: "visitor" },
+				}),
+			],
+			[
+				"the name-only key",
+				(key: string) => ({
+					[key]: { action: "member", memberId: randomUUID() },
+				}),
+			],
+		] as const)("links a reference to a renamed member after a deferral caused by an answer on %s", async (_label, answer) => {
+			const key = personKeyOf({ esUserId: null, name: "dupe single" });
+			extraResolutions = answer(key) as Record<string, PersonResolution>;
+			const stored = await upload((b) => {
+				b.people.push({
+					esUserId: P(9),
+					name: "Dupe Single",
+					status: "Member",
+					joined: null,
+				});
+				b.meetings[0]?.roles.push({
+					role: "Timekeeper Two",
+					slot: 9,
+					holder: { esUserId: null, name: "dupe single" },
+				});
+			});
+			expect(
+				(await preview(stored.importId)).people.find((p) => p.key === key),
+			).toMatchObject({ status: "skipped", needsDecision: false });
+			await apply(stored.importId);
+			const made = await memberByName("Dupe Single");
+			expect(made).toBeDefined();
+			await testDb
+				.update(members)
+				.set({ name: "Dupe Single Renamed" })
+				.where(eq(members.id, made?.id as string));
+			const before = await tally();
+			const next = await preview(stored.importId);
+			expect(next.people.find((p) => p.key === key)).toMatchObject({
+				status: "member",
+				memberId: made?.id,
+			});
+			await apply(stored.importId);
+			expect((await tally()).members).toBe(before.members);
+			expect(await refForKey(key)).toEqual([
+				{ kind: "person", targetId: made?.id },
+			]);
+		});
+
 		// protects=a list-only es: person with a saved guest answer beside a name-only
 		// reference is no fold: the reference is deferred and nothing is minted for it
 		// (no guest, no alias ref), instead of a pending guest applied after a merge;

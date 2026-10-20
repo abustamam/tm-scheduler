@@ -7,6 +7,7 @@ import {
 	DEFERRED_ANSWERED_REASON,
 	DEFERRED_NAMESAKES_REASON,
 	DEFERRED_REJECTED_REASON,
+	DEFERRED_UNAVAILABLE_REASON,
 	isJsonbSafeText,
 	needsDecision,
 	type PlanContext,
@@ -328,6 +329,7 @@ describe("buildImportPlan on the B fixture", () => {
 		});
 		expect(outcomeOf(plan, "900001")).toMatchObject({ status: "skipped" });
 		expect(plan.unresolved).toEqual([]);
+		expect(plan.canApply).toBe(true);
 	});
 
 	it("does not take an answer naming a member who is not on the roster", () => {
@@ -627,7 +629,6 @@ describe("buildImportPlan on the B fixture", () => {
 	});
 
 	const nameOnlyKey = personKeyOf({ esUserId: null, name: "dupe person" });
-	const DEFERRED = { status: "skipped" } as const;
 
 	// protects=two DISTINCT Easy-Speak ids with one name stay two creates (two
 	// namesakes), and the name-only reference is DEFERRED: not blocking, not an
@@ -699,9 +700,10 @@ describe("buildImportPlan on the B fixture", () => {
 		const plan = buildImportPlan(bundle, ctx());
 		const dupes = dupesOf(plan);
 		expect(dupes).toHaveLength(3);
-		expect(dupes.find((d) => d.key === nameOnlyKey)?.outcome).toMatchObject(
-			DEFERRED,
-		);
+		expect(dupes.find((d) => d.key === nameOnlyKey)?.outcome).toEqual({
+			status: "skipped",
+			reason: DEFERRED_NAMESAKES_REASON,
+		});
 		for (const k of ["es:900901", "es:900903"]) {
 			const o = dupes.find((d) => d.key === k)?.outcome;
 			expect(o?.status).toBe("create");
@@ -732,7 +734,9 @@ describe("buildImportPlan on the B fixture", () => {
 		expect(target?.outcome).not.toHaveProperty("mergedKeys");
 		expect(target?.listOnly).toBe(true);
 		expect(plan.notes).toHaveLength(1);
-		expect(plan.notes[0]).not.toMatch(/ask which person/u);
+		expect(plan.notes[0]).toContain(
+			"dupe person: the name matches a person on Easy-Speak's member list who has a saved answer",
+		);
 	});
 
 	// protects=a saved answer on the NAME-ONLY key keeps its answered outcome and
@@ -779,7 +783,8 @@ describe("buildImportPlan on the B fixture", () => {
 			reason: DEFERRED_REJECTED_REASON,
 		});
 		expect(deferred?.rejectedChoice).toBe(id(999));
-		expect(needsDecision(deferred as never)).toBe(false);
+		if (!deferred) throw new Error("fixture changed");
+		expect(needsDecision(deferred)).toBe(false);
 		const target = dupes.find((d) => d.key === "es:900901");
 		expect(target?.outcome.status).toBe("create");
 		expect(target?.outcome).not.toHaveProperty("mergedKeys");
@@ -1183,6 +1188,276 @@ describe("people the lists name and no meeting does (#1203)", () => {
 		const nova = plan.people.find((p) => p.key === "name:nova quill");
 		expect(nova?.outcome).toMatchObject({ status: "member", memberId: id(40) });
 		expect(nova?.key).toBe(personKeyOf({ esUserId: null, name: "Nova Quill" }));
+	});
+});
+
+describe("a name-only reference beside es: people of the same name (#1240)", () => {
+	const ES = (n: number) => `es:90092${n}`;
+	/** `esNames` are es: people who hold a role; `nName` holds a role with no profile. */
+	const nsBundle = (esNames: string[], nName: string) => {
+		const bundle = load();
+		bundle.people = [];
+		const past = bundle.meetings.find((m) => m.esMeetingId === "644304");
+		if (!past) throw new Error("fixture changed");
+		past.guests = [];
+		past.roles = [
+			{
+				role: "Timer",
+				slot: 1,
+				holder: { esUserId: null, name: nName },
+			},
+			...esNames.map((name, i) => ({
+				role: "Ah-Counter",
+				slot: 2 + i,
+				holder: { esUserId: `90092${i}`, name },
+			})),
+		];
+		return bundle;
+	};
+	const N_KEY = (name: string) => personKeyOf({ esUserId: null, name });
+	const RN = (n: number, name: string): PlanRosterMember => ({
+		memberId: id(50 + n),
+		name,
+	});
+	const run = (
+		bundle: EasySpeakBundleV1,
+		over: Partial<PlanContext> = {},
+		roster: PlanRosterMember[] = [],
+	) =>
+		buildImportPlan(bundle, ctx({ roster: [...ROSTER, ...roster], ...over }));
+	const person = (plan: ReturnType<typeof buildImportPlan>, key: string) =>
+		plan.people.find((p) => p.key === key);
+
+	// protects=one es: person already on the roster (by a ref after a rename, or by an
+	// answer) and a name-only create of the same name: the reference LINKS to that
+	// member, so no second Person is made after a deferral and a rename;
+	// fails_when=the group counts only creates, so the reference is created apart;
+	// no_claim=the apply, the integration suite's.
+	it.each([
+		[
+			"a ref after a rename",
+			{
+				refs: [{ kind: "person" as const, sourceId: ES(0), targetId: id(50) }],
+			},
+		],
+		[
+			"a saved member answer",
+			{
+				resolutions: {
+					[ES(0)]: { action: "member" as const, memberId: id(50) },
+				},
+			},
+		],
+	])("links a name-only create to the one es: person on the roster through %s", (_label, over) => {
+		const plan = run(nsBundle(["Jon Smith"], "jon smith"), over, [
+			RN(0, "Jonathan Smith"),
+		]);
+		expect(person(plan, N_KEY("jon smith"))?.outcome).toEqual({
+			status: "member",
+			memberId: id(50),
+			via: "folded",
+		});
+		expect(plan.notes).toEqual([]);
+	});
+
+	// protects=the link needs no answer rule: a rejected answer on the name-only key
+	// does not stop it linking to the member the es: person already is;
+	// fails_when=the link is gated on "no saved answer";
+	// no_claim=the rejectedChoice display.
+	it("links even when the name-only key has a rejected saved answer", () => {
+		const plan = run(
+			nsBundle(["Jon Smith"], "jon smith"),
+			{
+				refs: [{ kind: "person", sourceId: ES(0), targetId: id(50) }],
+				resolutions: {
+					[N_KEY("jon smith")]: { action: "member", memberId: id(999) },
+				},
+			},
+			[RN(0, "Jonathan Smith")],
+		);
+		const n = person(plan, N_KEY("jon smith"));
+		expect(n?.outcome).toMatchObject({ status: "member", memberId: id(50) });
+		expect(n?.rejectedChoice).toBe(id(999));
+	});
+
+	// protects=an es: person who is skipped, a guest, or a tombstone is not a create to
+	// fold into, nor a member to link to: the name-only create is DEFERRED;
+	// fails_when=such a person drops out of the group and the reference is created apart;
+	// no_claim=the wording of the note.
+	it.each([
+		[
+			"skipped",
+			{ resolutions: { [ES(0)]: { action: "skip" as const, reason: "No." } } },
+		],
+		[
+			"a guest",
+			{
+				resolutions: {
+					[ES(0)]: { action: "guest" as const, kind: "visitor" as const },
+				},
+			},
+		],
+		[
+			"a tombstone",
+			{
+				refs: [
+					{ kind: "guest" as const, sourceId: ES(0), targetId: "gone-guest" },
+				],
+			},
+		],
+	])("defers a name-only create beside an es: person who is %s", (_label, over) => {
+		const plan = run(nsBundle(["Jon Smith"], "jon smith"), over);
+		expect(person(plan, N_KEY("jon smith"))?.outcome).toEqual({
+			status: "skipped",
+			reason: DEFERRED_UNAVAILABLE_REASON,
+		});
+		expect(plan.notes).toHaveLength(1);
+		expect(plan.notes[0]).toContain("jon smith");
+	});
+
+	// protects=two es: namesakes who are both on the roster (by ref after a rename, or by
+	// answers) make the name-only reference ambiguous between exactly those members;
+	// fails_when=the group counts only creates, so the reference is created or linked to one;
+	// no_claim=a human's answer to it.
+	it.each([
+		[
+			"refs after renames",
+			{
+				refs: [
+					{ kind: "person" as const, sourceId: ES(0), targetId: id(50) },
+					{ kind: "person" as const, sourceId: ES(1), targetId: id(51) },
+				],
+			},
+		],
+		[
+			"saved member answers",
+			{
+				resolutions: {
+					[ES(0)]: { action: "member" as const, memberId: id(50) },
+					[ES(1)]: { action: "member" as const, memberId: id(51) },
+				},
+			},
+		],
+	])("asks which of two es: namesakes on the roster the reference is (%s)", (_label, over) => {
+		const plan = run(nsBundle(["Jon Smith", "Jon Smith"], "jon smith"), over, [
+			RN(0, "Jonathan Smith"),
+			RN(1, "Jonny Smith"),
+		]);
+		const n = person(plan, N_KEY("jon smith"));
+		expect(n?.outcome.status).toBe("ambiguous");
+		expect(
+			n?.outcome.status === "ambiguous" &&
+				n.outcome.candidates.map((c) => c.memberId).sort(),
+		).toEqual([id(50), id(51)]);
+		expect(plan.unresolved.map((p) => p.key)).toContain(N_KEY("jon smith"));
+	});
+
+	// protects=spelling and case variants: the name-only reference's exact spelling
+	// matches one roster member, but two es: namesakes of that name are on the roster,
+	// so it is ambiguous between them, never silently the exact one;
+	// fails_when=the exact pass is trusted beside namesakes;
+	// no_claim=a name with one es: person.
+	it.each([
+		["José Doe", "Jose Doe", "Jose Doe"],
+		["Ann Lee", "ANN LEE", "Ann Lee"],
+	])("is ambiguous between %s and %s even when one spelling matches exactly", (a, b, holder) => {
+		const plan = run(nsBundle([a, b], holder), {}, [RN(0, a), RN(1, b)]);
+		const n = person(plan, N_KEY(holder));
+		expect(n?.outcome.status).toBe("ambiguous");
+		expect(
+			n?.outcome.status === "ambiguous" &&
+				n.outcome.candidates.map((c) => c.memberId).sort(),
+		).toEqual([id(50), id(51)]);
+	});
+
+	// protects=two es: keys that resolve to ONE member are one person: the reference
+	// keeps its own outcome;
+	// fails_when=two keys are counted as two humans;
+	// no_claim=what its own outcome is.
+	it("leaves the reference alone when both es: keys are one member", () => {
+		const plan = run(
+			nsBundle(["Jon Smith", "Jon Smith"], "jon smith"),
+			{
+				refs: [
+					{ kind: "person", sourceId: ES(0), targetId: id(50) },
+					{ kind: "person", sourceId: ES(1), targetId: id(50) },
+				],
+			},
+			[RN(0, "Jonathan Smith")],
+		);
+		expect(person(plan, N_KEY("jon smith"))?.outcome.status).toBe("create");
+		expect(plan.notes).toEqual([]);
+	});
+
+	// protects=one namesake on the roster and one still a create (or skipped) is not
+	// enough to ask: the reference is DEFERRED, whether it was a create or matched a
+	// roster member by name;
+	// fails_when=the reference is linked or asked about on partial information;
+	// no_claim=the later import.
+	it.each([
+		["a create", {}, "jon smith"],
+		[
+			"skipped",
+			{ resolutions: { [ES(1)]: { action: "skip" as const, reason: "No." } } },
+			"jon smith",
+		],
+	])("defers a create beside one namesake on the roster and one who is %s", (_label, extra, holder) => {
+		const plan = run(
+			nsBundle(["Jon Smith", "Jon Smith"], holder),
+			{
+				refs: [{ kind: "person", sourceId: ES(0), targetId: id(50) }],
+				...extra,
+			},
+			[RN(0, "Jonathan Smith")],
+		);
+		expect(person(plan, N_KEY(holder))?.outcome).toEqual({
+			status: "skipped",
+			reason: DEFERRED_NAMESAKES_REASON,
+		});
+	});
+
+	it("defers a reference that matched a roster member by name beside a namesake who is skipped", () => {
+		const plan = run(
+			nsBundle(["Jon Smith", "Jon Smith"], "jon smith"),
+			{
+				refs: [{ kind: "person", sourceId: ES(0), targetId: id(50) }],
+				resolutions: { [ES(1)]: { action: "skip", reason: "No." } },
+			},
+			[RN(0, "Jonathan Smith"), RN(2, "Jon Smith")],
+		);
+		expect(person(plan, N_KEY("jon smith"))?.outcome).toEqual({
+			status: "skipped",
+			reason: DEFERRED_NAMESAKES_REASON,
+		});
+	});
+
+	// protects=a reference that resolved through its own ref, or whose own saved answer
+	// took effect, is never touched by the group;
+	// fails_when=the group overrides a ref or a human's answer;
+	// no_claim=namesakes themselves.
+	it("leaves a reference with its own ref or its own accepted answer alone", () => {
+		const base = nsBundle(["Jon Smith", "Jon Smith"], "jon smith");
+		const viaRef = run(
+			base,
+			{
+				refs: [
+					{ kind: "person", sourceId: N_KEY("jon smith"), targetId: id(52) },
+				],
+			},
+			[RN(2, "Someone Else")],
+		);
+		expect(person(viaRef, N_KEY("jon smith"))?.outcome).toEqual({
+			status: "member",
+			memberId: id(52),
+			via: "ref",
+		});
+		const answered = run(base, {
+			resolutions: { [N_KEY("jon smith")]: { action: "skip", reason: "No." } },
+		});
+		expect(person(answered, N_KEY("jon smith"))?.outcome).toEqual({
+			status: "skipped",
+			reason: "No.",
+		});
 	});
 });
 
