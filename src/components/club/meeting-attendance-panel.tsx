@@ -694,8 +694,8 @@ function RollChip({
 			// measured — see `AttendanceRow`'s trigger), so the two row shapes share
 			// the rail's one right edge and its one left edge. Split 32px for the
 			// chevron trigger, 4px of `gap-1`, and `flex-1` (140px) for the commit,
-			// whose widest label needs ~104px ("Present?" plus the sm button's 26px of
-			// chrome). Sizing the pair inside the existing track rather than widening
+			// whose widest label ("Present?", the widest of the two suggestions) needs
+			// well under that. Sizing the pair inside the existing track rather than widening
 			// it is what keeps the icon cluster to its left from moving.
 			<div className="flex w-44 items-center gap-1">
 				<Button
