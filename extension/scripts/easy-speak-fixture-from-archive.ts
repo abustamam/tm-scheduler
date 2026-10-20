@@ -665,8 +665,10 @@ function fakeNumber(st: RewriteState, id: string, ctx?: string): string {
 /** Every digit run in `s` replaced, the words and separators between them kept. */
 const mapRunsIn = (st: RewriteState, s: string) => s.replace(/\d+/g, (r) => fakeRun(st, r));
 
-/** How many weeks a first date, or one beyond all the others, may be moved at most. */
+/** How many weeks the first date on either side of today may be moved at most (5 years). */
 const DATE_SPREAD_WEEKS = 260;
+/** How many weeks each further date beyond the known ones is moved on top of that, at most: a page of 150 dates then stays within a few decades. */
+const DATE_STEP_WEEKS = 52;
 
 /**
  * A real day (days since 1970) to a synthetic one. NOT one shared offset: each distinct real date gets its own,
@@ -690,7 +692,7 @@ function fakeDay(st: RewriteState, day: number): number {
 	}
 	const lo = st.dates[loIdx];
 	const r = rng(st, `date:${day}`);
-	const spare = lo && hi ? Math.floor((hi.fake - lo.fake - (hi.real - lo.real)) / 7) : DATE_SPREAD_WEEKS;
+	const spare = lo && hi ? Math.floor((hi.fake - lo.fake - (hi.real - lo.real)) / 7) : (lo ?? hi)?.pivot ? DATE_SPREAD_WEEKS : DATE_STEP_WEEKS;
 	const at0 = lo ? lo.fake + (day - lo.real) : (hi as { real: number; fake: number }).fake - ((hi as { real: number }).real - day);
 	const sign = lo ? 1 : -1;
 	// a start among the spare weeks, then the next ones, until the day is neither the real one nor another real date of the pages

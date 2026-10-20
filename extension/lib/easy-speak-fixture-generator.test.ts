@@ -1088,6 +1088,28 @@ describe("round 3 (#1275): dates", () => {
 	it("R3-6b. a date-shaped text that is not a date keeps neither its month nor its digits", () => {
 		const out = ptext(rewriteEasySpeakPage(page("<p>May 99, 2026</p><p>March 45, 2025</p>")));
 		expect(out.join("|")).not.toMatch(/May|March|99|45|2026|2025/);
+		// ... in every date shape
+		const shapes = ptext(rewriteEasySpeakPage(page("<p>Tuesday 31st February 2026 at 7:00 pm</p><p>Feb 31 26, 7:30 pm</p><p>2026-02-30</p><p>2026-13-45</p>")));
+		expect(shapes.join("|")).not.toMatch(/Feb|Tuesday|31|30|45|13|2026|26/);
+	});
+
+	it("R3-5e. a synthetic date steps around a day the pages carry (the day the first run chose is taken, so the second run moves)", () => {
+		const html = page("<p>2026-11-03</p>");
+		const first = ptext(rewriteEasySpeakPage(html, { state: newRewriteState({ seed: "avoid", now: NOW }) }))[0];
+		const st = newRewriteState({ seed: "avoid", now: NOW });
+		st.realDays.add(dayOf(first));
+		const second = ptext(rewriteEasySpeakPage(html, { state: st }))[0];
+		expect(second).not.toBe(first);
+		expect(dayOf(second)).toBeGreaterThan(Math.floor(NOW / 86_400_000));
+	});
+
+	it("R3-5d. no synthetic date is one of the real dates of the page (150 days in a row)", () => {
+		const days = Array.from({ length: 150 }, (_, i) => new Date(Date.UTC(2026, 5, 1) + i * 86_400_000).toISOString().slice(0, 10));
+		for (const seed of ["a", "b", "c"]) {
+			const out = ptext(rewriteEasySpeakPage(page(days.map((d) => `<p>${d}</p>`).join("")), { state: newRewriteState({ seed, now: NOW }) }));
+			const real = new Set(days);
+			for (const o of out) expect(real.has(o), `seed ${seed}: ${o} is a real date of the page`).toBe(false);
+		}
 	});
 });
 
@@ -1115,6 +1137,10 @@ describe("round 3 (#1275): a literal exception holds only in its own context", (
 		const own = page(["1", "6", "2", "5"].map((v) => `<input name="available[123456]" type="radio" value="${v}">`).join(""));
 		const kept = Array.from(parseHtml(rewriteEasySpeakPage(own)).querySelectorAll("input")).map((x) => x.getAttribute("value"));
 		expect(kept).toEqual(["1", "6", "2", "5"]);
+		// a value the walker does not read stays out even on an attendance field
+		const odd = Array.from(parseHtml(rewriteEasySpeakPage(page(`<input name="available[123456]" type="radio" value="9"><input name="available[123456]" type="radio" value="3">`))).querySelectorAll("input")).map((x) => x.getAttribute("value"));
+		expect(odd).not.toContain("9");
+		expect(odd).not.toContain("3");
 	});
 
 	it("R3-3c. the pager keeps its digits only inside .nav and only when the page is not past the count (20 seeds)", () => {
@@ -1128,6 +1154,7 @@ describe("round 3 (#1275): a literal exception holds only in its own context", (
 		expect(nav("Page 2 of 3")).toContain("Page 2 of 3");
 		expect(nav("Page 4 of 1")).not.toContain("Page 4 of 1");
 		expect(nav("Page 12 of 30")).not.toMatch(/12|30/);
+		expect(nav("Page 2 of 30")).not.toMatch(/30/);
 	});
 
 	it("R3-6. a month name stays only in a month select's options; a name with a punctuation-joined role word is replaced whole", () => {
