@@ -39,6 +39,10 @@ The maintainer is the intake. An agent files an issue only for a user-visible bu
 corruption, a security hole, or a dev-ex bug (a defect in the repo's own tooling) that lies outside the files its PR touches; the full rule is "What
 earns an issue" in `CLAUDE.md`. That issue:
 
+- is searched for first: `gh issue list --state all --search "<file path>"` for the file the
+  finding is in. A match that is open gets a comment instead of a new issue; a closed one is
+  named in the agent's final message. (#1229 and #1244 were one bug, filed by two agents four
+  days apart.)
 - opens with the line `Found by an agent while working on #N` (or `… while <what the maintainer
   asked>` when there was no issue), so the grep below can count it;
 - carries `needs-triage` and a category label, nothing more. `ready-for-agent` is applied at the

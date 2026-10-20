@@ -28,8 +28,8 @@ outer loop; this section is one turn of it, and each turn is a fresh session:
 5. Each agent opens its PR and **stops**: `gh pr create`, body carrying `Closes #N`, no merge.
 6. **From the main session**: review the wave's PRs, then land them one at a time — see
    **Landing the wave** below. The merge decision is the maintainer's, not an agent's.
-7. Run `/qa-only` once against the deployed app. Write the handoff (CLAUDE.md's format) and
-   **stop**. The next stage belongs to a new session, which starts again at 1.
+7. Run `/qa-only` once against the deployed app. Read `main`'s CI (**Landing the wave**, step 6).
+   Write the handoff (CLAUDE.md's format) and **stop**. The next stage belongs to a new session, which starts again at 1.
 
 Step 1 is not a formality, and the fresh session is what makes it fresh. Between stages the
 plan genuinely changes: a merge makes cited paths exist (an issue leaves CITED PATHS ARE
@@ -151,7 +151,9 @@ Files this issue cites:
 7. STOP THERE. Do not merge, do not review your own PR, do not pick up another issue.
    Anything you noticed on the way follows CLAUDE.md's "What earns an issue": in the diff,
    fix it; a user-visible bug outside it, one `needs-triage` issue; anything else, one
-   sentence in the PR body.
+   sentence in the PR body. Before filing, search:
+   `gh issue list --state all --search "<file path>"`. An open match gets a comment, not a
+   new issue; a closed match is named in your final message.
 ```
 
 **Keep it this short.** The agent works in a worktree, so it reads CLAUDE.md itself — the
@@ -194,6 +196,11 @@ Merging is the serial half.
    as conflicting does. Back to 3 with the next PR, until the wave has landed.
 5. Watch CI on `main` after the wave lands. That run, not the PR's, is what catches two
    file-disjoint PRs breaking each other through an import.
+6. **Read `main`'s CI before the handoff is written.** `gh run list --branch main --limit 1`;
+   if the run is in progress, wait for it. Put its conclusion and link in the handoff's
+   **State** line. A red `main` is a **Needs you** item, or it gets fixed in this session. A
+   known flake filed twice (#1229, #1244) kept `main` red through a long weekend because
+   nothing tied this check to the handoff.
 
 ## Common mistakes
 
