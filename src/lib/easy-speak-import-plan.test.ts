@@ -862,6 +862,38 @@ describe("buildImportPlan on the B fixture", () => {
 		expect(plan.notes[0]).toContain('the saved answer "guest" is set aside');
 	});
 
+	// protects=a LIST-ONLY person with a live member ref, a deleted guest ref and a
+	// saved "guest" answer is also told the answer is set aside, once;
+	// fails_when=the note sits behind the guard that clears a list-only guest answer;
+	// no_claim=the apply.
+	it("notes a set-aside guest answer for a list-only person too", () => {
+		const roster = [
+			...ROSTER,
+			{ memberId: id(20), name: "Casey Winterbourne" },
+		];
+		const plan = buildImportPlan(
+			load(),
+			ctx({
+				roster,
+				refs: [
+					{ kind: "person", sourceId: "es:900029", targetId: id(20) },
+					{ kind: "guest", sourceId: "es:900029", targetId: "gone-guest" },
+				],
+				resolutions: { "es:900029": { action: "guest", kind: "visitor" } },
+			}),
+		);
+		const person = plan.people.find((p) => p.key === "es:900029");
+		expect(person?.listOnly).toBe(true);
+		expect(person?.outcome).toEqual({
+			status: "member",
+			memberId: id(20),
+			via: "ref",
+		});
+		const named = plan.notes.filter((n) => n.startsWith(`${person?.name}:`));
+		expect(named).toHaveLength(1);
+		expect(named[0]).toContain('the saved answer "guest" is set aside');
+	});
+
 	it("imports nothing from a meeting in the future, however the clock moves", () => {
 		const plan = buildImportPlan(
 			load(),

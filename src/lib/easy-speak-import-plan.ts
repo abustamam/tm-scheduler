@@ -777,6 +777,17 @@ export function buildImportPlan(
 		// row of the member list there is nothing to decide, so no answer is read.
 		if (outcome.status !== "deleted") {
 			const saved = ctx.resolutions?.[key];
+			if (
+				saved?.action === "guest" &&
+				guestRef &&
+				!ctx.guestIds.has(guestRef)
+			) {
+				// A guest the club deleted stays deleted, even beside a live member
+				// ref: the answer does not mint it again, and the preview says so.
+				notes.push(
+					`${ref.name}: the saved answer "guest" is set aside because the club deleted that guest; they stay a member.`,
+				);
+			}
 			const choice =
 				listOnly &&
 				(saved?.action === "guest" ||
@@ -798,11 +809,7 @@ export function buildImportPlan(
 				guestRef &&
 				!ctx.guestIds.has(guestRef)
 			) {
-				// A guest the club deleted stays deleted, even beside a live member
-				// ref: the answer does not mint it again, and the preview says so.
-				notes.push(
-					`${ref.name}: the saved answer "guest" is set aside because the club deleted that guest; they stay a member.`,
-				);
+				// Set aside (noted above): the deleted guest stays deleted.
 			} else if (choice?.action === "guest") {
 				// A guest the ref already names stays that guest: a saved "guest" answer
 				// must not mint a second one on every re-apply.
