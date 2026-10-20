@@ -507,6 +507,8 @@ async function loadPlanContext(
 							eq(activityLog.action, "member_remove"),
 							eq(activityLog.targetType, "member"),
 							inArray(activityLog.targetId, refMemberIds),
+							// A convert undo that KEPT the membership removed no one.
+							sql`${activityLog.detail}->>'membershipDeleted' is distinct from 'false'`,
 						),
 					);
 	return {
@@ -807,6 +809,8 @@ interface Resolved {
 export interface WritePeopleOptions {
 	/** The superadmin each `member_add` is attributed to. */
 	superadminUserId?: string | null;
+	/** The answers saved by the earlier apply: a replay of one is not a change. */
+	previousResolutions?: Record<string, PersonResolution>;
 	now?: Date;
 	/** The club's zone, for the day an officer term opens. */
 	timezone?: string | null;
@@ -1048,8 +1052,10 @@ export async function writePeopleAndRoles(
 			out.personByNewMember.set(created.id, created.personId);
 			await putRef(tx, clubId, "person", person.key, created.id);
 			for (const alias of o.mergedKeys ?? []) {
-				// Its own ref is stored by the next apply, which matches it by name.
+				// Stored now: a rename before the next apply must not send the alias
+				// back through a name match (a duplicate, or a later namesake).
 				out.members.set(alias, created.id);
+				await putRef(tx, clubId, "person", alias, created.id);
 			}
 		}
 
@@ -1068,28 +1074,37 @@ export async function writePeopleAndRoles(
 				if (o.guestId) {
 					// The saved answer's kind is the stored guest's kind: a changed answer
 					// must not leave the preview and the record disagreeing.
-					if (o.via === "chosen") {
+					// Only when the answer CHANGED in this import: a replay of the answer
+					// already applied must not revert a kind an officer set in the app.
+					const prior = opts.previousResolutions?.[person.key];
+					const replay = prior?.action === "guest" && prior.kind === o.kind;
+					if (o.via === "chosen" && !replay) {
 						await tx
 							.update(guests)
 							.set({ kind: o.kind })
 							.where(and(eq(guests.id, o.guestId), eq(guests.clubId, clubId)));
 					}
 					out.guests.set(person.key, o.guestId);
+					for (const alias of o.mergedKeys ?? []) {
+						out.guests.set(alias, o.guestId);
+						await putRef(tx, clubId, "guest", alias, o.guestId);
+					}
 					continue;
 				}
 				// The plan never makes a guest of a person no meeting names (#1203);
 				// this is the second lock on that door.
 				if (person.listOnly) continue;
 				let introducedByMemberId: string | null = null;
-				const introducer = byKey.get(introducerOf.get(person.key) ?? "");
+				const introducerKey = introducerOf.get(person.key) ?? "";
+				const introducer = byKey.get(introducerKey);
 				// The loop is name-sorted, so a creating introducer who sorts after the
 				// guest is not in `out.members` yet; a linked one always has its id.
-				const introducerMemberId = introducer
-					? (out.members.get(introducer.key) ??
-						(introducer.outcome.status === "member"
-							? introducer.outcome.memberId
-							: undefined))
-					: undefined;
+				// A merged alias is in `out.members` but not in `plan.people`.
+				const introducerMemberId =
+					out.members.get(introducerKey) ??
+					(introducer?.outcome.status === "member"
+						? introducer.outcome.memberId
+						: undefined);
 				if (introducerMemberId) {
 					introducedByMemberId = await validatedIntroducerId(
 						tx,
@@ -1110,6 +1125,10 @@ export async function writePeopleAndRoles(
 				out.guests.set(person.key, created.id);
 				out.newGuests++;
 				await putRef(tx, clubId, "guest", person.key, created.id);
+				for (const alias of o.mergedKeys ?? []) {
+					out.guests.set(alias, created.id);
+					await putRef(tx, clubId, "guest", alias, created.id);
+				}
 			}
 		}
 		return out;
@@ -1826,6 +1845,7 @@ async function applyUnderImportLock(input: {
 
 	const resolved = await writePeopleAndRoles(input.clubId, plan, {
 		superadminUserId: input.superadminUserId,
+		previousResolutions: stored.state.resolutions,
 		now,
 		timezone: loaded.ctx.clubTimezone,
 		countryCode: await loadClubDefaultCountryCode(input.clubId),

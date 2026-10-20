@@ -224,6 +224,8 @@ export type PlanPersonOutcome =
 			via: "ref" | "category" | "chosen";
 			/** Set when a ref already names the guest row. */
 			guestId: string | null;
+			/** Name-only keys merged into this guest (a list-only target's answer). */
+			mergedKeys?: string[];
 	  }
 	| { status: "skipped"; reason: string }
 	/**
@@ -644,6 +646,10 @@ export function buildImportPlan(
 	const rosterIds = new Set(ctx.roster.map((m) => m.memberId));
 
 	const people: PlanPerson[] = [];
+	const pendingGuests = new Map<
+		string,
+		Extract<PlanPersonOutcome, { status: "guest" }>
+	>();
 	for (const [key, entry] of seen) {
 		const { ref, appearances } = entry;
 		// A person no meeting names: matched, never created (#1203).
@@ -656,6 +662,10 @@ export function buildImportPlan(
 			0;
 		let outcome: PlanPersonOutcome = { status: "unmatched" };
 		let rejectedChoice: string | null = null;
+		// A saved "guest" answer a list-only person could not use; applied after
+		// the fold merge if meeting references join them.
+		let pendingGuest: Extract<PlanPersonOutcome, { status: "guest" }> | null =
+			null;
 
 		const memberRef = refTarget("person", key);
 		const guestRef = refTarget("guest", key);
@@ -677,10 +687,10 @@ export function buildImportPlan(
 			// (#1236). Only a saved answer, below, can say otherwise.
 			outcome = { status: "skipped", reason: ERASED_ACCOUNT_REASON };
 		} else {
-			// A vanished MEMBER ref is NOT a tombstone (D4 of #1196): the import never
-			// made that member, so its absence says the membership was merged away or
-			// a convert was undone, not that anyone declined this person. The person
-			// is matched by name again.
+			// A vanished MEMBER ref is a tombstone only when the club logged the
+			// member's removal (`member_remove`, below), except a convert undo that
+			// kept the membership. A merge logs none, so a merged-away member is
+			// matched by name again (D4 of #1196).
 			// Two spellings under one name-only key (José / Jose) cannot take the exact
 			// pass: it would match the first spelling and hand the second its member.
 			// The fold's candidates go to a human, or to nobody if the roster has none.
@@ -739,6 +749,14 @@ export function buildImportPlan(
 		// row of the member list there is nothing to decide, so no answer is read.
 		if (outcome.status !== "deleted") {
 			const saved = ctx.resolutions?.[key];
+			if (listOnly && saved?.action === "guest") {
+				pendingGuest = {
+					status: "guest",
+					kind: saved.kind,
+					via: "chosen",
+					guestId: guestRef && ctx.guestIds.has(guestRef) ? guestRef : null,
+				};
+			}
 			const choice =
 				listOnly &&
 				(saved?.action === "guest" ||
@@ -755,6 +773,13 @@ export function buildImportPlan(
 				} else {
 					rejectedChoice = choice.memberId;
 				}
+			} else if (
+				choice?.action === "guest" &&
+				guestRef &&
+				!ctx.guestIds.has(guestRef)
+			) {
+				// A guest the club deleted stays deleted, even beside a live member
+				// ref: the answer does not mint it again.
 			} else if (choice?.action === "guest") {
 				// A guest the ref already names stays that guest: a saved "guest" answer
 				// must not mint a second one on every re-apply.
@@ -777,12 +802,14 @@ export function buildImportPlan(
 			outcome,
 			rejectedChoice,
 		});
+		if (pendingGuest) pendingGuests.set(key, pendingGuest);
 	}
-	// One list entry (an `es:` id on the member list) and name-only meeting
-	// references folding to the same name are one human: the references join the
-	// list entry's create, so one Person is made and every key resolves to it. Two
-	// DISTINCT `es:` ids with one name stay two creates (two namesakes), and then
-	// the name-only references are not guessed onto either.
+	// Creates folding to one name are one human or several (never two Persons for
+	// one human). In a folded-name group: EXACTLY ONE `es:` create (listed or not)
+	// takes the name-only references, which join its create so one Person is made
+	// and every key resolves to it. Two or more `es:` creates are namesakes: they
+	// stay creates and each name-only create is `ambiguous` with no candidates,
+	// for a human, not guessed onto either.
 	const createsByFold = new Map<string, PlanPerson[]>();
 	for (const p of people) {
 		if (p.outcome.status !== "create") continue;
@@ -791,17 +818,19 @@ export function buildImportPlan(
 	}
 	const merged = new Set<PlanPerson>();
 	for (const group of createsByFold.values()) {
-		const listed = group.filter(
-			(p) => p.esUserId !== null && p.appearances.memberList > 0,
-		);
+		const esCreates = group.filter((p) => p.esUserId !== null);
 		const nameOnly = group.filter((p) => p.esUserId === null);
-		const target = listed[0];
-		if (listed.length !== 1 || !target || nameOnly.length === 0) continue;
+		if (nameOnly.length === 0 || esCreates.length === 0) continue;
+		const target = esCreates[0];
+		if (esCreates.length > 1 || !target) {
+			for (const p of nameOnly) {
+				p.outcome = { status: "ambiguous", candidates: [] };
+			}
+			continue;
+		}
 		if (target.outcome.status !== "create") continue;
-		target.outcome = {
-			...target.outcome,
-			mergedKeys: nameOnly.map((p) => p.key).sort(),
-		};
+		const mergedKeys = nameOnly.map((p) => p.key).sort();
+		target.outcome = { ...target.outcome, mergedKeys };
 		for (const p of nameOnly) {
 			target.appearances.roles += p.appearances.roles;
 			target.appearances.attendance += p.appearances.attendance;
@@ -816,6 +845,10 @@ export function buildImportPlan(
 			merged.add(p);
 		}
 		target.listOnly = false;
+		// Now named by a meeting, so the saved "guest" answer a list-only person
+		// could not use applies.
+		const pending = pendingGuests.get(target.key);
+		if (pending) target.outcome = { ...pending, mergedKeys };
 	}
 	if (merged.size > 0) {
 		for (let i = people.length - 1; i >= 0; i--) {

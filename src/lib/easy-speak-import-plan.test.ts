@@ -481,22 +481,95 @@ describe("buildImportPlan on the B fixture", () => {
 	// namesakes), neither blocked nor merged;
 	// fails_when=the guard folds distinct ids together or marks them ambiguous;
 	// no_claim=what happens to a name-only reference beside two namesakes.
-	it("keeps two list entries with distinct ids and one name as two creates", () => {
+	it("keeps two list entries with distinct ids and one name as two creates, and asks about the name-only reference", () => {
 		const bundle = dupeBundle(true);
 		const plan = buildImportPlan(bundle, ctx());
 		const dupes = dupesOf(plan);
+		const nameOnlyKey = personKeyOf({ esUserId: null, name: "dupe person" });
 		expect(dupes.map((d) => d.key).sort()).toEqual(
-			[
-				personKeyOf({ esUserId: null, name: "dupe person" }),
-				"es:900901",
-				"es:900902",
-			].sort(),
+			[nameOnlyKey, "es:900901", "es:900902"].sort(),
 		);
 		for (const d of dupes) {
-			expect(d.outcome.status).toBe("create");
-			expect(d.outcome).not.toHaveProperty("mergedKeys");
+			if (d.key === nameOnlyKey) {
+				expect(d.outcome).toEqual({ status: "ambiguous", candidates: [] });
+			} else {
+				expect(d.outcome.status).toBe("create");
+				expect(d.outcome).not.toHaveProperty("mergedKeys");
+			}
 		}
-		expect(plan.unresolved.map((p) => p.name)).not.toContain("Dupe Person");
+		expect(plan.unresolved.map((p) => p.key)).toContain(nameOnlyKey);
+	});
+
+	// protects=an UNLISTED es: meeting holder is the one create a same-name name-only
+	// reference joins: never two Persons for one human;
+	// fails_when=the merge needs a member-list row, so both are created;
+	// no_claim=the list-entry case, covered above.
+	it("merges a name-only reference into an unlisted es: holder", () => {
+		const bundle = dupeBundle(false);
+		bundle.people = [];
+		const past = bundle.meetings.find((m) => m.esMeetingId === "644304");
+		if (!past) throw new Error("fixture changed");
+		past.roles.push({
+			role: "Ah-Counter",
+			slot: 1,
+			holder: { esUserId: "900903", name: "Dupe Person" },
+		});
+		const dupes = dupesOf(buildImportPlan(bundle, ctx()));
+		expect(dupes).toHaveLength(1);
+		expect(dupes[0]?.key).toBe("es:900903");
+		expect(dupes[0]?.outcome).toMatchObject({
+			status: "create",
+			mergedKeys: [personKeyOf({ esUserId: null, name: "dupe person" })],
+		});
+	});
+
+	// protects=one listed plus one unlisted es: namesake is two humans: the name-only
+	// reference is asked about, not guessed onto the listed one;
+	// fails_when=the merge picks the single listed entry whatever else shares the name;
+	// no_claim=resolution of the ambiguity.
+	it("asks about a name-only reference beside a listed and an unlisted es: namesake", () => {
+		const bundle = dupeBundle(false);
+		const past = bundle.meetings.find((m) => m.esMeetingId === "644304");
+		if (!past) throw new Error("fixture changed");
+		past.roles.push({
+			role: "Ah-Counter",
+			slot: 1,
+			holder: { esUserId: "900903", name: "Dupe Person" },
+		});
+		const nameOnlyKey = personKeyOf({ esUserId: null, name: "dupe person" });
+		const dupes = dupesOf(buildImportPlan(bundle, ctx()));
+		expect(dupes).toHaveLength(3);
+		expect(dupes.find((d) => d.key === nameOnlyKey)?.outcome).toEqual({
+			status: "ambiguous",
+			candidates: [],
+		});
+		for (const k of ["es:900901", "es:900903"]) {
+			const o = dupes.find((d) => d.key === k)?.outcome;
+			expect(o?.status).toBe("create");
+			expect(o).not.toHaveProperty("mergedKeys");
+		}
+	});
+
+	// protects=a list-only es: target's saved "guest" answer applies once a merged
+	// name-only reference gives it meeting appearances, and keeps the aliases;
+	// fails_when=the answer is dropped during resolution and the merge flips listOnly;
+	// no_claim=the apply, in the integration suite.
+	it("applies a list-only target's saved guest answer after the merge", () => {
+		const plan = buildImportPlan(
+			dupeBundle(false),
+			ctx({
+				resolutions: { "es:900901": { action: "guest", kind: "visitor" } },
+			}),
+		);
+		const dupes = dupesOf(plan);
+		expect(dupes).toHaveLength(1);
+		expect(dupes[0]?.listOnly).toBe(false);
+		expect(dupes[0]?.outcome).toMatchObject({
+			status: "guest",
+			kind: "visitor",
+			via: "chosen",
+			mergedKeys: [personKeyOf({ esUserId: null, name: "dupe person" })],
+		});
 	});
 
 	// protects=a saved "guest" answer uses the live guest a ref names even when the
@@ -520,6 +593,28 @@ describe("buildImportPlan on the B fixture", () => {
 			kind: "visitor",
 			via: "chosen",
 			guestId: "guest-1",
+		});
+	});
+
+	// protects=a live member ref plus a DELETED guest ref plus a saved "guest"
+	// answer does not re-mint the guest the club deleted;
+	// fails_when=the member branch hides the guest tombstone from the saved answer;
+	// no_claim=the writer.
+	it("honours a deleted guest ref beside a live member ref and a saved guest answer", () => {
+		const plan = buildImportPlan(
+			load(),
+			ctx({
+				refs: [
+					{ kind: "person", sourceId: "es:900057", targetId: id(1) },
+					{ kind: "guest", sourceId: "es:900057", targetId: "gone-guest" },
+				],
+				resolutions: { "es:900057": { action: "guest", kind: "visitor" } },
+			}),
+		);
+		expect(outcomeOf(plan, "900057")).toEqual({
+			status: "member",
+			memberId: id(1),
+			via: "ref",
 		});
 	});
 

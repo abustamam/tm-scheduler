@@ -925,6 +925,162 @@ describe.skipIf(!hasTestDb)(
 			expect(alias).toEqual([{ targetId: rows[0]?.id }]);
 		});
 
+		const aliasBundle = (b: EasySpeakBundleV1) => {
+			b.meetings[0]?.roles.push({
+				role: "Timekeeper Two",
+				slot: 9,
+				holder: { esUserId: null, name: "pia president" },
+			});
+		};
+
+		// protects=a merged alias stores its own ref on the apply that made the member,
+		// so renaming that member before the next apply neither re-creates a former
+		// member nor links the alias to a later namesake;
+		// fails_when=the alias is left to be matched by name on the next apply;
+		// no_claim=the alias-less list entry, which resolves through its own ref.
+		it("keeps a merged alias on the created member after the member is renamed", async () => {
+			const stored = await upload(aliasBundle);
+			await apply(stored.importId);
+			const pia = await memberByName("Pia President");
+			await testDb
+				.update(members)
+				.set({ name: "Pia Renamed" })
+				.where(eq(members.id, pia?.id as string));
+			const before = await tally();
+			await apply(stored.importId);
+			expect(await memberByName("Pia President")).toBeUndefined();
+			expect((await tally()).members).toBe(before.members);
+			expect((await tally()).people).toBe(before.people);
+			const held = await testDb
+				.select({ id: roleSlots.id })
+				.from(roleSlots)
+				.where(eq(roleSlots.assignedMemberId, pia?.id as string));
+			expect(held.length).toBeGreaterThan(0);
+		});
+
+		// protects=a replayed saved guest answer does not revert a kind an officer
+		// changed in the app, while an answer CHANGED in the import still applies;
+		// fails_when=every re-apply rewrites the kind from the saved answer;
+		// no_claim=an answer the import changes, the test above.
+		it("a replayed saved guest answer leaves a kind the app changed", async () => {
+			extraResolutions = {
+				[`es:${P(5)}`]: { action: "guest", kind: "visitor" },
+			};
+			const stored = await upload();
+			await apply(stored.importId);
+			await testDb
+				.update(guests)
+				.set({ kind: "visiting_toastmaster" })
+				.where(
+					and(eq(guests.clubId, seed.clubId), eq(guests.name, "Gia Guest")),
+				);
+			await apply(stored.importId);
+			const rows = await testDb
+				.select({ kind: guests.kind })
+				.from(guests)
+				.where(
+					and(eq(guests.clubId, seed.clubId), eq(guests.name, "Gia Guest")),
+				);
+			expect(rows).toEqual([{ kind: "visiting_toastmaster" }]);
+		});
+
+		// protects=a member_remove row of a convert-undo that KEPT the membership
+		// (membershipDeleted false) is not a tombstone;
+		// fails_when=every member_remove row on a missing member id counts;
+		// no_claim=a removal through applyMemberRemove, covered above.
+		it("does not treat a kept-membership undo as a tombstone", async () => {
+			const stored = await upload();
+			await apply(stored.importId);
+			const pia = await memberByName("Pia President");
+			await applyMemberRemove({
+				clubId: seed.clubId,
+				memberId: pia?.id as string,
+				actorMemberId: null,
+			});
+			await testDb
+				.update(activityLog)
+				.set({ detail: { name: "Pia President", membershipDeleted: false } })
+				.where(
+					and(
+						eq(activityLog.clubId, seed.clubId),
+						eq(activityLog.action, "member_remove"),
+						eq(activityLog.targetId, pia?.id as string),
+					),
+				);
+			await apply(stored.importId);
+			expect(await memberByName("Pia President")).toBeDefined();
+		});
+
+		// protects=a merged alias acting as a guest's introducer is found;
+		// fails_when=the introducer is looked up only among plan.people;
+		// no_claim=an introducer who is not a member.
+		it("finds a merged alias as a guest's introducer", async () => {
+			const stored = await upload((b) => {
+				aliasBundle(b);
+				b.visitorsIntroduced = [
+					{
+						visitor: ref(P(5), "Gia Guest"),
+						introducedBy: { esUserId: null, name: "pia president" },
+					},
+				];
+			});
+			await apply(stored.importId);
+			const pia = await memberByName("Pia President");
+			const [gia] = await testDb
+				.select({ by: guests.introducedByMemberId })
+				.from(guests)
+				.where(
+					and(eq(guests.clubId, seed.clubId), eq(guests.name, "Gia Guest")),
+				);
+			expect(gia?.by).toBe(pia?.id);
+		});
+
+		// protects=a list-only es: person with a saved guest answer and a name-only
+		// meeting reference becomes one guest, the reference's key included;
+		// fails_when=the answer is dropped, or the alias has no guest ref;
+		// no_claim=the member case, the test above.
+		it("makes one guest of a list-only target and its alias on a saved guest answer", async () => {
+			extraResolutions = {
+				[`es:${P(9)}`]: { action: "guest", kind: "visitor" },
+			};
+			const stored = await upload((b) => {
+				b.people.push({
+					esUserId: P(9),
+					name: "Dupe Guesty",
+					status: "Member",
+					joined: null,
+				});
+				b.meetings[0]?.roles.push({
+					role: "Timekeeper Two",
+					slot: 9,
+					holder: { esUserId: null, name: "dupe guesty" },
+				});
+			});
+			await apply(stored.importId);
+			expect(await memberByName("Dupe Guesty")).toBeUndefined();
+			const rows = await testDb
+				.select({ id: guests.id })
+				.from(guests)
+				.where(
+					and(eq(guests.clubId, seed.clubId), eq(guests.name, "Dupe Guesty")),
+				);
+			expect(rows).toHaveLength(1);
+			const alias = await testDb
+				.select({ targetId: importRefs.targetId })
+				.from(importRefs)
+				.where(
+					and(
+						eq(importRefs.clubId, seed.clubId),
+						eq(importRefs.kind, "guest"),
+						eq(
+							importRefs.sourceId,
+							personKeyOf({ esUserId: null, name: "dupe guesty" }),
+						),
+					),
+				);
+			expect(alias).toEqual([{ targetId: rows[0]?.id }]);
+		});
+
 		// protects=an existing address differing in case or by surrounding blanks
 		// still counts as held, so it is not written to a second Person;
 		// fails_when=the holder lookup compares with bare lower();
