@@ -3266,7 +3266,7 @@ export type UndoCascadeCheck = {
 	/**
 	 * Every `table.column` this check covers: a foreign key to `members.id`. In
 	 * `UNDO_CASCADE_CHECKS` these are ON DELETE CASCADE keys and the FK drift guard
-	 * reads them; in `UNDO_NAME_BLANKING_CHECKS` they are SET NULL keys, and
+	 * reads them; in `undoNameBlankingChecks` they are SET NULL keys, and
 	 * informational.
 	 */
 	columns: string[];
@@ -3387,32 +3387,37 @@ const NAME_BLANKING_LABELS: Record<string, string> = {
  * history. Only when the undo deletes a membership the conversion created: the
  * reuse path deletes nothing.
  *
- * DERIVED from `PAST_AGENDA_MEMBER_KEYS` and `PAST_AGENDA_TIME_WINDOW_KEYS`
+ * DERIVED, lazily (a module-level spread evaluates before `members-logic` is
+ * initialised when an import cycle loads this file first), from `PAST_AGENDA_MEMBER_KEYS` and `PAST_AGENDA_TIME_WINDOW_KEYS`
  * (the member-removal refusal's lists, #1189), so the two stay one list. Role
  * slots are in the first list but are refused above, by the held-slots check.
  * These are SET NULL keys, not the CASCADE keys the FK drift guard reads, so
  * their `columns` are informational.
  */
-export const UNDO_NAME_BLANKING_CHECKS: UndoCascadeCheck[] = [
-	...PAST_AGENDA_MEMBER_KEYS,
-	...PAST_AGENDA_TIME_WINDOW_KEYS,
-]
-	.filter((key) => getTableName(key.table) !== "role_slots")
-	.map((key) => {
-		const table = getTableName(key.table);
-		const label = NAME_BLANKING_LABELS[table];
-		if (!label) {
-			throw new Error(
-				`UNDO_NAME_BLANKING_CHECKS: no refusal label for "${table}" (#1213)`,
-			);
-		}
-		return {
-			columns: [`${table}.${key.memberColumn.name}`],
-			label,
-			scope: "created" as const,
-			has: hasRowFor(key.table, key.memberColumn),
-		};
-	});
+let undoNameBlankingChecks_: UndoCascadeCheck[] | undefined;
+export function undoNameBlankingChecks(): UndoCascadeCheck[] {
+	undoNameBlankingChecks_ ??= buildUndoNameBlankingChecks();
+	return undoNameBlankingChecks_;
+}
+function buildUndoNameBlankingChecks(): UndoCascadeCheck[] {
+	return [...PAST_AGENDA_MEMBER_KEYS, ...PAST_AGENDA_TIME_WINDOW_KEYS]
+		.filter((key) => getTableName(key.table) !== "role_slots")
+		.map((key) => {
+			const table = getTableName(key.table);
+			const label = NAME_BLANKING_LABELS[table];
+			if (!label) {
+				throw new Error(
+					`undoNameBlankingChecks: no refusal label for "${table}" (#1213)`,
+				);
+			}
+			return {
+				columns: [`${table}.${key.memberColumn.name}`],
+				label,
+				scope: "created" as const,
+				has: hasRowFor(key.table, key.memberColumn),
+			};
+		});
+}
 
 /**
  * Undo a convert-to-member (#618): the reverse of `applyConvertGuestToMember`.
@@ -3636,13 +3641,10 @@ export async function applyUndoGuestConversion(
 		// Every table the delete below would take or blank. `UNDO_CASCADE_CHECKS`:
 		// the ON DELETE CASCADE keys to `members` (#1202), the list the FK drift
 		// guard reads, whose rows the delete takes silently.
-		// `UNDO_NAME_BLANKING_CHECKS`: the SET NULL keys that print a name on a past
+		// `undoNameBlankingChecks`: the SET NULL keys that print a name on a past
 		// agenda or minutes (#1213), whose rows the delete leaves nameless. A row in
 		// either refuses the undo and nothing is deleted.
-		for (const check of [
-			...UNDO_CASCADE_CHECKS,
-			...UNDO_NAME_BLANKING_CHECKS,
-		]) {
+		for (const check of [...UNDO_CASCADE_CHECKS, ...undoNameBlankingChecks()]) {
 			// `created` scope: on the reuse/reactivate path the undo deletes no
 			// membership, so nothing cascades and the row is not at risk.
 			if (check.scope === "created" && !record.createdMembership) continue;

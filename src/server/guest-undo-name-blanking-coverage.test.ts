@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("#/db", () => ({ db: {} }));
 
-const { UNDO_NAME_BLANKING_CHECKS } = await import(
+const { undoNameBlankingChecks } = await import(
 	"#/server/guest-pipeline-logic"
 );
 const { PAST_AGENDA_MEMBER_KEYS, PAST_AGENDA_TIME_WINDOW_KEYS } = await import(
@@ -18,9 +18,8 @@ const { PAST_AGENDA_MEMBER_KEYS, PAST_AGENDA_TIME_WINDOW_KEYS } = await import(
 
 describe("undo guest conversion covers every past-agenda name key (#1213)", () => {
 	it("has a created-scope check for each key of both lists, role slots aside", () => {
-		const covered = new Set(
-			UNDO_NAME_BLANKING_CHECKS.flatMap((c) => c.columns),
-		);
+		const checks = undoNameBlankingChecks();
+		const covered = new Set(checks.flatMap((c) => c.columns));
 		for (const key of [
 			...PAST_AGENDA_MEMBER_KEYS,
 			...PAST_AGENDA_TIME_WINDOW_KEYS,
@@ -29,9 +28,7 @@ describe("undo guest conversion covers every past-agenda name key (#1213)", () =
 			if (table === "role_slots") continue;
 			expect(covered, table).toContain(`${table}.${key.memberColumn.name}`);
 		}
-		expect(UNDO_NAME_BLANKING_CHECKS.every((c) => c.scope === "created")).toBe(
-			true,
-		);
+		expect(checks.every((c) => c.scope === "created")).toBe(true);
 		expect(covered).toContain("club_action_items.owner_member_id");
 	});
 });
