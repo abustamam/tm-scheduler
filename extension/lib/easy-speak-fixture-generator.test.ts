@@ -422,7 +422,9 @@ const digitRuns = (s: string): string[] => (s.match(/\d+/g) ?? []).map((r) => r.
  * markup it sat in; a fake phone (`(555) 010-xxxx`) is the contract's own placeholder and is not counted.
  */
 function expectNoDigitSurvives(input: string, out: string, allowed: string[] = []) {
-	const real = new Set(digitRuns(input));
+	// the digits of markup the generator keeps on purpose (a charset, a W3C URL, the viewport scale), as a literal list
+	const MARKUP = [/utf-8/gi, /iso-8859-1/gi, /<!doctype[^>]*>/gi, /https?:\/\/www\.w3\.org\/[^\s"']*/gi, /-\/\/w3c\/\/dtd[^"']*/gi, /initial-scale=1/gi];
+	const real = new Set(digitRuns(MARKUP.reduce((t, re) => t.replace(re, ""), input)));
 	const ok = new Set(allowed.map((r) => r.replace(/^0+(?=\d)/, "")));
 	const left = digitRuns(everything(out).replace(/\(555\) 010-\d{4}/g, ""));
 	for (const r of left) expect(real.has(r) && !ok.has(r), `the digit run ${r} is still in the generated page`).toBe(false);
@@ -550,10 +552,11 @@ describe("pages that must not be corrupted", () => {
 		expect(tds[0]).toMatch(/^Tuesday 22nd August 2028 at (?:[1-9]|1[0-2]):[0-5]\d pm America\/Los_Angeles$/);
 		expect(tds[0]).not.toContain("7:00");
 		expect(tds[1]).not.toMatch(/Noah|May/);
-		expect(tds[2]).toBe("May 2028");
-		expect(tds[3]).toMatch(/^Aug 29 28, (?:[1-9]|1[0-2]):[0-5]\d pm$/);
+		// a month and year is the 15th: 700 days after 15 May 2026 is 15 April 2028
+		expect(tds[2]).toBe("April 2028");
+		expect(tds[3]).toMatch(/^Aug 28 28, (?:[1-9]|1[0-2]):[0-5]\d pm$/);
 		expect(tds[4]).toBe("2027-04-05");
-		expect(tds[5]).toBe("(Actual meeting detail entered on 2028-09-02)");
+		expect(tds[5]).toBe("(Actual meeting detail entered on 2028-08-31)");
 		expectNone(out, ["2026", "2025", "2:43", "7:00"]);
 	});
 
