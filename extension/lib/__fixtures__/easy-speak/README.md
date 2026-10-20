@@ -56,9 +56,18 @@ username inside a URL replaced; host, page name, query parameter and fragment ar
 literal list). **Names are data too**: a tag that is not a standard HTML tag becomes a `span`, an
 attribute name that is not on the allow-list becomes `data-xN`, and comments, the doctype and
 `srcdoc` are scrubbed like any text. The allow-list is literal: nothing is kept for resembling a fake
-(a name that looks like one of `fake-names.json` is replaced like any other), and a one- or two-digit
-number stays only as a whole text node, beside a count label or in a level (`#2-1 - `). The document
-structure is kept. The same real value becomes the same fake within one run, so a person's id in a link and in a
+(a name that looks like one of `fake-names.json` is replaced like any other). **No digit survives**
+(decision B of the risk review): every run of digits is rewritten by one deterministic map that keeps
+its length, is one to one, and never maps a run to itself. The digit exceptions are literal strings in
+`ALLOW_LIST`: tag names `h1`-`h6`, the classes `row1`-`row3`, a few id words (`date1`...), the rank
+phrases (`1st Speaker`, `2nd Evaluator`, `PM1`, `EH1`, `PI1`), the doctype, charset and viewport
+strings, the layout attributes' values `0`-`12`, `100%`, `75%`, `50%`, `25%` (`colspan`, `width`...),
+a radio button's value `1`-`3` (the walker reads the attendance plan from it) and a pager's page
+numbers `1`-`9`. A **date moves by a whole number of weeks** (60 to 300, from the seed), so its weekday
+still fits and a month-year or a time stays a valid one; the same shift applies to every date in a run.
+The seed is **random by default**, so two runs differ and the output cannot be reversed from a known
+shift; `newRewriteState({ seed, dateShiftDays })` fixes it for a test. Event-handler attribute names are
+a literal list (`handlerNames`), not a pattern. The document structure is kept. The same real value becomes the same fake within one run, so a person's id in a link and in a
 table still line up. Then `fixtureViolations` runs over the output as a second net: if it reports
 anything, **nothing is written**, the violations are printed and the exit code is non-zero.
 
@@ -75,6 +84,9 @@ second net to look for. **A human still reads the output before it is committed*
 net, not clearance. Look for text that is still real and not on the allow-list's intent; things it
 cannot know (a club number shorter than four digits written outside the "Club Number" row, a speech
 title that happens to be a public Pathways name) are for the reader. Free text (a theme, a title, an
-introduction) comes out as `redacted-N` or a fake name: the walker's structure is kept, not its
-wording. Add to the allow-list only what every club's page says, never a name, and never to make a page
+introduction) comes out as `redacted-<letters>` or a fake name: the walker's structure is kept, not its
+wording. The evaluations JSON (`evaluation-*.json`, `my-evaluations.json`) is **hand-written**: the
+generator refuses JSON input (exit 2) rather than guess at it. One caveat of the digit map: the
+one-digit fake space has ten values, so on a page that uses all of them a one-digit run can come out as
+ANOTHER real one-digit run (never as itself); that is a coincidence of the map, not a kept value. Add to the allow-list only what every club's page says, never a name, and never to make a page
 pass. Then add a row to the table above and write the test with `replay`.
