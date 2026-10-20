@@ -91,6 +91,9 @@ describe("buildImportPlan on the B fixture", () => {
 		expect(plan.counts.awards).toBe(3);
 	});
 
+	// protects=a person is matched to the roster by exact name, then by folded name, and a name two members share is ambiguous, never guessed;
+	// fails_when=the folded pass is skipped, or a shared name is handed to the first member;
+	// no_claim=who is created or asked about; the next tests.
 	it("matches exactly, then by folded name, and flags a name shared by two members", () => {
 		const plan = buildImportPlan(load(), ctx());
 		expect(outcomeOf(plan, "900057")).toMatchObject({
@@ -111,6 +114,9 @@ describe("buildImportPlan on the B fixture", () => {
 		).toEqual([id(3), id(4)]);
 	});
 
+	// protects=a past person only a meeting names is created as a former member and does not block the apply; only the ambiguous are asked about;
+	// fails_when=the person is left unmatched, or asked about, or created active;
+	// no_claim=the member-list and guest-category precedence, which are their own tests.
 	it("creates a former member for a past person only a meeting names, and asks only about the ambiguous (#1240)", () => {
 		const plan = buildImportPlan(load(), ctx());
 		// Avery Alderfinch holds a role and is on no list and in no guest category.
@@ -190,6 +196,9 @@ describe("buildImportPlan on the B fixture", () => {
 		expect(plan.canApply).toBe(false);
 	});
 
+	// protects=a saved skip beats the roster match the plan would make (precedence 1);
+	// fails_when=the automatic match is applied over the saved answer;
+	// no_claim=a saved guest answer over a ref, which is the integration re-apply test.
 	it("lets a saved answer win over an automatic match (#1240 precedence 1)", () => {
 		const plan = buildImportPlan(
 			load(),
@@ -376,6 +385,9 @@ describe("buildImportPlan on the B fixture", () => {
 		expect(outcomeOf(memberGone, "900036")).not.toEqual({ status: "deleted" });
 	});
 
+	// protects=a vanished ref to a member the import did NOT create falls back to the name and is created when the name finds nobody; one the import created is a tombstone;
+	// fails_when=a vanished ref is trusted, or an import-created member the club removed is re-created (an admin with a term);
+	// no_claim=the apply writes, which the integration suite covers.
 	it("a member ref whose member row is gone falls back to the name, and creates the person when the name finds nobody (D4)", () => {
 		const matched = buildImportPlan(
 			load(),
@@ -397,6 +409,52 @@ describe("buildImportPlan on the B fixture", () => {
 		);
 		expect(outcomeOf(asks, "900001")).toMatchObject({ status: "create" });
 		expect(asks.unresolved.map((p) => p.key)).not.toContain("es:900001");
+	});
+
+	// protects=a vanished ref to a member an earlier apply created is a tombstone
+	// (never re-created, never asked about), and only when the import made them;
+	// fails_when=the tombstone is dropped, or applied to any vanished member ref;
+	// no_claim=the removal itself is the integration suite's.
+	it("treats a vanished ref to an import-created member as a tombstone", () => {
+		const refs = [{ kind: "person", sourceId: "es:900001", targetId: "gone" }];
+		const made = buildImportPlan(
+			load(),
+			ctx({ refs, importCreatedMemberIds: new Set(["gone"]) }),
+		);
+		expect(outcomeOf(made, "900001")).toEqual({ status: "deleted" });
+		expect(made.unresolved.map((p) => p.key)).not.toContain("es:900001");
+	});
+
+	// protects=two pending creates under one folded name are both ambiguous, so one
+	// human does not become two Persons;
+	// fails_when=both are created;
+	// no_claim=which of them a person then picks.
+	it("marks two pending creates with one folded name ambiguous", () => {
+		const bundle = load();
+		bundle.people = [
+			{
+				esUserId: "900901",
+				name: "Dupe Person",
+				status: "Member",
+				joined: null,
+			},
+		];
+		const past = bundle.meetings.find((m) => m.esMeetingId === "644304");
+		if (!past) throw new Error("fixture changed");
+		past.guests = [];
+		past.roles = [
+			{
+				role: "Timer",
+				slot: 1,
+				holder: { esUserId: null, name: "dupe person" },
+			},
+		];
+		const plan = buildImportPlan(bundle, ctx());
+		const dupes = plan.people.filter(
+			(p) => p.name.toLowerCase() === "dupe person",
+		);
+		expect(dupes).toHaveLength(2);
+		for (const d of dupes) expect(d.outcome.status).toBe("ambiguous");
 	});
 
 	it("imports nothing from a meeting in the future, however the clock moves", () => {
@@ -475,6 +533,9 @@ describe("people the lists name and no meeting does (#1203)", () => {
 		});
 	});
 
+	// protects=a person only the mentor chart or speech requests name, with no roster match, stays unmatched and never blocks;
+	// fails_when=the person is created, made a guest, or asked about;
+	// no_claim=a person the member list names, which is created.
 	it("leaves a chart-or-request-only person with no roster match unmatched: never a guest, never blocking", () => {
 		const before = buildImportPlan(load(), ctx({ resolutions: SKIP_AVERY }));
 		const unmatched = before.people.filter(
@@ -496,6 +557,9 @@ describe("people the lists name and no meeting does (#1203)", () => {
 		);
 	});
 
+	// protects=a saved answer for an unmatched chart-only person, and a guest answer for a list-only one, are ignored;
+	// fails_when=such a saved answer makes a guest or a member of someone no meeting names;
+	// no_claim=the same person when a meeting also names them.
 	it("does not read a saved decision for an unmatched chart-only person, nor a guest choice for a list-only one", () => {
 		const roster = [
 			...ROSTER,

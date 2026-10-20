@@ -244,6 +244,11 @@ describe.skipIf(!hasTestDb)(
 			};
 		}
 
+		// protects=a member only the mentor chart and the speech requests name gets a
+		// person ref, and both later steps import their rows (now two each, because a
+		// member-list person is made a member too);
+		// fails_when=the ref is missing and a later step reports the person unresolved;
+		// no_claim=the made member's own fields are the one-upload suite's.
 		it("AC1: a member only the chart and the requests name gets a person ref, and both later steps import their rows", async () => {
 			const nova = await addMember(NOVA.name);
 			const orla = await addMember(ORLA.name);
@@ -280,6 +285,9 @@ describe.skipIf(!hasTestDb)(
 				.select()
 				.from(mentorships)
 				.where(eq(mentorships.clubId, seed.clubId));
+			// The second pair is Ghost Pepper's, whose id the apply mints, so the exact
+			// set cannot be spelled; the count pins it.
+			expect(pairs).toHaveLength(2);
 			expect(
 				pairs.map((p) => [p.mentorMemberId, p.menteeMemberId]),
 			).toContainEqual([orla, nova]);
@@ -294,9 +302,14 @@ describe.skipIf(!hasTestDb)(
 				.select({ membershipId: speechRequests.membershipId })
 				.from(speechRequests)
 				.where(eq(speechRequests.clubId, seed.clubId));
+			expect(rows).toHaveLength(2);
 			expect(rows).toContainEqual({ membershipId: nova });
 		});
 
+		// protects=a member-list-only person who matches nobody is made a member, so
+		// the later mentor and speech-request steps find them;
+		// fails_when=the person is left unmatched and the steps report them unresolved;
+		// no_claim=the roster match of the other people is the test above.
 		it("AC2: a member-list-only person who matches nobody is made a member, so the later steps find them (#1240)", async () => {
 			await addMember(NOVA.name);
 			await addMember(ORLA.name);

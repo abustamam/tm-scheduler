@@ -112,6 +112,11 @@ export interface PlanContext {
 	existingMeetings: PlanExistingMeeting[];
 	/** `import_refs` for this club and source. */
 	refs: PlanRef[];
+	/**
+	 * Member ids an earlier apply of this import created. A `person` ref to one of
+	 * them whose row is gone is a removal by the club, not a merge: not re-created.
+	 */
+	importCreatedMemberIds?: ReadonlySet<string>;
 	/** The human's choices, by person key. They win over every automatic outcome but a tombstone. */
 	resolutions?: Readonly<Record<string, PersonResolution>>;
 	/**
@@ -686,6 +691,12 @@ export function buildImportPlan(
 				};
 			} else if (candidates.length > 1 || (collided && first)) {
 				outcome = { status: "ambiguous", candidates };
+			} else if (memberRef && ctx.importCreatedMemberIds?.has(memberRef)) {
+				// The ref names a member row that is gone and nobody on the roster is
+				// that person: the club removed a member this import made. Re-creating
+				// them would bring back a removed officer as an admin (#1240), so it is
+				// a tombstone, the way a vanished guest is.
+				outcome = { status: "deleted" };
 			} else if (entry.listRow) {
 				// Easy-Speak lists them as a member: that wins over a guest category.
 				const inactive = INACTIVE_STATUS.test(entry.listRow.status);
@@ -739,11 +750,13 @@ export function buildImportPlan(
 					rejectedChoice = choice.memberId;
 				}
 			} else if (choice?.action === "guest") {
+				// A guest the ref already names stays that guest: a saved "guest" answer
+				// must not mint a second one on every re-apply.
 				outcome = {
 					status: "guest",
 					kind: choice.kind,
 					via: "chosen",
-					guestId: null,
+					guestId: outcome.status === "guest" ? outcome.guestId : null,
 				};
 			} else if (choice?.action === "skip") {
 				outcome = { status: "skipped", reason: choice.reason };
@@ -758,6 +771,19 @@ export function buildImportPlan(
 			outcome,
 			rejectedChoice,
 		});
+	}
+	// Two pending creates under one folded name (an `es:` id on the member list
+	// and a name-only meeting reference) would make two Persons for one human.
+	// Neither is created: a person decides, with no candidates to offer.
+	const createsByFold = new Map<string, PlanPerson[]>();
+	for (const p of people) {
+		if (p.outcome.status !== "create") continue;
+		const fold = foldName(p.name);
+		createsByFold.set(fold, [...(createsByFold.get(fold) ?? []), p]);
+	}
+	for (const group of createsByFold.values()) {
+		if (group.length < 2) continue;
+		for (const p of group) p.outcome = { status: "ambiguous", candidates: [] };
 	}
 	people.sort(
 		(a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key),
@@ -1052,14 +1078,14 @@ function placeContacts(
 			exact.length > 0 ? exact : (byFold.get(foldName(r.name)) ?? []);
 		if (candidates.length === 0) {
 			warnings.push(
-				`Contact row ${row} (${r.name.trim()}) matches no one being linked or created; it is applied to no one.`,
+				`Contact row ${row} matches no one being linked or created; it is applied to no one.`,
 			);
 			return;
 		}
 		const [target] = candidates;
 		if (candidates.length > 1 || !target) {
 			warnings.push(
-				`Contact row ${row} (${r.name.trim()}) matches ${candidates.length} people; it is applied to no one.`,
+				`Contact row ${row} matches ${candidates.length} people; it is applied to no one.`,
 			);
 			return;
 		}

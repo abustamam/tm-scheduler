@@ -1332,8 +1332,6 @@ export const bulkImportSchema = z.object({
 });
 type BulkImportInput = z.infer<typeof bulkImportSchema> & RosterActor;
 
-type MembersTx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
-
 export interface RosterMemberInsert {
 	clubId: string;
 	name: string;
@@ -1356,7 +1354,7 @@ export interface RosterMemberInsert {
  * nothing: the caller owns the `member_add` and who it is attributed to.
  */
 export async function insertRosterMember(
-	tx: MembersTx,
+	tx: Tx,
 	input: RosterMemberInsert,
 ): Promise<{ id: string; personId: string }> {
 	const [person] = await tx

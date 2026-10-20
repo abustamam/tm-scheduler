@@ -44,11 +44,22 @@
  * prunes it.
  */
 import { createHash } from "node:crypto";
-import { and, asc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	eq,
+	inArray,
+	isNotNull,
+	isNull,
+	not,
+	or,
+	sql,
+} from "drizzle-orm";
 import type { AnyPgColumn, PgTable } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
 import {
+	activityLog,
 	clubImports,
 	clubs,
 	guests,
@@ -108,7 +119,12 @@ import {
 	clipImportedText,
 	normalizePreferredDates,
 } from "#/lib/speech-requests";
-import { soleHoldingClub } from "./account-link-logic";
+import {
+	identityIgnoredGuestPerson,
+	normalizedEmail,
+	normalizeEmail,
+	soleHoldingClub,
+} from "./account-link-logic";
 import { logActivity } from "./activity";
 import { importPlanAnswers } from "./attendance-plan-logic";
 import { lockClubForWrite } from "./club-write-lock";
@@ -471,10 +487,33 @@ async function loadPlanContext(
 			),
 	]);
 
+	// Members an earlier apply created (its `member_add` has no actor): a ref to
+	// one of them that no longer names a row means the club removed that member.
+	const refMemberIds = refs
+		.filter((r) => r.kind === "person")
+		.map((r) => r.targetId);
+	const addedRows =
+		refMemberIds.length === 0
+			? []
+			: await db
+					.select({ targetId: activityLog.targetId })
+					.from(activityLog)
+					.where(
+						and(
+							eq(activityLog.clubId, clubId),
+							eq(activityLog.action, "member_add"),
+							eq(activityLog.targetType, "member"),
+							isNull(activityLog.actorMemberId),
+							inArray(activityLog.targetId, refMemberIds),
+						),
+					);
 	return {
 		ctx: {
 			now,
 			clubTimezone: club.timezone,
+			importCreatedMemberIds: new Set(
+				addedRows.flatMap((r) => (r.targetId ? [r.targetId] : [])),
+			),
 			contacts,
 			contactState: await loadContactState(clubId, contacts),
 			roster: roster.map((m) => ({ memberId: m.memberId, name: m.name })),
@@ -502,7 +541,7 @@ async function loadContactState(
 	const emails = [
 		...new Set(
 			parseRosterText(contacts)
-				.map((r) => r.email.trim().toLowerCase())
+				.map((r) => normalizeEmail(r.email) ?? "")
 				.filter((e) => e !== "" && isValidEmail(e)),
 		),
 	];
@@ -521,9 +560,14 @@ async function loadContactState(
 		const rows = await db
 			.select({ id: people.id, email: people.email })
 			.from(people)
-			.where(inArray(sql`lower(${people.email})`, emails.slice(i, i + 1000)));
+			.where(
+				and(
+					inArray(normalizedEmail(people.email), emails.slice(i, i + 1000)),
+					not(identityIgnoredGuestPerson()),
+				),
+			);
 		for (const r of rows) {
-			const key = (r.email ?? "").toLowerCase();
+			const key = normalizeEmail(r.email) ?? "";
 			holders.set(key, (holders.get(key) ?? new Set()).add(r.id));
 		}
 	}
@@ -768,6 +812,9 @@ export interface WritePeopleOptions {
 	countryCode?: string | null;
 }
 
+const emailTakenNote = (row: number, name: string) =>
+	`The email in row ${row} was taken since the preview; left blank for ${name}.`;
+
 /** Another Person (any club) already holds this email, case-insensitively. */
 async function emailHeldByOther(
 	tx: Tx,
@@ -777,7 +824,12 @@ async function emailHeldByOther(
 	const rows = await tx
 		.select({ id: people.id })
 		.from(people)
-		.where(eq(sql`lower(${people.email})`, email.toLowerCase()));
+		.where(
+			and(
+				eq(normalizedEmail(people.email), normalizeEmail(email) ?? ""),
+				not(identityIgnoredGuestPerson()),
+			),
+		);
 	return rows.some((r) => r.id !== exceptPersonId);
 }
 
@@ -802,9 +854,7 @@ async function fillMemberContact(
 	if (!row) return;
 	if (fill.email) {
 		if (await emailHeldByOther(tx, fill.email, row.personId)) {
-			out.contactNotes.push(
-				`The email in row ${fill.row} was taken since the preview; left blank for ${fill.name}.`,
-			);
+			out.contactNotes.push(emailTakenNote(fill.row, fill.name));
 		} else {
 			const filled = await tx
 				.update(people)
@@ -819,12 +869,12 @@ async function fillMemberContact(
 				)
 				.returning({ id: people.id });
 			if (filled.length === 0) {
-				const [now] = await tx
+				const [current] = await tx
 					.select({ email: people.email })
 					.from(people)
 					.where(eq(people.id, row.personId))
 					.limit(1);
-				if (now && !now.email) {
+				if (current && !current.email) {
 					out.contactNotes.push(
 						`The email in row ${fill.row} was left blank for ${fill.name}: the person has a GavelUp account or belongs to another club, so it is theirs to add.`,
 					);
@@ -962,9 +1012,7 @@ export async function writePeopleAndRoles(
 			const fill = fillByKey.get(person.key);
 			let email = fill?.email ?? null;
 			if (fill && email && (await emailHeldByOther(tx, email, null))) {
-				out.contactNotes.push(
-					`The email in row ${fill.row} was taken since the preview; left blank for ${person.name}.`,
-				);
+				out.contactNotes.push(emailTakenNote(fill.row, person.name));
 				email = null;
 			}
 			const joined = o.joinedAt ? new Date(`${o.joinedAt}T12:00:00Z`) : null;
@@ -1020,8 +1068,13 @@ export async function writePeopleAndRoles(
 				if (person.listOnly) continue;
 				let introducedByMemberId: string | null = null;
 				const introducer = byKey.get(introducerOf.get(person.key) ?? "");
+				// The loop is name-sorted, so a creating introducer who sorts after the
+				// guest is not in `out.members` yet; a linked one always has its id.
 				const introducerMemberId = introducer
-					? out.members.get(introducer.key)
+					? (out.members.get(introducer.key) ??
+						(introducer.outcome.status === "member"
+							? introducer.outcome.memberId
+							: undefined))
 					: undefined;
 				if (introducerMemberId) {
 					introducedByMemberId = await validatedIntroducerId(
@@ -1837,7 +1890,11 @@ async function applyUnderImportLock(input: {
 	});
 	// Rows that set nothing, or a value left blank: a row number and a person, never
 	// the email or the phone, because this report is stored.
-	const contactNotes = [...plan.contactWarnings, ...resolved.contactNotes];
+	// A person's name can carry a NUL or a lone surrogate, which would fail the
+	// jsonb write after the people and meetings have committed.
+	const contactNotes = [...plan.contactWarnings, ...resolved.contactNotes].map(
+		(n) => scrubJsonbText(n),
+	);
 	if (contactNotes.length > 0) report.contactNotes = contactNotes;
 
 	const importState = JSON.stringify({ resolutions, report });

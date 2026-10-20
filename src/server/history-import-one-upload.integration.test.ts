@@ -68,7 +68,7 @@ const P = (n: number) => `9001${String(n).padStart(2, "0")}`;
 const ref = (esUserId: string, name: string) => ({ esUserId, name });
 
 /** The issue's fixture: P1 President, P2 Member, P3 Inactive, P4 meeting-only, P5 guest, P6 erased, P7 Ada, P8 Sam. */
-function bundleText(): string {
+function bundleText(mutate?: (b: EasySpeakBundleV1) => void): string {
 	const bundle = JSON.parse(readFileSync(FIXTURE, "utf8")) as EasySpeakBundleV1;
 	const past = bundle.meetings.find((m) => m.esMeetingId === "644304");
 	if (!past) throw new Error("fixture changed");
@@ -105,6 +105,7 @@ function bundleText(): string {
 	bundle.mentors = [];
 	bundle.speechRequests = [];
 	bundle.visitorsIntroduced = [];
+	mutate?.(bundle);
 	return JSON.stringify(bundle);
 }
 
@@ -149,6 +150,7 @@ describe.skipIf(!hasTestDb)(
 
 		beforeEach(async () => {
 			lockHook.run = null;
+			extraResolutions = {};
 			samMemberId = undefined;
 			seed = await seedClub();
 			superadminId = randomUUID();
@@ -201,15 +203,17 @@ describe.skipIf(!hasTestDb)(
 			await testDb.delete(user).where(inArray(user.id, extraUsers.splice(0)));
 		});
 
-		const upload = () =>
+		const upload = (mutate?: (b: EasySpeakBundleV1) => void) =>
 			logic.storeEasySpeakBundle({
 				clubId: seed.clubId,
 				uploadedByUserId: superadminId,
-				text: bundleText(),
+				text: bundleText(mutate),
 			});
 		const SAM: PersonResolution = { action: "member", memberId: "" };
+		let extraResolutions: Record<string, PersonResolution> = {};
 		const resolutions = (): Record<string, PersonResolution> => ({
 			[`es:${P(8)}`]: { ...SAM, memberId: samMemberId as string },
+			...extraResolutions,
 		});
 		const preview = (importId: string, contacts?: string) =>
 			logic.previewEasySpeakImport({
@@ -304,6 +308,17 @@ describe.skipIf(!hasTestDb)(
 						.select({ n: count() })
 						.from(guests)
 						.where(eq(guests.clubId, seed.clubId)),
+				),
+				memberAdds: await n(
+					testDb
+						.select({ n: count() })
+						.from(activityLog)
+						.where(
+							and(
+								eq(activityLog.clubId, seed.clubId),
+								eq(activityLog.action, "member_add"),
+							),
+						),
 				),
 			};
 		}
@@ -499,6 +514,11 @@ describe.skipIf(!hasTestDb)(
 			);
 		});
 
+		// protects=a linked member whose Person belongs to another club keeps a blank
+		// email (the email is theirs to add) while the blank phone is filled, and the
+		// report names the row and the person;
+		// fails_when=the soleHoldingClub clause is dropped and the email is written;
+		// no_claim=the account case above is a different clause.
 		it("leaves a linked member's email blank when another club holds the Person", async () => {
 			const other = await seedClub();
 			try {
@@ -636,6 +656,223 @@ describe.skipIf(!hasTestDb)(
 					),
 			);
 			expect(open).toBe(0);
+		});
+
+		// protects=a saved "guest" answer on a person a `guest` ref already names does
+		// not mint a second guest and Person on a re-apply;
+		// fails_when=the saved answer overrides the ref with guestId null;
+		// no_claim=a different kind in the saved answer is not decided here.
+		it("re-applying with a saved guest answer keeps the one guest", async () => {
+			extraResolutions = {
+				[`es:${P(5)}`]: { action: "guest", kind: "visitor" },
+			};
+			const stored = await upload();
+			await apply(stored.importId);
+			const afterFirst = await tally();
+			await apply(stored.importId);
+			const afterSecond = await tally();
+			expect(afterSecond).toEqual(afterFirst);
+			// No second member_add either: the removal-proof refs hold on re-apply.
+			expect(afterSecond.memberAdds).toBe(4);
+			expect(afterSecond.guests).toBe(1);
+			expect(afterSecond.people).toBe(afterFirst.people);
+		});
+
+		// protects=a guest keeps the linked member who introduced them even when the
+		// guest's name sorts before the introducer's;
+		// fails_when=the introducer is read from a map the sorted loop has not filled;
+		// no_claim=Gia Guest sorts before Sam Same, the linked introducer.
+		it("keeps the introducer of a guest who sorts before a linked introducer", async () => {
+			const stored = await upload((b) => {
+				b.visitorsIntroduced = [
+					{
+						visitor: ref(P(5), "Gia Guest"),
+						introducedBy: ref(P(8), "Sam Same"),
+					},
+				];
+			});
+			await apply(stored.importId);
+			const [gia] = await testDb
+				.select({ introducedBy: guests.introducedByMemberId })
+				.from(guests)
+				.where(
+					and(eq(guests.clubId, seed.clubId), eq(guests.name, "Gia Guest")),
+				);
+			expect(gia?.introducedBy).toBe(samMemberId);
+		});
+
+		// protects=a malformed contact row (no delimiter, so email and phone sit in
+		// the name cell) and a NUL in a pasted name appear nowhere in club_imports,
+		// and the apply still succeeds;
+		// fails_when=a warning echoes the pasted name cell, or notes skip the jsonb scrub;
+		// no_claim=the well-formed rows are the other contact tests'.
+		it("never stores a pasted name cell, even a malformed or NUL one", async () => {
+			const contacts = [
+				"Zed Nobody zed.nobody@contacts.example 555-0199",
+				"Nul\u0000Person, nul.person@contacts.example, 555-0198",
+				"Pia President, pia.president@contacts.example,",
+			].join("\n");
+			const stored = await upload();
+			const shown = await preview(stored.importId, contacts);
+			await apply(stored.importId, contacts, shown.planHash);
+			const [row] = await testDb
+				.select({ all: sql<string>`${clubImports}::text` })
+				.from(clubImports)
+				.where(eq(clubImports.id, stored.importId));
+			for (const v of [
+				"zed.nobody@contacts.example",
+				"555-0199",
+				"Zed Nobody",
+				"nul.person@contacts.example",
+				"555-0198",
+				"Nul",
+			]) {
+				expect(row?.all).not.toContain(v);
+			}
+			expect(row?.all).toContain("matches no one");
+		});
+
+		// protects=a member the club removed after the import made them is not
+		// re-created (nor re-made an admin with a term and a member_add) by a re-apply;
+		// fails_when=a vanished ref to an import-created member falls through to create;
+		// no_claim=a vanished ref to a member the import only linked is the D4 test.
+		it("does not re-create an imported officer the club removed", async () => {
+			const stored = await upload();
+			await apply(stored.importId);
+			const pia = await memberByName("Pia President");
+			await testDb.delete(members).where(eq(members.id, pia?.id as string));
+			const before = await tally();
+			await apply(stored.importId);
+			expect(await memberByName("Pia President")).toBeUndefined();
+			expect(await tally()).toEqual(before);
+		});
+
+		// protects=an existing address differing in case or by surrounding blanks
+		// still counts as held, so it is not written to a second Person;
+		// fails_when=the holder lookup compares with bare lower();
+		// no_claim=an address held only by a guest-only Person is ignored by design.
+		it("treats an address held with other case and blanks as held", async () => {
+			const [holder] = await testDb
+				.insert(people)
+				.values({ name: "Holder", email: "  MO.Held@Contacts.Example " })
+				.returning({ id: people.id });
+			extraPeople.push(holder?.id as string);
+			await testDb.insert(members).values({
+				clubId: seed.clubId,
+				personId: holder?.id as string,
+				name: "Holder",
+				clubRole: "member",
+				status: "active",
+			});
+			const stored = await upload();
+			const contacts = "Mo Member, mo.held@contacts.example,";
+			const shown = await preview(stored.importId, contacts);
+			expect(shown.contacts.warnings.join("\n")).toMatch(/already belongs/u);
+			await apply(stored.importId, contacts, shown.planHash);
+			const mo = await memberByName("Mo Member");
+			expect((await personRow(mo?.personId as string))?.email).toBeNull();
+		});
+
+		// protects=the in-transaction holder check also folds case and blanks: an
+		// address another Person takes between preview and apply as " RACE.Case@... "
+		// is still held;
+		// fails_when=emailHeldByOther compares with bare lower();
+		// no_claim=the preview-time lookup is the test above.
+		it("re-checks a held address with other case and blanks inside the apply", async () => {
+			const stored = await upload();
+			const contacts = "Pia President, race.case@contacts.example,";
+			const shown = await preview(stored.importId, contacts);
+			lockHook.run = async () => {
+				lockHook.run = null;
+				const [taker] = await testDb
+					.insert(people)
+					.values({ name: "Case Taker", email: " RACE.Case@Contacts.Example " })
+					.returning({ id: people.id });
+				extraPeople.push(taker?.id as string);
+				await testDb.insert(members).values({
+					clubId: seed.clubId,
+					personId: taker?.id as string,
+					name: "Case Taker",
+					clubRole: "member",
+					status: "active",
+				});
+			};
+			await apply(stored.importId, contacts, shown.planHash);
+			const pia = await memberByName("Pia President");
+			expect((await personRow(pia?.personId as string))?.email).toBeNull();
+		});
+
+		// protects=a linked member's email taken by another Person between preview and
+		// apply is left blank with a note by row and name;
+		// fails_when=fillMemberContact skips its own holder check;
+		// no_claim=the created-member race is the test above this block.
+		it("notes a linked member's email taken since the preview", async () => {
+			await testDb
+				.update(people)
+				.set({ email: null })
+				.where(eq(people.id, adaPersonId));
+			const stored = await upload();
+			const contacts = "Ada Linked, ada.race@contacts.example,";
+			const shown = await preview(stored.importId, contacts);
+			lockHook.run = async () => {
+				lockHook.run = null;
+				const [taker] = await testDb
+					.insert(people)
+					.values({ name: "Late Taker", email: "ada.race@contacts.example" })
+					.returning({ id: people.id });
+				extraPeople.push(taker?.id as string);
+			};
+			const { report } = await apply(stored.importId, contacts, shown.planHash);
+			expect((await personRow(adaPersonId))?.email).toBeNull();
+			expect(report.contactNotes).toEqual([
+				"The email in row 1 was taken since the preview; left blank for Ada Linked.",
+			]);
+		});
+
+		// protects=a person on the member list who a meeting also files under a guest
+		// category becomes a member (precedence 5), not a guest;
+		// fails_when=the guest category outranks the member list;
+		// no_claim=none beyond protects.
+		it("makes a listed member of a person also in a guest category", async () => {
+			const stored = await upload((b) => {
+				b.people.push({
+					esUserId: P(5),
+					name: "Gia Guest",
+					status: "Member",
+					joined: null,
+				});
+			});
+			await apply(stored.importId);
+			expect(await memberByName("Gia Guest")).toMatchObject({
+				status: "active",
+			});
+			const guestRows = await testDb
+				.select({ id: guests.id })
+				.from(guests)
+				.where(eq(guests.clubId, seed.clubId));
+			expect(guestRows).toEqual([]);
+		});
+
+		// protects=the president term opens at midnight of the club's own day, not the
+		// UTC day;
+		// fails_when=the term start is computed in UTC;
+		// no_claim=the term's end and the position are the first test's.
+		it("starts the officer term in the club's timezone", async () => {
+			const stored = await upload();
+			// 02:00Z on the 12th is still the 11th in Los Angeles (UTC-7).
+			await logic.applyEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				superadminUserId: superadminId,
+				resolutions: resolutions(),
+				now: new Date("2026-10-12T02:00:00Z"),
+			});
+			const pia = await memberByName("Pia President");
+			const [term] = await testDb
+				.select({ start: officerTerms.termStart })
+				.from(officerTerms)
+				.where(eq(officerTerms.membershipId, pia?.id as string));
+			expect(term?.start?.toISOString()).toBe("2026-10-11T07:00:00.000Z");
 		});
 	},
 );
