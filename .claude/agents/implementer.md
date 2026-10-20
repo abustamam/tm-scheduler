@@ -24,7 +24,9 @@ that area (`commands.md` before a migration, a browser-backed test or a mutation
   its options and your recommendation as your result. Do not post a handoff comment or notify
   anyone: the main session batches the questions and writes the one handoff.
 - Before you file an issue under CLAUDE.md's "What earns an issue", search for it:
-  `gh issue list --state all --search "<file path>"` for the file the finding is in. An open
-  match gets a comment instead of a new issue; a closed match is named in your final message.
+  `gh issue list --state all --search "<file path>"` for the file the finding is in. Read the
+  candidates; one is a match only if it is the same underlying bug (a shared path alone is
+  not). An open match gets a comment instead of a new issue; a closed match is named in your
+  final message, and if the bug is back, file a new issue that links it.
 - Keep your context small: read files by line range when you know where to look, and do not
   re-read a file you just edited.

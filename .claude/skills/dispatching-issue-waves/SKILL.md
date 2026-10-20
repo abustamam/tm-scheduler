@@ -28,8 +28,9 @@ outer loop; this section is one turn of it, and each turn is a fresh session:
 5. Each agent opens its PR and **stops**: `gh pr create`, body carrying `Closes #N`, no merge.
 6. **From the main session**: review the wave's PRs, then land them one at a time — see
    **Landing the wave** below. The merge decision is the maintainer's, not an agent's.
-7. Run `/qa-only` once against the deployed app. Read `main`'s CI (**Landing the wave**, step 6).
-   Write the handoff (CLAUDE.md's format) and **stop**. The next stage belongs to a new session, which starts again at 1.
+7. Run `/qa-only` once against the deployed app. Read `main`'s CI (**Landing the wave**,
+   step 5). Write the handoff (CLAUDE.md's format) and **stop**. The next stage belongs to a
+   new session, which starts again at 1.
 
 Step 1 is not a formality, and the fresh session is what makes it fresh. Between stages the
 plan genuinely changes: a merge makes cited paths exist (an issue leaves CITED PATHS ARE
@@ -151,9 +152,11 @@ Files this issue cites:
 7. STOP THERE. Do not merge, do not review your own PR, do not pick up another issue.
    Anything you noticed on the way follows CLAUDE.md's "What earns an issue": in the diff,
    fix it; a user-visible bug outside it, one `needs-triage` issue; anything else, one
-   sentence in the PR body. Before filing, search:
-   `gh issue list --state all --search "<file path>"`. An open match gets a comment, not a
-   new issue; a closed match is named in your final message.
+   sentence in the PR body. Before filing, search 
+   `gh issue list --state all --search "<file path>"` for the file the finding is in; read the
+   candidates, and treat one as a match only if it is the same underlying bug. An open match
+   gets a comment, not a new issue; a closed match is named in your final message, and if the
+   bug is back, file a new issue that links it.
 ```
 
 **Keep it this short.** The agent works in a worktree, so it reads CLAUDE.md itself — the
@@ -194,13 +197,14 @@ Merging is the serial half.
    (`strict: false` since 2026-09-25; CLAUDE.md's "Pull requests" section has why), so the
    other open PRs need no `gh pr update-branch` after each landing — only one GitHub reports
    as conflicting does. Back to 3 with the next PR, until the wave has landed.
-5. Watch CI on `main` after the wave lands. That run, not the PR's, is what catches two
-   file-disjoint PRs breaking each other through an import.
-6. **Read `main`'s CI before the handoff is written.** `gh run list --branch main --limit 1`;
-   if the run is in progress, wait for it. Put its conclusion and link in the handoff's
-   **State** line. A red `main` is a **Needs you** item, or it gets fixed in this session. A
-   known flake filed twice (#1229, #1244) kept `main` red through a long weekend because
-   nothing tied this check to the handoff.
+5. **Read `main`'s CI before the handoff is written.** It, not the PR's run, catches two
+   file-disjoint PRs breaking each other through an import. Take the run whose `headSha` is
+   the landed merge commit (`gh run list --branch main --workflow ci.yml --json
+   databaseId,headSha,status,conclusion,url`); a bare `--limit 1` can return an older run.
+   If it is queued or in progress, `gh run watch <id>`. Put its conclusion and url in the
+   handoff's **State** line. A red `main` is a **Needs you** item, or it gets fixed in this
+   session. A known flake filed twice (#1229, #1244) kept `main` red through a long weekend
+   because nothing tied this check to the handoff.
 
 ## Common mistakes
 
