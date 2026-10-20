@@ -57,16 +57,28 @@ literal list). **Names are data too**: a tag that is not a standard HTML tag bec
 attribute name that is not on the allow-list becomes `data-xN`, and comments, the doctype and
 `srcdoc` are scrubbed like any text. The allow-list is literal: nothing is kept for resembling a fake
 (a name that looks like one of `fake-names.json` is replaced like any other). **No digit survives**
-(decision B of the risk review): every run of digits is rewritten by one deterministic map that keeps
-its length, is one to one, and never maps a run to itself. The digit exceptions are literal strings in
-`ALLOW_LIST`: tag names `h1`-`h6`, the classes `row1`-`row3`, a few id words (`date1`...), the rank
-phrases (`1st Speaker`, `2nd Evaluator`, `PM1`, `EH1`, `PI1`), the doctype, charset and viewport
-strings, the layout attributes' values `0`-`12`, `100%`, `75%`, `50%`, `25%` (`colspan`, `width`...),
-a radio button's value `1`-`3` (the walker reads the attendance plan from it) and a pager's page
-numbers `1`-`9`. A **date moves by a whole number of weeks** (60 to 300, from the seed), so its weekday
-still fits and a month-year or a time stays a valid one; the same shift applies to every date in a run.
-The seed is **random by default**, so two runs differ and the output cannot be reversed from a known
-shift; `newRewriteState({ seed, dateShiftDays })` fixes it for a test. Event-handler attribute names are
+(decision B of the risk review; round 3 of #1275 reworked how). NFKC runs first, so a fullwidth or
+superscript digit is the digit it stands for, and a digit of any other script is dropped. A 1-3 digit
+run gets a fresh fake at every occurrence (no table to match against the real page). An id in its own
+context (`t=`, `s=`, a club id) gets one fake per id from a per-context derangement: lined up inside
+the context, unrelated across contexts. A run of 4+ digits takes a deterministic one-to-one walk (an
+explicit error if the space is full); a zero-prefixed run keeps its full width and is keyed by its
+exact text. No run maps to itself or to one the page carries. **Dates are synthetic**: each real date
+gets its own invented date that keeps the order of the dates, the weekday and the side of today
+(`newRewriteState({ now })` fixes today for a test) and avoids every real day on the pages; a
+date-shaped text that is not a date is scrubbed whole; a time becomes another valid time in its own
+12 or 24 hour format. What still keeps a digit is literal: tag names `h1`-`h6`, the classes `row1`-`row3`,
+a few id words (`date1`...), the rank phrases (`1st Speaker`, `PM1`, `EH1`, `PI1`), the doctype,
+charset and viewport strings, and three contexts: a radio's value 1, 2, 5, 6 only on an
+`available[<digits>]` field (the walker reads the attendance plan from it), a pager's page numbers
+`1`-`9` only inside `.nav` and never past the page count, and a month NAME only in the options of a
+select named `month`, `start_month` or `end_month`. The old layout-number list is gone: `colspan`,
+`width` and the like are mapped like any digit. Text is scanned by code point after NFKC, and any
+non-space, non-punctuation code point counts as content. A fake name never shares a word with the
+page, and the second net's `SHARED_WORDS` exempts only words of the allowed phrases. The seed is
+**random by default**, so two runs differ; `newRewriteState({ seed, now })` fixes it for a test.
+**Known limit:** within a cluster of dates the synthetic dates sit at an approximately
+fixed offset from the real ones, so the cluster's span is visible. Event-handler attribute names are
 a literal list (`handlerNames`), not a pattern. The document structure is kept. The same real value becomes the same fake within one run, so a person's id in a link and in a
 table still line up. Then `fixtureViolations` runs over the output as a second net: if it reports
 anything, **nothing is written**, the violations are printed and the exit code is non-zero.

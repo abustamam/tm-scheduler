@@ -443,7 +443,7 @@ function expectNoDigitSurvives(input: string, out: string, allowed: string[] = [
 		/\b(?:PM|EH|PI)[1-5]\b/g,
 		/\b[1-8](?:st|nd|rd|th) (?:Pref|Speaker|Evaluator)/g,
 		/Timer 2 - Online/g,
-		// layout attributes keep their literal 0-12 and 100/75/50/25%; a radio keeps 1-3; a pager keeps a page number 1-9
+		// layout attributes are MAPPED now (no layout list), but a mapped value can still be a small number, so the shape stays excused; a radio keeps 1, 2, 5, 6 on an available[] field; a pager keeps a page number 1-9
 		/\b(?:colspan|rowspan|size|rows|cols|maxlength|border|cellpadding|cellspacing|width|height)(?:="|\n)(?:\d{1,2}|100%|75%|50%|25%)(?!\d)/gi,
 		/type="radio"[^>]*value="[1256]"/gi,
 		/\b[1-9]\/[1-9]\b/g,
