@@ -152,7 +152,8 @@ export interface FixtureCheckOptions {
 const PHRASE_PARTS: string[] = [...PHRASE_SET, ...FAKE_NAMES];
 
 /** Words every fake name and allowed phrase already uses: a real name token equal to one is not a leak. */
-const SHARED_WORDS: ReadonlySet<string> = new Set([...FAKE_NAMES, ...PHRASE_SET].flatMap((p) => p.toLowerCase().split(/[\s-]+/)));
+// The allowed phrases' words only: a real name's word that is also a role word ("Timer") is the role. A fake NAME's words are not exempt: the generator never gives a fake a word the page carries, so a real name word found next to a fake one is the real one surviving.
+const SHARED_WORDS: ReadonlySet<string> = new Set([...PHRASE_SET].flatMap((p) => p.toLowerCase().split(/[\s-]+/)));
 
 /** Can a club id (or number) be matched as a bare number, or only next to a quote, `=` or `%3D`? */
 function clubIdRegex(id: string): RegExp {

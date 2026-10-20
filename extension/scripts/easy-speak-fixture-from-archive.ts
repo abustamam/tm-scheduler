@@ -387,7 +387,7 @@ const CLOSE = "";
 
 const SCAN = new RegExp(
 	[
-		`(?<tok>${OPEN}[^${CLOSE}]*${CLOSE})`,
+		`(?<tok>${OPEN}\\(555\\) 010-\\d{4}${CLOSE})`,
 		`(?<keep>(?<![${L}_])(?:${PHRASES.map(SPACE_WORDS).join("|")}|${KEEP_SHAPES.join("|")})(?![${L}]))`,
 		...DATE_SHAPES.map((d, i) => `(?<date${i}>(?<![${L}_])(?:${d.src})(?![${L}]))`),
 		String.raw`(?<user>\[[^\[\]\s]{1,60}\])`,
@@ -397,7 +397,8 @@ const SCAN = new RegExp(
 	"gu",
 );
 const UPPER = /^\p{Lu}/u;
-const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
+/** Content: a letter, a number, a mark, or ANY non-ASCII code point that is not a space or punctuation (a circled letter, a tag character, a private-use one). Only a space and punctuation are skipped. */
+const CONTENT = /[\p{L}\p{N}\p{M}]|[^\x00-\x7f\s\p{P}\p{Z}]/u;
 const ADJACENT = /^[\s ,.'’_/-]*$/;
 const NAME_SHAPE = /^\p{Lu}[\p{L}\p{M}'’-]*(?:[\s ]+\p{Lu}[\p{L}\p{M}'’.-]*)+$/u;
 const BRACKET_WORDS = new Set(A.bracketWords);
@@ -413,6 +414,8 @@ export interface RewriteState {
 	times: Map<string, string>;
 	/** Every run the pages of this run carry (no leading zeros): a fake is never one of them, so a fake never reads as real data. */
 	reserved: Set<string>;
+	/** Every word (lower case) any page of this run carries: a fake name never uses one. */
+	pageWords: Set<string>;
 	/** Every number a fake has been given out as, so a second real run never gets the same fake. */
 	taken: Set<string>;
 	/** One seeded derangement per short-id context and width (`t:3`): see `shortId`. */
@@ -459,6 +462,7 @@ export function newRewriteState(opts: RewriteStateOptions = {}): RewriteState {
 		numbers: new Map(),
 		times: new Map(),
 		reserved: new Set(),
+		pageWords: new Set(),
 		taken: new Set(),
 		shortPerms: new Map(),
 		fresh: 0,
@@ -493,11 +497,18 @@ function rng(st: RewriteState, label: string): () => number {
 const keyOf = (s: string) => s.replace(/[\s +]+/g, " ").trim().toLowerCase();
 const normRun = (r: string) => r.replace(/^0+(?=\d)/, "");
 
+/** The lower-case words of a text, and the parts of a hyphenated or apostrophised one. */
+const nameWords = (t: string): string[] => (t.normalize("NFKC").toLowerCase().match(/\p{L}[\p{L}\p{M}]*/gu) ?? []).filter((w) => w.length > 0);
+
 function fakeName(st: RewriteState, core: string): string {
 	const k = keyOf(core);
 	const have = st.names.get(k);
 	if (have) return have;
-	const next = FAKE_NAMES[st.nextName++];
+	// a fake name never shares a word with ANYTHING on the pages (a real name "Avery Quillon" must not become "Avery Alderfinch")
+	let next: string | undefined;
+	while ((next = FAKE_NAMES[st.nextName++]) !== undefined) {
+		if (!nameWords(next).some((w) => st.pageWords.has(w))) break;
+	}
 	if (!next) throw new Error("the page has more distinct names than fake-names.json holds; add INVENTED names there, never real ones");
 	st.names.set(k, next);
 	return next;
@@ -726,11 +737,14 @@ function fakeTime(st: RewriteState, raw: string): string {
 	const m = /^(\d{1,2}):(\d{2})([\s ]?[ap]m)?$/.exec(raw);
 	if (!m) return mapRunsIn(st, raw);
 	const [, h, mi, ap] = m;
-	const key = `${h}:${mi}`;
+	// 12-hour and 24-hour times are different spaces: "11:30" and "11:30am" must not share a fake
+	const hours = ap ? HOURS_12 : HOURS_24;
+	if (!hours.includes(String(Number(h))) || Number(mi) > 59) return mapRunsIn(st, raw);
+	const key = `${ap ? "12" : "24"}:${h}:${mi}`;
 	let f = st.times.get(key);
 	if (!f) {
-		const pool = (ap ? HOURS_12 : HOURS_24).filter((x) => x.length === h.length);
-		f = `${pick(st, `hour:${h}`, pool.length > 1 ? pool : HOURS_12, h)}:${pick(st, `minute:${mi}`, MINUTES, mi)}`;
+		const pool = hours.filter((x) => x.length === h.length);
+		f = `${pick(st, `hour:${key}`, pool.length > 1 ? pool : hours, h)}:${pick(st, `minute:${mi}`, MINUTES, mi)}`;
 		st.times.set(key, f);
 	}
 	return `${f}${ap ?? ""}`;
@@ -812,7 +826,9 @@ function scanHits(st: RewriteState, text: string): Hit[] {
  * Every digit run is replaced. `forceFirst`
  * / `forceLast` replace a kept phrase at that edge too (`Marlowe <b>Timer</b>` is two text nodes).
  */
-function scrubDetailed(st: RewriteState, text: string, force: { first?: boolean; last?: boolean } = {}): Scrubbed {
+function scrubDetailed(st: RewriteState, raw: string, force: { first?: boolean; last?: boolean } = {}): Scrubbed {
+	// compatibility forms first (a circled letter, a fullwidth digit, a superscript read as the letter or digit they stand for)
+	const text = raw.normalize("NFKC");
 	const hits = scanHits(st, text);
 	const segs: Seg[] = [];
 	let at = 0;
@@ -822,12 +838,18 @@ function scrubDetailed(st: RewriteState, text: string, force: { first?: boolean;
 		for (const cut of [...text.slice(from, to).matchAll(/[&|/\\]+/g), null]) {
 			const end = cut ? from + (cut.index ?? 0) : to;
 			const s = text.slice(start, end);
-			const first = s.search(LETTER_OR_DIGIT);
-			if (first >= 0) {
-				let last = s.length - 1;
-				while (!LETTER_OR_DIGIT.test(s[last])) last -= 1;
-				segs.push({ start: start + first, end: start + last + 1, replaced: true });
+			// by CODE POINT: an index into the UTF-16 units would land inside a surrogate pair
+			let first = -1;
+			let lastEnd = -1;
+			let i = 0;
+			for (const ch of s) {
+				if (CONTENT.test(ch)) {
+					if (first < 0) first = i;
+					lastEnd = i + ch.length;
+				}
+				i += ch.length;
 			}
+			if (first >= 0) segs.push({ start: start + first, end: start + lastEnd, replaced: true });
 			if (cut) start = end + cut[0].length;
 		}
 	};
@@ -992,17 +1014,28 @@ function windowFeatures(st: RewriteState, body: string): string | null {
 	return out.join(",");
 }
 
-function rewriteCode(st: RewriteState, code: string): string {
+function rewriteCode(st: RewriteState, source: string): string {
+	// compatibility forms first, so a fullwidth or superscript digit is the digit it stands for
+	const code = source.normalize("NFKC");
 	const bare = (s: string) =>
 		s
 			.replace(/\\/g, "")
 			.replace(/[\p{L}_$][\p{L}\p{N}_$]*/gu, (w) => (CODE_WORDS.has(w) ? w : "x"))
-			.replace(/\d+/g, (d) => fakeRun(st, d));
+			// a number written in any script (Arabic-Indic, Devanagari ...) is a number: ASCII ones are mapped, any other is 0
+			.replace(/\p{N}+/gu, (d) => (/^\d+$/.test(d) ? fakeRun(st, d) : "0"))
+			// nothing else outside ASCII survives in bare code (a symbol, a tag character, a private-use one)
+			.replace(/[^\x00-\x7f]/g, "");
 	let out = "";
 	let pos = 0;
-	for (const m of code.matchAll(/(['"`])((?:(?!\1)[^\\]|\\[\s\S])*)\1/g)) {
+	// a string literal, or a comment (dropped: a comment is not code, and valid JavaScript can hold anything in one)
+	for (const m of code.matchAll(/(['"`])((?:(?!\1)[^\\]|\\[\s\S])*)\1|\/\*[\s\S]*?(?:\*\/|$)|\/\/[^\n]*/g)) {
 		const idx = m.index ?? 0;
 		out += bare(code.slice(pos, idx));
+		pos = idx + m[0].length;
+		if (m[1] === undefined) {
+			out += " ";
+			continue;
+		}
 		const body = decodeJsEscapes(m[2]);
 		let inner: string;
 		if (A.codeStrings.includes(body)) inner = body;
@@ -1010,7 +1043,6 @@ function rewriteCode(st: RewriteState, code: string): string {
 		else if (/\.(?:php|html|aspx|cfm|cgi)(?:[?#]|$)|^https?:\/\//i.test(body)) inner = rewriteUrl(st, body);
 		else inner = scrubText(st, body);
 		out += `${m[1]}${inner.replace(/[\\'"`]/g, "")}${m[1]}`;
-		pos = idx + m[0].length;
 	}
 	return out + bare(code.slice(pos));
 }
@@ -1402,6 +1434,7 @@ function reserveRuns(st: RewriteState, doc: Document, html: string) {
 		let u = t;
 		for (const re of MARKUP_DIGITS) u = u.replace(re, " ");
 		for (const r of u.match(/\d+/g) ?? []) st.reserved.add(normRun(r));
+		for (const w of nameWords(u)) st.pageWords.add(w);
 		for (const [y, mo, d] of datesIn(u)) {
 			const t = Date.UTC(y, mo - 1, d);
 			if (new Date(t).getUTCMonth() === mo - 1 && new Date(t).getUTCDate() === d) st.realDays.add(Math.floor(t / 86_400_000));

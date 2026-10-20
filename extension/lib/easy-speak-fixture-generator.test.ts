@@ -1139,3 +1139,78 @@ describe("round 3 (#1275): a literal exception holds only in its own context", (
 		expect(slash).not.toMatch(/Quillon|Time/);
 	});
 });
+
+describe("round 3 (#1275): text, code and names", () => {
+	const gen = (body: string, original?: { names?: string[]; terms?: string[] }) => generateFixture(page(body), { original });
+
+	it("R3-F1. the private-use token brackets cannot be put back by an escape, an entity or a percent-escape: no payload between them survives", () => {
+		const payload = "zorvaksecret";
+		const cases = [
+			`<a href="javascript:void(0)" onclick="x('\\ue000${payload}\\ue001')">a</a>`,
+			`<textarea>&#xE000;${payload}&#xE001;</textarea>`,
+			`<a href="/orgdata.php?n=%EE%80%80${payload}%EE%80%81">a</a>`,
+			`<td data-x="">&#xE000;${payload}&#xE001;</td>`,
+		];
+		for (const c of cases) {
+			const r = gen(c, { terms: [payload] });
+			expect(r.html.toLowerCase(), c).not.toContain(payload);
+			expect(r.violations, c).toEqual([]);
+		}
+	});
+
+	it("R3-F2. non-ASCII digits and comments in handler code do not survive (fullwidth, Arabic-Indic, superscript, a comment)", () => {
+		const handlers = [
+			`f(４８２９１３)`,
+			`alert(٤١٥٥٥٥٠١٣٢)`,
+			`alert(⁴¹⁵⁵⁵⁵⁰¹³²)`,
+			`/* ４１５５５５０１３２ */ return false`,
+			`// 4155550132\nreturn false`,
+			`/* "quote */ f(1) /* 4155550132 */`,
+		];
+		for (const h of handlers) {
+			const out = rewriteEasySpeakPage(page(`<a onclick="${h}">a</a>`));
+			const code = parseHtml(out).querySelector("a")?.getAttribute("onclick") ?? "";
+			expect(code, h).not.toMatch(/[^\x00-\x7f]/);
+			expect(code, h).not.toMatch(/4155550132|482913/);
+			expect(code, h).not.toMatch(/\/\*|\/\//);
+		}
+	});
+
+	it("R3-1. supplementary-plane letters and digits do not survive in text, a meta content, a srcdoc or entities", () => {
+		const bodies = [`<p>𝟜𝟙𝟝𝟝𝟝𝟝𝟘𝟙𝟛𝟚</p>`, `<p>𠮷</p>`, `<p>&#120796;&#120793;&#120797;</p>`, `<p>x 𝟜𝟙𝟝</p>`, `<iframe srcdoc="<p>𝟜𝟙𝟝𝟝</p>"></iframe>`];
+		for (const b of bodies) {
+			const out = rewriteEasySpeakPage(page(b, `<meta name="description" content="𝟜𝟙𝟝𝟝">`));
+			expect(out, b).not.toMatch(/[\u{10000}-\u{10ffff}]/u);
+		}
+	});
+
+	it("R3-F3. code points outside letters and numbers (circled letters, tag characters) are content too", () => {
+		const out = rewriteEasySpeakPage(page(`<td>Ⓡⓞⓦⓐⓝ</td><td>R\u{E0061}\u{E0062}owan</td><td>\u{E0041}\u{E0042}</td>`));
+		expect(out).not.toMatch(/Ⓡ|ⓞ|[\u{E0000}-\u{E007F}]/u);
+		expect(out.toLowerCase()).not.toContain("rowan");
+	});
+
+	it("R3-7. a fake name never shares a word with the page: Avery Quillon is not Avery Alderfinch, and the net catches the real word if it ever is", () => {
+		const r = gen(`<p>Avery Alderfinch</p>`, { names: ["Avery Alderfinch"] });
+		expect(r.html).not.toMatch(/Avery|Alderfinch/);
+		const q = gen(`<p>Avery Quillon</p>`, { names: ["Avery Quillon"] });
+		expect(q.violations).toEqual([]);
+		expect(q.html).not.toMatch(/Avery|Quillon/);
+		// the net itself: a real word beside a fake name is reported even when the fake name happens to share it
+		const shared = fixtureViolations(page(`<p>Avery Alderfinch</p>`), { original: { names: ["Avery Quillon"] } });
+		expect(shared.join("\n")).toMatch(/avery/i);
+	});
+
+	it("R3-9. a 24-hour and a 12-hour time of the same digits are valid times of their own format", () => {
+		const out = Array.from(parseHtml(rewriteEasySpeakPage(page(`<p>11:30</p><p>11:30am</p><p>25:61</p>`), { state: newRewriteState({ seed: "t" }) })).querySelectorAll("p")).map((p) => p.textContent ?? "");
+		expect(out[0]).toMatch(/^(?:\d|1\d|2[0-3]):[0-5]\d$/);
+		expect(out[1]).toMatch(/^(?:[1-9]|1[0-2]):[0-5]\d ?am$/);
+		expect(out[2]).not.toMatch(/25|61/);
+		for (let i = 0; i < 25; i++) {
+			const [a, b] = Array.from(parseHtml(rewriteEasySpeakPage(page(`<p>11:30</p><p>11:30pm</p>`), { state: newRewriteState({ seed: `t${i}` }) })).querySelectorAll("p")).map((p) => p.textContent ?? "");
+			expect(Number(a.split(":")[0]), `seed ${i}`).toBeLessThanOrEqual(23);
+			expect(Number(b.split(":")[0]), `seed ${i}`).toBeLessThanOrEqual(12);
+			expect(Number(b.split(":")[0])).toBeGreaterThanOrEqual(1);
+		}
+	});
+});
