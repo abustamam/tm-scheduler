@@ -25,7 +25,7 @@
  * format (12 and 24 hour are separate spaces). Person ids become 900001-900999 and phones
  * `(555) 010-xxxx`. Only a literal allow-listed string keeps its digits (`ALLOW_LIST.phrases`,
  * `pageNumbers`) plus three contexts: a radio's value 1, 2, 5, 6 on an `available[<digits>]` field
- * only, a pager's digits only inside `.nav` (page no past the count), and a month NAME only in the
+ * only, a pager's digits only inside `.nav` (never past the page count), and a month NAME only in the
  * options of a select named month, start_month or end_month. There is no layout-number list any
  * more: `colspan`, `width` and the rest are mapped like any digit. Text is scanned by code point
  * after NFKC, and anything that is not a space or punctuation counts as content (a circled letter, a
