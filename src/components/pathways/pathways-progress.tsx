@@ -342,7 +342,10 @@ function MarkableProject({
 	const badge = (
 		<Badge
 			variant={isRequired ? "default" : "outline"}
-			className={cn(!isRequired && "font-normal text-muted-foreground")}
+			className={cn(
+				"h-auto max-w-full whitespace-normal text-left",
+				!isRequired && "font-normal text-muted-foreground",
+			)}
 		>
 			{onMark && projectId ? (
 				<Check className="mr-1 size-3 opacity-70" aria-hidden />
@@ -504,9 +507,13 @@ export function PathwaysProgress({
 		<Card>
 			<CardContent>
 				<Tabs value={selected} onValueChange={setActive}>
-					<TabsList>
+					<TabsList className="h-auto w-full flex-wrap justify-start group-data-[orientation=horizontal]/tabs:h-auto">
 						{paths.map((p) => (
-							<TabsTrigger key={p.courseCode} value={p.courseCode}>
+							<TabsTrigger
+								key={p.courseCode}
+								value={p.courseCode}
+								className="h-auto whitespace-normal"
+							>
 								{p.pathName}
 							</TabsTrigger>
 						))}
