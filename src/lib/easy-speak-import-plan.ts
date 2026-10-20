@@ -481,6 +481,13 @@ interface Seen {
 	 * exact-name matcher must not pick one of them for both.
 	 */
 	spellings: Set<string>;
+	/**
+	 * A real meeting signal: a role, an award, Table Topics, an introducer link, a
+	 * guest category, or an attendance row with a record or an attending /
+	 * tentative reply. A guest-section row with no reply and no record is only a
+	 * line on the attendance list ("Unknown"): it names nobody.
+	 */
+	signalled: boolean;
 }
 
 /** A spelling that keeps its accents: the fold's own key throws them away. */
@@ -586,6 +593,10 @@ export function buildImportPlan(
 		ref: EsPersonRef,
 		field: keyof Omit<PlanPerson["appearances"], "guestCategories">,
 		category?: EsGuestCategory,
+		signal = field === "roles" ||
+			field === "awards" ||
+			field === "tableTopics" ||
+			field === "introducedBy",
 	) => {
 		const key = personKeyOf(ref);
 		let entry = seen.get(key);
@@ -600,6 +611,7 @@ export function buildImportPlan(
 						})()
 					: null,
 				spellings: new Set(),
+				signalled: false,
 				appearances: {
 					roles: 0,
 					attendance: 0,
@@ -615,6 +627,7 @@ export function buildImportPlan(
 			seen.set(key, entry);
 		}
 		entry.spellings.add(spellingOf(ref.name));
+		if (signal || category) entry.signalled = true;
 		entry.appearances[field]++;
 		if (category && !entry.appearances.guestCategories.includes(category)) {
 			entry.appearances.guestCategories.push(category);
@@ -623,7 +636,16 @@ export function buildImportPlan(
 	for (const { meeting } of past) {
 		for (const role of meeting.roles)
 			if (role.holder) touch(role.holder, "roles");
-		for (const row of meeting.attendance) touch(row.who, "attendance");
+		for (const row of meeting.attendance) {
+			touch(
+				row.who,
+				"attendance",
+				undefined,
+				row.record !== null ||
+					row.plan === "attending" ||
+					row.plan === "tentative",
+			);
+		}
 		for (const g of meeting.guests) touch(g.who, "attendance", g.category);
 		for (const award of meeting.awards) touch(award.who, "awards");
 		for (const tt of meeting.tableTopics) touch(tt.who, "tableTopics");
@@ -736,8 +758,9 @@ export function buildImportPlan(
 					via: "category",
 					guestId: null,
 				};
-			} else if (!listOnly) {
-				// A past person a meeting names and nobody lists: a former member.
+			} else if (entry.signalled) {
+				// A past person a meeting names (a real signal, not a bare attendance
+				// line) and nobody lists: a former member.
 				outcome = {
 					status: "create",
 					membership: "former",

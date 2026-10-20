@@ -74,6 +74,19 @@ function withGuestSpeaker(): EasySpeakBundleV1 {
 	return bundle;
 }
 
+/** The fixture with Avery Alderfinch (an attendance row only, with no reply) given a role. */
+function withAveryRole(): EasySpeakBundleV1 {
+	const bundle = load();
+	bundle.meetings
+		.find((m) => m.esMeetingId === "644304")
+		?.roles.push({
+			role: "Ah-Counter",
+			slot: 99,
+			holder: { esUserId: "900001", name: "Avery Alderfinch" },
+		});
+	return bundle;
+}
+
 const outcomeOf = (
 	plan: ReturnType<typeof buildImportPlan>,
 	esUserId: string,
@@ -118,12 +131,12 @@ describe("buildImportPlan on the B fixture", () => {
 		).toEqual([id(3), id(4)]);
 	});
 
-	// protects=a past person only a meeting names is created as a former member and does not block the apply; only the ambiguous are asked about;
+	// protects=a past person a meeting SIGNALS (a role here) and nobody lists is created as a former member and does not block the apply; only the ambiguous are asked about;
 	// fails_when=the person is left unmatched, or asked about, or created active;
 	// no_claim=the member-list and guest-category precedence, which are their own tests.
 	it("creates a former member for a past person only a meeting names, and asks only about the ambiguous (#1240)", () => {
-		const plan = buildImportPlan(load(), ctx());
-		// Avery Alderfinch holds a role and is on no list and in no guest category.
+		const plan = buildImportPlan(withAveryRole(), ctx());
+		// Avery Alderfinch is on no list and in no guest category.
 		expect(outcomeOf(plan, "900001")).toEqual({
 			status: "create",
 			membership: "former",
@@ -132,6 +145,139 @@ describe("buildImportPlan on the B fixture", () => {
 		});
 		expect(plan.unresolved.map((p) => p.key)).toEqual(["es:900005"]);
 		expect(plan.canApply).toBe(false);
+	});
+
+	/** The fixture with one more person on the past meeting's attendance list only. */
+	const withAttendanceOnly = (
+		plan: "attending" | "not_attending" | "tentative" | "unknown" | null,
+		record: "attended" | "attended_online" | null,
+	) => {
+		const bundle = load();
+		bundle.meetings
+			.find((m) => m.esMeetingId === "644304")
+			?.attendance.push({
+				who: { esUserId: "900777", name: "Ottoline Listedonly" },
+				plan,
+				record,
+			});
+		return buildImportPlan(bundle, ctx());
+	};
+
+	// protects=the REAL fixture's Avery Alderfinch, a bare attendance row (no reply, no
+	// record) on a past meeting and on no list, is not made a former member;
+	// fails_when=any attendance row counts as "named by a meeting";
+	// no_claim=the apply.
+	it("does not create the real fixture's unsignalled attendance row (Avery Alderfinch)", () => {
+		const plan = buildImportPlan(load(), ctx());
+		expect(outcomeOf(plan, "900001")).toEqual({ status: "unmatched" });
+		expect(plan.unresolved.map((p) => p.key)).toEqual(["es:900005"]);
+	});
+
+	// protects=a person who is only a row on the attendance list with no reply and no
+	// record (a guest-section visitor with "Unknown") is not made a former member:
+	// matched when the roster has them, else left alone and not asked about;
+	// fails_when=any attendance row counts as "named by a meeting";
+	// no_claim=what a recorded attendance imports, the integration suite's.
+	it.each([
+		["unknown", "unknown", null],
+		["not_attending", "not_attending", null],
+		["no plan and no record", null, null],
+	] as const)("does not create a former member from an unsignalled attendance row (%s)", (_label, planAnswer, record) => {
+		const plan = withAttendanceOnly(planAnswer, record);
+		expect(outcomeOf(plan, "900777")).toEqual({ status: "unmatched" });
+		expect(plan.unresolved.map((p) => p.key)).not.toContain("es:900777");
+		expect(plan.counts.newFormerMembers).toBe(
+			buildImportPlan(load(), ctx()).counts.newFormerMembers,
+		);
+	});
+
+	// protects=an attendance row with a record, or an attending / tentative reply, is
+	// a real meeting signal: the unlisted person is still a former member;
+	// fails_when=the signal test drops a kind of row;
+	// no_claim=the unsignalled rows, above.
+	it.each([
+		["a record", null, "attended"],
+		["an online record", null, "attended_online"],
+		["an attending reply", "attending", null],
+		["a tentative reply", "tentative", null],
+	] as const)("still creates a former member from %s", (_label, planAnswer, record) => {
+		const plan = withAttendanceOnly(planAnswer, record);
+		expect(outcomeOf(plan, "900777")).toMatchObject({
+			status: "create",
+			membership: "former",
+		});
+	});
+
+	// protects=a role, an award, Table Topics or an introducer link each count as a
+	// meeting signal for an unlisted person;
+	// fails_when=the signal test names only some of them;
+	// no_claim=the attendance rows, above.
+	it.each([
+		[
+			"a role",
+			(b: EasySpeakBundleV1, who: { esUserId: string; name: string }) => {
+				b.meetings[0]?.roles.push({
+					role: "Ah-Counter",
+					slot: 98,
+					holder: who,
+				});
+			},
+		],
+		[
+			"an award",
+			(b: EasySpeakBundleV1, who: { esUserId: string; name: string }) => {
+				b.meetings[0]?.awards.push({ category: "best_speaker", who });
+			},
+		],
+		[
+			"Table Topics",
+			(b: EasySpeakBundleV1, who: { esUserId: string; name: string }) => {
+				b.meetings[0]?.tableTopics.push({ who, topic: null });
+			},
+		],
+		[
+			"an introducer link",
+			(b: EasySpeakBundleV1, who: { esUserId: string; name: string }) => {
+				b.visitorsIntroduced.push({
+					visitor: { esUserId: "900778", name: "Some Visitor" },
+					introducedBy: who,
+				});
+			},
+		],
+	] as const)("counts %s as a meeting signal", (_label, add) => {
+		const bundle = load();
+		const who = { esUserId: "900777", name: "Ottoline Listedonly" };
+		add(bundle, who);
+		expect(outcomeOf(buildImportPlan(bundle, ctx()), "900777")).toMatchObject({
+			status: "create",
+			membership: "former",
+		});
+	});
+
+	// protects=an unsignalled attendance-only person is still matched to the roster
+	// by name, as a list-only person is;
+	// fails_when=the match is skipped for a person with no signal;
+	// no_claim=creation.
+	it("matches an unsignalled attendance-only person to the roster", () => {
+		const bundle = load();
+		bundle.meetings
+			.find((m) => m.esMeetingId === "644304")
+			?.attendance.push({
+				who: { esUserId: "900777", name: "Ottoline Listedonly" },
+				plan: "unknown",
+				record: null,
+			});
+		const plan = buildImportPlan(
+			bundle,
+			ctx({
+				roster: [...ROSTER, { memberId: id(40), name: "Ottoline Listedonly" }],
+			}),
+		);
+		expect(outcomeOf(plan, "900777")).toEqual({
+			status: "member",
+			memberId: id(40),
+			via: "exact",
+		});
 	});
 
 	// protects=Easy-Speak's "Guest Speaker" section imports as `visiting_toastmaster`
@@ -405,7 +551,7 @@ describe("buildImportPlan on the B fixture", () => {
 		});
 		// Avery Alderfinch is on no roster: a stale ref changes nothing about that.
 		const asks = buildImportPlan(
-			load(),
+			withAveryRole(),
 			ctx({
 				refs: [{ kind: "person", sourceId: "es:900001", targetId: "gone" }],
 			}),
