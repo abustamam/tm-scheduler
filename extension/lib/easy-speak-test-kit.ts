@@ -391,9 +391,10 @@ export function fakeEasySpeak(opts: {
  * Replay a live-site failure: serve the given fixture pages in place of the usual ones and
  * return the walk harness (`run`, `log`, `store`...). Each key is a path, or a path with its
  * query ("/request_speech.php?s=1473688"); a bare path answers every request to it, a key with
- * a query only the requests that carry those parameters (others, like `mode`, may be there too). The value is a fixture file name. Every other URL is served as
- * `fakeEasySpeak` serves it, so a regression test for a live bug is the offending page, anonymised
- * by `scripts/easy-speak-fixture-from-archive.ts`, and a few lines:
+ * a query only the requests that carry those parameters (others, like `mode`, may be there too).
+ * The value is a fixture file name. Every other URL is served as `fakeEasySpeak` serves it, so a
+ * regression test for a live bug is the offending page, anonymised by hand (see
+ * `__fixtures__/easy-speak/README.md`), and a few lines:
  *
  *     const r = replay({ "/view_meeting.php?t=644360": "meeting-regression-123.html" });
  *     expect((await r.run()).bundle.meetings...).
