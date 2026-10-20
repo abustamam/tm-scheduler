@@ -37,7 +37,12 @@ Run `gh issue view <number> --comments`.
 
 The maintainer is the intake. An agent files an issue only for a user-visible bug, data loss or
 corruption, a security hole, or a dev-ex bug (a defect in the repo's own tooling) that lies outside the files its PR touches; the full rule is "What
-earns an issue" in `CLAUDE.md`. That issue:
+earns an issue" in `CLAUDE.md`. Search before filing:
+`gh issue list --state all --search "<file path>"` for the file the finding is in. Read the
+candidates; one is a match only if it is the same underlying bug (a shared path alone is
+not). An open match gets a comment instead of a new issue; a closed match is named in the
+agent's final message, and if the bug is back, a new issue links it. (#1229 and #1244 were one
+bug, filed by two agents four days apart.) The issue that is filed:
 
 - opens with the line `Found by an agent while working on #N` (or `… while <what the maintainer
   asked>` when there was no issue), so the grep below can count it;
