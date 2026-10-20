@@ -140,6 +140,7 @@ const COVERED: Record<string, { who: Who; url: (f: Fixture) => string }> = {
 	"/request-access": { who: "signed-out", url: () => "/request-access" },
 	"/signin": { who: "signed-out", url: () => "/signin" },
 	"/tour": { who: "signed-out", url: () => "/tour" },
+	"/timer": { who: "signed-out", url: () => "/timer" },
 	"/unsubscribe": { who: "signed-out", url: () => "/unsubscribe" },
 	"/whats-new": { who: "signed-out", url: () => "/whats-new" },
 	"/resources/": { who: "signed-out", url: () => "/resources" },
