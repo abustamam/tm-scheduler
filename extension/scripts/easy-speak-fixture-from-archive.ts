@@ -634,7 +634,7 @@ function fakeTime(st: RewriteState, raw: string): string {
  */
 function replaceDigits(st: RewriteState, text: string, isBare: boolean): string {
 	const digits = text.replace(/\D/g, "");
-	if (digits.length < 7 || digits.length > 15) return mapRunsIn(st, text);
+	if (digits.length < 7) return mapRunsIn(st, text);
 	if (isBare && !/^0/.test(digits) && digits.length < 9) return fakeNumber(st, digits);
 	return fakePhone(st, digits.replace(/^1(\d{10})$/, "$1"));
 }

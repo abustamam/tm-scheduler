@@ -421,13 +421,48 @@ const digitRuns = (s: string): string[] => (s.match(/\d+/g) ?? []).map((r) => r.
  * Decision B (#1275): no digit survives. Every digit run in `input` must be absent from `out`, whatever the
  * markup it sat in; a fake phone (`(555) 010-xxxx`) is the contract's own placeholder and is not counted.
  */
-function expectNoDigitSurvives(input: string, out: string, allowed: string[] = []) {
-	// the digits of markup the generator keeps on purpose (a charset, a W3C URL, the viewport scale), as a literal list
-	const MARKUP = [/utf-8/gi, /iso-8859-1/gi, /<!doctype[^>]*>/gi, /https?:\/\/www\.w3\.org\/[^\s"']*/gi, /-\/\/w3c\/\/dtd[^"']*/gi, /initial-scale=1/gi];
+function expectNoDigitSurvives(input: string, out: string, allowed: string[] = [], opts: { page?: boolean } = {}) {
+	// the digits of markup the generator keeps on purpose (the nbsp entity, a charset, a W3C URL, the viewport scale), as a literal list
+	const MARKUP = [
+		/&#160;/g,
+		/%[0-9a-f]{2}/gi, // a percent-escape is an encoded character, not a number
+		/utf-8/gi,
+		/iso-8859-1/gi,
+		/<!doctype[^>]*>/gi,
+		/https?:\/\/www\.w3\.org\/[^\s"']*/gi,
+		/-\/\/w3c\/\/dtd[^"']*/gi,
+		/initial-scale=1/gi,
+		// the allow-list's own digit-carrying strings: tags, classes, ids, a role's rank, a rating code
+		/<\/?h[1-6]\b/gi,
+		/\b(?:row|date|image|form|v)[1-3]\b/g,
+		/\b(?:PM|EH|PI)[1-5]\b/g,
+		/\b[1-8](?:st|nd|rd|th) (?:Pref|Speaker|Evaluator)/g,
+		/Timer 2 - Online/g,
+		// layout attributes keep their literal 0-12 and 100/75/50/25%; a radio keeps 1-3; a pager keeps a page number 1-9
+		/\b(?:colspan|rowspan|size|rows|cols|maxlength|border|cellpadding|cellspacing|width|height)(?:="|\n)(?:\d{1,2}|100%|75%|50%|25%)(?!\d)/gi,
+		/type="radio"[^>]*value="[1-3]"/gi,
+		/\b[1-9]\/[1-9]\b/g,
+	];
 	const real = new Set(digitRuns(MARKUP.reduce((t, re) => t.replace(re, ""), input)));
 	const ok = new Set(allowed.map((r) => r.replace(/^0+(?=\d)/, "")));
-	const left = digitRuns(everything(out).replace(/\(555\) 010-\d{4}/g, ""));
-	for (const r of left) expect(real.has(r) && !ok.has(r), `the digit run ${r} is still in the generated page`).toBe(false);
+	let text = MARKUP.reduce((t, re) => t.replace(re, ""), everything(out)).replace(/\(555\) 010-\d{4}/g, "");
+	if (opts.page) {
+		// A whole page uses up the one-digit fakes (there are ten), so a one-digit run may equal ANOTHER real one-digit
+		// run (never its own: the map has no fixed point, and the unit tests above prove that on small pages).
+		// A shifted date or time may share a day, a month or a minute with another real one by chance, and is
+		// compared whole instead: none of the real dates and times may be in the output.
+		const MON = "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
+		const stamps = new RegExp(`\\d{4}-\\d{2}-\\d{2}|\\d{1,2}:\\d{2}|\\d{1,2}(?:st|nd|rd|th)\\s+(?:${MON})\\s+\\d{4}|(?:${MON})\\s+\\d{1,2},?\\s+\\d{2,4}`, "gi");
+		const outStamps = new Set((text.match(stamps) ?? []).map((t) => t.toLowerCase()));
+		for (const t of input.match(stamps) ?? []) expect(outStamps.has(t.toLowerCase()), `the date or time ${t} is still in the generated page`).toBe(false);
+		text = text.replace(stamps, "");
+	}
+	for (const m of text.matchAll(/\d+/g)) {
+		const r = m[0].replace(/^0+(?=\d)/, "");
+		if (opts.page && r.length === 1) continue;
+		const at = m.index ?? 0;
+		expect(real.has(r) && !ok.has(r), `the digit run ${r} is still in the generated page, near: ${text.slice(Math.max(0, at - 40), at + 20)}`).toBe(false);
+	}
 }
 
 describe("round 2 (#1275, decision B): no digit survives", () => {
@@ -701,6 +736,16 @@ describe("the committed fixtures round-trip", () => {
 			.replace(/(?<!\d)4242(?!\d)/g, "7314159")
 			.replace(/(?<![1-9])(0*)9999(?!\d)/g, "$12718281")
 			.replace(/\(555\) 010-(\d{4})/g, "(212) 555-$1");
+		// a meeting id (t=) and a speech id (s=) become invented ones, and each is a term the rewrite must remove
+		const ids: string[] = [];
+		out = out.replace(/(?<=[?&;](?:t|s)=)\d+/g, (id) => {
+			if (id.length >= 4) ids.push(`7${id}`); // a one-digit speech id is too short to be a term of its own
+			return `7${id}`;
+		});
+		// an email, and data that sits only in an attribute, with short numbers among the long ones
+		const email = "zorvak.quillon@quorvakmail.example";
+		terms.push(email, "Zqattrdata");
+		out = out.replace("</title>", ` ${email}</title>`).replace(/<body/i, '<body title="Zqattrdata 415 x 4132 y 41 z 55 77"');
 		[...phrases.fixturePlaces, ...phrases.speechTitlesAndThemes]
 			.sort((a, b) => b.length - a.length)
 			.forEach((p, i) => {
@@ -708,16 +753,20 @@ describe("the committed fixtures round-trip", () => {
 				if (out.includes(p)) terms.push(invented);
 				out = out.replaceAll(p, invented);
 			});
-		return { html: out, names, terms };
+		return { html: out, names, terms, ids: [...new Set(ids)] };
 	}
 	const original = (names: string[], terms: string[]) => ({ names, terms, clubIds: ["7314159", "2718281"], personIds: [] as string[] });
+	/** Digit runs invented above that exist in no committed fixture, so any of them in the output is a leak. */
+	const INJECTED_RUNS = ["7314159", "2718281"];
 
 	it.each(files)("%s: invented real values put back in are all gone, and the structure is the page's own", (f) => {
 		const d = deFake(readFixture(f));
 		const r = generateFixture(d.html, { contactPage: isContact(f), original: original(d.names, d.terms) });
 		expect(r.violations).toEqual([]);
-		expectNone(r.html, [...d.names, ...d.terms]);
+		expectNone(r.html, [...d.names, ...d.terms, ...d.ids]);
 		expect(r.html).not.toMatch(/7900\d{3}|7314159|2718281|\(212\) 555-/);
+		expectNoDigitSurvives(d.html, r.html, [], { page: true });
+		for (const run of INJECTED_RUNS) expect(r.html, `injected run ${run}`).not.toContain(run);
 		const tags = (h: string) => [...parseHtml(h).querySelectorAll("*")].map((e) => e.tagName);
 		expect(tags(r.html)).toEqual(tags(readFixture(f)));
 	});
