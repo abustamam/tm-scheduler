@@ -28,24 +28,14 @@ the diff: it is the contract's only worked example.
 
 ## A live Easy-Speak failure ships its page
 
-A fix prompted by a live Easy-Speak failure commits the offending page, anonymised, in the same PR,
-with a test that fails without the fix (#1252). The export saves every page it fetched to
-`easy-speak-<club>-<date>-pages.json`; that archive is raw, so **never commit it or a page from it**.
+A fix prompted by a live Easy-Speak failure commits the offending page in the same PR, with a test
+that fails without the fix (#1252). The page is **anonymised by hand**: a human replaces every name,
+id, username, phone, email and club detail, then reads every line before committing. The export's
+`easy-speak-<club>-<date>-pages.json` archive is raw, so **never commit it or a page from it**.
 
-```bash
-cd extension
-bun scripts/easy-speak-fixture-from-archive.ts <archive.json> --list
-bun scripts/easy-speak-fixture-from-archive.ts <archive.json> --page <index|url-part> \
-    --out <name>.html [--name "Real Name"]... [--term "Real Club Name"]... [--dry-run]
-```
-
-The script strips scripts, styles and comments, swaps linked people, the viewer and the club for
-fakes and the guard's ranges, and runs the same checks as `easy-speak-fixtures.test.ts`
-(`fixtureViolations` in `easy-speak-test-kit.ts`). It refuses to write a page that fails them and
-prints what is left: name a person in plain text with `--name`, a club name, venue or address with
-`--term`. Never add an allow-list entry to make a page pass. **The guard is a net, not a gate**: it
-catches the shapes of real data it knows (names and ids in text and in every attribute, phones, emails, usernames, the club's ids, anything
-you named), not every shape. A human reads the whole generated file before committing it. Add a row to the table above, then write the test with `replay` from the test kit:
+`fixtureViolations` (`easy-speak-test-kit.ts`) is a net, not a gate: it catches the shapes of real
+data it knows, not every shape, and a pass is not clearance. Never add an allow-list entry to make a
+page pass. Add a row to the table above, then write the test with `replay`:
 
 ```ts
 const r = replay({ "/request_speech.php?s=123": "speech-request-regression.html" });
@@ -55,3 +45,5 @@ await expect(r.run()).resolves.toBeDefined(); // fails without the fix
 `replay` serves the named fixtures in place of the usual pages, for a path or a path plus the query
 parameters given, and runs the whole walk. Run `UPDATE_FIXTURES=1 bunx vitest run
 lib/easy-speak-walk.test.ts` only if the fixture changes `bundle.expected.json` on purpose.
+
+A deny-by-default fixture generator is tracked in #1272.

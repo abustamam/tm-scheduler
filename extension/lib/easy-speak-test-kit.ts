@@ -74,7 +74,7 @@ const nonPersonPhrases = JSON.parse(readFixture("non-person-phrases.json")) as R
 /** Every fake person name a fixture may carry, in the order `fake-names.json` lists them. */
 export const FAKE_NAMES: readonly string[] = fakeNames.names;
 /** The one username a fixture may carry. */
-export const FAKE_USERNAME: string = fakeNames.usernames[0];
+const FAKE_USERNAME: string = fakeNames.usernames[0];
 
 const FAKE_NAME_SET = new Set(FAKE_NAMES);
 const PHRASE_SET = new Set(
@@ -83,18 +83,15 @@ const PHRASE_SET = new Set(
 		.flatMap(([, v]) => v as string[]),
 );
 
-/** Credentials after a name ("Dana Vexford, DTM"): the one pattern `stripCredentials` and the generator share. */
-export const CREDENTIAL_SUFFIX = /,\s*[A-Z]{2,4}(?:\s+[A-Z]{2,4})*$/;
-
 /**
  * Every place a person's id rides in markup: any `…user…`/`…member…`/`…person…`/`…uid…` or bare
  * `u` parameter (`=` or percent-encoded), and the attendance rows' name attributes. Group 1 is
  * the prefix, group 2 the id. Global: reset with `matchAll` or `replace`, never `.test`.
  */
-export const PERSON_ID_PARAM = /((?<![A-Za-z])(?<!(?<!%[0-9a-f])[0-9])(?:u|[a-z_]*(?:user|member|person|uid)[a-z_]*)(?:=|%3[dD])|attend_image1?\[|available\[|rec\[|available_)(\d+)/gi;
+const PERSON_ID_PARAM = /((?<![A-Za-z])(?<!(?<!%[0-9a-f])[0-9])(?:u|[a-z_]*(?:user|member|person|uid)[a-z_]*)(?:=|%3[dD])|attend_image1?\[|available\[|rec\[|available_)(\d+)/gi;
 
 /** A phone with or without separators, a leading country code, or a tel: link's digits. */
-export const LOOSE_PHONE = /(?<!\d)(?:\+?1[\s.-]?)?\(?[2-9]\d{2}\)?[\s.-]?\d{3}[\s.-]?\d{4}(?!\d)|\+\d{1,3}[\s.-]\d[\d\s.-]{6,}\d|\+\d{10,14}(?!\d)/g;
+const LOOSE_PHONE = /(?<!\d)(?:\+?1[\s.-]?)?\(?[2-9]\d{2}\)?[\s.-]?\d{3}[\s.-]?\d{4}(?!\d)|\+\d{1,3}[\s.-]\d[\d\s.-]{6,}\d|\+\d{10,14}(?!\d)/g;
 // A US number's area code starts 2-9, so a bare 10-digit run starting 1 (a unix timestamp) is not one.
 
 const NAMED_ENTITIES: Record<string, string> = {
@@ -103,7 +100,7 @@ const NAMED_ENTITIES: Record<string, string> = {
 };
 
 /** HTML entities and percent-escapes undone (up to three layers), so `&#64;` and `%40` read as `@`. */
-export function decodeMarkup(s: string): string {
+function decodeMarkup(s: string): string {
 	let cur = s;
 	for (let i = 0; i < 3; i++) {
 		const next = cur
@@ -128,15 +125,15 @@ export function decodeMarkup(s: string): string {
 }
 
 /** The digits of a phone, without a leading country 1. */
-export const phoneDigits = (p: string): string => {
+const phoneDigits = (p: string): string => {
 	const d = p.replace(/\D/g, "");
 	return d.length === 11 && d[0] === "1" ? d.slice(1) : d;
 };
 /** The fictional range fixtures use: 555-010x-xxxx, here written (555) 010-xxxx. */
-export const isFakePhoneDigits = (d: string): boolean => /^555010\d{4}$/.test(d);
+const isFakePhoneDigits = (d: string): boolean => /^555010\d{4}$/.test(d);
 
-/** A real value the generator replaced and the page must no longer carry. */
-export interface FixtureOriginal {
+/** A real value the page must no longer carry (what the human anonymising it replaced). */
+interface FixtureOriginal {
 	/** Club ids and numbers, as the archive names them. */
 	clubIds?: string[];
 	/** Real person names, their aliases (initials) and tokens. */
@@ -155,17 +152,17 @@ export interface FixtureCheckOptions {
 const PHRASE_PARTS: string[] = [...PHRASE_SET, ...FAKE_NAMES];
 
 /** Words every fake name and allowed phrase already uses: a real name token equal to one is not a leak. */
-export const SHARED_WORDS: ReadonlySet<string> = new Set([...FAKE_NAMES, ...PHRASE_SET].flatMap((p) => p.toLowerCase().split(/[\s-]+/)));
+const SHARED_WORDS: ReadonlySet<string> = new Set([...FAKE_NAMES, ...PHRASE_SET].flatMap((p) => p.toLowerCase().split(/[\s-]+/)));
 
 /** Can a club id (or number) be matched as a bare number, or only next to a quote, `=` or `%3D`? */
-export function clubIdRegex(id: string): RegExp {
+function clubIdRegex(id: string): RegExp {
 	const e = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	return id.length >= 4 ? new RegExp(`(?<!\\d)${e}(?!\\d)`, "g") : new RegExp(`(?<==|%3[dD]|["'])${e}(?=["'&;#\\s>]|%26)`, "g");
 }
 
 /**
  * What is wrong with a candidate fixture page, as plain sentences; `[]` means it may be committed.
- * It is a net, not a gate: a human reads the generated file before committing it.
+ * It is a net, not a gate: a human reads the file before committing it.
  *
  * The same checks `easy-speak-fixtures.test.ts` runs over the committed pages (that file keeps its
  * own copy; a test here runs this over every committed page to hold the two together), made
@@ -174,7 +171,7 @@ export function clubIdRegex(id: string): RegExp {
  * name-shaped run in the text AND in every attribute is a fake name or an allowed phrase, phones
  * are `(555) 010-xxxx` and only on a contact page, no email. Everything but the first two is read
  * from the entity- and percent-decoded markup, case-insensitively. With `original`, the real
- * values the generator replaced must be gone too.
+ * values that were replaced must be gone too.
  */
 export function fixtureViolations(html: string, opts: FixtureCheckOptions = {}): string[] {
 	const out: string[] = [];

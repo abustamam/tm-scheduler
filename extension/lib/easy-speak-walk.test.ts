@@ -5,9 +5,7 @@
  * no contact pages in `raw`, and the expected bundle itself.
  * Run: cd extension && bunx vitest run lib/easy-speak-walk.test.ts
  */
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	isContactPage,
@@ -27,7 +25,6 @@ import {
 	setup,
 	stripClock,
 } from "./easy-speak-test-kit";
-import { FIXTURE_DIR, anonymise, main as fixtureCli, pickPage } from "../scripts/easy-speak-fixture-from-archive";
 import {
 	EARLIEST_MEETING_YEAR,
 	MIN_GAP_MS,
@@ -438,7 +435,7 @@ describe("replay: a live-site page served into the walk", () => {
 });
 
 describe("the fixture guard as a function", () => {
-	const htmlFixtures = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith(".html"));
+	const htmlFixtures = readdirSync(fixturePath("")).filter((f) => f.endsWith(".html"));
 
 	it("finds the committed pages (a floor: an empty list would pass every check below)", () => {
 		expect(htmlFixtures.length).toBeGreaterThanOrEqual(10);
@@ -461,104 +458,5 @@ describe("the fixture guard as a function", () => {
 		expect(v).toMatch(/123456/);
 		expect(v).toMatch(/212\) 555-0142/);
 		expect(v).toMatch(/email/);
-	});
-});
-
-describe("easy-speak-fixture-from-archive", () => {
-	/** A page shaped like the live site, with made-up "real" data: none of it is a real person. */
-	const raw = `<!DOCTYPE html><html><head><title>Easy-Speak :: Lakeside Mock Toastmasters</title><script>var secret="Jordan Testwright";</script></head><body>
-<!-- saved by hand -->
-<td>Mobile | <a href="https://easy-speak.org/profile.php?mode=editprofile">Welcome back Jordan Testwright</a>&nbsp;&nbsp;[jtest]&nbsp;&nbsp;</td>
-<a href="https://easy-speak.org/view_meeting.php?c=777&amp;show=next">Lakeside Mock Toastmasters</a>
-<input type="hidden" name="cached_club" value="777">
-<table><tr><td><a href="https://easy-speak.org/profile.php?mode=viewprofile&amp;u=123456">Jordan Testwright, DTM</a></td><td>(212) 555-0142</td><td><a href="mailto:jordan@example.com">jordan@example.com</a></td></tr>
-<tr><td><a href="https://easy-speak.org/profile.php?mode=viewprofile&amp;u=123457">Sam Fairweather</a></td><td>212.555.0143</td></tr></table>
-<p>Our next speaker, Riley Moonstone, grows tomatoes.</p></body></html>`;
-	const told = { names: ["Riley Moonstone"], terms: ["Lakeside Mock Toastmasters"], clubIds: ["777"], contactPage: true };
-
-	it("swaps names, ids, username, club id and phones, and drops scripts, comments and emails", () => {
-		const { html, problems } = anonymise(raw, told);
-		expect(problems).toEqual([]);
-		expect(fixtureViolations(html, { contactPage: true })).toEqual([]);
-		for (const gone of ["Jordan", "Testwright", "Fairweather", "Moonstone", "Lakeside", "123456", "jtest", "0142", "0143", "mailto", "@", "secret", "saved by hand", "c=777", 'value="777"']) {
-			expect(html).not.toContain(gone);
-		}
-		expect(html).toContain("u=900001");
-		expect(html).toContain("u=900002");
-		expect(html).toContain("(555) 010-0001");
-		expect(html).toContain("c=4242");
-	});
-
-	it("is deterministic: the same page gives the same output", () => {
-		expect(anonymise(raw, told).html).toBe(anonymise(raw, told).html);
-	});
-
-	it("refuses a plain-text name it was not told about, and says which", () => {
-		const { problems } = anonymise(raw, { terms: told.terms });
-		expect(problems.join("\n")).toMatch(/Riley Moonstone/);
-	});
-
-	it("refuses a club name it was not told about", () => {
-		const { problems } = anonymise(raw, { names: told.names });
-		expect(problems.join("\n")).toMatch(/Lakeside Mock Toastmasters/);
-	});
-
-	it("leaves a committed fixture passing the guard", () => {
-		expect(anonymise(readFixture("speech-request-intro.html")).problems).toEqual([]);
-	});
-
-	describe("the command", () => {
-		const dir = mkdtempSync(join(tmpdir(), "es-archive-"));
-		const archive = join(dir, "easy-speak-1-2026-10-19-pages.json");
-		writeFileSync(
-			archive,
-			JSON.stringify({
-				format: "gavelup.easy-speak-pages",
-				version: 1,
-				exportedAt: "",
-				club: { esClubId: "777", number: null },
-				pages: [
-					{ url: "https://easy-speak.org/view_meeting.php?t=1", fetchedAt: "", html: "<html><body>none</body></html>" },
-					{ url: "https://easy-speak.org/memberlist.php?s=9", fetchedAt: "", html: raw },
-				],
-			}),
-		);
-		const quiet = (fn: () => number) => {
-			const e = console.error;
-			const l = console.log;
-			console.error = () => {};
-			console.log = () => {};
-			try {
-				return fn();
-			} finally {
-				console.error = e;
-				console.log = l;
-			}
-		};
-
-		it("picks a page by index or by a single URL match, and refuses an ambiguous or missing one", () => {
-			const a = JSON.parse(readFileSync(archive, "utf8"));
-			expect(pickPage(a, "1").url).toContain("memberlist");
-			expect(pickPage(a, "memberlist").url).toContain("s=9");
-			expect(() => pickPage(a, "easy-speak.org")).toThrow(/2 pages match/);
-			expect(() => pickPage(a, "nope")).toThrow(/0 pages match/);
-			expect(() => pickPage(a, "5")).toThrow(/no page 5/);
-		});
-
-		it("exits 1 and writes nothing when the guard complains, 0 on --dry-run when it passes", () => {
-			const out = "zz-never-written-1252.html";
-			expect(quiet(() => fixtureCli([archive, "--page", "1", "--out", out]))).toBe(1);
-			expect(quiet(() => fixtureCli([archive, "--page", "1", "--out", out, "--name", "Riley Moonstone", "--term", "Lakeside Mock Toastmasters", "--dry-run"]))).toBe(0);
-			expect(existsSync(join(FIXTURE_DIR, out))).toBe(false);
-		});
-
-		it("rejects a bad file name, a missing page and a file that is not an archive", () => {
-			expect(quiet(() => fixtureCli([archive, "--page", "1", "--out", "../x.html"]))).toBe(2);
-			expect(quiet(() => fixtureCli([archive]))).toBe(2);
-			const notArchive = join(dir, "other.json");
-			writeFileSync(notArchive, "{}");
-			expect(quiet(() => fixtureCli([notArchive, "--page", "0", "--out", "a.html"]))).toBe(2);
-			expect(quiet(() => fixtureCli([archive, "--list"]))).toBe(0);
-		});
 	});
 });
