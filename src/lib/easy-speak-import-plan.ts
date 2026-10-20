@@ -289,6 +289,8 @@ export const DEFERRED_NAMESAKES_REASON =
 	"Deferred: the name matches more than one person on Easy-Speak's member list";
 export const DEFERRED_ANSWERED_REASON =
 	"Deferred: an answer is saved for a person with this name";
+export const DEFERRED_REJECTED_REASON =
+	"Deferred: the saved answer for this name no longer applies";
 
 /** What one contact row sets on one person; blank means "leave as it is". */
 export interface ContactFill {
@@ -823,28 +825,35 @@ export function buildImportPlan(
 		const esCreates = group.filter(
 			(p) => p.esUserId !== null && p.outcome.status === "create",
 		);
+		// A name-only create with a saved answer that took effect is no longer a
+		// create, so it is outside this list; one whose answer was rejected (a member
+		// the roster no longer holds) stays a create and is an answered key here.
 		const nameOnly = group.filter(
-			(p) =>
-				p.esUserId === null && p.outcome.status === "create" && !answered(p),
+			(p) => p.esUserId === null && p.outcome.status === "create",
 		);
 		if (nameOnly.length === 0 || esCreates.length === 0) continue;
 		const target = esCreates[0];
-		// A folded name is ONE name-only key (`name:<fold>`), and a name-only create
-		// with an answer was filtered out above, so the group's answers that matter
-		// here are the target's own.
-		const anyAnswer = target !== undefined && answered(target);
-		if (esCreates.length > 1 || anyAnswer || !target) {
-			const reason =
-				esCreates.length > 1
-					? DEFERRED_NAMESAKES_REASON
-					: DEFERRED_ANSWERED_REASON;
+		const targetAnswered = target !== undefined && answered(target);
+		const nameOnlyAnswered = nameOnly.some(answered);
+		if (esCreates.length > 1 || targetAnswered || nameOnlyAnswered || !target) {
 			for (const p of nameOnly) {
-				p.outcome = { status: "skipped", reason };
-				notes.push(
+				const [reason, note] =
 					esCreates.length > 1
-						? `${p.name}: the name matches more than one person on Easy-Speak's member list, so their meeting records are left out this time and the next import will ask which person it is.`
-						: `${p.name}: the name matches a person on Easy-Speak's member list who has a saved answer, so their meeting records are left out this time and the next import will match them against the roster.`,
-				);
+						? [
+								DEFERRED_NAMESAKES_REASON,
+								`${p.name}: the name matches more than one person on Easy-Speak's member list, so their meeting records are left out this time and the next import will ask which person it is.`,
+							]
+						: targetAnswered
+							? [
+									DEFERRED_ANSWERED_REASON,
+									`${p.name}: the name matches a person on Easy-Speak's member list who has a saved answer, so their meeting records are left out this time and the next import will match them against the roster.`,
+								]
+							: [
+									DEFERRED_REJECTED_REASON,
+									`${p.name}: there is a saved answer for this name that no longer applies, and the name matches a person on Easy-Speak's member list, so their meeting records are left out this time and the next import will match them against the roster.`,
+								];
+				p.outcome = { status: "skipped", reason };
+				notes.push(note);
 			}
 			continue;
 		}

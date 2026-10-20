@@ -6,6 +6,7 @@ import {
 	buildImportPlan,
 	DEFERRED_ANSWERED_REASON,
 	DEFERRED_NAMESAKES_REASON,
+	DEFERRED_REJECTED_REASON,
 	isJsonbSafeText,
 	needsDecision,
 	type PlanContext,
@@ -610,12 +611,13 @@ describe("buildImportPlan on the B fixture", () => {
 		expect(plan.notes).toEqual([]);
 	});
 
-	// protects=a name-only key whose answer failed (a member the roster does not
-	// hold) is a name-only key WITH an answer: the fold stays off and the es: create
-	// is not given its references;
-	// fails_when=only a key whose outcome changed counts as answered;
+	// protects=a name-only key whose saved answer was REJECTED (a member the roster
+	// no longer holds) keeps outcome `create` but is an answered key: it is DEFERRED
+	// beside the one es: create, never left to make a second Person for one human;
+	// fails_when=an answered name-only create is dropped from the group, so it is
+	// neither folded nor deferred;
 	// no_claim=what the panel shows for the rejected choice.
-	it("treats a name-only key with a rejected saved answer as answered", () => {
+	it("defers a name-only key with a rejected saved answer, keeping the rejected choice", () => {
 		const plan = buildImportPlan(
 			dupeBundle(false),
 			ctx({
@@ -625,12 +627,19 @@ describe("buildImportPlan on the B fixture", () => {
 			}),
 		);
 		const dupes = dupesOf(plan);
-		expect(
-			dupes.find((d) => d.key === "es:900901")?.outcome,
-		).not.toHaveProperty("mergedKeys");
-		expect(dupes.find((d) => d.key === nameOnlyKey)?.outcome.status).toBe(
-			"create",
-		);
+		const deferred = dupes.find((d) => d.key === nameOnlyKey);
+		expect(deferred?.outcome).toEqual({
+			status: "skipped",
+			reason: DEFERRED_REJECTED_REASON,
+		});
+		expect(deferred?.rejectedChoice).toBe(id(999));
+		expect(needsDecision(deferred as never)).toBe(false);
+		const target = dupes.find((d) => d.key === "es:900901");
+		expect(target?.outcome.status).toBe("create");
+		expect(target?.outcome).not.toHaveProperty("mergedKeys");
+		expect(plan.notes).toHaveLength(1);
+		expect(plan.notes[0]).toContain("dupe person");
+		expect(plan.notes[0]).toMatch(/saved answer for this name/u);
 	});
 
 	// protects=an es: create alone, and a name-only person alone, are plain creates
