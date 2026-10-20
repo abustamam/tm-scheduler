@@ -25,3 +25,25 @@ is the 1st speaker of the upcoming meeting (so the speech list's own request lin
 
 `UPDATE_FIXTURES=1 bunx vitest run lib/easy-speak-walk.test.ts` rewrites `bundle.expected.json`. Read
 the diff: it is the contract's only worked example.
+
+## A live Easy-Speak failure ships its page
+
+A fix prompted by a live Easy-Speak failure commits the offending page in the same PR, with a test
+that fails without the fix (#1252). The page is **anonymised by hand**: a human replaces every name,
+id, username, phone, email and club detail, then reads every line before committing. The export's
+`easy-speak-<club>-<date>-pages.json` archive is raw, so **never commit it or a page from it**.
+
+`fixtureViolations` (`easy-speak-test-kit.ts`) is a net, not a gate: it catches the shapes of real
+data it knows, not every shape, and a pass is not clearance. Never add an allow-list entry to make a
+page pass. Add a row to the table above, then write the test with `replay`:
+
+```ts
+const r = replay({ "/request_speech.php?s=123": "speech-request-regression.html" });
+await expect(r.run()).resolves.toBeDefined(); // fails without the fix
+```
+
+`replay` serves the named fixtures in place of the usual pages, for a path or a path plus the query
+parameters given, and runs the whole walk. Run `UPDATE_FIXTURES=1 bunx vitest run
+lib/easy-speak-walk.test.ts` only if the fixture changes `bundle.expected.json` on purpose.
+
+A deny-by-default fixture generator is tracked in #1272.

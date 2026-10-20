@@ -5,7 +5,7 @@
  * no contact pages in `raw`, and the expected bundle itself.
  * Run: cd extension && bunx vitest run lib/easy-speak-walk.test.ts
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	isContactPage,
@@ -17,6 +17,8 @@ import {
 	PHONE,
 	clock,
 	fixturePath,
+	fixtureViolations,
+	replay,
 	memoryStore,
 	parseHtml,
 	readFixture,
@@ -392,5 +394,69 @@ describe("a slow Easy-Speak", () => {
 		const s = setup({ store, clock: c, failOn, failStatus: 524 });
 		await expect(s.run()).rejects.toThrow(/Another Easy-Speak tab took over/);
 		expect(asked(s.log, MEETING)).toHaveLength(1);
+	});
+});
+
+// ---------------------------------------------------------------- replay and fixture generation (#1252)
+
+describe("replay: a live-site page served into the walk", () => {
+	const intro = "speech-request-intro.html";
+	const requests = (r: { log: FakeRequest[] }) => r.log.filter((q) => q.url.includes("/request_speech.php"));
+
+	// #1234: Easy-Speak showed a speech request form with no viewer and the walk stopped at it.
+	// speech-request-intro.html IS that page (anonymised), so the backfill needs no new fixture.
+	it("#1234: a request form with no viewer finishes the walk, whichever speech asks for it", async () => {
+		const r = replay({ "/request_speech.php": intro });
+		const { bundle } = await r.run();
+		expect(JSON.stringify(bundle)).toContain("grows tomatoes");
+		expect(requests(r).length).toBeGreaterThan(1);
+	});
+
+	it("an empty replay is the usual site", async () => {
+		const plain = stripClock(await setup().run()).bundle;
+		expect(stripClock(await replay({}).run()).bundle).toEqual(plain);
+	});
+
+	it("a replayed page that is not a signed-in page still fails the walk, so the replay is not a pass-through", async () => {
+		const r = replay({ "/request_speech.php": "club-data.html" });
+		await expect(r.run()).rejects.toThrow(/speech request/);
+	});
+
+	it("a query-carrying key wins over a bare path for that request only", async () => {
+		// The bare key serves a page that is no request form, so the walk stops at the first speech
+		// the specific key does not answer; the specific key must have answered 1473688.
+		const bare = replay({ "/request_speech.php": "club-data.html", "/request_speech.php?s=1473688": intro });
+		await expect(bare.run()).rejects.toThrow(/speech request/);
+		// It got past 1473688 (the specific key answered it) and stopped at another speech's form.
+		const asked = requests(bare).map((q) => q.url);
+		expect(asked.some((u) => u.includes("s=1473688"))).toBe(true);
+		expect(asked.at(-1)).not.toContain("s=1473688");
+	});
+});
+
+describe("the fixture guard as a function", () => {
+	const htmlFixtures = readdirSync(fixturePath("")).filter((f) => f.endsWith(".html"));
+
+	it("finds the committed pages (a floor: an empty list would pass every check below)", () => {
+		expect(htmlFixtures.length).toBeGreaterThanOrEqual(10);
+	});
+
+	it.each(htmlFixtures)("%s has no violation (the committed pages and the guard agree)", (file) => {
+		const contactPage = file === "club-data.html" || file === "member-list.html";
+		expect(fixtureViolations(readFixture(file), { contactPage })).toEqual([]);
+	});
+
+	it("names a real-looking name, id, username, phone and email", () => {
+		const bad = readFixture("member-list.html")
+			.replace("Avery Alderfinch", "Jordan Testwright")
+			.replace("u=900001", "u=123456")
+			.replace("[fixtureuser]&nbsp;", "[jtest]&nbsp;")
+			.replace("(555) 010-0001", "(212) 555-0142")
+			.replace("</body>", "<p>jordan@example.com</p></body>");
+		const v = fixtureViolations(bad).join("\n");
+		expect(v).toMatch(/Jordan Testwright/);
+		expect(v).toMatch(/123456/);
+		expect(v).toMatch(/212\) 555-0142/);
+		expect(v).toMatch(/email/);
 	});
 });
