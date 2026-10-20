@@ -507,7 +507,7 @@ export function PathwaysProgress({
 		<Card>
 			<CardContent>
 				<Tabs value={selected} onValueChange={setActive}>
-					<TabsList className="h-auto w-full flex-wrap justify-start">
+					<TabsList className="h-auto w-full flex-wrap justify-start group-data-[orientation=horizontal]/tabs:h-auto">
 						{paths.map((p) => (
 							<TabsTrigger
 								key={p.courseCode}
