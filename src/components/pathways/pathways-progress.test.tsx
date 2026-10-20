@@ -374,4 +374,34 @@ describe("PathwaysProgress", () => {
 			}
 		});
 	});
+
+	it("lets path tabs and project chips wrap instead of overflowing a narrow card (#1218)", () => {
+		const long = "A Very Long Elective Project Name That Cannot Fit";
+		render(
+			<PathwaysProgress
+				paths={[
+					{
+						...base,
+						upNext: [{ projectId: "p1", name: long, isRequired: true }],
+					} as PathViewModel,
+					{
+						...base,
+						courseCode: "8702",
+						pathName: "Dynamic Leadership With A Long Name",
+					},
+				]}
+				timeZone="UTC"
+			/>,
+		);
+		const tab = screen.getByRole("tab", { name: "Presentation Mastery" });
+		const list = tab.parentElement as HTMLElement;
+		expect(list.className).toContain("flex-wrap");
+		expect(list.className).toContain("w-full");
+		expect(tab.className).toContain("whitespace-normal");
+		const chip = screen
+			.getByText(long, { exact: false })
+			.closest("[data-slot=badge]") as HTMLElement;
+		expect(chip.className).toContain("whitespace-normal");
+		expect(chip.className).toContain("max-w-full");
+	});
 });
