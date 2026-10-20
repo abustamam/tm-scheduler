@@ -526,6 +526,16 @@ describe("round 2 (#1275, decision B): no digit survives", () => {
 		expect(new Set(fakes).size).toBe(1);
 	});
 
+	it("two different real runs never get one fake, even when the fakes of that length run short", () => {
+		const real = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
+		for (const seed of ["a", "b", "c", "d"]) {
+			const out = rewriteEasySpeakPage(page(real.map((r) => `<td>${r}</td>`).join("")), { state: newRewriteState({ seed }) });
+			const cells = Array.from(parseHtml(out).querySelectorAll("td")).map((t) => t.textContent ?? "");
+			expect(new Set(cells).size, `seed ${seed}: one to one`).toBe(real.length);
+			cells.forEach((c, i) => expect(c, `seed ${seed}: ${real[i]} is not kept`).not.toBe(real[i]));
+		}
+	});
+
 	it("a real run equal to a fake an earlier page was given gets its own fake", () => {
 		const st = newRewriteState();
 		const a = rewriteEasySpeakPage(page(`<td>31415</td>`), { state: st });
