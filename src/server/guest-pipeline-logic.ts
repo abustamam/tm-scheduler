@@ -8,6 +8,7 @@ import {
 	count,
 	desc,
 	eq,
+	getTableName,
 	gte,
 	ilike,
 	inArray,
@@ -27,7 +28,6 @@ import {
 	guestInvites,
 	guests,
 	meetingAttendance,
-	meetingAwards,
 	meetingCandidateDisqualifications,
 	meetings,
 	memberDues,
@@ -112,6 +112,10 @@ import {
 	RECORD_CHANGED_MESSAGE,
 	separateGuestFromMemberPerson,
 } from "./guests-logic";
+import {
+	PAST_AGENDA_MEMBER_KEYS,
+	PAST_AGENDA_TIME_WINDOW_KEYS,
+} from "./members-logic";
 import {
 	lockMembershipForMerge,
 	lockMembershipsAgainstMerge,
@@ -3259,7 +3263,12 @@ function hasRowFor(table: PgTable, column: PgColumn) {
 }
 
 export type UndoCascadeCheck = {
-	/** Every `table.column` this check covers: a foreign key to `members.id` with ON DELETE CASCADE. */
+	/**
+	 * Every `table.column` this check covers: a foreign key to `members.id`. In
+	 * `UNDO_CASCADE_CHECKS` these are ON DELETE CASCADE keys and the FK drift guard
+	 * reads them; in `UNDO_NAME_BLANKING_CHECKS` they are SET NULL keys, and
+	 * informational.
+	 */
 	columns: string[];
 	/** What the refusal says the member has (`UNDO_MEMBER_HAS_HISTORY_MESSAGE`). */
 	label: string;
@@ -3360,35 +3369,50 @@ export const UNDO_CASCADE_CHECKS: UndoCascadeCheck[] = [
 	},
 ];
 
+/** What the refusal says the member has, per table. A name-printing key in
+ *  `members-logic.ts` with no entry here throws when this module loads, so a new
+ *  key cannot be added there and forgotten by the undo (#1213). */
+const NAME_BLANKING_LABELS: Record<string, string> = {
+	meeting_attendance: "meeting attendance",
+	table_topics_speakers: "Table Topics turns",
+	meeting_awards: "meeting awards",
+	club_action_items: "action items",
+};
+
 /**
  * Rows that keep the member but would lose the NAME: foreign keys to
  * `members.id` that are ON DELETE SET NULL and print a name on a meeting's
  * agenda or minutes (#1213). Deleting the membership does not remove them, it
  * leaves them nameless, so the undo refuses the same way it does for cascading
  * history. Only when the undo deletes a membership the conversion created: the
- * reuse path deletes nothing. Mirrors `PAST_AGENDA_MEMBER_KEYS` in
- * `members-logic.ts` (role slots are already refused above).
+ * reuse path deletes nothing.
+ *
+ * DERIVED from `PAST_AGENDA_MEMBER_KEYS` and `PAST_AGENDA_TIME_WINDOW_KEYS`
+ * (the member-removal refusal's lists, #1189), so the two stay one list. Role
+ * slots are in the first list but are refused above, by the held-slots check.
+ * These are SET NULL keys, not the CASCADE keys the FK drift guard reads, so
+ * their `columns` are informational.
  */
 export const UNDO_NAME_BLANKING_CHECKS: UndoCascadeCheck[] = [
-	{
-		columns: ["meeting_attendance.member_id"],
-		label: "meeting attendance",
-		scope: "created",
-		has: hasRowFor(meetingAttendance, meetingAttendance.memberId),
-	},
-	{
-		columns: ["table_topics_speakers.member_id"],
-		label: "Table Topics turns",
-		scope: "created",
-		has: hasRowFor(tableTopicsSpeakers, tableTopicsSpeakers.memberId),
-	},
-	{
-		columns: ["meeting_awards.member_id"],
-		label: "meeting awards",
-		scope: "created",
-		has: hasRowFor(meetingAwards, meetingAwards.memberId),
-	},
-];
+	...PAST_AGENDA_MEMBER_KEYS,
+	...PAST_AGENDA_TIME_WINDOW_KEYS,
+]
+	.filter((key) => getTableName(key.table) !== "role_slots")
+	.map((key) => {
+		const table = getTableName(key.table);
+		const label = NAME_BLANKING_LABELS[table];
+		if (!label) {
+			throw new Error(
+				`UNDO_NAME_BLANKING_CHECKS: no refusal label for "${table}" (#1213)`,
+			);
+		}
+		return {
+			columns: [`${table}.${key.memberColumn.name}`],
+			label,
+			scope: "created" as const,
+			has: hasRowFor(key.table, key.memberColumn),
+		};
+	});
 
 /**
  * Undo a convert-to-member (#618): the reverse of `applyConvertGuestToMember`.
@@ -3609,9 +3633,12 @@ export async function applyUndoGuestConversion(
 			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("roles"));
 		}
 
-		// Every table whose foreign key to `members` is ON DELETE CASCADE (#1202),
-		// from the one list the FK drift guard reads. The delete below would take
-		// each row silently, so a row here refuses the undo and nothing is deleted.
+		// Every table the delete below would take or blank. `UNDO_CASCADE_CHECKS`:
+		// the ON DELETE CASCADE keys to `members` (#1202), the list the FK drift
+		// guard reads, whose rows the delete takes silently.
+		// `UNDO_NAME_BLANKING_CHECKS`: the SET NULL keys that print a name on a past
+		// agenda or minutes (#1213), whose rows the delete leaves nameless. A row in
+		// either refuses the undo and nothing is deleted.
 		for (const check of [
 			...UNDO_CASCADE_CHECKS,
 			...UNDO_NAME_BLANKING_CHECKS,

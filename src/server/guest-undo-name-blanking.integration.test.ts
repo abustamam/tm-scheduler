@@ -8,8 +8,10 @@
  */
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
+import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	clubActionItems,
 	guests,
 	meetingAttendance,
 	meetingAwards,
@@ -156,6 +158,31 @@ describe.skipIf(!hasTestDb)(
 			expect(left?.memberId).toBe(membershipId);
 		});
 
+		// fails_when=the action-item check is dropped from the undo's checks (the
+		// minutes print an open item's owner)
+		it("refuses when the member owns an action item, and keeps it", async () => {
+			const { guestId, membershipId } = await converted("Item Owner");
+			const [row] = await testDb
+				.insert(clubActionItems)
+				.values({
+					clubId: seed.clubId,
+					text: "Book the venue",
+					ownerMemberId: membershipId,
+				})
+				.returning({ id: clubActionItems.id });
+			if (!row) throw new Error("Failed to seed action item");
+
+			await expect(undo(guestId)).rejects.toThrow(
+				UNDO_MEMBER_HAS_HISTORY_MESSAGE("action items"),
+			);
+			await expectMembershipSurvives(membershipId);
+			const [left] = await testDb
+				.select({ owner: clubActionItems.ownerMemberId })
+				.from(clubActionItems)
+				.where(eq(clubActionItems.id, row.id));
+			expect(left?.owner).toBe(membershipId);
+		});
+
 		it("on a REUSED lapsed membership the undo deletes nothing, so those rows do not block it", async () => {
 			const email = `lapsed-${randomUUID()}@example.com`;
 			const [person] = await testDb
@@ -182,6 +209,11 @@ describe.skipIf(!hasTestDb)(
 			await testDb
 				.insert(tableTopicsSpeakers)
 				.values({ meetingId: seed.meetingId, memberId: lapsed.id });
+			await testDb.insert(clubActionItems).values({
+				clubId: seed.clubId,
+				text: "Reuse item",
+				ownerMemberId: lapsed.id,
+			});
 			await testDb.insert(meetingAwards).values({
 				meetingId: seed.meetingId,
 				category: "best_speaker",
@@ -199,6 +231,20 @@ describe.skipIf(!hasTestDb)(
 			const res = await undo(guestId);
 			expect(res.membershipDeleted).toBe(false);
 			await expectMembershipSurvives(lapsed.id);
+			// Nothing was deleted, so every seeded row still names the member.
+			const stillNamed = async (table: PgTable, col: PgColumn) =>
+				(await testDb.select({ v: col }).from(table).where(eq(col, lapsed.id)))
+					.length;
+			expect(
+				await stillNamed(meetingAttendance, meetingAttendance.memberId),
+			).toBe(1);
+			expect(
+				await stillNamed(tableTopicsSpeakers, tableTopicsSpeakers.memberId),
+			).toBe(1);
+			expect(await stillNamed(meetingAwards, meetingAwards.memberId)).toBe(1);
+			expect(
+				await stillNamed(clubActionItems, clubActionItems.ownerMemberId),
+			).toBe(1);
 		});
 	},
 );
