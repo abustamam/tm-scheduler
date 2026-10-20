@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as WhatsNewRouteImport } from './routes/whats-new'
 import { Route as UnsubscribeRouteImport } from './routes/unsubscribe'
 import { Route as TourRouteImport } from './routes/tour'
+import { Route as TimerRouteImport } from './routes/timer'
 import { Route as SigninRouteImport } from './routes/signin'
 import { Route as RequestAccessRouteImport } from './routes/request-access'
 import { Route as DistrictsRouteImport } from './routes/districts'
@@ -106,6 +107,11 @@ const UnsubscribeRoute = UnsubscribeRouteImport.update({
 const TourRoute = TourRouteImport.update({
   id: '/tour',
   path: '/tour',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TimerRoute = TimerRouteImport.update({
+  id: '/timer',
+  path: '/timer',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SigninRoute = SigninRouteImport.update({
@@ -535,6 +541,7 @@ export interface FileRoutesByFullPath {
   '/districts': typeof DistrictsRoute
   '/request-access': typeof RequestAccessRoute
   '/signin': typeof SigninRoute
+  '/timer': typeof TimerRoute
   '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/whats-new': typeof WhatsNewRoute
@@ -619,6 +626,7 @@ export interface FileRoutesByTo {
   '/districts': typeof DistrictsRoute
   '/request-access': typeof RequestAccessRoute
   '/signin': typeof SigninRoute
+  '/timer': typeof TimerRoute
   '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/whats-new': typeof WhatsNewRoute
@@ -703,6 +711,7 @@ export interface FileRoutesById {
   '/districts': typeof DistrictsRoute
   '/request-access': typeof RequestAccessRoute
   '/signin': typeof SigninRoute
+  '/timer': typeof TimerRoute
   '/tour': typeof TourRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/whats-new': typeof WhatsNewRoute
@@ -789,6 +798,7 @@ export interface FileRouteTypes {
     | '/districts'
     | '/request-access'
     | '/signin'
+    | '/timer'
     | '/tour'
     | '/unsubscribe'
     | '/whats-new'
@@ -873,6 +883,7 @@ export interface FileRouteTypes {
     | '/districts'
     | '/request-access'
     | '/signin'
+    | '/timer'
     | '/tour'
     | '/unsubscribe'
     | '/whats-new'
@@ -956,6 +967,7 @@ export interface FileRouteTypes {
     | '/districts'
     | '/request-access'
     | '/signin'
+    | '/timer'
     | '/tour'
     | '/unsubscribe'
     | '/whats-new'
@@ -1042,6 +1054,7 @@ export interface RootRouteChildren {
   DistrictsRoute: typeof DistrictsRoute
   RequestAccessRoute: typeof RequestAccessRoute
   SigninRoute: typeof SigninRoute
+  TimerRoute: typeof TimerRoute
   TourRoute: typeof TourRoute
   UnsubscribeRoute: typeof UnsubscribeRoute
   WhatsNewRoute: typeof WhatsNewRoute
@@ -1096,6 +1109,13 @@ declare module '@tanstack/react-router' {
       path: '/tour'
       fullPath: '/tour'
       preLoaderRoute: typeof TourRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/timer': {
+      id: '/timer'
+      path: '/timer'
+      fullPath: '/timer'
+      preLoaderRoute: typeof TimerRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/signin': {
@@ -1790,6 +1810,7 @@ const rootRouteChildren: RootRouteChildren = {
   DistrictsRoute: DistrictsRoute,
   RequestAccessRoute: RequestAccessRoute,
   SigninRoute: SigninRoute,
+  TimerRoute: TimerRoute,
   TourRoute: TourRoute,
   UnsubscribeRoute: UnsubscribeRoute,
   WhatsNewRoute: WhatsNewRoute,

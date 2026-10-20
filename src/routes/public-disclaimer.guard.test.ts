@@ -153,3 +153,16 @@ describe("public club surfaces carry the TI non-affiliation disclaimer (#381)", 
 		});
 	}
 });
+
+// `/timer` (#1248) is public and outside any club, so the `club.*` enrolment
+// above never sees it. It carries the disclaimer by rendering MarketingShell;
+// `marketing-disclaimer.guard.test.ts` enrols it generically, and this pins the
+// one route whose whole point is to be reached without any club chrome.
+describe("the standalone timer carries the disclaimer (#1248)", () => {
+	it("timer.tsx renders <MarketingShell>, which renders the canonical constant", () => {
+		expect(readRoute("timer.tsx")).toMatch(/<MarketingShell\b/);
+		expect(read("src/components/marketing/marketing-shell.tsx")).toMatch(
+			/\{TOASTMASTERS_DISCLAIMER\}/,
+		);
+	});
+});

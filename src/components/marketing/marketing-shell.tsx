@@ -28,6 +28,7 @@ export const HEADER_LINKS: MarketingLink[] = [
 export const FOOTER_LINKS: MarketingLink[] = [
 	{ label: "How it works", to: "/tour" },
 	{ label: "Resources", to: "/resources" },
+	{ label: "Timer", to: "/timer" },
 	{ label: "For districts", to: "/districts" },
 	{ label: "About", to: "/about" },
 	{ label: "Sign in", to: "/signin", search: { redirect: "/officers" } },

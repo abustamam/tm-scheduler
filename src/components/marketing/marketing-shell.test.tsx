@@ -94,12 +94,14 @@ describe("MarketingShell", () => {
 		expect(Object.keys(hrefs)).toEqual([
 			"How it works",
 			"Resources",
+			"Timer",
 			"For districts",
 			"About",
 			"Sign in",
 		]);
 		expect(hrefs["How it works"]).toBe("/tour");
 		expect(hrefs.Resources).toBe("/resources");
+		expect(hrefs.Timer).toBe("/timer");
 		expect(hrefs["For districts"]).toBe("/districts");
 		expect(hrefs.About).toBe("/about");
 		expect(hrefs["Sign in"]).toBe("/signin?redirect=%2Fofficers");
