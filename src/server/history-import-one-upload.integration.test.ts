@@ -678,6 +678,39 @@ describe.skipIf(!hasTestDb)(
 			).rejects.toThrow(logic.PLAN_CHANGED_MESSAGE);
 		});
 
+		// protects=a person who is only a bare attendance row (no reply, no record, or
+		// "not attending") applies without error and imports nothing for them: no member,
+		// guest, ref or attendance row;
+		// fails_when=the plan creates them, or the apply writes an attendance or plan row
+		// for a person it resolved to no one;
+		// no_claim=a recorded attendance, the older suites'.
+		it("applies a bare attendance row without creating or attributing anything", async () => {
+			const stored = await upload((b) => {
+				const past = b.meetings[0];
+				for (const [n, name, plan] of [
+					[1, "Unk Visitor", "unknown"],
+					[2, "Nope Visitor", "not_attending"],
+				] as const) {
+					past?.attendance.push({
+						who: ref(P(20 + n), name),
+						plan,
+						record: null,
+					});
+				}
+			});
+			const before = await tally();
+			await apply(stored.importId);
+			for (const name of ["Unk Visitor", "Nope Visitor"]) {
+				expect(await memberByName(name)).toBeUndefined();
+				expect(
+					await refForKey(`es:${P(name === "Unk Visitor" ? 21 : 22)}`),
+				).toEqual([]);
+			}
+			const after = await tally();
+			expect(after.members - before.members).toBe(4);
+			expect(after.guests - before.guests).toBe(1);
+		});
+
 		// protects=an email taken after the preview, inside the apply's own
 		// transaction, is left blank and the report says so, instead of two Persons
 		// holding one email;
