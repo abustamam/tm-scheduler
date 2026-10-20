@@ -43,8 +43,9 @@ The script strips scripts, styles and comments, swaps linked people, the viewer 
 fakes and the guard's ranges, and runs the same checks as `easy-speak-fixtures.test.ts`
 (`fixtureViolations` in `easy-speak-test-kit.ts`). It refuses to write a page that fails them and
 prints what is left: name a person in plain text with `--name`, a club name, venue or address with
-`--term`. Never add an allow-list entry to make a page pass. Read the output before committing it,
-add a row to the table above, then write the test with `replay` from the test kit:
+`--term`. Never add an allow-list entry to make a page pass. **The guard is a net, not a gate**: it
+catches the shapes of real data it knows (names and ids in text and in every attribute, phones, emails, usernames, the club's ids, anything
+you named), not every shape. A human reads the whole generated file before committing it. Add a row to the table above, then write the test with `replay` from the test kit:
 
 ```ts
 const r = replay({ "/request_speech.php?s=123": "speech-request-regression.html" });

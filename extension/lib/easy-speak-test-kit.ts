@@ -83,39 +83,168 @@ const PHRASE_SET = new Set(
 		.flatMap(([, v]) => v as string[]),
 );
 
+/** Credentials after a name ("Dana Vexford, DTM"): the one pattern `stripCredentials` and the generator share. */
+export const CREDENTIAL_SUFFIX = /,\s*[A-Z]{2,4}(?:\s+[A-Z]{2,4})*$/;
+
+/**
+ * Every place a person's id rides in markup: any `…user…`/`…member…`/`…person…`/`…uid…` or bare
+ * `u` parameter (`=` or percent-encoded), and the attendance rows' name attributes. Group 1 is
+ * the prefix, group 2 the id. Global: reset with `matchAll` or `replace`, never `.test`.
+ */
+export const PERSON_ID_PARAM = /((?<![A-Za-z])(?<!(?<!%[0-9a-f])[0-9])(?:u|[a-z_]*(?:user|member|person|uid)[a-z_]*)(?:=|%3[dD])|attend_image1?\[|available\[|rec\[|available_)(\d+)/gi;
+
+/** A phone with or without separators, a leading country code, or a tel: link's digits. */
+export const LOOSE_PHONE = /(?<!\d)(?:\+?1[\s.-]?)?\(?[2-9]\d{2}\)?[\s.-]?\d{3}[\s.-]?\d{4}(?!\d)|\+\d{1,3}[\s.-]\d[\d\s.-]{6,}\d|\+\d{10,14}(?!\d)/g;
+// A US number's area code starts 2-9, so a bare 10-digit run starting 1 (a unix timestamp) is not one.
+
+const NAMED_ENTITIES: Record<string, string> = {
+	amp: "&", nbsp: " ", quot: '"', apos: "'", lt: "<", gt: ">", commat: "@", period: ".", num: "#", lpar: "(", rpar: ")",
+	hyphen: "-", equals: "=", plus: "+", colon: ":", sol: "/", lowbar: "_", lsqb: "[", rsqb: "]", comma: ",",
+};
+
+/** HTML entities and percent-escapes undone (up to three layers), so `&#64;` and `%40` read as `@`. */
+export function decodeMarkup(s: string): string {
+	let cur = s;
+	for (let i = 0; i < 3; i++) {
+		const next = cur
+			.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
+				if (e[0] === "#") {
+					const n = e[1].toLowerCase() === "x" ? Number.parseInt(e.slice(2), 16) : Number(e.slice(1));
+					return n === 160 ? " " : n > 0 && n < 0x110000 ? String.fromCodePoint(n) : m;
+				}
+				return NAMED_ENTITIES[e.toLowerCase()] ?? m;
+			})
+			.replace(/(?:%[0-9a-f]{2})+/gi, (m) => {
+				try {
+					return decodeURIComponent(m);
+				} catch {
+					return m;
+				}
+			});
+		if (next === cur) break;
+		cur = next;
+	}
+	return cur;
+}
+
+/** The digits of a phone, without a leading country 1. */
+export const phoneDigits = (p: string): string => {
+	const d = p.replace(/\D/g, "");
+	return d.length === 11 && d[0] === "1" ? d.slice(1) : d;
+};
+/** The fictional range fixtures use: 555-010x-xxxx, here written (555) 010-xxxx. */
+export const isFakePhoneDigits = (d: string): boolean => /^555010\d{4}$/.test(d);
+
+/** A real value the generator replaced and the page must no longer carry. */
+export interface FixtureOriginal {
+	/** Club ids and numbers, as the archive names them. */
+	clubIds?: string[];
+	/** Real person names, their aliases (initials) and tokens. */
+	names?: string[];
+	/** Club names, venues, addresses. */
+	terms?: string[];
+	/** Real person ids. */
+	personIds?: string[];
+}
+export interface FixtureCheckOptions {
+	/** The page is one of the two contact pages, the only ones that may carry a phone. Default false. */
+	contactPage?: boolean;
+	original?: FixtureOriginal;
+}
+
+const PHRASE_PARTS: string[] = [...PHRASE_SET, ...FAKE_NAMES];
+
+/** Words every fake name and allowed phrase already uses: a real name token equal to one is not a leak. */
+export const SHARED_WORDS: ReadonlySet<string> = new Set([...FAKE_NAMES, ...PHRASE_SET].flatMap((p) => p.toLowerCase().split(/[\s-]+/)));
+
+/** Can a club id (or number) be matched as a bare number, or only next to a quote, `=` or `%3D`? */
+export function clubIdRegex(id: string): RegExp {
+	const e = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return id.length >= 4 ? new RegExp(`(?<!\\d)${e}(?!\\d)`, "g") : new RegExp(`(?<==|%3[dD]|["'])${e}(?=["'&;#\\s>]|%26)`, "g");
+}
+
 /**
  * What is wrong with a candidate fixture page, as plain sentences; `[]` means it may be committed.
+ * It is a net, not a gate: a human reads the generated file before committing it.
+ *
  * The same checks `easy-speak-fixtures.test.ts` runs over the committed pages (that file keeps its
- * own copy; a test here runs this over every committed page to hold the two together): person links
- * and the header name are fake, person ids are 900001-900999, one fake username, no leftover
- * evaluator history, every name-shaped run is a fake name or an allowed phrase, phones are
- * `(555) 010-xxxx`, no email. The fixture generator refuses to write a page this complains about.
+ * own copy; a test here runs this over every committed page to hold the two together), made
+ * stricter where a bypass was found: person links and the header name are fake, person ids (under
+ * any parameter name) are 900001-900999, one fake username, no leftover evaluator history, every
+ * name-shaped run in the text AND in every attribute is a fake name or an allowed phrase, phones
+ * are `(555) 010-xxxx` and only on a contact page, no email. Everything but the first two is read
+ * from the entity- and percent-decoded markup, case-insensitively. With `original`, the real
+ * values the generator replaced must be gone too.
  */
-export function fixtureViolations(html: string): string[] {
+export function fixtureViolations(html: string, opts: FixtureCheckOptions = {}): string[] {
 	const out: string[] = [];
 	const doc = parseHtml(html);
+	const decoded = decodeMarkup(html);
 	for (const a of Array.from(doc.querySelectorAll("a"))) {
-		const attrs = `${a.getAttribute("href") ?? ""} ${a.getAttribute("onclick") ?? ""}`;
-		if (!/[?&;]u=\d+/.test(attrs)) continue;
+		const attrs = decodeMarkup(`${a.getAttribute("href") ?? ""} ${a.getAttribute("onclick") ?? ""}`);
+		if (!/(?:[?&;]|^|\s)u=\d+/.test(attrs)) continue;
 		const t = stripCredentials(norm(a.textContent));
 		if (t === "" || /^(Request a Speech\.\.\.|Accept|TBA)$/.test(t)) continue;
 		if (!FAKE_NAME_SET.has(t)) out.push(`person link names someone who is not a fake name: "${t}"`);
 	}
 	const header = /Welcome back\s+(.+?)\s*\[/.exec(norm(doc.body?.textContent));
 	if (header && !FAKE_NAME_SET.has(stripCredentials(header[1]))) out.push(`header names "${header[1]}"`);
-	const ids = [...html.matchAll(/(?:[?&;]u=|attend_image1?\[|available\[|rec\[|available_|email_chk_\d+" name="rec\[)(\d+)/g)].map((m) => Number(m[1]));
-	for (const n of ids) if (n < 900_001 || n > 900_999) out.push(`person id ${n} is outside 900001-900999`);
-	if (/Accepted by|Previous Evaluators|I am NOT attending this meeting \(/.test(html)) out.push("leftover evaluator history");
-	for (const m of html.matchAll(/\[([A-Za-z0-9_]+)\]&nbsp;/g)) {
-		if (m[1] !== FAKE_USERNAME) out.push(`username "${m[1]}" is not ${FAKE_USERNAME}`);
+	for (const text of [html, decoded]) {
+		for (const m of text.matchAll(PERSON_ID_PARAM)) {
+			const n = Number(m[2]);
+			if (n < 900_001 || n > 900_999) out.push(`person id ${n} is outside 900001-900999`);
+		}
+	}
+	if (/Accepted by|Previous Evaluators|I am NOT attending this meeting \(/.test(decoded)) out.push("leftover evaluator history");
+	for (const m of decoded.matchAll(/\[([A-Za-z0-9_-]+)\](?=\s|$)/g)) {
+		if (m[1] !== FAKE_USERNAME && !/^\d+$/.test(m[1])) out.push(`username "${m[1]}" is not ${FAKE_USERNAME}`);
 	}
 	for (const r of nameShapedRuns(parseHtml(html))) {
 		if (!FAKE_NAME_SET.has(r) && !PHRASE_SET.has(r)) out.push(`name-shaped text "${r}" is neither a fake name nor an allowed phrase`);
 	}
+	// Every attribute (href, src, onclick, data-*, id, title...), decoded: a name in a URL is still a name.
+	for (const el of Array.from(doc.querySelectorAll("*"))) {
+		for (const a of Array.from(el.attributes ?? [])) {
+			for (const m of decodeMarkup(a.value).replace(/\+/g, " ").match(NAME_SHAPED) ?? []) {
+				const r = m.trim().replace(/['\u2019-]+$/, "");
+				// Attributes carry fragments of a phrase (an id, a javascript: call): a part of one is fine.
+				if (!FAKE_NAME_SET.has(r) && !PHRASE_SET.has(r) && !PHRASE_PARTS.some((p) => p.includes(r))) out.push(`name-shaped text "${r}" in the ${a.name} attribute is neither a fake name nor an allowed phrase`);
+			}
+		}
+	}
 	for (const m of html.match(new RegExp(PHONE.source, "g")) ?? []) {
 		if (!/^\(555\) 010-\d{4}$/.test(m)) out.push(`phone "${m}" is outside (555) 010-xxxx`);
 	}
-	if (EMAIL.test(html)) out.push("an email address");
+	const loose = decoded.match(LOOSE_PHONE) ?? [];
+	for (const m of loose) if (!isFakePhoneDigits(phoneDigits(m))) out.push(`phone "${m.trim()}" is outside (555) 010-xxxx`);
+	if ((loose.length > 0 || PHONE.test(html)) && !opts.contactPage) out.push("a phone on a page that is not a contact page (only club-data.html and member-list.html may carry one)");
+	if (EMAIL.test(html) || EMAIL.test(decoded)) out.push("an email address");
+	if (/mailto:/i.test(decoded)) out.push("a mailto: link");
+	if (opts.original) out.push(...originalLeaks(decoded, opts.original));
+	return out;
+}
+
+function originalLeaks(decoded: string, o: FixtureOriginal): string[] {
+	const out: string[] = [];
+	const view = decoded.replace(/[+\s]+/g, " ").toLowerCase();
+	for (const id of o.clubIds ?? []) {
+		if (id && decoded.match(clubIdRegex(id))) out.push(`the club id ${id} is still in the page`);
+	}
+	for (const id of o.personIds ?? []) {
+		if (id && id.length >= 4 && new RegExp(`(?<!\\d)${id}(?!\\d)`).test(decoded)) out.push(`the person id ${id} is still in the page`);
+	}
+	for (const t of o.terms ?? []) {
+		if (t && view.includes(t.replace(/[+\s]+/g, " ").toLowerCase())) out.push(`"${t}" is still in the page`);
+	}
+	for (const n of o.names ?? []) {
+		const whole = n.replace(/[+\s]+/g, " ").toLowerCase();
+		// The whole name, then each word of it: a bare "Riley" is as real as "Riley Moonstone".
+		for (const k of new Set([whole, ...whole.split(/[\s,]+/).filter((w) => w.length >= 3 && !SHARED_WORDS.has(w))])) {
+			if (k.length < 3) continue;
+			const e = k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+			if (new RegExp(`(?<![a-z])${e}(?![a-z])`).test(view)) out.push(`the real name "${n}" is still in the page (as "${k}")`);
+		}
+	}
 	return out;
 }
 

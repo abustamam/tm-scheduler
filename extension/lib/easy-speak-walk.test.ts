@@ -426,10 +426,8 @@ describe("replay: a live-site page served into the walk", () => {
 	});
 
 	it("a query-carrying key wins over a bare path for that request only", async () => {
-		// Every form is the fixture except the 1473688 one, which the bare key would have broken
-		// had it won: the walk finishes only if the specific key answered for 1473688.
-		const r = replay({ "/request_speech.php": intro, "/request_speech.php?s=1473688": intro });
-		await r.run();
+		// The bare key serves a page that is no request form, so the walk stops at the first speech
+		// the specific key does not answer; the specific key must have answered 1473688.
 		const bare = replay({ "/request_speech.php": "club-data.html", "/request_speech.php?s=1473688": intro });
 		await expect(bare.run()).rejects.toThrow(/speech request/);
 		// It got past 1473688 (the specific key answered it) and stopped at another speech's form.
@@ -442,8 +440,13 @@ describe("replay: a live-site page served into the walk", () => {
 describe("the fixture guard as a function", () => {
 	const htmlFixtures = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith(".html"));
 
+	it("finds the committed pages (a floor: an empty list would pass every check below)", () => {
+		expect(htmlFixtures.length).toBeGreaterThanOrEqual(10);
+	});
+
 	it.each(htmlFixtures)("%s has no violation (the committed pages and the guard agree)", (file) => {
-		expect(fixtureViolations(readFixture(file))).toEqual([]);
+		const contactPage = file === "club-data.html" || file === "member-list.html";
+		expect(fixtureViolations(readFixture(file), { contactPage })).toEqual([]);
 	});
 
 	it("names a real-looking name, id, username, phone and email", () => {
@@ -451,12 +454,12 @@ describe("the fixture guard as a function", () => {
 			.replace("Avery Alderfinch", "Jordan Testwright")
 			.replace("u=900001", "u=123456")
 			.replace("[fixtureuser]&nbsp;", "[jtest]&nbsp;")
-			.replace("(555) 010-0001", "(415) 867-5309")
+			.replace("(555) 010-0001", "(212) 555-0142")
 			.replace("</body>", "<p>jordan@example.com</p></body>");
 		const v = fixtureViolations(bad).join("\n");
 		expect(v).toMatch(/Jordan Testwright/);
 		expect(v).toMatch(/123456/);
-		expect(v).toMatch(/415\) 867-5309/);
+		expect(v).toMatch(/212\) 555-0142/);
 		expect(v).toMatch(/email/);
 	});
 });
@@ -468,16 +471,16 @@ describe("easy-speak-fixture-from-archive", () => {
 <td>Mobile | <a href="https://easy-speak.org/profile.php?mode=editprofile">Welcome back Jordan Testwright</a>&nbsp;&nbsp;[jtest]&nbsp;&nbsp;</td>
 <a href="https://easy-speak.org/view_meeting.php?c=777&amp;show=next">Lakeside Mock Toastmasters</a>
 <input type="hidden" name="cached_club" value="777">
-<table><tr><td><a href="https://easy-speak.org/profile.php?mode=viewprofile&amp;u=123456">Jordan Testwright, DTM</a></td><td>(415) 867-5309</td><td><a href="mailto:jordan@example.com">jordan@example.com</a></td></tr>
-<tr><td><a href="https://easy-speak.org/profile.php?mode=viewprofile&amp;u=123457">Sam Fairweather</a></td><td>415.867.5310</td></tr></table>
+<table><tr><td><a href="https://easy-speak.org/profile.php?mode=viewprofile&amp;u=123456">Jordan Testwright, DTM</a></td><td>(212) 555-0142</td><td><a href="mailto:jordan@example.com">jordan@example.com</a></td></tr>
+<tr><td><a href="https://easy-speak.org/profile.php?mode=viewprofile&amp;u=123457">Sam Fairweather</a></td><td>212.555.0143</td></tr></table>
 <p>Our next speaker, Riley Moonstone, grows tomatoes.</p></body></html>`;
-	const told = { names: ["Riley Moonstone"], terms: ["Lakeside Mock Toastmasters"] };
+	const told = { names: ["Riley Moonstone"], terms: ["Lakeside Mock Toastmasters"], clubIds: ["777"], contactPage: true };
 
 	it("swaps names, ids, username, club id and phones, and drops scripts, comments and emails", () => {
 		const { html, problems } = anonymise(raw, told);
 		expect(problems).toEqual([]);
-		expect(fixtureViolations(html)).toEqual([]);
-		for (const gone of ["Jordan", "Testwright", "Fairweather", "Moonstone", "Lakeside", "123456", "jtest", "867", "mailto", "@", "secret", "saved by hand", "c=777", 'value="777"']) {
+		expect(fixtureViolations(html, { contactPage: true })).toEqual([]);
+		for (const gone of ["Jordan", "Testwright", "Fairweather", "Moonstone", "Lakeside", "123456", "jtest", "0142", "0143", "mailto", "@", "secret", "saved by hand", "c=777", 'value="777"']) {
 			expect(html).not.toContain(gone);
 		}
 		expect(html).toContain("u=900001");
@@ -516,7 +519,7 @@ describe("easy-speak-fixture-from-archive", () => {
 				club: { esClubId: "777", number: null },
 				pages: [
 					{ url: "https://easy-speak.org/view_meeting.php?t=1", fetchedAt: "", html: "<html><body>none</body></html>" },
-					{ url: "https://easy-speak.org/request_speech.php?s=9", fetchedAt: "", html: raw },
+					{ url: "https://easy-speak.org/memberlist.php?s=9", fetchedAt: "", html: raw },
 				],
 			}),
 		);
@@ -535,8 +538,8 @@ describe("easy-speak-fixture-from-archive", () => {
 
 		it("picks a page by index or by a single URL match, and refuses an ambiguous or missing one", () => {
 			const a = JSON.parse(readFileSync(archive, "utf8"));
-			expect(pickPage(a, "1").url).toContain("request_speech");
-			expect(pickPage(a, "request_speech").url).toContain("s=9");
+			expect(pickPage(a, "1").url).toContain("memberlist");
+			expect(pickPage(a, "memberlist").url).toContain("s=9");
 			expect(() => pickPage(a, "easy-speak.org")).toThrow(/2 pages match/);
 			expect(() => pickPage(a, "nope")).toThrow(/0 pages match/);
 			expect(() => pickPage(a, "5")).toThrow(/no page 5/);
