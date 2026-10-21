@@ -1139,10 +1139,9 @@ interface TextRef {
 }
 
 /** A phone is split across text nodes when inline tags or block elements cut it up; `\u0001` marks a table cell, which never joins its neighbour. */
+/** A date is a date, never half of a phone ("2025-03-12" beside "4815162"): a run holding one is never joined. */
 const DATE_INSIDE = /(?<!\d)(?:19|20)\d{2}-\d{2}-\d{2}(?!\d)/;
 function plausibleBlockPhone(match: string): boolean {
-	// a date is a date, never half of a phone ("2025-03-12" beside "4815162")
-	if (DATE_INSIDE.test(match)) return false;
 	const groups = match.split(/\D+/).filter(Boolean);
 	const digits = groups.join("").length;
 	return digits >= 9 && digits <= 15 && groups.length <= 5 && groups.filter((g) => g.length >= 3).length >= 2;

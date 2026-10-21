@@ -5,6 +5,7 @@
  * invented values. The generator is safe by construction (it replaces everything not on an
  * allow-list), and a human still reads the output.
  */
+import { createHmac } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1351,9 +1352,23 @@ describe("round 4 (#1275, option A: simpler fakes)", () => {
 		}
 	});
 
+	it("R4-Q1b. a seed whose keyed start IS the input's last four digits still gets another suffix", () => {
+		// the keyed start of `fakePhone` replayed here: HMAC-SHA256(seed, "phone:<digits>|0"), first 6 bytes over 2^48
+		const digits = "5550100001";
+		let seed = "";
+		for (let i = 0; i < 400_000 && seed === ""; i++) {
+			const h = createHmac("sha256", Buffer.from(`ph${i}`)).update(`phone:${digits}|0`).digest();
+			if (Math.floor((h.readUIntBE(0, 6) / 2 ** 48) * 10_000) === 1) seed = `ph${i}`;
+		}
+		expect(seed, "a seed whose start is 0001").not.toBe("");
+		const out = texts(rewriteEasySpeakPage(page("<p>(555) 010-0001</p>"), { state: newRewriteState({ seed }) }))[0];
+		expect(out).toMatch(/^\(555\) 010-\d{4}$/);
+		expect(out).not.toBe("(555) 010-0001");
+	});
+
 	it("R4-Q2. the fake names come from a keyed order: the first allocation is not always the same name, so the skip pattern says nothing", () => {
 		const firsts = new Set<string>();
-		for (let i = 0; i < 30; i++) firsts.add(texts(rewriteEasySpeakPage(page("<td>Zq Brackenby</td>"), { state: newRewriteState({ seed: `o${i}` }) }), "td")[0]);
+		for (let i = 0; i < 30; i++) firsts.add(texts(rewriteEasySpeakPage(page("<td>Zq Brackenby</td>"), { state: newRewriteState({ seed: `o${i}` }) }), "td")[0].split(" ")[0]);
 		expect(firsts.size, "a keyed order, not a fixed list").toBeGreaterThan(10);
 	});
 
