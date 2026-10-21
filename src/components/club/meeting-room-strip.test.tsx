@@ -275,11 +275,11 @@ describe("MeetingRoomStrip — the vote poll (#913 AC4)", () => {
 });
 
 describe("MeetingRoomStrip — Leave feedback (#984)", () => {
-	it("shows Leave feedback, before Today's agenda, only while the window is open", async () => {
+	it("shows Leave feedback, first when no vote is open, only while the window is open (#1282)", async () => {
 		await renderStrip({ feedbackOpen: true });
 		expect(labels()).toEqual([
-			"Sign the guest book",
 			"Leave feedback",
+			"Sign the guest book",
 			"Today's agenda",
 		]);
 		expect(href("Leave feedback")).toBe(
@@ -290,6 +290,41 @@ describe("MeetingRoomStrip — Leave feedback (#984)", () => {
 	it("shows it to an identified member too", async () => {
 		await renderStrip({ feedbackOpen: true }, PAT);
 		expect(labels()).toEqual(["Leave feedback", "Today's agenda"]);
+	});
+
+	// protects=Leave feedback sits directly after Vote, ahead of the role, word
+	// and agenda buttons; fails_when=it drifts back to 4th place;
+	// no_claim=button order only, getBallot is mocked, not the live poll.
+	it("puts Leave feedback directly after Vote when a vote is open (#1282)", async () => {
+		vi.mocked(getBallot).mockResolvedValue(ballot(true));
+		await renderStrip(
+			{
+				feedbackOpen: true,
+				assigneeIds: [PAT.id],
+				wordOfTheDay: "Serendipity",
+			},
+			PAT,
+		);
+		await waitFor(() => expect(labels()[0]).toBe("Vote"));
+		expect(labels()).toEqual([
+			"Vote",
+			"Leave feedback",
+			"What I'm doing today",
+			"Word of the Day",
+			"Today's agenda",
+		]);
+	});
+
+	// protects=Leave feedback is the primary (filled) button while its three
+	// siblings stay outline; fails_when=it is rendered as variant outline again;
+	// no_claim=reads the button's class names, not its painted colour.
+	it("renders Leave feedback as the primary variant, not outline (#1282)", async () => {
+		await renderStrip({ feedbackOpen: true });
+		const fb = screen.getByRole("link", { name: "Leave feedback" });
+		expect(fb.className).toContain("bg-primary");
+		const guest = screen.getByRole("link", { name: "Sign the guest book" });
+		expect(guest.className).not.toContain("bg-primary ");
+		expect(guest.className).toContain("border");
 	});
 
 	it("hides it when the window is not open, and brings it back when it opens", async () => {

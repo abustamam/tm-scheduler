@@ -1241,7 +1241,7 @@ describe("MeetingAgendaPrint — the footer QR (#510, #913)", () => {
 			expect(qr?.querySelector("svg")).not.toBeNull();
 			// #913: every layout's caption names the meeting page, not the vote.
 			expect(qr?.textContent).toContain("Scan for");
-			expect(qr?.textContent).toContain("today's meeting");
+			expect(qr?.textContent).toContain("meeting & feedback");
 			expect(qr?.textContent).not.toMatch(/vote/i);
 		});
 
@@ -1339,7 +1339,7 @@ describe("MeetingAgendaPrint — the footer QR (#510, #913)", () => {
 				const qr = page?.querySelector(".footer-qr");
 				expect(qr).not.toBeNull();
 				expect(qr?.querySelector("svg")).not.toBeNull();
-				expect(qr?.textContent).toContain("today's meeting");
+				expect(qr?.textContent).toContain("meeting & feedback");
 			}
 		});
 
@@ -1861,7 +1861,7 @@ describe("the printed agenda carries no paper votes box (#721)", () => {
 				// The halves are separate text nodes either side of a `<br/>`,
 				// so `textContent` runs them together — two assertions.
 				expect(qr.textContent).toContain("Scan for");
-				expect(qr.textContent).toContain("today's meeting");
+				expect(qr.textContent).toContain("meeting & feedback");
 			}
 		});
 	}

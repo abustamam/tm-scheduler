@@ -631,6 +631,17 @@ export function Kick({
 export const FOOTER_QR_PX = 56;
 
 /**
+ * The footer QR's caption, one line per entry (#1282). The code opens the
+ * meeting page in the room, whose strip now leads with Vote and "Leave
+ * feedback", so the caption names both. Three print sites render it; one
+ * constant so they cannot drift apart.
+ */
+export const FOOTER_QR_CAPTION_LINES = [
+	"Scan for",
+	"meeting & feedback",
+] as const;
+
+/**
  * The dark page footer: a left/right line plus the non-affiliation disclaimer.
  *
  * `qrUrl`, when set, adds the meeting-page QR at the band's right edge. It
@@ -737,7 +748,7 @@ export function DarkFooter({
 						    lines to three is 10px the sheet has to find. Broken by
 						    hand rather than by a width cap so the wrap points are the
 						    readable ones and not wherever the platform's fallback font
-						    lands. "today's meeting" is narrower than the old
+						    lands. the caption (`FOOTER_QR_CAPTION_LINES`) is narrower than the old
 						    "Evaluator · Table Topics" line, and two short lines fit
 						    inside `FOOTER_QR_PX`, so the band costs no height. */}
 						<span
@@ -749,9 +760,9 @@ export function DarkFooter({
 								textAlign: "right",
 							}}
 						>
-							Scan for
+							{FOOTER_QR_CAPTION_LINES[0]}
 							<br />
-							today's meeting
+							{FOOTER_QR_CAPTION_LINES[1]}
 						</span>
 						<QRCodeSVG value={qrUrl} size={FOOTER_QR_PX} marginSize={0} />
 					</span>

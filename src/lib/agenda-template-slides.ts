@@ -85,6 +85,9 @@ export type TemplateDeckInput = {
 	nextMeeting?: NextMeetingSummary | null;
 	/** The sign-up QR's absolute URL, null until the origin is known. */
 	nextMeetingSignupUrl?: string | null;
+	/** The anonymous feedback page's absolute URL (#1282). A templated meeting
+	 *  has no General Evaluation slide, so the Thank-You slide carries the QR. */
+	feedbackUrl?: string | null;
 };
 
 /**
@@ -140,6 +143,7 @@ export function buildTemplateSlideDeck({
 	meetingNumber = null,
 	nextMeeting = null,
 	nextMeetingSignupUrl = null,
+	feedbackUrl = null,
 }: TemplateDeckInput): Slide[] {
 	const deck: Slide[] = [
 		{
@@ -219,6 +223,7 @@ export function buildTemplateSlideDeck({
 		meetingSchedule: club.meetingSchedule,
 		nextMeetingAt,
 		timezone: club.timezone,
+		feedbackUrl,
 	});
 
 	return deck;

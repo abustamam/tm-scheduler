@@ -30,6 +30,7 @@ import { ClubLogo } from "./club-logo";
 import {
 	DarkFooter,
 	FitPage,
+	FOOTER_QR_CAPTION_LINES,
 	FOOTER_QR_PX,
 	FOREST,
 	GREEN,
@@ -1860,9 +1861,9 @@ function GridLayout({
 													fontWeight: 700,
 												}}
 											>
-												Scan for
+												{FOOTER_QR_CAPTION_LINES[0]}
 												<br />
-												today's meeting
+												{FOOTER_QR_CAPTION_LINES[1]}
 											</span>
 										</span>
 									) : null}
@@ -2192,9 +2193,9 @@ function SpaciousLayout({
 											textAlign: "right",
 										}}
 									>
-										Scan for
+										{FOOTER_QR_CAPTION_LINES[0]}
 										<br />
-										today's meeting
+										{FOOTER_QR_CAPTION_LINES[1]}
 									</span>
 									<QRCodeSVG value={qrUrl} size={FOOTER_QR_PX} marginSize={0} />
 								</span>

@@ -41,6 +41,19 @@ export function meetingHubUrlFor(
 }
 
 /**
+ * The anonymous feedback page's URL (#1282), encoded by the presenter view's QR
+ * on the General Evaluation slide. Same `origin` contract as `meetingHubUrlFor`:
+ * `null` answers `""` ("no code yet"), `""` answers the bare path.
+ */
+export function meetingFeedbackUrlFor(
+	meeting: { clubKey: string; meetingKey: string },
+	origin: string | null,
+): string {
+	if (origin === null) return "";
+	return `${origin}/club/${meeting.clubKey}/meeting/${meeting.meetingKey}/feedback`;
+}
+
+/**
  * The meeting route's search. `room` is typed `string | number` because the
  * router's default search parser JSON-decodes each value: `?room=1` arrives as
  * the NUMBER 1, not the string "1".

@@ -86,7 +86,7 @@ describe("the printed agenda carries the meeting-page QR with digital voting OFF
 				expect(document.querySelector(".footer-qr svg")).not.toBeNull(),
 			);
 			for (const qr of document.querySelectorAll(".footer-qr")) {
-				expect(qr.textContent).toContain("today's meeting");
+				expect(qr.textContent).toContain("meeting & feedback");
 			}
 			expect(screen.queryByText(/scan to vote/i)).toBeNull();
 		});

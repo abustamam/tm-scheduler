@@ -306,6 +306,13 @@ type SlideShape =
 			 *  it write-only. */
 			owner: string;
 			time: string;
+			/** Absolute URL of the anonymous feedback page (#1282), rendered as a
+			 *  QR with "Leave a note for today's role-takers". Carried by exactly ONE
+			 *  slide per deck: the General Evaluation slide when the deck has one,
+			 *  else the Thank-You slide. `""` until the browser's origin is known (no
+			 *  QR yet); null/absent when this slide is not the one that shows it.
+			 *  Optional so a hand-built slide without it still type-checks. */
+			feedbackUrl?: string | null;
 	  }
 	| { kind: "awards"; categories: string[] }
 	| {
@@ -377,6 +384,13 @@ type SlideShape =
 			meetingSchedule: string | null;
 			nextMeetingAt: Date | null;
 			timezone: string;
+			/** Absolute URL of the anonymous feedback page (#1282), rendered as a
+			 *  QR with "Leave a note for today's role-takers". Carried by exactly ONE
+			 *  slide per deck: the General Evaluation slide when the deck has one,
+			 *  else the Thank-You slide. `""` until the browser's origin is known (no
+			 *  QR yet); null/absent when this slide is not the one that shows it.
+			 *  Optional so a hand-built slide without it still type-checks. */
+			feedbackUrl?: string | null;
 	  };
 
 /** The standard roles the deck binds slides to (mirrors the beats
@@ -522,6 +536,11 @@ export type SlideDeckInput = Omit<RunOfShowConfig, "tableTopicsLimits"> & {
 	 *  a relative path nobody's camera can scan. `null` when the meeting runs
 	 *  no digital vote (#770) — see `ballotUrlFor`. */
 	ballotUrl: string | null;
+	/** Absolute URL of this meeting's anonymous feedback page (#1282), from
+	 *  `meetingFeedbackUrlFor`. Lands on the General Evaluation slide, or on the
+	 *  Thank-You slide when the deck has no General Evaluation slide. Optional:
+	 *  absent means no feedback QR anywhere in the deck. */
+	feedbackUrl?: string | null;
 };
 
 export function buildSlideDeck({
@@ -532,6 +551,7 @@ export function buildSlideDeck({
 	meetingNumber = null,
 	geIntroducesFunctionaries,
 	ballotUrl,
+	feedbackUrl = null,
 	nextMeeting = null,
 	nextMeetingSignupUrl = null,
 }: SlideDeckInput): Slide[] {
@@ -916,6 +936,7 @@ export function buildSlideDeck({
 			kind: "generalEvaluation",
 			owner: geOwner.role,
 			time: beatTiming(runOfShow, "generalEvaluation"),
+			feedbackUrl,
 		});
 	}
 
@@ -953,6 +974,9 @@ export function buildSlideDeck({
 		meetingSchedule: club.meetingSchedule,
 		nextMeetingAt,
 		timezone: club.timezone,
+		// Exactly once per deck (#1282): the Thank-You slide carries the QR only
+		// when no General Evaluation slide does.
+		feedbackUrl: geOwner != null ? null : feedbackUrl,
 	});
 
 	return deck;
