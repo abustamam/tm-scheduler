@@ -1025,6 +1025,8 @@ function rewriteCode(st: RewriteState, source: string): string {
 		s
 			.replace(/\\/g, "")
 			.replace(/[\p{L}_$][\p{L}\p{N}_$]*/gu, (w) => (CODE_WORDS.has(w) ? w : "x"))
+			// digit groups run together by dots or dashes (`415.555.0132`) read as a phone once each group is mapped: the whole run is one constant
+			.replace(/\d+(?:[.\-/ ]\d+)+/g, (m) => (m.replace(/\D/g, "").length >= 7 ? "0" : m))
 			// a number written in any script (Arabic-Indic, Devanagari ...) is a number: ASCII ones are mapped, any other is 0
 			.replace(/\p{N}+/gu, (d) => (/^\d+$/.test(d) ? fakeRun(st, d) : "0"))
 			// nothing else outside ASCII survives in bare code (a symbol, a tag character, a private-use one)

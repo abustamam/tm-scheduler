@@ -973,18 +973,6 @@ const readFileSync_ = (p: string) => readFileSync(p, "utf8");
 describe("round 3 (#1275): digits", () => {
 	const cellsOf = (html: string) => Array.from(parseHtml(html).querySelectorAll("td")).map((t) => t.textContent ?? "");
 
-	it("R3-D1. a 1-3 digit run outside an id context is fresh for every occurrence: no page-wide table, never itself, same width", () => {
-		const out = rewriteEasySpeakPage(page(`<table><tr>${"<td>5</td>".repeat(40)}</tr></table>`), { state: newRewriteState({ seed: "fresh" }) });
-		const cells = cellsOf(out);
-		expect(cells).toHaveLength(40);
-		expect(new Set(cells).size, "one real 5 is many different fakes").toBeGreaterThan(3);
-		for (const c of cells) expect(c).toMatch(/^[0-46-9]$/);
-		const wide = cellsOf(rewriteEasySpeakPage(page(`<table><tr>${"<td>417</td>".repeat(30)}</tr></table>`)));
-		expect(new Set(wide).size).toBeGreaterThan(5);
-		for (const c of wide) expect(c).toMatch(/^\d{3}$/);
-		for (const c of wide) expect(c).not.toBe("417");
-	});
-
 	it("R3-D1b. t=, s= and a club id are consistent inside their own context only: the same id is one fake, another context has its own table", () => {
 		const html = page(
 			`<a href="/view_meeting.php?t=5">a</a><a href="/view_meeting.php?t=5">b</a><a href="/request_speech.php?s=5">c</a><input type="hidden" name="t" value="5"><a href="/view_meeting.php?c=5">d</a><td>5</td>`,
@@ -1043,16 +1031,12 @@ describe("round 3 (#1275): digits", () => {
 
 	it("R3-10. a zero prefix is not copied: the fake is allocated over the whole width", () => {
 		let wide = 0;
-		let narrow = 0;
 		for (let i = 0; i < 40; i++) {
-			const [a, b] = cellsOf(rewriteEasySpeakPage(page("<table><tr><td>00042</td><td>000</td></tr></table>"), { state: newRewriteState({ seed: `z${i}` }) }));
+			const [a] = cellsOf(rewriteEasySpeakPage(page("<table><tr><td>00042</td><td>000</td></tr></table>"), { state: newRewriteState({ seed: `z${i}` }) }));
 			expect(a).toMatch(/^\d{5}$/);
-			expect(b).toMatch(/^\d{3}$/);
 			if (!a.startsWith("00")) wide++;
-			if (!b.startsWith("00")) narrow++;
 		}
 		expect(wide, "00042 keeps its 00 prefix").toBeGreaterThan(30);
-		expect(narrow, "000 keeps its 00 prefix").toBeGreaterThan(20);
 	});
 });
 
@@ -1060,40 +1044,6 @@ describe("round 3 (#1275): dates", () => {
 	const NOW = Date.UTC(2026, 9, 20);
 	const ptext = (html: string) => Array.from(parseHtml(html).querySelectorAll("p")).map((t) => t.textContent ?? "");
 	const dayOf = (s: string) => Math.floor(Date.parse(`${s} UTC`) / 86_400_000);
-
-	it("R3-5. one known real-to-fake date pair does not give another real date (40 seeds), and the order, the weekday and the side of today stay", () => {
-		const real = [dayOf("January 1, 1970"), dayOf("October 20, 2026")];
-		let recovered = 0;
-		for (let i = 0; i < 40; i++) {
-			const out = ptext(rewriteEasySpeakPage(page("<p>January 1, 1970</p><p>October 20, 2026</p>"), { state: newRewriteState({ seed: `d${i}`, now: NOW }) }));
-			const fake = out.map(dayOf);
-			expect(fake[0], `seed ${i}: the order`).toBeLessThan(fake[1]);
-			expect(((fake[0] - real[0]) % 7) + ((fake[1] - real[1]) % 7), `seed ${i}: whole weeks`).toBe(0);
-			expect(fake[0]).not.toBe(real[0]);
-			expect(fake[1]).not.toBe(real[1]);
-			// the offset a reader reads off the first (public) pair, applied to the second
-			if (fake[1] - (fake[0] - real[0]) === real[1]) recovered++;
-		}
-		expect(recovered, "the first pair's offset gave the second date").toBeLessThanOrEqual(2);
-	});
-
-	it("R3-5b. a date keeps its side of today: past stays past, future stays future, today does not stay today", () => {
-		for (let i = 0; i < 30; i++) {
-			const [past, future, today] = ptext(rewriteEasySpeakPage(page("<p>2026-09-22</p><p>2026-11-03</p><p>2026-10-20</p>"), { state: newRewriteState({ seed: `s${i}`, now: NOW }) })).map(dayOf);
-			expect(past, `seed ${i}`).toBeLessThan(Math.floor(NOW / 86_400_000));
-			expect(future, `seed ${i}`).toBeGreaterThan(Math.floor(NOW / 86_400_000));
-			expect(today).not.toBe(Math.floor(NOW / 86_400_000));
-		}
-	});
-
-	it("R3-5c. many dates in any order keep their order and are each their own date (room is never exhausted)", () => {
-		const days = Array.from({ length: 120 }, (_, i) => new Date(Date.UTC(2024, 0, 1) + ((i * 53) % 900) * 86_400_000).toISOString().slice(0, 10));
-		const uniq = [...new Set(days)];
-		const out = ptext(rewriteEasySpeakPage(page(uniq.map((d) => `<p>${d}</p>`).join("")), { state: newRewriteState({ seed: "many", now: NOW }) })).map(dayOf);
-		const order = uniq.map((d, i) => [dayOf(d), out[i]] as const).sort((a, b) => a[0] - b[0]);
-		for (let i = 1; i < order.length; i++) expect(order[i][1]).toBeGreaterThan(order[i - 1][1]);
-		expect(new Set(out).size).toBe(uniq.length);
-	});
 
 	it("R3-6b. a date-shaped text that is not a date keeps neither its month nor its digits", () => {
 		const out = ptext(rewriteEasySpeakPage(page("<p>May 99, 2026</p><p>March 45, 2025</p>")));
@@ -1103,24 +1053,6 @@ describe("round 3 (#1275): dates", () => {
 		expect(shapes.join("|")).not.toMatch(/Feb|Tuesday|31|30|45|13|2026|26/);
 	});
 
-	it("R3-5e. a synthetic date steps around a day the pages carry (the day the first run chose is taken, so the second run moves)", () => {
-		const html = page("<p>2026-11-03</p>");
-		const first = ptext(rewriteEasySpeakPage(html, { state: newRewriteState({ seed: "avoid", now: NOW }) }))[0];
-		const st = newRewriteState({ seed: "avoid", now: NOW });
-		st.realDays.add(dayOf(first));
-		const second = ptext(rewriteEasySpeakPage(html, { state: st }))[0];
-		expect(second).not.toBe(first);
-		expect(dayOf(second)).toBeGreaterThan(Math.floor(NOW / 86_400_000));
-	});
-
-	it("R3-5d. no synthetic date is one of the real dates of the page (150 days in a row)", () => {
-		const days = Array.from({ length: 150 }, (_, i) => new Date(Date.UTC(2026, 5, 1) + i * 86_400_000).toISOString().slice(0, 10));
-		for (const seed of ["a", "b", "c"]) {
-			const out = ptext(rewriteEasySpeakPage(page(days.map((d) => `<p>${d}</p>`).join("")), { state: newRewriteState({ seed, now: NOW }) }));
-			const real = new Set(days);
-			for (const o of out) expect(real.has(o), `seed ${seed}: ${o} is a real date of the page`).toBe(false);
-		}
-	});
 });
 
 describe("round 3 (#1275): a literal exception holds only in its own context", () => {
@@ -1275,5 +1207,176 @@ describe("round 3 (#1275): text, code and names", () => {
 			expect(code, h).toMatch(/^x\(\d{6}\)$/);
 			expect(code, h).not.toContain("482913");
 		}
+	});
+});
+
+describe("round 4 (#1275, option A: simpler fakes)", () => {
+	const NOW = Date.UTC(2026, 9, 20);
+	const TODAY = Math.floor(NOW / 86_400_000);
+	const texts = (html: string, sel = "p") => Array.from(parseHtml(html).querySelectorAll(sel)).map((t) => t.textContent ?? "");
+	const dayOf = (s: string) => Math.floor(Date.parse(`${s} UTC`) / 86_400_000);
+	const gen = (body: string, seed: string, extra: { contactPage?: boolean } = {}) => generateFixture(page(body), { state: newRewriteState({ seed, now: NOW }), ...extra });
+	const meet = (iso: string, t = 1) => `<td><a href="https://easy-speak.org/view_meeting.php?t=${t}">${iso}</a></td>`;
+	const iso = (d: number) => new Date(d * 86_400_000).toISOString().slice(0, 10);
+	// FNV-1a-32 as the old generator seeded with: two seeds whose `seed|` collide had byte-identical output
+	const fnv = (s: string) => {
+		let h = 0x811c9dc5;
+		for (let i = 0; i < s.length; i++) {
+			h ^= s.charCodeAt(i);
+			h = Math.imul(h, 0x01000193);
+		}
+		return h >>> 0;
+	};
+
+	it("R4-K1. the randomness is HMAC-keyed with 256 random bits per run: two seeds an FNV-32 hash cannot tell apart give different output", () => {
+		const seen = new Map<number, string>();
+		let pair: [string, string] | null = null;
+		for (let i = 0; pair === null && i < 400_000; i++) {
+			const h = fnv(`k${i}|`);
+			const other = seen.get(h);
+			if (other !== undefined) pair = [other, `k${i}`];
+			else seen.set(h, `k${i}`);
+		}
+		expect(pair, "an FNV-32 collision among 400k seeds").not.toBeNull();
+		const body = Array.from({ length: 6 }, (_, i) => `<td>${7_100_000 + i * 13}</td><td>Rowan Tidewell${i}</td>`).join("");
+		const [a, b] = (pair as [string, string]).map((seed) => rewriteEasySpeakPage(page(body), { state: newRewriteState({ seed }) }));
+		expect(a, "same FNV state, so the old output was identical").not.toBe(b);
+		const fresh = [newRewriteState(), newRewriteState()];
+		expect(fresh[0].key.length).toBe(32);
+		expect(fresh[0].key.equals(fresh[1].key)).toBe(false);
+	});
+
+	it("R4-D1. member dates are one fixed placeholder: a known real-to-fake pair of two days in a row recovers nothing", () => {
+		const out = texts(rewriteEasySpeakPage(page("<p>2026-10-18</p><p>2026-10-19</p><p>1999-12-31</p>"), { state: newRewriteState({ seed: "date-probe-53", now: NOW }) }));
+		expect(out).toEqual(["2000-01-01", "2000-01-01", "2000-01-01"]);
+		for (const shape of ["October 18, 2026", "Tuesday 20th October 2026 at 7:00 pm", "Oct 18 26, 7:30 pm", "October 2026"]) {
+			const o = texts(rewriteEasySpeakPage(page(`<p>${shape}</p>`), { state: newRewriteState({ seed: "s", now: NOW }) }))[0];
+			expect(o, shape).not.toMatch(/2026|2025|18|20(?!00)/);
+		}
+	});
+
+	it("R4-D2. the meeting calendar is built from rank, not from the real gaps: weekly, ordered, and a member date between two meetings stays the placeholder", () => {
+		// real gaps of 1, 3 and 40 days, with a member date sitting between the first two
+		const real = ["2026-09-01", "2026-09-02", "2026-09-05", "2026-10-15", "2026-10-25", "2026-10-26"];
+		for (let i = 0; i < 12; i++) {
+			const html = page(`<table><tr>${real.map((d) => meet(d)).join("")}</tr></table><p>2026-09-01 joined</p><p>2026-09-03</p>`);
+			const out = rewriteEasySpeakPage(html, { state: newRewriteState({ seed: `cal${i}`, now: NOW }) });
+			const days = texts(out, "a").map(dayOf);
+			for (let k = 1; k < days.length; k++) expect(days[k] - days[k - 1], `seed ${i}: a week apart whatever the real gap`).toBe(k === 4 ? 7 : 7);
+			// the order, and the side of today: four completed meetings (before 2026-10-20), two upcoming
+			expect(days.slice(0, 4).every((d) => d < TODAY)).toBe(true);
+			expect(days.slice(4).every((d) => d > TODAY)).toBe(true);
+			expect(texts(out).map((x) => x.slice(0, 10))).toEqual(["2000-01-01", "2000-01-01"]);
+		}
+	});
+
+	it("R4-D3. one known pair of meeting dates gives no other date: the offset between two fakes is the rank difference whatever the real distance", () => {
+		const weekdays = new Set<number>();
+		for (const gap of [3, 10, 40, 400]) {
+			const a = TODAY + 2;
+			const o = texts(rewriteEasySpeakPage(page(`<table><tr>${meet(iso(a))}${meet(iso(a + gap), 2)}</tr></table>`), { state: newRewriteState({ seed: "pair", now: NOW }) }), "a").map(dayOf);
+			expect(o[1] - o[0], `a real gap of ${gap} days`).toBe(7);
+			weekdays.add(new Date(o[0] * 86_400_000).getUTCDay());
+		}
+		const days = new Set<number>();
+		for (let i = 0; i < 30; i++) days.add(dayOf(texts(rewriteEasySpeakPage(page(`<table><tr>${meet(iso(TODAY + 2))}</tr></table>`), { state: newRewriteState({ seed: `w${i}`, now: NOW }) }), "a")[0]));
+		expect(days.size, "the weekday is keyed").toBeGreaterThan(2);
+	});
+
+	it("R4-D4. a meeting date that falls between those of an earlier page of the state is refused, and priming the state with every page first is the way", () => {
+		const a = page(`<table><tr>${meet("2026-11-01")}${meet("2026-11-20", 2)}</tr></table>`);
+		const b = page(`<table><tr>${meet("2026-11-10", 3)}</tr></table>`);
+		const st = newRewriteState({ seed: "x", now: NOW });
+		rewriteEasySpeakPage(a, { state: st });
+		expect(() => rewriteEasySpeakPage(b, { state: st })).toThrow(/falls between/);
+		const primed = newRewriteState({ seed: "x", now: NOW });
+		primeRewriteState(primed, [a, b]);
+		const days = [a, b].flatMap((h) => texts(rewriteEasySpeakPage(h, { state: primed }), "a").map(dayOf));
+		expect(days[2] > days[0] && days[2] < days[1], "ranked over both pages").toBe(true);
+	});
+
+	it("R4-S1. a 1-3 digit run outside an id context is one constant per width: nothing is learnt from a repeated value or from the values left out", () => {
+		for (const seed of ["a", "b", "c"]) {
+			const out = texts(rewriteEasySpeakPage(page("<p>7</p>".repeat(32)), { state: newRewriteState({ seed }) }));
+			expect(new Set(out), "32 sevens, one output").toEqual(new Set(["0"]));
+		}
+		const tens = "<p>10</p>".repeat(60) + "<p>47</p><p>470</p>";
+		const out = texts(rewriteEasySpeakPage(page(tens), { state: newRewriteState({ seed: "ten" }) }));
+		expect(new Set(out.slice(0, 61)), "the page's own small numbers are not avoided").toEqual(new Set(["00"]));
+		expect(out[61]).toBe("000");
+	});
+
+	it("R4-M1. a decoded private-use character cannot make a phone trusted: entity, JS escape and percent forms are all rewritten", () => {
+		const cases = [
+			`<textarea>&#xE000;(555) 010-0132&#xE001;</textarea>`,
+			`<a href="#" onclick="alert('\\uE000(555) 010-0132\\uE001')">Go</a>`,
+			`<a href="clubdata.php?n=%EE%80%80(555)%20010-0132%EE%80%81">Go</a>`,
+			`<p>(555) 010-0132</p>`,
+		];
+		for (const body of cases) {
+			const r = gen(body, "m1", { contactPage: true });
+			expect(r.html, body).not.toContain("0132");
+			expect(r.html, body).not.toMatch(/[]/);
+			expect(r.violations, body).toEqual([]);
+		}
+	});
+
+	it("R4-N1. a name spelled with a JS escape or a percent escape is still a page word: no fake first name or surname is its", () => {
+		for (let i = 0; i < 40; i++) {
+			const js = rewriteEasySpeakPage(page(`<a href="#" onclick="alert('\\u0041very Tidewell')">Go</a>`), { state: newRewriteState({ seed: `n${i}` }) });
+			const pc = rewriteEasySpeakPage(page(`<a href="clubdata.php?n=%41very%20Tidewell">Go</a>`), { state: newRewriteState({ seed: `n${i}` }) });
+			expect(js.toLowerCase(), `seed ${i}`).not.toMatch(/avery|tidewell/);
+			expect(pc.toLowerCase(), `seed ${i}`).not.toMatch(/avery|tidewell/);
+		}
+	});
+
+	it("R4-P1. `Page` is kept only in the pager: a surname Page in its own block is replaced, the pager still reads Page 1 of 2", () => {
+		const out = texts(rewriteEasySpeakPage(page("<p>Rowan</p><p>Page</p><p>of</p>"), { state: newRewriteState({ seed: "p" }) }));
+		expect(out.join("|")).not.toMatch(/Rowan|Page|\bof\b/);
+		const pager = rewriteEasySpeakPage(page(`<div class="nav">Page <b>1</b> of <b>2</b></div>`));
+		expect(texts(pager, ".nav")[0]).toBe("Page 1 of 2");
+	});
+
+	it("R4-Q1. a fake phone never ends in the input's four digits or equals the input; the fake username is never the input's", () => {
+		for (const input of ["415 555 0001", "(555) 010-0001", "555-010-0001", "(212) 555-0133"]) {
+			const out = texts(rewriteEasySpeakPage(page(`<p>${input}</p>`), { state: newRewriteState({ seed: "q" }) }))[0];
+			expect(out, input).toMatch(/^\(555\) 010-\d{4}$/);
+			expect(out, input).not.toBe(input);
+			expect(out.slice(-4), input).not.toBe(input.slice(-4));
+		}
+		for (const [input, seed] of [["[fixtureuser]", "u"], ["[FixtureUser]", "u2"]]) {
+			const r = generateFixture(page(`<p>${input}</p>`), { state: newRewriteState({ seed }) });
+			expect(texts(r.html)[0].toLowerCase()).not.toBe("[fixtureuser]");
+			expect(r.violations).toEqual([]);
+		}
+	});
+
+	it("R4-Q2. the fake names come from a keyed order: the first allocation is not always the same name, so the skip pattern says nothing", () => {
+		const firsts = new Set<string>();
+		for (let i = 0; i < 30; i++) firsts.add(texts(rewriteEasySpeakPage(page("<td>Zq Brackenby</td>"), { state: newRewriteState({ seed: `o${i}` }) }), "td")[0]);
+		expect(firsts.size, "a keyed order, not a fixed list").toBeGreaterThan(10);
+	});
+
+	it("R4-X1. a date is never joined into a phone across blocks, and the page does not crash on it", () => {
+		for (const body of ["<p>2025-03-12</p><p>4815162</p>", "<td><b>2025-03-12</b> <i>4815162</i></td>"]) {
+			const out = rewriteEasySpeakPage(page(body), { state: newRewriteState({ seed: "x" }) });
+			expect(out, body).toContain("2000-01-01");
+			expect(out, body).not.toContain("(555)");
+			expect(out, body).not.toContain("4815162");
+		}
+	});
+
+	it("R4-X2. 150 distinct names on one page get 150 distinct fakes: the pool is first x last, not 81", () => {
+		const base26 = (n: number) => String.fromCharCode(97 + (n % 26)) + String.fromCharCode(97 + (Math.floor(n / 26) % 26));
+		const names = Array.from({ length: 150 }, (_, i) => `Zq${base26(i)}ovak Brack${base26(i)}enby`);
+		const out = texts(rewriteEasySpeakPage(page(names.map((n) => `<td>${n}</td>`).join("")), { state: newRewriteState({ seed: "many" }) }), "td");
+		expect(new Set(out).size).toBe(150);
+		for (const o of out) expect(isFakeName(o), o).toBe(true);
+	});
+
+	it("R4-X3. a phone-shaped number in code does not trip the net", () => {
+		const r = gen(`<a href="#" onclick="f(415.555.0132)">x</a>`, "f");
+		expect(r.violations).toEqual([]);
+		expect(r.html).not.toContain("0132");
 	});
 });
