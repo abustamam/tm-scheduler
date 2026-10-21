@@ -146,7 +146,7 @@ describe("leak shapes: every invented value is gone", () => {
 			"(415) 555-0132",
 			"02079460123",
 		];
-		const out = rewriteEasySpeakPage(page(phones.map((p) => `<td>Call ${p} now</td>`).join("")));
+		const out = rewriteEasySpeakPage(page(phones.map((p) => `<td>Call ${p} now</td>`).join("")), { state: newRewriteState({ seed: "pin-uk" }) });
 		expectNone(out, ["7946", "5550", "0198", "0132", "345 678", "0412", "1234", "5678", "0123"]);
 		// every one became a fake phone, none an id
 		expect(out.match(/\(555\) 010-\d{4}/g)?.length).toBe(phones.length);
@@ -171,7 +171,7 @@ describe("leak shapes: every invented value is gone", () => {
 	});
 
 	it("accented names and named accented entities", () => {
-		const out = rewriteEasySpeakPage(page(`<td>Ren&eacute; Dupónt</td><td>Zoë Café-Rousseau</td><td>&Aacute;ngel N&uacute;&ntilde;ez</td><td title="José Østergaard">x</td>`));
+		const out = rewriteEasySpeakPage(page(`<td>Ren&eacute; Dupónt</td><td>Zoë Café-Rousseau</td><td>&Aacute;ngel N&uacute;&ntilde;ez</td><td title="José Østergaard">x</td>`), { state: newRewriteState({ seed: "pin-accent" }) });
 		expectNone(out, ["dup", "rousseau", "ngel", "ez", "stergaard", "ren", "zoë", "jos"]);
 	});
 
@@ -278,6 +278,7 @@ describe("review round: every invented value is gone (#1275)", () => {
 				`<div>415</div><div>555</div><div>0199</div><p>020/7946/0018</p><a href="#" onclick="go(212-555-0147)">x</a><table><tr><td>742 Quorvak Lane</td></tr></table>` +
 					`<p>Call 618-555-0123</p>`,
 			),
+			{ state: newRewriteState({ seed: "pin-split" }) },
 		);
 		expectNone(out, ["0199", "7946", "0018", "0147", "742", "quorvak", "0123"]);
 		const text = everything(out).replace(/\(555\) 010-\d{4}/g, "");
@@ -351,6 +352,7 @@ describe("review round: every invented value is gone (#1275)", () => {
 				`<a href="/profile.php?mode=viewprofile&amp;u=900123">${LATE[0]}</a><table><tr><td>${LATE[1]}</td><td>${title}</td><td>${place}</td><td>(555) 010-0777</td><td>fixtureuser</td></tr></table>` +
 					`<a href="/orgdata.php?c=9999">x</a><a href="/orgdata.php?c=4242">y</a><a href="/profile.php?mode=viewprofile&amp;u=900124">z</a>`,
 			),
+			{ state: newRewriteState({ seed: "pin-resembles" }) },
 		);
 		expectNone(out, ["900123", "900124", LATE[0], LATE[1], title, place, "0777", "c=9999", "fixtureuser"]);
 		const clubs = [...out.matchAll(/c=(\d+)/g)].map((m) => m[1]);
@@ -515,7 +517,8 @@ describe("round 2 (#1275, decision B): no digit survives", () => {
 	it("a real id that equals an assigned fake is rewritten, never kept, and the map stays one to one", () => {
 		const links = ["111111", "222222", "333333"].map((u) => `<a href="/profile.php?mode=viewprofile&amp;u=${u}">Ab</a>`).join("");
 		const body = `${links}<div id="speech_900002" data-k="900001"></div><a href="/view_meeting.php?t=900003">m</a>`;
-		const out = rewriteEasySpeakPage(page(body));
+		// a fixed key: a person id is drawn from 900001-900999 without avoiding the page's own numbers (round 5), so under a random key it can equal one of these by chance
+		const out = rewriteEasySpeakPage(page(body), { state: newRewriteState({ seed: "pin-equals" }) });
 		expectNoDigitSurvives(body, out);
 		const doc = parseHtml(out);
 		expect(doc.querySelector("div")?.getAttribute("id")).not.toMatch(/90000[123]/);
@@ -1582,5 +1585,125 @@ describe("round 5 (#1275): dates and times", () => {
 		const st = newRewriteState({ seed: "ent", now: NOW5 });
 		primeRewriteState(st, [`<a href="https://easy-speak.org/view_meeting.php?t=5">Tuesday&nbsp;13th&nbsp;October&nbsp;2026</a>`]);
 		expect(st.pastDays.length).toBe(1);
+	});
+});
+
+describe("round 5 (#1275): priming, numeric dates, phones", () => {
+	it("R5-X2. priming reserves every page's words and digit runs before any fake is made: page A never gets a name word or number page B carries", () => {
+		const A = page(`<p>Rowan Tidewell</p><p>1234567</p>`);
+		const alone = rewriteEasySpeakPage(A, { state: newRewriteState({ seed: "prime" }) });
+		const [name, digits] = texts5(alone, "p");
+		const B = page(`<p>${name.split(" ")[0]}</p><p>${name.split(" ")[1]}</p><p>${digits}</p>`);
+		const st = newRewriteState({ seed: "prime" });
+		primeRewriteState(st, [A, B]);
+		expect(st.pageWords.has(name.split(" ")[0].toLowerCase())).toBe(true);
+		expect(st.reserved.has(digits)).toBe(true);
+		const [name2, digits2] = texts5(rewriteEasySpeakPage(A, { state: st }), "p");
+		expect(name2.toLowerCase().split(" ").some((w) => B.toLowerCase().includes(w)), `${name2} shares a word with page B`).toBe(false);
+		expect(digits2).not.toBe(digits);
+		expect(fixtureViolations(rewriteEasySpeakPage(B, { state: st }))).toEqual([]);
+	});
+
+	it("R5-X4. numeric and non-ordinal dates outside a meeting are the placeholder in their own shape, never a phone", () => {
+		const cases: [string, string][] = [
+			["10/13/2026", "01/01/2000"],
+			["12/03/2027", "01/01/2000"],
+			["13.10.2026", "01.01.2000"],
+			["13-10-2026", "01-01-2000"],
+			["2026/10/13", "2000/01/01"],
+			["2026.10.13", "2000.01.01"],
+			["27 October 2026", "01 January 2000"],
+			["13 Oct 2026", "01 Jan 2000"],
+			["Tuesday 27 October 2026", "Saturday 01 January 2000"],
+			["Oct 13, 2026", "Jan 01, 2000"],
+		];
+		for (const [input, want] of cases) {
+			const r = gen5(`<p>${input}</p>`, "num");
+			expect(texts5(r.html)[0], input).toBe(want);
+			expect(r.violations, input).toEqual([]);
+		}
+		// a date-shaped text that is not a date is scrubbed whole, never kept in part
+		for (const input of ["99/99/2026", "31 February 2026", "2026/13/45"]) {
+			const r = gen5(`<p>${input}</p>`, "num");
+			expect(texts5(r.html)[0], input).toMatch(/^redacted-[a-z]+$/);
+		}
+	});
+
+	it("R5-X4b. in a meeting link the same shapes give a VALID date: never `00 January 2000`", () => {
+		const real = [27, 13, 6].map((d, i) => `<a href="https://easy-speak.org/view_meeting.php?t=${70 + i}">${d} October 2026</a>`).join("");
+		const out = rewriteEasySpeakPage(page(`${real}<a href="https://easy-speak.org/view_meeting.php?t=75">12/03/2027</a>`), { state: newRewriteState({ seed: "mt", now: NOW5 }) });
+		const t = texts5(out, "a");
+		for (const x of t.slice(0, 3)) {
+			const m = /^(\d{1,2}) (\w+) (\d{4})$/.exec(x);
+			expect(m, x).toBeTruthy();
+			const d = new Date(Date.UTC(Number(m?.[3]), ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"].indexOf(m?.[2] ?? ""), Number(m?.[1])));
+			expect(d.getUTCDate(), x).toBe(Number(m?.[1]));
+			expect(x).not.toContain("00 ");
+		}
+		expect(t[3]).toBe("01/01/2000");
+		expect(fixtureViolations(out)).toEqual([]);
+	});
+
+	it("R5-X4c. no day-month-year output is ever an invalid date, whatever the day number", () => {
+		const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+		let body = "";
+		for (const mo of months) for (let d = 0; d <= 33; d++) body += `<p>${d} ${mo} 2026</p><p>${d}th ${mo} 2026</p>`;
+		// meeting links (their own page: every day of the other one is a real date, so no weekday would be free): a few valid days and the invalid ones
+		let links = "";
+		for (const mo of ["March", "April", "May"]) for (const d of [0, 1, 15, 31, 32, 33]) links += `<a href="https://easy-speak.org/view_meeting.php?t=${d}">${d}th ${mo} 2026</a>`;
+		let checked = 0;
+		for (const html of [body, links]) {
+			const out = rewriteEasySpeakPage(page(html), { state: newRewriteState({ seed: "fuzz", now: NOW5 }) });
+			for (const m of out.matchAll(/(\d{1,2})(?:st|nd|rd|th)? (January|February|March|April|May|June|July|August|September|October|November|December) (\d{4})/g)) {
+				const d = new Date(Date.UTC(Number(m[3]), months.indexOf(m[2]), Number(m[1])));
+				expect(d.getUTCDate() === Number(m[1]) && d.getUTCMonth() === months.indexOf(m[2]), m[0]).toBe(true);
+				checked++;
+			}
+		}
+		expect(checked).toBeGreaterThan(100);
+	});
+
+	it("R5-X4d. priming and rewriting read dates with one parser: a numeric date in a meeting link reserves both readings and is no meeting; a spelled one is a meeting", () => {
+		const st = newRewriteState({ seed: "one", now: NOW5 });
+		primeRewriteState(st, [page(`<a href="https://easy-speak.org/view_meeting.php?t=1">12/03/2027</a><a href="https://easy-speak.org/view_meeting.php?t=2">27 October 2026</a><p>2026.10.13</p>`)]);
+		const d = (y: number, mo: number, da: number) => Math.floor(Date.UTC(y, mo - 1, da) / 86_400_000);
+		for (const day of [d(2027, 3, 12), d(2027, 12, 3), d(2026, 10, 27), d(2026, 10, 13)]) expect(st.realDays.has(day), iso5(day)).toBe(true);
+		expect(st.pastDays).toEqual([d(2026, 10, 27)].filter((x) => x < st.today));
+		expect(st.futureDays).toEqual([d(2026, 10, 27)].filter((x) => x >= st.today));
+	});
+
+	const phoneOf = (html: string) => /\(555\) 010-(\d{4})/.exec(html)?.[1];
+
+	it("R5-X3. a phone cut across inline tags takes its suffix from the ORIGINAL digits: never the real last four, under every key", () => {
+		for (const seed of ["round5-2545", ...Array.from({ length: 300 }, (_, i) => `s${i}`)]) {
+			const out = rewriteEasySpeakPage(page(`<p>415 <b>555</b> 0132</p>`), { state: newRewriteState({ seed }) });
+			expect(phoneOf(out), seed).toBeDefined();
+			expect(phoneOf(out), seed).not.toBe("0132");
+			expect(texts5(out)[0], seed).toMatch(/^\(555\) 010-\d{4}$/);
+		}
+		// one real phone is one fake, whether it is whole or cut by a tag
+		const st = newRewriteState({ seed: "same" });
+		const both = rewriteEasySpeakPage(page(`<p>415 <b>555</b> 0132</p><p>415 555 0132</p>`), { state: st });
+		expect(texts5(both)[0]).toBe(texts5(both)[1]);
+	});
+
+	it("R5-C6. a phone is never joined across block elements or a line break", () => {
+		for (const body of ["<p>1234</p><p>415 555 0132</p>", "<td>1234</td><td>415 555 0132</td>", "<div>1234</div><div>415 555 0132</div>", "<ul><li>1234</li><li>415 555 0132</li></ul>", "<p>1234<br>415 555 0132</p>", "<div>1234</div>415 555 0132", "1234<div>415 555 0132</div>"]) {
+			const out = rewriteEasySpeakPage(page(body), { state: newRewriteState({ seed: "blk" }) });
+			const doc = parseHtml(out);
+			// the lines of text, in document order, wherever they sit
+			const lines = (doc.body?.textContent ?? "").split(/\s*(?=\(555\))|(?<=\d)(?=\()/).map((x) => x.trim()).filter(Boolean);
+			expect(lines.length, body).toBe(2);
+			expect(lines[0], body).toMatch(/^\d{4}$/);
+			expect(lines[1], body).toMatch(/^\(555\) 010-\d{4}$/);
+		}
+		// an inline tag still joins
+		expect(texts5(rewriteEasySpeakPage(page(`<p>415<span> 555</span><i> 0132</i></p>`), { state: newRewriteState({ seed: "inl" }) }))[0]).toMatch(/^\(555\) 010-\d{4}$/);
+	});
+
+	it("R5-C6b. a date beside digits in the next inline node is not half of a phone", () => {
+		const out = rewriteEasySpeakPage(page(`<p><a href="/view_meeting.php?t=1">6 October 2026</a><a href="/view_meeting.php?t=2">12/03/2027</a></p>`), { state: newRewriteState({ seed: "dd", now: NOW5 }) });
+		expect(out).not.toContain("(555)");
+		expect(texts5(out, "a")[1]).toBe("01/01/2000");
 	});
 });

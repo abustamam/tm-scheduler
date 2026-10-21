@@ -8,6 +8,13 @@
  * allow-list. Tag names, attribute names and event-handler names are checked too: an unknown one is
  * renamed.
  *
+ * **Round 5.** Meeting dates never equal a real date of the pages (the calendar sits on a keyed weekday whose slots are free of them all);
+ * a title cell's date is the meeting's only when written the way the walker reads it (`<day> <month> <year> at <time>`); numeric and
+ * non-ordinal dates are read before phones, by the one scan priming and rewriting share; text nodes are merged before any date is read;
+ * a time in a meeting date is drawn from the whole range, any other time is one constant; person ids come from a keyed permutation of
+ * 900001-900999; names are syllable-built words no real person has; priming reserves every page's words, digits and dates; a phone
+ * cut across INLINE tags takes its suffix from the original digits and never joins across a block or a `<br>`.
+ *
  * **Randomness (round 4, option A: simpler fakes).** Every random choice is HMAC-SHA256 under a 256-bit key made for
  * each run and never stored or printed (`newRewriteState({ seed })` passes one for a test). No real value ever reaches an
  * unkeyed hash. Where synthesising a realistic value is what leaks, the fake is a constant instead.
@@ -20,16 +27,17 @@
  *   id lines up inside a context and never across contexts;
  * - 4+ digit runs take a keyed deterministic one-to-one walk (an explicit error when the space is full), and a
  *   leading-zero run is keyed by its exact text and keeps its full width.
- * **Dates.** Only a date in a link to a meeting page, or in a meeting page's title cell, is a meeting date. Those get a
+ * **Dates.** Only a date in a link to a meeting page, or the `<day> <month> <year> at <time>` date in a meeting page's title cell, is a meeting date. Those get a
  * synthetic calendar built from their RANK among the pages' meeting dates (never from the real gaps): slots a week apart on a
  * keyed weekday, completed before `now`, upcoming after it, so the walker still reads upcoming versus completed, weekly
  * spacing and order. Pages sharing one state are primed together (`primeRewriteState`). Every other date (joined,
  * paid-until, last online) is the single placeholder 2000-01-01 in its own shape. A date-shaped text that is not a date is
- * scrubbed whole. A time becomes another valid time of its own format. Person ids become 900001-900999 (next free one);
+ * scrubbed whole. A time inside a meeting date is drawn from the whole range (keyed, no "never itself"); any other time is one
+ * constant (`12:00 am`, `00:00`). Person ids become the next of a keyed permutation of 900001-900999;
  * phones `(555) 010-xxxx` with a keyed suffix that is never the input's; the username is `fixtureuser` (`fixtureuser-alt`
- * when the input is that word); names are any invented first name with any invented last name, from a keyed stream.
- * A phone the markup cuts across text nodes is joined AFTER its digits are fake, so no marker character is used in any
- * string. Only a literal allow-listed string keeps its digits (`ALLOW_LIST.phrases`, `pageNumbers`) plus three contexts:
+ * when the input is that word); names are an invented first name with an invented last name (syllable-built, `inventedFirst` / `inventedLast`), from a keyed stream.
+ * A phone the markup cuts across INLINE tags is joined AFTER its digits are fake (never across a block or `<br>`), so no marker
+ * character is used in any string. Only a literal allow-listed string keeps its digits (`ALLOW_LIST.phrases`, `pageNumbers`) plus three contexts:
  * a radio's value 1, 2, 5, 6 on an `available[<digits>]` field only, a pager's digits only inside `.nav` (never past the
  * page count; `Page` and `of` are kept only there), and a month NAME only in the options of a select named month,
  * start_month or end_month. Text is scanned by code point after NFKC, and anything that is not a space or punctuation
@@ -1260,28 +1268,36 @@ const PHONE_RE = new RegExp(PHONE_SOURCE, "gu");
 
 interface TextRef {
 	node: Node;
-	container: Element | null;
+	/** The node's text as the page had it (after entity decoding), before any rewrite: a phone cut across nodes takes its fake from THESE digits. */
+	orig: string;
+	/** A block element or a `<br>` lies between the previous text node and this one: a phone never runs across it. */
+	breakBefore: boolean;
 }
 
-/** A phone is split across text nodes when inline tags or block elements cut it up; `\u0001` marks a table cell, which never joins its neighbour. */
-/** A date is a date, never half of a phone ("2025-03-12" beside "4815162"): a run holding one is never joined. */
-const DATE_INSIDE = /(?<!\d)(?:19|20)\d{2}-\d{2}-\d{2}(?!\d)/;
-function plausibleBlockPhone(match: string): boolean {
-	const groups = match.split(/\D+/).filter(Boolean);
-	const digits = groups.join("").length;
-	return digits >= 9 && digits <= 15 && groups.length <= 5 && groups.filter((g) => g.length >= 3).length >= 2;
-}
+/** Elements that end a line of text: a number in one is never the rest of a number in the next. Inline ones (`b`, `i`, `a`, `span`, `font`) do not. */
+const BLOCKS = new Set([...CONTAINERS, "tr", "table", "thead", "tbody", "tfoot", "br", "hr", "ul", "ol", "dl", "form", "select", "section", "article", "header", "footer", "nav", "aside", "main", "address", "fieldset", "center"]);
 
+/** A date is a date, never half of a phone (`2025-03-12` beside `4815162`, `12/03/2027` after `2026`): a run holding one is never joined. */
+const DATE_ANYWHERE = /(?:19|20)\d{2}-\d{2}-\d{2}|\d{1,2}[/.-]\d{1,2}[/.-](?:19|20)\d{2}|(?:19|20)\d{2}[/.]\d{1,2}[/.]\d{1,2}/;
+const PHONE_CHARS = String.raw`[\d+()${PHONE_SEP}]`;
+
+/**
+ * A phone the markup cuts across INLINE tags (`415 <b>555</b> 0132`) is one phone. It is joined only now, over the text that is ALREADY fake (its digits went
+ * through `fakeRun`), so the fake phone it becomes is never read again and no marker character is needed in any string. The fake suffix is chosen from the
+ * ORIGINAL digits (`TextRef.orig`), never from the intermediate fake ones: with the intermediate digits the suffix could be the real one.
+ * Block elements and `<br>` end a run: two lines are two numbers.
+ */
 function phonesAcrossNodes(st: RewriteState, refs: TextRef[]) {
-	const cell = (c: Element | null) => !!c && /^(?:td|th)$/i.test(c.tagName);
 	let whole = "";
 	const owner: number[] = [];
+	const start: number[] = [];
 	refs.forEach((r, i) => {
-		if (i > 0 && r.container !== refs[i - 1].container) {
-			whole += cell(r.container) || cell(refs[i - 1].container) ? "\u0001" : "\n";
+		if (i > 0 && r.breakBefore) {
+			whole += "\u0001";
 			owner.push(-1);
 		}
 		const t = r.node.nodeValue ?? "";
+		start.push(whole.length);
 		whole += t;
 		for (let k = 0; k < t.length; k++) owner.push(i);
 	});
@@ -1289,29 +1305,24 @@ function phonesAcrossNodes(st: RewriteState, refs: TextRef[]) {
 	for (const m of whole.matchAll(PHONE_RE)) {
 		const s = m.index ?? 0;
 		const e = s + m[0].length;
-		if (owner[s] === owner[e - 1] || DATE_INSIDE.test(m[0])) continue;
-		const add = (from: number, to: number) => {
-			const digits = whole.slice(from, to).replace(/\D/g, "");
-			spans.push({ s: from, e: to, fake: fakePhone(st, digits.replace(/^1(\d{10})$/, "$1")) });
-		};
-		if (!m[0].includes("\n")) {
-			const digits = m[0].replace(/\D/g, "");
-			if (digits.length >= 7 && digits.length <= 15) add(s, e);
-			continue;
-		}
-		// Several blocks of digits run together; a phone is the longest plausible run of whole blocks.
-		const pieces = [...m[0].matchAll(/[^\n]+/g)].map((p) => ({ s: s + (p.index ?? 0), e: s + (p.index ?? 0) + p[0].length }));
-		for (let i = 0; i < pieces.length - 1; ) {
-			let taken = false;
-			for (let j = Math.min(pieces.length - 1, i + 3); j > i && !taken; j--) {
-				if (plausibleBlockPhone(whole.slice(pieces[i].s, pieces[j].e))) {
-					add(pieces[i].s, pieces[j].e);
-					i = j + 1;
-					taken = true;
-				}
-			}
-			if (!taken) i += 1;
-		}
+		const first = owner[s];
+		const last = owner[e - 1];
+		if (first === last || DATE_ANYWHERE.test(m[0])) continue;
+		const nodes = Array.from({ length: last - first + 1 }, (_, k) => first + k);
+		const digits = m[0].replace(/\D/g, "");
+		if (digits.length < 7 || digits.length > 15) continue;
+		// the original digits: the tail of the first node, the head of the last, every middle node whole
+		const real = nodes
+			.map((i) => {
+				const o = refs[i].orig.normalize("NFKC");
+				if (i === first) return new RegExp(`${PHONE_CHARS}*$`, "u").exec(o)?.[0] ?? "";
+				if (i === last) return new RegExp(`^${PHONE_CHARS}*`, "u").exec(o)?.[0] ?? "";
+				return o;
+			})
+			.join("")
+			.replace(/\D/g, "");
+		const use = real.length >= 7 ? real : digits;
+		spans.push({ s, e, fake: fakePhone(st, use.replace(/^1(\d{10})$/, "$1")) });
 	}
 	if (spans.length === 0) return;
 	const out = refs.map(() => "");
@@ -1391,6 +1402,7 @@ function normalizeTags(doc: Document) {
 function collectText(doc: Document): { refs: TextRef[]; groups: Map<Element | null, Node[]> } {
 	const refs: TextRef[] = [];
 	const groups = new Map<Element | null, Node[]>();
+	let pendingBreak = false;
 	const walk = (n: Node) => {
 		const t = n.nodeType;
 		if (t === 8) {
@@ -1413,13 +1425,17 @@ function collectText(doc: Document): { refs: TextRef[]; groups: Map<Element | nu
 			n.nodeValue = tag === "textarea" ? decodeEntities(raw) : raw;
 			let c: Element | null = parent;
 			while (c && !CONTAINERS.has(tagOf(c))) c = c.parentElement;
-			refs.push({ node: n, container: c });
+			refs.push({ node: n, orig: n.nodeValue ?? "", breakBefore: pendingBreak });
+			pendingBreak = false;
 			const list = groups.get(c) ?? [];
 			list.push(n);
 			groups.set(c, list);
 			return;
 		}
+		const block = t === 1 && BLOCKS.has(tagOf(n as Element));
+		if (block) pendingBreak = true;
 		for (const c of Array.from(n.childNodes ?? [])) walk(c);
+		if (block) pendingBreak = true;
 	};
 	for (const c of Array.from(doc.childNodes)) walk(c);
 	return { refs, groups };
