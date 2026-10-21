@@ -49,7 +49,7 @@
  *
  * Run it from `extension/`. The input is raw member data: never commit it, never paste it anywhere.
  */
-import { randomUUID } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { FAKE_NAMES, type FixtureCheckOptions, fixtureViolations, parseHtml, readFixture } from "../lib/easy-speak-test-kit";
@@ -435,10 +435,8 @@ export interface RewriteState {
 	shortPerms: Map<string, number[]>;
 	/** Widths whose strict (avoid the page's runs) walk already came up empty, keyed `width:reserved size`: see `chooseRun`. */
 	strictMisses: Set<string>;
-	/** How many fresh short numbers this run has drawn (each draw is its own seeded stream). */
-	fresh: number;
-	/** Seeds the digit map and the date shift. A fresh random one by default, so a fake cannot be worked back to its real value from the source. */
-	seed: string;
+	/** The HMAC-SHA256 key every random choice is derived from: 256 random bits per run by default, never stored or printed, so no fake can be worked back to its real value. A test passes `seed` for determinism. */
+	key: Buffer;
 	/** The real "today" (a day number): dates before it stay before it, dates after it stay after it. */
 	today: number;
 	/** Every real date this run has met (a day number) and the synthetic day it became, sorted by the real one; see `fakeDay`. */
@@ -452,22 +450,14 @@ export interface RewriteState {
 }
 
 export interface RewriteStateOptions {
+	/** An explicit key, for a deterministic test. Default: 256 random bits per run (`randomBytes`), never stored or printed. */
 	seed?: string;
 	/** The real "today" in ms; default `Date.now()`. Dates keep their side of it. */
 	now?: number;
 }
 
-function hash32(s: string): number {
-	let h = 0x811c9dc5;
-	for (let i = 0; i < s.length; i++) {
-		h ^= s.charCodeAt(i);
-		h = Math.imul(h, 0x01000193);
-	}
-	return h >>> 0;
-}
-
 export function newRewriteState(opts: RewriteStateOptions = {}): RewriteState {
-	const seed = opts.seed ?? randomUUID();
+	const key = Buffer.from(opts.seed ?? randomBytes(32));
 	const today = Math.floor((opts.now ?? Date.now()) / 86_400_000);
 	return {
 		names: new Map(),
@@ -481,8 +471,7 @@ export function newRewriteState(opts: RewriteStateOptions = {}): RewriteState {
 		taken: new Set(),
 		shortPerms: new Map(),
 		strictMisses: new Set(),
-		fresh: 0,
-		seed,
+		key,
 		today,
 		dates: [{ real: today, fake: today, pivot: true }],
 		realDays: new Set(),
@@ -499,14 +488,12 @@ export function presetNumber(st: RewriteState, real: string, fake: string) {
 	st.taken.add(fake);
 }
 
-/** Seeded, so one run is repeatable; mulberry32 over a hash of the seed and a label. */
+/** A stream of numbers in [0, 1) keyed by HMAC-SHA256(key, label|counter): no real value ever reaches an unkeyed hash, and one label's stream says nothing about another's. */
 function rng(st: RewriteState, label: string): () => number {
-	let a = hash32(`${st.seed}|${label}`);
+	let i = 0;
 	return () => {
-		a = (a + 0x6d2b79f5) | 0;
-		let t = Math.imul(a ^ (a >>> 15), 1 | a);
-		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+		const h = createHmac("sha256", st.key).update(`${label}|${i++}`).digest();
+		return h.readUIntBE(0, 6) / 2 ** 48;
 	};
 }
 
@@ -656,26 +643,15 @@ function shortId(st: RewriteState, ctx: string, run: string): string {
 	return String(perm[Number(run)]).padStart(w, "0");
 }
 
-/** A 1-3 digit run outside an id context: a fresh value of the same width for EVERY occurrence, never itself. No page-wide map, so no table to decode a split phone from. */
-function freshShort(st: RewriteState, run: string): string {
-	const w = run.length;
-	// first a value no page of this run carries (so a fake never reads as real data), then any other one
-	for (const strict of [true, false]) {
-		for (let attempt = 0; attempt < 60; attempt++) {
-			const r = rng(st, `fresh:${st.fresh++}:${w}`);
-			const c = Array.from({ length: w }, () => String(Math.floor(r() * 10))).join("");
-			if (c !== run && !(strict && st.reserved.has(normRun(c)))) return c;
-		}
-	}
-	return String((Number(run) + 1) % 10 ** w).padStart(w, "0");
-}
+/** A 1-3 digit run outside an id context: ONE constant per width (`0`, `00`, `000`). No sampling and no "never itself", so no output carries anything about the input, however often it repeats. */
+const placeholderShort = (run: string) => "0".repeat(run.length);
 
 /**
- * Any digit run. 1-3 digits: a consistent fake only inside an id context (`ctx`), a fresh one per occurrence
+ * Any digit run. 1-3 digits: a keyed one-to-one fake only inside an id context (`ctx`), the constant placeholder
  * everywhere else. 4 or more digits: the deterministic one to one map (`chooseRun`).
  */
 function fakeRun(st: RewriteState, run: string, ctx?: string): string {
-	if (run.length <= 3) return ctx ? shortId(st, ctx, run) : freshShort(st, run);
+	if (run.length <= 3) return ctx ? shortId(st, ctx, run) : placeholderShort(run);
 	const lead = /^0/.test(run);
 	const key = lead ? run : normRun(run);
 	let f = st.numbers.get(key);
@@ -748,16 +724,14 @@ function shiftDate(st: RewriteState, y: number, m: number, d: number): { y: numb
 	return { y: n.getUTCFullYear(), m: n.getUTCMonth() + 1, d: n.getUTCDate(), dow: n.getUTCDay() };
 }
 
-/** The first candidate (from a seeded start) that is not `input` and, if it can be, not a run the pages carry. */
+/** The first candidate (from a keyed start) that is not `input`. Never avoids the page's runs: which values are skipped would say which numbers the page holds. */
 function pick(st: RewriteState, label: string, pool: string[], input: string): string {
 	const start = Math.floor(rng(st, label)() * pool.length);
-	for (const strict of [true, false]) {
-		for (let i = 0; i < pool.length; i++) {
-			const c = pool[(start + i) % pool.length];
-			if (normRun(c) !== normRun(input) && !(strict && st.reserved.has(normRun(c)))) return c;
-		}
+	for (let i = 0; i < pool.length; i++) {
+		const c = pool[(start + i) % pool.length];
+		if (normRun(c) !== normRun(input)) return c;
 	}
-	return pool.find((c) => normRun(c) !== normRun(input)) ?? pool[0];
+	return pool[0];
 }
 
 const HOURS_12 = Array.from({ length: 12 }, (_, i) => String(i + 1));
