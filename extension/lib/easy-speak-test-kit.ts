@@ -73,10 +73,37 @@ const nonPersonPhrases = JSON.parse(readFixture("non-person-phrases.json")) as R
 
 /** Every fake person name a fixture may carry, in the order `fake-names.json` lists them. */
 export const FAKE_NAMES: readonly string[] = fakeNames.names;
-/** The one username a fixture may carry. */
-const FAKE_USERNAME: string = fakeNames.usernames[0];
+/** The username a fixture carries, and the one it carries instead when the input's own username is that very word (so an output never equals its input). */
+export const FAKE_USERNAME: string = fakeNames.usernames[0];
+export const ALT_USERNAME = `${FAKE_USERNAME}-alt`;
 
 const FAKE_NAME_SET = new Set(FAKE_NAMES);
+
+// Invented words for generated names (round 5). A first name and a last name are each built from three syllables, so no word is a real
+// name, a real surname or a word of any page: the generator never has to skip a candidate because the page carries it (a skipped word would
+// say which words the page holds), and the pool is 2,304 first names x 2,304 last names. `isFakeName` recognises exactly these words.
+const FIRST_A = ["Zor", "Vel", "Quin", "Bry", "Thal", "Gor", "Myr", "Jax", "Kel", "Nyx", "Pyr", "Sev", "Tor", "Wyn", "Xan", "Yor"] as const;
+const LAST_A = ["Dra", "Fre", "Glo", "Hu", "Ilm", "Kra", "Lund", "Mor", "Ny", "Ost", "Pla", "Quo", "Rud", "Sko", "Tru", "Vra"] as const;
+const MID_FIRST = ["ba", "do", "fi", "gu", "ke", "lo", "mi", "nu", "pe", "ro", "su", "ti"] as const;
+const MID_LAST = ["ven", "dal", "mer", "gar", "hol", "kin", "lor", "nes", "par", "rin", "sul", "tev"] as const;
+const END_FIRST = ["ix", "ulf", "oz", "ux", "ept", "umb", "ark", "ysk", "eld", "orth", "ilk", "apt"] as const;
+const END_LAST = ["zax", "bryn", "dokh", "fule", "gnar", "jolt", "kwop", "mox", "plit", "rax", "skrim", "vuld"] as const;
+/** How many invented first names (and, the same number, last names) `inventedFirst` and `inventedLast` can make. */
+export const INVENTED_WORDS = FIRST_A.length * MID_FIRST.length * END_FIRST.length;
+const build = (a: readonly string[], m: readonly string[], e: readonly string[], i: number) => `${a[Math.floor(i / (m.length * e.length)) % a.length]}${m[Math.floor(i / e.length) % m.length]}${e[i % e.length]}`;
+/** The invented first name number `i` (0 <= i < INVENTED_WORDS). */
+export const inventedFirst = (i: number): string => build(FIRST_A, MID_FIRST, END_FIRST, i);
+/** The invented last name number `i` (0 <= i < INVENTED_WORDS). */
+export const inventedLast = (i: number): string => build(LAST_A, MID_LAST, END_LAST, i);
+const alt = (xs: readonly string[]) => xs.join("|");
+const INVENTED_FIRST_RE = new RegExp(`^(?:${alt(FIRST_A)})(?:${alt(MID_FIRST)})(?:${alt(END_FIRST)})$`);
+const INVENTED_LAST_RE = new RegExp(`^(?:${alt(LAST_A)})(?:${alt(MID_LAST)})(?:${alt(END_LAST)})$`);
+/** An invented name: one of the listed ones (the committed fixtures'), or an invented first name and an invented last name. */
+export const isFakeName = (t: string): boolean => {
+	if (FAKE_NAME_SET.has(t)) return true;
+	const parts = t.split(" ");
+	return parts.length === 2 && INVENTED_FIRST_RE.test(parts[0]) && INVENTED_LAST_RE.test(parts[1]);
+};
 const PHRASE_SET = new Set(
 	Object.entries(nonPersonPhrases)
 		.filter(([k]) => k !== "_about")
@@ -152,7 +179,8 @@ export interface FixtureCheckOptions {
 const PHRASE_PARTS: string[] = [...PHRASE_SET, ...FAKE_NAMES];
 
 /** Words every fake name and allowed phrase already uses: a real name token equal to one is not a leak. */
-const SHARED_WORDS: ReadonlySet<string> = new Set([...FAKE_NAMES, ...PHRASE_SET].flatMap((p) => p.toLowerCase().split(/[\s-]+/)));
+// The allowed phrases' words only: a real name's word that is also a role word ("Timer") is the role. A fake NAME's words are not exempt: the generator never gives a fake a word the page carries, so a real name word found next to a fake one is the real one surviving.
+const SHARED_WORDS: ReadonlySet<string> = new Set([...PHRASE_SET].flatMap((p) => p.toLowerCase().split(/[\s-]+/)));
 
 /** Can a club id (or number) be matched as a bare number, or only next to a quote, `=` or `%3D`? */
 function clubIdRegex(id: string): RegExp {
@@ -182,10 +210,10 @@ export function fixtureViolations(html: string, opts: FixtureCheckOptions = {}):
 		if (!/(?:[?&;]|^|\s)u=\d+/.test(attrs)) continue;
 		const t = stripCredentials(norm(a.textContent));
 		if (t === "" || /^(Request a Speech\.\.\.|Accept|TBA)$/.test(t)) continue;
-		if (!FAKE_NAME_SET.has(t)) out.push(`person link names someone who is not a fake name: "${t}"`);
+		if (!isFakeName(t)) out.push(`person link names someone who is not a fake name: "${t}"`);
 	}
 	const header = /Welcome back\s+(.+?)\s*\[/.exec(norm(doc.body?.textContent));
-	if (header && !FAKE_NAME_SET.has(stripCredentials(header[1]))) out.push(`header names "${header[1]}"`);
+	if (header && !isFakeName(stripCredentials(header[1]))) out.push(`header names "${header[1]}"`);
 	for (const text of [html, decoded]) {
 		for (const m of text.matchAll(PERSON_ID_PARAM)) {
 			const n = Number(m[2]);
@@ -194,10 +222,10 @@ export function fixtureViolations(html: string, opts: FixtureCheckOptions = {}):
 	}
 	if (/Accepted by|Previous Evaluators|I am NOT attending this meeting \(/.test(decoded)) out.push("leftover evaluator history");
 	for (const m of decoded.matchAll(/\[([A-Za-z0-9_-]+)\](?=\s|$)/g)) {
-		if (m[1] !== FAKE_USERNAME && !/^\d+$/.test(m[1])) out.push(`username "${m[1]}" is not ${FAKE_USERNAME}`);
+		if (m[1] !== FAKE_USERNAME && m[1] !== ALT_USERNAME && !/^\d+$/.test(m[1])) out.push(`username "${m[1]}" is not ${FAKE_USERNAME}`);
 	}
 	for (const r of nameShapedRuns(parseHtml(html))) {
-		if (!FAKE_NAME_SET.has(r) && !PHRASE_SET.has(r)) out.push(`name-shaped text "${r}" is neither a fake name nor an allowed phrase`);
+		if (!isFakeName(r) && !PHRASE_SET.has(r)) out.push(`name-shaped text "${r}" is neither a fake name nor an allowed phrase`);
 	}
 	// Every attribute (href, src, onclick, data-*, id, title...), decoded: a name in a URL is still a name.
 	for (const el of Array.from(doc.querySelectorAll("*"))) {
@@ -205,7 +233,7 @@ export function fixtureViolations(html: string, opts: FixtureCheckOptions = {}):
 			for (const m of decodeMarkup(a.value).replace(/\+/g, " ").match(NAME_SHAPED) ?? []) {
 				const r = m.trim().replace(/['\u2019-]+$/, "");
 				// Attributes carry fragments of a phrase (an id, a javascript: call): a part of one is fine.
-				if (!FAKE_NAME_SET.has(r) && !PHRASE_SET.has(r) && !PHRASE_PARTS.some((p) => p.includes(r))) out.push(`name-shaped text "${r}" in the ${a.name} attribute is neither a fake name nor an allowed phrase`);
+				if (!isFakeName(r) && !PHRASE_SET.has(r) && !PHRASE_PARTS.some((p) => p.includes(r))) out.push(`name-shaped text "${r}" in the ${a.name} attribute is neither a fake name nor an allowed phrase`);
 			}
 		}
 	}
@@ -327,7 +355,10 @@ export function fakeEasySpeak(opts: {
 	 * Default: the fixtures' own.
 	 */
 	as?: Identity | ((requestIndex: number, url: string) => Identity);
+	/** Where a fixture file's text comes from, instead of the committed file (the generator's round-trip test serves rewritten pages). */
+	read?: (file: string) => string;
 }) {
+	const read = opts.read ?? readFixture;
 	const meetings: Record<string, string> = {
 		"644360": "meeting-upcoming.html",
 		"644304": "meeting-completed.html",
@@ -357,30 +388,30 @@ export function fakeEasySpeak(opts: {
 		if (forced !== undefined) return page(forced);
 		const u = new URL(url);
 		const p = u.pathname;
-		if (p === "/clubdata.php") return page(readFixture("club-data.html"));
-		if (p === "/memberlist.php") return page(readFixture("member-list.html"));
+		if (p === "/clubdata.php") return page(read("club-data.html"));
+		if (p === "/memberlist.php") return page(read("member-list.html"));
 		if (p === "/meeting_list.php") {
 			const year = new URLSearchParams(body ?? "").get("start_year");
 			if (opts.listByYear) return page(opts.listByYear[year ?? ""] ?? emptyMeetingList());
-			return page(year === "2026" ? readFixture("meeting-list.html") : emptyMeetingList());
+			return page(year === "2026" ? read("meeting-list.html") : emptyMeetingList());
 		}
 		if (p === "/view_meeting.php") {
 			const file = meetings[u.searchParams.get("t") ?? ""];
-			if (file) return page(readFixture(file));
+			if (file) return page(read(file));
 		}
-		if (p === "/tm_all_speeches.php") return page(readFixture("speech-list.html"));
+		if (p === "/tm_all_speeches.php") return page(read("speech-list.html"));
 		if (p === "/request_speech.php") {
 			const s = u.searchParams.get("s") ?? "";
-			return page(s === "1473688" ? readFixture("speech-request-intro.html") : blankRequestForm(s));
+			return page(s === "1473688" ? read("speech-request-intro.html") : blankRequestForm(s));
 		}
 		if (p === "/memberchart.php") {
 			const file = charts[u.searchParams.get("chart") ?? ""];
-			if (file) return page(readFixture(file));
+			if (file) return page(read(file));
 		}
-		if (p === "/my_evaluations.php") return page(readFixture("my-evaluations.html"));
-		if (p === "/api/v1/evaluations.php/my-evaluations") return page(readFixture("my-evaluations.json"));
+		if (p === "/my_evaluations.php") return page(read("my-evaluations.html"));
+		if (p === "/api/v1/evaluations.php/my-evaluations") return page(read("my-evaluations.json"));
 		const ev = /^\/api\/v1\/evaluations\.php\/eval\/(\d+)$/.exec(p);
-		if (ev) return page(readFixture(`evaluation-${ev[1]}.json`));
+		if (ev) return page(read(`evaluation-${ev[1]}.json`));
 		return { ok: false, status: 404, text: async () => "not found" };
 	};
 }
