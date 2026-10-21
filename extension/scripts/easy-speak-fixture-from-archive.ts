@@ -56,7 +56,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { ALT_USERNAME, FAKE_FIRSTS, FAKE_LASTS, FAKE_USERNAME, type FixtureCheckOptions, fixtureViolations, parseHtml, readFixture } from "../lib/easy-speak-test-kit";
+import { ALT_USERNAME, FAKE_USERNAME, INVENTED_WORDS, inventedFirst, inventedLast, type FixtureCheckOptions, fixtureViolations, parseHtml, readFixture } from "../lib/easy-speak-test-kit";
 
 // ------------------------------------------------------------------ the allow-list
 
@@ -417,6 +417,8 @@ const BRACKET_WORDS = new Set(A.bracketWords);
 /** Everything one run remembers, so one real value always becomes the same fake. */
 export interface RewriteState {
 	names: Map<string, string>;
+	/** Every fake name given out (a set, so a page with thousands of names stays linear). */
+	usedNames: Set<string>;
 	words: Map<string, string>;
 	phones: Map<string, string>;
 	people: Map<string, string>;
@@ -460,6 +462,7 @@ export function newRewriteState(opts: RewriteStateOptions = {}): RewriteState {
 	const today = Math.floor((opts.now ?? Date.now()) / 86_400_000);
 	return {
 		names: new Map(),
+		usedNames: new Set(),
 		words: new Map(),
 		phones: new Map(),
 		people: new Map(),
@@ -506,18 +509,18 @@ function fakeName(st: RewriteState, core: string): string {
 	const k = keyOf(core);
 	const have = st.names.get(k);
 	if (have) return have;
-	// Any invented first name with any invented last name, drawn from a KEYED stream: which names the page used cannot be read off an allocation order,
-	// and the pool (first x last) does not run out on a realistic page. A fake never shares a word with ANYTHING on the pages
-	// (a real name "Avery Quillon" must not become "Avery Alderfinch").
-	const used = new Set(st.names.values());
+	// An invented first name with an invented last name (syllable-built words no real person has, `inventedFirst` / `inventedLast` in the test kit),
+	// drawn from a KEYED stream. The pool is 2,304 x 2,304 and does not run out on a realistic page; the page-word test below almost never fires
+	// (nothing a page carries is one of these words), so which fakes were skipped says nothing about the page.
 	for (let attempt = 0; attempt < 20_000; attempt++) {
 		const r = rng(st, `name:${st.nextName++}`);
-		const next = `${FAKE_FIRSTS[Math.floor(r() * FAKE_FIRSTS.length)]} ${FAKE_LASTS[Math.floor(r() * FAKE_LASTS.length)]}`;
-		if (used.has(next) || nameWords(next).some((w) => st.pageWords.has(w))) continue;
+		const next = `${inventedFirst(Math.floor(r() * INVENTED_WORDS))} ${inventedLast(Math.floor(r() * INVENTED_WORDS))}`;
+		if (st.usedNames.has(next) || nameWords(next).some((w) => st.pageWords.has(w))) continue;
+		st.usedNames.add(next);
 		st.names.set(k, next);
 		return next;
 	}
-	throw new Error("the page has more distinct names than the invented first and last names in fake-names.json can make; add INVENTED names there, never real ones");
+	throw new Error("no invented name left: the page has more distinct names than the invented first and last names can make");
 }
 
 /** The fixture username, or its alternate when the input's own username is that very word, so an output never equals its input. */

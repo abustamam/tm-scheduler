@@ -78,13 +78,32 @@ export const FAKE_USERNAME: string = fakeNames.usernames[0];
 export const ALT_USERNAME = `${FAKE_USERNAME}-alt`;
 
 const FAKE_NAME_SET = new Set(FAKE_NAMES);
-/** The first names and the rest-of-name parts of the invented names: the generator pairs any first with any last, so the pool cannot run out on a realistic page. */
-export const FAKE_FIRSTS: readonly string[] = [...new Set(FAKE_NAMES.map((n) => n.split(" ")[0]))];
-export const FAKE_LASTS: readonly string[] = [...new Set(FAKE_NAMES.map((n) => n.slice(n.indexOf(" ") + 1)))];
-const FIRST_SET = new Set(FAKE_FIRSTS);
-const LAST_SET = new Set(FAKE_LASTS);
-/** An invented name: one of the listed ones, or any invented first name with any invented last name. */
-export const isFakeName = (t: string): boolean => FAKE_NAME_SET.has(t) || (t.includes(" ") && FIRST_SET.has(t.split(" ")[0]) && LAST_SET.has(t.slice(t.indexOf(" ") + 1)));
+
+// Invented words for generated names (round 5). A first name and a last name are each built from three syllables, so no word is a real
+// name, a real surname or a word of any page: the generator never has to skip a candidate because the page carries it (a skipped word would
+// say which words the page holds), and the pool is 2,304 first names x 2,304 last names. `isFakeName` recognises exactly these words.
+const FIRST_A = ["Zor", "Vel", "Quin", "Bry", "Thal", "Gor", "Myr", "Jax", "Kel", "Nyx", "Pyr", "Sev", "Tor", "Wyn", "Xan", "Yor"] as const;
+const LAST_A = ["Dra", "Fre", "Glo", "Hu", "Ilm", "Kra", "Lund", "Mor", "Ny", "Ost", "Pla", "Quo", "Rud", "Sko", "Tru", "Vra"] as const;
+const MID_FIRST = ["ba", "do", "fi", "gu", "ke", "lo", "mi", "nu", "pe", "ro", "su", "ti"] as const;
+const MID_LAST = ["ven", "dal", "mer", "gar", "hol", "kin", "lor", "nes", "par", "rin", "sul", "tev"] as const;
+const END_FIRST = ["ix", "ulf", "oz", "ux", "ept", "umb", "ark", "ysk", "eld", "orth", "ilk", "apt"] as const;
+const END_LAST = ["zax", "bryn", "dokh", "fule", "gnar", "jolt", "kwop", "mox", "plit", "rax", "skrim", "vuld"] as const;
+/** How many invented first names (and, the same number, last names) `inventedFirst` and `inventedLast` can make. */
+export const INVENTED_WORDS = FIRST_A.length * MID_FIRST.length * END_FIRST.length;
+const build = (a: readonly string[], m: readonly string[], e: readonly string[], i: number) => `${a[Math.floor(i / (m.length * e.length)) % a.length]}${m[Math.floor(i / e.length) % m.length]}${e[i % e.length]}`;
+/** The invented first name number `i` (0 <= i < INVENTED_WORDS). */
+export const inventedFirst = (i: number): string => build(FIRST_A, MID_FIRST, END_FIRST, i);
+/** The invented last name number `i` (0 <= i < INVENTED_WORDS). */
+export const inventedLast = (i: number): string => build(LAST_A, MID_LAST, END_LAST, i);
+const alt = (xs: readonly string[]) => xs.join("|");
+const INVENTED_FIRST_RE = new RegExp(`^(?:${alt(FIRST_A)})(?:${alt(MID_FIRST)})(?:${alt(END_FIRST)})$`);
+const INVENTED_LAST_RE = new RegExp(`^(?:${alt(LAST_A)})(?:${alt(MID_LAST)})(?:${alt(END_LAST)})$`);
+/** An invented name: one of the listed ones (the committed fixtures'), or an invented first name and an invented last name. */
+export const isFakeName = (t: string): boolean => {
+	if (FAKE_NAME_SET.has(t)) return true;
+	const parts = t.split(" ");
+	return parts.length === 2 && INVENTED_FIRST_RE.test(parts[0]) && INVENTED_LAST_RE.test(parts[1]);
+};
 const PHRASE_SET = new Set(
 	Object.entries(nonPersonPhrases)
 		.filter(([k]) => k !== "_about")

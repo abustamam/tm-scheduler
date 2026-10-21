@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ALLOW_LIST, generateFixture, newRewriteState, presetNumber, primeRewriteState, rewriteEasySpeakPage } from "../scripts/easy-speak-fixture-from-archive";
-import { clock, FAKE_FIRSTS, FAKE_LASTS, FAKE_NAMES, fixturePath, fixtureViolations, isFakeName, parseHtml, readFixture, setup, stripClock } from "./easy-speak-test-kit";
+import { clock, FAKE_NAMES, INVENTED_WORDS, inventedFirst, inventedLast, fixturePath, fixtureViolations, isFakeName, parseHtml, readFixture, setup, stripClock } from "./easy-speak-test-kit";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/easy-speak-fixture-from-archive.ts", import.meta.url));
 
@@ -833,13 +833,12 @@ describe("the committed fixtures round-trip", () => {
 			if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === "club" ? { ...(x as object), name: "*" } : blank(x, k)]));
 			return typeof v === "string" && FREE_TEXT.has(key) ? "*" : v;
 		};
-		const alt = (xs: readonly string[]) => [...xs].sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-		// any invented first name with any invented last name (the generator pairs them)
-		const names = new RegExp(`(?:${alt(FAKE_FIRSTS)}) (?:${alt(FAKE_LASTS)})`, "g");
+		// any invented name (a listed one, or an invented first name with an invented last name: `isFakeName`)
+		const names = /[A-Z][A-Za-z'-]+ [A-Z][A-Za-z'-]+/g;
 		return JSON.stringify(blank(bundle))
 			.replace(/\d{4}-\d{2}-\d{2}(?:T[\d:.]+Z?)?/g, "<date>") // a shifted date is a different date by design
 			.replace(/\d+\.\d+/g, "#")
-			.replace(names, tok)
+			.replace(names, (m) => (isFakeName(m) ? tok(m) : m))
 			.replace(/\d{4,}/g, tok) // an id is its order of appearance
 			.replace(/\d+(?:\.\d+)?/g, "#"); // a level, a duration, a count is another number by design
 	}
@@ -1393,5 +1392,47 @@ describe("round 4 (#1275, option A: simpler fakes)", () => {
 		const r = gen(`<a href="#" onclick="f(415.555.0132)">x</a>`, "f");
 		expect(r.violations).toEqual([]);
 		expect(r.html).not.toContain("0132");
+	});
+});
+
+// round 5 helpers
+const NOW5 = Date.UTC(2026, 9, 20);
+const TODAY5 = Math.floor(NOW5 / 86_400_000);
+const texts5 = (html: string, sel = "p") => Array.from(parseHtml(html).querySelectorAll(sel)).map((t) => t.textContent ?? "");
+const gen5 = (body: string, seed: string, extra: { contactPage?: boolean } = {}) => generateFixture(page(body), { state: newRewriteState({ seed, now: NOW5 }), ...extra });
+const dayOf5 = (s: string) => Math.floor(Date.parse(`${s} UTC`) / 86_400_000);
+const iso5 = (d: number) => new Date(d * 86_400_000).toISOString().slice(0, 10);
+
+describe("round 5 (#1275): invented names", () => {
+	it("R5-C5. a page of common first names does not exhaust the pool, and no word of the page is skipped for", () => {
+		const firsts = "Avery, Blair, Casey, Dana, Elliot, Frankie, Gray, Harper, Indigo, Jules, Kai, Lane, Morgan, Noel, Oakley, Parker, Quinn, Reese, Sage, Tatum, Umber, Val, Wren, Xan, Yael, Zephyr, Guest";
+		const out = rewriteEasySpeakPage(page(`<p>Members: ${firsts}</p><p>Rowan Tidewell</p>`), { state: newRewriteState({ seed: "c5" }) });
+		const name = texts5(out, "p")[1];
+		expect(isFakeName(name), name).toBe(true);
+		expect(name).not.toMatch(/Guest|Fixture|Rowan|Tidewell/);
+	});
+
+	it("R5-C7. 3,000 distinct Title-Case runs (speech titles too) get 3,000 distinct fakes and the page does not throw", () => {
+		const word = (n: number) => `Qw${String.fromCharCode(97 + (n % 26))}${String.fromCharCode(97 + (Math.floor(n / 26) % 26))}${String.fromCharCode(97 + (Math.floor(n / 676) % 26))}x`;
+		const runs = Array.from({ length: 3000 }, (_, i) => `${word(i)} ${word(i + 5000)}`);
+		const out = texts5(rewriteEasySpeakPage(page(runs.map((r) => `<td>${r}</td>`).join("")), { state: newRewriteState({ seed: "many5" }) }), "td");
+		expect(new Set(out).size).toBe(3000);
+		for (const o of out) expect(isFakeName(o), o).toBe(true);
+	});
+
+	it("R5-V. the invented words are all distinct, none is a real first name or surname of the reviewers' probes, and the net tells them from real ones", () => {
+		const firsts = new Set(Array.from({ length: INVENTED_WORDS }, (_, i) => inventedFirst(i)));
+		const lasts = new Set(Array.from({ length: INVENTED_WORDS }, (_, i) => inventedLast(i)));
+		expect(firsts.size).toBe(INVENTED_WORDS);
+		expect(lasts.size).toBe(INVENTED_WORDS);
+		const real = "Avery Blair Casey Dana Elliot Frankie Gray Harper Indigo Jules Kai Lane Morgan Noel Oakley Parker Quinn Reese Sage Tatum Umber Val Wren Xan Yael Zephyr Rowan Tidewell Quillon Marlowe Pennyfeather Guest Fixture Speakers Riley Moonstone Taylor Jordan Alex Sam".split(" ");
+		for (const w of real) {
+			expect(firsts.has(w), w).toBe(false);
+			expect(lasts.has(w), w).toBe(false);
+		}
+		for (const w of [...firsts, ...lasts]) expect(w, w).toMatch(/^[A-Z][a-z]{6,}$/);
+		expect(isFakeName(`${inventedFirst(7)} ${inventedLast(11)}`)).toBe(true);
+		expect(isFakeName(`${inventedLast(7)} ${inventedFirst(11)}`), "order matters").toBe(false);
+		for (const n of ["Rowan Tidewell", "Guest Tansley Fixture", "Wren Zinnowick", `${inventedFirst(3)} Tidewell`]) expect(isFakeName(n), n).toBe(false);
 	});
 });
