@@ -154,7 +154,10 @@ describe("leak shapes: every invented value is gone", () => {
 	});
 
 	it("a phone split by inline tags", () => {
-		const out = rewriteEasySpeakPage(page(`<td><span>415</span>-<span>555</span>-<b>0199</b></td><td>(<i>212</i>) <b>555</b> <u>0147</u></td>`));
+		// pinned: a keyed 4-digit fake suffix contains "415" or "212" by chance in about 1 run in 125
+		const out = rewriteEasySpeakPage(page(`<td><span>415</span>-<span>555</span>-<b>0199</b></td><td>(<i>212</i>) <b>555</b> <u>0147</u></td>`), {
+			state: newRewriteState({ seed: "pin-inline-phone" }),
+		});
 		expectNone(out, ["0199", "0147", "415", "212"]);
 		expect(everything(out)).not.toMatch(/\b555\b(?!\) 010)/);
 	});
