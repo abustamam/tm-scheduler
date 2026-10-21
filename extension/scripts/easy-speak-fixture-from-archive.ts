@@ -515,6 +515,8 @@ export interface RewriteState {
 	realDays: Set<number>;
 	/** The weekday offset the synthetic calendar was built on (chosen on first use, see `calendarOffset`); null until then. */
 	calOff: number | null;
+	/** The calendar could not avoid every real day, only the real MEETING days (non-meeting dates are the placeholder, so one landing on a slot is not attributable). */
+	calLoose: boolean;
 	nextName: number;
 	nextPerson: number;
 	/** The keyed order 900001-900999 is handed out in (built on first use). */
@@ -553,6 +555,7 @@ export function newRewriteState(opts: RewriteStateOptions = {}): RewriteState {
 		meetingOk: false,
 		realDays: new Set(),
 		calOff: null,
+		calLoose: false,
 		nextName: 0,
 		nextPerson: 0,
 		personPerm: [],
@@ -660,13 +663,16 @@ function fakePerson(st: RewriteState, id: string): string {
 		}
 		st.personPerm = p.map(String);
 	}
+	// the first unused id that is not this id itself (a permutation alone maps a 900xxx id to itself 1 time in 999): an id passed over
+	// for being the input stays in the permutation for the next person
 	let f: string | undefined;
-	while (st.nextPerson < st.personPerm.length) {
-		const c = st.personPerm[st.nextPerson++];
-		if (!st.taken.has(c)) {
-			f = c;
-			break;
-		}
+	for (let i = st.nextPerson; i < st.personPerm.length; i++) {
+		const c = st.personPerm[i];
+		if (st.taken.has(c) || c === key) continue;
+		[st.personPerm[i], st.personPerm[st.nextPerson]] = [st.personPerm[st.nextPerson], st.personPerm[i]];
+		st.nextPerson++;
+		f = c;
+		break;
 	}
 	if (f === undefined) throw new Error("no person id left: the pages carry more than 999 distinct people");
 	st.people.set(key, f);
@@ -805,10 +811,11 @@ function fakeDay(st: RewriteState, day: number): number {
 
 const slotDay = (st: RewriteState, off: number, slot: number) => st.today - off + 7 * slot;
 
-/** True when no slot of the calendar built on weekday offset `off` is a real day any page carries. */
-function slotsFree(st: RewriteState, off: number): boolean {
-	for (let i = 0; i < st.pastDays.length; i++) if (st.realDays.has(slotDay(st, off, -i))) return false;
-	for (let i = 0; i < st.futureDays.length; i++) if (st.realDays.has(slotDay(st, off, i + 1))) return false;
+/** True when no slot of the calendar built on weekday offset `off` is a real day any page carries (`loose`: a real MEETING day). */
+function slotsFree(st: RewriteState, off: number, loose = st.calLoose): boolean {
+	const avoid = loose ? new Set([...st.pastDays, ...st.futureDays]) : st.realDays;
+	for (let i = 0; i < st.pastDays.length; i++) if (avoid.has(slotDay(st, off, -i))) return false;
+	for (let i = 0; i < st.futureDays.length; i++) if (avoid.has(slotDay(st, off, i + 1))) return false;
 	return true;
 }
 
@@ -825,8 +832,13 @@ function calendarOffset(st: RewriteState): number {
 		const j = Math.floor(r() * (i + 1));
 		[order[i], order[j]] = [order[j], order[i]];
 	}
-	const off = order.find((o) => slotsFree(st, o));
-	if (off === undefined) throw new Error("the pages carry a real date on every weekday of the synthetic meeting calendar: split the pages into runs with fewer dates");
+	let off = order.find((o) => slotsFree(st, o, false));
+	if (off === undefined) {
+		// every weekday holds some real date: avoid the real meeting days only (no slot is ever a real meeting date)
+		off = order.find((o) => slotsFree(st, o, true));
+		if (off !== undefined) st.calLoose = true;
+	}
+	if (off === undefined) throw new Error("the pages carry a real meeting date on every weekday of the synthetic meeting calendar: split the pages into runs with fewer meetings");
 	st.calOff = off;
 	return off;
 }

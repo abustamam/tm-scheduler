@@ -1523,9 +1523,10 @@ describe("round 5 (#1275): dates and times", () => {
 			expect(got.map(iso5), `seed ${i}`).toEqual([TODAY5 - 10, TODAY5 - 3, TODAY5 + 4].map(iso5));
 			for (const d of got) expect(real.has(d), `seed ${i}`).toBe(false);
 		}
-		// and with no free weekday at all the generator says so instead of copying a real date
+		// with no weekday free of every real date, the calendar falls back to avoiding the real MEETING days (round 6): it never copies one
 		const all = Array.from({ length: 6 }, (_, k) => `<p>${iso5(TODAY5 - 1 - k)}</p>`).join("");
-		expect(() => rewriteEasySpeakPage(page(`${meetLink(TODAY5 - 8, 1)}${all}`), { state: newRewriteState({ seed: "full", now: NOW5 }) })).toThrow(/every weekday/);
+		const full = rewriteEasySpeakPage(page(`${meetLink(TODAY5 - 8, 1)}${all}`), { state: newRewriteState({ seed: "full", now: NOW5 }) });
+		expect(texts5(full, "a").map(dayOfLong)).not.toContain(TODAY5 - 8);
 	});
 
 	it("R5-X1c. under many keys a plain calendar of meetings never lands on a real date (random pages)", () => {
@@ -1708,5 +1709,43 @@ describe("round 5 (#1275): priming, numeric dates, phones", () => {
 		const out = rewriteEasySpeakPage(page(`<p><a href="/view_meeting.php?t=1">6 October 2026</a><a href="/view_meeting.php?t=2">12/03/2027</a></p>`), { state: newRewriteState({ seed: "dd", now: NOW5 }) });
 		expect(out).not.toContain("(555)");
 		expect(texts5(out, "a")[1]).toBe("01/01/2000");
+	});
+});
+
+describe("round 6 (#1275): person ids, calendar room", () => {
+	const NOW6 = Date.UTC(2026, 9, 20);
+
+	it("R6-1. a person id inside the fake range never maps to itself", () => {
+		// the two keys the round-6 reviewers found mapping an id to itself, then a spread of others
+		const cases: [string, string][] = [["900456", "k1031"], ["900289", "round6"], ...Array.from({ length: 300 }, (_, i): [string, string] => [String(900_001 + (i % 999)), `r6-${i}`])];
+		for (const [id, seed] of cases) {
+			const out = rewriteEasySpeakPage(page(`<a href="profile.php?mode=viewprofile&u=${id}">Rowan Tidewell</a>`), { state: newRewriteState({ seed, now: NOW6 }) });
+			expect(out, `seed ${seed}`).not.toContain(`u=${id}`);
+		}
+	});
+
+	it("R6-2. member dates on every weekday do not exhaust the calendar, and no synthetic meeting date is a real meeting date", () => {
+		const meetings = Array.from({ length: 30 }, (_, k) => new Date(Date.UTC(2026, 9, 13) - k * 7 * 86_400_000));
+		const fmt = (d: Date) => `${d.getUTCDate()} ${["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][d.getUTCMonth()]} ${d.getUTCFullYear()} at 7:30 pm`;
+		const links = meetings.map((d, k) => `<a href="view_meeting.php?t=${4000 + k}">${fmt(d)}</a>`).join("");
+		const members = [14, 15, 16, 17, 18, 19].map((d) => `<p>Last online: 2026-10-${d}</p>`).join("");
+		const real = new Set(meetings.map((d) => fmt(d).replace(/ at .*/, "")));
+		for (let i = 0; i < 20; i++) {
+			const out = rewriteEasySpeakPage(page(links + members), { state: newRewriteState({ seed: `r6-cal-${i}`, now: NOW6 }) });
+			for (const t of texts5(out, "a")) expect(real.has(t.replace(/ at .*/, "")), t).toBe(false);
+		}
+	});
+
+	it("R6-2b. meetings on another weekday than today: the fallback still never lands a synthetic meeting date on a real one", () => {
+		// Thursdays back from 15 Oct 2026; member dates on the other five weekdays before today (Tuesday 20 Oct) leave no fully free weekday
+		const meetings = Array.from({ length: 12 }, (_, k) => new Date(Date.UTC(2026, 9, 15) - k * 7 * 86_400_000));
+		const fmt = (d: Date) => `${d.getUTCDate()} ${["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+		const links = meetings.map((d, k) => `<a href="view_meeting.php?t=${5000 + k}">${fmt(d)} at 7:30 pm</a>`).join("");
+		const members = [14, 16, 17, 18, 19].map((d) => `<p>Last online: 2026-10-${d}</p>`).join("");
+		const real = new Set(meetings.map(fmt));
+		for (let i = 0; i < 30; i++) {
+			const out = rewriteEasySpeakPage(page(links + members), { state: newRewriteState({ seed: `r6-thu-${i}`, now: NOW6 }) });
+			for (const t of texts5(out, "a")) expect(real.has(t.replace(/ at .*/, "")), `seed r6-thu-${i}: ${t}`).toBe(false);
+		}
 	});
 });
