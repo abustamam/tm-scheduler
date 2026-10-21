@@ -447,6 +447,8 @@ export interface RewriteState {
 	inMeeting: boolean;
 	nextName: number;
 	nextPerson: number;
+	/** The keyed order 900001-900999 is handed out in (built on first use). */
+	personPerm: string[];
 	nextWord: number;
 }
 
@@ -479,7 +481,8 @@ export function newRewriteState(opts: RewriteStateOptions = {}): RewriteState {
 		futureDays: [],
 		inMeeting: false,
 		nextName: 0,
-		nextPerson: 900_001,
+		nextPerson: 0,
+		personPerm: [],
 		nextWord: 0,
 	};
 }
@@ -565,15 +568,34 @@ function fakePhone(st: RewriteState, digits: string): string {
 	throw new Error("no fake phone left: the page carries more than 9,999 distinct phone numbers");
 }
 
-/** A person id: ANY id (a 900xxx one too) becomes the next id in 900001-900999 that no page of the run carries, the same one every time. */
+/**
+ * A person id: ANY id (a 900xxx one too) becomes the next id of a KEYED permutation of 900001-900999, the same one every time. Nothing is
+ * avoided that the page carries (which ids were skipped would say which numbers the page holds); an id a number fake already took is the
+ * only one passed over, so two fakes never collide.
+ */
 function fakePerson(st: RewriteState, id: string): string {
 	if (!/^\d+$/.test(id)) return "x";
 	const key = normRun(id);
 	const have = st.people.get(key);
 	if (have) return have;
-	let f: string;
-	do f = String(st.nextPerson++);
-	while (st.reserved.has(f) || st.taken.has(f));
+	if (st.personPerm.length === 0) {
+		const r = rng(st, "person-perm");
+		const p = Array.from({ length: 999 }, (_, i) => 900_001 + i);
+		for (let i = p.length - 1; i > 0; i--) {
+			const j = Math.floor(r() * (i + 1));
+			[p[i], p[j]] = [p[j], p[i]];
+		}
+		st.personPerm = p.map(String);
+	}
+	let f: string | undefined;
+	while (st.nextPerson < st.personPerm.length) {
+		const c = st.personPerm[st.nextPerson++];
+		if (!st.taken.has(c)) {
+			f = c;
+			break;
+		}
+	}
+	if (f === undefined) throw new Error("no person id left: the pages carry more than 999 distinct people");
 	st.people.set(key, f);
 	st.taken.add(f);
 	return f;
@@ -1330,9 +1352,6 @@ function textItems(st: RewriteState, groups: Map<Element | null, Node[]>): TextI
 			if (pager || monthOption) {
 				item.kind = "fixed";
 				item.fixed = t;
-			} else if (A.exactNodes.includes(t)) {
-				item.kind = "exact";
-				item.fixed = t;
 			} else if (link && /profile\.php\?mode=editprofile/.test(linkAttrs) && !/^Welcome back/.test(t)) {
 				item.kind = "fixed";
 				item.fixed = fakeUsername(t);
@@ -1344,9 +1363,12 @@ function textItems(st: RewriteState, groups: Map<Element | null, Node[]>): TextI
 				const cred = CREDENTIALS.exec(t)?.[0] ?? "";
 				item.kind = "name";
 				item.fixed = `${fakeName(st, t.replace(CREDENTIALS, ""))}${cred ? scrubText(st, cred) : ""}`;
+			} else if (A.exactNodes.includes(t)) {
+				item.kind = "exact";
+				item.fixed = t;
 			} else if (prevText === "Club Number" && /^\d+$/.test(t)) {
 				item.kind = "fixed";
-				item.fixed = fakeNumber(st, t);
+				item.fixed = fakeNumber(st, t, "club");
 			} else {
 				st.inMeeting = inMeetingContext(n);
 				item.res = scrubDetailed(st, t);

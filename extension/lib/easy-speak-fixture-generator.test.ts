@@ -187,7 +187,7 @@ describe("leak shapes: every invented value is gone", () => {
 		expectNone(out, ["123456", "345678", "234567", "456789", "567890", "678901", "789012", "890123", "901234", "112233"]);
 		expect(fixtureViolations(out)).toEqual([]);
 		// the same real id is the same fake wherever it appears
-		const ids = [...out.matchAll(/9000\d{2}/g)].map((m) => m[0]);
+		const ids = [...out.matchAll(/900\d{3}/g)].map((m) => m[0]);
 		expect(new Set(ids).size).toBeLessThan(ids.length);
 	});
 
@@ -266,10 +266,10 @@ describe("review round: every invented value is gone (#1275)", () => {
 		expectNone(out, ["1234567", "0412345678", "7654321", "567890", "567891", "9988776"]);
 		const doc = parseHtml(out);
 		const link = /u=(\d+)/.exec(doc.querySelector("a")?.getAttribute("href") ?? "")?.[1];
-		expect(link).toMatch(/^9000\d\d$/);
+		expect(link).toMatch(/^900\d{3}$/);
 		expect(doc.querySelector('input[name="speaker"]')?.getAttribute("value")).toBe(link);
 		expect(doc.querySelectorAll("option")[1].getAttribute("value")).toBe(link);
-		expect(doc.querySelector('input[name="user"]')?.getAttribute("value")).toMatch(/^9000\d\d$/);
+		expect(doc.querySelector('input[name="user"]')?.getAttribute("value")).toMatch(/^900\d{3}$/);
 	});
 
 	it("5. a phone split across block elements, written with slashes, or in a handler; a house number", () => {
@@ -393,7 +393,7 @@ describe("review round: every invented value is gone (#1275)", () => {
 		expect(out).toContain('rel="stylesheet"');
 		expect(out).toContain('http-equiv="Content-Type"');
 		expect(out).toContain('content="text/html; charset=UTF-8"');
-		expect(out).toContain("window.open('profile.php?mode=miniprofile&amp;u=900001', '_blank')");
+		expect(out).toMatch(/window\.open\('profile\.php\?mode=miniprofile&amp;u=900\d{3}', '_blank'\)/);
 		expect(out).toContain("showStatus('Visitor')");
 	});
 
@@ -1404,7 +1404,7 @@ const dayOf5 = (s: string) => Math.floor(Date.parse(`${s} UTC`) / 86_400_000);
 const iso5 = (d: number) => new Date(d * 86_400_000).toISOString().slice(0, 10);
 
 describe("round 5 (#1275): invented names", () => {
-	it("R5-C5. a page of common first names does not exhaust the pool, and no word of the page is skipped for", () => {
+	it("R5-X5. a page of common first names does not exhaust the pool, and no word of the page is skipped for", () => {
 		const firsts = "Avery, Blair, Casey, Dana, Elliot, Frankie, Gray, Harper, Indigo, Jules, Kai, Lane, Morgan, Noel, Oakley, Parker, Quinn, Reese, Sage, Tatum, Umber, Val, Wren, Xan, Yael, Zephyr, Guest";
 		const out = rewriteEasySpeakPage(page(`<p>Members: ${firsts}</p><p>Rowan Tidewell</p>`), { state: newRewriteState({ seed: "c5" }) });
 		const name = texts5(out, "p")[1];
@@ -1434,5 +1434,50 @@ describe("round 5 (#1275): invented names", () => {
 		expect(isFakeName(`${inventedFirst(7)} ${inventedLast(11)}`)).toBe(true);
 		expect(isFakeName(`${inventedLast(7)} ${inventedFirst(11)}`), "order matters").toBe(false);
 		for (const n of ["Rowan Tidewell", "Guest Tansley Fixture", "Wren Zinnowick", `${inventedFirst(3)} Tidewell`]) expect(isFakeName(n), n).toBe(false);
+	});
+});
+
+describe("round 5 (#1275): ids, club number, symbol links", () => {
+	const people = (n: number, extra = "") => page(`${Array.from({ length: n }, (_, i) => `<a href="/profile.php?mode=viewprofile&amp;u=${100 + i}">m${i}</a>`).join("")}${extra}`);
+	const idsOf = (html: string) => [...html.matchAll(/u=(\d+)/g)].map((m) => m[1]);
+
+	it("R5-C8. person ids come from a keyed permutation of 900001-900999 and never avoid what the page carries", () => {
+		const taken = Array.from({ length: 60 }, (_, i) => `<p>${900_001 + i}</p>`).join("");
+		for (const seed of ["p1", "p2", "p3"]) {
+			const bare = idsOf(rewriteEasySpeakPage(people(40), { state: newRewriteState({ seed }) }));
+			const crowded = idsOf(rewriteEasySpeakPage(people(40, taken), { state: newRewriteState({ seed }) }));
+			expect(crowded, "what the page carries changes nothing").toEqual(bare);
+		}
+		const firsts = new Set(["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"].map((seed) => idsOf(rewriteEasySpeakPage(people(1), { state: newRewriteState({ seed }) }))[0]));
+		expect(firsts.size, "keyed").toBeGreaterThan(6);
+		const all = idsOf(rewriteEasySpeakPage(people(999), { state: newRewriteState({ seed: "all" }) }));
+		expect(new Set(all).size).toBe(999);
+		for (const id of all) expect(Number(id)).toBeGreaterThanOrEqual(900_001);
+		for (const id of all) expect(Number(id)).toBeLessThanOrEqual(900_999);
+		expect(() => rewriteEasySpeakPage(people(1000), { state: newRewriteState({ seed: "all" }) })).toThrow(/no person id left/);
+	});
+
+	it("R5-C8b. a person id never takes a fake a number already took: with every other id taken, the one left is the one given", () => {
+		const st = newRewriteState({ seed: "left" });
+		for (let n = 900_001; n <= 900_999; n++) if (n !== 900_777) presetNumber(st, String(n + 100_000), String(n));
+		expect(idsOf(rewriteEasySpeakPage(people(1), { state: st }))).toEqual(["900777"]);
+	});
+
+	it("R5-X6. a short club id in the Club Number text is the same fake as in cached_club, not 00", () => {
+		const out = rewriteEasySpeakPage(page(`<input name="cached_club" value="42"><p>Club Number</p><p>42</p>`), { state: newRewriteState({ seed: "club" }) });
+		const value = parseHtml(out).querySelector("input")?.getAttribute("value");
+		expect(texts5(out, "p")[1]).toBe(value);
+		expect(value).not.toBe("42");
+		expect(value).not.toBe("00");
+	});
+
+	it("R5-C10. a person link whose text is a lone symbol is a fake name and does not block the write", () => {
+		for (const sym of ["?", "-", "x", "P", "&"]) {
+			const r = gen5(`<a href="/profile.php?mode=viewprofile&amp;u=123456">${sym}</a>`, `sym${sym}`);
+			expect(r.violations, sym).toEqual([]);
+			expect(isFakeName(texts5(r.html, "a")[0]), sym).toBe(true);
+		}
+		// a symbol outside a person link is still kept
+		expect(rewriteEasySpeakPage(page(`<a href="/x.php">?</a>`))).toContain(">?</a>");
 	});
 });
