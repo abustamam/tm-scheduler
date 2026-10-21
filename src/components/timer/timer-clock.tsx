@@ -123,6 +123,19 @@ const SCREEN_TEXT_CLASS: Record<TimerBand, string> = {
 	red: "text-white",
 	over: "text-white",
 };
+/** `screen` variant's primary button (Start / Pause / Resume): drawn in the
+ *  band's ink so it stays the one solid thing on any of the four colours,
+ *  where the theme's teal would clash with green and vanish on yellow. */
+const SCREEN_SOLID_CLASS: Record<TimerBand, string> = {
+	under: "",
+	green: "bg-white text-[#1f7a46] hover:bg-white/90",
+	yellow: "bg-[#1a1405] text-[#f2c230] hover:bg-[#1a1405]/90",
+	red: "bg-white text-[#c0262d] hover:bg-white/90",
+	over: "bg-white text-[#7a1218] hover:bg-white/90",
+};
+/** `screen` variant's secondary buttons: an outline in the band's own ink. */
+const SCREEN_QUIET_CLASS =
+	"border-current/40 bg-transparent text-inherit shadow-none hover:bg-black/10 hover:text-inherit dark:border-current/40 dark:bg-transparent dark:hover:bg-black/10";
 
 /**
  * Hold the screen awake while any clock is running (#729).
@@ -180,6 +193,22 @@ export function useWakeLock(active: boolean): void {
 
 type WakeLockLike = { release: () => Promise<void> };
 
+/** A card's colour beside its mark on the `screen` variant. Off the dark idle
+ *  ground it gets a ring in the band's ink, so a green dot still reads on the
+ *  green screen. */
+function MarkDot({ band, className }: { band: TimerBand; className: string }) {
+	return (
+		<span
+			aria-hidden
+			className={cn(
+				"inline-block size-2.5 rounded-full",
+				band !== "under" && "ring-2 ring-current/70",
+				className,
+			)}
+		/>
+	);
+}
+
 /** What happened to a segment's record attempt. Kept per segment rather than
  *  as one page-level flag: the Timer stops eight clocks over an evening, and a
  *  single banner would say nothing about WHICH one failed. */
@@ -227,6 +256,14 @@ export function SegmentClock({
 
 	const screen = variant === "screen";
 	const text = screen ? SCREEN_TEXT_CLASS[band] : BAND_CLASS[band];
+	// `screen` buttons: one solid primary in the band's ink, the rest quiet
+	// outlines, all on one centred row a thumb can reach.
+	const solid = screen
+		? cn("min-h-14 flex-1 text-base", SCREEN_SOLID_CLASS[band])
+		: "min-h-11 flex-1";
+	const quiet = screen
+		? cn("min-h-14 flex-1 text-base", SCREEN_QUIET_CLASS)
+		: "min-h-11 flex-1";
 
 	return (
 		<div
@@ -234,17 +271,22 @@ export function SegmentClock({
 			className={
 				screen
 					? cn(
-							"flex flex-col justify-center gap-4 p-4 transition-colors",
-							state.phase !== "idle" && "min-h-svh",
+							// `@container` so the digits size to this box, not the window:
+							// idle it is a card inside the page's column, running it is the
+							// whole screen.
+							"@container flex flex-col items-center justify-center gap-3 px-4 py-5 text-center transition-colors sm:gap-6 sm:py-8",
+							state.phase === "idle"
+								? "rounded-2xl border border-[var(--line)]"
+								: "min-h-svh",
 							SCREEN_BG_CLASS[band],
 						)
 					: "space-y-3 rounded-lg border border-[var(--line)] p-3"
 			}
 		>
-			<div>
-				<h2
-					className={`font-semibold text-base ${screen ? text : "text-foreground"}`}
-				>
+			{/* The public page has no role and no holder: its h1 already says what
+			    this is, so the label is for screen readers only. */}
+			<div className={screen ? "sr-only" : undefined}>
+				<h2 className="font-semibold text-base text-foreground">
 					{segment.roleLabel}
 				</h2>
 				{segment.holder ? (
@@ -256,19 +298,48 @@ export function SegmentClock({
 			    Timer's role sheet print — `formatTimingClock` is the one formatter
 			    all three go through, so the phone cannot read 6:30 beside a sheet
 			    reading 6:29. */}
-			<p className={`text-xs ${screen ? text : "text-muted-foreground"}`}>
-				<span className={screen ? undefined : "text-success"}>
+			<p
+				className={
+					screen
+						? `flex flex-wrap items-center justify-center gap-x-4 gap-y-1 font-medium text-sm tabular-nums ${text}`
+						: "text-xs text-muted-foreground"
+				}
+			>
+				<span
+					className={
+						screen ? "inline-flex items-center gap-1.5" : "text-success"
+					}
+				>
+					{screen ? <MarkDot band={band} className="bg-[#1f7a46]" /> : null}
 					Green {formatTimingClock(segment.marks.green)}
 				</span>
-				{" · "}
-				<span className={screen ? undefined : "text-warning-foreground"}>
+				{screen ? null : " · "}
+				<span
+					className={
+						screen
+							? "inline-flex items-center gap-1.5"
+							: "text-warning-foreground"
+					}
+				>
+					{screen ? <MarkDot band={band} className="bg-[#f2c230]" /> : null}
 					Yellow {formatTimingClock(segment.marks.yellow)}
 				</span>
-				{" · "}
-				<span className={screen ? undefined : "text-destructive"}>
+				{screen ? null : " · "}
+				<span
+					className={
+						screen ? "inline-flex items-center gap-1.5" : "text-destructive"
+					}
+				>
+					{screen ? <MarkDot band={band} className="bg-[#c0262d]" /> : null}
 					Red {formatTimingClock(segment.marks.red)}
 				</span>
-				{window ? <> · Qualifies {window.range}</> : null}
+				{window ? (
+					screen ? (
+						<span className="opacity-80">Qualifies {window.range}</span>
+					) : (
+						<> · Qualifies {window.range}</>
+					)
+				) : null}
 			</p>
 
 			<div
@@ -284,7 +355,13 @@ export function SegmentClock({
 					<output
 						aria-live="off"
 						className={`font-display font-semibold tabular-nums ${
-							screen ? "text-[min(26vw,38svh)] leading-none" : "text-4xl"
+							!screen
+								? "text-4xl"
+								: // Idle it shares the page with the settings and must leave
+									// Start above the fold (#1270); running it owns the screen.
+									state.phase === "idle"
+									? "text-[min(24cqw,20svh)] leading-none"
+									: "text-[min(30cqw,38svh)] leading-none"
 						} ${text}`}
 					>
 						{formatStopwatch(elapsed)}
@@ -293,7 +370,7 @@ export function SegmentClock({
 				{/* The colour is the signal, and colour alone is not a signal — this
 				    is what a screen reader and a colour-blind Timer read instead. */}
 				<span
-					className={`font-medium ${screen ? "text-2xl" : "text-sm"} ${text}`}
+					className={`font-medium ${screen ? "text-xl sm:text-2xl" : "text-sm"} ${text}`}
 				>
 					{TIMER_BAND_LABEL[band]}
 				</span>
@@ -301,10 +378,16 @@ export function SegmentClock({
 
 			{/* `min-h-11` for the 44px tap floor, same as the personal page: this is
 			    a thumb on a phone in a dim room, mid-speech. */}
-			<div className="flex flex-wrap gap-2">
+			<div
+				className={
+					screen
+						? `flex w-full max-w-md flex-wrap justify-center gap-2 ${text}`
+						: "flex flex-wrap gap-2"
+				}
+			>
 				{state.phase === "idle" ? (
 					<Button
-						className="min-h-11 flex-1"
+						className={solid}
 						disabled={startDisabled}
 						onClick={() => onAction({ type: "start", now: Date.now() })}
 					>
@@ -313,8 +396,8 @@ export function SegmentClock({
 				) : null}
 				{running ? (
 					<Button
-						className="min-h-11 flex-1"
-						variant="outline"
+						className={screen ? solid : quiet}
+						variant={screen ? "default" : "outline"}
 						onClick={() => onAction({ type: "pause", now: Date.now() })}
 					>
 						Pause
@@ -322,7 +405,7 @@ export function SegmentClock({
 				) : null}
 				{state.phase === "paused" ? (
 					<Button
-						className="min-h-11 flex-1"
+						className={solid}
 						disabled={startDisabled}
 						onClick={() => onAction({ type: "resume", now: Date.now() })}
 					>
@@ -331,7 +414,7 @@ export function SegmentClock({
 				) : null}
 				{state.phase === "running" || state.phase === "paused" ? (
 					<Button
-						className="min-h-11 flex-1"
+						className={quiet}
 						variant="outline"
 						onClick={() => onAction({ type: "stop", now: Date.now() })}
 					>
@@ -340,7 +423,15 @@ export function SegmentClock({
 				) : null}
 				{state.phase !== "idle" ? (
 					<Button
-						className="min-h-11"
+						className={
+							screen
+								? cn(
+										"min-h-14 text-base",
+										SCREEN_QUIET_CLASS,
+										"border-transparent",
+									)
+								: "min-h-11"
+						}
 						variant="ghost"
 						onClick={() => onAction({ type: "reset" })}
 					>
