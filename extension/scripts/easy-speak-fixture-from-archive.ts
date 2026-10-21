@@ -439,10 +439,12 @@ export interface RewriteState {
 	key: Buffer;
 	/** The real "today" (a day number): dates before it stay before it, dates after it stay after it. */
 	today: number;
-	/** Every real date this run has met (a day number) and the synthetic day it became, sorted by the real one; see `fakeDay`. */
-	dates: { real: number; fake: number; pivot?: boolean }[];
-	/** Every real date the pages of this run carry (a day number), so a synthetic date is never one of them. */
-	realDays: Set<number>;
+	/** The real meeting days this run has met that are before today, latest first; slot 0, -1, -2 ... (see `fakeDay`). */
+	pastDays: number[];
+	/** The real meeting days on or after today, earliest first; slot 1, 2, 3 ... */
+	futureDays: number[];
+	/** True while a text node inside a meeting link or a meeting title is rewritten: the only place a date is a meeting date. */
+	inMeeting: boolean;
 	nextName: number;
 	nextPerson: number;
 	nextPhone: number;
@@ -473,8 +475,9 @@ export function newRewriteState(opts: RewriteStateOptions = {}): RewriteState {
 		strictMisses: new Set(),
 		key,
 		today,
-		dates: [{ real: today, fake: today, pivot: true }],
-		realDays: new Set(),
+		pastDays: [],
+		futureDays: [],
+		inMeeting: false,
 		nextName: 0,
 		nextPerson: 900_001,
 		nextPhone: 1,
@@ -671,48 +674,35 @@ function fakeNumber(st: RewriteState, id: string, ctx?: string): string {
 /** Every digit run in `s` replaced, the words and separators between them kept. */
 const mapRunsIn = (st: RewriteState, s: string) => s.replace(/\d+/g, (r) => fakeRun(st, r));
 
-/** How many weeks the first date on either side of today may be moved at most (5 years). */
-const DATE_SPREAD_WEEKS = 260;
-/** How many weeks each further date beyond the known ones is moved on top of that, at most: a page of 150 dates then stays within a few decades. */
-const DATE_STEP_WEEKS = 52;
+/** The one date every date that is not a meeting date becomes (a join date, a paid-until date, a last-online date, a request date): 2000-01-01. */
+const PLACEHOLDER_DAY = Math.floor(Date.UTC(2000, 0, 1) / 86_400_000);
 
 /**
- * A real day (days since 1970) to a synthetic one. NOT one shared offset: each distinct real date gets its own,
- * so one known real-to-fake pair does not give another date. What is kept is only the order of the dates, their
- * weekday (a whole number of weeks apart from where they sit) and their side of "today". The invariant that
- * keeps room for any later date: between two known dates the fake gap is never smaller than the real gap, and
- * both differ by a whole number of weeks. A new date goes between its neighbours at its real distance plus a
- * random number of spare weeks; one beyond all of them, at most `DATE_SPREAD_WEEKS` further out.
+ * A meeting day (days since 1970) to a synthetic one. The synthetic calendar keeps ONLY what the walker reads: a meeting is
+ * completed or upcoming relative to today, meetings are a week apart and they keep their order. It is built from the RANK
+ * of a meeting among the meeting dates of the pages, never from the real gaps: slot 1, 2, 3 ... after today and slot 0, -1,
+ * -2 ... before it, each a whole week from the next, on a weekday a key chooses. One known real-to-fake pair, or the whole
+ * (public) weekly schedule, says nothing about any other date, and a date that is not a meeting date is `PLACEHOLDER_DAY`.
  */
 function fakeDay(st: RewriteState, day: number): number {
-	const same = st.dates.find((e) => e.real === day && !e.pivot);
-	if (same) return same.fake;
-	let at = 0;
-	while (at < st.dates.length && st.dates[at].real < day) at++;
-	let loIdx = at - 1;
-	let hi = st.dates[at];
-	if (hi && hi.real === day) {
-		// the pivot itself ("today"): it is only a bound
-		loIdx = at;
-		hi = st.dates[at + 1];
+	if (!st.inMeeting) return PLACEHOLDER_DAY;
+	const past = day < st.today;
+	const i = (past ? st.pastDays : st.futureDays).indexOf(day);
+	if (i < 0) return PLACEHOLDER_DAY;
+	const slot = past ? -i : i + 1;
+	const off = 1 + Math.floor(rng(st, "weekday")() * 6);
+	return st.today - off + 7 * slot;
+}
+
+/** Add the meeting days of a new page. A new day must lie beyond every known one (the calendar is built outward): otherwise earlier pages of the run were already written with another rank. */
+function addMeetingDays(st: RewriteState, days: Set<number>) {
+	for (const [list, past] of [[st.pastDays, true], [st.futureDays, false]] as const) {
+		const fresh = [...days].filter((d) => (d < st.today) === past && !list.includes(d));
+		if (fresh.length === 0) continue;
+		const merged = [...list, ...fresh].sort((a, b) => (past ? b - a : a - b));
+		if (list.some((d, k) => merged[k] !== d)) throw new Error("a meeting date of this page falls between meeting dates of an earlier page of the run: run the pages that share meeting dates one at a time, each with its own state");
+		list.push(...merged.slice(list.length));
 	}
-	const lo = st.dates[loIdx];
-	const r = rng(st, `date:${day}`);
-	const spare = lo && hi ? Math.floor((hi.fake - lo.fake - (hi.real - lo.real)) / 7) : (lo ?? hi)?.pivot ? DATE_SPREAD_WEEKS : DATE_STEP_WEEKS;
-	const at0 = lo ? lo.fake + (day - lo.real) : (hi as { real: number; fake: number }).fake - ((hi as { real: number }).real - day);
-	const sign = lo ? 1 : -1;
-	// a start among the spare weeks, then the next ones, until the day is neither the real one nor another real date of the pages
-	const start = Math.floor(r() * (spare + 1));
-	let f = at0 + sign * 7 * start;
-	for (let k = 0; k <= spare; k++) {
-		const c = at0 + sign * 7 * ((start + k) % (spare + 1));
-		if (c !== day && !st.realDays.has(c)) {
-			f = c;
-			break;
-		}
-	}
-	st.dates.splice(loIdx + 1, 0, { real: day, fake: f });
-	return f;
 }
 
 /** A synthetic date for a real one; null when the numbers are not a real date. */
@@ -1339,7 +1329,9 @@ function textItems(st: RewriteState, groups: Map<Element | null, Node[]>): TextI
 				item.kind = "fixed";
 				item.fixed = fakeNumber(st, t);
 			} else {
+				st.inMeeting = inMeetingContext(n);
 				item.res = scrubDetailed(st, t);
+				st.inMeeting = false;
 			}
 			prevText = t;
 			seq.push(item);
@@ -1366,7 +1358,9 @@ function forceEdge(st: RewriteState, it: TextItem, side: "first" | "last"): bool
 	if (it.kind !== "scrub" || (side === "first" ? it.forceFirst : it.forceLast)) return false;
 	if (side === "first") it.forceFirst = true;
 	else it.forceLast = true;
+	st.inMeeting = inMeetingContext(it.node);
 	it.res = scrubDetailed(st, it.text, { first: it.forceFirst, last: it.forceLast });
+	st.inMeeting = false;
 	return true;
 }
 
@@ -1417,7 +1411,16 @@ function rewriteAttributes(st: RewriteState, doc: Document) {
 /** Digits the markup itself always carries and the generator keeps as they are (an encoding name, a W3C url): not data, so not worth avoiding. */
 const MARKUP_DIGITS = [/utf-8/gi, /iso-8859-1/gi, /<!doctype[^>]*>/gi, /https?:\/\/www\.w3\.org\/[^\s"']*/gi, /-\/\/w3c\/\/dtd[^"']*/gi, /initial-scale=1/gi];
 
-/** The real dates a text carries, as [year, month, day], per date shape that holds a whole date (see `DATE_SHAPES`). */
+/** A meeting date is the text of a link to a meeting page or of a meeting page's title cell; any other date is a member's. */
+function inMeetingContext(n: Node): boolean {
+	const parent = n.parentElement as Element | null;
+	const link = parent?.closest("a") ?? null;
+	if (link && /view_meeting\.php/i.test(link.getAttribute("href") ?? "")) return true;
+	const cell = parent?.closest("td") ?? null;
+	return !!cell && /(?:^|\s)maintitle(?:\s|$)/.test(cell.getAttribute("class") ?? "");
+}
+
+/** The real days a text carries, as [year, month, day], per date shape that holds a whole day (see `DATE_SHAPES`). A month and a year, or a range of years, is never a meeting day. */
 function datesIn(t: string): [number, number, number][] {
 	const out: [number, number, number][] = [];
 	const add = (y: number, mo: number, d: number) => out.push([y, mo, d]);
@@ -1425,9 +1428,7 @@ function datesIn(t: string): [number, number, number][] {
 		[0, (m: RegExpMatchArray) => add(Number(m[7]), MONTHS.indexOf(m[5]) + 1, Number(m[3]))],
 		[2, (m: RegExpMatchArray) => add(2000 + Number(m[5]), MONTH_ABBR.indexOf(m[1]) + 1, Number(m[3]))],
 		[3, (m: RegExpMatchArray) => add(Number(m[6]), MONTHS.indexOf(m[1]) + 1, Number(m[3]))],
-		[4, (m: RegExpMatchArray) => add(Number(m[3]), MONTHS.indexOf(m[1]) + 1, 15)],
 		[5, (m: RegExpMatchArray) => add(Number(m[1]), Number(m[2]), Number(m[3]))],
-		[6, (m: RegExpMatchArray) => (add(Number(m[1]), 6, 15), add(Number(m[2]), 6, 15))],
 	] as [number, (m: RegExpMatchArray) => void][]) {
 		for (const m of t.matchAll(new RegExp(DATE_SHAPES[i].src, "giu"))) pick(m);
 	}
@@ -1441,10 +1442,6 @@ function reserveRuns(st: RewriteState, doc: Document, html: string) {
 		for (const re of MARKUP_DIGITS) u = u.replace(re, " ");
 		for (const r of u.match(/\d+/g) ?? []) st.reserved.add(normRun(r));
 		for (const w of nameWords(u)) st.pageWords.add(w);
-		for (const [y, mo, d] of datesIn(u)) {
-			const t = Date.UTC(y, mo - 1, d);
-			if (new Date(t).getUTCMonth() === mo - 1 && new Date(t).getUTCDate() === d) st.realDays.add(Math.floor(t / 86_400_000));
-		}
 	};
 	add(html);
 	// text and attributes too, in their decoded form
@@ -1454,12 +1451,19 @@ function reserveRuns(st: RewriteState, doc: Document, html: string) {
 		for (const c of Array.from(n.childNodes ?? [])) walk(c);
 	};
 	walk(doc as unknown as Node);
-	// Every real date of the page gets its synthetic day NOW, in the order that always leaves room: the dates before today
-	// from the latest backwards, the dates after it from the earliest forwards, each at the open end of what is known.
-	const known = new Set(st.dates.map((e) => e.real));
-	const fresh = [...st.realDays].filter((d) => !known.has(d));
-	for (const d of fresh.filter((x) => x < st.today).sort((a, b) => b - a)) fakeDay(st, d);
-	for (const d of fresh.filter((x) => x >= st.today).sort((a, b) => a - b)) fakeDay(st, d);
+	// the meeting dates (and only those) of the page get their place in the synthetic calendar NOW
+	const days = new Set<number>();
+	const meetingText = (n: Node) => {
+		if (n.nodeType === 3 && inMeetingContext(n)) {
+			for (const [y, mo, d] of datesIn((n.nodeValue ?? "").normalize("NFKC"))) {
+				const t = Date.UTC(y, mo - 1, d);
+				if (new Date(t).getUTCMonth() === mo - 1 && new Date(t).getUTCDate() === d) days.add(Math.floor(t / 86_400_000));
+			}
+		}
+		for (const c of Array.from(n.childNodes ?? [])) meetingText(c);
+	};
+	meetingText(doc as unknown as Node);
+	addMeetingDays(st, days);
 }
 
 /** A hand-written fixture, not a page: the evaluations JSON. */
