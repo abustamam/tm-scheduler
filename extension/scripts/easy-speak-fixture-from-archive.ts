@@ -8,29 +8,33 @@
  * allow-list. Tag names, attribute names and event-handler names are checked too: an unknown one is
  * renamed.
  *
- * **Digits (decision B, #1275; round 3).** Every digit run, in text, an attribute value, a URL or a
- * handler, is rewritten, and none maps to itself or to a run the page carries. NFKC runs first (a
- * fullwidth or superscript digit is the digit it stands for), and any other non-ASCII digit is dropped.
- * Three kinds of run, three rules:
- * - 1-3 digit runs are FRESH for every occurrence (no page-wide table, so a table of small numbers
- *   cannot be matched to the real one);
- * - ids in their own context (`t=`, `s=`, a club id) get one fake per id from a per-context seeded
- *   derangement, so the same id lines up inside a context and never across contexts;
- * - 4+ digit runs take a deterministic one-to-one walk (an explicit error when the space is full),
- *   and a leading-zero run is keyed by its exact text and keeps its full width.
- * Dates are SYNTHETIC: `newRewriteState({ now })` fixes today, and each real date gets its own invented
- * one that keeps the order of the dates, the weekday and the side of today, and steps around every
- * real day on the pages (the offset within a cluster is only approximately hidden; see the README).
- * A date-shaped text that is not a date is scrubbed whole. A time becomes another valid time of its own
- * format (12 and 24 hour are separate spaces). Person ids become 900001-900999 and phones
- * `(555) 010-xxxx`. Only a literal allow-listed string keeps its digits (`ALLOW_LIST.phrases`,
- * `pageNumbers`) plus three contexts: a radio's value 1, 2, 5, 6 on an `available[<digits>]` field
- * only, a pager's digits only inside `.nav` (never past the page count), and a month NAME only in the
- * options of a select named month, start_month or end_month. There is no layout-number list any
- * more: `colspan`, `width` and the rest are mapped like any digit. Text is scanned by code point
- * after NFKC, and anything that is not a space or punctuation counts as content (a circled letter, a
- * tag character). A fake name never shares a word with a page (`pageWords`), and the second net's
- * `SHARED_WORDS` exempts only words of the allowed phrases, never of the fake names.
+ * **Randomness (round 4, option A: simpler fakes).** Every random choice is HMAC-SHA256 under a 256-bit key made for
+ * each run and never stored or printed (`newRewriteState({ seed })` passes one for a test). No real value ever reaches an
+ * unkeyed hash. Where synthesising a realistic value is what leaks, the fake is a constant instead.
+ *
+ * **Digits.** Every digit run, in text, an attribute value, a URL or a handler, is rewritten. NFKC runs first (a
+ * fullwidth or superscript digit is the digit it stands for), and any other non-ASCII digit is dropped. Three kinds of run:
+ * - 1-3 digit runs outside an id context become ONE constant per width (`0`, `00`, `000`): nothing is sampled, so a repeated
+ *   value, or the values left out, reveal nothing;
+ * - ids in their own context (`t=`, `s=`, a club id) get one fake per id from a keyed per-context derangement, so the same
+ *   id lines up inside a context and never across contexts;
+ * - 4+ digit runs take a keyed deterministic one-to-one walk (an explicit error when the space is full), and a
+ *   leading-zero run is keyed by its exact text and keeps its full width.
+ * **Dates.** Only a date in a link to a meeting page, or in a meeting page's title cell, is a meeting date. Those get a
+ * synthetic calendar built from their RANK among the pages' meeting dates (never from the real gaps): slots a week apart on a
+ * keyed weekday, completed before `now`, upcoming after it, so the walker still reads upcoming versus completed, weekly
+ * spacing and order. Pages sharing one state are primed together (`primeRewriteState`). Every other date (joined,
+ * paid-until, last online) is the single placeholder 2000-01-01 in its own shape. A date-shaped text that is not a date is
+ * scrubbed whole. A time becomes another valid time of its own format. Person ids become 900001-900999 (next free one);
+ * phones `(555) 010-xxxx` with a keyed suffix that is never the input's; the username is `fixtureuser` (`fixtureuser-alt`
+ * when the input is that word); names are any invented first name with any invented last name, from a keyed stream.
+ * A phone the markup cuts across text nodes is joined AFTER its digits are fake, so no marker character is used in any
+ * string. Only a literal allow-listed string keeps its digits (`ALLOW_LIST.phrases`, `pageNumbers`) plus three contexts:
+ * a radio's value 1, 2, 5, 6 on an `available[<digits>]` field only, a pager's digits only inside `.nav` (never past the
+ * page count; `Page` and `of` are kept only there), and a month NAME only in the options of a select named month,
+ * start_month or end_month. Text is scanned by code point after NFKC, and anything that is not a space or punctuation
+ * counts as content. A fake name never shares a word with a page (`pageWords`, gathered from every decoded form: JS
+ * escapes, entities, percent-encoding, NFKC), and the second net's `SHARED_WORDS` exempts only words of the allowed phrases.
  *
  * Nothing here looks for a name, a phone or an email to remove (an earlier regex rewriter did, and
  * real data kept getting past it); what is not known to be safe is replaced, so a shape nobody

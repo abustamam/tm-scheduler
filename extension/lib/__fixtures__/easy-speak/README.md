@@ -59,15 +59,26 @@ attribute name that is not on the allow-list becomes `data-xN`, and comments, th
 (a name that looks like one of `fake-names.json` is replaced like any other). **No digit survives**
 (decision B of the risk review; round 3 of #1275 reworked how). NFKC runs first, so a fullwidth or
 superscript digit is the digit it stands for, and a digit of any other script is dropped. A 1-3 digit
-run gets a fresh fake at every occurrence (no table to match against the real page). An id in its own
-context (`t=`, `s=`, a club id) gets one fake per id from a per-context derangement: lined up inside
-the context, unrelated across contexts. A run of 4+ digits takes a deterministic one-to-one walk (an
-explicit error if the space is full); a zero-prefixed run keeps its full width and is keyed by its
-exact text. No run maps to itself or to one the page carries. **Dates are synthetic**: each real date
-gets its own invented date that keeps the order of the dates, the weekday and the side of today
-(`newRewriteState({ now })` fixes today for a test) and avoids every real day on the pages; a
-date-shaped text that is not a date is scrubbed whole; a time becomes another valid time in its own
-12 or 24 hour format. What still keeps a digit is literal: tag names `h1`-`h6`, the classes `row1`-`row3`,
+run outside an id context becomes ONE constant per width (`0`, `00`, `000`): no sampling and no "never
+itself", so a repeated value or the values left out say nothing about the page. An id in its own
+context (`t=`, `s=`, a club id) gets one fake per id from a keyed per-context derangement: lined up
+inside the context, unrelated across contexts. A run of 4+ digits takes a keyed deterministic
+one-to-one walk (an explicit error if the space is full); a zero-prefixed run keeps its full width and
+is keyed by its exact text. **Dates (round 4, option A):** only a date in a link to a meeting page or in a
+meeting page's title cell is a MEETING date. Meeting dates get a synthetic calendar built from their
+RANK among the meeting dates of the pages, never from the real gaps: slots a week apart, the ones
+before today completed and the ones after it upcoming, on a weekday a key chooses. Every other date
+(joined, paid until, last online, requested) is the one placeholder 2000-01-01 in whatever shape it
+was written, so one known real-to-fake pair, or the club's public weekly schedule, recovers nothing
+about a member date. Pages rewritten with ONE state share one calendar, so give the state all of them
+first (`primeRewriteState`); a meeting date that falls between those of an earlier page is refused.
+(`newRewriteState({ now })` fixes today for a test.) A date-shaped text that is not a date is scrubbed
+whole; a time becomes another valid time in its own 12 or 24 hour format. A phone becomes
+`(555) 010-xxxx` with a keyed suffix that is never the input's last four digits; the username is
+`fixtureuser`, or `fixtureuser-alt` when the input is that very word. Fake names are any invented first
+name with any invented last name, drawn from a keyed stream (no fixed allocation order to read the page's
+words from). A phone the markup cuts across text nodes is joined after the digits are already fake, and
+no in-string marker character exists anywhere. What still keeps a digit is literal: tag names `h1`-`h6`, the classes `row1`-`row3`,
 a few id words (`date1`...), the rank phrases (`1st Speaker`, `PM1`, `EH1`, `PI1`), the doctype,
 charset and viewport strings, and three contexts: a radio's value 1, 2, 5, 6 only on an
 `available[<digits>]` field (the walker reads the attendance plan from it), a pager's page numbers
@@ -75,10 +86,11 @@ charset and viewport strings, and three contexts: a radio's value 1, 2, 5, 6 onl
 select named `month`, `start_month` or `end_month`. The old layout-number list is gone: `colspan`,
 `width` and the like are mapped like any digit. Text is scanned by code point after NFKC, and any
 non-space, non-punctuation code point counts as content. A fake name never shares a word with the
-page, and the second net's `SHARED_WORDS` exempts only words of the allowed phrases. The seed is
-**random by default**, so two runs differ; `newRewriteState({ seed, now })` fixes it for a test.
-**Known limit:** within a cluster of dates the synthetic dates sit at an approximately
-fixed offset from the real ones, so the cluster's span is visible. Event-handler attribute names are
+page, and the second net's `SHARED_WORDS` exempts only words of the allowed phrases. Every random choice is HMAC-SHA256 under a
+256-bit key that is **random for each run and never stored or printed**; `newRewriteState({ seed, now })`
+passes an explicit key for a test. A name word spelled with a JS escape, an entity or a percent escape
+is a page word too (the words are gathered from every decoded form the rewrite reads). `Page` and `of`
+are kept only in the pager. Event-handler attribute names are
 a literal list (`handlerNames`), not a pattern. The document structure is kept. The same real value becomes the same fake within one run, so a person's id in a link and in a
 table still line up. Then `fixtureViolations` runs over the output as a second net: if it reports
 anything, **nothing is written**, the violations are printed and the exit code is non-zero.
@@ -98,7 +110,5 @@ cannot know (a club number shorter than four digits written outside the "Club Nu
 title that happens to be a public Pathways name) are for the reader. Free text (a theme, a title, an
 introduction) comes out as `redacted-<letters>` or a fake name: the walker's structure is kept, not its
 wording. The evaluations JSON (`evaluation-*.json`, `my-evaluations.json`) is **hand-written**: the
-generator refuses JSON input (exit 2) rather than guess at it. One caveat of the digit map: the
-one-digit fake space has ten values, so on a page that uses all of them a one-digit run can come out as
-ANOTHER real one-digit run (never as itself); that is a coincidence of the map, not a kept value. Add to the allow-list only what every club's page says, never a name, and never to make a page
+generator refuses JSON input (exit 2) rather than guess at it. A short number can come out as the same constant it was (`0` stays `0`): a placeholder, not a kept value. Add to the allow-list only what every club's page says, never a name, and never to make a page
 pass. Then add a row to the table above and write the test with `replay`.
