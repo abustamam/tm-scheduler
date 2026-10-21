@@ -83,29 +83,49 @@ const YEAR = String.raw`(?:19|20)\d{2}`;
 /** The zone abbreviations the site prints before `(GMT+n hrs)`. A literal list: any other three letters are a word, not a zone. */
 const ZONE_ABBR = ["PST", "PDT", "MST", "MDT", "CST", "CDT", "EST", "EDT", "AKST", "AKDT", "HST", "UTC", "GMT", "BST", "CET", "CEST", "IST", "JST", "AEST", "AEDT", "NZST", "NZDT"];
 
+/** Where a text sits: inside a link to a meeting page (`link`), or inside a meeting page's title cell (`title`). */
+type MeetingContext = "link" | "title" | null;
+
 interface DateShape {
 	/** A regex source; its capture groups are what `render` reads. Month and weekday NAMES are only ever kept inside one of these. */
 	src: string;
 	/** The shape with its digits replaced: a date becomes a synthetic one, a time another time, any other number goes through `fakeRun`. `null`: it is date-shaped but not a date (`May 99, 2026`), so the WHOLE match is scrubbed. */
 	render: (st: RewriteState, m: RegExpExecArray) => string | null;
+	/** The real days (year, month, day) a match can stand for. Absent: the shape holds no whole day (a time, a month and a year, a range of years). More than one: an ambiguous numeric date (`12/03/2027`). */
+	days?: (m: RegExpExecArray) => [number, number, number][];
+	/** Is this match the MEETING's own date, given where the text sits? Only then does it get a synthetic date; absent: never. */
+	meeting?: (m: RegExpExecArray, ctx: MeetingContext) => boolean;
 }
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
 const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : (["th", "st", "nd", "rd"][n % 10] ?? "th")}`;
+/** 1-12 for a full or three-letter month name, 0 for anything else. */
+const monthNum = (name: string) => MONTHS.indexOf(name) + 1 || MONTH_ABBR.indexOf(name) + 1;
+/** The month's name in the same form (full or abbreviated) as the real one. */
+const monthLike = (real: string, m: number) => (MONTHS.includes(real) ? MONTHS[m - 1] : MONTH_ABBR[m - 1]);
+const MONTH_ANY = `${MONTH}|${MONTH_SHORT}`;
+/** The placeholder date, `2000-01-01`, in a numeric shape: the same in every shape so nothing of the real date shows. */
+const PLACEHOLDER_NUMERIC = (a: string, sep1: string, b: string, sep2: string, c: string) => `${a}${sep1}${b}${sep2}${c}`;
 
 /**
  * Date, time and zone shapes. Each keeps its WORDS (a month, a weekday, a zone) and replaces its numbers:
  * none of them can hold a name (a count is digits, a zone is one of the literal abbreviations or zones above).
+ * ONE list serves priming and rewriting (`datesIn` reads `days` and `meeting` from it), so the two never disagree about what a date is.
  */
 const DATE_SHAPES: readonly DateShape[] = [
 	{
-		src: `(?:(${WEEKDAY})(${SP}))?(\\d{1,2})(?:st|nd|rd|th)(${SP})(${MONTH})(${SP})(${YEAR})(?:(${SP}at${SP})(${TIME})(?:(${SP})(${TZ}))?)?`,
+		// `Tuesday 13th October 2026 at 7:00 pm`, `13 October 2026`, `13 Oct 2026`: the day may be an ordinal, the weekday and the time are optional
+		src: `(?:(${WEEKDAY})(${SP}))?(\\d{1,2})(st|nd|rd|th)?(${SP})(${MONTH_ANY})(${SP})(${YEAR})(?:(${SP}at${SP})(${TIME})(?:(${SP})(${TZ}))?)?`,
 		render: (st, m) => {
-			const [raw, wd, sp1, day, sp2, month, sp3, year, at, time, sp4, tz] = m;
-			const sh = shiftDate(st, Number(year), MONTHS.indexOf(month) + 1, Number(day));
+			const [, wd, sp1, day, ord, sp2, month, sp3, year, at, time, sp4, tz] = m;
+			const sh = shiftDate(st, Number(year), monthNum(month), Number(day));
 			if (!sh) return null;
-			return `${wd ? `${WEEKDAYS[(sh.dow + 6) % 7]}${sp1}` : ""}${ordinal(sh.d)}${sp2}${MONTHS[sh.m - 1]}${sp3}${sh.y}${at ? `${at}${fakeTime(st, time)}${tz ? `${sp4}${tz}` : ""}` : ""}`;
+			const d = ord ? ordinal(sh.d) : day.length === 2 ? pad2(sh.d) : String(sh.d);
+			return `${wd ? `${WEEKDAYS[(sh.dow + 6) % 7]}${sp1}` : ""}${d}${sp2}${monthLike(month, sh.m)}${sp3}${sh.y}${at ? `${at}${fakeTime(st, time)}${tz ? `${sp4}${tz}` : ""}` : ""}`;
 		},
+		days: (m) => [[Number(m[8]), monthNum(m[6]), Number(m[3])]],
+		// the walker reads a meeting's date from its title cell only as `<day> <month> <year> at <time>` with the month spelled out (`TITLE_RE`)
+		meeting: (m, ctx) => ctx === "link" || (ctx === "title" && m[9] !== undefined && MONTHS.includes(m[6])),
 	},
 	{
 		src: `Every(${SP})(${WEEKDAY})(${SP})at(${SP})(${TIME})`,
@@ -118,20 +138,24 @@ const DATE_SHAPES: readonly DateShape[] = [
 			if (!sh) return null;
 			return `${MONTH_ABBR[sh.m - 1]}${m[2]}${pad2(sh.d)}${m[4]}${pad2(sh.y % 100)},${m[6]}${fakeTime(st, m[7])}`;
 		},
+		days: (m) => [[2000 + Number(m[5]), MONTH_ABBR.indexOf(m[1]) + 1, Number(m[3])]],
+		meeting: (_m, ctx) => ctx === "link",
 	},
 	{
-		src: `(${MONTH})(${SP})(\\d{1,2})(,?)(${SP})(${YEAR})`,
+		src: `(${MONTH_ANY})(${SP})(\\d{1,2})(,?)(${SP})(${YEAR})`,
 		render: (st, m) => {
-			const sh = shiftDate(st, Number(m[6]), MONTHS.indexOf(m[1]) + 1, Number(m[3]));
+			const sh = shiftDate(st, Number(m[6]), monthNum(m[1]), Number(m[3]));
 			if (!sh) return null;
-			return `${MONTHS[sh.m - 1]}${m[2]}${m[3].length === 2 ? pad2(sh.d) : sh.d}${m[4]}${m[5]}${sh.y}`;
+			return `${monthLike(m[1], sh.m)}${m[2]}${m[3].length === 2 ? pad2(sh.d) : sh.d}${m[4]}${m[5]}${sh.y}`;
 		},
+		days: (m) => [[Number(m[6]), monthNum(m[1]), Number(m[3])]],
+		meeting: (_m, ctx) => ctx === "link",
 	},
 	{
-		src: `(${MONTH})(${SP})(${YEAR})`,
+		src: `(${MONTH_ANY})(${SP})(${YEAR})`,
 		render: (st, m) => {
-			const sh = shiftDate(st, Number(m[3]), MONTHS.indexOf(m[1]) + 1, 15);
-			return sh ? `${MONTHS[sh.m - 1]}${m[2]}${sh.y}` : null;
+			const sh = shiftDate(st, Number(m[3]), monthNum(m[1]), 15);
+			return sh ? `${monthLike(m[1], sh.m)}${m[2]}${sh.y}` : null;
 		},
 	},
 	{
@@ -140,6 +164,8 @@ const DATE_SHAPES: readonly DateShape[] = [
 			const sh = shiftDate(st, Number(m[1]), Number(m[2]), Number(m[3]));
 			return sh ? `${sh.y}-${pad2(sh.m)}-${pad2(sh.d)}` : null;
 		},
+		days: (m) => [[Number(m[1]), Number(m[2]), Number(m[3])]],
+		meeting: (_m, ctx) => ctx === "link",
 	},
 	{
 		src: `(${YEAR})-(${YEAR})`,
@@ -150,11 +176,41 @@ const DATE_SHAPES: readonly DateShape[] = [
 		},
 	},
 	{
+		// `10/13/2026`, `13.10.2026`, `13-10-2026`: day first or month first, both read; never a meeting date, always the placeholder in the same shape
+		src: `(\\d{1,2})([/.\\-])(\\d{1,2})([/.\\-])(${YEAR})`,
+		render: (_st, m) => (numericDays(m, "dmy").length > 0 ? PLACEHOLDER_NUMERIC("01", m[2], "01", m[4], "2000") : null),
+		days: (m) => numericDays(m, "dmy"),
+	},
+	{
+		// `2026/10/13`, `2026.10.13`
+		src: `(${YEAR})([/.])(\\d{1,2})([/.])(\\d{1,2})`,
+		render: (_st, m) => (numericDays(m, "ymd").length > 0 ? PLACEHOLDER_NUMERIC("2000", m[2], "01", m[4], "01") : null),
+		days: (m) => numericDays(m, "ymd"),
+	},
+	{
 		src: `(${ZONE_ABBR.join("|")})(${SP})\\(GMT([+\\-−])(\\d{1,2})(${SP})hrs\\)`,
 		render: (st, m) => `${m[1]}${m[2]}(GMT${m[3]}${fakeRun(st, m[4])}${m[5]}hrs)`,
 	},
 	{ src: `(${TIME})`, render: (st, m) => fakeTime(st, m[1]) },
 ];
+
+/** A real calendar day as [year, month, day], or null when the numbers are not a date. */
+function realDate(y: number, mo: number, d: number): [number, number, number] | null {
+	const dt = new Date(Date.UTC(y, mo - 1, d));
+	return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d && mo >= 1 && d >= 1 ? [y, mo, d] : null;
+}
+
+/** The valid readings of a numeric date: `12/03/2027` is both the 12th of March and the 3rd of December. */
+function numericDays(m: RegExpExecArray, order: "dmy" | "ymd"): [number, number, number][] {
+	const out: [number, number, number][] = [];
+	const add = (r: [number, number, number] | null) => r && out.push(r);
+	if (order === "ymd") add(realDate(Number(m[1]), Number(m[3]), Number(m[5])));
+	else {
+		add(realDate(Number(m[5]), Number(m[1]), Number(m[3])));
+		add(realDate(Number(m[5]), Number(m[3]), Number(m[1])));
+	}
+	return out;
+}
 /** Shapes with no number in them: kept as they are. */
 const KEEP_SHAPES: readonly string[] = [String.raw`Division${SP}[A-Z]`, TZ];
 const DATE_RES = DATE_SHAPES.map((d) => new RegExp(`^${d.src}$`, "u"));
@@ -443,8 +499,14 @@ export interface RewriteState {
 	pastDays: number[];
 	/** The real meeting days on or after today, earliest first; slot 1, 2, 3 ... */
 	futureDays: number[];
-	/** True while a text node inside a meeting link or a meeting title is rewritten: the only place a date is a meeting date. */
-	inMeeting: boolean;
+	/** Where the text node being rewritten sits: inside a meeting link or a meeting title cell, the only places a date can be a meeting date. */
+	inMeeting: MeetingContext;
+	/** True only while a date or time that IS the meeting's own is rendered (`DateShape.meeting`); every other date is the placeholder, every other time a constant. */
+	meetingOk: boolean;
+	/** Every real day any page of this run carries, in ANY shape and place: a synthetic meeting date is never one of them. */
+	realDays: Set<number>;
+	/** The weekday offset the synthetic calendar was built on (chosen on first use, see `calendarOffset`); null until then. */
+	calOff: number | null;
 	nextName: number;
 	nextPerson: number;
 	/** The keyed order 900001-900999 is handed out in (built on first use). */
@@ -479,7 +541,10 @@ export function newRewriteState(opts: RewriteStateOptions = {}): RewriteState {
 		today,
 		pastDays: [],
 		futureDays: [],
-		inMeeting: false,
+		inMeeting: null,
+		meetingOk: false,
+		realDays: new Set(),
+		calOff: null,
 		nextName: 0,
 		nextPerson: 0,
 		personPerm: [],
@@ -722,13 +787,45 @@ const PLACEHOLDER_DAY = Math.floor(Date.UTC(2000, 0, 1) / 86_400_000);
  * (public) weekly schedule, says nothing about any other date, and a date that is not a meeting date is `PLACEHOLDER_DAY`.
  */
 function fakeDay(st: RewriteState, day: number): number {
-	if (!st.inMeeting) return PLACEHOLDER_DAY;
+	if (!st.meetingOk) return PLACEHOLDER_DAY;
 	const past = day < st.today;
 	const i = (past ? st.pastDays : st.futureDays).indexOf(day);
 	if (i < 0) return PLACEHOLDER_DAY;
 	const slot = past ? -i : i + 1;
-	const off = 1 + Math.floor(rng(st, "weekday")() * 6);
-	return st.today - off + 7 * slot;
+	return slotDay(st, calendarOffset(st), slot);
+}
+
+const slotDay = (st: RewriteState, off: number, slot: number) => st.today - off + 7 * slot;
+
+/** True when no slot of the calendar built on weekday offset `off` is a real day any page carries. */
+function slotsFree(st: RewriteState, off: number): boolean {
+	for (let i = 0; i < st.pastDays.length; i++) if (st.realDays.has(slotDay(st, off, -i))) return false;
+	for (let i = 0; i < st.futureDays.length; i++) if (st.realDays.has(slotDay(st, off, i + 1))) return false;
+	return true;
+}
+
+/**
+ * The weekday the synthetic calendar sits on, as days before today (1-6, so slot 0 is before today and slot 1 after it): the first of a
+ * KEYED order whose slots are all free of the real days the pages carry. A synthetic meeting date therefore never equals a real date, so no
+ * real date can survive as a "synthetic" one; once chosen it is kept (every page of a run shares it).
+ */
+function calendarOffset(st: RewriteState): number {
+	if (st.calOff !== null) return st.calOff;
+	const r = rng(st, "weekday");
+	const order = [1, 2, 3, 4, 5, 6];
+	for (let i = order.length - 1; i > 0; i--) {
+		const j = Math.floor(r() * (i + 1));
+		[order[i], order[j]] = [order[j], order[i]];
+	}
+	const off = order.find((o) => slotsFree(st, o));
+	if (off === undefined) throw new Error("the pages carry a real date on every weekday of the synthetic meeting calendar: split the pages into runs with fewer dates");
+	st.calOff = off;
+	return off;
+}
+
+/** After the real days or meeting days grew: a calendar already in use must still be free of every real day. */
+function checkCalendar(st: RewriteState) {
+	if (st.calOff !== null && !slotsFree(st, st.calOff)) throw new Error("a date of this page equals a synthetic meeting date an earlier page of the run was given: give the pages to `primeRewriteState` together before rewriting any");
 }
 
 /** Add the meeting days of a new page. A new day must lie beyond every known one (the calendar is built outward): otherwise earlier pages of the run were already written with another rank. */
@@ -751,33 +848,28 @@ function shiftDate(st: RewriteState, y: number, m: number, d: number): { y: numb
 	return { y: n.getUTCFullYear(), m: n.getUTCMonth() + 1, d: n.getUTCDate(), dow: n.getUTCDay() };
 }
 
-/** The first candidate (from a keyed start) that is not `input`. Never avoids the page's runs: which values are skipped would say which numbers the page holds. */
-function pick(st: RewriteState, label: string, pool: string[], input: string): string {
-	const start = Math.floor(rng(st, label)() * pool.length);
-	for (let i = 0; i < pool.length; i++) {
-		const c = pool[(start + i) % pool.length];
-		if (normRun(c) !== normRun(input)) return c;
-	}
-	return pool[0];
-}
-
 const HOURS_12 = Array.from({ length: 12 }, (_, i) => String(i + 1));
-const HOURS_24 = Array.from({ length: 24 }, (_, i) => String(i));
+const HOURS_24 = Array.from({ length: 24 }, (_, i) => pad2(i));
 const MINUTES = Array.from({ length: 60 }, (_, i) => pad2(i));
 
-/** A time of day, `7:30 pm`, becomes another valid time of the same shape: hour and minute are both different. */
+/**
+ * A time of day. The MEETING's own time (inside a meeting date, `DateShape.meeting`) is drawn from the full range, keyed: any hour of 1-12
+ * (or 0-23) and any minute, with no "never itself" rule and no width kept, so the output says nothing about the input (a rule "never the
+ * input" pins a value down after two regenerations). Any other time (last online, a request time) is ONE constant per format: `12:00 am`, `00:00`.
+ */
 function fakeTime(st: RewriteState, raw: string): string {
 	const m = /^(\d{1,2}):(\d{2})([\s ]?[ap]m)?$/.exec(raw);
 	if (!m) return mapRunsIn(st, raw);
 	const [, h, mi, ap] = m;
 	// 12-hour and 24-hour times are different spaces: "11:30" and "11:30am" must not share a fake
 	const hours = ap ? HOURS_12 : HOURS_24;
-	if (!hours.includes(String(Number(h))) || Number(mi) > 59) return mapRunsIn(st, raw);
+	if (!hours.includes(ap ? String(Number(h)) : pad2(Number(h))) || Number(mi) > 59) return mapRunsIn(st, raw);
+	if (!st.meetingOk) return ap ? "12:00 am" : "00:00";
 	const key = `${ap ? "12" : "24"}:${h}:${mi}`;
 	let f = st.times.get(key);
 	if (!f) {
-		const pool = hours.filter((x) => x.length === h.length);
-		f = `${pick(st, `hour:${key}`, pool.length > 1 ? pool : hours, h)}:${pick(st, `minute:${mi}`, MINUTES, mi)}`;
+		const at = (label: string, n: number) => Math.floor(rng(st, label)() * n);
+		f = `${hours[at(`hour:${key}`, hours.length)]}:${MINUTES[at(`minute:${key}`, MINUTES.length)]}`;
 		st.times.set(key, f);
 	}
 	return `${f}${ap ?? ""}`;
@@ -845,8 +937,12 @@ function scanHits(st: RewriteState, text: string): Hit[] {
 		else {
 			const i = DATE_SHAPES.findIndex((_, k) => g[`date${k}`] !== undefined);
 			const parts = DATE_RES[i].exec(raw);
+			// only the meeting's own date (and the time inside it) is a meeting date; every other date is the placeholder
+			st.meetingOk = !!parts && !!DATE_SHAPES[i].meeting?.(parts, st.inMeeting);
 			// not a date after all (`May 99, 2026`): the whole match is scrubbed, its month word included
-			hits.push({ start, end, kind: "repl", out: (parts ? DATE_SHAPES[i].render(st, parts) : null) ?? undefined });
+			const out = (parts ? DATE_SHAPES[i].render(st, parts) : null) ?? undefined;
+			st.meetingOk = false;
+			hits.push({ start, end, kind: "repl", out });
 		}
 	}
 	return hits;
@@ -1370,9 +1466,9 @@ function textItems(st: RewriteState, groups: Map<Element | null, Node[]>): TextI
 				item.kind = "fixed";
 				item.fixed = fakeNumber(st, t, "club");
 			} else {
-				st.inMeeting = inMeetingContext(n);
+				st.inMeeting = meetingContextOf(n);
 				item.res = scrubDetailed(st, t);
-				st.inMeeting = false;
+				st.inMeeting = null;
 			}
 			prevText = t;
 			seq.push(item);
@@ -1399,9 +1495,9 @@ function forceEdge(st: RewriteState, it: TextItem, side: "first" | "last"): bool
 	if (it.kind !== "scrub" || (side === "first" ? it.forceFirst : it.forceLast)) return false;
 	if (side === "first") it.forceFirst = true;
 	else it.forceLast = true;
-	st.inMeeting = inMeetingContext(it.node);
+	st.inMeeting = meetingContextOf(it.node);
 	it.res = scrubDetailed(st, it.text, { first: it.forceFirst, last: it.forceLast });
-	st.inMeeting = false;
+	st.inMeeting = null;
 	return true;
 }
 
@@ -1452,32 +1548,37 @@ function rewriteAttributes(st: RewriteState, doc: Document) {
 /** Digits the markup itself always carries and the generator keeps as they are (an encoding name, a W3C url): not data, so not worth avoiding. */
 const MARKUP_DIGITS = [/utf-8/gi, /iso-8859-1/gi, /<!doctype[^>]*>/gi, /https?:\/\/www\.w3\.org\/[^\s"']*/gi, /-\/\/w3c\/\/dtd[^"']*/gi, /initial-scale=1/gi];
 
-/** A meeting date is the text of a link to a meeting page or of a meeting page's title cell; any other date is a member's. */
-function inMeetingContext(n: Node): boolean {
+/**
+ * Where a text sits: in a link to a meeting page (`link`), or in a meeting page's title cell (`title`); anywhere else a date is a member's.
+ * In a title cell only a date written the way the walker reads it counts (`DateShape.meeting`): `Joined Date: October 14, 2026` in that cell is not the meeting's.
+ */
+function meetingContextOf(n: Node): MeetingContext {
 	const parent = n.parentElement as Element | null;
 	const link = parent?.closest("a") ?? null;
-	if (link && /view_meeting\.php/i.test(link.getAttribute("href") ?? "")) return true;
+	if (link && /view_meeting\.php/i.test(link.getAttribute("href") ?? "")) return "link";
 	const cell = parent?.closest("td") ?? null;
-	return !!cell && /(?:^|\s)maintitle(?:\s|$)/.test(cell.getAttribute("class") ?? "");
+	return cell && /(?:^|\s)maintitle(?:\s|$)/.test(cell.getAttribute("class") ?? "") ? "title" : null;
 }
 
-/** The real days a text carries, as [year, month, day], per date shape that holds a whole day (see `DATE_SHAPES`). A month and a year, or a range of years, is never a meeting day. */
-function datesIn(t: string): [number, number, number][] {
-	const out: [number, number, number][] = [];
-	const add = (y: number, mo: number, d: number) => out.push([y, mo, d]);
-	for (const [i, pick] of [
-		[0, (m: RegExpMatchArray) => add(Number(m[7]), MONTHS.indexOf(m[5]) + 1, Number(m[3]))],
-		[2, (m: RegExpMatchArray) => add(2000 + Number(m[5]), MONTH_ABBR.indexOf(m[1]) + 1, Number(m[3]))],
-		[3, (m: RegExpMatchArray) => add(Number(m[6]), MONTHS.indexOf(m[1]) + 1, Number(m[3]))],
-		[5, (m: RegExpMatchArray) => add(Number(m[1]), Number(m[2]), Number(m[3]))],
-	] as [number, (m: RegExpMatchArray) => void][]) {
-		for (const m of t.matchAll(new RegExp(DATE_SHAPES[i].src, "giu"))) pick(m);
+/**
+ * The real days a text carries, each flagged with whether it is the meeting's own date in `ctx`. It reads the text with the SAME scan the
+ * rewrite does (`SCAN`, `DATE_SHAPES`), so priming and rewriting never disagree about what a date is.
+ */
+function datesIn(t: string, ctx: MeetingContext): { day: number; meeting: boolean }[] {
+	const out: { day: number; meeting: boolean }[] = [];
+	for (const m of t.matchAll(SCAN)) {
+		const i = DATE_SHAPES.findIndex((_, k) => m.groups?.[`date${k}`] !== undefined);
+		if (i < 0 || !DATE_SHAPES[i].days) continue;
+		const parts = DATE_RES[i].exec(m[0]);
+		if (!parts) continue;
+		const meeting = !!DATE_SHAPES[i].meeting?.(parts, ctx);
+		for (const [y, mo, d] of DATE_SHAPES[i].days?.(parts) ?? []) if (realDate(y, mo, d)) out.push({ day: Math.floor(Date.UTC(y, mo - 1, d) / 86_400_000), meeting });
 	}
 	return out;
 }
 
-/** Every digit run the page carries, so no fake is ever one of them. */
-function reserveRuns(st: RewriteState, doc: Document, html: string) {
+/** Every digit run, every word and every date the page carries, so no fake digit run or name is one of them and no synthetic meeting date equals a real one. */
+function reservePage(st: RewriteState, doc: Document, html: string) {
 	const addOne = (t: string) => {
 		let u = t;
 		for (const re of MARKUP_DIGITS) u = u.replace(re, " ");
@@ -1485,33 +1586,39 @@ function reserveRuns(st: RewriteState, doc: Document, html: string) {
 		for (const w of nameWords(u)) st.pageWords.add(w);
 	};
 	// every representation the rewrite later reads a value in: as written, NFKC, with JS escapes undone, percent-decoded (a word spelled
-	// `\u0041very` or `%41very` is the word "avery" to the rewrite, so it is reserved as one)
+	// `Avery` or `%41very` is the word "avery" to the rewrite, so it is reserved as one)
 	const add = (t: string) => {
 		const nf = t.normalize("NFKC");
 		const js = decodeJsEscapes(nf);
 		for (const v of new Set([t, nf, js, decodeLoose(nf), decodeLoose(js), decodeJsEscapes(decodeLoose(nf))])) addOne(v);
 	};
 	add(html);
-	// text and attributes too, in their decoded form
+	// text and attributes too, in their decoded form; the days of every date in any of them
+	const days = (t: string) => {
+		for (const { day } of datesIn(t.normalize("NFKC"), null)) st.realDays.add(day);
+	};
 	const walk = (n: Node) => {
-		if (n.nodeType === 3 || n.nodeType === 8) add(n.nodeValue ?? "");
-		if (n.nodeType === 1) for (const a of Array.from((n as Element).attributes ?? [])) add(`${a.name} ${a.value}`);
+		if (n.nodeType === 3 || n.nodeType === 8) {
+			add(n.nodeValue ?? "");
+			days(n.nodeValue ?? "");
+		}
+		if (n.nodeType === 1)
+			for (const a of Array.from((n as Element).attributes ?? [])) {
+				add(`${a.name} ${a.value}`);
+				days(a.value);
+			}
 		for (const c of Array.from(n.childNodes ?? [])) walk(c);
 	};
 	walk(doc as unknown as Node);
-	// the meeting dates (and only those) of the page get their place in the synthetic calendar NOW
-	addMeetingDays(st, meetingDaysOf(doc));
 }
 
-/** The real days of the dates in meeting links and meeting titles of a page. */
+/** The real days of the meeting's own dates in a page: the dates in meeting links and in meeting title cells, read as the walker reads them. Adjacent text nodes must already be merged (`mergeAdjacentText`): `Tuesday&nbsp;13th&nbsp;October&nbsp;2026` is three nodes. */
 function meetingDaysOf(doc: Document): Set<number> {
 	const days = new Set<number>();
 	const meetingText = (n: Node) => {
-		if (n.nodeType === 3 && inMeetingContext(n)) {
-			for (const [y, mo, d] of datesIn((n.nodeValue ?? "").normalize("NFKC"))) {
-				const t = Date.UTC(y, mo - 1, d);
-				if (new Date(t).getUTCMonth() === mo - 1 && new Date(t).getUTCDate() === d) days.add(Math.floor(t / 86_400_000));
-			}
+		if (n.nodeType === 3) {
+			const ctx = meetingContextOf(n);
+			if (ctx) for (const d of datesIn((n.nodeValue ?? "").normalize("NFKC"), ctx)) if (d.meeting) days.add(d.day);
 		}
 		for (const c of Array.from(n.childNodes ?? [])) meetingText(c);
 	};
@@ -1519,14 +1626,29 @@ function meetingDaysOf(doc: Document): Set<number> {
 	return days;
 }
 
+/** A page the state has not seen: reserve what it carries (digits, words, dates) and give its meeting dates their place in the synthetic calendar. */
+function reserveRuns(st: RewriteState, doc: Document, html: string) {
+	reservePage(st, doc, html);
+	addMeetingDays(st, meetingDaysOf(doc));
+	checkCalendar(st);
+}
+
 /**
  * Several pages rewritten with ONE state share one synthetic calendar, built from the RANK of each meeting among ALL their meeting dates.
  * So the pages must be given to the state first, together: a page whose meeting date falls between those of an earlier page is refused.
+ * Priming also reserves every page's digit runs, words and dates BEFORE any fake is allocated, so a name or number made for the first page
+ * is never one a later page carries.
  */
 export function primeRewriteState(st: RewriteState, pages: string[]) {
 	const days = new Set<number>();
-	for (const html of pages) for (const d of meetingDaysOf(parseHtml(html))) days.add(d);
+	for (const html of pages) {
+		const doc = parseHtml(html);
+		mergeAdjacentText(doc);
+		reservePage(st, doc, html);
+		for (const d of meetingDaysOf(doc)) days.add(d);
+	}
 	addMeetingDays(st, days);
+	checkCalendar(st);
 }
 
 /** A hand-written fixture, not a page: the evaluations JSON. */
@@ -1543,6 +1665,8 @@ const looksLikeJson = (input: string) => {
 
 function rewriteDocument(st: RewriteState, html: string): string {
 	const doc = parseHtml(html);
+	// the parser splits text at every entity (`13th&nbsp;October`): one piece of text again before any date is read
+	mergeAdjacentText(doc);
 	reserveRuns(st, doc, html);
 	scrubDoctype(doc);
 	normalizeTags(doc);

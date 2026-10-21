@@ -614,7 +614,8 @@ describe("pages that must not be corrupted", () => {
 		expect(tds[0]).not.toContain("7:00");
 		expect(tds[1]).not.toMatch(/Noah|May/);
 		expect(tds[2]).toMatch(/^(?:January|February|March|April|May|June|July|August|September|October|November|December) \d{4}$/);
-		const m3 = /^(\w{3}) (\d{2}) (\d{2}), (?:[1-9]|1[0-2]):[0-5]\d pm$/.exec(tds[3]);
+		// round 5: a time that is not the meeting's own is one constant
+		const m3 = /^(\w{3}) (\d{2}) (\d{2}), 12:00 am$/.exec(tds[3]);
 		expect(m3, tds[3]).toBeTruthy();
 		expect(tds[4]).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 		expect(tds[5]).toMatch(/^\(Actual meeting detail entered on \d{4}-\d{2}-\d{2}\)$/);
@@ -1172,8 +1173,9 @@ describe("round 3 (#1275): text, code and names", () => {
 
 	it("R3-9. a 24-hour and a 12-hour time of the same digits are valid times of their own format", () => {
 		const out = Array.from(parseHtml(rewriteEasySpeakPage(page(`<p>11:30</p><p>11:30am</p><p>25:61</p>`), { state: newRewriteState({ seed: "t" }) })).querySelectorAll("p")).map((p) => p.textContent ?? "");
-		expect(out[0]).toMatch(/^(?:\d|1\d|2[0-3]):[0-5]\d$/);
-		expect(out[1]).toMatch(/^(?:[1-9]|1[0-2]):[0-5]\d ?am$/);
+		// round 5: a time outside a meeting date is one constant per format
+		expect(out[0]).toBe("00:00");
+		expect(out[1]).toBe("12:00 am");
 		expect(out[2]).not.toMatch(/25|61/);
 		for (let i = 0; i < 25; i++) {
 			const [a, b] = Array.from(parseHtml(rewriteEasySpeakPage(page(`<p>11:30</p><p>11:30pm</p>`), { state: newRewriteState({ seed: `t${i}` }) })).querySelectorAll("p")).map((p) => p.textContent ?? "");
@@ -1479,5 +1481,106 @@ describe("round 5 (#1275): ids, club number, symbol links", () => {
 		}
 		// a symbol outside a person link is still kept
 		expect(rewriteEasySpeakPage(page(`<a href="/x.php">?</a>`))).toContain(">?</a>");
+	});
+});
+
+describe("round 5 (#1275): dates and times", () => {
+	const MONTHS5 = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+	const ord5 = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : (["th", "st", "nd", "rd"][n % 10] ?? "th")}`;
+	const long5 = (day: number) => {
+		const d = new Date(day * 86_400_000);
+		return `${ord5(d.getUTCDate())} ${MONTHS5[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+	};
+	const meetLink = (day: number, t: number) => `<a href="https://easy-speak.org/view_meeting.php?t=${t}">${long5(day)}</a>`;
+	/** The day a `13th October 2026` text stands for. */
+	const dayOfLong = (s: string) => {
+		const m = /(\d{1,2})(?:st|nd|rd|th) (\w+) (\d{4})/.exec(s);
+		return m ? Math.floor(Date.UTC(Number(m[3]), MONTHS5.indexOf(m[2]), Number(m[1])) / 86_400_000) : Number.NaN;
+	};
+
+	it("R5-X1a. a member date in the title cell (`Joined Date: ...`) is the placeholder under every key, never itself", () => {
+		for (let i = 0; i < 200; i++) {
+			const out = rewriteEasySpeakPage(page(`<table><tr><td class="maintitle">Joined Date: October 14, 2026</td></tr></table>`), { state: newRewriteState({ seed: `j${i}`, now: NOW5 }) });
+			expect(texts5(out, "td")[0], `seed ${i}`).toBe("Joined Date: January 01, 2000");
+		}
+	});
+
+	it("R5-X1b. a synthetic meeting date is never a real date the pages carry: with every weekday but one taken, the calendar sits on the free one, under every key", () => {
+		// the free weekday: slot days are today-3 (slot 0), today-10 and today+4; every other day of +-70 is carried as a real date
+		const real = new Set<number>();
+		for (let d = TODAY5 - 70; d <= TODAY5 + 70; d++) if ((((d - TODAY5 + 3) % 7) + 7) % 7 !== 0) real.add(d);
+		const meetings = [TODAY5 - 8, TODAY5 - 15, TODAY5 + 5];
+		const body = `${meetings.map((d, i) => meetLink(d, 10 + i)).join("")}${[...real].map((d) => `<p>${iso5(d)}</p>`).join("")}`;
+		for (let i = 0; i < 60; i++) {
+			const out = rewriteEasySpeakPage(page(body), { state: newRewriteState({ seed: `cal${i}`, now: NOW5 }) });
+			const got = texts5(out, "a").map(dayOfLong).sort((a, b) => a - b);
+			expect(got.map(iso5), `seed ${i}`).toEqual([TODAY5 - 10, TODAY5 - 3, TODAY5 + 4].map(iso5));
+			for (const d of got) expect(real.has(d), `seed ${i}`).toBe(false);
+		}
+		// and with no free weekday at all the generator says so instead of copying a real date
+		const all = Array.from({ length: 6 }, (_, k) => `<p>${iso5(TODAY5 - 1 - k)}</p>`).join("");
+		expect(() => rewriteEasySpeakPage(page(`${meetLink(TODAY5 - 8, 1)}${all}`), { state: newRewriteState({ seed: "full", now: NOW5 }) })).toThrow(/every weekday/);
+	});
+
+	it("R5-X1c. under many keys a plain calendar of meetings never lands on a real date (random pages)", () => {
+		const meetings = [TODAY5 - 22, TODAY5 - 15, TODAY5 - 8, TODAY5 - 1, TODAY5 + 6, TODAY5 + 13];
+		const extra = [TODAY5 - 2, TODAY5 + 1].map((d) => `<p>${iso5(d)}</p>`).join("");
+		const real = new Set([...meetings, TODAY5 - 2, TODAY5 + 1]);
+		for (let i = 0; i < 200; i++) {
+			const out = rewriteEasySpeakPage(page(`${meetings.map((d, k) => meetLink(d, 20 + k)).join("")}${extra}`), { state: newRewriteState({ seed: `k${i}`, now: NOW5 }) });
+			for (const d of texts5(out, "a").map(dayOfLong)) expect(real.has(d), `seed ${i}: ${iso5(d)}`).toBe(false);
+		}
+	});
+
+	it("R5-X1d. a meeting title cell keeps only the date the walker reads (`<day> <month> <year> at <time>`) as the meeting's own", () => {
+		const out = rewriteEasySpeakPage(page(`<table><tr><td class="maintitle">Tuesday 13th October 2026 at 7:00 pm America/Los_Angeles</td><td class="maintitle">Joined Date: 13th October 2026</td></tr></table>`), { state: newRewriteState({ seed: "title", now: NOW5 }) });
+		const [meeting, joined] = texts5(out, "td");
+		expect(meeting).not.toContain("2000");
+		expect(meeting).not.toContain("13th October 2026");
+		expect(joined).toBe("Joined Date: 1st January 2000");
+	});
+
+	it("R5-X1e. a title date with an abbreviated month is not the date the walker reads, so it is the placeholder", () => {
+		const out = rewriteEasySpeakPage(page(`<table><tr><td class="maintitle">13 Oct 2026 at 7:00 pm</td></tr></table>`), { state: newRewriteState({ seed: "abbr", now: NOW5 }) });
+		expect(texts5(out, "td")[0]).toBe("01 Jan 2000 at 12:00 am");
+	});
+
+	it("R5-X1f. a later page whose real date is a synthetic meeting date an earlier page was given is refused, not written", () => {
+		const st = newRewriteState({ seed: "late", now: NOW5 });
+		const first = rewriteEasySpeakPage(page(meetLink(TODAY5 - 8, 1)), { state: st });
+		const synthetic = dayOfLong(texts5(first, "a")[0]);
+		expect(() => rewriteEasySpeakPage(page(`<p>${iso5(synthetic + 1)}</p>`), { state: st })).not.toThrow();
+		expect(() => rewriteEasySpeakPage(page(`<p>${iso5(synthetic)}</p>`), { state: st })).toThrow(/primeRewriteState/);
+	});
+
+	it("R5-C1. a time outside a meeting date is one constant; the meeting's own time comes from the whole range, and may equal the input", () => {
+		for (let i = 0; i < 40; i++) {
+			const out = rewriteEasySpeakPage(page(`<p>Last online 11:47 pm</p><p>Last online 23:47</p><p>Every Tuesday at 7:00 pm</p>`), { state: newRewriteState({ seed: `t${i}` }) });
+			expect(texts5(out), `seed ${i}`).toEqual(["Last online 12:00 am", "Last online 00:00", "Every Tuesday at 12:00 am"]);
+		}
+		const hours = new Set<string>();
+		let same = 0;
+		for (let i = 0; i < 400; i++) {
+			const out = rewriteEasySpeakPage(page(`<a href="https://easy-speak.org/view_meeting.php?t=1">Tuesday 13th October 2026 at 11:47 pm</a>`), { state: newRewriteState({ seed: `m${i}`, now: NOW5 }) });
+			const m = /at (\d{1,2}):(\d{2}) pm/.exec(texts5(out, "a")[0]);
+			expect(m, texts5(out, "a")[0]).toBeTruthy();
+			expect(Number(m?.[1])).toBeGreaterThanOrEqual(1);
+			expect(Number(m?.[1])).toBeLessThanOrEqual(12);
+			hours.add(m?.[1] ?? "");
+			if (m?.[1] === "11") same++;
+		}
+		expect(hours.size, "all twelve hours turn up").toBe(12);
+		expect(same, "the input's own hour is a fair draw, not excluded").toBeGreaterThan(0);
+	});
+
+	it("R5-C4. text nodes are merged before a meeting date is read: `Tuesday&nbsp;13th&nbsp;October&nbsp;2026` is a meeting date, same as with plain spaces", () => {
+		const a = rewriteEasySpeakPage(page(`<a href="https://easy-speak.org/view_meeting.php?t=5">Tuesday&nbsp;13th&nbsp;October&nbsp;2026</a>`), { state: newRewriteState({ seed: "ent", now: NOW5 }) });
+		const b = rewriteEasySpeakPage(page(`<a href="https://easy-speak.org/view_meeting.php?t=5">Tuesday 13th October 2026</a>`), { state: newRewriteState({ seed: "ent", now: NOW5 }) });
+		expect(texts5(a, "a")[0]).not.toContain("2000");
+		expect(texts5(a, "a")[0].replace(/\s/g, " ")).toBe(texts5(b, "a")[0].replace(/\s/g, " "));
+		// priming sees it too: the calendar has this one meeting
+		const st = newRewriteState({ seed: "ent", now: NOW5 });
+		primeRewriteState(st, [`<a href="https://easy-speak.org/view_meeting.php?t=5">Tuesday&nbsp;13th&nbsp;October&nbsp;2026</a>`]);
+		expect(st.pastDays.length).toBe(1);
 	});
 });
