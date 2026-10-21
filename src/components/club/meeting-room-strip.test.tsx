@@ -323,7 +323,7 @@ describe("MeetingRoomStrip — Leave feedback (#984)", () => {
 		const fb = screen.getByRole("link", { name: "Leave feedback" });
 		expect(fb.className).toContain("bg-primary");
 		const guest = screen.getByRole("link", { name: "Sign the guest book" });
-		expect(guest.className).not.toContain("bg-primary ");
+		expect(guest.className.split(/\s+/)).not.toContain("bg-primary");
 		expect(guest.className).toContain("border");
 	});
 

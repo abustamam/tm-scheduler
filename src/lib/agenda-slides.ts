@@ -132,6 +132,16 @@ export type HandoffTarget =
 	| "the General Evaluator"
 	| "the speech evaluators";
 
+/** The feedback invitation (#1282), carried by exactly ONE slide per deck: the
+ *  General Evaluation slide when the deck has one, else the Thank-You slide. */
+type FeedbackInvitation = {
+	/** Absolute URL of the anonymous feedback page, rendered as a QR with
+	 *  "Leave a note for today's role-takers". `""` until the browser's origin is
+	 *  known (no QR yet); null/absent when this slide is not the one that shows
+	 *  it. Optional so a hand-built slide without it still type-checks. */
+	feedbackUrl?: string | null;
+};
+
 /** One projected slide. Date formatting is deferred to the renderer.
  *
  *  `visiting` (#1164) is true when a name this slide SHOWS is a visiting
@@ -298,7 +308,7 @@ type SlideShape =
 			name: string;
 			time: string;
 	  }
-	| {
+	| ({
 			kind: "generalEvaluation";
 			/** Display name of the role giving it — see `functionaryReports.owner`.
 			 *  No `name`: unlike the other two owner-carrying slides, this one has
@@ -306,14 +316,7 @@ type SlideShape =
 			 *  it write-only. */
 			owner: string;
 			time: string;
-			/** Absolute URL of the anonymous feedback page (#1282), rendered as a
-			 *  QR with "Leave a note for today's role-takers". Carried by exactly ONE
-			 *  slide per deck: the General Evaluation slide when the deck has one,
-			 *  else the Thank-You slide. `""` until the browser's origin is known (no
-			 *  QR yet); null/absent when this slide is not the one that shows it.
-			 *  Optional so a hand-built slide without it still type-checks. */
-			feedbackUrl?: string | null;
-	  }
+	  } & FeedbackInvitation)
 	| { kind: "awards"; categories: string[] }
 	| {
 			/** The guest-comments beat (#352): the President invites them, between
@@ -379,19 +382,12 @@ type SlideShape =
 			 *  slide then shows no QR rather than one encoding a relative path. */
 			signupUrl: string | null;
 	  }
-	| {
+	| ({
 			kind: "thankYou";
 			meetingSchedule: string | null;
 			nextMeetingAt: Date | null;
 			timezone: string;
-			/** Absolute URL of the anonymous feedback page (#1282), rendered as a
-			 *  QR with "Leave a note for today's role-takers". Carried by exactly ONE
-			 *  slide per deck: the General Evaluation slide when the deck has one,
-			 *  else the Thank-You slide. `""` until the browser's origin is known (no
-			 *  QR yet); null/absent when this slide is not the one that shows it.
-			 *  Optional so a hand-built slide without it still type-checks. */
-			feedbackUrl?: string | null;
-	  };
+	  } & FeedbackInvitation);
 
 /** The standard roles the deck binds slides to (mirrors the beats
  *  `buildRunOfShow` emits in agenda-runsheet.ts). Each carries the immutable

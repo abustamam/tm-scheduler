@@ -748,9 +748,8 @@ export function DarkFooter({
 						    lines to three is 10px the sheet has to find. Broken by
 						    hand rather than by a width cap so the wrap points are the
 						    readable ones and not wherever the platform's fallback font
-						    lands. the caption (`FOOTER_QR_CAPTION_LINES`) is narrower than the old
-						    "Evaluator · Table Topics" line, and two short lines fit
-						    inside `FOOTER_QR_PX`, so the band costs no height. */}
+						    lands. The caption (`FOOTER_QR_CAPTION_LINES`) is two short lines,
+						    which is what keeps the band at its two-line height. */}
 						<span
 							style={{
 								fontSize: 6.5,

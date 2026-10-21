@@ -1045,6 +1045,16 @@ describe("the feedback invitation (#1282)", () => {
 		expect(screen.getByText("Anonymous · takes 30 seconds")).toBeTruthy();
 		const plate = screen.getByTestId("feedback-qr");
 		expect(plate.querySelector("svg")).toBeTruthy();
+		// Ask above the plate, reassurance below it.
+		const ask = screen.getByText("Leave a note for today's role-takers");
+		const reassurance = screen.getByText("Anonymous · takes 30 seconds");
+		expect(
+			ask.compareDocumentPosition(plate) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(
+			plate.compareDocumentPosition(reassurance) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
 		// A different URL must render a different code, or the QR ignores its value.
 		const first = plate.innerHTML;
 		cleanup();

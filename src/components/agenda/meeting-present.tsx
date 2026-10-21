@@ -468,6 +468,9 @@ function useFitTransform(deps: unknown[]) {
 	return { outer, inner };
 }
 
+/** The presenter view's QR edge, in px: the vote plate and the feedback plate. */
+const PRESENT_QR_PX = 220;
+
 /**
  * The "leave a note" invitation (#1282): the same white plate as the vote QR,
  * the same 220px code, with the ask above it and the reassurance below. The
@@ -475,10 +478,7 @@ function useFitTransform(deps: unknown[]) {
  */
 function FeedbackInvite({ url }: { url: string }) {
 	return (
-		<div
-			data-testid="feedback-invite"
-			className="flex flex-col items-center gap-[1cqw] text-center"
-		>
+		<div className="flex flex-col items-center gap-[1cqw] text-center">
 			<p className="text-[2.2cqw] font-semibold">
 				Leave a note for today's role-takers
 			</p>
@@ -486,7 +486,7 @@ function FeedbackInvite({ url }: { url: string }) {
 				className="rounded-[1.2cqw] bg-white p-[1.2cqw]"
 				data-testid="feedback-qr"
 			>
-				<QRCodeSVG value={url} size={220} marginSize={0} />
+				<QRCodeSVG value={url} size={PRESENT_QR_PX} marginSize={0} />
 			</div>
 			<p className="text-[1.7cqw] opacity-70">Anonymous · takes 30 seconds</p>
 		</div>
@@ -687,11 +687,13 @@ function ContentSlide({
 									{vote.ballotUrl ? (
 										<QRCodeSVG
 											value={vote.ballotUrl}
-											size={220}
+											size={PRESENT_QR_PX}
 											marginSize={0}
 										/>
 									) : (
-										<div style={{ width: 220, height: 220 }} />
+										<div
+											style={{ width: PRESENT_QR_PX, height: PRESENT_QR_PX }}
+										/>
 									)}
 								</div>
 								<p className="text-[2.2cqw] font-semibold">Scan to vote</p>

@@ -49,6 +49,15 @@ describe("meetingFeedbackUrlFor (#1282)", () => {
 	it('answers "" before the origin is known, so no QR renders yet', () => {
 		expect(meetingFeedbackUrlFor(meeting, null)).toBe("");
 	});
+
+	// protects=the documented relative form: "" origin answers the bare path;
+	// fails_when="" is treated like null (no URL) or the path is mangled;
+	// no_claim=none beyond protects.
+	it('answers the bare path for a deliberately relative ("") origin', () => {
+		expect(meetingFeedbackUrlFor(meeting, "")).toBe(
+			"/club/mcf/meeting/2026-06-25/feedback",
+		);
+	});
 });
 
 describe("isInRoom", () => {
