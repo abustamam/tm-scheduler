@@ -52,7 +52,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { FAKE_NAMES, type FixtureCheckOptions, fixtureViolations, parseHtml, readFixture } from "../lib/easy-speak-test-kit";
+import { ALT_USERNAME, FAKE_FIRSTS, FAKE_LASTS, FAKE_USERNAME, type FixtureCheckOptions, fixtureViolations, parseHtml, readFixture } from "../lib/easy-speak-test-kit";
 
 // ------------------------------------------------------------------ the allow-list
 
@@ -214,7 +214,7 @@ export const ALLOW_LIST = {
 		"at", "min",
 	],
 	/** Kept only when they are the WHOLE text node (a one-letter heading, a separator). */
-	exactNodes: ["P", "O", "N", "M", "?", "<", ">", "|", "/", "&", "-", "x", "Page", "of"],
+	exactNodes: ["P", "O", "N", "M", "?", "<", ">", "|", "/", "&", "-", "x"],
 	/** Month names are kept only inside an `<option>` of a month `<select>` (by its ORIGINAL name); elsewhere "May" is somebody's surname. */
 	optionOnly: MONTHS,
 	optionOnlySelects: ["month", "start_month", "end_month"],
@@ -357,7 +357,6 @@ export const ALLOW_LIST = {
 };
 
 const A = ALLOW_LIST;
-const FAKE_USERNAME = (JSON.parse(readFixture("fake-names.json")) as { usernames: string[] }).usernames[0];
 
 const lowerSet = (xs: readonly string[]) => new Set(xs.map((x) => x.toLowerCase()));
 const CLASS_SET = new Set(A.classes);
@@ -394,13 +393,8 @@ const PHRASES = [...A.phrases].sort((a, b) => b.length - a.length);
 // A separator inside a number that is a phone: space, dot, slash, hyphen, the Unicode dashes and the non-breaking hyphen.
 const PHONE_SEP = String.raw`\s(). ‐-―−\-/`;
 const PHONE_SOURCE = String.raw`(?<![${L}])(?:\+|00)?\(?\d[\d${PHONE_SEP}]{5,}\d(?![${L}])`;
-/** Characters outside any real page: they bracket a fake phone while the text is scrubbed, so it is not scrubbed twice. */
-const OPEN = "";
-const CLOSE = "";
-
 const SCAN = new RegExp(
 	[
-		`(?<tok>${OPEN}\\(555\\) 010-\\d{4}${CLOSE})`,
 		`(?<keep>(?<![${L}_])(?:${PHRASES.map(SPACE_WORDS).join("|")}|${KEEP_SHAPES.join("|")})(?![${L}]))`,
 		...DATE_SHAPES.map((d, i) => `(?<date${i}>(?<![${L}_])(?:${d.src})(?![${L}]))`),
 		String.raw`(?<user>\[[^\[\]\s]{1,60}\])`,
@@ -447,7 +441,6 @@ export interface RewriteState {
 	inMeeting: boolean;
 	nextName: number;
 	nextPerson: number;
-	nextPhone: number;
 	nextWord: number;
 }
 
@@ -480,7 +473,6 @@ export function newRewriteState(opts: RewriteStateOptions = {}): RewriteState {
 		inMeeting: false,
 		nextName: 0,
 		nextPerson: 900_001,
-		nextPhone: 1,
 		nextWord: 0,
 	};
 }
@@ -510,15 +502,22 @@ function fakeName(st: RewriteState, core: string): string {
 	const k = keyOf(core);
 	const have = st.names.get(k);
 	if (have) return have;
-	// a fake name never shares a word with ANYTHING on the pages (a real name "Avery Quillon" must not become "Avery Alderfinch")
-	let next: string | undefined;
-	while ((next = FAKE_NAMES[st.nextName++]) !== undefined) {
-		if (!nameWords(next).some((w) => st.pageWords.has(w))) break;
+	// Any invented first name with any invented last name, drawn from a KEYED stream: which names the page used cannot be read off an allocation order,
+	// and the pool (first x last) does not run out on a realistic page. A fake never shares a word with ANYTHING on the pages
+	// (a real name "Avery Quillon" must not become "Avery Alderfinch").
+	const used = new Set(st.names.values());
+	for (let attempt = 0; attempt < 20_000; attempt++) {
+		const r = rng(st, `name:${st.nextName++}`);
+		const next = `${FAKE_FIRSTS[Math.floor(r() * FAKE_FIRSTS.length)]} ${FAKE_LASTS[Math.floor(r() * FAKE_LASTS.length)]}`;
+		if (used.has(next) || nameWords(next).some((w) => st.pageWords.has(w))) continue;
+		st.names.set(k, next);
+		return next;
 	}
-	if (!next) throw new Error("the page has more distinct names than fake-names.json holds; add INVENTED names there, never real ones");
-	st.names.set(k, next);
-	return next;
+	throw new Error("the page has more distinct names than the invented first and last names in fake-names.json can make; add INVENTED names there, never real ones");
 }
+
+/** The fixture username, or its alternate when the input's own username is that very word, so an output never equals its input. */
+const fakeUsername = (real: string) => (real.trim().toLowerCase() === FAKE_USERNAME.toLowerCase() ? ALT_USERNAME : FAKE_USERNAME);
 
 /** `aa`, `ab`, ... : a placeholder word carries no digit, so it can never be a real number that survived. */
 const letters = (n: number) => {
@@ -545,9 +544,18 @@ const fakeText = (st: RewriteState, core: string) => (NAME_SHAPE.test(core.trim(
 function fakePhone(st: RewriteState, digits: string): string {
 	const have = st.phones.get(digits);
 	if (have) return have;
-	const p = `(555) 010-${String(st.nextPhone++).padStart(4, "0")}`;
-	st.phones.set(digits, p);
-	return p;
+	// a keyed one-to-one suffix that is neither the input's own last four digits nor the whole input
+	const used = new Set(st.phones.values());
+	const start = Math.floor(rng(st, `phone:${digits}`)() * 10_000);
+	for (let i = 0; i < 10_000; i++) {
+		const suffix = String((start + i) % 10_000).padStart(4, "0");
+		const p = `(555) 010-${suffix}`;
+		if (suffix !== digits.slice(-4) && `555010${suffix}` !== digits && !used.has(p)) {
+			st.phones.set(digits, p);
+			return p;
+		}
+	}
+	throw new Error("no fake phone left: the page carries more than 9,999 distinct phone numbers");
 }
 
 /** A person id: ANY id (a 900xxx one too) becomes the next id in 900001-900999 that no page of the run carries, the same one every time. */
@@ -801,8 +809,8 @@ function scanHits(st: RewriteState, text: string): Hit[] {
 		const start = m.index ?? 0;
 		const raw = m[0];
 		const end = start + raw.length;
-		if (g.tok !== undefined || g.keep !== undefined) hits.push({ start, end, kind: "keep", out: raw });
-		else if (g.user !== undefined) hits.push({ start, end, kind: "repl", out: BRACKET_WORDS.has(raw) ? raw : `[${FAKE_USERNAME}]` });
+		if (g.keep !== undefined) hits.push({ start, end, kind: "keep", out: raw });
+		else if (g.user !== undefined) hits.push({ start, end, kind: "repl", out: BRACKET_WORDS.has(raw) ? raw : `[${fakeUsername(raw.slice(1, -1))}]` });
 		else if (g.phone !== undefined) hits.push({ start, end, kind: "repl", out: replaceDigits(st, raw, /^\d+$/.test(raw)) });
 		else if (g.digits !== undefined) hits.push({ start, end, kind: "repl", out: fakeRun(st, raw) });
 		else {
@@ -1089,7 +1097,7 @@ interface AttrContext {
 }
 
 function rewriteAttribute(st: RewriteState, ctx: AttrContext, name: string, rawValue: string): string {
-	const value = rawValue.replace(/[]/g, "");
+	const value = rawValue;
 	const n = name.toLowerCase();
 	const pattern = ENUMS.get(n);
 	if (pattern) return pattern.test(value.trim()) ? value : "";
@@ -1129,7 +1137,10 @@ interface TextRef {
 }
 
 /** A phone is split across text nodes when inline tags or block elements cut it up; `\u0001` marks a table cell, which never joins its neighbour. */
+const DATE_INSIDE = /(?<!\d)(?:19|20)\d{2}-\d{2}-\d{2}(?!\d)/;
 function plausibleBlockPhone(match: string): boolean {
+	// a date is a date, never half of a phone ("2025-03-12" beside "4815162")
+	if (DATE_INSIDE.test(match)) return false;
 	const groups = match.split(/\D+/).filter(Boolean);
 	const digits = groups.join("").length;
 	return digits >= 9 && digits <= 15 && groups.length <= 5 && groups.filter((g) => g.length >= 3).length >= 2;
@@ -1152,10 +1163,10 @@ function phonesAcrossNodes(st: RewriteState, refs: TextRef[]) {
 	for (const m of whole.matchAll(PHONE_RE)) {
 		const s = m.index ?? 0;
 		const e = s + m[0].length;
-		if (owner[s] === owner[e - 1]) continue;
+		if (owner[s] === owner[e - 1] || DATE_INSIDE.test(m[0])) continue;
 		const add = (from: number, to: number) => {
 			const digits = whole.slice(from, to).replace(/\D/g, "");
-			spans.push({ s: from, e: to, fake: `${OPEN}${fakePhone(st, digits.replace(/^1(\d{10})$/, "$1"))}${CLOSE}` });
+			spans.push({ s: from, e: to, fake: fakePhone(st, digits.replace(/^1(\d{10})$/, "$1")) });
 		};
 		if (!m[0].includes("\n")) {
 			const digits = m[0].replace(/\D/g, "");
@@ -1272,7 +1283,7 @@ function collectText(doc: Document): { refs: TextRef[]; groups: Map<Element | nu
 				n.nodeValue = "";
 				return;
 			}
-			const raw = (n.nodeValue ?? "").replace(/[]/g, "");
+			const raw = (n.nodeValue ?? "");
 			n.nodeValue = tag === "textarea" ? decodeEntities(raw) : raw;
 			let c: Element | null = parent;
 			while (c && !CONTAINERS.has(tagOf(c))) c = c.parentElement;
@@ -1316,7 +1327,7 @@ function textItems(st: RewriteState, groups: Map<Element | null, Node[]>): TextI
 				item.fixed = t;
 			} else if (link && /profile\.php\?mode=editprofile/.test(linkAttrs) && !/^Welcome back/.test(t)) {
 				item.kind = "fixed";
-				item.fixed = FAKE_USERNAME;
+				item.fixed = fakeUsername(t);
 			} else if (link && /profile\.php\?mode=editprofile/.test(linkAttrs)) {
 				const who = t.replace(/^Welcome back\s*/, "").replace(CREDENTIALS, "");
 				item.kind = "fixed";
@@ -1437,11 +1448,18 @@ function datesIn(t: string): [number, number, number][] {
 
 /** Every digit run the page carries, so no fake is ever one of them. */
 function reserveRuns(st: RewriteState, doc: Document, html: string) {
-	const add = (t: string) => {
+	const addOne = (t: string) => {
 		let u = t;
 		for (const re of MARKUP_DIGITS) u = u.replace(re, " ");
 		for (const r of u.match(/\d+/g) ?? []) st.reserved.add(normRun(r));
 		for (const w of nameWords(u)) st.pageWords.add(w);
+	};
+	// every representation the rewrite later reads a value in: as written, NFKC, with JS escapes undone, percent-decoded (a word spelled
+	// `\u0041very` or `%41very` is the word "avery" to the rewrite, so it is reserved as one)
+	const add = (t: string) => {
+		const nf = t.normalize("NFKC");
+		const js = decodeJsEscapes(nf);
+		for (const v of new Set([t, nf, js, decodeLoose(nf), decodeLoose(js), decodeJsEscapes(decodeLoose(nf))])) addOne(v);
 	};
 	add(html);
 	// text and attributes too, in their decoded form
@@ -1485,20 +1503,18 @@ function rewriteDocument(st: RewriteState, html: string): string {
 	normalizeTags(doc);
 	mergeAdjacentText(doc);
 	const { refs, groups } = collectText(doc);
-	phonesAcrossNodes(st, refs);
 	// Text first: the person-link test reads the links' ORIGINAL attributes.
 	const sequences = textItems(st, groups);
 	swallowAcrossNodes(st, sequences);
 	for (const seq of sequences) {
 		for (const it of seq) {
-			const text = `${it.lead}${it.fixed ?? it.res?.out ?? ""}${it.trail}`.replace(/[]/g, "");
+			const text = `${it.lead}${it.fixed ?? it.res?.out ?? ""}${it.trail}`;
 			it.node.nodeValue = RAW_TEXT.has(tagOf(it.node.parentElement as Element | null)) ? escapeText(text) : text;
 		}
 	}
-	for (const r of refs) {
-		const t = r.node.nodeValue ?? "";
-		if (t.includes(OPEN) || t.includes(CLOSE)) r.node.nodeValue = t.replace(/[]/g, "");
-	}
+	// A phone the markup cut into several text nodes is joined only now, over the text that is ALREADY fake (its digits went through `fakeRun`),
+	// so the fake phone it becomes is never read again, and no marker character is needed in any string.
+	phonesAcrossNodes(st, refs);
 	rewriteAttributes(st, doc);
 	return doc.toString();
 }

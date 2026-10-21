@@ -73,10 +73,18 @@ const nonPersonPhrases = JSON.parse(readFixture("non-person-phrases.json")) as R
 
 /** Every fake person name a fixture may carry, in the order `fake-names.json` lists them. */
 export const FAKE_NAMES: readonly string[] = fakeNames.names;
-/** The one username a fixture may carry. */
-const FAKE_USERNAME: string = fakeNames.usernames[0];
+/** The username a fixture carries, and the one it carries instead when the input's own username is that very word (so an output never equals its input). */
+export const FAKE_USERNAME: string = fakeNames.usernames[0];
+export const ALT_USERNAME = `${FAKE_USERNAME}-alt`;
 
 const FAKE_NAME_SET = new Set(FAKE_NAMES);
+/** The first names and the rest-of-name parts of the invented names: the generator pairs any first with any last, so the pool cannot run out on a realistic page. */
+export const FAKE_FIRSTS: readonly string[] = [...new Set(FAKE_NAMES.map((n) => n.split(" ")[0]))];
+export const FAKE_LASTS: readonly string[] = [...new Set(FAKE_NAMES.map((n) => n.slice(n.indexOf(" ") + 1)))];
+const FIRST_SET = new Set(FAKE_FIRSTS);
+const LAST_SET = new Set(FAKE_LASTS);
+/** An invented name: one of the listed ones, or any invented first name with any invented last name. */
+export const isFakeName = (t: string): boolean => FAKE_NAME_SET.has(t) || (t.includes(" ") && FIRST_SET.has(t.split(" ")[0]) && LAST_SET.has(t.slice(t.indexOf(" ") + 1)));
 const PHRASE_SET = new Set(
 	Object.entries(nonPersonPhrases)
 		.filter(([k]) => k !== "_about")
@@ -183,10 +191,10 @@ export function fixtureViolations(html: string, opts: FixtureCheckOptions = {}):
 		if (!/(?:[?&;]|^|\s)u=\d+/.test(attrs)) continue;
 		const t = stripCredentials(norm(a.textContent));
 		if (t === "" || /^(Request a Speech\.\.\.|Accept|TBA)$/.test(t)) continue;
-		if (!FAKE_NAME_SET.has(t)) out.push(`person link names someone who is not a fake name: "${t}"`);
+		if (!isFakeName(t)) out.push(`person link names someone who is not a fake name: "${t}"`);
 	}
 	const header = /Welcome back\s+(.+?)\s*\[/.exec(norm(doc.body?.textContent));
-	if (header && !FAKE_NAME_SET.has(stripCredentials(header[1]))) out.push(`header names "${header[1]}"`);
+	if (header && !isFakeName(stripCredentials(header[1]))) out.push(`header names "${header[1]}"`);
 	for (const text of [html, decoded]) {
 		for (const m of text.matchAll(PERSON_ID_PARAM)) {
 			const n = Number(m[2]);
@@ -195,10 +203,10 @@ export function fixtureViolations(html: string, opts: FixtureCheckOptions = {}):
 	}
 	if (/Accepted by|Previous Evaluators|I am NOT attending this meeting \(/.test(decoded)) out.push("leftover evaluator history");
 	for (const m of decoded.matchAll(/\[([A-Za-z0-9_-]+)\](?=\s|$)/g)) {
-		if (m[1] !== FAKE_USERNAME && !/^\d+$/.test(m[1])) out.push(`username "${m[1]}" is not ${FAKE_USERNAME}`);
+		if (m[1] !== FAKE_USERNAME && m[1] !== ALT_USERNAME && !/^\d+$/.test(m[1])) out.push(`username "${m[1]}" is not ${FAKE_USERNAME}`);
 	}
 	for (const r of nameShapedRuns(parseHtml(html))) {
-		if (!FAKE_NAME_SET.has(r) && !PHRASE_SET.has(r)) out.push(`name-shaped text "${r}" is neither a fake name nor an allowed phrase`);
+		if (!isFakeName(r) && !PHRASE_SET.has(r)) out.push(`name-shaped text "${r}" is neither a fake name nor an allowed phrase`);
 	}
 	// Every attribute (href, src, onclick, data-*, id, title...), decoded: a name in a URL is still a name.
 	for (const el of Array.from(doc.querySelectorAll("*"))) {
@@ -206,7 +214,7 @@ export function fixtureViolations(html: string, opts: FixtureCheckOptions = {}):
 			for (const m of decodeMarkup(a.value).replace(/\+/g, " ").match(NAME_SHAPED) ?? []) {
 				const r = m.trim().replace(/['\u2019-]+$/, "");
 				// Attributes carry fragments of a phrase (an id, a javascript: call): a part of one is fine.
-				if (!FAKE_NAME_SET.has(r) && !PHRASE_SET.has(r) && !PHRASE_PARTS.some((p) => p.includes(r))) out.push(`name-shaped text "${r}" in the ${a.name} attribute is neither a fake name nor an allowed phrase`);
+				if (!isFakeName(r) && !PHRASE_SET.has(r) && !PHRASE_PARTS.some((p) => p.includes(r))) out.push(`name-shaped text "${r}" in the ${a.name} attribute is neither a fake name nor an allowed phrase`);
 			}
 		}
 	}
