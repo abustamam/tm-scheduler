@@ -33,10 +33,10 @@ import {
 
 const DEFAULT_PRESET = presetById("speech");
 
-const FIELD_LABELS: { key: keyof MarkFields; label: string }[] = [
-	{ key: "green", label: "Green" },
-	{ key: "yellow", label: "Yellow" },
-	{ key: "red", label: "Red" },
+const FIELD_LABELS: { key: keyof MarkFields; label: string; dot: string }[] = [
+	{ key: "green", label: "Green", dot: "bg-[#1f7a46]" },
+	{ key: "yellow", label: "Yellow", dot: "bg-[#f2c230]" },
+	{ key: "red", label: "Red", dot: "bg-[#c0262d]" },
 ];
 
 export function StandaloneTimer() {
@@ -129,14 +129,14 @@ export function StandaloneTimer() {
 
 	return (
 		<main>
-			<div className="mx-auto w-full max-w-reading space-y-4 p-4">
+			<div className="mx-auto w-full max-w-reading space-y-4 px-4 pt-4 pb-4 sm:space-y-5 sm:pt-10 sm:pb-5">
 				<header className="space-y-1">
-					<h1 className="font-display text-2xl font-semibold tracking-tight">
+					<h1 className="font-display text-2xl font-semibold sm:text-3xl tracking-tight">
 						Toastmasters timer
 					</h1>
 					<p className="text-muted-foreground text-sm">
-						A green, yellow and red stopwatch for any speech. Nothing is saved
-						or sent: it all runs on this device.
+						Green, yellow and red cards for any speech. Runs on this device;
+						nothing is saved or sent.
 					</p>
 				</header>
 
@@ -148,10 +148,10 @@ export function StandaloneTimer() {
 							aria-pressed={selection === p.id}
 							disabled={locked}
 							onClick={() => pick(p.id)}
-							className={`min-h-11 rounded-full border px-4 text-sm font-medium disabled:opacity-60 ${
+							className={`min-h-11 cursor-pointer rounded-full border px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 ${
 								selection === p.id
 									? "border-primary bg-primary text-primary-foreground"
-									: "border-[var(--line)]"
+									: "border-[var(--line)] hover:bg-muted"
 							}`}
 						>
 							{p.label}
@@ -160,9 +160,15 @@ export function StandaloneTimer() {
 				</div>
 
 				<div className="grid grid-cols-3 gap-3">
-					{FIELD_LABELS.map(({ key, label }) => (
-						<label key={key} className="space-y-1 text-sm font-medium">
-							{label}
+					{FIELD_LABELS.map(({ key, label, dot }) => (
+						<label key={key} className="space-y-1.5 text-sm font-medium">
+							<span className="flex items-center gap-1.5">
+								<span
+									aria-hidden
+									className={`inline-block size-2.5 rounded-full ${dot}`}
+								/>
+								{label}
+							</span>
 							<input
 								value={fields[key]}
 								onChange={(e) => edit(key, e.target.value)}
@@ -171,34 +177,43 @@ export function StandaloneTimer() {
 								autoComplete="off"
 								placeholder="m:ss"
 								aria-invalid={!result.ok}
-								className="block min-h-11 w-full rounded-md border border-[var(--line)] bg-background px-3 tabular-nums disabled:opacity-60"
+								className="block min-h-11 w-full rounded-md border border-[var(--line)] bg-background px-3 text-base tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 aria-invalid:border-destructive"
 							/>
 						</label>
 					))}
 				</div>
 
-				{result.ok ? (
-					<p className="text-muted-foreground text-sm">
-						Disqualified after {disqualifiedAfter(result.marks)}
-					</p>
-				) : (
-					<p role="alert" className="text-destructive text-sm">
-						{result.message}
-					</p>
-				)}
+				<div className="flex flex-wrap items-center justify-between gap-x-4">
+					{result.ok ? (
+						<p className="text-muted-foreground text-sm">
+							Disqualified after {disqualifiedAfter(result.marks)}
+						</p>
+					) : (
+						<p role="alert" className="text-destructive text-sm">
+							{result.message}
+						</p>
+					)}
 
-				<label className="flex min-h-11 items-center gap-2 text-sm font-medium">
-					<input
-						type="checkbox"
-						checked={showClock}
-						onChange={(e) => setShowClock(e.target.checked)}
-						className="size-5"
-					/>
-					Show clock
-				</label>
+					<label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm font-medium">
+						<input
+							type="checkbox"
+							checked={showClock}
+							onChange={(e) => setShowClock(e.target.checked)}
+							className="size-5 cursor-pointer accent-primary"
+						/>
+						Show clock
+					</label>
+				</div>
 			</div>
 
-			<div ref={clockRef}>
+			{/* Idle, the clock is a card in the same column as the settings above;
+			    from Start it is the whole screen (`min-h-svh`), edge to edge. */}
+			<div
+				ref={clockRef}
+				className={
+					locked ? undefined : "mx-auto w-full max-w-reading px-4 pb-12"
+				}
+			>
 				{segment ? (
 					<SegmentClock
 						variant="screen"
