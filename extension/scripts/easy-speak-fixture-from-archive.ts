@@ -1470,6 +1470,11 @@ function reserveRuns(st: RewriteState, doc: Document, html: string) {
 	};
 	walk(doc as unknown as Node);
 	// the meeting dates (and only those) of the page get their place in the synthetic calendar NOW
+	addMeetingDays(st, meetingDaysOf(doc));
+}
+
+/** The real days of the dates in meeting links and meeting titles of a page. */
+function meetingDaysOf(doc: Document): Set<number> {
 	const days = new Set<number>();
 	const meetingText = (n: Node) => {
 		if (n.nodeType === 3 && inMeetingContext(n)) {
@@ -1481,6 +1486,16 @@ function reserveRuns(st: RewriteState, doc: Document, html: string) {
 		for (const c of Array.from(n.childNodes ?? [])) meetingText(c);
 	};
 	meetingText(doc as unknown as Node);
+	return days;
+}
+
+/**
+ * Several pages rewritten with ONE state share one synthetic calendar, built from the RANK of each meeting among ALL their meeting dates.
+ * So the pages must be given to the state first, together: a page whose meeting date falls between those of an earlier page is refused.
+ */
+export function primeRewriteState(st: RewriteState, pages: string[]) {
+	const days = new Set<number>();
+	for (const html of pages) for (const d of meetingDaysOf(parseHtml(html))) days.add(d);
 	addMeetingDays(st, days);
 }
 

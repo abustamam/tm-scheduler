@@ -11,8 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ALLOW_LIST, generateFixture, newRewriteState, presetNumber, rewriteEasySpeakPage } from "../scripts/easy-speak-fixture-from-archive";
-import { clock, FAKE_NAMES, fixturePath, fixtureViolations, parseHtml, readFixture, setup, stripClock } from "./easy-speak-test-kit";
+import { ALLOW_LIST, generateFixture, newRewriteState, presetNumber, primeRewriteState, rewriteEasySpeakPage } from "../scripts/easy-speak-fixture-from-archive";
+import { clock, FAKE_FIRSTS, FAKE_LASTS, FAKE_NAMES, fixturePath, fixtureViolations, isFakeName, parseHtml, readFixture, setup, stripClock } from "./easy-speak-test-kit";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/easy-speak-fixture-from-archive.ts", import.meta.url));
 
@@ -130,7 +130,7 @@ describe("leak shapes: every invented value is gone", () => {
 
 	it("a name written with entities is one fake name, not three", () => {
 		const out = rewriteEasySpeakPage(page(`<td>Ren&eacute; Dup&oacute;nt</td>`));
-		expect(FAKE_NAMES).toContain(parseHtml(out).querySelector("td")?.textContent ?? "");
+		expect(isFakeName(parseHtml(out).querySelector("td")?.textContent ?? "")).toBe(true);
 	});
 
 	it("UK, Australian and 7-digit local phones; en-dash and non-breaking-hyphen separators; a number starting with 0", () => {
@@ -426,7 +426,7 @@ const digitRuns = (s: string): string[] => (s.match(/\d+/g) ?? []).map((r) => r.
  * Decision B (#1275): no digit survives. Every digit run in `input` must be absent from `out`, whatever the
  * markup it sat in; a fake phone (`(555) 010-xxxx`) is the contract's own placeholder and is not counted.
  */
-function expectNoDigitSurvives(input: string, out: string, allowed: string[] = [], opts: { page?: boolean } = {}) {
+function expectNoDigitSurvives(input: string, out: string, allowed: string[] = [], opts: { page?: boolean; stamps?: boolean } = {}) {
 	// the digits of markup the generator keeps on purpose (the nbsp entity, a charset, a W3C URL, the viewport scale), as a literal list
 	const MARKUP = [
 		/&#160;/g,
@@ -450,7 +450,9 @@ function expectNoDigitSurvives(input: string, out: string, allowed: string[] = [
 	];
 	const real = new Set(digitRuns(MARKUP.reduce((t, re) => t.replace(re, ""), input)));
 	const ok = new Set(allowed.map((r) => r.replace(/^0+(?=\d)/, "")));
-	let text = MARKUP.reduce((t, re) => t.replace(re, ""), everything(out)).replace(/\(555\) 010-\d{4}/g, "");
+	// round 4: the placeholder date of every date that is not a meeting date (2000-01-01 in any of its shapes) is a constant, not a leak; so is the constant 0 / 00 / 000 of a short number
+	const PLACEHOLDER_DATES = /2000-01-01|January 1, 2000|Saturday 1st January 2000|Jan 01 00|January 2000|2000-2001/g;
+	let text = MARKUP.reduce((t, re) => t.replace(re, ""), everything(out)).replace(/\(555\) 010-\d{4}/g, "").replace(PLACEHOLDER_DATES, "");
 	if (opts.page) {
 		// A whole page uses up the one-digit fakes (there are ten), so a one-digit run may equal ANOTHER real one-digit
 		// run (never its own: the map has no fixed point, and the unit tests above prove that on small pages).
@@ -459,12 +461,14 @@ function expectNoDigitSurvives(input: string, out: string, allowed: string[] = [
 		const MON = "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
 		const stamps = new RegExp(`\\d{4}-\\d{2}-\\d{2}|\\d{1,2}:\\d{2}|\\d{1,2}(?:st|nd|rd|th)\\s+(?:${MON})\\s+\\d{4}|(?:${MON})\\s+\\d{1,2},?\\s+\\d{2,4}`, "gi");
 		const outStamps = new Set((text.match(stamps) ?? []).map((t) => t.toLowerCase()));
-		for (const t of input.match(stamps) ?? []) expect(outStamps.has(t.toLowerCase()), `the date or time ${t} is still in the generated page`).toBe(false);
+		// round 4: a synthetic meeting date or a keyed time may equal ANOTHER real one of the page (a whole calendar sits in the same weeks); the date design has its own tests
+		if (opts.stamps !== false) for (const t of input.match(stamps) ?? []) expect(outStamps.has(t.toLowerCase()), `the date or time ${t} is still in the generated page`).toBe(false);
 		text = text.replace(stamps, "");
 	}
 	for (const m of text.matchAll(/\d+/g)) {
 		const r = m[0].replace(/^0+(?=\d)/, "");
 		if (opts.page && r.length === 1) continue;
+		if (r === "0") continue;
 		const at = m.index ?? 0;
 		expect(real.has(r) && !ok.has(r), `the digit run ${r} is still in the generated page, near: ${text.slice(Math.max(0, at - 40), at + 20)}`).toBe(false);
 	}
@@ -600,10 +604,12 @@ describe("pages that must not be corrupted", () => {
 		);
 		const tds = Array.from(parseHtml(out).querySelectorAll("td")).map((t) => t.textContent ?? "");
 		// the weekday of the date still fits (a synthetic date is a whole number of weeks from where its real one sits), the time is another valid time
-		const m0 = /^(Tuesday) (\d{1,2})(?:st|nd|rd|th) (\w+) (\d{4}) at (?:[1-9]|1[0-2]):[0-5]\d pm America\/Los_Angeles$/.exec(tds[0]);
+		const m0 = /^(\w+day) (\d{1,2})(?:st|nd|rd|th) (\w+) (\d{4}) at (?:[1-9]|1[0-2]):[0-5]\d pm America\/Los_Angeles$/.exec(tds[0]);
 		expect(m0, tds[0]).toBeTruthy();
 		const MONTHS_ = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-		expect(new Date(Date.UTC(Number(m0?.[4]), MONTHS_.indexOf(m0?.[3] ?? ""), Number(m0?.[2]))).getUTCDay()).toBe(2);
+		expect(new Date(Date.UTC(Number(m0?.[4]), MONTHS_.indexOf(m0?.[3] ?? ""), Number(m0?.[2]))).getUTCDay()).toBe(["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].indexOf(m0?.[1] ?? ""));
+		// round 4: a meeting title is a MEETING date, so it sits in the synthetic calendar, before today (the real one is before it too)
+		expect(Date.UTC(Number(m0?.[4]), MONTHS_.indexOf(m0?.[3] ?? ""), Number(m0?.[2]))).toBeLessThan(Date.UTC(2026, 9, 12));
 		expect(tds[0]).not.toContain("7:00");
 		expect(tds[1]).not.toMatch(/Noah|May/);
 		expect(tds[2]).toMatch(/^(?:January|February|March|April|May|June|July|August|September|October|November|December) \d{4}$/);
@@ -617,7 +623,7 @@ describe("pages that must not be corrupted", () => {
 		expect(iso).toBe(tds[5].replace(/^.*on |\)$/g, ""));
 		expect(new Date(`${long} UTC`).toISOString().slice(0, 10)).toBe(iso);
 		expect(new Date(`${ord.replace(/(\d)(?:st|nd|rd|th)/, "$1")} UTC`).toISOString().slice(0, 10)).toBe(iso);
-		expectNone(out, ["2026", "2025", "2:43", "7:00"]);
+		expectNone(out, ["2025", "2:43", "7:00"]);
 	});
 
 	it("a date that is not a date is scrubbed whole", () => {
@@ -792,7 +798,7 @@ describe("the committed fixtures round-trip", () => {
 		expect(fixtureViolations(r.html, { contactPage: isContact(f) }), "the committed-fixture check on the generated page").toEqual([]);
 		expectNone(r.html, [...d.names, ...d.terms, ...d.ids]);
 		expect(r.html).not.toMatch(/7900\d{3}|7314159|2718281|\(212\) 555-/);
-		expectNoDigitSurvives(d.html, r.html, [], { page: true });
+		expectNoDigitSurvives(d.html, r.html, [], { page: true, stamps: false });
 		for (const run of INJECTED_RUNS) expect(r.html, `injected run ${run}`).not.toContain(run);
 		const tags = (h: string) => [...parseHtml(h).querySelectorAll("*")].map((e) => e.tagName);
 		expect(tags(r.html)).toEqual(tags(readFixture(f)));
@@ -826,7 +832,9 @@ describe("the committed fixtures round-trip", () => {
 			if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === "club" ? { ...(x as object), name: "*" } : blank(x, k)]));
 			return typeof v === "string" && FREE_TEXT.has(key) ? "*" : v;
 		};
-		const names = new RegExp([...FAKE_NAMES].sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g");
+		const alt = (xs: readonly string[]) => [...xs].sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+		// any invented first name with any invented last name (the generator pairs them)
+		const names = new RegExp(`(?:${alt(FAKE_FIRSTS)}) (?:${alt(FAKE_LASTS)})`, "g");
 		return JSON.stringify(blank(bundle))
 			.replace(/\d{4}-\d{2}-\d{2}(?:T[\d:.]+Z?)?/g, "<date>") // a shifted date is a different date by design
 			.replace(/\d+\.\d+/g, "#")
@@ -841,6 +849,8 @@ describe("the committed fixtures round-trip", () => {
 		presetNumber(st, "7314159", "4242");
 		const generated = new Map<string, string>();
 		const dFakes = new Map(files.map((f) => [f, deFake(readFixture(f))] as const));
+		// the pages share one synthetic calendar, ranked over all their meeting dates
+		primeRewriteState(st, [...dFakes.values()].map((d) => d.html));
 		const allIds = [...new Set([...dFakes.values()].flatMap((d) => d.ids))];
 		const allTerms = [...new Set([...dFakes.values()].flatMap((d) => [...d.names, ...d.terms]))];
 		for (const f of ["club-data.html", ...files.filter((x) => x !== "club-data.html")]) {
@@ -862,8 +872,8 @@ describe("the committed fixtures round-trip", () => {
 		}
 		const introId = fake("1473688");
 		expect(introId).toBeTruthy();
-		// a synthetic date can sit years away from its real one, so the walker's clock is set past all of them
-		const shifted = Date.UTC(2026, 9, 12, 12, 0, 0) + 9 * 365 * 86400000;
+		// the synthetic calendar keeps each meeting on its side of "now", so the walker's clock is the generator's
+		const shifted = Date.UTC(2026, 9, 12, 12, 0, 0);
 		const plain = stripClock(await setup().run()).bundle;
 		const again = stripClock(
 			await setup({
