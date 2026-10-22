@@ -6,6 +6,10 @@ import {
 	DeclineReleaseDialog,
 	type PendingDecline,
 } from "#/components/club/decline-release-dialog";
+import {
+	FORBIDDEN_NOTIFY_PHRASES,
+	ROLE_DUTY_CLAUSE,
+} from "#/lib/role-duty-copy";
 
 /**
  * The confirm step between "Not coming" and the roles going back to the open
@@ -286,4 +290,41 @@ describe("DeclineReleaseDialog (#663)", () => {
 	// that cannot fail. The fix reads one narrow interface (the copy is derived
 	// from a held value, not from the live prop) and
 	// `decline-release-wiring.guard.test.ts` drives THAT instead.
+
+	describe("the duty clause (#1291)", () => {
+		const text = (over: Partial<PendingDecline>) => {
+			const { getByRole } = render(
+				<DeclineReleaseDialog
+					pending={pending(over)}
+					onCancel={vi.fn()}
+					onConfirm={vi.fn()}
+				/>,
+			);
+			return getByRole("dialog").textContent ?? "";
+		};
+
+		// protects=self-branch confirm carries the duty clause; fails_when=a self arm that frees a role renders without it; no_claim=route toast copy, signed-out paths
+		it("self with known roles carries the clause", () => {
+			const t = text({ self: true });
+			expect(t).toContain(ROLE_DUTY_CLAUSE);
+			for (const p of FORBIDDEN_NOTIFY_PHRASES) expect(t).not.toContain(p);
+		});
+
+		// protects=self-branch confirm carries the duty clause; fails_when=a self arm that frees a role renders without it; no_claim=route toast copy, signed-out paths
+		it("self on a stale page carries the clause", () => {
+			const t = text({ self: true, roleLabels: [] });
+			expect(t).toContain(ROLE_DUTY_CLAUSE);
+			for (const p of FORBIDDEN_NOTIFY_PHRASES) expect(t).not.toContain(p);
+		});
+
+		// protects=third-person and keep-role arms stay free of the holder's duty; fails_when=an officer-on-behalf or keep-role arm gains the clause; no_claim=route toast copy, signed-out paths
+		it("third-person and keep-role arms do not carry it", () => {
+			expect(text({})).not.toContain(ROLE_DUTY_CLAUSE);
+			expect(text({ roleLabels: [] })).not.toContain(ROLE_DUTY_CLAUSE);
+			expect(text({ willRelease: false })).not.toContain(ROLE_DUTY_CLAUSE);
+			expect(text({ willRelease: false, roleLabels: [] })).not.toContain(
+				ROLE_DUTY_CLAUSE,
+			);
+		});
+	});
 });

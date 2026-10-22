@@ -9,6 +9,7 @@ import {
 	DialogTitle,
 } from "#/components/ui/dialog";
 import { listRoles } from "#/lib/list-roles";
+import { ROLE_DUTY_CLAUSE } from "#/lib/role-duty-copy";
 
 /** The pending decline, or `null` when nothing is being confirmed. The subject
  *  is identified by `memberId` so the caller can hand the same object straight
@@ -112,14 +113,16 @@ export function DeclineReleaseDialog({
 			// The stale-page case, stated honestly. The page cannot see a slot
 			// claimed since it loaded, so it promises nothing and warns anyway.
 			return shown.self
-				? "This also frees any role you've taken for this meeting, and we can't put it back automatically."
+				? `This also frees any role you've taken for this meeting, and we can't put it back automatically. GavelUp doesn't tell anyone, so ${ROLE_DUTY_CLAUSE}.`
 				: `This also frees any role ${shown.name} has taken for this meeting, and we can't put it back automatically.`;
 		}
 		return `${who} ${roles} for this meeting. Recording that frees ${
 			one ? "the role" : "those roles"
 		} for someone else, and we can't put ${
 			one ? "it" : "them"
-		} back automatically.`;
+		} back automatically.${
+			shown.self ? ` GavelUp doesn't tell anyone, so ${ROLE_DUTY_CLAUSE}.` : ""
+		}`;
 	}
 
 	// "any role" on the stale-page branch, not "the role": the page cannot see a
