@@ -1,0 +1,2 @@
+ALTER TABLE "districts" ADD COLUMN "is_demo" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "districts_is_demo_unique" ON "districts" USING btree ("is_demo") WHERE "districts"."is_demo";

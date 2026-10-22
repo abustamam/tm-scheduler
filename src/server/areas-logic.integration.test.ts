@@ -1343,4 +1343,31 @@ describe.skipIf(!hasTestDb)("area hierarchy (#1116)", () => {
 			"Club not found",
 		);
 	});
+
+	// protects=at most one district is the demo district, while any number of real ones coexist;
+	// fails_when=a second is_demo=true row is accepted, or a plain district is refused;
+	// no_claim=nothing reads the flag yet, and the demo rebuild that sets it is a sibling issue
+	it("allows one demo district and refuses a second, but any number of real ones", async () => {
+		const a = await makeDistrict();
+		const b = await makeDistrict();
+		const c = await makeDistrict();
+		const rows = await testDb
+			.select({ id: districts.id, isDemo: districts.isDemo })
+			.from(districts)
+			.where(inArray(districts.id, [a, b, c]));
+		expect(rows.every((r) => r.isDemo === false)).toBe(true);
+
+		await testDb
+			.update(districts)
+			.set({ isDemo: true })
+			.where(eq(districts.id, a));
+		await expect(
+			testDb.update(districts).set({ isDemo: true }).where(eq(districts.id, b)),
+		).rejects.toThrow();
+		const [still] = await testDb
+			.select({ isDemo: districts.isDemo })
+			.from(districts)
+			.where(eq(districts.id, b));
+		expect(still.isDemo).toBe(false);
+	});
 });
