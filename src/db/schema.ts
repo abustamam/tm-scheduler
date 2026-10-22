@@ -3755,7 +3755,7 @@ export const districts = pgTable(
 		// and the same row across every program year.
 		number: text("number").notNull().unique(),
 		// The demo district (#1193): the parent of the demo club's area, numbered
-		// "DEMO". At most one; built and kept by the demo rebuild, never edited in the
+		// "DEMO". At most one (`districts_is_demo_unique`); built and kept by the demo rebuild, never edited in the
 		// console. Real Area Directors never see a club inside it as live.
 		isDemo: boolean("is_demo").notNull().default(false),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
