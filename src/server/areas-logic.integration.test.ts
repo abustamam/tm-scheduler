@@ -61,6 +61,7 @@ const {
 	assignDirectorFailure,
 	CLUB_NUMBER_CHANGED_MESSAGE,
 	CURRENT_TERM_EXISTS_MESSAGE,
+	DEMO_ACCOUNT_AREA_MESSAGE,
 	DEMO_DISTRICT_MESSAGE,
 	DEMO_DISTRICT_NUMBER_MESSAGE,
 	DIRECTOR_NOT_VERIFIED_MESSAGE,
@@ -1112,6 +1113,43 @@ describe.skipIf(!hasTestDb)("area hierarchy (#1116)", () => {
 		).rejects.toMatchObject({ cause: { code: "23514" } });
 	});
 
+	// protects=the shared demo account cannot be made Area Director of a real area, and
+	// no term opens; any other verified account still can;
+	// fails_when=the demo account is assigned, a term is written, or another account is refused;
+	// no_claim=the demo district itself (it refuses every write already, tested below).
+	it("refuses the demo account for a real area and lets another account through", async () => {
+		const { areaId } = await makeChain();
+		const demo = await makeUser({ email: `Demo-${randomUUID()}@test.example` });
+		const other = await makeUser();
+		vi.stubEnv("DEMO_ACCOUNT_EMAIL", ` ${demo.email.toUpperCase()} `);
+		try {
+			await expect(
+				assignAreaDirector(
+					{ areaId, userId: demo.id, displayName: "Demo" },
+					other.id,
+				),
+			).rejects.toThrow(DEMO_ACCOUNT_AREA_MESSAGE);
+			expect(
+				await testDb
+					.select()
+					.from(areaDirectors)
+					.where(eq(areaDirectors.areaId, areaId)),
+			).toHaveLength(0);
+			await assignAreaDirector(
+				{ areaId, userId: other.id, displayName: "Pat" },
+				other.id,
+			);
+			expect(
+				await testDb
+					.select()
+					.from(areaDirectors)
+					.where(eq(areaDirectors.areaId, areaId)),
+			).toHaveLength(1);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
 	it("needs a display name, and a verified account", async () => {
 		const { areaId } = await makeChain();
 		const verified = await makeUser();
@@ -1355,51 +1393,43 @@ describe.skipIf(!hasTestDb)("area hierarchy (#1116)", () => {
 	// refuses a second, by that name), while any number of real ones coexist;
 	// fails_when=a second is_demo=true row is accepted, the refusal comes from some other
 	// constraint, or a plain district is refused;
-	// no_claim=nothing reads the flag yet, and the demo rebuild that sets it is a sibling issue.
-	// Runs in one transaction that always rolls back, so no demo district is ever committed
-	// to the shared test database (sibling suites own that slot).
+	// no_claim=nothing reads the flag here; the demo rebuild that sets it is a sibling issue.
+	// The slot is taken through withDemoDistrict, which waits while a sibling suite holds a
+	// committed demo district, and everything rolls back.
 	it("allows one demo district and refuses a second, but any number of real ones", async () => {
-		class RollBack extends Error {}
 		const tag = randomUUID().slice(0, 8);
-		await testDb
-			.transaction(async (tx) => {
-				const rows = await tx
-					.insert(districts)
-					.values([
-						{ number: `D1${tag}` },
-						{ number: `D2${tag}` },
-						{ number: `D3${tag}` },
-					])
-					.returning({ id: districts.id, isDemo: districts.isDemo });
-				expect(rows).toHaveLength(3);
-				expect(rows.every((r) => r.isDemo === false)).toBe(true);
-				const [a, b] = rows.map((r) => r.id);
+		await withDemoDistrict(async ({ tx, districtId }) => {
+			const rows = await tx
+				.insert(districts)
+				.values([
+					{ number: `D1${tag}` },
+					{ number: `D2${tag}` },
+					{ number: `D3${tag}` },
+				])
+				.returning({ id: districts.id, isDemo: districts.isDemo });
+			expect(rows).toHaveLength(3);
+			expect(rows.every((r) => r.isDemo === false)).toBe(true);
+			const [b] = rows.map((r) => r.id);
+			const [held] = await tx
+				.select({ isDemo: districts.isDemo })
+				.from(districts)
+				.where(eq(districts.id, districtId));
+			expect(held.isDemo).toBe(true);
 
-				await tx
-					.update(districts)
-					.set({ isDemo: true })
-					.where(eq(districts.id, a));
-				// A savepoint: the unique violation aborts only it, so the read below is valid.
-				await expect(
-					tx.transaction((sp) =>
-						sp
-							.update(districts)
-							.set({ isDemo: true })
-							.where(eq(districts.id, b)),
-					),
-				).rejects.toMatchObject({
-					cause: { code: "23505", constraint: "districts_is_demo_unique" },
-				});
-				const [still] = await tx
-					.select({ isDemo: districts.isDemo })
-					.from(districts)
-					.where(eq(districts.id, b));
-				expect(still.isDemo).toBe(false);
-				throw new RollBack();
-			})
-			.catch((err) => {
-				if (!(err instanceof RollBack)) throw err;
+			// A savepoint: the unique violation aborts only it, so the read below is valid.
+			await expect(
+				tx.transaction((sp) =>
+					sp.update(districts).set({ isDemo: true }).where(eq(districts.id, b)),
+				),
+			).rejects.toMatchObject({
+				cause: { code: "23505", constraint: "districts_is_demo_unique" },
 			});
+			const [still] = await tx
+				.select({ isDemo: districts.isDemo })
+				.from(districts)
+				.where(eq(districts.id, b));
+			expect(still.isDemo).toBe(false);
+		});
 	});
 });
 
@@ -1502,8 +1532,10 @@ describe.skipIf(!hasTestDb)("the demo district in the console (#1279)", () => {
 		const rows = await testDb
 			.select({ number: districts.number, isDemo: districts.isDemo })
 			.from(districts);
+		// A committed demo district numbered "DEMO" may exist (the demo rebuild's
+		// suite); only a real (non-demo) row may not carry a refused spelling.
 		for (const number of refused) {
-			expect(rows.some((r) => r.number === number)).toBe(false);
+			expect(rows.some((r) => r.number === number && !r.isDemo)).toBe(false);
 		}
 		// "39" and "F" may already exist in the shared database; a per-run
 		// prefix keeps the proof that near-misses are not refused.

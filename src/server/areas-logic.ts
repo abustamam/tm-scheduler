@@ -48,6 +48,7 @@ import { optionalClubNumberSchema } from "#/lib/club-charter";
 import { currentProgramYear, programYearLabel } from "#/lib/dcp";
 import { normalizedEmail, normalizeEmail } from "./account-link-logic";
 import { isCurrentTerm, loadCurrentDirector } from "./area-terms-logic";
+import { parseDemoAccountEmail } from "./demo-reset-logic";
 import { isSqlState, isUniqueViolation } from "./pg-errors";
 
 type Db = typeof db;
@@ -70,6 +71,8 @@ export const AREA_CLUB_NOT_FOUND_MESSAGE = "Club not found in this area";
 export const DISPLAY_NAME_REQUIRED_MESSAGE = "Enter the Area Director's name";
 export const DIRECTOR_NOT_VERIFIED_MESSAGE =
 	"That account can't be made Area Director: its email isn't verified";
+export const DEMO_ACCOUNT_AREA_MESSAGE =
+	"The demo account may direct only the demo area";
 export const ARCHIVED_CLUB_MESSAGE =
 	"An archived club can't be placed in an area";
 export const DEMO_DISTRICT_MESSAGE =
@@ -1078,11 +1081,17 @@ export async function assignAreaDirector(
 			throw new Error(pastYearAreaMessage(place.programYear));
 		}
 		const [candidate] = await tx
-			.select({ emailVerified: user.emailVerified })
+			.select({ emailVerified: user.emailVerified, email: user.email })
 			.from(user)
 			.where(eq(user.id, input.userId));
 		if (!candidate?.emailVerified) {
 			throw new Error(DIRECTOR_NOT_VERIFIED_MESSAGE);
+		}
+		// The demo login is shared with presenters. This area is a real one (the
+		// demo district refused above), so the demo account may not direct it.
+		const demoEmail = parseDemoAccountEmail(process.env.DEMO_ACCOUNT_EMAIL);
+		if (demoEmail != null && normalizeEmail(candidate.email) === demoEmail) {
+			throw new Error(DEMO_ACCOUNT_AREA_MESSAGE);
 		}
 		try {
 			const [row] = await tx
