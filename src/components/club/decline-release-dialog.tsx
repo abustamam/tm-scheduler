@@ -9,6 +9,7 @@ import {
 	DialogTitle,
 } from "#/components/ui/dialog";
 import { listRoles } from "#/lib/list-roles";
+import { ROLE_DUTY_NO_NOTIFY_SENTENCE } from "#/lib/role-duty-copy";
 
 /** The pending decline, or `null` when nothing is being confirmed. The subject
  *  is identified by `memberId` so the caller can hand the same object straight
@@ -95,7 +96,6 @@ export function DeclineReleaseDialog({
 	const one = shown?.roleLabels.length === 1;
 	const known = (shown?.roleLabels.length ?? 0) > 0;
 	const roles = shown ? listRoles(shown.roleLabels) : "";
-	const who = shown?.self ? "You're" : `${shown?.name} is`;
 
 	/** Three cases, and the third is not a variant of the other two: it is the
 	 *  arm that keeps the role. Written out rather than assembled from flags,
@@ -112,14 +112,20 @@ export function DeclineReleaseDialog({
 			// The stale-page case, stated honestly. The page cannot see a slot
 			// claimed since it loaded, so it promises nothing and warns anyway.
 			return shown.self
-				? "This also frees any role you've taken for this meeting, and we can't put it back automatically."
+				? `This also frees any role you've taken for this meeting, and we can't put it back automatically. ${ROLE_DUTY_NO_NOTIFY_SENTENCE}`
 				: `This also frees any role ${shown.name} has taken for this meeting, and we can't put it back automatically.`;
 		}
-		return `${who} ${roles} for this meeting. Recording that frees ${
-			one ? "the role" : "those roles"
-		} for someone else, and we can't put ${
-			one ? "it" : "them"
-		} back automatically.`;
+		return shown.self
+			? `You're ${roles} for this meeting. Recording that frees ${
+					one ? "the role" : "those roles"
+				} for someone else, and we can't put ${
+					one ? "it" : "them"
+				} back automatically. ${ROLE_DUTY_NO_NOTIFY_SENTENCE}`
+			: `${shown.name} is ${roles} for this meeting. Recording that frees ${
+					one ? "the role" : "those roles"
+				} for someone else, and we can't put ${
+					one ? "it" : "them"
+				} back automatically.`;
 	}
 
 	// "any role" on the stale-page branch, not "the role": the page cannot see a

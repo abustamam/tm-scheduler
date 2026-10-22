@@ -6,6 +6,10 @@ import {
 	DeclineReleaseDialog,
 	type PendingDecline,
 } from "#/components/club/decline-release-dialog";
+import {
+	FORBIDDEN_NOTIFY_PHRASES,
+	ROLE_DUTY_CLAUSE,
+} from "#/lib/role-duty-copy";
 
 /**
  * The confirm step between "Not coming" and the roles going back to the open
@@ -286,4 +290,84 @@ describe("DeclineReleaseDialog (#663)", () => {
 	// that cannot fail. The fix reads one narrow interface (the copy is derived
 	// from a held value, not from the live prop) and
 	// `decline-release-wiring.guard.test.ts` drives THAT instead.
+
+	describe("the duty clause (#1291)", () => {
+		const text = (over: Partial<PendingDecline>) => {
+			const { getByRole } = render(
+				<DeclineReleaseDialog
+					pending={pending(over)}
+					onCancel={vi.fn()}
+					onConfirm={vi.fn()}
+				/>,
+			);
+			return getByRole("dialog").textContent ?? "";
+		};
+		// The description paragraph alone, so an exact match is not polluted by
+		// the title and the buttons.
+		const description = (over: Partial<PendingDecline>) => {
+			const { getByRole } = render(
+				<DeclineReleaseDialog
+					pending={pending(over)}
+					onCancel={vi.fn()}
+					onConfirm={vi.fn()}
+				/>,
+			);
+			const id = getByRole("dialog").getAttribute("aria-describedby") ?? "";
+			return document.getElementById(id)?.textContent ?? "";
+		};
+
+		// protects=self-branch confirm carries the duty clause; fails_when=a self arm that frees a role renders without it; no_claim=route toast copy, signed-out paths
+		it("self with known roles carries the clause", () => {
+			const t = text({ self: true });
+			expect(t).toContain(ROLE_DUTY_CLAUSE);
+			for (const p of FORBIDDEN_NOTIFY_PHRASES) expect(t).not.toContain(p);
+		});
+
+		// protects=self-branch confirm carries the duty clause; fails_when=a self arm that frees a role renders without it; no_claim=route toast copy, signed-out paths
+		it("self on a stale page carries the clause", () => {
+			const t = text({ self: true, roleLabels: [] });
+			expect(t).toContain(ROLE_DUTY_CLAUSE);
+			for (const p of FORBIDDEN_NOTIFY_PHRASES) expect(t).not.toContain(p);
+		});
+
+		// protects=third-person known roles arm text is exactly the pre-#1291 string and carries no holder duty; fails_when=the third-person known roles arm changes wording or gains the clause; no_claim=route toast copy, signed-out paths
+		it("third-person known roles arm is unchanged and clause-free", () => {
+			const t = description({});
+			expect(t).toBe(
+				"Ana Ruiz is Toastmaster of the Day for this meeting. Recording that frees the role for someone else, and we can't put it back automatically.",
+			);
+			expect(t).not.toContain(ROLE_DUTY_CLAUSE);
+			for (const p of FORBIDDEN_NOTIFY_PHRASES) expect(t).not.toContain(p);
+		});
+
+		// protects=third-person stale page arm text is exactly the pre-#1291 string and carries no holder duty; fails_when=the third-person stale page arm changes wording or gains the clause; no_claim=route toast copy, signed-out paths
+		it("third-person stale page arm is unchanged and clause-free", () => {
+			const t = description({ roleLabels: [] });
+			expect(t).toBe(
+				"This also frees any role Ana Ruiz has taken for this meeting, and we can't put it back automatically.",
+			);
+			expect(t).not.toContain(ROLE_DUTY_CLAUSE);
+			for (const p of FORBIDDEN_NOTIFY_PHRASES) expect(t).not.toContain(p);
+		});
+
+		// protects=keep-role known arm text is exactly the pre-#1291 string and carries no holder duty; fails_when=the keep-role known arm changes wording or gains the clause; no_claim=route toast copy, signed-out paths
+		it("keep-role known arm is unchanged and clause-free", () => {
+			const t = description({ willRelease: false });
+			expect(t).toBe(
+				"Ana Ruiz is Toastmaster of the Day for this meeting. That stays theirs — this only records that they're not coming.",
+			);
+			expect(t).not.toContain(ROLE_DUTY_CLAUSE);
+			for (const p of FORBIDDEN_NOTIFY_PHRASES) expect(t).not.toContain(p);
+		});
+
+		// protects=keep-role stale arm text is exactly the pre-#1291 string and carries no holder duty; fails_when=the keep-role stale arm changes wording or gains the clause; no_claim=route toast copy, signed-out paths
+		it("keep-role stale arm is unchanged and clause-free", () => {
+			const t = description({ willRelease: false, roleLabels: [] });
+			expect(t).toBe(
+				"This records that Ana Ruiz isn't coming. Any role they hold stays theirs.",
+			);
+			expect(t).not.toContain(ROLE_DUTY_CLAUSE);
+			for (const p of FORBIDDEN_NOTIFY_PHRASES) expect(t).not.toContain(p);
+		});
+	});
 });

@@ -5,6 +5,8 @@ import {
 	notComingMaybeRoleText,
 	notComingText,
 	notComingToast,
+	ROLE_DUTY_CLAUSE,
+	ROLE_DUTY_NO_NOTIFY_SENTENCE,
 	ROLE_FREED_DUTY_TEXT,
 	ROLE_KEPT_DUTY_TEXT,
 	roleDutyConfirmText,
@@ -69,5 +71,29 @@ describe("notComingToast", () => {
 		const t = notComingToast(0, false);
 		expect(t).toEqual({ text: NOT_COMING_NO_ROLE_TEXT });
 		expect("duration" in t).toBe(false);
+	});
+});
+
+// protects=the shared clause and the two sentences built from it keep today's exact wording; fails_when=the clause or either builder drifts; no_claim=dialog copy
+describe("ROLE_DUTY_CLAUSE", () => {
+	it("keeps the wording the builders emit", () => {
+		expect(ROLE_DUTY_CLAUSE).toBe(
+			"it's still on you to find a replacement or tell the Toastmaster or VPE",
+		);
+		expect(roleDutyConfirmText("Timer", "Tue")).toBe(
+			"You're Timer on Tue. This frees the role, but it's still on you to find a replacement or tell the Toastmaster or VPE. GavelUp doesn't tell anyone.",
+		);
+		expect(notComingMaybeRoleText("Tue")).toBe(
+			"You'll be marked as not coming for the Tue meeting. If a role has been assigned to you since this page loaded, it will be freed too, and it's on you to tell the Toastmaster or VPE.",
+		);
+	});
+});
+
+describe("ROLE_DUTY_NO_NOTIFY_SENTENCE", () => {
+	// protects=the self-decline dialog's shared sentence text; fails_when=the wording or the duty clause inside it changes; no_claim=where it is rendered
+	it("says GavelUp tells no one, so the duty stays with the holder", () => {
+		expect(ROLE_DUTY_NO_NOTIFY_SENTENCE).toBe(
+			"GavelUp doesn't tell anyone, so it's still on you to find a replacement or tell the Toastmaster or VPE.",
+		);
 	});
 });
