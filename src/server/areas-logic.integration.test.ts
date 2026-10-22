@@ -1343,4 +1343,55 @@ describe.skipIf(!hasTestDb)("area hierarchy (#1116)", () => {
 			"Club not found",
 		);
 	});
+
+	// protects=at most one district is the demo district (the `districts_is_demo_unique` index
+	// refuses a second, by that name), while any number of real ones coexist;
+	// fails_when=a second is_demo=true row is accepted, the refusal comes from some other
+	// constraint, or a plain district is refused;
+	// no_claim=nothing reads the flag yet, and the demo rebuild that sets it is a sibling issue.
+	// Runs in one transaction that always rolls back, so no demo district is ever committed
+	// to the shared test database (sibling suites own that slot).
+	it("allows one demo district and refuses a second, but any number of real ones", async () => {
+		class RollBack extends Error {}
+		const tag = randomUUID().slice(0, 8);
+		await testDb
+			.transaction(async (tx) => {
+				const rows = await tx
+					.insert(districts)
+					.values([
+						{ number: `D1${tag}` },
+						{ number: `D2${tag}` },
+						{ number: `D3${tag}` },
+					])
+					.returning({ id: districts.id, isDemo: districts.isDemo });
+				expect(rows).toHaveLength(3);
+				expect(rows.every((r) => r.isDemo === false)).toBe(true);
+				const [a, b] = rows.map((r) => r.id);
+
+				await tx
+					.update(districts)
+					.set({ isDemo: true })
+					.where(eq(districts.id, a));
+				// A savepoint: the unique violation aborts only it, so the read below is valid.
+				await expect(
+					tx.transaction((sp) =>
+						sp
+							.update(districts)
+							.set({ isDemo: true })
+							.where(eq(districts.id, b)),
+					),
+				).rejects.toMatchObject({
+					cause: { code: "23505", constraint: "districts_is_demo_unique" },
+				});
+				const [still] = await tx
+					.select({ isDemo: districts.isDemo })
+					.from(districts)
+					.where(eq(districts.id, b));
+				expect(still.isDemo).toBe(false);
+				throw new RollBack();
+			})
+			.catch((err) => {
+				if (!(err instanceof RollBack)) throw err;
+			});
+	});
 });
