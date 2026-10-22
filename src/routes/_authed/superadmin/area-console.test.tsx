@@ -22,6 +22,10 @@ import { renderUnderMemoryRouter } from "#/test/router-harness";
 
 const fns = vi.hoisted(() => ({
 	addAreaClub: vi.fn(),
+	createArea: vi.fn(),
+	createDistrict: vi.fn(),
+	createDivision: vi.fn(),
+	listConsoleAreas: vi.fn(),
 	assignAreaDirector: vi.fn(),
 	endAreaDirectorTerm: vi.fn(),
 	findUserForDirector: vi.fn(),
@@ -51,8 +55,9 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	useRouter: () => ({ invalidate }),
 }));
 
-import type { ConsoleAreaDetail } from "#/server/areas-logic";
+import type { ConsoleAreaDetail, ConsoleAreaList } from "#/server/areas-logic";
 import { Route } from "./areas.$areaId";
+import { Route as IndexRoute } from "./areas.index";
 
 const AREA_ID = "3f0b5c1e-6a3d-4d1b-9f5e-2c7a8b9d0e1f";
 const LINKED_ROW = "11111111-1111-4111-8111-111111111111";
@@ -80,6 +85,7 @@ function area(overrides: Partial<ConsoleAreaDetail> = {}): ConsoleAreaDetail {
 		currentProgramYear: 2026,
 		districtId: "88888888-8888-4888-8888-888888888888",
 		districtNumber: "39",
+		districtIsDemo: false,
 		clubs: [],
 		availableClubs: [],
 		director: null,
@@ -366,5 +372,150 @@ describe("Area page label fix (#1116)", () => {
 			data: { divisionId: expect.any(String), letter: "D" },
 		});
 		expect(toastError).toHaveBeenCalledWith("Area D4 already exists");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The demo district (#1279)
+// ---------------------------------------------------------------------------
+
+const DEMO_NOTICE = "Demo area. The demo rebuild keeps it; edits are off.";
+
+/** One club linked, one name-only, one open current term: every control has
+ *  something to act on. */
+function fullArea(overrides: Partial<ConsoleAreaDetail> = {}) {
+	return area({
+		clubs: [
+			{
+				id: LINKED_ROW,
+				clubId: GAVELUP_CLUB,
+				name: "Downtown Speakers",
+				clubNumber: "1234567",
+				visitCount: 0,
+				linkOffer: null,
+			},
+			{
+				id: NAME_ONLY_ROW,
+				clubId: null,
+				name: "Lakeside Club",
+				clubNumber: "7654321",
+				visitCount: 0,
+				linkOffer: { clubId: OFFERED_CLUB, name: "Lakeside Toastmasters" },
+			},
+		],
+		availableClubs: [{ id: OFFERED_CLUB, name: "Other", clubNumber: null }],
+		director: {
+			id: TERM_ID,
+			userId: "u1",
+			displayName: "Jamie Rivera",
+			email: "jamie@example.com",
+			startedAt: new Date("2026-07-01T00:00:00Z"),
+			endedAt: null,
+			state: "current",
+		},
+		...overrides,
+	});
+}
+
+describe("Demo area page (#1279)", () => {
+	it("a demo area shows the notice and none of the six edit controls", async () => {
+		// protects=a presenter-visible area offers no way to edit it;
+		// fails_when=any of add club, link, remove, rename, assign director, end
+		// term still renders, or the notice is missing;
+		// no_claim=the server refusal (areas-logic.integration.test.ts); the
+		// loader data is stubbed, so only the rendering is checked.
+		await renderArea(fullArea({ districtIsDemo: true }));
+		expect(screen.getByText(DEMO_NOTICE)).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /^Link to/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /Remove/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /Add club/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /Add by name/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: "End term" })).toBeNull();
+		expect(screen.queryByLabelText(/Find the Area Director/)).toBeNull();
+		expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+		expect(screen.queryByLabelText("Area number")).toBeNull();
+	});
+
+	it("a real area shows all six edit controls and no notice", async () => {
+		// protects=the console still edits a real area;
+		// fails_when=a control is hidden for a non-demo area or the notice shows;
+		// no_claim=none beyond protects; the assign form needs no open term, so
+		// it is checked on a second render with none.
+		await renderArea(fullArea());
+		expect(screen.queryByText(DEMO_NOTICE)).toBeNull();
+		expect(screen.getByRole("button", { name: /^Link to/ })).toBeTruthy();
+		expect(screen.getAllByRole("button", { name: /Remove/ })).toHaveLength(2);
+		expect(screen.getByRole("button", { name: /Add club/ })).toBeTruthy();
+		expect(screen.getByRole("button", { name: /Add by name/ })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "End term" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+		cleanup();
+		await renderArea(fullArea({ director: null }));
+		expect(screen.getByLabelText(/Find the Area Director/)).toBeTruthy();
+	});
+});
+
+describe("Areas index and the demo district (#1279)", () => {
+	function list(): ConsoleAreaList {
+		const year = 2026;
+		const district = (id: string, number: string, isDemo: boolean) => ({
+			id,
+			number,
+			isDemo,
+			divisions: [
+				{
+					id: `div-${id}`,
+					programYear: year,
+					programYearLabel: "2026–27",
+					letter: "A",
+					areas: [],
+				},
+			],
+		});
+		return {
+			currentProgramYear: year,
+			districts: [
+				district("d-real", "39", false),
+				district("d-demo", "DEMO", true),
+			],
+		};
+	}
+
+	async function renderIndex() {
+		vi.spyOn(IndexRoute, "useLoaderData").mockReturnValue(
+			// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
+			list() as any,
+		);
+		const Page = IndexRoute.options.component as () => React.ReactElement;
+		await renderUnderMemoryRouter(<Page />);
+	}
+
+	it("badges the demo district only", async () => {
+		// protects=the operator can tell the demo district from a real one;
+		// fails_when=no badge on DEMO, or a badge on district 39;
+		// no_claim=the loader's isDemo value, which is stubbed here.
+		await renderIndex();
+		expect(screen.getAllByText("Demo")).toHaveLength(1);
+		expect(
+			screen.getByRole("heading", { level: 2, name: /^District DEMO\s*Demo$/ }),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("heading", { level: 2, name: "District 39" }),
+		).toBeTruthy();
+	});
+
+	it("leaves the demo district out of the create pickers", async () => {
+		// protects=a superadmin cannot pick the demo district to add a division or
+		// area under; fails_when=a DEMO option appears in either picker;
+		// no_claim=the server refusal.
+		await renderIndex();
+		const picker = screen.getByLabelText("District") as HTMLSelectElement;
+		const options = Array.from(picker.options).map((o) => o.textContent);
+		expect(options).toContain("District 39");
+		expect(options).not.toContain("District DEMO");
+		const divPicker = screen.getByLabelText("Division") as HTMLSelectElement;
+		const divOptions = Array.from(divPicker.options).map((o) => o.textContent);
+		expect(divOptions.some((t) => t?.includes("District 39"))).toBe(true);
+		expect(divOptions.some((t) => t?.includes("DEMO"))).toBe(false);
 	});
 });

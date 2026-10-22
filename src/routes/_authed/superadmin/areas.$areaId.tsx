@@ -93,12 +93,19 @@ function AreaDetail() {
 					District {area.districtNumber} · Division {area.divisionLetter} ·{" "}
 					{area.programYearLabel}
 				</p>
+				{area.districtIsDemo ? (
+					<p className="text-sm font-medium" data-testid="demo-area-notice">
+						Demo area. The demo rebuild keeps it; edits are off.
+					</p>
+				) : null}
 			</div>
 
 			<ClubsPanel area={area} onChanged={refresh} />
 			<DirectorPanel area={area} onChanged={refresh} />
 			<AreaPreviewPanel key={area.id} areaId={area.id} />
-			<RelabelPanel area={area} onChanged={refresh} />
+			{area.districtIsDemo ? null : (
+				<RelabelPanel area={area} onChanged={refresh} />
+			)}
 		</PageContainer>
 	);
 }
@@ -158,7 +165,7 @@ function ClubsPanel({
 								</p>
 							</div>
 							<div className="flex flex-wrap items-center gap-2">
-								{club.linkOffer ? (
+								{area.districtIsDemo ? null : club.linkOffer ? (
 									<Button
 										type="button"
 										size="sm"
@@ -175,31 +182,37 @@ function ClubsPanel({
 										<Link2 className="size-4" /> Link to {club.linkOffer.name}
 									</Button>
 								) : null}
-								<Button
-									type="button"
-									size="sm"
-									variant="outline"
-									disabled={busyId === club.id || club.visitCount > 0}
-									title={
-										club.visitCount > 0 ? CLUB_HAS_VISITS_MESSAGE : undefined
-									}
-									onClick={() =>
-										act(
-											club.id,
-											() => removeAreaClub({ data: { areaClubId: club.id } }),
-											"Removed.",
-										)
-									}
-								>
-									<Trash2 className="size-4" /> Remove
-								</Button>
+								{area.districtIsDemo ? null : (
+									<Button
+										type="button"
+										size="sm"
+										variant="outline"
+										disabled={busyId === club.id || club.visitCount > 0}
+										title={
+											club.visitCount > 0 ? CLUB_HAS_VISITS_MESSAGE : undefined
+										}
+										onClick={() =>
+											act(
+												club.id,
+												() => removeAreaClub({ data: { areaClubId: club.id } }),
+												"Removed.",
+											)
+										}
+									>
+										<Trash2 className="size-4" /> Remove
+									</Button>
+								)}
 							</div>
 						</li>
 					))}
 				</ul>
 			)}
-			<AddGavelUpClubForm area={area} onAdded={onChanged} />
-			<AddNameOnlyClubForm areaId={area.id} onAdded={onChanged} />
+			{area.districtIsDemo ? null : (
+				<>
+					<AddGavelUpClubForm area={area} onAdded={onChanged} />
+					<AddNameOnlyClubForm areaId={area.id} onAdded={onChanged} />
+				</>
+			)}
 		</section>
 	);
 }
@@ -354,7 +367,10 @@ function DirectorPanel({
 	const [ending, setEnding] = useState(false);
 	const director = area.director;
 	// A past year's area is history: nobody is assigned to it any more.
-	const canAssign = !director && area.programYear >= area.currentProgramYear;
+	const canAssign =
+		!area.districtIsDemo &&
+		!director &&
+		area.programYear >= area.currentProgramYear;
 
 	async function endTerm(termId: string) {
 		const ok = await run(
@@ -383,7 +399,8 @@ function DirectorPanel({
 								: ""}
 						</p>
 					</div>
-					{director.state === "ended-with-year" ? null : (
+					{director.state === "ended-with-year" ||
+					area.districtIsDemo ? null : (
 						<Button
 							type="button"
 							size="sm"

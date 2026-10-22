@@ -72,6 +72,13 @@ export const DIRECTOR_NOT_VERIFIED_MESSAGE =
 	"That account can't be made Area Director: its email isn't verified";
 export const ARCHIVED_CLUB_MESSAGE =
 	"An archived club can't be placed in an area";
+export const DEMO_DISTRICT_MESSAGE =
+	"The demo district is kept by the demo rebuild and can't be edited here";
+export const DEMO_DISTRICT_NUMBER_MESSAGE =
+	"DEMO is reserved for the demo district";
+/** The number of the demo district. Local on purpose: the rebuild (#1278) has
+ *  its own constant, and the two files must not import each other. */
+const RESERVED_DEMO_NUMBER = "DEMO";
 export const DEMO_CLUB_MESSAGE = "The demo club can't be placed in an area";
 export const CLUB_NUMBER_CHANGED_MESSAGE =
 	"That club's number changed. Try again";
@@ -187,6 +194,7 @@ interface AreaPlace {
 	programYear: number;
 	districtId: string;
 	districtNumber: string;
+	districtIsDemo: boolean;
 }
 
 async function loadAreaPlace(
@@ -202,12 +210,30 @@ async function loadAreaPlace(
 			programYear: divisions.programYear,
 			districtId: districts.id,
 			districtNumber: districts.number,
+			districtIsDemo: districts.isDemo,
 		})
 		.from(areas)
 		.innerJoin(divisions, eq(divisions.id, areas.divisionId))
 		.innerJoin(districts, eq(districts.id, divisions.districtId))
 		.where(eq(areas.id, areaId));
 	if (!row) throw new Error(AREA_NOT_FOUND_MESSAGE);
+	return row;
+}
+
+/** Refuse a write under the demo district. Only the demo rebuild writes there:
+ *  its Area Director is the shared demo login. Read inside the write's own
+ *  transaction and before any insert or update. */
+function refuseDemoDistrict(isDemo: boolean): void {
+	if (isDemo) throw new Error(DEMO_DISTRICT_MESSAGE);
+}
+
+async function assertDistrictWritable(tx: Tx, districtId: string) {
+	const [row] = await tx
+		.select({ number: districts.number, isDemo: districts.isDemo })
+		.from(districts)
+		.where(eq(districts.id, districtId));
+	if (!row) throw new Error("District not found");
+	refuseDemoDistrict(row.isDemo);
 	return row;
 }
 
@@ -377,6 +403,8 @@ export interface ConsoleAreaListDivision {
 export interface ConsoleAreaListDistrict {
 	id: string;
 	number: string;
+	/** The demo district: shown, badged, and refused every write. */
+	isDemo: boolean;
 	divisions: ConsoleAreaListDivision[];
 }
 
@@ -395,6 +423,7 @@ export async function listConsoleAreas(
 		.select({
 			districtId: districts.id,
 			districtNumber: districts.number,
+			districtIsDemo: districts.isDemo,
 			divisionId: divisions.id,
 			programYear: divisions.programYear,
 			letter: divisions.letter,
@@ -438,7 +467,12 @@ export async function listConsoleAreas(
 	for (const r of rows) {
 		let district = byDistrict.get(r.districtId);
 		if (!district) {
-			district = { id: r.districtId, number: r.districtNumber, divisions: [] };
+			district = {
+				id: r.districtId,
+				number: r.districtNumber,
+				isDemo: r.districtIsDemo,
+				divisions: [],
+			};
 			byDistrict.set(r.districtId, district);
 		}
 		if (r.divisionId === null || r.programYear === null || r.letter === null) {
@@ -534,6 +568,8 @@ export interface ConsoleAreaDetail {
 	currentProgramYear: number;
 	districtId: string;
 	districtNumber: string;
+	/** The area sits in the demo district: the page shows a notice, no controls. */
+	districtIsDemo: boolean;
 	clubs: ConsoleAreaClub[];
 	/** GavelUp clubs that could be placed here: live, and in no area of this
 	 *  program year yet. */
@@ -680,6 +716,7 @@ export async function getConsoleArea(
 		currentProgramYear: currentProgramYear(now),
 		districtId: place.districtId,
 		districtNumber: place.districtNumber,
+		districtIsDemo: place.districtIsDemo,
 		clubs: areaClubList,
 		availableClubs,
 		director: terms.find((t) => t.endedAt === null) ?? null,
@@ -694,6 +731,9 @@ export async function getConsoleArea(
 export async function createDistrict(
 	input: z.infer<typeof createDistrictSchema>,
 ): Promise<{ id: string }> {
+	if (input.number.trim().toUpperCase() === RESERVED_DEMO_NUMBER) {
+		throw new Error(DEMO_DISTRICT_NUMBER_MESSAGE);
+	}
 	try {
 		const [row] = await db
 			.insert(districts)
@@ -719,25 +759,25 @@ export async function createDivision(
 			`A division's program year must be ${programYearLabel(current)} or ${programYearLabel(current + 1)}`,
 		);
 	}
-	const [district] = await db
-		.select({ number: districts.number })
-		.from(districts)
-		.where(eq(districts.id, input.districtId));
-	if (!district) throw new Error("District not found");
+	let districtNumber = "";
 	try {
-		const [row] = await db
-			.insert(divisions)
-			.values({
-				districtId: input.districtId,
-				programYear: input.programYear,
-				letter: input.letter,
-			})
-			.returning({ id: divisions.id });
-		return inserted(row);
+		return await db.transaction(async (tx) => {
+			const district = await assertDistrictWritable(tx, input.districtId);
+			districtNumber = district.number;
+			const [row] = await tx
+				.insert(divisions)
+				.values({
+					districtId: input.districtId,
+					programYear: input.programYear,
+					letter: input.letter,
+				})
+				.returning({ id: divisions.id });
+			return inserted(row);
+		});
 	} catch (err) {
 		if (isUniqueViolation(err)) {
 			throw new Error(
-				`Division ${input.letter} already exists in District ${district.number} for ${programYearLabel(input.programYear)}`,
+				`Division ${input.letter} already exists in District ${districtNumber} for ${programYearLabel(input.programYear)}`,
 			);
 		}
 		throw err;
@@ -747,21 +787,31 @@ export async function createDivision(
 export async function createArea(
 	input: z.infer<typeof createAreaSchema>,
 ): Promise<{ id: string }> {
-	const [division] = await db
-		.select({ letter: divisions.letter, programYear: divisions.programYear })
-		.from(divisions)
-		.where(eq(divisions.id, input.divisionId));
-	if (!division) throw new Error("Division not found");
+	let place = { letter: "", programYear: 0 };
 	try {
-		const [row] = await db
-			.insert(areas)
-			.values({ divisionId: input.divisionId, number: input.number })
-			.returning({ id: areas.id });
-		return inserted(row);
+		return await db.transaction(async (tx) => {
+			const [division] = await tx
+				.select({
+					letter: divisions.letter,
+					programYear: divisions.programYear,
+					isDemo: districts.isDemo,
+				})
+				.from(divisions)
+				.innerJoin(districts, eq(districts.id, divisions.districtId))
+				.where(eq(divisions.id, input.divisionId));
+			if (!division) throw new Error("Division not found");
+			refuseDemoDistrict(division.isDemo);
+			place = division;
+			const [row] = await tx
+				.insert(areas)
+				.values({ divisionId: input.divisionId, number: input.number })
+				.returning({ id: areas.id });
+			return inserted(row);
+		});
 	} catch (err) {
 		if (isUniqueViolation(err)) {
 			throw new Error(
-				`Area ${areaLabel(division.letter, input.number)} already exists for ${programYearLabel(division.programYear)}`,
+				`Area ${areaLabel(place.letter, input.number)} already exists for ${programYearLabel(place.programYear)}`,
 			);
 		}
 		throw err;
@@ -772,24 +822,30 @@ export async function createArea(
 export async function renameDivision(
 	input: z.infer<typeof renameDivisionSchema>,
 ): Promise<void> {
-	const [division] = await db
-		.select({
-			programYear: divisions.programYear,
-			districtNumber: districts.number,
-		})
-		.from(divisions)
-		.innerJoin(districts, eq(districts.id, divisions.districtId))
-		.where(eq(divisions.id, input.divisionId));
-	if (!division) throw new Error("Division not found");
+	let place = { programYear: 0, districtNumber: "" };
 	try {
-		await db
-			.update(divisions)
-			.set({ letter: input.letter, updatedAt: sql`now()` })
-			.where(eq(divisions.id, input.divisionId));
+		await db.transaction(async (tx) => {
+			const [division] = await tx
+				.select({
+					programYear: divisions.programYear,
+					districtNumber: districts.number,
+					isDemo: districts.isDemo,
+				})
+				.from(divisions)
+				.innerJoin(districts, eq(districts.id, divisions.districtId))
+				.where(eq(divisions.id, input.divisionId));
+			if (!division) throw new Error("Division not found");
+			refuseDemoDistrict(division.isDemo);
+			place = division;
+			await tx
+				.update(divisions)
+				.set({ letter: input.letter, updatedAt: sql`now()` })
+				.where(eq(divisions.id, input.divisionId));
+		});
 	} catch (err) {
 		if (isUniqueViolation(err)) {
 			throw new Error(
-				`Division ${input.letter} already exists in District ${division.districtNumber} for ${programYearLabel(division.programYear)}`,
+				`Division ${input.letter} already exists in District ${place.districtNumber} for ${programYearLabel(place.programYear)}`,
 			);
 		}
 		throw err;
@@ -800,14 +856,18 @@ export async function renameDivision(
 export async function renameArea(
 	input: z.infer<typeof renameAreaSchema>,
 ): Promise<void> {
-	const place = await loadAreaPlace(db, input.areaId);
+	let place: AreaPlace | undefined;
 	try {
-		await db
-			.update(areas)
-			.set({ number: input.number, updatedAt: sql`now()` })
-			.where(eq(areas.id, input.areaId));
+		await db.transaction(async (tx) => {
+			place = await loadAreaPlace(tx, input.areaId);
+			refuseDemoDistrict(place.districtIsDemo);
+			await tx
+				.update(areas)
+				.set({ number: input.number, updatedAt: sql`now()` })
+				.where(eq(areas.id, input.areaId));
+		});
 	} catch (err) {
-		if (isUniqueViolation(err)) {
+		if (place && isUniqueViolation(err)) {
 			throw new Error(
 				`Area ${areaLabel(place.divisionLetter, input.number)} already exists for ${programYearLabel(place.programYear)}`,
 			);
@@ -833,12 +893,12 @@ export async function renameArea(
 export async function addAreaClub(
 	input: z.input<typeof addAreaClubSchema>,
 ): Promise<{ id: string }> {
-	const target = await loadAreaPlace(db, input.areaId);
+	return db.transaction(async (tx) => {
+		const target = await loadAreaPlace(tx, input.areaId);
+		refuseDemoDistrict(target.districtIsDemo);
 
-	if (input.clubId) {
-		const clubId = input.clubId;
-		return db.transaction(async (tx) => {
-			const club = await lockClubRow(tx, clubId);
+		if (input.clubId) {
+			const club = await lockClubRow(tx, input.clubId);
 			await assertNotPlacedInYear(tx, club, target);
 			const [row] = await tx
 				.insert(areaClubs)
@@ -850,13 +910,11 @@ export async function addAreaClub(
 				})
 				.returning({ id: areaClubs.id });
 			return inserted(row);
-		});
-	}
+		}
 
-	const name = input.name?.trim();
-	if (!name) throw new Error("Enter the club's name");
-	const clubNumber = input.clubNumber || null;
-	return db.transaction(async (tx) => {
+		const name = input.name?.trim();
+		if (!name) throw new Error("Enter the club's name");
+		const clubNumber = input.clubNumber || null;
 		if (clubNumber) {
 			const club = await lockClubByNumber(tx, clubNumber, {
 				allowArchived: true,
@@ -877,10 +935,18 @@ export async function linkAreaClub(
 ): Promise<void> {
 	await db.transaction(async (tx) => {
 		const [row] = await tx
-			.select({ clubId: areaClubs.clubId, clubNumber: areaClubs.clubNumber })
+			.select({
+				clubId: areaClubs.clubId,
+				clubNumber: areaClubs.clubNumber,
+				districtIsDemo: districts.isDemo,
+			})
 			.from(areaClubs)
+			.innerJoin(areas, eq(areas.id, areaClubs.areaId))
+			.innerJoin(divisions, eq(divisions.id, areas.divisionId))
+			.innerJoin(districts, eq(districts.id, divisions.districtId))
 			.where(eq(areaClubs.id, input.areaClubId));
 		if (!row) throw new Error(AREA_CLUB_NOT_FOUND_MESSAGE);
+		refuseDemoDistrict(row.districtIsDemo);
 		if (row.clubId) throw new Error(ALREADY_LINKED_MESSAGE);
 		if (!row.clubNumber) {
 			throw new Error("This club has no club number to match");
@@ -920,6 +986,14 @@ export async function removeAreaClub(
 	input: z.infer<typeof areaClubIdSchema>,
 ): Promise<void> {
 	await db.transaction(async (tx) => {
+		const [place] = await tx
+			.select({ districtIsDemo: districts.isDemo })
+			.from(areaClubs)
+			.innerJoin(areas, eq(areas.id, areaClubs.areaId))
+			.innerJoin(divisions, eq(divisions.id, areas.divisionId))
+			.innerJoin(districts, eq(districts.id, divisions.districtId))
+			.where(eq(areaClubs.id, input.areaClubId));
+		if (place) refuseDemoDistrict(place.districtIsDemo);
 		const [row] = await tx
 			.select({ id: areaClubs.id })
 			.from(areaClubs)
@@ -996,31 +1070,34 @@ export async function assignAreaDirector(
 	// the name is what #1118 shows the club's admins.
 	const displayName = input.displayName.trim();
 	if (!displayName) throw new Error(DISPLAY_NAME_REQUIRED_MESSAGE);
-	const place = await loadAreaPlace(db, input.areaId);
-	if (place.programYear < currentProgramYear(now)) {
-		throw new Error(pastYearAreaMessage(place.programYear));
-	}
-	const [candidate] = await db
-		.select({ emailVerified: user.emailVerified })
-		.from(user)
-		.where(eq(user.id, input.userId));
-	if (!candidate?.emailVerified) {
-		throw new Error(DIRECTOR_NOT_VERIFIED_MESSAGE);
-	}
-	try {
-		const [row] = await db
-			.insert(areaDirectors)
-			.values({
-				areaId: input.areaId,
-				userId: input.userId,
-				displayName,
-				assignedBy,
-			})
-			.returning({ id: areaDirectors.id });
-		return inserted(row);
-	} catch (err) {
-		throw assignDirectorFailure(err);
-	}
+	return db.transaction(async (tx) => {
+		const place = await loadAreaPlace(tx, input.areaId);
+		refuseDemoDistrict(place.districtIsDemo);
+		if (place.programYear < currentProgramYear(now)) {
+			throw new Error(pastYearAreaMessage(place.programYear));
+		}
+		const [candidate] = await tx
+			.select({ emailVerified: user.emailVerified })
+			.from(user)
+			.where(eq(user.id, input.userId));
+		if (!candidate?.emailVerified) {
+			throw new Error(DIRECTOR_NOT_VERIFIED_MESSAGE);
+		}
+		try {
+			const [row] = await tx
+				.insert(areaDirectors)
+				.values({
+					areaId: input.areaId,
+					userId: input.userId,
+					displayName,
+					assignedBy,
+				})
+				.returning({ id: areaDirectors.id });
+			return inserted(row);
+		} catch (err) {
+			throw assignDirectorFailure(err);
+		}
+	});
 }
 
 /** Close a term. `ended_at` is the database's clock, as `started_at` is. */
@@ -1028,12 +1105,22 @@ export async function endAreaDirectorTerm(
 	input: z.infer<typeof endAreaDirectorTermSchema>,
 	endedBy: string,
 ): Promise<void> {
-	const ended = await db
-		.update(areaDirectors)
-		.set({ endedAt: sql`now()`, endedBy, updatedAt: sql`now()` })
-		.where(
-			and(eq(areaDirectors.id, input.termId), isNull(areaDirectors.endedAt)),
-		)
-		.returning({ id: areaDirectors.id });
-	if (ended.length === 0) throw new Error(NO_CURRENT_TERM_MESSAGE);
+	await db.transaction(async (tx) => {
+		const [place] = await tx
+			.select({ districtIsDemo: districts.isDemo })
+			.from(areaDirectors)
+			.innerJoin(areas, eq(areas.id, areaDirectors.areaId))
+			.innerJoin(divisions, eq(divisions.id, areas.divisionId))
+			.innerJoin(districts, eq(districts.id, divisions.districtId))
+			.where(eq(areaDirectors.id, input.termId));
+		if (place) refuseDemoDistrict(place.districtIsDemo);
+		const ended = await tx
+			.update(areaDirectors)
+			.set({ endedAt: sql`now()`, endedBy, updatedAt: sql`now()` })
+			.where(
+				and(eq(areaDirectors.id, input.termId), isNull(areaDirectors.endedAt)),
+			)
+			.returning({ id: areaDirectors.id });
+		if (ended.length === 0) throw new Error(NO_CURRENT_TERM_MESSAGE);
+	});
 }

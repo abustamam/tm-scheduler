@@ -29,8 +29,11 @@ import {
 import { CLUB_HAS_VISITS_MESSAGE } from "#/lib/area-limits";
 import { currentProgramYear, programYearLabel } from "#/lib/dcp";
 import { hasTestDb, openBlockingTx, testDb, waitForLockWait } from "#/test/db";
+import { withDemoDistrict } from "#/test/demo-district-tx";
 
-vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+// `dbMock()` forwards to `testDb` except inside `withDemoDistrict` (#1279),
+// which points `#/db` at one rolled-back transaction.
+vi.mock("#/db", async () => (await import("#/test/demo-district-tx")).dbMock());
 
 const {
 	addAreaClub,
@@ -56,6 +59,8 @@ const {
 	assignDirectorFailure,
 	CLUB_NUMBER_CHANGED_MESSAGE,
 	CURRENT_TERM_EXISTS_MESSAGE,
+	DEMO_DISTRICT_MESSAGE,
+	DEMO_DISTRICT_NUMBER_MESSAGE,
 	DIRECTOR_NOT_VERIFIED_MESSAGE,
 	DISPLAY_NAME_REQUIRED_MESSAGE,
 	NO_CURRENT_TERM_MESSAGE,
@@ -1393,5 +1398,191 @@ describe.skipIf(!hasTestDb)("area hierarchy (#1116)", () => {
 			.catch((err) => {
 				if (!(err instanceof RollBack)) throw err;
 			});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The demo district (#1279). Each body runs in one rolled-back transaction with
+// `#/db` pointed at it, because at most one `is_demo` district may exist in the
+// database and a sibling suite may own that slot.
+// ---------------------------------------------------------------------------
+describe.skipIf(!hasTestDb)("the demo district in the console (#1279)", () => {
+	afterEach(teardown);
+
+	/** The demo district with a division, an area, a name-only area club and an
+	 *  open term, all inserted directly. */
+	async function demoFixture(
+		tx: Parameters<Parameters<typeof withDemoDistrict>[0]>[0]["tx"],
+		districtId: string,
+	) {
+		const [division] = await tx
+			.insert(divisions)
+			.values({ districtId, programYear: YEAR, letter: "Z" })
+			.returning({ id: divisions.id });
+		const [area] = await tx
+			.insert(areas)
+			.values({ divisionId: division.id, number: "1" })
+			.returning({ id: areas.id });
+		const [areaClub] = await tx
+			.insert(areaClubs)
+			.values({
+				areaId: area.id,
+				name: "Demo Name Only",
+				clubNumber: uniqueClubNumber(),
+			})
+			.returning({ id: areaClubs.id });
+		const userId = randomUUID();
+		await tx.insert(user).values({
+			id: userId,
+			name: "",
+			email: `demo-ad-${userId}@test.example`,
+			emailVerified: true,
+		});
+		const [term] = await tx
+			.insert(areaDirectors)
+			.values({
+				areaId: area.id,
+				userId,
+				displayName: "Demo AD",
+				assignedBy: userId,
+			})
+			.returning({ id: areaDirectors.id });
+		return {
+			districtId,
+			divisionId: division.id,
+			areaId: area.id,
+			areaClubId: areaClub.id,
+			termId: term.id,
+			userId,
+		};
+	}
+
+	/** Every row the console writes under this district, as JSON: row counts
+	 *  and `updated_at` both show in a before/after comparison. */
+	async function snapshot(
+		tx: Parameters<Parameters<typeof withDemoDistrict>[0]>[0]["tx"],
+		f: { districtId: string; divisionId: string; areaId: string },
+	) {
+		return JSON.stringify({
+			districts: await tx
+				.select()
+				.from(districts)
+				.where(eq(districts.id, f.districtId)),
+			divisions: await tx
+				.select()
+				.from(divisions)
+				.where(eq(divisions.districtId, f.districtId)),
+			areas: await tx
+				.select()
+				.from(areas)
+				.where(eq(areas.divisionId, f.divisionId)),
+			areaClubs: await tx
+				.select()
+				.from(areaClubs)
+				.where(eq(areaClubs.areaId, f.areaId)),
+			areaDirectors: await tx
+				.select()
+				.from(areaDirectors)
+				.where(eq(areaDirectors.areaId, f.areaId)),
+		});
+	}
+
+	// protects=nobody can name a real district "DEMO" and so collide with the demo
+	// district's number; the allowed numbers still create;
+	// fails_when=any spelling of DEMO inserts a row, or "39" / "F" is refused;
+	// no_claim=what the database does with a second DEMO (the rebuild's own
+	// constraint); numbers are per-run suffixed apart from the refused ones.
+	it("reserves the number DEMO in any case and spacing, and still creates others", async () => {
+		const before = await testDb.select({ id: districts.id }).from(districts);
+		for (const number of ["DEMO", "demo", " Demo "]) {
+			await expect(createDistrict({ number })).rejects.toThrow(
+				DEMO_DISTRICT_NUMBER_MESSAGE,
+			);
+		}
+		const after = await testDb.select({ id: districts.id }).from(districts);
+		expect(after.length).toBe(before.length);
+		// "39" and "F" may already exist in the shared database; a per-run
+		// prefix keeps the proof that near-misses are not refused.
+		for (const number of [`39${run()}`, `F${run()}`]) {
+			const { id } = await createDistrict({ number });
+			created.districts.push(id);
+		}
+	});
+
+	type Fixture = Awaited<ReturnType<typeof demoFixture>>;
+	const writes: [string, (f: Fixture) => Promise<unknown>][] = [
+		[
+			"createDivision",
+			(f) =>
+				createDivision({
+					districtId: f.districtId,
+					programYear: YEAR,
+					letter: "Y",
+				}),
+		],
+		[
+			"createArea",
+			(f) => createArea({ divisionId: f.divisionId, number: "9" }),
+		],
+		[
+			"renameDivision",
+			(f) => renameDivision({ divisionId: f.divisionId, letter: "Y" }),
+		],
+		["renameArea", (f) => renameArea({ areaId: f.areaId, number: "9" })],
+		[
+			"addAreaClub",
+			async (f) => {
+				await addAreaClub({ areaId: f.areaId, name: "Real Club" });
+			},
+		],
+		["linkAreaClub", (f) => linkAreaClub({ areaClubId: f.areaClubId })],
+		["removeAreaClub", (f) => removeAreaClub({ areaClubId: f.areaClubId })],
+		[
+			"assignAreaDirector",
+			(f) =>
+				assignAreaDirector(
+					{ areaId: f.areaId, userId: f.userId, displayName: "Other" },
+					f.userId,
+				),
+		],
+		[
+			"endAreaDirectorTerm",
+			(f) => endAreaDirectorTerm({ termId: f.termId }, f.userId),
+		],
+	];
+
+	// protects=the shared demo login's hierarchy is edited only by the rebuild;
+	// fails_when=a write under the demo district succeeds, throws another
+	// message, or changes any row or `updated_at`;
+	// no_claim=the demo district is inserted directly, not built by the rebuild;
+	// refusals are checked on the logic functions, not the HTTP handlers.
+	it.each(
+		writes,
+	)("%s is refused under the demo district and changes nothing", async (_name, write) => {
+		await withDemoDistrict(async ({ tx, districtId }) => {
+			const f = await demoFixture(tx, districtId);
+			const before = await snapshot(tx, f);
+			await expect(write(f)).rejects.toThrow(DEMO_DISTRICT_MESSAGE);
+			expect(await snapshot(tx, f)).toBe(before);
+		});
+	});
+
+	// protects=the console tells the page which district is the demo one;
+	// fails_when=isDemo / districtIsDemo is wrong for either kind of district;
+	// no_claim=the page's rendering (area-console.test.tsx).
+	it("flags the demo district and its areas on the two reads, and no real one", async () => {
+		const real = await makeChain();
+		await withDemoDistrict(async ({ tx, districtId }) => {
+			const f = await demoFixture(tx, districtId);
+			const list = await listConsoleAreas();
+			expect(list.districts.find((d) => d.id === f.districtId)?.isDemo).toBe(
+				true,
+			);
+			expect(list.districts.find((d) => d.id === real.districtId)?.isDemo).toBe(
+				false,
+			);
+			expect((await getConsoleArea(f.areaId)).districtIsDemo).toBe(true);
+			expect((await getConsoleArea(real.areaId)).districtIsDemo).toBe(false);
+		});
 	});
 });

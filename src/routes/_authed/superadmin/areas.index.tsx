@@ -3,6 +3,7 @@ import { ArrowLeft, Loader2, Plus } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
+import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
@@ -73,7 +74,10 @@ function AreasConsole() {
 			) : (
 				districts.map((district) => (
 					<section key={district.id} className="space-y-3">
-						<h2 className="text-sm font-bold">District {district.number}</h2>
+						<h2 className="flex items-center gap-2 text-sm font-bold">
+							District {district.number}
+							{district.isDemo && <Badge variant="secondary">Demo</Badge>}
+						</h2>
 						{district.divisions.length === 0 ? (
 							<p className="text-sm text-muted-foreground">No divisions yet.</p>
 						) : (
@@ -259,11 +263,13 @@ function CreateDivisionForm({
 					<option value="" disabled>
 						Choose a district
 					</option>
-					{districts.map((d) => (
-						<option key={d.id} value={d.id}>
-							District {d.number}
-						</option>
-					))}
+					{districts
+						.filter((d) => !d.isDemo)
+						.map((d) => (
+							<option key={d.id} value={d.id}>
+								District {d.number}
+							</option>
+						))}
 				</select>
 			</div>
 			<div className="grid gap-3 sm:grid-cols-2">
@@ -308,9 +314,9 @@ function CreateAreaForm({
 	onCreated: () => void;
 }) {
 	const [busy, setBusy] = useState(false);
-	const divisions = districts.flatMap((d) =>
-		d.divisions.map((division) => ({ district: d, division })),
-	);
+	const divisions = districts
+		.filter((d) => !d.isDemo)
+		.flatMap((d) => d.divisions.map((division) => ({ district: d, division })));
 
 	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
