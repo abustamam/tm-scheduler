@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 // The logic module imports the pooled client; nothing here reaches it.
 vi.mock("#/db", () => ({ db: {} }));
 
-const { demoKeepRule, parseDemoAccountEmail } = await import(
+const { demoKeepRule, demoVisitDay, parseDemoAccountEmail } = await import(
 	"./demo-reset-logic"
 );
 
@@ -65,6 +65,47 @@ describe("demoKeepRule (#1199)", () => {
 		expect(rule(account("x@club.test"))).toBe(false);
 		expect(demoKeepRule("me@example.com")(account("ME@example.com"))).toBe(
 			true,
+		);
+	});
+});
+
+describe("demoVisitDay (#1278)", () => {
+	// protects=mid-year the visit is 14 calendar days before today in Chicago;
+	// fails_when=the UTC date is used (this instant is Nov 14 in Chicago) or the
+	//   lead is not 14 days;
+	// no_claim=none beyond protects.
+	it("is 14 days back in America/Chicago, mid-year", () => {
+		expect(demoVisitDay(new Date("2026-11-15T03:00:00Z"), 2026)).toBe(
+			"2026-10-31",
+		);
+		expect(demoVisitDay(new Date("2026-11-15T18:00:00Z"), 2026)).toBe(
+			"2026-11-01",
+		);
+	});
+
+	// protects=on July 5 the date is raised to the program year's first day;
+	// fails_when=June 21, a date outside the program year, is returned;
+	// no_claim=none beyond protects.
+	it("is July 1 on July 5", () => {
+		expect(demoVisitDay(new Date("2026-07-05T17:00:00Z"), 2026)).toBe(
+			"2026-07-01",
+		);
+	});
+
+	// protects=exactly 14 days after July 1 is not clamped, and a DST change in the
+	//   window does not move the date (calendar arithmetic, not 14 x 24h);
+	// fails_when=the 14th day is raised to July 1, or the March DST shift makes it
+	//   a day early or late;
+	// no_claim=none beyond protects.
+	it("does not clamp on July 15, and DST does not shift the date", () => {
+		expect(demoVisitDay(new Date("2026-07-15T17:00:00Z"), 2026)).toBe(
+			"2026-07-01",
+		);
+		expect(demoVisitDay(new Date("2026-07-16T17:00:00Z"), 2026)).toBe(
+			"2026-07-02",
+		);
+		expect(demoVisitDay(new Date("2027-03-15T17:00:00Z"), 2026)).toBe(
+			"2027-03-01",
 		);
 	});
 });

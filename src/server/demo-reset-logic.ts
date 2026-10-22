@@ -7,13 +7,28 @@
 // DB logic only: the session and superadmin gates live in `onboarding.ts`, and
 // this module may not be imported by a client route (see server-modules.guard).
 
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { user } from "#/db/auth-schema";
 import { buildFixtureClub } from "#/db/fixtures/club-fixture";
-import { clubs, guests, members, officerTerms, people } from "#/db/schema";
+import {
+	areaClubs,
+	areaDirectors,
+	areas,
+	clubs,
+	clubVisits,
+	districts,
+	divisions,
+	guests,
+	members,
+	officerTerms,
+	people,
+} from "#/db/schema";
+import { programYearIsoWindow } from "#/lib/area-visits";
+import { currentProgramYear } from "#/lib/dcp";
 import { isReservedRecipient } from "#/lib/email";
 import { normalizedEmail, normalizeEmail } from "./account-link-logic";
+import { isoDayIn } from "./area-visits-logic";
 import {
 	CLUB_WRITE_LOCK_TIMEOUT,
 	lockClubForWrite,
@@ -31,6 +46,18 @@ export const DEMO_CLUB_NAME = "GavelUp Demo Club";
 export const DEMO_CLUB_SLUG = "gavelup-demo-club";
 export const DEMO_ADMIN_NAME = "Demo Presenter";
 export const DEMO_TIMEZONE = "America/Chicago";
+
+// The demo hierarchy (#1278): one district flagged `is_demo`, and in each
+// program year one division and one area around the demo club.
+export const DEMO_DISTRICT_NUMBER = "DEMO";
+export const DEMO_DIVISION_LETTER = "A";
+export const DEMO_AREA_NUMBER = "1";
+export const DEMO_AREA_CLUB_NAMES = [
+	"Bayfront Speakers",
+	"Lighthouse Orators",
+	"Pier Nine Toastmasters",
+] as const;
+export const DEMO_VISIT_LEAD_DAYS = 14;
 
 /**
  * The advisory-lock namespace every demo rebuild takes (ASCII "Demo"), with a
@@ -236,8 +263,180 @@ export async function resetDemoClub(
 				userId: demoUser?.id ?? null,
 			},
 		});
+		await buildDemoArea(tx, {
+			clubId,
+			demoUserId: demoUser?.id ?? null,
+			actorUserId: opts.actor.userId,
+			now: opts.now,
+		});
 		return { clubId };
 	});
+}
+
+/**
+ * The calendar date `DEMO_VISIT_LEAD_DAYS` before today in `DEMO_TIMEZONE`,
+ * raised to the program year's first day when earlier. Calendar arithmetic on
+ * the ISO date, not `now` minus 14 x 24h, so a DST change cannot shift it.
+ */
+export function demoVisitDay(now: Date, programYear: number): string {
+	const [y, m, d] = isoDayIn(now, DEMO_TIMEZONE).split("-").map(Number);
+	const back = new Date(
+		Date.UTC(
+			y as number,
+			(m as number) - 1,
+			(d as number) - DEMO_VISIT_LEAD_DAYS,
+		),
+	);
+	const day = back.toISOString().slice(0, 10);
+	const { start } = programYearIsoWindow(programYear);
+	return day < start ? start : day;
+}
+
+/**
+ * Build, or keep, the demo district, this program year's division and area, the
+ * area's four clubs (the demo club and three name-only), two round-1 visits and
+ * the demo account's director term (#1278). Runs inside `resetDemoClub`'s
+ * transaction, so a throw rolls the whole rebuild back. The district, division
+ * and area are found, never recreated; last year's are not touched.
+ */
+export async function buildDemoArea(
+	tx: DbOrTx,
+	opts: {
+		clubId: string;
+		demoUserId: string | null;
+		actorUserId: string;
+		now: Date;
+	},
+): Promise<{ areaId: string }> {
+	const { now } = opts;
+	const year = currentProgramYear(now);
+
+	let [district] = await tx
+		.select({ id: districts.id })
+		.from(districts)
+		.where(eq(districts.isDemo, true))
+		.limit(1);
+	if (!district) {
+		[district] = await tx
+			.insert(districts)
+			.values({ number: DEMO_DISTRICT_NUMBER, isDemo: true })
+			.returning({ id: districts.id });
+	}
+	if (!district) throw new Error("demo district");
+
+	let [division] = await tx
+		.select({ id: divisions.id })
+		.from(divisions)
+		.where(
+			and(
+				eq(divisions.districtId, district.id),
+				eq(divisions.programYear, year),
+				eq(divisions.letter, DEMO_DIVISION_LETTER),
+			),
+		)
+		.limit(1);
+	if (!division) {
+		[division] = await tx
+			.insert(divisions)
+			.values({
+				districtId: district.id,
+				programYear: year,
+				letter: DEMO_DIVISION_LETTER,
+			})
+			.returning({ id: divisions.id });
+	}
+	if (!division) throw new Error("demo division");
+
+	let [area] = await tx
+		.select({ id: areas.id })
+		.from(areas)
+		.where(
+			and(
+				eq(areas.divisionId, division.id),
+				eq(areas.number, DEMO_AREA_NUMBER),
+			),
+		)
+		.limit(1);
+	if (!area) {
+		[area] = await tx
+			.insert(areas)
+			.values({ divisionId: division.id, number: DEMO_AREA_NUMBER })
+			.returning({ id: areas.id });
+	}
+	if (!area) throw new Error("demo area");
+	const areaId = area.id;
+
+	// Visits first: `club_visits.area_club_id` is RESTRICT. The area itself stays.
+	await tx
+		.delete(clubVisits)
+		.where(
+			inArray(
+				clubVisits.areaClubId,
+				tx
+					.select({ id: areaClubs.id })
+					.from(areaClubs)
+					.where(eq(areaClubs.areaId, areaId)),
+			),
+		);
+	await tx.delete(areaClubs).where(eq(areaClubs.areaId, areaId));
+
+	// No club number on any row, so the console's link offer can never match a
+	// real club.
+	const [demoRow, bayfrontRow] = await tx
+		.insert(areaClubs)
+		.values([
+			{
+				areaId,
+				clubId: opts.clubId,
+				name: DEMO_CLUB_NAME,
+				clubNumber: null,
+			},
+			...DEMO_AREA_CLUB_NAMES.map((name) => ({
+				areaId,
+				clubId: null,
+				name,
+				clubNumber: null,
+			})),
+		])
+		.returning({ id: areaClubs.id, name: areaClubs.name });
+	if (!demoRow || !bayfrontRow) throw new Error("demo area clubs");
+
+	const day = demoVisitDay(now, year);
+	await tx.insert(clubVisits).values(
+		[demoRow, bayfrontRow].map((row) => ({
+			areaClubId: row.id,
+			round: 1,
+			visitedOn: day,
+			recordedBy: opts.demoUserId,
+		})),
+	);
+
+	// The term bypasses `assignAreaDirector`, which refuses the demo district.
+	if (opts.demoUserId) {
+		const [open] = await tx
+			.select({ id: areaDirectors.id, userId: areaDirectors.userId })
+			.from(areaDirectors)
+			.where(
+				and(eq(areaDirectors.areaId, areaId), isNull(areaDirectors.endedAt)),
+			)
+			.limit(1);
+		if (open?.userId !== opts.demoUserId) {
+			if (open) {
+				await tx
+					.update(areaDirectors)
+					.set({ endedAt: now, endedBy: opts.actorUserId })
+					.where(eq(areaDirectors.id, open.id));
+			}
+			await tx.insert(areaDirectors).values({
+				areaId,
+				userId: opts.demoUserId,
+				displayName: DEMO_ADMIN_NAME,
+				startedAt: now,
+				assignedBy: opts.actorUserId,
+			});
+		}
+	}
+	return { areaId };
 }
 
 /**
