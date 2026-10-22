@@ -256,7 +256,7 @@ describe("PersonalMeetingBody — the confirm gate (#665)", () => {
 		expect(screen.queryByText("Give up your role?")).toBeNull();
 		expect(setPlannedAttendance).not.toHaveBeenCalled();
 		expect(
-			screen.getByText(new RegExp(ROLE_KEPT_DUTY_TEXT.slice(0, 40))),
+			screen.getByText(/find a replacement or tell the Toastmaster or VPE/),
 			"the copy must say the role stays theirs and the duty is theirs",
 		).toBeTruthy();
 	});
@@ -919,6 +919,7 @@ describe("formatMeetingKeyLabel (#676)", () => {
 
 // #1280. protects=every decline surface tells the holder the duty is still theirs and claims no notification; fails_when=copy says "we've let the team know" / "an officer will find cover", drops the duty, or shows duty text to a member with no role; no_claim=mocked server writes and sonner, so toast duration is asserted but not how long a real toast stays on screen
 describe("PersonalMeetingBody - role-duty copy (#1280)", () => {
+	// protects=confirm names the duty and "GavelUp doesn't tell anyone", toast reads Role freed for 10s; fails_when=duty or the no-notify sentence is dropped, or the toast is the short default; no_claim=mocked writes and sonner
 	it("signed-in holder: confirm says the duty is theirs and GavelUp tells no one; toast says Role freed", async () => {
 		await renderBody(makeView(), false);
 		await userEvent.click(
@@ -940,6 +941,7 @@ describe("PersonalMeetingBody - role-duty copy (#1280)", () => {
 		);
 	});
 
+	// protects=plural freed text after releasing two roles; fails_when=two roles read "Role freed."; no_claim=released count comes from a mocked server response
 	it("two released roles read Roles freed", async () => {
 		vi.mocked(markUnavailableReleasing).mockResolvedValueOnce({
 			ok: true,
@@ -960,6 +962,7 @@ describe("PersonalMeetingBody - role-duty copy (#1280)", () => {
 		expect(roleFreedDutyText(2)).toMatch(/^Roles freed\./);
 	});
 
+	// protects=a release that freed nothing shows the plain not-coming toast; fails_when=duty text shown to a member with no role; no_claim=released:0 is mocked
 	it("signed-in, nothing freed: plain not-coming toast, no duty text", async () => {
 		vi.mocked(markUnavailableReleasing).mockResolvedValueOnce({
 			ok: true,
@@ -973,10 +976,13 @@ describe("PersonalMeetingBody - role-duty copy (#1280)", () => {
 			}),
 		);
 		await waitFor(() =>
-			expect(toast.success).toHaveBeenCalledWith(NOT_COMING_NO_ROLE_TEXT),
+			expect(toast.success).toHaveBeenCalledWith(NOT_COMING_NO_ROLE_TEXT, {
+				duration: undefined,
+			}),
 		);
 	});
 
+	// protects=a signed-out holder who declines keeps the duty (role not freed) for 10s; fails_when=toast claims the role was freed or that anyone was told; no_claim=holdsRole comes from the fixture view
 	it("signed-out holder: toast keeps the duty with them", async () => {
 		await renderBody(makeView());
 		await userEvent.click(
@@ -992,6 +998,7 @@ describe("PersonalMeetingBody - role-duty copy (#1280)", () => {
 		);
 	});
 
+	// protects=no-role decline shows plain not-coming copy before and after; fails_when=duty text or a notify claim appears; no_claim=mocked writes and sonner
 	it("signed-out member with no role: no duty text, no notify claim", async () => {
 		await renderBody(makeView({ roles: [] }));
 		await userEvent.click(screen.getByRole("button", { name: "No, I can't" }));
@@ -1001,7 +1008,9 @@ describe("PersonalMeetingBody - role-duty copy (#1280)", () => {
 			screen.getByRole("button", { name: "Yes, I can't make it" }),
 		);
 		await waitFor(() =>
-			expect(toast.success).toHaveBeenCalledWith(NOT_COMING_NO_ROLE_TEXT),
+			expect(toast.success).toHaveBeenCalledWith(NOT_COMING_NO_ROLE_TEXT, {
+				duration: undefined,
+			}),
 		);
 	});
 });

@@ -106,13 +106,11 @@ import {
 	ROLE_CONFIRM_PROMPT,
 } from "#/lib/role-duties";
 import {
-	DUTY_TOAST_MS,
-	NOT_COMING_NO_ROLE_TEXT,
 	notComingMaybeRoleText,
 	notComingText,
+	notComingToast,
 	ROLE_KEPT_DUTY_TEXT,
 	roleDutyConfirmText,
-	roleFreedDutyText,
 } from "#/lib/role-duty-copy";
 import {
 	EMPTY_ROLE_GUIDE,
@@ -281,13 +279,8 @@ export function PersonalMeetingBody({
 							clubId: view.club.id,
 						},
 					});
-					if (released > 0) {
-						toast.success(roleFreedDutyText(released), {
-							duration: DUTY_TOAST_MS,
-						});
-					} else {
-						toast.success(NOT_COMING_NO_ROLE_TEXT);
-					}
+					const t = notComingToast(released, false);
+					toast.success(t.text, { duration: t.duration });
 				} else {
 					// Session-less: record the answer and free nothing. `releaseHeldRoles`
 					// is left at its `false` default rather than sent as false, so this
@@ -303,11 +296,8 @@ export function PersonalMeetingBody({
 					// It can be stale in the "role assigned since load" direction, and
 					// the consequence of being wrong here is a sentence that omits the
 					// role — not a write that does the wrong thing.
-					if (holdsRole) {
-						toast.success(ROLE_KEPT_DUTY_TEXT, { duration: DUTY_TOAST_MS });
-					} else {
-						toast.success(NOT_COMING_NO_ROLE_TEXT);
-					}
+					const t = notComingToast(0, holdsRole);
+					toast.success(t.text, { duration: t.duration });
 				}
 				// Closed BEFORE the refetch is awaited: the write has landed and the
 				// toast has fired, so leaving the dialog up and the buttons disabled

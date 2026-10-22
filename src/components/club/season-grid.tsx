@@ -19,7 +19,7 @@ import type { StoredMember } from "#/lib/member-identity";
 import { meetingRoleOptions } from "#/lib/member-role-picker";
 import {
 	DUTY_TOAST_MS,
-	NOT_COMING_NO_ROLE_TEXT,
+	notComingToast,
 	roleDutyConfirmText,
 	roleFreedDutyText,
 } from "#/lib/role-duty-copy";
@@ -322,12 +322,9 @@ export function SeasonGrid({
 			await onChanged?.();
 			if (!self) {
 				toast.success("Role released — they're marked unavailable.");
-			} else if (released > 0) {
-				toast.success(roleFreedDutyText(released), {
-					duration: DUTY_TOAST_MS,
-				});
 			} else {
-				toast.success(NOT_COMING_NO_ROLE_TEXT);
+				const t = notComingToast(released, false);
+				toast.success(t.text, { duration: t.duration });
 			}
 		} catch (err) {
 			showWriteError(err, "Couldn't update.");

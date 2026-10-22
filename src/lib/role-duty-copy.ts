@@ -41,6 +41,24 @@ export function notComingMaybeRoleText(when: string): string {
 /** Duration for any toast carrying duty text: long enough to read and act on. */
 export const DUTY_TOAST_MS = 10_000;
 
+/**
+ * The toast a member sees right after declining their own meeting: which sentence, and for how
+ * long. Pure (no toast import) so server code can reuse the module. `released` is the server's
+ * count of roles freed; `holdsRole` is the client's view and only matters when nothing was freed.
+ */
+export function notComingToast(
+	released: number,
+	holdsRole: boolean,
+): { text: string; duration?: number } {
+	if (released > 0) {
+		return { text: roleFreedDutyText(released), duration: DUTY_TOAST_MS };
+	}
+	if (holdsRole) {
+		return { text: ROLE_KEPT_DUTY_TEXT, duration: DUTY_TOAST_MS };
+	}
+	return { text: NOT_COMING_NO_ROLE_TEXT };
+}
+
 /** Phrases no surface may say: GavelUp notifies nobody. */
 export const FORBIDDEN_NOTIFY_PHRASES = [
 	"let the team know",
