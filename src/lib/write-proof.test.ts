@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
 import {
+	isConnectorSelf,
 	isNotOnRosterError,
 	isSignInRequiredError,
 	NOT_ON_ROSTER_MESSAGE,
@@ -232,5 +233,33 @@ describe("safeRedirect", () => {
 			"&code_challenge_method=S256&resource=https%3A%2F%2Fgavelup.app%2Fapi%2Fmcp" +
 			"&scope=openid+profile+email+offline_access";
 		expect(safeRedirect(continuation)).toBe(continuation);
+	});
+});
+
+/**
+ * Card (isConnectorSelf, #1283): protects=a `connector` proof is honoured only
+ * where the actor IS the subject, so a token owner can never write another
+ * member's row; fails_when=any proof other than `connector` is admitted, or a
+ * `connector` actor that is not the subject (or null) is; no_claim=a pure
+ * predicate over three values. That the seams call it, and that the session-only
+ * rulings do not, is `write-proof-connector.guard.test.ts` and the integration
+ * suites.
+ */
+describe("isConnectorSelf", () => {
+	const me = "member-a";
+	const other = "member-b";
+	it.each([
+		["session", me, me, false],
+		["session", other, me, false],
+		["asserted", me, me, false],
+		["asserted", other, me, false],
+		["connector", me, me, true],
+		["connector", other, me, false],
+	] as const)("%s, actor %s, subject %s -> %s", (proof, actor, subject, want) => {
+		expect(isConnectorSelf(proof, actor, subject)).toBe(want);
+	});
+
+	it("a connector proof with no actor is not self", () => {
+		expect(isConnectorSelf("connector", null, me)).toBe(false);
 	});
 });

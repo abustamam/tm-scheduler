@@ -3,9 +3,17 @@ import type { db } from "#/db";
 import { meetings, roleDefinitions, roleSlots, speeches } from "#/db/schema";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
-import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
+import {
+	isConnectorSelf,
+	SIGN_IN_REQUIRED_MESSAGE,
+	type WriteProof,
+} from "#/lib/write-proof";
 import { logActivity } from "./activity";
-import { resolveActor } from "./attendance-actor-logic";
+import {
+	type ResolvedActor,
+	resolveActor,
+	SELF_ONLY_MESSAGE,
+} from "./attendance-actor-logic";
 import { lockMemberAttendance, setPlanStatus } from "./attendance-plan-logic";
 import { assertClubNotArchived } from "./guards";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
@@ -180,6 +188,28 @@ export async function releaseHeldSlotsForRecord(
 }
 
 /**
+ * The actor of a `connector` write (#1283): the token owner's own membership,
+ * never a resolved ladder arm. The claim must be the subject itself; a token
+ * call has no cookie session for `resolveActor` to read, and no arm of the
+ * ladder may be granted to it (a token owner is not "an officer" here, whatever
+ * their standing). Throws `SELF_ONLY_MESSAGE` for anything else.
+ */
+export function connectorActor(
+	memberId: string,
+	claimedActorMemberId: string | undefined,
+): ResolvedActor {
+	if (!isConnectorSelf("connector", claimedActorMemberId ?? null, memberId)) {
+		throw new Error(SELF_ONLY_MESSAGE);
+	}
+	return {
+		actorMemberId: memberId,
+		viaManager: false,
+		via: "self",
+		proof: "connector",
+	};
+}
+
+/**
  * Release every role a member holds in a meeting and record them `not_coming`,
  * in one transaction (#204). Pure db logic so it's directly testable; the server
  * fn (`markUnavailableReleasing`) wraps it with the meeting-lock + membership
@@ -256,7 +286,13 @@ export async function releaseSlotsAndMarkUnavailable(
 		 *  `setPlanStatus`'s own `"manual"` default — but a caller that HAS the
 		 *  provenance must pass it, or the destructive path records less of it than
 		 *  the harmless rung write beside it. */
-		via?: "nudge" | "manual";
+		via?: "nudge" | "manual" | "connector";
+		/** `"connector"` (#1283): a token owner freeing their OWN roles. The ladder
+		 *  is skipped (it reads a cookie session a token call does not have) and
+		 *  `claimedActorMemberId` must equal `memberId`, else `SELF_ONLY_MESSAGE`.
+		 *  Omitted by every other caller, which resolves its proof exactly as
+		 *  before. */
+		proof?: WriteProof;
 	},
 ): Promise<{ released: number; releasedSlots: ReleasedSlot[] }> {
 	// Takedown outranks every other reason to refuse (ADR-0016), so it runs
@@ -269,15 +305,25 @@ export async function releaseSlotsAndMarkUnavailable(
 	// (#396/#246) — a decision, not an omission: `logActivity` stamps the real
 	// superadmin for it, so it must NOT fall back to the member or the write
 	// lands under their name.
-	const { actorMemberId, via, proof } = await resolveActor({
-		clubId: args.clubId,
-		meetingId: args.meetingId,
-		memberId: args.memberId,
-		claimedActorMemberId: args.claimedActorMemberId,
-	});
+	const { actorMemberId, via, proof } =
+		args.proof === "connector"
+			? connectorActor(args.memberId, args.claimedActorMemberId)
+			: await resolveActor({
+					clubId: args.clubId,
+					meetingId: args.meetingId,
+					memberId: args.memberId,
+					claimedActorMemberId: args.claimedActorMemberId,
+				});
 	// ADR-0026, and the reason the ladder alone was never enough here: see the
 	// header. Before the transaction, so a refusal leaves nothing behind.
-	if (proof !== "session") throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+	if (
+		!(
+			proof === "session" ||
+			isConnectorSelf(proof, actorMemberId, args.memberId)
+		)
+	) {
+		throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+	}
 	return database.transaction(async (tx) => {
 		// The membership merge lock (#1035), SHARED, before any other lock (#1217).
 		// The bulk UPDATE below has no ORDER BY, so with two slots it can lock them

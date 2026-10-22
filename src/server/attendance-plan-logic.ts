@@ -152,7 +152,7 @@ interface SetPlanStatusCommon {
 	 *  null and `logActivity` stamps the real superadmin for it. */
 	actorMemberId: string | null;
 	/** How the change happened. Recorded in the activity detail only. */
-	via?: "nudge" | "manual";
+	via?: "nudge" | "manual" | "connector";
 	/** WHICH authorization arm admitted the write, recorded in the activity
 	 *  detail. An honour-system TMOD write and a session-authenticated
 	 *  officer's are otherwise indistinguishable in the feed — and for a grant

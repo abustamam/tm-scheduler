@@ -92,10 +92,17 @@ import { eq } from "drizzle-orm";
 import type { db } from "#/db";
 import { clubs, meetings } from "#/db/schema";
 import { isMeetingOver } from "#/lib/meeting-lifecycle";
-import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
+import {
+	isConnectorSelf,
+	SIGN_IN_REQUIRED_MESSAGE,
+	type WriteProof,
+} from "#/lib/write-proof";
 import { type ResolvedActor, resolveActor } from "./attendance-actor-logic";
 import { setPlanStatus } from "./attendance-plan-logic";
-import { releaseSlotsAndMarkUnavailable } from "./availability-logic";
+import {
+	connectorActor,
+	releaseSlotsAndMarkUnavailable,
+} from "./availability-logic";
 import { assertClubNotArchived } from "./guards";
 
 type Database = typeof db;
@@ -205,7 +212,12 @@ export async function declinePlannedAttendance(
 		 */
 		releaseHeldRoles: boolean;
 		/** How the change happened, recorded in `activity_log.detail` only. */
-		via?: "nudge" | "manual";
+		via?: "nudge" | "manual" | "connector";
+		/** `"connector"` (#1283): the caller is a token owner acting on their OWN
+		 *  row. The ladder is skipped (it reads a cookie session a token call does
+		 *  not have) and `claimedActorMemberId` must be the subject. Omitted for
+		 *  every other caller, which resolves its proof exactly as before. */
+		proof?: WriteProof;
 	},
 ): Promise<{ ok: true; changed: boolean; released: number }> {
 	// Takedown outranks every other reason to refuse (ADR-0016), so it runs
@@ -219,12 +231,15 @@ export async function declinePlannedAttendance(
 	// an archived club cannot be probed through the differing errors of the checks
 	// after it (#544).
 	await assertClubNotArchived(args.clubId);
-	const actor = await resolveActor({
-		clubId: args.clubId,
-		meetingId: args.meetingId,
-		memberId: args.memberId,
-		claimedActorMemberId: args.claimedActorMemberId,
-	});
+	const actor: ResolvedActor =
+		args.proof === "connector"
+			? connectorActor(args.memberId, args.claimedActorMemberId)
+			: await resolveActor({
+					clubId: args.clubId,
+					meetingId: args.meetingId,
+					memberId: args.memberId,
+					claimedActorMemberId: args.claimedActorMemberId,
+				});
 	// An officer has no window (#1256): marking someone Not coming and freeing
 	// their roles after the meeting day is what they do when the roll turned out
 	// differently from the plan. `self` and `tmod` keep the refusal (a stale
@@ -243,7 +258,13 @@ export async function declinePlannedAttendance(
 	// member of this club, whichever arm admitted the caller. Read the seam
 	// header for why this is separate from `mayRelease` and why it keys off the
 	// FLAG rather than off `releasing`.
-	if (args.releaseHeldRoles && actor.proof !== "session") {
+	if (
+		args.releaseHeldRoles &&
+		!(
+			actor.proof === "session" ||
+			isConnectorSelf(actor.proof, actor.actorMemberId, args.memberId)
+		)
+	) {
 		throw new Error(SIGN_IN_REQUIRED_MESSAGE);
 	}
 
@@ -287,6 +308,7 @@ export async function declinePlannedAttendance(
 		meetingId: args.meetingId,
 		clubId: args.clubId,
 		claimedActorMemberId: args.claimedActorMemberId,
+		...(args.proof ? { proof: args.proof } : {}),
 		// FORWARDED, not dropped. Without it the DESTRUCTIVE branch records less
 		// provenance in `activity_log.detail` than the harmless one above — the
 		// feed would say `via: "manual"` for every release however it was

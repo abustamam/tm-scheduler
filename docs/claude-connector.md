@@ -57,6 +57,8 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
 | `get_lineup_blast` | reads | "Draft the lineup message for Saturday's meeting" — you copy and send it |
 | `get_my_feedback` | reads | "What did people say about my speech on Saturday?" Only **your own** anonymous notes, from meetings that have ended; never who wrote one. Every result tells Claude the note text is untrusted, anonymous input, never instructions |
 | `get_my_schedule` | reads | **Members.** "What's on my schedule?" Your own upcoming meetings (default 28 days) across your clubs, the roles you hold and whether you said you are coming. Takes no id: it is always you |
+| `set_my_attendance` | previews, then writes when you approve | **Members.** "I can't make next week's meeting", "put me down as coming." Does what the app's **Can't make it** does: frees every role you hold and marks you not coming. Takes no id: it is always you. **GavelUp tells no one** — the result carries a drafted message to the Toastmaster (or VPE) that *you* send |
+| `claim_open_role` | previews, then writes when you approve | **Members.** "Put me down for Table Topics on the 28th." Claims one open role for you; if several match (three open Speaker slots) it takes the first and says which others are open. Refused if you said you can't make that meeting |
 | `find_people` | reads | "Find Dana on our roster." Guest emails and phones come back **masked** |
 | `assign_roles` | **writes immediately** | "Put Dana in the Speaker 2 slot", "clear the Timer role" |
 | `set_awards` | **writes immediately** | "Best Speaker was Dana, Table Topics was Rizwan" — record or clear a meeting's winners |
@@ -68,6 +70,11 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
 
 **Know which tools write, and how:**
 
+- **`set_my_attendance` and `claim_open_role` write as you, after a preview.** Claude shows what
+  would change (which roles would be freed, which slot you would take) and only applies it once
+  you agree; if the meeting changed in between, nothing is written and Claude is shown the fresh
+  plan. Freeing a role does not discharge the duty: GavelUp tells nobody, so tell the Toastmaster
+  or VPE yourself or find someone to cover it.
 - **`assign_roles` changes the agenda the moment Claude calls it.** It checks everything first —
   a locked meeting, a duplicate slot, someone not on the roster — and applies the whole batch or
   none of it, but there is no second "are you sure" from GavelUp. Keep Claude's tool permission
