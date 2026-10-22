@@ -42,6 +42,12 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
 import { parseMeetingKey } from "#/lib/meeting-url";
+import {
+	NOT_COMING_NO_ROLE_TEXT,
+	ROLE_FREED_DUTY_TEXT,
+	ROLE_KEPT_DUTY_TEXT,
+	roleFreedDutyText,
+} from "#/lib/role-duty-copy";
 
 vi.mock("#/server/availability", () => ({
 	markUnavailableReleasing: vi.fn(async () => ({ ok: true, released: 1 })),
@@ -250,8 +256,8 @@ describe("PersonalMeetingBody — the confirm gate (#665)", () => {
 		expect(screen.queryByText("Give up your role?")).toBeNull();
 		expect(setPlannedAttendance).not.toHaveBeenCalled();
 		expect(
-			screen.getByText(/an officer will find cover/i),
-			"the copy must say where the role actually goes, not promise a release",
+			screen.getByText(/find a replacement or tell the Toastmaster or VPE/),
+			"the copy must say the role stays theirs and the duty is theirs",
 		).toBeTruthy();
 	});
 });
@@ -908,5 +914,103 @@ describe("formatMeetingKeyLabel (#676)", () => {
 				`label and router disagree on "${key}"`,
 			).toBe(routable);
 		}
+	});
+});
+
+// #1280. protects=every decline surface tells the holder the duty is still theirs and claims no notification; fails_when=copy says "we've let the team know" / "an officer will find cover", drops the duty, or shows duty text to a member with no role; no_claim=mocked server writes and sonner, so toast duration is asserted but not how long a real toast stays on screen
+describe("PersonalMeetingBody - role-duty copy (#1280)", () => {
+	// protects=confirm names the duty and "GavelUp doesn't tell anyone", toast reads Role freed for 10s; fails_when=duty or the no-notify sentence is dropped, or the toast is the short default; no_claim=mocked writes and sonner
+	it("signed-in holder: confirm says the duty is theirs and GavelUp tells no one; toast says Role freed", async () => {
+		await renderBody(makeView(), false);
+		await userEvent.click(
+			screen.getByRole("button", { name: "Can't make it" }),
+		);
+		expect(
+			screen.getByText(
+				/it's still on you to find a replacement or tell the Toastmaster or VPE/,
+			),
+		).toBeTruthy();
+		expect(screen.getByText(/GavelUp doesn't tell anyone/)).toBeTruthy();
+		await userEvent.click(
+			screen.getByRole("button", { name: "Release & mark me away" }),
+		);
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith(ROLE_FREED_DUTY_TEXT, {
+				duration: 10_000,
+			}),
+		);
+	});
+
+	// protects=plural freed text after releasing two roles; fails_when=two roles read "Role freed."; no_claim=released count comes from a mocked server response
+	it("two released roles read Roles freed", async () => {
+		vi.mocked(markUnavailableReleasing).mockResolvedValueOnce({
+			ok: true,
+			released: 2,
+		} as never);
+		await renderBody(makeView(), false);
+		await userEvent.click(
+			screen.getByRole("button", { name: "Can't make it" }),
+		);
+		await userEvent.click(
+			screen.getByRole("button", { name: "Release & mark me away" }),
+		);
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith(roleFreedDutyText(2), {
+				duration: 10_000,
+			}),
+		);
+		expect(roleFreedDutyText(2)).toMatch(/^Roles freed\./);
+	});
+
+	// protects=a release that freed nothing shows the plain not-coming toast; fails_when=duty text shown to a member with no role; no_claim=released:0 is mocked
+	it("signed-in, nothing freed: plain not-coming toast, no duty text", async () => {
+		vi.mocked(markUnavailableReleasing).mockResolvedValueOnce({
+			ok: true,
+			released: 0,
+		} as never);
+		await renderBody(makeView({ roles: [] }), false);
+		await userEvent.click(screen.getByRole("button", { name: "No, I can't" }));
+		await userEvent.click(
+			screen.getByRole("button", {
+				name: /release|mark me away|can't make it/i,
+			}),
+		);
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith(NOT_COMING_NO_ROLE_TEXT, {
+				duration: undefined,
+			}),
+		);
+	});
+
+	// protects=a signed-out holder who declines keeps the duty (role not freed) for 10s; fails_when=toast claims the role was freed or that anyone was told; no_claim=holdsRole comes from the fixture view
+	it("signed-out holder: toast keeps the duty with them", async () => {
+		await renderBody(makeView());
+		await userEvent.click(
+			screen.getByRole("button", { name: "Can't make it" }),
+		);
+		await userEvent.click(
+			screen.getByRole("button", { name: "Yes, I can't make it" }),
+		);
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith(ROLE_KEPT_DUTY_TEXT, {
+				duration: 10_000,
+			}),
+		);
+	});
+
+	// protects=no-role decline shows plain not-coming copy before and after; fails_when=duty text or a notify claim appears; no_claim=mocked writes and sonner
+	it("signed-out member with no role: no duty text, no notify claim", async () => {
+		await renderBody(makeView({ roles: [] }));
+		await userEvent.click(screen.getByRole("button", { name: "No, I can't" }));
+		expect(screen.queryByText(/still on you/)).toBeNull();
+		expect(screen.getByText(/You'll be marked as not coming/)).toBeTruthy();
+		await userEvent.click(
+			screen.getByRole("button", { name: "Yes, I can't make it" }),
+		);
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith(NOT_COMING_NO_ROLE_TEXT, {
+				duration: undefined,
+			}),
+		);
 	});
 });

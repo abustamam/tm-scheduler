@@ -106,6 +106,13 @@ import {
 	ROLE_CONFIRM_PROMPT,
 } from "#/lib/role-duties";
 import {
+	notComingMaybeRoleText,
+	notComingText,
+	notComingToast,
+	ROLE_KEPT_DUTY_TEXT,
+	roleDutyConfirmText,
+} from "#/lib/role-duty-copy";
+import {
 	EMPTY_ROLE_GUIDE,
 	findRoleGuideSource,
 	meetingRoleSheetHref,
@@ -272,11 +279,8 @@ export function PersonalMeetingBody({
 							clubId: view.club.id,
 						},
 					});
-					toast.success(
-						released > 0
-							? `Thanks — we've let the team know and freed up your ${released === 1 ? "role" : "roles"}.`
-							: "Thanks — we've let the team know.",
-					);
+					const t = notComingToast(released, false);
+					toast.success(t.text, { duration: t.duration });
 				} else {
 					// Session-less: record the answer and free nothing. `releaseHeldRoles`
 					// is left at its `false` default rather than sent as false, so this
@@ -292,11 +296,8 @@ export function PersonalMeetingBody({
 					// It can be stale in the "role assigned since load" direction, and
 					// the consequence of being wrong here is a sentence that omits the
 					// role — not a write that does the wrong thing.
-					toast.success(
-						holdsRole
-							? "Thanks — we've let the team know. An officer will find cover for your role."
-							: "Thanks — we've let the team know.",
-					);
+					const t = notComingToast(0, holdsRole);
+					toast.success(t.text, { duration: t.duration });
 				}
 				// Closed BEFORE the refetch is awaited: the write has landed and the
 				// toast has fired, so leaving the dialog up and the buttons disabled
@@ -595,11 +596,14 @@ export function PersonalMeetingBody({
 						<DialogDescription>
 							{canRelease
 								? holdsRole
-									? `You're ${listRoles(view.roles.map((r) => r.roleName))} for ${when}. Telling us you can't make it frees the role up for someone else, and we can't put it back automatically.`
-									: `We'll let the team know you can't make the ${when} meeting. If any role has been assigned to you since this page loaded, it will be freed up too.`
+									? roleDutyConfirmText(
+											listRoles(view.roles.map((r) => r.roleName)),
+											when,
+										)
+									: notComingMaybeRoleText(when)
 								: holdsRole
-									? `You're ${listRoles(view.roles.map((r) => r.roleName))} for ${when}. We'll let the team know you can't make it and an officer will find cover — your role stays yours until they do.`
-									: `We'll let the team know you can't make the ${when} meeting.`}
+									? `You're ${listRoles(view.roles.map((r) => r.roleName))} on ${when}. ${ROLE_KEPT_DUTY_TEXT}`
+									: notComingText(when)}
 						</DialogDescription>
 					</DialogHeader>
 					<DialogFooter>

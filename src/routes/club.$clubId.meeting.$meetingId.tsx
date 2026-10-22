@@ -125,6 +125,7 @@ import { deriveMeetingRoleFlags } from "#/lib/meeting-roles";
 import { useEffectiveMember } from "#/lib/member-identity";
 import { outstandingDutiesByMember } from "#/lib/nudge";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
+import { notComingToast } from "#/lib/role-duty-copy";
 import {
 	deriveRollAttendance,
 	deriveRollGuests,
@@ -1282,9 +1283,16 @@ function MeetingView() {
 			// the write; this is the receipt, and it reads the SERVER's count rather
 			// than the labels the dialog showed — the arm gate lives server-side, so
 			// the client's prediction is the thing that could be wrong.
-			if ("released" in written && written.released > 0) {
+			const released = "released" in written ? written.released : 0;
+			if (memberId === myId && next === "not_coming") {
+				// The viewer's own decline (#1280): the strip chip and the roster land
+				// here. `holdsRole` (this meeting's slots) is for COPY only, and only
+				// when the server freed nothing.
+				const t = notComingToast(released, holdsRole);
+				toast.success(t.text, { duration: t.duration });
+			} else if (released > 0) {
 				toast.success(
-					written.released === 1
+					released === 1
 						? "Not coming — role freed."
 						: "Not coming — roles freed.",
 				);
