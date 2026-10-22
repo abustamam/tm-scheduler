@@ -43,6 +43,7 @@ const inputSchema = {
 
 export const listMeetingsTool: McpToolDefinition = {
 	name: "list_meetings",
+	audience: "officer",
 	config: {
 		title: "List meetings",
 		description:

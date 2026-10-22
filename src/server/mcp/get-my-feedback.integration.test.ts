@@ -10,9 +10,8 @@
  * first proves the same call returns the owner's note, so an empty answer
  * cannot pass on a broken fixture.
  *
- * `club()` gives the seeded MEMBER an open officer term, because the tool
- * re-checks connector eligibility (`mayUseConnector`) on every call; the case
- * that ends that term is the one that tests the check.
+ * The tool re-checks connector eligibility (`mayUseConnector`) on every call;
+ * the case that deactivates the membership is the one that tests the check.
  */
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -274,7 +273,12 @@ describe.skipIf(!hasTestDb)("get_my_feedback (#987)", () => {
 		]);
 	});
 
-	it("refuses a caller who is no longer an officer of an open club, with a control while they still are", async () => {
+	// Card: protects=a token whose owner stops being an active member is refused
+	// at call time, not honoured until expiry; fails_when=the tool serves notes
+	// after the membership is deactivated, or the control call is not served
+	// first; no_claim=archived clubs and officer standing, which no longer
+	// matter to this tool (#1281).
+	it("refuses a caller who is no longer an active member of an open club, with a control while they still are", async () => {
 		const s = await club();
 		await setMeeting(s.meetingId, new Date(Date.now() - DAY));
 		await note(s, s.memberId, "for the member");
@@ -282,9 +286,9 @@ describe.skipIf(!hasTestDb)("get_my_feedback (#987)", () => {
 		expect(texts(await call(token))).toEqual(["for the member"]);
 
 		await testDb
-			.update(officerTerms)
-			.set({ termEnd: new Date() })
-			.where(eq(officerTerms.membershipId, s.memberId));
+			.update(members)
+			.set({ status: "inactive" })
+			.where(eq(members.id, s.memberId));
 
 		const err = await call(token).catch((e: unknown) => e);
 		expect(err).toBeInstanceOf(McpError);

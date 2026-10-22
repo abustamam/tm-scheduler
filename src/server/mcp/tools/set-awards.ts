@@ -195,6 +195,7 @@ function describeWinner(w: AwardWinner | null): string {
 
 export const setAwardsTool: McpToolDefinition = {
 	name: "set_awards",
+	audience: "officer",
 	config: {
 		title: "Set awards",
 		description:

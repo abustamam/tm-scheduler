@@ -142,11 +142,11 @@ export function unlistedCimdClientId(sources: ClientIdSources): string | null {
 }
 
 /**
- * The consent endpoint's refusal when a non-officer presses Approve, and the
+ * The consent endpoint's refusal when a non-member presses Approve, and the
  * one sentence for it: the hook in `src/lib/auth.ts` sends it as the
  * `error_description`, and `/oauth/consent` shows it whether it learned the
  * rule from its loader (`eligible: false`) or from this refusal.
  */
-export const NOT_AN_OFFICER = "not_an_officer";
-export const NOT_AN_OFFICER_MESSAGE =
-	"Only club officers can connect apps to GavelUp right now.";
+export const NOT_A_MEMBER = "not_a_member";
+export const NOT_A_MEMBER_MESSAGE =
+	"Only active members of a GavelUp club can connect apps.";

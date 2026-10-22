@@ -23,8 +23,8 @@ import {
 } from "#/lib/magic-link-email";
 import {
 	isCimdClientIdAllowed,
-	NOT_AN_OFFICER,
-	NOT_AN_OFFICER_MESSAGE,
+	NOT_A_MEMBER,
+	NOT_A_MEMBER_MESSAGE,
 	unlistedCimdClientId,
 } from "#/lib/oauth-connector-clients";
 import {
@@ -127,8 +127,8 @@ export const auth = betterAuth({
 				!(await mayUseConnector(session.user.id))
 			) {
 				throw new APIError("FORBIDDEN", {
-					error: NOT_AN_OFFICER,
-					error_description: NOT_AN_OFFICER_MESSAGE,
+					error: NOT_A_MEMBER,
+					error_description: NOT_A_MEMBER_MESSAGE,
 				});
 			}
 		}),

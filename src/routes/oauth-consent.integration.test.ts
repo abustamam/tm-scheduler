@@ -400,7 +400,10 @@ describe.skipIf(!hasTestDb)(
 				});
 			});
 
-			it("says a person who is an officer nowhere may not approve", async () => {
+			// Card: protects=the consent screen offers Approve only to someone who
+			// is an active member of an open club; fails_when=a person in no club
+			// is told they are eligible; no_claim=the POST gate, tested below.
+			it("says a person who is in no club may not approve", async () => {
 				const email = freshEmail();
 				const cookie = await oauth.signInCookie(loaded, email);
 				const lookup = await lookupConsentClient(
@@ -410,7 +413,10 @@ describe.skipIf(!hasTestDb)(
 				expect(lookup).toMatchObject({ signedIn: true, eligible: false });
 			});
 
-			it("says a plain member may not approve", async () => {
+			// Card: protects=a plain member (no admin role, no officer term) sees
+			// Approve (#1281); fails_when=eligibility is tied to officer standing
+			// again; no_claim=the POST gate, tested below.
+			it("says a plain member may approve (#1281)", async () => {
 				const email = freshEmail();
 				const cookie = await oauth.signInCookie(loaded, email);
 				await joinClub(cookie, club.clubId, "member");
@@ -418,7 +424,7 @@ describe.skipIf(!hasTestDb)(
 					new Headers({ cookie }),
 					client.clientId,
 				);
-				expect(lookup).toMatchObject({ signedIn: true, eligible: false });
+				expect(lookup).toMatchObject({ signedIn: true, eligible: true });
 			});
 
 			it("says an admin whose only club is archived may not approve", async () => {
@@ -457,7 +463,7 @@ describe.skipIf(!hasTestDb)(
 			});
 		});
 
-		describe("only a club officer may approve (#852)", () => {
+		describe("only an active member of an open club may approve (#852, #1281)", () => {
 			/** Authorize as `cookie` and POST an approval straight to the provider. */
 			async function approveAs(cookie: string): Promise<Response> {
 				const { location } = await oauth.startAuthorize(loaded, client, cookie);
@@ -472,15 +478,39 @@ describe.skipIf(!hasTestDb)(
 
 			async function expectRefused(res: Response, email: string) {
 				expect(res.status).toBe(403);
-				expect(await res.json()).toMatchObject({ error: "not_an_officer" });
+				expect(await res.json()).toMatchObject({ error: "not_a_member" });
 				expect(await consentRows(email)).toBe(0);
 			}
 
-			it("refuses a plain member's direct approval and records nothing", async () => {
+			// Card: protects=the consent POST accepts a plain member and records
+			// exactly one consent row; fails_when=the hook refuses a non-officer
+			// or writes no row; no_claim=the token the app later gets, covered by
+			// the connector suites.
+			it("approves a plain member's direct approval and records the consent (#1281)", async () => {
 				const email = freshEmail();
 				const cookie = await oauth.signInCookie(loaded, email);
 				await joinClub(cookie, club.clubId, "member");
-				await expectRefused(await approveAs(cookie), email);
+				const res = await approveAs(cookie);
+				expect(res.status).toBe(200);
+				expect(await consentRows(email)).toBe(1);
+			});
+
+			// Card: protects=a member of only an archived club cannot approve, with
+			// the `not_a_member` code and message, and nothing is recorded;
+			// fails_when=the archived club counts as standing, or the old
+			// `not_an_officer` code returns; no_claim=an open-club member, above.
+			it("refuses a plain member whose only club is archived, with the member message", async () => {
+				const email = freshEmail();
+				const cookie = await oauth.signInCookie(loaded, email);
+				await joinClub(cookie, archivedClub.clubId, "member");
+				const res = await approveAs(cookie);
+				expect(res.status).toBe(403);
+				expect(await res.json()).toMatchObject({
+					error: "not_a_member",
+					error_description:
+						"Only active members of a GavelUp club can connect apps.",
+				});
+				expect(await consentRows(email)).toBe(0);
 			});
 
 			it("refuses someone who is in no club at all", async () => {
@@ -508,7 +538,10 @@ describe.skipIf(!hasTestDb)(
 				expect(await consentRows(email)).toBe(1);
 			});
 
-			it("still lets a non-officer DECLINE, so the app stops waiting", async () => {
+			// Card: protects=a person who may not approve can still decline, so the
+			// app stops waiting; fails_when=the eligibility gate also blocks
+			// decline; no_claim=the gate on approval, tested above.
+			it("still lets a non-member DECLINE, so the app stops waiting", async () => {
 				const email = freshEmail();
 				const cookie = await oauth.signInCookie(loaded, email);
 				const { location } = await oauth.startAuthorize(loaded, client, cookie);

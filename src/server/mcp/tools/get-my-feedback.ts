@@ -20,7 +20,7 @@
  * included (a takedown stops new notes, not a person reading what they were
  * given). `mcp-authz.guard.test.ts` records that waiver. It still re-checks
  * `mayUseConnector` on every call, as every club-authorized tool re-checks its
- * club: a person whose last officer term has ended, or whose token outlived
+ * club: a person who has left their last open club, or whose token outlived
  * that, loses this tool at the same moment they lose the others.
  *
  * Note text is written by ANYONE in the room, with no session (`leaveFeedback`),
@@ -107,6 +107,7 @@ function trimToLocalDates(
 
 export const getMyFeedbackTool: McpToolDefinition = {
 	name: "get_my_feedback",
+	audience: "member",
 	config: {
 		title: "Get my feedback",
 		description:
@@ -127,7 +128,7 @@ export const getMyFeedbackTool: McpToolDefinition = {
 		if (!(await mayUseConnector(auth.user.id))) {
 			throw new McpError(
 				"FORBIDDEN",
-				"You are no longer an admin or officer of an open club.",
+				"You are no longer an active member of an open club.",
 			);
 		}
 

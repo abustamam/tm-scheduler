@@ -773,6 +773,52 @@ export async function listPlanForMeetings(
 		.where(inArray(meetingAttendancePlan.meetingId, meetingIds));
 }
 
+/** The plan answers and the roll marks of a set of members across several
+ *  meetings, one round-trip each regardless of how many meetings are asked
+ *  about. Both are narrowed to `memberIds` IN SQL, so no other member's row
+ *  leaves the database: the "my schedule" reads (#1281) ask for the caller's
+ *  own membership ids only. */
+export async function listMyAttendanceForMeetings(
+	database: DbOrTx,
+	args: { meetingIds: string[]; memberIds: string[] },
+): Promise<{
+	plan: { meetingId: string; status: AttendancePlanStatus }[];
+	roll: { meetingId: string; status: string }[];
+}> {
+	const { meetingIds, memberIds } = args;
+	// Short-circuit only; an empty `inArray` compiles to `false`.
+	if (meetingIds.length === 0 || memberIds.length === 0) {
+		return { plan: [], roll: [] };
+	}
+	const [plan, roll] = await Promise.all([
+		database
+			.select({
+				meetingId: meetingAttendancePlan.meetingId,
+				status: meetingAttendancePlan.status,
+			})
+			.from(meetingAttendancePlan)
+			.where(
+				and(
+					inArray(meetingAttendancePlan.meetingId, meetingIds),
+					inArray(meetingAttendancePlan.memberId, memberIds),
+				),
+			),
+		database
+			.select({
+				meetingId: meetingAttendance.meetingId,
+				status: meetingAttendance.status,
+			})
+			.from(meetingAttendance)
+			.where(
+				and(
+					inArray(meetingAttendance.meetingId, meetingIds),
+					inArray(meetingAttendance.memberId, memberIds),
+				),
+			),
+	]);
+	return { plan, roll };
+}
+
 /** `reached_out` member ids for one meeting — the old "contacted" set.
  *
  *  NO production caller since the panel landed: `meetings.ts` now takes the

@@ -40,6 +40,7 @@ function asMcpRefusal(err: unknown): unknown {
 
 export const restoreMeetingTool: McpToolDefinition = {
 	name: "restore_meeting",
+	audience: "officer",
 	config: {
 		title: "Restore meeting",
 		description:

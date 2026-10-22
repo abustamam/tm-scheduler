@@ -350,7 +350,7 @@ The first rule about WHO may connect: `mayUseConnector` (`src/server/connector-e
 an active admin membership or an open officer term in a non-archived club. It is the only place the
 rule is written; `/me`'s token minting and the consent screen both call it, and a guard holds that
 nothing else turns `adminClubsForUser` into a yes/no. The consent hook in `src/lib/auth.ts` refuses
-an APPROVAL from anyone else with 403 `not_an_officer` before the provider writes anything; a
+an APPROVAL from anyone else with 403 `not_a_member` before the provider writes anything; a
 decline is always allowed, so the app can stop waiting. The page reads the same predicate and
 shows a non-officer Decline only.
 

@@ -440,6 +440,7 @@ function applyError(err: unknown): unknown {
 
 export const editAgendaTool: McpToolDefinition = {
 	name: EDIT_AGENDA_TOOL,
+	audience: "officer",
 	config: {
 		title: "Edit agenda rows",
 		description:

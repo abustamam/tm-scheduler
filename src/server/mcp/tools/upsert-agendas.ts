@@ -65,6 +65,7 @@ const inputSchema = {
 
 export const upsertAgendasTool: McpToolDefinition = {
 	name: "upsert_agendas",
+	audience: "officer",
 	config: {
 		title: "Set meeting agendas",
 		description:

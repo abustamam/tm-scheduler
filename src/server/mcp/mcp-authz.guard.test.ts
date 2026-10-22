@@ -101,7 +101,13 @@ const AUTHENTICATE_ONLY: Record<string, string> = {
 		"and which of them are readable is recipientMayTouch in " +
 		"loadFeedbackForUser, the same rule the dashboard reads through. It " +
 		"still re-checks mayUseConnector on every call, so a caller who is no " +
-		"longer an officer of an open club loses it with every other tool.",
+		"longer a member of an open club loses it with every other tool.",
+	"get-my-schedule.ts":
+		"get_my_schedule is USER-scoped (#1281): the token owner's own upcoming " +
+		"meetings across their non-archived clubs, so there is no one clubId to " +
+		"authorize against. It takes no member, person or club id; the subject " +
+		"is auth.user.id and the clubs are auth.clubs, which excludes archived " +
+		"ones. Its audience is member, the only door a plain member has.",
 };
 
 /** The two sanctioned club-scoped entry points. */
@@ -292,10 +298,11 @@ describe("every MCP tool authorizes (#773)", () => {
 		// Widening this exempts a tool from the club check entirely, so it must
 		// break a test and be argued for rather than land as a one-line edit.
 		// `get-my-feedback.ts` joined in #987: a user-scoped READ of the caller's
-		// own notes, which names no club. A write tool never belongs here.
+		// own notes, which names no club. `get-my-schedule.ts` joined in #1281 on the same terms. A write tool never belongs here.
 		expect(Object.keys(AUTHENTICATE_ONLY)).toEqual([
 			"whoami.ts",
 			"get-my-feedback.ts",
+			"get-my-schedule.ts",
 		]);
 		for (const reason of Object.values(AUTHENTICATE_ONLY)) {
 			expect(reason.length).toBeGreaterThan(20);

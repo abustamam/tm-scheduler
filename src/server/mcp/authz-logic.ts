@@ -76,6 +76,9 @@ import {
 import { McpError } from "./errors";
 import type { McpToolContext } from "./tool";
 
+export const NOT_OFFICER_MESSAGE =
+	"You are not an admin or officer of that club.";
+
 /** A club the token owner may act on, as `whoami` reports it. */
 export interface TokenClub {
 	clubId: string;
@@ -83,8 +86,12 @@ export interface TokenClub {
 	timezone: string;
 	/** This membership's id — the `actor_member_id` every write is credited to. */
 	membershipId: string;
-	/** Why they are an admin here: a stored role, an elected office, or both. */
-	via: "admin" | "officer";
+	/**
+	 * Their standing here: a stored admin role, an elected office, or plain
+	 * membership. Admin wins over officer, officer over member. A `member` club
+	 * is reachable only by a tool whose `audience` is `member` (#1281).
+	 */
+	via: "admin" | "officer" | "member";
 	/** The standing recurrence rule's weekday (0 = Sunday) and time, if any. */
 	recurrence: { weekday: number; timeOfDay: string } | null;
 	/** Soft-archived (ADR-0016). Kept off `clubs`; see `AuthenticatedToken`. */
@@ -190,7 +197,7 @@ export async function authenticateToken(
 	// failing closed is the whole answer.
 	if (!owner) throw new McpUnauthorizedError();
 
-	const all = await adminClubsForUser(userId);
+	const all = await memberClubsForUser(userId);
 
 	// Telemetry for the `/me` token list. Outside any apply transaction (D10),
 	// and never allowed to fail the call it accompanied — a missing timestamp is
@@ -211,6 +218,12 @@ export async function authenticateToken(
 	};
 }
 
+const STANDING_RANK: Record<TokenClub["via"], number> = {
+	member: 0,
+	officer: 1,
+	admin: 2,
+};
+
 /**
  * Every club where a USER holds an active admin membership or an open officer
  * term — effective-admin (#202), the same grant `requireClubRole` gives in the
@@ -227,6 +240,17 @@ export async function authenticateToken(
  * load-bearing.
  */
 export async function adminClubsForUser(userId: string): Promise<TokenClub[]> {
+	return (await memberClubsForUser(userId)).filter((c) => c.via !== "member");
+}
+
+/**
+ * Every club where a USER is an active member, with their strongest standing in
+ * each (#1281): the same join `adminClubsForUser` always made, without the
+ * admin/officer filter. `authenticateToken` builds a token's clubs from THIS, so
+ * a club in the list is NOT proof of officer standing: `authorizeToken` checks
+ * the calling tool's `audience` against `via`.
+ */
+export async function memberClubsForUser(userId: string): Promise<TokenClub[]> {
 	const rows = await db
 		.select({
 			clubId: clubs.id,
@@ -260,15 +284,19 @@ export async function adminClubsForUser(userId: string): Promise<TokenClub[]> {
 	const byClub = new Map<string, TokenClub>();
 	for (const r of rows) {
 		const isAdmin = r.clubRole === "admin";
-		if (!isAdmin && r.officerTermId === null) continue;
+		const via: TokenClub["via"] = isAdmin
+			? "admin"
+			: r.officerTermId !== null
+				? "officer"
+				: "member";
 		const existing = byClub.get(r.clubId);
-		if (existing && (existing.via === "admin" || !isAdmin)) continue;
+		if (existing && STANDING_RANK[existing.via] >= STANDING_RANK[via]) continue;
 		byClub.set(r.clubId, {
 			clubId: r.clubId,
 			name: r.name,
 			timezone: r.timezone,
 			membershipId: r.membershipId,
-			via: isAdmin ? "admin" : "officer",
+			via,
 			archived: isClubArchived({ archivedAt: r.archivedAt }),
 			recurrence:
 				r.recurrenceEnabled &&
@@ -304,11 +332,13 @@ export async function authorizeToken(
 	const club = auth.membershipsIncludingArchived.find(
 		(c) => c.clubId === clubId,
 	);
-	if (!club) {
-		throw new McpError(
-			"FORBIDDEN",
-			"You are not an admin or officer of that club.",
-		);
+	// A missing `audience` means officer: only the dispatcher sets it, and only
+	// a tool that declares `"member"` gets the wider door (#1281). A plain member
+	// of the club gets the byte-identical refusal a stranger gets, BEFORE the
+	// archived check, so they cannot learn which officer clubs exist or are
+	// archived.
+	if (!club || (ctx.audience !== "member" && club.via === "member")) {
+		throw new McpError("FORBIDDEN", NOT_OFFICER_MESSAGE);
 	}
 	// After the membership resolves, matching `requireMembership`: a non-member
 	// keeps the "not an admin" answer above and never learns the club exists,

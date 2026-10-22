@@ -61,119 +61,124 @@ export function ApiTokensSection() {
 	const tokens = state.data.tokens;
 
 	return (
-		<div className="space-y-3 rounded-xl border bg-card p-4">
-			<div className="min-w-0">
-				<div className="flex items-center gap-2 font-medium">
-					<KeyRound className="size-4 text-primary" aria-hidden />
-					Personal access tokens
+		<details className="group rounded-xl border bg-card p-4">
+			<summary className="flex cursor-pointer items-center gap-2 font-medium">
+				<KeyRound className="size-4 text-primary" aria-hidden />
+				Connect an AI assistant
+			</summary>
+			<div className="mt-3 space-y-3">
+				<div className="min-w-0">
+					<div className="font-medium">Personal access tokens</div>
+					<p className="mt-1 text-sm text-muted-foreground">
+						Let an AI assistant read your schedule and feedback on your behalf;
+						where you're an admin or officer it can also work on your club's
+						meetings. A token acts as you. Treat it like a password.
+					</p>
 				</div>
-				<p className="mt-1 text-sm text-muted-foreground">
-					Let an AI assistant read and update your club's meetings on your
-					behalf. A token acts as you, in the clubs where you're an admin or
-					officer. Treat it like a password.
-				</p>
-			</div>
 
-			<div className="space-y-3">
-				<Label htmlFor="api-token-name">New token label (optional)</Label>
-				<div className="flex gap-2">
-					<Input
-						id="api-token-name"
-						value={name}
-						onChange={(e) => setName(e.target.value)}
-						placeholder="e.g. Claude on my laptop"
-						maxLength={100}
-					/>
-					<Button
-						onClick={() => generate.mutate()}
-						disabled={generate.isPending}
-					>
-						{generate.isPending ? (
-							<Loader2 className="size-4 animate-spin" />
-						) : (
-							"Create token"
-						)}
-					</Button>
-				</div>
-				{freshToken ? (
-					<div className="space-y-2 rounded-md border border-warning/60 bg-warning-soft p-3 text-sm">
-						<p className="font-bold">Copy this now — you won't see it again:</p>
-						<code className="block break-all font-mono text-xs">
-							{freshToken}
-						</code>
+				<div className="space-y-3">
+					<Label htmlFor="api-token-name">New token label (optional)</Label>
+					<div className="flex gap-2">
+						<Input
+							id="api-token-name"
+							value={name}
+							onChange={(e) => setName(e.target.value)}
+							placeholder="e.g. Claude on my laptop"
+							maxLength={100}
+						/>
 						<Button
-							variant="secondary"
-							size="sm"
-							onClick={() => {
-								navigator.clipboard.writeText(freshToken);
-								toast.success("Token copied.");
-							}}
+							onClick={() => generate.mutate()}
+							disabled={generate.isPending}
 						>
-							Copy
+							{generate.isPending ? (
+								<Loader2 className="size-4 animate-spin" />
+							) : (
+								"Create token"
+							)}
 						</Button>
-						<p className="text-muted-foreground">
-							Connect it with:{" "}
-							<code className="break-all font-mono text-xs">
-								claude mcp add --transport http gavelup{" "}
-								{typeof window === "undefined"
-									? "https://<host>"
-									: window.location.origin}
-								/api/mcp --header "Authorization: Bearer &lt;token&gt;"
-							</code>
-						</p>
 					</div>
-				) : null}
-			</div>
-
-			<div className="space-y-2">
-				<h2 className="text-sm font-bold">Your tokens</h2>
-				{state.isLoading ? (
-					<Loader2 className="size-4 animate-spin" />
-				) : tokens.length > 0 ? (
-					<ul className="space-y-2">
-						{tokens.map((t) => (
-							<li
-								key={t.id}
-								className="flex items-center justify-between gap-3 rounded-md border p-3 text-sm"
+					{freshToken ? (
+						<div className="space-y-2 rounded-md border border-warning/60 bg-warning-soft p-3 text-sm">
+							<p className="font-bold">
+								Copy this now — you won't see it again:
+							</p>
+							<code className="block break-all font-mono text-xs">
+								{freshToken}
+							</code>
+							<Button
+								variant="secondary"
+								size="sm"
+								onClick={() => {
+									navigator.clipboard.writeText(freshToken);
+									toast.success("Token copied.");
+								}}
 							>
-								<div className="min-w-0">
-									<span className="font-medium">{t.name ?? "(unnamed)"}</span>{" "}
-									<span className="text-muted-foreground">
-										{t.revokedAt
-											? "· revoked"
-											: t.lastUsedAt
-												? `· last used ${new Date(t.lastUsedAt).toLocaleDateString(APP_LOCALE)}`
-												: "· never used"}
-									</span>
-								</div>
-								{t.revokedAt ? null : (
-									<Button
-										variant="destructive"
-										size="sm"
-										disabled={revoke.isPending}
-										onClick={() => {
-											// Revoking breaks whatever is using it, and there is no
-											// undo — the token cannot be shown again.
-											if (
-												!window.confirm(
-													`Revoke ${t.name ?? "this token"}? Anything signed in with it stops working immediately.`,
-												)
-											) {
-												return;
-											}
-											revoke.mutate(t.id);
-										}}
-									>
-										Revoke
-									</Button>
-								)}
-							</li>
-						))}
-					</ul>
-				) : (
-					<p className="text-sm text-muted-foreground">No tokens yet.</p>
-				)}
+								Copy
+							</Button>
+							<p className="text-muted-foreground">
+								Connect it with:{" "}
+								<code className="break-all font-mono text-xs">
+									claude mcp add --transport http gavelup{" "}
+									{typeof window === "undefined"
+										? "https://<host>"
+										: window.location.origin}
+									/api/mcp --header "Authorization: Bearer &lt;token&gt;"
+								</code>
+							</p>
+						</div>
+					) : null}
+				</div>
+
+				<div className="space-y-2">
+					<h2 className="text-sm font-bold">Your tokens</h2>
+					{state.isLoading ? (
+						<Loader2 className="size-4 animate-spin" />
+					) : tokens.length > 0 ? (
+						<ul className="space-y-2">
+							{tokens.map((t) => (
+								<li
+									key={t.id}
+									className="flex items-center justify-between gap-3 rounded-md border p-3 text-sm"
+								>
+									<div className="min-w-0">
+										<span className="font-medium">{t.name ?? "(unnamed)"}</span>{" "}
+										<span className="text-muted-foreground">
+											{t.revokedAt
+												? "· revoked"
+												: t.lastUsedAt
+													? `· last used ${new Date(t.lastUsedAt).toLocaleDateString(APP_LOCALE)}`
+													: "· never used"}
+										</span>
+									</div>
+									{t.revokedAt ? null : (
+										<Button
+											variant="destructive"
+											size="sm"
+											disabled={revoke.isPending}
+											onClick={() => {
+												// Revoking breaks whatever is using it, and there is no
+												// undo — the token cannot be shown again.
+												if (
+													!window.confirm(
+														`Revoke ${t.name ?? "this token"}? Anything signed in with it stops working immediately.`,
+													)
+												) {
+													return;
+												}
+												revoke.mutate(t.id);
+											}}
+										>
+											Revoke
+										</Button>
+									)}
+								</li>
+							))}
+						</ul>
+					) : (
+						<p className="text-sm text-muted-foreground">No tokens yet.</p>
+					)}
+				</div>
 			</div>
-		</div>
+		</details>
 	);
 }
