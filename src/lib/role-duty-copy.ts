@@ -6,13 +6,15 @@
  * Client-safe: no server imports. Officer-on-behalf copy deliberately does not live here.
  */
 
-const TELL_LEADERS = "tell the Toastmaster or VPE";
+const TELL_TM_OR_VPE = "tell the Toastmaster or VPE";
 
 /** The duty a holder keeps after freeing a role; embed it in a sentence of your own. */
-export const ROLE_DUTY_CLAUSE = `it's still on you to find a replacement or ${TELL_LEADERS}`;
+export const ROLE_DUTY_CLAUSE = `it's still on you to find a replacement or ${TELL_TM_OR_VPE}`;
 
-const DUTY_SENTENCE =
-	"Now tell the Toastmaster or VPE, or find someone to cover it.";
+const DUTY_SENTENCE = `Now ${TELL_TM_OR_VPE}, or find someone to cover it.`;
+
+/** The self-decline dialog's sentence: GavelUp notifies nobody, so the duty stays with the holder. */
+export const ROLE_DUTY_NO_NOTIFY_SENTENCE = `GavelUp doesn't tell anyone, so ${ROLE_DUTY_CLAUSE}.`;
 
 /** Shown BEFORE a holder frees their own role(s). `roles` is the listRoles() output. */
 export function roleDutyConfirmText(roles: string, when: string): string {
@@ -27,8 +29,7 @@ export function roleFreedDutyText(count: number): string {
 export const ROLE_FREED_DUTY_TEXT = roleFreedDutyText(1);
 
 /** Shown when a holder declined but the role was NOT freed (signed-out decline). */
-export const ROLE_KEPT_DUTY_TEXT =
-	"Your role is still yours until someone covers it: find a replacement or tell the Toastmaster or VPE.";
+export const ROLE_KEPT_DUTY_TEXT = `Your role is still yours until someone covers it: find a replacement or ${TELL_TM_OR_VPE}.`;
 
 /** Shown AFTER a decline by someone holding no role. */
 export const NOT_COMING_NO_ROLE_TEXT = "Got it — you're marked as not coming.";
@@ -40,7 +41,7 @@ export function notComingText(when: string): string {
 
 /** Shown BEFORE a signed-in decline by someone holding no role (one may have been assigned since load). */
 export function notComingMaybeRoleText(when: string): string {
-	return `You'll be marked as not coming for the ${when} meeting. If a role has been assigned to you since this page loaded, it will be freed too, and it's on you to ${TELL_LEADERS}.`;
+	return `You'll be marked as not coming for the ${when} meeting. If a role has been assigned to you since this page loaded, it will be freed too, and it's on you to ${TELL_TM_OR_VPE}.`;
 }
 
 /** Duration for any toast carrying duty text: long enough to read and act on. */

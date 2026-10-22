@@ -6,6 +6,7 @@ import {
 	notComingText,
 	notComingToast,
 	ROLE_DUTY_CLAUSE,
+	ROLE_DUTY_NO_NOTIFY_SENTENCE,
 	ROLE_FREED_DUTY_TEXT,
 	ROLE_KEPT_DUTY_TEXT,
 	roleDutyConfirmText,
@@ -84,6 +85,15 @@ describe("ROLE_DUTY_CLAUSE", () => {
 		);
 		expect(notComingMaybeRoleText("Tue")).toBe(
 			"You'll be marked as not coming for the Tue meeting. If a role has been assigned to you since this page loaded, it will be freed too, and it's on you to tell the Toastmaster or VPE.",
+		);
+	});
+});
+
+describe("ROLE_DUTY_NO_NOTIFY_SENTENCE", () => {
+	// protects=the self-decline dialog's shared sentence text; fails_when=the wording or the duty clause inside it changes; no_claim=where it is rendered
+	it("says GavelUp tells no one, so the duty stays with the holder", () => {
+		expect(ROLE_DUTY_NO_NOTIFY_SENTENCE).toBe(
+			"GavelUp doesn't tell anyone, so it's still on you to find a replacement or tell the Toastmaster or VPE.",
 		);
 	});
 });
