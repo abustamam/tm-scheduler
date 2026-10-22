@@ -110,7 +110,10 @@ function buildServer(ctx: McpToolContext): McpServer {
 			// handlers take a bare record and re-parse, so the two meet here.
 			(async (args: Record<string, unknown>) => {
 				try {
-					const result = await tool.handler(args ?? {}, ctx);
+					const result = await tool.handler(args ?? {}, {
+						...ctx,
+						audience: tool.audience,
+					});
 					return {
 						content: [
 							{ type: "text" as const, text: JSON.stringify(result, null, 2) },

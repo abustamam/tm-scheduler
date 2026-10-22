@@ -1,7 +1,7 @@
 /**
  * `whoami` — who this token belongs to, and which clubs it may act on (#773).
  *
- * The ONE tool that calls `authenticateToken` rather than `authorizeToken`, and
+ * A tool that calls `authenticateToken` rather than `authorizeToken`, and
  * the guard waives it by name for that reason: it is what TELLS the caller which
  * clubs exist, so it has no `clubId` to be checked against. Every other tool
  * names a club or a meeting and is authorized against that.
@@ -14,11 +14,13 @@ import type { McpToolDefinition } from "../tool";
 
 export const whoamiTool: McpToolDefinition = {
 	name: "whoami",
+	audience: "member",
 	config: {
 		title: "Who am I",
 		description:
 			"The person this token belongs to, and the clubs where they are an " +
-			"admin or hold an elected office. Call this first: every other tool " +
+			"active member (`via` says whether as admin, officer or member). " +
+			"Call this first: every other tool " +
 			"needs a clubId or a meetingId from here.",
 	},
 	handler: async (_input, ctx) => {

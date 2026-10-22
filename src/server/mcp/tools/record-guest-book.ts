@@ -149,6 +149,7 @@ function toPendingEntries(
 
 export const recordGuestBookTool: McpToolDefinition = {
 	name: "record_guest_book",
+	audience: "officer",
 	config: {
 		title: "Record guest book",
 		description:

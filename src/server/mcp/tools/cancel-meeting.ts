@@ -64,6 +64,7 @@ function asMcpRefusal(err: unknown): unknown {
 
 export const cancelMeetingTool: McpToolDefinition = {
 	name: "cancel_meeting",
+	audience: "officer",
 	config: {
 		title: "Cancel meeting",
 		description:

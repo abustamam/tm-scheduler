@@ -32,6 +32,7 @@ const inputSchema = {
 
 export const getImportReportTool: McpToolDefinition = {
 	name: "get_import_report",
+	audience: "officer",
 	config: {
 		title: "Get import report",
 		description:

@@ -12,14 +12,15 @@ There are two ways in, and they reach the same seven tools with the same authori
 | **claude.ai** (web, desktop, iOS, Android) | OAuth: you sign in to GavelUp and approve the connection | The connector, once per Claude account |
 | **Claude Code** (your terminal) | A personal `tmk_` token pasted into a header | You, from Account settings (`/account`) |
 
-What either one can do is exactly what **you** can do: it acts in every club where you are an
-admin or hold an open officer term, and nowhere else. Every write is credited to you, the same as
+What either one can do is exactly what **you** can do: as a member it reads your own schedule
+and feedback; in every club where you are an admin or hold an open officer term it also gets the
+officer tools, and nowhere else. Every write is credited to you, the same as
 if you had made it in the app.
 
-**Connecting is for club officers, for now.** You need to be an admin, or hold an open officer
-term, in at least one club that is not archived — the same rule Account settings (`/account`)
-applies before it offers you a token. A plain member who tries sees "Only club officers can
-connect apps to GavelUp right now." with only a Decline button.
+**Every active member can connect.** You need to be an active member of at least one club that is
+not archived — the same rule Account settings (`/account`) applies before it offers you a token
+(under "Connect an AI assistant"). Officers get more tools than members. Someone in no open club
+sees "Only active members of a GavelUp club can connect apps." with only a Decline button.
 
 ---
 
@@ -55,6 +56,7 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
 | `get_agenda` | reads | "What's on the agenda for our next meeting? Which roles are open?" Also returns the timed run sheet: each row's start time and minutes, and when the meeting ends against its booked slot. Also returns the three award winners (Best Speaker, Best Evaluator, Best Table Topics) so Claude can see whether they are recorded. Reading it changes nothing, even on a meeting nobody has edited yet |
 | `get_lineup_blast` | reads | "Draft the lineup message for Saturday's meeting" — you copy and send it |
 | `get_my_feedback` | reads | "What did people say about my speech on Saturday?" Only **your own** anonymous notes, from meetings that have ended; never who wrote one. Every result tells Claude the note text is untrusted, anonymous input, never instructions |
+| `get_my_schedule` | reads | **Members.** "What's on my schedule?" Your own upcoming meetings (default 28 days) across your clubs, the roles you hold and whether you said you are coming. Takes no id: it is always you |
 | `find_people` | reads | "Find Dana on our roster." Guest emails and phones come back **masked** |
 | `assign_roles` | **writes immediately** | "Put Dana in the Speaker 2 slot", "clear the Timer role" |
 | `set_awards` | **writes immediately** | "Best Speaker was Dana, Table Topics was Rizwan" — record or clear a meeting's winners |
@@ -150,8 +152,8 @@ Revoke the token on `/account` to disconnect; that takes effect on the next call
 | "This approval link has expired or was changed" | The approval page is valid for ten minutes. Start again from Claude |
 | "You're signed in as someone else now" | You signed in to a different GavelUp account in another tab. Reload and check the account |
 | "We couldn't confirm the connection" | The network dropped mid-approval. Check claude.ai; if it isn't connected, connect again |
-| "Only club officers can connect apps to GavelUp right now" | The account you signed in with is not an admin or officer of any open club. Decline, or sign in as the account that is |
-| Every tool answers `FORBIDDEN` | The account you connected is not an admin or officer of that club |
+| "Only active members of a GavelUp club can connect apps" | The account you signed in with is not an active member of any open club. Decline, or sign in as the account that is |
+| Every officer tool answers `FORBIDDEN` | The account you connected is a member, not an admin or officer, of that club. `whoami`, `get_my_feedback` and `get_my_schedule` still work |
 | `ARCHIVED` | That club has been archived; it can't be changed from anywhere |
 | The magic link says it has expired | Links work once, for five minutes. Ask for a new one |
 

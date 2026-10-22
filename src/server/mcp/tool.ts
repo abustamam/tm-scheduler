@@ -43,13 +43,26 @@ export interface VerifiedOAuthGrant {
  *   header, resolved against `api_tokens` by `authz-logic` on every call.
  * - `oauthGrant` — a claude.ai access token, verified before any tool ran.
  */
-export type McpToolContext =
+export type McpToolContext = (
 	| { rawToken: string | null }
-	| { oauthGrant: VerifiedOAuthGrant };
+	| { oauthGrant: VerifiedOAuthGrant }
+) & {
+	/**
+	 * Who the running tool is for (#1281). Set ONLY by `buildServer` from the
+	 * tool's own definition; a tool never sets it. Absent means officer, so a
+	 * context built anywhere else fails closed.
+	 */
+	audience?: McpToolAudience;
+};
+
+/** `officer`: an admin or open-term officer of the club. `member`: any active member. */
+export type McpToolAudience = "officer" | "member";
 
 export interface McpToolDefinition {
 	/** The tool name as MCP clients see it, e.g. `record_guest_book`. */
 	name: string;
+	/** REQUIRED, no default: who may call this tool (#1281). */
+	audience: McpToolAudience;
 	config: {
 		title: string;
 		description: string;

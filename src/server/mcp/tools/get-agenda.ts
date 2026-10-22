@@ -74,6 +74,7 @@ async function loadAwards(
 
 export const getAgendaTool: McpToolDefinition = {
 	name: "get_agenda",
+	audience: "officer",
 	config: {
 		title: "Get agenda",
 		description:

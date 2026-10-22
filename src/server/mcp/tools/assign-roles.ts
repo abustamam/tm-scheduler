@@ -117,6 +117,7 @@ interface LockedSlot {
 
 export const assignRolesTool: McpToolDefinition = {
 	name: "assign_roles",
+	audience: "officer",
 	config: {
 		title: "Assign roles",
 		description:

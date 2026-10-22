@@ -27,8 +27,7 @@ import { requireUser } from "./guards";
 /** Whether minting a token could authorize anything, and the token list. */
 export interface ApiTokenState {
 	/**
-	 * The user is an active admin, or holds an open officer term, in at least one
-	 * club (`mayUseConnector`, the rule the consent screen applies too).
+	 * The user is an active member of at least one open club (`mayUseConnector`, the rule the consent screen applies too).
 	 * Resolved SERVER-side, rather than re-derived on the client: the route context carries
 	 * `officerPositions` for the ACTIVE club only, so a client-side check would
 	 * hide the section from an officer whose office is in another club.
@@ -64,7 +63,7 @@ export const generateApiToken = createServerFn({ method: "POST" })
 		const user = await requireUser();
 		if (!(await mayUseConnector(user.id))) {
 			throw new Error(
-				"Only a club admin or officer can create an access token.",
+				"Only active members of a club can create an access token.",
 			);
 		}
 		return createApiToken({ userId: user.id, name: data.name ?? null });

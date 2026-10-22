@@ -40,9 +40,14 @@ Moved verbatim out of `CLAUDE.md` on 2026-10-05 so it stops riding in every sess
   checks again before any fetch — widen that set, never the match, or `/oauth2/authorize` fetches whatever URL a caller
   names and writes a client row from it. It sits after `mcp()`, before `tanstackStartCookies()`.
   Tests `vi.mock("#/lib/cimd-transport")` and serve `src/test/fixtures/claude-cimd-metadata.json`.
-  Only officers may APPROVE a connection: `mayUseConnector` (`src/server/connector-eligibility.ts`)
-  is the one statement of that rule, checked in the consent `hooks.before` and read by `/me` and
-  `/oauth/consent` — so a test that approves must sign in as an admin or officer of an open club.
+  Every active member of an open club may APPROVE a connection (#1281): `mayUseConnector`
+  (`src/server/connector-eligibility.ts`) is the one statement of that rule, checked in the consent
+  `hooks.before` and read by `/me` and `/oauth/consent`. What a member may DO is per tool: every
+  `McpToolDefinition` declares a required `audience` (`officer` | `member`), `handle-request.ts`
+  stamps it on the context, and `authorizeToken` refuses a `via: "member"` club for an officer tool
+  with the byte-identical not-an-officer message, before the archived check. A token's `clubs` now
+  include member clubs, so a club in that list is NOT proof of officer standing;
+  `mcp-audience.guard.test.ts` pins the member tool set.
   A confidential client, if one is ever needed again, is registered with
   `scripts/register-oauth-client.ts` — `node .output/register-oauth-client.mjs`
   in production, since the image has no Bun — never by INSERT. Two traps in the browser half: the provider sends `/signin` and `/oauth/consent` a

@@ -199,6 +199,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"get_import_report",
 			"get_lineup_blast",
 			"get_my_feedback",
+			"get_my_schedule",
 			"list_meetings",
 			"record_guest_book",
 			"restore_meeting",
@@ -484,6 +485,9 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 		// kind this is meant to catch.
 		const calls = [
 			toolsCall("whoami"),
+			// #1281. A member tool: names nobody but the caller, but it reads
+			// through `loadMyCommitments` and the plan seam, so it is swept too.
+			toolsCall("get_my_schedule"),
 			toolsCall("list_meetings", { clubId: seed.clubId }),
 			toolsCall("find_people", { clubId: seed.clubId }),
 			toolsCall("get_agenda", { meetingId: seed.meetingId }),

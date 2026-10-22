@@ -29,10 +29,10 @@
  *   the copy for both says so rather than "nothing was connected".
  * - **Be framed.** One-click Approve is a clickjacking target, so the document
  *   is served with `X-Frame-Options: DENY` and `frame-ancestors 'none'`.
- * - **Offer Approve to someone who may not approve.** Connecting is for club
- *   officers for now (#852, `mayUseConnector`). The loader says so up front
+ * - **Offer Approve to someone who may not approve.** Connecting is for active
+ *   club members (#852, `mayUseConnector`; widened from officers in #1281). The loader says so up front
  *   (`eligible`), and the consent hook in `src/lib/auth.ts` refuses the POST
- *   with `not_an_officer` whatever this page shows; both land on the same
+ *   with `not_a_member` whatever this page shows; both land on the same
  *   Decline-only card.
  */
 import { createFileRoute, Link } from "@tanstack/react-router";
@@ -53,8 +53,8 @@ import {
 	replaceLocation,
 } from "#/lib/browser-location";
 import {
-	NOT_AN_OFFICER,
-	NOT_AN_OFFICER_MESSAGE,
+	NOT_A_MEMBER,
+	NOT_A_MEMBER_MESSAGE,
 } from "#/lib/oauth-connector-clients";
 import {
 	CONSENT_ACCOUNT_CHANGED,
@@ -113,9 +113,9 @@ function OAuthConsent() {
 	const [busy, setBusy] = useState<"accept" | "deny" | null>(null);
 	const [outcome, setOutcome] = useState<Outcome | null>(null);
 	const [error, setError] = useState<string | null>(null);
-	// The server refused an approval as not-an-officer: the loader's answer was
+	// The server refused an approval as not-a-member: the loader's answer was
 	// stale (an office ended since the page loaded), so show what it now says.
-	const [refusedAsNonOfficer, setRefusedAsNonOfficer] = useState(false);
+	const [refusedAsNonMember, setRefusedAsNonMember] = useState(false);
 
 	const signedOut = lookup !== null && !lookup.signedIn;
 	useEffect(() => {
@@ -168,10 +168,10 @@ function OAuthConsent() {
 			setOutcome({ kind: "account-changed" });
 			return;
 		}
-		if (accept && body?.error === NOT_AN_OFFICER) {
+		if (accept && body?.error === NOT_A_MEMBER) {
 			// A 403 the hook raises before the provider writes anything, so
 			// Decline is still meaningful and still offered.
-			setRefusedAsNonOfficer(true);
+			setRefusedAsNonMember(true);
 			setBusy(null);
 			return;
 		}
@@ -231,14 +231,14 @@ function OAuthConsent() {
 	const identified = lookup.client !== null;
 	const appName = lookup.client?.name ?? null;
 	const userId = lookup.userId;
-	if (!lookup.eligible || refusedAsNonOfficer) {
+	if (!lookup.eligible || refusedAsNonMember) {
 		return (
 			<ConsentShell
 				title={appName ? `Connect ${appName}?` : "Connect an app?"}
 				description={`Signed in as ${lookup.email}.`}
 			>
 				<CardContent className="space-y-3 text-sm">
-					<p role="alert">{NOT_AN_OFFICER_MESSAGE}</p>
+					<p role="alert">{NOT_A_MEMBER_MESSAGE}</p>
 					<p className="text-muted-foreground">
 						Decline to let {appName ?? "the app"} know it wasn't connected.
 					</p>
@@ -269,14 +269,15 @@ function OAuthConsent() {
 					</p>
 				)}
 				<p>
-					{appName ?? "This app"} will be able to act as you in every club where
-					you're an admin or officer: read agendas, members and guests, and make
-					changes such as assigning roles or adding meetings.
+					{appName ?? "This app"} will be able to act as you in your clubs. As a
+					member it can read your own schedule and feedback; where you're an
+					admin or officer it can also read agendas, members and guests, and
+					make changes such as assigning roles or adding meetings.
 				</p>
 				<p>
 					Some of those changes happen as soon as the app makes them, so only
-					approve an app you'd trust with your officer access. It can't do
-					anything you can't already do yourself.
+					approve an app you'd trust with your access. It can't do anything you
+					can't already do yourself.
 				</p>
 				{error ? (
 					<p className="text-destructive" role="alert">

@@ -1,5 +1,5 @@
 // Two structural rules #852 depends on, each of which fails silently when
-// broken: the officer rule is written once, and `cimd()` sits where it works.
+// broken: the connector rule is written once, and `cimd()` sits where it works.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -35,15 +35,15 @@ function between(source: string, start: string, end: string): string {
 
 const CALL = /\bmayUseConnector\(session\.user\.id\)/;
 
-describe("the officer rule is written once (#852)", () => {
-	it("connector-eligibility.ts is the only caller of adminClubsForUser besides authz-logic.ts, where it lives", () => {
+describe("the connector rule is written once (#852)", () => {
+	it("connector-eligibility.ts is the only caller of memberClubsForUser besides authz-logic.ts, where it lives", () => {
 		// An offender-list guard, so it reads RAW source (see guard-source.ts):
 		// stripping comments could only hide a caller, never invent one.
 		// `authz-logic.ts` defines it and `authenticateToken` resolves a token's
 		// clubs with it; any OTHER caller is a second copy of "who may connect".
 		const callers = sourceFiles()
 			.filter((path) =>
-				/\badminClubsForUser\s*\(/.test(readFileSync(path, "utf8")),
+				/\bmemberClubsForUser\s*\(/.test(readFileSync(path, "utf8")),
 			)
 			.map((path) => relative(SRC, path))
 			.sort();
@@ -74,7 +74,7 @@ describe("the officer rule is written once (#852)", () => {
 		);
 		expect(hook).toMatch(CALL);
 		expect(hook).toMatch(/ctx\.body\?\.accept === true/);
-		expect(hook).toMatch(/error: NOT_AN_OFFICER\b/);
+		expect(hook).toMatch(/error: NOT_A_MEMBER\b/);
 	});
 
 	it("lookupConsentClient reads it and reports it on BOTH signed-in arms", () => {
