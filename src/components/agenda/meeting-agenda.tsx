@@ -58,6 +58,7 @@ import {
 	personalNudgeUrl,
 } from "#/lib/nudge";
 import type { ContactMethod } from "#/lib/preferred-contact";
+import { DUTY_TOAST_MS, roleFreedDutyText } from "#/lib/role-duty-copy";
 import { rolesGuideUrl } from "#/lib/role-guide";
 import { speechWindow, speechWindowInputError } from "#/lib/speech-window";
 import {
@@ -391,7 +392,12 @@ export function MeetingAgenda({
 	async function doRelease(slot: AgendaSlot) {
 		await run(slot.id, async () => {
 			await actions.release(slot);
-			toast.success("Role released.");
+			// An officer releasing someone else's role keeps the plain line.
+			if (currentMemberId !== null && slot.assigneeId === currentMemberId) {
+				toast.success(roleFreedDutyText(1), { duration: DUTY_TOAST_MS });
+			} else {
+				toast.success("Role released.");
+			}
 		});
 	}
 

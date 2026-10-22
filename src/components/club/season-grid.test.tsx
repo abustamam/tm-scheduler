@@ -62,6 +62,7 @@ vi.mock("sonner", () => ({
 	toast: { success: toastSuccess, error: toastError },
 }));
 
+import { ROLE_FREED_DUTY_TEXT } from "#/lib/role-duty-copy";
 import { SeasonGrid } from "./season-grid";
 
 // jsdom doesn't implement scrollIntoView; SeasonGrid calls it on mount to
@@ -879,5 +880,115 @@ describe("Show past (#1048)", () => {
 		expect(within(firstRow as HTMLElement).getAllByRole("cell")).toHaveLength(
 			PAST + 1 + contactCells,
 		);
+	});
+});
+
+// #1280. protects=a member freeing their OWN role is told the duty is still theirs, and an officer acting on someone else's keeps the byte-identical officer copy; fails_when=self copy drops the duty or uses the officer sentence, or the officer variant gains duty text; no_claim=mocked server writes and sonner; the viewer-is-holder rule is exercised through the season grid, not through each other release surface
+describe("SeasonGrid: role-duty copy on release (#1280)", () => {
+	const held = (memberId: string): SeasonGridData => ({
+		...membersData,
+		cells: [
+			{
+				slotId: "slot-1",
+				meetingId: "m1",
+				roleDefinitionId: "ti",
+				slotIndex: 0,
+				memberId,
+				guestId: null,
+				status: "claimed",
+			},
+		],
+	});
+
+	afterEach(() => {
+		markUnavailableReleasing.mockClear();
+		releaseSlot.mockClear();
+		toastSuccess.mockClear();
+	});
+
+	it("self release-and-mark: confirm states the duty, toast is Role freed for 10s", async () => {
+		await renderMembersGrid({
+			data: held("c1"),
+			currentMemberId: "c1",
+			currentMemberSource: "session",
+			canManageOthers: false,
+		});
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Can't go —/ }),
+		);
+		expect(
+			await screen.findByText(
+				/it's still on you to find a replacement or tell the Toastmaster or VPE/,
+			),
+		).toBeTruthy();
+		await userEvent.click(
+			screen.getByRole("button", { name: /Release & mark unavailable/ }),
+		);
+		await waitFor(() =>
+			expect(toastSuccess).toHaveBeenCalledWith(ROLE_FREED_DUTY_TEXT, {
+				duration: 10_000,
+			}),
+		);
+	});
+
+	it("officer marking someone else unavailable keeps the officer sentence", async () => {
+		await renderMembersGrid({
+			data: held("c1"),
+			currentMemberId: "admin-1",
+			currentMemberSource: "session",
+			canManageOthers: true,
+		});
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Edit Carla Nguyen/ }),
+		);
+		await userEvent.click(
+			await screen.findByRole("button", { name: /mark them not available/i }),
+		);
+		await userEvent.click(
+			await screen.findByRole("button", { name: /Release & mark unavailable/ }),
+		);
+		await waitFor(() =>
+			expect(toastSuccess).toHaveBeenCalledWith(
+				"Role released — they're marked unavailable.",
+			),
+		);
+	});
+
+	it("releasing your own cell shows Role freed with the duty", async () => {
+		await renderGrid(undefined, {
+			data: held("c1"),
+			currentMemberId: "c1",
+			currentMemberSource: "session",
+		});
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Release / }),
+		);
+		await waitFor(() =>
+			expect(toastSuccess.mock.calls[0]?.[0]).toBe(ROLE_FREED_DUTY_TEXT),
+		);
+		expect(toastSuccess.mock.calls[0]?.[1]?.duration).toBe(10_000);
+	});
+	it("picker release: self sees Role freed, an officer releasing another's role sees the old line", async () => {
+		for (const [viewer, expected] of [
+			["c1", ROLE_FREED_DUTY_TEXT],
+			["admin-1", "Released Timer."],
+		] as const) {
+			cleanup();
+			toastSuccess.mockClear();
+			await renderMembersGrid({
+				data: held("c1"),
+				currentMemberId: viewer,
+				currentMemberSource: "session",
+				canManageOthers: viewer !== "c1",
+			});
+			await userEvent.click(
+				await screen.findByRole("button", { name: /^Edit Carla Nguyen/ }),
+			);
+			await userEvent.click(
+				await screen.findByRole("button", { name: /Timer/ }),
+			);
+			await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+			expect(toastSuccess.mock.calls[0]?.[0]).toBe(expected);
+		}
 	});
 });

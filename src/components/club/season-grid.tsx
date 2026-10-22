@@ -17,6 +17,12 @@ import { formatMeetingDate } from "#/lib/format";
 import { mailtoHref } from "#/lib/mailto";
 import type { StoredMember } from "#/lib/member-identity";
 import { meetingRoleOptions } from "#/lib/member-role-picker";
+import {
+	DUTY_TOAST_MS,
+	NOT_COMING_NO_ROLE_TEXT,
+	roleDutyConfirmText,
+	roleFreedDutyText,
+} from "#/lib/role-duty-copy";
 import { scrollAnchorClearOfPinnedColumn } from "#/lib/season-grid-anchor-scroll";
 import {
 	DEFAULT_PAST_COUNT,
@@ -209,7 +215,11 @@ export function SeasonGrid({
 		try {
 			await releaseSlot({ data: { slotId } });
 			await onChanged?.();
-			toast.success("Role released.", {
+			// Only your OWN cell is wired to `release` (`onRelease` is passed to
+			// GridCell, which renders it for `isMine` alone, and the claim-Undo is
+			// your own claim), so the holder here is always the viewer.
+			toast.success(roleFreedDutyText(1), {
+				duration: DUTY_TOAST_MS,
 				action: { label: "Undo", onClick: () => claim(slotId) },
 			});
 		} catch (err) {
@@ -301,7 +311,7 @@ export function SeasonGrid({
 		setConfirm(null);
 		setBusyMeetingId(meetingId);
 		try {
-			await markUnavailableReleasing({
+			const { released } = await markUnavailableReleasing({
 				data: {
 					memberId: targetMemberId,
 					actorMemberId: currentMemberId,
@@ -310,11 +320,15 @@ export function SeasonGrid({
 				},
 			});
 			await onChanged?.();
-			toast.success(
-				self
-					? "Role released — you're marked unavailable."
-					: "Role released — they're marked unavailable.",
-			);
+			if (!self) {
+				toast.success("Role released — they're marked unavailable.");
+			} else if (released > 0) {
+				toast.success(roleFreedDutyText(released), {
+					duration: DUTY_TOAST_MS,
+				});
+			} else {
+				toast.success(NOT_COMING_NO_ROLE_TEXT);
+			}
 		} catch (err) {
 			showWriteError(err, "Couldn't update.");
 		} finally {
@@ -918,7 +932,10 @@ export function SeasonGrid({
 						<DialogDescription>
 							{confirm?.memberName
 								? `${confirm.memberName} is ${confirm?.roleLabel} on ${confirm?.date}. Release the role and mark them unavailable for the meeting?`
-								: `You're ${confirm?.roleLabel} on ${confirm?.date}. Release and mark yourself unavailable for the meeting?`}
+								: roleDutyConfirmText(
+										confirm?.roleLabel ?? "",
+										confirm?.date ?? "",
+									)}
 						</DialogDescription>
 					</DialogHeader>
 					<DialogFooter>

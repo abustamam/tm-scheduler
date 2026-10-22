@@ -9,6 +9,7 @@ import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { navLabel } from "#/lib/nav-destinations";
+import { DUTY_TOAST_MS, roleFreedDutyText } from "#/lib/role-duty-copy";
 import { listMyCommitments } from "#/server/meetings";
 import { releaseSlot } from "#/server/slots";
 import {
@@ -51,7 +52,8 @@ function MyCommitments() {
 		setBusySlotId(slotId);
 		try {
 			await releaseSlot({ data: { slotId, actorMemberId: currentMemberId } });
-			toast.success("Role released.");
+			// /me lists only your own commitments, so the holder is the viewer.
+			toast.success(roleFreedDutyText(1), { duration: DUTY_TOAST_MS });
 			await router.invalidate();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");

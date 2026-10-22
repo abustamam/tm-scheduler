@@ -13,6 +13,7 @@ import {
 	type RoleOption,
 	slotAction,
 } from "#/lib/member-role-picker";
+import { DUTY_TOAST_MS, roleFreedDutyText } from "#/lib/role-duty-copy";
 import { cn } from "#/lib/utils";
 import type { SeasonGridData } from "#/server/season-grid";
 import { claimSlot, reassignSlot, releaseSlot } from "#/server/slots";
@@ -83,7 +84,11 @@ export function MemberRolePicker({
 			if (action === "release") {
 				// No actor on the wire (#763): the server reads the session.
 				await releaseSlot({ data: { slotId: o.slotId } });
-				toast.success(`Released ${o.label}.`);
+				if (isOwnRow) {
+					toast.success(roleFreedDutyText(1), { duration: DUTY_TOAST_MS });
+				} else {
+					toast.success(`Released ${o.label}.`);
+				}
 			} else if (action === "reassign") {
 				await reassignSlot({
 					data: { slotId: o.slotId, memberId: targetMemberId },

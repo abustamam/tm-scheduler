@@ -18,6 +18,7 @@ import { showWriteError } from "#/components/write-error-toast";
 import { authClient } from "#/lib/auth-client";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { type StoredMember, useEffectiveMember } from "#/lib/member-identity";
+import { DUTY_TOAST_MS, roleFreedDutyText } from "#/lib/role-duty-copy";
 import type { Orientation } from "#/lib/season-grid-view";
 import { getPublicClubProfileFn } from "#/server/clubs";
 import { listMemberCommitments } from "#/server/meetings";
@@ -97,7 +98,8 @@ function ClubHome() {
 		try {
 			// No actor on the wire (#763): the server reads the session.
 			await releaseSlot({ data: { slotId } });
-			toast.success("Role released.");
+			// Only your own commitments render a Release, so the holder is the viewer.
+			toast.success(roleFreedDutyText(1), { duration: DUTY_TOAST_MS });
 			await refetchAll();
 		} catch (err) {
 			showWriteError(err, "Something went wrong.");
