@@ -23,7 +23,11 @@ import {
 } from "#/lib/meeting-roles";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { isRealSpeechTitle, TBA_SPEECH_TITLE } from "#/lib/speech-title";
-import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
+import {
+	isConnectorSelf,
+	SIGN_IN_REQUIRED_MESSAGE,
+	type WriteProof,
+} from "#/lib/write-proof";
 import { logActivity } from "./activity";
 import {
 	type AttendancePlanStatus,
@@ -1437,6 +1441,7 @@ export async function markComingOnSelfClaim(
 				? ASK_ONLY_PLAN_FLOOR
 				: HOLDER_CONFIRM_PLAN_FLOOR,
 		...(args.proof ? { proof: args.proof } : {}),
+		...(args.proof === "connector" ? { via: "connector" as const } : {}),
 	});
 }
 
@@ -1576,6 +1581,11 @@ export async function confirmSlotCore(args: {
 	// a slot on a cancelled meeting. Here, before either grant, so the two arms
 	// refuse alike.
 	assertMeetingAccepts(slot.meetingStatus, "plan");
+
+	// A `connector` proof (#1283) is a token owner writing their OWN row; confirming
+	// a held role is a ruling that needs a session bound to the holder, so it is
+	// refused here whatever arm would have admitted it.
+	if (args.proof === "connector") throw new Error(SIGN_IN_REQUIRED_MESSAGE);
 
 	const grant = await resolveConfirmGrant(args, slot);
 
@@ -1935,6 +1945,27 @@ export async function claimSlotCore(
 	assertMeetingAccepts(slot.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED);
 
 	const forSomeoneElse = args.actorMemberId !== args.memberId;
+	// Fail-safe (#1283): a `connector` claim is a token owner claiming for
+	// themselves, whatever the caller passed. Mirrors `connectorActor`.
+	if (
+		args.proof === "connector" &&
+		!isConnectorSelf(args.proof, args.actorMemberId, args.memberId)
+	) {
+		throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+	}
+	if (args.proof === "connector") {
+		// The same lock and re-check the asserted path takes: a claim must not
+		// slip between this member's own decline (browser) and the flip below.
+		await lockMemberAttendance(tx, slot.meetingId, args.memberId);
+		if (
+			await isMemberUnavailable(tx, {
+				memberId: args.memberId,
+				meetingId: slot.meetingId,
+			})
+		) {
+			throw new Error("You're marked as not coming to that meeting.");
+		}
+	}
 	if (args.proof === "asserted") {
 		// Through `tx`: this runs inside the caller's transaction, and a pooled
 		// read here holds one connection while waiting on a second.
@@ -2021,6 +2052,9 @@ export async function claimSlotCore(
 		detail: {
 			memberId: args.memberId,
 			...(args.proof ? { proof: args.proof } : {}),
+			// A claim a token owner made for themselves through their agent (#1283),
+			// so the feed can tell it from a browser one.
+			...(args.proof === "connector" ? { via: "connector" } : {}),
 			// The only arm that lets an asserted caller claim for someone else, and
 			// the TMOD's id is as public as anyone's: say so on the row, so a claim
 			// credited to the TMOD by a forged id can be told apart in the feed.

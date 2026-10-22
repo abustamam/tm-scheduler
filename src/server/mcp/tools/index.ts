@@ -16,6 +16,7 @@
 import type { McpToolDefinition } from "../tool";
 import { assignRolesTool } from "./assign-roles";
 import { cancelMeetingTool } from "./cancel-meeting";
+import { claimOpenRoleTool } from "./claim-open-role";
 import { editAgendaTool } from "./edit-agenda";
 import { findPeopleTool } from "./find-people";
 import { getAgendaTool } from "./get-agenda";
@@ -27,6 +28,7 @@ import { listMeetingsTool } from "./list-meetings";
 import { recordGuestBookTool } from "./record-guest-book";
 import { restoreMeetingTool } from "./restore-meeting";
 import { setAwardsTool } from "./set-awards";
+import { setMyAttendanceTool } from "./set-my-attendance";
 import { upsertAgendasTool } from "./upsert-agendas";
 import { whoamiTool } from "./whoami";
 
@@ -38,6 +40,8 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	getImportReportTool,
 	getMyFeedbackTool,
 	getMyScheduleTool,
+	setMyAttendanceTool,
+	claimOpenRoleTool,
 	findPeopleTool,
 	recordGuestBookTool,
 	assignRolesTool,

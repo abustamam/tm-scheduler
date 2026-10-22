@@ -246,6 +246,7 @@ const MEETING_WRITERS: Record<string, Entry> = {
 					"src/server/attendance-plan.ts#setPlannedAttendance",
 					"src/server/availability-logic.ts#releaseSlotsAndMarkUnavailable",
 					"src/server/availability.ts#setAvailability",
+					"src/server/mcp/tools/set-my-attendance.ts#setMyAttendanceTool",
 					"src/server/slots-logic.ts#claimSlotCore",
 					"src/server/slots-logic.ts#confirmSlotCore",
 					"src/server/slots-logic.ts#reassignSlotCore",

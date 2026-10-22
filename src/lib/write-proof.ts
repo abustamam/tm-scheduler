@@ -45,8 +45,29 @@
  * and `src/routes/signin.tsx` import it into the browser bundle.
  */
 
-/** How the actor behind a write was established. */
-export type WriteProof = "session" | "asserted";
+/**
+ * How the actor behind a write was established.
+ *
+ * `connector` (#1283): the actor id is the token owner's OWN active membership in
+ * the meeting's club, resolved by `authorizeTokenForMeeting` from a verified
+ * `tmk_` or OAuth credential. It is accepted ONLY where actor === subject
+ * ({@link isConnectorSelf}); the session-only rulings (votes, ballots, slot
+ * confirm, minutes) never admit it.
+ */
+export type WriteProof = "session" | "asserted" | "connector";
+
+/**
+ * True when `proof` is `connector` AND the actor is the subject: a member acting
+ * on their own row through their own token. A pure predicate; it never throws,
+ * so the SEAM decides what to say when it is false.
+ */
+export function isConnectorSelf(
+	proof: WriteProof,
+	actorMemberId: string | null,
+	subjectMemberId: string,
+): boolean {
+	return proof === "connector" && actorMemberId === subjectMemberId;
+}
 
 /**
  * "You need a session for this."

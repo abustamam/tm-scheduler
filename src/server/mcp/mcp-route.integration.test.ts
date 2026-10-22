@@ -193,6 +193,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 		expect(listed.result.tools.map((t) => t.name).sort()).toEqual([
 			"assign_roles",
 			"cancel_meeting",
+			"claim_open_role",
 			"edit_agenda",
 			"find_people",
 			"get_agenda",
@@ -204,6 +205,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"record_guest_book",
 			"restore_meeting",
 			"set_awards",
+			"set_my_attendance",
 			"upsert_agendas",
 			"whoami",
 		]);
@@ -563,6 +565,17 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			// restore follows so the meeting is back as the cases after this expect.
 			toolsCall("cancel_meeting", { meetingId: seed.meetingId }),
 			toolsCall("restore_meeting", { meetingId: seed.meetingId }),
+			// #1283. The two member writes, LAST so the meeting is live again, and
+			// PREVIEWS only (no planHash) so nothing is written. They name the
+			// caller's own roles and the meeting's open labels, never a guest row.
+			toolsCall("set_my_attendance", {
+				meetingId: seed.meetingId,
+				status: "not_coming",
+			}),
+			toolsCall("claim_open_role", {
+				meetingId: seed.meetingId,
+				role: "Toastmaster",
+			}),
 		];
 		const rawByTool = new Map<string, string>();
 		const bodyByTool = new Map<string, unknown>();
