@@ -241,6 +241,16 @@ export function MeetingPresent({
 			? { ballotUrl: slide.ballotUrl, label: participationLabel(slide.kind) }
 			: null;
 
+	// The feedback invitation (#1282): only the General Evaluation slide, or the
+	// Thank-You slide of a deck with none, carries a `feedbackUrl`. `""` is the
+	// one render before the route knows its origin — withheld entirely (no plate,
+	// no copy), never a code that scans to nothing.
+	const feedbackUrl =
+		(slide.kind === "generalEvaluation" || slide.kind === "thankYou") &&
+		slide.feedbackUrl
+			? slide.feedbackUrl
+			: null;
+
 	return (
 		<div className="fixed inset-0 flex items-center justify-center bg-black">
 			<div className="absolute top-[2vmin] right-[2vmin] z-20 flex items-center gap-[1.2vmin]">
@@ -270,13 +280,14 @@ export function MeetingPresent({
 				}}
 			>
 				{layout.chrome === "splash" ? (
-					<Splash layout={layout} />
+					<Splash layout={layout} feedbackUrl={feedbackUrl} />
 				) : (
 					<ContentSlide
 						layout={layout}
 						clubName={clubName}
 						date={fdate}
 						vote={vote}
+						feedbackUrl={feedbackUrl}
 					/>
 				)}
 			</div>
@@ -457,10 +468,38 @@ function useFitTransform(deps: unknown[]) {
 	return { outer, inner };
 }
 
+/** The presenter view's QR edge, in px: the vote plate and the feedback plate. */
+const PRESENT_QR_PX = 220;
+
+/**
+ * The "leave a note" invitation (#1282): the same white plate as the vote QR,
+ * the same 220px code, with the ask above it and the reassurance below. The
+ * caller renders it only for a non-empty URL.
+ */
+function FeedbackInvite({ url }: { url: string }) {
+	return (
+		<div className="flex flex-col items-center gap-[1cqw] text-center">
+			<p className="text-[2.2cqw] font-semibold">
+				Leave a note for today's role-takers
+			</p>
+			<div
+				className="rounded-[1.2cqw] bg-white p-[1.2cqw]"
+				data-testid="feedback-qr"
+			>
+				<QRCodeSVG value={url} size={PRESENT_QR_PX} marginSize={0} />
+			</div>
+			<p className="text-[1.7cqw] opacity-70">Anonymous · takes 30 seconds</p>
+		</div>
+	);
+}
+
 function Splash({
 	layout,
+	feedbackUrl,
 }: {
 	layout: Extract<SlideLayout, { chrome: "splash" }>;
+	/** Non-null only on a Thank-You splash that carries the invitation. */
+	feedbackUrl: string | null;
 }) {
 	const dark = layout.tone === "dark";
 	// #725: the club's mark REPLACES the word — the two never stack. Decided from
@@ -482,7 +521,7 @@ function Splash({
 	const showLogo = logoUrl != null && !logoFailed;
 	return (
 		<div
-			className="flex h-full w-full flex-col items-center justify-center px-[8cqw] text-center"
+			className="relative flex h-full w-full flex-col items-center justify-center px-[8cqw] text-center"
 			style={
 				dark
 					? {
@@ -550,6 +589,11 @@ function Splash({
 					<LineView key={idx} line={l} splash />
 				))}
 			</div>
+			{feedbackUrl ? (
+				<div className="absolute right-[3cqw] bottom-[3cqw]">
+					<FeedbackInvite url={feedbackUrl} />
+				</div>
+			) : null}
 		</div>
 	);
 }
@@ -559,6 +603,7 @@ function ContentSlide({
 	clubName,
 	date,
 	vote,
+	feedbackUrl,
 }: {
 	layout: Extract<SlideLayout, { chrome: "content" }>;
 	clubName: string;
@@ -566,6 +611,8 @@ function ContentSlide({
 	/** Non-null only on the three vote slides (#510). `null` renders the body
 	 *  exactly as every other content slide always has. */
 	vote: { ballotUrl: string; label: string } | null;
+	/** Non-null only on the General Evaluation slide (#1282). */
+	feedbackUrl: string | null;
 }) {
 	const { outer, inner } = useFitTransform([layout]);
 	return (
@@ -640,11 +687,13 @@ function ContentSlide({
 									{vote.ballotUrl ? (
 										<QRCodeSVG
 											value={vote.ballotUrl}
-											size={220}
+											size={PRESENT_QR_PX}
 											marginSize={0}
 										/>
 									) : (
-										<div style={{ width: 220, height: 220 }} />
+										<div
+											style={{ width: PRESENT_QR_PX, height: PRESENT_QR_PX }}
+										/>
 									)}
 								</div>
 								<p className="text-[2.2cqw] font-semibold">Scan to vote</p>
@@ -652,6 +701,13 @@ function ContentSlide({
 								    (#510) — see `MeetingPresent`'s own comment on `participation`. */}
 								<p className="text-[1.7cqw] opacity-70">{vote.label}</p>
 							</div>
+						</div>
+					) : feedbackUrl ? (
+						<div className="flex items-center gap-[4cqw]">
+							<div className="flex-1">
+								<BodyView body={layout.body} />
+							</div>
+							<FeedbackInvite url={feedbackUrl} />
 						</div>
 					) : (
 						<BodyView body={layout.body} />

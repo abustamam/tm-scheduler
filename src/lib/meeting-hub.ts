@@ -32,12 +32,29 @@ export const MEETING_AGENDA_ANCHOR_ID = "agenda";
  * - `""` — deliberately relative. Answers the bare path.
  * - an origin — the absolute URL a phone's camera can resolve.
  */
+function meetingPath(meeting: { clubKey: string; meetingKey: string }): string {
+	return `/club/${meeting.clubKey}/meeting/${meeting.meetingKey}`;
+}
+
 export function meetingHubUrlFor(
 	meeting: { clubKey: string; meetingKey: string },
 	origin: string | null,
 ): string {
 	if (origin === null) return "";
-	return `${origin}/club/${meeting.clubKey}/meeting/${meeting.meetingKey}?${MEETING_ROOM_PARAM}=1`;
+	return `${origin}${meetingPath(meeting)}?${MEETING_ROOM_PARAM}=1`;
+}
+
+/**
+ * The anonymous feedback page's URL (#1282), encoded by the presenter view's QR
+ * on the General Evaluation slide. Same `origin` contract as `meetingHubUrlFor`:
+ * `null` answers `""` ("no code yet"), `""` answers the bare path.
+ */
+export function meetingFeedbackUrlFor(
+	meeting: { clubKey: string; meetingKey: string },
+	origin: string | null,
+): string {
+	if (origin === null) return "";
+	return `${origin}${meetingPath(meeting)}/feedback`;
 }
 
 /**

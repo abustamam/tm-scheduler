@@ -1010,3 +1010,91 @@ describe("content-slide spacing (#359, #724)", () => {
 		);
 	});
 });
+
+describe("the feedback invitation (#1282)", () => {
+	afterEach(() => cleanup());
+	const FB = "https://gavelup.test/club/mcf/meeting/2026-06-25/feedback";
+	const geDeck = (feedbackUrl: string | null | undefined): Slide[] => [
+		deck[0] as Slide,
+		{
+			kind: "generalEvaluation",
+			owner: "General Evaluator",
+			time: "5-7 min",
+			feedbackUrl,
+		},
+		{
+			kind: "thankYou",
+			meetingSchedule: null,
+			nextMeetingAt: null,
+			timezone: "America/Chicago",
+			feedbackUrl: null,
+		},
+	];
+
+	// protects=the General Evaluation slide shows a scannable QR for the feedback
+	// URL with the ask above and the reassurance below; fails_when=the plate, the
+	// copy or the encoded value is missing; no_claim=jsdom does not scan the code,
+	// so the value is read from the rendered QR's source, and projector layout
+	// is not checked.
+	it("shows the QR and copy on the General Evaluation slide", () => {
+		renderPresent({ deck: geDeck(FB) });
+		clickNext(); // -> generalEvaluation
+		expect(
+			screen.getByText("Leave a note for today's role-takers"),
+		).toBeTruthy();
+		expect(screen.getByText("Anonymous · takes 30 seconds")).toBeTruthy();
+		const plate = screen.getByTestId("feedback-qr");
+		expect(plate.querySelector("svg")).toBeTruthy();
+		// Ask above the plate, reassurance below it.
+		const ask = screen.getByText("Leave a note for today's role-takers");
+		const reassurance = screen.getByText("Anonymous · takes 30 seconds");
+		expect(
+			ask.compareDocumentPosition(plate) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(
+			plate.compareDocumentPosition(reassurance) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		// A different URL must render a different code, or the QR ignores its value.
+		const first = plate.innerHTML;
+		cleanup();
+		renderPresent({ deck: geDeck(`${FB}?x=1`) });
+		clickNext();
+		expect(screen.getByTestId("feedback-qr").innerHTML).not.toBe(first);
+	});
+
+	// protects=no QR, plate or copy while the origin is unknown (""), and none on
+	// a slide whose feedbackUrl is null; fails_when=an empty value renders a code
+	// that scans to nothing; no_claim=none beyond protects.
+	it("renders nothing while the URL is empty or null", () => {
+		const { container } = renderPresent({ deck: geDeck("") });
+		clickNext();
+		expect(container.querySelector('[data-testid="feedback-qr"]')).toBeNull();
+		expect(
+			screen.queryByText("Leave a note for today's role-takers"),
+		).toBeNull();
+		clickNext(); // -> thankYou, feedbackUrl null
+		expect(container.querySelector('[data-testid="feedback-qr"]')).toBeNull();
+	});
+
+	// protects=a deck with no General Evaluation shows the invitation on the
+	// Thank-You splash; fails_when=the splash ignores feedbackUrl;
+	// no_claim=position of the panel on the splash is not checked.
+	it("shows it on the Thank-You splash when that slide carries the URL", () => {
+		renderPresent({
+			deck: [
+				deck[0] as Slide,
+				{
+					kind: "thankYou",
+					meetingSchedule: null,
+					nextMeetingAt: null,
+					timezone: "America/Chicago",
+					feedbackUrl: FB,
+				},
+			],
+		});
+		clickNext();
+		expect(screen.getByText("Thank You")).toBeTruthy();
+		expect(screen.getByTestId("feedback-qr").querySelector("svg")).toBeTruthy();
+	});
+});

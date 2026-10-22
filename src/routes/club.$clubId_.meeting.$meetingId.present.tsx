@@ -16,6 +16,7 @@ import {
 	inRoomNextMeeting,
 } from "#/lib/in-room-meeting-payload";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
+import { meetingFeedbackUrlFor } from "#/lib/meeting-hub";
 import { signupUrlFor } from "#/lib/next-meeting-summary";
 import { getClubLogoMeta } from "#/server/club-logo";
 import { getPublicMeetingByKey } from "#/server/meetings";
@@ -82,6 +83,14 @@ function PresentPage() {
 		{ clubKey: clubId, meetingKey: meetingId },
 		origin,
 	);
+	// The anonymous feedback page's QR (#1282), on the General Evaluation slide
+	// (or Thank-You when there is none). Same origin rule as the ballot: `""`
+	// until the browser says where we are, which `MeetingPresent` renders as
+	// nothing rather than a code that scans to nothing.
+	const feedbackUrl = meetingFeedbackUrlFor(
+		{ clubKey: clubId, meetingKey: meetingId },
+		origin,
+	);
 	// What's on tap next (#932): the loader's snapshot, silently refreshed while
 	// the deck is up — see `useNextMeetingRefresh` for why a failure never shows.
 	// The refresh re-reads the same public payload the loader did (and narrows
@@ -137,6 +146,7 @@ function PresentPage() {
 				meetingNumber: data.meetingNumber,
 				nextMeeting,
 				nextMeetingSignupUrl,
+				feedbackUrl,
 			})
 		: buildSlideDeck({
 				meeting: data.meeting,
@@ -148,6 +158,7 @@ function PresentPage() {
 				nextMeetingSignupUrl,
 				geIntroducesFunctionaries: data.geIntroducesFunctionaries,
 				ballotUrl,
+				feedbackUrl,
 			});
 	// The watermark is FIXED, so it sits over whichever slide is showing and
 	// the deck's own layout and fit are untouched (#1057).

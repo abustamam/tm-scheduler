@@ -13,6 +13,7 @@ import {
 	type Slide,
 	type SlideDeckInput,
 } from "./agenda-slides";
+import { buildTemplateSlideDeck } from "./agenda-template-slides";
 import type { NextMeetingSummary } from "./next-meeting-summary";
 import { slideLayout } from "./slide-layout";
 
@@ -1932,5 +1933,50 @@ describe("What's on tap for next meeting (#932)", () => {
 			),
 		).toBe(JSON.stringify(before));
 		expect(before.some((s) => s.kind === "nextMeeting")).toBe(false);
+	});
+});
+
+describe("buildSlideDeck feedback QR placement (#1282)", () => {
+	const FB = "https://gavelup.test/club/mcf/meeting/2026-06-25/feedback";
+	const geSlot = slot({
+		roleName: "General Evaluator",
+		assigneeName: "Riyaz",
+	});
+
+	// protects=the General Evaluation slide carries the URL and the Thank-You
+	// slide does not, so the QR shows once; fails_when=both slides carry it or
+	// neither does; no_claim=deck data only, rendering is meeting-present.test.
+	it("puts the feedback URL on the General Evaluation slide only", () => {
+		const deck = build({ slots: [geSlot], feedbackUrl: FB });
+		expect(deck.find((s) => s.kind === "generalEvaluation")).toMatchObject({
+			feedbackUrl: FB,
+		});
+		expect(deck.find((s) => s.kind === "thankYou")).toMatchObject({
+			feedbackUrl: null,
+		});
+	});
+
+	// protects=a meeting with no General Evaluation slide still shows the
+	// invitation, on Thank-You; fails_when=the URL is dropped when geOwner is
+	// null; no_claim=an empty slot list stands in for "no GE and no Toastmaster".
+	it("falls back to the Thank-You slide when the deck has no General Evaluation", () => {
+		const deck = build({ slots: [], feedbackUrl: FB });
+		expect(deck.some((s) => s.kind === "generalEvaluation")).toBe(false);
+		expect(deck.find((s) => s.kind === "thankYou")).toMatchObject({
+			feedbackUrl: FB,
+		});
+	});
+
+	// protects=a templated (contest) deck, which has no General Evaluation slide,
+	// still carries the invitation on Thank-You; fails_when=buildTemplateSlideDeck
+	// drops feedbackUrl; no_claim=an empty-rows deck stands in for a contest.
+	it("carries it on the templated deck's Thank-You slide", () => {
+		const deck = buildTemplateSlideDeck({
+			meeting,
+			club,
+			rows: [],
+			feedbackUrl: FB,
+		});
+		expect(deck.at(-1)).toMatchObject({ kind: "thankYou", feedbackUrl: FB });
 	});
 });

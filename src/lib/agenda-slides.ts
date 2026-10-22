@@ -132,6 +132,16 @@ export type HandoffTarget =
 	| "the General Evaluator"
 	| "the speech evaluators";
 
+/** The feedback invitation (#1282), carried by exactly ONE slide per deck: the
+ *  General Evaluation slide when the deck has one, else the Thank-You slide. */
+type FeedbackInvitation = {
+	/** Absolute URL of the anonymous feedback page, rendered as a QR with
+	 *  "Leave a note for today's role-takers". `""` until the browser's origin is
+	 *  known (no QR yet); null/absent when this slide is not the one that shows
+	 *  it. Optional so a hand-built slide without it still type-checks. */
+	feedbackUrl?: string | null;
+};
+
 /** One projected slide. Date formatting is deferred to the renderer.
  *
  *  `visiting` (#1164) is true when a name this slide SHOWS is a visiting
@@ -298,7 +308,7 @@ type SlideShape =
 			name: string;
 			time: string;
 	  }
-	| {
+	| ({
 			kind: "generalEvaluation";
 			/** Display name of the role giving it — see `functionaryReports.owner`.
 			 *  No `name`: unlike the other two owner-carrying slides, this one has
@@ -306,7 +316,7 @@ type SlideShape =
 			 *  it write-only. */
 			owner: string;
 			time: string;
-	  }
+	  } & FeedbackInvitation)
 	| { kind: "awards"; categories: string[] }
 	| {
 			/** The guest-comments beat (#352): the President invites them, between
@@ -372,12 +382,12 @@ type SlideShape =
 			 *  slide then shows no QR rather than one encoding a relative path. */
 			signupUrl: string | null;
 	  }
-	| {
+	| ({
 			kind: "thankYou";
 			meetingSchedule: string | null;
 			nextMeetingAt: Date | null;
 			timezone: string;
-	  };
+	  } & FeedbackInvitation);
 
 /** The standard roles the deck binds slides to (mirrors the beats
  *  `buildRunOfShow` emits in agenda-runsheet.ts). Each carries the immutable
@@ -522,6 +532,11 @@ export type SlideDeckInput = Omit<RunOfShowConfig, "tableTopicsLimits"> & {
 	 *  a relative path nobody's camera can scan. `null` when the meeting runs
 	 *  no digital vote (#770) — see `ballotUrlFor`. */
 	ballotUrl: string | null;
+	/** Absolute URL of this meeting's anonymous feedback page (#1282), from
+	 *  `meetingFeedbackUrlFor`. Lands on the General Evaluation slide, or on the
+	 *  Thank-You slide when the deck has no General Evaluation slide. Optional:
+	 *  absent means no feedback QR anywhere in the deck. */
+	feedbackUrl?: string | null;
 };
 
 export function buildSlideDeck({
@@ -532,6 +547,7 @@ export function buildSlideDeck({
 	meetingNumber = null,
 	geIntroducesFunctionaries,
 	ballotUrl,
+	feedbackUrl = null,
 	nextMeeting = null,
 	nextMeetingSignupUrl = null,
 }: SlideDeckInput): Slide[] {
@@ -916,6 +932,7 @@ export function buildSlideDeck({
 			kind: "generalEvaluation",
 			owner: geOwner.role,
 			time: beatTiming(runOfShow, "generalEvaluation"),
+			feedbackUrl,
 		});
 	}
 
@@ -953,6 +970,9 @@ export function buildSlideDeck({
 		meetingSchedule: club.meetingSchedule,
 		nextMeetingAt,
 		timezone: club.timezone,
+		// Exactly once per deck (#1282): the Thank-You slide carries the QR only
+		// when no General Evaluation slide does.
+		feedbackUrl: geOwner != null ? null : feedbackUrl,
 	});
 
 	return deck;

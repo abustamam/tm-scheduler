@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
 	isInRoom,
 	type MeetingRoomSearch,
+	meetingFeedbackUrlFor,
 	meetingHubUrlFor,
 	validateMeetingRoomSearch,
 } from "./meeting-hub";
@@ -28,6 +29,33 @@ describe("meetingHubUrlFor (#913)", () => {
 	it('answers the bare path for a deliberately relative origin ("")', () => {
 		expect(meetingHubUrlFor(meeting, "")).toBe(
 			"/club/mcf/meeting/2026-06-25?room=1",
+		);
+	});
+});
+
+describe("meetingFeedbackUrlFor (#1282)", () => {
+	// protects=the presenter QR encodes the public feedback page, not the room
+	// page; fails_when=the path drops /feedback or carries ?room=1;
+	// no_claim=URL shape only, not that the route exists (the feedback route's own
+	// tests own that).
+	it("answers the absolute feedback page URL once the origin is known", () => {
+		expect(meetingFeedbackUrlFor(meeting, "https://gavelup.app")).toBe(
+			"https://gavelup.app/club/mcf/meeting/2026-06-25/feedback",
+		);
+	});
+
+	// protects=no QR before the origin is known; fails_when=null maps to a
+	// relative path a camera cannot resolve; no_claim=none beyond protects.
+	it('answers "" before the origin is known, so no QR renders yet', () => {
+		expect(meetingFeedbackUrlFor(meeting, null)).toBe("");
+	});
+
+	// protects=the documented relative form: "" origin answers the bare path;
+	// fails_when="" is treated like null (no URL) or the path is mangled;
+	// no_claim=none beyond protects.
+	it('answers the bare path for a deliberately relative ("") origin', () => {
+		expect(meetingFeedbackUrlFor(meeting, "")).toBe(
+			"/club/mcf/meeting/2026-06-25/feedback",
 		);
 	});
 });

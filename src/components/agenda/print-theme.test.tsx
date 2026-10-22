@@ -97,7 +97,7 @@ describe("DarkFooter's meeting-page QR (#913)", () => {
 		// opens the meeting page, whose strip leads with Vote only while a
 		// category is open. `<br />` adds no text node, hence two assertions.
 		expect(qr?.textContent).toContain("Scan for");
-		expect(qr?.textContent).toContain("today's meeting");
+		expect(qr?.textContent).toContain("meeting & feedback");
 		expect(qr?.textContent).not.toMatch(/vote/i);
 	});
 

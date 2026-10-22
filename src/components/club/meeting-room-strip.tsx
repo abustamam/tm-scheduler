@@ -38,10 +38,13 @@ const BIG = "h-auto min-h-12 w-full justify-start text-base";
  * | # | identified                              | no identity         |
  * |---|-----------------------------------------|---------------------|
  * | 1 | Vote, while ≥1 category is open         | Vote, same rule     |
- * | 2 | What I'm doing today, if they hold a slot | Sign the guest book |
- * | 3 | Word of the Day, if set                 | Word of the Day     |
- * | 4 | Leave feedback, while `feedbackOpen`    | Leave feedback      |
+ * | 2 | Leave feedback, while `feedbackOpen`    | Leave feedback      |
+ * | 3 | What I'm doing today, if they hold a slot | Sign the guest book |
+ * | 4 | Word of the Day, if set                 | Word of the Day     |
  * | 5 | Today's agenda (in-page anchor)         | Today's agenda      |
+ *
+ * "Leave feedback" is a primary button, second after Vote (#1282): nobody knew
+ * the anonymous notes existed when it was the fourth outline button.
  *
  * plus "Member? Pick your name" under the strip when there is no identity,
  * which opens the page's existing identity picker; the pick lands in the shared
@@ -118,6 +121,17 @@ export function MeetingRoomStrip({
 						</Link>
 					</Button>
 				) : null}
+				{feedbackOpen ? (
+					<Button asChild size="lg" className={BIG}>
+						<Link
+							to="/club/$clubId/meeting/$meetingId/feedback"
+							params={params}
+						>
+							<MessageSquareHeart className="size-5" aria-hidden />
+							Leave feedback
+						</Link>
+					</Button>
+				) : null}
 				{identified ? (
 					holdsRole ? (
 						<Button asChild size="lg" variant="outline" className={BIG}>
@@ -144,17 +158,6 @@ export function MeetingRoomStrip({
 						<Link to="/club/$clubId/meeting/$meetingId/word" params={params}>
 							<Sparkles className="size-5" aria-hidden />
 							Word of the Day
-						</Link>
-					</Button>
-				) : null}
-				{feedbackOpen ? (
-					<Button asChild size="lg" variant="outline" className={BIG}>
-						<Link
-							to="/club/$clubId/meeting/$meetingId/feedback"
-							params={params}
-						>
-							<MessageSquareHeart className="size-5" aria-hidden />
-							Leave feedback
 						</Link>
 					</Button>
 				) : null}
