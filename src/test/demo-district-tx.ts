@@ -51,6 +51,9 @@ export interface DemoDistrictCtx {
 	districtId: string;
 }
 
+/** The transaction type a `withDemoDistrict` body receives. */
+export type DemoTx = DemoDistrictCtx["tx"];
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Kept under vitest's 15s `testTimeout` so this helper's own error fires. */

@@ -38,6 +38,8 @@ function AreasConsole() {
 	const { districts, currentProgramYear } = Route.useLoaderData();
 	const router = useRouter();
 	const refresh = () => router.invalidate();
+	// The demo district takes no edits, so no form offers it.
+	const editableDistricts = districts.filter((d) => !d.isDemo);
 
 	return (
 		<PageContainer className="space-y-6">
@@ -62,11 +64,11 @@ function AreasConsole() {
 			<div className="grid gap-4 md:grid-cols-3">
 				<CreateDistrictForm onCreated={refresh} />
 				<CreateDivisionForm
-					districts={districts}
+					districts={editableDistricts}
 					currentProgramYear={currentProgramYear}
 					onCreated={refresh}
 				/>
-				<CreateAreaForm districts={districts} onCreated={refresh} />
+				<CreateAreaForm districts={editableDistricts} onCreated={refresh} />
 			</div>
 
 			{districts.length === 0 ? (
@@ -263,13 +265,11 @@ function CreateDivisionForm({
 					<option value="" disabled>
 						Choose a district
 					</option>
-					{districts
-						.filter((d) => !d.isDemo)
-						.map((d) => (
-							<option key={d.id} value={d.id}>
-								District {d.number}
-							</option>
-						))}
+					{districts.map((d) => (
+						<option key={d.id} value={d.id}>
+							District {d.number}
+						</option>
+					))}
 				</select>
 			</div>
 			<div className="grid gap-3 sm:grid-cols-2">
@@ -314,9 +314,9 @@ function CreateAreaForm({
 	onCreated: () => void;
 }) {
 	const [busy, setBusy] = useState(false);
-	const divisions = districts
-		.filter((d) => !d.isDemo)
-		.flatMap((d) => d.divisions.map((division) => ({ district: d, division })));
+	const divisions = districts.flatMap((d) =>
+		d.divisions.map((division) => ({ district: d, division })),
+	);
 
 	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();

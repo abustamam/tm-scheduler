@@ -29,10 +29,12 @@ import {
 import { CLUB_HAS_VISITS_MESSAGE } from "#/lib/area-limits";
 import { currentProgramYear, programYearLabel } from "#/lib/dcp";
 import { hasTestDb, openBlockingTx, testDb, waitForLockWait } from "#/test/db";
-import { withDemoDistrict } from "#/test/demo-district-tx";
+import { type DemoTx, withDemoDistrict } from "#/test/demo-district-tx";
 
 // `dbMock()` forwards to `testDb` except inside `withDemoDistrict` (#1279),
-// which points `#/db` at one rolled-back transaction.
+// which points `#/db` at one rolled-back transaction. A driver/query-spy test
+// (statementsDuring/readsOf) inside withDemoDistrict would count zero: the
+// redirect bypasses the spied pool.
 vi.mock("#/db", async () => (await import("#/test/demo-district-tx")).dbMock());
 
 const {
@@ -1411,10 +1413,7 @@ describe.skipIf(!hasTestDb)("the demo district in the console (#1279)", () => {
 
 	/** The demo district with a division, an area, a name-only area club and an
 	 *  open term, all inserted directly. */
-	async function demoFixture(
-		tx: Parameters<Parameters<typeof withDemoDistrict>[0]>[0]["tx"],
-		districtId: string,
-	) {
+	async function demoFixture(tx: DemoTx, districtId: string) {
 		const [division] = await tx
 			.insert(divisions)
 			.values({ districtId, programYear: YEAR, letter: "Z" })
@@ -1460,7 +1459,7 @@ describe.skipIf(!hasTestDb)("the demo district in the console (#1279)", () => {
 	/** Every row the console writes under this district, as JSON: row counts
 	 *  and `updated_at` both show in a before/after comparison. */
 	async function snapshot(
-		tx: Parameters<Parameters<typeof withDemoDistrict>[0]>[0]["tx"],
+		tx: DemoTx,
 		f: { districtId: string; divisionId: string; areaId: string },
 	) {
 		return JSON.stringify({
@@ -1493,14 +1492,19 @@ describe.skipIf(!hasTestDb)("the demo district in the console (#1279)", () => {
 	// no_claim=what the database does with a second DEMO (the rebuild's own
 	// constraint); numbers are per-run suffixed apart from the refused ones.
 	it("reserves the number DEMO in any case and spacing, and still creates others", async () => {
-		const before = await testDb.select({ id: districts.id }).from(districts);
-		for (const number of ["DEMO", "demo", " Demo "]) {
+		const refused = ["DEMO", "demo", " Demo "];
+		for (const number of refused) {
 			await expect(createDistrict({ number })).rejects.toThrow(
 				DEMO_DISTRICT_NUMBER_MESSAGE,
 			);
 		}
-		const after = await testDb.select({ id: districts.id }).from(districts);
-		expect(after.length).toBe(before.length);
+		// Not a row count: other files insert districts in parallel.
+		const rows = await testDb
+			.select({ number: districts.number, isDemo: districts.isDemo })
+			.from(districts);
+		for (const number of refused) {
+			expect(rows.some((r) => r.number === number)).toBe(false);
+		}
 		// "39" and "F" may already exist in the shared database; a per-run
 		// prefix keeps the proof that near-misses are not refused.
 		for (const number of [`39${run()}`, `F${run()}`]) {

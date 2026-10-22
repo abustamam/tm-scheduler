@@ -968,6 +968,7 @@ export async function linkAreaClub(
 		if (locked.clubId) throw new Error(ALREADY_LINKED_MESSAGE);
 
 		const target = await loadAreaPlace(tx, locked.areaId);
+		refuseDemoDistrict(target.districtIsDemo);
 		await assertNotPlacedInYear(tx, club, target, input.areaClubId);
 		await tx
 			.update(areaClubs)

@@ -74,6 +74,7 @@ async function run(
 
 function AreaDetail() {
 	const area = Route.useLoaderData();
+	const editable = !area.districtIsDemo;
 	const router = useRouter();
 	const refresh = () => router.invalidate();
 
@@ -93,7 +94,7 @@ function AreaDetail() {
 					District {area.districtNumber} · Division {area.divisionLetter} ·{" "}
 					{area.programYearLabel}
 				</p>
-				{area.districtIsDemo ? (
+				{!editable ? (
 					<p className="text-sm font-medium" data-testid="demo-area-notice">
 						Demo area. The demo rebuild keeps it; edits are off.
 					</p>
@@ -103,9 +104,7 @@ function AreaDetail() {
 			<ClubsPanel area={area} onChanged={refresh} />
 			<DirectorPanel area={area} onChanged={refresh} />
 			<AreaPreviewPanel key={area.id} areaId={area.id} />
-			{area.districtIsDemo ? null : (
-				<RelabelPanel area={area} onChanged={refresh} />
-			)}
+			{editable ? <RelabelPanel area={area} onChanged={refresh} /> : null}
 		</PageContainer>
 	);
 }
@@ -118,6 +117,7 @@ function ClubsPanel({
 	onChanged: () => void;
 }) {
 	const [busyId, setBusyId] = useState<string | null>(null);
+	const editable = !area.districtIsDemo;
 
 	async function act(
 		rowId: string,
@@ -165,7 +165,7 @@ function ClubsPanel({
 								</p>
 							</div>
 							<div className="flex flex-wrap items-center gap-2">
-								{area.districtIsDemo ? null : club.linkOffer ? (
+								{editable && club.linkOffer ? (
 									<Button
 										type="button"
 										size="sm"
@@ -182,7 +182,7 @@ function ClubsPanel({
 										<Link2 className="size-4" /> Link to {club.linkOffer.name}
 									</Button>
 								) : null}
-								{area.districtIsDemo ? null : (
+								{editable ? (
 									<Button
 										type="button"
 										size="sm"
@@ -201,18 +201,18 @@ function ClubsPanel({
 									>
 										<Trash2 className="size-4" /> Remove
 									</Button>
-								)}
+								) : null}
 							</div>
 						</li>
 					))}
 				</ul>
 			)}
-			{area.districtIsDemo ? null : (
+			{editable ? (
 				<>
 					<AddGavelUpClubForm area={area} onAdded={onChanged} />
 					<AddNameOnlyClubForm areaId={area.id} onAdded={onChanged} />
 				</>
-			)}
+			) : null}
 		</section>
 	);
 }
@@ -366,11 +366,10 @@ function DirectorPanel({
 }) {
 	const [ending, setEnding] = useState(false);
 	const director = area.director;
+	const editable = !area.districtIsDemo;
 	// A past year's area is history: nobody is assigned to it any more.
 	const canAssign =
-		!area.districtIsDemo &&
-		!director &&
-		area.programYear >= area.currentProgramYear;
+		editable && !director && area.programYear >= area.currentProgramYear;
 
 	async function endTerm(termId: string) {
 		const ok = await run(
@@ -399,8 +398,7 @@ function DirectorPanel({
 								: ""}
 						</p>
 					</div>
-					{director.state === "ended-with-year" ||
-					area.districtIsDemo ? null : (
+					{director.state === "ended-with-year" || !editable ? null : (
 						<Button
 							type="button"
 							size="sm"
