@@ -273,6 +273,11 @@ describe.skipIf(!hasTestDb)("get_my_feedback (#987)", () => {
 		]);
 	});
 
+	// Card: protects=a token whose owner stops being an active member is refused
+	// at call time, not honoured until expiry; fails_when=the tool serves notes
+	// after the membership is deactivated, or the control call is not served
+	// first; no_claim=archived clubs and officer standing, which no longer
+	// matter to this tool (#1281).
 	it("refuses a caller who is no longer an active member of an open club, with a control while they still are", async () => {
 		const s = await club();
 		await setMeeting(s.meetingId, new Date(Date.now() - DAY));

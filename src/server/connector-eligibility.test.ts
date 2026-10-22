@@ -15,6 +15,13 @@ beforeEach(() => {
 	vi.mocked(memberClubsForUser).mockReset();
 });
 
+/**
+ * Card: protects=`mayUseConnector` is true exactly when the user is an active
+ * member (any standing) of at least one open club (#1281); fails_when=it
+ * returns true for no club or only archived clubs, or false for a plain
+ * member; no_claim=`memberClubsForUser` is mocked here, so the membership
+ * query itself is covered by `mcp-member-audience.integration.test.ts`.
+ */
 describe("mayUseConnector", () => {
 	it("is true for an active member (any standing) of at least one open club", async () => {
 		vi.mocked(memberClubsForUser).mockResolvedValue([club(true), club(false)]);

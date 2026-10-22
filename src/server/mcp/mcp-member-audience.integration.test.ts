@@ -13,6 +13,7 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { apiTokens, clubs, members } from "#/db/schema";
 import {
 	cleanup,
@@ -26,9 +27,10 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const { MCP_TOOLS } = await import("#/server/mcp/tools");
 const { hashApiToken } = await import("#/server/api-tokens-logic");
-const { memberClubsForUser } = await import("#/server/mcp/authz-logic");
-
-const NOT_OFFICER = "You are not an admin or officer of that club.";
+const { memberClubsForUser, NOT_OFFICER_MESSAGE } = await import(
+	"#/server/mcp/authz-logic"
+);
+const { handleMcpRequest } = await import("#/server/mcp/handle-request");
 
 const seeded: SeededClub[] = [];
 afterEach(async () => {
@@ -144,7 +146,7 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		expect(refused).toEqual({
 			ok: false,
 			code: "FORBIDDEN",
-			message: NOT_OFFICER,
+			message: NOT_OFFICER_MESSAGE,
 		});
 	});
 
@@ -155,7 +157,11 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		for (const name of ["find_people", "get_import_report", "list_meetings"]) {
 			const a = await outcome(call(name, token, { clubId: own.clubId }));
 			const b = await outcome(call(name, token, { clubId: foreign.clubId }));
-			expect(a).toEqual({ ok: false, code: "FORBIDDEN", message: NOT_OFFICER });
+			expect(a).toEqual({
+				ok: false,
+				code: "FORBIDDEN",
+				message: NOT_OFFICER_MESSAGE,
+			});
 			expect(JSON.stringify(a)).toBe(JSON.stringify(b));
 		}
 		for (const name of ["get_agenda", "cancel_meeting"]) {
@@ -181,7 +187,7 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		expect(member).toEqual({
 			ok: false,
 			code: "FORBIDDEN",
-			message: NOT_OFFICER,
+			message: NOT_OFFICER_MESSAGE,
 		});
 		// Control: an officer of the same club is told it is archived, so the
 		// member answer above is the audience check and not the archive check.
@@ -206,16 +212,110 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		});
 	});
 
+	/**
+	 * Card (dispatcher stamping): protects=`buildServer` stamps each tool's own
+	 * `audience` onto the context over the real HTTP path, so a `member` tool is
+	 * let through `authorizeToken` for a plain member and an `officer` tool is
+	 * not (#1283's member write tools depend on it); fails_when=the
+	 * `audience: tool.audience` line is deleted (the member probe then fails
+	 * closed as officer) or hard-coded to "member" (the officer probe then
+	 * serves a plain member); no_claim=the shipped tools: none of the member
+	 * tools calls `authorizeToken` yet, so two probe tools are registered for
+	 * this case alone, because the stamp has no other observable today.
+	 */
+	it("the HTTP dispatcher stamps a member tool as member and an officer tool as officer", async () => {
+		const s = await club();
+		const memberToken = await tokenFor(s.memberUserId);
+		const { authorizeToken } = await import("#/server/mcp/authz-logic");
+		const mk = (name: string, audience: "member" | "officer") => ({
+			name,
+			audience,
+			config: {
+				title: name,
+				description: "test probe",
+				inputSchema: { clubId: z.string() },
+			},
+			handler: async (
+				input: Record<string, unknown>,
+				ctx: Parameters<typeof authorizeToken>[0],
+			) => {
+				await authorizeToken(ctx, input.clubId as string);
+				return { served: true };
+			},
+		});
+		const probes = [
+			mk("probe_member", "member"),
+			mk("probe_officer", "officer"),
+		];
+		MCP_TOOLS.push(...probes);
+		try {
+			let id = 0;
+			const rpc = async (name: string) => {
+				id += 1;
+				const res = await handleMcpRequest(
+					new Request("https://club.test/api/mcp", {
+						method: "POST",
+						headers: {
+							"content-type": "application/json",
+							accept: "application/json, text/event-stream",
+							authorization: `Bearer ${memberToken}`,
+						},
+						body: JSON.stringify({
+							jsonrpc: "2.0",
+							id,
+							method: "tools/call",
+							params: { name, arguments: { clubId: s.clubId } },
+						}),
+					}),
+				);
+				return (
+					JSON.parse(await res.text()) as {
+						result: {
+							isError?: boolean;
+							structuredContent: {
+								served?: boolean;
+								error?: { message: string };
+							};
+						};
+					}
+				).result;
+			};
+			const asMember = await rpc("probe_member");
+			expect(asMember.isError ?? false).toBe(false);
+			expect(asMember.structuredContent.served).toBe(true);
+			const asOfficer = await rpc("probe_officer");
+			expect(asOfficer.isError).toBe(true);
+			expect(asOfficer.structuredContent.error?.message).toBe(
+				NOT_OFFICER_MESSAGE,
+			);
+		} finally {
+			for (const p of probes) MCP_TOOLS.splice(MCP_TOOLS.indexOf(p), 1);
+		}
+	});
+
 	it("a tool context with no audience is treated as officer (fails closed)", async () => {
 		const s = await club();
 		const token = await tokenFor(s.memberUserId);
 		const r = await outcome(
 			tool("find_people").handler({ clubId: s.clubId }, { rawToken: token }),
 		);
-		expect(r).toEqual({ ok: false, code: "FORBIDDEN", message: NOT_OFFICER });
+		expect(r).toEqual({
+			ok: false,
+			code: "FORBIDDEN",
+			message: NOT_OFFICER_MESSAGE,
+		});
 	});
 });
 
+/**
+ * Card (memberClubsForUser): protects=standing is admin > officer > member, an
+ * archived club is kept and flagged (callers decide), and an inactive
+ * membership is no standing at all; fails_when=a plain member is dropped or
+ * ranked above an officer, an admin who also holds office is downgraded, an
+ * archived club disappears, or an inactive member still gets a club;
+ * no_claim=what each caller does with the standing (the audience gate and
+ * the consent rule have their own cases).
+ */
 describe.skipIf(!hasTestDb)("memberClubsForUser standing (#1281)", () => {
 	it("admin > officer > member, and archived clubs are kept", async () => {
 		const s = await club();

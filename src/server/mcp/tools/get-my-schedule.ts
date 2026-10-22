@@ -10,18 +10,17 @@
  * also why an archived club never appears.
  *
  * Roles come from `loadMyCommitments`, the dashboard's own read. Attendance
- * comes from the plan seam (`listPlanForMeetings`) and the roll
- * (`meeting_attendance`), each ONE batched read over every meeting in the
- * window, so the query count does not grow with the number of meetings.
- * Both are narrowed to the caller's own member ids before anything is returned:
- * the plan read returns every member's row, and none of the others leave here.
+ * comes from the plan seam (`listMyAttendanceForMeetings`): the plan and the
+ * roll, each ONE batched read over every meeting in the window, narrowed to the
+ * caller's own member ids in SQL, so the query count does not grow with the
+ * number of meetings and no other member's row is ever read.
  */
 import { and, asc, gte, inArray, lt, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { meetingAttendance, meetings } from "#/db/schema";
+import { meetings } from "#/db/schema";
 import { utcToZonedWallTime } from "#/lib/datetime";
-import { listPlanForMeetings } from "#/server/attendance-plan-logic";
+import { listMyAttendanceForMeetings } from "#/server/attendance-plan-logic";
 import { loadMyCommitments } from "#/server/my-activity-logic";
 import { ensureScheduleToppedUp } from "#/server/schedule-topup-logic";
 import { authenticateToken } from "../authz-logic";
@@ -55,12 +54,18 @@ export function isoInTimezone(instant: Date, timezone: string): string {
 
 export type MyAttendance = "coming" | "not_coming" | "unavailable" | null;
 
-/** `unavailable` (roll says absent) > `not_coming` > `coming` > null. */
+/**
+ * The roll wins over the plan (CODING_STANDARDS.md "Data layer", #1257): roll
+ * `absent` is `unavailable` whatever the plan says, roll `present` is `coming`
+ * even after a `not_coming`. Excused or no record falls through to the plan:
+ * `not_coming` > `coming` > null.
+ */
 export function combineAttendance(
 	roll: string | undefined,
 	plan: string | undefined,
 ): MyAttendance {
 	if (roll === "absent") return "unavailable";
+	if (roll === "present") return "coming";
 	if (plan === "not_coming") return "not_coming";
 	if (plan === "coming") return "coming";
 	return null;
@@ -115,21 +120,12 @@ export const getMyScheduleTool: McpToolDefinition = {
 
 		const meetingIds = rows.map((r) => r.id);
 		const myMemberIds = new Set(myClubs.map((c) => c.membershipId));
-		const [commitments, plan, roll] = await Promise.all([
+		const [commitments, { plan, roll }] = await Promise.all([
 			loadMyCommitments(auth.user.id),
-			listPlanForMeetings(db, meetingIds),
-			db
-				.select({
-					meetingId: meetingAttendance.meetingId,
-					status: meetingAttendance.status,
-				})
-				.from(meetingAttendance)
-				.where(
-					and(
-						inArray(meetingAttendance.meetingId, meetingIds),
-						inArray(meetingAttendance.memberId, [...myMemberIds]),
-					),
-				),
+			listMyAttendanceForMeetings(db, {
+				meetingIds,
+				memberIds: [...myMemberIds],
+			}),
 		]);
 
 		const rolesByMeeting = new Map<string, string[]>();
@@ -139,9 +135,7 @@ export const getMyScheduleTool: McpToolDefinition = {
 			rolesByMeeting.set(c.meetingId, list);
 		}
 		const planByMeeting = new Map<string, string>();
-		for (const p of plan) {
-			if (myMemberIds.has(p.memberId)) planByMeeting.set(p.meetingId, p.status);
-		}
+		for (const p of plan) planByMeeting.set(p.meetingId, p.status);
 		const rollByMeeting = new Map(roll.map((r) => [r.meetingId, r.status]));
 		const clubById = new Map(myClubs.map((c) => [c.clubId, c]));
 

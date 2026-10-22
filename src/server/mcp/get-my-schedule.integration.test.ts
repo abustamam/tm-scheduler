@@ -26,6 +26,7 @@ import {
 	seedClub,
 	testDb,
 } from "#/test/db";
+import { readsOf, statementsDuring } from "#/test/query-spy";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
@@ -76,6 +77,15 @@ function call(token: string, args: Record<string, unknown> = {}) {
 	}) as Promise<Result>;
 }
 
+/**
+ * Card (combineAttendance): protects=the roll wins over the plan, as
+ * CODING_STANDARDS.md "Data layer" (#1257) says: absent is unavailable whatever
+ * the plan says, present is coming even after Not coming, excused and no record
+ * fall through to the plan; fails_when=a present roll still reads not_coming, an
+ * absent roll reads coming, or an excused roll hides the plan answer;
+ * no_claim=pure function over two strings; the DB reads that feed it are the
+ * integration cases below.
+ */
 describe("combineAttendance", () => {
 	it("unavailable > not_coming > coming > null", () => {
 		expect(combineAttendance("absent", "coming")).toBe("unavailable");
@@ -83,6 +93,22 @@ describe("combineAttendance", () => {
 		expect(combineAttendance("present", "coming")).toBe("coming");
 		expect(combineAttendance(undefined, "reached_out")).toBeNull();
 		expect(combineAttendance(undefined, undefined)).toBeNull();
+	});
+
+	it("a present roll wins over a not_coming plan", () => {
+		expect(combineAttendance("present", "not_coming")).toBe("coming");
+		expect(combineAttendance("present", undefined)).toBe("coming");
+	});
+
+	it("an excused roll falls through to the plan", () => {
+		expect(combineAttendance("excused", "not_coming")).toBe("not_coming");
+		expect(combineAttendance("excused", "coming")).toBe("coming");
+		expect(combineAttendance("excused", undefined)).toBeNull();
+	});
+
+	it("an absent roll wins over a coming plan", () => {
+		expect(combineAttendance("absent", "coming")).toBe("unavailable");
+		expect(combineAttendance("absent", "not_coming")).toBe("unavailable");
 	});
 });
 
@@ -208,5 +234,56 @@ describe.skipIf(!hasTestDb)("get_my_schedule (#1281)", () => {
 			clubId: b.clubId,
 		});
 		expect(res.meetings.map((m) => m.clubId)).toEqual([a.clubId]);
+	});
+
+	it("a present roll shows coming over a not_coming plan, and excused falls to the plan", async () => {
+		const s = await club();
+		const token = await tokenFor(s.memberUserId);
+		await testDb.insert(meetingAttendancePlan).values({
+			memberId: s.memberId,
+			meetingId: s.meetingId,
+			status: "not_coming",
+		});
+		await testDb.insert(meetingAttendance).values({
+			meetingId: s.meetingId,
+			memberId: s.memberId,
+			status: "present",
+		});
+		expect((await call(token)).meetings[0]?.myAttendance).toBe("coming");
+		await testDb
+			.update(meetingAttendance)
+			.set({ status: "excused" })
+			.where(eq(meetingAttendance.memberId, s.memberId));
+		expect((await call(token)).meetings[0]?.myAttendance).toBe("not_coming");
+	});
+
+	/**
+	 * Card (query count): protects=the read count of get_my_schedule is a
+	 * function of the number of CLUBS, never of meetings, so a long window cannot
+	 * become an N+1; fails_when=the plan, roll or role read moves inside a
+	 * per-meeting loop; no_claim=counts SQL on the pool, not transactions, and
+	 * says nothing about how slow any one statement is.
+	 */
+	it("issues the same number of reads for 1 meeting as for 4", async () => {
+		const s = await club();
+		const token = await tokenFor(s.memberUserId);
+		const count = async () => {
+			const sql = await statementsDuring(() => call(token));
+			expect(
+				readsOf(sql, "meeting_attendance_plan"),
+				"the plan read must be observed",
+			).not.toHaveLength(0);
+			return sql.length;
+		};
+		const one = await count();
+		for (const d of [2, 3, 4]) {
+			await testDb.insert(meetings).values({
+				clubId: s.clubId,
+				scheduledAt: new Date(Date.now() + d * DAY),
+				status: "scheduled",
+			});
+		}
+		expect((await call(token)).meetings).toHaveLength(4);
+		expect(await count()).toBe(one);
 	});
 });
