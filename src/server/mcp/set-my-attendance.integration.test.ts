@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
 	apiTokens,
+	clubs,
 	meetingAttendancePlan,
 	meetings,
 	roleDefinitions,
@@ -32,6 +33,39 @@ import {
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+
+// Two injection points, each armed by one test and disarmed in `afterEach`:
+// `failAfterRelease` makes the Toastmaster lookup (which runs AFTER the release)
+// throw; `beforeRelease` runs inside the seam, after the tool's hash check and
+// before the attendance lock, i.e. in the window an assign can land in.
+const hooks = vi.hoisted(() => ({
+	failAfterRelease: false,
+	beforeRelease: null as null | (() => Promise<void>),
+}));
+vi.mock("#/server/meeting-authz-logic", async (orig) => {
+	const m = await orig<typeof import("#/server/meeting-authz-logic")>();
+	return {
+		...m,
+		loadTmodMemberId: (...a: Parameters<typeof m.loadTmodMemberId>) => {
+			if (hooks.failAfterRelease) throw new Error("boom after release");
+			return m.loadTmodMemberId(...a);
+		},
+	};
+});
+vi.mock("#/server/membership-merge-lock", async (orig) => {
+	const m = await orig<typeof import("#/server/membership-merge-lock")>();
+	return {
+		...m,
+		lockMembershipsAgainstMerge: async (
+			...a: Parameters<typeof m.lockMembershipsAgainstMerge>
+		) => {
+			const run = hooks.beforeRelease;
+			hooks.beforeRelease = null;
+			if (run) await run();
+			return m.lockMembershipsAgainstMerge(...a);
+		},
+	};
+});
 
 const { setMyAttendanceTool } = await import(
 	"#/server/mcp/tools/set-my-attendance"
@@ -50,6 +84,8 @@ const { confirmSlotCore } = await import("#/server/slots-logic");
 
 const seeded: SeededClub[] = [];
 afterEach(async () => {
+	hooks.failAfterRelease = false;
+	hooks.beforeRelease = null;
 	for (const s of seeded.splice(0).reverse()) {
 		await cleanup(s.clubId, [s.adminUserId, s.memberUserId]);
 	}
@@ -404,7 +440,10 @@ describe.skipIf(!hasTestDb)("set_my_attendance (#1283)", () => {
 			via: "connector",
 			proof: "connector",
 		});
-		expect(release?.detail).toMatchObject({ proof: "connector" });
+		expect(release?.detail).toMatchObject({
+			via: "connector",
+			proof: "connector",
+		});
 	});
 
 	// Card: protects=AC4 at the seams: connector proof with actor !== subject is
@@ -437,21 +476,151 @@ describe.skipIf(!hasTestDb)("set_my_attendance (#1283)", () => {
 	// Card: protects=AC5, the confirm gate refuses a connector proof;
 	// fails_when=confirming a held role accepts it; no_claim=voting, ballot and
 	// minutes are pinned by the guard test, not executed here.
-	it("slot confirm refuses a connector proof", async () => {
+	it("slot confirm refuses a connector proof that would otherwise confirm", async () => {
 		const s = await club();
 		const slotId = await holdSeededTimer(s);
+		// The holder, signed in, naming themselves: every other gate passes.
+		const same = {
+			slotId,
+			sessionUserId: s.memberUserId,
+			selfMemberId: s.memberId,
+		};
 		await expect(
-			confirmSlotCore({
-				slotId,
-				sessionUserId: null,
-				selfMemberId: s.memberId,
-				proof: "connector",
-			}),
+			confirmSlotCore({ ...same, proof: "connector" }),
 		).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
-		const [slot] = await testDb
-			.select({ status: roleSlots.status })
+		const statusOf = async () =>
+			(
+				await testDb
+					.select({ status: roleSlots.status })
+					.from(roleSlots)
+					.where(eq(roleSlots.id, slotId))
+			)[0]?.status;
+		expect(await statusOf()).toBe("claimed");
+		// The control: the same call with a session proof confirms, so the refusal
+		// above is the connector's and nothing else's.
+		await confirmSlotCore({ ...same, proof: "session" });
+		expect(await statusOf()).toBe("confirmed");
+	});
+
+	// Card: protects=the not-coming apply is ONE transaction: a failure after the
+	// release leaves every role held and no not_coming answer;
+	// fails_when=the release runs on a second pooled connection and commits alone;
+	// no_claim=the failure is injected into the Toastmaster lookup.
+	it("rolls the release back when a later step throws", async () => {
+		const s = await club();
+		await holdSeededTimer(s);
+		await addSlot(s, "Toastmaster of the Day", s.adminMemberId, 0);
+		const token = await tokenFor(s.memberUserId);
+		const p = await preview(token, s.meetingId, "not_coming");
+		hooks.failAfterRelease = true;
+		await expect(
+			call(token, {
+				meetingId: s.meetingId,
+				status: "not_coming",
+				planHash: p.planHash,
+			}),
+		).rejects.toThrow("boom after release");
+		expect(await planOf(s)).toBeNull();
+		const held = await testDb
+			.select({ id: roleSlots.id })
 			.from(roleSlots)
-			.where(eq(roleSlots.id, slotId));
-		expect(slot?.status).toBe("claimed");
+			.where(eq(roleSlots.assignedMemberId, s.memberId));
+		expect(held).toHaveLength(1);
+		const releases = await testDb
+			.select({ id: activityLog.id })
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, s.clubId),
+					eq(activityLog.action, "release"),
+				),
+			);
+		expect(releases).toEqual([]);
+	});
+
+	// Card: protects=a role assigned AFTER the hash check and before the release is
+	// never freed unseen; fails_when=the seam frees a slot the user did not
+	// preview; no_claim=the assign is injected into the seam's first lock.
+	it("PLAN_STALE when a slot lands between the hash check and the release; nothing written", async () => {
+		const s = await club();
+		await holdSeededTimer(s);
+		const token = await tokenFor(s.memberUserId);
+		const p = await preview(token, s.meetingId, "not_coming");
+		hooks.beforeRelease = async () => {
+			await addSlot(s, "Grammarian", s.memberId, 2);
+		};
+		const err = await expectMcpError(
+			Promise.resolve(
+				call(token, {
+					meetingId: s.meetingId,
+					status: "not_coming",
+					planHash: p.planHash,
+				}),
+			),
+			"PLAN_STALE",
+		);
+		expect(err.detail).toMatchObject({
+			plan: { rolesToFree: ["Timer", "Grammarian"] },
+		});
+		expect(await planOf(s)).toBeNull();
+		const held = await testDb
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.where(eq(roleSlots.assignedMemberId, s.memberId));
+		expect(held).toHaveLength(2);
+	});
+
+	// Card: protects=the hash covers the member's answer and unavailability, not
+	// only their slots; fails_when=a changed answer with no slot change applies;
+	// no_claim=none beyond protects.
+	it("PLAN_STALE when only the plan status changed (no slot change)", async () => {
+		const s = await club();
+		const token = await tokenFor(s.memberUserId);
+		const p = await preview(token, s.meetingId, "coming");
+		expect(p.blocking).toEqual([]);
+		await testDb.insert(meetingAttendancePlan).values({
+			memberId: s.memberId,
+			meetingId: s.meetingId,
+			status: "not_coming",
+		});
+		await expectMcpError(
+			Promise.resolve(
+				call(token, {
+					meetingId: s.meetingId,
+					status: "coming",
+					planHash: p.planHash,
+				}),
+			),
+			"PLAN_STALE",
+		);
+		expect(await planOf(s)).toBe("not_coming");
+	});
+
+	// Card: protects=a takedown refuses both previews and applies;
+	// fails_when=an archived club accepts a member's agent write;
+	// no_claim=the refusal's wording is the archive gate's, not asserted here.
+	it("an archived club refuses preview and apply", async () => {
+		const s = await club();
+		await holdSeededTimer(s);
+		const token = await tokenFor(s.memberUserId);
+		const p = await preview(token, s.meetingId, "not_coming");
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, s.clubId));
+		await expect(preview(token, s.meetingId, "not_coming")).rejects.toThrow();
+		await expect(
+			call(token, {
+				meetingId: s.meetingId,
+				status: "not_coming",
+				planHash: p.planHash,
+			}),
+		).rejects.toThrow();
+		expect(await planOf(s)).toBeNull();
+		const held = await testDb
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.where(eq(roleSlots.assignedMemberId, s.memberId));
+		expect(held).toHaveLength(1);
 	});
 });

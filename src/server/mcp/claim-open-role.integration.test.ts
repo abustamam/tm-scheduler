@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
 	apiTokens,
+	clubs,
 	meetingAttendancePlan,
 	meetings,
 	roleDefinitions,
@@ -36,6 +37,9 @@ const { claimOpenRoleTool } = await import(
 const { hashApiToken } = await import("#/server/api-tokens-logic");
 const { NOT_OFFICER_MESSAGE } = await import("#/server/mcp/authz-logic");
 const { McpError } = await import("#/server/mcp/errors");
+const { claimSlotCore } = await import("#/server/slots-logic");
+const { lockMemberAttendance } = await import("#/server/attendance-plan-logic");
+const { SIGN_IN_REQUIRED_MESSAGE } = await import("#/lib/write-proof");
 
 const seeded: SeededClub[] = [];
 afterEach(async () => {
@@ -329,5 +333,98 @@ describe.skipIf(!hasTestDb)("claim_open_role (#1283)", () => {
 					.where(and(eq(meetingAttendancePlan.meetingId, theirs.meetingId)))
 			).length,
 		).toBe(0);
+	});
+
+	// Card: protects=a connector claim is the token owner claiming for
+	// themselves, enforced at the seam too; fails_when=claimSlotCore admits a
+	// connector proof whose actor is not the claimant; no_claim=the tool never
+	// passes a different actor, so this is the seam's own fail-safe.
+	it("claimSlotCore refuses a connector proof when actor and claimant differ", async () => {
+		const s = await club();
+		await expect(
+			testDb.transaction((tx) =>
+				claimSlotCore(tx, {
+					slotId: s.slotId,
+					memberId: s.memberId,
+					actorMemberId: s.adminMemberId,
+					proof: "connector",
+				}),
+			),
+		).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+		expect((await holderOf(s.slotId))?.status).toBe("open");
+	});
+
+	// Card: protects=a connector claim takes the member's attendance lock and
+	// re-checks unavailability, so it cannot race the member's own browser
+	// decline; fails_when=the claim lands on a member whose decline committed
+	// while it waited; no_claim=the decline is simulated by a plan row written
+	// under the same lock.
+	it("a connector claim waits for a decline holding the attendance lock, then refuses", async () => {
+		const s = await club();
+		let release!: () => void;
+		const gate = new Promise<void>((r) => {
+			release = r;
+		});
+		let locked!: () => void;
+		const lockTaken = new Promise<void>((r) => {
+			locked = r;
+		});
+		const decline = testDb.transaction(async (tx) => {
+			await lockMemberAttendance(tx, s.meetingId, s.memberId);
+			locked();
+			await gate;
+			await tx.insert(meetingAttendancePlan).values({
+				memberId: s.memberId,
+				meetingId: s.meetingId,
+				status: "not_coming",
+			});
+		});
+		await lockTaken;
+		let settled = false;
+		const claim = testDb
+			.transaction((tx) =>
+				claimSlotCore(tx, {
+					slotId: s.slotId,
+					memberId: s.memberId,
+					actorMemberId: s.memberId,
+					proof: "connector",
+				}),
+			)
+			.finally(() => {
+				settled = true;
+			});
+		const outcome = claim.then(
+			() => null,
+			(e: unknown) => e,
+		);
+		await new Promise((r) => setTimeout(r, 400));
+		expect(settled).toBe(false);
+		release();
+		await decline;
+		const err = await outcome;
+		expect((err as Error).message).toMatch(/not coming/);
+		expect((await holderOf(s.slotId))?.status).toBe("open");
+	});
+
+	// Card: protects=a takedown refuses both previews and applies;
+	// fails_when=an archived club accepts a member's agent claim;
+	// no_claim=the refusal's wording is the archive gate's, not asserted here.
+	it("an archived club refuses preview and apply", async () => {
+		const s = await club();
+		const token = await tokenFor(s.memberUserId);
+		const p = await preview(token, s.meetingId, "Timer");
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, s.clubId));
+		await expect(preview(token, s.meetingId, "Timer")).rejects.toThrow();
+		await expect(
+			call(token, {
+				meetingId: s.meetingId,
+				role: "Timer",
+				planHash: p.planHash,
+			}),
+		).rejects.toThrow();
+		expect((await holderOf(s.slotId))?.status).toBe("open");
 	});
 });

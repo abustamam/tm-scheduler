@@ -30,7 +30,10 @@ import {
 	isMemberUnavailable,
 	setPlanStatus,
 } from "#/server/attendance-plan-logic";
-import { releaseSlotsAndMarkUnavailable } from "#/server/availability-logic";
+import {
+	HeldSlotsChangedError,
+	releaseSlotsAndMarkUnavailable,
+} from "#/server/availability-logic";
 import { lockClubForWrite } from "#/server/club-write-lock";
 import { loadTmodMemberId } from "#/server/meeting-authz-logic";
 import { authorizeTokenForMeeting } from "../authz-logic";
@@ -217,14 +220,36 @@ export const setMyAttendanceTool: McpToolDefinition = {
 				return { released: [], dutyText: null, draftMessage: null };
 			}
 
-			const { releasedSlots } = await releaseSlotsAndMarkUnavailable(db, {
-				memberId: who.memberId,
-				claimedActorMemberId: who.memberId,
-				meetingId: args.meetingId,
-				clubId: who.clubId,
-				via: "connector",
-				proof: "connector",
-			});
+			// On `tx`, not `db`: the release nests as a savepoint of THIS transaction,
+			// so it shares the checked connection, commits or rolls back with the
+			// answer, and re-checks the previewed held set under the attendance lock
+			// (a slot assigned after the hash check is PLAN_STALE, never freed unseen).
+			let releasedSlots: Awaited<
+				ReturnType<typeof releaseSlotsAndMarkUnavailable>
+			>["releasedSlots"];
+			try {
+				({ releasedSlots } = await releaseSlotsAndMarkUnavailable(tx, {
+					memberId: who.memberId,
+					claimedActorMemberId: who.memberId,
+					meetingId: args.meetingId,
+					clubId: who.clubId,
+					via: "connector",
+					proof: "connector",
+					expectedHeldSlotIds: c.heldSlotIds,
+				}));
+			} catch (e) {
+				if (!(e instanceof HeldSlotsChangedError)) throw e;
+				const fresh = await compute(tx, args, who);
+				throw new McpError(
+					"PLAN_STALE",
+					"That meeting changed since you previewed it. Review the fresh plan and ask the user again.",
+					{
+						plan: fresh.plan,
+						planHash: fresh.planHash,
+						blocking: fresh.blocking,
+					},
+				);
+			}
 			const released = releasedSlots.map((s) => s.label);
 			if (released.length === 0) {
 				return { released, dutyText: null, draftMessage: null };

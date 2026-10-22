@@ -23,7 +23,11 @@ import {
 } from "#/lib/meeting-roles";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { isRealSpeechTitle, TBA_SPEECH_TITLE } from "#/lib/speech-title";
-import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
+import {
+	isConnectorSelf,
+	SIGN_IN_REQUIRED_MESSAGE,
+	type WriteProof,
+} from "#/lib/write-proof";
 import { logActivity } from "./activity";
 import {
 	type AttendancePlanStatus,
@@ -1941,6 +1945,27 @@ export async function claimSlotCore(
 	assertMeetingAccepts(slot.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED);
 
 	const forSomeoneElse = args.actorMemberId !== args.memberId;
+	// Fail-safe (#1283): a `connector` claim is a token owner claiming for
+	// themselves, whatever the caller passed. Mirrors `connectorActor`.
+	if (
+		args.proof === "connector" &&
+		!isConnectorSelf(args.proof, args.actorMemberId, args.memberId)
+	) {
+		throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+	}
+	if (args.proof === "connector") {
+		// The same lock and re-check the asserted path takes: a claim must not
+		// slip between this member's own decline (browser) and the flip below.
+		await lockMemberAttendance(tx, slot.meetingId, args.memberId);
+		if (
+			await isMemberUnavailable(tx, {
+				memberId: args.memberId,
+				meetingId: slot.meetingId,
+			})
+		) {
+			throw new Error("You're marked as not coming to that meeting.");
+		}
+	}
 	if (args.proof === "asserted") {
 		// Through `tx`: this runs inside the caller's transaction, and a pooled
 		// read here holds one connection while waiting on a second.
