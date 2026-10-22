@@ -25,7 +25,6 @@ import {
 	people,
 } from "#/db/schema";
 import { programYearIsoWindow } from "#/lib/area-visits";
-import { currentProgramYear } from "#/lib/dcp";
 import { isReservedRecipient } from "#/lib/email";
 import { normalizedEmail, normalizeEmail } from "./account-link-logic";
 import { isoDayIn } from "./area-visits-logic";
@@ -72,6 +71,8 @@ export type DemoErrorCode =
 	| "ACCOUNT_IN_REAL_CLUB"
 	| "ADDRESS_IN_REAL_CLUB"
 	| "ACCOUNT_IS_SUPERADMIN"
+	| "ACCOUNT_DIRECTS_REAL_AREA"
+	| "DEMO_DISTRICT_NUMBER_TAKEN"
 	| "NOT_DEMO_CLUB"
 	| "NOT_AUTHORIZED";
 
@@ -83,6 +84,9 @@ const DEMO_ERROR_MESSAGES: Record<DemoErrorCode, string> = {
 		"A person at the demo account's address is already in a real club. Use an address that is in no other club.",
 	ACCOUNT_IS_SUPERADMIN:
 		"The demo account is a superadmin. Use an account that is not.",
+	ACCOUNT_DIRECTS_REAL_AREA:
+		"The demo account holds an Area Director term in a real area. It may hold one only in the demo area: end that term first.",
+	DEMO_DISTRICT_NUMBER_TAKEN: `A district numbered ${DEMO_DISTRICT_NUMBER} already exists and is not flagged as the demo district. Rename or remove it, then rebuild.`,
 	NOT_DEMO_CLUB: "That club is not the demo club.",
 	NOT_AUTHORIZED: "You no longer have permission to rebuild the demo club.",
 };
@@ -189,6 +193,22 @@ export async function resetDemoClub(
 				.limit(1);
 			if (inRealClub) throw new DemoError("ACCOUNT_IN_REAL_CLUB");
 			if (demoUser.isSuperadmin) throw new DemoError("ACCOUNT_IS_SUPERADMIN");
+			// The demo account may hold a term only in the demo area (#1278).
+			const [realTerm] = await tx
+				.select({ id: areaDirectors.id })
+				.from(areaDirectors)
+				.innerJoin(areas, eq(areas.id, areaDirectors.areaId))
+				.innerJoin(divisions, eq(divisions.id, areas.divisionId))
+				.innerJoin(districts, eq(districts.id, divisions.districtId))
+				.where(
+					and(
+						eq(areaDirectors.userId, demoUser.id),
+						isNull(areaDirectors.endedAt),
+						eq(districts.isDemo, false),
+					),
+				)
+				.limit(1);
+			if (realTerm) throw new DemoError("ACCOUNT_DIRECTS_REAL_AREA");
 		}
 
 		// The same refusal for a Person at the demo address that has no account yet:
@@ -274,6 +294,17 @@ export async function resetDemoClub(
 }
 
 /**
+ * The program year of the calendar day `now` falls on in `DEMO_TIMEZONE`, so it
+ * agrees with `demoVisitDay` (`currentProgramYear` reads the server's clock zone,
+ * which is UTC on Railway: near July 1 it would name the next year while the
+ * visit day, in Chicago, is still June).
+ */
+export function demoProgramYear(now: Date): number {
+	const [y, m] = isoDayIn(now, DEMO_TIMEZONE).split("-").map(Number);
+	return (m as number) >= 7 ? (y as number) : (y as number) - 1;
+}
+
+/**
  * The calendar date `DEMO_VISIT_LEAD_DAYS` before today in `DEMO_TIMEZONE`,
  * raised to the program year's first day when earlier. Calendar arithmetic on
  * the ISO date, not `now` minus 14 x 24h, so a DST change cannot shift it.
@@ -309,7 +340,7 @@ export async function buildDemoArea(
 	},
 ): Promise<{ areaId: string }> {
 	const { now } = opts;
-	const year = currentProgramYear(now);
+	const year = demoProgramYear(now);
 
 	let [district] = await tx
 		.select({ id: districts.id })
@@ -317,12 +348,20 @@ export async function buildDemoArea(
 		.where(eq(districts.isDemo, true))
 		.limit(1);
 	if (!district) {
+		// `districts.number` is unique: a district already numbered DEMO that is not
+		// flagged would make the insert fail every rebuild with a raw 23505.
+		const [taken] = await tx
+			.select({ id: districts.id })
+			.from(districts)
+			.where(eq(districts.number, DEMO_DISTRICT_NUMBER))
+			.limit(1);
+		if (taken) throw new DemoError("DEMO_DISTRICT_NUMBER_TAKEN");
 		[district] = await tx
 			.insert(districts)
 			.values({ number: DEMO_DISTRICT_NUMBER, isDemo: true })
 			.returning({ id: districts.id });
 	}
-	if (!district) throw new Error("demo district");
+	if (!district) throw new Error("demo district insert returned no row");
 
 	let [division] = await tx
 		.select({ id: divisions.id })
@@ -345,7 +384,7 @@ export async function buildDemoArea(
 			})
 			.returning({ id: divisions.id });
 	}
-	if (!division) throw new Error("demo division");
+	if (!division) throw new Error("demo division insert returned no row");
 
 	let [area] = await tx
 		.select({ id: areas.id })
@@ -363,9 +402,17 @@ export async function buildDemoArea(
 			.values({ divisionId: division.id, number: DEMO_AREA_NUMBER })
 			.returning({ id: areas.id });
 	}
-	if (!area) throw new Error("demo area");
+	if (!area) throw new Error("demo area insert returned no row");
 	const areaId = area.id;
 
+	// Lock the area's rows before deleting the visits: `recordClubVisit` takes
+	// FOR SHARE on an area club and then upserts a visit, so deleting visits first
+	// and area clubs second inverts its order and deadlocks.
+	await tx
+		.select({ id: areaClubs.id })
+		.from(areaClubs)
+		.where(eq(areaClubs.areaId, areaId))
+		.for("update");
 	// Visits first: `club_visits.area_club_id` is RESTRICT. The area itself stays.
 	await tx
 		.delete(clubVisits)
@@ -382,7 +429,7 @@ export async function buildDemoArea(
 
 	// No club number on any row, so the console's link offer can never match a
 	// real club.
-	const [demoRow, bayfrontRow] = await tx
+	const inserted = await tx
 		.insert(areaClubs)
 		.values([
 			{
@@ -399,7 +446,11 @@ export async function buildDemoArea(
 			})),
 		])
 		.returning({ id: areaClubs.id, name: areaClubs.name });
-	if (!demoRow || !bayfrontRow) throw new Error("demo area clubs");
+	const demoRow = inserted.find((r) => r.name === DEMO_CLUB_NAME);
+	const bayfrontRow = inserted.find((r) => r.name === DEMO_AREA_CLUB_NAMES[0]);
+	if (!demoRow || !bayfrontRow) {
+		throw new Error("demo area clubs insert did not return the visited rows");
+	}
 
 	const day = demoVisitDay(now, year);
 	await tx.insert(clubVisits).values(
@@ -411,7 +462,8 @@ export async function buildDemoArea(
 		})),
 	);
 
-	// The term bypasses `assignAreaDirector`, which refuses the demo district.
+	// The term bypasses `assignAreaDirector`, which the console will refuse for the
+	// demo district once #1279 lands.
 	if (opts.demoUserId) {
 		const [open] = await tx
 			.select({ id: areaDirectors.id, userId: areaDirectors.userId })

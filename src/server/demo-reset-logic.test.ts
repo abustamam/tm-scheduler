@@ -3,9 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 // The logic module imports the pooled client; nothing here reaches it.
 vi.mock("#/db", () => ({ db: {} }));
 
-const { demoKeepRule, demoVisitDay, parseDemoAccountEmail } = await import(
-	"./demo-reset-logic"
-);
+const { demoKeepRule, demoProgramYear, demoVisitDay, parseDemoAccountEmail } =
+	await import("./demo-reset-logic");
 
 describe("parseDemoAccountEmail (#1199)", () => {
 	// protects=an unset, null or blank env var is "not configured", not an address;
@@ -107,5 +106,26 @@ describe("demoVisitDay (#1278)", () => {
 		expect(demoVisitDay(new Date("2027-03-15T17:00:00Z"), 2026)).toBe(
 			"2027-03-01",
 		);
+	});
+});
+
+describe("demoProgramYear (#1278)", () => {
+	// protects=the program year follows the calendar day in America/Chicago, the
+	//   same day `demoVisitDay` uses: 01:00Z on July 1 is still June 30 in Chicago;
+	// fails_when=the server clock's zone decides (UTC names 2027) so the visit is
+	//   dated in the future of its own program year's window;
+	// no_claim=none beyond protects.
+	it("is still the previous program year at 2027-07-01T01:00Z", () => {
+		const now = new Date("2027-07-01T01:00:00Z");
+		expect(demoProgramYear(now)).toBe(2026);
+		expect(demoVisitDay(now, demoProgramYear(now))).toBe("2027-06-16");
+	});
+
+	// protects=once Chicago reaches July 1 the new year starts;
+	// fails_when=the boundary is off by a day in either direction;
+	// no_claim=none beyond protects.
+	it("is the new program year once Chicago reaches July 1", () => {
+		expect(demoProgramYear(new Date("2027-07-01T06:00:00Z"))).toBe(2027);
+		expect(demoProgramYear(new Date("2026-11-15T18:00:00Z"))).toBe(2026);
 	});
 });

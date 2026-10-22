@@ -162,8 +162,13 @@ vi.mock("#/db/fixtures/club-fixture", async (importOriginal) => {
 	};
 });
 
-const { DEMO_LOCK_KEY, DEMO_LOCK_NAMESPACE, DemoError, resetDemoClub } =
-	await import("./demo-reset-logic");
+const {
+	DEMO_DISTRICT_NUMBER,
+	DEMO_LOCK_KEY,
+	DEMO_LOCK_NAMESPACE,
+	DemoError,
+	resetDemoClub,
+} = await import("./demo-reset-logic");
 const { CLUB_BUSY_MESSAGE, lockClubForWrite } = await import(
 	"./club-write-lock"
 );
@@ -306,48 +311,83 @@ async function userByEmail(email: string) {
 	return row?.id ?? null;
 }
 
-/** The demo district and everything under it (#1278): a rebuild never deletes
- *  them, so the suite does, before it deletes the users the terms point at. */
+/** The demo hierarchy rows that existed before the test (another suite's, or a
+ *  leftover): `removeDemoHierarchy` removes only rows created after this. */
+const preexisting = {
+	districts: new Set<string>(),
+	divisions: new Set<string>(),
+	areas: new Set<string>(),
+};
+
+async function demoHierarchyRows() {
+	const ds = (
+		await testDb
+			.select({ id: districts.id })
+			.from(districts)
+			.where(eq(districts.isDemo, true))
+	).map((d) => d.id);
+	const divs = ds.length
+		? (
+				await testDb
+					.select({ id: divisions.id, districtId: divisions.districtId })
+					.from(divisions)
+					.where(inArray(divisions.districtId, ds))
+			).map((d) => d.id)
+		: [];
+	const ars = divs.length
+		? (
+				await testDb
+					.select({ id: areas.id })
+					.from(areas)
+					.where(inArray(areas.divisionId, divs))
+			).map((a) => a.id)
+		: [];
+	return { ds, divs, ars };
+}
+
+async function snapshotDemoHierarchy() {
+	const { ds, divs, ars } = await demoHierarchyRows();
+	preexisting.districts = new Set(ds);
+	preexisting.divisions = new Set(divs);
+	preexisting.areas = new Set(ars);
+}
+
+/** The demo hierarchy rows THIS suite created (#1278), after each test so the
+ *  single `is_demo` district slot is free for the next suite. A rebuild never
+ *  deletes them, so the suite does, before it deletes the users the terms point
+ *  at. Rows that existed at the snapshot are left alone. */
 async function removeDemoHierarchy() {
-	const ds = await testDb
-		.select({ id: districts.id })
-		.from(districts)
-		.where(eq(districts.isDemo, true));
-	if (ds.length === 0) return;
-	const divs = testDb
-		.select({ id: divisions.id })
-		.from(divisions)
-		.where(
-			inArray(
-				divisions.districtId,
-				ds.map((d) => d.id),
-			),
-		);
-	const ars = testDb
-		.select({ id: areas.id })
-		.from(areas)
-		.where(inArray(areas.divisionId, divs));
-	await testDb
-		.delete(clubVisits)
-		.where(
-			inArray(
-				clubVisits.areaClubId,
-				testDb
-					.select({ id: areaClubs.id })
-					.from(areaClubs)
-					.where(inArray(areaClubs.areaId, ars)),
-			),
-		);
-	await testDb.delete(areaClubs).where(inArray(areaClubs.areaId, ars));
-	await testDb.delete(areaDirectors).where(inArray(areaDirectors.areaId, ars));
-	await testDb.delete(areas).where(inArray(areas.divisionId, divs));
-	await testDb.delete(divisions).where(
-		inArray(
-			divisions.districtId,
-			ds.map((d) => d.id),
-		),
-	);
-	await testDb.delete(districts).where(eq(districts.isDemo, true));
+	const { ds, divs, ars } = await demoHierarchyRows();
+	const newAreas = ars.filter((id) => !preexisting.areas.has(id));
+	const newDivs = divs.filter((id) => !preexisting.divisions.has(id));
+	const newDistricts = ds.filter((id) => !preexisting.districts.has(id));
+	if (tracked.users.length) {
+		await testDb
+			.delete(areaDirectors)
+			.where(inArray(areaDirectors.userId, tracked.users));
+	}
+	if (newAreas.length) {
+		await testDb
+			.delete(clubVisits)
+			.where(
+				inArray(
+					clubVisits.areaClubId,
+					testDb
+						.select({ id: areaClubs.id })
+						.from(areaClubs)
+						.where(inArray(areaClubs.areaId, newAreas)),
+				),
+			);
+		await testDb.delete(areaClubs).where(inArray(areaClubs.areaId, newAreas));
+		await testDb
+			.delete(areaDirectors)
+			.where(inArray(areaDirectors.areaId, newAreas));
+		await testDb.delete(areas).where(inArray(areas.id, newAreas));
+	}
+	if (newDivs.length)
+		await testDb.delete(divisions).where(inArray(divisions.id, newDivs));
+	if (newDistricts.length)
+		await testDb.delete(districts).where(inArray(districts.id, newDistricts));
 }
 
 async function teardown() {
@@ -410,6 +450,7 @@ describe.skipIf(!hasTestDb)("resetDemoClub (#1199)", () => {
 	afterAll(removeAddedCatalog);
 	afterAll(teardown);
 	beforeEach(async () => {
+		await snapshotDemoHierarchy();
 		await teardown();
 		vi.stubEnv("DEMO_ACCOUNT_EMAIL", DEMO_EMAIL);
 		superId = await makeUser({
@@ -1076,7 +1117,10 @@ describe.skipIf(!hasTestDb)("resetDemoClub (#1199)", () => {
 
 		const h = await hierarchy();
 		expect(h.districts).toHaveLength(1);
-		expect(h.districts[0]).toMatchObject({ number: "DEMO", isDemo: true });
+		expect(h.districts[0]).toMatchObject({
+			number: DEMO_DISTRICT_NUMBER,
+			isDemo: true,
+		});
 		expect(h.divisions).toHaveLength(1);
 		expect(h.divisions[0]).toMatchObject({
 			programYear: currentProgramYear(now),
@@ -1133,9 +1177,10 @@ describe.skipIf(!hasTestDb)("resetDemoClub (#1199)", () => {
 	});
 
 	// protects=the in-club reset (actor clubAdmin) leaves the same hierarchy
-	//   state as the superadmin rebuild, and records the club admin's account as
-	//   the visits' and the term's actor where it applies;
-	// fails_when=the club-admin path skips the hierarchy step or doubles rows;
+	//   state as the superadmin rebuild, with the demo account as the visits'
+	//   recorded_by;
+	// fails_when=the club-admin path skips the hierarchy step or doubles rows, or
+	//   the visits carry no recorder;
 	// no_claim=stub builder; authorization is the #1199 cases above.
 	it("the in-club reset produces the same state as a second superadmin rebuild", async () => {
 		const demoUser = await demoAccount();
@@ -1155,6 +1200,12 @@ describe.skipIf(!hasTestDb)("resetDemoClub (#1199)", () => {
 			clubId,
 		);
 		expect(await visitsOf(h.areas[0]?.id as string)).toHaveLength(2);
+		const recorders = await testDb
+			.select({ recordedBy: clubVisits.recordedBy })
+			.from(clubVisits)
+			.innerJoin(areaClubs, eq(areaClubs.id, clubVisits.areaClubId))
+			.where(eq(areaClubs.areaId, h.areas[0]?.id as string));
+		expect(recorders.map((r) => r.recordedBy)).toEqual([demoUser, demoUser]);
 	});
 
 	// protects=with the demo account signed in once, it is the area's one open
@@ -1174,6 +1225,7 @@ describe.skipIf(!hasTestDb)("resetDemoClub (#1199)", () => {
 			expect.objectContaining({
 				userId: demoUser,
 				displayName: "Demo Presenter",
+				assignedBy: superId,
 			}),
 		]);
 		expect(await loadCurrentAreasForUser(demoUser, now)).toEqual([
@@ -1266,6 +1318,12 @@ describe.skipIf(!hasTestDb)("resetDemoClub (#1199)", () => {
 	it("a rebuild in the next program year builds a new division and area, leaving last year's", async () => {
 		await reset({ now: new Date("2026-11-15T18:00:00Z") });
 		const lastArea = (await hierarchy()).areas[0]?.id as string;
+		const lastRowsBefore = (await rowsOf(lastArea))
+			.map((r) => [r.id, r.name])
+			.sort();
+		const lastVisitsBefore = (await visitsOf(lastArea))
+			.map((v) => [v.id, v.name, v.visitedOn])
+			.sort();
 		await reset({ now: new Date("2027-08-10T18:00:00Z") });
 
 		const h = await hierarchy();
@@ -1275,11 +1333,108 @@ describe.skipIf(!hasTestDb)("resetDemoClub (#1199)", () => {
 		const rows = await rowsOf(lastArea);
 		expect(rows).toHaveLength(4);
 		expect(rows.every((r) => r.clubId === null)).toBe(true);
-		expect(await visitsOf(lastArea)).toHaveLength(2);
+		expect(rows.map((r) => [r.id, r.name]).sort()).toEqual(lastRowsBefore);
+		expect(
+			(await visitsOf(lastArea)).map((v) => [v.id, v.name, v.visitedOn]).sort(),
+		).toEqual(lastVisitsBefore);
 		const newArea = h.areas.find((a) => a.id !== lastArea);
 		expect(
 			(await rowsOf(newArea?.id as string)).filter((r) => r.clubId !== null),
 		).toHaveLength(1);
+	});
+
+	// protects=just after UTC midnight on July 1 (still June 30 in Chicago) the
+	//   division is the previous program year's and the visit is not dated later
+	//   than the day the demo runs;
+	// fails_when=the server clock's zone picks the program year, so the division
+	//   is next year's while the visit day is in June;
+	// no_claim=stub builder; the arithmetic itself is the unit cases.
+	it("takes the program year from the Chicago day at the July 1 boundary", async () => {
+		await reset({ now: new Date("2027-07-01T01:00:00Z") });
+
+		const h = await hierarchy();
+		expect(h.divisions.map((d) => d.programYear)).toEqual([2026]);
+		expect(
+			(await visitsOf(h.areas[0]?.id as string)).map((v) => v.visitedOn),
+		).toEqual(["2027-06-16", "2027-06-16"]);
+	});
+
+	// protects=a demo account holding an open term in a REAL area is refused with
+	//   a named error and the whole rebuild rolls back: the previous demo club and
+	//   its area rows (same ids) are intact;
+	// fails_when=the rebuild proceeds (the account would direct a real area and
+	//   the demo area), throws a raw error, or leaves a half-rebuilt state;
+	// no_claim=stub builder; the console-side refusal is #1294's.
+	it("refuses a demo account that holds a term in a real area, and rolls back", async () => {
+		const demoUser = await demoAccount();
+		const first = await reset();
+		const demoAreaId = (await hierarchy()).areas[0]?.id as string;
+		const before = (await rowsOf(demoAreaId)).map((r) => r.id).sort();
+		const [realDistrict] = await testDb
+			.insert(districts)
+			.values({ number: `R${RUN}`.slice(0, 8) })
+			.returning({ id: districts.id });
+		const [realDivision] = await testDb
+			.insert(divisions)
+			.values({
+				districtId: realDistrict?.id as string,
+				programYear: currentProgramYear(new Date()),
+				letter: "Q",
+			})
+			.returning({ id: divisions.id });
+		const [realArea] = await testDb
+			.insert(areas)
+			.values({ divisionId: realDivision?.id as string, number: "9" })
+			.returning({ id: areas.id });
+		await testDb.insert(areaDirectors).values({
+			areaId: realArea?.id as string,
+			userId: demoUser,
+			displayName: "Demo Presenter",
+			assignedBy: superId,
+		});
+		try {
+			await expect(reset()).rejects.toMatchObject({
+				name: "DemoError",
+				code: "ACCOUNT_DIRECTS_REAL_AREA",
+			});
+			expect((await demoClubs()).map((c) => c.id)).toEqual([first.clubId]);
+			expect((await rowsOf(demoAreaId)).map((r) => r.id).sort()).toEqual(
+				before,
+			);
+		} finally {
+			await testDb
+				.delete(areaDirectors)
+				.where(eq(areaDirectors.areaId, realArea?.id as string));
+			await testDb.delete(areas).where(eq(areas.id, realArea?.id as string));
+			await testDb
+				.delete(divisions)
+				.where(eq(divisions.id, realDivision?.id as string));
+			await testDb
+				.delete(districts)
+				.where(eq(districts.id, realDistrict?.id as string));
+		}
+	});
+
+	// protects=a district numbered DEMO that is not flagged is refused with a named
+	//   error instead of a raw unique violation, and nothing is rebuilt;
+	// fails_when=the insert raises 23505, or the unflagged district is adopted;
+	// no_claim=stub builder.
+	it("refuses with a named error when a non-demo district already has the number", async () => {
+		const [taken] = await testDb
+			.insert(districts)
+			.values({ number: DEMO_DISTRICT_NUMBER })
+			.returning({ id: districts.id });
+		try {
+			await expect(reset()).rejects.toMatchObject({
+				name: "DemoError",
+				code: "DEMO_DISTRICT_NUMBER_TAKEN",
+			});
+			expect(await demoClubs()).toHaveLength(0);
+		} finally {
+			await testDb
+				.delete(districts)
+				.where(eq(districts.id, taken?.id as string));
+		}
 	});
 
 	// protects=a throw after the hierarchy step's first insert rolls the whole
