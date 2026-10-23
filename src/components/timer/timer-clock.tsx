@@ -109,14 +109,14 @@ const BAND_CLASS: Record<TimerBand, string> = {
 /** `screen` variant (#1248): the band as a background, with an ink that holds
  *  contrast on it. The four hues are the four cards a Toastmasters timer raises;
  *  `over` is a deeper red, separated by its label, as in `BAND_CLASS`. */
-const SCREEN_BG_CLASS: Record<TimerBand, string> = {
+export const SCREEN_BG_CLASS: Record<TimerBand, string> = {
 	under: "bg-background",
 	green: "bg-[#1f7a46]",
 	yellow: "bg-[#f2c230]",
 	red: "bg-[#c0262d]",
 	over: "bg-[#7a1218]",
 };
-const SCREEN_TEXT_CLASS: Record<TimerBand, string> = {
+export const SCREEN_TEXT_CLASS: Record<TimerBand, string> = {
 	under: "text-foreground",
 	green: "text-white",
 	yellow: "text-[#1a1405]",
@@ -126,7 +126,7 @@ const SCREEN_TEXT_CLASS: Record<TimerBand, string> = {
 /** `screen` variant's primary button (Start / Pause / Resume): drawn in the
  *  band's ink so it stays the one solid thing on any of the four colours,
  *  where the theme's teal would clash with green and vanish on yellow. */
-const SCREEN_SOLID_CLASS: Record<TimerBand, string> = {
+export const SCREEN_SOLID_CLASS: Record<TimerBand, string> = {
 	under: "",
 	green: "bg-white text-[#1f7a46] hover:bg-white/90",
 	yellow: "bg-[#1a1405] text-[#f2c230] hover:bg-[#1a1405]/90",
@@ -134,7 +134,7 @@ const SCREEN_SOLID_CLASS: Record<TimerBand, string> = {
 	over: "bg-white text-[#7a1218] hover:bg-white/90",
 };
 /** `screen` variant's secondary buttons: an outline in the band's own ink. */
-const SCREEN_QUIET_CLASS =
+export const SCREEN_QUIET_CLASS =
 	"border-current/40 bg-transparent text-inherit shadow-none hover:bg-black/10 hover:text-inherit dark:border-current/40 dark:bg-transparent dark:hover:bg-black/10";
 
 /**
@@ -196,7 +196,13 @@ type WakeLockLike = { release: () => Promise<void> };
 /** A card's colour beside its mark on the `screen` variant. Off the dark idle
  *  ground it gets a ring in the band's ink, so a green dot still reads on the
  *  green screen. */
-function MarkDot({ band, className }: { band: TimerBand; className: string }) {
+export function MarkDot({
+	band,
+	className,
+}: {
+	band: TimerBand;
+	className: string;
+}) {
 	return (
 		<span
 			aria-hidden

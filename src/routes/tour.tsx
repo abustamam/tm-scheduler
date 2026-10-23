@@ -4,6 +4,7 @@ import { FounderNote } from "#/components/marketing/founder-note";
 import { MarketingShell } from "#/components/marketing/marketing-shell";
 import { AssistantDemo } from "#/components/marketing/tour/assistant-demo";
 import { ClaimDemo } from "#/components/marketing/tour/claim-demo";
+import { PresentDemo } from "#/components/marketing/tour/present-demo";
 import { TimerDemo } from "#/components/marketing/tour/timer-demo";
 import { BETA_PILL_CLASS } from "#/components/marketing/tour/tour-styles";
 import { VoteDemo } from "#/components/marketing/tour/vote-demo";
@@ -32,7 +33,7 @@ export const Route = createFileRoute("/tour")({
 });
 
 /**
- * A screenshot, framed. Scenes 2, 3 and 5 use one: there the real output is
+ * A screenshot, framed. Scenes 2 and 5 use one: there the real output is
  * the proof, so a drawing would be the weaker claim. Every image comes from
  * `bun run marketing:screenshots` against the seed club.
  */
@@ -135,8 +136,8 @@ function Tour() {
 
 				<Scene n={1} title="Claim a role in one tap." visual={<ClaimDemo />}>
 					<p>
-						Members open the meeting link, pick their name, and tap the role
-						they want. No account to make and no password to remember.
+						Members open the meeting link, pick their name, and tap Claim on the
+						role they want. No account to make and no password to remember.
 					</p>
 					<p>
 						Every role also comes with a short guide to what to do before and
@@ -165,19 +166,14 @@ function Tour() {
 					<p>That picture is the real print page, not a mock-up.</p>
 				</Scene>
 
-				<Scene
-					n={3}
-					title="Put it on the screen."
-					visual={
-						<Shot
-							src="/landing/tour-present.png"
-							alt="GavelUp's present mode for Harbor City Speakers, a sample club: the agenda shown as a full-screen slide for the projector."
-						/>
-					}
-				>
+				<Scene n={3} title="Put it on the screen." visual={<PresentDemo />}>
 					<p>
 						The same agenda turns into slides for the projector, one tap from
 						the meeting page. Need it in PowerPoint? Download it.
+					</p>
+					<p>
+						That's a small working copy of it: click it, or use the arrow keys,
+						and step through five of the real slides.
 					</p>
 					<p>
 						Open it before the meeting and it keeps working when the room's
@@ -202,7 +198,7 @@ function Tour() {
 						green, yellow and red. When it's time for Best Speaker, everyone
 						votes from their seat and the counter sees the tally.
 					</p>
-					<p>Tap the light to cycle it, then cast a vote.</p>
+					<p>Start the clock, then cast a vote.</p>
 				</Scene>
 
 				<Scene

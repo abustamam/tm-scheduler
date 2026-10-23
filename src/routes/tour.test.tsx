@@ -104,14 +104,13 @@ describe("/tour", () => {
 		expect(screen.getByText(AI_CONNECTOR_SETUP_LINE)).toBeTruthy();
 	});
 
-	it("shows the real screenshots in scenes 2, 3 and 5", async () => {
+	it("shows the real screenshots in scenes 2 and 5, and a working deck in scene 3", async () => {
 		await renderTour();
 		const srcs = screen
 			.getAllByRole("img")
 			.map((img) => img.getAttribute("src"));
 		expect(srcs).toEqual([
 			"/landing/tour-agenda.png",
-			"/landing/tour-present.png",
 			"/landing/tour-vpe.png",
 			"/landing/tour-vpm.png",
 		]);
@@ -120,16 +119,22 @@ describe("/tour", () => {
 		}
 	});
 
-	it("crops the agenda shot to its printed sheet, and leaves the present shot whole", async () => {
+	it("crops the agenda shot to its printed sheet", async () => {
 		await renderTour();
-		const [agenda, present] = screen.getAllByRole("img");
-		const agendaClasses = agenda.className.split(/\s+/);
-		const presentClasses = present.className.split(/\s+/);
+		const [agenda] = screen.getAllByRole("img");
+		const classes = agenda.className.split(/\s+/);
 		for (const c of ["aspect-[816/1000]", "object-cover", "object-left-top"]) {
-			expect(agendaClasses).toContain(c);
-			expect(presentClasses).not.toContain(c);
+			expect(classes).toContain(c);
 		}
-		expect(presentClasses).toContain("h-auto");
+	});
+
+	it("puts a clickable present deck in scene 3 instead of a picture", async () => {
+		await renderTour();
+		const s3 = document.querySelector('[data-scene="3"]') as HTMLElement;
+		expect(within(s3).queryByRole("img")).toBeNull();
+		expect(within(s3).getByText("1 / 5")).toBeTruthy();
+		fireEvent.click(within(s3).getByRole("button", { name: "Next slide" }));
+		expect(within(s3).getByText("2 / 5")).toBeTruthy();
 	});
 
 	it("numbers the steps 1 to 6, with the officers' stop at 5 and the assistant at 6", async () => {
@@ -226,11 +231,13 @@ describe("/tour", () => {
 
 	it("issues no network request, even after every demo is played", async () => {
 		await renderTour();
-		for (const b of screen.getAllByRole("button", { name: /^Claim / })) {
-			fireEvent.click(b);
-		}
-		fireEvent.click(screen.getByRole("button", { name: "Reset" }));
-		fireEvent.click(screen.getByText("Speaker 2 · 5–7 min"));
+		fireEvent.click(screen.getByRole("button", { name: "Next slide" }));
+		fireEvent.click(screen.getByRole("button", { name: "Claim Timer — open" }));
+		fireEvent.click(screen.getByRole("button", { name: "Jordan Reyes" }));
+		fireEvent.click(screen.getByRole("button", { name: "Claim" }));
+		fireEvent.click(screen.getByRole("button", { name: "Release" }));
+		fireEvent.click(screen.getByRole("button", { name: "Start" }));
+		fireEvent.click(screen.getByRole("button", { name: "Stop" }));
 		fireEvent.click(
 			screen.getByRole("button", { name: "Vote for Priya Nair" }),
 		);
