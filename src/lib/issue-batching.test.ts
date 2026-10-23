@@ -1462,6 +1462,45 @@ describe("extractDependencies", () => {
 		expect(extractDependencies("Land #619 first").blockedBy).toEqual([619]);
 	});
 
+	describe("bold/colon forms and lists of numbers (#1287)", () => {
+		test("a bold phrase with a colon and a parenthetical between numbers", () => {
+			expect(
+				extractDependencies(
+					"**Depends on:** #1281 (audience frame) and #1280 (duty copy)",
+				).blockedBy,
+			).toEqual([1280, 1281]);
+		});
+
+		test.each([
+			["Blocked by: #5", [5]],
+			["Requires: #5", [5]],
+			["_Requires_ #5", [5]],
+			["depends on #5, #6 and #7", [5, 6, 7]],
+			["depends on #5, and #6", [5, 6]],
+			["blocked by #5 & #6 / #7 or #8", [5, 6, 7, 8]],
+			["blocked by **#5** and **#6**", [5, 6]],
+		])("blocked-by %s", (body, expected) => {
+			expect(extractDependencies(body).blockedBy).toEqual(expected);
+		});
+
+		test("blocks reads a list", () => {
+			expect(extractDependencies("blocks #8 and #9").blocks).toEqual([8, 9]);
+		});
+
+		test("the list ends at the first token that is not a join", () => {
+			expect(
+				extractDependencies("depends on #5 for the schema; see also #6")
+					.blockedBy,
+			).toEqual([5]);
+		});
+
+		test("a quoted phrase in the new form is still excluded and reported", () => {
+			const r = extractDependencies("`**Depends on:** #5 and #6`");
+			expect(r.blockedBy).toEqual([]);
+			expect(r.ignored.map((d) => d.issue)).toEqual([5, 6]);
+		});
+	});
+
 	test("reads the inverse direction too", () => {
 		expect(extractDependencies("Blocks #618").blocks).toEqual([618]);
 	});

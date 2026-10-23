@@ -546,17 +546,31 @@ export function splitCitations(
 	return { present, missing };
 }
 
+/** Between a dependency phrase and its first `#N`: `:`, markdown emphasis, spaces. */
+const PHRASE_GAP = "[:*_\\s]*";
+/** One `#N`, optionally followed by a parenthetical note: `#1281 (audience frame)`. */
+const ISSUE_REF = "#\\d+(?:\\s*\\([^)\\n]*\\))?";
+/** What joins two numbers in a list: `,`, `and`, `&`, `/`, `or`, with emphasis. */
+const LIST_JOIN = "[\\s*_]*(?:(?:,[\\s*_]*)?(?:and|or)\\b|,|&|/)[\\s*_]*";
+/** `#A`, then any number of `<join> #B`. Ends at the first token that is not a join. */
+const ISSUE_LIST = `${ISSUE_REF}(?:${LIST_JOIN}${ISSUE_REF})*`;
+
 /**
  * Phrasings that mean "this issue must wait for #N".
  *
- * `\bblocks` deliberately does NOT match "unblocks": the preceding character
- * is a word character there, so the boundary fails.
+ * `blocks` deliberately does NOT match "unblocks": a letter precedes it. An
+ * underscore may, so `_Requires_ #5` reads.
  */
 const BLOCKED_BY_PATTERNS = [
-	/\b(?:blocked\s+by|depends\s+on|requires)\s+#(\d+)/gi,
-	/\bland\s+#(\d+)\s+first/gi,
+	new RegExp(
+		`(?<![A-Za-z0-9])(?:blocked\\s+by|depends\\s+on|requires)${PHRASE_GAP}(${ISSUE_LIST})`,
+		"gi",
+	),
+	/\bland\s+(#\d+)\s+first/gi,
 ];
-const BLOCKS_PATTERNS = [/\bblocks\s+#(\d+)/gi];
+const BLOCKS_PATTERNS = [
+	new RegExp(`(?<![A-Za-z0-9])blocks${PHRASE_GAP}(${ISSUE_LIST})`, "gi"),
+];
 
 /** A blockquote line (0-3 spaces, then `>`): usually someone else's text. */
 const BLOCKQUOTE = /^ {0,3}>/;
@@ -633,10 +647,12 @@ export function splitQuotedText(body: string): {
 /** Every `(phrase, number)` a set of patterns matches in `text`. */
 const matchPhrases = (text: string, patterns: RegExp[]) =>
 	patterns.flatMap((re) =>
-		[...text.matchAll(re)].map((m) => ({
-			phrase: m[0].replace(/\s+/g, " "),
-			issue: Number(m[1]),
-		})),
+		[...text.matchAll(re)].flatMap((m) =>
+			[...m[1].matchAll(/#(\d+)/g)].map((n) => ({
+				phrase: m[0].replace(/\s+/g, " "),
+				issue: Number(n[1]),
+			})),
+		),
 	);
 
 /**
