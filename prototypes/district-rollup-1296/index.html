@@ -1,0 +1,640 @@
+<title>District DEMO Roll-up</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<!--
+  PROTOTYPE, throwaway (#1296). Not app code; never merged into src/.
+  Question: what should a division rolling up its areas, and a district rolling up its
+  divisions, look like for a demo to division and district leaders?
+  Three structurally different variants on one page, switched from the bottom bar
+  (or the left/right arrow keys); the variant is kept in the URL hash (#a, #b, #c).
+  Real rows come from the demo rebuild (src/server/demo-reset-logic.ts): district DEMO,
+  division A, area A1, the GavelUp Demo Club and three name-only clubs. Everything else is
+  invented padding, marked "sample".
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=Manrope:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: one app-like shell (header + content), three variants swap the content only.
+   Palette and faces borrow GavelUp's own (src/styles.css): foam, sea ink, lagoon; Fraunces + Manrope. */
+:root {
+	--bg: #f3faf5;
+	--surface: #ffffff;
+	--surface-2: #e7f0e8;
+	--ink: #173a40;
+	--ink-soft: #4a676b;
+	--line: rgba(23, 58, 64, 0.14);
+	--accent: #246f76;
+	--accent-ink: #ffffff;
+	--good: #2f6a4a;
+	--good-fill: #e2f1e6;
+	--warn: #8f640c;
+	--warn-fill: #fdf3e7;
+	--bad: #a23b2a;
+	--bad-fill: #fbecea;
+	--heat-lo: #e3eee6;
+	--heat-hi: #1f6870;
+	--hatch: rgba(23, 58, 64, 0.16);
+	--bar-bg: #18323a;
+	--bar-ink: #f3faf5;
+	--font-display: "Fraunces", Georgia, "Times New Roman", serif;
+	--font-body: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+	--radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme="light"]) {
+		--bg: #0a1418; --surface: #10211f; --surface-2: #1c3238; --ink: #d9eeea; --ink-soft: #9dbdb9;
+		--line: rgba(141, 229, 219, 0.16); --accent: #4fb8b2; --accent-ink: #0a1418;
+		--good: #6ec89a; --good-fill: #14302a; --warn: #e2b04f; --warn-fill: #2e2410; --bad: #f08a78; --bad-fill: #34191a;
+		--heat-lo: #1a2e32; --heat-hi: #7fded3; --hatch: rgba(141, 229, 219, 0.18); --bar-bg: #d9eeea; --bar-ink: #0a1418;
+		color-scheme: dark;
+	}
+}
+:root[data-theme="dark"] {
+	--bg: #0a1418; --surface: #10211f; --surface-2: #1c3238; --ink: #d9eeea; --ink-soft: #9dbdb9;
+	--line: rgba(141, 229, 219, 0.16); --accent: #4fb8b2; --accent-ink: #0a1418;
+	--good: #6ec89a; --good-fill: #14302a; --warn: #e2b04f; --warn-fill: #2e2410; --bad: #f08a78; --bad-fill: #34191a;
+	--heat-lo: #1a2e32; --heat-hi: #7fded3; --hatch: rgba(141, 229, 219, 0.18); --bar-bg: #d9eeea; --bar-ink: #0a1418;
+	color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+	background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+	font-variant-numeric: tabular-nums;
+}
+.wrap {
+	max-width: 1180px; margin: 0 auto;
+	padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+h1, h2, h3 { font-family: var(--font-display); font-weight: 650; text-wrap: balance; margin: 0; letter-spacing: -0.01em; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Shell */
+.proto-note { background: var(--warn-fill); color: var(--warn); font-size: 12.5px; border-bottom: 1px solid var(--line); }
+.proto-note .wrap { padding-block: 6px; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; justify-content: space-between; }
+.proto-note label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; font-weight: 600; }
+header.app { border-bottom: 1px solid var(--line); background: var(--surface); }
+header.app .wrap { padding-block: 14px; display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: baseline; justify-content: space-between; }
+.brand { font-family: var(--font-display); font-size: 20px; font-weight: 650; color: var(--accent); }
+.brand span { color: var(--ink-soft); font-family: var(--font-body); font-size: 13px; font-weight: 500; margin-left: 10px; }
+.asof { font-size: 13px; color: var(--ink-soft); }
+main { padding-block: 24px 120px; }
+
+.eyebrow { font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
+.muted { color: var(--ink-soft); }
+.small { font-size: 13px; }
+.tag { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; padding: 1px 7px; border-radius: 999px; vertical-align: 1px; white-space: nowrap; }
+.tag-sample { border: 1px dashed var(--ink-soft); color: var(--ink-soft); margin-left: 6px; font-weight: 600; }
+body:not(.mark-sample) .tag-sample { display: none; }
+.tag-real { background: var(--accent); color: var(--accent-ink); margin-left: 6px; }
+body:not(.mark-sample) .tag-real { display: none; }
+.chip-off { background: var(--surface-2); color: var(--ink-soft); }
+.chip-good { background: var(--good-fill); color: var(--good); }
+.chip-warn { background: var(--warn-fill); color: var(--warn); }
+.chip-bad { background: var(--bad-fill); color: var(--bad); }
+.vacant { color: var(--bad); font-weight: 600; }
+
+/* Variant A: Ledger */
+.crumbs { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font-size: 14px; margin-bottom: 10px; }
+.crumbs button { background: none; border: 0; padding: 2px 0; color: var(--accent); cursor: pointer; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.crumbs .here { font-weight: 700; }
+.ledger-head { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: end; justify-content: space-between; margin-bottom: 18px; }
+.ledger-head h1 { font-size: clamp(26px, 4vw, 36px); }
+.officers { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 13.5px; }
+.officers b { font-weight: 600; }
+.strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-bottom: 22px; }
+.strip > div { background: var(--surface); padding: 14px 16px; display: grid; gap: 2px; }
+.strip .big { font-family: var(--font-display); font-size: 28px; font-weight: 650; line-height: 1.1; }
+.strip .big small { font-family: var(--font-body); font-size: 14px; font-weight: 600; color: var(--ink-soft); }
+.meter { height: 5px; border-radius: 3px; background: var(--surface-2); overflow: hidden; margin-top: 6px; }
+.meter i { display: block; height: 100%; background: var(--accent); }
+.table-box { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; min-width: 860px; font-size: 14px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); font-weight: 700; background: var(--surface-2); white-space: nowrap; }
+th.num, td.num { text-align: right; }
+tbody tr:last-child td { border-bottom: 0; }
+tr.drill { cursor: pointer; }
+tr.drill:hover td { background: color-mix(in oklab, var(--accent) 7%, var(--surface)); }
+tr.drill td:first-child button { background: none; border: 0; padding: 0; cursor: pointer; font-weight: 700; color: var(--accent); text-align: left; }
+tr.nolive td.h { color: var(--ink-soft); }
+.flag-list { font-size: 12.5px; color: var(--warn); }
+.foot { font-size: 12.5px; color: var(--ink-soft); margin-top: 10px; max-width: 70ch; }
+.callout { border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--surface); padding: 10px 14px; border-radius: 6px; font-size: 13.5px; margin-bottom: 16px; max-width: 80ch; }
+
+/* Variant B: Heat map */
+.heat-top { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: end; justify-content: space-between; margin-bottom: 16px; }
+.metric-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.metric-chips button { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 5px 12px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.metric-chips button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.heat-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; align-items: start; }
+.heat-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
+.div-col { display: grid; gap: 10px; align-content: start; }
+.div-col > header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; border-bottom: 2px solid var(--ink); padding-bottom: 6px; }
+.div-col > header h2 { font-size: 20px; }
+.div-col > header .v { font-family: var(--font-display); font-size: 22px; font-weight: 650; }
+.area-block { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: grid; gap: 8px; }
+.area-block > button.area-name { display: flex; justify-content: space-between; gap: 8px; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; font-weight: 700; font-size: 14px; }
+.area-block > button.area-name .v { font-weight: 700; color: var(--ink-soft); }
+.cells { display: flex; flex-wrap: wrap; gap: 5px; }
+.cell { width: 34px; height: 34px; border-radius: 5px; border: 1px solid var(--line); cursor: pointer; padding: 0; position: relative; }
+.cell.na { background: repeating-linear-gradient(45deg, var(--surface), var(--surface) 4px, var(--hatch) 4px, var(--hatch) 6px); }
+.cell.sel { outline: 2px solid var(--ink); outline-offset: 2px; }
+.cell.flagged::after { content: ""; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--bad); border: 1px solid var(--surface); }
+.ad-line { font-size: 12.5px; color: var(--ink-soft); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; font-size: 12.5px; color: var(--ink-soft); margin-top: 14px; }
+.legend .ramp { display: inline-block; width: 120px; height: 10px; border-radius: 3px; background: linear-gradient(90deg, var(--heat-lo), var(--heat-hi)); vertical-align: -1px; border: 1px solid var(--line); }
+.legend .sw { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -3px; margin-right: 4px; border: 1px solid var(--line); }
+.legend .sw.na { background: repeating-linear-gradient(45deg, var(--surface), var(--surface) 3px, var(--hatch) 3px, var(--hatch) 5px); }
+.legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--bad); margin-right: 4px; }
+.panel { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; display: grid; gap: 12px; }
+.panel h3 { font-size: 20px; }
+.kv { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; font-size: 14px; margin: 0; }
+.kv dt { color: var(--ink-soft); }
+.kv dd { margin: 0; text-align: right; font-weight: 600; }
+
+/* Variant C: Briefing */
+.scope-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 22px; }
+.scope-tabs button { background: none; border: 0; border-bottom: 3px solid transparent; padding: 8px 12px; cursor: pointer; font-weight: 600; color: var(--ink-soft); margin-bottom: -1px; }
+.scope-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.brief { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 32px; align-items: start; }
+.brief-main { display: grid; gap: 26px; min-width: 0; }
+.lede { font-family: var(--font-display); font-size: clamp(19px, 2.4vw, 23px); font-weight: 500; line-height: 1.45; max-width: 46ch; display: grid; gap: 10px; }
+.lede p { margin: 0; }
+.lede em { font-style: normal; color: var(--accent); font-weight: 650; }
+.sect h2 { font-size: 18px; margin-bottom: 8px; display: flex; gap: 8px; align-items: baseline; }
+.sect h2 .count { font-family: var(--font-body); font-size: 13px; font-weight: 700; color: var(--ink-soft); }
+.items { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.items li { border-bottom: 1px solid var(--line); padding: 10px 0; display: grid; grid-template-columns: 6px minmax(0, 1fr) auto; gap: 12px; align-items: start; }
+.items li .sev { width: 6px; align-self: stretch; border-radius: 3px; background: var(--warn); }
+.items li .sev.bad { background: var(--bad); }
+.items li .sev.good { background: var(--good); }
+.items li .sev.off { background: var(--surface-2); }
+.items li .what { font-weight: 600; }
+.items li .who { font-size: 13px; color: var(--ink-soft); text-align: right; white-space: nowrap; }
+.scorecard { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; display: grid; gap: 14px; }
+.scorecard h3 { font-size: 16px; }
+.sc-row { display: grid; gap: 4px; font-size: 13px; }
+.sc-row .top { display: flex; justify-content: space-between; gap: 8px; }
+.sc-row .top b { font-weight: 700; }
+.bars { display: grid; grid-template-columns: 74px 1fr 40px; gap: 3px 8px; align-items: center; font-size: 12px; color: var(--ink-soft); }
+.bars .b { height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.bars .b i { display: block; height: 100%; background: var(--accent); }
+.bars .n { text-align: right; color: var(--ink); font-weight: 600; }
+
+/* Switcher (prototype chrome, not part of any variant) */
+.switcher {
+	position: fixed; left: 50%; transform: translateX(-50%);
+	bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+	display: flex; align-items: center; gap: 4px; background: var(--bar-bg); color: var(--bar-ink);
+	border-radius: 999px; padding: 5px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28); z-index: 50; max-width: calc(100vw - 32px);
+}
+.switcher button { background: transparent; border: 0; color: inherit; width: 36px; height: 36px; border-radius: 50%; cursor: pointer; font-size: 18px; line-height: 1; }
+.switcher button:hover { background: color-mix(in oklab, var(--bar-ink) 16%, transparent); }
+.switcher .lbl { padding: 0 10px; font-size: 13.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.switcher .lbl span { font-weight: 500; opacity: 0.75; }
+
+@media (max-width: 900px) {
+	.heat-layout, .brief { grid-template-columns: minmax(0, 1fr); }
+	.panel, .scorecard { position: static; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="proto-note">
+	<div class="wrap">
+		<span><b>Prototype for #1296.</b> Throwaway, not app code. District DEMO, division A, area A1 and its four clubs come from the demo rebuild; every row tagged "sample" is invented to fill out the roll-up.</span>
+		<label for="mark-sample"><input type="checkbox" id="mark-sample" checked> Tag sample rows</label>
+	</div>
+</div>
+<header class="app">
+	<div class="wrap">
+		<div class="brand">GavelUp <span>District DEMO</span></div>
+		<div class="asof">Program year 2026–27 · figures as of 23 Oct 2026</div>
+	</div>
+</header>
+<main class="wrap" id="view"></main>
+<nav class="switcher" aria-label="Prototype variant">
+	<button type="button" id="prev" aria-label="Previous variant">‹</button>
+	<div class="lbl" id="vlabel" aria-live="polite"></div>
+	<button type="button" id="next" aria-label="Next variant">›</button>
+</nav>
+
+<script>
+"use strict";
+// ---- Data ------------------------------------------------------------------
+const TODAY = new Date("2026-10-23T12:00:00");
+const R1_DUE = new Date("2026-11-30T12:00:00");
+const DAYS_TO_R1 = Math.round((R1_DUE - TODAY) / 86400000);
+const OFFICES = 7;
+const DCP_GOALS = 10;
+
+function rng(seed) {
+	return () => {
+		seed = (seed + 0x6d2b79f5) | 0;
+		let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+}
+const rand = rng(1296);
+const between = (lo, hi) => Math.round(lo + rand() * (hi - lo));
+
+function sampleClub(name, pLive) {
+	const live = rand() < pLive;
+	const visited = rand() < 0.55;
+	const club = { name, real: false, live, v1: visited ? "Oct" : null, v2: null, h: null };
+	if (live) {
+		const sched = 16;
+		const members = between(12, 30);
+		club.h = {
+			held: sched - between(0, 4), sched,
+			roleFill: between(42, 97),
+			attendance: between(6, 21),
+			officers: between(3, 7),
+			dcp: between(0, 4),
+			renewed: Math.round(members * (0.3 + rand() * 0.65)), members,
+		};
+	}
+	return club;
+}
+const sampleArea = (id, director, names, pLive) => ({ id, real: false, director, clubs: names.map((n) => sampleClub(n, pLive)) });
+
+const DISTRICT = {
+	id: "DEMO", label: "District DEMO", real: true,
+	officers: [
+		{ role: "District Director", name: "Marisol Okafor" },
+		{ role: "Program Quality Director", name: "Daniel Hsu" },
+		{ role: "Club Growth Director", name: null },
+	],
+	divisions: [
+		{
+			id: "A", real: true, director: "Renata Silva",
+			areas: [
+				{
+					id: "A1", real: true, director: "Demo Presenter",
+					clubs: [
+						{ name: "GavelUp Demo Club", real: true, live: true, v1: "9 Oct", v2: null,
+							h: { held: 15, sched: 16, roleFill: 88, attendance: 14, officers: 7, dcp: 3, renewed: 18, members: 21 } },
+						{ name: "Bayfront Speakers", real: true, live: false, v1: "9 Oct", v2: null, h: null },
+						{ name: "Lighthouse Orators", real: true, live: false, v1: null, v2: null, h: null },
+						{ name: "Pier Nine Toastmasters", real: true, live: false, v1: null, v2: null, h: null },
+					],
+				},
+				sampleArea("A2", "Kwame Asante", ["Harbor Lights Speakers", "Tidewater Talkers", "Seaglass Communicators", "Anchor Point Toastmasters"], 0.5),
+				sampleArea("A3", null, ["Driftwood Speakers", "Saltmarsh Orators", "Breakwater Club", "Gull Island Toastmasters", "Morning Tide Speakers"], 0.45),
+			],
+		},
+		{
+			id: "B", real: false, director: "Helen Park",
+			areas: [
+				sampleArea("B1", "Tomás Rivera", ["Cedar Ridge Speakers", "Ironworks Toastmasters", "Millrace Orators", "Foundry Speakers"], 0.65),
+				sampleArea("B2", "Aisha Bello", ["Riverbend Toastmasters", "Lamplighters", "Northgate Communicators", "Old Mill Speakers"], 0.6),
+				sampleArea("B3", "Graham Liu", ["Summit Speakers", "Junction Toastmasters", "Granary Orators", "Prairie Voices", "Railyard Speakers"], 0.55),
+			],
+		},
+		{
+			id: "C", real: false, director: null,
+			areas: [
+				sampleArea("C1", "Noor Haddad", ["Library Square Toastmasters", "Midtown Masters", "Civic Center Speakers", "Union Hall Orators"], 0.4),
+				sampleArea("C2", null, ["Westfield Speakers", "Orchard Toastmasters", "Copperline Club"], 0.3),
+				sampleArea("C3", "Ben Adler", ["Bellview Speakers", "Kingsbridge Toastmasters", "Night Owls Speakers", "Fairground Orators"], 0.4),
+			],
+		},
+	],
+};
+// Parent links, so any node can find its division and area.
+for (const d of DISTRICT.divisions) {
+	d.label = `Division ${d.id}`;
+	for (const a of d.areas) {
+		a.label = `Area ${a.id}`; a.division = d;
+		for (const c of a.clubs) c.area = a;
+	}
+}
+const allAreas = () => DISTRICT.divisions.flatMap((d) => d.areas);
+const clubsOf = (node) => node.clubs ? node.clubs : node.areas ? node.areas.flatMap((a) => a.clubs) : node.divisions.flatMap((d) => d.areas.flatMap((a) => a.clubs));
+const areasOf = (node) => node.clubs ? [node] : node.areas ? node.areas : allAreas();
+
+// ---- Roll-up ------------------------------------------------------------------
+function flags(c) {
+	if (!c.live) return [];
+	const f = [], h = c.h;
+	if (h.roleFill < 60) f.push(`Role fill ${h.roleFill}%`);
+	if (h.officers < 5) f.push(`${h.officers} of ${OFFICES} officers`);
+	if (h.renewed / h.members < 0.5) f.push(`${h.renewed} of ${h.members} renewed`);
+	if (h.attendance < 8) f.push(`Attendance ${h.attendance}`);
+	if (h.held / h.sched < 0.8) f.push(`Held ${h.held} of ${h.sched} meetings`);
+	return f;
+}
+function rollup(node) {
+	const clubs = clubsOf(node), live = clubs.filter((c) => c.live), areas = areasOf(node);
+	const avg = (fn) => live.length ? live.reduce((s, c) => s + fn(c.h), 0) / live.length : null;
+	const directorPosts = node.clubs ? [node.director] : node.areas ? [node.director, ...node.areas.map((a) => a.director)]
+		: [...DISTRICT.officers.map((o) => o.name), ...DISTRICT.divisions.flatMap((d) => [d.director, ...d.areas.map((a) => a.director)])];
+	const sum = (fn) => live.reduce((s, c) => s + fn(c.h), 0);
+	return {
+		clubs: clubs.length, live: live.length, areas: areas.length,
+		v1: clubs.filter((c) => c.v1).length, v2: clubs.filter((c) => c.v2).length,
+		posts: directorPosts.length, filled: directorPosts.filter(Boolean).length,
+		roleFill: avg((h) => h.roleFill), attendance: avg((h) => h.attendance),
+		officers: live.length ? sum((h) => h.officers) / (live.length * OFFICES) : null,
+		dcp: avg((h) => h.dcp),
+		renewals: live.length ? sum((h) => h.renewed) / sum((h) => h.members) : null,
+		meetings: live.length ? sum((h) => h.held) / sum((h) => h.sched) : null,
+		flagged: live.filter((c) => flags(c).length).length,
+	};
+}
+
+// ---- Helpers ------------------------------------------------------------------
+const pct = (x) => x == null ? "—" : `${Math.round(x * 100)}%`;
+const one = (x) => x == null ? "—" : x.toFixed(1);
+const ratio = (a, b) => `${a}<small> / ${b}</small>`;
+const tag = (node) => node.real ? "" : `<span class="tag tag-sample">sample</span>`;
+const realTag = (node) => node.real ? `<span class="tag tag-real">from demo rebuild</span>` : "";
+const person = (n) => n ? n : `<span class="vacant">Vacant</span>`;
+const meter = (x) => `<div class="meter" aria-hidden="true"><i style="width:${Math.round((x || 0) * 100)}%"></i></div>`;
+const plural = (n, w, ws) => `${n} ${n === 1 ? w : (ws || w + "s")}`;
+
+const state = { variant: "a", path: [], metric: "live", sel: null, scope: "DEMO" };
+const VARIANTS = [
+	{ key: "a", name: "Ledger", render: renderLedger },
+	{ key: "b", name: "Heat map", render: renderHeat },
+	{ key: "c", name: "Briefing", render: renderBriefing },
+];
+
+// ---- Variant A: Ledger (drill-down table) ---------------------------------------------
+function nodeAt(path) {
+	let n = DISTRICT;
+	if (path[0]) n = DISTRICT.divisions.find((d) => d.id === path[0]);
+	if (path[1]) n = n.areas.find((a) => a.id === path[1]);
+	return n;
+}
+function renderLedger() {
+	const node = nodeAt(state.path), r = rollup(node);
+	const level = node.clubs ? "area" : node.areas ? "division" : "district";
+	const crumbs = [`<button type="button" data-path="">District DEMO</button>`];
+	if (state.path[0]) crumbs.push(`<span class="muted">›</span>`, state.path[1] ? `<button type="button" data-path="${state.path[0]}">Division ${state.path[0]}</button>` : `<span class="here">Division ${state.path[0]}</span>`);
+	if (state.path[1]) crumbs.push(`<span class="muted">›</span>`, `<span class="here">Area ${state.path[1]}</span>`);
+	if (!state.path[0]) crumbs[0] = `<span class="here">District DEMO</span>`;
+
+	const officers = level === "district"
+		? DISTRICT.officers.map((o) => `<span>${o.role}: <b>${person(o.name)}</b></span>`).join("")
+		: `<span>${level === "division" ? "Division Director" : "Area Director"}: <b>${person(node.director)}</b>${node.director === "Demo Presenter" ? " <span class='muted'>(the demo account)</span>" : ""}</span>`;
+
+	const strip = `
+		<div class="strip">
+			<div><span class="eyebrow">Clubs on GavelUp</span><span class="big">${ratio(r.live, r.clubs)}</span>${meter(r.live / r.clubs)}</div>
+			<div><span class="eyebrow">Round 1 visits</span><span class="big">${ratio(r.v1, r.clubs)}</span>${meter(r.v1 / r.clubs)}<span class="small muted">Due 30 Nov · ${DAYS_TO_R1} days left</span></div>
+			<div><span class="eyebrow">Director posts filled</span><span class="big">${ratio(r.filled, r.posts)}</span>${meter(r.filled / r.posts)}</div>
+			<div><span class="eyebrow">Clubs to check on</span><span class="big">${r.flagged}<small> of ${r.live} on GavelUp</small></span><span class="small muted">One or more figures below threshold</span></div>
+		</div>`;
+
+	let table;
+	if (level === "area") {
+		const rows = node.clubs.map((c) => {
+			const h = c.h, f = flags(c);
+			const cells = h
+				? `<td class="num h">${h.held} / ${h.sched}</td><td class="num h">${h.roleFill}%</td><td class="num h">${h.attendance}</td><td class="num h">${h.officers} / ${OFFICES}</td><td class="num h">${h.dcp} / ${DCP_GOALS}</td><td class="num h">${h.renewed} / ${h.members}</td>`
+				: `<td class="h" colspan="6">No figures: this club is not on GavelUp</td>`;
+			return `<tr class="${c.live ? "" : "nolive"}">
+				<td><b>${c.name}</b>${c.real ? realTag(c) : tag(c)}${f.length ? `<div class="flag-list">${f.join(" · ")}</div>` : ""}</td>
+				<td>${c.live ? `<span class="tag chip-good">On GavelUp</span>` : `<span class="tag chip-off">Not on GavelUp</span>`}</td>
+				${cells}
+				<td>${c.v1 ? `<span class="tag chip-good">Done ${c.v1}</span>` : `<span class="tag chip-warn">Due</span>`}</td>
+				<td>${c.v2 ? `<span class="tag chip-good">Done</span>` : `<span class="tag chip-off">Opens Feb</span>`}</td>
+			</tr>`;
+		}).join("");
+		table = `<div class="table-box"><table>
+			<thead><tr><th>Club</th><th>Status</th><th class="num">Meetings</th><th class="num">Role fill</th><th class="num">Attendance</th><th class="num">Officers</th><th class="num">DCP</th><th class="num">Renewals</th><th>Visit 1</th><th>Visit 2</th></tr></thead>
+			<tbody>${rows}</tbody></table></div>`;
+	} else {
+		const kids = level === "district" ? node.divisions : node.areas;
+		const rows = kids.map((k) => {
+			const kr = rollup(k);
+			return `<tr class="drill ${kr.live ? "" : "nolive"}" data-drill="${k.id}">
+				<td><button type="button" data-drill="${k.id}">${k.label}</button>${k.real ? realTag(k) : tag(k)}</td>
+				<td>${person(k.director)}</td>
+				<td class="num">${kr.live} / ${kr.clubs}</td>
+				<td class="num">${kr.v1} / ${kr.clubs}</td>
+				<td class="num h">${pct(kr.roleFill == null ? null : kr.roleFill / 100)}</td>
+				<td class="num h">${one(kr.attendance)}</td>
+				<td class="num h">${pct(kr.officers)}</td>
+				<td class="num h">${one(kr.dcp)}</td>
+				<td class="num h">${pct(kr.renewals)}</td>
+				<td class="num">${kr.flagged ? `<span class="tag chip-warn">${kr.flagged}</span>` : `<span class="muted">0</span>`}</td>
+			</tr>`;
+		}).join("");
+		table = `<div class="table-box"><table>
+			<thead><tr><th>${level === "district" ? "Division" : "Area"}</th><th>${level === "district" ? "Division Director" : "Area Director"}</th><th class="num">On GavelUp</th><th class="num">Visit 1</th><th class="num">Role fill</th><th class="num">Attendance</th><th class="num">Officers filled</th><th class="num">DCP goals</th><th class="num">Renewed</th><th class="num">To check</th></tr></thead>
+			<tbody>${rows}</tbody></table></div>`;
+	}
+
+	const a1Note = node.id === "A1" ? `<div class="callout">In the live demo this level is the real Area Director page, <b>/area/A1</b>. Signed in as the demo account, the presenter records round 2 for the GavelUp Demo Club from there.</div>` : "";
+	return `
+		<nav class="crumbs" aria-label="Breadcrumb">${crumbs.join("")}</nav>
+		<div class="ledger-head">
+			<div><div class="eyebrow">${level === "district" ? "District roll-up" : level === "division" ? "Division roll-up" : "Area"}</div><h1>${node.label}${node.real ? realTag(node) : tag(node)}</h1></div>
+			<div class="officers">${officers}</div>
+		</div>
+		${a1Note}${strip}${table}
+		<p class="foot">Health figures (role fill, attendance, officers, DCP, renewals) average the clubs that are on GavelUp only. A club that is not on GavelUp counts toward visits and coverage but adds no health figures. ${level !== "area" ? "Select a row to see the level below." : ""}</p>`;
+}
+
+// ---- Variant B: Heat map ----------------------------------------------------------------
+const METRICS = {
+	live: { label: "On GavelUp", club: (c) => c.live ? 1 : 0, allClubs: true, show: (r) => `${r.live}/${r.clubs}`, roll: (r) => r.live / r.clubs },
+	v1: { label: "Visit 1", club: (c) => c.v1 ? 1 : 0, allClubs: true, show: (r) => `${r.v1}/${r.clubs}`, roll: (r) => r.v1 / r.clubs },
+	roleFill: { label: "Role fill", club: (c) => c.h ? c.h.roleFill / 100 : null, show: (r) => pct(r.roleFill == null ? null : r.roleFill / 100), roll: (r) => r.roleFill == null ? null : r.roleFill / 100 },
+	officers: { label: "Officers", club: (c) => c.h ? c.h.officers / OFFICES : null, show: (r) => pct(r.officers), roll: (r) => r.officers },
+	renewals: { label: "Renewals", club: (c) => c.h ? c.h.renewed / c.h.members : null, show: (r) => pct(r.renewals), roll: (r) => r.renewals },
+	dcp: { label: "DCP goals", club: (c) => c.h ? c.h.dcp / 5 : null, show: (r) => one(r.dcp), roll: (r) => r.dcp == null ? null : r.dcp / 5 },
+};
+const heatBg = (v) => `background: color-mix(in oklab, var(--heat-hi) ${Math.round(Math.max(0, Math.min(1, v)) * 100)}%, var(--heat-lo))`;
+function clubPanel(c) {
+	const a = c.area, h = c.h, f = flags(c);
+	return `<div><div class="eyebrow">${a.division.label} · ${a.label}</div><h3>${c.name}</h3>
+		<div>${c.real ? realTag(c) : tag(c)}</div></div>
+		${c.live ? `<span class="tag chip-good" style="justify-self:start">On GavelUp</span>` : `<span class="tag chip-off" style="justify-self:start">Not on GavelUp</span>`}
+		<dl class="kv">
+			<dt>Visit 1</dt><dd>${c.v1 ? `Done ${c.v1}` : "Due by 30 Nov"}</dd>
+			<dt>Visit 2</dt><dd>${c.v2 ? "Done" : "Opens February"}</dd>
+			${h ? `<dt>Meetings</dt><dd>${h.held} of ${h.sched}</dd>
+			<dt>Role fill</dt><dd>${h.roleFill}%</dd>
+			<dt>Attendance</dt><dd>${h.attendance}</dd>
+			<dt>Officers</dt><dd>${h.officers} of ${OFFICES}</dd>
+			<dt>DCP goals</dt><dd>${h.dcp} of ${DCP_GOALS}</dd>
+			<dt>Renewals</dt><dd>${h.renewed} of ${h.members}</dd>` : ""}
+		</dl>
+		${h ? (f.length ? `<div class="flag-list">${f.join(" · ")}</div>` : `<div class="small muted">No figures below threshold.</div>`) : `<p class="small muted" style="margin:0">A club that is not on GavelUp has no health figures. Its Area Director still records visits for it.</p>`}
+		<div class="small muted">Area Director: ${person(a.director)}</div>`;
+}
+function areaPanel(a) {
+	const r = rollup(a);
+	return `<div><div class="eyebrow">${a.division.label}</div><h3>${a.label}${a.real ? realTag(a) : tag(a)}</h3></div>
+		<div class="small">Area Director: <b>${person(a.director)}</b></div>
+		<dl class="kv">
+			<dt>On GavelUp</dt><dd>${r.live} of ${r.clubs}</dd>
+			<dt>Visit 1</dt><dd>${r.v1} of ${r.clubs}</dd>
+			<dt>Role fill</dt><dd>${pct(r.roleFill == null ? null : r.roleFill / 100)}</dd>
+			<dt>Officers filled</dt><dd>${pct(r.officers)}</dd>
+			<dt>Renewed</dt><dd>${pct(r.renewals)}</dd>
+			<dt>Avg DCP goals</dt><dd>${one(r.dcp)}</dd>
+			<dt>Clubs to check on</dt><dd>${r.flagged}</dd>
+		</dl>
+		<p class="small muted" style="margin:0">Health figures cover the ${plural(r.live, "club")} on GavelUp.</p>`;
+}
+function renderHeat() {
+	const m = METRICS[state.metric];
+	if (!state.sel) state.sel = { kind: "club", area: "A1", i: 0 };
+	const chips = Object.entries(METRICS).map(([k, v]) => `<button type="button" data-metric="${k}" aria-pressed="${k === state.metric}">${v.label}</button>`).join("");
+	const dr = rollup(DISTRICT);
+	const cols = DISTRICT.divisions.map((d) => {
+		const r = rollup(d);
+		const blocks = d.areas.map((a) => {
+			const ar = rollup(a);
+			const cells = a.clubs.map((c, i) => {
+				const v = m.club(c);
+				const sel = state.sel.kind === "club" && state.sel.area === a.id && state.sel.i === i;
+				const na = v == null;
+				return `<button type="button" class="cell ${na ? "na" : ""} ${sel ? "sel" : ""} ${flags(c).length ? "flagged" : ""}" ${na ? "" : `style="${heatBg(v)}"`} data-club="${a.id}:${i}" aria-label="${c.name}: ${na ? "not on GavelUp" : m.label}" title="${c.name}"></button>`;
+			}).join("");
+			const aSel = state.sel.kind === "area" && state.sel.area === a.id;
+			return `<div class="area-block" ${aSel ? `style="outline:2px solid var(--ink);outline-offset:2px"` : ""}>
+				<button type="button" class="area-name" data-area="${a.id}"><span>${a.label}${a.real ? realTag(a) : tag(a)}</span><span class="v">${m.show(ar)}</span></button>
+				<div class="cells">${cells}</div>
+				<div class="ad-line">AD: ${person(a.director)}</div>
+			</div>`;
+		}).join("");
+		return `<section class="div-col">
+			<header><h2>${d.label}</h2><span class="v">${m.show(r)}</span></header>
+			<div class="ad-line">Division Director: ${person(d.director)} ${d.real ? realTag(d) : tag(d)}</div>
+			${blocks}
+		</section>`;
+	}).join("");
+	let panel;
+	if (state.sel.kind === "club") {
+		const a = allAreas().find((x) => x.id === state.sel.area);
+		panel = clubPanel(a.clubs[state.sel.i]);
+	} else panel = areaPanel(allAreas().find((x) => x.id === state.sel.area));
+	return `
+		<div class="heat-top">
+			<div><div class="eyebrow">District roll-up · every club, one square</div><h1 style="font-size:clamp(24px,3.6vw,32px)">District DEMO: ${m.label} <span class="muted" style="font-family:var(--font-body);font-size:18px;font-weight:600">${m.show(dr)}</span></h1></div>
+			<div class="metric-chips" role="group" aria-label="Colour squares by">${chips}</div>
+		</div>
+		<div class="heat-layout">
+			<div>
+				<div class="heat-cols">${cols}</div>
+				<div class="legend">
+					<span><span class="ramp"></span> ${m.allClubs ? "no → yes" : "low → high"}</span>
+					${m.allClubs ? "" : `<span><span class="sw na"></span>Not on GavelUp, no figures</span>`}
+					<span><span class="dot"></span>A figure is below threshold</span>
+					<span>Select a square for the club, an area name for the area.</span>
+				</div>
+			</div>
+			<aside class="panel" aria-live="polite">${panel}</aside>
+		</div>`;
+}
+
+// ---- Variant C: Briefing ----------------------------------------------------------------
+function renderBriefing() {
+	const node = state.scope === "DEMO" ? DISTRICT : DISTRICT.divisions.find((d) => d.id === state.scope);
+	const r = rollup(node), areas = areasOf(node), clubs = clubsOf(node);
+	const tabs = [["DEMO", "District DEMO"], ...DISTRICT.divisions.map((d) => [d.id, d.label])]
+		.map(([k, l]) => `<button type="button" role="tab" data-scope="${k}" aria-selected="${k === state.scope}">${l}</button>`).join("");
+	const roleWord = node === DISTRICT ? "District Director" : "Division Director";
+
+	const behind = areas.map((a) => ({ a, r: rollup(a) })).filter((x) => x.r.v1 < x.r.clubs).sort((x, y) => (x.r.v1 / x.r.clubs) - (y.r.v1 / y.r.clubs));
+	const underHalf = behind.filter((x) => x.r.v1 / x.r.clubs < 0.5).length;
+	const vacancies = [];
+	if (node === DISTRICT) DISTRICT.officers.forEach((o) => { if (!o.name) vacancies.push({ what: o.role, where: "District DEMO" }); });
+	const divs = node === DISTRICT ? DISTRICT.divisions : [node];
+	divs.forEach((d) => { if (!d.director) vacancies.push({ what: "Division Director", where: d.label }); d.areas.forEach((a) => { if (!a.director) vacancies.push({ what: "Area Director", where: `${a.label}, ${d.label}` }); }); });
+	const flagged = clubs.filter((c) => flags(c).length);
+	const notLive = areas.map((a) => ({ a, n: a.clubs.filter((c) => !c.live).length })).filter((x) => x.n);
+	const strong = clubs.filter((c) => c.live && !flags(c).length).sort((x, y) => (y.h.roleFill + y.h.dcp * 10) - (x.h.roleFill + x.h.dcp * 10)).slice(0, 3);
+
+	const lede = `
+		<p>${node.label} has <em>${plural(r.clubs, "club")}</em> in ${plural(r.areas, "area")}. ${r.live} are on GavelUp, so the health figures below speak for ${pct(r.live / r.clubs)} of them.</p>
+		<p>Round 1 visits stand at <em>${r.v1} of ${r.clubs}</em> with ${DAYS_TO_R1} days to the 30 November deadline${underHalf ? `; ${plural(underHalf, "area")} ${underHalf === 1 ? "is" : "are"} under halfway` : ""}.</p>
+		<p>${vacancies.length ? `<em>${plural(vacancies.length, "post")}</em> ${vacancies.length === 1 ? "is" : "are"} vacant` : "Every director post is filled"}, and ${plural(flagged.length, "club")} on GavelUp ${flagged.length === 1 ? "has" : "have"} a figure worth a call.</p>`;
+
+	const li = (sev, what, detail, who) => `<li><span class="sev ${sev}"></span><div><div class="what">${what}</div>${detail ? `<div class="small muted">${detail}</div>` : ""}</div><div class="who">${who || ""}</div></li>`;
+	const sect = (title, items, empty) => `<section class="sect"><h2>${title} <span class="count">${items.length}</span></h2>${items.length ? `<ul class="items">${items.join("")}</ul>` : `<p class="small muted" style="margin:0">${empty}</p>`}</section>`;
+
+	const visitItems = behind.map(({ a, r: ar }) => li(ar.v1 / ar.clubs < 0.5 ? "bad" : "", `${a.label}: ${ar.clubs - ar.v1} of ${ar.clubs} clubs still to visit${a.real ? realTag(a) : tag(a)}`,
+		a.clubs.filter((c) => !c.v1).map((c) => c.name).join(", "), a.director ? `AD ${a.director}` : `<span class="vacant">No AD</span>`));
+	const vacItems = vacancies.map((v) => li("bad", v.what, v.where, ""));
+	const flagItems = flagged.map((c) => li("", `${c.name}${c.real ? realTag(c) : tag(c)}`, flags(c).join(" · "), `${c.area.label} · ${c.area.director ? `AD ${c.area.director}` : "no AD"}`));
+	const notLiveItems = notLive.map(({ a, n }) => li("off", `${a.label}: ${n} of ${a.clubs.length} clubs not on GavelUp`, a.clubs.filter((c) => !c.live).map((c) => c.name).join(", "), a.director ? `AD ${a.director}` : ""));
+	const strongItems = strong.map((c) => li("good", c.name + (c.real ? realTag(c) : tag(c)), `Role fill ${c.h.roleFill}% · ${c.h.officers} of ${OFFICES} officers · ${c.h.dcp} DCP goals`, c.area.label));
+
+	const kids = node === DISTRICT ? DISTRICT.divisions : node.areas;
+	const scRows = kids.map((k) => {
+		const kr = rollup(k);
+		const bar = (label, x, txt) => `<span>${label}</span><span class="b"><i style="width:${Math.round((x || 0) * 100)}%"></i></span><span class="n">${txt}</span>`;
+		return `<div class="sc-row"><div class="top"><b>${k.label}</b><span class="muted">${k.director ? k.director : `<span class="vacant">Vacant</span>`}</span></div>
+			<div class="bars">${bar("On GavelUp", kr.live / kr.clubs, `${kr.live}/${kr.clubs}`)}${bar("Visit 1", kr.v1 / kr.clubs, `${kr.v1}/${kr.clubs}`)}${bar("Role fill", kr.roleFill == null ? 0 : kr.roleFill / 100, kr.roleFill == null ? "—" : Math.round(kr.roleFill) + "%")}</div></div>`;
+	}).join("");
+
+	return `
+		<div class="scope-tabs" role="tablist" aria-label="Whose briefing">${tabs}</div>
+		<div class="brief">
+			<div class="brief-main">
+				<div><div class="eyebrow">Briefing for the ${roleWord}${node.director ? `, ${node.director}` : node === DISTRICT ? `, ${DISTRICT.officers[0].name}` : " (post vacant)"}</div></div>
+				<div class="lede">${lede}</div>
+				${sect("Visits due before 30 November", visitItems, "Every club has had its round 1 visit.")}
+				${sect("Vacant posts", vacItems, "Every post is filled.")}
+				${sect("Clubs worth a call", flagItems, "No club on GavelUp has a figure below threshold.")}
+				${sect("Not on GavelUp yet", notLiveItems, "Every club is on GavelUp.")}
+				${sect("Going well", strongItems, "No club on GavelUp is clear of every threshold yet.")}
+			</div>
+			<aside class="scorecard">
+				<h3>${node === DISTRICT ? "By division" : "By area"}</h3>
+				${scRows}
+				<p class="small muted" style="margin:0">Role fill averages clubs on GavelUp only.</p>
+			</aside>
+		</div>`;
+}
+
+// ---- Wiring ---------------------------------------------------------------------------
+const view = document.getElementById("view");
+function render() {
+	const v = VARIANTS.find((x) => x.key === state.variant) || VARIANTS[0];
+	view.innerHTML = v.render();
+	document.getElementById("vlabel").innerHTML = `${v.key.toUpperCase()} <span>— ${v.name}</span>`;
+}
+function setVariant(key) {
+	state.variant = key;
+	try { history.replaceState(null, "", `#${key}`); } catch (e) { location.hash = key; }
+	render();
+}
+function step(dir) {
+	const i = VARIANTS.findIndex((x) => x.key === state.variant);
+	setVariant(VARIANTS[(i + dir + VARIANTS.length) % VARIANTS.length].key);
+}
+document.getElementById("prev").addEventListener("click", () => step(-1));
+document.getElementById("next").addEventListener("click", () => step(1));
+document.addEventListener("keydown", (e) => {
+	const t = e.target;
+	if (t && (t.matches("input, textarea, select") || t.isContentEditable)) return;
+	if (e.key === "ArrowLeft") step(-1);
+	if (e.key === "ArrowRight") step(1);
+});
+view.addEventListener("click", (e) => {
+	const el = e.target.closest("[data-path],[data-drill],[data-metric],[data-club],[data-area],[data-scope]");
+	if (!el) return;
+	if (el.dataset.path !== undefined) state.path = el.dataset.path ? [el.dataset.path] : [];
+	else if (el.dataset.drill) state.path = [...state.path, el.dataset.drill];
+	else if (el.dataset.metric) state.metric = el.dataset.metric;
+	else if (el.dataset.club) { const [area, i] = el.dataset.club.split(":"); state.sel = { kind: "club", area, i: Number(i) }; }
+	else if (el.dataset.area) state.sel = { kind: "area", area: el.dataset.area };
+	else if (el.dataset.scope) state.scope = el.dataset.scope;
+	render();
+});
+const mark = document.getElementById("mark-sample");
+mark.addEventListener("change", () => document.body.classList.toggle("mark-sample", mark.checked));
+document.body.classList.add("mark-sample");
+const h = (location.hash || "").replace("#", "");
+if (VARIANTS.some((x) => x.key === h)) state.variant = h;
+render();
+</script>
