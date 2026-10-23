@@ -4,6 +4,7 @@ import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { roleFreedDutyText } from "#/lib/role-duty-copy";
 
 /**
  * Scene 1 of `/tour`: the meeting page's role list on a phone, a facsimile of
@@ -33,6 +34,9 @@ type Slot = {
 	speaker?: boolean;
 	title?: string;
 	pathway?: string;
+	/** The shape of `AgendaSlot.description`: shown under the sheet's title. */
+	description: string;
+	/** The speech the evaluator will evaluate: its title, as the real row shows. */
 	evaluates?: string;
 	min?: number;
 	max?: number;
@@ -41,7 +45,13 @@ type Slot = {
 };
 
 const INITIAL_SLOTS: readonly Slot[] = [
-	{ id: "tm", role: "Toastmaster", holder: "Marcus Lee", seeded: true },
+	{
+		id: "tm",
+		role: "Toastmaster",
+		holder: "Marcus Lee",
+		description: "Runs the meeting and keeps it moving.",
+		seeded: true,
+	},
 	{
 		id: "s1",
 		role: "Speaker 1",
@@ -49,19 +59,40 @@ const INITIAL_SLOTS: readonly Slot[] = [
 		speaker: true,
 		title: "Small Boats",
 		pathway: "Dynamic Leadership",
+		description: "Deliver a prepared speech from your Pathways project.",
 		min: 5,
 		max: 7,
 		seeded: true,
 	},
-	{ id: "s2", role: "Speaker 2", holder: null, speaker: true, min: 5, max: 7 },
+	{
+		id: "s2",
+		role: "Speaker 2",
+		holder: null,
+		speaker: true,
+		description: "Deliver a prepared speech from your Pathways project.",
+		min: 5,
+		max: 7,
+	},
 	{
 		id: "ev",
 		role: "Evaluator 1",
 		holder: null,
-		evaluates: "Speaker 1",
+		description: "Give a speaker constructive feedback on their speech.",
+		evaluates: "“Small Boats”",
 	},
-	{ id: "timer", role: "Timer", holder: null },
-	{ id: "ah", role: "Ah-Counter", holder: "Ana Ruiz", seeded: true },
+	{
+		id: "timer",
+		role: "Timer",
+		holder: null,
+		description: "Time each speaker and show the green, yellow and red cards.",
+	},
+	{
+		id: "ah",
+		role: "Ah-Counter",
+		holder: "Ana Ruiz",
+		description: "Count filler words and report them at the end.",
+		seeded: true,
+	},
 ];
 
 export const CLAIM_DEMO_NAMES = [
@@ -69,6 +100,15 @@ export const CLAIM_DEMO_NAMES = [
 	"Sam Whitfield",
 	"Lena Park",
 ] as const;
+
+/** A couple of Pathways projects, standing in for the real project picker. */
+const PROJECTS = [
+	"Presentation Mastery · Level 2",
+	"Dynamic Leadership · Level 3",
+] as const;
+
+/** What initial focus and the Tab trap both treat as a stop; one list so they agree. */
+export const FOCUSABLE = "input, select, button:not([disabled])";
 
 type Stage = "idle" | "who" | "sheet";
 type FocusTarget = { id: string; kind: "claim" | "release" } | null;
@@ -91,9 +131,7 @@ function FrameOverlay({
 	const panel = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
-		const first = panel.current?.querySelector<HTMLElement>(
-			"input, button, [href]",
-		);
+		const first = panel.current?.querySelector<HTMLElement>(FOCUSABLE);
 		first?.focus();
 	}, []);
 
@@ -104,9 +142,7 @@ function FrameOverlay({
 			return;
 		}
 		if (e.key !== "Tab") return;
-		const items = panel.current?.querySelectorAll<HTMLElement>(
-			"input, button:not([disabled])",
-		);
+		const items = panel.current?.querySelectorAll<HTMLElement>(FOCUSABLE);
 		if (!items || items.length === 0) return;
 		const firstEl = items[0];
 		const lastEl = items[items.length - 1];
@@ -160,6 +196,8 @@ export function ClaimDemo() {
 	const [stage, setStage] = useState<Stage>("idle");
 	const [pendingId, setPendingId] = useState<string | null>(null);
 	const [title, setTitle] = useState("");
+	const [minutes, setMinutes] = useState({ min: "5", max: "7" });
+	const [project, setProject] = useState("");
 	const [announcement, setAnnouncement] = useState("");
 	const [toast, setToast] = useState("");
 	const [focusTarget, setFocusTarget] = useState<FocusTarget>(null);
@@ -174,7 +212,7 @@ export function ClaimDemo() {
 
 	useEffect(() => {
 		if (!toast) return;
-		const id = setTimeout(() => setToast(""), 2500);
+		const id = setTimeout(() => setToast(""), 4000);
 		return () => clearTimeout(id);
 	}, [toast]);
 
@@ -190,6 +228,8 @@ export function ClaimDemo() {
 		opener.current = el;
 		setPendingId(slot.id);
 		setTitle("");
+		setMinutes({ min: String(slot.min ?? 5), max: String(slot.max ?? 7) });
+		setProject("");
 		setStage(me ? "sheet" : "who");
 	}
 
@@ -207,6 +247,9 @@ export function ClaimDemo() {
 	function confirmClaim() {
 		if (!pending || !me) return;
 		const id = pending.id;
+		const min = Number(minutes.min);
+		const max = Number(minutes.max);
+		const hasWindow = min > 0 && max > 0;
 		setSlots((all) =>
 			all.map((s) =>
 				s.id === id
@@ -214,13 +257,20 @@ export function ClaimDemo() {
 							...s,
 							holder: me,
 							title: s.speaker ? title.trim() || "TBA" : s.title,
+							pathway: s.speaker ? project || undefined : s.pathway,
+							min: s.speaker && hasWindow ? min : s.min,
+							max: s.speaker && hasWindow ? max : s.max,
 						}
 					: s,
 			),
 		);
 		setStage("idle");
 		setPendingId(null);
-		say(`You claimed ${pending.role}.`);
+		say(
+			pending.speaker
+				? "You're booked to speak!"
+				: `You're on as ${pending.role}.`,
+		);
 		setFocusTarget({ id, kind: "release" });
 	}
 
@@ -228,11 +278,20 @@ export function ClaimDemo() {
 		setSlots((all) =>
 			all.map((s) =>
 				s.id === slot.id
-					? { ...s, holder: null, title: s.seeded ? s.title : undefined }
+					? s.seeded
+						? { ...s, holder: null }
+						: {
+								...s,
+								holder: null,
+								title: undefined,
+								pathway: undefined,
+								min: s.speaker ? 5 : undefined,
+								max: s.speaker ? 7 : undefined,
+							}
 					: s,
 			),
 		);
-		say(`You released ${slot.role}.`);
+		say(roleFreedDutyText(1));
 		setFocusTarget({ id: slot.id, kind: "claim" });
 	}
 
@@ -257,9 +316,7 @@ export function ClaimDemo() {
 						</div>
 						<div className="mt-2.5">
 							<div className="mb-1 flex items-center justify-between text-muted-foreground text-xs">
-								<span>
-									Roles filled: {filled} of {slots.length}
-								</span>
+								<span>Roles filled</span>
 								<span>{Math.round((filled / slots.length) * 100)}%</span>
 							</div>
 							<div
@@ -390,9 +447,22 @@ export function ClaimDemo() {
 								))}
 							</div>
 							<div className="space-y-1 text-sm">
-								<p className="font-medium">Don't see your name?</p>
+								<p className="font-medium text-foreground">
+									Don't see your name?
+								</p>
 								<p className="text-muted-foreground">
-									Visiting us today? Sign the guest book and we'll say hello.
+									Visiting us today?{" "}
+									{/* A button styled as the real link: this is a demo, so it
+									    must not navigate. */}
+									<button
+										type="button"
+										className="font-medium text-primary hover:underline"
+									>
+										Sign the guest book
+									</button>{" "}
+									and we'll say hello.
+								</p>
+								<p className="text-muted-foreground">
 									Just joined the club? Ask an officer to add you to the roster.
 								</p>
 							</div>
@@ -403,16 +473,12 @@ export function ClaimDemo() {
 						<FrameOverlay
 							align="bottom"
 							title={pending.role}
-							description={
-								pending.speaker
-									? undefined
-									: `You'll be the ${pending.role} on Thursday.`
-							}
+							description={pending.description}
 							onClose={closeOverlay}
 						>
 							{pending.speaker ? (
 								<form
-									className="space-y-3"
+									className="space-y-4"
 									onSubmit={(e) => {
 										e.preventDefault();
 										confirmClaim();
@@ -427,32 +493,83 @@ export function ClaimDemo() {
 											onChange={(e) => setTitle(e.target.value)}
 											placeholder="TBA if not decided yet"
 										/>
-										<p className="text-muted-foreground text-xs">
-											Min {pending.min} · Max {pending.max} minutes
-										</p>
 									</div>
-									<div className="flex justify-end gap-2">
+									<div className="space-y-2">
+										<Label htmlFor="claim-demo-project">Pathways project</Label>
+										<select
+											id="claim-demo-project"
+											value={project}
+											onChange={(e) => setProject(e.target.value)}
+											className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+										>
+											<option value="">Choose a project</option>
+											{PROJECTS.map((p) => (
+												<option key={p} value={p}>
+													{p}
+												</option>
+											))}
+										</select>
+									</div>
+									<div className="grid grid-cols-2 gap-3">
+										<div className="space-y-2">
+											<Label htmlFor="claim-demo-min">Min minutes</Label>
+											<Input
+												id="claim-demo-min"
+												name="minMinutes"
+												type="number"
+												inputMode="numeric"
+												min={1}
+												value={minutes.min}
+												onChange={(e) =>
+													setMinutes((m) => ({ ...m, min: e.target.value }))
+												}
+											/>
+										</div>
+										<div className="space-y-2">
+											<Label htmlFor="claim-demo-max">Max minutes</Label>
+											<Input
+												id="claim-demo-max"
+												name="maxMinutes"
+												type="number"
+												inputMode="numeric"
+												min={1}
+												value={minutes.max}
+												onChange={(e) =>
+													setMinutes((m) => ({ ...m, max: e.target.value }))
+												}
+											/>
+										</div>
+									</div>
+									<div className="flex flex-col gap-2">
+										<Button type="submit" className="w-full">
+											Claim speaking slot
+										</Button>
 										<Button
 											type="button"
-											variant="outline"
+											variant="ghost"
+											className="w-full"
 											onClick={closeOverlay}
 										>
 											Cancel
 										</Button>
-										<Button type="submit">Claim speaking slot</Button>
 									</div>
 								</form>
 							) : (
-								<div className="flex justify-end gap-2">
+								<div className="flex flex-col gap-2">
 									<Button
 										type="button"
-										variant="outline"
+										className="w-full"
+										onClick={confirmClaim}
+									>
+										Claim
+									</Button>
+									<Button
+										type="button"
+										variant="ghost"
+										className="w-full"
 										onClick={closeOverlay}
 									>
 										Cancel
-									</Button>
-									<Button type="button" onClick={confirmClaim}>
-										Claim
 									</Button>
 								</div>
 							)}

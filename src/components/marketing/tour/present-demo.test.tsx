@@ -16,6 +16,7 @@ describe("PresentDemo", () => {
 		render(<PresentDemo />);
 		expect(screen.getByText("1 / 5")).toBeTruthy();
 		expect(screen.getByText("Harbor City Speakers")).toBeTruthy();
+		expect(screen.getByText("Start time: 7:00 PM")).toBeTruthy();
 		expect(live()).toBe("Slide 1 of 5: Title slide");
 	});
 
@@ -23,12 +24,13 @@ describe("PresentDemo", () => {
 		render(<PresentDemo />);
 		fireEvent.click(next());
 		expect(screen.getByText("2 / 5")).toBeTruthy();
-		expect(screen.getByText("Speech Title:")).toBeTruthy();
+		expect(screen.getByText("Time: 5–7 minutes")).toBeTruthy();
 		expect(live()).toBe("Slide 2 of 5: Speech");
 		fireEvent.click(next());
 		expect(live()).toBe("Slide 3 of 5: Vote for Best Speaker");
 		fireEvent.click(next());
 		expect(screen.getByText("Scan to grab a role")).toBeTruthy();
+		expect(screen.getAllByText(/Open: grab it!/)).toHaveLength(3);
 		fireEvent.click(prev());
 		expect(screen.getByText("3 / 5")).toBeTruthy();
 	});
@@ -38,6 +40,10 @@ describe("PresentDemo", () => {
 		for (let i = 0; i < 8; i++) fireEvent.click(next());
 		expect(screen.getByText("5 / 5")).toBeTruthy();
 		expect(screen.getByText("Thank You")).toBeTruthy();
+		expect(
+			screen.getByText("CONGRATULATIONS on another great learning session!"),
+		).toBeTruthy();
+		expect(screen.getByText("Next Meeting:")).toBeTruthy();
 		expect(live()).toBe("Slide 5 of 5: Thank You");
 	});
 

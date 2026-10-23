@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { Button } from "#/components/ui/button";
 import {
-	TIMER_BAND_LABEL,
-	type TimerBand,
-	timerSignal,
-} from "#/lib/timer-signal";
+	MarkDot,
+	SCREEN_BG_CLASS,
+	SCREEN_QUIET_CLASS,
+	SCREEN_SOLID_CLASS,
+	SCREEN_TEXT_CLASS,
+} from "#/components/timer/timer-clock";
+import { Button } from "#/components/ui/button";
+import { TIMER_BAND_LABEL, timerSignal } from "#/lib/timer-signal";
 import { formatElapsedSeconds, formatStopwatch } from "#/lib/timer-state";
 import { TIMING_VERDICT_LABEL, timingVerdict } from "#/lib/timing-verdict";
 import {
@@ -18,7 +21,10 @@ import { cn } from "#/lib/utils";
  * `screen` variant of `SegmentClock` (`timer-clock.tsx`). The card fills with
  * the band's colour, and the band, the marks and the "Qualifies" window all
  * come from the same modules the real clock reads (`timer-signal.ts`,
- * `timing-window.ts`, `timing-verdict.ts`), so this cannot drift from it.
+ * `timing-window.ts`, `timing-verdict.ts`) and the band colours, button inks
+ * and mark dots are imported from `timer-clock.tsx`, so a change to any of
+ * them reaches this demo too. What is NOT shared is the layout and the state
+ * machine (the real clock is driven by `timer-state`'s reducer and wall time).
  *
  * Local state only; nothing is recorded. It runs at {@link SPEED}x so a visitor
  * reaches green in 15 seconds instead of five minutes, and says so on the card.
@@ -34,30 +40,6 @@ export const TIMER_DEMO_SPEED = 20;
 const MARKS = { green: 5, yellow: 6, red: 7 };
 const TICK_MS = 100;
 
-const BG: Record<TimerBand, string> = {
-	under: "bg-card",
-	green: "bg-[#1f7a46]",
-	yellow: "bg-[#f2c230]",
-	red: "bg-[#c0262d]",
-	over: "bg-[#7a1218]",
-};
-const TEXT: Record<TimerBand, string> = {
-	under: "text-foreground",
-	green: "text-white",
-	yellow: "text-[#1a1405]",
-	red: "text-white",
-	over: "text-white",
-};
-const SOLID: Record<TimerBand, string> = {
-	under: "",
-	green: "bg-white text-[#1f7a46] hover:bg-white/90",
-	yellow: "bg-[#1a1405] text-[#f2c230] hover:bg-[#1a1405]/90",
-	red: "bg-white text-[#c0262d] hover:bg-white/90",
-	over: "bg-white text-[#7a1218] hover:bg-white/90",
-};
-const QUIET =
-	"border-current/40 bg-transparent text-inherit shadow-none hover:bg-black/10 hover:text-inherit dark:border-current/40 dark:bg-transparent dark:hover:bg-black/10";
-
 type Phase = "idle" | "running" | "paused" | "stopped";
 
 export function TimerDemo() {
@@ -68,7 +50,9 @@ export function TimerDemo() {
 	const [startedAt, setStartedAt] = useState(0);
 	const [now, setNow] = useState(0);
 	const primaryRef = useRef<HTMLButtonElement>(null);
-	const [refocus, setRefocus] = useState(false);
+	// Set by a button press; the effect below then moves focus to the new
+	// primary button. A ref, so the first render never steals focus.
+	const refocus = useRef(false);
 
 	useEffect(() => {
 		if (phase !== "running") return;
@@ -78,40 +62,41 @@ export function TimerDemo() {
 
 	// The button that held focus is replaced by a different one on every phase
 	// change, so focus follows to the new primary button.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `phase` is the trigger.
 	useEffect(() => {
-		if (!refocus) return;
+		if (!refocus.current) return;
+		refocus.current = false;
 		primaryRef.current?.focus();
-		setRefocus(false);
-	}, [refocus]);
+	}, [phase]);
 
 	const elapsedMs =
 		phase === "running"
 			? banked + Math.max(0, now - startedAt) * TIMER_DEMO_SPEED
 			: banked;
 	const band = timerSignal(elapsedMs, MARKS, "speech");
-	const window = qualifyingWindowForMarks(MARKS);
+	const qualifying = qualifyingWindowForMarks(MARKS);
 
 	function start() {
 		const t = Date.now();
 		setStartedAt(t);
 		setNow(t);
 		setPhase("running");
-		setRefocus(true);
+		refocus.current = true;
 	}
 	function pause() {
 		setBanked(elapsedMs);
 		setPhase("paused");
-		setRefocus(true);
+		refocus.current = true;
 	}
 	function stop() {
 		setBanked(elapsedMs);
 		setPhase("stopped");
-		setRefocus(true);
+		refocus.current = true;
 	}
 	function reset() {
 		setBanked(0);
 		setPhase("idle");
-		setRefocus(true);
+		refocus.current = true;
 	}
 
 	const seconds = Math.floor(elapsedMs / 1000);
@@ -120,9 +105,9 @@ export function TimerDemo() {
 		{ markGreen: MARKS.green, markRed: MARKS.red },
 		"speech",
 	);
-	const text = TEXT[band];
-	const solid = cn(SOLID[band], "min-h-11 flex-1");
-	const quiet = cn(QUIET, "min-h-11 flex-1");
+	const text = SCREEN_TEXT_CLASS[band];
+	const solid = cn(SCREEN_SOLID_CLASS[band], "min-h-11 flex-1");
+	const quiet = cn(SCREEN_QUIET_CLASS, "min-h-11 flex-1");
 
 	return (
 		<section
@@ -131,17 +116,28 @@ export function TimerDemo() {
 		>
 			<div
 				data-band={band}
-				className={`flex min-h-[22rem] flex-col items-center justify-center gap-3 rounded-2xl border border-[var(--line)] px-4 py-6 text-center motion-safe:transition-colors motion-safe:duration-300 motion-safe:ease-out ${BG[band]} ${text}`}
+				className={`flex min-h-[22rem] flex-col items-center justify-center gap-3 rounded-2xl border border-[var(--line)] px-4 py-6 text-center motion-safe:transition-colors motion-safe:duration-300 motion-safe:ease-out ${SCREEN_BG_CLASS[band]} ${text}`}
 			>
 				<h3 className="font-extrabold text-[11.5px] uppercase tracking-[0.08em] opacity-80">
 					Speaker 2 · Priya Nair
 				</h3>
-				<p className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 font-medium text-xs tabular-nums">
-					<span>Green {formatTimingClock(MARKS.green)}</span>
-					<span>Yellow {formatTimingClock(MARKS.yellow)}</span>
-					<span>Red {formatTimingClock(MARKS.red)}</span>
-					{window ? (
-						<span className="opacity-80">Qualifies {window.range}</span>
+				<p
+					className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 font-medium text-sm tabular-nums ${text}`}
+				>
+					<span className="inline-flex items-center gap-1.5">
+						<MarkDot band={band} className="bg-[#1f7a46]" />
+						Green {formatTimingClock(MARKS.green)}
+					</span>
+					<span className="inline-flex items-center gap-1.5">
+						<MarkDot band={band} className="bg-[#f2c230]" />
+						Yellow {formatTimingClock(MARKS.yellow)}
+					</span>
+					<span className="inline-flex items-center gap-1.5">
+						<MarkDot band={band} className="bg-[#c0262d]" />
+						Red {formatTimingClock(MARKS.red)}
+					</span>
+					{qualifying ? (
+						<span className="opacity-80">Qualifies {qualifying.range}</span>
 					) : null}
 				</p>
 				<div className="flex flex-col items-center gap-1">

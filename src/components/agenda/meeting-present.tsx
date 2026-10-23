@@ -27,6 +27,16 @@ import {
 	slideName,
 } from "#/lib/slide-layout";
 import {
+	GOLD,
+	GROUND,
+	INK,
+	MAROON,
+	MUTED,
+	NAVY,
+	NAVY_GRADIENT_BOTTOM,
+	NAVY_GRADIENT_TOP,
+} from "#/lib/slide-palette";
+import {
 	cqw,
 	SLIDE_BODY_BOTTOM_PCT,
 	SLIDE_FOOTER_HEIGHT_PCT,
@@ -35,16 +45,6 @@ import {
 	SLIDE_INSET_PCT,
 } from "#/lib/slide-spacing";
 import { getVoteParticipation } from "#/server/voting";
-
-// Official brand palette (sampled from the wordmark) so chrome matches the logo.
-const INK = "#2b2b2b";
-const MAROON = "#770D29";
-const NAVY = "#004062";
-const GROUND = "#f3f4f4";
-const MUTED = "#565656";
-const GOLD = "#f3dd94";
-const NAVY_GRADIENT_TOP = "#0a4f78";
-const NAVY_GRADIENT_BOTTOM = "#002a41";
 
 /** Overview grid width. Fixed rather than responsive so ↑/↓ move by exactly one
  *  row, and so the row arithmetic lives in one place the tests can pin. Row

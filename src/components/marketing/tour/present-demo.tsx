@@ -1,6 +1,16 @@
 import { QRCodeSVG } from "qrcode.react";
 import type { ReactNode } from "react";
 import { useState } from "react";
+import {
+	GOLD,
+	GROUND,
+	INK,
+	MAROON,
+	MUTED,
+	NAVY,
+	NAVY_GRADIENT_BOTTOM,
+	NAVY_GRADIENT_TOP,
+} from "#/lib/slide-palette";
 
 /**
  * Scene 3 of `/tour`: a small working deck, a facsimile of present mode
@@ -9,8 +19,8 @@ import { useState } from "react";
  *
  * The colours are the SLIDE'S own, in both themes, like a projector: a deck
  * does not follow the app's light/dark switch, so raw hex is correct here and
- * theme tokens would be wrong. The values are copied from
- * `meeting-present.tsx` (which does not export them).
+ * theme tokens would be wrong. They come from `#/lib/slide-palette`, the same
+ * module the real deck reads.
  *
  * Local state only. The QR codes are real codes (`qrcode.react`, the encoder
  * present mode itself uses) of the public `/tour` URL: deterministic, so SSR
@@ -20,93 +30,107 @@ import { useState } from "react";
  * Left/PageUp back, clamped at both ends. The two invisible side zones are real
  * buttons, so a pointer or a screen reader has the same two moves.
  */
-const INK = "#2b2b2b";
-const MAROON = "#770D29";
-const NAVY = "#004062";
-const GROUND = "#f3f4f4";
-const GOLD = "#f3dd94";
-const NAVY_GRADIENT = "linear-gradient(160deg, #0a4f78, #002a41)";
-
 const CLUB = "Harbor City Speakers";
-const FOOTER_DATE = "Oct 30";
+const FOOTER_DATE = "October 29, 2026";
 const QR_URL = "https://gavelup.app/tour";
 
-type Slide = { title: string; body: ReactNode; dark?: boolean };
+type Slide = {
+	title: string;
+	body: ReactNode;
+	/** "splash" fills the frame with no header or footer, as `Splash` does. */
+	chrome: "content" | "splash-light" | "splash-dark";
+};
 
-function Qr({ caption }: { caption: string }) {
+function Qr({ caption, edge }: { caption: string; edge: string }) {
 	return (
-		<div className="shrink-0 text-center">
+		<div className="flex shrink-0 flex-col items-center gap-[1cqw]">
 			<div
 				aria-hidden
-				className="mx-auto rounded-md bg-white p-[1.2cqw]"
-				style={{ width: "17cqw", height: "17cqw" }}
+				className="rounded-[1.2cqw] bg-white p-[1.2cqw]"
+				style={{ width: edge, height: edge }}
 			>
 				<QRCodeSVG
 					value={QR_URL}
 					marginSize={0}
-					style={{ width: "100%", height: "100%" }}
+					style={{ display: "block", width: "100%", height: "100%" }}
 				/>
 			</div>
-			<p className="mt-[1cqw] font-semibold text-[2.2cqw]">{caption}</p>
+			<p className="font-semibold text-[2.2cqw]">{caption}</p>
+		</div>
+	);
+}
+
+/** `MUTED` sub-lines of a light splash, as `LineView`'s "muted" role. */
+function Muted({ children }: { children: ReactNode }) {
+	return (
+		<div className="text-[2.5cqw] leading-snug" style={{ color: MUTED }}>
+			{children}
 		</div>
 	);
 }
 
 const BULLET = "flex gap-[1cqw]";
+const MAROON_BOLD = { fontWeight: 800, color: MAROON } as const;
 
 const SLIDES: readonly Slide[] = [
 	{
 		title: "Title slide",
-		dark: true,
+		chrome: "splash-light",
 		body: (
-			<div className="px-[6cqw] text-center">
+			<>
 				<div
-					className="font-display font-semibold text-[6cqw] leading-tight"
-					style={{ color: GOLD }}
+					className="font-display font-semibold text-[6cqw] tracking-[-0.01em]"
+					style={{ color: NAVY }}
+				>
+					Toastmasters
+				</div>
+				<div
+					className="my-[3.4cqw] h-px"
+					style={{ width: "58cqw", background: NAVY }}
+				/>
+				<div
+					className="font-extrabold text-[6.4cqw] leading-tight"
+					style={{ color: INK }}
 				>
 					{CLUB}
 				</div>
-				<p className="mt-[2cqw] text-[2.2cqw] leading-snug text-white/85">
-					District 57 · Club #1234567 · Meeting #412
-					<br />
-					Thursday, October 30 · Start time 7:00 PM
-				</p>
-			</div>
+				<div className="mt-[2.6cqw] flex flex-col gap-[0.7cqw]">
+					<Muted>District 57</Muted>
+					<Muted>Club #1234567</Muted>
+					<Muted>Meeting #412</Muted>
+					<Muted>Thursday, October 29, 2026</Muted>
+					<Muted>Start time: 7:00 PM</Muted>
+				</div>
+			</>
 		),
 	},
 	{
 		title: "Speech",
+		chrome: "content",
 		body: (
 			<ul className="flex flex-col gap-[1.2cqw] text-[3cqw] leading-snug">
 				<li className={BULLET}>
 					<span aria-hidden>•</span>
-					<span>
-						<b>Speaker:</b> Priya Nair
-					</span>
+					<span>Speaker: Priya Nair</span>
 				</li>
 				<li className={BULLET}>
 					<span aria-hidden>•</span>
-					<span>
-						<b>Speech Title:</b> “What the Tide Leaves”
-					</span>
+					<span>Speech Title: “What the Tide Leaves”</span>
 				</li>
 				<li className={BULLET}>
 					<span aria-hidden>•</span>
-					<span>
-						<b>Project:</b> Presentation Mastery · Level 2
-					</span>
+					<span>Project: Presentation Mastery · Level 2</span>
 				</li>
 				<li className={BULLET}>
 					<span aria-hidden>•</span>
-					<span>
-						<b>Time:</b> 5–7 min
-					</span>
+					<span>Time: 5–7 minutes</span>
 				</li>
 			</ul>
 		),
 	},
 	{
 		title: "Vote for Best Speaker",
+		chrome: "content",
 		body: (
 			<div className="flex items-center gap-[4cqw]">
 				<ul className="flex-1 text-[3.2cqw] font-semibold leading-snug">
@@ -114,53 +138,84 @@ const SLIDES: readonly Slide[] = [
 					<li>Daniel Osei</li>
 					<li>Mei Tanaka</li>
 				</ul>
-				<div>
-					<Qr caption="Scan to vote" />
-					<p className="text-center text-[1.7cqw] opacity-70">14 votes in</p>
+				<div className="flex flex-col items-center">
+					<Qr caption="Scan to vote" edge="17cqw" />
+					<p className="text-[1.7cqw] opacity-70">14 votes in</p>
 				</div>
 			</div>
 		),
 	},
 	{
 		title: "What's on tap for next meeting",
+		chrome: "content",
 		body: (
-			<div className="flex items-center gap-[4cqw]">
-				<ul className="flex-1 text-[2.6cqw] leading-snug">
-					<li>
-						<b>Toastmaster</b> · Marcus Lee
-					</li>
-					<li>
-						<b>Speaker 1</b> · <i>Open</i>
-					</li>
-					<li>
-						<b>Speaker 2</b> · Ana Ruiz
-					</li>
-					<li>
-						<b>Evaluator 1</b> · <i>Open</i>
-					</li>
-					<li>
-						<b>Timer</b> · <i>Open</i>
-					</li>
-				</ul>
-				<Qr caption="Scan to grab a role" />
+			<div className="flex flex-col gap-[1cqw]">
+				<div className="flex items-center gap-[3cqw]">
+					<div className="flex min-w-0 flex-1 flex-col gap-[0.7cqw]">
+						<div className="font-semibold text-[2cqw] leading-tight">
+							Thursday, November 5, 2026 · 7:00 PM · Harbor City Library
+						</div>
+						<div className="font-extrabold text-[2.8cqw] leading-tight">
+							<span style={{ fontWeight: 800 }}>Toastmaster:</span> Marcus Lee
+						</div>
+						<div
+							className="text-[1.8cqw] leading-tight"
+							style={{ color: MUTED }}
+						>
+							Meeting #413
+						</div>
+					</div>
+					<Qr caption="Scan to grab a role" edge="11cqw" />
+				</div>
+				<div className="grid grid-cols-2 gap-x-[2.5cqw] gap-y-[0.5cqw] text-[1.8cqw] leading-tight">
+					<div>
+						<b>Speaker 1:</b>
+						<span style={MAROON_BOLD}> Open: grab it!</span>
+					</div>
+					<div>
+						<b>Evaluator 1:</b>
+						<span style={MAROON_BOLD}> Open: grab it!</span>
+					</div>
+					<div>
+						<b>Speaker 2:</b> Ana Ruiz
+					</div>
+					<div>
+						<b>Timer:</b>
+						<span style={MAROON_BOLD}> Open: grab it!</span>
+					</div>
+				</div>
 			</div>
 		),
 	},
 	{
 		title: "Thank You",
-		dark: true,
+		chrome: "splash-dark",
 		body: (
-			<div className="text-center">
+			<>
 				<div
-					className="font-display font-semibold text-[8cqw] leading-none"
+					className="my-[3.4cqw] h-px"
+					style={{ width: "58cqw", background: "rgba(255,255,255,.55)" }}
+				/>
+				<div
+					className="font-extrabold text-[6.4cqw] leading-tight"
 					style={{ color: GOLD }}
 				>
 					Thank You
 				</div>
-				<p className="mt-[3cqw] text-[2.6cqw] text-white/85">
-					See you next Thursday.
-				</p>
-			</div>
+				<div className="mt-[2.6cqw] flex flex-col gap-[0.7cqw]">
+					<div className="text-[2.5cqw] leading-snug">
+						CONGRATULATIONS on another great learning session!
+					</div>
+					<div className="h-[2.4cqw]" />
+					<div className="text-[2.5cqw] leading-snug">Next Meeting:</div>
+					<div className="font-semibold text-[2.8cqw] leading-tight">
+						Thursday, November 5, 2026
+					</div>
+					<div className="font-semibold text-[2.8cqw] leading-tight">
+						7:00 PM
+					</div>
+				</div>
+			</>
 		),
 	},
 ];
@@ -169,11 +224,19 @@ const ZONE =
 	"absolute top-0 bottom-0 z-10 w-1/4 cursor-pointer bg-transparent hover:bg-white/5 focus-visible:outline-none";
 
 function SlideFrame({ slide }: { slide: Slide }) {
-	if (slide.dark) {
+	if (slide.chrome !== "content") {
+		const dark = slide.chrome === "splash-dark";
 		return (
 			<div
-				className="flex h-full w-full items-center justify-center"
-				style={{ background: NAVY_GRADIENT }}
+				className="flex h-full w-full flex-col items-center justify-center px-[8cqw] text-center"
+				style={
+					dark
+						? {
+								background: `linear-gradient(180deg, ${NAVY_GRADIENT_TOP} 0%, ${NAVY_GRADIENT_BOTTOM} 100%)`,
+								color: "#eaf1f6",
+							}
+						: { background: GROUND, color: INK }
+				}
 			>
 				{slide.body}
 			</div>

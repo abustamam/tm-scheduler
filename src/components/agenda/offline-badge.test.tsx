@@ -200,6 +200,8 @@ describe("OfflineBadge", () => {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PRESENT = resolve(HERE, "meeting-present.tsx");
+// The deck's colours live in one module (`slide-palette.ts`), read by the host.
+const PALETTE = resolve(HERE, "../../lib/slide-palette.ts");
 const PRINT_THEME = resolve(HERE, "print-theme.tsx");
 
 /**
@@ -318,12 +320,13 @@ function letterboxGround(src: string): string {
  */
 const HOST_GROUNDS: Record<string, string> = (() => {
 	const present = hostSource(PRESENT);
+	const palette = hostSource(PALETTE);
 	return {
 		toolbar: toolbarGround(hostSource(PRINT_THEME)),
 		letterbox: letterboxGround(present),
-		contentSlide: hexConst(present, "GROUND"),
-		splashTop: hexConst(present, "NAVY_GRADIENT_TOP"),
-		splashBottom: hexConst(present, "NAVY_GRADIENT_BOTTOM"),
+		contentSlide: hexConst(palette, "GROUND"),
+		splashTop: hexConst(palette, "NAVY_GRADIENT_TOP"),
+		splashBottom: hexConst(palette, "NAVY_GRADIENT_BOTTOM"),
 	};
 })();
 

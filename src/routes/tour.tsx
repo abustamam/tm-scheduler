@@ -172,8 +172,8 @@ function Tour() {
 						the meeting page. Need it in PowerPoint? Download it.
 					</p>
 					<p>
-						That's a small working copy of it: click it, or use the arrow
-						keys, and step through five of the real slides.
+						That's a small working copy of it: click it, or use the arrow keys,
+						and step through five of the real slides.
 					</p>
 					<p>
 						Open it before the meeting and it keeps working when the room's
