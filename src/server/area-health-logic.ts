@@ -41,6 +41,7 @@ import {
 	clubs,
 	dcpGoalProgress,
 	dcpScoreboards,
+	districts,
 	divisions,
 	duesPeriods,
 	meetingAttendance,
@@ -415,9 +416,11 @@ export async function loadAreaHealth(
 			number: areas.number,
 			letter: divisions.letter,
 			programYear: divisions.programYear,
+			districtIsDemo: districts.isDemo,
 		})
 		.from(areas)
 		.innerJoin(divisions, eq(divisions.id, areas.divisionId))
+		.innerJoin(districts, eq(districts.id, divisions.districtId))
 		.where(eq(areas.id, areaId));
 	if (!area) throw new Error(AREA_NOT_FOUND_MESSAGE);
 
@@ -450,15 +453,16 @@ export async function loadAreaHealth(
 			// that never joined. The payload must not say it was archived, or the
 			// takedown itself would be disclosed to every Area Director.
 			//
-			// The demo club (#1200) is never live: it holds made-up people, so its
-			// numbers are not a real club's health. Placement is refused too
-			// (`areas-logic.ts`), which leaves this for a row placed before the
-			// refusal or by hand.
+			// The demo club (#1200) is live only inside the demo district (#1278),
+			// and only the demo club is: a real club's figures must never show in an
+			// area the shared demo login reads, even if a row got there by hand.
+			// Placing the demo club in a real area is refused (`areas-logic.ts`),
+			// which leaves a row placed before the refusal or by hand.
 			const live =
 				row.clubId !== null &&
 				row.clubName !== null &&
 				!isClubArchived({ archivedAt: row.archivedAt }) &&
-				!row.isDemo;
+				row.isDemo === area.districtIsDemo;
 			const status: ClubHealthStatus = live ? "on_gavelup" : "not_on_gavelup";
 			return {
 				areaClubId: row.areaClubId,

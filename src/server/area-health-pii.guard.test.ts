@@ -76,6 +76,7 @@ const ALLOWED_SCHEMA_NAMES = new Set([
 	"areaClubs",
 	"areas",
 	"divisions",
+	"districts",
 	"meetings",
 	"roleSlots",
 	"meetingAttendance",
