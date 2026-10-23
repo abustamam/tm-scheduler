@@ -2,7 +2,6 @@
  * Captures the real screenshots `/tour` shows (#867, #901):
  *
  *   public/landing/tour-agenda.png   ← /club/<slug>/meeting/<id>/print
- *   public/landing/tour-present.png  ← /club/<slug>/meeting/<id>/present
  *   public/landing/tour-vpe.png      ← /admin/vpe-dashboard#close-to-a-level,
  *                                      signed in as Harbor's VP Education
  *   public/landing/tour-vpm.png      ← /admin/vp-membership#guest-pipeline,
@@ -592,7 +591,6 @@ async function main() {
 			out: join(OUT_DIR, "tour-agenda.png"),
 			check: checkAgendaFeatures,
 		},
-		{ url: `${base}/present`, out: join(OUT_DIR, "tour-present.png") },
 	];
 
 	const clubId = await findClubId();

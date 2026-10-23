@@ -1,102 +1,114 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { CLAIM_DEMO_ROLES, ClaimDemo } from "./claim-demo";
+import { ClaimDemo } from "./claim-demo";
 
 afterEach(cleanup);
 
-const claimButtons = () => screen.queryAllByRole("button", { name: /^Claim / });
+const claimBtn = (role: string) =>
+	screen.getByRole("button", { name: `Claim ${role} — open` });
+const row = (role: string) =>
+	screen.getByText(role, { selector: "p" }).closest("li") as HTMLElement;
+const filledText = () => screen.getByText(/Roles filled: \d of 6/).textContent;
 
 describe("ClaimDemo", () => {
-	it("starts with every open role claimable and no Reset", () => {
+	it("starts with three of six filled, open rows with Claim and the rest Filled", () => {
 		render(<ClaimDemo />);
-		expect(claimButtons()).toHaveLength(CLAIM_DEMO_ROLES.length);
-		expect(screen.queryByText("You ✓")).toBeNull();
-		expect(screen.queryByRole("button", { name: "Reset" })).toBeNull();
-	});
-
-	it("turns only the tapped row into 'You ✓'", () => {
-		render(<ClaimDemo />);
-		fireEvent.click(screen.getByRole("button", { name: "Claim Speaker 2" }));
-
-		const mine = screen.getByText("You ✓");
-		expect(mine.closest("li")?.textContent).toContain("Speaker 2");
-		expect(screen.getAllByText("You ✓")).toHaveLength(1);
-		expect(
-			screen.queryByRole("button", { name: "Claim Speaker 2" }),
-		).toBeNull();
-		expect(
-			screen.getByRole("button", { name: "Claim Toastmaster" }),
-		).toBeTruthy();
-		expect(
-			screen.getByRole("button", { name: "Claim Evaluator 1" }),
-		).toBeTruthy();
-	});
-
-	it("shows Reset after the first claim, and Reset restores the initial state", () => {
-		render(<ClaimDemo />);
-		fireEvent.click(screen.getByRole("button", { name: "Claim Toastmaster" }));
-		fireEvent.click(screen.getByRole("button", { name: "Claim Evaluator 1" }));
-		expect(screen.getAllByText("You ✓")).toHaveLength(2);
-
-		fireEvent.click(screen.getByRole("button", { name: "Reset" }));
-		expect(claimButtons()).toHaveLength(CLAIM_DEMO_ROLES.length);
-		expect(screen.queryByText("You ✓")).toBeNull();
-		expect(screen.queryByRole("button", { name: "Reset" })).toBeNull();
-	});
-
-	it("gates the claim pop behind motion-safe", () => {
-		render(<ClaimDemo />);
-		fireEvent.click(screen.getByRole("button", { name: "Claim Toastmaster" }));
-		const cls = screen.getByText("You ✓").className;
-		expect(cls).toContain("motion-safe:zoom-in-[1.08]");
-		expect(cls).toContain("motion-safe:duration-300");
-		// No un-gated animation class alongside it.
-		expect(cls.split(/\s+/)).not.toContain("animate-in");
-	});
-
-	it("moves focus to the next open role and announces the claim", () => {
-		render(<ClaimDemo />);
-		const status = screen.getByRole("status");
-		expect(status.textContent).toBe("");
-
-		const first = screen.getByRole("button", { name: "Claim Toastmaster" });
-		first.focus();
-		fireEvent.click(first);
-		expect(document.activeElement).toBe(
-			screen.getByRole("button", { name: "Claim Speaker 2" }),
-		);
-		expect(status.textContent).toBe("You claimed Toastmaster.");
-
-		// Claiming a later row moves on to whichever role is still open.
-		fireEvent.click(screen.getByRole("button", { name: "Claim Evaluator 1" }));
-		expect(document.activeElement).toBe(
-			screen.getByRole("button", { name: "Claim Speaker 2" }),
-		);
-		expect(status.textContent).toBe("You claimed Evaluator 1.");
-	});
-
-	it("moves focus to Reset once every role is taken, and back to the first role after Reset", () => {
-		render(<ClaimDemo />);
-		for (const r of CLAIM_DEMO_ROLES) {
-			fireEvent.click(screen.getByRole("button", { name: `Claim ${r.role}` }));
+		expect(filledText()).toBe("Roles filled: 3 of 6");
+		for (const r of ["Speaker 2", "Evaluator 1", "Timer"]) {
+			expect(claimBtn(r)).toBeTruthy();
 		}
-		const reset = screen.getByRole("button", { name: "Reset" });
-		expect(document.activeElement).toBe(reset);
-
-		fireEvent.click(reset);
-		expect(document.activeElement).toBe(
-			screen.getByRole("button", { name: `Claim ${CLAIM_DEMO_ROLES[0].role}` }),
-		);
-		expect(screen.getByRole("status").textContent).toMatch(/reset/i);
+		expect(screen.getAllByText("Filled")).toHaveLength(3);
+		expect(screen.getByText("Evaluates")).toBeTruthy();
+		expect(screen.getByText(/Dynamic Leadership · 5–7 min/)).toBeTruthy();
+		for (const r of ["Toastmaster", "Speaker 1", "Ah-Counter"]) {
+			expect(row(r).textContent).not.toMatch(/Claim/);
+		}
 	});
 
-	it("labels its container", () => {
+	it("asks who you are first, with the real copy, and nothing is claimed yet", () => {
 		render(<ClaimDemo />);
-		expect(
-			screen.getByRole("region", {
-				name: "Try it: claim a role on the sign-up sheet",
-			}),
-		).toBeTruthy();
+		fireEvent.click(claimBtn("Timer"));
+		const dialog = screen.getByRole("dialog", { name: "Who are you?" });
+		expect(dialog.getAttribute("aria-modal")).toBe("true");
+		expect(dialog.textContent).toContain(
+			"Pick your name to continue. This just tags what you sign up for — no account needed.",
+		);
+		expect(dialog.textContent).toContain("Don't see your name?");
+		expect(filledText()).toBe("Roles filled: 3 of 6");
+	});
+
+	it("opens the claim sheet after a name, then marks (you) with Release", () => {
+		render(<ClaimDemo />);
+		fireEvent.click(claimBtn("Timer"));
+		fireEvent.click(screen.getByRole("button", { name: "Jordan Reyes" }));
+		expect(screen.getByRole("dialog", { name: "Timer" })).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Claim" }));
+		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(row("Timer").textContent).toContain("Jordan Reyes (you)");
+		expect(filledText()).toBe("Roles filled: 4 of 6");
+		expect(screen.getByRole("status").textContent).toBe("You claimed Timer.");
+		const release = screen.getByRole("button", { name: "Release" });
+		expect(document.activeElement).toBe(release);
+	});
+
+	it("skips the picker for the second claim", () => {
+		render(<ClaimDemo />);
+		fireEvent.click(claimBtn("Timer"));
+		fireEvent.click(screen.getByRole("button", { name: "Sam Whitfield" }));
+		fireEvent.click(screen.getByRole("button", { name: "Claim" }));
+		fireEvent.click(claimBtn("Evaluator 1"));
+		expect(screen.queryByRole("dialog", { name: "Who are you?" })).toBeNull();
+		expect(screen.getByRole("dialog", { name: "Evaluator 1" })).toBeTruthy();
+	});
+
+	it("takes a speech title for a speaker slot, and shows TBA when blank", () => {
+		render(<ClaimDemo />);
+		fireEvent.click(claimBtn("Speaker 2"));
+		fireEvent.click(screen.getByRole("button", { name: "Lena Park" }));
+		const input = screen.getByLabelText("Speech title") as HTMLInputElement;
+		expect(input.placeholder).toBe("TBA if not decided yet");
+		expect(screen.getByText("Min 5 · Max 7 minutes")).toBeTruthy();
+		fireEvent.change(input, { target: { value: "Tide Pools" } });
+		fireEvent.click(
+			screen.getByRole("button", { name: "Claim speaking slot" }),
+		);
+		expect(row("Speaker 2").textContent).toContain("“Tide Pools”");
+		fireEvent.click(screen.getByRole("button", { name: "Release" }));
+		expect(row("Speaker 2").textContent).not.toContain("Tide Pools");
+
+		fireEvent.click(claimBtn("Speaker 2"));
+		fireEvent.click(
+			screen.getByRole("button", { name: "Claim speaking slot" }),
+		);
+		expect(row("Speaker 2").textContent).toContain("“TBA”");
+	});
+
+	it("Cancel leaves the role open and returns focus to its Claim button", () => {
+		render(<ClaimDemo />);
+		fireEvent.click(claimBtn("Timer"));
+		fireEvent.click(screen.getByRole("button", { name: "Jordan Reyes" }));
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(filledText()).toBe("Roles filled: 3 of 6");
+		expect(document.activeElement).toBe(claimBtn("Timer"));
+	});
+
+	it("closes on Escape", () => {
+		render(<ClaimDemo />);
+		fireEvent.click(claimBtn("Timer"));
+		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it("Release reopens the role and announces it", () => {
+		render(<ClaimDemo />);
+		fireEvent.click(claimBtn("Timer"));
+		fireEvent.click(screen.getByRole("button", { name: "Jordan Reyes" }));
+		fireEvent.click(screen.getByRole("button", { name: "Claim" }));
+		fireEvent.click(screen.getByRole("button", { name: "Release" }));
+		expect(filledText()).toBe("Roles filled: 3 of 6");
+		expect(screen.getByRole("status").textContent).toBe("You released Timer.");
+		expect(document.activeElement).toBe(claimBtn("Timer"));
 	});
 });
