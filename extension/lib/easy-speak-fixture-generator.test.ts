@@ -194,24 +194,57 @@ describe("leak shapes: every invented value is gone", () => {
 		expect(new Set(ids).size).toBeLessThan(ids.length);
 	});
 
-	it("zero-padded club numbers, and another club's id", () => {
-		const out = rewriteEasySpeakPage(
-			page(
-				`<form action="https://dashboards.toastmasters.org/ClubReport.aspx?id=00031415"></form>` +
-					`<a href="https://easy-speak.org/view_meeting.php?c=27182&amp;show=next">own</a><a href="https://easy-speak.org/orgdata.php?c=00027182">own</a>` +
-					`<a href="https://easy-speak.org/view_meeting.php?c=16180">other</a><a href="https://marshalls.org/tmtools/DCP_Hist.cgi?club=0031415&amp;mon=cur">h</a>` +
-					`<table><tr><td>Club Number</td><td>031415</td></tr><tr><td>Club Number</td><td>12</td></tr></table><p>Club 00016180</p>`,
-			),
-		);
-		expectNone(out, ["31415", "27182", "16180"]);
-		// a zero-padded id keeps its width but NOT its zero prefix (round 3: the prefix is not copied), and is its own id:
-		// 27182 and 00027182 are two exact keys, so two different fakes
-		expect(out).toMatch(/ClubReport\.aspx\?id=\d{8}/);
-		expect(out).not.toMatch(/ClubReport\.aspx\?id=000/);
+	/** The zero-padded club numbers (and another club's id) as they appear on a real page: invented, like everything here. */
+	const ZERO_PADDED_PAGE = page(
+		`<form action="https://dashboards.toastmasters.org/ClubReport.aspx?id=00031415"></form>` +
+			`<a href="https://easy-speak.org/view_meeting.php?c=27182&amp;show=next">own</a><a href="https://easy-speak.org/orgdata.php?c=00027182">own</a>` +
+			`<a href="https://easy-speak.org/view_meeting.php?c=16180">other</a><a href="https://marshalls.org/tmtools/DCP_Hist.cgi?club=0031415&amp;mon=cur">h</a>` +
+			`<table><tr><td>Club Number</td><td>031415</td></tr><tr><td>Club Number</td><td>12</td></tr></table><p>Club 00016180</p>`,
+	);
+
+	/**
+	 * The property the generator promises, with no assertion on the random digits of a fake: a fake is drawn over the
+	 * real value's full width, so one may legitimately START with 000 and that reveals nothing (#1286). What must hold:
+	 * no real value survives (padded or not), each fake has its real value's width, and the exact keys 27182 and
+	 * 00027182 are two ids with two fakes.
+	 */
+	function expectZeroPaddedIdsInvented(out: string) {
+		// as whole digit runs, not substrings: a random 8-digit fake may contain "27182" in the middle by chance
+		const runs = (everything(out).match(/\d+/g) ?? []).map((r) => r.replace(/^0+/, ""));
+		for (const real of ["31415", "27182", "16180"]) expect(runs, `${real} (padded or not) is still in the generated page`).not.toContain(real);
+		const report = out.match(/ClubReport\.aspx\?id=(\d+)/)?.[1];
+		expect(report, "ClubReport id keeps its 8 digits").toMatch(/^\d{8}$/);
+		expect(report, "not the real padded value").not.toBe("00031415");
 		const own = [...out.matchAll(/c=(\d+)/g)].map((m) => m[1]);
-		expect(own[0]).toMatch(/^\d{5}$/);
-		expect(own[1]).toMatch(/^\d{8}$/);
-		expect(own[1]).not.toMatch(/^000/);
+		expect(own).toHaveLength(3);
+		expect(own[0], "27182 keeps its 5 digits").toMatch(/^\d{5}$/);
+		expect(own[1], "00027182 keeps its 8 digits").toMatch(/^\d{8}$/);
+		expect(own[2], "16180 keeps its 5 digits").toMatch(/^\d{5}$/);
+		expect(own[1], "00027182 is not 27182 re-padded").not.toBe(own[0].padStart(8, "0"));
+		expect(own[1]).not.toBe("00027182");
+		expect(out.match(/club=(\d+)&/)?.[1], "0031415 keeps its 7 digits").toMatch(/^\d{7}$/);
+		expect(out.match(/Club Number<\/td><td>(\d+)</)?.[1], "031415 keeps its 6 digits").toMatch(/^\d{6}$/);
+	}
+
+	it("zero-padded club numbers, and another club's id", () => {
+		expectZeroPaddedIdsInvented(rewriteEasySpeakPage(ZERO_PADDED_PAGE));
+	});
+
+	it("a fake that happens to start with 000 is still no leak (seed found by search, #1286)", () => {
+		const out = rewriteEasySpeakPage(ZERO_PADDED_PAGE, { state: newRewriteState({ seed: "zp233" }) });
+		// pins the premise: this seed draws a leading-000 fake, which the old `not.toMatch(/id=000/)` assertion rejected
+		expect(out).toMatch(/ClubReport\.aspx\?id=000\d{5}/);
+		expectZeroPaddedIdsInvented(out);
+	});
+
+	it("a zero-padded id's zero prefix is not copied: fixed seeds, so no randomness in the verdict (#1286)", () => {
+		// one fake may start with 000 by chance (above); a generator that copied the prefix would start EVERY one with it
+		const reports = Array.from({ length: 30 }, (_, i) => {
+			const out = rewriteEasySpeakPage(ZERO_PADDED_PAGE, { state: newRewriteState({ seed: `zp-fixed-${i}` }) });
+			expectZeroPaddedIdsInvented(out);
+			return out.match(/ClubReport\.aspx\?id=(\d{8})/)?.[1] ?? "";
+		});
+		expect(reports.filter((r) => !r.startsWith("000")).length).toBeGreaterThan(0);
 	});
 
 	it("a real club's name and places never survive, whatever its words", () => {
