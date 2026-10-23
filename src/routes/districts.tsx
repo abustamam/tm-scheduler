@@ -45,11 +45,11 @@ const CLUB_GETS = [
 	},
 	{
 		title: "Run the meeting",
-		body: "The agenda prints and projects itself from the roles people claimed. The Timer runs from a phone, and Best Speaker votes come from every seat.",
+		body: "The agenda prints and projects itself from the roles people claimed. The Timer runs from a phone, and Best Speaker votes come from every seat. To promote next week's meeting, GavelUp drafts a WhatsApp message, an email and a flyer from the agenda, and the officers send them.",
 	},
 	{
 		title: "Pathways & DCP",
-		body: "Officers see each member's Pathways progress and the club's DCP goals in one place, so the goals stay visible all year.",
+		body: "Officers see each member's Pathways progress and the club's DCP goals in one place, so the goals stay visible all year. New members get a guided first few weeks, our own short quiz to suggest a path, and an experienced member to pair with, and the VP Education sees who is settling in.",
 	},
 ];
 
@@ -60,7 +60,7 @@ const EASY_ROLLOUT = [
 	},
 	{
 		title: "We set each club up ourselves",
-		body: "A club tells us it's interested and we do the setup, so officers start with their meetings already there.",
+		body: "A club tells us it's interested and we do the setup, so officers start with their meetings already there. New clubs can start on GavelUp while they're still chartering, even before they have a club number.",
 	},
 	{
 		title: "Each club's data stays its own",

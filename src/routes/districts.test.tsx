@@ -98,6 +98,20 @@ describe("/districts (#868)", () => {
 		).toBe("/request-access?kind=district");
 	});
 
+	it("works the shipped features into the existing cards, with no pricing words (#946)", async () => {
+		await mount();
+		const gets = section("clubs-get").textContent ?? "";
+		expect(gets).toMatch(/WhatsApp message, an email and a flyer/);
+		expect(gets).toMatch(/our own short quiz/);
+		expect(gets).toMatch(/VP Education sees who is settling in/);
+		expect(section("rollout").textContent).toMatch(
+			/start on GavelUp while they're still chartering/,
+		);
+		expect(`${gets}${section("rollout").textContent}`).not.toMatch(
+			/free|pric|cost|trial/i,
+		);
+	});
+
 	// No district-management claim or hint, and no outcome promise in the hero.
 	it("says none of the banned phrases, and the hero does not promise Distinguished", async () => {
 		await mount("57");
