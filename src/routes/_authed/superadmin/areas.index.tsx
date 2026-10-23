@@ -3,6 +3,7 @@ import { ArrowLeft, Loader2, Plus } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
+import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
@@ -37,6 +38,8 @@ function AreasConsole() {
 	const { districts, currentProgramYear } = Route.useLoaderData();
 	const router = useRouter();
 	const refresh = () => router.invalidate();
+	// The demo district takes no edits, so no form offers it.
+	const editableDistricts = districts.filter((d) => !d.isDemo);
 
 	return (
 		<PageContainer className="space-y-6">
@@ -61,11 +64,11 @@ function AreasConsole() {
 			<div className="grid gap-4 md:grid-cols-3">
 				<CreateDistrictForm onCreated={refresh} />
 				<CreateDivisionForm
-					districts={districts}
+					districts={editableDistricts}
 					currentProgramYear={currentProgramYear}
 					onCreated={refresh}
 				/>
-				<CreateAreaForm districts={districts} onCreated={refresh} />
+				<CreateAreaForm districts={editableDistricts} onCreated={refresh} />
 			</div>
 
 			{districts.length === 0 ? (
@@ -73,7 +76,10 @@ function AreasConsole() {
 			) : (
 				districts.map((district) => (
 					<section key={district.id} className="space-y-3">
-						<h2 className="text-sm font-bold">District {district.number}</h2>
+						<h2 className="flex items-center gap-2 text-sm font-bold">
+							District {district.number}
+							{district.isDemo && <Badge variant="secondary">Demo</Badge>}
+						</h2>
 						{district.divisions.length === 0 ? (
 							<p className="text-sm text-muted-foreground">No divisions yet.</p>
 						) : (

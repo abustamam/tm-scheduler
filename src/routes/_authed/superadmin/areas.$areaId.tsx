@@ -74,6 +74,7 @@ async function run(
 
 function AreaDetail() {
 	const area = Route.useLoaderData();
+	const editable = !area.districtIsDemo;
 	const router = useRouter();
 	const refresh = () => router.invalidate();
 
@@ -93,12 +94,17 @@ function AreaDetail() {
 					District {area.districtNumber} · Division {area.divisionLetter} ·{" "}
 					{area.programYearLabel}
 				</p>
+				{!editable ? (
+					<p className="text-sm font-medium" data-testid="demo-area-notice">
+						Demo area. The demo rebuild keeps it; edits are off.
+					</p>
+				) : null}
 			</div>
 
 			<ClubsPanel area={area} onChanged={refresh} />
 			<DirectorPanel area={area} onChanged={refresh} />
 			<AreaPreviewPanel key={area.id} areaId={area.id} />
-			<RelabelPanel area={area} onChanged={refresh} />
+			{editable ? <RelabelPanel area={area} onChanged={refresh} /> : null}
 		</PageContainer>
 	);
 }
@@ -111,6 +117,7 @@ function ClubsPanel({
 	onChanged: () => void;
 }) {
 	const [busyId, setBusyId] = useState<string | null>(null);
+	const editable = !area.districtIsDemo;
 
 	async function act(
 		rowId: string,
@@ -158,7 +165,7 @@ function ClubsPanel({
 								</p>
 							</div>
 							<div className="flex flex-wrap items-center gap-2">
-								{club.linkOffer ? (
+								{editable && club.linkOffer ? (
 									<Button
 										type="button"
 										size="sm"
@@ -175,31 +182,37 @@ function ClubsPanel({
 										<Link2 className="size-4" /> Link to {club.linkOffer.name}
 									</Button>
 								) : null}
-								<Button
-									type="button"
-									size="sm"
-									variant="outline"
-									disabled={busyId === club.id || club.visitCount > 0}
-									title={
-										club.visitCount > 0 ? CLUB_HAS_VISITS_MESSAGE : undefined
-									}
-									onClick={() =>
-										act(
-											club.id,
-											() => removeAreaClub({ data: { areaClubId: club.id } }),
-											"Removed.",
-										)
-									}
-								>
-									<Trash2 className="size-4" /> Remove
-								</Button>
+								{editable ? (
+									<Button
+										type="button"
+										size="sm"
+										variant="outline"
+										disabled={busyId === club.id || club.visitCount > 0}
+										title={
+											club.visitCount > 0 ? CLUB_HAS_VISITS_MESSAGE : undefined
+										}
+										onClick={() =>
+											act(
+												club.id,
+												() => removeAreaClub({ data: { areaClubId: club.id } }),
+												"Removed.",
+											)
+										}
+									>
+										<Trash2 className="size-4" /> Remove
+									</Button>
+								) : null}
 							</div>
 						</li>
 					))}
 				</ul>
 			)}
-			<AddGavelUpClubForm area={area} onAdded={onChanged} />
-			<AddNameOnlyClubForm areaId={area.id} onAdded={onChanged} />
+			{editable ? (
+				<>
+					<AddGavelUpClubForm area={area} onAdded={onChanged} />
+					<AddNameOnlyClubForm areaId={area.id} onAdded={onChanged} />
+				</>
+			) : null}
 		</section>
 	);
 }
@@ -353,8 +366,10 @@ function DirectorPanel({
 }) {
 	const [ending, setEnding] = useState(false);
 	const director = area.director;
+	const editable = !area.districtIsDemo;
 	// A past year's area is history: nobody is assigned to it any more.
-	const canAssign = !director && area.programYear >= area.currentProgramYear;
+	const canAssign =
+		editable && !director && area.programYear >= area.currentProgramYear;
 
 	async function endTerm(termId: string) {
 		const ok = await run(
@@ -383,7 +398,7 @@ function DirectorPanel({
 								: ""}
 						</p>
 					</div>
-					{director.state === "ended-with-year" ? null : (
+					{director.state === "ended-with-year" || !editable ? null : (
 						<Button
 							type="button"
 							size="sm"
