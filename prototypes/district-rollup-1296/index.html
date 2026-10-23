@@ -182,6 +182,37 @@ tr.nolive td.h { color: var(--ink-soft); }
 .bars .b i { display: block; height: 100%; background: var(--accent); }
 .bars .n { text-align: right; color: var(--ink); font-weight: 600; }
 
+/* Variant D: Combined (callouts + switchable views over one drill-down scope) */
+.attn { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; margin-bottom: 22px; }
+.attn-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; display: grid; gap: 6px; align-content: start; }
+.attn-card.bad { border-color: color-mix(in oklab, var(--bad) 45%, var(--line)); }
+.attn-card .what { font-weight: 700; }
+.attn-card .go { justify-self: start; background: none; border: 0; padding: 0; color: var(--accent); font-weight: 700; cursor: pointer; font-size: 13.5px; text-decoration: underline; text-underline-offset: 3px; }
+.attn-more { font-size: 13px; color: var(--ink-soft); align-self: center; }
+.attn-clear { background: var(--good-fill); color: var(--good); border-radius: var(--radius); padding: 10px 14px; font-weight: 600; margin-bottom: 22px; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.seg button { border: 0; background: none; padding: 7px 14px; font-weight: 600; font-size: 13.5px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.heat-scope { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.club-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.club-tile { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 4px; min-height: 92px; position: relative; color: var(--ink); }
+.club-tile.na { background: repeating-linear-gradient(45deg, var(--surface), var(--surface) 6px, var(--hatch) 6px, var(--hatch) 8px); }
+.club-tile .nm { font-weight: 700; font-size: 13.5px; }
+.club-tile .vv { font-family: var(--font-display); font-size: 22px; font-weight: 650; }
+.club-tile.hi { color: var(--accent-ink); }
+.club-tile.flagged::after { content: ""; position: absolute; top: 8px; right: 8px; width: 9px; height: 9px; border-radius: 50%; background: var(--bad); border: 1px solid var(--surface); }
+.rank { display: grid; grid-template-columns: minmax(120px, 220px) minmax(0, 1fr) 64px; gap: 8px 12px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; font-size: 14px; }
+.rank .nm { background: none; border: 0; padding: 0; text-align: left; font-weight: 600; cursor: pointer; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rank .nm.static { cursor: default; }
+.rank .track { height: 14px; background: var(--surface-2); border-radius: 4px; position: relative; overflow: hidden; }
+.rank .track i { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.rank .track.flag i { background: var(--warn); }
+.rank .track .none { position: absolute; inset: 0; background: repeating-linear-gradient(45deg, transparent, transparent 4px, var(--hatch) 4px, var(--hatch) 6px); }
+.rank .val { text-align: right; font-weight: 700; }
+.rank .dist { grid-column: 1 / -1; border-top: 1px dashed var(--line); padding-top: 8px; font-size: 13px; color: var(--ink-soft); }
+
 /* Switcher (prototype chrome, not part of any variant) */
 .switcher {
 	position: fixed; left: 50%; transform: translateX(-50%);
@@ -355,8 +386,9 @@ const person = (n) => n ? n : `<span class="vacant">Vacant</span>`;
 const meter = (x) => `<div class="meter" aria-hidden="true"><i style="width:${Math.round((x || 0) * 100)}%"></i></div>`;
 const plural = (n, w, ws) => `${n} ${n === 1 ? w : (ws || w + "s")}`;
 
-const state = { variant: "a", path: [], metric: "live", sel: null, scope: "DEMO" };
+const state = { variant: "d", path: [], metric: "live", sel: null, scope: "DEMO", view: "heat" };
 const VARIANTS = [
+	{ key: "d", name: "Combined", render: renderCombined },
 	{ key: "a", name: "Ledger", render: renderLedger },
 	{ key: "b", name: "Heat map", render: renderHeat },
 	{ key: "c", name: "Briefing", render: renderBriefing },
@@ -596,6 +628,121 @@ function renderBriefing() {
 		</div>`;
 }
 
+// ---- Variant D: Combined ----------------------------------------------------------------
+// One scope (breadcrumb drill-down, as in A). On top, callouts for whatever under that scope
+// needs attention (from C). Below, the same scope seen as a heat map (B), ranked bars or a table (A).
+const pathOf = (n) => n.clubs ? [n.division.id, n.id] : n.areas ? [n.id] : [];
+function attentionFor(node) {
+	const out = [];
+	for (const a of areasOf(node)) {
+		const r = rollup(a), left = r.clubs - r.v1;
+		if (left && r.v1 / r.clubs < 0.5) out.push({ sev: "bad", kind: "Behind on visits", what: `${a.label}: ${left} of ${r.clubs} clubs not yet visited`, detail: `Round 1 is due in ${DAYS_TO_R1} days.`, owner: a.director ? `AD ${a.director}` : "No Area Director", node: a });
+		if (!a.director) out.push({ sev: "bad", kind: "Vacant post", what: `${a.label} has no Area Director`, detail: `${plural(a.clubs.length, "club")} with nobody to visit them.`, owner: `${a.division.label}`, node: a });
+		if (r.live / r.clubs < 0.34) out.push({ sev: "", kind: "Low coverage", what: `${a.label}: ${r.live} of ${r.clubs} clubs on GavelUp`, detail: "Health figures here speak for few clubs.", owner: a.director ? `AD ${a.director}` : "", node: a });
+	}
+	const divs = node.areas ? [node] : node.clubs ? [] : DISTRICT.divisions;
+	for (const d of divs) if (!d.director) out.push({ sev: "bad", kind: "Vacant post", what: `${d.label} has no Division Director`, detail: `${plural(d.areas.length, "area")} report to nobody.`, owner: "District DEMO", node: d });
+	if (node === DISTRICT) DISTRICT.officers.filter((o) => !o.name).forEach((o) => out.push({ sev: "bad", kind: "Vacant post", what: `No ${o.role}`, detail: "A district officer post is empty.", owner: "District DEMO", node: null }));
+	for (const c of clubsOf(node)) {
+		const f = flags(c);
+		if (f.length) out.push({ sev: f.length > 1 ? "bad" : "", kind: "Club to check on", what: c.name, detail: f.join(" · "), owner: `${c.area.label}${c.area.director ? ` · AD ${c.area.director}` : ""}`, node: c.area, real: c.real });
+	}
+	return out.sort((x, y) => (x.sev === "bad" ? 0 : 1) - (y.sev === "bad" ? 0 : 1));
+}
+function clubShow(key, c) {
+	const h = c.h;
+	if (key === "live") return c.live ? "On GavelUp" : "Not on GavelUp";
+	if (key === "v1") return c.v1 ? `Done ${c.v1}` : "Due";
+	if (!h) return "No figures";
+	return { roleFill: `${h.roleFill}%`, officers: `${h.officers}/${OFFICES}`, renewals: `${h.renewed}/${h.members}`, dcp: `${h.dcp}/${DCP_GOALS}` }[key];
+}
+function heatFor(node, m) {
+	const cell = (c, a, i) => {
+		const v = m.club(c), na = v == null;
+		return `<button type="button" class="cell ${na ? "na" : ""} ${flags(c).length ? "flagged" : ""}" ${na ? "" : `style="${heatBg(v)}"`} data-go="${a.division.id}/${a.id}" aria-label="${c.name}: ${clubShow(state.metric, c)}" title="${c.name}: ${clubShow(state.metric, c)}"></button>`;
+	};
+	const areaBlock = (a) => `<div class="area-block">
+		<button type="button" class="area-name" data-go="${a.division.id}/${a.id}"><span>${a.label}${a.real ? realTag(a) : tag(a)}</span><span class="v">${m.show(rollup(a))}</span></button>
+		<div class="cells">${a.clubs.map((c, i) => cell(c, a, i)).join("")}</div>
+		<div class="ad-line">AD: ${person(a.director)}</div></div>`;
+	if (node === DISTRICT) return `<div class="heat-cols">${DISTRICT.divisions.map((d) => `<section class="div-col">
+		<header><h2><button type="button" class="area-name" data-go="${d.id}" style="background:none;border:0;padding:0;cursor:pointer;font:inherit">${d.label}</button></h2><span class="v">${m.show(rollup(d))}</span></header>
+		<div class="ad-line">Division Director: ${person(d.director)} ${d.real ? realTag(d) : tag(d)}</div>
+		${d.areas.map(areaBlock).join("")}</section>`).join("")}</div>`;
+	if (node.areas) return `<div class="heat-scope">${node.areas.map(areaBlock).join("")}</div>`;
+	return `<div class="club-tiles">${node.clubs.map((c) => {
+		const v = m.club(c), na = v == null;
+		return `<div class="club-tile ${na ? "na" : ""} ${!na && v > 0.55 ? "hi" : ""} ${flags(c).length ? "flagged" : ""}" ${na ? "" : `style="${heatBg(v)}"`}>
+			<span class="nm">${c.name}</span><span class="vv">${clubShow(state.metric, c)}</span>
+			<span class="small">${c.real ? realTag(c) : tag(c)}</span></div>`;
+	}).join("")}</div>`;
+}
+function barsFor(node, m) {
+	const kids = node === DISTRICT ? DISTRICT.divisions : node.areas ? node.areas : node.clubs;
+	const isClub = !!node.clubs;
+	const rows = kids.map((k) => {
+		if (isClub) return { k, v: m.club(k), txt: clubShow(state.metric, k), flag: flags(k).length > 0, go: null };
+		const r = rollup(k);
+		return { k, v: m.roll(r), txt: m.show(r), flag: r.flagged > 0, go: pathOf(k).join("/") };
+	}).sort((x, y) => (y.v ?? -1) - (x.v ?? -1));
+	const whole = rollup(node);
+	return `<div class="rank">${rows.map((x) => `
+		${x.go ? `<button type="button" class="nm" data-go="${x.go}">${x.k.label || x.k.name}</button>` : `<span class="nm static">${x.k.name}</span>`}
+		<div class="track ${x.flag ? "flag" : ""}">${x.v == null ? `<span class="none"></span>` : `<i style="width:${Math.max(2, Math.round(Math.min(1, x.v) * 100))}%"></i>`}</div>
+		<span class="val">${x.txt}</span>`).join("")}
+		<div class="dist">${node.label} overall: <b>${m.show(whole)}</b>. Amber bars contain a club below threshold; hatched means no clubs on GavelUp to measure.</div></div>`;
+}
+function renderCombined() {
+	const node = nodeAt(state.path), r = rollup(node), m = METRICS[state.metric];
+	const level = node.clubs ? "area" : node.areas ? "division" : "district";
+	const crumbs = [state.path[0] ? `<button type="button" data-path="">District DEMO</button>` : `<span class="here">District DEMO</span>`];
+	if (state.path[0]) crumbs.push(`<span class="muted">›</span>`, state.path[1] ? `<button type="button" data-path="${state.path[0]}">Division ${state.path[0]}</button>` : `<span class="here">Division ${state.path[0]}</span>`);
+	if (state.path[1]) crumbs.push(`<span class="muted">›</span>`, `<span class="here">Area ${state.path[1]}</span>`);
+
+	const items = attentionFor(node), shown = items.slice(0, 6);
+	const here = (n) => n && n !== node && !(n.clubs && node.clubs);
+	const attn = items.length ? `<div class="attn">${shown.map((x) => `<div class="attn-card ${x.sev}">
+			<span class="tag ${x.sev === "bad" ? "chip-bad" : "chip-warn"}" style="justify-self:start">${x.kind}</span>
+			<span class="what">${x.what}${x.real ? realTag({ real: true }) : ""}</span>
+			<span class="small muted">${x.detail}</span>
+			<span class="small">${x.owner}</span>
+			${here(x.node) ? `<button type="button" class="go" data-go="${pathOf(x.node).join("/")}">Open ${x.node.label} →</button>` : ""}
+		</div>`).join("")}${items.length > shown.length ? `<div class="attn-more">and ${items.length - shown.length} more under ${node.label}</div>` : ""}</div>`
+		: `<div class="attn-clear">Nothing under ${node.label} needs attention right now.</div>`;
+
+	const views = [["heat", "Heat map"], ["bars", "Ranked bars"], ["table", "Table"]]
+		.map(([k, l]) => `<button type="button" data-view="${k}" aria-pressed="${k === state.view}">${l}</button>`).join("");
+	const chips = Object.entries(METRICS).map(([k, v]) => `<button type="button" data-metric="${k}" aria-pressed="${k === state.metric}">${v.label}</button>`).join("");
+	let body;
+	if (state.view === "table") {
+		// Reuse the Ledger's table for this scope.
+		const tmp = document.createElement("div"); tmp.innerHTML = renderLedger();
+		body = tmp.querySelector(".table-box").outerHTML;
+	} else body = state.view === "heat" ? heatFor(node, m) : barsFor(node, m);
+	const legend = state.view === "heat" ? `<div class="legend"><span><span class="ramp"></span> ${m.allClubs ? "no → yes" : "low → high"}</span>${m.allClubs ? "" : `<span><span class="sw na"></span>Not on GavelUp, no figures</span>`}<span><span class="dot"></span>A figure is below threshold</span>${level !== "area" ? "<span>Select a name or square to open that level.</span>" : ""}</div>` : "";
+
+	return `
+		<nav class="crumbs" aria-label="Breadcrumb">${crumbs.join("")}</nav>
+		<div class="ledger-head">
+			<div><div class="eyebrow">${level === "district" ? "District roll-up" : level === "division" ? "Division roll-up" : "Area"}</div><h1>${node.label}${node.real ? realTag(node) : tag(node)}</h1></div>
+			<div class="officers">${level === "district" ? DISTRICT.officers.map((o) => `<span>${o.role}: <b>${person(o.name)}</b></span>`).join("") : `<span>${level === "division" ? "Division Director" : "Area Director"}: <b>${person(node.director)}</b></span>`}</div>
+		</div>
+		<div class="eyebrow" style="margin-bottom:8px">Needs attention <span class="muted">· ${items.length}</span></div>
+		${attn}
+		<div class="strip">
+			<div><span class="eyebrow">Clubs on GavelUp</span><span class="big">${ratio(r.live, r.clubs)}</span>${meter(r.live / r.clubs)}</div>
+			<div><span class="eyebrow">Round 1 visits</span><span class="big">${ratio(r.v1, r.clubs)}</span>${meter(r.v1 / r.clubs)}<span class="small muted">Due 30 Nov · ${DAYS_TO_R1} days left</span></div>
+			<div><span class="eyebrow">Director posts filled</span><span class="big">${ratio(r.filled, r.posts)}</span>${meter(r.filled / r.posts)}</div>
+			<div><span class="eyebrow">Role fill, clubs on GavelUp</span><span class="big">${r.roleFill == null ? "—" : Math.round(r.roleFill) + "%"}</span>${meter(r.roleFill == null ? 0 : r.roleFill / 100)}</div>
+		</div>
+		<div class="toolbar">
+			<div class="seg" role="group" aria-label="Show as">${views}</div>
+			${state.view === "table" ? "" : `<div class="metric-chips" role="group" aria-label="Measure">${chips}</div>`}
+		</div>
+		${body}${legend}
+		<p class="foot">Health figures average the clubs on GavelUp only. A club not on GavelUp counts toward visits and coverage but adds no health figures.</p>`;
+}
+
 // ---- Wiring ---------------------------------------------------------------------------
 const view = document.getElementById("view");
 function render() {
@@ -621,9 +768,11 @@ document.addEventListener("keydown", (e) => {
 	if (e.key === "ArrowRight") step(1);
 });
 view.addEventListener("click", (e) => {
-	const el = e.target.closest("[data-path],[data-drill],[data-metric],[data-club],[data-area],[data-scope]");
+	const el = e.target.closest("[data-go],[data-view],[data-path],[data-drill],[data-metric],[data-club],[data-area],[data-scope]");
 	if (!el) return;
-	if (el.dataset.path !== undefined) state.path = el.dataset.path ? [el.dataset.path] : [];
+	if (el.dataset.go !== undefined) state.path = el.dataset.go ? el.dataset.go.split("/") : [];
+	else if (el.dataset.view) state.view = el.dataset.view;
+	else if (el.dataset.path !== undefined) state.path = el.dataset.path ? [el.dataset.path] : [];
 	else if (el.dataset.drill) state.path = [...state.path, el.dataset.drill];
 	else if (el.dataset.metric) state.metric = el.dataset.metric;
 	else if (el.dataset.club) { const [area, i] = el.dataset.club.split(":"); state.sel = { kind: "club", area, i: Number(i) }; }
