@@ -1462,6 +1462,62 @@ describe("extractDependencies", () => {
 		expect(extractDependencies("Land #619 first").blockedBy).toEqual([619]);
 	});
 
+	describe("bold/colon forms and lists of numbers (#1287)", () => {
+		test("a bold phrase with a colon and a parenthetical between numbers", () => {
+			expect(
+				extractDependencies(
+					"**Depends on:** #1281 (audience frame) and #1280 (duty copy)",
+				).blockedBy,
+			).toEqual([1280, 1281]);
+		});
+
+		test.each([
+			["Blocked by: #5", [5]],
+			["Requires: #5", [5]],
+			["_Requires_ #5", [5]],
+			["depends on #5, #6 and #7", [5, 6, 7]],
+			["depends on #5, and #6", [5, 6]],
+			["blocked by #5 & #6 / #7 or #8", [5, 6, 7, 8]],
+			["blocked by **#5** and **#6**", [5, 6]],
+			["depends on #5 (see #9 discussion)", [5]],
+			["depends on #5 (not #9, which is unrelated)", [5]],
+			["depends on #5 (schema) and #6 (copy)", [5, 6]],
+			["depends on #5,\n#6", [5, 6]],
+			["depends on #5,\n\n#6 is a cross-ref", [5]],
+			["depends on #5 and\n\n#6 fixed the schema", [5]],
+			["depends on #5 and\n  \n#6 fixed the schema", [5]],
+			["requires#5", []],
+		])("blocked-by reads %j", (body, expected) => {
+			expect(extractDependencies(body).blockedBy).toEqual(expected);
+		});
+
+		test("blocks reads a list", () => {
+			expect(extractDependencies("blocks #8 and #9").blocks).toEqual([8, 9]);
+		});
+
+		test.each([
+			["**Blocks:** #8", [8]],
+			["_Blocks_ #8", [8]],
+			["blocks#8", []],
+			["blocks #8 (not #9)", [8]],
+		])("blocks reads %j", (body, expected) => {
+			expect(extractDependencies(body).blocks).toEqual(expected);
+		});
+
+		test("the list ends at the first token that is not a join", () => {
+			expect(
+				extractDependencies("depends on #5 for the schema; see also #6")
+					.blockedBy,
+			).toEqual([5]);
+		});
+
+		test("a quoted phrase in the new form is still excluded and reported", () => {
+			const r = extractDependencies("`**Depends on:** #5 and #6`");
+			expect(r.blockedBy).toEqual([]);
+			expect(r.ignored.map((d) => d.issue)).toEqual([5, 6]);
+		});
+	});
+
 	test("reads the inverse direction too", () => {
 		expect(extractDependencies("Blocks #618").blocks).toEqual([618]);
 	});

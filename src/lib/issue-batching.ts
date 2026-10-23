@@ -546,17 +546,39 @@ export function splitCitations(
 	return { present, missing };
 }
 
+/** One space or tab, or a single newline that is not part of a blank line (a paragraph break). */
+const SOFT_WS = "(?:[^\\S\\n]|\\n(?![^\\S\\n]*\\n))";
+/** Not preceded by a letter or digit: "unblocks" is not "blocks"; `_Requires_` reads. */
+const PHRASE_START = "(?<![A-Za-z0-9])";
+/**
+ * Between a dependency phrase and its first `#N`: `:`, markdown emphasis, spaces. Never
+ * empty, so `requires#5` is not a dependency.
+ */
+const PHRASE_GAP = `(?=[:*_]|${SOFT_WS})(?:[:*_]|${SOFT_WS})+`;
+/** One `#N`, optionally followed by a parenthetical note: `#1281 (audience frame)`. */
+const ISSUE_REF = `#\\d+(?:${SOFT_WS}*\\([^)\\n]*\\))?`;
+/** What joins two numbers in a list: `,`, `and`, `&`, `/`, `or`, with emphasis. */
+const LIST_PAD = `(?:[*_]|${SOFT_WS})*`;
+const LIST_JOIN = `${LIST_PAD}(?:(?:,${LIST_PAD})?(?:and|or)\\b|,|&|/)${LIST_PAD}`;
+/** `#A`, then any number of `<join> #B`. Ends at the first token that is not a join. */
+const ISSUE_LIST = `${ISSUE_REF}(?:${LIST_JOIN}${ISSUE_REF})*`;
+
 /**
  * Phrasings that mean "this issue must wait for #N".
  *
- * `\bblocks` deliberately does NOT match "unblocks": the preceding character
- * is a word character there, so the boundary fails.
+ * `blocks` deliberately does NOT match "unblocks": a letter precedes it. An
+ * underscore may, so `_Requires_ #5` reads.
  */
 const BLOCKED_BY_PATTERNS = [
-	/\b(?:blocked\s+by|depends\s+on|requires)\s+#(\d+)/gi,
-	/\bland\s+#(\d+)\s+first/gi,
+	new RegExp(
+		`${PHRASE_START}(?:blocked\\s+by|depends\\s+on|requires)${PHRASE_GAP}(${ISSUE_LIST})`,
+		"gi",
+	),
+	/\bland\s+(#\d+)\s+first/gi,
 ];
-const BLOCKS_PATTERNS = [/\bblocks\s+#(\d+)/gi];
+const BLOCKS_PATTERNS = [
+	new RegExp(`${PHRASE_START}blocks${PHRASE_GAP}(${ISSUE_LIST})`, "gi"),
+];
 
 /** A blockquote line (0-3 spaces, then `>`): usually someone else's text. */
 const BLOCKQUOTE = /^ {0,3}>/;
@@ -633,10 +655,12 @@ export function splitQuotedText(body: string): {
 /** Every `(phrase, number)` a set of patterns matches in `text`. */
 const matchPhrases = (text: string, patterns: RegExp[]) =>
 	patterns.flatMap((re) =>
-		[...text.matchAll(re)].map((m) => ({
-			phrase: m[0].replace(/\s+/g, " "),
-			issue: Number(m[1]),
-		})),
+		[...text.matchAll(re)].flatMap((m) =>
+			[...m[1].replace(/\([^)]*\)/g, " ").matchAll(/#(\d+)/g)].map((n) => ({
+				phrase: m[0].replace(/\s+/g, " "),
+				issue: Number(n[1]),
+			})),
+		),
 	);
 
 /**
