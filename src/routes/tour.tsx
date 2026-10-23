@@ -138,6 +138,10 @@ function Tour() {
 						Members open the meeting link, pick their name, and tap the role
 						they want. No account to make and no password to remember.
 					</p>
+					<p>
+						Every role also comes with a short guide to what to do before and
+						during the meeting, so a first-timer knows where to start.
+					</p>
 					<p>Open roles are the ones with a button. Try one.</p>
 				</Scene>
 
@@ -177,7 +181,8 @@ function Tour() {
 					</p>
 					<p>
 						Open it before the meeting and it keeps working when the room's
-						Wi-Fi doesn't.
+						Wi-Fi doesn't. The last slide shows next week's open roles with a QR
+						code, so people can claim one before they leave.
 					</p>
 				</Scene>
 
@@ -226,6 +231,12 @@ function Tour() {
 						Your VP Membership sees every guest who has visited, and drafts an
 						invite to the next meeting in one tap. GavelUp writes the draft. You
 						send it.
+					</p>
+					<p>
+						The VP Education also sees which new members are settling in and who
+						still needs an experienced member to pair with. To fill next week's
+						meeting, GavelUp drafts a WhatsApp message, an email and a flyer
+						from the agenda. You send them.
 					</p>
 				</Scene>
 

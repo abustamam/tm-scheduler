@@ -189,6 +189,16 @@ describe("/tour", () => {
 		expect(text).toMatch(/VP Membership/);
 	});
 
+	it("works the shipped features into the existing stops (#946)", async () => {
+		await renderTour();
+		const scene = (n: number) =>
+			document.querySelector(`section[data-scene="${n}"]`)?.textContent ?? "";
+		expect(scene(1)).toMatch(/before and\s+during the meeting/);
+		expect(scene(3)).toMatch(/next week's open roles with a QR\s+code/);
+		expect(scene(5)).toMatch(/needs an experienced member to pair with/);
+		expect(scene(5)).toMatch(/WhatsApp message, an email and a flyer/);
+	});
+
 	it("closes with the pilot pricing line, the founder note and a /request-access link", async () => {
 		await renderTour();
 		expect(screen.getByText(PILOT_PRICING_LINE)).toBeTruthy();

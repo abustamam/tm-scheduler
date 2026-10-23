@@ -75,12 +75,12 @@ const MAJOR_FEATURES = [
 	{
 		icon: CalendarCheck,
 		title: "Members fill the sheet",
-		body: "Open roles are obvious at a glance, and members claim them without an account — so signing up is one tap, not a text to the VPE.",
+		body: "Open roles are obvious at a glance, and members claim them without an account — so signing up is one tap, not a text to the VPE. Each role comes with a short guide to what to do before and during the meeting, so a first-timer is never lost.",
 	},
 	{
 		icon: MonitorPlay,
 		title: "Works in the room",
-		body: "Print the agenda, project it, take the roll, run the vote for best speaker. Present mode and attendance keep working when the Wi-Fi does not.",
+		body: "Print the agenda, project it, take the roll, run the vote for best speaker. The last slide shows next week's open roles with a QR code to claim one before people leave. Present mode and attendance keep working when the Wi-Fi does not.",
 	},
 ];
 
@@ -88,12 +88,12 @@ const MINOR_FEATURES = [
 	{
 		icon: GraduationCap,
 		title: "Pathways & DCP",
-		body: "Every member's Pathways progress and the club's Distinguished Club Program goals in one place — plus the official evaluation form for each project.",
+		body: "Every member's Pathways progress and the club's Distinguished Club Program goals in one place — plus the official evaluation form for each project. New members get a guided first few weeks, our own short quiz to suggest a path, and an experienced member to pair with, and the VP Education sees who is settling in.",
 	},
 	{
 		icon: UserPlus,
 		title: "The rest of the officer's job",
-		body: "Guests through the pipeline, dues renewals on schedule, minutes and awards recorded — the admin that usually lives in someone's inbox.",
+		body: "Guests through the pipeline, dues renewals on schedule, minutes and awards recorded — the admin that usually lives in someone's inbox. Promote next week's meeting in one tap: GavelUp drafts the WhatsApp message, the email and a flyer from the agenda, and you send them.",
 	},
 ];
 
