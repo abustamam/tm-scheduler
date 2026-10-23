@@ -220,7 +220,6 @@ describe("leak shapes: every invented value is gone", () => {
 		expect(own[0], "27182 keeps its 5 digits").toMatch(/^\d{5}$/);
 		expect(own[1], "00027182 keeps its 8 digits").toMatch(/^\d{8}$/);
 		expect(own[2], "16180 keeps its 5 digits").toMatch(/^\d{5}$/);
-		expect(own[1], "00027182 is not 27182 re-padded").not.toBe(own[0].padStart(8, "0"));
 		expect(own[1]).not.toBe("00027182");
 		expect(out.match(/club=(\d+)&/)?.[1], "0031415 keeps its 7 digits").toMatch(/^\d{7}$/);
 		expect(out.match(/Club Number<\/td><td>(\d+)</)?.[1], "031415 keeps its 6 digits").toMatch(/^\d{6}$/);
@@ -238,13 +237,21 @@ describe("leak shapes: every invented value is gone", () => {
 	});
 
 	it("a zero-padded id's zero prefix is not copied: fixed seeds, so no randomness in the verdict (#1286)", () => {
-		// one fake may start with 000 by chance (above); a generator that copied the prefix would start EVERY one with it
-		const reports = Array.from({ length: 30 }, (_, i) => {
+		// one fake may start with 000 by chance (above); a generator that copied the prefix would start EVERY one with it.
+		// Both padded ids are checked, and 27182 vs 00027182 as two keys with two fakes (a collision after re-padding is
+		// legitimate for a random seed, so it is only asserted here, on seeds that are fixed)
+		const reports: string[] = [];
+		const owns: string[] = [];
+		for (let i = 0; i < 30; i++) {
 			const out = rewriteEasySpeakPage(ZERO_PADDED_PAGE, { state: newRewriteState({ seed: `zp-fixed-${i}` }) });
 			expectZeroPaddedIdsInvented(out);
-			return out.match(/ClubReport\.aspx\?id=(\d{8})/)?.[1] ?? "";
-		});
-		expect(reports.filter((r) => !r.startsWith("000")).length).toBeGreaterThan(0);
+			reports.push(out.match(/ClubReport\.aspx\?id=(\d{8})/)?.[1] ?? "");
+			const own = [...out.matchAll(/c=(\d+)/g)].map((m) => m[1]);
+			expect(own[1], `seed ${i}: 00027182 is not 27182 re-padded`).not.toBe(own[0].padStart(8, "0"));
+			owns.push(own[1]);
+		}
+		expect(reports.filter((r) => !r.startsWith("000")).length, "ClubReport id").toBeGreaterThan(0);
+		expect(owns.filter((r) => !r.startsWith("000")).length, "orgdata c=").toBeGreaterThan(0);
 	});
 
 	it("a real club's name and places never survive, whatever its words", () => {
