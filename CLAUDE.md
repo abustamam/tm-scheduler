@@ -158,6 +158,8 @@ with `docker ps`, not a `/dev/tcp/localhost` probe (`localhost` is `::1` here).
 - Three longer rules live in `CODING_STANDARDS.md` ("Conventions"): print routes share
   `PRINT_PAGE_CSS`; no `:not()` arm or `!important` on the text-link rule; a dialog's height
   belongs to `DialogContent`.
+- **Design system:** read `DESIGN.md` before UI work; ask before departing from it, and flag
+  code that doesn't match it in review.
 
 ## Data layer and deployment
 
