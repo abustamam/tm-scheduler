@@ -35,6 +35,7 @@ export function TableTopicsCapture({
 	canEdit,
 	busy,
 	roster,
+	unavailableMemberIds,
 	clubGuests,
 	onAdd,
 	onRemove,
@@ -49,6 +50,12 @@ export function TableTopicsCapture({
 	canEdit: boolean;
 	busy: boolean;
 	roster: { memberId: string; name: string }[];
+	/**
+	 * Members `isMemberUnavailable` says cannot take part at this meeting (#1319,
+	 * the #1257 rule). REQUIRED, and applied HERE rather than in each mounting
+	 * site, so the two pickers cannot drift. They are hidden, not greyed out.
+	 */
+	unavailableMemberIds: readonly string[];
 	clubGuests: { id: string; name: string; stage?: string }[];
 	onAdd: (payload: {
 		memberId?: string;
@@ -60,6 +67,7 @@ export function TableTopicsCapture({
 	onMove: (id: string, direction: "up" | "down") => void;
 }) {
 	const [topic, setTopic] = useState("");
+	const unavailableIds = new Set(unavailableMemberIds);
 	return (
 		<section className="space-y-3">
 			<h3 className="font-semibold text-sm">Table Topics speakers</h3>
@@ -136,7 +144,7 @@ export function TableTopicsCapture({
 					/>
 					<AssigneePicker
 						label="+ Add speaker"
-						roster={roster}
+						roster={roster.filter((m) => !unavailableIds.has(m.memberId))}
 						clubGuests={clubGuests}
 						busy={busy}
 						onPick={(payload) => {

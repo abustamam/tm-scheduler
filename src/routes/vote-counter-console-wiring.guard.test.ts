@@ -123,3 +123,28 @@ describe("vote counter console ruling-gate wiring (#752)", () => {
 		expect(props).not.toContain("<TableTopicsCapture");
 	});
 });
+
+describe("vote counter console Table Topics picker wiring (#1319)", () => {
+	const src = readSource(ROUTE);
+	const tagAt = src.indexOf("<TableTopicsCapture");
+	const tagEnd = src.indexOf("/>", tagAt);
+	const props = src.slice(tagAt, tagEnd);
+
+	it("finds the console's TableTopicsCapture and slices only it", () => {
+		// protects: the window below is this one element, not the whole route.
+		// fails_when: the element is renamed or the slice swallows the file.
+		// no_claim: says nothing about what the props contain.
+		expect(tagAt).toBeGreaterThan(-1);
+		expect(props.length).toBeLessThan(1000);
+		expect(props).not.toContain("<VoteCounterPanel");
+	});
+
+	it("hands the picker the unavailable ids from the loader", () => {
+		// protects: an officer adding a speaker mid-meeting is not offered an
+		//   Absent or Not-coming member; the route is the only place the ids
+		//   arrive, and a prop swap type-checks (the repo's route-prop-gate note).
+		// fails_when: the prop is dropped or fed another same-typed array.
+		// no_claim: the filtering itself, which lives in TableTopicsCapture.
+		expect(props).toContain("unavailableMemberIds={unavailableMemberIds}");
+	});
+});
