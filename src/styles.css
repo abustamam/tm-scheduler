@@ -48,6 +48,14 @@
   --hero-a: rgba(79, 184, 178, 0.36);
   --hero-b: rgba(47, 106, 74, 0.2);
 
+  /* Motion (DESIGN.md). Same in both modes. */
+  --duration-micro: 120ms;
+  --duration-short: 200ms;
+  --duration-medium: 300ms;
+  --ease-enter: cubic-bezier(0.2, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --ease-move: cubic-bezier(0.4, 0, 0.2, 1);
+
   /* Success accent — claimed/assigned role slots (the sign-up grid + Claim
      buttons). Derives from --palm, which flips light/dark, so text-success is
      AA-readable on surfaces in both themes (6.4:1 white bg / 8.5:1 dark card)
@@ -184,6 +192,23 @@
   --container-workspace: 1180px;
   --container-public: 64rem;
   --container-reading: 48rem;
+  /* Literals repeat the :root tokens: var(--ease-enter) here would be self-referential. */
+  --ease-enter: cubic-bezier(0.2, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --ease-move: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Semantic aliases over the brand vars; identical values in both modes. */
+  --color-surface-raised: var(--surface-strong);
+  --color-surface-glass: var(--surface);
+  --color-surface-soft: var(--foam);
+  --color-surface-muted: var(--sand);
+  --color-link: var(--lagoon-deep);
+  --color-highlight: var(--lagoon);
+  --color-primary-ink: var(--lagoon-ink);
+  --color-timer-green: #1f7a46;
+  --color-timer-yellow: #f2c230;
+  --color-timer-red: #c0262d;
+  --color-timer-over: #7a1218;
+  --color-timer-yellow-ink: #1a1405;
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
   --color-warning-strong: var(--warning-strong);
@@ -240,42 +265,10 @@ body {
   margin: 0;
   color: var(--sea-ink);
   font-family: var(--font-sans);
-  background-color: var(--bg-base);
-  background:
-    radial-gradient(1100px 620px at -8% -10%, var(--hero-a), transparent 58%),
-    radial-gradient(1050px 620px at 112% -12%, var(--hero-b), transparent 62%),
-    radial-gradient(720px 380px at 50% 115%, rgba(79, 184, 178, 0.1), transparent 68%),
-    linear-gradient(180deg, color-mix(in oklab, var(--sand) 68%, white) 0%, var(--foam) 44%, var(--bg-base) 100%);
+  background: radial-gradient(1100px 620px at -8% -10%, var(--hero-a), transparent 58%), var(--background);
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-}
-
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: -1;
-  opacity: 0.28;
-  background:
-    radial-gradient(circle at 20% 15%, rgba(255, 255, 255, 0.8), transparent 34%),
-    radial-gradient(circle at 78% 26%, rgba(79, 184, 178, 0.2), transparent 42%),
-    radial-gradient(circle at 42% 82%, rgba(47, 106, 74, 0.14), transparent 36%);
-}
-
-body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: -1;
-  opacity: 0.14;
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
-  background-size: 28px 28px;
-  mask-image: radial-gradient(circle at 50% 30%, black, transparent 78%);
 }
 
 /* Text-link styling. LAYERED, deliberately (#646).
@@ -453,6 +446,19 @@ a {
   body {
     background-color: var(--background);
     color: var(--foreground);
+  }
+}
+
+/* Reduced motion (DESIGN.md). Covers every transition and animation, including
+   the 180ms link, 170ms nav underline and the marketing .rise-in. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
