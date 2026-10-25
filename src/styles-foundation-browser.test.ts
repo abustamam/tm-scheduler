@@ -96,10 +96,11 @@ document.documentElement.setAttribute("data-result", encodeURIComponent(JSON.str
 }
 
 describe.skipIf(!chrome)("styles.css foundation in Chrome (#1306)", () => {
-	let report: Report;
+	let report: Report | undefined;
 	const get = async () => {
 		if (chrome === null) throw new Error("no Chrome");
-		return (report ??= await measure(chrome));
+		if (report === undefined) report = await measure(chrome);
+		return report;
 	};
 
 	it(
