@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { firstNameOf, greetingName, namesAgree } from "./person-name";
+import {
+	firstNameOf,
+	greetingName,
+	namesAgree,
+	nameWords,
+} from "./person-name";
 
 describe("namesAgree", () => {
 	it("matches the same name written the same way", () => {
@@ -248,5 +253,24 @@ describe("greetingName", () => {
 
 	it("keeps a mononym intact", () => {
 		expect(greetingName({ name: "Prince" })).toBe("Prince");
+	});
+});
+
+describe("nameWords (#1331)", () => {
+	// protects=search can read words in written order; fails_when=nameWords sorts or drops folding; no_claim=nothing about matching
+	it("keeps written order while folding case, accents and punctuation", () => {
+		expect(nameWords("Zoë D'Angelo-Smith")).toEqual([
+			"zoe",
+			"dangelo",
+			"smith",
+		]);
+	});
+
+	// protects=namesAgree's sorted token view; fails_when=nameTokens stops sorting (names over 8 tokens compare element-wise, so only sorted lists agree); no_claim=namesAgree pairing rules
+	it("nameTokens is nameWords sorted", () => {
+		const nine = "a1 b2 c3 d4 e5 f6 g7 h8 i9";
+		const reversed = nine.split(" ").reverse().join(" ");
+		expect(nameWords(reversed)[0]).toBe("i9");
+		expect(namesAgree(nine, reversed)).toBe(true);
 	});
 });
