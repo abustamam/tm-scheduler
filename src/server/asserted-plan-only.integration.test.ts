@@ -1,17 +1,17 @@
 /**
- * DB-backed tests that the SESSIONLESS (asserted-proof) claim and confirm read
- * the member's PLAN and never the attendance ROLL.
+ * DB-backed tests of the contract that the SESSIONLESS (asserted-proof) claim and
+ * confirm read the member's PLAN only.
  *
- * The roll (Present / Absent) is members-only. The plan answer (`not_coming`) is
- * public: the meeting payload's `answeredRungs` carries it. An asserted caller
- * holds no session, so what refuses them may only be the plan. In particular the
- * answer they get never differs by roll state, including for a slot someone else
- * already holds, where the check used to run before the conditional UPDATE.
+ * The attendance roll is members-only. The plan answer (`not_coming`) is public:
+ * the meeting payload's `answeredRungs` carries it. An asserted caller holds no
+ * session, so what refuses them is the plan alone: the result of an asserted
+ * claim or confirm is a function of the plan answer, for an open slot and for a
+ * slot another member holds.
  *
- * Session and connector callers keep the roll-wins rule (`isMemberUnavailable`):
- * a connector claim for an Absent member is still refused, and a session claim is
- * not gated on the roll at all, both as before. The `claimSlot` server fn is
- * driven with `createServerFn` and the session mocked, signed out.
+ * Session and connector callers keep the roll-aware check (`isMemberUnavailable`):
+ * a connector claim for an Absent member is refused, and a session claim is not
+ * gated on the roll at all. The `claimSlot` server fn is driven with
+ * `createServerFn` and the session mocked, signed out.
  */
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -57,7 +57,8 @@ vi.mock("#/lib/auth", () => ({
 }));
 
 const { claimSlot } = await import("#/server/slots");
-const { claimSlotCore, confirmSlotCore } = await import("#/server/slots-logic");
+const { claimSlotCore, confirmHeldClaimedSlots, confirmSlotCore } =
+	await import("#/server/slots-logic");
 const { isMemberNotComing, isMemberUnavailable } = await import(
 	"#/server/attendance-plan-logic"
 );
@@ -89,7 +90,7 @@ describe.skipIf(!hasTestDb)(
 
 		async function setPlan(
 			memberId: string,
-			status: "coming" | "not_coming" | null,
+			status: "coming" | "not_coming" | "reached_out" | null,
 		) {
 			await testDb
 				.delete(meetingAttendancePlan)
@@ -193,9 +194,9 @@ describe.skipIf(!hasTestDb)(
 			});
 		}
 
-		describe("the answer for a slot someone else already holds", () => {
-			it("is the same whether the member is Absent, Present, or has no roll row (plan: coming)", async () => {
-				// protects=a signed-out claim on a taken slot says nothing about the roll; fails_when=the asserted gate reads the roll before the conditional UPDATE; no_claim=the answer for a not_coming member differs by design, from the public plan, and is the next case
+		describe("a signed-out claim on a slot another member holds", () => {
+			it("is answered from the plan alone, for every roll state (plan: coming)", async () => {
+				// protects=an asserted claim on a held slot is a function of the plan answer; fails_when=the asserted path calls the roll-aware check; no_claim=a not_coming plan answer refuses by design, and is the third case
 				await giveSlotTo(seed.adminMemberId, "claimed");
 				await setPlan(seed.memberId, "coming");
 				const answers: Record<Roll, string> = {
@@ -217,7 +218,7 @@ describe.skipIf(!hasTestDb)(
 				});
 			});
 
-			it("is the same whether the member is Absent, Present, or has no roll row (no plan answer)", async () => {
+			it("is answered from the plan alone, for every roll state (no plan answer)", async () => {
 				await giveSlotTo(seed.adminMemberId, "claimed");
 				const answers: string[] = [];
 				for (const roll of ROLLS) {
@@ -227,8 +228,8 @@ describe.skipIf(!hasTestDb)(
 				expect(answers).toEqual(ROLLS.map(() => CLAIMED_ELSEWHERE_MESSAGE));
 			});
 
-			it("is the same whatever the roll says, for a member whose public plan answer is not_coming", async () => {
-				// The plan is public (`answeredRungs`), so refusing on it is fine; what must not change the answer is the roll.
+			it("is answered from the plan alone, for every roll state (plan: not_coming)", async () => {
+				// The plan is public (`answeredRungs`): a not_coming answer refuses, for every roll state.
 				await giveSlotTo(seed.adminMemberId, "claimed");
 				await setPlan(seed.memberId, "not_coming");
 				const answers: string[] = [];
@@ -248,7 +249,7 @@ describe.skipIf(!hasTestDb)(
 				"absent",
 				"present",
 			] as const)("an asserted self-claim by a member recorded %s, with no plan answer, is not refused by the roll", async (roll) => {
-				// protects=the roll does not gate an unverified claim; fails_when=the asserted gate reads the roll again; no_claim=who may claim for someone else is the TMOD rule, not under test here
+				// protects=an unverified claim is gated on the plan only; fails_when=the asserted path calls the roll-aware check; no_claim=who may claim for someone else is the TMOD rule, not under test here
 				await setRoll(seed.memberId, roll);
 				await claim(seed.memberId, seed.memberId, "asserted");
 				expect(await slot()).toEqual({
@@ -268,7 +269,7 @@ describe.skipIf(!hasTestDb)(
 			it.each(
 				ROLLS,
 			)("an asserted claim over a not_coming plan answer is still refused, writing nothing (roll: %s)", async (roll) => {
-				// protects=not_coming still refuses an unverified claim, whatever the roll says; fails_when=the plan check is dropped, or it yields to a Present roll; no_claim=none
+				// protects=not_coming refuses an unverified claim for every roll state; fails_when=the plan check is dropped, or the roll can lift it; no_claim=none
 				await setPlan(seed.memberId, "not_coming");
 				await setRoll(seed.memberId, roll);
 				await expect(
@@ -290,7 +291,7 @@ describe.skipIf(!hasTestDb)(
 			});
 
 			it("a CONNECTOR claim for a member recorded Absent is still refused: roll wins", async () => {
-				// protects=session and connector callers keep the roll-wins rule; fails_when=the connector arm moves to the plan-only check; no_claim=the MCP tools call isMemberUnavailable directly and have their own tests
+				// protects=session and connector callers keep the roll-aware check; fails_when=the connector arm moves to the plan-only check; no_claim=the MCP tools call isMemberUnavailable directly and have their own tests
 				await setRoll(seed.memberId, "absent");
 				await expect(
 					claim(seed.memberId, seed.memberId, "connector"),
@@ -317,7 +318,7 @@ describe.skipIf(!hasTestDb)(
 			it.each(
 				ROLLS,
 			)("an asserted confirm with no plan answer is not refused by the roll (roll: %s)", async (roll) => {
-				// protects=the roll does not gate an unverified confirm; fails_when=the confirm gate reads the roll again; no_claim=who may confirm over a not_coming answer is the next case
+				// protects=an unverified confirm is gated on the plan only; fails_when=the confirm path calls the roll-aware check; no_claim=who may confirm over a not_coming answer is the next case
 				await setRoll(seed.memberId, roll);
 				const result = await confirm("asserted");
 				expect(result).toMatchObject({ ok: true, grantedVia: "self" });
@@ -327,8 +328,8 @@ describe.skipIf(!hasTestDb)(
 
 			it.each(
 				ROLLS,
-			)("an asserted confirm over a not_coming plan answer is refused, the same way whatever the roll says (roll: %s)", async (roll) => {
-				// protects=not_coming still refuses an unverified confirm, and the roll changes neither the refusal nor its text; fails_when=the plan check is dropped, or it yields to a Present roll; no_claim=none
+			)("an asserted confirm over a not_coming plan answer is refused with the one message (roll: %s)", async (roll) => {
+				// protects=not_coming refuses an unverified confirm with one message for every roll state; fails_when=the plan check is dropped, or the roll can lift it; no_claim=none
 				await setPlan(seed.memberId, "not_coming");
 				await setRoll(seed.memberId, roll);
 				await expect(confirm("asserted")).rejects.toThrow(
@@ -351,12 +352,53 @@ describe.skipIf(!hasTestDb)(
 				expect((await slot())?.status).toBe("confirmed");
 				expect(await plan(seed.memberId)).toBe("coming");
 			});
+
+			describe("confirmHeldClaimedSlots with the asserted proof", () => {
+				function confirmHeld() {
+					return confirmHeldClaimedSlots({
+						memberId: seed.memberId,
+						meetingId: seed.meetingId,
+						proof: "asserted",
+					});
+				}
+
+				it("returns one result for every roll state: it reads the plan only", async () => {
+					// protects=the signed-out confirm-held path is a function of the plan answer; fails_when=it calls the roll-aware check; no_claim=the nudge page's wiring is pinned by attendance-plan-confirm-wiring.guard.test.ts
+					const results: { confirmedRoles: string[] }[] = [];
+					for (const roll of ROLLS) {
+						await giveSlotTo(seed.memberId, "claimed");
+						await setPlan(seed.memberId, null);
+						await setRoll(seed.memberId, roll);
+						results.push(await confirmHeld());
+						expect((await slot())?.status).toBe("confirmed");
+					}
+					expect(results[0]?.confirmedRoles).toHaveLength(1);
+					expect(results).toEqual(ROLLS.map(() => results[0]));
+				});
+
+				it.each(
+					ROLLS,
+				)("a not_coming plan answer refuses it with the one message, writing nothing (roll: %s)", async (roll) => {
+					await setPlan(seed.memberId, "not_coming");
+					await setRoll(seed.memberId, roll);
+					await expect(confirmHeld()).rejects.toThrow(
+						new RegExp(`^${SIGN_IN_REQUIRED_MESSAGE.replace(/\./g, "\\.")}$`),
+					);
+					expect((await slot())?.status).toBe("claimed");
+					expect(await plan(seed.memberId)).toBe("not_coming");
+				});
+			});
 		});
 
 		describe("isMemberNotComing", () => {
-			it("is true only for a not_coming plan answer, whatever the roll says", async () => {
+			it("is true only for a not_coming plan answer, for every roll state", async () => {
 				const answers: Record<string, boolean> = {};
-				for (const planStatus of [null, "coming", "not_coming"] as const) {
+				for (const planStatus of [
+					null,
+					"coming",
+					"not_coming",
+					"reached_out",
+				] as const) {
 					await setPlan(seed.memberId, planStatus);
 					for (const roll of ROLLS) {
 						await setRoll(seed.memberId, roll);
@@ -373,13 +415,16 @@ describe.skipIf(!hasTestDb)(
 					"coming/none": false,
 					"coming/absent": false,
 					"coming/present": false,
+					"reached_out/none": false,
+					"reached_out/absent": false,
+					"reached_out/present": false,
 					"not_coming/none": true,
 					"not_coming/absent": true,
 					"not_coming/present": true,
 				});
 			});
 
-			it("is the plan-only twin: isMemberUnavailable still lets the roll win", async () => {
+			it("is plan-only, where isMemberUnavailable is the roll-aware check", async () => {
 				await setPlan(seed.memberId, "not_coming");
 				await setRoll(seed.memberId, "present");
 				const args = { memberId: seed.memberId, meetingId: seed.meetingId };
@@ -391,7 +436,7 @@ describe.skipIf(!hasTestDb)(
 				expect(await isMemberUnavailable(testDb, args)).toBe(true);
 			});
 
-			it("is scoped to the meeting's club: another club's member is never not coming here", async () => {
+			it("is scoped to the meeting's club: another club's member is never not_coming here", async () => {
 				const other = await seedClub();
 				clubs.push(other);
 				await testDb.insert(meetingAttendancePlan).values({

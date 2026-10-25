@@ -733,20 +733,33 @@ export async function isMemberUnavailable(
 }
 
 /**
- * Is one member's PLAN answer `not_coming`? The plan-only twin of
- * `isMemberUnavailable`: it never reads the roll. A sessionless (asserted-proof)
- * caller uses this one, because the plan is public (the meeting payload's
- * `answeredRungs` carries it) and the roll is members-only. Session and
- * connector callers keep `isMemberUnavailable` (the roll wins over the plan).
+ * Is one member's PLAN answer `not_coming` for this meeting? Plan-only
+ * unavailability, used by the asserted claim and confirm. Its query holds the
+ * club's `members` and `meetings` rows (for club scoping) and the plan table,
+ * and no attendance table at all; session and connector callers use
+ * `isMemberUnavailable`, which reads both.
  *
- * Same club scoping as `isMemberUnavailable` (it shares `unavailableBase`), so a
- * member id from another club is never "not coming" here.
+ * Club-scoped like `isMemberUnavailable`: a member id from another club is
+ * never `not_coming` for this meeting.
  */
 export async function isMemberNotComing(
 	database: DbOrTx,
 	args: { memberId: string; meetingId: string },
 ): Promise<boolean> {
-	const rows = await unavailableBase(database, args.meetingId)
+	const rows = await database
+		.select({ id: members.id })
+		.from(members)
+		.innerJoin(
+			meetings,
+			and(eq(meetings.id, args.meetingId), eq(meetings.clubId, members.clubId)),
+		)
+		.innerJoin(
+			meetingAttendancePlan,
+			and(
+				eq(meetingAttendancePlan.memberId, members.id),
+				eq(meetingAttendancePlan.meetingId, args.meetingId),
+			),
+		)
 		.where(
 			and(
 				eq(members.id, args.memberId),

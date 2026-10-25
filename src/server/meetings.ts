@@ -273,9 +273,8 @@ async function loadMeetingDetail(
 	//    available even after Not coming. A membership that is not active counts
 	//    as no membership here.
 	//  - everyone else, signed out included, gets the PLAN-only `not_coming` list.
-	// The split is the gate: `answeredRungs` below is public, and the roll is
-	// members-only, so handing the roll-aware list to a public reader would let
-	// them compare the two and read each member's Present/Absent record.
+	// The roll-aware list is for active members only: the roll is members-only,
+	// while `answeredRungs` below is public and carries the plan.
 	let viewerIsMember = canManage;
 	if (!viewerIsMember && currentUserId) {
 		const membership = await getMembership(currentUserId, meeting.clubId);

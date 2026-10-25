@@ -329,8 +329,8 @@ export async function resolveMemberSubject(
  * downstream re-checks, because the boolean IS the decision: `getProjectOptions`
  * passes it straight to `listProjectOptions` as `includeProgress`.
  *
- * `canManageClub` is a sibling that reads `clubRole` and now also requires
- * `status === "active"`; `getMembership`'s ordering still decides which of two
+ * `canManageClub` is a sibling that reads `clubRole` and requires
+ * `status === "active"`; `getMembership`'s ordering decides which of two
  * rows it sees, and that ordering is a thing this function did not have either.
  * Requiring active here rather than leaning on key 1 is deliberate: key 1 only
  * ranks rows that exist, so a lapsed admin who is the ONLY membership still

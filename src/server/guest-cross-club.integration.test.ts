@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
 	guests,
+	impersonationSessions,
 	members,
 	officerTerms,
 	people,
@@ -110,6 +111,37 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 		extraPeople.push(personId);
 		if (clubId) await makeAdmin(personId, clubId);
 		return { userId, personId };
+	}
+
+	/**
+	 * A superadmin with a `read_write` session for `lapsedClubId` (a user holds one
+	 * session at a time) and an inactive admin seat in that same club, who is an
+	 * active admin of `otherClubId`.
+	 */
+	async function seedImpersonator(
+		lapsedClubId: string,
+		otherClubId: string,
+	): Promise<string> {
+		const { userId, personId } = await seedUser(otherClubId);
+		await testDb
+			.update(user)
+			.set({ isSuperadmin: true })
+			.where(eq(user.id, userId));
+		await testDb.insert(members).values({
+			clubId: lapsedClubId,
+			personId,
+			name: "Lapsed Officer",
+			clubRole: "admin",
+			status: "inactive",
+		});
+		await testDb.insert(impersonationSessions).values({
+			superadminUserId: userId,
+			clubId: lapsedClubId,
+			mode: "read_write",
+			reason: "test",
+			expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+		});
+		return userId;
 	}
 
 	async function makeAdmin(personId: string, clubId: string): Promise<string> {
@@ -413,6 +445,24 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				.from(guests)
 				.where(eq(guests.id, g.id));
 			expect(mine?.introducedBy).toBeNull();
+		});
+
+		it("credits no introducer to a read_write impersonator whose seat in the other club is not active", async () => {
+			// protects=only an ACTIVE seat is credited as the introducer; fails_when=the introducer is taken from a membership that is not active; no_claim=an active officer is credited to their seat (the case above)
+			const impersonator = await seedImpersonator(b.clubId, a.clubId);
+			const g = await seedGuest(a.clubId);
+			await applyAddGuestToClub({
+				userId: impersonator,
+				fromClubId: a.clubId,
+				guestId: g.id,
+				toClubId: b.clubId,
+			});
+			const [added] = await testDb
+				.select({ introducedBy: guests.introducedByMemberId })
+				.from(guests)
+				.where(eq(guests.clubId, b.clubId));
+			expect(added).toBeDefined();
+			expect(added?.introducedBy).toBeNull();
 		});
 
 		it("is refused when the other club already has an unconverted guest on that Person", async () => {
@@ -1633,6 +1683,24 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 			expect(formatActivity(entry as ActivityEntry).summary).toBe(
 				"linked Audit Acting to the same person in another club",
 			);
+		});
+
+		it("credits the activity row to no member for a read_write impersonator whose seat in the acting club is not active", async () => {
+			// protects=the audit row names the actor's ACTIVE seat only; fails_when=the actor id is taken from a membership that is not active; no_claim=an active officer is credited to their seat (the audit test above)
+			const impersonator = await seedImpersonator(a.clubId, b.clubId);
+			const g = await seedGuest(a.clubId, { name: "Impersonated Acting" });
+			const o = await seedGuest(b.clubId, {
+				name: "Impersonated Other",
+				email: `im-${uniq()}@example.test`,
+			});
+			await applyLinkGuestAcrossClubs({
+				...asOfficer(g, o),
+				userId: impersonator,
+				expected: await expectedOf(g, o),
+			});
+			const rows = await linkLogRows(a.clubId);
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.actorMemberId).toBeNull();
 		});
 
 		// -- the read contracts -------------------------------------------------

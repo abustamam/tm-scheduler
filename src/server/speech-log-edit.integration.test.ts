@@ -18,6 +18,7 @@ import {
 	activityLog,
 	clubs,
 	guests,
+	impersonationSessions,
 	meetings,
 	members,
 	officerTerms,
@@ -55,9 +56,12 @@ vi.mock("@tanstack/react-start", () => ({
 
 let sessionUserId: string | null = null;
 let request = { headers: new Headers() };
+/** When set, every `getRequest()` returns a NEW object (see the impersonator case). */
+let freshRequestPerCall = false;
 vi.mock("@tanstack/react-start/server", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-start/server")>()),
-	getRequest: () => request,
+	getRequest: () =>
+		freshRequestPerCall ? { headers: request.headers } : request,
 }));
 vi.mock("#/lib/auth", () => ({
 	auth: {
@@ -84,6 +88,7 @@ describe.skipIf(!hasTestDb)("edit a speech from the speech log (#1159)", () => {
 
 	beforeEach(async () => {
 		sessionUserId = null;
+		freshRequestPerCall = false;
 		request = { headers: new Headers() };
 		extraUserIds = [];
 		extraClubIds = [];
@@ -147,6 +152,9 @@ describe.skipIf(!hasTestDb)("edit a speech from the speech log (#1159)", () => {
 				.delete(speeches)
 				.where(inArray(speeches.personId, personIds));
 		}
+		await testDb
+			.delete(impersonationSessions)
+			.where(eq(impersonationSessions.clubId, seed.clubId));
 		for (const clubId of extraClubIds) await cleanup(clubId, []);
 		await cleanup(seed.clubId, [
 			seed.adminUserId,
@@ -402,6 +410,36 @@ describe.skipIf(!hasTestDb)("edit a speech from the speech log (#1159)", () => {
 			const log = await editLog();
 			expect(log).toHaveLength(1);
 			expect(log[0]?.actorMemberId).toBe(former.memberId);
+		});
+
+		it("a read_write impersonator whose own membership is not active is credited to no member", async () => {
+			// protects=the log row names the actor's ACTIVE seat only; fails_when=the actor id is taken from a membership that is not active; no_claim=an active admin is credited to their seat (AC1)
+			const lapsed = await addMember({ status: "inactive" });
+			await testDb
+				.update(user)
+				.set({ isSuperadmin: true })
+				.where(eq(user.id, lapsed.userId));
+			await testDb.insert(impersonationSessions).values({
+				superadminUserId: lapsed.userId,
+				clubId: seed.clubId,
+				mode: "read_write",
+				reason: "test",
+				expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+			});
+			const { slotId } = await emptyMemberSlot(seed.memberId);
+			await setStatus("completed");
+			sessionUserId = lapsed.userId;
+			// The impersonation marker is keyed by the request object. A new object
+			// per call leaves it unset, so the row carries exactly the actor id this
+			// site passes, and the site's own status test is what the assertion reads.
+			freshRequestPerCall = true;
+
+			await editSpeechFromLog({ data: { ...withProject(), slotId } });
+
+			expect((await snapshot(slotId)).speech?.projectId).toBe(projectId);
+			const log = await editLog();
+			expect(log).toHaveLength(1);
+			expect(log[0]?.actorMemberId).toBeNull();
 		});
 
 		it("a title-only edit keeps the free-text path, project, level and introduction the form did not send", async () => {

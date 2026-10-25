@@ -201,6 +201,11 @@ const SLOT_FILL_BLANK: Record<
 			mustContain: string[];
 			/** Each `[a, b]`: `a` must occur, and before `b`. */
 			mustPrecede?: [string, string][];
+			/** Shapes that must NOT occur anywhere in the fn body. */
+			mustNotContain?: string[];
+			/** Each `[open, forbidden]`: `open` (ending in `{`) must occur, and the
+			 *  brace-matched block it opens must not contain `forbidden`. */
+			mustNotContainIn?: [string, string][];
 		}[];
 	}
 > = {
@@ -230,6 +235,11 @@ const SLOT_FILL_BLANK: Record<
 					"proof: args.proof,",
 				],
 				mustPrecede: [['if (args.proof === "asserted")', ".update(roleSlots)"]],
+				// The sessionless proof reads the plan only: the roll-aware check
+				// belongs to the connector arm, and the asserted block never calls it.
+				mustNotContainIn: [
+					['if (args.proof === "asserted") {', "isMemberUnavailable"],
+				],
 			},
 			{
 				file: "slots-logic.ts",
@@ -265,6 +275,9 @@ const SLOT_FILL_BLANK: Record<
 						".update(roleSlots)",
 					],
 				],
+				// The connector proof is refused outright and a session proof is not
+				// gated on the roll, so this core has no use for the roll-aware check.
+				mustNotContain: ["isMemberUnavailable"],
 			},
 			{
 				file: "slots-logic.ts",
@@ -290,6 +303,16 @@ const SLOT_FILL_BLANK: Record<
  *  a reformat (Biome re-wrapping a ternary) does not read as a deletion. */
 function collapse(text: string): string {
 	return text.replace(/\s+/g, " ").replace(/\( /g, "(").replace(/ \)/g, ")");
+}
+
+/** The brace-matched block whose `{` is at `open`, or null when it never closes. */
+function braceBlock(text: string, open: number): string | null {
+	let depth = 0;
+	for (let i = open; i < text.length; i++) {
+		if (text[i] === "{") depth++;
+		else if (text[i] === "}" && --depth === 0) return text.slice(open, i + 1);
+	}
+	return null;
 }
 
 /**
@@ -1047,6 +1070,23 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 					if (a === -1 || b === -1 || a > b) {
 						offenders.push(
 							`${check.file}#${check.fn} (${first} must run before ${then})`,
+						);
+					}
+				}
+				for (const forbidden of check.mustNotContain ?? []) {
+					if (flat.includes(forbidden)) {
+						offenders.push(
+							`${check.file}#${check.fn} (must not use ${forbidden})`,
+						);
+					}
+				}
+				for (const [open, forbidden] of check.mustNotContainIn ?? []) {
+					const at = flat.indexOf(collapse(open));
+					const block =
+						at === -1 ? null : braceBlock(flat, at + collapse(open).length - 1);
+					if (block === null || block.includes(forbidden)) {
+						offenders.push(
+							`${check.file}#${check.fn} (the ${open} block must exist and not use ${forbidden})`,
 						);
 					}
 				}

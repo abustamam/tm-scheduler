@@ -267,8 +267,9 @@ export function showsMeetingReadiness(input: {
  * Who sees the panel: a club admin (`canManage`) who is not previewing as a
  * member, OR this meeting's Toastmaster of the Day.
  *
- * `canManage` is `canManageClub`'s answer (`src/server/guards.ts`): a stored
- * `club_role` of admin, or a `read_write` impersonation. It does NOT include an
+ * `canManage` is `canManageClub`'s answer (`src/server/guards.ts`): an active
+ * membership whose stored `club_role` is admin, or a `read_write`
+ * impersonation. It does NOT include an
  * elected officer who is not an admin. That is the pre-existing asymmetry the
  * route's `guestEdit` comment describes (the server is more permissive than this
  * UI), and it is not this panel's call to widen: such an officer sees the panel

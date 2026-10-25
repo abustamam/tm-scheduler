@@ -131,8 +131,8 @@ describe.skipIf(!hasTestDb)(
 
 		// Status outranks role: an admin badge on a membership they no longer hold
 		// must not beat the membership they actually have. This is the direction
-		// that matters, because `canManageClub` returns `clubRole === "admin"`
-		// WITHOUT checking status.
+		// that matters, because `canManageClub` takes the one row this returns and
+		// requires it to be active.
 		it("prefers an active member over an INACTIVE admin", async () => {
 			const staleAdmin = await addMembership({
 				clubRole: "admin",

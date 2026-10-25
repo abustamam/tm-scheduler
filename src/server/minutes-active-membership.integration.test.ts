@@ -3,8 +3,9 @@
  * as no membership: neither a member's read of a completed meeting's minutes nor
  * an admin's read of a meeting that is not completed.
  *
- * Ending (`former`) or deactivating (`inactive`) a membership leaves its stored
- * `club_role` alone, so the rows below say "admin" for someone who no longer is.
+ * Ending (`former`) or deactivating (`inactive`) a membership keeps its stored
+ * `club_role`, so the rows below hold the role "admin" with a status that is
+ * not `active`.
  * `getMinutes` is called through the real server fn, with `createServerFn` and
  * the session mocked.
  */
@@ -153,6 +154,25 @@ describe.skipIf(!hasTestDb)(
 		it("a signed-out caller reads nothing", async () => {
 			const s = await seed("completed");
 			expect(await minutesFor(s, null)).toEqual(EMPTY);
+		});
+
+		it.each(
+			NOT_ACTIVE,
+		)("a read_only impersonation reads nothing, for a superadmin whose own membership is %s", async (status) => {
+			// protects=only a read_write impersonation reads the minutes of a meeting that is not completed, and a membership that is not active does not widen a read_only one; fails_when=a non-active membership or a read_only session grants the read or the edit; no_claim=none
+			const s = await seed("scheduled");
+			await testDb
+				.update(user)
+				.set({ isSuperadmin: true })
+				.where(eq(user.id, s.adminUserId));
+			await setStatus(s.adminMemberId, status);
+			await testDb.insert(impersonationSessions).values({
+				superadminUserId: s.adminUserId,
+				clubId: s.clubId,
+				mode: "read_only",
+				expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+			});
+			expect(await minutesFor(s, s.adminUserId)).toEqual(EMPTY);
 		});
 
 		it.each(

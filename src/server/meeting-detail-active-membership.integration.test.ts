@@ -1,12 +1,12 @@
 /**
  * DB-backed tests that a membership which is not `active` counts as no
- * membership for the two reads `loadMeetingDetail` decides from it: the admin
+ * membership for the two reads `loadMeetingDetail` decides from it: the manager
  * payload (`canManage`) and the roll-aware unavailable list (`viewerIsMember`).
  *
- * Ending (`former`) or deactivating (`inactive`) a membership leaves its stored
- * `club_role` alone, so a row can say "admin" for someone who no longer is. The
- * seed here puts the viewer in exactly that state by writing the status column
- * and nothing else.
+ * Ending (`former`) or deactivating (`inactive`) a membership keeps its stored
+ * `club_role`, so a row can hold the role "admin" with a status that is not
+ * `active`. The seed here puts the viewer in exactly that state by writing the
+ * status column and nothing else.
  *
  * `getMeeting` is called through the real server fn with `createServerFn`,
  * the session and the request mocked, the way
@@ -16,10 +16,12 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	guests,
 	impersonationSessions,
 	meetingAttendance,
 	meetingAttendancePlan,
 	members,
+	officerTerms,
 	people,
 	roleSlots,
 	user,
@@ -31,6 +33,7 @@ import {
 	seedClub,
 	seedPerson,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -102,12 +105,12 @@ async function seed(): Promise<SeededClub> {
 describe.skipIf(!hasTestDb)(
 	"meeting detail: a membership that is not active grants no admin read",
 	() => {
-		/** Everything `canManage` unlocks, plus the data it is meant to withhold. */
+		/** Everything `canManage` unlocks: contact details, the plan ladder, a guest. */
 		async function seedAdminPayload(s: SeededClub) {
 			// The slot holder's contact details (`loadHolderContacts`).
 			await testDb
 				.update(people)
-				.set({ email: `holder-${s.memberId}@test.example`, phone: "5550100" })
+				.set({ email: `holder-${s.memberId}@test.example`, phone: "+15550100" })
 				.where(eq(people.id, s.personId));
 			await testDb
 				.update(roleSlots)
@@ -132,6 +135,12 @@ describe.skipIf(!hasTestDb)(
 					status: "coming",
 				},
 			]);
+			// A club guest for the assign picker (`clubGuests`).
+			await testDb
+				.insert(guests)
+				.values(
+					await withGuestPerson({ clubId: s.clubId, name: "Picker Guest" }),
+				);
 		}
 
 		async function adminView(s: SeededClub) {
@@ -143,6 +152,9 @@ describe.skipIf(!hasTestDb)(
 				rosterRows: detail.roster.length,
 				rosterWithEmail: detail.roster.filter((r) => r.email).length,
 				holderEmail: held?.holderEmail ?? null,
+				holderPhone: held?.holderPhone ?? null,
+				clubGuests: detail.clubGuests.length,
+				clubRoles: detail.clubRoles.length,
 				ladderRows: detail.plan.length,
 				reachedOut: detail.plan.filter((r) => r.status === "reached_out")
 					.length,
@@ -156,15 +168,19 @@ describe.skipIf(!hasTestDb)(
 			expect(await canManageClub(s.adminUserId, s.clubId)).toBe(true);
 			expect(view.canManage).toBe(true);
 			expect(view.rosterRows).toBeGreaterThan(0);
+			expect(view.rosterWithEmail).toBeGreaterThan(0);
 			expect(view.holderEmail).toBe(`holder-${s.memberId}@test.example`);
+			expect(view.holderPhone).toBe("+15550100");
+			expect(view.clubGuests).toBe(1);
+			expect(view.clubRoles).toBeGreaterThan(0);
 			expect(view.ladderRows).toBe(2);
 			expect(view.reachedOut).toBe(1);
 		});
 
 		it.each(
 			NOT_ACTIVE,
-		)("a %s admin gets no canManage, no roster, no contact details and an empty plan ladder", async (status) => {
-			// protects=a membership that is not active grants no admin read; fails_when=canManageClub (or the payload) reads clubRole without the active test; no_claim=impersonation is covered by the case below
+		)("a %s membership with role admin is not a manager", async (status) => {
+			// protects=a membership that is not active carries the plain payload: no canManage, roster, contact details, plan ladder, guests or role bank; fails_when=canManageClub (or the payload) reads clubRole without the active test; no_claim=impersonation is covered by the case below
 			const s = await seed();
 			await seedAdminPayload(s);
 			await setStatus(s.adminMemberId, status);
@@ -181,6 +197,9 @@ describe.skipIf(!hasTestDb)(
 				rosterRows: 0,
 				rosterWithEmail: 0,
 				holderEmail: null,
+				holderPhone: null,
+				clubGuests: 0,
+				clubRoles: 0,
 				ladderRows: 0,
 				reachedOut: 0,
 			});
@@ -308,13 +327,37 @@ describe.skipIf(!hasTestDb)(
 
 		it.each(
 			NOT_ACTIVE,
-		)("a %s admin gets the plan-only list as well", async (status) => {
+		)("a %s membership with role admin gets the plan-only list as well", async (status) => {
 			const s = await seed();
 			const { rollAbsent, notComingPresent } = await seedRoll(s);
 			await setStatus(s.adminMemberId, status);
 			const ids = await unavailableFor(s, s.adminUserId);
 			expect(ids).toContain(notComingPresent);
 			expect(ids).not.toContain(rollAbsent);
+		});
+
+		it.each(
+			NOT_ACTIVE,
+		)("a %s member holding an open officer term is not a manager and gets the plan-only list", async (status) => {
+			// protects=an open officer term does not make a membership that is not active a manager or a reader of the roll; fails_when=canManageClub or the unavailable-list gate counts the term without the active test; no_claim=an active officer's affordances are the route's concern
+			const s = await seed();
+			const { rollAbsent, notComingPresent } = await seedRoll(s);
+			await testDb.insert(officerTerms).values({
+				membershipId: s.memberId,
+				position: "vp_education",
+				termStart: new Date(),
+				termEnd: null,
+			});
+			await setStatus(s.memberId, status);
+			sessionUserId = s.memberUserId;
+			const detail = await getMeeting({ data: s.meetingId });
+			expect(detail.canManage).toBe(false);
+			expect(detail.roster).toEqual([]);
+			expect(detail.plan).toEqual([]);
+			const ids = detail.unavailableMembers.map((m) => m.id).sort();
+			expect(ids).toContain(notComingPresent);
+			expect(ids).not.toContain(rollAbsent);
+			expect(ids).toEqual(await unavailableFor(s, null));
 		});
 
 		it("an active admin gets the roll-aware list (canManage implies a member)", async () => {

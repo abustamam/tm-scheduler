@@ -867,9 +867,10 @@ export async function setMemberPresence(
  *
  * The attendance lock comes FIRST and covers both writes. A claim that takes
  * `lockMemberAttendance` (the asserted and connector arms) waits behind it, so
- * with the upsert and the release under it a claim either ran before (and is
- * freed with the rest) or runs after the release. An asserted claim reads the
- * plan only, not the roll, so this lock is what orders it against this write.
+ * with the upsert and the release under it a claim either committed before (and
+ * its slot is released only when its id is among the confirmed `releaseSlotIds`)
+ * or runs after the release. An asserted claim reads the plan only, not the
+ * roll, so this lock is what orders it against this write.
  * Taking it only for the release would leave a gap between the upsert
  * committing and the lock being taken in which a claim re-takes a role that is
  * then freed under it.
