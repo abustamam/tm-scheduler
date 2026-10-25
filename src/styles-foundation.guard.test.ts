@@ -36,8 +36,10 @@ const root = blockBody(css, "\n:root");
 
 describe("styles.css foundation (#1306)", () => {
 	it("extraction is not vacuous", () => {
-		expect(theme.length).toBeGreaterThan(200);
-		expect(root.length).toBeGreaterThan(200);
+		expect(theme.match(/--color-[\w-]+:/g)?.length ?? 0).toBeGreaterThanOrEqual(
+			12,
+		);
+		expect(root.match(/--duration-[\w-]+:/g)?.length ?? 0).toBe(3);
 	});
 
 	it("declares the six motion tokens in :root and the easings in @theme inline", () => {
@@ -60,9 +62,9 @@ describe("styles.css foundation (#1306)", () => {
 	});
 
 	it("has exactly one prefers-reduced-motion block, setting both durations on *", () => {
-		const header = "@media (prefers-reduced-motion: reduce)";
-		expect(css.split(header).length - 1).toBe(1);
-		const body = blockBody(css, header);
+		const headers = css.match(/@media[^{]*prefers-reduced-motion[^{]*/g) ?? [];
+		expect(headers).toHaveLength(1);
+		const body = blockBody(css, headers[0] ?? "@media prefers-reduced-motion");
 		expect(body).toMatch(/\*\s*,/);
 		expect(body).toMatch(/transition-duration:\s*0\.01ms\s*!important/);
 		expect(body).toMatch(/animation-duration:\s*0\.01ms\s*!important/);
@@ -70,13 +72,15 @@ describe("styles.css foundation (#1306)", () => {
 
 	it("paints one wash on body, from --hero-a, and drops the overlay layers", () => {
 		const body = blockBody(css, "\nbody {");
-		const bg = /background:([^;]*);/.exec(body)?.[1] ?? "";
+		expect(body.match(/(^|[\s;{])background\s*:/g)).toHaveLength(1);
+		expect(body).not.toMatch(/background-image\s*:/);
+		const bg = /(?:^|[\s;{])background\s*:([^;]*);/.exec(body)?.[1] ?? "";
 		expect(bg).not.toBe("");
 		expect(bg.match(/radial-gradient\(/g)).toHaveLength(1);
 		expect(bg).toContain("var(--hero-a)");
 		expect(bg).not.toContain("linear-gradient");
-		expect(css).not.toMatch(/body::before/);
-		expect(css).not.toMatch(/body::after/);
+		expect(css).not.toMatch(/body\s*::?\s*before/);
+		expect(css).not.toMatch(/body\s*::?\s*after/);
 		// The variable stays: the marketing shell may reference it.
 		expect(css).toContain("--hero-b:");
 	});

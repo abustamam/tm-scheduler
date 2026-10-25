@@ -1,7 +1,7 @@
 // Real-cascade check for the styles.css foundation (#1306): compiles
 // `src/styles.css` with Tailwind, loads it in Chrome, and reads computed
-// styles. Skips without Chrome like the other browser suites
-// (`docs/agents/commands.md`: set CHROME_PATH on a Mac).
+// styles. Skips locally without Chrome (`docs/agents/commands.md`: set
+// CHROME_PATH on a Mac); in CI the availability test below fails instead.
 //
 // protects: the `ease-enter` utility exists and computes the token's curve;
 //   `bg-surface-raised` / `text-link` resolve to the same colour as the brand
@@ -28,7 +28,17 @@ const chrome = findChrome();
 
 type Report = Record<string, string>;
 
-async function measure(): Promise<Report> {
+describe("styles foundation harness availability", () => {
+	it("has a browser to measure with when running in CI", () => {
+		if (!process.env.CI) return;
+		expect(
+			chrome,
+			"CI has no Chrome, so the foundation gate would skip",
+		).not.toBeNull();
+	});
+});
+
+async function measure(chromePath: string): Promise<Report> {
 	const compiler = await compile(
 		readFileSync(resolve(SRC, "styles.css"), "utf8"),
 		{ base: SRC, onDependency: () => {} },
@@ -64,7 +74,7 @@ document.documentElement.setAttribute("data-result", encodeURIComponent(JSON.str
 			printableDocument(css.replace(/@import url\([^)]*\);?/g, ""), body),
 		);
 		const dom = execFileSync(
-			chrome as string,
+			chromePath,
 			[
 				"--headless",
 				"--disable-gpu",
@@ -87,7 +97,10 @@ document.documentElement.setAttribute("data-result", encodeURIComponent(JSON.str
 
 describe.skipIf(!chrome)("styles.css foundation in Chrome (#1306)", () => {
 	let report: Report;
-	const get = async () => (report ??= await measure());
+	const get = async () => {
+		if (chrome === null) throw new Error("no Chrome");
+		return (report ??= await measure(chrome));
+	};
 
 	it(
 		"ease-enter computes the token's curve",

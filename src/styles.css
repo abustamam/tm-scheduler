@@ -192,6 +192,7 @@
   --container-workspace: 1180px;
   --container-public: 64rem;
   --container-reading: 48rem;
+  /* Literals repeat the :root tokens: var(--ease-enter) here would be self-referential. */
   --ease-enter: cubic-bezier(0.2, 0, 0, 1);
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
   --ease-move: cubic-bezier(0.4, 0, 0.2, 1);
