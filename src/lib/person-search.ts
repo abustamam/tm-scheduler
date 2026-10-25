@@ -4,7 +4,7 @@
  * Case- and accent-insensitive, every query word must prefix some name word in
  * any order, substring as the fallback. No fuzzy matching.
  */
-import { firstNameOf, MAX_NAME_CHARS, nameWords } from "./person-name";
+import { firstNameOf, nameWords } from "./person-name";
 
 export interface SearchablePerson {
 	name: string;
@@ -24,10 +24,7 @@ interface FoldedQuery {
 }
 
 function foldQuery(query: string): FoldedQuery | null {
-	const words = nameWords(query.slice(0, MAX_NAME_CHARS)).slice(
-		0,
-		MAX_QUERY_WORDS,
-	);
+	const words = nameWords(query).slice(0, MAX_QUERY_WORDS);
 	if (words.length === 0) return null;
 	return { words, joined: words.join(" ") };
 }
@@ -48,6 +45,11 @@ function tierOf(q: FoldedQuery, person: SearchablePerson): MatchTier | null {
 	return null;
 }
 
+/** True when the query folds to no words (empty, blank or punctuation-only): it lists everyone. */
+export function isBlankQuery(query: string): boolean {
+	return foldQuery(query) === null;
+}
+
 /** Best tier across the person's strings, or null for no match. Empty/blank query is 0. */
 export function matchTier(
 	query: string,
@@ -59,7 +61,7 @@ export function matchTier(
 
 /**
  * Matching rows, sorted by rank(p) asc, then tier asc, then name.localeCompare,
- * then input order (stable). Non-matching rows are dropped.
+ * then input order (Array.prototype.sort is stable). Non-matching rows are dropped.
  */
 export function searchPeople<T extends SearchablePerson>(
 	query: string,
@@ -74,8 +76,7 @@ export function searchPeople<T extends SearchablePerson>(
 		if (t !== null) rows.push({ p, r: rank(p), t, i });
 	});
 	rows.sort(
-		(a, b) =>
-			a.r - b.r || a.t - b.t || a.p.name.localeCompare(b.p.name) || a.i - b.i,
+		(a, b) => a.r - b.r || a.t - b.t || a.p.name.localeCompare(b.p.name),
 	);
 	return rows.map((x) => x.p);
 }

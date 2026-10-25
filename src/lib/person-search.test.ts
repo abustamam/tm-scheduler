@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { goesBy, matchTier, searchPeople } from "./person-search";
+import { goesBy, isBlankQuery, matchTier, searchPeople } from "./person-search";
 
 const names = (rows: { name: string }[]) => rows.map((r) => r.name);
 
@@ -78,27 +78,26 @@ describe("matchTier", () => {
 		expect(matchTier(q, { name: "a b c d e f g h" })).toBe(0);
 	});
 
-	// protects=length cap; fails_when=query uncapped; no_claim=speed
+	// protects=length cap; fails_when=query uncapped (the zz survives and the row stops matching); no_claim=speed
 	it("caps the query length", () => {
-		const long = `jo ${"x".repeat(500)}`;
-		expect(matchTier(long, { name: "Jo Smith" })).toBeNull();
-		expect(matchTier(`${"x".repeat(200)} jo`, { name: "Jo" })).toBeNull();
+		const long = `${"'".repeat(200)}zz`;
+		expect(matchTier(long, { name: "Jo" })).toBe(0);
 	});
 });
 
 describe("searchPeople", () => {
 	const people = [
-		{ name: "Diana Park" },
+		{ name: "Adiana Park" },
 		{ name: "Anabel Cruz" },
 		{ name: "Ana Lee" },
 	];
 
-	// protects=tier then localeCompare order and dropping non-matches; fails_when=tier or name sort missing; no_claim=rank
+	// protects=tier before name, then name within a tier, and dropping non-matches; fails_when=tier or name sort missing (Adiana sorts first by name but is tier 3); no_claim=rank
 	it("orders by tier then name", () => {
 		expect(names(searchPeople("ana", [...people, { name: "Zed" }]))).toEqual([
 			"Ana Lee",
 			"Anabel Cruz",
-			"Diana Park",
+			"Adiana Park",
 		]);
 	});
 
@@ -135,6 +134,16 @@ describe("searchPeople", () => {
 			{ name: "Jo", id: 2 },
 		];
 		expect(searchPeople("jo", rows).map((r) => r.id)).toEqual([1, 2]);
+	});
+});
+
+describe("isBlankQuery", () => {
+	// protects=the one blank-query rule find_people shares with the matcher; fails_when=punctuation-only counts as a query or a word is called blank; no_claim=matching
+	it("is true for empty, blank and punctuation-only, false for a word", () => {
+		expect(isBlankQuery("")).toBe(true);
+		expect(isBlankQuery("  ")).toBe(true);
+		expect(isBlankQuery("''")).toBe(true);
+		expect(isBlankQuery("jo")).toBe(false);
 	});
 });
 

@@ -67,11 +67,7 @@ export const MAX_NAME_CHARS = 200;
 /**
  * The comparable tokens of a full name: lowercased, diacritic-folded, split on
  * whitespace and hyphens, inner punctuation stripped, in written order.
- * `nameTokens` sorts them for `namesAgree`; search keeps the order (#1331).
- *
- * Sorting is what makes "Khan, Zabihullah" and "Zabihullah Khan" compare equal
- * without having to decide which token is the family name — a decision this
- * codebase deliberately refuses to make (see `firstNameOf`).
+ * Written order is kept (search reads it, #1331); `nameTokens` sorts it for `namesAgree`.
  *
  * Separators and inner punctuation are deliberately NOT the same thing. Hyphens
  * separate ("Abdul-Rasheed" reads as "Abdul Rasheed"); an apostrophe does not.
@@ -95,6 +91,13 @@ export function nameWords(name: string): string[] {
 		.filter(Boolean);
 }
 
+/**
+ * `nameWords` sorted.
+ *
+ * Sorting is what makes "Khan, Zabihullah" and "Zabihullah Khan" compare equal
+ * without having to decide which token is the family name — a decision this
+ * codebase deliberately refuses to make (see `firstNameOf`).
+ */
 function nameTokens(name: string): string[] {
 	return nameWords(name).sort();
 }

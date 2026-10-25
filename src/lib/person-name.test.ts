@@ -266,10 +266,11 @@ describe("nameWords (#1331)", () => {
 		]);
 	});
 
-	// protects=namesAgree's sorted token view; fails_when=nameTokens stops sorting; no_claim=namesAgree pairing rules
+	// protects=namesAgree's sorted token view; fails_when=nameTokens stops sorting (names over 8 tokens compare element-wise, so only sorted lists agree); no_claim=namesAgree pairing rules
 	it("nameTokens is nameWords sorted", () => {
-		const name = "Zabihullah Khan";
-		expect(nameWords(name)).toEqual(["zabihullah", "khan"]);
-		expect(namesAgree("Khan, Zabihullah", name)).toBe(true);
+		const nine = "a1 b2 c3 d4 e5 f6 g7 h8 i9";
+		const reversed = nine.split(" ").reverse().join(" ");
+		expect(nameWords(reversed)[0]).toBe("i9");
+		expect(namesAgree(nine, reversed)).toBe(true);
 	});
 });

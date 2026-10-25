@@ -23,8 +23,7 @@
  */
 import { z } from "zod";
 import { MAX_FIND_PEOPLE_RESULTS } from "#/lib/mcp-limits";
-import { nameWords } from "#/lib/person-name";
-import { searchPeople } from "#/lib/person-search";
+import { isBlankQuery, searchPeople } from "#/lib/person-search";
 import { loadClubContactPreferences } from "#/server/contact-preference-logic";
 import { loadGuestPipeline } from "#/server/guest-pipeline-logic";
 import { loadPublicClubRoster } from "#/server/members-logic";
@@ -94,8 +93,7 @@ export const findPeopleTool: McpToolDefinition = {
 
 		// A blank or punctuation-only query lists everyone in reader order.
 		const query = args.query ?? "";
-		const matched =
-			nameWords(query).length === 0 ? people : searchPeople(query, people);
+		const matched = isBlankQuery(query) ? people : searchPeople(query, people);
 
 		return {
 			clubId: club.clubId,
