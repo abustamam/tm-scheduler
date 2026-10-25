@@ -732,6 +732,44 @@ export async function isMemberUnavailable(
 	return rows.length > 0;
 }
 
+/**
+ * Is one member's PLAN answer `not_coming` for this meeting? Plan-only
+ * unavailability, used by the asserted claim and confirm. Its query holds the
+ * club's `members` and `meetings` rows (for club scoping) and the plan table,
+ * and no attendance table at all; session and connector callers use
+ * `isMemberUnavailable`, which reads both.
+ *
+ * Club-scoped like `isMemberUnavailable`: a member id from another club is
+ * never `not_coming` for this meeting.
+ */
+export async function isMemberNotComing(
+	database: DbOrTx,
+	args: { memberId: string; meetingId: string },
+): Promise<boolean> {
+	const rows = await database
+		.select({ id: members.id })
+		.from(members)
+		.innerJoin(
+			meetings,
+			and(eq(meetings.id, args.meetingId), eq(meetings.clubId, members.clubId)),
+		)
+		.innerJoin(
+			meetingAttendancePlan,
+			and(
+				eq(meetingAttendancePlan.memberId, members.id),
+				eq(meetingAttendancePlan.meetingId, args.meetingId),
+			),
+		)
+		.where(
+			and(
+				eq(members.id, args.memberId),
+				eq(meetingAttendancePlan.status, "not_coming"),
+			),
+		)
+		.limit(1);
+	return rows.length > 0;
+}
+
 /** `not_coming` pairs across several meetings (season grid, recurrence check). */
 export async function listNotComingForMeetings(
 	database: DbOrTx,

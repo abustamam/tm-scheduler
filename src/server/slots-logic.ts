@@ -31,6 +31,7 @@ import {
 import { logActivity } from "./activity";
 import {
 	type AttendancePlanStatus,
+	isMemberNotComing,
 	isMemberUnavailable,
 	lockMemberAttendance,
 	setPlanStatus,
@@ -1618,14 +1619,17 @@ export async function confirmSlotCore(args: {
 		// outsider holding the link could otherwise undo any decline by
 		// confirming the role it left behind.
 		if (grant.via === "self" && proof === "asserted") {
-			// Held to commit, like the claim gate: a roll write or a releasing
-			// decline cannot slip between this read and the flip below.
+			// Held to commit, like the claim gate: a releasing decline cannot slip
+			// between this read and the flip below.
 			await lockMemberAttendance(tx, slot.meetingId, grant.holderMemberId);
 		}
+		// PLAN only. The asserted caller holds no session, and the roll is
+		// members-only, so the refusal depends on what the public payload shows
+		// (`answeredRungs`). A session-proven holder is not gated here.
 		if (
 			grant.via === "self" &&
 			proof === "asserted" &&
-			(await isMemberUnavailable(tx, {
+			(await isMemberNotComing(tx, {
 				memberId: grant.holderMemberId,
 				meetingId: slot.meetingId,
 			}))
@@ -1954,7 +1958,8 @@ export async function claimSlotCore(
 		throw new Error(SIGN_IN_REQUIRED_MESSAGE);
 	}
 	if (args.proof === "connector") {
-		// The same lock and re-check the asserted path takes: a claim must not
+		// The connector arm takes the same attendance lock as the asserted arm and
+		// re-checks with the roll-aware `isMemberUnavailable`: a claim must not
 		// slip between this member's own decline (browser) and the flip below.
 		await lockMemberAttendance(tx, slot.meetingId, args.memberId);
 		if (
@@ -1978,8 +1983,11 @@ export async function claimSlotCore(
 		// Held to commit, so a releasing decline cannot slip between this read
 		// and the flip below and leave the role on a member who said no.
 		await lockMemberAttendance(tx, slot.meetingId, args.memberId);
+		// PLAN only, never the roll: this caller holds no session and the roll is
+		// members-only, so the refusal depends on the plan answer alone. It runs
+		// before the conditional UPDATE below, so a refusal writes nothing.
 		if (
-			await isMemberUnavailable(tx, {
+			await isMemberNotComing(tx, {
 				memberId: args.memberId,
 				meetingId: slot.meetingId,
 			})

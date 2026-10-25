@@ -86,13 +86,14 @@ describe("the Absent release wiring (#1256)", () => {
 	});
 
 	it("the Absent upsert and the release run in ONE transaction, after both locks, in that order", () => {
-		// protects=an asserted claim cannot re-take a freed role in a gap, and an
-		//   Absent write cannot commit while the release fails (or the reverse)
+		// protects=a claim that takes the attendance lock (asserted or connector)
+		//   waits behind the Absent write and its release, and an Absent write
+		//   cannot commit while the release fails (or the reverse)
 		// fails_when=the upsert is called without the tx (its own statement on the
 		//   pool), the release moves outside `db.transaction`, or a lock is dropped or
 		//   reordered (merge lock, then attendance lock, then the writes)
 		// no_claim=that the locks serialise against a real concurrent claim (needs two
-		//   connections; the #1259 suite owns the claim side)
+		//   connections; the claim-side integration suite owns that)
 		const body = functionBody(LOGIC, "setMemberAbsentReleasingRoles");
 		const order = [
 			"db.transaction(",

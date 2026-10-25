@@ -201,6 +201,11 @@ const SLOT_FILL_BLANK: Record<
 			mustContain: string[];
 			/** Each `[a, b]`: `a` must occur, and before `b`. */
 			mustPrecede?: [string, string][];
+			/** Shapes that must NOT occur anywhere in the fn body. */
+			mustNotContain?: string[];
+			/** Each `[open, forbidden]`: `open` (ending in `{`) must occur, and the
+			 *  brace-matched block it opens must not contain `forbidden`. */
+			mustNotContainIn?: [string, string][];
 		}[];
 	}
 > = {
@@ -222,11 +227,19 @@ const SLOT_FILL_BLANK: Record<
 					// TMOD read through the caller's transaction, never the pool.
 					"const forSomeoneElse = args.actorMemberId !== args.memberId;",
 					'if (args.proof === "asserted") { if (forSomeoneElse && args.actorMemberId !== (await loadTmodMemberId(slot.meetingId, tx))) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
-					// Over the member's own decline, or an Absent on the roll: refused.
-					"if (await isMemberUnavailable(tx, { memberId: args.memberId, meetingId: slot.meetingId, })) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }",
+					// Over the member's own decline: refused. The PLAN only, never the
+					// roll, for the sessionless proof.
+					"if (await isMemberNotComing(tx, { memberId: args.memberId, meetingId: slot.meetingId, })) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }",
+					// The connector arm keeps the roll-aware read.
+					'if (args.proof === "connector") { await lockMemberAttendance(tx, slot.meetingId, args.memberId); if (await isMemberUnavailable(tx, { memberId: args.memberId, meetingId: slot.meetingId, })) { throw new Error("You\'re marked as not coming to that meeting."); } }',
 					"proof: args.proof,",
 				],
 				mustPrecede: [['if (args.proof === "asserted")', ".update(roleSlots)"]],
+				// The sessionless proof reads the plan only: the roll-aware check
+				// belongs to the connector arm, and the asserted block never calls it.
+				mustNotContainIn: [
+					['if (args.proof === "asserted") {', "isMemberUnavailable"],
+				],
 			},
 			{
 				file: "slots-logic.ts",
@@ -253,15 +266,18 @@ const SLOT_FILL_BLANK: Record<
 					// the caller's proof or, with none, the session bound to the
 					// HOLDER — never "session" for any other signed-in member.
 					'const proof: WriteProof = grant.via === "officer" ? "session" : (args.proof ?? ((await sessionIsHolder(slot.clubId, args.sessionUserId, grant.holderMemberId,)) ? "session" : "asserted"));',
-					'if (grant.via === "self" && proof === "asserted") { await lockMemberAttendance(tx, slot.meetingId, grant.holderMemberId); } if (grant.via === "self" && proof === "asserted" && (await isMemberUnavailable(tx, { memberId: grant.holderMemberId, meetingId: slot.meetingId, }))) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
+					'if (grant.via === "self" && proof === "asserted") { await lockMemberAttendance(tx, slot.meetingId, grant.holderMemberId); } if (grant.via === "self" && proof === "asserted" && (await isMemberNotComing(tx, { memberId: grant.holderMemberId, meetingId: slot.meetingId, }))) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
 					'demoteFrom: proof === "asserted" ? ASK_ONLY_PLAN_FLOOR : (args.planFloor ?? HOLDER_CONFIRM_PLAN_FLOOR),',
 				],
 				mustPrecede: [
 					[
-						'proof === "asserted" && (await isMemberUnavailable(',
+						'proof === "asserted" && (await isMemberNotComing(',
 						".update(roleSlots)",
 					],
 				],
+				// The connector proof is refused outright and a session proof is not
+				// gated on the roll, so this core has no use for the roll-aware check.
+				mustNotContain: ["isMemberUnavailable"],
 			},
 			{
 				file: "slots-logic.ts",
@@ -287,6 +303,16 @@ const SLOT_FILL_BLANK: Record<
  *  a reformat (Biome re-wrapping a ternary) does not read as a deletion. */
 function collapse(text: string): string {
 	return text.replace(/\s+/g, " ").replace(/\( /g, "(").replace(/ \)/g, ")");
+}
+
+/** The brace-matched block whose `{` is at `open`, or null when it never closes. */
+function braceBlock(text: string, open: number): string | null {
+	let depth = 0;
+	for (let i = open; i < text.length; i++) {
+		if (text[i] === "{") depth++;
+		else if (text[i] === "}" && --depth === 0) return text.slice(open, i + 1);
+	}
+	return null;
 }
 
 /**
@@ -1044,6 +1070,23 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 					if (a === -1 || b === -1 || a > b) {
 						offenders.push(
 							`${check.file}#${check.fn} (${first} must run before ${then})`,
+						);
+					}
+				}
+				for (const forbidden of check.mustNotContain ?? []) {
+					if (flat.includes(forbidden)) {
+						offenders.push(
+							`${check.file}#${check.fn} (must not use ${forbidden})`,
+						);
+					}
+				}
+				for (const [open, forbidden] of check.mustNotContainIn ?? []) {
+					const at = flat.indexOf(collapse(open));
+					const block =
+						at === -1 ? null : braceBlock(flat, at + collapse(open).length - 1);
+					if (block === null || block.includes(forbidden)) {
+						offenders.push(
+							`${check.file}#${check.fn} (the ${open} block must exist and not use ${forbidden})`,
 						);
 					}
 				}

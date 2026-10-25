@@ -578,26 +578,16 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 				.values({ memberId, meetingId: seed.meetingId, status });
 		}
 
-		it("refuses an asserted claim for a member recorded Absent, writing nothing (#1257)", async () => {
-			// protects=an Absent member cannot be put on a role by an unverified claim; fails_when=the gate reads only the plan, so no-answer+absent is let through; no_claim=the TMOD actor is a fixture row, not a verified session
+		it("an asserted claim by the TMOD for a member recorded Absent, with no plan answer, succeeds", async () => {
+			// protects=a sessionless claim is gated on the plan only; fails_when=the asserted path calls the roll-aware check; no_claim=the TMOD actor is a fixture row, not a verified session
 			await makeTmod(seed.memberId);
 			await record(otherMemberId, "absent");
-			await expect(
-				claim(otherMemberId, seed.memberId, "asserted"),
-			).rejects.toThrow(exact(SIGN_IN_REQUIRED_MESSAGE));
-			expect(await claimRows()).toHaveLength(0);
-		});
-
-		it("admits an asserted claim for not_coming recorded Present (#1257)", async () => {
-			// protects=the roll record wins over the plan: someone who turned up can take a role; fails_when=the gate reads only the plan and still refuses a Present member; no_claim=Present rows are inserted directly, not through roll mode
-			await answer(seed.memberId, "not_coming");
-			await record(seed.memberId, "present");
-			await claim(seed.memberId, seed.memberId, "asserted");
-			expect((await slot())?.assignedMemberId).toBe(seed.memberId);
+			await claim(otherMemberId, seed.memberId, "asserted");
+			expect((await slot())?.assignedMemberId).toBe(otherMemberId);
 		});
 
 		it("a SESSION claim for a member recorded Absent still succeeds (#1257)", async () => {
-			// protects=Absent only gates the unverified proof; fails_when=the Absent check moves outside the asserted branch; no_claim=none beyond protects
+			// protects=only the connector proof is gated on the roll, so a session claim is not; fails_when=the roll-aware check moves outside the connector branch; no_claim=none beyond protects
 			await record(otherMemberId, "absent");
 			await claim(otherMemberId, seed.memberId, "session");
 			expect((await slot())?.assignedMemberId).toBe(otherMemberId);

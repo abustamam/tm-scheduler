@@ -93,7 +93,10 @@ export const getMinutes = createServerFn({ method: "GET" })
 		// module's existing not-visible shape rather than throwing, matching how the
 		// public readers collapse archived into never-existed.
 		if (!(await isReadableClub(clubId))) return empty;
-		const membership = await getMembership(sessionUser.id, clubId);
+		// A membership that is not active counts as no membership: it is neither a
+		// member's read of the minutes nor an admin's.
+		const found = await getMembership(sessionUser.id, clubId);
+		const membership = found?.status === "active" ? found : null;
 		// Read-write impersonation (#246): a superadmin acting as admin has no
 		// membership but may still edit minutes. Only checked when there's no real
 		// membership (zero cost for real members).

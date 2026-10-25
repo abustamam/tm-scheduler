@@ -201,9 +201,9 @@ async function resolveAdminGrant(
 		// · Keys 1 and 2 are not what refuses a lapsed admin in THIS function — the
 		//   `status === "active"` check below is, and the grant decision is
 		//   invariant to swapping them. In `getMembership` the polarity genuinely
-		//   is load-bearing, because `canManageClub` reads `clubRole` with no
-		//   status check at all. Do not read the ordering as making the check below
-		//   redundant: delete it and an inactive admin duplicate grants.
+		//   is load-bearing, because `canManageClub` takes the one row it gets
+		//   and requires it to be active. Do not read the ordering as making the
+		//   check below redundant: delete it and an inactive admin duplicate grants.
 		// · "Two queries cannot disagree" means on ONE snapshot. Two statements
 		//   read different MVCC snapshots, so this orders the rows a statement
 		//   sees, not the rows two statements see. `getMembership` takes

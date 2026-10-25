@@ -53,9 +53,9 @@ describe("loadMeetingDetail contact gating (#37 PII)", () => {
 		expect(src).toContain(
 			"unavailableMembers=viewerIsMember?awaitlistUnavailableWithNames(db,meetingId):awaitlistNotComingWithNames(db,meetingId)",
 		);
-		// The gate's own condition: dropping it hands the roll to every reader.
+		// The gate's own condition: the roll-aware list is for an ACTIVE member.
 		expect(src).toContain(
-			"viewerIsMember=!!(awaitgetMembership(currentUserId,meeting.clubId))",
+			'constmembership=awaitgetMembership(currentUserId,meeting.clubId);viewerIsMember=membership?.status==="active";',
 		);
 	});
 

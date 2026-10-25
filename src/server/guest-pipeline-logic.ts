@@ -4099,7 +4099,7 @@ export async function applyAddGuestToClub(
 		}
 		await assertStillAdminOfBothClubs(tx, userId, fromClubId, toClubId);
 		// The officer's seat in the destination, read in this transaction by the same
-		// resolver the re-check just used (null for an impersonating superadmin).
+		// resolver the re-check just used. Only an ACTIVE seat is credited.
 		const destination = await getMembership(userId, toClubId, tx);
 
 		if (guest.stage === "joined") throw new Error(GUEST_NOW_MEMBER_MESSAGE);
@@ -4114,8 +4114,10 @@ export async function applyAddGuestToClub(
 			stage: "prospect",
 			kind: "visitor",
 			// The officer who added them, so the destination club's officers can see
-			// who did (null for an impersonating superadmin, who holds no seat).
-			introducedByMemberId: destination?.id ?? null,
+			// who did (null when they hold no active seat there, as an impersonating
+			// superadmin does not).
+			introducedByMemberId:
+				destination?.status === "active" ? destination.id : null,
 		});
 		return { ok: true as const };
 	});
@@ -4489,7 +4491,7 @@ export async function applyLinkGuestAcrossClubs(
 		// The acting club only, and nothing of the other club: no id, no name.
 		await logActivity(tx, {
 			clubId,
-			actorMemberId: actor?.id ?? null,
+			actorMemberId: actor?.status === "active" ? actor.id : null,
 			action: "member_merge",
 			targetType: "member",
 			detail: {

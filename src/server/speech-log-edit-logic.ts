@@ -170,8 +170,10 @@ export async function applySpeechLogEdit(args: {
 			actorMemberId = slot.assignedMemberId;
 		} else {
 			await assertStillClubAdmin(tx, args.actorUserId, clubId);
-			actorMemberId =
-				(await getMembership(args.actorUserId, clubId, tx))?.id ?? null;
+			// Credited to the actor's ACTIVE seat only: an impersonating superadmin
+			// who holds a membership that is not active is credited to no member.
+			const actor = await getMembership(args.actorUserId, clubId, tx);
+			actorMemberId = actor?.status === "active" ? actor.id : null;
 		}
 
 		// A completed meeting is accepted (the whole point), a cancelled one is

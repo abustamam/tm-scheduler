@@ -472,6 +472,7 @@ public `answeredRungs` would let anyone read each member's Present/Absent
 `status = 'reached_out'` (the officer-only rung) — testing for a row now silently counts all
 three. `src/server/attendance-plan-logic.ts` is the seam: `getPlanStatus`,
 `listPlanForMeetings`, `listNotComingWithNames` (plan-only, the public reader),
+`isMemberNotComing` (plan-only unavailability, used by asserted claim and confirm),
 `listUnavailableWithNames` and `isMemberUnavailable` (roll wins over plan, members only), `listNotComingForMeetings`,
 `listReachedOutForMeeting`, `listComingForMeeting`, `memberHasAttendancePlanRows` (a count-free
 existence check for the guest-conversion undo's cascade refusal), `setPlanStatus`,
