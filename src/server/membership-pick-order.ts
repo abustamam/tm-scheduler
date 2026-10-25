@@ -24,8 +24,9 @@
  * ## The keys, in order (#471)
  *
  *   1. ACTIVE first — a lapsed membership must never out-rank a current one.
- *      This is load-bearing in `getMembership`, because `canManageClub` reads
- *      `clubRole` with no status check. It is NOT what refuses a lapsed admin in
+ *      This is load-bearing in `getMembership`, because `canManageClub` requires
+ *      the row it gets back to be active, so a lapsed row that came back first
+ *      would hide a current one. It is NOT what refuses a lapsed admin in
  *      `resolveAdminGrant` or `viewerMaySeeProgress`: each carries its own
  *      `status === "active"` check, because key 1 only ranks rows that exist and
  *      a lapsed admin who is the ONLY membership still comes back first.

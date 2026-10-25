@@ -268,16 +268,18 @@ async function loadMeetingDetail(
 
 	// Members who cannot take a role at this meeting, with names, so the VPE can
 	// see who NOT to chase when filling open roles. Two readings (#1257):
-	//  - a MEMBER of this club (an admin, or a read_write impersonator, implies
-	//    it) gets the roll-wins rule: Absent is unavailable, Present is available
-	//    even after Not coming.
+	//  - an ACTIVE member of this club (an admin, or a read_write impersonator,
+	//    implies it) gets the roll-wins rule: Absent is unavailable, Present is
+	//    available even after Not coming. A membership that is not active counts
+	//    as no membership here.
 	//  - everyone else, signed out included, gets the PLAN-only `not_coming` list.
 	// The split is the gate: `answeredRungs` below is public, and the roll is
 	// members-only, so handing the roll-aware list to a public reader would let
 	// them compare the two and read each member's Present/Absent record.
 	let viewerIsMember = canManage;
 	if (!viewerIsMember && currentUserId) {
-		viewerIsMember = !!(await getMembership(currentUserId, meeting.clubId));
+		const membership = await getMembership(currentUserId, meeting.clubId);
+		viewerIsMember = membership?.status === "active";
 	}
 	const unavailableMembers = viewerIsMember
 		? await listUnavailableWithNames(db, meetingId)

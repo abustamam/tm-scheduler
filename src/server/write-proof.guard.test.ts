@@ -222,8 +222,11 @@ const SLOT_FILL_BLANK: Record<
 					// TMOD read through the caller's transaction, never the pool.
 					"const forSomeoneElse = args.actorMemberId !== args.memberId;",
 					'if (args.proof === "asserted") { if (forSomeoneElse && args.actorMemberId !== (await loadTmodMemberId(slot.meetingId, tx))) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
-					// Over the member's own decline, or an Absent on the roll: refused.
-					"if (await isMemberUnavailable(tx, { memberId: args.memberId, meetingId: slot.meetingId, })) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }",
+					// Over the member's own decline: refused. The PLAN only, never the
+					// roll, for the sessionless proof.
+					"if (await isMemberNotComing(tx, { memberId: args.memberId, meetingId: slot.meetingId, })) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }",
+					// The connector arm keeps the roll-aware read.
+					'if (args.proof === "connector") { await lockMemberAttendance(tx, slot.meetingId, args.memberId); if (await isMemberUnavailable(tx, { memberId: args.memberId, meetingId: slot.meetingId, })) { throw new Error("You\'re marked as not coming to that meeting."); } }',
 					"proof: args.proof,",
 				],
 				mustPrecede: [['if (args.proof === "asserted")', ".update(roleSlots)"]],
@@ -253,12 +256,12 @@ const SLOT_FILL_BLANK: Record<
 					// the caller's proof or, with none, the session bound to the
 					// HOLDER — never "session" for any other signed-in member.
 					'const proof: WriteProof = grant.via === "officer" ? "session" : (args.proof ?? ((await sessionIsHolder(slot.clubId, args.sessionUserId, grant.holderMemberId,)) ? "session" : "asserted"));',
-					'if (grant.via === "self" && proof === "asserted") { await lockMemberAttendance(tx, slot.meetingId, grant.holderMemberId); } if (grant.via === "self" && proof === "asserted" && (await isMemberUnavailable(tx, { memberId: grant.holderMemberId, meetingId: slot.meetingId, }))) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
+					'if (grant.via === "self" && proof === "asserted") { await lockMemberAttendance(tx, slot.meetingId, grant.holderMemberId); } if (grant.via === "self" && proof === "asserted" && (await isMemberNotComing(tx, { memberId: grant.holderMemberId, meetingId: slot.meetingId, }))) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
 					'demoteFrom: proof === "asserted" ? ASK_ONLY_PLAN_FLOOR : (args.planFloor ?? HOLDER_CONFIRM_PLAN_FLOOR),',
 				],
 				mustPrecede: [
 					[
-						'proof === "asserted" && (await isMemberUnavailable(',
+						'proof === "asserted" && (await isMemberNotComing(',
 						".update(roleSlots)",
 					],
 				],

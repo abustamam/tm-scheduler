@@ -395,14 +395,20 @@ export async function assertStillClubAdmin(
  * does NOT grant for `read_only` impersonation — read-only keeps those write
  * surfaces hidden. The write itself is still enforced by the mutating guards, so
  * this only decides what affordances render. The impersonation lookup runs only
- * when there's no real membership (zero cost for real members).
+ * when there's no real ACTIVE membership (zero cost for active members). A
+ * membership that is not `active` grants nothing.
  */
 export async function canManageClub(
 	userId: string,
 	clubId: string,
 ): Promise<boolean> {
 	const membership = await getMembership(userId, clubId);
-	if (membership) return membership.clubRole === "admin";
+	// Only an ACTIVE membership counts: a former or inactive one keeps its stored
+	// `club_role`, and counts as no membership at all, so it still reaches the
+	// impersonation check below (same shape as `requireMembership`).
+	if (membership && membership.status === "active") {
+		return membership.clubRole === "admin";
+	}
 	const session = await getActiveImpersonation(userId, clubId);
 	return session?.mode === "read_write";
 }

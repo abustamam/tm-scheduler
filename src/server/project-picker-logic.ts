@@ -329,11 +329,12 @@ export async function resolveMemberSubject(
  * downstream re-checks, because the boolean IS the decision: `getProjectOptions`
  * passes it straight to `listProjectOptions` as `includeProgress`.
  *
- * `canManageClub` is the one sibling that also reads `clubRole` with no status
- * check, and it is NOT a precedent — `getMembership`'s ordering is what covers
- * it, and that ordering is a thing this function did not have either. Requiring
- * active here rather than leaning on key 1 is deliberate: key 1 only ranks rows
- * that exist, so a lapsed admin who is the ONLY membership still comes back.
+ * `canManageClub` is a sibling that reads `clubRole` and now also requires
+ * `status === "active"`; `getMembership`'s ordering still decides which of two
+ * rows it sees, and that ordering is a thing this function did not have either.
+ * Requiring active here rather than leaning on key 1 is deliberate: key 1 only
+ * ranks rows that exist, so a lapsed admin who is the ONLY membership still
+ * comes back.
  *
  * Returns a boolean rather than throwing: failing to prove admin is not an
  * error here, it just means a plainer picker.
@@ -391,7 +392,8 @@ export async function viewerMaySeeProgress(input: {
 		// 1 and 2 leaves all 15 cases in the suite green, because whichever of the
 		// two rows the swap picks, the check refuses it. The polarity is kept for
 		// agreement with `getMembership`, where it genuinely decides (`canManageClub`
-		// reads `clubRole` with no status check at all), not because it decides here.
+		// takes the one row it gets and requires it to be active), not because it
+		// decides here.
 		// The direction that does NOT hold: deleting the check below and keeping the
 		// ordering re-opens the bug on a single lapsed-admin membership, which is the
 		// only shape #822 was actually reachable in. One case gates that, and it is

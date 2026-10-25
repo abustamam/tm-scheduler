@@ -578,22 +578,24 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 				.values({ memberId, meetingId: seed.meetingId, status });
 		}
 
-		it("refuses an asserted claim for a member recorded Absent, writing nothing (#1257)", async () => {
-			// protects=an Absent member cannot be put on a role by an unverified claim; fails_when=the gate reads only the plan, so no-answer+absent is let through; no_claim=the TMOD actor is a fixture row, not a verified session
+		it("an asserted claim for a member recorded Absent, with no plan answer, succeeds: the roll is not read", async () => {
+			// protects=a sessionless claim reads the plan only, so an Absent roll record does not refuse it; fails_when=the asserted gate reads the roll again; no_claim=the TMOD actor is a fixture row, not a verified session
 			await makeTmod(seed.memberId);
 			await record(otherMemberId, "absent");
-			await expect(
-				claim(otherMemberId, seed.memberId, "asserted"),
-			).rejects.toThrow(exact(SIGN_IN_REQUIRED_MESSAGE));
-			expect(await claimRows()).toHaveLength(0);
+			await claim(otherMemberId, seed.memberId, "asserted");
+			expect((await slot())?.assignedMemberId).toBe(otherMemberId);
 		});
 
-		it("admits an asserted claim for not_coming recorded Present (#1257)", async () => {
-			// protects=the roll record wins over the plan: someone who turned up can take a role; fails_when=the gate reads only the plan and still refuses a Present member; no_claim=Present rows are inserted directly, not through roll mode
+		it("an asserted claim for a not_coming member recorded Present is refused, writing nothing", async () => {
+			// protects=a sessionless claim reads the plan only, so a Present roll record does not lift a not_coming answer; fails_when=the asserted gate lets the roll override the plan; no_claim=Present rows are inserted directly, not through roll mode
 			await answer(seed.memberId, "not_coming");
 			await record(seed.memberId, "present");
-			await claim(seed.memberId, seed.memberId, "asserted");
-			expect((await slot())?.assignedMemberId).toBe(seed.memberId);
+			await expect(
+				claim(seed.memberId, seed.memberId, "asserted"),
+			).rejects.toThrow(exact(SIGN_IN_REQUIRED_MESSAGE));
+			expect(await slot()).toEqual({ status: "open", assignedMemberId: null });
+			expect(await claimRows()).toHaveLength(0);
+			expect(await planStatus(seed.memberId)).toBe("not_coming");
 		});
 
 		it("a SESSION claim for a member recorded Absent still succeeds (#1257)", async () => {

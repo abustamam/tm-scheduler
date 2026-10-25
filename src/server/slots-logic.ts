@@ -31,6 +31,7 @@ import {
 import { logActivity } from "./activity";
 import {
 	type AttendancePlanStatus,
+	isMemberNotComing,
 	isMemberUnavailable,
 	lockMemberAttendance,
 	setPlanStatus,
@@ -1622,10 +1623,13 @@ export async function confirmSlotCore(args: {
 			// decline cannot slip between this read and the flip below.
 			await lockMemberAttendance(tx, slot.meetingId, grant.holderMemberId);
 		}
+		// PLAN only. The asserted caller holds no session, and the roll is
+		// members-only, so the refusal depends on what the public payload shows
+		// (`answeredRungs`). A session-proven holder is not gated here.
 		if (
 			grant.via === "self" &&
 			proof === "asserted" &&
-			(await isMemberUnavailable(tx, {
+			(await isMemberNotComing(tx, {
 				memberId: grant.holderMemberId,
 				meetingId: slot.meetingId,
 			}))
@@ -1978,8 +1982,11 @@ export async function claimSlotCore(
 		// Held to commit, so a releasing decline cannot slip between this read
 		// and the flip below and leave the role on a member who said no.
 		await lockMemberAttendance(tx, slot.meetingId, args.memberId);
+		// PLAN only, never the roll: this caller holds no session and the roll is
+		// members-only. This runs before the conditional UPDATE below, so the
+		// answer for an already-taken slot is the same whatever the roll says.
 		if (
-			await isMemberUnavailable(tx, {
+			await isMemberNotComing(tx, {
 				memberId: args.memberId,
 				meetingId: slot.meetingId,
 			})

@@ -732,6 +732,31 @@ export async function isMemberUnavailable(
 	return rows.length > 0;
 }
 
+/**
+ * Is one member's PLAN answer `not_coming`? The plan-only twin of
+ * `isMemberUnavailable`: it never reads the roll. A sessionless (asserted-proof)
+ * caller uses this one, because the plan is public (the meeting payload's
+ * `answeredRungs` carries it) and the roll is members-only. Session and
+ * connector callers keep `isMemberUnavailable` (the roll wins over the plan).
+ *
+ * Same club scoping as `isMemberUnavailable` (it shares `unavailableBase`), so a
+ * member id from another club is never "not coming" here.
+ */
+export async function isMemberNotComing(
+	database: DbOrTx,
+	args: { memberId: string; meetingId: string },
+): Promise<boolean> {
+	const rows = await unavailableBase(database, args.meetingId)
+		.where(
+			and(
+				eq(members.id, args.memberId),
+				eq(meetingAttendancePlan.status, "not_coming"),
+			),
+		)
+		.limit(1);
+	return rows.length > 0;
+}
+
 /** `not_coming` pairs across several meetings (season grid, recurrence check). */
 export async function listNotComingForMeetings(
 	database: DbOrTx,
