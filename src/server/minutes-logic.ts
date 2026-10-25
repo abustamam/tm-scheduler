@@ -1021,7 +1021,12 @@ export async function addTableTopicsSpeaker(input: {
 				const [existing] = await tx
 					.select({ id: tableTopicsSpeakers.id })
 					.from(tableTopicsSpeakers)
-					.where(eq(tableTopicsSpeakers.id, input.id))
+					.where(
+						and(
+							eq(tableTopicsSpeakers.id, input.id),
+							eq(tableTopicsSpeakers.meetingId, input.meetingId),
+						),
+					)
 					.limit(1);
 				if (existing) return { id: existing.id };
 			}
@@ -1039,7 +1044,7 @@ export async function addTableTopicsSpeaker(input: {
 					.where(eq(members.id, input.memberId))
 					.limit(1);
 				throw new Error(
-					`${person?.name ?? "That member"} is marked absent for this meeting.`,
+					`${person?.name ?? "That member"} is not available for this meeting.`,
 				);
 			}
 		} else if (input.guestId || input.newGuest) {

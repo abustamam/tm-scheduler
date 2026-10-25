@@ -627,7 +627,7 @@ describe.skipIf(!hasTestDb)("meeting minutes (#152)", () => {
 					meetingId: seed.meetingId,
 					memberId: seed.memberId,
 				}),
-			).rejects.toThrow(/marked absent for this meeting/);
+			).rejects.toThrow(/is not available for this meeting/);
 			expect(await speakerRows()).toHaveLength(0);
 		});
 
@@ -641,7 +641,7 @@ describe.skipIf(!hasTestDb)("meeting minutes (#152)", () => {
 					meetingId: seed.meetingId,
 					memberId: seed.memberId,
 				}),
-			).rejects.toThrow(/marked absent/);
+			).rejects.toThrow(/is not available for this meeting/);
 			expect(await speakerRows()).toHaveLength(0);
 		});
 
@@ -678,6 +678,37 @@ describe.skipIf(!hasTestDb)("meeting minutes (#152)", () => {
 				}),
 			).resolves.toEqual({ id });
 			expect(await speakerRows()).toHaveLength(1);
+		});
+
+		it("does not replay an id that belongs to another meeting", async () => {
+			// protects: the replay lookup is scoped to this meeting, so an id reused
+			//   from another meeting does not skip the availability check.
+			// fails_when: the lookup matches on id alone.
+			// no_claim: a same-meeting replay (above) still returns the row.
+			const [other] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: seed.clubId,
+					scheduledAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+					status: "scheduled",
+				})
+				.returning({ id: meetings.id });
+			const id = randomUUID();
+			await addTableTopicsSpeaker({
+				// biome-ignore lint/style/noNonNullAssertion: insert above returns a row
+				meetingId: other!.id,
+				memberId: seed.memberId,
+				id,
+			});
+			await markRoll("absent");
+			await expect(
+				addTableTopicsSpeaker({
+					meetingId: seed.meetingId,
+					memberId: seed.memberId,
+					id,
+				}),
+			).rejects.toThrow(/is not available for this meeting/);
+			expect(await speakerRows()).toHaveLength(0);
 		});
 	});
 });

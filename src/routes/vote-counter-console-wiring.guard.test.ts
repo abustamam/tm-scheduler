@@ -126,7 +126,9 @@ describe("vote counter console ruling-gate wiring (#752)", () => {
 
 describe("vote counter console Table Topics picker wiring (#1319)", () => {
 	const src = readSource(ROUTE);
-	const tagAt = src.indexOf("<TableTopicsCapture");
+	// Anchored to a line-leading JSX tag, so a comment naming the element
+	// cannot be the match.
+	const tagAt = src.search(/^[ \t]*<TableTopicsCapture\b/m);
 	const tagEnd = src.indexOf("/>", tagAt);
 	const props = src.slice(tagAt, tagEnd);
 
@@ -146,5 +148,38 @@ describe("vote counter console Table Topics picker wiring (#1319)", () => {
 		// fails_when: the prop is dropped or fed another same-typed array.
 		// no_claim: the filtering itself, which lives in TableTopicsCapture.
 		expect(props).toContain("unavailableMemberIds={unavailableMemberIds}");
+	});
+});
+
+describe("minutes card Table Topics picker wiring (#1319)", () => {
+	const src = readSource(ROUTE);
+	// The element's own closing `/>` sits on a line at the tag's indentation;
+	// the nested `email={...}` object closes deeper, so it cannot end the slice.
+	const open = /^([ \t]*)<MeetingMinutes\b/m.exec(src);
+	const tagAt = open?.index ?? -1;
+	const indent = open?.[1] ?? "";
+	const tagEnd = src.indexOf(`\n${indent}/>`, tagAt);
+	const props = src.slice(tagAt, tagEnd);
+
+	it("finds the route's MeetingMinutes and slices only it", () => {
+		// protects: the window below is this one element, not the whole route.
+		// fails_when: the element is renamed or the slice swallows the file.
+		// no_claim: says nothing about what the props contain.
+		expect(tagAt).toBeGreaterThan(-1);
+		expect(tagEnd).toBeGreaterThan(tagAt);
+		expect(props.length).toBeLessThan(4000);
+		expect(props).not.toContain("<VoteCounterPanel");
+		expect(props).not.toContain("<TableTopicsCapture");
+	});
+
+	it("hands the minutes card the unavailable ids from the loader", () => {
+		// protects: the Table Topics picker on the minutes card hides Absent and
+		//   Not-coming members; the prop is optional on MeetingMinutes (other
+		//   tests render it bare), so dropping it type-checks and passes them.
+		// fails_when: the prop is dropped or fed another same-typed array.
+		// no_claim: the filtering itself, which lives in TableTopicsCapture.
+		expect(props).toMatch(
+			/^[ \t]*unavailableMemberIds=\{unavailableMemberIds\}$/m,
+		);
 	});
 });
