@@ -66,7 +66,8 @@ export const MAX_NAME_CHARS = 200;
 
 /**
  * The comparable tokens of a full name: lowercased, diacritic-folded, split on
- * whitespace and hyphens, inner punctuation stripped, sorted.
+ * whitespace and hyphens, inner punctuation stripped, in written order.
+ * `nameTokens` sorts them for `namesAgree`; search keeps the order (#1331).
  *
  * Sorting is what makes "Khan, Zabihullah" and "Zabihullah Khan" compare equal
  * without having to decide which token is the family name — a decision this
@@ -83,7 +84,7 @@ export const MAX_NAME_CHARS = 200;
  * scripts, which a `[^a-z0-9]` class would erase to zero tokens — making
  * `namesAgree` permanently false for those members rather than merely imprecise.
  */
-function nameTokens(name: string): string[] {
+export function nameWords(name: string): string[] {
 	return name
 		.slice(0, MAX_NAME_CHARS)
 		.normalize("NFD")
@@ -91,8 +92,11 @@ function nameTokens(name: string): string[] {
 		.toLowerCase()
 		.split(/[\s\u002d\u2010-\u2015]+/u)
 		.map((t) => t.replace(/[\p{P}\p{S}]/gu, ""))
-		.filter(Boolean)
-		.sort();
+		.filter(Boolean);
+}
+
+function nameTokens(name: string): string[] {
+	return nameWords(name).sort();
 }
 
 /**

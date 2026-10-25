@@ -23,6 +23,8 @@
  */
 import { z } from "zod";
 import { MAX_FIND_PEOPLE_RESULTS } from "#/lib/mcp-limits";
+import { nameWords } from "#/lib/person-name";
+import { searchPeople } from "#/lib/person-search";
 import { loadClubContactPreferences } from "#/server/contact-preference-logic";
 import { loadGuestPipeline } from "#/server/guest-pipeline-logic";
 import { loadPublicClubRoster } from "#/server/members-logic";
@@ -36,7 +38,9 @@ const inputSchema = {
 		.string()
 		.max(100)
 		.optional()
-		.describe("Case-insensitive substring of a name. Omit to list everyone."),
+		.describe(
+			"Name or preferred name; accent-insensitive, any word order. Omit to list everyone.",
+		),
 };
 
 export const findPeopleTool: McpToolDefinition = {
@@ -88,14 +92,10 @@ export const findPeopleTool: McpToolDefinition = {
 			})),
 		];
 
-		const needle = args.query?.trim().toLowerCase();
-		const matched = needle
-			? people.filter(
-					(p) =>
-						p.name.toLowerCase().includes(needle) ||
-						(p.preferredName?.toLowerCase().includes(needle) ?? false),
-				)
-			: people;
+		// A blank or punctuation-only query lists everyone in reader order.
+		const query = args.query ?? "";
+		const matched =
+			nameWords(query).length === 0 ? people : searchPeople(query, people);
 
 		return {
 			clubId: club.clubId,

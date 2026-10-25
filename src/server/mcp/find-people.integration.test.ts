@@ -125,6 +125,44 @@ describe.skipIf(!hasTestDb)("find_people (#773 D4)", () => {
 		expect(guest.people.map((p) => p.name)).toEqual(["Jonathan Vance"]);
 	});
 
+	// protects=accent-insensitive find_people; fails_when=query not folded; no_claim=other surfaces
+	it("finds a member stored with an accent by an unaccented query", async () => {
+		await testDb
+			.update(members)
+			.set({ name: "José Ruiz" })
+			.where(eq(members.id, seed.memberId));
+		const res = await call({ clubId: seed.clubId, query: "jose" });
+		expect(res.people.map((p) => p.name)).toEqual(["José Ruiz"]);
+	});
+
+	// protects=any word order; fails_when=substring-only filter; no_claim=ranking beyond one hit
+	it("matches words in any order", async () => {
+		await testDb
+			.update(members)
+			.set({ name: "Jo Smith" })
+			.where(eq(members.id, seed.memberId));
+		const res = await call({ clubId: seed.clubId, query: "smith jo" });
+		expect(res.people.map((p) => p.name)).toEqual(["Jo Smith"]);
+	});
+
+	// protects=preferred-name union; fails_when=name and preferred checked separately; no_claim=nickname derivation
+	it("matches a word of the name plus a word of the preferred name", async () => {
+		const res = await call({ clubId: seed.clubId, query: "rash adm" });
+		expect(res.people.map((p) => p.name)).toEqual(["Admin User"]);
+	});
+
+	// protects=reader order for blank queries; fails_when=blank query is re-sorted or filtered; no_claim=truncation
+	it("keeps reader order for an absent, blank or punctuation-only query", async () => {
+		const all = (await call({ clubId: seed.clubId })).people.map((p) => p.id);
+		expect(all).toHaveLength(3);
+		for (const query of ["", "   ", "''"]) {
+			const res = await call({ clubId: seed.clubId, query });
+			expect(res.people.map((p) => p.id)).toEqual(all);
+		}
+		// Members come before guests, as the reader returns them.
+		expect(all.at(-1)).not.toBe(seed.memberId);
+	});
+
 	it("still returns no raw member contact", async () => {
 		// #37's rule is about phone and email, and item 4 does not touch it: a
 		// member row carries identity only.
