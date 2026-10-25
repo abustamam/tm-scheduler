@@ -144,7 +144,7 @@ function AboutPage() {
 							height={350}
 							className="block aspect-[4/1] h-auto w-full rounded-2xl object-cover"
 						/>
-						<figcaption className="mt-2 text-sm text-[var(--sea-ink-soft)]">
+						<figcaption className="mt-2 text-sm text-muted-foreground">
 							Speaking to an audience of 700.
 						</figcaption>
 					</figure>

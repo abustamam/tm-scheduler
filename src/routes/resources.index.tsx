@@ -36,7 +36,7 @@ function ResourcesIndex() {
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					Toastmasters resources
 				</h1>
-				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+				<p className="mt-1 text-sm text-muted-foreground">
 					What to expect at a meeting, what each role does, and printable sheets
 					you can bring along.
 				</p>

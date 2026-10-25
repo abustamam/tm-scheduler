@@ -116,24 +116,24 @@ export function TimerDemo() {
 		>
 			<div
 				data-band={band}
-				className={`flex min-h-[22rem] flex-col items-center justify-center gap-3 rounded-2xl border border-[var(--line)] px-4 py-6 text-center motion-safe:transition-colors motion-safe:duration-300 motion-safe:ease-out ${SCREEN_BG_CLASS[band]} ${text}`}
+				className={`flex min-h-[22rem] flex-col items-center justify-center gap-3 rounded-2xl border border-border px-4 py-6 text-center motion-safe:transition-colors motion-safe:duration-300 motion-safe:ease-out ${SCREEN_BG_CLASS[band]} ${text}`}
 			>
-				<h3 className="font-extrabold text-[11.5px] uppercase tracking-[0.08em] opacity-80">
+				<h3 className="font-bold text-xs uppercase tracking-[0.08em] opacity-80">
 					Speaker 2 · Priya Nair
 				</h3>
 				<p
-					className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 font-medium text-sm tabular-nums ${text}`}
+					className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 font-semibold text-sm tabular-nums ${text}`}
 				>
 					<span className="inline-flex items-center gap-1.5">
-						<MarkDot band={band} className="bg-[#1f7a46]" />
+						<MarkDot band={band} className="bg-timer-green" />
 						Green {formatTimingClock(MARKS.green)}
 					</span>
 					<span className="inline-flex items-center gap-1.5">
-						<MarkDot band={band} className="bg-[#f2c230]" />
+						<MarkDot band={band} className="bg-timer-yellow" />
 						Yellow {formatTimingClock(MARKS.yellow)}
 					</span>
 					<span className="inline-flex items-center gap-1.5">
-						<MarkDot band={band} className="bg-[#c0262d]" />
+						<MarkDot band={band} className="bg-timer-red" />
 						Red {formatTimingClock(MARKS.red)}
 					</span>
 					{qualifying ? (
@@ -144,7 +144,9 @@ export function TimerDemo() {
 					<span className="font-display font-semibold text-6xl tabular-nums leading-none">
 						{formatStopwatch(elapsedMs)}
 					</span>
-					<span className="font-medium text-lg">{TIMER_BAND_LABEL[band]}</span>
+					<span className="font-semibold text-lg">
+						{TIMER_BAND_LABEL[band]}
+					</span>
 				</div>
 				<div className="flex w-full max-w-xs flex-wrap justify-center gap-2">
 					{phase === "idle" ? (
@@ -173,13 +175,13 @@ export function TimerDemo() {
 						</Button>
 					) : null}
 				</div>
-				<p className="min-h-5 font-medium text-sm">
+				<p className="min-h-5 font-semibold text-sm">
 					{phase === "stopped"
 						? `Recorded ${formatElapsedSeconds(seconds)} · ${TIMING_VERDICT_LABEL[verdict]}`
 						: null}
 				</p>
 			</div>
-			<p className="text-[var(--sea-ink-soft)] text-xs">
+			<p className="text-muted-foreground text-xs">
 				Running at {TIMER_DEMO_SPEED}× speed, so green arrives in 15 seconds.
 			</p>
 			{/* Says the band only when it changes, never per tick. */}

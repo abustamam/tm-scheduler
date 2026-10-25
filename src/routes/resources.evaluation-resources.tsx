@@ -63,7 +63,7 @@ function EvaluationResourcesIndex() {
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					Evaluation resources
 				</h1>
-				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+				<p className="mt-1 text-sm text-muted-foreground">
 					The official evaluation form for every Pathways project. Search by
 					project name or item number.
 				</p>
@@ -78,12 +78,12 @@ function EvaluationResourcesIndex() {
 				className="mb-4 max-w-md"
 			/>
 
-			<p className="mb-3 text-[var(--sea-ink-soft)] text-sm" aria-live="polite">
+			<p className="mb-3 text-muted-foreground text-sm" aria-live="polite">
 				{results.length} of {EVALUATION_RESOURCES.length}
 			</p>
 
 			{results.length === 0 ? (
-				<p className="text-[var(--sea-ink-soft)] text-sm">
+				<p className="text-muted-foreground text-sm">
 					Nothing matches “{query}”. Try a project name or an item number like
 					8200E.
 				</p>
@@ -92,13 +92,13 @@ function EvaluationResourcesIndex() {
 					{results.map((r) => (
 						<li
 							key={r.key}
-							className="rounded-xl border border-[var(--line)] bg-card p-3.5"
+							className="rounded-xl border border-border bg-card p-3.5"
 						>
 							<a
 								href={r.url}
 								target="_blank"
 								rel="noopener noreferrer"
-								className="flex items-start gap-2 text-sm font-medium"
+								className="flex items-start gap-2 text-sm font-semibold"
 							>
 								<FileText className="mt-0.5 size-4 shrink-0" aria-hidden />
 								<span>
@@ -107,7 +107,7 @@ function EvaluationResourcesIndex() {
 								</span>
 							</a>
 							{r.itemCode ? (
-								<p className="mt-1 pl-6 text-[var(--sea-ink-soft)] text-xs">
+								<p className="mt-1 pl-6 text-muted-foreground text-xs">
 									Item {r.itemCode}
 								</p>
 							) : null}
@@ -120,7 +120,7 @@ function EvaluationResourcesIndex() {
 			    hand-written blurb so one copy cannot drift from the other, and it is
 			    the only place this slug's prose renders — the static route wins over
 			    `resources.$slug`, so without this it reaches no URL at all. */}
-			<article className="prose-gavelup mt-10 border-[var(--line)] border-t pt-6">
+			<article className="prose-gavelup mt-10 border-border border-t pt-6">
 				<ReactMarkdown remarkPlugins={[remarkGfm]}>{ARTICLE}</ReactMarkdown>
 			</article>
 		</ResourcesShell>

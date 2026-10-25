@@ -36,11 +36,11 @@ export interface Resource {
 export function resourceToneGradient(tone: ResourceTone): string {
 	switch (tone) {
 		case "palm":
-			return "linear-gradient(150deg, var(--palm), #245238)";
+			return "linear-gradient(150deg, var(--color-success), #245238)";
 		case "ink":
-			return "linear-gradient(150deg, var(--sea-ink-soft), var(--sea-ink))";
+			return "linear-gradient(150deg, var(--color-muted-foreground), var(--color-foreground))";
 		default:
-			return "linear-gradient(150deg, var(--lagoon), var(--lagoon-deep))";
+			return "linear-gradient(150deg, var(--color-highlight), var(--color-link))";
 	}
 }
 

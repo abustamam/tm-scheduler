@@ -54,9 +54,9 @@ export function MarketingShell({ children }: { children: ReactNode }) {
 		// No background colour here, deliberately (#612). styles.css gives `body`
 		// a layered treatment — three radial washes on --hero-a/--hero-b over a
 		// sand → foam → bg-base ramp, with dark-mode variants — and the landing
-		// page used to set `bg-[var(--foam)]`, flat-filling straight over all of
+		// page used to set `bg-surface-soft`, flat-filling straight over all of
 		// it. Marketing pages are the surfaces that most need that atmosphere.
-		<div className="flex min-h-svh flex-col text-[var(--sea-ink)]">
+		<div className="flex min-h-svh flex-col text-foreground">
 			{/* `flex-wrap` (#870): the brand plus three nav buttons need ~430px and
 			    `Button` never shrinks, so on a phone the nav drops to its own row
 			    instead of running "Sign in" off-screen, where body's
@@ -82,8 +82,8 @@ export function MarketingShell({ children }: { children: ReactNode }) {
 
 			{children}
 
-			<footer className="border-t border-[var(--line)]">
-				<div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-5 py-8 text-sm text-[var(--sea-ink-soft)] sm:px-8">
+			<footer className="border-t border-border">
+				<div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-5 py-8 text-sm text-muted-foreground sm:px-8">
 					<div className="flex flex-wrap items-center justify-between gap-3">
 						<BrandMark size="sm" />
 						{/* Wraps for the same reason as the header nav (#870): five links
@@ -94,7 +94,7 @@ export function MarketingShell({ children }: { children: ReactNode }) {
 									key={l.label}
 									to={l.to}
 									search={l.search}
-									className="font-semibold text-[var(--sea-ink)] no-underline hover:underline"
+									className="font-semibold text-foreground no-underline hover:underline"
 								>
 									{l.label}
 								</Link>

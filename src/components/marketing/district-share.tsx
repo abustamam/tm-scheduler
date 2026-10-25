@@ -69,7 +69,7 @@ export function DistrictShare({ d }: { d?: string }) {
 
 			{link && blurb ? (
 				<div className="space-y-4" data-testid="district-share-output">
-					<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-5">
+					<div className="rounded-2xl border border-border bg-surface-raised p-5">
 						<p className="text-base leading-relaxed" data-testid="share-blurb">
 							{blurb}
 						</p>
@@ -83,7 +83,7 @@ export function DistrictShare({ d }: { d?: string }) {
 					</div>
 					<div className="flex flex-wrap items-center gap-3">
 						<code
-							className="break-all rounded-md bg-[var(--surface-strong)] px-2 py-1 text-sm"
+							className="break-all rounded-md bg-surface-raised px-2 py-1 text-sm"
 							data-testid="share-link"
 						>
 							{link}

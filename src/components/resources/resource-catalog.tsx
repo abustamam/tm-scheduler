@@ -98,7 +98,7 @@ export function ResourceCatalog({
 				</fieldset>
 			) : null}
 
-			<p className="mb-3 text-sm text-[var(--sea-ink-soft)]" aria-live="polite">
+			<p className="mb-3 text-sm text-muted-foreground" aria-live="polite">
 				{countLabel(visible.length, items.length)}
 			</p>
 
@@ -108,7 +108,7 @@ export function ResourceCatalog({
 				// than as "nothing here". Only an empty `items` reaches this in
 				// practice — `categories` is derived, so a category with no articles
 				// never becomes a chip you could press.
-				<p className="text-sm text-[var(--sea-ink-soft)]">
+				<p className="text-sm text-muted-foreground">
 					Nothing to show here yet.
 				</p>
 			) : (
@@ -148,10 +148,10 @@ function CategoryChip({
 			aria-pressed={active}
 			onClick={onSelect}
 			className={cn(
-				"rounded-full border px-3.5 py-1.5 text-[13px] font-semibold outline-none transition-transform active:scale-[0.97] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+				"rounded-full border px-3.5 py-1.5 text-sm font-semibold outline-none transition-transform active:scale-[0.97] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
 				active
-					? "border-[var(--sea-ink)] bg-[var(--sea-ink)] text-[var(--background)]"
-					: "border-[var(--line)] bg-[var(--surface-strong)] text-[var(--sea-ink-soft)]",
+					? "border-foreground bg-foreground text-[var(--background)]"
+					: "border-border bg-surface-raised text-muted-foreground",
 			)}
 		>
 			{label}
@@ -165,7 +165,7 @@ function ResourceCard({ resource }: { resource: Resource }) {
 		<Link
 			to="/resources/$slug"
 			params={{ slug: resource.slug }}
-			className="group flex flex-col gap-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-5 text-[var(--sea-ink)] no-underline shadow-[0_1px_0_var(--inset-glint)_inset,0_8px_20px_rgba(23,58,64,.05)] transition-all hover:-translate-y-0.5 hover:border-[var(--lagoon-deep)]"
+			className="group flex flex-col gap-3 rounded-xl border border-border bg-surface-raised p-5 text-foreground no-underline shadow-[0_8px_20px_rgba(23,58,64,.05)] transition-[transform,border-color] hover:-translate-y-0.5 hover:border-link"
 		>
 			<div className="flex items-center justify-between gap-2">
 				<span
@@ -177,13 +177,13 @@ function ResourceCard({ resource }: { resource: Resource }) {
 				{/* The card's own category, so the chip you pressed is legible on the
 				    results it produced — and so the grouping still reads once the
 				    filter is back on "All". */}
-				<span className="text-[10.5px] font-bold tracking-[0.05em] text-[var(--sea-ink-soft)] uppercase">
+				<span className="text-xs font-bold tracking-[0.05em] text-muted-foreground uppercase">
 					{resource.cat}
 				</span>
 			</div>
 			<div>
 				<div className="text-sm leading-tight font-bold">{resource.title}</div>
-				<p className="mt-1 text-xs leading-snug text-[var(--sea-ink-soft)]">
+				<p className="mt-1 text-xs leading-snug text-muted-foreground">
 					{resource.desc}
 				</p>
 			</div>

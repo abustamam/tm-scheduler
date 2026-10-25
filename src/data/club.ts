@@ -17,11 +17,11 @@ export type MemberStatus = "on" | "dtm" | "behind" | "new";
 export function avatarGradient(tone: MemberTone): string {
 	switch (tone) {
 		case "palm":
-			return "linear-gradient(150deg, var(--palm), #245238)";
+			return "linear-gradient(150deg, var(--color-success), #245238)";
 		case "amber":
 			return "linear-gradient(150deg, #e0b357, #c2851a)";
 		default:
-			return "linear-gradient(150deg, var(--lagoon), var(--lagoon-deep))";
+			return "linear-gradient(150deg, var(--color-highlight), var(--color-link))";
 	}
 }
 
@@ -36,22 +36,26 @@ export interface StatusMeta {
 export function statusMeta(status: MemberStatus): StatusMeta {
 	switch (status) {
 		case "on":
-			return { dot: "var(--palm)", label: "On track", longLabel: "On track" };
+			return {
+				dot: "var(--color-success)",
+				label: "On track",
+				longLabel: "On track",
+			};
 		case "dtm":
 			return {
-				dot: "var(--lagoon-deep)",
+				dot: "var(--color-link)",
 				label: "DTM track",
 				longLabel: "DTM track",
 			};
 		case "behind":
 			return {
-				dot: "var(--warning)",
+				dot: "var(--color-warning)",
 				label: "Behind",
 				longLabel: "Behind on goals",
 			};
 		default:
 			return {
-				dot: "var(--sea-ink-soft)",
+				dot: "var(--color-muted-foreground)",
 				label: "New member",
 				longLabel: "New member",
 			};

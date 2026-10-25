@@ -11,15 +11,12 @@ import { cn } from "#/lib/utils";
 export function FounderNote({ className }: { className?: string }) {
 	return (
 		<p
-			className={cn(
-				"text-sm leading-relaxed text-[var(--sea-ink-soft)]",
-				className,
-			)}
+			className={cn("text-sm leading-relaxed text-muted-foreground", className)}
 		>
 			<span>{FOUNDER_BLURB}</span>{" "}
 			<Link
 				to="/about"
-				className="font-semibold text-[var(--sea-ink)] no-underline hover:underline"
+				className="font-semibold text-foreground no-underline hover:underline"
 			>
 				More about GavelUp →
 			</Link>

@@ -25,9 +25,9 @@ export function VoteDemo() {
 	return (
 		<section
 			aria-label="Try it: vote for best speaker"
-			className="flex flex-col gap-3 rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-4"
+			className="flex flex-col gap-3 rounded-2xl border border-border bg-surface-raised p-4"
 		>
-			<div className="font-extrabold text-[11.5px] text-[var(--sea-ink-soft)] uppercase tracking-[0.08em]">
+			<div className="font-bold text-xs text-muted-foreground uppercase tracking-[0.08em]">
 				Best speaker
 			</div>
 			<ul className="flex flex-col gap-2">
@@ -41,10 +41,10 @@ export function VoteDemo() {
 								setTallies((t) => t.map((n, j) => (j === idx ? n + 1 : n)));
 								setVotedFor(idx);
 							}}
-							className={`flex w-full items-center justify-between rounded-xl border px-3 py-2.5 text-left font-bold text-[14px] motion-safe:transition-colors motion-safe:duration-200 motion-safe:ease-out enabled:cursor-pointer enabled:hover:border-[var(--lagoon-deep)] disabled:cursor-default ${
+							className={`flex w-full items-center justify-between rounded-xl border px-3 py-2.5 text-left font-bold text-sm motion-safe:transition-colors motion-safe:duration-200 motion-safe:ease-out enabled:cursor-pointer enabled:hover:border-link disabled:cursor-default ${
 								votedFor === idx
-									? "border-[var(--palm)] bg-success text-success-foreground"
-									: "border-[var(--line)]"
+									? "border-success bg-success text-success-foreground"
+									: "border-border"
 							}`}
 						>
 							<span>{s.name}</span>
@@ -56,7 +56,7 @@ export function VoteDemo() {
 				))}
 			</ul>
 			<div className="flex h-6 items-center justify-between text-sm">
-				<span aria-live="polite" className="text-[var(--sea-ink-soft)]">
+				<span aria-live="polite" className="text-muted-foreground">
 					{votedFor === null ? "Tap a name." : "Vote counted."}
 				</span>
 				{votedFor !== null ? (
