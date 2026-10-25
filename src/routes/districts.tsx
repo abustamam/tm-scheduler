@@ -69,7 +69,7 @@ const EASY_ROLLOUT = [
 ];
 
 const H2 =
-	"font-display text-2xl font-semibold tracking-[-0.01em] text-[var(--sea-ink)]";
+	"font-display text-2xl font-semibold tracking-[-0.01em] text-foreground";
 
 function Section({
 	id,
@@ -99,8 +99,8 @@ function PointList({ points }: { points: { title: string; body: string }[] }) {
 		<ul className="grid gap-5 sm:grid-cols-3">
 			{points.map((p) => (
 				<li key={p.title}>
-					<p className="font-semibold text-[var(--sea-ink)]">{p.title}</p>
-					<p className="mt-1.5 text-[15px] leading-relaxed text-[var(--sea-ink-soft)]">
+					<p className="font-semibold text-foreground">{p.title}</p>
+					<p className="mt-1.5 text-base leading-relaxed text-muted-foreground">
 						{p.body}
 					</p>
 				</li>
@@ -115,7 +115,7 @@ function Districts() {
 		<MarketingShell>
 			<main className="mx-auto w-full max-w-5xl flex-1 px-5 pt-10 pb-20 sm:px-8 lg:pt-16">
 				<section data-section="hero">
-					<p className="font-extrabold text-[11.5px] text-[var(--palm)] uppercase tracking-[0.12em]">
+					<p className="font-bold text-xs text-success uppercase tracking-[0.12em]">
 						For district leaders
 					</p>
 					<h1
@@ -124,7 +124,7 @@ function Districts() {
 					>
 						Help more of your clubs run great meetings.
 					</h1>
-					<p className="mt-5 max-w-2xl text-lg leading-relaxed text-[var(--sea-ink-soft)]">
+					<p className="mt-5 max-w-2xl text-lg leading-relaxed text-muted-foreground">
 						GavelUp helps a club fill its meeting roles faster, run the room
 						smoothly on the night, and keep its DCP goals in view all year.
 					</p>
@@ -135,7 +135,7 @@ function Districts() {
 					<p className="mt-5">
 						<Link
 							to="/tour"
-							className="font-semibold text-[var(--sea-ink)] no-underline hover:underline"
+							className="font-semibold text-foreground no-underline hover:underline"
 						>
 							See the tour →
 						</Link>
@@ -151,7 +151,7 @@ function Districts() {
 				</Section>
 
 				<Section id="talk" title="Talk to us">
-					<p className="max-w-2xl text-base leading-relaxed text-[var(--sea-ink-soft)]">
+					<p className="max-w-2xl text-base leading-relaxed text-muted-foreground">
 						Tell us about your district and the clubs you have in mind, and
 						we'll work out the easiest way to get them started.
 					</p>
@@ -165,7 +165,7 @@ function Districts() {
 				</Section>
 
 				<Section id="share" title="Share with your clubs">
-					<p className="mb-5 max-w-2xl text-base leading-relaxed text-[var(--sea-ink-soft)]">
+					<p className="mb-5 max-w-2xl text-base leading-relaxed text-muted-foreground">
 						A ready-made note to forward to your club presidents. Enter your
 						district number and copy it into an email or your district's group
 						chat.

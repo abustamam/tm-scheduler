@@ -32,7 +32,7 @@ import type { AgendaBlockingItem } from "#/server/agenda-plan-pending-logic";
 
 const CELL = "px-3 py-2 align-top";
 const HEAD =
-	"px-3 py-2 text-left text-xs font-extrabold tracking-[0.06em] text-[var(--sea-ink-soft)] uppercase";
+	"px-3 py-2 text-left text-xs font-bold tracking-[0.06em] text-muted-foreground uppercase";
 
 /** One sentence per warning, in the words an officer is thinking in. */
 const WARNING_LABEL: Record<AgendaWarning, string> = {
@@ -77,10 +77,10 @@ export function AgendaDiffTable(props: AgendaDiffTableProps) {
 	const rows = rowsOf(props);
 
 	return (
-		<div className="relative w-full overflow-x-auto rounded-2xl border border-[var(--line)]">
+		<div className="relative w-full overflow-x-auto rounded-2xl border border-border">
 			<table className="w-full min-w-[52rem] border-collapse text-sm">
 				<thead>
-					<tr className="border-b border-[var(--line)] bg-[var(--foam)]">
+					<tr className="border-b border-border bg-surface-soft">
 						<th className={HEAD}>Date</th>
 						<th className={HEAD}>Time</th>
 						<th className={HEAD}>Meeting</th>
@@ -97,7 +97,7 @@ export function AgendaDiffTable(props: AgendaDiffTableProps) {
 						row.kind === "blocked" ? (
 							<tr
 								key={`blocked-${row.index}`}
-								className="border-b border-[var(--line)] last:border-b-0"
+								className="border-b border-border last:border-b-0"
 								data-testid="agenda-diff-row"
 							>
 								<td className={`${CELL} whitespace-nowrap font-semibold`}>
@@ -117,12 +117,12 @@ export function AgendaDiffTable(props: AgendaDiffTableProps) {
 						) : (
 							<tr
 								key={`line-${row.index}`}
-								className="border-b border-[var(--line)] last:border-b-0"
+								className="border-b border-border last:border-b-0"
 								data-testid="agenda-diff-row"
 							>
 								<td className={`${CELL} whitespace-nowrap font-semibold`}>
 									{row.line.date}
-									<span className="block text-xs font-normal text-[var(--sea-ink-soft)]">
+									<span className="block text-xs font-normal text-muted-foreground">
 										{row.line.weekday}
 									</span>
 								</td>
@@ -132,7 +132,7 @@ export function AgendaDiffTable(props: AgendaDiffTableProps) {
 									props.meetingNumbers[row.line.index] != null ? (
 										<>
 											#{props.meetingNumbers[row.line.index]}
-											<span className="block text-xs text-[var(--sea-ink-soft)]">
+											<span className="block text-xs text-muted-foreground">
 												provisional
 											</span>
 										</>
@@ -154,7 +154,7 @@ export function AgendaDiffTable(props: AgendaDiffTableProps) {
 											location={row.line.location}
 										/>
 									) : row.line.changes.length === 0 ? (
-										<span className="text-[var(--sea-ink-soft)]">
+										<span className="text-muted-foreground">
 											Everything already matches
 										</span>
 									) : (
@@ -180,7 +180,7 @@ export function AgendaDiffTable(props: AgendaDiffTableProps) {
 								</td>
 								<td className={CELL}>
 									{row.line.warnings.length === 0 ? (
-										<span className="text-[var(--sea-ink-soft)]">—</span>
+										<span className="text-muted-foreground">—</span>
 									) : (
 										<ul className="space-y-1">
 											{row.line.warnings.map((warning) => (
@@ -203,7 +203,7 @@ export function AgendaDiffTable(props: AgendaDiffTableProps) {
 /** A stored value, or a visible marker for "nothing there". */
 function Value({ value }: { value: string | null }) {
 	return value === null ? (
-		<span className="text-[var(--sea-ink-soft)]">(empty)</span>
+		<span className="text-muted-foreground">(empty)</span>
 	) : (
 		<span>{value}</span>
 	);
@@ -232,7 +232,7 @@ function CreateMeta({
 	).filter(([, value]) => value !== null);
 	if (set.length === 0) {
 		return (
-			<span className="text-[var(--sea-ink-soft)]">
+			<span className="text-muted-foreground">
 				A blank meeting with the club's standard roles
 			</span>
 		);

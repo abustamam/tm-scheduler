@@ -67,10 +67,10 @@ export function AssistantDemo() {
 		<section
 			ref={ref}
 			aria-label="Example: asking an AI assistant to fill a role"
-			className="flex flex-col gap-3 rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-4"
+			className="flex flex-col gap-3 rounded-2xl border border-border bg-surface-raised p-4"
 		>
 			<div className="flex items-center justify-between">
-				<span className="font-extrabold text-[11.5px] text-[var(--sea-ink-soft)] uppercase tracking-[0.08em]">
+				<span className="font-bold text-xs text-muted-foreground uppercase tracking-[0.08em]">
 					Your assistant
 				</span>
 				<span className={BETA_PILL_CLASS}>Beta</span>
@@ -80,10 +80,10 @@ export function AssistantDemo() {
 				{ASSISTANT_DEMO_MESSAGES.slice(0, shown).map((m) => (
 					<li
 						key={m.from}
-						className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[14.5px] leading-snug motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-safe:duration-200 motion-safe:ease-out ${
+						className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-snug motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-safe:duration-200 motion-safe:ease-out ${
 							m.from === "user"
 								? "self-end rounded-br-md bg-primary text-primary-foreground"
-								: "self-start rounded-bl-md bg-muted text-[var(--sea-ink)]"
+								: "self-start rounded-bl-md bg-muted text-foreground"
 						}`}
 					>
 						<span className="sr-only">
@@ -93,9 +93,7 @@ export function AssistantDemo() {
 					</li>
 				))}
 			</ol>
-			<p className="text-sm text-[var(--sea-ink-soft)]">
-				{AI_CONNECTOR_SETUP_LINE}
-			</p>
+			<p className="text-sm text-muted-foreground">{AI_CONNECTOR_SETUP_LINE}</p>
 		</section>
 	);
 }

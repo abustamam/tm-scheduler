@@ -112,10 +112,10 @@ function SignIn() {
 				<CardContent>
 					{status === "sent" ? (
 						<div className="space-y-2 text-sm">
-							<p className="font-medium">Check your email</p>
+							<p className="font-semibold">Check your email</p>
 							<p className="text-muted-foreground">
 								We sent a sign-in link to{" "}
-								<span className="font-medium text-foreground">{email}</span>.
+								<span className="font-semibold text-foreground">{email}</span>.
 								{connecting
 									? " Open it and you'll be asked to approve the connection."
 									: " Open it on this device to finish signing in."}
@@ -167,7 +167,7 @@ function SignIn() {
 				Just signing up for a meeting role? No account needed — open your
 				club&apos;s sign-up link and pick your name.
 			</p>
-			<p className="w-full max-w-sm text-center text-[11px] leading-relaxed text-muted-foreground/80">
+			<p className="w-full max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
 				{TOASTMASTERS_DISCLAIMER}
 			</p>
 		</main>

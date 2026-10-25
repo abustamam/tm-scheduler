@@ -89,7 +89,7 @@ const SLIDES: readonly Slide[] = [
 					style={{ width: "58cqw", background: NAVY }}
 				/>
 				<div
-					className="font-extrabold text-[6.4cqw] leading-tight"
+					className="font-bold text-[6.4cqw] leading-tight"
 					style={{ color: INK }}
 				>
 					{CLUB}
@@ -155,7 +155,7 @@ const SLIDES: readonly Slide[] = [
 						<div className="font-semibold text-[2cqw] leading-tight">
 							Thursday, November 5, 2026 · 7:00 PM · Harbor City Library
 						</div>
-						<div className="font-extrabold text-[2.8cqw] leading-tight">
+						<div className="font-bold text-[2.8cqw] leading-tight">
 							<span style={{ fontWeight: 800 }}>Toastmaster:</span> Marcus Lee
 						</div>
 						<div
@@ -197,7 +197,7 @@ const SLIDES: readonly Slide[] = [
 					style={{ width: "58cqw", background: "rgba(255,255,255,.55)" }}
 				/>
 				<div
-					className="font-extrabold text-[6.4cqw] leading-tight"
+					className="font-bold text-[6.4cqw] leading-tight"
 					style={{ color: GOLD }}
 				>
 					Thank You
@@ -248,7 +248,7 @@ function SlideFrame({ slide }: { slide: Slide }) {
 			style={{ background: GROUND, color: INK }}
 		>
 			<header className="px-[5cqw] pt-[3.4cqw]">
-				<div className="font-extrabold text-[3.9cqw] leading-tight">
+				<div className="font-bold text-[3.9cqw] leading-tight">
 					{slide.title}
 				</div>
 				<div
@@ -311,7 +311,7 @@ export function PresentDemo() {
 				<SlideFrame slide={slide} />
 				<div
 					aria-hidden
-					className="absolute top-[0.8cqw] left-1/2 z-20 -translate-x-1/2 rounded-full bg-black/35 px-[1.4cqw] py-[0.3cqw] text-[1.6cqw] text-white/90 tabular-nums"
+					className="absolute top-[0.8cqw] left-1/2 z-20 -translate-x-1/2 rounded-full bg-black/35 px-[1.4cqw] py-[0.3cqw] text-[1.6cqw] text-white tabular-nums"
 				>
 					{index + 1} / {SLIDES.length}
 				</div>
@@ -328,7 +328,7 @@ export function PresentDemo() {
 					className={`${ZONE} right-0`}
 				/>
 			</div>
-			<p className="text-sm text-[var(--sea-ink-soft)]">
+			<p className="text-sm text-muted-foreground">
 				Click the right side for the next slide, the left side to go back. Arrow
 				keys work too.
 			</p>

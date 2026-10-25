@@ -34,7 +34,7 @@ function WhatsNewPage() {
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					What's new
 				</h1>
-				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+				<p className="mt-1 text-sm text-muted-foreground">
 					The latest additions to GavelUp, newest first.
 				</p>
 			</div>

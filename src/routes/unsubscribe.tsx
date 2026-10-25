@@ -31,7 +31,7 @@ function Unsubscribe() {
 					</CardDescription>
 				</CardHeader>
 			</Card>
-			<p className="w-full max-w-sm text-center text-[11px] leading-relaxed text-muted-foreground/80">
+			<p className="w-full max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
 				{TOASTMASTERS_DISCLAIMER}
 			</p>
 		</main>

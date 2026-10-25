@@ -147,7 +147,7 @@ export function MeetingTemplateDialog({
 									selected === c.id ? "border-primary" : "border-transparent"
 								} hover:bg-muted`}
 							>
-								<span className="flex items-center gap-2 font-medium">
+								<span className="flex items-center gap-2 font-semibold">
 									{c.name}
 									{c.key === currentTemplateKey ? (
 										<span className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">
@@ -199,7 +199,7 @@ export function MeetingTemplateDialog({
 									aria-hidden="true"
 								/>
 								<div>
-									<p className="font-medium">
+									<p className="font-semibold">
 										{joinNames(holders.map((h) => h.name))} will lose the{" "}
 										{holders.length === 1 ? "role" : "roles"} they accepted.
 									</p>

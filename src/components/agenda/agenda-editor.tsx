@@ -362,16 +362,16 @@ export function AgendaEditor({
 				<table className="w-full border-collapse text-sm">
 					<thead>
 						<tr className="border-b text-left text-muted-foreground text-xs uppercase tracking-wide">
-							<th scope="col" className="w-16 py-2 font-medium">
+							<th scope="col" className="w-16 py-2 font-semibold">
 								Start
 							</th>
-							<th scope="col" className="py-2 font-medium">
+							<th scope="col" className="py-2 font-semibold">
 								Activity
 							</th>
-							<th scope="col" className="w-40 py-2 font-medium">
+							<th scope="col" className="w-40 py-2 font-semibold">
 								Who
 							</th>
-							<th scope="col" className="w-20 py-2 text-right font-medium">
+							<th scope="col" className="w-20 py-2 text-right font-semibold">
 								Min
 							</th>
 							<th scope="col" className="w-10 py-2">
@@ -440,7 +440,7 @@ export function AgendaEditor({
 					<tfoot>
 						<tr className="border-t-2">
 							<td colSpan={5} className="py-2" data-testid="agenda-budget">
-								<span className="font-medium">Ends {budget.endsAt}</span>
+								<span className="font-semibold">Ends {budget.endsAt}</span>
 								<span className="text-muted-foreground">
 									{" · "}
 									{budget.totalMinutes} min · slot {budget.slotMinutes} min ·{" "}
@@ -448,7 +448,7 @@ export function AgendaEditor({
 								<span
 									className={
 										budget.deltaMinutes > 0
-											? "font-medium text-destructive"
+											? "font-semibold text-destructive"
 											: ""
 									}
 								>
@@ -933,7 +933,7 @@ function AgendaTableRow({
 			<>
 				<tr className="border-b bg-muted/40">
 					<td
-						className="py-2 font-medium text-muted-foreground text-xs"
+						className="py-2 font-semibold text-muted-foreground text-xs"
 						data-testid={`agenda-row-start-${index}`}
 					>
 						{entry.row.time}
@@ -1346,7 +1346,7 @@ function ClubSettingsLink({ clubUuid }: { clubUuid: string }) {
 		<Link
 			to="/admin/club-settings"
 			search={{ club: clubUuid }}
-			className="text-primary underline underline-offset-2 hover:text-primary/80"
+			className="text-primary underline underline-offset-2 hover:text-primary"
 		>
 			Club settings
 		</Link>
@@ -1513,7 +1513,7 @@ function RowDetail({
 							className="flex flex-col gap-1"
 							data-testid={`agenda-row-club-marks-${row.id}`}
 						>
-							<span className="font-medium text-sm">Timing</span>
+							<span className="font-semibold text-sm">Timing</span>
 							<p className="text-sm tabular-nums">
 								Green {formatTimingClock(row.markGreen)} · Yellow{" "}
 								{formatTimingClock(row.markYellow)} · Red{" "}
@@ -1890,7 +1890,7 @@ function RolesPanel({
 					onSubmit={submitAddRole}
 				>
 					<div className="flex w-full flex-col gap-1">
-						<h3 className="font-medium text-sm">Create a new role</h3>
+						<h3 className="font-semibold text-sm">Create a new role</h3>
 						<p className="text-muted-foreground text-xs">
 							Only for a role your club does not have yet. It joins the club's
 							roles, off the standard meeting shape.
@@ -1989,7 +1989,7 @@ function RolesPanel({
 								aria-hidden="true"
 							/>
 							<div>
-								<p className="font-medium">
+								<p className="font-semibold">
 									{joinNames(phase.holders.map((h) => h.name))} will lose{" "}
 									{phase.role.name}.
 								</p>

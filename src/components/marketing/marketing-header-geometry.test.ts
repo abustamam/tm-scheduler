@@ -276,7 +276,7 @@ describe.skipIf(!hasChrome)(
 			container = classContaining(SHELL, "flex-col gap-4");
 			row = classContaining(SHELL, "justify-between gap-3");
 			linkRow = classContaining(SHELL, "gap-x-4");
-			link = classContaining(SHELL, "text-[var(--sea-ink)] no-underline");
+			link = classContaining(SHELL, "text-foreground no-underline");
 			brandRow = classContaining(BRAND, "gap-[11px]");
 			css = await buildAppCss([
 				...candidatesIn(fixture(linkRow)),

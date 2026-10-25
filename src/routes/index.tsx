@@ -114,7 +114,7 @@ const MINOR_FEATURES = [
  * against the UI it depicts.
  *
  * Colours come from the SEMANTIC pairs, not the raw ramp. `--lagoon-ink` is
- * dark in light mode and LIGHT in dark mode (`var(--lagoon-deep)`, #8de5db), so
+ * dark in light mode and LIGHT in dark mode (`var(--color-primary-ink)`, #8de5db in dark), so
  * a hand-rolled white-on-lagoon-ink chip lands near 1.3:1 for dark-mode
  * readers. `bg-primary` / `bg-success` and their foregrounds are the pairs
  * styles.css already verifies in both themes.
@@ -151,17 +151,17 @@ function MemberRoleList() {
 				    Everything INSIDE the screen is tokenised and flips. */}
 				<div
 					aria-hidden
-					className="w-[300px] rounded-[34px] bg-[#0e2a2e] p-2.5 shadow-[0_30px_70px_rgba(23,58,64,.26)]"
+					className="w-[300px] rounded-[34px] bg-on-accent-fill p-2.5 shadow-[0_30px_70px_rgba(23,58,64,.26)]"
 				>
-					<div className="overflow-hidden rounded-[27px] bg-[var(--foam)]">
-						<div className="border-[var(--line)] border-b bg-[var(--surface-strong)] px-4 pt-3.5 pb-3">
-							<div className="font-extrabold text-[11.5px] text-[var(--sea-ink-soft)] uppercase tracking-[0.06em]">
+					<div className="overflow-hidden rounded-[27px] bg-surface-soft">
+						<div className="border-border border-b bg-surface-raised px-4 pt-3.5 pb-3">
+							<div className="font-bold text-xs text-muted-foreground uppercase tracking-[0.06em]">
 								Harbor City Speakers
 							</div>
-							<div className="mt-0.5 font-display font-semibold text-[17px]">
+							<div className="mt-0.5 font-display font-semibold text-base">
 								Tuesday, 26 August
 							</div>
-							<div className="mt-1 text-[11.5px] text-[var(--sea-ink-soft)]">
+							<div className="mt-1 text-xs text-muted-foreground">
 								Tap a role to take it. That's the whole thing.
 							</div>
 						</div>
@@ -169,21 +169,19 @@ function MemberRoleList() {
 							{DEMO_ROLES.map((r) => (
 								<div
 									key={r.role}
-									className="flex items-center justify-between gap-2.5 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] px-3 py-2.5"
+									className="flex items-center justify-between gap-2.5 rounded-xl border border-border bg-surface-raised px-3 py-2.5"
 								>
 									<div className="min-w-0">
-										<div className="truncate font-bold text-[14px]">
-											{r.role}
-										</div>
-										<div className="truncate text-[11.5px] text-[var(--sea-ink-soft)]">
+										<div className="truncate font-bold text-sm">{r.role}</div>
+										<div className="truncate text-xs text-muted-foreground">
 											{r.detail}
 										</div>
 									</div>
 									<span
 										className={
 											r.taken
-												? "shrink-0 rounded-full bg-success px-3 py-1.5 font-extrabold text-[12.5px] text-success-foreground"
-												: "shrink-0 rounded-full bg-primary px-3 py-1.5 font-extrabold text-[12.5px] text-primary-foreground"
+												? "shrink-0 rounded-full bg-success px-3 py-1.5 font-bold text-xs text-success-foreground"
+												: "shrink-0 rounded-full bg-primary px-3 py-1.5 font-bold text-xs text-primary-foreground"
 										}
 									>
 										{r.taken ? "Taken" : "Claim"}
@@ -193,7 +191,7 @@ function MemberRoleList() {
 						</div>
 					</div>
 				</div>
-				<span className="-translate-x-1/2 absolute bottom-0 left-1/2 whitespace-nowrap rounded-full border border-[var(--line)] bg-[var(--surface-strong)] px-4 py-1.5 font-extrabold text-[12.5px] text-[var(--palm)]">
+				<span className="-translate-x-1/2 absolute bottom-0 left-1/2 whitespace-nowrap rounded-full border border-border bg-surface-raised px-4 py-1.5 font-bold text-xs text-success">
 					No sign-in. No app to install.
 				</span>
 			</div>
@@ -208,7 +206,7 @@ function Landing() {
 				{/* Hero */}
 				<section className="mx-auto grid w-full max-w-6xl items-center gap-10 px-5 py-12 sm:px-8 lg:grid-cols-2 lg:gap-14 lg:py-20">
 					<div className="max-w-xl">
-						<p className="font-extrabold text-[11.5px] text-[var(--palm)] uppercase tracking-[0.12em]">
+						<p className="font-bold text-xs text-success uppercase tracking-[0.12em]">
 							For Toastmasters clubs
 						</p>
 						{/*
@@ -225,7 +223,7 @@ function Landing() {
 						>
 							Every role filled before the meeting starts.
 						</h1>
-						<p className="mt-5 text-lg leading-relaxed text-[var(--sea-ink-soft)]">
+						<p className="mt-5 text-lg leading-relaxed text-muted-foreground">
 							{HERO_BODY}
 						</p>
 						<div className="mt-8 flex flex-wrap items-center gap-3">
@@ -238,11 +236,11 @@ function Landing() {
 								<Link to="/request-access">Request access</Link>
 							</Button>
 						</div>
-						<p className="mt-4 text-sm text-[var(--sea-ink-soft)]">
+						<p className="mt-4 text-sm text-muted-foreground">
 							New club? GavelUp is invite-only while it's young — ask, and we'll
 							set your club up ourselves.
 						</p>
-						<p className="mt-2 text-sm font-semibold text-[var(--sea-ink)]">
+						<p className="mt-2 text-sm font-semibold text-foreground">
 							{PILOT_PRICING_LINE}
 						</p>
 						<FounderNote className="mt-4" />
@@ -257,18 +255,18 @@ function Landing() {
 						{MAJOR_FEATURES.map((f) => (
 							<div
 								key={f.title}
-								className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-6"
+								className="rounded-2xl border border-border bg-surface-raised p-6"
 							>
-								<span className="flex size-10 items-center justify-center rounded-xl bg-[var(--sand)] text-[var(--lagoon-deep)]">
+								<span className="flex size-10 items-center justify-center rounded-xl bg-surface-muted text-link">
 									<f.icon className="size-5" aria-hidden />
 								</span>
 								<h2
-									className="mt-4 font-display font-semibold text-[22px] tracking-[-0.015em]"
+									className="mt-4 font-display font-semibold text-2xl tracking-[-0.015em]"
 									style={{ fontVariationSettings: "'opsz' 60" }}
 								>
 									{f.title}
 								</h2>
-								<p className="mt-2 text-[15px] leading-relaxed text-[var(--sea-ink-soft)]">
+								<p className="mt-2 text-base leading-relaxed text-muted-foreground">
 									{f.body}
 								</p>
 							</div>
@@ -276,15 +274,12 @@ function Landing() {
 					</div>
 					<div className="mt-6 grid gap-x-10 lg:grid-cols-2">
 						{MINOR_FEATURES.map((f) => (
-							<div key={f.title} className="border-[var(--line)] border-t py-4">
-								<h3 className="flex items-center gap-2 font-extrabold text-[15px]">
-									<f.icon
-										className="size-4 shrink-0 text-[var(--lagoon-deep)]"
-										aria-hidden
-									/>
+							<div key={f.title} className="border-border border-t py-4">
+								<h3 className="flex items-center gap-2 font-bold text-base">
+									<f.icon className="size-4 shrink-0 text-link" aria-hidden />
 									{f.title}
 								</h3>
-								<p className="mt-1 text-sm leading-relaxed text-[var(--sea-ink-soft)]">
+								<p className="mt-1 text-sm leading-relaxed text-muted-foreground">
 									{f.body}
 								</p>
 							</div>

@@ -42,7 +42,7 @@ function WhichPath() {
 					<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 						Which path should I start with?
 					</h1>
-					<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+					<p className="mt-1 text-sm text-muted-foreground">
 						Answer a few questions about what you want out of Toastmasters and
 						we'll suggest a path or two. It's only a starting point: there's no
 						wrong choice, and you can pick any path you like. Your answers stay

@@ -61,11 +61,11 @@ function ResourceArticle() {
 				</ReactMarkdown>
 			</article>
 			{resource.downloads?.length ? (
-				<section className="mt-8 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-5">
+				<section className="mt-8 rounded-xl border border-border bg-surface-raised p-5">
 					<h2 className="font-display text-lg font-semibold">
 						Printable role sheets
 					</h2>
-					<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+					<p className="mt-1 text-sm text-muted-foreground">
 						Blank forms to print and fill in by hand.
 					</p>
 					<div className="mt-3 flex flex-wrap gap-2">

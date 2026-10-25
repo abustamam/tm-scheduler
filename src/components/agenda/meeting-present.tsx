@@ -317,7 +317,7 @@ export function MeetingPresent({
 				title="Jump to a slide (B)"
 				aria-label={`Slide ${i + 1} of ${deck.length} — jump to a slide`}
 				aria-haspopup="dialog"
-				className="absolute top-[2vmin] left-1/2 -translate-x-1/2 cursor-pointer rounded-full bg-black/35 px-[1.4vmin] py-[0.3vmin] text-[1.6vmin] text-white/90 tabular-nums"
+				className="absolute top-[2vmin] left-1/2 -translate-x-1/2 cursor-pointer rounded-full bg-black/35 px-[1.4vmin] py-[0.3vmin] text-[1.6vmin] text-white tabular-nums"
 			>
 				{i + 1} / {deck.length}
 			</button>
@@ -370,7 +370,7 @@ function SlideOverview({
 			className="absolute inset-0 z-40 flex flex-col bg-black/95 px-[4vmin] py-[3vmin] text-white"
 		>
 			<div className="flex items-center justify-between gap-[2vmin]">
-				<div className="text-[2.4vmin] font-extrabold">Jump to a slide</div>
+				<div className="text-[2.4vmin] font-bold">Jump to a slide</div>
 				<div className="flex items-center gap-[2vmin]">
 					{/* Never advertise Escape here. It closes the overview, but it is
 					    also a browser-level fullscreen exit that `preventDefault`
@@ -378,14 +378,14 @@ function SlideOverview({
 					    projector to the tab strip and the OS taskbar in front of the
 					    room. B is both the way out and the way to commit, and it is
 					    the one the remote in their hand can actually press. */}
-					<span className="text-[1.5vmin] text-white/60">
+					<span className="text-[1.5vmin] text-white">
 						← → browse · B or Enter go · ✕ cancel
 					</span>
 					<button
 						type="button"
 						aria-label="Cancel and stay on the current slide"
 						onClick={onClose}
-						className="rounded-full bg-white/10 p-[1vmin] text-white/80 hover:bg-white/20"
+						className="rounded-full bg-white/10 p-[1vmin] text-white hover:bg-white/20"
 					>
 						<X className="size-[2vmin]" aria-hidden />
 					</button>
@@ -578,7 +578,7 @@ function Splash({
 				}}
 			/>
 			<div
-				className="text-[6.4cqw] font-extrabold leading-tight text-balance"
+				className="text-[6.4cqw] font-bold leading-tight text-balance"
 				style={{ color: dark ? GOLD : INK }}
 			>
 				{layout.headline}
@@ -631,7 +631,7 @@ function ContentSlide({
 					paddingTop: cqw(SLIDE_HEADER_TOP_PCT),
 				}}
 			>
-				<div className="text-[3.9cqw] font-extrabold leading-tight">
+				<div className="text-[3.9cqw] font-bold leading-tight">
 					{layout.header}
 				</div>
 				<div
@@ -762,7 +762,7 @@ function ContentSlide({
 						<div className="text-[2cqw] opacity-90">{date}</div>
 					</div>
 				</div>
-				<p className="text-center text-[1.05cqw] leading-tight text-white/50">
+				<p className="text-center text-[1.05cqw] leading-tight text-white">
 					{TOASTMASTERS_DISCLAIMER}
 				</p>
 			</footer>
@@ -816,14 +816,14 @@ function BodyView({
 					<div
 						// biome-ignore lint/suspicious/noArrayIndexKey: bullet items have no stable id and can repeat
 						key={idx}
-						className="flex gap-[1.6cqw] text-[4.3cqw] font-extrabold leading-tight"
+						className="flex gap-[1.6cqw] text-[4.3cqw] font-bold leading-tight"
 					>
 						<span>•</span>
 						<span>{t}</span>
 					</div>
 				))}
 				{body.link ? (
-					<div className="flex gap-[1.6cqw] text-[4.3cqw] font-extrabold leading-tight">
+					<div className="flex gap-[1.6cqw] text-[4.3cqw] font-bold leading-tight">
 						<span>•</span>
 						<span>
 							Link:{" "}
@@ -879,7 +879,7 @@ function BodyView({
 					<div
 						// biome-ignore lint/suspicious/noArrayIndexKey: numbered items have no stable id and can repeat
 						key={idx}
-						className="flex gap-[2cqw] text-[5cqw] font-extrabold leading-tight"
+						className="flex gap-[2cqw] text-[5cqw] font-bold leading-tight"
 					>
 						<span className="tabular-nums">{idx + 1}.</span>
 						<span>{t}</span>
@@ -902,7 +902,7 @@ function LineView({ line, splash }: { line: Line; splash?: boolean }) {
 	if (line.role === "spacer") return <div className="h-[2.4cqw]" />;
 	if (line.role === "name")
 		return (
-			<div className="text-[4.2cqw] font-extrabold leading-tight">{`•  ${line.text}`}</div>
+			<div className="text-[4.2cqw] font-bold leading-tight">{`•  ${line.text}`}</div>
 		);
 	if (line.role === "muted")
 		return (
@@ -920,7 +920,7 @@ function LineView({ line, splash }: { line: Line; splash?: boolean }) {
 			</div>
 		);
 	return (
-		<div className="text-[5cqw] font-extrabold leading-tight text-balance">
+		<div className="text-[5cqw] font-bold leading-tight text-balance">
 			{line.text}
 		</div>
 	);

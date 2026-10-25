@@ -247,7 +247,7 @@ function SuggestFillsBody({
 								<div className="min-w-0 flex-1 space-y-1">
 									<label
 										htmlFor={`suggest-${row.slot.id}`}
-										className="font-medium text-sm"
+										className="font-semibold text-sm"
 									>
 										{label}
 									</label>

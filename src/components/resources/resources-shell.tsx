@@ -71,14 +71,14 @@ export function ResourcesShell({
 	}
 
 	return (
-		<div className="flex min-h-svh flex-col bg-[var(--foam)] text-[var(--sea-ink)]">
+		<div className="flex min-h-svh flex-col bg-surface-soft text-foreground">
 			<header className="mx-auto flex w-full max-w-4xl items-center justify-between px-5 py-5 sm:px-8">
 				<Link to="/" className="no-underline">
 					<BrandMark size="sm" />
 				</Link>
 				<Link
 					to="/resources"
-					className="text-sm font-semibold text-[var(--sea-ink)] no-underline hover:underline"
+					className="text-sm font-semibold text-foreground no-underline hover:underline"
 				>
 					All resources
 				</Link>
@@ -87,9 +87,9 @@ export function ResourcesShell({
 				{children}
 				<MarketingCta className="mt-12" />
 			</main>
-			<footer className="border-t border-[var(--line)]">
+			<footer className="border-t border-border">
 				<div className="mx-auto w-full max-w-4xl px-5 py-8 sm:px-8">
-					<p className="max-w-3xl text-xs leading-relaxed text-[var(--sea-ink-soft)]">
+					<p className="max-w-3xl text-xs leading-relaxed text-muted-foreground">
 						{TOASTMASTERS_DISCLAIMER}
 					</p>
 				</div>

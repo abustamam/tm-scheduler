@@ -159,13 +159,13 @@ function RequestAccess() {
 	return (
 		<MarketingShell>
 			<main className="mx-auto w-full max-w-xl flex-1 px-5 py-12 sm:px-8">
-				<p className="font-extrabold text-[11.5px] text-[var(--palm)] uppercase tracking-[0.12em]">
+				<p className="font-bold text-xs text-success uppercase tracking-[0.12em]">
 					Invite-only while it's young
 				</p>
 				<h1 className="mt-3 font-display font-semibold text-3xl tracking-[-0.02em]">
 					Request access
 				</h1>
-				<p className="mt-3 text-sm font-semibold text-[var(--sea-ink)]">
+				<p className="mt-3 text-sm font-semibold text-foreground">
 					{PILOT_PRICING_LINE}
 				</p>
 
@@ -182,7 +182,7 @@ function RequestAccess() {
 						<div
 							role="tablist"
 							aria-label="Who is asking"
-							className="inline-flex rounded-full border border-[var(--line)] bg-[var(--surface)] p-1"
+							className="inline-flex rounded-full border border-border bg-surface-glass p-1"
 						>
 							{ACCESS_REQUEST_KINDS.map((value) => (
 								<button
@@ -193,8 +193,8 @@ function RequestAccess() {
 									onClick={() => chooseKind(value)}
 									className={
 										kind === value
-											? "rounded-full bg-[var(--sea-ink)] px-4 py-1.5 font-semibold text-sm text-[var(--surface)]"
-											: "rounded-full px-4 py-1.5 font-semibold text-sm text-[var(--sea-ink-soft)]"
+											? "rounded-full bg-foreground px-4 py-1.5 font-semibold text-sm text-background"
+											: "rounded-full px-4 py-1.5 font-semibold text-sm text-muted-foreground"
 									}
 								>
 									{KIND_LABELS[value]}
@@ -202,7 +202,7 @@ function RequestAccess() {
 							))}
 						</div>
 
-						<div className="space-y-4 rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-5">
+						<div className="space-y-4 rounded-2xl border border-border bg-surface-raised p-5">
 							<Field id="ra-name" label="Your name">
 								<Input
 									id="ra-name"
@@ -386,7 +386,7 @@ function OutcomePanel({ outcome }: { outcome: Outcome }) {
 	return (
 		<div
 			aria-live="polite"
-			className="mt-8 flex flex-col items-start gap-3 rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-6"
+			className="mt-8 flex flex-col items-start gap-3 rounded-2xl border border-border bg-surface-raised p-6"
 		>
 			{outcome === "busy" ? (
 				<p className="text-sm leading-relaxed">

@@ -15,34 +15,32 @@ export function MarketingCta({ className }: { className?: string }) {
 		<aside
 			aria-label="GavelUp for your club"
 			className={cn(
-				"rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-6 sm:p-8",
+				"rounded-2xl border border-border bg-surface-raised p-6 sm:p-8",
 				className,
 			)}
 		>
 			<h2 className="font-display text-2xl font-semibold tracking-[-0.02em]">
 				Your club could run its meetings here.
 			</h2>
-			<p className="mt-2 max-w-2xl text-base leading-relaxed text-[var(--sea-ink-soft)]">
+			<p className="mt-2 max-w-2xl text-base leading-relaxed text-muted-foreground">
 				Members claim roles from one shared sheet with no account, and the
 				agenda prints and projects itself.
 			</p>
 			<div className="mt-5 flex flex-wrap items-center gap-x-6 gap-y-2">
 				<Link
 					to="/tour"
-					className="font-semibold text-[var(--sea-ink)] no-underline hover:underline"
+					className="font-semibold text-foreground no-underline hover:underline"
 				>
 					See how it works →
 				</Link>
 				<Link
 					to="/districts"
-					className="text-sm font-semibold text-[var(--sea-ink-soft)] no-underline hover:underline"
+					className="text-sm font-semibold text-muted-foreground no-underline hover:underline"
 				>
 					Running a district? →
 				</Link>
 			</div>
-			<p className="mt-4 text-xs text-[var(--sea-ink-soft)]">
-				{PILOT_PRICING_LINE}
-			</p>
+			<p className="mt-4 text-xs text-muted-foreground">{PILOT_PRICING_LINE}</p>
 		</aside>
 	);
 }

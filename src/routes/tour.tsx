@@ -61,7 +61,7 @@ function Shot({
 			width={1600}
 			height={height}
 			loading="lazy"
-			className={`w-full rounded-2xl border border-[var(--line)] shadow-[0_20px_50px_rgba(23,58,64,.18)] ${
+			className={`w-full rounded-2xl border border-border shadow-[0_20px_50px_rgba(23,58,64,.18)] ${
 				sheet
 					? "mx-auto aspect-[816/1000] max-w-md object-cover object-left-top"
 					: "h-auto"
@@ -95,7 +95,7 @@ function Scene({
 			className="mx-auto grid w-full max-w-6xl items-center gap-8 px-5 py-12 sm:px-8 lg:grid-cols-2 lg:gap-14"
 		>
 			<div className={flip ? "max-w-xl lg:order-2" : "max-w-xl"}>
-				<p className="font-extrabold text-[11.5px] text-[var(--palm)] uppercase tracking-[0.12em]">
+				<p className="font-bold text-xs text-success uppercase tracking-[0.12em]">
 					Step {n}
 				</p>
 				<h2
@@ -105,7 +105,7 @@ function Scene({
 					{title}
 					{badge ? <span className={BETA_PILL_CLASS}>{badge}</span> : null}
 				</h2>
-				<div className="mt-4 space-y-3 text-[17px] leading-relaxed text-[var(--sea-ink-soft)]">
+				<div className="mt-4 space-y-3 text-base leading-relaxed text-muted-foreground">
 					{children}
 				</div>
 			</div>
@@ -119,7 +119,7 @@ function Tour() {
 		<MarketingShell>
 			<main className="flex-1">
 				<div className="mx-auto w-full max-w-6xl px-5 pt-10 sm:px-8 lg:pt-16">
-					<p className="font-extrabold text-[11.5px] text-[var(--palm)] uppercase tracking-[0.12em]">
+					<p className="font-bold text-xs text-success uppercase tracking-[0.12em]">
 						The tour
 					</p>
 					<h1
@@ -128,7 +128,7 @@ function Tour() {
 					>
 						One meeting, from sign-up sheet to Best Speaker.
 					</h1>
-					<p className="mt-5 max-w-2xl text-lg leading-relaxed text-[var(--sea-ink-soft)]">
+					<p className="mt-5 max-w-2xl text-lg leading-relaxed text-muted-foreground">
 						Six stops. The drawings are tappable, so go ahead and press things.
 						The Ah-Counter isn't listening.
 					</p>
@@ -250,8 +250,8 @@ function Tour() {
 				</Scene>
 
 				<section className="mx-auto w-full max-w-6xl px-5 pt-6 pb-16 sm:px-8">
-					<div className="max-w-xl rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-6">
-						<p className="font-semibold text-[var(--sea-ink)]">
+					<div className="max-w-xl rounded-2xl border border-border bg-surface-raised p-6">
+						<p className="font-semibold text-foreground">
 							{PILOT_PRICING_LINE}
 						</p>
 						<FounderNote className="mt-3" />
