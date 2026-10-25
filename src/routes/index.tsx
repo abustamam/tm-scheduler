@@ -114,7 +114,7 @@ const MINOR_FEATURES = [
  * against the UI it depicts.
  *
  * Colours come from the SEMANTIC pairs, not the raw ramp. `--lagoon-ink` is
- * dark in light mode and LIGHT in dark mode (`var(--color-link)`, #8de5db), so
+ * dark in light mode and LIGHT in dark mode (`var(--color-primary-ink)`, #8de5db in dark), so
  * a hand-rolled white-on-lagoon-ink chip lands near 1.3:1 for dark-mode
  * readers. `bg-primary` / `bg-success` and their foregrounds are the pairs
  * styles.css already verifies in both themes.

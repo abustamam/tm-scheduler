@@ -150,7 +150,7 @@ function CategoryChip({
 			className={cn(
 				"rounded-full border px-3.5 py-1.5 text-sm font-semibold outline-none transition-transform active:scale-[0.97] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
 				active
-					? "border-foreground bg-foreground text-[var(--background)]"
+					? "border-foreground bg-foreground text-background"
 					: "border-border bg-surface-raised text-muted-foreground",
 			)}
 		>

@@ -193,7 +193,7 @@ function RequestAccess() {
 									onClick={() => chooseKind(value)}
 									className={
 										kind === value
-											? "rounded-full bg-foreground px-4 py-1.5 font-semibold text-sm text-surface-glass"
+											? "rounded-full bg-foreground px-4 py-1.5 font-semibold text-sm text-background"
 											: "rounded-full px-4 py-1.5 font-semibold text-sm text-muted-foreground"
 									}
 								>

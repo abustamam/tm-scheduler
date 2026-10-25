@@ -54,7 +54,7 @@ export function MarketingShell({ children }: { children: ReactNode }) {
 		// No background colour here, deliberately (#612). styles.css gives `body`
 		// a layered treatment — three radial washes on --hero-a/--hero-b over a
 		// sand → foam → bg-base ramp, with dark-mode variants — and the landing
-		// page used to set `bg-surface-soft`, flat-filling straight over all of
+		// page used to set a flat foam-coloured fill, painting straight over all of
 		// it. Marketing pages are the surfaces that most need that atmosphere.
 		<div className="flex min-h-svh flex-col text-foreground">
 			{/* `flex-wrap` (#870): the brand plus three nav buttons need ~430px and
