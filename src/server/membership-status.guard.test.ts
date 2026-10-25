@@ -382,6 +382,7 @@ describe("every getMembership( call tests its own result for an active membershi
 
 	it("the comment blanker keeps strings and templates as text and offsets true", () => {
 		const src =
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: the string is source text for the scanner under test.
 			'const u = "//"; // note\nconst t = `a ${f(`b ${getMembership(1)}`)} // text`;\ngetMembership(2); /* x */';
 		const { code, skeleton } = scan(src);
 		expect(code).toHaveLength(src.length);
