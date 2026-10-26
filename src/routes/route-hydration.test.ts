@@ -237,6 +237,12 @@ const COVERED: Record<string, { who: Who; url: (f: Fixture) => string }> = {
 		who: "admin",
 		url: (f) => `/club/${f.slug}/meeting/${f.upcomingMeetingId}/me`,
 	},
+	// Public digital agenda (#1335). The HTML is viewer-independent; swept on an
+	// upcoming meeting so the run rows and the clock times are drawn.
+	"/club/$clubId/meeting/$meetingId/agenda": {
+		who: "admin",
+		url: (f) => `/club/${f.slug}/meeting/${f.upcomingMeetingId}/agenda`,
+	},
 	"/club/$clubId/meeting/$meetingId/flyer": {
 		who: "admin",
 		url: (f) => `/club/${f.slug}/meeting/${f.upcomingMeetingId}/flyer`,
