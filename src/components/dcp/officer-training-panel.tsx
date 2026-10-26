@@ -300,12 +300,12 @@ function PhaseBadge({ tally }: { tally: TrainingPeriodTally }) {
 		<Badge
 			className={cn(
 				"gap-1 font-normal",
-				// `text-[var(--on-accent-fill)]`, never `text-white`. Both of these
+				// `text-on-accent-fill`, never `text-white`. Both of these
 				// fills are light in BOTH themes, so white measured 3.2:1 / 2.0:1 on
 				// the amber and 3.8:1 / 1.5:1 on the teal — all four under AA at the
 				// 12px a Badge renders, and the two dark values are the label-on-fill
 				// class recorded at #645. Dark ink is 4.6:1 at worst. See styles.css.
-				"text-[var(--on-accent-fill)]",
+				"text-on-accent-fill",
 				urgent ? "bg-warning-strong" : "bg-link",
 			)}
 		>

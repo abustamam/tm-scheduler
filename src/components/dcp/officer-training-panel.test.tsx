@@ -233,7 +233,7 @@ describe("the window", () => {
 			const { container } = mount(view({ periods: [t, tally(2)] }));
 			expect(container.innerHTML).not.toContain("bg-warning-strong text-white");
 			expect(container.innerHTML).not.toContain("bg-link text-white");
-			expect(container.innerHTML).toContain("text-[var(--on-accent-fill)]");
+			expect(container.innerHTML).toContain("text-on-accent-fill");
 		}
 	});
 
@@ -321,7 +321,7 @@ describe("the window", () => {
 		);
 		expect(card(1).textContent).toContain("Closes in 1 day");
 		// The urgent FILL is absent, which is the real assertion — the old one
-		// looked for `bg-warning-strong text-white`, a string this
+		// looked for `bg-[var(--warning-strong)] text-white`, a string this
 		// component no longer emits anywhere, so it could only pass.
 		expect(container.innerHTML).not.toContain("bg-warning-strong");
 		expect(card(1).textContent).not.toContain("act now");

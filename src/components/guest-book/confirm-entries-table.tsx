@@ -175,7 +175,7 @@ export function ConfirmEntriesTable({
 											{problems.map((p) => (
 												<span
 													key={`${p.code}-${p.message}`}
-													className="mt-1 block text-xs font-semibold text-[var(--ember,#a33)]"
+													className="mt-1 block text-xs font-semibold text-destructive"
 												>
 													{p.message}
 												</span>

@@ -684,7 +684,7 @@ function writeStoredOpen(storageKey: string, open: boolean): void {
 }
 
 const GROUP_LABEL_CLASS =
-	"text-xs font-bold tracking-[0.12em] text-muted-foreground uppercase opacity-70";
+	"text-xs font-bold tracking-[0.12em] text-muted-foreground uppercase";
 
 function NavGroup({
 	group,

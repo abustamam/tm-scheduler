@@ -153,7 +153,7 @@ export function FeedbackForYou({
 				{newCount > 0 ? (
 					<span
 						data-testid="feedback-new-badge"
-						className="shrink-0 rounded-full bg-highlight/15 px-2.5 py-1 text-xs font-bold text-link"
+						className="shrink-0 rounded-full bg-highlight/16 px-2.5 py-1 text-xs font-bold text-link"
 					>
 						{newCount} new
 					</span>
@@ -194,7 +194,7 @@ export function FeedbackForYou({
 										>
 											<div className="min-w-0 flex-1 text-sm">
 												{newIds.has(n.id) ? (
-													<span className="mb-1 inline-block rounded-full bg-highlight/15 px-2 py-0.5 text-xs font-bold text-link">
+													<span className="mb-1 inline-block rounded-full bg-highlight/16 px-2 py-0.5 text-xs font-bold text-link">
 														New
 													</span>
 												) : null}
