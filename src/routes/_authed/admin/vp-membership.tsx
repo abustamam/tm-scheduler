@@ -325,7 +325,7 @@ function VpMembership() {
 							<Loader2 className="size-6 animate-spin text-muted-foreground" />
 						</div>
 					)}
-					<div className="max-w-[200px] text-sm font-semibold text-foreground">
+					<div className="max-w-[200px] text-sm font-semibold text-black">
 						Scan to sign the {clubName} guest book
 					</div>
 				</div>
