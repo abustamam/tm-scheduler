@@ -21,6 +21,9 @@
   --surface-strong: rgba(255, 255, 255, 0.9);
   --line: rgba(23, 58, 64, 0.14);
   --inset-glint: rgba(255, 255, 255, 0.82);
+  /* A physical phone's bezel, for the marketing tour's device facsimile only.
+     Deliberately NOT redefined in .dark: hardware does not change with the theme. */
+  --device-bezel: #0e2a2e;
   /* Attention / warning accent — "behind on goals" + open role slots.
      --warning-foreground is the *text* step: darkened from #a8761a (3.98:1,
      failed AA) to keep ≥4.5:1 on white (5.3), foam (5.0) and sand (4.5). */
@@ -199,6 +202,7 @@
   /* Semantic aliases over the brand vars; identical values in both modes. */
   --color-surface-raised: var(--surface-strong);
   --color-surface-glass: var(--surface);
+  --color-device-bezel: var(--device-bezel);
   --color-surface-soft: var(--foam);
   --color-surface-muted: var(--sand);
   --color-link: var(--lagoon-deep);

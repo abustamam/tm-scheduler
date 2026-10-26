@@ -306,7 +306,7 @@ export function ClaimDemo() {
 			aria-label="Try it: claim a role on the meeting page"
 			className="flex flex-col items-center gap-3"
 		>
-			<div className="w-[320px] max-w-full rounded-[34px] bg-[#0e2a2e] p-2.5 shadow-[0_30px_70px_rgba(23,58,64,.26)]">
+			<div className="w-[320px] max-w-full rounded-[34px] bg-device-bezel p-2.5 shadow-[0_30px_70px_rgba(23,58,64,.26)]">
 				<div className="relative min-h-[540px] overflow-hidden rounded-[27px] bg-background text-foreground">
 					<div className="border-b bg-card px-4 pt-3.5 pb-3">
 						<div className="font-bold text-xs text-muted-foreground uppercase tracking-[0.06em]">

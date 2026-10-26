@@ -143,6 +143,10 @@ Muted text is `muted-foreground` at full strength. No opacity modifiers (`/60`, 
 they drop under AA. Timer card colors (green/yellow/red) are domain colors and get named tokens
 rather than hex in components. Chart tokens derive from the brand ramp, not shadcn's defaults.
 
+`device-bezel` (`bg-device-bezel`, `#0e2a2e`) is the phone bezel of the marketing tour's device
+facsimile and nothing else: never app chrome. It is the same in light and dark, since hardware
+does not follow the theme.
+
 Dark mode keeps the elevation order background < card < popover < muted, each step a teal-tinted
 lift, rather than inverting lightness.
 
