@@ -4,11 +4,23 @@ import { cn } from "#/lib/utils";
 import { MeetingLink } from "./meeting-link";
 
 // The cells are 14px semibold text (DESIGN.md), which is still under WCAG's
-// large-text size, so AA needs 4.5:1. The success/warning/destructive token
-// values are AA-verified in BOTH themes (see styles.css, #219): success fill
-// pairs ≥6.4:1, warning/destructive text-on-surface ≥5:1, and
-// warning-foreground on warning-soft (the Claim cell) is about 5.1:1. Text
-// colors carry no opacity modifier: a faded text color is an unverified one.
+// large-text size, so AA needs 4.5:1. Text colors carry no opacity modifier: a
+// faded text color is an unverified one. Pairs, computed from styles.css:
+//   Claim rest, light: warning-foreground #8f640c on warning-soft #fdf3e7 4.79:1
+//   Claim rest, dark:  warning-foreground #e6c98a on warning-soft (#e0b357 at
+//     14% over the #0a1418 page) 9.05:1
+//   Claim hover, light: on-accent-fill #0a1418 on warning #d99a2e 7.65:1
+//   Claim hover, dark:  on-accent-fill #0a1418 on warning #e0b357 9.55:1
+//   NA toggle hover, light: primary-foreground #fff on destructive 6.42:1
+//   NA toggle hover, dark: primary-foreground #0a1418 on destructive 6.45:1
+//   (the dark pair needs the full-strength destructive fill, not /60: dark ink
+//   on destructive/60 measures 2.97:1)
+// success fill pairs and warning/destructive text-on-surface are verified in
+// styles.css (#219) at >=6.4:1 and >=5:1.
+// The Claim button's classes, shared by every surface that offers a Claim.
+export const CLAIM_CLASS =
+	"border-warning bg-warning-soft text-warning-foreground hover:bg-warning hover:text-on-accent-fill";
+
 export const CELL_KIND_CLASS: Record<ViewCell["kind"], string> = {
 	assigned: "bg-success/15 text-foreground",
 	open: "border border-dashed border-warning text-warning-foreground",
@@ -98,7 +110,7 @@ export function GridCell({
 						: "Mark yourself unavailable — I can't make this one") + dateSuffix;
 		const tone =
 			cell.kind === "na"
-				? "border border-dashed border-destructive/70 text-destructive hover:bg-destructive hover:text-white dark:hover:bg-destructive/60"
+				? "border border-dashed border-destructive/70 text-destructive hover:bg-destructive hover:text-primary-foreground"
 				: cell.kind === "assigned"
 					? "bg-success text-success-foreground ring-2 ring-success-strong hover:opacity-80"
 					: "border border-border text-muted-foreground hover:border-destructive/50 hover:text-destructive";
@@ -132,7 +144,8 @@ export function GridCell({
 				onClick={() => onClaim(slotId)}
 				className={cn(
 					CELL_BASE,
-					"w-full cursor-pointer border border-warning bg-warning-soft text-warning-foreground transition-colors hover:bg-warning hover:text-on-accent-fill disabled:opacity-50",
+					"w-full cursor-pointer border transition-colors disabled:opacity-50",
+					CLAIM_CLASS,
 				)}
 			>
 				{busy ? <Loader2 className="size-3.5 animate-spin" /> : "Claim"}

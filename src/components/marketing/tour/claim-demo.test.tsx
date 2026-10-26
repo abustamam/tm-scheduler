@@ -8,6 +8,7 @@ import {
 	within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectAmberClaim } from "#/components/club/claim-class-assert";
 import { ClaimDemo } from "./claim-demo";
 
 beforeEach(() => vi.useFakeTimers());
@@ -130,10 +131,7 @@ describe("ClaimDemo", () => {
 		render(<ClaimDemo />);
 		const c = screen.getAllByRole("button", { name: /^Claim .* — open$/ })[0]
 			.className;
-		expect(c).toMatch(/\bborder-warning\b/);
-		expect(c).toMatch(/\bbg-warning-soft\b/);
-		expect(c).toMatch(/\btext-warning-foreground\b/);
-		expect(c).not.toMatch(/success/);
+		expectAmberClaim(c);
 	});
 
 	it("Cancel leaves the role open and returns focus to its Claim button", () => {

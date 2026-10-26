@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useEffect, useId, useRef, useState } from "react";
+import { CLAIM_CLASS } from "#/components/club/grid-cell";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -392,7 +393,7 @@ export function ClaimDemo() {
 														ref={register(`${slot.id}:claim`)}
 														size="sm"
 														variant="outline"
-														className="border-warning bg-warning-soft text-warning-foreground hover:bg-warning hover:text-on-accent-fill"
+														className={CLAIM_CLASS}
 														aria-label={`Claim ${slot.role} — open`}
 														onClick={(e) => startClaim(slot, e.currentTarget)}
 													>

@@ -8,6 +8,7 @@ import { MeetingWordOfTheDayDialog } from "#/components/agenda/meeting-word-of-t
 import { SuggestFillsDialog } from "#/components/agenda/suggest-fills-dialog";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
 import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
+import { CLAIM_CLASS } from "#/components/club/grid-cell";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
 import {
 	buildRecruitTargets,
@@ -941,7 +942,7 @@ export function MeetingAgenda({
 													<Button
 														size="sm"
 														variant="outline"
-														className="border-warning bg-warning-soft text-warning-foreground hover:bg-warning hover:text-on-accent-fill"
+														className={CLAIM_CLASS}
 														aria-label={`Claim ${slot.roleName} — open`}
 														onClick={() => handleClaimClick(slot)}
 														disabled={busy || !canClaim}

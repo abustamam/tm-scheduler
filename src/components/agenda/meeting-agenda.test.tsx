@@ -6,6 +6,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { expectAmberClaim } from "#/components/club/claim-class-assert";
 import { MeetingAttendancePanel } from "#/components/club/meeting-attendance-panel";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { buildPanelRoleMap, type PlanStatus } from "#/lib/attendance-panel";
@@ -402,10 +403,7 @@ describe("MeetingAgenda capability gating", () => {
 			[slot({ status: "open" })],
 		);
 		const c = screen.getByRole("button", { name: /^Claim / }).className;
-		expect(c).toMatch(/\bborder-warning\b/);
-		expect(c).toMatch(/\bbg-warning-soft\b/);
-		expect(c).toMatch(/\btext-warning-foreground\b/);
-		expect(c).not.toMatch(/success/);
+		expectAmberClaim(c);
 	});
 
 	it("keeps Claim disabled for a memberless viewer with no requireIdentity (authed impersonation)", () => {
