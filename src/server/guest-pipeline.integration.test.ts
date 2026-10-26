@@ -4818,6 +4818,27 @@ describe.skipIf(!hasTestDb)("guest link search (#1333)", () => {
 		expect(await ask("  J.Doe@GMAIL.com ")).toEqual(["Quinn Quill"]);
 	});
 
+	// protects=the exact-address rule alone puts the owner of the typed address first, even with stray case and spaces, when another guest outranks it on name; fails_when=exact-address rows are dropped from the result or stop normalizing; no_claim=ordering among non-exact rows
+	it("puts the exact address first over a better-named competitor", async () => {
+		await seedOther("Quinn Quill", { email: "j.doe@gmail.com" });
+		await seedOther("J Doe", { email: "j.doe@other.test" });
+		expect(await ask("  J.Doe@GMAIL.com ")).toEqual(["Quinn Quill", "J Doe"]);
+	});
+
+	// protects=a name match outranks a weaker email-local-part match across the two readings of an email-shaped query; fails_when=the plain and email-shaped rankings are merged by list position instead of tier; no_claim=exact-address rows
+	it("ranks by match tier across the plain and email-shaped readings", async () => {
+		await seedOther("Quinn Quill", { email: "j.doe.extra@example.com" });
+		await seedOther("Jdoe");
+		expect(await ask("j.doe")).toEqual(["Jdoe", "Quinn Quill"]);
+	});
+
+	// protects=a query with only a wildcard before the address lists nobody rather than everyone; fails_when=the email-shaped reading folds to a blank query; no_claim=a guest whose address is exactly that
+	it("lists nobody for a wildcard-only local part", async () => {
+		await seedOther("Quinn Quill", { email: "j.doe@gmail.com" });
+		await seedOther("Zed Other");
+		expect(await ask("%@gmail.com")).toEqual([]);
+	});
+
 	// protects=at most 20 rows come back, ranked by tier then name, and an empty query is the first 20 by name; fails_when=the cap or the empty-query SQL order changes; no_claim=a club past the 1000-guest pool (a documented ceiling)
 	it("caps at 20, ranks by tier, and lists the first 20 by name for an empty query", async () => {
 		for (let i = 0; i < 25; i++) {

@@ -70,7 +70,7 @@ import {
 	emailSearchTerms,
 	GUEST_LINK_SEARCH_POOL,
 	isBlankQuery,
-	searchPeople,
+	matchTier,
 } from "#/lib/person-search";
 import {
 	coalesceToE164,
@@ -4443,23 +4443,34 @@ export async function listGuestLinkCandidates(input: {
 	// never matches. A query shaped like an address is also read that way
 	// (`emailQueryTerms`) and merged in; a whole address matches exactly, first.
 	const wanted = normalizeEmail(q);
-	const people_ = rows.map((r) => ({
+	const emailQ = emailQueryTerms(q);
+	const searchable = rows.map((r, index) => ({
 		...r,
+		index,
 		extraTerms: r.email ? [emailSearchTerms(r.email)] : [],
 	}));
-	const plain = searchPeople(q, people_);
-	const emailQ = emailQueryTerms(q);
-	const emailShaped = emailQ ? searchPeople(emailQ, people_) : [];
-	const best = new Map<string, number>();
-	for (const list of [plain, emailShaped]) {
-		list.forEach((r, i) => {
-			best.set(r.guestId, Math.min(best.get(r.guestId) ?? i, i));
-		});
-	}
-	const byId = new Map([...emailShaped, ...plain].map((r) => [r.guestId, r]));
-	const merged = [...byId.values()].sort(
-		(a, b) => (best.get(a.guestId) ?? 0) - (best.get(b.guestId) ?? 0),
-	);
+	const merged = searchable
+		.map((r) => {
+			const plainTier = matchTier(q, r);
+			const emailTier = emailQ ? matchTier(emailQ, r) : null;
+			const tier =
+				plainTier === null
+					? emailTier
+					: emailTier === null
+						? plainTier
+						: Math.min(plainTier, emailTier);
+			return { r, tier };
+		})
+		.filter((x): x is { r: (typeof searchable)[number]; tier: number } => {
+			return x.tier !== null;
+		})
+		.sort(
+			(a, b) =>
+				a.tier - b.tier ||
+				a.r.name.localeCompare(b.r.name) ||
+				a.r.index - b.r.index,
+		)
+		.map((x) => x.r);
 	const exact = rows.filter((r) => normalizeEmail(r.email) === wanted);
 	const exactIds = new Set(exact.map((r) => r.guestId));
 	return [...exact, ...merged.filter((r) => !exactIds.has(r.guestId))]

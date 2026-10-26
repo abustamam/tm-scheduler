@@ -185,6 +185,7 @@ describe("email search words", () => {
 		expect(emailQueryTerms("j.doe@gm")).toBe("j doe");
 		expect(emailQueryTerms("jane_under")).toBe("jane under");
 		expect(emailQueryTerms("jane doe")).toBeNull();
+		expect(emailQueryTerms("%@gmail.com")).toBeNull();
 		expect(emailQueryTerms("@gmail")).toBeNull();
 		expect(emailQueryTerms("%")).toBeNull();
 	});

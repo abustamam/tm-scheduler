@@ -115,5 +115,6 @@ export function emailSearchTerms(email: string): string {
  */
 export function emailQueryTerms(query: string): string | null {
 	if (!/[@._+]/.test(query)) return null;
-	return emailSearchTerms(query.trim()) || null;
+	const terms = emailSearchTerms(query.trim());
+	return terms && !isBlankQuery(terms) ? terms : null;
 }
