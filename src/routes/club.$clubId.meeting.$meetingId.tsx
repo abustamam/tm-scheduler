@@ -5,7 +5,6 @@ import {
 	CalendarX,
 	ClipboardList,
 	Clock,
-	ListChecks,
 	Loader2,
 	Lock,
 	MapPin,
@@ -44,6 +43,7 @@ import { MeetingRoomStrip } from "#/components/club/meeting-room-strip";
 import {
 	type LifecycleAction,
 	MeetingToolbar,
+	stripIsPrimary,
 } from "#/components/club/meeting-toolbar";
 import { OpenActionItems } from "#/components/club/open-action-items";
 import { TableTopicsCapture } from "#/components/club/table-topics-capture";
@@ -708,6 +708,13 @@ function MeetingView() {
 		!cancelled &&
 		(effectiveCanManage ||
 			((!previewAsMember || isTmod) && lineupAccess?.allowed === true));
+	// The ONE filled button in the action area (#1307): the rule is
+	// `stripIsPrimary`, shared with the toolbar's own phase rules.
+	const stripPrimary = stripIsPrimary({
+		phase,
+		cancelled,
+		canManage: effectiveCanManage,
+	});
 	const showPlanPanel = runsThisMeeting && phase === "upcoming";
 	// An officer already has `plan` on the payload; only the non-officer TMOD
 	// needs the extra round trip, and only while the panel is actually shown.
@@ -1987,7 +1994,7 @@ function MeetingView() {
 					{effectiveCanManage ? (
 						<span className="flex flex-wrap gap-2">
 							<Button
-								size="sm"
+								size="touch"
 								variant="outline"
 								onClick={() => setNoticeOpen(true)}
 							>
@@ -1996,8 +2003,9 @@ function MeetingView() {
 							</Button>
 							{!datePassed ? (
 								<Button
-									size="sm"
-									variant="outline"
+									size="touch"
+									// The only filled action on a cancelled meeting (#1307).
+									variant="default"
 									onClick={doRestore}
 									disabled={lifecycleBusy}
 									aria-busy={lifecycleAction === "restore"}
@@ -2134,6 +2142,7 @@ function MeetingView() {
 					availBusy={myStatusBusy}
 					canToggleAvailability={viewer.canToggleAvailability}
 					onSetStatus={setMyStatus}
+					primary={stripPrimary}
 				/>
 				{/* The strip derives identity from `member !== null`; the TOOLBAR
 				    still takes an explicit hasIdentity, because its gate is the
@@ -2160,6 +2169,8 @@ function MeetingView() {
 					cancelled={cancelled}
 					canCancel={canCancel}
 					onCancel={() => setCancelConfirmOpen(true)}
+					canLineupBlast={canLineupBlast}
+					onLineupBlast={() => setLineupOpen(true)}
 				/>
 				{/* Cancel confirm (#1057). It states the three things an officer
 				    needs before saying yes: roles are kept, members stop seeing the
@@ -2223,18 +2234,6 @@ function MeetingView() {
 						timezone={timezone}
 						holders={cancellationHolders}
 					/>
-				) : null}
-				{canLineupBlast ? (
-					<div className="flex flex-wrap items-center gap-2 pt-1">
-						<Button
-							size="sm"
-							variant="outline"
-							onClick={() => setLineupOpen(true)}
-						>
-							<ListChecks className="size-4" aria-hidden />
-							Lineup blast
-						</Button>
-					</div>
 				) : null}
 				{canLineupBlast && lineupOpen ? (
 					<LineupBlastSheet

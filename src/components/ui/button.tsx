@@ -24,6 +24,10 @@ const buttonVariants = cva(
 				default: "h-9 px-4 py-2 has-[>svg]:px-3",
 				xs: "h-6 gap-1 rounded-md px-2 text-xs has-[>svg]:px-1.5 [&_svg:not([class*='size-'])]:size-3",
 				sm: "h-8 gap-1.5 rounded-md px-3 has-[>svg]:px-2.5",
+				// Phone-tall (44px) below md, the compact 32px at md and up. For
+				// member-facing buttons on the meeting page (DESIGN.md, #1307).
+				touch:
+					"h-11 gap-2 rounded-md px-4 has-[>svg]:px-3 md:h-8 md:gap-1.5 md:px-3 md:has-[>svg]:px-2.5",
 				lg: "h-10 rounded-md px-6 has-[>svg]:px-4",
 				icon: "size-9",
 				"icon-xs": "size-6 rounded-md [&_svg:not([class*='size-'])]:size-3",

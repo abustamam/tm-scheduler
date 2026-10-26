@@ -81,6 +81,52 @@ describe("meeting chrome route wiring (#541 D2/D3)", () => {
 		);
 	});
 
+	// #1307. `primary`, `canLineupBlast` and `onLineupBlast` are plain
+	// boolean / callback props whose wrong values type-check and render: a
+	// hard-coded `primary={true}` fills "I'll be there" beside Present, and a
+	// dropped `canLineupBlast` silently hides the Lineup blast item from every
+	// officer. The components are tested through their props, so only the
+	// route's call site can be pinned here.
+	it("the strip's primary comes from the shared rule over phase, cancelled and effectiveCanManage", () => {
+		const src = readSource(ROUTE);
+		expect(src).toContain("primary={stripPrimary}");
+		const at = src.indexOf("stripIsPrimary({");
+		expect(at, "the route must call stripIsPrimary").toBeGreaterThan(-1);
+		const args = src.slice(at, src.indexOf("})", at));
+		expect(args).toContain("phase");
+		expect(args).toContain("cancelled");
+		expect(
+			args,
+			"officer-ness must be the PREVIEW-aware effectiveCanManage, or an " +
+				"officer previewing as a member keeps Present filled and loses " +
+				'"I\'ll be there".',
+		).toContain("canManage: effectiveCanManage");
+	});
+
+	it("the toolbar gets the lineup-blast gate and opener, and the old route button is gone", () => {
+		const src = readSource(ROUTE);
+		expect(src).toContain("canLineupBlast={canLineupBlast}");
+		expect(src).toContain("onLineupBlast={() => setLineupOpen(true)}");
+		expect(
+			src,
+			"Lineup blast moved into the Manage menu (#1307); a route-level button " +
+				"would show it twice.",
+		).not.toMatch(/>\s*Lineup blast\s*</);
+	});
+
+	it("Restore is the one filled action on a cancelled meeting, and touch sized", () => {
+		const src = readSource(ROUTE);
+		const at = src.indexOf("onClick={doRestore}");
+		expect(at).toBeGreaterThan(-1);
+		const button = src.slice(src.lastIndexOf("<Button", at), at);
+		expect(button).toContain('variant="default"');
+		expect(button).toContain('size="touch"');
+		const viewAt = src.indexOf("onClick={() => setNoticeOpen(true)}");
+		const view = src.slice(src.lastIndexOf("<Button", viewAt), viewAt);
+		expect(view).toContain('variant="outline"');
+		expect(view).toContain('size="touch"');
+	});
+
 	// One clock for the render (spec D1). Re-reading `new Date()` inside any of
 	// these calls is invisible in every test (they agree ~always) and wrong
 	// exactly at club-local midnight, which is the case the single clock exists

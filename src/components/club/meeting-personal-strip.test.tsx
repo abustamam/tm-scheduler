@@ -23,11 +23,38 @@ const BASE = {
 	availBusy: false,
 	canToggleAvailability: true,
 	onSetStatus: vi.fn(),
+	primary: false,
 };
 
 function renderStrip(overrides: Partial<typeof BASE> = {}) {
 	render(<MeetingPersonalStrip {...BASE} {...overrides} />);
 }
+
+describe("MeetingPersonalStrip primary + touch size (#1307)", () => {
+	it("I'll be there is the filled `touch` button when the route says primary; the rest stay outline/touch", () => {
+		renderStrip({ member: MEMBER, source: "session", primary: true });
+		const yes = screen.getByRole("button", { name: "I'll be there" });
+		expect(yes.dataset.variant).toBe("default");
+		expect(yes.dataset.size).toBe("touch");
+		const no = screen.getByRole("button", { name: /i can't make this one/i });
+		expect(no.dataset.variant).toBe("outline");
+		expect(no.dataset.size).toBe("touch");
+	});
+
+	it("is outline when the route says another control leads", () => {
+		renderStrip({ member: MEMBER, source: "session", primary: false });
+		expect(
+			screen.getByRole("button", { name: "I'll be there" }).dataset.variant,
+		).toBe("outline");
+	});
+
+	it("the undo chip is `touch` sized", () => {
+		renderStrip({ member: MEMBER, source: "session", myStatus: "coming" });
+		expect(screen.getByRole("button", { name: /undo/i }).dataset.size).toBe(
+			"touch",
+		);
+	});
+});
 
 describe("MeetingPersonalStrip (#541 D3)", () => {
 	it("guest without identity: viewing-as line, NO availability control", async () => {
@@ -188,6 +215,7 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 				availBusy={false}
 				canToggleAvailability={true}
 				onSetStatus={onSetStatus}
+				primary={false}
 			/>,
 		);
 		fireEvent.click(getByRole("button", { name: "I'll be there" }));
@@ -209,6 +237,7 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 				availBusy={false}
 				canToggleAvailability={true}
 				onSetStatus={onSetStatus}
+				primary={false}
 			/>,
 		);
 		fireEvent.click(getByRole("button", { name: /undo/i }));

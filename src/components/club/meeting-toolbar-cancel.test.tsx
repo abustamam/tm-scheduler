@@ -43,38 +43,48 @@ async function renderToolbar(overrides: Partial<MeetingToolbarProps> = {}) {
 	await renderUnderMemoryRouter(<MeetingToolbar {...BASE} {...overrides} />);
 }
 
-const cancelButton = () =>
-	screen.queryByRole("button", { name: /cancel meeting/i });
+/** Opens the Manage menu (#1307): Cancel, Complete etc. are menu items now. */
+async function openManage() {
+	await userEvent.click(screen.getByRole("button", { name: /^manage$/i }));
+}
+const item = (name: RegExp) => screen.queryByRole("menuitem", { name });
+
+const cancelButton = () => item(/cancel meeting/i);
 
 describe("Cancel meeting (#1057)", () => {
 	it("shows for an officer on a cancellable meeting, and wires the handler", async () => {
 		const onCancel = vi.fn();
 		await renderToolbar({ onCancel });
+		// Behind Manage, not a top-level button (#1307).
+		expect(
+			screen.queryByRole("button", { name: /cancel meeting/i }),
+		).toBeNull();
+		await openManage();
 		const button = cancelButton();
 		expect(button).toBeTruthy();
-		// `outline`, like every other edit-group button: the phase primary is
-		// the only filled control in the row (D2).
-		expect(button?.getAttribute("data-variant")).toBe("outline");
+		// The destructive item style, last in the menu.
+		expect(button?.getAttribute("data-variant")).toBe("destructive");
 		await userEvent.click(button as HTMLElement);
 		expect(onCancel).toHaveBeenCalledTimes(1);
 	});
 
 	it("is absent for a member, whatever the route says about cancellability", async () => {
 		await renderToolbar({ canManage: false, canCancel: true });
+		expect(screen.queryByRole("button", { name: /^manage$/i })).toBeNull();
 		expect(cancelButton()).toBeNull();
 	});
 
 	it("is absent when the route says the meeting cannot be cancelled now", async () => {
 		await renderToolbar({ canCancel: false });
+		await openManage();
 		expect(cancelButton()).toBeNull();
 	});
 
 	it("is absent on a locked meeting, which offers Reopen instead", async () => {
 		await renderToolbar({ locked: true, canCancel: true });
+		await openManage();
 		expect(cancelButton()).toBeNull();
-		expect(
-			screen.getByRole("button", { name: /reopen meeting/i }),
-		).toBeTruthy();
+		expect(item(/reopen meeting/i)).toBeTruthy();
 	});
 
 	it("is absent, and defaults closed, when the route passes nothing (the optional props)", async () => {
@@ -83,18 +93,21 @@ describe("Cancel meeting (#1057)", () => {
 			canCancel: undefined,
 			onCancel: undefined,
 		});
+		await openManage();
 		expect(cancelButton()).toBeNull();
 		// The rest of the edit group is untouched by the defaults.
-		expect(screen.getByRole("button", { name: /add role/i })).toBeTruthy();
+		expect(item(/add role/i)).toBeTruthy();
 	});
 
 	it("in flight: disables and announces aria-busy rather than hiding", async () => {
 		await renderToolbar({ lifecycleBusy: true });
-		const button = cancelButton() as HTMLButtonElement;
-		expect(button.disabled).toBe(true);
+		await openManage();
+		const button = cancelButton() as HTMLElement;
+		expect(button.getAttribute("aria-disabled")).toBe("true");
 		expect(button.getAttribute("aria-busy")).toBe("true");
 		cleanup();
 		await renderToolbar({ lifecycleBusy: false });
+		await openManage();
 		expect(cancelButton()?.getAttribute("aria-busy")).not.toBe("true");
 	});
 
@@ -105,13 +118,12 @@ describe("Cancel meeting (#1057)", () => {
 			lifecycleBusy: true,
 			busyAction: "complete",
 		});
-		const complete = screen.getByRole("button", {
-			name: /complete meeting/i,
-		}) as HTMLButtonElement;
-		const cancel = cancelButton() as HTMLButtonElement;
+		await openManage();
+		const complete = item(/complete meeting/i) as HTMLElement;
+		const cancel = cancelButton() as HTMLElement;
 		// Both disabled: nothing else may start while a lifecycle write runs.
-		expect(complete.disabled).toBe(true);
-		expect(cancel.disabled).toBe(true);
+		expect(complete.getAttribute("aria-disabled")).toBe("true");
+		expect(cancel.getAttribute("aria-disabled")).toBe("true");
 		// Only the one pressed says so, and only it carries the spinner.
 		expect(complete.getAttribute("aria-busy")).toBe("true");
 		expect(cancel.getAttribute("aria-busy")).not.toBe("true");
@@ -126,7 +138,8 @@ describe("Cancel meeting (#1057)", () => {
 			lifecycleBusy: true,
 			busyAction: "cancel",
 		});
-		const complete = screen.getByRole("button", { name: /complete meeting/i });
+		await openManage();
+		const complete = item(/complete meeting/i) as HTMLElement;
 		expect(cancelButton()?.getAttribute("aria-busy")).toBe("true");
 		expect(complete.getAttribute("aria-busy")).not.toBe("true");
 		expect(complete.querySelector(".animate-spin")).toBeNull();
@@ -167,6 +180,9 @@ describe("a cancelled meeting's toolbar (#1057)", () => {
 			canComplete: true,
 			hasAddableRoles: true,
 		});
+		// Nothing in the officer group is reachable: the menu has no items, so
+		// the trigger itself is gone.
+		expect(screen.queryByRole("button", { name: /^manage$/i })).toBeNull();
 		expect(cancelButton()).toBeNull();
 		expect(screen.queryByRole("button", { name: /add role/i })).toBeNull();
 		expect(
@@ -185,6 +201,7 @@ describe("a cancelled meeting's toolbar (#1057)", () => {
 
 	it("the gate is `cancelled`, not the route's canCancel: a stale true cannot resurface the button", async () => {
 		await renderToolbar({ cancelled: true, canCancel: true });
+		expect(screen.queryByRole("button", { name: /^manage$/i })).toBeNull();
 		expect(cancelButton()).toBeNull();
 	});
 
@@ -194,11 +211,10 @@ describe("a cancelled meeting's toolbar (#1057)", () => {
 			canComplete: true,
 			hasAddableRoles: true,
 		});
-		expect(screen.getByRole("button", { name: /add role/i })).toBeTruthy();
-		expect(
-			screen.getByRole("button", { name: /complete meeting/i }),
-		).toBeTruthy();
-		expect(screen.getByRole("button", { name: /promote/i })).toBeTruthy();
+		await openManage();
+		expect(item(/add role/i)).toBeTruthy();
+		expect(item(/complete meeting/i)).toBeTruthy();
+		expect(item(/promote/i)).toBeTruthy();
 		expect(cancelButton()).toBeTruthy();
 	});
 });
