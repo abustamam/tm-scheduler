@@ -76,8 +76,10 @@ const RUNG_LABELS: Record<PlanStatus, string> = {
  *  button chrome, and 172.16px in the DejaVu fallback, so it cannot fit 144px.
  *  "Coming · asked" is 98.92px Manrope (101.51px system-ui) + 42 = 140.9px /
  *  143.5px, which FITS, so " · asked" stays visible at every width. Only the
- *  Linux DejaVu fallback (149.97px) overflows, by ~6px and only until the
- *  webfont swaps in; that is accepted, because hiding "asked" would leave the
+ *  Linux DejaVu fallback (149.97px) overflows, by ~6px into the 12px gap, for
+ *  as long as Manrope (Google Fonts) has not loaded, which may be never if it
+ *  is blocked or the device is offline; that is accepted, because hiding
+ *  "asked" would leave the
  *  label "Coming" unchanged after tapping "Asked" on an assumed row, which reads
  *  as "it didn't save". The announcement carries both words at every width, and
  *  the muting still marks an assumed row. */
@@ -474,8 +476,9 @@ function AttendanceRow({
 							 *  (144px, the roll row's) and " · assumed" is hidden, so the widest
 							 *  visible label is "Coming · asked": 98.92px Manrope (101.51px
 							 *  system-ui) + 42 = 140.9px / 143.5px, which fits. Only the DejaVu
-							 *  fallback (107.97 + 42 = 149.97px) overflows, by ~6px, until the
-							 *  webfont loads; accepted, since hiding "asked" would make the "Asked"
+							 *  fallback (107.97 + 42 = 149.97px) overflows, by ~6px into the gap,
+							 *  while Manrope is not loaded (possibly for good, if Google Fonts is
+							 *  blocked); accepted, since hiding "asked" would make the "Asked"
 							 *  menu item look like a no-op. ("Not coming" carries no qualifier and
 							 *  is under 144px.)
 							 *  On a line the phone track costs 144 + the 12px `gap-3` + the 32px

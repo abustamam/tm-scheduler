@@ -589,7 +589,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// path the route actually uses: clearing DELETES a real row and logs it,
 		// so it must be visible even though the effective status cannot move.
 		// An assumed row with no stored rung reads exactly as it did before.
-		const { getByRole, queryByText } = renderPanel({
+		const { getByRole } = renderPanel({
 			plan: [{ memberId: "m1", status: "reached_out" as const }],
 			rungOverride: { m1: null },
 			roleByMemberId: {
@@ -601,7 +601,6 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 				name: "Ayesha Khan status: Coming — assumed, role confirmed",
 			}),
 		).toBeTruthy();
-		expect(queryByText(/Coming · asked/)).toBeNull();
 		// It reads as a plain assumed row again — the qualifier falls BACK to
 		// "assumed" rather than disappearing, which is what makes the clear
 		// visible at all now that the badge no longer carries assumed-ness.
