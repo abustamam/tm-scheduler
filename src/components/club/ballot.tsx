@@ -396,7 +396,7 @@ export function Ballot({
 								// try again" — a transient failure the voter can retry away.
 								// This is persistent state that nobody did wrong. Rendering
 								// both in the same red made the voter work out which.
-								<p className="mt-3 text-sm font-medium text-warning-foreground">
+								<p className="mt-3 text-sm font-semibold text-warning-foreground">
 									{confirmedName} can't win this award — {chosenIsOut.reason}.
 									Tap another name.
 								</p>
@@ -404,7 +404,7 @@ export function Ballot({
 								// Re-tapping from this phone is refused every time, so the
 								// retry copy below would be wrong advice. Signing in as the
 								// member is the one thing that changes the answer.
-								<p className="mt-3 text-sm font-medium text-destructive">
+								<p className="mt-3 text-sm font-semibold text-destructive">
 									{VOTE_CAST_ELSEWHERE_MESSAGE}{" "}
 									<a
 										href={signInHref(
@@ -417,14 +417,14 @@ export function Ballot({
 								</p>
 							) : state === "failed" && refusal === "guest" ? (
 								// A guest cannot sign in, so there is no action to offer.
-								<p className="mt-3 text-sm font-medium text-destructive">
+								<p className="mt-3 text-sm font-semibold text-destructive">
 									{GUEST_VOTE_CAST_ELSEWHERE_MESSAGE}
 								</p>
 							) : state === "failed" ? (
 								// The selection is KEPT on failure, and a failure NEVER reads as
 								// counted. A dropped vote that looks cast is worse than a
 								// visible retry.
-								<p className="mt-3 text-sm font-medium text-destructive">
+								<p className="mt-3 text-sm font-semibold text-destructive">
 									Couldn't send that — tap your choice again.
 								</p>
 							) : state === "sending" ? (

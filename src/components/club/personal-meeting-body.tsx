@@ -349,7 +349,7 @@ export function PersonalMeetingBody({
 						<button
 							type="button"
 							onClick={onNotYou}
-							className="-mx-2 inline-flex min-h-11 items-center rounded-md px-2 text-sm font-medium text-primary underline underline-offset-2"
+							className="-mx-2 inline-flex min-h-11 items-center rounded-md px-2 text-sm font-semibold text-primary underline underline-offset-2"
 						>
 							Not you?
 						</button>
@@ -367,7 +367,7 @@ export function PersonalMeetingBody({
 			/>
 
 			{writesClosed ? (
-				<p className="rounded-md border border-[var(--line)] p-3 text-muted-foreground text-sm">
+				<p className="rounded-md border border-border p-3 text-muted-foreground text-sm">
 					{cancelled
 						? "This meeting was cancelled."
 						: locked
@@ -407,7 +407,7 @@ export function PersonalMeetingBody({
 				// it is text rather than a link for the reason the strip gives — a
 				// refusal that is actually attempted still carries a real one-tap
 				// link through `showWriteError`.
-				<p className="rounded-md border border-[var(--line)] p-3 text-muted-foreground text-sm">
+				<p className="rounded-md border border-border p-3 text-muted-foreground text-sm">
 					Sign in to change your answer.
 				</p>
 			) : (
@@ -456,7 +456,7 @@ export function PersonalMeetingBody({
 						return (
 							<div
 								key={role.slotId}
-								className="rounded-lg border border-[var(--line)] p-3"
+								className="rounded-lg border border-border p-3"
 							>
 								{/* A heading, and a size up from the `text-sm` duty labels it
 								    heads — it was a `<p>` at the same size as its own list. */}
@@ -560,7 +560,7 @@ export function PersonalMeetingBody({
 								<RoleGuideSections
 									// On the root, not a wrapper: a role with nothing to show
 									// renders nothing, not an empty ruled box.
-									className="mt-2 border-t border-[var(--line)] pt-2"
+									className="mt-2 border-t border-border pt-2"
 									guide={
 										guideSource ? roleGuide(guideSource) : EMPTY_ROLE_GUIDE
 									}
@@ -682,7 +682,7 @@ export function PersonalMeetingShell({
 	return (
 		<div className="mx-auto w-full max-w-reading space-y-4 p-4 pb-10">
 			{children}
-			<div className="border-t border-[var(--line)] pt-3">
+			<div className="border-t border-border pt-3">
 				<FullMeetingLink clubId={clubId} meetingId={meetingId} />
 			</div>
 		</div>
@@ -700,7 +700,7 @@ export function FullMeetingLink({
 		<Link
 			to="/club/$clubId/meeting/$meetingId"
 			params={{ clubId, meetingId }}
-			className="-mx-2 inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-primary"
+			className="-mx-2 inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm font-semibold text-primary"
 		>
 			See the full meeting page
 			<ArrowRight aria-hidden className="size-4" />

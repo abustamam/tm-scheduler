@@ -32,12 +32,9 @@ export function VisitCta({
 	clubName: string;
 }) {
 	return (
-		<section className="rounded-xl border border-[var(--line)] bg-card p-4">
+		<section className="rounded-xl border border-border bg-card p-4">
 			<div className="flex items-start gap-3">
-				<HandHeart
-					className="mt-0.5 size-4 shrink-0 text-[var(--lagoon-deep)]"
-					aria-hidden
-				/>
+				<HandHeart className="mt-0.5 size-4 shrink-0 text-link" aria-hidden />
 				<div className="min-w-0 flex-1">
 					<h2 className="text-sm font-semibold text-foreground">
 						Planning a visit?
@@ -49,7 +46,7 @@ export function VisitCta({
 					<Link
 						to="/club/$clubId/guest-book"
 						params={{ clubId }}
-						className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-primary no-underline hover:underline"
+						className="mt-2 inline-flex items-center gap-1 text-sm font-semibold text-primary no-underline hover:underline"
 					>
 						Sign the guest book
 						<ArrowRight className="size-3.5" aria-hidden />

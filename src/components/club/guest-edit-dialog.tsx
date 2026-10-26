@@ -393,7 +393,7 @@ export function GuestEditDialog({
 						/>
 						<p
 							id={`guest-preferred-hint-${guest.id}`}
-							className="text-xs text-[var(--sea-ink-soft)]"
+							className="text-xs text-muted-foreground"
 						>
 							Used to greet them in WhatsApp and email drafts. Leave blank to
 							use their first name.
@@ -419,7 +419,7 @@ export function GuestEditDialog({
 						{showBookEmail ? (
 							<div
 								data-slot="guest-book-email"
-								className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--sea-ink-soft)]"
+								className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
 							>
 								<span className="min-w-0 break-all">
 									Typed on the public guest book (unconfirmed): {bookEmail}
@@ -461,7 +461,7 @@ export function GuestEditDialog({
 							<p
 								id={`guest-contact-locked-${guest.id}`}
 								data-slot="guest-contact-locked"
-								className="text-xs text-[var(--sea-ink-soft)]"
+								className="text-xs text-muted-foreground"
 							>
 								{GUEST_CONTACT_REFUSAL_MESSAGES[contactRefusal]}
 							</p>
@@ -526,14 +526,14 @@ export function GuestEditDialog({
 					) : profileState.status === "loading" ? (
 						<p
 							data-slot="guest-profile-loading"
-							className="text-xs text-[var(--sea-ink-soft)]"
+							className="text-xs text-muted-foreground"
 						>
 							Loading kind and introducer…
 						</p>
 					) : (
 						<p
 							data-slot="guest-profile-failed"
-							className="text-xs text-[var(--sea-ink-soft)]"
+							className="text-xs text-muted-foreground"
 						>
 							Couldn't load this guest's kind and introducer. Saving keeps them
 							as they are.

@@ -108,7 +108,7 @@ export function ClubAgendasPanel({
 			</div>
 
 			{agendas.adopted ? null : (
-				<div className="rounded-lg border border-[var(--line)] p-4 space-y-2">
+				<div className="rounded-lg border border-border p-4 space-y-2">
 					<p className="text-sm">
 						Make today's standard agenda your club's own. You can then change it
 						from any meeting and save it back as your default.
@@ -128,10 +128,10 @@ export function ClubAgendasPanel({
 					{agendas.templates.map((t) => (
 						<li
 							key={t.id}
-							className="rounded-lg border border-[var(--line)] p-4 space-y-3"
+							className="rounded-lg border border-border p-4 space-y-3"
 						>
 							<div className="flex flex-wrap items-center gap-2">
-								<span className="font-medium">{t.name}</span>
+								<span className="font-semibold">{t.name}</span>
 								{t.isDefault ? <Badge>Default</Badge> : null}
 								{t.enabled ? null : <Badge variant="outline">Disabled</Badge>}
 								<span className="text-xs text-muted-foreground">
@@ -484,7 +484,7 @@ function ResultGroup<T extends MeetingRef>({
 	if (meetings.length === 0) return null;
 	return (
 		<section className="space-y-1">
-			<h3 className="font-medium">{title}</h3>
+			<h3 className="font-semibold">{title}</h3>
 			<ul className="space-y-1">
 				{meetings.map((m) => {
 					const extra = note?.(m);

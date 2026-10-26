@@ -22,7 +22,7 @@ export function ViewingAs({
 				<button
 					type="button"
 					onClick={promptIdentity}
-					className="font-medium text-foreground underline underline-offset-2 hover:text-foreground"
+					className="font-semibold text-foreground underline underline-offset-2 hover:text-foreground"
 				>
 					I'm a member →
 				</button>
@@ -32,7 +32,7 @@ export function ViewingAs({
 	return (
 		<p className="text-sm text-muted-foreground">
 			Signing up as{" "}
-			<span className="font-medium text-foreground">{member.name}</span>
+			<span className="font-semibold text-foreground">{member.name}</span>
 			<span aria-hidden> · </span>
 			<button
 				type="button"

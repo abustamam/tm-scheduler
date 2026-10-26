@@ -147,7 +147,7 @@ function ClubHome() {
 				<div>
 					<h2 className="text-base font-semibold">Sign-up sheet</h2>
 					<p className="text-sm text-muted-foreground">
-						Tap an <span className="font-medium text-success">open</span> role
+						Tap an <span className="font-semibold text-success">open</span> role
 						to claim it, or your own to release it.
 					</p>
 				</div>
@@ -328,9 +328,9 @@ function ClaimAccountCard({ member }: { member: StoredMember }) {
 					<p className="font-semibold text-foreground">Check your email</p>
 					<p className="text-muted-foreground">
 						We sent a sign-in link to{" "}
-						<span className="font-medium text-foreground">{email}</span>. Open
+						<span className="font-semibold text-foreground">{email}</span>. Open
 						it to save{" "}
-						<span className="font-medium text-foreground">{member.name}</span>{" "}
+						<span className="font-semibold text-foreground">{member.name}</span>{" "}
 						to your account.
 					</p>
 				</div>

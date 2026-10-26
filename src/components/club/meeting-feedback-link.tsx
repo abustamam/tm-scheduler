@@ -27,7 +27,7 @@ export function MeetingFeedbackLink({
 			to="/club/$clubId/meeting/$meetingId/feedback"
 			params={{ clubId, meetingId: meetingKey }}
 			data-testid="meeting-leave-feedback"
-			className="flex w-fit items-center gap-1.5 text-sm font-medium text-primary underline-offset-4 hover:underline"
+			className="flex w-fit items-center gap-1.5 text-sm font-semibold text-primary underline-offset-4 hover:underline"
 		>
 			<MessageSquareHeart className="size-4" aria-hidden />
 			Leave feedback

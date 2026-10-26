@@ -55,7 +55,7 @@ export function CancelledMeetingNotice({
 			<Link
 				to="/club/$clubId/meeting/$meetingId"
 				params={{ clubId, meetingId }}
-				className="font-medium text-primary underline-offset-4 hover:underline"
+				className="font-semibold text-primary underline-offset-4 hover:underline"
 			>
 				See the meeting
 			</Link>

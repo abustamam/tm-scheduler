@@ -61,7 +61,7 @@ export function AttendanceModeToggle({
 						className={cn(
 							"inline-flex min-h-6 items-center px-2 text-xs disabled:pointer-events-none disabled:opacity-50",
 							pressed
-								? "bg-secondary font-medium text-secondary-foreground"
+								? "bg-secondary font-semibold text-secondary-foreground"
 								: "text-muted-foreground hover:bg-muted",
 						)}
 					>

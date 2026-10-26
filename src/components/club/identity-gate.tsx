@@ -147,7 +147,7 @@ export function IdentityGateProvider({
 							// tracked guest ended up in a club's roster.
 							notListedHint={
 								<>
-									<p className="font-medium text-foreground">
+									<p className="font-semibold text-foreground">
 										Don't see your name?
 									</p>
 									<p className="text-muted-foreground">
@@ -155,7 +155,7 @@ export function IdentityGateProvider({
 										<a
 											href={`/club/${clubSlug}/guest-book`}
 											data-slot="guest-book-link"
-											className="font-medium text-primary hover:underline"
+											className="font-semibold text-primary hover:underline"
 										>
 											Sign the guest book
 										</a>{" "}

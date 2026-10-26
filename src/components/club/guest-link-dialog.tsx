@@ -173,8 +173,8 @@ export function GuestLinkDialog({
 					<div className="space-y-3 text-sm" data-slot="guest-link-confirm">
 						{preview.ok ? (
 							<p>
-								<span className="font-medium">{guestName}</span> and{" "}
-								<span className="font-medium">{picked.name}</span> become one
+								<span className="font-semibold">{guestName}</span> and{" "}
+								<span className="font-semibold">{picked.name}</span> become one
 								person. Email: {preview.email ?? "none"}. Phone:{" "}
 								{preview.phone ?? "none"}. {otherClubName}'s officers will see
 								and can edit this email and phone.
@@ -221,7 +221,7 @@ export function GuestLinkDialog({
 								))}
 							</select>
 						) : (
-							<p className="text-sm text-[var(--sea-ink-soft)]">
+							<p className="text-sm text-muted-foreground">
 								From {otherClubName}
 							</p>
 						)}
@@ -251,10 +251,10 @@ export function GuestLinkDialog({
 											className="flex w-full items-center justify-between gap-3 rounded-lg border border-border bg-card px-3 py-2.5 text-left transition-colors hover:bg-accent disabled:opacity-60"
 										>
 											<span className="min-w-0">
-												<span className="block truncate font-medium">
+												<span className="block truncate font-semibold">
 													{c.name}
 												</span>
-												<span className="block truncate text-xs text-[var(--sea-ink-soft)]">
+												<span className="block truncate text-xs text-muted-foreground">
 													{[c.email, c.phone].filter(Boolean).join(" · ") ||
 														"No contact"}
 												</span>

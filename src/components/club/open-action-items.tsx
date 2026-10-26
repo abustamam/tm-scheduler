@@ -27,22 +27,19 @@ export function OpenActionItems({
 }) {
 	if (items.length === 0) return null;
 	return (
-		<section className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-5">
+		<section className="rounded-2xl border border-border bg-surface-raised p-5">
 			<div className="mb-3 flex items-center gap-2">
-				<ClipboardCheck
-					className="size-4 text-[var(--sea-ink-soft)]"
-					aria-hidden
-				/>
+				<ClipboardCheck className="size-4 text-muted-foreground" aria-hidden />
 				<h2 className="font-semibold text-sm">Open action items</h2>
 			</div>
 			<ul className="space-y-1.5">
 				{items.map((i) => (
 					<li key={i.id} className="text-sm">
-						<span className="font-medium">{i.text}</span>
+						<span className="font-semibold">{i.text}</span>
 						{/* No owner run at all when nobody owns it — a placeholder would
 						    read as an assignment that was never made. */}
 						{i.ownerName || i.dueDate ? (
-							<span className="text-xs text-[var(--sea-ink-soft)]">
+							<span className="text-xs text-muted-foreground">
 								{i.ownerName ? ` · ${i.ownerName}` : ""}
 								{i.dueDate ? ` · due ${formatCalendarDay(i.dueDate)}` : ""}
 							</span>
@@ -50,7 +47,7 @@ export function OpenActionItems({
 					</li>
 				))}
 				{total > items.length ? (
-					<li className="text-xs text-[var(--sea-ink-soft)]">
+					<li className="text-xs text-muted-foreground">
 						+{total - items.length} more not shown
 					</li>
 				) : null}

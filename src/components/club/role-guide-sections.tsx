@@ -73,7 +73,7 @@ function SheetLink({ sheet }: { sheet: RoleGuideSheetLink }) {
 	return (
 		<a
 			href={sheet.href}
-			className="-mx-2 inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-primary"
+			className="-mx-2 inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm font-semibold text-primary"
 			aria-label={`Full script (PDF): ${sheet.title}`}
 		>
 			<FileText aria-hidden className="size-4" />
@@ -210,7 +210,7 @@ export function RoleGuideItem({
 	return (
 		<li id={anchor || undefined} className="scroll-mt-20 space-y-2 p-4">
 			<div>
-				<h3 className="font-medium text-foreground text-sm">{role.name}</h3>
+				<h3 className="font-semibold text-foreground text-sm">{role.name}</h3>
 				{role.description ? (
 					<p className="mt-1 text-sm text-muted-foreground">
 						{role.description}

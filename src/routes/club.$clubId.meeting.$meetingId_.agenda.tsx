@@ -157,7 +157,7 @@ function AgendaEditorRoute() {
 					// of them. Accepting that silently would be the invisible authoring
 					// D1 rejects, so the trade is stated where it is made.
 					<p className="mt-2 rounded-md border border-dashed p-3 text-muted-foreground text-sm">
-						<strong className="font-medium">This agenda is now yours.</strong>{" "}
+						<strong className="font-semibold">This agenda is now yours.</strong>{" "}
 						Improvements we make to the standard agenda will not reach it — edit
 						it here instead.
 					</p>

@@ -61,7 +61,7 @@ export function MeetingReadinessPanel({
 				data-testid="meeting-readiness-panel"
 				className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-lg border bg-card px-4 py-3"
 			>
-				<p className="flex min-w-0 items-center gap-2 text-sm font-medium">
+				<p className="flex min-w-0 items-center gap-2 text-sm font-semibold">
 					<CircleCheck className="size-4 shrink-0 text-success" aria-hidden />
 					Everything's set for this meeting
 				</p>
@@ -102,7 +102,7 @@ export function MeetingReadinessPanel({
 								/>
 							)}
 							<div className="min-w-0 flex-1 break-words">
-								<span className="font-medium">{item.label}</span>{" "}
+								<span className="font-semibold">{item.label}</span>{" "}
 								<span className="text-muted-foreground tabular-nums">
 									{item.doneCount}/{item.total}
 								</span>

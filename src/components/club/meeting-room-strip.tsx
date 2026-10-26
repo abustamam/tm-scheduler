@@ -175,7 +175,7 @@ export function MeetingRoomStrip({
 				<button
 					type="button"
 					onClick={promptIdentity}
-					className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+					className="text-sm font-semibold text-primary underline-offset-4 hover:underline"
 				>
 					Member? Pick your name
 				</button>

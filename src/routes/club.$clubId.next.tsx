@@ -62,8 +62,8 @@ function NoUpcomingMeeting() {
 			<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 				Next meeting
 			</h1>
-			<div className="mt-7 rounded-2xl border border-dashed border-[var(--line)] bg-[var(--surface)] px-6 py-16 text-center">
-				<p className="text-sm text-[var(--sea-ink-soft)]">
+			<div className="mt-7 rounded-2xl border border-dashed border-border bg-surface-glass px-6 py-16 text-center">
+				<p className="text-sm text-muted-foreground">
 					No upcoming meeting is scheduled yet.
 				</p>
 				{canSchedule ? (

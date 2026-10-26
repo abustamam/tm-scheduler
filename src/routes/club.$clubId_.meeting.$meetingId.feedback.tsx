@@ -248,9 +248,9 @@ function FeedbackCancelled({
 	const { clubId } = Route.useParams();
 	return (
 		<div className="flex min-h-svh w-full flex-col bg-background">
-			<header className="flex items-center gap-3 border-b border-[var(--line)] px-4 py-3 md:px-6">
+			<header className="flex items-center gap-3 border-b border-border px-4 py-3 md:px-6">
 				<BrandMark size="sm" />
-				<span className="min-w-0 flex-1 truncate text-right text-[11px] font-semibold tracking-[0.04em] text-muted-foreground uppercase">
+				<span className="min-w-0 flex-1 truncate text-right text-xs font-semibold tracking-[0.04em] text-muted-foreground uppercase">
 					{clubNumber ? `${clubName} · Club ${clubNumber}` : clubName}
 				</span>
 				<ThemeToggle compact />
@@ -291,9 +291,9 @@ function FeedbackOpen({ data }: { data: OpenFeedbackData }) {
 
 	return (
 		<div className="flex min-h-svh w-full flex-col bg-background">
-			<header className="flex items-center gap-3 border-b border-[var(--line)] px-4 py-3 md:px-6">
+			<header className="flex items-center gap-3 border-b border-border px-4 py-3 md:px-6">
 				<BrandMark size="sm" />
-				<span className="min-w-0 flex-1 truncate text-right text-[11px] font-semibold tracking-[0.04em] text-muted-foreground uppercase">
+				<span className="min-w-0 flex-1 truncate text-right text-xs font-semibold tracking-[0.04em] text-muted-foreground uppercase">
 					{clubNumber ? `${clubName} · Club ${clubNumber}` : clubName}
 				</span>
 				<ThemeToggle compact />
@@ -312,14 +312,14 @@ function FeedbackOpen({ data }: { data: OpenFeedbackData }) {
 				{state === "notYet" ? (
 					<p
 						data-testid="feedback-state"
-						className="rounded-xl border border-border bg-muted/60 px-4 py-3 text-center text-sm font-medium text-muted-foreground"
+						className="rounded-xl border border-border bg-muted/60 px-4 py-3 text-center text-sm font-semibold text-muted-foreground"
 					>
 						{FEEDBACK_NOT_OPEN_MESSAGE}
 					</p>
 				) : state === "closed" ? (
 					<p
 						data-testid="feedback-state"
-						className="rounded-xl border border-border bg-muted/60 px-4 py-3 text-center text-sm font-medium text-muted-foreground"
+						className="rounded-xl border border-border bg-muted/60 px-4 py-3 text-center text-sm font-semibold text-muted-foreground"
 					>
 						{FEEDBACK_CLOSED_MESSAGE}
 					</p>
@@ -436,7 +436,7 @@ function PersonRow({
 			className="flex min-h-14 w-full items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 text-left transition-colors hover:bg-muted/60"
 		>
 			<span className="min-w-0 flex-1">
-				<span className="block truncate font-medium">{name}</span>
+				<span className="block truncate font-semibold">{name}</span>
 				{detail ? (
 					<span className="block truncate text-sm text-muted-foreground">
 						{detail}
@@ -444,7 +444,7 @@ function PersonRow({
 				) : null}
 			</span>
 			{sent ? (
-				<span className="flex shrink-0 items-center gap-1 text-sm font-medium text-primary">
+				<span className="flex shrink-0 items-center gap-1 text-sm font-semibold text-primary">
 					Sent
 					<Check className="size-4" aria-hidden />
 				</span>

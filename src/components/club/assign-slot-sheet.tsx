@@ -229,7 +229,7 @@ export function AssignSlotSheet({
 														Last: {formatLastServed(row.lastServedAt)}
 													</span>
 												) : (
-													<span className="font-medium text-warning-foreground text-xs">
+													<span className="font-semibold text-warning-foreground text-xs">
 														Never done this role
 													</span>
 												)}
@@ -251,7 +251,7 @@ export function AssignSlotSheet({
 
 					{allowGuests && !reassignBlocked ? (
 						<div className="mt-4 space-y-3 border-t pt-4">
-							<p className="font-medium text-sm">Or assign a guest</p>
+							<p className="font-semibold text-sm">Or assign a guest</p>
 							<p className="text-muted-foreground text-xs">
 								Guests aren't roster members — they won't appear in the member
 								picker or roster.

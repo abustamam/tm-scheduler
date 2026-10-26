@@ -206,7 +206,7 @@ export function PromoTemplateEditor({
 				</div>
 
 				<fieldset className="space-y-2">
-					<legend className="text-sm font-medium">
+					<legend className="text-sm font-semibold">
 						What each version includes
 					</legend>
 					<table className="text-sm">
@@ -214,7 +214,7 @@ export function PromoTemplateEditor({
 							<tr>
 								<th />
 								{PROMO_CHANNELS.map((c) => (
-									<th key={c} className="px-3 font-medium">
+									<th key={c} className="px-3 font-semibold">
 										{CHANNEL_LABEL[c]}
 									</th>
 								))}
@@ -248,7 +248,7 @@ export function PromoTemplateEditor({
 				{warnings.length > 0 ? (
 					<p
 						role="alert"
-						className="rounded-md border border-amber-500/50 bg-amber-500/10 p-2 text-sm"
+						className="rounded-md border border-warning/50 bg-warning-soft p-2 text-sm"
 					>
 						Not a placeholder: {warnings.map((w) => `{${w}}`).join(", ")}. It
 						will show exactly as typed.
