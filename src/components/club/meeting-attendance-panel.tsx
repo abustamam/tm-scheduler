@@ -71,13 +71,16 @@ const RUNG_LABELS: Record<PlanStatus, string> = {
  *  fit, and widening the track spends ~50px of a ~292px rail saying twice what
  *  "asked" already implies (nobody answered).
  *
- *  BELOW `md` the whole qualifier is hidden (CSS, `hidden md:inline`) and the
- *  trigger shows the bare status word, because neither qualified label fits
- *  144px once the phone's webfont has not loaded: with the 42px of button chrome,
- *  `"Coming · assumed"` is 172.16px in the DejaVu Sans fallback and
- *  `"Coming · asked"` is 107.97 + 42 = 149.97px (Manrope: ~141px, which fits
- *  only when the webfont has loaded). The announcement still carries both words
- *  at every width, and the muting still marks an assumed row. */
+ *  BELOW `md` only " · assumed" is hidden (CSS, `hidden md:inline`). Measured
+ *  with the real webfonts, "Coming · assumed" is 119.85px Manrope + 42px of
+ *  button chrome, and 172.16px in the DejaVu fallback, so it cannot fit 144px.
+ *  "Coming · asked" is 98.92px Manrope (101.51px system-ui) + 42 = 140.9px /
+ *  143.5px, which FITS, so " · asked" stays visible at every width. Only the
+ *  Linux DejaVu fallback (149.97px) overflows, by ~6px and only until the
+ *  webfont swaps in; that is accepted, because hiding "asked" would leave the
+ *  label "Coming" unchanged after tapping "Asked" on an assumed row, which reads
+ *  as "it didn't save". The announcement carries both words at every width, and
+ *  the muting still marks an assumed row. */
 const ASSUMED_WORD = "assumed";
 const ASKED_WORD = "asked";
 
@@ -468,11 +471,13 @@ function AttendanceRow({
 							 *
 							 *  176px clears that by 3.8px and clears the shipped Manrope by 14.1px.
 							 *  That full label only shows from `md`. Below it the track is `w-36`
-							 *  (144px, the roll row's) and the qualifier is hidden, so the widest
-							 *  visible label is the bare "Coming" (DejaVu 53.64px + 42 = 95.64px;
-							 *  "Not coming" is wider but carries no qualifier and is under 144px).
-							 *  A 144px track would clip "Coming · asked" too (107.97 + 42 =
-							 *  149.97px in DejaVu), so that qualifier is hidden below `md` as well.
+							 *  (144px, the roll row's) and " · assumed" is hidden, so the widest
+							 *  visible label is "Coming · asked": 98.92px Manrope (101.51px
+							 *  system-ui) + 42 = 140.9px / 143.5px, which fits. Only the DejaVu
+							 *  fallback (107.97 + 42 = 149.97px) overflows, by ~6px, until the
+							 *  webfont loads; accepted, since hiding "asked" would make the "Asked"
+							 *  menu item look like a no-op. ("Not coming" carries no qualifier and
+							 *  is under 144px.)
 							 *  On a line the phone track costs 144 + the 12px `gap-3` + the 32px
 							 *  contact-menu icon = 188px, leaving the identity (`min-w-0`,
 							 *  truncating) the rest of the row; the 375px case in
@@ -510,7 +515,16 @@ function AttendanceRow({
 								<span aria-hidden>
 									{statusLabel}
 									{qualifier ? (
-										<span className="hidden md:inline"> · {qualifier}</span>
+										<span
+											className={
+												qualifier === ASSUMED_WORD
+													? "hidden md:inline"
+													: undefined
+											}
+										>
+											{" "}
+											· {qualifier}
+										</span>
 									) : null}
 								</span>
 								{/* No `opacity-60`. The glyph inherits `currentColor`, which on an
@@ -782,8 +796,8 @@ function RollChip({
 			 *  direct child of a `flex flex-col` `<li>` and stretched the full width,
 			 *  so the rail's one right edge held for the plan rows and not for these.
 			 *  `w-36 md:w-44` is the SAME track plan mode's trigger uses: plan mode
-			 *  hides its "· assumed" / "· asked" qualifier below `md` so its widest
-			 *  visible label ("Not coming") fits 144px too, and from `md` both modes
+			 *  hides its "· assumed" qualifier below `md`, so its widest PHONE label is
+			 *  "Coming · asked" (~141px), which fits 144px too, and from `md` both modes
 			 *  share the 176px track. */}
 			<Button
 				variant="outline"

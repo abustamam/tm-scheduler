@@ -577,6 +577,11 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// already carries "nobody answered", so "Coming · assumed · asked" would
 		// say it twice — and would fail here.
 		expect(visibleLabel(btn)).toBe("Coming · asked");
+		// " · asked" is visible at EVERY width: no `hidden` class, or tapping
+		// "Asked" on a phone would leave the label reading "Coming" (no-op look).
+		const qualifier = btn.querySelector("span[aria-hidden] > span");
+		expect(qualifier?.textContent).toBe(" · asked");
+		expect(qualifier?.className ?? "").not.toContain("hidden");
 	});
 
 	it("drops the stored Asked when the officer clears it back to no answer", () => {

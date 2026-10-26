@@ -110,6 +110,8 @@ type Shape = "oneLine" | "twoLine" | "plan";
 const PLAN_STATUS = "Coming";
 const PLAN_QUALIFIER = " · assumed";
 const PLAN_LABEL = `${PLAN_STATUS}${PLAN_QUALIFIER}`;
+const ASKED_QUALIFIER = " · asked";
+type Qualifier = "assumed" | "asked";
 const PLAN_CODE = "TOASTM";
 /** The widest label a roll trigger shows. */
 const ROLL_LABEL = "Excused";
@@ -165,6 +167,7 @@ describe.skipIf(!hasChrome)(
 			status: "",
 			planStatus: "",
 			qualifier: "",
+			qualifierAsked: "",
 			menuTrigger: "",
 		};
 
@@ -172,11 +175,11 @@ describe.skipIf(!hasChrome)(
 			`${cls.buttonBase} ${variant} ${size} ${extra}`;
 
 		/** One roll row, the shipped classes around synthetic contents. */
-		function rowHtml(shape: Shape): string {
+		function rowHtml(shape: Shape, word: Qualifier = "assumed"): string {
 			const plan = shape === "plan";
 			const chipText = plan ? PLAN_CODE : "TD";
 			const identity = `<div class="${cls.identity}"><span class="${cls.name}" title="${NAME}" data-name>${NAME}</span><span data-slot="badge" class="${cls.badgeBase} ${cls.badgeSecondary} ${cls.chipBadge}" data-chip><span aria-hidden>${chipText}</span></span></div>`;
-			const status = `<button type="button" class="${button(cls.outline, cls.sm, plan ? cls.planStatus : cls.status)}" data-status><span class="sr-only">${NAME} status</span><span aria-hidden data-label>${plan ? `${PLAN_STATUS}<span class="${cls.qualifier}">${PLAN_QUALIFIER}</span>` : ROLL_LABEL}</span><svg class="size-3.5" viewBox="0 0 24 24" width="14" height="14"></svg></button>`;
+			const status = `<button type="button" class="${button(cls.outline, cls.sm, plan ? cls.planStatus : cls.status)}" data-status><span class="sr-only">${NAME} status</span><span aria-hidden data-label>${plan ? `${PLAN_STATUS}<span class="${word === "assumed" ? cls.qualifier : cls.qualifierAsked}">${word === "assumed" ? PLAN_QUALIFIER : ASKED_QUALIFIER}</span>` : ROLL_LABEL}</span><svg class="size-3.5" viewBox="0 0 24 24" width="14" height="14"></svg></button>`;
 			const menu = `<button type="button" class="${button(cls.ghost, cls.iconSm, cls.menuTrigger)}" aria-label="Contact ${NAME}" data-menu><svg class="size-4" viewBox="0 0 24 24" width="16" height="16"></svg></button>`;
 			const actions = `<div class="${cls.actionLine}">${status}${menu}</div>`;
 			// The CONTROL: the pre-#1309 shape, the action line under the identity.
@@ -217,8 +220,12 @@ describe.skipIf(!hasChrome)(
 		})();
 		</script>`;
 
-		function measure(shape: Shape, viewport = VIEWPORT): Measure {
-			const bodyHtml = `<div style="width:${PHONE_PX}px" data-rail><div class="${cls.cardBase} ${cls.card}"><div class="${cls.cardBodyBase} ${cls.cardBody}">${rowHtml(shape)}</div></div></div>`;
+		function measure(
+			shape: Shape,
+			viewport = VIEWPORT,
+			word: Qualifier = "assumed",
+		): Measure {
+			const bodyHtml = `<div style="width:${PHONE_PX}px" data-rail><div class="${cls.cardBase} ${cls.card}"><div class="${cls.cardBodyBase} ${cls.cardBody}">${rowHtml(shape, word)}</div></div></div>`;
 			const title = renderAndReadTitle({
 				bodyHtml,
 				css,
@@ -317,13 +324,24 @@ describe.skipIf(!hasChrome)(
 				"plan row trigger className",
 				"function AttendanceRow",
 			);
-			// The qualifier span inside the aria-hidden visible label.
+			// The qualifier span inside the aria-hidden visible label: ONE ternary,
+			// `qualifier === ASSUMED_WORD ? <assumed arm> : <asked arm>`. Both arms are
+			// read, so putting `hidden md:inline` on the asked arm changes this test.
 			cls.qualifier = capture(
 				PANEL,
-				/<span className="(hidden md:inline)">/,
-				"plan row qualifier className",
+				/qualifier === ASSUMED_WORD\s*\?\s*"([^"]*)"/,
+				"plan row qualifier className (assumed arm)",
 				"function AttendanceRow",
 			);
+			// `undefined` (no class) is the only arm that keeps "asked" visible.
+			const askedArm = capture(
+				PANEL,
+				/qualifier === ASSUMED_WORD\s*\?\s*"[^"]*"\s*:\s*(undefined|"[^"]*")/,
+				"plan row qualifier className (asked arm)",
+				"function AttendanceRow",
+			);
+			cls.qualifierAsked =
+				askedArm === "undefined" ? "" : askedArm.replace(/"/g, "");
 			cls.menuTrigger = capture(
 				NUDGE,
 				/size="icon-sm"\s*className="([^"]*)"/,
@@ -396,6 +414,24 @@ describe.skipIf(!hasChrome)(
 			).toBeLessThanOrEqual(4);
 			expect(m.nameTruncated, "the long name is what gives way").toBe(true);
 			expect(m.overhang, "controls clipped by the row").toBeLessThanOrEqual(0);
+			expect(m.pageOverflow, "page scrolls sideways").toBeLessThanOrEqual(0);
+		});
+
+		it("keeps 'Coming · asked' VISIBLE at 375px on one line, overflowing the 144px trigger by at most 8px (the harness font is the system sans, not Manrope: DejaVu overflows ~6px, Manrope fits)", () => {
+			const m = measure("plan", VIEWPORT, "asked");
+			expect(m.innerWidth, "the md: breakpoint must be off").toBeLessThan(
+				MD_PX,
+			);
+			expect(m.statusWidth).toBe(144);
+			expect(m.labelText, "visible label below md").toBe(
+				`${PLAN_STATUS}${ASKED_QUALIFIER}`,
+			);
+			expect(m.statusClip, "clip beyond the ~6px fallback").toBeLessThanOrEqual(
+				8,
+			);
+			expect(m.rowHeight, `row is ${m.rowHeight}px tall`).toBeLessThanOrEqual(
+				48,
+			);
 			expect(m.pageOverflow, "page scrolls sideways").toBeLessThanOrEqual(0);
 		});
 
