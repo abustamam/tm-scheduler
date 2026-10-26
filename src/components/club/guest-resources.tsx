@@ -32,7 +32,7 @@ export const GUEST_LINKS: { slug: string; label: string }[] = [
  */
 export function GuestResources({ clubId }: { clubId: string }) {
 	return (
-		<section className="rounded-xl border border-[var(--line)] bg-card p-4">
+		<section className="rounded-xl border border-border bg-card p-4">
 			<h2 className="text-sm font-semibold text-foreground">
 				New to Toastmasters?
 			</h2>
@@ -42,7 +42,7 @@ export function GuestResources({ clubId }: { clubId: string }) {
 						<Link
 							to="/resources/$slug"
 							params={{ slug: r.slug }}
-							className="inline-flex items-center gap-1 text-sm font-medium text-primary no-underline hover:underline"
+							className="inline-flex items-center gap-1 text-sm font-semibold text-primary no-underline hover:underline"
 						>
 							{r.label}
 							<ArrowRight className="size-3.5" aria-hidden />
@@ -53,7 +53,7 @@ export function GuestResources({ clubId }: { clubId: string }) {
 					<Link
 						to="/club/$clubId/roles-guide"
 						params={{ clubId }}
-						className="inline-flex items-center gap-1 text-sm font-medium text-primary no-underline hover:underline"
+						className="inline-flex items-center gap-1 text-sm font-semibold text-primary no-underline hover:underline"
 					>
 						Meeting roles
 						<ArrowRight className="size-3.5" aria-hidden />

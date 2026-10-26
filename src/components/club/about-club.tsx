@@ -33,7 +33,7 @@ export function AboutClub({
 	if (!meetingSchedule && !district && !mission) return null;
 
 	return (
-		<section className="rounded-xl border border-[var(--line)] bg-card p-4">
+		<section className="rounded-xl border border-border bg-card p-4">
 			<h2 className="text-sm font-semibold text-foreground">
 				About {clubName}
 			</h2>

@@ -51,7 +51,7 @@ export function CharterSettings(props: CharterSettingsProps) {
 				<p className="text-sm text-muted-foreground">
 					<span
 						data-testid="charter-status"
-						className="mr-1 inline-block rounded-full bg-[var(--sand)] px-2 py-0.5 text-xs font-semibold text-[var(--sea-ink-soft)] uppercase tracking-[0.04em]"
+						className="mr-1 inline-block rounded-full bg-surface-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground uppercase tracking-[0.04em]"
 					>
 						{CHARTER_STATUS_LABEL[props.charterStatus]}
 					</span>{" "}

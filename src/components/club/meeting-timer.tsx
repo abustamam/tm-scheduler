@@ -332,7 +332,7 @@ export function MeetingTimer({
 				// Explicit, never a blank page: an agenda with no timed row is a real
 				// state (a club that has set no min/max on anything), and a Timer
 				// staring at an empty screen cannot tell it from a broken link.
-				<p className="rounded-md border border-[var(--line)] p-3 text-muted-foreground text-sm">
+				<p className="rounded-md border border-border p-3 text-muted-foreground text-sm">
 					Nothing on this agenda has timing marks yet, so there is nothing to
 					time. Whoever edits the agenda can add a minimum and maximum to a
 					segment.

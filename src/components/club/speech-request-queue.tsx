@@ -37,24 +37,24 @@ export function SpeechRequestQueue({
 			{rows.map((row) => (
 				<li
 					key={row.id}
-					className="space-y-2 border-b border-[var(--line)] px-5 py-3 last:border-b-0"
+					className="space-y-2 border-b border-border px-5 py-3 last:border-b-0"
 				>
 					<div className="flex flex-wrap items-start justify-between gap-3">
 						<div className="min-w-0 space-y-0.5">
 							<div className="text-sm font-bold">{row.memberName}</div>
 							<div className="text-sm">
 								{row.title ?? (
-									<span className="text-[var(--sea-ink-soft)]">
+									<span className="text-muted-foreground">
 										{UNTITLED_REQUEST_LABEL}
 									</span>
 								)}
 							</div>
 							{row.path || row.projectName ? (
-								<div className="text-xs text-[var(--sea-ink-soft)]">
+								<div className="text-xs text-muted-foreground">
 									{[row.path, row.projectName].filter(Boolean).join(" · ")}
 								</div>
 							) : null}
-							<div className="text-xs text-[var(--sea-ink-soft)]">
+							<div className="text-xs text-muted-foreground">
 								{row.preferredDates.length > 0
 									? `Prefers ${row.preferredDates.map((d) => formatCalendarDay(d)).join(", ")}`
 									: "No preferred dates"}
@@ -166,7 +166,7 @@ function SchedulePanel({
 	return (
 		<div className="flex flex-wrap items-center gap-2">
 			<select
-				className="h-8 rounded-md border border-[var(--line)] bg-background px-2 text-sm"
+				className="h-8 rounded-md border border-border bg-background px-2 text-sm"
 				aria-label={`Slot for ${row.memberName}`}
 				value={slotId}
 				onChange={(e) => setSlotId(e.target.value)}

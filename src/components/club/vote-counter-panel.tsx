@@ -388,7 +388,7 @@ export function VoteCounterPanel({
 						    its error renders only on the category it was fired for; the
 						    next attempt resets it. */}
 						{toggle.isError && toggle.variables?.category === category ? (
-							<p className="mt-2 text-xs font-medium text-destructive">
+							<p className="mt-2 text-xs font-semibold text-destructive">
 								{(toggle.error as Error).message}
 							</p>
 						) : null}
@@ -432,7 +432,7 @@ export function VoteCounterPanel({
 						    the pointer is Bob's. Alphabetical is stable and says nothing. */}
 						{t?.isOpen && t.results.length > 0 ? (
 							<div className="mt-3 flex flex-col gap-2">
-								<p className="text-xs font-medium text-muted-foreground">
+								<p className="text-xs font-semibold text-muted-foreground">
 									Candidates
 								</p>
 								{[...t.results]
@@ -454,7 +454,7 @@ export function VoteCounterPanel({
 						{t && !t.isOpen ? (
 							<div className="mt-3 flex flex-col gap-2">
 								{tied.length > 1 ? (
-									<p className="text-sm font-medium text-warning-foreground">
+									<p className="text-sm font-semibold text-warning-foreground">
 										{tied.length} tied on {top} — pick the winner.
 									</p>
 								) : null}
@@ -500,7 +500,7 @@ export function VoteCounterPanel({
 						    room. */}
 						{t?.disqualified.length ? (
 							<div className="mt-3 flex flex-col gap-2 rounded-lg border border-dashed border-border p-3">
-								<p className="text-xs font-medium text-muted-foreground">
+								<p className="text-xs font-semibold text-muted-foreground">
 									Disqualified — votes kept on file, excluded from the count
 								</p>
 								{t.disqualified.map((r) => {
@@ -567,7 +567,7 @@ export function VoteCounterPanel({
 											    room, and it was the one new mutation with no error
 											    surface at all. */}
 											{undo.isError && undo.variables?.key === key ? (
-												<p className="text-xs font-medium text-destructive">
+												<p className="text-xs font-semibold text-destructive">
 													{(undo.error as Error).message}
 												</p>
 											) : null}
@@ -703,7 +703,7 @@ function ReasonForm({
 				</Button>
 			</form>
 			{error ? (
-				<p className="text-xs font-medium text-destructive">{error}</p>
+				<p className="text-xs font-semibold text-destructive">{error}</p>
 			) : null}
 		</div>
 	);

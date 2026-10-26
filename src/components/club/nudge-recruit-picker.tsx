@@ -193,22 +193,22 @@ export function NudgeRecruitPicker({
 									>
 										<span className="flex-1 truncate">{t.name}</span>
 										{t.notAvailable ? (
-											<span className="ml-2 text-xs text-[var(--warning-strong)]">
+											<span className="ml-2 text-xs text-warning-strong">
 												Not available
 											</span>
 										) : null}
 										{t.alreadyRole ? (
-											<span className="ml-2 text-xs text-[var(--sea-ink-soft)]">
+											<span className="ml-2 text-xs text-muted-foreground">
 												Already: {t.alreadyRole}
 											</span>
 										) : null}
 										{t.contacted ? (
-											<span className="ml-2 text-xs text-[var(--success-strong)]">
+											<span className="ml-2 text-xs text-success-strong">
 												Contacted
 											</span>
 										) : null}
 										{!t.phone && !t.email ? (
-											<span className="ml-2 text-xs text-[var(--sea-ink-soft)]">
+											<span className="ml-2 text-xs text-muted-foreground">
 												no contact
 											</span>
 										) : null}

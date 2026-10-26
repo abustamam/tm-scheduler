@@ -283,7 +283,7 @@ export function PromoDrafts({
 	return (
 		<div className="space-y-3">
 			{warnings.length > 0 ? (
-				<p className="rounded-md border border-amber-500/50 bg-amber-500/10 p-2 text-sm">
+				<p className="rounded-md border border-warning/50 bg-warning-soft p-2 text-sm">
 					The template uses {warnings.map((w) => `{${w}}`).join(", ")}, which
 					isn't a placeholder, so it's shown as typed. Fix it in club settings.
 				</p>
@@ -311,7 +311,7 @@ export function PromoDrafts({
 					<p
 						className={
 							whatsapp.length > PROMO_LIMITS.whatsappSoft
-								? "text-amber-700 text-xs dark:text-amber-400"
+								? "text-warning-foreground text-xs"
 								: "text-muted-foreground text-xs"
 						}
 					>

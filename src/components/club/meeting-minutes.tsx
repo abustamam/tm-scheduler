@@ -278,7 +278,7 @@ function MeetingMinutesView({
 					// a bug to the officer who used it last week.
 					<section className="space-y-1">
 						<h3 className="font-semibold text-sm">Attendance</h3>
-						<p className="text-[var(--sea-ink-soft)] text-xs">
+						<p className="text-muted-foreground text-xs">
 							Opens on the day of the meeting — attendance records who was
 							actually there.
 						</p>
@@ -503,7 +503,7 @@ function AttendanceRecord({ minutes }: { minutes: MinutesData }) {
 			</ul>
 
 			<div className="space-y-2">
-				<h4 className="font-medium text-sm">Guests present</h4>
+				<h4 className="font-semibold text-sm">Guests present</h4>
 				<div className="flex flex-wrap gap-2">
 					{minutes.guests.map((g) => (
 						<Badge key={g.guestId} variant="secondary">
@@ -590,7 +590,7 @@ function AwardsSection({
 						className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
 					>
 						<span className="text-sm">
-							<span className="font-medium">{AWARD_LABELS[a.category]}</span>
+							<span className="font-semibold">{AWARD_LABELS[a.category]}</span>
 							{": "}
 							{a.name ? (
 								<>
@@ -683,7 +683,7 @@ function TimingSection({
 		<section className="space-y-2">
 			<div>
 				<h3 className="font-semibold text-sm">Timing</h3>
-				<p className="text-xs text-[var(--sea-ink-soft)]">
+				<p className="text-xs text-muted-foreground">
 					What the Timer measured, against the window each segment was assigned
 					at the time.
 				</p>
@@ -761,7 +761,7 @@ function TimingRow({
 
 	return (
 		<li className="flex flex-wrap items-center gap-x-2 gap-y-1">
-			<span className="font-medium">{timing.roleName}:</span>
+			<span className="font-semibold">{timing.roleName}:</span>
 			<span className="text-muted-foreground">
 				{timing.assigneeName ?? "—"}
 				{timing.isGuest ? " (Guest)" : ""}
@@ -791,7 +791,7 @@ function TimingRow({
 			) : (
 				<>
 					<span className="tabular-nums">{clock}</span>
-					<span className="text-xs text-[var(--sea-ink-soft)]">{verdict}</span>
+					<span className="text-xs text-muted-foreground">{verdict}</span>
 					{canEdit ? (
 						<Button
 							size="xs"
@@ -835,7 +835,7 @@ function ProgramSection({
 			<ul className="space-y-1 text-sm">
 				{program.map((p) => (
 					<li key={p.slotId} className="flex flex-wrap gap-x-2">
-						<span className="font-medium">{p.roleName}:</span>
+						<span className="font-semibold">{p.roleName}:</span>
 						<span className="text-muted-foreground">
 							{p.assigneeName ?? "—"}
 							{p.isGuest ? " (Guest)" : ""}
@@ -872,7 +872,7 @@ function ActionItemsSection({ items }: { items?: MinutesActionItems }) {
 		<section className="space-y-3">
 			<div>
 				<h3 className="font-semibold text-sm">Action items</h3>
-				<p className="text-xs text-[var(--sea-ink-soft)]">
+				<p className="text-xs text-muted-foreground">
 					What the club had outstanding at this meeting. Managed under Manage
 					&rsaquo; Action items.
 				</p>
@@ -881,12 +881,12 @@ function ActionItemsSection({ items }: { items?: MinutesActionItems }) {
 				<ul className="space-y-1.5">
 					{items.open.map((i) => (
 						<li key={i.id} className="text-sm">
-							<span className="font-medium">{i.text}</span>
+							<span className="font-semibold">{i.text}</span>
 							{/* An unowned item shows NO owner run. Substituting a name here
 							    would read as an owner, and would quietly reassign a departed
 							    owner's commitment to the whole club. */}
 							{i.ownerName || i.dueDate ? (
-								<span className="text-xs text-[var(--sea-ink-soft)]">
+								<span className="text-xs text-muted-foreground">
 									{i.ownerName ? ` · ${i.ownerName}` : ""}
 									{i.dueDate ? ` · due ${formatCalendarDay(i.dueDate)}` : ""}
 								</span>
@@ -896,16 +896,18 @@ function ActionItemsSection({ items }: { items?: MinutesActionItems }) {
 					<ElidedNote total={items.openTotal} shown={items.open.length} />
 				</ul>
 			) : (
-				<p className="text-sm text-[var(--sea-ink-soft)]">
+				<p className="text-sm text-muted-foreground">
 					Nothing was outstanding.
 				</p>
 			)}
 			{items.resolved.length > 0 ? (
 				<div className="space-y-1.5">
-					<h4 className="font-medium text-sm">Closed since the last meeting</h4>
+					<h4 className="font-semibold text-sm">
+						Closed since the last meeting
+					</h4>
 					<ul className="space-y-1">
 						{items.resolved.map((i) => (
-							<li key={i.id} className="text-sm text-[var(--sea-ink-soft)]">
+							<li key={i.id} className="text-sm text-muted-foreground">
 								<span className="line-through">{i.text}</span>
 								{" · "}
 								{i.resolution === "dropped" ? "Dropped" : "Done"}
@@ -931,7 +933,7 @@ function ActionItemsSection({ items }: { items?: MinutesActionItems }) {
 function ElidedNote({ total, shown }: { total: number; shown: number }) {
 	if (total <= shown) return null;
 	return (
-		<li className="text-xs text-[var(--sea-ink-soft)]">
+		<li className="text-xs text-muted-foreground">
 			+{total - shown} more not shown
 		</li>
 	);

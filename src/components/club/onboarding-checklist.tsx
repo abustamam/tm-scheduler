@@ -58,14 +58,14 @@ export function OnboardingChecklist({
 	return (
 		<section
 			aria-label="Setup checklist"
-			className="space-y-3.5 rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-5 shadow-[0_1px_0_var(--inset-glint)_inset,0_8px_20px_rgba(23,58,64,.05)]"
+			className="space-y-3.5 rounded-2xl border border-border bg-surface-raised p-5 shadow-[0_8px_20px_rgba(23,58,64,.05)]"
 		>
 			<div className="flex items-start justify-between gap-3">
 				<div>
 					<h2 className="font-display text-lg font-semibold tracking-[-0.01em]">
 						Get your club set up
 					</h2>
-					<p className="mt-0.5 text-xs text-[var(--sea-ink-soft)]">
+					<p className="mt-0.5 text-xs text-muted-foreground">
 						{doneCount} of {items.length} done
 					</p>
 				</div>
@@ -73,7 +73,7 @@ export function OnboardingChecklist({
 					type="button"
 					onClick={handleDismiss}
 					aria-label="Dismiss setup checklist"
-					className="flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--foam)] hover:text-[var(--sea-ink)]"
+					className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-surface-soft hover:text-foreground"
 				>
 					<X className="size-4" aria-hidden />
 				</button>
@@ -84,16 +84,16 @@ export function OnboardingChecklist({
 					<li key={item.key}>
 						<Link
 							to={item.to}
-							className="group flex items-center gap-3 rounded-lg px-2.5 py-2 transition-colors hover:bg-[var(--foam)]"
+							className="group flex items-center gap-3 rounded-lg px-2.5 py-2 transition-colors hover:bg-surface-soft"
 						>
 							{item.complete ? (
 								<CheckCircle2
-									className="size-5 shrink-0 text-[var(--lagoon-deep)]"
+									className="size-5 shrink-0 text-link"
 									aria-hidden
 								/>
 							) : (
 								<Circle
-									className="size-5 shrink-0 text-[var(--sea-ink-soft)] opacity-40"
+									className="size-5 shrink-0 text-muted-foreground opacity-40"
 									aria-hidden
 								/>
 							)}
@@ -101,13 +101,13 @@ export function OnboardingChecklist({
 								<div
 									className={
 										item.complete
-											? "text-sm font-semibold text-[var(--sea-ink-soft)] line-through"
-											: "text-sm font-semibold text-[var(--sea-ink)]"
+											? "text-sm font-semibold text-muted-foreground line-through"
+											: "text-sm font-semibold text-foreground"
 									}
 								>
 									{item.label}
 								</div>
-								<div className="truncate text-xs text-[var(--sea-ink-soft)]">
+								<div className="truncate text-xs text-muted-foreground">
 									{item.description}
 								</div>
 							</div>
@@ -116,12 +116,12 @@ export function OnboardingChecklist({
 				))}
 			</ul>
 
-			<div className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-[var(--line)] px-3 py-2.5">
+			<div className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-border px-3 py-2.5">
 				<div className="min-w-0 flex-1">
-					<div className="text-sm font-semibold text-[var(--sea-ink)]">
+					<div className="text-sm font-semibold text-foreground">
 						Share your sign-up link
 					</div>
-					<div className="truncate text-xs text-[var(--sea-ink-soft)]">
+					<div className="truncate text-xs text-muted-foreground">
 						Send members straight to the sign-up sheet.
 					</div>
 				</div>

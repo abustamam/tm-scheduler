@@ -38,7 +38,7 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
 				onClick={toggle}
 				title="Toggle theme"
 				aria-label="Toggle theme"
-				className="flex size-[30px] shrink-0 items-center justify-center rounded-[9px] border border-[var(--line)] bg-[var(--surface-strong)] text-[var(--sea-ink)] transition-colors hover:bg-[var(--foam)]"
+				className="flex size-[30px] shrink-0 items-center justify-center rounded-[9px] border border-border bg-surface-raised text-foreground transition-colors hover:bg-surface-soft"
 			>
 				{isDark ? (
 					<Sun className="size-4" aria-hidden />
@@ -54,7 +54,7 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
 			type="button"
 			onClick={toggle}
 			title="Toggle theme"
-			className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-strong)] px-3 py-2 text-xs font-semibold text-[var(--sea-ink)] transition-colors hover:bg-[var(--foam)]"
+			className="flex items-center gap-2 rounded-lg border border-border bg-surface-raised px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-surface-soft"
 		>
 			{isDark ? (
 				<Sun className="size-4" aria-hidden />

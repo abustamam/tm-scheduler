@@ -30,7 +30,7 @@ import {
  */
 
 const selectClass =
-	"h-8 rounded-md border border-[var(--line)] bg-background px-2 text-sm";
+	"h-8 rounded-md border border-border bg-background px-2 text-sm";
 
 /** A calendar day, UTC, as an ISO date: no runtime-resolved locale or zone. */
 const isoDay = (d: Date | string) => new Date(d).toISOString().slice(0, 10);
@@ -231,14 +231,14 @@ export function ImportHistoryPanel({
 
 	return (
 		<section
-			className="max-w-3xl space-y-4 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4"
+			className="max-w-3xl space-y-4 rounded-xl border border-border bg-surface-raised p-4"
 			data-testid="import-history-panel"
 		>
 			<div className="space-y-1">
 				<h2 className="text-sm font-bold">Import Easy-Speak history</h2>
 				<p className="text-sm text-muted-foreground">
 					Upload the JSON bundle the browser extension exported for{" "}
-					<span className="font-medium">{clubName}</span>. Nothing is written
+					<span className="font-semibold">{clubName}</span>. Nothing is written
 					until you apply. Applying again adds nothing that is already there.
 					The uploaded bundle, with every guest's name, is kept until the club
 					is deleted.
@@ -268,12 +268,12 @@ export function ImportHistoryPanel({
 			</div>
 
 			<div className="space-y-1">
-				<label className="text-sm font-medium" htmlFor="import-contacts">
+				<label className="text-sm font-semibold" htmlFor="import-contacts">
 					Contacts (optional)
 				</label>
 				<textarea
 					id="import-contacts"
-					className="min-h-20 w-full rounded-md border border-[var(--line)] bg-background p-2 text-sm"
+					className="min-h-20 w-full rounded-md border border-border bg-background p-2 text-sm"
 					placeholder="name, email, phone (one person per line)"
 					value={contacts}
 					onChange={(e) => setContacts(e.target.value)}
@@ -329,19 +329,19 @@ export function ImportHistoryPanel({
 				<div className="space-y-4">
 					<p className="text-sm">
 						Bundle from{" "}
-						<span className="font-medium">
+						<span className="font-semibold">
 							{data.bundleClub.name}
 							{data.bundleClub.number ? ` (#${data.bundleClub.number})` : ""}
 						</span>
 						, importing into{" "}
-						<span className="font-medium">
+						<span className="font-semibold">
 							{data.club.name}
 							{data.club.number ? ` (#${data.club.number})` : ""}
 						</span>
 						.
 					</p>
 					{data.warnings.map((w) => (
-						<p key={w} className="text-sm text-amber-700">
+						<p key={w} className="text-sm text-warning-foreground">
 							{w}
 						</p>
 					))}
@@ -402,7 +402,7 @@ export function ImportHistoryPanel({
 					</p>
 					{data.contacts.warnings.length > 0 ? (
 						<ul
-							className="list-disc space-y-0.5 pl-5 text-sm text-amber-700"
+							className="list-disc space-y-0.5 pl-5 text-sm text-warning-foreground"
 							data-testid="import-contact-warnings"
 						>
 							{data.contacts.warnings.map((w) => (
@@ -612,7 +612,7 @@ function MentorsResult({
 			</dl>
 			{result.skipped.length > 0 ? (
 				<div className="space-y-1" data-testid="mentors-skipped">
-					<h4 className="text-sm font-medium">Pairs not imported</h4>
+					<h4 className="text-sm font-semibold">Pairs not imported</h4>
 					<ul className="list-disc space-y-0.5 pl-5 text-sm">
 						{result.skipped.map((p, i) => (
 							<li
@@ -641,7 +641,7 @@ function MentorsResult({
 			</dl>
 			{result.willing.skipped.length > 0 ? (
 				<div className="space-y-1" data-testid="mentors-willing-skipped">
-					<h4 className="text-sm font-medium">
+					<h4 className="text-sm font-semibold">
 						"Wants Mentee?" not imported ({result.willing.skipped.length})
 					</h4>
 					<ul className="list-disc space-y-0.5 pl-5 text-sm">
@@ -661,7 +661,7 @@ function Count({ label, n }: { label: string; n: number }) {
 	return (
 		<div className="flex justify-between gap-2">
 			<dt className="text-muted-foreground">{label}</dt>
-			<dd className="font-medium tabular-nums">{n}</dd>
+			<dd className="font-semibold tabular-nums">{n}</dd>
 		</div>
 	);
 }
@@ -693,10 +693,10 @@ function PeopleToResolve({
 					return (
 						<li
 							key={p.key}
-							className="space-y-1 rounded-md border border-[var(--line)] p-2 text-sm"
+							className="space-y-1 rounded-md border border-border p-2 text-sm"
 							data-testid={`resolve-${p.key}`}
 						>
-							<div className="font-medium">
+							<div className="font-semibold">
 								{p.name}{" "}
 								<span className="font-normal text-muted-foreground">
 									{p.status === "ambiguous"
@@ -854,14 +854,12 @@ function ListOnlyPeople({ people }: { people: PreviewPeople }) {
 
 function ReportView({ report }: { report: ImportReport }) {
 	return (
-		<div className="space-y-3 border-t border-[var(--line)] pt-3">
+		<div className="space-y-3 border-t border-border pt-3">
 			<h3 className="text-sm font-bold">
 				Reconciliation report{" "}
 				<span
 					className={
-						report.reconciled
-							? "text-emerald-700"
-							: "font-bold text-destructive"
+						report.reconciled ? "text-success" : "font-bold text-destructive"
 					}
 				>
 					{report.reconciled ? "every count matches" : "differences found"}
@@ -870,10 +868,10 @@ function ReportView({ report }: { report: ImportReport }) {
 			<table className="w-full text-sm">
 				<thead>
 					<tr className="text-left text-muted-foreground">
-						<th className="font-medium">Count</th>
-						<th className="font-medium">Bundle</th>
-						<th className="font-medium">GavelUp</th>
-						<th className="font-medium">Missing source ids</th>
+						<th className="font-semibold">Count</th>
+						<th className="font-semibold">Bundle</th>
+						<th className="font-semibold">GavelUp</th>
+						<th className="font-semibold">Missing source ids</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -889,7 +887,7 @@ function ReportView({ report }: { report: ImportReport }) {
 			</table>
 			{report.meetings.failed.length > 0 ? (
 				<div className="text-sm" role="alert">
-					<p className="font-medium text-destructive">
+					<p className="font-semibold text-destructive">
 						{report.meetings.failed.length} meeting(s) failed and were left out
 						whole:
 					</p>
@@ -903,7 +901,7 @@ function ReportView({ report }: { report: ImportReport }) {
 				</div>
 			) : null}
 			<div className="text-sm">
-				<p className="font-medium">Intentionally not imported</p>
+				<p className="font-semibold">Intentionally not imported</p>
 				<ul className="list-disc pl-5">
 					{report.notImported.map((n) => (
 						<li key={n.what}>
@@ -914,7 +912,7 @@ function ReportView({ report }: { report: ImportReport }) {
 			</div>
 			{report.skippedPeople.length > 0 ? (
 				<div className="text-sm">
-					<p className="font-medium">People you skipped</p>
+					<p className="font-semibold">People you skipped</p>
 					<ul className="list-disc pl-5">
 						{report.skippedPeople.map((s) => (
 							<li key={s.key}>
@@ -936,7 +934,7 @@ function ReportView({ report }: { report: ImportReport }) {
 			</p>
 			{report.contactNotes && report.contactNotes.length > 0 ? (
 				<div className="text-sm" data-testid="report-contact-notes">
-					<p className="font-medium">Contacts left out</p>
+					<p className="font-semibold">Contacts left out</p>
 					<ul className="list-disc pl-5">
 						{report.contactNotes.map((n) => (
 							<li key={n}>{n}</li>

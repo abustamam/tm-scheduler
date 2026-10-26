@@ -127,9 +127,9 @@ function ClubShell() {
 	// Anonymous visitor → today's lightweight header + name-pick, unchanged.
 	return (
 		<div className="flex min-h-svh w-full flex-col bg-background">
-			<header className="flex items-center gap-3 border-b border-[var(--line)] px-4 py-3 md:px-6">
+			<header className="flex items-center gap-3 border-b border-border px-4 py-3 md:px-6">
 				<BrandMark size="sm" />
-				<span className="min-w-0 flex-1 truncate text-right text-[11px] font-semibold tracking-[0.04em] text-muted-foreground uppercase">
+				<span className="min-w-0 flex-1 truncate text-right text-xs font-semibold tracking-[0.04em] text-muted-foreground uppercase">
 					{clubNumber ? `${clubName} · Club ${clubNumber}` : clubName}
 				</span>
 				{/* Same per-browser preference as the authed shell — shared

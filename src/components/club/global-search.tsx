@@ -146,19 +146,19 @@ export function GlobalSearch({
 						setQuery("");
 					}
 				}}
-				className="h-9 rounded-lg border-[var(--line)] bg-[var(--surface-strong)]"
+				className="h-9 rounded-lg border-border bg-surface-raised"
 			/>
 			{open ? (
 				<div
 					id={listId}
 					className={
 						variant === "popover"
-							? "absolute inset-x-0 top-full z-50 mt-1.5 max-h-[min(420px,60vh)] overflow-y-auto rounded-lg border border-[var(--line)] bg-[var(--surface-strong)] p-1 shadow-lg backdrop-blur-[6px]"
-							: "mt-1.5 max-h-[45svh] overflow-y-auto rounded-lg border border-[var(--line)] bg-[var(--surface-strong)] p-1"
+							? "absolute inset-x-0 top-full z-50 mt-1.5 max-h-[min(420px,60vh)] overflow-y-auto rounded-lg border border-border bg-surface-raised p-1 shadow-lg backdrop-blur-[6px]"
+							: "mt-1.5 max-h-[45svh] overflow-y-auto rounded-lg border border-border bg-surface-raised p-1"
 					}
 				>
 					{results.members.length === 0 && results.pages.length === 0 ? (
-						<div className="px-2.5 py-2 text-xs text-[var(--sea-ink-soft)]">
+						<div className="px-2.5 py-2 text-xs text-muted-foreground">
 							No matches for “{query.trim()}”
 						</div>
 					) : (
@@ -177,7 +177,7 @@ export function GlobalSearch({
 														}),
 													)
 												}
-												className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[var(--foam)]"
+												className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-surface-soft"
 											>
 												<MemberAvatar
 													tone={toneFromSeed(m.id)}
@@ -185,11 +185,11 @@ export function GlobalSearch({
 													size={28}
 												/>
 												<span className="min-w-0 leading-tight">
-													<span className="block truncate text-sm font-semibold text-[var(--sea-ink)]">
+													<span className="block truncate text-sm font-semibold text-foreground">
 														{m.name}
 													</span>
 													{m.officerPositions.length > 0 ? (
-														<span className="block truncate text-xs text-[var(--sea-ink-soft)]">
+														<span className="block truncate text-xs text-muted-foreground">
 															{m.officerPositions
 																.map(officerPositionLabel)
 																.join(", ")}
@@ -208,7 +208,7 @@ export function GlobalSearch({
 											<button
 												type="button"
 												onClick={() => choose(() => navigate({ to: p.to }))}
-												className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-sm font-medium text-[var(--sea-ink)] transition-colors hover:bg-[var(--foam)]"
+												className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-sm font-semibold text-foreground transition-colors hover:bg-surface-soft"
 											>
 												{p.label}
 											</button>
@@ -233,7 +233,7 @@ function ResultGroup({
 }) {
 	return (
 		<>
-			<div className="px-2.5 pt-2 pb-0.5 text-xs font-extrabold tracking-[0.12em] text-[var(--sea-ink-soft)] uppercase opacity-70 first:pt-1">
+			<div className="px-2.5 pt-2 pb-0.5 text-xs font-bold tracking-[0.12em] text-muted-foreground uppercase opacity-70 first:pt-1">
 				{label}
 			</div>
 			<ul aria-label={label}>{children}</ul>

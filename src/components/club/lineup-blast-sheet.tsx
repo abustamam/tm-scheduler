@@ -142,7 +142,7 @@ export function LineupBlastSheet({
 									>
 										{/* The builder's own parts, styled by state: the words
 										    are the draft's, never re-decided here. */}
-										<span className="font-medium">{line.label}</span>
+										<span className="font-semibold">{line.label}</span>
 										{line.name ? ` – ${line.name} –` : " –"}
 										{line.mark ? (
 											<>
@@ -150,8 +150,8 @@ export function LineupBlastSheet({
 												<span
 													className={
 														line.state === "open"
-															? "text-red-700 dark:text-red-400"
-															: "rounded-sm bg-yellow-200 px-1 text-yellow-950"
+															? "text-destructive"
+															: "rounded-sm bg-warning-soft px-1 text-foreground"
 													}
 												>
 													{line.mark}
@@ -162,9 +162,7 @@ export function LineupBlastSheet({
 								))}
 							</ul>
 							{blast.summary ? (
-								<p className="text-red-700 text-sm dark:text-red-400">
-									{blast.summary}
-								</p>
+								<p className="text-destructive text-sm">{blast.summary}</p>
 							) : null}
 							<div className="space-y-1">
 								<Label htmlFor="lineup-text">Message</Label>

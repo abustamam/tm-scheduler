@@ -118,7 +118,7 @@ export function MySpeechRequests({
 							className="flex flex-wrap items-start justify-between gap-2 rounded-lg border p-3 text-sm"
 						>
 							<div className="min-w-0 space-y-0.5">
-								<div className="font-medium">
+								<div className="font-semibold">
 									{r.title ?? (
 										<span className="text-muted-foreground">
 											{UNTITLED_REQUEST_LABEL}
@@ -132,7 +132,7 @@ export function MySpeechRequests({
 								) : null}
 								{r.backInQueue ? (
 									<div
-										className="text-amber-700 dark:text-amber-400"
+										className="text-warning-foreground"
 										data-testid="request-back-in-queue"
 									>
 										{BACK_IN_QUEUE_NOTICE}
@@ -234,7 +234,7 @@ function RequestForm({
 	return (
 		<form onSubmit={submit} className="space-y-2 rounded-lg border p-3">
 			<label htmlFor={`${uid}-title`} className="block text-sm">
-				<span className="font-medium">Speech title</span>
+				<span className="font-semibold">Speech title</span>
 				<Input
 					id={`${uid}-title`}
 					value={title}
@@ -244,7 +244,7 @@ function RequestForm({
 			</label>
 			<div className="grid gap-2 sm:grid-cols-2">
 				<label htmlFor={`${uid}-path`} className="block text-sm">
-					<span className="font-medium">Path</span>
+					<span className="font-semibold">Path</span>
 					<Input
 						id={`${uid}-path`}
 						value={path}
@@ -253,7 +253,7 @@ function RequestForm({
 					/>
 				</label>
 				<label htmlFor={`${uid}-project`} className="block text-sm">
-					<span className="font-medium">Project</span>
+					<span className="font-semibold">Project</span>
 					<Input
 						id={`${uid}-project`}
 						value={projectName}
@@ -263,7 +263,7 @@ function RequestForm({
 				</label>
 			</div>
 			<label htmlFor={`${uid}-intro`} className="block text-sm">
-				<span className="font-medium">Introduction</span>
+				<span className="font-semibold">Introduction</span>
 				<Textarea
 					id={`${uid}-intro`}
 					value={introduction}
@@ -272,7 +272,7 @@ function RequestForm({
 				/>
 			</label>
 			<fieldset className="space-y-1">
-				<legend className="text-sm font-medium">
+				<legend className="text-sm font-semibold">
 					Preferred dates (up to {MAX_PREFERRED_DATES})
 				</legend>
 				<div className="flex flex-wrap gap-2">

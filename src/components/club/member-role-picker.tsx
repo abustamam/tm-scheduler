@@ -127,11 +127,9 @@ export function MemberRolePicker({
 		<Popover open={open} onOpenChange={setOpen}>
 			<PopoverTrigger asChild>{children}</PopoverTrigger>
 			<PopoverContent align="center" className="w-72 p-0">
-				<div className="border-b border-[var(--line)] px-3 py-2">
+				<div className="border-b border-border px-3 py-2">
 					<div className="text-sm font-semibold">{targetName}</div>
-					<div className="text-xs text-[var(--sea-ink-soft)]">
-						{meetingDate}
-					</div>
+					<div className="text-xs text-muted-foreground">{meetingDate}</div>
 				</div>
 				<div className="max-h-72 overflow-y-auto py-1">
 					{options.map((o) => {
@@ -144,15 +142,15 @@ export function MemberRolePicker({
 								disabled={busy !== null || locked}
 								onClick={() => act(o)}
 								className={cn(
-									"flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-[var(--foam)] disabled:opacity-50",
+									"flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-surface-soft disabled:opacity-50",
 								)}
 							>
 								<span
 									className={cn(
 										"flex size-4 shrink-0 items-center justify-center rounded-[4px] border",
 										o.state === "mine"
-											? "border-[var(--palm)] bg-[var(--palm)] text-white"
-											: "border-[var(--line)]",
+											? "border-success bg-success text-white"
+											: "border-border",
 									)}
 								>
 									{busy === o.slotId ? (
@@ -163,18 +161,18 @@ export function MemberRolePicker({
 								</span>
 								<span className="shrink-0">{o.label}</span>
 								{o.state === "other" ? (
-									<span className="min-w-0 flex-1 truncate text-right text-xs text-[var(--sea-ink-soft)]">
+									<span className="min-w-0 flex-1 truncate text-right text-xs text-muted-foreground">
 										{o.holderName}
 									</span>
 								) : (
 									<span className="flex-1" />
 								)}
 								{o.state === "other" && canReassign ? (
-									<span className="shrink-0 text-[10px] font-bold tracking-[0.04em] text-[var(--warning-foreground)] uppercase">
+									<span className="shrink-0 text-xs font-bold tracking-[0.04em] text-warning-foreground uppercase">
 										bump
 									</span>
 								) : action === "release" ? (
-									<X className="size-3.5 shrink-0 text-[var(--sea-ink-soft)]" />
+									<X className="size-3.5 shrink-0 text-muted-foreground" />
 								) : null}
 							</button>
 						);
@@ -185,7 +183,7 @@ export function MemberRolePicker({
 				    DECLINE half stays — an asserted caller may still record a first
 				    answer. */}
 				{declined && !canMarkAvailable ? null : (
-					<div className="border-t border-[var(--line)] p-1">
+					<div className="border-t border-border p-1">
 						<button
 							type="button"
 							disabled={busy !== null}
@@ -194,7 +192,7 @@ export function MemberRolePicker({
 								if (declined) onMarkAvailable();
 								else onMarkUnavailable();
 							}}
-							className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--foam)]"
+							className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-surface-soft"
 						>
 							<UserMinus className="size-4 shrink-0" aria-hidden />
 							{declined

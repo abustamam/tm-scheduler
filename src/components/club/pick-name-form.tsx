@@ -76,7 +76,7 @@ export function PickNameForm({
 								size={38}
 							/>
 							<span className="flex min-w-0 flex-col">
-								<span className="truncate font-medium text-foreground">
+								<span className="truncate font-semibold text-foreground">
 									{m.name}
 								</span>
 								{m.officerPositions.length ? (

@@ -85,7 +85,7 @@ const selectClass =
 	"flex h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
 
 const cardClass =
-	"space-y-4 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4 sm:p-5";
+	"space-y-4 rounded-xl border border-border bg-surface-raised p-4 sm:p-5";
 
 function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : "Something went wrong.";
@@ -120,7 +120,7 @@ export function OfficialRequirementsNote() {
 	return (
 		<p
 			data-testid="charter-official-note"
-			className="rounded-lg border border-[var(--line)] bg-[var(--sand)] px-3 py-2 text-sm text-[var(--sea-ink)]"
+			className="rounded-lg border border-border bg-surface-muted px-3 py-2 text-sm text-foreground"
 		>
 			{OFFICIAL_REQUIREMENTS_NOTE}{" "}
 			<a
@@ -154,7 +154,7 @@ export function CharterDashboard({
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					{CHARTER_DASHBOARD_COPY.title}
 				</h1>
-				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+				<p className="mt-1 text-sm text-muted-foreground">
 					{dashboard
 						? CHARTER_DASHBOARD_COPY.intro
 						: CHARTER_DASHBOARD_COPY.chartered}
@@ -203,7 +203,7 @@ export function CharterProgress({
 		<div className="space-y-1.5">
 			<div
 				data-testid="charter-progress-text"
-				className="text-2xl font-semibold text-[var(--sea-ink)]"
+				className="text-2xl font-semibold text-foreground"
 			>
 				{CHARTER_DASHBOARD_COPY.progress(paid, needed)}
 			</div>
@@ -213,10 +213,10 @@ export function CharterProgress({
 				aria-valuemax={needed}
 				aria-valuenow={paid}
 				aria-label={CHARTER_DASHBOARD_COPY.target}
-				className="h-2.5 w-full overflow-hidden rounded-full bg-[var(--line)]"
+				className="h-2.5 w-full overflow-hidden rounded-full bg-border"
 			>
 				<div
-					className="h-full rounded-full bg-[var(--lagoon-deep)]"
+					className="h-full rounded-full bg-link"
 					style={{ width: `${pct}%` }}
 				/>
 			</div>
@@ -354,7 +354,7 @@ function ChecklistSection({
 				>
 					{CHARTER_DASHBOARD_COPY.checklist}
 				</h2>
-				<p className="text-sm text-[var(--sea-ink-soft)]">
+				<p className="text-sm text-muted-foreground">
 					{CHARTER_DASHBOARD_COPY.checklistNote}
 				</p>
 			</div>
@@ -362,7 +362,7 @@ function ChecklistSection({
 				<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
 					<p
 						data-testid="charter-not-started"
-						className="flex-1 text-sm text-[var(--sea-ink-soft)]"
+						className="flex-1 text-sm text-muted-foreground"
 					>
 						{CHARTER_DASHBOARD_COPY.notStarted}
 					</p>
@@ -457,7 +457,7 @@ function StepRow({
 	return (
 		<li
 			data-testid="charter-step"
-			className="flex flex-col gap-2 rounded-lg border border-[var(--line)] p-3 sm:flex-row sm:items-end"
+			className="flex flex-col gap-2 rounded-lg border border-border p-3 sm:flex-row sm:items-end"
 		>
 			<div className="min-w-0 flex-1 space-y-1">
 				<Label htmlFor={labelId} className="sr-only">
@@ -591,7 +591,7 @@ function HelpersSection({
 				{CHARTER_DASHBOARD_COPY.helpers}
 			</h2>
 			{dashboard.helpers.length === 0 ? (
-				<p className="text-sm text-[var(--sea-ink-soft)]">
+				<p className="text-sm text-muted-foreground">
 					{CHARTER_DASHBOARD_COPY.noHelpers}
 				</p>
 			) : (
@@ -600,16 +600,16 @@ function HelpersSection({
 						<li
 							key={h.id}
 							data-testid="charter-helper"
-							className="flex items-start gap-3 rounded-lg border border-[var(--line)] p-3"
+							className="flex items-start gap-3 rounded-lg border border-border p-3"
 						>
 							<div className="min-w-0 flex-1 text-sm">
-								<div className="font-semibold text-[var(--sea-ink)]">
+								<div className="font-semibold text-foreground">
 									{h.name}{" "}
-									<span className="text-xs font-bold tracking-[0.04em] text-[var(--sea-ink-soft)] uppercase">
+									<span className="text-xs font-bold tracking-[0.04em] text-muted-foreground uppercase">
 										{CHARTER_HELPER_ROLE_LABEL[h.role]}
 									</span>
 								</div>
-								<div className="break-words text-[var(--sea-ink-soft)]">
+								<div className="break-words text-muted-foreground">
 									{[
 										h.personId ? "On your roster" : h.homeClub,
 										h.email,

@@ -77,7 +77,7 @@ export function MeetingCancellationSheet({
 						>
 							{notice.lines.map((line) => (
 								<li key={line.roleName}>
-									<span className="font-medium">{line.roleName}</span>
+									<span className="font-semibold">{line.roleName}</span>
 									{`: ${line.names.join(", ")}`}
 								</li>
 							))}

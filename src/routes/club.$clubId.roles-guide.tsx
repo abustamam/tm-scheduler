@@ -82,10 +82,10 @@ function RolesGuide() {
 			) : (
 				byCategory.map((group) => (
 					<section key={group.category} className="space-y-2">
-						<h2 className="text-[11px] font-semibold tracking-[0.04em] text-muted-foreground uppercase">
+						<h2 className="text-xs font-semibold tracking-[0.04em] text-muted-foreground uppercase">
 							{group.label}
 						</h2>
-						<ul className="divide-y divide-[var(--line)] overflow-hidden rounded-xl border border-[var(--line)] bg-card">
+						<ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
 							{group.roles.map((r) => (
 								<RoleGuideItem key={r.id} role={r} />
 							))}
@@ -102,7 +102,7 @@ function RolesGuide() {
 				to="/club/$clubId/roles"
 				params={{ clubId }}
 				reloadDocument
-				className="inline-flex items-center gap-1.5 text-sm font-medium text-primary no-underline hover:underline"
+				className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary no-underline hover:underline"
 			>
 				<Printer className="size-3.5" aria-hidden />
 				Printable version

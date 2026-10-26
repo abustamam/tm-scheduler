@@ -152,9 +152,7 @@ function EditorCard({
 				</h1>
 				<p className="text-muted-foreground text-sm">{blurb}</p>
 			</header>
-			<div className="rounded-lg border border-[var(--line)] p-4">
-				{children}
-			</div>
+			<div className="rounded-lg border border-border p-4">{children}</div>
 			<Link
 				to={backHref}
 				className="inline-block text-sm text-primary hover:underline"
