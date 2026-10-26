@@ -24,8 +24,8 @@ that area (`commands.md` before a migration, a browser-backed test or a mutation
   harness (`docs/agents/commands.md`). Two traps: a worktree is assigned no dev port and its
   `.env.local` pins `BETTER_AUTH_URL` to :3000, so pick a free port P and run
   `BETTER_AUTH_URL=http://localhost:P bun run dev -- --port P --strictPort` (the process env
-  wins over `.env.local`; otherwise the magic link points at another worktree's server); an `_authed` page needs a session, and with no email provider
-  the magic link prints to the dev-server console. The per-wave post-deploy `/qa-only` stays; this
+  wins over `.env.local`; otherwise the magic link points at another worktree's server);
+  an `_authed` page needs a session, and with no email provider the magic link prints to the dev-server console. The per-wave post-deploy `/qa-only` stays; this
   is an earlier look.
 - A migration whose SQL changes data (`UPDATE`, `DELETE FROM`, `INSERT INTO`, `TRUNCATE`) needs a
   `## Prod check` section in the PR body: the read-only SQL to run after deploy and the result
