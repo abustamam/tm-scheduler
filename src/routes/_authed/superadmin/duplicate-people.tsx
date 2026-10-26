@@ -53,7 +53,7 @@ function DuplicatePeopleConsole() {
 			<div className="space-y-1">
 				<Link
 					to="/superadmin"
-					className="inline-flex items-center gap-1 text-sm text-[var(--sea-ink-soft)] hover:text-[var(--sea-ink)]"
+					className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 				>
 					<ArrowLeft className="size-4" /> All clubs
 				</Link>
@@ -98,8 +98,8 @@ function LinkBadge({ linked }: { linked: boolean }) {
 		<span
 			className={
 				linked
-					? "inline-block rounded-full bg-[var(--foam)] px-2 py-0.5 text-xs font-semibold text-[var(--palm)]"
-					: "inline-block rounded-full bg-[var(--sand)] px-2 py-0.5 text-xs font-semibold text-[var(--sea-ink-soft)]"
+					? "inline-block rounded-full bg-surface-soft px-2 py-0.5 text-xs font-semibold text-success"
+					: "inline-block rounded-full bg-surface-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground"
 			}
 		>
 			{linked ? "Linked" : "Unclaimed"}
@@ -112,7 +112,7 @@ function LinkBadge({ linked }: { linked: boolean }) {
 function GuestBadge({ guestOnly }: { guestOnly: boolean }) {
 	if (!guestOnly) return null;
 	return (
-		<span className="inline-block rounded-full bg-[var(--sand)] px-2 py-0.5 text-xs font-semibold text-[var(--sea-ink-soft)]">
+		<span className="inline-block rounded-full bg-surface-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground">
 			Guest
 		</span>
 	);
@@ -136,10 +136,10 @@ function DuplicateGroupCard({
 	const keeper = sorted.find((p) => p.id === keeperId) ?? sorted[0];
 
 	return (
-		<div className="space-y-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4">
+		<div className="space-y-3 rounded-xl border border-border bg-surface-raised p-4">
 			<div className="flex items-center justify-between gap-2">
 				<h3 className="text-sm font-bold">{group.email}</h3>
-				<span className="text-xs text-[var(--sea-ink-soft)]">
+				<span className="text-xs text-muted-foreground">
 					{group.people.length} people
 				</span>
 			</div>
@@ -150,8 +150,8 @@ function DuplicateGroupCard({
 						className={cn(
 							"flex flex-wrap items-start gap-3 rounded-lg border p-3 text-sm",
 							person.id === keeperId
-								? "border-[var(--palm)] bg-[var(--foam)]"
-								: "border-[var(--line)]",
+								? "border-success bg-surface-soft"
+								: "border-border",
 						)}
 					>
 						<input
@@ -167,18 +167,18 @@ function DuplicateGroupCard({
 							className="flex-1 cursor-pointer space-y-0.5"
 						>
 							<span className="flex flex-wrap items-center gap-2">
-								<span className="font-medium">{person.name}</span>
+								<span className="font-semibold">{person.name}</span>
 								<LinkBadge linked={person.linked} />
 								<GuestBadge guestOnly={person.guestOnly} />
 							</span>
-							<span className="block text-[var(--sea-ink-soft)]">
+							<span className="block text-muted-foreground">
 								{person.email ?? "no email"} ·{" "}
 								{person.clubs.length > 0 ? person.clubs.join(", ") : "no club"}{" "}
 								· {person.historyCount} in history
 							</span>
 						</label>
 						{person.id === keeperId ? (
-							<span className="shrink-0 self-center rounded-full bg-[var(--sand)] px-2.5 py-1 text-xs font-semibold text-[var(--sea-ink-soft)] uppercase tracking-[0.04em]">
+							<span className="shrink-0 self-center rounded-full bg-surface-muted px-2.5 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-[0.04em]">
 								Keeper
 							</span>
 						) : (
@@ -227,7 +227,7 @@ function ManualSearchSection({ onMerged }: { onMerged: () => void }) {
 	const keeper = results.find((p) => p.id === keeperId);
 
 	return (
-		<div className="space-y-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4">
+		<div className="space-y-3 rounded-xl border border-border bg-surface-raised p-4">
 			<h2 className="text-sm font-bold">Search for a merge candidate</h2>
 			<p className="text-sm text-muted-foreground">
 				The escape hatch for duplicates that don't share an email — a typo'd
@@ -260,7 +260,7 @@ function ManualSearchSection({ onMerged }: { onMerged: () => void }) {
 				</Button>
 			</form>
 			{trimmed.length > 0 && trimmed.length < 2 ? (
-				<p className="text-xs text-[var(--sea-ink-soft)]">
+				<p className="text-xs text-muted-foreground">
 					Keep typing — 2+ characters to search.
 				</p>
 			) : null}
@@ -273,8 +273,8 @@ function ManualSearchSection({ onMerged }: { onMerged: () => void }) {
 							className={cn(
 								"flex flex-wrap items-start gap-3 rounded-lg border p-3 text-sm",
 								person.id === keeperId
-									? "border-[var(--palm)] bg-[var(--foam)]"
-									: "border-[var(--line)]",
+									? "border-success bg-surface-soft"
+									: "border-border",
 							)}
 						>
 							<input
@@ -290,11 +290,11 @@ function ManualSearchSection({ onMerged }: { onMerged: () => void }) {
 								className="flex-1 cursor-pointer space-y-0.5"
 							>
 								<span className="flex flex-wrap items-center gap-2">
-									<span className="font-medium">{person.name}</span>
+									<span className="font-semibold">{person.name}</span>
 									<LinkBadge linked={person.linked} />
 									<GuestBadge guestOnly={person.guestOnly} />
 								</span>
-								<span className="block text-[var(--sea-ink-soft)]">
+								<span className="block text-muted-foreground">
 									{person.email ?? "no email"} ·{" "}
 									{person.clubs.length > 0
 										? person.clubs.join(", ")
@@ -303,7 +303,7 @@ function ManualSearchSection({ onMerged }: { onMerged: () => void }) {
 								</span>
 							</label>
 							{person.id === keeperId ? (
-								<span className="shrink-0 self-center rounded-full bg-[var(--sand)] px-2.5 py-1 text-xs font-semibold text-[var(--sea-ink-soft)] uppercase tracking-[0.04em]">
+								<span className="shrink-0 self-center rounded-full bg-surface-muted px-2.5 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-[0.04em]">
 									Keeper
 								</span>
 							) : keeperId != null ? (
@@ -418,9 +418,9 @@ function MergeConfirm({
 						<Loader2 className="size-4 animate-spin" /> Loading preview…
 					</p>
 				) : error ? (
-					<p className="text-sm text-[var(--danger-strong,#b91c1c)]">{error}</p>
+					<p className="text-sm text-destructive">{error}</p>
 				) : preview?.block ? (
-					<p className="rounded-lg bg-[var(--danger,#dc2626)]/10 p-3 text-sm text-[var(--danger-strong,#b91c1c)]">
+					<p className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
 						{preview.block}
 					</p>
 				) : preview ? (

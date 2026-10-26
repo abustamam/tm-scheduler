@@ -82,13 +82,13 @@ function SuperadminConsole() {
 					<div className="flex items-center gap-4">
 						<Link
 							to="/superadmin/areas"
-							className="text-sm text-[var(--palm)] underline-offset-2 hover:underline"
+							className="text-sm text-success underline-offset-2 hover:underline"
 						>
 							Areas →
 						</Link>
 						<Link
 							to="/superadmin/duplicate-people"
-							className="text-sm text-[var(--palm)] underline-offset-2 hover:underline"
+							className="text-sm text-success underline-offset-2 hover:underline"
 						>
 							Duplicate people →
 						</Link>
@@ -97,10 +97,10 @@ function SuperadminConsole() {
 				{clubs.length === 0 ? (
 					<p className="text-sm text-muted-foreground">No clubs yet.</p>
 				) : (
-					<div className="overflow-x-auto rounded-xl border border-[var(--line)]">
+					<div className="overflow-x-auto rounded-xl border border-border">
 						<table className="w-full text-sm">
 							<thead>
-								<tr className="border-b border-[var(--line)] bg-[var(--surface-strong)] text-left text-xs font-semibold text-[var(--sea-ink-soft)]">
+								<tr className="border-b border-border bg-surface-raised text-left text-xs font-semibold text-muted-foreground">
 									<th className="px-4 py-2.5">Club</th>
 									<th className="px-4 py-2.5">Number</th>
 									<th className="px-4 py-2.5">Time zone</th>
@@ -113,28 +113,28 @@ function SuperadminConsole() {
 								{clubs.map((club) => (
 									<tr
 										key={club.clubId}
-										className="border-b border-[var(--line)] last:border-0"
+										className="border-b border-border last:border-0"
 									>
-										<td className="px-4 py-2.5 font-medium">
+										<td className="px-4 py-2.5 font-semibold">
 											<Link
 												to="/superadmin/$clubId"
 												params={{ clubId: club.clubId }}
-												className="text-[var(--palm)] underline-offset-2 hover:underline"
+												className="text-success underline-offset-2 hover:underline"
 											>
 												{club.name}
 											</Link>
 											{club.charterStatus === "chartering" ? (
-												<span className="ml-2 inline-block rounded-full bg-[var(--foam)] px-2 py-0.5 text-xs font-semibold text-[var(--palm)] uppercase tracking-[0.04em]">
+												<span className="ml-2 inline-block rounded-full bg-surface-soft px-2 py-0.5 text-xs font-semibold text-success uppercase tracking-[0.04em]">
 													{CHARTER_STATUS_LABEL.chartering}
 												</span>
 											) : null}
 											{club.isDemo ? (
-												<span className="ml-2 inline-block rounded-full bg-[var(--sand)] px-2 py-0.5 text-xs font-semibold text-[var(--sea-ink-soft)] uppercase tracking-[0.04em]">
+												<span className="ml-2 inline-block rounded-full bg-surface-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground uppercase tracking-[0.04em]">
 													Demo
 												</span>
 											) : null}
 											{club.archivedAt ? (
-												<span className="ml-2 inline-block rounded-full bg-[var(--sand)] px-2 py-0.5 text-xs font-semibold text-[var(--sea-ink-soft)] uppercase tracking-[0.04em]">
+												<span className="ml-2 inline-block rounded-full bg-surface-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground uppercase tracking-[0.04em]">
 													Archived
 												</span>
 											) : null}
@@ -142,7 +142,7 @@ function SuperadminConsole() {
 										<td className="px-4 py-2.5 tabular-nums">
 											{club.clubNumber ?? "—"}
 										</td>
-										<td className="px-4 py-2.5 whitespace-nowrap text-[var(--sea-ink-soft)]">
+										<td className="px-4 py-2.5 whitespace-nowrap text-muted-foreground">
 											{club.timezone}
 										</td>
 										<td className="px-4 py-2.5 tabular-nums">
@@ -153,7 +153,7 @@ function SuperadminConsole() {
 												<span>
 													{club.firstAdmin.name}
 													{club.firstAdmin.email ? (
-														<span className="text-[var(--sea-ink-soft)]">
+														<span className="text-muted-foreground">
 															{" "}
 															· {club.firstAdmin.email}
 														</span>
@@ -161,10 +161,10 @@ function SuperadminConsole() {
 													<LinkBadge linked={club.firstAdmin.linked} />
 												</span>
 											) : (
-												<span className="text-[var(--sea-ink-soft)]">None</span>
+												<span className="text-muted-foreground">None</span>
 											)}
 										</td>
-										<td className="px-4 py-2.5 whitespace-nowrap text-[var(--sea-ink-soft)]">
+										<td className="px-4 py-2.5 whitespace-nowrap text-muted-foreground">
 											{dateFmt.format(new Date(club.createdAt))}
 										</td>
 									</tr>
@@ -215,7 +215,7 @@ function DemoClubCard({
 	return (
 		<section
 			aria-label="Demo club"
-			className="space-y-2 rounded-xl border border-dashed border-[var(--line)] bg-[var(--foam)] p-4"
+			className="space-y-2 rounded-xl border border-dashed border-border bg-surface-soft p-4"
 		>
 			<h2 className="text-sm font-bold">Demo club</h2>
 			<p className="text-sm text-muted-foreground">
@@ -247,8 +247,8 @@ function LinkBadge({ linked }: { linked: boolean }) {
 		<span
 			className={
 				linked
-					? "inline-block rounded-full bg-[var(--foam)] px-2 py-0.5 text-xs font-semibold text-[var(--palm)]"
-					: "inline-block rounded-full bg-[var(--sand)] px-2 py-0.5 text-xs font-semibold text-[var(--sea-ink-soft)]"
+					? "inline-block rounded-full bg-surface-soft px-2 py-0.5 text-xs font-semibold text-success"
+					: "inline-block rounded-full bg-surface-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground"
 			}
 		>
 			{linked ? "Linked" : "Unclaimed"}
@@ -327,16 +327,16 @@ function CreateClubForm({
 	return (
 		<form
 			onSubmit={onSubmit}
-			className="space-y-3 rounded-xl border border-dashed border-[var(--line)] bg-[var(--foam)] p-4"
+			className="space-y-3 rounded-xl border border-dashed border-border bg-surface-soft p-4"
 		>
 			<h2 className="text-sm font-bold">Create a club</h2>
 			<fieldset className="space-y-1.5">
-				<legend className="text-sm font-medium">Charter status</legend>
+				<legend className="text-sm font-semibold">Charter status</legend>
 				<div className="flex flex-wrap gap-4">
 					{CHARTER_STATUSES.map((status) => (
 						<label
 							key={status}
-							className="flex items-center gap-2 text-sm font-medium"
+							className="flex items-center gap-2 text-sm font-semibold"
 						>
 							<input
 								type="radio"

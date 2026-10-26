@@ -123,7 +123,7 @@ function RecurringSchedule() {
 			</div>
 
 			<div className="max-w-xl space-y-4">
-				<label className="flex items-center gap-2 text-sm font-medium">
+				<label className="flex items-center gap-2 text-sm font-semibold">
 					<input
 						type="checkbox"
 						checked={enabled}

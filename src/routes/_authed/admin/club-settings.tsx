@@ -428,7 +428,7 @@ function DemoResetCard({ clubId }: { clubId: string }) {
 	return (
 		<section
 			aria-labelledby="demo-reset-heading"
-			className="space-y-3 rounded-xl border border-dashed border-[var(--line)] bg-[var(--foam)] p-4"
+			className="space-y-3 rounded-xl border border-dashed border-border bg-surface-soft p-4"
 		>
 			<h2 id="demo-reset-heading" className="text-sm font-bold">
 				Demo club
@@ -820,7 +820,7 @@ function ClubSettings() {
 
 			<form onSubmit={onSaveAgenda} className="max-w-xl space-y-4">
 				<div className="space-y-2">
-					<label className="flex items-center gap-2 text-sm font-medium">
+					<label className="flex items-center gap-2 text-sm font-semibold">
 						<input
 							type="checkbox"
 							checked={geIntroduces}
@@ -841,7 +841,7 @@ function ClubSettings() {
 							<Link
 								to="/admin/agendas"
 								search={{ club: adminClub.clubId }}
-								className="font-medium underline"
+								className="font-semibold underline"
 							>
 								Go to Agendas
 							</Link>
@@ -855,8 +855,8 @@ function ClubSettings() {
 						their reports near the end.
 					</p>
 				</div>
-				<div className="space-y-2 border-t border-[var(--line)] pt-4">
-					<label className="flex items-center gap-2 text-sm font-medium">
+				<div className="space-y-2 border-t border-border pt-4">
+					<label className="flex items-center gap-2 text-sm font-semibold">
 						<input
 							type="checkbox"
 							checked={digitalVoting}
@@ -871,8 +871,8 @@ function ClubSettings() {
 						off for a single meeting from that meeting's console.
 					</p>
 				</div>
-				<fieldset className="space-y-2 border-t border-[var(--line)] pt-4">
-					<legend className="float-left w-full text-sm font-medium">
+				<fieldset className="space-y-2 border-t border-border pt-4">
+					<legend className="float-left w-full text-sm font-semibold">
 						Default print layout
 					</legend>
 					<p className="clear-left text-xs text-muted-foreground">
@@ -890,7 +890,9 @@ function ClubSettings() {
 									checked={printLayout === id}
 									onChange={() => setPrintLayout(id)}
 								/>
-								<span className="font-medium">{AGENDA_LAYOUT_LABELS[id]}</span>{" "}
+								<span className="font-semibold">
+									{AGENDA_LAYOUT_LABELS[id]}
+								</span>{" "}
 								<span className="text-xs text-muted-foreground">
 									{AGENDA_LAYOUT_HINTS[id]}
 								</span>
@@ -898,8 +900,8 @@ function ClubSettings() {
 						))}
 					</div>
 				</fieldset>
-				<div className="space-y-2 border-t border-[var(--line)] pt-4">
-					<p className="text-sm font-medium">Table Topics speaking limits</p>
+				<div className="space-y-2 border-t border-border pt-4">
+					<p className="text-sm font-semibold">Table Topics speaking limits</p>
 					<p className="text-xs text-muted-foreground">
 						{/* Rendered from the constant, not retyped: this used to be a
 						    fourth hand-written copy of "1–2 minutes", so changing the
@@ -1041,7 +1043,7 @@ function ClubSettings() {
 					</p>
 				</div>
 
-				<label className="flex items-center gap-2 text-sm font-medium">
+				<label className="flex items-center gap-2 text-sm font-semibold">
 					<input
 						type="checkbox"
 						checked={logoAttested}

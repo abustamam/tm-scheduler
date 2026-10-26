@@ -49,7 +49,7 @@ const selectClass =
 	"flex h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
 
 const panelClass =
-	"space-y-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4";
+	"space-y-3 rounded-xl border border-border bg-surface-raised p-4";
 
 type Area = ConsoleAreaDetail;
 
@@ -83,7 +83,7 @@ function AreaDetail() {
 			<div className="space-y-1">
 				<Link
 					to="/superadmin/areas"
-					className="inline-flex items-center gap-1 text-sm text-[var(--sea-ink-soft)] hover:text-[var(--sea-ink)]"
+					className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 				>
 					<ArrowLeft className="size-4" /> All areas
 				</Link>
@@ -95,7 +95,7 @@ function AreaDetail() {
 					{area.programYearLabel}
 				</p>
 				{!editable ? (
-					<p className="text-sm font-medium" data-testid="demo-area-notice">
+					<p className="text-sm font-semibold" data-testid="demo-area-notice">
 						Demo area. The demo rebuild keeps it; edits are off.
 					</p>
 				) : null}
@@ -136,7 +136,7 @@ function ClubsPanel({
 					No clubs in this area yet.
 				</p>
 			) : (
-				<ul className="divide-y divide-[var(--line)]">
+				<ul className="divide-y divide-border">
 					{area.clubs.map((club) => (
 						<li
 							key={club.id}
@@ -147,19 +147,19 @@ function ClubsPanel({
 									<Link
 										to="/superadmin/$clubId"
 										params={{ clubId: club.clubId }}
-										className="font-medium text-[var(--palm)] underline-offset-2 hover:underline"
+										className="font-semibold text-success underline-offset-2 hover:underline"
 									>
 										{club.name}
 									</Link>
 								) : (
-									<span className="font-medium">
+									<span className="font-semibold">
 										{club.name}
-										<span className="ml-2 inline-block rounded-full bg-[var(--sand)] px-2 py-0.5 text-xs font-semibold text-[var(--sea-ink-soft)] uppercase tracking-[0.04em]">
+										<span className="ml-2 inline-block rounded-full bg-surface-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground uppercase tracking-[0.04em]">
 											Not on GavelUp
 										</span>
 									</span>
 								)}
-								<p className="text-xs text-[var(--sea-ink-soft)]">
+								<p className="text-xs text-muted-foreground">
 									Club {club.clubNumber ?? "—"} · {club.visitCount} visit
 									{club.visitCount === 1 ? "" : "s"} recorded
 								</p>
@@ -250,7 +250,7 @@ function AddGavelUpClubForm({
 	return (
 		<form
 			onSubmit={onSubmit}
-			className="flex flex-wrap items-end gap-3 border-t border-dashed border-[var(--line)] pt-3"
+			className="flex flex-wrap items-end gap-3 border-t border-dashed border-border pt-3"
 		>
 			<div className="min-w-48 flex-1 space-y-1.5">
 				<Label htmlFor="gavelupClub">Add a GavelUp club</Label>
@@ -321,7 +321,7 @@ function AddNameOnlyClubForm({
 	return (
 		<form
 			onSubmit={onSubmit}
-			className="flex flex-wrap items-end gap-3 border-t border-dashed border-[var(--line)] pt-3"
+			className="flex flex-wrap items-end gap-3 border-t border-dashed border-border pt-3"
 		>
 			<div className="min-w-48 flex-1 space-y-1.5">
 				<Label htmlFor="nameOnlyClubName">A club not on GavelUp</Label>
@@ -386,8 +386,8 @@ function DirectorPanel({
 			{director ? (
 				<div className="flex flex-wrap items-center justify-between gap-2 text-sm">
 					<div>
-						<p className="font-medium">{director.displayName}</p>
-						<p className="text-xs text-[var(--sea-ink-soft)]">
+						<p className="font-semibold">{director.displayName}</p>
+						<p className="text-xs text-muted-foreground">
 							{director.email} · since{" "}
 							{dateFmt.format(new Date(director.startedAt))}
 							{director.state === "upcoming"
@@ -425,15 +425,15 @@ function DirectorPanel({
 			) : null}
 
 			{area.pastTerms.length > 0 ? (
-				<div className="space-y-1.5 border-t border-dashed border-[var(--line)] pt-3">
-					<h3 className="text-xs font-semibold text-[var(--sea-ink-soft)]">
+				<div className="space-y-1.5 border-t border-dashed border-border pt-3">
+					<h3 className="text-xs font-semibold text-muted-foreground">
 						Past terms
 					</h3>
 					<ul className="space-y-1 text-sm">
 						{area.pastTerms.map((term) => (
 							<li key={term.id}>
 								{term.displayName}{" "}
-								<span className="text-[var(--sea-ink-soft)]">
+								<span className="text-muted-foreground">
 									· {term.email} · {dateFmt.format(new Date(term.startedAt))} to{" "}
 									{term.endedAt ? dateFmt.format(new Date(term.endedAt)) : "—"}
 								</span>
@@ -502,7 +502,7 @@ function AssignDirectorForm({
 	}
 
 	return (
-		<div className="space-y-3 border-t border-dashed border-[var(--line)] pt-3">
+		<div className="space-y-3 border-t border-dashed border-border pt-3">
 			<form onSubmit={lookUp} className="flex flex-wrap items-end gap-3">
 				<div className="min-w-48 flex-1 space-y-1.5">
 					<Label htmlFor="directorEmail">Find the Area Director by email</Label>

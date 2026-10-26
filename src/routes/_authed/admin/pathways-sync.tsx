@@ -65,7 +65,7 @@ function PathwaysSync() {
 				</p>
 			</div>
 
-			<div className="space-y-2 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4 text-sm">
+			<div className="space-y-2 rounded-xl border border-border bg-surface-raised p-4 text-sm">
 				<h2 className="text-sm font-bold">How to get the JSON</h2>
 				<ol className="list-decimal space-y-1 pl-5 text-muted-foreground">
 					<li>
@@ -107,7 +107,7 @@ function PathwaysSync() {
 			</Button>
 
 			{result ? (
-				<div className="space-y-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4">
+				<div className="space-y-3 rounded-xl border border-border bg-surface-raised p-4">
 					<p className="text-sm font-bold">
 						Matched {result.matched} member-path row
 						{result.matched === 1 ? "" : "s"} · {result.pathsUpserted} path

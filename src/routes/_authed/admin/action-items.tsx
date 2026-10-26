@@ -134,7 +134,7 @@ function ActionItems() {
 					<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 						Action items
 					</h1>
-					<p className="mt-1 max-w-prose text-sm text-[var(--sea-ink-soft)]">
+					<p className="mt-1 max-w-prose text-sm text-muted-foreground">
 						Things the club has agreed to do. They stay here until somebody
 						closes them, and they appear on every meeting's minutes until then.
 					</p>
@@ -297,7 +297,7 @@ function ActionItems() {
 							<Label htmlFor="ai-owner">Owner (optional)</Label>
 							<select
 								id="ai-owner"
-								className="h-9 w-full rounded-md border border-[var(--line)] bg-transparent px-3 text-sm"
+								className="h-9 w-full rounded-md border border-border bg-transparent px-3 text-sm"
 								value={ownerMemberId}
 								onChange={(e) => setOwnerMemberId(e.target.value)}
 							>
@@ -351,13 +351,13 @@ function ItemBody({ item }: { item: ActionItemRow }) {
 		<div className="min-w-0 flex-1 basis-56">
 			<div
 				className={cn(
-					"text-sm font-medium",
+					"text-sm font-semibold",
 					item.resolution === "dropped" && "line-through opacity-60",
 				)}
 			>
 				{item.text}
 			</div>
-			<div className="mt-0.5 text-xs text-[var(--sea-ink-soft)]">
+			<div className="mt-0.5 text-xs text-muted-foreground">
 				{/* An unowned item shows no owner at all — inventing one here would
 				    read as an assignment nobody made. */}
 				{item.ownerName ?? "No owner"}
@@ -383,9 +383,9 @@ function Section({
 		<div>
 			<div className="mb-2.5">
 				<h2 className="text-sm font-bold tracking-[-0.01em]">{title}</h2>
-				<p className="text-xs text-[var(--sea-ink-soft)]">{subtitle}</p>
+				<p className="text-xs text-muted-foreground">{subtitle}</p>
 			</div>
-			<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_14px_30px_rgba(23,58,64,.06)]">
+			<div className="overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-[0_14px_30px_rgba(23,58,64,.06)]">
 				{children}
 			</div>
 		</div>
@@ -394,7 +394,7 @@ function Section({
 
 function Row({ children }: { children: React.ReactNode }) {
 	return (
-		<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-[var(--line)] px-5 py-3 last:border-b-0">
+		<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-border px-5 py-3 last:border-b-0">
 			{children}
 		</div>
 	);
@@ -402,7 +402,7 @@ function Row({ children }: { children: React.ReactNode }) {
 
 function EmptyRow({ children }: { children: React.ReactNode }) {
 	return (
-		<p className="px-5 py-10 text-center text-sm text-[var(--sea-ink-soft)]">
+		<p className="px-5 py-10 text-center text-sm text-muted-foreground">
 			{children}
 		</p>
 	);

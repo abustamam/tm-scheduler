@@ -225,7 +225,7 @@ function VpeDashboard() {
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					VP Education
 				</h1>
-				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+				<p className="mt-1 text-sm text-muted-foreground">
 					Attendance, speaker rotation and role fairness at a glance — who has
 					stopped coming, who's overdue for a role, and who's up next to speak.
 				</p>
@@ -237,25 +237,23 @@ function VpeDashboard() {
 					<div
 						key={s.label}
 						className={cn(
-							"rounded-xl border bg-[var(--surface-strong)] px-4 py-4 shadow-[0_1px_0_var(--inset-glint)_inset,0_8px_20px_rgba(23,58,64,.05)]",
-							s.amber ? "border-[var(--warning)]" : "border-[var(--line)]",
+							"rounded-xl border bg-surface-raised px-4 py-4 shadow-[0_8px_20px_rgba(23,58,64,.05)]",
+							s.amber ? "border-warning" : "border-border",
 						)}
 					>
-						<div className="text-xs font-bold tracking-[0.04em] text-[var(--sea-ink-soft)] uppercase">
+						<div className="text-xs font-bold tracking-[0.04em] text-muted-foreground uppercase">
 							{s.label}
 						</div>
 						<div className="mt-2 flex items-baseline gap-2">
 							<span
 								className={cn(
 									"font-display text-3xl leading-none font-semibold",
-									s.amber && "text-[var(--warning-strong)]",
+									s.amber && "text-warning-strong",
 								)}
 							>
 								{s.value}
 							</span>
-							<span className="text-xs text-[var(--sea-ink-soft)]">
-								{s.note}
-							</span>
+							<span className="text-xs text-muted-foreground">{s.note}</span>
 						</div>
 					</div>
 				))}
@@ -449,9 +447,9 @@ function Section({
 		<div id={id} className={id ? "scroll-mt-24" : undefined}>
 			<div className="mb-2.5">
 				<h2 className="text-sm font-bold tracking-[-0.01em]">{title}</h2>
-				<p className="text-xs text-[var(--sea-ink-soft)]">{subtitle}</p>
+				<p className="text-xs text-muted-foreground">{subtitle}</p>
 			</div>
-			<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_14px_30px_rgba(23,58,64,.06)]">
+			<div className="overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-[0_14px_30px_rgba(23,58,64,.06)]">
 				{children}
 			</div>
 		</div>
@@ -460,7 +458,7 @@ function Section({
 
 function EmptyRow({ children }: { children: React.ReactNode }) {
 	return (
-		<p className="px-5 py-10 text-center text-sm text-[var(--sea-ink-soft)]">
+		<p className="px-5 py-10 text-center text-sm text-muted-foreground">
 			{children}
 		</p>
 	);
@@ -502,7 +500,7 @@ function MemberIdentity({
 					{/* The pill is `sm`-and-up ONLY — see BookedMarker's note. */}
 					{bookedAt ? <BookedPill at={bookedAt} timezone={timezone} /> : null}
 				</div>
-				<div className="text-xs text-[var(--sea-ink-soft)]">
+				<div className="text-xs text-muted-foreground">
 					{joinedAt ? formatTenure(joinedAt, clock) : "Tenure unknown"}
 				</div>
 				{bookedAt ? <BookedLine at={bookedAt} timezone={timezone} /> : null}
@@ -548,7 +546,7 @@ function BookedPill({
 		// Teal (the token the member dashboard's "Signed up" pill uses) rather
 		// than the amber the wait column carries: these two mean opposite things
 		// and must not look alike.
-		<span className="hidden shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2 py-0.5 text-[11px] font-bold whitespace-nowrap text-[var(--lagoon-deep)] sm:inline-block">
+		<span className="hidden shrink-0 rounded-full bg-highlight/15 px-2 py-0.5 text-xs font-bold whitespace-nowrap text-link sm:inline-block">
 			Booked · {formatMeetingDate(at, timezone)}
 		</span>
 	);
@@ -563,14 +561,14 @@ function BookedLine({
 	timezone?: string;
 }) {
 	return (
-		<div className="text-xs font-bold text-[var(--lagoon-deep)] sm:hidden">
+		<div className="text-xs font-bold text-link sm:hidden">
 			Booked {formatShortDate(at, timezone)}
 		</div>
 	);
 }
 
 const ROW_CLASS =
-	"group grid cursor-pointer items-center gap-3.5 border-b border-[var(--line)] px-5 py-3 transition-colors last:border-b-0 hover:bg-[var(--foam)]";
+	"group grid cursor-pointer items-center gap-3.5 border-b border-border px-5 py-3 transition-colors last:border-b-0 hover:bg-surface-soft";
 
 function OverdueRow({
 	member,
@@ -604,8 +602,8 @@ function OverdueRow({
 				timezone={timezone}
 			/>
 			<div className="text-sm">
-				<span className="font-bold text-[var(--warning-strong)]">{wait}</span>
-				<div className="text-xs text-[var(--sea-ink-soft)]">
+				<span className="font-bold text-warning-strong">{wait}</span>
+				<div className="text-xs text-muted-foreground">
 					{member.lastAnyRoleAt
 						? `last: ${formatShortDate(member.lastAnyRoleAt, timezone)}`
 						: "no role history"}
@@ -652,10 +650,10 @@ function LapseRow({
 				clock={clock}
 			/>
 			<div className="text-sm">
-				<span className="font-bold text-[var(--warning-strong)]">
+				<span className="font-bold text-warning-strong">
 					{member.streak} missed
 				</span>
-				<div className="text-xs text-[var(--sea-ink-soft)]">
+				<div className="text-xs text-muted-foreground">
 					{rate ? `${seen} · ${rate}` : seen}
 				</div>
 			</div>
@@ -687,7 +685,7 @@ function RotationRow({
 				"grid-cols-[28px_1fr_34px] sm:grid-cols-[28px_1fr_130px_190px_34px]",
 			)}
 		>
-			<div className="text-sm font-bold text-[var(--sea-ink-soft)] tabular-nums">
+			<div className="text-sm font-bold text-muted-foreground tabular-nums">
 				{rank}
 			</div>
 			<MemberIdentity
@@ -701,20 +699,18 @@ function RotationRow({
 			<div className="hidden text-sm sm:block">
 				{row.lastSpokenAt ? (
 					<>
-						<span className="font-bold text-[var(--sea-ink)]">
+						<span className="font-bold text-foreground">
 							{formatShortDate(row.lastSpokenAt, timezone)}
 						</span>
-						<div className="text-xs text-[var(--sea-ink-soft)]">
+						<div className="text-xs text-muted-foreground">
 							{row.timesSpoken} time{row.timesSpoken === 1 ? "" : "s"}
 						</div>
 					</>
 				) : (
-					<span className="font-bold text-[var(--lagoon-deep)]">
-						Never spoken
-					</span>
+					<span className="font-bold text-link">Never spoken</span>
 				)}
 			</div>
-			<div className="hidden min-w-0 truncate text-xs text-[var(--sea-ink-soft)] sm:block">
+			<div className="hidden min-w-0 truncate text-xs text-muted-foreground sm:block">
 				{pathway ?? "—"}
 			</div>
 			<Chevron />
@@ -757,7 +753,7 @@ function ProximityRow({
 	return (
 		<div
 			className={cn(
-				"grid items-center gap-3.5 border-b border-[var(--line)] px-5 py-3 last:border-b-0",
+				"grid items-center gap-3.5 border-b border-border px-5 py-3 last:border-b-0",
 				"grid-cols-[1fr_auto]",
 			)}
 		>
@@ -775,24 +771,22 @@ function ProximityRow({
 					<span className="truncate text-sm font-bold">{row.name}</span>
 				</Link>
 				{/* Indented to clear the avatar, like PairingRow's chips. */}
-				<div className="mt-1 pl-[50px] text-xs text-[var(--sea-ink-soft)]">
+				<div className="mt-1 pl-[50px] text-xs text-muted-foreground">
 					{proximityDetail(row)}
 				</div>
 				{row.upcomingSpeakerAt ? (
-					<div className="pl-[50px] text-xs font-bold text-[var(--lagoon-deep)] sm:hidden">
+					<div className="pl-[50px] text-xs font-bold text-link sm:hidden">
 						Speaking {formatShortDate(row.upcomingSpeakerAt, timezone)}
 					</div>
 				) : null}
 			</div>
 			<div className="flex items-center gap-2 justify-self-end">
 				{row.upcomingSpeakerAt ? (
-					<span className="hidden shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2 py-0.5 text-[11px] font-bold whitespace-nowrap text-[var(--lagoon-deep)] sm:inline-block">
+					<span className="hidden shrink-0 rounded-full bg-highlight/15 px-2 py-0.5 text-xs font-bold whitespace-nowrap text-link sm:inline-block">
 						Speaking · {formatMeetingDate(row.upcomingSpeakerAt, timezone)}
 					</span>
 				) : (
-					<span className="text-xs text-[var(--sea-ink-soft)]">
-						Not scheduled
-					</span>
+					<span className="text-xs text-muted-foreground">Not scheduled</span>
 				)}
 				{/* OUTSIDE the member-page link above, so opening a draft never
 				    navigates to the profile (#900). Icon-only: the row's right
@@ -847,7 +841,7 @@ function OrientationRow({
 	return (
 		<div
 			data-testid="orientation-row"
-			className="grid grid-cols-[1fr_auto] items-center gap-3.5 border-b border-[var(--line)] px-5 py-3 last:border-b-0"
+			className="grid grid-cols-[1fr_auto] items-center gap-3.5 border-b border-border px-5 py-3 last:border-b-0"
 		>
 			<div className="min-w-0">
 				<Link
@@ -868,9 +862,7 @@ function OrientationRow({
 							key={item.key}
 							className={cn(
 								"inline-flex items-center gap-1",
-								item.done
-									? "text-[var(--lagoon-deep)]"
-									: "text-[var(--sea-ink-soft)]",
+								item.done ? "text-link" : "text-muted-foreground",
 							)}
 						>
 							{item.done ? (
@@ -883,7 +875,7 @@ function OrientationRow({
 						</li>
 					))}
 				</ul>
-				<div className="pl-[50px] text-xs text-[var(--sea-ink-soft)]">
+				<div className="pl-[50px] text-xs text-muted-foreground">
 					{row.mentorNames.length > 0
 						? `Mentor: ${row.mentorNames.join(", ")}`
 						: "No mentor"}
@@ -894,15 +886,13 @@ function OrientationRow({
 					<span
 						className={cn(
 							"font-bold whitespace-nowrap",
-							stalled
-								? "text-[var(--warning-strong)]"
-								: "text-[var(--sea-ink)]",
+							stalled ? "text-warning-strong" : "text-foreground",
 						)}
 					>
 						{orientationDayLabel(row.days)}
 					</span>
 					{stalled ? (
-						<div className="text-xs font-bold whitespace-nowrap text-[var(--warning-strong)]">
+						<div className="text-xs font-bold whitespace-nowrap text-warning-strong">
 							Over {ORIENTATION_STALLED_AFTER_DAYS} days
 						</div>
 					) : null}
@@ -985,8 +975,8 @@ function PairingRow({
 						className={cn(
 							"mt-1 text-xs",
 							row.hasRepeat
-								? "font-bold text-[var(--warning-foreground)]"
-								: "text-[var(--sea-ink-soft)]",
+								? "font-bold text-warning-foreground"
+								: "text-muted-foreground",
 						)}
 					>
 						{row.hasRepeat
@@ -1020,10 +1010,10 @@ function PairingChip({
 	return (
 		<span
 			className={cn(
-				"inline-flex max-w-full items-baseline gap-1 rounded-full border px-2 py-0.5 text-[11px] font-bold",
+				"inline-flex max-w-full items-baseline gap-1 rounded-full border px-2 py-0.5 text-xs font-bold",
 				pair.repeat
-					? "border-[var(--warning)] bg-[var(--warning-soft)] text-[var(--warning-foreground)]"
-					: "border-[var(--line)] text-[var(--sea-ink)]",
+					? "border-warning bg-warning-soft text-warning-foreground"
+					: "border-border text-foreground",
 			)}
 		>
 			{/* The NAME wraps and the date does not: a long name in a
@@ -1037,7 +1027,7 @@ function PairingChip({
 			    evaluations, not the last N months, so a rare speaker's chips can
 			    be years old — and a year-less date reads exactly like this
 			    year's, letting a stale repeat drive "vary the next one". */}
-			<span className="whitespace-nowrap text-[var(--sea-ink-soft)]">
+			<span className="whitespace-nowrap text-muted-foreground">
 				{formatHistoryDate(pair.scheduledAt, { timeZone: timezone })}
 			</span>
 		</span>
@@ -1046,7 +1036,7 @@ function PairingChip({
 
 function Chevron() {
 	return (
-		<div className="justify-self-end text-[var(--sea-ink-soft)] opacity-45 transition-all group-hover:translate-x-0.5 group-hover:opacity-100">
+		<div className="justify-self-end text-muted-foreground opacity-45 transition-[transform,opacity] group-hover:translate-x-0.5 group-hover:opacity-100">
 			<ChevronRight className="size-4" aria-hidden />
 		</div>
 	);
