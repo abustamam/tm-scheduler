@@ -125,3 +125,105 @@ describe("AssignSlotSheet session rule (#1003)", () => {
 		expect(options?.action?.label).toBe("Sign in");
 	});
 });
+
+describe("AssignSlotSheet one picker (#1332)", () => {
+	const props = {
+		...baseProps,
+		roster: [
+			{ id: "m-jose", name: "José Ruiz" },
+			{ id: "m-rob", name: "Robert Smith", preferredName: "Bob" },
+			{ id: "m-zed", name: "Zed Away" },
+			{ id: "m-abe", name: "Abe Busy" },
+			{ id: "m-cal", name: "Cal Free" },
+		],
+		roleByMemberId: { "m-abe": "Speaker" },
+		unavailableIds: ["m-zed"],
+	};
+	const optionNames = () =>
+		screen.getAllByRole("option").map((o) => o.textContent ?? "");
+
+	it("finds a member by accent-free name and by preferred name", async () => {
+		// protects: AC1, "jose" lists José Ruiz; "bob" lists Robert Smith with goes-by.
+		// fails_when: the roster's preferredName is not passed to the picker.
+		// no_claim: the server populating preferredName (integration tests).
+		const user = userEvent.setup();
+		render(<AssignSlotSheet {...props} slot={openSlot} />);
+		await user.type(screen.getByPlaceholderText("Search members…"), "jose");
+		expect(optionNames()).toHaveLength(1);
+		expect(optionNames()[0]).toContain("José Ruiz");
+		await user.clear(screen.getByPlaceholderText("Search members…"));
+		await user.type(screen.getByPlaceholderText("Search members…"), "bob");
+		expect(optionNames()[0]).toContain("Robert Smith · goes by Bob");
+	});
+
+	it("keeps today's empty-query order: available, then holding a role, then Not available", () => {
+		// protects: AC3, tier order via rank equals buildPickerRows' order.
+		// fails_when: rank is dropped (alphabetical only) or tiers are reordered.
+		// no_claim: the sub-line and badge content.
+		render(<AssignSlotSheet {...props} slot={openSlot} />);
+		const names = optionNames().map((n) => n.split(/Never|Last/)[0]);
+		const order = [
+			"Cal Free",
+			"José Ruiz",
+			"Robert Smith",
+			"Abe Busy",
+			"Zed Away",
+		];
+		order.forEach((name, i) => {
+			expect(names[i]).toContain(name);
+		});
+	});
+
+	it("shows one input with Members and Guests groups, and a guest pick assigns that guest", async () => {
+		// protects: AC2, no second search box; guest pick calls assignGuestSlot with guestId.
+		// fails_when: the guest block keeps its own input, or a guest pick goes to claimSlot.
+		// no_claim: the new-guest form (unchanged, not exercised here).
+		const { assignGuestSlot } = await import("#/server/guests");
+		vi.mocked(assignGuestSlot).mockResolvedValue({ ok: true } as never);
+		const user = userEvent.setup();
+		render(
+			<AssignSlotSheet
+				{...props}
+				slot={openSlot}
+				allowGuests
+				clubGuests={[{ id: "g-1", name: "Gina Guest" }]}
+			/>,
+		);
+		expect(screen.getByText("Members")).toBeTruthy();
+		expect(screen.getByText("Guests")).toBeTruthy();
+		expect(screen.queryByRole("textbox", { name: "Search guests" })).toBeNull();
+		await user.click(screen.getByRole("option", { name: /Gina Guest/ }));
+		await waitFor(() =>
+			expect(assignGuestSlot).toHaveBeenCalledWith({
+				data: { slotId: "slot-open", guestId: "g-1" },
+			}),
+		);
+		expect(claimSlot).not.toHaveBeenCalled();
+	});
+
+	it("sorts a Not available exact match below an available substring match, still selectable", async () => {
+		// protects: AC4, rank before tier, and unavailable stays pickable.
+		// fails_when: tier ordering overrides the caller's rank, or unavailable rows are disabled.
+		// no_claim: the dimmed name styling.
+		const user = userEvent.setup();
+		render(
+			<AssignSlotSheet
+				{...props}
+				roster={[
+					{ id: "m-ann", name: "Ann" },
+					{ id: "m-joann", name: "Joanne" },
+				]}
+				unavailableIds={["m-ann"]}
+				slot={openSlot}
+			/>,
+		);
+		await user.type(screen.getByPlaceholderText("Search members…"), "ann");
+		expect(optionNames()[0]).toContain("Joanne");
+		expect(optionNames()[1]).toContain("Ann");
+		await user.click(screen.getAllByRole("option")[1]!);
+		await waitFor(() => expect(claimSlot).toHaveBeenCalledTimes(1));
+		expect(claimSlot).toHaveBeenCalledWith({
+			data: expect.objectContaining({ memberId: "m-ann" }),
+		});
+	});
+});

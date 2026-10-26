@@ -1,16 +1,12 @@
 import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import {
+	PersonPicker,
+	type PickerPerson,
+} from "#/components/club/person-picker";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
-import {
-	Command,
-	CommandEmpty,
-	CommandGroup,
-	CommandInput,
-	CommandItem,
-	CommandList,
-} from "#/components/ui/command";
 import { Input } from "#/components/ui/input";
 import {
 	Popover,
@@ -49,14 +45,19 @@ export function TableTopicsCapture({
 	}[];
 	canEdit: boolean;
 	busy: boolean;
-	roster: { memberId: string; name: string }[];
+	roster: { memberId: string; name: string; preferredName?: string | null }[];
 	/**
 	 * Members `isMemberUnavailable` says cannot take part at this meeting (#1319,
 	 * the #1257 rule). REQUIRED, and applied HERE rather than in each mounting
 	 * site, so the two pickers cannot drift. They are hidden, not greyed out.
 	 */
 	unavailableMemberIds: readonly string[];
-	clubGuests: { id: string; name: string; stage?: string }[];
+	clubGuests: {
+		id: string;
+		name: string;
+		preferredName?: string | null;
+		stage?: string;
+	}[];
 	onAdd: (payload: {
 		memberId?: string;
 		guestId?: string;
@@ -173,8 +174,13 @@ export function AssigneePicker({
 	onPick,
 }: {
 	label: string;
-	roster: { memberId: string; name: string }[];
-	clubGuests: { id: string; name: string; stage?: string }[];
+	roster: { memberId: string; name: string; preferredName?: string | null }[];
+	clubGuests: {
+		id: string;
+		name: string;
+		preferredName?: string | null;
+		stage?: string;
+	}[];
 	busy: boolean;
 	onPick: (payload: {
 		memberId?: string;
@@ -183,68 +189,52 @@ export function AssigneePicker({
 	}) => void;
 }) {
 	const [open, setOpen] = useState(false);
-	const [search, setSearch] = useState("");
+	const people: PickerPerson[] = [
+		...roster.map(
+			(m): PickerPerson => ({
+				kind: "member",
+				id: m.memberId,
+				name: m.name,
+				preferredName: m.preferredName,
+			}),
+		),
+		...clubGuests.map(
+			(g): PickerPerson => ({
+				kind: "guest",
+				id: g.id,
+				name: g.name,
+				preferredName: g.preferredName,
+				stage: g.stage,
+			}),
+		),
+	];
 	return (
-		<Popover
-			open={open}
-			onOpenChange={(next) => {
-				setOpen(next);
-				setSearch("");
-			}}
-		>
+		<Popover open={open} onOpenChange={setOpen}>
 			<PopoverTrigger asChild>
 				<Button type="button" size="sm" variant="outline" disabled={busy}>
 					{label}
 				</Button>
 			</PopoverTrigger>
 			<PopoverContent className="w-72 space-y-3">
-				<Command>
-					<CommandInput
-						placeholder="Search members and guests…"
-						value={search}
-						onValueChange={setSearch}
-					/>
-					<CommandList>
-						<CommandEmpty>No matching people.</CommandEmpty>
-						<CommandGroup heading="Members">
-							{roster.map((m) => (
-								<CommandItem
-									key={m.memberId}
-									value={`m ${m.name} ${m.memberId}`}
-									disabled={busy}
-									onSelect={() => {
-										onPick({ memberId: m.memberId });
-										setOpen(false);
-									}}
-								>
-									{m.name}
-								</CommandItem>
-							))}
-						</CommandGroup>
-						{clubGuests.length > 0 ? (
-							<CommandGroup heading="Guests">
-								{clubGuests
-									.filter((g) => g.stage !== "lost" || search.trim().length > 0)
-									.map((g) => (
-										<CommandItem
-											key={g.id}
-											value={`g ${g.name} ${g.id}`}
-											disabled={busy}
-											onSelect={() => {
-												onPick({ guestId: g.id });
-												setOpen(false);
-											}}
-										>
-											{g.name}
-											<Badge variant="outline" className="ml-auto">
-												Guest
-											</Badge>
-										</CommandItem>
-									))}
-							</CommandGroup>
-						) : null}
-					</CommandList>
-				</Command>
+				<PersonPicker
+					people={people}
+					disabled={busy}
+					placeholder="Search members and guests…"
+					emptyText="No matching people."
+					onPick={(person) => {
+						onPick(
+							person.kind === "guest"
+								? { guestId: person.id }
+								: { memberId: person.id },
+						);
+						setOpen(false);
+					}}
+					renderMeta={(person) =>
+						person.kind === "guest" ? (
+							<Badge variant="outline">Guest</Badge>
+						) : null
+					}
+				/>
 				<form
 					onSubmit={(e) => {
 						e.preventDefault();

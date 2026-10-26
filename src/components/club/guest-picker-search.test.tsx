@@ -38,6 +38,11 @@ afterEach(() => {
 
 describe("lost guest search", () => {
 	it("searches existing guests in role assignment and resets for another slot", async () => {
+		// protects: role assignment offers a lost guest only once searched for, picks
+		//   it with the right ids, and starts the next slot with an empty search.
+		// fails_when: lost guests are listed unsearched, the search survives a slot
+		//   change, or the pick sends the wrong slotId/guestId.
+		// no_claim: the server action itself (mocked) or the member rows.
 		const user = userEvent.setup();
 		const slot = {
 			id: "slot-one",
@@ -58,39 +63,42 @@ describe("lost guest search", () => {
 			onAssigned: vi.fn(),
 		};
 		const { rerender } = render(<AssignSlotSheet {...props} slot={slot} />);
-		expect(screen.getByRole("button", { name: "Active Visitor" })).toBeTruthy();
+		expect(screen.getByRole("option", { name: /Active Visitor/ })).toBeTruthy();
 		expect(
-			screen.queryByRole("button", { name: "Returning Visitor" }),
+			screen.queryByRole("option", { name: /Returning Visitor/ }),
 		).toBeNull();
-		const search = screen.getByRole("textbox", { name: "Search guests" });
+		const search = screen.getByPlaceholderText("Search members and guests…");
 		await user.type(search, "returning");
 		expect(
-			screen.getByRole("button", { name: "Returning Visitor" }),
+			await screen.findByRole("option", { name: /Returning Visitor/ }),
 		).toBeTruthy();
 		await user.clear(search);
 		expect(
-			screen.queryByRole("button", { name: "Returning Visitor" }),
+			screen.queryByRole("option", { name: /Returning Visitor/ }),
 		).toBeNull();
 		await user.type(search, "nobody");
 		expect(
-			screen.queryByRole("button", { name: "Returning Visitor" }),
+			screen.queryByRole("option", { name: /Returning Visitor/ }),
 		).toBeNull();
 		await user.clear(search);
 		await user.type(search, "Returning");
-		await user.click(screen.getByRole("button", { name: "Returning Visitor" }));
+		await user.click(
+			await screen.findByRole("option", { name: /Returning Visitor/ }),
+		);
 		expect(assignGuestSlot).toHaveBeenCalledWith({
 			data: { slotId: "slot-one", guestId: "lost" },
 		});
+		await user.type(search, "returning");
 		rerender(<AssignSlotSheet {...props} slot={{ ...slot, id: "slot-two" }} />);
 		expect(
 			(
-				screen.getByRole("textbox", {
-					name: "Search guests",
-				}) as HTMLInputElement
+				screen.getByPlaceholderText(
+					"Search members and guests…",
+				) as HTMLInputElement
 			).value,
 		).toBe("");
 		expect(
-			screen.queryByRole("button", { name: "Returning Visitor" }),
+			screen.queryByRole("option", { name: /Returning Visitor/ }),
 		).toBeNull();
 	});
 

@@ -17,6 +17,7 @@ import {
 	meetings,
 	meetingTimings,
 	members,
+	people,
 	roleDefinitions,
 	roleSlots,
 	speeches,
@@ -71,9 +72,18 @@ export type NewGuestInput = {
 	phone?: string | null;
 };
 
+/** The member's own preferred name, else their person's (mirrors `memberGoesBy`
+ *  in meeting-contacts-logic.ts; the member's own wins). */
+const memberPreferredName = sql<
+	string | null
+>`coalesce(${members.preferredName}, ${people.preferredName})`;
+
 export interface MinutesMemberRow {
 	memberId: string;
 	name: string;
+	/** The member's own preferred name, else their person's, else null (#1332).
+	 *  Optional: an offline snapshot saved before #1332 lacks it; the server always sends it. */
+	preferredName?: string | null;
 	/**
 	 * The saved attendance status, or `null` when nobody has recorded one yet —
 	 * "unmarked" (#218). Unmarked is the absence of a record, NOT a synonym for
@@ -329,8 +339,13 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 
 	// Active roster (the editable attendance list).
 	const activeMembers = await db
-		.select({ id: members.id, name: members.name })
+		.select({
+			id: members.id,
+			name: members.name,
+			preferredName: memberPreferredName,
+		})
 		.from(members)
+		.innerJoin(people, eq(people.id, members.personId))
 		.where(and(eq(members.clubId, clubId), eq(members.status, "active")))
 		.orderBy(asc(members.name));
 
@@ -341,9 +356,11 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 			status: meetingAttendance.status,
 			mode: meetingAttendance.mode,
 			name: members.name,
+			preferredName: memberPreferredName,
 		})
 		.from(meetingAttendance)
 		.innerJoin(members, eq(members.id, meetingAttendance.memberId))
+		.innerJoin(people, eq(people.id, members.personId))
 		.where(
 			and(
 				eq(meetingAttendance.meetingId, meetingId),
@@ -398,6 +415,7 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 		memberRows.set(m.id, {
 			memberId: m.id,
 			name: m.name,
+			preferredName: m.preferredName,
 			// No saved record ⇒ unmarked (null). Never inferred from a role slot (#218).
 			status: saved?.status ?? null,
 			// Read as stored, and carried only when recorded: NULL is ABSENT on
@@ -412,6 +430,7 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 			memberRows.set(id, {
 				memberId: id,
 				name: r.name,
+				preferredName: r.preferredName,
 				status: r.status,
 				...(r.mode ? { mode: r.mode } : {}),
 				hasRole: roleMemberIds.has(id),

@@ -345,4 +345,21 @@ describe.skipIf(!hasTestDb)("guest assignment (#151)", () => {
 			expect(again.guestId).toBe(res.guestId);
 		});
 	});
+	it("listClubGuests returns each guest's preferredName (#1332)", async () => {
+		// protects: the picker can match a guest by the name they go by (#1332).
+		// fails_when: the select drops guests.preferredName, so it is undefined.
+		// no_claim: nothing about matching itself (person-search.test.ts).
+		const [g] = await testDb
+			.insert(guests)
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: "Robert Visitor", preferredName: "Bob" },
+					testDb,
+				),
+			)
+			.returning({ id: guests.id });
+		expect(await listClubGuests(seed.clubId)).toContainEqual(
+			expect.objectContaining({ id: g!.id, preferredName: "Bob" }),
+		);
+	});
 });

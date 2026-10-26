@@ -1,16 +1,12 @@
 import { Loader2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import {
+	PersonPicker,
+	type PickerPerson,
+} from "#/components/club/person-picker";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
-import {
-	Command,
-	CommandEmpty,
-	CommandGroup,
-	CommandInput,
-	CommandItem,
-	CommandList,
-} from "#/components/ui/command";
 import { Input } from "#/components/ui/input";
 import {
 	Sheet,
@@ -23,11 +19,15 @@ import { showWriteError } from "#/components/write-error-toast";
 import {
 	buildPickerRows,
 	formatLastServed,
+	type PickerRow,
+	pickerTier,
 	resolveAssignAction,
 } from "#/lib/agenda";
-import { cn } from "#/lib/utils";
 import { assignGuestSlot } from "#/server/guests";
 import { claimSlot, reassignSlot } from "#/server/slots";
+
+type AssignPerson = PickerPerson &
+	({ kind: "guest"; row?: undefined } | { kind: "member"; row: PickerRow });
 
 type AssignSlot = {
 	id: string;
@@ -54,7 +54,12 @@ export function AssignSlotSheet({
 	onAssigned,
 }: {
 	slot: AssignSlot | null;
-	roster: { id: string; name: string; stage?: string }[];
+	roster: {
+		id: string;
+		name: string;
+		preferredName?: string | null;
+		stage?: string;
+	}[];
 	roleByMemberId: Record<string, string>;
 	unavailableIds: string[];
 	roleRecency: RoleRecency;
@@ -74,17 +79,16 @@ export function AssignSlotSheet({
 	 *  self-serve/TMOD view. */
 	allowGuests?: boolean;
 	/** Existing club guests to pick from (admin path only). */
-	clubGuests?: { id: string; name: string; stage?: string }[];
+	clubGuests?: {
+		id: string;
+		name: string;
+		preferredName?: string | null;
+		stage?: string;
+	}[];
 	onOpenChange: (open: boolean) => void;
 	onAssigned: () => void | Promise<void>;
 }) {
 	const [busy, setBusy] = useState(false);
-	const [guestSearch, setGuestSearch] = useState("");
-	const [searchSlotId, setSearchSlotId] = useState(slot?.id);
-	if (searchSlotId !== slot?.id) {
-		setSearchSlotId(slot?.id);
-		setGuestSearch("");
-	}
 	// Revive the ISO recency for the role being assigned into Dates for the rows.
 	const lastServedAt: Record<string, Date> = {};
 	if (slot) {
@@ -100,6 +104,30 @@ export function AssignSlotSheet({
 		unavailableIds,
 		lastServedAt,
 	);
+	const people: AssignPerson[] = [
+		...rows.map(
+			(row): AssignPerson => ({
+				kind: "member",
+				id: row.id,
+				name: row.name,
+				preferredName: row.preferredName,
+				rank: pickerTier(row),
+				row,
+			}),
+		),
+		...(allowGuests
+			? clubGuests.map(
+					(g): AssignPerson => ({
+						kind: "guest",
+						id: g.id,
+						name: g.name,
+						preferredName: g.preferredName,
+						stage: g.stage,
+						rank: 0,
+					}),
+				)
+			: []),
+	];
 	const isReassign =
 		slot !== null && resolveAssignAction(slot).kind === "reassign";
 	// The visibility rule sits beside the claim-vs-reassign decision it guards:
@@ -192,103 +220,65 @@ export function AssignSlotSheet({
 							Someone already holds this role. Sign in to reassign it.
 						</p>
 					) : (
-						<Command key={slot?.id ?? "closed"}>
-							<CommandInput placeholder="Search members…" />
-							<CommandList>
-								<CommandEmpty>No members found.</CommandEmpty>
-								<CommandGroup>
-									{rows.map((row) => (
-										<CommandItem
-											key={row.id}
-											value={`${row.name} ${row.id}`}
-											disabled={busy}
-											onSelect={() => pick(row.id)}
-											className="flex items-center justify-between gap-2"
-										>
-											<span className="flex flex-col">
-												{/* Tier 3 (#377): sorted last AND visually receded, so the
-											    bottom of the list reads as "not candidates" without
-											    hiding anyone who might still need assigning. The
-											    recession is on the NAME only — dimming the whole row
-											    would drag the muted sub-line and the amber "Never done
-											    this role" hint below WCAG AA (the latter to 2.46:1,
-											    worse than the value styles.css records as having been
-											    rejected for failing AA), and would wash out cmdk's
-											    keyboard-selection highlight on exactly the rows a user
-											    reaches by typing an unavailable member's name. The
-											    "Not available" badge carries the semantic signal. */}
-												<span
-													className={cn(
-														row.unavailable && "text-muted-foreground",
-													)}
-												>
-													{row.name}
-												</span>
-												{row.lastServedAt ? (
-													<span className="text-muted-foreground text-xs">
-														Last: {formatLastServed(row.lastServedAt)}
-													</span>
-												) : (
-													<span className="font-semibold text-warning-foreground text-xs">
-														Never done this role
-													</span>
-												)}
-											</span>
-											<span className="flex items-center gap-1">
-												{row.currentRole ? (
-													<Badge variant="secondary">{row.currentRole}</Badge>
-												) : null}
-												{row.unavailable ? (
-													<Badge variant="outline">Not available</Badge>
-												) : null}
-											</span>
-										</CommandItem>
-									))}
-								</CommandGroup>
-							</CommandList>
-						</Command>
+						<PersonPicker
+							key={slot?.id ?? "closed"}
+							people={people}
+							disabled={busy}
+							placeholder={
+								allowGuests ? "Search members and guests…" : "Search members…"
+							}
+							emptyText={
+								allowGuests ? "No matching people." : "No members found."
+							}
+							onPick={(person) =>
+								person.kind === "guest"
+									? void assignGuest({ guestId: person.id })
+									: void pick(person.id)
+							}
+							// Only the NAME recedes for a Not-available member (#377). Dimming
+							// the whole row would drag the muted sub-line and the amber "Never
+							// done this role" hint below WCAG AA; the "Not available" badge
+							// carries the semantic signal.
+							nameClassName={(person) =>
+								person.row?.unavailable ? "text-muted-foreground" : undefined
+							}
+							renderSubline={(person) =>
+								person.kind === "guest" ? null : person.row.lastServedAt ? (
+									<span className="text-muted-foreground text-xs">
+										Last: {formatLastServed(person.row.lastServedAt)}
+									</span>
+								) : (
+									<span className="font-semibold text-warning-foreground text-xs">
+										Never done this role
+									</span>
+								)
+							}
+							renderMeta={(person) =>
+								person.kind === "guest" ? (
+									<Badge variant="outline">Guest</Badge>
+								) : (
+									<span className="flex items-center gap-1">
+										{person.row.currentRole ? (
+											<Badge variant="secondary">
+												{person.row.currentRole}
+											</Badge>
+										) : null}
+										{person.row.unavailable ? (
+											<Badge variant="outline">Not available</Badge>
+										) : null}
+									</span>
+								)
+							}
+						/>
 					)}
 
 					{allowGuests && !reassignBlocked ? (
 						<div className="mt-4 space-y-3 border-t pt-4">
-							<p className="font-semibold text-sm">Or assign a guest</p>
+							<p className="font-semibold text-sm">Add a new guest</p>
 							<p className="text-muted-foreground text-xs">
 								Guests aren't roster members — they won't appear in the member
 								picker or roster.
 							</p>
-							{clubGuests.length > 0 ? (
-								<div className="space-y-2">
-									<Input
-										placeholder="Search guests…"
-										aria-label="Search guests"
-										value={guestSearch}
-										onChange={(event) => setGuestSearch(event.target.value)}
-									/>
-									<div className="flex flex-wrap gap-2">
-										{clubGuests
-											.filter(
-												(g) =>
-													(g.stage !== "lost" ||
-														guestSearch.trim().length > 0) &&
-													g.name
-														.toLowerCase()
-														.includes(guestSearch.trim().toLowerCase()),
-											)
-											.map((g) => (
-												<Button
-													key={g.id}
-													type="button"
-													size="sm"
-													variant="secondary"
-													disabled={busy}
-													onClick={() => void assignGuest({ guestId: g.id })}
-												>
-													{g.name}
-												</Button>
-											))}
-									</div>
-								</div>
-							) : null}
 							<form onSubmit={onCreateGuest} className="space-y-2">
 								<Input
 									name="guestName"
