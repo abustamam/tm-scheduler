@@ -166,19 +166,21 @@ export function MeetingToolbar({
 	const canEdit = canManage && !cancelled;
 	// Whether the Manage menu has any item (#1307). Each item below spells its
 	// own gate inline, as its button did, because
-	// `meeting-cancel-wiring.guard.test.ts` pins those exact expressions; this
-	// list must mirror them.
-	const showAddRole = canEdit && !locked && hasAddableRoles;
-	const showComplete = canEdit && !locked && canComplete;
+	// `meeting-cancel-wiring.guard.test.ts` pins those exact expressions. This
+	// must be true whenever ANY item's gate is: Promote is `canEdit`, and Add
+	// role / Complete / Cancel are all `canEdit && …`, so `canEdit` already
+	// covers them; the two gates `canEdit` does NOT cover are Lineup blast and
+	// Reopen (`canManage && locked`, which stays on a cancelled meeting). A new
+	// item with a gate outside those needs a term here; the property test in
+	// meeting-toolbar.test.tsx (trigger renders iff the menu has an item) fails
+	// if it is missed.
 	const showReopen = canManage && locked;
-	const showCancel = canEdit && !locked && canCancel;
-	const showManage =
-		canEdit ||
-		canLineupBlast ||
-		showAddRole ||
-		showComplete ||
-		showReopen ||
-		showCancel;
+	const showManage = canEdit || canLineupBlast || showReopen;
+	// The trigger spins only for a write that lives in this menu. Restore is the
+	// cancelled banner's button, so it never makes Manage busy; an absent
+	// `busyAction` keeps the old rule (every busy control spins), as `spins` does.
+	const manageBusy =
+		lifecycleBusy && (busyAction == null || busyAction !== "restore");
 	return (
 		<div className="flex flex-wrap items-center gap-2 pt-1">
 			{presentIsPrimary ? (
@@ -241,12 +243,8 @@ export function MeetingToolbar({
 				// plain member never sees an empty "Manage".
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
-						<Button
-							variant="outline"
-							size="touch"
-							aria-busy={lifecycleBusy && busyAction !== undefined}
-						>
-							{lifecycleBusy ? (
+						<Button variant="outline" size="touch" aria-busy={manageBusy}>
+							{manageBusy ? (
 								<Loader2 className="animate-spin" aria-hidden />
 							) : null}
 							Manage

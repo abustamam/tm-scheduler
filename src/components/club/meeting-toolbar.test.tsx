@@ -12,7 +12,7 @@ import type { AgendaLayout } from "#/components/agenda/meeting-agenda-print";
 import type { Slide } from "#/lib/agenda-slides";
 import type { MeetingPhase } from "#/lib/meeting-lifecycle";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
-import { MeetingToolbar } from "./meeting-toolbar";
+import { type LifecycleAction, MeetingToolbar } from "./meeting-toolbar";
 
 const BASE = {
 	phase: "upcoming" as MeetingPhase,
@@ -42,6 +42,7 @@ const BASE = {
 	canCancel: undefined as boolean | undefined,
 	canLineupBlast: undefined as boolean | undefined,
 	onLineupBlast: undefined as (() => void) | undefined,
+	busyAction: undefined as LifecycleAction | null | undefined,
 };
 
 afterEach(cleanup);
@@ -501,5 +502,122 @@ describe("MeetingToolbar (#541 D2)", () => {
 			share.compareDocumentPosition(menuTrigger) &
 				Node.DOCUMENT_POSITION_FOLLOWING,
 		).toBeTruthy();
+	});
+
+	// The trigger is gated by `showManage`, a hand-written mirror of each item's
+	// inline gate. Drift either way is a bug: a trigger over an empty menu, or
+	// an item no one can reach. So assert the equivalence over the whole
+	// persona x phase x locked matrix rather than pinning today's expressions.
+	describe("Manage trigger renders iff the menu has an item", () => {
+		const PERSONAS: Record<string, Partial<typeof BASE>> = {
+			"officer, everything on": {
+				hasIdentity: true,
+				canManage: true,
+				hasAddableRoles: true,
+				canComplete: true,
+				canCancel: true,
+				canLineupBlast: true,
+			},
+			"officer, nothing else": { hasIdentity: true, canManage: true },
+			"member with lineup access": {
+				hasIdentity: true,
+				canLineupBlast: true,
+			},
+			"member without": { hasIdentity: true },
+			anonymous: {},
+		};
+		const PHASES: Record<string, Partial<typeof BASE>> = {
+			upcoming: { phase: "upcoming" },
+			today: { phase: "today" },
+			completed: { phase: "completed" },
+			cancelled: { phase: "upcoming", cancelled: true },
+		};
+		const cases = Object.entries(PERSONAS).flatMap(([persona, p]) =>
+			Object.entries(PHASES).flatMap(([phase, ph]) =>
+				[false, true].map((locked) => ({
+					label: `${persona} / ${phase} / ${locked ? "locked" : "unlocked"}`,
+					props: { ...p, ...ph, locked },
+				})),
+			),
+		);
+
+		// The menu's items are not in the DOM until the trigger exists, so
+		// "no trigger" alone cannot show an item went unreachable. The oracle
+		// is the item rules themselves: Promote / Add role / Complete / Cancel
+		// need an officer on a live (not cancelled) meeting, Reopen an officer
+		// on a locked one (cancelled included), Lineup blast its own flag.
+		it.each(cases)("$label", async ({ props }) => {
+			const officer = props.canManage === true;
+			const anyItem =
+				props.canLineupBlast === true ||
+				(officer && (props.cancelled !== true || props.locked === true));
+			await renderToolbar(props);
+			const trigger = screen.queryByRole("button", { name: /^manage$/i });
+			expect(trigger !== null).toBe(anyItem);
+			if (trigger === null) return;
+			await userEvent.click(trigger);
+			expect(screen.getAllByRole("menuitem").length).toBeGreaterThanOrEqual(1);
+		});
+
+		it("the matrix reaches both outcomes (it is not vacuous)", async () => {
+			let shown = 0;
+			let hidden = 0;
+			for (const { props } of cases) {
+				await renderToolbar(props);
+				if (screen.queryByRole("button", { name: /^manage$/i })) shown++;
+				else hidden++;
+				cleanup();
+			}
+			expect(shown).toBeGreaterThan(0);
+			expect(hidden).toBeGreaterThan(0);
+		});
+	});
+
+	// The trigger spins only for a write that lives in the Manage menu. Restore
+	// is the cancelled banner's button, so it must not make Manage busy.
+	describe("Manage trigger busy state", () => {
+		const trigger = () =>
+			screen.getByRole("button", { name: /manage/i }) as HTMLElement;
+		const OFFICER = { canManage: true, canComplete: true, canCancel: true };
+
+		it.each([
+			"complete",
+			"reopen",
+			"cancel",
+		] as const)("busy %s: spins and carries aria-busy", async (busyAction) => {
+			await renderToolbar({
+				...OFFICER,
+				lifecycleBusy: true,
+				busyAction,
+			});
+			expect(trigger().getAttribute("aria-busy")).toBe("true");
+			expect(trigger().querySelector("svg.animate-spin")).not.toBeNull();
+		});
+
+		it("busy restore: Manage is NOT busy (Restore is the banner's action)", async () => {
+			await renderToolbar({
+				...OFFICER,
+				lifecycleBusy: true,
+				busyAction: "restore",
+			});
+			expect(trigger().getAttribute("aria-busy")).not.toBe("true");
+			expect(trigger().querySelector("svg.animate-spin")).toBeNull();
+		});
+
+		it("busy with no busyAction named: spins (old behaviour, as the items do)", async () => {
+			await renderToolbar({ ...OFFICER, lifecycleBusy: true });
+			expect(trigger().getAttribute("aria-busy")).toBe("true");
+			expect(trigger().querySelector("svg.animate-spin")).not.toBeNull();
+		});
+
+		it("idle: neither", async () => {
+			await renderToolbar({
+				...OFFICER,
+				lifecycleBusy: false,
+				busyAction: "complete",
+			});
+			expect(trigger().getAttribute("aria-busy")).not.toBe("true");
+			expect(trigger().querySelector("svg.animate-spin")).toBeNull();
+		});
 	});
 });
