@@ -85,6 +85,10 @@ vi.mock("#/server/voting", () => ({
 vi.mock("#/server/members", () => ({ listMembers: vi.fn() }));
 // The flyer route's one reader (#931).
 vi.mock("#/server/promo", () => ({ getPublicFlyer: vi.fn() }));
+// The digital agenda's role descriptions (#1335).
+vi.mock("#/server/role-definitions", () => ({ getPublicClubRoles: vi.fn() }));
+// Reached through `MeetingRunOfShow`'s "You" badge; never called by a loader.
+vi.mock("#/lib/auth-client", () => ({ authClient: { useSession: vi.fn() } }));
 
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import {
@@ -96,6 +100,8 @@ import { FLYER_MEETING_FIELDS } from "#/lib/promo-template";
 import { getClubLogoMeta } from "#/server/club-logo";
 import { getPublicMeetingByKey } from "#/server/meetings";
 import { getPublicFlyer } from "#/server/promo";
+import { getPublicClubRoles } from "#/server/role-definitions";
+import { Route as AgendaRoute } from "./club.$clubId_.meeting.$meetingId.agenda";
 import { Route as FlyerRoute } from "./club.$clubId_.meeting.$meetingId.flyer";
 import { Route as PresentRoute } from "./club.$clubId_.meeting.$meetingId.present";
 import { Route as PrintRoute } from "./club.$clubId_.meeting.$meetingId.print";
@@ -123,6 +129,10 @@ const WITHHELD = [
 	"src/routes/club.$clubId_.meeting.$meetingId.print.tsx",
 	"src/routes/club.$clubId_.meeting.$meetingId.present.tsx",
 	"src/routes/club.$clubId_.meeting.$meetingId.word.tsx",
+	// The digital agenda (#1335): public, phone-sized, and the one that is meant
+	// to be read off a screen, so it is held to the same rule.
+	"src/routes/club.$clubId_.meeting.$meetingId.agenda.tsx",
+	"src/components/agenda/meeting-run-of-show.tsx",
 	"src/components/agenda/meeting-agenda-print.tsx",
 	"src/components/agenda/meeting-present.tsx",
 	"src/components/agenda/word-of-the-day-poster.tsx",
@@ -220,14 +230,14 @@ describe("the join link is on NO in-room artifact (#731)", () => {
 		});
 	}
 
-	it("still sweeps all sixteen modules", () => {
+	it("still sweeps all eighteen modules", () => {
 		// The cheapest way to "fix" a failure above is to delete the offending
 		// entry from WITHHELD, which silences the guard without changing what
 		// ships. A count floor makes that a visible edit rather than a quiet one:
 		// three routes, three renderers, three deck builders, the
 		// next-meeting slide's data module and body (#932), and the five
 		// marketing-blast modules (#931).
-		expect(WITHHELD).toHaveLength(16);
+		expect(WITHHELD).toHaveLength(18);
 	});
 });
 
@@ -391,6 +401,7 @@ const ARTIFACT_ROUTES: ArtifactRoute[] = [
 	{ segment: "print", route: PrintRoute, carriesMeeting: true },
 	{ segment: "present", route: PresentRoute, carriesMeeting: true },
 	{ segment: "word", route: WordRoute, carriesMeeting: true },
+	{ segment: "agenda", route: AgendaRoute, carriesMeeting: true },
 	// Already compliant before #754 — it projects four named fields and carries
 	// no meeting row at all, which is the stronger position and the pattern
 	// copied into `in-room-meeting-payload`. Enrolled so it stays that way:
@@ -437,6 +448,7 @@ beforeEach(() => {
 		// biome-ignore lint/suspicious/noExplicitAny: a partial club is enough
 	} as any);
 	vi.mocked(getClubLogoMeta).mockResolvedValue(null);
+	vi.mocked(getPublicClubRoles).mockResolvedValue([]);
 	// biome-ignore lint/suspicious/noExplicitAny: a partial payload is enough
 	vi.mocked(getPublicMeetingByKey).mockResolvedValue(detail() as any);
 });
