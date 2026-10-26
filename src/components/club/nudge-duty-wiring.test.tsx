@@ -240,7 +240,7 @@ describe("the attendance rail's drafts", () => {
 		const user = userEvent.setup();
 		await user.click(screen.getByRole("button", { name: `Contact ${name}` }));
 		const item = screen.getByRole("menuitem", {
-			name: /^WhatsApp( · preferred)?$/,
+			name: /^WhatsApp( \(preferred\))?, opens in a new tab$/,
 		});
 		await user.keyboard("{Escape}");
 		return item;

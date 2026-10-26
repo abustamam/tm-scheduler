@@ -43,11 +43,6 @@ interface NudgeButtonsBase {
 	 *  with the agenda slot cards and the recruit picker, where the words are
 	 *  affordable; only the 340px attendance rail needs the space back. */
 	iconOnly?: boolean;
-	/** OPT-IN, and only the attendance rail passes it (#1094): a three-icon
-	 *  `iconOnly` group takes the whole line, right-aligned, so a wrapping parent
-	 *  (`flex-wrap`) puts it above its sibling. A percentage width means nothing
-	 *  in a content-sized cell, so `iconOnly` alone must not turn it on. */
-	ownLineWhenCrowded?: boolean;
 	/** `"inline"` (default) renders the outline link buttons. `"menu"` (#1309)
 	 *  folds every available method into ONE `Contact <name>` row menu, so a roll
 	 *  row stays on one line; the preferred method is listed first. */
@@ -141,7 +136,6 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 		onContacted,
 		iconOnly = false,
 		preferredContact = null,
-		ownLineWhenCrowded = false,
 		layout = "inline",
 	} = props;
 	// Render the channel links only after mount. The caller builds `shareUrl` with
@@ -313,75 +307,46 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 			</span>
 		) : null;
 
-	const link = (
-		m: ContactMethod,
-		href: string,
-		label: string,
-		text: string,
-		icon: ReactNode,
-		external: boolean,
-	) => (
-		<Button
-			key={m}
-			asChild
-			size={iconOnly ? "icon-sm" : "sm"}
-			variant="outline"
-		>
-			<a
-				href={href}
-				{...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
-				onClick={onContacted}
-				aria-label={iconOnly ? label : undefined}
-				title={iconOnly ? label : undefined}
-			>
-				{icon}
-				{iconOnly ? null : text}
-				{badge(m)}
-			</a>
-		</Button>
-	);
-
-	const buttons: Partial<Record<ContactMethod, ReactNode>> = {
-		call: callUrl
-			? link(
-					"call",
-					callUrl,
-					callLabel,
-					"Call",
-					<Phone className="size-4" aria-hidden />,
-					false,
-				)
-			: null,
-		sms: smsUrl
-			? link(
-					"sms",
-					smsUrl,
-					smsLabel,
-					"SMS",
-					<MessageSquareText className="size-4" aria-hidden />,
-					false,
-				)
-			: null,
-		whatsapp: nudge.whatsappUrl
-			? link(
-					"whatsapp",
-					nudge.whatsappUrl,
-					waLabel,
-					"WhatsApp",
-					<MessageCircle className="size-4" aria-hidden />,
-					true,
-				)
-			: null,
-		email: nudge.mailtoUrl
-			? link(
-					"email",
-					nudge.mailtoUrl,
-					mailLabel,
-					"Email",
-					<Mail className="size-4" aria-hidden />,
-					false,
-				)
-			: null,
+	// ONE table for both layouts, so the inline buttons and the menu items cannot
+	// drift on href, order, wording or the new-tab rule.
+	const methods: Record<
+		ContactMethod,
+		{
+			href: string | null | undefined;
+			label: string;
+			text: string;
+			icon: ReactNode;
+			external: boolean;
+		}
+	> = {
+		call: {
+			href: callUrl,
+			label: callLabel,
+			text: "Call",
+			icon: <Phone className="size-4" aria-hidden />,
+			external: false,
+		},
+		sms: {
+			href: smsUrl,
+			label: smsLabel,
+			text: "SMS",
+			icon: <MessageSquareText className="size-4" aria-hidden />,
+			external: false,
+		},
+		whatsapp: {
+			href: nudge.whatsappUrl,
+			label: waLabel,
+			text: "WhatsApp",
+			icon: <MessageCircle className="size-4" aria-hidden />,
+			external: true,
+		},
+		email: {
+			href: nudge.mailtoUrl,
+			label: mailLabel,
+			text: "Email",
+			icon: <Mail className="size-4" aria-hidden />,
+			external: false,
+		},
 	};
 	// Preferred first (Call/SMS only exist when preferred), then today's order.
 	const order: ContactMethod[] = ["call", "sms", "whatsapp", "email"];
@@ -390,49 +355,7 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 		order.unshift(preferredContact);
 	}
 
-	// Three icons do not fit the rail's action line beside the status control
-	// once a classic scrollbar takes 15px (#1094), so, for a caller that opts in
-	// (`ownLineWhenCrowded`, the rail), that group takes the whole line,
-	// right-aligned, and the caller's `flex-wrap` puts it above the status
-	// control. Two icons keep today's single line.
-	const rendered = order.filter((m) => buttons[m]).length;
-	const ownLine = iconOnly && ownLineWhenCrowded && rendered >= 3;
-
 	if (layout === "menu") {
-		const items: Record<
-			ContactMethod,
-			{
-				href: string | null | undefined;
-				text: string;
-				icon: ReactNode;
-				external: boolean;
-			}
-		> = {
-			call: {
-				href: callUrl,
-				text: "Call",
-				icon: <Phone className="size-4" aria-hidden />,
-				external: false,
-			},
-			sms: {
-				href: smsUrl,
-				text: "SMS",
-				icon: <MessageSquareText className="size-4" aria-hidden />,
-				external: false,
-			},
-			whatsapp: {
-				href: nudge.whatsappUrl,
-				text: "WhatsApp",
-				icon: <MessageCircle className="size-4" aria-hidden />,
-				external: true,
-			},
-			email: {
-				href: nudge.mailtoUrl,
-				text: "Email",
-				icon: <Mail className="size-4" aria-hidden />,
-				external: false,
-			},
-		};
 		return (
 			<DropdownMenu>
 				<DropdownMenuTrigger asChild>
@@ -447,7 +370,7 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="end">
 					{order.map((m) => {
-						const item = items[m];
+						const item = methods[m];
 						if (!item.href) return null;
 						return (
 							<DropdownMenuItem key={m} asChild>
@@ -457,6 +380,13 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 										? { target: "_blank", rel: "noopener noreferrer" }
 										: {})}
 									onClick={onContacted}
+									// The visible text is only "WhatsApp", so a link that opens
+									// a new tab says so here, as the inline label does.
+									aria-label={
+										item.external
+											? `${item.text}${preferredContact === m ? " (preferred)" : ""}, opens in a new tab`
+											: undefined
+									}
 								>
 									{item.icon}
 									{item.text}
@@ -471,11 +401,33 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 	}
 
 	return (
-		<div
-			className={`flex items-center gap-1.5${ownLine ? " w-full justify-end" : ""}`}
-			data-own-line={ownLine ? "" : undefined}
-		>
-			{order.map((m) => buttons[m] ?? null)}
+		<div className="flex items-center gap-1.5">
+			{order.map((m) => {
+				const item = methods[m];
+				if (!item.href) return null;
+				return (
+					<Button
+						key={m}
+						asChild
+						size={iconOnly ? "icon-sm" : "sm"}
+						variant="outline"
+					>
+						<a
+							href={item.href}
+							{...(item.external
+								? { target: "_blank", rel: "noopener noreferrer" }
+								: {})}
+							onClick={onContacted}
+							aria-label={iconOnly ? item.label : undefined}
+							title={iconOnly ? item.label : undefined}
+						>
+							{item.icon}
+							{iconOnly ? null : item.text}
+							{badge(m)}
+						</a>
+					</Button>
+				);
+			})}
 		</div>
 	);
 }

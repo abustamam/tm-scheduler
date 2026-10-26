@@ -852,11 +852,12 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// with a label running ~66px ("Ask") to ~172px ("Coming · assumed"), so the
 		// two icon buttons to its left jittered by that delta down the column — a
 		// crooked action column traded for a crooked status column. `w-44` (176px) is
-		// measured against the widest label plus the sm button's 42px of chrome.
-		// `w-36` below `md`, `w-44` from `md` (#1309): the one-line row has to leave
-		// the name room at 375px.
-		expect(trigger.classList.contains("w-36")).toBe(true);
-		expect(trigger.classList.contains("md:w-44")).toBe(true);
+		// measured against the widest label plus the sm button's 42px of chrome, and
+		// holds at EVERY width: `w-36` (144px) would clip "Coming · assumed" on a
+		// phone (the 375px case in `roll-row-geometry.test.ts` measures it).
+		expect(trigger.classList.contains("w-44")).toBe(true);
+		expect(trigger.classList.contains("w-36")).toBe(false);
+		expect(trigger.classList.contains("md:w-44")).toBe(false);
 		expect(trigger.classList.contains("justify-between")).toBe(true);
 
 		// WCAG 1.4.11. The chevron inherits `currentColor`, so on a muted row
@@ -1295,7 +1296,8 @@ describe("roll mode", () => {
 		// Queried BEFORE the menu opens: an open Radix menu hides the rest of the
 		// page from the accessibility tree.
 		const actionLine = trigger.parentElement as HTMLElement;
-		const status = within(actionLine).getByRole("button", {
+		// getByRole throws unless the status control is on the same line.
+		within(actionLine).getByRole("button", {
 			name: /Abe Nkemelu status/i,
 		});
 		const items = within(await openContact("Abe Nkemelu")).getAllByRole(
@@ -1311,8 +1313,6 @@ describe("roll mode", () => {
 		// control on a non-wrapping line. The #1094 own-line / `flex-wrap` shape
 		// this replaces is gone.
 		expect(actionLine.classList.contains("flex-wrap")).toBe(false);
-		expect(actionLine.querySelector("[data-own-line]")).toBeNull();
-		expect(status).toBeTruthy();
 	});
 
 	it("F6: drafts an on-your-way ask, not a pre-meeting one, from the room", async () => {
@@ -1604,7 +1604,6 @@ describe("roll mode", () => {
 		getByText("Cy Active");
 		getByText("Dee Gone");
 		getByText("Eli Nocontact");
-		expect(getByText("Cy Active")).toBeTruthy();
 		expect(queryByRole("button", { name: "Contact Cy Active" })).not.toBeNull();
 		expect(queryByRole("button", { name: "Contact Dee Gone" })).toBeNull();
 		// Nothing on file: no trigger that opens an empty menu, no inline notice.

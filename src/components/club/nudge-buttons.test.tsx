@@ -347,34 +347,6 @@ describe("NudgeButtons", () => {
 			expect(names()).toEqual(["Email"]);
 		});
 
-		it("keeps an iconOnly three-icon group a normal inline group without the rail's opt-in", () => {
-			// The dashboards render `iconOnly` in content-sized cells, where
-			// `w-full` would stretch the cell.
-			render(
-				<NudgeButtons {...base} {...both} preferredContact="sms" iconOnly />,
-			);
-			const links = screen.getAllByRole("link");
-			expect(links).toHaveLength(3);
-			const group = links[0]?.parentElement;
-			expect(group?.classList.contains("w-full")).toBe(false);
-			expect(group?.hasAttribute("data-own-line")).toBe(false);
-		});
-
-		it("takes its own line when the rail opts in", () => {
-			render(
-				<NudgeButtons
-					{...base}
-					{...both}
-					preferredContact="sms"
-					iconOnly
-					ownLineWhenCrowded
-				/>,
-			);
-			const group = screen.getAllByRole("link")[0]?.parentElement;
-			expect(group?.classList.contains("w-full")).toBe(true);
-			expect(group?.hasAttribute("data-own-line")).toBe(true);
-		});
-
 		it("fires onContacted from Call and SMS", async () => {
 			const onContacted = vi.fn();
 			render(
@@ -480,6 +452,45 @@ describe("NudgeButtons", () => {
 			const mail = items.find((i) => i.textContent === "Email");
 			mail?.addEventListener("click", (e) => e.preventDefault());
 			await userEvent.click(mail as HTMLElement);
+			expect(onContacted).toHaveBeenCalledTimes(1);
+		});
+
+		it("keeps the opens-in-a-new-tab announcement on the external item only", async () => {
+			render(
+				<NudgeButtons
+					{...base}
+					{...both}
+					preferredContact="whatsapp"
+					layout="menu"
+				/>,
+			);
+			const items = await open();
+			expect(items.map((i) => i.getAttribute("aria-label"))).toEqual([
+				"WhatsApp (preferred), opens in a new tab",
+				null,
+			]);
+			// The visible text is untouched by the label.
+			expect(items[0]?.textContent).toBe("WhatsApp · preferred");
+		});
+
+		it("fires onContacted when a menu item is chosen with the keyboard", async () => {
+			const onContacted = vi.fn();
+			render(
+				<NudgeButtons
+					{...base}
+					{...both}
+					layout="menu"
+					onContacted={onContacted}
+				/>,
+			);
+			screen.getByRole("button", { name: "Contact Jane" }).focus();
+			await userEvent.keyboard("{Enter}");
+			const mail = screen
+				.getAllByRole("menuitem")
+				.find((i) => i.textContent === "Email");
+			mail?.addEventListener("click", (e) => e.preventDefault());
+			(mail as HTMLElement).focus();
+			await userEvent.keyboard("{Enter}");
 			expect(onContacted).toHaveBeenCalledTimes(1);
 		});
 

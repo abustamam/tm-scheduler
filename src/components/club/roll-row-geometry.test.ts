@@ -50,9 +50,21 @@ function classAfterTag(file: string, tag: string): string {
 	return m?.[1] ?? "";
 }
 
-/** Group 1 of the one place `re` matches in `file`. */
-function capture(file: string, re: RegExp, what: string): string {
-	const m = re.exec(readSource(file));
+/** Group 1 of the first place `re` matches in `file`, searched only AFTER
+ *  `anchor` when one is given (so the search is inside the construct meant). */
+function capture(
+	file: string,
+	re: RegExp,
+	what: string,
+	anchor?: string,
+): string {
+	const src = readSource(file);
+	let from = 0;
+	if (anchor) {
+		from = src.indexOf(anchor);
+		expect(from, `\`${anchor}\` not found in ${file}`).toBeGreaterThan(-1);
+	}
+	const m = re.exec(src.slice(from));
 	expect(m, `${what} not found in ${file}`).not.toBeNull();
 	return m?.[1] ?? "";
 }
@@ -90,6 +102,14 @@ const VIEWPORT = { width: 500, height: 800 };
 /** Tailwind's `md` breakpoint: below it the status track is `w-36`. */
 const MD_PX = 768;
 
+type Shape = "oneLine" | "twoLine" | "plan";
+/** The widest label a plan trigger shows (an assumed Coming), and a long role
+ *  code; the real chip shows the code, not the role name. */
+const PLAN_LABEL = "Coming · assumed";
+const PLAN_CODE = "TOASTM";
+/** The widest label a roll trigger shows. */
+const ROLL_LABEL = "Excused";
+
 const NAME = "Abdul-Rasheed Bustamam-Featherstonehaugh";
 
 type Measure = {
@@ -103,6 +123,10 @@ type Measure = {
 	menuMid: number;
 	nameTruncated: boolean;
 	statusWidth: number;
+	/** The status trigger's content width minus its box; > 0 is a clipped label. */
+	statusClip: number;
+	/** The document's horizontal scroll overflow; > 0 scrolls sideways. */
+	pageOverflow: number;
 	/** Right-most control edge minus the row's right edge; > 0 is clipped. */
 	overhang: number;
 };
@@ -131,6 +155,7 @@ describe.skipIf(!hasChrome)(
 			sm: "",
 			iconSm: "",
 			status: "",
+			planStatus: "",
 			menuTrigger: "",
 		};
 
@@ -138,14 +163,16 @@ describe.skipIf(!hasChrome)(
 			`${cls.buttonBase} ${variant} ${size} ${extra}`;
 
 		/** One roll row, the shipped classes around synthetic contents. */
-		function rowHtml(shape: "oneLine" | "twoLine"): string {
-			const identity = `<div class="${cls.identity}"><span class="${cls.name}" title="${NAME}" data-name>${NAME}</span><span data-slot="badge" class="${cls.badgeBase} ${cls.badgeSecondary} ${cls.chipBadge}" data-chip><span aria-hidden>TD</span></span></div>`;
-			const status = `<button type="button" class="${button(cls.outline, cls.sm, cls.status)}" data-status><span aria-hidden>Absent</span><svg class="size-3.5" viewBox="0 0 24 24" width="14" height="14"></svg></button>`;
+		function rowHtml(shape: Shape): string {
+			const plan = shape === "plan";
+			const chipText = plan ? PLAN_CODE : "TD";
+			const identity = `<div class="${cls.identity}"><span class="${cls.name}" title="${NAME}" data-name>${NAME}</span><span data-slot="badge" class="${cls.badgeBase} ${cls.badgeSecondary} ${cls.chipBadge}" data-chip><span aria-hidden>${chipText}</span></span></div>`;
+			const status = `<button type="button" class="${button(cls.outline, cls.sm, plan ? cls.planStatus : cls.status)}" data-status><span class="sr-only">${NAME} status</span><span aria-hidden>${plan ? PLAN_LABEL : ROLL_LABEL}</span><svg class="size-3.5" viewBox="0 0 24 24" width="14" height="14"></svg></button>`;
 			const menu = `<button type="button" class="${button(cls.ghost, cls.iconSm, cls.menuTrigger)}" aria-label="Contact ${NAME}" data-menu><svg class="size-4" viewBox="0 0 24 24" width="16" height="16"></svg></button>`;
 			const actions = `<div class="${cls.actionLine}">${status}${menu}</div>`;
 			// The CONTROL: the pre-#1309 shape, the action line under the identity.
 			const inner =
-				shape === "oneLine"
+				shape !== "twoLine"
 					? `<div class="${cls.mainLine}">${identity}${actions}</div>`
 					: `<div class="flex flex-col gap-1.5">${identity}${actions}</div>`;
 			// A divider-bearing row ABOVE it, as in the real list, so the measured
@@ -171,13 +198,15 @@ describe.skipIf(!hasChrome)(
 				menuMid: Math.round(r(menu).top + r(menu).height / 2),
 				nameTruncated: nm.scrollWidth > nm.clientWidth ? 1 : 0,
 				statusWidth: Math.round(r(st).width),
+				statusClip: st.scrollWidth - st.clientWidth,
+				pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
 				overhang: Math.round(Math.max(r(st).right, r(menu).right) - r(row).right)
 			};
 			document.title = Object.keys(out).map(function (k) { return k + "=" + out[k]; }).join(";");
 		})();
 		</script>`;
 
-		function measure(shape: "oneLine" | "twoLine"): Measure {
+		function measure(shape: Shape): Measure {
 			const bodyHtml = `<div style="width:${PHONE_PX}px" data-rail><div class="${cls.cardBase} ${cls.card}"><div class="${cls.cardBodyBase} ${cls.cardBody}">${rowHtml(shape)}</div></div></div>`;
 			const title = renderAndReadTitle({
 				bodyHtml,
@@ -207,6 +236,8 @@ describe.skipIf(!hasChrome)(
 				menuMid: n("menuMid"),
 				nameTruncated: n("nameTruncated") === 1,
 				statusWidth: n("statusWidth"),
+				statusClip: n("statusClip"),
+				pageOverflow: n("pageOverflow"),
 				overhang: n("overhang"),
 			};
 		}
@@ -229,19 +260,31 @@ describe.skipIf(!hasChrome)(
 				BADGE,
 				/secondary:\s*"([^"]*)"/,
 				"badge secondary",
+				"variants:",
 			);
 			// The role chip's own class on the roll row's `<Badge variant="secondary">`.
 			cls.chipBadge = capture(
 				PANEL,
 				/<Badge variant="secondary" className="([^"]*)"/,
 				"role chip className",
+				"function PanelIdentityLine",
 			);
 			cls.actionLine = classAfterTag(PANEL, "function PanelActionLine");
 			cls.buttonBase = capture(BUTTON, /cva\(\s*"([^"]*)"/, "button base");
-			cls.outline = capture(BUTTON, /outline:\s*"([^"]*)"/, "outline");
-			cls.ghost = capture(BUTTON, /ghost:\s*"([^"]*)"/, "ghost");
-			cls.sm = capture(BUTTON, /\n\s*sm:\s*"([^"]*)"/, "size sm");
-			cls.iconSm = capture(BUTTON, /"icon-sm":\s*"([^"]*)"/, "size icon-sm");
+			cls.outline = capture(
+				BUTTON,
+				/outline:\s*"([^"]*)"/,
+				"outline",
+				"variant: {",
+			);
+			cls.ghost = capture(BUTTON, /ghost:\s*"([^"]*)"/, "ghost", "variant: {");
+			cls.sm = capture(BUTTON, /\n\s*sm:\s*"([^"]*)"/, "size sm", "size: {");
+			cls.iconSm = capture(
+				BUTTON,
+				/"icon-sm":\s*"([^"]*)"/,
+				"size icon-sm",
+				"size: {",
+			);
 			// The RECORDED chip's trigger (RollChip), the one a recorded row shows.
 			const rollChip = readSource(PANEL);
 			const at = rollChip.indexOf("function RollChip");
@@ -254,15 +297,23 @@ describe.skipIf(!hasChrome)(
 				"RollChip's recorded trigger class not found",
 			).not.toBeNull();
 			cls.status = status?.[1] ?? "";
+			// The PLAN row's trigger (AttendanceRow), `cn("w-44 …", m.assumed && …)`.
+			cls.planStatus = capture(
+				PANEL,
+				/cn\(\s*"(w-44[^"]*)"/,
+				"plan row trigger className",
+				"function AttendanceRow",
+			);
 			cls.menuTrigger = capture(
 				NUDGE,
 				/size="icon-sm"\s*className="([^"]*)"/,
 				"menu trigger className",
+				'layout === "menu"',
 			);
 			css = await buildAppCss(
 				candidatesIn(
 					Object.values(cls)
-						.concat(["flex flex-col gap-1.5", "size-3.5", "size-4"])
+						.concat(["flex flex-col gap-1.5", "size-3.5", "size-4", "sr-only"])
 						.map((c) => `<i class="${c}"></i>`)
 						.join(""),
 				),
@@ -278,6 +329,12 @@ describe.skipIf(!hasChrome)(
 			);
 			expect(m.railWidth).toBe(PHONE_PX);
 			expect(m.statusWidth, "status track below md is w-36").toBe(144);
+			// "Excused", the widest roll label (~55.7px + 42px of button chrome =
+			// ~98px, measured), fits the 144px track.
+			expect(
+				m.statusClip,
+				"the roll label overflows its track",
+			).toBeLessThanOrEqual(0);
 			expect(
 				m.rowHeight,
 				`row is ${m.rowHeight}px tall, not one line`,
@@ -293,6 +350,31 @@ describe.skipIf(!hasChrome)(
 			// What gives way is the name, not the controls.
 			expect(m.nameTruncated, "a long name truncates").toBe(true);
 			expect(m.overhang, "controls clipped by the row").toBeLessThanOrEqual(0);
+		});
+
+		it("keeps a plan row showing 'Coming · assumed' on one line at 375px, label unclipped, nothing scrolling sideways", () => {
+			const m = measure("plan");
+			expect(m.innerWidth, "the md: breakpoint must be off").toBeLessThan(
+				MD_PX,
+			);
+			expect(m.statusWidth, "the plan trigger is w-44 at every width").toBe(
+				176,
+			);
+			expect(
+				m.statusClip,
+				`"${PLAN_LABEL}" overflows its ${m.statusWidth}px trigger`,
+			).toBeLessThanOrEqual(0);
+			expect(m.rowHeight, `row is ${m.rowHeight}px tall`).toBeLessThanOrEqual(
+				48,
+			);
+			const mids = [m.nameMid, m.chipMid, m.statusMid, m.menuMid];
+			expect(
+				Math.max(...mids) - Math.min(...mids),
+				`vertical centres (name, chip, status, menu) = ${mids.join(", ")}`,
+			).toBeLessThanOrEqual(4);
+			expect(m.nameTruncated, "the long name is what gives way").toBe(true);
+			expect(m.overhang, "controls clipped by the row").toBeLessThanOrEqual(0);
+			expect(m.pageOverflow, "page scrolls sideways").toBeLessThanOrEqual(0);
 		});
 
 		it("CONTROL: the pre-#1309 two-line shape fails the same measurement", () => {

@@ -65,10 +65,11 @@ const RUNG_LABELS: Record<PlanStatus, string> = {
  *  with its rationale.
  *
  *  The width is what forces it, and the number is measured, so do not "fix" this
- *  by stacking the two: the trigger is a fixed `w-44` (176px, `w-36` below `md`) track sized against
- *  the widest label it must hold, `"Coming · assumed"`. `"Coming · assumed ·
- *  asked"` does not fit, and widening the track spends ~50px of a ~292px rail
- *  saying twice what "asked" already implies (nobody answered). */
+ *  by stacking the two: the plan row's trigger is a fixed `w-44` (176px, at
+ *  every width) track sized against the widest label it must hold,
+ *  `"Coming · assumed"` (measured below). `"Coming · assumed · asked"` does not
+ *  fit, and widening the track spends ~50px of a ~292px rail saying twice what
+ *  "asked" already implies (nobody answered). */
 const ASSUMED_WORD = "assumed";
 const ASKED_WORD = "asked";
 
@@ -445,10 +446,10 @@ function AttendanceRow({
 							 *  has TWO hard vertical edges. `justify-end` on the line above flushes
 							 *  only the RIGHT one, and this trigger is `whitespace-nowrap` with a
 							 *  label running from "Ask" to "Coming · assumed" — so everything to its
-							 *  left was pushed by that delta and the two icon buttons, the repeated
+							 *  left was pushed by that delta and the contact controls, the repeated
 							 *  identical elements the eye tracks down a 40-row column, formed a
-							 *  ragged edge jittering up to ~90px row to row. That traded a crooked
-							 *  status column for a crooked action column.
+							 *  ragged edge jittering row to row. That traded a crooked status
+							 *  column for a crooked action column.
 							 *
 							 *  `w-44` (11rem = 176px) is MEASURED against the widest label after the
 							 *  badge fix above, not guessed:
@@ -461,15 +462,17 @@ function AttendanceRow({
 							 *    worst intrinsic width            130.16 + 42 = 172.16px
 							 *
 							 *  176px clears that by 3.8px and clears the shipped Manrope by 14.1px.
-							 *  And it fits: the rail's usable width is ~292px, the icon cluster is
-							 *  32 + 6 + 32 = 70px, and the 12px `gap-3` above leaves 210px for this
-							 *  track — 34px spare. */}
+							 *  The track is `w-44` at EVERY width, not `w-36` below `md`: 144px
+							 *  would clip this nowrap label on a phone. On a line it costs
+							 *  176 + the 12px `gap-3` + the 32px contact-menu icon = 220px, leaving
+							 *  the identity (`min-w-0`, truncating) the rest of the row; the
+							 *  375px case in `roll-row-geometry.test.ts` holds that. */}
 							<Button
 								variant="outline"
 								size="sm"
 								disabled={locked || pending}
 								className={cn(
-									"w-36 justify-between md:w-44",
+									"w-44 justify-between",
 									m.assumed &&
 										"text-muted-foreground hover:text-muted-foreground",
 								)}
@@ -698,13 +701,13 @@ function RollChip({
 			: "the plan suggests";
 		const suggestionAnnouncement = `${row.name} status: not recorded — ${source} ${ROLL_LABELS[suggestion]}. Tap to record it.`;
 		return (
-			// The SAME `w-44` track a recorded row's trigger fills (the 176px is
-			// measured — see `AttendanceRow`'s trigger), so the two row shapes share
-			// the rail's one right edge and its one left edge. Split 32px for the
-			// chevron trigger, 4px of `gap-1`, and `flex-1` (140px) for the commit,
-			// whose widest label ("Present?", the widest of the two suggestions) needs
-			// well under that. Sizing the pair inside the existing track rather than widening
-			// it is what keeps the icon cluster to its left from moving.
+			// The SAME `w-36 md:w-44` track a recorded row's trigger fills, so the
+			// two roll row shapes share the rail's one right edge. Split 32px for the
+			// chevron trigger, 4px of `gap-1`, and `flex-1` for the commit (108px
+			// below `md`, 140px from `md`), whose widest label ("Present?", the
+			// widest of the two suggestions) needs well under either. Sizing the pair
+			// inside the track rather than widening it keeps the contact menu to its
+			// right from moving.
 			<div className="flex w-36 items-center gap-1 md:w-44">
 				<Button
 					variant="outline"
@@ -763,8 +766,10 @@ function RollChip({
 			 *  formed a ragged edge. Roll mode had no track at all: the chip was a
 			 *  direct child of a `flex flex-col` `<li>` and stretched the full width,
 			 *  so the rail's one right edge held for the plan rows and not for these.
-			 *  `w-44` is the number plan mode measured for a wider label set, which
-			 *  this one fits inside — one track for both modes is the point. */}
+			 *  `w-36 md:w-44` is narrower than plan mode's `w-44` below `md`, because
+			 *  this label set ("—" to "Excused") is far shorter than "Coming ·
+			 *  assumed" and the phone's line is the scarce thing; from `md` the two
+			 *  modes share the 176px track. */}
 			<Button
 				variant="outline"
 				size="sm"
@@ -820,10 +825,10 @@ function RollAttendanceRow({
 	return (
 		// The rail's row (v1.19.0.0, #594), SHARED as code rather than as a copied
 		// class list — see `PanelRow` for what the copy had missed. Both modes now
-		// render the same three components, so the row is one thing again: the
-		// identity line with the name and the short role code, then the action line,
-		// right-aligned on the rail's one right edge, holding the icon-only contact
-		// drafts and the status control inside its fixed track.
+		// render the same three components, so the row is one thing again: ONE
+		// line (#1309), the identity (name and short role code, which truncates) on
+		// the left and the action line on the right, holding the status control in
+		// its fixed track and the one contact-menu icon.
 		<PanelRow>
 			<PanelMainLine>
 				<PanelIdentityLine
@@ -840,10 +845,9 @@ function RollAttendanceRow({
 						onSetAttendance={onSetAttendance}
 					/>
 					{hideContact || row.departed ? null : (
-						// `iconOnly`, which this row was missing. The prop's own doc says it
-						// is opt-in because "only the 340px attendance rail needs the space
-						// back" — and this IS that rail, so the words cost ~60px of a ~292px
-						// column for an affordance the plan rows next to it render as glyphs.
+						// `layout="menu"`: the contact drafts are one `Contact <name>` icon
+						// that opens a menu, the same as the plan rows, so the line holds the
+						// status track plus 32px however many channels the member has.
 						//
 						// `arriving`, not `attendance`. This row renders during the meeting —
 						// contact stays until the meeting is `completed` — and the
@@ -867,9 +871,9 @@ function RollAttendanceRow({
 				</PanelActionLine>
 			</PanelMainLine>
 			{/* #1049. Its OWN right-aligned line under the chip, not a third item
-			 *  on the action line: the chip's `w-44` track plus two contact glyphs
-			 *  already fill most of a ~292px column, and squeezing the toggle in
-			 *  would move the chip off the rail's one right edge. Present rows only
+			 *  on the action line: the status track plus the contact-menu icon
+			 *  already fill most of the line at a phone's width, and squeezing the
+			 *  toggle in would move the chip off the rail's one right edge. Present rows only
 			 *  — someone absent or excused was in neither place, and the server
 			 *  clears the mode for them. Same disabled condition as the chip. */}
 			{row.status === "present" && onSetMode ? (
