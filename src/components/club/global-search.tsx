@@ -233,7 +233,7 @@ function ResultGroup({
 }) {
 	return (
 		<>
-			<div className="px-2.5 pt-2 pb-0.5 text-xs font-bold tracking-[0.12em] text-muted-foreground uppercase opacity-70 first:pt-1">
+			<div className="px-2.5 pt-2 pb-0.5 text-xs font-bold tracking-[0.12em] text-muted-foreground uppercase first:pt-1">
 				{label}
 			</div>
 			<ul aria-label={label}>{children}</ul>

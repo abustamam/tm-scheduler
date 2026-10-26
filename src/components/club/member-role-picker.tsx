@@ -149,7 +149,7 @@ export function MemberRolePicker({
 									className={cn(
 										"flex size-4 shrink-0 items-center justify-center rounded-[4px] border",
 										o.state === "mine"
-											? "border-success bg-success text-white"
+											? "border-success bg-success text-success-foreground"
 											: "border-border",
 									)}
 								>
