@@ -403,7 +403,11 @@ describe.skipIf(!hasChrome)(
 				`"${PLAN_STATUS}" overflows its ${m.statusWidth}px trigger`,
 			).toBeLessThanOrEqual(0);
 			// What the name keeps: with a 6-char role chip it still gets a real box.
-			expect(m.nameWidth, "the name's box").toBeGreaterThanOrEqual(56);
+			// Font-dependent, so the floor sits between the two tracks rather than on
+			// one font's number: at `w-36` the name measured 56px (macOS sans) and
+			// 49px (CI, DejaVu, whose chip is wider); at the old `w-44` it was 24px /
+			// ~17px. 40 fails the old track in both and passes the new one in both.
+			expect(m.nameWidth, "the name's box").toBeGreaterThanOrEqual(40);
 			expect(m.rowHeight, `row is ${m.rowHeight}px tall`).toBeLessThanOrEqual(
 				48,
 			);
