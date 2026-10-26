@@ -8,6 +8,7 @@ import { MeetingWordOfTheDayDialog } from "#/components/agenda/meeting-word-of-t
 import { SuggestFillsDialog } from "#/components/agenda/suggest-fills-dialog";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
 import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
+import { CLAIM_CLASS } from "#/components/club/grid-cell";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
 import {
 	buildRecruitTargets,
@@ -674,7 +675,7 @@ export function MeetingAgenda({
 													disabled={!isOpen || !canClaim || !claimOffered}
 													className="w-full min-w-0 text-left disabled:cursor-default"
 												>
-													<p className="font-medium">
+													<p className="font-semibold">
 														{slotLabel(slot, roleCounts)}
 													</p>
 
@@ -695,7 +696,7 @@ export function MeetingAgenda({
 
 													{slot.isSpeakerRole && slot.speechTitle ? (
 														<div className="mt-1 text-sm">
-															<p className="font-medium">
+															<p className="font-semibold">
 																&ldquo;{slot.speechTitle}&rdquo;
 															</p>
 															<p className="text-xs text-muted-foreground">
@@ -716,7 +717,7 @@ export function MeetingAgenda({
 													{slot.evaluates ? (
 														<p className="mt-1 text-xs text-muted-foreground">
 															Evaluates{" "}
-															<span className="font-medium text-foreground">
+															<span className="font-semibold text-foreground">
 																{slot.evaluates.speechTitle
 																	? `“${slot.evaluates.speechTitle}”`
 																	: (slot.evaluates.speakerName ?? "a speaker")}
@@ -732,7 +733,7 @@ export function MeetingAgenda({
 													// ROLE so two cards held by one person differ, and
 													// on the viewer's own card it drops the third
 													// person the "(you)" row already replaced.
-													<output className="mt-1 block text-xs text-[var(--warning-foreground)]">
+													<output className="mt-1 block text-xs text-warning-foreground">
 														{isMine
 															? "You said you can't make it."
 															: `${slot.assigneeName} can't make it.`}{" "}
@@ -936,12 +937,12 @@ export function MeetingAgenda({
 												) : null}
 
 												{isOpen && claimOffered ? (
-													// Same success-outline treatment as the sign-up grid's
+													// Same amber treatment as the sign-up grid's
 													// Claim cells — one visual language for one verb.
 													<Button
 														size="sm"
 														variant="outline"
-														className="border-success/70 text-success hover:bg-success hover:text-success-foreground"
+														className={CLAIM_CLASS}
 														aria-label={`Claim ${slot.roleName} — open`}
 														onClick={() => handleClaimClick(slot)}
 														disabled={busy || !canClaim}

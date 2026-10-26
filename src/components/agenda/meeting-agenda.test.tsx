@@ -6,6 +6,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { expectAmberClaim } from "#/components/club/claim-class-assert";
 import { MeetingAttendancePanel } from "#/components/club/meeting-attendance-panel";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { buildPanelRoleMap, type PlanStatus } from "#/lib/attendance-panel";
@@ -386,6 +387,23 @@ describe("MeetingAgenda capability gating", () => {
 		expect(requireIdentity).toHaveBeenCalled();
 		// Still no manager assign picker for an anonymous visitor.
 		expect(screen.queryByRole("button", { name: /Assign/ })).toBeNull();
+	});
+
+	// protects: the Claim button is amber like every open-role surface; fails_when:
+	// it reverts to the green outline; no_claim: classes do not prove contrast.
+	it("renders the Claim button with the amber open-role classes, none green", () => {
+		renderAgenda(
+			meetingViewer({
+				currentMemberId: null,
+				canManage: false,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			[slot({ status: "open" })],
+		);
+		const c = screen.getByRole("button", { name: /^Claim / }).className;
+		expectAmberClaim(c);
 	});
 
 	it("keeps Claim disabled for a memberless viewer with no requireIdentity (authed impersonation)", () => {
@@ -1328,7 +1346,7 @@ describe("MeetingAgenda: a holder who said they can't make it (#764)", () => {
 		expect(screen.getByRole("status").closest("button")).toBeNull();
 		// The TEXT warning step (≥4.5:1 on white), not the 3.15:1 fill token.
 		const cls = screen.getByRole("status").className;
-		expect(cls).toContain("text-[var(--warning-foreground)]");
+		expect(cls).toContain("text-warning-foreground");
 		expect(cls).not.toContain("--warning-strong");
 	});
 

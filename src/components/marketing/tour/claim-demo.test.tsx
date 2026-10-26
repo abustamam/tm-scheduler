@@ -8,6 +8,7 @@ import {
 	within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectAmberClaim } from "#/components/club/claim-class-assert";
 import { ClaimDemo } from "./claim-demo";
 
 beforeEach(() => vi.useFakeTimers());
@@ -122,6 +123,24 @@ describe("ClaimDemo", () => {
 			screen.getByRole("button", { name: "Claim speaking slot" }),
 		);
 		expect(row("Speaker 2").textContent).toContain("“TBA”");
+	});
+
+	// protects: the device bezel uses the design token; fails_when: a raw hex
+	// background class comes back (#1308 AC 5); no_claim: the colour itself.
+	it("colours the device bezel with a token, not a raw hex class", () => {
+		const { container } = render(<ClaimDemo />);
+		const bezel = container.querySelector("section > div") as HTMLElement;
+		expect(bezel.className).toContain("bg-device-bezel");
+		expect(bezel.className).not.toMatch(/\bbg-\[#/);
+	});
+
+	// protects: the tour's Claim matches the product's amber Claim; fails_when:
+	// it stays green or goes primary; no_claim: classes do not prove contrast.
+	it("renders the open-row Claim with the amber classes, none green", () => {
+		render(<ClaimDemo />);
+		const c = screen.getAllByRole("button", { name: /^Claim .* — open$/ })[0]
+			.className;
+		expectAmberClaim(c);
 	});
 
 	it("Cancel leaves the role open and returns focus to its Claim button", () => {

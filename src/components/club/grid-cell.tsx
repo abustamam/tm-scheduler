@@ -3,13 +3,28 @@ import type { ViewCell } from "#/lib/season-grid-view";
 import { cn } from "#/lib/utils";
 import { MeetingLink } from "./meeting-link";
 
-// The cells are 12px text, so WCAG AA needs 4.5:1. The success/warning/
-// destructive token values are AA-verified in BOTH themes (see styles.css,
-// #219): success fill pairs ≥6.4:1, warning/destructive text-on-surface ≥5:1.
+// The cells are 14px semibold text (DESIGN.md), which is still under WCAG's
+// large-text size, so AA needs 4.5:1. Text colors carry no opacity modifier: a
+// faded text color is an unverified one. Pairs, computed from styles.css:
+//   Claim rest, light: warning-foreground #8f640c on warning-soft #fdf3e7 4.79:1
+//   Claim rest, dark:  warning-foreground #e6c98a on warning-soft (#e0b357 at
+//     14% over the #0a1418 page) 9.05:1
+//   Claim hover, light: on-accent-fill #0a1418 on warning #d99a2e 7.65:1
+//   Claim hover, dark:  on-accent-fill #0a1418 on warning #e0b357 9.55:1
+//   NA toggle hover, light: primary-foreground #fff on destructive 6.42:1
+//   NA toggle hover, dark: primary-foreground #0a1418 on destructive 6.45:1
+//   (the dark pair needs the full-strength destructive fill, not /60: dark ink
+//   on destructive/60 measures 2.97:1)
+// success fill pairs and warning/destructive text-on-surface are verified in
+// styles.css (#219) at >=6.4:1 and >=5:1.
+// The Claim button's classes, shared by every surface that offers a Claim.
+export const CLAIM_CLASS =
+	"border-warning bg-warning-soft text-warning-foreground hover:bg-warning hover:text-on-accent-fill";
+
 export const CELL_KIND_CLASS: Record<ViewCell["kind"], string> = {
-	assigned: "bg-success text-success-foreground",
-	open: "border border-dashed border-warning/60 text-warning-foreground",
-	free: "border border-border text-muted-foreground/60",
+	assigned: "bg-success/15 text-foreground",
+	open: "border border-dashed border-warning text-warning-foreground",
+	free: "border border-border text-muted-foreground",
 	na: "border border-dashed border-destructive/60 text-destructive",
 	blank: "opacity-0",
 };
@@ -18,7 +33,7 @@ export const CELL_KIND_CLASS: Record<ViewCell["kind"], string> = {
 // row itself grows to the 44px touch minimum (#224). md+ keeps the h-8 desktop
 // density unchanged.
 export const CELL_BASE =
-	"flex h-11 min-w-[3rem] items-center justify-center rounded-md px-2 text-xs font-semibold md:h-8";
+	"flex h-11 min-w-[3rem] items-center justify-center rounded-md px-2 text-sm font-semibold md:h-8";
 
 /**
  * One season-grid cell. Read-only by default (links to the meeting). When a
@@ -95,10 +110,10 @@ export function GridCell({
 						: "Mark yourself unavailable — I can't make this one") + dateSuffix;
 		const tone =
 			cell.kind === "na"
-				? "border border-dashed border-destructive/70 text-destructive hover:bg-destructive hover:text-white dark:hover:bg-destructive/60"
+				? "border border-dashed border-destructive/70 text-destructive hover:bg-destructive hover:text-primary-foreground"
 				: cell.kind === "assigned"
 					? "bg-success text-success-foreground ring-2 ring-success-strong hover:opacity-80"
-					: "border border-border text-muted-foreground/70 hover:border-destructive/50 hover:text-destructive";
+					: "border border-border text-muted-foreground hover:border-destructive/50 hover:text-destructive";
 		return (
 			<button
 				type="button"
@@ -129,7 +144,8 @@ export function GridCell({
 				onClick={() => onClaim(slotId)}
 				className={cn(
 					CELL_BASE,
-					"w-full cursor-pointer border border-success/70 text-success transition-colors hover:bg-success hover:text-success-foreground disabled:opacity-50",
+					"w-full cursor-pointer border transition-colors disabled:opacity-50",
+					CLAIM_CLASS,
 				)}
 			>
 				{busy ? <Loader2 className="size-3.5 animate-spin" /> : "Claim"}
@@ -160,23 +176,13 @@ export function GridCell({
 	const inner = (
 		<span
 			title={cell.title ? cell.title + dateSuffix : undefined}
-			className={cn(
-				CELL_BASE,
-				CELL_KIND_CLASS[cell.kind],
-				// In the interactive sheet, everyone else's filled cells recede so
-				// it's obvious you can only act on your own. A light success wash +
-				// full-strength foreground text (not opacity) keeps the receded
-				// names AA-readable in both themes (≥9.8:1 measured).
-				interactive &&
-					cell.kind === "assigned" &&
-					"bg-success/15 text-foreground",
-			)}
+			className={cn(CELL_BASE, CELL_KIND_CLASS[cell.kind])}
 		>
 			{cell.text}
 			{cell.contacted ? (
 				<span
 					aria-hidden
-					className="ml-1 inline-block size-1.5 rounded-full bg-[var(--success-strong)]"
+					className="ml-1 inline-block size-1.5 rounded-full bg-success-strong"
 				/>
 			) : null}
 		</span>
