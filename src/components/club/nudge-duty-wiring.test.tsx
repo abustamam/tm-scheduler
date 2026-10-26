@@ -233,31 +233,43 @@ describe("the attendance rail's drafts", () => {
 			/>,
 		);
 
-	const rowLink = (name: string) =>
-		screen.getByRole("link", { name: new RegExp(`${name} on WhatsApp`, "i") });
+	/** The row's WhatsApp draft now lives in its `Contact <name>` menu (#1309):
+	 *  open it, take the item, and close the menu again so the next row's
+	 *  trigger is reachable (an open Radix menu makes the rest inert). */
+	const rowLink = async (name: string) => {
+		const user = userEvent.setup();
+		await user.click(screen.getByRole("button", { name: `Contact ${name}` }));
+		const item = screen.getByRole("menuitem", {
+			name: /^WhatsApp( \(preferred\))?, opens in a new tab$/,
+		});
+		await user.keyboard("{Escape}");
+		return item;
+	};
 
-	it("tells a role-holder what they still owe, on their own page", () => {
+	it("tells a role-holder what they still owe, on their own page", async () => {
 		renderRail();
-		const text = draftText(rowLink("Jane Doe"));
+		const text = draftText(await rowLink("Jane Doe"));
 		expect(text).toContain("you're our Grammarian");
 		expect(text).toContain("you'll also need to set the Word of the Day");
 		expect(text).toContain("/me?as=m1");
 	});
 
-	it("names the speaker and links their form on an evaluator's row (#1163)", () => {
+	it("names the speaker and links their form on an evaluator's row (#1163)", async () => {
 		const evaluating = EVALUATING;
 		if (!evaluating) throw new Error("fixture");
 		renderRail(new Map([["m1", evaluating]]));
-		const text = draftText(rowLink("Jane Doe"));
+		const text = draftText(await rowLink("Jane Doe"));
 		expect(text).toContain("you're evaluating Priya's speech");
 		expect(text).toContain(ICE_BREAKER_FORM_FRAGMENT);
 		// Only the row the map names: the other member keeps the role-less draft.
-		expect(draftText(rowLink("Sam Rivera"))).toContain("are you able to make");
+		expect(draftText(await rowLink("Sam Rivera"))).toContain(
+			"are you able to make",
+		);
 	});
 
-	it("leaves the role-less row's attendance draft exactly as it was", () => {
+	it("leaves the role-less row's attendance draft exactly as it was", async () => {
 		renderRail();
-		const text = draftText(rowLink("Sam Rivera"));
+		const text = draftText(await rowLink("Sam Rivera"));
 		expect(text).toContain("are you able to make our Tue 9 Sep meeting?");
 		// No duty, and the PUBLIC agenda — this draft asks about the meeting, so
 		// the meeting page is the page that answers it.

@@ -60,6 +60,12 @@ const roster = [
 	},
 ];
 
+/** A plan trigger's VISIBLE label: the `aria-hidden` span's text, qualifier
+ *  included (CSS hides the qualifier below `md`; jsdom loads no stylesheet). */
+function visibleLabel(trigger: HTMLElement): string {
+	return trigger.querySelector("span[aria-hidden]")?.textContent ?? "";
+}
+
 function renderPanel(
 	over: Partial<Parameters<typeof MeetingAttendancePanel>[0]> = {},
 ) {
@@ -85,11 +91,40 @@ function renderPanel(
 	return { props, ...render(<MeetingAttendancePanel {...props} />) };
 }
 
+/** The contact drafts live in each row's `Contact <name>` menu (#1309). Opens
+ *  it and returns the menu. */
+async function openContact(name: string) {
+	await userEvent
+		.setup()
+		.click(screen.getByRole("button", { name: `Contact ${name}` }));
+	return screen.getByRole("menu");
+}
+
+/** One menu item of a row's contact menu, opened and then closed again so a
+ *  second lookup in the same render can reach the next trigger. The element is
+ *  returned for its `href`; it is detached by then, so never click it. */
+async function contactItem(name: string, label: RegExp) {
+	const item = within(await openContact(name)).getByRole("menuitem", {
+		name: label,
+	});
+	await userEvent.setup().keyboard("{Escape}");
+	return item;
+}
+
+/** One real tap on a draft: open the row's menu, choose the item. */
+async function tapContact(name: string, label: RegExp) {
+	const user = userEvent.setup();
+	await user.click(screen.getByRole("button", { name: `Contact ${name}` }));
+	await user.click(
+		within(screen.getByRole("menu")).getByRole("menuitem", { name: label }),
+	);
+}
+
 describe("MeetingAttendancePanel (plan mode)", () => {
 	afterEach(() => cleanup());
 
-	it("#1094: a plan row preferring SMS leads with an SMS icon on its own line", () => {
-		const { getAllByRole } = renderPanel({
+	it("#1094: a plan row preferring SMS lists SMS first, marked preferred, in its contact menu", async () => {
+		renderPanel({
 			roster: [
 				{
 					id: "m1",
@@ -101,15 +136,25 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 				},
 			],
 		});
-		const links = getAllByRole("link").filter((l) =>
-			l.getAttribute("aria-label")?.includes("Ayesha"),
+		const items = within(await openContact("Ayesha Khan")).getAllByRole(
+			"menuitem",
 		);
-		expect(links[0]?.getAttribute("aria-label")).toBe(
-			"Text Ayesha Khan by SMS (preferred)",
-		);
-		expect(links).toHaveLength(3);
-		// Plan rows opt in to the rail's own-line layout too.
-		expect(links[0]?.parentElement?.hasAttribute("data-own-line")).toBe(true);
+		expect(items.map((i) => i.textContent)).toEqual([
+			"SMS · preferred",
+			"WhatsApp",
+			"Email",
+		]);
+		expect(items[0]?.getAttribute("href")).toMatch(/^sms:/);
+	});
+
+	it("#1309: a plan row renders no inline contact link, only the Contact menu trigger", () => {
+		renderPanel();
+		// The roster's rows are not member links (no capability), so ANY link on
+		// the rail would be a contact draft sitting inline on the row.
+		expect(screen.queryAllByRole("link")).toHaveLength(0);
+		expect(
+			screen.getByRole("button", { name: "Contact Ayesha Khan" }),
+		).toBeTruthy();
 	});
 
 	it("lists the whole roster with its counts line", () => {
@@ -222,10 +267,16 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		).toBe(true);
 	});
 
-	it("offers a WhatsApp draft when a phone is on file, and says so when not", () => {
-		const { getByText, getAllByRole } = renderPanel();
-		expect(getAllByRole("link").length).toBeGreaterThan(0);
-		expect(getByText(/No contact on file/i)).toBeTruthy();
+	it("offers a WhatsApp draft when a phone is on file, and no contact menu when nothing is", async () => {
+		const { queryByRole, queryByText } = renderPanel();
+		const items = within(await openContact("Ayesha Khan")).getAllByRole(
+			"menuitem",
+		);
+		expect(items.map((i) => i.textContent)).toContain("WhatsApp");
+		// Bo Lin has neither: no trigger that opens an empty menu, and no inline
+		// "No contact on file" line either (#1309 renders nothing).
+		expect(queryByRole("button", { name: "Contact Bo Lin" })).toBeNull();
+		expect(queryByText(/No contact on file/i)).toBeNull();
 	});
 
 	it("shows the sign-up sheet's short code, with the full role as its tooltip", () => {
@@ -376,26 +427,25 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		expect(within(btn).getByText("Ask").className).not.toContain("sr-only");
 	});
 
-	it("drafts a ROLE confirmation for a member who holds a slot", () => {
+	it("drafts a ROLE confirmation for a member who holds a slot", async () => {
 		// `mode` is COMPUTED at this call site, which is the #319 trap: a component
 		// tested through its props cannot see a WRONG prop, and asserting that a
 		// WhatsApp button merely EXISTS passes for either mode. So assert the text
 		// the officer would actually send.
-		const { getByRole } = renderPanel({
+		renderPanel({
 			roleByMemberId: {
 				m1: { code: "TD", roleName: "Toastmaster", confirmed: false },
 			},
 		});
 		const href =
-			getByRole("link", {
-				name: /Message Ayesha Khan on WhatsApp/i,
-			}).getAttribute("href") ?? "";
+			(await contactItem("Ayesha Khan", /^WhatsApp/)).getAttribute("href") ??
+			"";
 		expect(decodeURIComponent(href)).toContain(
 			"just confirming you're our Toastmaster",
 		);
 	});
 
-	it("does not draft a confirmation to someone who has DECLINED their slot", () => {
+	it("does not draft a confirmation to someone who has DECLINED their slot", async () => {
 		// The third axis. Both other `nudgeMode` tests vary role present/absent and
 		// hold the answer at null, so keying the draft on `m.role` alone passed
 		// both — while this row visibly reads "Not coming" and handed the officer
@@ -411,32 +461,28 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 			getByRole("button", { name: "Ayesha Khan status: Not coming" }),
 		).toBeTruthy();
 		const href =
-			getByRole("link", {
-				name: /Message Ayesha Khan on WhatsApp/i,
-			}).getAttribute("href") ?? "";
+			(await contactItem("Ayesha Khan", /^WhatsApp/)).getAttribute("href") ??
+			"";
 		const message = decodeURIComponent(href);
 		expect(message).not.toContain("just confirming");
 		expect(message).toContain("are you able to make our");
 	});
 
-	it("falls back to the attendance draft for a member with no slot", () => {
-		const { getByRole } = renderPanel();
+	it("falls back to the attendance draft for a member with no slot", async () => {
+		renderPanel();
 		const href =
-			getByRole("link", {
-				name: /Message Ayesha Khan on WhatsApp/i,
-			}).getAttribute("href") ?? "";
+			(await contactItem("Ayesha Khan", /^WhatsApp/)).getAttribute("href") ??
+			"";
 		expect(decodeURIComponent(href)).toContain("are you able to make our");
 	});
 
-	it("marks the member contacted when a draft is opened, unless locked", () => {
+	it("marks the member contacted when a draft is opened, unless locked", async () => {
 		// Tapping a draft is a real WRITE (no answer → reached_out) and it is the
 		// only rung the officer never sets by hand. Severing the wiring
 		// (`onContacted={() => {}}`) kept 17/17 green — `renderPanel` supplies the
 		// spy on every render and nothing ever asserted against it.
 		const unlocked = renderPanel();
-		fireEvent.click(
-			unlocked.getByRole("link", { name: /Message Ayesha Khan on WhatsApp/i }),
-		);
+		await tapContact("Ayesha Khan", /^WhatsApp/);
 		expect(unlocked.props.onContacted).toHaveBeenCalledWith("m1");
 		cleanup();
 
@@ -445,9 +491,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// nothing observed. The draft still OPENS on a locked meeting — the link is
 		// never disabled — a locked meeting simply records nothing against it.
 		const locked = renderPanel({ locked: true });
-		fireEvent.click(
-			locked.getByRole("link", { name: /Message Ayesha Khan on WhatsApp/i }),
-		);
+		await tapContact("Ayesha Khan", /^WhatsApp/);
 		expect(locked.props.onContacted).not.toHaveBeenCalled();
 	});
 
@@ -465,7 +509,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// `getByRole` with an EXACT `name` is the accessible-name assertion here —
 		// jest-dom is not installed, so there is no `toHaveAccessibleName`, and
 		// `getByRole` throws when nothing matches.
-		const { getByRole, queryByRole, getByText } = renderPanel({
+		const { getByRole, queryByRole } = renderPanel({
 			roleByMemberId: {
 				m1: { code: "TD", roleName: "Toastmaster", confirmed: true },
 			},
@@ -479,7 +523,15 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// the word was identical to a real answer and the only visible signal was
 		// the muting — a grey control says "less important", never "nobody said
 		// this". Now the control spells it out.
-		expect(getByText("Coming · assumed").className).not.toContain("sr-only");
+		const trigger = getByRole("button", {
+			name: "Ayesha Khan status: Coming — assumed, role confirmed",
+		});
+		expect(visibleLabel(trigger)).toBe("Coming · assumed");
+		// The qualifier is hidden below `md` by CSS (the 144px track cannot hold
+		// it), shown from `md`; the announced name above is unchanged either way.
+		const qualifier = trigger.querySelector("span[aria-hidden] > span");
+		expect(qualifier?.textContent).toBe(" · assumed");
+		expect(qualifier?.className).toBe("hidden md:inline");
 
 		// The NEGATIVE arm: no role, no answer, so nothing may claim an inference.
 		expect(getByRole("button", { name: "Bo Lin status: Ask" })).toBeTruthy();
@@ -524,7 +576,12 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// EXACT, which is also what pins "one qualifier, never two": "asked"
 		// already carries "nobody answered", so "Coming · assumed · asked" would
 		// say it twice — and would fail here.
-		expect(within(btn).getByText("Coming · asked")).toBeTruthy();
+		expect(visibleLabel(btn)).toBe("Coming · asked");
+		// " · asked" is visible at EVERY width: no `hidden` class, or tapping
+		// "Asked" on a phone would leave the label reading "Coming" (no-op look).
+		const qualifier = btn.querySelector("span[aria-hidden] > span");
+		expect(qualifier?.textContent).toBe(" · asked");
+		expect(qualifier?.className ?? "").not.toContain("hidden");
 	});
 
 	it("drops the stored Asked when the officer clears it back to no answer", () => {
@@ -532,7 +589,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// path the route actually uses: clearing DELETES a real row and logs it,
 		// so it must be visible even though the effective status cannot move.
 		// An assumed row with no stored rung reads exactly as it did before.
-		const { getByRole, getByText, queryByText } = renderPanel({
+		const { getByRole } = renderPanel({
 			plan: [{ memberId: "m1", status: "reached_out" as const }],
 			rungOverride: { m1: null },
 			roleByMemberId: {
@@ -544,11 +601,12 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 				name: "Ayesha Khan status: Coming — assumed, role confirmed",
 			}),
 		).toBeTruthy();
-		expect(queryByText("Coming · asked")).toBeNull();
 		// It reads as a plain assumed row again — the qualifier falls BACK to
 		// "assumed" rather than disappearing, which is what makes the clear
 		// visible at all now that the badge no longer carries assumed-ness.
-		expect(getByText("Coming · assumed")).toBeTruthy();
+		expect(
+			visibleLabel(getByRole("button", { name: /Ayesha Khan status/i })),
+		).toBe("Coming · assumed");
 	});
 
 	it("mutes the control on an assumed row but not on an answered one", () => {
@@ -631,60 +689,52 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// The CONTROL is where the distinction lives now, and it does move.
 		const assumed = getByRole("button", { name: /Ayesha Khan status/i });
 		const answered = getByRole("button", { name: /Bo Lin status/i });
-		expect(within(assumed).getByText("Coming · assumed")).toBeTruthy();
+		expect(visibleLabel(assumed)).toBe("Coming · assumed");
 		// EXACT "Coming", so a qualifier leaking onto an ANSWERED row fails here.
-		expect(within(answered).getByText("Coming")).toBeTruthy();
+		expect(visibleLabel(answered)).toBe("Coming");
 	});
 
-	it("renders a long name in full rather than cutting it off", () => {
+	it("keeps a long name on ONE line: truncated, with the full name in its title (#1309)", () => {
+		const full = "Bartholomew Featherstonehaugh-Cholmondeley";
 		const { getByText } = renderPanel({
 			roster: [
 				{
 					id: "m1",
-					name: "Bartholomew Featherstonehaugh-Cholmondeley",
+					name: full,
 					preferredName: null,
 					phone: null,
 					email: null,
 				},
 			],
 		});
-		const el = getByText("Bartholomew Featherstonehaugh-Cholmondeley");
-		// HONEST LIMIT: jsdom performs no layout, so the WRAP itself is not
-		// assertable in process, and this diff is not worth standing up the
-		// headless-Chrome harness for. What IS assertable is the mechanism — the
-		// class that caused the cutoff is gone. Do not read a green run here as
-		// proof of the rendered geometry.
-		// BOTH halves, with word-boundary semantics. `not.toContain("truncate")`
-		// alone passes for `line-clamp-1`, which reintroduces the very cutoff this
-		// test exists to prevent — verified, it kept all 17 green. Removing the bad
-		// class is only half the requirement; naming the class we DO want is what
-		// closes it.
-		expect(el.classList.contains("truncate")).toBe(false);
-		expect(el.classList.contains("break-words")).toBe(true);
-		// And the CAP, which the two assertions above permitted but never
-		// required. Design doc §3 says "capped at 2 lines"; the element had
-		// `break-words` and no clamp at all, so `name` — unbounded user data —
-		// grew the row without limit and `line-clamp-2` was satisfied by nothing.
-		// This is the assertion that distinguishes the spec's reading from the
-		// merely-not-truncated one.
-		expect(el.classList.contains("line-clamp-2")).toBe(true);
+		const el = getByText(full);
+		// HONEST LIMIT: jsdom performs no layout, so the rendered one-line height
+		// is `roll-row-geometry.test.ts`'s job (Chrome). What is assertable here is
+		// the mechanism: the name truncates (and can shrink in its flex row via
+		// `min-w-0`), and the text it cuts stays reachable through `title`. A
+		// wrapping class coming back (`line-clamp-*`, `break-words`) would put the
+		// row on two lines again.
+		expect(el.classList.contains("truncate")).toBe(true);
+		expect(el.classList.contains("min-w-0")).toBe(true);
+		expect(el.getAttribute("title")).toBe(full);
+		expect(el.className).not.toMatch(/line-clamp|break-words/);
 	});
 
-	it("greets by the recorded preferred name, in both drafts", () => {
+	it("greets by the recorded preferred name, in both drafts", async () => {
 		// #486 wired end to end on THIS surface. Severing either prop at the
 		// `NudgeButtons` call site — `email={null}` or `preferredName={null}` — left
 		// the suite green (both verified), because no fixture had an email at all
 		// and every fixture had a null preferred name. The mail draft is the half
 		// that could not render at all.
-		const { getByRole } = renderPanel();
+		renderPanel();
 		const wa = decodeURIComponent(
-			getByRole("link", {
-				name: /Message Abdul-Rasheed Bustamam on WhatsApp/i,
-			}).getAttribute("href") ?? "",
+			(await contactItem("Abdul-Rasheed Bustamam", /^WhatsApp/)).getAttribute(
+				"href",
+			) ?? "",
 		);
 		// The mail draft exists at all only because `email` is wired.
 		const mailHref =
-			getByRole("link", { name: "Email Abdul-Rasheed Bustamam" }).getAttribute(
+			(await contactItem("Abdul-Rasheed Bustamam", /^Email/)).getAttribute(
 				"href",
 			) ?? "";
 		expect(mailHref.startsWith("mailto:rasheed@club.example")).toBe(true);
@@ -788,13 +838,15 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 					release = resolve;
 				}),
 		);
-		const { getByRole } = renderPanel({ onContacted });
-		const wa = () =>
-			getByRole("link", { name: /Message Ayesha Khan on WhatsApp/i });
-		fireEvent.click(wa());
-		fireEvent.click(wa());
-		fireEvent.click(wa());
-		fireEvent.click(wa());
+		renderPanel({ onContacted });
+		// Each tap is a full open-menu-then-choose (#1309): the menu closes on
+		// choose, so a repeat tap has to reopen it. Re-queried every time, so this
+		// cannot pass by tapping a detached node.
+		const wa = () => tapContact("Ayesha Khan", /^WhatsApp/);
+		await wa();
+		await wa();
+		await wa();
+		await wa();
 		expect(onContacted).toHaveBeenCalledTimes(1);
 
 		// And it RELEASES. A guard that never clears records the first ask and
@@ -803,7 +855,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		await act(async () => {
 			release();
 		});
-		fireEvent.click(wa());
+		await wa();
 		expect(onContacted).toHaveBeenCalledTimes(2);
 	});
 
@@ -816,12 +868,15 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		const trigger = getByRole("button", { name: /Ayesha Khan status/i });
 
 		// A FIXED TRACK plus `justify-between` = two hard vertical edges. `justify-end`
-		// alone flushes only the right one, and this trigger is `whitespace-nowrap`
-		// with a label running ~66px ("Ask") to ~172px ("Coming · assumed"), so the
-		// two icon buttons to its left jittered by that delta down the column — a
-		// crooked action column traded for a crooked status column. `w-44` (176px) is
-		// measured against the widest label plus the sm button's 42px of chrome.
-		expect(trigger.classList.contains("w-44")).toBe(true);
+		// alone flushes only the right one, and this trigger is `whitespace-nowrap`,
+		// so the two icon buttons to its left would jitter by the label's width
+		// delta down the column. The track is `w-36` (144px) below `md`, where the
+		// qualifier is hidden, and `md:w-44` (176px) from `md`, which holds the
+		// widest visible label "Coming · assumed" (the 375px and 1280px cases in
+		// `roll-row-geometry.test.ts` measure both).
+		expect(trigger.classList.contains("w-36")).toBe(true);
+		expect(trigger.classList.contains("md:w-44")).toBe(true);
+		expect(trigger.classList.contains("w-44")).toBe(false);
 		expect(trigger.classList.contains("justify-between")).toBe(true);
 
 		// WCAG 1.4.11. The chevron inherits `currentColor`, so on a muted row
@@ -831,17 +886,17 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		expect(chevron).toBeTruthy();
 		expect(chevron?.classList.contains("opacity-60")).toBe(false);
 
-		// 6px between the status control and Email put two DIFFERENT actions inside
-		// one fat-finger: a slip writes `reached_out` and throws the tablet into a
-		// mail client mid-meeting. WhatsApp and Email keep their 6px — same member,
-		// same handler — so both halves are asserted, or "widen everything" passes.
+		// A tight gap between the status control and the contact menu trigger puts
+		// two DIFFERENT actions inside one fat-finger: a slip writes `reached_out`
+		// and opens a menu mid-meeting. They share ONE non-wrapping action line
+		// (#1309), so the gap and the absence of a wrap are asserted on it.
 		const actionLine = trigger.parentElement;
 		expect(actionLine?.classList.contains("gap-3")).toBe(true);
 		expect(actionLine?.classList.contains("gap-1.5")).toBe(false);
-		const nudges = getByRole("link", {
-			name: /Message Ayesha Khan on WhatsApp/i,
-		}).closest("div");
-		expect(nudges?.classList.contains("gap-1.5")).toBe(true);
+		expect(actionLine?.classList.contains("flex-wrap")).toBe(false);
+		expect(
+			getByRole("button", { name: "Contact Ayesha Khan" }).parentElement,
+		).toBe(actionLine);
 	});
 });
 
@@ -1075,7 +1130,7 @@ describe("roll mode", () => {
 		expect(chip.textContent).toContain("—");
 	});
 
-	it("F4: builds its identity line from the rail's OWN row, byte for byte", () => {
+	it("F4: builds its identity line from the rail's OWN row, byte for byte (one-line shape, #1309)", () => {
 		// The previous refit copied `AttendanceRow`'s `<li>` class list and left the
 		// contents pre-#594, under a comment claiming the shell was shared "verbatim".
 		// Four fixes that rebuild made for this 340px column were therefore missing
@@ -1129,12 +1184,15 @@ describe("roll mode", () => {
 		const plan = render(<MeetingAttendancePanel {...shared} mode="plan" />);
 		expect(identityLine(plan)).toBe(rollLine);
 
-		// And name the two defects explicitly, because "identical to plan mode" would
-		// also be satisfied by breaking BOTH — a parity assertion cannot see a defect
-		// present on each side.
-		expect(rollLine).toContain("line-clamp-2");
-		expect(rollLine).toContain("break-words");
-		expect(rollLine).not.toContain("truncate");
+		// And name the one-line shape explicitly (#1309), because "identical to plan
+		// mode" would also be satisfied by breaking BOTH — a parity assertion cannot
+		// see a defect present on each side. The name truncates and the identity
+		// block is the flexible one (`min-w-0 flex-1`) in the one-line row; the
+		// two-line clamp is what this replaced.
+		expect(rollLine).toContain("truncate");
+		expect(rollLine).toContain("min-w-0 flex-1");
+		expect(rollLine).not.toContain("line-clamp");
+		expect(rollLine).not.toContain("break-words");
 		// The 2-4 character CODE is what is VISIBLE; the full role name reaches a
 		// pointer through `title` and a screen reader through the `sr-only` span. On
 		// the surviving render, since the roll copy is unmounted above — and the two
@@ -1185,7 +1243,8 @@ describe("roll mode", () => {
 			/>,
 		);
 		const chip = getByRole("button", { name: /Bea Osei status/i });
-		expect(chip.classList.contains("w-44")).toBe(true);
+		expect(chip.classList.contains("w-36")).toBe(true);
+		expect(chip.classList.contains("md:w-44")).toBe(true);
 		expect(chip.classList.contains("justify-between")).toBe(true);
 		const actionLine = chip.parentElement;
 		expect(actionLine?.classList.contains("justify-end")).toBe(true);
@@ -1198,27 +1257,47 @@ describe("roll mode", () => {
 		// The SUGGESTION row's pair shares that one track between the commit and its
 		// menu trigger, rather than widening the rail for a second control.
 		const commit = getByRole("button", { name: /Abe Nkemelu status/i });
-		expect(commit.parentElement?.classList.contains("w-44")).toBe(true);
+		expect(commit.parentElement?.classList.contains("w-36")).toBe(true);
+		expect(commit.parentElement?.classList.contains("md:w-44")).toBe(true);
 	});
 
-	it("F4: draws the roll row's contact drafts as icons, like the plan rows", () => {
-		// `iconOnly` is opt-in because `NudgeButtons` is shared with the agenda slot
-		// cards and the recruit picker, "where the words are affordable; only the
-		// 340px attendance rail needs the space back". This is that rail, and the
-		// roll rows were the one place in it still paying for the words.
-		const { getByRole } = render(<MeetingAttendancePanel {...rollProps} />);
-		const wa = getByRole("link", {
-			name: /Message Abe Nkemelu on WhatsApp/i,
-		});
-		// The accessible name comes from the label; the WORDS are gone from the page.
-		expect(wa.textContent).toBe("");
-		expect(getByRole("link", { name: /Email Abe Nkemelu/i }).textContent).toBe(
-			"",
+	it("F4: draws the roll row's contact drafts as ONE menu icon, words only inside the menu (#1309)", async () => {
+		// `NudgeButtons` is shared with the agenda slot cards and the recruit
+		// picker; only the 340px attendance rail needs the space back, and a roll
+		// row has to stay on one line, so its drafts fold into one icon trigger.
+		render(<MeetingAttendancePanel {...rollProps} />);
+		const trigger = screen.getByRole("button", { name: "Contact Abe Nkemelu" });
+		// The accessible name comes from the label; no words on the row itself.
+		expect(trigger.textContent).toBe("");
+		expect(screen.queryAllByRole("link")).toHaveLength(0);
+		const items = within(await openContact("Abe Nkemelu")).getAllByRole(
+			"menuitem",
 		);
+		// Inside the menu the words ARE visible.
+		expect(items.map((i) => i.textContent)).toEqual(["WhatsApp", "Email"]);
 	});
 
-	it("#1094: a roll row preferring SMS gets a third, marked icon on its own line", () => {
-		const { getAllByRole } = render(
+	it("#1309: a roll row has no inline contact link, and its menu holds exactly the available methods with today's hrefs", async () => {
+		render(<MeetingAttendancePanel {...rollProps} />);
+		expect(screen.queryAllByRole("link")).toHaveLength(0);
+		const items = within(await openContact("Abe Nkemelu")).getAllByRole(
+			"menuitem",
+		);
+		expect(items).toHaveLength(2);
+		expect(items[0]?.getAttribute("href")).toMatch(
+			/^https:\/\/[^?]+\?phone=12025550101/,
+		);
+		expect(items[1]?.getAttribute("href")).toMatch(
+			/^mailto:abe@example\.com\?/,
+		);
+		// Bea has an email only: her menu lists Email alone, not an empty shell.
+		await userEvent.setup().keyboard("{Escape}");
+		const bea = within(await openContact("Bea Osei")).getAllByRole("menuitem");
+		expect(bea.map((i) => i.textContent)).toEqual(["Email"]);
+	});
+
+	it("#1094: a roll row preferring SMS lists SMS first, marked, and still holds one line", async () => {
+		render(
 			<MeetingAttendancePanel
 				{...rollProps}
 				roster={[
@@ -1232,31 +1311,39 @@ describe("roll mode", () => {
 				]}
 			/>,
 		);
-		const links = getAllByRole("link");
-		expect(links).toHaveLength(3);
-		expect(links[0]?.getAttribute("aria-label")).toBe(
-			"Text Abe Nkemelu by SMS (preferred)",
+		const trigger = screen.getByRole("button", { name: "Contact Abe Nkemelu" });
+		// Queried BEFORE the menu opens: an open Radix menu hides the rest of the
+		// page from the accessibility tree.
+		const actionLine = trigger.parentElement as HTMLElement;
+		// getByRole throws unless the status control is on the same line.
+		within(actionLine).getByRole("button", {
+			name: /Abe Nkemelu status/i,
+		});
+		const items = within(await openContact("Abe Nkemelu")).getAllByRole(
+			"menuitem",
 		);
-		expect(links[0]?.textContent).toBe("");
-		// The two-line shape: the icon group takes the whole line (so the line's
-		// `flex-wrap` puts it above the status control), right-aligned.
-		const group = links[0]?.parentElement;
-		expect(group?.hasAttribute("data-own-line")).toBe(true);
-		expect(group?.classList.contains("w-full")).toBe(true);
-		expect(group?.classList.contains("justify-end")).toBe(true);
-		expect(group?.parentElement?.classList.contains("flex-wrap")).toBe(true);
+		expect(items.map((i) => i.textContent)).toEqual([
+			"SMS · preferred",
+			"WhatsApp",
+			"Email",
+		]);
+		expect(items[0]?.getAttribute("href")).toMatch(/^sms:/);
+		// One line, whatever the preference: the trigger is a sibling of the status
+		// control on a non-wrapping line. The #1094 own-line / `flex-wrap` shape
+		// this replaces is gone.
+		expect(actionLine.classList.contains("flex-wrap")).toBe(false);
 	});
 
-	it("F6: drafts an on-your-way ask, not a pre-meeting one, from the room", () => {
+	it("F6: drafts an on-your-way ask, not a pre-meeting one, from the room", async () => {
 		// `hideContact` is `roll && phaseCompleted`, so this affordance renders
 		// exactly on meeting day — and it was hard-wired to `mode="attendance"`,
 		// whose copy is "are you able to make our <date> meeting?" under the subject
 		// "Are you coming?". Drafted at 7:45pm from the room where that meeting is
 		// running.
-		const { getByRole } = render(<MeetingAttendancePanel {...rollProps} />);
-		const href = getByRole("link", {
-			name: /Message Abe Nkemelu on WhatsApp/i,
-		}).getAttribute("href");
+		render(<MeetingAttendancePanel {...rollProps} />);
+		const href = (await contactItem("Abe Nkemelu", /^WhatsApp/)).getAttribute(
+			"href",
+		);
 		expect(decodeURIComponent(href ?? "")).toContain("are you on your way?");
 		// The pre-meeting wording must be gone from the draft, not merely joined by
 		// the new sentence.
@@ -1267,7 +1354,7 @@ describe("roll mode", () => {
 
 	it("keeps contact while the meeting is today and drops it once completed", () => {
 		const today = render(<MeetingAttendancePanel {...rollProps} />);
-		today.getByRole("link", { name: /WhatsApp/i });
+		today.getByRole("button", { name: "Contact Abe Nkemelu" });
 		today.unmount();
 		// `completed` rows are a historical record — nobody is being chased.
 		const done = render(
@@ -1277,7 +1364,9 @@ describe("roll mode", () => {
 				phaseCompleted={true}
 			/>,
 		);
-		expect(() => done.getByRole("link", { name: /WhatsApp/i })).toThrow();
+		expect(() =>
+			done.getByRole("button", { name: "Contact Abe Nkemelu" }),
+		).toThrow();
 	});
 
 	it("keeps contact on a locked meeting that is not yet completed", () => {
@@ -1294,7 +1383,7 @@ describe("roll mode", () => {
 				phaseCompleted={false}
 			/>,
 		);
-		getByRole("link", { name: /WhatsApp/i });
+		getByRole("button", { name: "Contact Abe Nkemelu" });
 	});
 
 	it("keeps the chips live on a COMPLETED meeting, unlike plan mode's rungs", () => {
@@ -1504,36 +1593,41 @@ describe("roll mode", () => {
 		const { queryByText } = render(<MeetingAttendancePanel {...rollProps} />);
 		expect(queryByText("Guests")).toBeNull();
 	});
-	it("skips the contact affordance for a DEPARTED row while keeping it for an active member with none", () => {
-		// Two fixes from the same round contradicted each other here.
+	it("skips the contact menu for a DEPARTED row while keeping it for an active member with contact", () => {
 		// `deriveRollRoster` appends a member who holds a recorded row but has left
-		// the club, with phone and email null — and `NudgeButtons` renders "No
-		// contact on file" when both are null, which is precisely the copy
-		// `hideContact` omits the whole component to avoid. Fixed by TAGGING the
-		// appended row, not by skipping whenever contact is missing: for an active
-		// member that message is true and actionable ("go add a number"), and only
-		// a departed member has nothing to add and nobody to chase.
-		const { getByText, queryAllByText } = render(
+		// the club. Give BOTH rows a phone, so the departed row's missing menu can
+		// only be `hideContact`/`row.departed` doing its job, not an absence of
+		// contact data (which now also renders nothing, #1309).
+		const { getByText, queryByRole, queryByText } = render(
 			<MeetingAttendancePanel
 				{...rollProps}
 				roster={[
-					{ id: "m-here", name: "Cy Active", phone: null, email: null },
+					{
+						id: "m-here",
+						name: "Cy Active",
+						phone: "+12025550102",
+						email: null,
+					},
 					{
 						id: "m-gone",
 						name: "Dee Gone",
-						phone: null,
+						phone: "+12025550103",
 						email: null,
 						departed: true,
 					},
+					{ id: "m-none", name: "Eli Nocontact", phone: null, email: null },
 				]}
 				attendance={[{ memberId: "m-gone", status: "present" }]}
 			/>,
 		);
-		// Both rows are on screen...
 		getByText("Cy Active");
 		getByText("Dee Gone");
-		// ...and exactly ONE of them says it: the active member with nothing stored.
-		expect(queryAllByText("No contact on file")).toHaveLength(1);
+		getByText("Eli Nocontact");
+		expect(queryByRole("button", { name: "Contact Cy Active" })).not.toBeNull();
+		expect(queryByRole("button", { name: "Contact Dee Gone" })).toBeNull();
+		// Nothing on file: no trigger that opens an empty menu, no inline notice.
+		expect(queryByRole("button", { name: "Contact Eli Nocontact" })).toBeNull();
+		expect(queryByText("No contact on file")).toBeNull();
 	});
 
 	const syncIdle = {
@@ -1663,20 +1757,23 @@ describe("member identity link (#727)", () => {
 		expect(link.getAttribute("href")).toBe("/members/m1");
 	});
 
-	it("keeps the two-line clamp on the LINKED name (criterion 11)", async () => {
-		// `name` is unbounded user data and the rail is ~292px wide. The clamp has
-		// to be on the element holding the TEXT, so swapping a `<span>` for an
+	it("keeps the one-line truncation on the LINKED name (criterion 11, #1309)", async () => {
+		// `name` is unbounded user data and the rail is ~292px wide. The truncation
+		// has to be on the element holding the TEXT, so swapping a `<span>` for an
 		// `<a>` is the classic way to lose it — and jsdom performs no layout, so
-		// the rendered height is not measurable here (CLAUDE.md's jsdom trap).
-		// What IS assertable is that the link carries the same box the plain span
-		// does, which is the property the shared class constant exists to hold.
+		// the rendered height is not measurable here (CLAUDE.md's jsdom trap; the
+		// Chrome geometry test covers the plain span). What IS assertable is that
+		// the link carries the same box the plain span does, which is the property
+		// the shared class constant exists to hold, plus the `title` that keeps the
+		// cut-off text reachable.
 		await renderUnderMemoryRouter(
 			<MeetingAttendancePanel {...linkProps} canViewMemberDetail={true} />,
 		);
 		const link = screen.getByRole("link", { name: "Ayesha Khan" });
-		expect(link.className).toContain("line-clamp-2");
-		expect(link.className).toContain("break-words");
+		expect(link.className).toContain("truncate");
 		expect(link.className).toContain("min-w-0");
+		expect(link.getAttribute("title")).toBe("Ayesha Khan");
+		expect(link.className).not.toMatch(/line-clamp|break-words/);
 	});
 
 	it("paints the link with its OWN text utility, not the base-layer anchor colour", async () => {

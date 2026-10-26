@@ -64,11 +64,25 @@ const RUNG_LABELS: Record<PlanStatus, string> = {
  *  only in the announcement, and the split is pinned by the panel's own suite
  *  with its rationale.
  *
- *  The width is what forces it, and the number is measured, so do not "fix" this
- *  by stacking the two: the trigger is a fixed `w-44` (176px) track sized against
- *  the widest label it must hold, `"Coming · assumed"`. `"Coming · assumed ·
- *  asked"` does not fit, and widening the track spends ~50px of a ~292px rail
- *  saying twice what "asked" already implies (nobody answered). */
+ *  The width is what forces it, and the numbers are measured, so do not "fix"
+ *  this by stacking the two: the plan row's trigger is `w-36` (144px) below `md`
+ *  and `w-44` (176px) from `md` up. From `md` it holds the widest visible label,
+ *  `"Coming · assumed"` (measured below); `"Coming · assumed · asked"` does not
+ *  fit, and widening the track spends ~50px of a ~292px rail saying twice what
+ *  "asked" already implies (nobody answered).
+ *
+ *  BELOW `md` only " · assumed" is hidden (CSS, `hidden md:inline`). Measured
+ *  with the real webfonts, "Coming · assumed" is 119.85px Manrope + 42px of
+ *  button chrome, and 172.16px in the DejaVu fallback, so it cannot fit 144px.
+ *  "Coming · asked" is 98.92px Manrope (101.51px system-ui) + 42 = 140.9px /
+ *  143.5px, which FITS, so " · asked" stays visible at every width. Only the
+ *  Linux DejaVu fallback (149.97px) overflows, by ~6px into the 12px gap, for
+ *  as long as Manrope (Google Fonts) has not loaded, which may be never if it
+ *  is blocked or the device is offline; that is accepted, because hiding
+ *  "asked" would leave the
+ *  label "Coming" unchanged after tapping "Asked" on an assumed row, which reads
+ *  as "it didn't save". The announcement carries both words at every width, and
+ *  the muting still marks an assumed row. */
 const ASSUMED_WORD = "assumed";
 const ASKED_WORD = "asked";
 
@@ -117,7 +131,7 @@ const LG_BREAKPOINT_PX = 1024;
  */
 function PanelRow({ children }: { children: ReactNode }) {
 	return (
-		<li className="flex flex-col gap-1.5 border-b border-border/60 py-2.5 last:border-b-0">
+		<li className="flex flex-col gap-1.5 border-b border-border/60 py-2 last:border-b-0">
 			{children}
 		</li>
 	);
@@ -139,8 +153,7 @@ function PanelRow({ children }: { children: ReactNode }) {
  *  renders an unbounded name at full height. One constant, applied to whichever
  *  element is the text box, is what makes the linked row obey the same ceiling
  *  as the plain one. */
-const IDENTITY_NAME_CLASS =
-	"line-clamp-2 min-w-0 flex-1 break-words text-sm font-medium";
+const IDENTITY_NAME_CLASS = "min-w-0 truncate text-sm font-medium";
 
 /** Identity line. The name owns it — at 2-4 characters the role code costs it
  *  almost nothing, which is the whole reason the code replaced the full role name
@@ -171,7 +184,7 @@ function PanelIdentityLine({
 	linkToMemberId: string | null;
 }) {
 	return (
-		<div className="flex items-start gap-1.5">
+		<div className="flex min-w-0 flex-1 items-center gap-1.5">
 			{linkToMemberId ? (
 				/* `text-inherit` is NOT decoration — without a `text-*` utility this
 				 * anchor is painted by `styles.css`'s `@layer base { a { color:
@@ -215,12 +228,15 @@ function PanelIdentityLine({
 					 * on club wifi, mid-meeting. Desktop loses a hover prefetch; that is
 					 * the trade, and it is the right way round. */
 					preload={false}
+					title={name}
 					className={cn(IDENTITY_NAME_CLASS, "text-inherit hover:underline")}
 				>
 					{name}
 				</Link>
 			) : (
-				<span className={IDENTITY_NAME_CLASS}>{name}</span>
+				<span className={IDENTITY_NAME_CLASS} title={name}>
+					{name}
+				</span>
 			)}
 			{/* No `mt-0.5` on the badge below: under `items-start` its inner text
 			 *  centre already lands within a pixel of the name's (11px vs 10px
@@ -266,20 +282,25 @@ function PanelIdentityLine({
  *  throws the tablet into a mail client mid-meeting. The extra 6px is ~2%
  *  of a 340px rail.
  *
- *  `flex-wrap` is for ONE case (#1094): a member who prefers Call or SMS has
- *  three icons, which with the status control's fixed `w-44` need 296px — more
- *  than the ~275px a classic (non-overlay) scrollbar leaves on Windows and
- *  Linux. Their `NudgeButtons` group takes the full width, so it wraps onto
- *  its own right-aligned line ABOVE the status control, which stays on the
- *  row's right edge with the same gap away from the icons. Two-icon rows fit
- *  on one line and never wrap. `pinned-column-reachability.test.ts` holds both
- *  shapes under a forced 15px scrollbar. */
+ *  No `flex-wrap` (#1309): the contact drafts are ONE `Contact <name>` menu
+ *  icon now, so the line is the status track plus a 32px icon and never needs a
+ *  second line, whatever channels the member prefers. The identity beside it
+ *  is what gives way (`min-w-0` + `truncate`).
+ *  `pinned-column-reachability.test.ts` holds this under a forced 15px
+ *  scrollbar. */
 function PanelActionLine({ children }: { children: ReactNode }) {
 	return (
-		<div className="flex flex-wrap items-center justify-end gap-3">
+		<div className="flex shrink-0 items-center justify-end gap-3">
 			{children}
 		</div>
 	);
+}
+
+/** The ONE line of a roll row (#1309): identity on the left, which gives way
+ *  (`min-w-0` + `truncate`), and the status control plus the contact menu on
+ *  the right, which do not. */
+function PanelMainLine({ children }: { children: ReactNode }) {
+	return <div className="flex items-center gap-2">{children}</div>;
 }
 
 function AttendanceRow({
@@ -403,142 +424,164 @@ function AttendanceRow({
 	// the counts line's separator; the announced one spells it out, because "·"
 	// is not read aloud.
 	const statusLabel = m.status ? RUNG_LABELS[m.status] : "Ask";
-	const visibleLabel = qualifier
-		? `${statusLabel} · ${qualifier}`
-		: statusLabel;
 	const statusAnnouncement = `${m.name} status: ${statusLabel}${
 		m.assumed ? ` — ${ASSUMED_WORD}, role confirmed` : ""
 	}${alsoAsked ? `, already ${ASKED_WORD}` : ""}`;
 
 	return (
 		<PanelRow>
-			<PanelIdentityLine
-				name={m.name}
-				role={m.role}
-				linkToMemberId={linkIdentity ? m.id : null}
-			/>
-			<PanelActionLine>
-				<NudgeButtons
-					{...nudgeMode}
-					iconOnly
-					ownLineWhenCrowded
+			<PanelMainLine>
+				<PanelIdentityLine
 					name={m.name}
-					preferredName={m.preferredName}
-					phone={m.phone}
-					email={m.email}
-					preferredContact={m.preferredContact}
-					meetingDate={meetingDate}
-					shareUrl={shareUrl}
-					onContacted={() => onContacted(m.id)}
+					role={m.role}
+					linkToMemberId={linkIdentity ? m.id : null}
 				/>
-				<DropdownMenu>
-					<DropdownMenuTrigger asChild>
-						{/* The accessible name is COMPOSED FROM CONTENT, never an
-						 *  `aria-label`. `aria-label` OVERRIDES content, so labelling this
-						 *  `"${m.name} status"` meant the answer itself — Coming / Asked /
-						 *  Not coming / Ask — reached no screen reader at all on any row
-						 *  where someone had actually replied, on a rail whose entire
-						 *  purpose is "who is coming". Worse, it was ASYMMETRIC: assumed
-						 *  rows folded their status into the label and answered rows did
-						 *  not, so an inference told an AT user strictly more than a real
-						 *  answer did. Composing keeps the visible label and the announced
-						 *  one the same string by construction. `hover:text-muted-foreground`
-						 *  rides along with the muting because the `outline` variant's
-						 *  `hover:text-accent-foreground` is a class+pseudo-class (0-2-0)
-						 *  and beats a bare `text-muted-foreground` (0-1-0) on hover. */}
-						{/* A FIXED TRACK, and `justify-between` inside it, so the action column
-						 *  has TWO hard vertical edges. `justify-end` on the line above flushes
-						 *  only the RIGHT one, and this trigger is `whitespace-nowrap` with a
-						 *  label running from "Ask" to "Coming · assumed" — so everything to its
-						 *  left was pushed by that delta and the two icon buttons, the repeated
-						 *  identical elements the eye tracks down a 40-row column, formed a
-						 *  ragged edge jittering up to ~90px row to row. That traded a crooked
-						 *  status column for a crooked action column.
-						 *
-						 *  `w-44` (11rem = 176px) is MEASURED against the widest label after the
-						 *  badge fix above, not guessed:
-						 *
-						 *    "Coming · assumed" at 14px/500   Manrope       119.86px
-						 *                                     DejaVu Sans   130.16px
-						 *        (the widest common substitute while the webfont swaps in)
-						 *    sm button chrome: px-2.5 (10+10) + border (1+1)
-						 *                      + gap-1.5 (6) + size-3.5 chevron (14)  =  42px
-						 *    worst intrinsic width            130.16 + 42 = 172.16px
-						 *
-						 *  176px clears that by 3.8px and clears the shipped Manrope by 14.1px.
-						 *  And it fits: the rail's usable width is ~292px, the icon cluster is
-						 *  32 + 6 + 32 = 70px, and the 12px `gap-3` above leaves 210px for this
-						 *  track — 34px spare. */}
-						<Button
-							variant="outline"
-							size="sm"
-							disabled={locked || pending}
-							className={cn(
-								"w-44 justify-between",
-								m.assumed &&
-									"text-muted-foreground hover:text-muted-foreground",
-							)}
-						>
-							{/* ONE sr-only string carries the whole name, with the visible
-							 *  label `aria-hidden` beside it — the same shape as the badge
-							 *  above, for the same reason. Both strings derive from
-							 *  `statusLabel`, so what is shown and what is announced cannot
-							 *  drift apart.
+				<PanelActionLine>
+					<DropdownMenu>
+						<DropdownMenuTrigger asChild>
+							{/* The accessible name is COMPOSED FROM CONTENT, never an
+							 *  `aria-label`. `aria-label` OVERRIDES content, so labelling this
+							 *  `"${m.name} status"` meant the answer itself — Coming / Asked /
+							 *  Not coming / Ask — reached no screen reader at all on any row
+							 *  where someone had actually replied, on a rail whose entire
+							 *  purpose is "who is coming". Worse, it was ASYMMETRIC: assumed
+							 *  rows folded their status into the label and answered rows did
+							 *  not, so an inference told an AT user strictly more than a real
+							 *  answer did. Composing keeps the visible label and the announced
+							 *  one the same string by construction. `hover:text-muted-foreground`
+							 *  rides along with the muting because the `outline` variant's
+							 *  `hover:text-accent-foreground` is a class+pseudo-class (0-2-0)
+							 *  and beats a bare `text-muted-foreground` (0-1-0) on hover. */}
+							{/* A FIXED TRACK, and `justify-between` inside it, so the action column
+							 *  has TWO hard vertical edges. `justify-end` on the line above flushes
+							 *  only the RIGHT one, and this trigger is `whitespace-nowrap` with a
+							 *  label running from "Ask" to "Coming · assumed" — so everything to its
+							 *  left was pushed by that delta and the contact controls, the repeated
+							 *  identical elements the eye tracks down a 40-row column, formed a
+							 *  ragged edge jittering row to row. That traded a crooked status
+							 *  column for a crooked action column.
 							 *
-							 *  Why one span rather than a sr-only prefix beside a plain
-							 *  label: the separator between sibling children is
-							 *  DISPLAY-DEPENDENT. accname leaves it to the implementation
-							 *  (w3c/accname#3); `dom-accessibility-api` inserts " " only when
-							 *  a child's computed `display` is not `inline`
-							 *  (`accessible-name-and-description.js:250-253`). `sr-only` sets
-							 *  `position: absolute`, which blockifies (CSS Display 3 §2.7),
-							 *  so a split name would gain its space in a real browser but
-							 *  NOT under jsdom, where no stylesheet loads and the span stays
-							 *  `inline` — announcing "status:Ask" in the harness while
-							 *  reading correctly in production. One span never splits the
-							 *  string, so it is indifferent to that rule in both
-							 *  environments. */}
-							<span className="sr-only">{statusAnnouncement}</span>
-							<span aria-hidden>{visibleLabel}</span>
-							{/* No `opacity-60`. The glyph inherits `currentColor`, which on an
-							 *  assumed row is `text-muted-foreground` (`--sea-ink-soft` #416166);
-							 *  composited at 60% over the outline button's `bg-background`
-							 *  (`--foam` #f3faf5) that is 2.66:1, under the 3:1 WCAG 1.4.11 requires
-							 *  of a non-text UI indicator — and 3.69:1 even on answered rows. The
-							 *  muted colour is already doing the de-emphasis; multiplying the two is
-							 *  what crossed the threshold. Without it: ~4.4:1 muted, ~6.7:1 normal. */}
-							<ChevronDown className="size-3.5" aria-hidden />
-						</Button>
-					</DropdownMenuTrigger>
-					{/* On an ASSUMED row neither "Asked" nor "No answer" can MOVE the
-					 *  row — the confirmed slot still stands and outranks both — but
-					 *  neither is a no-op, and both are now VISIBLE through the
-					 *  `· asked` suffix the label carries. "Asked" writes
-					 *  `reached_out`, taking the row from "Coming" to "Coming · asked";
-					 *  "No answer" DELETES that row and writes an activity entry,
-					 *  taking it back. Without the suffix both round-tripped to an
-					 *  unchanged label, which reads as "it didn't save" and gets tapped
-					 *  again. To say they are OUT, the officer picks "Not coming",
-					 *  which is an explicit answer and does outrank the inference. */}
-					<DropdownMenuContent align="end">
-						{/* "No answer" (`status: null`) is the one item that DELETES, and
+							 *  `w-44` (11rem = 176px) is MEASURED against the widest label after the
+							 *  badge fix above, not guessed:
+							 *
+							 *    "Coming · assumed" at 14px/500   Manrope       119.86px
+							 *                                     DejaVu Sans   130.16px
+							 *        (the widest common substitute while the webfont swaps in)
+							 *    sm button chrome: px-2.5 (10+10) + border (1+1)
+							 *                      + gap-1.5 (6) + size-3.5 chevron (14)  =  42px
+							 *    worst intrinsic width            130.16 + 42 = 172.16px
+							 *
+							 *  176px clears that by 3.8px and clears the shipped Manrope by 14.1px.
+							 *  That full label only shows from `md`. Below it the track is `w-36`
+							 *  (144px, the roll row's) and " · assumed" is hidden, so the widest
+							 *  visible label is "Coming · asked": 98.92px Manrope (101.51px
+							 *  system-ui) + 42 = 140.9px / 143.5px, which fits. Only the DejaVu
+							 *  fallback (107.97 + 42 = 149.97px) overflows, by ~6px into the gap,
+							 *  while Manrope is not loaded (possibly for good, if Google Fonts is
+							 *  blocked); accepted, since hiding "asked" would make the "Asked"
+							 *  menu item look like a no-op. ("Not coming" carries no qualifier and
+							 *  is under 144px.)
+							 *  On a line the phone track costs 144 + the 12px `gap-3` + the 32px
+							 *  contact-menu icon = 188px, leaving the identity (`min-w-0`,
+							 *  truncating) the rest of the row; the 375px case in
+							 *  `roll-row-geometry.test.ts` holds that. */}
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={locked || pending}
+								className={cn(
+									"w-36 justify-between md:w-44",
+									m.assumed &&
+										"text-muted-foreground hover:text-muted-foreground",
+								)}
+							>
+								{/* ONE sr-only string carries the whole name, with the visible
+								 *  label `aria-hidden` beside it — the same shape as the badge
+								 *  above, for the same reason. Both strings derive from
+								 *  `statusLabel`, so what is shown and what is announced cannot
+								 *  drift apart.
+								 *
+								 *  Why one span rather than a sr-only prefix beside a plain
+								 *  label: the separator between sibling children is
+								 *  DISPLAY-DEPENDENT. accname leaves it to the implementation
+								 *  (w3c/accname#3); `dom-accessibility-api` inserts " " only when
+								 *  a child's computed `display` is not `inline`
+								 *  (`accessible-name-and-description.js:250-253`). `sr-only` sets
+								 *  `position: absolute`, which blockifies (CSS Display 3 §2.7),
+								 *  so a split name would gain its space in a real browser but
+								 *  NOT under jsdom, where no stylesheet loads and the span stays
+								 *  `inline` — announcing "status:Ask" in the harness while
+								 *  reading correctly in production. One span never splits the
+								 *  string, so it is indifferent to that rule in both
+								 *  environments. */}
+								<span className="sr-only">{statusAnnouncement}</span>
+								<span aria-hidden>
+									{statusLabel}
+									{qualifier ? (
+										<span
+											className={
+												qualifier === ASSUMED_WORD
+													? "hidden md:inline"
+													: undefined
+											}
+										>
+											{" "}
+											· {qualifier}
+										</span>
+									) : null}
+								</span>
+								{/* No `opacity-60`. The glyph inherits `currentColor`, which on an
+								 *  assumed row is `text-muted-foreground` (`--sea-ink-soft` #416166);
+								 *  composited at 60% over the outline button's `bg-background`
+								 *  (`--foam` #f3faf5) that is 2.66:1, under the 3:1 WCAG 1.4.11 requires
+								 *  of a non-text UI indicator — and 3.69:1 even on answered rows. The
+								 *  muted colour is already doing the de-emphasis; multiplying the two is
+								 *  what crossed the threshold. Without it: ~4.4:1 muted, ~6.7:1 normal. */}
+								<ChevronDown className="size-3.5" aria-hidden />
+							</Button>
+						</DropdownMenuTrigger>
+						{/* On an ASSUMED row neither "Asked" nor "No answer" can MOVE the
+						 *  row — the confirmed slot still stands and outranks both — but
+						 *  neither is a no-op, and both are now VISIBLE through the
+						 *  `· asked` suffix the label carries. "Asked" writes
+						 *  `reached_out`, taking the row from "Coming" to "Coming · asked";
+						 *  "No answer" DELETES that row and writes an activity entry,
+						 *  taking it back. Without the suffix both round-tripped to an
+						 *  unchanged label, which reads as "it didn't save" and gets tapped
+						 *  again. To say they are OUT, the officer picks "Not coming",
+						 *  which is an explicit answer and does outrank the inference. */}
+						<DropdownMenuContent align="end">
+							{/* "No answer" (`status: null`) is the one item that DELETES, and
 						    since #762 deleting an answer needs a session — see
 						    `canClearRung`. Dropped rather than disabled: a disabled row in
 						    a four-item menu reads as a transient state, and the officer
 						    this rail is written for always has the session anyway. */}
-						{MENU.filter((item) => canClearRung || item.status !== null).map(
-							(item) => (
-								<DropdownMenuItem
-									key={item.label}
-									onSelect={() => onWriteRung(m.id, item.status)}
-								>
-									{item.label}
-								</DropdownMenuItem>
-							),
-						)}
-					</DropdownMenuContent>
-				</DropdownMenu>
-			</PanelActionLine>
+							{MENU.filter((item) => canClearRung || item.status !== null).map(
+								(item) => (
+									<DropdownMenuItem
+										key={item.label}
+										onSelect={() => onWriteRung(m.id, item.status)}
+									>
+										{item.label}
+									</DropdownMenuItem>
+								),
+							)}
+						</DropdownMenuContent>
+					</DropdownMenu>
+					<NudgeButtons
+						{...nudgeMode}
+						layout="menu"
+						name={m.name}
+						preferredName={m.preferredName}
+						phone={m.phone}
+						email={m.email}
+						preferredContact={m.preferredContact}
+						meetingDate={meetingDate}
+						shareUrl={shareUrl}
+						onContacted={() => onContacted(m.id)}
+					/>
+				</PanelActionLine>
+			</PanelMainLine>
 		</PanelRow>
 	);
 }
@@ -690,14 +733,14 @@ function RollChip({
 			: "the plan suggests";
 		const suggestionAnnouncement = `${row.name} status: not recorded — ${source} ${ROLL_LABELS[suggestion]}. Tap to record it.`;
 		return (
-			// The SAME `w-44` track a recorded row's trigger fills (the 176px is
-			// measured — see `AttendanceRow`'s trigger), so the two row shapes share
-			// the rail's one right edge and its one left edge. Split 32px for the
-			// chevron trigger, 4px of `gap-1`, and `flex-1` (140px) for the commit,
-			// whose widest label ("Present?", the widest of the two suggestions) needs
-			// well under that. Sizing the pair inside the existing track rather than widening
-			// it is what keeps the icon cluster to its left from moving.
-			<div className="flex w-44 items-center gap-1">
+			// The SAME `w-36 md:w-44` track a recorded row's trigger fills, so the
+			// two roll row shapes share the rail's one right edge. Split 32px for the
+			// chevron trigger, 4px of `gap-1`, and `flex-1` for the commit (108px
+			// below `md`, 140px from `md`), whose widest label ("Present?", the
+			// widest of the two suggestions) needs well under either. Sizing the pair
+			// inside the track rather than widening it keeps the contact menu to its
+			// right from moving.
+			<div className="flex w-36 items-center gap-1 md:w-44">
 				<Button
 					variant="outline"
 					size="sm"
@@ -755,12 +798,14 @@ function RollChip({
 			 *  formed a ragged edge. Roll mode had no track at all: the chip was a
 			 *  direct child of a `flex flex-col` `<li>` and stretched the full width,
 			 *  so the rail's one right edge held for the plan rows and not for these.
-			 *  `w-44` is the number plan mode measured for a wider label set, which
-			 *  this one fits inside — one track for both modes is the point. */}
+			 *  `w-36 md:w-44` is the SAME track plan mode's trigger uses: plan mode
+			 *  hides its "· assumed" qualifier below `md`, so its widest PHONE label is
+			 *  "Coming · asked" (~141px), which fits 144px too, and from `md` both modes
+			 *  share the 176px track. */}
 			<Button
 				variant="outline"
 				size="sm"
-				className="w-44 justify-between"
+				className="w-36 justify-between md:w-44"
 				disabled={disabled}
 			>
 				<span className="sr-only">{recordedAnnouncement}</span>
@@ -812,55 +857,55 @@ function RollAttendanceRow({
 	return (
 		// The rail's row (v1.19.0.0, #594), SHARED as code rather than as a copied
 		// class list — see `PanelRow` for what the copy had missed. Both modes now
-		// render the same three components, so the row is one thing again: the
-		// identity line with the name and the short role code, then the action line,
-		// right-aligned on the rail's one right edge, holding the icon-only contact
-		// drafts and the status control inside its fixed track.
+		// render the same three components, so the row is one thing again: ONE
+		// line (#1309), the identity (name and short role code, which truncates) on
+		// the left and the action line on the right, holding the status control in
+		// its fixed track and the one contact-menu icon.
 		<PanelRow>
-			<PanelIdentityLine
-				name={row.name}
-				role={row.role}
-				linkToMemberId={linkIdentity ? row.id : null}
-			/>
-			<PanelActionLine>
-				{hideContact || row.departed ? null : (
-					// `iconOnly`, which this row was missing. The prop's own doc says it
-					// is opt-in because "only the 340px attendance rail needs the space
-					// back" — and this IS that rail, so the words cost ~60px of a ~292px
-					// column for an affordance the plan rows next to it render as glyphs.
-					//
-					// `arriving`, not `attendance`. This row renders during the meeting —
-					// contact stays until the meeting is `completed` — and the
-					// `attendance` copy is a pre-meeting ask: "are you able to make our
-					// Tuesday 18 August meeting?" under the subject "Are you coming?",
-					// drafted at 7:45pm from the room where that meeting is running. The
-					// question a roll-call row actually wants is whether they are on
-					// their way.
-					<NudgeButtons
-						mode="arriving"
-						iconOnly
-						ownLineWhenCrowded
-						name={row.name}
-						preferredName={row.preferredName}
-						phone={row.phone}
-						email={row.email}
-						preferredContact={row.preferredContact}
-						meetingDate={meetingDate}
-						shareUrl={shareUrl}
-					/>
-				)}
-				<RollChip
-					row={row}
-					locked={locked}
-					pending={pending}
-					busy={busy}
-					onSetAttendance={onSetAttendance}
+			<PanelMainLine>
+				<PanelIdentityLine
+					name={row.name}
+					role={row.role}
+					linkToMemberId={linkIdentity ? row.id : null}
 				/>
-			</PanelActionLine>
+				<PanelActionLine>
+					<RollChip
+						row={row}
+						locked={locked}
+						pending={pending}
+						busy={busy}
+						onSetAttendance={onSetAttendance}
+					/>
+					{hideContact || row.departed ? null : (
+						// `layout="menu"`: the contact drafts are one `Contact <name>` icon
+						// that opens a menu, the same as the plan rows, so the line holds the
+						// status track plus 32px however many channels the member has.
+						//
+						// `arriving`, not `attendance`. This row renders during the meeting —
+						// contact stays until the meeting is `completed` — and the
+						// `attendance` copy is a pre-meeting ask: "are you able to make our
+						// Tuesday 18 August meeting?" under the subject "Are you coming?",
+						// drafted at 7:45pm from the room where that meeting is running. The
+						// question a roll-call row actually wants is whether they are on
+						// their way.
+						<NudgeButtons
+							mode="arriving"
+							layout="menu"
+							name={row.name}
+							preferredName={row.preferredName}
+							phone={row.phone}
+							email={row.email}
+							preferredContact={row.preferredContact}
+							meetingDate={meetingDate}
+							shareUrl={shareUrl}
+						/>
+					)}
+				</PanelActionLine>
+			</PanelMainLine>
 			{/* #1049. Its OWN right-aligned line under the chip, not a third item
-			 *  on the action line: the chip's `w-44` track plus two contact glyphs
-			 *  already fill most of a ~292px column, and squeezing the toggle in
-			 *  would move the chip off the rail's one right edge. Present rows only
+			 *  on the action line: the status track plus the contact-menu icon
+			 *  already fill most of the line at a phone's width, and squeezing the
+			 *  toggle in would move the chip off the rail's one right edge. Present rows only
 			 *  — someone absent or excused was in neither place, and the server
 			 *  clears the mode for them. Same disabled condition as the chip. */}
 			{row.status === "present" && onSetMode ? (
