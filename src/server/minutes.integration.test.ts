@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	guests,
 	meetingAttendance,
+	meetingAttendancePlan,
 	meetingAwards,
 	meetings,
 	roleDefinitions,
@@ -591,6 +592,123 @@ describe.skipIf(!hasTestDb)("meeting minutes (#152)", () => {
 			await expect(assertAttendanceRecordable(randomUUID())).rejects.toThrow(
 				"Meeting not found.",
 			);
+		});
+	});
+
+	describe("Table Topics refuses an unavailable member (#1319)", () => {
+		async function speakerRows() {
+			return testDb
+				.select({ id: tableTopicsSpeakers.id })
+				.from(tableTopicsSpeakers)
+				.where(eq(tableTopicsSpeakers.meetingId, seed.meetingId));
+		}
+		const markRoll = (status: "present" | "absent") =>
+			testDb.insert(meetingAttendance).values({
+				meetingId: seed.meetingId,
+				memberId: seed.memberId,
+				status,
+			});
+		const markNotComing = () =>
+			testDb.insert(meetingAttendancePlan).values({
+				meetingId: seed.meetingId,
+				memberId: seed.memberId,
+				status: "not_coming",
+			});
+
+		it("refuses a member recorded Absent and inserts no row", async () => {
+			// protects: the server rule behind the hidden picker entry (a stale tab
+			//   or a queued offline add cannot add an Absent member).
+			// fails_when: addTableTopicsSpeaker stops checking isMemberUnavailable,
+			//   or checks it after the insert.
+			// no_claim: says nothing about the picker UI or about guests.
+			await markRoll("absent");
+			await expect(
+				addTableTopicsSpeaker({
+					meetingId: seed.meetingId,
+					memberId: seed.memberId,
+				}),
+			).rejects.toThrow(/is not available for this meeting/);
+			expect(await speakerRows()).toHaveLength(0);
+		});
+
+		it("refuses a Not-coming member with no roll record", async () => {
+			// protects: the plan arm of the rule when the roll is silent.
+			// fails_when: the check reads only the roll, not the plan.
+			// no_claim: nothing about a member with a roll record.
+			await markNotComing();
+			await expect(
+				addTableTopicsSpeaker({
+					meetingId: seed.meetingId,
+					memberId: seed.memberId,
+				}),
+			).rejects.toThrow(/is not available for this meeting/);
+			expect(await speakerRows()).toHaveLength(0);
+		});
+
+		it("accepts a Not-coming member recorded Present", async () => {
+			// protects: the roll record wins over the plan (#1257).
+			// fails_when: the check reads the plan without the roll.
+			// no_claim: nothing about Absent members.
+			await markNotComing();
+			await markRoll("present");
+			const { id } = await addTableTopicsSpeaker({
+				meetingId: seed.meetingId,
+				memberId: seed.memberId,
+			});
+			expect((await speakerRows()).map((r) => r.id)).toEqual([id]);
+		});
+
+		it("replays an existing speaker id after the member is marked Absent", async () => {
+			// protects: idempotency comes before the refusal, so a lost-ack replay
+			//   of an add made before the Absent mark is not turned into an error.
+			// fails_when: the unavailability check runs before the id lookup.
+			// no_claim: a NEW id for an Absent member still refuses (above).
+			const id = randomUUID();
+			await addTableTopicsSpeaker({
+				meetingId: seed.meetingId,
+				memberId: seed.memberId,
+				id,
+			});
+			await markRoll("absent");
+			await expect(
+				addTableTopicsSpeaker({
+					meetingId: seed.meetingId,
+					memberId: seed.memberId,
+					id,
+				}),
+			).resolves.toEqual({ id });
+			expect(await speakerRows()).toHaveLength(1);
+		});
+
+		it("does not replay an id that belongs to another meeting", async () => {
+			// protects: the replay lookup is scoped to this meeting, so an id reused
+			//   from another meeting does not skip the availability check.
+			// fails_when: the lookup matches on id alone.
+			// no_claim: a same-meeting replay (above) still returns the row.
+			const [other] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: seed.clubId,
+					scheduledAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+					status: "scheduled",
+				})
+				.returning({ id: meetings.id });
+			const id = randomUUID();
+			await addTableTopicsSpeaker({
+				// biome-ignore lint/style/noNonNullAssertion: insert above returns a row
+				meetingId: other!.id,
+				memberId: seed.memberId,
+				id,
+			});
+			await markRoll("absent");
+			await expect(
+				addTableTopicsSpeaker({
+					meetingId: seed.meetingId,
+					memberId: seed.memberId,
+					id,
+				}),
+			).rejects.toThrow(/is not available for this meeting/);
+			expect(await speakerRows()).toHaveLength(0);
 		});
 	});
 });

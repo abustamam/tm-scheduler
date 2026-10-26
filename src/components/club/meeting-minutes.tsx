@@ -98,6 +98,12 @@ type MeetingMinutesProps = {
 	 * route) always supplies it.
 	 */
 	offline?: ReturnType<typeof useOfflineMinutes>;
+	/**
+	 * Members unavailable for this meeting (#1319, `listUnavailableWithNames`),
+	 * hidden from the Table Topics picker. Defaults to none for a caller with no
+	 * loader behind it; the route always passes it.
+	 */
+	unavailableMemberIds?: readonly string[];
 	/** Used only by the `offline`-less fallback below. */
 	onMutated?: () => void | Promise<void>;
 	/**
@@ -152,6 +158,7 @@ function MeetingMinutesView({
 	clubGuests,
 	offline,
 	email,
+	unavailableMemberIds = [],
 }: MeetingMinutesProps & { offline: ReturnType<typeof useOfflineMinutes> }) {
 	// #176 slice 3-5: the offline write queue, reconnect drain and `mutate`/
 	// `opMeta` all live in the shared hook now (`#/hooks/use-offline-minutes`) —
@@ -290,6 +297,7 @@ function MeetingMinutesView({
 					roster={displayMinutes.members.filter(
 						(m) => m.status === "present" || m.status === null,
 					)}
+					unavailableMemberIds={unavailableMemberIds}
 					clubGuests={clubGuests}
 					onAdd={(payload) =>
 						mutate(

@@ -32,7 +32,10 @@ import { toStoredPhone } from "#/lib/phone";
 import { writeInKey, writeInNameSchema } from "#/lib/write-in-limits";
 import type { MinutesActionItems } from "./action-items-logic";
 import { loadActionItemsForMinutes } from "./action-items-logic";
-import { lockMemberAttendance } from "./attendance-plan-logic";
+import {
+	isMemberUnavailable,
+	lockMemberAttendance,
+} from "./attendance-plan-logic";
 import {
 	type ReleasedSlot,
 	releaseHeldSlotsForRecord,
@@ -1011,6 +1014,39 @@ export async function addTableTopicsSpeaker(input: {
 		if (input.memberId) {
 			await requireMemberInMeetingClub(input.memberId, clubId);
 			memberId = input.memberId;
+			// Idempotency first (#1319): a replay whose speaker row already exists
+			// returns it, so a speaker added before the member was marked Absent is
+			// not turned into an error on replay.
+			if (input.id) {
+				const [existing] = await tx
+					.select({ id: tableTopicsSpeakers.id })
+					.from(tableTopicsSpeakers)
+					.where(
+						and(
+							eq(tableTopicsSpeakers.id, input.id),
+							eq(tableTopicsSpeakers.meetingId, input.meetingId),
+						),
+					)
+					.limit(1);
+				if (existing) return { id: existing.id };
+			}
+			// Insert path only: the same rule the pickers hide by (#1257), so a stale
+			// tab or a queued offline add cannot add an unavailable member.
+			if (
+				await isMemberUnavailable(tx, {
+					memberId: input.memberId,
+					meetingId: input.meetingId,
+				})
+			) {
+				const [person] = await tx
+					.select({ name: members.name })
+					.from(members)
+					.where(eq(members.id, input.memberId))
+					.limit(1);
+				throw new Error(
+					`${person?.name ?? "That member"} is not available for this meeting.`,
+				);
+			}
 		} else if (input.guestId || input.newGuest) {
 			guestId = await resolveGuestId(tx, clubId, input, input.newGuestId);
 		} else {

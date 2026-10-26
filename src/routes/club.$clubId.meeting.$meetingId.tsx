@@ -2367,6 +2367,7 @@ function MeetingView() {
 								// edit would land in the record of one.
 								canEdit={effectiveCanManage && minutes.canEdit && !cancelled}
 								clubGuests={clubGuests}
+								unavailableMemberIds={unavailableMemberIds}
 								offline={offlineMinutes}
 								email={
 									minutesEmail
@@ -2439,6 +2440,7 @@ function MeetingView() {
 								canEdit={true}
 								busy={voteConsoleBusy}
 								roster={voteCounterRoster}
+								unavailableMemberIds={unavailableMemberIds}
 								clubGuests={clubGuests}
 								onAdd={handleAddTableTopicsSpeaker}
 								onRemove={handleRemoveTableTopicsSpeaker}
