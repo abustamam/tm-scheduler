@@ -10,13 +10,11 @@ import {
 	eq,
 	getTableName,
 	gte,
-	ilike,
 	inArray,
 	isNotNull,
 	isNull,
 	min,
 	ne,
-	or,
 	type SQL,
 	sql,
 } from "drizzle-orm";
@@ -67,6 +65,7 @@ import {
 } from "#/lib/meeting-lifecycle";
 import type { OfficerPosition } from "#/lib/officers";
 import { namesAgree } from "#/lib/person-name";
+import { isBlankQuery, searchPeople } from "#/lib/person-search";
 import {
 	coalesceToE164,
 	DEFAULT_COUNTRY_CODE,
@@ -4155,6 +4154,12 @@ export const GUEST_LINK_BOTH_HAVE_HISTORY_MESSAGE =
 /** Most candidates the picker returns. */
 export const GUEST_LINK_CANDIDATE_LIMIT = 20;
 
+/**
+ * Most of the other club's guests ranked per search, by (name, id). A documented
+ * ceiling: a club with more guests is searched over its first 1000 (#1333).
+ */
+export const GUEST_LINK_SEARCH_POOL = 1000;
+
 /** Both Persons' contact as a link compares it: normalized, never shown. */
 export interface GuestLinkBasis {
 	thisEmail: string | null;
@@ -4385,9 +4390,9 @@ export async function previewGuestLink(
 
 /**
  * The picker behind "Same person as…": up to 20 of `otherClubId`'s unconverted
- * guests whose Person is guest-only and is not this guest's own, by name. A
- * case-insensitive substring of `q` filters on the guest's name or the Person's
- * email; an empty `q` is the first 20. Name, email and phone only: nothing of the
+ * guests whose Person is guest-only and is not this guest's own, by name. `q` is
+ * ranked with the shared matcher over name, preferred name and the local part of
+ * the email (or an exact address); an empty `q` is the first 20 by name. Name, email and phone only: nothing of the
  * other club's stage, visits, invites or notes.
  */
 export async function listGuestLinkCandidates(input: {
@@ -4402,12 +4407,11 @@ export async function listGuestLinkCandidates(input: {
 	const mine = await readGuestOf(db, clubId, guestId);
 	if (!mine) throw new Error(GUEST_NOT_IN_CLUB_MESSAGE);
 	const q = input.q.trim();
-	// A `%`, `_` or `\` typed into the box means itself.
-	const pattern = q ? `%${q.replace(/[\\%_]/g, "\\$&")}%` : null;
-	return db
+	const rows = await db
 		.select({
 			guestId: guests.id,
 			name: guests.name,
+			preferredName: guests.preferredName,
 			email: people.email,
 			phone: people.phone,
 		})
@@ -4419,13 +4423,37 @@ export async function listGuestLinkCandidates(input: {
 				ne(guests.stage, "joined"),
 				ne(guests.personId, mine.personId),
 				identityIgnoredGuestPerson(),
-				pattern
-					? or(ilike(guests.name, pattern), ilike(people.email, pattern))
-					: undefined,
 			),
 		)
 		.orderBy(asc(guests.name), asc(guests.id))
-		.limit(GUEST_LINK_CANDIDATE_LIMIT);
+		.limit(GUEST_LINK_SEARCH_POOL);
+	const toCandidate = (r: (typeof rows)[number]): GuestLinkCandidate => ({
+		guestId: r.guestId,
+		name: r.name,
+		email: r.email,
+		phone: r.phone,
+	});
+	if (isBlankQuery(q)) {
+		return rows.slice(0, GUEST_LINK_CANDIDATE_LIMIT).map(toCandidate);
+	}
+	// The email joins the match by its local part only (#1333): split on `.`,
+	// `_` and `+`, so "doe" word-prefixes `j.doe@gmail.com` and the domain never
+	// matches. A query that is a whole address matches that address exactly.
+	const wanted = q.toLowerCase();
+	const ranked = searchPeople(
+		q,
+		rows.map((r) => ({
+			...r,
+			extraTerms: r.email
+				? [(r.email.split("@")[0] ?? "").split(/[._+]/).join(" ")]
+				: [],
+		})),
+	);
+	const exact = rows.filter((r) => r.email?.toLowerCase() === wanted);
+	const exactIds = new Set(exact.map((r) => r.guestId));
+	return [...exact, ...ranked.filter((r) => !exactIds.has(r.guestId))]
+		.slice(0, GUEST_LINK_CANDIDATE_LIMIT)
+		.map(toCandidate);
 }
 
 /**

@@ -85,6 +85,7 @@ const {
 	GUEST_BOOK_MAX_NEW_PER_WINDOW,
 	GUEST_BOOK_THROTTLED_MESSAGE,
 	loadGuestPipeline,
+	listGuestLinkCandidates,
 	loadLinkCandidates,
 } = await import("#/server/guest-pipeline-logic");
 const { applyAssignGuestToSlot, listClubGuests } = await import(
@@ -4702,5 +4703,123 @@ describe.skipIf(!hasTestDb)("guest invites (#899)", () => {
 			expect(json).not.toContain(joinUrl);
 			expect(json).not.toContain("joinUrl");
 		}
+	});
+});
+
+/**
+ * The "Same person as…" guest search ranks on the server with the shared
+ * matcher (#1333): name, goes-by name and the local part of the email.
+ */
+describe.skipIf(!hasTestDb)("guest link search (#1333)", () => {
+	let a: SeededClub;
+	let b: SeededClub;
+	let mine: string;
+	const strayPeople: string[] = [];
+
+	async function seedOther(
+		name: string,
+		over: { email?: string; preferredName?: string } = {},
+	): Promise<string> {
+		const [row] = await testDb
+			.insert(guests)
+			.values(
+				await withGuestPerson(
+					{
+						clubId: b.clubId,
+						name,
+						email: over.email ?? null,
+						phone: null,
+						stage: "prospect",
+						...(over.preferredName
+							? { preferredName: over.preferredName }
+							: {}),
+					},
+					testDb,
+				),
+			)
+			.returning({ id: guests.id });
+		if (!row) throw new Error("no guest");
+		return row.id;
+	}
+
+	const ask = async (q: string) =>
+		(
+			await listGuestLinkCandidates({
+				userId: a.adminUserId,
+				clubId: a.clubId,
+				guestId: mine,
+				otherClubId: b.clubId,
+				q,
+			})
+		).map((r) => r.name);
+
+	beforeEach(async () => {
+		a = await seedClub();
+		b = await seedClub();
+		const [person] = await testDb
+			.select({ id: people.id })
+			.from(people)
+			.where(eq(people.userId, a.adminUserId));
+		if (!person) throw new Error("no officer person");
+		await testDb.insert(members).values({
+			clubId: b.clubId,
+			personId: person.id,
+			name: "Officer",
+			clubRole: "admin",
+			status: "active",
+		});
+		mine = await seedGuest(a.clubId, "Mine Own");
+	});
+
+	afterEach(async () => {
+		const clubIds = [a.clubId, b.clubId];
+		const guestPersons = await testDb
+			.selectDistinct({ id: guests.personId })
+			.from(guests)
+			.where(inArray(guests.clubId, clubIds));
+		await testDb.delete(guests).where(inArray(guests.clubId, clubIds));
+		strayPeople.push(...guestPersons.map((g) => g.id));
+		await cleanup(a.clubId, [a.adminUserId, a.memberUserId]);
+		await cleanup(b.clubId, [b.adminUserId, b.memberUserId]);
+		const ids = strayPeople.splice(0);
+		if (ids.length > 0) {
+			await testDb.delete(people).where(inArray(people.id, ids));
+		}
+	});
+
+	// protects=an unaccented query finds an accented guest and a goes-by name finds its owner; fails_when=the ilike filter or the name-only match returns; no_claim=ordering between tiers
+	it("finds an accented name and a goes-by name", async () => {
+		await seedOther("José Ruiz");
+		await seedOther("Robert Smith", { preferredName: "Bob" });
+		await seedOther("Zed Other");
+		expect(await ask("jose")).toEqual(["José Ruiz"]);
+		expect(await ask("bob")).toEqual(["Robert Smith"]);
+	});
+
+	// protects=the email matches by its local part, never by its domain, and a whole address matches exactly; fails_when=the whole email is folded into one word (the domain matches) or the exact-address case is lost; no_claim=other punctuation inside a local part
+	it("matches an email by its local part and by the exact address, not by its domain", async () => {
+		await seedOther("Quinn Quill", { email: "j.doe@gmail.com" });
+		await seedOther("Gail Gale", { email: "gail@corp.example" });
+		expect(await ask("doe")).toEqual(["Quinn Quill"]);
+		expect(await ask("gmail")).toEqual([]);
+		expect(await ask("j.doe@gmail.com")).toEqual(["Quinn Quill"]);
+	});
+
+	// protects=at most 20 rows come back, ranked by tier then name, and an empty query is the first 20 by name; fails_when=the cap or the empty-query SQL order changes; no_claim=a club past the 1000-guest pool (a documented ceiling)
+	it("caps at 20, ranks by tier, and lists the first 20 by name for an empty query", async () => {
+		for (let i = 0; i < 25; i++) {
+			await seedOther(`Pat ${String(i).padStart(2, "0")}`);
+		}
+		await seedOther("Zed Spat");
+		const typed = await ask("pat");
+		expect(typed).toHaveLength(20);
+		expect(typed[0]).toBe("Pat 00");
+		expect(typed).not.toContain("Zed Spat");
+		const all = await ask("");
+		expect(all).toHaveLength(20);
+		expect(all[0]).toBe("Pat 00");
+		expect(all[19]).toBe("Pat 19");
+		// "%" folds to nothing: it lists, it does not filter.
+		expect(await ask("%")).toEqual(all);
 	});
 });

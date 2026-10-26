@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { type ReactNode, useState } from "react";
-import { Input } from "#/components/ui/input";
-import { Label } from "#/components/ui/label";
+import { type ReactNode, useMemo } from "react";
+import { PersonPicker } from "#/components/club/person-picker";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import type { StoredMember } from "#/lib/member-identity";
 import { officerPositionLabel } from "#/lib/officers";
@@ -37,63 +36,45 @@ export function PickNameForm({
 	 */
 	notListedHint?: ReactNode;
 }) {
-	const [query, setQuery] = useState("");
-
 	const { data: members = [] } = useQuery({
 		queryKey: ["members", clubUuid],
 		queryFn: () => listMembers({ data: clubUuid }),
 	});
 
-	const filtered = members.filter((m) =>
-		m.name.toLowerCase().includes(query.trim().toLowerCase()),
+	const people = useMemo(
+		() =>
+			members.map((m) => ({
+				kind: "member" as const,
+				id: m.id,
+				name: m.name,
+				preferredName: m.preferredName,
+				officerPositions: m.officerPositions,
+			})),
+		[members],
 	);
 
 	return (
 		<div className="flex flex-col gap-4">
-			<div className="space-y-2">
-				<Label htmlFor="member-search">Search members</Label>
-				<Input
-					id="member-search"
-					type="search"
-					placeholder="Type your name…"
-					value={query}
-					onChange={(e) => setQuery(e.target.value)}
-					autoComplete="off"
-				/>
-			</div>
-
-			<ul className="flex max-h-[40svh] flex-col gap-2 overflow-y-auto">
-				{filtered.map((m) => (
-					<li key={m.id}>
-						<button
-							type="button"
-							onClick={() => onPicked({ id: m.id, name: m.name })}
-							className="flex w-full items-center gap-3 rounded-lg border border-border bg-card px-3 py-2.5 text-left transition-colors hover:bg-accent"
-						>
-							<MemberAvatar
-								tone={toneFromSeed(m.id)}
-								initials={initialsOf(m.name)}
-								size={38}
-							/>
-							<span className="flex min-w-0 flex-col">
-								<span className="truncate font-semibold text-foreground">
-									{m.name}
-								</span>
-								{m.officerPositions.length ? (
-									<span className="truncate text-muted-foreground text-xs">
-										{m.officerPositions.map(officerPositionLabel).join(", ")}
-									</span>
-								) : null}
-							</span>
-						</button>
-					</li>
-				))}
-				{filtered.length === 0 ? (
-					<li className="px-1 py-2 text-muted-foreground text-sm">
-						No members match “{query}”.
-					</li>
-				) : null}
-			</ul>
+			<PersonPicker
+				people={people}
+				placeholder="Type your name…"
+				emptyText="No members match."
+				onPick={(m) => onPicked({ id: m.id, name: m.name })}
+				renderLeading={(m) => (
+					<MemberAvatar
+						tone={toneFromSeed(m.id)}
+						initials={initialsOf(m.name)}
+						size={38}
+					/>
+				)}
+				renderMeta={(m) =>
+					m.officerPositions.length ? (
+						<span className="text-muted-foreground text-xs">
+							{m.officerPositions.map(officerPositionLabel).join(", ")}
+						</span>
+					) : null
+				}
+			/>
 
 			{notListedHint ? (
 				<div className="space-y-2 border-border border-t pt-4 text-sm">

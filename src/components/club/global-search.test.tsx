@@ -49,6 +49,40 @@ describe("searchWorkspace", () => {
 		expect(r.members.map((m) => m.name)).toEqual(["Mahbuba"]);
 	});
 
+	// protects=an office label finds the officer; fails_when=extraTerms is not passed; no_claim=page hits
+	it("finds an officer by their office label", () => {
+		expect(
+			searchWorkspace("vp education", members, NOBODY).members.map(
+				(m) => m.name,
+			),
+		).toEqual(["Mahbuba"]);
+	});
+
+	// protects=words match in any order and the result rows are the member rows unchanged; fails_when=matching is a plain substring or extraTerms leaks onto the row; no_claim=ranking inside a tier
+	it("matches words in any order and returns plain member rows", () => {
+		const r = searchWorkspace(
+			"smith jo",
+			[{ id: "j", name: "Jo Smith", officerPositions: [] }, ...members],
+			NOBODY,
+		);
+		expect(r.members).toEqual([
+			{ id: "j", name: "Jo Smith", officerPositions: [] },
+		]);
+	});
+
+	// protects=results are ordered by match tier before the cap of 8; fails_when=input order or alphabetical order is used instead; no_claim=localeCompare tie-break
+	it("ranks by tier: prefix before substring", () => {
+		const r = searchWorkspace(
+			"ann",
+			[
+				{ id: "a", name: "Joanne", officerPositions: [] },
+				{ id: "b", name: "Annie", officerPositions: [] },
+			],
+			NOBODY,
+		);
+		expect(r.members.map((m) => m.name)).toEqual(["Annie", "Joanne"]);
+	});
+
 	it("caps member results at 8", () => {
 		const many = Array.from({ length: 20 }, (_, i) => ({
 			id: `x${i}`,

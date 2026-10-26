@@ -6,16 +6,9 @@ import {
 	GuestEditDialog,
 	type GuestEditFields,
 } from "#/components/club/guest-edit-dialog";
+import { PersonPicker } from "#/components/club/person-picker";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
-import {
-	Command,
-	CommandEmpty,
-	CommandGroup,
-	CommandInput,
-	CommandItem,
-	CommandList,
-} from "#/components/ui/command";
 import { Input } from "#/components/ui/input";
 import {
 	Popover,
@@ -87,7 +80,12 @@ export function AttendanceGuestsGroup({
 	onSetGuestMode,
 }: {
 	guests: MinutesGuestRow[];
-	clubGuests: { id: string; name: string; stage?: string }[];
+	clubGuests: {
+		id: string;
+		name: string;
+		preferredName?: string | null;
+		stage?: string;
+	}[];
 	locked: boolean;
 	/**
 	 * #727. Omitted ⇒ guest names are plain text, which is what every viewer
@@ -108,7 +106,6 @@ export function AttendanceGuestsGroup({
 	onSetGuestMode?: (guestId: string, mode: AttendanceMode) => void;
 }) {
 	const [open, setOpen] = useState(false);
-	const [search, setSearch] = useState("");
 	// The guest whose edit dialog is up, by id — never the row itself. `fields` is
 	// refreshed after every save (`guestEdit.onSaved`), so an id re-reads the NEW
 	// row on the next open while a captured object would keep rendering the values
@@ -275,7 +272,6 @@ export function AttendanceGuestsGroup({
 				open={open}
 				onOpenChange={(next) => {
 					setOpen(next);
-					setSearch("");
 				}}
 			>
 				<PopoverTrigger asChild>
@@ -285,42 +281,27 @@ export function AttendanceGuestsGroup({
 				</PopoverTrigger>
 				<PopoverContent className="w-72 space-y-3">
 					{addableClubGuests.length > 0 ? (
-						<Command>
-							<CommandInput
-								placeholder="Search guests…"
-								value={search}
-								onValueChange={setSearch}
-							/>
-							<CommandList>
-								<CommandEmpty>No matching guests.</CommandEmpty>
-								<CommandGroup heading="Existing guests">
-									{addableClubGuests
-										.filter(
-											(g) => g.stage !== "lost" || search.trim().length > 0,
-										)
-										.map((g) => (
-											<CommandItem
-												key={g.id}
-												value={`${g.name} ${g.id}`}
-												disabled={locked}
-												onSelect={() => {
-													// Belt as well as braces. `disabled` above is cmdk's,
-													// which does remove the select listener rather than
-													// merely styling the row — but the guarantee is stated
-													// HERE, where the write actually leaves, rather than
-													// inherited from a library's internals. Same reason the
-													// form below carries one.
-													if (locked) return;
-													onAddGuest({ guestId: g.id });
-													setOpen(false);
-												}}
-											>
-												{g.name}
-											</CommandItem>
-										))}
-								</CommandGroup>
-							</CommandList>
-						</Command>
+						<PersonPicker
+							people={addableClubGuests.map((g) => ({
+								kind: "guest" as const,
+								id: g.id,
+								name: g.name,
+								preferredName: g.preferredName,
+								stage: g.stage,
+							}))}
+							placeholder="Search guests…"
+							emptyText="No matching guests."
+							disabled={locked}
+							onPick={(g) => {
+								// Belt as well as braces. `disabled` is the picker's, but the
+								// guarantee is stated HERE, where the write actually leaves,
+								// rather than inherited from a library's internals. Same
+								// reason the form below carries one.
+								if (locked) return;
+								onAddGuest({ guestId: g.id });
+								setOpen(false);
+							}}
+						/>
 					) : null}
 					<form
 						onSubmit={(e) => {
