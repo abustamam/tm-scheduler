@@ -21,8 +21,10 @@ that area (`commands.md` before a migration, a browser-backed test or a mutation
   whether `document.documentElement.scrollWidth > window.innerWidth` and whether the page's primary
   control is within the first 812px; a PR that changes no page says "no page changed". A defect
   found is fixed in the same PR with a 375px headless-Chrome geometry test on the existing
-  harness (`docs/agents/commands.md`). Two traps: a worktree is assigned no dev port, so use the
-  URL `bun run dev` prints, not 3000; an `_authed` page needs a session, and with no email provider
+  harness (`docs/agents/commands.md`). Two traps: a worktree is assigned no dev port and its
+  `.env.local` pins `BETTER_AUTH_URL` to :3000, so pick a free port P and run
+  `BETTER_AUTH_URL=http://localhost:P bun run dev -- --port P --strictPort` (the process env
+  wins over `.env.local`; otherwise the magic link points at another worktree's server); an `_authed` page needs a session, and with no email provider
   the magic link prints to the dev-server console. The per-wave post-deploy `/qa-only` stays; this
   is an earlier look.
 - A migration whose SQL changes data (`UPDATE`, `DELETE FROM`, `INSERT INTO`, `TRUNCATE`) needs a
