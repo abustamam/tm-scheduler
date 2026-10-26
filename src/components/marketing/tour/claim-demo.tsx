@@ -9,7 +9,7 @@ import { roleFreedDutyText } from "#/lib/role-duty-copy";
 /**
  * Scene 1 of `/tour`: the meeting page's role list on a phone, a facsimile of
  * `MeetingAgenda` (`meeting-agenda.tsx`): the "Roles filled" bar, slot cards
- * with "Open" / "Filled" / "(you)", the success-outline Claim button, Release,
+ * with "Open" / "Filled" / "(you)", the amber Claim button, Release,
  * the "Who are you?" name picker (`identity-gate.tsx`) the first time, and the
  * claim sheet (`ClaimSheet`) with a speech-title field for a speaker slot.
  *
@@ -308,10 +308,10 @@ export function ClaimDemo() {
 			<div className="w-[320px] max-w-full rounded-[34px] bg-[#0e2a2e] p-2.5 shadow-[0_30px_70px_rgba(23,58,64,.26)]">
 				<div className="relative min-h-[540px] overflow-hidden rounded-[27px] bg-background text-foreground">
 					<div className="border-b bg-card px-4 pt-3.5 pb-3">
-						<div className="font-extrabold text-[11px] text-muted-foreground uppercase tracking-[0.06em]">
+						<div className="font-bold text-xs text-muted-foreground uppercase tracking-[0.06em]">
 							Harbor City Speakers
 						</div>
-						<div className="mt-0.5 font-display font-semibold text-[17px]">
+						<div className="mt-0.5 font-display font-semibold text-base">
 							Thursday's meeting
 						</div>
 						<div className="mt-2.5">
@@ -349,7 +349,7 @@ export function ClaimDemo() {
 									>
 										<div className="flex items-start justify-between gap-3">
 											<div className="min-w-0 flex-1">
-												<p className="font-medium">{slot.role}</p>
+												<p className="font-semibold">{slot.role}</p>
 												<p className="text-muted-foreground text-sm">
 													{open ? (
 														"Open"
@@ -364,7 +364,7 @@ export function ClaimDemo() {
 												</p>
 												{slot.speaker && slot.title ? (
 													<div className="mt-1 text-sm">
-														<p className="font-medium">
+														<p className="font-semibold">
 															&ldquo;{slot.title}&rdquo;
 														</p>
 														<p className="text-muted-foreground text-xs">
@@ -380,7 +380,7 @@ export function ClaimDemo() {
 												{slot.evaluates ? (
 													<p className="mt-1 text-muted-foreground text-xs">
 														Evaluates{" "}
-														<span className="font-medium text-foreground">
+														<span className="font-semibold text-foreground">
 															{slot.evaluates}
 														</span>
 													</p>
@@ -392,7 +392,7 @@ export function ClaimDemo() {
 														ref={register(`${slot.id}:claim`)}
 														size="sm"
 														variant="outline"
-														className="border-success/70 text-success hover:bg-success hover:text-success-foreground"
+														className="border-warning bg-warning-soft text-warning-foreground hover:bg-warning hover:text-on-accent-fill"
 														aria-label={`Claim ${slot.role} — open`}
 														onClick={(e) => startClaim(slot, e.currentTarget)}
 													>
@@ -447,7 +447,7 @@ export function ClaimDemo() {
 								))}
 							</div>
 							<div className="space-y-1 text-sm">
-								<p className="font-medium text-foreground">
+								<p className="font-semibold text-foreground">
 									Don't see your name?
 								</p>
 								<p className="text-muted-foreground">
@@ -456,7 +456,7 @@ export function ClaimDemo() {
 									    must not navigate. */}
 									<button
 										type="button"
-										className="font-medium text-primary hover:underline"
+										className="font-semibold text-primary hover:underline"
 									>
 										Sign the guest book
 									</button>{" "}

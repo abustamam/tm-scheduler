@@ -124,6 +124,18 @@ describe("ClaimDemo", () => {
 		expect(row("Speaker 2").textContent).toContain("“TBA”");
 	});
 
+	// protects: the tour's Claim matches the product's amber Claim; fails_when:
+	// it stays green or goes primary; no_claim: classes do not prove contrast.
+	it("renders the open-row Claim with the amber classes, none green", () => {
+		render(<ClaimDemo />);
+		const c = screen.getAllByRole("button", { name: /^Claim .* — open$/ })[0]
+			.className;
+		expect(c).toMatch(/\bborder-warning\b/);
+		expect(c).toMatch(/\bbg-warning-soft\b/);
+		expect(c).toMatch(/\btext-warning-foreground\b/);
+		expect(c).not.toMatch(/success/);
+	});
+
 	it("Cancel leaves the role open and returns focus to its Claim button", () => {
 		render(<ClaimDemo />);
 		fireEvent.click(claimBtn("Timer"));
