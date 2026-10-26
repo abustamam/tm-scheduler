@@ -109,6 +109,7 @@ import { Route as ThemeRoute } from "./club.$clubId.meeting.$meetingId_.me_.them
 import { Route as TimerRoute } from "./club.$clubId.meeting.$meetingId_.me_.timer";
 import { Route as MeTopicsRoute } from "./club.$clubId.meeting.$meetingId_.me_.topics";
 import { Route as MeWordRoute } from "./club.$clubId.meeting.$meetingId_.me_.word";
+import { Route as RunOfShowRoute } from "./club.$clubId_.meeting.$meetingId.agenda";
 import { Route as FeedbackRoute } from "./club.$clubId_.meeting.$meetingId.feedback";
 import { Route as FlyerRoute } from "./club.$clubId_.meeting.$meetingId.flyer";
 import { Route as PresentRoute } from "./club.$clubId_.meeting.$meetingId.present";
@@ -277,6 +278,14 @@ const KEY_READER_ROUTES: {
 		name: "present",
 		file: "club.$clubId_.meeting.$meetingId.present.tsx",
 		route: PresentRoute,
+		shell: false,
+		reader: getPublicMeetingByKey,
+		crossClubCheck: true,
+	},
+	{
+		name: "run-of-show",
+		file: "club.$clubId_.meeting.$meetingId.agenda.tsx",
+		route: RunOfShowRoute,
 		shell: false,
 		reader: getPublicMeetingByKey,
 		crossClubCheck: true,

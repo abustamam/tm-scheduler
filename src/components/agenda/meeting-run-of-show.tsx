@@ -141,11 +141,11 @@ export function MeetingRunOfShow(props: MeetingRunOfShowProps) {
 	const slotById = new Map(slots.map((s) => [s.id, s]));
 
 	return (
-		<main className="mx-auto w-full max-w-xl px-4 pb-12 pt-6 text-foreground">
+		<main className="mx-auto w-full max-w-xl px-4 pb-12 pt-6 text-foreground break-words">
 			<header className="space-y-2 border-b border-border pb-4">
 				<div className="flex items-center gap-3">
 					<ClubLogo logoUrl={logoUrl} height={36} maxWidth={120} />
-					<p className="text-sm font-semibold text-muted-foreground">
+					<p className="min-w-0 text-sm font-semibold text-muted-foreground">
 						{clubName}
 					</p>
 				</div>
