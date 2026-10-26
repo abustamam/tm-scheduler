@@ -42,10 +42,10 @@ vi.mock("#/server/meeting-key", () => ({
 	resolveMeetingKeyForUser: vi.fn(),
 }));
 
-import { Route } from "./club.$clubId.meeting.$meetingId_.agenda";
+import { Route } from "./club.$clubId.meeting.$meetingId_.agenda.edit";
 
 const HREF =
-	"/club/thr-speaking-club/meeting/6b971d60-654e-45b2-b5bb-271f026fe586/agenda";
+	"/club/thr-speaking-club/meeting/6b971d60-654e-45b2-b5bb-271f026fe586/agenda/edit";
 
 /** Invoke the real guard with the parent shell's context and a url. */
 async function runBeforeLoad(context: { shell: boolean; hasSession: boolean }) {

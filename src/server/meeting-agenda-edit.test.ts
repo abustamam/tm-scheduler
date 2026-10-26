@@ -6,7 +6,7 @@
  * `patchInput` with no message argument. `ZodError.message` is
  * `JSON.stringify(issues, null, 2)` — the whole issues array, `code` and
  * `path` included — and the editor route does no error mapping
- * (`club.$clubId.meeting.$meetingId_.agenda.tsx`) before `runAction`
+ * (`club.$clubId.meeting.$meetingId_.agenda.edit.tsx`) before `runAction`
  * (`agenda-editor.tsx`) toasts `err.message` verbatim. So tripping any of
  * those bounds put a raw JSON dump in front of a club officer.
  *

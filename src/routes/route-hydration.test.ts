@@ -229,9 +229,9 @@ const COVERED: Record<string, { who: Who; url: (f: Fixture) => string }> = {
 		who: "admin",
 		url: (f) => `/club/${f.slug}/meeting/${f.pastMeetingId}`,
 	},
-	"/club/$clubId/meeting/$meetingId/agenda": {
+	"/club/$clubId/meeting/$meetingId/agenda/edit": {
 		who: "admin",
-		url: (f) => `/club/${f.slug}/meeting/${f.upcomingMeetingId}/agenda`,
+		url: (f) => `/club/${f.slug}/meeting/${f.upcomingMeetingId}/agenda/edit`,
 	},
 	"/club/$clubId/meeting/$meetingId/me": {
 		who: "admin",

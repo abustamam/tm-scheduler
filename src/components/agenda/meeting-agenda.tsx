@@ -515,7 +515,7 @@ export function MeetingAgenda({
 			{viewer.canManage && meeting.templateId ? (
 				<Button type="button" variant="outline" size="sm" asChild>
 					<Link
-						to="/club/$clubId/meeting/$meetingId/agenda"
+						to="/club/$clubId/meeting/$meetingId/agenda/edit"
 						params={{ clubId: meeting.clubId, meetingId: meeting.id }}
 					>
 						Edit agenda

@@ -7,7 +7,7 @@ import { readSource } from "#/test/guard-source";
  * `readSource` blanks comments so the sentence in the JSX above — which quotes
  * the copy — cannot satisfy this on its own.
  */
-const ROUTE = "src/routes/club.$clubId.meeting.$meetingId_.agenda.tsx";
+const ROUTE = "src/routes/club.$clubId.meeting.$meetingId_.agenda.edit.tsx";
 
 describe("adoption notice", () => {
 	it("tells the officer that upstream improvements stop arriving", () => {
