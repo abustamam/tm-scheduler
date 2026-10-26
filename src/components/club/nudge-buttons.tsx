@@ -1,6 +1,18 @@
-import { Mail, MessageCircle, MessageSquareText, Phone } from "lucide-react";
+import {
+	Mail,
+	MessageCircle,
+	MessageSquareText,
+	MoreHorizontal,
+	Phone,
+} from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { Button } from "#/components/ui/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "#/components/ui/dropdown-menu";
 import type { EvaluatorFormBrief } from "#/lib/evaluator-form";
 import type { LevelProgress } from "#/lib/level-proximity";
 import { buildNudge } from "#/lib/nudge";
@@ -36,6 +48,10 @@ interface NudgeButtonsBase {
 	 *  (`flex-wrap`) puts it above its sibling. A percentage width means nothing
 	 *  in a content-sized cell, so `iconOnly` alone must not turn it on. */
 	ownLineWhenCrowded?: boolean;
+	/** `"inline"` (default) renders the outline link buttons. `"menu"` (#1309)
+	 *  folds every available method into ONE `Contact <name>` row menu, so a roll
+	 *  row stays on one line; the preferred method is listed first. */
+	layout?: "inline" | "menu";
 }
 
 /** The meeting a draft asks about. Required on every arm but `orientation`. */
@@ -126,6 +142,7 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 		iconOnly = false,
 		preferredContact = null,
 		ownLineWhenCrowded = false,
+		layout = "inline",
 	} = props;
 	// Render the channel links only after mount. The caller builds `shareUrl` with
 	// a `window.location.origin` prefix that is correct only on the client; during
@@ -244,6 +261,7 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 			: null;
 
 	if (!nudge.whatsappUrl && !nudge.mailtoUrl && !callUrl && !smsUrl) {
+		if (layout === "menu") return null;
 		return (
 			<span className="text-xs text-[var(--sea-ink-soft)]">
 				No contact on file
@@ -290,7 +308,7 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 
 	const badge = (m: ContactMethod) =>
 		preferredContact === m && !iconOnly ? (
-			<span className="rounded-full bg-[rgba(79,184,178,.16)] px-1.5 text-[10px] font-bold text-[var(--lagoon-deep)]">
+			<span className="rounded-full bg-highlight/15 px-1.5 text-xs font-bold text-link">
 				Preferred
 			</span>
 		) : null;
@@ -379,6 +397,78 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 	// control. Two icons keep today's single line.
 	const rendered = order.filter((m) => buttons[m]).length;
 	const ownLine = iconOnly && ownLineWhenCrowded && rendered >= 3;
+
+	if (layout === "menu") {
+		const items: Record<
+			ContactMethod,
+			{
+				href: string | null | undefined;
+				text: string;
+				icon: ReactNode;
+				external: boolean;
+			}
+		> = {
+			call: {
+				href: callUrl,
+				text: "Call",
+				icon: <Phone className="size-4" aria-hidden />,
+				external: false,
+			},
+			sms: {
+				href: smsUrl,
+				text: "SMS",
+				icon: <MessageSquareText className="size-4" aria-hidden />,
+				external: false,
+			},
+			whatsapp: {
+				href: nudge.whatsappUrl,
+				text: "WhatsApp",
+				icon: <MessageCircle className="size-4" aria-hidden />,
+				external: true,
+			},
+			email: {
+				href: nudge.mailtoUrl,
+				text: "Email",
+				icon: <Mail className="size-4" aria-hidden />,
+				external: false,
+			},
+		};
+		return (
+			<DropdownMenu>
+				<DropdownMenuTrigger asChild>
+					<Button
+						variant="ghost"
+						size="icon-sm"
+						className="shrink-0"
+						aria-label={`Contact ${name}`}
+					>
+						<MoreHorizontal className="size-4" aria-hidden />
+					</Button>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="end">
+					{order.map((m) => {
+						const item = items[m];
+						if (!item.href) return null;
+						return (
+							<DropdownMenuItem key={m} asChild>
+								<a
+									href={item.href}
+									{...(item.external
+										? { target: "_blank", rel: "noopener noreferrer" }
+										: {})}
+									onClick={onContacted}
+								>
+									{item.icon}
+									{item.text}
+									{preferredContact === m ? " · preferred" : null}
+								</a>
+							</DropdownMenuItem>
+						);
+					})}
+				</DropdownMenuContent>
+			</DropdownMenu>
+		);
+	}
 
 	return (
 		<div

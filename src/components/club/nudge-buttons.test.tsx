@@ -403,4 +403,114 @@ describe("NudgeButtons", () => {
 			expect(onContacted).toHaveBeenCalledTimes(2);
 		});
 	});
+
+	describe('layout="menu" (#1309)', () => {
+		const both = { phone: "+14155552671", email: "j@x.io" };
+		const open = async () => {
+			await userEvent.click(
+				screen.getByRole("button", { name: "Contact Jane" }),
+			);
+			return screen.getAllByRole("menuitem");
+		};
+
+		it("lists every available method in one Contact menu, each an <a> with today's href", async () => {
+			// The hrefs the inline layout renders, read from a sibling render, so the
+			// menu cannot drift from them.
+			const inline = render(
+				<NudgeButtons {...base} {...both} preferredContact="sms" />,
+			);
+			const inlineHrefs = screen
+				.getAllByRole("link")
+				.map((l) => l.getAttribute("href"));
+			inline.unmount();
+
+			render(
+				<NudgeButtons
+					{...base}
+					{...both}
+					preferredContact="sms"
+					layout="menu"
+				/>,
+			);
+			// Nothing inline until the menu opens.
+			expect(screen.queryAllByRole("link")).toHaveLength(0);
+			const items = await open();
+			expect(items.map((i) => i.tagName)).toEqual(["A", "A", "A"]);
+			expect(items.map((i) => i.getAttribute("href"))).toEqual(inlineHrefs);
+			// WhatsApp opens in a new tab with the same rel, as inline.
+			const wa = items.find((i) => i.textContent === "WhatsApp");
+			expect(wa?.getAttribute("target")).toBe("_blank");
+			expect(wa?.getAttribute("rel")).toBe("noopener noreferrer");
+		});
+
+		it("lists the preferred method first with a visible '· preferred' suffix", async () => {
+			render(
+				<NudgeButtons
+					{...base}
+					{...both}
+					preferredContact="email"
+					layout="menu"
+				/>,
+			);
+			const items = await open();
+			expect(items.map((i) => i.textContent)).toEqual([
+				"Email · preferred",
+				"WhatsApp",
+			]);
+		});
+
+		it("renders nothing at all when no method is available", () => {
+			const { container } = render(
+				<NudgeButtons {...base} phone={null} email={null} layout="menu" />,
+			);
+			expect(container.innerHTML).toBe("");
+		});
+
+		it("fires onContacted when a menu item is chosen", async () => {
+			const onContacted = vi.fn();
+			render(
+				<NudgeButtons
+					{...base}
+					{...both}
+					layout="menu"
+					onContacted={onContacted}
+				/>,
+			);
+			const items = await open();
+			const mail = items.find((i) => i.textContent === "Email");
+			mail?.addEventListener("click", (e) => e.preventDefault());
+			await userEvent.click(mail as HTMLElement);
+			expect(onContacted).toHaveBeenCalledTimes(1);
+		});
+
+		it("leaves the inline links unchanged when no layout is given", () => {
+			render(<NudgeButtons {...base} {...both} preferredContact="sms" />);
+			const links = screen.getAllByRole("link");
+			expect(links.map((l) => l.textContent)).toEqual([
+				"SMSPreferred",
+				"WhatsApp",
+				"Email",
+			]);
+			expect(links.map((l) => l.getAttribute("href"))).toEqual([
+				expect.stringMatching(/^sms:\+14155552671\?body=/),
+				expect.stringMatching(
+					/^https:\/\/web\.whatsapp\.com\/send\/\?phone=14155552671/,
+				),
+				expect.stringMatching(/^mailto:j@x\.io\?/),
+			]);
+			expect(screen.queryByRole("button", { name: /Contact/ })).toBeNull();
+			// An explicit "inline" is the same markup as the default.
+			const byDefault = document.body.innerHTML;
+			cleanup();
+			render(
+				<NudgeButtons
+					{...base}
+					{...both}
+					preferredContact="sms"
+					layout="inline"
+				/>,
+			);
+			expect(document.body.innerHTML).toBe(byDefault);
+		});
+	});
 });
