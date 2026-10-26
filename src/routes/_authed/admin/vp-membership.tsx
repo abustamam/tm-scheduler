@@ -160,25 +160,25 @@ const STAGES: { id: GuestStage; label: string; blurb: string; tone: string }[] =
 			id: "prospect",
 			label: "Prospects",
 			blurb: "New visitors — reach out",
-			tone: "text-[var(--lagoon-deep)]",
+			tone: "text-link",
 		},
 		{
 			id: "following_up",
 			label: "Following up",
 			blurb: "In conversation",
-			tone: "text-[var(--sea-ink)]",
+			tone: "text-foreground",
 		},
 		{
 			id: "joined",
 			label: "Joined",
 			blurb: "Became members 🎉",
-			tone: "text-[var(--success-strong)]",
+			tone: "text-success-strong",
 		},
 		{
 			id: "lost",
 			label: "Lost",
 			blurb: "Not moving forward",
-			tone: "text-[var(--sea-ink-soft)]",
+			tone: "text-muted-foreground",
 		},
 	];
 
@@ -309,23 +309,23 @@ function VpMembership() {
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					VP Membership
 				</h1>
-				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+				<p className="mt-1 text-sm text-muted-foreground">
 					Your guest pipeline — capture visitors at the door, follow up, and
 					convert prospects into members.
 				</p>
 			</div>
 
 			{/* Guest-book QR — stable, printable table-tent front door. */}
-			<div className="grid gap-4 rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-5 shadow-[0_1px_0_var(--inset-glint)_inset,0_14px_30px_rgba(23,58,64,.06)] sm:grid-cols-[auto_1fr] sm:items-center">
+			<div className="grid gap-4 rounded-2xl border border-border bg-surface-raised p-5 shadow-[0_14px_30px_rgba(23,58,64,.06)] sm:grid-cols-[auto_1fr] sm:items-center">
 				<div className="qr-tent flex flex-col items-center gap-3 rounded-xl bg-white p-4 text-center">
 					{guestBookUrl ? (
 						<QRCodeSVG value={guestBookUrl} size={168} marginSize={0} />
 					) : (
 						<div className="flex size-[168px] items-center justify-center">
-							<Loader2 className="size-6 animate-spin text-[var(--sea-ink-soft)]" />
+							<Loader2 className="size-6 animate-spin text-muted-foreground" />
 						</div>
 					)}
-					<div className="max-w-[200px] text-[13px] font-semibold text-[#173a40]">
+					<div className="max-w-[200px] text-sm font-semibold text-foreground">
 						Scan to sign the {clubName} guest book
 					</div>
 				</div>
@@ -334,12 +334,12 @@ function VpMembership() {
 						<h2 className="text-sm font-bold tracking-[-0.01em]">
 							Guest book link
 						</h2>
-						<p className="text-xs text-[var(--sea-ink-soft)]">
+						<p className="text-xs text-muted-foreground">
 							Print it as a table tent, or share the link. Guests self-register
 							and are recorded at the current meeting — no app or login needed.
 						</p>
 					</div>
-					<div className="break-all rounded-lg border border-[var(--line)] bg-[var(--foam)] px-3 py-2 font-mono text-xs text-[var(--sea-ink)]">
+					<div className="break-all rounded-lg border border-border bg-surface-soft px-3 py-2 font-mono text-xs text-foreground">
 						{guestBookUrl || "…"}
 					</div>
 					<Button
@@ -436,14 +436,14 @@ function Section({
 				<div>
 					<h2 className={cn("text-sm font-bold tracking-[-0.01em]", titleTone)}>
 						{title}{" "}
-						<span className="text-[var(--sea-ink-soft)] tabular-nums">
+						<span className="text-muted-foreground tabular-nums">
 							· {count}
 						</span>
 					</h2>
-					<p className="text-xs text-[var(--sea-ink-soft)]">{subtitle}</p>
+					<p className="text-xs text-muted-foreground">{subtitle}</p>
 				</div>
 			</div>
-			<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_14px_30px_rgba(23,58,64,.06)]">
+			<div className="overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-[0_14px_30px_rgba(23,58,64,.06)]">
 				{children}
 			</div>
 		</div>
@@ -461,7 +461,7 @@ function BroughtBySection({ brought }: { brought: BroughtCount[] }) {
 	return (
 		<Section
 			title="Visitors introduced"
-			titleTone="text-[var(--sea-ink)]"
+			titleTone="text-foreground"
 			count={total}
 			subtitle="Who brought your guests — set it from a guest's Edit"
 		>
@@ -472,10 +472,10 @@ function BroughtBySection({ brought }: { brought: BroughtCount[] }) {
 					{brought.map((b) => (
 						<li
 							key={b.memberId}
-							className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-2.5 text-sm last:border-b-0"
+							className="flex items-center justify-between gap-3 border-b border-border px-5 py-2.5 text-sm last:border-b-0"
 						>
 							<span className="min-w-0 truncate font-semibold">{b.name}</span>
-							<span className="shrink-0 tabular-nums text-[var(--sea-ink-soft)]">
+							<span className="shrink-0 tabular-nums text-muted-foreground">
 								{b.count} guest{b.count === 1 ? "" : "s"}
 							</span>
 						</li>
@@ -488,7 +488,7 @@ function BroughtBySection({ brought }: { brought: BroughtCount[] }) {
 
 function EmptyRow({ children }: { children: React.ReactNode }) {
 	return (
-		<p className="px-5 py-8 text-center text-sm text-[var(--sea-ink-soft)]">
+		<p className="px-5 py-8 text-center text-sm text-muted-foreground">
 			{children}
 		</p>
 	);
@@ -576,12 +576,12 @@ function GuestInvite({
 				title={reason ?? undefined}
 				className="m-0 flex min-w-0 items-center gap-1.5 border-0 p-0"
 			>
-				<span className="text-xs font-semibold text-[var(--sea-ink-soft)] opacity-60">
+				<span className="text-xs font-semibold text-muted-foreground opacity-60">
 					{label}
 				</span>
 				<span
 					data-slot="guest-invite-reason"
-					className="text-[11px] text-[var(--sea-ink-soft)]"
+					className="text-xs text-muted-foreground"
 				>
 					{reason}
 				</span>
@@ -680,7 +680,7 @@ function GuestRow({
 	const broughtBy = profile?.introducedByName ?? null;
 
 	return (
-		<div className="flex flex-col gap-3 border-b border-[var(--line)] px-5 py-3.5 last:border-b-0 sm:flex-row sm:items-center sm:justify-between">
+		<div className="flex flex-col gap-3 border-b border-border px-5 py-3.5 last:border-b-0 sm:flex-row sm:items-center sm:justify-between">
 			{/* The identity side keeps a floor and the controls wrap instead. With
 			    the controls `shrink-0`, a laptop-width pane squeezed the name,
 			    contact and invite badge into a ~40px column, one word a line. */}
@@ -695,7 +695,7 @@ function GuestRow({
 					{kindCaption ? (
 						<div
 							data-slot="guest-kind-caption"
-							className="truncate text-xs font-semibold text-[var(--palm)]"
+							className="truncate text-xs font-semibold text-success"
 						>
 							{kindCaption}
 						</div>
@@ -703,12 +703,12 @@ function GuestRow({
 					{invited ? (
 						<div
 							data-slot="guest-invite-history"
-							className="text-xs text-[var(--sea-ink-soft)]"
+							className="text-xs text-muted-foreground"
 						>
 							{invited.upcoming ? (
 								<span
 									data-slot="guest-invited-badge"
-									className="mr-0.5 inline-block rounded-full border border-[var(--line)] bg-[var(--foam)] px-2 py-0.5 text-xs font-semibold text-[var(--palm)]"
+									className="mr-0.5 inline-block rounded-full border border-border bg-surface-soft px-2 py-0.5 text-xs font-semibold text-success"
 								>
 									{invited.lead}
 								</span>
@@ -722,7 +722,7 @@ function GuestRow({
 						// `gap-y-0.5`: this line could not wrap while it was one truncated
 						// string, and now it can — two elements with no leading between
 						// them read as one smudged block on a narrow card.
-						<div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-[var(--sea-ink-soft)]">
+						<div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
 							{hasPhone ? (
 								<WhatsAppPhoneLink phone={guest.phone} name={guest.name} />
 							) : null}
@@ -761,7 +761,7 @@ function GuestRow({
 										<span
 											data-slot="unconfirmed-email-badge"
 											title="Typed on the public guest book. Not confirmed by an officer."
-											className="shrink-0 rounded-full border border-[var(--line)] bg-[var(--foam)] px-2 py-0.5 text-xs font-semibold text-[var(--sea-ink-soft)]"
+											className="shrink-0 rounded-full border border-border bg-surface-soft px-2 py-0.5 text-xs font-semibold text-muted-foreground"
 										>
 											Unconfirmed
 										</span>
@@ -770,14 +770,14 @@ function GuestRow({
 							) : null}
 						</div>
 					) : null}
-					<div className="text-xs text-[var(--sea-ink-soft)]">
+					<div className="text-xs text-muted-foreground">
 						{visits}
 						{firstVisit ? ` · ${firstVisit}` : ""}
 					</div>
 					{broughtBy ? (
 						<div
 							data-slot="guest-brought-by"
-							className="truncate text-xs text-[var(--sea-ink-soft)]"
+							className="truncate text-xs text-muted-foreground"
 						>
 							Brought by {broughtBy}
 						</div>
@@ -802,7 +802,7 @@ function GuestRow({
 					<span
 						data-slot="stranded-badge"
 						title="This guest was converted to a member, and that member has since been removed from the roster."
-						className="rounded-full bg-[var(--surface-strong)] px-2.5 py-1 text-xs font-bold text-[var(--sea-ink-soft)]"
+						className="rounded-full bg-surface-raised px-2.5 py-1 text-xs font-bold text-muted-foreground"
 					>
 						Member removed
 					</span>
@@ -997,7 +997,7 @@ function GuestRowActions({
 	return (
 		<>
 			{joined ? (
-				<span className="rounded-full bg-[var(--success)] px-2.5 py-1 text-xs font-bold text-[var(--success-foreground)]">
+				<span className="rounded-full bg-success px-2.5 py-1 text-xs font-bold text-success-foreground">
 					Member
 				</span>
 			) : (
@@ -1342,8 +1342,8 @@ function GuestJoinedDialog({
 									<UserPlus className="mt-0.5 size-4 shrink-0" aria-hidden />
 								)}
 								<span>
-									<span className="block font-medium">New member</span>
-									<span className="block text-sm text-[var(--sea-ink-soft)]">
+									<span className="block font-semibold">New member</span>
+									<span className="block text-sm text-muted-foreground">
 										Adds them to the roster. Any roles they hold move onto their
 										new member record.
 									</span>
@@ -1358,10 +1358,10 @@ function GuestJoinedDialog({
 							>
 								<Link2 className="mt-0.5 size-4 shrink-0" aria-hidden />
 								<span>
-									<span className="block font-medium">
+									<span className="block font-semibold">
 										Already on the roster
 									</span>
-									<span className="block text-sm text-[var(--sea-ink-soft)]">
+									<span className="block text-sm text-muted-foreground">
 										A member who signed in as a guest. Links this guest to their
 										member record; nobody new is added.
 									</span>
@@ -1380,7 +1380,7 @@ function GuestJoinedDialog({
 						</DialogHeader>
 						<p
 							data-slot="unconfirmed-email-address"
-							className="break-all rounded-lg bg-[var(--surface-strong)] p-3 text-sm font-medium"
+							className="break-all rounded-lg bg-surface-raised p-3 text-sm font-semibold"
 						>
 							{bookEmail}
 						</p>
@@ -1451,8 +1451,8 @@ function GuestJoinedDialog({
 						{picked ? (
 							<div className="space-y-3 text-sm">
 								<p>
-									Link <span className="font-medium">{guest.name}</span> to{" "}
-									<span className="font-medium">{picked.name}</span>?
+									Link <span className="font-semibold">{guest.name}</span> to{" "}
+									<span className="font-semibold">{picked.name}</span>?
 								</p>
 								{picked.sharesMeeting ? (
 									// Warn, do not refuse. Holding two roles at one meeting is
@@ -1460,7 +1460,7 @@ function GuestJoinedDialog({
 									// enough that it should not happen silently.
 									<p
 										data-slot="link-same-meeting-warning"
-										className="rounded-lg bg-[var(--surface-strong)] p-3 text-[var(--sea-ink-soft)]"
+										className="rounded-lg bg-surface-raised p-3 text-muted-foreground"
 									>
 										Heads up: {picked.name} already has a role at a meeting
 										where {guest.name} does. After linking, one person holds
@@ -1508,9 +1508,11 @@ function GuestJoinedDialog({
 													onClick={() => setPicked(c)}
 													className="flex w-full items-center justify-between gap-3 rounded-lg border border-border bg-card px-3 py-2.5 text-left transition-colors hover:bg-accent"
 												>
-													<span className="truncate font-medium">{c.name}</span>
+													<span className="truncate font-semibold">
+														{c.name}
+													</span>
 													{c.suggested ? (
-														<span className="shrink-0 rounded-full bg-[var(--success)] px-2 py-0.5 text-[var(--success-foreground)] text-xs font-bold">
+														<span className="shrink-0 rounded-full bg-success px-2 py-0.5 text-success-foreground text-xs font-bold">
 															Same name
 														</span>
 													) : null}

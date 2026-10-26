@@ -181,7 +181,7 @@ function RolesManager() {
 						    off it and carrying three nights' agendas. The section plus the
 						    count below replace the badge. */}
 						{key === "non-standing" ? (
-							<div className="space-y-1 border-t border-[var(--line)] pt-6">
+							<div className="space-y-1 border-t border-border pt-6">
 								<h2 className="font-display text-xl font-semibold tracking-[-0.02em]">
 									Not on standard meetings
 								</h2>
@@ -354,7 +354,7 @@ function RoleCard({
 	return (
 		<form
 			onSubmit={onSave}
-			className={`rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4 ${
+			className={`rounded-xl border border-border bg-surface-raised p-4 ${
 				role.enabled ? "" : "opacity-70"
 			}`}
 		>
@@ -365,7 +365,7 @@ function RoleCard({
 						onClick={onMoveUp}
 						disabled={isFirst}
 						title="Move up"
-						className="flex size-6 items-center justify-center rounded-md text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--foam)] disabled:opacity-30"
+						className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-surface-soft disabled:opacity-30"
 					>
 						<ChevronUp className="size-4" />
 						<span className="sr-only">Move up</span>
@@ -375,7 +375,7 @@ function RoleCard({
 						onClick={onMoveDown}
 						disabled={isLast}
 						title="Move down"
-						className="flex size-6 items-center justify-center rounded-md text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--foam)] disabled:opacity-30"
+						className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-surface-soft disabled:opacity-30"
 					>
 						<ChevronDown className="size-4" />
 						<span className="sr-only">Move down</span>
@@ -613,7 +613,7 @@ function AddRoleForm({
 	return (
 		<form
 			onSubmit={onSubmit}
-			className="space-y-3 rounded-xl border border-dashed border-[var(--line)] bg-[var(--foam)] p-4"
+			className="space-y-3 rounded-xl border border-dashed border-border bg-surface-soft p-4"
 		>
 			<h2 className="text-sm font-bold">Add a custom role</h2>
 			<div className="grid gap-3 sm:grid-cols-[2fr_1fr_auto]">

@@ -234,7 +234,7 @@ function DuesTracker() {
 					<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 						Dues
 					</h1>
-					<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+					<p className="mt-1 text-sm text-muted-foreground">
 						Track who has paid membership dues each period. Status only — no
 						money moves here, and paying (or not) never changes a member's
 						roster status.
@@ -246,13 +246,13 @@ function DuesTracker() {
 			</div>
 
 			{periods.length === 0 ? (
-				<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] px-6 py-12 text-center">
+				<div className="rounded-2xl border border-border bg-surface-raised px-6 py-12 text-center">
 					<CalendarPlus
-						className="mx-auto size-8 text-[var(--sea-ink-soft)] opacity-50"
+						className="mx-auto size-8 text-muted-foreground opacity-50"
 						aria-hidden
 					/>
 					<p className="mt-3 text-sm font-semibold">No dues periods yet</p>
-					<p className="mx-auto mt-1 max-w-md text-xs text-[var(--sea-ink-soft)]">
+					<p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
 						Create a period to start tracking dues. Toastmasters renews
 						semi-annually — the Apr 1 / Oct 1 presets are one click.
 					</p>
@@ -266,7 +266,7 @@ function DuesTracker() {
 					<div className="flex flex-wrap items-center gap-3">
 						<Label
 							htmlFor="dues-period"
-							className="text-xs font-bold uppercase tracking-[0.04em] text-[var(--sea-ink-soft)]"
+							className="text-xs font-bold uppercase tracking-[0.04em] text-muted-foreground"
 						>
 							Period
 						</Label>
@@ -274,7 +274,7 @@ function DuesTracker() {
 							id="dues-period"
 							value={selectedId ?? ""}
 							onChange={(e) => setSelectedId(e.target.value || null)}
-							className="h-9 rounded-md border border-[var(--line)] bg-[var(--surface-strong)] px-3 text-sm font-medium outline-none focus-visible:border-[var(--lagoon-deep)]"
+							className="h-9 rounded-md border border-border bg-surface-raised px-3 text-sm font-semibold outline-none focus-visible:border-link"
 						>
 							{periods.map((p) => (
 								<option key={p.id} value={p.id}>
@@ -286,7 +286,7 @@ function DuesTracker() {
 							<Button
 								variant="ghost"
 								size="sm"
-								className="text-[var(--sea-ink-soft)]"
+								className="text-muted-foreground"
 								onClick={handleDeletePeriod}
 							>
 								Delete period
@@ -405,24 +405,24 @@ function StatCard({
 	return (
 		<div
 			className={cn(
-				"rounded-xl border bg-[var(--surface-strong)] px-4 py-4 shadow-[0_1px_0_var(--inset-glint)_inset,0_8px_20px_rgba(23,58,64,.05)]",
-				amber ? "border-[var(--warning)]" : "border-[var(--line)]",
+				"rounded-xl border bg-surface-raised px-4 py-4 shadow-[0_8px_20px_rgba(23,58,64,.05)]",
+				amber ? "border-warning" : "border-border",
 			)}
 		>
-			<div className="text-xs font-bold tracking-[0.04em] text-[var(--sea-ink-soft)] uppercase">
+			<div className="text-xs font-bold tracking-[0.04em] text-muted-foreground uppercase">
 				{label}
 			</div>
 			<div className="mt-2 flex items-baseline gap-2">
 				<span
 					className={cn(
 						"font-display text-3xl leading-none font-semibold",
-						amber && "text-[var(--warning-strong)]",
+						amber && "text-warning-strong",
 					)}
 				>
 					{value}
 				</span>
 				{note ? (
-					<span className="text-xs text-[var(--sea-ink-soft)]">{note}</span>
+					<span className="text-xs text-muted-foreground">{note}</span>
 				) : null}
 			</div>
 		</div>
@@ -442,9 +442,9 @@ function Section({
 		<div>
 			<div className="mb-2.5">
 				<h2 className="text-sm font-bold tracking-[-0.01em]">{title}</h2>
-				<p className="text-xs text-[var(--sea-ink-soft)]">{subtitle}</p>
+				<p className="text-xs text-muted-foreground">{subtitle}</p>
 			</div>
-			<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_14px_30px_rgba(23,58,64,.06)]">
+			<div className="overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-[0_14px_30px_rgba(23,58,64,.06)]">
 				{children}
 			</div>
 		</div>
@@ -453,7 +453,7 @@ function Section({
 
 function EmptyRow({ children }: { children: React.ReactNode }) {
 	return (
-		<p className="px-5 py-10 text-center text-sm text-[var(--sea-ink-soft)]">
+		<p className="px-5 py-10 text-center text-sm text-muted-foreground">
 			{children}
 		</p>
 	);
@@ -461,9 +461,7 @@ function EmptyRow({ children }: { children: React.ReactNode }) {
 
 function StatusBadge({ status }: { status: MemberDuesRow["status"] }) {
 	if (status === "paid") {
-		return (
-			<Badge className="bg-[var(--success,#0f766e)] text-white">Paid</Badge>
-		);
+		return <Badge className="bg-success text-success-foreground">Paid</Badge>;
 	}
 	if (status === "waived") {
 		return <Badge variant="secondary">Waived</Badge>;
@@ -485,7 +483,7 @@ function MemberRow({
 	onUndo: () => void;
 }) {
 	return (
-		<div className="flex flex-wrap items-center gap-3 border-b border-[var(--line)] px-5 py-3 last:border-b-0">
+		<div className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-3 last:border-b-0">
 			<div className="flex min-w-0 flex-1 items-center gap-3">
 				<MemberAvatar
 					tone={toneFromSeed(row.membershipId)}
@@ -494,7 +492,7 @@ function MemberRow({
 				/>
 				<div className="min-w-0 leading-[1.25]">
 					<div className="truncate text-sm font-bold">{row.name}</div>
-					<div className="text-xs text-[var(--sea-ink-soft)]">
+					<div className="text-xs text-muted-foreground">
 						{row.status === "paid"
 							? `${formatCents(row.amountCents)}${
 									row.paidAt
@@ -533,7 +531,7 @@ function OverdueRow({ row }: { row: OverdueDuesRow }) {
 		<Link
 			to="/members/$id"
 			params={{ id: row.membershipId }}
-			className="group flex items-center gap-3.5 border-b border-[var(--line)] px-5 py-3 transition-colors last:border-b-0 hover:bg-[var(--foam)]"
+			className="group flex items-center gap-3.5 border-b border-border px-5 py-3 transition-colors last:border-b-0 hover:bg-surface-soft"
 		>
 			<MemberAvatar
 				tone={toneFromSeed(row.membershipId)}
@@ -542,12 +540,12 @@ function OverdueRow({ row }: { row: OverdueDuesRow }) {
 			/>
 			<div className="min-w-0 flex-1 leading-[1.25]">
 				<div className="truncate text-sm font-bold">{row.name}</div>
-				<div className="truncate text-xs text-[var(--warning-strong)]">
+				<div className="truncate text-xs text-warning-strong">
 					Owes: {row.owedPeriods.map((p) => p.label).join(", ")}
 				</div>
 			</div>
 			<ChevronRight
-				className="size-4 shrink-0 text-[var(--sea-ink-soft)] opacity-45 transition-all group-hover:translate-x-0.5 group-hover:opacity-100"
+				className="size-4 shrink-0 text-muted-foreground opacity-45 transition-[transform,opacity] group-hover:translate-x-0.5 group-hover:opacity-100"
 				aria-hidden
 			/>
 		</Link>
@@ -777,12 +775,12 @@ function RecordPaymentDialog({
 							checked={fullYear}
 							onChange={(e) => setFullYear(e.target.checked)}
 							disabled={!hasNextPeriod}
-							className="size-4 rounded border-[var(--line)]"
+							className="size-4 rounded border-border"
 						/>
 						<span>
 							Pay full year (this period + the next)
 							{!hasNextPeriod ? (
-								<span className="block text-xs text-[var(--sea-ink-soft)]">
+								<span className="block text-xs text-muted-foreground">
 									Create the following period to enable full-year.
 								</span>
 							) : null}

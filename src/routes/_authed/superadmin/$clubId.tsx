@@ -73,14 +73,14 @@ function ClubDetail() {
 			<div className="space-y-1">
 				<Link
 					to="/superadmin"
-					className="inline-flex items-center gap-1 text-sm text-[var(--sea-ink-soft)] hover:text-[var(--sea-ink)]"
+					className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 				>
 					<ArrowLeft className="size-4" /> All clubs
 				</Link>
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					{club.name}
 					{club.archivedAt ? (
-						<span className="ml-3 inline-block rounded-full bg-[var(--sand)] px-2.5 py-1 align-middle text-xs font-semibold text-[var(--sea-ink-soft)] uppercase tracking-[0.04em]">
+						<span className="ml-3 inline-block rounded-full bg-surface-muted px-2.5 py-1 align-middle text-xs font-semibold text-muted-foreground uppercase tracking-[0.04em]">
 							Archived
 						</span>
 					) : null}
@@ -92,7 +92,7 @@ function ClubDetail() {
 				</p>
 			</div>
 
-			<section className="max-w-xl space-y-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4">
+			<section className="max-w-xl space-y-3 rounded-xl border border-border bg-surface-raised p-4">
 				<h2 className="text-sm font-bold">First admin</h2>
 				{club.firstAdmin ? (
 					<AdminPanel
@@ -162,7 +162,7 @@ function ImportHistoryDisclosure({
 		);
 	}
 	return (
-		<section className="max-w-xl space-y-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4">
+		<section className="max-w-xl space-y-3 rounded-xl border border-border bg-surface-raised p-4">
 			<h2 className="text-sm font-bold">Import Easy-Speak history</h2>
 			<p className="text-sm text-muted-foreground">
 				Bring this club's past meetings, roles, speeches and attendance in from
@@ -219,7 +219,7 @@ function CharterPanel({
 	}
 
 	return (
-		<section className="max-w-xl space-y-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4">
+		<section className="max-w-xl space-y-3 rounded-xl border border-border bg-surface-raised p-4">
 			<h2 className="text-sm font-bold">Charter</h2>
 			<p
 				className="text-sm text-muted-foreground"
@@ -280,12 +280,12 @@ function ViewAsPanel({
 	}
 
 	return (
-		<section className="max-w-xl space-y-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4">
+		<section className="max-w-xl space-y-3 rounded-xl border border-border bg-surface-raised p-4">
 			<h2 className="text-sm font-bold">View as this club</h2>
 			<p className="text-sm text-muted-foreground">
-				Open <span className="font-medium">{clubName}</span>'s workspace exactly
-				as an admin sees it, to diagnose an issue. The session is{" "}
-				<span className="font-medium">read-only</span> (you can't change the
+				Open <span className="font-semibold">{clubName}</span>'s workspace
+				exactly as an admin sees it, to diagnose an issue. The session is{" "}
+				<span className="font-semibold">read-only</span> (you can't change the
 				club's data), auto-expires in 60 minutes, and is recorded in the club's
 				activity log.
 			</p>
@@ -338,18 +338,16 @@ function ActAsAdminPanel({
 	}
 
 	return (
-		<section className="max-w-xl space-y-3 rounded-xl border border-[var(--danger,#dc2626)]/40 bg-[var(--danger,#dc2626)]/5 p-4">
-			<h2 className="text-sm font-bold text-[var(--danger-strong,#b91c1c)]">
+		<section className="max-w-xl space-y-3 rounded-xl border border-destructive/40 bg-destructive/5 p-4">
+			<h2 className="text-sm font-bold text-destructive">
 				Act as this club's admin
 			</h2>
 			<p className="text-sm text-muted-foreground">
-				Open <span className="font-medium">{clubName}</span>'s workspace with
+				Open <span className="font-semibold">{clubName}</span>'s workspace with
 				full admin powers to fix an issue.{" "}
-				<span className="font-medium text-[var(--danger-strong,#b91c1c)]">
-					Changes are live
-				</span>{" "}
+				<span className="font-semibold text-destructive">Changes are live</span>{" "}
 				and made in the club's data. The session auto-expires in{" "}
-				<span className="font-medium">15 minutes</span>, and every change is
+				<span className="font-semibold">15 minutes</span>, and every change is
 				recorded against your name in the club's activity log.
 			</p>
 			<div className="space-y-1.5">
@@ -438,7 +436,7 @@ function ArchivePanel({
 	}
 
 	return (
-		<section className="max-w-xl space-y-3 rounded-xl border border-dashed border-[var(--line)] p-4">
+		<section className="max-w-xl space-y-3 rounded-xl border border-dashed border-border p-4">
 			<h2 className="text-sm font-bold">
 				{isArchived ? "Archived club" : "Archive club"}
 			</h2>
@@ -544,19 +542,17 @@ function DeletePermanentlyPanel({
 	return (
 		<form
 			onSubmit={onDelete}
-			className="space-y-3 rounded-lg border border-[var(--danger,#dc2626)]/40 bg-[var(--danger,#dc2626)]/5 p-3"
+			className="space-y-3 rounded-lg border border-destructive/40 bg-destructive/5 p-3"
 		>
-			<h3 className="text-sm font-bold text-[var(--danger-strong,#b91c1c)]">
-				Delete permanently
-			</h3>
+			<h3 className="text-sm font-bold text-destructive">Delete permanently</h3>
 			<p className="text-sm text-muted-foreground">
-				Deletes <span className="font-medium">{clubName}</span>, its meetings
+				Deletes <span className="font-semibold">{clubName}</span>, its meetings
 				and guests, and every current or former member held by no other GavelUp
 				club, with their sign-in account. Someone whose speeches or Pathways
 				history belong to another club is kept, and so is an account that
 				belongs to a superadmin or is still linked elsewhere. Members of another
 				club keep their account and Pathways history.{" "}
-				<span className="font-medium text-[var(--danger-strong,#b91c1c)]">
+				<span className="font-semibold text-destructive">
 					This can't be undone.
 				</span>
 			</p>
@@ -572,7 +568,7 @@ function DeletePermanentlyPanel({
 				/>
 			</div>
 			{error ? (
-				<p role="alert" className="text-sm text-[var(--danger-strong,#b91c1c)]">
+				<p role="alert" className="text-sm text-destructive">
 					{error}
 				</p>
 			) : null}
@@ -601,7 +597,7 @@ function DeletedSummary({ result }: { result: DeleteResult }) {
 	return (
 		<section
 			aria-live="polite"
-			className="max-w-xl space-y-3 rounded-xl border border-[var(--line)] p-4"
+			className="max-w-xl space-y-3 rounded-xl border border-border p-4"
 		>
 			<h1 className="font-display text-2xl font-semibold">
 				{result.clubName} was permanently deleted.
@@ -677,12 +673,12 @@ function AdminPanel({
 	return (
 		<div className="space-y-3">
 			<div className="text-sm">
-				<span className="font-medium">{name}</span>{" "}
+				<span className="font-semibold">{name}</span>{" "}
 				<span
 					className={
 						linked
-							? "inline-block rounded-full bg-[var(--foam)] px-2 py-0.5 text-xs font-semibold text-[var(--palm)]"
-							: "inline-block rounded-full bg-[var(--sand)] px-2 py-0.5 text-xs font-semibold text-[var(--sea-ink-soft)]"
+							? "inline-block rounded-full bg-surface-soft px-2 py-0.5 text-xs font-semibold text-success"
+							: "inline-block rounded-full bg-surface-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground"
 					}
 				>
 					{linked ? "Linked" : "Unclaimed"}

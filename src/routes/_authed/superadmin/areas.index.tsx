@@ -46,7 +46,7 @@ function AreasConsole() {
 			<div className="space-y-1">
 				<Link
 					to="/superadmin"
-					className="inline-flex items-center gap-1 text-sm text-[var(--sea-ink-soft)] hover:text-[var(--sea-ink)]"
+					className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 				>
 					<ArrowLeft className="size-4" /> All clubs
 				</Link>
@@ -87,11 +87,11 @@ function AreasConsole() {
 								{district.divisions.map((division) => (
 									<div
 										key={division.id}
-										className="space-y-2 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4"
+										className="space-y-2 rounded-xl border border-border bg-surface-raised p-4"
 									>
 										<h3 className="text-sm font-semibold">
 											Division {division.letter}{" "}
-											<span className="font-normal text-[var(--sea-ink-soft)]">
+											<span className="font-normal text-muted-foreground">
 												· {division.programYearLabel}
 											</span>
 										</h3>
@@ -100,7 +100,7 @@ function AreasConsole() {
 												No areas yet.
 											</p>
 										) : (
-											<ul className="divide-y divide-[var(--line)]">
+											<ul className="divide-y divide-border">
 												{division.areas.map((area) => (
 													<li
 														key={area.id}
@@ -109,11 +109,11 @@ function AreasConsole() {
 														<Link
 															to="/superadmin/areas/$areaId"
 															params={{ areaId: area.id }}
-															className="font-medium text-[var(--palm)] underline-offset-2 hover:underline"
+															className="font-semibold text-success underline-offset-2 hover:underline"
 														>
 															Area {area.label}
 														</Link>
-														<span className="text-[var(--sea-ink-soft)]">
+														<span className="text-muted-foreground">
 															{area.clubCount} club
 															{area.clubCount === 1 ? "" : "s"}
 															{" · "}
@@ -170,7 +170,7 @@ function SubmitButton({ busy, label }: { busy: boolean; label: string }) {
 }
 
 const formClass =
-	"space-y-3 rounded-xl border border-dashed border-[var(--line)] bg-[var(--foam)] p-4";
+	"space-y-3 rounded-xl border border-dashed border-border bg-surface-soft p-4";
 
 function CreateDistrictForm({ onCreated }: { onCreated: () => void }) {
 	const [busy, setBusy] = useState(false);

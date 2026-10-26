@@ -93,7 +93,7 @@ function SyncTokens() {
 				</p>
 			</div>
 
-			<div className="space-y-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4">
+			<div className="space-y-3 rounded-xl border border-border bg-surface-raised p-4">
 				<Label htmlFor="token-name">New token label (optional)</Label>
 				<div className="flex gap-2">
 					<Input
@@ -143,10 +143,10 @@ function SyncTokens() {
 						{tokensQuery.data.map((t) => (
 							<li
 								key={t.id}
-								className="flex items-center justify-between gap-3 rounded-md border border-[var(--line)] p-3 text-sm"
+								className="flex items-center justify-between gap-3 rounded-md border border-border p-3 text-sm"
 							>
 								<div>
-									<span className="font-medium">{t.name ?? "(unnamed)"}</span>{" "}
+									<span className="font-semibold">{t.name ?? "(unnamed)"}</span>{" "}
 									<span className="text-muted-foreground">
 										{t.revokedAt
 											? "· revoked"

@@ -348,7 +348,7 @@ function DcpTracker() {
 					<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 						Distinguished Club Program
 					</h1>
-					<p className="mt-1 max-w-2xl text-sm text-[var(--sea-ink-soft)]">
+					<p className="mt-1 max-w-2xl text-sm text-muted-foreground">
 						Track the club's 10 DCP goals for the program year. Enter progress
 						by hand — the two new-member goals are pre-filled from the roster.
 						The recognition tier and membership base update as you go.
@@ -357,7 +357,7 @@ function DcpTracker() {
 				<div className="flex items-center gap-2">
 					<Label
 						htmlFor="dcp-year"
-						className="text-xs font-bold uppercase tracking-[0.04em] text-[var(--sea-ink-soft)]"
+						className="text-xs font-bold uppercase tracking-[0.04em] text-muted-foreground"
 					>
 						Year
 					</Label>
@@ -365,7 +365,7 @@ function DcpTracker() {
 						id="dcp-year"
 						value={year}
 						onChange={(e) => setYear(Number(e.target.value))}
-						className="h-9 rounded-md border border-[var(--line)] bg-[var(--surface-strong)] px-3 text-sm font-medium outline-none focus-visible:border-[var(--lagoon-deep)]"
+						className="h-9 rounded-md border border-border bg-surface-raised px-3 text-sm font-semibold outline-none focus-visible:border-link"
 					>
 						{yearOptions.map((y) => (
 							<option key={y} value={y}>
@@ -408,7 +408,7 @@ function DcpTracker() {
 									    windows can be shut while the NEXT year's period 1 is
 									    open, and the panel below would just look finished. */}
 									{trainingYear !== year && trainingWindowOpen ? (
-										<p className="text-xs text-[var(--warning-strong)]">
+										<p className="text-xs text-warning-strong">
 											Officer training for {programYearLabel(trainingYear)} is
 											open now. Switch the year above to record it — the windows
 											below belong to {programYearLabel(year)}.
@@ -438,7 +438,7 @@ function DcpTracker() {
 
 function EmptyCard({ children }: { children: React.ReactNode }) {
 	return (
-		<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] px-6 py-12 text-center text-sm text-[var(--sea-ink-soft)]">
+		<div className="rounded-2xl border border-border bg-surface-raised px-6 py-12 text-center text-sm text-muted-foreground">
 			{children}
 		</div>
 	);
@@ -456,15 +456,15 @@ function StartCard({
 	onStart: () => void;
 }) {
 	return (
-		<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] px-6 py-12 text-center">
+		<div className="rounded-2xl border border-border bg-surface-raised px-6 py-12 text-center">
 			<Trophy
-				className="mx-auto size-8 text-[var(--sea-ink-soft)] opacity-50"
+				className="mx-auto size-8 text-muted-foreground opacity-50"
 				aria-hidden
 			/>
 			<p className="mt-3 text-sm font-semibold">
 				No {programYearLabel(year)} scoreboard yet
 			</p>
-			<p className="mx-auto mt-1 max-w-md text-xs text-[var(--sea-ink-soft)]">
+			<p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
 				Start the scoreboard to seed the 10 goals. We'll snapshot the current
 				active-member count as this year's baseline
 				{view ? ` (${view.currentActive} active)` : ""} and pre-fill the
@@ -484,26 +484,26 @@ function SummaryHeadline({ view }: { view: DcpScoreboardView }) {
 	return (
 		<div
 			className={cn(
-				"rounded-2xl border bg-[var(--surface-strong)] px-6 py-5 shadow-[0_1px_0_var(--inset-glint)_inset,0_14px_30px_rgba(23,58,64,.06)]",
-				tier ? "border-[var(--lagoon-deep)]" : "border-[var(--line)]",
+				"rounded-2xl border bg-surface-raised px-6 py-5 shadow-[0_14px_30px_rgba(23,58,64,.06)]",
+				tier ? "border-link" : "border-border",
 			)}
 		>
 			<div className="flex flex-wrap items-center justify-between gap-3">
 				<div className="flex items-baseline gap-3">
 					<span className="font-display text-4xl font-semibold leading-none">
 						{summary.goalsMet}
-						<span className="text-2xl text-[var(--sea-ink-soft)]">/10</span>
+						<span className="text-2xl text-muted-foreground">/10</span>
 					</span>
-					<span className="text-sm font-semibold text-[var(--sea-ink-soft)]">
+					<span className="text-sm font-semibold text-muted-foreground">
 						goals met
 					</span>
 				</div>
 				{tier ? (
-					<Badge className="gap-1 bg-[var(--lagoon-deep)] text-white">
+					<Badge className="gap-1 bg-link text-white">
 						<Award className="size-3.5" /> {tier}
 					</Badge>
 				) : (
-					<span className="text-sm text-[var(--sea-ink-soft)]">
+					<span className="text-sm text-muted-foreground">
 						{summary.goalsToDistinguished > 0
 							? `${summary.goalsToDistinguished} more for Distinguished`
 							: "Goals met — needs the membership base"}
@@ -511,7 +511,7 @@ function SummaryHeadline({ view }: { view: DcpScoreboardView }) {
 				)}
 			</div>
 			{!summary.baseMet ? (
-				<p className="mt-2 text-xs text-[var(--warning-strong)]">
+				<p className="mt-2 text-xs text-warning-strong">
 					Membership base not yet met — a tier needs 20+ active members or net
 					growth of +5.
 				</p>
@@ -554,14 +554,14 @@ function BaseCard({
 	}
 
 	return (
-		<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] px-5 py-4">
+		<div className="rounded-2xl border border-border bg-surface-raised px-5 py-4">
 			<div className="flex flex-wrap items-end justify-between gap-4">
 				<div className="flex flex-wrap items-center gap-6">
 					<Stat label="Active now" value={String(view.currentActive)} />
 					<div className="space-y-1.5">
 						<Label
 							htmlFor="dcp-base"
-							className="text-xs font-bold uppercase tracking-[0.04em] text-[var(--sea-ink-soft)]"
+							className="text-xs font-bold uppercase tracking-[0.04em] text-muted-foreground"
 						>
 							Baseline (Jul 1)
 						</Label>
@@ -591,7 +591,7 @@ function BaseCard({
 function Stat({ label, value }: { label: string; value: string }) {
 	return (
 		<div>
-			<div className="text-xs font-bold uppercase tracking-[0.04em] text-[var(--sea-ink-soft)]">
+			<div className="text-xs font-bold uppercase tracking-[0.04em] text-muted-foreground">
 				{label}
 			</div>
 			<div className="mt-1 font-display text-2xl font-semibold leading-none">
@@ -663,7 +663,7 @@ function GoalGroup({
 					</Button>
 				) : null}
 			</div>
-			<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_14px_30px_rgba(23,58,64,.06)]">
+			<div className="overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-[0_14px_30px_rgba(23,58,64,.06)]">
 				{goals.map((g) => (
 					<GoalRow
 						key={g.key}
@@ -680,7 +680,7 @@ function GoalGroup({
 				))}
 			</div>
 			{suggest ? (
-				<p className="mt-2 text-xs text-[var(--sea-ink-soft)]">
+				<p className="mt-2 text-xs text-muted-foreground">
 					Pathways figures are approximate: a level is dated when this club
 					first synced it — not Base Camp's award date — and only completions
 					from your first sync onward are counted. Anything earlier needs
@@ -726,13 +726,13 @@ function GoalRow({
 	}
 
 	return (
-		<div className="flex flex-wrap items-center gap-3 border-b border-[var(--line)] px-5 py-3 last:border-b-0">
+		<div className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-3 last:border-b-0">
 			<div
 				className={cn(
 					"flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-bold",
 					met
-						? "border-[var(--lagoon-deep)] bg-[var(--lagoon-deep)] text-white"
-						: "border-[var(--line)] text-[var(--sea-ink-soft)]",
+						? "border-link bg-link text-white"
+						: "border-border text-muted-foreground",
 				)}
 				aria-hidden
 			>
@@ -741,7 +741,7 @@ function GoalRow({
 			<div className="min-w-0 flex-1">
 				<div className="text-sm font-semibold">{goal.label}</div>
 				{!goal.composite ? (
-					<div className="text-xs text-[var(--sea-ink-soft)]">
+					<div className="text-xs text-muted-foreground">
 						Target {goal.target}
 					</div>
 				) : null}
@@ -751,7 +751,7 @@ function GoalRow({
 					{suggestionNote ? (
 						<Badge
 							variant="outline"
-							className="gap-1 border-dashed text-[var(--sea-ink-soft)]"
+							className="gap-1 border-dashed text-muted-foreground"
 							title="Derived from your officer training records — not yet applied"
 						>
 							<Sparkles className="size-3" aria-hidden />
@@ -771,7 +771,7 @@ function GoalRow({
 					{derived !== null ? (
 						<Badge
 							variant="outline"
-							className="gap-1 border-dashed text-[var(--sea-ink-soft)]"
+							className="gap-1 border-dashed text-muted-foreground"
 							title="Derived from synced Pathways completions — not yet applied"
 						>
 							<Sparkles className="size-3" aria-hidden />

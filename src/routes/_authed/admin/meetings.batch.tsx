@@ -338,7 +338,7 @@ function BatchMeetings() {
 				</div>
 
 				<div className="space-y-3">
-					<h2 className="text-sm font-medium">Preview</h2>
+					<h2 className="text-sm font-semibold">Preview</h2>
 					{preview == null ? (
 						<p className="text-sm text-muted-foreground">
 							Set a cadence and generate to preview the dates.
