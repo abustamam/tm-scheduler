@@ -584,6 +584,8 @@ export function resolveAssignAction(slot: {
 export type PickerRow = {
 	id: string;
 	name: string;
+	/** Passed through from the roster so the picker can match it (#1332). */
+	preferredName?: string | null;
 	unavailable: boolean;
 	currentRole: string | null;
 	/** When this member last held the role being assigned, or null = never (#146). */
@@ -596,7 +598,7 @@ export type PickerRow = {
  *  already-assigned: "not coming at all" is a stronger signal than "here but
  *  busy", and collapsing the two into one bucket is what made the old order read
  *  as haphazard. */
-function pickerTier(row: {
+export function pickerTier(row: {
 	unavailable: boolean;
 	currentRole: string | null;
 }): 0 | 1 | 2 {
@@ -612,7 +614,7 @@ function pickerTier(row: {
  *  recent prior date they held the role being assigned (null = never); it
  *  annotates rows but does NOT affect ordering (#146). */
 export function buildPickerRows(
-	roster: { id: string; name: string }[],
+	roster: { id: string; name: string; preferredName?: string | null }[],
 	roleByMemberId: Record<string, string>,
 	unavailableIds: string[],
 	lastServedAt: Record<string, Date | null> = {},
@@ -622,6 +624,7 @@ export function buildPickerRows(
 		.map((m) => ({
 			id: m.id,
 			name: m.name,
+			preferredName: m.preferredName,
 			unavailable: unavailable.has(m.id),
 			currentRole: roleByMemberId[m.id] ?? null,
 			lastServedAt: lastServedAt[m.id] ?? null,

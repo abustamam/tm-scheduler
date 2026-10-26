@@ -19,6 +19,8 @@ import {
 	meetingAttendancePlan,
 	meetingAwards,
 	meetings,
+	members,
+	people,
 	roleDefinitions,
 	roleSlots,
 	tableTopicsSpeakers,
@@ -709,6 +711,62 @@ describe.skipIf(!hasTestDb)("meeting minutes (#152)", () => {
 				}),
 			).rejects.toThrow(/is not available for this meeting/);
 			expect(await speakerRows()).toHaveLength(0);
+		});
+	});
+	describe("preferredName on members (#1332)", () => {
+		async function personOf(memberId: string): Promise<string> {
+			const [m] = await testDb
+				.select({ personId: members.personId })
+				.from(members)
+				.where(eq(members.id, memberId));
+			return m!.personId;
+		}
+		const preferredOf = async (memberId: string) =>
+			(await loadMinutes(seed.meetingId)).members.find(
+				(x) => x.memberId === memberId,
+			)?.preferredName;
+
+		it("returns the member's own preferred name over the person's", async () => {
+			// protects: the club-authoritative alias wins (AC8), as memberGoesBy does.
+			// fails_when: the person's value is selected, or coalesce args are swapped.
+			// no_claim: nothing about the saved-attendance-only query path.
+			await testDb
+				.update(members)
+				.set({ preferredName: "Memby" })
+				.where(eq(members.id, seed.memberId));
+			await testDb
+				.update(people)
+				.set({ preferredName: "Persony" })
+				.where(eq(people.id, await personOf(seed.memberId)));
+			expect(await preferredOf(seed.memberId)).toBe("Memby");
+		});
+
+		it("falls back to the person's preferred name", async () => {
+			// protects: a member with no own alias still carries the person's (AC8).
+			// fails_when: only members.preferredName is selected, or the join is dropped.
+			// no_claim: nothing about which club's alias a second club sees.
+			await testDb
+				.update(people)
+				.set({ preferredName: "Persony" })
+				.where(eq(people.id, await personOf(seed.adminMemberId)));
+			expect(await preferredOf(seed.adminMemberId)).toBe("Persony");
+		});
+
+		it("is null when neither has one, in the active roster and the saved-only rows", async () => {
+			// protects: absence is null, never undefined or an empty string (AC8).
+			// fails_when: the coalesce returns "" or the field is omitted.
+			// no_claim: nothing about trimming whitespace-only values.
+			expect(await preferredOf(seed.memberId)).toBeNull();
+			await testDb
+				.update(members)
+				.set({ status: "inactive" })
+				.where(eq(members.id, seed.memberId));
+			await testDb.insert(meetingAttendance).values({
+				meetingId: seed.meetingId,
+				memberId: seed.memberId,
+				status: "present",
+			});
+			expect(await preferredOf(seed.memberId)).toBeNull();
 		});
 	});
 });

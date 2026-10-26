@@ -1018,6 +1018,7 @@ function MeetingView() {
 	const voteCounterRoster = roster.map((r) => ({
 		memberId: r.id,
 		name: r.name,
+		preferredName: r.preferredName ?? null,
 	}));
 
 	// The Ballot Counter console's Table Topics list (#510). `getMinutes`'

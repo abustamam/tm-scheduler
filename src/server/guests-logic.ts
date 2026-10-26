@@ -319,6 +319,7 @@ export async function listClubGuests(clubId: string) {
 		.select({
 			id: guests.id,
 			name: guests.name,
+			preferredName: guests.preferredName,
 			stage: guests.stage,
 			// A guest's contact lives on their Person (#1125).
 			email: people.email,
