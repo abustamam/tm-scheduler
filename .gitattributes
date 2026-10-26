@@ -1,0 +1,3 @@
+# Drizzle schema snapshots are generated: GitHub collapses them in PR diffs.
+# No -diff/binary here, so local git diff still prints them. _journal.json stays unmarked.
+drizzle/meta/*_snapshot.json linguist-generated
