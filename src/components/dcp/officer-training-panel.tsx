@@ -58,7 +58,7 @@ export interface OfficerTrainingPanelProps {
 // 309px wide inside a 301px content box, clipping its own dropdown arrow against
 // the card's `overflow-hidden`.
 const SELECT_CLASS =
-	"h-9 max-w-full rounded-md border border-[var(--line)] bg-[var(--surface-strong)] px-3 text-sm font-medium outline-none focus-visible:border-[var(--lagoon-deep)]";
+	"h-9 max-w-full rounded-md border border-border bg-surface-raised px-3 text-sm font-semibold outline-none focus-visible:border-link";
 
 /**
  * How close to the deadline counts as urgent. Three weeks is the issue's own
@@ -92,7 +92,7 @@ export function OfficerTrainingPanel({
 				    double-hatter is exactly where the two diverge, so the sentence has
 				    to sit next to the number it explains and has to say the same thing
 				    the number does. */}
-				<p className="mt-1 max-w-2xl text-xs text-[var(--sea-ink-soft)]">
+				<p className="mt-1 max-w-2xl text-xs text-muted-foreground">
 					Goal 9 needs four officer <em>roles</em> trained in each training
 					period, and Toastmasters credits one person per role — so this page
 					counts <em>roles</em>, not heads. Someone holding two offices and
@@ -115,7 +115,7 @@ export function OfficerTrainingPanel({
 				/>
 			))}
 
-			<p className="max-w-2xl text-xs text-[var(--sea-ink-soft)]">
+			<p className="max-w-2xl text-xs text-muted-foreground">
 				Toastmasters, not GavelUp, decides who was trained — nothing here ticks
 				goal 9 for you.
 			</p>
@@ -153,11 +153,11 @@ function PeriodCard({
 		<div
 			data-testid={`cot-period-${tally.period}`}
 			className={cn(
-				"overflow-hidden rounded-2xl border bg-[var(--surface-strong)]",
-				focused ? "border-[var(--lagoon-deep)]" : "border-[var(--line)]",
+				"overflow-hidden rounded-2xl border bg-surface-raised",
+				focused ? "border-link" : "border-border",
 			)}
 		>
-			<div className="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--line)] px-5 py-4">
+			<div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-5 py-4">
 				<div className="min-w-0">
 					<div className="flex flex-wrap items-center gap-2">
 						<span className="text-sm font-semibold">
@@ -165,7 +165,7 @@ function PeriodCard({
 						</span>
 						<PhaseBadge tally={tally} />
 					</div>
-					<div className="mt-1 text-xs text-[var(--sea-ink-soft)]">
+					<div className="mt-1 text-xs text-muted-foreground">
 						{formatIsoDate(tally.window.startsOn)} –{" "}
 						{formatIsoDate(tally.window.endsOn)}
 						{tally.windowIsDefault
@@ -176,16 +176,14 @@ function PeriodCard({
 				<div className="text-right">
 					<div className="font-display text-2xl font-semibold leading-none">
 						{tally.trained}
-						<span className="text-lg text-[var(--sea-ink-soft)]">
+						<span className="text-lg text-muted-foreground">
 							/{tally.required}
 						</span>
 					</div>
 					<div
 						className={cn(
 							"mt-1 text-xs font-semibold",
-							tally.met
-								? "text-[var(--sea-ink-soft)]"
-								: "text-[var(--warning-strong)]",
+							tally.met ? "text-muted-foreground" : "text-warning-strong",
 						)}
 					>
 						{/* "All four trained", not "Bar cleared": the rest of this page
@@ -207,8 +205,8 @@ function PeriodCard({
 			/>
 
 			{open.length > 0 ? (
-				<div className="border-b border-[var(--line)] px-5 py-3">
-					<div className="text-xs font-bold uppercase tracking-[0.04em] text-[var(--sea-ink-soft)]">
+				<div className="border-b border-border px-5 py-3">
+					<div className="text-xs font-bold uppercase tracking-[0.04em] text-muted-foreground">
 						Not recorded yet
 					</div>
 					{/*
@@ -302,13 +300,13 @@ function PhaseBadge({ tally }: { tally: TrainingPeriodTally }) {
 		<Badge
 			className={cn(
 				"gap-1 font-normal",
-				// `text-[var(--on-accent-fill)]`, never `text-white`. Both of these
+				// `text-on-accent-fill`, never `text-white`. Both of these
 				// fills are light in BOTH themes, so white measured 3.2:1 / 2.0:1 on
 				// the amber and 3.8:1 / 1.5:1 on the teal — all four under AA at the
 				// 12px a Badge renders, and the two dark values are the label-on-fill
 				// class recorded at #645. Dark ink is 4.6:1 at worst. See styles.css.
-				"text-[var(--on-accent-fill)]",
-				urgent ? "bg-[var(--warning-strong)]" : "bg-[var(--lagoon-deep)]",
+				"text-on-accent-fill",
+				urgent ? "bg-warning-strong" : "bg-link",
 			)}
 		>
 			{/* Urgency was carried by BACKGROUND COLOUR ALONE — the two arms rendered
@@ -332,13 +330,13 @@ function TrainedList({
 }) {
 	if (records.length === 0) {
 		return (
-			<p className="border-b border-[var(--line)] px-5 py-3 text-xs text-[var(--sea-ink-soft)]">
+			<p className="border-b border-border px-5 py-3 text-xs text-muted-foreground">
 				Nobody recorded for this period yet.
 			</p>
 		);
 	}
 	return (
-		<ul className="border-b border-[var(--line)]">
+		<ul className="border-b border-border">
 			{/*
 			 * Each row is TWO flex children, not eight: the details wrap inside their
 			 * own `min-w-0 flex-1` group and the delete button stays pinned to the
@@ -349,27 +347,24 @@ function TrainedList({
 			{records.map((r) => (
 				<li key={r.id} className="flex items-start gap-2 px-5 py-2 text-sm">
 					<div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-						<Check
-							className="size-3.5 shrink-0 text-[var(--lagoon-deep)]"
-							aria-hidden
-						/>
-						<span className="font-medium">{r.memberName}</span>
-						<span className="text-xs text-[var(--sea-ink-soft)]">
+						<Check className="size-3.5 shrink-0 text-link" aria-hidden />
+						<span className="font-semibold">{r.memberName}</span>
+						<span className="text-xs text-muted-foreground">
 							{officerPositionLabel(r.position)}
 						</span>
 						{r.trainedOn ? (
-							<span className="text-xs text-[var(--sea-ink-soft)]">
+							<span className="text-xs text-muted-foreground">
 								{formatIsoDate(r.trainedOn)}
 							</span>
 						) : (
-							<span className="text-xs italic text-[var(--sea-ink-soft)]">
+							<span className="text-xs italic text-muted-foreground">
 								date not recorded
 							</span>
 						)}
 						{r.outsideWindow ? (
 							<Badge
 								variant="outline"
-								className="gap-1 border-[var(--warning-strong)] font-normal text-[var(--warning-strong)]"
+								className="gap-1 border-warning-strong font-normal text-warning-strong"
 							>
 								<AlertTriangle className="size-3" aria-hidden />
 								outside this window
@@ -467,7 +462,7 @@ function AddRecordForm({
 	return (
 		<form
 			onSubmit={submit}
-			className="flex flex-wrap items-end gap-2 border-b border-[var(--line)] px-5 py-3"
+			className="flex flex-wrap items-end gap-2 border-b border-border px-5 py-3"
 		>
 			<div className="space-y-1">
 				<Label htmlFor={selectId} className="text-xs">
@@ -671,9 +666,7 @@ function WindowEditor({
 				Cancel
 			</Button>
 			{invalid ? (
-				<p className="text-xs text-[var(--warning-strong)]">
-					{WINDOW_ORDER_MESSAGE}
-				</p>
+				<p className="text-xs text-warning-strong">{WINDOW_ORDER_MESSAGE}</p>
 			) : null}
 		</div>
 	);

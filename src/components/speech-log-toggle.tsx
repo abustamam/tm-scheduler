@@ -18,7 +18,7 @@ export function SpeechLogToggle({
 }) {
 	if (!truncated && !allSpeeches) return null;
 	return (
-		<div className="border-t border-[var(--line)] px-5 py-2.5 text-right text-xs">
+		<div className="border-t border-border px-5 py-2.5 text-right text-xs">
 			{allSpeeches ? (
 				<Link to="." search={{}}>
 					Show recent

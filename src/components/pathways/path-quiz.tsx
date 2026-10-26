@@ -60,18 +60,18 @@ export function PathQuiz({ signedIn }: { signedIn: boolean }) {
 							</li>
 						))}
 					</ul>
-					<p className="mt-3 text-sm text-[var(--sea-ink-soft)]">
+					<p className="mt-3 text-sm text-muted-foreground">
 						This is only a suggestion. Every path builds the same core speaking
 						and leadership skills, and you can choose any of them.
 					</p>
 				</section>
 
 				{signedIn ? null : (
-					<div className="rounded-lg border border-[var(--line)] p-4">
-						<p className="font-medium">
+					<div className="rounded-lg border border-border p-4">
+						<p className="font-semibold">
 							Ask the club about it at your next visit.
 						</p>
-						<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+						<p className="mt-1 text-sm text-muted-foreground">
 							Members are happy to tell you what their own path has been like.
 						</p>
 					</div>
@@ -119,14 +119,14 @@ export function PathQuiz({ signedIn }: { signedIn: boolean }) {
 		>
 			{PATH_QUIZ.map((q, i) => (
 				<fieldset key={q.id} className="flex flex-col gap-2">
-					<legend className="mb-2 font-medium">
-						<span className="text-[var(--sea-ink-soft)]">{i + 1}. </span>
+					<legend className="mb-2 font-semibold">
+						<span className="text-muted-foreground">{i + 1}. </span>
 						{q.prompt}
 					</legend>
 					{q.options.map((o) => (
 						<label
 							key={o.id}
-							className="flex cursor-pointer items-start gap-3 rounded-md border border-[var(--line)] px-3 py-2 text-sm has-[:checked]:border-[var(--lagoon-deep)] has-[:checked]:bg-[var(--sand)]"
+							className="flex cursor-pointer items-start gap-3 rounded-md border border-border px-3 py-2 text-sm has-[:checked]:border-link has-[:checked]:bg-surface-muted"
 						>
 							<input
 								type="radio"
@@ -146,7 +146,7 @@ export function PathQuiz({ signedIn }: { signedIn: boolean }) {
 					See my suggestion
 				</Button>
 				{complete ? null : (
-					<p className="text-xs text-[var(--sea-ink-soft)]">
+					<p className="text-xs text-muted-foreground">
 						Answer every question to see a suggestion.
 					</p>
 				)}
@@ -170,17 +170,15 @@ function SuggestionCard({
 			aria-label={s.name}
 			className={
 				featured
-					? "rounded-lg border border-[var(--lagoon-deep)] p-4"
-					: "rounded-md border border-[var(--line)] px-3 py-2"
+					? "rounded-lg border border-link p-4"
+					: "rounded-md border border-border px-3 py-2"
 			}
 		>
-			<h3 className={featured ? "font-semibold text-lg" : "font-medium"}>
+			<h3 className={featured ? "font-semibold text-lg" : "font-semibold"}>
 				{s.name}
 			</h3>
 			<p className="mt-1 text-sm">{s.focus}</p>
-			{why ? (
-				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">{why}</p>
-			) : null}
+			{why ? <p className="mt-1 text-sm text-muted-foreground">{why}</p> : null}
 			<div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
 				{signedIn ? (
 					<Button asChild size="sm" variant={featured ? "default" : "outline"}>

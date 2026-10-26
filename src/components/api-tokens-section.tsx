@@ -62,13 +62,13 @@ export function ApiTokensSection() {
 
 	return (
 		<details className="group rounded-xl border bg-card p-4">
-			<summary className="flex cursor-pointer items-center gap-2 font-medium">
+			<summary className="flex cursor-pointer items-center gap-2 font-semibold">
 				<KeyRound className="size-4 text-primary" aria-hidden />
 				Connect an AI assistant
 			</summary>
 			<div className="mt-3 space-y-3">
 				<div className="min-w-0">
-					<div className="font-medium">Personal access tokens</div>
+					<div className="font-semibold">Personal access tokens</div>
 					<p className="mt-1 text-sm text-muted-foreground">
 						Let an AI assistant read your schedule and feedback on your behalf;
 						where you're an admin or officer it can also work on your club's
@@ -141,7 +141,9 @@ export function ApiTokensSection() {
 									className="flex items-center justify-between gap-3 rounded-md border p-3 text-sm"
 								>
 									<div className="min-w-0">
-										<span className="font-medium">{t.name ?? "(unnamed)"}</span>{" "}
+										<span className="font-semibold">
+											{t.name ?? "(unnamed)"}
+										</span>{" "}
 										<span className="text-muted-foreground">
 											{t.revokedAt
 												? "· revoked"

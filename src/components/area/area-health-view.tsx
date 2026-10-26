@@ -29,7 +29,7 @@ export function AreaHealthView({
 				As of {formatAsOf(health.asOf)}. {RECENT_WINDOW_NOTE}
 			</p>
 			{health.clubs.length === 0 ? (
-				<p className="rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4 text-sm text-muted-foreground">
+				<p className="rounded-xl border border-border bg-surface-raised p-4 text-sm text-muted-foreground">
 					There are no clubs in this area yet.
 				</p>
 			) : (

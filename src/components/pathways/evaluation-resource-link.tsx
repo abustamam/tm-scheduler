@@ -70,7 +70,7 @@ export function EvaluationResourceLinks({
 				// project (Evaluation and Feedback, required at Level 1 on all five
 				// legacy paths) renders THREE links, and inline the caveat read as if
 				// it qualified only the third.
-				<p className="text-[var(--sea-ink-soft)] text-xs">
+				<p className="text-muted-foreground text-xs">
 					Toastmasters publishes only the current edition of{" "}
 					{resources.length > 1 ? "these forms" : "this form"}.
 				</p>

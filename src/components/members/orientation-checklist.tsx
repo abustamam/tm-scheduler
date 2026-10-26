@@ -59,13 +59,13 @@ export function OrientationChecklist({
 	return (
 		<section
 			aria-labelledby="orientation-heading"
-			className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]"
+			className="overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-[0_10px_24px_rgba(23,58,64,.05)]"
 		>
 			<div className="flex items-center justify-between gap-3 px-5 pt-4 pb-2.5">
 				<h2 id="orientation-heading" className="text-sm font-bold">
 					{ORIENTATION_HEADING}
 				</h2>
-				<span className="text-xs text-[var(--sea-ink-soft)]">
+				<span className="text-xs text-muted-foreground">
 					{view.doneCount} of {view.total} done
 				</span>
 			</div>
@@ -75,7 +75,7 @@ export function OrientationChecklist({
 						key={item.key}
 						data-item={item.key}
 						data-done={item.done ? "true" : "false"}
-						className="flex items-start gap-3 border-t border-[var(--line)] px-5 py-3"
+						className="flex items-start gap-3 border-t border-border px-5 py-3"
 					>
 						{item.selfTick ? (
 							<input
@@ -87,7 +87,7 @@ export function OrientationChecklist({
 									const next = e.currentTarget.checked;
 									void run("base-camp", () => onToggleBaseCamp(next));
 								}}
-								className="mt-0.5 size-4 shrink-0 accent-[var(--lagoon-deep)]"
+								className="mt-0.5 size-4 shrink-0 accent-link"
 							/>
 						) : (
 							<DerivedMark done={item.done} />
@@ -103,9 +103,7 @@ export function OrientationChecklist({
 							) : (
 								<span className={itemLabelClass(item.done)}>{item.label}</span>
 							)}
-							<div className="text-xs text-[var(--sea-ink-soft)]">
-								{item.hint}
-							</div>
+							<div className="text-xs text-muted-foreground">{item.hint}</div>
 							{item.key === "get-a-mentor" && item.done ? (
 								<MentorContacts mentors={view.mentors} />
 							) : null}
@@ -114,7 +112,7 @@ export function OrientationChecklist({
 					</li>
 				))}
 			</ul>
-			<div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] px-5 py-3">
+			<div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-5 py-3">
 				<Link
 					to="/resources/$slug"
 					params={{ slug: PATHWAYS_EXPLAINER_SLUG }}
@@ -140,8 +138,8 @@ export function OrientationChecklist({
 
 function itemLabelClass(done: boolean): string {
 	return done
-		? "text-sm font-bold text-[var(--sea-ink-soft)] line-through"
-		: "text-sm font-bold text-[var(--sea-ink)]";
+		? "text-sm font-bold text-muted-foreground line-through"
+		: "text-sm font-bold text-foreground";
 }
 
 /** Who the member's new-member mentor is, and how to reach them (#939). */
@@ -156,7 +154,7 @@ function MentorContacts({ mentors }: { mentors: OrientationMentor[] }) {
 					key={`${m.name}|${m.email ?? ""}|${m.phone ?? ""}`}
 					className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs"
 				>
-					<span className="font-semibold text-[var(--sea-ink)]">
+					<span className="font-semibold text-foreground">
 						Your mentor: {m.name}
 					</span>
 					<MemberContactLinks name={m.name} email={m.email} phone={m.phone} />
@@ -174,8 +172,8 @@ function DerivedMark({ done }: { done: boolean }) {
 			aria-label={done ? "Done" : "Not done yet"}
 			className={
 				done
-					? "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-[var(--palm)] text-white"
-					: "mt-0.5 size-4 shrink-0 rounded-full border border-[var(--line)]"
+					? "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-success text-white"
+					: "mt-0.5 size-4 shrink-0 rounded-full border border-border"
 			}
 		>
 			{done ? <Check className="size-3" aria-hidden /> : null}

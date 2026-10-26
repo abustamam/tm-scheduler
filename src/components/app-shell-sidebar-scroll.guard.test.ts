@@ -69,7 +69,7 @@ function classNameContaining(fragment: string): string {
 
 /** The scrolling middle band, and the footer that must stay out of it. */
 const NAV_BAND = classNameContaining("min-h-0 flex-1 flex-col");
-const FOOTER = classNameContaining("rounded-xl border border-[var(--line)]");
+const FOOTER = classNameContaining("rounded-xl border border-border");
 
 describe("app shell sidebar scrolling", () => {
 	// Control. Every assertion below is "the extracted string contains X", and

@@ -90,7 +90,7 @@ export function ConnectedAppsSection({
 	return (
 		<div className="space-y-3 rounded-xl border bg-card p-4">
 			<div className="min-w-0">
-				<h2 className="flex items-center gap-2 font-medium">
+				<h2 className="flex items-center gap-2 font-semibold">
 					<Plug className="size-4 text-primary" aria-hidden />
 					Connected apps
 				</h2>
@@ -124,7 +124,7 @@ export function ConnectedAppsSection({
 							className="flex items-center justify-between gap-3 rounded-md border p-3 text-sm"
 						>
 							<div className="min-w-0">
-								<div className="font-medium">
+								<div className="font-semibold">
 									{appLabel(app)}
 									{app.name ? null : (
 										<>

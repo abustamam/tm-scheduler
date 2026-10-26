@@ -111,15 +111,15 @@ const BAND_CLASS: Record<TimerBand, string> = {
  *  `over` is a deeper red, separated by its label, as in `BAND_CLASS`. */
 export const SCREEN_BG_CLASS: Record<TimerBand, string> = {
 	under: "bg-background",
-	green: "bg-[#1f7a46]",
-	yellow: "bg-[#f2c230]",
-	red: "bg-[#c0262d]",
-	over: "bg-[#7a1218]",
+	green: "bg-timer-green",
+	yellow: "bg-timer-yellow",
+	red: "bg-timer-red",
+	over: "bg-timer-over",
 };
 export const SCREEN_TEXT_CLASS: Record<TimerBand, string> = {
 	under: "text-foreground",
 	green: "text-white",
-	yellow: "text-[#1a1405]",
+	yellow: "text-timer-yellow-ink",
 	red: "text-white",
 	over: "text-white",
 };
@@ -128,10 +128,10 @@ export const SCREEN_TEXT_CLASS: Record<TimerBand, string> = {
  *  where the theme's teal would clash with green and vanish on yellow. */
 export const SCREEN_SOLID_CLASS: Record<TimerBand, string> = {
 	under: "",
-	green: "bg-white text-[#1f7a46] hover:bg-white/90",
-	yellow: "bg-[#1a1405] text-[#f2c230] hover:bg-[#1a1405]/90",
-	red: "bg-white text-[#c0262d] hover:bg-white/90",
-	over: "bg-white text-[#7a1218] hover:bg-white/90",
+	green: "bg-white text-timer-green hover:bg-white/90",
+	yellow: "bg-timer-yellow-ink text-timer-yellow hover:bg-timer-yellow-ink/90",
+	red: "bg-white text-timer-red hover:bg-white/90",
+	over: "bg-white text-timer-over hover:bg-white/90",
 };
 /** `screen` variant's secondary buttons: an outline in the band's own ink. */
 export const SCREEN_QUIET_CLASS =
@@ -282,11 +282,11 @@ export function SegmentClock({
 							// whole screen.
 							"@container flex flex-col items-center justify-center gap-3 px-4 py-5 text-center transition-colors sm:gap-6 sm:py-8",
 							state.phase === "idle"
-								? "rounded-2xl border border-[var(--line)]"
+								? "rounded-2xl border border-border"
 								: "min-h-svh",
 							SCREEN_BG_CLASS[band],
 						)
-					: "space-y-3 rounded-lg border border-[var(--line)] p-3"
+					: "space-y-3 rounded-lg border border-border p-3"
 			}
 		>
 			{/* The public page has no role and no holder: its h1 already says what
@@ -307,7 +307,7 @@ export function SegmentClock({
 			<p
 				className={
 					screen
-						? `flex flex-wrap items-center justify-center gap-x-4 gap-y-1 font-medium text-sm tabular-nums ${text}`
+						? `flex flex-wrap items-center justify-center gap-x-4 gap-y-1 font-semibold text-sm tabular-nums ${text}`
 						: "text-xs text-muted-foreground"
 				}
 			>
@@ -316,7 +316,7 @@ export function SegmentClock({
 						screen ? "inline-flex items-center gap-1.5" : "text-success"
 					}
 				>
-					{screen ? <MarkDot band={band} className="bg-[#1f7a46]" /> : null}
+					{screen ? <MarkDot band={band} className="bg-timer-green" /> : null}
 					Green {formatTimingClock(segment.marks.green)}
 				</span>
 				{screen ? null : " · "}
@@ -327,7 +327,7 @@ export function SegmentClock({
 							: "text-warning-foreground"
 					}
 				>
-					{screen ? <MarkDot band={band} className="bg-[#f2c230]" /> : null}
+					{screen ? <MarkDot band={band} className="bg-timer-yellow" /> : null}
 					Yellow {formatTimingClock(segment.marks.yellow)}
 				</span>
 				{screen ? null : " · "}
@@ -336,7 +336,7 @@ export function SegmentClock({
 						screen ? "inline-flex items-center gap-1.5" : "text-destructive"
 					}
 				>
-					{screen ? <MarkDot band={band} className="bg-[#c0262d]" /> : null}
+					{screen ? <MarkDot band={band} className="bg-timer-red" /> : null}
 					Red {formatTimingClock(segment.marks.red)}
 				</span>
 				{window ? (
@@ -376,7 +376,7 @@ export function SegmentClock({
 				{/* The colour is the signal, and colour alone is not a signal — this
 				    is what a screen reader and a colour-blind Timer read instead. */}
 				<span
-					className={`font-medium ${screen ? "text-xl sm:text-2xl" : "text-sm"} ${text}`}
+					className={`font-semibold ${screen ? "text-xl sm:text-2xl" : "text-sm"} ${text}`}
 				>
 					{TIMER_BAND_LABEL[band]}
 				</span>

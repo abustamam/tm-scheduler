@@ -29,11 +29,11 @@ export function AreaHealthTable({
 	readOnly?: boolean;
 }) {
 	return (
-		<div className="hidden overflow-x-auto rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] md:block">
+		<div className="hidden overflow-x-auto rounded-xl border border-border bg-surface-raised md:block">
 			<table className="w-full border-collapse text-left text-sm">
 				<caption className="sr-only">Club health for the area</caption>
 				<thead>
-					<tr className="border-b border-[var(--line)] align-bottom">
+					<tr className="border-b border-border align-bottom">
 						<th
 							scope="col"
 							className="px-4 py-3 text-xs font-bold uppercase tracking-[0.06em] text-muted-foreground"
@@ -64,7 +64,7 @@ export function AreaHealthTable({
 						return (
 							<tr
 								key={club.areaClubId}
-								className="border-b border-[var(--line)] align-top last:border-b-0"
+								className="border-b border-border align-top last:border-b-0"
 							>
 								<th scope="row" className="px-4 py-3 font-normal">
 									<div className="font-semibold">{club.name}</div>

@@ -175,10 +175,7 @@ describe.skipIf(!hasChrome)(
 		beforeAll(async () => {
 			cls.aside = classAfterTag(SHELL, "<aside");
 			cls.navBand = classContaining(SHELL, "min-h-0 flex-1 flex-col");
-			cls.footer = classContaining(
-				SHELL,
-				"rounded-xl border border-[var(--line)]",
-			);
+			cls.footer = classContaining(SHELL, "rounded-xl border border-border");
 			cls.drawer = classAfterTag(SHELL, "<SheetContent");
 			cls.rail = classAfterTag(MEETING_ROUTE, "<aside");
 			cls.card = classAfterTag(PANEL, "<Card ");

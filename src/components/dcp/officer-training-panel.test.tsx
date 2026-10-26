@@ -231,13 +231,9 @@ describe("the window", () => {
 		]) {
 			cleanup();
 			const { container } = mount(view({ periods: [t, tally(2)] }));
-			expect(container.innerHTML).not.toContain(
-				"bg-[var(--warning-strong)] text-white",
-			);
-			expect(container.innerHTML).not.toContain(
-				"bg-[var(--lagoon-deep)] text-white",
-			);
-			expect(container.innerHTML).toContain("text-[var(--on-accent-fill)]");
+			expect(container.innerHTML).not.toContain("bg-warning-strong text-white");
+			expect(container.innerHTML).not.toContain("bg-link text-white");
+			expect(container.innerHTML).toContain("text-on-accent-fill");
 		}
 	});
 
@@ -288,7 +284,7 @@ describe("the window", () => {
 				],
 			}),
 		);
-		expect(container.innerHTML).toContain("bg-[var(--warning-strong)]");
+		expect(container.innerHTML).toContain("bg-warning-strong");
 		// Exactly at the boundary: 21 days is urgent, 22 is not.
 		expect(card(1).textContent).toContain("act now");
 		cleanup();
@@ -327,7 +323,7 @@ describe("the window", () => {
 		// The urgent FILL is absent, which is the real assertion — the old one
 		// looked for `bg-[var(--warning-strong)] text-white`, a string this
 		// component no longer emits anywhere, so it could only pass.
-		expect(container.innerHTML).not.toContain("bg-[var(--warning-strong)]");
+		expect(container.innerHTML).not.toContain("bg-warning-strong");
 		expect(card(1).textContent).not.toContain("act now");
 	});
 
@@ -965,7 +961,7 @@ describe("the panel", () => {
 
 	it("highlights the period in focus", () => {
 		mount(view({ focus: 2 }));
-		expect(card(2).className).toContain("border-[var(--lagoon-deep)]");
-		expect(card(1).className).toContain("border-[var(--line)]");
+		expect(card(2).className).toContain("border-link");
+		expect(card(1).className).toContain("border-border");
 	});
 });

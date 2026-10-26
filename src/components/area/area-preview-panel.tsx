@@ -38,7 +38,7 @@ export function AreaPreviewPanel({ areaId }: { areaId: string }) {
 	}
 
 	return (
-		<section className="space-y-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4">
+		<section className="space-y-3 rounded-xl border border-border bg-surface-raised p-4">
 			<div className="flex flex-wrap items-center justify-between gap-2">
 				<h2 className="text-sm font-bold">Preview as Area Director</h2>
 				<Button

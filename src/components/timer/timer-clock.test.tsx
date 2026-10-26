@@ -60,7 +60,7 @@ describe("screen variant height by phase", () => {
 describe("card variant", () => {
 	it.each(Object.keys(STATES))("%s markup is unchanged", (phase) => {
 		expect(bandClassName("card", STATES[phase])).toBe(
-			"space-y-3 rounded-lg border border-[var(--line)] p-3",
+			"space-y-3 rounded-lg border border-border p-3",
 		);
 	});
 });

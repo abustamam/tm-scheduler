@@ -49,7 +49,7 @@ const OUTCOME_LABEL: Record<string, string> = {
 
 const CELL = "px-3 py-2 align-top";
 const HEAD =
-	"px-3 py-2 text-left text-xs font-extrabold tracking-[0.06em] text-[var(--sea-ink-soft)] uppercase";
+	"px-3 py-2 text-left text-xs font-bold tracking-[0.06em] text-muted-foreground uppercase";
 
 export interface ConfirmEntriesTableProps {
 	entries: PendingEntry[];
@@ -124,10 +124,10 @@ export function ConfirmEntriesTable({
 		// with it present — the page scrolled sideways while the box that was
 		// supposed to scroll was already clipping correctly, which is why this
 		// reads as the table's bug and is not.
-		<div className="relative w-full overflow-x-auto rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)]">
+		<div className="relative w-full overflow-x-auto rounded-2xl border border-border bg-surface-raised">
 			<table className="w-full min-w-[54rem] border-collapse text-sm">
 				<thead>
-					<tr className="border-b border-[var(--line)] bg-[var(--foam)]">
+					<tr className="border-b border-border bg-surface-soft">
 						<th className={HEAD}>Name</th>
 						<th className={HEAD}>Goes by</th>
 						<th className={HEAD}>Email</th>
@@ -149,7 +149,7 @@ export function ConfirmEntriesTable({
 							<tr
 								key={entry.id}
 								data-entry-id={entry.id}
-								className={`border-b border-[var(--line)] last:border-b-0 ${
+								className={`border-b border-border last:border-b-0 ${
 									entry.dropped ? "opacity-50" : ""
 								}`}
 							>
@@ -159,23 +159,23 @@ export function ConfirmEntriesTable({
 								<td className={CELL}>{field(entry, "phone")}</td>
 								<td className={`${CELL} min-w-[14rem]`}>
 									{entry.dropped ? (
-										<span className="text-xs font-semibold text-[var(--sea-ink-soft)]">
+										<span className="text-xs font-semibold text-muted-foreground">
 											Dropped — this line will not be recorded
 										</span>
 									) : (
 										<>
-											<span className="text-xs font-bold text-[var(--sea-ink)]">
+											<span className="text-xs font-bold text-foreground">
 												{OUTCOME_LABEL[line?.outcome ?? ""] ?? "—"}
 											</span>
 											{line?.matchedName ? (
-												<span className="block text-xs text-[var(--sea-ink-soft)]">
+												<span className="block text-xs text-muted-foreground">
 													On file as {line.matchedName}
 												</span>
 											) : null}
 											{problems.map((p) => (
 												<span
 													key={`${p.code}-${p.message}`}
-													className="mt-1 block text-xs font-semibold text-[var(--ember,#a33)]"
+													className="mt-1 block text-xs font-semibold text-destructive"
 												>
 													{p.message}
 												</span>
@@ -183,7 +183,7 @@ export function ConfirmEntriesTable({
 											{ambiguity ? (
 												<select
 													aria-label={`Resolve ${entry.name}`}
-													className="mt-1.5 h-9 w-full rounded-lg border border-[var(--line)] bg-[var(--surface-strong)] px-2 text-xs"
+													className="mt-1.5 h-9 w-full rounded-lg border border-border bg-surface-raised px-2 text-xs"
 													disabled={busy}
 													value={
 														entry.resolve?.kind === "existing"

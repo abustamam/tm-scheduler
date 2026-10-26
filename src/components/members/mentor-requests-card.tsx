@@ -66,13 +66,10 @@ export function MentorRequestsCard({
 	return (
 		<section
 			aria-labelledby="mentor-requests-heading"
-			className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]"
+			className="overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-[0_10px_24px_rgba(23,58,64,.05)]"
 		>
 			<div className="flex items-center gap-2 px-5 pt-4 pb-2.5">
-				<HeartHandshake
-					className="size-4 text-[var(--lagoon-deep)]"
-					aria-hidden
-				/>
+				<HeartHandshake className="size-4 text-link" aria-hidden />
 				<h2 id="mentor-requests-heading" className="text-sm font-bold">
 					{MENTOR_REQUESTS_HEADING}
 				</h2>
@@ -89,13 +86,13 @@ export function MentorRequestsCard({
 						<li
 							key={r.id}
 							data-request={r.id}
-							className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] px-5 py-3"
+							className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-5 py-3"
 						>
 							<div className="text-sm">
-								<span className="font-bold text-[var(--sea-ink)]">
+								<span className="font-bold text-foreground">
 									{r.mentee.name}
 								</span>
-								<span className="ml-2 text-xs text-[var(--sea-ink-soft)]">
+								<span className="ml-2 text-xs text-muted-foreground">
 									{focus} · {formatShortDate(r.createdAt, timezone)}
 								</span>
 							</div>
@@ -112,7 +109,7 @@ export function MentorRequestsCard({
 						key={r.id}
 						data-request={r.id}
 						data-accepted="true"
-						className="border-t border-[var(--line)] px-5 py-3"
+						className="border-t border-border px-5 py-3"
 					>
 						<p className="mb-2 text-sm font-semibold">
 							Now mentoring {r.mentee.name}. Say hi:

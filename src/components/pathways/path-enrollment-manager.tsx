@@ -97,10 +97,10 @@ export function PathEnrollmentManager({
 					{enrollments.map((e) => (
 						<li
 							key={e.pathId}
-							className="flex items-center justify-between gap-2 rounded-md border border-[var(--line)] px-3 py-2"
+							className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2"
 						>
 							<span className="flex min-w-0 items-center gap-2">
-								<span className="truncate font-medium text-sm">{e.name}</span>
+								<span className="truncate font-semibold text-sm">{e.name}</span>
 								{e.status === "legacy" ? (
 									<Badge variant="outline" className="shrink-0 text-xs">
 										Legacy
@@ -203,7 +203,7 @@ function PathGroup({
 	if (paths.length === 0) return null;
 	return (
 		<div className="flex flex-col gap-1.5">
-			<div className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
+			<div className="font-semibold text-muted-foreground text-xs uppercase tracking-wide">
 				{label}
 			</div>
 			{paths.map((p) => (

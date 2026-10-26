@@ -94,7 +94,7 @@ export function ProjectPicker({
 				>
 					{selected ? (
 						<span className="flex min-w-0 flex-col">
-							<span className="truncate font-medium">
+							<span className="truncate font-semibold">
 								{selected.project.name}
 							</span>
 							<span className="truncate text-muted-foreground text-xs">
@@ -198,7 +198,7 @@ function PathSection({
 		<div className="flex flex-col gap-2">
 			{showPathName ? (
 				<div className="flex items-center gap-2">
-					<span className="font-medium text-sm">{path.name}</span>
+					<span className="font-semibold text-sm">{path.name}</span>
 					{path.status === "legacy" ? (
 						<Badge variant="outline" className="text-xs">
 							Legacy
@@ -209,14 +209,14 @@ function PathSection({
 			{levels.map(([level, projects]) => {
 				const isOpen = openLevels.has(level);
 				return (
-					<div key={level} className="rounded-md border border-[var(--line)]">
+					<div key={level} className="rounded-md border border-border">
 						<button
 							type="button"
 							className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left"
 							onClick={() => toggle(level)}
 							aria-expanded={isOpen}
 						>
-							<span className="font-medium text-sm">{levelLabel(level)}</span>
+							<span className="font-semibold text-sm">{levelLabel(level)}</span>
 							<ChevronDown
 								className={`size-4 opacity-50 transition-transform ${
 									isOpen ? "rotate-180" : ""
@@ -262,7 +262,7 @@ function LevelProjects({
 		else bySeries.set(p.series, [p]);
 	}
 	return (
-		<div className="border-[var(--line)] border-t">
+		<div className="border-border border-t">
 			<ul>
 				{ordinary.map((project) => (
 					<ProjectRow
@@ -274,8 +274,8 @@ function LevelProjects({
 				))}
 			</ul>
 			{[...bySeries.entries()].map(([series, rows]) => (
-				<div key={series} className="border-[var(--line)] border-t">
-					<div className="px-3 pt-2 pb-1 font-medium text-muted-foreground text-xs">
+				<div key={series} className="border-border border-t">
+					<div className="px-3 pt-2 pb-1 font-semibold text-muted-foreground text-xs">
 						{SERIES_LABEL[series]}
 					</div>
 					<ul>
@@ -366,7 +366,7 @@ function ProjectRow({
 					) : null}
 				</span>
 				{badge ? (
-					<Badge variant="secondary" className="shrink-0 text-[10px]">
+					<Badge variant="secondary" className="shrink-0 text-xs">
 						{badge}
 					</Badge>
 				) : null}
