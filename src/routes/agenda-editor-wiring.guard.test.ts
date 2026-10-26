@@ -10,7 +10,7 @@
  * offered at all, and whether the route hands the editor the loader's own data
  * or something re-derived — the #319 shape: a well-tested component reached
  * through a wrong (or wrongly-gated) prop. Neither route can be mounted in
- * vitest (`club.$clubId.meeting.$meetingId_.agenda.tsx` needs a router,
+ * vitest (`club.$clubId.meeting.$meetingId_.agenda.edit.tsx` needs a router,
  * loader context and a session), so this repo's idiom for that layer is a
  * comment-blind source guard.
  *
@@ -44,7 +44,8 @@ import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
 
 const MEETING_AGENDA = "src/components/agenda/meeting-agenda.tsx";
-const AGENDA_ROUTE = "src/routes/club.$clubId.meeting.$meetingId_.agenda.tsx";
+const AGENDA_ROUTE =
+	"src/routes/club.$clubId.meeting.$meetingId_.agenda.edit.tsx";
 
 describe("meeting-agenda → agenda editor button wiring", () => {
 	const src = readSource(MEETING_AGENDA);
@@ -68,7 +69,7 @@ describe("meeting-agenda → agenda editor button wiring", () => {
 
 	it("links to the agenda route with the meeting's raw id, not a re-derived key", () => {
 		const m = src.match(
-			/<Link\s+to="\/club\/\$clubId\/meeting\/\$meetingId\/agenda"[\s\S]*?\/>/,
+			/<Link\s+to="\/club\/\$clubId\/meeting\/\$meetingId\/agenda\/edit"[\s\S]*?\/>/,
 		);
 		expect(m, "no Link to the agenda route found").toBeTruthy();
 		const call = m?.[0] ?? "";
@@ -88,7 +89,7 @@ describe("meeting-agenda → agenda editor button wiring", () => {
 		// bugs already shipped from that rule. `<Button asChild>` is excluded via
 		// `:not([data-slot="button"])`; a bare `<Link>` here would not be.
 		const m = src.match(
-			/<Button[^>]*asChild[^>]*>\s*<Link\s+to="\/club\/\$clubId\/meeting\/\$meetingId\/agenda"/,
+			/<Button[^>]*asChild[^>]*>\s*<Link\s+to="\/club\/\$clubId\/meeting\/\$meetingId\/agenda\/edit"/,
 		);
 		expect(
 			m,

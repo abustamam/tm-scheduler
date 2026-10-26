@@ -1,4 +1,4 @@
-// src/routes/club.$clubId.meeting.$meetingId_.agenda.tsx
+// src/routes/club.$clubId.meeting.$meetingId_.agenda.edit.tsx
 //
 // The per-meeting agenda editor (#agenda-templates Phase 2, Task 9).
 //
@@ -9,7 +9,7 @@
 // name) would make this page's content unreachable: the router would match
 // both routes and render the parent's full leaf UI with nowhere for this
 // component to appear. The underscore keeps the URL identical
-// (`/club/$clubId/meeting/$meetingId/agenda`) while parenting this route
+// (`/club/$clubId/meeting/$meetingId/agenda/edit`) while parenting this route
 // directly on the club shell (`club.$clubId.tsx`) instead — the same shape
 // `club.$clubId.roles-guide.tsx` uses for an in-chrome standalone page.
 //
@@ -44,7 +44,7 @@ import {
 import { resolveMeetingKeyForUser } from "#/server/meeting-key";
 
 export const Route = createFileRoute(
-	"/club/$clubId/meeting/$meetingId_/agenda",
+	"/club/$clubId/meeting/$meetingId_/agenda/edit",
 )({
 	// Sign-in gate (#769). The `/club/$clubId` shell above this route is
 	// deliberately PUBLIC — a guest reaches the sign-up sheet through it — so

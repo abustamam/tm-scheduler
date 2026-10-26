@@ -5,7 +5,7 @@
  * The agenda editor's server fns (`getAgendaDraft` and its writes) take a bare
  * uuid, while every link into `/club/<club>/meeting/<key>/…` may carry a
  * club-local date key. Resolving here, before the draft is fetched, is what lets
- * `/meeting/2026-09-26/agenda` open the editor instead of failing `uuid.parse`
+ * `/meeting/2026-09-26/agenda/edit` open the editor instead of failing `uuid.parse`
  * with a 500.
  *
  * Session-bearing ON PURPOSE (`requireUser`). The only caller is the agenda

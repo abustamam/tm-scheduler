@@ -103,7 +103,7 @@ import { resolveMeetingKeyForUser } from "#/server/meeting-key";
 import { getMeetingByKey, getPublicMeetingByKey } from "#/server/meetings";
 import { getPublicFlyer } from "#/server/promo";
 import { getFeedbackTargetsPublic } from "#/server/role-feedback";
-import { Route as AgendaRoute } from "./club.$clubId.meeting.$meetingId_.agenda";
+import { Route as AgendaRoute } from "./club.$clubId.meeting.$meetingId_.agenda.edit";
 import { Route as MeRoute } from "./club.$clubId.meeting.$meetingId_.me";
 import { Route as ThemeRoute } from "./club.$clubId.meeting.$meetingId_.me_.theme";
 import { Route as TimerRoute } from "./club.$clubId.meeting.$meetingId_.me_.timer";
@@ -190,7 +190,7 @@ function mockClub() {
 
 const NOT_FOUND = () => new Error("Meeting not found.");
 
-const AGENDA_FILE = "club.$clubId.meeting.$meetingId_.agenda.tsx";
+const AGENDA_FILE = "club.$clubId.meeting.$meetingId_.agenda.edit.tsx";
 const FLYER_FILE = "club.$clubId_.meeting.$meetingId.flyer.tsx";
 const FEEDBACK_FILE = "club.$clubId_.meeting.$meetingId.feedback.tsx";
 

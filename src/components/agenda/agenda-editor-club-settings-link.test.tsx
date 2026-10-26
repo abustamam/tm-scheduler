@@ -112,7 +112,8 @@ async function settingsHref(clubUuid: string): Promise<string | null> {
 		.getAttribute("href");
 }
 
-const AGENDA_ROUTE = "src/routes/club.$clubId.meeting.$meetingId_.agenda.tsx";
+const AGENDA_ROUTE =
+	"src/routes/club.$clubId.meeting.$meetingId_.agenda.edit.tsx";
 const EDITOR = "src/components/agenda/agenda-editor.tsx";
 
 describe("the rendered link", () => {
