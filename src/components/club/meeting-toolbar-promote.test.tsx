@@ -69,11 +69,13 @@ describe("Promote on the meeting toolbar (#931)", () => {
 	it("a member does not see it", async () => {
 		await renderUnderMemoryRouter(<MeetingToolbar {...props(false)} />);
 		expect(screen.queryByRole("button", { name: /promote/i })).toBeNull();
+		expect(screen.queryByRole("button", { name: /^manage$/i })).toBeNull();
 	});
 
 	it("an admin sees it, and it opens the sheet for this meeting", async () => {
 		await renderUnderMemoryRouter(<MeetingToolbar {...props(true)} />);
-		await userEvent.click(screen.getByRole("button", { name: /promote/i }));
+		await userEvent.click(screen.getByRole("button", { name: /^manage$/i }));
+		await userEvent.click(screen.getByRole("menuitem", { name: /promote/i }));
 		await waitFor(() =>
 			expect(getPromoContext).toHaveBeenCalledWith({
 				data: { meetingId: DB_ID },

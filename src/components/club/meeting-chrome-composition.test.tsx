@@ -46,6 +46,7 @@ async function renderHeader(opts: {
 	canManage: boolean;
 	canComplete?: boolean;
 	locked?: boolean;
+	primary?: boolean;
 }) {
 	await renderUnderMemoryRouter(
 		<>
@@ -64,6 +65,7 @@ async function renderHeader(opts: {
 				availBusy={false}
 				canToggleAvailability={true}
 				onSetStatus={vi.fn()}
+				primary={opts.primary ?? true}
 			/>
 			<MeetingToolbar
 				phase={opts.phase}
@@ -112,6 +114,8 @@ describe("the composed meeting header keeps ONE emphasis (#541 D2)", () => {
 				myUnavailable: false,
 				canManage: true,
 				canComplete: true,
+				// The route's rule: an officer on the day has Present.
+				primary: false,
 			},
 			expected: /present/i,
 		},
@@ -125,18 +129,21 @@ describe("the composed meeting header keeps ONE emphasis (#541 D2)", () => {
 				myUnavailable: true,
 				canManage: true,
 				canComplete: true,
+				primary: false,
 			},
 			expected: /present/i,
 		},
 		{
-			label: "meeting day, member, MARKED UNAVAILABLE",
+			// A member has no phase primary on the day any more (#1307): their
+			// filled action is "I'll be there", and once answered nothing is.
+			label: "meeting day, member, UNANSWERED: I'll be there leads",
 			opts: {
 				phase: "today" as MeetingPhase,
 				over: false,
-				myUnavailable: true,
+				myUnavailable: false,
 				canManage: false,
 			},
-			expected: /present/i,
+			expected: /i'll be there/i,
 		},
 		{
 			label: "completed, officer",
@@ -158,6 +165,16 @@ describe("the composed meeting header keeps ONE emphasis (#541 D2)", () => {
 				`composed header, got: ${JSON.stringify(filled)}`,
 		).toHaveLength(1);
 		expect(filled[0]).toMatch(expected);
+	});
+
+	it("meeting day, member, ANSWERED: nothing is filled", async () => {
+		await renderHeader({
+			phase: "today",
+			over: false,
+			myUnavailable: true,
+			canManage: false,
+		});
+		expect(filledControls()).toHaveLength(0);
 	});
 
 	it("upcoming has NO phase primary, so nothing in the header is filled", async () => {

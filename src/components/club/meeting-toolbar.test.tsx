@@ -12,7 +12,7 @@ import type { AgendaLayout } from "#/components/agenda/meeting-agenda-print";
 import type { Slide } from "#/lib/agenda-slides";
 import type { MeetingPhase } from "#/lib/meeting-lifecycle";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
-import { MeetingToolbar } from "./meeting-toolbar";
+import { type LifecycleAction, MeetingToolbar } from "./meeting-toolbar";
 
 const BASE = {
 	phase: "upcoming" as MeetingPhase,
@@ -38,6 +38,11 @@ const BASE = {
 	onAddRole: vi.fn(),
 	onComplete: vi.fn(),
 	onReopen: vi.fn(),
+	cancelled: undefined as boolean | undefined,
+	canCancel: undefined as boolean | undefined,
+	canLineupBlast: undefined as boolean | undefined,
+	onLineupBlast: undefined as (() => void) | undefined,
+	busyAction: undefined as LifecycleAction | null | undefined,
 };
 
 afterEach(cleanup);
@@ -53,6 +58,12 @@ async function renderToolbar(overrides: Partial<typeof BASE> = {}) {
 	return props;
 }
 
+/** Opens the Manage menu (#1307): the officer extras are menu items now. */
+async function openManage() {
+	await userEvent.click(screen.getByRole("button", { name: /^manage$/i }));
+}
+const item = (name: RegExp) => screen.queryByRole("menuitem", { name });
+
 describe("MeetingToolbar (#541 D2)", () => {
 	it("upcoming: no primary — just share and the export menu", async () => {
 		await renderToolbar({ phase: "upcoming", hasIdentity: true });
@@ -65,8 +76,8 @@ describe("MeetingToolbar (#541 D2)", () => {
 		expect(screen.queryByTestId("toolbar-primary")).toBeNull();
 	});
 
-	it("today + identity: Present is the filled primary, pinned to the present route", async () => {
-		await renderToolbar({ phase: "today", hasIdentity: true });
+	it("today + officer: Present is the filled primary, pinned to the present route", async () => {
+		await renderToolbar({ phase: "today", hasIdentity: true, canManage: true });
 		const primary = screen.getByTestId("toolbar-primary");
 		expect(primary.textContent).toMatch(/present/i);
 		expect(primary.closest("a")?.getAttribute("href")).toContain(
@@ -78,6 +89,27 @@ describe("MeetingToolbar (#541 D2)", () => {
 		// Opened in a new tab (target="_blank" above) needs noopener so the new
 		// page can't reach back into this one via window.opener.
 		expect(primary.closest("a")?.getAttribute("rel")).toContain("noopener");
+	});
+
+	it("today + member: Present is OUTLINE (the member's filled action is I'll be there), touch sized", async () => {
+		await renderToolbar({ phase: "today", hasIdentity: true });
+		const primary = screen.getByTestId("toolbar-primary");
+		expect(primary.getAttribute("data-variant")).toBe("outline");
+		expect(primary.getAttribute("data-size")).toBe("touch");
+		expect(
+			document.querySelectorAll('[data-slot="button"][data-variant="default"]'),
+		).toHaveLength(0);
+	});
+
+	it("Present, Share link and Print & export use the touch height", async () => {
+		await renderToolbar({ phase: "today", hasIdentity: true });
+		expect(screen.getByTestId("toolbar-primary").dataset.size).toBe("touch");
+		expect(
+			screen.getByRole("button", { name: /copy share link/i }).className,
+		).toContain("h-11");
+		expect(
+			screen.getByRole("button", { name: /print & export/i }).dataset.size,
+		).toBe("touch");
 	});
 
 	it("today + GUEST (no identity): no primary, but share + the export menu stay reachable (spec D2 guest row)", async () => {
@@ -136,19 +168,72 @@ describe("MeetingToolbar (#541 D2)", () => {
 		expect(screen.getByRole("menuitem", { name: /^present$/i })).toBeTruthy();
 	});
 
-	it("officer edit group renders only for canManage", async () => {
+	it("officer edit group renders only for canManage, as Manage menu items", async () => {
 		await renderToolbar({ canManage: false, hasAddableRoles: true });
-		expect(screen.queryByRole("button", { name: /add role/i })).toBeNull();
+		expect(screen.queryByRole("button", { name: /^manage$/i })).toBeNull();
 		cleanup();
 		await renderToolbar({
 			canManage: true,
 			hasAddableRoles: true,
 			canComplete: true,
 		});
-		expect(screen.getByRole("button", { name: /add role/i })).toBeTruthy();
+		// Not top-level buttons any more.
+		expect(screen.queryByRole("button", { name: /add role/i })).toBeNull();
 		expect(
-			screen.getByRole("button", { name: /complete meeting/i }),
-		).toBeTruthy();
+			screen.queryByRole("button", { name: /complete meeting/i }),
+		).toBeNull();
+		await openManage();
+		expect(item(/add role/i)).toBeTruthy();
+		expect(item(/complete meeting/i)).toBeTruthy();
+		expect(item(/promote/i)).toBeTruthy();
+	});
+
+	it("Manage items come in the specified order, Cancel last behind a separator", async () => {
+		await renderToolbar({
+			canManage: true,
+			hasAddableRoles: true,
+			canComplete: true,
+			canCancel: true,
+			canLineupBlast: true,
+		});
+		await openManage();
+		expect(
+			screen.getAllByRole("menuitem").map((el) => el.textContent?.trim()),
+		).toEqual([
+			"Promote",
+			"Add role",
+			"Lineup blast",
+			"Complete meeting",
+			"Cancel meeting",
+		]);
+		expect(item(/cancel meeting/i)?.getAttribute("data-variant")).toBe(
+			"destructive",
+		);
+		expect(screen.getByRole("separator")).toBeTruthy();
+	});
+
+	it("Manage trigger is hidden when no item is visible, and shows for lineup access alone", async () => {
+		// A member with nothing: no trigger.
+		await renderToolbar({ canManage: false });
+		expect(screen.queryByRole("button", { name: /^manage$/i })).toBeNull();
+		cleanup();
+		// A cancelled meeting empties an officer's menu too.
+		await renderToolbar({ canManage: true, cancelled: true });
+		expect(screen.queryByRole("button", { name: /^manage$/i })).toBeNull();
+		cleanup();
+		// A member with lineup access: Manage with ONLY Lineup blast.
+		const onLineupBlast = vi.fn();
+		await renderToolbar({
+			canManage: false,
+			canLineupBlast: true,
+			onLineupBlast,
+		});
+		await openManage();
+		expect(
+			screen.getAllByRole("menuitem").map((el) => el.textContent?.trim()),
+		).toEqual(["Lineup blast"]);
+		await userEvent.click(item(/lineup blast/i) as HTMLElement);
+		expect(onLineupBlast).toHaveBeenCalledTimes(1);
 	});
 
 	it("locked meeting offers Reopen (officer) instead of Add role / Complete", async () => {
@@ -158,13 +243,10 @@ describe("MeetingToolbar (#541 D2)", () => {
 			hasAddableRoles: true,
 			canComplete: true,
 		});
-		expect(
-			screen.getByRole("button", { name: /reopen meeting/i }),
-		).toBeTruthy();
-		expect(screen.queryByRole("button", { name: /add role/i })).toBeNull();
-		expect(
-			screen.queryByRole("button", { name: /complete meeting/i }),
-		).toBeNull();
+		await openManage();
+		expect(item(/reopen meeting/i)).toBeTruthy();
+		expect(item(/add role/i)).toBeNull();
+		expect(item(/complete meeting/i)).toBeNull();
 	});
 
 	it("wires the edit-group handlers", async () => {
@@ -177,9 +259,10 @@ describe("MeetingToolbar (#541 D2)", () => {
 			onAddRole,
 			onComplete,
 		});
-		const user = userEvent.setup();
-		await user.click(screen.getByRole("button", { name: /add role/i }));
-		await user.click(screen.getByRole("button", { name: /complete meeting/i }));
+		await openManage();
+		await userEvent.click(item(/add role/i) as HTMLElement);
+		await openManage();
+		await userEvent.click(item(/complete meeting/i) as HTMLElement);
 		expect(onAddRole).toHaveBeenCalledTimes(1);
 		expect(onComplete).toHaveBeenCalledTimes(1);
 	});
@@ -199,6 +282,8 @@ describe("MeetingToolbar (#541 D2)", () => {
 			canComplete: true,
 			hasAddableRoles: true,
 		});
+		// No Manage trigger at all, so no item can be reached.
+		expect(screen.queryByRole("button", { name: /^manage$/i })).toBeNull();
 		expect(
 			screen.queryByRole("button", { name: /reopen meeting/i }),
 		).toBeNull();
@@ -219,26 +304,25 @@ describe("MeetingToolbar (#541 D2)", () => {
 	it("wires the reopen handler", async () => {
 		const onReopen = vi.fn();
 		await renderToolbar({ canManage: true, locked: true, onReopen });
-		await userEvent.click(
-			screen.getByRole("button", { name: /reopen meeting/i }),
-		);
+		await openManage();
+		await userEvent.click(item(/reopen meeting/i) as HTMLElement);
 		expect(onReopen).toHaveBeenCalledTimes(1);
 	});
 
-	it("officer, but no addable roles left: no Add role button", async () => {
+	it("officer, but no addable roles left: no Add role item", async () => {
 		await renderToolbar({ canManage: true, hasAddableRoles: false });
-		expect(screen.queryByRole("button", { name: /add role/i })).toBeNull();
+		await openManage();
+		expect(item(/add role/i)).toBeNull();
 	});
 
-	it("officer, but nothing left to complete: no Complete meeting button", async () => {
+	it("officer, but nothing left to complete: no Complete meeting item", async () => {
 		await renderToolbar({
 			canManage: true,
 			canComplete: false,
 			locked: false,
 		});
-		expect(
-			screen.queryByRole("button", { name: /complete meeting/i }),
-		).toBeNull();
+		await openManage();
+		expect(item(/complete meeting/i)).toBeNull();
 	});
 
 	it("lifecycle mutation in flight: Complete meeting disables instead of hiding", async () => {
@@ -247,10 +331,9 @@ describe("MeetingToolbar (#541 D2)", () => {
 			canComplete: true,
 			lifecycleBusy: true,
 		});
-		const complete = screen.getByRole("button", {
-			name: /complete meeting/i,
-		}) as HTMLButtonElement;
-		expect(complete.disabled).toBe(true);
+		await openManage();
+		const complete = item(/complete meeting/i) as HTMLElement;
+		expect(complete.getAttribute("aria-disabled")).toBe("true");
 	});
 
 	// `disabled` alone tells a screen-reader user nothing: the swapped-in spinner
@@ -267,16 +350,14 @@ describe("MeetingToolbar (#541 D2)", () => {
 		props,
 	}) => {
 		await renderToolbar({ canManage: true, lifecycleBusy: true, ...props });
-		expect(screen.getByRole("button", { name }).getAttribute("aria-busy")).toBe(
-			"true",
-		);
+		await openManage();
+		expect(item(name)?.getAttribute("aria-busy")).toBe("true");
 		cleanup();
 		// Not stuck on: it must be absent/false when idle, or it announces a
 		// permanent busy state and the assertion above proves nothing.
 		await renderToolbar({ canManage: true, lifecycleBusy: false, ...props });
-		expect(
-			screen.getByRole("button", { name }).getAttribute("aria-busy"),
-		).not.toBe("true");
+		await openManage();
+		expect(item(name)?.getAttribute("aria-busy")).not.toBe("true");
 	});
 
 	it("lifecycle mutation in flight while locked: Reopen meeting disables instead of hiding", async () => {
@@ -285,10 +366,8 @@ describe("MeetingToolbar (#541 D2)", () => {
 			locked: true,
 			lifecycleBusy: true,
 		});
-		const reopen = screen.getByRole("button", {
-			name: /reopen meeting/i,
-		}) as HTMLButtonElement;
-		expect(reopen.disabled).toBe(true);
+		await openManage();
+		expect(item(/reopen meeting/i)?.getAttribute("aria-disabled")).toBe("true");
 	});
 
 	it("passes printLayout/deck/clubName/wordOfTheDay through to the export menu", async () => {
@@ -410,7 +489,7 @@ describe("MeetingToolbar (#541 D2)", () => {
 	});
 
 	it("orders the toolbar: primary, then share, then the export menu trigger", async () => {
-		await renderToolbar({ phase: "today", hasIdentity: true });
+		await renderToolbar({ phase: "today", hasIdentity: true, canManage: true });
 		const primary = screen.getByTestId("toolbar-primary");
 		const share = screen.getByRole("button", { name: /copy share link/i });
 		const menuTrigger = screen.getByRole("button", {
@@ -423,5 +502,122 @@ describe("MeetingToolbar (#541 D2)", () => {
 			share.compareDocumentPosition(menuTrigger) &
 				Node.DOCUMENT_POSITION_FOLLOWING,
 		).toBeTruthy();
+	});
+
+	// The trigger is gated by `showManage`, a hand-written mirror of each item's
+	// inline gate. Drift either way is a bug: a trigger over an empty menu, or
+	// an item no one can reach. So assert the equivalence over the whole
+	// persona x phase x locked matrix rather than pinning today's expressions.
+	describe("Manage trigger renders iff the menu has an item", () => {
+		const PERSONAS: Record<string, Partial<typeof BASE>> = {
+			"officer, everything on": {
+				hasIdentity: true,
+				canManage: true,
+				hasAddableRoles: true,
+				canComplete: true,
+				canCancel: true,
+				canLineupBlast: true,
+			},
+			"officer, nothing else": { hasIdentity: true, canManage: true },
+			"member with lineup access": {
+				hasIdentity: true,
+				canLineupBlast: true,
+			},
+			"member without": { hasIdentity: true },
+			anonymous: {},
+		};
+		const PHASES: Record<string, Partial<typeof BASE>> = {
+			upcoming: { phase: "upcoming" },
+			today: { phase: "today" },
+			completed: { phase: "completed" },
+			cancelled: { phase: "upcoming", cancelled: true },
+		};
+		const cases = Object.entries(PERSONAS).flatMap(([persona, p]) =>
+			Object.entries(PHASES).flatMap(([phase, ph]) =>
+				[false, true].map((locked) => ({
+					label: `${persona} / ${phase} / ${locked ? "locked" : "unlocked"}`,
+					props: { ...p, ...ph, locked },
+				})),
+			),
+		);
+
+		// The menu's items are not in the DOM until the trigger exists, so
+		// "no trigger" alone cannot show an item went unreachable. The oracle
+		// is the item rules themselves: Promote / Add role / Complete / Cancel
+		// need an officer on a live (not cancelled) meeting, Reopen an officer
+		// on a locked one (cancelled included), Lineup blast its own flag.
+		it.each(cases)("$label", async ({ props }) => {
+			const officer = props.canManage === true;
+			const anyItem =
+				props.canLineupBlast === true ||
+				(officer && (props.cancelled !== true || props.locked === true));
+			await renderToolbar(props);
+			const trigger = screen.queryByRole("button", { name: /^manage$/i });
+			expect(trigger !== null).toBe(anyItem);
+			if (trigger === null) return;
+			await userEvent.click(trigger);
+			expect(screen.getAllByRole("menuitem").length).toBeGreaterThanOrEqual(1);
+		});
+
+		it("the matrix reaches both outcomes (it is not vacuous)", async () => {
+			let shown = 0;
+			let hidden = 0;
+			for (const { props } of cases) {
+				await renderToolbar(props);
+				if (screen.queryByRole("button", { name: /^manage$/i })) shown++;
+				else hidden++;
+				cleanup();
+			}
+			expect(shown).toBeGreaterThan(0);
+			expect(hidden).toBeGreaterThan(0);
+		});
+	});
+
+	// The trigger spins only for a write that lives in the Manage menu. Restore
+	// is the cancelled banner's button, so it must not make Manage busy.
+	describe("Manage trigger busy state", () => {
+		const trigger = () =>
+			screen.getByRole("button", { name: /manage/i }) as HTMLElement;
+		const OFFICER = { canManage: true, canComplete: true, canCancel: true };
+
+		it.each([
+			"complete",
+			"reopen",
+			"cancel",
+		] as const)("busy %s: spins and carries aria-busy", async (busyAction) => {
+			await renderToolbar({
+				...OFFICER,
+				lifecycleBusy: true,
+				busyAction,
+			});
+			expect(trigger().getAttribute("aria-busy")).toBe("true");
+			expect(trigger().querySelector("svg.animate-spin")).not.toBeNull();
+		});
+
+		it("busy restore: Manage is NOT busy (Restore is the banner's action)", async () => {
+			await renderToolbar({
+				...OFFICER,
+				lifecycleBusy: true,
+				busyAction: "restore",
+			});
+			expect(trigger().getAttribute("aria-busy")).not.toBe("true");
+			expect(trigger().querySelector("svg.animate-spin")).toBeNull();
+		});
+
+		it("busy with no busyAction named: spins (old behaviour, as the items do)", async () => {
+			await renderToolbar({ ...OFFICER, lifecycleBusy: true });
+			expect(trigger().getAttribute("aria-busy")).toBe("true");
+			expect(trigger().querySelector("svg.animate-spin")).not.toBeNull();
+		});
+
+		it("idle: neither", async () => {
+			await renderToolbar({
+				...OFFICER,
+				lifecycleBusy: false,
+				busyAction: "complete",
+			});
+			expect(trigger().getAttribute("aria-busy")).not.toBe("true");
+			expect(trigger().querySelector("svg.animate-spin")).toBeNull();
+		});
 	});
 });

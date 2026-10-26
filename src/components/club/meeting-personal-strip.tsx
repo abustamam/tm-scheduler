@@ -50,6 +50,7 @@ export function MeetingPersonalStrip({
 	availBusy,
 	canToggleAvailability,
 	onSetStatus,
+	primary,
 }: {
 	source: "anon" | "session";
 	member: StoredMember | null;
@@ -63,6 +64,12 @@ export function MeetingPersonalStrip({
 	availBusy: boolean;
 	canToggleAvailability: boolean;
 	onSetStatus: (s: PlanStatus | null) => void;
+	/** True when "I'll be there" is the ONE filled button in the meeting's
+	 *  action area (#1307): the route computes it from the phase × persona
+	 *  table, because only it sees the toolbar's Present / Minutes / Restore.
+	 *  Required, not optional: a dropped prop would silently outline the
+	 *  member's main action. */
+	primary: boolean;
 }) {
 	// Identity IS the member object — a separate boolean was two flags that
 	// had to agree, with no caller able to make them diverge.
@@ -94,8 +101,8 @@ export function MeetingPersonalStrip({
 				<div className="flex items-center gap-2">
 					<Button
 						type="button"
-						variant="outline"
-						size="sm"
+						variant={primary ? "default" : "outline"}
+						size="touch"
 						onClick={() => onSetStatus("coming")}
 						disabled={disabled}
 						aria-busy={availBusy}
@@ -106,7 +113,7 @@ export function MeetingPersonalStrip({
 					<Button
 						type="button"
 						variant="outline"
-						size="sm"
+						size="touch"
 						onClick={() => onSetStatus("not_coming")}
 						disabled={disabled}
 						aria-busy={availBusy}
@@ -140,7 +147,7 @@ export function MeetingPersonalStrip({
 					// competing for the one emphasis D2 reserves for the phase primary.
 					// Neither component's own test can see this: each renders alone.
 					variant="secondary"
-					size="sm"
+					size="touch"
 					onClick={() => onSetStatus(null)}
 					disabled={disabled}
 					aria-busy={availBusy}

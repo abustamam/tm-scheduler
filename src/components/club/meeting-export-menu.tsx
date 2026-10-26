@@ -49,6 +49,7 @@ export function MeetingExportMenu({
 	clubName,
 	wordOfTheDay,
 	presentIsPrimary,
+	size = "sm",
 }: {
 	clubSlug: string;
 	/** URL key (date or uuid) — used by the print/present/word LINKS. */
@@ -67,6 +68,8 @@ export function MeetingExportMenu({
 	wordOfTheDay: string | null;
 	/** True when the toolbar already renders Present as the phase primary. */
 	presentIsPrimary: boolean;
+	/** Trigger height: `touch` is 44px on a phone (#1307). Default `sm`. */
+	size?: "sm" | "touch";
 }) {
 	const [sheetsOpen, setSheetsOpen] = useState(false);
 	const [packetOpen, setPacketOpen] = useState(false);
@@ -84,7 +87,7 @@ export function MeetingExportMenu({
 		<>
 			<DropdownMenu>
 				<DropdownMenuTrigger asChild>
-					<Button ref={triggerRef} variant="outline" size="sm">
+					<Button ref={triggerRef} variant="outline" size={size}>
 						<Printer />
 						Print & export
 						<ChevronDown className="opacity-60" />
