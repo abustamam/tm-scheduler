@@ -155,7 +155,7 @@ function YourWins({
 	if (wins.length === 0) return null;
 	return (
 		<div className="flex flex-col gap-2">
-			<div className="font-medium text-foreground text-sm">Your wins</div>
+			<div className="font-semibold text-foreground text-sm">Your wins</div>
 			<ul className="flex flex-col gap-2">
 				{wins.map((w, i) => {
 					const dateLabel = formatWinDate(w.deliveredAt, timeZone);
@@ -168,7 +168,7 @@ function YourWins({
 							<Trophy className="mt-0.5 size-4 shrink-0 text-primary" />
 							<div className="flex min-w-0 flex-1 flex-col">
 								<div className="flex flex-wrap items-baseline gap-x-2">
-									<span className="font-medium text-foreground text-sm">
+									<span className="font-semibold text-foreground text-sm">
 										{w.name}
 									</span>
 									<span className="text-muted-foreground text-xs">
@@ -180,7 +180,7 @@ function YourWins({
 									    the same idea are `completed` vs `approved` — this is not
 									    an error state and must not read like one. */}
 									{w.awaitingProcessing ? (
-										<Badge variant="outline" className="text-[10px]">
+										<Badge variant="outline" className="text-xs">
 											Awaiting Base Camp
 										</Badge>
 									) : null}
@@ -238,7 +238,7 @@ function UpNext({
 	if (!hasBasecampTracked && series.length === 0) return null;
 	return (
 		<div className="flex flex-col gap-2">
-			<div className="font-medium text-foreground text-sm">Up next</div>
+			<div className="font-semibold text-foreground text-sm">Up next</div>
 			{upNext.length > 0 && (
 				<div className="flex flex-wrap gap-1.5">
 					{upNext.map((p) => (
@@ -397,7 +397,7 @@ function PathBlock({
 				<div className="flex min-w-0 flex-1 flex-col gap-3">
 					<LevelChips levels={path.levels} currentLevel={shownLevel} />
 					{path.complete ? (
-						<div className="font-medium text-foreground text-sm">
+						<div className="font-semibold text-foreground text-sm">
 							Path complete 🎉
 						</div>
 					) : shownLevel !== null ? (

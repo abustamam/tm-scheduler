@@ -277,7 +277,7 @@ export function AppShell({
 		// audience is the ACTIVE club's — an officer there sees admin entries.
 		<WhatsNewProvider isAdmin={isOfficer}>
 			<div
-				className="flex min-h-svh w-full font-sans text-[var(--sea-ink)]"
+				className="flex min-h-svh w-full font-sans text-foreground"
 				// Where the sticky chrome ends, stated once (`shell-sticky-offset.ts`):
 				// the headers pin under the banner, and a pinned column (the meeting
 				// page's attendance rail) pins under both, impersonating or not.
@@ -290,7 +290,7 @@ export function AppShell({
 			    means the document scroll cannot reveal what spills out of it, so an
 			    officer+superadmin nav (~28 items) had ~700px of items reachable by
 			    nothing at all. */}
-				<aside className="sticky top-0 hidden h-svh w-[248px] shrink-0 flex-col gap-1.5 border-r border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-4 backdrop-blur-[6px] lg:flex">
+				<aside className="sticky top-0 hidden h-svh w-[248px] shrink-0 flex-col gap-1.5 border-r border-border bg-linear-to-b from-surface-raised to-surface-glass px-3.5 py-4 backdrop-blur-[6px] lg:flex">
 					{sidebar()}
 				</aside>
 
@@ -303,7 +303,7 @@ export function AppShell({
 						// with the nav. `SidebarInner`'s middle band scrolls instead, and
 						// the drawer has to stop scrolling for that band to be the thing
 						// that overflows.
-						className="w-[284px] max-w-[86vw] gap-1.5 overflow-hidden border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-4 sm:max-w-[86vw] lg:hidden"
+						className="w-[284px] max-w-[86vw] gap-1.5 overflow-hidden border-border bg-linear-to-b from-surface-raised to-surface-glass px-3.5 py-4 sm:max-w-[86vw] lg:hidden"
 						onEscapeKeyDown={(e) => {
 							// Escape clears open search results first; only a second
 							// Escape (nothing left to clear) closes the drawer.
@@ -352,8 +352,8 @@ export function AppShell({
 						/>
 					) : null}
 					{/* Desktop header (lg+) */}
-					<header className="sticky top-(--shell-banner-offset) z-10 hidden items-center gap-3.5 border-b border-[var(--line)] bg-[var(--surface)] px-7 py-4 backdrop-blur-[6px] lg:flex">
-						<div className="text-xs font-semibold tracking-[0.01em] text-[var(--sea-ink-soft)]">
+					<header className="sticky top-(--shell-banner-offset) z-10 hidden items-center gap-3.5 border-b border-border bg-surface-glass px-7 py-4 backdrop-blur-[6px] lg:flex">
+						<div className="text-xs font-semibold tracking-[0.01em] text-muted-foreground">
 							{crumbFor(pathname)}
 						</div>
 						<div className="flex-1" />
@@ -371,16 +371,16 @@ export function AppShell({
 					</header>
 
 					{/* Mobile top app-bar (below lg) */}
-					<header className="sticky top-(--shell-banner-offset) z-10 flex items-center gap-2.5 border-b border-[var(--line)] bg-[var(--surface)] px-4 py-3 backdrop-blur-[6px] lg:hidden">
+					<header className="sticky top-(--shell-banner-offset) z-10 flex items-center gap-2.5 border-b border-border bg-surface-glass px-4 py-3 backdrop-blur-[6px] lg:hidden">
 						<button
 							type="button"
 							onClick={() => setNavOpen(true)}
 							aria-label="Open navigation"
-							className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-[var(--line)] text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--foam)] hover:text-[var(--sea-ink)]"
+							className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-surface-soft hover:text-foreground"
 						>
 							<Menu className="size-4" aria-hidden />
 						</button>
-						<div className="min-w-0 flex-1 truncate text-xs font-semibold tracking-[0.01em] text-[var(--sea-ink-soft)]">
+						<div className="min-w-0 flex-1 truncate text-xs font-semibold tracking-[0.01em] text-muted-foreground">
 							{crumbFor(pathname)}
 						</div>
 						<WhatsNewButton />
@@ -402,7 +402,7 @@ export function AppShell({
 					<section className="min-w-0 flex-1 overflow-x-clip">
 						{children}
 					</section>
-					<footer className="border-t border-[var(--line)] px-7 py-3 text-center text-[11px] leading-relaxed text-[var(--sea-ink-soft)]">
+					<footer className="border-t border-border px-7 py-3 text-center text-xs leading-relaxed text-muted-foreground">
 						{TOASTMASTERS_DISCLAIMER}
 					</footer>
 				</main>
@@ -461,7 +461,7 @@ function PreviewAsMemberButton() {
 			type="button"
 			onClick={() => void toggle("member")}
 			title="Preview as member"
-			className="flex size-7 items-center justify-center rounded-md text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--surface-strong)] hover:text-[var(--sea-ink)]"
+			className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-surface-raised hover:text-foreground"
 		>
 			<Eye className="size-4" aria-hidden />
 			<span className="sr-only">Preview as member</span>
@@ -540,11 +540,11 @@ function SidebarInner({
 			    above already absorbs the free space, so this sits at the bottom
 			    whether the nav overflows or not — and must not be squeezed when it
 			    does. */}
-			<div className="flex shrink-0 items-center gap-2.5 rounded-xl border border-[var(--line)] bg-[var(--foam)] p-2.5">
+			<div className="flex shrink-0 items-center gap-2.5 rounded-xl border border-border bg-surface-soft p-2.5">
 				<MemberAvatar tone="palm" initials={initials} size={34} />
 				<div className="min-w-0 leading-tight">
 					<div className="truncate text-sm font-bold">{displayName}</div>
-					<div className="text-xs text-[var(--sea-ink-soft)]">{roleLabel}</div>
+					<div className="text-xs text-muted-foreground">{roleLabel}</div>
 				</div>
 				<div className="ml-auto flex shrink-0 items-center gap-1">
 					{showThemeToggle ? <ThemeToggle /> : null}
@@ -553,7 +553,7 @@ function SidebarInner({
 						type="button"
 						onClick={onSignOut}
 						title="Sign out"
-						className="flex size-7 items-center justify-center rounded-md text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--surface-strong)] hover:text-[var(--sea-ink)]"
+						className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-surface-raised hover:text-foreground"
 					>
 						<LogOut className="size-4" aria-hidden />
 						<span className="sr-only">Sign out</span>
@@ -684,7 +684,7 @@ function writeStoredOpen(storageKey: string, open: boolean): void {
 }
 
 const GROUP_LABEL_CLASS =
-	"text-xs font-extrabold tracking-[0.12em] text-[var(--sea-ink-soft)] uppercase opacity-70";
+	"text-xs font-bold tracking-[0.12em] text-muted-foreground uppercase opacity-70";
 
 function NavGroup({
 	group,
@@ -763,8 +763,8 @@ function NavGroup({
 function navItemClass(active: boolean): string {
 	return `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm tracking-[0.01em] transition-colors ${
 		active
-			? "bg-[var(--sand)] font-bold text-[var(--sea-ink)] [&_svg]:opacity-100"
-			: "font-medium text-[var(--sea-ink-soft)] hover:bg-[var(--foam)] [&_svg]:opacity-70"
+			? "bg-surface-muted font-bold text-foreground [&_svg]:opacity-100"
+			: "font-semibold text-muted-foreground hover:bg-surface-soft [&_svg]:opacity-70"
 	}`;
 }
 

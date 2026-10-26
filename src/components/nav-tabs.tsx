@@ -37,7 +37,7 @@ export function NavTabs({
 	return (
 		<nav
 			aria-label={label}
-			className="inline-flex gap-1 rounded-lg border border-[var(--line)] bg-[var(--foam)] p-1"
+			className="inline-flex gap-1 rounded-lg border border-border bg-surface-soft p-1"
 		>
 			{tabs.map((tab) => {
 				const active = tab.to === current;
@@ -48,8 +48,8 @@ export function NavTabs({
 						aria-current={active ? "page" : undefined}
 						className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
 							active
-								? "bg-[var(--surface-strong)] font-bold text-[var(--sea-ink)] shadow-sm"
-								: "font-medium text-[var(--sea-ink-soft)] hover:text-[var(--sea-ink)]"
+								? "bg-surface-raised font-bold text-foreground shadow-sm"
+								: "font-semibold text-muted-foreground hover:text-foreground"
 						}`}
 					>
 						{tab.label}

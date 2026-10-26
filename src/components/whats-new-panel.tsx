@@ -215,7 +215,7 @@ export function NewBadge({
 	if (!isNew) return null;
 	return (
 		<span
-			className={`inline-flex items-center rounded-full bg-primary px-1.5 py-px text-[10px] font-bold tracking-[0.04em] text-primary-foreground uppercase ${className}`}
+			className={`inline-flex items-center rounded-full bg-primary px-1.5 py-px text-xs font-bold tracking-[0.04em] text-primary-foreground uppercase ${className}`}
 		>
 			New
 		</span>
@@ -321,13 +321,13 @@ export function WhatsNewButton() {
 				type="button"
 				onClick={() => onOpenChange(true)}
 				aria-label={unseen ? "What's new (new updates)" : "What's new"}
-				className="relative flex size-9 shrink-0 items-center justify-center rounded-lg border border-[var(--line)] text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--foam)] hover:text-[var(--sea-ink)]"
+				className="relative flex size-9 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-surface-soft hover:text-foreground"
 			>
 				<Sparkles className="size-4" aria-hidden />
 				{unseen ? (
 					<span
 						data-testid="whats-new-dot"
-						className="absolute top-1.5 right-1.5 size-2 rounded-full bg-primary ring-2 ring-[var(--surface)]"
+						className="absolute top-1.5 right-1.5 size-2 rounded-full bg-primary ring-2 ring-surface-glass"
 						aria-hidden
 					/>
 				) : null}

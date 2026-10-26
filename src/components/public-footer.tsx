@@ -24,7 +24,7 @@ export function PublicFooter({
 	return (
 		<footer
 			className={cn(
-				"mt-auto border-t border-[var(--line)] px-5 py-4 text-center text-[11px] leading-relaxed text-[var(--sea-ink-soft)] sm:px-8",
+				"mt-auto border-t border-border px-5 py-4 text-center text-xs leading-relaxed text-muted-foreground sm:px-8",
 				className,
 			)}
 			style={style}

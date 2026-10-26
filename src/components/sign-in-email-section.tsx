@@ -59,7 +59,7 @@ export function SignInEmailSection({ outcome }: { outcome?: string }) {
 	return (
 		<div className="space-y-3 rounded-xl border bg-card p-4">
 			<div className="min-w-0">
-				<h2 className="flex items-center gap-2 font-medium">
+				<h2 className="flex items-center gap-2 font-semibold">
 					<Mail className="size-4 text-primary" aria-hidden />
 					Sign-in email
 				</h2>
@@ -89,7 +89,7 @@ export function SignInEmailSection({ outcome }: { outcome?: string }) {
 				</p>
 			) : (
 				<>
-					<p className="break-all text-sm font-medium">
+					<p className="break-all text-sm font-semibold">
 						{state.data?.email ?? ""}
 					</p>
 					{state.data?.canChange ? (
@@ -122,7 +122,7 @@ export function SignInEmailSection({ outcome }: { outcome?: string }) {
 							</div>
 							{sentTo ? (
 								<output className="block text-sm text-muted-foreground">
-									Check <span className="font-medium">{sentTo}</span> for a
+									Check <span className="font-semibold">{sentTo}</span> for a
 									link. Your address changes when you click it, within the hour.
 								</output>
 							) : null}

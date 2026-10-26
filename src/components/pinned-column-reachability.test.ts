@@ -177,7 +177,7 @@ describe.skipIf(!hasChrome)(
 			cls.navBand = classContaining(SHELL, "min-h-0 flex-1 flex-col");
 			cls.footer = classContaining(
 				SHELL,
-				"rounded-xl border border-[var(--line)]",
+				"rounded-xl border border-border",
 			);
 			cls.drawer = classAfterTag(SHELL, "<SheetContent");
 			cls.rail = classAfterTag(MEETING_ROUTE, "<aside");

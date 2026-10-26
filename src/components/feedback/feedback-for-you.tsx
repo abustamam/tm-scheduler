@@ -144,7 +144,7 @@ export function FeedbackForYou({
 	return (
 		<section
 			aria-labelledby="feedback-for-you-heading"
-			className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]"
+			className="overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-[0_10px_24px_rgba(23,58,64,.05)]"
 		>
 			<div className="flex items-center justify-between px-5 pt-4 pb-2.5">
 				<h2 id="feedback-for-you-heading" className="text-sm font-bold">
@@ -153,7 +153,7 @@ export function FeedbackForYou({
 				{newCount > 0 ? (
 					<span
 						data-testid="feedback-new-badge"
-						className="shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2.5 py-1 text-xs font-bold text-[var(--lagoon-deep)]"
+						className="shrink-0 rounded-full bg-highlight/15 px-2.5 py-1 text-xs font-bold text-link"
 					>
 						{newCount} new
 					</span>
@@ -162,12 +162,12 @@ export function FeedbackForYou({
 			{feedback.loadFailed ? (
 				<p
 					data-testid="feedback-load-failed"
-					className="border-t border-[var(--line)] px-5 py-8 text-center text-sm text-[var(--sea-ink-soft)]"
+					className="border-t border-border px-5 py-8 text-center text-sm text-muted-foreground"
 				>
 					{FEEDBACK_LOAD_FAILED_TEXT}
 				</p>
 			) : meetings.length === 0 ? (
-				<p className="border-t border-[var(--line)] px-5 py-8 text-center text-sm text-[var(--sea-ink-soft)]">
+				<p className="border-t border-border px-5 py-8 text-center text-sm text-muted-foreground">
 					{FEEDBACK_EMPTY_TEXT}
 				</p>
 			) : (
@@ -175,9 +175,9 @@ export function FeedbackForYou({
 					<div
 						key={m.meetingId}
 						data-testid="feedback-meeting"
-						className="border-t border-[var(--line)] px-5 py-3"
+						className="border-t border-border px-5 py-3"
 					>
-						<h3 className="text-xs font-bold text-[var(--sea-ink-soft)]">
+						<h3 className="text-xs font-bold text-muted-foreground">
 							{formatMeetingDate(m.meetingDate, m.timezone)} · {m.clubName}
 						</h3>
 						{m.roles.map((r) => (
@@ -190,11 +190,11 @@ export function FeedbackForYou({
 									{r.notes.map((n) => (
 										<li
 											key={n.id}
-											className="flex items-start gap-3 rounded-xl border border-[var(--line)] bg-[var(--foam)] px-3.5 py-2.5"
+											className="flex items-start gap-3 rounded-xl border border-border bg-surface-soft px-3.5 py-2.5"
 										>
 											<div className="min-w-0 flex-1 text-sm">
 												{newIds.has(n.id) ? (
-													<span className="mb-1 inline-block rounded-full bg-[rgba(79,184,178,.16)] px-2 py-0.5 text-[11px] font-bold text-[var(--lagoon-deep)]">
+													<span className="mb-1 inline-block rounded-full bg-highlight/15 px-2 py-0.5 text-xs font-bold text-link">
 														New
 													</span>
 												) : null}
@@ -220,7 +220,7 @@ export function FeedbackForYou({
 												onClick={() => remove(n.id)}
 												disabled={busyId === n.id}
 												aria-label="Delete this note"
-												className="shrink-0 rounded-lg p-1.5 text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--surface-strong)] hover:text-[var(--sea-ink)] disabled:opacity-50"
+												className="shrink-0 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-surface-raised hover:text-foreground disabled:opacity-50"
 											>
 												<Trash2 className="size-4" aria-hidden />
 											</button>

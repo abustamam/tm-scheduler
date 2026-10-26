@@ -64,7 +64,7 @@ export type MemberMentorshipsView = MemberMentorships;
 export type ClubMentoringView = ClubMentorships;
 
 const CARD =
-	"overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]";
+	"overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-[0_10px_24px_rgba(23,58,64,.05)]";
 
 const SELECT =
 	"flex h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
@@ -84,14 +84,11 @@ function PartyLine({
 }) {
 	const focus = mentorshipFocusText(row.focus, row.focusOther);
 	return (
-		<li
-			data-mentorship={row.id}
-			className="border-t border-[var(--line)] px-5 py-3"
-		>
-			<div className="text-sm font-bold text-[var(--sea-ink)]">
+		<li data-mentorship={row.id} className="border-t border-border px-5 py-3">
+			<div className="text-sm font-bold text-foreground">
 				{row.member.name}
 				{focus ? (
-					<span className="ml-2 text-xs font-semibold text-[var(--sea-ink-soft)]">
+					<span className="ml-2 text-xs font-semibold text-muted-foreground">
 						{focus}
 					</span>
 				) : null}
@@ -105,7 +102,7 @@ function PartyLine({
 					/>
 				</div>
 			) : (
-				<div className="mt-0.5 text-xs text-[var(--sea-ink-soft)]">
+				<div className="mt-0.5 text-xs text-muted-foreground">
 					No contact on file.
 				</div>
 			)}
@@ -160,17 +157,14 @@ export function MentorshipCard({
 	return (
 		<section aria-labelledby={`${checkboxId}-heading`} className={CARD}>
 			<div className="flex items-center gap-2 px-5 pt-4 pb-2.5">
-				<HeartHandshake
-					className="size-4 text-[var(--lagoon-deep)]"
-					aria-hidden
-				/>
+				<HeartHandshake className="size-4 text-link" aria-hidden />
 				<h2 id={`${checkboxId}-heading`} className="text-sm font-bold">
 					{MENTORING_HEADING}
 				</h2>
 			</div>
 			{view.mentors.length > 0 ? (
 				<>
-					<h3 className="px-5 pb-1 text-xs font-bold tracking-[0.05em] text-[var(--sea-ink-soft)] uppercase">
+					<h3 className="px-5 pb-1 text-xs font-bold tracking-[0.05em] text-muted-foreground uppercase">
 						{YOUR_MENTORS_HEADING}
 					</h3>
 					<ul className="m-0 list-none p-0" data-list="mentors">
@@ -182,7 +176,7 @@ export function MentorshipCard({
 			) : null}
 			{view.mentees.length > 0 ? (
 				<>
-					<h3 className="px-5 pt-2 pb-1 text-xs font-bold tracking-[0.05em] text-[var(--sea-ink-soft)] uppercase">
+					<h3 className="px-5 pt-2 pb-1 text-xs font-bold tracking-[0.05em] text-muted-foreground uppercase">
 						{YOUR_MENTEES_HEADING}
 					</h3>
 					<ul className="m-0 list-none p-0" data-list="mentees">
@@ -199,20 +193,20 @@ export function MentorshipCard({
 					</ul>
 				</>
 			) : null}
-			<div className="flex items-start gap-2.5 border-t border-[var(--line)] px-5 py-3">
+			<div className="flex items-start gap-2.5 border-t border-border px-5 py-3">
 				<input
 					type="checkbox"
 					id={checkboxId}
 					checked={view.willingToMentor}
 					disabled={busy}
 					onChange={(e) => void toggle(e.currentTarget.checked)}
-					className="mt-0.5 size-4 shrink-0 accent-[var(--lagoon-deep)]"
+					className="mt-0.5 size-4 shrink-0 accent-link"
 				/>
 				<div className="leading-[1.3]">
 					<label htmlFor={checkboxId} className="text-sm font-semibold">
 						{WILLING_TO_MENTOR_LABEL}
 					</label>
-					<div className="text-xs text-[var(--sea-ink-soft)]">
+					<div className="text-xs text-muted-foreground">
 						Members can find you on Find a mentor; your VP Education sees you
 						when pairing.
 					</div>
@@ -222,8 +216,8 @@ export function MentorshipCard({
 				// Willing, but the member never said so themselves (the Easy-Speak
 				// import set it): hidden from Find a mentor until they confirm, and
 				// confirming is the same call as ticking the box.
-				<div className="border-t border-[var(--line)] px-5 py-3 text-xs">
-					<p className="text-[var(--sea-ink-soft)]">{MENTOR_UNLISTED_NOTICE}</p>
+				<div className="border-t border-border px-5 py-3 text-xs">
+					<p className="text-muted-foreground">{MENTOR_UNLISTED_NOTICE}</p>
 					<Button
 						size="sm"
 						className="mt-2"
@@ -245,7 +239,7 @@ export function MentorshipCard({
 					listsOnSave={!view.mentorListed}
 				/>
 			) : null}
-			<div className="border-t border-[var(--line)] px-5 py-3 text-xs">
+			<div className="border-t border-border px-5 py-3 text-xs">
 				<Link to="/mentors" className="font-semibold">
 					{FIND_A_MENTOR_LABEL}
 				</Link>
@@ -285,7 +279,7 @@ function MentorBioEditor({
 	}
 
 	return (
-		<div className="border-t border-[var(--line)] px-5 py-3">
+		<div className="border-t border-border px-5 py-3">
 			<Label htmlFor={fieldId} className="text-sm font-semibold">
 				{MENTOR_BIO_LABEL}
 			</Label>
@@ -305,7 +299,7 @@ function MentorBioEditor({
 					className={
 						tooLong
 							? "text-xs font-semibold text-destructive"
-							: "text-xs text-[var(--sea-ink-soft)]"
+							: "text-xs text-muted-foreground"
 					}
 					data-slot="mentor-bio-count"
 				>
@@ -360,12 +354,12 @@ export function ClubMentoringCard({
 				<h2 id="member-mentoring-heading" className="text-sm font-bold">
 					{MEMBER_MENTORING_HEADING}
 				</h2>
-				<span className="text-xs text-[var(--sea-ink-soft)]">
+				<span className="text-xs text-muted-foreground">
 					{view.active.length} active
 				</span>
 			</div>
 			{view.active.length === 0 ? (
-				<p className="border-t border-[var(--line)] px-5 py-3 text-xs text-[var(--sea-ink-soft)]">
+				<p className="border-t border-border px-5 py-3 text-xs text-muted-foreground">
 					No active pairings. Pair a member with a mentor from their member
 					page.
 				</p>
@@ -376,16 +370,13 @@ export function ClubMentoringCard({
 						return (
 							<li
 								key={p.id}
-								className="border-t border-[var(--line)] px-5 py-2.5 text-sm"
+								className="border-t border-border px-5 py-2.5 text-sm"
 							>
 								<MemberLink {...p.mentee} />
-								<span className="text-[var(--sea-ink-soft)]">
-									{" "}
-									mentored by{" "}
-								</span>
+								<span className="text-muted-foreground"> mentored by </span>
 								<MemberLink {...p.mentor} />
 								{focus ? (
-									<span className="ml-2 text-xs text-[var(--sea-ink-soft)]">
+									<span className="ml-2 text-xs text-muted-foreground">
 										{focus}
 									</span>
 								) : null}
@@ -401,12 +392,12 @@ export function ClubMentoringCard({
 					timezone={timezone}
 				/>
 			) : null}
-			<div className="border-t border-[var(--line)] px-5 py-3">
-				<h3 className="mb-1 text-xs font-bold tracking-[0.05em] text-[var(--sea-ink-soft)] uppercase">
+			<div className="border-t border-border px-5 py-3">
+				<h3 className="mb-1 text-xs font-bold tracking-[0.05em] text-muted-foreground uppercase">
 					No mentor yet ({unpaired.length})
 				</h3>
 				{unpaired.length === 0 ? (
-					<p className="text-xs text-[var(--sea-ink-soft)]">
+					<p className="text-xs text-muted-foreground">
 						Every active member has a mentor.
 					</p>
 				) : (
@@ -418,7 +409,7 @@ export function ClubMentoringCard({
 							<li key={m.id}>
 								<MemberLink {...m} />
 								{m.inOrientation ? (
-									<span className="ml-1 text-xs text-[var(--sea-ink-soft)]">
+									<span className="ml-1 text-xs text-muted-foreground">
 										(new)
 									</span>
 								) : null}
@@ -427,12 +418,12 @@ export function ClubMentoringCard({
 					</ul>
 				)}
 			</div>
-			<div className="border-t border-[var(--line)] px-5 py-3">
-				<h3 className="mb-1 text-xs font-bold tracking-[0.05em] text-[var(--sea-ink-soft)] uppercase">
+			<div className="border-t border-border px-5 py-3">
+				<h3 className="mb-1 text-xs font-bold tracking-[0.05em] text-muted-foreground uppercase">
 					Willing to mentor ({view.willing.length})
 				</h3>
 				{view.willing.length === 0 ? (
-					<p className="text-xs text-[var(--sea-ink-soft)]">
+					<p className="text-xs text-muted-foreground">
 						Nobody has said so yet. Members tick it on their dashboard.
 					</p>
 				) : (
@@ -481,8 +472,8 @@ function PendingRequestsList({
 		}
 	}
 	return (
-		<div className="border-t border-[var(--line)] px-5 py-3">
-			<h3 className="mb-1 text-xs font-bold tracking-[0.05em] text-[var(--sea-ink-soft)] uppercase">
+		<div className="border-t border-border px-5 py-3">
+			<h3 className="mb-1 text-xs font-bold tracking-[0.05em] text-muted-foreground uppercase">
 				Pending requests ({requests.length})
 			</h3>
 			{error ? (
@@ -501,14 +492,14 @@ function PendingRequestsList({
 						>
 							<span>
 								<MemberLink {...r.mentee} />
-								<span className="text-[var(--sea-ink-soft)]"> asked </span>
+								<span className="text-muted-foreground"> asked </span>
 								<MemberLink {...r.mentor} />
-								<span className="ml-2 text-xs text-[var(--sea-ink-soft)]">
+								<span className="ml-2 text-xs text-muted-foreground">
 									{focus} · {formatShortDate(r.createdAt, timezone)}
 								</span>
 								{r.partyInactive ? (
 									<span
-										className="mt-0.5 block text-xs text-[var(--sea-ink-soft)]"
+										className="mt-0.5 block text-xs text-muted-foreground"
 										data-slot="inactive-party-note"
 									>
 										{INACTIVE_PARTY_NOTE}
@@ -600,11 +591,11 @@ function AdminPairingRow({
 	return (
 		<li
 			data-mentorship={row.id}
-			className="flex flex-col gap-1.5 border-t border-[var(--line)] py-2.5"
+			className="flex flex-col gap-1.5 border-t border-border py-2.5"
 		>
 			<div className="flex items-center justify-between gap-2 text-sm">
 				<span>
-					<span className="text-xs text-[var(--sea-ink-soft)]">
+					<span className="text-xs text-muted-foreground">
 						{side === "mentor" ? "Mentor: " : "Mentee: "}
 					</span>
 					<MemberLink id={row.member.id} name={row.member.name} />
@@ -681,21 +672,18 @@ export function MentorshipAdminPanel({
 	}
 
 	return (
-		<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-5 shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
+		<div className="rounded-2xl border border-border bg-surface-raised p-5 shadow-[0_10px_24px_rgba(23,58,64,.05)]">
 			<h2 className="mb-2 flex items-center gap-1.5 text-sm font-bold">
-				<HeartHandshake
-					className="size-4 text-[var(--sea-ink-soft)]"
-					aria-hidden
-				/>
+				<HeartHandshake className="size-4 text-muted-foreground" aria-hidden />
 				{MENTORSHIP_ADMIN_HEADING}
 			</h2>
 			{view.willingToMentor ? (
-				<p className="mb-2 text-xs text-[var(--sea-ink-soft)]">
+				<p className="mb-2 text-xs text-muted-foreground">
 					{memberName} is willing to mentor.
 				</p>
 			) : null}
 			{view.mentors.length + view.mentees.length === 0 ? (
-				<p className="mb-2 text-xs text-[var(--sea-ink-soft)]">
+				<p className="mb-2 text-xs text-muted-foreground">
 					No active pairings.
 				</p>
 			) : (
@@ -721,7 +709,7 @@ export function MentorshipAdminPanel({
 				</ul>
 			)}
 			{memberActive ? (
-				<div className="flex flex-col gap-2 border-t border-[var(--line)] pt-3">
+				<div className="flex flex-col gap-2 border-t border-border pt-3">
 					<Label htmlFor={`${ids}-mentor`}>Add a mentor</Label>
 					<select
 						id={`${ids}-mentor`}
@@ -765,7 +753,7 @@ export function MentorshipAdminPanel({
 					</Button>
 				</div>
 			) : (
-				<p className="text-xs text-[var(--sea-ink-soft)]">
+				<p className="text-xs text-muted-foreground">
 					Reactivate {memberName} to pair them with a mentor.
 				</p>
 			)}

@@ -18,8 +18,8 @@ function ScreenFrame({
 	children: React.ReactNode;
 }) {
 	return (
-		<div className="flex min-h-svh w-full flex-col bg-[var(--foam)] font-sans text-[var(--sea-ink)]">
-			<header className="flex items-center justify-between border-b border-[var(--line)] bg-[var(--surface)] px-5 py-4 sm:px-8">
+		<div className="flex min-h-svh w-full flex-col bg-surface-soft font-sans text-foreground">
+			<header className="flex items-center justify-between border-b border-border bg-surface-glass px-5 py-4 sm:px-8">
 				<BrandMark />
 				<Button
 					variant="ghost"
@@ -32,7 +32,7 @@ function ScreenFrame({
 				</Button>
 			</header>
 			{children}
-			<footer className="border-t border-[var(--line)] px-5 py-4 text-center text-[11px] leading-relaxed text-[var(--sea-ink-soft)] sm:px-8">
+			<footer className="border-t border-border px-5 py-4 text-center text-xs leading-relaxed text-muted-foreground sm:px-8">
 				{TOASTMASTERS_DISCLAIMER}
 			</footer>
 		</div>
@@ -88,8 +88,8 @@ export function NoClubScreen({
 	return (
 		<ScreenFrame onSignOut={onSignOut}>
 			<main className="flex flex-1 flex-col items-center justify-center gap-6 px-5 py-12">
-				<div className="w-full max-w-md rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-7 text-center shadow-[0_1px_0_var(--inset-glint)_inset,0_18px_44px_rgba(23,58,64,.10)] sm:p-9">
-					<span className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-[var(--sand)] text-[var(--lagoon-deep)]">
+				<div className="w-full max-w-md rounded-2xl border border-border bg-surface-raised p-7 text-center shadow-[0_18px_44px_rgba(23,58,64,.10)] sm:p-9">
+					<span className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-surface-muted text-link">
 						<Users className="size-6" aria-hidden />
 					</span>
 					<h1 className="mt-5 font-display text-2xl font-semibold tracking-[-0.01em]">
@@ -97,9 +97,9 @@ export function NoClubScreen({
 							? "Your club isn't available"
 							: "You're not in a club yet"}
 					</h1>
-					<p className="mt-3 text-sm leading-relaxed text-[var(--sea-ink-soft)]">
+					<p className="mt-3 text-sm leading-relaxed text-muted-foreground">
 						You're signed in as{" "}
-						<span className="font-semibold text-[var(--sea-ink)]">{email}</span>
+						<span className="font-semibold text-foreground">{email}</span>
 						{hasArchivedClub
 							? ", and your membership is still on file — but the club has been removed from GavelUp. Signing in with a different email won't change this; your club's officers can tell you more."
 							: ", but this account isn't linked to a Toastmasters club on GavelUp yet."}
@@ -129,13 +129,13 @@ export function NoClubScreen({
 						) : null}
 					</div>
 
-					<p className="mt-6 text-xs leading-relaxed text-[var(--sea-ink-soft)]">
+					<p className="mt-6 text-xs leading-relaxed text-muted-foreground">
 						Already on a club's roster? Make sure you sign in with the same
 						email your club has on file — otherwise{" "}
 						<button
 							type="button"
 							onClick={onSignOut}
-							className="font-semibold text-[var(--sea-ink)] underline underline-offset-2"
+							className="font-semibold text-foreground underline underline-offset-2"
 						>
 							sign out
 						</button>{" "}

@@ -185,7 +185,7 @@ export function SendMinutesDialog({
 										className="flex items-center justify-between gap-2 rounded px-2 py-1 text-sm hover:bg-accent"
 									>
 										<span className="flex min-w-0 flex-col">
-											<span className="truncate font-medium text-foreground">
+											<span className="truncate font-semibold text-foreground">
 												{r.name}
 											</span>
 											{r.name !== r.email ? (
@@ -256,7 +256,7 @@ export function SendMinutesDialog({
 							<ul className="flex flex-col gap-1 text-sm">
 								{invalid.map((r) => (
 									<li key={r.email}>
-										<span className="font-medium">{r.name}</span>{" "}
+										<span className="font-semibold">{r.name}</span>{" "}
 										<span className="break-all text-muted-foreground">
 											{JSON.stringify(r.email)}
 										</span>

@@ -34,9 +34,9 @@ import {
 const DEFAULT_PRESET = presetById("speech");
 
 const FIELD_LABELS: { key: keyof MarkFields; label: string; dot: string }[] = [
-	{ key: "green", label: "Green", dot: "bg-[#1f7a46]" },
-	{ key: "yellow", label: "Yellow", dot: "bg-[#f2c230]" },
-	{ key: "red", label: "Red", dot: "bg-[#c0262d]" },
+	{ key: "green", label: "Green", dot: "bg-timer-green" },
+	{ key: "yellow", label: "Yellow", dot: "bg-timer-yellow" },
+	{ key: "red", label: "Red", dot: "bg-timer-red" },
 ];
 
 export function StandaloneTimer() {
@@ -148,10 +148,10 @@ export function StandaloneTimer() {
 							aria-pressed={selection === p.id}
 							disabled={locked}
 							onClick={() => pick(p.id)}
-							className={`min-h-11 cursor-pointer rounded-full border px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 ${
+							className={`min-h-11 cursor-pointer rounded-full border px-4 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 ${
 								selection === p.id
 									? "border-primary bg-primary text-primary-foreground"
-									: "border-[var(--line)] hover:bg-muted"
+									: "border-border hover:bg-muted"
 							}`}
 						>
 							{p.label}
@@ -161,7 +161,7 @@ export function StandaloneTimer() {
 
 				<div className="grid grid-cols-3 gap-3">
 					{FIELD_LABELS.map(({ key, label, dot }) => (
-						<label key={key} className="space-y-1.5 text-sm font-medium">
+						<label key={key} className="space-y-1.5 text-sm font-semibold">
 							<span className="flex items-center gap-1.5">
 								<span
 									aria-hidden
@@ -177,7 +177,7 @@ export function StandaloneTimer() {
 								autoComplete="off"
 								placeholder="m:ss"
 								aria-invalid={!result.ok}
-								className="block min-h-11 w-full rounded-md border border-[var(--line)] bg-background px-3 text-base tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 aria-invalid:border-destructive"
+								className="block min-h-11 w-full rounded-md border border-border bg-background px-3 text-base tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 aria-invalid:border-destructive"
 							/>
 						</label>
 					))}
@@ -194,7 +194,7 @@ export function StandaloneTimer() {
 						</p>
 					)}
 
-					<label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm font-medium">
+					<label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm font-semibold">
 						<input
 							type="checkbox"
 							checked={showClock}

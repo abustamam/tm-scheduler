@@ -28,7 +28,7 @@ export function AreaClubCard({
 	const note = statusNote(club.status);
 	const number = clubNumberText(club.clubNumber);
 	return (
-		<article className="space-y-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4">
+		<article className="space-y-3 rounded-xl border border-border bg-surface-raised p-4">
 			<header>
 				<h3 className="font-semibold">{club.name}</h3>
 				{number ? (

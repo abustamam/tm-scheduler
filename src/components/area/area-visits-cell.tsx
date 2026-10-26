@@ -61,7 +61,7 @@ function VisitText({
 		<span>
 			Round {round}:{" "}
 			{date ? (
-				<span className="font-medium">{formatCalendarDay(date)}</span>
+				<span className="font-semibold">{formatCalendarDay(date)}</span>
 			) : (
 				<span className="text-muted-foreground">not yet</span>
 			)}

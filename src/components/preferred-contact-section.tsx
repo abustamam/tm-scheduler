@@ -48,7 +48,7 @@ export function PreferredContactSection() {
 	return (
 		<div className="space-y-3 rounded-xl border bg-card p-4">
 			<div className="min-w-0">
-				<h2 className="flex items-center gap-2 font-medium">
+				<h2 className="flex items-center gap-2 font-semibold">
 					<MessageCircle className="size-4 text-primary" aria-hidden />
 					How should officers reach you?
 				</h2>

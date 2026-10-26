@@ -51,13 +51,13 @@ const SIZES: Record<
 	md: {
 		chip: "size-[38px] rounded-[11px]",
 		glyph: 20,
-		wordmark: "text-[19px]",
+		wordmark: "text-xl",
 	},
 	// `sm` is a slightly smaller variant for the public shell header.
 	sm: {
 		chip: "size-[30px] rounded-[9px]",
 		glyph: 16,
-		wordmark: "text-[16px]",
+		wordmark: "text-base",
 	},
 };
 
@@ -72,7 +72,7 @@ export function BrandMark({
 	return (
 		<div className="flex items-center gap-[11px]">
 			<span
-				className={`flex shrink-0 items-center justify-center bg-[linear-gradient(150deg,var(--lagoon),var(--lagoon-deep))] shadow-[0_4px_12px_rgba(50,143,151,.35),0_1px_0_rgba(255,255,255,.4)_inset] ${s.chip}`}
+				className={`flex shrink-0 items-center justify-center bg-linear-150 from-highlight to-link shadow-[0_4px_12px_rgba(50,143,151,.35),0_1px_0_rgba(255,255,255,.4)_inset] ${s.chip}`}
 			>
 				<GavelGlyph size={s.glyph} />
 			</span>
@@ -83,7 +83,7 @@ export function BrandMark({
 					GavelUp
 				</div>
 				{subtitle ? (
-					<div className="mt-0.5 truncate text-[11px] font-semibold tracking-[0.04em] text-[var(--sea-ink-soft)] uppercase">
+					<div className="mt-0.5 truncate text-xs font-semibold tracking-[0.04em] text-muted-foreground uppercase">
 						{subtitle}
 					</div>
 				) : null}
