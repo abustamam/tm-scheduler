@@ -4805,6 +4805,19 @@ describe.skipIf(!hasTestDb)("guest link search (#1333)", () => {
 		expect(await ask("j.doe@gmail.com")).toEqual(["Quinn Quill"]);
 	});
 
+	// protects=a partly typed address (dots, underscore, plus, a half domain) finds the guest, and an exact address with stray case and spaces is still found first; fails_when=the query is folded with punctuation stripped (j.doe becomes jdoe) or the exact match stops normalizing; no_claim=matching on the domain
+	it("finds an email by a typed address fragment and normalizes the exact address", async () => {
+		await seedOther("Quinn Quill", { email: "j.doe@gmail.com" });
+		await seedOther("Jane Under", { email: "jane_under@corp.example" });
+		await seedOther("Plus Pal", { email: "pal+club@corp.example" });
+		expect(await ask("j.doe")).toEqual(["Quinn Quill"]);
+		expect(await ask("j.doe@gm")).toEqual(["Quinn Quill"]);
+		expect(await ask("jane_under")).toEqual(["Jane Under"]);
+		expect(await ask("pal+club")).toEqual(["Plus Pal"]);
+		expect(await ask("gmail")).toEqual([]);
+		expect(await ask("  J.Doe@GMAIL.com ")).toEqual(["Quinn Quill"]);
+	});
+
 	// protects=at most 20 rows come back, ranked by tier then name, and an empty query is the first 20 by name; fails_when=the cap or the empty-query SQL order changes; no_claim=a club past the 1000-guest pool (a documented ceiling)
 	it("caps at 20, ranks by tier, and lists the first 20 by name for an empty query", async () => {
 		for (let i = 0; i < 25; i++) {

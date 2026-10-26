@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { goesBy, isBlankQuery, matchTier, searchPeople } from "./person-search";
+import {
+	emailQueryTerms,
+	emailSearchTerms,
+	GUEST_LINK_SEARCH_POOL,
+	goesBy,
+	isBlankQuery,
+	matchTier,
+	searchPeople,
+} from "./person-search";
 
 const names = (rows: { name: string }[]) => rows.map((r) => r.name);
 
@@ -160,5 +168,31 @@ describe("goesBy", () => {
 		).toBeNull();
 		expect(goesBy({ name: "Robert Smith", preferredName: "  " })).toBeNull();
 		expect(goesBy({ name: "Robert Smith", preferredName: null })).toBeNull();
+	});
+});
+
+describe("email search words", () => {
+	// protects=the local part splits on . _ + and the domain is dropped; fails_when=the split or the domain drop changes; no_claim=display of emails
+	it("keeps the local part, split on . _ +", () => {
+		expect(emailSearchTerms("j.doe@gmail.com")).toBe("j doe");
+		expect(emailSearchTerms("jane_under+club@x.org")).toBe("jane under club");
+		expect(emailSearchTerms("plain@x.org")).toBe("plain");
+	});
+
+	// protects=a query shaped like an address folds by the same rule, a name query does not; fails_when=the query side stops agreeing with emailSearchTerms or a plain name query gets an email reading; no_claim=ranking
+	it("reads an address-shaped query the same way and leaves name queries alone", () => {
+		expect(emailQueryTerms("j.doe")).toBe("j doe");
+		expect(emailQueryTerms("j.doe@gm")).toBe("j doe");
+		expect(emailQueryTerms("jane_under")).toBe("jane under");
+		expect(emailQueryTerms("jane doe")).toBeNull();
+		expect(emailQueryTerms("@gmail")).toBeNull();
+		expect(emailQueryTerms("%")).toBeNull();
+	});
+});
+
+describe("GUEST_LINK_SEARCH_POOL", () => {
+	// protects=the documented guest-link ranking ceiling; fails_when=the number changes without the doc and the ceiling test noticing; no_claim=the query that uses it
+	it("is 1000", () => {
+		expect(GUEST_LINK_SEARCH_POOL).toBe(1000);
 	});
 });

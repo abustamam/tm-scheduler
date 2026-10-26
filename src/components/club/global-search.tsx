@@ -16,7 +16,7 @@ import {
 	visibleDestinations,
 } from "#/lib/nav-destinations";
 import { officerPositionLabel } from "#/lib/officers";
-import { searchPeople } from "#/lib/person-search";
+import { isBlankQuery, searchPeople } from "#/lib/person-search";
 import { listMembers } from "#/server/members";
 
 /** Roster row shape returned by `listMembers` (name + current offices). */
@@ -40,15 +40,19 @@ export function searchWorkspace(
 ): { members: MemberRow[]; pages: WorkspacePage[] } {
 	const q = rawQuery.trim().toLowerCase();
 	if (!q) return { members: [], pages: [] };
-	const memberHits = searchPeople(
-		rawQuery,
-		members.map((m) => ({
-			...m,
-			extraTerms: m.officerPositions.map(officerPositionLabel),
-		})),
-	)
-		.slice(0, MAX_MEMBER_RESULTS)
-		.map(({ extraTerms: _extra, ...m }) => m as MemberRow);
+	// A punctuation-only query ("%", ".") folds to no words, which the matcher
+	// reads as "everyone": no members for it. Pages keep their label match.
+	const memberHits = isBlankQuery(rawQuery)
+		? []
+		: searchPeople(
+				rawQuery,
+				members.map((m) => ({
+					...m,
+					extraTerms: m.officerPositions.map(officerPositionLabel),
+				})),
+			)
+				.slice(0, MAX_MEMBER_RESULTS)
+				.map(({ extraTerms: _extra, ...m }) => m as MemberRow);
 	const pageHits = visibleDestinations(grants).filter((p) =>
 		p.label.toLowerCase().includes(q),
 	);

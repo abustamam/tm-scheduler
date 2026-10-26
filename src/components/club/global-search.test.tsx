@@ -84,6 +84,7 @@ describe("searchWorkspace", () => {
 		expect(r.members.map((m) => m.name)).toEqual(["Samuel", "Rosamund"]);
 	});
 
+	// protects=the best-tier member survives the 8-result cap even when ten weaker matches sort first; fails_when=the cap is applied before ranking; no_claim=the order of the weaker matches
 	it("keeps the best-tier match when the 8-result cap cuts the list", () => {
 		const substring = Array.from({ length: 10 }, (_, i) => ({
 			id: `s${i}`,
@@ -97,6 +98,13 @@ describe("searchWorkspace", () => {
 		);
 		expect(r.members).toHaveLength(8);
 		expect(r.members[0]?.name).toBe("Samuel");
+	});
+
+	// protects=a punctuation-only query lists no members; fails_when=the guard goes back to a bare trim() and the matcher's blank query lists the first 8; no_claim=page matching for punctuation
+	it("returns no members for a punctuation-only query", () => {
+		const members = [{ id: "a", name: "Ann", officerPositions: [] }];
+		expect(searchWorkspace("%", members, NOBODY).members).toEqual([]);
+		expect(searchWorkspace(".", members, NOBODY).members).toEqual([]);
 	});
 
 	it("caps member results at 8", () => {

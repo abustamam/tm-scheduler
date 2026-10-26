@@ -293,10 +293,10 @@ export function AttendanceGuestsGroup({
 							emptyText="No matching guests."
 							disabled={locked}
 							onPick={(g) => {
-								// Belt as well as braces. `disabled` is the picker's, but the
-								// guarantee is stated HERE, where the write actually leaves,
-								// rather than inherited from a library's internals. Same
-								// reason the form below carries one.
+								// Belt as well as braces. PersonPicker disables its rows when
+								// `disabled` is set, but the guarantee is stated HERE, where the
+								// write actually leaves, so it holds even if the picker's
+								// disabling changes. Same reason the form below carries one.
 								if (locked) return;
 								onAddGuest({ guestId: g.id });
 								setOpen(false);

@@ -95,3 +95,25 @@ export function goesBy(person: {
 	if (fold(preferred) === fold(firstNameOf(person.name))) return null;
 	return preferred;
 }
+
+/**
+ * Most of the other club's guests ranked per guest-link search, by (name, id).
+ * A documented ceiling: a club with more guests is searched over its first 1000
+ * (#1333). A number, so it lives here and not beside the db import.
+ */
+export const GUEST_LINK_SEARCH_POOL = 1000;
+
+/** Fold an email's local part into search words: split on `.`, `_`, `+`; the domain never matches. */
+export function emailSearchTerms(email: string): string {
+	return (email.split("@")[0] ?? "").split(/[._+]/).filter(Boolean).join(" ");
+}
+
+/**
+ * The email-shaped reading of a query, or null when the query has no `@`, `.`,
+ * `_` or `+` (a plain name query) or nothing is left of its local part. Same
+ * rule as `emailSearchTerms`, so "j.doe" and "j.doe@gm" agree with `j.doe@…`.
+ */
+export function emailQueryTerms(query: string): string | null {
+	if (!/[@._+]/.test(query)) return null;
+	return emailSearchTerms(query.trim()) || null;
+}

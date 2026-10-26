@@ -65,7 +65,13 @@ import {
 } from "#/lib/meeting-lifecycle";
 import type { OfficerPosition } from "#/lib/officers";
 import { namesAgree } from "#/lib/person-name";
-import { isBlankQuery, searchPeople } from "#/lib/person-search";
+import {
+	emailQueryTerms,
+	emailSearchTerms,
+	GUEST_LINK_SEARCH_POOL,
+	isBlankQuery,
+	searchPeople,
+} from "#/lib/person-search";
 import {
 	coalesceToE164,
 	DEFAULT_COUNTRY_CODE,
@@ -4154,11 +4160,7 @@ export const GUEST_LINK_BOTH_HAVE_HISTORY_MESSAGE =
 /** Most candidates the picker returns. */
 export const GUEST_LINK_CANDIDATE_LIMIT = 20;
 
-/**
- * Most of the other club's guests ranked per search, by (name, id). A documented
- * ceiling: a club with more guests is searched over its first 1000 (#1333).
- */
-export const GUEST_LINK_SEARCH_POOL = 1000;
+export { GUEST_LINK_SEARCH_POOL };
 
 /** Both Persons' contact as a link compares it: normalized, never shown. */
 export interface GuestLinkBasis {
@@ -4436,22 +4438,31 @@ export async function listGuestLinkCandidates(input: {
 	if (isBlankQuery(q)) {
 		return rows.slice(0, GUEST_LINK_CANDIDATE_LIMIT).map(toCandidate);
 	}
-	// The email joins the match by its local part only (#1333): split on `.`,
-	// `_` and `+`, so "doe" word-prefixes `j.doe@gmail.com` and the domain never
-	// matches. A query that is a whole address matches that address exactly.
-	const wanted = q.toLowerCase();
-	const ranked = searchPeople(
-		q,
-		rows.map((r) => ({
-			...r,
-			extraTerms: r.email
-				? [(r.email.split("@")[0] ?? "").split(/[._+]/).join(" ")]
-				: [],
-		})),
+	// The email joins the match by its local part only (#1333): see
+	// `emailSearchTerms`, so "doe" word-prefixes `j.doe@gmail.com` and the domain
+	// never matches. A query shaped like an address is also read that way
+	// (`emailQueryTerms`) and merged in; a whole address matches exactly, first.
+	const wanted = normalizeEmail(q);
+	const people_ = rows.map((r) => ({
+		...r,
+		extraTerms: r.email ? [emailSearchTerms(r.email)] : [],
+	}));
+	const plain = searchPeople(q, people_);
+	const emailQ = emailQueryTerms(q);
+	const emailShaped = emailQ ? searchPeople(emailQ, people_) : [];
+	const best = new Map<string, number>();
+	for (const list of [plain, emailShaped]) {
+		list.forEach((r, i) => {
+			best.set(r.guestId, Math.min(best.get(r.guestId) ?? i, i));
+		});
+	}
+	const byId = new Map([...emailShaped, ...plain].map((r) => [r.guestId, r]));
+	const merged = [...byId.values()].sort(
+		(a, b) => (best.get(a.guestId) ?? 0) - (best.get(b.guestId) ?? 0),
 	);
-	const exact = rows.filter((r) => r.email?.toLowerCase() === wanted);
+	const exact = rows.filter((r) => normalizeEmail(r.email) === wanted);
 	const exactIds = new Set(exact.map((r) => r.guestId));
-	return [...exact, ...ranked.filter((r) => !exactIds.has(r.guestId))]
+	return [...exact, ...merged.filter((r) => !exactIds.has(r.guestId))]
 		.slice(0, GUEST_LINK_CANDIDATE_LIMIT)
 		.map(toCandidate);
 }
