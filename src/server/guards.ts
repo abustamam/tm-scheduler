@@ -5,7 +5,10 @@ import { clubs, members, officerTerms, people, user } from "#/db/schema";
 import { auth } from "#/lib/auth";
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
 import { NO_PERMISSION_MESSAGE } from "#/lib/permission-message";
-import { RULING_NEEDS_SESSION_MESSAGE } from "#/lib/write-proof";
+import {
+	MEMBER_NOT_ELIGIBLE_MESSAGE,
+	RULING_NEEDS_SESSION_MESSAGE,
+} from "#/lib/write-proof";
 import { markImpersonatedWrite } from "./impersonation-actor";
 import {
 	type ActiveImpersonation,
@@ -855,18 +858,36 @@ export async function getMember(memberId: string) {
 
 /** Validate that a memberId exists, belongs to the given clubId, and is active.
  *  Throws otherwise. Gates claiming / reassignment / availability so inactive
- *  (unrenewed) members can't claim or be assigned new roles. */
-export async function requireMemberInClub(memberId: string, clubId: string) {
+ *  (unrenewed) members can't claim or be assigned new roles.
+ *
+ *  The memberId comes off the wire and member ids are public on past agendas, so
+ *  the REASON for a refusal is itself a leak: three wordings told anyone holding
+ *  an id whether that person's membership had lapsed or ended (#1341). A caller
+ *  who is not a signed-in club admin therefore hears ONE message for every
+ *  member who cannot take roles here (absent, other club, `inactive`, `former`).
+ *  A signed-in admin can already see each member's status, so they keep the
+ *  specific reason, but only when the caller that already holds the session
+ *  passes it as `viewerUserId`. This function never reads the session itself
+ *  (`write-proof.guard.test.ts` pins that), so omitting it is the uniform,
+ *  sessionless answer. */
+export async function requireMemberInClub(
+	memberId: string,
+	clubId: string,
+	viewerUserId?: string | null,
+) {
 	const member = await getMember(memberId);
+	if (member && member.clubId === clubId && member.status === "active") {
+		return member;
+	}
+	if (!viewerUserId || !(await canManageClub(viewerUserId, clubId))) {
+		throw new Error(MEMBER_NOT_ELIGIBLE_MESSAGE);
+	}
 	if (!member || member.clubId !== clubId) {
-		throw new Error("Member not found in this club.");
+		throw new Error(MEMBER_NOT_ELIGIBLE_MESSAGE);
 	}
-	if (member.status !== "active") {
-		throw new Error(
-			member.status === "former"
-				? "That member is no longer a member of this club."
-				: "That member is inactive — reactivate them first.",
-		);
-	}
-	return member;
+	throw new Error(
+		member.status === "former"
+			? "That member is no longer a member of this club."
+			: "That member is inactive — reactivate them first.",
+	);
 }

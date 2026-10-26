@@ -338,12 +338,12 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 		it("guards: refuses former, keeps the inactive message", async () => {
 			const former = await addMember("Gus Guard", "former");
 			const inactive = await addMember("Ivy Guard", "inactive");
-			await expect(requireMemberInClub(former, seed.clubId)).rejects.toThrow(
-				"That member is no longer a member of this club.",
-			);
-			await expect(requireMemberInClub(inactive, seed.clubId)).rejects.toThrow(
-				"inactive",
-			);
+			await expect(
+				requireMemberInClub(former, seed.clubId, seed.adminUserId),
+			).rejects.toThrow("That member is no longer a member of this club.");
+			await expect(
+				requireMemberInClub(inactive, seed.clubId, seed.adminUserId),
+			).rejects.toThrow("inactive");
 		});
 
 		// protects=the public/picker roster lists only active members;
