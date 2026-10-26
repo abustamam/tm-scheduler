@@ -55,7 +55,7 @@ function PastMeetingsPage() {
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					Past meetings
 				</h1>
-				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+				<p className="mt-1 text-sm text-muted-foreground">
 					Every meeting your club has held, newest first.
 				</p>
 			</div>
@@ -71,24 +71,21 @@ function PastMeetingsPage() {
 						: "No past meetings yet — once a meeting is over it shows up here."}
 				</p>
 			) : (
-				<ul className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
+				<ul className="overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-[0_10px_24px_rgba(23,58,64,.05)]">
 					{data.meetings.map((m) => (
-						<li
-							key={m.id}
-							className="border-b border-[var(--line)] last:border-b-0"
-						>
+						<li key={m.id} className="border-b border-border last:border-b-0">
 							<Link
 								to="/club/$clubId/meeting/$meetingId"
 								params={{
 									clubId: data.clubSlug ?? "",
 									meetingId: m.urlKey,
 								}}
-								className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-5 py-3.5 transition-colors hover:bg-[var(--foam)]"
+								className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-5 py-3.5 transition-colors hover:bg-surface-soft"
 							>
 								<span className="min-w-[11.5rem] font-semibold text-sm">
 									{formatArchiveDate(m.scheduledAt, data.timezone)}
 								</span>
-								<span className="min-w-0 flex-1 truncate text-sm text-[var(--sea-ink-soft)]">
+								<span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
 									{m.theme ?? (
 										<span className="italic">
 											{formatMeetingTime(m.scheduledAt, data.timezone)}
@@ -99,7 +96,7 @@ function PastMeetingsPage() {
 									<Badge variant="outline">#{m.meetingNumber}</Badge>
 								) : null}
 								{m.totalSlots > 0 ? (
-									<span className="text-xs text-[var(--sea-ink-soft)]">
+									<span className="text-xs text-muted-foreground">
 										{m.totalSlots - m.openSlots}/{m.totalSlots} roles filled
 									</span>
 								) : null}
@@ -133,9 +130,7 @@ function PastMeetingsPage() {
 					) : (
 						<span />
 					)}
-					<span className="text-xs text-[var(--sea-ink-soft)]">
-						Page {page}
-					</span>
+					<span className="text-xs text-muted-foreground">Page {page}</span>
 					{data.hasMore ? (
 						<Button asChild variant="outline" size="sm">
 							<Link to="/meetings" search={{ page: page + 1 }}>

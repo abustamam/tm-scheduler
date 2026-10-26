@@ -210,13 +210,13 @@ function joinedLabel(value: Date | string, timeZone: string) {
 function SpeechStatePill({ state }: { state: SpeechScheduleState }) {
 	if (state === "scheduled") {
 		return (
-			<span className="shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2.5 py-1 text-xs font-bold text-[var(--lagoon-deep)]">
+			<span className="shrink-0 rounded-full bg-highlight/15 px-2.5 py-1 text-xs font-bold text-link">
 				{SPEECH_SCHEDULE_STATE_LABELS.scheduled}
 			</span>
 		);
 	}
 	return (
-		<span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-1 text-xs font-semibold text-[var(--palm)]">
+		<span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-surface-soft px-2.5 py-1 text-xs font-semibold text-success">
 			{SPEECH_SCHEDULE_STATE_LABELS.delivered}
 		</span>
 	);
@@ -311,7 +311,7 @@ function MemberDetail() {
 						{member.name}
 					</h1>
 					<div className="mt-1.5 flex flex-wrap items-center gap-2.5">
-						<span className="text-sm text-[var(--sea-ink-soft)]">
+						<span className="text-sm text-muted-foreground">
 							{tenure} · joined {joinedLabel(joined, timezone)}
 						</span>
 						{holdsOffice ? (
@@ -325,8 +325,8 @@ function MemberDetail() {
 						) : null}
 						{member.status !== "active" ? (
 							<>
-								<span className="size-1 rounded-full bg-[var(--sea-ink-soft)]" />
-								<span className="inline-flex items-center rounded-full border border-[var(--line)] bg-[var(--sand)] px-2.5 py-0.5 text-xs font-bold tracking-[0.03em] text-[var(--sea-ink-soft)] uppercase">
+								<span className="size-1 rounded-full bg-muted-foreground" />
+								<span className="inline-flex items-center rounded-full border border-border bg-surface-muted px-2.5 py-0.5 text-xs font-bold tracking-[0.03em] text-muted-foreground uppercase">
 									{member.status === "former" ? "Former" : "Inactive"}
 								</span>
 							</>
@@ -345,15 +345,15 @@ function MemberDetail() {
 			{/* Speech log (real) + side cards */}
 			<div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[1.5fr_1fr]">
 				{/* Speech log */}
-				<div className="min-w-0 overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
+				<div className="min-w-0 overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-[0_10px_24px_rgba(23,58,64,.05)]">
 					<div className="flex items-center justify-between px-5 pt-4 pb-3">
 						<h2 className="text-sm font-bold">Speech log</h2>
-						<span className="text-xs text-[var(--sea-ink-soft)]">
+						<span className="text-xs text-muted-foreground">
 							{allSpeeches ? "all" : "most recent"} {speechLog.length}
 						</span>
 					</div>
 					{speechLog.length === 0 ? (
-						<p className="border-t border-[var(--line)] px-5 py-8 text-center text-sm text-[var(--sea-ink-soft)]">
+						<p className="border-t border-border px-5 py-8 text-center text-sm text-muted-foreground">
 							No speeches logged yet.
 						</p>
 					) : (
@@ -377,13 +377,13 @@ function MemberDetail() {
 							return (
 								<div
 									key={l.slotId}
-									className="grid grid-cols-[54px_1fr_auto] items-center gap-3 border-t border-[var(--line)] px-5 py-3 transition-colors hover:bg-[var(--foam)]"
+									className="grid grid-cols-[54px_1fr_auto] items-center gap-3 border-t border-border px-5 py-3 transition-colors hover:bg-surface-soft"
 								>
 									<div className="text-center leading-[1.1]">
 										<div className="font-display text-lg font-semibold">
 											{day}
 										</div>
-										<div className="text-xs font-bold tracking-[0.05em] text-[var(--sea-ink-soft)]">
+										<div className="text-xs font-bold tracking-[0.05em] text-muted-foreground">
 											{mon}
 										</div>
 									</div>
@@ -394,7 +394,7 @@ function MemberDetail() {
 												roleName: l.roleName,
 											})}
 										</div>
-										<div className="truncate text-xs text-[var(--sea-ink-soft)]">
+										<div className="truncate text-xs text-muted-foreground">
 											{[sub || l.roleName, evaluatorLabel]
 												.filter(Boolean)
 												.join(" · ")}
@@ -418,10 +418,10 @@ function MemberDetail() {
 
 				{/* Side cards */}
 				<div className="flex min-w-0 flex-col gap-5">
-					<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-5 shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
+					<div className="rounded-2xl border border-border bg-surface-raised p-5 shadow-[0_10px_24px_rgba(23,58,64,.05)]">
 						<h2 className="mb-3 text-sm font-bold">Roles served this year</h2>
 						{rolesServed.length === 0 ? (
-							<p className="text-xs text-[var(--sea-ink-soft)]">
+							<p className="text-xs text-muted-foreground">
 								No roles served yet this year.
 							</p>
 						) : (
@@ -429,10 +429,10 @@ function MemberDetail() {
 								{rolesServed.map((r) => (
 									<span
 										key={r.name}
-										className="inline-flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--foam)] px-3 py-1.5 text-xs font-semibold"
+										className="inline-flex items-center gap-2 rounded-full border border-border bg-surface-soft px-3 py-1.5 text-xs font-semibold"
 									>
 										{r.name}
-										<span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--sand)] px-1 text-xs font-bold text-[var(--sea-ink-soft)]">
+										<span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-surface-muted px-1 text-xs font-bold text-muted-foreground">
 											{r.count}
 										</span>
 									</span>
@@ -580,10 +580,10 @@ function UnscheduledSpeeches({
 	}
 
 	return (
-		<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-5 shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
+		<div className="rounded-2xl border border-border bg-surface-raised p-5 shadow-[0_10px_24px_rgba(23,58,64,.05)]">
 			<h2 className="mb-3 text-sm font-bold">Unscheduled speeches</h2>
 			{live.length === 0 ? (
-				<p className="text-xs text-[var(--sea-ink-soft)]">
+				<p className="text-xs text-muted-foreground">
 					No unscheduled speeches. Prepared speeches with no meeting slot show
 					up here.
 				</p>
@@ -596,12 +596,12 @@ function UnscheduledSpeeches({
 						return (
 							<li
 								key={s.id}
-								className="rounded-xl border border-[var(--line)] bg-[var(--foam)] px-3.5 py-2.5"
+								className="rounded-xl border border-border bg-surface-soft px-3.5 py-2.5"
 							>
 								<div className="min-w-0">
 									<div className="truncate text-sm font-bold">{s.title}</div>
 									{sub ? (
-										<div className="truncate text-xs text-[var(--sea-ink-soft)]">
+										<div className="truncate text-xs text-muted-foreground">
 											{sub}
 										</div>
 									) : null}
@@ -627,7 +627,7 @@ function UnscheduledSpeeches({
 									</Button>
 								</div>
 								{openSlots.length === 0 ? (
-									<p className="mt-1.5 text-xs text-[var(--sea-ink-soft)]">
+									<p className="mt-1.5 text-xs text-muted-foreground">
 										No open speaker slots to schedule into.
 									</p>
 								) : null}
@@ -638,17 +638,17 @@ function UnscheduledSpeeches({
 			)}
 
 			{archived.length > 0 ? (
-				<details className="mt-3 border-t border-[var(--line)] pt-3">
-					<summary className="cursor-pointer text-xs font-semibold text-[var(--sea-ink-soft)]">
+				<details className="mt-3 border-t border-border pt-3">
+					<summary className="cursor-pointer text-xs font-semibold text-muted-foreground">
 						Archived ({archived.length})
 					</summary>
 					<ul className="mt-2 flex flex-col gap-2">
 						{archived.map((s) => (
 							<li
 								key={s.id}
-								className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-[var(--line)] px-3.5 py-2"
+								className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-border px-3.5 py-2"
 							>
-								<span className="min-w-0 truncate text-xs text-[var(--sea-ink-soft)]">
+								<span className="min-w-0 truncate text-xs text-muted-foreground">
 									{s.title}
 								</span>
 								<Button
@@ -687,18 +687,18 @@ function UnscheduledSpeeches({
 									onClick={() =>
 										scheduling && onSchedule(scheduling.id, slot.slotId)
 									}
-									className="flex w-full items-center justify-between gap-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--foam)] disabled:opacity-60"
+									className="flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-surface-raised px-3.5 py-2.5 text-left transition-colors hover:bg-surface-soft disabled:opacity-60"
 								>
 									<span className="min-w-0">
 										<span className="block truncate text-sm font-semibold">
 											{formatMeetingDate(slot.scheduledAt, timezone)}
 										</span>
-										<span className="block truncate text-xs text-[var(--sea-ink-soft)]">
+										<span className="block truncate text-xs text-muted-foreground">
 											{slot.roleName}
 										</span>
 									</span>
 									<CalendarPlus
-										className="size-4 shrink-0 text-[var(--sea-ink-soft)]"
+										className="size-4 shrink-0 text-muted-foreground"
 										aria-hidden
 									/>
 								</button>
@@ -799,7 +799,7 @@ function MemberContactLinks({
 					: null;
 
 	return (
-		<div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-[var(--sea-ink-soft)]">
+		<div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
 			{preferredLink ? (
 				<span
 					className="inline-flex items-center gap-1.5"
@@ -1011,7 +1011,7 @@ function MemberActions({
 				<Button
 					variant="outline"
 					size="sm"
-					className="border-[var(--line)] text-[var(--danger,#b4232a)] hover:bg-[rgba(180,35,42,.08)]"
+					className="border-border text-destructive hover:bg-destructive/10"
 					onClick={() => {
 						setRemoveRefusal(null);
 						setRemoveOpen(true);
@@ -1052,7 +1052,7 @@ function MemberActions({
 							/>
 							<p
 								id="edit-preferred-name-hint"
-								className="text-xs text-[var(--sea-ink-soft)]"
+								className="text-xs text-muted-foreground"
 							>
 								Used to greet them in WhatsApp and email drafts. Leave blank to
 								use their first name.
@@ -1072,10 +1072,7 @@ function MemberActions({
 							{/* The one place the app says what this field is (#907): the
 							    member's own address in every club, and what they sign in
 							    with. Once they have signed in it is theirs. */}
-							<p
-								id="edit-email-hint"
-								className="text-xs text-[var(--sea-ink-soft)]"
-							>
+							<p id="edit-email-hint" className="text-xs text-muted-foreground">
 								{isLinkedAccount
 									? emailRefusedCopy("bound", member.name)
 									: "Their sign-in address, and where an account invite is sent. Every club they belong to shares it."}
@@ -1119,7 +1116,7 @@ function MemberActions({
 									/>
 									<p
 										id="edit-preferred-contact-hint"
-										className="text-xs text-[var(--sea-ink-soft)]"
+										className="text-xs text-muted-foreground"
 									>
 										{member.contactPreferenceRefusal === "member_set"
 											? "The member chose this themselves."
@@ -1146,7 +1143,7 @@ function MemberActions({
 							)}
 						</div>
 						<fieldset className="space-y-2" disabled={isFormer}>
-							<legend className="font-medium text-sm">Offices held</legend>
+							<legend className="font-semibold text-sm">Offices held</legend>
 							<p className="text-muted-foreground text-xs">
 								{isFormer
 									? "A former member can't hold an office. Reactivate them first."
@@ -1223,7 +1220,7 @@ function MemberActions({
 						</DialogDescription>
 					</DialogHeader>
 					{removeRefusal ? (
-						<p role="alert" className="text-sm text-[var(--danger,#b4232a)]">
+						<p role="alert" className="text-sm text-destructive">
 							{removeRefusal}
 						</p>
 					) : null}
@@ -1292,20 +1289,17 @@ function ClubRoleControl({
 	}
 
 	return (
-		<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-5 shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
+		<div className="rounded-2xl border border-border bg-surface-raised p-5 shadow-[0_10px_24px_rgba(23,58,64,.05)]">
 			<div className="mb-2 flex items-center justify-between gap-2">
 				<h2 className="flex items-center gap-1.5 text-sm font-bold">
-					<ShieldCheck
-						className="size-4 text-[var(--sea-ink-soft)]"
-						aria-hidden
-					/>
+					<ShieldCheck className="size-4 text-muted-foreground" aria-hidden />
 					Club role
 				</h2>
-				<span className="inline-flex items-center rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-0.5 text-xs font-bold tracking-[0.03em] uppercase">
+				<span className="inline-flex items-center rounded-full border border-border bg-surface-soft px-2.5 py-0.5 text-xs font-bold tracking-[0.03em] uppercase">
 					{isAdmin ? "Admin" : "Member"}
 				</span>
 			</div>
-			<p className="mb-3 text-xs text-[var(--sea-ink-soft)]">
+			<p className="mb-3 text-xs text-muted-foreground">
 				Club role is a permission for managing the club — separate from officer
 				position.
 			</p>
@@ -1408,18 +1402,18 @@ function OrientationControl({
 			(orientation.dismissed && !orientation.complete));
 
 	return (
-		<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-5 shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
+		<div className="rounded-2xl border border-border bg-surface-raised p-5 shadow-[0_10px_24px_rgba(23,58,64,.05)]">
 			<div className="mb-2 flex items-center justify-between gap-2">
 				<h2 className="flex items-center gap-1.5 text-sm font-bold">
-					<Compass className="size-4 text-[var(--sea-ink-soft)]" aria-hidden />
+					<Compass className="size-4 text-muted-foreground" aria-hidden />
 					New-member orientation
 				</h2>
-				<span className="inline-flex items-center rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-0.5 text-xs font-bold tracking-[0.03em]">
+				<span className="inline-flex items-center rounded-full border border-border bg-surface-soft px-2.5 py-0.5 text-xs font-bold tracking-[0.03em]">
 					{status}
 				</span>
 			</div>
 			{orientation.inOrientation ? (
-				<ul className="mb-3 flex flex-col gap-1 text-xs text-[var(--sea-ink-soft)]">
+				<ul className="mb-3 flex flex-col gap-1 text-xs text-muted-foreground">
 					{orientation.items.map((item) => (
 						<li key={item.key}>
 							{item.done ? "✓" : "○"} {item.label}
@@ -1427,7 +1421,7 @@ function OrientationControl({
 					))}
 				</ul>
 			) : (
-				<p className="mb-3 text-xs text-[var(--sea-ink-soft)]">
+				<p className="mb-3 text-xs text-muted-foreground">
 					A first-weeks checklist on their dashboard: choose a path, schedule an
 					Ice Breaker, take a supporting role, set up Base Camp, get a mentor.
 				</p>
@@ -1505,7 +1499,7 @@ function BackLink() {
 	return (
 		<Link
 			to="/roster"
-			className="group inline-flex items-center gap-2 text-sm font-semibold text-[var(--sea-ink-soft)] no-underline transition-colors hover:text-[var(--sea-ink)]"
+			className="group inline-flex items-center gap-2 text-sm font-semibold text-muted-foreground no-underline transition-colors hover:text-foreground"
 		>
 			<ChevronLeft
 				className="size-4 transition-transform group-hover:-translate-x-0.5"

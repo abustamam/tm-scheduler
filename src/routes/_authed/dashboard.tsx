@@ -269,7 +269,7 @@ function Dashboard() {
 				    reaches `#/db` through its server fns and cannot be rendered in
 				    vitest at all. */}
 				<DashboardGreeting name={authUser.name || authUser.email} />
-				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+				<p className="mt-1 text-sm text-muted-foreground">
 					Here's where you stand and what's coming up.
 				</p>
 			</div>
@@ -297,10 +297,10 @@ function Dashboard() {
 						/>
 					) : null}
 					{/* Speech log (real) */}
-					<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
+					<div className="overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-[0_10px_24px_rgba(23,58,64,.05)]">
 						<div className="flex items-center justify-between px-5 pt-4 pb-2.5">
 							<h2 className="text-sm font-bold">My speech log</h2>
-							<span className="text-xs text-[var(--sea-ink-soft)]">
+							<span className="text-xs text-muted-foreground">
 								{allSpeeches
 									? `all ${speeches.length}`
 									: `${speeches.length} recent`}
@@ -310,7 +310,7 @@ function Dashboard() {
 							<Link
 								to="/schedule"
 								search={{ view: "members", count: 8 }}
-								className="block border-t border-[var(--line)] px-5 py-8 text-center text-sm text-[var(--sea-ink-soft)] no-underline transition-colors hover:bg-[var(--foam)]"
+								className="block border-t border-border px-5 py-8 text-center text-sm text-muted-foreground no-underline transition-colors hover:bg-surface-soft"
 							>
 								No speeches yet. Sign up for a speaking slot to get started →
 							</Link>
@@ -328,7 +328,7 @@ function Dashboard() {
 								return (
 									<div
 										key={l.slotId}
-										className="grid grid-cols-[64px_1fr_auto] items-center gap-3.5 border-t border-[var(--line)] px-5 py-3 transition-colors hover:bg-[var(--foam)]"
+										className="grid grid-cols-[64px_1fr_auto] items-center gap-3.5 border-t border-border px-5 py-3 transition-colors hover:bg-surface-soft"
 									>
 										{/* Same hazard as the H1 above, and the reason this is a
 										    component too: the date was formatted with an
@@ -347,7 +347,7 @@ function Dashboard() {
 													roleName: l.roleName,
 												})}
 											</div>
-											<div className="truncate text-xs text-[var(--sea-ink-soft)]">
+											<div className="truncate text-xs text-muted-foreground">
 												{[l.projectName, l.pathwayPath]
 													.filter(Boolean)
 													.join(" · ") || l.roleName}
@@ -394,14 +394,14 @@ function Dashboard() {
 				{/* Right column */}
 				<div className="flex min-w-0 flex-col gap-5">
 					{/* Upcoming roles (real) */}
-					<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
+					<div className="overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-[0_10px_24px_rgba(23,58,64,.05)]">
 						<div className="px-5 pt-4 pb-2.5">
 							<h2 className="text-sm font-bold">My upcoming roles</h2>
 						</div>
 						{commitments.length === 0 ? (
 							<Link
 								to="/next"
-								className="block border-t border-[var(--line)] px-5 py-5 text-sm text-[var(--sea-ink-soft)] no-underline transition-colors hover:bg-[var(--foam)]"
+								className="block border-t border-border px-5 py-5 text-sm text-muted-foreground no-underline transition-colors hover:bg-surface-soft"
 							>
 								You haven't signed up for any upcoming roles. Sign up for a
 								meeting role →
@@ -418,17 +418,14 @@ function Dashboard() {
 											// club-A's agenda. `meetingId` is already on the payload.
 											to="/meetings/$id"
 											params={{ id: r.meetingId }}
-											className="flex items-center gap-3 border-t border-[var(--line)] px-5 py-3 no-underline transition-colors hover:bg-[var(--foam)]"
+											className="flex items-center gap-3 border-t border-border px-5 py-3 no-underline transition-colors hover:bg-surface-soft"
 										>
-											<span
-												className="size-2 shrink-0 rounded-full"
-												style={{ background: "var(--palm)" }}
-											/>
+											<span className="size-2 shrink-0 rounded-full bg-success" />
 											<div className="min-w-0 flex-1 leading-[1.25]">
-												<div className="text-sm font-bold text-[var(--sea-ink)]">
+												<div className="text-sm font-bold text-foreground">
 													{r.roleName}
 												</div>
-												<div className="text-xs text-[var(--sea-ink-soft)]">
+												<div className="text-xs text-muted-foreground">
 													{/* Club is unconditional, not the last fallback: as a
 													    third fallback it showed up only on the sparsest
 													    rows — never on the speech/theme rows most likely
@@ -443,8 +440,8 @@ function Dashboard() {
 											<span
 												className={
 													confirmed
-														? "shrink-0 rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-1 text-xs font-bold text-[var(--sea-ink-soft)]"
-														: "shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2.5 py-1 text-xs font-bold text-[var(--lagoon-deep)]"
+														? "shrink-0 rounded-full border border-border bg-surface-soft px-2.5 py-1 text-xs font-bold text-muted-foreground"
+														: "shrink-0 rounded-full bg-highlight/15 px-2.5 py-1 text-xs font-bold text-link"
 												}
 											>
 												{confirmed ? "Confirmed" : "Signed up"}
@@ -563,14 +560,14 @@ function Dashboard() {
 function SpeechStatePill({ state }: { state: SpeechScheduleState }) {
 	if (state === "scheduled") {
 		return (
-			<span className="shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2.5 py-1 text-xs font-bold text-[var(--lagoon-deep)]">
+			<span className="shrink-0 rounded-full bg-highlight/15 px-2.5 py-1 text-xs font-bold text-link">
 				{SPEECH_SCHEDULE_STATE_LABELS.scheduled}
 			</span>
 		);
 	}
 	return (
-		<span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-1 text-xs font-semibold text-[var(--palm)]">
-			<span className="size-1.5 rounded-full bg-[var(--palm)]" />
+		<span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-surface-soft px-2.5 py-1 text-xs font-semibold text-success">
+			<span className="size-1.5 rounded-full bg-success" />
 			{SPEECH_SCHEDULE_STATE_LABELS.delivered}
 		</span>
 	);
@@ -588,9 +585,9 @@ function QuickAction({
 	return (
 		<Link
 			to={to}
-			className="flex items-center gap-2.5 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] px-4 py-3 text-sm font-semibold text-[var(--sea-ink)] no-underline transition-colors hover:border-[var(--lagoon-deep)] hover:bg-[var(--foam)]"
+			className="flex items-center gap-2.5 rounded-xl border border-border bg-surface-raised px-4 py-3 text-sm font-semibold text-foreground no-underline transition-colors hover:border-link hover:bg-surface-soft"
 		>
-			<Icon className="size-5 text-[var(--lagoon-deep)]" aria-hidden />
+			<Icon className="size-5 text-link" aria-hidden />
 			{children}
 		</Link>
 	);
