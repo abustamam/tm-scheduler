@@ -101,11 +101,15 @@ const PHONE_PX = 375;
 const VIEWPORT = { width: 500, height: 800 };
 /** Tailwind's `md` breakpoint: below it the status track is `w-36`. */
 const MD_PX = 768;
+/** A desktop window: `md:` is on, the plan trigger is `md:w-44` (176px). */
+const DESKTOP_VIEWPORT = { width: 1280, height: 800 };
 
 type Shape = "oneLine" | "twoLine" | "plan";
 /** The widest label a plan trigger shows (an assumed Coming), and a long role
  *  code; the real chip shows the code, not the role name. */
-const PLAN_LABEL = "Coming · assumed";
+const PLAN_STATUS = "Coming";
+const PLAN_QUALIFIER = " · assumed";
+const PLAN_LABEL = `${PLAN_STATUS}${PLAN_QUALIFIER}`;
 const PLAN_CODE = "TOASTM";
 /** The widest label a roll trigger shows. */
 const ROLL_LABEL = "Excused";
@@ -122,6 +126,10 @@ type Measure = {
 	statusMid: number;
 	menuMid: number;
 	nameTruncated: boolean;
+	/** The name's box width: what is left for it after the controls. */
+	nameWidth: number;
+	/** The status label's visible text (`innerText`: a `display:none` span is absent). */
+	labelText: string;
 	statusWidth: number;
 	/** The status trigger's content width minus its box; > 0 is a clipped label. */
 	statusClip: number;
@@ -156,6 +164,7 @@ describe.skipIf(!hasChrome)(
 			iconSm: "",
 			status: "",
 			planStatus: "",
+			qualifier: "",
 			menuTrigger: "",
 		};
 
@@ -167,7 +176,7 @@ describe.skipIf(!hasChrome)(
 			const plan = shape === "plan";
 			const chipText = plan ? PLAN_CODE : "TD";
 			const identity = `<div class="${cls.identity}"><span class="${cls.name}" title="${NAME}" data-name>${NAME}</span><span data-slot="badge" class="${cls.badgeBase} ${cls.badgeSecondary} ${cls.chipBadge}" data-chip><span aria-hidden>${chipText}</span></span></div>`;
-			const status = `<button type="button" class="${button(cls.outline, cls.sm, plan ? cls.planStatus : cls.status)}" data-status><span class="sr-only">${NAME} status</span><span aria-hidden>${plan ? PLAN_LABEL : ROLL_LABEL}</span><svg class="size-3.5" viewBox="0 0 24 24" width="14" height="14"></svg></button>`;
+			const status = `<button type="button" class="${button(cls.outline, cls.sm, plan ? cls.planStatus : cls.status)}" data-status><span class="sr-only">${NAME} status</span><span aria-hidden data-label>${plan ? `${PLAN_STATUS}<span class="${cls.qualifier}">${PLAN_QUALIFIER}</span>` : ROLL_LABEL}</span><svg class="size-3.5" viewBox="0 0 24 24" width="14" height="14"></svg></button>`;
 			const menu = `<button type="button" class="${button(cls.ghost, cls.iconSm, cls.menuTrigger)}" aria-label="Contact ${NAME}" data-menu><svg class="size-4" viewBox="0 0 24 24" width="16" height="16"></svg></button>`;
 			const actions = `<div class="${cls.actionLine}">${status}${menu}</div>`;
 			// The CONTROL: the pre-#1309 shape, the action line under the identity.
@@ -197,6 +206,8 @@ describe.skipIf(!hasChrome)(
 				statusMid: Math.round(r(st).top + r(st).height / 2),
 				menuMid: Math.round(r(menu).top + r(menu).height / 2),
 				nameTruncated: nm.scrollWidth > nm.clientWidth ? 1 : 0,
+				nameWidth: Math.round(r(nm).width),
+				labelText: q("[data-label]").innerText,
 				statusWidth: Math.round(r(st).width),
 				statusClip: st.scrollWidth - st.clientWidth,
 				pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -206,13 +217,13 @@ describe.skipIf(!hasChrome)(
 		})();
 		</script>`;
 
-		function measure(shape: Shape): Measure {
+		function measure(shape: Shape, viewport = VIEWPORT): Measure {
 			const bodyHtml = `<div style="width:${PHONE_PX}px" data-rail><div class="${cls.cardBase} ${cls.card}"><div class="${cls.cardBodyBase} ${cls.cardBody}">${rowHtml(shape)}</div></div></div>`;
 			const title = renderAndReadTitle({
 				bodyHtml,
 				css,
 				script: PROBE,
-				viewport: VIEWPORT,
+				viewport,
 				tmpPrefix: "roll-row-",
 			});
 			// A missing title means the script never ran, and every field would then
@@ -235,6 +246,8 @@ describe.skipIf(!hasChrome)(
 				statusMid: n("statusMid"),
 				menuMid: n("menuMid"),
 				nameTruncated: n("nameTruncated") === 1,
+				nameWidth: n("nameWidth"),
+				labelText: kv.get("labelText") ?? "",
 				statusWidth: n("statusWidth"),
 				statusClip: n("statusClip"),
 				pageOverflow: n("pageOverflow"),
@@ -297,11 +310,18 @@ describe.skipIf(!hasChrome)(
 				"RollChip's recorded trigger class not found",
 			).not.toBeNull();
 			cls.status = status?.[1] ?? "";
-			// The PLAN row's trigger (AttendanceRow), `cn("w-44 …", m.assumed && …)`.
+			// The PLAN row's trigger (AttendanceRow), `cn("w-36 … md:w-44", m.assumed && …)`.
 			cls.planStatus = capture(
 				PANEL,
-				/cn\(\s*"(w-44[^"]*)"/,
+				/cn\(\s*"(w-36[^"]*)"/,
 				"plan row trigger className",
+				"function AttendanceRow",
+			);
+			// The qualifier span inside the aria-hidden visible label.
+			cls.qualifier = capture(
+				PANEL,
+				/<span className="(hidden md:inline)">/,
+				"plan row qualifier className",
 				"function AttendanceRow",
 			);
 			cls.menuTrigger = capture(
@@ -352,18 +372,20 @@ describe.skipIf(!hasChrome)(
 			expect(m.overhang, "controls clipped by the row").toBeLessThanOrEqual(0);
 		});
 
-		it("keeps a plan row showing 'Coming · assumed' on one line at 375px, label unclipped, nothing scrolling sideways", () => {
+		it("keeps a plan row on one line at 375px: bare 'Coming' unclipped in the 144px trigger, the name given the room, nothing scrolling sideways", () => {
 			const m = measure("plan");
 			expect(m.innerWidth, "the md: breakpoint must be off").toBeLessThan(
 				MD_PX,
 			);
-			expect(m.statusWidth, "the plan trigger is w-44 at every width").toBe(
-				176,
-			);
+			expect(m.statusWidth, "the plan trigger is w-36 below md").toBe(144);
+			// The qualifier is `display:none` below md: the label is the bare status.
+			expect(m.labelText, "visible label below md").toBe(PLAN_STATUS);
 			expect(
 				m.statusClip,
-				`"${PLAN_LABEL}" overflows its ${m.statusWidth}px trigger`,
+				`"${PLAN_STATUS}" overflows its ${m.statusWidth}px trigger`,
 			).toBeLessThanOrEqual(0);
+			// What the name keeps: with a 6-char role chip it still gets a real box.
+			expect(m.nameWidth, "the name's box").toBeGreaterThanOrEqual(56);
 			expect(m.rowHeight, `row is ${m.rowHeight}px tall`).toBeLessThanOrEqual(
 				48,
 			);
@@ -375,6 +397,23 @@ describe.skipIf(!hasChrome)(
 			expect(m.nameTruncated, "the long name is what gives way").toBe(true);
 			expect(m.overhang, "controls clipped by the row").toBeLessThanOrEqual(0);
 			expect(m.pageOverflow, "page scrolls sideways").toBeLessThanOrEqual(0);
+		});
+
+		it("shows 'Coming · assumed' unclipped in the 176px trigger from md up (1280px)", () => {
+			const m = measure("plan", DESKTOP_VIEWPORT);
+			expect(
+				m.innerWidth,
+				"the md: breakpoint must be on",
+			).toBeGreaterThanOrEqual(MD_PX);
+			expect(m.statusWidth, "the plan trigger is md:w-44").toBe(176);
+			expect(m.labelText, "visible label from md").toBe(PLAN_LABEL);
+			expect(
+				m.statusClip,
+				`"${PLAN_LABEL}" overflows its ${m.statusWidth}px trigger`,
+			).toBeLessThanOrEqual(0);
+			expect(m.rowHeight, `row is ${m.rowHeight}px tall`).toBeLessThanOrEqual(
+				48,
+			);
 		});
 
 		it("CONTROL: the pre-#1309 two-line shape fails the same measurement", () => {

@@ -64,12 +64,20 @@ const RUNG_LABELS: Record<PlanStatus, string> = {
  *  only in the announcement, and the split is pinned by the panel's own suite
  *  with its rationale.
  *
- *  The width is what forces it, and the number is measured, so do not "fix" this
- *  by stacking the two: the plan row's trigger is a fixed `w-44` (176px, at
- *  every width) track sized against the widest label it must hold,
- *  `"Coming · assumed"` (measured below). `"Coming · assumed · asked"` does not
+ *  The width is what forces it, and the numbers are measured, so do not "fix"
+ *  this by stacking the two: the plan row's trigger is `w-36` (144px) below `md`
+ *  and `w-44` (176px) from `md` up. From `md` it holds the widest visible label,
+ *  `"Coming · assumed"` (measured below); `"Coming · assumed · asked"` does not
  *  fit, and widening the track spends ~50px of a ~292px rail saying twice what
- *  "asked" already implies (nobody answered). */
+ *  "asked" already implies (nobody answered).
+ *
+ *  BELOW `md` the whole qualifier is hidden (CSS, `hidden md:inline`) and the
+ *  trigger shows the bare status word, because neither qualified label fits
+ *  144px once the phone's webfont has not loaded: with the 42px of button chrome,
+ *  `"Coming · assumed"` is 172.16px in the DejaVu Sans fallback and
+ *  `"Coming · asked"` is 107.97 + 42 = 149.97px (Manrope: ~141px, which fits
+ *  only when the webfont has loaded). The announcement still carries both words
+ *  at every width, and the muting still marks an assumed row. */
 const ASSUMED_WORD = "assumed";
 const ASKED_WORD = "asked";
 
@@ -411,9 +419,6 @@ function AttendanceRow({
 	// the counts line's separator; the announced one spells it out, because "·"
 	// is not read aloud.
 	const statusLabel = m.status ? RUNG_LABELS[m.status] : "Ask";
-	const visibleLabel = qualifier
-		? `${statusLabel} · ${qualifier}`
-		: statusLabel;
 	const statusAnnouncement = `${m.name} status: ${statusLabel}${
 		m.assumed ? ` — ${ASSUMED_WORD}, role confirmed` : ""
 	}${alsoAsked ? `, already ${ASKED_WORD}` : ""}`;
@@ -462,17 +467,22 @@ function AttendanceRow({
 							 *    worst intrinsic width            130.16 + 42 = 172.16px
 							 *
 							 *  176px clears that by 3.8px and clears the shipped Manrope by 14.1px.
-							 *  The track is `w-44` at EVERY width, not `w-36` below `md`: 144px
-							 *  would clip this nowrap label on a phone. On a line it costs
-							 *  176 + the 12px `gap-3` + the 32px contact-menu icon = 220px, leaving
-							 *  the identity (`min-w-0`, truncating) the rest of the row; the
-							 *  375px case in `roll-row-geometry.test.ts` holds that. */}
+							 *  That full label only shows from `md`. Below it the track is `w-36`
+							 *  (144px, the roll row's) and the qualifier is hidden, so the widest
+							 *  visible label is the bare "Coming" (DejaVu 53.64px + 42 = 95.64px;
+							 *  "Not coming" is wider but carries no qualifier and is under 144px).
+							 *  A 144px track would clip "Coming · asked" too (107.97 + 42 =
+							 *  149.97px in DejaVu), so that qualifier is hidden below `md` as well.
+							 *  On a line the phone track costs 144 + the 12px `gap-3` + the 32px
+							 *  contact-menu icon = 188px, leaving the identity (`min-w-0`,
+							 *  truncating) the rest of the row; the 375px case in
+							 *  `roll-row-geometry.test.ts` holds that. */}
 							<Button
 								variant="outline"
 								size="sm"
 								disabled={locked || pending}
 								className={cn(
-									"w-44 justify-between",
+									"w-36 justify-between md:w-44",
 									m.assumed &&
 										"text-muted-foreground hover:text-muted-foreground",
 								)}
@@ -497,7 +507,12 @@ function AttendanceRow({
 								 *  string, so it is indifferent to that rule in both
 								 *  environments. */}
 								<span className="sr-only">{statusAnnouncement}</span>
-								<span aria-hidden>{visibleLabel}</span>
+								<span aria-hidden>
+									{statusLabel}
+									{qualifier ? (
+										<span className="hidden md:inline"> · {qualifier}</span>
+									) : null}
+								</span>
 								{/* No `opacity-60`. The glyph inherits `currentColor`, which on an
 								 *  assumed row is `text-muted-foreground` (`--sea-ink-soft` #416166);
 								 *  composited at 60% over the outline button's `bg-background`
@@ -766,10 +781,10 @@ function RollChip({
 			 *  formed a ragged edge. Roll mode had no track at all: the chip was a
 			 *  direct child of a `flex flex-col` `<li>` and stretched the full width,
 			 *  so the rail's one right edge held for the plan rows and not for these.
-			 *  `w-36 md:w-44` is narrower than plan mode's `w-44` below `md`, because
-			 *  this label set ("—" to "Excused") is far shorter than "Coming ·
-			 *  assumed" and the phone's line is the scarce thing; from `md` the two
-			 *  modes share the 176px track. */}
+			 *  `w-36 md:w-44` is the SAME track plan mode's trigger uses: plan mode
+			 *  hides its "· assumed" / "· asked" qualifier below `md` so its widest
+			 *  visible label ("Not coming") fits 144px too, and from `md` both modes
+			 *  share the 176px track. */}
 			<Button
 				variant="outline"
 				size="sm"

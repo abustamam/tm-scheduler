@@ -60,6 +60,12 @@ const roster = [
 	},
 ];
 
+/** A plan trigger's VISIBLE label: the `aria-hidden` span's text, qualifier
+ *  included (CSS hides the qualifier below `md`; jsdom loads no stylesheet). */
+function visibleLabel(trigger: HTMLElement): string {
+	return trigger.querySelector("span[aria-hidden]")?.textContent ?? "";
+}
+
 function renderPanel(
 	over: Partial<Parameters<typeof MeetingAttendancePanel>[0]> = {},
 ) {
@@ -503,7 +509,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// `getByRole` with an EXACT `name` is the accessible-name assertion here —
 		// jest-dom is not installed, so there is no `toHaveAccessibleName`, and
 		// `getByRole` throws when nothing matches.
-		const { getByRole, queryByRole, getByText } = renderPanel({
+		const { getByRole, queryByRole } = renderPanel({
 			roleByMemberId: {
 				m1: { code: "TD", roleName: "Toastmaster", confirmed: true },
 			},
@@ -517,7 +523,15 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// the word was identical to a real answer and the only visible signal was
 		// the muting — a grey control says "less important", never "nobody said
 		// this". Now the control spells it out.
-		expect(getByText("Coming · assumed").className).not.toContain("sr-only");
+		const trigger = getByRole("button", {
+			name: "Ayesha Khan status: Coming — assumed, role confirmed",
+		});
+		expect(visibleLabel(trigger)).toBe("Coming · assumed");
+		// The qualifier is hidden below `md` by CSS (the 144px track cannot hold
+		// it), shown from `md`; the announced name above is unchanged either way.
+		const qualifier = trigger.querySelector("span[aria-hidden] > span");
+		expect(qualifier?.textContent).toBe(" · assumed");
+		expect(qualifier?.className).toBe("hidden md:inline");
 
 		// The NEGATIVE arm: no role, no answer, so nothing may claim an inference.
 		expect(getByRole("button", { name: "Bo Lin status: Ask" })).toBeTruthy();
@@ -562,7 +576,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// EXACT, which is also what pins "one qualifier, never two": "asked"
 		// already carries "nobody answered", so "Coming · assumed · asked" would
 		// say it twice — and would fail here.
-		expect(within(btn).getByText("Coming · asked")).toBeTruthy();
+		expect(visibleLabel(btn)).toBe("Coming · asked");
 	});
 
 	it("drops the stored Asked when the officer clears it back to no answer", () => {
@@ -570,7 +584,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// path the route actually uses: clearing DELETES a real row and logs it,
 		// so it must be visible even though the effective status cannot move.
 		// An assumed row with no stored rung reads exactly as it did before.
-		const { getByRole, getByText, queryByText } = renderPanel({
+		const { getByRole, queryByText } = renderPanel({
 			plan: [{ memberId: "m1", status: "reached_out" as const }],
 			rungOverride: { m1: null },
 			roleByMemberId: {
@@ -582,11 +596,13 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 				name: "Ayesha Khan status: Coming — assumed, role confirmed",
 			}),
 		).toBeTruthy();
-		expect(queryByText("Coming · asked")).toBeNull();
+		expect(queryByText(/Coming · asked/)).toBeNull();
 		// It reads as a plain assumed row again — the qualifier falls BACK to
 		// "assumed" rather than disappearing, which is what makes the clear
 		// visible at all now that the badge no longer carries assumed-ness.
-		expect(getByText("Coming · assumed")).toBeTruthy();
+		expect(
+			visibleLabel(getByRole("button", { name: /Ayesha Khan status/i })),
+		).toBe("Coming · assumed");
 	});
 
 	it("mutes the control on an assumed row but not on an answered one", () => {
@@ -669,9 +685,9 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// The CONTROL is where the distinction lives now, and it does move.
 		const assumed = getByRole("button", { name: /Ayesha Khan status/i });
 		const answered = getByRole("button", { name: /Bo Lin status/i });
-		expect(within(assumed).getByText("Coming · assumed")).toBeTruthy();
+		expect(visibleLabel(assumed)).toBe("Coming · assumed");
 		// EXACT "Coming", so a qualifier leaking onto an ANSWERED row fails here.
-		expect(within(answered).getByText("Coming")).toBeTruthy();
+		expect(visibleLabel(answered)).toBe("Coming");
 	});
 
 	it("keeps a long name on ONE line: truncated, with the full name in its title (#1309)", () => {
@@ -848,16 +864,15 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		const trigger = getByRole("button", { name: /Ayesha Khan status/i });
 
 		// A FIXED TRACK plus `justify-between` = two hard vertical edges. `justify-end`
-		// alone flushes only the right one, and this trigger is `whitespace-nowrap`
-		// with a label running ~66px ("Ask") to ~172px ("Coming · assumed"), so the
-		// two icon buttons to its left jittered by that delta down the column — a
-		// crooked action column traded for a crooked status column. `w-44` (176px) is
-		// measured against the widest label plus the sm button's 42px of chrome, and
-		// holds at EVERY width: `w-36` (144px) would clip "Coming · assumed" on a
-		// phone (the 375px case in `roll-row-geometry.test.ts` measures it).
-		expect(trigger.classList.contains("w-44")).toBe(true);
-		expect(trigger.classList.contains("w-36")).toBe(false);
-		expect(trigger.classList.contains("md:w-44")).toBe(false);
+		// alone flushes only the right one, and this trigger is `whitespace-nowrap`,
+		// so the two icon buttons to its left would jitter by the label's width
+		// delta down the column. The track is `w-36` (144px) below `md`, where the
+		// qualifier is hidden, and `md:w-44` (176px) from `md`, which holds the
+		// widest visible label "Coming · assumed" (the 375px and 1280px cases in
+		// `roll-row-geometry.test.ts` measure both).
+		expect(trigger.classList.contains("w-36")).toBe(true);
+		expect(trigger.classList.contains("md:w-44")).toBe(true);
+		expect(trigger.classList.contains("w-44")).toBe(false);
 		expect(trigger.classList.contains("justify-between")).toBe(true);
 
 		// WCAG 1.4.11. The chevron inherits `currentColor`, so on a muted row
