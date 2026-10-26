@@ -1,7 +1,15 @@
-// The digital agenda's loader (#1335).
+// @vitest-environment jsdom
+// The digital agenda's loader and route wiring (#1335).
 // Each test's card: protects=...; fails_when=...; no_claim=...
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+	createMemoryHistory,
+	createRootRoute,
+	createRouter,
+	RouterProvider,
+} from "@tanstack/react-router";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("#/lib/club-route", () => ({ resolveClubOrRedirect: vi.fn() }));
@@ -15,13 +23,28 @@ vi.mock("#/lib/auth-client", () => ({
 vi.mock("#/server/ballot-session-voter", () => ({
 	getBallotSessionVoter: vi.fn(),
 }));
+// The server-side session readers: the loader must never call them (AC 5).
+vi.mock("#/server/auth-context", () => ({ getAuthContext: vi.fn() }));
+vi.mock("#/lib/auth", () => ({
+	auth: { api: { getSession: vi.fn() } },
+}));
+// Wraps the real seam so the route's props plumbing can be read off the call.
+vi.mock("#/lib/agenda-runsheet", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("#/lib/agenda-runsheet")>();
+	return { ...actual, resolveAgendaRows: vi.fn(actual.resolveAgendaRows) };
+});
 
 import { notFound } from "@tanstack/react-router";
+import { applyFlex, resolveAgendaRows } from "#/lib/agenda-runsheet";
+import { buildTimeline } from "#/lib/agenda-timing";
+import { auth } from "#/lib/auth";
 import { authClient } from "#/lib/auth-client";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { getAuthContext } from "#/server/auth-context";
 import { getClubLogoMeta } from "#/server/club-logo";
 import { getPublicMeetingByKey } from "#/server/meetings";
 import { getPublicClubRoles } from "#/server/role-definitions";
+import { readSource } from "#/test/guard-source";
 import { Route } from "./club.$clubId_.meeting.$meetingId.agenda";
 
 const CLUB_ID = "11111111-1111-4111-8111-111111111111";
@@ -73,7 +96,10 @@ beforeEach(() => {
 	vi.mocked(getPublicClubRoles).mockResolvedValue([]);
 	vi.mocked(getPublicMeetingByKey).mockResolvedValue(detail());
 });
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+	cleanup();
+	vi.clearAllMocks();
+});
 
 describe("404s", () => {
 	// protects=a mistyped key is the not-found page, not a 500;
@@ -165,33 +191,243 @@ describe("payload", () => {
 
 describe("the loader reads no session (AC 5)", () => {
 	// protects=every visitor is served the same data, so the HTML is cacheable and hydrates;
-	// fails_when=the loader branches on the viewer, or touches the auth client;
-	// no_claim=the auth mock is not wired into the loader, so equality is by construction plus the source check below
-	it("returns deep-equal data signed in and signed out", async () => {
-		vi.mocked(authClient.useSession).mockReturnValue({
-			data: { user: { id: "u1" } },
-			isPending: false,
-		} as never);
+	// fails_when=the loader branches on the viewer through either server-side session reader;
+	// no_claim=a reader this test does not mock is caught only by the source check below
+	it("returns deep-equal data signed in and signed out, and calls no reader", async () => {
+		const member = {
+			user: { id: "u1", email: "member@example.test" },
+			session: { id: "s1" },
+		};
+		vi.mocked(getAuthContext).mockResolvedValueOnce(member as never);
+		vi.mocked(auth.api.getSession).mockResolvedValueOnce(member as never);
 		const signedIn = await runLoader();
-		vi.mocked(authClient.useSession).mockReturnValue({
-			data: null,
-			isPending: false,
-		} as never);
+		vi.mocked(getAuthContext).mockResolvedValueOnce(null as never);
+		vi.mocked(auth.api.getSession).mockResolvedValueOnce(null as never);
 		const signedOut = await runLoader();
 		expect(signedIn).toEqual(signedOut);
+		expect(getAuthContext).not.toHaveBeenCalled();
+		expect(auth.api.getSession).not.toHaveBeenCalled();
 		expect(authClient.useSession).not.toHaveBeenCalled();
 	});
 
 	// protects=the route module itself cannot reach a session;
-	// fails_when=an import of the server auth context or the auth client is added to the route;
+	// fails_when=the route imports any auth module or calls getSession (comments are ignored);
 	// no_claim=the page component lives in another module, which may use the client hook
-	it("imports nothing from auth-context or auth-client", () => {
-		const src = readFileSync(
+	it("imports no auth module and calls no getSession", () => {
+		const src = readSource(
 			resolve(__dirname, "club.$clubId_.meeting.$meetingId.agenda.tsx"),
-			"utf8",
 		);
-		expect(src).not.toMatch(/from\s+["']#\/server\/auth-context["']/);
-		expect(src).not.toMatch(/from\s+["']#\/lib\/auth-client["']/);
 		expect(src.length).toBeGreaterThan(500);
+		expect(src).not.toMatch(/["']#\/lib\/auth(?:-client)?["']/);
+		expect(src).not.toMatch(/["']#\/server\/auth-context["']/);
+		expect(src).not.toMatch(/getSession|getAuthContext|useSession/);
+	});
+});
+
+describe("parity with /print through the route (AC 1)", () => {
+	// A real template with section rows, a non-default flow and a zone where
+	// UTC and local differ: 02:30Z on Jul 31 is 7:30 PM on Jul 30 in Los Angeles.
+	const ZONE = "America/Los_Angeles";
+	const beat = (o: Record<string, unknown>) => ({
+		detail: null,
+		minutes: 5,
+		roleKey: null,
+		repeatsRoleKey: null,
+		flex: false,
+		handoff: false,
+		markGreen: null,
+		markYellow: null,
+		markRed: null,
+		clubGoverned: false,
+		...o,
+	});
+	const TEMPLATE = {
+		roles: [
+			{ key: "contestant", name: "Contestant", isSpeakerRole: true },
+			{ key: "contest_chair", name: "Contest Chair", isSpeakerRole: false },
+		],
+		beats: [
+			beat({
+				id: "b0",
+				sortOrder: 0,
+				kind: "section",
+				label: "Opening",
+				minutes: 0,
+			}),
+			beat({
+				id: "b1",
+				sortOrder: 1,
+				kind: "event",
+				label: "Welcome",
+				minutes: 10,
+			}),
+			beat({
+				id: "b2",
+				sortOrder: 2,
+				kind: "section",
+				label: "Contest",
+				minutes: 0,
+			}),
+			beat({
+				id: "b3",
+				sortOrder: 3,
+				kind: "role",
+				label: "Contest chair",
+				minutes: 15,
+				roleKey: "contest_chair",
+			}),
+			beat({
+				id: "b4",
+				sortOrder: 4,
+				kind: "role",
+				label: "Contest speeches",
+				minutes: 20,
+				roleKey: "contestant",
+			}),
+			beat({
+				id: "b5",
+				sortOrder: 5,
+				kind: "event",
+				label: "Results",
+				minutes: 5,
+			}),
+		],
+	};
+	const slotRow = (o: Record<string, unknown>) => ({
+		category: "speaker",
+		isSpeakerRole: false,
+		slotIndex: 0,
+		assigneeName: null,
+		assigneeId: null,
+		speechTitle: null,
+		projectLevel: null,
+		minMinutes: null,
+		maxMinutes: null,
+		evaluatesSlotId: null,
+		evaluates: null,
+		...o,
+	});
+	const SLOTS = [
+		slotRow({
+			id: "chair",
+			roleKey: "contest_chair",
+			roleName: "Contest Chair",
+			category: "leadership",
+			assigneeName: "Faisal Ali",
+		}),
+		slotRow({
+			id: "c0",
+			roleKey: "contestant",
+			roleName: "Contestant",
+			isSpeakerRole: true,
+			assigneeName: "Rehanna Khan",
+		}),
+		slotRow({
+			id: "c1",
+			roleKey: "contestant",
+			roleName: "Contestant",
+			isSpeakerRole: true,
+			slotIndex: 1,
+			assigneeName: "Jagpal Singh",
+		}),
+	];
+
+	function payload() {
+		const d = detail();
+		d.meeting.scheduledAt = "2026-07-31T02:30:00Z";
+		d.timezone = ZONE;
+		d.geIntroducesFunctionaries = true;
+		d.tableTopicsMinSeconds = 90;
+		d.tableTopicsMaxSeconds = 150;
+		d.template = TEMPLATE;
+		d.slots = SLOTS;
+		return d;
+	}
+
+	async function renderRoute() {
+		vi.mocked(getPublicMeetingByKey).mockResolvedValue(payload());
+		vi.mocked(authClient.useSession).mockReturnValue({
+			data: null,
+			isPending: false,
+		} as never);
+		const loaded = await runLoader();
+		vi.spyOn(Route, "useLoaderData").mockReturnValue(loaded as never);
+		vi.spyOn(Route, "useParams").mockReturnValue(ctx.params as never);
+		const Page = (
+			Route.options as unknown as { component: () => React.ReactNode }
+		).component;
+		const qc = new QueryClient();
+		const rootRoute = createRootRoute({
+			component: () => (
+				<QueryClientProvider client={qc}>
+					<Page />
+				</QueryClientProvider>
+			),
+		});
+		const router = createRouter({
+			routeTree: rootRoute,
+			history: createMemoryHistory({ initialEntries: ["/"] }),
+		});
+		render(<RouterProvider router={router} />);
+		await waitFor(() => expect(router.state.status).toBe("idle"));
+		await screen.findByRole("heading", { level: 1 });
+		return loaded;
+	}
+
+	const drawn = () =>
+		Array.from(
+			document.querySelectorAll('[data-testid="run-of-show"] > li'),
+		).map((li) => {
+			const h2 = li.querySelector("h2");
+			if (h2) return { who: h2.textContent, time: null };
+			return {
+				who: li.querySelector("p.font-semibold")?.textContent,
+				time: li.querySelector("span.tabular-nums")?.textContent,
+			};
+		});
+
+	// protects=the phone's order, labels and clock times (sections included) equal the print seam's, fed what the ROUTE passes;
+	// fails_when=the route drops or swaps a prop (template, timezone, flow flag, Table Topics window), or the page stops using the seam;
+	// no_claim=does not render /print itself; the golden times below stand in for it
+	it("draws the same rows, labels and times as the print seam, with non-default options", async () => {
+		const loaded = await renderRoute();
+
+		// Wiring: what the route handed the seam is what the loader produced.
+		expect(resolveAgendaRows).toHaveBeenCalledWith(
+			expect.objectContaining({
+				geIntroducesFunctionaries: true,
+				tableTopicsLimits: { minSeconds: 90, maxSeconds: 150 },
+				template: TEMPLATE,
+			}),
+		);
+
+		const expected = buildTimeline(
+			applyFlex(
+				resolveAgendaRows({
+					geIntroducesFunctionaries: true,
+					tableTopicsLimits: { minSeconds: 90, maxSeconds: 150 },
+					template: TEMPLATE as never,
+					slots: SLOTS as never,
+				}),
+				loaded.meeting.lengthMinutes,
+			).rows,
+			"2026-07-31T02:30:00Z",
+			ZONE,
+		).map((r) =>
+			r.section
+				? { who: r.who, time: null }
+				: { who: r.roleLabel ?? r.who, time: r.time },
+		);
+		expect(drawn()).toEqual(expected);
+
+		// Golden: literals, so a defect on both sides cannot hide.
+		expect(drawn()).toEqual([
+			{ who: "Opening", time: null },
+			{ who: "Welcome", time: "7:30" },
+			{ who: "Contest", time: null },
+			{ who: "Contest chair", time: "7:40" },
+			{ who: "Contest speeches", time: "7:55" },
+			{ who: "Results", time: "8:15" },
+		]);
 	});
 });

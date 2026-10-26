@@ -17,8 +17,6 @@ vi.mock("#/server/ballot-session-voter", () => ({
 	getBallotSessionVoter: vi.fn(),
 }));
 
-import { applyFlex, resolveAgendaRows } from "#/lib/agenda-runsheet";
-import { buildTimeline } from "#/lib/agenda-timing";
 import { authClient } from "#/lib/auth-client";
 import { getBallotSessionVoter } from "#/server/ballot-session-voter";
 import {
@@ -222,6 +220,52 @@ describe("rows", () => {
 		expect(rowOf("Speaker").textContent).not.toContain("Evaluated by");
 	});
 
+	// protects=every evaluator of a speech is named, in slot order, as the run sheet names them;
+	// fails_when=only the first evaluator is drawn;
+	// no_claim=says nothing about how the evaluators' own rows read
+	it("names two evaluators, joined with a comma", async () => {
+		const slots = SLOTS();
+		slots.splice(
+			3,
+			0,
+			slot({
+				id: "ev2",
+				roleKey: "evaluator",
+				roleName: "Evaluator",
+				category: "evaluator",
+				slotIndex: 1,
+				assigneeName: "Rehanna",
+				assigneeId: "m-rehanna",
+				evaluatesSlotId: "sp",
+			}),
+		);
+		await renderPage(props({ slots }));
+		expect(rowOf("Speaker").textContent).toContain(
+			"Evaluated by Sudheer, Rehanna",
+		);
+	});
+
+	// protects=a stray evaluatesSlotId on a non-Evaluator slot does not name that person as the evaluator;
+	// fails_when=the lookup drops the Evaluator-role filter pairedEvaluatorNames applies;
+	// no_claim=says nothing about how such a link could arise
+	it("ignores a non-evaluator slot that points at the speaker", async () => {
+		const slots = SLOTS();
+		slots.push(
+			slot({
+				id: "stray",
+				roleKey: "timer",
+				roleName: "Timer",
+				assigneeName: "Strayperson",
+				assigneeId: "m-stray",
+				evaluatesSlotId: "sp",
+			}),
+		);
+		await renderPage(props({ slots }));
+		const text = rowOf("Speaker").textContent ?? "";
+		expect(text).toContain("Evaluated by Sudheer");
+		expect(text).not.toContain("Strayperson");
+	});
+
 	// protects=a role nobody holds reads "—" rather than the sheet's "open" wording;
 	// fails_when=the OPEN placeholder or an empty cell is drawn;
 	// no_claim=says nothing about which rows are open
@@ -374,6 +418,24 @@ describe("the 'You' badge", () => {
 		});
 	});
 
+	// protects=the badge uses DESIGN.md's "yours" treatment (solid green plus ring), never teal;
+	// fails_when=the badge goes back to the primary (teal) tokens, which DESIGN.md reserves for navigation;
+	// no_claim=does not measure contrast; the tokens carry the AA pairing in both themes
+	it("is the green 'yours' fill with the status ring, not teal", async () => {
+		session({ userId: "u1" });
+		vi.mocked(getBallotSessionVoter).mockResolvedValue({
+			id: "m-jagpal",
+			name: "Jagpal",
+		} as never);
+		await renderPage(props());
+		const badge = await screen.findByText("You");
+		const cls = badge.className;
+		expect(cls).toContain("bg-success");
+		expect(cls).toContain("text-success-foreground");
+		expect(cls).toContain("ring-success-strong");
+		expect(cls).not.toMatch(/primary/);
+	});
+
 	// protects=a signed-in non-member gets no badge;
 	// fails_when=null voter is treated as a match;
 	// no_claim=says nothing about members
@@ -461,36 +523,5 @@ describe("cancelled", () => {
 		expect(screen.getByTestId("cancelled-meeting-notice")).toBeTruthy();
 		expect(screen.queryByTestId("run-of-show")).toBeNull();
 		expect(screen.getByText("Downtown Toastmasters")).toBeTruthy();
-	});
-});
-
-describe("parity with /print", () => {
-	// protects=the phone's row order and clock times equal the print seam's;
-	// fails_when=this page stops calling resolveAgendaRows -> applyFlex -> buildTimeline;
-	// no_claim=does not render /print itself, only the seam it calls
-	it("draws every row's clock time, in order, as the print seam computes them", async () => {
-		const p = props();
-		const expected = buildTimeline(
-			applyFlex(
-				resolveAgendaRows({
-					geIntroducesFunctionaries: false,
-					tableTopicsLimits: { minSeconds: null, maxSeconds: null },
-					template: null,
-					slots: p.slots,
-				}),
-				p.meeting.lengthMinutes,
-			).rows,
-			p.meeting.scheduledAt,
-			"UTC",
-		);
-		await renderPage(p);
-		const drawn = Array.from(
-			document.querySelectorAll('[data-testid="run-of-show"] > li'),
-		).map((li) => li.querySelector("span.tabular-nums")?.textContent ?? null);
-		expect(drawn).toEqual(
-			expected.filter((r) => !r.section).map((r) => r.time),
-		);
-		// A vacuity floor: the fixture produces a real agenda.
-		expect(drawn.length).toBeGreaterThan(10);
 	});
 });

@@ -14,10 +14,11 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { ClubLogo } from "#/components/agenda/club-logo";
 import { CancelledMeetingNotice } from "#/components/club/cancelled-meeting-notice";
-import { OPEN_LABEL, slotAssigneeDisplay } from "#/lib/agenda";
+import { OPEN_LABEL } from "#/lib/agenda";
 import {
 	type AgendaSlot,
 	applyFlex,
+	pairedEvaluatorNames,
 	resolveAgendaRows,
 } from "#/lib/agenda-runsheet";
 import { buildTimeline, type TimelineRow } from "#/lib/agenda-timing";
@@ -242,9 +243,8 @@ function RunRow({
 		row.holders && row.holders.length > 1 ? row.holders.join(", ") : null;
 	const person = holders ?? holderText(row.holder);
 	const isSpeaker = slot?.isSpeakerRole === true;
-	const evaluator = isSpeaker
-		? slots.find((s) => s.evaluatesSlotId === slot.id && s.assigneeName)
-		: undefined;
+	// The run sheet's own lookup: only Evaluator-role slots, every one of them.
+	const evaluators = isSpeaker ? pairedEvaluatorNames(slot.id, slots) : [];
 	const isYou =
 		viewerId !== null &&
 		slot?.assigneeId != null &&
@@ -265,14 +265,14 @@ function RunRow({
 					<p className="text-base">
 						{person}
 						{isYou ? (
-							<span className="ml-2 rounded-full bg-primary px-2 py-0.5 align-middle text-xs font-semibold text-primary-foreground">
+							<span className="ml-2 rounded-full bg-success px-2 py-0.5 align-middle text-xs font-semibold text-success-foreground ring-2 ring-success-strong">
 								You
 							</span>
 						) : null}
 					</p>
 				) : null}
 				{isSpeaker && slot ? (
-					<SpeakerFacts slot={slot} evaluator={evaluator} />
+					<SpeakerFacts slot={slot} evaluators={evaluators} />
 				) : row.detail ? (
 					<p className="text-sm text-muted-foreground">{row.detail}</p>
 				) : null}
@@ -302,10 +302,10 @@ function holderText(holder: string | null | undefined): string {
 
 function SpeakerFacts({
 	slot,
-	evaluator,
+	evaluators,
 }: {
 	slot: RunOfShowSlot;
-	evaluator: RunOfShowSlot | undefined;
+	evaluators: string[];
 }) {
 	const timing =
 		slot.minMinutes != null && slot.maxMinutes != null
@@ -318,7 +318,9 @@ function SpeakerFacts({
 			) : null}
 			{slot.projectLevel ? <p>{slot.projectLevel}</p> : null}
 			{timing ? <p>{timing}</p> : null}
-			{evaluator ? <p>Evaluated by {slotAssigneeDisplay(evaluator)}</p> : null}
+			{evaluators.length > 0 ? (
+				<p>Evaluated by {evaluators.join(", ")}</p>
+			) : null}
 		</div>
 	);
 }
