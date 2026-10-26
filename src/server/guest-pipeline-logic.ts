@@ -10,13 +10,11 @@ import {
 	eq,
 	getTableName,
 	gte,
-	ilike,
 	inArray,
 	isNotNull,
 	isNull,
 	min,
 	ne,
-	or,
 	type SQL,
 	sql,
 } from "drizzle-orm";
@@ -67,6 +65,13 @@ import {
 } from "#/lib/meeting-lifecycle";
 import type { OfficerPosition } from "#/lib/officers";
 import { namesAgree } from "#/lib/person-name";
+import {
+	emailQueryTerms,
+	emailSearchTerms,
+	GUEST_LINK_SEARCH_POOL,
+	isBlankQuery,
+	matchTier,
+} from "#/lib/person-search";
 import {
 	coalesceToE164,
 	DEFAULT_COUNTRY_CODE,
@@ -4155,6 +4160,8 @@ export const GUEST_LINK_BOTH_HAVE_HISTORY_MESSAGE =
 /** Most candidates the picker returns. */
 export const GUEST_LINK_CANDIDATE_LIMIT = 20;
 
+export { GUEST_LINK_SEARCH_POOL };
+
 /** Both Persons' contact as a link compares it: normalized, never shown. */
 export interface GuestLinkBasis {
 	thisEmail: string | null;
@@ -4385,9 +4392,9 @@ export async function previewGuestLink(
 
 /**
  * The picker behind "Same person as…": up to 20 of `otherClubId`'s unconverted
- * guests whose Person is guest-only and is not this guest's own, by name. A
- * case-insensitive substring of `q` filters on the guest's name or the Person's
- * email; an empty `q` is the first 20. Name, email and phone only: nothing of the
+ * guests whose Person is guest-only and is not this guest's own, by name. `q` is
+ * ranked with the shared matcher over name, preferred name and the local part of
+ * the email (or an exact address); an empty `q` is the first 20 by name. Name, email and phone only: nothing of the
  * other club's stage, visits, invites or notes.
  */
 export async function listGuestLinkCandidates(input: {
@@ -4402,12 +4409,11 @@ export async function listGuestLinkCandidates(input: {
 	const mine = await readGuestOf(db, clubId, guestId);
 	if (!mine) throw new Error(GUEST_NOT_IN_CLUB_MESSAGE);
 	const q = input.q.trim();
-	// A `%`, `_` or `\` typed into the box means itself.
-	const pattern = q ? `%${q.replace(/[\\%_]/g, "\\$&")}%` : null;
-	return db
+	const rows = await db
 		.select({
 			guestId: guests.id,
 			name: guests.name,
+			preferredName: guests.preferredName,
 			email: people.email,
 			phone: people.phone,
 		})
@@ -4419,13 +4425,57 @@ export async function listGuestLinkCandidates(input: {
 				ne(guests.stage, "joined"),
 				ne(guests.personId, mine.personId),
 				identityIgnoredGuestPerson(),
-				pattern
-					? or(ilike(guests.name, pattern), ilike(people.email, pattern))
-					: undefined,
 			),
 		)
 		.orderBy(asc(guests.name), asc(guests.id))
-		.limit(GUEST_LINK_CANDIDATE_LIMIT);
+		.limit(GUEST_LINK_SEARCH_POOL);
+	const toCandidate = (r: (typeof rows)[number]): GuestLinkCandidate => ({
+		guestId: r.guestId,
+		name: r.name,
+		email: r.email,
+		phone: r.phone,
+	});
+	if (isBlankQuery(q)) {
+		return rows.slice(0, GUEST_LINK_CANDIDATE_LIMIT).map(toCandidate);
+	}
+	// The email joins the match by its local part only (#1333): see
+	// `emailSearchTerms`, so "doe" word-prefixes `j.doe@gmail.com` and the domain
+	// never matches. A query shaped like an address is also read that way
+	// (`emailQueryTerms`) and merged in; a whole address matches exactly, first.
+	const wanted = normalizeEmail(q);
+	const emailQ = emailQueryTerms(q);
+	const searchable = rows.map((r, index) => ({
+		...r,
+		index,
+		extraTerms: r.email ? [emailSearchTerms(r.email)] : [],
+	}));
+	const merged = searchable
+		.map((r) => {
+			const plainTier = matchTier(q, r);
+			const emailTier = emailQ ? matchTier(emailQ, r) : null;
+			const tier =
+				plainTier === null
+					? emailTier
+					: emailTier === null
+						? plainTier
+						: Math.min(plainTier, emailTier);
+			return { r, tier };
+		})
+		.filter((x): x is { r: (typeof searchable)[number]; tier: number } => {
+			return x.tier !== null;
+		})
+		.sort(
+			(a, b) =>
+				a.tier - b.tier ||
+				a.r.name.localeCompare(b.r.name) ||
+				a.r.index - b.r.index,
+		)
+		.map((x) => x.r);
+	const exact = rows.filter((r) => normalizeEmail(r.email) === wanted);
+	const exactIds = new Set(exact.map((r) => r.guestId));
+	return [...exact, ...merged.filter((r) => !exactIds.has(r.guestId))]
+		.slice(0, GUEST_LINK_CANDIDATE_LIMIT)
+		.map(toCandidate);
 }
 
 /**

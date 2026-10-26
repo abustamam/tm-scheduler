@@ -164,4 +164,70 @@ describe("NudgeRecruitPicker", () => {
 		expect(draftText(wa)).toContain("Hi Zabihullah,");
 		expect(draftText(wa)).not.toContain("Kogyani");
 	});
+
+	async function open(targets: RecruitTarget[]) {
+		const user = userEvent.setup();
+		render(
+			<NudgeRecruitPicker
+				roleName="Timer"
+				meetingDate="Thu, Jul 23"
+				shareUrl="https://gavelup.app/club/mcf/meeting/abc"
+				targets={targets}
+			/>,
+		);
+		await user.click(screen.getByRole("button", { name: /nudge someone/i }));
+		return user;
+	}
+	const names = () =>
+		screen.getAllByRole("option").map((o) => o.textContent ?? "");
+
+	// protects=with an empty query available members come first then Not available, alphabetical within each; fails_when=the rank or the name tiebreak is dropped; no_claim=ranking while a query is typed beyond the matcher's own tests
+	it("lists available members first, unavailable last, alphabetical within each", async () => {
+		await open([
+			target({ id: "1", name: "Zoe", notAvailable: false }),
+			target({ id: "2", name: "Ann", notAvailable: true }),
+			target({ id: "3", name: "Bea", notAvailable: false }),
+			target({ id: "4", name: "Cal", notAvailable: true }),
+		]);
+		expect(names().map((n) => n.slice(0, 3))).toEqual([
+			"Bea",
+			"Zoe",
+			"Ann",
+			"Cal",
+		]);
+	});
+
+	// protects=all four row flags still render; fails_when=renderMeta drops one; no_claim=their colours
+	it("keeps every flag on the row", async () => {
+		await open([
+			target({
+				notAvailable: true,
+				alreadyRole: "Timer",
+				contacted: true,
+				phone: null,
+				email: null,
+			}),
+		]);
+		const row = names()[0] ?? "";
+		expect(row).toContain("Not available");
+		expect(row).toContain("Already: Timer");
+		expect(row).toContain("Contacted");
+		expect(row).toContain("no contact");
+	});
+
+	// protects=words match in any order and by preferred name, and picking opens that member's draft; fails_when=matching falls back to cmdk order-sensitive search or the pick opens the wrong row; no_claim=fuzzy matching (there is none)
+	it("matches words in any order and by goes-by name", async () => {
+		const user = await open([
+			target({ id: "1", name: "Robert Smith", preferredName: "Bob" }),
+			target({ id: "2", name: "Ada Lovelace" }),
+		]);
+		const box = screen.getByPlaceholderText("Search members…");
+		await user.type(box, "smith rob");
+		expect(names()).toHaveLength(1);
+		await user.clear(box);
+		await user.type(box, "bob");
+		expect(names()[0]).toContain("Robert Smith");
+		await user.click(screen.getAllByRole("option")[0] as HTMLElement);
+		expect(await screen.findByRole("link", { name: /whatsapp/i })).toBeTruthy();
+	});
 });

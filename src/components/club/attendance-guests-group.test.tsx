@@ -663,4 +663,87 @@ describe("AttendanceGuestsGroup", () => {
 		getByText("Priya Nair");
 		expect(queryByRole("button", { name: /Remove Priya Nair/i })).toBeNull();
 	});
+
+	async function openPicker(
+		clubGuests: { id: string; name: string; stage?: string }[],
+		over: Partial<React.ComponentProps<typeof AttendanceGuestsGroup>> = {},
+	) {
+		const onAddGuest = vi.fn();
+		render(
+			<AttendanceGuestsGroup
+				{...base}
+				guests={[]}
+				clubGuests={clubGuests}
+				onAddGuest={onAddGuest}
+				{...over}
+			/>,
+		);
+		await userEvent.click(screen.getByRole("button", { name: /\+ Add guest/ }));
+		return onAddGuest;
+	}
+
+	// protects=an unaccented query finds an accented guest and the pick sends their id; fails_when=the picker stops folding accents or preferred names; no_claim=ranking order
+	it("finds guest José by 'jose' and by a goes-by name", async () => {
+		const onAddGuest = await openPicker([
+			{ id: "g9", name: "José Ruiz" } as never,
+			{ id: "g8", name: "Robert Smith", preferredName: "Bob" } as never,
+		]);
+		const box = screen.getByPlaceholderText("Search guests…");
+		await userEvent.type(box, "jose");
+		expect(screen.queryByText(/Robert Smith/)).toBeNull();
+		await userEvent.click(screen.getByText(/José Ruiz/));
+		expect(onAddGuest).toHaveBeenCalledWith({ guestId: "g9" });
+	});
+
+	// protects=a guest is found by their goes-by name and the row shows it; fails_when=preferredName stops being searched or shown; no_claim=ranking order
+	it("finds Robert Smith by his goes-by name 'bob'", async () => {
+		await openPicker([
+			{ id: "g9", name: "José Ruiz" } as never,
+			{ id: "g8", name: "Robert Smith", preferredName: "Bob" } as never,
+		]);
+		await userEvent.type(screen.getByPlaceholderText("Search guests…"), "bob");
+		expect(screen.getByText(/Robert Smith/)).toBeTruthy();
+		expect(screen.getByText(/goes by Bob/)).toBeTruthy();
+		expect(screen.queryByText(/José Ruiz/)).toBeNull();
+	});
+
+	// protects=a lost guest is hidden until something is typed; fails_when=the lost rule is dropped or applied while typing; no_claim=lost guests are not deleted
+	it("hides a lost guest until the query is typed", async () => {
+		await openPicker([
+			{ id: "g1", name: "Lena Lost", stage: "lost" },
+			{ id: "g2", name: "Pia Prospect", stage: "prospect" },
+		]);
+		expect(screen.queryByText(/Lena Lost/)).toBeNull();
+		await userEvent.type(screen.getByPlaceholderText("Search guests…"), "len");
+		expect(screen.getByText(/Lena Lost/)).toBeTruthy();
+	});
+
+	// protects=a roll that locks while the picker is open never calls onAddGuest, because PersonPicker disables its rows; fails_when=the group stops passing disabled={locked} to PersonPicker; no_claim=the `if (locked) return` belt in onPick (unreachable through the UI: the disabled cmdk item swallows the click first) and other writes while locked
+	it("never calls onAddGuest once the roll locks", async () => {
+		const onAddGuest = vi.fn();
+		const guests = [{ id: "g2", name: "Tom Reyes" }];
+		const view = render(
+			<AttendanceGuestsGroup
+				{...base}
+				guests={[]}
+				clubGuests={guests}
+				onAddGuest={onAddGuest}
+			/>,
+		);
+		await userEvent.click(screen.getByRole("button", { name: /\+ Add guest/ }));
+		view.rerender(
+			<AttendanceGuestsGroup
+				{...base}
+				guests={[]}
+				clubGuests={guests}
+				onAddGuest={onAddGuest}
+				locked={true}
+			/>,
+		);
+		const row = screen.getByText("Tom Reyes").closest("[cmdk-item]");
+		expect(row?.getAttribute("aria-disabled")).toBe("true");
+		await userEvent.click(screen.getByText("Tom Reyes"));
+		fireEvent.click(screen.getByText("Tom Reyes"));
+		expect(onAddGuest).not.toHaveBeenCalled();
+	});
 });

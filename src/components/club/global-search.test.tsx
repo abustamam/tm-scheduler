@@ -49,6 +49,64 @@ describe("searchWorkspace", () => {
 		expect(r.members.map((m) => m.name)).toEqual(["Mahbuba"]);
 	});
 
+	// protects=an office label finds the officer; fails_when=extraTerms is not passed; no_claim=page hits
+	it("finds an officer by their office label", () => {
+		expect(
+			searchWorkspace("vp education", members, NOBODY).members.map(
+				(m) => m.name,
+			),
+		).toEqual(["Mahbuba"]);
+	});
+
+	// protects=words match in any order and the result rows are the member rows unchanged; fails_when=matching is a plain substring or extraTerms leaks onto the row; no_claim=ranking inside a tier
+	it("matches words in any order and returns plain member rows", () => {
+		const r = searchWorkspace(
+			"smith jo",
+			[{ id: "j", name: "Jo Smith", officerPositions: [] }, ...members],
+			NOBODY,
+		);
+		expect(r.members).toEqual([
+			{ id: "j", name: "Jo Smith", officerPositions: [] },
+		]);
+	});
+
+	// protects=results are ordered by match tier before the cap of 8, in a fixture where tier and alphabetical order disagree; fails_when=input order or alphabetical order is used instead; no_claim=localeCompare tie-break
+	it("ranks by tier: prefix before substring, against alphabetical order", () => {
+		// "Rosamund" sorts before "Samuel" alphabetically, so only tier ranking puts Samuel first.
+		const r = searchWorkspace(
+			"sam",
+			[
+				{ id: "a", name: "Rosamund", officerPositions: [] },
+				{ id: "b", name: "Samuel", officerPositions: [] },
+			],
+			NOBODY,
+		);
+		expect(r.members.map((m) => m.name)).toEqual(["Samuel", "Rosamund"]);
+	});
+
+	// protects=the best-tier member survives the 8-result cap even when ten weaker matches sort first; fails_when=the cap is applied before ranking; no_claim=the order of the weaker matches
+	it("keeps the best-tier match when the 8-result cap cuts the list", () => {
+		const substring = Array.from({ length: 10 }, (_, i) => ({
+			id: `s${i}`,
+			name: `Rosamund ${i}`,
+			officerPositions: [],
+		}));
+		const r = searchWorkspace(
+			"sam",
+			[...substring, { id: "p", name: "Samuel", officerPositions: [] }],
+			NOBODY,
+		);
+		expect(r.members).toHaveLength(8);
+		expect(r.members[0]?.name).toBe("Samuel");
+	});
+
+	// protects=a punctuation-only query lists no members; fails_when=the guard goes back to a bare trim() and the matcher's blank query lists the first 8; no_claim=page matching for punctuation
+	it("returns no members for a punctuation-only query", () => {
+		const members = [{ id: "a", name: "Ann", officerPositions: [] }];
+		expect(searchWorkspace("%", members, NOBODY).members).toEqual([]);
+		expect(searchWorkspace(".", members, NOBODY).members).toEqual([]);
+	});
+
 	it("caps member results at 8", () => {
 		const many = Array.from({ length: 20 }, (_, i) => ({
 			id: `x${i}`,

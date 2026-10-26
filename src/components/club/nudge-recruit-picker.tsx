@@ -1,14 +1,7 @@
 import { useMemo, useState } from "react";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
+import { PersonPicker } from "#/components/club/person-picker";
 import { Button } from "#/components/ui/button";
-import {
-	Command,
-	CommandEmpty,
-	CommandGroup,
-	CommandInput,
-	CommandItem,
-	CommandList,
-} from "#/components/ui/command";
 import {
 	Popover,
 	PopoverContent,
@@ -110,8 +103,17 @@ export function NudgeRecruitPicker({
 }) {
 	const [open, setOpen] = useState(false);
 	const [picked, setPicked] = useState<RecruitTarget | null>(null);
-	const sorted = useMemo(
-		() => [...targets].sort((a, b) => a.name.localeCompare(b.name)),
+	// Unavailable members sort last (rank 1); the matcher orders the rest.
+	const people = useMemo(
+		() =>
+			targets.map((t) => ({
+				kind: "member" as const,
+				id: t.id,
+				name: t.name,
+				preferredName: t.preferredName,
+				rank: t.notAvailable ? 1 : 0,
+				target: t,
+			})),
 		[targets],
 	);
 	// `picked` is a point-in-time snapshot from the moment it was selected; once
@@ -121,7 +123,7 @@ export function NudgeRecruitPicker({
 	// panel (in particular the "Contacted" checkbox) reflects the current state
 	// instead of going stale until closed and reopened.
 	const livePicked = picked
-		? (sorted.find((t) => t.id === picked.id) ?? picked)
+		? (targets.find((t) => t.id === picked.id) ?? picked)
 		: null;
 
 	return (
@@ -177,46 +179,39 @@ export function NudgeRecruitPicker({
 						</Button>
 					</div>
 				) : (
-					<Command>
-						<CommandInput placeholder="Search members…" />
-						<CommandList>
-							<CommandEmpty>No members found.</CommandEmpty>
-							<CommandGroup>
-								{sorted.map((t) => (
-									<CommandItem
-										key={t.id}
-										// Suffix the id so two members with the same name are
-										// distinct cmdk values (keyboard selection targets the
-										// right one); search still matches on the name.
-										value={`${t.name} ${t.id}`}
-										onSelect={() => setPicked(t)}
-									>
-										<span className="flex-1 truncate">{t.name}</span>
-										{t.notAvailable ? (
-											<span className="ml-2 text-xs text-warning-strong">
-												Not available
-											</span>
-										) : null}
-										{t.alreadyRole ? (
-											<span className="ml-2 text-xs text-muted-foreground">
-												Already: {t.alreadyRole}
-											</span>
-										) : null}
-										{t.contacted ? (
-											<span className="ml-2 text-xs text-success-strong">
-												Contacted
-											</span>
-										) : null}
-										{!t.phone && !t.email ? (
-											<span className="ml-2 text-xs text-muted-foreground">
-												no contact
-											</span>
-										) : null}
-									</CommandItem>
-								))}
-							</CommandGroup>
-						</CommandList>
-					</Command>
+					<PersonPicker
+						people={people}
+						placeholder="Search members…"
+						emptyText="No members found."
+						onPick={(p) => setPicked(p.target)}
+						renderMeta={(p) => {
+							const t = p.target;
+							return (
+								<span className="flex items-center">
+									{t.notAvailable ? (
+										<span className="ml-2 text-xs text-warning-strong">
+											Not available
+										</span>
+									) : null}
+									{t.alreadyRole ? (
+										<span className="ml-2 text-xs text-muted-foreground">
+											Already: {t.alreadyRole}
+										</span>
+									) : null}
+									{t.contacted ? (
+										<span className="ml-2 text-xs text-success-strong">
+											Contacted
+										</span>
+									) : null}
+									{!t.phone && !t.email ? (
+										<span className="ml-2 text-xs text-muted-foreground">
+											no contact
+										</span>
+									) : null}
+								</span>
+							);
+						}}
+					/>
 				)}
 			</PopoverContent>
 		</Popover>

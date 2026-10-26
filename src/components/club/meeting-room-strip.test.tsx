@@ -19,6 +19,14 @@ import { getBallot } from "#/server/voting";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
 import { MeetingRoomStrip, ROOM_VOTE_POLL_MS } from "./meeting-room-strip";
 
+class RO {
+	observe() {}
+	unobserve() {}
+	disconnect() {}
+}
+globalThis.ResizeObserver = RO as unknown as typeof ResizeObserver;
+Element.prototype.scrollIntoView = () => {};
+
 const CLUB = "downtown";
 const CLUB_UUID = "11111111-2222-4333-8444-555555555555";
 const MEETING_UUID = "99999999-2222-4333-8444-555555555555";
@@ -215,7 +223,7 @@ describe("MeetingRoomStrip — identity branching (#913 AC2, AC3)", () => {
 		await user.click(
 			screen.getByRole("button", { name: "Member? Pick your name" }),
 		);
-		await user.click(await screen.findByRole("button", { name: /Pat Lee/ }));
+		await user.click(await screen.findByRole("option", { name: /Pat Lee/ }));
 
 		await waitFor(() =>
 			expect(labels()).toEqual(["What I'm doing today", "Today's agenda"]),
