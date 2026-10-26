@@ -38,6 +38,11 @@ afterEach(() => {
 
 describe("lost guest search", () => {
 	it("searches existing guests in role assignment and resets for another slot", async () => {
+		// protects: role assignment offers a lost guest only once searched for, picks
+		//   it with the right ids, and starts the next slot with an empty search.
+		// fails_when: lost guests are listed unsearched, the search survives a slot
+		//   change, or the pick sends the wrong slotId/guestId.
+		// no_claim: the server action itself (mocked) or the member rows.
 		const user = userEvent.setup();
 		const slot = {
 			id: "slot-one",

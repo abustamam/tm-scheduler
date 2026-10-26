@@ -235,6 +235,10 @@ export function AssignSlotSheet({
 									? void assignGuest({ guestId: person.id })
 									: void pick(person.id)
 							}
+							// Only the NAME recedes for a Not-available member (#377). Dimming
+							// the whole row would drag the muted sub-line and the amber "Never
+							// done this role" hint below WCAG AA; the "Not available" badge
+							// carries the semantic signal.
 							nameClassName={(person) =>
 								person.row?.unavailable ? "text-muted-foreground" : undefined
 							}

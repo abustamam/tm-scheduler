@@ -90,12 +90,16 @@ describe("TableTopicsCapture picker (#1332)", () => {
 	it("never brings back a hidden member, whatever is typed", async () => {
 		// protects: AC6, #1319's hidden members are removed before the picker sees them.
 		// fails_when: the filter moves after the picker, or typing re-includes the row.
+		//   The positive control (a visible member IS listed) keeps an empty picker
+		//   from passing the negative assertion.
 		// no_claim: how unavailableMemberIds is computed.
 		open(["b"]);
-		await userEvent.type(
-			screen.getByPlaceholderText("Search members and guests…"),
-			"Bo Absent",
-		);
+		const search = screen.getByPlaceholderText("Search members and guests…");
+		await userEvent.type(search, "Bo Absent");
+		expect(screen.queryByText("Bo Absent")).toBeNull();
+		await userEvent.clear(search);
+		await userEvent.type(search, "Ada");
+		expect(screen.getByText("Ada Here")).toBeTruthy();
 		expect(screen.queryByText("Bo Absent")).toBeNull();
 	});
 
