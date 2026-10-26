@@ -46,8 +46,7 @@ export const Route = createFileRoute("/_authed/agenda-plan/$planId")({
 	component: AgendaPlanConfirm,
 });
 
-const CARD =
-	"rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] px-5 py-6";
+const CARD = "rounded-2xl border border-border bg-surface-raised px-5 py-6";
 
 function Shell({
 	title,
@@ -102,7 +101,7 @@ function AgendaPlanConfirm() {
 	if (view.status === "not_found") {
 		return (
 			<Shell title="Not found">
-				<p className="text-sm text-[var(--sea-ink-soft)]">
+				<p className="text-sm text-muted-foreground">
 					That confirmation link doesn't point at anything you can open. Ask
 					whoever proposed these agendas to send you a fresh one.
 				</p>
@@ -113,7 +112,7 @@ function AgendaPlanConfirm() {
 	if (view.status === "archived") {
 		return (
 			<Shell title="Club archived">
-				<p className="text-sm text-[var(--sea-ink-soft)]">{view.message}</p>
+				<p className="text-sm text-muted-foreground">{view.message}</p>
 			</Shell>
 		);
 	}
@@ -121,7 +120,7 @@ function AgendaPlanConfirm() {
 	if (view.status === "expired") {
 		return (
 			<Shell title="Link expired">
-				<p className="text-sm text-[var(--sea-ink-soft)]">
+				<p className="text-sm text-muted-foreground">
 					This confirmation link expired on{" "}
 					{formatMeetingDate(view.expiresAt, timezone)}. Nothing was saved — ask
 					for the dates again to get a new link.
@@ -133,7 +132,7 @@ function AgendaPlanConfirm() {
 	if (view.status === "applied") {
 		return (
 			<Shell title="Already saved">
-				<p className="text-sm text-[var(--sea-ink-soft)]">
+				<p className="text-sm text-muted-foreground">
 					These agendas were saved on{" "}
 					{formatMeetingDate(view.appliedAt, timezone)} in {view.clubName}.
 					{view.applied
@@ -149,10 +148,8 @@ function AgendaPlanConfirm() {
 	if (view.status === "unreadable") {
 		return (
 			<Shell title="Can't read this plan">
-				<p className="text-sm font-semibold text-[var(--sea-ink)]">
-					{view.message}
-				</p>
-				<p className="mt-2 text-sm text-[var(--sea-ink-soft)]">
+				<p className="text-sm font-semibold text-foreground">{view.message}</p>
+				<p className="mt-2 text-sm text-muted-foreground">
 					{view.clubName} · nothing has been saved.
 				</p>
 			</Shell>
@@ -167,14 +164,14 @@ function AgendaPlanConfirm() {
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					Confirm these agendas
 				</h1>
-				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+				<p className="mt-1 text-sm text-muted-foreground">
 					{/* The dates ASKED, not the dates planned — a blocked date is still
 					    a row in the table below, and a count that skipped it would
 					    read as one the page had dropped. */}
 					{view.clubName} · {view.entryCount} date
 					{view.entryCount === 1 ? "" : "s"}
 				</p>
-				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+				<p className="mt-1 text-sm text-muted-foreground">
 					Check every date before saving. Nothing is written until you press
 					Save.
 				</p>
@@ -222,7 +219,7 @@ function AgendaPlanConfirm() {
 					{busy ? "Working…" : "Save these agendas"}
 				</Button>
 				{problems > 0 ? (
-					<span className="text-sm text-[var(--sea-ink-soft)]">
+					<span className="text-sm text-muted-foreground">
 						{problems === 1
 							? "1 date still needs attention."
 							: `${problems} dates still need attention.`}

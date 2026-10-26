@@ -243,7 +243,7 @@ function PreferredContactIcon({ method }: { method: ContactMethod | null }) {
 			aria-label={label}
 			title={label}
 			data-testid="preferred-contact-icon"
-			className="inline-flex shrink-0 text-[var(--sea-ink-soft)]"
+			className="inline-flex shrink-0 text-muted-foreground"
 		>
 			<Icon className="size-3.5" aria-hidden />
 		</span>
@@ -386,7 +386,7 @@ function Roster() {
 					<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 						Club roster
 					</h1>
-					<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+					<p className="mt-1 text-sm text-muted-foreground">
 						Every member of your club at a glance · Spring 2026 term
 					</p>
 				</div>
@@ -471,10 +471,10 @@ function Roster() {
 					/>
 				))}
 				{servedAsAdmin ? (
-					<label className="ml-auto inline-flex cursor-pointer items-center gap-2 text-sm text-[var(--sea-ink-soft)]">
+					<label className="ml-auto inline-flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
 						<input
 							type="checkbox"
-							className="size-4 accent-[var(--sea-ink)]"
+							className="size-4 accent-foreground"
 							checked={showFormerPathways}
 							onChange={(e) =>
 								navigate({
@@ -489,10 +489,10 @@ function Roster() {
 			</div>
 
 			{/* Table */}
-			<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_14px_30px_rgba(23,58,64,.06)]">
+			<div className="overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-[0_14px_30px_rgba(23,58,64,.06)]">
 				<div
 					className={cn(
-						"grid gap-3.5 border-b border-[var(--line)] bg-[var(--foam)] px-5 py-3 text-xs font-extrabold tracking-[0.08em] text-[var(--sea-ink-soft)] uppercase",
+						"grid gap-3.5 border-b border-border bg-surface-soft px-5 py-3 text-xs font-bold tracking-[0.08em] text-muted-foreground uppercase",
 						gridCols,
 					)}
 				>
@@ -506,12 +506,12 @@ function Roster() {
 				{visible.length === 0 ? (
 					rows.length === 0 ? (
 						<div className="px-5 py-12 text-center">
-							<p className="text-sm font-semibold text-[var(--sea-ink)]">
+							<p className="text-sm font-semibold text-foreground">
 								No members yet
 							</p>
 							{canManage ? (
 								<>
-									<p className="mx-auto mt-1.5 max-w-sm text-sm text-[var(--sea-ink-soft)]">
+									<p className="mx-auto mt-1.5 max-w-sm text-sm text-muted-foreground">
 										Import your club's roster to get everyone set up — paste
 										names and emails, or add them one at a time.
 									</p>
@@ -524,14 +524,14 @@ function Roster() {
 									</Button>
 								</>
 							) : (
-								<p className="mx-auto mt-1.5 max-w-sm text-sm text-[var(--sea-ink-soft)]">
+								<p className="mx-auto mt-1.5 max-w-sm text-sm text-muted-foreground">
 									Once an officer adds the club's roster, members will show up
 									here.
 								</p>
 							)}
 						</div>
 					) : (
-						<p className="px-5 py-10 text-center text-sm text-[var(--sea-ink-soft)]">
+						<p className="px-5 py-10 text-center text-sm text-muted-foreground">
 							No members match this filter.
 						</p>
 					)
@@ -544,7 +544,7 @@ function Roster() {
 						<div
 							key={m.id}
 							className={cn(
-								"group relative grid items-center gap-3.5 border-b border-[var(--line)] px-5 py-3 transition-colors last:border-b-0 hover:bg-[var(--foam)]",
+								"group relative grid items-center gap-3.5 border-b border-border px-5 py-3 transition-colors last:border-b-0 hover:bg-surface-soft",
 								gridCols,
 								m.membershipStatus === "inactive" && "opacity-55",
 							)}
@@ -574,28 +574,28 @@ function Roster() {
 											</Badge>
 										) : null}
 										{m.membershipStatus === "inactive" ? (
-											<span className="shrink-0 rounded-full border border-[var(--line)] bg-[var(--sand)] px-2 py-0.5 text-xs font-bold tracking-[0.03em] text-[var(--sea-ink-soft)] uppercase">
+											<span className="shrink-0 rounded-full border border-border bg-surface-muted px-2 py-0.5 text-xs font-bold tracking-[0.03em] text-muted-foreground uppercase">
 												Inactive
 											</span>
 										) : null}
 									</div>
-									<div className="text-xs text-[var(--sea-ink-soft)]">
+									<div className="text-xs text-muted-foreground">
 										{m.tenure}
 									</div>
 								</div>
 							</div>
 
 							{/* Speeches */}
-							<div className="pointer-events-none relative z-[1] hidden text-sm font-bold text-[var(--sea-ink)] sm:block">
+							<div className="pointer-events-none relative z-[1] hidden text-sm font-bold text-foreground sm:block">
 								{m.speeches}
-								<span className="text-xs font-medium text-[var(--sea-ink-soft)]">
+								<span className="text-xs font-semibold text-muted-foreground">
 									{" "}
 									given
 								</span>
 							</div>
 
 							{/* Pathway */}
-							<div className="pointer-events-none relative z-[1] hidden min-w-0 truncate text-xs text-[var(--sea-ink-soft)] sm:block">
+							<div className="pointer-events-none relative z-[1] hidden min-w-0 truncate text-xs text-muted-foreground sm:block">
 								{m.pathwayLabel ??
 									// An officer is told the column is hidden, not empty; anyone
 									// else sees the ordinary "no paths" dash.
@@ -625,7 +625,7 @@ function Roster() {
 							    dead-but-live, which is the same bug on a narrower input. */}
 							<div
 								className={cn(
-									"relative hidden min-w-0 truncate text-xs text-[var(--sea-ink-soft)] xl:block",
+									"relative hidden min-w-0 truncate text-xs text-muted-foreground xl:block",
 									hasDialablePhone(m.phone)
 										? "z-[2] w-fit max-w-full"
 										: "pointer-events-none",
@@ -644,7 +644,7 @@ function Roster() {
 										state={m.inviteState}
 									/>
 								) : null}
-								<span className="pointer-events-none text-[var(--sea-ink-soft)] opacity-45 transition-all group-hover:translate-x-0.5 group-hover:opacity-100">
+								<span className="pointer-events-none text-muted-foreground opacity-45 transition-[transform,opacity] group-hover:translate-x-0.5 group-hover:opacity-100">
 									<ChevronRight className="size-4" aria-hidden />
 								</span>
 							</div>
@@ -653,7 +653,7 @@ function Roster() {
 				)}
 			</div>
 
-			<p className="mt-3.5 px-0.5 text-xs text-[var(--sea-ink-soft)]">
+			<p className="mt-3.5 px-0.5 text-xs text-muted-foreground">
 				Tip: click any member to open their profile, speech log and roles
 				served.
 			</p>
@@ -754,7 +754,7 @@ function RowInviteControl({
 		return (
 			<span
 				title="This member has an account"
-				className="inline-flex items-center text-[var(--lagoon-deep)]"
+				className="inline-flex items-center text-link"
 			>
 				<CheckCircle2 className="size-4" aria-hidden />
 				<span className="sr-only">Joined</span>
@@ -810,8 +810,8 @@ function RowInviteControl({
 			title={label}
 			aria-label={label}
 			className={cn(
-				"inline-flex size-7 items-center justify-center rounded-md border border-[var(--line)] bg-[var(--surface-strong)] text-[var(--sea-ink-soft)] transition-colors hover:border-[var(--lagoon-deep)] hover:text-[var(--lagoon-deep)] disabled:cursor-not-allowed disabled:opacity-40",
-				state === "invited" && "text-[var(--lagoon-deep)]",
+				"inline-flex size-7 items-center justify-center rounded-md border border-border bg-surface-raised text-muted-foreground transition-colors hover:border-link hover:text-link disabled:cursor-not-allowed disabled:opacity-40",
+				state === "invited" && "text-link",
 			)}
 		>
 			{busy ? (
@@ -912,9 +912,9 @@ const CSV_ACTION_META: Record<
 	CsvPreview["rows"][number]["action"],
 	{ label: string; className: string }
 > = {
-	insert: { label: "New", className: "text-[var(--lagoon-deep)]" },
-	update: { label: "Update", className: "text-[var(--sea-ink)]" },
-	skip: { label: "Skip", className: "text-[var(--warning-strong)]" },
+	insert: { label: "New", className: "text-link" },
+	update: { label: "Update", className: "text-foreground" },
+	skip: { label: "Skip", className: "text-warning-strong" },
 };
 
 /**
@@ -1034,9 +1034,9 @@ function CsvUploadDialog({
 				</DialogHeader>
 
 				<div className="space-y-3">
-					<label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-[var(--line)] bg-[var(--foam)] px-4 py-3 text-sm transition-colors hover:border-[var(--lagoon-deep)]">
-						<Upload className="size-4 text-[var(--sea-ink-soft)]" aria-hidden />
-						<span className="font-semibold text-[var(--sea-ink)]">
+					<label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-border bg-surface-soft px-4 py-3 text-sm transition-colors hover:border-link">
+						<Upload className="size-4 text-muted-foreground" aria-hidden />
+						<span className="font-semibold text-foreground">
 							{fileName ?? "Choose a .csv file…"}
 						</span>
 						<input
@@ -1048,29 +1048,29 @@ function CsvUploadDialog({
 					</label>
 
 					{previewing ? (
-						<p className="text-sm text-[var(--sea-ink-soft)]">
+						<p className="text-sm text-muted-foreground">
 							Reading and matching rows…
 						</p>
 					) : null}
 
 					{preview ? (
 						<>
-							<div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-[var(--sea-ink-soft)]">
+							<div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
 								<span>
-									<span className="font-bold text-[var(--lagoon-deep)]">
+									<span className="font-bold text-link">
 										{preview.summary.toInsert}
 									</span>{" "}
 									new
 								</span>
 								<span>
-									<span className="font-bold text-[var(--sea-ink)]">
+									<span className="font-bold text-foreground">
 										{preview.summary.toUpdate}
 									</span>{" "}
 									to update
 								</span>
 								{preview.summary.toSkip > 0 ? (
 									<span>
-										<span className="font-bold text-[var(--warning-strong)]">
+										<span className="font-bold text-warning-strong">
 											{preview.summary.toSkip}
 										</span>{" "}
 										skipped
@@ -1091,19 +1091,19 @@ function CsvUploadDialog({
 							    say whether anyone else holds them — the importing
 							    admin has no business learning either. */}
 							{preview.summary.foreignSkipped > 0 ? (
-								<p className="text-xs text-[var(--warning-strong)]">
+								<p className="text-xs text-warning-strong">
 									{foreignSkipSummary(preview.summary.foreignSkipped)}
 								</p>
 							) : null}
 							{preview.summary.addressConflicts > 0 ? (
-								<p className="text-xs text-[var(--warning-strong)]">
+								<p className="text-xs text-warning-strong">
 									{`${preview.summary.addressConflicts} row(s) will be imported with an email another member already has on their roster entry — neither can sign in until each has their own address.`}
 								</p>
 							) : null}
 
 							{preview.summary.ambiguous > 0 ||
 							preview.summary.unparseablePositions > 0 ? (
-								<p className="text-xs text-[var(--warning-strong)]">
+								<p className="text-xs text-warning-strong">
 									{preview.summary.ambiguous > 0
 										? `${preview.summary.ambiguous} row(s) share an email and were added as separate members. `
 										: ""}
@@ -1115,10 +1115,10 @@ function CsvUploadDialog({
 
 							<section
 								aria-label="Officer access changes"
-								className="space-y-3 rounded-lg border border-[var(--line)] p-3"
+								className="space-y-3 rounded-lg border border-border p-3"
 							>
 								<h3 className="font-semibold">Officer access changes</h3>
-								<p className="text-sm text-[var(--sea-ink-soft)]">
+								<p className="text-sm text-muted-foreground">
 									Each selected office grants full club-admin access. Leave
 									unchecked to import the roster without granting access.
 									Existing offices are kept.
@@ -1159,7 +1159,7 @@ function CsvUploadDialog({
 													? ` · Customer ID ${change.customerId}`
 													: ""}
 												<br />
-												<span className="text-xs text-[var(--sea-ink-soft)]">
+												<span className="text-xs text-muted-foreground">
 													{change.personId ? "Existing person" : "New person"} ·
 													Import row {change.rowIndex + 1}
 												</span>
@@ -1170,9 +1170,9 @@ function CsvUploadDialog({
 							</section>
 
 							{preview.rows.length > 0 ? (
-								<div className="max-h-[300px] overflow-auto rounded-lg border border-[var(--line)]">
+								<div className="max-h-[300px] overflow-auto rounded-lg border border-border">
 									<table className="w-full text-xs">
-										<thead className="sticky top-0 bg-[var(--foam)] text-xs font-extrabold tracking-[0.06em] text-[var(--sea-ink-soft)] uppercase">
+										<thead className="sticky top-0 bg-surface-soft text-xs font-bold tracking-[0.06em] text-muted-foreground uppercase">
 											<tr>
 												<th className="px-3 py-2 text-left">Member</th>
 												<th className="px-3 py-2 text-left">Email</th>
@@ -1188,19 +1188,18 @@ function CsvUploadDialog({
 														// biome-ignore lint/suspicious/noArrayIndexKey: preview rows have no stable id
 														key={i}
 														className={cn(
-															"border-t border-[var(--line)]",
-															row.action === "skip" &&
-																"bg-[var(--warning-soft,#fdf3e7)]",
+															"border-t border-border",
+															row.action === "skip" && "bg-warning-soft",
 														)}
 													>
-														<td className="px-3 py-1.5 font-medium">
+														<td className="px-3 py-1.5 font-semibold">
 															{row.name || (
-																<span className="text-[var(--sea-ink-soft)] italic">
+																<span className="text-muted-foreground italic">
 																	(blank)
 																</span>
 															)}
 														</td>
-														<td className="px-3 py-1.5 text-[var(--sea-ink-soft)]">
+														<td className="px-3 py-1.5 text-muted-foreground">
 															{row.email || "—"}
 														</td>
 														<td
@@ -1211,7 +1210,7 @@ function CsvUploadDialog({
 														>
 															{meta.label}
 														</td>
-														<td className="px-3 py-1.5 text-[var(--sea-ink-soft)]">
+														<td className="px-3 py-1.5 text-muted-foreground">
 															{row.note ?? "—"}
 														</td>
 													</tr>
@@ -1361,7 +1360,7 @@ function AddMemberDialog({
 						<div className="space-y-1.5">
 							<Label htmlFor="add-member-email">
 								Email{" "}
-								<span className="font-normal text-[var(--sea-ink-soft)]">
+								<span className="font-normal text-muted-foreground">
 									optional
 								</span>
 							</Label>
@@ -1377,7 +1376,7 @@ function AddMemberDialog({
 						<div className="space-y-1.5">
 							<Label htmlFor="add-member-phone">
 								Phone{" "}
-								<span className="font-normal text-[var(--sea-ink-soft)]">
+								<span className="font-normal text-muted-foreground">
 									optional
 								</span>
 							</Label>
@@ -1390,12 +1389,12 @@ function AddMemberDialog({
 							/>
 						</div>
 
-						<p className="text-sm text-[var(--sea-ink-soft)]">
+						<p className="text-sm text-muted-foreground">
 							Assign officer access from the member's profile after adding them.
 						</p>
 
 						{blockingIssue ? (
-							<p className="text-sm font-semibold text-[var(--warning-strong)]">
+							<p className="text-sm font-semibold text-warning-strong">
 								{ADD_ISSUE_MESSAGE[blockingIssue]}
 							</p>
 						) : null}
@@ -1496,20 +1495,20 @@ function BulkImportDialog({
 						placeholder={
 							"Jane Doe, jane@club.org, 19165551234, President\nJohn Smith, john@club.org, 19165555678"
 						}
-						className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-strong)] px-3 py-2 font-mono text-xs text-[var(--sea-ink)] transition-colors hover:border-[var(--lagoon-deep)] focus:outline-none"
+						className="w-full rounded-lg border border-border bg-surface-raised px-3 py-2 font-mono text-xs text-foreground transition-colors hover:border-link focus:outline-none"
 					/>
 
 					{preview.length > 0 ? (
 						<>
-							<div className="text-sm text-[var(--sea-ink-soft)]">
-								<span className="font-bold text-[var(--sea-ink)]">
+							<div className="text-sm text-muted-foreground">
+								<span className="font-bold text-foreground">
 									{importable.length}
 								</span>{" "}
 								to import
 								{skipped > 0 ? (
 									<>
 										{" · "}
-										<span className="font-bold text-[var(--warning-strong)]">
+										<span className="font-bold text-warning-strong">
 											{skipped}
 										</span>{" "}
 										skipped
@@ -1517,9 +1516,9 @@ function BulkImportDialog({
 								) : null}
 							</div>
 
-							<div className="max-h-[260px] overflow-auto rounded-lg border border-[var(--line)]">
+							<div className="max-h-[260px] overflow-auto rounded-lg border border-border">
 								<table className="w-full text-xs">
-									<thead className="sticky top-0 bg-[var(--foam)] text-xs font-extrabold tracking-[0.06em] text-[var(--sea-ink-soft)] uppercase">
+									<thead className="sticky top-0 bg-surface-soft text-xs font-bold tracking-[0.06em] text-muted-foreground uppercase">
 										<tr>
 											<th className="px-3 py-2 text-left">Name</th>
 											<th className="px-3 py-2 text-left">Email</th>
@@ -1534,33 +1533,31 @@ function BulkImportDialog({
 												// biome-ignore lint/suspicious/noArrayIndexKey: preview rows have no stable id
 												key={i}
 												className={cn(
-													"border-t border-[var(--line)]",
-													!row.willImport && "bg-[var(--warning-soft,#fdf3e7)]",
+													"border-t border-border",
+													!row.willImport && "bg-warning-soft",
 												)}
 											>
-												<td className="px-3 py-1.5 font-medium">
+												<td className="px-3 py-1.5 font-semibold">
 													{row.name || (
-														<span className="text-[var(--sea-ink-soft)] italic">
+														<span className="text-muted-foreground italic">
 															(blank)
 														</span>
 													)}
 												</td>
-												<td className="px-3 py-1.5 text-[var(--sea-ink-soft)]">
+												<td className="px-3 py-1.5 text-muted-foreground">
 													{row.email || "—"}
 												</td>
-												<td className="px-3 py-1.5 text-[var(--sea-ink-soft)]">
+												<td className="px-3 py-1.5 text-muted-foreground">
 													{row.phone || "—"}
 												</td>
-												<td className="px-3 py-1.5 text-[var(--sea-ink-soft)]">
+												<td className="px-3 py-1.5 text-muted-foreground">
 													{row.office || "—"}
 												</td>
 												<td className="px-3 py-1.5">
 													{row.willImport ? (
-														<span className="font-semibold text-[var(--lagoon-deep)]">
-															OK
-														</span>
+														<span className="font-semibold text-link">OK</span>
 													) : (
-														<span className="font-semibold text-[var(--warning-strong)]">
+														<span className="font-semibold text-warning-strong">
 															{row.issues
 																.map((issue) => ISSUE_LABELS[issue])
 																.join(", ")}
@@ -1619,7 +1616,7 @@ function MergeMembersDialog({
 	const canSubmit = Boolean(keeper && absorbed) && !sameMember && !busy;
 
 	const selectClass =
-		"h-9 w-full rounded-lg border border-[var(--line)] bg-[var(--surface-strong)] px-3 text-sm font-medium text-[var(--sea-ink)] transition-colors hover:border-[var(--lagoon-deep)]";
+		"h-9 w-full rounded-lg border border-border bg-surface-raised px-3 text-sm font-semibold text-foreground transition-colors hover:border-link";
 
 	async function onMerge() {
 		if (!keeper || !absorbed || sameMember) return;
@@ -1655,7 +1652,7 @@ function MergeMembersDialog({
 					<div className="space-y-2">
 						<label
 							htmlFor="merge-keeper"
-							className="text-sm font-medium text-[var(--sea-ink)]"
+							className="text-sm font-semibold text-foreground"
 						>
 							Keep
 						</label>
@@ -1677,7 +1674,7 @@ function MergeMembersDialog({
 					<div className="space-y-2">
 						<label
 							htmlFor="merge-absorbed"
-							className="text-sm font-medium text-[var(--sea-ink)]"
+							className="text-sm font-semibold text-foreground"
 						>
 							Absorb (this duplicate is removed)
 						</label>
@@ -1698,11 +1695,11 @@ function MergeMembersDialog({
 					</div>
 
 					{sameMember ? (
-						<p className="text-sm font-medium text-[var(--warning-strong)]">
+						<p className="text-sm font-semibold text-warning-strong">
 							Pick two different members.
 						</p>
 					) : keeper && absorbed ? (
-						<p className="text-sm text-[var(--sea-ink-soft)]">
+						<p className="text-sm text-muted-foreground">
 							Merge <span className="font-bold">{absorbed.name}</span> into{" "}
 							<span className="font-bold">{keeper.name}</span>? {absorbed.name}
 							's roles and history move to {keeper.name}, then {absorbed.name}{" "}
@@ -1739,26 +1736,26 @@ function StatCard({
 }) {
 	const inner = (
 		<>
-			<div className="text-xs font-bold tracking-[0.04em] text-[var(--sea-ink-soft)] uppercase">
+			<div className="text-xs font-bold tracking-[0.04em] text-muted-foreground uppercase">
 				{stat.label}
 			</div>
 			<div className="mt-2 flex items-baseline gap-2">
 				<span
 					className={cn(
 						"font-display text-3xl leading-none font-semibold",
-						stat.amber && "text-[var(--warning-strong)]",
+						stat.amber && "text-warning-strong",
 					)}
 				>
 					{stat.value}
 				</span>
-				<span className="text-xs text-[var(--sea-ink-soft)]">{stat.note}</span>
+				<span className="text-xs text-muted-foreground">{stat.note}</span>
 			</div>
 		</>
 	);
 
 	const className = cn(
-		"rounded-xl border bg-[var(--surface-strong)] px-4 py-4 shadow-[0_1px_0_var(--inset-glint)_inset,0_8px_20px_rgba(23,58,64,.05)] transition-transform hover:-translate-y-0.5",
-		stat.amber ? "border-[var(--warning)]" : "border-[var(--line)]",
+		"rounded-xl border bg-surface-raised px-4 py-4 shadow-[0_8px_20px_rgba(23,58,64,.05)] transition-transform hover:-translate-y-0.5",
+		stat.amber ? "border-warning" : "border-border",
 	);
 
 	if (stat.to) {
@@ -1789,8 +1786,8 @@ function SegmentChip({
 			className={cn(
 				"inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold transition-transform active:scale-[0.97]",
 				active
-					? "border-[var(--sea-ink)] bg-[var(--sea-ink)] text-[var(--background)]"
-					: "border-[var(--line)] bg-[var(--surface-strong)] text-[var(--sea-ink-soft)]",
+					? "border-foreground bg-foreground text-background"
+					: "border-border bg-surface-raised text-muted-foreground",
 			)}
 		>
 			{segment.label}
@@ -1799,7 +1796,7 @@ function SegmentChip({
 					"inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-xs font-bold",
 					active
 						? "bg-white/20 text-current"
-						: "bg-[var(--sand)] text-[var(--sea-ink-soft)]",
+						: "bg-surface-muted text-muted-foreground",
 				)}
 			>
 				{count}
@@ -1849,11 +1846,9 @@ function FormerMembersDialog({
 					</DialogDescription>
 				</DialogHeader>
 				{formerMembers.length === 0 ? (
-					<p className="text-sm text-[var(--sea-ink-soft)]">
-						No former members.
-					</p>
+					<p className="text-sm text-muted-foreground">No former members.</p>
 				) : (
-					<ul className="divide-y divide-[var(--line)]">
+					<ul className="divide-y divide-border">
 						{formerMembers.map((m) => (
 							<li
 								key={m.id}
@@ -1867,7 +1862,7 @@ function FormerMembersDialog({
 									>
 										{m.name}
 									</Link>
-									<div className="text-xs text-[var(--sea-ink-soft)]">
+									<div className="text-xs text-muted-foreground">
 										Ended {m.endedAt ?? "unknown"}
 									</div>
 								</div>

@@ -121,7 +121,7 @@ function MentorsPage() {
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					{FIND_A_MENTOR_HEADING}
 				</h1>
-				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+				<p className="mt-1 text-sm text-muted-foreground">
 					Members of your club who have offered to mentor.
 				</p>
 			</div>
@@ -131,21 +131,19 @@ function MentorsPage() {
 					{refused}
 				</p>
 			) : mentors.length === 0 ? (
-				<p className="text-sm text-[var(--sea-ink-soft)]">
-					{NO_MENTORS_MESSAGE}
-				</p>
+				<p className="text-sm text-muted-foreground">{NO_MENTORS_MESSAGE}</p>
 			) : (
 				<ul className="m-0 grid list-none gap-3 p-0 sm:grid-cols-2">
 					{mentors.map((m) => (
 						<li
 							key={m.memberId}
 							data-mentor={m.memberId}
-							className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] px-5 py-4"
+							className="rounded-2xl border border-border bg-surface-raised px-5 py-4"
 						>
-							<h2 className="flex flex-wrap items-center gap-2 text-base font-bold text-[var(--sea-ink)]">
+							<h2 className="flex flex-wrap items-center gap-2 text-base font-bold text-foreground">
 								{m.name}
 								{pairings.some((p) => p.member.id === m.memberId) ? (
-									<span className="rounded-full bg-[var(--lagoon-deep)]/10 px-2 py-0.5 text-xs font-semibold text-[var(--lagoon-deep)]">
+									<span className="rounded-full bg-link/10 px-2 py-0.5 text-xs font-semibold text-link">
 										Your mentor
 									</span>
 								) : null}
@@ -154,12 +152,12 @@ function MentorsPage() {
 								className={
 									m.mentorBio
 										? "mt-1 text-sm whitespace-pre-wrap"
-										: "mt-1 text-sm text-[var(--sea-ink-soft)]"
+										: "mt-1 text-sm text-muted-foreground"
 								}
 							>
 								{m.mentorBio ?? NO_BIO_TEXT}
 							</p>
-							<p className="mt-2 text-xs text-[var(--sea-ink-soft)]">
+							<p className="mt-2 text-xs text-muted-foreground">
 								{menteeCountText(m.activeMenteeCount)}
 							</p>
 							<AskToMentor
@@ -218,7 +216,7 @@ function RequestStatus({
 	}
 	return (
 		<div
-			className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] px-5 py-3 text-sm"
+			className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-border bg-surface-raised px-5 py-3 text-sm"
 			data-slot="request-pending"
 		>
 			<span>

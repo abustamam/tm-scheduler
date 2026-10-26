@@ -53,8 +53,7 @@ export const Route = createFileRoute("/_authed/guest-book/$planId")({
 	component: GuestBookConfirm,
 });
 
-const CARD =
-	"rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] px-5 py-6";
+const CARD = "rounded-2xl border border-border bg-surface-raised px-5 py-6";
 
 function Shell({
 	title,
@@ -139,7 +138,7 @@ function GuestBookConfirm() {
 	if (view.status === "not_found") {
 		return (
 			<Shell title="Not found">
-				<p className="text-sm text-[var(--sea-ink-soft)]">
+				<p className="text-sm text-muted-foreground">
 					That confirmation link doesn't point at anything you can open. Ask
 					whoever transcribed the page to send you a fresh one.
 				</p>
@@ -150,7 +149,7 @@ function GuestBookConfirm() {
 	if (view.status === "archived") {
 		return (
 			<Shell title="Club archived">
-				<p className="text-sm text-[var(--sea-ink-soft)]">{view.message}</p>
+				<p className="text-sm text-muted-foreground">{view.message}</p>
 			</Shell>
 		);
 	}
@@ -158,7 +157,7 @@ function GuestBookConfirm() {
 	if (view.status === "expired") {
 		return (
 			<Shell title="Link expired">
-				<p className="text-sm text-[var(--sea-ink-soft)]">
+				<p className="text-sm text-muted-foreground">
 					This confirmation link expired on{" "}
 					{formatMeetingDate(view.expiresAt, timezone)}. Nothing was recorded —
 					transcribe the page again to get a new link.
@@ -172,7 +171,7 @@ function GuestBookConfirm() {
 			<Shell title="Already recorded">
 				{/* Carries no visitor data: `entries` was nulled when the write
 				    landed, and this state never had any to render. */}
-				<p className="text-sm text-[var(--sea-ink-soft)]">
+				<p className="text-sm text-muted-foreground">
 					{/* `meetingDate` comes out of the payload since #812 and is null
 					    only when the payload's envelope did not parse. An applied
 					    tombstone keeps its date, so this arm normally has one — but
@@ -192,10 +191,8 @@ function GuestBookConfirm() {
 	if (view.status === "unplannable") {
 		return (
 			<Shell title="Can't record this page yet">
-				<p className="text-sm font-semibold text-[var(--sea-ink)]">
-					{view.message}
-				</p>
-				<p className="mt-2 text-sm text-[var(--sea-ink-soft)]">
+				<p className="text-sm font-semibold text-foreground">{view.message}</p>
+				<p className="mt-2 text-sm text-muted-foreground">
 					{view.clubName}
 					{view.meetingDate ? ` · ${view.meetingDate}` : ""} ·{" "}
 					{view.entries.length} line
@@ -214,7 +211,7 @@ function GuestBookConfirm() {
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					Confirm the guest book
 				</h1>
-				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+				<p className="mt-1 text-sm text-muted-foreground">
 					{/* The club-LOCAL date, rendered as stored. Running it through
 					    `formatMeetingDate` would parse `YYYY-MM-DD` as UTC midnight and
 					    re-render it in the reader's own zone, which shows the previous
@@ -224,7 +221,7 @@ function GuestBookConfirm() {
 					{view.meetingNumber ? ` · #${view.meetingNumber}` : ""}
 					{view.meeting.theme ? ` · ${view.meeting.theme}` : ""}
 				</p>
-				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+				<p className="mt-1 text-sm text-muted-foreground">
 					Check every line against the paper page. Nothing is recorded until you
 					press Record.
 				</p>
@@ -247,7 +244,7 @@ function GuestBookConfirm() {
 			</div>
 
 			{view.summary.probablyAlreadyTranscribed ? (
-				<p className="text-sm font-semibold text-[var(--sea-ink)]">
+				<p className="text-sm font-semibold text-foreground">
 					Every line here is already recorded against this meeting — this page
 					looks like it was transcribed before.
 				</p>
@@ -289,7 +286,7 @@ function GuestBookConfirm() {
 					// "Needs attention", not "needs an answer": a blocking item is as
 					// often a misread address to correct as an ambiguity to answer,
 					// and only one of the two is a question.
-					<span className="text-sm text-[var(--sea-ink-soft)]">
+					<span className="text-sm text-muted-foreground">
 						{problems === 1
 							? "1 line still needs attention."
 							: `${problems} lines still need attention.`}

@@ -71,19 +71,19 @@ function MyCommitments() {
 			{/* Temporary (#912): remove after 2026-12-31. */}
 			<p className="text-sm text-muted-foreground">
 				API tokens and connected apps have moved to{" "}
-				<Link to="/account" className="font-medium text-primary underline">
+				<Link to="/account" className="font-semibold text-primary underline">
 					{navLabel("/account")}
 				</Link>
 				.
 			</p>
 
 			{needsSpeechDetails.length > 0 ? (
-				<div className="rounded-xl border border-[var(--warning)]/40 bg-[var(--warning-soft)] p-4">
-					<div className="flex items-center gap-2 font-semibold text-[var(--warning-foreground)]">
+				<div className="rounded-xl border border-warning/40 bg-warning-soft p-4">
+					<div className="flex items-center gap-2 font-semibold text-warning-foreground">
 						<Mic className="size-4" aria-hidden />
 						Speeches needing details
 					</div>
-					<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+					<p className="mt-1 text-sm text-muted-foreground">
 						You're down to speak but haven't added a title or project yet. Add
 						them so your evaluator can prepare.
 					</p>
@@ -119,7 +119,7 @@ function MyCommitments() {
 					<Link
 						to="/schedule"
 						search={{ view: "members", count: 8 }}
-						className="font-medium text-primary underline"
+						className="font-semibold text-primary underline"
 					>
 						Sign up on the sign-up sheet
 					</Link>{" "}
@@ -178,7 +178,7 @@ function MyCommitments() {
 										    to (#437), while the shell header names only the active
 										    one. Without it a two-club member sees two rows that
 										    differ by date alone — each with its own Release. */}
-										<span className="font-medium text-foreground">
+										<span className="font-semibold text-foreground">
 											{c.clubName}
 										</span>{" "}
 										· {formatMeetingDate(c.scheduledAt, c.timezone)} ·{" "}
