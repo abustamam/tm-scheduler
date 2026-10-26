@@ -48,6 +48,15 @@ function setup() {
 }
 
 describe("PickNameForm (#1333)", () => {
+	// protects=the search input keeps its accessible name "Search members"; fails_when=the inputLabel prop is dropped or not passed to the input; no_claim=placeholder text
+	it("names the search input 'Search members'", async () => {
+		setup();
+		await screen.findByText(/José Ruiz/);
+		expect(
+			screen.getByRole("combobox", { name: "Search members" }),
+		).toBeTruthy();
+	});
+
 	// protects=an unaccented query finds an accented name; fails_when=matching reverts to name.includes; no_claim=ranking order
 	it("finds José Ruiz by 'jose'", async () => {
 		const { user } = setup();

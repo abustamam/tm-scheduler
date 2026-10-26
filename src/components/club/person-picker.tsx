@@ -38,6 +38,7 @@ export function PersonPicker<T extends PickerPerson>({
 	renderSubline,
 	nameClassName,
 	autoFocus,
+	inputLabel,
 }: {
 	people: readonly T[];
 	onPick: (person: T) => void;
@@ -51,6 +52,8 @@ export function PersonPicker<T extends PickerPerson>({
 	/** Class for the name text only, e.g. to recede an unavailable member. */
 	nameClassName?: (person: T) => string | undefined;
 	autoFocus?: boolean;
+	/** Accessible name for the search input (placeholder is not one). */
+	inputLabel?: string;
 }) {
 	const [query, setQuery] = useState("");
 	const blank = isBlankQuery(query);
@@ -102,7 +105,9 @@ export function PersonPicker<T extends PickerPerson>({
 	}
 
 	return (
-		<Command shouldFilter={false}>
+		// cmdk names the input through aria-labelledby -> its Command label, which
+		// outranks an aria-label on the input, so the name goes on `label`.
+		<Command shouldFilter={false} label={inputLabel}>
 			<CommandInput
 				placeholder={placeholder}
 				value={query}

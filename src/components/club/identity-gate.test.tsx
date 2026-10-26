@@ -14,6 +14,14 @@ vi.mock("#/server/members", () => ({
 
 import { IdentityGateProvider, useRequireIdentity } from "./identity-gate";
 
+class RO {
+	observe() {}
+	unobserve() {}
+	disconnect() {}
+}
+globalThis.ResizeObserver = RO as unknown as typeof ResizeObserver;
+Element.prototype.scrollIntoView = () => {};
+
 const CLUB_UUID = "11111111-1111-1111-1111-111111111111";
 const CLUB_SLUG = "club-slug";
 

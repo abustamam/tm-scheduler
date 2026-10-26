@@ -70,17 +70,33 @@ describe("searchWorkspace", () => {
 		]);
 	});
 
-	// protects=results are ordered by match tier before the cap of 8; fails_when=input order or alphabetical order is used instead; no_claim=localeCompare tie-break
-	it("ranks by tier: prefix before substring", () => {
+	// protects=results are ordered by match tier before the cap of 8, in a fixture where tier and alphabetical order disagree; fails_when=input order or alphabetical order is used instead; no_claim=localeCompare tie-break
+	it("ranks by tier: prefix before substring, against alphabetical order", () => {
+		// "Rosamund" sorts before "Samuel" alphabetically, so only tier ranking puts Samuel first.
 		const r = searchWorkspace(
-			"ann",
+			"sam",
 			[
-				{ id: "a", name: "Joanne", officerPositions: [] },
-				{ id: "b", name: "Annie", officerPositions: [] },
+				{ id: "a", name: "Rosamund", officerPositions: [] },
+				{ id: "b", name: "Samuel", officerPositions: [] },
 			],
 			NOBODY,
 		);
-		expect(r.members.map((m) => m.name)).toEqual(["Annie", "Joanne"]);
+		expect(r.members.map((m) => m.name)).toEqual(["Samuel", "Rosamund"]);
+	});
+
+	it("keeps the best-tier match when the 8-result cap cuts the list", () => {
+		const substring = Array.from({ length: 10 }, (_, i) => ({
+			id: `s${i}`,
+			name: `Rosamund ${i}`,
+			officerPositions: [],
+		}));
+		const r = searchWorkspace(
+			"sam",
+			[...substring, { id: "p", name: "Samuel", officerPositions: [] }],
+			NOBODY,
+		);
+		expect(r.members).toHaveLength(8);
+		expect(r.members[0]?.name).toBe("Samuel");
 	});
 
 	it("caps member results at 8", () => {

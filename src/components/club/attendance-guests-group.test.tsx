@@ -695,6 +695,18 @@ describe("AttendanceGuestsGroup", () => {
 		expect(onAddGuest).toHaveBeenCalledWith({ guestId: "g9" });
 	});
 
+	// protects=a guest is found by their goes-by name and the row shows it; fails_when=preferredName stops being searched or shown; no_claim=ranking order
+	it("finds Robert Smith by his goes-by name 'bob'", async () => {
+		await openPicker([
+			{ id: "g9", name: "José Ruiz" } as never,
+			{ id: "g8", name: "Robert Smith", preferredName: "Bob" } as never,
+		]);
+		await userEvent.type(screen.getByPlaceholderText("Search guests…"), "bob");
+		expect(screen.getByText(/Robert Smith/)).toBeTruthy();
+		expect(screen.getByText(/goes by Bob/)).toBeTruthy();
+		expect(screen.queryByText(/José Ruiz/)).toBeNull();
+	});
+
 	// protects=a lost guest is hidden until something is typed; fails_when=the lost rule is dropped or applied while typing; no_claim=lost guests are not deleted
 	it("hides a lost guest until the query is typed", async () => {
 		await openPicker([
@@ -706,7 +718,7 @@ describe("AttendanceGuestsGroup", () => {
 		expect(screen.getByText(/Lena Lost/)).toBeTruthy();
 	});
 
-	// protects=a locked roll never calls onAddGuest even when a row is selected; fails_when=the locked belt in onPick is removed; no_claim=other writes while locked (covered elsewhere)
+	// protects=a roll that locks while the picker is open never calls onAddGuest, because PersonPicker disables its rows; fails_when=the group stops passing disabled={locked} to PersonPicker; no_claim=the `if (locked) return` belt in onPick (unreachable through the UI: the disabled cmdk item swallows the click first) and other writes while locked
 	it("never calls onAddGuest once the roll locks", async () => {
 		const onAddGuest = vi.fn();
 		const guests = [{ id: "g2", name: "Tom Reyes" }];
@@ -728,6 +740,9 @@ describe("AttendanceGuestsGroup", () => {
 				locked={true}
 			/>,
 		);
+		const row = screen.getByText("Tom Reyes").closest("[cmdk-item]");
+		expect(row?.getAttribute("aria-disabled")).toBe("true");
+		await userEvent.click(screen.getByText("Tom Reyes"));
 		fireEvent.click(screen.getByText("Tom Reyes"));
 		expect(onAddGuest).not.toHaveBeenCalled();
 	});

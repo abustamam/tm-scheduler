@@ -1704,12 +1704,13 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 		});
 
 		// -- the read contracts -------------------------------------------------
-		// protects=the picker returns exactly {guestId,name,email,phone} per row, only the other club's unconverted guest-only Persons that are not this guest's own, filtered case-insensitively on name or email, `%` literal, by name, capped at 20; fails_when=a key (stage, notes, personId, …) is added, an excluded kind leaks in, the filter or cap or order changes; no_claim=the viewer sees names, emails and phones of the other club's guests by design (the dialog says so)
+		// protects=the picker returns exactly {guestId,name,email,phone} per row, only the other club's unconverted guest-only Persons that are not this guest's own, ranked by the shared matcher over name or the email's local part (the domain never matches, a whole address does), `%` folds to blank, capped at 20; fails_when=a key (stage, notes, personId, …) is added, an excluded kind leaks in, the filter or cap or order changes; no_claim=the viewer sees names, emails and phones of the other club's guests by design (the dialog says so)
 		it("lists candidates with exactly the contract's keys, filtered and capped", async () => {
 			const g = await seedGuest(a.clubId);
+			const keepEmail = `zed-${uniq()}@Example.test`;
 			const keep = await seedGuest(b.clubId, {
 				name: "Zed Candidate",
-				email: `zed-${uniq()}@Example.test`,
+				email: keepEmail,
 				phone: "+14155550133",
 			});
 			const member = await seedMember(c.clubId);
@@ -1747,12 +1748,16 @@ describe.skipIf(!hasTestDb)("guests across clubs (#1127)", () => {
 				guestId: keep.id,
 				phone: "+14155550133",
 			});
-			// By email, case-insensitively.
-			expect((await ask("EXAMPLE.TEST")).map((r) => r.name)).toEqual([
+			// The email's domain never matches (#1333)...
+			expect(await ask("EXAMPLE.TEST")).toEqual([]);
+			// ...but a whole address does, case-insensitively.
+			expect((await ask(keepEmail.toUpperCase())).map((r) => r.name)).toEqual([
 				"Zed Candidate",
 			]);
-			// A typed % means itself.
-			expect((await ask("%")).map((r) => r.name)).toEqual(["100% Real"]);
+			// A typed % folds to a blank query: the first 20 by name, not a literal match.
+			expect((await ask("%")).map((r) => r.name)).toEqual(
+				(await ask("")).map((r) => r.name),
+			);
 			// Ordered by name; empty q is the first 20.
 			for (let i = 0; i < 22; i++) {
 				await seedGuest(b.clubId, {

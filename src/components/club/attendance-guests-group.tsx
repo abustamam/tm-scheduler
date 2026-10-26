@@ -26,7 +26,7 @@ import type { MinutesGuestRow } from "#/server/minutes-logic";
  * control hinting at what a viewer cannot do.
  *
  * It carries the DATA as well as the permission, and it has to: the meeting
- * payload projects guests to `{ id, name, stage }` (see `meetings.ts`'s `clubGuests`
+ * payload projects guests to `{ id, name, preferredName, stage }` (see `meetings.ts`'s `clubGuests`
  * comment — guest contact has never ridden on this page) and `MinutesGuestRow`
  * carries no contact either. A dialog opened over blank fields does not merely
  * look wrong: the form's handler turns an empty field into `null`, so the first

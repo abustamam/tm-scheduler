@@ -57,6 +57,7 @@ export function PickNameForm({
 		<div className="flex flex-col gap-4">
 			<PersonPicker
 				people={people}
+				inputLabel="Search members"
 				placeholder="Type your name…"
 				emptyText="No members match."
 				onPick={(m) => onPicked({ id: m.id, name: m.name })}
