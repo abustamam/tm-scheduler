@@ -94,6 +94,21 @@ describe("/tour", () => {
 		});
 	});
 
+	it("never wraps the hero's hyphenated words at the hyphen", async () => {
+		await renderTour();
+		const h1 = screen.getByRole("heading", { level: 1 });
+		expect(h1.textContent).toBe(
+			"One meeting, from sign-up sheet to Best Speaker.",
+		);
+		// text-balance broke the headline as "sign-" / "up sheet" at 1440px.
+		const hero = h1.parentElement as HTMLElement;
+		for (const word of ["sign-up", "Ah-Counter"]) {
+			expect(within(hero).getByText(word).className).toContain(
+				"whitespace-nowrap",
+			);
+		}
+	});
+
 	it("marks the assistant scene Beta, with the connector setup line", async () => {
 		await renderTour();
 		const h2 = screen.getByRole("heading", {
