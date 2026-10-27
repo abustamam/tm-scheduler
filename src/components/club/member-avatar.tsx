@@ -23,9 +23,10 @@ export function MemberAvatar({
 				"flex shrink-0 items-center justify-center rounded-full font-bold",
 				// The lagoon and amber gradients end on --lagoon-deep and
 				// --warning-strong, the two fills styles.css says never to put white
-				// on (3.8:1 and 3.2:1 light, worse dark). Palm stays dark in light
-				// mode, where white measures 6.4:1.
-				tone === "palm" ? "text-white" : "text-on-accent-fill",
+				// on (3.8:1 and 3.2:1 light, worse dark). Palm starts on --success,
+				// which flips to a light green in dark mode (white ~2:1 there), so it
+				// takes the ink that flips with it.
+				tone === "palm" ? "text-success-foreground" : "text-on-accent-fill",
 				className,
 			)}
 			style={{

@@ -8,9 +8,14 @@ describe("MemberAvatar", () => {
 		cleanup();
 	});
 
-	it("keeps white initials on the dark palm fill", () => {
+	// Pins the class only: jsdom resolves no theme. --success-foreground is
+	// white on the light theme's dark palm and dark ink on the dark theme's
+	// light palm (styles.css).
+	it("gives the palm fill the success ink, which flips with the theme", () => {
 		render(<MemberAvatar tone="palm" initials="RB" />);
-		expect(screen.getByText("RB").className).toContain("text-white");
+		const avatar = screen.getByText("RB");
+		expect(avatar.className).toContain("text-success-foreground");
+		expect(avatar.className).not.toContain("text-white");
 	});
 
 	it.each([
