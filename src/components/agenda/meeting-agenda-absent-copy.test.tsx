@@ -109,11 +109,7 @@ function renderAgenda(
 					notes: null,
 				} as unknown as MeetingAgendaProps["meeting"]
 			}
-			templateKey={null}
-			timezone="UTC"
 			meetingOver={false}
-			selfMemberId={currentMemberId}
-			onMetaSaved={() => {}}
 			contactedMemberIds={[]}
 			{...extra}
 		/>,
