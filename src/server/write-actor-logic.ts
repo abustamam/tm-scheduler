@@ -159,12 +159,9 @@ export async function resolveWriteActorWithProof(
 		}
 	}
 	if (!input.claimedActorMemberId) return null;
-	// Pass the session through: the caller's own session is already in hand, and
-	// it decides whether a refusal may name the member's status (#1341).
 	const member = await requireMemberInClub(
 		input.claimedActorMemberId,
 		input.clubId,
-		input.sessionUserId ?? null,
 	);
 	return { memberId: member.id, proof: "asserted" };
 }

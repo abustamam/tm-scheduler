@@ -92,13 +92,12 @@ export const NOT_ON_ROSTER_MESSAGE =
 	"Your account isn't linked to this club's roster. Ask an officer to add your email.";
 
 /**
- * "That member cannot take roles in this club" — the one refusal a sessionless
- * (asserted-proof) caller hears for a member id that is absent, in another club,
+ * The one refusal every caller hears for a member id that is absent, in another club,
  * `inactive` or `former` (#1341). Member ids are public on past agendas, so any
  * difference in wording would tell a stranger whether someone's membership
- * lapsed or ended. The text is the long-standing not-found message, so existing
- * callers and matchers are unchanged. A signed-in club admin keeps the specific
- * reasons (`requireMemberInClub`), since they can already see the status.
+ * lapsed or ended. The text is the long-standing "Member not found in this club."
+ * on purpose: it reveals nothing about status, and existing callers and
+ * matchers are unchanged. No caller, admin included, hears a specific reason.
  */
 export const MEMBER_NOT_ELIGIBLE_MESSAGE = "Member not found in this club.";
 

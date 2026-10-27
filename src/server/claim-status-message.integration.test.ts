@@ -1,8 +1,7 @@
 /**
  * #1341: member ids are public on past agendas, so the refusal for a sessionless
  * claim must not vary with the named member's status. Every member who cannot
- * take roles gets the same message on the asserted path; a signed-in club admin
- * keeps the specific reason.
+ * take roles gets the same message, for every caller.
  */
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,7 +21,9 @@ import {
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const { requireMemberInClub } = await import("./guards");
-const { resolveWriteActorWithProof } = await import("./write-actor-logic");
+const { resolveSessionActor, resolveWriteActorWithProof } = await import(
+	"./write-actor-logic"
+);
 
 const exactly = (message: string) =>
 	new RegExp(`^${message.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
@@ -67,39 +68,33 @@ describe.skipIf(!hasTestDb)("asserted-proof refusal wording (#1341)", () => {
 		expect(unknown).toBe(MEMBER_NOT_ELIGIBLE_MESSAGE);
 	});
 
-	it("a signed-in session without admin rights hears the same message", async () => {
-		await setStatus("former");
-		await expect(
-			requireMemberInClub(club.memberId, club.clubId, club.memberUserId),
-		).rejects.toThrow(exactly(MEMBER_NOT_ELIGIBLE_MESSAGE));
-	});
-
-	it("a signed-in admin still sees the specific reason", async () => {
+	it("a signed-in admin hears the same message, for every status", async () => {
+		// Maintainer decision on #1341: one message everywhere, officers included.
+		const unknown = await requireMemberInClub(
+			crypto.randomUUID(),
+			club.clubId,
+		).catch((e: Error) => e.message);
 		await setStatus("inactive");
-		await expect(
-			requireMemberInClub(club.memberId, club.clubId, club.adminUserId),
-		).rejects.toThrow(
-			exactly("That member is inactive — reactivate them first."),
-		);
+		const inactive = await requireMemberInClub(
+			club.memberId,
+			club.clubId,
+		).catch((e: Error) => e.message);
 		await setStatus("former");
-		await expect(
-			requireMemberInClub(club.memberId, club.clubId, club.adminUserId),
-		).rejects.toThrow(
-			exactly("That member is no longer a member of this club."),
+		const former = await requireMemberInClub(club.memberId, club.clubId).catch(
+			(e: Error) => e.message,
 		);
-		await expect(
-			requireMemberInClub(crypto.randomUUID(), club.clubId, club.adminUserId),
-		).rejects.toThrow(exactly(MEMBER_NOT_ELIGIBLE_MESSAGE));
+		expect(new Set([unknown, inactive, former])).toEqual(
+			new Set([MEMBER_NOT_ELIGIBLE_MESSAGE]),
+		);
 	});
 
-	it("an admin of ANOTHER club learns nothing", async () => {
+	it("the signed-in lapsed-member copy reaches an ENDED member's own session", async () => {
 		await setStatus("former");
 		await expect(
-			requireMemberInClub(club.memberId, club.clubId, other.adminUserId),
-		).rejects.toThrow(exactly(MEMBER_NOT_ELIGIBLE_MESSAGE));
-	});
-
-	it("the signed-in lapsed-member copy covers lapsed and ended", () => {
-		expect(MEMBERSHIP_INACTIVE_MESSAGE).toMatch(/lapsed or ended/);
+			resolveSessionActor({
+				clubId: club.clubId,
+				sessionUserId: club.memberUserId,
+			}),
+		).rejects.toThrow(exactly(MEMBERSHIP_INACTIVE_MESSAGE));
 	});
 });
