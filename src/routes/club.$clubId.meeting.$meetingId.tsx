@@ -710,9 +710,8 @@ function MeetingView() {
 	// change, so a member in your seat sees these controls and so do you.
 	const runsThisMeeting = effectiveCanManage || isTmod;
 	// Lineup blast (#1024): club admins, officers and this meeting's Toastmaster.
-	// A stored admin is known here; an officer is not (`canManage` is
-	// `clubRole === "admin"` only), so a signed-in member or a self-identified
-	// Toastmaster asks the server, which decides through the same
+	// `canManage` covers a stored admin and an officer with an open term, so a
+	// signed-in member or a self-identified Toastmaster asks the server, which decides through the same
 	// `mayDraftLineupBlast` rule its draft fn enforces.
 	const { data: lineupAccess } = useQuery({
 		queryKey: ["lineup-blast-access", meeting.id, myId] as const,
@@ -913,16 +912,9 @@ function MeetingView() {
 	// an earlier viewer arm a control for a later one.
 	//
 	// The client gate is `canManage` and the server's is `requireClubRole(…,
-	// ["admin"])`, and those two do NOT agree — deliberately. `canManageClub`
-	// (`guards.ts`) is `clubRole === "admin"` only, while `requireClubRole`
-	// ALSO grants to an elected officer holding an open `officer_terms` row
-	// (effective-admin, #202). So an officer who holds their seat by election
-	// rather than by stored `club_role` sees plain text here while the server
-	// would have accepted their write: the server is deliberately MORE
-	// permissive than this UI. That asymmetry is pre-existing — it already
-	// governs whether this panel shows roster contact at all — and it stays;
-	// widening it here would invent a second answer to "may this person edit a
-	// guest". `guest-edit-authz.integration.test.ts` pins both halves.
+	// ["admin"])`; both grant to a stored admin and to an elected officer holding
+	// an open `officer_terms` row (effective-admin, #202).
+	// `guest-edit-authz.integration.test.ts` pins that they agree.
 	const guestEdit =
 		effectiveCanManage && guestPipeline
 			? {

@@ -15,9 +15,8 @@
  * its own: one proves the gate refuses, the other proves the write is behind
  * it.
  *
- * The last case is the one to read before "fixing" anything here. The UI's gate
- * and the server's gate deliberately DISAGREE, and the disagreement is
- * one-directional — the server is more permissive than the rail.
+ * The last case pins that the UI's gate and the server's gate agree on an
+ * elected officer.
  */
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -158,25 +157,13 @@ describe.skipIf(!hasTestDb)("guest-edit authorization (#727)", () => {
 		expect(after?.email).toBe("nadia.new@example.test");
 	});
 
-	it("an ELECTED officer may write, and still sees plain text — the gap is deliberate", async () => {
-		// The amendment of 2026-09-17, pinned so the next reader does not "fix" it.
-		//
-		// The two gates are NOT the same function and do not answer the same way:
-		//
-		//  · `canManageClub` (what the meeting page's `canManage` is) is
-		//    `clubRole === "admin"` and nothing else.
-		//  · `requireClubRole(…, ["admin"])` (what `updateGuest` runs) ALSO grants
-		//    to any membership holding an open `officer_terms` row — effective
-		//    admin, #202.
-		//
-		// So an officer who holds their seat by ELECTION rather than by stored
-		// `club_role` is refused the control and would have been allowed the write.
-		// That asymmetry is pre-existing — it already decides whether this panel
-		// shows roster contact at all — and #727 deliberately did not widen
-		// `canManage` or invent a second capability to close it. What it must not
-		// do is drift silently, which is what this case is for: the server being
-		// MORE permissive than the UI is the safe direction, and a change that
-		// reversed it would be a real hole.
+	it("an ELECTED officer may write, and the UI's capability agrees", async () => {
+		// `canManageClub` (what the meeting page's `canManage` is) and
+		// `requireClubRole(…, ["admin"])` (what `updateGuest` runs) share one
+		// officer arm (effective admin, #202): an open `officer_terms` row. They
+		// once disagreed, so an officer who held their seat by ELECTION rather than
+		// by stored `club_role` was refused the control the server would have
+		// honoured. Pinned so the two cannot drift apart again.
 		await testDb.insert(officerTerms).values({
 			membershipId: seed.memberId,
 			position: "vp_education",
@@ -184,15 +171,10 @@ describe.skipIf(!hasTestDb)("guest-edit authorization (#727)", () => {
 			termEnd: null, // open term = currently held
 		});
 
-		// The write side says yes…
 		await expect(
 			requireClubRole(seed.memberUserId, seed.clubId, ["admin"]),
 		).resolves.toBeTruthy();
-		// …and the UI's capability still says no, so the rail renders the guest
-		// name as plain text and offers no dialog.
-		expect(await canManageClub(seed.memberUserId, seed.clubId)).toBe(false);
-		// The admin's own answer is unchanged, so this is a statement about the
-		// officer row and not about `canManageClub` being broken outright.
+		expect(await canManageClub(seed.memberUserId, seed.clubId)).toBe(true);
 		expect(await canManageClub(seed.adminUserId, seed.clubId)).toBe(true);
 	});
 });

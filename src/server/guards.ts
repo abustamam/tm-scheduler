@@ -310,14 +310,22 @@ export async function requireClubRole(
 	if (roles.includes(membership.clubRole)) {
 		return membership;
 	}
-	if (
-		roles.includes("admin") &&
-		membership.id !== null &&
-		(await getOpenOfficerPositions(db, membership.id)).length > 0
-	) {
+	if (roles.includes("admin") && (await holdsOfficerSeat(membership))) {
 		return membership;
 	}
 	throw new Error(NO_PERMISSION_MESSAGE);
+}
+
+/**
+ * Effective-admin's officer arm (#202), shared by `requireClubRole` (the write
+ * gate) and `canManageClub` (the read-surface flag) so the two cannot drift: an
+ * open `officer_terms` row on this membership.
+ */
+async function holdsOfficerSeat(
+	membership: Pick<ResolvedMembership, "id">,
+): Promise<boolean> {
+	if (membership.id === null) return false;
+	return (await getOpenOfficerPositions(db, membership.id)).length > 0;
 }
 
 /**
@@ -393,7 +401,8 @@ export async function assertStillClubAdmin(
  * READ-surface "can this user manage this club as an admin?" — for computing the
  * `canManage` / `canEdit` flags that GET loaders return to drive admin
  * affordances (e.g. `getMeeting`, `getMinutes`). True for a real active admin
- * membership OR an active `read_write` impersonation session (#246): a superadmin
+ * membership, an active membership holding an open officer term (effective
+ * admin, #202), OR an active `read_write` impersonation session (#246): a superadmin
  * acting as admin has no membership but should see the admin UI. Deliberately
  * does NOT grant for `read_only` impersonation — read-only keeps those write
  * surfaces hidden. The write itself is still enforced by the mutating guards, so
@@ -410,7 +419,11 @@ export async function canManageClub(
 	// `club_role`, and counts as no membership at all, so it still reaches the
 	// impersonation check below (same shape as `requireMembership`).
 	if (membership && membership.status === "active") {
-		return membership.clubRole === "admin";
+		// Effective-admin (#202), the same two arms as `requireClubRole(…,
+		// ["admin"])`: a stored admin OR an elected officer with an open term.
+		return (
+			membership.clubRole === "admin" || (await holdsOfficerSeat(membership))
+		);
 	}
 	const session = await getActiveImpersonation(userId, clubId);
 	return session?.mode === "read_write";
