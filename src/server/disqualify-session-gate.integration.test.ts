@@ -280,17 +280,14 @@ describe.skipIf(!hasTestDb)(
 			).resolves.toMatchObject({ allowed: true, via: "admin" });
 		});
 
-		// AC4. The elected officer is part of the GRANT but is deliberately NOT
-		// named by the console's copy, which says "ask an admin": signing in makes
-		// the session win in `useEffectiveMember`, so a non-admin officer stops
-		// matching the slot and loses the console entirely (#844). The grant is
-		// asserted here anyway, because it is what the gate does and what the ADR
-		// records.
+		// AC4. The elected officer is part of the GRANT. Since #1383 they also keep
+		// the console (`canManageClub` admits them), though the refusal copy still
+		// says "ask an admin". The grant is asserted because it is what the gate
+		// does and what the ADR records.
 		//
-		// It runs through `voteCounterCapabilityFor`'s `requireClubRole` retry —
-		// `resolveVoteCounterAuthz` reads `club_role` only and does NOT grant this
-		// member (pinned next door) — so deleting that retry narrows the gate
-		// silently.
+		// `resolveVoteCounterAuthz` now grants this member itself through
+		// `resolveAdminGrant`'s officer arm; `voteCounterCapabilityFor`'s
+		// `requireClubRole` retry is a second, redundant path to the same answer.
 		it("ALLOWS a signed-in ELECTED OFFICER with an open term and club_role member", async () => {
 			await addVoteCounterSlot(club, club.memberId);
 			const officer = await addSignedInMember(club.clubId, "VP Education");

@@ -92,6 +92,9 @@ Four rows need their qualifier read carefully.
   cannot reach the console at all (`canManageClub` excludes #202's effective-admin, and signing in
   stops them matching the slot). That gap is pre-existing and is filed as #844; the copy names
   routes that work rather than the full grant.
+  **Amendment 2026-10-27 (#1383):** `canManageClub` now admits an elected officer with an open
+  term, so that officer does reach the console, and `resolveAdminGrant` grants them itself. The
+  copy still names only the admin and the Ballot Counter.
 
 - **"yes, if the slot is one of YOUR memberships"** is the role-console row #747 decided, and it
   covers **only the four arms in `src/server/meeting-authz-logic.ts`** — the row below it is the

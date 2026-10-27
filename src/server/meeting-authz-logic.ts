@@ -201,8 +201,10 @@ async function resolveAdminGrant(
 		// wrong half:
 		//
 		// · Keys 1 and 2 are not what refuses a lapsed admin in THIS function — the
-		//   `status === "active"` check below is, and the grant decision is
-		//   invariant to swapping them. In `getMembership` the polarity genuinely
+		//   `status === "active"` check below is. Swapping them CAN change the
+		//   grant now that the officer arm exists: an inactive admin beside an
+		//   active officer duplicate would, with the order swapped, pick the
+		//   inactive admin and refuse the officer. In `getMembership` the polarity genuinely
 		//   is load-bearing, because `canManageClub` takes the one row it gets
 		//   and requires it to be active. Do not read the ordering as making the
 		//   check below redundant: delete it and an inactive admin duplicate grants.

@@ -236,19 +236,18 @@ export function safeRedirect(
  * route is named IN the sentence rather than offered as a button, because the
  * person who most needs it is not the person holding the phone.
  *
- * **"club admin", not "officer", and the narrowing is measured.** #752 specified
- * this sentence as "ask an officer", which is true of the GATE — the officer
- * retry inside `voteCounterCapabilityFor` grants an elected officer holding an
- * open term — and false of the SCREEN. Signing in makes the session win in
- * `useEffectiveMember`, so `myId` stops matching the Vote Counter slot and
- * `isVoteCounter` goes false. `canManage` (`canManageClub`) has admitted an
- * elected officer with an open term since #1383, so that officer keeps the
- * console; a member who is neither admin nor officer does not: both terms of the
- * console's own section gate are false for them and the whole Ballot Counter
- * console disappears. A refusal that names
- * a route which removes the console is worse than one that names none, so the
- * copy names only what works: a club admin signing in here, or the Ballot
- * Counter signing in as themselves. The server grant is unchanged and
+ * **"club admin", not "officer".** #752 specified this sentence as "ask an
+ * officer". That is true of the GATE (the officer retry inside
+ * `voteCounterCapabilityFor`, and `resolveAdminGrant` since #1383, both grant an
+ * elected officer holding an open term) and, since #1383, of the SCREEN too:
+ * `canManage` (`canManageClub`) admits that officer, so they keep the console
+ * after signing in, although signing in makes the session win in
+ * `useEffectiveMember` and `isVoteCounter` goes false. A plain member who is
+ * neither admin nor officer loses the console, since both terms of its section
+ * gate are false for them. The copy still names only a club admin signing in
+ * here, or the Ballot Counter signing in as themselves: it is the shortest
+ * sentence that is true for everyone who can see it, and an officer who reads
+ * "club admin" is an effective admin anyway. The server grant is unchanged and
  * still asserted.
  */
 export const RULING_NEEDS_SESSION_MESSAGE =

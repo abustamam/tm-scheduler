@@ -179,30 +179,59 @@ describe.skipIf(!hasTestDb)(
 		});
 
 		describe("refused", () => {
+			const EDIT = /permission to edit this meeting/;
+			const WOD = /permission to edit the Word of the Day/;
 			const refusals = async () => {
-				const calls = [
-					() =>
-						updateMeeting({
-							data: { meetingId: club.meetingId, theme: "nope" },
-						}),
-					() =>
-						updateMeeting({
-							data: {
-								meetingId: club.meetingId,
-								scheduledAt: "2027-04-01T18:30",
-							},
-						}),
-					() =>
-						updateWordOfTheDay({
-							data: { meetingId: club.meetingId, wordOfTheDay: "nope" },
-						}),
-					() => addSpeakerSlot({ data: { meetingId: club.meetingId } }),
-					() => removeSpeakerSlot({ data: { meetingId: club.meetingId } }),
+				// Two removable speaker slots, added by the admin, so a refused remove or
+				// move has something to act on and a bare throw cannot pass for it.
+				sessionUserId = club.adminUserId;
+				await addSpeakerSlot({ data: { meetingId: club.meetingId } });
+				await addSpeakerSlot({ data: { meetingId: club.meetingId } });
+				const before = await speakerSlots();
+				expect(before).toHaveLength(2);
+				asOfficer();
+				const calls: [() => Promise<unknown>, RegExp][] = [
+					[
+						() =>
+							updateMeeting({
+								data: { meetingId: club.meetingId, theme: "nope" },
+							}),
+						EDIT,
+					],
+					[
+						() =>
+							updateMeeting({
+								data: {
+									meetingId: club.meetingId,
+									scheduledAt: "2027-04-01T18:30",
+								},
+							}),
+						EDIT,
+					],
+					[
+						() =>
+							updateWordOfTheDay({
+								data: { meetingId: club.meetingId, wordOfTheDay: "nope" },
+							}),
+						WOD,
+					],
+					[() => addSpeakerSlot({ data: { meetingId: club.meetingId } }), EDIT],
+					[
+						() => removeSpeakerSlot({ data: { meetingId: club.meetingId } }),
+						EDIT,
+					],
+					[
+						() =>
+							moveSpeakerSlot({
+								data: { slotId: before[1].id, direction: "up" },
+							}),
+						EDIT,
+					],
 				];
-				for (const call of calls) {
-					await expect(call()).rejects.toThrow();
+				for (const [call, message] of calls) {
+					await expect(call()).rejects.toThrow(message);
 				}
-				expect(await speakerSlots()).toHaveLength(0);
+				expect(await speakerSlots()).toEqual(before);
 				const [row] = await testDb
 					.select({ theme: meetings.theme, word: meetings.wordOfTheDay })
 					.from(meetings)
