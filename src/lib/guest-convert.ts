@@ -259,6 +259,51 @@ export const UNDO_MEMBER_HAS_HISTORY_MESSAGE = (what: string): string =>
 	`destroy it. Use the member merge tool instead.`;
 
 /**
+ * Refusal when the membership was merged with another roster entry since the
+ * conversion (#1322), in EITHER direction.
+ *
+ * Merged INTO: the member merge folded an older row's join date and role into
+ * this membership, and the conversion's record still matches it, so deleting it
+ * would take that older member off the roster. Merged AWAY: the membership was
+ * absorbed into an older row, the conversion's own record went with it, and the
+ * guest now points at the keeper; the "removing the member from the roster"
+ * advice in `UNDO_NO_RECORD_MESSAGE` would delete THAT member.
+ *
+ * The remedy named is the one that works: the merge tool is what produced this
+ * state, and a mistaken conversion has no keeper to merge into.
+ */
+export const UNDO_MEMBERSHIP_MERGED_MESSAGE =
+	"This member was merged with another roster entry after the guest was " +
+	"converted, so undoing the conversion would delete the merged member. Set " +
+	"them inactive or former instead.";
+
+/**
+ * Refusal when another guest is linked to the membership the undo would delete
+ * (#1322). Deleting it would strand that guest at `joined` with no pointer, and
+ * once the pointer is null unlink refuses, so the contact the link recorded
+ * could not come back. The maintainer's decision (2026-10-26): refuse, do not
+ * unlink on the admin's behalf.
+ *
+ * Names the guests, for the reason `GUEST_IS_NOW_A_MEMBER_MESSAGE` names its
+ * subject: the admin is looking at a card for a different guest.
+ */
+export const UNDO_OTHER_GUEST_LINKED_MESSAGE = (names: string[]): string => {
+	const shown = names.slice(0, 3);
+	const more = names.length - shown.length;
+	const list =
+		more > 0
+			? `${shown.join(", ")} and ${more} more`
+			: shown.length > 1
+				? `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`
+				: (shown[0] ?? "Another guest");
+	return (
+		`${list} ${names.length > 1 ? "are" : "is"} linked to this member too, ` +
+		`so undoing the conversion would delete the member and leave them ` +
+		`without one. Unlink them first.`
+	);
+};
+
+/**
  * Whether a guest row is stranded: frozen at `joined` while the membership it
  * was converted into no longer exists (#618).
  *

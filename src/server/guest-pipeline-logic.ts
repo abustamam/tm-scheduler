@@ -11,15 +11,23 @@ import {
 	getTableName,
 	gte,
 	inArray,
+	is,
 	isNotNull,
 	isNull,
 	min,
 	ne,
+	or,
 	type SQL,
 	sql,
 } from "drizzle-orm";
-import { type PgColumn, type PgTable, union } from "drizzle-orm/pg-core";
+import {
+	getTableConfig,
+	type PgColumn,
+	PgTable,
+	union,
+} from "drizzle-orm/pg-core";
 import { db } from "#/db";
+import * as dbSchema from "#/db/schema";
 import {
 	activityLog,
 	clubs,
@@ -54,8 +62,10 @@ import {
 	LINK_MEMBER_NOT_IN_CLUB_MESSAGE,
 	UNDO_MEMBER_HAS_ACCOUNT_MESSAGE,
 	UNDO_MEMBER_HAS_HISTORY_MESSAGE,
+	UNDO_MEMBERSHIP_MERGED_MESSAGE,
 	UNDO_NO_RECORD_MESSAGE,
 	UNDO_NOT_CONVERTED_MESSAGE,
+	UNDO_OTHER_GUEST_LINKED_MESSAGE,
 	UNLINK_NOT_LINKED_MESSAGE,
 } from "#/lib/guest-convert";
 import { isInvitableStage, NOT_INVITABLE_MESSAGE } from "#/lib/guest-invite";
@@ -3422,6 +3432,255 @@ function buildUndoNameBlankingChecks(): UndoCascadeCheck[] {
 				has: hasRowFor(key.table, key.memberColumn),
 			};
 		});
+}
+
+/**
+ * The SET NULL keys whose member is "who brought this guest": a guest's
+ * `introduced_by_member_id` and an invitation's `invited_by_member_id` (#1322).
+ * The delete blanks them without a word, and `collapseMemberships` re-points
+ * both, so the repo already treats them as worth keeping. They print no name on
+ * an agenda, which is why neither list above covers them, so the undo refuses
+ * while one points at the membership. Only when the conversion created it: the
+ * reuse path deletes nothing.
+ */
+export const UNDO_GUEST_ATTRIBUTION_CHECKS: UndoCascadeCheck[] = [
+	{
+		columns: ["guests.introduced_by_member_id"],
+		label: "guest introductions",
+		scope: "created",
+		has: hasRowFor(guests, guests.introducedByMemberId),
+	},
+	{
+		columns: ["guest_invites.invited_by_member_id"],
+		label: "guest invitations",
+		scope: "created",
+		has: hasRowFor(guestInvites, guestInvites.invitedByMemberId),
+	},
+];
+
+/** Keys the undo itself rewrites. The reason is what a reader of the table sees. */
+const UNDO_HANDLED_KEYS: Record<string, string> = {
+	"guests.converted_membership_id":
+		"the undo clears this guest's pointer; another guest pointing at the membership refuses it (the linked-guest check, #1322)",
+	"role_slots.assigned_member_id":
+		"the undo moves the slots the conversion recorded back to the guest; a slot beyond them refuses it (the held-slots check, #618)",
+};
+
+/** Keys another issue owns. A key lands here only with that issue's number. */
+const UNDO_DEFERRED_KEYS: Record<string, { issue: number; reason: string }> = {
+	"meeting_votes.candidate_member_id": {
+		issue: 1323,
+		reason:
+			"the delete nulls a ballot's candidate and the tally drops it; #1323 decides refuse, re-point or accept",
+	},
+	"meeting_votes.voter_member_id": {
+		issue: 1323,
+		reason:
+			"the delete nulls a ballot's voter; #1323 decides refuse, re-point or accept",
+	},
+};
+
+/**
+ * A SET NULL key whose column says who DID something (`recorded_by`, `marked_by`,
+ * `decided_by`, `created_by`, `opened_by`, `actor`) is safe to blank: the row it
+ * sits on belongs to someone else and outlives the member, as it does when a
+ * member is removed (#1189). Classified by this rule rather than by a list of
+ * `table.column` names because the mentorship tables may be named only by
+ * `mentorship-logic.ts` (`src/routes/mentorship-not-public.guard.test.ts`). The
+ * test in `guest-undo-after-change.integration.test.ts` holds the resulting set
+ * to the keys it was reviewed for, so a new `*_by_member_id` column is not
+ * blanked until a person adds it there.
+ */
+const ATTRIBUTION_COLUMN = /(?:_by|^actor)_member_id$/;
+
+/** One class per foreign key to `members`: what the undo does about it. */
+export type UndoKeyClass =
+	/** A check refuses the undo while a row points at the membership. */
+	| { kind: "refuse"; check: UndoCascadeCheck }
+	/** The delete blanks it and the undo says so on the `member_remove` record. */
+	| { kind: "blank"; table: PgTable; column: PgColumn }
+	/** The undo rewrites it itself. */
+	| { kind: "handled"; by: string }
+	/** Another issue decides; the key is classified there. */
+	| { kind: "deferred"; issue: number; reason: string };
+
+export type UndoKeyPlan = {
+	/** Every foreign key to `members`, as `table.column`, with its class. */
+	classes: ReadonlyMap<string, UndoKeyClass>;
+	/** The refusals to run, once each, in the order they run. */
+	refusals: UndoCascadeCheck[];
+	/** The keys the delete blanks, counted into the `member_remove` record. */
+	blanks: { key: string; table: PgTable; column: PgColumn }[];
+};
+
+/** Every foreign key to `members.id`, read off the drizzle schema. */
+function foreignKeysToMembers() {
+	const out: {
+		key: string;
+		onDelete: string | undefined;
+		table: PgTable;
+		column: PgColumn;
+	}[] = [];
+	const seen = new Set<PgTable>();
+	for (const value of Object.values(dbSchema)) {
+		if (!is(value, PgTable) || seen.has(value)) continue;
+		seen.add(value);
+		for (const fk of getTableConfig(value).foreignKeys) {
+			const ref = fk.reference();
+			if (ref.foreignTable !== members) continue;
+			for (const column of ref.columns) {
+				out.push({
+					key: `${getTableName(value)}.${column.name}`,
+					onDelete: fk.onDelete,
+					table: value,
+					column,
+				});
+			}
+		}
+	}
+	return out;
+}
+
+/**
+ * The one table the undo reads about every foreign key to `members` (#1322):
+ * refuse, safe to blank, handled by the undo, or deferred to the issue that owns
+ * it. Built lazily, for the reason `undoNameBlankingChecks` is (a module-level
+ * spread of another server module's export evaluates before it is initialised
+ * when an import cycle loads this file first).
+ *
+ * A foreign key in NO class throws, so a new one cannot reach a delete the undo
+ * has not been told about; the guard in `guest-undo-after-change.integration.test.ts`
+ * fails first, comparing this table with `pg_constraint`. A key in TWO classes
+ * throws too, and so does a refusal naming a column that is no foreign key to
+ * `members`, so the lists above cannot drift from the schema either way.
+ */
+export function undoKeyPlan(): UndoKeyPlan {
+	undoKeyPlan_ ??= buildUndoKeyPlan();
+	return undoKeyPlan_;
+}
+let undoKeyPlan_: UndoKeyPlan | undefined;
+
+function buildUndoKeyPlan(): UndoKeyPlan {
+	const refusals = [
+		...UNDO_CASCADE_CHECKS,
+		...undoNameBlankingChecks(),
+		...UNDO_GUEST_ATTRIBUTION_CHECKS,
+	];
+	const refusing = new Map<string, UndoCascadeCheck>();
+	for (const check of refusals) {
+		for (const column of check.columns) {
+			if (refusing.has(column)) {
+				throw new Error(`undoKeyPlan: ${column} is refused twice (#1322)`);
+			}
+			refusing.set(column, check);
+		}
+	}
+	const classes = new Map<string, UndoKeyClass>();
+	const blanks: UndoKeyPlan["blanks"] = [];
+	for (const fk of foreignKeysToMembers()) {
+		const found: UndoKeyClass[] = [];
+		const check = refusing.get(fk.key);
+		if (check) found.push({ kind: "refuse", check });
+		const handled = UNDO_HANDLED_KEYS[fk.key];
+		if (handled) found.push({ kind: "handled", by: handled });
+		const deferred = UNDO_DEFERRED_KEYS[fk.key];
+		if (deferred) found.push({ kind: "deferred", ...deferred });
+		if (
+			found.length === 0 &&
+			fk.onDelete === "set null" &&
+			ATTRIBUTION_COLUMN.test(fk.column.name)
+		) {
+			found.push({ kind: "blank", table: fk.table, column: fk.column });
+			blanks.push({ key: fk.key, table: fk.table, column: fk.column });
+		}
+		const [only, ...rest] = found;
+		if (!only || rest.length > 0) {
+			throw new Error(
+				`undoKeyPlan: ${fk.key} (ON DELETE ${fk.onDelete ?? "no action"}) is in ${found.length} classes, not one (#1322)`,
+			);
+		}
+		classes.set(fk.key, only);
+	}
+	for (const column of refusing.keys()) {
+		if (!classes.has(column)) {
+			throw new Error(
+				`undoKeyPlan: ${column} is refused but is no foreign key to members (#1322)`,
+			);
+		}
+	}
+	return { classes, refusals, blanks };
+}
+
+/** Rows on each blank key that point at the membership: only the non-zero ones. */
+async function countBlankedKeys(
+	tx: DbOrTx,
+	membershipId: string,
+): Promise<Record<string, number>> {
+	const out: Record<string, number> = {};
+	for (const { key, table, column } of undoKeyPlan().blanks) {
+		const [row] = await tx
+			.select({ n: count() })
+			.from(table)
+			.where(eq(column, membershipId));
+		const n = Number(row?.n ?? 0);
+		if (n > 0) out[key] = n;
+	}
+	return out;
+}
+
+/**
+ * Whether a member merge has touched this membership since the convert (#1322).
+ *
+ * `collapseMemberships` folds the absorbed row's join date and role into the
+ * keeper and deletes only the absorbed side's `member_add`, so a conversion
+ * record that still matches the keeper says nothing about what the keeper now
+ * holds. Two writers call it, and each leaves a `member_merge` row:
+ *
+ *   - the within-club merge, targeted at the keeper MEMBERSHIP with the absorbed
+ *     id in `detail.absorbedId`. A guest link writes `member_merge` against the
+ *     membership too (with `detail.fromGuestId`, no `absorbedId`), so the
+ *     `absorbedId` is what tells them apart.
+ *   - the cross-club Person merge, targeted at the keeper PERSON, with
+ *     `movedCounts.collapsed` > 0 when it fused two memberships of one club.
+ *     That count is across every club, so a row can be a false positive here
+ *     (refusing is the safe side). `since` bounds it, because a Person can have
+ *     been merged long before this membership existed; the membership-targeted
+ *     row needs no bound when `since` is null only for a membership this
+ *     conversion did not create, which never asks.
+ */
+async function membershipHasMergeHistory(
+	tx: DbOrTx,
+	clubId: string,
+	membershipId: string,
+	personId: string | undefined,
+	since: Date | null,
+): Promise<boolean> {
+	const rows = await tx
+		.select({ id: activityLog.id })
+		.from(activityLog)
+		.where(
+			and(
+				eq(activityLog.clubId, clubId),
+				eq(activityLog.action, "member_merge"),
+				or(
+					and(
+						eq(activityLog.targetType, "member"),
+						eq(activityLog.targetId, membershipId),
+						sql`${activityLog.detail}->>'absorbedId' is not null`,
+					),
+					personId
+						? and(
+								eq(activityLog.targetType, "person"),
+								eq(activityLog.targetId, personId),
+								sql`(${activityLog.detail}->'movedCounts'->>'collapsed')::int > 0`,
+								since ? gte(activityLog.createdAt, since) : undefined,
+							)
+						: undefined,
+				),
+			),
+		)
+		.limit(1);
+	return rows.length > 0;
 }
 
 /**
