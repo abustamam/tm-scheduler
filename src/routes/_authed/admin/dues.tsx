@@ -484,7 +484,7 @@ function MemberRow({
 }) {
 	return (
 		<div className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-3 last:border-b-0">
-			<div className="flex min-w-0 flex-1 items-center gap-3">
+			<div className="flex min-w-[11rem] flex-1 items-center gap-3">
 				<MemberAvatar
 					tone={toneFromSeed(row.membershipId)}
 					initials={initialsOf(row.name)}
