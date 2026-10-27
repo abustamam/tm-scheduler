@@ -33,6 +33,7 @@ import {
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import { MEMBERSHIP_ENDED_CHANGE } from "#/lib/activity-format";
 import { localDateKey } from "#/lib/meeting-url";
 import { pastAgendaRemoveRefusal } from "#/lib/member-remove";
 import {
@@ -699,6 +700,11 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 				...(demotes ? { clubRole: "member" as const } : {}),
 			})
 			.where(eq(members.id, input.memberId));
+		// What an End did beyond the status flip, recorded on the activity row
+		// (#1328) the way convert records `closedOfficerPositions`: nothing else
+		// readable afterwards says which offices ended or how many roles let go.
+		const closedOfficerPositions: string[] = [];
+		let releasedSlots = 0;
 		if (ending) {
 			// Every open officer term closes today, in this transaction, so a
 			// failure here leaves the status unchanged. A term that has not begun
@@ -706,7 +712,11 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 			// day, or later today, both give `term_end = term_start`. Every other
 			// term ends at `now`, which is the club-local today's instant.
 			const open = await tx
-				.select({ id: officerTerms.id, termStart: officerTerms.termStart })
+				.select({
+					id: officerTerms.id,
+					termStart: officerTerms.termStart,
+					position: officerTerms.position,
+				})
 				.from(officerTerms)
 				.where(
 					and(
@@ -720,6 +730,7 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 					.update(officerTerms)
 					.set({ termEnd, updatedAt: now })
 					.where(eq(officerTerms.id, t.id));
+				closedOfficerPositions.push(t.position);
 			}
 		}
 		// Free up their upcoming roles so the VPE can re-fill them; past slots
@@ -769,6 +780,7 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 					)
 					.returning({ id: roleSlots.id });
 				if (released.length === 0) continue;
+				releasedSlots++;
 				await logActivity(tx, {
 					clubId: input.clubId,
 					actorMemberId: input.actorMemberId,
@@ -798,6 +810,17 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 				},
 				...(ending || current.status === "former"
 					? { endedAt: { before: current.endedAt, after: endedAt } }
+					: {}),
+				// An End is told apart from a field edit by `change` (the feed reads
+				// it, `activity-format.ts`) and names who it ended by `memberId`.
+				...(ending
+					? {
+							change: MEMBERSHIP_ENDED_CHANGE,
+							memberId: input.memberId,
+							closedOfficerPositions,
+							releasedSlots,
+							releasedClubRole: current.clubRole,
+						}
 					: {}),
 			},
 		});

@@ -2363,6 +2363,31 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(await statusOf(membershipId)).toBe("active");
 		});
 
+		it("reports the prior status, and the end date, when it wakes a FORMER member (#1328)", async () => {
+			const email = `former-${randomUUID()}@example.com`;
+			const { membershipId } = await lapsedMember("Fern Former", { email });
+			await testDb
+				.update(members)
+				.set({ status: "former", endedAt: "2026-03-04" })
+				.where(eq(members.id, membershipId));
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Fern Former",
+				email,
+			});
+
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+				confirmedEmail: email,
+			});
+
+			expect(res.reactivated).toBe(true);
+			expect(res.reactivatedFrom).toBe("former");
+			expect(res.priorEndedAt).toBe("2026-03-04");
+		});
+
 		it("reactivates a membership matched by PHONE rather than email", async () => {
 			// The other arm of the dedup, and the one the issue's repro names
 			// second. It reaches the same reuse branch, so the fix covers it — but
@@ -2384,6 +2409,9 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 
 			expect(res.membershipId).toBe(membershipId);
 			expect(res.reactivated).toBe(true);
+			// An inactive wake-up names its prior status and carries no end date (#1328).
+			expect(res.reactivatedFrom).toBe("inactive");
+			expect(res.priorEndedAt).toBeUndefined();
 			expect(await statusOf(membershipId)).toBe("active");
 		});
 

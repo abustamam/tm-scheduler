@@ -403,6 +403,7 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 			"email",
 			"phone",
 			"status",
+			"ended_at",
 			"club_role",
 			"joined_at",
 			"customer_id",
@@ -413,6 +414,7 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 			email: expect.stringContaining("@test.example"),
 			phone: "+14155550100",
 			status: "active",
+			ended_at: null,
 			club_role: "member",
 			joined_at: "2024-01-15",
 			customer_id: expect.stringContaining(`C-MINE${RUN}`),
@@ -595,6 +597,7 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 			{
 				member_id: a.club.adminMemberId,
 				name: "Admin User",
+				member_status: "active",
 				path: `Zeta ${RUN}`,
 				current_level: null,
 				status: "active",
@@ -602,6 +605,7 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 			{
 				member_id: a.club.memberId,
 				name: "Member User",
+				member_status: "active",
 				path: `MINE${RUN} Path`,
 				current_level: 2,
 				status: "active",
@@ -636,11 +640,10 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 		);
 	});
 
-	// A club's export must not show people the club no longer has. An
-	// enrollment carries no club, so a LAPSED membership was the only thing
-	// joining a former member's Pathways record (including progress made at
-	// whatever club they joined next) to this club's admins.
-	it("pathways.csv: a lapsed member's enrollments are absent; an active member's archived one stays", async () => {
+	// History stays in the export (#1328, #1342): a former or lapsed member's
+	// Pathways rows are still listed, marked by member_status, and a former
+	// member's end date rides members.csv.
+	it("pathways.csv: a former member's enrollments stay, marked; members.csv carries ended_at", async () => {
 		const own = await seedClub();
 		extraClubs.push(own.clubId);
 		const [admin] = await testDb
@@ -664,34 +667,25 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 		]);
 		await testDb
 			.update(members)
-			.set({ status: "inactive" })
+			.set({ status: "former", endedAt: "2026-03-04" })
 			.where(inArray(members.id, [own.adminMemberId]));
 
 		const out = await loadClubExport(own.clubId);
 		const byName = Object.fromEntries(
 			(out?.files ?? []).map((f) => [f.filename, f]),
 		);
-		expect(byName["pathways.csv"].rows).toEqual([
-			{
-				member_id: own.memberId,
-				name: "Member User",
-				path: `Archived ${RUN}`,
-				current_level: null,
-				status: "archived",
-			},
-			{
-				member_id: own.memberId,
-				name: "Member User",
-				path: `Kept ${RUN}`,
-				current_level: null,
-				status: "active",
-			},
+		expect(
+			byName["pathways.csv"].rows.map((r) => [r.name, r.member_status, r.path]),
+		).toEqual([
+			["Admin User", "former", `Lapsed ${RUN}`],
+			["Member User", "active", `Archived ${RUN}`],
+			["Member User", "active", `Kept ${RUN}`],
 		]);
-		// Still on the roster file, as a past member: only Pathways is scoped.
 		expect(byName["members.csv"].rows).toContainEqual(
 			expect.objectContaining({
 				member_id: own.adminMemberId,
-				status: "inactive",
+				status: "former",
+				ended_at: "2026-03-04",
 			}),
 		);
 

@@ -325,6 +325,9 @@ export async function loadClubExport(
 					// A Person fact (#906), through the join below.
 					phone: people.phone,
 					status: members.status,
+					// When a former member's membership ended (#1328); null for one
+					// that has not, or whose date was never known.
+					endedAt: members.endedAt,
 					clubRole: members.clubRole,
 					joinedAt: members.joinedAt,
 					customerId: people.customerId,
@@ -447,6 +450,7 @@ export async function loadClubExport(
 				.select({
 					memberId: members.id,
 					name: members.name,
+					memberStatus: members.status,
 					path: pathwaysPaths.name,
 					archivedAt: pathEnrollments.archivedAt,
 					// The highest level TI has approved as complete. A per-enrollment
@@ -456,16 +460,15 @@ export async function loadClubExport(
 					),
 				})
 				.from(pathEnrollments)
-				// ACTIVE memberships only. An enrollment is PERSON-owned and carries
-				// no club, so the membership is the only thing tying it to this club;
-				// a lapsed one would keep sending a former member's progress, at
-				// whatever club they belong to now, to the admins of one they left.
+				// Every membership of THIS club, whatever its status (#1328, #1342): a
+				// former member's paths stay in the export, marked by `member_status`.
+				// An enrollment is PERSON-owned and carries no club, so the membership
+				// is the only thing tying it to this club.
 				.innerJoin(
 					members,
 					and(
 						eq(members.personId, pathEnrollments.personId),
 						eq(members.clubId, clubId),
-						eq(members.status, "active"),
 					),
 				)
 				.innerJoin(pathwaysPaths, eq(pathwaysPaths.id, pathEnrollments.pathId))
@@ -477,6 +480,7 @@ export async function loadClubExport(
 					pathEnrollments.id,
 					members.id,
 					members.name,
+					members.status,
 					pathwaysPaths.name,
 					pathEnrollments.archivedAt,
 				);
@@ -630,6 +634,7 @@ export async function loadClubExport(
 				"email",
 				"phone",
 				"status",
+				"ended_at",
 				"club_role",
 				"joined_at",
 				"customer_id",
@@ -642,6 +647,7 @@ export async function loadClubExport(
 					email: m.email,
 					phone: m.phone,
 					status: m.status,
+					ended_at: m.endedAt,
 					club_role: m.clubRole,
 					joined_at: joinedDate(m.joinedAt, tz),
 					customer_id: m.customerId,
@@ -784,11 +790,12 @@ export async function loadClubExport(
 		),
 		file(
 			"pathways.csv",
-			["member_id", "name", "path", "current_level", "status"],
+			["member_id", "name", "member_status", "path", "current_level", "status"],
 			enrollmentRows
 				.map((e) => ({
 					member_id: e.memberId,
 					name: e.name,
+					member_status: e.memberStatus,
 					path: e.path,
 					// pg returns `max()` over an expression as text; the column is an int.
 					current_level:
@@ -925,7 +932,7 @@ const FILE_DESCRIPTIONS: Record<
 	string
 > = {
 	"members.csv":
-		"One row per membership, current and past, with contact details.",
+		"One row per membership, current and past, with contact details. ended_at is the day a former membership ended (empty if unknown or not ended).",
 	"officer-terms.csv": "One row per officer term.",
 	"meetings.csv": "One row per meeting.",
 	"roles.csv": "One row per role slot on each meeting's agenda.",
@@ -934,7 +941,7 @@ const FILE_DESCRIPTIONS: Record<
 	"speeches.csv":
 		"One row per speech given at this club's meetings, by a member or a guest (speaker_type).",
 	"pathways.csv":
-		"One row per Pathways enrollment of this club's current (active) members. current_level is the highest level Toastmasters has approved as complete (empty if none); status is archived for a path the member is no longer working on.",
+		"One row per Pathways enrollment of this club's members, current and former (member_status). current_level is the highest level Toastmasters has approved as complete (empty if none); status is archived for a path the member is no longer working on.",
 	"guests.csv":
 		"One row per guest, with contact details. kind is visitor (a guest) or visiting_toastmaster (a Toastmaster from another club); home_club is a visiting Toastmaster's own club. visits counts the meetings of this club the guest attended, held a role at or spoke at Table Topics, not counting cancelled meetings or ones still to come, the same count the guest pipeline shows; first_visit is the earliest of them.",
 	"awards.csv": "One row per meeting award.",

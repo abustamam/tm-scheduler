@@ -111,6 +111,34 @@ describe.skipIf(!hasTestDb)("membership CSV upload (#62)", () => {
 		expect(await clubMemberCount(clubId)).toBe(0);
 	});
 
+	it("a paid row matching a FORMER member previews as former, and the commit leaves them former (#1328)", async () => {
+		const clubId = await club();
+		const text = csv([
+			{
+				"Customer ID": "PN-9",
+				Name: "Fay",
+				Email: "fay@x.io",
+				"Status (*)": "PaidMember",
+			},
+		]);
+		await logic.commitMemberImport(clubId, text);
+		await testDb
+			.update(members)
+			.set({ status: "former", endedAt: "2026-03-04" })
+			.where(eq(members.clubId, clubId));
+
+		const preview = await logic.previewMemberImport(clubId, text);
+		expect(preview.rows[0]?.action).toBe("update");
+		expect(preview.rows[0]?.note).toContain("Former member");
+
+		await logic.commitMemberImport(clubId, text);
+		const [after] = await testDb
+			.select({ status: members.status })
+			.from(members)
+			.where(eq(members.clubId, clubId));
+		expect(after.status).toBe("former");
+	});
+
 	it("commits the paid rows and re-preview is all updates (idempotent)", async () => {
 		const clubId = await club();
 		const text = csv([

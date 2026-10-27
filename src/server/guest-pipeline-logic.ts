@@ -1911,6 +1911,14 @@ export interface ConvertGuestResult {
 	 */
 	reactivated: boolean;
 	/**
+	 * The status convert woke the membership out of (#1328). Present exactly
+	 * when `reactivated` is true; `former` means a deliberate End was reversed.
+	 */
+	reactivatedFrom?: "inactive" | "former";
+	/** The `ended_at` a former membership carried (club-local `YYYY-MM-DD`);
+	 *  present only for a former wake-up, null when the date was unknown. */
+	priorEndedAt?: string | null;
+	/**
 	 * The elevated `club_role` the wake-up wrote back down to `member`, or
 	 * absent when the reused row was not elevated (#501 review).
 	 *
@@ -2758,6 +2766,8 @@ export async function applyConvertGuestToMember(
 			membershipId,
 			personId,
 			reactivated: reactivatedFrom !== undefined,
+			...(reactivatedFrom ? { reactivatedFrom } : {}),
+			...(reactivatedFrom === "former" ? { priorEndedAt } : {}),
 			...(demotedFrom ? { demotedFrom } : {}),
 			closedOfficerPositions,
 			// One release only — see the field's docblock. Delete this line and
