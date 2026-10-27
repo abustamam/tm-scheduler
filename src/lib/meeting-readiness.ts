@@ -268,12 +268,9 @@ export function showsMeetingReadiness(input: {
  * member, OR this meeting's Toastmaster of the Day.
  *
  * `canManage` is `canManageClub`'s answer (`src/server/guards.ts`): an active
- * membership whose stored `club_role` is admin, or a `read_write`
- * impersonation. It does NOT include an
- * elected officer who is not an admin. That is the pre-existing asymmetry the
- * route's `guestEdit` comment describes (the server is more permissive than this
- * UI), and it is not this panel's call to widen: such an officer sees the panel
- * only by holding this meeting's TMOD slot.
+ * membership whose stored `club_role` is admin or that holds an open officer
+ * term (effective admin, #202; the read flag caught up in #1383), or a
+ * `read_write` impersonation.
  *
  * Preview-as-member (#320) drops only the ADMIN arm. The TMOD arm stays (AC 8,
  * third row) because the page derives `isTmod` from the viewer's own slot

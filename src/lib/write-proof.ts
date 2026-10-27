@@ -241,11 +241,11 @@ export function safeRedirect(
  * retry inside `voteCounterCapabilityFor` grants an elected officer holding an
  * open term — and false of the SCREEN. Signing in makes the session win in
  * `useEffectiveMember`, so `myId` stops matching the Vote Counter slot and
- * `isVoteCounter` goes false; `canManage` is `canManageClub`, which is an
- * active membership with `clubRole === "admin"` or a `read_write`
- * impersonation and does NOT include
- * that officer. Both terms of the console's own section gate are therefore false
- * for them and the whole Ballot Counter console disappears. A refusal that names
+ * `isVoteCounter` goes false. `canManage` (`canManageClub`) has admitted an
+ * elected officer with an open term since #1383, so that officer keeps the
+ * console; a member who is neither admin nor officer does not: both terms of the
+ * console's own section gate are false for them and the whole Ballot Counter
+ * console disappears. A refusal that names
  * a route which removes the console is worse than one that names none, so the
  * copy names only what works: a club admin signing in here, or the Ballot
  * Counter signing in as themselves. The officer's unreachable capability is
