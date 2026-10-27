@@ -684,3 +684,27 @@ describe.skipIf(!hasChrome)(
 		});
 	},
 );
+
+// The browser suite above reads TWO of the panel's three status tracks out of
+// source (the recorded chip and the plan trigger). The third is the unrecorded
+// suggestion pair's wrapper, a `div` the harness does not measure, and a
+// mutation check found `@md:w-44` -> `md:w-44` on it survives every measurement:
+// that row's track would follow the VIEWPORT again (176px in a 340px rail) while
+// the other two follow the panel. This needs no browser, so it also runs where
+// the suite above skips.
+describe("every status track in the attendance panel follows the panel, not the viewport", () => {
+	const tracks = readSource(PANEL).match(/"[^"\n]*\bw-36\b[^"\n]*"/g) ?? [];
+
+	it("finds the three tracks (the recorded chip, the plan trigger, the suggestion pair)", () => {
+		expect(tracks.length).toBeGreaterThanOrEqual(3);
+	});
+
+	it("each w-36 track widens at `@md:` of the list, never at the viewport's `md:`", () => {
+		for (const track of tracks) {
+			expect(track, `${track} widens at the viewport, not the panel`).toMatch(
+				/(^|[\s"])@md:w-44(\s|")/,
+			);
+			expect(track).not.toMatch(/(^|[\s"])md:w-44/);
+		}
+	});
+});
