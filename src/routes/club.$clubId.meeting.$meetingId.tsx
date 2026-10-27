@@ -83,7 +83,7 @@ import {
 } from "#/lib/attendance-mode";
 import {
 	buildPanelRoleMap,
-	clearRefusedToast,
+	clearRefusedMessage,
 	type PlanStatus,
 } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
@@ -1322,7 +1322,7 @@ function MeetingView() {
 			// that does what an officer or Toastmaster usually means.
 			const refusedClear =
 				"cleared" in written
-					? clearRefusedToast({
+					? clearRefusedMessage({
 							cleared: written.cleared,
 							memberId,
 							myId,

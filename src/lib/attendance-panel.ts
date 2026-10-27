@@ -161,9 +161,14 @@ export function resolveEffectiveRung(
 }
 
 /** What the viewer is told when "No answer" removed nothing from ANOTHER
- *  member's answered row. */
-export const ANSWER_NOT_YOURS_TO_CLEAR_TEXT =
-	"That answer is the member's own. Pick Not coming if that's what you mean.";
+ *  member's `coming`. The pick that does what they usually mean is Not coming. */
+export const COMING_NOT_YOURS_TO_CLEAR_TEXT =
+	"Only they can clear their own answer. Pick Not coming if they can't make it.";
+
+/** The same, for another member's `not_coming`: there is no further pick to
+ *  offer, so it only says whose answer it is. */
+export const NOT_COMING_NOT_YOURS_TO_CLEAR_TEXT =
+	"Only they can clear their own answer.";
 
 /**
  * The one sentence for a "No answer" the server declined, or null when there is
@@ -176,27 +181,30 @@ export const ANSWER_NOT_YOURS_TO_CLEAR_TEXT =
  * season grid; an officer or Toastmaster on the rail gets `cleared: false` on
  * someone else's `coming` / `not_coming`, and this is where they hear why.
  *
- * Only for a row that SHOWED an answer (`previous`) and is not the viewer's own.
- * An absent row is a no-op that was never going to say anything, and an
- * `reached_out` row the Toastmaster may not clear is the officer's ask, not "the
- * member's own answer" — naming it that would be wrong. The viewer's own row is
- * left out because it is the member's own, so a refusal there is not about
- * whose answer it is.
+ * Only for a row whose STORED answer (`previous`) is one of those two and is not
+ * the viewer's own. An absent row is a no-op that was never going to say
+ * anything, and an `reached_out` row the Toastmaster may not clear is the
+ * officer's ask, not "their own answer" — naming it that would be wrong. The
+ * viewer's own row is left out because it is the member's own, so a refusal
+ * there is not about whose answer it is.
  *
  * Pure and client-safe so vitest can reach it; the route cannot be mounted.
  */
-export function clearRefusedToast(args: {
+export function clearRefusedMessage(args: {
 	/** `cleared` from the server's reply. */
 	cleared: boolean;
 	memberId: string;
 	/** The viewer's own member id, null when they are not on the roster. */
 	myId: string | null;
-	/** What the row displayed when "No answer" was picked. */
+	/** The row's stored status, or the pending override on it, when "No answer"
+	 *  was picked: not necessarily what the row displayed (an assumed Coming is
+	 *  displayed but not stored). */
 	previous: PlanStatus | null;
 }): string | null {
 	if (args.cleared || args.memberId === args.myId) return null;
-	const answered = args.previous === "coming" || args.previous === "not_coming";
-	return answered ? ANSWER_NOT_YOURS_TO_CLEAR_TEXT : null;
+	if (args.previous === "coming") return COMING_NOT_YOURS_TO_CLEAR_TEXT;
+	if (args.previous === "not_coming") return NOT_COMING_NOT_YOURS_TO_CLEAR_TEXT;
+	return null;
 }
 
 /** What a ROW carries. `confirmed` is deliberately absent: on the way out it is

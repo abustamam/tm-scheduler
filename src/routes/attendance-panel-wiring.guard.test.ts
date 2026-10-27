@@ -951,12 +951,12 @@ describe("a declined 'No answer' says why (clear floors)", () => {
 		// fails_when=the toast call is deleted (the control silently reverts again),
 		//   or the helper is fed a constant instead of the reply's `cleared`, or
 		//   `previous` is dropped so an absent row would be reported as refused
-		// no_claim=the sentence or when it applies (clearRefusedToast's own test in
+		// no_claim=the sentence or when it applies (clearRefusedMessage's own test in
 		//   attendance-panel.test.ts); that the server answers cleared: false at all
 		//   (attendance-plan-logic.integration.test.ts)
 		const commit = commitRungBody();
 		expect(commit).toMatch(
-			/clearRefusedToast\(\{\s*cleared: written\.cleared,\s*memberId,\s*myId,\s*previous,?\s*\}\)/,
+			/clearRefusedMessage\(\{\s*cleared: written\.cleared,\s*memberId,\s*myId,\s*previous,?\s*\}\)/,
 		);
 		expect(commit).toContain("if (refusedClear) toast.message(refusedClear);");
 	});

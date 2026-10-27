@@ -580,21 +580,33 @@ clear-to-unmarked gap; an officer who wants a row to stop saying "coming" picks 
 holds for ANOTHER member's row. An officer clearing their OWN answer is allowed, through
 `clearFloor`, since the actor there is the session's own membership: the personal strip's "undo"
 used to delete nothing for an officer and revert with no error. A refusal now says so: when the
-server answers `cleared: false` for ANOTHER member's answered row, `commitRung` toasts
-`ANSWER_NOT_YOURS_TO_CLEAR_TEXT` (`clearRefusedToast`, `src/lib/attendance-panel.ts`) rather than
-letting the row revert in silence.
+server answers `cleared: false` for ANOTHER member's answered row, `commitRung` toasts the
+sentence `clearRefusedMessage` (`src/lib/attendance-panel.ts`) picks for that stored status (the
+`coming` one also points at Not coming) rather than letting the row revert in silence. The meeting
+page's clear refuses a caller whose proof is not `"session"` (`assertSessionProof`,
+`attendance-actor-logic.ts`) before it reads the ladder, so a claimed id can never stand in for a
+session there.
 
-**`clearAvailability` is the officer's deliberate clear, and it checks who the caller is.** It is
-the season grid's "Marked them available" and the Undo after "Marked them unavailable". After
-`requireSessionActor` it runs `resolveClearActor` (`attendance-actor-logic.ts`): the caller's OWN
-row is allowed on any arm, ANOTHER member's row only on the officer arm — `requireClubRole(admin)`,
-the same principal as the grid's `canManageOthers` (a stored admin, any open officer term, a
-read-write impersonating superadmin) — and everyone else, the Toastmaster included, gets
-`SELF_ONLY_MESSAGE`. It keeps `SELF_SERVICE_RUNGS` as its floor, and takes its credit from the
-resolved actor, which is the session's own member on every arm. The refusal lives in a seam
-(`resolveClearActor`) rather than in the handler body because a `createServerFn` body cannot be
-invoked in vitest; `availability-authz.guard.test.ts` pins the handler's wiring and
-`availability.integration.test.ts` executes the rule.
+**The season grid's `setAvailability` and `clearAvailability` are owner-or-officer, and the clear
+also needs a session.** They are "Not available", "Marked them available" and the Undo after
+"Marked them unavailable". Both run `resolveOwnerOrOfficer` (`attendance-actor-logic.ts`): the
+caller's OWN row is allowed on any arm, ANOTHER member's row only on the officer arm —
+`requireClubRole(admin)`, the same principal as the grid's `canManageOthers` (a stored admin, any
+open officer term, a read-write impersonating superadmin) — and everyone else, the Toastmaster
+included, gets `SELF_ONLY_MESSAGE`. The clear then calls `assertSessionProof` and refuses unless the
+proof is `"session"`: the clears exist to remove an answer, so an asserted caller (no session, or a
+claim with the membership link gone) throws `SIGN_IN_REQUIRED_MESSAGE` instead of resolving. The
+floor depends on whose row it is: the member's own row keeps `SELF_SERVICE_RUNGS`, and an officer
+clearing ANOTHER member's row floors at `CLEARABLE_DECLINE` (the decline the grid undoes), so a stale
+grid cannot delete a `coming`. The credit is the resolved actor, which behind the proof check is the
+session's own member, or null for a read_write impersonating superadmin (whom `logActivity`
+stamps). The set keeps its write modes (a session writes unrestricted, an asserted caller fills a
+blank); a read_only impersonating superadmin can no longer write through it. The rules live in the
+seams (`setAvailabilityCore`, `clearAvailabilityCore`, `clearPlannedAttendanceCore`,
+`availability-logic.ts`) rather than in the handler bodies because a `createServerFn` body cannot
+be invoked in vitest; the handlers keep the meeting, archive and roster gates and bind the SUBJECT
+to `data.memberId`. `availability-authz.guard.test.ts` pins the handlers' wiring and
+`availability.integration.test.ts` executes the rules.
 
 Both `demoteFrom` and `onlyFrom` are `setWhere`/`WHERE` predicates rather than a
 read-then-write, so they are also the de-dup and race fix for `markComingOnSelfClaim`.
