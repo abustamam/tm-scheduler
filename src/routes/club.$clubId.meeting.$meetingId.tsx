@@ -1620,12 +1620,16 @@ function MeetingView() {
 	// — but clamped off `reached_out`. `rungOverride` is shared with the
 	// officer panel, so an OFFICER setting their own row to `reached_out` from
 	// the panel would otherwise mislabel their own strip as "can't make this
-	// one — undo?", and tapping that "undo" actually DELETES the row: an
-	// officer's clear is unrestricted (`onlyFrom` is lifted for them in
-	// `clearPlannedAttendance`), so it would erase the very outreach record the
-	// clamp exists to protect (whole-branch review M8). `answeredRungs` can
-	// never itself produce `reached_out` — it is filtered server-side — so this
-	// only ever intercepts the override.
+	// one — undo?", and tapping that "undo" actually DELETES the row. Since #573
+	// `clearPlannedAttendance` floors every clear server-side, and the floors
+	// are complements: the officer arm may clear only the ASK (`CLEARABLE_ASK`,
+	// `reached_out`), the self and Toastmaster arm only an ANSWER
+	// (`SELF_SERVICE_RUNGS`, `coming` / `not_coming`). An officer is resolved as
+	// the officer arm even on their own row, so the "undo" clear is floored to
+	// exactly `reached_out`: it would erase the very outreach record the clamp
+	// exists to protect (whole-branch review M8), and cannot touch an answer.
+	// `answeredRungs` can never itself produce `reached_out` — it is filtered
+	// server-side — so this only ever intercepts the override.
 	let myEffectiveStatus =
 		myId && rungOverride[myId] !== undefined ? rungOverride[myId] : myStatus;
 	myEffectiveStatus =
@@ -2199,10 +2203,19 @@ function MeetingView() {
 					onEditWod={() => setWodOpen(true)}
 					canChangeType={viewer.canManage}
 					onChangeType={async () => {
-						setTemplates(
-							await listTemplatesForClub({ data: { clubId: meeting.clubId } }),
-						);
-						setTemplateOpen(true);
+						// A failed fetch must not open the dialog onto an empty or stale
+						// list, and must not be an unhandled rejection with no feedback:
+						// it surfaces the way this route surfaces every failed write.
+						try {
+							setTemplates(
+								await listTemplatesForClub({
+									data: { clubId: meeting.clubId },
+								}),
+							);
+							setTemplateOpen(true);
+						} catch (err) {
+							showWriteError(err, "Couldn't load the meeting types.");
+						}
 					}}
 					editAgendaParams={
 						viewer.canManage && meeting.templateId

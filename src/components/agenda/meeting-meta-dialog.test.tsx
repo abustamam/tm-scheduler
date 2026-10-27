@@ -60,7 +60,7 @@ const meeting = (over: Record<string, unknown> = {}) =>
 		...over,
 	}) as unknown as MeetingProp;
 
-/** The dialog exactly as `meeting-agenda.tsx` mounts it: ALWAYS rendered when
+/** The dialog exactly as the meeting route mounts it: ALWAYS rendered when
  *  the viewer may edit meta, with `open` toggling — not conditionally mounted. */
 const dialog = (
 	open: boolean,
@@ -167,7 +167,7 @@ describe("what the dialog sends", () => {
 });
 
 /**
- * The dialog is mounted whenever `viewer.canEditMeetingMeta` (`meeting-agenda.tsx`),
+ * The dialog is mounted whenever `viewer.canEditMeetingMeta` (the meeting route),
  * NOT gated on `open`. Radix unmounts `DialogContent`'s children on close, so
  * every sibling input re-reads the row on each open because each is uncontrolled
  * with a `defaultValue`.
@@ -209,8 +209,8 @@ describe("the field re-reads the row on every open", () => {
 	});
 
 	it("picks up a link added by someone else since the dialog last opened", async () => {
-		// `onMetaSaved()` refetches and the `meeting` prop changes underneath a
-		// mounted dialog. State initialized once would stay diverged from the row.
+		// `onSaved()` invalidates the route loader and the `meeting` prop changes
+		// underneath a mounted dialog. State initialized once would stay diverged from the row.
 		const view = render(dialog(true, { joinUrl: null }));
 		expect(field().value).toBe("");
 		view.rerender(dialog(false, { joinUrl: null }));
@@ -277,7 +277,7 @@ describe("the inline error", () => {
 /**
  * The time, for a viewer who may not change it (#772).
  *
- * `meeting-agenda.tsx` mounts this dialog on `viewer.canEditMeetingMeta` — which
+ * The meeting route mounts this dialog on `viewer.canEditMeetingMeta` — which
  * includes a self-serve Toastmaster who is NOT an admin — and passes
  * `canReschedule={viewer.canManage}`, false for exactly that person. It used to
  * resubmit the meeting's stored wall time on their behalf, and the writer

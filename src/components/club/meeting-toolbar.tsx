@@ -13,6 +13,7 @@ import {
 	Pencil,
 	Plus,
 	Presentation,
+	Sparkles,
 } from "lucide-react";
 import { lazy, Suspense, useState } from "react";
 import type { AgendaLayout } from "#/components/agenda/meeting-agenda-print";
@@ -95,17 +96,23 @@ export type MeetingToolbarProps = {
 	 * IS, and each dialog is the route's: this component renders the entry and
 	 * calls the handler, it decides nothing. Optional with a closed default,
 	 * like Cancel: a dropped prop hides the entry rather than showing one the
-	 * viewer may not use, and `agenda-editor-wiring.guard.test.ts` pins the
+	 * viewer may not use, and `meeting-setup-wiring.guard.test.ts` pins the
 	 * route's wiring.
 	 *
+	 * Every one of them is an item in the Manage menu, for every audience:
+	 * there is no standalone button for the narrower edit rights. The Toastmaster
+	 * (and any officer who is not an admin) already has a Manage menu, because
+	 * `canLineupBlast` is true for them (`mayDraftLineupBlast`), so a button
+	 * beside it would be a fifth top-level control; a Grammarian with no other
+	 * right gets the menu with Edit Word of the Day in it.
+	 *
 	 * `canEditMeta` is `viewer.canEditMeetingMeta`: an officer or the meeting's
-	 * Toastmaster. An officer finds "Edit meeting" in Manage; the Toastmaster has
-	 * no Manage menu, so theirs is a button in this row.
+	 * Toastmaster.
 	 */
 	canEditMeta?: boolean;
 	onEditMeta?: () => void;
-	/** `viewer.canEditWod`: the pure Grammarian, who has no Manage menu either,
-	 *  so theirs is a button in this row. */
+	/** `viewer.canEditWod`: the pure Grammarian's affordance (an admin or the
+	 *  Toastmaster edits the Word of the Day through Edit meeting). */
 	canEditWod?: boolean;
 	onEditWod?: () => void;
 	/** `viewer.canManage`: reshaping a meeting sits with reschedule and cancel,
@@ -147,10 +154,11 @@ export function stripIsPrimary({
  * a phase-driven primary (today → Present, completed → Minutes anchor,
  * upcoming → none), the share chip, the Print & export menu, and one
  * "Manage" menu holding the officer extras and Lineup blast (#1307). The
- * meeting-setup entries (Edit meeting, Change meeting type, Edit agenda) lead
- * that menu; a non-officer with a narrower edit right (the Toastmaster's Edit
- * meeting, the Grammarian's Edit Word of the Day) has no menu, so theirs is one
- * outline button in the row. Pure component so the phase × persona matrix is
+ * meeting-setup entries (Edit meeting, Edit Word of the Day, Change meeting
+ * type, Edit agenda) lead that menu for every audience: a person with a narrower
+ * edit right (the Toastmaster's Edit meeting, the Grammarian's Edit Word of the
+ * Day) gets the menu with their one entry in it, never a button beside it, so
+ * the row stays at four. Pure component so the phase × persona matrix is
  * testable in jsdom; the route only wires props and owns the mutation handlers
  * and the dialogs.
  */
@@ -219,13 +227,12 @@ export function MeetingToolbar({
 	// if it is missed.
 	const showReopen = canManage && locked;
 	// The setup entries (the route reads each gate off its `viewer`, which a
-	// locked or cancelled meeting zeroes, so none shows there). An officer's
-	// "Edit meeting" is a menu item and the Toastmaster's, who has no menu, a
-	// button; the split is `canManage`, the effective-admin answer. None of
-	// these is covered by `canEdit`, so each is a term of `showManage`.
-	const metaInMenu = canEditMeta && canManage;
-	const metaAsButton = canEditMeta && !canManage;
-	const showSetup = metaInMenu || canChangeType || editAgendaParams !== null;
+	// locked or cancelled meeting zeroes, so none shows there). Each is a Manage
+	// item for whoever holds it: the Toastmaster's Edit meeting and the
+	// Grammarian's Edit Word of the Day are not covered by `canEdit`, so each is
+	// a term here, and `showSetup` is a term of `showManage`.
+	const showSetup =
+		canEditMeta || canEditWod || canChangeType || editAgendaParams !== null;
 	const showManage = canEdit || canLineupBlast || showReopen || showSetup;
 	// The trigger spins only for a write that lives in this menu. Restore is the
 	// cancelled banner's button, so it never makes Manage busy; an absent
@@ -287,26 +294,6 @@ export function MeetingToolbar({
 				presentIsPrimary={presentIsPrimary}
 				size="touch"
 			/>
-			{metaAsButton ? (
-				<Button
-					type="button"
-					variant="outline"
-					size="touch"
-					onClick={() => onEditMeta?.()}
-				>
-					Edit meeting
-				</Button>
-			) : null}
-			{canEditWod ? (
-				<Button
-					type="button"
-					variant="outline"
-					size="touch"
-					onClick={() => onEditWod?.()}
-				>
-					Edit Word of the Day
-				</Button>
-			) : null}
 			{showManage ? (
 				// The officer extras live in ONE menu (#1307, DESIGN.md: one primary
 				// per person). Each item keeps the visibility gate its button had;
@@ -325,10 +312,16 @@ export function MeetingToolbar({
 					<DropdownMenuContent align="start">
 						{/* Meeting setup first, lifecycle after. Each opens a dialog the
 						    route owns, except Edit agenda, which is the editor page. */}
-						{metaInMenu ? (
+						{canEditMeta ? (
 							<DropdownMenuItem onSelect={() => onEditMeta?.()}>
 								<Pencil />
 								Edit meeting
+							</DropdownMenuItem>
+						) : null}
+						{canEditWod ? (
+							<DropdownMenuItem onSelect={() => onEditWod?.()}>
+								<Sparkles />
+								Edit Word of the Day
 							</DropdownMenuItem>
 						) : null}
 						{canChangeType ? (

@@ -536,16 +536,22 @@ describe("MeetingToolbar (#541 D2)", () => {
 				hasIdentity: true,
 				canLineupBlast: true,
 			},
-			// The meeting-setup entries (Edit meeting, Change meeting type, Edit
-			// agenda). Each is a term of `showManage` that `canEdit` does not
-			// cover, so each gets a persona that has no OTHER reason for a menu:
-			// dropping one term from `showSetup` fails exactly one of these.
+			// The meeting-setup entries (Edit meeting, Edit Word of the Day, Change
+			// meeting type, Edit agenda). Each is a term of `showManage` that
+			// `canEdit` does not cover, so each gets a persona that has no OTHER
+			// reason for a menu: dropping one term from `showSetup` fails exactly
+			// one of these.
 			"officer, setup entries only": {
 				hasIdentity: true,
 				canManage: true,
 				canEditMeta: true,
 				canChangeType: true,
 				editAgendaParams: SETUP_PARAMS,
+			},
+			"Toastmaster with lineup access": {
+				hasIdentity: true,
+				canEditMeta: true,
+				canLineupBlast: true,
 			},
 			"member with only Edit meeting (Toastmaster)": {
 				hasIdentity: true,
@@ -588,12 +594,14 @@ describe("MeetingToolbar (#541 D2)", () => {
 		// on a locked one (cancelled included), Lineup blast its own flag. The
 		// setup entries do not read `cancelled` or `locked` at all: the route
 		// zeroes each flag through `lockedViewer`, so the toolbar shows what it
-		// is handed. Edit meeting is a MENU item only for an officer (for anyone
-		// else it is a top-level button); Edit Word of the Day is never one.
+		// is handed. Every one of them is a MENU item for whoever holds it (Edit
+		// meeting and Edit Word of the Day included: there is no standalone
+		// button for the narrower edit rights), so each is its own term.
 		it.each(cases)("$label", async ({ props }) => {
 			const officer = props.canManage === true;
 			const setupItem =
-				(props.canEditMeta === true && officer) ||
+				props.canEditMeta === true ||
+				props.canEditWod === true ||
 				props.canChangeType === true ||
 				(props.editAgendaParams ?? null) !== null;
 			const anyItem =
@@ -672,16 +680,22 @@ describe("MeetingToolbar (#541 D2)", () => {
 });
 
 // The meeting-setup entries moved here from the agenda's top row: Edit meeting,
-// Change meeting type and Edit agenda lead the officer's Manage menu, and the
-// two narrower edit rights (the Toastmaster's Edit meeting, the Grammarian's
-// Edit Word of the Day) are outline buttons in the row because those people
-// have no Manage menu. Personas are built the way the route builds them: a
+// Edit Word of the Day, Change meeting type and Edit agenda are ALL Manage
+// menu items, for every audience. The two narrower edit rights (the
+// Toastmaster's Edit meeting, the Grammarian's Edit Word of the Day) are not
+// standalone buttons: the route hands the Toastmaster `canLineupBlast`, so they
+// already have a Manage menu, and a button beside it would be a fifth
+// top-level control. Personas are built the way the route builds them: a
 // `meetingViewer`, then each toolbar flag read off it AS IS, so the persona ->
 // flag derivation the agenda's tests used to cover stays under test.
 describe("MeetingToolbar meeting-setup entries", () => {
 	const persona = (
 		over: Partial<Parameters<typeof meetingViewer>[0]>,
 		templateId: string | null = "tpl-1",
+		// The route fetches lineup access asynchronously
+		// (`lineupAccess?.allowed === true`), so the Toastmaster's first paint has
+		// it false and the settled page has it true. Both are real states.
+		canLineupBlast = false,
 	): Partial<typeof BASE> => {
 		const v = meetingViewer({
 			currentMemberId: "me",
@@ -698,12 +712,20 @@ describe("MeetingToolbar meeting-setup entries", () => {
 			canEditWod: v.canEditWod,
 			canChangeType: v.canManage,
 			editAgendaParams: v.canManage && templateId ? SETUP_PARAMS : null,
+			canLineupBlast,
 		};
 	};
 	const OFFICER_SETUP = persona({ canManage: true });
 	const names = () =>
 		screen.getAllByRole("menuitem").map((el) => el.textContent?.trim());
 	const button = (name: RegExp) => screen.queryByRole("button", { name });
+	/** Every top-level control: the buttons and links outside any open menu. On
+	 *  the day, for a member, this is Present, Share and Print & export, and
+	 *  Manage; DESIGN.md and the toolbar's doc allow four and no more. */
+	const topLevelControls = () => [
+		...screen.queryAllByRole("button"),
+		...screen.queryAllByRole("link"),
+	];
 
 	it("officer: the setup entries lead Manage, then a separator, then the lifecycle items", async () => {
 		await renderToolbar({
@@ -754,35 +776,63 @@ describe("MeetingToolbar meeting-setup entries", () => {
 		expect(screen.queryByRole("separator")).toBeNull();
 	});
 
-	it("Toastmaster: Edit meeting is an outline touch button and there is no Manage menu", async () => {
-		const onEditMeta = vi.fn();
-		await renderToolbar({
-			...persona({ isTmod: true }),
-			onEditMeta,
+	// The Toastmaster as the route produces them on the day: `canLineupBlast`
+	// true once `getLineupBlastAccess` settles, false until then (and for a
+	// Toastmaster the server does not admit). Edit meeting is a Manage item in
+	// BOTH, and never a button in the row.
+	describe.each([
+		["lineup access settled", true],
+		["lineup access not (yet) granted", false],
+	])("Toastmaster, %s", (_label, canLineupBlast) => {
+		const TMOD = () => persona({ isTmod: true }, "tpl-1", canLineupBlast);
+
+		it("Edit meeting is inside Manage, with no top-level Edit meeting button", async () => {
+			const onEditMeta = vi.fn();
+			await renderToolbar({ ...TMOD(), onEditMeta });
+			expect(button(/edit meeting/i)).toBeNull();
+			expect(button(/edit word of the day/i)).toBeNull();
+			expect(button(/^manage$/i)).toBeTruthy();
+			await openManage();
+			expect(names()).toEqual(
+				canLineupBlast ? ["Edit meeting", "Lineup blast"] : ["Edit meeting"],
+			);
+			await userEvent.click(item(/^edit meeting$/i) as HTMLElement);
+			expect(onEditMeta).toHaveBeenCalledTimes(1);
 		});
-		const edit = button(/^edit meeting$/i) as HTMLElement;
-		expect(edit).toBeTruthy();
-		expect(edit.getAttribute("data-variant")).toBe("outline");
-		expect(edit.getAttribute("data-size")).toBe("touch");
-		expect(button(/^manage$/i)).toBeNull();
-		expect(button(/edit word of the day/i)).toBeNull();
-		await userEvent.click(edit);
-		expect(onEditMeta).toHaveBeenCalledTimes(1);
+
+		it("the row stays at four top-level controls on the day", async () => {
+			// The worst case: a member on the day has Present as well.
+			await renderToolbar({ ...TMOD(), phase: "today" });
+			expect(topLevelControls().length).toBeLessThanOrEqual(4);
+			expect(button(/^manage$/i)).toBeTruthy();
+		});
+
+		it("a separator divides Edit meeting from Lineup blast only when both show", async () => {
+			await renderToolbar({ ...TMOD() });
+			await openManage();
+			expect(screen.queryAllByRole("separator")).toHaveLength(
+				canLineupBlast ? 1 : 0,
+			);
+		});
 	});
 
-	it("Grammarian: Edit Word of the Day is an outline touch button, with no Manage menu and no Edit meeting", async () => {
+	// A Grammarian with no other right: no lineup access, no officer term. The
+	// menu exists for the one entry, and the entry is not also a button.
+	it("Grammarian: Edit Word of the Day is inside Manage, with no top-level button and no Edit meeting", async () => {
 		const onEditWod = vi.fn();
 		await renderToolbar({
 			...persona({ isGrammarian: true }),
+			phase: "today",
 			onEditWod,
 		});
-		const edit = button(/^edit word of the day$/i) as HTMLElement;
-		expect(edit).toBeTruthy();
-		expect(edit.getAttribute("data-variant")).toBe("outline");
-		expect(edit.getAttribute("data-size")).toBe("touch");
-		expect(button(/^manage$/i)).toBeNull();
+		expect(button(/edit word of the day/i)).toBeNull();
 		expect(button(/edit meeting/i)).toBeNull();
-		await userEvent.click(edit);
+		expect(topLevelControls().length).toBeLessThanOrEqual(4);
+		expect(button(/^manage$/i)).toBeTruthy();
+		await openManage();
+		expect(names()).toEqual(["Edit Word of the Day"]);
+		expect(screen.queryByRole("separator")).toBeNull();
+		await userEvent.click(item(/^edit word of the day$/i) as HTMLElement);
 		expect(onEditWod).toHaveBeenCalledTimes(1);
 	});
 
@@ -794,18 +844,19 @@ describe("MeetingToolbar meeting-setup entries", () => {
 		expect(screen.queryByRole("link", { name: /edit agenda/i })).toBeNull();
 	});
 
-	it("an editable-window miss hides the Toastmaster's and Grammarian's buttons", async () => {
+	it("an editable-window miss leaves the Toastmaster and the Grammarian no entry and no Manage menu", async () => {
 		// `isEditableWindow: false` is what a past meeting derives; the viewer
-		// drops both flags, so the toolbar renders neither.
+		// drops both flags, so the toolbar renders neither entry. Without lineup
+		// access nothing else holds the menu open either.
 		await renderToolbar({
 			...persona({ isTmod: true, isEditableWindow: false }),
 		});
-		expect(button(/edit meeting/i)).toBeNull();
+		expect(button(/^manage$/i)).toBeNull();
 		cleanup();
 		await renderToolbar({
 			...persona({ isGrammarian: true, isEditableWindow: false }),
 		});
-		expect(button(/edit word of the day/i)).toBeNull();
+		expect(button(/^manage$/i)).toBeNull();
 	});
 
 	it("a meeting with no template has no Edit agenda (the editor would bounce back)", async () => {
@@ -841,12 +892,37 @@ describe("MeetingToolbar meeting-setup entries", () => {
 		expect(link.className.split(/\s+/)).toContain("text-inherit");
 	});
 
+	it("the four setup entries lead Manage in the specified order", async () => {
+		// No single viewer holds all four (`canEditWod` is the PURE Grammarian's),
+		// so the flags are handed directly: this pins the menu's order, which is
+		// a rendering contract, not a persona.
+		await renderToolbar({
+			canManage: true,
+			hasAddableRoles: true,
+			canEditMeta: true,
+			canEditWod: true,
+			canChangeType: true,
+			editAgendaParams: SETUP_PARAMS,
+		});
+		await openManage();
+		expect(names()).toEqual([
+			"Edit meeting",
+			"Edit Word of the Day",
+			"Change meeting type",
+			"Edit agenda",
+			"Promote",
+			"Add role",
+		]);
+		expect(screen.getAllByRole("separator")).toHaveLength(1);
+	});
+
 	it("each Manage entry calls its own handler", async () => {
 		const onEditMeta = vi.fn();
 		const onChangeType = vi.fn();
 		const onEditWod = vi.fn();
 		await renderToolbar({
 			...OFFICER_SETUP,
+			canEditWod: true,
 			onEditMeta,
 			onChangeType,
 			onEditWod,
@@ -855,19 +931,27 @@ describe("MeetingToolbar meeting-setup entries", () => {
 		await userEvent.click(item(/edit meeting/i) as HTMLElement);
 		expect(onEditMeta).toHaveBeenCalledTimes(1);
 		expect(onChangeType).not.toHaveBeenCalled();
+		expect(onEditWod).not.toHaveBeenCalled();
+		await openManage();
+		await userEvent.click(item(/edit word of the day/i) as HTMLElement);
+		expect(onEditWod).toHaveBeenCalledTimes(1);
+		expect(onEditMeta).toHaveBeenCalledTimes(1);
+		expect(onChangeType).not.toHaveBeenCalled();
 		await openManage();
 		await userEvent.click(item(/change meeting type/i) as HTMLElement);
 		expect(onChangeType).toHaveBeenCalledTimes(1);
 		expect(onEditMeta).toHaveBeenCalledTimes(1);
-		expect(onEditWod).not.toHaveBeenCalled();
+		expect(onEditWod).toHaveBeenCalledTimes(1);
 	});
 
 	it("an absent handler does not throw when an entry is chosen", async () => {
 		// The handlers are optional so a dropped prop hides nothing it should
 		// show; choosing the entry must be a no-op, not a TypeError.
-		await renderToolbar({ ...OFFICER_SETUP });
+		await renderToolbar({ ...OFFICER_SETUP, canEditWod: true });
 		await openManage();
 		await userEvent.click(item(/edit meeting/i) as HTMLElement);
+		await openManage();
+		await userEvent.click(item(/edit word of the day/i) as HTMLElement);
 		await openManage();
 		await userEvent.click(item(/change meeting type/i) as HTMLElement);
 		expect(button(/^manage$/i)).toBeTruthy();

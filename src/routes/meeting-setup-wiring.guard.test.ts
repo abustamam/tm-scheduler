@@ -16,7 +16,7 @@
  * zeroes every flag on a completed or cancelled meeting, so a gate read off it
  * vanishes there for free. The toolbar's own `canEdit` is `canManage &&
  * !cancelled`: it would show Edit meeting on a COMPLETED meeting, and would
- * hide the Toastmaster's and Grammarian's buttons (they are not managers) on
+ * hide the Toastmaster's and Grammarian's entries (they are not managers) on
  * every meeting. `canManage` straight off the loader is the real admin even
  * while previewing as a member.
  *
@@ -53,6 +53,21 @@ describe("meeting route → toolbar meeting-setup gates", () => {
 		expect(block.length, "no onChangeType handler found").toBeGreaterThan(0);
 		expect(block).toMatch(/listTemplatesForClub\(/);
 		expect(block).toMatch(/setTemplateOpen\(true\)/);
+	});
+
+	it("a failed template fetch is a write-error toast, not an unhandled rejection", () => {
+		const block =
+			toolbar.match(/onChangeType=\{[\s\S]*?\n\t{5}\}\}/)?.[0] ?? "";
+		expect(block.length, "no onChangeType handler found").toBeGreaterThan(0);
+		// The fetch AND the dialog open sit inside the `try`, so a failure never
+		// opens the dialog onto an empty or stale list; the `catch` reports it
+		// through the helper every other failed write on this route uses.
+		expect(
+			block,
+			"onChangeType must `try` the fetch, then open the dialog, and `catch` into showWriteError(…)",
+		).toMatch(
+			/try\s*\{[\s\S]*listTemplatesForClub\([\s\S]*setTemplateOpen\(true\)[\s\S]*\}\s*catch\s*\(\w+\)\s*\{[\s\S]*showWriteError\(/,
+		);
 	});
 });
 
