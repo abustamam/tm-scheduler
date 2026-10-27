@@ -955,8 +955,11 @@ describe("a declined 'No answer' says why (clear floors)", () => {
 		//   attendance-panel.test.ts); that the server answers cleared: false at all
 		//   (attendance-plan-logic.integration.test.ts)
 		const commit = commitRungBody();
+		// The whole ternary, so the helper's result is what `refusedClear` holds: a
+		// call that stays in the source but is short-circuited (`null && call(...)`)
+		// would still contain the arguments and silence the toast.
 		expect(commit).toMatch(
-			/clearRefusedMessage\(\{\s*cleared: written\.cleared,\s*memberId,\s*myId,\s*previous,?\s*\}\)/,
+			/const refusedClear =\s*"cleared" in written\s*\?\s*clearRefusedMessage\(\{\s*cleared: written\.cleared,\s*memberId,\s*myId,\s*previous,?\s*\}\)\s*:\s*null;/,
 		);
 		expect(commit).toContain("if (refusedClear) toast.message(refusedClear);");
 	});
