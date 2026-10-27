@@ -58,6 +58,7 @@ import {
 	soleHoldingClub,
 } from "./account-link-logic";
 import { logActivity } from "./activity";
+import { deletePlanRowsOfEndedMember } from "./attendance-plan-logic";
 import { isReadableClub } from "./club-readable-logic";
 import { CLUB_BUSY_MESSAGE } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
@@ -596,7 +597,9 @@ type SetStatusInput = z.infer<typeof setStatusSchema> & RosterActor;
 /** Toggle a roster member active/inactive. Inactive members are hidden from
  *  sign-up / roster / season / picker views and can't claim or be assigned new
  *  roles, but their past role history is preserved (never deleted) and
- *  reactivating restores them everywhere. Logs member_edit with the status
+ *  reactivating restores them everywhere. Ending a membership (→ former) also
+ *  deletes the member's planned-attendance answers on meetings that are not
+ *  completed (#1342); going inactive keeps them. Logs member_edit with the status
  *  before/after. On an active→inactive transition their UPCOMING role slots are
  *  released (mirrors applyMemberRemove); past slots are left untouched.
  *  "Upcoming" includes a CANCELLED future meeting (#1057): cancelling keeps its
@@ -762,6 +765,11 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 				});
 			}
 		}
+		// Their planned-attendance answers on meetings still to come go with the
+		// membership (#1342): a person who has left has none to give, and a row
+		// left here would keep naming them on the meeting's public "not coming"
+		// list. A completed meeting's answers stay, like its slots and roll.
+		if (ending) await deletePlanRowsOfEndedMember(tx, input.memberId);
 		await logActivity(tx, {
 			clubId: input.clubId,
 			actorMemberId: input.actorMemberId,

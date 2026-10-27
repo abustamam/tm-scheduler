@@ -521,6 +521,16 @@ const MEETING_WRITERS: Record<string, Entry> = {
 			},
 		},
 	},
+	"src/server/attendance-plan-logic.ts#deletePlanRowsOfEndedMember": {
+		class: "plan",
+		overrides: {
+			cancelled: {
+				accept: true,
+				reason:
+					"Ending a membership drops the member's plan rows on scheduled AND cancelled meetings on purpose (#1342): a cancelled meeting can be restored and nobody can answer for a former member then. The DELETE's own meetingAcceptsWrite refuses a completed meeting, whose answers stay as history.",
+			},
+		},
+	},
 	"src/server/members-logic.ts#applySetMemberStatus": {
 		class: "plan",
 		overrides: {
