@@ -7,6 +7,7 @@ import {
 	isStrandedConvertedGuest,
 	JOIN_DATE_MARGIN_MS,
 	joinedBeforeConversion,
+	UNDO_MEMBERSHIP_EDITED_MESSAGE,
 	UNDO_MEMBERSHIP_MERGED_MESSAGE,
 	UNDO_OTHER_GUEST_LINKED_MESSAGE,
 } from "./guest-convert";
@@ -274,6 +275,20 @@ describe("UNDO_MEMBERSHIP_MERGED_MESSAGE", () => {
 				"former instead.",
 		);
 		expect(UNDO_MEMBERSHIP_MERGED_MESSAGE).not.toMatch(/after/i);
+	});
+});
+
+/**
+ * The refusal for an admin's status, role or end-date edit after the conversion
+ * created the membership (#1322): the delete would discard their decision.
+ */
+describe("UNDO_MEMBERSHIP_EDITED_MESSAGE", () => {
+	it("says an admin changed the status or role, and names the way out", () => {
+		expect(UNDO_MEMBERSHIP_EDITED_MESSAGE).toBe(
+			"An admin has changed this member's status or role since the " +
+				"conversion, so undoing it would discard that decision. Set them " +
+				"inactive or former instead.",
+		);
 	});
 });
 

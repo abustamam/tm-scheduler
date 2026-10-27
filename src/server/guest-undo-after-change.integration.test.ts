@@ -3,11 +3,13 @@
  * is exactly as convert left it. Every test here starts from the state a later
  * flow leaves behind, then undoes the conversion:
  *
- *   1. a member merge into the membership (both directions, and two Person
- *      merges in a row),
+ *   1. a member merge into the membership (both directions, and a chain of
+ *      Person merges that moves it to another Person),
  *   2. a second guest linked to it,
  *   3. a row of its own on a SET NULL key the delete would blank, one test per key,
- *   4. a status the admin changed after convert woke the member.
+ *   4. a status the admin changed after convert woke the member, or another
+ *      guest that now depends on it,
+ *   5. a status or role the admin changed after convert CREATED the membership.
  *
  * Plus the guard over `pg_constraint`: every foreign key to `members` is
  * classified once, in the table the undo reads (`undoKeyPlan`).
@@ -34,7 +36,9 @@ import {
 	projectCompletionMarks,
 } from "#/db/schema";
 import {
+	JOIN_DATE_MARGIN_MS,
 	UNDO_MEMBER_HAS_HISTORY_MESSAGE,
+	UNDO_MEMBERSHIP_EDITED_MESSAGE,
 	UNDO_MEMBERSHIP_MERGED_MESSAGE,
 	UNDO_NO_RECORD_MESSAGE,
 } from "#/lib/guest-convert";
@@ -232,6 +236,52 @@ describe.skipIf(!hasTestDb)(
 			return { personId: p.id, membershipId: m.id };
 		}
 
+		function setStatus(
+			membershipId: string,
+			status: "active" | "inactive" | "former",
+		) {
+			return applySetMemberStatus({
+				clubId: seed.clubId,
+				memberId: membershipId,
+				status,
+				actorMemberId: seed.adminMemberId,
+			});
+		}
+
+		function setRole(membershipId: string, clubRole: "admin" | "member") {
+			return applySetMemberRole({
+				clubId: seed.clubId,
+				memberId: membershipId,
+				clubRole,
+				actorMemberId: seed.adminMemberId,
+			});
+		}
+
+		/**
+		 * Moves the membership `personId` holds up `depth` Person merges, each into a
+		 * fresh Person that holds nothing here: the membership follows, nothing
+		 * collapses, and every merge logs `collapsed: 0` on the Person it ends
+		 * with. Returns the Person the membership names at the end.
+		 */
+		async function moveMembershipUp(personId: string, depth: number) {
+			let current = personId;
+			for (let i = 0; i < depth; i++) {
+				const [next] = await testDb
+					.insert(people)
+					.values({ name: `Chain Elsewhere ${i} ${randomUUID()}` })
+					.returning({ id: people.id });
+				if (!next) throw new Error("Failed to seed person");
+				strayPeople.push(next.id);
+				const merged = await mergePeople({
+					keeperPersonId: next.id,
+					absorbedPersonId: current,
+				});
+				expect(merged.movedCounts.collapsed).toBe(0);
+				current = next.id;
+			}
+			return current;
+		}
+
 		// ------------------------------------------------------------------
 		// 1. A merge into the membership
 		// ------------------------------------------------------------------
@@ -388,53 +438,88 @@ describe.skipIf(!hasTestDb)(
 				await expectUntouched(guestId, older.membershipId);
 			});
 
-			// protects=the join-date check on the row itself: two Person merges in a
-			// row (the first folds a 2019 member into the converted membership, the
-			// second moves the membership to a third Person) leave the person-targeted
-			// log row on the Person the membership no longer has, so only the 2019 join
-			// date still says what it holds; the undo refuses and the member stays;
-			// fails_when=the undo trusts the log alone (it returned membershipDeleted:
-			// true and the 2019 member left the roster);
-			// no_claim=that every chain is caught: a merged-in row that joined AFTER
-			// the conversion leaves the join date unchanged
-			it("refuses when two Person merges in a row left the log pointing at a Person the membership no longer has", async () => {
-				const { guestId, membershipId, personId } =
-					await converted("Chain Keeper");
-				const older = await olderMember("Chain Older");
+			// protects=a chain of two Person merges (the first folds an older member
+			// into the converted membership, the second moves the membership to a
+			// third Person) is read through the Person lineage: the row that says
+			// "collapsed" targets the Person the membership no longer names, and the
+			// row on the Person it ends with says `collapsed: 0`; the undo refuses
+			// and the member stays. The absorbed row's join date shows nothing the
+			// join-date check can use (no date, or six hours before the conversion,
+			// inside its one-day margin), so only the lineage walk can say so;
+			// fails_when=the walk reads only the membership's CURRENT Person (it
+			// returned membershipDeleted: true and the older admin left the roster);
+			// no_claim=the join-date witness (the set-back test below)
+			it.each([
+				["no join date", null],
+				["a join date six hours before the conversion", 6 * 3_600_000],
+			])("refuses after two Person merges in a row when the older member had %s", async (_label, hoursAgoMs) => {
+				const { guestId, membershipId, personId } = await converted(
+					`Chain Keeper ${hoursAgoMs}`,
+				);
+				const before = (await memberRow(membershipId))?.joinedAt;
+				const older = await olderMember(
+					`Chain Older ${hoursAgoMs}`,
+					hoursAgoMs === null ? null : new Date(Date.now() - hoursAgoMs),
+				);
 				const first = await mergePeople({
 					keeperPersonId: personId,
 					absorbedPersonId: older.personId,
 				});
 				expect(first.movedCounts.collapsed).toBe(1);
-				expect((await memberRow(membershipId))?.joinedAt?.getFullYear()).toBe(
-					2019,
-				);
-				// A third Person holding no membership here (the same human's record
-				// elsewhere): absorbing the converted Person moves the membership to it
-				// without collapsing anything, so this merge logs `collapsed: 0`.
-				const [elsewhere] = await testDb
-					.insert(people)
-					.values({ name: "Chain Elsewhere" })
-					.returning({ id: people.id });
-				if (!elsewhere) throw new Error("Failed to seed person");
-				strayPeople.push(elsewhere.id);
-				const second = await mergePeople({
-					keeperPersonId: elsewhere.id,
-					absorbedPersonId: personId,
-				});
-				expect(second.movedCounts.collapsed).toBe(0);
+				const elsewhere = await moveMembershipUp(personId, 1);
 				const moved = await testDb
 					.select({ personId: members.personId })
 					.from(members)
 					.where(eq(members.id, membershipId));
-				expect(moved[0]?.personId).toBe(elsewhere.id);
+				expect(moved[0]?.personId).toBe(elsewhere);
+				// The join date is within the margin the join-date check allows.
+				const joinedAt = (await memberRow(membershipId))?.joinedAt;
+				if (hoursAgoMs === null) expect(joinedAt).toEqual(before);
+				else
+					expect(joinedAt?.getTime()).toBeGreaterThan(
+						Date.now() - JOIN_DATE_MARGIN_MS,
+					);
 
 				expect(await refusalOf(guestId)).toBe(UNDO_MEMBERSHIP_MERGED_MESSAGE);
 
 				await expectUntouched(guestId, membershipId);
-				expect((await memberRow(membershipId))?.joinedAt?.getFullYear()).toBe(
-					2019,
-				);
+			});
+
+			// protects=the walk goes further than one hop: three Person merges in a
+			// row, the collapse only in the first, the two after it moving the
+			// membership on without collapsing anything, still refuse;
+			// fails_when=the walk stops after the first level of absorbed Persons;
+			// no_claim=that a chain this long is common
+			it("refuses after three Person merges in a row, the collapse in the first", async () => {
+				const { guestId, membershipId, personId } =
+					await converted("Chain Of Three");
+				const older = await olderMember("Chain Of Three Older", null);
+				const first = await mergePeople({
+					keeperPersonId: personId,
+					absorbedPersonId: older.personId,
+				});
+				expect(first.movedCounts.collapsed).toBe(1);
+				await moveMembershipUp(personId, 2);
+
+				expect(await refusalOf(guestId)).toBe(UNDO_MEMBERSHIP_MERGED_MESSAGE);
+
+				await expectUntouched(guestId, membershipId);
+			});
+
+			// protects=the walk is not a blanket refusal: a lineage whose every row
+			// says `collapsed: 0` (the membership only moved between Persons) is
+			// undone as usual;
+			// fails_when=any person-targeted merge row in the lineage refuses;
+			// no_claim=that a merge into another Person is harmless for a reused row
+			it("does not refuse after Person merges that collapsed nothing", async () => {
+				const { guestId, membershipId, personId } =
+					await converted("Chain Of Nothing");
+				await moveMembershipUp(personId, 2);
+
+				const res = await undo(guestId);
+
+				expect(res.membershipDeleted).toBe(true);
+				expect(await memberRow(membershipId)).toBeUndefined();
 			});
 
 			// protects=the join-date check does not refuse an ordinary conversion: a
@@ -503,6 +588,34 @@ describe.skipIf(!hasTestDb)(
 					clubId: seed.clubId,
 					guestId: other,
 					actorMemberId: seed.adminMemberId,
+				});
+
+				const res = await undo(guestId);
+
+				expect(res.membershipDeleted).toBe(true);
+				expect(await memberRow(membershipId)).toBeUndefined();
+			});
+
+			// protects=the lineage walk reads a person-targeted row that lacks the
+			// fields it looks for (no `movedCounts`, no absorbed Person, or no detail
+			// at all) as "nothing collapsed, nobody absorbed" and neither throws nor
+			// refuses;
+			// fails_when=the reader trusts the shape (a missing `movedCounts` throws
+			// out of the undo, or counts as a collapse);
+			// no_claim=that any writer produces such a row today
+			it.each([
+				["no movedCounts", { keeperPersonId: "k", absorbedPersonId: "a" }],
+				["no detail", null],
+			])("is not refused, and does not throw, on a person-targeted row with %s", async (_label, detail) => {
+				const { guestId, membershipId, personId } = await converted(
+					`Odd Person Row ${_label}`,
+				);
+				await testDb.insert(activityLog).values({
+					clubId: seed.clubId,
+					action: "member_merge",
+					targetType: "person",
+					targetId: personId,
+					detail,
 				});
 
 				const res = await undo(guestId);
@@ -1041,32 +1154,11 @@ describe.skipIf(!hasTestDb)(
 				return guestId;
 			}
 
-			function setStatus(
-				membershipId: string,
-				status: "active" | "inactive" | "former",
-			) {
-				return applySetMemberStatus({
-					clubId: seed.clubId,
-					memberId: membershipId,
-					status,
-					actorMemberId: seed.adminMemberId,
-				});
-			}
-
-			function setRole(membershipId: string, clubRole: "admin" | "member") {
-				return applySetMemberRole({
-					clubId: seed.clubId,
-					memberId: membershipId,
-					clubRole,
-					actorMemberId: seed.adminMemberId,
-				});
-			}
-
 			/** The undo wrote nothing to the member: the guest is detached, the record says why. */
 			async function expectLeftAlone(
 				guestId: string,
 				membershipId: string,
-				because: "not_active" | "changed_since",
+				because: "not_active" | "other_guest" | "changed_since",
 				leftAs: "active" | "inactive" | "former",
 			) {
 				const g = await guestRow(guestId);
@@ -1419,6 +1511,248 @@ describe.skipIf(!hasTestDb)(
 				const after = await memberRow(membershipId);
 				expect(after?.status).toBe("inactive");
 				expect(after?.endedAt).toBeNull();
+			});
+
+			// protects=a chain of two Person merges (the first collapses an active
+			// duplicate into the woken membership, the second moves the membership to
+			// another Person) still stops the restore: the row that says "collapsed"
+			// targets a Person the membership no longer names, and the reuse path has
+			// no join-date fallback, so the lineage walk is the only witness;
+			// fails_when=the walk reads only the membership's CURRENT Person (the
+			// undo wrote `inactive` over the merged, active member);
+			// no_claim=the created path (the item 1 chain tests)
+			it("leaves a membership alone after two Person merges, the first collapsing a duplicate", async () => {
+				const { membershipId, personId, email } = await lapsed("Chain Woken", {
+					status: "inactive",
+				});
+				const guestId = await wake("Chain Woken", email);
+				const dup = await olderMember("Chain Woken Dup");
+				const first = await mergePeople({
+					keeperPersonId: personId,
+					absorbedPersonId: dup.personId,
+				});
+				expect(first.movedCounts.collapsed).toBe(1);
+				const elsewhere = await moveMembershipUp(personId, 1);
+				const [moved] = await testDb
+					.select({ personId: members.personId })
+					.from(members)
+					.where(eq(members.id, membershipId));
+				expect(moved?.personId).toBe(elsewhere);
+
+				await undo(guestId);
+
+				expect((await memberRow(membershipId))?.status).toBe("active");
+				await expectLeftAlone(guestId, membershipId, "changed_since", "active");
+			});
+
+			// protects=the lineage walk does not skip a legitimate restore: Person
+			// merges that only moved the woken membership (nothing collapsed) leave
+			// the lapse to be put back;
+			// fails_when=any person-targeted merge row in the lineage stops the restore;
+			// no_claim=a merge that collapsed something (the test above)
+			it("still puts the lapse back after Person merges that collapsed nothing", async () => {
+				const { membershipId, personId, email } = await lapsed("Moved Woken", {
+					status: "inactive",
+				});
+				const guestId = await wake("Moved Woken", email);
+				await moveMembershipUp(personId, 2);
+
+				await undo(guestId);
+
+				expect((await memberRow(membershipId))?.status).toBe("inactive");
+				const detail = await undoDetail(membershipId);
+				expect(detail?.statusRestoredTo).toBe("inactive");
+				expect(detail).not.toHaveProperty("leftBecause");
+			});
+
+			/**
+			 * A second guest converted onto the same membership: its Person carries the
+			 * member's address, so convert dedupes onto the existing row (the reuse
+			 * branch) and, the membership already being active, writes no status.
+			 */
+			async function convertedOnto(name: string, email: string) {
+				const [g] = await testDb
+					.insert(guests)
+					.values(
+						await withGuestPerson({ clubId: seed.clubId, name, email }, testDb),
+					)
+					.returning({ id: guests.id });
+				if (!g) throw new Error("Failed to seed guest");
+				await applyConvertGuestToMember({
+					clubId: seed.clubId,
+					guestId: g.id,
+					actorMemberId: seed.adminMemberId,
+					confirmedEmail: email,
+				});
+				return g.id;
+			}
+
+			/** What undoing the first guest left: the member exactly as the second guest needs it. */
+			async function expectKeptForOtherGuest(
+				firstGuestId: string,
+				otherGuestId: string,
+				membershipId: string,
+			) {
+				const after = await memberRow(membershipId);
+				expect(after?.status).toBe("active");
+				expect(after?.endedAt).toBeNull();
+				// Convert wrote the role down; the undo does not put it back either.
+				expect(after?.clubRole).toBe("member");
+				const other = await guestRow(otherGuestId);
+				expect(other?.stage).toBe("joined");
+				expect(other?.convertedMembershipId).toBe(membershipId);
+				await expectLeftAlone(
+					firstGuestId,
+					membershipId,
+					"other_guest",
+					"active",
+				);
+			}
+
+			// protects=convert wakes a former admin for guest one, guest two is then
+			// converted onto the now-active member (which writes no status of its
+			// own), and undoing guest one detaches it without putting `former` and
+			// the stale end date back: guest two is `joined` against that member;
+			// fails_when=the other-guest gate is dropped from the reuse path (the
+			// undo restored `former` while guest two still pointed at the member);
+			// no_claim=a guest LINKED to the member (next test)
+			it("leaves the member active when another guest was converted onto it", async () => {
+				const { membershipId, email } = await lapsed("Shared Convert", {
+					status: "former",
+					endedAt: "2020-01-15",
+					clubRole: "admin",
+				});
+				const first = await wake("Shared Convert", email);
+				const second = await convertedOnto("Shared Convert Two", email);
+				expect((await guestRow(second))?.convertedMembershipId).toBe(
+					membershipId,
+				);
+
+				const res = await undo(first);
+
+				expect(res.membershipDeleted).toBe(false);
+				await expectKeptForOtherGuest(first, second, membershipId);
+			});
+
+			// protects=the same for a guest LINKED to the woken member (linking to a
+			// former member is prohibited, so the lapse must not come back under it);
+			// fails_when=the other-guest gate looks only at converted guests, or at
+			// the audit log (a link logs `member_merge` without `absorbedId`, which
+			// the merge gate rightly ignores);
+			// no_claim=what unlinking does afterwards
+			it("leaves the member active when another guest was linked to it", async () => {
+				const { membershipId, email } = await lapsed("Shared Link", {
+					status: "former",
+					endedAt: "2020-01-15",
+					clubRole: "admin",
+				});
+				const first = await wake("Shared Link", email);
+				const second = await seedGuest("Shared Link Two");
+				await applyLinkGuestToMember({
+					clubId: seed.clubId,
+					guestId: second,
+					memberId: membershipId,
+					actorMemberId: seed.adminMemberId,
+				});
+
+				const res = await undo(first);
+
+				expect(res.membershipDeleted).toBe(false);
+				await expectKeptForOtherGuest(first, second, membershipId);
+			});
+
+			// protects=the gate reads who points at the member NOW, not who once did:
+			// a guest linked and then unlinked leaves the restore to happen;
+			// fails_when=the gate counts a past link, or holds the undone guest
+			// itself against the member;
+			// no_claim=the refusals on the created path
+			it("still puts the lapse back once the other guest is unlinked", async () => {
+				const { membershipId, email } = await lapsed("Shared Then Free", {
+					status: "former",
+					endedAt: "2020-01-15",
+				});
+				const first = await wake("Shared Then Free", email);
+				const second = await seedGuest("Shared Then Free Two");
+				await applyLinkGuestToMember({
+					clubId: seed.clubId,
+					guestId: second,
+					memberId: membershipId,
+					actorMemberId: seed.adminMemberId,
+				});
+				await applyUnlinkGuestFromMember({
+					clubId: seed.clubId,
+					guestId: second,
+					actorMemberId: seed.adminMemberId,
+				});
+
+				await undo(first);
+
+				const after = await memberRow(membershipId);
+				expect(after?.status).toBe("former");
+				expect(after?.endedAt).toBe("2020-01-15");
+				const detail = await undoDetail(membershipId);
+				expect(detail?.statusRestoredTo).toBe("former");
+				expect(detail).not.toHaveProperty("leftBecause");
+			});
+		});
+
+		// ------------------------------------------------------------------
+		// 5. A status or role set after the convert CREATED the membership
+		// ------------------------------------------------------------------
+
+		describe("a status or role an admin set after the convert created the membership (item 5)", () => {
+			// protects=an admin's promotion, end date or inactive flag on a membership
+			// the conversion created is not deleted with it: the undo refuses and the
+			// membership, with the decision, is still there;
+			// fails_when=the created path stops asking whether an admin edited the
+			// membership (it deleted the promoted admin and the ended member);
+			// no_claim=an edit that changes none of the three (next test)
+			it.each([
+				[
+					"promoted to admin",
+					(id: string) => setRole(id, "admin"),
+					{ clubRole: "admin", status: "active" },
+				],
+				[
+					"ended",
+					(id: string) => setStatus(id, "former"),
+					{ clubRole: "member", status: "former" },
+				],
+				[
+					"set inactive",
+					(id: string) => setStatus(id, "inactive"),
+					{ clubRole: "member", status: "inactive" },
+				],
+			])("refuses when the member was %s", async (label, edit, expected) => {
+				const { guestId, membershipId } = await converted(`Edited ${label}`);
+				await edit(membershipId);
+
+				expect(await refusalOf(guestId)).toBe(UNDO_MEMBERSHIP_EDITED_MESSAGE);
+
+				await expectUntouched(guestId, membershipId);
+				const after = await memberRow(membershipId);
+				expect(after?.clubRole).toBe(expected.clubRole);
+				expect(after?.status).toBe(expected.status);
+			});
+
+			// protects=the refusal is about the three columns, not any edit: a rename
+			// of the converted member does not stop the undo;
+			// fails_when=the filter on the member_edit detail is dropped and every
+			// edit refuses (the same filter the reuse path reads);
+			// no_claim=the edits that do refuse (the test above)
+			it("does not refuse after an edit that changes neither status nor role", async () => {
+				const { guestId, membershipId } = await converted("Renamed Created");
+				await applyMemberEdit({
+					clubId: seed.clubId,
+					memberId: membershipId,
+					name: "Renamed Created Two",
+					actorMemberId: seed.adminMemberId,
+				});
+
+				const res = await undo(guestId);
+
+				expect(res.membershipDeleted).toBe(true);
+				expect(await memberRow(membershipId)).toBeUndefined();
 			});
 		});
 	},

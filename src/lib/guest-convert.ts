@@ -282,6 +282,22 @@ export const UNDO_MEMBERSHIP_MERGED_MESSAGE =
 	"instead.";
 
 /**
+ * Refusal when an admin has edited the membership's status, role or end date
+ * since the conversion CREATED it (#1322). The undo deletes that membership, and
+ * the admin's decision (a promotion, an end date, an inactive flag) goes with
+ * it, so the undo declines to make that call for them. Only the created path
+ * asks: a reused membership is left standing, and the reuse path leaves the
+ * admin's edit in place instead (`leftBecause: "changed_since"`).
+ *
+ * The remedy named is the one that keeps the member on the roster, as the
+ * merged message's does.
+ */
+export const UNDO_MEMBERSHIP_EDITED_MESSAGE =
+	"An admin has changed this member's status or role since the conversion, " +
+	"so undoing it would discard that decision. Set them inactive or former " +
+	"instead.";
+
+/**
  * Refusal when another guest is linked to the membership the undo would delete
  * (#1322). Deleting it would strand that guest at `joined` with no pointer, and
  * once the pointer is null unlink refuses, so the contact the link recorded

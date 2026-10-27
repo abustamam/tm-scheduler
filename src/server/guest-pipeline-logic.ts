@@ -60,6 +60,7 @@ import {
 	LINK_MEMBER_NOT_IN_CLUB_MESSAGE,
 	UNDO_MEMBER_HAS_ACCOUNT_MESSAGE,
 	UNDO_MEMBER_HAS_HISTORY_MESSAGE,
+	UNDO_MEMBERSHIP_EDITED_MESSAGE,
 	UNDO_MEMBERSHIP_MERGED_MESSAGE,
 	UNDO_NO_RECORD_MESSAGE,
 	UNDO_NOT_CONVERTED_MESSAGE,
@@ -3641,9 +3642,8 @@ async function countBlankedKeys(
  *     `movedCounts.collapsed` > 0 when it fused two memberships of one club.
  *     That count is across every club, so a row can be a false positive here
  *     (refusing is the safe side). The row is never re-targeted when a later
- *     Person merge moves the membership to another Person, so this log alone
- *     misses a chain of two merges; the created path adds the join-date check
- *     (`joinedBeforeConversion`) for that.
+ *     Person merge moves the membership to another Person, so a chain of
+ *     merges is read by walking the lineage (`personLineageCollapsed`).
  *
  * `since` bounds both arms: a Person or a reused membership can have been
  * merged long before the conversion this undo reverses. `null` asks about any
@@ -3665,24 +3665,94 @@ async function membershipHasMergeHistory(
 				eq(activityLog.clubId, clubId),
 				eq(activityLog.action, "member_merge"),
 				since ? gte(activityLog.createdAt, since) : undefined,
-				or(
-					and(
-						eq(activityLog.targetType, "member"),
-						eq(activityLog.targetId, membershipId),
-						sql`${activityLog.detail}->>'absorbedId' is not null`,
-					),
-					personId
-						? and(
-								eq(activityLog.targetType, "person"),
-								eq(activityLog.targetId, personId),
-								sql`(${activityLog.detail}->'movedCounts'->>'collapsed')::int > 0`,
-							)
-						: undefined,
-				),
+				eq(activityLog.targetType, "member"),
+				eq(activityLog.targetId, membershipId),
+				sql`${activityLog.detail}->>'absorbedId' is not null`,
 			),
 		)
 		.limit(1);
-	return rows.length > 0;
+	if (rows.length > 0) return true;
+	return personId ? personLineageCollapsed(tx, clubId, personId, since) : false;
+}
+
+/**
+ * Whether any Person merge in this club that is part of `personId`'s lineage
+ * collapsed two memberships into one at or after `since` (#1322).
+ *
+ * `mergePeople` writes one person-targeted `member_merge` row per affected club
+ * (`targetId` the keeper, `detail.absorbedPersonId` the Person it absorbed,
+ * `movedCounts.collapsed` how many memberships it fused) and never re-targets an
+ * older row. So when Person P1 absorbs P0 (collapsing P0's membership into
+ * this one) and P2 then absorbs P1, the row that says "collapsed" targets P1, a
+ * Person the membership no longer names, and the row on P2 says `collapsed: 0`.
+ * Reading only the membership's CURRENT Person misses the first merge.
+ *
+ * The lineage is every Person absorbed into the current one, transitively: read
+ * the rows that target the frontier, add each row's absorbed Person to it, repeat.
+ * Walked here in TypeScript, level by level with a visited set (a cycle cannot
+ * happen, but the set makes the loop's end obvious), rather than as a recursive
+ * SQL query: a hand-written correlated subquery over this table has emitted a
+ * tautological WHERE in this repo before.
+ *
+ * `since` bounds every hop, which is consistent: a Person that absorbed another
+ * did so before it was itself absorbed, so a hop older than `since` has
+ * only older hops behind it.
+ */
+async function personLineageCollapsed(
+	tx: DbOrTx,
+	clubId: string,
+	personId: string,
+	since: Date | null,
+): Promise<boolean> {
+	const seen = new Set<string>([personId]);
+	let frontier: string[] = [personId];
+	while (frontier.length > 0) {
+		const rows = await tx
+			.select({ detail: activityLog.detail })
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, clubId),
+					eq(activityLog.action, "member_merge"),
+					eq(activityLog.targetType, "person"),
+					inArray(activityLog.targetId, frontier),
+					since ? gte(activityLog.createdAt, since) : undefined,
+				),
+			);
+		const next: string[] = [];
+		for (const { detail } of rows) {
+			const merge = readPersonMergeDetail(detail);
+			if (merge.collapsed > 0) return true;
+			if (merge.absorbedPersonId && !seen.has(merge.absorbedPersonId)) {
+				seen.add(merge.absorbedPersonId);
+				next.push(merge.absorbedPersonId);
+			}
+		}
+		frontier = next;
+	}
+	return false;
+}
+
+/**
+ * The two fields of a person-targeted `member_merge` row the lineage walk reads
+ * (`mergePeople` writes them). A row missing either reads as "nothing collapsed,
+ * nobody absorbed" rather than throwing: an old or hand-written row must not
+ * break an undo, and the audit-log witness is not the only one.
+ */
+function readPersonMergeDetail(detail: unknown): {
+	absorbedPersonId: string | null;
+	collapsed: number;
+} {
+	const d = (detail ?? {}) as {
+		absorbedPersonId?: unknown;
+		movedCounts?: { collapsed?: unknown } | null;
+	};
+	const collapsed = Number(d.movedCounts?.collapsed ?? 0);
+	return {
+		absorbedPersonId:
+			typeof d.absorbedPersonId === "string" ? d.absorbedPersonId : null,
+		collapsed: Number.isFinite(collapsed) ? collapsed : 0,
+	};
 }
 
 /**
@@ -3722,6 +3792,31 @@ async function membershipStatusEditedSince(
 		)
 		.limit(1);
 	return rows.length > 0;
+}
+
+/**
+ * The other guests in the club pointing at this membership (#1322), by name,
+ * sorted: a guest LINKED to it (`applyLinkGuestToMember`) or CONVERTED onto it
+ * (the reuse branch of convert). Not the guest being undone.
+ */
+async function otherGuestsOnMembership(
+	tx: DbOrTx,
+	clubId: string,
+	membershipId: string,
+	guestId: string,
+): Promise<string[]> {
+	const linked = await tx
+		.select({ name: guests.name })
+		.from(guests)
+		.where(
+			and(
+				eq(guests.clubId, clubId),
+				eq(guests.convertedMembershipId, membershipId),
+				ne(guests.id, guestId),
+			),
+		)
+		.orderBy(asc(guests.name), asc(guests.id));
+	return linked.map((g) => g.name);
 }
 
 /**
@@ -3766,20 +3861,26 @@ async function membershipStatusEditedSince(
  *
  * The membership must be untouched since. A merge into it or away from it
  * (`UNDO_MEMBERSHIP_MERGED_MESSAGE`, #1322: the merge folds an older member's
- * join date and role into the row this undo would delete; read off the audit log
- * and, for a chain of Person merges that log loses, off a join date well before
- * the conversion), and another
+ * join date and role into the row this undo would delete; read off the audit log,
+ * walking the Person lineage because a chain of Person merges leaves the
+ * collapse on a Person the membership no longer names, and for a chain the log
+ * still loses, off a join date well before the conversion), an admin's status,
+ * role or end-date edit (`UNDO_MEMBERSHIP_EDITED_MESSAGE`: the delete would
+ * discard that decision), and another
  * guest linked to it (`UNDO_OTHER_GUEST_LINKED_MESSAGE`: refused, not unlinked,
  * as decided on #1322, because the delete would strand that guest's contact)
  * refuse it, each only when the conversion created the membership. Every foreign
  * key to `members` is classified once in `undoKeyPlan`: refuse, safe to blank
  * (named in the `member_remove` record under `blanked`), handled by the undo, or
  * deferred to the issue that owns it. On the reuse path the recorded prior status
- * and role are written back only while the membership is still `active` AND
- * nothing has changed it since the convert (no status, role or end-date edit, no
- * merge into it): a membership an admin has since ended, set inactive, edited
- * back and forth or merged into keeps what they decided, and the record says
- * `statusLeftAs` and `leftBecause`. That path does not refuse, because nothing is
+ * and role are written back only while the membership is still `active`, no
+ * other guest points at it, AND nothing has changed it since the convert (no
+ * status, role or end-date edit, no merge into it): a membership an admin has
+ * since ended, set inactive, edited back and forth or merged into keeps what
+ * they decided, one another guest was converted or linked onto stays active for
+ * that guest, and the record says `statusLeftAs` and `leftBecause`
+ * (`not_active`, `other_guest` or `changed_since`). That path does not refuse,
+ * because nothing is
  * deleted there. A signed-in account (`people.user_id`,
  * the same gate `applyMemberRemove` uses), dues rows, and any role slot the
  * member holds BEYOND the ones the conversion moved all block it — each is
@@ -3963,13 +4064,14 @@ export async function applyUndoGuestConversion(
 			// reused membership is left standing.
 			//
 			// Two witnesses, because each can be missing. The audit log says a merge
-			// happened, but a person-targeted row is never re-targeted when a later
-			// Person merge moves the membership to another Person, so a chain of two
-			// merges leaves nothing on the Person it ends up with. The row itself
-			// says so too: convert wrote `joined_at` as now, and a merge keeps the
-			// EARLIEST join date, so one well before the conversion is an older
-			// member's. (An admin who edited the join date backwards refuses as well,
-			// the safe side.)
+			// happened; a person-targeted row is never re-targeted when a later
+			// Person merge moves the membership to another Person, so it is read
+			// along the Person lineage (`personLineageCollapsed`), not off the
+			// Person the membership names now. The row itself says so too: convert
+			// wrote `joined_at` as now, and a merge keeps the EARLIEST join date, so
+			// one well before the conversion is an older member's. (An admin who
+			// edited the join date backwards refuses as well, the safe side.) The
+			// date is a second witness that does not depend on the log.
 			if (
 				(await membershipHasMergeHistory(
 					tx,
@@ -3983,21 +4085,29 @@ export async function applyUndoGuestConversion(
 			) {
 				throw new Error(UNDO_MEMBERSHIP_MERGED_MESSAGE);
 			}
+			// An admin decided something about this membership since the convert: a
+			// promotion, an end date, an inactive flag. The delete would take that
+			// decision with the row, so refuse rather than make the call for them.
+			// After the merge refusal, so a merged membership still says so.
+			if (
+				await membershipStatusEditedSince(
+					tx,
+					input.clubId,
+					membershipId,
+					entry?.createdAt ?? null,
+				)
+			) {
+				throw new Error(UNDO_MEMBERSHIP_EDITED_MESSAGE);
+			}
 			// Another guest linked to this membership (#1322, decided 2026-10-26:
 			// refuse, do not unlink). The delete would leave it at `joined` with no
 			// pointer, and unlink refuses once the pointer is null.
-			const linked = await tx
-				.select({ name: guests.name })
-				.from(guests)
-				.where(
-					and(
-						eq(guests.clubId, input.clubId),
-						eq(guests.convertedMembershipId, membershipId),
-						ne(guests.id, input.guestId),
-					),
-				)
-				.orderBy(asc(guests.name), asc(guests.id));
-			const [firstLinked, ...otherLinked] = linked.map((g) => g.name);
+			const [firstLinked, ...otherLinked] = await otherGuestsOnMembership(
+				tx,
+				input.clubId,
+				membershipId,
+				input.guestId,
+			);
 			if (firstLinked !== undefined) {
 				throw new Error(
 					UNDO_OTHER_GUEST_LINKED_MESSAGE([firstLinked, ...otherLinked]),
@@ -4096,7 +4206,7 @@ export async function applyUndoGuestConversion(
 		// Set only when the gate below declines to write, so the record can say
 		// what the undo left alone, and why.
 		let statusLeftAs: (typeof members.$inferSelect)["status"] | undefined;
-		let leftBecause: "not_active" | "changed_since" | undefined;
+		let leftBecause: "not_active" | "other_guest" | "changed_since" | undefined;
 		if (record.createdMembership) {
 			blanked = await countBlankedKeys(tx, membershipId);
 			await tx.delete(members).where(eq(members.id, membershipId));
@@ -4142,6 +4252,23 @@ export async function applyUndoGuestConversion(
 			if (membership.status !== "active") {
 				statusLeftAs = membership.status;
 				leftBecause = "not_active";
+			} else if (
+				(
+					await otherGuestsOnMembership(
+						tx,
+						input.clubId,
+						membershipId,
+						input.guestId,
+					)
+				).length > 0
+			) {
+				// Another guest depends on the membership being active: it was converted
+				// onto the member (the wake-up already done, so it wrote no status) or
+				// linked to them, and linking to a former member is prohibited. Putting
+				// the lapse back would leave that guest `joined` against a membership
+				// that no longer takes part (#1322).
+				statusLeftAs = membership.status;
+				leftBecause = "other_guest";
 			} else if (
 				(await membershipStatusEditedSince(
 					tx,
