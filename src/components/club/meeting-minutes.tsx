@@ -202,8 +202,8 @@ function MeetingMinutesView({
 
 	return (
 		<Card>
-			<CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
-				<div className="space-y-1">
+			<CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 space-y-0">
+				<div className="min-w-0 space-y-1">
 					<CardTitle>Minutes</CardTitle>
 					<CardDescription>
 						{meetingDayReached
@@ -211,7 +211,7 @@ function MeetingMinutesView({
 							: "Table Topics speakers and awards. Attendance opens on the day."}
 					</CardDescription>
 				</div>
-				<div className="flex items-center gap-2">
+				<div className="flex flex-wrap items-center gap-2">
 					<Button asChild variant="outline" size="sm">
 						<a
 							href={`/api/meetings/${meetingId}/minutes/pdf`}
