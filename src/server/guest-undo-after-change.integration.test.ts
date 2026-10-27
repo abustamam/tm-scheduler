@@ -1039,7 +1039,7 @@ describe.skipIf(!hasTestDb)(
 						expect(cls.check.columns, key).toContain(key);
 						break;
 					case "blank":
-						expect(`${cls.table}`, key).toBeTruthy();
+						expect(cls.column, key).toBeDefined();
 						break;
 					case "handled":
 						expect(cls.by.trim().length, `${key} needs a reason`).toBeGreaterThan(
