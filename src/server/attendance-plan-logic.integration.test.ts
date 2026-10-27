@@ -10,16 +10,21 @@ import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
+	impersonationSessions,
 	meetingAttendance,
 	meetingAttendancePlan,
 	meetings,
 	members,
+	people,
 	roleDefinitions,
 	roleSlots,
 	user,
 } from "#/db/schema";
 import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
-import { resolveActor } from "#/server/attendance-actor-logic";
+import {
+	resolveActor,
+	SELF_ONLY_MESSAGE,
+} from "#/server/attendance-actor-logic";
 import {
 	ASSERTED_OVERWRITE_MESSAGE,
 	CLEARABLE_ASK,
@@ -35,6 +40,7 @@ import {
 	SELF_SERVICE_RUNGS,
 	setPlanStatus,
 } from "#/server/attendance-plan-logic";
+import { clearPlannedAttendanceCore } from "#/server/availability-logic";
 import {
 	cleanup,
 	hasTestDb,
@@ -55,8 +61,10 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
  * anonymous caller it always was, and the `afterEach` below resets it.
  */
 let sessionUserId: string | null = null;
-/** One stable object, because the impersonation marker is keyed on identity. */
-const request = { headers: new Headers() };
+/** One stable object per case, because the impersonation marker is keyed on
+ *  identity. `let` so a case that makes an impersonated write can swap it for a
+ *  fresh one afterwards, or the marker outlives the case. */
+let request = { headers: new Headers() };
 vi.mock("@tanstack/react-start/server", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-start/server")>()),
 	getRequest: () => request,
@@ -1416,11 +1424,13 @@ describe.skipIf(!hasTestDb)("importPlanAnswers (#1051)", () => {
 });
 
 /**
- * The Toastmaster arm's clear, run through the ladder and the floor it picks.
+ * The meeting page's "No answer", run through the seam the handler calls.
  *
- * `clearPlannedAttendance` resolves the arm with `resolveActor` and hands the
- * result to `clearFloor`; its handler body cannot be invoked in vitest, so this
- * runs those same two calls and the delete against the real rows
+ * `clearPlannedAttendance`'s ladder, session-proof check and floor live in
+ * `clearPlannedAttendanceCore` (`availability-logic.ts`), which the handler calls
+ * after its meeting, archive, roster and `requireSessionActor` gates; this calls
+ * the same seam against the real rows, so a deleted proof check or a changed
+ * floor fails here and not only in a source grep
  * (`attendance-plan-authz.guard.test.ts` pins the handler's own wiring).
  *
  * A member's ANSWER is cleared by that member, or by an officer on the season
@@ -1433,9 +1443,11 @@ describe.skipIf(!hasTestDb)("the Toastmaster's clear (#573 follow-up)", () => {
 	let club: SeededClub;
 	let tmodUserId: string;
 	let tmodMemberId: string;
+	let extraUserIds: string[];
 
 	beforeEach(async () => {
 		club = await seedClub();
+		extraUserIds = [];
 		tmodUserId = randomUUID();
 		const email = `${tmodUserId}@test.example`;
 		await testDb
@@ -1477,67 +1489,94 @@ describe.skipIf(!hasTestDb)("the Toastmaster's clear (#573 follow-up)", () => {
 	});
 	afterEach(async () => {
 		sessionUserId = null;
+		// The impersonation marker is keyed on the request object's identity, so a
+		// case that made an impersonated write must not leave it on the shared one.
+		request = { headers: new Headers() };
 		await cleanup(club.clubId, [
 			club.adminUserId,
 			club.memberUserId,
 			tmodUserId,
+			...extraUserIds,
 		]);
 	});
 
-	/** `clearPlannedAttendance`'s resolve-then-floor-then-delete, as the signed-in
-	 *  Toastmaster. The claim names the subject, the shape the rail sends. */
-	async function tmodClears(subjectMemberId: string) {
+	/** The seam as the meeting page calls it. The claim names the subject, the
+	 *  shape the rail sends, unless a case passes its own id or `null` for none. */
+	const clearAs = (
+		subjectMemberId: string,
+		claim: string | null = subjectMemberId,
+	) =>
+		clearPlannedAttendanceCore(testDb, {
+			memberId: subjectMemberId,
+			meetingId: club.meetingId,
+			clubId: club.clubId,
+			claimedActorMemberId: claim ?? undefined,
+		});
+	const rowOf = (memberId: string) =>
+		getPlanStatus(testDb, { memberId, meetingId: club.meetingId });
+	const seedRow = (
+		memberId: string,
+		status: "reached_out" | "coming" | "not_coming",
+		actorMemberId: string = memberId,
+	) =>
+		setPlanStatus(testDb, {
+			memberId,
+			meetingId: club.meetingId,
+			clubId: club.clubId,
+			status,
+			actorMemberId,
+		});
+	/** A superadmin with an impersonation session in this club, signed in. */
+	async function signInAsSupport(mode: "read_only" | "read_write") {
+		const superadminId = randomUUID();
+		await testDb.insert(user).values({
+			id: superadminId,
+			name: "Support",
+			email: `support-${superadminId}@test.example`,
+			emailVerified: true,
+			isSuperadmin: true,
+		});
+		extraUserIds.push(superadminId);
+		await testDb.insert(impersonationSessions).values({
+			superadminUserId: superadminId,
+			clubId: club.clubId,
+			mode,
+			expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+		});
+		sessionUserId = superadminId;
+		return superadminId;
+	}
+
+	it("resolves the seeded caller as the Toastmaster arm", async () => {
+		// The cases below mean "the Toastmaster" only if the fixture gives the
+		// caller that arm; without this a broken fixture would read as a floor.
 		const resolved = await resolveActor({
 			clubId: club.clubId,
 			meetingId: club.meetingId,
-			memberId: subjectMemberId,
-			claimedActorMemberId: subjectMemberId,
+			memberId: club.memberId,
+			claimedActorMemberId: club.memberId,
 		});
 		expect(resolved.via).toBe("tmod");
-		return clearPlanStatus(testDb, {
-			memberId: subjectMemberId,
-			meetingId: club.meetingId,
-			clubId: club.clubId,
-			actorMemberId: resolved.actorMemberId,
-			onlyFrom: clearFloor({
-				via: resolved.via,
-				actorMemberId: resolved.actorMemberId,
-				memberId: subjectMemberId,
-			}),
-		});
-	}
-	const rowOf = (memberId: string) =>
-		getPlanStatus(testDb, { memberId, meetingId: club.meetingId });
+		expect(resolved.proof).toBe("session");
+	});
 
 	// protects=a Toastmaster's "No answer" on another member's coming/not_coming deletes nothing and the row survives; fails_when=the tmod arm's other-row floor returns SELF_SERVICE_RUNGS (or the ask); no_claim=the officer's season-grid clear, which is a different path
 	it.each([
 		"coming",
 		"not_coming",
 	] as const)("KEEPS another member's %s row", async (status) => {
-		await setPlanStatus(testDb, {
-			memberId: club.memberId,
-			meetingId: club.meetingId,
-			clubId: club.clubId,
-			status,
-			actorMemberId: club.memberId,
-		});
+		await seedRow(club.memberId, status);
 
-		const res = await tmodClears(club.memberId);
+		const res = await clearAs(club.memberId);
 
 		expect(res.cleared).toBe(false);
 		expect(await rowOf(club.memberId)).toBe(status);
 	});
 
 	it("KEEPS another member's reached_out row: an officer's ask is not the Toastmaster's to take back", async () => {
-		await setPlanStatus(testDb, {
-			memberId: club.memberId,
-			meetingId: club.meetingId,
-			clubId: club.clubId,
-			status: "reached_out",
-			actorMemberId: club.adminMemberId,
-		});
+		await seedRow(club.memberId, "reached_out", club.adminMemberId);
 
-		const res = await tmodClears(club.memberId);
+		const res = await clearAs(club.memberId);
 
 		expect(res.cleared).toBe(false);
 		expect(await rowOf(club.memberId)).toBe("reached_out");
@@ -1548,30 +1587,18 @@ describe.skipIf(!hasTestDb)("the Toastmaster's clear (#573 follow-up)", () => {
 		"coming",
 		"not_coming",
 	] as const)("clears their OWN %s row", async (status) => {
-		await setPlanStatus(testDb, {
-			memberId: tmodMemberId,
-			meetingId: club.meetingId,
-			clubId: club.clubId,
-			status,
-			actorMemberId: tmodMemberId,
-		});
+		await seedRow(tmodMemberId, status);
 
-		const res = await tmodClears(tmodMemberId);
+		const res = await clearAs(tmodMemberId);
 
 		expect(res.cleared).toBe(true);
 		expect(await rowOf(tmodMemberId)).toBe(null);
 	});
 
 	it("does not clear their OWN reached_out: the ask is the officer's to remove", async () => {
-		await setPlanStatus(testDb, {
-			memberId: tmodMemberId,
-			meetingId: club.meetingId,
-			clubId: club.clubId,
-			status: "reached_out",
-			actorMemberId: club.adminMemberId,
-		});
+		await seedRow(tmodMemberId, "reached_out", club.adminMemberId);
 
-		const res = await tmodClears(tmodMemberId);
+		const res = await clearAs(tmodMemberId);
 
 		expect(res.cleared).toBe(false);
 		expect(await rowOf(tmodMemberId)).toBe("reached_out");
@@ -1585,33 +1612,127 @@ describe.skipIf(!hasTestDb)("the Toastmaster's clear (#573 follow-up)", () => {
 			.set({ assignedMemberId: club.adminMemberId })
 			.where(eq(roleSlots.meetingId, club.meetingId));
 		sessionUserId = club.adminUserId;
-		await setPlanStatus(testDb, {
-			memberId: club.memberId,
-			meetingId: club.meetingId,
-			clubId: club.clubId,
-			status: "reached_out",
-			actorMemberId: club.adminMemberId,
-		});
+		await seedRow(club.memberId, "reached_out", club.adminMemberId);
 
-		const resolved = await resolveActor({
-			clubId: club.clubId,
-			meetingId: club.meetingId,
-			memberId: club.memberId,
-		});
-		expect(resolved.via).toBe("officer");
-		const res = await clearPlanStatus(testDb, {
-			memberId: club.memberId,
-			meetingId: club.meetingId,
-			clubId: club.clubId,
-			actorMemberId: resolved.actorMemberId,
-			onlyFrom: clearFloor({
-				via: resolved.via,
-				actorMemberId: resolved.actorMemberId,
-				memberId: club.memberId,
-			}),
-		});
+		const res = await clearAs(club.memberId, null);
 
 		expect(res.cleared).toBe(true);
 		expect(await rowOf(club.memberId)).toBe(null);
+	});
+
+	// protects=an officer's "No answer" on another member's answered row removes nothing, through the seam itself; fails_when=the officer arm's other-row floor widens to SELF_SERVICE_RUNGS or the floor is dropped; no_claim=the season grid's clear, which floors at a decline instead
+	it.each([
+		"coming",
+		"not_coming",
+	] as const)("KEEPS another member's %s row when an OFFICER clears", async (status) => {
+		sessionUserId = club.adminUserId;
+		await seedRow(club.memberId, status);
+
+		const res = await clearAs(club.memberId, null);
+
+		expect(res.cleared).toBe(false);
+		expect(await rowOf(club.memberId)).toBe(status);
+	});
+
+	// ------------------------------------------------------------------------
+	// Only a session-proven caller deletes anything.
+	// ------------------------------------------------------------------------
+
+	// protects=a clear with NO session is refused whatever it claims, and the row stays; fails_when=the seam's assertSessionProof is removed (the asserted self arm admits a claim naming the subject, and an anonymous clear of one's own row would delete); no_claim=requireSessionActor in the handler, which the guard test pins
+	it.each([
+		["claims the subject", true],
+		["claims nobody", false],
+	] as const)("REFUSES a caller with no session that %s", async (_label, claimsSubject) => {
+		await seedRow(club.memberId, "not_coming");
+		sessionUserId = null;
+
+		await expect(
+			clearAs(club.memberId, claimsSubject ? club.memberId : null),
+		).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+		expect(await rowOf(club.memberId)).toBe("not_coming");
+	});
+
+	// protects=a Toastmaster whose login no longer resolves to a roster member mid-request is refused instead of clearing the row they name; fails_when=assertSessionProof is removed (the asserted arm then admits the claimed Toastmaster id); no_claim=none beyond protects
+	it("REFUSES a signed-in Toastmaster whose membership link is gone, even naming their own row", async () => {
+		await seedRow(tmodMemberId, "not_coming");
+		const [m] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.id, tmodMemberId));
+		if (!m) throw new Error("tmod member missing");
+		await testDb
+			.update(people)
+			.set({ userId: null })
+			.where(eq(people.id, m.personId));
+
+		await expect(clearAs(tmodMemberId)).rejects.toThrow(
+			SIGN_IN_REQUIRED_MESSAGE,
+		);
+		expect(await rowOf(tmodMemberId)).toBe("not_coming");
+	});
+
+	// protects=a read-only support session cannot clear a member's answer; fails_when=the read-only impersonation is granted the officer arm or admitted as asserted; no_claim=the message (it is the ladder's, not the gate's)
+	it("REFUSES a read_only support session", async () => {
+		await seedRow(club.memberId, "reached_out", club.adminMemberId);
+		await signInAsSupport("read_only");
+
+		await expect(clearAs(club.memberId, null)).rejects.toThrow();
+		expect(await rowOf(club.memberId)).toBe("reached_out");
+	});
+
+	// protects=a read_write impersonating superadmin keeps the officer arm's credit: the clear is credited to nobody and stamped with the superadmin; fails_when=assertSessionProof refuses the officer arm's null actor, or the actor is defaulted to the claim; no_claim=none beyond protects
+	it("lets a read_write support session clear an ask, credited to nobody and stamped", async () => {
+		await seedRow(club.memberId, "reached_out", club.adminMemberId);
+		const superadminId = await signInAsSupport("read_write");
+
+		const res = await clearAs(club.memberId, null);
+
+		expect(res.cleared).toBe(true);
+		expect(await rowOf(club.memberId)).toBe(null);
+		const logs = await testDb
+			.select({
+				actorMemberId: activityLog.actorMemberId,
+				impersonatedBy: activityLog.impersonatedBy,
+				detail: activityLog.detail,
+			})
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.targetId, club.meetingId),
+					eq(activityLog.action, "plan_set"),
+				),
+			);
+		const cleared = logs.filter(
+			(l) => (l.detail as { status?: unknown } | null)?.status === null,
+		);
+		expect(cleared).toHaveLength(1);
+		expect(cleared[0]?.actorMemberId).toBeNull();
+		expect(cleared[0]?.impersonatedBy).toBe(superadminId);
+	});
+
+	// ------------------------------------------------------------------------
+	// The claim never decides who the actor is.
+	// ------------------------------------------------------------------------
+
+	// protects=a plain signed-in member who claims the Toastmaster's published id on another member's row is refused and the row stays; fails_when=the claim is believed over the session, or the Toastmaster arm admits a claimed id; no_claim=none beyond protects
+	it("REFUSES a plain member who CLAIMS this meeting's Toastmaster id", async () => {
+		await seedRow(club.adminMemberId, "not_coming");
+		sessionUserId = club.memberUserId;
+
+		await expect(clearAs(club.adminMemberId, tmodMemberId)).rejects.toThrow(
+			SELF_ONLY_MESSAGE,
+		);
+		expect(await rowOf(club.adminMemberId)).toBe("not_coming");
+	});
+
+	// protects=a plain signed-in member who names THEMSELVES as the actor while naming another member as the subject is refused; fails_when=the ladder is asked about the claimed id instead of the subject; no_claim=none beyond protects
+	it("REFUSES a plain member who claims THEMSELVES while naming ANOTHER subject", async () => {
+		await seedRow(club.adminMemberId, "not_coming");
+		sessionUserId = club.memberUserId;
+
+		await expect(clearAs(club.adminMemberId, club.memberId)).rejects.toThrow(
+			SELF_ONLY_MESSAGE,
+		);
+		expect(await rowOf(club.adminMemberId)).toBe("not_coming");
 	});
 });

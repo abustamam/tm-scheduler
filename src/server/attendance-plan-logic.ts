@@ -84,6 +84,19 @@ export const SELF_SERVICE_RUNGS: readonly AttendancePlanStatus[] = [
  */
 export const CLEARABLE_ASK: readonly AttendancePlanStatus[] = ["reached_out"];
 
+/**
+ * The one rung an OFFICER's season-grid clear may take off ANOTHER member's row:
+ * a decline. The grid calls `clearAvailability` on someone else's row only to
+ * undo a "Marked them unavailable" or to mark a declined member available, so a
+ * `not_coming` is all it ever has reason to remove. A grid that rendered a while
+ * ago must not be able to delete a `coming` the member gave since, and the
+ * officer's own ask is the meeting page's to take back, so this is narrower than
+ * {@link SELF_SERVICE_RUNGS}. The member's OWN row keeps that wider floor.
+ */
+export const CLEARABLE_DECLINE: readonly AttendancePlanStatus[] = [
+	"not_coming",
+];
+
 /** What an officer may delete from THEIR OWN row: their own answer and the ask. */
 const OFFICER_OWN_ROW_RUNGS: readonly AttendancePlanStatus[] = [
 	...SELF_SERVICE_RUNGS,
@@ -540,7 +553,9 @@ export async function setPlanStatus(
  * clearing the ASK on someone else's row (and the union of the two on their OWN
  * row, see {@link clearFloor}). A Toastmaster clearing ANOTHER member's row gets
  * {@link NO_CLEARABLE_RUNGS}: a member's answer is cleared by that member, or by
- * an officer on the season grid, and by nobody else. Making the argument
+ * an officer on the season grid, and by nobody else. That officer's grid clear
+ * of another member's row takes {@link CLEARABLE_DECLINE}, the decline it is
+ * there to undo. Making the argument
  * mandatory means a new caller has to pick one rather than inheriting the widest
  * possible delete by saying nothing.
  */

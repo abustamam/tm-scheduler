@@ -10,11 +10,20 @@ import {
 } from "#/lib/write-proof";
 import { logActivity } from "./activity";
 import {
+	assertSessionProof,
 	type ResolvedActor,
 	resolveActor,
+	resolveOwnerOrOfficer,
 	SELF_ONLY_MESSAGE,
 } from "./attendance-actor-logic";
-import { lockMemberAttendance, setPlanStatus } from "./attendance-plan-logic";
+import {
+	CLEARABLE_DECLINE,
+	clearFloor,
+	clearPlanStatus,
+	lockMemberAttendance,
+	SELF_SERVICE_RUNGS,
+	setPlanStatus,
+} from "./attendance-plan-logic";
 import { assertClubNotArchived } from "./guards";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
 import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
@@ -437,5 +446,183 @@ export async function releaseSlotsAndMarkUnavailable(
 		});
 
 		return { released: releasedSlots.length, releasedSlots };
+	});
+}
+
+/**
+ * The season grid's "Not available", through the actor ladder (`setAvailability`
+ * wraps this with the meeting, archive and roster gates).
+ *
+ * WHOSE row it may write is {@link resolveOwnerOrOfficer}'s question, and it is
+ * the same one `clearAvailabilityCore` asks: that member, or an officer, and
+ * nobody else. Before it, a signed-in caller resolved to `proof: "session"` and
+ * took the unrestricted write with nothing comparing them with the subject, so
+ * the only thing standing between a member and another member's decline was that
+ * the grid did not render the control. An asserted claim naming someone else is
+ * refused here too, as is this meeting's Toastmaster on another member's row.
+ *
+ * What an ALLOWED caller gets is unchanged: a session writes unrestricted, an
+ * asserted caller fills a blank (`onlyIfAbsent`, ADR-0026), and the credit is the
+ * resolved actor. A null actor is the impersonating superadmin and nothing else
+ * (the officer arm's memberless admin); `logActivity` is null-aware by design
+ * (ADR-0016 / #246), so the id is passed along as-is rather than falling back to
+ * the member, which would file the superadmin's write under their name.
+ *
+ * The proof falls back to the WEAKER value for that null actor, as it always has
+ * on this delegate: `"session"` from the officer arm is true of the CAPABILITY
+ * and not of an actor to attribute, and an unknown must fail closed. The cost is
+ * that a read_write impersonation gets fill-blank mode on this one legacy
+ * delegate; the officer's real surface is `setPlannedAttendance`.
+ *
+ * No release and no ladder demotion: writing `not_coming` over an officer's
+ * `reached_out` is the ladder working (they asked, the member answered), and
+ * restricting it would discard the answer.
+ */
+export async function setAvailabilityCore(
+	database: DbOrTx,
+	args: {
+		memberId: string;
+		meetingId: string;
+		/** ALWAYS the OWNING club, read off the meeting row by the caller (#396). */
+		clubId: string;
+		/** The actor the CLIENT asserted, if any: an assertion, not proof. The RAW
+		 *  claim, never defaulted to the subject (see {@link resolveOwnerOrOfficer}). */
+		claimedActorMemberId?: string;
+	},
+): Promise<{ ok: true; proof: WriteProof }> {
+	const resolved = await resolveOwnerOrOfficer({
+		clubId: args.clubId,
+		meetingId: args.meetingId,
+		memberId: args.memberId,
+		claimedActorMemberId: args.claimedActorMemberId,
+	});
+	const actorMemberId = resolved.actorMemberId;
+	const proof: WriteProof =
+		actorMemberId === null ? "asserted" : resolved.proof;
+	const answer = {
+		memberId: args.memberId,
+		meetingId: args.meetingId,
+		clubId: args.clubId,
+		status: "not_coming" as const,
+		actorMemberId,
+	};
+	if (proof === "asserted") {
+		await setPlanStatus(database, {
+			...answer,
+			proof: "asserted",
+			onlyIfAbsent: true,
+		});
+	} else {
+		await setPlanStatus(database, { ...answer, proof });
+	}
+	return { ok: true as const, proof };
+}
+
+/**
+ * The season grid's "Marked them available" and the Undo after "Marked them
+ * unavailable" (`clearAvailability` wraps this with the meeting, archive and
+ * roster gates and `requireSessionActor`).
+ *
+ * A member's answer is cleared by that member, or by an officer acting on the
+ * grid, and by nobody else ({@link resolveOwnerOrOfficer}), and only by a
+ * caller whose identity a session PROVED ({@link assertSessionProof}).
+ *
+ * WHICH rungs go depends on whose row it is. The member's own row keeps
+ * {@link SELF_SERVICE_RUNGS}; an officer clearing ANOTHER member's row may remove
+ * only a decline ({@link CLEARABLE_DECLINE}), the one thing the grid calls this
+ * for on someone else's row, so a stale grid cannot delete a `coming`. Neither
+ * ever reaches an officer's `reached_out`.
+ *
+ * The credit is the resolved actor, which behind the proof check is the
+ * session's own membership, or null for a read_write impersonating superadmin
+ * (the officer arm's memberless admin, whom `logActivity` stamps).
+ */
+export async function clearAvailabilityCore(
+	database: DbOrTx,
+	args: {
+		/** The SUBJECT: whose answer is cleared. Never the claim. */
+		memberId: string;
+		meetingId: string;
+		/** ALWAYS the OWNING club, read off the meeting row by the caller (#396). */
+		clubId: string;
+		/** The actor the CLIENT asserted, if any; the RAW claim. */
+		claimedActorMemberId?: string;
+	},
+): Promise<{ ok: true; cleared: boolean }> {
+	const resolved = await resolveOwnerOrOfficer({
+		clubId: args.clubId,
+		meetingId: args.meetingId,
+		memberId: args.memberId,
+		claimedActorMemberId: args.claimedActorMemberId,
+	});
+	assertSessionProof(resolved);
+	return clearPlanStatus(database, {
+		memberId: args.memberId,
+		meetingId: args.meetingId,
+		clubId: args.clubId,
+		actorMemberId: resolved.actorMemberId,
+		onlyFrom:
+			resolved.actorMemberId === args.memberId
+				? SELF_SERVICE_RUNGS
+				: CLEARABLE_DECLINE,
+	});
+}
+
+/**
+ * The meeting page's "No answer" (`clearPlannedAttendance` wraps this with the
+ * meeting, archive and roster gates and `requireSessionActor`).
+ *
+ * Unlike the grid's clear this does NOT refuse another member's row for the
+ * Toastmaster: it runs the whole ladder and lets {@link clearFloor} decide what
+ * each arm may delete, so the Toastmaster on another member's row gets an empty
+ * floor and an answer of `cleared: false`, which the rail turns into a toast
+ * (#573). Only a caller whose identity a session PROVED
+ * ({@link assertSessionProof}) gets that far, which is also what makes
+ * `clearFloor`'s own-row test mean anything: with a proven session the actor on
+ * the self and Toastmaster arms is the session's own member and a claimed id is
+ * ignored, and on the officer arm it is the session's `membership.id` outright.
+ *
+ * EVERY arm passes a floor (#573). The officer arm used to pass none, so "No
+ * answer" could destroy a reply that arrived since the panel rendered: the rail
+ * does not poll, so a row can still read `Asked` while the server already holds
+ * `not_coming`, and deleting that drops the member off `unavailableMembers` and
+ * out of the recruit picker's warning, so they can be handed a role they said
+ * they could not take. "No answer" means "make it as if they never replied", so
+ * it never destroys a reply it did not mean to. Correcting a wrong answer is the
+ * SET path (pick Coming / Not coming), where an officer's deliberate pick is
+ * unfloored; nobody decided officers needed to erase answers.
+ *
+ * The trade-off, stated: an officer cannot return ANOTHER member's answered row
+ * to "no answer" from here. They pick "Not coming" on the meeting page, or use
+ * the season grid, whose clear takes a decline back
+ * ({@link clearAvailabilityCore}). Their OWN row is self-service, which is why
+ * the strip's undo on an officer's own row works.
+ */
+export async function clearPlannedAttendanceCore(
+	database: DbOrTx,
+	args: {
+		/** The SUBJECT: whose answer is cleared. Never the claim. */
+		memberId: string;
+		meetingId: string;
+		/** ALWAYS the OWNING club, read off the meeting row by the caller (#396). */
+		clubId: string;
+		/** The actor the CLIENT asserted, if any; the RAW claim. */
+		claimedActorMemberId?: string;
+	},
+): Promise<{ ok: true; cleared: boolean }> {
+	const resolved = await resolveActor({
+		clubId: args.clubId,
+		meetingId: args.meetingId,
+		memberId: args.memberId,
+		claimedActorMemberId: args.claimedActorMemberId,
+	});
+	assertSessionProof(resolved);
+	const { actorMemberId, via } = resolved;
+	return clearPlanStatus(database, {
+		memberId: args.memberId,
+		meetingId: args.meetingId,
+		clubId: args.clubId,
+		actorMemberId,
+		onlyFrom: clearFloor({ via, actorMemberId, memberId: args.memberId }),
 	});
 }

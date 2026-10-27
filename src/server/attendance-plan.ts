@@ -6,11 +6,8 @@ import { attendancePlanStatusEnum, meetings } from "#/db/schema";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { resolveActor } from "./attendance-actor-logic";
 import { declinePlannedAttendance } from "./attendance-decline-logic";
-import {
-	clearFloor,
-	clearPlanStatus,
-	setPlanStatus,
-} from "./attendance-plan-logic";
+import { setPlanStatus } from "./attendance-plan-logic";
+import { clearPlannedAttendanceCore } from "./availability-logic";
 import { assertClubNotArchived, requireMemberInClub } from "./guards";
 import { confirmHeldClaimedSlots } from "./slots-logic";
 import { requireSessionActor } from "./write-actor-logic";
@@ -264,7 +261,14 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
  *  than absent, for the reason `released` is. */
 const NONE_CONFIRMED: string[] = [];
 
-/** Clear a member's planned attendance back to "no answer" (row absent). */
+/** Clear a member's planned attendance back to "no answer" (row absent).
+ *
+ *  A member's ANSWER is cleared by that member, or by an officer on the season
+ *  grid (`clearAvailability`), and by nobody else. This is the meeting page's
+ *  clear, and `clearPlannedAttendanceCore` gives each arm of the ladder the
+ *  floor `clearFloor` names: a member their own answer, an officer the ASK on
+ *  another member's row (and their own answer and ask on their own), and the
+ *  Toastmaster nothing on another member's row. */
 export const clearPlannedAttendance = createServerFn({ method: "POST" })
 	.validator((i: unknown) =>
 		// `releaseHeldRoles` omitted alongside the other two: clearing a row back to
@@ -288,76 +292,23 @@ export const clearPlannedAttendance = createServerFn({ method: "POST" })
 		assertMeetingAccepts(meeting.status, "plan", { accept: ["cancelled"] });
 		await requireMemberInClub(data.memberId, meeting.clubId);
 		// #762 / ADR-0026. A clear DESTROYS an answer a person put there, and the
-		// ladder below cannot tell a signed-in member from a visitor who typed
-		// their id — on the anonymous path `claimedActorMemberId` defaults to the
-		// subject, so its self-only arm admits any roster member. The RETURN is
-		// deliberately unused: this answers "may this request write at all", and
-		// the resolution below still answers who to credit and which floor
-		// applies.
+		// ladder cannot tell a signed-in member from a visitor who typed their id —
+		// on the anonymous path `claimedActorMemberId` defaults to the subject, so
+		// its self-only arm admits any roster member. This is the explicit, early
+		// half, as in `markUnavailableReleasing`; the RETURN is deliberately unused.
+		// The seam checks the PROOF of the actor it resolves, which is the half
+		// vitest can execute and the one that holds when the session's membership
+		// changes between the two reads.
 		await requireSessionActor({ clubId: meeting.clubId });
-		const { actorMemberId, via } = await resolveActor({
-			clubId: meeting.clubId,
-			meetingId: data.meetingId,
+		return clearPlannedAttendanceCore(db, {
+			// The SUBJECT is `data.memberId`, never the claim: the ladder compares the
+			// actor with it.
 			memberId: data.memberId,
+			meetingId: data.meetingId,
+			clubId: meeting.clubId,
+			// The RAW claim. Behind the session gate it changes no outcome (a resolved
+			// session ignores it), so this is defence in depth, not an input the rule
+			// relies on.
 			claimedActorMemberId: data.actorMemberId,
-		});
-		return clearPlanStatus(db, {
-			memberId: data.memberId,
-			meetingId: data.meetingId,
-			clubId: meeting.clubId,
-			actorMemberId,
-			// Clearing your OWN answer is self-service, but `reached_out` is not
-			// your answer — it is the officer's record of having asked, and before
-			// the consolidation deleting it required `requireUser()` +
-			// `requireClubRole(admin)` because it lived in its own table. The
-			// self-only arm is no barrier here: on the anonymous path
-			// `claimedActorMemberId` defaults to the subject, so actor === subject
-			// always holds and any roster member is reachable.
-			//
-			// Gated on the OFFICER arm specifically, NOT on `viaManager` (#576
-			// review). `viaManager` also admits the Toastmaster, whose claim is
-			// honour-system and whose id is published on the public payload — so
-			// widening this would have dropped "delete another officer's private
-			// record of having asked" from authenticated-admin to unauthenticated.
-			// A Toastmaster keeps the whole WRITE ladder; taking back an officer's
-			// `reached_out` stays an officer action, which is where the bar was
-			// before the consolidation. Writing `reached_out` is what the panel is
-			// for; deleting someone else's is not.
-			//
-			// EVERY arm passes a floor (#573), chosen by `clearFloor`: a member (the
-			// self arm, or the Toastmaster on their own row) may clear their own
-			// ANSWER, the officer arm may clear the ASK on someone else's row.
-			// Neither may erase the other's, and the Toastmaster clearing ANOTHER
-			// member's row gets an empty floor: a member's answer is cleared by that
-			// member, or by an officer on the season grid, and by nobody else.
-			// Collapsing the own-row floor to `["reached_out"]` (#573's first
-			// proposal) would stop a Toastmaster clearing their own `coming`.
-			// (`clearAvailability` in `availability.ts` is the season grid's clear and
-			// holds the same rule through `resolveClearActor`; `outreach.ts`'s admin
-			// clear already passed `["reached_out"]` inline.)
-			//
-			// The officer arm used to pass `undefined` — clear whatever is there —
-			// and that is the defect. "No answer" means "make it as if they never
-			// replied", so it must never destroy a reply: the rail does not poll, so
-			// a row can still read `Asked` while the server already holds
-			// `not_coming`, and deleting that drops the member off
-			// `unavailableMembers` and out of the recruit picker's warning. They can
-			// then be handed a role they said they could not take.
-			//
-			// This is NOT the "officer corrects a wrong answer" power — that is the
-			// SET path (pick Coming / Not coming), where `demoteFrom` deliberately
-			// leaves an officer's deliberate pick unfloored. The two got conflated
-			// because a one-tap menu item was wired to the unrestricted clear,
-			// replacing `clearContacted`, which had always been narrow by
-			// construction. Nobody decided officers needed to erase answers.
-			//
-			// Accepted trade-off: an officer cannot return ANOTHER member's answered
-			// row to "no answer"; they pick "Not coming" (same shape as roll mode's
-			// clear-to-unmarked gap, TODOS.md). Their OWN row is self-service: on
-			// the officer arm `actorMemberId` is the session's `membership.id`,
-			// never the caller's `claimedActorMemberId`, so `clearFloor` can trust
-			// `actorMemberId === memberId` there. Before this, the strip's "undo" on
-			// an officer's own row deleted nothing and the answer reappeared.
-			onlyFrom: clearFloor({ via, actorMemberId, memberId: data.memberId }),
 		});
 	});
