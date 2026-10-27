@@ -46,7 +46,16 @@
  * Person fact shared by every club that holds them (#906), and so is the email,
  * `people.email` (#907).
  */
-import { type AnyColumn, and, eq, isNotNull, max, or, sql } from "drizzle-orm";
+import {
+	type AnyColumn,
+	and,
+	eq,
+	isNotNull,
+	max,
+	ne,
+	or,
+	sql,
+} from "drizzle-orm";
 import { strToU8, zipSync } from "fflate";
 import { db } from "#/db";
 import {
@@ -472,9 +481,27 @@ export async function loadClubExport(
 					),
 				)
 				.innerJoin(pathwaysPaths, eq(pathwaysPaths.id, pathEnrollments.pathId))
+				// A FORMER member's progress is bounded (#1328, maintainer decision
+				// 2026-10-27): an enrollment is person-owned and has no club or start
+				// date, so what they did at another club after leaving must not reach
+				// this club's admins. A level counts when this club credited it, or it
+				// was completed on or before the day the membership ended (the club's
+				// day, like `ended_at`). Active and inactive members are unbounded.
 				.leftJoin(
 					pathLevelProgress,
-					eq(pathLevelProgress.enrollmentId, pathEnrollments.id),
+					and(
+						eq(pathLevelProgress.enrollmentId, pathEnrollments.id),
+						or(
+							ne(members.status, "former"),
+							eq(pathLevelProgress.creditedClubId, clubId),
+							sql`(${pathLevelProgress.completedAt} at time zone ${club.timezone})::date <= ${members.endedAt}`,
+						),
+					),
+				)
+				// A former member's enrollment with no qualifying level is omitted: it
+				// carries nothing this club can claim.
+				.where(
+					or(ne(members.status, "former"), isNotNull(pathLevelProgress.id)),
 				)
 				.groupBy(
 					pathEnrollments.id,

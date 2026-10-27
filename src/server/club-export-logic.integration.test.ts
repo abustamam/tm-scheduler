@@ -11,7 +11,7 @@
  * in under 3s, the issue's threshold for moving to fflate's streaming `Zip`.
  */
 import { randomUUID } from "node:crypto";
-import { inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { strFromU8, unzipSync } from "fflate";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -650,21 +650,70 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 			.select({ personId: members.personId })
 			.from(members)
 			.where(inArray(members.id, [own.adminMemberId]));
-		const [kept, archived, lapsed] = await testDb
+		const [kept, archived, lapsed, empty] = await testDb
 			.insert(pathwaysPaths)
 			.values([
 				{ courseCode: `K${RUN}`, name: `Kept ${RUN}` },
 				{ courseCode: `A${RUN}`, name: `Archived ${RUN}` },
 				{ courseCode: `L${RUN}`, name: `Lapsed ${RUN}` },
+				{ courseCode: `E${RUN}`, name: `Empty ${RUN}` },
 			])
 			.returning({ id: pathwaysPaths.id });
-		pathIds.push(kept.id, archived.id, lapsed.id);
+		pathIds.push(kept.id, archived.id, lapsed.id, empty.id);
 		await testDb.insert(pathEnrollments).values([
 			{ personId: own.personId, pathId: kept.id },
 			{ personId: own.personId, pathId: archived.id, archivedAt: new Date() },
 			// The admin's: active in Pathways, but their membership here lapses.
 			{ personId: admin.personId, pathId: lapsed.id },
+			{ personId: admin.personId, pathId: empty.id },
 		]);
+		const [lapsedEnr] = await testDb
+			.select({ id: pathEnrollments.id })
+			.from(pathEnrollments)
+			.where(
+				and(
+					eq(pathEnrollments.personId, admin.personId),
+					eq(pathEnrollments.pathId, lapsed.id),
+				),
+			);
+		const [emptyEnr] = await testDb
+			.select({ id: pathEnrollments.id })
+			.from(pathEnrollments)
+			.where(
+				and(
+					eq(pathEnrollments.personId, admin.personId),
+					eq(pathEnrollments.pathId, empty.id),
+				),
+			);
+		const other = await seedClub();
+		extraClubs.push(other.clubId);
+		const lvl = (level: number, completedAt: Date, creditedClubId: string) => ({
+			enrollmentId: lapsedEnr.id,
+			level,
+			completed: 1,
+			total: 1,
+			approved: true,
+			completedAt,
+			creditedClubId,
+		});
+		await testDb.insert(pathLevelProgress).values([
+			// Credited HERE, though after the membership ended: counts.
+			lvl(3, new Date("2026-06-01T12:00:00Z"), own.clubId),
+			// Another club's, completed before the membership ended: counts.
+			lvl(1, new Date("2026-02-01T12:00:00Z"), other.clubId),
+			// Another club's, completed after it ended: left out.
+			lvl(4, new Date("2026-06-01T12:00:00Z"), other.clubId),
+		]);
+		// An unapproved, unattributed row for the path with no qualifying level.
+		await testDb.insert(pathLevelProgress).values({
+			enrollmentId: emptyEnr.id,
+			level: 1,
+			completed: 0,
+			total: 1,
+			approved: false,
+			completedAt: new Date("2026-06-01T12:00:00Z"),
+			creditedClubId: other.clubId,
+		});
 		await testDb
 			.update(members)
 			.set({ status: "former", endedAt: "2026-03-04" })
@@ -675,11 +724,19 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 			(out?.files ?? []).map((f) => [f.filename, f]),
 		);
 		expect(
-			byName["pathways.csv"].rows.map((r) => [r.name, r.member_status, r.path]),
+			byName["pathways.csv"].rows.map((r) => [
+				r.name,
+				r.member_status,
+				r.path,
+				r.current_level,
+			]),
 		).toEqual([
-			["Admin User", "former", `Lapsed ${RUN}`],
-			["Member User", "active", `Archived ${RUN}`],
-			["Member User", "active", `Kept ${RUN}`],
+			// Levels 3 (credited here) and 1 (before ended_at) count; 4, another
+			// club's after the end, does not. The enrollment with no qualifying
+			// level (Empty) is omitted.
+			["Admin User", "former", `Lapsed ${RUN}`, 3],
+			["Member User", "active", `Archived ${RUN}`, null],
+			["Member User", "active", `Kept ${RUN}`, null],
 		]);
 		expect(byName["members.csv"].rows).toContainEqual(
 			expect.objectContaining({
@@ -690,6 +747,8 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 		);
 
 		await cleanup(own.clubId, [own.adminUserId, own.memberUserId]);
+		await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		extraClubs.pop();
 		extraClubs.pop();
 	});
 

@@ -711,6 +711,7 @@ export function planImport(
 		if (conflict) summary.addressConflicts++;
 		if (md.kind === "update" && existingMember) {
 			summary.toUpdate++;
+			const fillNote = updateNote([...md.fills, ...personFills], row.joinedAt);
 			previewRows.push({
 				name: row.name,
 				email: row.email,
@@ -720,8 +721,8 @@ export function planImport(
 				note: withEmailRefusal(
 					withConflict(
 						existingMember.status === "former"
-							? `${FORMER_UPDATE_NOTE} · ${updateNote([...md.fills, ...personFills], row.joinedAt)}`
-							: updateNote([...md.fills, ...personFills], row.joinedAt),
+							? `${FORMER_UPDATE_NOTE} · ${fillNote}`
+							: fillNote,
 						conflict,
 					),
 					emailOutcome,

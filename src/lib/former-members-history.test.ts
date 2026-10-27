@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ActivityEntry } from "#/server/activity-feed-logic";
 import { formatActivity, MEMBERSHIP_ENDED_CHANGE } from "./activity-format";
 import {
 	CONVERT_REACTIVATED_FORMER_MESSAGE,
@@ -47,8 +48,8 @@ describe("convert notice names a former wake-up (#1328)", () => {
 
 describe("activity feed words an End (#1328)", () => {
 	it("reads 'ended <name>'s membership', not a details edit", () => {
-		const e = {
-			id: 1,
+		const e: ActivityEntry = {
+			id: "1",
 			action: "member_edit",
 			createdAt: new Date(),
 			actorName: "Rasheed",
@@ -63,11 +64,11 @@ describe("activity feed words an End (#1328)", () => {
 			guestName: null,
 			guestLink: false,
 			unlinked: false,
-		} as never;
+		};
 		expect(formatActivity(e).summary).toBe("ended Pat's membership");
-		expect(
-			formatActivity({ ...(e as object), change: null } as never).summary,
-		).toBe("updated a member's details");
+		expect(formatActivity({ ...e, change: null }).summary).toBe(
+			"updated a member's details",
+		);
 	});
 });
 

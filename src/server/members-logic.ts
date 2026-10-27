@@ -819,7 +819,10 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 							memberId: input.memberId,
 							closedOfficerPositions,
 							releasedSlots,
-							releasedClubRole: current.clubRole,
+							// Only when the role actually changed.
+							...(current.clubRole !== "member"
+								? { releasedClubRole: current.clubRole }
+								: {}),
 						}
 					: {}),
 			},
