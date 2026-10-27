@@ -1014,7 +1014,7 @@ describe.skipIf(!hasTestDb)(
 			["markUnavailableReleasing", markUnavailableReleasing],
 		] as const)("%s", (_name, handler) => {
 			const call = () =>
-				Promise.resolve().then(() =>
+				Promise.resolve().then<unknown>(() =>
 					handler({
 						data: {
 							memberId: crypto.randomUUID(), // on no roster
