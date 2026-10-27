@@ -418,5 +418,25 @@ describe.skipIf(!hasTestDb)(
 			// the one key that decides whether a grant happens at all.
 			expect((await getMembership(userId, club.clubId))?.id).toBe(active);
 		});
+
+		// The officer sibling (#1383). With the officer arm, an inactive ADMIN
+		// duplicate beside an ACTIVE row holding an open term is the case where
+		// key 1 (active first) decides the grant: swap it and the pick lands on
+		// the inactive admin and refuses a live officer.
+		it("grants an ACTIVE officer duplicate beside an INACTIVE admin one, crediting the officer row", async () => {
+			// protects=pick key 1 + the officer arm; fails_when=the inactive admin row outranks the active officer row, or resolveAdminGrant ignores open terms; no_claim=none
+			await addMembership({ clubRole: "admin", status: "inactive" });
+			const officer = await addMembership({
+				clubRole: "member",
+				status: "active",
+				openTerms: 1,
+			});
+
+			const authz = await agendaAuthz();
+			expect(authz.allowed).toBe(true);
+			expect(authz.via).toBe("admin");
+			expect(authz.actorMemberId).toBe(officer);
+			await expectAgreesWithGuardPath(officer);
+		});
 	},
 );

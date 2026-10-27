@@ -35,6 +35,25 @@ export async function getOpenOfficerPositions(
 }
 
 /**
+ * Effective-admin (#202): a stored `admin`, or an active membership's open
+ * officer term. The predicate `requireClubRole`, `assertStillClubAdmin`,
+ * `canManageClub`, `holdsAdminAuthority` (`guards.ts`), `resolveAdminGrant`
+ * (`meeting-authz-logic.ts`), `getMinutes` and the minutes PDF route all ask, so
+ * those copies cannot drift. Callers keep their own `status === "active"` check.
+ * It lives here, not in `guards.ts`, because `guards.ts` imports
+ * `meeting-authz-logic.ts` and the reverse import would be a cycle.
+ * `id` is null for a synthetic (impersonation) membership, which holds no term.
+ */
+export async function isEffectiveAdmin(
+	database: Database,
+	membership: { id: string | null; clubRole: string },
+): Promise<boolean> {
+	if (membership.clubRole === "admin") return true;
+	if (membership.id === null) return false;
+	return (await getOpenOfficerPositions(database, membership.id)).length > 0;
+}
+
+/**
  * End every OPEN officer term a membership holds, returning the positions it
  * actually closed, President first (#805).
  *

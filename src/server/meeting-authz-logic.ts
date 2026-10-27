@@ -31,6 +31,7 @@ import {
 	membershipPickOpenTermJoin,
 	membershipPickOrder,
 } from "./membership-pick-order";
+import { isEffectiveAdmin } from "./officers-logic";
 
 // Either the main db client or a drizzle transaction, as in `guards.ts`.
 type DbOrTx =
@@ -169,8 +170,9 @@ async function resolveAdminGrant(
 		.from(members)
 		.innerJoin(people, eq(people.id, members.personId))
 		// Open terms only; `officer_terms_open_idx` covers (membership_id, term_end).
-		// Joined for the ORDER BY alone (key 3) — the count is never selected, and
-		// no arm below grants on an officer term.
+		// Joined for the ORDER BY alone (key 3) — the count is never selected. The
+		// officer arm below asks `isEffectiveAdmin` about the PICKED row, and
+		// key 3 is what makes the picked row the one that holds the term.
 		.leftJoin(officerTerms, membershipPickOpenTermJoin())
 		.where(and(eq(people.userId, sessionUserId), eq(members.clubId, clubId)))
 		// `members.id` is the primary key, so every selected column OF `members` is
@@ -199,8 +201,10 @@ async function resolveAdminGrant(
 		// wrong half:
 		//
 		// · Keys 1 and 2 are not what refuses a lapsed admin in THIS function — the
-		//   `status === "active"` check below is, and the grant decision is
-		//   invariant to swapping them. In `getMembership` the polarity genuinely
+		//   `status === "active"` check below is. Swapping them CAN change the
+		//   grant now that the officer arm exists: an inactive admin beside an
+		//   active officer duplicate would, with the order swapped, pick the
+		//   inactive admin and refuse the officer. In `getMembership` the polarity genuinely
 		//   is load-bearing, because `canManageClub` takes the one row it gets
 		//   and requires it to be active. Do not read the ordering as making the
 		//   check below redundant: delete it and an inactive admin duplicate grants.
@@ -217,7 +221,15 @@ async function resolveAdminGrant(
 	// is listed first because `alsoMine` is the REST of the same ordered result —
 	// dropping it here would silently re-narrow the binding to one row.
 	const membershipIds = picked ? [picked.id, ...alsoMine.map((m) => m.id)] : [];
-	if (picked && picked.status === "active" && picked.clubRole === "admin") {
+	// Effective-admin (#202, #1383): a stored admin OR an active membership
+	// holding an open officer term, the same two arms as `requireClubRole(…,
+	// ["admin"])` and `canManageClub`. The `status` check covers both: a lapsed
+	// officer or admin grants nothing.
+	if (
+		picked &&
+		picked.status === "active" &&
+		(await isEffectiveAdmin(db, picked))
+	) {
 		return { granted: true, memberId: picked.id, membershipIds };
 	}
 	const session = await getActiveImpersonation(sessionUserId, clubId);

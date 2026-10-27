@@ -9,11 +9,12 @@ import { isReadableClub } from "#/server/club-readable-logic";
 import { getMembership, getSessionUser } from "#/server/guards";
 import { getMeetingClubId, getMeetingStatus } from "#/server/minutes-logic";
 import { renderMinutesPdf } from "#/server/minutes-pdf-logic";
+import { isEffectiveAdmin } from "#/server/officers-logic";
 
 /**
  * GET /api/meetings/$id/minutes/pdf — download a meeting's minutes as a PDF
  * (ADR-0014 / #152). Same visibility as the on-screen Minutes section: club
- * admins always; members only once the meeting is `completed`. Non-members get
+ * admins and elected officers (effective admin, #202) always; members only once the meeting is `completed`. Non-members get
  * 403. Generated server-side via `@react-pdf/renderer` (no Chromium).
  *
  * `?view=guests` serves the GUEST copy (#903), the one without the club's
@@ -60,7 +61,7 @@ export const Route = createFileRoute("/api/meetings/$id/minutes/pdf")({
 				}
 				const status = await getMeetingStatus(meetingId);
 				const canDownload =
-					membership.clubRole === "admin" || status === "completed";
+					(await isEffectiveAdmin(db, membership)) || status === "completed";
 				if (!canDownload) {
 					return new Response("Minutes aren't available yet.", { status: 403 });
 				}

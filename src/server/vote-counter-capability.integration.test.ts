@@ -38,7 +38,6 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/vote-counter-capability.integration.test.ts
  */
-import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { members, officerTerms, roleDefinitions, roleSlots } from "#/db/schema";
 import {
@@ -227,38 +226,31 @@ describe.skipIf(!hasTestDb)(
 			).rejects.toThrow();
 		});
 
-		// Why `requireVoteCounterCapability` retries `requireClubRole` instead of
-		// just trusting `resolveVoteCounterAuthz`.
-		//
-		// The five minutes.ts fns used to gate on `requireClubRole(..., ["admin"])`,
-		// which ALSO grants to an elected officer holding an open term (#202
-		// effective-admin). `resolveVoteCounterAuthz` reads `clubRole` only. Without
-		// the retry, swapping the gates would have silently REVOKED award-setting
-		// and Table Topics capture from officers who hold their seat that way.
-		//
-		// This asserts the resolver genuinely does NOT cover that member, which is
-		// what makes the fallback load-bearing rather than dead code. Delete the
-		// fallback and officers lose a capability they have today.
-		it("resolver alone does NOT grant to an elected officer — hence the requireClubRole retry", async () => {
-			const officerId = await addRosterMember(club.clubId, "Elected Officer");
+		// `requireVoteCounterCapability` keeps a `requireClubRole` retry beside
+		// `resolveVoteCounterAuthz`. Before #1383 the resolver read `clubRole` only
+		// and the retry was load-bearing for officers; now the resolver's admin arm
+		// (`resolveAdminGrant`) grants an elected officer itself and the retry is
+		// redundant. This pins the resolver's side: an officer SESSION is granted.
+		it("resolver grants a signed-in elected officer with club_role member (#1383)", async () => {
 			await testDb.insert(officerTerms).values({
-				membershipId: officerId,
+				membershipId: club.memberId,
 				position: "vp_education",
 				termStart: new Date("2026-07-01"),
 			});
 			const authz = await resolveVoteCounterAuthz({
 				meetingId: club.meetingId,
-				selfMemberId: officerId,
+				sessionUserId: club.memberUserId,
+			});
+			expect(authz.allowed).toBe(true);
+			expect(authz.via).toBe("admin");
+			expect(authz.actorMemberId).toBe(club.memberId);
+		});
+
+		it("resolver refuses a caller with no session and no self-assert (anonymous)", async () => {
+			const authz = await resolveVoteCounterAuthz({
+				meetingId: club.meetingId,
 			});
 			expect(authz.allowed).toBe(false);
-			// ...and the open term that `requireClubRole` keys off really is there,
-			// so the two gates genuinely disagree about this member.
-			const terms = await testDb
-				.select()
-				.from(officerTerms)
-				.where(eq(officerTerms.membershipId, officerId));
-			expect(terms).toHaveLength(1);
-			expect(terms[0].termEnd).toBeNull();
 		});
 	},
 );
