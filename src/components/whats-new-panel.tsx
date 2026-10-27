@@ -18,6 +18,7 @@ import {
 	SheetTitle,
 } from "#/components/ui/sheet";
 import { formatArchiveDate } from "#/lib/format";
+import { cn } from "#/lib/utils";
 import {
 	addToStoredSet,
 	eligibleEntries,
@@ -294,44 +295,48 @@ export function WhatsNewPublicList({
 // Header button + panel (signed in)
 // ---------------------------------------------------------------------------
 
+/** Undefined state (loading or failed) shows no dot: fail silent. */
+function sessionHasUnseen({ eligible, state }: SessionWhatsNew): boolean {
+	return hasUnseenEntries(eligible, state ? new Set(state.seenIds) : null);
+}
+
+function whatsNewLabel(unseen: boolean): string {
+	return unseen ? "What's new (new updates)" : "What's new";
+}
+
 /**
- * The header's "What's new" button. The dot shows while an entry the user is
- * eligible for is not among the ids they have seen; opening the panel records
- * what it shows. Outside `<WhatsNewProvider>` it renders nothing.
+ * The sheet/seen logic behind every "What's new" trigger (the desktop header
+ * button, the mobile drawer row). `available` is false outside
+ * `<WhatsNewProvider>`. The dot shows while an entry the user is eligible for is
+ * not among the ids they have seen; opening the panel records what it shows.
+ * Render `sheet` once next to the trigger and call `openPanel` from it.
  */
-export function WhatsNewButton() {
+function useWhatsNewPanel(): {
+	available: boolean;
+	unseen: boolean;
+	openPanel: () => void;
+	sheet: ReactNode;
+} {
 	const session = useContext(SessionWhatsNewContext);
 	const [open, setOpen] = useState(false);
-	if (!session) return null;
-	const { eligible, state, markPanelSeen, clearFeature } = session;
-	// Undefined state (loading or failed) shows no dot: fail silent.
-	const unseen = hasUnseenEntries(
-		eligible,
-		state ? new Set(state.seenIds) : null,
-	);
+	if (!session) {
+		return {
+			available: false,
+			unseen: false,
+			openPanel: () => {},
+			sheet: null,
+		};
+	}
+	const { eligible, markPanelSeen, clearFeature } = session;
+	const unseen = sessionHasUnseen(session);
 
 	function onOpenChange(next: boolean) {
 		setOpen(next);
 		if (next && unseen) markPanelSeen(eligible.map((e) => e.id));
 	}
 
-	return (
+	const sheet = (
 		<Sheet open={open} onOpenChange={onOpenChange}>
-			<button
-				type="button"
-				onClick={() => onOpenChange(true)}
-				aria-label={unseen ? "What's new (new updates)" : "What's new"}
-				className="relative flex size-9 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-surface-soft hover:text-foreground"
-			>
-				<Sparkles className="size-4" aria-hidden />
-				{unseen ? (
-					<span
-						data-testid="whats-new-dot"
-						className="absolute top-1.5 right-1.5 size-2 rounded-full bg-primary ring-2 ring-surface-glass"
-						aria-hidden
-					/>
-				) : null}
-			</button>
 			{/* The sheet is a fixed-height flex column and NOT the scroller: the
 			    body below is, so the header stays pinned. `min-h-0` is what lets a
 			    flex child shrink below its content and scroll instead of growing. */}
@@ -355,5 +360,77 @@ export function WhatsNewButton() {
 				</div>
 			</SheetContent>
 		</Sheet>
+	);
+	return {
+		available: true,
+		unseen,
+		openPanel: () => onOpenChange(true),
+		sheet,
+	};
+}
+
+/** Whether there are unseen entries (false outside the provider), for a
+ *  trigger that does not own the sheet, like the mobile menu button's dot. */
+export function useWhatsNewUnseen(): boolean {
+	const session = useContext(SessionWhatsNewContext);
+	if (!session) return false;
+	return sessionHasUnseen(session);
+}
+
+/** The dot on a What's new trigger. */
+export function WhatsNewDot({ className = "" }: { className?: string }) {
+	return (
+		<span
+			data-testid="whats-new-dot"
+			className={cn(
+				"absolute size-2 rounded-full bg-primary ring-2 ring-surface-glass",
+				className,
+			)}
+			aria-hidden
+		/>
+	);
+}
+
+/** The header's "What's new" button (desktop header). Outside
+ *  `<WhatsNewProvider>` it renders nothing. */
+export function WhatsNewButton() {
+	const { available, unseen, openPanel, sheet } = useWhatsNewPanel();
+	if (!available) return null;
+	return (
+		<>
+			<button
+				type="button"
+				onClick={openPanel}
+				aria-label={whatsNewLabel(unseen)}
+				className="relative flex size-9 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-surface-soft hover:text-foreground outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+			>
+				<Sparkles className="size-4" aria-hidden />
+				{unseen ? <WhatsNewDot className="top-1.5 right-1.5" /> : null}
+			</button>
+			{sheet}
+		</>
+	);
+}
+
+/** The "What's new" row in the mobile nav drawer. */
+export function WhatsNewMenuRow() {
+	const { available, unseen, openPanel, sheet } = useWhatsNewPanel();
+	if (!available) return null;
+	return (
+		<>
+			<button
+				type="button"
+				onClick={openPanel}
+				aria-label={whatsNewLabel(unseen)}
+				className="relative flex w-full shrink-0 items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-semibold text-muted-foreground transition-colors hover:bg-surface-soft hover:text-foreground outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+			>
+				<Sparkles className="size-4" aria-hidden />
+				What's new
+				{unseen ? (
+					<WhatsNewDot className="top-1/2 right-3 -translate-y-1/2" />
+				) : null}
+			</button>
+			{sheet}
+		</>
 	);
 }

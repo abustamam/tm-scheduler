@@ -4,6 +4,7 @@ import {
 	Outlet,
 	redirect,
 	useRouter,
+	useRouterState,
 } from "@tanstack/react-router";
 import { useMemo } from "react";
 import { toast } from "sonner";
@@ -71,6 +72,8 @@ function ClubShell() {
 	const { clubUuid, clubName, clubNumber, shell, authCtx, effectiveMemberId } =
 		Route.useRouteContext();
 	const router = useRouter();
+	// Sign-in returns here, not to "/"; `/signin` validates it with `safeRedirect`.
+	const here = useRouterState({ select: (st) => st.location.href });
 	// Memoized because it feeds `IdentityGateProvider`'s context value, which
 	// consumers now put in `useEffect` dep arrays (#665's `?as=` seeding). A
 	// fresh object each render makes the context value fresh each render, which
@@ -137,13 +140,19 @@ function ClubShell() {
 				<ThemeToggle compact />
 				{/* Bridge to the full signed-in workspace (dashboard, Pathways,
 				    resources) — the sign-up sheet stays usable without it. */}
-				<Link
-					to="/signin"
-					search={{ redirect: "/" }}
-					className="shrink-0 text-xs font-semibold text-muted-foreground underline underline-offset-2 hover:text-foreground"
+				<span className="hidden shrink-0 text-xs text-muted-foreground min-[420px]:inline">
+					Not signed in
+				</span>
+				<Button
+					asChild
+					variant="outline"
+					size="sm"
+					className="h-11 shrink-0 md:h-8"
 				>
-					Sign in
-				</Link>
+					<Link to="/signin" search={{ redirect: here }}>
+						Sign in
+					</Link>
+				</Button>
 			</header>
 			<IdentityGateProvider
 				clubUuid={clubUuid}

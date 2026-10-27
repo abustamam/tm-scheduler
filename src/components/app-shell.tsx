@@ -24,7 +24,10 @@ import { Toaster } from "#/components/ui/sonner";
 import {
 	NewBadge,
 	useIsNew,
+	useWhatsNewUnseen,
 	WhatsNewButton,
+	WhatsNewDot,
+	WhatsNewMenuRow,
 	WhatsNewProvider,
 } from "#/components/whats-new-panel";
 import { initialsOf } from "#/lib/avatar";
@@ -254,6 +257,7 @@ export function AppShell({
 		onNavigate?: () => void,
 		showThemeToggle = false,
 		searchSlot?: ReactNode,
+		showWhatsNewRow = false,
 	) => (
 		<SidebarInner
 			clubName={clubName}
@@ -268,6 +272,7 @@ export function AppShell({
 			canPreviewAsMember={isOfficer}
 			onNavigate={onNavigate}
 			showThemeToggle={showThemeToggle}
+			showWhatsNewRow={showWhatsNewRow}
 			searchSlot={searchSlot}
 		/>
 	);
@@ -328,6 +333,7 @@ export function AppShell({
 								grants={searchGrants}
 								onNavigate={() => setNavOpen(false)}
 							/>,
+							true,
 						)}
 					</SheetContent>
 				</Sheet>
@@ -372,23 +378,23 @@ export function AppShell({
 
 					{/* Mobile top app-bar (below lg) */}
 					<header className="sticky top-(--shell-banner-offset) z-10 flex items-center gap-2.5 border-b border-border bg-surface-glass px-4 py-3 backdrop-blur-[6px] lg:hidden">
-						<button
-							type="button"
-							onClick={() => setNavOpen(true)}
-							aria-label="Open navigation"
-							className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-surface-soft hover:text-foreground"
-						>
-							<Menu className="size-4" aria-hidden />
-						</button>
+						<MobileMenuButton onOpen={() => setNavOpen(true)} />
 						<div className="min-w-0 flex-1 truncate text-xs font-semibold tracking-[0.01em] text-muted-foreground">
 							{crumbFor(pathname)}
 						</div>
-						<WhatsNewButton />
 						<ClubSwitcher
 							clubs={clubs}
 							activeClubId={activeClubId}
 							impersonating={impersonating != null}
 						/>
+						<button
+							type="button"
+							onClick={() => setNavOpen(true)}
+							aria-label={`Account and navigation, signed in as ${displayName}`}
+							className="flex size-11 shrink-0 items-center justify-center rounded-full outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+						>
+							<MemberAvatar tone="palm" initials={initials} size={36} />
+						</button>
 					</header>
 
 					{/* `overflow-x-clip`, not `-hidden` (#999). Both clip a too-wide
@@ -469,6 +475,22 @@ function PreviewAsMemberButton() {
 	);
 }
 
+/** The mobile app bar's menu button; wears the What's new dot while unseen. */
+function MobileMenuButton({ onOpen }: { onOpen: () => void }) {
+	const unseen = useWhatsNewUnseen();
+	return (
+		<button
+			type="button"
+			onClick={onOpen}
+			aria-label={unseen ? "Open navigation (new updates)" : "Open navigation"}
+			className="relative flex size-11 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-surface-soft hover:text-foreground outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+		>
+			<Menu className="size-4" aria-hidden />
+			{unseen ? <WhatsNewDot className="top-1.5 right-1.5" /> : null}
+		</button>
+	);
+}
+
 function SidebarInner({
 	clubName,
 	clubNumber,
@@ -482,6 +504,7 @@ function SidebarInner({
 	canPreviewAsMember,
 	onNavigate,
 	showThemeToggle,
+	showWhatsNewRow,
 	searchSlot,
 }: {
 	clubName: string;
@@ -497,6 +520,8 @@ function SidebarInner({
 	canPreviewAsMember: boolean;
 	onNavigate?: () => void;
 	showThemeToggle?: boolean;
+	/** The "What's new" row (mobile drawer only: the mobile header has no button). */
+	showWhatsNewRow?: boolean;
 	/** Global search rendered below the brand (mobile drawer only, #221). */
 	searchSlot?: ReactNode;
 }) {
@@ -536,6 +561,8 @@ function SidebarInner({
 				/>
 			</div>
 
+			{showWhatsNewRow ? <WhatsNewMenuRow /> : null}
+
 			{/* Footer mini-profile. `shrink-0`, not `mt-auto`: the scrolling band
 			    above already absorbs the free space, so this sits at the bottom
 			    whether the nav overflows or not — and must not be squeezed when it
@@ -543,6 +570,7 @@ function SidebarInner({
 			<div className="flex shrink-0 items-center gap-2.5 rounded-xl border border-border bg-surface-soft p-2.5">
 				<MemberAvatar tone="palm" initials={initials} size={34} />
 				<div className="min-w-0 leading-tight">
+					<div className="text-xs text-muted-foreground">Signed in as</div>
 					<div className="truncate text-sm font-bold">{displayName}</div>
 					<div className="text-xs text-muted-foreground">{roleLabel}</div>
 				</div>
