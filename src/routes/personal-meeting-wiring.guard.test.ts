@@ -153,14 +153,23 @@ describe("personal meeting body → duty wiring (#665)", () => {
 		"utf8",
 	);
 
+	const ctxSrc = readSource("src/components/club/duty-context.ts");
+
+	// protects=a member's two speaker slots are ticked independently;
+	// fails_when=/me stops calling the shared helper per role, or the helper
+	// reads a per-member title; no_claim=the rendered ticks (meeting-your-jobs
+	// tests and the personal-meeting-body tests cover those).
 	it("computes duty state PER SLOT, not per member", () => {
 		// TODOS.md's `DutyContext` trap: the context mixes meeting-scoped fields
 		// with the slot-scoped `speechTitle`, so ONE context per member marks both
 		// of a member's speaker slots done off a single title. `defaultCount` is 3,
 		// so holding two is ordinary. The seam is per-slot; this pins the consumer.
-		expect(body).toContain("speechTitle: role.speechTitle");
+		// The context is built by the shared helper (#1376), once per role inside
+		// the roles map; the helper reads the slot-scoped field.
+		expect(ctxSrc).toContain("speechTitle: role.speechTitle");
+		expect(body).toContain("buildDutyContext(view, role)");
 		expect(body).toMatch(
-			/view\.roles\.map\(\(role\)[\s\S]{0,600}dutiesForRole\(\{/,
+			/view\.roles\.map\(\(role\)[\s\S]{0,600}dutiesForRole\(\{[\s\S]{0,1500}buildDutyContext\(view, role\)/,
 		);
 		expect(rawBody).not.toMatch(/speechTitle: view\.roles\[0\]/);
 	});

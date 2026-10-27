@@ -17,7 +17,8 @@ const CARD = "src/components/club/meeting-your-jobs.tsx";
 
 describe("MeetingYourJobs wiring (#1376)", () => {
 	// protects=the card sits right after the strip and acts as the page's
-	// identity; fails_when=it is moved, or fed `?as=`/`search.as`.
+	// identity, meeting key and club; fails_when=it is moved, fed `?as=`, or
+	// given the wrong key/club expression; no_claim=the card renders.
 	it("mounts after MeetingPersonalStrip with myId and source", () => {
 		const src = readSource(ROUTE);
 		const strip = src.indexOf("<MeetingPersonalStrip");
@@ -30,11 +31,13 @@ describe("MeetingYourJobs wiring (#1376)", () => {
 		const block = src.slice(card, cardEnd);
 		expect(block).toMatch(/memberId=\{myId\}/);
 		expect(block).toMatch(/source=\{source\}/);
+		expect(block).toMatch(/meetingKey=\{urlKey\}/);
+		expect(block).toMatch(/clubUuid=\{clubUuid\}/);
 		expect(block).not.toMatch(/search\.as|\bas\b=/);
 	});
 
 	// protects=no new server surface or private fields; fails_when=the card
-	// imports another server module.
+	// imports another server module; no_claim=the view's fields are public-safe.
 	it("imports only #/server/personal-meeting from src/server", () => {
 		const raw = readFileSync(resolve(ROOT, CARD), "utf8");
 		const mods = [...raw.matchAll(/from\s+"(#\/server\/[^"]+)"/g)].map(

@@ -8,13 +8,10 @@
 // No attendance, no `reached_out`, no contact details.
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { CheckCircle2, Circle } from "lucide-react";
 import { type DutyTarget, dutiesForRole } from "#/lib/role-duties";
 import { getPublicPersonalMeetingView } from "#/server/personal-meeting";
 import { buildDutyContext } from "./duty-context";
-
-const DUTY_ROW =
-	"-mx-2 flex min-h-11 items-center gap-2 rounded-md px-2 py-2 text-sm text-primary hover:underline";
+import { DUTY_ROW, DutyMark, dutyLabelClass } from "./duty-row";
 
 export function MeetingYourJobs({
 	clubId,
@@ -40,6 +37,12 @@ export function MeetingYourJobs({
 				data: { clubId: clubUuid, meetingKey, memberId: memberId as string },
 			}),
 		enabled: Boolean(memberId),
+		// `/me` and its editors invalidate `["personal-meeting", clubUuid,
+		// <their raw $meetingId param>]`, which is not always this key's third
+		// segment (a date key here, the uuid there). Rather than depend on the
+		// two matching, an edit made over there is picked up when this card
+		// mounts again: it always revalidates, and shows the cached view meanwhile.
+		refetchOnMount: "always",
 	});
 
 	// No identity, pending, error, rejected member: no card. The card is
@@ -71,36 +74,18 @@ export function MeetingYourJobs({
 				const ctx = buildDutyContext(view, role);
 				return (
 					<div key={role.slotId}>
-						<h3 className="font-medium text-sm text-foreground">
+						<h3 className="font-semibold text-base text-foreground">
 							{role.roleName}
 						</h3>
 						{duties.length > 0 ? (
 							<ul className="mt-1 space-y-1">
 								{duties.map((duty) => {
 									const done = duty.done(ctx);
-									const content = (
-										<>
-											{done ? (
-												<CheckCircle2
-													aria-hidden
-													className="size-4 shrink-0 text-success"
-												/>
-											) : (
-												<Circle
-													aria-hidden
-													className="size-4 shrink-0 text-muted-foreground"
-												/>
-											)}
-											<span className="sr-only">
-												{done ? "Done: " : "To do: "}
-											</span>
-										</>
-									);
-									const labelClass = done
-										? "text-muted-foreground line-through"
-										: "";
+									const content = <DutyMark done={done} />;
+									const labelClass = dutyLabelClass(done);
 									if (duty.id === "speech_details") {
-										if (source === "anon") {
+										// A done title needs no sign-in: it reads like the session row.
+										if (source === "anon" && !done) {
 											return (
 												<li key={duty.id}>
 													<Link
