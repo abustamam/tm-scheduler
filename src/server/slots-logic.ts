@@ -1613,6 +1613,20 @@ export async function confirmSlotCore(args: {
 					: "asserted"));
 
 	return db.transaction(async (tx) => {
+		// The membership merge lock (#1035), SHARED on the holder, before this
+		// transaction's first lock of any kind. The self arm makes two rows name the
+		// holder, the plan row below and the activity row, and a merge absorbing
+		// that membership re-points both, then DELETEs it. Without this a confirm
+		// that has the slot's row lock and wants the plan row can meet a merge that
+		// has re-pointed the plan row and wants the slot: a deadlock that Postgres
+		// resolves by aborting one of the two, and the merge is the dearer. Lock
+		// order: membership merge lock -> (attendance lock) -> row locks, the order
+		// `claimSlotCore` and `membership-merge-lock.ts` document. Refuses with
+		// `CLUB_BUSY_MESSAGE` when a merge absorbed the holder while this waited.
+		// The officer arm writes no row that names the holder and takes no lock.
+		if (grant.via === "self") {
+			await lockMembershipsAgainstMerge(tx, [grant.holderMemberId]);
+		}
 		// The asserted holder's gate, read in the SAME transaction and BEFORE the
 		// flip so a refusal writes nothing. A decline is a record, not a blank:
 		// over it an unverified confirm is contradicting the member, and an

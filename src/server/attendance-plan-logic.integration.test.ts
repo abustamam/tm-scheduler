@@ -24,6 +24,7 @@ import {
 	importPlanAnswers,
 	isMemberUnavailable,
 	listNotComingForMeetings,
+	listNotComingWithNames,
 	listPlanForMeetings,
 	listUnavailableWithNames,
 	SELF_SERVICE_RUNGS,
@@ -421,22 +422,29 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 		const CASES: [
 			string,
 			"absent" | "present" | "excused" | null,
-			"coming" | "not_coming" | null,
+			"coming" | "not_coming" | "reached_out" | null,
 			boolean,
 		][] = [
 			["absent, no plan", "absent", null, true],
 			["absent, coming", "absent", "coming", true],
+			// `reached_out` is the officer's ASK, never an answer, so it must read as
+			// no plan at all: the roll decides when there is one, and with none the
+			// row does not make anyone unavailable.
+			["absent, reached_out", "absent", "reached_out", true],
 			["present, not_coming", "present", "not_coming", false],
+			["present, reached_out", "present", "reached_out", false],
 			["excused, not_coming", "excused", "not_coming", true],
 			["excused, no plan", "excused", null, false],
+			["excused, reached_out", "excused", "reached_out", false],
 			["no record, not_coming", null, "not_coming", true],
 			["no record, coming", null, "coming", false],
+			["no record, reached_out", null, "reached_out", false],
 		];
 
 		async function seedCase(
 			name: string,
 			record: "absent" | "present" | "excused" | null,
-			plan: "coming" | "not_coming" | null,
+			plan: "coming" | "not_coming" | "reached_out" | null,
 		) {
 			const [m] = await testDb
 				.insert(members)
@@ -487,6 +495,28 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 			expect(out).toEqual([
 				{ id: a, name: "Abe Alpha" },
 				{ id: z, name: "Zed Zulu" },
+			]);
+		});
+
+		it("the public list is the plan alone, ordered by name: not_coming only, the roll never read", async () => {
+			// protects=the order and the plan-only filter of `listNotComingWithNames`, the list a signed-out reader gets; fails_when=ORDER BY dropped (the plan rows go in reverse alphabetical order), a coming or reached_out row is listed, a Present record hides a Not coming member, or an Absent record adds one (the roll is members-only); no_claim=which readers are handed this list is the loader's gate (meeting-detail-unavailable.integration.test.ts)
+			// Plan rows go in OPPOSITE order to the names, so an unordered read cannot
+			// pass by returning rows as they were written.
+			const zoe = await seedCase("Zoe Zander", null, "not_coming");
+			// Present does NOT clear them from the public list: that would publish
+			// the roll to everyone who can read the plan.
+			const mia = await seedCase("Mia Mills", "present", "not_coming");
+			const aaron = await seedCase("Aaron Abbott", null, "not_coming");
+			await seedCase("Cy Coming", null, "coming");
+			await seedCase("Rae Reached", null, "reached_out");
+			// Absent adds nobody: only the members-only list reads the roll.
+			await seedCase("Abel Absent", "absent", null);
+
+			const out = await listNotComingWithNames(testDb, club.meetingId);
+			expect(out).toEqual([
+				{ id: aaron, name: "Aaron Abbott" },
+				{ id: mia, name: "Mia Mills" },
+				{ id: zoe, name: "Zoe Zander" },
 			]);
 		});
 	});

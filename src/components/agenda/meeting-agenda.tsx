@@ -143,6 +143,13 @@ export interface MeetingAgendaProps {
 	 *  meeting — annotates the recruit picker and the assign sheet so a manager
 	 *  doesn't nudge or assign someone who already said they're out. */
 	unavailableMemberIds: string[];
+	/** The subset of `unavailableMemberIds` the viewer did NOT say themselves:
+	 *  members the ROLL marked Absent while their own plan answer is not "not
+	 *  coming" (#1344). Read only on the viewer's own card, which then says
+	 *  "You're marked absent." instead of "You said you can't make it." — they
+	 *  said nothing; the roll recorded it. Defaults to none, so a caller that
+	 *  does not supply it keeps the first-person "said" copy. */
+	markedAbsentMemberIds?: string[];
 	/** Role ids managed by the speaker pair buttons — the remove-role control
 	 *  renders disabled (with the reason) on their non-speaker cards (#225). Only
 	 *  consulted for managers; defaults to none. */
@@ -227,6 +234,7 @@ export function MeetingAgenda({
 	roleRecency,
 	roleByMemberId,
 	unavailableMemberIds,
+	markedAbsentMemberIds = [],
 	pairedRoleIds = new Set<string>(),
 	clubGuests = [],
 	shareUrl,
@@ -735,7 +743,9 @@ export function MeetingAgenda({
 													// person the "(you)" row already replaced.
 													<output className="mt-1 block text-xs text-warning-foreground">
 														{isMine
-															? "You said you can't make it."
+															? markedAbsentMemberIds.includes(holderMemberId)
+																? "You're marked absent."
+																: "You said you can't make it."
 															: `${slot.assigneeName} can't make it.`}{" "}
 														{slotLabel(slot, roleCounts)} needs a new holder.
 													</output>

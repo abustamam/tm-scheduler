@@ -1,6 +1,6 @@
 # ADR-0026: An unverified picker may fill a blank; changing, clearing or ruling needs a session
 
-Status: Accepted
+Status: Accepted. Amended 2026-10-25 (#1337): see the Amendment at the end.
 
 Amends the trust model of ADR-0010 (TMOD self-serve editing), which called self-assert "interim …
 when real per-member auth lands". Relates to ADR-0008 (Person vs Membership — the identity this
@@ -218,3 +218,35 @@ class of debt it is.
   that previously succeeded: a signed-in caller can no longer assert somebody else's id into one of
   the four `meeting-authz-logic.ts` consoles. The anonymous arm it sits beside is untouched, so the
   flow the public link exists for is the same flow it was.
+
+## Amendment (2026-10-25, #1337): an unverified claim or confirm reads the plan only
+
+The maintainer decided this on 2026-10-25 and #1337 landed it. It fixes what "unless your answer is
+`not_coming`" means in the Decision table and in the bullet that glosses it, and it replaces the
+roll-aware gate that #1259 (#1257) had put on the same arm.
+
+- **A sessionless (asserted-proof) claim or confirm reads the PLAN and nothing else.** The
+  unverified arm of `claimSlotCore` and `confirmSlotCore` is refused with `SIGN_IN_REQUIRED_MESSAGE`
+  when the member's `meeting_attendance_plan` row is `not_coming`, and for no other reason.
+  `isMemberNotComing` (`attendance-plan-logic.ts`) is the one reader, and it joins no attendance
+  table. A `coming` row, a `reached_out` row, no row, and any record on the roll (Present, Absent,
+  Excused) all leave the arm open.
+- **Why the roll stays out.** The meeting page is public and the roll is members-only; the plan
+  answer is public (`answeredRungs` carries it on the meeting payload). An unverified caller holds no
+  session, and member ids are public identifiers (above), so a gate that read the roll would answer
+  anyone holding the link whether a named member is recorded Absent (refused) or recorded Present
+  after saying Not coming (accepted): the record the loader withholds from a signed-out reader
+  (`loadMeetingDetail`'s `viewerIsMember` gate, #1259). Reading the plan alone makes the answer a
+  function of what the public payload already shows.
+- **What still reads the roll.** The connector's own writes (#1283): the `connector` arm of
+  `claimSlotCore`, and the `claim_open_role` and `set_my_attendance` tools, through
+  `isMemberUnavailable`, where the roll wins when there is one (Absent is unavailable whatever the
+  plan says, Present is available even after Not coming, Excused and no record fall through to the
+  plan). So does the pickers' list, for an ACTIVE member of the club only; a signed-out reader or a
+  non-member gets the plan-only `listNotComingWithNames`. A session-proven claimer or holder is
+  not refused over a decline by this gate on either record, as the table says: a signed-in member
+  may change their own mind.
+- **Superseded.** From #1259 to #1337 the unverified arm was roll-aware: an asserted claim for a
+  member recorded Absent was refused, and one for a member who had said Not coming and was recorded
+  Present was accepted (#1257, acceptance criterion 4). That reading is withdrawn: "your answer"
+  in the Decision table is the plan answer, the one on the public payload.
