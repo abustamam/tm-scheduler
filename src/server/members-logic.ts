@@ -823,14 +823,17 @@ type SetRoleInput = z.infer<typeof setRoleSchema> & RosterActor;
 export async function applySetMemberRole(input: SetRoleInput) {
 	return db.transaction(async (tx) => {
 		// Read under the row lock (#1340): an end-membership racing this change
-		// cannot be overwritten by a promotion computed from a stale read.
+		// cannot be overwritten by a promotion computed from a stale read. NO KEY
+		// UPDATE, not UPDATE: the activity insert below key-shares the ACTOR's
+		// member row, so two admins changing each other's role would deadlock
+		// under FOR UPDATE (#1327 item 3).
 		const [current] = await tx
 			.select()
 			.from(members)
 			.where(
 				and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
 			)
-			.for("update");
+			.for("no key update");
 		if (!current) throw new Error("Member not found.");
 		// A former member holds no role (#1340): ending one writes `member`, and
 		// reactivating restores `member`; a role is set on an active or inactive row.
