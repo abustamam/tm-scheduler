@@ -485,7 +485,7 @@ function SummaryHeadline({ view }: { view: DcpScoreboardView }) {
 		<div
 			className={cn(
 				"rounded-2xl border bg-surface-raised px-6 py-5 shadow-[0_14px_30px_rgba(23,58,64,.06)]",
-				tier ? "border-link" : "border-border",
+				tier ? "border-success" : "border-border",
 			)}
 		>
 			<div className="flex flex-wrap items-center justify-between gap-3">
