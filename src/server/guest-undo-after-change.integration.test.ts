@@ -3,7 +3,8 @@
  * is exactly as convert left it. Every test here starts from the state a later
  * flow leaves behind, then undoes the conversion:
  *
- *   1. a member merge into the membership (both directions),
+ *   1. a member merge into the membership (both directions, and two Person
+ *      merges in a row),
  *   2. a second guest linked to it,
  *   3. a row of its own on a SET NULL key the delete would blank, one test per key,
  *   4. a status the admin changed after convert woke the member.
@@ -36,7 +37,6 @@ import {
 	UNDO_MEMBER_HAS_HISTORY_MESSAGE,
 	UNDO_MEMBERSHIP_MERGED_MESSAGE,
 	UNDO_NO_RECORD_MESSAGE,
-	UNDO_OTHER_GUEST_LINKED_MESSAGE,
 } from "#/lib/guest-convert";
 import {
 	cleanup,
@@ -54,12 +54,18 @@ const {
 	applyLinkGuestToMember,
 	applyUndoGuestConversion,
 	applyUnlinkGuestFromMember,
+	buildUndoKeyPlan,
 	captureGuestVisit,
+	UNDO_DEFERRED_KEYS,
+	UNDO_HANDLED_KEYS,
 	undoKeyPlan,
 } = await import("#/server/guest-pipeline-logic");
-const { applyMemberMerge, applySetMemberStatus } = await import(
-	"#/server/members-logic"
-);
+const {
+	applyMemberEdit,
+	applyMemberMerge,
+	applySetMemberRole,
+	applySetMemberStatus,
+} = await import("#/server/members-logic");
 const { mergePeople } = await import("#/server/people-merge-logic");
 
 describe.skipIf(!hasTestDb)(
@@ -198,8 +204,15 @@ describe.skipIf(!hasTestDb)(
 			return row?.detail as Record<string, unknown> | undefined;
 		}
 
-		/** An older roster row (a person who joined in 2019) for a merge. */
-		async function olderMember(name: string) {
+		/**
+		 * An older roster row (a person who joined in 2019) for a merge. `joinedAt:
+		 * null` is a row with no join date, which a merge folds in without moving the
+		 * keeper's, so only the audit log can say it happened.
+		 */
+		async function olderMember(
+			name: string,
+			joinedAt: Date | null = new Date("2019-03-01T00:00:00Z"),
+		) {
 			const [p] = await testDb
 				.insert(people)
 				.values({ name })
@@ -212,7 +225,7 @@ describe.skipIf(!hasTestDb)(
 					clubId: seed.clubId,
 					personId: p.id,
 					name,
-					joinedAt: new Date("2019-03-01T00:00:00Z"),
+					joinedAt,
 				})
 				.returning({ id: members.id });
 			if (!m) throw new Error("Failed to seed older member");
@@ -300,6 +313,179 @@ describe.skipIf(!hasTestDb)(
 				await expectUntouched(guestId, membershipId);
 			});
 
+			// protects=the audit-log witness on its own: a member with NO join date
+			// merged into the converted membership leaves the keeper's join date where
+			// convert put it (the merge keeps the earliest known), so the join-date
+			// check sees nothing and the `member_merge` row is the only evidence, for
+			// the within-club merge and for the Person merge alike;
+			// fails_when=the created path stops reading the audit log and trusts the
+			// join date (the other refusals in this block all merge a 2019 row, which
+			// the join-date check also catches);
+			// no_claim=that this member's history is worth keeping beyond the roster row
+			it.each([
+				[
+					"a within-club merge",
+					async (ids: { membershipId: string; personId: string }) => {
+						const dup = await olderMember("No Date Dup", null);
+						await applyMemberMerge({
+							clubId: seed.clubId,
+							keeperId: ids.membershipId,
+							absorbedId: dup.membershipId,
+							actorMemberId: seed.adminMemberId,
+						});
+					},
+				],
+				[
+					"a Person merge",
+					async (ids: { membershipId: string; personId: string }) => {
+						const dup = await olderMember("No Date Person Dup", null);
+						await mergePeople({
+							keeperPersonId: ids.personId,
+							absorbedPersonId: dup.personId,
+						});
+					},
+				],
+			])("refuses after %s that left the join date alone", async (label, merge) => {
+				const { guestId, membershipId, personId } = await converted(
+					`No Date ${label}`,
+				);
+				const before = (await memberRow(membershipId))?.joinedAt;
+
+				await merge({ membershipId, personId });
+
+				expect((await memberRow(membershipId))?.joinedAt).toEqual(before);
+				expect(await refusalOf(guestId)).toBe(UNDO_MEMBERSHIP_MERGED_MESSAGE);
+				await expectUntouched(guestId, membershipId);
+			});
+
+			// protects=the Person-merge "away" direction: the converted Person is
+			// ABSORBED, its membership collapses into the older keeper's, the
+			// conversion's record goes with it, and the undo refuses naming the merge
+			// (the no-record branch) and deletes nothing, the keeper included;
+			// fails_when=that branch stops looking at the keeper Person's merge row, or
+			// falls back to the roster-removal advice that would delete the keeper;
+			// no_claim=the within-club away direction (the test above)
+			it("refuses when a Person merge absorbed the converted Person into an older one", async () => {
+				const { guestId, membershipId, personId } =
+					await converted("Person Merged Away");
+				const older = await olderMember("Older Person Keeper");
+				const merged = await mergePeople({
+					keeperPersonId: older.personId,
+					absorbedPersonId: personId,
+				});
+				expect(merged.movedCounts.collapsed).toBe(1);
+				// The conversion's membership is gone into the older keeper's, which the
+				// guest now points at.
+				expect(await memberRow(membershipId)).toBeUndefined();
+				expect((await guestRow(guestId))?.convertedMembershipId).toBe(
+					older.membershipId,
+				);
+
+				const refusal = await refusalOf(guestId);
+
+				expect(refusal).toBe(UNDO_MEMBERSHIP_MERGED_MESSAGE);
+				expect(refusal).not.toBe(UNDO_NO_RECORD_MESSAGE);
+				await expectUntouched(guestId, older.membershipId);
+			});
+
+			// protects=the join-date check on the row itself: two Person merges in a
+			// row (the first folds a 2019 member into the converted membership, the
+			// second moves the membership to a third Person) leave the person-targeted
+			// log row on the Person the membership no longer has, so only the 2019 join
+			// date still says what it holds; the undo refuses and the member stays;
+			// fails_when=the undo trusts the log alone (it returned membershipDeleted:
+			// true and the 2019 member left the roster);
+			// no_claim=that every chain is caught: a merged-in row that joined AFTER
+			// the conversion leaves the join date unchanged
+			it("refuses when two Person merges in a row left the log pointing at a Person the membership no longer has", async () => {
+				const { guestId, membershipId, personId } =
+					await converted("Chain Keeper");
+				const older = await olderMember("Chain Older");
+				const first = await mergePeople({
+					keeperPersonId: personId,
+					absorbedPersonId: older.personId,
+				});
+				expect(first.movedCounts.collapsed).toBe(1);
+				expect((await memberRow(membershipId))?.joinedAt?.getFullYear()).toBe(
+					2019,
+				);
+				// A third Person holding no membership here (the same human's record
+				// elsewhere): absorbing the converted Person moves the membership to it
+				// without collapsing anything, so this merge logs `collapsed: 0`.
+				const [elsewhere] = await testDb
+					.insert(people)
+					.values({ name: "Chain Elsewhere" })
+					.returning({ id: people.id });
+				if (!elsewhere) throw new Error("Failed to seed person");
+				strayPeople.push(elsewhere.id);
+				const second = await mergePeople({
+					keeperPersonId: elsewhere.id,
+					absorbedPersonId: personId,
+				});
+				expect(second.movedCounts.collapsed).toBe(0);
+				const moved = await testDb
+					.select({ personId: members.personId })
+					.from(members)
+					.where(eq(members.id, membershipId));
+				expect(moved[0]?.personId).toBe(elsewhere.id);
+
+				expect(await refusalOf(guestId)).toBe(UNDO_MEMBERSHIP_MERGED_MESSAGE);
+
+				await expectUntouched(guestId, membershipId);
+				expect((await memberRow(membershipId))?.joinedAt?.getFullYear()).toBe(
+					2019,
+				);
+			});
+
+			// protects=the join-date check does not refuse an ordinary conversion: a
+			// membership stamped at the conversion, or an hour off it (app clock
+			// against database clock), is undone;
+			// fails_when=the margin is dropped so any join date before the record's
+			// timestamp refuses;
+			// no_claim=the refusal side (the chain test above)
+			it.each([
+				["just converted", 0],
+				["an hour before the conversion record", 3_600_000],
+				["an hour after it", -3_600_000],
+			])("does not refuse a membership joined %s", async (_label, offsetMs) => {
+				const { guestId, membershipId } = await converted(
+					`Join Margin ${offsetMs}`,
+				);
+				const [made] = await testDb
+					.select({ joinedAt: members.joinedAt })
+					.from(members)
+					.where(eq(members.id, membershipId));
+				expect(made?.joinedAt).toBeTruthy();
+				if (offsetMs !== 0 && made?.joinedAt) {
+					await testDb
+						.update(members)
+						.set({ joinedAt: new Date(made.joinedAt.getTime() - offsetMs) })
+						.where(eq(members.id, membershipId));
+				}
+
+				const res = await undo(guestId);
+
+				expect(res.membershipDeleted).toBe(true);
+				expect(await memberRow(membershipId)).toBeUndefined();
+			});
+
+			// protects=a join date set back by days refuses even when no merge is
+			// logged: the safe side, as the comment on the check says (an admin who
+			// edited the date backwards looks the same as a merge);
+			// fails_when=the check is limited to rows the log also names;
+			// no_claim=that this is always a merge
+			it("refuses a membership whose join date was set back days before the conversion", async () => {
+				const { guestId, membershipId } = await converted("Join Set Back");
+				await testDb
+					.update(members)
+					.set({ joinedAt: new Date(Date.now() - 3 * 24 * 3_600_000) })
+					.where(eq(members.id, membershipId));
+
+				expect(await refusalOf(guestId)).toBe(UNDO_MEMBERSHIP_MERGED_MESSAGE);
+
+				await expectUntouched(guestId, membershipId);
+			});
+
 			it("is not fooled by a guest LINK, which logs member_merge against the membership too", async () => {
 				// `applyLinkGuestToMember` writes `member_merge` with `targetId` the
 				// membership and `detail.fromGuestId`; a member-to-member merge writes
@@ -369,10 +555,9 @@ describe.skipIf(!hasTestDb)(
 
 				const refusal = await refusalOf(guestId);
 
-				expect(refusal).toBe(
-					UNDO_OTHER_GUEST_LINKED_MESSAGE(["Linked Second"]),
+				expect(refusal).toMatch(
+					/^Linked Second is linked to this member too, .*Unlink them, or undo their conversion, first\.$/,
 				);
-				expect(refusal).toContain("Linked Second");
 				await expectUntouched(guestId, membershipId);
 				// The link is exactly as it was: still joined, still pointing here.
 				const linked = await guestRow(other);
@@ -391,8 +576,9 @@ describe.skipIf(!hasTestDb)(
 					});
 				}
 
-				expect(await refusalOf(guestId)).toBe(
-					UNDO_OTHER_GUEST_LINKED_MESSAGE(["Amy Linked", "Zed Linked"]),
+				// Sorted by name, whatever order they were linked in.
+				expect(await refusalOf(guestId)).toMatch(
+					/^Amy Linked and Zed Linked are linked to this member too, /,
 				);
 				await expectUntouched(guestId, membershipId);
 			});
@@ -837,7 +1023,7 @@ describe.skipIf(!hasTestDb)(
 					})
 					.returning({ id: members.id });
 				if (!m) throw new Error("Failed to seed lapsed member");
-				return { membershipId: m.id, email };
+				return { membershipId: m.id, personId: p.id, email };
 			}
 
 			async function wake(name: string, email: string) {
@@ -867,6 +1053,33 @@ describe.skipIf(!hasTestDb)(
 				});
 			}
 
+			function setRole(membershipId: string, clubRole: "admin" | "member") {
+				return applySetMemberRole({
+					clubId: seed.clubId,
+					memberId: membershipId,
+					clubRole,
+					actorMemberId: seed.adminMemberId,
+				});
+			}
+
+			/** The undo wrote nothing to the member: the guest is detached, the record says why. */
+			async function expectLeftAlone(
+				guestId: string,
+				membershipId: string,
+				because: "not_active" | "changed_since",
+				leftAs: "active" | "inactive" | "former",
+			) {
+				const g = await guestRow(guestId);
+				expect(g?.stage).toBe("following_up");
+				expect(g?.convertedMembershipId).toBeNull();
+				const detail = await undoDetail(membershipId);
+				expect(detail?.membershipDeleted).toBe(false);
+				expect(detail).not.toHaveProperty("statusRestoredTo");
+				expect(detail).not.toHaveProperty("clubRoleRestoredTo");
+				expect(detail?.statusLeftAs).toBe(leftAs);
+				expect(detail?.leftBecause).toBe(because);
+			}
+
 			// protects=convert wakes an inactive member, an admin ends the
 			// membership, and the undo no longer writes `inactive` over it: the guest
 			// is detached and the status the admin chose stands, `ended_at` included;
@@ -892,9 +1105,7 @@ describe.skipIf(!hasTestDb)(
 				const g = await guestRow(guestId);
 				expect(g?.stage).toBe("following_up");
 				expect(g?.convertedMembershipId).toBeNull();
-				const detail = await undoDetail(membershipId);
-				expect(detail).not.toHaveProperty("statusRestoredTo");
-				expect(detail?.statusLeftAs).toBe("former");
+				await expectLeftAlone(guestId, membershipId, "not_active", "former");
 			});
 
 			it("does not overwrite a newer ended_at with the stale one", async () => {
@@ -914,6 +1125,7 @@ describe.skipIf(!hasTestDb)(
 				const after = await memberRow(membershipId);
 				expect(after?.status).toBe("former");
 				expect(after?.endedAt).toBe(ended);
+				await expectLeftAlone(guestId, membershipId, "not_active", "former");
 			});
 
 			it("leaves a membership the admin set inactive alone, and the demoted role with it", async () => {
@@ -932,8 +1144,7 @@ describe.skipIf(!hasTestDb)(
 				// Convert wrote the role down; an undo that restored it onto a row it
 				// otherwise leaves alone would be a promotion the admin never made.
 				expect(after?.clubRole).toBe("member");
-				const detail = await undoDetail(membershipId);
-				expect(detail).not.toHaveProperty("clubRoleRestoredTo");
+				await expectLeftAlone(guestId, membershipId, "not_active", "inactive");
 			});
 
 			it("still puts the lapse back while the membership is active", async () => {
@@ -951,7 +1162,228 @@ describe.skipIf(!hasTestDb)(
 				expect(after?.endedAt).toBeNull();
 				const detail = await undoDetail(membershipId);
 				expect(detail?.statusRestoredTo).toBe("inactive");
+				expect(detail?.clubRoleRestoredTo).toBe("admin");
 				expect(detail).not.toHaveProperty("statusLeftAs");
+				expect(detail).not.toHaveProperty("leftBecause");
+			});
+
+			// protects=an edit that touches none of status, role or end date (a rename)
+			// does not stop the undo putting the lapse back, so the gate is not "any
+			// member_edit";
+			// fails_when=the filter on the member_edit detail is dropped and every
+			// edit counts;
+			// no_claim=the edits that do count (the tests below)
+			it("still puts the lapse back after an edit that changes neither status, role nor end date", async () => {
+				const { membershipId, email } = await lapsed("Renamed After Wake", {
+					status: "inactive",
+					clubRole: "admin",
+				});
+				const guestId = await wake("Renamed After Wake", email);
+				await applyMemberEdit({
+					clubId: seed.clubId,
+					memberId: membershipId,
+					name: "Renamed After Wake Two",
+					actorMemberId: seed.adminMemberId,
+				});
+
+				await undo(guestId);
+
+				const after = await memberRow(membershipId);
+				expect(after?.status).toBe("inactive");
+				expect(after?.clubRole).toBe("admin");
+				const detail = await undoDetail(membershipId);
+				expect(detail?.statusRestoredTo).toBe("inactive");
+				expect(detail).not.toHaveProperty("leftBecause");
+			});
+
+			// protects=an admin who ended the woken membership and then re-activated
+			// it made a newer decision that happens to read `active`, like the convert
+			// left it; the undo leaves it active and does not write the stale prior
+			// status and end date over it (it wrote `former` and the 2020 date);
+			// fails_when=the status-edit clause of the changed-since gate is dropped
+			// and `active` alone counts as untouched;
+			// no_claim=the merge clauses (next tests)
+			it("leaves a membership alone that was ended and then re-activated", async () => {
+				const { membershipId, email } = await lapsed("Ended Reactivated", {
+					status: "former",
+					endedAt: "2020-01-15",
+				});
+				const guestId = await wake("Ended Reactivated", email);
+				await setStatus(membershipId, "former");
+				await setStatus(membershipId, "active");
+				expect((await memberRow(membershipId))?.status).toBe("active");
+
+				const res = await undo(guestId);
+
+				expect(res.membershipDeleted).toBe(false);
+				const after = await memberRow(membershipId);
+				expect(after?.status).toBe("active");
+				expect(after?.endedAt).toBeNull();
+				await expectLeftAlone(guestId, membershipId, "changed_since", "active");
+			});
+
+			// protects=the same for the role: an admin who promoted the woken member
+			// and then deliberately demoted them again keeps that decision, and the
+			// recorded prior role (admin) is not written back;
+			// fails_when=the role edit is not among the edits the gate counts;
+			// no_claim=what happens to a role nobody touched (the lapse test above)
+			it("leaves a role alone that an admin promoted and then demoted", async () => {
+				const { membershipId, email } = await lapsed("Role Flip", {
+					status: "inactive",
+					clubRole: "admin",
+				});
+				const guestId = await wake("Role Flip", email);
+				expect((await memberRow(membershipId))?.clubRole).toBe("member");
+				await setRole(membershipId, "admin");
+				await setRole(membershipId, "member");
+
+				await undo(guestId);
+
+				const after = await memberRow(membershipId);
+				expect(after?.status).toBe("active");
+				expect(after?.clubRole).toBe("member");
+				await expectLeftAlone(guestId, membershipId, "changed_since", "active");
+			});
+
+			// protects=the status clause on its own: an inactive-then-active flip logs
+			// `after.status` and no end date (only an edit that ends or reopens a
+			// membership logs one), so it is the case the other clauses cannot catch;
+			// fails_when=the status clause is dropped from the gate;
+			// no_claim=an end-date edit (the next test)
+			it("leaves a membership alone that was set inactive and then active again", async () => {
+				const { membershipId, email } = await lapsed("Inactive Flip", {
+					status: "inactive",
+				});
+				const guestId = await wake("Inactive Flip", email);
+				await setStatus(membershipId, "inactive");
+				await setStatus(membershipId, "active");
+
+				await undo(guestId);
+
+				expect((await memberRow(membershipId))?.status).toBe("active");
+				await expectLeftAlone(guestId, membershipId, "changed_since", "active");
+			});
+
+			// protects=an edit that writes only the end date counts, whatever else it
+			// does: today `applySetMemberStatus` always logs `after.status` beside
+			// `endedAt`, so the row is written by hand in the shape its detail has;
+			// fails_when=the end-date clause is dropped from the gate (a future writer
+			// that corrects an end date without a status change would slip past it);
+			// no_claim=that any writer logs this today
+			it("counts an edit that wrote only the end date", async () => {
+				const { membershipId, email } = await lapsed("End Date Only", {
+					status: "inactive",
+				});
+				const guestId = await wake("End Date Only", email);
+				await testDb.insert(activityLog).values({
+					clubId: seed.clubId,
+					action: "member_edit",
+					targetType: "member",
+					targetId: membershipId,
+					detail: { endedAt: { before: null, after: "2024-06-01" } },
+				});
+
+				await undo(guestId);
+
+				await expectLeftAlone(guestId, membershipId, "changed_since", "active");
+			});
+
+			// protects=an admin's status edit from BEFORE the convert does not stop the
+			// restore: the edit clause is bounded by the conversion record's date;
+			// fails_when=the gate loses its lower bound and any status edit ever
+			// logged on the membership counts;
+			// no_claim=an edit after the convert (the tests above)
+			it("still puts the lapse back when the status edit was before the convert", async () => {
+				const { membershipId, email } = await lapsed("Edited Before Wake", {
+					status: "inactive",
+				});
+				await setStatus(membershipId, "former");
+				await setStatus(membershipId, "inactive");
+				const guestId = await wake("Edited Before Wake", email);
+
+				await undo(guestId);
+
+				expect((await memberRow(membershipId))?.status).toBe("inactive");
+				const detail = await undoDetail(membershipId);
+				expect(detail?.statusRestoredTo).toBe("inactive");
+				expect(detail).not.toHaveProperty("leftBecause");
+			});
+
+			// protects=an active duplicate merged into the woken membership brings its
+			// own status; the undo does not set the merged member inactive (it did);
+			// fails_when=the within-club merge arm is dropped from the changed-since
+			// gate on the reuse path;
+			// no_claim=the Person-level merge (next test)
+			it("leaves a membership alone that an active duplicate was merged into", async () => {
+				const { membershipId, email } = await lapsed("Merged Into Woken", {
+					status: "inactive",
+				});
+				const guestId = await wake("Merged Into Woken", email);
+				const dup = await olderMember("Merged Dup");
+				await applyMemberMerge({
+					clubId: seed.clubId,
+					keeperId: membershipId,
+					absorbedId: dup.membershipId,
+					actorMemberId: seed.adminMemberId,
+				});
+				expect((await memberRow(membershipId))?.status).toBe("active");
+
+				const res = await undo(guestId);
+
+				expect(res.membershipDeleted).toBe(false);
+				expect((await memberRow(membershipId))?.status).toBe("active");
+				await expectLeftAlone(guestId, membershipId, "changed_since", "active");
+			});
+
+			it("leaves a membership alone that a Person merge collapsed a duplicate into", async () => {
+				const { membershipId, personId, email } = await lapsed(
+					"Person Merged Woken",
+					{ status: "inactive" },
+				);
+				const guestId = await wake("Person Merged Woken", email);
+				const dup = await olderMember("Person Merged Dup");
+				const merged = await mergePeople({
+					keeperPersonId: personId,
+					absorbedPersonId: dup.personId,
+				});
+				expect(merged.movedCounts.collapsed).toBe(1);
+
+				await undo(guestId);
+
+				expect((await memberRow(membershipId))?.status).toBe("active");
+				await expectLeftAlone(guestId, membershipId, "changed_since", "active");
+			});
+
+			// protects=a merge that happened BEFORE the convert does not stop the
+			// restore: the gate is bounded by the conversion record's date;
+			// fails_when=the changed-since gate loses its lower bound and any merge
+			// ever logged on the membership counts;
+			// no_claim=a merge after the convert (the tests above)
+			it("still puts the lapse back when the merge was before the convert", async () => {
+				const { membershipId, email } = await lapsed("Merged Before Wake", {
+					status: "inactive",
+				});
+				const dup = await olderMember("Merged Before Dup");
+				await applyMemberMerge({
+					clubId: seed.clubId,
+					keeperId: membershipId,
+					absorbedId: dup.membershipId,
+					actorMemberId: seed.adminMemberId,
+				});
+				// The merge folded the active duplicate in; put the lapse back by hand,
+				// as it would have been when the convert ran.
+				await testDb
+					.update(members)
+					.set({ status: "inactive" })
+					.where(eq(members.id, membershipId));
+				const guestId = await wake("Merged Before Wake", email);
+
+				await undo(guestId);
+
+				expect((await memberRow(membershipId))?.status).toBe("inactive");
+				const detail = await undoDetail(membershipId);
+				expect(detail?.statusRestoredTo).toBe("inactive");
+				expect(detail).not.toHaveProperty("leftBecause");
 			});
 
 			it("still puts a former membership's end date back while it is active", async () => {
@@ -1027,6 +1459,36 @@ describe.skipIf(!hasTestDb)(
 			);
 		}
 
+		// protects=a name in the handled or deferred list that is no foreign key to
+		// `members` (a column renamed or dropped, a typo) fails the build of the
+		// table instead of sitting there claiming a key the undo no longer has;
+		// fails_when=the build checks only the refusal list, as it once did;
+		// no_claim=that the real lists are right (the tests above compare them with
+		// the live constraints)
+		it.each([
+			["handled", "guests.no_such_member_id"],
+			["deferred", "meeting_votes.no_such_member_id"],
+		])("throws when the %s list names a column that is no key to members", (list, key) => {
+			expect(() =>
+				buildUndoKeyPlan(
+					{
+						...UNDO_HANDLED_KEYS,
+						...(list === "handled" ? { [key]: "stale" } : {}),
+					},
+					{
+						...UNDO_DEFERRED_KEYS,
+						...(list === "deferred"
+							? { [key]: { issue: 1, reason: "stale" } }
+							: {}),
+					},
+				),
+			).toThrow(`${key} is ${list} but is no foreign key to members`);
+		});
+
+		it("builds from the real lists", () => {
+			expect(() => buildUndoKeyPlan()).not.toThrow();
+		});
+
 		it("classifies exactly the foreign keys `pg_constraint` has, whatever their ON DELETE", async () => {
 			// ALL of them, not the CASCADE subset the older drift guard reads: a SET
 			// NULL key is blanked by the undo's delete, and was the half nobody
@@ -1048,7 +1510,8 @@ describe.skipIf(!hasTestDb)(
 						expect(cls.check.columns, key).toContain(key);
 						break;
 					case "blank":
-						expect(cls.column, key).toBeDefined();
+						expect(cls.fk.key, key).toBe(key);
+						expect(cls.fk.column, key).toBeDefined();
 						break;
 					case "handled":
 						expect(

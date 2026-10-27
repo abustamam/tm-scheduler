@@ -5,6 +5,10 @@ import {
 	CONVERT_REACTIVATED_MESSAGE,
 	convertNoticeDescription,
 	isStrandedConvertedGuest,
+	JOIN_DATE_MARGIN_MS,
+	joinedBeforeConversion,
+	UNDO_MEMBERSHIP_MERGED_MESSAGE,
+	UNDO_OTHER_GUEST_LINKED_MESSAGE,
 } from "./guest-convert";
 import { ROSTER_CONFLICT_COPY } from "./roster-conflict-copy";
 
@@ -206,5 +210,103 @@ describe("isStrandedConvertedGuest", () => {
 				convertedMembershipId: null,
 			}),
 		).toBe(false);
+	});
+});
+
+/**
+ * The refusal that names the guests still attached to a membership (#1322).
+ * Literal expected strings on purpose: a test that built its expectation with
+ * the builder itself could not see a defect that is on both sides.
+ */
+describe("UNDO_OTHER_GUEST_LINKED_MESSAGE", () => {
+	const TAIL =
+		"so undoing the conversion would delete the member and leave them " +
+		"without one. Unlink them, or undo their conversion, first.";
+
+	// protects=the one-guest branch names the guest and agrees in number;
+	// fails_when=the singular drops the name or says "are";
+	// no_claim=the longer lists (next tests)
+	it("names one guest", () => {
+		expect(UNDO_OTHER_GUEST_LINKED_MESSAGE(["Amy"])).toBe(
+			`Amy is linked to this member too, ${TAIL}`,
+		);
+	});
+
+	it("joins two guests with and", () => {
+		expect(UNDO_OTHER_GUEST_LINKED_MESSAGE(["Amy", "Bob"])).toBe(
+			`Amy and Bob are linked to this member too, ${TAIL}`,
+		);
+	});
+
+	it("lists three guests with commas and a final and", () => {
+		expect(UNDO_OTHER_GUEST_LINKED_MESSAGE(["Amy", "Bob", "Cy"])).toBe(
+			`Amy, Bob and Cy are linked to this member too, ${TAIL}`,
+		);
+	});
+
+	it("shows three and counts the rest past three", () => {
+		expect(
+			UNDO_OTHER_GUEST_LINKED_MESSAGE(["Amy", "Bob", "Cy", "Di", "Ed"]),
+		).toBe(`Amy, Bob, Cy and 2 more are linked to this member too, ${TAIL}`);
+	});
+
+	// protects=the remedy fits a guest that was CONVERTED onto the member, which
+	// cannot be unlinked ("This guest isn't linked to a member"): it has to name
+	// undoing that conversion as well;
+	// fails_when=the wording goes back to "Unlink them first";
+	// no_claim=that the undo of the other guest works (the pipeline suites)
+	it("names undoing a conversion as a remedy, not only unlinking", () => {
+		expect(UNDO_OTHER_GUEST_LINKED_MESSAGE(["Amy"])).toMatch(
+			/Unlink them, or undo their conversion, first\.$/,
+		);
+	});
+});
+
+/**
+ * The merged refusal fires from two branches, one of which cannot order the
+ * merge against the conversion, so the text must not claim an order (#1322).
+ */
+describe("UNDO_MEMBERSHIP_MERGED_MESSAGE", () => {
+	it("says the member was merged, and not when", () => {
+		expect(UNDO_MEMBERSHIP_MERGED_MESSAGE).toBe(
+			"This member was merged with another roster entry, so undoing the " +
+				"conversion would delete the merged member. Set them inactive or " +
+				"former instead.",
+		);
+		expect(UNDO_MEMBERSHIP_MERGED_MESSAGE).not.toMatch(/after/i);
+	});
+});
+
+/**
+ * The join-date test that catches a merge the audit log lost (#1322).
+ */
+describe("joinedBeforeConversion", () => {
+	const converted = new Date("2026-10-26T12:00:00Z");
+	const ago = (ms: number) => new Date(converted.getTime() - ms);
+
+	it("is false for a membership with no join date", () => {
+		expect(joinedBeforeConversion(null, converted)).toBe(false);
+	});
+
+	it("is false for a join date at the conversion, or a little off it", () => {
+		expect(joinedBeforeConversion(converted, converted)).toBe(false);
+		// App clock ahead of or behind the database clock.
+		expect(joinedBeforeConversion(ago(-60_000), converted)).toBe(false);
+		expect(joinedBeforeConversion(ago(3_600_000), converted)).toBe(false);
+	});
+
+	it("is false at exactly the margin and true just past it", () => {
+		expect(joinedBeforeConversion(ago(JOIN_DATE_MARGIN_MS), converted)).toBe(
+			false,
+		);
+		expect(
+			joinedBeforeConversion(ago(JOIN_DATE_MARGIN_MS + 1), converted),
+		).toBe(true);
+	});
+
+	it("is true for a join date years before it, the shape of a merged older row", () => {
+		expect(
+			joinedBeforeConversion(new Date("2019-03-01T00:00:00Z"), converted),
+		).toBe(true);
 	});
 });
