@@ -43,7 +43,12 @@ import {
 } from "#/server/availability";
 import type { SeasonGridCount, SeasonGridData } from "#/server/season-grid";
 import { claimSlot, releaseSlot } from "#/server/slots";
-import { CELL_BASE, CELL_KIND_CLASS, GridCell } from "./grid-cell";
+import {
+	CELL_BASE,
+	CELL_KIND_CLASS,
+	GridCell,
+	type PendingWrite,
+} from "./grid-cell";
 import { MeetingLink } from "./meeting-link";
 import { MemberRolePicker } from "./member-role-picker";
 
@@ -139,7 +144,16 @@ export function SeasonGrid({
 	const scrollerRef = useRef<HTMLDivElement>(null);
 	const labelHeadRef = useRef<HTMLTableCellElement>(null);
 	const selfRowRef = useRef<HTMLTableRowElement>(null);
-	const [busySlotId, setBusySlotId] = useState<string | null>(null);
+	// Optimistic claim/release, keyed by slotId (#1315). The entry is an object
+	// so a later write on the same slot is not cleared by an earlier one's
+	// `finally`. It applies only while loader data still shows the pre-write
+	// state (`pendingApplies`), so fresh data never double-counts.
+	const [pending, setPending] = useState<ReadonlyMap<string, PendingWrite>>(
+		new Map(),
+	);
+	// A claim's identity-picker window is not yet `pending`; this ref keeps a
+	// second tap on the same cell from opening a duplicate claim meanwhile.
+	const claimingRef = useRef(new Set<string>());
 	const [busyMeetingId, setBusyMeetingId] = useState<string | null>(null);
 	// The assigned-cell confirm: releasing a role + marking unavailable. When
 	// `memberName` is set, an officer is acting on that member (not themselves).
@@ -174,23 +188,86 @@ export function SeasonGrid({
 		selfRowRef.current?.scrollIntoView({ block: "center", inline: "nearest" });
 	}, [orientation]);
 
+	function startPending(slotId: string, write: PendingWrite) {
+		setPending((prev) => new Map(prev).set(slotId, write));
+	}
+	function endPending(slotId: string, write: PendingWrite) {
+		setPending((prev) => {
+			if (prev.get(slotId) !== write) return prev;
+			const next = new Map(prev);
+			next.delete(slotId);
+			return next;
+		});
+	}
+	const memberNameById = new Map(data.memberNames.map((n) => [n.id, n.name]));
+	// The slot's state in loader data, for `pendingApplies`.
+	const slotState = new Map(
+		data.cells.map((c) => [
+			c.slotId,
+			{ open: c.memberId === null && c.guestId === null, memberId: c.memberId },
+		]),
+	);
+	function pendingApplies(slotId: string | null): PendingWrite | null {
+		if (!slotId) return null;
+		const write = pending.get(slotId);
+		const state = slotState.get(slotId);
+		if (!write || !state) return null;
+		if (write.kind === "claim") return state.open ? write : null;
+		if (currentMemberId && state.memberId === currentMemberId) return write;
+		// The Undo of a resolved claim while the claim's refetch is still in
+		// flight: loader data shows the slot open, yet the cell must read as
+		// releasing (open, busy), not as a tappable Claim.
+		return write.afterClaim && state.open ? write : null;
+	}
+	const meetingOpenDelta = new Map<string, number>();
+	for (const c of data.cells) {
+		const w = pendingApplies(c.slotId);
+		if (!w) continue;
+		// A release over a slot loader data already shows open adds nothing: the
+		// column's count already includes it.
+		const delta =
+			w.kind === "claim"
+				? -1
+				: c.memberId === null && c.guestId === null
+					? 0
+					: 1;
+		meetingOpenDelta.set(
+			c.meetingId,
+			(meetingOpenDelta.get(c.meetingId) ?? 0) + delta,
+		);
+	}
+
+	// The write succeeded, so a failed refetch is not the write's error.
+	async function refetchQuietly(what: string) {
+		try {
+			await onChanged?.();
+		} catch (err) {
+			console.error(`Refetch after ${what} failed`, err);
+		}
+	}
+
 	async function claim(slotId: string) {
-		// Busy set BEFORE the (possibly multi-second) identity-picker await, so
-		// the tapped cell disables for the whole window — otherwise a second tap
-		// while the picker is open could fire a duplicate claim.
-		setBusySlotId(slotId);
+		// Guard the (possibly multi-second) identity-picker await: a second tap
+		// while the picker is open must not fire a duplicate claim.
+		if (claimingRef.current.has(slotId)) return;
+		claimingRef.current.add(slotId);
+		let entry: PendingWrite | null = null;
 		try {
 			let memberId = currentMemberId;
 			if (!memberId && requireIdentity) {
 				const me = await requireIdentity();
-				if (!me) return; // dismissed — finally clears busy
+				if (!me) return; // dismissed — nothing was set
 				memberId = me.id;
 			}
 			if (!memberId) return;
+			entry = { kind: "claim", name: memberNameById.get(memberId) ?? null };
+			startPending(slotId, entry);
 			const { proof } = await claimSlot({
 				data: { slotId, memberId, actorMemberId: memberId },
 			});
-			await onChanged?.();
+			// The write is done: free the slot for an Undo-then-claim during the
+			// refetch below (a held ref would swallow that tap).
+			claimingRef.current.delete(slotId);
 			// UNDO ONLY FOR A PROVEN WRITER (#763, ADR-0026). Undo is
 			// `releaseSlot`, which needs a session; a claim is open to an anonymous
 			// roster pick and reports which of the two just happened. Read from the
@@ -199,22 +276,24 @@ export function SeasonGrid({
 			// only the server knows that. Anything but `"session"` fails closed.
 			toast.success("Role claimed.", {
 				...(proof === "session"
-					? { action: { label: "Undo", onClick: () => release(slotId) } }
+					? { action: { label: "Undo", onClick: () => release(slotId, true) } }
 					: {}),
 			});
+			await refetchQuietly("claim");
 		} catch (err) {
 			showWriteError(err, "Couldn't claim role.");
 		} finally {
-			setBusySlotId(null);
+			claimingRef.current.delete(slotId);
+			if (entry) endPending(slotId, entry);
 		}
 	}
 
 	// No actor on the wire (#763): the server credits the session.
-	async function release(slotId: string) {
-		setBusySlotId(slotId);
+	async function release(slotId: string, afterClaim = false) {
+		const entry: PendingWrite = { kind: "release", afterClaim };
+		startPending(slotId, entry);
 		try {
 			await releaseSlot({ data: { slotId } });
-			await onChanged?.();
 			// Only your OWN cell is wired to `release` (`onRelease` is passed to
 			// GridCell, which renders it for `isMine` alone, and the claim-Undo is
 			// your own claim), so the holder here is always the viewer.
@@ -222,10 +301,11 @@ export function SeasonGrid({
 				duration: DUTY_TOAST_MS,
 				action: { label: "Undo", onClick: () => claim(slotId) },
 			});
+			await refetchQuietly("release");
 		} catch (err) {
 			showWriteError(err, "Couldn't release role.");
 		} finally {
-			setBusySlotId(null);
+			endPending(slotId, entry);
 		}
 	}
 
@@ -419,7 +499,7 @@ export function SeasonGrid({
 				{clubSlug ? (
 					"Roster view"
 				) : (
-					<Link to="/roster" className="font-medium text-primary underline">
+					<Link to="/roster" className="font-semibold text-primary underline">
 						Roster view
 					</Link>
 				)}
@@ -449,7 +529,7 @@ export function SeasonGrid({
 					))}
 				</div>
 				<div className="inline-flex items-center gap-2">
-					<span className="text-xs font-medium text-muted-foreground">
+					<span className="text-xs font-semibold text-muted-foreground">
 						Meetings shown
 					</span>
 					<div className="inline-flex overflow-hidden rounded-lg border">
@@ -472,7 +552,7 @@ export function SeasonGrid({
 				</div>
 				{onPastCountChange ? (
 					<div className="inline-flex items-center gap-2">
-						<span className="text-xs font-medium text-muted-foreground">
+						<span className="text-xs font-semibold text-muted-foreground">
 							Show past
 						</span>
 						<div className="inline-flex overflow-hidden rounded-lg border">
@@ -549,11 +629,15 @@ export function SeasonGrid({
 									// `meeting-personal-strip.tsx` makes the same split for the
 									// same write.
 									const chipIsControl = !status?.declined || provenIdentity;
+									const openNow = Math.max(
+										0,
+										m.openCount + (meetingOpenDelta.get(m.id) ?? 0),
+									);
 									const header = (
 										<>
 											<div>{formatMeetingDate(m.scheduledAt, m.timezone)}</div>
 											{m.isCompleted ? (
-												<div className="flex items-center justify-center gap-0.5 text-[10px] font-semibold text-muted-foreground">
+												<div className="flex items-center justify-center gap-0.5 text-xs font-semibold text-muted-foreground">
 													<Lock className="size-2.5" aria-hidden />
 													locked
 												</div>
@@ -561,12 +645,12 @@ export function SeasonGrid({
 												// "ended", not "done": a past meeting still accepts
 												// late sign-ups (recording who stepped in), so the
 												// label shouldn't read as closed.
-												<div className="text-[10px] font-medium text-warning-foreground">
+												<div className="text-xs font-semibold text-warning-foreground tabular-nums">
 													{m.isPast
 														? "ended"
-														: m.openCount === 0
+														: openNow === 0
 															? "full"
-															: `${m.openCount} open`}
+															: `${openNow} open`}
 												</div>
 											)}
 										</>
@@ -616,7 +700,7 @@ export function SeasonGrid({
 													className={cn(
 														// px-2.5/py-1/11px (was px-1.5/py-0.5/10px): the chip is a
 														// primary mobile action — 19px tall was too small to tap.
-														"mx-auto mt-1 flex cursor-pointer items-center gap-0.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap transition-colors disabled:opacity-50",
+														"mx-auto mt-1 flex cursor-pointer items-center gap-0.5 rounded-full border px-2.5 py-1 text-xs font-semibold whitespace-nowrap transition-colors disabled:opacity-50",
 														// Below md the pill gets a bit more padding (~33px) and an
 														// invisible ::after pad tops it up to a ≥44px hit area:
 														// 4px up (exactly the mt-1 gap, so it never covers the
@@ -627,7 +711,7 @@ export function SeasonGrid({
 															? // Same fill recipe as the destructive Button variant, so
 																// white text stays AA in dark (destructive/60 ⇒ 6.0:1).
 																"border-destructive bg-destructive text-white hover:opacity-80 dark:border-destructive/60 dark:bg-destructive/60"
-															: "border-border text-muted-foreground/70 hover:border-destructive/50 hover:text-destructive",
+															: "border-border text-muted-foreground hover:border-destructive/50 hover:text-destructive",
 													)}
 												>
 													{busyMeetingId === m.id ? (
@@ -722,7 +806,7 @@ export function SeasonGrid({
 												row.label
 											)}
 											{isSelfRow ? (
-												<span className="ml-1.5 inline-flex items-center rounded-full bg-primary px-1.5 py-0.5 align-middle text-[10px] font-semibold leading-none text-primary-foreground">
+												<span className="ml-1.5 inline-flex items-center rounded-full bg-primary px-1.5 py-0.5 align-middle text-xs font-semibold leading-none text-primary-foreground">
 													You
 												</span>
 											) : null}
@@ -787,7 +871,7 @@ export function SeasonGrid({
 																	CELL_KIND_CLASS[cell.kind],
 																	"w-full cursor-pointer transition-[filter,border-color] hover:brightness-95 disabled:opacity-50",
 																	cell.kind === "free" &&
-																		"group/cell hover:border-[var(--lagoon-deep)] hover:text-[var(--lagoon-deep)] focus-visible:border-[var(--lagoon-deep)] focus-visible:text-[var(--lagoon-deep)]",
+																		"group/cell hover:border-link hover:text-link focus-visible:border-link focus-visible:text-link",
 																)}
 															>
 																{cell.kind === "free" ? (
@@ -814,7 +898,7 @@ export function SeasonGrid({
 																{cell.contacted ? (
 																	<span
 																		aria-hidden
-																		className="ml-1 inline-block size-1.5 rounded-full bg-[var(--success-strong)]"
+																		className="ml-1 inline-block size-1.5 rounded-full bg-success-strong"
 																	/>
 																) : null}
 															</button>
@@ -828,10 +912,8 @@ export function SeasonGrid({
 														cell={cell}
 														currentMemberId={actingMemberId}
 														prospectiveClaim={prospectiveClaim}
-														busy={
-															(!!cell.slotId && busySlotId === cell.slotId) ||
-															busyMeetingId === cell.meetingId
-														}
+														pending={pendingApplies(cell.slotId)}
+														busy={busyMeetingId === cell.meetingId}
 														// A completed or past meeting is locked: the server refuses the claim
 														// (#1107), so the grid offers no control for it.
 														onClaim={m && isLocked(m) ? undefined : claim}
@@ -908,7 +990,7 @@ export function SeasonGrid({
 			    for unavailable — compact on purpose, decoded here once. Quiet: one
 			    wrapping muted line under the grid. */}
 			{orientation === "members" && data.rows.length > 0 ? (
-				<p className="text-[11px] leading-relaxed text-muted-foreground">
+				<p className="text-xs leading-relaxed text-muted-foreground">
 					{data.rows.map((r) => (
 						<span
 							key={`${r.roleDefinitionId}:${r.slotIndex}`}

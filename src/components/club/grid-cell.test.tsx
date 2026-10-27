@@ -181,3 +181,56 @@ describe("GridCell state classes (#1308)", () => {
 		).toEqual([]);
 	});
 });
+
+describe("GridCell optimistic claim (#1315)", () => {
+	// protects=a pending claim renders mine with a Check and aria-busy, no spinner; fails_when=Loader2 returns or aria-busy is missing; no_claim=the 200ms transition (reduced-motion test)
+	it("a pending claim shows Check, the claimer's name and aria-busy, with no spinner", () => {
+		render(
+			<GridCell
+				cell={openCell}
+				currentMemberId="me"
+				onClaim={vi.fn()}
+				pending={{ kind: "claim", name: "Mia Mine" }}
+			/>,
+		);
+		const btn = screen.getByRole("button");
+		expect(btn.getAttribute("aria-busy")).toBe("true");
+		expect((btn as HTMLButtonElement).disabled).toBe(true);
+		expect(btn.className).toContain("bg-success");
+		expect(btn.querySelector("svg.lucide-check")).not.toBeNull();
+		expect(btn.querySelector(".animate-spin")).toBeNull();
+		expect(btn.textContent).toBe("Mia Mine");
+	});
+
+	// protects=the availability toggle keeps its spinner (criterion 10); fails_when=the spinner is removed there too; no_claim=season-grid does not mount this branch
+	it("the availability toggle still shows a spinner while busy", () => {
+		render(
+			<GridCell
+				cell={openCell}
+				currentMemberId="me"
+				availabilityEditable
+				onAvailability={vi.fn()}
+				busy
+			/>,
+		);
+		expect(
+			screen.getByRole("button").querySelector(".animate-spin"),
+		).not.toBeNull();
+	});
+});
+
+describe("GridCell pending claim label (#1315)", () => {
+	// protects=a pending claim with no known name falls back to the cell's text; fails_when=the label blanks; no_claim=none
+	it("falls back to the cell text when the claimer's name is unknown", () => {
+		render(
+			<GridCell
+				cell={openCell}
+				currentMemberId="me"
+				pending={{ kind: "claim", name: null }}
+				onClaim={() => {}}
+			/>,
+		);
+		const btn = screen.getByRole("button", { name: /^Claiming Timer/ });
+		expect(btn.textContent).toBe("Timer");
+	});
+});
