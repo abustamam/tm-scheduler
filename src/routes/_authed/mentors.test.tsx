@@ -457,6 +457,17 @@ describe("asking a mentor (#1209)", () => {
 		});
 	});
 
+	// protects=each mentor's Ask is an outline button, so a list of mentors is
+	// not a stack of equal filled primaries (DESIGN.md, one primary per screen);
+	// fails_when=any Ask renders as the default filled variant;
+	// no_claim=the rendered colors (jsdom has no stylesheet)
+	it("offers Ask on every mentor as an outline button", async () => {
+		await renderPage({ refused: null, mentors: [mentorMia, mentorBo] });
+		const asks = screen.getAllByRole("button", { name: "Ask to mentor me" });
+		expect(asks).toHaveLength(2);
+		for (const b of asks) expect(b.dataset.variant).toBe("outline");
+	});
+
 	// protects=after a decline the page says "{name} can't take you on right
 	// now. You can ask someone else." with no reason, and the Ask buttons are
 	// on; an accepted or withdrawn latest request says nothing;

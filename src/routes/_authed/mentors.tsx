@@ -325,8 +325,11 @@ function AskToMentor({
 
 	return (
 		<>
+			{/* Outline: one per mentor, so a filled primary here would put several
+			    equal primaries on the screen (DESIGN.md). */}
 			<Button
 				size="sm"
+				variant="outline"
 				className="mt-3"
 				disabled={disabled || firstFree === null}
 				onClick={() => {
