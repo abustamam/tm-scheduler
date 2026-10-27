@@ -6,6 +6,7 @@ import {
 	RouterProvider,
 } from "@tanstack/react-router";
 import {
+	act,
 	cleanup,
 	render,
 	screen,
@@ -13,6 +14,7 @@ import {
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StoredMember } from "#/lib/member-identity";
 import type { SeasonGridData } from "#/server/season-grid";
@@ -1138,5 +1140,219 @@ describe("SeasonGrid: role-duty copy on release (#1280)", () => {
 			await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
 			expect(toastSuccess.mock.calls[0]?.[0]).toBe(expected);
 		}
+	});
+});
+
+describe("SeasonGrid: optimistic claim and release (#1315)", () => {
+	const ME = "me-1";
+	const withHolder = (memberId: string | null): SeasonGridData => ({
+		...data,
+		meetings: [{ ...data.meetings[0]!, openCount: memberId ? 0 : 1 }],
+		memberNames: [{ id: ME, name: "Mia Mine" }],
+		cells: [
+			{
+				slotId: "slot-1",
+				meetingId: "m1",
+				roleDefinitionId: "ti",
+				slotIndex: 0,
+				memberId,
+				guestId: null,
+				status: memberId ? "claimed" : "open",
+			},
+		],
+	});
+	const twoOpen: SeasonGridData = {
+		...withHolder(null),
+		meetings: [{ ...data.meetings[0]!, openCount: 2 }],
+		rows: [
+			...data.rows,
+			{
+				roleDefinitionId: "ah",
+				slotIndex: 0,
+				label: "Ah-Counter",
+				shortCode: "Ah",
+				sortOrder: 1,
+				isSpeakerRole: false,
+			},
+		],
+		cells: [
+			...withHolder(null).cells,
+			{
+				slotId: "slot-2",
+				meetingId: "m1",
+				roleDefinitionId: "ah",
+				slotIndex: 0,
+				memberId: null,
+				guestId: null,
+				status: "open",
+			},
+		],
+	};
+	const deferred = <T,>() => {
+		let resolve!: (v: T) => void;
+		let reject!: (e: unknown) => void;
+		const promise = new Promise<T>((res, rej) => {
+			resolve = res;
+			reject = rej;
+		});
+		return { promise, resolve, reject };
+	};
+
+	afterEach(() => {
+		claimSlot.mockReset();
+		claimSlot.mockResolvedValue({ ok: true, proof: "session" });
+		releaseSlot.mockReset();
+		releaseSlot.mockResolvedValue({ ok: true });
+		toastSuccess.mockClear();
+		toastError.mockClear();
+	});
+
+	const mount = (d: SeasonGridData, onChanged?: () => Promise<void>) =>
+		renderUnderMemoryRouter(
+			<SeasonGrid
+				data={d}
+				orientation="roles"
+				count="all"
+				currentMemberId={ME}
+				currentMemberSource="session"
+				onChanged={onChanged}
+			/>,
+		);
+
+	// protects=a tap shows the claim at once; fails_when=the cell waits for the server or keeps a spinner; no_claim=server-side count is not exercised
+	it("fills the cell as mine and ticks the count down while claimSlot is unresolved", async () => {
+		const d = deferred<{ ok: true; proof: "session" }>();
+		claimSlot.mockReturnValueOnce(d.promise);
+		await mount(twoOpen);
+		expect(screen.getByText("2 open")).toBeTruthy();
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Claim Timer/ }),
+		);
+		const cellBtn = await screen.findByRole("button", {
+			name: /^Claiming Timer/,
+		});
+		expect(cellBtn.getAttribute("aria-busy")).toBe("true");
+		expect(cellBtn.className).toContain("bg-success");
+		expect(cellBtn.querySelector("svg.lucide-check")).not.toBeNull();
+		expect(cellBtn.querySelector(".animate-spin")).toBeNull();
+		expect(cellBtn.textContent).toContain("Mia Mine");
+		expect(screen.getByText("1 open")).toBeTruthy();
+		await act(async () => d.resolve({ ok: true, proof: "session" }));
+	});
+
+	// protects=a failed claim restores the cell and count; fails_when=the optimistic fill sticks; no_claim=none
+	it("rolls back the cell and count and shows the error when claimSlot rejects", async () => {
+		const d = deferred<{ ok: true; proof: "session" }>();
+		claimSlot.mockReturnValueOnce(d.promise);
+		await mount(twoOpen);
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Claim Timer/ }),
+		);
+		expect(await screen.findByText("1 open")).toBeTruthy();
+		await act(async () => d.reject(new Error("Slot taken")));
+		await screen.findByText("2 open");
+		expect(screen.getByRole("button", { name: /^Claim Timer/ })).toBeTruthy();
+		expect(toastError).toHaveBeenCalledWith("Slot taken");
+		expect(toastSuccess).not.toHaveBeenCalled();
+	});
+
+	// protects=a dismissed picker changes nothing; fails_when=the cell fills before identity is known; no_claim=none
+	it("changes nothing when the identity picker is dismissed", async () => {
+		await renderGrid(vi.fn(async () => null));
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Claim Timer/ }),
+		);
+		expect(screen.getByText("1 open")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /^Claiming/ })).toBeNull();
+		expect(claimSlot).not.toHaveBeenCalled();
+	});
+
+	// protects=release shows the role freed at once; fails_when=count stays or spinner shows; no_claim=none
+	it("release ticks the count up as an open Claim cell, and restores on rejection", async () => {
+		const d = deferred<{ ok: true }>();
+		releaseSlot.mockReturnValueOnce(d.promise);
+		await mount(withHolder(ME));
+		expect(screen.getByText("full")).toBeTruthy();
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Release / }),
+		);
+		const cellBtn = await screen.findByRole("button", {
+			name: /^Releasing /,
+		});
+		expect(cellBtn.getAttribute("aria-busy")).toBe("true");
+		expect(cellBtn.textContent).toBe("Claim");
+		expect(screen.getByText("1 open")).toBeTruthy();
+		await act(async () => d.reject(new Error("nope")));
+		await screen.findByText("full");
+		expect(screen.getByRole("button", { name: /^Release / })).toBeTruthy();
+		expect(toastError).toHaveBeenCalledWith("nope");
+	});
+
+	// protects=the column reads full when the optimistic count reaches 0; fails_when=a stale 0 open or negative; no_claim=none
+	it("reads full when the optimistic count reaches 0", async () => {
+		const d = deferred<{ ok: true; proof: "session" }>();
+		claimSlot.mockReturnValueOnce(d.promise);
+		await mount(withHolder(null));
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Claim Timer/ }),
+		);
+		expect(await screen.findByText("full")).toBeTruthy();
+		await act(async () => d.resolve({ ok: true, proof: "session" }));
+	});
+
+	// protects=a failed refetch is not a claim error; fails_when=the error toast shows or the entry sticks; no_claim=the refetch itself
+	it("a refetch that fails after a successful claim shows the success toast, no error, and clears the entry", async () => {
+		const consoleError = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => {});
+		await mount(twoOpen, async () => {
+			throw new Error("refetch down");
+		});
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Claim Timer/ }),
+		);
+		await waitFor(() =>
+			expect(toastSuccess.mock.calls[0]?.[0]).toBe("Role claimed."),
+		);
+		expect(toastError).not.toHaveBeenCalled();
+		// Loader data never changed, so with the entry cleared the cell is open.
+		await screen.findByText("2 open");
+		expect(screen.queryByRole("button", { name: /^Claiming/ })).toBeNull();
+		consoleError.mockRestore();
+	});
+
+	// protects=fresh loader data does not double-count a still-pending entry; fails_when=count drops by two; no_claim=none
+	it("lowers the count by exactly one when loader data already shows the claim and the entry is pending", async () => {
+		const d = deferred<{ ok: true; proof: "session" }>();
+		claimSlot.mockReturnValueOnce(d.promise);
+		let setData!: (d: SeasonGridData) => void;
+		function Harness() {
+			const [cur, set] = useState(twoOpen);
+			setData = set;
+			return (
+				<SeasonGrid
+					data={cur}
+					orientation="roles"
+					count="all"
+					currentMemberId={ME}
+					currentMemberSource="session"
+				/>
+			);
+		}
+		await renderUnderMemoryRouter(<Harness />);
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Claim Timer/ }),
+		);
+		expect(await screen.findByText("1 open")).toBeTruthy();
+		const claimed: SeasonGridData = {
+			...twoOpen,
+			meetings: [{ ...twoOpen.meetings[0]!, openCount: 1 }],
+			cells: twoOpen.cells.map((c) =>
+				c.slotId === "slot-1" ? { ...c, memberId: ME, status: "claimed" } : c,
+			),
+		};
+		act(() => setData(claimed));
+		expect(screen.getByText("1 open")).toBeTruthy();
+		await act(async () => d.resolve({ ok: true, proof: "session" }));
 	});
 });

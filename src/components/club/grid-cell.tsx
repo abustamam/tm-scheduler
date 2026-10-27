@@ -1,4 +1,4 @@
-import { Loader2 } from "lucide-react";
+import { Check, Loader2 } from "lucide-react";
 import type { ViewCell } from "#/lib/season-grid-view";
 import { cn } from "#/lib/utils";
 import { MeetingLink } from "./meeting-link";
@@ -20,6 +20,19 @@ import { MeetingLink } from "./meeting-link";
 // The Claim button's classes, shared by every surface that offers a Claim.
 export const CLAIM_CLASS =
 	"border-warning bg-warning-soft text-warning-foreground hover:bg-warning hover:text-on-accent-fill";
+
+/** An optimistic claim/release in flight on this slot (#1315). `name` is the
+ *  label a mine cell shows after the refetch (the claimer's name). */
+export interface PendingWrite {
+	kind: "claim" | "release";
+	name: string | null;
+}
+
+// The claim moment (DESIGN.md): amber outline to solid green in 200ms.
+const CLAIM_TRANSITION =
+	"transition-[background-color,border-color,color,box-shadow] duration-200 ease-enter";
+const MINE_CLASS =
+	"bg-success text-success-foreground ring-2 ring-success-strong";
 
 export const CELL_KIND_CLASS: Record<ViewCell["kind"], string> = {
 	assigned: "bg-success/15 text-foreground",
@@ -45,6 +58,7 @@ export function GridCell({
 	cell,
 	currentMemberId,
 	busy = false,
+	pending = null,
 	onClaim,
 	onRelease,
 	prospectiveClaim = false,
@@ -58,6 +72,9 @@ export function GridCell({
 	cell: ViewCell;
 	currentMemberId?: string | null;
 	busy?: boolean;
+	/** Optimistic claim/release in flight: a claim renders as mine (Check +
+	 *  label), a release as the open Claim cell. Both are aria-busy. */
+	pending?: PendingWrite | null;
 	onClaim?: (slotId: string) => void;
 	onRelease?: (slotId: string) => void;
 	/** Public read-only surface: show "Claim" on OPEN cells even with no
@@ -132,6 +149,35 @@ export function GridCell({
 		);
 	}
 
+	// A claim in flight shows as already yours; a release as open again. The
+	// control is disabled and aria-busy until loader data takes over.
+	if (pending && cell.slotId) {
+		const claiming = pending.kind === "claim";
+		const label = claiming ? (pending.name ?? cell.text) : "Claim";
+		return (
+			<button
+				type="button"
+				disabled
+				aria-busy="true"
+				title={cell.title ? cell.title + dateSuffix : undefined}
+				aria-label={
+					claiming
+						? `Claiming ${cell.title}${dateSuffix}`
+						: `Releasing ${cell.title}${dateSuffix}`
+				}
+				className={cn(
+					CELL_BASE,
+					"w-full border",
+					CLAIM_TRANSITION,
+					claiming ? `border-transparent ${MINE_CLASS}` : CLAIM_CLASS,
+				)}
+			>
+				{claiming ? <Check className="mr-1 size-3.5" aria-hidden /> : null}
+				{label}
+			</button>
+		);
+	}
+
 	// Claim an OPEN slot as the current member.
 	if (isClaimable && onClaim && cell.slotId) {
 		const slotId = cell.slotId;
@@ -144,11 +190,12 @@ export function GridCell({
 				onClick={() => onClaim(slotId)}
 				className={cn(
 					CELL_BASE,
-					"w-full cursor-pointer border transition-colors disabled:opacity-50",
+					"w-full cursor-pointer border disabled:opacity-50",
+					CLAIM_TRANSITION,
 					CLAIM_CLASS,
 				)}
 			>
-				{busy ? <Loader2 className="size-3.5 animate-spin" /> : "Claim"}
+				Claim
 			</button>
 		);
 	}
@@ -165,10 +212,12 @@ export function GridCell({
 				onClick={() => onRelease(slotId)}
 				className={cn(
 					CELL_BASE,
-					"w-full cursor-pointer bg-success text-success-foreground ring-2 ring-success-strong transition-opacity hover:opacity-80 disabled:opacity-50",
+					"w-full cursor-pointer border border-transparent hover:opacity-80 disabled:opacity-50",
+					CLAIM_TRANSITION,
+					MINE_CLASS,
 				)}
 			>
-				{busy ? <Loader2 className="size-3.5 animate-spin" /> : cell.text}
+				{cell.text}
 			</button>
 		);
 	}
