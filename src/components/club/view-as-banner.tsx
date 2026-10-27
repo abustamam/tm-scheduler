@@ -8,7 +8,9 @@ import { Eye, X } from "lucide-react";
  */
 export function ViewAsBanner({ onExit }: { onExit: () => void }) {
 	return (
-		<div className="sticky top-0 z-20 flex h-9 items-center gap-2 bg-[var(--palm,#0f766e)] px-4 text-xs font-semibold text-white shadow-sm">
+		// success-foreground flips with the theme: white on the dark light-mode
+		// palm, dark ink on the pale dark-mode palm (white there was ~2:1).
+		<div className="sticky top-0 z-20 flex h-9 items-center gap-2 bg-success px-4 text-xs font-semibold text-success-foreground shadow-sm">
 			<Eye className="size-3.5 shrink-0" aria-hidden />
 			<span className="truncate">Previewing as a member</span>
 			<button
