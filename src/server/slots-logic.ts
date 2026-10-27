@@ -1731,7 +1731,10 @@ export async function confirmSlotCore(args: {
 /** The refusals `confirmHeldClaimedSlots` treats as "this slot moved since we
  *  listed it" rather than as a failure. Every one of them is a race with an
  *  officer's release, reassignment or removal, and none is a gate: the archive
- *  and lock refusals are deliberately absent, so they still throw. */
+ *  and lock refusals are deliberately absent, so they still throw.
+ *  `CLUB_BUSY_MESSAGE` is deliberately absent too (#1344): a merge that absorbs
+ *  the holder mid-confirm makes the confirm throw "busy, try again" instead of
+ *  leaving the role silently claimed after the member said yes. */
 const LOST_CONFIRM_RACE: ReadonlySet<string> = new Set([
 	SLOT_NOT_FOUND_MESSAGE,
 	ONLY_CLAIMED_CONFIRMABLE_MESSAGE,

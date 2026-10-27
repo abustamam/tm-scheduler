@@ -89,6 +89,7 @@ import {
 	meetingHeading,
 } from "#/lib/format";
 import { buildHeldRoleLabels } from "#/lib/held-role-labels";
+import { markedAbsentMemberIds } from "#/lib/marked-absent-member-ids";
 import { MINUTES_ANCHOR_ID } from "#/lib/meeting-anchors";
 import {
 	cancellationNoticeHref,
@@ -1142,16 +1143,6 @@ function MeetingView() {
 	// else, which is what keeps the recruit picker's "already asked" marks off a
 	// plain member's screen.
 	const unavailableMemberIds = unavailableMembers.map((m) => m.id);
-	// The unavailable members who did NOT say so (#1344): the roll marked them
-	// Absent, but the public `answeredRungs` carries no `not_coming` for them.
-	// Derived from those two values only; the roll is members-only and gets no
-	// payload field. The own-card flag reads it to say "marked absent".
-	const markedAbsentMemberIds = unavailableMemberIds.filter(
-		(id) =>
-			!answeredRungs.some(
-				(r) => r.memberId === id && r.status === "not_coming",
-			),
-	);
 	const contactedMemberIds = effectivePlan
 		.filter((p) => p.status === "reached_out")
 		.map((p) => p.memberId);
@@ -2292,7 +2283,10 @@ function MeetingView() {
 							roleRecency={roleRecency}
 							roleByMemberId={roleByMemberId}
 							unavailableMemberIds={unavailableMemberIds}
-							markedAbsentMemberIds={markedAbsentMemberIds}
+							markedAbsentMemberIds={markedAbsentMemberIds(
+								unavailableMemberIds,
+								answeredRungs,
+							)}
 							pairedRoleIds={effectiveCanManage ? pairedIds : undefined}
 							clubGuests={effectiveCanManage ? clubGuests : undefined}
 							shareUrl={effectiveCanManage ? nudgeShareUrl : ""}

@@ -227,7 +227,9 @@ roll-aware gate that #1259 (#1257) had put on the same arm.
 
 - **A sessionless (asserted-proof) claim or confirm reads the PLAN and nothing else.** The
   unverified arm of `claimSlotCore` and `confirmSlotCore` is refused with `SIGN_IN_REQUIRED_MESSAGE`
-  when the member's `meeting_attendance_plan` row is `not_coming`, and for no other reason.
+  when the member's `meeting_attendance_plan` row is `not_coming`, and for no other ATTENDANCE
+  reason (the asserted `claimSlotCore` arm is also refused with that message when a caller who is
+  not the meeting's Toastmaster claims for someone else, which reads no attendance row).
   `isMemberNotComing` (`attendance-plan-logic.ts`) is the one reader, and it joins no attendance
   table. A `coming` row, a `reached_out` row, no row, and any record on the roll (Present, Absent,
   Excused) all leave the arm open.
@@ -242,10 +244,15 @@ roll-aware gate that #1259 (#1257) had put on the same arm.
   `claimSlotCore`, and the `claim_open_role` and `set_my_attendance` tools, through
   `isMemberUnavailable`, where the roll wins when there is one (Absent is unavailable whatever the
   plan says, Present is available even after Not coming, Excused and no record fall through to the
-  plan). So does the pickers' list, for an ACTIVE member of the club only; a signed-out reader or a
-  non-member gets the plan-only `listNotComingWithNames`. A session-proven claimer or holder is
-  not refused over a decline by this gate on either record, as the table says: a signed-in member
-  may change their own mind.
+  plan). So does the Table Topics add (`addTableTopicsSpeaker`, `minutes-logic.ts`, #1319), a
+  session write that refuses an unavailable member on its insert path through the same
+  `isMemberUnavailable`, so a stale tab or a queued offline add cannot add a member the pickers
+  hide. So does the pickers' list, for the club's active members and for any viewer who can manage
+  the meeting (the loader starts `viewerIsMember = canManage`, so a read_write impersonating
+  superadmin with no membership gets the roll-wins list too); a signed-out reader, and a
+  non-member who cannot manage, gets the plan-only `listNotComingWithNames`. A session-proven
+  claimer or holder is not refused over a decline by this gate on either record, as the table says:
+  a signed-in member may change their own mind.
 - **Superseded.** From #1259 to #1337 the unverified arm was roll-aware: an asserted claim for a
   member recorded Absent was refused, and one for a member who had said Not coming and was recorded
   Present was accepted (#1257, acceptance criterion 4). That reading is withdrawn: "your answer"

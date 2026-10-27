@@ -26,7 +26,7 @@
  */
 import { and, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { meetingAttendancePlan, members, roleSlots } from "#/db/schema";
+import { meetingAttendancePlan, members, people, roleSlots } from "#/db/schema";
 import type { WriteProof } from "#/lib/write-proof";
 import {
 	cleanup,
@@ -82,18 +82,22 @@ describe.skipIf(!hasTestDb)(
 		let seed: SeededClub;
 		let keeperId: string;
 		let absorbedId: string;
+		// The absorbed membership's person. The merge DELETEs that membership, so
+		// `cleanup` (which reads the club's surviving members) never reaches this
+		// club-less row: delete it here (docs/agents/commands.md).
+		let absorbedPersonId: string;
 
 		beforeEach(async () => {
 			seed = await seedClub();
 			keeperId = seed.memberId;
-			const personId = await seedPerson({
+			absorbedPersonId = await seedPerson({
 				name: `Absorbed ${crypto.randomUUID()}`,
 			});
 			const [row] = await testDb
 				.insert(members)
 				.values({
 					clubId: seed.clubId,
-					personId,
+					personId: absorbedPersonId,
 					name: "Absorbed Duplicate",
 					clubRole: "member",
 					status: "active",
@@ -123,6 +127,7 @@ describe.skipIf(!hasTestDb)(
 			for (const h of openHolds.splice(0)) await h.commit().catch(() => {});
 			await Promise.allSettled(inFlight.splice(0));
 			await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+			await testDb.delete(people).where(eq(people.id, absorbedPersonId));
 		});
 
 		/** Run the merge on its own connection; resolves its backend pid first. */
