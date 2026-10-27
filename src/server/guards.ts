@@ -28,7 +28,10 @@ import {
 	membershipPickOpenTermJoin,
 	membershipPickOrder,
 } from "./membership-pick-order";
-import { getOpenOfficerPositions } from "./officers-logic";
+import {
+	getOpenOfficerPositions,
+	holdsOpenOfficerTerm,
+} from "./officers-logic";
 
 // IMPORTANT: this module touches `db`/`pg` and must never be imported by a
 // client component directly. Only server-function modules import it; the
@@ -325,7 +328,7 @@ async function holdsOfficerSeat(
 	membership: Pick<ResolvedMembership, "id">,
 ): Promise<boolean> {
 	if (membership.id === null) return false;
-	return (await getOpenOfficerPositions(db, membership.id)).length > 0;
+	return holdsOpenOfficerTerm(db, membership.id);
 }
 
 /**
@@ -400,7 +403,8 @@ export async function assertStillClubAdmin(
 /**
  * READ-surface "can this user manage this club as an admin?" — for computing the
  * `canManage` / `canEdit` flags that GET loaders return to drive admin
- * affordances (e.g. `getMeeting`, `getMinutes`). True for a real active admin
+ * affordances (e.g. `getMeeting`). `getMinutes` computes its own `canEdit` with
+ * the same two membership arms. True for a real active admin
  * membership, an active membership holding an open officer term (effective
  * admin, #202), OR an active `read_write` impersonation session (#246): a superadmin
  * acting as admin has no membership but should see the admin UI. Deliberately
@@ -686,30 +690,21 @@ export async function requireTableTopicsNotesEditor(input: {
  * reason documented there, not for a different authorization decision.
  *
  * A strict SUPERSET of the `requireClubRole(..., ["admin"])` gate it replaced on
- * those five, and it has to be. `resolveVoteCounterAuthz`'s admin check reads
- * `clubRole === "admin"` only, while `requireClubRole` ALSO grants to an elected
- * officer holding an open term (#202 effective-admin). Swapping one for the
- * other would therefore have quietly REVOKED award-setting and Table Topics
- * capture from officers who hold their seat that way — a privilege loss nobody
- * asked for, and the mirror image of the unmentioned privilege GAIN #464 closed.
- * So the officer path is retried explicitly below.
+ * those five, and it has to be. Before #1383 `resolveVoteCounterAuthz`'s admin
+ * check read `clubRole === "admin"` only, while `requireClubRole` ALSO grants to
+ * an elected officer holding an open term (#202 effective-admin), so swapping one
+ * for the other would have quietly REVOKED award-setting and Table Topics capture
+ * from officers who hold their seat that way — the mirror image of the
+ * unmentioned privilege GAIN #464 closed. The officer path is retried below.
  *
- * That retry PRESERVES the grant `requireClubRole` gave these capabilities
- * before the swap, and no UI surface reaches it today, deliberately (#844,
- * option 2, maintainer 2026-09-24). An elected officer who is not a `clubRole`
- * admin holds the capability server-side, for the five minutes-side calls and
- * for `voting.ts`'s open/close/tally (its `requireVoteCounter` wrapper delegates
- * here), but reaches it only through a direct server-fn call. Neither surface
- * that would use it is open to them: the Ballot Counter console on the meeting
- * page is gated on `isVoteCounter || effectiveCanManage`, and the minutes editor
- * on `effectiveCanManage && minutes.canEdit`, where `getMinutes` sets `canEdit`
- * from `clubRole === "admin"` or a `read_write` impersonation. `canManageClub`
- * does not include the #202 effective-admin officer either, and `isVoteCounter`
- * means holding the slot. So such an officer acts through a club admin. That is
- * the decision, not a bug. Do NOT close it by widening `canManage`, `canEdit` or
- * the meeting payload: `canManage` also gates roster contact details and guest
- * records, so widening it would disclose PII to a principal who does not have
- * it today.
+ * Since #1383 the retry is redundant for the agenda-side resolvers, whose admin
+ * arm (`resolveAdminGrant`) itself admits an elected officer, but it stays as the
+ * one place this gate's superset-of-`requireClubRole` property is stated. Decided
+ * by the maintainer 2026-10-27 (reversing #844 option 2): an elected officer gets
+ * the full meeting-page admin surface. `canManageClub` includes them, `getMinutes`
+ * sets `canEdit` for them, and the Ballot Counter console and minutes editor are
+ * open to them. Officers already read contact details through
+ * `requireClubAdminView`, so widening `canManage` discloses nothing new.
  *
  * `setAttendance` / `addMinutesGuest` / `removeMinutesGuest` deliberately do NOT
  * come through here — they stay `gateAdmin`-only. A Ballot Counter has no
@@ -822,13 +817,11 @@ async function voteCounterCapabilityFor(
  * impersonating superadmin, or the Ballot Counter signing in as themselves.
  *
  * **The refusal copy names only two of those four, deliberately.** An elected
- * officer who is not a club admin can be granted here and cannot REACH the
- * console: signing in makes the session win in `useEffectiveMember`, so they
- * stop matching the Vote Counter slot, and `canManageClub` does not include
- * #202's effective-admin — both terms of the console's section gate go false and
- * the whole panel disappears. So the copy says "ask an admin", which works. The
- * officer's unreachable capability is a separate, pre-existing gap, filed as
- * #844; nothing here narrows the grant.
+ * officer who is not a club admin is granted here, and since #1383 keeps the
+ * console (`canManageClub` admits them), but signing in makes the session win in
+ * `useEffectiveMember`, so they stop matching the Vote Counter slot. The copy
+ * says "ask an admin", which works for anyone, and says nothing that would
+ * describe a route a plain member cannot use.
  *
  * The refusal is {@link RULING_NEEDS_SESSION_MESSAGE} rather than
  * `SIGN_IN_REQUIRED_MESSAGE` or the generic permission error, and the console

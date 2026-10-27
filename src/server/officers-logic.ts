@@ -35,6 +35,21 @@ export async function getOpenOfficerPositions(
 }
 
 /**
+ * Does this membership hold any open officer term (#202)? The ONE statement of
+ * the effective-admin officer arm: `guards.ts` (`requireClubRole`,
+ * `canManageClub`) and `meeting-authz-logic.ts` (`resolveAdminGrant`) both call
+ * it, so the write gate, the read flag and the agenda-write grant cannot drift.
+ * It lives here, not in `guards.ts`, because `guards.ts` imports
+ * `meeting-authz-logic.ts` and the reverse import would be a cycle.
+ */
+export async function holdsOpenOfficerTerm(
+	database: Database,
+	membershipId: string,
+): Promise<boolean> {
+	return (await getOpenOfficerPositions(database, membershipId)).length > 0;
+}
+
+/**
  * End every OPEN officer term a membership holds, returning the positions it
  * actually closed, President first (#805).
  *

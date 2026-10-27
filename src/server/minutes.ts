@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getCookie } from "@tanstack/react-start/server";
 import { z } from "zod";
+import { db } from "#/db";
 import { ATTENDANCE_MODES } from "#/lib/attendance-mode";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { MEETING_UPDATE_FIELDS } from "#/lib/meeting-limits";
@@ -31,6 +32,7 @@ import {
 	setMemberAbsentReleasingRoles,
 	setMemberPresence,
 } from "./minutes-logic";
+import { holdsOpenOfficerTerm } from "./officers-logic";
 import { minutesAccess } from "./view-as-logic";
 
 const uuid = z.string().uuid();
@@ -117,7 +119,11 @@ export const getMinutes = createServerFn({ method: "GET" })
 		}
 		const status = await getMeetingStatus(meetingId);
 		const { canEdit, visible } = minutesAccess({
-			isAdmin: membership?.clubRole === "admin",
+			// Effective-admin (#202): stored admin OR an open officer term, the same
+			// two arms as the minutes writes' `requireClubRole` gate.
+			isAdmin:
+				membership?.clubRole === "admin" ||
+				(membership ? await holdsOpenOfficerTerm(db, membership.id) : false),
 			impersonatingReadWrite: impersonatingRW,
 			asMember,
 			status,
