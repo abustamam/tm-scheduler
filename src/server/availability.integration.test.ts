@@ -1748,8 +1748,51 @@ describe.skipIf(!hasTestDb)(
 						clubId: seed.clubId,
 					},
 				}),
-			).resolves.toEqual({ ok: true });
+			).resolves.toEqual({ ok: true, cleared: true });
 			expect(await statusOf(seed.memberId)).toEqual([]);
+		});
+
+		// protects=the clear handler returns the seam's `cleared`, which the grid's Undo is gated on: an officer's clear of another member's row reports true for a decline it removed and false for a `coming` it left; fails_when=the handler returns a constant for `cleared`, or drops it; no_claim=the grid's reading of it (season-grid.test.tsx)
+		it("clearAvailability: an officer's clear reports whether it removed the decline", async () => {
+			const clearAsOfficer = () =>
+				clearAvailability({
+					data: {
+						memberId: seed.memberId,
+						actorMemberId: seed.adminMemberId,
+						meetingId: seed.meetingId,
+						clubId: seed.clubId,
+					},
+				});
+			sessionUserId = seed.adminUserId;
+
+			// The decline the grid showed is still there: removed, so Undo is offered.
+			await setPlanStatus(testDb, {
+				memberId: seed.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				status: "not_coming",
+				actorMemberId: seed.memberId,
+			});
+			await expect(clearAsOfficer()).resolves.toEqual({
+				ok: true,
+				cleared: true,
+			});
+			expect(await statusOf(seed.memberId)).toEqual([]);
+
+			// The member answered `coming` since the grid rendered: nothing removed,
+			// so no Undo, and the answer is untouched.
+			await setPlanStatus(testDb, {
+				memberId: seed.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				status: "coming",
+				actorMemberId: seed.memberId,
+			});
+			await expect(clearAsOfficer()).resolves.toEqual({
+				ok: true,
+				cleared: false,
+			});
+			expect(await statusOf(seed.memberId)).toEqual(["coming"]);
 		});
 
 		// protects=the set handler hands the seam data.memberId as the subject; fails_when=the handler passes data.actorMemberId as the subject (the caller declines THEMSELVES and is admitted as self); no_claim=the seam's own rules
