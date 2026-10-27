@@ -25,6 +25,7 @@ import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { isRealSpeechTitle, TBA_SPEECH_TITLE } from "#/lib/speech-title";
 import {
 	isConnectorSelf,
+	MEMBER_NOT_ELIGIBLE_MESSAGE,
 	SIGN_IN_REQUIRED_MESSAGE,
 	type WriteProof,
 } from "#/lib/write-proof";
@@ -1892,6 +1893,35 @@ async function sessionIsHolder(
 }
 
 /**
+ * Lock the member a slot is about to be given to `FOR SHARE` and refuse one who
+ * is not ACTIVE (#1327). `applySetMemberStatus` holds the row `FOR NO KEY
+ * UPDATE`, which conflicts with this, so an assignment either commits before
+ * End reads the member's slots (and End releases it) or waits for End and finds
+ * the member ended. The status was checked only BEFORE the transaction, so a
+ * claim queued behind End's lock landed after the release sweep.
+ *
+ * Lock order: member row -> slot row, the order End takes. MUST run before the
+ * first slot lock of the transaction. `FOR SHARE` does not conflict with the
+ * key-share an activity-log insert takes on the member, so a member releasing
+ * their own role is not blocked by it. The refusal is the one wording every
+ * ineligible member gets (#1341).
+ */
+export async function lockMemberForAssignment(
+	tx: DbOrTx,
+	memberId: string,
+): Promise<void> {
+	const [row] = await tx
+		.select({ status: members.status })
+		.from(members)
+		.where(eq(members.id, memberId))
+		.limit(1)
+		.for("share");
+	if (!row || row.status !== "active") {
+		throw new Error(MEMBER_NOT_ELIGIBLE_MESSAGE);
+	}
+}
+
+/**
  * Claim an OPEN slot for a member (#825).
  *
  * Extracted from `claimSlot`'s handler body for the reason #809 extracted
@@ -1939,6 +1969,8 @@ export async function claimSlotCore(
 	// `membership-merge-lock.ts`. Refuses with `CLUB_BUSY_MESSAGE` when a merge
 	// absorbed the membership while this waited.
 	await lockMembershipsAgainstMerge(tx, [args.memberId]);
+	// #1327: the member must still be active, under a row lock End conflicts with.
+	await lockMemberForAssignment(tx, args.memberId);
 	const [slot] = await tx
 		.select({
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
@@ -2141,6 +2173,9 @@ export async function reassignSlotCore(
 		proof?: WriteProof;
 	},
 ): Promise<{ clubId: string }> {
+	// #1327: the new holder is locked (and checked active) BEFORE the slot, the
+	// order End takes: member row, then slots.
+	await lockMemberForAssignment(tx, args.memberId);
 	// Lock only the role_slots row; FOR UPDATE on the joined role_definitions /
 	// meetings catalog rows is unnecessary (they don't change under us).
 	const [slot] = await tx

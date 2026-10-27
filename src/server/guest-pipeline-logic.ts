@@ -2909,7 +2909,12 @@ export async function applyLinkGuestToMember(
 			.select({ personId: members.personId, status: members.status })
 			.from(members)
 			.where(eq(members.id, input.memberId))
-			.limit(1);
+			.limit(1)
+			// FOR SHARE (#1327): conflicts with the FOR NO KEY UPDATE an End or a
+			// merge holds on the row, so the status read below is never a snapshot
+			// that an End committed behind. The club write lock End now also takes
+			// serializes the two as well; this is the row-level half.
+			.for("share");
 		if (memberNow?.personId !== member.personId) {
 			throw new Error(RECORD_CHANGED_MESSAGE);
 		}

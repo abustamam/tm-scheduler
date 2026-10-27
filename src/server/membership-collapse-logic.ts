@@ -11,7 +11,7 @@
 //
 // This lives in a `*-logic.ts` (never client-imported) so its `#/db` import
 // never leaks `pg` → `Buffer` into the browser bundle. See members-logic.ts.
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { db } from "#/db";
 import {
 	activityLog,
@@ -121,6 +121,10 @@ export async function collapseMemberships(
 			),
 		);
 	await lockPersonsInOrder(tx, noKeyUpdate(...peeked.map((m) => m.personId)));
+	// Both rows locked `FOR NO KEY UPDATE`, in id order, before the merged status
+	// is derived (#1327). Read without it, a concurrent End on the keeper was
+	// overwritten by a status computed from the stale read. NO KEY UPDATE is the
+	// mode a plain UPDATE of the row takes, so it blocks no FK key-share.
 	const rows = await tx
 		.select()
 		.from(members)
@@ -129,7 +133,9 @@ export async function collapseMemberships(
 				eq(members.clubId, clubId),
 				inArray(members.id, [keeperId, absorbedId]),
 			),
-		);
+		)
+		.orderBy(asc(members.id))
+		.for("no key update");
 	const keeper = rows.find((m) => m.id === keeperId);
 	const absorbed = rows.find((m) => m.id === absorbedId);
 	if (!keeper || !absorbed) {
@@ -152,6 +158,9 @@ export async function collapseMemberships(
 	const otherSide = listedSide === keeper ? absorbed : keeper;
 
 	const statuses = [keeper.status, absorbed.status];
+	// Active wins, then inactive (they may renew), then former (#1239). Whether
+	// FORMER should outrank inactive (#1327 item 4) is an open decision: the
+	// existing `members-former.integration.test.ts` asserts this order.
 	const mergedStatus = statuses.includes("active")
 		? ("active" as const)
 		: statuses.includes("inactive")
@@ -173,8 +182,9 @@ export async function collapseMemberships(
 				(absorbed.clubRole === "admin" && absorbed.status === "active")
 					? "admin"
 					: "member",
-			// Active wins, then inactive (they may renew), then former (#1239).
 			status: mergedStatus,
+			// The keeper's end date wins. Keeping the LATER of two (#1327 item 4) is
+			// an open decision: `members-former.integration.test.ts` asserts this.
 			endedAt:
 				mergedStatus === "former" ? (keeper.endedAt ?? absorbed.endedAt) : null,
 			joinedAt: earliestDate(keeper.joinedAt, absorbed.joinedAt),

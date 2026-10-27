@@ -61,7 +61,7 @@ import {
 import { logActivity } from "./activity";
 import { deletePlanRowsOfEndedMember } from "./attendance-plan-logic";
 import { isReadableClub } from "./club-readable-logic";
-import { CLUB_BUSY_MESSAGE } from "./club-write-lock";
+import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { contactMethodAvailableSql } from "./contact-preference-logic";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
@@ -635,6 +635,11 @@ type SetStatusInput = z.infer<typeof setStatusSchema> & RosterActor;
  *  choose one of these two meanings explicitly — and say which, here. */
 export async function applySetMemberStatus(input: SetStatusInput) {
 	await db.transaction(async (tx) => {
+		// The club write lock (#1327), FIRST, as the merge takes it: it serializes
+		// this with every other status and role change in the club, so the
+		// last-admin count below cannot be taken against a snapshot two admins
+		// ending each other both pass. Club write lock -> merge lock -> row locks.
+		await lockClubForWrite(tx, input.clubId);
 		// The membership merge lock (#1035), SHARED, before any row lock or write
 		// (#1189): the global rule, see `applyMemberRemove`. A removal holds it
 		// EXCLUSIVE for its whole transaction, so the two never interleave. Without
@@ -651,7 +656,14 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 			.where(
 				and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
 			)
-			.for("update");
+			// NO KEY UPDATE, not UPDATE (#1327): FOR UPDATE blocks the key-share an
+			// FK insert takes on this row, so End deadlocked (40P01) with a member
+			// releasing their own role (its activity-log insert key-shares them
+			// while End waits on that release's slot), and with a second admin
+			// ending this one (the audit insert key-shares the actor row).
+			// Everything this transaction writes to the row is a plain UPDATE,
+			// which takes this mode anyway.
+			.for("no key update");
 		if (!current) throw new Error("Member not found.");
 		// Same → same (including former → former) is a no-op: no write, no log.
 		if (current.status === input.status) return;
@@ -848,6 +860,9 @@ type SetRoleInput = z.infer<typeof setRoleSchema> & RosterActor;
  */
 export async function applySetMemberRole(input: SetRoleInput) {
 	return db.transaction(async (tx) => {
+		// The club write lock (#1327), first: the last-admin check below reads
+		// other rows, so it runs serialized with every status change in the club.
+		await lockClubForWrite(tx, input.clubId);
 		// Read under the row lock (#1340): an end-membership racing this change
 		// cannot be overwritten by a promotion computed from a stale read. NO KEY
 		// UPDATE, not UPDATE: the activity insert below key-shares the ACTOR's

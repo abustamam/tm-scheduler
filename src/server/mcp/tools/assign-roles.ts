@@ -201,6 +201,15 @@ export const assignRolesTool: McpToolDefinition = {
 				});
 			}
 
+			// The target members first, `FOR SHARE` (#1327): `applySetMemberStatus`
+			// holds a member `FOR NO KEY UPDATE` and then waits for their slots, so
+			// the member row is taken before the slot rows, never after. An ended
+			// member drops out of this read and is reported as NOT_A_MEMBER.
+			const targetMembers = await loadTargetMembers(
+				tx,
+				club.clubId,
+				args.assignments,
+			);
 			const locked = await lockSlots(
 				tx,
 				args.meetingId,
@@ -222,11 +231,6 @@ export const assignRolesTool: McpToolDefinition = {
 				}
 			}
 
-			const targetMembers = await loadTargetMembers(
-				tx,
-				club.clubId,
-				args.assignments,
-			);
 			const targetGuests = await loadTargetGuests(
 				tx,
 				club.clubId,
@@ -453,7 +457,10 @@ async function loadTargetMembers(
 				// agenda either.
 				eq(members.status, "active"),
 			),
-		);
+		)
+		// In id order, locked `FOR SHARE` (#1327): see the call site.
+		.orderBy(asc(members.id))
+		.for("share");
 	return new Map(rows.map((r) => [r.id, r]));
 }
 
