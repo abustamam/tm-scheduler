@@ -333,7 +333,7 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 	});
 
 	describe("the six rewritten sites exclude former", () => {
-		// protects=requireMemberInClub refuses a former member with the former copy, inactive keeps its own;
+		// protects=requireMemberInClub refuses former and inactive members with the one uniform message (#1341);
 		// fails_when=a former member can be assigned a role;
 		// no_claim=callers' own wiring of this guard.
 		it("guards: refuses former, one uniform message", async () => {

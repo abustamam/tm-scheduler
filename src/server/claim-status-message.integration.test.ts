@@ -68,7 +68,7 @@ describe.skipIf(!hasTestDb)("asserted-proof refusal wording (#1341)", () => {
 		expect(unknown).toBe(MEMBER_NOT_ELIGIBLE_MESSAGE);
 	});
 
-	it("a signed-in admin hears the same message, for every status", async () => {
+	it("the guard itself answers every status with the same message", async () => {
 		// Maintainer decision on #1341: one message everywhere, officers included.
 		const unknown = await requireMemberInClub(
 			crypto.randomUUID(),
