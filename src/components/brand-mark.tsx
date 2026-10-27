@@ -76,14 +76,20 @@ export function BrandMark({
 			>
 				<GavelGlyph size={s.glyph} />
 			</span>
-			<div className="leading-[1.05]">
+			{/* `min-w-0`: a flex item will not shrink below its content, so without
+			    it the subtitle's `truncate` never engages and a long club name runs
+			    past the sidebar's edge. */}
+			<div className="min-w-0 leading-[1.05]">
 				<div
 					className={`font-display font-semibold tracking-[-0.01em] ${s.wordmark}`}
 				>
 					GavelUp
 				</div>
 				{subtitle ? (
-					<div className="mt-0.5 truncate text-xs font-semibold tracking-[0.04em] text-muted-foreground uppercase">
+					<div
+						className="mt-0.5 truncate text-xs font-semibold tracking-[0.04em] text-muted-foreground uppercase"
+						title={typeof subtitle === "string" ? subtitle : undefined}
+					>
 						{subtitle}
 					</div>
 				) : null}
