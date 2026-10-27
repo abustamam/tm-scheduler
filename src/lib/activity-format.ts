@@ -7,6 +7,10 @@ import type { ActivityEntry } from "#/server/activity-feed";
  */
 export const GUEST_CROSS_CLUB_LINK_CHANGE = "guest_cross_club_link";
 
+/** `detail.change` of the `member_edit` row that ending a membership writes
+ *  (#1328). The writer (`members-logic.ts`) and this formatter share the spelling. */
+export const MEMBERSHIP_ENDED_CHANGE = "membership_ended";
+
 export interface FormattedActivity {
 	actor: string;
 	summary: string;
@@ -100,7 +104,10 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 			summary = `added member "${entry.subjectName ?? "someone"}"`;
 			break;
 		case "member_edit":
-			summary = "updated a member's details";
+			summary =
+				entry.change === MEMBERSHIP_ENDED_CHANGE
+					? `ended ${entry.subjectName ?? "a member"}'s membership`
+					: "updated a member's details";
 			break;
 		case "member_merge": {
 			// Two different events share this action, deliberately: a member↔member

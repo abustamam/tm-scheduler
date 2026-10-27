@@ -448,6 +448,25 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		expect(detail.firstAdmin?.personId).toBe(res.personId);
 		expect(detail.firstAdmin?.linked).toBe(false);
 		expect(detail.memberCount).toBe(1);
+
+		// Former and inactive memberships are not counted (#1328).
+		for (const [i, status] of (["former", "inactive"] as const).entries()) {
+			const [person] = await testDb
+				.insert(people)
+				.values({ name: `Gone ${i}` })
+				.returning({ id: people.id });
+			await testDb.insert(members).values({
+				clubId: res.clubId,
+				personId: person.id,
+				name: `Gone ${i}`,
+				status,
+			});
+		}
+		const again = await listClubsForConsole();
+		expect(again.clubs.find((c) => c.clubId === res.clubId)?.memberCount).toBe(
+			1,
+		);
+		expect((await getClubConsoleDetail(res.clubId)).memberCount).toBe(1);
 	});
 
 	// #716/#670. The zone is picked at provisioning rather than left to the

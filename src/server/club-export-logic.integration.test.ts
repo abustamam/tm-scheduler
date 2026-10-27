@@ -11,7 +11,7 @@
  * in under 3s, the issue's threshold for moving to fflate's streaming `Zip`.
  */
 import { randomUUID } from "node:crypto";
-import { inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { strFromU8, unzipSync } from "fflate";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -403,6 +403,7 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 			"email",
 			"phone",
 			"status",
+			"ended_at",
 			"club_role",
 			"joined_at",
 			"customer_id",
@@ -413,6 +414,7 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 			email: expect.stringContaining("@test.example"),
 			phone: "+14155550100",
 			status: "active",
+			ended_at: null,
 			club_role: "member",
 			joined_at: "2024-01-15",
 			customer_id: expect.stringContaining(`C-MINE${RUN}`),
@@ -595,6 +597,7 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 			{
 				member_id: a.club.adminMemberId,
 				name: "Admin User",
+				member_status: "active",
 				path: `Zeta ${RUN}`,
 				current_level: null,
 				status: "active",
@@ -602,6 +605,7 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 			{
 				member_id: a.club.memberId,
 				name: "Member User",
+				member_status: "active",
 				path: `MINE${RUN} Path`,
 				current_level: 2,
 				status: "active",
@@ -636,66 +640,115 @@ describe.skipIf(!hasTestDb)("loadClubExport (#915)", () => {
 		);
 	});
 
-	// A club's export must not show people the club no longer has. An
-	// enrollment carries no club, so a LAPSED membership was the only thing
-	// joining a former member's Pathways record (including progress made at
-	// whatever club they joined next) to this club's admins.
-	it("pathways.csv: a lapsed member's enrollments are absent; an active member's archived one stays", async () => {
+	// History stays in the export (#1328, #1342): a former or lapsed member's
+	// Pathways rows are still listed, marked by member_status, and a former
+	// member's end date rides members.csv.
+	it("pathways.csv: a former member's enrollments stay, marked; members.csv carries ended_at", async () => {
 		const own = await seedClub();
 		extraClubs.push(own.clubId);
 		const [admin] = await testDb
 			.select({ personId: members.personId })
 			.from(members)
 			.where(inArray(members.id, [own.adminMemberId]));
-		const [kept, archived, lapsed] = await testDb
+		const [kept, archived, lapsed, empty] = await testDb
 			.insert(pathwaysPaths)
 			.values([
 				{ courseCode: `K${RUN}`, name: `Kept ${RUN}` },
 				{ courseCode: `A${RUN}`, name: `Archived ${RUN}` },
 				{ courseCode: `L${RUN}`, name: `Lapsed ${RUN}` },
+				{ courseCode: `E${RUN}`, name: `Empty ${RUN}` },
 			])
 			.returning({ id: pathwaysPaths.id });
-		pathIds.push(kept.id, archived.id, lapsed.id);
+		pathIds.push(kept.id, archived.id, lapsed.id, empty.id);
 		await testDb.insert(pathEnrollments).values([
 			{ personId: own.personId, pathId: kept.id },
 			{ personId: own.personId, pathId: archived.id, archivedAt: new Date() },
 			// The admin's: active in Pathways, but their membership here lapses.
 			{ personId: admin.personId, pathId: lapsed.id },
+			{ personId: admin.personId, pathId: empty.id },
 		]);
+		const [lapsedEnr] = await testDb
+			.select({ id: pathEnrollments.id })
+			.from(pathEnrollments)
+			.where(
+				and(
+					eq(pathEnrollments.personId, admin.personId),
+					eq(pathEnrollments.pathId, lapsed.id),
+				),
+			);
+		const [emptyEnr] = await testDb
+			.select({ id: pathEnrollments.id })
+			.from(pathEnrollments)
+			.where(
+				and(
+					eq(pathEnrollments.personId, admin.personId),
+					eq(pathEnrollments.pathId, empty.id),
+				),
+			);
+		const other = await seedClub();
+		extraClubs.push(other.clubId);
+		const lvl = (level: number, completedAt: Date, creditedClubId: string) => ({
+			enrollmentId: lapsedEnr.id,
+			level,
+			completed: 1,
+			total: 1,
+			approved: true,
+			completedAt,
+			creditedClubId,
+		});
+		await testDb.insert(pathLevelProgress).values([
+			// Credited HERE, though after the membership ended: counts.
+			lvl(3, new Date("2026-06-01T12:00:00Z"), own.clubId),
+			// Another club's, completed before the membership ended: counts.
+			lvl(1, new Date("2026-02-01T12:00:00Z"), other.clubId),
+			// Another club's, completed after it ended: left out.
+			lvl(4, new Date("2026-06-01T12:00:00Z"), other.clubId),
+		]);
+		// An unapproved, unattributed row for the path with no qualifying level.
+		await testDb.insert(pathLevelProgress).values({
+			enrollmentId: emptyEnr.id,
+			level: 1,
+			completed: 0,
+			total: 1,
+			approved: false,
+			completedAt: new Date("2026-06-01T12:00:00Z"),
+			creditedClubId: other.clubId,
+		});
 		await testDb
 			.update(members)
-			.set({ status: "inactive" })
+			.set({ status: "former", endedAt: "2026-03-04" })
 			.where(inArray(members.id, [own.adminMemberId]));
 
 		const out = await loadClubExport(own.clubId);
 		const byName = Object.fromEntries(
 			(out?.files ?? []).map((f) => [f.filename, f]),
 		);
-		expect(byName["pathways.csv"].rows).toEqual([
-			{
-				member_id: own.memberId,
-				name: "Member User",
-				path: `Archived ${RUN}`,
-				current_level: null,
-				status: "archived",
-			},
-			{
-				member_id: own.memberId,
-				name: "Member User",
-				path: `Kept ${RUN}`,
-				current_level: null,
-				status: "active",
-			},
+		expect(
+			byName["pathways.csv"].rows.map((r) => [
+				r.name,
+				r.member_status,
+				r.path,
+				r.current_level,
+			]),
+		).toEqual([
+			// Levels 3 (credited here) and 1 (before ended_at) count; 4, another
+			// club's after the end, does not. The enrollment with no qualifying
+			// level (Empty) is omitted.
+			["Admin User", "former", `Lapsed ${RUN}`, 3],
+			["Member User", "active", `Archived ${RUN}`, null],
+			["Member User", "active", `Kept ${RUN}`, null],
 		]);
-		// Still on the roster file, as a past member: only Pathways is scoped.
 		expect(byName["members.csv"].rows).toContainEqual(
 			expect.objectContaining({
 				member_id: own.adminMemberId,
-				status: "inactive",
+				status: "former",
+				ended_at: "2026-03-04",
 			}),
 		);
 
 		await cleanup(own.clubId, [own.adminUserId, own.memberUserId]);
+		await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		extraClubs.pop();
 		extraClubs.pop();
 	});
 

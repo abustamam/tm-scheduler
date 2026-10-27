@@ -118,6 +118,12 @@ export interface ExistingMembershipRow {
 	id: string;
 	personId: string;
 	name: string;
+	/**
+	 * The membership's status, when the caller has it (the preview does). A
+	 * `former` match is noted in the plan: the commit fill-updates the row and
+	 * leaves it former (#1328), so the admin must reactivate from the profile.
+	 */
+	status?: "active" | "inactive" | "former";
 }
 
 /**
@@ -566,6 +572,10 @@ function withEmailRefusal(
 	return note ? `${note} · ${refusal}` : refusal;
 }
 
+/** The plan's statement of what the commit does with a former member's row (#1328). */
+export const FORMER_UPDATE_NOTE =
+	"Former member: fills only; they stay former until reactivated from their profile";
+
 function updateNote(fills: FieldFill[], joinedAt: Date | null): string {
 	const parts: string[] = [];
 	if (fills.length > 0) {
@@ -701,6 +711,7 @@ export function planImport(
 		if (conflict) summary.addressConflicts++;
 		if (md.kind === "update" && existingMember) {
 			summary.toUpdate++;
+			const fillNote = updateNote([...md.fills, ...personFills], row.joinedAt);
 			previewRows.push({
 				name: row.name,
 				email: row.email,
@@ -709,7 +720,9 @@ export function planImport(
 				action: "update",
 				note: withEmailRefusal(
 					withConflict(
-						updateNote([...md.fills, ...personFills], row.joinedAt),
+						existingMember.status === "former"
+							? `${FORMER_UPDATE_NOTE} · ${fillNote}`
+							: fillNote,
 						conflict,
 					),
 					emailOutcome,

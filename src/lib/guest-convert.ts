@@ -54,6 +54,15 @@ export const CONVERT_NAME_CLASH_MESSAGE =
 export const CONVERT_REACTIVATED_MESSAGE =
 	"Reactivated an existing lapsed membership (was inactive).";
 
+/** The same notice when the membership had been deliberately ended (#1328):
+ *  convert just reversed an End, which the admin must be told. */
+export const CONVERT_REACTIVATED_FORMER_MESSAGE = (
+	endedAt: string | null | undefined,
+): string =>
+	`Reactivated a former member's membership (was former${
+		endedAt ? `, ended ${endedAt}` : ""
+	}). Their membership had been ended; converting reversed that.`;
+
 /**
  * Told to the admin when waking that lapsed membership also wrote its club role
  * back DOWN to Member (#501 review).
@@ -139,6 +148,11 @@ export const CONVERT_OFFICER_TERM_CLOSED_MESSAGE = (
  *  `ConvertGuestResult`, restated here so this module stays free of `#/db`. */
 export interface ConvertNotice {
 	reactivated: boolean;
+	/** The status the membership was woken from (#1328). Absent on an older
+	 *  tab's result: the notice then falls back to the "inactive" wording. */
+	reactivatedFrom?: "inactive" | "former";
+	/** `ended_at` of a former membership, club-local `YYYY-MM-DD`, when known. */
+	priorEndedAt?: string | null;
 	/** The elevated club role convert wrote down to `member`, if it did. */
 	demotedFrom?: "admin";
 	/** Open officer positions the wake-up ended, because they would otherwise
@@ -177,7 +191,11 @@ export function convertNoticeDescription(
 ): string | undefined {
 	const lines: string[] = [];
 	if (result.reactivated) {
-		lines.push(CONVERT_REACTIVATED_MESSAGE);
+		lines.push(
+			result.reactivatedFrom === "former"
+				? CONVERT_REACTIVATED_FORMER_MESSAGE(result.priorEndedAt)
+				: CONVERT_REACTIVATED_MESSAGE,
+		);
 		if (result.demotedFrom) lines.push(CONVERT_DEMOTED_MESSAGE);
 		if (result.closedOfficerPositions.length > 0) {
 			lines.push(

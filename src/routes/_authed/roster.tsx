@@ -49,6 +49,12 @@ import {
 	parseRosterText,
 	type RowIssue,
 } from "#/lib/roster-import";
+import {
+	FORMER_MEMBER_LABEL,
+	FORMER_MEMBER_MESSAGE,
+	flagFormerMatches,
+	type PreviewRowWithFormer,
+} from "#/lib/roster-import-former";
 import { cn } from "#/lib/utils";
 import { inviteAllMembers, inviteMember } from "#/server/account-invite";
 import { listClubMembers } from "#/server/club";
@@ -368,7 +374,9 @@ function Roster() {
 		{
 			label: "Speeches given",
 			value: String(rows.reduce((n, r) => n + r.speeches, 0)),
-			note: "all time",
+			// The rows are current members only (#1328): a former member's speeches
+			// are not in this sum, so the card must not say "all time".
+			note: "current members",
 		},
 		{
 			label: "Open roles",
@@ -697,6 +705,7 @@ function Roster() {
 					open={importOpen}
 					onOpenChange={setImportOpen}
 					existing={members}
+					formerNames={formerMembers.map((m) => m.name)}
 					clubId={clubId}
 				/>
 			) : null}
@@ -723,6 +732,7 @@ function Roster() {
 					open={addOpen}
 					onOpenChange={setAddOpen}
 					existing={members}
+					formerNames={formerMembers.map((m) => m.name)}
 					clubId={clubId}
 				/>
 			) : null}
@@ -1268,11 +1278,14 @@ function AddMemberDialog({
 	open,
 	onOpenChange,
 	existing,
+	formerNames,
 	clubId,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	existing: { name: string; email: string | null }[];
+	/** Former members' names (an admin's list, #1328): previewed as blocked. */
+	formerNames: string[];
 	clubId: string;
 }) {
 	const router = useRouter();
@@ -1283,9 +1296,11 @@ function AddMemberDialog({
 
 	// Validate the single row through the same preview builder Bulk import uses,
 	// so a blank name / bad email / duplicate is caught before we ever submit.
-	const preview: PreviewRow | null = name.trim()
-		? (buildImportPreview([{ name, email, phone, office: "" }], existing)[0] ??
-			null)
+	const preview: PreviewRowWithFormer | null = name.trim()
+		? (flagFormerMatches(
+				buildImportPreview([{ name, email, phone, office: "" }], existing),
+				formerNames,
+			)[0] ?? null)
 		: null;
 	const blockingIssue =
 		preview && !preview.willImport ? preview.issues[0] : null;
@@ -1395,7 +1410,9 @@ function AddMemberDialog({
 
 						{blockingIssue ? (
 							<p className="text-sm font-semibold text-warning-strong">
-								{ADD_ISSUE_MESSAGE[blockingIssue]}
+								{preview?.former
+									? FORMER_MEMBER_MESSAGE
+									: ADD_ISSUE_MESSAGE[blockingIssue]}
 							</p>
 						) : null}
 					</div>
@@ -1420,11 +1437,14 @@ function BulkImportDialog({
 	open,
 	onOpenChange,
 	existing,
+	formerNames,
 	clubId,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	existing: { name: string; email: string | null }[];
+	/** Former members' names (an admin's list, #1328): previewed as blocked. */
+	formerNames: string[];
 	clubId: string;
 }) {
 	const router = useRouter();
@@ -1432,7 +1452,10 @@ function BulkImportDialog({
 	const [busy, setBusy] = useState(false);
 
 	const preview = text.trim()
-		? buildImportPreview(parseRosterText(text), existing)
+		? flagFormerMatches(
+				buildImportPreview(parseRosterText(text), existing),
+				formerNames,
+			)
 		: [];
 	const importable = preview.filter((r) => r.willImport);
 	const skipped = preview.length - importable.length;
@@ -1558,9 +1581,11 @@ function BulkImportDialog({
 														<span className="font-semibold text-link">OK</span>
 													) : (
 														<span className="font-semibold text-warning-strong">
-															{row.issues
-																.map((issue) => ISSUE_LABELS[issue])
-																.join(", ")}
+															{row.former
+																? FORMER_MEMBER_LABEL
+																: row.issues
+																		.map((issue) => ISSUE_LABELS[issue])
+																		.join(", ")}
 														</span>
 													)}
 												</td>

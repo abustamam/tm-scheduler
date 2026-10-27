@@ -143,6 +143,9 @@ export async function listClubsForConsole(): Promise<ConsoleClubList> {
 			count: sql<number>`count(*)::int`,
 		})
 		.from(members)
+		// Active members only (#1328): a former or lapsed membership is not a
+		// member the console's count should promise.
+		.where(eq(members.status, "active"))
 		.groupBy(members.clubId);
 	const countByClub = new Map(counts.map((c) => [c.clubId, c.count]));
 
@@ -241,7 +244,7 @@ export async function getClubConsoleDetail(
 	const [{ count }] = await db
 		.select({ count: sql<number>`count(*)::int` })
 		.from(members)
-		.where(eq(members.clubId, clubId));
+		.where(and(eq(members.clubId, clubId), eq(members.status, "active")));
 
 	const admin = await firstAdminOf(clubId);
 

@@ -4,8 +4,8 @@ import { useState } from "react";
 import { PageContainer } from "#/components/page-container";
 import { formatActivity } from "#/lib/activity-format";
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
+import { listActivityActors } from "#/server/activity-actors";
 import { listActivity } from "#/server/activity-feed";
-import { listClubMembers } from "#/server/club";
 import { loadClubTimezoneSettings } from "#/server/clubs";
 import { listUpcomingMeetings } from "#/server/meetings";
 
@@ -19,7 +19,7 @@ export const Route = createFileRoute("/_authed/activity")({
 		const [activity, meetings, members, { timezone }] = await Promise.all([
 			listActivity({ data: { clubId } }),
 			listUpcomingMeetings({ data: clubId }),
-			listClubMembers({ data: clubId }),
+			listActivityActors({ data: clubId }),
 			// Every date on this page is the CLUB's day (#1017). Left to the
 			// runtime, the UTC server and the browser bucketed an evening's
 			// entries under different day headings and React threw the server
@@ -118,7 +118,7 @@ function ActivityLog() {
 						<option value={ALL}>All members</option>
 						{members.map((m) => (
 							<option key={m.id} value={m.id}>
-								{m.name}
+								{m.status === "former" ? `${m.name} (former)` : m.name}
 							</option>
 						))}
 					</select>
