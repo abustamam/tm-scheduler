@@ -32,7 +32,7 @@ import {
 	setMemberAbsentReleasingRoles,
 	setMemberPresence,
 } from "./minutes-logic";
-import { holdsOpenOfficerTerm } from "./officers-logic";
+import { isEffectiveAdmin } from "./officers-logic";
 import { minutesAccess } from "./view-as-logic";
 
 const uuid = z.string().uuid();
@@ -121,9 +121,7 @@ export const getMinutes = createServerFn({ method: "GET" })
 		const { canEdit, visible } = minutesAccess({
 			// Effective-admin (#202): stored admin OR an open officer term, the same
 			// two arms as the minutes writes' `requireClubRole` gate.
-			isAdmin:
-				membership?.clubRole === "admin" ||
-				(membership ? await holdsOpenOfficerTerm(db, membership.id) : false),
+			isAdmin: membership ? await isEffectiveAdmin(db, membership) : false,
 			impersonatingReadWrite: impersonatingRW,
 			asMember,
 			status,

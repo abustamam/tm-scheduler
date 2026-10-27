@@ -28,7 +28,7 @@ import {
 	it,
 	vi,
 } from "vitest";
-import { clubs, meetings } from "#/db/schema";
+import { clubs, meetings, officerTerms } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -230,6 +230,40 @@ describe.skipIf(!hasTestDb)("GET /api/meetings/$id/minutes/pdf (#903)", () => {
 			expect(res.status, `query "${q}"`).toBe(403);
 		}
 		expect(renderMinutesPdf).not.toHaveBeenCalled();
+	});
+
+	it("serves an elected officer (open term, club_role member) before completion, with or without view", async () => {
+		// protects=an officer may download minutes the page shows them (#1383); fails_when=the route gates on clubRole === admin only; no_claim=none
+		await testDb
+			.insert(officerTerms)
+			.values({ membershipId: club.memberId, position: "secretary" });
+		try {
+			for (const q of ["", "?view=guests"]) {
+				const res = await download(club.meetingId, club.memberUserId, q);
+				expect(res.status, `query "${q}"`).toBe(200);
+			}
+		} finally {
+			await testDb
+				.delete(officerTerms)
+				.where(eq(officerTerms.membershipId, club.memberId));
+		}
+	});
+
+	it("refuses an officer whose term has ended before completion", async () => {
+		await testDb.insert(officerTerms).values({
+			membershipId: club.memberId,
+			position: "secretary",
+			termEnd: new Date(),
+		});
+		try {
+			const res = await download(club.meetingId, club.memberUserId, "");
+			expect(res.status).toBe(403);
+			expect(renderMinutesPdf).not.toHaveBeenCalled();
+		} finally {
+			await testDb
+				.delete(officerTerms)
+				.where(eq(officerTerms.membershipId, club.memberId));
+		}
 	});
 
 	it("still 403s a non-member, with or without view", async () => {

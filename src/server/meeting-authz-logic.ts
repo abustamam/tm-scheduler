@@ -31,7 +31,7 @@ import {
 	membershipPickOpenTermJoin,
 	membershipPickOrder,
 } from "./membership-pick-order";
-import { holdsOpenOfficerTerm } from "./officers-logic";
+import { isEffectiveAdmin } from "./officers-logic";
 
 // Either the main db client or a drizzle transaction, as in `guards.ts`.
 type DbOrTx =
@@ -171,7 +171,7 @@ async function resolveAdminGrant(
 		.innerJoin(people, eq(people.id, members.personId))
 		// Open terms only; `officer_terms_open_idx` covers (membership_id, term_end).
 		// Joined for the ORDER BY alone (key 3) — the count is never selected. The
-		// officer arm below asks `holdsOpenOfficerTerm` about the PICKED row, and
+		// officer arm below asks `isEffectiveAdmin` about the PICKED row, and
 		// key 3 is what makes the picked row the one that holds the term.
 		.leftJoin(officerTerms, membershipPickOpenTermJoin())
 		.where(and(eq(people.userId, sessionUserId), eq(members.clubId, clubId)))
@@ -228,7 +228,7 @@ async function resolveAdminGrant(
 	if (
 		picked &&
 		picked.status === "active" &&
-		(picked.clubRole === "admin" || (await holdsOpenOfficerTerm(db, picked.id)))
+		(await isEffectiveAdmin(db, picked))
 	) {
 		return { granted: true, memberId: picked.id, membershipIds };
 	}

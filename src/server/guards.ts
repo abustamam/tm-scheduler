@@ -28,10 +28,7 @@ import {
 	membershipPickOpenTermJoin,
 	membershipPickOrder,
 } from "./membership-pick-order";
-import {
-	getOpenOfficerPositions,
-	holdsOpenOfficerTerm,
-} from "./officers-logic";
+import { isEffectiveAdmin } from "./officers-logic";
 
 // IMPORTANT: this module touches `db`/`pg` and must never be imported by a
 // client component directly. Only server-function modules import it; the
@@ -313,22 +310,10 @@ export async function requireClubRole(
 	if (roles.includes(membership.clubRole)) {
 		return membership;
 	}
-	if (roles.includes("admin") && (await holdsOfficerSeat(membership))) {
+	if (roles.includes("admin") && (await isEffectiveAdmin(db, membership))) {
 		return membership;
 	}
 	throw new Error(NO_PERMISSION_MESSAGE);
-}
-
-/**
- * Effective-admin's officer arm (#202), shared by `requireClubRole` (the write
- * gate) and `canManageClub` (the read-surface flag) so the two cannot drift: an
- * open `officer_terms` row on this membership.
- */
-async function holdsOfficerSeat(
-	membership: Pick<ResolvedMembership, "id">,
-): Promise<boolean> {
-	if (membership.id === null) return false;
-	return holdsOpenOfficerTerm(db, membership.id);
 }
 
 /**
@@ -394,9 +379,8 @@ export async function assertStillClubAdmin(
 	}
 	// From the row just read, not a second query — same as `requireMembership`.
 	assertNotArchived(membership);
-	if (membership.clubRole === "admin") return;
-	// Effective-admin (#202): an elected officer is a full admin.
-	if ((await getOpenOfficerPositions(conn, membership.id)).length > 0) return;
+	// Effective-admin (#202): a stored admin or an elected officer.
+	if (await isEffectiveAdmin(conn, membership)) return;
 	throw new Error(NO_PERMISSION_MESSAGE);
 }
 
@@ -425,9 +409,7 @@ export async function canManageClub(
 	if (membership && membership.status === "active") {
 		// Effective-admin (#202), the same two arms as `requireClubRole(…,
 		// ["admin"])`: a stored admin OR an elected officer with an open term.
-		return (
-			membership.clubRole === "admin" || (await holdsOfficerSeat(membership))
-		);
+		return isEffectiveAdmin(db, membership);
 	}
 	const session = await getActiveImpersonation(userId, clubId);
 	return session?.mode === "read_write";
@@ -450,13 +432,11 @@ export interface ClubViewAccess {
 }
 
 /** Stored `admin`, or any open officer term (#202): every officer is a full
- *  admin. The one statement of that rule for a resolved active membership on
- *  the read side. */
+ *  admin. Delegates to `isEffectiveAdmin`, the shared predicate. */
 async function holdsAdminAuthority(
 	membership: RealMembership,
 ): Promise<boolean> {
-	if (membership.clubRole === "admin") return true;
-	return (await getOpenOfficerPositions(db, membership.id)).length > 0;
+	return isEffectiveAdmin(db, membership);
 }
 
 /**

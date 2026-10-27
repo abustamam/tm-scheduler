@@ -35,18 +35,22 @@ export async function getOpenOfficerPositions(
 }
 
 /**
- * Does this membership hold any open officer term (#202)? The ONE statement of
- * the effective-admin officer arm: `guards.ts` (`requireClubRole`,
- * `canManageClub`) and `meeting-authz-logic.ts` (`resolveAdminGrant`) both call
- * it, so the write gate, the read flag and the agenda-write grant cannot drift.
+ * Effective-admin (#202): a stored `admin`, or an active membership's open
+ * officer term. The predicate `requireClubRole`, `assertStillClubAdmin`,
+ * `canManageClub`, `holdsAdminAuthority` (`guards.ts`), `resolveAdminGrant`
+ * (`meeting-authz-logic.ts`), `getMinutes` and the minutes PDF route all ask, so
+ * those copies cannot drift. Callers keep their own `status === "active"` check.
  * It lives here, not in `guards.ts`, because `guards.ts` imports
  * `meeting-authz-logic.ts` and the reverse import would be a cycle.
+ * `id` is null for a synthetic (impersonation) membership, which holds no term.
  */
-export async function holdsOpenOfficerTerm(
+export async function isEffectiveAdmin(
 	database: Database,
-	membershipId: string,
+	membership: { id: string | null; clubRole: string },
 ): Promise<boolean> {
-	return (await getOpenOfficerPositions(database, membershipId)).length > 0;
+	if (membership.clubRole === "admin") return true;
+	if (membership.id === null) return false;
+	return (await getOpenOfficerPositions(database, membership.id)).length > 0;
 }
 
 /**
