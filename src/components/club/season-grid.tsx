@@ -294,7 +294,7 @@ export function SeasonGrid({
 			// still shows "declined" over an answer that has since changed deletes
 			// nothing. Offering Undo then would re-decline over that newer answer.
 			// The refresh above is what shows the person the row as it now stands.
-			if (!cleared) {
+			if (cleared === false) {
 				toast.message(
 					self
 						? "Nothing changed. Your answer changed since this page loaded."

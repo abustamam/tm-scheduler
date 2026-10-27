@@ -737,6 +737,21 @@ describe("SeasonGrid: the Undo after a clear follows what the clear did", () => 
 		);
 		expect(toastSuccess).not.toHaveBeenCalled();
 	});
+
+	it("treats a reply with no `cleared` as the clear that landed", async () => {
+		// A server from before `cleared` existed answers a bare `{ ok: true }`
+		// while a deploy overlaps. Only an explicit `false` means nothing was
+		// removed; reading a missing field as `false` would tell an officer
+		// "nothing changed" about a clear that worked.
+		clearAvailability.mockResolvedValueOnce({ ok: true } as unknown as {
+			ok: true;
+			cleared: boolean;
+		});
+		await officerClearsCarla();
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		expect(toastSuccess.mock.calls[0]?.[0]).toBe("Marked them available.");
+		expect(toastMessage).not.toHaveBeenCalled();
+	});
 });
 
 describe("SeasonGrid legend (#542, F-008)", () => {

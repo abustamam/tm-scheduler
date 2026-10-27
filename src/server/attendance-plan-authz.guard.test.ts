@@ -246,7 +246,7 @@ describe("attendance-plan authz (D6)", () => {
 		// "delete whatever is in the row", which let an officer's "No answer" erase
 		// an answer that arrived since the panel rendered. Verbatim, handler and
 		// seam both: stripping only deletes text.
-		const seamRaw = CLEAR_SEAM;
+		const seamRaw = CLEAR_SEAM_RAW;
 		for (const [where, src] of [
 			["the handler", handlerBody(RAW, "clearPlannedAttendance")],
 			["the seam", seamRaw],
@@ -295,9 +295,9 @@ describe("attendance-plan authz (D6)", () => {
 	it("runs the session gate before the ladder on the clear", () => {
 		// `clearFloor` can trust the Toastmaster arm's actor as "the session's own
 		// member" only because a session is PROVEN first: with one, the caller is
-		// resolved from the session and a claimed id is ignored. Without it a
-		// visitor could claim the Toastmaster's published id and clear "their own"
-		// row. Two halves, one per place the check can live: the handler's early
+		// resolved from the session and a claimed id is ignored. Without it the
+		// arm's actor would rest on a claim rather than a session, and the own-row
+		// test would mean nothing. Two halves, one per place the check can live: the handler's early
 		// gate, and the seam's proof check, which is the one vitest executes and the
 		// one that holds when the session's membership changes between the two reads.
 		const body = handlerBody(SRC, "clearPlannedAttendance");
@@ -470,7 +470,7 @@ describe("attendance-plan authz (D6)", () => {
 		).toMatch(
 			/const actorMemberId = membership\.id;\s*const proof = "session";\s*return \{ actorMemberId, viaManager: true, via: "officer", proof \};/,
 		);
-		for (const src of [SRC, CLEAR_SEAM_RAW]) {
+		for (const src of [RAW, CLEAR_SEAM_RAW]) {
 			expect(
 				src,
 				"the officer clear must NOT be gated on viaManager — that admits the honour-system TMOD arm",

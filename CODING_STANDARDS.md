@@ -606,7 +606,7 @@ re-decline. The set keeps its write modes (a session writes unrestricted, an ass
 blank); a read_only impersonating superadmin can no longer write through it. The rules live in the
 seams (`setAvailabilityCore`, `clearAvailabilityCore`, `clearPlannedAttendanceCore`,
 `availability-logic.ts`) rather than in the handler bodies because a `createServerFn` body cannot
-be invoked in vitest; the handlers keep the meeting, archive and roster gates and bind the SUBJECT
+be invoked in vitest without mocking `createServerFn` itself; the handlers keep the meeting, archive and roster gates and bind the SUBJECT
 to `data.memberId`. `availability-authz.guard.test.ts` pins the wiring of `setAvailability` and
 `clearAvailability` (`attendance-plan-authz.guard.test.ts` that of `clearPlannedAttendance`), and
 `availability.integration.test.ts` executes the rules.

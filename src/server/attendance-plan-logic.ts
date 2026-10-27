@@ -113,7 +113,9 @@ const OFFICER_OWN_ROW_RUNGS: readonly AttendancePlanStatus[] = [
  *
  * Neither floor fits that caller: `SELF_SERVICE_RUNGS` is a member's own answer,
  * and `CLEARABLE_ASK` is an officer's ask, which the Toastmaster arm does not
- * remove on another member's row.
+ * remove on another member's row. The Toastmaster's standing comes from holding
+ * a slot on this meeting, not from an office, and an answer belongs to the
+ * member who gave it, so their reach over other rows stops at setting.
  */
 export const NO_CLEARABLE_RUNGS: readonly AttendancePlanStatus[] = [];
 
