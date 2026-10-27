@@ -1620,16 +1620,17 @@ function MeetingView() {
 	// — but clamped off `reached_out`. `rungOverride` is shared with the
 	// officer panel, so an OFFICER setting their own row to `reached_out` from
 	// the panel would otherwise mislabel their own strip as "can't make this
-	// one — undo?", and tapping that "undo" actually DELETES the row. Since #573
-	// `clearPlannedAttendance` floors every clear server-side, and the floors
-	// are complements: the officer arm may clear only the ASK (`CLEARABLE_ASK`,
-	// `reached_out`), the self and Toastmaster arm only an ANSWER
-	// (`SELF_SERVICE_RUNGS`, `coming` / `not_coming`). An officer is resolved as
-	// the officer arm even on their own row, so the "undo" clear is floored to
-	// exactly `reached_out`: it would erase the very outreach record the clamp
-	// exists to protect (whole-branch review M8), and cannot touch an answer.
-	// `answeredRungs` can never itself produce `reached_out` — it is filtered
-	// server-side — so this only ever intercepts the override.
+	// one — undo?", and tapping that "undo" actually DELETES the row. An
+	// officer's clear is not unrestricted: since #573 `clearPlannedAttendance`
+	// floors every clear server-side, and the officer arm's floor is the ASK
+	// (`CLEARABLE_ASK`, `reached_out`), the self and Toastmaster arm's an ANSWER
+	// (`SELF_SERVICE_RUNGS`), so neither erases the other's. On another member's
+	// row the ask is the only thing an officer may clear. But the officer arm
+	// applies to their own row too, and `reached_out` is always in its floor, so
+	// the "undo" clear would erase the very outreach record the clamp exists to
+	// protect (whole-branch review M8). `answeredRungs` can never itself produce
+	// `reached_out` — it is filtered server-side — so this only ever intercepts
+	// the override.
 	let myEffectiveStatus =
 		myId && rungOverride[myId] !== undefined ? rungOverride[myId] : myStatus;
 	myEffectiveStatus =
