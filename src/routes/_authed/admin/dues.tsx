@@ -484,6 +484,7 @@ function MemberRow({
 }) {
 	return (
 		<div className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-3 last:border-b-0">
+			{/* 11rem: avatar + a readable name line; below it the badge and buttons wrap instead (#1361). */}
 			<div className="flex min-w-[11rem] flex-1 items-center gap-3">
 				<MemberAvatar
 					tone={toneFromSeed(row.membershipId)}
