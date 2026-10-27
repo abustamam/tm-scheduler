@@ -5,7 +5,30 @@ import {
 	formatMeetingTime,
 	formatMeetingTimeRange,
 	formatShortDate,
+	meetingHeading,
 } from "./format";
+
+describe("meetingHeading", () => {
+	// 01:30 UTC on Oct 29 is still Wed, Oct 28 in Los Angeles.
+	const at = "2026-10-29T01:30:00Z";
+	const tz = "America/Los_Angeles";
+
+	it("titles a themed meeting by its theme and keeps the date below", () => {
+		expect(meetingHeading("Boundaries", at, tz)).toEqual({
+			title: "Boundaries",
+			detailDate: "Wed, Oct 28",
+		});
+	});
+
+	it("titles an unthemed meeting by its club-local date, printed once", () => {
+		for (const theme of [null, "", "   "]) {
+			expect(meetingHeading(theme, at, tz)).toEqual({
+				title: "Wed, Oct 28",
+				detailDate: null,
+			});
+		}
+	});
+});
 
 describe("formatShortDate", () => {
 	it("formats a date as compact month + day in the given timezone", () => {
