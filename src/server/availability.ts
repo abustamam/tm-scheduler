@@ -42,19 +42,20 @@
 // of the line that needs a session bound to a member of this club. Each names
 // `requireSessionActor` in its own handler.
 //
-// The two `setAvailability` / `clearAvailability` delegates still name the
-// rungs they may touch (`SELF_SERVICE_RUNGS`) rather than trusting the plan
-// seam to know who is calling: that seam is `attendance-plan-logic.ts`, and it
-// genuinely cannot know — it takes a `DbOrTx` and no session. What it CAN be
-// told is how the caller's identity was established, which is the `proof`
-// `setAvailability` now passes and the `onlyIfAbsent` mode it picks from it.
+// The three seams (`setAvailabilityCore`, `clearAvailabilityCore`,
+// `releaseSlotsAndMarkUnavailable`, all in `availability-logic.ts`) run the D6
+// actor ladder themselves, so the caller check lives where vitest can execute
+// it and this module hands each one the client's RAW assertion for that to mean
+// anything. The two delegates still name the rungs they may touch rather than
+// trusting the plan store to know who is calling: `attendance-plan-logic.ts`
+// genuinely cannot — it takes a `DbOrTx` and no session. What it CAN be told is
+// how the caller's identity was established, which is the `proof` the set seam
+// passes and the `onlyIfAbsent` mode it picks from it, and which rungs the
+// clear may delete.
 //
-// `markUnavailableReleasing` is the exception since #675, and the distinction is
-// worth keeping straight because it is what the missing gate hid behind. ITS
-// seam is `releaseSlotsAndMarkUnavailable`, which reaches the request for a
-// session itself and runs the D6 actor ladder — so the caller check does live
-// there, and this module must hand it the client's RAW assertion for that to
-// mean anything.
+// `markUnavailableReleasing` was the first of the three, since #675, and the
+// distinction is worth keeping straight because it is what the missing gate hid
+// behind.
 import { createServerFn } from "@tanstack/react-start";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
@@ -62,18 +63,13 @@ import { db } from "#/db";
 import { meetings } from "#/db/schema";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import {
-	clearPlanStatus,
-	SELF_SERVICE_RUNGS,
-	setPlanStatus,
-} from "./attendance-plan-logic";
-import { releaseSlotsAndMarkUnavailable } from "./availability-logic";
+	clearAvailabilityCore,
+	releaseSlotsAndMarkUnavailable,
+	setAvailabilityCore,
+} from "./availability-logic";
 import { assertClubNotArchived, requireMemberInClub } from "./guards";
 import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
-import {
-	requestWriteActor,
-	requestWriteActorWithProof,
-	requireSessionActor,
-} from "./write-actor-logic";
+import { requireSessionActor } from "./write-actor-logic";
 
 /** Load a meeting's status (for the #150 lock) and its OWNING club, or throw if
  *  it's missing. The club is read from the meeting rather than trusted from the
@@ -96,7 +92,7 @@ const availabilitySchema = z.object({
 	memberId: z.string().uuid(),
 	/** Who performed the action. Omitted ⇒ self-service (actor = subject); set
 	 *  to an officer's member id when an admin marks someone else unavailable.
-	 *  PUBLIC path, so this is an assertion, not proof — `requestWriteActor`
+	 *  PUBLIC path, so this is an assertion, not proof — the actor ladder
 	 *  club-scopes it and a real session overrides it (#396). */
 	actorMemberId: z.string().uuid().optional(),
 	meetingId: z.string().uuid(),
@@ -118,7 +114,12 @@ const availabilitySchema = z.object({
  *  season grid's offers in the meantime. So an ASSERTED caller may fill a blank
  *  and may re-affirm the answer already there; changing one raises
  *  `SIGN_IN_REQUIRED_MESSAGE` from the seam, which the grid renders as a toast
- *  carrying a one-tap sign-in link. */
+ *  carrying a one-tap sign-in link.
+ *
+ *  And WHOSE row is the caller's question, answered in the seam
+ *  (`setAvailabilityCore`): the member's own, or any member's for an officer, and
+ *  nobody else's. A signed-in caller used to resolve to the unrestricted write
+ *  with nothing comparing them with the subject. */
 export const setAvailability = createServerFn({ method: "POST" })
 	.validator((i: unknown) => availabilitySchema.parse(i))
 	.handler(async ({ data }) => {
@@ -131,54 +132,9 @@ export const setAvailability = createServerFn({ method: "POST" })
 		// what a caller who fails those checks is told.
 		assertMeetingAccepts(meeting.status, "plan", PLAN_ACCEPTING_CANCELLED);
 		await requireMemberInClub(data.memberId, meeting.clubId);
-		// `…WithProof` (#762). The subject default stays — this endpoint has no
-		// ladder and never had one, so the claim only decides who is CREDITED —
-		// but the arm that answered now decides how much the write may do.
-		const actor = await requestWriteActorWithProof({
-			clubId: meeting.clubId,
-			claimedActorMemberId: data.actorMemberId ?? data.memberId,
-		});
-		// Null is the impersonating superadmin and NOTHING else here: the claim is
-		// always present (it defaults to the subject), so the "nobody to credit"
-		// arm is unreachable, and the impersonation arm is only taken after a real
-		// session was read. `logActivity` is null-aware by design (ADR-0016 /
-		// #246), so the id is passed along as-is rather than falling back to the
-		// member — that would file the superadmin's write under their name.
+		// The ladder, the owner-or-officer rule and the write all run in the seam,
+		// where vitest can reach them. The RAW claim, as the other two take it.
 		//
-		// The proof falls back to the WEAKER value, matching the same fallback in
-		// `attendance-actor-logic.ts` and for its reason: an unknown must fail
-		// closed. The first draft of this line said `"session"` and it was wrong in
-		// the one way that matters — `resolveWriteActorWithProof` returns null for
-		// BOTH impersonation modes, so a READ-ONLY superadmin session would have
-		// taken the unrestricted overwrite branch here while `resolveActor` and
-		// `requireSessionActor` both refuse them and ADR-0020 calls that mode
-		// write-blind. The cost is that a read_write impersonation gets fill-blank
-		// mode on this one legacy delegate; the officer's real surface is
-		// `setPlannedAttendance`, where the same principal resolves through
-		// `requireClubRole` and comes back `"session"`, so admin parity (#246) is
-		// unaffected where it is actually exercised.
-		const answer = {
-			memberId: data.memberId,
-			meetingId: data.meetingId,
-			clubId: meeting.clubId,
-			status: "not_coming" as const,
-			actorMemberId: actor?.memberId ?? null,
-			proof: actor?.proof ?? ("asserted" as const),
-			// Deliberately NO `demoteFrom`. Writing `not_coming` over an officer's
-			// `reached_out` is the ladder working: they asked, the member answered.
-			// Restricting this would silently discard the answer, which is a worse
-			// loss than the "we asked them" bit it would have preserved.
-		};
-		if (answer.proof === "asserted") {
-			await setPlanStatus(db, {
-				...answer,
-				proof: "asserted",
-				onlyIfAbsent: true,
-			});
-		} else {
-			await setPlanStatus(db, answer);
-		}
-
 		// `proof` is RETURNED (#762 review), and it is the only thing this fn can
 		// tell a caller that the caller cannot work out for itself. The season
 		// grid offers "Undo" on this toast, and undo is `clearAvailability`, which
@@ -190,16 +146,26 @@ export const setAvailability = createServerFn({ method: "POST" })
 		// a second guess at one: it is what the write that JUST LANDED actually
 		// resolved to, from the same resolution that decided the write's mode.
 		// Additive, so a tab loaded before this deploy simply ignores it.
-		return { ok: true as const, proof: answer.proof };
+		return setAvailabilityCore(db, {
+			memberId: data.memberId,
+			meetingId: data.meetingId,
+			clubId: meeting.clubId,
+			claimedActorMemberId: data.actorMemberId,
+		});
 	});
 
 /** Take a member's "not coming" back to "no answer" (row absent).
  *  SIGNED IN since #762 — a clear DESTROYS an answer a person put there, which
  *  is the side of ADR-0026's line that needs a session bound to a member of this
  *  club. `requireMemberInClub` proves the SUBJECT is on the roster and proves
- *  nothing about the caller; the self-service floor below keeps an officer's
- *  `reached_out` out of reach; neither of those is the check that says the
- *  person clearing the row is entitled to. */
+ *  nothing about the caller; neither is the check that says the person clearing
+ *  the row is entitled to.
+ *
+ *  That check is `clearAvailabilityCore`'s: a member's answer is cleared by that
+ *  member, or by an officer acting on the season grid (`canManageOthers` there,
+ *  `requireClubRole(admin)` here), and by nobody else, the meeting's Toastmaster
+ *  included, and only by a caller whose identity a session proved. An officer
+ *  clearing ANOTHER member's row removes a decline and nothing else. */
 export const clearAvailability = createServerFn({ method: "POST" })
 	.validator((i: unknown) => availabilitySchema.parse(i))
 	.handler(async ({ data }) => {
@@ -209,29 +175,23 @@ export const clearAvailability = createServerFn({ method: "POST" })
 		// the plan seam below.
 		assertMeetingAccepts(meeting.status, "plan", PLAN_ACCEPTING_CANCELLED);
 		await requireMemberInClub(data.memberId, meeting.clubId);
-		// The RETURN is deliberately unused: this gate answers "may this request
-		// write at all", and who to CREDIT is the existing resolution below, which
-		// is unchanged. Binding the result would also import the null hazard
-		// documented on `SessionActor` for no gain.
+		// The explicit, early half, as in `markUnavailableReleasing`: a write
+		// surface that deletes an answer names its session gate in its own handler.
+		// The RETURN is deliberately unused. The seam checks the PROOF of the actor
+		// it resolves, which is the half vitest can execute, and it is the one that
+		// holds when the session's membership changes between the two reads.
 		await requireSessionActor({ clubId: meeting.clubId });
-		const actorMemberId = await requestWriteActor({
-			clubId: meeting.clubId,
-			claimedActorMemberId: data.actorMemberId ?? data.memberId,
-		});
-
-		await clearPlanStatus(db, {
+		await clearAvailabilityCore(db, {
+			// The SUBJECT is `data.memberId`, never the claim: the ladder compares the
+			// actor with it.
 			memberId: data.memberId,
 			meetingId: data.meetingId,
 			clubId: meeting.clubId,
-			actorMemberId,
-			// THE fix for the authorization regression this consolidation created.
-			// Deleting an officer's "I contacted them" used to require
-			// `requireUser()` + `requireClubRole(admin)`, because it lived in its own
-			// table. It now shares a row with the member's own answer, and this
-			// endpoint takes no session at all — so without this the whole officer
-			// chase list was erasable by anyone who could read a member id off the
-			// public season grid.
-			onlyFrom: SELF_SERVICE_RUNGS,
+			// The RAW claim, deliberately NOT defaulted to the subject. Behind the
+			// session gate it changes no outcome, so this is defence in depth: a
+			// default would make actor === subject for every request if the gate were
+			// ever lost, the shape `markUnavailableReleasing` documents.
+			claimedActorMemberId: data.actorMemberId,
 		});
 
 		return { ok: true as const };

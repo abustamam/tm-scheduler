@@ -40,7 +40,7 @@
  *
  * This module touches `db` and must never be imported by client code.
  */
-import type { WriteProof } from "#/lib/write-proof";
+import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
 import {
 	getSessionUser,
 	NO_PERMISSION_MESSAGE,
@@ -66,8 +66,12 @@ export const SELF_ONLY_MESSAGE =
 export interface ResolvedActor {
 	actorMemberId: string | null;
 	/** Admitted as someone who RUNS this meeting, and so may set any member's
-	 *  row, write the officer-only `reached_out` rung, and clear without the
-	 *  self-service restriction.
+	 *  row on the meeting page and write the officer-only `reached_out` rung.
+	 *
+	 *  It does NOT widen a CLEAR. A member's answer is cleared by that member or
+	 *  by an officer, and the Toastmaster is neither on another member's row: the
+	 *  clears read the ARM (`clearFloor`, {@link resolveOwnerOrOfficer}), not this
+	 *  flag.
 	 *
 	 *  Named for the CAPABILITY, not the arm, because two arms now grant it: a
 	 *  club officer, and this meeting's own TMOD (#576). It was `viaOfficer`
@@ -188,7 +192,11 @@ export async function resolveActor(args: {
 	// and edit meeting meta, so it is consistent with the product's identity
 	// model (#317) for WRITES that land in the activity feed. It is deliberately
 	// NOT trusted for anything else: the contact roster needs a real session
-	// (`loadTmodPanelData`), and the unrestricted clear stays on the officer arm.
+	// (`loadTmodPanelData`), and clearing ANOTHER member's answer is not this
+	// arm's at all — `clearFloor` gives it an empty floor there and
+	// `resolveOwnerOrOfficer` refuses it outright (as it refuses it WRITING
+	// another member's row on the season grid). A member's answer is changed
+	// there by that member, or by an officer, and by nobody else.
 	//
 	// Skipped entirely when there is no caller to match, which is what keeps the
 	// slot join off the request for a caller who asserted nothing.
@@ -231,4 +239,63 @@ export async function resolveActor(args: {
 	// edit that makes it reachable fails closed instead of granting.
 	const proof = resolved?.proof ?? "asserted";
 	return { actorMemberId: actor, viaManager: false, via: "self", proof };
+}
+
+/**
+ * {@link resolveActor} for a write that changes ONE member's own answer and takes
+ * no per-arm floor of its own: the season grid's `setAvailability` and
+ * `clearAvailability`. One function states "the owner or an officer" for both,
+ * so the two endpoints cannot drift.
+ *
+ * `resolveActor` admits three callers for a WRITE, and the Toastmaster arm is
+ * one that may set another member's row on the meeting page. The grid is
+ * different. A member's ANSWER (`coming` / `not_coming`) is changed there by that
+ * member, or by an officer acting deliberately on the grid (`canManageOthers`,
+ * the same principal the officer arm admits), and by nobody else, so another
+ * member's row is refused here with {@link SELF_ONLY_MESSAGE} unless the officer
+ * arm admitted the caller. The Toastmaster arm is refused too: `resolveActor`
+ * reports it `viaManager`, but that capability is about the meeting page's
+ * ladder and does not extend to the grid.
+ *
+ * Both halves of the condition earn their place. The test is the ids
+ * (`actorMemberId !== memberId`), never `via === "self"`, because the
+ * Toastmaster changing THEIR OWN row is changing their own answer and is
+ * allowed; the arm only decides who may skip the id test, and that is the
+ * officer arm alone.
+ *
+ * Pass the RAW claim, never one defaulted to the subject. Behind
+ * `requireSessionActor` (the clears) a signed-in caller's actor is the session's
+ * own member and a claimed id is ignored, so the claim changes no outcome there:
+ * it is defence in depth, so that losing the gate does not turn the comparison
+ * true for every request, which is the shape `markUnavailableReleasing`
+ * documents. On the session-less `setAvailability` the claim is the caller's
+ * whole assertion, and an asserted claim naming someone else is refused here.
+ */
+export async function resolveOwnerOrOfficer(args: {
+	clubId: string;
+	meetingId: string;
+	memberId: string;
+	claimedActorMemberId?: string;
+}): Promise<ResolvedActor> {
+	const resolved = await resolveActor(args);
+	if (resolved.via !== "officer" && resolved.actorMemberId !== args.memberId) {
+		throw new Error(SELF_ONLY_MESSAGE);
+	}
+	return resolved;
+}
+
+/**
+ * Refuse unless the resolved actor's identity was PROVEN by a session
+ * (ADR-0026), with the sentence `requireSessionActor` raises for a missing one.
+ *
+ * The clears run `requireSessionActor` in their handler, and that gate's result
+ * is not what the ladder acts on: the ladder reads the session again, and a
+ * session that loses its membership link between the two reads falls through to
+ * the asserted arm, which answers for a visitor who typed a member's id. So the
+ * seam that deletes an answer checks the proof of the actor it is about to act
+ * as. The officer arm is always `"session"`; the self and Toastmaster arms are
+ * only when a session resolved them.
+ */
+export function assertSessionProof(resolved: ResolvedActor): void {
+	if (resolved.proof !== "session") throw new Error(SIGN_IN_REQUIRED_MESSAGE);
 }

@@ -64,6 +64,34 @@ function handlerBody(source: string, name: string): string {
 const HANDLERS = ["setPlannedAttendance", "clearPlannedAttendance"];
 
 /**
+ * `clearPlannedAttendance`'s ladder, session-proof check and floor live in
+ * `clearPlannedAttendanceCore` (`availability-logic.ts`), a seam the handler
+ * calls after its own gates, so that `attendance-plan-logic.integration.test.ts`
+ * can EXECUTE them. The handler's assertions below pin the gates it keeps and
+ * the arguments it hands the seam; the seam's body is pinned where the logic is.
+ */
+const CLEAR_SEAM = (() => {
+	const logic = readSource(resolve(__dirname, "availability-logic.ts"));
+	const start = logic.indexOf(
+		"export async function clearPlannedAttendanceCore(",
+	);
+	if (start === -1) {
+		throw new Error(
+			"clearPlannedAttendanceCore not found in availability-logic.ts — it was renamed or removed. Re-point this guard rather than deleting the case.",
+		);
+	}
+	const next = logic.indexOf("\nexport ", start + 1);
+	return logic.slice(start, next === -1 ? logic.length : next);
+})();
+
+/** What each handler calls to learn who the caller is: the ladder itself for the
+ *  set, the seam that runs it for the clear. */
+const ACTOR_CALL = {
+	setPlannedAttendance: "await resolveActor(",
+	clearPlannedAttendance: "clearPlannedAttendanceCore(db, {",
+} as const;
+
+/**
  * The meeting-lock call a handler must make: the per-status helper, or EXACTLY
  * the write policy's `plan` class with `accept: ["cancelled"]` (#1137).
  *
@@ -112,7 +140,9 @@ describe("attendance-plan authz (D6)", () => {
 		});
 
 		it(`${fn} resolves the actor through the shared self-only gate`, () => {
-			expect(handlerBody(SRC, fn)).toContain("await resolveActor(");
+			expect(handlerBody(SRC, fn)).toContain(
+				ACTOR_CALL[fn as keyof typeof ACTOR_CALL],
+			);
 		});
 
 		it(`${fn} gates on the club's archived_at BEFORE any other check`, () => {
@@ -127,7 +157,10 @@ describe("attendance-plan authz (D6)", () => {
 			const positions: [string, number][] = [
 				["the meeting-lock call", body.search(LOCK_CHECK)],
 				["requireMemberInClub(", body.indexOf("requireMemberInClub(")],
-				["resolveActor(", body.indexOf("resolveActor(")],
+				[
+					ACTOR_CALL[fn as keyof typeof ACTOR_CALL],
+					body.indexOf(ACTOR_CALL[fn as keyof typeof ACTOR_CALL]),
+				],
 			];
 			for (const [later, at] of positions) {
 				expect(
@@ -175,38 +208,110 @@ describe("attendance-plan authz (D6)", () => {
 	});
 
 	it("never lets a session-less caller delete an officer's reached_out", () => {
-		// The clear path has no rung check of its own — it restricts the SEAM
+		// The clear path has no rung check of its own: it restricts the SEAM
 		// instead, which is the half that actually reaches the database. Deleting
 		// the officer's outreach record used to require `requireUser()` +
 		// `requireClubRole(admin)`; after the consolidation it is one row with the
-		// member's own answer, and this endpoint takes no session at all.
+		// member's own answer. The clear requires a session (#762), and the floor
+		// below is what keeps the ask out of reach of every arm but the officer's.
 		// True as written since the #576 review, and it was NOT before: the clear
 		// briefly rode `viaManager`, which admits the honour-system Toastmaster arm,
 		// so a session-less caller asserting a public member id could delete.
 		const body = handlerBody(SRC, "clearPlannedAttendance");
 		expect(
 			body,
-			"clearPlannedAttendance must resolve WHICH arm admitted the caller — a " +
-				"boolean capability cannot tell an officer from a self-asserted TMOD",
-		).toContain("via");
+			"the SUBJECT the seam compares the actor with is data.memberId, never the claim",
+		).toContain("memberId: data.memberId,");
+		expect(body).toContain("claimedActorMemberId: data.actorMemberId,");
 		expect(
-			body,
+			CLEAR_SEAM,
+			"clearPlannedAttendanceCore must resolve WHICH arm admitted the caller — a " +
+				"boolean capability cannot tell an officer from a self-asserted TMOD",
+		).toContain("const { actorMemberId, via } = resolved;");
+		expect(
+			CLEAR_SEAM,
 			"the floor comes from clearFloor, fed the RESOLVED arm and actor — not a caller-supplied id",
-		).toContain(
-			"onlyFrom: clearFloor({ via, actorMemberId, memberId: data.memberId })",
+		).toMatch(
+			/onlyFrom:\s*clearFloor\(\{\s*via,\s*actorMemberId,\s*memberId: args\.memberId,?\s*\}\)/,
 		);
 		// The defect this replaced, pinned as a NEGATIVE so a revert cannot pass by
 		// keeping the ternary shape while widening one arm. `undefined` there meant
 		// "delete whatever is in the row", which let an officer's "No answer" erase
-		// an answer that arrived since the panel rendered.
+		// an answer that arrived since the panel rendered. Verbatim, handler and
+		// seam both: stripping only deletes text.
+		const seamRaw = CLEAR_SEAM;
+		for (const [where, src] of [
+			["the handler", handlerBody(RAW, "clearPlannedAttendance")],
+			["the seam", seamRaw],
+		] as const) {
+			expect(
+				src,
+				`${where}: the officer arm must never pass an unfloored clear again (#573)`,
+			).not.toContain('via === "officer" ? undefined');
+			expect(
+				src,
+				`${where}: no inline floor: every clear goes through clearFloor`,
+			).not.toContain('via === "officer" ?');
+		}
+	});
+
+	it("floors the Toastmaster's clear of ANOTHER member's row at nothing", () => {
+		// A member's ANSWER is cleared by that member, or by an officer on the season
+		// grid, and by nobody else. `clearFloor` is where the Toastmaster arm gets
+		// its half of that rule, so the arm is pinned INSIDE the function: the
+		// `tmod` case, the own-row test it keys on, and the empty constant it
+		// returns otherwise. The behavioural twin is the Toastmaster block in
+		// `attendance-plan-logic.integration.test.ts`.
+		const logic = readSource(resolve(__dirname, "attendance-plan-logic.ts"));
+		const start = logic.indexOf("export function clearFloor");
+		expect(start, "clearFloor not found").toBeGreaterThan(-1);
+		const next = logic.indexOf("\nexport ", start + 1);
+		const fn = logic.slice(start, next === -1 ? logic.length : next);
 		expect(
-			body,
-			"the officer arm must never pass an unfloored clear again (#573)",
-		).not.toContain('via === "officer" ? undefined');
+			fn,
+			"the own-row test compares the RESOLVED actor with the subject",
+		).toContain("const ownRow = args.actorMemberId === args.memberId;");
 		expect(
-			body,
-			"no inline floor: every clear goes through clearFloor",
-		).not.toContain('via === "officer" ?');
+			fn,
+			"the tmod arm keeps the self-service floor on its own row and gets nothing on another's",
+		).toMatch(
+			/case "tmod":\s*return ownRow \? SELF_SERVICE_RUNGS : NO_CLEARABLE_RUNGS;/,
+		);
+		expect(
+			logic,
+			"the empty floor is a named constant that really is empty",
+		).toMatch(
+			/export const NO_CLEARABLE_RUNGS: readonly AttendancePlanStatus\[\] = \[\];/,
+		);
+	});
+
+	it("runs the session gate before the ladder on the clear", () => {
+		// `clearFloor` can trust the Toastmaster arm's actor as "the session's own
+		// member" only because a session is PROVEN first: with one, the caller is
+		// resolved from the session and a claimed id is ignored. Without it a
+		// visitor could claim the Toastmaster's published id and clear "their own"
+		// row. Two halves, one per place the check can live: the handler's early
+		// gate, and the seam's proof check, which is the one vitest executes and the
+		// one that holds when the session's membership changes between the two reads.
+		const body = handlerBody(SRC, "clearPlannedAttendance");
+		const gate = body.indexOf("await requireSessionActor(");
+		expect(gate).toBeGreaterThan(-1);
+		expect(
+			body.indexOf("clearPlannedAttendanceCore(db, {"),
+			"the handler must reach the session gate before the seam",
+		).toBeGreaterThan(gate);
+
+		const ladder = CLEAR_SEAM.indexOf("await resolveActor(");
+		const proof = CLEAR_SEAM.indexOf("assertSessionProof(resolved);");
+		const del = CLEAR_SEAM.indexOf("clearPlanStatus(");
+		expect(ladder).toBeGreaterThan(-1);
+		expect(
+			proof,
+			"the proof check must follow the ladder: it reads the arm's proof",
+		).toBeGreaterThan(ladder);
+		expect(del, "the proof check must precede the delete").toBeGreaterThan(
+			proof,
+		);
 	});
 
 	it("reports the officer branch rather than inferring it from a null actor", () => {
@@ -327,11 +432,15 @@ describe("attendance-plan authz (D6)", () => {
 		// clear the ask, not an answer — so what this pins is the arm SPLIT, which
 		// is unchanged, on an expression whose right-hand side moved.
 		expect(SRC).toContain('if (!viaManager && data.status === "reached_out")');
-		expect(SRC).toContain(
-			"onlyFrom: clearFloor({ via, actorMemberId, memberId: data.memberId }),",
+		expect(CLEAR_SEAM).toMatch(
+			/onlyFrom:\s*clearFloor\(\{\s*via,\s*actorMemberId,\s*memberId: args\.memberId,?\s*\}\)/,
 		);
-		// `clearFloor` trusts `actorMemberId === memberId` on the officer arm only
-		// because that arm sets it from the SESSION's own membership. Pin the arm's
+		// `clearFloor` trusts `actorMemberId === memberId` because the seam refuses
+		// every caller whose identity a session did not PROVE
+		// (`assertSessionProof`, pinned above), which makes the actor on the officer
+		// AND Toastmaster arms the session's own member (an impersonating
+		// superadmin's is null, and a null equals no id). The officer arm's actor
+		// comes from the SESSION's own membership. Pin the arm's
 		// WHOLE sequence, declaration through return, inside `resolveActor`'s body.
 		// The declaration alone is not the pin: it survives anywhere in the module
 		// and survives a return that reads the claimed id instead

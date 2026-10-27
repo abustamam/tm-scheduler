@@ -928,3 +928,46 @@ describe("roll Absent release wiring (#1256)", () => {
 		);
 	});
 });
+
+describe("a declined 'No answer' says why (clear floors)", () => {
+	// COMMENT-BLIND: every assertion is "must BE present", and the route's own
+	// prose names these identifiers.
+	const src = readSource(ROUTE);
+
+	/** `commitRung`'s body, up to the next `async function`, so a neighbour's
+	 *  call cannot satisfy an assertion about it. */
+	function commitRungBody(): string {
+		const at = src.indexOf("async function commitRung(");
+		expect(at, "commitRung not found in the route").toBeGreaterThan(-1);
+		const next = src.indexOf("\n\tasync function ", at + 1);
+		return src.slice(at, next === -1 ? src.length : next);
+	}
+
+	it("toasts the server's `cleared: false` for another member's answered row", () => {
+		// protects=a "No answer" the server declined (`cleared: false`) on another
+		//   member's answer reaches the viewer as one toast, fed the server's
+		//   `cleared`, the row's own id, the viewer's id and the rung the row
+		//   showed before the tap
+		// fails_when=the toast call is deleted (the control silently reverts again),
+		//   or the helper is fed a constant instead of the reply's `cleared`, or
+		//   `previous` is dropped so an absent row would be reported as refused
+		// no_claim=the sentence or when it applies (clearRefusedMessage's own test in
+		//   attendance-panel.test.ts); that the server answers cleared: false at all
+		//   (attendance-plan-logic.integration.test.ts)
+		const commit = commitRungBody();
+		// The whole ternary, so the helper's result is what `refusedClear` holds: a
+		// call that stays in the source but is short-circuited (`null && call(...)`)
+		// would still contain the arguments and silence the toast.
+		expect(commit).toMatch(
+			/const refusedClear =\s*"cleared" in written\s*\?\s*clearRefusedMessage\(\{\s*cleared: written\.cleared,\s*memberId,\s*myId,\s*previous,?\s*\}\)\s*:\s*null;/,
+		);
+		expect(commit).toContain("if (refusedClear) toast.message(refusedClear);");
+	});
+
+	it("reads `cleared` only off a reply that has one", () => {
+		// `written` is the clear's reply OR the set's, and only the clear's carries
+		// `cleared`; the `in` check is what keeps a write from reading `undefined`
+		// as a refusal.
+		expect(commitRungBody()).toContain('"cleared" in written');
+	});
+});

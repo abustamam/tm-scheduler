@@ -60,7 +60,9 @@ export type AttendancePlanStatus =
  * The rungs a member may set for THEMSELVES. `reached_out` is missing on
  * purpose: it is an officer's record of having asked, not an answer, so the
  * self-serve surfaces neither write it nor may erase it. Pass this as
- * `onlyFrom` / `demoteFrom` from any session-less caller.
+ * `onlyFrom` / `demoteFrom` from any session-less caller. As a CLEAR floor it
+ * is for a caller whose row it is: whether the caller IS the subject is the
+ * actor ladder's question, never this constant's.
  */
 export const SELF_SERVICE_RUNGS: readonly AttendancePlanStatus[] = [
 	"coming",
@@ -82,6 +84,19 @@ export const SELF_SERVICE_RUNGS: readonly AttendancePlanStatus[] = [
  */
 export const CLEARABLE_ASK: readonly AttendancePlanStatus[] = ["reached_out"];
 
+/**
+ * The one rung an OFFICER's season-grid clear may take off ANOTHER member's row:
+ * a decline. The grid calls `clearAvailability` on someone else's row only to
+ * undo a "Marked them unavailable" or to mark a declined member available, so a
+ * `not_coming` is all it ever has reason to remove. A grid that rendered a while
+ * ago must not be able to delete a `coming` the member gave since, and the
+ * officer's own ask is the meeting page's to take back, so this is narrower than
+ * {@link SELF_SERVICE_RUNGS}. The member's OWN row keeps that wider floor.
+ */
+export const CLEARABLE_DECLINE: readonly AttendancePlanStatus[] = [
+	"not_coming",
+];
+
 /** What an officer may delete from THEIR OWN row: their own answer and the ask. */
 const OFFICER_OWN_ROW_RUNGS: readonly AttendancePlanStatus[] = [
 	...SELF_SERVICE_RUNGS,
@@ -89,31 +104,65 @@ const OFFICER_OWN_ROW_RUNGS: readonly AttendancePlanStatus[] = [
 ];
 
 /**
+ * The floor that deletes NOTHING: the Toastmaster's clear of ANOTHER member's
+ * row. Named rather than a bare `[]` so the intent reads at the call site and a
+ * "tidy-up" to an empty literal is not mistaken for a leftover. It is safe as
+ * an `onlyFrom` because drizzle compiles `inArray(col, [])` to `false` — a
+ * delete that matches no row, not one that matches every row — which
+ * `clearPlanStatus` documents beside the predicate.
+ *
+ * Neither floor fits that caller. `SELF_SERVICE_RUNGS` would let them erase
+ * another member's own answer; `CLEARABLE_ASK` would let them erase an
+ * officer's ask, which the Toastmaster arm never could (its claim can be
+ * honour-system, and its id is published on the public agenda payload).
+ */
+export const NO_CLEARABLE_RUNGS: readonly AttendancePlanStatus[] = [];
+
+/**
  * The `onlyFrom` floor for `clearPlannedAttendance`: which rungs this caller's
  * "No answer" may delete.
  *
- * #573's floor stops an officer's "No answer" destroying ANOTHER member's reply,
- * and stays for every row but one: an officer's own. Their own answer is theirs
- * to take back like any member's, and the officer arm used to refuse it
- * silently (`cleared: false`, so the strip reverted with no error).
+ * A member's ANSWER is cleared by that member, or by an officer acting
+ * deliberately on the season grid (`clearAvailability`), and by nobody else.
+ * #573's floor stops an officer's "No answer" destroying ANOTHER member's reply
+ * on this path too, and this function extends the same rule to the Toastmaster.
+ * Each arm may clear its OWN row, and an officer may also clear the ASK on
+ * anyone's:
  *
- * `actorMemberId` is trustworthy only on the officer arm, which is why the self
- * test is gated on `via`: `resolveActor` sets it from the session's own
- * `membership.id` there, never from the caller's `claimedActorMemberId`. A
- * `null` actor (an impersonating superadmin has no member row) equals no id, so
- * is never "self".
+ *   officer, own row      their answer and the ask  (OFFICER_OWN_ROW_RUNGS)
+ *   officer, another row  the ask only              (CLEARABLE_ASK)
+ *   tmod, own row         their answer              (SELF_SERVICE_RUNGS)
+ *   tmod, another row     nothing                   (NO_CLEARABLE_RUNGS)
+ *   self                  their answer              (SELF_SERVICE_RUNGS)
+ *
+ * The self arm needs no row test: `resolveActor` throws `SELF_ONLY_MESSAGE`
+ * unless its actor IS the subject, so that arm only ever reaches here on its
+ * own row.
+ *
+ * `actorMemberId` is trustworthy here because `clearPlannedAttendance` runs
+ * `requireSessionActor` BEFORE `resolveActor`: with a session bound to a member
+ * of this club, `resolveWriteActorWithProof` answers with that membership and
+ * ignores the claimed id, so the tmod arm's actor is the SESSION's own member
+ * and cannot be asserted into equalling a subject. (Without that gate a visitor
+ * could claim the Toastmaster's published id and "clear their own row", which
+ * is the honour-system shape ADR-0026 removed.) The officer arm's is the
+ * session's `membership.id` outright. A `null` actor (an impersonating
+ * superadmin has no member row) equals no id, so is never "self".
  */
 export function clearFloor(args: {
 	via: ResolvedActor["via"];
 	actorMemberId: string | null;
 	memberId: string;
 }): readonly AttendancePlanStatus[] {
-	if (args.via !== "officer") {
-		return SELF_SERVICE_RUNGS;
+	const ownRow = args.actorMemberId === args.memberId;
+	switch (args.via) {
+		case "officer":
+			return ownRow ? OFFICER_OWN_ROW_RUNGS : CLEARABLE_ASK;
+		case "tmod":
+			return ownRow ? SELF_SERVICE_RUNGS : NO_CLEARABLE_RUNGS;
+		case "self":
+			return SELF_SERVICE_RUNGS;
 	}
-	return args.actorMemberId === args.memberId
-		? OFFICER_OWN_ROW_RUNGS
-		: CLEARABLE_ASK;
 }
 
 /**
@@ -500,11 +549,15 @@ export async function setPlanStatus(
  * parameter simply looked sanctioned.
  *
  * The two floors in use are exact complements — {@link SELF_SERVICE_RUNGS} for a
- * self/TMOD caller clearing an ANSWER, {@link CLEARABLE_ASK} for an officer
+ * caller clearing their OWN ANSWER, {@link CLEARABLE_ASK} for an officer
  * clearing the ASK on someone else's row (and the union of the two on their OWN
- * row, see {@link clearFloor}). Making the argument mandatory means a new caller
- * has to pick one rather than inheriting the widest possible delete by saying
- * nothing.
+ * row, see {@link clearFloor}). A Toastmaster clearing ANOTHER member's row gets
+ * {@link NO_CLEARABLE_RUNGS}: a member's answer is cleared by that member, or by
+ * an officer on the season grid, and by nobody else. That officer's grid clear
+ * of another member's row takes {@link CLEARABLE_DECLINE}, the decline it is
+ * there to undo. Making the argument
+ * mandatory means a new caller has to pick one rather than inheriting the widest
+ * possible delete by saying nothing.
  */
 export async function clearPlanStatus(
 	database: DbOrTx,

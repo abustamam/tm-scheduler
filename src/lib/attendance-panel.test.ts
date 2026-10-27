@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { PanelRole, PlanStatus } from "./attendance-panel";
-import { buildPanelRoleMap, buildPlanPanel } from "./attendance-panel";
+import {
+	buildPanelRoleMap,
+	buildPlanPanel,
+	COMING_NOT_YOURS_TO_CLEAR_TEXT,
+	clearRefusedMessage,
+	NOT_COMING_NOT_YOURS_TO_CLEAR_TEXT,
+} from "./attendance-panel";
 
 const roster = [
 	{ id: "d", name: "Dana", preferredName: null, phone: null, email: null },
@@ -505,5 +511,50 @@ describe("buildPanelRoleMap", () => {
 			},
 		];
 		expect(Object.keys(buildPanelRoleMap(slots))).toEqual([]);
+	});
+});
+
+describe("clearRefusedMessage", () => {
+	const base = { cleared: false, memberId: "m1", myId: "me" } as const;
+
+	// protects=a declined "No answer" on another member's coming answers with the sentence that also offers Not coming; fails_when=the coming sentence loses the Not coming pointer, is returned for another status, or is returned when the server cleared the row; no_claim=that the server declines (attendance-plan-logic.integration.test.ts)
+	it("tells the viewer a declined clear of another member's coming is theirs, and offers Not coming", () => {
+		expect(clearRefusedMessage({ ...base, previous: "coming" })).toBe(
+			COMING_NOT_YOURS_TO_CLEAR_TEXT,
+		);
+		expect(COMING_NOT_YOURS_TO_CLEAR_TEXT).toBe(
+			"Only they can clear their own answer. Pick Not coming if they can't make it.",
+		);
+		expect(
+			clearRefusedMessage({ ...base, previous: "coming", cleared: true }),
+		).toBeNull();
+	});
+
+	// protects=a declined "No answer" on another member's not_coming answers with the shorter sentence, which does NOT tell the viewer to pick the answer the row already holds; fails_when=the not_coming row gets the coming sentence, or the sentence is returned when the server cleared the row; no_claim=that the server declines (attendance-plan-logic.integration.test.ts)
+	it("tells the viewer a declined clear of another member's not_coming is theirs, with no pointer", () => {
+		expect(clearRefusedMessage({ ...base, previous: "not_coming" })).toBe(
+			NOT_COMING_NOT_YOURS_TO_CLEAR_TEXT,
+		);
+		expect(NOT_COMING_NOT_YOURS_TO_CLEAR_TEXT).toBe(
+			"Only they can clear their own answer.",
+		);
+		expect(NOT_COMING_NOT_YOURS_TO_CLEAR_TEXT).not.toContain("Not coming");
+		expect(
+			clearRefusedMessage({ ...base, previous: "not_coming", cleared: true }),
+		).toBeNull();
+	});
+
+	// protects=no misleading toast when the row showed no answer; fails_when=an absent row or an officer's ask is reported as "the member's own"; no_claim=none beyond protects
+	it.each([
+		null,
+		"reached_out",
+	] as const)("says nothing when the row showed %s", (previous) => {
+		expect(clearRefusedMessage({ ...base, previous })).toBeNull();
+	});
+
+	it("says nothing for the viewer's own row", () => {
+		expect(
+			clearRefusedMessage({ ...base, memberId: "me", previous: "coming" }),
+		).toBeNull();
 	});
 });
