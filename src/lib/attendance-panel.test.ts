@@ -523,7 +523,7 @@ describe("clearRefusedMessage", () => {
 			COMING_NOT_YOURS_TO_CLEAR_TEXT,
 		);
 		expect(COMING_NOT_YOURS_TO_CLEAR_TEXT).toBe(
-			"Only they can clear their own answer. Pick Not coming if they can't make it.",
+			"That's their answer, so it stays. Pick Not coming if they can't make it.",
 		);
 		expect(
 			clearRefusedMessage({ ...base, previous: "coming", cleared: true }),
@@ -536,7 +536,7 @@ describe("clearRefusedMessage", () => {
 			NOT_COMING_NOT_YOURS_TO_CLEAR_TEXT,
 		);
 		expect(NOT_COMING_NOT_YOURS_TO_CLEAR_TEXT).toBe(
-			"Only they can clear their own answer.",
+			"That's their answer, so it stays.",
 		);
 		expect(NOT_COMING_NOT_YOURS_TO_CLEAR_TEXT).not.toContain("Not coming");
 		expect(
