@@ -167,7 +167,10 @@ export async function collapseMemberships(
 		.update(members)
 		.set({
 			clubRole:
-				keeper.clubRole === "admin" || absorbed.clubRole === "admin"
+				// Admin only from an ACTIVE row (#1340): a stored role on an inactive
+				// or former row grants nothing, so it must not promote the survivor.
+				(keeper.clubRole === "admin" && keeper.status === "active") ||
+				(absorbed.clubRole === "admin" && absorbed.status === "active")
 					? "admin"
 					: "member",
 			// Active wins, then inactive (they may renew), then former (#1239).

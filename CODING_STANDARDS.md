@@ -363,8 +363,10 @@ never re-key them.
 4. no OTHER Person **that counts as a holder** carries that address — one that is
    bound, or holds at least one membership (`countsAsHolder`).
 
-**Every membership counts for arm 3 — no status filter, no archived filter.** A
-lapsed member is still somebody a club vouched for. Do not reintroduce a filter.
+**Every membership but a FORMER one counts for arm 3 — no archived filter.** A
+lapsed (inactive) member is still somebody a club vouched for; an ended (former)
+membership does not vouch (maintainer decision on #1340, 2026-10-26). Do not
+widen it back to every status, and do not add an archived filter.
 There is deliberately no "exactly one club" arm any more: it existed because any
 club could type the per-club vouch, and none can now.
 

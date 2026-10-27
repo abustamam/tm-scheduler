@@ -49,8 +49,12 @@ vi.mock("./guards", async (importOriginal) => ({
 	requireUser: vi.fn(async () => ({ id: currentUser.id })),
 }));
 
-const { applySetMemberStatus, loadFormerMembers, loadPublicClubRoster } =
-	await import("#/server/members-logic");
+const {
+	applySetMemberRole,
+	applySetMemberStatus,
+	loadFormerMembers,
+	loadPublicClubRoster,
+} = await import("#/server/members-logic");
 const { listFormerMembers } = await import("#/server/members");
 const { requireMemberInClub } = await import("#/server/guards");
 const { loadClubMembers, loadMemberProfile } = await import(
@@ -208,6 +212,53 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 			expect(row.status).toBe("inactive");
 			expect(row.endedAt).toBeNull();
 			expect(await statusLogCount(id)).toBe(1);
+		});
+
+		// protects=former -> inactive also writes role member over a stale admin (#1340);
+		// fails_when=the role write is limited to former -> active;
+		// no_claim=the ended_at clearing (test above).
+		it("former -> inactive writes role member over a stale admin", async () => {
+			const id = await addMember("Stale Inactive", "former", {
+				clubRole: "admin",
+				endedAt: "2020-01-02",
+			});
+			await set(id, "inactive");
+			const row = await rowOf(id);
+			expect(row.status).toBe("inactive");
+			expect(row.clubRole).toBe("member");
+		});
+
+		// protects=a former member's club role cannot be set, from either direction (#1340);
+		// fails_when=applySetMemberRole drops its former refusal, or reads the status outside the row lock;
+		// no_claim=the profile hiding the control (UI).
+		it("applySetMemberRole refuses a former row and writes nothing", async () => {
+			const id = await addMember("Ended Member", "former", {
+				clubRole: "member",
+				endedAt: "2020-01-02",
+			});
+			await expect(
+				applySetMemberRole({
+					clubId: seed.clubId,
+					memberId: id,
+					clubRole: "admin",
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(/former member/);
+			expect((await rowOf(id)).clubRole).toBe("member");
+			expect(await statusLogCount(id)).toBe(0);
+
+			const stale = await addMember("Stale Former", "former", {
+				clubRole: "admin",
+				endedAt: "2020-01-02",
+			});
+			await expect(
+				applySetMemberRole({
+					clubId: seed.clubId,
+					memberId: stale,
+					clubRole: "admin",
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(/former member/);
 		});
 
 		// protects=former -> former is a no-op (end date kept, nothing logged);
@@ -568,6 +619,82 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 			expect(former.endedAt).toBe("2020-01-01");
 			const fallback = await merge("former", "former");
 			expect(fallback.endedAt).toBe("2021-05-05");
+		});
+
+		// protects=ending an admin writes club_role=member in the same UPDATE and the activity row records the role before and after (#1340);
+		// fails_when=the ended row keeps admin, or the log omits the role;
+		// no_claim=the last-admin refusal (next test).
+		it("ending an admin demotes them to member and logs the role", async () => {
+			const id = await addMember("Ended Admin", "active", {
+				clubRole: "admin",
+			});
+			await set(id, "former");
+			expect((await rowOf(id)).clubRole).toBe("member");
+			const [log] = await testDb
+				.select()
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.action, "member_edit"),
+						eq(activityLog.targetId, id),
+					),
+				);
+			expect(log.detail).toMatchObject({
+				before: { status: "active", clubRole: "admin" },
+				after: { status: "former", clubRole: "member" },
+			});
+		});
+
+		// protects=former -> active restores role member even from a row that still carries admin (today's prod data), and inactive -> active keeps the role;
+		// fails_when=Reactivate returns a former admin as an admin, or reactivating an inactive admin demotes them;
+		// no_claim=the toast copy (UI).
+		it("reactivating a former row that still carries admin restores member", async () => {
+			const stale = await addMember("Stale Admin", "former", {
+				clubRole: "admin",
+				endedAt: "2020-01-01",
+			});
+			await set(stale, "active");
+			const row = await rowOf(stale);
+			expect(row.status).toBe("active");
+			expect(row.clubRole).toBe("member");
+
+			const lapsed = await addMember("Lapsed Admin", "inactive", {
+				clubRole: "admin",
+			});
+			await set(lapsed, "active");
+			expect((await rowOf(lapsed)).clubRole).toBe("admin");
+		});
+
+		// protects=a merge takes admin only from an ACTIVE row, so a stale former or inactive admin cannot promote the survivor (#1340);
+		// fails_when=either side's former or inactive admin role wins the merge, or an active admin loses it;
+		// no_claim=status/endedAt merge (test above).
+		it("collapseMemberships ignores admin on a former row", async () => {
+			const merge = async (
+				k: [Status, "admin" | "member"],
+				a: [Status, "admin" | "member"],
+			) => {
+				const keeper = await addMember("K", k[0], { clubRole: k[1] });
+				const absorbed = await addMember("A", a[0], { clubRole: a[1] });
+				await testDb.transaction((tx) =>
+					collapseMemberships(tx, seed.clubId, keeper, absorbed),
+				);
+				return (await rowOf(keeper)).clubRole;
+			};
+			expect(await merge(["active", "member"], ["former", "admin"])).toBe(
+				"member",
+			);
+			expect(await merge(["former", "admin"], ["active", "member"])).toBe(
+				"member",
+			);
+			expect(await merge(["active", "member"], ["inactive", "admin"])).toBe(
+				"member",
+			);
+			expect(await merge(["inactive", "admin"], ["former", "admin"])).toBe(
+				"member",
+			);
+			expect(await merge(["active", "admin"], ["former", "member"])).toBe(
+				"admin",
+			);
 		});
 
 		// protects=ending the club's last admin is refused, with the "end the membership" wording, and nothing changes;

@@ -611,10 +611,14 @@ type SetStatusInput = z.infer<typeof setStatusSchema> & RosterActor;
  *  (#501 review):
  *
  *  - THIS one is an admin on the roster naming a member and saying "they are
- *    back". It writes `{ status }` and nothing else, so `club_role` and any
- *    open officer term survive untouched and the member returns with exactly
- *    the standing they lapsed with. That is the intent: the admin picked this
- *    human on purpose.
+ *    back". inactive → active writes `{ status }` and nothing else, so
+ *    `club_role` survives untouched and the member returns with exactly the
+ *    standing they lapsed with. That is the intent: the admin picked this
+ *    human on purpose. **former → active restores role `member` (#1340):**
+ *    ending a membership writes `club_role = 'member'` in the same UPDATE, and
+ *    a stale `admin` on a former row (data from before #1340) is written down
+ *    too, so coming back is never a promotion. An admin who wants them as an
+ *    admin again says so with Set role.
  *  - `applyConvertGuestToMember`'s REUSE branch wakes a lapsed membership as a
  *    side effect of converting a GUEST, and the row it lands on is chosen by
  *    Person dedup, which can match the wrong human (#561). So it writes an
@@ -656,6 +660,10 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 		// going inactive, plus the end date and the open officer terms.
 		const ending = current.status !== "former" && input.status === "former";
 		const releasing = deactivating || ending;
+		// #1340: a membership that ends, or comes back from former, holds role
+		// `member`. Ending is when the permission stops; coming back is never a
+		// promotion, so a stale `admin` on a former row is not restored.
+		const demotes = ending || current.status === "former";
 		const now = new Date();
 		// Guardrail (#187): deactivating an admin must not strand the club with
 		// zero active admins — that would silently bypass the demote guard.
@@ -683,7 +691,13 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 		}
 		await tx
 			.update(members)
-			.set({ status: input.status, endedAt })
+			.set({
+				status: input.status,
+				endedAt,
+				// Ending drops the role; leaving former restores `member` (#1340).
+				// Also clears a stale `admin` an ended row still carries.
+				...(demotes ? { clubRole: "member" as const } : {}),
+			})
 			.where(eq(members.id, input.memberId));
 		if (ending) {
 			// Every open officer term closes today, in this transaction, so a
@@ -777,8 +791,11 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 			targetType: "member",
 			targetId: input.memberId,
 			detail: {
-				before: { status: current.status },
-				after: { status: input.status },
+				before: { status: current.status, clubRole: current.clubRole },
+				after: {
+					status: input.status,
+					clubRole: demotes ? "member" : current.clubRole,
+				},
 				...(ending || current.status === "former"
 					? { endedAt: { before: current.endedAt, after: endedAt } }
 					: {}),
@@ -804,19 +821,33 @@ type SetRoleInput = z.infer<typeof setRoleSchema> & RosterActor;
  * member_edit with the role before/after.
  */
 export async function applySetMemberRole(input: SetRoleInput) {
-	const [current] = await db
-		.select()
-		.from(members)
-		.where(
-			and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
-		);
-	if (!current) throw new Error("Member not found.");
-	// Idempotent: nothing changed → nothing to write or log.
-	if (current.clubRole === input.clubRole) {
-		return { ok: true as const, clubRole: current.clubRole };
-	}
-	const demoting = current.clubRole === "admin" && input.clubRole === "member";
-	await db.transaction(async (tx) => {
+	return db.transaction(async (tx) => {
+		// Read under the row lock (#1340): an end-membership racing this change
+		// cannot be overwritten by a promotion computed from a stale read. NO KEY
+		// UPDATE, not UPDATE: the activity insert below key-shares the ACTOR's
+		// member row, so two admins changing each other's role would deadlock
+		// under FOR UPDATE (#1327 item 3).
+		const [current] = await tx
+			.select()
+			.from(members)
+			.where(
+				and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
+			)
+			.for("no key update");
+		if (!current) throw new Error("Member not found.");
+		// A former member holds no role (#1340): ending one writes `member`, and
+		// reactivating restores `member`; a role is set on an active or inactive row.
+		if (current.status === "former") {
+			throw new Error(
+				"A former member holds no club role — reactivate them first.",
+			);
+		}
+		// Idempotent: nothing changed → nothing to write or log.
+		if (current.clubRole === input.clubRole) {
+			return { ok: true as const, clubRole: current.clubRole };
+		}
+		const demoting =
+			current.clubRole === "admin" && input.clubRole === "member";
 		// Guardrail (#187): a demote can lower the active-admin count (a promote
 		// only raises it). An INACTIVE admin isn't counted, so a demote can only
 		// strand the club when the target is currently an active admin.
@@ -843,8 +874,8 @@ export async function applySetMemberRole(input: SetRoleInput) {
 				after: { clubRole: input.clubRole },
 			},
 		});
+		return { ok: true as const, clubRole: input.clubRole };
 	});
-	return { ok: true as const, clubRole: input.clubRole };
 }
 
 export const mergeSchema = z.object({

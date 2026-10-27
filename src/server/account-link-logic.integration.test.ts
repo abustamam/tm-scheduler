@@ -79,7 +79,7 @@ describe.skipIf(!hasTestDb)(
 			memberEmail?: string | null;
 			personUserId?: string | null;
 			personId?: string;
-			status?: "active" | "inactive";
+			status?: "active" | "inactive" | "former";
 		}): Promise<{ personId: string; memberId: string }> {
 			let personId = opts.personId;
 			if (!personId) {
@@ -112,7 +112,10 @@ describe.skipIf(!hasTestDb)(
 		/** A second club holding the same Person. */
 		async function alsoHeldBy(
 			personId: string,
-			opts: { status?: "active" | "inactive"; archived?: boolean } = {},
+			opts: {
+				status?: "active" | "inactive" | "former";
+				archived?: boolean;
+			} = {},
 		): Promise<SeededClub> {
 			const other = await seedClub();
 			extraClubs.push(other);
@@ -257,9 +260,9 @@ describe.skipIf(!hasTestDb)(
 		// ---------------------------------------------------------------------
 		// Any club vouches — and several may (#907)
 		//
-		// Every membership counts, whatever its status or its club's: the arm
-		// is "a club holds them", and a lapsed member is still someone a club
-		// vouched for. What used to make a second club dangerous was that it
+		// Every membership counts but a FORMER one (#1340), whatever its club's
+		// status: the arm is "a club holds them", and a lapsed (inactive) member
+		// is still someone a club vouched for; an ended one is not. What used to make a second club dangerous was that it
 		// could type its own vouch; since #907 it cannot write the address at
 		// all (`soleHoldingClub`), so the second club no longer refuses.
 		// ---------------------------------------------------------------------
@@ -286,6 +289,45 @@ describe.skipIf(!hasTestDb)(
 			expect((await linkPersonToUser(userId)).linkedPersonIds).toEqual([
 				personId,
 			]);
+		});
+
+		// protects=a FORMER membership does not vouch for sign-in but an inactive one does, in both the bind SQL and its JS explainer (#1340);
+		// fails_when=either predicate drops its former filter;
+		// no_claim=the shared-address arm.
+		it("a FORMER membership does not vouch; an inactive one does", async () => {
+			const { bindVerifiedPerson, rosterConflictFor } = await import(
+				"#/server/account-link-logic"
+			);
+			const make = async (status: "former" | "inactive") => {
+				const email = `${status}-${randomUUID()}@test.example`;
+				const [person] = await testDb
+					.insert(people)
+					.values({ name: `Holder ${status}`, email })
+					.returning({ id: people.id });
+				if (!person) throw new Error("person insert failed");
+				personIds.push(person.id);
+				await alsoHeldBy(person.id, { status });
+				return { id: person.id, email, userId: await seedUser(email) };
+			};
+			const former = await make("former");
+			expect(await rosterConflictFor(former.id, former.email)).toBe(
+				"no_vouching_row",
+			);
+			expect(
+				await bindVerifiedPerson({
+					personId: former.id,
+					userId: former.userId,
+				}),
+			).toBe(false);
+
+			const inactive = await make("inactive");
+			expect(await rosterConflictFor(inactive.id, inactive.email)).toBeNull();
+			expect(
+				await bindVerifiedPerson({
+					personId: inactive.id,
+					userId: inactive.userId,
+				}),
+			).toBe(true);
 		});
 
 		it("a membership in an ARCHIVED club still vouches", async () => {

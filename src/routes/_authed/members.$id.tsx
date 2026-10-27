@@ -450,7 +450,7 @@ function MemberDetail() {
 						/>
 					) : null}
 
-					{clubId && viewerIsAdmin ? (
+					{clubId && viewerIsAdmin && member.status !== "former" ? (
 						<ClubRoleControl member={member} clubId={clubId} />
 					) : null}
 
@@ -885,13 +885,7 @@ function MemberActions({
 			await setMemberStatus({
 				data: { clubId, memberId: member.id, status: next },
 			});
-			toast.success(
-				next === "inactive"
-					? `${member.name} marked inactive.`
-					: next === "former"
-						? `${member.name}'s membership ended.`
-						: `${member.name} reactivated.`,
-			);
+			toast.success(statusToast(member.name, next, isFormer));
 			await router.invalidate();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
@@ -1250,6 +1244,18 @@ function MemberActions({
 	);
 }
 
+function statusToast(
+	name: string,
+	next: "active" | "inactive" | "former",
+	wasFormer: boolean,
+): string {
+	if (next === "inactive") return `${name} marked inactive.`;
+	if (next === "former") return `${name}'s membership ended.`;
+	return wasFormer
+		? `${name} reactivated as a member.`
+		: `${name} reactivated.`;
+}
+
 /**
  * Admin-only control to promote/demote a member's CLUB ROLE — the permission
  * that gates club management, distinct from officer position (#187). Promote is
@@ -1266,7 +1272,9 @@ function ClubRoleControl({
 	const router = useRouter();
 	const [busy, setBusy] = useState(false);
 	const [demoteOpen, setDemoteOpen] = useState(false);
-	const isAdmin = member.clubRole === "admin";
+	// A former member holds no role (#1340): a stale stored `admin` on an ended
+	// row is not shown as one.
+	const isAdmin = member.clubRole === "admin" && member.status !== "former";
 
 	async function setRole(next: "admin" | "member") {
 		setBusy(true);

@@ -84,7 +84,7 @@ describe.skipIf(!hasTestDb)("rosterConflictFor complements the bind", () => {
 	async function addMembership(opts: {
 		personId: string;
 		clubId?: string;
-		status?: "active" | "inactive";
+		status?: "active" | "inactive" | "former";
 	}): Promise<void> {
 		await testDb.insert(members).values({
 			clubId: opts.clubId ?? club.clubId,
@@ -168,6 +168,24 @@ describe.skipIf(!hasTestDb)("rosterConflictFor complements the bind", () => {
 					clubId: await otherClub(true),
 					status: "inactive",
 				});
+			},
+		},
+		{
+			// #1340: an ended membership vouches for nothing; an inactive one does.
+			name: "only a FORMER membership",
+			expected: "no_vouching_row",
+			build: async (personId, address) => {
+				await setEmail(personId, address);
+				await addMembership({ personId, status: "former" });
+			},
+		},
+		{
+			name: "a FORMER membership in one club, an active one in another",
+			expected: null,
+			build: async (personId, address) => {
+				await setEmail(personId, address);
+				await addMembership({ personId, status: "former" });
+				await addMembership({ personId, clubId: await otherClub() });
 			},
 		},
 		{

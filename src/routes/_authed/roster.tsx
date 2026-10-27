@@ -1826,7 +1826,7 @@ function FormerMembersDialog({
 			await setMemberStatus({
 				data: { clubId, memberId: m.id, status: "active" },
 			});
-			toast.success(`${m.name} reactivated.`);
+			toast.success(`${m.name} reactivated as a member.`);
 			await router.invalidate();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
