@@ -570,6 +570,79 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 			expect(fallback.endedAt).toBe("2021-05-05");
 		});
 
+		// protects=ending an admin writes club_role=member in the same UPDATE and the activity row records the role before and after (#1340);
+		// fails_when=the ended row keeps admin, or the log omits the role;
+		// no_claim=the last-admin refusal (next test).
+		it("ending an admin demotes them to member and logs the role", async () => {
+			const id = await addMember("Ended Admin", "active", {
+				clubRole: "admin",
+			});
+			await set(id, "former");
+			expect((await rowOf(id)).clubRole).toBe("member");
+			const [log] = await testDb
+				.select()
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.action, "member_edit"),
+						eq(activityLog.targetId, id),
+					),
+				);
+			expect(log.detail).toMatchObject({
+				before: { status: "active", clubRole: "admin" },
+				after: { status: "former", clubRole: "member" },
+			});
+		});
+
+		// protects=former -> active restores role member even from a row that still carries admin (today's prod data), and inactive -> active keeps the role;
+		// fails_when=Reactivate returns a former admin as an admin, or reactivating an inactive admin demotes them;
+		// no_claim=the toast copy (UI).
+		it("reactivating a former row that still carries admin restores member", async () => {
+			const stale = await addMember("Stale Admin", "former", {
+				clubRole: "admin",
+				endedAt: "2020-01-01",
+			});
+			await set(stale, "active");
+			const row = await rowOf(stale);
+			expect(row.status).toBe("active");
+			expect(row.clubRole).toBe("member");
+
+			const lapsed = await addMember("Lapsed Admin", "inactive", {
+				clubRole: "admin",
+			});
+			await set(lapsed, "active");
+			expect((await rowOf(lapsed)).clubRole).toBe("admin");
+		});
+
+		// protects=a merge takes admin only from a non-former row, so a stale former admin cannot promote the survivor (#1340);
+		// fails_when=either side's former admin role wins the merge, or an inactive admin loses it;
+		// no_claim=status/endedAt merge (test above).
+		it("collapseMemberships ignores admin on a former row", async () => {
+			const merge = async (
+				k: [Status, "admin" | "member"],
+				a: [Status, "admin" | "member"],
+			) => {
+				const keeper = await addMember("K", k[0], { clubRole: k[1] });
+				const absorbed = await addMember("A", a[0], { clubRole: a[1] });
+				await testDb.transaction((tx) =>
+					collapseMemberships(tx, seed.clubId, keeper, absorbed),
+				);
+				return (await rowOf(keeper)).clubRole;
+			};
+			expect(await merge(["active", "member"], ["former", "admin"])).toBe(
+				"member",
+			);
+			expect(await merge(["former", "admin"], ["active", "member"])).toBe(
+				"member",
+			);
+			expect(await merge(["active", "member"], ["inactive", "admin"])).toBe(
+				"admin",
+			);
+			expect(await merge(["active", "admin"], ["former", "member"])).toBe(
+				"admin",
+			);
+		});
+
 		// protects=ending the club's last admin is refused, with the "end the membership" wording, and nothing changes;
 		// fails_when=the last admin can be ended, or the message still says "deactivate";
 		// no_claim=the inactive wording (covered by the existing deactivate tests).

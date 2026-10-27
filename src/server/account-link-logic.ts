@@ -121,7 +121,9 @@ function countsAsHolder(table: { id: AnyPgColumn; userId: AnyPgColumn }): SQL {
  * Postgres evaluates them against the row being updated.
  *
  *  1. **It is their address** — `people.email` normalises to `address`.
- *  2. **A club vouches** — the Person holds at least one membership.
+ *  2. **A club vouches** — the Person holds at least one membership that is
+ *     not former (#1340). An inactive member is still somebody the club
+ *     vouches for; a former one has left, so their address no longer binds.
  *  3. **The address is theirs alone** — no OTHER Person carries it who is
  *     somebody: bound to an account, or on at least one roster. A leftover with
  *     neither (`applyMemberRemove` strips the roster row and keeps the Person)
@@ -140,8 +142,9 @@ function countsAsHolder(table: { id: AnyPgColumn; userId: AnyPgColumn }): SQL {
  * Person it shares, so a multi-club member can sign in by email again. The
  * exceptions are the bind itself and the superadmin repairs.
  *
- * **Every membership counts for arm 2: no status filter, no archived filter.**
- * A lapsed member is still somebody a club vouched for.
+ * **Every non-former membership counts for arm 2: no archived filter.**
+ * An inactive (lapsed) member is still somebody a club vouched for; a former
+ * member is not (#1340, maintainer decision 2026-10-26).
  *
  * Arm 2 is load-bearing on its own: `applyMemberRemove` and undoing a guest
  * conversion both leave Persons with no membership behind, and an address on
@@ -162,7 +165,9 @@ function rosterPermitsBind(address: string): SQL {
 			db
 				.select({ one: sql`1` })
 				.from(vouching)
-				.where(eq(vouching.personId, people.id)),
+				.where(
+					and(eq(vouching.personId, people.id), ne(vouching.status, "former")),
+				),
 		),
 		// 3. Nobody else who counts carries the address.
 		notExists(
@@ -798,7 +803,7 @@ export async function rosterConflictFor(
 	const [membership] = await db
 		.select({ id: members.id })
 		.from(members)
-		.where(eq(members.personId, personId))
+		.where(and(eq(members.personId, personId), ne(members.status, "former")))
 		.limit(1);
 	if (!membership) return "no_vouching_row";
 

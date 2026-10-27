@@ -890,7 +890,9 @@ function MemberActions({
 					? `${member.name} marked inactive.`
 					: next === "former"
 						? `${member.name}'s membership ended.`
-						: `${member.name} reactivated.`,
+						: isFormer
+							? `${member.name} reactivated as a member.`
+							: `${member.name} reactivated.`,
 			);
 			await router.invalidate();
 		} catch (err) {
@@ -1266,7 +1268,9 @@ function ClubRoleControl({
 	const router = useRouter();
 	const [busy, setBusy] = useState(false);
 	const [demoteOpen, setDemoteOpen] = useState(false);
-	const isAdmin = member.clubRole === "admin";
+	// A former member holds no role (#1340): a stale stored `admin` on an ended
+	// row is not shown as one.
+	const isAdmin = member.clubRole === "admin" && member.status !== "former";
 
 	async function setRole(next: "admin" | "member") {
 		setBusy(true);

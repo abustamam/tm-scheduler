@@ -277,7 +277,13 @@ async function firstAdminOf(clubId: string) {
 		})
 		.from(members)
 		.innerJoin(people, eq(people.id, members.personId))
-		.where(and(eq(members.clubId, clubId), eq(members.clubRole, "admin")))
+		.where(
+			and(
+				eq(members.clubId, clubId),
+				eq(members.clubRole, "admin"),
+				eq(members.status, "active"),
+			),
+		)
 		.orderBy(asc(members.createdAt), asc(members.id))
 		.limit(1);
 	return row ?? null;
