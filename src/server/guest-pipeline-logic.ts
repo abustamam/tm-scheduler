@@ -100,6 +100,7 @@ import {
 import { logActivity } from "./activity";
 import {
 	ATTENDANCE_PLAN_MEMBER_FK,
+	deletePlanRowsOfEndedMember,
 	memberHasAttendancePlanRows,
 } from "./attendance-plan-logic";
 import {
@@ -4388,6 +4389,10 @@ export async function applyUndoGuestConversion(
 						...(record.demotedFrom ? { clubRole: record.demotedFrom } : {}),
 					})
 					.where(eq(members.id, membershipId));
+				// Back to `former` is an ending like any other (#1342): a plan row
+				// written while the conversion had them active must not outlive it.
+				if (record.reactivatedFrom === "former")
+					await deletePlanRowsOfEndedMember(tx, membershipId);
 			}
 		}
 

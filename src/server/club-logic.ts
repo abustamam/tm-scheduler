@@ -134,8 +134,32 @@ export async function loadClubMembers(
  * drifts — a `coalesceToE164` taught to strip extensions, say — a coalesced
  * prefill starts writing the guess over the stored digits on every save.
  * Round-tripping the raw bytes does not depend on that coincidence.
+ *
+ * A FORMER member's contact is withheld (#1342). Leaving the club takes the
+ * person off the roster, and this profile is still reachable by id from every
+ * past agenda they appear on, so without this an ex-member's email, phone and
+ * WhatsApp link stayed one click from any active member. Their name, status and
+ * history still come back; `email`, `phone`, `phoneRaw`, `preferredContact` and
+ * `contactPreferenceRefusal` come back null, and the profile page already
+ * renders no contact block for a person with neither an email nor a phone.
+ *
+ * Unlike the gate this file leaves to its caller, THIS decision is made here, and
+ * it fails closed: with no `viewerMayRevealFormer` a former member's contact is
+ * never returned, so a new caller that forgets the option gets the redacted
+ * profile rather than the whole of it. `getMemberProfile` passes
+ * `mayRevealFormerMembers` (guards.ts): an admin or officer, or a superadmin
+ * under "Act as admin", the same rule that decides a former member's Pathways.
+ * It is a function, not a boolean, so the officer lookup behind it runs only for
+ * a former member and never costs an active member's profile a query.
+ *
+ * Inactive members are NOT withheld: they are still on the roster, which already
+ * shows every member their contact.
  */
-export async function loadMemberProfile(clubId: string, memberId: string) {
+export async function loadMemberProfile(
+	clubId: string,
+	memberId: string,
+	opts: { viewerMayRevealFormer?: () => Promise<boolean> } = {},
+) {
 	const [row, cc] = await Promise.all([
 		db
 			.select({
@@ -177,6 +201,20 @@ export async function loadMemberProfile(clubId: string, memberId: string) {
 	]);
 	if (!row) return undefined;
 	const { storedPreferredContact, ...profile } = row;
+	// A former member's contact is for an admin only (#1342); see the header.
+	if (
+		row.status === "former" &&
+		!(opts.viewerMayRevealFormer && (await opts.viewerMayRevealFormer()))
+	) {
+		return {
+			...profile,
+			phone: null,
+			phoneRaw: null,
+			email: null,
+			preferredContact: null,
+			contactPreferenceRefusal: null,
+		};
+	}
 	// Whether THIS club may change the Person's preference (#1093 review,
 	// #1110): the member has not chosen it themselves, and this club is their
 	// sole holder — read through the write's own explainer, so the form and the

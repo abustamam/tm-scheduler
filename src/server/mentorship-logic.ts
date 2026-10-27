@@ -1460,6 +1460,7 @@ export async function loadMyMentorRequests(
 				createdAt: mentorshipRequests.createdAt,
 				mentorId: mentorM.id,
 				mentorName: mentorM.name,
+				mentorStatus: mentorM.status,
 				person: {
 					email: mentorPersonR.email,
 					phone: mentorPersonR.phone,
@@ -1516,9 +1517,14 @@ export async function loadMyMentorRequests(
 					focus: o.focus,
 					focusOther: o.focusOther,
 					createdAt: o.createdAt,
+					// A mentor who is no longer active (left the club, #1342) keeps
+					// their name on the request the mentee can still withdraw, but
+					// their contact is not handed to a former colleague's mentee.
 					mentor: requestParty(
 						{ id: o.mentorId, name: o.mentorName },
-						o.person,
+						o.mentorStatus === "active"
+							? o.person
+							: { email: null, phone: null, preferredContact: null },
 						cc,
 					),
 				}

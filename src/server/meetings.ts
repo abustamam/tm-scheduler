@@ -284,9 +284,13 @@ async function loadMeetingDetail(
 		? await listUnavailableWithNames(db, meetingId)
 		: await listNotComingWithNames(db, meetingId);
 
-	const allRungs = (await listPlanForMeetings(db, [meetingId])).map(
-		({ memberId, status }) => ({ memberId, status }),
-	);
+	// ACTIVE members' rows only (#1342): `answeredRungs` is public, and a plan
+	// row of a member who left must not tell a signed-out reader who they were.
+	const allRungs = (
+		await listPlanForMeetings(db, [meetingId], {
+			activeOnly: true,
+		})
+	).map(({ memberId, status }) => ({ memberId, status }));
 	// The whole ladder for the officer's panel. Admin-only: `reached_out` is the
 	// officer's private record of having asked, and it now shares one array with
 	// the member's own answer.

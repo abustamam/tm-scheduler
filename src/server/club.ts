@@ -5,7 +5,11 @@ import { db } from "#/db";
 import { meetings, roleDefinitions, roleSlots } from "#/db/schema";
 import { speechLogEvaluatorNames } from "#/lib/speech-log";
 import { loadClubMembers, loadMemberProfile } from "./club-logic";
-import { requireClubViewAccess, requireUser } from "./guards";
+import {
+	mayRevealFormerMembers,
+	requireClubViewAccess,
+	requireUser,
+} from "./guards";
 import { loadMySpeechLog, loadSpeechLog } from "./my-activity-logic";
 import {
 	currentOfficersByMember,
@@ -129,12 +133,19 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 	)
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireClubViewAccess(currentUser.id, data.clubId);
+		const access = await requireClubViewAccess(currentUser.id, data.clubId);
 
 		// Identity + contact for this club's member, with phone coalesced to E.164
 		// (#295) so the profile's WhatsApp link is a valid full number. Query lives
 		// in `club-logic.ts` — see that module's header.
-		const member = await loadMemberProfile(data.clubId, data.memberId);
+		//
+		// A FORMER member's contact goes only to an admin (#1342): the loader
+		// withholds it unless this says the viewer may reveal. Passed as the guard
+		// that already decides a former member's Pathways, and as a function so the
+		// officer lookup behind it runs only when the member is former.
+		const member = await loadMemberProfile(data.clubId, data.memberId, {
+			viewerMayRevealFormer: () => mayRevealFormerMembers(access),
+		});
 
 		if (!member) {
 			return {

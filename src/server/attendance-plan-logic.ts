@@ -15,6 +15,8 @@ import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
 import { logActivity } from "./activity";
 import type { ResolvedActor } from "./attendance-actor-logic";
 import { takeAdvisoryLockWithin } from "./club-write-lock";
+import { meetingAcceptsWrite } from "./meeting-write-gate";
+import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 
 // Either the main db client or a drizzle transaction — so callers writing
 // inside their own transaction (e.g. `releaseSlotsAndMarkUnavailable`) can
@@ -607,6 +609,48 @@ export async function clearPlanStatus(
 }
 
 /**
+ * Every plan row a member holds on a meeting that is not completed, deleted
+ * (#1342). The writer for a membership that ENDS (`applySetMemberStatus`, the
+ * move to `former`): a person who has left has no answer to give about a
+ * meeting still to come, and an undeleted row would keep naming them on that
+ * meeting's public "not coming" list.
+ *
+ * "Not completed" is `scheduled` AND `cancelled`: a cancelled meeting can be
+ * restored, and nobody can answer for the former member when it is. A completed
+ * meeting's answers are history, left as they were, like the roll and the role
+ * slots there. The DELETE says so with the shared plan policy
+ * (`meetingAcceptsWrite`, accepting `cancelled`), the gate the same ending's slot
+ * release uses, so a status the policy adds is placed here without a second list.
+ *
+ * Meant to run inside the ending's transaction, on its `tx`, so the status
+ * change and the deletion commit together or not at all. It is a set-based
+ * DELETE and logs nothing, deliberately: the ending already logs one
+ * `member_edit` for the person, and one `plan_set` per swept row would put a
+ * former member's whole RSVP history into the activity feed on the day they
+ * leave. It takes no `lockMemberAttendance`, so a write that lands after it (a
+ * session-less answer racing the ending) is not prevented, only made invisible
+ * to the public list by `listNotComingWithNames`'s active-only filter.
+ */
+export async function deletePlanRowsOfEndedMember(
+	database: DbOrTx,
+	memberId: string,
+): Promise<void> {
+	await database
+		.delete(meetingAttendancePlan)
+		.where(
+			and(
+				eq(meetingAttendancePlan.memberId, memberId),
+				meetingAcceptsWrite(
+					database,
+					"plan",
+					meetingAttendancePlan.meetingId,
+					PLAN_ACCEPTING_CANCELLED,
+				),
+			),
+		);
+}
+
+/**
  * Fill in a past meeting's plan answers from an import (#1051, D3 of #1196): a
  * bulk fill-if-ABSENT, and nothing else.
  *
@@ -760,6 +804,9 @@ function unavailableBase(database: DbOrTx, meetingId: string) {
 			and(
 				eq(meetingAttendancePlan.memberId, members.id),
 				eq(meetingAttendancePlan.meetingId, meetingId),
+				// A non-active member's plan row is not read (#1342): it is the
+				// reader-side cover for rows kept or landed after an ending.
+				eq(members.status, "active"),
 			),
 		)
 		.leftJoin(
@@ -790,6 +837,13 @@ export async function listUnavailableWithNames(
  * PUBLIC variant of `listUnavailableWithNames` (#1257): it ignores the roll, so
  * a signed-out reader or a non-member cannot combine it with the public
  * answers to infer who was marked Present or Absent (the roll is members-only).
+ *
+ * ACTIVE members only (#1342). The public roster lists no one else, so a name
+ * here that the roster does not show tells a signed-out reader who used to be a
+ * member. `deletePlanRowsOfEndedMember` removes a former member's rows when the
+ * membership ends; this filter is the second line, for a row a racing write
+ * lands afterwards, and it is the only one that covers an inactive member, whose
+ * rows are kept for when they return.
  */
 export async function listNotComingWithNames(
 	database: DbOrTx,
@@ -803,6 +857,7 @@ export async function listNotComingWithNames(
 			and(
 				eq(meetingAttendancePlan.meetingId, meetingId),
 				eq(meetingAttendancePlan.status, "not_coming"),
+				eq(members.status, "active"),
 			),
 		)
 		.orderBy(members.name);
@@ -883,10 +938,12 @@ export async function listNotComingForMeetings(
 }
 
 /** Every plan row across several meetings, statuses included — the season grid
- *  needs both partitions from one round-trip. */
+ *  needs both partitions from one round-trip. `activeOnly` (#1342) drops the
+ *  rows of members who are not active: the public and TMOD readers pass it. */
 export async function listPlanForMeetings(
 	database: DbOrTx,
 	meetingIds: string[],
+	opts: { activeOnly?: boolean } = {},
 ): Promise<
 	{ memberId: string; meetingId: string; status: AttendancePlanStatus }[]
 > {
@@ -898,7 +955,13 @@ export async function listPlanForMeetings(
 			status: meetingAttendancePlan.status,
 		})
 		.from(meetingAttendancePlan)
-		.where(inArray(meetingAttendancePlan.meetingId, meetingIds));
+		.innerJoin(members, eq(members.id, meetingAttendancePlan.memberId))
+		.where(
+			and(
+				inArray(meetingAttendancePlan.meetingId, meetingIds),
+				opts.activeOnly ? eq(members.status, "active") : undefined,
+			),
+		);
 }
 
 /** The plan answers and the roll marks of a set of members across several

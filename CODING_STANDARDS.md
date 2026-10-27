@@ -471,12 +471,19 @@ public `answeredRungs` would let anyone read each member's Present/Absent
 (`loadMeetingDetail`'s `viewerIsMember` gate). One asking "who was contacted?" must filter
 `status = 'reached_out'` (the officer-only rung) — testing for a row now silently counts all
 three. `src/server/attendance-plan-logic.ts` is the seam: `getPlanStatus`,
-`listPlanForMeetings`, `listNotComingWithNames` (plan-only, the public reader),
+`listPlanForMeetings` (`{ activeOnly: true }` for every public or TMOD reader, #1342),
+`listNotComingWithNames` (plan-only, ACTIVE members only, the public reader),
 `isMemberNotComing` (plan-only unavailability, used by asserted claim and confirm),
 `listUnavailableWithNames` and `isMemberUnavailable` (roll wins over plan, members only), `listNotComingForMeetings`,
 `listReachedOutForMeeting`, `listComingForMeeting`, `memberHasAttendancePlanRows` (a count-free
 existence check for the guest-conversion undo's cascade refusal), `setPlanStatus`,
-`clearPlanStatus`. Add a
+`clearPlanStatus`, `deletePlanRowsOfEndedMember` (the ending's set-based delete of a
+member's rows on every meeting not yet completed, run in the same transaction as the
+status change AND by the guest-conversion undo when it returns a membership to `former`;
+logs nothing, takes no lock). A leaving member's answers are not the public's to read:
+the readers filter `members.status = 'active'` (the delete alone misses a row that lands
+after it, and an inactive member's rows are kept), so a new reader of plan rows filters
+too. Add a
 function there rather than an inline query — the seam is where the actor attribution and the
 two status predicates live, and an inline query bypasses both while still typechecking.
 

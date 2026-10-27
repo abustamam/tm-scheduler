@@ -608,7 +608,7 @@ describe("roster Pathway column — former members", () => {
 		memberRow({ id: FORMER_ID, name: "Fay Former", status: "inactive" }),
 	];
 	const toggle = () =>
-		screen.queryByRole("checkbox", { name: "Show former members' Pathways" });
+		screen.queryByRole("checkbox", { name: "Show inactive members' Pathways" });
 
 	it("offers the control to an admin", async () => {
 		await renderRoute(roster(), { canManage: true });

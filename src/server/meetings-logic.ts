@@ -1118,9 +1118,10 @@ export async function loadMeetingDetailForTest(
 	plan: { memberId: string; status: PlanStatus }[];
 	answeredRungs: { memberId: string; status: "coming" | "not_coming" }[];
 }> {
-	const allRungs = (await listPlanForMeetings(db, [meetingId])).map(
-		({ memberId, status }) => ({ memberId, status }),
-	);
+	// Active members' rows only (#1342).
+	const allRungs = (
+		await listPlanForMeetings(db, [meetingId], { activeOnly: true })
+	).map(({ memberId, status }) => ({ memberId, status }));
 	const plan = opts.canManage ? allRungs : [];
 	const answeredRungs = allRungs.filter(
 		(r): r is { memberId: string; status: "coming" | "not_coming" } =>
@@ -1209,9 +1210,10 @@ export async function loadTmodPanelData(input: {
 	if (!claimed || claimed.status !== "active") return empty;
 
 	// The ladder: granted on the honour-system claim above.
-	const plan = (await listPlanForMeetings(db, [input.meetingId])).map(
-		({ memberId, status }) => ({ memberId, status }),
-	);
+	// Active members' rows only (#1342): the roster below is active-only too.
+	const plan = (
+		await listPlanForMeetings(db, [input.meetingId], { activeOnly: true })
+	).map(({ memberId, status }) => ({ memberId, status }));
 
 	// CONTACT is granted only to a real session that IS this Toastmaster. A
 	// signed-in club member who is not the TMOD gets names and no contact, so this

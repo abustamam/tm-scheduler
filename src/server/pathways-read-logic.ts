@@ -1036,10 +1036,16 @@ export async function pathwaysForUser(
  * Inactive memberships are left out unless `includeInactive` is set, for the
  * reason the club export's pathways.csv gives (#958): an enrollment is
  * PERSON-owned and carries no club, so a lapsed membership is the only link
- * from a former member's Pathways record, including progress made at clubs
- * they joined afterwards, to the club they left. Only
+ * from a lapsed member's Pathways record, including progress made at clubs
+ * they joined afterwards, to the club they lapsed from. Only
  * `listClubMemberPathwaysFor` passes `includeInactive`, and only after
  * `mayRevealFormerMembers` (guards.ts) says yes.
+ *
+ * `includeInactive` means INACTIVE and never FORMER (#1342). A member who has
+ * left (#1239) is on no roster segment, so the roster has no cell to put their
+ * paths in, and the payload used to carry them anyway for the page to drop. Their
+ * Pathways stay where an admin looks for them on purpose: the member's own
+ * profile (`pathwaysForMember`).
  */
 export async function pathwaysByMember(
 	clubId: string,
@@ -1071,7 +1077,11 @@ export async function pathwaysByMember(
 			and(
 				eq(members.clubId, clubId),
 				isNull(pathEnrollments.archivedAt),
-				opts.includeInactive ? undefined : eq(members.status, "active"),
+				// Not `undefined` for `includeInactive`: that dropped the filter, and a
+				// former member's paths came back with the inactive ones (#1342).
+				opts.includeInactive
+					? inArray(members.status, ["active", "inactive"])
+					: eq(members.status, "active"),
 			),
 		)
 		.orderBy(asc(pathwaysPaths.sortOrder), asc(pathLevelProgress.level));
@@ -1237,6 +1247,8 @@ export async function pathwaysByMember(
  * `includeFormer` is a REQUEST, not a grant: it takes effect only when
  * `mayRevealFormerMembers` (guards.ts) agrees, and is otherwise ignored, so a
  * plain member who sets it gets exactly what they would have got without it.
+ * The name is older than the "former" status (#1239): what it adds is the
+ * INACTIVE members' paths, never a former member's (#1342).
  */
 export async function listClubMemberPathwaysFor(
 	userId: string,
