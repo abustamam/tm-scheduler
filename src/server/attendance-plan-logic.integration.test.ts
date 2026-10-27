@@ -15,6 +15,7 @@ import {
 	members,
 } from "#/db/schema";
 import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
+import { resolveActor } from "#/server/attendance-actor-logic";
 import {
 	ASSERTED_OVERWRITE_MESSAGE,
 	CLEARABLE_ASK,
@@ -38,6 +39,32 @@ import {
 	seedPerson,
 	testDb,
 } from "#/test/db";
+
+vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+
+/**
+ * The session mocks `availability.integration.test.ts` uses, for the same
+ * reason: `resolveActor`'s officer arm reads the SESSION off the current
+ * request, which vitest has none of. Only the cookie -> session lookup better-auth
+ * would do is faked; `getSessionUser` and `requireClubRole` run for real against
+ * the seeded rows. Every case that does not set `sessionUserId` stays the
+ * anonymous caller it always was, and the `afterEach` below resets it.
+ */
+let sessionUserId: string | null = null;
+/** One stable object, because the impersonation marker is keyed on identity. */
+const request = { headers: new Headers() };
+vi.mock("@tanstack/react-start/server", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@tanstack/react-start/server")>()),
+	getRequest: () => request,
+}));
+vi.mock("#/lib/auth", () => ({
+	auth: {
+		api: {
+			getSession: async () =>
+				sessionUserId ? { user: { id: sessionUserId } } : null,
+		},
+	},
+}));
 
 describe.skipIf(!hasTestDb)("meeting_attendance_plan table", () => {
 	let club: SeededClub;
@@ -1065,7 +1092,7 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 			 * error. Read the row back for the same reason as above: a refused delete
 			 * and a delete that found nothing both report `cleared: false`.
 			 */
-			describe("an officer clearing their OWN row", () => {
+			describe("an officer clearing their own row vs another member's", () => {
 				const officerClear = (subjectMemberId: string) =>
 					clearPlanStatus(testDb, {
 						memberId: subjectMemberId,
@@ -1131,6 +1158,118 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 
 					expect(res.cleared).toBe(true);
 					expect(await rowOf(club.memberId)).toBe(null);
+				});
+			});
+
+			/**
+			 * `clearFloor`'s self test is only safe because, on the officer arm,
+			 * `resolveActor` sets `actorMemberId` from the SESSION's own membership.
+			 * The block above feeds `clearFloor` a hand-picked actor, so it cannot see
+			 * a ladder that read the caller's CLAIMED id there instead; these run the
+			 * ladder itself, with a signed-in admin who claims to be someone else.
+			 * `attendance-plan-authz.guard.test.ts` pins the same sequence as source
+			 * text; this is the half that fails on behaviour.
+			 */
+			describe("the officer arm's actor is the session's member, never the claimed one", () => {
+				beforeEach(() => {
+					sessionUserId = club.adminUserId;
+				});
+				afterEach(() => {
+					sessionUserId = null;
+				});
+
+				const resolveAs = (subjectMemberId: string, claimed: string) =>
+					resolveActor({
+						clubId: club.clubId,
+						meetingId: club.meetingId,
+						memberId: subjectMemberId,
+						claimedActorMemberId: claimed,
+					});
+
+				it("credits the admin's own member id when the caller claims another member", async () => {
+					const resolved = await resolveAs(club.memberId, club.memberId);
+
+					expect(resolved.via).toBe("officer");
+					expect(resolved.proof).toBe("session");
+					expect(resolved.actorMemberId).toBe(club.adminMemberId);
+					expect(resolved.actorMemberId).not.toBe(club.memberId);
+				});
+
+				it("floors another member's row at the ask even when the claim names that member", async () => {
+					const resolved = await resolveAs(club.memberId, club.memberId);
+
+					expect(
+						clearFloor({
+							via: resolved.via,
+							actorMemberId: resolved.actorMemberId,
+							memberId: club.memberId,
+						}),
+					).toEqual(["reached_out"]);
+				});
+
+				it("keeps another member's coming row when the claim names that member", async () => {
+					await setPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+						clubId: club.clubId,
+						status: "coming",
+						actorMemberId: club.memberId,
+					});
+
+					const resolved = await resolveAs(club.memberId, club.memberId);
+					const res = await clearPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+						clubId: club.clubId,
+						actorMemberId: resolved.actorMemberId,
+						onlyFrom: clearFloor({
+							via: resolved.via,
+							actorMemberId: resolved.actorMemberId,
+							memberId: club.memberId,
+						}),
+					});
+
+					expect(res.cleared).toBe(false);
+					expect(
+						await getPlanStatus(testDb, {
+							memberId: club.memberId,
+							meetingId: club.meetingId,
+						}),
+					).toBe("coming");
+				});
+
+				it("still lets the admin clear their OWN coming row while claiming another member", async () => {
+					await setPlanStatus(testDb, {
+						memberId: club.adminMemberId,
+						meetingId: club.meetingId,
+						clubId: club.clubId,
+						status: "coming",
+						actorMemberId: club.adminMemberId,
+					});
+
+					// The claim names someone else; the subject is the admin's own row, so
+					// the answer is the SESSION's and the clear goes through.
+					const resolved = await resolveAs(club.adminMemberId, club.memberId);
+					expect(resolved.actorMemberId).toBe(club.adminMemberId);
+					const res = await clearPlanStatus(testDb, {
+						memberId: club.adminMemberId,
+						meetingId: club.meetingId,
+						clubId: club.clubId,
+						actorMemberId: resolved.actorMemberId,
+						onlyFrom: clearFloor({
+							via: resolved.via,
+							actorMemberId: resolved.actorMemberId,
+							memberId: club.adminMemberId,
+						}),
+					});
+
+					expect(res.cleared).toBe(true);
+					expect(
+						await getPlanStatus(testDb, {
+							memberId: club.adminMemberId,
+							meetingId: club.meetingId,
+						}),
+					).toBe(null);
 				});
 			});
 

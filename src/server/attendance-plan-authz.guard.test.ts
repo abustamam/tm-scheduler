@@ -331,12 +331,23 @@ describe("attendance-plan authz (D6)", () => {
 			"onlyFrom: clearFloor({ via, actorMemberId, memberId: data.memberId }),",
 		);
 		// `clearFloor` trusts `actorMemberId === memberId` on the officer arm only
-		// because that arm sets it from the SESSION's own membership. Pin the source
-		// of it, so an edit that read the caller's claimed id there fails here.
+		// because that arm sets it from the SESSION's own membership. Pin the arm's
+		// WHOLE sequence, declaration through return, inside `resolveActor`'s body.
+		// The declaration alone is not the pin: it survives anywhere in the module
+		// and survives a return that reads the claimed id instead
+		// (`actorMemberId: args.claimedActorMemberId ?? actorMemberId`), which is
+		// the edit this exists to fail. Comments are blanked to spaces by
+		// `readSource`, so `\s*` spans the prose between the three statements. The
+		// behavioural twin is in `attendance-plan-logic.integration.test.ts`.
+		const resolveActorBody = LADDER.slice(
+			LADDER.indexOf("export async function resolveActor"),
+		);
 		expect(
-			LADDER,
+			resolveActorBody,
 			"the officer arm's actor must be the session's membership, never the claimed id",
-		).toContain("const actorMemberId = membership.id;");
+		).toMatch(
+			/const actorMemberId = membership\.id;\s*const proof = "session";\s*return \{ actorMemberId, viaManager: true, via: "officer", proof \};/,
+		);
 		expect(
 			SRC,
 			"the officer clear must NOT be gated on viaManager — that admits the honour-system TMOD arm",
