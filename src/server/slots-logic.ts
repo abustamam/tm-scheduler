@@ -1613,6 +1613,20 @@ export async function confirmSlotCore(args: {
 					: "asserted"));
 
 	return db.transaction(async (tx) => {
+		// The membership merge lock (#1035), SHARED on the holder, before this
+		// transaction's first lock of any kind. The self arm makes two rows name the
+		// holder, the plan row below and the activity row, and a merge absorbing
+		// that membership re-points both, then DELETEs it. Without this a confirm
+		// that has the slot's row lock and wants the plan row can meet a merge that
+		// has re-pointed the plan row and wants the slot: a deadlock that Postgres
+		// resolves by aborting one of the two, and the merge is the dearer. Lock
+		// order: membership merge lock -> (attendance lock) -> row locks, the order
+		// `claimSlotCore` and `membership-merge-lock.ts` document. Refuses with
+		// `CLUB_BUSY_MESSAGE` when a merge absorbed the holder while this waited.
+		// The officer arm writes no row that names the holder and takes no lock.
+		if (grant.via === "self") {
+			await lockMembershipsAgainstMerge(tx, [grant.holderMemberId]);
+		}
 		// The asserted holder's gate, read in the SAME transaction and BEFORE the
 		// flip so a refusal writes nothing. A decline is a record, not a blank:
 		// over it an unverified confirm is contradicting the member, and an
@@ -1717,7 +1731,10 @@ export async function confirmSlotCore(args: {
 /** The refusals `confirmHeldClaimedSlots` treats as "this slot moved since we
  *  listed it" rather than as a failure. Every one of them is a race with an
  *  officer's release, reassignment or removal, and none is a gate: the archive
- *  and lock refusals are deliberately absent, so they still throw. */
+ *  and lock refusals are deliberately absent, so they still throw.
+ *  `CLUB_BUSY_MESSAGE` is deliberately absent too (#1344): a merge that absorbs
+ *  the holder mid-confirm makes the confirm throw "busy, try again" instead of
+ *  leaving the role silently claimed after the member said yes. */
 const LOST_CONFIRM_RACE: ReadonlySet<string> = new Set([
 	SLOT_NOT_FOUND_MESSAGE,
 	ONLY_CLAIMED_CONFIRMABLE_MESSAGE,

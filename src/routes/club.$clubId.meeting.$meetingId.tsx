@@ -92,6 +92,7 @@ import {
 	meetingHeading,
 } from "#/lib/format";
 import { buildHeldRoleLabels } from "#/lib/held-role-labels";
+import { markedAbsentMemberIds } from "#/lib/marked-absent-member-ids";
 import { MINUTES_ANCHOR_ID } from "#/lib/meeting-anchors";
 import {
 	cancellationNoticeHref,
@@ -2380,6 +2381,10 @@ function MeetingView() {
 							roleRecency={roleRecency}
 							roleByMemberId={roleByMemberId}
 							unavailableMemberIds={unavailableMemberIds}
+							markedAbsentMemberIds={markedAbsentMemberIds(
+								unavailableMemberIds,
+								answeredRungs,
+							)}
 							pairedRoleIds={effectiveCanManage ? pairedIds : undefined}
 							clubGuests={effectiveCanManage ? clubGuests : undefined}
 							shareUrl={effectiveCanManage ? nudgeShareUrl : ""}
