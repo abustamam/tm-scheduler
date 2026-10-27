@@ -499,7 +499,7 @@ function SummaryHeadline({ view }: { view: DcpScoreboardView }) {
 					</span>
 				</div>
 				{tier ? (
-					<Badge className="gap-1 bg-link text-white">
+					<Badge className="gap-1 bg-success text-success-foreground">
 						<Award className="size-3.5" /> {tier}
 					</Badge>
 				) : (
@@ -731,7 +731,7 @@ function GoalRow({
 				className={cn(
 					"flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-bold",
 					met
-						? "border-link bg-link text-white"
+						? "border-success bg-success text-success-foreground"
 						: "border-border text-muted-foreground",
 				)}
 				aria-hidden
