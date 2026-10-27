@@ -259,6 +259,106 @@ export const UNDO_MEMBER_HAS_HISTORY_MESSAGE = (what: string): string =>
 	`destroy it. Use the member merge tool instead.`;
 
 /**
+ * Refusal when the membership was merged with another roster entry (#1322), in
+ * EITHER direction.
+ *
+ * Merged INTO: the member merge folded an older row's join date and role into
+ * this membership, and the conversion's record still matches it, so deleting it
+ * would take that older member off the roster. Merged AWAY: the membership was
+ * absorbed into an older row, the conversion's own record went with it, and the
+ * guest now points at the keeper; the "removing the member from the roster"
+ * advice in `UNDO_NO_RECORD_MESSAGE` would delete THAT member.
+ *
+ * Says nothing about WHEN: the refusal also fires from the merged-away branch,
+ * where the only evidence is a merge on the keeper's Person that cannot be
+ * ordered against the conversion, so a claim of "after" would sometimes be false.
+ *
+ * The remedy named is the one that works: the merge tool is what produced this
+ * state, and a mistaken conversion has no keeper to merge into.
+ */
+export const UNDO_MEMBERSHIP_MERGED_MESSAGE =
+	"This member was merged with another roster entry, so undoing the " +
+	"conversion would delete the merged member. Set them inactive or former " +
+	"instead.";
+
+/**
+ * Refusal when an admin has edited the membership's status, role or end date
+ * since the conversion CREATED it (#1322). The undo deletes that membership, and
+ * the admin's decision (a promotion, an end date, an inactive flag) goes with
+ * it, so the undo declines to make that call for them. Only the created path
+ * asks: a reused membership is left standing, and the reuse path leaves the
+ * admin's edit in place instead (`leftBecause: "changed_since"`).
+ *
+ * The remedy named is the one that keeps the member on the roster, as the
+ * merged message's does.
+ */
+export const UNDO_MEMBERSHIP_EDITED_MESSAGE =
+	"An admin has changed this member's status or role since the conversion, " +
+	"so undoing it would discard that decision. Set them inactive or former " +
+	"instead.";
+
+/**
+ * Refusal when another guest is linked to the membership the undo would delete
+ * (#1322). Deleting it would strand that guest at `joined` with no pointer, and
+ * once the pointer is null unlink refuses, so the contact the link recorded
+ * could not come back. The maintainer's decision (2026-10-26): refuse, do not
+ * unlink on the admin's behalf.
+ *
+ * Names the guests, for the reason `GUEST_IS_NOW_A_MEMBER_MESSAGE` names its
+ * subject: the admin is looking at a card for a different guest. The remedy
+ * covers both ways a guest can be attached: a guest LINKED to the member is
+ * unlinked, and one CONVERTED onto it (the reuse branch) cannot be unlinked, so
+ * its way off is to undo its own conversion. At least one name, by type: the
+ * caller refuses only when it found a guest.
+ */
+export const UNDO_OTHER_GUEST_LINKED_MESSAGE = (
+	names: [string, ...string[]],
+): string => {
+	const shown = names.slice(0, 3);
+	const more = names.length - shown.length;
+	const list =
+		more > 0
+			? `${shown.join(", ")} and ${more} more`
+			: shown.length > 1
+				? `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`
+				: names[0];
+	return (
+		`${list} ${names.length > 1 ? "are" : "is"} linked to this member too, ` +
+		`so undoing the conversion would delete the member and leave them ` +
+		`without one. Unlink them, or undo their conversion, first.`
+	);
+};
+
+/**
+ * Whether a membership's join date says it holds an older member's history, so
+ * the undo must not delete it (#1322).
+ *
+ * Convert writes `joined_at` as the moment it ran, and `collapseMemberships`
+ * sets the keeper's `joined_at` to the EARLIEST of the two rows it fuses. So a
+ * membership the conversion created whose join date is well before the
+ * conversion has absorbed an older row. The audit log cannot say so reliably: a
+ * person-targeted `member_merge` row is never re-targeted when a later Person
+ * merge moves the membership to another Person, so a chain of two merges leaves
+ * no row on the membership's current Person.
+ *
+ * The one-day margin absorbs the app clock (convert's `joined_at`) against the
+ * database clock (the record's `createdAt`) and a transaction that started a
+ * moment before it committed; a merge of any real older row is far earlier. An
+ * admin who edited the join date backwards also refuses: that is the safe side,
+ * and the remedy named is the same.
+ */
+export const JOIN_DATE_MARGIN_MS = 24 * 60 * 60 * 1000;
+export function joinedBeforeConversion(
+	joinedAt: Date | null,
+	convertedAt: Date,
+): boolean {
+	return (
+		joinedAt !== null &&
+		joinedAt.getTime() < convertedAt.getTime() - JOIN_DATE_MARGIN_MS
+	);
+}
+
+/**
  * Whether a guest row is stranded: frozen at `joined` while the membership it
  * was converted into no longer exists (#618).
  *
