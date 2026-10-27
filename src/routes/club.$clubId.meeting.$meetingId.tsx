@@ -2568,12 +2568,12 @@ function MeetingView() {
 						// that `visible` to `auto` (CSS Overflow 3 §3), so the scrolling
 						// element clips on BOTH axes. Nothing in the rail overhangs today —
 						// the row wraps (`break-words`, `line-clamp-2`), the widest control
-						// is the measured `w-44` track, and the row menu is a portalled
+						// is the measured `w-36` track, and the row menu is a portalled
 						// `DropdownMenuContent` — but a future popover that renders INLINE
 						// would be cut off. Moving the scroller inward tightened that box
 						// from the column to the card's body, so it is a smaller trap than
 						// it was, not a new one.
-						className="order-1 lg:order-2 lg:sticky lg:top-[var(--shell-pinned-top,6rem)] lg:flex lg:max-h-[calc(100vh_-_var(--shell-pinned-top,6rem)_-_1rem)] lg:w-[340px] lg:shrink-0 lg:flex-col"
+						className="order-1 lg:order-2 lg:sticky lg:top-[var(--shell-pinned-top,6rem)] lg:flex lg:max-h-[calc(100vh_-_var(--shell-pinned-top,6rem)_-_1rem)] lg:w-[340px] lg:shrink-0 lg:flex-col xl:w-96"
 					>
 						<MeetingAttendancePanel
 							// `upcoming` → the outreach ladder; meeting day and after → the
