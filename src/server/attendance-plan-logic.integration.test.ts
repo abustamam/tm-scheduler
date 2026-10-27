@@ -18,6 +18,7 @@ import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
 import {
 	ASSERTED_OVERWRITE_MESSAGE,
 	CLEARABLE_ASK,
+	clearFloor,
 	clearPlanStatus,
 	getPlanStatus,
 	IMPORT_PLAN_STATUS_MESSAGE,
@@ -1054,6 +1055,83 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 						meetingId: club.meetingId,
 					}),
 				).toBe(null);
+			});
+
+			/**
+			 * An officer's OWN row is self-service (the floor is `clearFloor`'s, the
+			 * same call `clearPlannedAttendance` makes with the resolved arm and actor).
+			 * The officer arm used to apply `CLEARABLE_ASK` to its own row too, so the
+			 * personal strip's "undo" deleted nothing and the answer came back with no
+			 * error. Read the row back for the same reason as above: a refused delete
+			 * and a delete that found nothing both report `cleared: false`.
+			 */
+			describe("an officer clearing their OWN row", () => {
+				const officerClear = (subjectMemberId: string) =>
+					clearPlanStatus(testDb, {
+						memberId: subjectMemberId,
+						meetingId: club.meetingId,
+						clubId: club.clubId,
+						actorMemberId: club.adminMemberId,
+						onlyFrom: clearFloor({
+							via: "officer",
+							actorMemberId: club.adminMemberId,
+							memberId: subjectMemberId,
+						}),
+					});
+				const rowOf = (memberId: string) =>
+					getPlanStatus(testDb, { memberId, meetingId: club.meetingId });
+
+				it.each([
+					"coming",
+					"not_coming",
+					"reached_out",
+				] as const)("clears their own %s row", async (status) => {
+					await setPlanStatus(testDb, {
+						memberId: club.adminMemberId,
+						meetingId: club.meetingId,
+						clubId: club.clubId,
+						status,
+						actorMemberId: club.adminMemberId,
+					});
+
+					const res = await officerClear(club.adminMemberId);
+
+					expect(res.cleared).toBe(true);
+					expect(await rowOf(club.adminMemberId)).toBe(null);
+				});
+
+				it.each([
+					"coming",
+					"not_coming",
+				] as const)("still keeps ANOTHER member's %s row (#573)", async (status) => {
+					await setPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+						clubId: club.clubId,
+						status,
+						actorMemberId: club.memberId,
+					});
+
+					const res = await officerClear(club.memberId);
+
+					expect(res.cleared).toBe(false);
+					expect(await rowOf(club.memberId)).toBe(status);
+				});
+
+				it("clears another member's reached_out, so un-asking keeps working", async () => {
+					await setPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+						clubId: club.clubId,
+						status: "reached_out",
+						actorMemberId: club.adminMemberId,
+					});
+
+					const res = await officerClear(club.memberId);
+
+					expect(res.cleared).toBe(true);
+					expect(await rowOf(club.memberId)).toBe(null);
+				});
 			});
 
 			/**

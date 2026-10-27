@@ -7,9 +7,8 @@ import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { resolveActor } from "./attendance-actor-logic";
 import { declinePlannedAttendance } from "./attendance-decline-logic";
 import {
-	CLEARABLE_ASK,
+	clearFloor,
 	clearPlanStatus,
-	SELF_SERVICE_RUNGS,
 	setPlanStatus,
 } from "./attendance-plan-logic";
 import { assertClubNotArchived, requireMemberInClub } from "./guards";
@@ -325,19 +324,13 @@ export const clearPlannedAttendance = createServerFn({ method: "POST" })
 			// before the consolidation. Writing `reached_out` is what the panel is
 			// for; deleting someone else's is not.
 			//
-			// BOTH arms now pass a floor (#573), and they are exact complements: the
-			// self/TMOD arm may clear an ANSWER, the officer arm may clear the ASK.
-			// Neither may erase the other's.
-			//
-			// The ternary STAYS. #573 proposed replacing this whole expression with
-			// `["reached_out"]`, on the stated grounds that "non-officer arms are
-			// unchanged — they already pass SELF_SERVICE_RUNGS". They pass it from
-			// the other branch of THIS ternary, not from another function, so
-			// collapsing it would also have stopped a self-asserted Toastmaster
-			// clearing their own `coming` — a narrowing nobody asked for, in a
-			// change whose whole point is that nobody asked for the other one.
-			// (`clearAvailability` in `availability.ts` is a separate self-serve
-			// endpoint and is genuinely untouched; `outreach.ts`'s admin clear
+			// EVERY arm passes a floor (#573), chosen by `clearFloor`: the self/TMOD
+			// arm may clear an ANSWER, the officer arm may clear the ASK on someone
+			// else's row. Neither may erase the other's. The non-officer arms must
+			// keep SELF_SERVICE_RUNGS: collapsing to `["reached_out"]` (#573's first
+			// proposal) would stop a self-asserted Toastmaster clearing their own
+			// `coming`. (`clearAvailability` in `availability.ts` is a separate
+			// self-serve endpoint and is untouched; `outreach.ts`'s admin clear
 			// already passed `["reached_out"]` inline.)
 			//
 			// The officer arm used to pass `undefined` — clear whatever is there —
@@ -355,10 +348,13 @@ export const clearPlannedAttendance = createServerFn({ method: "POST" })
 			// replacing `clearContacted`, which had always been narrow by
 			// construction. Nobody decided officers needed to erase answers.
 			//
-			// Accepted trade-off: there is now no way to return an answered row to
-			// "no answer". Same shape as roll mode's clear-to-unmarked gap
-			// (TODOS.md). An officer who wants a row to stop saying "coming" picks
-			// "Not coming".
-			onlyFrom: via === "officer" ? CLEARABLE_ASK : SELF_SERVICE_RUNGS,
+			// Accepted trade-off: an officer cannot return ANOTHER member's answered
+			// row to "no answer"; they pick "Not coming" (same shape as roll mode's
+			// clear-to-unmarked gap, TODOS.md). Their OWN row is self-service: on
+			// the officer arm `actorMemberId` is the session's `membership.id`,
+			// never the caller's `claimedActorMemberId`, so `clearFloor` can trust
+			// `actorMemberId === memberId` there. Before this, the strip's "undo" on
+			// an officer's own row deleted nothing and the answer reappeared.
+			onlyFrom: clearFloor({ via, actorMemberId, memberId: data.memberId }),
 		});
 	});

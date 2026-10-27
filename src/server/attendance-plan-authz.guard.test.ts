@@ -191,9 +191,9 @@ describe("attendance-plan authz (D6)", () => {
 		).toContain("via");
 		expect(
 			body,
-			"the officer arm gets its OWN floor, not an unrestricted delete (#573)",
+			"the floor comes from clearFloor, fed the RESOLVED arm and actor — not a caller-supplied id",
 		).toContain(
-			'onlyFrom: via === "officer" ? CLEARABLE_ASK : SELF_SERVICE_RUNGS',
+			"onlyFrom: clearFloor({ via, actorMemberId, memberId: data.memberId })",
 		);
 		// The defect this replaced, pinned as a NEGATIVE so a revert cannot pass by
 		// keeping the ternary shape while widening one arm. `undefined` there meant
@@ -203,6 +203,10 @@ describe("attendance-plan authz (D6)", () => {
 			body,
 			"the officer arm must never pass an unfloored clear again (#573)",
 		).not.toContain('via === "officer" ? undefined');
+		expect(
+			body,
+			"no inline floor: every clear goes through clearFloor",
+		).not.toContain('via === "officer" ?');
 	});
 
 	it("reports the officer branch rather than inferring it from a null actor", () => {
@@ -324,8 +328,15 @@ describe("attendance-plan authz (D6)", () => {
 		// is unchanged, on an expression whose right-hand side moved.
 		expect(SRC).toContain('if (!viaManager && data.status === "reached_out")');
 		expect(SRC).toContain(
-			'onlyFrom: via === "officer" ? CLEARABLE_ASK : SELF_SERVICE_RUNGS,',
+			"onlyFrom: clearFloor({ via, actorMemberId, memberId: data.memberId }),",
 		);
+		// `clearFloor` trusts `actorMemberId === memberId` on the officer arm only
+		// because that arm sets it from the SESSION's own membership. Pin the source
+		// of it, so an edit that read the caller's claimed id there fails here.
+		expect(
+			LADDER,
+			"the officer arm's actor must be the session's membership, never the claimed id",
+		).toContain("const actorMemberId = membership.id;");
 		expect(
 			SRC,
 			"the officer clear must NOT be gated on viaManager — that admits the honour-system TMOD arm",
