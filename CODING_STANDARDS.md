@@ -584,8 +584,8 @@ server answers `cleared: false` for ANOTHER member's answered row, `commitRung` 
 sentence `clearRefusedMessage` (`src/lib/attendance-panel.ts`) picks for that stored status (the
 `coming` one also points at Not coming) rather than letting the row revert in silence. The meeting
 page's clear refuses a caller whose proof is not `"session"` (`assertSessionProof`,
-`attendance-actor-logic.ts`) before it reads the ladder, so a claimed id can never stand in for a
-session there.
+`attendance-actor-logic.ts`), checked on the ladder's own result: after `resolveActor`, before the
+delete. So a claimed id can never stand in for a session there.
 
 **The season grid's `setAvailability` and `clearAvailability` are owner-or-officer, and the clear
 also needs a session.** They are "Not available", "Marked them available" and the Undo after
@@ -600,12 +600,15 @@ floor depends on whose row it is: the member's own row keeps `SELF_SERVICE_RUNGS
 clearing ANOTHER member's row floors at `CLEARABLE_DECLINE` (the decline the grid undoes), so a stale
 grid cannot delete a `coming`. The credit is the resolved actor, which behind the proof check is the
 session's own member, or null for a read_write impersonating superadmin (whom `logActivity`
-stamps). The set keeps its write modes (a session writes unrestricted, an asserted caller fills a
+stamps). `clearAvailability` returns `cleared` beside `ok` and the grid offers its Undo only when
+it is true: a clear that removed nothing (a stale grid over a newer answer) says so and offers no
+re-decline. The set keeps its write modes (a session writes unrestricted, an asserted caller fills a
 blank); a read_only impersonating superadmin can no longer write through it. The rules live in the
 seams (`setAvailabilityCore`, `clearAvailabilityCore`, `clearPlannedAttendanceCore`,
 `availability-logic.ts`) rather than in the handler bodies because a `createServerFn` body cannot
 be invoked in vitest; the handlers keep the meeting, archive and roster gates and bind the SUBJECT
-to `data.memberId`. `availability-authz.guard.test.ts` pins the handlers' wiring and
+to `data.memberId`. `availability-authz.guard.test.ts` pins the wiring of `setAvailability` and
+`clearAvailability` (`attendance-plan-authz.guard.test.ts` that of `clearPlannedAttendance`), and
 `availability.integration.test.ts` executes the rules.
 
 Both `demoteFrom` and `onlyFrom` are `setWhere`/`WHERE` predicates rather than a
