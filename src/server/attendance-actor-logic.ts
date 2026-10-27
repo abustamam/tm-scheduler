@@ -188,7 +188,10 @@ export async function resolveActor(args: {
 	// and edit meeting meta, so it is consistent with the product's identity
 	// model (#317) for WRITES that land in the activity feed. It is deliberately
 	// NOT trusted for anything else: the contact roster needs a real session
-	// (`loadTmodPanelData`), and the unrestricted clear stays on the officer arm.
+	// (`loadTmodPanelData`), and clearing ANOTHER member's answer is not this
+	// arm's at all — `clearFloor` gives it an empty floor there and
+	// `resolveClearActor` refuses it outright. A member's answer is cleared by
+	// that member, or by an officer, and by nobody else.
 	//
 	// Skipped entirely when there is no caller to match, which is what keeps the
 	// slot join off the request for a caller who asserted nothing.
@@ -231,4 +234,44 @@ export async function resolveActor(args: {
 	// edit that makes it reachable fails closed instead of granting.
 	const proof = resolved?.proof ?? "asserted";
 	return { actorMemberId: actor, viaManager: false, via: "self", proof };
+}
+
+/**
+ * {@link resolveActor} for a CLEAR that takes no per-row floor of its own: the
+ * season grid's `clearAvailability`.
+ *
+ * `resolveActor` admits three callers for a WRITE, and the Toastmaster arm is
+ * one that may set another member's row. Clearing is different. A member's
+ * ANSWER (`coming` / `not_coming`) is cleared by that member, or by an officer
+ * acting deliberately on the grid (`canManageOthers`, the same principal the
+ * officer arm admits), and by nobody else — so another member's row is refused
+ * here with {@link SELF_ONLY_MESSAGE} unless the officer arm admitted the
+ * caller. The Toastmaster arm is refused too: `resolveActor` reports it
+ * `viaManager`, but that capability is about WRITING the ladder and does not
+ * extend to deleting a member's answer.
+ *
+ * Both halves of the condition earn their place. The test is the ids
+ * (`actorMemberId !== memberId`), never `via === "self"`, because the
+ * Toastmaster clearing THEIR OWN row is clearing their own answer and is
+ * allowed; the arm only decides who may skip the id test, and that is the
+ * officer arm alone.
+ *
+ * Callers must have passed `requireSessionActor` first. Then the actor on every
+ * non-officer arm is the SESSION's own member (a claimed id is ignored once a
+ * session resolves), which is what makes comparing it with the subject mean
+ * anything. Pass the RAW claim, never one defaulted to the subject — the same
+ * rule `markUnavailableReleasing` documents, for the same reason: a defaulted
+ * claim makes the comparison true for every request.
+ */
+export async function resolveClearActor(args: {
+	clubId: string;
+	meetingId: string;
+	memberId: string;
+	claimedActorMemberId?: string;
+}): Promise<ResolvedActor> {
+	const resolved = await resolveActor(args);
+	if (resolved.via !== "officer" && resolved.actorMemberId !== args.memberId) {
+		throw new Error(SELF_ONLY_MESSAGE);
+	}
+	return resolved;
 }

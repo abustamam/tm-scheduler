@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { PanelRole, PlanStatus } from "./attendance-panel";
-import { buildPanelRoleMap, buildPlanPanel } from "./attendance-panel";
+import {
+	ANSWER_NOT_YOURS_TO_CLEAR_TEXT,
+	buildPanelRoleMap,
+	buildPlanPanel,
+	clearRefusedToast,
+} from "./attendance-panel";
 
 const roster = [
 	{ id: "d", name: "Dana", preferredName: null, phone: null, email: null },
@@ -505,5 +510,35 @@ describe("buildPanelRoleMap", () => {
 			},
 		];
 		expect(Object.keys(buildPanelRoleMap(slots))).toEqual([]);
+	});
+});
+
+describe("clearRefusedToast", () => {
+	const base = { cleared: false, memberId: "m1", myId: "me" } as const;
+
+	// protects=a declined "No answer" on another member's coming/not_coming answers with the one sentence; fails_when=the sentence is not returned for an answered row, or is returned when the server cleared it; no_claim=that the server declines (attendance-plan-logic.integration.test.ts)
+	it.each([
+		"coming",
+		"not_coming",
+	] as const)("tells the viewer a declined clear of another member's %s is the member's own", (previous) => {
+		expect(clearRefusedToast({ ...base, previous })).toBe(
+			ANSWER_NOT_YOURS_TO_CLEAR_TEXT,
+		);
+		expect(ANSWER_NOT_YOURS_TO_CLEAR_TEXT).toContain("Not coming");
+		expect(clearRefusedToast({ ...base, previous, cleared: true })).toBeNull();
+	});
+
+	// protects=no misleading toast when the row showed no answer; fails_when=an absent row or an officer's ask is reported as "the member's own"; no_claim=none beyond protects
+	it.each([
+		null,
+		"reached_out",
+	] as const)("says nothing when the row showed %s", (previous) => {
+		expect(clearRefusedToast({ ...base, previous })).toBeNull();
+	});
+
+	it("says nothing for the viewer's own row", () => {
+		expect(
+			clearRefusedToast({ ...base, memberId: "me", previous: "coming" }),
+		).toBeNull();
 	});
 });

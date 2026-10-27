@@ -324,14 +324,17 @@ export const clearPlannedAttendance = createServerFn({ method: "POST" })
 			// before the consolidation. Writing `reached_out` is what the panel is
 			// for; deleting someone else's is not.
 			//
-			// EVERY arm passes a floor (#573), chosen by `clearFloor`: the self/TMOD
-			// arm may clear an ANSWER, the officer arm may clear the ASK on someone
-			// else's row. Neither may erase the other's. The non-officer arms must
-			// keep SELF_SERVICE_RUNGS: collapsing to `["reached_out"]` (#573's first
-			// proposal) would stop a self-asserted Toastmaster clearing their own
-			// `coming`. (`clearAvailability` in `availability.ts` is a separate
-			// self-serve endpoint and is untouched; `outreach.ts`'s admin clear
-			// already passed `["reached_out"]` inline.)
+			// EVERY arm passes a floor (#573), chosen by `clearFloor`: a member (the
+			// self arm, or the Toastmaster on their own row) may clear their own
+			// ANSWER, the officer arm may clear the ASK on someone else's row.
+			// Neither may erase the other's, and the Toastmaster clearing ANOTHER
+			// member's row gets an empty floor: a member's answer is cleared by that
+			// member, or by an officer on the season grid, and by nobody else.
+			// Collapsing the own-row floor to `["reached_out"]` (#573's first
+			// proposal) would stop a Toastmaster clearing their own `coming`.
+			// (`clearAvailability` in `availability.ts` is the season grid's clear and
+			// holds the same rule through `resolveClearActor`; `outreach.ts`'s admin
+			// clear already passed `["reached_out"]` inline.)
 			//
 			// The officer arm used to pass `undefined` — clear whatever is there —
 			// and that is the defect. "No answer" means "make it as if they never

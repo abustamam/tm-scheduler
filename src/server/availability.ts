@@ -61,6 +61,7 @@ import { z } from "zod";
 import { db } from "#/db";
 import { meetings } from "#/db/schema";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
+import { resolveClearActor } from "./attendance-actor-logic";
 import {
 	clearPlanStatus,
 	SELF_SERVICE_RUNGS,
@@ -70,7 +71,6 @@ import { releaseSlotsAndMarkUnavailable } from "./availability-logic";
 import { assertClubNotArchived, requireMemberInClub } from "./guards";
 import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 import {
-	requestWriteActor,
 	requestWriteActorWithProof,
 	requireSessionActor,
 } from "./write-actor-logic";
@@ -199,7 +199,13 @@ export const setAvailability = createServerFn({ method: "POST" })
  *  club. `requireMemberInClub` proves the SUBJECT is on the roster and proves
  *  nothing about the caller; the self-service floor below keeps an officer's
  *  `reached_out` out of reach; neither of those is the check that says the
- *  person clearing the row is entitled to. */
+ *  person clearing the row is entitled to.
+ *
+ *  That check is `resolveClearActor`: a member's answer is cleared by that
+ *  member, or by an officer acting on the season grid (`canManageOthers` there,
+ *  `requireClubRole(admin)` here), and by nobody else — the meeting's
+ *  Toastmaster included. Anyone else naming another member's row is refused
+ *  with `SELF_ONLY_MESSAGE`. */
 export const clearAvailability = createServerFn({ method: "POST" })
 	.validator((i: unknown) => availabilitySchema.parse(i))
 	.handler(async ({ data }) => {
@@ -210,13 +216,24 @@ export const clearAvailability = createServerFn({ method: "POST" })
 		assertMeetingAccepts(meeting.status, "plan", PLAN_ACCEPTING_CANCELLED);
 		await requireMemberInClub(data.memberId, meeting.clubId);
 		// The RETURN is deliberately unused: this gate answers "may this request
-		// write at all", and who to CREDIT is the existing resolution below, which
-		// is unchanged. Binding the result would also import the null hazard
-		// documented on `SessionActor` for no gain.
+		// write at all", and the resolution below answers who the caller IS and
+		// whether they may clear THIS row. Binding the result would also import the
+		// null hazard documented on `SessionActor` for no gain.
 		await requireSessionActor({ clubId: meeting.clubId });
-		const actorMemberId = await requestWriteActor({
+		// Who may clear this row, and who to CREDIT. The credit is what
+		// `requestWriteActor` resolved here before: with a session in hand (the gate
+		// above) every arm answers with the session's own membership, or null for a
+		// read-write impersonating superadmin, which is exactly what the actor
+		// ladder returns for the officer, Toastmaster and self arms.
+		//
+		// The RAW claim, deliberately NOT defaulted to the subject: that default
+		// would make actor === subject for every request and turn the refusal into a
+		// no-op, the shape `markUnavailableReleasing` documents.
+		const { actorMemberId } = await resolveClearActor({
 			clubId: meeting.clubId,
-			claimedActorMemberId: data.actorMemberId ?? data.memberId,
+			meetingId: data.meetingId,
+			memberId: data.memberId,
+			claimedActorMemberId: data.actorMemberId,
 		});
 
 		await clearPlanStatus(db, {
@@ -227,10 +244,9 @@ export const clearAvailability = createServerFn({ method: "POST" })
 			// THE fix for the authorization regression this consolidation created.
 			// Deleting an officer's "I contacted them" used to require
 			// `requireUser()` + `requireClubRole(admin)`, because it lived in its own
-			// table. It now shares a row with the member's own answer, and this
-			// endpoint takes no session at all — so without this the whole officer
-			// chase list was erasable by anyone who could read a member id off the
-			// public season grid.
+			// table. It now shares a row with the member's own answer, so without
+			// this floor the whole officer chase list was erasable by whoever could
+			// read a member id off the public season grid.
 			onlyFrom: SELF_SERVICE_RUNGS,
 		});
 

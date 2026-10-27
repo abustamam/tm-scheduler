@@ -81,7 +81,11 @@ import {
 	presenceWriteMode,
 	withMode,
 } from "#/lib/attendance-mode";
-import { buildPanelRoleMap, type PlanStatus } from "#/lib/attendance-panel";
+import {
+	buildPanelRoleMap,
+	clearRefusedToast,
+	type PlanStatus,
+} from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { ballotUrlFor } from "#/lib/digital-voting";
 import { evaluatingByMember } from "#/lib/evaluator-form";
@@ -1310,6 +1314,22 @@ function MeetingView() {
 			// than the labels the dialog showed — the arm gate lives server-side, so
 			// the client's prediction is the thing that could be wrong.
 			const released = "released" in written ? written.released : 0;
+			// A "No answer" the server declined (`cleared: false`) leaves the row
+			// exactly as it was, and the refetch below then shows that — a control
+			// that did nothing and said nothing. On another member's answer it is
+			// because a member's answer is cleared by that member, or by an officer
+			// on the season grid, and not from here: say so, and point at the pick
+			// that does what an officer or Toastmaster usually means.
+			const refusedClear =
+				"cleared" in written
+					? clearRefusedToast({
+							cleared: written.cleared,
+							memberId,
+							myId,
+							previous,
+						})
+					: null;
+			if (refusedClear) toast.message(refusedClear);
 			if (memberId === myId && next === "not_coming") {
 				// The viewer's own decline (#1280): the strip chip and the roster land
 				// here. `holdsRole` (this meeting's slots) is for COPY only, and only
@@ -1623,9 +1643,10 @@ function MeetingView() {
 	// one — undo?", and tapping that "undo" actually DELETES the row. An
 	// officer's clear is not unrestricted: since #573 `clearPlannedAttendance`
 	// floors every clear server-side, and the officer arm's floor is the ASK
-	// (`CLEARABLE_ASK`, `reached_out`), the self and Toastmaster arm's an ANSWER
-	// (`SELF_SERVICE_RUNGS`), so neither erases the other's. On another member's
-	// row the ask is the only thing an officer may clear. But the officer arm
+	// (`CLEARABLE_ASK`, `reached_out`), the self arm's and the Toastmaster's own
+	// row an ANSWER (`SELF_SERVICE_RUNGS`), so neither erases the other's. On
+	// another member's row the ask is the only thing an officer may clear, and
+	// the Toastmaster may clear nothing. But the officer arm
 	// applies to their own row too, and `reached_out` is always in its floor, so
 	// the "undo" clear would erase the very outreach record the clamp exists to
 	// protect (whole-branch review M8). `answeredRungs` can never itself produce

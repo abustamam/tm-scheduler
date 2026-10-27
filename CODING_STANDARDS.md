@@ -527,17 +527,21 @@ caller a session authenticated), and `clearPlanStatus`'s `onlyFrom`
 names the statuses a delete may remove, and since #573 it is **REQUIRED** — there is no
 "clear whatever is there" any more, and its absence used to be the hole. The two CLEAR floors are
 exact COMPLEMENTS, defined beside each other: `SELF_SERVICE_RUNGS` (`coming | not_coming`) is what
-a self/TMOD caller may clear, `CLEARABLE_ASK` (`reached_out`) is what an officer may clear. A
+a member may clear on their OWN row, `CLEARABLE_ASK` (`reached_out`) is what an officer may clear. A
 member clears an ANSWER; an officer clears the ASK; neither may erase the other's. So a plain
-member and a
-self-asserted Toastmaster still cannot erase an officer's `reached_out` — which deleting a
+member and a Toastmaster still cannot erase an officer's `reached_out` — which deleting a
 `meeting_outreach` row used to require an admin to do — and an officer can no longer erase a reply
-on ANOTHER member's row. The one exception is an officer's OWN row: `clearFloor` (which
-`clearPlannedAttendance` calls with the resolved arm and actor) lets them clear their own answer as
-well as the ask, because on the officer arm `actorMemberId` is the SESSION's own `membership.id`,
-never the caller's claimed id. That trust is what makes the self test safe, and it is pinned both
-as source text and by a behavioural test that runs `resolveActor` with a session whose member
-differs from the claim.
+on ANOTHER member's row. **A member's ANSWER is cleared by that member, or by an officer acting
+deliberately on the season grid (`clearAvailability`), and by nobody else:** the Toastmaster
+(`via: "tmod"`) clearing ANOTHER member's row gets `NO_CLEARABLE_RUNGS`, an empty floor that
+deletes nothing (drizzle compiles `inArray(col, [])` to `false`), and may not clear even
+`reached_out`. Their OWN row keeps `SELF_SERVICE_RUNGS`. The own-row exception is `clearFloor` (which
+`clearPlannedAttendance` calls with the resolved arm and actor): an officer clears their own answer
+as well as the ask, a Toastmaster their own answer. It is safe because `actorMemberId` is the
+SESSION's own member on both arms — `clearPlannedAttendance` runs `requireSessionActor` before
+`resolveActor`, and a session resolves the caller from the membership and ignores the claimed id.
+That trust is pinned both as source text and by behavioural tests that run `resolveActor` with a
+session whose member differs from the claim.
 
 **Since #762 there is a THIRD write mode, and "the two floors" above now names only the clear
 pair.** `setPlanStatus`'s `onlyIfAbsent` is the fill-blank write ADR-0026 gives a caller whose
@@ -575,7 +579,22 @@ that an answered row can no longer be returned to "no answer" — same shape as 
 clear-to-unmarked gap; an officer who wants a row to stop saying "coming" picks "Not coming". That
 holds for ANOTHER member's row. An officer clearing their OWN answer is allowed, through
 `clearFloor`, since the actor there is the session's own membership: the personal strip's "undo"
-used to delete nothing for an officer and revert with no error.
+used to delete nothing for an officer and revert with no error. A refusal now says so: when the
+server answers `cleared: false` for ANOTHER member's answered row, `commitRung` toasts
+`ANSWER_NOT_YOURS_TO_CLEAR_TEXT` (`clearRefusedToast`, `src/lib/attendance-panel.ts`) rather than
+letting the row revert in silence.
+
+**`clearAvailability` is the officer's deliberate clear, and it checks who the caller is.** It is
+the season grid's "Marked them available" and the Undo after "Marked them unavailable". After
+`requireSessionActor` it runs `resolveClearActor` (`attendance-actor-logic.ts`): the caller's OWN
+row is allowed on any arm, ANOTHER member's row only on the officer arm — `requireClubRole(admin)`,
+the same principal as the grid's `canManageOthers` (a stored admin, any open officer term, a
+read-write impersonating superadmin) — and everyone else, the Toastmaster included, gets
+`SELF_ONLY_MESSAGE`. It keeps `SELF_SERVICE_RUNGS` as its floor, and takes its credit from the
+resolved actor, which is the session's own member on every arm. The refusal lives in a seam
+(`resolveClearActor`) rather than in the handler body because a `createServerFn` body cannot be
+invoked in vitest; `availability-authz.guard.test.ts` pins the handler's wiring and
+`availability.integration.test.ts` executes the rule.
 
 Both `demoteFrom` and `onlyFrom` are `setWhere`/`WHERE` predicates rather than a
 read-then-write, so they are also the de-dup and race fix for `markComingOnSelfClaim`.

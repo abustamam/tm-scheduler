@@ -41,8 +41,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
 	clubs,
+	impersonationSessions,
 	meetingAttendancePlan,
 	members,
+	officerTerms,
 	roleDefinitions,
 	roleSlots,
 	user,
@@ -81,8 +83,11 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
  * process genuinely cannot have.
  */
 let sessionUserId: string | null = null;
-/** One stable object, because the impersonation marker is keyed on identity. */
-const request = { headers: new Headers() };
+/** One stable object per case, because the impersonation marker is keyed on
+ *  identity. `let` so a case that makes an impersonated write can swap it for a
+ *  fresh one afterwards: the marker would otherwise outlive the case and stamp
+ *  every later write with a superadmin the case has cleaned up. */
+let request = { headers: new Headers() };
 vi.mock("@tanstack/react-start/server", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-start/server")>()),
 	getRequest: () => request,
@@ -105,7 +110,9 @@ const {
 const { CLUB_BUSY_MESSAGE } = await import("./club-write-lock");
 const { releaseSlotsAndMarkUnavailable } = await import("./availability-logic");
 const { claimSlotCore } = await import("./slots-logic");
-const { SELF_ONLY_MESSAGE } = await import("./attendance-actor-logic");
+const { resolveClearActor, SELF_ONLY_MESSAGE } = await import(
+	"./attendance-actor-logic"
+);
 const { requireSessionActor } = await import("./write-actor-logic");
 
 // ---------------------------------------------------------------------------
@@ -1021,6 +1028,250 @@ describe.skipIf(!hasTestDb)(
 					clubId: seed.clubId,
 				}),
 			).rejects.toThrow(CLUB_ARCHIVED_MESSAGE);
+		});
+	},
+);
+
+/**
+ * What `clearAvailability`'s handler does, reproduced for the reason the file
+ * header gives (a `createServerFn` body cannot be invoked here): the session
+ * gate, then `resolveClearActor` with the RAW claim, then the floored clear.
+ * `availability-authz.guard.test.ts` pins that the handler makes these calls in
+ * this shape; what only a behavioural test can see is what they DO, and that is
+ * the half below.
+ */
+async function clearAvailabilityAs(
+	club: SeededClub,
+	memberId: string,
+	claimedActorMemberId?: string,
+) {
+	await requireSessionActor({ clubId: club.clubId });
+	const { actorMemberId } = await resolveClearActor({
+		clubId: club.clubId,
+		meetingId: club.meetingId,
+		memberId,
+		claimedActorMemberId,
+	});
+	return clearPlanStatus(testDb, {
+		memberId,
+		meetingId: club.meetingId,
+		clubId: club.clubId,
+		actorMemberId,
+		onlyFrom: SELF_SERVICE_RUNGS,
+	});
+}
+
+/**
+ * Who may clear a member's ANSWER through the season grid's clear (the grid's
+ * "Marked them available" and the Undo after "Marked them unavailable"): that
+ * member, or an officer acting on the grid, and nobody else.
+ *
+ * Every case reads the row back. `cleared` alone cannot tell a refused delete
+ * from a delete that found nothing, and a refusal that THROWS before the delete
+ * would leave the row either way — so the rows are the assertion, and the
+ * refusals assert both the message and the surviving row.
+ */
+describe.skipIf(!hasTestDb)(
+	"clearAvailability: whose answer a clear may remove",
+	() => {
+		let seed: SeededClub;
+		/** The member whose answer the other callers try to clear. */
+		let subjectId: string;
+		let extraUserIds: string[];
+
+		beforeEach(async () => {
+			seed = await seedClub();
+			sessionUserId = null;
+			extraUserIds = [];
+			// The seeded plain member is the SUBJECT, and holds a decline.
+			subjectId = seed.memberId;
+			await setPlanStatus(testDb, {
+				memberId: subjectId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				status: "not_coming",
+				actorMemberId: subjectId,
+			});
+		});
+
+		afterEach(async () => {
+			sessionUserId = null;
+			// Drops any impersonation marker the case left on the request.
+			request = { headers: new Headers() };
+			await cleanup(seed.clubId, [
+				seed.adminUserId,
+				seed.memberUserId,
+				...extraUserIds,
+			]);
+		});
+
+		const statusOf = async (memberId: string) =>
+			(await planRows(memberId, seed.meetingId)).map((r) => r.status);
+
+		// protects=a signed-in member who is neither the subject, an officer nor the Toastmaster cannot clear another member's answer; fails_when=the actor ladder's self-only throw or the refusal is dropped, or the caller's claimed id decides; no_claim=the handler's own wiring (the guard test)
+		it("REFUSES a plain member clearing ANOTHER member's answer, and the row survives", async () => {
+			const other = await addSignedInMember(seed.clubId, "Plain Member");
+			extraUserIds.push(other.userId);
+			sessionUserId = other.userId;
+
+			await expect(clearAvailabilityAs(seed, subjectId)).rejects.toThrow(
+				SELF_ONLY_MESSAGE,
+			);
+			expect(await statusOf(subjectId)).toEqual(["not_coming"]);
+		});
+
+		it("REFUSES a plain member who CLAIMS the officer's member id", async () => {
+			// The claim is ignored once a session resolves, so naming the officer
+			// confers nothing. Without this the refusal could be reading the claim.
+			const other = await addSignedInMember(seed.clubId, "Plain Member");
+			extraUserIds.push(other.userId);
+			sessionUserId = other.userId;
+
+			await expect(
+				clearAvailabilityAs(seed, subjectId, seed.adminMemberId),
+			).rejects.toThrow(SELF_ONLY_MESSAGE);
+			expect(await statusOf(subjectId)).toEqual(["not_coming"]);
+		});
+
+		it("lets a member clear their OWN answer, credited to them", async () => {
+			sessionUserId = seed.memberUserId;
+
+			const res = await clearAvailabilityAs(seed, subjectId);
+
+			expect(res.cleared).toBe(true);
+			expect(await statusOf(subjectId)).toEqual([]);
+			const cleared = (await planSetLogs(seed.meetingId)).filter(
+				(l) => (l.detail as { status?: unknown } | null)?.status === null,
+			);
+			expect(cleared).toHaveLength(1);
+			expect(cleared[0]?.actorMemberId).toBe(subjectId);
+		});
+
+		// protects=the Toastmaster of THIS meeting, who is not an officer, cannot clear another member's answer through the grid's clear; fails_when=the refusal admits the tmod arm (testing via === "self" instead of the id comparison) or is removed; no_claim=none beyond protects
+		it("REFUSES this meeting's signed-in Toastmaster clearing ANOTHER member's answer", async () => {
+			const tmod = await addSignedInMember(seed.clubId, "Signed-in TMOD");
+			extraUserIds.push(tmod.userId);
+			await addTmodSlot(seed, tmod.memberId);
+			sessionUserId = tmod.userId;
+
+			await expect(clearAvailabilityAs(seed, subjectId)).rejects.toThrow(
+				SELF_ONLY_MESSAGE,
+			);
+			expect(await statusOf(subjectId)).toEqual(["not_coming"]);
+		});
+
+		// protects=the Toastmaster still clears their OWN answer; fails_when=the refusal compares the wrong ids or refuses the whole tmod arm; no_claim=none beyond protects
+		it("lets this meeting's Toastmaster clear their OWN answer", async () => {
+			const tmod = await addSignedInMember(seed.clubId, "Signed-in TMOD");
+			extraUserIds.push(tmod.userId);
+			await addTmodSlot(seed, tmod.memberId);
+			await setPlanStatus(testDb, {
+				memberId: tmod.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				status: "coming",
+				actorMemberId: tmod.memberId,
+			});
+			sessionUserId = tmod.userId;
+
+			const res = await clearAvailabilityAs(seed, tmod.memberId);
+
+			expect(res.cleared).toBe(true);
+			expect(await statusOf(tmod.memberId)).toEqual([]);
+			// The subject's row was not touched by the same call.
+			expect(await statusOf(subjectId)).toEqual(["not_coming"]);
+		});
+
+		// protects=an officer clearing another member's decline on the season grid still works, credited to the officer; fails_when=the officer arm is refused with the rest or the credit changes; no_claim=none beyond protects
+		it("lets a club OFFICER clear ANOTHER member's answer — the grid's flow — credited to the officer", async () => {
+			sessionUserId = seed.adminUserId;
+
+			const res = await clearAvailabilityAs(seed, subjectId);
+
+			expect(res.cleared).toBe(true);
+			expect(await statusOf(subjectId)).toEqual([]);
+			const cleared = (await planSetLogs(seed.meetingId)).filter(
+				(l) => (l.detail as { status?: unknown } | null)?.status === null,
+			);
+			expect(cleared).toHaveLength(1);
+			expect(cleared[0]?.actorMemberId).toBe(seed.adminMemberId);
+			expect(cleared[0]?.detail).toMatchObject({ memberId: subjectId });
+		});
+
+		it("lets an ELECTED officer (no stored admin role) clear another member's answer", async () => {
+			// The grid's `canManageOthers` is `clubRole === "admin" || any open officer
+			// term`; the officer arm is `requireClubRole(admin)`, which admits the same
+			// two. A plain-role member holding an office is the case that would split
+			// them if either side narrowed.
+			const officer = await addSignedInMember(seed.clubId, "Secretary");
+			extraUserIds.push(officer.userId);
+			await testDb.insert(officerTerms).values({
+				membershipId: officer.memberId,
+				position: "secretary",
+			});
+			sessionUserId = officer.userId;
+
+			const res = await clearAvailabilityAs(seed, subjectId);
+
+			expect(res.cleared).toBe(true);
+			expect(await statusOf(subjectId)).toEqual([]);
+		});
+
+		it("REFUSES a member whose officer term has ended", async () => {
+			const former = await addSignedInMember(seed.clubId, "Former Secretary");
+			extraUserIds.push(former.userId);
+			await testDb.insert(officerTerms).values({
+				membershipId: former.memberId,
+				position: "secretary",
+				termEnd: new Date(Date.now() - 86_400_000),
+			});
+			sessionUserId = former.userId;
+
+			await expect(clearAvailabilityAs(seed, subjectId)).rejects.toThrow(
+				SELF_ONLY_MESSAGE,
+			);
+			expect(await statusOf(subjectId)).toEqual(["not_coming"]);
+		});
+
+		it("lets a read-write impersonating superadmin clear another member's answer", async () => {
+			const superadminId = randomUUID();
+			await testDb.insert(user).values({
+				id: superadminId,
+				name: "Super Admin",
+				email: `super-${superadminId}@test.example`,
+				emailVerified: true,
+				isSuperadmin: true,
+			});
+			extraUserIds.push(superadminId);
+			await testDb.insert(impersonationSessions).values({
+				superadminUserId: superadminId,
+				clubId: seed.clubId,
+				mode: "read_write",
+				expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+			});
+			sessionUserId = superadminId;
+
+			const res = await clearAvailabilityAs(seed, subjectId);
+
+			expect(res.cleared).toBe(true);
+			expect(await statusOf(subjectId)).toEqual([]);
+		});
+
+		it("keeps the self-service floor for an officer: another member's reached_out stays", async () => {
+			// The refusal decides WHO may clear; the floor still decides WHICH rungs.
+			await setPlanStatus(testDb, {
+				memberId: subjectId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				status: "reached_out",
+				actorMemberId: seed.adminMemberId,
+			});
+			sessionUserId = seed.adminUserId;
+
+			const res = await clearAvailabilityAs(seed, subjectId);
+
+			expect(res.cleared).toBe(false);
+			expect(await statusOf(subjectId)).toEqual(["reached_out"]);
 		});
 	},
 );

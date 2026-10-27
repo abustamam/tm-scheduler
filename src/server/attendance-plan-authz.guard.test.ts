@@ -209,6 +209,48 @@ describe("attendance-plan authz (D6)", () => {
 		).not.toContain('via === "officer" ?');
 	});
 
+	it("floors the Toastmaster's clear of ANOTHER member's row at nothing", () => {
+		// A member's ANSWER is cleared by that member, or by an officer on the season
+		// grid, and by nobody else. `clearFloor` is where the Toastmaster arm gets
+		// its half of that rule, so the arm is pinned INSIDE the function: the
+		// `tmod` case, the own-row test it keys on, and the empty constant it
+		// returns otherwise. The behavioural twin is the Toastmaster block in
+		// `attendance-plan-logic.integration.test.ts`.
+		const logic = readSource(resolve(__dirname, "attendance-plan-logic.ts"));
+		const start = logic.indexOf("export function clearFloor");
+		expect(start, "clearFloor not found").toBeGreaterThan(-1);
+		const next = logic.indexOf("\nexport ", start + 1);
+		const fn = logic.slice(start, next === -1 ? logic.length : next);
+		expect(
+			fn,
+			"the own-row test compares the RESOLVED actor with the subject",
+		).toContain("const ownRow = args.actorMemberId === args.memberId;");
+		expect(
+			fn,
+			"the tmod arm keeps the self-service floor on its own row and gets nothing on another's",
+		).toMatch(
+			/case "tmod":\s*return ownRow \? SELF_SERVICE_RUNGS : NO_CLEARABLE_RUNGS;/,
+		);
+		expect(
+			logic,
+			"the empty floor is a named constant that really is empty",
+		).toMatch(
+			/export const NO_CLEARABLE_RUNGS: readonly AttendancePlanStatus\[\] = \[\];/,
+		);
+	});
+
+	it("runs the session gate before the ladder on the clear", () => {
+		// `clearFloor` can trust the Toastmaster arm's actor as "the session's own
+		// member" only because a session is required first: with one, the caller is
+		// resolved from the session and a claimed id is ignored. Without it a
+		// visitor could claim the Toastmaster's published id and clear "their own"
+		// row.
+		const body = handlerBody(SRC, "clearPlannedAttendance");
+		const gate = body.indexOf("await requireSessionActor(");
+		expect(gate).toBeGreaterThan(-1);
+		expect(body.indexOf("await resolveActor(")).toBeGreaterThan(gate);
+	});
+
 	it("reports the officer branch rather than inferring it from a null actor", () => {
 		// A null actor means "impersonating superadmin" only because a read-only
 		// session falls through and is rejected below — an accident of ordering,

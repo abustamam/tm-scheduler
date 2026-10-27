@@ -151,6 +151,68 @@ describe("markUnavailableReleasing subject check (#675)", () => {
 	});
 });
 
+describe("clearAvailability: whose answer a clear may remove", () => {
+	// The behaviour is executed in `availability.integration.test.ts`
+	// ("clearAvailability: whose answer a clear may remove"), through the seam. What
+	// that file cannot see is the handler's own wiring, which is what these pin.
+	const body = handlerBody(HANDLER, "clearAvailability");
+	const bodyRaw = handlerBody(HANDLER_RAW, "clearAvailability");
+
+	it("resolves who may clear through resolveClearActor, with the raw claim", () => {
+		expect(
+			body,
+			"the subject check lives in resolveClearActor; without this call any signed-in member may clear any row",
+		).toContain("await resolveClearActor({");
+		expect(
+			body,
+			"the seam needs the CLAIM — a defaulted one makes actor === subject for every request",
+		).toContain("claimedActorMemberId: data.actorMemberId,");
+	});
+
+	it("never defaults that claim to the subject", () => {
+		expect(
+			bodyRaw,
+			"`?? data.memberId` makes the self-only comparison true for every request",
+		).not.toContain("?? data.memberId");
+	});
+
+	it("takes the credit from the resolved actor, not a second resolution", () => {
+		// `requestWriteActor` answers "who do I credit", never "may this caller do
+		// this"; a second resolution beside the ladder is the shape the old bug wore.
+		expect(bodyRaw).not.toContain("requestWriteActor(");
+		expect(body).toMatch(
+			/const \{ actorMemberId \} = await resolveClearActor\(/,
+		);
+		expect(body).toMatch(/clearPlanStatus\(db, \{[^}]*\bactorMemberId,/s);
+	});
+
+	it("opens with the session gate, before the actor is resolved", () => {
+		const gate = body.indexOf("await requireSessionActor(");
+		expect(gate).toBeGreaterThan(-1);
+		expect(
+			body.indexOf("await resolveClearActor("),
+			"the ladder's non-officer arms read the SESSION's member only once a session is required",
+		).toBeGreaterThan(gate);
+	});
+
+	it("refuses another member's row unless the OFFICER arm admitted the caller", () => {
+		// Anchored inside `resolveClearActor`, and both halves of the condition plus
+		// the throw: the arm test alone refuses the Toastmaster's own row, the id
+		// test alone admits nobody but the subject, and a condition with no throw is
+		// not a gate.
+		const ladder = readSource(resolve(__dirname, "attendance-actor-logic.ts"));
+		const at = ladder.indexOf("export async function resolveClearActor");
+		expect(at, "resolveClearActor not found").toBeGreaterThan(-1);
+		const fn = ladder.slice(at);
+		expect(fn).toMatch(
+			/if \(\s*resolved\.via !== "officer" &&\s*resolved\.actorMemberId !== args\.memberId\s*\) \{\s*throw new Error\(SELF_ONLY_MESSAGE\);\s*\}/,
+		);
+		expect(fn, "it must run the shared ladder, not a second copy").toContain(
+			"await resolveActor(args)",
+		);
+	});
+});
+
 describe("releaseSlotsAndMarkUnavailable gates in the seam (#675)", () => {
 	it("reuses the shared D6 ladder rather than a second copy of it", () => {
 		// A copied three-arm ladder is how the two drift, and the arms are ordered

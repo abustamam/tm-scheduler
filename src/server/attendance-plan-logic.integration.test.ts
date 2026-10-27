@@ -5,6 +5,7 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/attendance-plan-logic.integration.test.ts
  */
+import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -13,6 +14,9 @@ import {
 	meetingAttendancePlan,
 	meetings,
 	members,
+	roleDefinitions,
+	roleSlots,
+	user,
 } from "#/db/schema";
 import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
 import { resolveActor } from "#/server/attendance-actor-logic";
@@ -1408,5 +1412,206 @@ describe.skipIf(!hasTestDb)("importPlanAnswers (#1051)", () => {
 		await expect(
 			importPlanAnswers(testDb, { meetingId: club.meetingId, answers: [] }),
 		).resolves.toEqual({ inserted: 0 });
+	});
+});
+
+/**
+ * The Toastmaster arm's clear, run through the ladder and the floor it picks.
+ *
+ * `clearPlannedAttendance` resolves the arm with `resolveActor` and hands the
+ * result to `clearFloor`; its handler body cannot be invoked in vitest, so this
+ * runs those same two calls and the delete against the real rows
+ * (`attendance-plan-authz.guard.test.ts` pins the handler's own wiring).
+ *
+ * A member's ANSWER is cleared by that member, or by an officer on the season
+ * grid, and by nobody else. The Toastmaster is neither, so on another member's
+ * row its floor is empty: `coming` and `not_coming` both survive. Every case
+ * reads the row back, because `cleared: false` is the same report for a refused
+ * delete and for a delete that found nothing.
+ */
+describe.skipIf(!hasTestDb)("the Toastmaster's clear (#573 follow-up)", () => {
+	let club: SeededClub;
+	let tmodUserId: string;
+	let tmodMemberId: string;
+
+	beforeEach(async () => {
+		club = await seedClub();
+		tmodUserId = randomUUID();
+		const email = `${tmodUserId}@test.example`;
+		await testDb
+			.insert(user)
+			.values({ id: tmodUserId, name: "TMOD", email, emailVerified: true });
+		const [m] = await testDb
+			.insert(members)
+			.values({
+				clubId: club.clubId,
+				personId: await seedPerson({
+					name: "TMOD",
+					email,
+					userId: tmodUserId,
+				}),
+				name: "TMOD",
+			})
+			.returning({ id: members.id });
+		if (!m) throw new Error("member insert failed");
+		tmodMemberId = m.id;
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: club.clubId,
+				name: "Toastmaster of the Day",
+				key: null,
+				category: "leadership",
+				isSpeakerRole: false,
+				sortOrder: 1,
+			})
+			.returning({ id: roleDefinitions.id });
+		if (!def) throw new Error("role definition insert failed");
+		await testDb.insert(roleSlots).values({
+			meetingId: club.meetingId,
+			roleDefinitionId: def.id,
+			status: "claimed",
+			assignedMemberId: tmodMemberId,
+		});
+		sessionUserId = tmodUserId;
+	});
+	afterEach(async () => {
+		sessionUserId = null;
+		await cleanup(club.clubId, [
+			club.adminUserId,
+			club.memberUserId,
+			tmodUserId,
+		]);
+	});
+
+	/** `clearPlannedAttendance`'s resolve-then-floor-then-delete, as the signed-in
+	 *  Toastmaster. The claim names the subject, the shape the rail sends. */
+	async function tmodClears(subjectMemberId: string) {
+		const resolved = await resolveActor({
+			clubId: club.clubId,
+			meetingId: club.meetingId,
+			memberId: subjectMemberId,
+			claimedActorMemberId: subjectMemberId,
+		});
+		expect(resolved.via).toBe("tmod");
+		return clearPlanStatus(testDb, {
+			memberId: subjectMemberId,
+			meetingId: club.meetingId,
+			clubId: club.clubId,
+			actorMemberId: resolved.actorMemberId,
+			onlyFrom: clearFloor({
+				via: resolved.via,
+				actorMemberId: resolved.actorMemberId,
+				memberId: subjectMemberId,
+			}),
+		});
+	}
+	const rowOf = (memberId: string) =>
+		getPlanStatus(testDb, { memberId, meetingId: club.meetingId });
+
+	// protects=a Toastmaster's "No answer" on another member's coming/not_coming deletes nothing and the row survives; fails_when=the tmod arm's other-row floor returns SELF_SERVICE_RUNGS (or the ask); no_claim=the officer's season-grid clear, which is a different path
+	it.each([
+		"coming",
+		"not_coming",
+	] as const)("KEEPS another member's %s row", async (status) => {
+		await setPlanStatus(testDb, {
+			memberId: club.memberId,
+			meetingId: club.meetingId,
+			clubId: club.clubId,
+			status,
+			actorMemberId: club.memberId,
+		});
+
+		const res = await tmodClears(club.memberId);
+
+		expect(res.cleared).toBe(false);
+		expect(await rowOf(club.memberId)).toBe(status);
+	});
+
+	it("KEEPS another member's reached_out row: an officer's ask is not the Toastmaster's to take back", async () => {
+		await setPlanStatus(testDb, {
+			memberId: club.memberId,
+			meetingId: club.meetingId,
+			clubId: club.clubId,
+			status: "reached_out",
+			actorMemberId: club.adminMemberId,
+		});
+
+		const res = await tmodClears(club.memberId);
+
+		expect(res.cleared).toBe(false);
+		expect(await rowOf(club.memberId)).toBe("reached_out");
+	});
+
+	// protects=the Toastmaster still takes back their OWN answer; fails_when=the own-row test is inverted or the tmod arm loses SELF_SERVICE_RUNGS; no_claim=none beyond protects
+	it.each([
+		"coming",
+		"not_coming",
+	] as const)("clears their OWN %s row", async (status) => {
+		await setPlanStatus(testDb, {
+			memberId: tmodMemberId,
+			meetingId: club.meetingId,
+			clubId: club.clubId,
+			status,
+			actorMemberId: tmodMemberId,
+		});
+
+		const res = await tmodClears(tmodMemberId);
+
+		expect(res.cleared).toBe(true);
+		expect(await rowOf(tmodMemberId)).toBe(null);
+	});
+
+	it("does not clear their OWN reached_out: the ask is the officer's to remove", async () => {
+		await setPlanStatus(testDb, {
+			memberId: tmodMemberId,
+			meetingId: club.meetingId,
+			clubId: club.clubId,
+			status: "reached_out",
+			actorMemberId: club.adminMemberId,
+		});
+
+		const res = await tmodClears(tmodMemberId);
+
+		expect(res.cleared).toBe(false);
+		expect(await rowOf(tmodMemberId)).toBe("reached_out");
+	});
+
+	it("an officer who also holds the Toastmaster slot is the officer arm, not floored to nothing", async () => {
+		// The arm order is officer first, so an admin who runs the meeting keeps the
+		// officer's floor (the ask on another's row) rather than the Toastmaster's.
+		await testDb
+			.update(roleSlots)
+			.set({ assignedMemberId: club.adminMemberId })
+			.where(eq(roleSlots.meetingId, club.meetingId));
+		sessionUserId = club.adminUserId;
+		await setPlanStatus(testDb, {
+			memberId: club.memberId,
+			meetingId: club.meetingId,
+			clubId: club.clubId,
+			status: "reached_out",
+			actorMemberId: club.adminMemberId,
+		});
+
+		const resolved = await resolveActor({
+			clubId: club.clubId,
+			meetingId: club.meetingId,
+			memberId: club.memberId,
+		});
+		expect(resolved.via).toBe("officer");
+		const res = await clearPlanStatus(testDb, {
+			memberId: club.memberId,
+			meetingId: club.meetingId,
+			clubId: club.clubId,
+			actorMemberId: resolved.actorMemberId,
+			onlyFrom: clearFloor({
+				via: resolved.via,
+				actorMemberId: resolved.actorMemberId,
+				memberId: club.memberId,
+			}),
+		});
+
+		expect(res.cleared).toBe(true);
+		expect(await rowOf(club.memberId)).toBe(null);
 	});
 });
