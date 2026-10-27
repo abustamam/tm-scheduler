@@ -1080,7 +1080,7 @@ export async function pathwaysByMember(
 				// Not `undefined` for `includeInactive`: that dropped the filter, and a
 				// former member's paths came back with the inactive ones (#1342).
 				opts.includeInactive
-					? ne(members.status, "former")
+					? inArray(members.status, ["active", "inactive"])
 					: eq(members.status, "active"),
 			),
 		)

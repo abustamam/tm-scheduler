@@ -316,17 +316,27 @@ export async function loadSeasonGrid(input: {
 	} else {
 		memberRows = active.map((m) => ({ id: m.id, name: m.name }));
 	}
-	const memberNames: SeasonGridMember[] = allMemberRows.map((m) => ({
-		id: m.id,
-		name: m.name,
-	}));
+	// Names resolve for the active members and for a non-active member who HOLDS
+	// a cell in this window (the roles orientation shows past holders). A former
+	// member who holds nothing here is not named: the public grid is not a place
+	// to learn who used to belong (#1342). A holder's id is already in `cells`.
+	const holderIds = new Set(
+		cells.flatMap((c) => (c.memberId === null ? [] : [c.memberId])),
+	);
+	const memberNames: SeasonGridMember[] = allMemberRows
+		.filter((m) => m.status === "active" || holderIds.has(m.id))
+		.map((m) => ({ id: m.id, name: m.name }));
 
 	// One round-trip for both partitions. Row presence is NOT the answer any
 	// more: `coming` is the opposite of unavailable and `reached_out` only says
 	// somebody asked, so each side names the status it means. The exported
 	// `unavailable` / `contacted` shapes are unchanged — `#/lib/season-grid-view`
 	// consumes them as they are.
-	const planRows = await listPlanForMeetings(db, meetingIds);
+	// ACTIVE members' rows only (#1342): the plan lists are public, and a
+	// non-active member's answer is not theirs to publish any more.
+	const planRows = await listPlanForMeetings(db, meetingIds, {
+		activeOnly: true,
+	});
 	const unavailable = planRows
 		.filter((r) => r.status === "not_coming")
 		.map(({ memberId, meetingId }) => ({ memberId, meetingId }));

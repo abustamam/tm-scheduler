@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { readSource } from "#/test/guard-source";
+import { readSource, serverFnBody } from "#/test/guard-source";
 
 // `getMemberProfile` is a `createServerFn`, which no test can invoke (no
 // session, no RPC layer), so its wiring has no behavioural surface here.
@@ -23,21 +23,8 @@ import { readSource } from "#/test/guard-source";
 // assertions, which a comment merely naming the call would satisfy.
 const source = readSource(resolve(__dirname, "club.ts"));
 
-/** The `getMemberProfile` declaration, up to the next top-level declaration. */
-function profileHandler(): string {
-	const start = source.indexOf(
-		"export const getMemberProfile = createServerFn",
-	);
-	expect(start, "getMemberProfile not found in club.ts").toBeGreaterThan(-1);
-	const rest = source.slice(start + 1);
-	const next = rest.search(
-		/\n(?:export\s+)?(?:const|function|async function|type|interface)\s/,
-	);
-	return next === -1 ? rest : rest.slice(0, next);
-}
-
 describe("getMemberProfile hands a former member's contact to an admin only (#1342)", () => {
-	const body = profileHandler();
+	const body = serverFnBody(source, "getMemberProfile");
 
 	it("keeps the grant requireClubViewAccess returned", () => {
 		expect(body).toMatch(

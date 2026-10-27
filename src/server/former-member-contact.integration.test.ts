@@ -236,7 +236,8 @@ describe.skipIf(!hasTestDb)("a former member's contact (#1342)", () => {
 		});
 
 		it("an active member's contact goes to a plain member, and the viewer check never runs", async () => {
-			const viewerMayRevealFormer = vi.fn(async () => true);
+			// `false`: were an active member ever redacted for a non-admin, this fails.
+			const viewerMayRevealFormer = vi.fn(async () => false);
 			const p = await loadMemberProfile(club.clubId, club.memberId, {
 				viewerMayRevealFormer,
 			});

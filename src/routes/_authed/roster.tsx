@@ -69,7 +69,7 @@ import {
 /** One row of `listFormerMembers` (#1239). */
 type FormerMemberItem = { id: string; name: string; endedAt: string | null };
 
-/** `?formerPathways=true`: an officer asked to see former members' Pathways. */
+/** `?formerPathways=true`: an officer asked to see inactive members' Pathways (never former, #1342). */
 type RosterSearch = { formerPathways?: true };
 
 export const Route = createFileRoute("/_authed/roster")({
@@ -287,7 +287,7 @@ function Roster() {
 	// minus "View as this club". That read-only session passes every client
 	// admin check (`getAuthContext` surfaces it as `clubRole: "admin"`) while
 	// the export route and `mayRevealFormerMembers` both refuse it. Gates the
-	// export link and the "Show former members' Pathways" control alike; the
+	// export link and the "Show inactive members' Pathways" control alike; the
 	// server enforces each on its own.
 	const servedAsAdmin =
 		!!clubId && canManage && exportLinkAllowed(impersonating, clubId);
@@ -483,7 +483,7 @@ function Roster() {
 								})
 							}
 						/>
-						Show former members' Pathways
+						Show inactive members' Pathways
 					</label>
 				) : null}
 			</div>

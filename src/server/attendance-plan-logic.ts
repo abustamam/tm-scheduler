@@ -630,14 +630,12 @@ export async function clearPlanStatus(
  * leave. It takes no `lockMemberAttendance`, so a write that lands after it (a
  * session-less answer racing the ending) is not prevented, only made invisible
  * to the public list by `listNotComingWithNames`'s active-only filter.
- *
- * Returns how many rows it deleted.
  */
 export async function deletePlanRowsOfEndedMember(
 	database: DbOrTx,
 	memberId: string,
-): Promise<number> {
-	const removed = await database
+): Promise<void> {
+	await database
 		.delete(meetingAttendancePlan)
 		.where(
 			and(
@@ -649,9 +647,7 @@ export async function deletePlanRowsOfEndedMember(
 					PLAN_ACCEPTING_CANCELLED,
 				),
 			),
-		)
-		.returning({ id: meetingAttendancePlan.id });
-	return removed.length;
+		);
 }
 
 /**
@@ -808,6 +804,9 @@ function unavailableBase(database: DbOrTx, meetingId: string) {
 			and(
 				eq(meetingAttendancePlan.memberId, members.id),
 				eq(meetingAttendancePlan.meetingId, meetingId),
+				// A non-active member's plan row is not read (#1342): it is the
+				// reader-side cover for rows kept or landed after an ending.
+				eq(members.status, "active"),
 			),
 		)
 		.leftJoin(
@@ -939,10 +938,12 @@ export async function listNotComingForMeetings(
 }
 
 /** Every plan row across several meetings, statuses included — the season grid
- *  needs both partitions from one round-trip. */
+ *  needs both partitions from one round-trip. `activeOnly` (#1342) drops the
+ *  rows of members who are not active: the public and TMOD readers pass it. */
 export async function listPlanForMeetings(
 	database: DbOrTx,
 	meetingIds: string[],
+	opts: { activeOnly?: boolean } = {},
 ): Promise<
 	{ memberId: string; meetingId: string; status: AttendancePlanStatus }[]
 > {
@@ -954,7 +955,13 @@ export async function listPlanForMeetings(
 			status: meetingAttendancePlan.status,
 		})
 		.from(meetingAttendancePlan)
-		.where(inArray(meetingAttendancePlan.meetingId, meetingIds));
+		.innerJoin(members, eq(members.id, meetingAttendancePlan.memberId))
+		.where(
+			and(
+				inArray(meetingAttendancePlan.meetingId, meetingIds),
+				opts.activeOnly ? eq(members.status, "active") : undefined,
+			),
+		);
 }
 
 /** The plan answers and the roll marks of a set of members across several

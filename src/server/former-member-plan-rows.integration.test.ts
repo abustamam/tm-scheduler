@@ -124,6 +124,28 @@ describe.skipIf(!hasTestDb)("leaving the club and plan rows (#1342)", () => {
 			);
 		});
 
+		it("deletes the row on a past meeting that is still scheduled, since the decision is by status", async () => {
+			// protects=that "not yet completed" is read from the meeting's STATUS, not its date: a past meeting nobody closed is still scheduled and its row goes; fails_when=the delete is narrowed to meetings in the future (the past-but-scheduled row stays); no_claim=the completed meeting's row (previous test)
+			const leaver = await addMember("Pat Past-due");
+			const pastScheduled = await addMeeting("scheduled", -3);
+			await plan(leaver, pastScheduled, "not_coming");
+
+			await set(leaver, "former");
+
+			expect(await rowsOf(leaver)).toEqual([]);
+		});
+
+		it("deletes the rows of an INACTIVE member who is then ended", async () => {
+			// protects=ending from `inactive` deletes, as ending from `active` does (the rows an inactive member kept are the ones the ending must now clear); fails_when=the delete is gated on the previous status being active; no_claim=going inactive (next test)
+			const lapsed = await addMember("Ivy Inactive-Leaver", "inactive");
+			const scheduled = await addMeeting("scheduled", 7);
+			await plan(lapsed, scheduled, "not_coming");
+
+			await set(lapsed, "former");
+
+			expect(await rowsOf(lapsed)).toEqual([]);
+		});
+
 		it("leaves a member who goes inactive, rather than ends, with their rows", async () => {
 			// protects=that only an ENDING deletes: an inactive member is expected back and keeps their answers; fails_when=the delete moves out of the `ending` branch into `releasing` (the deactivation path), so going inactive also deletes; no_claim=none beyond protects
 			const lapsing = await addMember("Lou Lapsing");
