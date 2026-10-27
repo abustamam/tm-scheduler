@@ -1355,4 +1355,186 @@ describe("SeasonGrid: optimistic claim and release (#1315)", () => {
 		expect(screen.getByText("1 open")).toBeTruthy();
 		await act(async () => d.resolve({ ok: true, proof: "session" }));
 	});
+
+	// A grid whose loader data a test can swap, like a router refetch would.
+	const mountSwappable = async (
+		initial: SeasonGridData,
+		onChanged?: () => Promise<void>,
+	) => {
+		let setData!: (d: SeasonGridData) => void;
+		function Harness() {
+			const [cur, set] = useState(initial);
+			setData = set;
+			return (
+				<SeasonGrid
+					data={cur}
+					orientation="roles"
+					count="all"
+					currentMemberId={ME}
+					currentMemberSource="session"
+					onChanged={onChanged}
+				/>
+			);
+		}
+		await renderUnderMemoryRouter(<Harness />);
+		return (d: SeasonGridData) => act(() => setData(d));
+	};
+	const undoFromLastToast = () => {
+		const calls = toastSuccess.mock.calls;
+		const [, options] = calls[calls.length - 1]!;
+		expect(options.action.label).toBe("Undo");
+		// Fire and forget: the write is deliberately left unresolved by callers.
+		act(() => {
+			void options.action.onClick();
+		});
+	};
+
+	// protects=claimingRef: a second tap while the identity picker is open does not fire a second claim; fails_when=claimingRef is not consulted; no_claim=none
+	it("a second tap while the identity picker is open claims once", async () => {
+		const picker = deferred<StoredMember | null>();
+		await renderGrid(() => picker.promise);
+		const btn = await screen.findByRole("button", { name: /^Claim Timer/ });
+		await userEvent.click(btn);
+		await userEvent.click(btn);
+		await act(async () => picker.resolve(PICKED));
+		await waitFor(() => expect(claimSlot).toHaveBeenCalledTimes(1));
+	});
+
+	// protects=the open count never reads negative; fails_when=Math.max(0, ..) is dropped; no_claim=none
+	it("clamps the open count at 0 when stale data would take it negative", async () => {
+		const d = deferred<{ ok: true; proof: "session" }>();
+		claimSlot.mockReturnValueOnce(d.promise);
+		const stale: SeasonGridData = {
+			...withHolder(null),
+			meetings: [{ ...data.meetings[0]!, openCount: 0 }],
+		};
+		await mount(stale);
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Claim Timer/ }),
+		);
+		await screen.findByRole("button", { name: /^Claiming Timer/ });
+		expect(screen.queryByText("-1 open")).toBeNull();
+		expect(screen.getByText("full")).toBeTruthy();
+		await act(async () => d.resolve({ ok: true, proof: "session" }));
+	});
+
+	// protects=a pending release whose result loader data already shows does not raise the count twice; fails_when=the release entry applies against an already-open slot; no_claim=none
+	it("raises the count by one, not two, when loader data already shows the release", async () => {
+		const d = deferred<{ ok: true }>();
+		releaseSlot.mockReturnValueOnce(d.promise);
+		const swap = await mountSwappable(withHolder(ME));
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Release / }),
+		);
+		expect(await screen.findByText("1 open")).toBeTruthy();
+		await swap(withHolder(null));
+		expect(screen.getByText("1 open")).toBeTruthy();
+		// Loader data has taken over: the entry no longer applies to the cell.
+		expect(screen.queryByRole("button", { name: /^Releasing/ })).toBeNull();
+		await act(async () => d.resolve({ ok: true }));
+	});
+
+	// protects=a failed refetch is not a release error; fails_when=the error toast shows or the entry sticks; no_claim=none
+	it("a refetch that fails after a successful release shows the success toast, no error, and clears the entry", async () => {
+		const consoleError = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => {});
+		await mount(withHolder(ME), async () => {
+			throw new Error("refetch down");
+		});
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Release / }),
+		);
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		expect(toastError).not.toHaveBeenCalled();
+		await waitFor(() =>
+			expect(screen.queryByRole("button", { name: /^Releasing/ })).toBeNull(),
+		);
+		expect(screen.getByRole("button", { name: /^Release / })).toBeTruthy();
+		consoleError.mockRestore();
+	});
+
+	// protects=Undo tapped before the claim's refetch lands reads as releasing and is not a dead control; fails_when=a release over a stale-open slot renders a plain Claim; no_claim=none
+	it("Undo during the claim's refetch shows an open, busy cell and an unchanged count", async () => {
+		const refetch = deferred<void>();
+		const release = deferred<{ ok: true }>();
+		releaseSlot.mockReturnValueOnce(release.promise);
+		await mount(twoOpen, () => refetch.promise);
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Claim Timer/ }),
+		);
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		await undoFromLastToast();
+		const cellBtn = await screen.findByRole("button", {
+			name: /^Releasing Timer/,
+		});
+		expect(cellBtn.getAttribute("aria-busy")).toBe("true");
+		expect(cellBtn.textContent).toBe("Claim");
+		expect(screen.getByText("2 open")).toBeTruthy();
+		await act(async () => {
+			release.resolve({ ok: true });
+			refetch.resolve();
+		});
+	});
+
+	// protects=claimingRef is freed once the claim write resolves, so Undo then claim works; fails_when=claimingRef is held through the refetch; no_claim=none
+	it("a claim tapped again after Undo during the refetch is not swallowed", async () => {
+		const refetch = deferred<void>();
+		await mount(twoOpen, () => refetch.promise);
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Claim Timer/ }),
+		);
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		await undoFromLastToast();
+		await waitFor(() => expect(releaseSlot).toHaveBeenCalledTimes(1));
+		// The release's toast offers Undo = claim again.
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(2));
+		await undoFromLastToast();
+		await waitFor(() => expect(claimSlot).toHaveBeenCalledTimes(2));
+		await act(async () => refetch.resolve());
+	});
+
+	// protects=endPending's identity check: an earlier write's finally does not clear a later write's entry; fails_when=endPending deletes whatever entry is there; no_claim=none
+	it("the claim's late refetch does not clear the Undo's pending release", async () => {
+		const refetch = deferred<void>();
+		const release = deferred<{ ok: true }>();
+		releaseSlot.mockReturnValueOnce(release.promise);
+		await mount(twoOpen, () => refetch.promise);
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Claim Timer/ }),
+		);
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		await undoFromLastToast();
+		await screen.findByRole("button", { name: /^Releasing Timer/ });
+		// The claim's refetch finishes first: its finally must leave the release.
+		await act(async () => refetch.resolve());
+		expect(
+			screen.getByRole("button", { name: /^Releasing Timer/ }),
+		).toBeTruthy();
+		await act(async () => release.resolve({ ok: true }));
+	});
+
+	// protects=criterion 2: a rejection with no user message still toasts the claim fallback; fails_when=the fallback string changes or is dropped; no_claim=none
+	it("shows the claim fallback when the rejection carries no message", async () => {
+		claimSlot.mockRejectedValueOnce("boom");
+		await mount(twoOpen);
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Claim Timer/ }),
+		);
+		await waitFor(() =>
+			expect(toastError).toHaveBeenCalledWith("Couldn't claim role."),
+		);
+	});
+
+	// protects=criterion 4: a rejection with no user message still toasts the release fallback; fails_when=the fallback string changes or is dropped; no_claim=none
+	it("shows the release fallback when the rejection carries no message", async () => {
+		releaseSlot.mockRejectedValueOnce("boom");
+		await mount(withHolder(ME));
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Release / }),
+		);
+		await waitFor(() =>
+			expect(toastError).toHaveBeenCalledWith("Couldn't release role."),
+		);
+	});
 });

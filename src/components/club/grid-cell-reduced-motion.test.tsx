@@ -24,7 +24,9 @@ const cell: ViewCell = {
 	memberId: null,
 };
 
-async function transitionDuration(reduce: boolean): Promise<string> {
+async function transition(
+	reduce: boolean,
+): Promise<{ duration: string; timing: string }> {
 	const body = renderToStaticMarkup(
 		<GridCell
 			cell={cell}
@@ -41,7 +43,7 @@ async function transitionDuration(reduce: boolean): Promise<string> {
 		writeFileSync(join(dir, "app.css"), css, "utf8");
 		writeFileSync(
 			join(dir, "page.html"),
-			`<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="./app.css"></head><body>${body}<script>document.title="D="+getComputedStyle(document.querySelector("button")).transitionDuration;</script></body></html>`,
+			`<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="./app.css"></head><body>${body}<script>var s=getComputedStyle(document.querySelector("button"));document.title="D="+s.transitionDuration+"|"+s.transitionTimingFunction;</script></body></html>`,
 			"utf8",
 		);
 		const dom = execFileSync(
@@ -62,7 +64,10 @@ async function transitionDuration(reduce: boolean): Promise<string> {
 				timeout: 30_000,
 			},
 		);
-		return /<title>D=([^<]*)<\/title>/.exec(dom)?.[1] ?? "";
+		const [duration = "", timing = ""] = (
+			/<title>D=([^<]*)<\/title>/.exec(dom)?.[1] ?? ""
+		).split("|");
+		return { duration, timing };
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -79,12 +84,16 @@ const maxMs = (v: string) =>
 describe.skipIf(!hasChrome)(
 	"claim fill transition under reduced motion",
 	() => {
-		// protects=reduced motion collapses the cell transition; fails_when=duration above 0.01ms under reduce; no_claim=the normal-motion duration is the control only (an unlayered `button` rule in styles.css sets it, so it is not exactly 200ms)
+		// protects=the claim transition is 200ms on the enter easing (not styles.css's unlayered 180ms `ease` button rule) and reduced motion still collapses it; fails_when=the transition is removed, regresses to the global rule, or survives reduced motion; no_claim=none
 		it(
 			"animates normally and is at most 0.01ms under prefers-reduced-motion",
 			async () => {
-				expect(maxMs(await transitionDuration(false))).toBeGreaterThan(100);
-				expect(maxMs(await transitionDuration(true))).toBeLessThanOrEqual(0.01);
+				const normal = await transition(false);
+				expect(normal.duration).toBe("0.2s");
+				expect(normal.timing).toBe("cubic-bezier(0.2, 0, 0, 1)");
+				expect(maxMs((await transition(true)).duration)).toBeLessThanOrEqual(
+					0.01,
+				);
 			},
 			CHROME_TEST_TIMEOUT_MS,
 		);

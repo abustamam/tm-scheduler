@@ -1,4 +1,5 @@
 import { Check, Loader2 } from "lucide-react";
+import type { CSSProperties } from "react";
 import type { ViewCell } from "#/lib/season-grid-view";
 import { cn } from "#/lib/utils";
 import { MeetingLink } from "./meeting-link";
@@ -23,14 +24,24 @@ export const CLAIM_CLASS =
 
 /** An optimistic claim/release in flight on this slot (#1315). `name` is the
  *  label a mine cell shows after the refetch (the claimer's name). */
-export interface PendingWrite {
-	kind: "claim" | "release";
-	name: string | null;
-}
+export type PendingWrite =
+	| { kind: "claim"; name: string | null }
+	/** `afterClaim`: the release is the Undo of a claim that already resolved,
+	 *  so loader data may still show the slot open while the write is in flight. */
+	| { kind: "release"; afterClaim?: boolean };
 
 // The claim moment (DESIGN.md): amber outline to solid green in 200ms.
-const CLAIM_TRANSITION =
-	"transition-[background-color,border-color,color,box-shadow] duration-200 ease-enter";
+// Inline, not Tailwind classes: styles.css has an UNLAYERED
+// `button, .island-shell, a { transition: ... 180ms ease }` that beats every
+// layered utility, so `duration-200 ease-enter` never applied. An inline style
+// beats that rule, and still loses to the reduced-motion block's unlayered
+// `transition-duration: 0.01ms !important` (an important declaration outranks
+// any non-important one, inline or not). Do not use Tailwind's `!` modifier.
+const CLAIM_TRANSITION_STYLE: CSSProperties = {
+	transitionProperty: "background-color, border-color, color, box-shadow",
+	transitionDuration: "200ms",
+	transitionTimingFunction: "var(--ease-enter)",
+};
 const MINE_CLASS =
 	"bg-success text-success-foreground ring-2 ring-success-strong";
 
@@ -153,7 +164,8 @@ export function GridCell({
 	// control is disabled and aria-busy until loader data takes over.
 	if (pending && cell.slotId) {
 		const claiming = pending.kind === "claim";
-		const label = claiming ? (pending.name ?? cell.text) : "Claim";
+		const label =
+			pending.kind === "claim" ? (pending.name ?? cell.text) : "Claim";
 		return (
 			<button
 				type="button"
@@ -165,10 +177,10 @@ export function GridCell({
 						? `Claiming ${cell.title}${dateSuffix}`
 						: `Releasing ${cell.title}${dateSuffix}`
 				}
+				style={CLAIM_TRANSITION_STYLE}
 				className={cn(
 					CELL_BASE,
 					"w-full border",
-					CLAIM_TRANSITION,
 					claiming ? `border-transparent ${MINE_CLASS}` : CLAIM_CLASS,
 				)}
 			>
@@ -188,10 +200,10 @@ export function GridCell({
 				title={`${cell.title} — tap to claim${dateSuffix}`}
 				aria-label={`Claim ${cell.title}${dateSuffix}`}
 				onClick={() => onClaim(slotId)}
+				style={CLAIM_TRANSITION_STYLE}
 				className={cn(
 					CELL_BASE,
 					"w-full cursor-pointer border disabled:opacity-50",
-					CLAIM_TRANSITION,
 					CLAIM_CLASS,
 				)}
 			>
@@ -210,10 +222,10 @@ export function GridCell({
 				title={`${cell.title} — tap to release${dateSuffix}`}
 				aria-label={`Release ${cell.title}${dateSuffix}`}
 				onClick={() => onRelease(slotId)}
+				style={CLAIM_TRANSITION_STYLE}
 				className={cn(
 					CELL_BASE,
 					"w-full cursor-pointer border border-transparent hover:opacity-80 disabled:opacity-50",
-					CLAIM_TRANSITION,
 					MINE_CLASS,
 				)}
 			>

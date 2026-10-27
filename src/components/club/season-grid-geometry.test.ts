@@ -758,7 +758,7 @@ describe.skipIf(!hasChrome)(
 		const heads = () =>
 			Array.from({ length: COLUMNS }, (_, i) => {
 				const past = i < PAST;
-				return `<th class="${meetingHead}${past ? ` ${pastMuted}` : ""}"><span class="block py-2 md:py-0">Thu, Mar ${i + 1}</span><div class="text-[10px] font-medium">${past ? "ended" : "2 open"}</div></th>`;
+				return `<th class="${meetingHead}${past ? ` ${pastMuted}` : ""}"><span class="block py-2 md:py-0">Thu, Mar ${i + 1}</span><div class="text-xs font-semibold">${past ? "ended" : "2 open"}</div></th>`;
 			}).join("");
 
 		const cells = (r: number) =>
@@ -868,7 +868,7 @@ describe.skipIf(!hasChrome)(
 			);
 			controlLabel = classLiteralContaining(
 				GRID,
-				"text-xs font-medium text-muted-foreground",
+				"text-xs font-semibold text-muted-foreground",
 			);
 			labelHead = classLiteralContaining(GRID, "sticky top-0 left-0");
 			// Any rem value, so `minColumnPx` reads whatever floor ships.

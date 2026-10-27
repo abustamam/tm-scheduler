@@ -213,16 +213,37 @@ export function SeasonGrid({
 		const state = slotState.get(slotId);
 		if (!write || !state) return null;
 		if (write.kind === "claim") return state.open ? write : null;
-		return currentMemberId && state.memberId === currentMemberId ? write : null;
+		if (currentMemberId && state.memberId === currentMemberId) return write;
+		// The Undo of a resolved claim while the claim's refetch is still in
+		// flight: loader data shows the slot open, yet the cell must read as
+		// releasing (open, busy), not as a tappable Claim.
+		return write.afterClaim && state.open ? write : null;
 	}
 	const meetingOpenDelta = new Map<string, number>();
 	for (const c of data.cells) {
 		const w = pendingApplies(c.slotId);
 		if (!w) continue;
+		// A release over a slot loader data already shows open adds nothing: the
+		// column's count already includes it.
+		const delta =
+			w.kind === "claim"
+				? -1
+				: c.memberId === null && c.guestId === null
+					? 0
+					: 1;
 		meetingOpenDelta.set(
 			c.meetingId,
-			(meetingOpenDelta.get(c.meetingId) ?? 0) + (w.kind === "claim" ? -1 : 1),
+			(meetingOpenDelta.get(c.meetingId) ?? 0) + delta,
 		);
+	}
+
+	// The write succeeded, so a failed refetch is not the write's error.
+	async function refetchQuietly(what: string) {
+		try {
+			await onChanged?.();
+		} catch (err) {
+			console.error(`Refetch after ${what} failed`, err);
+		}
 	}
 
 	async function claim(slotId: string) {
@@ -244,6 +265,9 @@ export function SeasonGrid({
 			const { proof } = await claimSlot({
 				data: { slotId, memberId, actorMemberId: memberId },
 			});
+			// The write is done: free the slot for an Undo-then-claim during the
+			// refetch below (a held ref would swallow that tap).
+			claimingRef.current.delete(slotId);
 			// UNDO ONLY FOR A PROVEN WRITER (#763, ADR-0026). Undo is
 			// `releaseSlot`, which needs a session; a claim is open to an anonymous
 			// roster pick and reports which of the two just happened. Read from the
@@ -252,15 +276,10 @@ export function SeasonGrid({
 			// only the server knows that. Anything but `"session"` fails closed.
 			toast.success("Role claimed.", {
 				...(proof === "session"
-					? { action: { label: "Undo", onClick: () => release(slotId) } }
+					? { action: { label: "Undo", onClick: () => release(slotId, true) } }
 					: {}),
 			});
-			// The claim succeeded: a failed refetch is not a claim error.
-			try {
-				await onChanged?.();
-			} catch (err) {
-				console.error("Refetch after claim failed", err);
-			}
+			await refetchQuietly("claim");
 		} catch (err) {
 			showWriteError(err, "Couldn't claim role.");
 		} finally {
@@ -270,8 +289,8 @@ export function SeasonGrid({
 	}
 
 	// No actor on the wire (#763): the server credits the session.
-	async function release(slotId: string) {
-		const entry: PendingWrite = { kind: "release", name: null };
+	async function release(slotId: string, afterClaim = false) {
+		const entry: PendingWrite = { kind: "release", afterClaim };
 		startPending(slotId, entry);
 		try {
 			await releaseSlot({ data: { slotId } });
@@ -282,11 +301,7 @@ export function SeasonGrid({
 				duration: DUTY_TOAST_MS,
 				action: { label: "Undo", onClick: () => claim(slotId) },
 			});
-			try {
-				await onChanged?.();
-			} catch (err) {
-				console.error("Refetch after release failed", err);
-			}
+			await refetchQuietly("release");
 		} catch (err) {
 			showWriteError(err, "Couldn't release role.");
 		} finally {
@@ -484,7 +499,7 @@ export function SeasonGrid({
 				{clubSlug ? (
 					"Roster view"
 				) : (
-					<Link to="/roster" className="font-medium text-primary underline">
+					<Link to="/roster" className="font-semibold text-primary underline">
 						Roster view
 					</Link>
 				)}
@@ -514,7 +529,7 @@ export function SeasonGrid({
 					))}
 				</div>
 				<div className="inline-flex items-center gap-2">
-					<span className="text-xs font-medium text-muted-foreground">
+					<span className="text-xs font-semibold text-muted-foreground">
 						Meetings shown
 					</span>
 					<div className="inline-flex overflow-hidden rounded-lg border">
@@ -537,7 +552,7 @@ export function SeasonGrid({
 				</div>
 				{onPastCountChange ? (
 					<div className="inline-flex items-center gap-2">
-						<span className="text-xs font-medium text-muted-foreground">
+						<span className="text-xs font-semibold text-muted-foreground">
 							Show past
 						</span>
 						<div className="inline-flex overflow-hidden rounded-lg border">
@@ -622,7 +637,7 @@ export function SeasonGrid({
 										<>
 											<div>{formatMeetingDate(m.scheduledAt, m.timezone)}</div>
 											{m.isCompleted ? (
-												<div className="flex items-center justify-center gap-0.5 text-[10px] font-semibold text-muted-foreground">
+												<div className="flex items-center justify-center gap-0.5 text-xs font-semibold text-muted-foreground">
 													<Lock className="size-2.5" aria-hidden />
 													locked
 												</div>
@@ -630,7 +645,7 @@ export function SeasonGrid({
 												// "ended", not "done": a past meeting still accepts
 												// late sign-ups (recording who stepped in), so the
 												// label shouldn't read as closed.
-												<div className="text-[10px] font-medium text-warning-foreground tabular-nums">
+												<div className="text-xs font-semibold text-warning-foreground tabular-nums">
 													{m.isPast
 														? "ended"
 														: openNow === 0
@@ -685,7 +700,7 @@ export function SeasonGrid({
 													className={cn(
 														// px-2.5/py-1/11px (was px-1.5/py-0.5/10px): the chip is a
 														// primary mobile action — 19px tall was too small to tap.
-														"mx-auto mt-1 flex cursor-pointer items-center gap-0.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap transition-colors disabled:opacity-50",
+														"mx-auto mt-1 flex cursor-pointer items-center gap-0.5 rounded-full border px-2.5 py-1 text-xs font-semibold whitespace-nowrap transition-colors disabled:opacity-50",
 														// Below md the pill gets a bit more padding (~33px) and an
 														// invisible ::after pad tops it up to a ≥44px hit area:
 														// 4px up (exactly the mt-1 gap, so it never covers the
@@ -696,7 +711,7 @@ export function SeasonGrid({
 															? // Same fill recipe as the destructive Button variant, so
 																// white text stays AA in dark (destructive/60 ⇒ 6.0:1).
 																"border-destructive bg-destructive text-white hover:opacity-80 dark:border-destructive/60 dark:bg-destructive/60"
-															: "border-border text-muted-foreground/70 hover:border-destructive/50 hover:text-destructive",
+															: "border-border text-muted-foreground hover:border-destructive/50 hover:text-destructive",
 													)}
 												>
 													{busyMeetingId === m.id ? (
@@ -791,7 +806,7 @@ export function SeasonGrid({
 												row.label
 											)}
 											{isSelfRow ? (
-												<span className="ml-1.5 inline-flex items-center rounded-full bg-primary px-1.5 py-0.5 align-middle text-[10px] font-semibold leading-none text-primary-foreground">
+												<span className="ml-1.5 inline-flex items-center rounded-full bg-primary px-1.5 py-0.5 align-middle text-xs font-semibold leading-none text-primary-foreground">
 													You
 												</span>
 											) : null}
@@ -856,7 +871,7 @@ export function SeasonGrid({
 																	CELL_KIND_CLASS[cell.kind],
 																	"w-full cursor-pointer transition-[filter,border-color] hover:brightness-95 disabled:opacity-50",
 																	cell.kind === "free" &&
-																		"group/cell hover:border-[var(--lagoon-deep)] hover:text-[var(--lagoon-deep)] focus-visible:border-[var(--lagoon-deep)] focus-visible:text-[var(--lagoon-deep)]",
+																		"group/cell hover:border-link hover:text-link focus-visible:border-link focus-visible:text-link",
 																)}
 															>
 																{cell.kind === "free" ? (
@@ -883,7 +898,7 @@ export function SeasonGrid({
 																{cell.contacted ? (
 																	<span
 																		aria-hidden
-																		className="ml-1 inline-block size-1.5 rounded-full bg-[var(--success-strong)]"
+																		className="ml-1 inline-block size-1.5 rounded-full bg-success-strong"
 																	/>
 																) : null}
 															</button>
@@ -975,7 +990,7 @@ export function SeasonGrid({
 			    for unavailable — compact on purpose, decoded here once. Quiet: one
 			    wrapping muted line under the grid. */}
 			{orientation === "members" && data.rows.length > 0 ? (
-				<p className="text-[11px] leading-relaxed text-muted-foreground">
+				<p className="text-xs leading-relaxed text-muted-foreground">
 					{data.rows.map((r) => (
 						<span
 							key={`${r.roleDefinitionId}:${r.slotIndex}`}

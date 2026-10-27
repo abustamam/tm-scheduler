@@ -218,3 +218,19 @@ describe("GridCell optimistic claim (#1315)", () => {
 		).not.toBeNull();
 	});
 });
+
+describe("GridCell pending claim label (#1315)", () => {
+	// protects=a pending claim with no known name falls back to the cell's text; fails_when=the label blanks; no_claim=none
+	it("falls back to the cell text when the claimer's name is unknown", () => {
+		render(
+			<GridCell
+				cell={openCell}
+				currentMemberId="me"
+				pending={{ kind: "claim", name: null }}
+				onClaim={() => {}}
+			/>,
+		);
+		const btn = screen.getByRole("button", { name: /^Claiming Timer/ });
+		expect(btn.textContent).toBe("Timer");
+	});
+});
