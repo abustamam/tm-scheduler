@@ -13,6 +13,7 @@ import {
 } from "#/lib/meeting-lifecycle";
 import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
 import { logActivity } from "./activity";
+import type { ResolvedActor } from "./attendance-actor-logic";
 import { takeAdvisoryLockWithin } from "./club-write-lock";
 
 // Either the main db client or a drizzle transaction — so callers writing
@@ -80,6 +81,40 @@ export const SELF_SERVICE_RUNGS: readonly AttendancePlanStatus[] = [
  * Correcting a wrong answer is the SET path, not this one.
  */
 export const CLEARABLE_ASK: readonly AttendancePlanStatus[] = ["reached_out"];
+
+/** What an officer may delete from THEIR OWN row: their own answer and the ask. */
+const OFFICER_OWN_ROW_RUNGS: readonly AttendancePlanStatus[] = [
+	...SELF_SERVICE_RUNGS,
+	...CLEARABLE_ASK,
+];
+
+/**
+ * The `onlyFrom` floor for `clearPlannedAttendance`: which rungs this caller's
+ * "No answer" may delete.
+ *
+ * #573's floor stops an officer's "No answer" destroying ANOTHER member's reply,
+ * and stays for every row but one: an officer's own. Their own answer is theirs
+ * to take back like any member's, and the officer arm used to refuse it
+ * silently (`cleared: false`, so the strip reverted with no error).
+ *
+ * `actorMemberId` is trustworthy only on the officer arm, which is why the self
+ * test is gated on `via`: `resolveActor` sets it from the session's own
+ * `membership.id` there, never from the caller's `claimedActorMemberId`. A
+ * `null` actor (an impersonating superadmin has no member row) equals no id, so
+ * is never "self".
+ */
+export function clearFloor(args: {
+	via: ResolvedActor["via"];
+	actorMemberId: string | null;
+	memberId: string;
+}): readonly AttendancePlanStatus[] {
+	if (args.via !== "officer") {
+		return SELF_SERVICE_RUNGS;
+	}
+	return args.actorMemberId === args.memberId
+		? OFFICER_OWN_ROW_RUNGS
+		: CLEARABLE_ASK;
+}
 
 /**
  * The rungs that are NOT a member's own answer, and so still count as BLANK for
@@ -466,8 +501,10 @@ export async function setPlanStatus(
  *
  * The two floors in use are exact complements — {@link SELF_SERVICE_RUNGS} for a
  * self/TMOD caller clearing an ANSWER, {@link CLEARABLE_ASK} for an officer
- * clearing the ASK. Making the argument mandatory means a new caller has to pick
- * one rather than inheriting the widest possible delete by saying nothing.
+ * clearing the ASK on someone else's row (and the union of the two on their OWN
+ * row, see {@link clearFloor}). Making the argument mandatory means a new caller
+ * has to pick one rather than inheriting the widest possible delete by saying
+ * nothing.
  */
 export async function clearPlanStatus(
 	database: DbOrTx,

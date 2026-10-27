@@ -93,7 +93,6 @@ function renderAgenda(
 	extra?: Partial<MeetingAgendaProps>,
 ) {
 	const meeting = extra?.meeting ?? meetingFixture();
-	const timezone = extra?.timezone ?? "UTC";
 	// Mirrors the route's own lift (#396 PR 2): derived from the same slots the
 	// test renders, so a fixture's assignee actually shows up under a role.
 	const roleCounts = buildRoleCounts(slots);
@@ -114,13 +113,9 @@ function renderAgenda(
 			shareUrl="https://gavelup.app/club/test/meeting/m1"
 			meetingDate="Jan 1, 2026"
 			meeting={meeting}
-			templateKey={extra?.templateKey ?? null}
-			timezone={timezone}
 			// The route hands its own frozen answer in; the fixtures are 30 days
 			// out, so "not over" unless a test says otherwise via `extra`.
 			meetingOver={false}
-			selfMemberId="me"
-			onMetaSaved={() => {}}
 			requireIdentity={requireIdentity}
 			contactedMemberIds={[]}
 			{...extra}
@@ -545,72 +540,6 @@ describe("MeetingAgenda capability gating", () => {
 		);
 		expect(screen.getByRole("button", { name: /Assign/ })).toBeTruthy();
 		expect(screen.getByRole("button", { name: "+ Add speaker" })).toBeTruthy();
-	});
-
-	it("shows the WOD editor to a pure grammarian, hides it from a plain member", () => {
-		renderAgenda(
-			meetingViewer({
-				currentMemberId: "me",
-				canManage: false,
-				isTmod: false,
-				isGrammarian: true,
-				isEditableWindow: true,
-			}),
-			[slot({ status: "open" })],
-		);
-		expect(
-			screen.getByRole("button", { name: /edit word of the day/i }),
-		).toBeTruthy();
-		cleanup();
-		renderAgenda(
-			meetingViewer({
-				currentMemberId: "me",
-				canManage: false,
-				isTmod: false,
-				isGrammarian: false,
-				isEditableWindow: true,
-			}),
-			[slot({ status: "open" })],
-		);
-		expect(
-			screen.queryByRole("button", { name: /edit word of the day/i }),
-		).toBeNull();
-	});
-
-	it("shows 'Edit meeting' to a TMOD and an admin, hides it from a plain member", () => {
-		for (const v of [
-			meetingViewer({
-				currentMemberId: "me",
-				canManage: false,
-				isTmod: true,
-				isGrammarian: false,
-				isEditableWindow: true,
-			}),
-			meetingViewer({
-				currentMemberId: "me",
-				canManage: true,
-				isTmod: false,
-				isGrammarian: false,
-				isEditableWindow: true,
-			}),
-		]) {
-			renderAgenda(v, [slot({ status: "open" })]);
-			expect(
-				screen.getByRole("button", { name: /edit meeting/i }),
-			).toBeTruthy();
-			cleanup();
-		}
-		renderAgenda(
-			meetingViewer({
-				currentMemberId: "me",
-				canManage: false,
-				isTmod: false,
-				isGrammarian: false,
-				isEditableWindow: true,
-			}),
-			[slot({ status: "open" })],
-		);
-		expect(screen.queryByRole("button", { name: /edit meeting/i })).toBeNull();
 	});
 });
 
@@ -1161,10 +1090,6 @@ describe("MeetingAgenda confirm nudge records outreach (#662)", () => {
 						shareUrl="https://gavelup.app/club/test/meeting/m1"
 						meetingDate="Jan 1, 2026"
 						meeting={meetingFixture()}
-						templateKey={null}
-						timezone="UTC"
-						selfMemberId="me"
-						onMetaSaved={() => {}}
 						contactedMemberIds={contactedMemberIds}
 						onContacted={(memberId) => recordOutreach(memberId)}
 					/>
@@ -1469,10 +1394,6 @@ describe("MeetingAgenda: a holder who said they can't make it (#764)", () => {
 			shareUrl: "https://gavelup.app/club/test/meeting/m1",
 			meetingDate: "Jan 1, 2026",
 			meeting: meetingFixture(),
-			templateKey: null,
-			timezone: "UTC",
-			selfMemberId: "me",
-			onMetaSaved: () => {},
 			contactedMemberIds: [],
 		};
 		rerender(<MeetingAgenda {...props} />);

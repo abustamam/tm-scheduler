@@ -180,6 +180,7 @@ describe.skipIf(!hasChrome)(
 			cls.card = classAfterTag(PANEL, "<Card ");
 			cls.cardHeader = classAfterTag(PANEL, "<CardHeader");
 			cls.cardBody = classAfterTag(PANEL, "<CardContent");
+			cls.list = classAfterTag(PANEL, '<ul role="list"');
 			css = await buildAppCss(
 				candidatesIn(`${shellHtml()}${railHtml()}${drawerHtml()}`),
 			);
@@ -299,11 +300,13 @@ describe.skipIf(!hasChrome)(
 				expect(nameBox, "IDENTITY_NAME_CLASS not found").toBeTruthy();
 				const icon = /"icon-sm":\s*"([^"]*)"/.exec(readSource(BUTTON))?.[1];
 				expect(icon, "icon-sm size not found in button.tsx").toBeTruthy();
-				const chip = /"(w-36)[^"]* (md:w-44)[^"]*"/.exec(readSource(PANEL));
+				const chip = /"(w-36)[^"]* (@md:w-44)[^"]*"/.exec(readSource(PANEL));
 				expect(chip, "status trigger widths not found").not.toBeNull();
 				const chipClass = `${chip?.[1]} ${chip?.[2]}`;
 				const longName = "Bartholomew Montgomery-Featherstonehaugh ".repeat(3);
-				const row = `<div class="${mainLine}" data-line><div class="${identity}"><span class="${nameBox}" data-name>${longName}</span><span class="shrink-0" data-role>VPE</span></div><div class="${line}"><div class="${chipClass}" data-chip></div><a class="inline-flex shrink-0 ${icon}" data-icon></a></div></div>`;
+				// Inside the panel's own `@container` list: the track's `@md:` arm is
+				// measured against it, and without it the arm matches nothing.
+				const row = `<div class="${cls.list}"><div class="${mainLine}" data-line><div class="${identity}"><span class="${nameBox}" data-name>${longName}</span><span class="shrink-0" data-role>VPE</span></div><div class="${line}"><div class="${chipClass}" data-chip></div><a class="inline-flex shrink-0 ${icon}" data-icon></a></div></div></div>`;
 				const html = railHtml().replace(
 					/<div class="py-4 text-sm"[^>]*>Member 1<\/div>/,
 					row,
@@ -323,6 +326,7 @@ describe.skipIf(!hasChrome)(
 						nameEl.scrollWidth > nameEl.clientWidth ? "truncated" : "notTruncated",
 						body.scrollWidth <= body.clientWidth ? "noscroll" : "hscroll",
 						Math.round(chip.width),
+						Math.round(document.querySelector("aside").getBoundingClientRect().width),
 					].join(",");
 				</script>`;
 				const rowCss =
@@ -334,8 +338,13 @@ describe.skipIf(!hasChrome)(
 					script,
 					viewport: VIEWPORT,
 				});
-				// 1280px is >= md, so the track is the 176px `md:w-44` arm.
-				expect(title).toBe("oneLine,inside,nameYields,truncated,noscroll,176");
+				// 1280px is the `xl` rail: 384px (`xl:w-96`; it was `lg:w-[340px]`), so
+				// its list is 350px, under the 28rem the `@md:w-44` arm needs: the
+				// track is the 144px `w-36`. It was 176px when `md:w-44` followed the
+				// viewport.
+				expect(title).toBe(
+					"oneLine,inside,nameYields,truncated,noscroll,144,384",
+				);
 			});
 
 			it("loses the header if the scroller moves back out to the <aside>", () => {

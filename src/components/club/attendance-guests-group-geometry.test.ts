@@ -142,8 +142,11 @@ const NAME = "Nadia Farouk";
 /** A name that does not fit the rail beside the toggle on its own. */
 const LONG_NAME = "Alexandria Konstantinopoulos-Vanderbilt";
 
-/** Desktop: `lg:` applies, so the route's real `<aside>` is 340px wide. */
-const VIEWPORT = { width: 1280, height: 800 };
+/** Desktop: `lg:` applies and `xl:` does not, so the route's real `<aside>` is
+ *  340px wide, the narrowest it gets and the width the review measured. */
+const VIEWPORT = { width: 1024, height: 800 };
+/** `xl:` applies: the same `<aside>` is 384px wide. */
+const XL_VIEWPORT = { width: 1440, height: 800 };
 
 type Measure = {
 	groupClientWidth: number;
@@ -306,12 +309,12 @@ describe.skipIf(!hasChrome)(
 		})();
 		</script>`;
 
-		function measure(bodyHtml: string): Measure {
+		function measure(bodyHtml: string, viewport = VIEWPORT): Measure {
 			const title = renderAndReadTitle({
 				bodyHtml,
 				css,
 				script: PROBE,
-				viewport: VIEWPORT,
+				viewport,
 				tmpPrefix: "guests-badge-",
 			});
 			// A missing title means the script never ran — every field would then
@@ -463,20 +466,25 @@ describe.skipIf(!hasChrome)(
 			expect(cls.nameButton).toContain("min-w-0");
 			expect(cls.nameButtonText).toContain("truncate");
 			expect(cls.rail).toMatch(/lg:w-\[\d+px\]/);
+			expect(cls.rail).toMatch(/xl:w-96/);
 			expect(cls.cardBodyBase).toContain("px-6");
 			expect(cls.toggle).toContain("shrink-0");
 		});
 
 		describe("a guest speaker with a 120-character home club, as an officer sees them", () => {
-			for (const [where, fixture] of [
-				["on the 340px desktop rail", desktopFixture],
-				["on a 375px phone", phoneFixture],
-				["on a 768px tablet", tabletFixture],
+			for (const [where, fixture, viewport] of [
+				["on the 340px desktop rail", desktopFixture, VIEWPORT],
+				["on the 384px xl rail", desktopFixture, XL_VIEWPORT],
+				["on a 375px phone", phoneFixture, VIEWPORT],
+				["on a 768px tablet", tabletFixture, VIEWPORT],
 			] as const) {
 				for (const nameAsControl of [false, true]) {
 					const how = nameAsControl ? "name as the edit control" : "plain name";
 					it(`${where}, ${how}: the badge stays inside the rail and the caption gives way`, () => {
-						const m = measure(fixture(officerView(shipped(), nameAsControl)));
+						const m = measure(
+							fixture(officerView(shipped(), nameAsControl)),
+							viewport,
+						);
 						expectInsideTheRail(m, `${where}, ${how}`);
 						// The badge really was constrained — without this the rest passes
 						// vacuously on a caption that happened to fit.

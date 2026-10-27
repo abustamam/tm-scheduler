@@ -20,6 +20,9 @@ import {
 	type MeetingAgendaActions,
 } from "#/components/agenda/meeting-agenda";
 import { MeetingAnnouncements } from "#/components/agenda/meeting-announcements";
+import { MeetingMetaDialog } from "#/components/agenda/meeting-meta-dialog";
+import { MeetingTemplateDialog } from "#/components/agenda/meeting-template-dialog";
+import { MeetingWordOfTheDayDialog } from "#/components/agenda/meeting-word-of-the-day-dialog";
 import {
 	AbsentReleaseDialog,
 	type PendingAbsent,
@@ -142,6 +145,12 @@ import {
 import { getClubLogoMeta } from "#/server/club-logo";
 import { getGuestPipeline } from "#/server/guest-pipeline";
 import { getLineupBlastAccess } from "#/server/lineup-blast";
+import {
+	applyTemplateToMeeting,
+	listTemplatesForClub,
+	type MeetingTemplateSummary,
+	previewTemplateForMeeting,
+} from "#/server/meeting-templates";
 import {
 	cancelMeeting,
 	completeMeeting,
@@ -436,6 +445,14 @@ function MeetingView() {
 	// too, when the URL carries `?notice=1` (see `doCancel`).
 	const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
 	const [noticeOpen, setNoticeOpen] = useState(false);
+	// The meeting-setup dialogs the Manage menu and the Toastmaster's / Grammarian's
+	// buttons open (they lived on the agenda until the toolbar took the entries).
+	// "Change meeting type" loads its template list lazily, on open: an officer
+	// affordance nobody else pays for.
+	const [wodOpen, setWodOpen] = useState(false);
+	const [metaOpen, setMetaOpen] = useState(false);
+	const [templateOpen, setTemplateOpen] = useState(false);
+	const [templates, setTemplates] = useState<MeetingTemplateSummary[]>([]);
 	// Ballot Counter console (#510 Task 10) — its own Table Topics edits, kept
 	// separate from `MeetingMinutes`'s offline queue: the console is reachable
 	// even when `minutes.visible` is false (a non-admin Vote Counter on a
@@ -1604,12 +1621,17 @@ function MeetingView() {
 	// — but clamped off `reached_out`. `rungOverride` is shared with the
 	// officer panel, so an OFFICER setting their own row to `reached_out` from
 	// the panel would otherwise mislabel their own strip as "can't make this
-	// one — undo?", and tapping that "undo" actually DELETES the row: an
-	// officer's clear is unrestricted (`onlyFrom` is lifted for them in
-	// `clearPlannedAttendance`), so it would erase the very outreach record the
-	// clamp exists to protect (whole-branch review M8). `answeredRungs` can
-	// never itself produce `reached_out` — it is filtered server-side — so this
-	// only ever intercepts the override.
+	// one — undo?", and tapping that "undo" actually DELETES the row. An
+	// officer's clear is not unrestricted: since #573 `clearPlannedAttendance`
+	// floors every clear server-side, and the officer arm's floor is the ASK
+	// (`CLEARABLE_ASK`, `reached_out`), the self and Toastmaster arm's an ANSWER
+	// (`SELF_SERVICE_RUNGS`), so neither erases the other's. On another member's
+	// row the ask is the only thing an officer may clear. But the officer arm
+	// applies to their own row too, and `reached_out` is always in its floor, so
+	// the "undo" clear would erase the very outreach record the clamp exists to
+	// protect (whole-branch review M8). `answeredRungs` can never itself produce
+	// `reached_out` — it is filtered server-side — so this only ever intercepts
+	// the override.
 	let myEffectiveStatus =
 		myId && rungOverride[myId] !== undefined ? rungOverride[myId] : myStatus;
 	myEffectiveStatus =
@@ -2173,7 +2195,84 @@ function MeetingView() {
 					onCancel={() => setCancelConfirmOpen(true)}
 					canLineupBlast={canLineupBlast}
 					onLineupBlast={() => setLineupOpen(true)}
+					// Each gate is the `viewer` flag as is, not the toolbar's `canEdit`:
+					// `viewer` is built from `effectiveCanManage` and `lockedViewer`
+					// zeroes it on a completed or cancelled meeting, so these entries
+					// vanish there exactly as the agenda's buttons did.
+					canEditMeta={viewer.canEditMeetingMeta}
+					onEditMeta={() => setMetaOpen(true)}
+					canEditWod={viewer.canEditWod}
+					onEditWod={() => setWodOpen(true)}
+					canChangeType={viewer.canManage}
+					onChangeType={async () => {
+						// A failed fetch must not open the dialog onto an empty or stale
+						// list, and must not be an unhandled rejection with no feedback:
+						// it surfaces the way this route surfaces every failed write.
+						try {
+							setTemplates(
+								await listTemplatesForClub({
+									data: { clubId: meeting.clubId },
+								}),
+							);
+							setTemplateOpen(true);
+						} catch (err) {
+							showWriteError(err, "Couldn't load the meeting types.");
+						}
+					}}
+					editAgendaParams={
+						viewer.canManage && meeting.templateId
+							? { clubId: meeting.clubId, meetingId: meeting.id }
+							: null
+					}
 				/>
+				{viewer.canEditWod ? (
+					<MeetingWordOfTheDayDialog
+						open={wodOpen}
+						onOpenChange={setWodOpen}
+						meeting={meeting}
+						selfMemberId={agendaMemberId}
+						onSaved={async () => {
+							setWodOpen(false);
+							await router.invalidate();
+						}}
+					/>
+				) : null}
+				{viewer.canManage ? (
+					<MeetingTemplateDialog
+						open={templateOpen}
+						onOpenChange={setTemplateOpen}
+						currentTemplateKey={templateKey}
+						templates={templates}
+						loadPreview={(templateId) =>
+							previewTemplateForMeeting({
+								data: { meetingId: meeting.id, templateId },
+							})
+						}
+						onApply={async (templateId) => {
+							await applyTemplateToMeeting({
+								data: { meetingId: meeting.id, templateId },
+							});
+							// Re-runs the meeting loader, so the agenda re-renders in the
+							// meeting's new shape.
+							await router.invalidate();
+						}}
+					/>
+				) : null}
+				{viewer.canEditMeetingMeta ? (
+					<MeetingMetaDialog
+						open={metaOpen}
+						onOpenChange={setMetaOpen}
+						meeting={meeting}
+						timezone={timezone}
+						selfMemberId={agendaMemberId}
+						canReschedule={viewer.canManage}
+						effectiveMeetingNumber={meetingNumber}
+						onSaved={async () => {
+							setMetaOpen(false);
+							await router.invalidate();
+						}}
+					/>
+				) : null}
 				{/* Cancel confirm (#1057). It states the three things an officer
 				    needs before saying yes: roles are kept, members stop seeing the
 				    meeting, nothing is sent — and, truthfully, how long a restore
@@ -2276,7 +2375,6 @@ function MeetingView() {
 					<section id={MEETING_AGENDA_ANCHOR_ID} className="scroll-mt-28">
 						<MeetingAgenda
 							slots={slots}
-							effectiveMeetingNumber={meetingNumber}
 							viewer={viewer}
 							actions={actions}
 							roster={roster}
@@ -2296,13 +2394,7 @@ function MeetingView() {
 							// manager-only.
 							personalNudgeBase={effectiveCanManage ? nudgePersonalBase : null}
 							meeting={meeting}
-							templateKey={templateKey}
-							timezone={timezone}
 							meetingOver={over}
-							selfMemberId={agendaMemberId}
-							onMetaSaved={async () => {
-								await router.invalidate();
-							}}
 							requireIdentity={requireIdentity}
 							contactedMemberIds={contactedMemberIds}
 							onContacted={async (memberId, via) => {
@@ -2573,12 +2665,12 @@ function MeetingView() {
 						// that `visible` to `auto` (CSS Overflow 3 §3), so the scrolling
 						// element clips on BOTH axes. Nothing in the rail overhangs today —
 						// the row wraps (`break-words`, `line-clamp-2`), the widest control
-						// is the measured `w-44` track, and the row menu is a portalled
+						// is the measured `w-36` track, and the row menu is a portalled
 						// `DropdownMenuContent` — but a future popover that renders INLINE
 						// would be cut off. Moving the scroller inward tightened that box
 						// from the column to the card's body, so it is a smaller trap than
 						// it was, not a new one.
-						className="order-1 lg:order-2 lg:sticky lg:top-[var(--shell-pinned-top,6rem)] lg:flex lg:max-h-[calc(100vh_-_var(--shell-pinned-top,6rem)_-_1rem)] lg:w-[340px] lg:shrink-0 lg:flex-col"
+						className="order-1 lg:order-2 lg:sticky lg:top-[var(--shell-pinned-top,6rem)] lg:flex lg:max-h-[calc(100vh_-_var(--shell-pinned-top,6rem)_-_1rem)] lg:w-[340px] lg:shrink-0 lg:flex-col xl:w-96"
 					>
 						<MeetingAttendancePanel
 							// `upcoming` → the outreach ladder; meeting day and after → the

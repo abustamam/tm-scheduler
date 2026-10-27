@@ -1,10 +1,6 @@
-import { Link } from "@tanstack/react-router";
 import { Loader2, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { MeetingMetaDialog } from "#/components/agenda/meeting-meta-dialog";
-import { MeetingTemplateDialog } from "#/components/agenda/meeting-template-dialog";
-import { MeetingWordOfTheDayDialog } from "#/components/agenda/meeting-word-of-the-day-dialog";
 import { SuggestFillsDialog } from "#/components/agenda/suggest-fills-dialog";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
 import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
@@ -62,12 +58,6 @@ import type { ContactMethod } from "#/lib/preferred-contact";
 import { DUTY_TOAST_MS, roleFreedDutyText } from "#/lib/role-duty-copy";
 import { rolesGuideUrl } from "#/lib/role-guide";
 import { speechWindow, speechWindowInputError } from "#/lib/speech-window";
-import {
-	applyTemplateToMeeting,
-	listTemplatesForClub,
-	type MeetingTemplateSummary,
-	previewTemplateForMeeting,
-} from "#/server/meeting-templates";
 import type { getMeeting } from "#/server/meetings";
 
 export type AgendaSlot = Awaited<
@@ -171,21 +161,8 @@ export interface MeetingAgendaProps {
 	 * neither (its `meeting` row carries uuids).
 	 */
 	personalNudgeBase?: PersonalNudgeBase | null;
-	/** The full meeting row, for the lifted edit dialogs. The WOD dialog reads
-	 *  only a subset (id + wod fields); the meta dialog needs all of it. */
+	/** The full meeting row; the agenda reads its status for the claim gates. */
 	meeting: Awaited<ReturnType<typeof getMeeting>>["meeting"];
-	/** The KEY of the template this meeting is currently running, or null for a
-	 *  standard meeting — see `loadTemplateKey`. Feeds the "Current" badge in
-	 *  `MeetingTemplateDialog`. Deliberately NOT `meeting.templateId`: since
-	 *  conversion started pointing meetings at a private per-meeting copy, that
-	 *  id is fresh every conversion and matches no `listAvailableTemplates`
-	 *  choice — the `key` a private copy keeps from its source is the stable
-	 *  thing to match against. */
-	templateKey: string | null;
-	/** The meeting's EFFECTIVE number (stored or derived, #358). */
-	effectiveMeetingNumber?: number | null;
-	/** Club timezone — the meta dialog renders/parses the date field in it. */
-	timezone: string;
 	/** The route's one "is it over?" answer (`isMeetingOver`, #393), computed
 	 *  from its frozen `now` and handed in rather than recomputed here, so the
 	 *  agenda cannot read a different instant from the rest of the page (and
@@ -194,11 +171,6 @@ export interface MeetingAgendaProps {
 	 *  "can't make it" flag rather than one on a meeting that has happened. The
 	 *  route's wiring is pinned in `meeting-agenda.test.tsx`. */
 	meetingOver?: boolean;
-	/** Self-asserted identity the lifted edit dialogs pass to their server fns
-	 *  (ADR-0010 TMOD/Grammarian path). The activity-log actor is NOT sent — the
-	 *  server derives it from the session or the verified self-assertion (#396). */
-	selfMemberId: string | null;
-	onMetaSaved: () => void | Promise<void>;
 	/** Public surface: resolve/collect identity before opening the claim flow when there's no identity. */
 	requireIdentity?: () => Promise<StoredMember | null>;
 	/** Member ids already contacted for this meeting (#340). Admin-only; empty on
@@ -241,25 +213,13 @@ export function MeetingAgenda({
 	meetingDate,
 	personalNudgeBase = null,
 	meeting,
-	templateKey,
-	effectiveMeetingNumber = null,
-	timezone,
 	meetingOver = true,
-	selfMemberId,
-	onMetaSaved,
 	requireIdentity,
 	contactedMemberIds,
 	onContacted,
 	onUncontacted,
 }: MeetingAgendaProps) {
 	const { currentMemberId } = viewer;
-	const [wodOpen, setWodOpen] = useState(false);
-	const [metaOpen, setMetaOpen] = useState(false);
-	// "Change meeting type" (#agenda-templates). Officer-only: reshaping a
-	// meeting sits with reschedule and cancel, not with the agenda-content
-	// edits ADR-0010 grants the self-asserted Toastmaster.
-	const [templateOpen, setTemplateOpen] = useState(false);
-	const [templates, setTemplates] = useState<MeetingTemplateSummary[]>([]);
 	// Claiming an open slot requires the capability AND either an identity or a
 	// `requireIdentity` resolver to collect one at click time — a `lockedViewer`
 	// sets `canClaim` false so a locked/past meeting is read-only. Without a
@@ -473,101 +433,6 @@ export function MeetingAgenda({
 
 	return (
 		<>
-			{viewer.canEditWod ? (
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					onClick={() => setWodOpen(true)}
-				>
-					Edit Word of the Day
-				</Button>
-			) : null}
-			{viewer.canEditWod ? (
-				<MeetingWordOfTheDayDialog
-					open={wodOpen}
-					onOpenChange={setWodOpen}
-					meeting={meeting}
-					selfMemberId={selfMemberId}
-					onSaved={async () => {
-						setWodOpen(false);
-						await onMetaSaved();
-					}}
-				/>
-			) : null}
-			{viewer.canEditMeetingMeta ? (
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					onClick={() => setMetaOpen(true)}
-				>
-					Edit meeting
-				</Button>
-			) : null}
-			{viewer.canManage ? (
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					onClick={async () => {
-						// Lazy: the list is an officer affordance nobody else pays for.
-						setTemplates(
-							await listTemplatesForClub({ data: { clubId: meeting.clubId } }),
-						);
-						setTemplateOpen(true);
-					}}
-				>
-					Change meeting type
-				</Button>
-			) : null}
-			{viewer.canManage && meeting.templateId ? (
-				<Button type="button" variant="outline" size="sm" asChild>
-					<Link
-						to="/club/$clubId/meeting/$meetingId/agenda/edit"
-						params={{ clubId: meeting.clubId, meetingId: meeting.id }}
-					>
-						Edit agenda
-					</Link>
-				</Button>
-			) : null}
-			{viewer.canManage ? (
-				<MeetingTemplateDialog
-					open={templateOpen}
-					onOpenChange={setTemplateOpen}
-					currentTemplateKey={templateKey}
-					templates={templates}
-					loadPreview={(templateId) =>
-						previewTemplateForMeeting({
-							data: { meetingId: meeting.id, templateId },
-						})
-					}
-					onApply={async (templateId) => {
-						await applyTemplateToMeeting({
-							data: { meetingId: meeting.id, templateId },
-						});
-						// Re-runs the meeting loader, so the agenda re-renders in the
-						// meeting's new shape.
-						await onMetaSaved();
-					}}
-				/>
-			) : null}
-			{viewer.canEditMeetingMeta ? (
-				<MeetingMetaDialog
-					open={metaOpen}
-					onOpenChange={setMetaOpen}
-					meeting={meeting}
-					timezone={timezone}
-					selfMemberId={selfMemberId}
-					canReschedule={viewer.canManage}
-					effectiveMeetingNumber={effectiveMeetingNumber}
-					onSaved={async () => {
-						setMetaOpen(false);
-						await onMetaSaved();
-					}}
-				/>
-			) : null}
-
 			{viewer.canManage ? (
 				<section className="rounded-xl border bg-card p-4">
 					<div className="flex flex-wrap items-center justify-between gap-3">

@@ -67,8 +67,9 @@ export function MeetingMetaDialog({
 	 * #731. The join-link INPUT is uncontrolled, like every other field here, and
 	 * that is load-bearing rather than stylistic.
 	 *
-	 * This component is mounted whenever the viewer may edit meta — see
-	 * `meeting-agenda.tsx` — not when the dialog opens, so state declared out here
+	 * This component is mounted whenever the viewer may edit meta — see the
+	 * meeting route (`club.$clubId.meeting.$meetingId.tsx`) — not when the dialog
+	 * opens, so state declared out here
 	 * lives for the lifetime of the meeting page. Radix unmounts `DialogContent`'s
 	 * children on close, so an uncontrolled input re-reads the row on every open;
 	 * a `useState(meeting.joinUrl ?? "")` does not. Since this field is sent on

@@ -350,10 +350,6 @@ describe("the agenda slot card's confirm draft", () => {
 						...meetingOver,
 					} as unknown as MeetingAgendaProps["meeting"]
 				}
-				templateKey={null}
-				timezone="UTC"
-				selfMemberId="me"
-				onMetaSaved={() => {}}
 				contactedMemberIds={[]}
 			/>,
 		);

@@ -4,12 +4,16 @@ import {
 	CheckCircle2,
 	ChevronDown,
 	ClipboardList,
+	FilePenLine,
+	LayoutTemplate,
 	ListChecks,
 	Loader2,
 	LockOpen,
 	Megaphone,
+	Pencil,
 	Plus,
 	Presentation,
+	Sparkles,
 } from "lucide-react";
 import { lazy, Suspense, useState } from "react";
 import type { AgendaLayout } from "#/components/agenda/meeting-agenda-print";
@@ -87,6 +91,40 @@ export type MeetingToolbarProps = {
 	canLineupBlast?: boolean;
 	/** Opens the route's lineup blast sheet; the draft happens there. */
 	onLineupBlast?: () => void;
+	/**
+	 * The meeting-setup entries. Each flag is the route's `viewer.<flag>` AS
+	 * IS, and each dialog is the route's: this component renders the entry and
+	 * calls the handler, it decides nothing. Optional with a closed default,
+	 * like Cancel: a dropped prop hides the entry rather than showing one the
+	 * viewer may not use, and `meeting-setup-wiring.guard.test.ts` pins the
+	 * route's wiring.
+	 *
+	 * Every one of them is an item in the Manage menu, for every audience:
+	 * there is no standalone button for the narrower edit rights. The Toastmaster
+	 * (and any officer who is not an admin) already has a Manage menu, because
+	 * `canLineupBlast` is true for them (`mayDraftLineupBlast`), so a button
+	 * beside it would be a fifth top-level control; a Grammarian with no other
+	 * right gets the menu with Edit Word of the Day in it.
+	 *
+	 * `canEditMeta` is `viewer.canEditMeetingMeta`: an officer or the meeting's
+	 * Toastmaster.
+	 */
+	canEditMeta?: boolean;
+	onEditMeta?: () => void;
+	/** `viewer.canEditWod`: the pure Grammarian's affordance (an admin or the
+	 *  Toastmaster edits the Word of the Day through Edit meeting). */
+	canEditWod?: boolean;
+	onEditWod?: () => void;
+	/** `viewer.canManage`: reshaping a meeting sits with reschedule and cancel,
+	 *  not with the agenda-content edits the Toastmaster is granted. */
+	canChangeType?: boolean;
+	onChangeType?: () => void;
+	/** Where "Edit agenda" goes, or null/absent to hide it. The route passes
+	 *  params only when `viewer.canManage && meeting.templateId`: the editor
+	 *  redirects a meeting with no template straight back, so the entry would
+	 *  be a dead end. The ids are the meeting row's own, as the link has
+	 *  always used. */
+	editAgendaParams?: { clubId: string; meetingId: string } | null;
 };
 
 /**
@@ -115,8 +153,14 @@ export function stripIsPrimary({
  * The meeting view's toolbar (#541 D2): at most four top-level things —
  * a phase-driven primary (today → Present, completed → Minutes anchor,
  * upcoming → none), the share chip, the Print & export menu, and one
- * "Manage" menu holding the officer extras and Lineup blast (#1307). Pure component so the phase × persona matrix is testable in
- * jsdom; the route only wires props and owns the mutation handlers.
+ * "Manage" menu holding the officer extras and Lineup blast (#1307). The
+ * meeting-setup entries (Edit meeting, Edit Word of the Day, Change meeting
+ * type, Edit agenda) lead that menu for every audience: a person with a narrower
+ * edit right (the Toastmaster's Edit meeting, the Grammarian's Edit Word of the
+ * Day) gets the menu with their one entry in it, never a button beside it, so
+ * the row stays at four. Pure component so the phase × persona matrix is
+ * testable in jsdom; the route only wires props and owns the mutation handlers
+ * and the dialogs.
  */
 export function MeetingToolbar({
 	phase,
@@ -147,6 +191,13 @@ export function MeetingToolbar({
 	busyAction,
 	canLineupBlast = false,
 	onLineupBlast,
+	canEditMeta = false,
+	onEditMeta,
+	canEditWod = false,
+	onEditWod,
+	canChangeType = false,
+	onChangeType,
+	editAgendaParams = null,
 }: MeetingToolbarProps) {
 	// Spec D2 primary matrix: guests never get a primary; members get Present
 	// on meeting day; only officers get the completed-phase Minutes primary.
@@ -175,7 +226,14 @@ export function MeetingToolbar({
 	// meeting-toolbar.test.tsx (trigger renders iff the menu has an item) fails
 	// if it is missed.
 	const showReopen = canManage && locked;
-	const showManage = canEdit || canLineupBlast || showReopen;
+	// The setup entries (the route reads each gate off its `viewer`, which a
+	// locked or cancelled meeting zeroes, so none shows there). Each is a Manage
+	// item for whoever holds it: the Toastmaster's Edit meeting and the
+	// Grammarian's Edit Word of the Day are not covered by `canEdit`, so each is
+	// a term here, and `showSetup` is a term of `showManage`.
+	const showSetup =
+		canEditMeta || canEditWod || canChangeType || editAgendaParams !== null;
+	const showManage = canEdit || canLineupBlast || showReopen || showSetup;
 	// The trigger spins only for a write that lives in this menu. Restore is the
 	// cancelled banner's button, so it never makes Manage busy; an absent
 	// `busyAction` keeps the old rule (every busy control spins), as `spins` does.
@@ -252,6 +310,47 @@ export function MeetingToolbar({
 						</Button>
 					</DropdownMenuTrigger>
 					<DropdownMenuContent align="start">
+						{/* Meeting setup first, lifecycle after. Each opens a dialog the
+						    route owns, except Edit agenda, which is the editor page. */}
+						{canEditMeta ? (
+							<DropdownMenuItem onSelect={() => onEditMeta?.()}>
+								<Pencil />
+								Edit meeting
+							</DropdownMenuItem>
+						) : null}
+						{canEditWod ? (
+							<DropdownMenuItem onSelect={() => onEditWod?.()}>
+								<Sparkles />
+								Edit Word of the Day
+							</DropdownMenuItem>
+						) : null}
+						{canChangeType ? (
+							<DropdownMenuItem onSelect={() => onChangeType?.()}>
+								<LayoutTemplate />
+								Change meeting type
+							</DropdownMenuItem>
+						) : null}
+						{editAgendaParams ? (
+							<DropdownMenuItem asChild>
+								{/* `text-inherit` is NOT decoration: a bare anchor is painted
+								    by styles.css's `@layer base` link rule, so a menu item that
+								    is an anchor would read teal beside its button-shaped peers.
+								    A utility wins by layer order, which is the one sanctioned
+								    fix (CODING_STANDARDS.md, the layered text-link entry); never
+								    a `:not()` arm or `!important`. */}
+								<Link
+									to="/club/$clubId/meeting/$meetingId/agenda/edit"
+									params={editAgendaParams}
+									className="text-inherit"
+								>
+									<FilePenLine />
+									Edit agenda
+								</Link>
+							</DropdownMenuItem>
+						) : null}
+						{showSetup && (canEdit || canLineupBlast || showReopen) ? (
+							<DropdownMenuSeparator />
+						) : null}
 						{/* Promote (#931): admin only — `canManage` is the effective-admin
 						    answer, the same rule `requireClubRole(…, ["admin"])` states on
 						    the server. Drafts only; nothing is sent from here. */}

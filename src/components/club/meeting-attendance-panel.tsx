@@ -65,13 +65,16 @@ const RUNG_LABELS: Record<PlanStatus, string> = {
  *  with its rationale.
  *
  *  The width is what forces it, and the numbers are measured, so do not "fix"
- *  this by stacking the two: the plan row's trigger is `w-36` (144px) below `md`
- *  and `w-44` (176px) from `md` up. From `md` it holds the widest visible label,
- *  `"Coming · assumed"` (measured below); `"Coming · assumed · asked"` does not
- *  fit, and widening the track spends ~50px of a ~292px rail saying twice what
- *  "asked" already implies (nobody answered).
+ *  this by stacking the two: the plan row's trigger is `w-36` (144px) and
+ *  `@md:w-44` (176px) once the list is 28rem wide. That is the PANEL's width,
+ *  not the viewport's: the `lg` rail is 340px, narrower than a phone, and keyed
+ *  to the viewport it got the widest track and left the name ~18px. At 28rem it
+ *  holds the widest visible label, `"Coming · assumed"` (measured below);
+ *  `"Coming · assumed · asked"` does not fit, and widening the track spends
+ *  ~50px of a ~292px rail saying twice what "asked" already implies (nobody
+ *  answered).
  *
- *  BELOW `md` only " · assumed" is hidden (CSS, `hidden md:inline`). Measured
+ *  Under 28rem only " · assumed" is hidden (CSS, `hidden @md:inline`). Measured
  *  with the real webfonts, "Coming · assumed" is 119.85px Manrope + 42px of
  *  button chrome, and 172.16px in the DejaVu fallback, so it cannot fit 144px.
  *  "Coming · asked" is 98.92px Manrope (101.51px system-ui) + 42 = 140.9px /
@@ -472,8 +475,10 @@ function AttendanceRow({
 							 *    worst intrinsic width            130.16 + 42 = 172.16px
 							 *
 							 *  176px clears that by 3.8px and clears the shipped Manrope by 14.1px.
-							 *  That full label only shows from `md`. Below it the track is `w-36`
-							 *  (144px, the roll row's) and " · assumed" is hidden, so the widest
+							 *  That full label only shows once the list is 28rem wide (`@md`, a
+							 *  container query on the `<ul>`: the rail and a phone never reach it, a
+							 *  stacked tablet panel does). Under it the track is `w-36` (144px, the
+							 *  roll row's) and " · assumed" is hidden, so the widest
 							 *  visible label is "Coming · asked": 98.92px Manrope (101.51px
 							 *  system-ui) + 42 = 140.9px / 143.5px, which fits. Only the DejaVu
 							 *  fallback (107.97 + 42 = 149.97px) overflows, by ~6px into the gap,
@@ -481,16 +486,16 @@ function AttendanceRow({
 							 *  blocked); accepted, since hiding "asked" would make the "Asked"
 							 *  menu item look like a no-op. ("Not coming" carries no qualifier and
 							 *  is under 144px.)
-							 *  On a line the phone track costs 144 + the 12px `gap-3` + the 32px
+							 *  On a line the narrow track costs 144 + the 12px `gap-3` + the 32px
 							 *  contact-menu icon = 188px, leaving the identity (`min-w-0`,
-							 *  truncating) the rest of the row; the 375px case in
-							 *  `roll-row-geometry.test.ts` holds that. */}
+							 *  truncating) the rest of the row; the rail and phone cases in
+							 *  `roll-row-geometry.test.ts` hold that. */}
 							<Button
 								variant="outline"
 								size="sm"
 								disabled={locked || pending}
 								className={cn(
-									"w-36 justify-between md:w-44",
+									"w-36 justify-between @md:w-44",
 									m.assumed &&
 										"text-muted-foreground hover:text-muted-foreground",
 								)}
@@ -521,7 +526,7 @@ function AttendanceRow({
 										<span
 											className={
 												qualifier === ASSUMED_WORD
-													? "hidden md:inline"
+													? "hidden @md:inline"
 													: undefined
 											}
 										>
@@ -733,14 +738,14 @@ function RollChip({
 			: "the plan suggests";
 		const suggestionAnnouncement = `${row.name} status: not recorded — ${source} ${ROLL_LABELS[suggestion]}. Tap to record it.`;
 		return (
-			// The SAME `w-36 md:w-44` track a recorded row's trigger fills, so the
+			// The SAME `w-36 @md:w-44` track a recorded row's trigger fills, so the
 			// two roll row shapes share the rail's one right edge. Split 32px for the
 			// chevron trigger, 4px of `gap-1`, and `flex-1` for the commit (108px
-			// below `md`, 140px from `md`), whose widest label ("Present?", the
+			// under 28rem, 140px from it), whose widest label ("Present?", the
 			// widest of the two suggestions) needs well under either. Sizing the pair
 			// inside the track rather than widening it keeps the contact menu to its
 			// right from moving.
-			<div className="flex w-36 items-center gap-1 md:w-44">
+			<div className="flex w-36 items-center gap-1 @md:w-44">
 				<Button
 					variant="outline"
 					size="sm"
@@ -798,14 +803,14 @@ function RollChip({
 			 *  formed a ragged edge. Roll mode had no track at all: the chip was a
 			 *  direct child of a `flex flex-col` `<li>` and stretched the full width,
 			 *  so the rail's one right edge held for the plan rows and not for these.
-			 *  `w-36 md:w-44` is the SAME track plan mode's trigger uses: plan mode
-			 *  hides its "· assumed" qualifier below `md`, so its widest PHONE label is
-			 *  "Coming · asked" (~141px), which fits 144px too, and from `md` both modes
-			 *  share the 176px track. */}
+			 *  `w-36 @md:w-44` is the SAME track plan mode's trigger uses: plan mode
+			 *  hides its "· assumed" qualifier under 28rem, so its widest narrow label
+			 *  is "Coming · asked" (~141px), which fits 144px too, and from 28rem both
+			 *  modes share the 176px track. */}
 			<Button
 				variant="outline"
 				size="sm"
-				className="w-36 justify-between md:w-44"
+				className="w-36 justify-between @md:w-44"
 				disabled={disabled}
 			>
 				<span className="sr-only">{recordedAnnouncement}</span>
@@ -1335,10 +1340,11 @@ export function MeetingAttendancePanel({
 	// Below `lg` the card is a normal block in the page flow and none of it
 	// applies: the page scrolls, so a scroller here would be a box inside a box.
 	// The `lg:` prefixes are the coupling to that one caller, which is also the
-	// only caller.
+	// only caller. `lg:px-4` is one of them: the rail is 340px (384px at `xl`),
+	// so its card gives the row 16px back on each side instead of the default 24.
 	return (
 		<Card className="lg:min-h-0 lg:flex-1">
-			<CardHeader className="shrink-0">
+			<CardHeader className="shrink-0 lg:px-4">
 				<div className="flex items-center justify-between gap-2">
 					<div className="min-w-0">
 						<CardTitle>{roll ? "Attendance" : "Planned attendance"}</CardTitle>
@@ -1387,7 +1393,7 @@ export function MeetingAttendancePanel({
 			 *  merely CSS-hidden, which would still expose every member's name to a
 			 *  screen reader (and make the collapse untestable). */}
 			{showRows ? (
-				<CardContent className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain">
+				<CardContent className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain lg:px-4">
 					{/* A LIST, not forty sibling divs: without it an AT user gets no set
 					 *  size and no position within it, on the one surface whose job is
 					 *  "how many of us are there and where am I in the chase".
@@ -1399,10 +1405,13 @@ export function MeetingAttendancePanel({
 					 *  list at all, losing the set size above at exactly the place it was
 					 *  added to help. Both suppressions below are that same point: the
 					 *  role is redundant to a STATIC reader and load-bearing to a real
-					 *  one. */}
+					 *  one.
+					 *
+					 *  `@container` is the other job: this list's inline size IS every
+					 *  row's, so it is what the status track's `@md:` classes measure. */}
 					{/* biome-ignore lint/a11y/noRedundantRoles: not redundant in practice — preflight's `list-style: none` makes WebKit drop the implicit role */}
 					{/* biome-ignore lint/a11y/useSemanticElements: this already IS a <ul>; the rule misfires when the explicit role matches the element */}
-					<ul role="list">
+					<ul role="list" className="@container">
 						{roll
 							? (rollPanel?.rows ?? []).map((row) => (
 									<RollAttendanceRow

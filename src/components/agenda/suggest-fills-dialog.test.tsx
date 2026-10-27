@@ -400,10 +400,6 @@ describe("MeetingAgenda: who sees Suggest fills (#58)", () => {
 						status: "scheduled",
 					} as unknown as MeetingAgendaProps["meeting"]
 				}
-				templateKey={null}
-				timezone="UTC"
-				selfMemberId="me"
-				onMetaSaved={() => {}}
 				contactedMemberIds={[]}
 			/>,
 		);
@@ -500,10 +496,6 @@ describe("MeetingAgenda: who sees Suggest fills (#58)", () => {
 							status: "scheduled",
 						} as unknown as MeetingAgendaProps["meeting"]
 					}
-					templateKey={null}
-					timezone="UTC"
-					selfMemberId="me"
-					onMetaSaved={() => {}}
 					contactedMemberIds={[]}
 				/>
 			);

@@ -531,7 +531,13 @@ a self/TMOD caller may clear, `CLEARABLE_ASK` (`reached_out`) is what an officer
 member clears an ANSWER; an officer clears the ASK; neither may erase the other's. So a plain
 member and a
 self-asserted Toastmaster still cannot erase an officer's `reached_out` — which deleting a
-`meeting_outreach` row used to require an admin to do — and an officer can no longer erase a reply.
+`meeting_outreach` row used to require an admin to do — and an officer can no longer erase a reply
+on ANOTHER member's row. The one exception is an officer's OWN row: `clearFloor` (which
+`clearPlannedAttendance` calls with the resolved arm and actor) lets them clear their own answer as
+well as the ask, because on the officer arm `actorMemberId` is the SESSION's own `membership.id`,
+never the caller's claimed id. That trust is what makes the self test safe, and it is pinned both
+as source text and by a behavioural test that runs `resolveActor` with a session whose member
+differs from the claim.
 
 **Since #762 there is a THIRD write mode, and "the two floors" above now names only the clear
 pair.** `setPlanStatus`'s `onlyIfAbsent` is the fill-blank write ADR-0026 gives a caller whose
@@ -566,7 +572,10 @@ officers needed that power; a one-tap menu item was wired to a delete whose floo
 omitting a parameter looked sanctioned. Correcting a wrong answer is the SET path, where
 `demoteFrom` deliberately leaves an officer's deliberate pick unfloored. The accepted trade-off is
 that an answered row can no longer be returned to "no answer" — same shape as roll mode's
-clear-to-unmarked gap; an officer who wants a row to stop saying "coming" picks "Not coming".
+clear-to-unmarked gap; an officer who wants a row to stop saying "coming" picks "Not coming". That
+holds for ANOTHER member's row. An officer clearing their OWN answer is allowed, through
+`clearFloor`, since the actor there is the session's own membership: the personal strip's "undo"
+used to delete nothing for an officer and revert with no error.
 
 Both `demoteFrom` and `onlyFrom` are `setWhere`/`WHERE` predicates rather than a
 read-then-write, so they are also the de-dup and race fix for `markComingOnSelfClaim`.
