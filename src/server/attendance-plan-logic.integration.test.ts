@@ -1714,6 +1714,23 @@ describe.skipIf(!hasTestDb)("the Toastmaster's clear (#573 follow-up)", () => {
 	// The claim never decides who the actor is.
 	// ------------------------------------------------------------------------
 
+	// protects=the row a clear deletes is the SUBJECT's, whatever actor the request claims, and a third member's answer is never touched; fails_when=the seam hands the claimed id to the delete in place of the subject (a session caller then removes a third member's answer and keeps their own); no_claim=the handler's own binding (the guard test)
+	it.each([
+		["the Toastmaster", "tmod"],
+		["a plain member", "member"],
+	] as const)("deletes the SUBJECT's own row, not the claimed member's, for %s", async (_label, who) => {
+		const subject = who === "tmod" ? tmodMemberId : club.memberId;
+		await seedRow(subject, "not_coming");
+		await seedRow(club.adminMemberId, "not_coming");
+		sessionUserId = who === "tmod" ? tmodUserId : club.memberUserId;
+
+		const res = await clearAs(subject, club.adminMemberId);
+
+		expect(res.cleared).toBe(true);
+		expect(await rowOf(subject)).toBe(null);
+		expect(await rowOf(club.adminMemberId)).toBe("not_coming");
+	});
+
 	// protects=a plain signed-in member who claims the Toastmaster's published id on another member's row is refused and the row stays; fails_when=the claim is believed over the session, or the Toastmaster arm admits a claimed id; no_claim=none beyond protects
 	it("REFUSES a plain member who CLAIMS this meeting's Toastmaster id", async () => {
 		await seedRow(club.adminMemberId, "not_coming");

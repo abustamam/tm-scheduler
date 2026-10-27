@@ -1317,6 +1317,29 @@ describe.skipIf(!hasTestDb)(
 			expect(await statusOf(subjectId)).toEqual(["not_coming"]);
 		});
 
+		// protects=the row a clear deletes is the SUBJECT's, whatever actor the request claims, and a third member's answer is never touched; fails_when=the seam hands the claimed id to the delete in place of the subject (a session caller then removes a third member's answer and keeps their own); no_claim=the handler's own binding (the guard test)
+		it.each([
+			["a member clearing their own row", "member"],
+			["an officer clearing another member's decline", "officer"],
+		] as const)("deletes the SUBJECT's row, not the claimed member's, for %s", async (_label, who) => {
+			const third = await addSignedInMember(seed.clubId, "Third Member");
+			extraUserIds.push(third.userId);
+			await setPlanStatus(testDb, {
+				memberId: third.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				status: "not_coming",
+				actorMemberId: third.memberId,
+			});
+			sessionUserId = who === "member" ? seed.memberUserId : seed.adminUserId;
+
+			const res = await clearAvailabilityAs(seed, subjectId, third.memberId);
+
+			expect(res.cleared).toBe(true);
+			expect(await statusOf(subjectId)).toEqual([]);
+			expect(await statusOf(third.memberId)).toEqual(["not_coming"]);
+		});
+
 		// protects=a clear with NO session is refused whatever it claims, and the row stays; fails_when=the seam's proof check is removed (the asserted self arm admits a claim naming the subject); no_claim=requireSessionActor in the handler (the next block calls the handler)
 		it.each([
 			["claims the subject", true],
