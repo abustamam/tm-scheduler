@@ -222,6 +222,9 @@ describe("the personal page's link INTO the stopwatch (#729/#730)", () => {
 		expect(rawBody).not.toContain("me_/timer");
 	});
 
+	// protects=the Timer's timing duty can be ticked; fails_when=the shared
+	// helper stops passing the meeting-scoped hasTiming, or /me stops using it;
+	// no_claim=a timing is actually recorded.
 	it("passes hasTiming into the duty context", () => {
 		// Without this the `timing` duty's `done` is permanently false, which is
 		// precisely the outcome `role-duties.ts` forbids and the reason #729
@@ -229,7 +232,12 @@ describe("the personal page's link INTO the stopwatch (#729/#730)", () => {
 		// `FIELD_BY_DUTY` entry is a typecheck failure over in
 		// `role-duties.test.ts`; a missing PASS-THROUGH here is not, so it needs
 		// its own assertion.
-		expect(body).toContain("hasTiming: view.meeting.hasTiming");
+		// The context is built in the helper both `/me` and the meeting page's
+		// card share (#1376); `/me` must go through it.
+		expect(readSource("src/components/club/duty-context.ts")).toContain(
+			"hasTiming: view.meeting.hasTiming",
+		);
+		expect(body).toContain("buildDutyContext(view, role)");
 	});
 
 	it("does NOT close the checklist when the answer window closes", () => {
@@ -277,13 +285,24 @@ describe("the personal page's link INTO the stopwatch (#729/#730)", () => {
 		expect(section).not.toContain("writesClosed");
 	});
 
+	// protects=speechTitle per slot, hasTiming per meeting; fails_when=either is
+	// read at the other's scope in the helper or /me inlines its own context;
+	// no_claim=the duty ticks render correctly.
 	it("keeps the meeting-scoped and slot-scoped fields distinct", () => {
 		// `speechTitle` is per-SLOT (a member can hold two speaker slots and one
 		// title must not tick both); `hasTiming` is per-MEETING, because a timing
 		// is recorded against a SPEAKER's slot and never against the Timer's own.
 		// Reading either at the other's scope is a silently wrong tick.
-		expect(body).toContain("speechTitle: role.speechTitle");
+		const rawCtx = readFileSync(
+			resolve(ROOT, "src/components/club/duty-context.ts"),
+			"utf8",
+		);
+		expect(readSource("src/components/club/duty-context.ts")).toContain(
+			"speechTitle: role.speechTitle",
+		);
+		expect(rawCtx).not.toContain("hasTiming: role.");
 		expect(rawBody).not.toContain("hasTiming: role.");
+		expect(rawBody).not.toContain("speechTitle:");
 	});
 });
 

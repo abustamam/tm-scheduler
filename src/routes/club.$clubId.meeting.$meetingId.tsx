@@ -48,6 +48,7 @@ import {
 	MeetingToolbar,
 	stripIsPrimary,
 } from "#/components/club/meeting-toolbar";
+import { MeetingYourJobs } from "#/components/club/meeting-your-jobs";
 import { OpenActionItems } from "#/components/club/open-action-items";
 import { TableTopicsCapture } from "#/components/club/table-topics-capture";
 import { VoteCounterPanel } from "#/components/club/vote-counter-panel";
@@ -2188,6 +2189,14 @@ function MeetingView() {
 					canToggleAvailability={viewer.canToggleAvailability}
 					onSetStatus={setMyStatus}
 					primary={stripPrimary}
+				/>
+				{/* #1376. Reads the page's resolved identity, never `?as=`. */}
+				<MeetingYourJobs
+					clubId={clubId}
+					clubUuid={clubUuid}
+					meetingKey={urlKey}
+					memberId={myId}
+					source={source}
 				/>
 				{/* The strip derives identity from `member !== null`; the TOOLBAR
 				    still takes an explicit hasIdentity, because its gate is the

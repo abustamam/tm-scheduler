@@ -534,7 +534,9 @@ export function MeetingAgenda({
 								return (
 									<li
 										key={slot.id}
-										className="rounded-xl border bg-card p-4 shadow-sm"
+										// Anchor for the meeting page's "Your jobs" card (#1376).
+										id={`slot-${slot.id}`}
+										className="scroll-mt-28 rounded-xl border bg-card p-4 shadow-sm"
 									>
 										<div className="flex items-start justify-between gap-3">
 											{/* The flag sits OUTSIDE (below) the claim button, in a wrapper

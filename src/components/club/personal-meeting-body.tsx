@@ -123,6 +123,8 @@ import {
 import { setPlannedAttendance } from "#/server/attendance-plan";
 import { markUnavailableReleasing } from "#/server/availability";
 import type { PersonalMeetingView } from "#/server/personal-meeting";
+import { buildDutyContext } from "./duty-context";
+import { DUTY_ROW, DutyMark, dutyLabelClass } from "./duty-row";
 import { guideOpenState, RoleGuideSections } from "./role-guide-sections";
 
 /** The scannable stamp above a heading — the club shell header's own recipe,
@@ -466,51 +468,15 @@ export function PersonalMeetingBody({
 								<ul className="mt-2 space-y-1">
 									{duties.length > 0 ? (
 										duties.map((duty) => {
-											const done = duty.done({
-												theme: view.meeting.theme,
-												wordOfTheDay: view.meeting.wordOfTheDay,
-												tableTopicsNotes: view.meeting.tableTopicsNotes,
-												// Per-SLOT, never per-member: a member can hold two
-												// speaker slots and one title must not tick both.
-												speechTitle: role.speechTitle,
-												// MEETING-scoped, unlike the line above, and the seam's
-												// own docblock says why: a timing is recorded against a
-												// SPEAKER's slot, never against the Timer's, so a
-												// per-slot answer would be false for the Timer forever
-												// — the permanently-unticked box `role-duties.ts`
-												// forbids. Passing it is not optional bookkeeping: the
-												// tick is the receipt, and without this the duty lands
-												// with a `done` that can never be true (#730).
-												hasTiming: view.meeting.hasTiming,
-											});
+											const done = duty.done(buildDutyContext(view, role));
 											return (
 												<li key={duty.id}>
 													{/* `duty.href` as given — the duty registry owns
 													    where a duty is done, and #666 is moving those
 													    targets. Never hardcode one here. */}
 													<Link to={duty.href(target)} className={DUTY_ROW}>
-														{done ? (
-															<CheckCircle2
-																aria-hidden
-																className="size-4 shrink-0 text-success"
-															/>
-														) : (
-															<Circle
-																aria-hidden
-																className="size-4 shrink-0 text-muted-foreground"
-															/>
-														)}
-														{/* The icons are aria-hidden, so without this the
-														    done/not-done state — the whole point of a
-														    checklist — is inaudible to a screen reader. */}
-														<span className="sr-only">
-															{done ? "Done: " : "To do: "}
-														</span>
-														<span
-															className={
-																done ? "text-muted-foreground line-through" : ""
-															}
-														>
+														<DutyMark done={done} />
+														<span className={dutyLabelClass(done)}>
 															{duty.label}
 														</span>
 													</Link>
@@ -633,15 +599,6 @@ export function PersonalMeetingBody({
 		</>
 	);
 }
-
-/**
- * One duty row. `min-h-11` + the padding is the whole point: these were bare
- * `text-sm` links at roughly a 20px target, and they are the navigation into
- * the editors where the duty actually gets done. The negative margin lets the
- * target reach the card's padding edge without the label moving.
- */
-const DUTY_ROW =
-	"-mx-2 flex min-h-11 items-center gap-2 rounded-md px-2 py-2 text-sm text-primary hover:underline";
 
 /**
  * The in-button pending state (`assign-slot-sheet.tsx`'s text-plus-spinner
