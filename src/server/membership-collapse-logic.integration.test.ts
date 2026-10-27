@@ -211,7 +211,8 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			.select()
 			.from(members)
 			.where(eq(members.id, keeperId));
-		expect(keeper?.clubRole).toBe("admin"); // higher of the two wins
+		// Admin only from an ACTIVE row (#1340): the inactive admin does not promote.
+		expect(keeper?.clubRole).toBe("member");
 		expect(keeper?.status).toBe("active"); // active if either is active
 		expect(keeper?.joinedAt?.getTime()).toBe(older.getTime()); // earliest known
 	});

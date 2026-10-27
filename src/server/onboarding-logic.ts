@@ -157,7 +157,9 @@ export async function listClubsForConsole(): Promise<ConsoleClubList> {
 		})
 		.from(members)
 		.innerJoin(people, eq(people.id, members.personId))
-		.where(eq(members.clubRole, "admin"))
+		// Active only (#1340), like `firstAdminOf`: a former row's stored role
+		// grants nothing.
+		.where(and(eq(members.clubRole, "admin"), eq(members.status, "active")))
 		.orderBy(asc(members.clubId), asc(members.createdAt), asc(members.id));
 	const firstAdminByClub = new Map<string, ConsoleAdmin>();
 	for (const row of adminRows) {

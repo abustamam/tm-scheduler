@@ -821,19 +821,30 @@ type SetRoleInput = z.infer<typeof setRoleSchema> & RosterActor;
  * member_edit with the role before/after.
  */
 export async function applySetMemberRole(input: SetRoleInput) {
-	const [current] = await db
-		.select()
-		.from(members)
-		.where(
-			and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
-		);
-	if (!current) throw new Error("Member not found.");
-	// Idempotent: nothing changed → nothing to write or log.
-	if (current.clubRole === input.clubRole) {
-		return { ok: true as const, clubRole: current.clubRole };
-	}
-	const demoting = current.clubRole === "admin" && input.clubRole === "member";
-	await db.transaction(async (tx) => {
+	return db.transaction(async (tx) => {
+		// Read under the row lock (#1340): an end-membership racing this change
+		// cannot be overwritten by a promotion computed from a stale read.
+		const [current] = await tx
+			.select()
+			.from(members)
+			.where(
+				and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
+			)
+			.for("update");
+		if (!current) throw new Error("Member not found.");
+		// A former member holds no role (#1340): ending one writes `member`, and
+		// reactivating restores `member`; a role is set on an active or inactive row.
+		if (current.status === "former") {
+			throw new Error(
+				"A former member holds no club role — reactivate them first.",
+			);
+		}
+		// Idempotent: nothing changed → nothing to write or log.
+		if (current.clubRole === input.clubRole) {
+			return { ok: true as const, clubRole: current.clubRole };
+		}
+		const demoting =
+			current.clubRole === "admin" && input.clubRole === "member";
 		// Guardrail (#187): a demote can lower the active-admin count (a promote
 		// only raises it). An INACTIVE admin isn't counted, so a demote can only
 		// strand the club when the target is currently an active admin.
@@ -860,8 +871,8 @@ export async function applySetMemberRole(input: SetRoleInput) {
 				after: { clubRole: input.clubRole },
 			},
 		});
+		return { ok: true as const, clubRole: input.clubRole };
 	});
-	return { ok: true as const, clubRole: input.clubRole };
 }
 
 export const mergeSchema = z.object({

@@ -305,6 +305,49 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		expect(detail.firstAdmin?.name).toBe("Current Admin");
 	});
 
+	// protects=the console LIST names the earliest ACTIVE admin too, never an ended founder still carrying admin (#1340);
+	// fails_when=listClubsForConsole drops its status filter;
+	// no_claim=the detail view.
+	it("the console list skips an ended founder when naming the first admin", async () => {
+		const { listClubsForConsole } = await import("#/server/onboarding-logic");
+		const res = await createClubWithAdmin({
+			clubName: "Founder Left List",
+			clubNumber: uniqueNumber(),
+			charteredAt: "2020-01-01",
+			adminName: "Ended Founder",
+			adminEmail: `founder-${randomUUID()}@test.example`,
+			timezone: DEFAULT_CLUB_TIMEZONE,
+		});
+		createdClubs.push(res.clubId);
+		const [founder] = await testDb
+			.select({ id: members.id })
+			.from(members)
+			.where(eq(members.clubId, res.clubId));
+		const [person] = await testDb
+			.insert(people)
+			.values({
+				name: "Current Admin",
+				email: `current-${randomUUID()}@test.example`,
+			})
+			.returning({ id: people.id });
+		await testDb.insert(members).values({
+			clubId: res.clubId,
+			personId: person.id,
+			name: "Current Admin",
+			clubRole: "admin",
+			status: "active",
+		});
+		await testDb
+			.update(members)
+			.set({ status: "former", endedAt: "2020-02-02" })
+			.where(eq(members.id, founder.id));
+
+		const listed = (await listClubsForConsole()).clubs.find(
+			(c) => c.clubId === res.clubId,
+		);
+		expect(listed?.firstAdmin?.name).toBe("Current Admin");
+	});
+
 	it("refuses the admin-email edit if the Person links mid-edit", async () => {
 		// The check reads `admin.userId` outside the write's transaction, so the
 		// predicate has to be in the STATEMENT too — otherwise a sign-in landing in

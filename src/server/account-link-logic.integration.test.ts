@@ -260,9 +260,9 @@ describe.skipIf(!hasTestDb)(
 		// ---------------------------------------------------------------------
 		// Any club vouches — and several may (#907)
 		//
-		// Every membership counts, whatever its status or its club's: the arm
-		// is "a club holds them", and a lapsed member is still someone a club
-		// vouched for. What used to make a second club dangerous was that it
+		// Every membership counts but a FORMER one (#1340), whatever its club's
+		// status: the arm is "a club holds them", and a lapsed (inactive) member
+		// is still someone a club vouched for; an ended one is not. What used to make a second club dangerous was that it
 		// could type its own vouch; since #907 it cannot write the address at
 		// all (`soleHoldingClub`), so the second club no longer refuses.
 		// ---------------------------------------------------------------------
