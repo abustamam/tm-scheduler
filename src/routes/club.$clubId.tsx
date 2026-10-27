@@ -143,7 +143,12 @@ function ClubShell() {
 				<span className="hidden shrink-0 text-xs text-muted-foreground min-[420px]:inline">
 					Not signed in
 				</span>
-				<Button asChild size="sm" className="shrink-0">
+				<Button
+					asChild
+					variant="outline"
+					size="sm"
+					className="h-11 shrink-0 md:h-8"
+				>
 					<Link to="/signin" search={{ redirect: here }}>
 						Sign in
 					</Link>

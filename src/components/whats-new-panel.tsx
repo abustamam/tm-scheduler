@@ -18,6 +18,7 @@ import {
 	SheetTitle,
 } from "#/components/ui/sheet";
 import { formatArchiveDate } from "#/lib/format";
+import { cn } from "#/lib/utils";
 import {
 	addToStoredSet,
 	eligibleEntries,
@@ -294,6 +295,15 @@ export function WhatsNewPublicList({
 // Header button + panel (signed in)
 // ---------------------------------------------------------------------------
 
+/** Undefined state (loading or failed) shows no dot: fail silent. */
+function sessionHasUnseen({ eligible, state }: SessionWhatsNew): boolean {
+	return hasUnseenEntries(eligible, state ? new Set(state.seenIds) : null);
+}
+
+function whatsNewLabel(unseen: boolean): string {
+	return unseen ? "What's new (new updates)" : "What's new";
+}
+
 /**
  * The sheet/seen logic behind every "What's new" trigger (the desktop header
  * button, the mobile drawer row). `available` is false outside
@@ -301,7 +311,7 @@ export function WhatsNewPublicList({
  * not among the ids they have seen; opening the panel records what it shows.
  * Render `sheet` once next to the trigger and call `openPanel` from it.
  */
-export function useWhatsNewPanel(): {
+function useWhatsNewPanel(): {
 	available: boolean;
 	unseen: boolean;
 	openPanel: () => void;
@@ -317,12 +327,8 @@ export function useWhatsNewPanel(): {
 			sheet: null,
 		};
 	}
-	const { eligible, state, markPanelSeen, clearFeature } = session;
-	// Undefined state (loading or failed) shows no dot: fail silent.
-	const unseen = hasUnseenEntries(
-		eligible,
-		state ? new Set(state.seenIds) : null,
-	);
+	const { eligible, markPanelSeen, clearFeature } = session;
+	const unseen = sessionHasUnseen(session);
 
 	function onOpenChange(next: boolean) {
 		setOpen(next);
@@ -368,10 +374,7 @@ export function useWhatsNewPanel(): {
 export function useWhatsNewUnseen(): boolean {
 	const session = useContext(SessionWhatsNewContext);
 	if (!session) return false;
-	return hasUnseenEntries(
-		session.eligible,
-		session.state ? new Set(session.state.seenIds) : null,
-	);
+	return sessionHasUnseen(session);
 }
 
 /** The dot on a What's new trigger. */
@@ -379,7 +382,10 @@ export function WhatsNewDot({ className = "" }: { className?: string }) {
 	return (
 		<span
 			data-testid="whats-new-dot"
-			className={`absolute size-2 rounded-full bg-primary ring-2 ring-surface-glass ${className}`}
+			className={cn(
+				"absolute size-2 rounded-full bg-primary ring-2 ring-surface-glass",
+				className,
+			)}
 			aria-hidden
 		/>
 	);
@@ -395,8 +401,8 @@ export function WhatsNewButton() {
 			<button
 				type="button"
 				onClick={openPanel}
-				aria-label={unseen ? "What's new (new updates)" : "What's new"}
-				className="relative flex size-9 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-surface-soft hover:text-foreground"
+				aria-label={whatsNewLabel(unseen)}
+				className="relative flex size-9 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-surface-soft hover:text-foreground outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
 			>
 				<Sparkles className="size-4" aria-hidden />
 				{unseen ? <WhatsNewDot className="top-1.5 right-1.5" /> : null}
@@ -415,8 +421,8 @@ export function WhatsNewMenuRow() {
 			<button
 				type="button"
 				onClick={openPanel}
-				aria-label={unseen ? "What's new (new updates)" : "What's new"}
-				className="relative flex w-full shrink-0 items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-semibold text-muted-foreground transition-colors hover:bg-surface-soft hover:text-foreground"
+				aria-label={whatsNewLabel(unseen)}
+				className="relative flex w-full shrink-0 items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-semibold text-muted-foreground transition-colors hover:bg-surface-soft hover:text-foreground outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
 			>
 				<Sparkles className="size-4" aria-hidden />
 				What's new

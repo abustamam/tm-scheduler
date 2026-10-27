@@ -391,7 +391,7 @@ export function AppShell({
 							type="button"
 							onClick={() => setNavOpen(true)}
 							aria-label={`Account and navigation, signed in as ${displayName}`}
-							className="shrink-0 rounded-full"
+							className="flex size-11 shrink-0 items-center justify-center rounded-full outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
 						>
 							<MemberAvatar tone="palm" initials={initials} size={36} />
 						</button>
@@ -483,7 +483,7 @@ function MobileMenuButton({ onOpen }: { onOpen: () => void }) {
 			type="button"
 			onClick={onOpen}
 			aria-label={unseen ? "Open navigation (new updates)" : "Open navigation"}
-			className="relative flex size-9 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-surface-soft hover:text-foreground"
+			className="relative flex size-11 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-surface-soft hover:text-foreground outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
 		>
 			<Menu className="size-4" aria-hidden />
 			{unseen ? <WhatsNewDot className="top-1.5 right-1.5" /> : null}
@@ -570,7 +570,7 @@ function SidebarInner({
 			<div className="flex shrink-0 items-center gap-2.5 rounded-xl border border-border bg-surface-soft p-2.5">
 				<MemberAvatar tone="palm" initials={initials} size={34} />
 				<div className="min-w-0 leading-tight">
-					<div className="text-[11px] text-muted-foreground">Signed in as</div>
+					<div className="text-xs text-muted-foreground">Signed in as</div>
 					<div className="truncate text-sm font-bold">{displayName}</div>
 					<div className="text-xs text-muted-foreground">{roleLabel}</div>
 				</div>

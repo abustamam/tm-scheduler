@@ -7,7 +7,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	cleanup,
-	configure,
 	render,
 	screen,
 	waitFor,
@@ -62,7 +61,7 @@ vi.mock("#/components/club/theme-toggle", () => ({ ThemeToggle: () => null }));
 vi.mock("#/components/ui/sonner", () => ({ Toaster: () => null }));
 
 // A loaded machine loses to the 1s default (first render + query resolve).
-configure({ asyncUtilTimeout: 5000 });
+const SLOW = { timeout: 5000 };
 
 import { AppShell, shellPropsFromContext } from "./app-shell";
 
@@ -128,9 +127,11 @@ describe("AppShell mobile app bar", () => {
 
 	it("shows the dot on the menu button while entries are unseen", async () => {
 		const { container } = renderShell();
-		const menu = await within(mobileHeader(container)).findByRole("button", {
-			name: "Open navigation (new updates)",
-		});
+		const menu = await within(mobileHeader(container)).findByRole(
+			"button",
+			{ name: "Open navigation (new updates)" },
+			SLOW,
+		);
 		expect(within(menu).getByTestId("whats-new-dot")).toBeTruthy();
 	});
 
@@ -140,12 +141,14 @@ describe("AppShell mobile app bar", () => {
 			featuresSeen: [],
 		});
 		const { container } = renderShell();
-		await waitFor(() =>
-			expect(
-				within(mobileHeader(container)).getByRole("button", {
-					name: "Open navigation",
-				}),
-			).toBeTruthy(),
+		await waitFor(
+			() =>
+				expect(
+					within(mobileHeader(container)).getByRole("button", {
+						name: "Open navigation",
+					}),
+				).toBeTruthy(),
+			SLOW,
 		);
 	});
 
@@ -155,7 +158,7 @@ describe("AppShell mobile app bar", () => {
 			name: "Account and navigation, signed in as Jane Doe",
 		});
 		await userEvent.click(avatar);
-		const drawer = await screen.findByRole("dialog");
+		const drawer = await screen.findByRole("dialog", {}, SLOW);
 		expect(within(drawer).getByText("Signed in as")).toBeTruthy();
 		expect(within(drawer).getByText("Jane Doe")).toBeTruthy();
 	});
@@ -163,15 +166,17 @@ describe("AppShell mobile app bar", () => {
 	it("the drawer's What's new row opens the sheet and marks entries seen", async () => {
 		const { container } = renderShell();
 		await userEvent.click(
-			await within(mobileHeader(container)).findByRole("button", {
-				name: "Open navigation (new updates)",
-			}),
+			await within(mobileHeader(container)).findByRole(
+				"button",
+				{ name: "Open navigation (new updates)" },
+				SLOW,
+			),
 		);
-		const drawer = await screen.findByRole("dialog");
+		const drawer = await screen.findByRole("dialog", {}, SLOW);
 		await userEvent.click(
 			within(drawer).getByRole("button", { name: /^what's new/i }),
 		);
-		await screen.findByText("Shiny thing");
+		await screen.findByText("Shiny thing", {}, SLOW);
 		expect(server.markWhatsNewSeen).toHaveBeenCalledTimes(1);
 		expect(server.markWhatsNewSeen.mock.calls[0][0].data.entryIds).toEqual([
 			"shiny",
