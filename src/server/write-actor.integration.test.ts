@@ -138,7 +138,7 @@ describe.skipIf(!hasTestDb)("resolveWriteActor (#396)", () => {
 				sessionUserId: null,
 				claimedActorMemberId: clubA.memberId,
 			}),
-		).rejects.toThrow(/inactive/i);
+		).rejects.toThrow(/not found in this club/i);
 	});
 
 	it("falls back to the name-pick when the signed-in user isn't a member here", async () => {

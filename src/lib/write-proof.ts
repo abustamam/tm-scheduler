@@ -92,10 +92,20 @@ export const NOT_ON_ROSTER_MESSAGE =
 	"Your account isn't linked to this club's roster. Ask an officer to add your email.";
 
 /**
+ * The one refusal every caller hears for a member id that is absent, in another club,
+ * `inactive` or `former` (#1341). Member ids are public on past agendas, so any
+ * difference in wording would tell a stranger whether someone's membership
+ * lapsed or ended. The text is the long-standing "Member not found in this club."
+ * on purpose: it reveals nothing about status, and existing callers and
+ * matchers are unchanged. No caller, admin included, hears a specific reason.
+ */
+export const MEMBER_NOT_ELIGIBLE_MESSAGE = "Member not found in this club.";
+
+/**
  * "Your membership here is not active."
  *
- * A THIRD refusal, because `membership_status` has exactly two values and a
- * proven-actor gate admits only `active` — so without it a lapsed member is told
+ * A THIRD refusal, because `membership_status` has three values (`active`,
+ * `inactive`, `former`) and a proven-actor gate admits only `active` — so without it a lapsed member is told
  * their account "isn't linked to this club's roster" and to ask an officer to
  * add their email. Their email IS on the roster; the remedy is reactivation, and
  * `guards.ts` already says so in its own words for the other direction ("That
@@ -109,7 +119,7 @@ export const NOT_ON_ROSTER_MESSAGE =
  * case that did nothing but drift.
  */
 export const MEMBERSHIP_INACTIVE_MESSAGE =
-	"Your membership in this club isn't active. Ask an officer to reactivate it.";
+	"Your membership in this club has lapsed or ended. Ask an officer to reactivate it.";
 
 /** True when a server write refused because the caller had no session. */
 export function isSignInRequiredError(err: unknown): boolean {

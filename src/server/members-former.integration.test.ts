@@ -21,6 +21,7 @@ import {
 	roleSlots,
 } from "#/db/schema";
 import { localDateKey } from "#/lib/meeting-url";
+import { MEMBER_NOT_ELIGIBLE_MESSAGE } from "#/lib/write-proof";
 import {
 	cleanup,
 	hasTestDb,
@@ -332,17 +333,17 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 	});
 
 	describe("the six rewritten sites exclude former", () => {
-		// protects=requireMemberInClub refuses a former member with the former copy, inactive keeps its own;
+		// protects=requireMemberInClub refuses former and inactive members with the one uniform message (#1341);
 		// fails_when=a former member can be assigned a role;
 		// no_claim=callers' own wiring of this guard.
-		it("guards: refuses former, keeps the inactive message", async () => {
+		it("guards: refuses former, one uniform message", async () => {
 			const former = await addMember("Gus Guard", "former");
 			const inactive = await addMember("Ivy Guard", "inactive");
 			await expect(requireMemberInClub(former, seed.clubId)).rejects.toThrow(
-				"That member is no longer a member of this club.",
+				MEMBER_NOT_ELIGIBLE_MESSAGE,
 			);
 			await expect(requireMemberInClub(inactive, seed.clubId)).rejects.toThrow(
-				"inactive",
+				MEMBER_NOT_ELIGIBLE_MESSAGE,
 			);
 		});
 

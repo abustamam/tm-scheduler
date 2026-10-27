@@ -282,8 +282,9 @@ export async function resolveSessionActor(input: {
 	// Three refusals, not two, because they have three different fixes. A caller
 	// with an INACTIVE membership is on this roster — telling them to ask an
 	// officer to add their email sends them to fix something that is not broken.
-	// `membership_status` has exactly two values, so `membership` being present
-	// at all here means inactive.
+	// `membership_status` has three values (active, inactive, former) and the
+	// session arm above admitted only `active`, so `membership` being present at
+	// all here means lapsed (inactive) or ended (former).
 	//
 	// Nothing about the archived club is disclosed on this arm: a non-member
 	// hears about their own membership rather than about the takedown, which is
