@@ -11,7 +11,6 @@ import {
 	getTableName,
 	gte,
 	inArray,
-	is,
 	isNotNull,
 	isNull,
 	min,
@@ -20,14 +19,9 @@ import {
 	type SQL,
 	sql,
 } from "drizzle-orm";
-import {
-	getTableConfig,
-	type PgColumn,
-	PgTable,
-	union,
-} from "drizzle-orm/pg-core";
+import { type PgColumn, type PgTable, union } from "drizzle-orm/pg-core";
 import { db } from "#/db";
-import * as dbSchema from "#/db/schema";
+import { foreignKeysToMembers } from "#/db/members-foreign-keys";
 import {
 	activityLog,
 	clubs,
@@ -3512,34 +3506,6 @@ export type UndoKeyPlan = {
 	/** The keys the delete blanks, counted into the `member_remove` record. */
 	blanks: { key: string; table: PgTable; column: PgColumn }[];
 };
-
-/** Every foreign key to `members.id`, read off the drizzle schema. */
-function foreignKeysToMembers() {
-	const out: {
-		key: string;
-		onDelete: string | undefined;
-		table: PgTable;
-		column: PgColumn;
-	}[] = [];
-	const seen = new Set<PgTable>();
-	for (const value of Object.values(dbSchema)) {
-		if (!is(value, PgTable) || seen.has(value)) continue;
-		seen.add(value);
-		for (const fk of getTableConfig(value).foreignKeys) {
-			const ref = fk.reference();
-			if (ref.foreignTable !== members) continue;
-			for (const column of ref.columns) {
-				out.push({
-					key: `${getTableName(value)}.${column.name}`,
-					onDelete: fk.onDelete,
-					table: value,
-					column,
-				});
-			}
-		}
-	}
-	return out;
-}
 
 /**
  * The one table the undo reads about every foreign key to `members` (#1322):

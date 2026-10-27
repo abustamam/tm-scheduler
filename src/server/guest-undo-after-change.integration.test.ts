@@ -87,7 +87,10 @@ describe.skipIf(!hasTestDb)(
 			}
 		});
 
-		async function seedGuest(name: string, extra: { introducedBy?: string } = {}) {
+		async function seedGuest(
+			name: string,
+			extra: { introducedBy?: string } = {},
+		) {
 			const [g] = await testDb
 				.insert(guests)
 				.values(
@@ -280,8 +283,9 @@ describe.skipIf(!hasTestDb)(
 			it("refuses when a Person merge collapsed an older member into it", async () => {
 				// The cross-club Person merge reaches `collapseMemberships` too, and
 				// logs a person-targeted row, not a membership-targeted one.
-				const { guestId, membershipId, personId } =
-					await converted("Person Merge Keeper");
+				const { guestId, membershipId, personId } = await converted(
+					"Person Merge Keeper",
+				);
 				const older = await olderMember("Older Person");
 				await mergePeople({
 					keeperPersonId: personId,
@@ -365,7 +369,9 @@ describe.skipIf(!hasTestDb)(
 
 				const refusal = await refusalOf(guestId);
 
-				expect(refusal).toBe(UNDO_OTHER_GUEST_LINKED_MESSAGE(["Linked Second"]));
+				expect(refusal).toBe(
+					UNDO_OTHER_GUEST_LINKED_MESSAGE(["Linked Second"]),
+				);
 				expect(refusal).toContain("Linked Second");
 				await expectUntouched(guestId, membershipId);
 				// The link is exactly as it was: still joined, still pointing here.
@@ -392,7 +398,9 @@ describe.skipIf(!hasTestDb)(
 			});
 
 			it("undoes once the other guest is unlinked", async () => {
-				const { guestId, membershipId } = await converted("Converted Then Free");
+				const { guestId, membershipId } = await converted(
+					"Converted Then Free",
+				);
 				const other = await seedGuest("Linked Then Unlinked");
 				await applyLinkGuestToMember({
 					clubId: seed.clubId,
@@ -1033,18 +1041,20 @@ describe.skipIf(!hasTestDb)(
 			for (const [key, cls] of classes) {
 				switch (cls.kind) {
 					case "refuse":
-						expect(cls.check.label.length, `${key} refusal label`).toBeGreaterThan(
-							0,
-						);
+						expect(
+							cls.check.label.length,
+							`${key} refusal label`,
+						).toBeGreaterThan(0);
 						expect(cls.check.columns, key).toContain(key);
 						break;
 					case "blank":
 						expect(cls.column, key).toBeDefined();
 						break;
 					case "handled":
-						expect(cls.by.trim().length, `${key} needs a reason`).toBeGreaterThan(
-							0,
-						);
+						expect(
+							cls.by.trim().length,
+							`${key} needs a reason`,
+						).toBeGreaterThan(0);
 						break;
 					case "deferred":
 						expect(cls.issue, `${key} names its issue`).toBeGreaterThan(0);
@@ -1057,7 +1067,9 @@ describe.skipIf(!hasTestDb)(
 		it("runs every refusal the table names, and only those", () => {
 			const { classes, refusals } = undoKeyPlan();
 			const named = new Set(
-				[...classes.values()].flatMap((c) => (c.kind === "refuse" ? [c.check] : [])),
+				[...classes.values()].flatMap((c) =>
+					c.kind === "refuse" ? [c.check] : [],
+				),
 			);
 			expect(new Set(refusals)).toEqual(named);
 			expect(refusals.length, "a check runs once").toBe(named.size);
