@@ -20,6 +20,9 @@ import {
 	type MeetingAgendaActions,
 } from "#/components/agenda/meeting-agenda";
 import { MeetingAnnouncements } from "#/components/agenda/meeting-announcements";
+import { MeetingMetaDialog } from "#/components/agenda/meeting-meta-dialog";
+import { MeetingTemplateDialog } from "#/components/agenda/meeting-template-dialog";
+import { MeetingWordOfTheDayDialog } from "#/components/agenda/meeting-word-of-the-day-dialog";
 import {
 	AbsentReleaseDialog,
 	type PendingAbsent,
@@ -141,6 +144,12 @@ import {
 import { getClubLogoMeta } from "#/server/club-logo";
 import { getGuestPipeline } from "#/server/guest-pipeline";
 import { getLineupBlastAccess } from "#/server/lineup-blast";
+import {
+	applyTemplateToMeeting,
+	listTemplatesForClub,
+	type MeetingTemplateSummary,
+	previewTemplateForMeeting,
+} from "#/server/meeting-templates";
 import {
 	cancelMeeting,
 	completeMeeting,
@@ -435,6 +444,14 @@ function MeetingView() {
 	// too, when the URL carries `?notice=1` (see `doCancel`).
 	const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
 	const [noticeOpen, setNoticeOpen] = useState(false);
+	// The meeting-setup dialogs the Manage menu and the Toastmaster's / Grammarian's
+	// buttons open (they lived on the agenda until the toolbar took the entries).
+	// "Change meeting type" loads its template list lazily, on open: an officer
+	// affordance nobody else pays for.
+	const [wodOpen, setWodOpen] = useState(false);
+	const [metaOpen, setMetaOpen] = useState(false);
+	const [templateOpen, setTemplateOpen] = useState(false);
+	const [templates, setTemplates] = useState<MeetingTemplateSummary[]>([]);
 	// Ballot Counter console (#510 Task 10) — its own Table Topics edits, kept
 	// separate from `MeetingMinutes`'s offline queue: the console is reachable
 	// even when `minutes.visible` is false (a non-admin Vote Counter on a
@@ -2172,7 +2189,75 @@ function MeetingView() {
 					onCancel={() => setCancelConfirmOpen(true)}
 					canLineupBlast={canLineupBlast}
 					onLineupBlast={() => setLineupOpen(true)}
+					// Each gate is the `viewer` flag as is, not the toolbar's `canEdit`:
+					// `viewer` is built from `effectiveCanManage` and `lockedViewer`
+					// zeroes it on a completed or cancelled meeting, so these entries
+					// vanish there exactly as the agenda's buttons did.
+					canEditMeta={viewer.canEditMeetingMeta}
+					onEditMeta={() => setMetaOpen(true)}
+					canEditWod={viewer.canEditWod}
+					onEditWod={() => setWodOpen(true)}
+					canChangeType={viewer.canManage}
+					onChangeType={async () => {
+						setTemplates(
+							await listTemplatesForClub({ data: { clubId: meeting.clubId } }),
+						);
+						setTemplateOpen(true);
+					}}
+					editAgendaParams={
+						viewer.canManage && meeting.templateId
+							? { clubId: meeting.clubId, meetingId: meeting.id }
+							: null
+					}
 				/>
+				{viewer.canEditWod ? (
+					<MeetingWordOfTheDayDialog
+						open={wodOpen}
+						onOpenChange={setWodOpen}
+						meeting={meeting}
+						selfMemberId={agendaMemberId}
+						onSaved={async () => {
+							setWodOpen(false);
+							await router.invalidate();
+						}}
+					/>
+				) : null}
+				{viewer.canManage ? (
+					<MeetingTemplateDialog
+						open={templateOpen}
+						onOpenChange={setTemplateOpen}
+						currentTemplateKey={templateKey}
+						templates={templates}
+						loadPreview={(templateId) =>
+							previewTemplateForMeeting({
+								data: { meetingId: meeting.id, templateId },
+							})
+						}
+						onApply={async (templateId) => {
+							await applyTemplateToMeeting({
+								data: { meetingId: meeting.id, templateId },
+							});
+							// Re-runs the meeting loader, so the agenda re-renders in the
+							// meeting's new shape.
+							await router.invalidate();
+						}}
+					/>
+				) : null}
+				{viewer.canEditMeetingMeta ? (
+					<MeetingMetaDialog
+						open={metaOpen}
+						onOpenChange={setMetaOpen}
+						meeting={meeting}
+						timezone={timezone}
+						selfMemberId={agendaMemberId}
+						canReschedule={viewer.canManage}
+						effectiveMeetingNumber={meetingNumber}
+						onSaved={async () => {
+							setMetaOpen(false);
+							await router.invalidate();
+						}}
+					/>
+				) : null}
 				{/* Cancel confirm (#1057). It states the three things an officer
 				    needs before saying yes: roles are kept, members stop seeing the
 				    meeting, nothing is sent — and, truthfully, how long a restore
@@ -2275,7 +2360,6 @@ function MeetingView() {
 					<section id={MEETING_AGENDA_ANCHOR_ID} className="scroll-mt-28">
 						<MeetingAgenda
 							slots={slots}
-							effectiveMeetingNumber={meetingNumber}
 							viewer={viewer}
 							actions={actions}
 							roster={roster}
@@ -2291,13 +2375,7 @@ function MeetingView() {
 							// manager-only.
 							personalNudgeBase={effectiveCanManage ? nudgePersonalBase : null}
 							meeting={meeting}
-							templateKey={templateKey}
-							timezone={timezone}
 							meetingOver={over}
-							selfMemberId={agendaMemberId}
-							onMetaSaved={async () => {
-								await router.invalidate();
-							}}
 							requireIdentity={requireIdentity}
 							contactedMemberIds={contactedMemberIds}
 							onContacted={async (memberId, via) => {

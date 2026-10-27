@@ -103,11 +103,7 @@ function renderAgenda(slots: AgendaSlot[]) {
 			shareUrl="https://gavelup.app/club/downtown/meeting/2026-10-13"
 			meetingDate="Tue, Oct 13"
 			meeting={meeting}
-			templateKey={null}
-			timezone="UTC"
 			meetingOver={false}
-			selfMemberId="me"
-			onMetaSaved={() => {}}
 			contactedMemberIds={[]}
 			personalNudgeBase={{
 				origin: "https://gavelup.app",

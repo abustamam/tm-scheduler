@@ -1,12 +1,13 @@
 /**
  * The agenda-editor wiring between the meeting page and its own route
- * (#agenda-templates Phase 2, Task 9).
+ * (#agenda-templates Phase 2, Task 9). The entry is an item in the meeting
+ * toolbar's Manage menu now; it was a button at the top of the agenda.
  *
  * ## Why a source guard and not a render test
  *
  * `AgendaEditor` is covered directly through props (`agenda-editor.test.tsx`),
  * and the server fns it's wired to are covered in Tasks 6-8. What no such test
- * can see is the EXPRESSION that decides whether the "Edit agenda" button is
+ * can see is the EXPRESSION that decides whether the "Edit agenda" entry is
  * offered at all, and whether the route hands the editor the loader's own data
  * or something re-derived — the #319 shape: a well-tested component reached
  * through a wrong (or wrongly-gated) prop. Neither route can be mounted in
@@ -16,10 +17,10 @@
  *
  * Three specific regressions this pins:
  *
- * 1. The button gated on `viewer.canManage` alone. A standard (untemplated)
+ * 1. The entry gated on `viewer.canManage` alone. A standard (untemplated)
  *    meeting has no agenda to fork — `getAgendaDraft` returns null for it, and
  *    without the `meeting.templateId` half of the gate every officer would see
- *    an "Edit agenda" button that immediately redirects back to the meeting
+ *    an "Edit agenda" entry that immediately redirects back to the meeting
  *    page it came from.
  * 2. The loader NOT redirecting on a null draft — an officer would land on a
  *    page with nothing to render (or a runtime crash reading fields off
@@ -43,57 +44,73 @@
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
 
-const MEETING_AGENDA = "src/components/agenda/meeting-agenda.tsx";
+const MEETING_ROUTE = "src/routes/club.$clubId.meeting.$meetingId.tsx";
+const MEETING_TOOLBAR = "src/components/club/meeting-toolbar.tsx";
 const AGENDA_ROUTE =
 	"src/routes/club.$clubId.meeting.$meetingId_.agenda.edit.tsx";
 
-describe("meeting-agenda → agenda editor button wiring", () => {
-	const src = readSource(MEETING_AGENDA);
+// "Edit agenda" moved from a button at the top of `<MeetingAgenda>` to an item
+// in the toolbar's Manage menu. The decision stays in the ROUTE (it hands the
+// toolbar `editAgendaParams`, or null) and the toolbar only renders the link,
+// so the guard reads both halves.
+describe("meeting route + toolbar → agenda editor entry wiring", () => {
+	const route = readSource(MEETING_ROUTE);
+	const toolbar = readSource(MEETING_TOOLBAR);
 
-	it("offers the button only for a templated meeting an officer may manage", () => {
-		// Anchored on the literal `&&` and a flat `? (` — not just the presence of
-		// both tokens somewhere before a `? (`. The looser form (any characters
+	it("offers the entry only for a templated meeting an officer may manage", () => {
+		// Anchored on the literal `&&` and a flat `? {` — not just the presence of
+		// both tokens somewhere before a `?`. The looser form (any characters
 		// between the two names) passes on `||`, on `&& !meeting.templateId`, and
 		// on a nested ternary splitting the two conditions across two `?`s — all
-		// three gate the button wrong while still containing both identifiers.
-		const m = src.match(
-			/\{viewer\.canManage\s*&&\s*meeting\.templateId\s*\?\s*\(/,
+		// three gate the entry wrong while still containing both identifiers.
+		const m = route.match(
+			/editAgendaParams=\{\s*viewer\.canManage\s*&&\s*meeting\.templateId\s*\?\s*\{/,
 		);
 		expect(
 			m,
-			"the button's gate must be the single conjunction " +
-				"`viewer.canManage && meeting.templateId ? (` — not an `||`, a negation, " +
-				"or a nested ternary that only mentions both names",
+			"the entry's gate must be the single conjunction " +
+				"`viewer.canManage && meeting.templateId ? {…} : null` — not an `||`, " +
+				"a negation, or a nested ternary that only mentions both names",
 		).toBeTruthy();
 	});
 
-	it("links to the agenda route with the meeting's raw id, not a re-derived key", () => {
-		const m = src.match(
-			/<Link\s+to="\/club\/\$clubId\/meeting\/\$meetingId\/agenda\/edit"[\s\S]*?\/>/,
-		);
-		expect(m, "no Link to the agenda route found").toBeTruthy();
+	it("hands the toolbar the meeting's raw ids, not a re-derived key", () => {
+		const m = route.match(/editAgendaParams=\{[\s\S]*?\n\t+\}/);
+		expect(m, "no editAgendaParams prop found on the route").toBeTruthy();
 		const call = m?.[0] ?? "";
 		expect(
 			call,
-			`the Link must pass meetingId: meeting.id, got: ${call}`,
+			`the route must pass meetingId: meeting.id, got: ${call}`,
 		).toMatch(/meetingId:\s*meeting\.id/);
 		expect(
 			call,
-			`the Link must pass clubId: meeting.clubId, got: ${call}`,
+			`the route must pass clubId: meeting.clubId, got: ${call}`,
 		).toMatch(/clubId:\s*meeting\.clubId/);
 	});
 
-	it("wraps the Link in an asChild Button, never a bare anchor", () => {
-		// The global unlayered `a` rule in src/styles.css beats any layered
-		// Tailwind utility and repaints a bare anchor link-teal — three separate
-		// bugs already shipped from that rule. `<Button asChild>` is excluded via
-		// `:not([data-slot="button"])`; a bare `<Link>` here would not be.
-		const m = src.match(
-			/<Button[^>]*asChild[^>]*>\s*<Link\s+to="\/club\/\$clubId\/meeting\/\$meetingId\/agenda\/edit"/,
+	it("the toolbar links to the agenda route with exactly those params", () => {
+		const m = toolbar.match(
+			/<Link\s+to="\/club\/\$clubId\/meeting\/\$meetingId\/agenda\/edit"[\s\S]*?>/,
+		);
+		expect(m, "no Link to the agenda route found").toBeTruthy();
+		expect(
+			m?.[0] ?? "",
+			"the Link must take the route's `editAgendaParams` as its params",
+		).toMatch(/params=\{editAgendaParams\}/);
+	});
+
+	it("is a menu item that keeps the menu's text colour, never a bare anchor", () => {
+		// A bare anchor is repainted link-teal by the global text-link rule
+		// (three separate bugs shipped from that rule). It is LAYERED, so a
+		// component's own colour utility wins: the Link inside the menu item
+		// carries `text-inherit` and reads as its button-shaped peers do. The
+		// old `<Button asChild>` wrapper is gone with the button.
+		const m = toolbar.match(
+			/<DropdownMenuItem\s+asChild>\s*(?:\{\s*\}\s*)?<Link\s+to="\/club\/\$clubId\/meeting\/\$meetingId\/agenda\/edit"[^>]*className="[^"]*\btext-inherit\b[^"]*"/,
 		);
 		expect(
 			m,
-			"the agenda Link must be wrapped in <Button asChild>",
+			"the agenda Link must sit in <DropdownMenuItem asChild> with className text-inherit",
 		).toBeTruthy();
 	});
 });

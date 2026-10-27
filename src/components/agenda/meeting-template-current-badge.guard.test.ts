@@ -1,6 +1,11 @@
 /**
- * The "Current" badge wiring between the meeting agenda and
+ * The "Current" badge wiring between the meeting route and
  * `MeetingTemplateDialog` (#agenda-templates, Task 3 fix round 1, finding 2).
+ *
+ * The dialog used to be rendered by `<MeetingAgenda>`, which took the key as a
+ * prop. "Change meeting type" moved into the toolbar's Manage menu and the route
+ * renders the dialog itself, so the call site this guard reads is the route's;
+ * `<MeetingAgenda>` no longer has a `templateKey` prop to declare or be handed.
  *
  * ## Why a source guard and not a render test
  *
@@ -21,7 +26,7 @@
  *
  * Task 3 made `applyTemplateConversion` point a meeting at a PRIVATE
  * per-meeting copy rather than the shared template it was converted from.
- * `meeting-agenda.tsx` kept passing `currentTemplateId={meeting.templateId ??
+ * the call site kept passing `currentTemplateId={meeting.templateId ??
  * null}` into the dialog, and the dialog matched by `id` — a private copy's
  * id is fresh every conversion and never equals any `listAvailableTemplates`
  * choice's id, so after ANY conversion nothing was ever marked "Current"
@@ -43,11 +48,10 @@
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
 
-const AGENDA = "src/components/agenda/meeting-agenda.tsx";
 const ROUTE = "src/routes/club.$clubId.meeting.$meetingId.tsx";
 
-describe("meeting agenda → template dialog 'Current' badge wiring", () => {
-	const src = readSource(AGENDA);
+describe("meeting route → template dialog 'Current' badge wiring", () => {
+	const src = readSource(ROUTE);
 
 	it("passes the dialog a KEY, not the meeting's own template id", () => {
 		expect(src).toMatch(/currentTemplateKey=\{templateKey\}/);
@@ -61,15 +65,9 @@ describe("meeting agenda → template dialog 'Current' badge wiring", () => {
 		).not.toMatch(/currentTemplateId=\{meeting\.templateId/);
 	});
 
-	it("declares templateKey as its own prop, not derived from `meeting` inline", () => {
-		expect(src).toMatch(/templateKey:\s*string \| null/);
-	});
-});
-
-describe("meeting route → agenda templateKey wiring", () => {
-	const src = readSource(ROUTE);
-
-	it("threads the loader's templateKey through, not a hardcoded value", () => {
-		expect(src).toMatch(/templateKey=\{templateKey\}/);
+	it("reads templateKey from the loader's data, not derived from `meeting` inline", () => {
+		// The key is its own loader field (`loadTemplateKey`), destructured with
+		// the rest of the loader data; `meeting.templateId` is not a stand-in.
+		expect(src).toMatch(/\btemplateKey,[^}]*\} = Route\.useLoaderData\(\)/);
 	});
 });
