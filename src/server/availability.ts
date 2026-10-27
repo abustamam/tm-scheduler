@@ -118,8 +118,9 @@ const availabilitySchema = z.object({
  *
  *  And WHOSE row is the caller's question, answered in the seam
  *  (`setAvailabilityCore`): the member's own, or any member's for an officer, and
- *  nobody else's. A signed-in caller used to resolve to the unrestricted write
- *  with nothing comparing them with the subject. */
+ *  nobody else's. The seam asks it rather than relying on the grid, which renders
+ *  another member's cells only for an officer: a server fn is callable without
+ *  the grid, so the rule has to hold here. */
 export const setAvailability = createServerFn({ method: "POST" })
 	.validator((i: unknown) => availabilitySchema.parse(i))
 	.handler(async ({ data }) => {

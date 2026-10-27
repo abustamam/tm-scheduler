@@ -455,10 +455,10 @@ export async function releaseSlotsAndMarkUnavailable(
  *
  * WHOSE row it may write is {@link resolveOwnerOrOfficer}'s question, and it is
  * the same one `clearAvailabilityCore` asks: that member, or an officer, and
- * nobody else. Before it, a signed-in caller resolved to `proof: "session"` and
- * took the unrestricted write with nothing comparing them with the subject, so
- * the only thing standing between a member and another member's decline was that
- * the grid did not render the control. An asserted claim naming someone else is
+ * nobody else. The check lives in the server because the grid renders another
+ * member's cells only for an officer, and the server must not rely on that: a
+ * write arrives from whatever called the server fn, so it compares the resolved
+ * actor with the subject itself. An asserted claim naming someone else is
  * refused here too, as is this meeting's Toastmaster on another member's row.
  *
  * What an ALLOWED caller gets is unchanged: a session writes unrestricted, an
@@ -582,15 +582,14 @@ export async function clearAvailabilityCore(
  * the self and Toastmaster arms is the session's own member and a claimed id is
  * ignored, and on the officer arm it is the session's `membership.id` outright.
  *
- * EVERY arm passes a floor (#573). The officer arm used to pass none, so "No
- * answer" could destroy a reply that arrived since the panel rendered: the rail
- * does not poll, so a row can still read `Asked` while the server already holds
- * `not_coming`, and deleting that drops the member off `unavailableMembers` and
- * out of the recruit picker's warning, so they can be handed a role they said
- * they could not take. "No answer" means "make it as if they never replied", so
- * it never destroys a reply it did not mean to. Correcting a wrong answer is the
- * SET path (pick Coming / Not coming), where an officer's deliberate pick is
- * unfloored; nobody decided officers needed to erase answers.
+ * EVERY arm passes a floor (#573), the officer arm included. "No answer" means
+ * "make it as if they never replied", so it never destroys a reply it did not
+ * mean to: the rail does not poll, so a row can read `Asked` while the server
+ * already holds `not_coming`, and a delete that took that reply would drop the
+ * member off `unavailableMembers` and out of the recruit picker's warning.
+ * Correcting a wrong answer is the SET path (pick Coming / Not coming), where an
+ * officer's deliberate pick is unfloored, so this path has no reason to erase
+ * another member's answer.
  *
  * The trade-off, stated: an officer cannot return ANOTHER member's answered row
  * to "no answer" from here. They pick "Not coming" on the meeting page, or use

@@ -257,8 +257,8 @@ describe("clearAvailability: whose answer a clear may remove", () => {
 
 	it("leaves the actor resolution to the seam", () => {
 		// `requestWriteActor` answers "who do I credit", never "may this caller do
-		// this"; a resolution here, beside the seam's own, is the shape the old bug
-		// wore, and the next reader would pass ITS result on.
+		// this"; a resolution here, beside the seam's own, would be a second answer
+		// to who is calling, and the next reader would pass ITS result on.
 		expect(bodyRaw).not.toContain("requestWriteActor(");
 		expect(bodyRaw).not.toContain("resolveClearActor");
 		expect(bodyRaw).not.toContain("resolveOwnerOrOfficer(");

@@ -1411,10 +1411,10 @@ describe.skipIf(!hasTestDb)(
 );
 
 /**
- * Whose row `setAvailability` may write. It used to be unrestricted for a
- * signed-in caller: `proof: "session"` took the unrestricted write with nothing
- * comparing the caller with the subject. Now it is the member's own row, or any
- * member's for an officer, and nobody else's.
+ * Whose row `setAvailability` may write: the member's own, or any member's for an
+ * officer, and nobody else's. The seam compares the resolved actor with the
+ * subject itself, because the grid renders another member's cells only for an
+ * officer and the server must not rely on that.
  *
  * Every refusal reads the row back and asserts nothing was logged, because a
  * refusal that threw AFTER writing would still reject.
