@@ -68,6 +68,19 @@ function handlerBody(source: string, name: string): string {
 	return source.slice(start, next === -1 ? source.length : next);
 }
 
+/** One `export async function <name>(` seam, up to the next top-level export, so
+ *  an assertion about one seam cannot be satisfied by its neighbour's code. */
+function seamBody(source: string, name: string): string {
+	const start = source.indexOf(`export async function ${name}(`);
+	if (start === -1) {
+		throw new Error(
+			`${name} not found in availability-logic.ts — it was renamed or removed. Re-point this guard rather than deleting the case.`,
+		);
+	}
+	const next = source.indexOf("\nexport ", start + 1);
+	return source.slice(start, next === -1 ? source.length : next);
+}
+
 describe("the lock check's options constant (#1135)", () => {
 	it("hands `cancelled` on and nothing else", () => {
 		// The three handlers pass this constant and this guard reads only their
@@ -148,6 +161,166 @@ describe("markUnavailableReleasing subject check (#675)", () => {
 				`${later} must not run before the archive gate`,
 			).toBeGreaterThan(archive);
 		}
+	});
+});
+
+describe("setAvailability: whose row a decline may be written on", () => {
+	// The behaviour is executed in `availability.integration.test.ts` through
+	// `setAvailabilityCore`; this pins what that file cannot see, the handler's own
+	// argument list, and that the seam asks the owner-or-officer question rather
+	// than the actor ladder's alone (which admits any signed-in member on another
+	// member's row).
+	const body = handlerBody(HANDLER, "setAvailability");
+	const bodyRaw = handlerBody(HANDLER_RAW, "setAvailability");
+	const seam = seamBody(SEAM, "setAvailabilityCore");
+	const seamRaw = seamBody(SEAM_RAW, "setAvailabilityCore");
+
+	it("hands the seam the SUBJECT as memberId and the client's raw claim", () => {
+		expect(
+			body,
+			"the owner-or-officer rule compares the actor with the SUBJECT; a subject bound to the claim is always the caller's own row",
+		).toMatch(
+			/setAvailabilityCore\(db, \{\s*memberId: data\.memberId,[^}]*\bclaimedActorMemberId: data\.actorMemberId,/s,
+		);
+	});
+
+	it("never defaults that claim to the subject", () => {
+		// An asserted claim naming the subject resolves to the subject, so a
+		// `?? data.memberId` here makes the owner-or-officer comparison true for
+		// every request.
+		expect(
+			bodyRaw,
+			"`?? data.memberId` would make actor === subject for every request",
+		).not.toContain("?? data.memberId");
+	});
+
+	it("leaves the actor resolution to the seam", () => {
+		expect(bodyRaw).not.toContain("requestWriteActor(");
+		expect(bodyRaw).not.toContain("resolveOwnerOrOfficer(");
+		expect(bodyRaw).not.toContain("resolveActor(");
+	});
+
+	it("resolves owner-or-officer in the seam with the subject and the raw claim", () => {
+		expect(
+			seam,
+			"the subject check lives in resolveOwnerOrOfficer; resolveActor alone lets any signed-in member write another member's row",
+		).toMatch(
+			/await resolveOwnerOrOfficer\(\{[^}]*\bmemberId: args\.memberId,[^}]*\bclaimedActorMemberId: args\.claimedActorMemberId,/s,
+		);
+		expect(
+			seamRaw,
+			"the bare ladder admits any signed-in caller on another member's row",
+		).not.toMatch(/\bresolveActor\(/);
+	});
+});
+
+describe("clearAvailability: whose answer a clear may remove", () => {
+	// The behaviour is executed in `availability.integration.test.ts`
+	// ("clearAvailability: whose answer a clear may remove"), through
+	// `clearAvailabilityCore`, which the handler calls after its own gates. What
+	// that file cannot see is the handler's own wiring, which is what the first
+	// block pins; the second pins the seam's order, which a behavioural test only
+	// sees one deletion at a time.
+	const body = handlerBody(HANDLER, "clearAvailability");
+	const bodyRaw = handlerBody(HANDLER_RAW, "clearAvailability");
+	const seam = seamBody(SEAM, "clearAvailabilityCore");
+
+	it("hands the seam the SUBJECT as memberId and the client's raw claim", () => {
+		expect(
+			body,
+			"the ladder compares the actor with the SUBJECT; a subject bound to the claim clears the caller's own row",
+		).toContain("memberId: data.memberId,");
+		expect(body, "the seam needs the CLAIM, not a finished actor id").toContain(
+			"claimedActorMemberId: data.actorMemberId,",
+		);
+		expect(body).toContain("clearAvailabilityCore(db, {");
+	});
+
+	it("returns the seam's `cleared`, which the grid's Undo is gated on", () => {
+		expect(
+			body,
+			"the grid offers Undo only for a clear that removed something; a constant here would offer it after a clear that deleted nothing",
+		).toMatch(
+			/const \{ cleared \} = await clearAvailabilityCore\(db, \{[\s\S]*return \{ ok: true as const, cleared \};/,
+		);
+	});
+
+	it("never defaults that claim to the subject", () => {
+		// Behind the session gate a default changes no outcome, so this is defence
+		// in depth: were the gate ever lost, `?? data.memberId` would make the
+		// self-only comparison true for every request.
+		expect(
+			bodyRaw,
+			"`?? data.memberId` would make actor === subject if the session gate were ever lost",
+		).not.toContain("?? data.memberId");
+	});
+
+	it("leaves the actor resolution to the seam", () => {
+		// `requestWriteActor` answers "who do I credit", never "may this caller do
+		// this"; a resolution here, beside the seam's own, would be a second answer
+		// to who is calling, and the next reader would pass ITS result on.
+		expect(bodyRaw).not.toContain("requestWriteActor(");
+		expect(bodyRaw).not.toContain("resolveClearActor");
+		expect(bodyRaw).not.toContain("resolveOwnerOrOfficer(");
+		expect(bodyRaw).not.toContain("resolveActor(");
+	});
+
+	it("opens with the session gate, before the seam", () => {
+		const gate = body.indexOf("await requireSessionActor(");
+		expect(gate).toBeGreaterThan(-1);
+		expect(
+			body.indexOf("clearAvailabilityCore(db, {"),
+			"a write surface that deletes an answer names its session gate in its own handler, before it reaches the database",
+		).toBeGreaterThan(gate);
+	});
+
+	it("resolves owner-or-officer in the seam with the subject and the raw claim", () => {
+		expect(
+			seam,
+			"the subject check lives in resolveOwnerOrOfficer; without this call any signed-in member may clear any row",
+		).toMatch(
+			/await resolveOwnerOrOfficer\(\{[^}]*\bmemberId: args\.memberId,[^}]*\bclaimedActorMemberId: args\.claimedActorMemberId,/s,
+		);
+	});
+
+	it("refuses an unproven session between the ladder and the delete", () => {
+		const ladder = seam.indexOf("await resolveOwnerOrOfficer(");
+		const proof = seam.indexOf("assertSessionProof(resolved);");
+		const del = seam.indexOf("clearPlanStatus(");
+		expect(ladder).toBeGreaterThan(-1);
+		expect(
+			proof,
+			"an asserted caller is admitted by the ladder, so the proof check is what keeps an anonymous caller from deleting",
+		).toBeGreaterThan(ladder);
+		expect(del, "the proof check must precede the delete").toBeGreaterThan(
+			proof,
+		);
+	});
+
+	it("floors a member's own clear at their rungs and an officer's clear of another's row at a decline", () => {
+		// Pinned whole: SELF_SERVICE_RUNGS on the other-row arm would let a stale
+		// grid delete a `coming` the member gave since, and CLEARABLE_ASK on the own
+		// arm would stop an officer taking back their own answer.
+		expect(seam).toMatch(
+			/onlyFrom:\s*resolved\.actorMemberId === args\.memberId\s*\?\s*SELF_SERVICE_RUNGS\s*:\s*CLEARABLE_DECLINE/,
+		);
+	});
+
+	it("refuses another member's row unless the OFFICER arm admitted the caller", () => {
+		// Anchored inside `resolveOwnerOrOfficer`, and both halves of the condition
+		// plus the throw: the arm test alone refuses the Toastmaster's own row, the id
+		// test alone admits nobody but the subject, and a condition with no throw is
+		// not a gate.
+		const ladder = readSource(resolve(__dirname, "attendance-actor-logic.ts"));
+		const at = ladder.indexOf("export async function resolveOwnerOrOfficer");
+		expect(at, "resolveOwnerOrOfficer not found").toBeGreaterThan(-1);
+		const fn = ladder.slice(at);
+		expect(fn).toMatch(
+			/if \(\s*resolved\.via !== "officer" &&\s*resolved\.actorMemberId !== args\.memberId\s*\) \{\s*throw new Error\(SELF_ONLY_MESSAGE\);\s*\}/,
+		);
+		expect(fn, "it must run the shared ladder, not a second copy").toContain(
+			"await resolveActor(args)",
+		);
 	});
 });
 

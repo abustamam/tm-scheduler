@@ -119,6 +119,24 @@ function namedFunctionBody(source: string, name: string): string {
 }
 
 /**
+ * The `fill-blank` rows whose handler delegates the fill-blank decision to a
+ * seam in another module. The generic fill-blank case reads the SEAM's body for
+ * the proof branch and the `onlyIfAbsent: true` write mode, and the handler's
+ * only job here is to still call it.
+ *
+ * `setAvailability`'s ladder, proof fallback and write moved into
+ * `setAvailabilityCore` so `availability.integration.test.ts` can execute them;
+ * left unpointed, the generic case would read a handler that no longer holds
+ * either marker.
+ */
+const FILL_BLANK_SEAMS: Record<string, { file: string; fn: string }> = {
+	"availability.ts#setAvailability": {
+		file: "availability-logic.ts",
+		fn: "setAvailabilityCore",
+	},
+};
+
+/**
  * The `fill-blank` rows whose blank is NOT a plan rung (#765).
  *
  * The plan rows fill a blank through `setPlanStatus(…, { onlyIfAbsent: true })`
@@ -955,7 +973,17 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 			// is safe only because those cases fail when a row is missing from
 			// `DEVICE_BOUND_FILL_BLANK` / `SLOT_FILL_BLANK`.
 			if (key in DEVICE_BOUND_FILL_BLANK || key in SLOT_FILL_BLANK) continue;
-			const body = POST_FNS.get(key) ?? "";
+			let body = POST_FNS.get(key) ?? "";
+			const seam = FILL_BLANK_SEAMS[key];
+			if (seam) {
+				if (!body.includes(`${seam.fn}(`)) {
+					offenders.push(`${key} (does not call ${seam.fn})`);
+				}
+				body = namedFunctionBody(
+					readSource(resolve(SERVER, seam.file)),
+					seam.fn,
+				);
+			}
 			if (!body.includes('proof === "asserted"')) {
 				offenders.push(`${key} (never branches on the proof)`);
 			}
