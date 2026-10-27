@@ -90,6 +90,10 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+// The default 1s waitFor loses to a loaded machine (first render + query
+// resolve); the suite's own per-test budget is 15s.
+const SLOW = { timeout: 5000 };
+
 function accountLink() {
 	return screen.getByRole("link", { name: /account settings/i });
 }
@@ -97,28 +101,42 @@ function accountLink() {
 describe("sidebar New badge", () => {
 	it("shows on the destination and clears when the entry is clicked", async () => {
 		renderNav("/roster");
-		await waitFor(() => expect(accountLink().textContent).toContain("New"));
+		await waitFor(
+			() => expect(accountLink().textContent).toContain("New"),
+			SLOW,
+		);
 		expect(server.markFeatureSeen).not.toHaveBeenCalled();
 		await userEvent.click(accountLink());
 		expect(server.markFeatureSeen).toHaveBeenCalledWith({
 			data: { featureKey: "account" },
 		});
-		await waitFor(() => expect(accountLink().textContent).not.toContain("New"));
+		await waitFor(
+			() => expect(accountLink().textContent).not.toContain("New"),
+			SLOW,
+		);
 	});
 
 	it("clears on landing on the page, without a click on the entry", async () => {
 		renderNav("/account");
-		await waitFor(() =>
-			expect(server.markFeatureSeen).toHaveBeenCalledWith({
-				data: { featureKey: "account" },
-			}),
+		await waitFor(
+			() =>
+				expect(server.markFeatureSeen).toHaveBeenCalledWith({
+					data: { featureKey: "account" },
+				}),
+			SLOW,
 		);
-		await waitFor(() => expect(accountLink().textContent).not.toContain("New"));
+		await waitFor(
+			() => expect(accountLink().textContent).not.toContain("New"),
+			SLOW,
+		);
 	});
 
 	it("no badge on a destination that is not a feature key", async () => {
 		renderNav("/roster");
-		await waitFor(() => expect(server.getWhatsNewState).toHaveBeenCalled());
+		await waitFor(
+			() => expect(server.getWhatsNewState).toHaveBeenCalled(),
+			SLOW,
+		);
 		const roster = screen.getByRole("link", { name: /roster/i });
 		expect(roster.textContent).not.toContain("New");
 	});

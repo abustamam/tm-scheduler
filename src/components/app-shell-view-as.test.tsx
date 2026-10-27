@@ -47,6 +47,9 @@ vi.mock("#/components/whats-new-panel", () => ({
 	NewBadge: () => null,
 	useIsNew: () => ({ isNew: false, markSeen: vi.fn() }),
 	WhatsNewButton: () => null,
+	WhatsNewDot: () => null,
+	WhatsNewMenuRow: () => null,
+	useWhatsNewUnseen: () => false,
 	WhatsNewProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
