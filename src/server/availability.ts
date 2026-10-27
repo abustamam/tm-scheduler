@@ -181,7 +181,7 @@ export const clearAvailability = createServerFn({ method: "POST" })
 		// it resolves, which is the half vitest can execute, and it is the one that
 		// holds when the session's membership changes between the two reads.
 		await requireSessionActor({ clubId: meeting.clubId });
-		await clearAvailabilityCore(db, {
+		const { cleared } = await clearAvailabilityCore(db, {
 			// The SUBJECT is `data.memberId`, never the claim: the ladder compares the
 			// actor with it.
 			memberId: data.memberId,
@@ -194,7 +194,13 @@ export const clearAvailability = createServerFn({ method: "POST" })
 			claimedActorMemberId: data.actorMemberId,
 		});
 
-		return { ok: true as const };
+		// `cleared` is RETURNED, as `setAvailability` returns `proof`: the grid
+		// offers "Undo" (a re-decline) on this toast, and an officer's clear of
+		// another member's row removes a decline and nothing else, so a grid that
+		// still shows a decline over a newer `coming` deletes nothing. Undoing a
+		// clear that removed nothing would overwrite that answer. Additive, so a
+		// tab loaded before this deploy simply ignores it.
+		return { ok: true as const, cleared };
 	});
 
 /**

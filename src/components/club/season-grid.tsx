@@ -280,7 +280,7 @@ export function SeasonGrid({
 		const self = targetMemberId === currentMemberId;
 		setBusyMeetingId(meetingId);
 		try {
-			await clearAvailability({
+			const { cleared } = await clearAvailability({
 				data: {
 					memberId: targetMemberId,
 					actorMemberId: currentMemberId,
@@ -289,6 +289,19 @@ export function SeasonGrid({
 				},
 			});
 			await onChanged?.();
+			// UNDO ONLY FOR A CLEAR THAT REMOVED SOMETHING. An officer's clear of
+			// another member's row deletes a decline and nothing else, so a grid that
+			// still shows "declined" over an answer that has since changed deletes
+			// nothing. Offering Undo then would re-decline over that newer answer.
+			// The refresh above is what shows the person the row as it now stands.
+			if (!cleared) {
+				toast.message(
+					self
+						? "Nothing changed. Your answer changed since this page loaded."
+						: "Nothing changed. Their answer changed since this page loaded.",
+				);
+				return;
+			}
 			toast.success(
 				self ? "You're marked available." : "Marked them available.",
 				{
