@@ -3795,18 +3795,18 @@ async function membershipStatusEditedSince(
 }
 
 /**
- * The other guests in the club pointing at this membership (#1322), by name,
- * sorted: a guest LINKED to it (`applyLinkGuestToMember`) or CONVERTED onto it
- * (the reuse branch of convert). Not the guest being undone.
+ * The other guests in the club pointing at this membership (#1322), sorted: a
+ * guest LINKED to it (`applyLinkGuestToMember`) or CONVERTED onto it (the reuse
+ * branch of convert). Not the guest being undone.
  */
-async function otherGuestsOnMembership(
+async function otherGuestRowsOnMembership(
 	tx: DbOrTx,
 	clubId: string,
 	membershipId: string,
 	guestId: string,
-): Promise<string[]> {
-	const linked = await tx
-		.select({ name: guests.name })
+): Promise<{ id: string; name: string }[]> {
+	return tx
+		.select({ id: guests.id, name: guests.name })
 		.from(guests)
 		.where(
 			and(
@@ -3816,7 +3816,85 @@ async function otherGuestsOnMembership(
 			),
 		)
 		.orderBy(asc(guests.name), asc(guests.id));
-	return linked.map((g) => g.name);
+}
+
+/** `otherGuestRowsOnMembership`, by name: what the created path's refusal prints. */
+async function otherGuestsOnMembership(
+	tx: DbOrTx,
+	clubId: string,
+	membershipId: string,
+	guestId: string,
+): Promise<string[]> {
+	const others = await otherGuestRowsOnMembership(
+		tx,
+		clubId,
+		membershipId,
+		guestId,
+	);
+	return others.map((g) => g.name);
+}
+
+/**
+ * The other guests pointing at this membership that attached to it at or after
+ * `since` (#1322), by name: the reuse path's gate. A guest that pointed at the
+ * membership BEFORE the conversion coexisted with the lapse the conversion woke
+ * it from, so restoring the lapse strands nobody it did not already strand
+ * (linking refuses only a `former` member, so a guest can be linked to an
+ * `inactive` one). The created path does not ask: that membership did not exist
+ * before the conversion, so any guest on it attached after.
+ *
+ * The audit log says when a guest attached: a link writes a `member_merge`
+ * targeted at the membership and a conversion onto it a `member_add`, each with
+ * `detail.fromGuestId`. Read as two queries and a map in TypeScript, not a
+ * correlated subquery. A guest's NEWEST such row is its attachment: one that
+ * was unlinked and linked again after the conversion attached after it. A guest
+ * with no row at all (a pointer set before either writer logged this, or moved
+ * here by a merge, which leaves the row on the absorbed membership) counts as
+ * attached after, the safe side: the member is left alone. `null` for `since`
+ * counts every guest.
+ */
+async function otherGuestsAttachedSince(
+	tx: DbOrTx,
+	clubId: string,
+	membershipId: string,
+	guestId: string,
+	since: Date | null,
+): Promise<string[]> {
+	const others = await otherGuestRowsOnMembership(
+		tx,
+		clubId,
+		membershipId,
+		guestId,
+	);
+	if (others.length === 0 || since === null) return others.map((g) => g.name);
+	const rows = await tx
+		.select({
+			guestId: sql<string>`${activityLog.detail}->>'fromGuestId'`,
+			createdAt: activityLog.createdAt,
+		})
+		.from(activityLog)
+		.where(
+			and(
+				eq(activityLog.clubId, clubId),
+				inArray(activityLog.action, ["member_add", "member_merge"]),
+				eq(activityLog.targetType, "member"),
+				eq(activityLog.targetId, membershipId),
+				sql`${activityLog.detail}->>'fromGuestId' is not null`,
+			),
+		);
+	const newest = new Map<string, Date>();
+	for (const row of rows) {
+		const seen = newest.get(row.guestId);
+		if (seen === undefined || row.createdAt > seen) {
+			newest.set(row.guestId, row.createdAt);
+		}
+	}
+	return others
+		.filter((g) => {
+			const attached = newest.get(g.id);
+			return attached === undefined || attached >= since;
+		})
+		.map((g) => g.name);
 }
 
 /**
@@ -3874,11 +3952,13 @@ async function otherGuestsOnMembership(
  * (named in the `member_remove` record under `blanked`), handled by the undo, or
  * deferred to the issue that owns it. On the reuse path the recorded prior status
  * and role are written back only while the membership is still `active`, no
- * other guest points at it, AND nothing has changed it since the convert (no
- * status, role or end-date edit, no merge into it): a membership an admin has
- * since ended, set inactive, edited back and forth or merged into keeps what
- * they decided, one another guest was converted or linked onto stays active for
- * that guest, and the record says `statusLeftAs` and `leftBecause`
+ * other guest has attached to it since the convert, AND nothing has changed it
+ * since (no status, role or end-date edit, no merge into it): a membership an
+ * admin has since ended, set inactive, edited back and forth or merged into
+ * keeps what they decided, one another guest was converted or linked onto after
+ * the convert stays active for that guest (a guest already on it before the
+ * convert coexisted with the lapse, so it does not stop the restore), and the
+ * record says `statusLeftAs` and `leftBecause`
  * (`not_active`, `other_guest` or `changed_since`). That path does not refuse,
  * because nothing is
  * deleted there. A signed-in account (`people.user_id`,
@@ -4254,19 +4334,23 @@ export async function applyUndoGuestConversion(
 				leftBecause = "not_active";
 			} else if (
 				(
-					await otherGuestsOnMembership(
+					await otherGuestsAttachedSince(
 						tx,
 						input.clubId,
 						membershipId,
 						input.guestId,
+						entry?.createdAt ?? null,
 					)
 				).length > 0
 			) {
-				// Another guest depends on the membership being active: it was converted
-				// onto the member (the wake-up already done, so it wrote no status) or
-				// linked to them, and linking to a former member is prohibited. Putting
-				// the lapse back would leave that guest `joined` against a membership
-				// that no longer takes part (#1322).
+				// Another guest came to depend on the membership being active AFTER this
+				// conversion: it was converted onto the member (the wake-up already
+				// done, so it wrote no status) or linked to them, and linking to a
+				// former member is prohibited. Putting the lapse back would leave that
+				// guest `joined` against a membership that no longer takes part (#1322).
+				// A guest already on it BEFORE the conversion coexisted with the lapse
+				// (linking refuses only `former`), so it does not count: the restore
+				// returns the membership to the state it shared with that guest.
 				statusLeftAs = membership.status;
 				leftBecause = "other_guest";
 			} else if (

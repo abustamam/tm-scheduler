@@ -1694,6 +1694,198 @@ describe.skipIf(!hasTestDb)(
 				expect(detail?.statusRestoredTo).toBe("former");
 				expect(detail).not.toHaveProperty("leftBecause");
 			});
+
+			function linkTo(guestId: string, membershipId: string) {
+				return applyLinkGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					memberId: membershipId,
+					actorMemberId: seed.adminMemberId,
+				});
+			}
+
+			/** The record of when `guestId` attached to `membershipId`: its link or convert row. */
+			async function attachmentRows(guestId: string, membershipId: string) {
+				return testDb
+					.select({ id: activityLog.id, createdAt: activityLog.createdAt })
+					.from(activityLog)
+					.where(
+						and(
+							eq(activityLog.clubId, seed.clubId),
+							inArray(activityLog.action, ["member_add", "member_merge"]),
+							eq(activityLog.targetId, membershipId),
+							sql`${activityLog.detail}->>'fromGuestId' = ${guestId}`,
+						),
+					);
+			}
+
+			/** The lapse was put back and the guest that was already on the member stayed on it. */
+			async function expectLapsePutBack(
+				firstGuestId: string,
+				otherGuestId: string,
+				membershipId: string,
+				lapse: { status: "inactive" | "former"; clubRole: "admin" | "member" },
+			) {
+				const after = await memberRow(membershipId);
+				expect(after?.status).toBe(lapse.status);
+				expect(after?.clubRole).toBe(lapse.clubRole);
+				const detail = await undoDetail(membershipId);
+				expect(detail?.membershipDeleted).toBe(false);
+				expect(detail?.statusRestoredTo).toBe(lapse.status);
+				expect(detail).not.toHaveProperty("statusLeftAs");
+				expect(detail).not.toHaveProperty("leftBecause");
+				const detached = await guestRow(firstGuestId);
+				expect(detached?.stage).toBe("following_up");
+				expect(detached?.convertedMembershipId).toBeNull();
+				const other = await guestRow(otherGuestId);
+				expect(other?.stage).toBe("joined");
+				expect(other?.convertedMembershipId).toBe(membershipId);
+			}
+
+			// protects=a guest LINKED to the inactive member before the convert woke
+			// it does not stop the undo putting the lapse back: that guest coexisted
+			// with the inactive membership, and linking refuses only a `former` one,
+			// so the restore returns the member to the state it shared with it;
+			// fails_when=the gate counts every guest pointing at the member now (the
+			// undo detached the guest and left the member `active`, so a convert
+			// followed at once by an undo was not its reverse);
+			// no_claim=a guest that attached after the convert (the tests around this)
+			it("still puts the lapse back when another guest was linked to the member before the convert", async () => {
+				const { membershipId, email } = await lapsed("Linked Before Wake", {
+					status: "inactive",
+					clubRole: "admin",
+				});
+				const before = await seedGuest("Linked Before Wake Two");
+				await linkTo(before, membershipId);
+				const first = await convertedOnto("Linked Before Wake One", email);
+				expect((await memberRow(membershipId))?.status).toBe("active");
+
+				await undo(first);
+
+				await expectLapsePutBack(first, before, membershipId, {
+					status: "inactive",
+					clubRole: "admin",
+				});
+			});
+
+			// protects=the same for a guest CONVERTED onto the member before: it woke
+			// the member, an admin set it inactive again, and the next convert woke it
+			// once more; undoing that one puts `inactive` back under both;
+			// fails_when=the gate reads only the pointer, not when it was set;
+			// no_claim=what the first guest's own undo does (it is not undone here)
+			it("still puts the lapse back when another guest was converted onto the member before the convert", async () => {
+				const { membershipId, email } = await lapsed("Converted Before", {
+					status: "inactive",
+					clubRole: "admin",
+				});
+				const before = await wake("Converted Before", email);
+				expect((await memberRow(membershipId))?.status).toBe("active");
+				await setStatus(membershipId, "inactive");
+				// `setStatus` wrote only the status, so the demoted role stays `member`.
+				const demoted = (await memberRow(membershipId))?.clubRole;
+				const first = await convertedOnto("Converted Before Two", email);
+				expect((await memberRow(membershipId))?.status).toBe("active");
+
+				await undo(first);
+
+				await expectLapsePutBack(first, before, membershipId, {
+					status: "inactive",
+					clubRole: demoted ?? "member",
+				});
+			});
+
+			// protects=a guest that was linked before the convert, unlinked, and
+			// linked again AFTER it attached after the convert: its newest attachment
+			// is the one that counts;
+			// fails_when=the gate takes the guest's FIRST attachment row, or the
+			// oldest of them, and reads the relink as the old link;
+			// no_claim=a guest that was only unlinked (the test above, and no row at
+			// all after it)
+			it("leaves the member active when a guest linked before the convert was unlinked and linked again after it", async () => {
+				const { membershipId, email } = await lapsed("Relinked After", {
+					status: "inactive",
+					clubRole: "admin",
+				});
+				const other = await seedGuest("Relinked After Two");
+				await linkTo(other, membershipId);
+				const first = await convertedOnto("Relinked After One", email);
+				await applyUnlinkGuestFromMember({
+					clubId: seed.clubId,
+					guestId: other,
+					actorMemberId: seed.adminMemberId,
+				});
+				await linkTo(other, membershipId);
+
+				const res = await undo(first);
+
+				expect(res.membershipDeleted).toBe(false);
+				await expectKeptForOtherGuest(first, other, membershipId);
+			});
+
+			// protects=a guest pointing at the member with no attachment row at all
+			// (a pointer older than the audit writers, or one a merge moved here)
+			// counts as attached after, so the member is left alone: the gate does
+			// not read "no row" as "before";
+			// fails_when=a missing row is taken as an attachment from before the
+			// convert (the safe side is the opposite one: leave the member alone);
+			// no_claim=how a pointer comes to have no row
+			it("treats a guest pointing at the member with no attachment record as attached after", async () => {
+				const { membershipId, email } = await lapsed("Legacy Pointer", {
+					status: "inactive",
+					clubRole: "admin",
+				});
+				const legacy = await seedGuest("Legacy Pointer Two");
+				await linkTo(legacy, membershipId);
+				await testDb.delete(activityLog).where(
+					inArray(
+						activityLog.id,
+						(await attachmentRows(legacy, membershipId)).map((r) => r.id),
+					),
+				);
+				expect(await attachmentRows(legacy, membershipId)).toEqual([]);
+				const first = await convertedOnto("Legacy Pointer One", email);
+
+				await undo(first);
+
+				const after = await memberRow(membershipId);
+				expect(after?.status).toBe("active");
+				expect(after?.clubRole).toBe("member");
+				expect((await guestRow(legacy))?.convertedMembershipId).toBe(
+					membershipId,
+				);
+				await expectLeftAlone(first, membershipId, "other_guest", "active");
+			});
+
+			// protects=an attachment stamped at the very instant of the conversion
+			// record counts as after it: the bound is inclusive, so a tie leaves the
+			// member alone rather than restoring under a guest;
+			// fails_when=the comparison is strict (`>`), so a tie reads as before;
+			// no_claim=a row stamped later than the record (the relink test)
+			it("treats an attachment at the instant of the conversion record as after it", async () => {
+				const { membershipId, email } = await lapsed("Tied Instant", {
+					status: "inactive",
+					clubRole: "admin",
+				});
+				const other = await seedGuest("Tied Instant Two");
+				await linkTo(other, membershipId);
+				const first = await convertedOnto("Tied Instant One", email);
+				const [record] = await attachmentRows(first, membershipId);
+				if (!record) throw new Error("no conversion record");
+				const [link] = await attachmentRows(other, membershipId);
+				if (!link) throw new Error("no link record");
+				expect(link.createdAt.getTime()).toBeLessThan(
+					record.createdAt.getTime(),
+				);
+				await testDb
+					.update(activityLog)
+					.set({ createdAt: record.createdAt })
+					.where(eq(activityLog.id, link.id));
+
+				await undo(first);
+
+				expect((await memberRow(membershipId))?.status).toBe("active");
+				await expectLeftAlone(first, membershipId, "other_guest", "active");
+			});
 		});
 
 		// ------------------------------------------------------------------
