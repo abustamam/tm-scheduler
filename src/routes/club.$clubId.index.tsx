@@ -147,8 +147,9 @@ function ClubHome() {
 				<div>
 					<h2 className="text-base font-semibold">Sign-up sheet</h2>
 					<p className="text-sm text-muted-foreground">
-						Tap an <span className="font-semibold text-success">open</span> role
-						to claim it, or your own to release it.
+						Tap an{" "}
+						<span className="font-semibold text-warning-foreground">open</span>{" "}
+						role to claim it, or your own to release it.
 					</p>
 				</div>
 				<SeasonGrid

@@ -85,7 +85,7 @@ function CharterCard({ summary }: { summary: CharterSummary }) {
 		<Link
 			to="/admin/charter"
 			data-testid="charter-card"
-			className="group block space-y-3 rounded-xl border border-border bg-surface-raised px-4 py-4 shadow-[0_8px_20px_rgba(23,58,64,.05)] transition-colors hover:border-link"
+			className="group block space-y-3 rounded-xl border border-border bg-surface-raised px-4 py-4 shadow-[0_8px_20px_rgba(23,58,64,.05)] outline-none transition-colors hover:border-link focus-visible:ring-[3px] focus-visible:ring-ring/50"
 		>
 			<div className="flex items-center gap-3">
 				<div className="min-w-0 flex-1">
@@ -99,7 +99,7 @@ function CharterCard({ summary }: { summary: CharterSummary }) {
 					</div>
 				</div>
 				<ChevronRight
-					className="size-4 shrink-0 text-muted-foreground opacity-45 transition-[transform,opacity] group-hover:translate-x-0.5 group-hover:opacity-100"
+					className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5"
 					aria-hidden
 				/>
 			</div>
@@ -123,28 +123,35 @@ function TaskSection({
 			<h2 className="text-xs font-bold tracking-[0.12em] text-muted-foreground uppercase">
 				{title}
 			</h2>
-			<div className="grid gap-3 sm:grid-cols-2">
+			{/* One grouped list with dividers, not a grid of cards (DESIGN.md,
+			    Layout): these are navigation items, and the sidebar beside them
+			    already carries the same destinations. */}
+			<ul className="overflow-hidden rounded-xl border border-border bg-surface-raised shadow-[0_8px_20px_rgba(23,58,64,.05)]">
 				{tasks.map((task) => (
-					<Link
+					<li
 						key={`${title}:${task.to}`}
-						to={task.to}
-						className="group flex items-center gap-3 rounded-xl border border-border bg-surface-raised px-4 py-3.5 shadow-[0_8px_20px_rgba(23,58,64,.05)] transition-[transform,border-color] hover:-translate-y-0.5 hover:border-link"
+						className="border-b border-border last:border-b-0"
 					>
-						<div className="min-w-0 flex-1">
-							<div className="text-sm font-bold text-foreground">
-								{officerTaskTitle(task)}
+						<Link
+							to={task.to}
+							className="group flex items-center gap-3 px-4 py-3 outline-none transition-colors hover:bg-surface-soft focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
+						>
+							<div className="min-w-0 flex-1">
+								<div className="text-sm font-bold text-foreground">
+									{officerTaskTitle(task)}
+								</div>
+								<div className="truncate text-xs text-muted-foreground">
+									{task.description}
+								</div>
 							</div>
-							<div className="truncate text-xs text-muted-foreground">
-								{task.description}
-							</div>
-						</div>
-						<ChevronRight
-							className="size-4 shrink-0 text-muted-foreground opacity-45 transition-[transform,opacity] group-hover:translate-x-0.5 group-hover:opacity-100"
-							aria-hidden
-						/>
-					</Link>
+							<ChevronRight
+								className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5"
+								aria-hidden
+							/>
+						</Link>
+					</li>
 				))}
-			</div>
+			</ul>
 		</section>
 	);
 }

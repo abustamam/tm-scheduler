@@ -485,7 +485,7 @@ function SummaryHeadline({ view }: { view: DcpScoreboardView }) {
 		<div
 			className={cn(
 				"rounded-2xl border bg-surface-raised px-6 py-5 shadow-[0_14px_30px_rgba(23,58,64,.06)]",
-				tier ? "border-link" : "border-border",
+				tier ? "border-success" : "border-border",
 			)}
 		>
 			<div className="flex flex-wrap items-center justify-between gap-3">
@@ -499,7 +499,7 @@ function SummaryHeadline({ view }: { view: DcpScoreboardView }) {
 					</span>
 				</div>
 				{tier ? (
-					<Badge className="gap-1 bg-link text-white">
+					<Badge className="gap-1 bg-success text-success-foreground">
 						<Award className="size-3.5" /> {tier}
 					</Badge>
 				) : (
@@ -731,7 +731,7 @@ function GoalRow({
 				className={cn(
 					"flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-bold",
 					met
-						? "border-link bg-link text-white"
+						? "border-success bg-success text-success-foreground"
 						: "border-border text-muted-foreground",
 				)}
 				aria-hidden

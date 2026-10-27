@@ -45,10 +45,12 @@ export function ImpersonationBanner({
 
 	return (
 		<div
-			className={`sticky top-0 z-20 flex h-9 items-center gap-2 px-4 text-xs font-semibold text-white shadow-sm ${
+			className={`sticky top-0 z-20 flex h-9 items-center gap-2 px-4 text-xs font-semibold shadow-sm ${
 				readWrite
-					? "bg-[var(--danger-strong,#b91c1c)]"
-					: "bg-[var(--warning-strong,#b45309)]"
+					? "bg-[var(--danger-strong,#b91c1c)] text-white"
+					: // White on --warning-strong measures 3.2:1; styles.css reserves
+						// --on-accent-fill for text on that fill.
+						"bg-warning-strong text-on-accent-fill"
 			}`}
 		>
 			{readWrite ? (

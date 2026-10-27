@@ -84,9 +84,9 @@ import { ballotUrlFor } from "#/lib/digital-voting";
 import { evaluatingByMember } from "#/lib/evaluator-form";
 import { feedbackWindow } from "#/lib/feedback-window";
 import {
-	formatMeetingDate,
 	formatMeetingTime,
 	formatMeetingTimeRange,
+	meetingHeading,
 } from "#/lib/format";
 import { buildHeldRoleLabels } from "#/lib/held-role-labels";
 import { MINUTES_ANCHOR_ID } from "#/lib/meeting-anchors";
@@ -626,6 +626,7 @@ function MeetingView() {
 	// Its own fact, not a step toward `over`: it drives the "already taken place"
 	// notice, which a manager (still editing) must not see.
 	const datePassed = meetingDatePassed(meeting.scheduledAt, timezone, now);
+	const heading = meetingHeading(meeting.theme, meeting.scheduledAt, timezone);
 	// The one "is it over?" rule (#393) — shared with `resolveMeetingViewer` and
 	// handed to <MeetingAgenda> rather than recomputed there.
 	const over = isMeetingOver({
@@ -2033,13 +2034,13 @@ function MeetingView() {
 				</div>
 			) : null}
 			<header className="space-y-2 pt-2">
-				<h1 className="font-display text-2xl font-semibold tracking-tight">
-					{meeting.theme ?? "Meeting"}
+				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
+					{heading.title}
 				</h1>
 				<div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
 					<span className="flex items-center gap-1.5">
 						<CalendarDays className="size-4" aria-hidden />
-						{formatMeetingDate(meeting.scheduledAt, timezone)} ·{" "}
+						{heading.detailDate ? `${heading.detailDate} · ` : null}
 						{formatMeetingTimeRange(
 							meeting.scheduledAt,
 							meeting.lengthMinutes,

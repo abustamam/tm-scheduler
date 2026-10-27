@@ -126,11 +126,14 @@ function Tour() {
 						className="mt-3.5 max-w-3xl text-balance font-display font-semibold text-4xl leading-[1.05] tracking-[-0.022em] sm:text-5xl"
 						style={{ fontVariationSettings: "'opsz' 120" }}
 					>
-						One meeting, from sign-up sheet to Best Speaker.
+						{/* Balanced wrapping otherwise breaks at the hyphen ("sign-" / "up"). */}
+						One meeting, from <span className="whitespace-nowrap">sign-up</span>{" "}
+						sheet to Best Speaker.
 					</h1>
 					<p className="mt-5 max-w-2xl text-lg leading-relaxed text-muted-foreground">
 						Six stops. The drawings are tappable, so go ahead and press things.
-						The Ah-Counter isn't listening.
+						The <span className="whitespace-nowrap">Ah-Counter</span> isn't
+						listening.
 					</p>
 				</div>
 

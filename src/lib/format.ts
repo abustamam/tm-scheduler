@@ -25,6 +25,24 @@ export function formatMeetingDate(value: Date | string, timeZone?: string) {
 	}).format(d);
 }
 
+/**
+ * The meeting page's h1, and the date its details line leads with. A themed
+ * meeting is titled by its theme with the date below it; an unthemed one is
+ * titled by its date, so the h1 never reads only "Meeting" and the date is not
+ * printed twice.
+ */
+export function meetingHeading(
+	theme: string | null,
+	scheduledAt: Date | string,
+	timeZone: string,
+): { title: string; detailDate: string | null } {
+	const date = formatMeetingDate(scheduledAt, timeZone);
+	const named = theme?.trim();
+	return named
+		? { title: named, detailDate: date }
+		: { title: date, detailDate: null };
+}
+
 export function formatMeetingTime(value: Date | string, timeZone?: string) {
 	const d = typeof value === "string" ? new Date(value) : value;
 	return new Intl.DateTimeFormat(APP_LOCALE, {
