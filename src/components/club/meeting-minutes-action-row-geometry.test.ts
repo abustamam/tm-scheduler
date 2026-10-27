@@ -1,15 +1,17 @@
 /**
  * #1349: at 375px the Minutes header's action row (Download PDF + Email the
  * minutes) ran past the card's padding because the header and the row were
- * both non-wrapping flex rows. The header's right content edge is the bound.
+ * both non-wrapping rows.
  *
- * Class strings come from the real source; the markup between them is
- * synthetic (mounting MeetingMinutes needs the router). The control is the
- * pre-fix classes, which must overflow, so the measurement can fail.
+ * Class strings come from the real sources (meeting-minutes.tsx, card.tsx,
+ * button.tsx) and the buttons are built with `buttonVariants` using each
+ * button's real variant and size. The markup between them is synthetic
+ * (mounting MeetingMinutes needs the router).
  */
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
+import { buttonVariants } from "#/components/ui/button";
 import { cn } from "#/lib/utils";
 import { readSource } from "#/test/guard-source";
 import {
@@ -20,21 +22,33 @@ import {
 import { CHROME_TEST_TIMEOUT_MS, findChrome } from "#/test/print-page-count";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = resolve(HERE, "meeting-minutes.tsx");
-const CARD = resolve(HERE, "../ui/card.tsx");
+const MINUTES_SRC = resolve(HERE, "meeting-minutes.tsx");
+const CARD_SRC = resolve(HERE, "../ui/card.tsx");
 
-const PRE_FIX_HEADER = "flex-row items-start justify-between gap-3 space-y-0";
-const PRE_FIX_ACTIONS = "flex items-center gap-2";
-const BUTTON =
-	"inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border px-4 h-9 text-sm font-semibold";
-
-function between(open: string, close: string): string {
-	const src = readSource(SRC);
+/** The text between `open` and the next `close` in a source file. */
+function sourceBetween(file: string, open: string, close: string): string {
+	const src = readSource(file);
 	const i = src.indexOf(open);
-	expect(i, `${open} not in source`).toBeGreaterThan(-1);
+	expect(i, `${open} not in ${file}`).toBeGreaterThan(-1);
 	const j = src.indexOf(close, i + open.length);
 	return src.slice(i + open.length, j);
 }
+
+/** `cn(` first string argument of a card.tsx component, by its data-slot. */
+function cardSlotClasses(slot: string): string {
+	const src = readSource(CARD_SRC);
+	const at = src.indexOf(`data-slot="${slot}"`);
+	expect(at, `${slot} not in card.tsx`).toBeGreaterThan(-1);
+	const m = /cn\(\s*"([^"]+)"/.exec(src.slice(at));
+	expect(m, `no cn() string after ${slot}`).not.toBeNull();
+	return m?.[1] ?? "";
+}
+
+const dropToken = (classes: string, token: string) =>
+	classes
+		.split(/\s+/)
+		.filter((t) => t !== token)
+		.join(" ");
 
 const hasChrome = findChrome() !== null;
 
@@ -46,79 +60,156 @@ describe("minutes action row harness availability", () => {
 });
 
 describe.skipIf(!hasChrome)(
-	"the Minutes header at 375px",
+	"the Minutes header geometry",
 	{ timeout: CHROME_TEST_TIMEOUT_MS },
 	() => {
-		let header = "";
-		let titleBlock = "";
-		let actions = "";
-		let css = "";
+		let headerClasses = "";
+		let titleBlockClasses = "";
+		let actionsClasses = "";
+		let cardClasses = "";
 		let cardHeaderBase = "";
+		let css = "";
 
-		const fixture = (h: string, t: string, a: string) => `
-			<div style="width:375px;padding:0 16px;box-sizing:border-box">
-			<div class="flex flex-col gap-6 rounded-xl border py-6" id="card" style="box-sizing:border-box">
-				<div class="${cn(cardHeaderBase, h)}" id="header">
-					<div class="${t}"><h2 class="font-semibold">Minutes</h2>
+		// Real buttons: Download PDF is `outline`/`sm` (meeting-minutes.tsx), the
+		// Email trigger is `outline`/default (send-minutes-dialog.tsx).
+		const downloadClasses = buttonVariants({ variant: "outline", size: "sm" });
+		const emailClasses = buttonVariants({ variant: "outline" });
+
+		const fixture = (cardWidth: number, header: string, actions: string) => `
+			<div style="width:${cardWidth}px;padding:0 16px;box-sizing:border-box">
+			<div class="${cardClasses}" id="card">
+				<div class="${cn(cardHeaderBase, header)}" id="header">
+					<div class="${titleBlockClasses}" id="title"><h2 class="font-semibold">Minutes</h2>
 						<p class="text-sm">Attendance, Table Topics speakers, and awards — the record of what happened.</p></div>
-					<div class="${a}" id="actions">
-						<a class="${BUTTON}" href="#"><span class="size-4"></span>Download PDF</a>
-						<button class="${BUTTON}" type="button"><span class="size-4"></span>Email the minutes</button>
+					<div class="${actions}" id="actions">
+						<a class="${downloadClasses}" href="#"><svg class="size-4"></svg>Download PDF</a>
+						<button class="${emailClasses}" type="button"><svg class="size-4"></svg>Email the minutes</button>
 					</div>
 				</div>
 			</div></div>`;
 
-		const probe = (h: string, t: string, a: string) => {
+		/** Render at `viewport` px and measure the header's actions. */
+		const measureHeader = (
+			viewport: number,
+			header: string,
+			actions: string,
+		) => {
 			const script = `<script>
-				const hd=document.getElementById("header"), ac=document.getElementById("actions");
-				const cs=getComputedStyle(hd);
-				const edge=hd.getBoundingClientRect().right-parseFloat(cs.paddingRight);
+				const hd=document.getElementById("header"), ac=document.getElementById("actions"), ti=document.getElementById("title");
+				const edge=hd.getBoundingClientRect().right-parseFloat(getComputedStyle(hd).paddingRight);
 				const kids=[...ac.children].map(c=>c.getBoundingClientRect().right);
-				document.title="over="+(Math.max(...kids)-edge)+";doc="+(document.documentElement.scrollWidth>innerWidth);
+				document.title="over="+(Math.max(...kids)-edge)
+					+";doc="+(document.documentElement.scrollWidth>innerWidth)
+					+";titleW="+ti.getBoundingClientRect().width
+					+";actionsTop="+ac.getBoundingClientRect().top
+					+";titleBottom="+ti.getBoundingClientRect().bottom;
 			</script>`;
 			const title = renderAndReadTitle({
-				bodyHtml: fixture(h, t, a),
+				bodyHtml: fixture(viewport, header, actions),
 				css,
 				script,
-				viewport: { width: 375, height: 700 },
+				viewport: { width: viewport, height: 700 },
 			});
+			const num = (k: string) =>
+				Number(new RegExp(`${k}=([-\\d.]+)`).exec(title)?.[1]);
 			return {
-				over: Number(/over=([-\d.]+)/.exec(title)?.[1]),
-				doc: /doc=true/.test(title),
+				overflowPastContentEdge: num("over"),
+				documentScrolls: /doc=true/.test(title),
+				titleWidth: num("titleW"),
+				actionsStackBelowTitle: num("actionsTop") >= num("titleBottom") - 0.5,
 			};
 		};
 
 		beforeAll(async () => {
-			header = between('<CardHeader className="', '"');
-			titleBlock = "min-w-0 space-y-1";
-			const actionsLine = readSource(SRC).match(
+			headerClasses = sourceBetween(
+				MINUTES_SRC,
+				'<CardHeader className="',
+				'"',
+			);
+			titleBlockClasses = sourceBetween(
+				MINUTES_SRC,
+				'<CardHeader className="' +
+					headerClasses +
+					'">\n\t\t\t\t<div className="',
+				'"',
+			);
+			const actionsMatch = readSource(MINUTES_SRC).match(
 				/<div className="(flex[^"]*)">\s*<Button asChild variant="outline" size="sm">\s*<a\s+href=\{`\/api\/meetings\/\$\{meetingId\}\/minutes\/pdf`\}/,
 			);
-			actions = actionsLine?.[1] ?? "";
-			const m = /"(@container\/card-header[^"]*)"/.exec(readSource(CARD));
-			cardHeaderBase = m?.[1] ?? "";
+			actionsClasses = actionsMatch?.[1] ?? "";
+			cardClasses = cardSlotClasses("card");
+			cardHeaderBase = cardSlotClasses("card-header");
 			css = await buildAppCss([
 				...candidatesIn(
-					`<div class="flex flex-col gap-6 rounded-xl border py-6 ${cn(cardHeaderBase, header)} ${cn(cardHeaderBase, PRE_FIX_HEADER)} ${titleBlock} ${actions} ${PRE_FIX_HEADER} ${PRE_FIX_ACTIONS} ${BUTTON}">`,
+					`<div class="${[
+						cardClasses,
+						cardHeaderBase,
+						headerClasses,
+						titleBlockClasses,
+						actionsClasses,
+						downloadClasses,
+						emailClasses,
+						"size-4 font-semibold text-sm",
+					].join(" ")}">`,
 				),
 			]);
 		});
 
 		it("reads real class strings", () => {
-			expect(header).toContain("flex-row");
-			expect(actions).toContain("flex");
-			expect(cardHeaderBase).toContain("grid");
+			expect(headerClasses.split(/\s+/)).toContain("flex");
+			expect(headerClasses.split(/\s+/)).toContain("flex-wrap");
+			expect(titleBlockClasses).toContain("min-w-0");
+			expect(actionsClasses.split(/\s+/)).toContain("flex-wrap");
+			expect(cardClasses).toContain("rounded-xl");
+			expect(cardHeaderBase.split(/\s+/)).toContain("grid");
 		});
 
-		it("control: the pre-fix classes run past the padding", () => {
-			const r = probe(PRE_FIX_HEADER, "space-y-1", PRE_FIX_ACTIONS);
-			expect(r.over).toBeGreaterThan(1);
+		/** Inside the content box, no page scroll, title keeps a readable measure. */
+		const isSane = (r: ReturnType<typeof measureHeader>) =>
+			r.overflowPastContentEdge <= 0.5 &&
+			!r.documentScrolls &&
+			r.titleWidth >= 250;
+
+		it("375px: the buttons stay inside the content box, below the title", () => {
+			const r = measureHeader(375, headerClasses, actionsClasses);
+			expect(r.overflowPastContentEdge).toBeLessThanOrEqual(0.5);
+			expect(r.documentScrolls).toBe(false);
+			expect(r.titleWidth).toBeGreaterThanOrEqual(250);
+			expect(r.actionsStackBelowTitle).toBe(true);
 		});
 
-		it("keeps both buttons inside the header's content box", () => {
-			const r = probe(header, titleBlock, actions);
-			expect(r.over).toBeLessThanOrEqual(0.5);
-			expect(r.doc).toBe(false);
+		it("1100px: the title and the buttons sit side by side", () => {
+			const r = measureHeader(1100, headerClasses, actionsClasses);
+			expect(isSane(r)).toBe(true);
+			expect(r.actionsStackBelowTitle).toBe(false);
+		});
+
+		it("375px control: without the actions' `flex-wrap` the buttons spill", () => {
+			const r = measureHeader(
+				375,
+				headerClasses,
+				dropToken(actionsClasses, "flex-wrap"),
+			);
+			expect(r.overflowPastContentEdge).toBeGreaterThan(0.5);
+		});
+
+		it("375px control: without the header's `flex-wrap` the title is squeezed", () => {
+			const r = measureHeader(
+				375,
+				dropToken(headerClasses, "flex-wrap"),
+				actionsClasses,
+			);
+			expect(isSane(r)).toBe(false);
+			expect(r.titleWidth).toBeLessThan(250);
+		});
+
+		it("1100px control: without the header's `flex` (the old grid) the buttons drop below the title", () => {
+			const r = measureHeader(
+				1100,
+				dropToken(headerClasses, "flex"),
+				actionsClasses,
+			);
+			expect(r.actionsStackBelowTitle).toBe(true);
 		});
 	},
 );
