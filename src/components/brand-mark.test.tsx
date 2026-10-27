@@ -19,7 +19,9 @@ describe("BrandMark", () => {
 		expect(screen.getByText("Acme Club · Club 1492")).toBeTruthy();
 	});
 
-	it("lets a long subtitle truncate inside its column and keeps the full text in title", () => {
+	// Pins the classes only: jsdom lays out nothing, so whether the line
+	// actually truncates is checked in a browser, not here.
+	it("gives a long subtitle the truncate and min-w-0 classes, with the full text in title", () => {
 		render(<BrandMark subtitle="THR Speaking Club · Club 28680689" />);
 		const line = screen.getByText("THR Speaking Club · Club 28680689");
 		expect(line.getAttribute("title")).toBe(

@@ -94,7 +94,9 @@ describe("/tour", () => {
 		});
 	});
 
-	it("never wraps the hero's hyphenated words at the hyphen", async () => {
+	// Pins the class only: jsdom lays out nothing, so where the line actually
+	// breaks is checked in a browser, not here.
+	it("puts the hero's hyphenated words in whitespace-nowrap spans", async () => {
 		await renderTour();
 		const h1 = screen.getByRole("heading", { level: 1 });
 		expect(h1.textContent).toBe(
