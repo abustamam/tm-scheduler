@@ -164,6 +164,56 @@ describe("markUnavailableReleasing subject check (#675)", () => {
 	});
 });
 
+describe("setAvailability: whose row a decline may be written on", () => {
+	// The behaviour is executed in `availability.integration.test.ts` through
+	// `setAvailabilityCore`; this pins what that file cannot see, the handler's own
+	// argument list, and that the seam asks the owner-or-officer question rather
+	// than the actor ladder's alone (which admits any signed-in member on another
+	// member's row).
+	const body = handlerBody(HANDLER, "setAvailability");
+	const bodyRaw = handlerBody(HANDLER_RAW, "setAvailability");
+	const seam = seamBody(SEAM, "setAvailabilityCore");
+	const seamRaw = seamBody(SEAM_RAW, "setAvailabilityCore");
+
+	it("hands the seam the SUBJECT as memberId and the client's raw claim", () => {
+		expect(
+			body,
+			"the owner-or-officer rule compares the actor with the SUBJECT; a subject bound to the claim is always the caller's own row",
+		).toMatch(
+			/setAvailabilityCore\(db, \{\s*memberId: data\.memberId,[^}]*\bclaimedActorMemberId: data\.actorMemberId,/s,
+		);
+	});
+
+	it("never defaults that claim to the subject", () => {
+		// An asserted claim naming the subject resolves to the subject, so a
+		// `?? data.memberId` here makes the owner-or-officer comparison true for
+		// every request.
+		expect(
+			bodyRaw,
+			"`?? data.memberId` would make actor === subject for every request",
+		).not.toContain("?? data.memberId");
+	});
+
+	it("leaves the actor resolution to the seam", () => {
+		expect(bodyRaw).not.toContain("requestWriteActor(");
+		expect(bodyRaw).not.toContain("resolveOwnerOrOfficer(");
+		expect(bodyRaw).not.toContain("resolveActor(");
+	});
+
+	it("resolves owner-or-officer in the seam with the subject and the raw claim", () => {
+		expect(
+			seam,
+			"the subject check lives in resolveOwnerOrOfficer; resolveActor alone lets any signed-in member write another member's row",
+		).toMatch(
+			/await resolveOwnerOrOfficer\(\{[^}]*\bmemberId: args\.memberId,[^}]*\bclaimedActorMemberId: args\.claimedActorMemberId,/s,
+		);
+		expect(
+			seamRaw,
+			"the bare ladder admits any signed-in caller on another member's row",
+		).not.toMatch(/\bresolveActor\(/);
+	});
+});
+
 describe("clearAvailability: whose answer a clear may remove", () => {
 	// The behaviour is executed in `availability.integration.test.ts`
 	// ("clearAvailability: whose answer a clear may remove"), through
@@ -186,6 +236,15 @@ describe("clearAvailability: whose answer a clear may remove", () => {
 		expect(body).toContain("clearAvailabilityCore(db, {");
 	});
 
+	it("returns the seam's `cleared`, which the grid's Undo is gated on", () => {
+		expect(
+			body,
+			"the grid offers Undo only for a clear that removed something; a constant here would offer it after a clear that deleted nothing",
+		).toMatch(
+			/const \{ cleared \} = await clearAvailabilityCore\(db, \{[\s\S]*return \{ ok: true as const, cleared \};/,
+		);
+	});
+
 	it("never defaults that claim to the subject", () => {
 		// Behind the session gate a default changes no outcome, so this is defence
 		// in depth: were the gate ever lost, `?? data.memberId` would make the
@@ -198,8 +257,8 @@ describe("clearAvailability: whose answer a clear may remove", () => {
 
 	it("leaves the actor resolution to the seam", () => {
 		// `requestWriteActor` answers "who do I credit", never "may this caller do
-		// this"; a resolution here, beside the seam's own, is the shape the old bug
-		// wore, and the next reader would pass ITS result on.
+		// this"; a resolution here, beside the seam's own, would be a second answer
+		// to who is calling, and the next reader would pass ITS result on.
 		expect(bodyRaw).not.toContain("requestWriteActor(");
 		expect(bodyRaw).not.toContain("resolveClearActor");
 		expect(bodyRaw).not.toContain("resolveOwnerOrOfficer(");

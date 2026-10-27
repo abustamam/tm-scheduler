@@ -31,6 +31,7 @@ const {
 	releaseSlot,
 	setAvailability,
 	toastSuccess,
+	toastMessage,
 	toastError,
 } = vi.hoisted(() => ({
 	// #763: like `setAvailability`, the claim REPORTS its proof and the grid
@@ -41,7 +42,15 @@ const {
 			proof: "session",
 		}),
 	),
-	clearAvailability: vi.fn(async () => ({ ok: true })),
+	// The clear REPORTS whether it removed anything, and the grid offers Undo
+	// (a re-decline) only when it did; a mock returning a bare `{ ok: true }`
+	// models a server that never shipped, so the default is the clear that landed.
+	clearAvailability: vi.fn(
+		async (): Promise<{ ok: true; cleared: boolean }> => ({
+			ok: true,
+			cleared: true,
+		}),
+	),
 	markUnavailableReleasing: vi.fn(async () => ({ ok: true, released: 1 })),
 	releaseSlot: vi.fn(async () => ({ ok: true })),
 	// #762: the handler REPORTS how the caller's identity was established, and
@@ -50,6 +59,7 @@ const {
 	// the session case and the anon case sets its own.
 	setAvailability: vi.fn(async () => ({ ok: true, proof: "session" })),
 	toastSuccess: vi.fn(),
+	toastMessage: vi.fn(),
 	toastError: vi.fn(),
 }));
 vi.mock("#/server/slots", () => ({ claimSlot, releaseSlot }));
@@ -59,7 +69,7 @@ vi.mock("#/server/availability", () => ({
 	setAvailability,
 }));
 vi.mock("sonner", () => ({
-	toast: { success: toastSuccess, error: toastError },
+	toast: { success: toastSuccess, message: toastMessage, error: toastError },
 }));
 
 import {
@@ -136,6 +146,7 @@ async function renderMembersGrid(
 		currentMemberId?: string;
 		canManageOthers?: boolean;
 		data?: SeasonGridData;
+		onChanged?: () => void | Promise<void>;
 	} = {},
 ) {
 	const rootRoute = createRootRoute({
@@ -151,6 +162,7 @@ async function renderMembersGrid(
 				currentMemberSource={over.currentMemberSource ?? "session"}
 				canManageOthers={over.canManageOthers ?? true}
 				clubId="club-1"
+				onChanged={over.onChanged}
 			/>
 		),
 	});
@@ -632,6 +644,113 @@ describe("SeasonGrid: a control shown to an anon viewer must not refuse (#762)",
 			await screen.findByRole("button", { name: /^Not going —/ }),
 		);
 		await waitFor(() => expect(clearAvailability).toHaveBeenCalledTimes(1));
+	});
+});
+
+describe("SeasonGrid: the Undo after a clear follows what the clear did", () => {
+	// `clearAvailability` REPORTS `cleared`. An officer's clear of another
+	// member's row removes a decline and nothing else, so a grid still showing a
+	// decline over an answer that has since changed deletes nothing; the Undo on
+	// that toast would re-decline over the newer answer.
+	const declined: SeasonGridData = {
+		...membersData,
+		unavailable: [{ memberId: "c1", meetingId: "m1" }],
+	};
+
+	afterEach(() => {
+		setAvailability.mockClear();
+		clearAvailability.mockClear();
+		toastSuccess.mockClear();
+		toastMessage.mockClear();
+		toastError.mockClear();
+	});
+
+	/** An officer on the grid takes Carla's decline back from the cell menu. */
+	async function officerClearsCarla(onChanged = vi.fn()) {
+		await renderMembersGrid({
+			data: declined,
+			currentMemberId: "admin-1",
+			currentMemberSource: "session",
+			canManageOthers: true,
+			onChanged,
+		});
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Edit Carla Nguyen/ }),
+		);
+		await userEvent.click(
+			await screen.findByRole("button", { name: /mark them available/i }),
+		);
+		await waitFor(() => expect(clearAvailability).toHaveBeenCalledTimes(1));
+		return onChanged;
+	}
+
+	it("offers Undo when the clear removed the decline, and Undo re-declines", async () => {
+		// The control: the undo is the product, and a gate that removed it for
+		// everyone would satisfy the negative below.
+		const onChanged = await officerClearsCarla();
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		expect(toastSuccess.mock.calls[0]?.[0]).toBe("Marked them available.");
+		expect(toastMessage).not.toHaveBeenCalled();
+		expect(onChanged).toHaveBeenCalledTimes(1);
+		const options = toastSuccess.mock.calls[0]?.[1] as {
+			action?: { label: string; onClick: () => void };
+		};
+		expect(options.action?.label).toBe("Undo");
+		options.action?.onClick();
+		await waitFor(() => expect(setAvailability).toHaveBeenCalledTimes(1));
+		expect(setAvailability.mock.calls[0]).toMatchObject([
+			{ data: { memberId: "c1", meetingId: "m1" } },
+		]);
+	});
+
+	it("says nothing changed and offers NO Undo when the clear removed nothing", async () => {
+		clearAvailability.mockResolvedValueOnce({ ok: true, cleared: false });
+		const onChanged = await officerClearsCarla();
+		await waitFor(() => expect(toastMessage).toHaveBeenCalledTimes(1));
+		expect(toastMessage.mock.calls[0]?.[0]).toBe(
+			"Nothing changed. Their answer changed since this page loaded.",
+		);
+		// No second argument at all: there is no action to tap, so the member's
+		// newer answer cannot be overwritten from this toast.
+		expect(toastMessage.mock.calls[0]).toHaveLength(1);
+		// Not the success toast, which carries the Undo.
+		expect(toastSuccess).not.toHaveBeenCalled();
+		expect(setAvailability).not.toHaveBeenCalled();
+		// The grid refreshes, so the person sees the row as it now stands.
+		expect(onChanged).toHaveBeenCalledTimes(1);
+	});
+
+	it("says 'Your answer' for the viewer's own row", async () => {
+		clearAvailability.mockResolvedValueOnce({ ok: true, cleared: false });
+		await renderMembersGrid({
+			data: declined,
+			currentMemberId: "c1",
+			currentMemberSource: "session",
+			canManageOthers: false,
+		});
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Not going —/ }),
+		);
+		await waitFor(() => expect(toastMessage).toHaveBeenCalledTimes(1));
+		expect(toastMessage.mock.calls[0]?.[0]).toBe(
+			"Nothing changed. Your answer changed since this page loaded.",
+		);
+		expect(toastSuccess).not.toHaveBeenCalled();
+	});
+
+	it("treats a reply with no `cleared` as the clear that landed", async () => {
+		// A server from before `cleared` existed answers a bare `{ ok: true }`
+		// while a deploy overlaps. Only an explicit `false` means nothing was
+		// removed; reading a missing field as `false` would tell an officer
+		// "nothing changed" about a clear that worked.
+		clearAvailability.mockResolvedValueOnce({ ok: true } as unknown as {
+			ok: true;
+			cleared: boolean;
+		});
+		await officerClearsCarla();
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		expect(toastSuccess.mock.calls[0]?.[0]).toBe("Marked them available.");
+		expect(toastMessage).not.toHaveBeenCalled();
 	});
 });
 

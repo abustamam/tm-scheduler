@@ -70,8 +70,7 @@ const HANDLERS = ["setPlannedAttendance", "clearPlannedAttendance"];
  * can EXECUTE them. The handler's assertions below pin the gates it keeps and
  * the arguments it hands the seam; the seam's body is pinned where the logic is.
  */
-const CLEAR_SEAM = (() => {
-	const logic = readSource(resolve(__dirname, "availability-logic.ts"));
+function clearSeamBody(logic: string): string {
 	const start = logic.indexOf(
 		"export async function clearPlannedAttendanceCore(",
 	);
@@ -82,7 +81,15 @@ const CLEAR_SEAM = (() => {
 	}
 	const next = logic.indexOf("\nexport ", start + 1);
 	return logic.slice(start, next === -1 ? logic.length : next);
-})();
+}
+const LOGIC_FILE = resolve(__dirname, "availability-logic.ts");
+/** Comment-blind — for "must BE present" only. */
+const CLEAR_SEAM = clearSeamBody(readSource(LOGIC_FILE));
+/** Verbatim — for "must be ABSENT" only. Scoped to this one seam, not the whole
+ *  module: `setAvailabilityCore` legitimately maps `actorMemberId === null` to
+ *  `"asserted"`, so the negatives below cannot read `availability-logic.ts`
+ *  whole. */
+const CLEAR_SEAM_RAW = clearSeamBody(readFileSync(LOGIC_FILE, "utf8"));
 
 /** What each handler calls to learn who the caller is: the ladder itself for the
  *  set, the seam that runs it for the clear. */
@@ -239,7 +246,7 @@ describe("attendance-plan authz (D6)", () => {
 		// "delete whatever is in the row", which let an officer's "No answer" erase
 		// an answer that arrived since the panel rendered. Verbatim, handler and
 		// seam both: stripping only deletes text.
-		const seamRaw = CLEAR_SEAM;
+		const seamRaw = CLEAR_SEAM_RAW;
 		for (const [where, src] of [
 			["the handler", handlerBody(RAW, "clearPlannedAttendance")],
 			["the seam", seamRaw],
@@ -288,9 +295,9 @@ describe("attendance-plan authz (D6)", () => {
 	it("runs the session gate before the ladder on the clear", () => {
 		// `clearFloor` can trust the Toastmaster arm's actor as "the session's own
 		// member" only because a session is PROVEN first: with one, the caller is
-		// resolved from the session and a claimed id is ignored. Without it a
-		// visitor could claim the Toastmaster's published id and clear "their own"
-		// row. Two halves, one per place the check can live: the handler's early
+		// resolved from the session and a claimed id is ignored. Without it the
+		// arm's actor would rest on a claim rather than a session, and the own-row
+		// test would mean nothing. Two halves, one per place the check can live: the handler's early
 		// gate, and the seam's proof check, which is the one vitest executes and the
 		// one that holds when the session's membership changes between the two reads.
 		const body = handlerBody(SRC, "clearPlannedAttendance");
@@ -333,6 +340,12 @@ describe("attendance-plan authz (D6)", () => {
 				`${fn} must use the reported branch, not re-derive it from the actor id`,
 			).not.toContain("actorMemberId === null");
 		}
+		// The clear's ladder moved into its seam, so the handler read above no
+		// longer holds the place a consumer would re-derive the branch.
+		expect(
+			CLEAR_SEAM_RAW,
+			"clearPlannedAttendanceCore must use the reported branch, not re-derive it from the actor id",
+		).not.toContain("actorMemberId === null");
 	});
 
 	it("keeps ONE copy of the ladder, in the shared module", () => {
@@ -457,10 +470,12 @@ describe("attendance-plan authz (D6)", () => {
 		).toMatch(
 			/const actorMemberId = membership\.id;\s*const proof = "session";\s*return \{ actorMemberId, viaManager: true, via: "officer", proof \};/,
 		);
-		expect(
-			SRC,
-			"the officer clear must NOT be gated on viaManager — that admits the honour-system TMOD arm",
-		).not.toContain("onlyFrom: viaManager ?");
+		for (const src of [RAW, CLEAR_SEAM_RAW]) {
+			expect(
+				src,
+				"the officer clear must NOT be gated on viaManager — that admits the honour-system TMOD arm",
+			).not.toContain("onlyFrom: viaManager ?");
+		}
 		for (const src of [SRC, LADDER]) {
 			expect(
 				src,

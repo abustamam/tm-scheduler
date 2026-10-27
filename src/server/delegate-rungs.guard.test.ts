@@ -179,6 +179,15 @@ describe("legacy delegates write the rung they are named for (D6)", () => {
 			d.seam ? seamBody(source, d.seam) : handlerBody(source, d.fn, d.file);
 		const strippedLogic = d.seam ? readSource(SEAM_PATH) : stripped;
 		const rawLogic = d.seam ? readFileSync(SEAM_PATH, "utf8") : raw;
+		/** What a NEGATIVE reads: the handler AND, when the delegate names a seam,
+		 *  the seam, verbatim. A "never" that read only the seam would let the
+		 *  handler grow the forbidden call, and one that read only the handler would
+		 *  let the seam grow it (they were one body before the seam existed). */
+		const negativeBodies = () => {
+			const bodies = [handlerBody(raw, d.fn, d.file)];
+			if (d.seam) bodies.push(logicBody(rawLogic));
+			return bodies;
+		};
 
 		if (d.rung) {
 			it(`${d.fn} writes status: "${d.rung}"`, () => {
@@ -196,10 +205,12 @@ describe("legacy delegates write the rung they are named for (D6)", () => {
 			});
 
 			it(`${d.fn} never calls setPlanStatus`, () => {
-				expect(
-					logicBody(rawLogic),
-					`${d.fn} must not call setPlanStatus — ${d.breaks}.`,
-				).not.toContain("setPlanStatus(");
+				for (const body of negativeBodies()) {
+					expect(
+						body,
+						`${d.fn} must not call setPlanStatus — ${d.breaks}.`,
+					).not.toContain("setPlanStatus(");
+				}
 			});
 		}
 
@@ -232,12 +243,13 @@ describe("legacy delegates write the rung they are named for (D6)", () => {
 				// A negative, so read VERBATIM: the prose above explains why this
 				// delegate must NOT carry a predicate, and a comment-blind read would
 				// let the explanation satisfy the assertion it is explaining.
-				const body = logicBody(rawLogic);
-				expect(
-					body,
-					`${d.fn} must NOT restrict the write — ${d.predicateBreaks}.`,
-				).not.toContain("demoteFrom:");
-				expect(body).not.toContain("onlyFrom:");
+				for (const body of negativeBodies()) {
+					expect(
+						body,
+						`${d.fn} must NOT restrict the write — ${d.predicateBreaks}.`,
+					).not.toContain("demoteFrom:");
+					expect(body).not.toContain("onlyFrom:");
+				}
 			});
 		}
 	}

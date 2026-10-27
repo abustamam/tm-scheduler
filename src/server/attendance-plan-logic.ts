@@ -111,10 +111,11 @@ const OFFICER_OWN_ROW_RUNGS: readonly AttendancePlanStatus[] = [
  * delete that matches no row, not one that matches every row — which
  * `clearPlanStatus` documents beside the predicate.
  *
- * Neither floor fits that caller. `SELF_SERVICE_RUNGS` would let them erase
- * another member's own answer; `CLEARABLE_ASK` would let them erase an
- * officer's ask, which the Toastmaster arm never could (its claim can be
- * honour-system, and its id is published on the public agenda payload).
+ * Neither floor fits that caller: `SELF_SERVICE_RUNGS` is a member's own answer,
+ * and `CLEARABLE_ASK` is an officer's ask, which the Toastmaster arm does not
+ * remove on another member's row. The Toastmaster's standing comes from holding
+ * a slot on this meeting, not from an office, and an answer belongs to the
+ * member who gave it, so their reach over other rows stops at setting.
  */
 export const NO_CLEARABLE_RUNGS: readonly AttendancePlanStatus[] = [];
 
@@ -143,10 +144,9 @@ export const NO_CLEARABLE_RUNGS: readonly AttendancePlanStatus[] = [];
  * `requireSessionActor` BEFORE `resolveActor`: with a session bound to a member
  * of this club, `resolveWriteActorWithProof` answers with that membership and
  * ignores the claimed id, so the tmod arm's actor is the SESSION's own member
- * and cannot be asserted into equalling a subject. (Without that gate a visitor
- * could claim the Toastmaster's published id and "clear their own row", which
- * is the honour-system shape ADR-0026 removed.) The officer arm's is the
- * session's `membership.id` outright. A `null` actor (an impersonating
+ * and cannot be asserted into equalling a subject. (A claimed id is not proof
+ * of who is calling, ADR-0026, which is why the gate comes first.) The officer
+ * arm's is the session's `membership.id` outright. A `null` actor (an impersonating
  * superadmin has no member row) equals no id, so is never "self".
  */
 export function clearFloor(args: {
