@@ -61,7 +61,8 @@ const roster = [
 ];
 
 /** A plan trigger's VISIBLE label: the `aria-hidden` span's text, qualifier
- *  included (CSS hides the qualifier below `md`; jsdom loads no stylesheet). */
+ *  included (CSS hides the qualifier until the list is 28rem wide; jsdom loads
+ *  no stylesheet). */
 function visibleLabel(trigger: HTMLElement): string {
 	return trigger.querySelector("span[aria-hidden]")?.textContent ?? "";
 }
@@ -527,11 +528,12 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 			name: "Ayesha Khan status: Coming — assumed, role confirmed",
 		});
 		expect(visibleLabel(trigger)).toBe("Coming · assumed");
-		// The qualifier is hidden below `md` by CSS (the 144px track cannot hold
-		// it), shown from `md`; the announced name above is unchanged either way.
+		// The qualifier is hidden by CSS until the LIST is 28rem wide (`@md`, a
+		// container query; the 144px track cannot hold it), shown from there; the
+		// announced name above is unchanged either way.
 		const qualifier = trigger.querySelector("span[aria-hidden] > span");
 		expect(qualifier?.textContent).toBe(" · assumed");
-		expect(qualifier?.className).toBe("hidden md:inline");
+		expect(qualifier?.className).toBe("hidden @md:inline");
 
 		// The NEGATIVE arm: no role, no answer, so nothing may claim an inference.
 		expect(getByRole("button", { name: "Bo Lin status: Ask" })).toBeTruthy();
@@ -859,6 +861,27 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		expect(onContacted).toHaveBeenCalledTimes(2);
 	});
 
+	it("keys the status track to the LIST's width and trims the rail card's padding to 16px", () => {
+		// HONEST LIMIT as below: jsdom lays nothing out, so this pins the classes
+		// and `roll-row-geometry.test.ts` measures what they do at the real rail
+		// widths. The `@md:` track classes only mean something under an ancestor
+		// that is a container; without one they match nothing and every row keeps
+		// the narrow track, which no class assertion on the trigger would notice.
+		const { container, getByRole } = renderPanel();
+		const list = container.querySelector('ul[role="list"]');
+		expect(list?.classList.contains("@container")).toBe(true);
+		expect(
+			list?.contains(getByRole("button", { name: /Ayesha Khan status/i })),
+			"the track must sit INSIDE the container",
+		).toBe(true);
+		// The rail's card gives the row 16px a side at `lg`, header and body
+		// together so the title and the rows share one left edge.
+		const header = container.querySelector('[data-slot="card-header"]');
+		const body = container.querySelector('[data-slot="card-content"]');
+		expect(header?.classList.contains("lg:px-4")).toBe(true);
+		expect(body?.classList.contains("lg:px-4")).toBe(true);
+	});
+
 	it("gives the action line two hard edges and a legible chevron", () => {
 		// HONEST LIMIT, the same one the long-name test states: jsdom performs no
 		// layout and loads no stylesheet, so none of this is the rendered GEOMETRY or
@@ -870,12 +893,15 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// A FIXED TRACK plus `justify-between` = two hard vertical edges. `justify-end`
 		// alone flushes only the right one, and this trigger is `whitespace-nowrap`,
 		// so the two icon buttons to its left would jitter by the label's width
-		// delta down the column. The track is `w-36` (144px) below `md`, where the
-		// qualifier is hidden, and `md:w-44` (176px) from `md`, which holds the
-		// widest visible label "Coming · assumed" (the 375px and 1280px cases in
-		// `roll-row-geometry.test.ts` measure both).
+		// delta down the column. The track is `w-36` (144px) while the list is under
+		// 28rem, where the qualifier is hidden, and `@md:w-44` (176px) from there,
+		// which holds the widest visible label "Coming · assumed". It follows the
+		// PANEL's width, not the viewport's: the 340px rail is narrower than a
+		// phone (the rail, phone and tablet cases in `roll-row-geometry.test.ts`
+		// measure it).
 		expect(trigger.classList.contains("w-36")).toBe(true);
-		expect(trigger.classList.contains("md:w-44")).toBe(true);
+		expect(trigger.classList.contains("@md:w-44")).toBe(true);
+		expect(trigger.classList.contains("md:w-44")).toBe(false);
 		expect(trigger.classList.contains("w-44")).toBe(false);
 		expect(trigger.classList.contains("justify-between")).toBe(true);
 
@@ -1244,7 +1270,8 @@ describe("roll mode", () => {
 		);
 		const chip = getByRole("button", { name: /Bea Osei status/i });
 		expect(chip.classList.contains("w-36")).toBe(true);
-		expect(chip.classList.contains("md:w-44")).toBe(true);
+		expect(chip.classList.contains("@md:w-44")).toBe(true);
+		expect(chip.classList.contains("md:w-44")).toBe(false);
 		expect(chip.classList.contains("justify-between")).toBe(true);
 		const actionLine = chip.parentElement;
 		expect(actionLine?.classList.contains("justify-end")).toBe(true);
@@ -1258,7 +1285,8 @@ describe("roll mode", () => {
 		// menu trigger, rather than widening the rail for a second control.
 		const commit = getByRole("button", { name: /Abe Nkemelu status/i });
 		expect(commit.parentElement?.classList.contains("w-36")).toBe(true);
-		expect(commit.parentElement?.classList.contains("md:w-44")).toBe(true);
+		expect(commit.parentElement?.classList.contains("@md:w-44")).toBe(true);
+		expect(commit.parentElement?.classList.contains("md:w-44")).toBe(false);
 	});
 
 	it("F4: draws the roll row's contact drafts as ONE menu icon, words only inside the menu (#1309)", async () => {
