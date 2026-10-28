@@ -9,7 +9,6 @@ import {
 	Vote,
 } from "lucide-react";
 import { Button } from "#/components/ui/button";
-import { MEETING_AGENDA_ANCHOR_ID } from "#/lib/meeting-hub";
 import type { StoredMember } from "#/lib/member-identity";
 import { hasWordOfTheDay } from "#/lib/word-poster";
 import { getBallot } from "#/server/voting";
@@ -41,7 +40,7 @@ const BIG = "h-auto min-h-12 w-full justify-start text-base";
  * | 2 | Leave feedback, while `feedbackOpen`    | Leave feedback      |
  * | 3 | What I'm doing today, if they hold a slot | Sign the guest book |
  * | 4 | Word of the Day, if set                 | Word of the Day     |
- * | 5 | Today's agenda (in-page anchor)         | Today's agenda      |
+ * | 5 | Today's agenda (digital agenda, #1321)  | Today's agenda      |
  *
  * "Leave feedback" is a primary button, second after Vote (#1282): nobody knew
  * the anonymous notes existed when it was the fourth outline button.
@@ -162,10 +161,7 @@ export function MeetingRoomStrip({
 					</Button>
 				) : null}
 				<Button asChild size="lg" variant="outline" className={BIG}>
-					{/* Router-owned hash link, like the toolbar's Minutes primary: a raw
-					    `<a href="#…">` makes a history entry the router does not own.
-					    `search` is kept so the strip is still there after the jump. */}
-					<Link to="." search={true} hash={MEETING_AGENDA_ANCHOR_ID}>
+					<Link to="/club/$clubId/meeting/$meetingId/agenda" params={params}>
 						<ClipboardList className="size-5" aria-hidden />
 						Today's agenda
 					</Link>

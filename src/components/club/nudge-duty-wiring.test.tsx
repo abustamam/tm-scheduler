@@ -37,6 +37,14 @@ import { outstandingDuties, type PersonalNudgeBase } from "#/lib/nudge";
 // time under jsdom). No handler runs in a render-only test.
 vi.mock("#/db", () => ({ db: {} }));
 
+// MeetingAgenda renders a router <Link> ("View agenda", #1336) and this suite
+// mounts it router-less; a stand-in <a> keeps the render working.
+vi.mock("@tanstack/react-router", async (importOriginal) =>
+	(await import("#/test/router-link-stub")).routerLinkMock(
+		await importOriginal<typeof import("@tanstack/react-router")>(),
+	),
+);
+
 // cmdk (the recruit picker's list) measures on mount and scrolls the active
 // item into view; jsdom has neither API. Same stub the picker's own suite uses.
 class ResizeObserverStub {

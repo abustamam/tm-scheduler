@@ -23,6 +23,14 @@ import {
 // The agenda imports every sheet's server-fn module and their `#/db` import;
 // none of them run here. `claimSlot` is the one write this dialog makes.
 vi.mock("#/db", () => ({ db: {} }));
+
+// MeetingAgenda renders a router <Link> ("View agenda", #1336) and this suite
+// mounts it router-less; a stand-in <a> keeps the render working.
+vi.mock("@tanstack/react-router", async (importOriginal) =>
+	(await import("#/test/router-link-stub")).routerLinkMock(
+		await importOriginal<typeof import("@tanstack/react-router")>(),
+	),
+);
 vi.mock("#/server/slots", () => ({
 	claimSlot: vi.fn(),
 	reassignSlot: vi.fn(),

@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { Loader2, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -433,6 +434,20 @@ export function MeetingAgenda({
 
 	return (
 		<>
+			{/* The digital agenda (#1335), for everyone and on every day, cancelled
+			    or not: it is a read-only page the public meeting page already
+			    exposes the same slots to. The uuid params are the ones the
+			    agenda editor link uses; both route segments accept a uuid (#877). */}
+			<div className="mb-4 flex flex-wrap items-center justify-end gap-2">
+				<Button asChild variant="outline" size="touch">
+					<Link
+						to="/club/$clubId/meeting/$meetingId/agenda"
+						params={{ clubId: meeting.clubId, meetingId: meeting.id }}
+					>
+						View agenda
+					</Link>
+				</Button>
+			</div>
 			{viewer.canManage ? (
 				<section className="rounded-xl border bg-card p-4">
 					<div className="flex flex-wrap items-center justify-between gap-3">

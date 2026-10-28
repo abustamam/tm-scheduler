@@ -53,7 +53,7 @@ describe("the meeting route wires the in-room strip (#913)", () => {
 		expect(agenda).toBeGreaterThan(strip);
 	});
 
-	it("gives the agenda the anchor the strip's 'Today's agenda' link targets", () => {
+	it("keeps the #agenda anchor on the sign-up agenda, so shared links still scroll", () => {
 		expect(source).toMatch(/id=\{MEETING_AGENDA_ANCHOR_ID\}/);
 		// …and wraps the agenda itself, not some other section.
 		const anchor = source.indexOf("id={MEETING_AGENDA_ANCHOR_ID}");
