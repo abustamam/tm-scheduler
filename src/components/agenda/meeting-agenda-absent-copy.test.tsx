@@ -30,6 +30,33 @@ import {
 // not throw on a missing DATABASE_URL. Hoisted above the imports.
 vi.mock("#/db", () => ({ db: {} }));
 
+// MeetingAgenda renders a router <Link> ("View agenda", #1336) and this suite
+// mounts it router-less; a stand-in <a> keeps the render working.
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("@tanstack/react-router")>();
+	return {
+		...actual,
+		Link: ({
+			to,
+			params,
+			children,
+			...rest
+		}: {
+			to: string;
+			params?: Record<string, string>;
+			children?: React.ReactNode;
+		}) => (
+			<a
+				{...rest}
+				href={to.replace(/\$(\w+)/g, (_, k: string) => params?.[k] ?? "")}
+			>
+				{children}
+			</a>
+		),
+	};
+});
+
 const noop = async () => {};
 const actions: MeetingAgendaActions = {
 	claim: noop,

@@ -182,7 +182,11 @@ describe("MeetingRoomStrip — identity branching (#913 AC2, AC3)", () => {
 			`/club/${CLUB}/meeting/${KEY}/me`,
 		);
 		expect(href("Word of the Day")).toBe(`/club/${CLUB}/meeting/${KEY}/word`);
-		expect(href("Today's agenda")).toMatch(/#agenda$/);
+		// protects=the strip's fifth action opens the digital agenda route with the
+		// keys the page was opened with; fails_when=it falls back to a `#agenda`
+		// hash, or builds the href from the uuid instead of the page's keys;
+		// no_claim=the agenda route renders (its own tests) or the QR target.
+		expect(href("Today's agenda")).toBe(`/club/${CLUB}/meeting/${KEY}/agenda`);
 		expect(
 			screen.queryByRole("button", { name: /pick your name/i }),
 		).toBeNull();

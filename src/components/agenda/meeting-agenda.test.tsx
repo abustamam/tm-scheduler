@@ -25,6 +25,34 @@ import {
 // not set" throw at import time. `vi.mock` is hoisted above the imports.
 vi.mock("#/db", () => ({ db: {} }));
 
+// "View agenda" is a router <Link>; every render here is router-less. A stand-in
+// that substitutes the params into `to` keeps the href assertable without
+// mounting a router around 57 sync renders.
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("@tanstack/react-router")>();
+	return {
+		...actual,
+		Link: ({
+			to,
+			params,
+			children,
+			...rest
+		}: {
+			to: string;
+			params?: Record<string, string>;
+			children?: React.ReactNode;
+		}) => (
+			<a
+				{...rest}
+				href={to.replace(/\$(\w+)/g, (_, k: string) => params?.[k] ?? "")}
+			>
+				{children}
+			</a>
+		),
+	};
+});
+
 const noop = async () => {};
 const actions: MeetingAgendaActions = {
 	claim: noop,
@@ -72,6 +100,7 @@ function meetingFixture(
 ): MeetingAgendaProps["meeting"] {
 	return {
 		id: "m1",
+		clubId: "c1",
 		scheduledAt: daysFromNow(30),
 		status: "scheduled",
 		lengthMinutes: 90,
@@ -125,6 +154,76 @@ function renderAgenda(
 
 describe("MeetingAgenda capability gating", () => {
 	afterEach(() => cleanup());
+
+	// protects=every audience reaches the digital agenda from the meeting page
+	// via the uuid route; fails_when=the link is gated on a capability, or its
+	// href is built from anything but the meeting's own club and meeting uuids;
+	// no_claim=the target page renders, or a signed-out visitor sees nothing
+	// members-only there (that page's own tests).
+	it.each([
+		[
+			"anon",
+			meetingViewer({
+				currentMemberId: null,
+				canManage: false,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+		],
+		[
+			"member",
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: false,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+		],
+		[
+			"manager",
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: true,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+		],
+	])("shows View agenda to %s", (_who, viewer) => {
+		renderAgenda(viewer, [slot({})]);
+		expect(
+			screen.getByRole("link", { name: "View agenda" }).getAttribute("href"),
+		).toBe("/club/c1/meeting/m1/agenda");
+	});
+
+	// protects=the link survives every meeting state; fails_when=it is hidden
+	// for a past or cancelled meeting; no_claim=anything about the claim gates.
+	it.each([
+		["past", { scheduledAt: daysFromNow(-30) }],
+		["upcoming", { scheduledAt: daysFromNow(30) }],
+		["cancelled", { status: "cancelled" }],
+	])("shows View agenda on a %s meeting", (_when, over) => {
+		renderAgenda(
+			meetingViewer({
+				currentMemberId: null,
+				canManage: false,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			[slot({})],
+			undefined,
+			undefined,
+			{
+				meeting: meetingFixture(over),
+			},
+		);
+		expect(
+			screen.getByRole("link", { name: "View agenda" }).getAttribute("href"),
+		).toBe("/club/c1/meeting/m1/agenda");
+	});
 
 	it("shows admin controls (stats, confirm) for a manager", () => {
 		const filled = slot({
