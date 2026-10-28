@@ -838,7 +838,9 @@ describe("HydrationBrowser.sweep never-attached diagnostics and retry (#1338)", 
 	 * `loads[n].attaches`. The first sweep load is the warm-up, the second the
 	 * judged one, a retry the third.
 	 */
-	function fakeBrowser(loads: { attaches: boolean; events?: object[] }[]) {
+	function fakeBrowser(
+		loads: { attaches: boolean; events?: object[]; delayMs?: number }[],
+	) {
 		const b = new (
 			HydrationBrowser as unknown as new (
 				...a: unknown[]
@@ -853,14 +855,14 @@ describe("HydrationBrowser.sweep never-attached diagnostics and retry (#1338)", 
 			async send(method: string) {
 				if (method === "Page.navigate") {
 					n++;
-					queueMicrotask(() => {
+					setTimeout(() => {
 						for (const ev of loads[n]?.events ?? []) {
 							priv.receive({ data: JSON.stringify(ev) });
 						}
 						priv.receive({
 							data: JSON.stringify({ method: "Page.loadEventFired" }),
 						});
-					});
+					}, loads[n]?.delayMs ?? 0);
 				}
 				return {};
 			},
@@ -879,6 +881,7 @@ describe("HydrationBrowser.sweep never-attached diagnostics and retry (#1338)", 
 	const broken = {
 		attaches: false,
 		events: [
+			// The same console error twice: the de-duplication case.
 			{
 				method: "Runtime.consoleAPICalled",
 				params: { type: "error", args: [{ value: "Failed to fetch module" }] },
@@ -948,8 +951,107 @@ describe("HydrationBrowser.sweep never-attached diagnostics and retry (#1338)", 
 		const r = await run(b);
 		expect(navigations()).toBe(3);
 		expect(r.hydrated).toBe(true);
-		expect(r.retried).toBe(true);
 		expect(r.neverAttached?.failedRequests).toHaveLength(2);
+	});
+
+	it("judges the retry's own time, not the warm-up and the dead load", async () => {
+		const { b } = fakeBrowser([
+			{ attaches: true, delayMs: 5_000 },
+			{ ...broken, delayMs: 40_000 },
+			{ attaches: true, delayMs: 2_000 },
+		]);
+		const r = await run(b);
+		expect(r.hydrated).toBe(true);
+		expect(r.ms).toBeLessThan(10_000);
+		expect(r.neverAttached?.ms).toBeGreaterThanOrEqual(40_000);
+	});
+
+	it("keeps warm-up plus judged load as ms for a route that attaches first time", async () => {
+		const { b } = fakeBrowser([
+			{ attaches: true, delayMs: 5_000 },
+			{ attaches: true, delayMs: 7_000 },
+		]);
+		const r = await run(b);
+		expect(r.ms).toBeGreaterThanOrEqual(12_000);
+	});
+
+	it("does not judge the retry by the dead load's hydration error", async () => {
+		const { b } = fakeBrowser([
+			good,
+			{
+				attaches: false,
+				events: [
+					{
+						method: "Runtime.consoleAPICalled",
+						params: {
+							type: "error",
+							args: [{ value: "Hydration failed because the server HTML" }],
+						},
+					},
+				],
+			},
+			good,
+		]);
+		const r = await run(b);
+		expect(r.hydrated).toBe(true);
+		expect(r.mismatches).toEqual([]);
+		expect(r.neverAttached?.errors.join(" ")).toMatch(/Hydration failed/);
+	});
+
+	it("does not blame the dead load for a request the warm-up failed", async () => {
+		const { b } = fakeBrowser([
+			{
+				attaches: true,
+				events: [
+					{
+						method: "Network.requestWillBeSent",
+						params: { requestId: "w", request: { url: "http://x/warm" } },
+					},
+					{
+						method: "Network.loadingFailed",
+						params: { requestId: "w", errorText: "net::ERR_FAILED" },
+					},
+				],
+			},
+			{ attaches: false },
+			good,
+		]);
+		const r = await run(b);
+		expect(r.neverAttached?.failedRequests).toEqual([]);
+	});
+
+	it("leaves cancelled requests and the aborted EventSource out of the diagnostics", async () => {
+		const { b } = fakeBrowser([
+			good,
+			{
+				attaches: false,
+				events: [
+					{
+						method: "Network.requestWillBeSent",
+						params: { requestId: "c", request: { url: "http://x/c.js" } },
+					},
+					{
+						method: "Network.loadingFailed",
+						params: {
+							requestId: "c",
+							errorText: "net::ERR_ABORTED",
+							canceled: true,
+						},
+					},
+					{
+						method: "Network.loadingFailed",
+						params: {
+							requestId: "es",
+							errorText: "net::ERR_ABORTED",
+							type: "EventSource",
+						},
+					},
+				],
+			},
+			good,
+		]);
+		const r = await run(b);
+		expect(r.neverAttached?.failedRequests).toEqual([]);
 	});
 
 	it("fails the route, after exactly one retry, when the retry never attaches either", async () => {
@@ -957,7 +1059,7 @@ describe("HydrationBrowser.sweep never-attached diagnostics and retry (#1338)", 
 		const r = await run(b);
 		expect(navigations()).toBe(3);
 		expect(r.hydrated).toBe(false);
-		expect(r.retried).toBe(true);
+		expect(r.neverAttached).toBeDefined();
 	});
 
 	it("makes no retry when the judged load attaches", async () => {
@@ -965,7 +1067,6 @@ describe("HydrationBrowser.sweep never-attached diagnostics and retry (#1338)", 
 		const r = await run(b);
 		expect(navigations()).toBe(2);
 		expect(r.hydrated).toBe(true);
-		expect(r.retried).toBeUndefined();
 		expect(r.neverAttached).toBeUndefined();
 	});
 });
