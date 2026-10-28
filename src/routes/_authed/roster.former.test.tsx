@@ -14,6 +14,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { setMemberStatus } from "#/server/members";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
 
+// Records router.invalidate (Retry, Reactivate) while leaving every other
+// router member real.
+const invalidate = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("@tanstack/react-router")>();
+	return {
+		...actual,
+		useRouter: () => {
+			const router = actual.useRouter();
+			return new Proxy(router, {
+				get: (t, k, r) =>
+					k === "invalidate" ? invalidate : Reflect.get(t, k, r),
+			});
+		},
+	};
+});
 vi.mock("#/server/account-invite", () => ({
 	inviteAllMembers: vi.fn(),
 	inviteMember: vi.fn(),
@@ -252,5 +269,100 @@ describe("roster former members (#1239)", () => {
 				within(dialog).getByRole("button", { name: "Reactivate Gina Former" }),
 			),
 		);
+	});
+
+	// protects=Retry in the load-failure dialog shows Retrying… and asks the router to reload;
+	// fails_when=Retry does nothing, or does not show progress;
+	// no_claim=that the reload succeeds (the loader is stubbed).
+	it("Retry shows Retrying… and invalidates the router", async () => {
+		let release: () => void = () => {};
+		invalidate.mockReturnValueOnce(
+			new Promise<void>((r) => {
+				release = r;
+			}),
+		);
+		await renderRoute([memberRow("Ada Active", "active")], true, [], {
+			formerFailed: true,
+		});
+		fireEvent.click(
+			screen.getByRole("button", { name: "Former members (couldn't load)" }),
+		);
+		const dialog = await screen.findByRole("dialog");
+		fireEvent.click(within(dialog).getByRole("button", { name: "Retry" }));
+		expect(await within(dialog).findByText("Retrying…")).toBeTruthy();
+		expect(invalidate).toHaveBeenCalledTimes(1);
+		await act(async () => release());
+		await within(dialog).findByRole("button", { name: "Retry" });
+	});
+
+	// protects=reactivating the only/last row moves focus to the dialog heading;
+	// fails_when=focus falls to the container or body;
+	// no_claim=real router invalidation (the harness re-renders by hand).
+	it("moves focus to the heading after the last row is reactivated", async () => {
+		const list = [{ id: "a", name: "Fred Former", endedAt: "2026-10-05" }];
+		// The server drops the row before the dialog sees the success.
+		vi.mocked(setMemberStatus).mockImplementation((async () => {
+			list.shift();
+		}) as never);
+		await renderRoute([memberRow("Ada Active", "active")], true, list);
+		fireEvent.click(screen.getByRole("button", { name: "Former members (1)" }));
+		const dialog = await screen.findByRole("dialog");
+		fireEvent.click(
+			within(dialog).getByRole("button", { name: "Reactivate Fred Former" }),
+		);
+		await waitFor(() => expect(setMemberStatus).toHaveBeenCalledTimes(1));
+		await act(async () => {
+			force?.();
+		});
+		await waitFor(() =>
+			expect(document.activeElement).toBe(
+				within(dialog).getByRole("heading", { name: "Former members" }),
+			),
+		);
+	});
+
+	// protects=a second click on any row while one reactivation is in flight is ignored;
+	// fails_when=the busyId guard is removed and a second request is sent;
+	// no_claim=the server's own idempotence.
+	it("ignores a second click while a reactivation is pending", async () => {
+		const list = [
+			{ id: "a", name: "Fred Former", endedAt: "2026-10-05" },
+			{ id: "b", name: "Gina Former", endedAt: null },
+		];
+		let resolve: () => void = () => {};
+		vi.mocked(setMemberStatus).mockReturnValue(
+			new Promise<void>((r) => {
+				resolve = r;
+			}) as never,
+		);
+		await renderRoute([memberRow("Ada Active", "active")], true, list);
+		fireEvent.click(screen.getByRole("button", { name: "Former members (2)" }));
+		const dialog = await screen.findByRole("dialog");
+		fireEvent.click(
+			within(dialog).getByRole("button", { name: "Reactivate Fred Former" }),
+		);
+		await within(dialog).findByText("Reactivating…");
+		fireEvent.click(
+			within(dialog).getByRole("button", { name: "Reactivate Gina Former" }),
+		);
+		fireEvent.click(
+			within(dialog).getByRole("button", { name: "Reactivating Fred Former" }),
+		);
+		expect(setMemberStatus).toHaveBeenCalledTimes(1);
+		await act(async () => resolve());
+	});
+
+	// protects=the "Hidden" cell's explanation is reachable: a title on a pointer-reachable element and text for assistive tech;
+	// fails_when=the title returns to a pointer-events-none ancestor, or the sr-only text is dropped;
+	// no_claim=real hover (jsdom has no layout).
+	it("explains Hidden on a pointer-reachable element and to assistive tech", async () => {
+		await renderRoute([memberRow("Ina Inactive", "inactive")], true, []);
+		const hidden = screen.getByText("Hidden");
+		const note =
+			"Pathways are hidden for inactive members. Use the checkbox above to show them.";
+		expect(hidden.getAttribute("title")).toBe(note);
+		expect(hidden.className).toContain("pointer-events-auto");
+		expect(hidden.querySelector(".sr-only")?.textContent).toContain(note);
+		expect(hidden.closest("[title]")).toBe(hidden);
 	});
 });

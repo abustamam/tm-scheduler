@@ -483,7 +483,7 @@ function Roster() {
 					<button
 						type="button"
 						className={cn(
-							"inline-flex min-h-11 items-center rounded-full px-3 text-sm font-semibold underline-offset-4 hover:underline",
+							"inline-flex min-h-11 items-center rounded-full px-3 text-sm font-semibold underline-offset-4 hover:underline outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
 							formerFailed ? "text-destructive" : "text-link",
 						)}
 						onClick={() => setFormerOpen(true)}
@@ -618,18 +618,24 @@ function Roster() {
 							</div>
 
 							{/* Pathway */}
-							<div
-								className="pointer-events-none relative z-[1] hidden min-w-0 truncate text-xs text-muted-foreground sm:block"
-								title={
-									m.pathwayWithheld && servedAsAdmin
-										? "Pathways are hidden for inactive members. Use the checkbox above to show them."
-										: undefined
-								}
-							>
+							<div className="pointer-events-none relative z-[1] hidden min-w-0 truncate text-xs text-muted-foreground sm:block">
 								{m.pathwayLabel ??
 									// An officer is told the column is hidden, not empty; anyone
-									// else sees the ordinary "no paths" dash.
-									(m.pathwayWithheld && servedAsAdmin ? "Hidden" : "—")}
+									// else sees the ordinary "no paths" dash. The explanation sits
+									// on its own pointer-events-auto span: a title on the
+									// pointer-events-none cell never shows, and a title alone is
+									// invisible to assistive tech, hence the sr-only copy.
+									(m.pathwayWithheld && servedAsAdmin ? (
+										<span
+											className="pointer-events-auto cursor-help"
+											title={PATHWAYS_HIDDEN_NOTE}
+										>
+											Hidden
+											<span className="sr-only">. {PATHWAYS_HIDDEN_NOTE}</span>
+										</span>
+									) : (
+										"—"
+									))}
 							</div>
 
 							{/* Phone. LIVE only when there is a link to click — the
@@ -1836,6 +1842,9 @@ function SegmentChip({
 		</button>
 	);
 }
+
+const PATHWAYS_HIDDEN_NOTE =
+	"Pathways are hidden for inactive members. Use the checkbox above to show them.";
 
 /** The admin's list of former members (#1239), each with Reactivate. */
 function FormerMembersDialog({

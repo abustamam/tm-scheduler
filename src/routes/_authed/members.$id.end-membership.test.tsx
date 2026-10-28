@@ -13,7 +13,15 @@ import {
 } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setMemberStatus } from "#/server/members";
+import { getMemberProfile } from "#/server/club";
+import { listFormerMembers, setMemberStatus } from "#/server/members";
+import { getMemberMentorships } from "#/server/mentorship";
+import { getMemberOrientation } from "#/server/orientation";
+import {
+	getMemberEnrollments,
+	listPathwayOptions,
+} from "#/server/path-enrollment";
+import { getMemberPathways } from "#/server/pathways-read";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
 
 vi.mock("#/server/club", () => ({ getMemberProfile: vi.fn() }));
@@ -44,6 +52,9 @@ vi.mock("#/server/pathways-read", () => ({ getMemberPathways: vi.fn() }));
 vi.mock("#/server/progress-marks", () => ({
 	markMemberProject: vi.fn(),
 	unmarkMemberProject: vi.fn(),
+}));
+vi.mock("#/server/clubs", () => ({
+	loadClubTimezoneSettings: vi.fn(async () => ({ timezone: "UTC", zones: [] })),
 }));
 vi.mock("#/server/speeches", () => ({
 	archiveSpeech: vi.fn(),
@@ -146,8 +157,9 @@ describe("End membership confirm (#1329)", () => {
 		await openEnd();
 		const body = screen.getByRole("dialog").textContent ?? "";
 		expect(body).toMatch(/upcoming roles are released/);
-		expect(body).toMatch(/office they hold is closed/);
-		expect(body).toMatch(/admin access/);
+		expect(body).toMatch(
+			/office they hold is closed and any admin access they have ends/,
+		);
 		expect(body).toMatch(/Reactivating them restores neither/);
 	});
 
@@ -240,5 +252,79 @@ describe("Former profile (#1329)", () => {
 		expect(
 			screen.getByText(`Pathways progress isn't shown for ${word} members.`),
 		).toBeTruthy();
+	});
+});
+
+describe("Former profile loader (#1329)", () => {
+	const loader = Route.options.loader as unknown as (a: unknown) => Promise<{
+		endedAt: string | null;
+	}>;
+	const OTHER_ID = "33333333-3333-4333-8333-333333333333";
+
+	function run(opts: {
+		clubRole?: "admin" | "member";
+		impersonating?: { mode: "read_only"; clubId: string } | null;
+		status?: "former" | "active";
+	}) {
+		vi.mocked(getMemberProfile).mockResolvedValue({
+			member: { id: MEMBER_ID, status: opts.status ?? "former" },
+		} as never);
+		vi.mocked(getMemberPathways).mockResolvedValue([] as never);
+		vi.mocked(listPathwayOptions).mockResolvedValue([] as never);
+		vi.mocked(getMemberEnrollments).mockResolvedValue([] as never);
+		vi.mocked(getMemberOrientation).mockResolvedValue(null as never);
+		vi.mocked(getMemberMentorships).mockResolvedValue(null as never);
+		return loader({
+			params: { id: MEMBER_ID },
+			deps: { allSpeeches: false },
+			context: {
+				activeClubId: CLUB_ID,
+				clubs: [
+					{
+						clubId: CLUB_ID,
+						name: "Downtown Club",
+						clubNumber: "123456",
+						clubRole: opts.clubRole ?? "admin",
+					},
+				],
+				officerPositions: [],
+				impersonating: opts.impersonating ?? null,
+			},
+		});
+	}
+
+	// protects=the end date is the row whose id matches the route param, not the first row;
+	// fails_when=the loader takes rows[0] or matches by name;
+	// no_claim=the server's list.
+	it("picks the former-members row by params.id", async () => {
+		vi.mocked(listFormerMembers).mockResolvedValue([
+			{ id: OTHER_ID, name: "Other", endedAt: "2025-01-01" },
+			{ id: MEMBER_ID, name: "Ada Member", endedAt: "2026-10-05" },
+		] as never);
+		expect((await run({})).endedAt).toBe("2026-10-05");
+	});
+
+	// protects=a viewer the admin-only list refuses never makes the call;
+	// fails_when=the loader calls listFormerMembers for a non-admin, a view-as session, or a non-former member;
+	// no_claim=the server's own refusal.
+	it.each([
+		["a non-admin", { clubRole: "member" as const }],
+		[
+			"a view-as session",
+			{ impersonating: { mode: "read_only" as const, clubId: CLUB_ID } },
+		],
+		["an active member's profile", { status: "active" as const }],
+	])("does not call listFormerMembers for %s", async (_label, opts) => {
+		const result = await run(opts);
+		expect(listFormerMembers).not.toHaveBeenCalled();
+		expect(result.endedAt).toBeNull();
+	});
+
+	// protects=a failing list gives no date and does not fail the page;
+	// fails_when=the rejection propagates out of the loader;
+	// no_claim=that the failure is surfaced anywhere.
+	it("yields no date, not a failed loader, when the list rejects", async () => {
+		vi.mocked(listFormerMembers).mockRejectedValue(new Error("boom"));
+		expect((await run({})).endedAt).toBeNull();
 	});
 });

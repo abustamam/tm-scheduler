@@ -184,9 +184,18 @@ export const Route = createFileRoute("/_authed/members/$id")({
 			),
 		]);
 		// The profile does not carry the end date; the former-members list does.
-		// Admin-only, so anyone else gets a throw, swallowed to "no date".
+		// That list is admin-only (and refuses "View as this club"), so only a
+		// viewer it will serve asks. A failure leaves "no date", not a failed page.
+		const servedAsAdmin =
+			!!context.clubs &&
+			!!effectiveAdminClub({
+				clubs: context.clubs,
+				activeClubId: clubId,
+				officerPositions: context.officerPositions ?? [],
+			}) &&
+			exportLinkAllowed(context.impersonating, clubId);
 		const endedAt =
-			profile.member?.status === "former"
+			profile.member?.status === "former" && servedAsAdmin
 				? await listFormerMembers({ data: { clubId } })
 						.then(
 							(rows) => rows.find((r) => r.id === params.id)?.endedAt ?? null,
@@ -1263,7 +1272,7 @@ function MemberActions({
 						<DialogTitle>End {member.name}'s membership?</DialogTitle>
 						<DialogDescription>
 							They leave the roster and their upcoming roles are released. Any
-							office they hold is closed, which ends the admin access it gives.
+							office they hold is closed and any admin access they have ends.
 							Reactivating them restores neither. Their history stays.
 						</DialogDescription>
 					</DialogHeader>
