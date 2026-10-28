@@ -128,7 +128,7 @@ export async function loadPublicUpcomingMeetings(
 		rows,
 		rows[0]?.timezone ?? "UTC",
 	);
-	return rows.map((r) => ({ ...r, urlKey: keys.get(r.id) ?? r.id }));
+	return rows.map((r) => ({ ...r, urlKey: keys(r.id) }));
 }
 
 export interface PublicNextMeetingKey {
@@ -1118,7 +1118,7 @@ export async function loadCancelledMeetings(
 		id: r.id,
 		scheduledAt: r.scheduledAt.toISOString(),
 		timezone,
-		urlKey: keys.get(r.id) ?? r.id,
+		urlKey: keys(r.id),
 	}));
 }
 

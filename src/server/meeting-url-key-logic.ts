@@ -56,8 +56,8 @@ export async function urlKeysForClubMeetings(
 	clubId: string,
 	items: { id: string; scheduledAt: Date | string }[],
 	timezone: string,
-): Promise<Map<string, string>> {
-	if (items.length === 0) return new Map();
+): Promise<(id: string) => string> {
+	if (items.length === 0) return keyOfFrom(new Map());
 	const dates = items.map((i) =>
 		localDateKey(new Date(i.scheduledAt), timezone),
 	);
@@ -73,9 +73,21 @@ export async function urlKeysForClubMeetings(
 				lt(meetings.scheduledAt, localDayRange(last, timezone).end),
 			),
 		);
-	return urlKeysForMeetings(
-		items,
-		timezone,
-		rows.map((r) => r.scheduledAt),
+	return keyOfFrom(
+		urlKeysForMeetings(
+			items,
+			timezone,
+			rows.map((r) => r.scheduledAt),
+		),
 	);
+}
+
+/** A total lookup: a key for every id it was built from, a throw for any other,
+ *  so a caller can never fall back to the uuid (#1396). */
+export function keyOfFrom(keys: Map<string, string>): (id: string) => string {
+	return (id) => {
+		const key = keys.get(id);
+		if (key === undefined) throw new Error(`no meeting url key for ${id}`);
+		return key;
+	};
 }

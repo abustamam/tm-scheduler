@@ -610,7 +610,7 @@ async function applyDefaultToUpcoming(
 	const refOf = (m: { id: string; scheduledAt: Date }): MeetingRef => ({
 		meetingId: m.id,
 		scheduledAt: m.scheduledAt,
-		urlKey: keys.get(m.id) ?? m.id,
+		urlKey: keys(m.id),
 	});
 
 	for (const [index, meeting] of candidates.entries()) {

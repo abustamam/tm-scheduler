@@ -59,6 +59,7 @@ import {
 	loadTemplateKey,
 } from "./meeting-templates-logic";
 import {
+	keyOfFrom,
 	resolveMeetingUrlKey,
 	urlKeysForClubMeetings,
 } from "./meeting-url-key-logic";
@@ -765,10 +766,10 @@ export const listMemberCommitments = createServerFn({ method: "GET" })
 					rows.map((r) => ({ id: r.meetingId, scheduledAt: r.scheduledAt })),
 					timezone,
 				)
-			: new Map<string, string>();
+			: keyOfFrom(new Map());
 		return rows.map((r) => ({
 			...r,
-			urlKey: keys.get(r.meetingId) ?? r.meetingId,
+			urlKey: keys(r.meetingId),
 		}));
 	});
 

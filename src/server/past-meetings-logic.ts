@@ -19,6 +19,7 @@ import { clubs, meetingAttendance, meetings, roleSlots } from "#/db/schema";
 import { deriveMeetingNumber } from "#/lib/meeting-number";
 import { urlKeysForMeetings } from "#/lib/meeting-url";
 import { isReadableClub } from "./club-readable-logic";
+import { keyOfFrom } from "./meeting-url-key-logic";
 
 /** Default rows per archive page. The route passes its own `limit`; this is the
  *  fallback for callers (e.g. the nav strip) that just want "a few". */
@@ -167,7 +168,7 @@ export async function loadPastMeetings(input: {
 		.from(meetings)
 		.where(eq(meetings.clubId, input.clubId))
 		.orderBy(asc(meetings.scheduledAt));
-	const keys = urlKeysForMeetings(spine, timezone);
+	const keyOf = keyOfFrom(urlKeysForMeetings(spine, timezone));
 
 	// Which of these meetings actually have minutes recorded — one grouped query
 	// over the page's ids.
@@ -194,7 +195,7 @@ export async function loadPastMeetings(input: {
 			status: m.status as "scheduled" | "completed",
 			openSlots: m.openSlots,
 			totalSlots: m.totalSlots,
-			urlKey: keys.get(m.id) ?? m.id,
+			urlKey: keyOf(m.id),
 			meetingNumber: deriveMeetingNumber(spine, m.id),
 			hasMinutes: withMinutes.has(m.id),
 		})),

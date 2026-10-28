@@ -1,6 +1,5 @@
 import type { LinkProps } from "@tanstack/react-router";
 import { formatShortDate } from "./format";
-import { urlKeysForMeetings } from "./meeting-url";
 
 export type MeetingNavItem = {
 	meetingId: string;
@@ -12,21 +11,16 @@ export type MeetingNavItem = {
 
 // `urlKey` is the server's canonical key (`resolveMeetingUrlKey`), which counts
 // cancelled meetings on the same date and so cannot be recomputed from the
-// handful of rows this strip holds (#1396). Optional only so a caller with no
-// server key (tests, a list that already holds the whole club) still gets one
-// derived from the rows; every production source supplies it.
-type CurrentMeeting = {
+// handful of rows this strip holds (#1396). REQUIRED, so a caller that forgets
+// it fails typecheck instead of linking to the wrong meeting.
+type NavMeeting = {
 	id: string;
 	scheduledAt: Date | string;
 	openSlots: number;
-	urlKey?: string;
+	urlKey: string;
 };
-type UpcomingMeeting = {
-	id: string;
-	scheduledAt: Date | string;
-	openSlots: number;
-	urlKey?: string;
-};
+type CurrentMeeting = NavMeeting;
+type UpcomingMeeting = NavMeeting;
 
 function toMillis(value: Date | string): number {
 	return (typeof value === "string" ? new Date(value) : value).getTime();
@@ -68,10 +62,9 @@ export function buildMeetingNavItems(
 	const ordered = [...byId.values()].sort(
 		(a, b) => toMillis(a.scheduledAt) - toMillis(b.scheduledAt),
 	);
-	const keys = urlKeysForMeetings(ordered, timezone);
 	return ordered.map((m) => ({
 		meetingId: m.id,
-		urlKey: m.urlKey ?? keys.get(m.id) ?? m.id,
+		urlKey: m.urlKey,
 		label: formatShortDate(m.scheduledAt, timezone),
 		isCurrent: m.id === current.id,
 		hasOpenRoles: !m.isPast && m.openSlots > 0,
@@ -85,7 +78,8 @@ export function buildMeetingNavItems(
  * meeting loaders share one implementation.
  */
 export function deriveMeetingNavItems(
-	meeting: { id: string; scheduledAt: Date | string; urlKey?: string },
+	meeting: { id: string; scheduledAt: Date | string },
+	urlKey: string,
 	slots: { status: string }[],
 	upcoming: UpcomingMeeting[],
 	timezone: string,
@@ -97,7 +91,7 @@ export function deriveMeetingNavItems(
 			id: meeting.id,
 			scheduledAt: meeting.scheduledAt,
 			openSlots,
-			urlKey: meeting.urlKey,
+			urlKey,
 		},
 		upcoming,
 		timezone,

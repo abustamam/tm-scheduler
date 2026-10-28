@@ -266,7 +266,7 @@ export async function loadSeasonGrid(input: {
 		id: m.id,
 		scheduledAt: m.scheduledAt.toISOString(),
 		timezone,
-		urlKey: gridKeys.get(m.id) ?? m.id,
+		urlKey: gridKeys(m.id),
 		openCount: openByMeeting.get(m.id) ?? 0,
 		totalSlots: totalByMeeting.get(m.id) ?? 0,
 		isPast: m.scheduledAt < now,

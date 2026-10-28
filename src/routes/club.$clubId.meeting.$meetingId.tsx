@@ -274,6 +274,7 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 		const upcoming = await upcomingPromise;
 		const navItems = deriveMeetingNavItems(
 			data.meeting,
+			data.urlKey,
 			data.slots,
 			upcoming,
 			data.timezone,
