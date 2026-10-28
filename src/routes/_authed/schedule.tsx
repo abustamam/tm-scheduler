@@ -219,7 +219,7 @@ function SeasonGridPage() {
 							// value is always written, so it beats the phone default.
 							search: (prev) => ({
 								...prev,
-								past: pastSearch(p).past,
+								past: p,
 							}),
 						})
 					}

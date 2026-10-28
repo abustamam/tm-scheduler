@@ -35,7 +35,9 @@ const {
 	toastSuccess,
 	toastMessage,
 	toastError,
+	anchorScroll,
 } = vi.hoisted(() => ({
+	anchorScroll: vi.fn(),
 	// #763: like `setAvailability`, the claim REPORTS its proof and the grid
 	// offers Undo (a session-gated release) only on `"session"`.
 	claimSlot: vi.fn(
@@ -70,6 +72,19 @@ vi.mock("#/server/availability", () => ({
 	markUnavailableReleasing,
 	setAvailability,
 }));
+// Spy-through: the real helper still runs; the spy counts its calls (#1316).
+vi.mock("#/lib/season-grid-anchor-scroll", async (orig) => {
+	const actual = await orig<typeof import("#/lib/season-grid-anchor-scroll")>();
+	return {
+		...actual,
+		scrollAnchorClearOfPinnedColumn: (
+			...a: Parameters<typeof actual.scrollAnchorClearOfPinnedColumn>
+		) => {
+			anchorScroll(...a);
+			return actual.scrollAnchorClearOfPinnedColumn(...a);
+		},
+	};
+});
 vi.mock("sonner", () => ({
 	toast: { success: toastSuccess, message: toastMessage, error: toastError },
 }));
@@ -1015,6 +1030,33 @@ describe("Show past (#1048)", () => {
 			.getAllByRole("columnheader")
 			.filter((th) => th.textContent?.includes("ended"));
 		expect(past).toHaveLength(2);
+	});
+
+	// protects=a phone hydrates with the desktop default of 2 past columns and
+	// then drops them: the anchor scroll must run again, or scrollLeft keeps
+	// the two-column offset and hides the first upcoming meeting (#1316);
+	// fails_when=the anchor-scroll effect depends on [] again.
+	it("re-runs the anchor scroll when the rendered past columns change", async () => {
+		function Harness() {
+			const [n, setN] = useState<0 | 2>(2);
+			return (
+				<>
+					<button type="button" onClick={() => setN(0)}>
+						drop past
+					</button>
+					<SeasonGrid
+						data={wideData}
+						orientation="roles"
+						count={8}
+						pastCount={n}
+					/>
+				</>
+			);
+		}
+		await renderUnderMemoryRouter(<Harness />);
+		anchorScroll.mockClear();
+		await userEvent.click(screen.getByRole("button", { name: "drop past" }));
+		expect(anchorScroll).toHaveBeenCalledTimes(1);
 	});
 
 	// protects=a long member name is truncated inside the label column and its

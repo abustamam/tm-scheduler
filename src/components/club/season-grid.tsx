@@ -178,12 +178,17 @@ export function SeasonGrid({
 
 	// Bring the anchor meeting into view to the RIGHT of the pinned label
 	// column, not centred under it on a phone (#930).
+	// Re-runs when the rendered past-column count changes (#1316): a phone hydrates
+	// with the desktop default of 2, then drops them, moving the anchor to
+	// column 0 while scrollLeft would still sit two columns along.
+	const renderedPastCount = data.meetings.filter((m) => m.isPast).length;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: renderedPastCount is the trigger, not a value read
 	useEffect(() => {
 		const scroller = scrollerRef.current;
 		const anchor = anchorRef.current;
 		if (!scroller || !anchor) return;
 		scrollAnchorClearOfPinnedColumn(scroller, labelHeadRef.current, anchor);
-	}, []);
+	}, [renderedPastCount]);
 
 	// Members × Meetings: bring the viewer's own row into view on load (and when
 	// switching into this orientation), mirroring the horizontal anchor scroll.
@@ -514,7 +519,7 @@ export function SeasonGrid({
 
 	return (
 		<div className="space-y-4">
-			<div className="flex flex-nowrap items-center gap-3 overflow-x-auto md:flex-wrap md:gap-4 md:overflow-visible">
+			<div className="flex flex-nowrap items-center gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:flex-wrap md:gap-4 md:overflow-visible">
 				<div className="inline-flex shrink-0 overflow-hidden rounded-lg border">
 					{VIEWS.map((v) => (
 						<button

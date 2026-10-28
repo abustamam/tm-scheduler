@@ -770,12 +770,18 @@ describe.skipIf(!hasChrome)(
 					"sticky top-0 min-w-[3.5rem]",
 				),
 				rowHead: classLiteralContaining(GRID, "sticky left-0 z-10"),
-				truncate: classLiteralContaining(GRID, "block min-w-0 truncate"),
+				// The row label's real wrapper, link and link-span, read from source.
+				labelWrap: classLiteralContaining(GRID, "flex items-center gap-1.5"),
+				labelLink: classLiteralContaining(GRID, "min-w-0 hover:underline"),
+				truncate: classLiteralContaining(GRID, "block truncate"),
+				meetingSpan: classLiteralContaining(GRID, "block py-2 md:py-0"),
 				cell: classLiteralContaining(GRID_CELL, "flex h-11 min-w-[3rem]"),
 			};
 		}
 
-		function fixture(controlsClass: string): string {
+		function fixture(controlsClass: string, stripBound = false): string {
+			const bound = (cls: string) =>
+				stripBound ? cls.replace(/\b(max-)?w-36\b/g, "") : cls;
 			const seg = (labels: string[]) =>
 				`<div class="${c.segmented}">${labels.map((l) => `<button type="button" class="${c.seg}">${l}</button>`).join("")}</div>`;
 			const group = (label: string, labels: string[]) =>
@@ -784,12 +790,12 @@ describe.skipIf(!hasChrome)(
 			const heads = Array.from(
 				{ length: 8 },
 				(_, i) =>
-					`<th class="${c.meetingHead}"${i === 0 ? ' id="anchor"' : ""}><span class="block py-2 md:py-0">Thu, Oct ${i + 1}</span></th>`,
+					`<th class="${c.meetingHead}"${i === 0 ? ' id="anchor"' : ""}><span class="${c.meetingSpan}">Thu, Oct ${i + 1}</span></th>`,
 			).join("");
 			const rows = Array.from(
 				{ length: 6 },
 				(_, r) => `<tr class="group transition-colors">
-					<th class="${c.rowHead}" id="${r === 0 ? "bodyLabel" : `l${r}`}"><div class="flex items-center gap-1.5"><a href="#" class="min-w-0"><span class="${c.truncate}" title="${LONG_NAME}">${LONG_NAME}</span></a></div></th>
+					<th class="${bound(c.rowHead)}" id="${r === 0 ? "bodyLabel" : `l${r}`}"><div class="${c.labelWrap}"><a href="#" class="${c.labelLink}"><span class="${c.truncate}" title="${LONG_NAME}">${LONG_NAME}</span></a></div></th>
 					${Array.from({ length: 8 }, () => `<td class="p-0"><div class="${c.cell}">open</div></td>`).join("")}
 				</tr>`,
 			).join("");
@@ -805,7 +811,7 @@ describe.skipIf(!hasChrome)(
 						</div>
 						<div class="${c.frame}"><div class="${c.scroller}" id="scroller">
 							<table class="${c.table}" id="table">
-								<thead><tr><th class="${c.labelHead}" id="label">Member</th>${heads}</tr></thead>
+								<thead><tr><th class="${bound(c.labelHead)}" id="label">Member</th>${heads}</tr></thead>
 								<tbody>${rows}</tbody>
 							</table>
 						</div></div>
@@ -825,7 +831,7 @@ describe.skipIf(!hasChrome)(
 			scrollerRight: number;
 			wrapOverflow: boolean;
 		};
-		function probe(html: string): Probe {
+		function probe(html: string, extraCss = ""): Probe {
 			const script = `<script>(function(){
 				var $=function(i){return document.getElementById(i)};
 				(${scrollAnchorClearOfPinnedColumn.toString()})($("scroller"),$("label"),$("anchor"));
@@ -848,7 +854,7 @@ describe.skipIf(!hasChrome)(
 			})();</script>`;
 			const title = renderAndReadTitle({
 				bodyHtml: html,
-				css,
+				css: css + extraCss,
 				script,
 				viewport: PHONE,
 				tmpPrefix: "season-grid-first-screen-",
@@ -902,14 +908,25 @@ describe.skipIf(!hasChrome)(
 			expect(p.bodyW).toBeGreaterThan(100);
 		});
 
+		it("control: without w-36 / max-w-36 the label column exceeds 144px", () => {
+			const p = probe(fixture(c.controls, true));
+			expect(p.headW).toBeGreaterThan(144);
+			expect(p.bodyW).toBeGreaterThan(144);
+		});
+
 		it("the anchor column is clear of the pinned label column", () => {
 			const p = probe(fixture(c.controls));
 			expect(p.anchorLeft).toBeGreaterThanOrEqual(p.labelRight);
 			expect(p.anchorRight).toBeLessThanOrEqual(p.scrollerRight + 0.5);
 		});
 
+		// Linux Chrome draws a classic 15px scrollbar on an overflowing row (the
+		// Mac's is an overlay): CI measured 45px with it. Forced here so the
+		// gate fails on a Mac too.
+		const CLASSIC_SCROLLBAR = "\n#controls::-webkit-scrollbar{height:15px}";
+
 		it("the controls row is one line, 44px or less, and the page does not scroll sideways", () => {
-			const p = probe(fixture(c.controls));
+			const p = probe(fixture(c.controls), CLASSIC_SCROLLBAR);
 			expect(p.controlsHeight).toBeLessThanOrEqual(44);
 			expect(p.wrapOverflow).toBe(false);
 		});
@@ -918,6 +935,15 @@ describe.skipIf(!hasChrome)(
 			const p = probe(fixture(c.controls));
 			expect(p.shareTop).toBeLessThan(p.tableTop);
 			expect(p.tableTop).toBeLessThan(PHONE.height);
+		});
+
+		it("control: a classic scrollbar on the row, un-hidden, makes it taller than 44px", () => {
+			const shown = c.controls
+				.replace("[scrollbar-width:none]", "")
+				.replace("[&::-webkit-scrollbar]:hidden", "");
+			expect(shown).not.toBe(c.controls);
+			const p = probe(fixture(shown), CLASSIC_SCROLLBAR);
+			expect(p.controlsHeight).toBeGreaterThan(44);
 		});
 
 		it("control: with wrapping restored the controls take more than one line", () => {
