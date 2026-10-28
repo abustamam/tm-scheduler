@@ -8,6 +8,7 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { expectAmberClaim } from "#/components/club/claim-class-assert";
 import { MeetingAttendancePanel } from "#/components/club/meeting-attendance-panel";
+import { buttonVariants } from "#/components/ui/button";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { buildPanelRoleMap, type PlanStatus } from "#/lib/attendance-panel";
 import { lockedViewer } from "#/lib/meeting-lifecycle";
@@ -28,30 +29,11 @@ vi.mock("#/db", () => ({ db: {} }));
 // "View agenda" is a router <Link>; every render here is router-less. A stand-in
 // that substitutes the params into `to` keeps the href assertable without
 // mounting a router around 57 sync renders.
-vi.mock("@tanstack/react-router", async (importOriginal) => {
-	const actual =
-		await importOriginal<typeof import("@tanstack/react-router")>();
-	return {
-		...actual,
-		Link: ({
-			to,
-			params,
-			children,
-			...rest
-		}: {
-			to: string;
-			params?: Record<string, string>;
-			children?: React.ReactNode;
-		}) => (
-			<a
-				{...rest}
-				href={to.replace(/\$(\w+)/g, (_, k: string) => params?.[k] ?? "")}
-			>
-				{children}
-			</a>
-		),
-	};
-});
+vi.mock("@tanstack/react-router", async (importOriginal) =>
+	(await import("#/test/router-link-stub")).routerLinkMock(
+		await importOriginal<typeof import("@tanstack/react-router")>(),
+	),
+);
 
 const noop = async () => {};
 const actions: MeetingAgendaActions = {
@@ -196,6 +178,27 @@ describe("MeetingAgenda capability gating", () => {
 		expect(
 			screen.getByRole("link", { name: "View agenda" }).getAttribute("href"),
 		).toBe("/club/c1/meeting/m1/agenda");
+	});
+
+	// protects=the phone-tall (44px) tap target, DESIGN.md; fails_when=the link
+	// drops back to the compact size; no_claim=layout beyond the size classes.
+	it("renders View agenda at the touch size", () => {
+		renderAgenda(
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: false,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			[slot({})],
+		);
+		const link = screen.getByRole("link", { name: "View agenda" });
+		const touch = buttonVariants({ variant: "outline", size: "touch" }).split(
+			" ",
+		);
+		expect(touch).toContain("h-11");
+		for (const c of touch) expect(link.classList.contains(c)).toBe(true);
 	});
 
 	// protects=the link survives every meeting state; fails_when=it is hidden

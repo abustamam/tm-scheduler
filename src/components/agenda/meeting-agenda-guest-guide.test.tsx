@@ -21,30 +21,11 @@ vi.mock("#/db", () => ({ db: {} }));
 
 // MeetingAgenda renders a router <Link> ("View agenda", #1336) and this suite
 // mounts it router-less; a stand-in <a> keeps the render working.
-vi.mock("@tanstack/react-router", async (importOriginal) => {
-	const actual =
-		await importOriginal<typeof import("@tanstack/react-router")>();
-	return {
-		...actual,
-		Link: ({
-			to,
-			params,
-			children,
-			...rest
-		}: {
-			to: string;
-			params?: Record<string, string>;
-			children?: React.ReactNode;
-		}) => (
-			<a
-				{...rest}
-				href={to.replace(/\$(\w+)/g, (_, k: string) => params?.[k] ?? "")}
-			>
-				{children}
-			</a>
-		),
-	};
-});
+vi.mock("@tanstack/react-router", async (importOriginal) =>
+	(await import("#/test/router-link-stub")).routerLinkMock(
+		await importOriginal<typeof import("@tanstack/react-router")>(),
+	),
+);
 
 afterEach(cleanup);
 

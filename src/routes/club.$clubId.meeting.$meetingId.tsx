@@ -2392,8 +2392,8 @@ function MeetingView() {
 						/>
 					) : null}
 
-					{/* The strip's "Today's agenda" target (#913). Always rendered, so
-					    a shared `#agenda` link works on any day. */}
+					{/* Keeps a shared `#agenda` link working on any day (the strip now
+					    links to the digital agenda route). Always rendered. */}
 					<section id={MEETING_AGENDA_ANCHOR_ID} className="scroll-mt-28">
 						<MeetingAgenda
 							slots={slots}

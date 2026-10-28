@@ -438,8 +438,8 @@ export function MeetingAgenda({
 			    or not: it is a read-only page the public meeting page already
 			    exposes the same slots to. The uuid params are the ones the
 			    agenda editor link uses; both route segments accept a uuid (#877). */}
-			<div className="flex flex-wrap items-center justify-end gap-2">
-				<Button asChild variant="outline" size="sm">
+			<div className="mb-4 flex flex-wrap items-center justify-end gap-2">
+				<Button asChild variant="outline" size="touch">
 					<Link
 						to="/club/$clubId/meeting/$meetingId/agenda"
 						params={{ clubId: meeting.clubId, meetingId: meeting.id }}
