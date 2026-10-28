@@ -69,6 +69,8 @@ describe.skipIf(!hasTestDb)(
 				.where(eq(members.id, seed.memberId));
 			const result = await approve();
 			expect(result.officerGrants).toBe(0);
+			// Still a skipped assignment: the decrement sits after the skip.
+			expect(result.stats.skippedOfficerAssignments).toBe(1);
 			expect(await offices()).toHaveLength(0);
 		});
 
@@ -78,6 +80,7 @@ describe.skipIf(!hasTestDb)(
 		it("still opens the term on an active membership", async () => {
 			const result = await approve();
 			expect(result.officerGrants).toBe(1);
+			expect(result.stats.skippedOfficerAssignments).toBe(0);
 			expect(await offices()).toHaveLength(1);
 		});
 	},

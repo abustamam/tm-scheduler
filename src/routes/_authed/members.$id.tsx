@@ -48,6 +48,7 @@ import { mailtoHref } from "#/lib/mailto";
 import { phoneEditPayload } from "#/lib/member-edit-phone";
 import { isPastAgendaRemoveRefusal } from "#/lib/member-remove";
 import { formatTenure } from "#/lib/members";
+import { isOnRoster } from "#/lib/membership-status";
 import {
 	OFFICER_POSITIONS,
 	type OfficerPosition,
@@ -848,12 +849,6 @@ type ProfileMember = {
 	status: "active" | "inactive" | "former";
 	clubRole: "admin" | "member";
 };
-
-/** Only a membership on the roster (active or inactive) holds a role. Named
- *  positively (#1326): a status added later holds none until listed here. */
-function isOnRoster(status: ProfileMember["status"]): boolean {
-	return status === "active" || status === "inactive";
-}
 
 function MemberActions({
 	member,

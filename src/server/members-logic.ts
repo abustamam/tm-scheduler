@@ -35,6 +35,7 @@ import {
 import { MEMBERSHIP_ENDED_CHANGE } from "#/lib/activity-format";
 import { localDateKey } from "#/lib/meeting-url";
 import { pastAgendaRemoveRefusal } from "#/lib/member-remove";
+import { isOnRoster } from "#/lib/membership-status";
 import {
 	OFFICER_POSITIONS,
 	type OfficerPosition,
@@ -673,9 +674,7 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 			current.status === "active" && input.status === "inactive";
 		// Leaving the roster for good (#1239): same release of upcoming slots as
 		// going inactive, plus the end date and the open officer terms.
-		const ending =
-			(current.status === "active" || current.status === "inactive") &&
-			input.status === "former";
+		const ending = isOnRoster(current.status) && input.status === "former";
 		const releasing = deactivating || ending;
 		// #1340: a membership that ends, or comes back from former, holds role
 		// `member`. Ending is when the permission stops; coming back is never a

@@ -624,21 +624,20 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 			expect(open).toEqual([]);
 		});
 
-		// protects=active -> active and inactive -> inactive write nothing and log nothing;
-		// fails_when=a repeat of the same status writes a log row or releases a slot;
-		// no_claim=former -> former (its own test).
-		it("same-status writes are no-ops for active and inactive", async () => {
-			const a = await addMember("Same Active");
-			await assignSlot(a);
-			await set(a, "active");
-			expect((await rowOf(a)).status).toBe("active");
-			expect(await statusLogCount(a)).toBe(0);
-			expect((await slotRow()).assignedMemberId).toBe(a);
-			const i = await addMember("Same Inactive", "inactive");
-			await set(i, "inactive");
-			expect((await rowOf(i)).status).toBe("inactive");
-			expect(await statusLogCount(i)).toBe(0);
-		});
+		// protects=a repeat of the SAME status writes nothing and logs nothing, one case per status;
+		// fails_when=a repeat of that status writes a log row, releases a slot or changes the row;
+		// no_claim=a change of status (the tests above and below).
+		for (const status of ["active", "inactive", "former"] as const) {
+			it(`${status} -> ${status} is a no-op`, async () => {
+				const id = await addMember(`Same ${status}`, status);
+				if (status !== "former") await assignSlot(id);
+				await set(id, status);
+				expect((await rowOf(id)).status).toBe(status);
+				expect(await statusLogCount(id)).toBe(0);
+				if (status !== "former")
+					expect((await slotRow()).assignedMemberId).toBe(id);
+			});
+		}
 
 		// protects=ending an INACTIVE admin is allowed even when no other admin is left, because they were never in the active-admin count;
 		// fails_when=the last-admin guard runs for an inactive admin, refusing the End as "last admin";
@@ -682,19 +681,21 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 			expect(open).toHaveLength(1);
 		});
 
-		// protects=collapsing two active rows keeps active, two inactive rows keeps inactive;
-		// fails_when=a same-status merge yields another status;
-		// no_claim=mixed-status merges (the collapse test below).
-		it("collapse of active+active and inactive+inactive keeps the status", async () => {
-			for (const status of ["active", "inactive"] as const) {
+		// protects=collapsing two rows of the SAME status keeps that status, one case per status;
+		// fails_when=a same-status merge yields another status (e.g. a rule that wants EXACTLY ONE active row, or falls back to inactive);
+		// no_claim=mixed-status merges (the collapse test below). A fallback that merely
+		//   returns the keeper's status cannot be told apart here: the keeper has the same
+		//   status as the absorbed row, so it is only the mixed test that pins that.
+		for (const status of ["active", "inactive", "former"] as const) {
+			it(`collapse of ${status}+${status} keeps ${status}`, async () => {
 				const keeper = await addMember(`K ${status}`, status);
 				const absorbed = await addMember(`A ${status}`, status);
 				await testDb.transaction((tx) =>
 					collapseMemberships(tx, seed.clubId, keeper, absorbed),
 				);
 				expect((await rowOf(keeper)).status).toBe(status);
-			}
-		});
+			});
+		}
 	});
 
 	describe("fix round: refusals and restores", () => {

@@ -23,6 +23,7 @@ import {
 	normalizeHomeClub,
 } from "#/lib/guest-profile";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
+import { isOnRoster } from "#/lib/membership-status";
 import { toStoredPhone } from "#/lib/phone";
 import {
 	guestContactRefusalFor,
@@ -588,10 +589,7 @@ export async function loadGuestProfile(
 	// A former member (#1239) is not pickable, unless they are the introducer
 	// already on file: dropping them would blank the field on the next save.
 	const roster = allMembers.filter(
-		(m) =>
-			m.status === "active" ||
-			m.status === "inactive" ||
-			m.id === stored.introducedByMemberId,
+		(m) => isOnRoster(m.status) || m.id === stored.introducedByMemberId,
 	);
 	return {
 		...stored,

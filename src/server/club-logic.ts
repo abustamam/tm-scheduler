@@ -21,6 +21,7 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { members, people } from "#/db/schema";
+import { ROSTER_STATUSES } from "#/lib/membership-status";
 import { coalesceToE164 } from "#/lib/phone";
 import {
 	type ContactMethod,
@@ -96,7 +97,7 @@ export async function loadClubMembers(
 			.where(
 				and(
 					eq(members.clubId, clubId),
-					inArray(members.status, ["active", "inactive"]),
+					inArray(members.status, [...ROSTER_STATUSES]),
 				),
 			)
 			.orderBy(asc(members.name)),
