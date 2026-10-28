@@ -28,7 +28,6 @@ import {
 	meetingAwards,
 	meetings,
 	members,
-	officerTerms,
 	people,
 	roleSlots,
 	tableTopicsSpeakers,
@@ -67,7 +66,10 @@ import { contactMethodAvailableSql } from "./contact-preference-logic";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
 import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
-import { collapseMemberships } from "./membership-collapse-logic";
+import {
+	collapseMemberships,
+	endOfficerTermsOfEndedMember,
+} from "./membership-collapse-logic";
 import {
 	lockMembershipForMerge,
 	lockMembershipsAgainstMerge,
@@ -719,37 +721,13 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 		let releasedSlots = 0;
 		if (ending) {
 			// Every open officer term closes today, in this transaction, so a
-			// failure here leaves the status unchanged. A term that has not begun
-			// yet ends when it starts, never before: a start on a later club-local
-			// day, or later today, both give `term_end = term_start`. Every other
-			// term ends at `now`, which is the club-local today's instant.
-			const open = await tx
-				.select({
-					id: officerTerms.id,
-					termStart: officerTerms.termStart,
-					position: officerTerms.position,
-				})
-				.from(officerTerms)
-				.where(
-					and(
-						eq(officerTerms.membershipId, input.memberId),
-						isNull(officerTerms.termEnd),
-					),
-				);
-			for (const t of open) {
-				const termEnd = t.termStart && t.termStart > now ? t.termStart : now;
-				await tx
-					.update(officerTerms)
-					.set({ termEnd, updatedAt: now })
-					.where(eq(officerTerms.id, t.id));
-				closedOfficerPositions.push(t.position);
-			}
+			// failure here leaves the status unchanged (`endOfficerTermsOfEndedMember`).
+			closedOfficerPositions.push(
+				...(await endOfficerTermsOfEndedMember(tx, input.memberId, now)),
+			);
 		}
-		// Free up their roles so the VPE can re-fill them. An End (#1327) releases
-		// every meeting that is not completed, whatever the clock says: one in
-		// progress, or past but not yet closed, still has live tools. Going
-		// inactive keeps the wall clock. A completed meeting's slots stay
-		// assigned (history preserved).
+		// Free up their upcoming roles so the VPE can re-fill them; past slots
+		// and a completed meeting's slots stay assigned (history preserved).
 		// A cancelled future meeting is released too (#1057, #1154).
 		if (releasing) {
 			const upcoming = await tx
@@ -759,11 +737,13 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 				.where(
 					and(
 						eq(roleSlots.assignedMemberId, input.memberId),
-						ending
-							? ne(meetings.status, "completed")
-							: gte(meetings.scheduledAt, new Date()),
+						gte(meetings.scheduledAt, new Date()),
 					),
-				);
+				)
+				// In slot-id order, the order `applyMoveSlot` writes a pair in, so an
+				// End and a reorder of the member's slots cannot wait on each other
+				// (#1327).
+				.orderBy(asc(roleSlots.id));
 			for (const s of upcoming) {
 				// Unlink any speech (speech_id → NULL); the speech persists
 				// Person-owned and unscheduled (ADR-0009 — never destroyed).

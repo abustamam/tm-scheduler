@@ -36,13 +36,13 @@ import {
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { logActivity } from "./activity";
 import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
-import { markComingOnSelfClaim } from "./slots-logic";
+import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
+import { lockMemberForAssignment, markComingOnSelfClaim } from "./slots-logic";
 
 // Either the main db client or a drizzle transaction — so these helpers can run
 // inside a caller's transaction and commit atomically with the slot change.
-type DbOrTx =
-	| typeof db
-	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+type DbOrTx = typeof db | Tx;
 
 export type UnscheduledSpeech = {
 	id: string;
@@ -326,6 +326,16 @@ export async function attachSpeechToOpenSlot(
 	if (!membership) {
 		throw new Error("The speaker isn't an active member of this club.");
 	}
+
+	// Lock the speaker's membership and refuse one who is no longer active
+	// (#1327). The `active` filter above read a snapshot: an End that committed
+	// after it released this member's roles, and the UPDATE below would give a
+	// former member a slot again. Merge lock, Person, member row, then the slot
+	// rows below: `lockMemberForAssignment` has the order. A member whose End is
+	// still in flight makes this wait, and then refuses. Every caller runs in a
+	// transaction (the cast), or the row locks would not outlive the statement.
+	await lockMembershipsAgainstMerge(conn as Tx, [membership.id]);
+	await lockMemberForAssignment(conn as Tx, membership.id);
 
 	// Invariant guard: unlink any slot still pointing at this speech before we
 	// relink, so setting the new slot's speech_id can't violate the unique index.

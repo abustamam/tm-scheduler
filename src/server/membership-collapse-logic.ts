@@ -11,7 +11,7 @@
 //
 // This lives in a `*-logic.ts` (never client-imported) so its `#/db` import
 // never leaks `pg` → `Buffer` into the browser bundle. See members-logic.ts.
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import type { db } from "#/db";
 import {
 	activityLog,
@@ -22,6 +22,7 @@ import {
 	meetingAttendancePlan,
 	meetingAwards,
 	meetingCandidateDisqualifications,
+	meetings,
 	meetingTimings,
 	meetingVoteSessions,
 	meetingVotes,
@@ -38,16 +39,68 @@ import {
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { earliestDate } from "#/lib/person-identity";
+import { logActivity } from "./activity";
+import { deletePlanRowsOfEndedMember } from "./attendance-plan-logic";
 import {
 	lockClubForWrite,
 	lockPersonsInOrder,
 	noKeyUpdate,
 } from "./club-write-lock";
 import { RECORD_CHANGED_MESSAGE } from "./guests-logic";
+import { meetingAcceptsWrite } from "./meeting-write-gate";
+import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 import { lockMembershipForMerge } from "./membership-merge-lock";
 
 /** A drizzle transaction handle (the arg the `db.transaction` callback gets). */
 type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+/** The later of two club-local date keys (`members.ended_at`); a null (unknown)
+ *  yields to a known one. The `Date` twin is `earliestDate`
+ *  (`#/lib/person-identity`). */
+function latestDate(a: string | null, b: string | null): string | null {
+	if (!a) return b;
+	if (!b) return a;
+	return a > b ? a : b;
+}
+
+/**
+ * Close every open officer term of a membership: the office an End takes away
+ * (#1239), also what a merge that yields a `former` membership must do (#1327),
+ * or reactivating that member later hands an open Treasurer term, and with it
+ * admin authority, back. A term that has not begun yet ends when it starts,
+ * never before: a start on a later club-local day, or later today, both give
+ * `term_end = term_start`. Every other term ends at `now`. Returns the closed
+ * positions, for the activity detail.
+ */
+export async function endOfficerTermsOfEndedMember(
+	tx: Tx,
+	memberId: string,
+	now: Date,
+): Promise<string[]> {
+	const open = await tx
+		.select({
+			id: officerTerms.id,
+			termStart: officerTerms.termStart,
+			position: officerTerms.position,
+		})
+		.from(officerTerms)
+		.where(
+			and(
+				eq(officerTerms.membershipId, memberId),
+				isNull(officerTerms.termEnd),
+			),
+		);
+	const closed: string[] = [];
+	for (const t of open) {
+		const termEnd = t.termStart && t.termStart > now ? t.termStart : now;
+		await tx
+			.update(officerTerms)
+			.set({ termEnd, updatedAt: now })
+			.where(eq(officerTerms.id, t.id));
+		closed.push(t.position);
+	}
+	return closed;
+}
 
 /**
  * Collapse the `absorbedId` membership into `keeperId` (both must belong to
@@ -168,8 +221,8 @@ export async function collapseMemberships(
 			: ("inactive" as const);
 
 	// --- Reconcile the surviving keeper row --------------------------------
-	// club_role: higher wins (admin > member). status: active if EITHER is
-	// active. joined_at: earliest known. preferred_name: keeper's, filling a
+	// club_role: higher wins (admin > member), from an ACTIVE row only. status:
+	// active if EITHER is active, else former if either is, else inactive. joined_at: earliest known. preferred_name: keeper's, filling a
 	// null from the absorbed. (name is left as the keeper's; the phone and the
 	// email are the Person's, not either membership's, #906 / #907.)
 	await tx
@@ -186,11 +239,7 @@ export async function collapseMemberships(
 			// The LATER end date wins (#1327); a null (unknown) yields to a known one.
 			endedAt:
 				mergedStatus === "former"
-					? keeper.endedAt && absorbed.endedAt
-						? keeper.endedAt > absorbed.endedAt
-							? keeper.endedAt
-							: absorbed.endedAt
-						: (keeper.endedAt ?? absorbed.endedAt)
+					? latestDate(keeper.endedAt, absorbed.endedAt)
 					: null,
 			joinedAt: earliestDate(keeper.joinedAt, absorbed.joinedAt),
 			preferredName: keeper.preferredName ?? absorbed.preferredName,
@@ -659,6 +708,63 @@ export async function collapseMemberships(
 		.update(speechRequests)
 		.set({ membershipId: keeperId })
 		.where(eq(speechRequests.membershipId, absorbedId));
+
+	// 19. A merge that yields `former` ends the membership (#1327): it does what
+	//     an End does beyond the status flip. The keeper now holds the absorbed
+	//     row's terms, slots and plan rows (steps 1, 3 and 6), so this runs over
+	//     both. Left open, a Treasurer term would make reactivating the member
+	//     an admin again (`isEffectiveAdmin` reads the open term), and a future
+	//     role would keep naming a person who has left.
+	if (mergedStatus === "former") {
+		await endOfficerTermsOfEndedMember(tx, keeperId, new Date());
+		// Its roles on meetings still to come (the wall clock, as End's release,
+		// `applySetMemberStatus`), in slot-id order. A completed meeting's slot
+		// stays: the status rides in the UPDATE (#1154).
+		const upcoming = await tx
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.where(
+				and(
+					eq(roleSlots.assignedMemberId, keeperId),
+					gte(meetings.scheduledAt, new Date()),
+				),
+			)
+			.orderBy(asc(roleSlots.id));
+		for (const s of upcoming) {
+			const released = await tx
+				.update(roleSlots)
+				.set({
+					assignedMemberId: null,
+					status: "open",
+					claimedAt: null,
+					speechId: null,
+				})
+				.where(
+					and(
+						eq(roleSlots.id, s.id),
+						eq(roleSlots.assignedMemberId, keeperId),
+						meetingAcceptsWrite(
+							tx,
+							"plan",
+							roleSlots.meetingId,
+							PLAN_ACCEPTING_CANCELLED,
+						),
+					),
+				)
+				.returning({ id: roleSlots.id });
+			if (released.length === 0) continue;
+			await logActivity(tx, {
+				clubId,
+				actorMemberId: null,
+				action: "release",
+				targetType: "slot",
+				targetId: s.id,
+				detail: { fromMemberId: keeperId },
+			});
+		}
+		await deletePlanRowsOfEndedMember(tx, keeperId);
+	}
 
 	// --- Delete the now-empty absorbed membership --------------------------
 	await tx.delete(members).where(eq(members.id, absorbedId));

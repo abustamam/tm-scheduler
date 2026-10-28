@@ -64,8 +64,10 @@ import {
 	MEETING_CANCELLED_MESSAGE,
 } from "#/lib/meeting-cancellation-notice";
 import { isMeetingLocked } from "#/lib/meeting-lifecycle";
+import { lockPersonsInOrder, noKeyUpdate } from "#/server/club-write-lock";
 import { applyAssignGuestToSlot } from "#/server/guests-logic";
 import { lockMeetingForSlotEdit } from "#/server/meeting-slot-lock";
+import { lockMembershipsAgainstMerge } from "#/server/membership-merge-lock";
 import { reassignSlotCore, releaseSlotCore } from "#/server/slots-logic";
 import { authorizeTokenForMeeting } from "../authz-logic";
 import { type McpBlockingItem, McpError } from "../errors";
@@ -141,6 +143,38 @@ export const assignRolesTool: McpToolDefinition = {
 
 		return db.transaction(async (tx) => {
 			const blocking: McpBlockingItem[] = [];
+
+			// The assignment targets' merge lock (SHARED) and Persons (NO KEY
+			// UPDATE), BEFORE the meeting lock (#1327): a removal holds the merge
+			// lock EXCLUSIVE and then waits for the meeting, and a profile edit holds
+			// a Person FOR UPDATE and then wants the member row this batch locks
+			// `FOR SHARE` below, so both come first, in the order of
+			// `lockMemberForAssignment`. Only members of THIS club that exist: an
+			// unknown or foreign id is reported as NOT_A_MEMBER further down, not
+			// refused here. `reassignSlotCore` re-takes each of these.
+			const wanted = [
+				...new Set(
+					args.assignments.flatMap((a) =>
+						"memberId" in a ? [a.memberId] : [],
+					),
+				),
+			];
+			if (wanted.length > 0) {
+				const inClub = await tx
+					.select({ id: members.id, personId: members.personId })
+					.from(members)
+					.where(
+						and(eq(members.clubId, club.clubId), inArray(members.id, wanted)),
+					);
+				await lockMembershipsAgainstMerge(
+					tx,
+					inClub.map((m) => m.id),
+				);
+				await lockPersonsInOrder(
+					tx,
+					noKeyUpdate(...inClub.map((m) => m.personId)),
+				);
+			}
 
 			// Duplicates are decided from the input alone, before any read — two
 			// instructions about one slot means one of them was a mistake, and
@@ -294,6 +328,9 @@ export const assignRolesTool: McpToolDefinition = {
 
 			for (const a of args.assignments) {
 				if ("memberId" in a) {
+					// The target's merge lock and Person are already held (top of this
+					// transaction) and the member `FOR SHARE` (`loadTargetMembers`), so
+					// everything `reassignSlotCore` takes first is a re-take (#1327).
 					await reassignSlotCore(tx, {
 						slotId: a.slotId,
 						memberId: a.memberId,

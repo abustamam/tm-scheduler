@@ -15,6 +15,7 @@ import {
 	activityLog,
 	clubs,
 	duesPeriods,
+	meetingAttendancePlan,
 	meetings,
 	members,
 	officerTerms,
@@ -61,6 +62,7 @@ const { loadClubMembers, loadMemberProfile } = await import(
 	"#/server/club-logic"
 );
 const { currentOfficersForClub } = await import("#/server/officer-terms-logic");
+const { isEffectiveAdmin } = await import("#/server/officers-logic");
 const { loadSeasonGrid } = await import("#/server/season-grid-logic");
 const { loadPublicPersonalMeetingView } = await import(
 	"#/server/personal-meeting-logic"
@@ -498,7 +500,7 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 
 	// protects=a former member's past role slot is untouched by ending, still on their profile and the grid's name lookup;
 	// fails_when=history is deleted/released or the profile is unreachable;
-	// no_claim=a past COMPLETED meeting's slot only (End releases a past meeting that is not completed, next test); rendering of the printed agenda is not exercised.
+	// no_claim=a PAST meeting's slot only; rendering of the printed agenda is not exercised.
 	it("history survives: past slot, profile, grid names", async () => {
 		const id = await addMember("Hal History");
 		const [past] = await testDb
@@ -506,7 +508,6 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 			.values({
 				clubId: seed.clubId,
 				scheduledAt: new Date(Date.now() - 3 * 86400000),
-				status: "completed",
 				theme: "Past",
 			} as typeof meetings.$inferInsert)
 			.returning({ id: meetings.id });
@@ -528,32 +529,6 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 			pastCount: 4,
 		});
 		expect(grid.memberNames.map((m) => m.id)).toContain(id);
-	});
-
-	// protects=ending releases a role on a PAST meeting that is not completed (#1327), while a completed one keeps its slot;
-	// fails_when=End keys the release on scheduledAt >= now again, or releases a completed meeting;
-	// no_claim=going inactive (wall-clock release, member-status.integration.test.ts).
-	it("End releases a past-but-not-completed meeting's role", async () => {
-		const id = await addMember("Nora Notclosed");
-		const [past] = await testDb
-			.insert(meetings)
-			.values({
-				clubId: seed.clubId,
-				scheduledAt: new Date(Date.now() - 3 * 86400000),
-				theme: "Past, open",
-			} as typeof meetings.$inferInsert)
-			.returning({ id: meetings.id });
-		await testDb
-			.update(roleSlots)
-			.set({ meetingId: past.id, assignedMemberId: id, status: "claimed" })
-			.where(eq(roleSlots.id, seed.slotId));
-		await set(id, "former");
-		const [slot] = await testDb
-			.select()
-			.from(roleSlots)
-			.where(eq(roleSlots.id, seed.slotId));
-		expect(slot.assignedMemberId).toBeNull();
-		expect(slot.status).toBe("open");
 	});
 
 	// protects=guest-convert reactivates a former membership: active, ended_at cleared, reactivatedFrom "former";
@@ -673,6 +648,64 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 			expect(absorbedLater.endedAt).toBe("2021-05-05");
 			const fallback = await merge("former", "former", undefined, "2021-05-05");
 			expect(fallback.endedAt).toBe("2021-05-05");
+		});
+
+		// protects=a merge that yields FORMER does what an End does: closes the keeper's open officer terms (an inactive Treasurer merged with a former duplicate), releases its upcoming roles and drops its upcoming plan answers, so reactivating it later grants no authority and a role is not left on a person who has left (#1327);
+		// fails_when=the merged former row keeps an open term (isEffectiveAdmin true after reactivation), a future slot, or a future plan row;
+		// no_claim=a merge that yields inactive or active (offices and roles stay), a PAST meeting's slot (history, covered by the End tests).
+		it("collapseMemberships yielding former closes offices, releases roles, drops plans", async () => {
+			const keeper = await addMember("Inactive Treasurer", "inactive");
+			const absorbed = await addMember("Former Twin", "former", {
+				endedAt: "2020-01-01",
+			});
+			await openTerm(keeper, "treasurer");
+			const [future] = await testDb
+				.select({ id: meetings.id })
+				.from(meetings)
+				.where(eq(meetings.id, seed.meetingId));
+			await testDb
+				.update(roleSlots)
+				.set({
+					assignedMemberId: absorbed,
+					status: "claimed",
+					claimedAt: new Date(),
+				})
+				.where(eq(roleSlots.id, seed.slotId));
+			await testDb.insert(meetingAttendancePlan).values({
+				memberId: absorbed,
+				meetingId: future.id,
+				status: "not_coming",
+			});
+			await testDb.transaction((tx) =>
+				collapseMemberships(tx, seed.clubId, keeper, absorbed),
+			);
+			const open = await testDb
+				.select()
+				.from(officerTerms)
+				.where(
+					and(
+						eq(officerTerms.membershipId, keeper),
+						sql`${officerTerms.termEnd} is null`,
+					),
+				);
+			expect(open).toEqual([]);
+			const [slot] = await testDb
+				.select()
+				.from(roleSlots)
+				.where(eq(roleSlots.id, seed.slotId));
+			expect(slot.assignedMemberId).toBeNull();
+			expect(slot.status).toBe("open");
+			expect(
+				await testDb
+					.select()
+					.from(meetingAttendancePlan)
+					.where(eq(meetingAttendancePlan.memberId, keeper)),
+			).toEqual([]);
+			// The state the bug left: reactivating handed the office, and admin, back.
+			await set(keeper, "active");
+			const row = await rowOf(keeper);
+			expect(row.status).toBe("active");
+			expect(await isEffectiveAdmin(testDb, row)).toBe(false);
 		});
 
 		// protects=ending an admin writes club_role=member in the same UPDATE and the activity row records the role before and after (#1340);
@@ -948,7 +981,6 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 				.values({
 					clubId: seed.clubId,
 					scheduledAt: new Date(Date.now() - 5 * 86400000),
-					status: "completed",
 					theme: "Past",
 				} as typeof meetings.$inferInsert)
 				.returning({ id: meetings.id });
