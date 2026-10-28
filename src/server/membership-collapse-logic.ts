@@ -156,7 +156,7 @@ export async function collapseMemberships(
 	// has the whole argument.
 	//
 	// BOTH memberships, in id order (round 4): the keeper's slots are now locked
-	// up front (step 6), so a keeper-side writer that holds a slot and then
+	// up front (before the first write), so a keeper-side writer that holds a slot and then
 	// reaches a row this merge re-pointed (a self confirm or an availability
 	// release upserting the plan row; a removal of the keeper locking its slots
 	// then its member row) closed a cycle with it. Every such writer takes the
@@ -217,6 +217,25 @@ export async function collapseMemberships(
 			throw new Error(RECORD_CHANGED_MESSAGE);
 		}
 	}
+
+	// Every slot either membership holds, locked `FOR NO KEY UPDATE` in slot-id
+	// order (#1327), BEFORE the collapse's first data write (round 5). It was
+	// step 6, after step 3 had re-pointed the absorbed plan row onto (keeper,
+	// meeting): the collapse then held that unique key while waiting for a slot,
+	// and the officer arm of `confirmSlotCore` (no merge lock) holds the slot and
+	// upserts the plan row (keeper, meeting): a 40P01. Locked here the collapse
+	// holds no re-pointed row while it waits, and the re-point of step 6 and the
+	// release of step 19 wait for nothing. Slot-id order is `applyMoveSlot`'s, and
+	// the slots come after the member rows as End takes them. Nothing steps 1-5
+	// write (officer terms, dues, plan rows, attendance, awards) is held by a
+	// writer that also holds a slot and waits on a member row: those writers take
+	// the member row only as an FK key share, which `NO KEY UPDATE` does not block.
+	await tx
+		.select({ id: roleSlots.id })
+		.from(roleSlots)
+		.where(inArray(roleSlots.assignedMemberId, [keeperId, absorbedId]))
+		.orderBy(asc(roleSlots.id))
+		.for("no key update");
 
 	// The mentor listing's side: whichever membership is willing AND listed (#945).
 	const isListedMentor = (m: typeof keeper) =>
@@ -373,17 +392,8 @@ export async function collapseMemberships(
 		.where(eq(meetingAwards.memberId, absorbedId));
 
 	// 6. role_slots.assigned_member_id — no member-unique; re-point all.
-	//    Every slot either membership holds is locked FIRST, in slot-id order
-	//    (#1327), the order `applyMoveSlot` writes a pair in. The re-point below
-	//    and step 19's release then wait for nothing, so the collapse never holds
-	//    a later-id slot while waiting on an earlier one, and a reorder cannot
-	//    form a cycle with it. After the member rows, as End takes them.
-	await tx
-		.select({ id: roleSlots.id })
-		.from(roleSlots)
-		.where(inArray(roleSlots.assignedMemberId, [keeperId, absorbedId]))
-		.orderBy(asc(roleSlots.id))
-		.for("no key update");
+	//    The slots are already locked (see "Every slot ..." after the member
+	//    rows above), so this re-point and step 19's release wait for nothing.
 	await tx
 		.update(roleSlots)
 		.set({ assignedMemberId: keeperId })

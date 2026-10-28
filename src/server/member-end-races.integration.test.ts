@@ -777,9 +777,8 @@ describe.skipIf(!hasTestDb)("ending a membership vs its races (#1327)", () => {
 	});
 
 	/**
-	 * A merge parked at its slot locks (step 6), having already re-pointed the
-	 * absorbed member's plan row onto the keeper (step 3), uncommitted: the state
-	 * the round-3 keeper-slot lock left a keeper-side writer to meet. `slotId` is
+	 * A merge parked at its up-front slot lock (before any re-point; round 5),
+	 * holding both merge locks exclusive. `slotId` is
 	 * a keeper slot a blocker holds. The collapse holds BOTH merge locks
 	 * exclusive, so a keeper-side writer must queue at the advisory lock, never
 	 * on a row.
@@ -845,6 +844,58 @@ describe.skipIf(!hasTestDb)("ending a membership vs its races (#1327)", () => {
 			.from(meetingAttendancePlan)
 			.where(eq(meetingAttendancePlan.meetingId, club.meetingId));
 		expect(plans.every((p) => p.memberId === keeper)).toBe(true);
+	});
+
+	// protects=an officer's confirm of the keeper's slot, queued with a merge into that keeper that has an absorbed plan row for the same meeting, does not deadlock (40P01) and leaves the plan row on the keeper: the merge locks the slots before re-pointing any row, so it never holds the re-pointed plan row while it waits for the slot;
+	// fails_when=the officer arm starts writing a row the merge re-points (today it flips the slot and logs an activity row naming the ADMIN, no plan row), or the merge holds a re-pointed row while it waits on the slot;
+	// no_claim=the keeper-self confirm arm (the merge lock serializes that one, covered above); mutation-checked: removing the up-front slot lock does NOT fail this test, because the officer arm writes no plan row today.
+	it("an officer's confirm and a merge into the slot's holder do not deadlock", async () => {
+		const keeper = await addMember("Keeper Kit");
+		const absorbed = await addMember("Absorbed Ari");
+		const held = await addSlot(club.meetingId, keeper);
+		await testDb.insert(meetingAttendancePlan).values({
+			memberId: absorbed,
+			meetingId: club.meetingId,
+			status: "reached_out",
+		});
+		// A blocker holds the slot so the officer's confirm parks on the lock graph
+		// (the officer arm takes no merge lock), then the merge queues behind it.
+		const blocker = await openBlockingTx(async (tx) => {
+			await tx.execute(
+				sql`select 1 from role_slots where id = ${held} for update`,
+			);
+		});
+		let confirm: Promise<unknown> | undefined;
+		let merging: Promise<unknown> | undefined;
+		try {
+			confirm = confirmSlotCore({
+				slotId: held,
+				sessionUserId: club.adminUserId,
+				selfMemberId: null,
+			});
+			confirm.catch(() => {});
+			await waitForLockWait("role_slots", blocker.pid);
+			merging = testDb.transaction((tx) =>
+				collapseMemberships(tx, club.clubId, keeper, absorbed),
+			);
+			merging.catch(() => {});
+		} finally {
+			await blocker.commit();
+		}
+		const [confirmErr, mergeErr] = await Promise.all([
+			settle(confirm as Promise<unknown>),
+			settle(merging as Promise<unknown>),
+		]);
+		expect(confirmErr && isDeadlock(confirmErr)).toBeFalsy();
+		expect(mergeErr && isDeadlock(mergeErr)).toBeFalsy();
+		expect(confirmErr).toBeNull();
+		expect(mergeErr).toBeNull();
+		expect(await slot(held)).toMatchObject({ assignedMemberId: keeper });
+		const plans = await testDb
+			.select({ memberId: meetingAttendancePlan.memberId })
+			.from(meetingAttendancePlan)
+			.where(eq(meetingAttendancePlan.meetingId, club.meetingId));
+		expect(plans).toEqual([{ memberId: keeper }]);
 	});
 
 	// protects=removing the keeper of a merge that is parked on the keeper's slots waits on the merge lock and does not deadlock (40P01) between the member row and the slots;
