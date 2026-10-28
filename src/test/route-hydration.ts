@@ -272,10 +272,44 @@ export interface RouteResult {
 	/** React attached to the document, i.e. hydration actually ran. */
 	hydrated: boolean;
 	mismatches: Mismatch[];
-	/** Wall time both loads took, for spotting a route that waits on a timeout. */
+	/**
+	 * Wall time of the loads that were judged, for spotting a route that waits
+	 * on a timeout: warm-up plus judged load. After a retry (#1338) it is the
+	 * retry's load alone, so a dead first load does not read as a slow route;
+	 * that load's own time is `neverAttached.ms`.
+	 */
 	ms: number;
 	/** The page's visible text, for asserting WHICH state of a route rendered. */
 	text: string;
+	/**
+	 * Why a judged load ended with React never attached (#1338). Present when
+	 * the first judged load of this route did, and the route was then retried
+	 * once: a retry that attached still leaves the first attempt's trace here.
+	 */
+	neverAttached?: NeverAttached;
+}
+
+/** What one load that never attached left behind: the page's own account of why. */
+export interface NeverAttached {
+	/** Wall time of that load. */
+	ms: number;
+	/** Every console error and uncaught exception, unfiltered, de-duplicated. */
+	errors: string[];
+	/** Requests that failed outright, or answered with a status of 400 or more. */
+	failedRequests: string[];
+}
+
+/** One line per route that never attached, for an assertion message. */
+export function describeNeverAttached(r: RouteResult): string {
+	const n = r.neverAttached;
+	if (!n) return `${r.path}: React never attached (no diagnostics)`;
+	return [
+		`${r.path}: React never attached (first load ${n.ms}ms, retried once, retry ${
+			r.hydrated ? "attached" : "did not attach"
+		})`,
+		...n.errors.map((e) => `  console: ${e.slice(0, 500)}`),
+		...n.failedRequests.map((f) => `  request: ${f}`),
+	].join("\n");
 }
 
 /**
@@ -527,6 +561,10 @@ export class HydrationBrowser {
 	private navigations = 0;
 	/** When a request last started or ended. */
 	private lastNetworkChange = 0;
+	/** URL of each request seen in this load, by CDP requestId (#1338). */
+	private requestUrls = new Map<string, string>();
+	/** Requests that failed or answered >= 400 in this load (#1338). */
+	private failedRequests: string[] = [];
 	private chrome!: ChildProcess;
 	private dir!: string;
 	/** The tail of Chrome's stderr, kept for as long as it runs. */
@@ -821,10 +859,29 @@ export class HydrationBrowser {
 			msg.params.type !== "EventSource"
 		) {
 			this.lastNetworkChange = Date.now();
+			this.requestUrls.set(msg.params.requestId, msg.params.request?.url);
+		} else if (msg.method === "Network.responseReceived") {
+			const { requestId, response } = msg.params;
+			if (response?.status >= 400) {
+				this.failedRequests.push(
+					`${response.url ?? this.requestUrls.get(requestId)} -> HTTP ${response.status}`,
+				);
+			}
 		} else if (
 			msg.method === "Network.loadingFinished" ||
 			msg.method === "Network.loadingFailed"
 		) {
+			if (
+				msg.method === "Network.loadingFailed" &&
+				// A cancelled request (and the devtools EventSource, which is
+				// aborted on navigation) is not why a page failed to boot.
+				!msg.params.canceled &&
+				msg.params.type !== "EventSource"
+			) {
+				this.failedRequests.push(
+					`${this.requestUrls.get(msg.params.requestId) ?? `request ${msg.params.requestId}`} failed: ${msg.params.errorText}`,
+				);
+			}
 			this.lastNetworkChange = Date.now();
 		} else if (
 			msg.method === "Page.frameNavigated" &&
@@ -909,11 +966,32 @@ export class HydrationBrowser {
 		const started = Date.now();
 		await this.load(`${base}${path}`);
 		let hydrated = false;
+		let loadStarted = Date.now();
 		for (let attempt = 0; attempt < 3; attempt++) {
-			this.errors = [];
-			this.navigations = 0;
+			this.resetLoadState();
+			loadStarted = Date.now();
 			hydrated = await this.load(`${base}${path}`);
 			if (this.navigations <= 1) break;
+		}
+		// A page that never booted is retried ONCE (#1338), and what the first
+		// attempt saw is kept even when the retry attaches. A mismatch needs a
+		// page that attached, so it is never retried.
+		let neverAttached: NeverAttached | undefined;
+		let ms = Date.now() - started;
+		if (!hydrated) {
+			neverAttached = {
+				ms: Date.now() - loadStarted,
+				errors: [...new Set(this.errors)],
+				failedRequests: [...new Set(this.failedRequests)],
+			};
+			console.warn(
+				`[route-hydration] ${path}: React never attached after ${neverAttached.ms}ms; retrying once. ` +
+					`errors: ${JSON.stringify(neverAttached.errors)}; requests: ${JSON.stringify(neverAttached.failedRequests)}`,
+			);
+			this.resetLoadState();
+			const retryStarted = Date.now();
+			hydrated = await this.load(`${base}${path}`);
+			ms = Date.now() - retryStarted;
 		}
 		const landed = await this.evaluate<string>("location.pathname");
 		const mismatches = [...new Set(this.errors)]
@@ -925,9 +1003,17 @@ export class HydrationBrowser {
 			landed,
 			hydrated,
 			mismatches,
-			ms: Date.now() - started,
+			ms,
 			text,
+			...(neverAttached ? { neverAttached } : {}),
 		};
+	}
+
+	private resetLoadState() {
+		this.errors = [];
+		this.navigations = 0;
+		this.failedRequests = [];
+		this.requestUrls.clear();
 	}
 
 	/** What the page itself reports as its zone, locale and clock. */
