@@ -298,4 +298,11 @@ describe("charter dashboard", () => {
 		expect(row.textContent).toContain("Club mentor");
 		expect(row.textContent).toContain("Downtown · pat@example.com");
 	});
+
+	it("fills the progress bar with the success colour, not the link teal", () => {
+		renderDashboard(data());
+		const bar = screen.getAllByRole("progressbar")[0];
+		expect(bar.firstElementChild?.className).toContain("bg-success");
+		expect(bar.firstElementChild?.className).not.toContain("bg-link");
+	});
 });

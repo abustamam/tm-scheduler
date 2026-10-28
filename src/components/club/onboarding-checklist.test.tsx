@@ -116,4 +116,14 @@ describe("OnboardingChecklist", () => {
 		const copyButton = screen.getByRole("button", { name: /copy link/i });
 		expect(copyButton).toBeTruthy();
 	});
+
+	it("draws a done step's check in the success colour, never the link teal", async () => {
+		await renderChecklist({
+			clubId: "club-1",
+			status: { ...NEW_CLUB, clubDetailsComplete: true },
+		});
+		const checks = document.querySelectorAll("svg.text-success");
+		expect(checks.length).toBeGreaterThan(0);
+		expect(document.querySelector("svg.text-link")).toBeNull();
+	});
 });

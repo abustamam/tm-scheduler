@@ -88,7 +88,7 @@ export function OnboardingChecklist({
 						>
 							{item.complete ? (
 								<CheckCircle2
-									className="size-5 shrink-0 text-link"
+									className="size-5 shrink-0 text-success"
 									aria-hidden
 								/>
 							) : (
