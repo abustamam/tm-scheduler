@@ -566,7 +566,7 @@ describe("member profile — speech log evaluators (#681)", () => {
 });
 
 describe("member profile — a former member's Pathways", () => {
-	const WITHHELD = "Pathways progress isn't shown for former members.";
+	const WITHHELD = "Pathways progress isn't shown for inactive members.";
 	const EMPTY = "No Pathways path set yet.";
 
 	it("tells a plain member they are not shown, not that none is set", async () => {
