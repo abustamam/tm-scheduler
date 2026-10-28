@@ -202,9 +202,21 @@ describe("nothing uses the any-status membership lookup (#1343)", () => {
 		expect(offenders).toEqual([]);
 	});
 
-	it("guards.ts exports getActiveMembership and filters on active in the query", () => {
+	/**
+	 * protects=`getActiveMembership`'s own body (from its declaration to the next
+	 *   top-level declaration) contains `eq(members.status, "active")`;
+	 * fails_when=that filter is removed from, or moved out of, that function while
+	 *   it stays elsewhere in guards.ts;
+	 * no_claim=that the filter sits in the WHERE of the right statement; behaviour
+	 *   is `membership-resolution.integration.test.ts`.
+	 */
+	it("the body of getActiveMembership contains the active status filter", () => {
 		const src = readSource("src/server/guards.ts");
-		expect(src).toMatch(/export async function getActiveMembership\(/);
-		expect(src).toMatch(/eq\(members\.status,\s*"active"\)/);
+		const start = src.indexOf("export async function getActiveMembership(");
+		expect(start).toBeGreaterThan(-1);
+		// A top-level function ends at the first "\n}\n" after its declaration.
+		const end = src.indexOf("\n}\n", start);
+		expect(end).toBeGreaterThan(start);
+		expect(src.slice(start, end)).toMatch(/eq\(members\.status,\s*"active"\)/);
 	});
 });

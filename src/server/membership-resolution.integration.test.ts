@@ -100,7 +100,10 @@ describe.skipIf(!hasTestDb)(
 			expect(await getActiveMembership(userId, club.clubId)).toBeNull();
 		});
 
-		it("prefers an ACTIVE membership over a lapsed one", async () => {
+		// Since #1343 this passes on the WHERE filter alone: the lapsed row is no
+		// longer a candidate, so the pick order's "active first" key is not what
+		// is under test here (key 1 is now defence in depth).
+		it("never returns a lapsed membership when an active one exists", async () => {
 			const lapsed = await addMembership({
 				clubRole: "member",
 				status: "inactive",

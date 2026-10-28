@@ -33,9 +33,6 @@
  *
  * This module touches `db` and must never be imported by client code.
  */
-import { and, eq, ne } from "drizzle-orm";
-import { db } from "#/db";
-import { members, people } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
 import {
 	MEMBERSHIP_INACTIVE_MESSAGE,
@@ -47,6 +44,7 @@ import {
 	assertClubNotArchived,
 	getActiveMembership,
 	getSessionUser,
+	hasNonActiveMembership,
 	requireMemberInClub,
 } from "./guards";
 import { markImpersonatedWrite } from "./impersonation-actor";
@@ -300,22 +298,12 @@ export async function resolveSessionActor(input: {
 	// the same trade `requireMembership` makes with NOT_A_MEMBER and which
 	// discloses less, not more.
 	// `getActiveMembership` returns null for a non-active row (#1343), so ask for
-	// one directly: the message differs, the fix differs.
-	const [onRoster] = await db
-		.select({ id: members.id })
-		.from(members)
-		.innerJoin(people, eq(people.id, members.personId))
-		.where(
-			and(
-				eq(people.userId, input.sessionUserId),
-				eq(members.clubId, input.clubId),
-				ne(members.status, "active"),
-			),
-		)
-		// Any non-active row yields the same message, so the pick is order-free;
-		// the ORDER BY only keeps it deterministic (membership-pick-ordering guard).
-		.orderBy(members.id)
-		.limit(1);
+	// one directly: the message differs, the fix differs. A member reactivated
+	// between the two reads only changes which refusal is shown; accepted.
+	const onRoster = await hasNonActiveMembership(
+		input.sessionUserId,
+		input.clubId,
+	);
 	throw new Error(
 		onRoster ? MEMBERSHIP_INACTIVE_MESSAGE : NOT_ON_ROSTER_MESSAGE,
 	);

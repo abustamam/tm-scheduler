@@ -324,10 +324,10 @@ function collapse(text: string): string {
 }
 
 /**
- * Index just past the string or template literal that opens at `i`, or `i + 1`
- * when `text[i]` opens neither. Escapes are skipped; a template's `${ … }` is
- * code, so braces and strings inside it are walked by the caller's loop through
- * `templateDepth`.
+ * Index just past the `'` or `"` string literal that opens at `i`, or `i + 1`
+ * when `text[i]` opens neither. Escapes are skipped. Template literals are NOT
+ * handled here: `braceBlock` walks them itself (its `inTemplateText` and
+ * `templates` stack), because a template's `${ … }` is code.
  */
 function skipQuoted(text: string, i: number): number {
 	const quote = text[i];

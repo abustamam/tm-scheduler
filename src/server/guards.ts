@@ -1,5 +1,5 @@
 import { getRequest } from "@tanstack/react-start/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, members, officerTerms, people, user } from "#/db/schema";
 import { auth } from "#/lib/auth";
@@ -152,6 +152,33 @@ export async function getActiveMembership(
 		.orderBy(...membershipPickOrder())
 		.limit(1);
 	return membership ?? null;
+}
+
+/**
+ * Does `userId` hold a NON-active (inactive or former) membership in `clubId`?
+ *
+ * The other half of `getActiveMembership`, for the one caller that needs to tell
+ * "lapsed" from "never on the roster" to pick a refusal message
+ * (`resolveSessionActor`). An existence check, not a pick: any such row gives
+ * the same answer, so it neither orders nor limits. Two reads, so a member
+ * reactivated between them changes only which refusal text is shown.
+ */
+export async function hasNonActiveMembership(
+	userId: string,
+	clubId: string,
+): Promise<boolean> {
+	const rows = await db
+		.select({ id: members.id })
+		.from(members)
+		.innerJoin(people, eq(people.id, members.personId))
+		.where(
+			and(
+				eq(people.userId, userId),
+				eq(members.clubId, clubId),
+				ne(members.status, "active"),
+			),
+		);
+	return rows.length > 0;
 }
 
 /**
