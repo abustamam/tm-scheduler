@@ -231,6 +231,46 @@ describe.skipIf(!hasTestDb)(
 			expect(res.membershipDeleted).toBe(true);
 		});
 
+		// fails_when=the `status = 'completed'` arm of pastAgendaMeeting is dropped
+		it("a completed meeting dated in the FUTURE still counts as past and blocks it", async () => {
+			const { guestId, membershipId } = await converted("Completed Early");
+			await testDb.insert(meetingAttendance).values({
+				meetingId: await meetingAt(3, "completed"),
+				memberId: membershipId,
+				status: "present",
+			});
+			await expect(undo(guestId)).rejects.toThrow(
+				UNDO_MEMBER_NAME_HISTORY_MESSAGE("meeting attendance"),
+			);
+		});
+
+		// fails_when=the meetings.clubId filter is dropped from hasRowOnPastAgenda.
+		// Reachable only by a direct insert (the app never writes another club's
+		// meeting against this club's membership), which is what the filter guards.
+		it("a row on ANOTHER club's past meeting does not block it", async () => {
+			const { guestId, membershipId } = await converted("Cross Club Row");
+			const other = await seedClub();
+			try {
+				const [m] = await testDb
+					.insert(meetings)
+					.values({
+						clubId: other.clubId,
+						scheduledAt: new Date(Date.now() - 3 * DAY),
+						status: "scheduled",
+					})
+					.returning({ id: meetings.id });
+				if (!m) throw new Error("Failed to seed meeting");
+				await testDb.insert(meetingAttendance).values({
+					meetingId: m.id,
+					memberId: membershipId,
+					status: "present",
+				});
+				expect((await undo(guestId)).membershipDeleted).toBe(true);
+			} finally {
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
+		});
+
 		it("a Table Topics turn and an award on an upcoming meeting do not block it", async () => {
 			const { guestId, membershipId } = await converted("Upcoming Rows");
 			const upcoming = await meetingAt(4);
@@ -247,8 +287,8 @@ describe.skipIf(!hasTestDb)(
 
 		it("an action item no past meeting prints with its owner does not block it", async () => {
 			const { guestId, membershipId } = await converted("Quiet Items");
-			// Only an upcoming meeting exists in the item's window; the item was also
-			// resolved before the past meeting, which then prints its text only.
+			// NO meeting is in the item's window: the only meeting (-2d) falls after
+			// the item was resolved (-5d), so it prints the text without the owner.
 			await meetingAt(-2);
 			await testDb.insert(clubActionItems).values({
 				clubId: seed.clubId,
@@ -313,15 +353,11 @@ describe.skipIf(!hasTestDb)(
 			expect(left?.holder).toBe(lapsed.id);
 		});
 
-		/** The created-membership path; the tests backdate rows to stand in for
-		 *  history the Person brought from another club. */
-		async function convertedOldPerson(name: string) {
-			return converted(name);
-		}
-
-		// fails_when=the speech count reads every speech the Person has again
-		it("a speech the Person made BEFORE the convert (another club's history) does not block the undo", async () => {
-			const old = await convertedOldPerson("Visiting Speaker");
+		// fails_when=the speech count reads every speech the Person has again.
+		// The Person is fresh; the speech's created_at is BACKDATED to stand in for
+		// history from before the convert (speeches carry no club).
+		it("a speech with a created_at before the convert (backdated; stands for another club's history) does not block the undo", async () => {
+			const old = await converted("Visiting Speaker");
 			await testDb.insert(speeches).values({
 				personId: old.personId,
 				title: "Home club speech",
@@ -331,7 +367,7 @@ describe.skipIf(!hasTestDb)(
 		});
 
 		it("a speech made AFTER the convert still blocks it", async () => {
-			const old = await convertedOldPerson("Speaks Later");
+			const old = await converted("Speaks Later");
 			await testDb
 				.insert(speeches)
 				.values({ personId: old.personId, title: "Club speech" });
@@ -356,13 +392,15 @@ describe.skipIf(!hasTestDb)(
 				level: 1,
 				completed: 1,
 				total: 4,
-				approved: false,
+				// Reachable state: creditedClubId is stamped only when a level flips to
+				// approved (ADR-0022).
+				approved: true,
 				creditedClubId: clubId,
 			});
 		}
 
 		it("an enrolment credited to ANOTHER club does not block the undo", async () => {
-			const old = await convertedOldPerson("Enrolled Elsewhere");
+			const old = await converted("Enrolled Elsewhere");
 			const other = await seedClub();
 			try {
 				await enrolCredited(old.personId, other.clubId);
@@ -376,7 +414,7 @@ describe.skipIf(!hasTestDb)(
 		});
 
 		it("an enrolment credited to THIS club blocks it", async () => {
-			const old = await convertedOldPerson("Enrolled Here");
+			const old = await converted("Enrolled Here");
 			await enrolCredited(old.personId, seed.clubId);
 			await expect(undo(old.guestId)).rejects.toThrow(
 				UNDO_MEMBER_HAS_HISTORY_MESSAGE("a Pathways enrolment"),

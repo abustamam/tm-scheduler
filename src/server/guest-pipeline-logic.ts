@@ -3343,6 +3343,10 @@ export type UndoCheckContext = { clubId: string; now: Date };
  * Labels are what the admin reads. `role_feedback_notes` is private to its
  * recipient, so its label is generic and must not name feedback.
  */
+/** One generic label for the checks on tables private to a member (mentorship,
+ *  mentor request, feedback notes), so no label tells an admin which one exists. */
+const PRIVATE_RECORDS_LABEL = "other records";
+
 export const UNDO_CASCADE_CHECKS: UndoCascadeCheck[] = [
 	{
 		columns: ["member_dues.membership_id"],
@@ -3375,14 +3379,14 @@ export const UNDO_CASCADE_CHECKS: UndoCascadeCheck[] = [
 	},
 	{
 		columns: MENTORSHIP_MEMBER_FKS,
-		label: "a mentorship",
+		label: PRIVATE_RECORDS_LABEL,
 		scope: "created",
 		has: memberHasMentorship,
 	},
 	{
 		// ANY status: a decided request is still the member's record (#945).
 		columns: MENTOR_REQUEST_MEMBER_FKS,
-		label: "a mentor request",
+		label: PRIVATE_RECORDS_LABEL,
 		scope: "created",
 		has: memberHasMentorRequest,
 	},
@@ -3396,7 +3400,7 @@ export const UNDO_CASCADE_CHECKS: UndoCascadeCheck[] = [
 		// Private to the recipient (readable only by them, after the meeting): the
 		// label must not tell an admin that feedback exists.
 		columns: ["role_feedback_notes.recipient_member_id"],
-		label: "other records",
+		label: PRIVATE_RECORDS_LABEL,
 		scope: "created",
 		has: hasRowFor(roleFeedbackNotes, roleFeedbackNotes.recipientMemberId),
 	},
