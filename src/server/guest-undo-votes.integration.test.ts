@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	guests,
 	meetingAwards,
+	meetings,
 	meetingVoteSessions,
 	meetingVotes,
 	members,
@@ -87,9 +88,12 @@ describe.skipIf(!hasTestDb)(
 			return s.id;
 		}
 
-		async function award(category: "best_speaker" | "best_table_topics") {
+		async function award(
+			category: "best_speaker" | "best_table_topics",
+			meetingId: string = seed.meetingId,
+		) {
 			await testDb.insert(meetingAwards).values({
-				meetingId: seed.meetingId,
+				meetingId,
 				category,
 				memberId: seed.memberId,
 			});
@@ -130,6 +134,11 @@ describe.skipIf(!hasTestDb)(
 			});
 			await expect(undo(guestId)).rejects.toThrow(UNDO_OPEN_BALLOT_MESSAGE);
 			await expectMembershipSurvives(membershipId);
+			const [vote] = await testDb
+				.select({ v: meetingVotes.voterMemberId })
+				.from(meetingVotes)
+				.where(eq(meetingVotes.sessionId, sessionId));
+			expect(vote?.v).toBe(membershipId);
 		});
 
 		it("still refuses when a DIFFERENT category's award is recorded", async () => {
@@ -145,17 +154,39 @@ describe.skipIf(!hasTestDb)(
 		});
 
 		it("does not refuse once that ballot's award is recorded", async () => {
-			const { guestId } = await converted("Award Recorded");
+			const { guestId, membershipId } = await converted("Award Recorded");
 			const sessionId = await session("best_speaker");
 			await award("best_speaker");
+			// The converted member is a VOTER; the award names someone else.
 			await testDb.insert(meetingVotes).values({
 				sessionId,
-				voterMemberId: seed.memberId,
+				voterMemberId: membershipId,
 				candidateMemberId: seed.memberId,
 			});
-			// The member holds no vote here; the award is for someone else.
 			const res = await undo(guestId);
 			expect(res.membershipDeleted).toBe(true);
+		});
+
+		it("still refuses when the award is recorded at a DIFFERENT meeting", async () => {
+			const { guestId, membershipId } = await converted("Other Meeting");
+			const sessionId = await session("best_speaker");
+			const [other] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: seed.clubId,
+					scheduledAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+					status: "scheduled",
+				})
+				.returning({ id: meetings.id });
+			if (!other) throw new Error("Failed to seed meeting");
+			await award("best_speaker", other.id);
+			await testDb.insert(meetingVotes).values({
+				sessionId,
+				voterMemberId: membershipId,
+				candidateMemberId: seed.memberId,
+			});
+			await expect(undo(guestId)).rejects.toThrow(UNDO_OPEN_BALLOT_MESSAGE);
+			await expectMembershipSurvives(membershipId);
 		});
 
 		it("does not refuse for a vote that names other people", async () => {
