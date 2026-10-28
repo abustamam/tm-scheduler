@@ -50,7 +50,7 @@ import {
 import { RECORD_CHANGED_MESSAGE } from "./guests-logic";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
 import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
-import { lockMembershipForMerge } from "./membership-merge-lock";
+import { lockMembershipsForMerge } from "./membership-merge-lock";
 
 /** A drizzle transaction handle (the arg the `db.transaction` callback gets). */
 type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
@@ -155,19 +155,16 @@ export async function collapseMemberships(
 	// club write lock → membership merge lock → row locks. `membership-merge-lock.ts`
 	// has the whole argument.
 	//
-	// BOTH memberships, in id order (round 4): the keeper's slots are now locked
-	// up front (before the first write), so a keeper-side writer that holds a slot and then
-	// reaches a row this merge re-pointed (a self confirm or an availability
-	// release upserting the plan row; a removal of the keeper locking its slots
-	// then its member row) closed a cycle with it. Every such writer takes the
-	// keeper's lock SHARED before its first row lock, so under the exclusive lock
-	// it either finished first or waits here. An advisory wait still takes part
-	// in deadlock detection, but nobody holding a row lock waits on it.
-	for (const id of [keeperId, absorbedId].sort((a, b) =>
-		a.toLowerCase() < b.toLowerCase() ? -1 : 1,
-	)) {
-		await lockMembershipForMerge(tx, id);
-	}
+	// BOTH memberships, in lock-key order (`lockMembershipsForMerge`): the
+	// keeper's slots are locked below, and a keeper-side writer that holds a slot
+	// and then reaches a row this merge re-points (a self confirm or an
+	// availability release upserting the plan row; a removal of the keeper
+	// locking its slots then its member row) would close a cycle with it. Every
+	// such writer takes the keeper's lock SHARED before its first row lock, so
+	// under the exclusive lock it either finished first or waits here. An
+	// advisory wait still takes part in deadlock detection, but nobody holding a
+	// row lock waits on it.
+	await lockMembershipsForMerge(tx, [keeperId, absorbedId]);
 
 	// The two memberships' Persons, locked BEFORE any membership row is written
 	// (the lock protocol of ADR-0031: club, then Persons, then rows). This
@@ -219,17 +216,16 @@ export async function collapseMemberships(
 	}
 
 	// Every slot either membership holds, locked `FOR NO KEY UPDATE` in slot-id
-	// order (#1327), BEFORE the collapse's first data write (round 5). It was
-	// step 6, after step 3 had re-pointed the absorbed plan row onto (keeper,
-	// meeting): the collapse then held that unique key while waiting for a slot,
-	// and the officer arm of `confirmSlotCore` (no merge lock) holds the slot and
-	// upserts the plan row (keeper, meeting): a 40P01. Locked here the collapse
-	// holds no re-pointed row while it waits, and the re-point of step 6 and the
-	// release of step 19 wait for nothing. Slot-id order is `applyMoveSlot`'s, and
-	// the slots come after the member rows as End takes them. Nothing steps 1-5
-	// write (officer terms, dues, plan rows, attendance, awards) is held by a
-	// writer that also holds a slot and waits on a member row: those writers take
-	// the member row only as an FK key share, which `NO KEY UPDATE` does not block.
+	// order (#1327), BEFORE the collapse's first data write. Slot-id order is
+	// `applyMoveSlot`'s, and the slots come after the member rows as End takes
+	// them, so the collapse holds no re-pointed row while it waits for a slot, and
+	// the re-point of step 6 and the release of step 19 wait for nothing. This is
+	// defensive: no known writer closes a cycle here (an officer's confirm writes
+	// only the slot and an activity row, and serializes on the slot). Nothing
+	// steps 1-5 write (officer terms, dues, plan rows, attendance, awards) is held
+	// by a writer that also holds a slot and waits on a member row: those writers
+	// take the member row only as an FK key share, which `NO KEY UPDATE` does not
+	// block.
 	await tx
 		.select({ id: roleSlots.id })
 		.from(roleSlots)
@@ -392,8 +388,8 @@ export async function collapseMemberships(
 		.where(eq(meetingAwards.memberId, absorbedId));
 
 	// 6. role_slots.assigned_member_id — no member-unique; re-point all.
-	//    The slots are already locked (see "Every slot ..." after the member
-	//    rows above), so this re-point and step 19's release wait for nothing.
+	//    The slots are already locked (see "Every slot ..." above), so this
+	//    re-point and step 19's release wait for nothing.
 	await tx
 		.update(roleSlots)
 		.set({ assignedMemberId: keeperId })
@@ -750,9 +746,13 @@ export async function collapseMemberships(
 		.where(eq(speechRequests.membershipId, absorbedId));
 
 	// 19. A merge that yields `former` ends the membership (#1327): it does what
-	//     an End does beyond the status flip. The keeper now holds the absorbed
-	//     row's terms, slots and plan rows (steps 1, 3 and 6), so this runs over
-	//     both. Left open, a Treasurer term would make reactivating the member
+	//     an End does beyond the status flip, over the keeper, which now holds the
+	//     absorbed row's terms, slots and plan rows (steps 1, 3 and 6). It closes
+	//     the keeper's open officer terms, releases its slots on meetings that
+	//     have not yet started (wall clock, `gte(meetings.scheduledAt, now)`, as
+	//     End does; the slots were locked up front), and deletes its plan rows.
+	//     A `member_edit` row in End's shape is written only when the keeper was
+	//     not already `former`. Left open, a Treasurer term would make reactivating the member
 	//     an admin again (`isEffectiveAdmin` reads the open term), and a future
 	//     role would keep naming a person who has left.
 	if (mergedStatus === "former") {
@@ -763,8 +763,8 @@ export async function collapseMemberships(
 			now,
 		);
 		// Its roles on meetings still to come (the wall clock, as End's release,
-		// `applySetMemberStatus`), in slot-id order, every one already locked by
-		// step 6. A completed meeting's slot stays: the status rides in the
+		// `applySetMemberStatus`), in slot-id order, every one already locked up
+		// front. A completed meeting's slot stays: the status rides in the
 		// UPDATE (#1154).
 		const upcoming = await tx
 			.select({ id: roleSlots.id })
