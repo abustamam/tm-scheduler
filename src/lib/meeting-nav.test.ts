@@ -8,13 +8,59 @@ import {
 const TZ = "UTC";
 
 describe("buildMeetingNavItems", () => {
+	it("uses the server's canonical key over one derived from the strip's own rows (#1396)", () => {
+		// A cancelled meeting shares the date but is not in the strip, so the
+		// strip alone would say the bare date.
+		const items = buildMeetingNavItems(
+			{
+				id: "a",
+				scheduledAt: "2026-07-09T19:00:00Z",
+				openSlots: 0,
+				urlKey: "2026-07-09-1900",
+			},
+			[
+				{
+					id: "b",
+					scheduledAt: "2026-07-23T19:00:00Z",
+					openSlots: 0,
+					urlKey: "2026-07-23-1900",
+				},
+			],
+			TZ,
+		);
+		expect(items.map((i) => i.urlKey)).toEqual([
+			"2026-07-09-1900",
+			"2026-07-23-1900",
+		]);
+	});
+
 	it("sorts by date, flags the current meeting, and maps open-role dots", () => {
 		const items = buildMeetingNavItems(
-			{ id: "b", scheduledAt: "2026-07-23T19:00:00Z", openSlots: 0 },
+			{
+				id: "b",
+				scheduledAt: "2026-07-23T19:00:00Z",
+				openSlots: 0,
+				urlKey: "2026-07-23",
+			},
 			[
-				{ id: "b", scheduledAt: "2026-07-23T19:00:00Z", openSlots: 0 },
-				{ id: "a", scheduledAt: "2026-07-09T19:00:00Z", openSlots: 3 },
-				{ id: "c", scheduledAt: "2026-08-13T19:00:00Z", openSlots: 1 },
+				{
+					id: "b",
+					scheduledAt: "2026-07-23T19:00:00Z",
+					openSlots: 0,
+					urlKey: "2026-07-23",
+				},
+				{
+					id: "a",
+					scheduledAt: "2026-07-09T19:00:00Z",
+					openSlots: 3,
+					urlKey: "2026-07-09",
+				},
+				{
+					id: "c",
+					scheduledAt: "2026-08-13T19:00:00Z",
+					openSlots: 1,
+					urlKey: "2026-08-13",
+				},
 			],
 			TZ,
 		);
@@ -29,10 +75,25 @@ describe("buildMeetingNavItems", () => {
 		// The current meeting already started, so listUpcomingMeetings excluded it,
 		// but its loaded agenda still has open roles — the dot must reflect that.
 		const items = buildMeetingNavItems(
-			{ id: "past", scheduledAt: "2026-07-01T19:00:00Z", openSlots: 2 },
+			{
+				id: "past",
+				scheduledAt: "2026-07-01T19:00:00Z",
+				openSlots: 2,
+				urlKey: "2026-07-01",
+			},
 			[
-				{ id: "a", scheduledAt: "2026-07-09T19:00:00Z", openSlots: 2 },
-				{ id: "c", scheduledAt: "2026-08-13T19:00:00Z", openSlots: 0 },
+				{
+					id: "a",
+					scheduledAt: "2026-07-09T19:00:00Z",
+					openSlots: 2,
+					urlKey: "2026-07-09",
+				},
+				{
+					id: "c",
+					scheduledAt: "2026-08-13T19:00:00Z",
+					openSlots: 0,
+					urlKey: "2026-08-13",
+				},
 			],
 			TZ,
 		);
@@ -47,8 +108,20 @@ describe("buildMeetingNavItems", () => {
 		// The current meeting is in the upcoming set with a stale openSlots=2, but
 		// its freshly-loaded agenda has 0 open roles — the current item wins.
 		const items = buildMeetingNavItems(
-			{ id: "a", scheduledAt: "2026-07-09T19:00:00Z", openSlots: 0 },
-			[{ id: "a", scheduledAt: "2026-07-09T19:00:00Z", openSlots: 2 }],
+			{
+				id: "a",
+				scheduledAt: "2026-07-09T19:00:00Z",
+				openSlots: 0,
+				urlKey: "2026-07-09",
+			},
+			[
+				{
+					id: "a",
+					scheduledAt: "2026-07-09T19:00:00Z",
+					openSlots: 2,
+					urlKey: "2026-07-09",
+				},
+			],
 			TZ,
 		);
 
@@ -62,7 +135,12 @@ describe("buildMeetingNavItems", () => {
 
 	it("returns just the current meeting when upcoming is empty", () => {
 		const items = buildMeetingNavItems(
-			{ id: "only", scheduledAt: "2026-07-09T19:00:00Z", openSlots: 0 },
+			{
+				id: "only",
+				scheduledAt: "2026-07-09T19:00:00Z",
+				openSlots: 0,
+				urlKey: "2026-07-09",
+			},
 			[],
 			TZ,
 		);
@@ -79,12 +157,34 @@ describe("buildMeetingNavItems", () => {
 
 	it("pages backwards: past meetings sort ahead of the current one and stay linkable", () => {
 		const items = buildMeetingNavItems(
-			{ id: "cur", scheduledAt: "2026-07-23T19:00:00Z", openSlots: 0 },
-			[{ id: "next", scheduledAt: "2026-07-30T19:00:00Z", openSlots: 1 }],
+			{
+				id: "cur",
+				scheduledAt: "2026-07-23T19:00:00Z",
+				openSlots: 0,
+				urlKey: "2026-07-23",
+			},
+			[
+				{
+					id: "next",
+					scheduledAt: "2026-07-30T19:00:00Z",
+					openSlots: 1,
+					urlKey: "2026-07-30",
+				},
+			],
 			TZ,
 			[
-				{ id: "older", scheduledAt: "2026-07-02T19:00:00Z", openSlots: 0 },
-				{ id: "prev", scheduledAt: "2026-07-09T19:00:00Z", openSlots: 0 },
+				{
+					id: "older",
+					scheduledAt: "2026-07-02T19:00:00Z",
+					openSlots: 0,
+					urlKey: "2026-07-02",
+				},
+				{
+					id: "prev",
+					scheduledAt: "2026-07-09T19:00:00Z",
+					openSlots: 0,
+					urlKey: "2026-07-09",
+				},
 			],
 		);
 
@@ -107,10 +207,29 @@ describe("buildMeetingNavItems", () => {
 		// A meeting that has already happened with unfilled roles is history, not a
 		// call to action — the dot would read as "go claim this".
 		const items = buildMeetingNavItems(
-			{ id: "cur", scheduledAt: "2026-07-23T19:00:00Z", openSlots: 0 },
-			[{ id: "next", scheduledAt: "2026-07-30T19:00:00Z", openSlots: 2 }],
+			{
+				id: "cur",
+				scheduledAt: "2026-07-23T19:00:00Z",
+				openSlots: 0,
+				urlKey: "2026-07-23",
+			},
+			[
+				{
+					id: "next",
+					scheduledAt: "2026-07-30T19:00:00Z",
+					openSlots: 2,
+					urlKey: "2026-07-30",
+				},
+			],
 			TZ,
-			[{ id: "prev", scheduledAt: "2026-07-09T19:00:00Z", openSlots: 4 }],
+			[
+				{
+					id: "prev",
+					scheduledAt: "2026-07-09T19:00:00Z",
+					openSlots: 4,
+					urlKey: "2026-07-09",
+				},
+			],
 		);
 
 		expect(items.find((i) => i.meetingId === "prev")?.hasOpenRoles).toBe(false);
@@ -121,12 +240,27 @@ describe("buildMeetingNavItems", () => {
 		// Viewing a past meeting: its authoritative agenda still wins over the
 		// past-window row, so the current tab's dot matches the roles on the page.
 		const items = buildMeetingNavItems(
-			{ id: "cur", scheduledAt: "2026-07-09T19:00:00Z", openSlots: 3 },
+			{
+				id: "cur",
+				scheduledAt: "2026-07-09T19:00:00Z",
+				openSlots: 3,
+				urlKey: "2026-07-09",
+			},
 			[],
 			TZ,
 			[
-				{ id: "cur", scheduledAt: "2026-07-09T19:00:00Z", openSlots: 0 },
-				{ id: "older", scheduledAt: "2026-07-02T19:00:00Z", openSlots: 1 },
+				{
+					id: "cur",
+					scheduledAt: "2026-07-09T19:00:00Z",
+					openSlots: 0,
+					urlKey: "2026-07-09",
+				},
+				{
+					id: "older",
+					scheduledAt: "2026-07-02T19:00:00Z",
+					openSlots: 1,
+					urlKey: "2026-07-02",
+				},
 			],
 		);
 
@@ -145,12 +279,14 @@ describe("buildMeetingNavItems", () => {
 				id: "cur",
 				scheduledAt: new Date("2026-07-21T23:45:00Z"),
 				openSlots: 0,
+				urlKey: "2026-07-21",
 			},
 			[
 				{
 					id: "up",
 					scheduledAt: new Date("2026-07-28T23:45:00Z"),
 					openSlots: 2,
+					urlKey: "2026-07-28",
 				},
 			],
 			"America/Chicago",
@@ -166,9 +302,17 @@ describe("deriveMeetingNavItems", () => {
 	it("derives the current meeting's open-role dot from its slots, overriding its upcoming row", () => {
 		const items = deriveMeetingNavItems(
 			{ id: "a", scheduledAt: "2026-07-09T19:00:00Z" },
+			"2026-07-09",
 			[{ status: "open" }, { status: "confirmed" }, { status: "claimed" }],
 			// Upcoming lists the current meeting with a stale openSlots=0.
-			[{ id: "a", scheduledAt: "2026-07-09T19:00:00Z", openSlots: 0 }],
+			[
+				{
+					id: "a",
+					scheduledAt: "2026-07-09T19:00:00Z",
+					openSlots: 0,
+					urlKey: "2026-07-09",
+				},
+			],
 			TZ,
 		);
 
@@ -181,10 +325,25 @@ describe("deriveMeetingNavItems", () => {
 	it("threads the past window through so the strip pages backwards", () => {
 		const items = deriveMeetingNavItems(
 			{ id: "b", scheduledAt: "2026-07-16T19:00:00Z" },
+			"2026-07-16",
 			[{ status: "open" }],
-			[{ id: "c", scheduledAt: "2026-07-23T19:00:00Z", openSlots: 0 }],
+			[
+				{
+					id: "c",
+					scheduledAt: "2026-07-23T19:00:00Z",
+					openSlots: 0,
+					urlKey: "2026-07-23",
+				},
+			],
 			TZ,
-			[{ id: "a", scheduledAt: "2026-07-09T19:00:00Z", openSlots: 2 }],
+			[
+				{
+					id: "a",
+					scheduledAt: "2026-07-09T19:00:00Z",
+					openSlots: 2,
+					urlKey: "2026-07-09",
+				},
+			],
 		);
 
 		expect(items.map((i) => i.meetingId)).toEqual(["a", "b", "c"]);
@@ -194,8 +353,16 @@ describe("deriveMeetingNavItems", () => {
 	it("is unchanged when no past window is supplied", () => {
 		const items = deriveMeetingNavItems(
 			{ id: "a", scheduledAt: "2026-07-09T19:00:00Z" },
+			"2026-07-09",
 			[],
-			[{ id: "b", scheduledAt: "2026-07-16T19:00:00Z", openSlots: 1 }],
+			[
+				{
+					id: "b",
+					scheduledAt: "2026-07-16T19:00:00Z",
+					openSlots: 1,
+					urlKey: "2026-07-16",
+				},
+			],
 			TZ,
 		);
 		expect(items.map((i) => i.meetingId)).toEqual(["a", "b"]);
@@ -223,9 +390,24 @@ describe("the strip with the past-but-after gap (#1158)", () => {
 	// A completed, B past-but-unfinished, C upcoming. The route feeds the
 	// `before = viewed` window and the `after = viewed` gap in as `past`, so the
 	// two overlap on the viewed meeting and on nothing else.
-	const A = { id: "A", scheduledAt: "2026-09-24T23:00:00Z", openSlots: 0 };
-	const B = { id: "B", scheduledAt: "2026-10-08T23:00:00Z", openSlots: 3 };
-	const C = { id: "C", scheduledAt: "2026-10-22T23:00:00Z", openSlots: 2 };
+	const A = {
+		id: "A",
+		scheduledAt: "2026-09-24T23:00:00Z",
+		openSlots: 0,
+		urlKey: "2026-09-24",
+	};
+	const B = {
+		id: "B",
+		scheduledAt: "2026-10-08T23:00:00Z",
+		openSlots: 3,
+		urlKey: "2026-10-08",
+	};
+	const C = {
+		id: "C",
+		scheduledAt: "2026-10-22T23:00:00Z",
+		openSlots: 2,
+		urlKey: "2026-10-22",
+	};
 
 	it("shows A, B and C in order from A, B and C, each exactly once", () => {
 		const cases = [
@@ -234,7 +416,7 @@ describe("the strip with the past-but-after gap (#1158)", () => {
 			{ viewed: C, before: [A, B], gap: [] },
 		];
 		for (const { viewed, before, gap } of cases) {
-			const items = deriveMeetingNavItems(viewed, [], [C], TZ, [
+			const items = deriveMeetingNavItems(viewed, viewed.urlKey, [], [C], TZ, [
 				...before,
 				...gap,
 			]);
@@ -246,7 +428,7 @@ describe("the strip with the past-but-after gap (#1158)", () => {
 	});
 
 	it("gives the unfinished past meeting no open-roles dot", () => {
-		const items = deriveMeetingNavItems(A, [], [C], TZ, [A, B]);
+		const items = deriveMeetingNavItems(A, A.urlKey, [], [C], TZ, [A, B]);
 		expect(items.find((i) => i.meetingId === "B")?.hasOpenRoles).toBe(false);
 		expect(items.find((i) => i.meetingId === "C")?.hasOpenRoles).toBe(true);
 	});

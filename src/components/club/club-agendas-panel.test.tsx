@@ -176,16 +176,24 @@ describe("DefaultResultLists", () => {
 				timezone="America/Chicago"
 				result={{
 					templateId: "t-1",
-					applied: [{ meetingId: "m-a", scheduledAt: at("2026-10-06") }],
+					applied: [
+						{
+							meetingId: "m-a",
+							scheduledAt: at("2026-10-06"),
+							urlKey: "2026-10-06",
+						},
+					],
 					keptEdited: [
 						{
 							meetingId: "m-c",
 							scheduledAt: at("2026-10-13"),
+							urlKey: "2026-10-13",
 							onDefaultCopy: false,
 						},
 						{
 							meetingId: "m-e",
 							scheduledAt: at("2026-10-20"),
+							urlKey: "2026-10-20",
 							onDefaultCopy: true,
 						},
 					],
@@ -193,6 +201,7 @@ describe("DefaultResultLists", () => {
 						{
 							meetingId: "m-d",
 							scheduledAt: at("2026-10-27"),
+							urlKey: "2026-10-27",
 							roles: ["Ah-Counter"],
 						},
 					],
@@ -200,10 +209,17 @@ describe("DefaultResultLists", () => {
 						{
 							meetingId: "m-g",
 							scheduledAt: at("2026-11-10"),
+							urlKey: "2026-11-10",
 							roles: ["Timer"],
 						},
 					],
-					failed: [{ meetingId: "m-f", scheduledAt: at("2026-11-03") }],
+					failed: [
+						{
+							meetingId: "m-f",
+							scheduledAt: at("2026-11-03"),
+							urlKey: "2026-11-03",
+						},
+					],
 				}}
 			/>
 		));
@@ -228,7 +244,7 @@ describe("DefaultResultLists", () => {
 			),
 		).toBeTruthy();
 		const link = screen.getByRole("link", { name: "Tue, Oct 6" });
-		expect(link.getAttribute("href")).toBe(`/club/${CLUB}/meeting/m-a`);
+		expect(link.getAttribute("href")).toBe(`/club/${CLUB}/meeting/2026-10-06`);
 	});
 
 	it("says so when there are no upcoming meetings", async () => {

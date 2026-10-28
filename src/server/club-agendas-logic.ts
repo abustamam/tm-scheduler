@@ -60,6 +60,7 @@ import {
 	WouldReleaseError,
 	WouldRemoveError,
 } from "./meeting-templates-logic";
+import { urlKeysForClubMeetings } from "./meeting-url-key-logic";
 
 export { CLUB_TEMPLATE_GONE_MESSAGE };
 
@@ -367,7 +368,12 @@ export async function deleteClubTemplate(input: {
 // ---------------------------------------------------------------------------
 
 /** A meeting named in a set-default result. */
-export type MeetingRef = { meetingId: string; scheduledAt: Date };
+export type MeetingRef = {
+	meetingId: string;
+	scheduledAt: Date;
+	/** The canonical URL key the result list links with (#1396). */
+	urlKey: string;
+};
 
 /**
  * What setting a default did to the club's upcoming meetings (spec D4, D12).
@@ -591,11 +597,24 @@ async function applyDefaultToUpcoming(
 		roles: standard.roles,
 	};
 
+	const [club] = await database
+		.select({ timezone: clubs.timezone })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	const keys = await urlKeysForClubMeetings(
+		clubId,
+		candidates,
+		club?.timezone ?? "UTC",
+	);
+	const refOf = (m: { id: string; scheduledAt: Date }): MeetingRef => ({
+		meetingId: m.id,
+		scheduledAt: m.scheduledAt,
+		urlKey: keys(m.id),
+	});
+
 	for (const [index, meeting] of candidates.entries()) {
-		const ref: MeetingRef = {
-			meetingId: meeting.id,
-			scheduledAt: meeting.scheduledAt,
-		};
+		const ref = refOf(meeting);
 		try {
 			const copy =
 				meeting.templateId === null
@@ -645,10 +664,7 @@ async function applyDefaultToUpcoming(
 				// every other write honours, seen as soon as it commits.
 				if (err.reason === "archived") {
 					for (const rest of candidates.slice(index)) {
-						result.failed.push({
-							meetingId: rest.id,
-							scheduledAt: rest.scheduledAt,
-						});
+						result.failed.push(refOf(rest));
 					}
 					return result;
 				}

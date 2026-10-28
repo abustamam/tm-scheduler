@@ -164,6 +164,9 @@ export interface MeetingAgendaProps {
 	personalNudgeBase?: PersonalNudgeBase | null;
 	/** The full meeting row; the agenda reads its status for the claim gates. */
 	meeting: Awaited<ReturnType<typeof getMeeting>>["meeting"];
+	/** The meeting's canonical URL key; the "View agenda" link is built from it,
+	 *  never from `meeting.id` (#1396). */
+	meetingUrlKey: string;
 	/** The route's one "is it over?" answer (`isMeetingOver`, #393), computed
 	 *  from its frozen `now` and handed in rather than recomputed here, so the
 	 *  agenda cannot read a different instant from the rest of the page (and
@@ -214,6 +217,7 @@ export function MeetingAgenda({
 	meetingDate,
 	personalNudgeBase = null,
 	meeting,
+	meetingUrlKey,
 	meetingOver = true,
 	requireIdentity,
 	contactedMemberIds,
@@ -442,7 +446,7 @@ export function MeetingAgenda({
 				<Button asChild variant="outline" size="touch">
 					<Link
 						to="/club/$clubId/meeting/$meetingId/agenda"
-						params={{ clubId: meeting.clubId, meetingId: meeting.id }}
+						params={{ clubId: meeting.clubId, meetingId: meetingUrlKey }}
 					>
 						View agenda
 					</Link>

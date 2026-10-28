@@ -127,16 +127,16 @@ describe("meeting route: cancel wiring (#1057)", () => {
 		expect(bannerSrc).toContain("Restore");
 	});
 
-	it("moves a bare-date URL to the uuid URL after cancelling, and opens the notice on arrival", () => {
-		expect(src).toContain("if (meetingKeyParam !== meeting.id) {");
-		expect(src).toContain("cancellationNoticeHref(clubId, meeting.id)");
+	it("moves any other URL to the meeting's own key after cancelling, and opens the notice on arrival", () => {
+		expect(src).toContain("if (meetingKeyParam !== urlKey) {");
+		expect(src).toContain("cancellationNoticeHref(clubId, urlKey)");
 		expect(src).toContain("isCancellationNoticeRequested(search)");
 		expect(src).toContain(
 			"if (noticeRequested && cancelled && effectiveCanManage) {",
 		);
 	});
 
-	it("on the uuid URL already, doCancel re-runs the loader and opens the notice in place", () => {
+	it("on the canonical URL already, doCancel re-runs the loader and opens the notice in place", () => {
 		// Sliced to doCancel's OWN body (review of #1084): the file-wide pins
 		// above are satisfied with the else branch deleted, and an officer who
 		// cancels from a uuid URL is then left on a stale page with no notice.
@@ -148,7 +148,7 @@ describe("meeting route: cancel wiring (#1057)", () => {
 		// REPLACES the history entry (review of #1084, G), so Back does not land
 		// on the dead date URL a cancelled meeting no longer answers to.
 		expect(body).toContain(
-			"if (meetingKeyParam !== meeting.id) { await router.navigate({ href: cancellationNoticeHref(clubId, meeting.id), replace: true, }); }",
+			"if (meetingKeyParam !== urlKey) { await router.navigate({ href: cancellationNoticeHref(clubId, urlKey), replace: true, }); }",
 		);
 	});
 
@@ -214,15 +214,14 @@ describe("meeting route: cancel wiring (#1057)", () => {
 		).toContain("await router.invalidate();");
 	});
 
-	it("on a cancelled meeting every link is built from the uuid (review of #1084, C)", () => {
-		// The canonical key is a bare club-local date, and a date key skips a
-		// cancelled meeting — so Share, Present, export, the ballot QR, the nudge
-		// drafts and the feedback link all 404'd from the cancelled page.
+	it("on a cancelled meeting every link is built from the canonical key (#1396)", () => {
+		// Since #1396 the canonical key reaches a cancelled meeting (a same-date
+		// collision gets `-HHmm`, counting cancelled meetings), so every link is
+		// built from it and none from the uuid.
 		const flat = src.replace(/\s+/g, " ");
 		expect(src).toContain("urlKey: canonicalUrlKey,");
-		expect(flat).toContain(
-			"const urlKey = isMeetingCancelled(meeting.status) ? meeting.id : canonicalUrlKey;",
-		);
+		expect(flat).toContain("const urlKey = canonicalUrlKey;");
+		expect(flat).not.toContain("? meeting.id : canonicalUrlKey");
 		// The derivation is the ONLY reader of the canonical key, so no call site
 		// can bypass it: the destructure binds it, the derivation reads it, and
 		// nothing else names it (comment-blind, so prose does not count).

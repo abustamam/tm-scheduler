@@ -78,19 +78,20 @@ export function meetingHasStarted(
 
 /**
  * The search key that opens the notice sheet on arrival. A bare-date meeting
- * URL skips a cancelled meeting (`meeting-resolve-logic.ts`), so after
- * cancelling from one the page moves to the uuid URL, and this is how the sheet
+ * URL names the live meeting that day, so after cancelling from one the page
+ * moves to the meeting's own canonical key, and this is how the sheet
  * survives the move: the route's `validateSearch` passes unknown keys through
  * unchanged, and an officer landing with it open sees the notice first.
  */
 export const CANCELLATION_NOTICE_PARAM = "notice";
 
-/** The uuid meeting URL with the notice flag set. */
+/** The canonical-key meeting URL with the notice flag set (#1396: never the
+ *  uuid). */
 export function cancellationNoticeHref(
 	clubKey: string,
-	meetingId: string,
+	meetingKey: string,
 ): string {
-	return `/club/${clubKey}/meeting/${meetingId}?${CANCELLATION_NOTICE_PARAM}=1`;
+	return `/club/${clubKey}/meeting/${meetingKey}?${CANCELLATION_NOTICE_PARAM}=1`;
 }
 
 /** Whether the URL asks for the notice. Both spellings the router can hand

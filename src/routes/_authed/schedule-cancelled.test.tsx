@@ -37,7 +37,12 @@ afterEach(() => {
 
 const MEETING_UUID = "11111111-2222-4333-8444-555555555555";
 const CANCELLED: CancelledMeetingRow[] = [
-	{ id: MEETING_UUID, scheduledAt: "2026-10-03T15:00:00Z", timezone: "UTC" },
+	{
+		id: MEETING_UUID,
+		scheduledAt: "2026-10-03T15:00:00Z",
+		timezone: "UTC",
+		urlKey: "2026-10-03",
+	},
 ];
 
 interface Ctx {
@@ -148,16 +153,16 @@ async function renderPage(ctx: Ctx, cancelled: CancelledMeetingRow[]) {
 }
 
 describe("the strip", () => {
-	it("shows an officer each cancelled meeting struck through, linked by UUID to the club slug", async () => {
+	it("shows an officer each cancelled meeting struck through, linked by its date key to the club slug", async () => {
 		await renderPage(ADMIN, CANCELLED);
 		const strip = screen.getByTestId("cancelled-meetings");
 		expect(strip.textContent).toContain("Cancelled");
 		const link = strip.querySelector("a");
 		expect(link?.getAttribute("href")).toBe(
-			`/club/downtown/meeting/${MEETING_UUID}`,
+			"/club/downtown/meeting/2026-10-03",
 		);
-		// The uuid, never a date key: a bare-date URL skips a cancelled meeting.
-		expect(link?.getAttribute("href")).not.toContain("2026-10-03");
+		// The key, never the uuid (#1396).
+		expect(link?.getAttribute("href")).not.toContain(MEETING_UUID);
 		expect(link?.className).toContain("line-through");
 		// Review of #1084, G: the strike in the text's own colour, kept on hover
 		// (`hover:underline` sets the same `text-decoration-line` and would

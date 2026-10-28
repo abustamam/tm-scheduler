@@ -110,6 +110,7 @@ function renderAgenda(slots: AgendaSlot[]) {
 			unavailableMemberIds={[]}
 			shareUrl="https://gavelup.app/club/downtown/meeting/2026-10-13"
 			meetingDate="Tue, Oct 13"
+			meetingUrlKey="2026-10-06"
 			meeting={meeting}
 			meetingOver={false}
 			contactedMemberIds={[]}

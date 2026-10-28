@@ -19,7 +19,6 @@ import {
 	MEETING_UPDATE_FIELDS,
 } from "#/lib/meeting-limits";
 import { pairedRoleIds } from "#/lib/meeting-roles";
-import { urlKeysForMeetings } from "#/lib/meeting-url";
 import { officerPositionLabel } from "#/lib/officers";
 import { PROMO_LIMITS } from "#/lib/promo-template";
 import { WOD_FIELDS, WOD_UPDATE_FIELDS } from "#/lib/wod-limits";
@@ -59,7 +58,11 @@ import {
 	loadTemplateContent,
 	loadTemplateKey,
 } from "./meeting-templates-logic";
-import { resolveMeetingUrlKey } from "./meeting-url-key-logic";
+import {
+	keyOfFrom,
+	resolveMeetingUrlKey,
+	urlKeysForClubMeetings,
+} from "./meeting-url-key-logic";
 import {
 	applyCancelMeeting,
 	applyCompleteMeeting,
@@ -711,6 +714,7 @@ export const listMemberCommitments = createServerFn({ method: "GET" })
 				slotId: roleSlots.id,
 				status: roleSlots.status,
 				meetingId: meetings.id,
+				clubId: meetings.clubId,
 				scheduledAt: meetings.scheduledAt,
 				lengthMinutes: meetings.lengthMinutes,
 				theme: meetings.theme,
@@ -756,13 +760,16 @@ export const listMemberCommitments = createServerFn({ method: "GET" })
 		// A member belongs to one club, so every row shares a timezone; fall back
 		// to UTC only for the (empty-rows) edge case.
 		const timezone = rows[0]?.timezone ?? "UTC";
-		const keys = urlKeysForMeetings(
-			rows.map((r) => ({ id: r.meetingId, scheduledAt: r.scheduledAt })),
-			timezone,
-		);
+		const keys = rows[0]
+			? await urlKeysForClubMeetings(
+					rows[0].clubId,
+					rows.map((r) => ({ id: r.meetingId, scheduledAt: r.scheduledAt })),
+					timezone,
+				)
+			: keyOfFrom(new Map());
 		return rows.map((r) => ({
 			...r,
-			urlKey: keys.get(r.meetingId) ?? r.meetingId,
+			urlKey: keys(r.meetingId),
 		}));
 	});
 

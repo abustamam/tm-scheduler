@@ -274,6 +274,7 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 		const upcoming = await upcomingPromise;
 		const navItems = deriveMeetingNavItems(
 			data.meeting,
+			data.urlKey,
 			data.slots,
 			upcoming,
 			data.timezone,
@@ -354,7 +355,8 @@ function MeetingView() {
 	// `meetingKeyParam` is the key the URL actually carries (a club-local date
 	// or the uuid); `canonicalUrlKey` below is the one the server resolved, and
 	// `urlKey` the one this page links with. `doCancel` compares the first to
-	// `meeting.id` to know whether the page is already on the uuid URL (#1057).
+	// `urlKey` to know whether the page is already on the URL that keeps
+	// reaching this meeting once it is cancelled (#1057).
 	const { clubId, meetingId: meetingKeyParam } = Route.useParams();
 	const { clubUuid, effectiveMemberId, authCtx, shell } =
 		Route.useRouteContext();
@@ -392,16 +394,11 @@ function MeetingView() {
 		clubDigitalVotingEnabled,
 	} = Route.useLoaderData();
 	// The key every link on this page is built from: Share, Present and the
-	// export menu, the ballot QR, the nudge drafts and the feedback link. The
-	// server's canonical key is a bare club-local date, and a date key SKIPS a
-	// cancelled meeting (`meeting-resolve-logic.ts`) — so on a cancelled meeting
-	// every one of those links resolved to nothing, or to the other meeting that
-	// day (#1057). The uuid is the one key that reaches a cancelled meeting.
-	// Derived HERE, under the name the call sites already use, so each of them
-	// follows with no edit of its own.
-	const urlKey = isMeetingCancelled(meeting.status)
-		? meeting.id
-		: canonicalUrlKey;
+	// export menu, the ballot QR, the nudge drafts and the feedback link. It is
+	// the server's canonical key for live and cancelled meetings alike (#1396):
+	// a cancelled meeting that shares its date with another gets a `-HHmm` key,
+	// which reaches it, so the uuid is no longer needed here.
+	const urlKey = canonicalUrlKey;
 	const router = useRouter();
 	const search = Route.useSearch();
 	const online = useOnlineStatus();
@@ -1842,9 +1839,9 @@ function MeetingView() {
 					? "This meeting was already cancelled. Nothing has been sent."
 					: "Meeting cancelled. Nothing has been sent.",
 			);
-			if (meetingKeyParam !== meeting.id) {
+			if (meetingKeyParam !== urlKey) {
 				await router.navigate({
-					href: cancellationNoticeHref(clubId, meeting.id),
+					href: cancellationNoticeHref(clubId, urlKey),
 					replace: true,
 				});
 			} else {
@@ -2416,6 +2413,7 @@ function MeetingView() {
 							// manager-only.
 							personalNudgeBase={effectiveCanManage ? nudgePersonalBase : null}
 							meeting={meeting}
+							meetingUrlKey={urlKey}
 							meetingOver={over}
 							requireIdentity={requireIdentity}
 							contactedMemberIds={contactedMemberIds}
