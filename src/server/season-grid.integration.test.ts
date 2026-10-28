@@ -419,12 +419,23 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 			expect(data.meetings.filter((m) => m.isPast)).toHaveLength(2);
 		});
 
+		it("pastCount 0 returns no past meetings (#1316's phone default)", async () => {
+			const { loadSeasonGrid } = await import("#/server/season-grid-logic");
+			await seedPast();
+			const data = await loadSeasonGrid({
+				clubId: seed.clubId,
+				count: 8,
+				pastCount: 0,
+			});
+			expect(data.meetings.filter((m) => m.isPast)).toHaveLength(0);
+			expect(data.meetings.at(0)?.id).toBe(seed.meetingId);
+		});
+
 		it.each([
 			99,
 			500,
 			14,
 			3,
-			0,
 			-1,
 			Number.NaN,
 		])("bounds pastCount %s to 2 on the SERVER, whatever the route allowed", async (n) => {
