@@ -48,6 +48,7 @@ import { mailtoHref } from "#/lib/mailto";
 import { phoneEditPayload } from "#/lib/member-edit-phone";
 import { isPastAgendaRemoveRefusal } from "#/lib/member-remove";
 import { formatTenure } from "#/lib/members";
+import { isOnRoster } from "#/lib/membership-status";
 import {
 	OFFICER_POSITIONS,
 	type OfficerPosition,
@@ -338,7 +339,9 @@ function MemberDetail() {
 					<Button asChild size="sm">
 						<Link to="/next">Assign a role</Link>
 					</Button>
-					{clubId ? <MemberActions member={member} clubId={clubId} /> : null}
+					{clubId && viewerIsAdmin ? (
+						<MemberActions member={member} clubId={clubId} />
+					) : null}
 				</div>
 			</div>
 
@@ -450,7 +453,7 @@ function MemberDetail() {
 						/>
 					) : null}
 
-					{clubId && viewerIsAdmin && member.status !== "former" ? (
+					{clubId && viewerIsAdmin && isOnRoster(member.status) ? (
 						<ClubRoleControl member={member} clubId={clubId} />
 					) : null}
 
@@ -869,13 +872,9 @@ function MemberActions({
 	// It derives from the refusal (member-set or multi-club), NOT from whether
 	// the member has signed in (#1110).
 	const preferenceLocked = member.contactPreferenceRefusal !== null;
-	const isInactive = member.status === "inactive";
+	const isActive = member.status === "active";
 	const isFormer = member.status === "former";
 	const [endOpen, setEndOpen] = useState(false);
-
-	function onToggleStatus() {
-		return onSetStatus(member.status === "active" ? "inactive" : "active");
-	}
 
 	async function onSetStatus(next: "active" | "inactive" | "former") {
 		setRemoveOpen(false);
@@ -931,7 +930,11 @@ function MemberActions({
 								String(form.get("preferredContact") ?? ""),
 								member.preferredContact,
 							)),
-					officerPositions,
+					// A former member's office fieldset is disabled, so the form carries
+					// no checkboxes for them: send NO office change (the server leaves
+					// terms alone) rather than an empty set that closes every office
+					// (#1326).
+					...(isFormer ? {} : { officerPositions }),
 				},
 			});
 			// The rest of the edit always LANDS. The email is the Person's (#907):
@@ -986,12 +989,14 @@ function MemberActions({
 					variant="outline"
 					size="sm"
 					disabled={busy}
-					onClick={onToggleStatus}
+					onClick={() => onSetStatus(isActive ? "inactive" : "active")}
 				>
-					{isInactive || isFormer ? "Reactivate" : "Mark inactive"}
+					{isActive ? "Mark inactive" : "Reactivate"}
 				</Button>
 			) : null}
-			{!isFormer ? (
+			{/* The same linked-account rule as Mark inactive (#1326): a member with a
+			    sign-in account is not taken off the roster from here. */}
+			{!isFormer && !isLinkedAccount ? (
 				<Button
 					variant="outline"
 					size="sm"
@@ -1224,8 +1229,12 @@ function MemberActions({
 								Cancel
 							</Button>
 						</DialogClose>
-						{removeRefusal && !isInactive ? (
-							<Button type="button" disabled={busy} onClick={onToggleStatus}>
+						{removeRefusal && isActive ? (
+							<Button
+								type="button"
+								disabled={busy}
+								onClick={() => onSetStatus("inactive")}
+							>
 								Mark inactive instead
 							</Button>
 						) : null}
@@ -1274,7 +1283,7 @@ function ClubRoleControl({
 	const [demoteOpen, setDemoteOpen] = useState(false);
 	// A former member holds no role (#1340): a stale stored `admin` on an ended
 	// row is not shown as one.
-	const isAdmin = member.clubRole === "admin" && member.status !== "former";
+	const isAdmin = member.clubRole === "admin" && isOnRoster(member.status);
 
 	async function setRole(next: "admin" | "member") {
 		setBusy(true);

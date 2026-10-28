@@ -35,6 +35,7 @@ import {
 import { MEMBERSHIP_ENDED_CHANGE } from "#/lib/activity-format";
 import { localDateKey } from "#/lib/meeting-url";
 import { pastAgendaRemoveRefusal } from "#/lib/member-remove";
+import { isOnRoster } from "#/lib/membership-status";
 import {
 	OFFICER_POSITIONS,
 	type OfficerPosition,
@@ -673,7 +674,7 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 			current.status === "active" && input.status === "inactive";
 		// Leaving the roster for good (#1239): same release of upcoming slots as
 		// going inactive, plus the end date and the open officer terms.
-		const ending = current.status !== "former" && input.status === "former";
+		const ending = isOnRoster(current.status) && input.status === "former";
 		const releasing = deactivating || ending;
 		// #1340: a membership that ends, or comes back from former, holds role
 		// `member`. Ending is when the permission stops; coming back is never a
@@ -681,8 +682,14 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 		const demotes = ending || current.status === "former";
 		const now = new Date();
 		// Guardrail (#187): deactivating an admin must not strand the club with
-		// zero active admins — that would silently bypass the demote guard.
-		if ((deactivating || ending) && current.clubRole === "admin") {
+		// zero active admins — that would silently bypass the demote guard. Only an
+		// ACTIVE admin counts toward that (#1326): an inactive one is already out
+		// of the active-admin count, so ending them cannot lower it.
+		if (
+			(deactivating || ending) &&
+			current.clubRole === "admin" &&
+			current.status === "active"
+		) {
 			await assertKeepsAnActiveAdmin(
 				tx,
 				input.clubId,

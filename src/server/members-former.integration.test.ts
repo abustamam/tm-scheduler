@@ -579,6 +579,125 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 		).toBe(true);
 	});
 
+	describe("status writers for three statuses (#1326)", () => {
+		const assignSlot = (memberId: string) =>
+			testDb
+				.update(roleSlots)
+				.set({ assignedMemberId: memberId, status: "claimed" })
+				.where(eq(roleSlots.id, seed.slotId));
+		const slotRow = async () =>
+			(
+				await testDb
+					.select()
+					.from(roleSlots)
+					.where(eq(roleSlots.id, seed.slotId))
+			)[0];
+
+		// protects=ending a member who holds an UPCOMING slot releases it (End is a releasing transition, not only "deactivating");
+		// fails_when=`releasing` is `deactivating` alone, so an End leaves the slot assigned;
+		// no_claim=a past meeting's slot (history, covered by the End tests).
+		it("ending a member releases their upcoming slot", async () => {
+			const id = await addMember("Rel Easer");
+			await assignSlot(id);
+			await set(id, "former");
+			const slot = await slotRow();
+			expect(slot.assignedMemberId).toBeNull();
+			expect(slot.status).toBe("open");
+		});
+
+		// protects=inactive -> former closes the open term (the one End path from inactive);
+		// fails_when=a term stays open after an inactive member is ended;
+		// no_claim=active -> former (the officer-terms tests).
+		it("inactive -> former closes an open term", async () => {
+			const id = await addMember("Ina Ctive", "inactive");
+			await openTerm(id, "treasurer");
+			await set(id, "former");
+			const open = await testDb
+				.select()
+				.from(officerTerms)
+				.where(
+					and(
+						eq(officerTerms.membershipId, id),
+						sql`${officerTerms.termEnd} is null`,
+					),
+				);
+			expect(open).toEqual([]);
+		});
+
+		// protects=a repeat of the SAME status writes nothing and logs nothing, one case per status;
+		// fails_when=a repeat of that status writes a log row, releases a slot or changes the row;
+		// no_claim=a change of status (the tests above and below).
+		for (const status of ["active", "inactive", "former"] as const) {
+			it(`${status} -> ${status} is a no-op`, async () => {
+				const id = await addMember(`Same ${status}`, status);
+				if (status !== "former") await assignSlot(id);
+				await set(id, status);
+				expect((await rowOf(id)).status).toBe(status);
+				expect(await statusLogCount(id)).toBe(0);
+				if (status !== "former")
+					expect((await slotRow()).assignedMemberId).toBe(id);
+			});
+		}
+
+		// protects=ending an INACTIVE admin is allowed even when no other admin is left, because they were never in the active-admin count;
+		// fails_when=the last-admin guard runs for an inactive admin, refusing the End as "last admin";
+		// no_claim=ending the last ACTIVE admin (refused, tested above).
+		it("ends an inactive admin when no other admin is active", async () => {
+			await testDb
+				.update(members)
+				.set({ status: "inactive", clubRole: "admin" })
+				.where(eq(members.id, seed.memberId));
+			await testDb
+				.update(members)
+				.set({ status: "former", clubRole: "member" })
+				.where(eq(members.id, seed.adminMemberId));
+			await set(seed.memberId, "former");
+			const row = await rowOf(seed.memberId);
+			expect(row.status).toBe("former");
+			expect(row.clubRole).toBe("member");
+		});
+
+		// protects=an edit that sends NO officerPositions (what the form sends for a former member) leaves their terms untouched;
+		// fails_when=an omitted field is read as an empty set and closes the offices;
+		// no_claim=the form itself (the fieldset is disabled in the UI).
+		it("an edit without officerPositions leaves terms alone", async () => {
+			const id = await addMember("Keep Terms", "inactive");
+			await openTerm(id, "president");
+			await applyMemberEdit({
+				clubId: seed.clubId,
+				memberId: id,
+				name: "Keep Terms 2",
+				actorMemberId: seed.adminMemberId,
+			});
+			const open = await testDb
+				.select()
+				.from(officerTerms)
+				.where(
+					and(
+						eq(officerTerms.membershipId, id),
+						sql`${officerTerms.termEnd} is null`,
+					),
+				);
+			expect(open).toHaveLength(1);
+		});
+
+		// protects=collapsing two rows of the SAME status keeps that status, one case per status;
+		// fails_when=a same-status merge yields another status (e.g. a rule that wants EXACTLY ONE active row, or falls back to inactive);
+		// no_claim=mixed-status merges (the collapse test below). A fallback that merely
+		//   returns the keeper's status cannot be told apart here: the keeper has the same
+		//   status as the absorbed row, so it is only the mixed test that pins that.
+		for (const status of ["active", "inactive", "former"] as const) {
+			it(`collapse of ${status}+${status} keeps ${status}`, async () => {
+				const keeper = await addMember(`K ${status}`, status);
+				const absorbed = await addMember(`A ${status}`, status);
+				await testDb.transaction((tx) =>
+					collapseMemberships(tx, seed.clubId, keeper, absorbed),
+				);
+				expect((await rowOf(keeper)).status).toBe(status);
+			});
+		}
+	});
+
 	describe("fix round: refusals and restores", () => {
 		const newGuest = async (name = "Gus Guest") => {
 			const email = `g-${randomUUID()}@example.com`;

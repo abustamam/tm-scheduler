@@ -18,9 +18,10 @@
 // Keeping them out of `club.ts` also keeps that module to `createServerFn`s and
 // types, which `server-modules.guard.test.ts` enforces: a plain db-touching
 // export there drags `#/db` → `pg` → `Buffer` into the client bundle.
-import { and, asc, eq, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { members, people } from "#/db/schema";
+import { ROSTER_STATUSES } from "#/lib/membership-status";
 import { coalesceToE164 } from "#/lib/phone";
 import {
 	type ContactMethod,
@@ -93,7 +94,12 @@ export async function loadClubMembers(
 			.innerJoin(people, eq(people.id, members.personId))
 			// A FORMER member (#1239) is on no roster segment; the admin reaches
 			// them through `listFormerMembers`.
-			.where(and(eq(members.clubId, clubId), ne(members.status, "former")))
+			.where(
+				and(
+					eq(members.clubId, clubId),
+					inArray(members.status, [...ROSTER_STATUSES]),
+				),
+			)
 			.orderBy(asc(members.name)),
 		loadClubDefaultCountryCode(clubId),
 	]);
