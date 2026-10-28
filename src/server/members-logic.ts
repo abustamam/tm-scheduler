@@ -940,7 +940,9 @@ export async function applyMemberMerge(input: MergeInput) {
 	}
 
 	await db.transaction(async (tx) => {
-		await collapseMemberships(tx, clubId, keeperId, absorbedId);
+		await collapseMemberships(tx, clubId, keeperId, absorbedId, {
+			actorMemberId: input.actorMemberId,
+		});
 		await logActivity(tx, {
 			clubId,
 			actorMemberId: input.actorMemberId,

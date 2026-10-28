@@ -37,11 +37,6 @@ import {
 	lockMemberAttendance,
 	setPlanStatus,
 } from "./attendance-plan-logic";
-import {
-	CLUB_BUSY_MESSAGE,
-	lockPersonsInOrder,
-	noKeyUpdate,
-} from "./club-write-lock";
 import { assertClubNotArchived, requireClubRole } from "./guards";
 import { loadTmodMemberId } from "./meeting-authz-logic";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
@@ -1911,15 +1906,16 @@ async function sessionIsHolder(
  * transaction, so a claim queued behind End's lock landed after the release
  * sweep.
  *
- * LOCK ORDER, the protocol of ADR-0031: the caller's SHARED membership merge
- * lock first (`lockMembershipsAgainstMerge`, so a removal or merge that holds it
- * exclusive serializes the whole assignment), then THIS: the member's PERSON
- * `FOR NO KEY UPDATE`, then the member row `FOR SHARE`, and only then the slot.
- * The Person comes before the member because `applyMemberEdit` takes the Person
- * `FOR UPDATE` and then updates the member, while a speaker claim holding the
- * member `FOR SHARE` would key-share that Person for its speech: a cycle (40P01)
- * the other way round. `NO KEY UPDATE` orders against that edit and not against
- * the key-share, so two speeches for one Person still insert side by side.
+ * LOCK ORDER (ADR-0031): the caller's SHARED membership merge lock first
+ * (`lockMembershipsAgainstMerge`, so a removal or merge that holds it
+ * exclusive serializes the whole assignment), then THIS member row `FOR SHARE`,
+ * and only then the slot. No Person lock is taken here: a Person lock ahead of
+ * the member row made every assignment deadlock-prone against `mergePeople`
+ * (Person, then the exclusive merge lock) and against `scheduleSpeechRequest`
+ * (meeting, then Person). The cost is a known residual, deliberately accepted:
+ * a speaker claim holding the member `FOR SHARE` key-shares the Person for its
+ * speech, while `applyMemberEdit` holds that Person `FOR UPDATE` and then wants
+ * the member `NO KEY UPDATE`: 40P01 for one of them, retryable, no data lost.
  * `FOR SHARE` on the member does not conflict with the key-share an
  * activity-log insert takes on it, so a member releasing their own role is not
  * blocked. MUST run before the first slot lock of the transaction. The refusal
@@ -1929,15 +1925,8 @@ export async function lockMemberForAssignment(
 	tx: Tx,
 	memberId: string,
 ): Promise<void> {
-	const [peek] = await tx
-		.select({ personId: members.personId })
-		.from(members)
-		.where(eq(members.id, memberId))
-		.limit(1);
-	if (!peek) throw new Error(MEMBER_NOT_ELIGIBLE_MESSAGE);
-	await lockPersonsInOrder(tx, noKeyUpdate(peek.personId));
 	const [row] = await tx
-		.select({ status: members.status, personId: members.personId })
+		.select({ status: members.status })
 		.from(members)
 		.where(eq(members.id, memberId))
 		.limit(1)
@@ -1945,9 +1934,6 @@ export async function lockMemberForAssignment(
 	if (!row || row.status !== "active") {
 		throw new Error(MEMBER_NOT_ELIGIBLE_MESSAGE);
 	}
-	// A person merge moved the membership to another Person while this waited for
-	// the first one's lock: the lock held is the wrong one.
-	if (row.personId !== peek.personId) throw new Error(CLUB_BUSY_MESSAGE);
 }
 
 /**
@@ -1994,7 +1980,7 @@ export async function claimSlotCore(
 	// role, before this transaction's first row lock. Without it a merge
 	// absorbing that membership could re-point the slots it saw, then have its
 	// DELETE set-null this claim's holder, leaving a slot `claimed` by nobody.
-	// Lock order: membership merge lock → Person → member row → (attendance
+	// Lock order: membership merge lock → member row → (attendance
 	// lock) → slot rows; see `lockMemberForAssignment` and
 	// `membership-merge-lock.ts`. Refuses with `CLUB_BUSY_MESSAGE` when a merge
 	// absorbed the membership while this waited.
@@ -2204,7 +2190,7 @@ export async function reassignSlotCore(
 	},
 ): Promise<{ clubId: string }> {
 	// #1327: the new holder is locked (and checked active) BEFORE the slot, the
-	// order End takes: merge lock, Person, member row, then slots. The SHARED
+	// order End takes: merge lock, member row, then slots. The SHARED
 	// merge lock comes first so a removal of that member (EXCLUSIVE, then its
 	// meetings, slots and the member row) serializes this whole reassignment
 	// instead of meeting it half-way: the member `FOR SHARE` held here against

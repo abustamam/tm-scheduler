@@ -330,7 +330,7 @@ export async function attachSpeechToOpenSlot(
 	// Lock the speaker's membership and refuse one who is no longer active
 	// (#1327). The `active` filter above read a snapshot: an End that committed
 	// after it released this member's roles, and the UPDATE below would give a
-	// former member a slot again. Merge lock, Person, member row, then the slot
+	// former member a slot again. Merge lock, member row, then the slot
 	// rows below: `lockMemberForAssignment` has the order. A member whose End is
 	// still in flight makes this wait, and then refuses. Every caller runs in a
 	// transaction (the cast), or the row locks would not outlive the statement.

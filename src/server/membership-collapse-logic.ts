@@ -38,6 +38,7 @@ import {
 	speechRequests,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import { MEMBERSHIP_ENDED_CHANGE } from "#/lib/activity-format";
 import { earliestDate } from "#/lib/person-identity";
 import { logActivity } from "./activity";
 import { deletePlanRowsOfEndedMember } from "./attendance-plan-logic";
@@ -121,8 +122,12 @@ export async function collapseMemberships(
 	clubId: string,
 	keeperId: string,
 	absorbedId: string,
+	/** Who is merging, credited on what a merge-to-former ends and releases. A
+	 *  caller with no member behind it (`mergePeople`) omits it: null. */
+	opts: { actorMemberId?: string | null } = {},
 ): Promise<void> {
 	if (keeperId === absorbedId) return;
+	const actorMemberId = opts.actorMemberId ?? null;
 
 	// The club write lock, before the first re-point. The anonymous feedback
 	// form (`role-feedback-logic.ts`) inserts under it, and nothing else stopped
@@ -354,6 +359,17 @@ export async function collapseMemberships(
 		.where(eq(meetingAwards.memberId, absorbedId));
 
 	// 6. role_slots.assigned_member_id — no member-unique; re-point all.
+	//    Every slot either membership holds is locked FIRST, in slot-id order
+	//    (#1327), the order `applyMoveSlot` writes a pair in. The re-point below
+	//    and step 19's release then wait for nothing, so the collapse never holds
+	//    a later-id slot while waiting on an earlier one, and a reorder cannot
+	//    form a cycle with it. After the member rows, as End takes them.
+	await tx
+		.select({ id: roleSlots.id })
+		.from(roleSlots)
+		.where(inArray(roleSlots.assignedMemberId, [keeperId, absorbedId]))
+		.orderBy(asc(roleSlots.id))
+		.for("no key update");
 	await tx
 		.update(roleSlots)
 		.set({ assignedMemberId: keeperId })
@@ -716,10 +732,16 @@ export async function collapseMemberships(
 	//     an admin again (`isEffectiveAdmin` reads the open term), and a future
 	//     role would keep naming a person who has left.
 	if (mergedStatus === "former") {
-		await endOfficerTermsOfEndedMember(tx, keeperId, new Date());
+		const now = new Date();
+		const closedOfficerPositions = await endOfficerTermsOfEndedMember(
+			tx,
+			keeperId,
+			now,
+		);
 		// Its roles on meetings still to come (the wall clock, as End's release,
-		// `applySetMemberStatus`), in slot-id order. A completed meeting's slot
-		// stays: the status rides in the UPDATE (#1154).
+		// `applySetMemberStatus`), in slot-id order, every one already locked by
+		// step 6. A completed meeting's slot stays: the status rides in the
+		// UPDATE (#1154).
 		const upcoming = await tx
 			.select({ id: roleSlots.id })
 			.from(roleSlots)
@@ -727,10 +749,11 @@ export async function collapseMemberships(
 			.where(
 				and(
 					eq(roleSlots.assignedMemberId, keeperId),
-					gte(meetings.scheduledAt, new Date()),
+					gte(meetings.scheduledAt, now),
 				),
 			)
 			.orderBy(asc(roleSlots.id));
+		let releasedSlots = 0;
 		for (const s of upcoming) {
 			const released = await tx
 				.update(roleSlots)
@@ -754,9 +777,10 @@ export async function collapseMemberships(
 				)
 				.returning({ id: roleSlots.id });
 			if (released.length === 0) continue;
+			releasedSlots++;
 			await logActivity(tx, {
 				clubId,
-				actorMemberId: null,
+				actorMemberId,
 				action: "release",
 				targetType: "slot",
 				targetId: s.id,
@@ -764,6 +788,26 @@ export async function collapseMemberships(
 			});
 		}
 		await deletePlanRowsOfEndedMember(tx, keeperId);
+		// What End records on its `member_edit` row (#1328): who ended, which
+		// offices closed, how many roles went. Only when the merge actually ended
+		// something, so a merge of two already-ended rows stays one quiet row.
+		if (closedOfficerPositions.length > 0 || releasedSlots > 0) {
+			await logActivity(tx, {
+				clubId,
+				actorMemberId,
+				action: "member_edit",
+				targetType: "member",
+				targetId: keeperId,
+				detail: {
+					before: { status: keeper.status, clubRole: keeper.clubRole },
+					after: { status: mergedStatus, clubRole: "member" },
+					change: MEMBERSHIP_ENDED_CHANGE,
+					memberId: keeperId,
+					closedOfficerPositions,
+					releasedSlots,
+				},
+			});
+		}
 	}
 
 	// --- Delete the now-empty absorbed membership --------------------------
