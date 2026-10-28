@@ -277,6 +277,17 @@ export const UNDO_MEMBER_HAS_HISTORY_MESSAGE = (what: string): string =>
 	`destroy it. Use the member merge tool instead.`;
 
 /**
+ * Refusal when a row naming the member would lose the name (#1324): attendance,
+ * Table Topics, awards and action items survive the delete, they are just left
+ * nameless on a past agenda or its minutes. The merge tool is no remedy: it
+ * needs a keeper, and a mistaken conversion has none. Setting the member
+ * inactive or former keeps the name and takes them off the roster.
+ */
+export const UNDO_MEMBER_NAME_HISTORY_MESSAGE = (what: string): string =>
+	`This member is named on ${what} on a past meeting, and undoing the ` +
+	`conversion would leave that blank. Set the member inactive or former instead.`;
+
+/**
  * Refusal when the membership was merged with another roster entry (#1322), in
  * EITHER direction.
  *

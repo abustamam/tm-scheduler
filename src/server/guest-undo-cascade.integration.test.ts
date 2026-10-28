@@ -135,7 +135,7 @@ describe.skipIf(!hasTestDb)(
 			if (!pairing) throw new Error("Failed to seed mentorship");
 
 			await expect(undo(guestId)).rejects.toThrow(
-				UNDO_MEMBER_HAS_HISTORY_MESSAGE("a mentorship"),
+				UNDO_MEMBER_HAS_HISTORY_MESSAGE("other records"),
 			);
 
 			await expectMembershipSurvives(guestId, membershipId);
@@ -147,16 +147,15 @@ describe.skipIf(!hasTestDb)(
 		});
 
 		// protects=a mentor request, either side and any status, refuses the undo
-		// with its OWN label ("a mentor request", not "a mentorship") and keeps
-		// the request, because the membership delete would cascade it away;
-		// fails_when=the request lookup is dropped from the undo's checks (the
-		// membership and its requests are deleted), or the refusal reuses the
-		// pairing's label;
+		// with the shared generic label (no label identifies one private table)
+		// and keeps the request, because the membership delete would cascade it
+		// away; fails_when=the request lookup is dropped from the undo's checks
+		// (the membership and its requests are deleted);
 		// no_claim=the reuse path (the test below), where nothing is deleted
 		it.each([
 			["mentor", "pending"],
 			["mentee", "declined"],
-		] as const)("refuses when the member is the %s of a %s mentor request, naming the request", async (side, status) => {
+		] as const)("refuses when the member is the %s of a %s mentor request, with the generic label", async (side, status) => {
 			const { guestId, membershipId } = await converted(`Asked ${side}`);
 			const [request] = await testDb
 				.insert(mentorshipRequests)
@@ -173,8 +172,8 @@ describe.skipIf(!hasTestDb)(
 				() => "",
 				(e: Error) => e.message,
 			);
-			expect(refusal).toBe(UNDO_MEMBER_HAS_HISTORY_MESSAGE("a mentor request"));
-			expect(refusal).not.toBe(UNDO_MEMBER_HAS_HISTORY_MESSAGE("a mentorship"));
+			expect(refusal).toBe(UNDO_MEMBER_HAS_HISTORY_MESSAGE("other records"));
+			expect(refusal).not.toMatch(/mentor/i);
 
 			await expectMembershipSurvives(guestId, membershipId);
 			const [stillThere] = await testDb

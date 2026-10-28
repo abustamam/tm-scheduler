@@ -9,10 +9,12 @@ import {
 	desc,
 	eq,
 	getTableName,
+	gt,
 	gte,
 	inArray,
 	isNotNull,
 	isNull,
+	lt,
 	min,
 	ne,
 	or,
@@ -27,6 +29,7 @@ import {
 } from "#/db/members-foreign-keys";
 import {
 	activityLog,
+	clubActionItems,
 	clubs,
 	guestInvites,
 	guests,
@@ -38,6 +41,7 @@ import {
 	officerTerms,
 	officerTrainingRecords,
 	pathEnrollments,
+	pathLevelProgress,
 	people,
 	roleFeedbackNotes,
 	roleSlots,
@@ -60,6 +64,7 @@ import {
 	LINK_MEMBER_NOT_IN_CLUB_MESSAGE,
 	UNDO_MEMBER_HAS_ACCOUNT_MESSAGE,
 	UNDO_MEMBER_HAS_HISTORY_MESSAGE,
+	UNDO_MEMBER_NAME_HISTORY_MESSAGE,
 	UNDO_MEMBERSHIP_EDITED_MESSAGE,
 	UNDO_MEMBERSHIP_MERGED_MESSAGE,
 	UNDO_NO_RECORD_MESSAGE,
@@ -127,6 +132,8 @@ import {
 	RECORD_CHANGED_MESSAGE,
 	separateGuestFromMemberPerson,
 } from "./guests-logic";
+import { meetingAcceptsWrite } from "./meeting-write-gate";
+import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 import {
 	PAST_AGENDA_MEMBER_KEYS,
 	PAST_AGENDA_TIME_WINDOW_KEYS,
@@ -3309,8 +3316,26 @@ export type UndoCascadeCheck = {
 	 * deletes nothing, so a row there is not at risk and refusing would be false.
 	 */
 	scope: "always" | "created";
-	has: (tx: DbOrTx, memberId: string) => Promise<boolean>;
+	/**
+	 * `name`: the row survives the delete and only loses the member's NAME (#1324),
+	 * so the refusal says that, and names the remedy that works (set the member
+	 * inactive or former) instead of the merge tool, which needs a keeper.
+	 */
+	kind?: "name";
+	has: (
+		tx: DbOrTx,
+		memberId: string,
+		ctx: UndoCheckContext,
+	) => Promise<boolean>;
 };
+
+/** What a check may need beyond the member: the club, and the one clock a
+ *  "past agenda" is read against. */
+export type UndoCheckContext = { clubId: string; now: Date };
+
+/** One generic label for the checks on tables private to a member (mentorship,
+ *  mentor request, feedback notes), so no label tells an admin which one exists. */
+const PRIVATE_RECORDS_LABEL = "other records";
 
 /**
  * The refusals `applyUndoGuestConversion` makes for history that its final
@@ -3356,14 +3381,14 @@ export const UNDO_CASCADE_CHECKS: UndoCascadeCheck[] = [
 	},
 	{
 		columns: MENTORSHIP_MEMBER_FKS,
-		label: "a mentorship",
+		label: PRIVATE_RECORDS_LABEL,
 		scope: "created",
 		has: memberHasMentorship,
 	},
 	{
 		// ANY status: a decided request is still the member's record (#945).
 		columns: MENTOR_REQUEST_MEMBER_FKS,
-		label: "a mentor request",
+		label: PRIVATE_RECORDS_LABEL,
 		scope: "created",
 		has: memberHasMentorRequest,
 	},
@@ -3377,7 +3402,7 @@ export const UNDO_CASCADE_CHECKS: UndoCascadeCheck[] = [
 		// Private to the recipient (readable only by them, after the meeting): the
 		// label must not tell an admin that feedback exists.
 		columns: ["role_feedback_notes.recipient_member_id"],
-		label: "other records",
+		label: PRIVATE_RECORDS_LABEL,
 		scope: "created",
 		has: hasRowFor(roleFeedbackNotes, roleFeedbackNotes.recipientMemberId),
 	},
@@ -3429,6 +3454,16 @@ export function undoNameBlankingChecks(): UndoCascadeCheck[] {
 	undoNameBlankingChecks_ ??= buildUndoNameBlankingChecks();
 	return undoNameBlankingChecks_;
 }
+/** A meeting whose agenda is already history: the SQL form of
+ *  `isPastAgendaMeeting` in `members-logic.ts` (#1189), the line the member
+ *  removal refuses on. `completed`, or past its time and not cancelled. */
+function pastAgendaMeeting(now: Date) {
+	return or(
+		eq(meetings.status, "completed"),
+		and(lt(meetings.scheduledAt, now), ne(meetings.status, "cancelled")),
+	);
+}
+
 function buildUndoNameBlankingChecks(): UndoCascadeCheck[] {
 	return [...PAST_AGENDA_MEMBER_KEYS, ...PAST_AGENDA_TIME_WINDOW_KEYS]
 		.filter((key) => getTableName(key.table) !== "role_slots")
@@ -3444,9 +3479,69 @@ function buildUndoNameBlankingChecks(): UndoCascadeCheck[] {
 				columns: [`${table}.${key.memberColumn.name}`],
 				label,
 				scope: "created" as const,
-				has: hasRowFor(key.table, key.memberColumn),
+				kind: "name" as const,
+				// Only where #1189's removal rule would count the row (#1324): a row on a
+				// past agenda. An `absent` mark on an upcoming meeting prints no name
+				// anywhere that matters yet, and a cancelled meeting printed nothing.
+				has:
+					"meetingColumn" in key
+						? hasRowOnPastAgenda(key.table, key.memberColumn, key.meetingColumn)
+						: hasOwnedItemOnPastAgenda,
 			};
 		});
+}
+
+function hasRowOnPastAgenda(
+	table: PgTable,
+	memberColumn: PgColumn,
+	meetingColumn: PgColumn,
+) {
+	return async (
+		tx: DbOrTx,
+		memberId: string,
+		ctx: UndoCheckContext,
+	): Promise<boolean> => {
+		const rows = await tx
+			.select({ v: meetings.id })
+			.from(table)
+			.innerJoin(meetings, eq(meetings.id, meetingColumn))
+			.where(
+				and(
+					eq(memberColumn, memberId),
+					eq(meetings.clubId, ctx.clubId),
+					pastAgendaMeeting(ctx.now),
+				),
+			)
+			.limit(1);
+		return rows.length > 0;
+	};
+}
+
+/** An action item the member owns that a past meeting's minutes print WITH its
+ *  owner: the minutes' own window (`openAsOf`), so a resolved item counts only
+ *  for meetings that happened before it was resolved. */
+async function hasOwnedItemOnPastAgenda(
+	tx: DbOrTx,
+	memberId: string,
+	ctx: UndoCheckContext,
+): Promise<boolean> {
+	const rows = await tx
+		.select({ v: meetings.id })
+		.from(meetings)
+		.innerJoin(
+			clubActionItems,
+			and(
+				eq(clubActionItems.ownerMemberId, memberId),
+				gte(meetings.scheduledAt, clubActionItems.createdAt),
+				or(
+					isNull(clubActionItems.resolvedAt),
+					lt(meetings.scheduledAt, clubActionItems.resolvedAt),
+				),
+			),
+		)
+		.where(and(eq(meetings.clubId, ctx.clubId), pastAgendaMeeting(ctx.now)))
+		.limit(1);
+	return rows.length > 0;
 }
 
 /**
@@ -3529,6 +3624,13 @@ export type UndoKeyPlan = {
 	refusals: UndoCascadeCheck[];
 	/** The keys the delete blanks, counted into the `member_remove` record. */
 	blanks: MembersForeignKey[];
+	/**
+	 * The name-blanking keys (attendance, Table Topics, awards, action-item
+	 * owners): classed `refuse`, so not in `blanks`, but a row that passed the
+	 * refusal (an upcoming meeting) is blanked by the delete and named on the
+	 * record too (#1322, #1324).
+	 */
+	nameBlanks: MembersForeignKey[];
 };
 
 /**
@@ -3578,10 +3680,14 @@ export function buildUndoKeyPlan(
 	}
 	const classes = new Map<string, UndoKeyClass>();
 	const blanks: UndoKeyPlan["blanks"] = [];
+	const nameBlanks: UndoKeyPlan["nameBlanks"] = [];
 	for (const fk of foreignKeysToMembers()) {
 		const found: UndoKeyClass[] = [];
 		const check = refusing.get(fk.key);
-		if (check) found.push({ kind: "refuse", check });
+		if (check) {
+			found.push({ kind: "refuse", check });
+			if (check.kind === "name") nameBlanks.push(fk);
+		}
 		const handled = handledKeys[fk.key];
 		if (handled) found.push({ kind: "handled", by: handled });
 		const deferred = deferredKeys[fk.key];
@@ -3614,7 +3720,7 @@ export function buildUndoKeyPlan(
 			);
 		}
 	}
-	return { classes, refusals, blanks };
+	return { classes, refusals, blanks, nameBlanks };
 }
 
 /**
@@ -3631,7 +3737,8 @@ async function countBlankedKeys(
 	membershipId: string,
 ): Promise<Record<string, number>> {
 	const out: Record<string, number> = {};
-	for (const { key, table, column } of undoKeyPlan().blanks) {
+	const plan = undoKeyPlan();
+	for (const { key, table, column } of [...plan.blanks, ...plan.nameBlanks]) {
 		const [row] = await tx
 			.select({ n: count() })
 			.from(table)
@@ -4233,7 +4340,10 @@ export async function applyUndoGuestConversion(
 				),
 			);
 		const moved = new Set(record.slotIds);
-		if (held.some((s) => !moved.has(s.id))) {
+		// Only when the conversion CREATED the membership (#1324): the reuse path
+		// deletes nothing, so a slot the convert did not move is not at risk, and
+		// #1202's rule is that old history must not block it.
+		if (record.createdMembership && held.some((s) => !moved.has(s.id))) {
 			throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("roles"));
 		}
 
@@ -4244,27 +4354,53 @@ export async function applyUndoGuestConversion(
 		// agenda or minutes (#1213), whose rows the delete leaves nameless.
 		// `UNDO_GUEST_ATTRIBUTION_CHECKS`: the guest introductions and invitations.
 		// A row in any of them refuses the undo and nothing is deleted.
+		const checkCtx: UndoCheckContext = {
+			clubId: input.clubId,
+			now: new Date(),
+		};
 		for (const check of undoKeyPlan().refusals) {
 			// `created` scope: on the reuse/reactivate path the undo deletes no
 			// membership, so nothing cascades and the row is not at risk.
 			if (check.scope === "created" && !record.createdMembership) continue;
-			if (await check.has(tx, membershipId)) {
-				throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE(check.label));
+			if (await check.has(tx, membershipId, checkCtx)) {
+				throw new Error(
+					check.kind === "name"
+						? UNDO_MEMBER_NAME_HISTORY_MESSAGE(check.label)
+						: UNDO_MEMBER_HAS_HISTORY_MESSAGE(check.label),
+				);
 			}
 		}
 
 		if (record.createdMembership) {
+			// Only what this conversion's membership can have earned (#1324): a
+			// speech made after the convert, and an enrolment credited to THIS club.
+			// A Person the convert reused can bring history from another club, which
+			// the undo neither deletes nor says anything about.
 			const [spoken] = await tx
 				.select({ n: count() })
 				.from(speeches)
-				.where(eq(speeches.personId, memberPersonId));
+				.where(
+					and(
+						eq(speeches.personId, memberPersonId),
+						entry ? gt(speeches.createdAt, entry.createdAt) : undefined,
+					),
+				);
 			if (Number(spoken?.n ?? 0) > 0) {
 				throw new Error(UNDO_MEMBER_HAS_HISTORY_MESSAGE("speeches"));
 			}
 			const [enrolled] = await tx
 				.select({ n: count() })
 				.from(pathEnrollments)
-				.where(eq(pathEnrollments.personId, memberPersonId));
+				.innerJoin(
+					pathLevelProgress,
+					eq(pathLevelProgress.enrollmentId, pathEnrollments.id),
+				)
+				.where(
+					and(
+						eq(pathEnrollments.personId, memberPersonId),
+						eq(pathLevelProgress.creditedClubId, input.clubId),
+					),
+				);
 			if (Number(enrolled?.n ?? 0) > 0) {
 				throw new Error(
 					UNDO_MEMBER_HAS_HISTORY_MESSAGE("a Pathways enrolment"),
@@ -4408,6 +4544,57 @@ export async function applyUndoGuestConversion(
 				// written while the conversion had them active must not outlive it.
 				if (record.reactivatedFrom === "former")
 					await deletePlanRowsOfEndedMember(tx, membershipId);
+				// Any non-active status releases upcoming roles, as
+				// `applySetMemberStatus` does (`releasing`, members-logic.ts, which inlines it
+				// and exports no helper; the same predicate and per-slot UPDATE, in slot-id order): a convert-woken member the
+				// VPE has since cast must not stay on the live agenda while `inactive` or
+				// `former`. Past slots stay (history). Not run on `changed_since` and the
+				// other leave-alone branches, which write no status.
+				if (record.reactivatedFrom) {
+					const upcoming = await tx
+						.select({ id: roleSlots.id })
+						.from(roleSlots)
+						.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+						.where(
+							and(
+								eq(roleSlots.assignedMemberId, membershipId),
+								gte(meetings.scheduledAt, new Date()),
+							),
+						)
+						.orderBy(asc(roleSlots.id));
+					for (const s of upcoming) {
+						const released = await tx
+							.update(roleSlots)
+							.set({
+								assignedMemberId: null,
+								status: "open",
+								claimedAt: null,
+								speechId: null,
+							})
+							.where(
+								and(
+									eq(roleSlots.id, s.id),
+									eq(roleSlots.assignedMemberId, membershipId),
+									meetingAcceptsWrite(
+										tx,
+										"plan",
+										roleSlots.meetingId,
+										PLAN_ACCEPTING_CANCELLED,
+									),
+								),
+							)
+							.returning({ id: roleSlots.id });
+						if (released.length === 0) continue;
+						await logActivity(tx, {
+							clubId: input.clubId,
+							actorMemberId: input.actorMemberId,
+							action: "release",
+							targetType: "slot",
+							targetId: s.id,
+							detail: { fromMemberId: membershipId },
+						});
+					}
+				}
 			}
 		}
 
