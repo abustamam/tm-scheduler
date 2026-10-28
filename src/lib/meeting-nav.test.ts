@@ -8,6 +8,32 @@ import {
 const TZ = "UTC";
 
 describe("buildMeetingNavItems", () => {
+	it("uses the server's canonical key over one derived from the strip's own rows (#1396)", () => {
+		// A cancelled meeting shares the date but is not in the strip, so the
+		// strip alone would say the bare date.
+		const items = buildMeetingNavItems(
+			{
+				id: "a",
+				scheduledAt: "2026-07-09T19:00:00Z",
+				openSlots: 0,
+				urlKey: "2026-07-09-1900",
+			},
+			[
+				{
+					id: "b",
+					scheduledAt: "2026-07-23T19:00:00Z",
+					openSlots: 0,
+					urlKey: "2026-07-23-1900",
+				},
+			],
+			TZ,
+		);
+		expect(items.map((i) => i.urlKey)).toEqual([
+			"2026-07-09-1900",
+			"2026-07-23-1900",
+		]);
+	});
+
 	it("sorts by date, flags the current meeting, and maps open-role dots", () => {
 		const items = buildMeetingNavItems(
 			{ id: "b", scheduledAt: "2026-07-23T19:00:00Z", openSlots: 0 },

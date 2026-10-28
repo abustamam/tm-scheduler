@@ -47,7 +47,10 @@ import {
 	resolveMeetingNumber,
 } from "./meeting-number-logic";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
-import { resolveMeetingUrlKey } from "./meeting-url-key-logic";
+import {
+	resolveMeetingUrlKey,
+	urlKeysForClubMeetings,
+} from "./meeting-url-key-logic";
 import { meetingRowAccepts } from "./meeting-write-gate";
 import { loadPublicClubRoster } from "./members-logic";
 import { closeAllVotesTx } from "./voting-logic";
@@ -68,6 +71,9 @@ export interface UpcomingMeetingRow {
 	location: string | null;
 	status: (typeof meetings.$inferSelect)["status"];
 	timezone: string;
+	/** The canonical URL key (`resolveMeetingUrlKey`), counting cancelled
+	 *  meetings on the same date (#1396). */
+	urlKey: string;
 	openSlots: number;
 	totalSlots: number;
 }
@@ -94,7 +100,7 @@ export async function loadPublicUpcomingMeetings(
 	clubId: string,
 ): Promise<UpcomingMeetingRow[]> {
 	if (!(await isReadableClub(clubId))) return [];
-	return db
+	const rows = await db
 		.select({
 			id: meetings.id,
 			scheduledAt: meetings.scheduledAt,
@@ -117,6 +123,12 @@ export async function loadPublicUpcomingMeetings(
 		)
 		.groupBy(meetings.id, clubs.timezone)
 		.orderBy(asc(meetings.scheduledAt));
+	const keys = await urlKeysForClubMeetings(
+		clubId,
+		rows,
+		rows[0]?.timezone ?? "UTC",
+	);
+	return rows.map((r) => ({ ...r, urlKey: keys.get(r.id) ?? r.id }));
 }
 
 export interface PublicNextMeetingKey {
@@ -1065,6 +1077,9 @@ export interface CancelledMeetingRow {
 	/** ISO instant. */
 	scheduledAt: string;
 	timezone: string;
+	/** The canonical URL key: `-HHmm` when another meeting, live or cancelled,
+	 *  shares the date (#1396). */
+	urlKey: string;
 }
 
 /**
@@ -1098,10 +1113,12 @@ export async function loadCancelledMeetings(
 			),
 		)
 		.orderBy(asc(meetings.scheduledAt));
+	const keys = await urlKeysForClubMeetings(clubId, rows, timezone);
 	return rows.map((r) => ({
 		id: r.id,
 		scheduledAt: r.scheduledAt.toISOString(),
 		timezone,
+		urlKey: keys.get(r.id) ?? r.id,
 	}));
 }
 

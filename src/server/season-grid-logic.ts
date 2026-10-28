@@ -11,11 +11,11 @@ import {
 	type slotStatusEnum,
 } from "#/db/schema";
 import { buildRoleCounts, buildShortCodes, slotLabel } from "#/lib/agenda";
-import { urlKeysForMeetings } from "#/lib/meeting-url";
 import { coalesceToE164, DEFAULT_COUNTRY_CODE } from "#/lib/phone";
 import { parsePastCount } from "#/lib/season-grid-view";
 import { listPlanForMeetings } from "./attendance-plan-logic";
 import { isReadableClub } from "./club-readable-logic";
+import { urlKeysForClubMeetings } from "./meeting-url-key-logic";
 
 export type SeasonGridCount = 4 | 8 | "all";
 export type SlotStatus = (typeof slotStatusEnum.enumValues)[number];
@@ -257,7 +257,11 @@ export async function loadSeasonGrid(input: {
 			openByMeeting.set(c.meetingId, (openByMeeting.get(c.meetingId) ?? 0) + 1);
 	}
 
-	const gridKeys = urlKeysForMeetings(ordered, timezone);
+	const gridKeys = await urlKeysForClubMeetings(
+		input.clubId,
+		ordered,
+		timezone,
+	);
 	const gridMeetings: SeasonGridMeeting[] = ordered.map((m) => ({
 		id: m.id,
 		scheduledAt: m.scheduledAt.toISOString(),

@@ -492,7 +492,7 @@ function ResultGroup<T extends MeetingRef>({
 						<li key={m.meetingId}>
 							<Link
 								to="/club/$clubId/meeting/$meetingId"
-								params={{ clubId, meetingId: m.meetingId }}
+								params={{ clubId, meetingId: m.urlKey }}
 								className="underline"
 							>
 								{formatMeetingDate(m.scheduledAt, timezone)}

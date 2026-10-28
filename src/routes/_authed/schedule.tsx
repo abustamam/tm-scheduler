@@ -162,9 +162,9 @@ function SeasonGridPage() {
 			    them only for an effective admin and the server refuses anyone
 			    else, so `cancelled` is empty for a member by construction and
 			    `canManageOthers` here is the client half of the same rule. Each
-			    is struck through and links by UUID: a bare-date URL skips a
-			    cancelled meeting (`meeting-resolve-logic.ts`), so the uuid is the
-			    only link that reaches it, and reaching it is where Restore lives. */}
+			    is struck through and links by its canonical key (#1396), which
+			    reaches it even beside a live meeting that day; reaching it is where
+			    Restore lives. */}
 			{canManageOthers && cancelled.length > 0 && clubKey ? (
 				<section
 					aria-label="Cancelled meetings"
@@ -179,7 +179,7 @@ function SeasonGridPage() {
 						<Link
 							key={m.id}
 							to="/club/$clubId/meeting/$meetingId"
-							params={{ clubId: clubKey, meetingId: m.id }}
+							params={{ clubId: clubKey, meetingId: m.urlKey }}
 							// `decoration-current` so the strike is the text's own colour;
 							// no `hover:underline`, which REPLACES `line-through` (one
 							// `text-decoration-line`) and un-strikes the date on hover;

@@ -10,15 +10,22 @@ export type MeetingNavItem = {
 	hasOpenRoles: boolean;
 };
 
+// `urlKey` is the server's canonical key (`resolveMeetingUrlKey`), which counts
+// cancelled meetings on the same date and so cannot be recomputed from the
+// handful of rows this strip holds (#1396). Optional only so a caller with no
+// server key (tests, a list that already holds the whole club) still gets one
+// derived from the rows; every production source supplies it.
 type CurrentMeeting = {
 	id: string;
 	scheduledAt: Date | string;
 	openSlots: number;
+	urlKey?: string;
 };
 type UpcomingMeeting = {
 	id: string;
 	scheduledAt: Date | string;
 	openSlots: number;
+	urlKey?: string;
 };
 
 function toMillis(value: Date | string): number {
@@ -54,6 +61,7 @@ export function buildMeetingNavItems(
 		id: current.id,
 		scheduledAt: current.scheduledAt,
 		openSlots: current.openSlots,
+		urlKey: current.urlKey,
 		isPast: false,
 	});
 
@@ -63,7 +71,7 @@ export function buildMeetingNavItems(
 	const keys = urlKeysForMeetings(ordered, timezone);
 	return ordered.map((m) => ({
 		meetingId: m.id,
-		urlKey: keys.get(m.id) ?? m.id,
+		urlKey: m.urlKey ?? keys.get(m.id) ?? m.id,
 		label: formatShortDate(m.scheduledAt, timezone),
 		isCurrent: m.id === current.id,
 		hasOpenRoles: !m.isPast && m.openSlots > 0,
@@ -77,7 +85,7 @@ export function buildMeetingNavItems(
  * meeting loaders share one implementation.
  */
 export function deriveMeetingNavItems(
-	meeting: { id: string; scheduledAt: Date | string },
+	meeting: { id: string; scheduledAt: Date | string; urlKey?: string },
 	slots: { status: string }[],
 	upcoming: UpcomingMeeting[],
 	timezone: string,
@@ -85,7 +93,12 @@ export function deriveMeetingNavItems(
 ): MeetingNavItem[] {
 	const openSlots = slots.filter((s) => s.status === "open").length;
 	return buildMeetingNavItems(
-		{ id: meeting.id, scheduledAt: meeting.scheduledAt, openSlots },
+		{
+			id: meeting.id,
+			scheduledAt: meeting.scheduledAt,
+			openSlots,
+			urlKey: meeting.urlKey,
+		},
 		upcoming,
 		timezone,
 		past,

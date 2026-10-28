@@ -249,11 +249,13 @@ export function GridCell({
 		</span>
 	);
 	if (cell.kind === "blank") return inner;
+	// A public cell with no key is not a link: the uuid is never a fallback.
+	if (clubSlug && !meetingKey) return inner;
 	return (
 		<MeetingLink
 			clubSlug={clubSlug}
 			meetingId={cell.meetingId}
-			meetingKey={meetingKey}
+			meetingKey={meetingKey ?? ""}
 			className="block"
 			aria-label={(cell.title || "meeting") + dateSuffix}
 		>

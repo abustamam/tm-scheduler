@@ -7,6 +7,20 @@ import type { ReactNode } from "react";
  * be collapsed into one `<Link to={...}>` call — this component hides the
  * two-branch `if` behind a single call site instead.
  */
+type MeetingLinkProps = {
+	/** Club slug: when set (public club shell), links target the public meeting
+	 *  view instead of the signed-in `/meetings/$id` route. */
+	clubSlug?: string;
+	meetingId: string;
+	/** The meeting's canonical URL key (`$meetingId` param of the public view).
+	 *  Required (#1396): a public link never falls back to the uuid. Unused by
+	 *  the signed-in `/meetings/$id` branch, which takes the uuid. */
+	meetingKey: string;
+	className?: string;
+	"aria-label"?: string;
+	children: ReactNode;
+};
+
 export function MeetingLink({
 	clubSlug,
 	meetingId,
@@ -14,24 +28,12 @@ export function MeetingLink({
 	className,
 	"aria-label": ariaLabel,
 	children,
-}: {
-	/** Club slug — when set (public club shell), links target the public
-	 *  meeting view instead of the signed-in `/meetings/$id` route. */
-	clubSlug?: string;
-	meetingId: string;
-	/** Club-local-date key for the PUBLIC view (`$meetingId` param). Defaults to
-	 *  `meetingId`. Ignored by the authed `/meetings/$id` branch, which always
-	 *  uses the raw uuid. */
-	meetingKey?: string;
-	className?: string;
-	"aria-label"?: string;
-	children: ReactNode;
-}) {
+}: MeetingLinkProps) {
 	if (clubSlug) {
 		return (
 			<Link
 				to="/club/$clubId/meeting/$meetingId"
-				params={{ clubId: clubSlug, meetingId: meetingKey ?? meetingId }}
+				params={{ clubId: clubSlug, meetingId: meetingKey }}
 				className={className}
 				aria-label={ariaLabel}
 			>

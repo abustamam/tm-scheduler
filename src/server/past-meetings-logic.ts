@@ -155,8 +155,8 @@ export async function loadPastMeetings(input: {
 	// The club's full meeting spine, ordered — one query that serves BOTH the
 	// per-row number and the url keys, instead of `resolveMeetingKey` /
 	// `resolveMeetingNumber` per row (the N+1 trap). Cancelled rows stay in for
-	// numbering (an anchor could be one); they are filtered out for url keys, to
-	// match `resolveMeetingKey`'s own same-day collision rule.
+	// numbering (an anchor could be one) AND for url keys: a cancelled meeting
+	// on the same date makes both keys `-HHmm` (#1396).
 	const spine = await db
 		.select({
 			id: meetings.id,
@@ -167,10 +167,7 @@ export async function loadPastMeetings(input: {
 		.from(meetings)
 		.where(eq(meetings.clubId, input.clubId))
 		.orderBy(asc(meetings.scheduledAt));
-	const keys = urlKeysForMeetings(
-		spine.filter((m) => m.status !== "cancelled"),
-		timezone,
-	);
+	const keys = urlKeysForMeetings(spine, timezone);
 
 	// Which of these meetings actually have minutes recorded — one grouped query
 	// over the page's ids.

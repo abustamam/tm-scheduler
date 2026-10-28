@@ -118,16 +118,27 @@ export function localDayRange(
 	};
 }
 
-/** Assign canonical urlKeys to a list, detecting collisions WITHIN the list
- *  (same club-local date ⇒ all suffixed). Returns id → urlKey. */
+/** Assign canonical urlKeys to a list (same club-local date ⇒ all suffixed).
+ *  Returns id → urlKey.
+ *
+ *  A meeting's key must be the same on every surface (#1396), and EVERY meeting
+ *  in the club counts toward a collision, cancelled ones included. A list that
+ *  leaves some out (the grid and the nav strip hide cancelled meetings) must
+ *  pass `counting`: the scheduled instants of ALL the club's meetings that
+ *  could share a date with an item, items themselves included. Without it the
+ *  collisions are detected within `items` only, which is right just for a list
+ *  that already holds the whole club. */
 export function urlKeysForMeetings(
 	items: { id: string; scheduledAt: Date | string }[],
 	timeZone: string,
+	counting?: readonly (Date | string)[],
 ): Map<string, string> {
 	const dateOf = (i: { scheduledAt: Date | string }) =>
 		localDateKey(new Date(i.scheduledAt), timeZone);
 	const counts = new Map<string, number>();
-	for (const i of items) {
+	for (const i of counting
+		? counting.map((c) => ({ scheduledAt: c }))
+		: items) {
 		const d = dateOf(i);
 		counts.set(d, (counts.get(d) ?? 0) + 1);
 	}
