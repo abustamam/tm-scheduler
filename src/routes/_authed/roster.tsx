@@ -10,7 +10,7 @@ import {
 	Upload,
 	UserPlus,
 } from "lucide-react";
-import { type ChangeEvent, useState } from "react";
+import { type ChangeEvent, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { CONTACT_METHOD_ICONS } from "#/components/contact-method-icon";
@@ -33,6 +33,7 @@ import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { clubExportUrl, exportLinkAllowed } from "#/lib/club-export-url";
 import { DEMO_INVITE_NOT_SENT } from "#/lib/demo-club-copy";
 import { effectiveAdminClub } from "#/lib/effective-admin";
+import { formatCalendarDay } from "#/lib/format";
 import { type InviteState, inviteStateOf } from "#/lib/invite-state";
 import { formatTenure } from "#/lib/members";
 import { foreignSkipSummary } from "#/lib/members-import-plan";
@@ -478,6 +479,20 @@ function Roster() {
 						onSelect={() => setSeg(s.key)}
 					/>
 				))}
+				{servedAsAdmin && (formerMembers.length > 0 || formerFailed) ? (
+					<button
+						type="button"
+						className={cn(
+							"inline-flex min-h-11 items-center rounded-full px-3 text-sm font-semibold underline-offset-4 hover:underline",
+							formerFailed ? "text-destructive" : "text-link",
+						)}
+						onClick={() => setFormerOpen(true)}
+					>
+						{formerFailed
+							? "Former members (couldn't load)"
+							: `Former members (${formerMembers.length})`}
+					</button>
+				) : null}
 				{servedAsAdmin ? (
 					<label className="ml-auto inline-flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
 						<input
@@ -603,7 +618,14 @@ function Roster() {
 							</div>
 
 							{/* Pathway */}
-							<div className="pointer-events-none relative z-[1] hidden min-w-0 truncate text-xs text-muted-foreground sm:block">
+							<div
+								className="pointer-events-none relative z-[1] hidden min-w-0 truncate text-xs text-muted-foreground sm:block"
+								title={
+									m.pathwayWithheld && servedAsAdmin
+										? "Pathways are hidden for inactive members. Use the checkbox above to show them."
+										: undefined
+								}
+							>
 								{m.pathwayLabel ??
 									// An officer is told the column is hidden, not empty; anyone
 									// else sees the ordinary "no paths" dash.
@@ -666,28 +688,13 @@ function Roster() {
 				served.
 			</p>
 
-			{servedAsAdmin ? (
-				<p className="mt-2 px-0.5 text-xs">
-					{formerFailed ? (
-						<span role="alert">Former members could not be loaded.</span>
-					) : (
-						<button
-							type="button"
-							className="underline"
-							onClick={() => setFormerOpen(true)}
-						>
-							Former members ({formerMembers.length})
-						</button>
-					)}
-				</p>
-			) : null}
-
-			{clubId && servedAsAdmin && !formerFailed ? (
+			{clubId && servedAsAdmin ? (
 				<FormerMembersDialog
 					open={formerOpen}
 					onOpenChange={setFormerOpen}
 					clubId={clubId}
 					formerMembers={formerMembers}
+					failed={formerFailed === true}
 				/>
 			) : null}
 
@@ -1836,22 +1843,49 @@ function FormerMembersDialog({
 	onOpenChange,
 	clubId,
 	formerMembers,
+	failed,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	clubId: string;
 	formerMembers: FormerMemberItem[];
+	/** The list could not be loaded: say so here, with a retry. */
+	failed: boolean;
 }) {
 	const router = useRouter();
 	const [busyId, setBusyId] = useState<string | null>(null);
+	const [retrying, setRetrying] = useState(false);
+	const titleRef = useRef<HTMLHeadingElement>(null);
+	const buttonRefs = useRef(new Map<string, HTMLButtonElement>());
+	// After a row leaves the list: the row that took its place, or null for
+	// the heading. A row's own button unmounts with it, so focus would
+	// otherwise drop to the dialog container.
+	const [pendingFocus, setPendingFocus] = useState<{
+		removedId: string;
+		nextId: string | null;
+	} | null>(null);
+
+	useEffect(() => {
+		if (!pendingFocus) return;
+		if (formerMembers.some((m) => m.id === pendingFocus.removedId)) return;
+		const next = pendingFocus.nextId
+			? buttonRefs.current.get(pendingFocus.nextId)
+			: null;
+		(next ?? titleRef.current)?.focus();
+		setPendingFocus(null);
+	}, [formerMembers, pendingFocus]);
 
 	async function reactivate(m: FormerMemberItem) {
+		if (busyId !== null) return;
+		const index = formerMembers.findIndex((f) => f.id === m.id);
+		const neighbour = formerMembers[index + 1] ?? formerMembers[index - 1];
 		setBusyId(m.id);
 		try {
 			await setMemberStatus({
 				data: { clubId, memberId: m.id, status: "active" },
 			});
 			toast.success(`${m.name} reactivated as a member.`);
+			setPendingFocus({ removedId: m.id, nextId: neighbour?.id ?? null });
 			await router.invalidate();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
@@ -1860,48 +1894,88 @@ function FormerMembersDialog({
 		}
 	}
 
+	async function retry() {
+		setRetrying(true);
+		try {
+			await router.invalidate();
+		} finally {
+			setRetrying(false);
+		}
+	}
+
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent>
 				<DialogHeader>
-					<DialogTitle>Former members</DialogTitle>
+					<DialogTitle ref={titleRef} tabIndex={-1}>
+						Former members
+					</DialogTitle>
 					<DialogDescription>
 						People whose membership ended. Their history stays; they are off the
 						roster.
 					</DialogDescription>
 				</DialogHeader>
-				{formerMembers.length === 0 ? (
+				{failed ? (
+					<div className="space-y-3">
+						<p role="alert" className="text-sm text-destructive">
+							Former members could not be loaded.
+						</p>
+						<Button
+							type="button"
+							variant="outline"
+							disabled={retrying}
+							onClick={retry}
+						>
+							{retrying ? "Retrying…" : "Retry"}
+						</Button>
+					</div>
+				) : formerMembers.length === 0 ? (
 					<p className="text-sm text-muted-foreground">No former members.</p>
 				) : (
 					<ul className="divide-y divide-border">
-						{formerMembers.map((m) => (
-							<li
-								key={m.id}
-								className="flex items-center justify-between gap-3 py-2"
-							>
-								<div className="min-w-0">
-									<Link
-										to="/members/$id"
-										params={{ id: m.id }}
-										className="font-semibold"
-									>
-										{m.name}
-									</Link>
-									<div className="text-xs text-muted-foreground">
-										Ended {m.endedAt ?? "unknown"}
-									</div>
-								</div>
-								<Button
-									type="button"
-									variant="outline"
-									size="sm"
-									disabled={busyId !== null}
-									onClick={() => reactivate(m)}
+						{formerMembers.map((m) => {
+							const busy = busyId === m.id;
+							return (
+								<li
+									key={m.id}
+									className="flex items-center justify-between gap-3 py-2"
 								>
-									Reactivate
-								</Button>
-							</li>
-						))}
+									<div className="min-w-0">
+										<Link
+											to="/members/$id"
+											params={{ id: m.id }}
+											className="font-semibold"
+										>
+											{m.name}
+										</Link>
+										<div className="text-xs text-muted-foreground">
+											{m.endedAt
+												? `Ended ${formatCalendarDay(m.endedAt, { withYear: true })}`
+												: "End date unknown"}
+										</div>
+									</div>
+									{/* aria-disabled, not disabled: a disabled button gives up
+									    focus, and the busy row's button is the one focused. */}
+									<Button
+										ref={(el: HTMLButtonElement | null) => {
+											if (el) buttonRefs.current.set(m.id, el);
+											else buttonRefs.current.delete(m.id);
+										}}
+										type="button"
+										variant="outline"
+										size="sm"
+										aria-disabled={busyId !== null}
+										aria-label={
+											busy ? `Reactivating ${m.name}` : `Reactivate ${m.name}`
+										}
+										className={cn(busyId !== null && "opacity-60")}
+										onClick={() => reactivate(m)}
+									>
+										{busy ? "Reactivating…" : "Reactivate"}
+									</Button>
+								</li>
+							);
+						})}
 					</ul>
 				)}
 				<DialogFooter>

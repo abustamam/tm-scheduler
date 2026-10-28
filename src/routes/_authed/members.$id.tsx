@@ -13,7 +13,7 @@ import {
 	Mail,
 	ShieldCheck,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { CONTACT_METHOD_ICONS } from "#/components/contact-method-icon";
@@ -43,7 +43,12 @@ import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { exportLinkAllowed } from "#/lib/club-export-url";
 import { effectiveAdminClub } from "#/lib/effective-admin";
-import { APP_LOCALE, formatDayMonth, formatMeetingDate } from "#/lib/format";
+import {
+	APP_LOCALE,
+	formatCalendarDay,
+	formatDayMonth,
+	formatMeetingDate,
+} from "#/lib/format";
 import { mailtoHref } from "#/lib/mailto";
 import { phoneEditPayload } from "#/lib/member-edit-phone";
 import { isPastAgendaRemoveRefusal } from "#/lib/member-remove";
@@ -79,6 +84,7 @@ import {
 import { getMemberProfile } from "#/server/club";
 import {
 	editMember,
+	listFormerMembers,
 	removeMember,
 	setMemberRole,
 	setMemberStatus,
@@ -128,6 +134,7 @@ export const Route = createFileRoute("/_authed/members/$id")({
 				orientation: null as OrientationView | null,
 				mentorship: null as MemberMentorshipsView | null,
 				now: Date.now(),
+				endedAt: null as string | null,
 				// Nothing is dated without a club, so any fixed zone will do.
 				timezone: "UTC",
 			};
@@ -176,8 +183,19 @@ export const Route = createFileRoute("/_authed/members/$id")({
 				loadClubTimezoneSettings({ data: clubId }),
 			),
 		]);
+		// The profile does not carry the end date; the former-members list does.
+		// Admin-only, so anyone else gets a throw, swallowed to "no date".
+		const endedAt =
+			profile.member?.status === "former"
+				? await listFormerMembers({ data: { clubId } })
+						.then(
+							(rows) => rows.find((r) => r.id === params.id)?.endedAt ?? null,
+						)
+						.catch(() => null)
+				: null;
 		return {
 			...profile,
+			endedAt,
 			allSpeeches: deps.allSpeeches,
 			pathways,
 			pathOptions,
@@ -239,6 +257,7 @@ function MemberDetail() {
 		mentorship,
 		now,
 		timezone,
+		endedAt,
 	} = Route.useLoaderData();
 	const { activeClubId, clubs, officerPositions, impersonating, authUser } =
 		Route.useRouteContext();
@@ -330,6 +349,11 @@ function MemberDetail() {
 								<span className="inline-flex items-center rounded-full border border-border bg-surface-muted px-2.5 py-0.5 text-xs font-bold tracking-[0.03em] text-muted-foreground uppercase">
 									{member.status === "former" ? "Former" : "Inactive"}
 								</span>
+								{member.status === "former" && endedAt ? (
+									<span className="text-sm text-muted-foreground">
+										Ended {formatCalendarDay(endedAt, { withYear: true })}
+									</span>
+								) : null}
 							</>
 						) : null}
 					</div>
@@ -484,7 +508,8 @@ function MemberDetail() {
 				    marks their own from the dashboard. */}
 				{pathwaysWithheld ? (
 					<p className="text-sm text-muted-foreground">
-						Pathways progress isn't shown for former members.
+						Pathways progress isn't shown for{" "}
+						{member.status === "former" ? "former" : "inactive"} members.
 					</p>
 				) : clubId && viewerIsAdmin ? (
 					<MemberProgressPanel
@@ -875,8 +900,40 @@ function MemberActions({
 	const isActive = member.status === "active";
 	const isFormer = member.status === "former";
 	const [endOpen, setEndOpen] = useState(false);
+	// The server's refusal of End, shown in the dialog itself (as Remove does).
+	const [endError, setEndError] = useState<string | null>(null);
+	// Set after a successful End: the End button unmounts with the status
+	// change, so focus moves to Reactivate once it renders.
+	const [focusReactivate, setFocusReactivate] = useState(false);
+	const reactivateRef = useRef<HTMLButtonElement>(null);
 
-	async function onSetStatus(next: "active" | "inactive" | "former") {
+	useEffect(() => {
+		// Not while busy: Reactivate is disabled until the request settles.
+		if (focusReactivate && isFormer && !busy) {
+			reactivateRef.current?.focus();
+			setFocusReactivate(false);
+		}
+	}, [focusReactivate, isFormer, busy]);
+
+	async function onEnd() {
+		setEndError(null);
+		setBusy(true);
+		try {
+			await setMemberStatus({
+				data: { clubId, memberId: member.id, status: "former" },
+			});
+			toast.success(statusToast(member.name, "former", isFormer));
+			setFocusReactivate(true);
+			setEndOpen(false);
+			await router.invalidate();
+		} catch (err) {
+			setEndError(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function onSetStatus(next: "active" | "inactive") {
 		setRemoveOpen(false);
 		setEndOpen(false);
 		setBusy(true);
@@ -986,6 +1043,7 @@ function MemberActions({
 			</Button>
 			{!isLinkedAccount || isFormer ? (
 				<Button
+					ref={reactivateRef}
 					variant="outline"
 					size="sm"
 					disabled={busy}
@@ -1001,7 +1059,10 @@ function MemberActions({
 					variant="outline"
 					size="sm"
 					disabled={busy}
-					onClick={() => setEndOpen(true)}
+					onClick={() => {
+						setEndError(null);
+						setEndOpen(true);
+					}}
 				>
 					End membership
 				</Button>
@@ -1183,14 +1244,34 @@ function MemberActions({
 			</Dialog>
 
 			{/* End membership confirm dialog (#1239) */}
-			<Dialog open={endOpen} onOpenChange={setEndOpen}>
-				<DialogContent>
+			{/* Stays open until the request settles: a refusal shows here, and
+			    closing mid-request is ignored. */}
+			<Dialog
+				open={endOpen}
+				onOpenChange={(open) => {
+					if (!busy) setEndOpen(open);
+				}}
+			>
+				<DialogContent
+					// The End button is gone once the member is former; focus is
+					// placed on Reactivate by the effect above, not returned here.
+					onCloseAutoFocus={(e) => {
+						if (focusReactivate) e.preventDefault();
+					}}
+				>
 					<DialogHeader>
 						<DialogTitle>End {member.name}'s membership?</DialogTitle>
 						<DialogDescription>
-							They leave the roster; their history stays.
+							They leave the roster and their upcoming roles are released. Any
+							office they hold is closed, which ends the admin access it gives.
+							Reactivating them restores neither. Their history stays.
 						</DialogDescription>
 					</DialogHeader>
+					{endError ? (
+						<p role="alert" className="text-sm text-destructive">
+							{endError}
+						</p>
+					) : null}
 					<DialogFooter>
 						<DialogClose asChild>
 							<Button type="button" variant="outline" disabled={busy}>
@@ -1201,7 +1282,7 @@ function MemberActions({
 							type="button"
 							variant="destructive"
 							disabled={busy}
-							onClick={() => onSetStatus("former")}
+							onClick={onEnd}
 						>
 							{busy ? "Ending…" : "End membership"}
 						</Button>
