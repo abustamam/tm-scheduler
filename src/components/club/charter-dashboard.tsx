@@ -216,7 +216,7 @@ export function CharterProgress({
 				className="h-2.5 w-full overflow-hidden rounded-full bg-border"
 			>
 				<div
-					className="h-full rounded-full bg-link"
+					className="h-full rounded-full bg-success"
 					style={{ width: `${pct}%` }}
 				/>
 			</div>
