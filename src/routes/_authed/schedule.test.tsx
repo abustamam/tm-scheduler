@@ -43,6 +43,7 @@ Element.prototype.scrollIntoView = vi.fn();
 
 afterEach(() => {
 	cleanup();
+	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
 	vi.clearAllMocks();
 });
@@ -55,25 +56,33 @@ type ValidateSearch = (s: Record<string, unknown>) => {
 const validateSearch = Route.options
 	.validateSearch as unknown as ValidateSearch;
 
+/** Pretend the viewport is (or is not) below `md`. */
+function setPhone(phone: boolean) {
+	vi.stubGlobal("matchMedia", (query: string) => ({
+		matches: phone,
+		media: query,
+		addEventListener: () => {},
+		removeEventListener: () => {},
+	}));
+}
+
 /** A typed-in `/schedule?…`, parsed the way the router parses it. */
 const fromUrl = (qs: string) => validateSearch(defaultParseSearch(qs));
 
 describe("?past= in the URL", () => {
-	it.each([4, 8, 13])("?past=%i is kept", (n) => {
+	it.each([0, 2, 4, 8, 13])("?past=%i is kept, 2 and 0 included", (n) => {
 		expect(fromUrl(`?past=${n}`).past).toBe(n);
 	});
 
 	it.each([
-		["?past=2", "the default itself"],
 		["?past=99", "out of range"],
-		["?past=0", "zero"],
 		["?past=-1", "negative"],
 		["?past=3", "between members of the set"],
 		["?past=abc", "not a number"],
 		["?past=", "empty"],
 		["?past=8&past=4", "repeated"],
 		["", "absent"],
-	])("%s (%s) falls back to 2, which the URL leaves out", (qs) => {
+	])("%s (%s) is no pick: the key is left out and the responsive default applies", (qs) => {
 		const search = fromUrl(qs);
 		expect(search.past).toBeUndefined();
 		expect("past" in search).toBe(false);
@@ -223,7 +232,7 @@ describe("the Show past control", () => {
 		expect(defaultStringifySearch(next)).toBe("?view=roles&count=4&past=8");
 	});
 
-	it("picking 2 drops the key from the URL rather than writing past=2", async () => {
+	it("picking 2 writes past=2, so it beats the phone default", async () => {
 		const prev = { view: "members", count: "all", past: 13 } as const;
 		const navigate = await renderPage(prev);
 		fireEvent.click(
@@ -233,7 +242,46 @@ describe("the Show past control", () => {
 		const next = applied(navigate, prev);
 		expect(next.view).toBe("members");
 		expect(next.count).toBe("all");
-		expect(defaultStringifySearch(next)).not.toContain("past");
+		expect(next.past).toBe(2);
+		expect(defaultStringifySearch(next)).toContain("past=2");
+	});
+
+	it("picking None writes past=0", async () => {
+		const prev = { view: "members", count: 8 } as const;
+		const navigate = await renderPage(prev);
+		fireEvent.click(
+			screen.getByRole("button", { name: "Show no past meetings" }),
+		);
+		await waitFor(() => expect(navigate).toHaveBeenCalled());
+		expect(applied(navigate, prev).past).toBe(0);
+	});
+
+	it("an explicit ?past= beats the phone default", async () => {
+		setPhone(true);
+		await renderPage({ view: "members", count: 8, past: 4 });
+		expect(
+			screen
+				.getByRole("button", { name: "Show 4 past meetings" })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
+	});
+
+	it("with no ?past= a phone reads None and a desktop reads 2", async () => {
+		setPhone(true);
+		await renderPage({ view: "members", count: 8 });
+		expect(
+			screen
+				.getByRole("button", { name: "Show no past meetings" })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
+		cleanup();
+		setPhone(false);
+		await renderPage({ view: "members", count: 8 });
+		expect(
+			screen
+				.getByRole("button", { name: "Show 2 past meetings" })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
 	});
 
 	it("the orientation toggle keeps past", async () => {
@@ -261,7 +309,14 @@ describe("the Show past control", () => {
 	});
 });
 
-describe("the next-meeting link button (#1146)", () => {
+/** Open the one Share menu (#1316); Radix opens on pointerdown. */
+async function openShareMenu() {
+	const trigger = screen.getByRole("button", { name: "Share" });
+	fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+	await screen.findByRole("menu");
+}
+
+describe("the Share menu (#1316, was the next-meeting link button #1146)", () => {
 	const search = { view: "members", count: 8 } as const;
 
 	// protects=a plain member (context has no clubs, so no officer role) sees a
@@ -278,8 +333,9 @@ describe("the next-meeting link button (#1146)", () => {
 		const success = vi.spyOn(toast, "success");
 		try {
 			await renderPage(search, { ...gridData, clubSlug: "harbor" });
+			await openShareMenu();
 			fireEvent.click(
-				screen.getByRole("button", { name: "Copy next-meeting link" }),
+				screen.getByRole("menuitem", { name: "Copy next-meeting link" }),
 			);
 			await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
 			expect(writeText).toHaveBeenCalledWith(
@@ -290,9 +346,6 @@ describe("the next-meeting link button (#1146)", () => {
 					"Link copied: it always opens the next meeting",
 				),
 			);
-			expect(
-				screen.getByRole("button", { name: "Copy sign-up sheet link" }),
-			).toBeTruthy();
 		} finally {
 			success.mockRestore();
 			vi.unstubAllGlobals();
@@ -303,14 +356,53 @@ describe("the next-meeting link button (#1146)", () => {
 	// fails_when=the new button is rendered without the `data?.clubSlug` guard
 	// (a link to `/club/null/next`) or the guard is dropped from the first one;
 	// no_claim=the null slug is a hand-built fixture, not a real club row.
-	it("renders neither button when the club has no slug", async () => {
+	it("renders no Share trigger when the club has no slug", async () => {
 		await renderPage(search);
-		expect(
-			screen.queryByRole("button", { name: "Copy next-meeting link" }),
-		).toBeNull();
-		expect(
-			screen.queryByRole("button", { name: "Copy sign-up sheet link" }),
-		).toBeNull();
+		expect(screen.queryByRole("button", { name: "Share" })).toBeNull();
+	});
+
+	// protects=exactly one Share trigger; its menu holds the two copy items and
+	// the print link, and none of the three renders outside the menu;
+	// fails_when=a ShareLinkButton or the Print link is left beside the menu;
+	// no_claim=layout at 375px (season-grid-geometry.test.ts measures that).
+	it("has one Share trigger holding all three items, none outside it", async () => {
+		await renderPage(search, { ...gridData, clubSlug: "harbor" });
+		expect(screen.getAllByRole("button", { name: "Share" })).toHaveLength(1);
+		for (const name of [
+			"Copy sign-up sheet link",
+			"Copy next-meeting link",
+			"Print table tent",
+		]) {
+			expect(screen.queryByText(name)).toBeNull();
+		}
+		await openShareMenu();
+		expect(screen.getAllByRole("menuitem").map((e) => e.textContent)).toEqual([
+			"Copy sign-up sheet link",
+			"Copy next-meeting link",
+			"Print table tent",
+		]);
+	});
+
+	// protects=the sign-up sheet item copies origin + /club/<slug> with the
+	// default success toast;
+	// fails_when=it copies the /next path or toasts the next-meeting text.
+	it("Copy sign-up sheet link copies /club/<slug> with the default toast", async () => {
+		const writeText = vi.fn(async (_: string) => {});
+		vi.stubGlobal("navigator", { clipboard: { writeText } });
+		const success = vi.spyOn(toast, "success");
+		await renderPage(search, { ...gridData, clubSlug: "harbor" });
+		await openShareMenu();
+		fireEvent.click(
+			screen.getByRole("menuitem", { name: "Copy sign-up sheet link" }),
+		);
+		await waitFor(() =>
+			expect(writeText).toHaveBeenCalledWith(
+				`${window.location.origin}/club/harbor`,
+			),
+		);
+		await waitFor(() =>
+			expect(success).toHaveBeenCalledWith("Link copied — paste it to share"),
+		);
 	});
 
 	// protects=the "Print table tent" link renders for a club with a slug and
@@ -320,7 +412,8 @@ describe("the next-meeting link button (#1146)", () => {
 	// no_claim=the loader data is mocked; the tent route itself is tested beside it.
 	it("links to the table tent only when the club has a slug", async () => {
 		await renderPage(search, { ...gridData, clubSlug: "harbor" });
-		const link = screen.getByRole("link", { name: "Print table tent" });
+		await openShareMenu();
+		const link = screen.getByRole("menuitem", { name: "Print table tent" });
 		expect(link.getAttribute("href")).toBe("/club/harbor/next/tent");
 		cleanup();
 		await renderPage(search);

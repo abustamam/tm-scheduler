@@ -41,11 +41,12 @@ export type Orientation = "roles" | "members";
 /**
  * How many PAST meetings the grid shows to the left of the upcoming ones
  * (#1048). A closed set, not a range: `?past=` is user-typed, and the server
- * reads it too, so anything outside it — 99, 0, -1, "abc", 3, an empty value, a
+ * reads it too, so anything outside it — 99, -1, "abc", 3, an empty value, a
  * repeated param — collapses to the default rather than being clamped to the
- * nearest member. 13 is a quarter of weekly meetings.
+ * nearest member. 0 is "none" (#1316): the phone default, upcoming meetings only.
+ * 13 is a quarter of weekly meetings.
  */
-export const PAST_COUNTS = [2, 4, 8, 13] as const;
+export const PAST_COUNTS = [0, 2, 4, 8, 13] as const;
 export type SeasonGridPast = (typeof PAST_COUNTS)[number];
 /** Today's lookback, and the only one the PUBLIC sheet ever gets. */
 export const DEFAULT_PAST_COUNT: SeasonGridPast = 2;
@@ -57,6 +58,13 @@ export const DEFAULT_PAST_COUNT: SeasonGridPast = 2;
  * as either); everything else is the default.
  */
 export function parsePastCount(value: unknown): SeasonGridPast {
+	return readPastCount(value) ?? DEFAULT_PAST_COUNT;
+}
+
+/** The past-count `value` names, or `undefined` when it names none. The route
+ *  needs the difference between "picked 2" and "picked nothing" (#1316): only
+ *  the second takes the responsive default. */
+export function readPastCount(value: unknown): SeasonGridPast | undefined {
 	const n =
 		typeof value === "number"
 			? value
@@ -65,7 +73,29 @@ export function parsePastCount(value: unknown): SeasonGridPast {
 				: Number.NaN;
 	return (PAST_COUNTS as readonly number[]).includes(n)
 		? (n as SeasonGridPast)
-		: DEFAULT_PAST_COUNT;
+		: undefined;
+}
+
+/**
+ * The grid with at most the `pastCount` most recent PAST meetings kept (#1316).
+ * The loader fetches for the URL alone and cannot know the viewport, so a phone
+ * with no `?past=` receives the desktop default of 2 and drops them here. Cells,
+ * availability and the member axis key on meeting id or member, so removing
+ * columns is all it takes; the same object comes back when nothing is dropped.
+ */
+export function limitPastMeetings(
+	data: SeasonGridData,
+	pastCount: number,
+): SeasonGridData {
+	const past = data.meetings.filter((m) => m.isPast);
+	if (past.length <= pastCount) return data;
+	const dropped = new Set(
+		past.slice(0, past.length - pastCount).map((m) => m.id),
+	);
+	return {
+		...data,
+		meetings: data.meetings.filter((m) => !dropped.has(m.id)),
+	};
 }
 
 export function projectGrid(

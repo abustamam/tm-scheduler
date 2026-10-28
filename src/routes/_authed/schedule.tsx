@@ -1,15 +1,22 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { CalendarX, Printer } from "lucide-react";
+import { CalendarX, Printer, Share2 } from "lucide-react";
+import { useSyncExternalStore } from "react";
 import { SeasonGrid } from "#/components/club/season-grid";
 import { PageContainer } from "#/components/page-container";
-import { ShareLinkButton } from "#/components/share-link-button";
+import { copyShareLink } from "#/components/share-link-button";
 import { Button } from "#/components/ui/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "#/components/ui/dropdown-menu";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatMeetingDate } from "#/lib/format";
 import {
 	DEFAULT_PAST_COUNT,
 	type Orientation,
-	parsePastCount,
+	readPastCount,
 	type SeasonGridPast,
 } from "#/lib/season-grid-view";
 import {
@@ -36,7 +43,7 @@ export const Route = createFileRoute("/_authed/schedule")({
 				: search.count === "all"
 					? "all"
 					: 8,
-		...pastSearch(parsePastCount(search.past)),
+		...pastSearch(readPastCount(search.past)),
 	}),
 	loaderDeps: ({ search }) => ({
 		count: search.count,
@@ -66,9 +73,30 @@ export const Route = createFileRoute("/_authed/schedule")({
 	component: SeasonGridPage,
 });
 
-/** `past` as a search fragment: the key is dropped at the default. */
-function pastSearch(past: SeasonGridPast): { past?: SeasonGridPast } {
-	return past === DEFAULT_PAST_COUNT ? {} : { past };
+/** `past` as a search fragment. A value the viewer picked is ALWAYS written,
+ *  2 and 0 included (#1316); only "never picked" leaves the key out, and that
+ *  is what lets the responsive default apply. */
+function pastSearch(past: SeasonGridPast | undefined): {
+	past?: SeasonGridPast;
+} {
+	return past === undefined ? {} : { past };
+}
+
+const PHONE_QUERY = "(max-width: 767px)";
+function subscribePhone(cb: () => void) {
+	const mq = window.matchMedia(PHONE_QUERY);
+	mq.addEventListener("change", cb);
+	return () => mq.removeEventListener("change", cb);
+}
+
+/** Below `md`. The server snapshot is false, so SSR renders the desktop default
+ *  and a phone corrects after hydration as an ordinary update (#1316). */
+function useIsPhone(): boolean {
+	return useSyncExternalStore(
+		subscribePhone,
+		() => window.matchMedia(PHONE_QUERY).matches,
+		() => false,
+	);
 }
 
 function SeasonGridPage() {
@@ -83,6 +111,7 @@ function SeasonGridPage() {
 	// The club key the meeting route takes: the slug when the grid has it, the
 	// uuid otherwise. Either resolves (`club.$clubId.tsx`).
 	const clubKey = data?.clubSlug ?? activeClubId;
+	const isPhone = useIsPhone();
 
 	return (
 		<PageContainer className="space-y-4">
@@ -91,26 +120,42 @@ function SeasonGridPage() {
 					Sign-up sheet
 				</h1>
 				{data?.clubSlug ? (
-					<div className="flex flex-wrap gap-2">
-						<ShareLinkButton
-							path={`/club/${data.clubSlug}`}
-							label="Copy sign-up sheet link"
-						/>
-						<ShareLinkButton
-							path={`/club/${data.clubSlug}/next`}
-							label="Copy next-meeting link"
-							successMessage="Link copied: it always opens the next meeting"
-						/>
-						<Button asChild variant="outline" size="sm">
-							<Link
-								to="/club/$clubId/next/tent"
-								params={{ clubId: data.clubSlug }}
+					<DropdownMenu>
+						<DropdownMenuTrigger asChild>
+							<Button type="button" variant="outline" size="sm">
+								<Share2 className="size-4" aria-hidden />
+								Share
+							</Button>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent align="end">
+							<DropdownMenuItem
+								onSelect={() => {
+									void copyShareLink(`/club/${data.clubSlug}`);
+								}}
 							>
-								<Printer className="size-4" aria-hidden />
-								Print table tent
-							</Link>
-						</Button>
-					</div>
+								Copy sign-up sheet link
+							</DropdownMenuItem>
+							<DropdownMenuItem
+								onSelect={() => {
+									void copyShareLink(
+										`/club/${data.clubSlug}/next`,
+										"Link copied: it always opens the next meeting",
+									);
+								}}
+							>
+								Copy next-meeting link
+							</DropdownMenuItem>
+							<DropdownMenuItem asChild>
+								<Link
+									to="/club/$clubId/next/tent"
+									params={{ clubId: data.clubSlug }}
+								>
+									<Printer className="size-4" aria-hidden />
+									Print table tent
+								</Link>
+							</DropdownMenuItem>
+						</DropdownMenuContent>
+					</DropdownMenu>
 				) : null}
 			</div>
 			{/* Cancelled meetings (#1057), officers only — the loader asks for
@@ -151,7 +196,7 @@ function SeasonGridPage() {
 					data={data}
 					orientation={view}
 					count={count}
-					pastCount={past ?? DEFAULT_PAST_COUNT}
+					pastCount={past ?? (isPhone ? 0 : DEFAULT_PAST_COUNT)}
 					showContact
 					currentMemberId={currentMemberId}
 					// Always a session here — this route is under `_authed`, and
@@ -170,11 +215,11 @@ function SeasonGridPage() {
 					}
 					onPastCountChange={(p) =>
 						navigate({
-							// Spread `prev` so `view` and `count` ride along. `undefined`
-							// at the default drops the key from the URL.
+							// Spread `prev` so `view` and `count` ride along. A picked
+							// value is always written, so it beats the phone default.
 							search: (prev) => ({
 								...prev,
-								past: pastSearch(p).past,
+								past: p,
 							}),
 						})
 					}
