@@ -22,7 +22,7 @@ import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import {
 	assertClubNotArchived,
 	assertStillClubAdmin,
-	getMembership,
+	getActiveMembership,
 	requireClubRole,
 } from "./guards";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
@@ -172,8 +172,8 @@ export async function applySpeechLogEdit(args: {
 			await assertStillClubAdmin(tx, args.actorUserId, clubId);
 			// Credited to the actor's ACTIVE seat only: an impersonating superadmin
 			// who holds a membership that is not active is credited to no member.
-			const actor = await getMembership(args.actorUserId, clubId, tx);
-			actorMemberId = actor?.status === "active" ? actor.id : null;
+			const actor = await getActiveMembership(args.actorUserId, clubId, tx);
+			actorMemberId = actor?.id ?? null;
 		}
 
 		// A completed meeting is accepted (the whole point), a cancelled one is

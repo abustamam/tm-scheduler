@@ -25,7 +25,7 @@ import {
 import { toStoredPhone } from "#/lib/phone";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
-import { assertStillClubAdmin, getMembership } from "./guards";
+import { assertStillClubAdmin, getActiveMembership } from "./guards";
 import {
 	AccessRefreshRequired,
 	isAccessContention,
@@ -339,11 +339,11 @@ export async function commitMemberImport(
 							termEnd: officerTerms.termEnd,
 							version: sql<string>`${officerTerms}.xmin::text`,
 						});
-					const actor = await getMembership(approval.userId, clubId, tx);
+					const actor = await getActiveMembership(approval.userId, clubId, tx);
 					await logActivity(tx, {
 						clubId,
-						actorMemberId: actor?.status === "active" ? actor.id : null,
-						impersonatedBy: actor?.status === "active" ? null : approval.userId,
+						actorMemberId: actor?.id ?? null,
+						impersonatedBy: actor ? null : approval.userId,
 						action: "member_edit",
 						targetType: "member",
 						targetId: actual.membershipId,

@@ -85,7 +85,7 @@ export async function requireUser() {
  * Resolve the signed-in user's membership in a club (ADR-0008 Phase B / #99):
  * user → Person (`people.user_id`) → the `members` row for that person in this
  * club. Returns the membership's id, role and status, or null when the user has
- * no linked person or no membership in the club.
+ * no linked person or no ACTIVE membership in the club (#1343).
  *
  * Returns the STRONGEST membership, deterministically (#471). `people.user_id`
  * is not unique — ADR-0008 makes one human one Person, but duplicates predate
@@ -102,7 +102,7 @@ export async function requireUser() {
  * three single-membership picks since #838 so authorization and attribution
  * cannot drift apart; the reason each key sits where it does is written there.
  */
-export async function getMembership(
+export async function getActiveMembership(
 	userId: string,
 	clubId: string,
 	/**
@@ -133,7 +133,16 @@ export async function getMembership(
 		.innerJoin(clubs, eq(clubs.id, members.clubId))
 		// Open terms only, for key 3 of the shared order.
 		.leftJoin(officerTerms, membershipPickOpenTermJoin())
-		.where(and(eq(people.userId, userId), eq(members.clubId, clubId)))
+		.where(
+			and(
+				eq(people.userId, userId),
+				eq(members.clubId, clubId),
+				// ACTIVE rows only: a former or inactive row is no membership, so
+				// no caller needs its own `status` test (#1343). The order below
+				// already ranks active first, so this never changes which active row wins.
+				eq(members.status, "active"),
+			),
+		)
 		// `members.id` is the primary key, so every selected column OF `members` is
 		// functionally dependent on it and needs no explicit grouping. That
 		// inference does NOT cross a join: Postgres rejects `clubs.archived_at`
@@ -152,7 +161,9 @@ export async function getMembership(
  * `members` row, so it can never be used as a real `actor_member_id`) and
  * `impersonatedBy` = the real superadmin user id.
  */
-type RealMembership = NonNullable<Awaited<ReturnType<typeof getMembership>>>;
+type RealMembership = NonNullable<
+	Awaited<ReturnType<typeof getActiveMembership>>
+>;
 export type ResolvedMembership =
 	| (RealMembership & { impersonatedBy?: null })
 	| {
@@ -184,7 +195,7 @@ function assertNotArchived(club: { archivedAt: Date | null }): void {
  *  `requireMembership` and so never get this check for free — the anonymous
  *  roster-pick identity is the dominant path in this product, and #555 records
  *  that an archived club still accepts its writes. Every caller that resolved a
- *  membership reads `membership.archivedAt` instead, which `getMembership` now
+ *  membership reads `membership.archivedAt` instead, which `getActiveMembership` now
  *  carries on its existing join (#566): this used to run on every gated read and
  *  cost one round-trip each time.
  *
@@ -221,7 +232,7 @@ export async function assertClubNotArchived(
 	 * lock, and a read on `db` from inside that transaction would take a SECOND
 	 * pooled connection while the first holds the lock — the pool is 10 and
 	 * nothing bounds a pool wait. Same parameter, and the same reason,
-	 * `getMembership` and `getActiveImpersonation` took theirs (#806).
+	 * `getActiveMembership` and `getActiveImpersonation` took theirs (#806).
 	 */
 	conn: DbOrTx = db,
 ): Promise<void> {
@@ -282,8 +293,8 @@ export async function requireMembership(
 	userId: string,
 	clubId: string,
 ): Promise<ResolvedMembership> {
-	const membership = await getMembership(userId, clubId);
-	if (!membership || membership.status !== "active") {
+	const membership = await getActiveMembership(userId, clubId);
+	if (!membership) {
 		return requireReadWriteImpersonation(userId, clubId);
 	}
 	// From the row just read, not a second query (#566).
@@ -350,8 +361,8 @@ export async function assertStillClubAdmin(
 	userId: string,
 	clubId: string,
 ): Promise<void> {
-	const membership = await getMembership(userId, clubId, conn);
-	if (!membership || membership.status !== "active") {
+	const membership = await getActiveMembership(userId, clubId, conn);
+	if (!membership) {
 		// Parity with `requireMembership`, which falls through to the
 		// impersonation arm and throws this when there is none.
 		const [club] = await conn
@@ -402,11 +413,11 @@ export async function canManageClub(
 	userId: string,
 	clubId: string,
 ): Promise<boolean> {
-	const membership = await getMembership(userId, clubId);
+	const membership = await getActiveMembership(userId, clubId);
 	// Only an ACTIVE membership counts: a former or inactive one keeps its stored
 	// `club_role`, and counts as no membership at all, so it still reaches the
 	// impersonation check below (same shape as `requireMembership`).
-	if (membership && membership.status === "active") {
+	if (membership) {
 		// Effective-admin (#202), the same two arms as `requireClubRole(…,
 		// ["admin"])`: a stored admin OR an elected officer with an open term.
 		return isEffectiveAdmin(db, membership);
@@ -424,7 +435,7 @@ export interface ClubViewAccess {
 	via: "member" | "impersonation";
 	impersonating: boolean;
 	/** The real membership when `via === "member"`; null when impersonating. */
-	membership: Awaited<ReturnType<typeof getMembership>> | null;
+	membership: Awaited<ReturnType<typeof getActiveMembership>> | null;
 	/** The session's mode when `via === "impersonation"`; null for a member.
 	 *  Carried from the lookup the gate already made, so a caller asking
 	 *  "read-only or act-as-admin?" does not query the session a second time. */
@@ -528,8 +539,8 @@ export async function requireClubViewAccess(
 	userId: string,
 	clubId: string,
 ): Promise<ClubViewAccess> {
-	const membership = await getMembership(userId, clubId);
-	if (membership && membership.status === "active") {
+	const membership = await getActiveMembership(userId, clubId);
+	if (membership) {
 		return grantView(clubId, "member", membership);
 	}
 	const session = await getActiveImpersonation(userId, clubId);
@@ -551,12 +562,8 @@ export async function requireClubAdminView(
 	userId: string,
 	clubId: string,
 ): Promise<ClubViewAccess> {
-	const membership = await getMembership(userId, clubId);
-	if (
-		membership &&
-		membership.status === "active" &&
-		(await holdsAdminAuthority(membership))
-	) {
+	const membership = await getActiveMembership(userId, clubId);
+	if (membership && (await holdsAdminAuthority(membership))) {
 		return grantView(clubId, "member", membership);
 	}
 	const session = await getActiveImpersonation(userId, clubId);

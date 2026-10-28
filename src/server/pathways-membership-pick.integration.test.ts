@@ -4,7 +4,7 @@
  * `status` at all.
  *
  * `viewerMaySeeProgress` (`project-picker-logic.ts`), `selfMemberIdInClub`
- * (`progress-marks-logic.ts`) and `getMembership` (`guards.ts`) resolve the SAME
+ * (`progress-marks-logic.ts`) and `getActiveMembership` (`guards.ts`) resolve the SAME
  * signed-in-user → Person → membership relationship for the same club. #471 gave
  * the third a five-key total order precisely so an arbitrary pick could not flip
  * an authorization answer, #804/#821 copied it into `resolveAdminGrant`, and
@@ -28,9 +28,9 @@
  * each on the function that can see it.
  *
  * **Agreement is the property, not stability.** A wrong-but-consistent pick is
- * stable. Every case that can name a membership also asserts `getMembership`
+ * stable. Every case that can name a membership also asserts `getActiveMembership`
  * names the same one, and every boolean case asserts the boolean equals what
- * `getMembership`'s own chosen row implies — which is what fails if only one of
+ * `getActiveMembership`'s own chosen row implies — which is what fails if only one of
  * the four queries' joins or grouping is ever changed. (The ORDER itself is one
  * shared definition since #838, `membershipPickOrder()`, so it can no longer
  * drift between them; its keys are pinned as SQL by
@@ -67,7 +67,7 @@
  *    → 1. The polarity is only observable where no status check stands in
  *    front of it, which is why the note sits on that case and not on the
  *    boolean one that reads like it.
- *  · before #838, flipping only `getMembership`'s terminator to
+ *  · before #838, flipping only `getActiveMembership`'s terminator to
  *    `desc(members.id)` → 1 (the primary-key case): the gate on the copies
  *    drifting. One shared order makes that drift unrepresentable. The
  *    terminator is not uniquely gated HERE, because `GROUP BY members.id`
@@ -103,7 +103,7 @@ const { selfMemberIdInClub, resolveMarkAuthz } = await import(
 // The reference ordering. Imported so agreement is ASSERTED rather than assumed
 // from the queries looking alike — they share an ORDER (#838), not a query, and
 // `guards.ts` is deliberately NOT mocked here for the same reason.
-const { getMembership } = await import("./guards");
+const { getActiveMembership } = await import("./guards");
 
 describe.skipIf(!hasTestDb)("Pathways membership picks (#822)", () => {
 	let club: SeededClub;
@@ -204,13 +204,13 @@ describe.skipIf(!hasTestDb)("Pathways membership picks (#822)", () => {
 
 	/**
 	 * The acceptance property for the BOOLEAN surface: the answer equals what
-	 * `getMembership`'s own chosen row implies. Stability alone would pass on a
+	 * `getActiveMembership`'s own chosen row implies. Stability alone would pass on a
 	 * wrong-but-consistent pick, and an expected-value assertion alone cannot see
 	 * the two orderings drifting apart.
 	 */
 	async function expectBooleanAgreesWithGuardPath(expected: boolean) {
 		const answer = await maySeeProgress();
-		const reference = await getMembership(userId, club.clubId);
+		const reference = await getActiveMembership(userId, club.clubId);
 		const impliedByReference =
 			reference?.status === "active" && reference.clubRole === "admin";
 		expect(answer).toBe(expected);
@@ -220,7 +220,7 @@ describe.skipIf(!hasTestDb)("Pathways membership picks (#822)", () => {
 	/** Same property for the ID surface: the two resolvers name the SAME row. */
 	async function expectIdAgreesWithGuardPath(expected: string) {
 		const picked = await selfMemberIdInClub(userId, club.clubId);
-		const reference = await getMembership(userId, club.clubId);
+		const reference = await getActiveMembership(userId, club.clubId);
 		expect(picked).toBe(expected);
 		expect(reference?.id).toBe(expected);
 		expect(picked).toBe(reference?.id);
@@ -313,7 +313,7 @@ describe.skipIf(!hasTestDb)("Pathways membership picks (#822)", () => {
 		// and its twin in `meeting-authz-membership-pick`. What this pins is the
 		// DIRECTION: no officer-term shape — open, closed, or several — turns a
 		// plain active member into someone who may read the record, and the answer
-		// still agrees with what `getMembership`'s chosen row implies.
+		// still agrees with what `getActiveMembership`'s chosen row implies.
 		it("does not grant off an officer term, open or CLOSED, on a plain member", async () => {
 			await addMembership({
 				clubRole: "member",
@@ -334,7 +334,7 @@ describe.skipIf(!hasTestDb)("Pathways membership picks (#822)", () => {
 		// here seeds at least one, so nothing else reaches it.
 		it("refuses a caller with no membership in the club", async () => {
 			expect(await maySeeProgress()).toBe(false);
-			expect(await getMembership(userId, club.clubId)).toBeNull();
+			expect(await getActiveMembership(userId, club.clubId)).toBeNull();
 		});
 	});
 
@@ -363,7 +363,11 @@ describe.skipIf(!hasTestDb)("Pathways membership picks (#822)", () => {
 				status: "inactive",
 			});
 
-			await expectIdAgreesWithGuardPath(lapsed);
+			// `getActiveMembership` returns null for a lapsed-only user (#1343), so
+			// the guard path has nothing to agree with here: `selfMemberIdInClub`
+			// deliberately keeps naming the lapsed row for attribution.
+			expect(await selfMemberIdInClub(userId, club.clubId)).toBe(lapsed);
+			expect(await getActiveMembership(userId, club.clubId)).toBeNull();
 		});
 
 		// Key 1, and this is where its POLARITY is load-bearing — the boolean
@@ -490,7 +494,7 @@ describe.skipIf(!hasTestDb)("Pathways membership picks (#822)", () => {
 		// terminator in isolation — deleting `members.id` from the ORDER BY leaves
 		// it green, because the `GROUP BY members.id` beneath already sorts the
 		// group on that column under the plan Postgres picks. Before #838 it
-		// pinned the cost of the copy (flip only `getMembership`'s terminator and
+		// pinned the cost of the copy (flip only `getActiveMembership`'s terminator and
 		// this case alone failed); one shared order makes that unrepresentable,
 		// and `membership-pick-order.test.ts` pins the key as rendered SQL.
 		it("is total: a created_at tie still resolves, on the primary key", async () => {
@@ -555,7 +559,7 @@ describe.skipIf(!hasTestDb)("Pathways membership picks (#822)", () => {
 			expect(authz.personId).toBe(club.personId);
 			expect(authz.actorMemberId).toBe(admin);
 			expect(authz.actorMemberId).toBe(
-				(await getMembership(userId, club.clubId))?.id,
+				(await getActiveMembership(userId, club.clubId))?.id,
 			);
 		});
 	});

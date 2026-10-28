@@ -146,7 +146,7 @@ describe("minutes capability boundary (#510)", () => {
 /**
  * Archive takedown on the minutes surface (#560).
  *
- * `getMinutes` resolves membership with a bare `getMembership` instead of a
+ * `getMinutes` resolves membership with a bare `getActiveMembership` instead of a
  * `require*` gate, so it never reaches the read gates' `assertClubNotArchived`,
  * and a `createServerFn` is addressable directly with no router — the meeting page
  * 404ing for an archived club gates the CALLER, not this endpoint. An archived club
@@ -189,7 +189,7 @@ describe("minutes archive gate (#560)", () => {
 		// Ordering is the property, not mere presence: a gate placed after
 		// `loadMinutes` would leak the payload it exists to withhold.
 		for (const after of [
-			"getMembership(",
+			"getActiveMembership(",
 			"loadMinutes(",
 			"loadMinutesProgram(",
 		]) {
@@ -212,7 +212,12 @@ describe("minutes archive gate (#560)", () => {
 		const renderAt = route.indexOf("renderMinutesPdf(");
 		expect(renderAt).toBeGreaterThan(-1);
 		expect(gateAt).toBeLessThan(renderAt);
-		// And a LAPSED member must not download an active club's minutes either.
-		expect(route).toMatch(/membership\.status !== "active"/);
+		// And a LAPSED member must not download an active club's minutes either:
+		// `getActiveMembership` returns null for a non-active row, and the route
+		// refuses on that null.
+		expect(route).toMatch(/getActiveMembership\(sessionUser\.id, clubId\)/);
+		expect(route).toMatch(
+			/if \(!membership\) \{\s*return new Response\("Not a member/,
+		);
 	});
 });

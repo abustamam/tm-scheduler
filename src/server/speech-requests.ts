@@ -16,7 +16,7 @@ import { z } from "zod";
 import { db } from "#/db";
 import { speechRequestFieldsSchema } from "#/lib/speech-requests";
 import {
-	getMembership,
+	getActiveMembership,
 	requireClubAdminView,
 	requireClubRole,
 	requireMembership,
@@ -89,12 +89,8 @@ export const getMySpeechRequests = createServerFn({ method: "GET" })
 	.validator((input: unknown) => parse(clubScoped, input))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		const membership = await getMembership(user.id, data.clubId);
-		if (
-			!membership ||
-			membership.status !== "active" ||
-			membership.archivedAt !== null
-		) {
+		const membership = await getActiveMembership(user.id, data.clubId);
+		if (!membership || membership.archivedAt !== null) {
 			return [];
 		}
 		return listMySpeechRequests(db, {

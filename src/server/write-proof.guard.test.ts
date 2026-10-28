@@ -323,12 +323,57 @@ function collapse(text: string): string {
 	return text.replace(/\s+/g, " ").replace(/\( /g, "(").replace(/ \)/g, ")");
 }
 
-/** The brace-matched block whose `{` is at `open`, or null when it never closes. */
+/**
+ * Index just past the string or template literal that opens at `i`, or `i + 1`
+ * when `text[i]` opens neither. Escapes are skipped; a template's `${ … }` is
+ * code, so braces and strings inside it are walked by the caller's loop through
+ * `templateDepth`.
+ */
+function skipQuoted(text: string, i: number): number {
+	const quote = text[i];
+	if (quote !== '"' && quote !== "'") return i + 1;
+	for (let j = i + 1; j < text.length; j++) {
+		if (text[j] === "\\") j++;
+		else if (text[j] === quote) return j + 1;
+	}
+	return text.length;
+}
+
+/**
+ * The brace-matched block whose `{` is at `open`, or null when it never closes.
+ * Braces inside a string or template text do not count, so one in the asserted
+ * block cannot end it early. A template's `${` opens a code brace, as in source.
+ */
 function braceBlock(text: string, open: number): string | null {
 	let depth = 0;
+	// Depths at which a template literal's `${` was opened, innermost last.
+	const templates: number[] = [];
+	let inTemplateText = false;
 	for (let i = open; i < text.length; i++) {
-		if (text[i] === "{") depth++;
-		else if (text[i] === "}" && --depth === 0) return text.slice(open, i + 1);
+		const c = text[i];
+		if (inTemplateText) {
+			if (c === "\\") i++;
+			else if (c === "`") inTemplateText = false;
+			else if (c === "$" && text[i + 1] === "{") {
+				templates.push(depth++);
+				inTemplateText = false;
+				i++;
+			}
+			continue;
+		}
+		if (c === '"' || c === "'") {
+			i = skipQuoted(text, i) - 1;
+		} else if (c === "`") {
+			inTemplateText = true;
+		} else if (c === "{") {
+			depth++;
+		} else if (c === "}") {
+			depth--;
+			if (templates.length > 0 && templates[templates.length - 1] === depth) {
+				templates.pop();
+				inTemplateText = true;
+			} else if (depth === 0) return text.slice(open, i + 1);
+		}
 	}
 	return null;
 }
@@ -1369,5 +1414,17 @@ describe("deleteConsoleClub is superadmin-only (#914)", () => {
 		);
 		expect(session).toBeLessThan(superadmin);
 		expect(superadmin).toBeLessThan(del);
+	});
+});
+
+describe("braceBlock ignores braces in strings and template text (#1343)", () => {
+	it("matches the real closing brace", () => {
+		const src = "x { a: \"}\", b: '{', c: `}${ { d: 1 } }}` } tail";
+		expect(braceBlock(src, src.indexOf("{"))).toBe(
+			"{ a: \"}\", b: '{', c: `}${ { d: 1 } }}` }",
+		);
+	});
+	it("is null when the block never closes", () => {
+		expect(braceBlock('{ a: "}"', 0)).toBeNull();
 	});
 });

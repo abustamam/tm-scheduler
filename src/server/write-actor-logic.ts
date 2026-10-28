@@ -33,6 +33,9 @@
  *
  * This module touches `db` and must never be imported by client code.
  */
+import { and, eq, ne } from "drizzle-orm";
+import { db } from "#/db";
+import { members, people } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
 import {
 	MEMBERSHIP_INACTIVE_MESSAGE,
@@ -42,7 +45,7 @@ import {
 } from "#/lib/write-proof";
 import {
 	assertClubNotArchived,
-	getMembership,
+	getActiveMembership,
 	getSessionUser,
 	requireMemberInClub,
 } from "./guards";
@@ -120,7 +123,7 @@ export interface ResolvedWriteActor {
  * what must not authorize a console. It THROWS (`requireMemberInClub`) on an id
  * that is not on the roster, where an authz resolver returns `allowed: false`
  * and every caller has a refusal path rather than an error path. And it re-reads
- * the membership through `getMembership`, so a resolver that already holds the
+ * the membership through `getActiveMembership`, so a resolver that already holds the
  * row would take a second query and a second MVCC snapshot to ask a question it
  * can already answer. The VOCABULARY is shared — "session" vs "asserted" means
  * one thing repo-wide (`#/lib/write-proof`) — and that is the part worth
@@ -130,8 +133,11 @@ export async function resolveWriteActorWithProof(
 	input: WriteActorInput,
 ): Promise<ResolvedWriteActor | null> {
 	if (input.sessionUserId) {
-		const membership = await getMembership(input.sessionUserId, input.clubId);
-		if (membership && membership.status === "active") {
+		const membership = await getActiveMembership(
+			input.sessionUserId,
+			input.clubId,
+		);
+		if (membership) {
 			return { memberId: membership.id, proof: "session" };
 		}
 		// An impersonating superadmin has no membership in this club, so without
@@ -238,10 +244,13 @@ export async function resolveSessionActor(input: {
 	sessionUserId: string | null | undefined;
 }): Promise<SessionActor> {
 	if (!input.sessionUserId) throw new Error(SIGN_IN_REQUIRED_MESSAGE);
-	const membership = await getMembership(input.sessionUserId, input.clubId);
-	if (membership && membership.status === "active") {
+	const membership = await getActiveMembership(
+		input.sessionUserId,
+		input.clubId,
+	);
+	if (membership) {
 		// ARCHIVE, from the row just read rather than a second query — that is why
-		// `getMembership` selects `clubs.archived_at` at all (#566).
+		// `getActiveMembership` selects `clubs.archived_at` at all (#566).
 		//
 		// `guards.ts` cannot lend its private `assertNotArchived` here, so this
 		// raises the identical sentence out of `#/lib/club-archive`, which is the
@@ -283,15 +292,29 @@ export async function resolveSessionActor(input: {
 	// with an INACTIVE membership is on this roster — telling them to ask an
 	// officer to add their email sends them to fix something that is not broken.
 	// `membership_status` has three values (active, inactive, former) and the
-	// session arm above admitted only `active`, so `membership` being present at
-	// all here means lapsed (inactive) or ended (former).
+	// session arm above admitted only `active`, so a non-active row on this
+	// roster means lapsed (inactive) or ended (former).
 	//
 	// Nothing about the archived club is disclosed on this arm: a non-member
 	// hears about their own membership rather than about the takedown, which is
 	// the same trade `requireMembership` makes with NOT_A_MEMBER and which
 	// discloses less, not more.
+	// `getActiveMembership` returns null for a non-active row (#1343), so ask for
+	// one directly: the message differs, the fix differs.
+	const [onRoster] = await db
+		.select({ id: members.id })
+		.from(members)
+		.innerJoin(people, eq(people.id, members.personId))
+		.where(
+			and(
+				eq(people.userId, input.sessionUserId),
+				eq(members.clubId, input.clubId),
+				ne(members.status, "active"),
+			),
+		)
+		.limit(1);
 	throw new Error(
-		membership ? MEMBERSHIP_INACTIVE_MESSAGE : NOT_ON_ROSTER_MESSAGE,
+		onRoster ? MEMBERSHIP_INACTIVE_MESSAGE : NOT_ON_ROSTER_MESSAGE,
 	);
 }
 

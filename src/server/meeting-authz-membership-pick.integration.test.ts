@@ -2,7 +2,7 @@
  * Regression (#804): the per-meeting agenda authz resolved its own membership
  * with an unordered `.limit(1)`.
  *
- * `resolveAdminGrant` (`meeting-authz-logic.ts`) and `getMembership`
+ * `resolveAdminGrant` (`meeting-authz-logic.ts`) and `getActiveMembership`
  * (`guards.ts`) resolve the SAME signed-in-user → Person → membership
  * relationship for the same club. #471 gave the second a five-key total order
  * precisely so an arbitrary pick could not flip an authorization answer; the
@@ -12,7 +12,7 @@
  *
  * **Agreement is the property, not stability.** A wrong-but-consistent pick is
  * stable, and every case here that can name a specific membership also asserts
- * `getMembership` names the same one. Since #838 both order by the one shared
+ * `getActiveMembership` names the same one. Since #838 both order by the one shared
  * `membershipPickOrder()` (`membership-pick-order.ts`), so there are no longer
  * two orderings to drift apart; agreement is still asserted, because the two
  * QUERIES remain separate (different joins, grouping and shape), and a join or
@@ -64,7 +64,7 @@ const {
 } = await import("./meeting-authz-logic");
 // The reference ordering. Imported so agreement is ASSERTED rather than assumed
 // from the two queries looking alike — they share an ORDER (#838), not a query.
-const { getMembership } = await import("./guards");
+const { getActiveMembership } = await import("./guards");
 
 describe.skipIf(!hasTestDb)(
 	"meeting agenda authz with duplicate Persons (#804)",
@@ -166,7 +166,7 @@ describe.skipIf(!hasTestDb)(
 		 */
 		async function expectAgreesWithGuardPath(expected: string) {
 			const authz = await agendaAuthz();
-			const reference = await getMembership(userId, club.clubId);
+			const reference = await getActiveMembership(userId, club.clubId);
 			expect(authz.actorMemberId).toBe(expected);
 			expect(reference?.id).toBe(expected);
 			expect(authz.actorMemberId).toBe(reference?.id);
@@ -255,13 +255,13 @@ describe.skipIf(!hasTestDb)(
 			expect(authz.allowed).toBe(false);
 			expect(authz.via).toBeNull();
 			expect(authz.actorMemberId).toBeNull();
-			expect(await getMembership(userId, club.clubId)).toBeNull();
+			expect(await getActiveMembership(userId, club.clubId)).toBeNull();
 		});
 
 		// ── Key 3: more OPEN officer terms ────────────────────────────────────
 		// Both rows are active admins, so the grant happens either way and
 		// `actorMemberId` is the only thing that moves. It has to move the same way
-		// `getMembership` moves: effective-admin (#202) reads ONE membership's
+		// `getActiveMembership` moves: effective-admin (#202) reads ONE membership's
 		// terms, so the two resolvers disagreeing here hands two parts of the app
 		// different rows for the same human.
 		it("breaks a status+role tie on the open officer term", async () => {
@@ -304,7 +304,7 @@ describe.skipIf(!hasTestDb)(
 		// row is written FIRST and ties on every key above: drop the predicate and
 		// both count 1, the tie falls to `created_at`, and the closed-term row wins.
 		// The same case exists in `membership-resolution.integration.test.ts`
-		// through `getMembership`; both read the shared join condition (#838), and
+		// through `getActiveMembership`; both read the shared join condition (#838), and
 		// this one gates it through the resolver that grants.
 		it("ignores a CLOSED officer term when ranking", async () => {
 			const closedTerm = await addMembership({
@@ -363,7 +363,7 @@ describe.skipIf(!hasTestDb)(
 		// property of the plan, not a guarantee, which is why the key stays — but
 		// a comment claiming this case pins it would have been false.
 		//
-		// Before #838 it pinned what the COPY cost: flipping only `getMembership`'s
+		// Before #838 it pinned what the COPY cost: flipping only `getActiveMembership`'s
 		// terminator to `desc(members.id)` failed this case and nothing else. There
 		// is one terminator now, so that drift is unrepresentable; the key itself
 		// is pinned as rendered SQL by `membership-pick-order.test.ts`, which does
@@ -416,7 +416,7 @@ describe.skipIf(!hasTestDb)(
 			// Denied, so `actorMemberId` names nothing — but the resolvers must still
 			// agree on WHICH row they refused off, or the two would drift apart on
 			// the one key that decides whether a grant happens at all.
-			expect((await getMembership(userId, club.clubId))?.id).toBe(active);
+			expect((await getActiveMembership(userId, club.clubId))?.id).toBe(active);
 		});
 
 		// The officer sibling (#1383). With the officer arm, an inactive ADMIN

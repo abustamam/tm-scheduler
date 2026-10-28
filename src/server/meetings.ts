@@ -34,7 +34,7 @@ import {
 } from "./club-readable-logic";
 import {
 	canManageClub,
-	getMembership,
+	getActiveMembership,
 	getSessionUser,
 	requireClubAdminView,
 	requireClubRole,
@@ -277,8 +277,8 @@ async function loadMeetingDetail(
 	// while `answeredRungs` below is public and carries the plan.
 	let viewerIsMember = canManage;
 	if (!viewerIsMember && currentUserId) {
-		const membership = await getMembership(currentUserId, meeting.clubId);
-		viewerIsMember = membership?.status === "active";
+		const membership = await getActiveMembership(currentUserId, meeting.clubId);
+		viewerIsMember = membership !== null;
 	}
 	const unavailableMembers = viewerIsMember
 		? await listUnavailableWithNames(db, meetingId)

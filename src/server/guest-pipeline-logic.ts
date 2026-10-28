@@ -114,7 +114,7 @@ import { loadClubDefaultCountryCode } from "./clubs-logic";
 import {
 	assertClubNotArchived,
 	assertStillClubAdmin,
-	getMembership,
+	getActiveMembership,
 	NO_PERMISSION_MESSAGE,
 	NOT_A_MEMBER_MESSAGE,
 	requireClubRole,
@@ -4785,7 +4785,7 @@ export async function applyAddGuestToClub(
 		await assertStillAdminOfBothClubs(tx, userId, fromClubId, toClubId);
 		// The officer's seat in the destination, read in this transaction by the same
 		// resolver the re-check just used. Only an ACTIVE seat is credited.
-		const destination = await getMembership(userId, toClubId, tx);
+		const destination = await getActiveMembership(userId, toClubId, tx);
 
 		if (guest.stage === "joined") throw new Error(GUEST_NOW_MEMBER_MESSAGE);
 		if (await personIsHereAlready(tx, guest.personId, toClubId)) {
@@ -4801,8 +4801,7 @@ export async function applyAddGuestToClub(
 			// The officer who added them, so the destination club's officers can see
 			// who did (null when they hold no active seat there, as an impersonating
 			// superadmin does not).
-			introducedByMemberId:
-				destination?.status === "active" ? destination.id : null,
+			introducedByMemberId: destination?.id ?? null,
 		});
 		return { ok: true as const };
 	});
@@ -5197,7 +5196,7 @@ export async function applyLinkGuestAcrossClubs(
 			throw new Error(RECORD_CHANGED_MESSAGE);
 		}
 		await assertStillAdminOfBothClubs(tx, userId, clubId, otherClubId);
-		const actor = await getMembership(userId, clubId, tx);
+		const actor = await getActiveMembership(userId, clubId, tx);
 
 		const self = await loadGuestLinkSide(tx, mine, otherClubId);
 		const other = await loadGuestLinkSide(tx, theirs, clubId);
@@ -5221,7 +5220,7 @@ export async function applyLinkGuestAcrossClubs(
 		// The acting club only, and nothing of the other club: no id, no name.
 		await logActivity(tx, {
 			clubId,
-			actorMemberId: actor?.status === "active" ? actor.id : null,
+			actorMemberId: actor?.id ?? null,
 			action: "member_merge",
 			targetType: "member",
 			detail: {

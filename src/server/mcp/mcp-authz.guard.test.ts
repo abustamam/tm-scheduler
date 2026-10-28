@@ -377,7 +377,7 @@ describe("nothing on the MCP path reads a session cookie (#773)", () => {
 	it("the binding parser sees an import and ignores a mention", () => {
 		// Same reason as the predicate self-test above: without this, the sweep
 		// passes on a clean tree whether or not `importedBindings` works.
-		const imported = `import { requireClubRole, getMembership } from "../guards";`;
+		const imported = `import { requireClubRole, getActiveMembership } from "../guards";`;
 		const renamed = `import { requireUser as ru } from "#/server/guards";`;
 		const mentioned = `// never call requireClubRole here\nconst s = "requireUser";`;
 		expect(importedBindings(imported)).toContain("requireClubRole");
