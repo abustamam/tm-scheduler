@@ -339,7 +339,9 @@ function MemberDetail() {
 					<Button asChild size="sm">
 						<Link to="/next">Assign a role</Link>
 					</Button>
-					{clubId ? <MemberActions member={member} clubId={clubId} /> : null}
+					{clubId && viewerIsAdmin ? (
+						<MemberActions member={member} clubId={clubId} />
+					) : null}
 				</div>
 			</div>
 

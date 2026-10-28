@@ -40,8 +40,8 @@ const FORBIDDEN = [
 	// ne(members.status, "x"), ne(m.status, 'x'), ne(alias.status, "x")
 	new RegExp(String.raw`\bne\(\s*[\w$.]+\.status\s*,\s*${DQ}\s*,?\s*\)`, "g"),
 	// x.status !== "x", x?.status != "x", and the literal on the left
-	new RegExp(String.raw`\.status\s*!==?\s*${DQ}`, "g"),
-	new RegExp(String.raw`${DQ}\s*!==?\s*[\w$.?]+\.status\b`, "g"),
+	new RegExp(String.raw`\bstatus\s*!==?\s*${DQ}`, "g"),
+	new RegExp(String.raw`${DQ}\s*!==?\s*[\w$.?]*\bstatus\b`, "g"),
 	// notInArray(members.status, [...])
 	/\bnotInArray\(\s*[\w$.]+\.status\b/g,
 	// raw SQL: status <> 'x', m.status != 'x', status NOT IN ('x', ...)
@@ -147,6 +147,9 @@ describe("membership status is never tested negatively (#1239, #1326)", () => {
 			expect(hit(`r.status !== "${lit}"`)).toBe(1);
 			expect(hit(`r?.status != "${lit}"`)).toBe(1);
 			expect(hit(`"${lit}" !== r.status`)).toBe(1);
+			expect(hit(`status !== "${lit}"`)).toBe(1);
+			expect(hit(`"${lit}" !== status`)).toBe(1);
+			expect(hit(`status != "${lit}"`)).toBe(1);
 			expect(hit(`sql\`status <> '${lit}'\``)).toBe(1);
 			expect(hit(`sql\`m.status != '${lit}'\``)).toBe(1);
 			expect(hit(`r.status === "${lit}"`)).toBe(0);

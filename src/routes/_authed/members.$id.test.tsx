@@ -140,7 +140,7 @@ async function renderRoute(
 				clubId: CLUB_ID,
 				name: "Downtown Club",
 				clubNumber: "123456",
-				clubRole: ctxOver.clubRole ?? "member",
+				clubRole: ctxOver.clubRole ?? "admin",
 			},
 		],
 		activeClubId: CLUB_ID,
@@ -570,7 +570,7 @@ describe("member profile — a former member's Pathways", () => {
 	const EMPTY = "No Pathways path set yet.";
 
 	it("tells a plain member they are not shown, not that none is set", async () => {
-		await renderRoute({ status: "inactive" });
+		await renderRoute({ status: "inactive" }, {}, { clubRole: "member" });
 		expect(screen.getByText(WITHHELD)).toBeTruthy();
 		expect(screen.queryByText(EMPTY)).toBeNull();
 	});
@@ -579,6 +579,16 @@ describe("member profile — a former member's Pathways", () => {
 		await renderRoute();
 		expect(screen.getByText(EMPTY)).toBeTruthy();
 		expect(screen.queryByText(WITHHELD)).toBeNull();
+	});
+
+	it("shows a non-admin viewer no action row (#1326)", async () => {
+		await renderRoute({}, {}, { clubRole: "member" });
+		expect(screen.queryByRole("button", { name: /edit/i })).toBeNull();
+		expect(screen.queryByRole("button", { name: /remove/i })).toBeNull();
+		expect(screen.queryByRole("button", { name: /mark inactive/i })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /end membership/i }),
+		).toBeNull();
 	});
 
 	it("shows an admin the panel itself", async () => {
