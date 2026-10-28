@@ -71,6 +71,7 @@ import {
 	DEFAULT_CLIENT,
 	type DevServer,
 	describeMismatch,
+	describeNeverAttached,
 	HydrationBrowser,
 	REPO_ROOT,
 	type RouteResult,
@@ -791,7 +792,7 @@ describe("route hydration gate (#1000)", () => {
 				"redirected, so not swept: fix the URL or the fixture",
 			).toEqual([]);
 			expect(
-				swept.filter((r) => !r.hydrated).map((r) => r.path),
+				swept.filter((r) => !r.hydrated).map(describeNeverAttached),
 				"React never attached, so a clean result would mean nothing",
 			).toEqual([]);
 		});

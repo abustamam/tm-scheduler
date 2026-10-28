@@ -55,6 +55,7 @@ import {
 	CHROME_LAUNCH_TIMEOUT_MS,
 	ConnectionWatch,
 	DEFAULT_CLIENT,
+	describeNeverAttached,
 	EXIT_REPORT_GRACE_MS,
 	HydrationBrowser,
 } from "#/test/route-hydration";
@@ -828,4 +829,143 @@ describe("HydrationBrowser commands (#1128)", () => {
 		},
 		REAL_LAUNCH_TEST_MS,
 	);
+});
+
+describe("HydrationBrowser.sweep never-attached diagnostics and retry (#1338)", () => {
+	/**
+	 * A browser with no Chrome: `Page.navigate` replays `loads[n].events` for
+	 * the nth load through the real `receive`, and the React marker reads as
+	 * `loads[n].attaches`. The first sweep load is the warm-up, the second the
+	 * judged one, a retry the third.
+	 */
+	function fakeBrowser(loads: { attaches: boolean; events?: object[] }[]) {
+		const b = new (
+			HydrationBrowser as unknown as new (
+				...a: unknown[]
+			) => HydrationBrowser
+		)(DEFAULT_CLIENT, 0, 1_000);
+		const priv = b as unknown as {
+			receive(e: { data: string }): void;
+			cdp: { send(method: string): Promise<unknown> };
+		};
+		let n = -1;
+		priv.cdp = {
+			async send(method: string) {
+				if (method === "Page.navigate") {
+					n++;
+					queueMicrotask(() => {
+						for (const ev of loads[n]?.events ?? []) {
+							priv.receive({ data: JSON.stringify(ev) });
+						}
+						priv.receive({
+							data: JSON.stringify({ method: "Page.loadEventFired" }),
+						});
+					});
+				}
+				return {};
+			},
+		};
+		(b as unknown as { evaluate: unknown }).evaluate = async (
+			expression: string,
+		) => {
+			if (expression.includes("__reactContainer$"))
+				return loads[n]?.attaches ?? false;
+			if (expression.includes("location.pathname")) return "/x";
+			return "";
+		};
+		return { b, navigations: () => n + 1 };
+	}
+
+	const broken = {
+		attaches: false,
+		events: [
+			{
+				method: "Runtime.consoleAPICalled",
+				params: { type: "error", args: [{ value: "Failed to fetch module" }] },
+			},
+			{
+				method: "Runtime.consoleAPICalled",
+				params: { type: "error", args: [{ value: "Failed to fetch module" }] },
+			},
+			{
+				method: "Network.requestWillBeSent",
+				params: { requestId: "1", request: { url: "http://x/chunk.js" } },
+			},
+			{
+				method: "Network.loadingFailed",
+				params: { requestId: "1", errorText: "net::ERR_ABORTED" },
+			},
+			{
+				method: "Network.requestWillBeSent",
+				params: { requestId: "2", request: { url: "http://x/api" } },
+			},
+			{
+				method: "Network.responseReceived",
+				params: {
+					requestId: "2",
+					response: { url: "http://x/api", status: 503 },
+				},
+			},
+		],
+	};
+	const good = { attaches: true };
+
+	async function run(b: HydrationBrowser) {
+		vi.useFakeTimers();
+		try {
+			const p = b.sweep("http://x", "/x");
+			await vi.advanceTimersByTimeAsync(600_000);
+			return await p;
+		} finally {
+			vi.useRealTimers();
+		}
+	}
+
+	beforeEach(() => {
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+	});
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("carries the console error and the failed request of a load that never attached", async () => {
+		const { b } = fakeBrowser([good, broken, broken]);
+		const r = await run(b);
+		expect(r.hydrated).toBe(false);
+		expect(r.neverAttached?.errors).toEqual(["Failed to fetch module"]);
+		expect(r.neverAttached?.failedRequests).toEqual([
+			"http://x/chunk.js failed: net::ERR_ABORTED",
+			"http://x/api -> HTTP 503",
+		]);
+		expect(r.neverAttached?.ms).toBeGreaterThan(0);
+		expect(describeNeverAttached(r)).toContain(
+			"http://x/chunk.js failed: net::ERR_ABORTED",
+		);
+	});
+
+	it("retries exactly once, and keeps the first attempt's trace when the retry attaches", async () => {
+		const { b, navigations } = fakeBrowser([good, broken, good]);
+		const r = await run(b);
+		expect(navigations()).toBe(3);
+		expect(r.hydrated).toBe(true);
+		expect(r.retried).toBe(true);
+		expect(r.neverAttached?.failedRequests).toHaveLength(2);
+	});
+
+	it("fails the route, after exactly one retry, when the retry never attaches either", async () => {
+		const { b, navigations } = fakeBrowser([good, broken, broken, good]);
+		const r = await run(b);
+		expect(navigations()).toBe(3);
+		expect(r.hydrated).toBe(false);
+		expect(r.retried).toBe(true);
+	});
+
+	it("makes no retry when the judged load attaches", async () => {
+		const { b, navigations } = fakeBrowser([good, good, good]);
+		const r = await run(b);
+		expect(navigations()).toBe(2);
+		expect(r.hydrated).toBe(true);
+		expect(r.retried).toBeUndefined();
+		expect(r.neverAttached).toBeUndefined();
+	});
 });
