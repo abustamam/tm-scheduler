@@ -132,6 +132,8 @@ import {
 	RECORD_CHANGED_MESSAGE,
 	separateGuestFromMemberPerson,
 } from "./guests-logic";
+import { meetingAcceptsWrite } from "./meeting-write-gate";
+import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 import {
 	PAST_AGENDA_MEMBER_KEYS,
 	PAST_AGENDA_TIME_WINDOW_KEYS,
@@ -3331,6 +3333,10 @@ export type UndoCascadeCheck = {
  *  "past agenda" is read against. */
 export type UndoCheckContext = { clubId: string; now: Date };
 
+/** One generic label for the checks on tables private to a member (mentorship,
+ *  mentor request, feedback notes), so no label tells an admin which one exists. */
+const PRIVATE_RECORDS_LABEL = "other records";
+
 /**
  * The refusals `applyUndoGuestConversion` makes for history that its final
  * `delete(members)` would cascade away (#1202), in the order they run. The FK
@@ -3343,10 +3349,6 @@ export type UndoCheckContext = { clubId: string; now: Date };
  * Labels are what the admin reads. `role_feedback_notes` is private to its
  * recipient, so its label is generic and must not name feedback.
  */
-/** One generic label for the checks on tables private to a member (mentorship,
- *  mentor request, feedback notes), so no label tells an admin which one exists. */
-const PRIVATE_RECORDS_LABEL = "other records";
-
 export const UNDO_CASCADE_CHECKS: UndoCascadeCheck[] = [
 	{
 		columns: ["member_dues.membership_id"],
@@ -3622,6 +3624,13 @@ export type UndoKeyPlan = {
 	refusals: UndoCascadeCheck[];
 	/** The keys the delete blanks, counted into the `member_remove` record. */
 	blanks: MembersForeignKey[];
+	/**
+	 * The name-blanking keys (attendance, Table Topics, awards, action-item
+	 * owners): classed `refuse`, so not in `blanks`, but a row that passed the
+	 * refusal (an upcoming meeting) is blanked by the delete and named on the
+	 * record too (#1322, #1324).
+	 */
+	nameBlanks: MembersForeignKey[];
 };
 
 /**
@@ -3671,10 +3680,14 @@ export function buildUndoKeyPlan(
 	}
 	const classes = new Map<string, UndoKeyClass>();
 	const blanks: UndoKeyPlan["blanks"] = [];
+	const nameBlanks: UndoKeyPlan["nameBlanks"] = [];
 	for (const fk of foreignKeysToMembers()) {
 		const found: UndoKeyClass[] = [];
 		const check = refusing.get(fk.key);
-		if (check) found.push({ kind: "refuse", check });
+		if (check) {
+			found.push({ kind: "refuse", check });
+			if (check.kind === "name") nameBlanks.push(fk);
+		}
 		const handled = handledKeys[fk.key];
 		if (handled) found.push({ kind: "handled", by: handled });
 		const deferred = deferredKeys[fk.key];
@@ -3707,7 +3720,7 @@ export function buildUndoKeyPlan(
 			);
 		}
 	}
-	return { classes, refusals, blanks };
+	return { classes, refusals, blanks, nameBlanks };
 }
 
 /**
@@ -3724,7 +3737,8 @@ async function countBlankedKeys(
 	membershipId: string,
 ): Promise<Record<string, number>> {
 	const out: Record<string, number> = {};
-	for (const { key, table, column } of undoKeyPlan().blanks) {
+	const plan = undoKeyPlan();
+	for (const { key, table, column } of [...plan.blanks, ...plan.nameBlanks]) {
 		const [row] = await tx
 			.select({ n: count() })
 			.from(table)
@@ -4530,6 +4544,57 @@ export async function applyUndoGuestConversion(
 				// written while the conversion had them active must not outlive it.
 				if (record.reactivatedFrom === "former")
 					await deletePlanRowsOfEndedMember(tx, membershipId);
+				// Any non-active status releases upcoming roles, as
+				// `applySetMemberStatus` does (`releasing`, members-logic.ts, which inlines it
+				// and exports no helper; the same predicate and per-slot UPDATE, in slot-id order): a convert-woken member the
+				// VPE has since cast must not stay on the live agenda while `inactive` or
+				// `former`. Past slots stay (history). Not run on `changed_since` and the
+				// other leave-alone branches, which write no status.
+				if (record.reactivatedFrom) {
+					const upcoming = await tx
+						.select({ id: roleSlots.id })
+						.from(roleSlots)
+						.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+						.where(
+							and(
+								eq(roleSlots.assignedMemberId, membershipId),
+								gte(meetings.scheduledAt, new Date()),
+							),
+						)
+						.orderBy(asc(roleSlots.id));
+					for (const s of upcoming) {
+						const released = await tx
+							.update(roleSlots)
+							.set({
+								assignedMemberId: null,
+								status: "open",
+								claimedAt: null,
+								speechId: null,
+							})
+							.where(
+								and(
+									eq(roleSlots.id, s.id),
+									eq(roleSlots.assignedMemberId, membershipId),
+									meetingAcceptsWrite(
+										tx,
+										"plan",
+										roleSlots.meetingId,
+										PLAN_ACCEPTING_CANCELLED,
+									),
+								),
+							)
+							.returning({ id: roleSlots.id });
+						if (released.length === 0) continue;
+						await logActivity(tx, {
+							clubId: input.clubId,
+							actorMemberId: input.actorMemberId,
+							action: "release",
+							targetType: "slot",
+							targetId: s.id,
+							detail: { fromMemberId: membershipId },
+						});
+					}
+				}
 			}
 		}
 

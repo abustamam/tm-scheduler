@@ -9,10 +9,11 @@
  * `#/db` is mocked to the TEST_DATABASE_URL client; the suite skips when unset.
  */
 import { randomUUID } from "node:crypto";
-import { eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	activityLog,
 	clubActionItems,
 	guests,
 	meetingAttendance,
@@ -307,12 +308,15 @@ describe.skipIf(!hasTestDb)(
 			expect(message).not.toContain("merge");
 		});
 
-		// fails_when=the held-slots refusal runs on the reuse path again
-		it("a REUSED membership holding a slot the convert did not move still undoes", async () => {
+		async function lapsedWithSlots(
+			name: string,
+			slotOffsetsDays: number[],
+			priorStatus: "inactive" | "former" = "inactive",
+		) {
 			const email = `slot-${randomUUID()}@example.com`;
 			const [person] = await testDb
 				.insert(people)
-				.values({ name: "Slot Holder", email })
+				.values({ name, email })
 				.returning({ id: people.id });
 			if (!person) throw new Error("Failed to seed person");
 			strayPeople.push(person.id);
@@ -321,36 +325,136 @@ describe.skipIf(!hasTestDb)(
 				.values({
 					clubId: seed.clubId,
 					personId: person.id,
-					name: "Slot Holder",
-					status: "inactive",
+					name,
+					status: priorStatus,
+					...(priorStatus === "former" ? { endedAt: "2020-01-15" } : {}),
 				})
 				.returning({ id: members.id });
 			if (!lapsed) throw new Error("Failed to seed lapsed membership");
-			const [slot] = await testDb
-				.insert(roleSlots)
-				.values({
-					meetingId: await meetingAt(5),
-					roleDefinitionId: seed.roleDefinitionId,
-					status: "claimed",
-					assignedMemberId: lapsed.id,
-				})
-				.returning({ id: roleSlots.id });
-			if (!slot) throw new Error("Failed to seed slot");
-			const guestId = await seedGuest("Slot Holder Guest");
+			const slotIds: string[] = [];
+			for (const offset of slotOffsetsDays) {
+				const [slot] = await testDb
+					.insert(roleSlots)
+					.values({
+						meetingId: await meetingAt(offset),
+						roleDefinitionId: seed.roleDefinitionId,
+						status: "claimed",
+						assignedMemberId: lapsed.id,
+					})
+					.returning({ id: roleSlots.id });
+				if (!slot) throw new Error("Failed to seed slot");
+				slotIds.push(slot.id);
+			}
+			const guestId = await seedGuest(`${name} Guest`);
 			await applyConvertGuestToMember({
 				clubId: seed.clubId,
 				guestId,
 				actorMemberId: seed.adminMemberId,
 				confirmedEmail: email,
 			});
+			return { guestId, membershipId: lapsed.id, slotIds };
+		}
 
+		async function slotState(slotId: string) {
+			const [row] = await testDb
+				.select({
+					holder: roleSlots.assignedMemberId,
+					status: roleSlots.status,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, slotId));
+			return row;
+		}
+
+		// fails_when=the held-slots refusal runs on the reuse path again, or the
+		// reuse path stops releasing the upcoming slot when it writes a lapsed status
+		// (a state applySetMemberStatus never produces: inactive and still cast)
+		it.each([
+			"inactive",
+			"former",
+		] as const)("a REUSED %s membership holding an UPCOMING slot undoes and the slot is released", async (prior) => {
+			const { guestId, membershipId, slotIds } = await lapsedWithSlots(
+				`Upcoming ${prior}`,
+				[5],
+				prior,
+			);
 			const res = await undo(guestId);
 			expect(res.membershipDeleted).toBe(false);
-			const [left] = await testDb
-				.select({ holder: roleSlots.assignedMemberId })
-				.from(roleSlots)
-				.where(eq(roleSlots.id, slot.id));
-			expect(left?.holder).toBe(lapsed.id);
+			const [m] = await testDb
+				.select({ status: members.status })
+				.from(members)
+				.where(eq(members.id, membershipId));
+			expect(m?.status).toBe(prior);
+			expect(await slotState(slotIds[0] as string)).toEqual({
+				holder: null,
+				status: "open",
+			});
+		});
+
+		// fails_when=the release drops its `scheduledAt >= now` predicate
+		it("a REUSED membership's slot on a PAST meeting stays held", async () => {
+			const { guestId, membershipId, slotIds } = await lapsedWithSlots(
+				"Past Slot",
+				[-4, 5],
+			);
+			await undo(guestId);
+			expect(await slotState(slotIds[0] as string)).toEqual({
+				holder: membershipId,
+				status: "claimed",
+			});
+			expect((await slotState(slotIds[1] as string))?.holder).toBeNull();
+		});
+
+		// fails_when=the release runs on the leave-alone (changed_since) branch
+		it("a REUSED membership the undo leaves alone (changed_since) keeps its upcoming slot", async () => {
+			const { guestId, membershipId, slotIds } = await lapsedWithSlots(
+				"Changed Since",
+				[5],
+			);
+			await testDb.insert(activityLog).values({
+				clubId: seed.clubId,
+				actorMemberId: seed.adminMemberId,
+				action: "member_edit",
+				targetType: "member",
+				targetId: membershipId,
+				detail: { after: { status: "active" } },
+			});
+			const res = await undo(guestId);
+			expect(res.membershipDeleted).toBe(false);
+			const [m] = await testDb
+				.select({ status: members.status })
+				.from(members)
+				.where(eq(members.id, membershipId));
+			expect(m?.status).toBe("active");
+			expect((await slotState(slotIds[0] as string))?.holder).toBe(
+				membershipId,
+			);
+		});
+
+		// fails_when=countBlankedKeys stops counting the name-blanking keys
+		it("names an upcoming-meeting attendance row on the member_remove record's blanked map", async () => {
+			const { guestId, membershipId } = await converted("Blanked Attendance");
+			await testDb.insert(meetingAttendance).values({
+				meetingId: await meetingAt(4),
+				memberId: membershipId,
+				status: "absent",
+			});
+			expect((await undo(guestId)).membershipDeleted).toBe(true);
+			const [row] = await testDb
+				.select({ detail: activityLog.detail })
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.clubId, seed.clubId),
+						eq(activityLog.action, "member_remove"),
+						eq(activityLog.targetId, membershipId),
+					),
+				)
+				.orderBy(desc(activityLog.createdAt))
+				.limit(1);
+			expect(
+				(row?.detail as { blanked?: Record<string, number> }).blanked,
+			).toEqual({ "meeting_attendance.member_id": 1 });
 		});
 
 		// fails_when=the speech count reads every speech the Person has again.
