@@ -156,7 +156,7 @@ function PanelRow({ children }: { children: ReactNode }) {
  *  renders an unbounded name at full height. One constant, applied to whichever
  *  element is the text box, is what makes the linked row obey the same ceiling
  *  as the plain one. */
-const IDENTITY_NAME_CLASS = "min-w-0 truncate text-sm font-medium";
+const IDENTITY_NAME_CLASS = "min-w-0 truncate text-sm font-semibold";
 
 /** Identity line. The name owns it — at 2-4 characters the role code costs it
  *  almost nothing, which is the whole reason the code replaced the full role name
@@ -191,7 +191,7 @@ function PanelIdentityLine({
 			{linkToMemberId ? (
 				/* `text-inherit` is NOT decoration — without a `text-*` utility this
 				 * anchor is painted by `styles.css`'s `@layer base { a { color:
-				 * var(--lagoon-deep) } }`, which is #328f97: 3.81:1 on white, UNDER
+				 * the lagoon-deep brand colour } }`, which is #328f97: 3.81:1 on white, UNDER
 				 * AA, on a `text-sm` name (see CODING_STANDARDS.md's layered-text-link
 				 * entry, where that exact number and that exact failure are recorded).
 				 * It would also have made the two branches render different INK while
@@ -1348,9 +1348,7 @@ export function MeetingAttendancePanel({
 				<div className="flex items-center justify-between gap-2">
 					<div className="min-w-0">
 						<CardTitle>{roll ? "Attendance" : "Planned attendance"}</CardTitle>
-						<span className="text-xs text-[var(--sea-ink-soft)]">
-							{countsLine}
-						</span>
+						<span className="text-xs text-muted-foreground">{countsLine}</span>
 						{/* In the HEADER, not with the rows: it has to stay visible
 						 *  whatever the collapse does, and it belongs next to the counts
 						 *  line it qualifies — the counts are the optimistic projection,

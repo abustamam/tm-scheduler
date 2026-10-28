@@ -35,6 +35,12 @@ const theme = blockBody(css, "@theme inline");
 const root = blockBody(css, "\n:root");
 
 describe("styles.css foundation (#1306)", () => {
+	it("loads exactly the DESIGN.md font weights (#1317)", () => {
+		expect(css.split("\n")[0]).toBe(
+			"@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Manrope:wght@400;600;700&display=swap');",
+		);
+	});
+
 	it("extraction is not vacuous", () => {
 		expect(theme.match(/--color-[\w-]+:/g)?.length ?? 0).toBeGreaterThanOrEqual(
 			12,

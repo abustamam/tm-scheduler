@@ -89,7 +89,7 @@ export function MeetingPersonalStrip({
 				// session exists and no row was recorded. Both say nothing rather than
 				// inventing a record. Fixes #548.
 				myAttendance === undefined || myAttendance === null ? null : (
-					<p className="text-sm font-medium text-muted-foreground">
+					<p className="text-sm font-semibold text-muted-foreground">
 						{myAttendance === "present"
 							? "You attended this meeting."
 							: myAttendance === "excused"
@@ -125,7 +125,7 @@ export function MeetingPersonalStrip({
 				// No session ⇒ no undo (see the header). The STATEMENT is the same
 				// sentence the chip carries, minus the affordance that would refuse.
 				<div className="flex flex-wrap items-baseline gap-x-2">
-					<p className="text-sm font-medium">
+					<p className="text-sm font-semibold">
 						{myStatus === "coming"
 							? "You'll be there."
 							: "You can't make this one."}
