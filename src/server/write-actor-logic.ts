@@ -312,6 +312,9 @@ export async function resolveSessionActor(input: {
 				ne(members.status, "active"),
 			),
 		)
+		// Any non-active row yields the same message, so the pick is order-free;
+		// the ORDER BY only keeps it deterministic (membership-pick-ordering guard).
+		.orderBy(members.id)
 		.limit(1);
 	throw new Error(
 		onRoster ? MEMBERSHIP_INACTIVE_MESSAGE : NOT_ON_ROSTER_MESSAGE,

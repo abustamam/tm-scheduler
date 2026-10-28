@@ -81,6 +81,8 @@ const FILED: Record<string, string> = {};
 const OWN_ORDER: Record<string, string> = {
 	"src/server/auth-context-person-logic.ts:loadPersonDisplayName":
 		"a display NAME, not a membership: tie-broken on people.createdAt/id to match resolveUserPersonId (#707)",
+	"src/server/write-actor-logic.ts:resolveSessionActor":
+		"an EXISTENCE probe for a non-active row that only picks the refusal message; any such row gives the same answer, so the order (members.id) is only for determinism (#1343)",
 };
 
 /** Every `*.ts` under `src/server`, recursively, excluding tests. */

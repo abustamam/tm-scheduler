@@ -55,7 +55,7 @@ describe("loadMeetingDetail contact gating (#37 PII)", () => {
 		);
 		// The gate's own condition: the roll-aware list is for an ACTIVE member.
 		expect(src).toContain(
-			'constmembership=awaitgetMembership(currentUserId,meeting.clubId);viewerIsMember=membership?.status==="active";',
+			"constmembership=awaitgetActiveMembership(currentUserId,meeting.clubId);viewerIsMember=membership!==null;",
 		);
 	});
 
