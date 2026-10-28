@@ -298,6 +298,21 @@ export async function commitMemberImport(
 						)
 					)
 						throw new AccessRefreshRequired();
+					// A term opens only on an ACTIVE membership (#1326): a former member
+					// holds no office, and an inactive one is off the roster. Read under a
+					// shared row lock, so an End racing this commit waits for it (or this
+					// one sees the ended row). The row stays a skipped assignment.
+					const [target] = await tx
+						.select({ status: members.status })
+						.from(members)
+						.where(
+							and(
+								eq(members.id, actual.membershipId),
+								eq(members.clubId, clubId),
+							),
+						)
+						.for("share");
+					if (target?.status !== "active") return null;
 					const approvalId = importHash(token);
 					const [used] = await tx
 						.select({ id: activityLog.id })
@@ -349,6 +364,7 @@ export async function commitMemberImport(
 					}
 					return term;
 				});
+				if (!granted) continue;
 				planned.snapshot.terms.push(granted);
 				planned.snapshot.terms.sort((a, b) => a.id.localeCompare(b.id));
 				officerGrants++;

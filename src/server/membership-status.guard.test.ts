@@ -19,10 +19,32 @@ import { describe, expect, it } from "vitest";
 import { readSource, TOP_LEVEL_BOUNDARY } from "#/test/guard-source";
 
 // `\s` spans newlines, so `ne(\n\tmembers.status,\n\t"inactive",\n)` is caught.
+// A NEGATIVE test against `"inactive"` or `"former"` is the mistake: it passes a
+// status that does not exist yet (#1239, #1326). Name the statuses wanted
+// (`inArray(members.status, ["active", "inactive"])`) or test `"active"`.
+const NEGATIVE_STATUS = String.raw`"(?:inactive|former)"`;
 const FORBIDDEN = [
-	/ne\(\s*members\.status\s*,\s*"inactive"\s*,?\s*\)/g,
-	/status\s*!==\s*"inactive"/g,
+	new RegExp(
+		String.raw`ne\(\s*members\.status\s*,\s*${NEGATIVE_STATUS}\s*,?\s*\)`,
+		"g",
+	),
+	new RegExp(String.raw`status\s*!==\s*${NEGATIVE_STATUS}`, "g"),
 ];
+
+/**
+ * Sites the scan cannot make fail yet, because their files are outside #1326's
+ * change set: each is a pre-existing `ne(members.status, "former")` /
+ * `!== "former"` that a fourth status would leak through. A site is listed by
+ * file, with the number of matches it holds; a new match in a listed file, or a
+ * listed file that holds fewer, fails the test, so the list only shrinks.
+ */
+const KNOWN_UNFIXED: Record<string, number> = {
+	"src/routes/_authed/roster.tsx": 1,
+	"src/server/account-link-logic.ts": 1,
+	"src/server/club-export-logic.ts": 2,
+	"src/server/guest-pipeline-logic.ts": 1,
+	"src/server/membership-collapse-logic.ts": 1,
+};
 
 function sourceFiles(dir: string): string[] {
 	return readdirSync(dir).flatMap((name) => {
@@ -46,24 +68,46 @@ function offenders(file: string, text: string): string[] {
 	return hits;
 }
 
-describe("membership status is tested for active, not for 'not inactive' (#1239)", () => {
-	it("no source file uses the two forbidden patterns", () => {
+describe("membership status is never tested negatively (#1239, #1326)", () => {
+	it("no source file uses a negative filter against inactive or former, beyond the known list", () => {
 		const files = sourceFiles("src");
 		// Vacuity floor: a wrong cwd or a moved tree would scan nothing and pass.
 		expect(files.length).toBeGreaterThan(100);
 		expect(files).toContain(join("src", "server", "account-invite.ts"));
 		expect(files).toContain(join("src", "server", "members-logic.ts"));
-		const hits = files.flatMap((f) => offenders(f, readSource(f)));
-		expect(hits).toEqual([]);
+		const byFile = new Map<string, string[]>();
+		for (const f of files) {
+			const hits = offenders(f, readSource(f));
+			if (hits.length) byFile.set(f.split("\\").join("/"), hits);
+		}
+		// A new site anywhere fails; a listed file holding another fails; a listed
+		// file that no longer holds its match fails too, so the list only shrinks.
+		const unexpected = [...byFile].flatMap(([f, hits]) =>
+			hits.length === (KNOWN_UNFIXED[f] ?? 0) ? [] : hits,
+		);
+		expect(unexpected).toEqual([]);
+		for (const [f, n] of Object.entries(KNOWN_UNFIXED)) {
+			expect({ file: f, count: byFile.get(f)?.length ?? 0 }).toEqual({
+				file: f,
+				count: n,
+			});
+		}
 	});
 
 	it("the patterns match the shapes they claim, including a split call", () => {
 		expect(offenders("x.ts", 'ne(members.status, "inactive")')).toHaveLength(1);
+		expect(offenders("x.ts", 'ne(members.status, "former")')).toHaveLength(1);
 		expect(
-			offenders("x.ts", 'ne(\n\tmembers.status,\n\t"inactive",\n)'),
+			offenders("x.ts", 'ne(\n\tmembers.status,\n\t"former",\n)'),
 		).toHaveLength(1);
 		expect(offenders("x.ts", 'r.status !== "inactive"')).toHaveLength(1);
+		expect(offenders("x.ts", 'current.status !== "former"')).toHaveLength(1);
 		expect(offenders("x.ts", 'r.status === "inactive"')).toHaveLength(0);
+		expect(offenders("x.ts", 'r.status === "former"')).toHaveLength(0);
+		// The wanted-status form the four filters now use.
+		expect(
+			offenders("x.ts", 'inArray(members.status, ["active", "inactive"])'),
+		).toHaveLength(0);
 	});
 });
 
