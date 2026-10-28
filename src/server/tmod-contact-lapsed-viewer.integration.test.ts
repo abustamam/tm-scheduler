@@ -2,18 +2,23 @@
  * The TMOD contact gate, from the VIEWER's side (#1343).
  *
  * `loadTmodPanelData` grants the contact roster only when the signed-in
- * viewer's ACTIVE membership is the meeting's Toastmaster. A viewer whose only
- * membership in the club is inactive or former has none, so they get names and
- * no contact, even though the caller asserts the Toastmaster's member id.
- * `meetings-contact-gate.guard.test.ts` pins the call's source shape; this
- * runs it.
+ * viewer's own active membership IS the meeting's Toastmaster. A viewer whose
+ * only membership in the club is inactive or former is not the Toastmaster, so
+ * they get names and no contact, even though the caller asserts the
+ * Toastmaster's member id. A Toastmaster whose own membership has lapsed gets
+ * nothing at all. `meetings-contact-gate.guard.test.ts` pins the call's source
+ * shape; this runs it.
  *
- * protects=a viewer with only an inactive or former membership in the club
- *   receives no phone or email from `loadTmodPanelData`;
- * fails_when=a missing active membership (`getActiveMembership` null) passes the
- *   `contactAllowed` check, or `getActiveMembership` stops filtering on active;
- * no_claim=the honour-system claim step (the claimed member's own status), which
- *   `tmod-panel-data.integration.test.ts` covers.
+ * protects=`contactAllowed` requires the viewer's own membership to BE the
+ *   Toastmaster's, so a viewer with a missing or other (inactive/former)
+ *   membership receives no phone or email; a lapsed (inactive/former)
+ *   Toastmaster gets `{ plan: [], roster: [] }`;
+ * fails_when=`membership?.id === tmodMemberId` stops requiring a membership
+ *   (a null membership passes), or the claimed-status check stops rejecting a
+ *   lapsed Toastmaster;
+ * no_claim=that `getActiveMembership` filters on active status, which
+ *   `membership-resolution.integration.test.ts` ("null when the only membership
+ *   is not active") pins directly; it is unobservable through this function.
  */
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -90,6 +95,23 @@ describe.skipIf(!hasTestDb)("loadTmodPanelData contact gate (#1343)", () => {
 			expect(roster.every((r) => r.phone === null && r.email === null)).toBe(
 				true,
 			);
+		});
+	}
+
+	for (const status of ["inactive", "former"] as const) {
+		it(`gives a Toastmaster whose own membership is ${status} nothing`, async () => {
+			await testDb
+				.update(members)
+				.set({ status })
+				.where(eq(members.id, seed.adminMemberId));
+
+			const result = await loadTmodPanelData({
+				meetingId: seed.meetingId,
+				memberId: seed.adminMemberId,
+				sessionUserId: seed.adminUserId,
+			});
+
+			expect(result).toEqual({ plan: [], roster: [] });
 		});
 	}
 });
