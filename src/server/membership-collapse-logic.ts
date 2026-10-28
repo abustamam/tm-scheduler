@@ -158,14 +158,14 @@ export async function collapseMemberships(
 	const otherSide = listedSide === keeper ? absorbed : keeper;
 
 	const statuses = [keeper.status, absorbed.status];
-	// Active wins, then inactive (they may renew), then former (#1239). Whether
-	// FORMER should outrank inactive (#1327 item 4) is an open decision: the
-	// existing `members-former.integration.test.ts` asserts this order.
+	// Active wins, then former, then inactive (#1327): an End is never reversed
+	// by a merge with a stale inactive duplicate. Only an active row (a renewal)
+	// brings the person back.
 	const mergedStatus = statuses.includes("active")
 		? ("active" as const)
-		: statuses.includes("inactive")
-			? ("inactive" as const)
-			: ("former" as const);
+		: statuses.includes("former")
+			? ("former" as const)
+			: ("inactive" as const);
 
 	// --- Reconcile the surviving keeper row --------------------------------
 	// club_role: higher wins (admin > member). status: active if EITHER is
@@ -183,10 +183,15 @@ export async function collapseMemberships(
 					? "admin"
 					: "member",
 			status: mergedStatus,
-			// The keeper's end date wins. Keeping the LATER of two (#1327 item 4) is
-			// an open decision: `members-former.integration.test.ts` asserts this.
+			// The LATER end date wins (#1327); a null (unknown) yields to a known one.
 			endedAt:
-				mergedStatus === "former" ? (keeper.endedAt ?? absorbed.endedAt) : null,
+				mergedStatus === "former"
+					? keeper.endedAt && absorbed.endedAt
+						? keeper.endedAt > absorbed.endedAt
+							? keeper.endedAt
+							: absorbed.endedAt
+						: (keeper.endedAt ?? absorbed.endedAt)
+					: null,
 			joinedAt: earliestDate(keeper.joinedAt, absorbed.joinedAt),
 			preferredName: keeper.preferredName ?? absorbed.preferredName,
 			// #939: willing to mentor if EITHER row said so. The flag is the

@@ -745,8 +745,11 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 				closedOfficerPositions.push(t.position);
 			}
 		}
-		// Free up their upcoming roles so the VPE can re-fill them; past slots
-		// and a completed meeting's slots stay assigned (history preserved).
+		// Free up their roles so the VPE can re-fill them. An End (#1327) releases
+		// every meeting that is not completed, whatever the clock says: one in
+		// progress, or past but not yet closed, still has live tools. Going
+		// inactive keeps the wall clock. A completed meeting's slots stay
+		// assigned (history preserved).
 		// A cancelled future meeting is released too (#1057, #1154).
 		if (releasing) {
 			const upcoming = await tx
@@ -756,7 +759,9 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 				.where(
 					and(
 						eq(roleSlots.assignedMemberId, input.memberId),
-						gte(meetings.scheduledAt, new Date()),
+						ending
+							? ne(meetings.status, "completed")
+							: gte(meetings.scheduledAt, new Date()),
 					),
 				);
 			for (const s of upcoming) {

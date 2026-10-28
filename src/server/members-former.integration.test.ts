@@ -498,7 +498,7 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 
 	// protects=a former member's past role slot is untouched by ending, still on their profile and the grid's name lookup;
 	// fails_when=history is deleted/released or the profile is unreachable;
-	// no_claim=a PAST meeting's slot only; rendering of the printed agenda is not exercised.
+	// no_claim=a past COMPLETED meeting's slot only (End releases a past meeting that is not completed, next test); rendering of the printed agenda is not exercised.
 	it("history survives: past slot, profile, grid names", async () => {
 		const id = await addMember("Hal History");
 		const [past] = await testDb
@@ -506,6 +506,7 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 			.values({
 				clubId: seed.clubId,
 				scheduledAt: new Date(Date.now() - 3 * 86400000),
+				status: "completed",
 				theme: "Past",
 			} as typeof meetings.$inferInsert)
 			.returning({ id: meetings.id });
@@ -527,6 +528,32 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 			pastCount: 4,
 		});
 		expect(grid.memberNames.map((m) => m.id)).toContain(id);
+	});
+
+	// protects=ending releases a role on a PAST meeting that is not completed (#1327), while a completed one keeps its slot;
+	// fails_when=End keys the release on scheduledAt >= now again, or releases a completed meeting;
+	// no_claim=going inactive (wall-clock release, member-status.integration.test.ts).
+	it("End releases a past-but-not-completed meeting's role", async () => {
+		const id = await addMember("Nora Notclosed");
+		const [past] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: seed.clubId,
+				scheduledAt: new Date(Date.now() - 3 * 86400000),
+				theme: "Past, open",
+			} as typeof meetings.$inferInsert)
+			.returning({ id: meetings.id });
+		await testDb
+			.update(roleSlots)
+			.set({ meetingId: past.id, assignedMemberId: id, status: "claimed" })
+			.where(eq(roleSlots.id, seed.slotId));
+		await set(id, "former");
+		const [slot] = await testDb
+			.select()
+			.from(roleSlots)
+			.where(eq(roleSlots.id, seed.slotId));
+		expect(slot.assignedMemberId).toBeNull();
+		expect(slot.status).toBe("open");
 	});
 
 	// protects=guest-convert reactivates a former membership: active, ended_at cleared, reactivatedFrom "former";
@@ -588,11 +615,16 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 			return { guestId, email };
 		};
 
-		// protects=collapsing two memberships keeps the best status (active > inactive > former) and a former result keeps its ended_at;
-		// fails_when=a former row outranks an inactive one, or the merged former row loses its date;
+		// protects=collapsing two memberships keeps the best status (active > former > inactive, #1327), a former result keeps the LATER ended_at, and an End is never reversed by a stale inactive duplicate in either merge direction;
+		// fails_when=inactive outranks former again, or the keeper's earlier date beats a later absorbed one;
 		// no_claim=the rest of the merge (slots, notes) is covered by the collapse suites.
-		it("collapseMemberships: active > inactive > former, endedAt kept", async () => {
-			const merge = async (a: Status, b: Status, aEnd?: string) => {
+		it("collapseMemberships: active > former > inactive, later endedAt wins", async () => {
+			const merge = async (
+				a: Status,
+				b: Status,
+				aEnd?: string,
+				bEnd?: string,
+			) => {
 				const keeper = await addMember(
 					`K ${a}`,
 					a,
@@ -601,7 +633,7 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 				const absorbed = await addMember(
 					`A ${b}`,
 					b,
-					b === "former" ? { endedAt: "2021-05-05" } : {},
+					bEnd ? { endedAt: bEnd } : {},
 				);
 				await testDb.transaction((tx) =>
 					collapseMemberships(tx, seed.clubId, keeper, absorbed),
@@ -611,13 +643,35 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 			expect((await merge("former", "active", "2020-01-01")).status).toBe(
 				"active",
 			);
-			const inactive = await merge("former", "inactive", "2020-01-01");
-			expect(inactive.status).toBe("inactive");
-			expect(inactive.endedAt).toBeNull();
-			const former = await merge("former", "former", "2020-01-01");
-			expect(former.status).toBe("former");
-			expect(former.endedAt).toBe("2020-01-01");
-			const fallback = await merge("former", "former");
+			// The state the bug leaves: an ended member and a stale inactive duplicate.
+			const endedKeeper = await merge("former", "inactive", "2020-01-01");
+			expect(endedKeeper.status).toBe("former");
+			expect(endedKeeper.endedAt).toBe("2020-01-01");
+			const endedAbsorbed = await merge(
+				"inactive",
+				"former",
+				undefined,
+				"2021-05-05",
+			);
+			expect(endedAbsorbed.status).toBe("former");
+			expect(endedAbsorbed.endedAt).toBe("2021-05-05");
+			expect((await merge("inactive", "inactive")).status).toBe("inactive");
+			// Two end dates: the later wins from either side.
+			const keeperLater = await merge(
+				"former",
+				"former",
+				"2022-02-02",
+				"2021-05-05",
+			);
+			expect(keeperLater.endedAt).toBe("2022-02-02");
+			const absorbedLater = await merge(
+				"former",
+				"former",
+				"2020-01-01",
+				"2021-05-05",
+			);
+			expect(absorbedLater.endedAt).toBe("2021-05-05");
+			const fallback = await merge("former", "former", undefined, "2021-05-05");
 			expect(fallback.endedAt).toBe("2021-05-05");
 		});
 
@@ -894,6 +948,7 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 				.values({
 					clubId: seed.clubId,
 					scheduledAt: new Date(Date.now() - 5 * 86400000),
+					status: "completed",
 					theme: "Past",
 				} as typeof meetings.$inferInsert)
 				.returning({ id: meetings.id });
