@@ -17,6 +17,7 @@ import {
 	lt,
 	min,
 	ne,
+	notExists,
 	or,
 	type SQL,
 	sql,
@@ -34,8 +35,11 @@ import {
 	guestInvites,
 	guests,
 	meetingAttendance,
+	meetingAwards,
 	meetingCandidateDisqualifications,
 	meetings,
+	meetingVoteSessions,
+	meetingVotes,
 	memberDues,
 	members,
 	officerTerms,
@@ -3568,6 +3572,57 @@ export const UNDO_GUEST_ATTRIBUTION_CHECKS: UndoCascadeCheck[] = [
 	},
 ];
 
+/**
+ * Refusal when the member is a candidate or voter in a ballot whose award is not
+ * yet recorded (#1323). `meeting_votes.candidate_member_id` and `voter_member_id`
+ * are SET NULL, and the tally drops a candidate-less vote, so the delete would
+ * change the count of a vote still being taken. A recorded award closes the
+ * ballot; until then the officer finishes it first.
+ */
+export const UNDO_OPEN_BALLOT_MESSAGE =
+	"This member is a candidate or voter in a ballot whose award has not been " +
+	"recorded yet, so undoing the conversion would drop their votes from the " +
+	"count. Record the award first, then undo.";
+
+/** A vote naming the member, as candidate or voter, in a ballot (a vote session)
+ *  of this club whose category has no recorded award on that meeting (#1323). */
+async function hasOpenBallotVote(
+	tx: DbOrTx,
+	memberId: string,
+	ctx: UndoCheckContext,
+): Promise<boolean> {
+	const rows = await tx
+		.select({ v: meetingVotes.id })
+		.from(meetingVotes)
+		.innerJoin(
+			meetingVoteSessions,
+			eq(meetingVoteSessions.id, meetingVotes.sessionId),
+		)
+		.innerJoin(meetings, eq(meetings.id, meetingVoteSessions.meetingId))
+		.where(
+			and(
+				eq(meetings.clubId, ctx.clubId),
+				or(
+					eq(meetingVotes.candidateMemberId, memberId),
+					eq(meetingVotes.voterMemberId, memberId),
+				),
+				notExists(
+					tx
+						.select({ one: meetingAwards.id })
+						.from(meetingAwards)
+						.where(
+							and(
+								eq(meetingAwards.meetingId, meetingVoteSessions.meetingId),
+								eq(meetingAwards.category, meetingVoteSessions.category),
+							),
+						),
+				),
+			),
+		)
+		.limit(1);
+	return rows.length > 0;
+}
+
 /** Keys the undo itself rewrites. The reason is what a reader of the table sees. */
 export const UNDO_HANDLED_KEYS: Record<string, string> = {
 	"guests.converted_membership_id":
@@ -3584,12 +3639,12 @@ export const UNDO_DEFERRED_KEYS: Record<
 	"meeting_votes.candidate_member_id": {
 		issue: 1323,
 		reason:
-			"the delete nulls a ballot's candidate and the tally drops it; #1323 decides refuse, re-point or accept",
+			"refused while the ballot's award is unrecorded, by `hasOpenBallotVote` in the undo (#1323)",
 	},
 	"meeting_votes.voter_member_id": {
 		issue: 1323,
 		reason:
-			"the delete nulls a ballot's voter; #1323 decides refuse, re-point or accept",
+			"refused while the ballot's award is unrecorded, by `hasOpenBallotVote` in the undo (#1323)",
 	},
 };
 
@@ -4369,6 +4424,15 @@ export async function applyUndoGuestConversion(
 						: UNDO_MEMBER_HAS_HISTORY_MESSAGE(check.label),
 				);
 			}
+		}
+
+		// Votes still being counted (#1323): the delete nulls them. Only when the
+		// conversion created the membership; the reuse path deletes nothing.
+		if (
+			record.createdMembership &&
+			(await hasOpenBallotVote(tx, membershipId, checkCtx))
+		) {
+			throw new Error(UNDO_OPEN_BALLOT_MESSAGE);
 		}
 
 		if (record.createdMembership) {
