@@ -5,7 +5,7 @@
  * `people.user_id` carries only a plain non-unique index (`people_user_idx`),
  * so one human reachable through two Person rows in one club is representable
  * and a single-row pick off that column is arbitrary unless it is ordered.
- * #471 fixed `getMembership`; #804 found the same defect in
+ * #471 fixed `getActiveMembership`; #804 found the same defect in
  * `resolveAdminGrant`, written after it, and fixed it by COPYING the order —
  * deliberately, because routing the hot path through the guard resolver would
  * change its cost and its returned shape. #822 then found two more and copied
@@ -356,7 +356,7 @@ describe("single-row membership picks are ordered (#804)", () => {
 		expect(keys).toContain(
 			"src/server/meeting-authz-logic.ts:resolveAdminGrant",
 		);
-		expect(keys).toContain("src/server/guards.ts:getMembership");
+		expect(keys).toContain("src/server/guards.ts:getActiveMembership");
 		expect(keys).toContain(
 			"src/server/project-picker-logic.ts:viewerMaySeeProgress",
 		);
@@ -371,7 +371,7 @@ describe("single-row membership picks are ordered (#804)", () => {
 			.map((p) => p.where);
 		expect(
 			offenders,
-			`These keep ONE membership row out of a people.user_id lookup with no ORDER BY, so which row they get is arbitrary — the defect #471 fixed in getMembership and #804 fixed in resolveAdminGrant. Order by membershipPickOrder() from membership-pick-order.ts (active, admin, open officer terms, oldest, id), or add "<file>:<fn>" to FILED with the issue that owns it.`,
+			`These keep ONE membership row out of a people.user_id lookup with no ORDER BY, so which row they get is arbitrary — the defect #471 fixed in getActiveMembership and #804 fixed in resolveAdminGrant. Order by membershipPickOrder() from membership-pick-order.ts (active, admin, open officer terms, oldest, id), or add "<file>:<fn>" to FILED with the issue that owns it.`,
 		).toEqual([]);
 	});
 
@@ -399,7 +399,7 @@ describe("single-row membership picks are ordered (#804)", () => {
 		// AND joined.
 		expect(picks.filter((p) => p.shared && p.joined).map((p) => p.key)).toEqual(
 			expect.arrayContaining([
-				"src/server/guards.ts:getMembership",
+				"src/server/guards.ts:getActiveMembership",
 				"src/server/meeting-authz-logic.ts:resolveAdminGrant",
 				"src/server/project-picker-logic.ts:viewerMaySeeProgress",
 				"src/server/progress-marks-logic.ts:selfMemberIdInClub",

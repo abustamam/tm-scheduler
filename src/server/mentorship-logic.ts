@@ -57,7 +57,7 @@ import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import {
 	assertStillClubAdmin,
-	getMembership,
+	getActiveMembership,
 	NO_PERMISSION_MESSAGE,
 	NOT_A_MEMBER_MESSAGE,
 	requireClubRole,
@@ -1047,10 +1047,9 @@ async function assertStillMayAnswer(
 		}
 		return;
 	}
-	const membership = await getMembership(input.userId, req.clubId, tx);
+	const membership = await getActiveMembership(input.userId, req.clubId, tx);
 	if (
 		!membership ||
-		membership.status !== "active" ||
 		membership.archivedAt !== null ||
 		membership.id !== req.mentorMemberId ||
 		membership.id !== input.actorMemberId

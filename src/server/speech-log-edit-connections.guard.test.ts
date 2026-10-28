@@ -46,7 +46,7 @@ describe("applySpeechLogEdit reads inside its transaction on `tx` (#1159)", () =
 	it.each([
 		["the speaker check", /\bisSpeakerOfSpeech\(\s*tx\s*,/],
 		["the admin re-check", /\bassertStillClubAdmin\(\s*tx\s*,/],
-		["the membership read", /\bgetMembership\([^)]*,\s*tx\s*\)/],
+		["the membership read", /\bgetActiveMembership\([^)]*,\s*tx\s*\)/],
 		["the slot read", /\breadSlot\(\s*tx\s*,/],
 		["the meeting lock", /\blockMeetingForSlotEdit\(\s*tx\s*,/],
 		["the archive check", /\bassertClubNotArchived\([^)]*,\s*tx\s*\)/],

@@ -9,7 +9,7 @@ import { parseViewAs, VIEW_AS_COOKIE } from "#/lib/view-as";
 import type { ReleasedSlot } from "./availability-logic";
 import { isReadableClub } from "./club-readable-logic";
 import {
-	getMembership,
+	getActiveMembership,
 	getSessionUser,
 	requireClubRole,
 	requireUser,
@@ -97,8 +97,7 @@ export const getMinutes = createServerFn({ method: "GET" })
 		if (!(await isReadableClub(clubId))) return empty;
 		// A membership that is not active counts as no membership: it is neither a
 		// member's read of the minutes nor an admin's.
-		const found = await getMembership(sessionUser.id, clubId);
-		const membership = found?.status === "active" ? found : null;
+		const membership = await getActiveMembership(sessionUser.id, clubId);
 		// Read-write impersonation (#246): a superadmin acting as admin has no
 		// membership but may still edit minutes. Only checked when there's no real
 		// membership (zero cost for real members).

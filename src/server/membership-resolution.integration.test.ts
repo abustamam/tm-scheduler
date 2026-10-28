@@ -1,5 +1,5 @@
 /**
- * Regression (#471): `getMembership` resolved the AUTHORIZATION-bearing
+ * Regression (#471): `getActiveMembership` resolved the AUTHORIZATION-bearing
  * membership with an unordered `.limit(1)`.
  *
  * `people.user_id` is not unique (ADR-0008 / #329 — duplicates predate
@@ -34,10 +34,10 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { getMembership } = await import("./guards");
+const { getActiveMembership } = await import("./guards");
 
 describe.skipIf(!hasTestDb)(
-	"getMembership with duplicate Persons (#471)",
+	"getActiveMembership with duplicate Persons (#471)",
 	() => {
 		let club: SeededClub;
 		let userId: string;
@@ -95,7 +95,15 @@ describe.skipIf(!hasTestDb)(
 			return memberRow.id;
 		}
 
-		it("prefers an ACTIVE membership over a lapsed one", async () => {
+		it("returns null when the only membership is not active (#1343)", async () => {
+			await addMembership({ clubRole: "admin", status: "inactive" });
+			expect(await getActiveMembership(userId, club.clubId)).toBeNull();
+		});
+
+		// Since #1343 this passes on the WHERE filter alone: the lapsed row is no
+		// longer a candidate, so the pick order's "active first" key is not what
+		// is under test here (key 1 is now defence in depth).
+		it("never returns a lapsed membership when an active one exists", async () => {
 			const lapsed = await addMembership({
 				clubRole: "member",
 				status: "inactive",
@@ -105,7 +113,7 @@ describe.skipIf(!hasTestDb)(
 				status: "active",
 			});
 
-			const got = await getMembership(userId, club.clubId);
+			const got = await getActiveMembership(userId, club.clubId);
 			expect(got?.id).toBe(active);
 			expect(got?.id).not.toBe(lapsed);
 			expect(got?.status).toBe("active");
@@ -123,7 +131,7 @@ describe.skipIf(!hasTestDb)(
 				status: "active",
 			});
 
-			const got = await getMembership(userId, club.clubId);
+			const got = await getActiveMembership(userId, club.clubId);
 			expect(got?.id).toBe(admin);
 			expect(got?.id).not.toBe(plain);
 			expect(got?.clubRole).toBe("admin");
@@ -143,7 +151,7 @@ describe.skipIf(!hasTestDb)(
 				status: "active",
 			});
 
-			const got = await getMembership(userId, club.clubId);
+			const got = await getActiveMembership(userId, club.clubId);
 			expect(got?.id).toBe(active);
 			expect(got?.id).not.toBe(staleAdmin);
 			expect(got?.clubRole).toBe("member");
@@ -167,7 +175,7 @@ describe.skipIf(!hasTestDb)(
 				termStart: new Date("2026-01-01"),
 			});
 
-			const got = await getMembership(userId, club.clubId);
+			const got = await getActiveMembership(userId, club.clubId);
 			expect(got?.id).toBe(officer);
 			expect(got?.id).not.toBe(plain);
 		});
@@ -194,7 +202,7 @@ describe.skipIf(!hasTestDb)(
 				termStart: new Date("2026-01-01"),
 			});
 
-			expect((await getMembership(userId, club.clubId))?.id).toBe(
+			expect((await getActiveMembership(userId, club.clubId))?.id).toBe(
 				openTermHolder,
 			);
 		});
@@ -221,9 +229,9 @@ describe.skipIf(!hasTestDb)(
 			}
 
 			const answers = new Set([
-				(await getMembership(userId, club.clubId))?.id,
-				(await getMembership(userId, club.clubId))?.id,
-				(await getMembership(userId, club.clubId))?.id,
+				(await getActiveMembership(userId, club.clubId))?.id,
+				(await getActiveMembership(userId, club.clubId))?.id,
+				(await getActiveMembership(userId, club.clubId))?.id,
 			]);
 			// Two queries in one request disagreeing is what flips an authz answer.
 			expect(answers.size).toBe(1);
@@ -252,7 +260,7 @@ describe.skipIf(!hasTestDb)(
 				},
 			]);
 
-			const got = await getMembership(userId, club.clubId);
+			const got = await getActiveMembership(userId, club.clubId);
 			expect(got).toEqual({
 				id: officer,
 				clubId: club.clubId,
@@ -279,7 +287,7 @@ describe.skipIf(!hasTestDb)(
 				.returning({ id: people.id });
 			madePeople.push(orphan.id);
 
-			expect(await getMembership(userId, club.clubId)).toBeNull();
+			expect(await getActiveMembership(userId, club.clubId)).toBeNull();
 		});
 
 		it("does not leak another club's membership", async () => {
@@ -304,7 +312,7 @@ describe.skipIf(!hasTestDb)(
 					status: "active",
 				});
 
-				const got = await getMembership(userId, club.clubId);
+				const got = await getActiveMembership(userId, club.clubId);
 				expect(got?.clubId).toBe(club.clubId);
 				expect(got?.clubRole).toBe("admin");
 			} finally {

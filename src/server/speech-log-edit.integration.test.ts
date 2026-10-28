@@ -56,12 +56,9 @@ vi.mock("@tanstack/react-start", () => ({
 
 let sessionUserId: string | null = null;
 let request = { headers: new Headers() };
-/** When set, every `getRequest()` returns a NEW object (see the impersonator case). */
-let freshRequestPerCall = false;
 vi.mock("@tanstack/react-start/server", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-start/server")>()),
-	getRequest: () =>
-		freshRequestPerCall ? { headers: request.headers } : request,
+	getRequest: () => request,
 }));
 vi.mock("#/lib/auth", () => ({
 	auth: {
@@ -88,7 +85,6 @@ describe.skipIf(!hasTestDb)("edit a speech from the speech log (#1159)", () => {
 
 	beforeEach(async () => {
 		sessionUserId = null;
-		freshRequestPerCall = false;
 		request = { headers: new Headers() };
 		extraUserIds = [];
 		extraClubIds = [];
@@ -231,6 +227,7 @@ describe.skipIf(!hasTestDb)("edit a speech from the speech log (#1159)", () => {
 		return testDb
 			.select({
 				actorMemberId: activityLog.actorMemberId,
+				impersonatedBy: activityLog.impersonatedBy,
 				targetId: activityLog.targetId,
 				detail: activityLog.detail,
 			})
@@ -429,17 +426,13 @@ describe.skipIf(!hasTestDb)("edit a speech from the speech log (#1159)", () => {
 			const { slotId } = await emptyMemberSlot(seed.memberId);
 			await setStatus("completed");
 			sessionUserId = lapsed.userId;
-			// The impersonation marker is keyed by the request object. A new object
-			// per call leaves it unset, so the row carries exactly the actor id this
-			// site passes, and the site's own status test is what the assertion reads.
-			freshRequestPerCall = true;
-
 			await editSpeechFromLog({ data: { ...withProject(), slotId } });
 
 			expect((await snapshot(slotId)).speech?.projectId).toBe(projectId);
 			const log = await editLog();
 			expect(log).toHaveLength(1);
 			expect(log[0]?.actorMemberId).toBeNull();
+			expect(log[0]?.impersonatedBy).toBe(lapsed.userId);
 		});
 
 		it("a title-only edit keeps the free-text path, project, level and introduction the form did not send", async () => {

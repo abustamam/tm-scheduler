@@ -35,7 +35,7 @@ import { logActivity } from "./activity";
 import type { AttendancePlanStatus as PlanStatus } from "./attendance-plan-logic";
 import { listPlanForMeetings } from "./attendance-plan-logic";
 import { isReadableClub } from "./club-readable-logic";
-import { getMembership } from "./guards";
+import { getActiveMembership } from "./guards";
 import { loadTmodMemberId } from "./meeting-authz-logic";
 import {
 	loadRosterWithContact,
@@ -1220,10 +1220,9 @@ export async function loadTmodPanelData(input: {
 	// gate and the write gate answer the same way for the same person — the "two
 	// gates disagree" shape #560 records.
 	const membership = input.sessionUserId
-		? await getMembership(input.sessionUserId, row.clubId)
+		? await getActiveMembership(input.sessionUserId, row.clubId)
 		: null;
-	const contactAllowed =
-		membership?.status === "active" && membership.id === tmodMemberId;
+	const contactAllowed = membership?.id === tmodMemberId;
 	if (contactAllowed) {
 		return { plan, roster: await loadRosterWithContact(row.clubId) };
 	}

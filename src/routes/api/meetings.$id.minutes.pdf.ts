@@ -6,7 +6,7 @@ import { cap } from "#/lib/cap";
 import { formatShortDate } from "#/lib/format";
 import { MINUTES_RENDER_CAPS } from "#/lib/minutes-render-caps";
 import { isReadableClub } from "#/server/club-readable-logic";
-import { getMembership, getSessionUser } from "#/server/guards";
+import { getActiveMembership, getSessionUser } from "#/server/guards";
 import { getMeetingClubId, getMeetingStatus } from "#/server/minutes-logic";
 import { renderMinutesPdf } from "#/server/minutes-pdf-logic";
 import { isEffectiveAdmin } from "#/server/officers-logic";
@@ -53,10 +53,10 @@ export const Route = createFileRoute("/api/meetings/$id/minutes/pdf")({
 				if (!(await isReadableClub(clubId))) {
 					return new Response("Meeting not found.", { status: 404 });
 				}
-				const membership = await getMembership(sessionUser.id, clubId);
-				// `status` matters, not just presence: a LAPSED member of the club could
-				// otherwise still download the minutes.
-				if (!membership || membership.status !== "active") {
+				const membership = await getActiveMembership(sessionUser.id, clubId);
+				// Active only (`getActiveMembership`): a LAPSED member could otherwise
+				// still download the minutes.
+				if (!membership) {
 					return new Response("Not a member of this club.", { status: 403 });
 				}
 				const status = await getMeetingStatus(meetingId);
