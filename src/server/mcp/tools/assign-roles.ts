@@ -66,6 +66,7 @@ import {
 import { isMeetingLocked } from "#/lib/meeting-lifecycle";
 import { applyAssignGuestToSlot } from "#/server/guests-logic";
 import { lockMeetingForSlotEdit } from "#/server/meeting-slot-lock";
+import { lockMembershipsAgainstMerge } from "#/server/membership-merge-lock";
 import { reassignSlotCore, releaseSlotCore } from "#/server/slots-logic";
 import { authorizeTokenForMeeting } from "../authz-logic";
 import { type McpBlockingItem, McpError } from "../errors";
@@ -142,6 +143,37 @@ export const assignRolesTool: McpToolDefinition = {
 		return db.transaction(async (tx) => {
 			const blocking: McpBlockingItem[] = [];
 
+			// The assignment targets' merge lock (SHARED), BEFORE the meeting lock
+			// (#1327): a removal holds the merge lock EXCLUSIVE and then waits for
+			// the meeting, so taking it after the meeting would have this batch
+			// hold the meeting while waiting for the merge lock. The same order
+			// `applyMemberRemove` uses (merge lock, then meetings), so it is
+			// ordered consistently; a merge-lock wait is advisory and bounded (5s, then
+			// `CLUB_BUSY_MESSAGE`) and, like any lock, takes part in deadlock
+			// detection, but this batch holds no row lock while it waits. No Person lock: see
+			// `lockMemberForAssignment`. Only members of THIS club that exist: an
+			// unknown or foreign id is reported as NOT_A_MEMBER further down, not
+			// refused here. `reassignSlotCore` re-takes each of these.
+			const wanted = [
+				...new Set(
+					args.assignments.flatMap((a) =>
+						"memberId" in a ? [a.memberId] : [],
+					),
+				),
+			];
+			if (wanted.length > 0) {
+				const inClub = await tx
+					.select({ id: members.id })
+					.from(members)
+					.where(
+						and(eq(members.clubId, club.clubId), inArray(members.id, wanted)),
+					);
+				await lockMembershipsAgainstMerge(
+					tx,
+					inClub.map((m) => m.id),
+				);
+			}
+
 			// Duplicates are decided from the input alone, before any read — two
 			// instructions about one slot means one of them was a mistake, and
 			// applying the later one silently picks which.
@@ -201,6 +233,15 @@ export const assignRolesTool: McpToolDefinition = {
 				});
 			}
 
+			// The target members first, `FOR SHARE` (#1327): `applySetMemberStatus`
+			// holds a member `FOR NO KEY UPDATE` and then waits for their slots, so
+			// the member row is taken before the slot rows, never after. An ended
+			// member drops out of this read and is reported as NOT_A_MEMBER.
+			const targetMembers = await loadTargetMembers(
+				tx,
+				club.clubId,
+				args.assignments,
+			);
 			const locked = await lockSlots(
 				tx,
 				args.meetingId,
@@ -222,11 +263,6 @@ export const assignRolesTool: McpToolDefinition = {
 				}
 			}
 
-			const targetMembers = await loadTargetMembers(
-				tx,
-				club.clubId,
-				args.assignments,
-			);
 			const targetGuests = await loadTargetGuests(
 				tx,
 				club.clubId,
@@ -290,6 +326,9 @@ export const assignRolesTool: McpToolDefinition = {
 
 			for (const a of args.assignments) {
 				if ("memberId" in a) {
+					// The target's merge lock is already held (top of this
+					// transaction) and the member `FOR SHARE` (`loadTargetMembers`), so
+					// everything `reassignSlotCore` takes first is a re-take (#1327).
 					await reassignSlotCore(tx, {
 						slotId: a.slotId,
 						memberId: a.memberId,
@@ -453,7 +492,10 @@ async function loadTargetMembers(
 				// agenda either.
 				eq(members.status, "active"),
 			),
-		);
+		)
+		// In id order, locked `FOR SHARE` (#1327): see the call site.
+		.orderBy(asc(members.id))
+		.for("share");
 	return new Map(rows.map((r) => [r.id, r]));
 }
 

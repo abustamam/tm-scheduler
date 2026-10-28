@@ -25,6 +25,7 @@ import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { isRealSpeechTitle, TBA_SPEECH_TITLE } from "#/lib/speech-title";
 import {
 	isConnectorSelf,
+	MEMBER_NOT_ELIGIBLE_MESSAGE,
 	SIGN_IN_REQUIRED_MESSAGE,
 	type WriteProof,
 } from "#/lib/write-proof";
@@ -1171,14 +1172,19 @@ async function applyMoveSlot(
 		const neighbor =
 			input.direction === "up" ? ordered[pos - 1] : ordered[pos + 1];
 		if (!neighbor) throw new Error("No slot to swap with.");
-		await tx
-			.update(roleSlots)
-			.set({ slotIndex: neighbor.slotIndex })
-			.where(eq(roleSlots.id, self.id));
-		await tx
-			.update(roleSlots)
-			.set({ slotIndex: self.slotIndex })
-			.where(eq(roleSlots.id, neighbor.id));
+		// The two rows are written in id order, the order an End releases a
+		// member's slots in (`applySetMemberStatus`), so the two cannot wait on each
+		// other when one member holds both (#1327).
+		const swaps = [
+			{ id: self.id, slotIndex: neighbor.slotIndex },
+			{ id: neighbor.id, slotIndex: self.slotIndex },
+		].sort((a, b) => a.id.localeCompare(b.id));
+		for (const w of swaps) {
+			await tx
+				.update(roleSlots)
+				.set({ slotIndex: w.slotIndex })
+				.where(eq(roleSlots.id, w.id));
+		}
 		if (movedThePairedLineup) {
 			await realignEvaluatorPairs(
 				tx,
@@ -1892,6 +1898,45 @@ async function sessionIsHolder(
 }
 
 /**
+ * Lock the member a slot is about to be given to and refuse one who is not
+ * ACTIVE (#1327). `applySetMemberStatus` holds the row `FOR NO KEY UPDATE`,
+ * which conflicts with the `FOR SHARE` taken here, so an assignment either
+ * commits before End reads the member's slots (and End releases it) or waits
+ * for End and finds the member ended. The status was checked only BEFORE the
+ * transaction, so a claim queued behind End's lock landed after the release
+ * sweep.
+ *
+ * LOCK ORDER (ADR-0031): the caller's SHARED membership merge lock first
+ * (`lockMembershipsAgainstMerge`, so a removal or merge that holds it
+ * exclusive serializes the whole assignment), then THIS member row `FOR SHARE`,
+ * and only then the slot. No Person lock is taken here: a Person lock ahead of
+ * the member row made every assignment deadlock-prone against `mergePeople`
+ * (Person, then the exclusive merge lock) and against `scheduleSpeechRequest`
+ * (meeting, then Person). The cost is a known residual, deliberately accepted:
+ * a speaker claim holding the member `FOR SHARE` key-shares the Person for its
+ * speech, while `applyMemberEdit` holds that Person `FOR UPDATE` and then wants
+ * the member `NO KEY UPDATE`: 40P01 for one of them, retryable, no data lost.
+ * `FOR SHARE` on the member does not conflict with the key-share an
+ * activity-log insert takes on it, so a member releasing their own role is not
+ * blocked. MUST run before the first slot lock of the transaction. The refusal
+ * is the one wording every ineligible member gets (#1341).
+ */
+export async function lockMemberForAssignment(
+	tx: Tx,
+	memberId: string,
+): Promise<void> {
+	const [row] = await tx
+		.select({ status: members.status })
+		.from(members)
+		.where(eq(members.id, memberId))
+		.limit(1)
+		.for("share");
+	if (!row || row.status !== "active") {
+		throw new Error(MEMBER_NOT_ELIGIBLE_MESSAGE);
+	}
+}
+
+/**
  * Claim an OPEN slot for a member (#825).
  *
  * Extracted from `claimSlot`'s handler body for the reason #809 extracted
@@ -1935,10 +1980,13 @@ export async function claimSlotCore(
 	// role, before this transaction's first row lock. Without it a merge
 	// absorbing that membership could re-point the slots it saw, then have its
 	// DELETE set-null this claim's holder, leaving a slot `claimed` by nobody.
-	// Lock order: membership merge lock → (attendance lock) → row locks; see
+	// Lock order: membership merge lock → member row → (attendance
+	// lock) → slot rows; see `lockMemberForAssignment` and
 	// `membership-merge-lock.ts`. Refuses with `CLUB_BUSY_MESSAGE` when a merge
 	// absorbed the membership while this waited.
 	await lockMembershipsAgainstMerge(tx, [args.memberId]);
+	// #1327: the member must still be active, under a row lock End conflicts with.
+	await lockMemberForAssignment(tx, args.memberId);
 	const [slot] = await tx
 		.select({
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
@@ -2141,6 +2189,18 @@ export async function reassignSlotCore(
 		proof?: WriteProof;
 	},
 ): Promise<{ clubId: string }> {
+	// #1327: the new holder is locked (and checked active) BEFORE the slot, the
+	// order End takes: merge lock, member row, then slots. The SHARED
+	// merge lock comes first so a removal of that member (EXCLUSIVE, then its
+	// meetings, slots and the member row) serializes this whole reassignment
+	// instead of meeting it half-way: the member `FOR SHARE` held here against
+	// the removal's `FOR UPDATE`, while this waits for a slot it holds, was a
+	// cycle. `assign_roles` already holds the target `FOR SHARE` from
+	// `loadTargetMembers`, so for it this is a re-take, not a new lock.
+	// (`tx as Tx`: every production caller is in a transaction; a bare `db` in a
+	// test then takes locks that end with each statement, as before.)
+	await lockMembershipsAgainstMerge(tx as Tx, [args.memberId]);
+	await lockMemberForAssignment(tx as Tx, args.memberId);
 	// Lock only the role_slots row; FOR UPDATE on the joined role_definitions /
 	// meetings catalog rows is unnecessary (they don't change under us).
 	const [slot] = await tx

@@ -15,6 +15,7 @@ import {
 	activityLog,
 	clubs,
 	duesPeriods,
+	meetingAttendancePlan,
 	meetings,
 	members,
 	officerTerms,
@@ -61,6 +62,7 @@ const { loadClubMembers, loadMemberProfile } = await import(
 	"#/server/club-logic"
 );
 const { currentOfficersForClub } = await import("#/server/officer-terms-logic");
+const { isEffectiveAdmin } = await import("#/server/officers-logic");
 const { loadSeasonGrid } = await import("#/server/season-grid-logic");
 const { loadPublicPersonalMeetingView } = await import(
 	"#/server/personal-meeting-logic"
@@ -588,11 +590,16 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 			return { guestId, email };
 		};
 
-		// protects=collapsing two memberships keeps the best status (active > inactive > former) and a former result keeps its ended_at;
-		// fails_when=a former row outranks an inactive one, or the merged former row loses its date;
+		// protects=collapsing two memberships keeps the best status (active > former > inactive, #1327), a former result keeps the LATER ended_at, and an End is never reversed by a stale inactive duplicate in either merge direction;
+		// fails_when=inactive outranks former again, or the keeper's earlier date beats a later absorbed one;
 		// no_claim=the rest of the merge (slots, notes) is covered by the collapse suites.
-		it("collapseMemberships: active > inactive > former, endedAt kept", async () => {
-			const merge = async (a: Status, b: Status, aEnd?: string) => {
+		it("collapseMemberships: active > former > inactive, later endedAt wins", async () => {
+			const merge = async (
+				a: Status,
+				b: Status,
+				aEnd?: string,
+				bEnd?: string,
+			) => {
 				const keeper = await addMember(
 					`K ${a}`,
 					a,
@@ -601,7 +608,7 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 				const absorbed = await addMember(
 					`A ${b}`,
 					b,
-					b === "former" ? { endedAt: "2021-05-05" } : {},
+					bEnd ? { endedAt: bEnd } : {},
 				);
 				await testDb.transaction((tx) =>
 					collapseMemberships(tx, seed.clubId, keeper, absorbed),
@@ -611,14 +618,208 @@ describe.skipIf(!hasTestDb)("former membership (#1239)", () => {
 			expect((await merge("former", "active", "2020-01-01")).status).toBe(
 				"active",
 			);
-			const inactive = await merge("former", "inactive", "2020-01-01");
-			expect(inactive.status).toBe("inactive");
-			expect(inactive.endedAt).toBeNull();
-			const former = await merge("former", "former", "2020-01-01");
-			expect(former.status).toBe("former");
-			expect(former.endedAt).toBe("2020-01-01");
-			const fallback = await merge("former", "former");
+			// The state the bug leaves: an ended member and a stale inactive duplicate.
+			const endedKeeper = await merge("former", "inactive", "2020-01-01");
+			expect(endedKeeper.status).toBe("former");
+			expect(endedKeeper.endedAt).toBe("2020-01-01");
+			const endedAbsorbed = await merge(
+				"inactive",
+				"former",
+				undefined,
+				"2021-05-05",
+			);
+			expect(endedAbsorbed.status).toBe("former");
+			expect(endedAbsorbed.endedAt).toBe("2021-05-05");
+			expect((await merge("inactive", "inactive")).status).toBe("inactive");
+			// Two end dates: the later wins from either side.
+			const keeperLater = await merge(
+				"former",
+				"former",
+				"2022-02-02",
+				"2021-05-05",
+			);
+			expect(keeperLater.endedAt).toBe("2022-02-02");
+			const absorbedLater = await merge(
+				"former",
+				"former",
+				"2020-01-01",
+				"2021-05-05",
+			);
+			expect(absorbedLater.endedAt).toBe("2021-05-05");
+			const fallback = await merge("former", "former", undefined, "2021-05-05");
 			expect(fallback.endedAt).toBe("2021-05-05");
+		});
+
+		// protects=a merge that yields FORMER does what an End does: closes the keeper's open officer terms (an inactive Treasurer merged with a former duplicate), releases its upcoming roles and drops its upcoming plan answers, so reactivating it later grants no authority and a role is not left on a person who has left (#1327);
+		// fails_when=the merged former row keeps an open term (isEffectiveAdmin true after reactivation), a future slot, or a future plan row;
+		// no_claim=a merge that yields inactive or active (offices and roles stay), a PAST meeting's slot (history, covered by the End tests).
+		it("collapseMemberships yielding former closes offices, releases roles, drops plans", async () => {
+			const keeper = await addMember("Inactive Treasurer", "inactive");
+			const absorbed = await addMember("Former Twin", "former", {
+				endedAt: "2020-01-01",
+			});
+			await openTerm(keeper, "treasurer");
+			const [future] = await testDb
+				.select({ id: meetings.id })
+				.from(meetings)
+				.where(eq(meetings.id, seed.meetingId));
+			await testDb
+				.update(roleSlots)
+				.set({
+					assignedMemberId: absorbed,
+					status: "claimed",
+					claimedAt: new Date(),
+				})
+				.where(eq(roleSlots.id, seed.slotId));
+			await testDb.insert(meetingAttendancePlan).values({
+				memberId: absorbed,
+				meetingId: future.id,
+				status: "not_coming",
+			});
+			await testDb.transaction((tx) =>
+				collapseMemberships(tx, seed.clubId, keeper, absorbed, {
+					actorMemberId: seed.adminMemberId,
+				}),
+			);
+			const open = await testDb
+				.select()
+				.from(officerTerms)
+				.where(
+					and(
+						eq(officerTerms.membershipId, keeper),
+						sql`${officerTerms.termEnd} is null`,
+					),
+				);
+			expect(open).toEqual([]);
+			const [slot] = await testDb
+				.select()
+				.from(roleSlots)
+				.where(eq(roleSlots.id, seed.slotId));
+			expect(slot.assignedMemberId).toBeNull();
+			expect(slot.status).toBe("open");
+			expect(
+				await testDb
+					.select()
+					.from(meetingAttendancePlan)
+					.where(eq(meetingAttendancePlan.memberId, keeper)),
+			).toEqual([]);
+			// The state the bug left: reactivating handed the office, and admin, back.
+			await set(keeper, "active");
+			const row = await rowOf(keeper);
+			expect(row.status).toBe("active");
+			expect(await isEffectiveAdmin(testDb, row)).toBe(false);
+		});
+
+		// protects=a merge that yields FORMER records what End records, with the merger as actor: ONE member_edit row naming the closed offices and the released slot count, and the per-slot release row credited to the actor, not null (#1327, #1328);
+		// fails_when=the merge ends the member but writes no member_edit row, drops closedOfficerPositions or releasedSlots, or credits the release to null;
+		// no_claim=a merge of two already-ended rows with nothing to close (next test).
+		it("collapseMemberships yielding former records the End on the activity row", async () => {
+			const keeper = await addMember("Inactive Treasurer", "inactive");
+			const absorbed = await addMember("Former Twin", "former", {
+				endedAt: "2020-01-01",
+			});
+			await openTerm(keeper, "treasurer");
+			await testDb
+				.update(roleSlots)
+				.set({
+					assignedMemberId: absorbed,
+					status: "claimed",
+					claimedAt: new Date(),
+				})
+				.where(eq(roleSlots.id, seed.slotId));
+			await testDb.transaction((tx) =>
+				collapseMemberships(tx, seed.clubId, keeper, absorbed, {
+					actorMemberId: seed.adminMemberId,
+				}),
+			);
+			const rows = await testDb
+				.select()
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.clubId, seed.clubId),
+						eq(activityLog.targetId, keeper),
+						eq(activityLog.action, "member_edit"),
+					),
+				);
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.actorMemberId).toBe(seed.adminMemberId);
+			expect(rows[0]?.detail).toMatchObject({
+				change: "membership_ended",
+				memberId: keeper,
+				closedOfficerPositions: ["treasurer"],
+				releasedSlots: 1,
+				after: { status: "former" },
+				endedAt: { before: null, after: "2020-01-01" },
+			});
+			expect(rows[0]?.detail).not.toHaveProperty("releasedClubRole");
+			const [release] = await testDb
+				.select()
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.action, "release"),
+						eq(activityLog.targetId, seed.slotId),
+					),
+				);
+			expect(release?.actorMemberId).toBe(seed.adminMemberId);
+		});
+
+		// protects=a merge whose keeper is NOT yet former and yields former writes the End row even with nothing to close (inactive -> former is an End), in End's shape: endedAt before/after and the role it dropped; a keeper already former is not ended again, so no row (#1327);
+		// fails_when=the row is skipped for an empty release, or written for a keeper that was already former, or lacks endedAt / releasedClubRole;
+		// no_claim=a merge that closes something (test above).
+		it("collapseMemberships logs the End exactly when the keeper goes to former", async () => {
+			const logged = (id: string) =>
+				testDb
+					.select()
+					.from(activityLog)
+					.where(
+						and(
+							eq(activityLog.targetId, id),
+							eq(activityLog.action, "member_edit"),
+						),
+					);
+			// Inactive stored admin + former twin: ended, nothing to close.
+			const inactive = await addMember("Inactive Admin", "inactive", {
+				clubRole: "admin",
+			});
+			const twin = await addMember("Ended Twin", "former", {
+				endedAt: "2020-02-02",
+			});
+			await testDb.transaction((tx) =>
+				collapseMemberships(tx, seed.clubId, inactive, twin),
+			);
+			const ended = await logged(inactive);
+			expect(ended).toHaveLength(1);
+			expect(ended[0]?.detail).toMatchObject({
+				change: "membership_ended",
+				before: { status: "inactive", clubRole: "admin" },
+				after: { status: "former", clubRole: "member" },
+				endedAt: { before: null, after: "2020-02-02" },
+				releasedClubRole: "admin",
+				closedOfficerPositions: [],
+				releasedSlots: 0,
+			});
+			// Former keeper + inactive duplicate: already ended, no second End.
+			const former = await addMember("Ended One", "former", {
+				endedAt: "2020-01-01",
+			});
+			const dup = await addMember("Inactive Dup", "inactive");
+			await testDb.transaction((tx) =>
+				collapseMemberships(tx, seed.clubId, former, dup),
+			);
+			expect(await logged(former)).toEqual([]);
+			// Two ended rows: nothing logged either.
+			const one = await addMember("Ended A", "former", {
+				endedAt: "2020-01-01",
+			});
+			const two = await addMember("Ended B", "former", {
+				endedAt: "2020-02-02",
+			});
+			await testDb.transaction((tx) =>
+				collapseMemberships(tx, seed.clubId, one, two),
+			);
+			expect(await logged(one)).toEqual([]);
 		});
 
 		// protects=ending an admin writes club_role=member in the same UPDATE and the activity row records the role before and after (#1340);

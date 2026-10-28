@@ -28,9 +28,10 @@
  *
  * LOCK ORDER. Every taker takes this lock BEFORE its first row lock:
  *
- *   merge:  club write lock → THIS (exclusive, absorbed id) → row locks
- *   writer: [club write lock →] THIS (shared, each referenced member id, in id
- *           order) → row locks
+ *   merge:  club write lock → THIS (exclusive, keeper and absorbed ids, in
+ *           lock-key order) → Persons → member rows → slots (slot-id order)
+ *   writer: [club write lock →] THIS (shared, each referenced member id, in
+ *           lock-key order) → row locks
  *
  * Most covered writers take no club write lock. Two do, and take it FIRST, as
  * the merge does: `setMentorshipFocus` and `applyUnlinkGuestFromMember` (#1217),
@@ -51,6 +52,15 @@
  * namespace as the first int, so it can never equal the club write lock's key
  * or any bigint-keyed lock in the app. Two memberships whose ids share a
  * `hashtext` value share a key, which costs only a brief wait.
+ *
+ * ORDER OF SEVERAL LOCKS. A taker of more than one membership lock takes them
+ * in ascending order of the KEY (the `hashtext` value), never of the id text,
+ * and takes a key shared by two ids once. `hashtext` is not injective and does
+ * not preserve text order, so ordering by id can invert two takers: with ids
+ * a < b < c and hashtext(a) = hashtext(c), a ballot takes S(a) then S(b) while
+ * a merge (keeper b, absorbed c) sorted by id takes X(b) then X(c), which is
+ * the key of a: each waits on the other, 40P01. Ordered by key, both take the
+ * smaller key first.
  *
  * Waits are bounded by `takeAdvisoryLockWithin` (5s, then `CLUB_BUSY_MESSAGE`),
  * because a public writer waiting here holds a pooled connection.
@@ -95,7 +105,40 @@ export async function lockMembershipForMerge(
 }
 
 /**
- * A writer's half: take each membership's lock SHARED, in id order, then
+ * The distinct lock keys of these ids, ascending. Computed by Postgres so the
+ * order is exactly the one `hashtext` yields for the lock call. A JS array is
+ * wrapped in `sql.param`, or drizzle expands it per element.
+ */
+async function lockKeysInOrder(
+	tx: Tx,
+	memberIds: ReadonlyArray<string>,
+): Promise<number[]> {
+	const res = await tx.execute(
+		sql`select distinct hashtext(k) as h from unnest(${sql.param(memberIds.map(membershipLockKey))}::text[]) as k order by h`,
+	);
+	return res.rows.map((r) => Number((r as { h: number | string }).h));
+}
+
+/**
+ * The merge's half for several memberships (the keeper and the absorbed): take
+ * each lock EXCLUSIVE, in ascending lock-key order (see ORDER OF SEVERAL LOCKS
+ * above). Same placement rule as `lockMembershipForMerge`.
+ */
+export async function lockMembershipsForMerge(
+	tx: Tx,
+	memberIds: ReadonlyArray<string>,
+): Promise<void> {
+	if (memberIds.length === 0) return;
+	for (const h of await lockKeysInOrder(tx, memberIds)) {
+		await takeAdvisoryLockWithin(
+			tx,
+			sql`select pg_advisory_xact_lock(${MEMBERSHIP_MERGE_LOCK_NAMESPACE}::int4, ${h}::int4)`,
+		);
+	}
+}
+
+/**
+ * A writer's half: take each membership's lock SHARED, in lock-key order, then
  * re-read that every one still exists. A membership a merge absorbed while the
  * writer waited is gone, and the writer is refused with `CLUB_BUSY_MESSAGE`
  * before it writes anything; trying again after a reload finds the keeper.
@@ -112,12 +155,12 @@ export async function lockMembershipsAgainstMerge(
 				.filter((id): id is string => Boolean(id))
 				.map(membershipLockKey),
 		),
-	].sort();
+	];
 	if (ids.length === 0) return;
-	for (const id of ids) {
+	for (const h of await lockKeysInOrder(tx, ids)) {
 		await takeAdvisoryLockWithin(
 			tx,
-			sql`select pg_advisory_xact_lock_shared(${MEMBERSHIP_MERGE_LOCK_NAMESPACE}::int4, hashtext(${id}))`,
+			sql`select pg_advisory_xact_lock_shared(${MEMBERSHIP_MERGE_LOCK_NAMESPACE}::int4, ${h}::int4)`,
 		);
 	}
 	const found = await tx

@@ -11,7 +11,7 @@
 //
 // This lives in a `*-logic.ts` (never client-imported) so its `#/db` import
 // never leaks `pg` → `Buffer` into the browser bundle. See members-logic.ts.
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import type { db } from "#/db";
 import {
 	activityLog,
@@ -22,6 +22,7 @@ import {
 	meetingAttendancePlan,
 	meetingAwards,
 	meetingCandidateDisqualifications,
+	meetings,
 	meetingTimings,
 	meetingVoteSessions,
 	meetingVotes,
@@ -37,17 +38,70 @@ import {
 	speechRequests,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import { MEMBERSHIP_ENDED_CHANGE } from "#/lib/activity-format";
 import { earliestDate } from "#/lib/person-identity";
+import { logActivity } from "./activity";
+import { deletePlanRowsOfEndedMember } from "./attendance-plan-logic";
 import {
 	lockClubForWrite,
 	lockPersonsInOrder,
 	noKeyUpdate,
 } from "./club-write-lock";
 import { RECORD_CHANGED_MESSAGE } from "./guests-logic";
-import { lockMembershipForMerge } from "./membership-merge-lock";
+import { meetingAcceptsWrite } from "./meeting-write-gate";
+import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
+import { lockMembershipsForMerge } from "./membership-merge-lock";
 
 /** A drizzle transaction handle (the arg the `db.transaction` callback gets). */
 type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+/** The later of two club-local date keys (`members.ended_at`); a null (unknown)
+ *  yields to a known one. The `Date` twin is `earliestDate`
+ *  (`#/lib/person-identity`). */
+function latestDate(a: string | null, b: string | null): string | null {
+	if (!a) return b;
+	if (!b) return a;
+	return a > b ? a : b;
+}
+
+/**
+ * Close every open officer term of a membership: the office an End takes away
+ * (#1239), also what a merge that yields a `former` membership must do (#1327),
+ * or reactivating that member later hands an open Treasurer term, and with it
+ * admin authority, back. A term that has not begun yet ends when it starts,
+ * never before: a start on a later club-local day, or later today, both give
+ * `term_end = term_start`. Every other term ends at `now`. Returns the closed
+ * positions, for the activity detail.
+ */
+export async function endOfficerTermsOfEndedMember(
+	tx: Tx,
+	memberId: string,
+	now: Date,
+): Promise<string[]> {
+	const open = await tx
+		.select({
+			id: officerTerms.id,
+			termStart: officerTerms.termStart,
+			position: officerTerms.position,
+		})
+		.from(officerTerms)
+		.where(
+			and(
+				eq(officerTerms.membershipId, memberId),
+				isNull(officerTerms.termEnd),
+			),
+		);
+	const closed: string[] = [];
+	for (const t of open) {
+		const termEnd = t.termStart && t.termStart > now ? t.termStart : now;
+		await tx
+			.update(officerTerms)
+			.set({ termEnd, updatedAt: now })
+			.where(eq(officerTerms.id, t.id));
+		closed.push(t.position);
+	}
+	return closed;
+}
 
 /**
  * Collapse the `absorbedId` membership into `keeperId` (both must belong to
@@ -68,8 +122,12 @@ export async function collapseMemberships(
 	clubId: string,
 	keeperId: string,
 	absorbedId: string,
+	/** Who is merging, credited on what a merge-to-former ends and releases. A
+	 *  caller with no member behind it (`mergePeople`) omits it: null. */
+	opts: { actorMemberId?: string | null } = {},
 ): Promise<void> {
 	if (keeperId === absorbedId) return;
+	const actorMemberId = opts.actorMemberId ?? null;
 
 	// The club write lock, before the first re-point. The anonymous feedback
 	// form (`role-feedback-logic.ts`) inserts under it, and nothing else stopped
@@ -96,7 +154,17 @@ export async function collapseMemberships(
 	// waits for this merge to commit and is refused. Lock order:
 	// club write lock → membership merge lock → row locks. `membership-merge-lock.ts`
 	// has the whole argument.
-	await lockMembershipForMerge(tx, absorbedId);
+	//
+	// BOTH memberships, in lock-key order (`lockMembershipsForMerge`): the
+	// keeper's slots are locked below, and a keeper-side writer that holds a slot
+	// and then reaches a row this merge re-points (a self confirm or an
+	// availability release upserting the plan row; a removal of the keeper
+	// locking its slots then its member row) would close a cycle with it. Every
+	// such writer takes the keeper's lock SHARED before its first row lock, so
+	// under the exclusive lock it either finished first or waits here. An
+	// advisory wait still takes part in deadlock detection, but nobody holding a
+	// row lock waits on it.
+	await lockMembershipsForMerge(tx, [keeperId, absorbedId]);
 
 	// The two memberships' Persons, locked BEFORE any membership row is written
 	// (the lock protocol of ADR-0031: club, then Persons, then rows). This
@@ -121,6 +189,10 @@ export async function collapseMemberships(
 			),
 		);
 	await lockPersonsInOrder(tx, noKeyUpdate(...peeked.map((m) => m.personId)));
+	// Both rows locked `FOR NO KEY UPDATE`, in id order, before the merged status
+	// is derived (#1327). Read without it, a concurrent End on the keeper was
+	// overwritten by a status computed from the stale read. NO KEY UPDATE is the
+	// mode a plain UPDATE of the row takes, so it blocks no FK key-share.
 	const rows = await tx
 		.select()
 		.from(members)
@@ -129,7 +201,9 @@ export async function collapseMemberships(
 				eq(members.clubId, clubId),
 				inArray(members.id, [keeperId, absorbedId]),
 			),
-		);
+		)
+		.orderBy(asc(members.id))
+		.for("no key update");
 	const keeper = rows.find((m) => m.id === keeperId);
 	const absorbed = rows.find((m) => m.id === absorbedId);
 	if (!keeper || !absorbed) {
@@ -140,6 +214,24 @@ export async function collapseMemberships(
 			throw new Error(RECORD_CHANGED_MESSAGE);
 		}
 	}
+
+	// Every slot either membership holds, locked `FOR NO KEY UPDATE` in slot-id
+	// order (#1327), BEFORE the collapse's first data write. Slot-id order is
+	// `applyMoveSlot`'s, and the slots come after the member rows as End takes
+	// them, so the collapse holds no re-pointed row while it waits for a slot, and
+	// the re-point of step 6 and the release of step 19 wait for nothing. This is
+	// defensive: no known writer closes a cycle here (an officer's confirm writes
+	// only the slot and an activity row, and serializes on the slot). Nothing
+	// steps 1-5 write (officer terms, dues, plan rows, attendance, awards) is held
+	// by a writer that also holds a slot and waits on a member row: those writers
+	// take the member row only as an FK key share, which `NO KEY UPDATE` does not
+	// block.
+	await tx
+		.select({ id: roleSlots.id })
+		.from(roleSlots)
+		.where(inArray(roleSlots.assignedMemberId, [keeperId, absorbedId]))
+		.orderBy(asc(roleSlots.id))
+		.for("no key update");
 
 	// The mentor listing's side: whichever membership is willing AND listed (#945).
 	const isListedMentor = (m: typeof keeper) =>
@@ -152,15 +244,22 @@ export async function collapseMemberships(
 	const otherSide = listedSide === keeper ? absorbed : keeper;
 
 	const statuses = [keeper.status, absorbed.status];
+	// Active wins, then former, then inactive (#1327): an End is never reversed
+	// by a merge with a stale inactive duplicate. Only an active row (a renewal)
+	// brings the person back.
 	const mergedStatus = statuses.includes("active")
 		? ("active" as const)
-		: statuses.includes("inactive")
-			? ("inactive" as const)
-			: ("former" as const);
+		: statuses.includes("former")
+			? ("former" as const)
+			: ("inactive" as const);
 
+	const mergedEndedAt =
+		mergedStatus === "former"
+			? latestDate(keeper.endedAt, absorbed.endedAt)
+			: null;
 	// --- Reconcile the surviving keeper row --------------------------------
-	// club_role: higher wins (admin > member). status: active if EITHER is
-	// active. joined_at: earliest known. preferred_name: keeper's, filling a
+	// club_role: higher wins (admin > member), from an ACTIVE row only. status:
+	// active if EITHER is active, else former if either is, else inactive. joined_at: earliest known. preferred_name: keeper's, filling a
 	// null from the absorbed. (name is left as the keeper's; the phone and the
 	// email are the Person's, not either membership's, #906 / #907.)
 	await tx
@@ -173,10 +272,9 @@ export async function collapseMemberships(
 				(absorbed.clubRole === "admin" && absorbed.status === "active")
 					? "admin"
 					: "member",
-			// Active wins, then inactive (they may renew), then former (#1239).
 			status: mergedStatus,
-			endedAt:
-				mergedStatus === "former" ? (keeper.endedAt ?? absorbed.endedAt) : null,
+			// The LATER end date wins (#1327); a null (unknown) yields to a known one.
+			endedAt: mergedEndedAt,
 			joinedAt: earliestDate(keeper.joinedAt, absorbed.joinedAt),
 			preferredName: keeper.preferredName ?? absorbed.preferredName,
 			// #939: willing to mentor if EITHER row said so. The flag is the
@@ -290,6 +388,8 @@ export async function collapseMemberships(
 		.where(eq(meetingAwards.memberId, absorbedId));
 
 	// 6. role_slots.assigned_member_id — no member-unique; re-point all.
+	//    The slots are already locked (see "Every slot ..." above), so this
+	//    re-point and step 19's release wait for nothing.
 	await tx
 		.update(roleSlots)
 		.set({ assignedMemberId: keeperId })
@@ -644,6 +744,102 @@ export async function collapseMemberships(
 		.update(speechRequests)
 		.set({ membershipId: keeperId })
 		.where(eq(speechRequests.membershipId, absorbedId));
+
+	// 19. A merge that yields `former` ends the membership (#1327): it does what
+	//     an End does beyond the status flip, over the keeper, which now holds the
+	//     absorbed row's terms, slots and plan rows (steps 1, 3 and 6). It closes
+	//     the keeper's open officer terms, releases its slots on meetings that
+	//     have not yet started (wall clock, `gte(meetings.scheduledAt, now)`, as
+	//     End does; the slots were locked up front), and deletes its plan rows.
+	//     A `member_edit` row in End's shape is written only when the keeper was
+	//     not already `former`. Left open, a Treasurer term would make reactivating the member
+	//     an admin again (`isEffectiveAdmin` reads the open term), and a future
+	//     role would keep naming a person who has left.
+	if (mergedStatus === "former") {
+		const now = new Date();
+		const closedOfficerPositions = await endOfficerTermsOfEndedMember(
+			tx,
+			keeperId,
+			now,
+		);
+		// Its roles on meetings still to come (the wall clock, as End's release,
+		// `applySetMemberStatus`), in slot-id order, every one already locked up
+		// front. A completed meeting's slot stays: the status rides in the
+		// UPDATE (#1154).
+		const upcoming = await tx
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.where(
+				and(
+					eq(roleSlots.assignedMemberId, keeperId),
+					gte(meetings.scheduledAt, now),
+				),
+			)
+			.orderBy(asc(roleSlots.id));
+		let releasedSlots = 0;
+		for (const s of upcoming) {
+			const released = await tx
+				.update(roleSlots)
+				.set({
+					assignedMemberId: null,
+					status: "open",
+					claimedAt: null,
+					speechId: null,
+				})
+				.where(
+					and(
+						eq(roleSlots.id, s.id),
+						eq(roleSlots.assignedMemberId, keeperId),
+						meetingAcceptsWrite(
+							tx,
+							"plan",
+							roleSlots.meetingId,
+							PLAN_ACCEPTING_CANCELLED,
+						),
+					),
+				)
+				.returning({ id: roleSlots.id });
+			if (released.length === 0) continue;
+			releasedSlots++;
+			await logActivity(tx, {
+				clubId,
+				actorMemberId,
+				action: "release",
+				targetType: "slot",
+				targetId: s.id,
+				detail: { fromMemberId: keeperId },
+			});
+		}
+		await deletePlanRowsOfEndedMember(tx, keeperId);
+		// What End records on its `member_edit` row (#1328): who ended, which
+		// offices closed, how many roles went, the end date and the role it dropped.
+		// Written when this merge ENDS the keeper (it was not `former` and now is,
+		// even with nothing to close: inactive -> former is an End), the shape
+		// `applySetMemberStatus` writes. A keeper already `former` is not ended
+		// again, so a merge of two ended rows stays one quiet row.
+		if (keeper.status !== "former") {
+			await logActivity(tx, {
+				clubId,
+				actorMemberId,
+				action: "member_edit",
+				targetType: "member",
+				targetId: keeperId,
+				detail: {
+					before: { status: keeper.status, clubRole: keeper.clubRole },
+					after: { status: mergedStatus, clubRole: "member" },
+					endedAt: { before: keeper.endedAt, after: mergedEndedAt },
+					change: MEMBERSHIP_ENDED_CHANGE,
+					memberId: keeperId,
+					closedOfficerPositions,
+					releasedSlots,
+					...(keeper.clubRole !== "member"
+						? { releasedClubRole: keeper.clubRole }
+						: {}),
+				},
+			});
+		}
+	}
 
 	// --- Delete the now-empty absorbed membership --------------------------
 	await tx.delete(members).where(eq(members.id, absorbedId));
