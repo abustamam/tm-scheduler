@@ -3,6 +3,29 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
 
+const DEFAULT_SUCCESS = "Link copied — paste it to share";
+
+/**
+ * Copies `origin + path` to the clipboard and toasts the outcome. Returns
+ * whether it copied. Shared by the button below and the schedule's Share menu
+ * (#1316), so the two cannot drift on clipboard behaviour or wording.
+ */
+export async function copyShareLink(
+	path: string,
+	successMessage: string = DEFAULT_SUCCESS,
+): Promise<boolean> {
+	const url =
+		typeof window === "undefined" ? path : window.location.origin + path;
+	try {
+		await navigator.clipboard.writeText(url);
+		toast.success(successMessage);
+		return true;
+	} catch {
+		toast.error("Couldn't copy — your browser blocked clipboard access");
+		return false;
+	}
+}
+
 /**
  * Copies a shareable, login-free meeting/role link to the clipboard.
  * `path` is app-relative (e.g. `/club/abc/meeting/xyz`); the current
@@ -13,7 +36,7 @@ import { Button } from "#/components/ui/button";
 export function ShareLinkButton({
 	path,
 	label = "Copy share link",
-	successMessage = "Link copied — paste it to share",
+	successMessage = DEFAULT_SUCCESS,
 	className,
 }: {
 	path: string;
@@ -25,16 +48,9 @@ export function ShareLinkButton({
 	const [copied, setCopied] = useState(false);
 
 	async function copy() {
-		const url =
-			typeof window === "undefined" ? path : window.location.origin + path;
-		try {
-			await navigator.clipboard.writeText(url);
-			setCopied(true);
-			toast.success(successMessage);
-			setTimeout(() => setCopied(false), 2000);
-		} catch {
-			toast.error("Couldn't copy — your browser blocked clipboard access");
-		}
+		if (!(await copyShareLink(path, successMessage))) return;
+		setCopied(true);
+		setTimeout(() => setCopied(false), 2000);
 	}
 
 	return (

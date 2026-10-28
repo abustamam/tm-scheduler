@@ -27,6 +27,7 @@ import { scrollAnchorClearOfPinnedColumn } from "#/lib/season-grid-anchor-scroll
 import {
 	DEFAULT_PAST_COUNT,
 	FREE_CELL,
+	limitPastMeetings,
 	type MemberMeetingStatus,
 	memberMeetingStatus,
 	NA_CELL,
@@ -64,7 +65,7 @@ function isLocked(m: { isCompleted: boolean; isPast: boolean }): boolean {
 }
 
 export function SeasonGrid({
-	data,
+	data: fullData,
 	orientation,
 	count,
 	pastCount = DEFAULT_PAST_COUNT,
@@ -83,8 +84,8 @@ export function SeasonGrid({
 	data: SeasonGridData;
 	orientation: Orientation;
 	count: SeasonGridCount;
-	/** Past meetings shown (#1048) — only drives which "Show past" button reads
-	 *  as selected; the columns themselves come from `data`. */
+	/** Past meetings shown (#1048). Reads the "Show past" button, and trims
+	 *  `data` down to this many past columns when it carries more (#1316). */
 	pastCount?: SeasonGridPast;
 	/** When set, the grid becomes interactive as this member: claim/release
 	 *  roles (Roles × Meetings) and toggle availability (Members × Meetings). */
@@ -129,6 +130,9 @@ export function SeasonGrid({
 	 *  `currentMemberId`. */
 	requireIdentity?: () => Promise<StoredMember | null>;
 }) {
+	// The loader fetches for the URL alone; a phone with no `?past=` shows fewer
+	// past columns than it was sent (#1316).
+	const data = limitPastMeetings(fullData, pastCount);
 	const rows = projectGrid(data, orientation);
 	// Members × Meetings contact columns (signed-in only) resolve email/phone
 	// off the member axis; role rows have no memberId and never render these.
@@ -510,8 +514,8 @@ export function SeasonGrid({
 
 	return (
 		<div className="space-y-4">
-			<div className="flex flex-wrap items-center gap-4">
-				<div className="inline-flex overflow-hidden rounded-lg border">
+			<div className="flex flex-nowrap items-center gap-3 overflow-x-auto md:flex-wrap md:gap-4 md:overflow-visible">
+				<div className="inline-flex shrink-0 overflow-hidden rounded-lg border">
 					{VIEWS.map((v) => (
 						<button
 							key={v.value}
@@ -528,7 +532,7 @@ export function SeasonGrid({
 						</button>
 					))}
 				</div>
-				<div className="inline-flex items-center gap-2">
+				<div className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap">
 					<span className="text-xs font-semibold text-muted-foreground">
 						Meetings shown
 					</span>
@@ -551,7 +555,7 @@ export function SeasonGrid({
 					</div>
 				</div>
 				{onPastCountChange ? (
-					<div className="inline-flex items-center gap-2">
+					<div className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap">
 						<span className="text-xs font-semibold text-muted-foreground">
 							Show past
 						</span>
@@ -560,7 +564,11 @@ export function SeasonGrid({
 								<button
 									key={p}
 									type="button"
-									aria-label={`Show ${p} past meetings`}
+									aria-label={
+										p === 0
+											? "Show no past meetings"
+											: `Show ${p} past meetings`
+									}
 									aria-pressed={pastCount === p}
 									onClick={() => onPastCountChange(p)}
 									className={cn(
@@ -570,7 +578,7 @@ export function SeasonGrid({
 											: "text-muted-foreground",
 									)}
 								>
-									{p}
+									{p === 0 ? "None" : p}
 								</button>
 							))}
 						</div>
@@ -610,7 +618,7 @@ export function SeasonGrid({
 						    scrolled (the grid auto-scrolls to the upcoming meeting). */}
 								<th
 									ref={labelHeadRef}
-									className="sticky top-0 left-0 z-20 bg-card px-3 py-2 text-left text-xs font-semibold shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]"
+									className="sticky top-0 left-0 z-20 w-36 max-w-36 bg-card px-3 py-2 text-left text-xs font-semibold shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]"
 								>
 									{labelHead}
 								</th>
@@ -781,7 +789,7 @@ export function SeasonGrid({
 									>
 										<th
 											className={cn(
-												"sticky left-0 z-10 px-3 py-1 text-right text-xs font-semibold whitespace-nowrap",
+												"sticky left-0 z-10 w-36 max-w-36 px-3 py-1 text-left text-xs font-semibold",
 												isSelfRow
 													? // Opaque tinted fill (color-mix stays opaque, so nothing
 														// bleeds under the sticky column) + a 3px inset accent bar.
@@ -789,27 +797,36 @@ export function SeasonGrid({
 													: "bg-card group-hover:bg-muted shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]",
 											)}
 										>
-											{row.memberId ? (
-												// Below md the row is already 44px tall (the cells grew),
-												// so an invisible ::before pad stretches this ~17px text
-												// link over the whole row height (±14px) and into the th
-												// side padding (±8px) without moving a pixel visually;
-												// md+ renders exactly as before (#224).
-												<Link
-													to="/members/$id"
-													params={{ id: row.memberId }}
-													className="hover:underline max-md:relative max-md:before:absolute max-md:before:-inset-x-2 max-md:before:-inset-y-3.5 max-md:before:content-['']"
-												>
-													{row.label}
-												</Link>
-											) : (
-												row.label
-											)}
-											{isSelfRow ? (
-												<span className="ml-1.5 inline-flex items-center rounded-full bg-primary px-1.5 py-0.5 align-middle text-xs font-semibold leading-none text-primary-foreground">
-													You
-												</span>
-											) : null}
+											<div className="flex items-center gap-1.5">
+												{row.memberId ? (
+													// Below md the row is already 44px tall (the cells grew),
+													// so an invisible ::before pad stretches this ~17px text
+													// link over the whole row height (±14px) and into the th
+													// side padding (±8px) without moving a pixel visually;
+													// md+ renders exactly as before (#224).
+													<Link
+														to="/members/$id"
+														params={{ id: row.memberId }}
+														className="min-w-0 hover:underline max-md:relative max-md:before:absolute max-md:before:-inset-x-2 max-md:before:-inset-y-3.5 max-md:before:content-['']"
+													>
+														<span className="block truncate" title={row.label}>
+															{row.label}
+														</span>
+													</Link>
+												) : (
+													<span
+														className="block min-w-0 truncate"
+														title={row.label}
+													>
+														{row.label}
+													</span>
+												)}
+												{isSelfRow ? (
+													<span className="inline-flex shrink-0 items-center rounded-full bg-primary px-1.5 py-0.5 align-middle text-xs font-semibold leading-none text-primary-foreground">
+														You
+													</span>
+												) : null}
+											</div>
 										</th>
 										{row.cells.map((cell, i) => {
 											const m = data.meetings[i];

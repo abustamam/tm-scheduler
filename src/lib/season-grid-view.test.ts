@@ -270,12 +270,17 @@ describe("memberMeetingStatus", () => {
 });
 
 describe("parsePastCount (#1048)", () => {
-	it("admits exactly 2, 4, 8 and 13, as numbers or their decimal strings", () => {
-		expect(PAST_COUNTS).toEqual([2, 4, 8, 13]);
+	it("admits exactly 0, 2, 4, 8 and 13, as numbers or their decimal strings", () => {
+		expect(PAST_COUNTS).toEqual([0, 2, 4, 8, 13]);
 		for (const n of PAST_COUNTS) {
 			expect(parsePastCount(n)).toBe(n);
 			expect(parsePastCount(String(n))).toBe(n);
 		}
+	});
+
+	it("reads 0 as none, not as the default (#1316)", () => {
+		expect(parsePastCount("0")).toBe(0);
+		expect(parsePastCount(0)).toBe(0);
 	});
 
 	it("defaults to 2", () => {
@@ -286,7 +291,6 @@ describe("parsePastCount (#1048)", () => {
 	it.each([
 		["99", 99],
 		["500", 500],
-		["0", 0],
 		["-1", -1],
 		["3 (between members)", 3],
 		["12.9", 12.9],

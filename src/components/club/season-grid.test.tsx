@@ -925,7 +925,7 @@ describe("Show past (#1048)", () => {
 		);
 	});
 
-	it("offers 2, 4, 8 and 13, marks the current one, and reports a pick", async () => {
+	it("offers None, 2, 4, 8 and 13, marks the current one, and reports a pick", async () => {
 		const onPastCountChange = vi.fn();
 		await renderUnderMemoryRouter(
 			<SeasonGrid
@@ -937,10 +937,17 @@ describe("Show past (#1048)", () => {
 			/>,
 		);
 		const buttons = screen.getAllByRole("button", {
-			name: /^Show \d+ past meetings$/,
+			name: /^Show (\d+|no) past meetings$/,
 		});
-		expect(buttons.map((b) => b.textContent)).toEqual(["2", "4", "8", "13"]);
+		expect(buttons.map((b) => b.textContent)).toEqual([
+			"None",
+			"2",
+			"4",
+			"8",
+			"13",
+		]);
 		expect(buttons.map((b) => b.getAttribute("aria-pressed"))).toEqual([
+			"false",
 			"false",
 			"false",
 			"true",
@@ -967,6 +974,71 @@ describe("Show past (#1048)", () => {
 				.getByRole("button", { name: "Show 2 past meetings" })
 				.getAttribute("aria-pressed"),
 		).toBe("true");
+	});
+
+	// protects=pastCount=0 shows no past column and the first column is the
+	// first upcoming meeting; a pick of None is reported as 0;
+	// fails_when=the grid renders every past column it was sent, as before #1316;
+	// no_claim=layout (season-grid-geometry.test.ts).
+	it("pastCount=0 renders no past column and reports None as 0", async () => {
+		const onPastCountChange = vi.fn();
+		await renderUnderMemoryRouter(
+			<SeasonGrid
+				data={wideData}
+				orientation="roles"
+				count={8}
+				pastCount={0}
+				onPastCountChange={onPastCountChange}
+			/>,
+		);
+		const heads = screen
+			.getAllByRole("columnheader")
+			.filter((th) => /ended|open|full/.test(th.textContent ?? ""));
+		expect(heads).toHaveLength(1);
+		expect(heads[0]?.textContent).not.toContain("ended");
+		await userEvent.click(
+			screen.getByRole("button", { name: "Show no past meetings" }),
+		);
+		expect(onPastCountChange).toHaveBeenCalledWith(0);
+	});
+
+	it("pastCount=2 keeps the two most recent past columns of thirteen", async () => {
+		await renderUnderMemoryRouter(
+			<SeasonGrid
+				data={wideData}
+				orientation="roles"
+				count={8}
+				pastCount={2}
+			/>,
+		);
+		const past = screen
+			.getAllByRole("columnheader")
+			.filter((th) => th.textContent?.includes("ended"));
+		expect(past).toHaveLength(2);
+	});
+
+	// protects=a long member name is truncated inside the label column and its
+	// full text is on `title`;
+	// fails_when=the label loses `truncate` (a long name widens the column) or
+	// the title (the name becomes unreachable);
+	// no_claim=the 144px width itself, which only a browser measures.
+	it("a label truncates and carries its full name in title", async () => {
+		const long = "Bartholomew Montgomery-Featherstonehaugh III";
+		await renderUnderMemoryRouter(
+			<SeasonGrid
+				data={{
+					...membersData,
+					members: [{ id: "c1", name: long }],
+					memberNames: [{ id: "c1", name: long }],
+				}}
+				orientation="members"
+				count={8}
+			/>,
+		);
+		const label = screen.getByTitle(long);
+		expect(label.className).toContain("truncate");
+		expect(label.closest("th")?.className).toContain("max-w-36");
+		expect(label.closest("th")?.className).not.toContain("text-right");
 	});
 
 	it.each([

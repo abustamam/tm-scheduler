@@ -80,6 +80,9 @@ const GRID = resolve(HERE, "season-grid.tsx");
 const WHATSAPP = resolve(HERE, "../whatsapp-phone-link.tsx");
 const CONTAINER = resolve(HERE, "../page-container.tsx");
 const GRID_CELL = resolve(HERE, "grid-cell.tsx");
+const SCHEDULE = resolve(HERE, "../../routes/_authed/schedule.tsx");
+const SHELL = resolve(HERE, "../app-shell.tsx");
+const BUTTON = resolve(HERE, "../ui/button.tsx");
 
 /**
  * The unique `className="…"` CONTAINING `fragment`.
@@ -253,7 +256,7 @@ describe.skipIf(!hasChrome)(
 			frame = classContaining(GRID, "rounded-xl border");
 			table = classContaining(GRID, "border-separate");
 			root = classContaining(GRID, "space-y-4");
-			controls = classContaining(GRID, "flex flex-wrap items-center gap-4");
+			controls = classContaining(GRID, "flex flex-nowrap items-center gap-3");
 			labelHead = classLiteralContaining(GRID, "sticky top-0 left-0");
 			meetingHead = classLiteralContaining(GRID, "sticky top-0 min-w-[3.5rem]");
 			contactHead = classLiteralContaining(GRID, "sticky top-0 bg-card");
@@ -551,7 +554,13 @@ describe.skipIf(!hasChrome)(
 		const desktop = () => fixture(16, 8);
 		/** A column wider than the room the label leaves: one long name, held on one line. */
 		const wideAnchor = () =>
-			phonePin(fixture(8, 3, "Abdurrahman&nbsp;Oyelaran&nbsp;Castillo"));
+			phonePin(
+				fixture(
+					8,
+					3,
+					"Abdurrahman&nbsp;Oyelaran&nbsp;Castillo&nbsp;Hernandez&nbsp;Whitfield",
+				),
+			);
 
 		beforeAll(async () => {
 			scroller = classContaining(GRID, "scroll-fade-r");
@@ -676,7 +685,7 @@ describe.skipIf(!hasChrome)(
 
 		it("control: the pre-fix centred scroll hides the anchor under the label at 375px", () => {
 			const p = probeAnchor({
-				bodyHtml: phone(),
+				bodyHtml: wideAnchor(),
 				css,
 				scroll: PRE_FIX_SCROLL,
 				viewport: PHONE,
@@ -687,6 +696,236 @@ describe.skipIf(!hasChrome)(
 				"the pre-fix call no longer reproduces #930, so the fixed assertion " +
 					"above cannot fail",
 			).toBeLessThan(p.labelRight - 0.5);
+		});
+	},
+);
+
+/**
+ * The phone sign-up grid's first screen (#1316).
+ *
+ * At 375px the page used to open with a wrapping row of three outline buttons,
+ * three wrapping filter groups, and a label column as wide as its longest name,
+ * so the grid started below the first screen and a long name pushed the
+ * meetings off it. This lays the real class strings out in Chrome: the shell's
+ * mobile app bar and clipping section, `schedule.tsx`'s header row and h1, the
+ * Share trigger (Button's own outline + sm literals), the controls row with all
+ * three groups, and the grid with a 40-character member name.
+ *
+ * What it does not prove: the markup between those strings is synthetic (the
+ * real page needs a router and a database), the shell's app-bar children are a
+ * 44px stand-in for the menu button and club switcher, and headless Chrome has
+ * no phone-width window (see `phonePin`). The CONTROL removes `flex-nowrap`
+ * and must reproduce the wrapped, multi-line row, which is what lets the
+ * one-line assertion fail.
+ */
+describe.skipIf(!hasChrome)(
+	"the phone sign-up grid's first screen (#1316)",
+	{ timeout: CHROME_TEST_TIMEOUT_MS },
+	() => {
+		const PHONE = { width: 375, height: 812 };
+		const LONG_NAME = "Bartholomew Montgomery-Featherstonehaugh";
+		let css = "";
+		let c: Record<string, string> = {};
+
+		function classes(): Record<string, string> {
+			return {
+				appBar: classLiteralContaining(
+					SHELL,
+					"sticky top-(--shell-banner-offset) z-10 flex items-center gap-2.5",
+				),
+				section: classContaining(SHELL, "overflow-x-clip"),
+				page: classLiteralContaining(CONTAINER, "max-w-workspace"),
+				headerRow: classContaining(
+					SCHEDULE,
+					"flex flex-wrap items-center justify-between gap-3",
+				),
+				h1: classContaining(SCHEDULE, "font-display text-3xl"),
+				btnBase: classLiteralContaining(
+					BUTTON,
+					"inline-flex shrink-0 items-center justify-center",
+				),
+				btnOutline: classLiteralContaining(BUTTON, "border bg-background"),
+				btnSm: classLiteralContaining(BUTTON, "h-8 gap-1.5"),
+				root: classContaining(GRID, "space-y-4"),
+				controls: classContaining(GRID, "flex flex-nowrap items-center gap-3"),
+				segmented: classContaining(
+					GRID,
+					"inline-flex shrink-0 overflow-hidden",
+				),
+				group: classLiteralContaining(
+					GRID,
+					"inline-flex shrink-0 items-center gap-2",
+				),
+				groupLabel: classLiteralContaining(
+					GRID,
+					"text-xs font-semibold text-muted",
+				),
+				seg: classLiteralContaining(GRID, "px-3 py-1.5 text-xs font-semibold"),
+				frame: classContaining(GRID, "rounded-xl border"),
+				scroller: classContaining(GRID, "scroll-fade-r"),
+				table: classContaining(GRID, "border-separate"),
+				labelHead: classContaining(GRID, "sticky top-0 left-0"),
+				meetingHead: classLiteralContaining(
+					GRID,
+					"sticky top-0 min-w-[3.5rem]",
+				),
+				rowHead: classLiteralContaining(GRID, "sticky left-0 z-10"),
+				truncate: classLiteralContaining(GRID, "block min-w-0 truncate"),
+				cell: classLiteralContaining(GRID_CELL, "flex h-11 min-w-[3rem]"),
+			};
+		}
+
+		function fixture(controlsClass: string): string {
+			const seg = (labels: string[]) =>
+				`<div class="${c.segmented}">${labels.map((l) => `<button type="button" class="${c.seg}">${l}</button>`).join("")}</div>`;
+			const group = (label: string, labels: string[]) =>
+				`<div class="${c.group}"><span class="${c.groupLabel}">${label}</span>${seg(labels)}</div>`;
+			const btn = `${c.btnBase} ${c.btnOutline} ${c.btnSm}`;
+			const heads = Array.from(
+				{ length: 8 },
+				(_, i) =>
+					`<th class="${c.meetingHead}"${i === 0 ? ' id="anchor"' : ""}><span class="block py-2 md:py-0">Thu, Oct ${i + 1}</span></th>`,
+			).join("");
+			const rows = Array.from(
+				{ length: 6 },
+				(_, r) => `<tr class="group transition-colors">
+					<th class="${c.rowHead}" id="${r === 0 ? "bodyLabel" : `l${r}`}"><div class="flex items-center gap-1.5"><a href="#" class="min-w-0"><span class="${c.truncate}" title="${LONG_NAME}">${LONG_NAME}</span></a></div></th>
+					${Array.from({ length: 8 }, () => `<td class="p-0"><div class="${c.cell}">open</div></td>`).join("")}
+				</tr>`,
+			).join("");
+			return `<div id="wrap" style="width:375px">
+				<header class="${c.appBar}"><button type="button" style="width:44px;height:44px">menu</button><div class="min-w-0 flex-1 truncate text-xs">Sign-up sheet</div></header>
+				<section class="${c.section}"><div class="${c.page} space-y-4">
+					<div class="${c.headerRow}"><h1 class="${c.h1}">Sign-up sheet</h1><button type="button" class="${btn}" id="share">Share</button></div>
+					<div class="${c.root}">
+						<div class="${controlsClass}" id="controls">
+							${seg(["Roles × Meetings", "Members × Meetings"])}
+							${group("Meetings shown", ["4", "8", "All"])}
+							${group("Show past", ["None", "2", "4", "8", "13"])}
+						</div>
+						<div class="${c.frame}"><div class="${c.scroller}" id="scroller">
+							<table class="${c.table}" id="table">
+								<thead><tr><th class="${c.labelHead}" id="label">Member</th>${heads}</tr></thead>
+								<tbody>${rows}</tbody>
+							</table>
+						</div></div>
+					</div>
+				</div></section></div>`;
+		}
+
+		type Probe = {
+			controlsHeight: number;
+			tableTop: number;
+			shareTop: number;
+			headW: number;
+			bodyW: number;
+			labelRight: number;
+			anchorLeft: number;
+			anchorRight: number;
+			scrollerRight: number;
+			wrapOverflow: boolean;
+		};
+		function probe(html: string): Probe {
+			const script = `<script>(function(){
+				var $=function(i){return document.getElementById(i)};
+				(${scrollAnchorClearOfPinnedColumn.toString()})($("scroller"),$("label"),$("anchor"));
+				document.fonts.ready.then(function(){setTimeout(function(){
+					var sr=$("scroller").getBoundingClientRect(), w=$("wrap");
+					var o={
+						controlsHeight:$("controls").getBoundingClientRect().height,
+						tableTop:$("table").getBoundingClientRect().top+window.scrollY,
+						shareTop:$("share").getBoundingClientRect().top+window.scrollY,
+						headW:$("label").getBoundingClientRect().width,
+						bodyW:$("bodyLabel").getBoundingClientRect().width,
+						labelRight:$("label").getBoundingClientRect().right,
+						anchorLeft:$("anchor").getBoundingClientRect().left,
+						anchorRight:$("anchor").getBoundingClientRect().right,
+						scrollerRight:sr.left+$("scroller").clientLeft+$("scroller").clientWidth,
+						wrapOverflow:w.scrollWidth>w.clientWidth?1:0
+					};
+					document.title=Object.keys(o).map(function(k){return k+"="+o[k]}).join(";");
+				},0)});
+			})();</script>`;
+			const title = renderAndReadTitle({
+				bodyHtml: html,
+				css,
+				script,
+				viewport: PHONE,
+				tmpPrefix: "season-grid-first-screen-",
+			});
+			if (!title.includes("tableTop=")) {
+				throw new Error(
+					`probe produced no measurement (title: ${title || "∅"})`,
+				);
+			}
+			const kv = new Map(
+				title.split(";").map((x) => x.split("=") as [string, string]),
+			);
+			const n = (k: string) => Number(kv.get(k));
+			return {
+				controlsHeight: n("controlsHeight"),
+				tableTop: n("tableTop"),
+				shareTop: n("shareTop"),
+				headW: n("headW"),
+				bodyW: n("bodyW"),
+				labelRight: n("labelRight"),
+				anchorLeft: n("anchorLeft"),
+				anchorRight: n("anchorRight"),
+				scrollerRight: n("scrollerRight"),
+				wrapOverflow: kv.get("wrapOverflow") === "1",
+			};
+		}
+
+		const wrapped = () => c.controls.replace("flex-nowrap", "flex-wrap");
+
+		beforeAll(async () => {
+			c = classes();
+			css = await buildAppCss([
+				...candidatesIn(fixture(c.controls)),
+				...candidatesIn(fixture(wrapped())),
+			]);
+		});
+
+		it("reads the shipped classes out of source", () => {
+			expect(c.controls).toContain("overflow-x-auto");
+			expect(c.labelHead).toContain("max-w-36");
+			expect(c.rowHead).toContain("max-w-36");
+			expect(c.truncate).toContain("truncate");
+		});
+
+		it("the label column computes to at most 144px for a 40-character name", () => {
+			const p = probe(fixture(c.controls));
+			expect(LONG_NAME).toHaveLength(40);
+			expect(p.headW).toBeLessThanOrEqual(144);
+			expect(p.bodyW).toBeLessThanOrEqual(144);
+			// Not vacuous: the column is not collapsed to nothing.
+			expect(p.bodyW).toBeGreaterThan(100);
+		});
+
+		it("the anchor column is clear of the pinned label column", () => {
+			const p = probe(fixture(c.controls));
+			expect(p.anchorLeft).toBeGreaterThanOrEqual(p.labelRight);
+			expect(p.anchorRight).toBeLessThanOrEqual(p.scrollerRight + 0.5);
+		});
+
+		it("the controls row is one line, 44px or less, and the page does not scroll sideways", () => {
+			const p = probe(fixture(c.controls));
+			expect(p.controlsHeight).toBeLessThanOrEqual(44);
+			expect(p.wrapOverflow).toBe(false);
+		});
+
+		it("the table starts within the first 812px with the Share trigger above it", () => {
+			const p = probe(fixture(c.controls));
+			expect(p.shareTop).toBeLessThan(p.tableTop);
+			expect(p.tableTop).toBeLessThan(PHONE.height);
+		});
+
+		it("control: with wrapping restored the controls take more than one line", () => {
+			const p = probe(fixture(wrapped()));
+			expect(
+				p.controlsHeight,
+				"a wrapping row no longer exceeds 44px, so the one-line assertion above cannot fail",
+			).toBeGreaterThan(44);
 		});
 	},
 );
@@ -854,7 +1093,7 @@ describe.skipIf(!hasChrome)(
 			frame = classContaining(GRID, "rounded-xl border");
 			table = classContaining(GRID, "border-separate");
 			root = classContaining(GRID, "space-y-4");
-			controls = classContaining(GRID, "flex flex-wrap items-center gap-4");
+			controls = classContaining(GRID, "flex flex-nowrap items-center gap-3");
 			toggleButton = classLiteralContaining(GRID, "px-3 py-1.5 text-xs");
 			// Repeated in source (three button groups, two labelled controls), so
 			// the first literal is read rather than a unique className.
@@ -864,7 +1103,7 @@ describe.skipIf(!hasChrome)(
 			);
 			labelledControl = classLiteralContaining(
 				GRID,
-				"inline-flex items-center gap-2",
+				"inline-flex shrink-0 items-center gap-2",
 			);
 			controlLabel = classLiteralContaining(
 				GRID,
