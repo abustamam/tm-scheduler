@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	apiTokens,
 	guests,
+	meetingAttendancePlan,
 	members,
 	people,
 	roleDefinitions,
@@ -55,9 +56,8 @@ const { collapseMemberships } = await import(
 const { applyLinkGuestToMember, LINK_MEMBER_FORMER_MESSAGE } = await import(
 	"#/server/guest-pipeline-logic"
 );
-const { claimSlotCore, reassignSlotCore, releaseSlotCore } = await import(
-	"#/server/slots-logic"
-);
+const { claimSlotCore, confirmSlotCore, reassignSlotCore, releaseSlotCore } =
+	await import("#/server/slots-logic");
 const { assignRolesTool } = await import("#/server/mcp/tools/assign-roles");
 const { hashApiToken } = await import("#/server/api-tokens-logic");
 const { isDeadlock } = await import("#/server/pg-errors");
@@ -670,8 +670,8 @@ describe.skipIf(!hasTestDb)("ending a membership vs its races (#1327)", () => {
 		expect(await slot(club.slotId)).toMatchObject({ assignedMemberId: keeper });
 	}
 
-	// protects=a claim of a member that mergePeople is absorbing ends without a deadlock (40P01) and the merge re-points the claimed slot: the claim takes no Person lock, so it never waits on the Persons the merge holds;
-	// fails_when=lockMemberForAssignment (or claimSlotCore) takes the member's Person ahead of the member row: the claim waits for the merge's FOR UPDATE while the merge waits for the claim's shared merge lock;
+	// protects=a claim of a member that mergePeople is absorbing ends without a deadlock (40P01) and the merge re-points the claimed slot: a Person lock returning ahead of the slot would make the claim wait on the Persons the merge holds;
+	// fails_when=lockMemberForAssignment (or claimSlotCore) takes the member's Person ahead of the member row/slot again;
 	// no_claim=a SPEAKER claim, whose speech insert key-shares the Person: that pair deadlocked before #1327 too (membership-merge-lock.ts), filed as its own issue.
 	it("a claim and mergePeople of the same member do not deadlock", async () => {
 		await assignmentVsMergePeople((absorbed) =>
@@ -686,8 +686,8 @@ describe.skipIf(!hasTestDb)("ending a membership vs its races (#1327)", () => {
 		);
 	});
 
-	// protects=assign_roles naming a member that mergePeople is absorbing ends without a deadlock (40P01): the batch takes the shared merge lock and the member row, never the Person;
-	// fails_when=assign_roles (or reassignSlotCore) locks the member's Person before the meeting, as the round that added it did;
+	// protects=assign_roles naming a member that mergePeople is absorbing ends without a deadlock (40P01) and the merge re-points the assigned slot: a Person lock returning ahead of the slot would make the batch wait on the Persons the merge holds;
+	// fails_when=assign_roles (or reassignSlotCore) locks the member's Person ahead of the meeting/slot again;
 	// no_claim=the browser claim path (the test above).
 	it("assign_roles and mergePeople of the same member do not deadlock", async () => {
 		const token = `tmk_${randomUUID().replaceAll("-", "")}`;
@@ -774,6 +774,107 @@ describe.skipIf(!hasTestDb)("ending a membership vs its races (#1327)", () => {
 				assignedMemberId: null,
 			});
 		}
+	});
+
+	/**
+	 * A merge parked at its slot locks (step 6), having already re-pointed the
+	 * absorbed member's plan row onto the keeper (step 3), uncommitted: the state
+	 * the round-3 keeper-slot lock left a keeper-side writer to meet. `slotId` is
+	 * a keeper slot a blocker holds. The collapse holds BOTH merge locks
+	 * exclusive, so a keeper-side writer must queue at the advisory lock, never
+	 * on a row.
+	 */
+	async function parkMerge(keeper: string, absorbed: string, slotId: string) {
+		const blocker = await openBlockingTx(async (tx) => {
+			await tx.execute(
+				sql`select 1 from role_slots where id = ${slotId} for update`,
+			);
+		});
+		const merging = testDb.transaction((tx) =>
+			collapseMemberships(tx, club.clubId, keeper, absorbed),
+		);
+		merging.catch(() => {});
+		let mergePid: number;
+		try {
+			mergePid = await waitForLockWait("role_slots", blocker.pid);
+		} catch (e) {
+			await blocker.commit();
+			await settle(merging);
+			throw e;
+		}
+		return { blocker, merging, mergePid };
+	}
+
+	// protects=a keeper's own confirm racing a merge that absorbs a plan-row holder for the same meeting waits on the merge lock (EXCLUSIVE on the keeper too) and does not deadlock (40P01) through the re-pointed plan row's unique key;
+	// fails_when=collapseMemberships takes the merge lock only on the absorbed membership: the confirm holds the keeper's slot and waits for the merge's uncommitted plan row while the merge waits for the slot;
+	// no_claim=the officer confirm arm, which takes no merge lock (not a keeper-self writer).
+	it("a keeper's confirm and a merge into that keeper do not deadlock", async () => {
+		const keeper = await addMember("Keeper Kim");
+		const absorbed = await addMember("Absorbed Abe");
+		const held = await addSlot(club.meetingId, keeper);
+		await testDb.insert(meetingAttendancePlan).values({
+			memberId: absorbed,
+			meetingId: club.meetingId,
+			status: "reached_out",
+		});
+		const parked = await parkMerge(keeper, absorbed, held);
+		let confirm: Promise<unknown> | undefined;
+		try {
+			confirm = confirmSlotCore({
+				slotId: held,
+				sessionUserId: null,
+				selfMemberId: keeper,
+				proof: "asserted",
+			});
+			confirm.catch(() => {});
+			await waitForLockWait("advisory", parked.mergePid);
+		} finally {
+			await parked.blocker.commit();
+		}
+		const [mergeErr, confirmErr] = await Promise.all([
+			settle(parked.merging),
+			settle(confirm as Promise<unknown>),
+		]);
+		expect(mergeErr && isDeadlock(mergeErr)).toBeFalsy();
+		expect(confirmErr && isDeadlock(confirmErr)).toBeFalsy();
+		expect(mergeErr).toBeNull();
+		expect(confirmErr).toBeNull();
+		expect(await slot(held)).toMatchObject({ assignedMemberId: keeper });
+		const plans = await testDb
+			.select({ memberId: meetingAttendancePlan.memberId })
+			.from(meetingAttendancePlan)
+			.where(eq(meetingAttendancePlan.meetingId, club.meetingId));
+		expect(plans.every((p) => p.memberId === keeper)).toBe(true);
+	});
+
+	// protects=removing the keeper of a merge that is parked on the keeper's slots waits on the merge lock and does not deadlock (40P01) between the member row and the slots;
+	// fails_when=collapseMemberships takes the merge lock only on the absorbed membership: the removal holds the keeper's slots and wants its member row, the merge holds the member row and wants the slots;
+	// no_claim=removing the absorbed membership (the removal then refuses behind the merge, covered by the lock tests).
+	it("removing the keeper and a merge into that keeper do not deadlock", async () => {
+		const keeper = await addMember("Keeper Kay");
+		const absorbed = await addMember("Absorbed Al");
+		const held = await addSlot(club.meetingId, keeper);
+		const parked = await parkMerge(keeper, absorbed, held);
+		let removal: Promise<unknown> | undefined;
+		try {
+			removal = applyMemberRemove({
+				clubId: club.clubId,
+				memberId: keeper,
+				actorMemberId: club.adminMemberId,
+			});
+			removal.catch(() => {});
+			await waitForLockWait("advisory", parked.mergePid);
+		} finally {
+			await parked.blocker.commit();
+		}
+		const [mergeErr, removeErr] = await Promise.all([
+			settle(parked.merging),
+			settle(removal as Promise<unknown>),
+		]);
+		expect(mergeErr && isDeadlock(mergeErr)).toBeFalsy();
+		expect(removeErr && isDeadlock(removeErr)).toBeFalsy();
+		expect(mergeErr).toBeNull();
+		expect(removeErr).toBeNull();
 	});
 
 	// protects=a reassign aimed at a member who is being removed does not deadlock with the removal (40P01): the reassign takes the shared merge lock first, so the removal serializes it;

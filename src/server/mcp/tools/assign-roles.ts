@@ -148,8 +148,9 @@ export const assignRolesTool: McpToolDefinition = {
 			// the meeting, so taking it after the meeting would have this batch
 			// hold the meeting while waiting for the merge lock. The same order
 			// `applyMemberRemove` uses (merge lock, then meetings), so it is
-			// cycle-free; a merge-lock wait is advisory and bounded (5s, then
-			// `CLUB_BUSY_MESSAGE`), never a 40P01. No Person lock: see
+			// ordered consistently; a merge-lock wait is advisory and bounded (5s, then
+			// `CLUB_BUSY_MESSAGE`) and, like any lock, takes part in deadlock
+			// detection, but this batch holds no row lock while it waits. No Person lock: see
 			// `lockMemberForAssignment`. Only members of THIS club that exist: an
 			// unknown or foreign id is reported as NOT_A_MEMBER further down, not
 			// refused here. `reassignSlotCore` re-takes each of these.

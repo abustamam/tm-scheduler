@@ -154,7 +154,20 @@ export async function collapseMemberships(
 	// waits for this merge to commit and is refused. Lock order:
 	// club write lock → membership merge lock → row locks. `membership-merge-lock.ts`
 	// has the whole argument.
-	await lockMembershipForMerge(tx, absorbedId);
+	//
+	// BOTH memberships, in id order (round 4): the keeper's slots are now locked
+	// up front (step 6), so a keeper-side writer that holds a slot and then
+	// reaches a row this merge re-pointed (a self confirm or an availability
+	// release upserting the plan row; a removal of the keeper locking its slots
+	// then its member row) closed a cycle with it. Every such writer takes the
+	// keeper's lock SHARED before its first row lock, so under the exclusive lock
+	// it either finished first or waits here. An advisory wait still takes part
+	// in deadlock detection, but nobody holding a row lock waits on it.
+	for (const id of [keeperId, absorbedId].sort((a, b) =>
+		a.toLowerCase() < b.toLowerCase() ? -1 : 1,
+	)) {
+		await lockMembershipForMerge(tx, id);
+	}
 
 	// The two memberships' Persons, locked BEFORE any membership row is written
 	// (the lock protocol of ADR-0031: club, then Persons, then rows). This
@@ -225,6 +238,10 @@ export async function collapseMemberships(
 			? ("former" as const)
 			: ("inactive" as const);
 
+	const mergedEndedAt =
+		mergedStatus === "former"
+			? latestDate(keeper.endedAt, absorbed.endedAt)
+			: null;
 	// --- Reconcile the surviving keeper row --------------------------------
 	// club_role: higher wins (admin > member), from an ACTIVE row only. status:
 	// active if EITHER is active, else former if either is, else inactive. joined_at: earliest known. preferred_name: keeper's, filling a
@@ -242,10 +259,7 @@ export async function collapseMemberships(
 					: "member",
 			status: mergedStatus,
 			// The LATER end date wins (#1327); a null (unknown) yields to a known one.
-			endedAt:
-				mergedStatus === "former"
-					? latestDate(keeper.endedAt, absorbed.endedAt)
-					: null,
+			endedAt: mergedEndedAt,
 			joinedAt: earliestDate(keeper.joinedAt, absorbed.joinedAt),
 			preferredName: keeper.preferredName ?? absorbed.preferredName,
 			// #939: willing to mentor if EITHER row said so. The flag is the
@@ -789,9 +803,12 @@ export async function collapseMemberships(
 		}
 		await deletePlanRowsOfEndedMember(tx, keeperId);
 		// What End records on its `member_edit` row (#1328): who ended, which
-		// offices closed, how many roles went. Only when the merge actually ended
-		// something, so a merge of two already-ended rows stays one quiet row.
-		if (closedOfficerPositions.length > 0 || releasedSlots > 0) {
+		// offices closed, how many roles went, the end date and the role it dropped.
+		// Written when this merge ENDS the keeper (it was not `former` and now is,
+		// even with nothing to close: inactive -> former is an End), the shape
+		// `applySetMemberStatus` writes. A keeper already `former` is not ended
+		// again, so a merge of two ended rows stays one quiet row.
+		if (keeper.status !== "former") {
 			await logActivity(tx, {
 				clubId,
 				actorMemberId,
@@ -801,10 +818,14 @@ export async function collapseMemberships(
 				detail: {
 					before: { status: keeper.status, clubRole: keeper.clubRole },
 					after: { status: mergedStatus, clubRole: "member" },
+					endedAt: { before: keeper.endedAt, after: mergedEndedAt },
 					change: MEMBERSHIP_ENDED_CHANGE,
 					memberId: keeperId,
 					closedOfficerPositions,
 					releasedSlots,
+					...(keeper.clubRole !== "member"
+						? { releasedClubRole: keeper.clubRole }
+						: {}),
 				},
 			});
 		}
