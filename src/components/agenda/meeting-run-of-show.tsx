@@ -12,6 +12,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { ChevronRight } from "lucide-react";
 import { ClubLogo } from "#/components/agenda/club-logo";
 import { CancelledMeetingNotice } from "#/components/club/cancelled-meeting-notice";
 import { OPEN_LABEL } from "#/lib/agenda";
@@ -284,7 +285,13 @@ function RunRow({
 	return (
 		<li>
 			<details className="group">
-				<summary className="cursor-pointer list-none">{body}</summary>
+				<summary className="flex cursor-pointer list-none items-start gap-2 [&::-webkit-details-marker]:hidden">
+					<div className="min-w-0 flex-1">{body}</div>
+					<ChevronRight
+						aria-hidden
+						className="mt-3.5 size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90"
+					/>
+				</summary>
 				<p className="pb-3 pl-15 text-sm text-muted-foreground">
 					{description}
 				</p>

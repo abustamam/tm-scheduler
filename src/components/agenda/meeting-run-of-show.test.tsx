@@ -389,6 +389,25 @@ describe("role descriptions", () => {
 		expect(document.querySelectorAll("details")).toHaveLength(0);
 	});
 
+	// protects=an expandable row shows a rotating chevron in its <summary>, a plain row none (#1364);
+	// fails_when=the chevron is removed, loses group-open:rotate-90, or the summary shows the webkit marker
+	it("an expandable row has a chevron in its summary; a plain row has none", async () => {
+		await renderPage(
+			props({ roleDescriptions: { speaker: "Gives a prepared speech." } }),
+		);
+		const summary = document.querySelector("details > summary");
+		const chevron = summary?.querySelector("svg.lucide-chevron-right");
+		expect(chevron).not.toBeNull();
+		expect(chevron?.getAttribute("aria-hidden")).toBe("true");
+		expect(chevron?.getAttribute("class")).toContain("group-open:rotate-90");
+		expect(summary?.getAttribute("class")).toContain(
+			"[&::-webkit-details-marker]:hidden",
+		);
+		expect(document.querySelectorAll("svg.lucide-chevron-right")).toHaveLength(
+			1,
+		);
+	});
+
 	// protects=no description, no <details>;
 	// fails_when=an empty disclosure is drawn;
 	// no_claim=says nothing about clubs with descriptions
