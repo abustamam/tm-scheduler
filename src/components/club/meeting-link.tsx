@@ -8,13 +8,14 @@ import type { ReactNode } from "react";
  * two-branch `if` behind a single call site instead.
  */
 type MeetingLinkProps = {
-	/** Club slug: when set (public club shell), links target the public meeting
-	 *  view instead of the signed-in `/meetings/$id` route. */
-	clubSlug?: string;
+	/** The club's slug, from the grid data (#1401). When set, the link is the
+	 *  canonical `/club/$clubId/meeting/$meetingId`, signed in or not; null only
+	 *  for the empty grid, which falls back to `/meetings/$id`. */
+	clubSlug?: string | null;
 	meetingId: string;
 	/** The meeting's canonical URL key (`$meetingId` param of the public view).
-	 *  Required (#1396): a public link never falls back to the uuid. Unused by
-	 *  the signed-in `/meetings/$id` branch, which takes the uuid. */
+	 *  Required (#1396): a slug link never falls back to the uuid. Unused by
+	 *  the `/meetings/$id` branch, which takes the uuid. */
 	meetingKey: string;
 	className?: string;
 	"aria-label"?: string;

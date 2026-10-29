@@ -124,6 +124,7 @@ function renderAgenda(
 			shareUrl="https://gavelup.app/club/test/meeting/m1"
 			meetingDate="Jan 1, 2026"
 			meetingUrlKey="2026-10-06"
+			clubSlug="my-club"
 			meeting={meeting}
 			// The route hands its own frozen answer in; the fixtures are 30 days
 			// out, so "not over" unless a test says otherwise via `extra`.
@@ -178,7 +179,7 @@ describe("MeetingAgenda capability gating", () => {
 		renderAgenda(viewer, [slot({})]);
 		expect(
 			screen.getByRole("link", { name: "View agenda" }).getAttribute("href"),
-		).toBe("/club/c1/meeting/2026-10-06/agenda");
+		).toBe("/club/my-club/meeting/2026-10-06/agenda");
 	});
 
 	// protects=the phone-tall (44px) tap target, DESIGN.md; fails_when=the link
@@ -226,7 +227,7 @@ describe("MeetingAgenda capability gating", () => {
 		);
 		expect(
 			screen.getByRole("link", { name: "View agenda" }).getAttribute("href"),
-		).toBe("/club/c1/meeting/2026-10-06/agenda");
+		).toBe("/club/my-club/meeting/2026-10-06/agenda");
 	});
 
 	it("shows admin controls (stats, confirm) for a manager", () => {
@@ -1193,6 +1194,7 @@ describe("MeetingAgenda confirm nudge records outreach (#662)", () => {
 						shareUrl="https://gavelup.app/club/test/meeting/m1"
 						meetingDate="Jan 1, 2026"
 						meetingUrlKey="2026-10-06"
+						clubSlug="my-club"
 						meeting={meetingFixture()}
 						contactedMemberIds={contactedMemberIds}
 						onContacted={(memberId) => recordOutreach(memberId)}

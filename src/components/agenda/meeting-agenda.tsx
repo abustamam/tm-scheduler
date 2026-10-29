@@ -167,6 +167,9 @@ export interface MeetingAgendaProps {
 	/** The meeting's canonical URL key; the "View agenda" link is built from it,
 	 *  never from `meeting.id` (#1396). */
 	meetingUrlKey: string;
+	/** The club's slug (the route's canonical `$clubId` param); the "View agenda"
+	 *  link uses it, never `meeting.clubId` (#1401). Absent hides the link. */
+	clubSlug?: string;
 	/** The route's one "is it over?" answer (`isMeetingOver`, #393), computed
 	 *  from its frozen `now` and handed in rather than recomputed here, so the
 	 *  agenda cannot read a different instant from the rest of the page (and
@@ -218,6 +221,7 @@ export function MeetingAgenda({
 	personalNudgeBase = null,
 	meeting,
 	meetingUrlKey,
+	clubSlug,
 	meetingOver = true,
 	requireIdentity,
 	contactedMemberIds,
@@ -440,18 +444,19 @@ export function MeetingAgenda({
 		<>
 			{/* The digital agenda (#1335), for everyone and on every day, cancelled
 			    or not: it is a read-only page the public meeting page already
-			    exposes the same slots to. The uuid params are the ones the
-			    agenda editor link uses; both route segments accept a uuid (#877). */}
-			<div className="mb-4 flex flex-wrap items-center justify-end gap-2">
-				<Button asChild variant="outline" size="touch">
-					<Link
-						to="/club/$clubId/meeting/$meetingId/agenda"
-						params={{ clubId: meeting.clubId, meetingId: meetingUrlKey }}
-					>
-						View agenda
-					</Link>
-				</Button>
-			</div>
+			    exposes the same slots to. Slug and date key, never a uuid (#1401). */}
+			{clubSlug ? (
+				<div className="mb-4 flex flex-wrap items-center justify-end gap-2">
+					<Button asChild variant="outline" size="touch">
+						<Link
+							to="/club/$clubId/meeting/$meetingId/agenda"
+							params={{ clubId: clubSlug, meetingId: meetingUrlKey }}
+						>
+							View agenda
+						</Link>
+					</Button>
+				</div>
+			) : null}
 			{viewer.canManage ? (
 				<section className="rounded-xl border bg-card p-4">
 					<div className="flex flex-wrap items-center justify-between gap-3">

@@ -49,6 +49,14 @@ const KEY_BUILDERS: Record<string, number> = {
 const UUID_LOCAL =
 	/(?:(?:const|let)\s+meetingId\s*=\s*[^;\n]*(?:\.id|\.meetingId)\b|\bid:\s*meetingId\b)/;
 
+// #1401: the club segment is the slug. A club uuid reaches it as `x.clubId`,
+// `clubUuid` / `x.clubUuid`, or `club.id`; `params.clubId` is the slug.
+const UUID_CLUB_VALUE = /(?<!\bparams)\.clubId\b|\bclubUuid\b|\bclub\.id\b/;
+// A local `clubId` that holds a club's uuid (so `{ clubId }` shorthand is one),
+// as opposed to `const { clubId } = Route.useParams()`.
+const UUID_CLUB_LOCAL =
+	/(?:(?:const|let)\s+clubId\s*=\s*[^;\n]*(?:\.clubId|\bclubUuid|\bclub\.id)\b|\b(?:id|clubUuid):\s*clubId\b)/;
+
 /** A deliberate uuid in a meeting URL: `file: snippet`. Empty today. */
 const ALLOWED_UUID_LINKS: string[] = [];
 
@@ -82,6 +90,13 @@ function uuidMeetingLinks(
 	for (const m of source.matchAll(ROUTE_LINK)) {
 		seen.links++;
 		const body = m[1] ?? "";
+		// #1401: the club segment is the slug too; `x.clubId` is the club uuid.
+		const club = body.match(/\bclubId:\s*([^,}]+)/)?.[1]?.trim();
+		if (club) {
+			if (UUID_CLUB_VALUE.test(club)) found.push(`clubId: ${club}`);
+		} else if (/\bclubId\b/.test(body) && UUID_CLUB_LOCAL.test(source)) {
+			found.push("clubId (shorthand, a uuid local)");
+		}
 		const value = body.match(/meetingId:\s*([^,}]+)/)?.[1]?.trim();
 		if (value) {
 			if (UUID_VALUE.test(value)) found.push(`meetingId: ${value}`);
@@ -122,6 +137,43 @@ describe("meeting links use the canonical key (#1396)", () => {
 				'<Link to="/club/$clubId/meeting/$meetingId" params={{ clubId, meetingId: m.urlKey }}>',
 			),
 		).toEqual([]);
+	});
+
+	it("flags a club uuid in the club segment (#1401)", () => {
+		expect(
+			uuidMeetingLinks(
+				'<Link to="/club/$clubId/meeting/$meetingId/agenda" params={{ clubId: meeting.clubId, meetingId: key }}>',
+			),
+		).toEqual(["clubId: meeting.clubId"]);
+		expect(
+			uuidMeetingLinks(
+				'<Link to="/club/$clubId/meeting/$meetingId/agenda" params={{ clubId: clubSlug, meetingId: key }}>',
+			),
+		).toEqual([]);
+		const link = (club: string) =>
+			`<Link to="/club/$clubId/meeting/$meetingId/agenda" params={{ ${club}, meetingId: key }}>`;
+		expect(uuidMeetingLinks(link("clubId: clubUuid"))).toEqual([
+			"clubId: clubUuid",
+		]);
+		expect(uuidMeetingLinks(link("clubId: ctx.clubUuid"))).toEqual([
+			"clubId: ctx.clubUuid",
+		]);
+		expect(uuidMeetingLinks(link("clubId: club.id"))).toEqual([
+			"clubId: club.id",
+		]);
+		expect(
+			uuidMeetingLinks(`const clubId = meeting.clubId;\n${link("clubId")}`),
+		).toEqual(["clubId (shorthand, a uuid local)"]);
+		expect(
+			uuidMeetingLinks(`const { clubUuid: clubId } = ctx;\n${link("clubId")}`),
+		).toEqual(["clubId (shorthand, a uuid local)"]);
+		// The route param is the slug: not flagged.
+		expect(
+			uuidMeetingLinks(
+				`const { clubId } = Route.useParams();\n${link("clubId")}`,
+			),
+		).toEqual([]);
+		expect(uuidMeetingLinks(link("clubId: params.clubId"))).toEqual([]);
 	});
 
 	it("flags the object form, the shorthand over a uuid local, and the named sinks", () => {
