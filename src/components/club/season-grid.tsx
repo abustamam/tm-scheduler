@@ -73,7 +73,7 @@ export function SeasonGrid({
 	currentMemberSource = "anon",
 	canManageOthers = false,
 	clubId,
-	clubSlug,
+	publicShell,
 	showContact = false,
 	onOrientationChange,
 	onCountChange,
@@ -114,10 +114,10 @@ export function SeasonGrid({
 	canManageOthers?: boolean;
 	/** Club uuid — required for the availability calls. */
 	clubId?: string;
-	/** Club slug — the PUBLIC-SHELL flag (#1401): set only on the public club
-	 *  page. It gates public-only behaviour (plain-text "Roster view"); it does
-	 *  not build links, which take `data.clubSlug` on both surfaces. */
-	clubSlug?: string;
+	/** PUBLIC-SHELL flag (#1401), not a slug: set only on the public club page.
+	 *  It gates public-only behaviour (plain-text "Roster view"); links take
+	 *  `data.clubSlug` on both surfaces. */
+	publicShell?: boolean;
 	/** Show member Email/Phone columns (Members × Meetings, signed-in only). */
 	showContact?: boolean;
 	onOrientationChange?: (o: Orientation) => void;
@@ -506,7 +506,7 @@ export function SeasonGrid({
 		return (
 			<p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
 				No members yet. Add members from the{" "}
-				{clubSlug ? (
+				{publicShell ? (
 					"Roster view"
 				) : (
 					<Link to="/roster" className="font-semibold text-primary underline">
@@ -943,7 +943,7 @@ export function SeasonGrid({
 														// Releasing is session-gated (#763), so an
 														// anonymous pick's own cell is not a control.
 														onRelease={provenIdentity ? release : undefined}
-														clubSlug={data.clubSlug ?? undefined}
+														clubSlug={data.clubSlug}
 														meetingKey={m?.urlKey}
 														meetingLabel={
 															m

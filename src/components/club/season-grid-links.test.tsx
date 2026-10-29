@@ -1,7 +1,5 @@
 // @vitest-environment jsdom
 
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { cleanup, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SeasonGridData } from "#/server/season-grid";
@@ -113,24 +111,9 @@ describe("SeasonGrid meeting links (#1401)", () => {
 		).toBe("/roster");
 		cleanup();
 		await renderUnderMemoryRouter(
-			<SeasonGrid
-				data={empty}
-				orientation="members"
-				count="all"
-				clubSlug="downtown"
-			/>,
+			<SeasonGrid data={empty} orientation="members" count="all" publicShell />,
 		);
 		expect(screen.queryByRole("link", { name: "Roster view" })).toBeNull();
 		expect(screen.getByText(/Roster view/)).toBeTruthy();
-	});
-});
-
-describe("meeting route hands MeetingAgenda the canonical slug (#1401)", () => {
-	it("passes clubSlug from the route's $clubId param", () => {
-		const src = readFileSync(
-			resolve(__dirname, "../../routes/club.$clubId.meeting.$meetingId.tsx"),
-			"utf8",
-		);
-		expect(src).toMatch(/meetingUrlKey=\{urlKey\}\s*clubSlug=\{clubId\}/);
 	});
 });

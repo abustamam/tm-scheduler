@@ -358,7 +358,7 @@ function MeetingView() {
 	// `urlKey` to know whether the page is already on the URL that keeps
 	// reaching this meeting once it is cancelled (#1057).
 	const { clubId, meetingId: meetingKeyParam } = Route.useParams();
-	const { clubUuid, effectiveMemberId, authCtx, shell } =
+	const { clubUuid, clubSlug, effectiveMemberId, authCtx, shell } =
 		Route.useRouteContext();
 	const {
 		meeting,
@@ -2414,7 +2414,7 @@ function MeetingView() {
 							personalNudgeBase={effectiveCanManage ? nudgePersonalBase : null}
 							meeting={meeting}
 							meetingUrlKey={urlKey}
-							clubSlug={clubId}
+							clubSlug={clubSlug}
 							meetingOver={over}
 							requireIdentity={requireIdentity}
 							contactedMemberIds={contactedMemberIds}

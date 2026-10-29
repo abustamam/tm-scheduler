@@ -103,7 +103,7 @@ export function GridCell({
 	subjectName?: string;
 	/** The club's slug (from the grid data, #1401): when set, cell links target
 	 *  the canonical meeting URL; otherwise `/meetings/$id`. */
-	clubSlug?: string;
+	clubSlug?: string | null;
 	/** The column meeting's public-view key (date URL). Passed through to
 	 *  `MeetingLink`; unused on the `/meetings/$id` fallback. */
 	meetingKey?: string;

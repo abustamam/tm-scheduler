@@ -164,7 +164,7 @@ function ClubHome() {
 					// forming a second one.
 					currentMemberSource={source}
 					clubId={clubUuid}
-					clubSlug={clubId}
+					publicShell
 					requireIdentity={requireIdentity}
 					onOrientationChange={(v) =>
 						navigate({ search: (prev) => ({ ...prev, view: v }) })
