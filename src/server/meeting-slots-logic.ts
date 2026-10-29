@@ -111,7 +111,14 @@ export async function loadMeetingSlots(
 		.leftJoin(guestAssignee, eq(guestAssignee.id, roleSlots.assignedGuestId))
 		.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
 		.where(eq(roleSlots.meetingId, meetingId))
-		.orderBy(asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex));
+		.orderBy(
+			asc(roleDefinitions.sortOrder),
+			// Unique tail (#1372): roles sharing a sortOrder must not interleave
+			// or reorder between reads.
+			asc(roleDefinitions.id),
+			asc(roleSlots.slotIndex),
+			asc(roleSlots.id),
+		);
 
 	// Flag guest-held slots so every read path can render the guest marker: a
 	// visiting Toastmaster reads "Name (V)" (#1164), any other guest "Name · Guest".
