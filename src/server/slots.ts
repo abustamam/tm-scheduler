@@ -5,6 +5,7 @@ import { db } from "#/db";
 import { meetings, members, roleDefinitions, roleSlots } from "#/db/schema";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { logActivity } from "./activity";
+import { withDeadlockRetry } from "./deadlock-retry";
 import {
 	assertClubNotArchived,
 	getSessionUser,
@@ -89,14 +90,17 @@ export const claimSlot = createServerFn({ method: "POST" })
 			proof: "session" as const,
 		};
 
-		await db.transaction((tx) =>
-			claimSlotCore(tx, {
-				slotId: data.slotId,
-				memberId: data.memberId,
-				actorMemberId: actor.memberId,
-				speakerDetails: data.speakerDetails,
-				proof: actor.proof,
-			}),
+		// One retry on a deadlock with a member edit (#1388), on a new transaction.
+		await withDeadlockRetry(() =>
+			db.transaction((tx) =>
+				claimSlotCore(tx, {
+					slotId: data.slotId,
+					memberId: data.memberId,
+					actorMemberId: actor.memberId,
+					speakerDetails: data.speakerDetails,
+					proof: actor.proof,
+				}),
+			),
 		);
 
 		return { ok: true as const, proof: actor.proof };

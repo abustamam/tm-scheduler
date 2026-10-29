@@ -23,6 +23,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
+import { deadlock } from "#/test/deadlock";
+import { CLUB_BUSY_MESSAGE } from "./club-write-lock";
 
 vi.mock("@tanstack/react-start", () => ({
 	createServerFn: () => ({
@@ -230,4 +232,44 @@ describe.each(CASES)("$name transport (#825)", (c) => {
 			expect(c.core()).not.toHaveBeenCalled();
 		});
 	}
+});
+
+describe("claimSlot deadlock retry (#1388)", () => {
+	const claim = () =>
+		claimSlot({
+			data: {
+				slotId: SLOT_ID,
+				memberId: MEMBER_ID,
+				actorMemberId: ASSERTED_ACTOR,
+			},
+		});
+
+	// protects=a claim chosen as a deadlock victim runs again once on a new transaction and succeeds;
+	// fails_when=the handler's transaction is not wrapped in withDeadlockRetry;
+	// no_claim=the real deadlock against applyMemberEdit (the helper is unit-tested).
+	it("retries once on 40P01, on a new transaction", async () => {
+		vi.mocked(logic.claimSlotCore).mockRejectedValueOnce(deadlock());
+		await expect(claim()).resolves.toEqual({ ok: true, proof: "asserted" });
+		expect(db.transaction).toHaveBeenCalledTimes(2);
+		expect(logic.claimSlotCore).toHaveBeenCalledTimes(2);
+	});
+
+	it("a second 40P01 is CLUB_BUSY_MESSAGE with the driver error as cause", async () => {
+		const first = deadlock();
+		const second = deadlock();
+		vi.mocked(logic.claimSlotCore)
+			.mockRejectedValueOnce(first)
+			.mockRejectedValueOnce(second);
+		const err = await claim().catch((e: unknown) => e);
+		expect((err as Error).message).toBe(CLUB_BUSY_MESSAGE);
+		expect((err as Error).cause).toBe(second);
+	});
+
+	it("a refusal is not retried", async () => {
+		vi.mocked(logic.claimSlotCore).mockRejectedValueOnce(
+			new Error("Member is not eligible"),
+		);
+		await expect(claim()).rejects.toThrow("Member is not eligible");
+		expect(db.transaction).toHaveBeenCalledTimes(1);
+	});
 });

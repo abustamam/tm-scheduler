@@ -37,6 +37,7 @@ import {
 import { lockClubForWrite } from "./club-write-lock";
 import { RECORD_CHANGED_MESSAGE } from "./guests-logic";
 import { collapseMemberships } from "./membership-collapse-logic";
+import { lockMembershipsForMerge } from "./membership-merge-lock";
 
 // A transaction handle (or the base db) — both expose the query builder we use.
 type Db = typeof db;
@@ -161,9 +162,14 @@ export async function mergePeople(
 	const parsed = mergePeopleSchema.parse(input);
 	return db.transaction(async (tx) => {
 		// The lock protocol (ADR-0031): every affected club's write lock, in id
-		// order; then both Persons `FOR UPDATE`, in id order (the absorbed one is
-		// deleted, so the strong mode is right here). The guest rows are not locked
-		// up front; see below.
+		// order; then the EXCLUSIVE membership merge lock of every membership
+		// either Person holds in those clubs (#1388); then both Persons
+		// `FOR UPDATE`, in id order (the absorbed one is deleted, so the strong
+		// mode is right here). The guest rows are not locked up front; see below.
+		// The merge locks come before the Persons because a speaker claim or a
+		// speech-request scheduling holds a SHARED merge lock and then key-shares
+		// the Person: with the Person held first, the merge waited on the merge
+		// lock while the writer waited on the Person (40P01).
 		// #1124 reversed this function's old order (Persons first, club locks
 		// after), because a convert, a guest-book capture and #1127's link all take
 		// the club's write lock BEFORE they touch a Person, and a merge that held a
@@ -181,6 +187,32 @@ export async function mergePeople(
 		const clubsBefore = await clubsHoldingPersons(tx, personIds);
 		for (const clubId of clubsBefore) await lockClubForWrite(tx, clubId);
 
+		// Read-then-lock, as for the clubs: read the memberships unlocked, lock
+		// them, read again (here, and again once the Persons are locked); a moved
+		// set means one was attached or detached meanwhile, and nothing has been
+		// written.
+		const membershipIdsOf = async () =>
+			(
+				await tx
+					.select({ id: members.id })
+					.from(members)
+					.where(inArray(members.personId, personIds))
+			)
+				.map((r) => r.id)
+				.sort();
+		const membershipsBefore = await membershipIdsOf();
+		await lockMembershipsForMerge(tx, membershipsBefore);
+		// This early check only fails fast, before the Persons are touched. It is NOT
+		// enough on its own: `insertRosterMember` and `importPeopleAndMembers` take
+		// no club write lock, so a membership can still be attached to either Person
+		// after this read and before the Person lock below. That one never got the
+		// early exclusive merge lock, so a speaker claim on it (shared merge lock,
+		// then key-share on the Person) could close a cycle with the collapse's later
+		// exclusive lock. The check after the Person lock is the one that closes it.
+		const membershipsMoved = async () =>
+			(await membershipIdsOf()).join() !== membershipsBefore.join();
+		if (await membershipsMoved()) throw new Error(RECORD_CHANGED_MESSAGE);
+
 		const rows = await tx
 			.select()
 			.from(people)
@@ -190,6 +222,12 @@ export async function mergePeople(
 		const keeper = rows.find((p) => p.id === parsed.keeperPersonId);
 		const absorbed = rows.find((p) => p.id === parsed.absorbedPersonId);
 		if (!keeper || !absorbed) throw new Error("Person not found.");
+
+		// Under the Person locks: a membership insert key-shares its Person, so none
+		// can be attached to either Person from here on. A set that differs from the
+		// one whose merge locks we hold means one slipped in (or left) between the
+		// early read and these locks; refuse with nothing written.
+		if (await membershipsMoved()) throw new Error(RECORD_CHANGED_MESSAGE);
 
 		const clubsAfter = await clubsHoldingPersons(tx, personIds);
 		if (

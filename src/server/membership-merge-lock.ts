@@ -28,8 +28,9 @@
  *
  * LOCK ORDER. Every taker takes this lock BEFORE its first row lock:
  *
- *   merge:  club write lock → THIS (exclusive, keeper and absorbed ids, in
- *           lock-key order) → Persons → member rows → slots (slot-id order)
+ *   merge:  club write lock → THIS (exclusive, every membership of either
+ *           Person, in lock-key order; #1388) → Persons → member rows → slots
+ *           (slot-id order)
  *   writer: [club write lock →] THIS (shared, each referenced member id, in
  *           lock-key order) → row locks
  *
@@ -43,9 +44,9 @@
  * cannot be part of a cycle through the merge; the merge holds only advisory
  * locks when it waits here (inside `mergePeople`, also the Person rows and the
  * row locks of the clubs it has already collapsed — none of which a writer
- * covered here touches, except that a SPEAKER claim's speech FK-locks the
- * Person row: that pair already deadlocked before this lock, since the claim
- * then held the membership's FK lock that the DELETE needs). Shared takers
+ * covered here touches). Since #1388 `mergePeople` takes this lock before it
+ * locks the Persons, so a SPEAKER claim's speech (which FK-locks the Person
+ * row) and a speech-request scheduling no longer cycle with it. Shared takers
  * never block each other, so the room does not queue behind itself.
  *
  * THE KEY SPACE. The two-int form, like `lockClubForWrite`, with its own fixed

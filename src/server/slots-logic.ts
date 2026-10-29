@@ -1912,10 +1912,12 @@ async function sessionIsHolder(
  * and only then the slot. No Person lock is taken here: a Person lock ahead of
  * the member row made every assignment deadlock-prone against `mergePeople`
  * (Person, then the exclusive merge lock) and against `scheduleSpeechRequest`
- * (meeting, then Person). The cost is a known residual, deliberately accepted:
- * a speaker claim holding the member `FOR SHARE` key-shares the Person for its
- * speech, while `applyMemberEdit` holds that Person `FOR UPDATE` and then wants
- * the member `NO KEY UPDATE`: 40P01 for one of them, retryable, no data lost.
+ * (meeting, then Person). `mergePeople` instead takes its exclusive merge locks
+ * before its Persons (#1388), so a claim and a merge no longer cycle. One pair
+ * remains: a speaker claim holding the member `FOR SHARE` key-shares the Person
+ * for its speech, while `applyMemberEdit` holds that Person `FOR UPDATE` and
+ * then wants the member `NO KEY UPDATE`. Postgres aborts one with 40P01; the
+ * `claimSlot` server fn and `applyMemberEdit` retry once (`withDeadlockRetry`).
  * `FOR SHARE` on the member does not conflict with the key-share an
  * activity-log insert takes on it, so a member releasing their own role is not
  * blocked. MUST run before the first slot lock of the transaction. The refusal
