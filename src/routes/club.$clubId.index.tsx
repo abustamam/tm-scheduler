@@ -18,11 +18,13 @@ import { showWriteError } from "#/components/write-error-toast";
 import { authClient } from "#/lib/auth-client";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { type StoredMember, useEffectiveMember } from "#/lib/member-identity";
+import { OG_IMAGE_SIZE_META, ogImagePath } from "#/lib/og-image-url";
 import { DUTY_TOAST_MS, roleFreedDutyText } from "#/lib/role-duty-copy";
 import type { Orientation } from "#/lib/season-grid-view";
 import { shareMeta } from "#/lib/share-meta";
 import { getPublicClubProfileFn } from "#/server/clubs";
 import { listMemberCommitments } from "#/server/meetings";
+import { getClubOgVersion } from "#/server/og-card";
 import {
 	getPublicSeasonGrid,
 	type SeasonGridCount,
@@ -50,17 +52,26 @@ export const Route = createFileRoute("/club/$clubId/")({
 		// catch a profile query failure would 500 the whole public club page.
 		// `AboutClub` already renders nothing for a null profile, so degrading
 		// to "no About block" is free.
-		const [grid, profile] = await Promise.all([
+		const [grid, profile, ogVersion] = await Promise.all([
 			getPublicSeasonGrid({
 				data: { clubId: context.clubUuid, count: deps.count },
 			}),
 			getPublicClubProfileFn({ data: context.clubUuid }).catch(() => null),
+			// Only the preview's cache-buster: a failure drops `?v=`, never the page.
+			getClubOgVersion({ data: { clubId: context.clubUuid } }).catch(
+				() => null,
+			),
 		]);
-		return { grid, profile };
+		return { grid, profile, ogVersion };
 	},
 	component: ClubHome,
-	head: ({ match, params }) => ({
+	head: ({ match, params, loaderData }) => ({
 		meta: shareMeta({
+			image: ogImagePath(
+				`/api/og/club/${match.context.clubUuid}.png`,
+				loaderData?.ogVersion,
+			),
+			extra: OG_IMAGE_SIZE_META,
 			title: `${match.context.clubName} — sign up for meeting roles`,
 			description: `Pick your name and claim a role at an upcoming ${match.context.clubName} meeting.`,
 			path: `/club/${params.clubId}`,

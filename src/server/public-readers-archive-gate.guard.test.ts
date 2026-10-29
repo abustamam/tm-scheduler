@@ -125,6 +125,21 @@ interface Wiring {
 
 const WIRINGS: Wiring[] = [
 	{
+		file: "server/og-card.ts",
+		fn: "getClubOgVersion",
+		mustCall: "loadClubCardInput",
+		// `loadClubCardInput` runs `isReadableClub` before reading anything.
+		leaks: "the club's name, logo version and next meeting's time and theme",
+	},
+	{
+		file: "server/og-card.ts",
+		fn: "getMeetingOgVersion",
+		mustCall: "loadMeetingCardInput",
+		// `loadMeetingCardInput` reads through `loadPublicFlyer`, which is gated
+		// by `resolvePublicMeetingKey`.
+		leaks: "a meeting's theme, time, location and Word of the Day",
+	},
+	{
 		file: "server/meetings.ts",
 		fn: "getTmodPanelData",
 		mustCall: "loadTmodPanelData",
@@ -1256,6 +1271,11 @@ describe("API routes are enrolled in the archive gate (#555)", () => {
 	 */
 	const API_GATED_VIA: Record<string, string> = {
 		"club.$clubId.logo.ts": "src/server/club-logo-logic.ts",
+		// #1411. Both og endpoints delegate to the card input loaders: the club
+		// card runs `isReadableClub` first, the meeting card reads through the
+		// archive-gated `loadPublicFlyer`.
+		"og.club.$clubId[.]png.ts": "src/server/og-card-logic.ts",
+		"og.meeting.$clubId.$meetingKey[.]png.ts": "src/server/og-card-logic.ts",
 		"pathways/ingest.ts": "src/server/pathways-ingest-logic.ts",
 		// #773. The MCP endpoint's route body does nothing but delegate, and its
 		// handler does nothing but authenticate and dispatch; the archive check
