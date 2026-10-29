@@ -86,9 +86,18 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 const REL_SKIP = new Set([
+	// Generated; never hand-written.
 	"src/routeTree.gen.ts",
+	// Print surface: inline print styles, no PRINT_PAGE_CSS marker to filter on.
 	"src/components/agenda/meeting-agenda-print.tsx",
 ]);
+
+/**
+ * A file that MUST be in the scanned set, named explicitly: a count cannot see
+ * a whole extension class vanish (`.ts` alone clears the floor). Mirrors
+ * CANARY in routes/no-tel-links.guard.test.ts.
+ */
+const CANARY = "src/routes/_authed/roster.tsx";
 
 const scanned = walk(SRC)
 	.filter((abs) => /\.tsx?$/.test(abs))
@@ -102,6 +111,13 @@ const scanned = walk(SRC)
 describe("design tokens (DESIGN.md)", () => {
 	it("walks a non-trivial source tree (so a broken walk can't pass vacuously)", () => {
 		expect(scanned.length).toBeGreaterThan(300);
+	});
+
+	it("scans the .tsx files, where every class string lives", () => {
+		expect(
+			scanned.map((abs) => relative(ROOT, abs)),
+			`${CANARY} is not in the scanned set. A narrowed extension pattern can drop every .tsx file while the count above still passes on .ts files alone.`,
+		).toContain(CANARY);
 	});
 
 	it("no source file uses a banned token or type spelling (D1 to D7)", () => {
@@ -122,6 +138,8 @@ describe("D1 to D7 patterns", () => {
 		["D1", "text-[var(--sea-ink-soft)]", "text-muted-foreground"],
 		["D2", "text-[11px]", "text-xs"],
 		["D3", "bg-red-500", "bg-destructive"],
+		["D3", "text-slate-700", "text-foreground"],
+		["D3", "border-teal-200", "border-border"],
 		["D4", "transition-all", "transition-colors"],
 		["D5", "text-foreground/70", "text-sm/6"],
 		["D6", "font-medium", "font-semibold"],

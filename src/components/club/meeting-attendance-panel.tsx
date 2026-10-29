@@ -190,8 +190,8 @@ function PanelIdentityLine({
 		<div className="flex min-w-0 flex-1 items-center gap-1.5">
 			{linkToMemberId ? (
 				/* `text-inherit` is NOT decoration — without a `text-*` utility this
-				 * anchor is painted by `styles.css`'s `@layer base { a { color:
-				 * the lagoon-deep brand colour } }`, which is #328f97: 3.81:1 on white, UNDER
+				 * anchor is painted by the base-layer `a` colour rule in `styles.css`
+				 * (the lagoon-deep brand colour), which is #328f97: 3.81:1 on white, UNDER
 				 * AA, on a `text-sm` name (see CODING_STANDARDS.md's layered-text-link
 				 * entry, where that exact number and that exact failure are recorded).
 				 * It would also have made the two branches render different INK while
