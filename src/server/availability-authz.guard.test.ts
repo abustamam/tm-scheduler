@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
@@ -368,17 +368,18 @@ describe("releaseSlotsAndMarkUnavailable gates in the seam (#675)", () => {
 });
 
 // #1303. protects=a connector write for ANOTHER member reaches the release seam
-// only through `connectorOfficerActor`, keyed on the token owner's standing, and
-// the seam's gate admits it only through `isConnectorOfficer`; fails_when=the
-// officer path is routed without `connectorStanding`, the standing is not read,
-// or the gate stops naming the officer predicate; no_claim=lexical, the
-// integration suite proves the refusals.
+// only with the branded actor `connectorOfficerActor` returns (`connectorOfficer`),
+// and the seam's gate admits it only through `isConnectorOfficer`; fails_when=the
+// seam takes the standing or a bare string again, the officer path stops being
+// the branded value, or the brand is minted anywhere but `connectorOfficerActor`;
+// no_claim=lexical, the integration suite proves the refusals.
 describe("releaseSlotsAndMarkUnavailable: the officer-connector path (#1303)", () => {
-	it("routes a connector proof to connectorOfficerActor only with a standing, else the self-only actor", () => {
+	it("takes the connector actor from the branded officer value, else the self-only actor", () => {
 		const body = seamBody(SEAM, "releaseSlotsAndMarkUnavailable");
 		expect(body).toMatch(
-			/args\.connectorStanding\s*\?\s*connectorOfficerActor\(\s*args\.connectorStanding,\s*args\.claimedActorMemberId,?\s*\)\s*:\s*connectorActor\(args\.memberId, args\.claimedActorMemberId\)/,
+			/args\.proof === "connector"\s*\?\s*\(args\.connectorOfficer \?\?\s*connectorActor\(args\.memberId, args\.claimedActorMemberId\)\)/,
 		);
+		expect(body).not.toContain("connectorStanding");
 	});
 
 	it("admits a connector actor that is not the subject only via isConnectorOfficer", () => {
@@ -386,15 +387,58 @@ describe("releaseSlotsAndMarkUnavailable: the officer-connector path (#1303)", (
 		expect(body).toContain(
 			"isConnectorSelf(proof, actorMemberId, args.memberId)",
 		);
-		expect(body).toContain("isConnectorOfficer(proof, via, actorMemberId)");
+		expect(body).toContain(
+			"isConnectorOfficer(proof, args.connectorOfficer, actorMemberId)",
+		);
+	});
+
+	it("bounds the release by the previewed slot ids", () => {
+		const body = seamBody(SEAM, "releaseSlotsAndMarkUnavailable");
+		expect(body).toContain("slotIds: args.expectedHeldSlotIds,");
+		const release = SEAM.slice(
+			SEAM.indexOf("export async function releaseHeldSlotsForPlan("),
+			SEAM.indexOf("export async function releaseHeldSlotsForRecord("),
+		);
+		expect(release).toContain("inArray(roleSlots.id, [...args.slotIds])");
 	});
 
 	it("refuses a plain member's standing and keeps the self-only actor unchanged", () => {
-		expect(SEAM).toMatch(
-			/connectorOfficerActor\([\s\S]*?standing === "member"[\s\S]*?NO_PERMISSION_MESSAGE/,
+		const officer = SEAM.slice(
+			SEAM.indexOf("export function connectorOfficerActor("),
+			SEAM.indexOf("export function connectorOfficerActor(") + 500,
 		);
-		expect(SEAM).toMatch(
-			/function connectorActor\([\s\S]*?isConnectorSelf\("connector"[\s\S]*?SELF_ONLY_MESSAGE/,
+		expect(officer).toContain('standing === "member"');
+		expect(officer).toContain("NO_PERMISSION_MESSAGE");
+		expect(officer).toContain("brandConnectorOfficer(actorMemberId)");
+		const self = SEAM.slice(
+			SEAM.indexOf("export function connectorActor("),
+			SEAM.indexOf("export function connectorOfficerActor("),
 		);
+		expect(self).toContain('isConnectorSelf("connector"');
+		expect(self).toContain("SELF_ONLY_MESSAGE");
+	});
+
+	it("mints the officer brand in exactly one place", () => {
+		const callers: string[] = [];
+		const walk = (dir: string) => {
+			for (const entry of readdirSync(dir, { withFileTypes: true })) {
+				const path = resolve(dir, entry.name);
+				if (entry.isDirectory()) walk(path);
+				else if (
+					/\.tsx?$/.test(entry.name) &&
+					!/\.test\.tsx?$/.test(entry.name)
+				) {
+					const text = readFileSync(path, "utf8");
+					if (/brandConnectorOfficer\(|as ConnectorOfficerActor/.test(text))
+						callers.push(path.slice(path.indexOf("src/")));
+				}
+			}
+		};
+		walk(resolve(__dirname, ".."));
+		expect(callers.sort()).toEqual([
+			"src/lib/write-proof.ts",
+			"src/server/availability-logic.ts",
+		]);
+		expect(SEAM_RAW.match(/brandConnectorOfficer\(/g)).toHaveLength(1);
 	});
 });

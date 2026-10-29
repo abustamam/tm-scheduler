@@ -536,15 +536,31 @@ describe("attendance-plan authz (D6)", () => {
 });
 
 // #1303. protects=`setPlanStatus` refuses a connector write on someone else's row
-// unless the officer-connector path (`grantedVia: "officer"` with a real actor)
-// made it; fails_when=the backstop is deleted or loosened to admit any connector
-// proof; no_claim=lexical, the integration suite proves the refusals.
+// unless it carries the branded officer-connector actor (`connectorOfficer`, which
+// only `connectorOfficerActor` produces) and never reads a caller's own
+// `grantedVia` string for that decision; fails_when=the backstop is deleted,
+// loosened to admit any connector proof, or goes back to trusting `grantedVia`;
+// no_claim=lexical, the integration suite proves the refusals.
 describe("setPlanStatus: connector writes for another member (#1303)", () => {
 	const LOGIC = readSource(resolve(__dirname, "attendance-plan-logic.ts"));
+	/** `setPlanStatus` alone, up to the next top-level export. */
+	function setPlanStatusBody(): string {
+		const start = LOGIC.indexOf("export async function setPlanStatus(");
+		if (start === -1)
+			throw new Error("setPlanStatus not found; re-point this guard.");
+		const next = LOGIC.indexOf("\nexport ", start + 1);
+		return LOGIC.slice(start, next === -1 ? LOGIC.length : next);
+	}
 
-	it("refuses a connector proof that is neither self nor the officer path", () => {
-		expect(LOGIC).toMatch(
-			/args\.proof === "connector" &&\s*!isConnectorSelf\(args\.proof, args\.actorMemberId, args\.memberId\) &&\s*!\(args\.grantedVia === "officer" && args\.actorMemberId !== null\)\s*\)\s*\{\s*throw new Error\(SELF_ONLY_REFUSAL\)/,
+	it("refuses a connector proof that is neither self nor the officer actor", () => {
+		expect(setPlanStatusBody()).toMatch(
+			/args\.proof === "connector" &&\s*!isConnectorSelf\(args\.proof, args\.actorMemberId, args\.memberId\) &&\s*!isConnectorOfficer\(args\.proof, args\.connectorOfficer, args\.actorMemberId\)\s*\)\s*\{\s*throw new Error\(SELF_ONLY_MESSAGE\)/,
 		);
+	});
+
+	it("never decides the officer path from the caller's grantedVia string", () => {
+		const body = setPlanStatusBody();
+		const gate = body.slice(0, body.indexOf("meetingStatusOf("));
+		expect(gate).not.toContain("grantedVia");
 	});
 });

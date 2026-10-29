@@ -12,8 +12,10 @@ import {
 	type MeetingWriteOptions,
 } from "#/lib/meeting-lifecycle";
 import {
+	type ConnectorOfficerActor,
+	isConnectorOfficer,
 	isConnectorSelf,
-	SELF_ONLY_REFUSAL,
+	SELF_ONLY_MESSAGE,
 	SIGN_IN_REQUIRED_MESSAGE,
 	type WriteProof,
 } from "#/lib/write-proof";
@@ -252,6 +254,10 @@ interface SetPlanStatusCommon {
 	 *  callers that have no ladder (`setAvailability`, the self-claim path)
 	 *  need no change. */
 	grantedVia?: "officer" | "tmod" | "self";
+	/** The officer-connector actor (#1303), required for a `connector` write on
+	 *  ANOTHER member's row. Only `connectorOfficerActor` produces one, so the
+	 *  seam never trusts a caller's own `grantedVia` string for that decision. */
+	connectorOfficer?: ConnectorOfficerActor;
 	/** HOW the actor's identity was established, recorded as `detail.proof`
 	 *  (#762, ADR-0026).
 	 *
@@ -446,16 +452,17 @@ export async function setPlanStatus(
 	if (!args.onlyIfAbsent && args.proof === "asserted" && !args.demoteFrom) {
 		throw new Error(ASSERTED_OVERWRITE_MESSAGE);
 	}
-	// A connector write for ANOTHER member is admitted only from the officer-
-	// connector path (#1303), which stamps `grantedVia: "officer"`; a connector
-	// write on one's own row is the self path. Anything else is refused here, so a
-	// new connector caller cannot write someone else's answer by omission.
+	// A connector write for ANOTHER member is admitted only with the officer-
+	// connector actor (#1303), a value only `connectorOfficerActor` produces; a
+	// connector write on one's own row is the self path. Anything else is refused
+	// here, so a new connector caller cannot write someone else's answer by
+	// omission, and a `grantedVia` string alone proves nothing.
 	if (
 		args.proof === "connector" &&
 		!isConnectorSelf(args.proof, args.actorMemberId, args.memberId) &&
-		!(args.grantedVia === "officer" && args.actorMemberId !== null)
+		!isConnectorOfficer(args.proof, args.connectorOfficer, args.actorMemberId)
 	) {
-		throw new Error(SELF_ONLY_REFUSAL);
+		throw new Error(SELF_ONLY_MESSAGE);
 	}
 	const status = await meetingStatusOf(database, args.meetingId);
 	if (status !== null) {
