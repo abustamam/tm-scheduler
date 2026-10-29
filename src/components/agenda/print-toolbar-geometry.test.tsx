@@ -305,6 +305,19 @@ type Frame = {
 	controls: Control[];
 	/** Each of `SHARE_TOKENS` as resolved on the Share button, as RGBA. */
 	shareTokens: Record<string, string>;
+	/**
+	 * State of the "Copy shareable link" button (null when the surface has none),
+	 * recorded in the failure message. FRAME_PROBE disables transitions and
+	 * animations, so animations/transition should read 0 / "none 0s"; a non-zero
+	 * value means that override stopped applying, and hover: true means the
+	 * pointer state changed the colour. `color` is the button's computed ink.
+	 */
+	shareDiag: {
+		animations: number;
+		hover: boolean;
+		transition: string;
+		color: string;
+	} | null;
 };
 
 type Case = FrameCase;
@@ -318,7 +331,12 @@ const caseId = (s: Surface, w: number, theme: Theme, repaired: boolean) =>
  * the toolbar row's items; then every text control in the card, with its ink
  * and the ground composited beneath it, both normalised through a canvas.
  */
-const FRAME_PROBE = `<script>
+const FRAME_PROBE = `<style>
+/* Test page only: the Button base class carries the transition-colors class, so a
+   read at load could in principle catch a colour mid-fade. Suspected cause of
+   the #1403 flake, not reproduced; this removes it from the reads. */
+*, *::before, *::after { transition: none !important; animation: none !important; }
+</style><script>
 var TOKENS = ${JSON.stringify(SHARE_TOKENS)};
 addEventListener("load", function () {
 	var d = document.documentElement;
@@ -371,9 +389,11 @@ addEventListener("load", function () {
 		controls.push({ text: el.textContent.trim(), fg: [fg[0], fg[1], fg[2], fg[3] / 255], bg: [bg[0], bg[1], bg[2]] });
 	});
 	var tokens = {};
-	var btn = card.querySelector("button[data-slot=button]");
+	var diag = null;
+	var btn = Array.prototype.find.call(card.querySelectorAll("button[data-slot=button]"), function (b) { return b.textContent.trim() === "Copy shareable link"; });
 	if (btn) {
 		var cs = getComputedStyle(btn);
+		diag = { animations: btn.getAnimations().length, hover: btn.matches(":hover"), transition: cs.transitionProperty + " " + cs.transitionDuration, color: cs.color };
 		TOKENS.forEach(function (t) {
 			ctx.clearRect(0, 0, 1, 1);
 			ctx.globalCompositeOperation = "copy";
@@ -390,7 +410,7 @@ addEventListener("load", function () {
 		rowHeight: row.getBoundingClientRect().height, sheets: sheets,
 		clientWidth: d.clientWidth, scrollWidth: d.scrollWidth,
 		sheetTextNodes: texts.length, overlaps: overlaps, controls: controls,
-		shareTokens: tokens
+		shareTokens: tokens, shareDiag: diag
 	} }, "*");
 });
 </script>`;
@@ -563,7 +583,14 @@ describe.skipIf(!hasChrome)(
 			const f = frame(surface, PHONE_W, theme, true);
 			expect(f.controls.length).toBeGreaterThan(0);
 			for (const c of f.controls) {
-				expect(contrast(c), JSON.stringify(c)).toBeGreaterThanOrEqual(AA);
+				expect(
+					contrast(c),
+					JSON.stringify(
+						c.text === "Copy shareable link"
+							? { c, shareDiag: f.shareDiag }
+							: { c },
+					),
+				).toBeGreaterThanOrEqual(AA);
 			}
 		});
 
@@ -601,11 +628,14 @@ describe.skipIf(!hasChrome)(
 		it.each(
 			WITH_SHARE,
 		)("%s: CONTROL — without the pinned palette, Share is unreadable in dark theme", (surface) => {
-			const share = frame(surface, PHONE_W, "dark", false).controls.find(
-				(c) => c.text === "Copy shareable link",
-			);
+			const f = frame(surface, PHONE_W, "dark", false);
+			const share = f.controls.find((c) => c.text === "Copy shareable link");
 			expect(share).toBeDefined();
-			if (share) expect(contrast(share)).toBeLessThan(2);
+			if (share)
+				expect(
+					contrast(share),
+					JSON.stringify({ share, shareDiag: f.shareDiag }),
+				).toBeLessThan(2);
 		});
 	},
 );
