@@ -93,7 +93,7 @@ export function MeetingSign({
 				style={{
 					marginTop: 12,
 					fontSize: 112,
-					fontWeight: 800,
+					fontWeight: 700,
 					lineHeight: 1,
 					letterSpacing: ".02em",
 				}}

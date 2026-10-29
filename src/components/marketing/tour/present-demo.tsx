@@ -70,7 +70,7 @@ function Muted({ children }: { children: ReactNode }) {
 }
 
 const BULLET = "flex gap-[1cqw]";
-const MAROON_BOLD = { fontWeight: 800, color: MAROON } as const;
+const MAROON_BOLD = { fontWeight: 700, color: MAROON } as const;
 
 const SLIDES: readonly Slide[] = [
 	{
@@ -156,7 +156,7 @@ const SLIDES: readonly Slide[] = [
 							Thursday, November 5, 2026 · 7:00 PM · Harbor City Library
 						</div>
 						<div className="font-bold text-[2.8cqw] leading-tight">
-							<span style={{ fontWeight: 800 }}>Toastmaster:</span> Marcus Lee
+							<span style={{ fontWeight: 700 }}>Toastmaster:</span> Marcus Lee
 						</div>
 						<div
 							className="text-[1.8cqw] leading-tight"

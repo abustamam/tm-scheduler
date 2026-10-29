@@ -131,7 +131,7 @@ export function AreaClubSummarySheet({
 										<dt
 											style={{
 												fontSize: 10,
-												fontWeight: 800,
+												fontWeight: 700,
 												letterSpacing: ".06em",
 												textTransform: "uppercase",
 												color: MUTED,

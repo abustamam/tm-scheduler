@@ -64,7 +64,8 @@ import {
 } from "#/test/print-compact-fixtures";
 import { CHROME_TEST_TIMEOUT_MS, findChrome } from "#/test/print-page-count";
 // The committed baseline: `renderToStaticMarkup` of the MCF fixture at each layout,
-// written on this branch's base commit BEFORE any code change.
+// written on this branch's base commit BEFORE any code change. Its font weights were remapped
+// by script in #1402 (800 to 700, 500 to 400/600); regenerating must be followed by the same remap.
 import baseline from "./__snapshots__/print-compact-baseline.json";
 import {
 	type AgendaLayout,

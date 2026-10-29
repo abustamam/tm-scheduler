@@ -509,7 +509,7 @@ export function PrintAgendaView({
 										style={{
 											marginLeft: 6,
 											fontSize: 11,
-											fontWeight: 500,
+											fontWeight: 600,
 											opacity: 0.85,
 										}}
 									>

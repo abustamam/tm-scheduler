@@ -128,7 +128,7 @@ const pill: React.CSSProperties = {
 	padding: "2px 8px",
 	borderRadius: 999,
 	fontSize: 11,
-	fontWeight: 500,
+	fontWeight: 400,
 	color: PILL_INK,
 	// `backgroundColor`, not the `background` shorthand: the test reads this
 	// value back off the rendered node to recompute the ratios above, and

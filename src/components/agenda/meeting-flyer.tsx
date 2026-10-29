@@ -116,7 +116,7 @@ export function MeetingFlyerLetter({
 						fontFamily: SERIF,
 						fontSize: 52,
 						lineHeight: 1.08,
-						fontWeight: 700,
+						fontWeight: 600,
 						margin: 0,
 						color: INK,
 						...clamp(3),
@@ -145,7 +145,7 @@ export function MeetingFlyerLetter({
 				<div style={{ display: "flex", gap: 36, alignItems: "flex-start" }}>
 					<div style={{ flex: 1, minWidth: 0 }}>
 						{when ? (
-							<div style={{ fontSize: 28, fontWeight: 800, color: INK }}>
+							<div style={{ fontSize: 28, fontWeight: 700, color: INK }}>
 								{when}
 							</div>
 						) : null}
@@ -274,7 +274,7 @@ function CancelledStamp() {
 			>
 				{FLYER_CANCELLED_LABEL}
 			</div>
-			<div style={{ fontSize: 30, fontWeight: 800, marginTop: 8 }}>
+			<div style={{ fontSize: 30, fontWeight: 700, marginTop: 8 }}>
 				{FLYER_CANCELLED_DETAIL}
 			</div>
 		</div>
@@ -398,7 +398,7 @@ export function MeetingFlyerSquare({
 					<div
 						style={{
 							fontSize: 26,
-							fontWeight: 800,
+							fontWeight: 700,
 							letterSpacing: ".12em",
 							textTransform: "uppercase",
 							color: FOREST,
@@ -413,7 +413,7 @@ export function MeetingFlyerSquare({
 						fontFamily: SERIF,
 						fontSize: 56,
 						lineHeight: 1.08,
-						fontWeight: 700,
+						fontWeight: 600,
 						marginTop: 24,
 						...clamp(3),
 					}}
@@ -421,7 +421,7 @@ export function MeetingFlyerSquare({
 					{content.headline}
 				</div>
 				{when ? (
-					<div style={{ fontSize: 34, fontWeight: 800, marginTop: 18 }}>
+					<div style={{ fontSize: 34, fontWeight: 700, marginTop: 18 }}>
 						{when}
 					</div>
 				) : null}

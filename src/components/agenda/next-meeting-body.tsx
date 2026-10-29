@@ -39,7 +39,7 @@ export function NextMeetingBodyView({ body }: { body: RosterBody }) {
 					</div>
 					{body.toastmaster ? (
 						<div
-							style={{ fontSize: "2.8cqw", fontWeight: 800, lineHeight: 1.15 }}
+							style={{ fontSize: "2.8cqw", fontWeight: 700, lineHeight: 1.15 }}
 							data-testid="next-meeting-toastmaster"
 						>
 							<RowText row={body.toastmaster} />
@@ -120,7 +120,7 @@ export function NextMeetingBodyView({ body }: { body: RosterBody }) {
 				<div
 					style={{
 						fontSize: "2cqw",
-						fontWeight: 800,
+						fontWeight: 700,
 						lineHeight: 1.3,
 						color: MAROON,
 					}}
@@ -144,10 +144,10 @@ function RowText({
 }) {
 	return (
 		<>
-			<span style={{ fontWeight: 800 }}>{row.label}:</span>
+			<span style={{ fontWeight: 700 }}>{row.label}:</span>
 			{row.names ? ` ${row.names}` : null}
 			{row.open ? (
-				<span style={{ fontWeight: 800, color: MAROON }}> {row.open}</span>
+				<span style={{ fontWeight: 700, color: MAROON }}> {row.open}</span>
 			) : null}
 		</>
 	);

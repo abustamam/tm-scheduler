@@ -45,6 +45,10 @@
  * Linux CI's face is shorter and moves them. The jsdom tests above stub every
  * height, so they use the smaller contestDense16 and do not depend on a face.
  *
+ * The stored markup's font weights were remapped by script in #1402 (800 to 700, 500 to
+ * 400/600), so regenerating from the documented commit would reintroduce the old weights and
+ * must be followed by the same remap.
+ *
  * WHAT IT IS COMPARED AGAINST. Two committed files hold what Timing printed on
  * `main` at fa28dd4 (#1230, before this change), because a reference read through
  * this branch's own `TimingEntry` would move with every change made to it:

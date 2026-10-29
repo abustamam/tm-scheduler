@@ -2,6 +2,10 @@
  * Writes `src/components/agenda/__snapshots__/print-paginate-main-baseline.json`
  * (#1227): what Timing printed on `main` before it could paginate.
  *
+ * The stored markup's font weights were remapped by script in #1402 (800 to 700, 500 to
+ * 400/600), so regenerating from the documented commit would reintroduce the old weights and
+ * must be followed by the same remap.
+ *
  * Regenerate, ONLY from a checkout of the commit before #1227 (a later commit
  * renders through the code the snapshot exists to check):
  *

@@ -104,7 +104,7 @@ export function WordOfTheDayPoster({
 							// same dominance whether it is "Apt" or a 22-letter mouthful.
 							fontSize: posterBodySize(w),
 							lineHeight: 1.4,
-							fontWeight: 500,
+							fontWeight: 400,
 							margin: 0,
 							// 23em is the measure (~65 characters) this is set to; the cap
 							// keeps that intent from exceeding the content box as the size
