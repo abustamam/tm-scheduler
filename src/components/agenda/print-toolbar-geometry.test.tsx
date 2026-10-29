@@ -585,7 +585,11 @@ describe.skipIf(!hasChrome)(
 			for (const c of f.controls) {
 				expect(
 					contrast(c),
-					JSON.stringify({ c, diag: f.shareDiag }),
+					JSON.stringify(
+						c.text === "Copy shareable link"
+							? { c, shareDiag: f.shareDiag }
+							: { c },
+					),
 				).toBeGreaterThanOrEqual(AA);
 			}
 		});
