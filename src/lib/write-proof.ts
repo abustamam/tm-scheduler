@@ -85,6 +85,16 @@ export function isConnectorOfficer(
 }
 
 /**
+ * The self-only refusal text, byte-identical to `SELF_ONLY_MESSAGE` in
+ * `src/server/attendance-actor-logic.ts` (tests compare against that one). It
+ * lives here as well because `attendance-plan-logic.ts` must stay loadable
+ * without `DATABASE_URL`, and a value import from the actor module pulls in
+ * `guards` and the db client at load (#1303).
+ */
+export const SELF_ONLY_REFUSAL =
+	"You can only change your own planned attendance.";
+
+/**
  * "You need a session for this."
  *
  * Byte-identical to what `requireUser` (`src/server/guards.ts:65`) has always

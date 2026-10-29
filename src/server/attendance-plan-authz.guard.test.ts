@@ -544,7 +544,7 @@ describe("setPlanStatus: connector writes for another member (#1303)", () => {
 
 	it("refuses a connector proof that is neither self nor the officer path", () => {
 		expect(LOGIC).toMatch(
-			/args\.proof === "connector" &&\s*!isConnectorSelf\(args\.proof, args\.actorMemberId, args\.memberId\) &&\s*!\(args\.grantedVia === "officer" && args\.actorMemberId !== null\)\s*\)\s*\{\s*throw new Error\(SELF_ONLY_MESSAGE\)/,
+			/args\.proof === "connector" &&\s*!isConnectorSelf\(args\.proof, args\.actorMemberId, args\.memberId\) &&\s*!\(args\.grantedVia === "officer" && args\.actorMemberId !== null\)\s*\)\s*\{\s*throw new Error\(SELF_ONLY_REFUSAL\)/,
 		);
 	});
 });

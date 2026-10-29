@@ -13,14 +13,12 @@ import {
 } from "#/lib/meeting-lifecycle";
 import {
 	isConnectorSelf,
+	SELF_ONLY_REFUSAL,
 	SIGN_IN_REQUIRED_MESSAGE,
 	type WriteProof,
 } from "#/lib/write-proof";
 import { logActivity } from "./activity";
-import {
-	type ResolvedActor,
-	SELF_ONLY_MESSAGE,
-} from "./attendance-actor-logic";
+import type { ResolvedActor } from "./attendance-actor-logic";
 import { takeAdvisoryLockWithin } from "./club-write-lock";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
 import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
@@ -457,7 +455,7 @@ export async function setPlanStatus(
 		!isConnectorSelf(args.proof, args.actorMemberId, args.memberId) &&
 		!(args.grantedVia === "officer" && args.actorMemberId !== null)
 	) {
-		throw new Error(SELF_ONLY_MESSAGE);
+		throw new Error(SELF_ONLY_REFUSAL);
 	}
 	const status = await meetingStatusOf(database, args.meetingId);
 	if (status !== null) {
