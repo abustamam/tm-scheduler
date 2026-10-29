@@ -87,7 +87,7 @@ export function OrientationChecklist({
 									const next = e.currentTarget.checked;
 									void run("base-camp", () => onToggleBaseCamp(next));
 								}}
-								className="mt-0.5 size-4 shrink-0 accent-link"
+								className="mt-0.5 size-4 shrink-0 accent-link-fill"
 							/>
 						) : (
 							<DerivedMark done={item.done} />

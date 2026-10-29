@@ -517,7 +517,7 @@ a {
 }
 .prose-gavelup a {
 	color: var(--color-link);
-	text-decoration: underline;
+	text-decoration-line: underline;
 }
 .prose-gavelup blockquote {
 	border-left: 3px solid var(--line);

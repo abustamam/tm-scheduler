@@ -6,8 +6,11 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readSource } from "#/test/guard-source";
 
-const css = readFileSync(join(__dirname, "styles.css"), "utf8");
+// Must-be-present checks read comment-blind (a comment quoting the pattern
+// must not satisfy them); the offender sweep below stays raw.
+const css = readSource(join(__dirname, "styles.css"));
 
 function luminance(hex: string): number {
 	const c = [1, 3, 5].map((i) => {
@@ -55,9 +58,22 @@ describe("link colour split (#1366)", () => {
 		expect(css).toMatch(/a:hover\s*\{[^}]*text-decoration-thickness:\s*2px/);
 	});
 
-	it("no bg-/border-/to- utility uses the text token", () => {
-		const re = /(?<![\w-])(?:[\w[\]:-]*:)?(?:bg|border|to)-link(?![\w-])/;
-		const offenders = walk(join(__dirname))
+	it("prose links keep a non-colour hover cue (no decoration shorthand)", () => {
+		const m = css.match(/\.prose-gavelup a\s*\{([^}]*)\}/);
+		if (!m) throw new Error(".prose-gavelup a rule not found");
+		// The shorthand resets colour/thickness and, being unlayered, beats the
+		// layered a:hover; the longhand lets a:hover's thickening reach prose.
+		expect(m[1]).not.toMatch(/text-decoration\s*:/);
+		expect(m[1]).toMatch(/text-decoration-line:\s*underline/);
+	});
+
+	it("no non-text utility uses the text token", () => {
+		const re =
+			/(?<![\w-])(?:[\w[\]:-]*:)?(?:bg|border(?:-[trblxyse])?|to|from|via|accent|ring|outline|fill|stroke|decoration|divide|shadow|caret)-link(?![\w-])/;
+		const files = walk(join(__dirname));
+		// Vacuity floor: a broken walk must not read as "no offenders".
+		expect(files.length).toBeGreaterThan(200);
+		const offenders = files
 			.filter((p) => re.test(readFileSync(p, "utf8")))
 			.map((p) => p.replace(__dirname, "src"));
 		expect(offenders).toEqual([]);

@@ -200,7 +200,7 @@ export function MentorshipCard({
 					checked={view.willingToMentor}
 					disabled={busy}
 					onChange={(e) => void toggle(e.currentTarget.checked)}
-					className="mt-0.5 size-4 shrink-0 accent-link"
+					className="mt-0.5 size-4 shrink-0 accent-link-fill"
 				/>
 				<div className="leading-[1.3]">
 					<label htmlFor={checkboxId} className="text-sm font-semibold">

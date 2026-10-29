@@ -232,6 +232,7 @@ describe("the window", () => {
 			cleanup();
 			const { container } = mount(view({ periods: [t, tally(2)] }));
 			expect(container.innerHTML).not.toContain("bg-warning-strong text-white");
+			expect(container.innerHTML).not.toContain("bg-link text-white");
 			expect(container.innerHTML).not.toContain("bg-link-fill text-white");
 			expect(container.innerHTML).toContain("text-on-accent-fill");
 		}
