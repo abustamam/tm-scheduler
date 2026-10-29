@@ -126,7 +126,7 @@ export function PathQuiz({ signedIn }: { signedIn: boolean }) {
 					{q.options.map((o) => (
 						<label
 							key={o.id}
-							className="flex cursor-pointer items-start gap-3 rounded-md border border-border px-3 py-2 text-sm has-[:checked]:border-link has-[:checked]:bg-surface-muted"
+							className="flex cursor-pointer items-start gap-3 rounded-md border border-border px-3 py-2 text-sm has-[:checked]:border-link-fill has-[:checked]:bg-surface-muted"
 						>
 							<input
 								type="radio"
@@ -170,7 +170,7 @@ function SuggestionCard({
 			aria-label={s.name}
 			className={
 				featured
-					? "rounded-lg border border-link p-4"
+					? "rounded-lg border border-link-fill p-4"
 					: "rounded-md border border-border px-3 py-2"
 			}
 		>

@@ -58,7 +58,7 @@ export interface OfficerTrainingPanelProps {
 // 309px wide inside a 301px content box, clipping its own dropdown arrow against
 // the card's `overflow-hidden`.
 const SELECT_CLASS =
-	"h-9 max-w-full rounded-md border border-border bg-surface-raised px-3 text-sm font-semibold outline-none focus-visible:border-link";
+	"h-9 max-w-full rounded-md border border-border bg-surface-raised px-3 text-sm font-semibold outline-none focus-visible:border-link-fill";
 
 /**
  * How close to the deadline counts as urgent. Three weeks is the issue's own
@@ -154,7 +154,7 @@ function PeriodCard({
 			data-testid={`cot-period-${tally.period}`}
 			className={cn(
 				"overflow-hidden rounded-2xl border bg-surface-raised",
-				focused ? "border-link" : "border-border",
+				focused ? "border-link-fill" : "border-border",
 			)}
 		>
 			<div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-5 py-4">
@@ -306,7 +306,7 @@ function PhaseBadge({ tally }: { tally: TrainingPeriodTally }) {
 				// 12px a Badge renders, and the two dark values are the label-on-fill
 				// class recorded at #645. Dark ink is 4.6:1 at worst. See styles.css.
 				"text-on-accent-fill",
-				urgent ? "bg-warning-strong" : "bg-link",
+				urgent ? "bg-warning-strong" : "bg-link-fill",
 			)}
 		>
 			{/* Urgency was carried by BACKGROUND COLOUR ALONE — the two arms rendered

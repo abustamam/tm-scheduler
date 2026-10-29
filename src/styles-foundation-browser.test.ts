@@ -48,12 +48,12 @@ async function measure(chromePath: string): Promise<Report> {
 		"bg-surface-raised",
 		"text-link",
 		"bg-[var(--surface-strong)]",
-		"text-[var(--lagoon-deep)]",
+		"text-[var(--lagoon-ink)]",
 	]);
 	const body = `
 <div id="ease" class="ease-enter"></div>
-<div id="light"><i id="l-raised" class="bg-surface-raised"></i><i id="l-var" class="bg-[var(--surface-strong)]"></i><b id="l-link" class="text-link"></b><b id="l-linkvar" class="text-[var(--lagoon-deep)]"></b></div>
-<div id="dark" class="dark"><i id="d-raised" class="bg-surface-raised"></i><i id="d-var" class="bg-[var(--surface-strong)]"></i><b id="d-link" class="text-link"></b><b id="d-linkvar" class="text-[var(--lagoon-deep)]"></b></div>
+<div id="light"><i id="l-raised" class="bg-surface-raised"></i><i id="l-var" class="bg-[var(--surface-strong)]"></i><b id="l-link" class="text-link"></b><b id="l-linkvar" class="text-[var(--lagoon-ink)]"></b></div>
+<div id="dark" class="dark"><i id="d-raised" class="bg-surface-raised"></i><i id="d-var" class="bg-[var(--surface-strong)]"></i><b id="d-link" class="text-link"></b><b id="d-linkvar" class="text-[var(--lagoon-ink)]"></b></div>
 <script>
 var out = {};
 var cs = function (id, prop) { return getComputedStyle(document.getElementById(id))[prop]; };

@@ -833,7 +833,7 @@ function RowInviteControl({
 			title={label}
 			aria-label={label}
 			className={cn(
-				"inline-flex size-7 items-center justify-center rounded-md border border-border bg-surface-raised text-muted-foreground transition-colors hover:border-link hover:text-link disabled:cursor-not-allowed disabled:opacity-40",
+				"inline-flex size-7 items-center justify-center rounded-md border border-border bg-surface-raised text-muted-foreground transition-colors hover:border-link-fill hover:text-link disabled:cursor-not-allowed disabled:opacity-40",
 				state === "invited" && "text-link",
 			)}
 		>
@@ -1057,7 +1057,7 @@ function CsvUploadDialog({
 				</DialogHeader>
 
 				<div className="space-y-3">
-					<label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-border bg-surface-soft px-4 py-3 text-sm transition-colors hover:border-link">
+					<label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-border bg-surface-soft px-4 py-3 text-sm transition-colors hover:border-link-fill">
 						<Upload className="size-4 text-muted-foreground" aria-hidden />
 						<span className="font-semibold text-foreground">
 							{fileName ?? "Choose a .csv file…"}
@@ -1531,7 +1531,7 @@ function BulkImportDialog({
 						placeholder={
 							"Jane Doe, jane@club.org, 19165551234, President\nJohn Smith, john@club.org, 19165555678"
 						}
-						className="w-full rounded-lg border border-border bg-surface-raised px-3 py-2 font-mono text-xs text-foreground transition-colors hover:border-link focus:outline-none"
+						className="w-full rounded-lg border border-border bg-surface-raised px-3 py-2 font-mono text-xs text-foreground transition-colors hover:border-link-fill focus:outline-none"
 					/>
 
 					{preview.length > 0 ? (
@@ -1654,7 +1654,7 @@ function MergeMembersDialog({
 	const canSubmit = Boolean(keeper && absorbed) && !sameMember && !busy;
 
 	const selectClass =
-		"h-9 w-full rounded-lg border border-border bg-surface-raised px-3 text-sm font-semibold text-foreground transition-colors hover:border-link";
+		"h-9 w-full rounded-lg border border-border bg-surface-raised px-3 text-sm font-semibold text-foreground transition-colors hover:border-link-fill";
 
 	async function onMerge() {
 		if (!keeper || !absorbed || sameMember) return;

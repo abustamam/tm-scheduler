@@ -205,7 +205,10 @@
   --color-device-bezel: var(--device-bezel);
   --color-surface-soft: var(--foam);
   --color-surface-muted: var(--sand);
-  --color-link: var(--lagoon-deep);
+  /* Link TEXT: --lagoon-ink is 5.49:1 on foam in light (--lagoon-deep was 3.59:1);
+     in dark the two are the same colour. Fills/borders/gradients use link-fill. */
+  --color-link: var(--lagoon-ink);
+  --color-link-fill: var(--lagoon-deep);
   --color-highlight: var(--lagoon);
   --color-primary-ink: var(--lagoon-ink);
   --color-timer-green: #1f7a46;
@@ -312,14 +315,17 @@ body {
    PRINT_PAGE_CSS, and `bun run test` never parses this file as CSS. */
 @layer base {
   a {
-    color: var(--lagoon-deep);
-    text-decoration-color: rgba(50, 143, 151, 0.4);
+    color: var(--color-link);
+    text-decoration-color: color-mix(in srgb, var(--color-link) 40%, transparent);
     text-decoration-thickness: 1px;
     text-underline-offset: 2px;
   }
 
+  /* Resting colour is already the ink step, so hover cannot be a colour change:
+     the underline goes opaque and thickens. */
   a:hover {
-    color: var(--lagoon-ink);
+    text-decoration-color: var(--color-link);
+    text-decoration-thickness: 2px;
   }
 }
 
@@ -510,8 +516,8 @@ a {
 	font-weight: 700;
 }
 .prose-gavelup a {
-	color: var(--lagoon-deep);
-	text-decoration: underline;
+	color: var(--color-link);
+	text-decoration-line: underline;
 }
 .prose-gavelup blockquote {
 	border-left: 3px solid var(--line);

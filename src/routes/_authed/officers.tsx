@@ -85,7 +85,7 @@ function CharterCard({ summary }: { summary: CharterSummary }) {
 		<Link
 			to="/admin/charter"
 			data-testid="charter-card"
-			className="group block space-y-3 rounded-xl border border-border bg-surface-raised px-4 py-4 shadow-[0_8px_20px_rgba(23,58,64,.05)] outline-none transition-colors hover:border-link focus-visible:ring-[3px] focus-visible:ring-ring/50"
+			className="group block space-y-3 rounded-xl border border-border bg-surface-raised px-4 py-4 shadow-[0_8px_20px_rgba(23,58,64,.05)] outline-none transition-colors hover:border-link-fill focus-visible:ring-[3px] focus-visible:ring-ring/50"
 		>
 			<div className="flex items-center gap-3">
 				<div className="min-w-0 flex-1">

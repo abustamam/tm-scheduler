@@ -233,6 +233,7 @@ describe("the window", () => {
 			const { container } = mount(view({ periods: [t, tally(2)] }));
 			expect(container.innerHTML).not.toContain("bg-warning-strong text-white");
 			expect(container.innerHTML).not.toContain("bg-link text-white");
+			expect(container.innerHTML).not.toContain("bg-link-fill text-white");
 			expect(container.innerHTML).toContain("text-on-accent-fill");
 		}
 	});
@@ -961,7 +962,7 @@ describe("the panel", () => {
 
 	it("highlights the period in focus", () => {
 		mount(view({ focus: 2 }));
-		expect(card(2).className).toContain("border-link");
+		expect(card(2).className).toContain("border-link-fill");
 		expect(card(1).className).toContain("border-border");
 	});
 });

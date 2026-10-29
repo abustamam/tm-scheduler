@@ -365,7 +365,7 @@ function DcpTracker() {
 						id="dcp-year"
 						value={year}
 						onChange={(e) => setYear(Number(e.target.value))}
-						className="h-9 rounded-md border border-border bg-surface-raised px-3 text-sm font-semibold outline-none focus-visible:border-link"
+						className="h-9 rounded-md border border-border bg-surface-raised px-3 text-sm font-semibold outline-none focus-visible:border-link-fill"
 					>
 						{yearOptions.map((y) => (
 							<option key={y} value={y}>
