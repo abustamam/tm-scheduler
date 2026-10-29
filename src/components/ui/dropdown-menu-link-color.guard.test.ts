@@ -1,5 +1,7 @@
-// A `<DropdownMenuItem asChild>` wrapping a `<Link>` / `<a>` must carry a `text-*`
-// colour utility (#1370).
+// A `<DropdownMenuItem asChild>` whose child is a `<Link>` / `<a>` must carry a
+// `text-*` colour utility (#1370). Only `<Link>` / `<a>` children are checked; an
+// asChild item wrapping a `<button>` or any other element is not (buttons are not
+// painted by the anchor rule).
 //
 // `styles.css` paints every bare anchor through a rule in `@layer base`, and
 // `DropdownMenuItem` sets a text colour only on focus, so an anchor item with no
@@ -28,11 +30,12 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
 
 /** `text-*` utilities that are NOT a colour. */
 const NON_COLOUR =
-	/^text-(?:xs|sm|base|lg|\d*xl|left|right|center|justify|start|end|wrap|nowrap|balance|pretty|ellipsis|clip)$/;
+	/^text-(?:\d*xs|sm|base|lg|\d*xl|left|right|center|justify|start|end|wrap|nowrap|balance|pretty|ellipsis|clip|\[(?:length:|[\d.]+(?:px|rem|em|%|vh|vw|ch|pt)\])[^\s]*)$/;
 
 function hasColourUtility(tag: string): boolean {
-	return tag.split(/[\s"'`{}(),]+/).some((tok) => {
-		const base = tok.split(":").pop() ?? "";
+	return tag.split(/[\s"'`{}]+/).some((tok) => {
+		// strip variant prefixes (`hover:`), but not the `:` inside `text-[color:…]`
+		const base = tok.replace(/^(?:[^:[\s]+:)+/, "").replace(/^\(+/, "");
 		return base.startsWith("text-") && !NON_COLOUR.test(base);
 	});
 }
@@ -49,17 +52,32 @@ function openingTag(src: string, from: number): string {
 	return src.slice(from);
 }
 
-function offenders(src: string): number[] {
-	const lines: number[] = [];
-	const re =
-		/<DropdownMenuItem\b[^>]*\basChild\b[^>]*>(?:\s|\{\s*\})*<(Link|a)\b/g;
+/** Every `<DropdownMenuItem asChild>` whose child is a `<Link>` / `<a>`. */
+function linkItems(src: string): { line: number; bare: boolean }[] {
+	const out: { line: number; bare: boolean }[] = [];
+	const re = /<DropdownMenuItem\b/g;
 	for (let m = re.exec(src); m; m = re.exec(src)) {
-		const tagStart = m.index + m[0].lastIndexOf("<");
-		if (!hasColourUtility(openingTag(src, tagStart))) {
-			lines.push(src.slice(0, m.index).split("\n").length);
-		}
+		const item = openingTag(src, m.index);
+		if (!/\basChild\b/.test(item)) continue;
+		const after = src.slice(m.index + item.length);
+		const child = /^(?:\s|\{\s*\})*<(?:Link|a)\b/.exec(after);
+		if (!child) continue;
+		const tag = openingTag(
+			src,
+			m.index + item.length + child[0].lastIndexOf("<"),
+		);
+		out.push({
+			line: src.slice(0, m.index).split("\n").length,
+			bare: !hasColourUtility(tag),
+		});
 	}
-	return lines;
+	return out;
+}
+
+function offenders(src: string): number[] {
+	return linkItems(src)
+		.filter((i) => i.bare)
+		.map((i) => i.line);
 }
 
 describe("DropdownMenuItem asChild links carry a text colour (#1370)", () => {
@@ -80,13 +98,57 @@ describe("DropdownMenuItem asChild links carry a text colour (#1370)", () => {
 		expect(offenders(stripComments(commented))).toEqual([1]);
 	});
 
+	it("scans the item tag brace-aware: an arrow-function prop does not hide the item", () => {
+		const arrow = `<DropdownMenuItem asChild onSelect={() => close()}>\n<Link to="/x">x</Link>`;
+		expect(offenders(arrow)).toEqual([1]);
+		expect(
+			offenders(
+				`<DropdownMenuItem asChild onSelect={() => close()}><Link className="text-inherit" to="/x">x</Link>`,
+			),
+		).toEqual([]);
+	});
+
+	it("treats arbitrary sizes and the size scale as non-colour", () => {
+		for (const cls of [
+			"text-[13px]",
+			"text-2xs",
+			"text-[length:var(--s)]",
+			"text-sm",
+		]) {
+			expect(
+				offenders(`<DropdownMenuItem asChild><a className="${cls}">x</a>`),
+			).toEqual([1]);
+		}
+		for (const cls of [
+			"text-[#123456]",
+			"text-[color:var(--c)]",
+			"text-inherit",
+		]) {
+			expect(
+				offenders(`<DropdownMenuItem asChild><a className="${cls}">x</a>`),
+			).toEqual([]);
+		}
+	});
+
 	it("every asChild link item in src/ has one", () => {
 		const found: string[] = [];
+		const seen: Record<string, number> = {};
 		for (const file of sourceFiles(SRC)) {
-			for (const line of offenders(readSource(file))) {
-				found.push(`${relative(SRC, file)}:${line}`);
-			}
+			const rel = relative(SRC, file);
+			const items = linkItems(readSource(file));
+			if (items.length) seen[rel] = items.length;
+			for (const i of items) if (i.bare) found.push(`${rel}:${i.line}`);
 		}
 		expect(found).toEqual([]);
+		// Vacuity floor: a regex that stops matching must not read green.
+		expect(
+			seen["components/club/meeting-export-menu.tsx"],
+		).toBeGreaterThanOrEqual(5);
+		for (const f of [
+			"components/club/meeting-toolbar.tsx",
+			"routes/_authed/schedule.tsx",
+		]) {
+			expect(seen[f], f).toBeGreaterThanOrEqual(1);
+		}
 	});
 });
