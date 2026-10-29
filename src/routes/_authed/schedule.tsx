@@ -171,7 +171,7 @@ function SeasonGridPage() {
 					data-testid="cancelled-meetings"
 					className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-dashed px-3 py-2 text-sm"
 				>
-					<span className="flex items-center gap-1.5 font-medium text-muted-foreground">
+					<span className="flex items-center gap-1.5 font-semibold text-muted-foreground">
 						<CalendarX className="size-4" aria-hidden />
 						Cancelled
 					</span>

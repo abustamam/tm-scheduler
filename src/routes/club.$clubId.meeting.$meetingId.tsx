@@ -1998,7 +1998,7 @@ function MeetingView() {
 				show={source === "anon" && member !== null}
 			/>
 			{!online && shell ? (
-				<div className="flex items-center gap-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm font-medium text-warning-foreground">
+				<div className="flex items-center gap-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm font-semibold text-warning-foreground">
 					<WifiOff className="size-4 shrink-0" aria-hidden />
 					You're offline — minutes edits are saved on this device and sync when
 					you reconnect. Other changes (meeting details, roles) need a
@@ -2011,7 +2011,7 @@ function MeetingView() {
 				// which is not what happened to it.
 				<div
 					data-testid="cancelled-banner"
-					className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm font-medium"
+					className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm font-semibold"
 				>
 					<span className="flex items-center gap-2">
 						<CalendarX
@@ -2057,12 +2057,12 @@ function MeetingView() {
 					) : null}
 				</div>
 			) : locked ? (
-				<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
+				<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-semibold text-muted-foreground">
 					<Lock className="size-4" aria-hidden />
 					{MEETING_LOCKED_MESSAGE}
 				</div>
 			) : datePassed && !effectiveCanManage ? (
-				<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
+				<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-semibold text-muted-foreground">
 					<Lock className="size-4" aria-hidden />
 					This meeting has already taken place.
 				</div>
@@ -2085,7 +2085,7 @@ function MeetingView() {
 						<span
 							className={
 								flex.status === "over"
-									? "flex items-center gap-1.5 font-medium text-destructive"
+									? "flex items-center gap-1.5 font-semibold text-destructive"
 									: "flex items-center gap-1.5 text-muted-foreground"
 							}
 						>
@@ -2123,7 +2123,7 @@ function MeetingView() {
 							href={joinUrl}
 							target="_blank"
 							rel="noopener noreferrer"
-							className="flex items-center gap-1.5 font-medium text-primary underline-offset-4 hover:underline"
+							className="flex items-center gap-1.5 font-semibold text-primary underline-offset-4 hover:underline"
 						>
 							<Video className="size-4" aria-hidden />
 							Join the video call
@@ -2155,7 +2155,7 @@ function MeetingView() {
 					<p className="flex items-center gap-1.5 text-sm">
 						<Sparkles className="size-4 text-primary" aria-hidden />
 						<span className="text-muted-foreground">Word of the day:</span>
-						<span className="font-medium">{meeting.wordOfTheDay}</span>
+						<span className="font-semibold">{meeting.wordOfTheDay}</span>
 					</p>
 				) : null}
 				<MeetingPersonalStrip
@@ -2520,7 +2520,7 @@ function MeetingView() {
 				   primary can never point at a section that is not here — and it is the
 				   preview-aware flag, so the two still flip together in preview mode. */
 						<section id={MINUTES_ANCHOR_ID} className="scroll-mt-28">
-							<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
+							<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-semibold text-muted-foreground">
 								<ClipboardList className="size-4 shrink-0" aria-hidden />
 								Minutes couldn't load — refresh to try again.
 							</div>

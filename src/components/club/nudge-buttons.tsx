@@ -257,9 +257,7 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 	if (!nudge.whatsappUrl && !nudge.mailtoUrl && !callUrl && !smsUrl) {
 		if (layout === "menu") return null;
 		return (
-			<span className="text-xs text-[var(--sea-ink-soft)]">
-				No contact on file
-			</span>
+			<span className="text-xs text-muted-foreground">No contact on file</span>
 		);
 	}
 
