@@ -53,6 +53,24 @@ import {
 import { MeetingLink } from "./meeting-link";
 import { MemberRolePicker } from "./member-role-picker";
 
+/*
+ * Sticky row-label cell colours (#1302). The table is border-separate with a 4px
+ * spacing, so a sticky cell's background stops at its border box and cells
+ * scrolled underneath show through the gap around it. Each cell therefore
+ * paints a 4px spread shadow (`0_0_0_4px_<colour>`) in its OWN fill colour,
+ * stacked after the edge shadow. Full literal class strings so Tailwind sees
+ * them. Where a row is hovered or is the self row its label cell is raised to
+ * z-[11] (over the base z-10, via cn) so its spread paints over the next row's card-coloured spread in the
+ * gap; both stay below the header's z-20. DESIGN.md "Elevation & Depth" bans a
+ * zero-offset glow; this is a zero-offset fill in the cell's own colour.
+ */
+const STICKY_LABEL_ROW =
+	"group-hover:z-[11] bg-card group-hover:bg-muted shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35),0_0_0_4px_var(--card)] group-hover:shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35),0_0_0_4px_var(--muted)]";
+// The self row: opaque tinted fill + a 3px inset accent bar; the spread repeats
+// the fill's colour-mix (a test asserts the two stay equal).
+const STICKY_LABEL_SELF =
+	"z-[11] bg-[color-mix(in_oklab,var(--card),var(--primary)_8%)] shadow-[inset_3px_0_0_0_var(--primary),4px_0_6px_-4px_rgba(0,0,0,0.35),0_0_0_4px_color-mix(in_oklab,var(--card),var(--primary)_8%)]";
+
 const COUNTS: SeasonGridCount[] = [4, 8, "all"];
 const VIEWS: { value: Orientation; label: string }[] = [
 	{ value: "roles", label: "Roles × Meetings" },
@@ -624,7 +642,7 @@ export function SeasonGrid({
 						    scrolled (the grid auto-scrolls to the upcoming meeting). */}
 								<th
 									ref={labelHeadRef}
-									className="sticky top-0 left-0 z-20 w-36 max-w-36 bg-card px-3 py-2 text-left text-xs font-semibold shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]"
+									className="sticky top-0 left-0 z-20 w-36 max-w-36 bg-card px-3 py-2 text-left text-xs font-semibold shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35),0_0_0_4px_var(--card)]"
 								>
 									{labelHead}
 								</th>
@@ -796,11 +814,7 @@ export function SeasonGrid({
 										<th
 											className={cn(
 												"sticky left-0 z-10 w-36 max-w-36 px-3 py-1 text-left text-xs font-semibold",
-												isSelfRow
-													? // Opaque tinted fill (color-mix stays opaque, so nothing
-														// bleeds under the sticky column) + a 3px inset accent bar.
-														"bg-[color-mix(in_oklab,var(--card),var(--primary)_8%)] shadow-[inset_3px_0_0_0_var(--primary),4px_0_6px_-4px_rgba(0,0,0,0.35)]"
-													: "bg-card group-hover:bg-muted shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]",
+												isSelfRow ? STICKY_LABEL_SELF : STICKY_LABEL_ROW,
 											)}
 										>
 											<div className="flex items-center gap-1.5">
