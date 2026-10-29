@@ -433,6 +433,36 @@ describe.skipIf(!hasTestDb)("assign_roles (#809)", () => {
 		expect(row?.assignedGuestId).toBeNull();
 	});
 
+	describe("ids are case-insensitive (#1418)", () => {
+		it("an uppercase meetingId, slotId and memberId applies, and the plan echoes lowercase", async () => {
+			const res = (await call({
+				meetingId: seed.meetingId.toUpperCase(),
+				assignments: [
+					{
+						slotId: seed.slotId.toUpperCase(),
+						memberId: seed.memberId.toUpperCase(),
+					},
+				],
+			})) as Applied;
+
+			expect(res.applied).toBe(true);
+			expect(res.plan[0]?.slotId).toBe(seed.slotId);
+			const row = await slotState(seed.slotId);
+			expect(row?.assignedMemberId).toBe(seed.memberId);
+		});
+
+		it("an uppercase guestId resolves like its lowercase form", async () => {
+			const guestId = await addGuest(seed.clubId, "Visitor Vera");
+			const res = (await call({
+				meetingId: seed.meetingId,
+				assignments: [{ slotId: seed.slotId, guestId: guestId.toUpperCase() }],
+			})) as Applied;
+
+			expect(res.plan[0]?.change).toBe("open → Visitor Vera");
+			expect((await slotState(seed.slotId))?.assignedGuestId).toBe(guestId);
+		});
+	});
+
 	describe("a speech survives the slot it was on (ADR-0009)", () => {
 		it("release unlinks the speech, keeps it Person-owned, and the plan says so", async () => {
 			const { slotId, speechId } = await addSpeakerSlotWithSpeech(
@@ -704,6 +734,15 @@ describe.skipIf(!hasTestDb)("assign_roles (#809)", () => {
 				indexes: [0, 1],
 			});
 			// Last-write-wins is what this refuses; neither instruction landed.
+			expect((await slotState(seed.slotId))?.assignedMemberId).toBeNull();
+		});
+
+		it("DUPLICATE_SLOT — the same slot in two letter cases is still a duplicate (#1418)", async () => {
+			const blocking = await blockingFrom([
+				{ slotId: seed.slotId, memberId: seed.memberId },
+				{ slotId: seed.slotId.toUpperCase(), memberId: otherMemberId },
+			]);
+			expect(blocking.map((b) => b.code)).toEqual(["DUPLICATE_SLOT"]);
 			expect((await slotState(seed.slotId))?.assignedMemberId).toBeNull();
 		});
 

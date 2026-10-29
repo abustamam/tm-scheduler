@@ -72,14 +72,20 @@ import { authorizeTokenForMeeting } from "../authz-logic";
 import { type McpBlockingItem, McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
 
+/** A uuid, lowercased once at the edge (#1418). Postgres matches a uuid in any
+ *  case but returns it lowercase, so a JS Map/Set lookup keyed by the returned
+ *  id missed an uppercase request id; one canonical form makes every lookup,
+ *  duplicate check, plan line and write agree. */
+const uuidId = z.string().uuid().toLowerCase();
+
 const assignmentSchema = z.union([
-	z.object({ slotId: z.string().uuid(), memberId: z.string().uuid() }).strict(),
-	z.object({ slotId: z.string().uuid(), guestId: z.string().uuid() }).strict(),
-	z.object({ slotId: z.string().uuid(), clear: z.literal(true) }).strict(),
+	z.object({ slotId: uuidId, memberId: uuidId }).strict(),
+	z.object({ slotId: uuidId, guestId: uuidId }).strict(),
+	z.object({ slotId: uuidId, clear: z.literal(true) }).strict(),
 ]);
 
 const inputSchema = {
-	meetingId: z.string().uuid(),
+	meetingId: uuidId,
 	assignments: z
 		.array(assignmentSchema)
 		.min(1)
