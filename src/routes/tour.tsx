@@ -10,6 +10,7 @@ import { BETA_PILL_CLASS } from "#/components/marketing/tour/tour-styles";
 import { VoteDemo } from "#/components/marketing/tour/vote-demo";
 import { Button } from "#/components/ui/button";
 import { PILOT_PRICING_LINE } from "#/lib/brand";
+import { shareMeta } from "#/lib/share-meta";
 
 const TITLE = "How GavelUp works: a tour for Toastmasters officers";
 const DESCRIPTION =
@@ -19,15 +20,12 @@ const DESCRIPTION =
 // is already in may still want to send this page to someone who is not.
 export const Route = createFileRoute("/tour")({
 	head: () => ({
-		meta: [
-			{ title: TITLE },
-			{ name: "description", content: DESCRIPTION },
-			{ property: "og:title", content: TITLE },
-			{ property: "og:description", content: DESCRIPTION },
-			{ property: "og:type", content: "website" },
-			{ property: "og:image", content: "/landing/tour-agenda.png" },
-			{ name: "twitter:card", content: "summary_large_image" },
-		],
+		meta: shareMeta({
+			title: TITLE,
+			description: DESCRIPTION,
+			path: "/tour",
+			image: "/landing/tour-agenda.png",
+		}),
 	}),
 	component: Tour,
 });

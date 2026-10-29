@@ -20,6 +20,7 @@ import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { type StoredMember, useEffectiveMember } from "#/lib/member-identity";
 import { DUTY_TOAST_MS, roleFreedDutyText } from "#/lib/role-duty-copy";
 import type { Orientation } from "#/lib/season-grid-view";
+import { shareMeta } from "#/lib/share-meta";
 import { getPublicClubProfileFn } from "#/server/clubs";
 import { listMemberCommitments } from "#/server/meetings";
 import {
@@ -58,6 +59,13 @@ export const Route = createFileRoute("/club/$clubId/")({
 		return { grid, profile };
 	},
 	component: ClubHome,
+	head: ({ match, params }) => ({
+		meta: shareMeta({
+			title: `${match.context.clubName} — sign up for meeting roles`,
+			description: `Pick your name and claim a role at an upcoming ${match.context.clubName} meeting.`,
+			path: `/club/${params.clubId}`,
+		}),
+	}),
 });
 
 function ClubHome() {

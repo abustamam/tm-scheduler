@@ -10,6 +10,7 @@ import { MarketingShell } from "#/components/marketing/marketing-shell";
 import { Button } from "#/components/ui/button";
 import { PILOT_PRICING_LINE } from "#/lib/brand";
 import { homeRedirectTarget } from "#/lib/home-route";
+import { shareMeta } from "#/lib/share-meta";
 import { getAuthContext } from "#/server/auth-context";
 
 const TITLE = "GavelUp — the meeting runner for Toastmasters clubs";
@@ -39,15 +40,11 @@ export const Route = createFileRoute("/")({
 		}
 	},
 	head: () => ({
-		meta: [
-			{ title: TITLE },
-			{ name: "description", content: DESCRIPTION },
-			{ property: "og:title", content: TITLE },
-			{ property: "og:description", content: DESCRIPTION },
-			{ property: "og:type", content: "website" },
-			{ property: "og:image", content: "/landing/hero.png" },
-			{ name: "twitter:card", content: "summary_large_image" },
-		],
+		meta: shareMeta({
+			title: TITLE,
+			description: DESCRIPTION,
+			path: "/",
+		}),
 	}),
 	component: Landing,
 });

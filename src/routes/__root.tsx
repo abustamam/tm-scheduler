@@ -6,6 +6,7 @@ import {
 	Scripts,
 } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
+import { shareMeta } from "#/lib/share-meta";
 import { ServiceWorkerManager } from "../components/service-worker-manager";
 import TanStackQueryDevtools from "../integrations/tanstack-query/devtools";
 import appCss from "../styles.css?url";
@@ -24,9 +25,11 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 				name: "viewport",
 				content: "width=device-width, initial-scale=1",
 			},
-			{
+			...shareMeta({
 				title: "GavelUp",
-			},
+				description:
+					"Meeting scheduling, roles and agendas for Toastmasters clubs.",
+			}),
 		],
 		links: [
 			{

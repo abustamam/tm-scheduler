@@ -7,6 +7,7 @@ import { ResourcesShell } from "#/components/resources/resources-shell";
 import { Button } from "#/components/ui/button";
 import { getResourceMarkdown } from "#/data/resource-content";
 import { resourceBySlug } from "#/data/resources";
+import { shareMeta } from "#/lib/share-meta";
 import { getAuthContext } from "#/server/auth-context";
 
 export const Route = createFileRoute("/resources/$slug")({
@@ -28,7 +29,11 @@ export const Route = createFileRoute("/resources/$slug")({
 			? `${resource.title} — GavelUp`
 			: "Resource — GavelUp";
 		return {
-			meta: [{ title }, { name: "description", content: resource?.desc ?? "" }],
+			meta: shareMeta({
+				title,
+				description: resource?.desc ?? "Toastmasters resources from GavelUp.",
+				path: `/resources/${params.slug}`,
+			}),
 		};
 	},
 	component: ResourceArticle,

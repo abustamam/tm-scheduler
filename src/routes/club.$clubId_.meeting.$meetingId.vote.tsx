@@ -18,6 +18,7 @@ import { authClient } from "#/lib/auth-client";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { readStoredMember } from "#/lib/member-identity";
+import { NOINDEX, shareMeta } from "#/lib/share-meta";
 import { getPublicMeetingByKey } from "#/server/meetings";
 
 // Escapes the `/club/$clubId` shell (trailing `_`) so it never hits the
@@ -71,9 +72,16 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/vote")({
 	// holding the phone should be told it is the MEETING that is missing, in the
 	// same words every other meeting sub-route uses.
 	notFoundComponent: VoteNotFound,
-	head: () => ({
-		meta: [{ name: "robots", content: "noindex, nofollow" }],
-	}),
+	head: ({ loaderData }) => {
+		const club = loaderData?.clubName ?? "Club";
+		return {
+			meta: shareMeta({
+				title: `Vote — ${club}`,
+				description: `Cast your vote at the ${club} meeting.`,
+				extra: [NOINDEX],
+			}),
+		};
+	},
 });
 
 function VoteNotFound() {
