@@ -101,7 +101,7 @@ const WATERMARK_TEXT_STYLE: React.CSSProperties = {
 	padding: "8px 32px",
 	color: "rgba(185, 28, 28, 0.55)",
 	fontSize: 120,
-	fontWeight: 800,
+	fontWeight: 700,
 	letterSpacing: "0.08em",
 	lineHeight: 1,
 	// Prints in colour where the browser would otherwise drop it to save ink.

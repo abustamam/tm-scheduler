@@ -508,7 +508,7 @@ function OfficerGrid({
 							textTransform: "uppercase",
 							letterSpacing: ".04em",
 							color: onDark ? SEAFOAM : FOREST,
-							fontWeight: 800,
+							fontWeight: 700,
 						}}
 					>
 						{o.office}
@@ -943,7 +943,7 @@ function RunNarrative({
 		flex: "none" as const,
 		width: stampWidth,
 		fontSize: type.stamp,
-		fontWeight: lg ? 800 : 700,
+		fontWeight: 700,
 		color: INK,
 	};
 	const detail = {
@@ -1199,7 +1199,7 @@ function HeaderBand({ header }: { header: AgendaHeader }) {
 									letterSpacing: ".1em",
 									textTransform: "uppercase",
 									color: SEAFOAM,
-									fontWeight: 800,
+									fontWeight: 700,
 								}}
 							>
 								Theme
@@ -1217,7 +1217,7 @@ function HeaderBand({ header }: { header: AgendaHeader }) {
 									letterSpacing: ".1em",
 									textTransform: "uppercase",
 									color: SEAFOAM,
-									fontWeight: 800,
+									fontWeight: 700,
 								}}
 							>
 								Word of the Day
@@ -1287,7 +1287,7 @@ function EditorialLayout({
 					{header.timeRange}
 				</span>
 				{header.location ? (
-					<span style={{ color: MUTED, fontWeight: 500 }}>
+					<span style={{ color: MUTED, fontWeight: 600 }}>
 						{header.location}
 					</span>
 				) : null}
@@ -1779,7 +1779,7 @@ function GridLayout({
 											textTransform: "uppercase",
 											letterSpacing: ".09em",
 											fontSize: 9,
-											fontWeight: 800,
+											fontWeight: 700,
 											color: SEAFOAM,
 										}}
 									>
@@ -1877,7 +1877,7 @@ function GridLayout({
 							<div
 								style={{
 									fontSize: 9,
-									fontWeight: 500,
+									fontWeight: 400,
 									color: "rgba(255,255,255,.8)",
 									lineHeight: 1.3,
 									marginTop: officers.length > 0 ? 10 : 0,
@@ -2149,7 +2149,7 @@ function SpaciousLayout({
 										<div
 											style={{
 												fontSize: 11,
-												fontWeight: 500,
+												fontWeight: 400,
 												color: "rgba(255,255,255,.85)",
 												lineHeight: 1.3,
 												whiteSpace: "pre-line",
@@ -2353,7 +2353,7 @@ function TimingTableHead() {
 				fontSize: 9,
 				textTransform: "uppercase",
 				letterSpacing: ".05em",
-				fontWeight: 800,
+				fontWeight: 700,
 			}}
 		>
 			<div style={{ flex: "none", width: 46 }}>Time</div>
@@ -2506,7 +2506,7 @@ function TimingEntry({
 					flex: "none",
 					width: 46,
 					fontSize: 11,
-					fontWeight: 800,
+					fontWeight: 700,
 					color: INK,
 				}}
 			>
@@ -2952,7 +2952,7 @@ function TimingLayout({
 								letterSpacing: ".1em",
 								textTransform: "uppercase",
 								color: FOREST,
-								fontWeight: 800,
+								fontWeight: 700,
 							}}
 						>
 							Detailed Timing Agenda

@@ -122,7 +122,7 @@ export function ClubRoleSheet({
 												background: i % 2 === 1 ? "#fafdfb" : "#fff",
 											}}
 										>
-											<div style={{ font: `700 14px ${SERIF}`, color: INK }}>
+											<div style={{ font: `600 14px ${SERIF}`, color: INK }}>
 												{r.name}
 											</div>
 											{r.description ? (

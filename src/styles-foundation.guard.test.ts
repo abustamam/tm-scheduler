@@ -36,9 +36,9 @@ const root = blockBody(css, "\n:root");
 
 describe("styles.css foundation (#1306)", () => {
 	it("loads exactly the DESIGN.md font weights (#1317)", () => {
-		// Print surfaces still use these weights; a follow-up remaps them to 600/700, then trims.
+		// Print surfaces were remapped to these weights in #1402; no 500/800 or Fraunces 700 remains.
 		expect(css.split("\n")[0]).toBe(
-			"@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap');",
+			"@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Manrope:wght@400;600;700&display=swap');",
 		);
 	});
 
