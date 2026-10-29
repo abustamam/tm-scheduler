@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { deadlock } from "#/test/deadlock";
 import { CLUB_BUSY_MESSAGE } from "./club-write-lock";
 import { withDeadlockRetry } from "./deadlock-retry";
-
-const deadlock = () =>
-	Object.assign(new Error("deadlock detected"), { code: "40P01" });
 
 describe("withDeadlockRetry (#1388)", () => {
 	// protects=a 40P01 on the first attempt reruns the whole unit once, and outer state comes from the second attempt only;

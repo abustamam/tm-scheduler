@@ -23,6 +23,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
+import { deadlock } from "#/test/deadlock";
 import { CLUB_BUSY_MESSAGE } from "./club-write-lock";
 
 vi.mock("@tanstack/react-start", () => ({
@@ -234,8 +235,6 @@ describe.each(CASES)("$name transport (#825)", (c) => {
 });
 
 describe("claimSlot deadlock retry (#1388)", () => {
-	const deadlock = () =>
-		Object.assign(new Error("deadlock detected"), { code: "40P01" });
 	const claim = () =>
 		claimSlot({
 			data: {
