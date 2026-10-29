@@ -11,9 +11,16 @@ import {
 	assertMeetingAccepts,
 	type MeetingWriteOptions,
 } from "#/lib/meeting-lifecycle";
-import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
+import {
+	isConnectorSelf,
+	SIGN_IN_REQUIRED_MESSAGE,
+	type WriteProof,
+} from "#/lib/write-proof";
 import { logActivity } from "./activity";
-import type { ResolvedActor } from "./attendance-actor-logic";
+import {
+	type ResolvedActor,
+	SELF_ONLY_MESSAGE,
+} from "./attendance-actor-logic";
 import { takeAdvisoryLockWithin } from "./club-write-lock";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
 import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
@@ -440,6 +447,17 @@ export async function setPlanStatus(
 	// fails on the call rather than after a partial write.
 	if (!args.onlyIfAbsent && args.proof === "asserted" && !args.demoteFrom) {
 		throw new Error(ASSERTED_OVERWRITE_MESSAGE);
+	}
+	// A connector write for ANOTHER member is admitted only from the officer-
+	// connector path (#1303), which stamps `grantedVia: "officer"`; a connector
+	// write on one's own row is the self path. Anything else is refused here, so a
+	// new connector caller cannot write someone else's answer by omission.
+	if (
+		args.proof === "connector" &&
+		!isConnectorSelf(args.proof, args.actorMemberId, args.memberId) &&
+		!(args.grantedVia === "officer" && args.actorMemberId !== null)
+	) {
+		throw new Error(SELF_ONLY_MESSAGE);
 	}
 	const status = await meetingStatusOf(database, args.meetingId);
 	if (status !== null) {

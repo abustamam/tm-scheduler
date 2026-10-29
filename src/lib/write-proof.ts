@@ -70,6 +70,21 @@ export function isConnectorSelf(
 }
 
 /**
+ * True when `proof` is `connector` AND the write came through the distinct
+ * officer-connector path (#1303): an officer-audience token whose owner is a club
+ * admin, acting on ANOTHER member's row. `via` is the arm `connectorOfficerActor`
+ * stamps, `"officer"`; a `connectorActor` result is `"self"` and never matches.
+ * A pure predicate beside {@link isConnectorSelf}, which keeps its own meaning.
+ */
+export function isConnectorOfficer(
+	proof: WriteProof,
+	via: string,
+	actorMemberId: string | null,
+): boolean {
+	return proof === "connector" && via === "officer" && actorMemberId !== null;
+}
+
+/**
  * "You need a session for this."
  *
  * Byte-identical to what `requireUser` (`src/server/guards.ts:65`) has always

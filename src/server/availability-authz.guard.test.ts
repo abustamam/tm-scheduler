@@ -366,3 +366,35 @@ describe("releaseSlotsAndMarkUnavailable gates in the seam (#675)", () => {
 		expect(SEAM).toContain("grantedVia: via,");
 	});
 });
+
+// #1303. protects=a connector write for ANOTHER member reaches the release seam
+// only through `connectorOfficerActor`, keyed on the token owner's standing, and
+// the seam's gate admits it only through `isConnectorOfficer`; fails_when=the
+// officer path is routed without `connectorStanding`, the standing is not read,
+// or the gate stops naming the officer predicate; no_claim=lexical, the
+// integration suite proves the refusals.
+describe("releaseSlotsAndMarkUnavailable: the officer-connector path (#1303)", () => {
+	it("routes a connector proof to connectorOfficerActor only with a standing, else the self-only actor", () => {
+		const body = seamBody(SEAM, "releaseSlotsAndMarkUnavailable");
+		expect(body).toMatch(
+			/args\.connectorStanding\s*\?\s*connectorOfficerActor\(\s*args\.connectorStanding,\s*args\.claimedActorMemberId,?\s*\)\s*:\s*connectorActor\(args\.memberId, args\.claimedActorMemberId\)/,
+		);
+	});
+
+	it("admits a connector actor that is not the subject only via isConnectorOfficer", () => {
+		const body = seamBody(SEAM, "releaseSlotsAndMarkUnavailable");
+		expect(body).toContain(
+			"isConnectorSelf(proof, actorMemberId, args.memberId)",
+		);
+		expect(body).toContain("isConnectorOfficer(proof, via, actorMemberId)");
+	});
+
+	it("refuses a plain member's standing and keeps the self-only actor unchanged", () => {
+		expect(SEAM).toMatch(
+			/connectorOfficerActor\([\s\S]*?standing === "member"[\s\S]*?NO_PERMISSION_MESSAGE/,
+		);
+		expect(SEAM).toMatch(
+			/function connectorActor\([\s\S]*?isConnectorSelf\("connector"[\s\S]*?SELF_ONLY_MESSAGE/,
+		);
+	});
+});

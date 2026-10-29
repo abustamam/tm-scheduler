@@ -534,3 +534,17 @@ describe("attendance-plan authz (D6)", () => {
 		).not.toMatch(/demoteFrom:\s*\["reached_out"\],/);
 	});
 });
+
+// #1303. protects=`setPlanStatus` refuses a connector write on someone else's row
+// unless the officer-connector path (`grantedVia: "officer"` with a real actor)
+// made it; fails_when=the backstop is deleted or loosened to admit any connector
+// proof; no_claim=lexical, the integration suite proves the refusals.
+describe("setPlanStatus: connector writes for another member (#1303)", () => {
+	const LOGIC = readSource(resolve(__dirname, "attendance-plan-logic.ts"));
+
+	it("refuses a connector proof that is neither self nor the officer path", () => {
+		expect(LOGIC).toMatch(
+			/args\.proof === "connector" &&\s*!isConnectorSelf\(args\.proof, args\.actorMemberId, args\.memberId\) &&\s*!\(args\.grantedVia === "officer" && args\.actorMemberId !== null\)\s*\)\s*\{\s*throw new Error\(SELF_ONLY_MESSAGE\)/,
+		);
+	});
+});

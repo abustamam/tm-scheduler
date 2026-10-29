@@ -3,7 +3,9 @@ import type { db } from "#/db";
 import { meetings, roleDefinitions, roleSlots, speeches } from "#/db/schema";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
+import { NO_PERMISSION_MESSAGE } from "#/lib/permission-message";
 import {
+	isConnectorOfficer,
 	isConnectorSelf,
 	SIGN_IN_REQUIRED_MESSAGE,
 	type WriteProof,
@@ -234,6 +236,30 @@ export function connectorActor(
 }
 
 /**
+ * The actor of an OFFICER-connector write (#1303): an officer-audience token
+ * whose owner is a club admin (or holds an open office, the app's effective
+ * admin), freeing or answering for ANOTHER member. A distinct, named path:
+ * {@link connectorActor} and `isConnectorSelf` keep refusing anyone but the
+ * subject. `standing` is `TokenClub.via` for THIS meeting's club; a plain
+ * member gets the self-only refusal's neighbour, `NO_PERMISSION_MESSAGE`. The
+ * Toastmaster has no arm here: standing is the only thing read.
+ */
+export function connectorOfficerActor(
+	standing: "admin" | "officer" | "member",
+	actorMemberId: string | undefined,
+): ResolvedActor {
+	if (standing === "member" || !actorMemberId) {
+		throw new Error(NO_PERMISSION_MESSAGE);
+	}
+	return {
+		actorMemberId,
+		viaManager: true,
+		via: "officer",
+		proof: "connector",
+	};
+}
+
+/**
  * Release every role a member holds in a meeting and record them `not_coming`,
  * in one transaction (#204). Pure db logic so it's directly testable; the server
  * fn (`markUnavailableReleasing`) wraps it with the meeting-lock + membership
@@ -317,6 +343,11 @@ export async function releaseSlotsAndMarkUnavailable(
 		 *  Omitted by every other caller, which resolves its proof exactly as
 		 *  before. */
 		proof?: WriteProof;
+		/** `"connector"` only (#1303): the token owner's standing in this club, which
+		 *  routes the write through {@link connectorOfficerActor} so the owner may
+		 *  free ANOTHER member's roles. Absent keeps the self-only
+		 *  {@link connectorActor}. */
+		connectorStanding?: "admin" | "officer" | "member";
 		/** The slot ids the caller previewed and hashed (#1283). Given, the held
 		 *  set read under `lockMemberAttendance` must equal it, else
 		 *  {@link HeldSlotsChangedError} and nothing is written: an assign or claim
@@ -337,7 +368,12 @@ export async function releaseSlotsAndMarkUnavailable(
 	// lands under their name.
 	const { actorMemberId, via, proof } =
 		args.proof === "connector"
-			? connectorActor(args.memberId, args.claimedActorMemberId)
+			? args.connectorStanding
+				? connectorOfficerActor(
+						args.connectorStanding,
+						args.claimedActorMemberId,
+					)
+				: connectorActor(args.memberId, args.claimedActorMemberId)
 			: await resolveActor({
 					clubId: args.clubId,
 					meetingId: args.meetingId,
@@ -349,7 +385,8 @@ export async function releaseSlotsAndMarkUnavailable(
 	if (
 		!(
 			proof === "session" ||
-			isConnectorSelf(proof, actorMemberId, args.memberId)
+			isConnectorSelf(proof, actorMemberId, args.memberId) ||
+			isConnectorOfficer(proof, via, actorMemberId)
 		)
 	) {
 		throw new Error(SIGN_IN_REQUIRED_MESSAGE);
