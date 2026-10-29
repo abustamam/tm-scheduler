@@ -27,6 +27,7 @@ import { getMyScheduleTool } from "./get-my-schedule";
 import { listMeetingsTool } from "./list-meetings";
 import { recordGuestBookTool } from "./record-guest-book";
 import { restoreMeetingTool } from "./restore-meeting";
+import { setAttendanceTool } from "./set-attendance";
 import { setAwardsTool } from "./set-awards";
 import { setMyAttendanceTool } from "./set-my-attendance";
 import { upsertAgendasTool } from "./upsert-agendas";
@@ -41,6 +42,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	getMyFeedbackTool,
 	getMyScheduleTool,
 	setMyAttendanceTool,
+	setAttendanceTool,
 	claimOpenRoleTool,
 	findPeopleTool,
 	recordGuestBookTool,

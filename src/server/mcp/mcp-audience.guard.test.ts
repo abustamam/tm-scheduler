@@ -27,6 +27,14 @@ describe("MCP tool audiences (#1281)", () => {
 		]);
 	});
 
+	it("set_attendance (an officer writing ANOTHER member's answer, #1303) is an officer tool", () => {
+		const t = MCP_TOOLS.find((x) => x.name === "set_attendance");
+		expect(t?.audience).toBe("officer");
+		expect(
+			MCP_TOOLS.filter((x) => x.audience === "member").map((x) => x.name),
+		).not.toContain("set_attendance");
+	});
+
 	it("every tool declares an audience", () => {
 		for (const t of MCP_TOOLS) {
 			expect(["officer", "member"], t.name).toContain(t.audience);

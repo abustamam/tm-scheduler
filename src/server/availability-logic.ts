@@ -3,7 +3,11 @@ import type { db } from "#/db";
 import { meetings, roleDefinitions, roleSlots, speeches } from "#/db/schema";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
+import { NO_PERMISSION_MESSAGE } from "#/lib/permission-message";
 import {
+	brandConnectorOfficer,
+	type ConnectorOfficerActor,
+	isConnectorOfficer,
 	isConnectorSelf,
 	SIGN_IN_REQUIRED_MESSAGE,
 	type WriteProof,
@@ -25,6 +29,7 @@ import {
 	setPlanStatus,
 } from "./attendance-plan-logic";
 import { assertClubNotArchived } from "./guards";
+import type { TokenClub } from "./mcp/authz-logic";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
 import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
 
@@ -164,8 +169,15 @@ async function reportFreed(
  */
 export async function releaseHeldSlotsForPlan(
 	tx: Tx,
-	args: ReleaseContext,
+	args: ReleaseContext & {
+		/** The slots the caller previewed (`expectedHeldSlotIds`, #1303). Given, it
+		 *  is the CEILING of the UPDATE, as `releaseHeldSlotsForRecord`'s is: a role
+		 *  that reached the member after the held-set re-check is not freed unseen.
+		 *  Omitted by every other caller, which frees everything the member holds. */
+		slotIds?: readonly string[];
+	},
 ): Promise<ReleasedSlot[]> {
+	if (args.slotIds && args.slotIds.length === 0) return [];
 	const read = await readHeldSlots(tx, args.meetingId, args.memberId);
 	const released = await tx
 		.update(roleSlots)
@@ -174,6 +186,7 @@ export async function releaseHeldSlotsForPlan(
 			and(
 				eq(roleSlots.meetingId, args.meetingId),
 				eq(roleSlots.assignedMemberId, args.memberId),
+				args.slotIds ? inArray(roleSlots.id, [...args.slotIds]) : undefined,
 				meetingAcceptsWrite(tx, "plan", roleSlots.meetingId),
 			),
 		)
@@ -231,6 +244,27 @@ export function connectorActor(
 		via: "self",
 		proof: "connector",
 	};
+}
+
+/**
+ * The actor of an OFFICER-connector write (#1303): an officer-audience token
+ * whose owner is a club admin (or holds an open office, the app's effective
+ * admin), freeing or answering for ANOTHER member. A distinct, named path:
+ * {@link connectorActor} and `isConnectorSelf` keep refusing anyone but the
+ * subject. `standing` is the owner's standing in THIS meeting's club, read
+ * fresh under the club write lock by the caller; a plain member gets
+ * `NO_PERMISSION_MESSAGE`. The Toastmaster has no arm here: standing is the
+ * only thing read. The result is the branded `ConnectorOfficerActor`, the only
+ * value the seams accept for a connector write on another member's row.
+ */
+export function connectorOfficerActor(
+	standing: TokenClub["via"],
+	actorMemberId: string | undefined,
+): ConnectorOfficerActor {
+	if (standing === "member" || !actorMemberId) {
+		throw new Error(NO_PERMISSION_MESSAGE);
+	}
+	return brandConnectorOfficer(actorMemberId);
 }
 
 /**
@@ -317,6 +351,11 @@ export async function releaseSlotsAndMarkUnavailable(
 		 *  Omitted by every other caller, which resolves its proof exactly as
 		 *  before. */
 		proof?: WriteProof;
+		/** `"connector"` only (#1303): the value {@link connectorOfficerActor}
+		 *  returned, which lets the token owner free ANOTHER member's roles. Absent
+		 *  keeps the self-only {@link connectorActor}. A caller's own string cannot
+		 *  stand in for it: the type is branded. */
+		connectorOfficer?: ConnectorOfficerActor;
 		/** The slot ids the caller previewed and hashed (#1283). Given, the held
 		 *  set read under `lockMemberAttendance` must equal it, else
 		 *  {@link HeldSlotsChangedError} and nothing is written: an assign or claim
@@ -337,7 +376,8 @@ export async function releaseSlotsAndMarkUnavailable(
 	// lands under their name.
 	const { actorMemberId, via, proof } =
 		args.proof === "connector"
-			? connectorActor(args.memberId, args.claimedActorMemberId)
+			? (args.connectorOfficer ??
+				connectorActor(args.memberId, args.claimedActorMemberId))
 			: await resolveActor({
 					clubId: args.clubId,
 					meetingId: args.meetingId,
@@ -349,7 +389,8 @@ export async function releaseSlotsAndMarkUnavailable(
 	if (
 		!(
 			proof === "session" ||
-			isConnectorSelf(proof, actorMemberId, args.memberId)
+			isConnectorSelf(proof, actorMemberId, args.memberId) ||
+			isConnectorOfficer(proof, args.connectorOfficer, actorMemberId)
 		)
 	) {
 		throw new Error(SIGN_IN_REQUIRED_MESSAGE);
@@ -402,6 +443,7 @@ export async function releaseSlotsAndMarkUnavailable(
 		const releasedSlots = await releaseHeldSlotsForPlan(tx, {
 			meetingId: args.meetingId,
 			memberId: args.memberId,
+			slotIds: args.expectedHeldSlotIds,
 			proof,
 			cause: "not_coming",
 			clubId: args.clubId,
@@ -436,6 +478,9 @@ export async function releaseSlotsAndMarkUnavailable(
 			// "auditable afterwards" is not auditable while an honour-system TMOD
 			// release and an officer's look identical in the feed.
 			grantedVia: via,
+			// The officer-connector actor, or nothing: `setPlanStatus` refuses a
+			// connector write on another member's row without it.
+			connectorOfficer: args.connectorOfficer,
 			// Always `"session"` past the gate above, and recorded anyway, so a
 			// feed reader is not left inferring it from which writers happen to be
 			// gated this month. It is a one-way signal and not a discriminator:

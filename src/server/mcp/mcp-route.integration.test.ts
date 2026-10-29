@@ -204,6 +204,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"list_meetings",
 			"record_guest_book",
 			"restore_meeting",
+			"set_attendance",
 			"set_awards",
 			"set_my_attendance",
 			"upsert_agendas",
@@ -570,6 +571,13 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			// caller's own roles and the meeting's open labels, never a guest row.
 			toolsCall("set_my_attendance", {
 				meetingId: seed.meetingId,
+				status: "not_coming",
+			}),
+			// #1303. The officer write: names another member, never a guest row.
+			// A preview only (no planHash), so nothing is written.
+			toolsCall("set_attendance", {
+				meetingId: seed.meetingId,
+				memberId: seed.memberId,
 				status: "not_coming",
 			}),
 			toolsCall("claim_open_role", {

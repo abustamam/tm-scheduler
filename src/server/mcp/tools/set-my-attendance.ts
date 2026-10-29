@@ -20,36 +20,27 @@
  * sentence and a drafted message the member sends themselves.
  */
 import { z } from "zod";
-import { db } from "#/db";
 import { listRoles } from "#/lib/list-roles";
-import { planHash } from "#/lib/mcp-plan";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { roleFreedDutyText } from "#/lib/role-duty-copy";
-import {
-	getPlanStatus,
-	isMemberUnavailable,
-	setPlanStatus,
-} from "#/server/attendance-plan-logic";
-import {
-	HeldSlotsChangedError,
-	releaseSlotsAndMarkUnavailable,
-} from "#/server/availability-logic";
-import { lockClubForWrite } from "#/server/club-write-lock";
+import { setPlanStatus } from "#/server/attendance-plan-logic";
+import { releaseSlotsAndMarkUnavailable } from "#/server/availability-logic";
 import { loadTmodMemberId } from "#/server/meeting-authz-logic";
 import { authorizeTokenForMeeting } from "../authz-logic";
-import { McpError } from "../errors";
 import {
+	attendancePlanHash,
 	type DbOrTx,
-	loadLabelledSlots,
+	isAlreadyStatus,
 	loadMeetingFacts,
+	loadMemberAttendanceState,
 	type MemberBlockingItem,
 	meetingDayLabel,
+	meetingPlanHeader,
 	meetingStateBlocking,
 	memberFirstName,
-	throwIfLocked,
+	runAttendanceTool,
 } from "../member-meeting";
 import type { McpToolDefinition } from "../tool";
-import { isoInTimezone } from "./get-my-schedule";
 
 const TOOL = "set_my_attendance";
 
@@ -66,22 +57,14 @@ const inputSchema = {
 
 interface Computed {
 	plan: {
-		meeting: {
-			meetingId: string;
-			clubName: string;
-			startsAt: string;
-			status: string;
-		};
+		meeting: ReturnType<typeof meetingPlanHeader>;
 		status: "coming" | "not_coming";
 		rolesToFree: string[];
 	};
 	planHash: string;
 	blocking: MemberBlockingItem[];
 	heldSlotIds: string[];
-	heldLabels: string[];
 	dayLabel: string;
-	clubId: string;
-	status: string;
 }
 
 async function compute(
@@ -90,25 +73,15 @@ async function compute(
 	who: { clubId: string; userId: string; memberId: string },
 ): Promise<Computed> {
 	const facts = await loadMeetingFacts(conn, args.meetingId);
-	const slots = await loadLabelledSlots(conn, args.meetingId);
-	const held = slots.filter((s) => s.holderMemberId === who.memberId);
-	const planStatus = await getPlanStatus(conn, {
+	const state = await loadMemberAttendanceState(conn, {
+		meetingId: facts.meetingId,
 		memberId: who.memberId,
-		meetingId: args.meetingId,
-	});
-	const unavailable = await isMemberUnavailable(conn, {
-		memberId: who.memberId,
-		meetingId: args.meetingId,
 	});
 	const rolesToFree =
-		args.status === "not_coming" ? held.map((s) => s.label) : [];
+		args.status === "not_coming" ? state.held.map((s) => s.label) : [];
 
 	const blocking = meetingStateBlocking(facts);
-	const already =
-		args.status === "coming"
-			? planStatus === "coming" && !unavailable
-			: unavailable && held.length === 0;
-	if (already && blocking.length === 0) {
+	if (isAlreadyStatus(args.status, state) && blocking.length === 0) {
 		blocking.push({
 			code: "ALREADY_THAT_STATUS",
 			message:
@@ -119,33 +92,22 @@ async function compute(
 	}
 
 	const plan = {
-		meeting: {
-			meetingId: facts.meetingId,
-			clubName: facts.clubName,
-			startsAt: isoInTimezone(facts.scheduledAt, facts.timezone),
-			status: facts.status,
-		},
+		meeting: meetingPlanHeader(facts),
 		status: args.status,
 		rolesToFree,
 	};
-	const heldSlotIds = held.map((s) => s.slotId).sort();
 	return {
 		plan,
-		planHash: planHash({
+		planHash: attendancePlanHash({
 			tool: TOOL,
 			clubId: who.clubId,
 			userId: who.userId,
-			plan: {
-				...plan,
-				state: { heldSlotIds, planStatus, unavailable },
-			},
+			plan,
+			state,
 		}),
 		blocking,
-		heldSlotIds,
-		heldLabels: held.map((s) => s.label),
+		heldSlotIds: state.heldSlotIds,
 		dayLabel: meetingDayLabel(facts.scheduledAt, facts.timezone),
-		clubId: facts.clubId,
-		status: facts.status,
 	};
 }
 
@@ -170,100 +132,74 @@ export const setMyAttendanceTool: McpToolDefinition = {
 	},
 	handler: async (input, ctx) => {
 		const args = z.object(inputSchema).parse(input);
-		const { club, user } = await authorizeTokenForMeeting(ctx, args.meetingId);
+		// A uuid is case-insensitive to the schema and to SQL, but not to the
+		// text-keyed locks: the request's spelling is only ever an argument to SQL,
+		// and the writes use `facts.meetingId`, read from the database. The subject
+		// is the token's own membership id, also read from the database.
+		const { meetingId } = args;
+		const { club, user } = await authorizeTokenForMeeting(ctx, meetingId);
 		const who = {
 			clubId: club.clubId,
 			userId: user.id,
 			memberId: club.membershipId,
 		};
+		const a = { meetingId, status: args.status };
 
-		if (!args.planHash) {
-			const c = await compute(db, args, who);
-			return { plan: c.plan, planHash: c.planHash, blocking: c.blocking };
-		}
-		const hash = args.planHash;
+		return runAttendanceTool({
+			planHash: args.planHash,
+			meetingId,
+			clubId: who.clubId,
+			compute: (conn) => compute(conn, a, who),
+			apply: async (tx, c, facts) => {
+				if (args.status === "coming") {
+					// The plan write class by name, ahead of the plan seam (#1135):
+					// `setPlanStatus` accepts a completed meeting and leaves it to its
+					// callers. `throwIfLocked` is the tool's `LOCKED` answer; this is
+					// the refusal `meeting-writers.guard.test.ts` reads.
+					assertMeetingAccepts(facts.status, "plan");
+					// Overwrites a `not_coming` (the plan row IS the unavailability mark),
+					// so a later claim_open_role is not blocked by NOT_COMING.
+					await setPlanStatus(tx, {
+						memberId: who.memberId,
+						meetingId: facts.meetingId,
+						clubId: who.clubId,
+						status: "coming",
+						actorMemberId: who.memberId,
+						via: "connector",
+						grantedVia: "self",
+						proof: "connector",
+					});
+					return { released: [], dutyText: null, draftMessage: null };
+				}
 
-		return db.transaction(async (tx) => {
-			await lockClubForWrite(tx, who.clubId);
-			const facts = await loadMeetingFacts(tx, args.meetingId);
-			throwIfLocked(facts);
-			const c = await compute(tx, args, who);
-			if (c.planHash !== hash) {
-				throw new McpError(
-					"PLAN_STALE",
-					"That meeting changed since you previewed it. Review the fresh plan and ask the user again.",
-					{ plan: c.plan, planHash: c.planHash, blocking: c.blocking },
-				);
-			}
-			const first = c.blocking[0];
-			if (first)
-				throw new McpError("BLOCKED", first.message, { blocking: c.blocking });
-
-			if (args.status === "coming") {
-				// The plan write class by name, ahead of the plan seam (#1135):
-				// `setPlanStatus` accepts a completed meeting and leaves it to its
-				// callers. `throwIfLocked` above is the tool's `LOCKED` answer; this is
-				// the refusal `meeting-writers.guard.test.ts` reads.
-				assertMeetingAccepts(facts.status, "plan");
-				// Overwrites a `not_coming` (the plan row IS the unavailability mark),
-				// so a later claim_open_role is not blocked by NOT_COMING.
-				await setPlanStatus(tx, {
-					memberId: who.memberId,
-					meetingId: args.meetingId,
-					clubId: who.clubId,
-					status: "coming",
-					actorMemberId: who.memberId,
-					via: "connector",
-					grantedVia: "self",
-					proof: "connector",
-				});
-				return { released: [], dutyText: null, draftMessage: null };
-			}
-
-			// On `tx`, not `db`: the release nests as a savepoint of THIS transaction,
-			// so it shares the checked connection, commits or rolls back with the
-			// answer, and re-checks the previewed held set under the attendance lock
-			// (a slot assigned after the hash check is PLAN_STALE, never freed unseen).
-			let releasedSlots: Awaited<
-				ReturnType<typeof releaseSlotsAndMarkUnavailable>
-			>["releasedSlots"];
-			try {
-				({ releasedSlots } = await releaseSlotsAndMarkUnavailable(tx, {
+				// On `tx`, not `db`: the release nests as a savepoint of THIS transaction,
+				// so it shares the checked connection, commits or rolls back with the
+				// answer, and re-checks the previewed held set under the attendance lock
+				// (a slot assigned after the hash check is PLAN_STALE, never freed unseen).
+				const { releasedSlots } = await releaseSlotsAndMarkUnavailable(tx, {
 					memberId: who.memberId,
 					claimedActorMemberId: who.memberId,
-					meetingId: args.meetingId,
+					meetingId: facts.meetingId,
 					clubId: who.clubId,
 					via: "connector",
 					proof: "connector",
 					expectedHeldSlotIds: c.heldSlotIds,
-				}));
-			} catch (e) {
-				if (!(e instanceof HeldSlotsChangedError)) throw e;
-				const fresh = await compute(tx, args, who);
-				throw new McpError(
-					"PLAN_STALE",
-					"That meeting changed since you previewed it. Review the fresh plan and ask the user again.",
-					{
-						plan: fresh.plan,
-						planHash: fresh.planHash,
-						blocking: fresh.blocking,
-					},
-				);
-			}
-			const released = releasedSlots.map((s) => s.label);
-			if (released.length === 0) {
-				return { released, dutyText: null, draftMessage: null };
-			}
-			const tmodId = await loadTmodMemberId(args.meetingId, tx);
-			const tmodFirst =
-				tmodId && tmodId !== who.memberId
-					? await memberFirstName(tx, tmodId)
-					: null;
-			return {
-				released,
-				dutyText: roleFreedDutyText(released.length),
-				draftMessage: `Hi ${tmodFirst ?? "VPE"}, I can't make the ${c.dayLabel} meeting, so I've freed ${listRoles(released)}. Could you help find cover?`,
-			};
+				});
+				const released = releasedSlots.map((s) => s.label);
+				if (released.length === 0) {
+					return { released, dutyText: null, draftMessage: null };
+				}
+				const tmodId = await loadTmodMemberId(facts.meetingId, tx);
+				const tmodFirst =
+					tmodId && tmodId !== who.memberId
+						? await memberFirstName(tx, tmodId)
+						: null;
+				return {
+					released,
+					dutyText: roleFreedDutyText(released.length),
+					draftMessage: `Hi ${tmodFirst ?? "VPE"}, I can't make the ${c.dayLabel} meeting, so I've freed ${listRoles(released)}. Could you help find cover?`,
+				};
+			},
 		});
 	},
 };

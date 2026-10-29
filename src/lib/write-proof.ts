@@ -69,6 +69,67 @@ export function isConnectorSelf(
 	return proof === "connector" && actorMemberId === subjectMemberId;
 }
 
+declare const connectorOfficerBrand: unique symbol;
+
+/**
+ * The actor an OFFICER-connector write carries (#1303): an officer-audience
+ * token whose owner holds admin or officer standing in the meeting's club,
+ * writing ANOTHER member's answer. It is a `ResolvedActor` with a brand, and
+ * `connectorOfficerActor` (`availability-logic.ts`) is the only function that
+ * produces one, so a seam that requires this type cannot be handed a caller's
+ * own `grantedVia: "officer"` string. Type-level, like every brand: the guard
+ * tests pin that nothing else casts to it.
+ */
+export interface ConnectorOfficerActor {
+	readonly [connectorOfficerBrand]: true;
+	readonly actorMemberId: string;
+	readonly viaManager: true;
+	readonly via: "officer";
+	readonly proof: "connector";
+}
+
+/** Mint the brand. Called by `connectorOfficerActor` and nothing else. */
+export function brandConnectorOfficer(
+	actorMemberId: string,
+): ConnectorOfficerActor {
+	return {
+		actorMemberId,
+		viaManager: true,
+		via: "officer",
+		proof: "connector",
+	} as ConnectorOfficerActor;
+}
+
+/**
+ * True when `proof` is `connector` AND the write carries the officer-connector
+ * actor, whose id is the actor the write is credited to. It does NOT say whose
+ * row is written (it takes no subject): it admits an officer's write on ANY
+ * member's row, which is why the seams call it only for the case
+ * {@link isConnectorSelf} does not cover. A pure predicate; it never throws.
+ */
+export function isConnectorOfficer(
+	proof: WriteProof,
+	officer: ConnectorOfficerActor | undefined,
+	actorMemberId: string | null,
+): boolean {
+	return (
+		proof === "connector" &&
+		officer !== undefined &&
+		actorMemberId !== null &&
+		officer.actorMemberId === actorMemberId
+	);
+}
+
+/**
+ * The self-only refusal text. Declared ONCE, here, because
+ * `attendance-plan-logic.ts` must stay loadable without `DATABASE_URL` and a
+ * value import from the actor module pulls in `guards` and the db client at load
+ * (#1303); `attendance-actor-logic.ts` imports it and re-exports it as
+ * `SELF_ONLY_MESSAGE`, the name its callers and tests use.
+ */
+export const SELF_ONLY_MESSAGE =
+	"You can only change your own planned attendance.";
+
 /**
  * "You need a session for this."
  *

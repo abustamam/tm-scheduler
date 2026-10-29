@@ -40,7 +40,11 @@
  *
  * This module touches `db` and must never be imported by client code.
  */
-import { SIGN_IN_REQUIRED_MESSAGE, type WriteProof } from "#/lib/write-proof";
+import {
+	SELF_ONLY_MESSAGE,
+	SIGN_IN_REQUIRED_MESSAGE,
+	type WriteProof,
+} from "#/lib/write-proof";
 import {
 	getSessionUser,
 	NO_PERMISSION_MESSAGE,
@@ -52,11 +56,10 @@ import { loadTmodMemberId } from "./meeting-authz-logic";
 import { resolveWriteActorWithProof } from "./write-actor-logic";
 
 /** The rejection an asserted non-manager caller gets when they name a subject
- *  that is not themselves. Exported so a test compares against THIS string
- *  rather than a copy of it — it was module-private while the ladder lived in a
- *  server-fn module, which is exactly what made the rule unassertable. */
-export const SELF_ONLY_MESSAGE =
-	"You can only change your own planned attendance.";
+ *  that is not themselves. Declared once in `write-proof.ts` (this module is
+ *  not db-free) and re-exported so a test compares against THIS string rather
+ *  than a copy of it. */
+export { SELF_ONLY_MESSAGE };
 
 /** Which arm of D6 admitted the caller, plus who to credit. The capability flag
  *  is REPORTED rather than inferred: `actorMemberId === null` happens to mean
