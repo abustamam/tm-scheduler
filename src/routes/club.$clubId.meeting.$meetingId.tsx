@@ -133,7 +133,7 @@ import {
 import { deriveMeetingRoleFlags } from "#/lib/meeting-roles";
 import { useEffectiveMember } from "#/lib/member-identity";
 import { outstandingDutiesByMember } from "#/lib/nudge";
-import { OG_IMAGE_SIZE_META, ogImagePath } from "#/lib/og-image-url";
+import { meetingOgImage, OG_IMAGE_SIZE_META } from "#/lib/og-image-url";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { notComingToast } from "#/lib/role-duty-copy";
 import {
@@ -360,8 +360,9 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 					? `This meeting is cancelled. ${description}`
 					: description,
 				path: `/club/${params.clubId}/meeting/${params.meetingId}`,
-				image: ogImagePath(
-					`/api/og/meeting/${match.context.clubUuid}/${encodeURIComponent(params.meetingId)}.png`,
+				image: meetingOgImage(
+					match.context.clubUuid,
+					params.meetingId,
 					loaderData?.ogVersion,
 				),
 				extra: OG_IMAGE_SIZE_META,

@@ -68,7 +68,9 @@ describe.skipIf(!hasTestDb)("og card endpoints (#1411)", () => {
 		]) {
 			expect(res.status).toBe(200);
 			expect(res.headers.get("content-type")).toBe("image/png");
-			expect(res.headers.get("cache-control")).toBe("public, max-age=3600");
+			expect(res.headers.get("cache-control")).toBe(
+				"public, max-age=300, must-revalidate",
+			);
 			expect(res.headers.get("etag")).toMatch(/^"[0-9a-f]{12}"$/);
 			expect(size(Buffer.from(await res.arrayBuffer()))).toEqual({
 				w: 1200,

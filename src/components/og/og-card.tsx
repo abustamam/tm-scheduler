@@ -22,9 +22,10 @@ import {
 	SANS,
 	SERIF,
 } from "#/components/agenda/print-theme";
+import { OG_IMAGE_HEIGHT, OG_IMAGE_WIDTH } from "#/lib/og-image-url";
 
-export const OG_WIDTH = 1200;
-export const OG_HEIGHT = 630;
+export const OG_WIDTH = OG_IMAGE_WIDTH;
+export const OG_HEIGHT = OG_IMAGE_HEIGHT;
 
 export interface MeetingCardView {
 	clubName: string;

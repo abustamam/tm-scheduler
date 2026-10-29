@@ -127,15 +127,15 @@ const WIRINGS: Wiring[] = [
 	{
 		file: "server/og-card.ts",
 		fn: "getClubOgVersion",
-		mustCall: "loadClubCardInput",
-		// `loadClubCardInput` runs `isReadableClub` before reading anything.
+		mustCall: "loadPublicClubCardInput",
+		// `loadPublicClubCardInput` runs `isReadableClub` before reading anything.
 		leaks: "the club's name, logo version and next meeting's time and theme",
 	},
 	{
 		file: "server/og-card.ts",
 		fn: "getMeetingOgVersion",
-		mustCall: "loadMeetingCardInput",
-		// `loadMeetingCardInput` reads through `loadPublicFlyer`, which is gated
+		mustCall: "loadPublicMeetingCardInput",
+		// `loadPublicMeetingCardInput` reads through `loadPublicFlyer`, which is gated
 		// by `resolvePublicMeetingKey`.
 		leaks: "a meeting's theme, time, location and Word of the Day",
 	},

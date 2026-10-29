@@ -13,28 +13,39 @@
 // and display names. The next meeting comes from `meetings-logic`.
 
 import { createHash } from "node:crypto";
-import { Resvg } from "@resvg/resvg-js";
+import { renderAsync } from "@resvg/resvg-js";
 import { eq } from "drizzle-orm";
 import satori from "satori";
 import {
 	ClubCard,
-	DefaultCard,
 	MeetingCard,
 	OG_HEIGHT,
 	OG_WIDTH,
 } from "#/components/og/og-card";
 import { db } from "#/db";
+import type { meetingStatusEnum } from "#/db/schema";
 import { clubs } from "#/db/schema";
 import { APP_LOCALE } from "#/lib/format";
+import {
+	loadClubLogoForServing,
+	loadClubLogoMeta,
+} from "#/server/club-logo-logic";
+import { isReadableClub } from "#/server/club-readable-logic";
+import { loadNextMeetingSummary } from "#/server/meetings-logic";
+import { loadPublicFlyer } from "#/server/promo-logic";
+// Relative on purpose: `?inline` / `?raw` are Vite suffixes on a file path.
 import faviconSvg from "../../public/favicon.svg?raw";
 import defaultPng from "../../public/og/default.png?inline";
 import frauncesSemiBold from "../assets/og-fonts/Fraunces-SemiBold.woff?inline";
 import manropeBold from "../assets/og-fonts/Manrope-Bold.woff?inline";
 import manropeRegular from "../assets/og-fonts/Manrope-Regular.woff?inline";
-import { loadClubLogoForServing, loadClubLogoMeta } from "./club-logo-logic";
-import { isReadableClub } from "./club-readable-logic";
-import { loadNextMeetingSummary } from "./meetings-logic";
-import { loadPublicFlyer } from "./promo-logic";
+
+/**
+ * Bump on ANY change to the card's layout, fonts, locale or colours: it is part
+ * of the hash, so every ETag and `?v=` changes and a cached old-looking card is
+ * not served for the new code.
+ */
+export const OG_RENDERER_REVISION = 1;
 
 export const MEETING_CARD_KEYS = [
 	"kind",
@@ -61,6 +72,8 @@ export const CLUB_CARD_KEYS = [
 	"nextTheme",
 ] as const;
 
+type MeetingStatus = (typeof meetingStatusEnum.enumValues)[number];
+
 export interface MeetingCardInput {
 	kind: "meeting";
 	clubId: string;
@@ -74,7 +87,7 @@ export interface MeetingCardInput {
 	word: string | null;
 	location: string | null;
 	online: boolean;
-	status: string;
+	status: MeetingStatus;
 }
 
 export interface ClubCardInput {
@@ -89,11 +102,16 @@ export interface ClubCardInput {
 
 export type OgCardInput = MeetingCardInput | ClubCardInput;
 
-/** First 12 hex characters of a SHA-256 over the input, keys sorted. */
+/**
+ * First 12 hex characters of a SHA-256 over the renderer revision and the
+ * input, keys sorted.
+ */
 export function ogCardVersion(input: OgCardInput): string {
 	const stable = JSON.stringify(
 		Object.fromEntries(
-			Object.entries(input).sort(([a], [b]) => (a < b ? -1 : 1)),
+			Object.entries({ rendererRevision: OG_RENDERER_REVISION, ...input }).sort(
+				([a], [b]) => (a < b ? -1 : 1),
+			),
 		),
 	);
 	return createHash("sha256").update(stable).digest("hex").slice(0, 12);
@@ -114,7 +132,7 @@ async function logoVersionOf(clubId: string): Promise<string | null> {
 }
 
 /** Null for an unknown or archived club, or a key naming no meeting. */
-export async function loadMeetingCardInput(
+export async function loadPublicMeetingCardInput(
 	clubId: string,
 	key: string,
 ): Promise<MeetingCardInput | null> {
@@ -140,7 +158,7 @@ export async function loadMeetingCardInput(
 }
 
 /** Null for an unknown or archived club. */
-export async function loadClubCardInput(
+export async function loadPublicClubCardInput(
 	clubId: string,
 	now: Date = new Date(),
 ): Promise<ClubCardInput | null> {
@@ -216,69 +234,97 @@ function formatWhen(iso: string, timeZone: string): string {
 	}).format(new Date(iso));
 }
 
-async function logoSrcFor(clubId: string, logoVersion: string | null) {
-	if (!logoVersion) return MARK_SRC;
-	const logo = await loadClubLogoForServing(clubId);
-	if (!logo) return MARK_SRC;
-	return `data:${logo.mime};base64,${logo.bytes.toString("base64")}`;
-}
-
 async function toPng(element: Parameters<typeof satori>[0]): Promise<Buffer> {
 	const svg = await satori(element, {
 		width: OG_WIDTH,
 		height: OG_HEIGHT,
 		fonts: fonts(),
 	});
-	return new Resvg(svg, { fitTo: { mode: "width", value: OG_WIDTH } })
-		.render()
-		.asPng();
+	// `renderAsync` rasterises on libuv's thread pool: a ~500 ms render must not
+	// block the single Node event loop that serves every other request.
+	const image = await renderAsync(svg, {
+		fitTo: { mode: "width", value: OG_WIDTH },
+	});
+	return image.asPng();
+}
+
+/**
+ * Renders the card and returns the version of what it ACTUALLY drew. The logo
+ * bytes are read once here and the version is taken from that read, so a logo
+ * replaced between the input load and now cannot leave the ETag naming bytes
+ * the PNG does not hold.
+ */
+export async function renderOgCardVersioned(
+	input: OgCardInput,
+): Promise<{ png: Buffer; version: string }> {
+	const logo = input.logoVersion
+		? await loadClubLogoForServing(input.clubId)
+		: null;
+	const drawn: OgCardInput = {
+		...input,
+		logoVersion: logo ? String(logo.updatedAt.getTime()) : null,
+	};
+	const logoSrc = logo
+		? `data:${logo.mime};base64,${logo.bytes.toString("base64")}`
+		: MARK_SRC;
+	const version = ogCardVersion(drawn);
+	if (drawn.kind === "meeting") {
+		const where = drawn.online ? "Online" : drawn.location;
+		return {
+			version,
+			png: await toPng(
+				MeetingCard({
+					view: {
+						clubName: drawn.clubName,
+						logoSrc,
+						when: formatWhen(drawn.scheduledAt, drawn.timezone),
+						theme: drawn.theme,
+						where,
+						word: drawn.word,
+						cancelled: drawn.status === "cancelled",
+					},
+				}),
+			),
+		};
+	}
+	return {
+		version,
+		png: await toPng(
+			ClubCard({
+				view: {
+					clubName: drawn.clubName,
+					logoSrc,
+					nextWhen: drawn.nextScheduledAt
+						? formatWhen(drawn.nextScheduledAt, drawn.timezone)
+						: null,
+					nextTheme: drawn.nextTheme,
+				},
+			}),
+		),
+	};
 }
 
 export async function renderOgCard(input: OgCardInput): Promise<Buffer> {
-	const logoSrc = await logoSrcFor(input.clubId, input.logoVersion);
-	if (input.kind === "meeting") {
-		const where = input.online ? "Online" : input.location;
-		return toPng(
-			MeetingCard({
-				view: {
-					clubName: input.clubName,
-					logoSrc,
-					when: formatWhen(input.scheduledAt, input.timezone),
-					theme: input.theme,
-					where,
-					word: input.word,
-					cancelled: input.status === "cancelled",
-				},
-			}),
-		);
-	}
-	return toPng(
-		ClubCard({
-			view: {
-				clubName: input.clubName,
-				logoSrc,
-				nextWhen: input.nextScheduledAt
-					? formatWhen(input.nextScheduledAt, input.timezone)
-					: null,
-				nextTheme: input.nextTheme,
-			},
-		}),
-	);
-}
-
-/** Renders `public/og/default.png`; used once to produce it, and by its test. */
-export async function renderDefaultCard(): Promise<Buffer> {
-	return toPng(DefaultCard({ markSrc: MARK_SRC }));
+	return (await renderOgCardVersioned(input)).png;
 }
 
 // ---------------------------------------------------------------------------
 // LRU + response
 // ---------------------------------------------------------------------------
 
-const LRU_MAX = 200;
-const lru = new Map<string, Buffer>();
+export const LRU_MAX = 200;
+interface Rendered {
+	png: Buffer;
+	version: string;
+}
+const lru = new Map<string, Rendered>();
+/** Renders in flight, by requested version: concurrent misses share one. */
+const inflight = new Map<string, Promise<Rendered>>();
+/** A render that threw is not retried for this long (version -> expiry ms). */
+export const FAILED_RENDER_TTL_MS = 30_000;
+const failed = new Map<string, number>();
 
-function lruGet(version: string): Buffer | undefined {
+function lruGet(version: string): Rendered | undefined {
 	const hit = lru.get(version);
 	if (hit) {
 		lru.delete(version);
@@ -287,8 +333,8 @@ function lruGet(version: string): Buffer | undefined {
 	return hit;
 }
 
-function lruSet(version: string, png: Buffer) {
-	lru.set(version, png);
+function lruSet(version: string, r: Rendered) {
+	lru.set(version, r);
 	if (lru.size > LRU_MAX) {
 		const oldest = lru.keys().next().value;
 		if (oldest !== undefined) lru.delete(oldest);
@@ -297,9 +343,18 @@ function lruSet(version: string, png: Buffer) {
 
 export function clearOgCardCache() {
 	lru.clear();
+	inflight.clear();
+	failed.clear();
 }
 
-const OK_CACHE = "public, max-age=3600";
+export function ogCardCacheSize(): number {
+	return lru.size;
+}
+
+// A card must not outlive an archive by long: the 304 path re-runs the archive
+// gate (the loader), so a short max-age with `must-revalidate` bounds how long
+// a browser or shared cache keeps serving an archived club's card.
+const OK_CACHE = "public, max-age=300, must-revalidate";
 
 function fallbackResponse(): Response {
 	return new Response(new Uint8Array(bytesOf(defaultPng)), {
@@ -311,17 +366,28 @@ function fallbackResponse(): Response {
 	});
 }
 
+/** The path segments of `request.url` matched by `pattern`, or null. */
+export function ogPathMatch(
+	request: Request,
+	pattern: RegExp,
+): RegExpExecArray | null {
+	return pattern.exec(new URL(request.url).pathname);
+}
+
 /**
  * The shared GET body of both endpoints. `?v=` is never read: the card always
  * shows the CURRENT state, and its ETag is the hash of that state, which is
  * the same value the page's `og:image` URL carries.
  *
- * A thrown render (or a throwing read) serves the static default card with a
- * 200 and no ETag: a link preview must never break.
+ * A miss renders once per version however many requests arrive together
+ * (single-flight), off the event loop (`renderAsync`). A thrown render (or a
+ * throwing read) serves the static default card with a 200 and no ETag: a link
+ * preview must never break.
  */
 export async function respondOgCard(
 	load: () => Promise<OgCardInput | null>,
 	request: Request,
+	render: (input: OgCardInput) => Promise<Rendered> = renderOgCardVersioned,
 ): Promise<Response> {
 	let input: OgCardInput | null;
 	try {
@@ -331,8 +397,8 @@ export async function respondOgCard(
 		return fallbackResponse();
 	}
 	if (!input) return new Response("Not found.", { status: 404 });
-	const version = ogCardVersion(input);
-	const etag = `"${version}"`;
+	const key = ogCardVersion(input);
+	const etag = `"${key}"`;
 	const headers = {
 		"cache-control": OK_CACHE,
 		etag,
@@ -340,18 +406,34 @@ export async function respondOgCard(
 	if (request.headers.get("if-none-match") === etag) {
 		return new Response(null, { status: 304, headers });
 	}
+	if ((failed.get(key) ?? 0) > Date.now()) return fallbackResponse();
 	try {
-		let png = lruGet(version);
-		if (!png) {
-			png = await renderOgCard(input);
-			lruSet(version, png);
+		let hit = lruGet(key);
+		if (!hit) {
+			let pending = inflight.get(key);
+			if (!pending) {
+				pending = render(input).finally(() => inflight.delete(key));
+				inflight.set(key, pending);
+			}
+			hit = await pending;
+			lruSet(key, hit);
 		}
-		return new Response(new Uint8Array(png), {
+		return new Response(new Uint8Array(hit.png), {
 			status: 200,
-			headers: { ...headers, "content-type": "image/png" },
+			headers: {
+				...headers,
+				// The version of the bytes actually drawn (see renderOgCardVersioned).
+				etag: `"${hit.version}"`,
+				"content-type": "image/png",
+			},
 		});
 	} catch (err) {
 		console.error("[og-card] render failed", err);
+		failed.set(key, Date.now() + FAILED_RENDER_TTL_MS);
+		if (failed.size > LRU_MAX) {
+			const oldest = failed.keys().next().value;
+			if (oldest !== undefined) failed.delete(oldest);
+		}
 		return fallbackResponse();
 	}
 }

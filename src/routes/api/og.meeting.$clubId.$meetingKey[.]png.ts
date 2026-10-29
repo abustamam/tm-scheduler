@@ -1,5 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { loadMeetingCardInput, respondOgCard } from "#/server/og-card-logic";
+import {
+	loadPublicMeetingCardInput,
+	ogPathMatch,
+	respondOgCard,
+} from "#/server/og-card-logic";
 
 /**
  * GET /api/og/meeting/$clubId/$meetingKey.png (#1411): the 1200x630 link
@@ -14,8 +18,9 @@ export const Route = createFileRoute("/api/og/meeting/$clubId/$meetingKey.png")(
 				// last one `meetingKey.png`, suffix included.
 				GET: ({ request }) =>
 					respondOgCard(async () => {
-						const m = /\/api\/og\/meeting\/([^/]+)\/([^/]+)\.png$/.exec(
-							new URL(request.url).pathname,
+						const m = ogPathMatch(
+							request,
+							/\/api\/og\/meeting\/([^/]+)\/([^/]+)\.png$/,
 						);
 						if (!m) return null;
 						let key: string;
@@ -24,7 +29,7 @@ export const Route = createFileRoute("/api/og/meeting/$clubId/$meetingKey.png")(
 						} catch {
 							return null;
 						}
-						return loadMeetingCardInput(m[1], key);
+						return loadPublicMeetingCardInput(m[1], key);
 					}, request),
 			},
 		},

@@ -1,10 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import {
-	loadClubCardInput,
-	loadMeetingCardInput,
+	loadPublicClubCardInput,
+	loadPublicMeetingCardInput,
 	ogCardVersion,
-} from "./og-card-logic";
+} from "#/server/og-card-logic";
 
 /**
  * The `?v=` a page puts on its `og:image` URL (#1411): the hash of the same
@@ -14,7 +14,7 @@ import {
 export const getClubOgVersion = createServerFn({ method: "GET" })
 	.validator((d: unknown) => z.object({ clubId: z.string().uuid() }).parse(d))
 	.handler(async ({ data }) => {
-		const input = await loadClubCardInput(data.clubId);
+		const input = await loadPublicClubCardInput(data.clubId);
 		return input ? ogCardVersion(input) : null;
 	});
 
@@ -23,6 +23,6 @@ export const getMeetingOgVersion = createServerFn({ method: "GET" })
 		z.object({ clubId: z.string().uuid(), key: z.string().min(1) }).parse(d),
 	)
 	.handler(async ({ data }) => {
-		const input = await loadMeetingCardInput(data.clubId, data.key);
+		const input = await loadPublicMeetingCardInput(data.clubId, data.key);
 		return input ? ogCardVersion(input) : null;
 	});

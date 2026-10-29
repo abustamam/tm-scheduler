@@ -18,7 +18,7 @@ import { showWriteError } from "#/components/write-error-toast";
 import { authClient } from "#/lib/auth-client";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { type StoredMember, useEffectiveMember } from "#/lib/member-identity";
-import { OG_IMAGE_SIZE_META, ogImagePath } from "#/lib/og-image-url";
+import { clubOgImage, OG_IMAGE_SIZE_META } from "#/lib/og-image-url";
 import { DUTY_TOAST_MS, roleFreedDutyText } from "#/lib/role-duty-copy";
 import type { Orientation } from "#/lib/season-grid-view";
 import { shareMeta } from "#/lib/share-meta";
@@ -67,10 +67,7 @@ export const Route = createFileRoute("/club/$clubId/")({
 	component: ClubHome,
 	head: ({ match, params, loaderData }) => ({
 		meta: shareMeta({
-			image: ogImagePath(
-				`/api/og/club/${match.context.clubUuid}.png`,
-				loaderData?.ogVersion,
-			),
+			image: clubOgImage(match.context.clubUuid, loaderData?.ogVersion),
 			extra: OG_IMAGE_SIZE_META,
 			title: `${match.context.clubName} — sign up for meeting roles`,
 			description: `Pick your name and claim a role at an upcoming ${match.context.clubName} meeting.`,
