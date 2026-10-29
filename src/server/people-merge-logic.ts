@@ -188,8 +188,9 @@ export async function mergePeople(
 		for (const clubId of clubsBefore) await lockClubForWrite(tx, clubId);
 
 		// Read-then-lock, as for the clubs: read the memberships unlocked, lock
-		// them, read again; a moved set means one was attached or detached
-		// meanwhile, and nothing has been written.
+		// them, read again (here, and again once the Persons are locked); a moved
+		// set means one was attached or detached meanwhile, and nothing has been
+		// written.
 		const membershipIdsOf = async () =>
 			(
 				await tx
@@ -201,10 +202,16 @@ export async function mergePeople(
 				.sort();
 		const membershipsBefore = await membershipIdsOf();
 		await lockMembershipsForMerge(tx, membershipsBefore);
-		const membershipsAfter = await membershipIdsOf();
-		if (membershipsAfter.join() !== membershipsBefore.join()) {
-			throw new Error(RECORD_CHANGED_MESSAGE);
-		}
+		// This early check only fails fast, before the Persons are touched. It is NOT
+		// enough on its own: `insertRosterMember` and `importPeopleAndMembers` take
+		// no club write lock, so a membership can still be attached to either Person
+		// after this read and before the Person lock below. That one never got the
+		// early exclusive merge lock, so a speaker claim on it (shared merge lock,
+		// then key-share on the Person) could close a cycle with the collapse's later
+		// exclusive lock. The check after the Person lock is the one that closes it.
+		const membershipsMoved = async () =>
+			(await membershipIdsOf()).join() !== membershipsBefore.join();
+		if (await membershipsMoved()) throw new Error(RECORD_CHANGED_MESSAGE);
 
 		const rows = await tx
 			.select()
@@ -215,6 +222,12 @@ export async function mergePeople(
 		const keeper = rows.find((p) => p.id === parsed.keeperPersonId);
 		const absorbed = rows.find((p) => p.id === parsed.absorbedPersonId);
 		if (!keeper || !absorbed) throw new Error("Person not found.");
+
+		// Under the Person locks: a membership insert key-shares its Person, so none
+		// can be attached to either Person from here on. A set that differs from the
+		// one whose merge locks we hold means one slipped in (or left) between the
+		// early read and these locks; refuse with nothing written.
+		if (await membershipsMoved()) throw new Error(RECORD_CHANGED_MESSAGE);
 
 		const clubsAfter = await clubsHoldingPersons(tx, personIds);
 		if (

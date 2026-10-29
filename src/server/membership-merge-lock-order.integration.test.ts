@@ -416,5 +416,57 @@ describe.skipIf(!hasTestDb)(
 				.where(sql`${people.id} in (${keeper.personId}, ${absorbedPersonId})`);
 			expect(persons).toHaveLength(2);
 		}, 20_000);
+
+		// protects=a membership attached to the absorbed Person after the merge took its merge locks but before it locked the Persons is detected by the re-read under the Person locks, so the merge is refused instead of collapsing a membership that never got the early exclusive merge lock (#1388 pair 2);
+		// fails_when=the post-Person-lock membership re-read in mergePeople is removed: the merge succeeds and moves the late membership;
+		// no_claim=the early re-read (right after the merge locks), covered by the case above.
+		it("refuses with RECORD_CHANGED_MESSAGE when a membership is attached between the merge locks and the Person locks, writing nothing", async () => {
+			// Park the merge on the absorbed Person, i.e. after its merge locks, so the
+			// early re-read has already passed. NO KEY UPDATE conflicts with the
+			// merge's FOR UPDATE but not with the key-share a membership insert takes,
+			// so the insert below is granted whichever Person the merge locks first.
+			const blocker = await openBlockingTx(async (tx) => {
+				await tx.execute(
+					sql`select id from people where id = ${absorbedPersonId} for no key update`,
+				);
+			});
+			const merging = merge();
+			merging.catch(() => {});
+			let late: string;
+			try {
+				await waitForLockWait('"people"', blocker.pid);
+				// What a roster add does: a membership insert that takes no club lock.
+				const [row] = await testDb
+					.insert(members)
+					.values({
+						clubId: keeper.clubId,
+						personId: absorbedPersonId,
+						name: "Late Membership",
+						clubRole: "member",
+						status: "active",
+					})
+					.returning({ id: members.id });
+				if (!row) throw new Error("late membership insert failed");
+				late = row.id;
+			} finally {
+				await blocker.commit();
+			}
+			await expect(merging).rejects.toThrow(RECORD_CHANGED_MESSAGE);
+			const personOf = async (id: string) =>
+				(
+					await testDb
+						.select({ personId: members.personId })
+						.from(members)
+						.where(sql`${members.id} = ${id}`)
+				)[0]?.personId;
+			expect(await personOf(absorbedMemberId)).toBe(absorbedPersonId);
+			expect(await personOf(late)).toBe(absorbedPersonId);
+			expect(await personOf(keeper.memberId)).toBe(keeper.personId);
+			const persons = await testDb
+				.select({ id: people.id })
+				.from(people)
+				.where(sql`${people.id} in (${keeper.personId}, ${absorbedPersonId})`);
+			expect(persons).toHaveLength(2);
+		}, 20_000);
 	},
 );
