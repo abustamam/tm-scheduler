@@ -312,6 +312,8 @@ const EXCLUDED: Record<string, string> = {
 	"/api/auth/$": "API route, no HTML",
 	"/api/pathways/ingest": "API route, no HTML",
 	"/api/club/$clubId/logo": "image endpoint, no HTML",
+	"/api/og/club/$clubId.png": "image endpoint, no HTML",
+	"/api/og/meeting/$clubId/$meetingKey.png": "image endpoint, no HTML",
 	"/api/clubs/$clubId/export/zip": "download endpoint, no HTML",
 	"/api/meetings/$id/minutes/pdf": "PDF endpoint, no HTML",
 	"/api/meetings/$id/packet/pdf": "PDF endpoint, no HTML",

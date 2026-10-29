@@ -9,6 +9,15 @@ import { defineConfig } from "vite";
 
 const config = defineConfig({
 	resolve: { tsconfigPaths: true },
+	// @resvg/resvg-js is a native addon (#1411). Its js-binding.js statically
+	// requires every platform's .node package; on Linux the matching one is
+	// installed, so the dev dep optimizer tried to bundle a .node file and died
+	// with UNLOADABLE_DEPENDENCY. Keep it out of optimization and external.
+	optimizeDeps: { exclude: ["@resvg/resvg-js"] },
+	ssr: {
+		external: ["@resvg/resvg-js"],
+		optimizeDeps: { exclude: ["@resvg/resvg-js"] },
+	},
 	plugins: [
 		devtools(),
 		nitro({

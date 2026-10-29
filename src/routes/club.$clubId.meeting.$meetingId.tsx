@@ -133,6 +133,7 @@ import {
 import { deriveMeetingRoleFlags } from "#/lib/meeting-roles";
 import { useEffectiveMember } from "#/lib/member-identity";
 import { outstandingDutiesByMember } from "#/lib/nudge";
+import { meetingOgImage, OG_IMAGE_SIZE_META } from "#/lib/og-image-url";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { notComingToast } from "#/lib/role-duty-copy";
 import {
@@ -183,6 +184,7 @@ import {
 } from "#/server/minutes";
 import { getMinutesRecipients } from "#/server/minutes-email";
 import type { AttendanceStatus, AwardCategory } from "#/server/minutes-logic";
+import { getMeetingOgVersion } from "#/server/og-card";
 import { clearContacted, setContacted } from "#/server/outreach";
 import {
 	addRoleSlot,
@@ -236,6 +238,11 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 		// page — same treatment as `upcomingPromise` above.
 		const logoPromise = getClubLogoMeta({
 			data: { clubId: context.clubUuid },
+		}).catch(() => null);
+
+		// Only the preview image's cache-buster: a failure drops `?v=`, never the page.
+		const ogVersionPromise = getMeetingOgVersion({
+			data: { clubId: context.clubUuid, key: params.meetingId },
 		}).catch(() => null);
 
 		const data = await meetingPromise;
@@ -327,6 +334,7 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 			openActionItems,
 			minutesEmail,
 			logoUrl: clubLogoUrl(context.clubUuid, logoMeta?.updatedAt),
+			ogVersion: await ogVersionPromise,
 		};
 	},
 	component: MeetingView,
@@ -352,6 +360,12 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 					? `This meeting is cancelled. ${description}`
 					: description,
 				path: `/club/${params.clubId}/meeting/${params.meetingId}`,
+				image: meetingOgImage(
+					match.context.clubUuid,
+					params.meetingId,
+					loaderData?.ogVersion,
+				),
+				extra: OG_IMAGE_SIZE_META,
 			}),
 		};
 	},

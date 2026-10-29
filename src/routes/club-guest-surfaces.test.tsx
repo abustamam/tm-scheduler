@@ -36,6 +36,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("#/server/clubs", () => ({ getPublicClubProfileFn: vi.fn() }));
 vi.mock("#/server/season-grid", () => ({ getPublicSeasonGrid: vi.fn() }));
 vi.mock("#/server/role-definitions", () => ({ getPublicClubRoles: vi.fn() }));
+vi.mock("#/server/og-card", () => ({
+	getClubOgVersion: vi.fn().mockResolvedValue(null),
+}));
 // Reached transitively by the club index route through the components it
 // renders (identity-gate → pick-name-form → #/server/members; season-grid →
 // #/server/availability; the claim/release handlers). Every one imports `#/db`
