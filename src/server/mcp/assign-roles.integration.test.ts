@@ -446,9 +446,27 @@ describe.skipIf(!hasTestDb)("assign_roles (#809)", () => {
 			})) as Applied;
 
 			expect(res.applied).toBe(true);
+			expect(res.meetingId).toBe(seed.meetingId);
 			expect(res.plan[0]?.slotId).toBe(seed.slotId);
 			const row = await slotState(seed.slotId);
 			expect(row?.assignedMemberId).toBe(seed.memberId);
+		});
+
+		it("clearing an assigned slot by an uppercase slotId leaves it open", async () => {
+			await call({
+				meetingId: seed.meetingId,
+				assignments: [{ slotId: seed.slotId, memberId: seed.memberId }],
+			});
+
+			const res = (await call({
+				meetingId: seed.meetingId,
+				assignments: [{ slotId: seed.slotId.toUpperCase(), clear: true }],
+			})) as Applied;
+
+			expect(res.summary).toEqual({ members: 0, guests: 0, cleared: 1 });
+			const row = await slotState(seed.slotId);
+			expect(row?.assignedMemberId).toBeNull();
+			expect(row?.status).toBe("open");
 		});
 
 		it("an uppercase guestId resolves like its lowercase form", async () => {
