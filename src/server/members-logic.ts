@@ -64,6 +64,7 @@ import { isReadableClub } from "./club-readable-logic";
 import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { contactMethodAvailableSql } from "./contact-preference-logic";
+import { withDeadlockRetry } from "./deadlock-retry";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
 import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
@@ -313,268 +314,272 @@ export async function contactPreferenceRefusalFor(
  * the rule.
  */
 export async function applyMemberEdit(input: EditInput) {
-	const [current] = await db
-		.select()
-		.from(members)
-		.where(
-			and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
-		);
-	if (!current) throw new Error("Member not found.");
-	// Standardize the phone to E.164 on write (#295), using the club default
-	// country code for numbers entered without one.
-	const cc = await loadClubDefaultCountryCode(input.clubId);
-	const next = {
-		name: input.name,
-		// Trim HERE, not only in the zod schema: `applyMemberEdit` is exported and
-		// called directly (tests, and any future server-side caller) with the
-		// validator bypassed. A whitespace-only value would otherwise store "   "
-		// AND seed "   " onto people.preferred_name, permanently defeating the
-		// isNull guard below so the real name could never seed up.
-		preferredName: input.preferredName?.trim() || null,
-	};
-	// Trimmed HERE for the same reason as `preferredName` above: the zod schema
-	// trims, but `applyMemberEdit` is exported and reached directly with the
-	// validator bypassed. `undefined` = leave the Person's address alone.
-	const email =
-		input.email === undefined ? undefined : input.email?.trim() || null;
-	// Person-level, written to `people` below rather than to the membership —
-	// and only when the caller sent one (`undefined` = leave it alone).
-	const phone =
-		input.phone === undefined ? undefined : toStoredPhone(input.phone, cc);
-	// `undefined` = leave the Person's preference alone (#1093).
-	const preferredContact = input.preferredContact;
-	// Current offices before the edit — derived from open terms, for the log.
-	const beforeOffices = await currentOfficersFor(input.memberId);
-	let emailChange: { before: string | null; after: string | null } | null =
-		null;
-	let emailRefused: EmailWriteRefusal | null = null;
-	await db.transaction(async (tx) => {
-		// LOCK ORDER: the Person, THEN the membership. Guest conversion
-		// (`applyConvertGuestToMember`) writes the Person (its phone fill and its
-		// goes-by seed) and then takes the membership `FOR UPDATE`; taking them
-		// here in the opposite order deadlocks the two (#906 review).
-		// `edit-convert-lock-order.integration.test.ts` drives both orders.
-		//
-		// The Person lock is also what the email write below relies on (#907): a
-		// bind that commits first is seen by its WHERE, one that arrives later
-		// waits for this transaction.
-		const [currentPerson] = await tx
-			.select({
-				phone: people.phone,
-				email: people.email,
-				userId: people.userId,
-				storedPreferredContact: people.preferredContact,
-			})
-			.from(people)
-			.where(eq(people.id, current.personId))
-			.for("update");
-		if (!currentPerson) throw new Error("Member's person not found.");
-		if (phone !== undefined) {
-			// The phone is the Person's (#906), so it goes to `people`, keyed by
-			// the membership's own `person_id` — never a membership row.
-			await tx
-				.update(people)
-				.set({ phone })
-				.where(eq(people.id, current.personId));
-		}
-		// The email (#907): written whenever the stored STRING differs, so an
-		// officer can repair a stored address carrying a NBSP or U+FEFF — JS
-		// `.trim()` hides those and SQL `[[:space:]]` does not, so comparing
-		// normalised values reported success while the bind kept failing. A
-		// refusal is only REPORTED when the address actually differs
-		// (normalised): a case- or whitespace-only difference on a bound or
-		// shared Person is the same address, never refused and never logged.
-		if (email !== undefined && email !== currentPerson.email) {
-			const written = await tx
-				.update(people)
-				.set({ email })
-				.where(
-					and(
-						eq(people.id, current.personId),
-						isNull(people.userId),
-						soleHoldingClub(input.clubId),
-					),
-				)
-				.returning({ id: people.id });
-			if (written.length > 0) {
-				emailChange = { before: currentPerson.email, after: email };
-			} else if (
-				normalizeEmail(email) !== normalizeEmail(currentPerson.email)
-			) {
-				emailRefused =
-					(await emailWriteRefusalFor(current.personId, input.clubId, tx)) ??
-					"multi_club";
-			}
-		}
-		// The contact preference (#1093, #1110). AFTER the phone and email writes, so
-		// its WHERE judges availability against the row as this edit leaves it:
-		// clearing the phone and choosing SMS in one save matches nothing. Three
-		// rules sit in the UPDATE's own WHERE, not in a prior read: the member
-		// has not chosen it themselves (provenance is NULL or 'officer'); this club is
-		// their SOLE holder (the rule `people.email` has, ADR-0029, applied to
-		// the preference too; the phone has no such rule); and the method's
-		// data exists.
-		//
-		// Zero rows refuses the WHOLE edit — unlike the email, whose refusal lets
-		// the rest of the save land. The throw rolls back every write above, so
-		// nothing in this save lands. The WHERE decides; the message is
-		// BEST-EFFORT. It comes from a read after the UPDATE that holds no
-		// membership lock, so another club removing its membership in between
-		// can turn a multi-club refusal into "add a phone number or email". No
-		// lock is taken for that: the outcome (refused, nothing written) is right
-		// either way, and only the sentence can be stale.
-		if (preferredContact !== undefined) {
-			const written = await tx
-				.update(people)
-				.set({ preferredContact, contactPreferenceBy: "officer" })
-				.where(
-					and(
-						eq(people.id, current.personId),
-						or(
-							isNull(people.contactPreferenceBy),
-							eq(people.contactPreferenceBy, "officer"),
-						),
-						soleHoldingClub(input.clubId),
-						contactMethodAvailableSql(preferredContact),
-					),
-				)
-				.returning({ id: people.id });
-			if (written.length === 0) {
-				// Ownership before availability, so a multi-club Person whose
-				// email write was just refused hears "another club", not "add an
-				// email" (#1093 review) — subject to the race described above.
-				const owner = await contactPreferenceRefusalFor(
-					current.personId,
-					input.clubId,
-					tx,
-				);
-				throw new Error(
-					owner === "member_set"
-						? CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE
-						: owner === "multi_club"
-							? CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE
-							: CONTACT_METHOD_UNAVAILABLE_MESSAGE,
-				);
-			}
-		}
-		// The "goes by" name below is the only other person-level write this form makes
-		// besides the phone above (which is a Person fact outright, #906), and it
-		// is scoped by VALUE rather than by blast radius. That is
-		// deliberate: `preferred_name` is a display fallback, so the worst a stale
-		// copy costs is a wrong greeting in another club, and one club overwriting
-		// another's answer is the only risk worth guarding. The email used to sit
-		// here under a much stricter rule because it could re-key an identity; #756
-		// removed the write instead of tightening the rule again. Do not read that
-		// as licence to seed anything else up from a roster row without asking what
-		// its worst case is.
-		//
-		// The "goes by" name (#486): it is a person-level fact
-		// (ADR-0008) that should travel with them, so seed it UP when the Person
-		// has none. Guarded on NULL so a second club's admin can't overwrite what
-		// this person recorded elsewhere — the membership row is always authoritative
-		// for THIS club either way.
-		if (next.preferredName !== null) {
-			await tx
-				.update(people)
-				.set({ preferredName: next.preferredName })
-				.where(
-					and(eq(people.id, current.personId), isNull(people.preferredName)),
-				);
-		} else if (current.preferredName !== null) {
-			// CLEARING has to clear both, or it does nothing at all. The read is a
-			// coalesce onto `people.preferred_name`, so leaving the Person copy
-			// behind resurrects the exact name the admin just deleted — and the form
-			// promises "leave blank to use their first name". Scoped to the value
-			// this membership seeded, so a different answer recorded by another club
-			// survives untouched.
-			await tx
-				.update(people)
-				.set({ preferredName: null })
-				.where(
-					and(
-						eq(people.id, current.personId),
-						eq(people.preferredName, current.preferredName),
-					),
-				);
-		}
-		// A former member (#1239) holds no office: opening a term would put them
-		// back on the officers list and grant admin-adjacent access. Read under
-		// the row lock so an end-membership racing this edit cannot slip past.
-		if (input.officerPositions !== undefined) {
-			const [locked] = await tx
-				.select({ status: members.status })
-				.from(members)
-				.where(eq(members.id, input.memberId))
+	// A deadlock with a speaker claim (#1388) aborts one side; run the whole
+	// edit again once, reads and outer state included.
+	return withDeadlockRetry(async () => {
+		const [current] = await db
+			.select()
+			.from(members)
+			.where(
+				and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
+			);
+		if (!current) throw new Error("Member not found.");
+		// Standardize the phone to E.164 on write (#295), using the club default
+		// country code for numbers entered without one.
+		const cc = await loadClubDefaultCountryCode(input.clubId);
+		const next = {
+			name: input.name,
+			// Trim HERE, not only in the zod schema: `applyMemberEdit` is exported and
+			// called directly (tests, and any future server-side caller) with the
+			// validator bypassed. A whitespace-only value would otherwise store "   "
+			// AND seed "   " onto people.preferred_name, permanently defeating the
+			// isNull guard below so the real name could never seed up.
+			preferredName: input.preferredName?.trim() || null,
+		};
+		// Trimmed HERE for the same reason as `preferredName` above: the zod schema
+		// trims, but `applyMemberEdit` is exported and reached directly with the
+		// validator bypassed. `undefined` = leave the Person's address alone.
+		const email =
+			input.email === undefined ? undefined : input.email?.trim() || null;
+		// Person-level, written to `people` below rather than to the membership —
+		// and only when the caller sent one (`undefined` = leave it alone).
+		const phone =
+			input.phone === undefined ? undefined : toStoredPhone(input.phone, cc);
+		// `undefined` = leave the Person's preference alone (#1093).
+		const preferredContact = input.preferredContact;
+		// Current offices before the edit — derived from open terms, for the log.
+		const beforeOffices = await currentOfficersFor(input.memberId);
+		let emailChange: { before: string | null; after: string | null } | null =
+			null;
+		let emailRefused: EmailWriteRefusal | null = null;
+		await db.transaction(async (tx) => {
+			// LOCK ORDER: the Person, THEN the membership. Guest conversion
+			// (`applyConvertGuestToMember`) writes the Person (its phone fill and its
+			// goes-by seed) and then takes the membership `FOR UPDATE`; taking them
+			// here in the opposite order deadlocks the two (#906 review).
+			// `edit-convert-lock-order.integration.test.ts` drives both orders.
+			//
+			// The Person lock is also what the email write below relies on (#907): a
+			// bind that commits first is seen by its WHERE, one that arrives later
+			// waits for this transaction.
+			const [currentPerson] = await tx
+				.select({
+					phone: people.phone,
+					email: people.email,
+					userId: people.userId,
+					storedPreferredContact: people.preferredContact,
+				})
+				.from(people)
+				.where(eq(people.id, current.personId))
 				.for("update");
-			if (locked?.status === "former" && input.officerPositions.length > 0) {
-				throw new Error(
-					"A former member can't hold an office — reactivate them first.",
-				);
+			if (!currentPerson) throw new Error("Member's person not found.");
+			if (phone !== undefined) {
+				// The phone is the Person's (#906), so it goes to `people`, keyed by
+				// the membership's own `person_id` — never a membership row.
+				await tx
+					.update(people)
+					.set({ phone })
+					.where(eq(people.id, current.personId));
 			}
-		}
-		// The membership last — see LOCK ORDER above.
-		await tx.update(members).set(next).where(eq(members.id, input.memberId));
-		// Reconcile the office set only when the caller sent one (undefined = leave
-		// terms alone). Dedupe first so a repeated office can't open two terms.
-		if (input.officerPositions !== undefined) {
-			await reconcileOfficerTerms(tx, input.memberId, [
-				...new Set(input.officerPositions),
-			]);
-		}
-		const afterOffices =
-			input.officerPositions !== undefined
-				? [...new Set(input.officerPositions)]
-				: beforeOffices;
-		await logActivity(tx, {
-			clubId: input.clubId,
-			actorMemberId: input.actorMemberId,
-			action: "member_edit",
-			targetType: "member",
-			targetId: input.memberId,
-			detail: {
-				before: {
-					name: current.name,
-					preferredName: current.preferredName,
-					// Logged only when the edit wrote it.
-					...(emailChange ? { email: emailChange.before } : {}),
-					// Logged only when the edit wrote it.
-					...(phone !== undefined ? { phone: currentPerson.phone } : {}),
-					// Logged only when the edit wrote it: the preference as it was
-					// SHOWN, never the raw column (#1093).
-					...(preferredContact !== undefined
-						? {
-								preferredContact: effectivePreferredContact(
-									currentPerson.storedPreferredContact,
-									currentPerson,
-								),
-							}
-						: {}),
-					officerPositions: beforeOffices,
+			// The email (#907): written whenever the stored STRING differs, so an
+			// officer can repair a stored address carrying a NBSP or U+FEFF — JS
+			// `.trim()` hides those and SQL `[[:space:]]` does not, so comparing
+			// normalised values reported success while the bind kept failing. A
+			// refusal is only REPORTED when the address actually differs
+			// (normalised): a case- or whitespace-only difference on a bound or
+			// shared Person is the same address, never refused and never logged.
+			if (email !== undefined && email !== currentPerson.email) {
+				const written = await tx
+					.update(people)
+					.set({ email })
+					.where(
+						and(
+							eq(people.id, current.personId),
+							isNull(people.userId),
+							soleHoldingClub(input.clubId),
+						),
+					)
+					.returning({ id: people.id });
+				if (written.length > 0) {
+					emailChange = { before: currentPerson.email, after: email };
+				} else if (
+					normalizeEmail(email) !== normalizeEmail(currentPerson.email)
+				) {
+					emailRefused =
+						(await emailWriteRefusalFor(current.personId, input.clubId, tx)) ??
+						"multi_club";
+				}
+			}
+			// The contact preference (#1093, #1110). AFTER the phone and email writes, so
+			// its WHERE judges availability against the row as this edit leaves it:
+			// clearing the phone and choosing SMS in one save matches nothing. Three
+			// rules sit in the UPDATE's own WHERE, not in a prior read: the member
+			// has not chosen it themselves (provenance is NULL or 'officer'); this club is
+			// their SOLE holder (the rule `people.email` has, ADR-0029, applied to
+			// the preference too; the phone has no such rule); and the method's
+			// data exists.
+			//
+			// Zero rows refuses the WHOLE edit — unlike the email, whose refusal lets
+			// the rest of the save land. The throw rolls back every write above, so
+			// nothing in this save lands. The WHERE decides; the message is
+			// BEST-EFFORT. It comes from a read after the UPDATE that holds no
+			// membership lock, so another club removing its membership in between
+			// can turn a multi-club refusal into "add a phone number or email". No
+			// lock is taken for that: the outcome (refused, nothing written) is right
+			// either way, and only the sentence can be stale.
+			if (preferredContact !== undefined) {
+				const written = await tx
+					.update(people)
+					.set({ preferredContact, contactPreferenceBy: "officer" })
+					.where(
+						and(
+							eq(people.id, current.personId),
+							or(
+								isNull(people.contactPreferenceBy),
+								eq(people.contactPreferenceBy, "officer"),
+							),
+							soleHoldingClub(input.clubId),
+							contactMethodAvailableSql(preferredContact),
+						),
+					)
+					.returning({ id: people.id });
+				if (written.length === 0) {
+					// Ownership before availability, so a multi-club Person whose
+					// email write was just refused hears "another club", not "add an
+					// email" (#1093 review) — subject to the race described above.
+					const owner = await contactPreferenceRefusalFor(
+						current.personId,
+						input.clubId,
+						tx,
+					);
+					throw new Error(
+						owner === "member_set"
+							? CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE
+							: owner === "multi_club"
+								? CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE
+								: CONTACT_METHOD_UNAVAILABLE_MESSAGE,
+					);
+				}
+			}
+			// The "goes by" name below is the only other person-level write this form makes
+			// besides the phone above (which is a Person fact outright, #906), and it
+			// is scoped by VALUE rather than by blast radius. That is
+			// deliberate: `preferred_name` is a display fallback, so the worst a stale
+			// copy costs is a wrong greeting in another club, and one club overwriting
+			// another's answer is the only risk worth guarding. The email used to sit
+			// here under a much stricter rule because it could re-key an identity; #756
+			// removed the write instead of tightening the rule again. Do not read that
+			// as licence to seed anything else up from a roster row without asking what
+			// its worst case is.
+			//
+			// The "goes by" name (#486): it is a person-level fact
+			// (ADR-0008) that should travel with them, so seed it UP when the Person
+			// has none. Guarded on NULL so a second club's admin can't overwrite what
+			// this person recorded elsewhere — the membership row is always authoritative
+			// for THIS club either way.
+			if (next.preferredName !== null) {
+				await tx
+					.update(people)
+					.set({ preferredName: next.preferredName })
+					.where(
+						and(eq(people.id, current.personId), isNull(people.preferredName)),
+					);
+			} else if (current.preferredName !== null) {
+				// CLEARING has to clear both, or it does nothing at all. The read is a
+				// coalesce onto `people.preferred_name`, so leaving the Person copy
+				// behind resurrects the exact name the admin just deleted — and the form
+				// promises "leave blank to use their first name". Scoped to the value
+				// this membership seeded, so a different answer recorded by another club
+				// survives untouched.
+				await tx
+					.update(people)
+					.set({ preferredName: null })
+					.where(
+						and(
+							eq(people.id, current.personId),
+							eq(people.preferredName, current.preferredName),
+						),
+					);
+			}
+			// A former member (#1239) holds no office: opening a term would put them
+			// back on the officers list and grant admin-adjacent access. Read under
+			// the row lock so an end-membership racing this edit cannot slip past.
+			if (input.officerPositions !== undefined) {
+				const [locked] = await tx
+					.select({ status: members.status })
+					.from(members)
+					.where(eq(members.id, input.memberId))
+					.for("update");
+				if (locked?.status === "former" && input.officerPositions.length > 0) {
+					throw new Error(
+						"A former member can't hold an office — reactivate them first.",
+					);
+				}
+			}
+			// The membership last — see LOCK ORDER above.
+			await tx.update(members).set(next).where(eq(members.id, input.memberId));
+			// Reconcile the office set only when the caller sent one (undefined = leave
+			// terms alone). Dedupe first so a repeated office can't open two terms.
+			if (input.officerPositions !== undefined) {
+				await reconcileOfficerTerms(tx, input.memberId, [
+					...new Set(input.officerPositions),
+				]);
+			}
+			const afterOffices =
+				input.officerPositions !== undefined
+					? [...new Set(input.officerPositions)]
+					: beforeOffices;
+			await logActivity(tx, {
+				clubId: input.clubId,
+				actorMemberId: input.actorMemberId,
+				action: "member_edit",
+				targetType: "member",
+				targetId: input.memberId,
+				detail: {
+					before: {
+						name: current.name,
+						preferredName: current.preferredName,
+						// Logged only when the edit wrote it.
+						...(emailChange ? { email: emailChange.before } : {}),
+						// Logged only when the edit wrote it.
+						...(phone !== undefined ? { phone: currentPerson.phone } : {}),
+						// Logged only when the edit wrote it: the preference as it was
+						// SHOWN, never the raw column (#1093).
+						...(preferredContact !== undefined
+							? {
+									preferredContact: effectivePreferredContact(
+										currentPerson.storedPreferredContact,
+										currentPerson,
+									),
+								}
+							: {}),
+						officerPositions: beforeOffices,
+					},
+					after: {
+						...next,
+						...(emailChange ? { email: emailChange.after } : {}),
+						...(phone !== undefined ? { phone } : {}),
+						...(preferredContact !== undefined ? { preferredContact } : {}),
+						officerPositions: afterOffices,
+					},
 				},
-				after: {
-					...next,
-					...(emailChange ? { email: emailChange.after } : {}),
-					...(phone !== undefined ? { phone } : {}),
-					...(preferredContact !== undefined ? { preferredContact } : {}),
-					officerPositions: afterOffices,
-				},
-			},
+			});
 		});
-	});
 
-	// Did this edit leave the member unable to sign in? Reported, never refused.
-	//
-	// The case that makes this necessary is not only the member being edited:
-	// typing an address ANOTHER Person already carries makes it ambiguous, and
-	// the bind then refuses BOTH of them. So a save on Alice's row can silently
-	// revoke Bob's sign-in — a member the admin was not editing and cannot see
-	// from this screen. The invite button and the bulk dialog both ask this
-	// question; the edit form is where the address is actually typed.
-	//
-	// Skipped for a Person who already holds an account: nothing this form can
-	// write affects their sign-in.
-	const rosterConflict = await personEmailObstacle(current.personId);
-	return { ok: true as const, rosterConflict, emailRefused };
+		// Did this edit leave the member unable to sign in? Reported, never refused.
+		//
+		// The case that makes this necessary is not only the member being edited:
+		// typing an address ANOTHER Person already carries makes it ambiguous, and
+		// the bind then refuses BOTH of them. So a save on Alice's row can silently
+		// revoke Bob's sign-in — a member the admin was not editing and cannot see
+		// from this screen. The invite button and the bulk dialog both ask this
+		// question; the edit form is where the address is actually typed.
+		//
+		// Skipped for a Person who already holds an account: nothing this form can
+		// write affects their sign-in.
+		const rosterConflict = await personEmailObstacle(current.personId);
+		return { ok: true as const, rosterConflict, emailRefused };
+	});
 }
 
 /** The bind obstacle for a member's Person, or null — including for an already
