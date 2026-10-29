@@ -114,8 +114,9 @@ export function SeasonGrid({
 	canManageOthers?: boolean;
 	/** Club uuid — required for the availability calls. */
 	clubId?: string;
-	/** Club slug — when set (public club shell), meeting links in the header
-	 *  and cells target the public meeting view instead of `/meetings/$id`. */
+	/** Club slug — the PUBLIC-SHELL flag (#1401): set only on the public club
+	 *  page. It gates public-only behaviour (plain-text "Roster view"); it does
+	 *  not build links, which take `data.clubSlug` on both surfaces. */
 	clubSlug?: string;
 	/** Show member Email/Phone columns (Members × Meetings, signed-in only). */
 	showContact?: boolean;
@@ -684,7 +685,7 @@ export function SeasonGrid({
 										    real padding (the header grows a little on the phone);
 										    md+ is py-0 — unchanged (#224). */}
 											<MeetingLink
-												clubSlug={clubSlug}
+												clubSlug={data.clubSlug}
 												meetingId={m.id}
 												meetingKey={m.urlKey}
 												className="block py-2 md:py-0"
@@ -942,7 +943,7 @@ export function SeasonGrid({
 														// Releasing is session-gated (#763), so an
 														// anonymous pick's own cell is not a control.
 														onRelease={provenIdentity ? release : undefined}
-														clubSlug={clubSlug}
+														clubSlug={data.clubSlug ?? undefined}
 														meetingKey={m?.urlKey}
 														meetingLabel={
 															m

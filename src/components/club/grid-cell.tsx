@@ -101,11 +101,11 @@ export function GridCell({
 	 *  on their behalf) — used to word the control "Mark {name} unavailable"
 	 *  instead of "yourself". Omitted ⇒ the viewer's own row. */
 	subjectName?: string;
-	/** Club slug — when set (public club shell), cell links target the public
-	 *  meeting view instead of the signed-in `/meetings/$id` route. */
+	/** The club's slug (from the grid data, #1401): when set, cell links target
+	 *  the canonical meeting URL; otherwise `/meetings/$id`. */
 	clubSlug?: string;
 	/** The column meeting's public-view key (date URL). Passed through to
-	 *  `MeetingLink` — ignored in authed mode. */
+	 *  `MeetingLink`; unused on the `/meetings/$id` fallback. */
 	meetingKey?: string;
 	/** Formatted meeting date (e.g. from `formatMeetingDate`) — appended to
 	 *  every button/link accessible name so a screen reader tabbing across the
@@ -249,7 +249,7 @@ export function GridCell({
 		</span>
 	);
 	if (cell.kind === "blank") return inner;
-	// A public cell with no key is not a link: the uuid is never a fallback.
+	// A slug cell with no key is not a link: the uuid is never a fallback.
 	if (clubSlug && !meetingKey) return inner;
 	return (
 		<MeetingLink

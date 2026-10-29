@@ -82,6 +82,10 @@ function uuidMeetingLinks(
 	for (const m of source.matchAll(ROUTE_LINK)) {
 		seen.links++;
 		const body = m[1] ?? "";
+		// #1401: the club segment is the slug too; `x.clubId` is the club uuid.
+		const club = body.match(/\bclubId:\s*([^,}]+)/)?.[1]?.trim();
+		if (club && /(?<!\bparams)\.clubId\b/.test(club))
+			found.push(`clubId: ${club}`);
 		const value = body.match(/meetingId:\s*([^,}]+)/)?.[1]?.trim();
 		if (value) {
 			if (UUID_VALUE.test(value)) found.push(`meetingId: ${value}`);
@@ -120,6 +124,19 @@ describe("meeting links use the canonical key (#1396)", () => {
 		expect(
 			uuidMeetingLinks(
 				'<Link to="/club/$clubId/meeting/$meetingId" params={{ clubId, meetingId: m.urlKey }}>',
+			),
+		).toEqual([]);
+	});
+
+	it("flags a club uuid in the club segment (#1401)", () => {
+		expect(
+			uuidMeetingLinks(
+				'<Link to="/club/$clubId/meeting/$meetingId/agenda" params={{ clubId: meeting.clubId, meetingId: key }}>',
+			),
+		).toEqual(["clubId: meeting.clubId"]);
+		expect(
+			uuidMeetingLinks(
+				'<Link to="/club/$clubId/meeting/$meetingId/agenda" params={{ clubId: clubSlug, meetingId: key }}>',
 			),
 		).toEqual([]);
 	});

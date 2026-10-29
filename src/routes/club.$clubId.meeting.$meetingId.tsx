@@ -2414,6 +2414,7 @@ function MeetingView() {
 							personalNudgeBase={effectiveCanManage ? nudgePersonalBase : null}
 							meeting={meeting}
 							meetingUrlKey={urlKey}
+							clubSlug={clubId}
 							meetingOver={over}
 							requireIdentity={requireIdentity}
 							contactedMemberIds={contactedMemberIds}
