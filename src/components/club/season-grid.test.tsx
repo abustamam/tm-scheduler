@@ -1657,24 +1657,40 @@ describe("SeasonGrid sticky label column fills the border-spacing gap (#1302)", 
 	// The table is border-separate with a 4px spacing, so a sticky cell's
 	// background stops at its border box and whatever scrolls underneath shows
 	// through the gap. The fix is a 4px spread shadow in the cell's own colour.
-	// jsdom has no paint, so the class strings read off the RENDERED cells are
-	// the assertable contract; deleting the spread fails these.
+	// jsdom has no paint, so these assert the class strings on the RENDERED
+	// cells (the contract), not the pixels; the real-paint check is the
+	// Chrome-backed season-grid-sticky-gap test.
 	const stickyLabelCells = () =>
 		Array.from(document.querySelectorAll("table th")).filter(
 			(th) =>
 				th.classList.contains("sticky") && th.classList.contains("left-0"),
 		);
+	// A BASE (non-variant) arbitrary shadow: the class must start the token, so
+	// `group-hover:shadow-[...]` never satisfies it.
+	const baseShadow = (th: Element) =>
+		th.className.match(/(?:^|\s)shadow-\[([^\]]*)\]/)?.[1] ?? "";
+	const headerCell = () =>
+		stickyLabelCells().find((th) => th.className.includes("top-0"));
+	const bodyCells = () =>
+		stickyLabelCells().filter((th) => !th.className.includes("top-0"));
 
 	it.each([
 		["roles", () => renderGrid(undefined, { currentMemberId: "admin-1" })],
 		["members", () => renderMembersGrid()],
-	])("every sticky label cell (%s view) carries a 4px own-colour spread", async (_n, mount) => {
+	])("header and every body label cell (%s view) carry their own-colour base spread", async (_n, mount) => {
 		await mount();
-		const cells = stickyLabelCells();
-		// the header cell plus at least one body row label
-		expect(cells.length).toBeGreaterThan(1);
-		for (const th of cells) {
-			expect(th.className).toMatch(/shadow-\[[^\]]*0_0_0_4px_[^\]]*\]/);
+		expect(headerCell()).toBeTruthy();
+		expect(baseShadow(headerCell() as Element)).toContain(
+			"0_0_0_4px_var(--card)",
+		);
+		const body = bodyCells();
+		expect(body.length).toBeGreaterThan(0);
+		for (const th of body) {
+			const spread = baseShadow(th);
+			// plain rows spread card; the self row spreads its tint (next test)
+			expect(spread).toMatch(
+				/0_0_0_4px_(var\(--card\)|color-mix\(in_oklab,var\(--card\),var\(--primary\)_8%\))/,
+			);
 		}
 		// the spread must equal the table's spacing, or a sliver stays open
 		expect(document.querySelector("table")?.className).toContain(
@@ -1682,10 +1698,20 @@ describe("SeasonGrid sticky label column fills the border-spacing gap (#1302)", 
 		);
 	});
 
+	it("a plain body row at rest spreads var(--card) in its BASE shadow", async () => {
+		await renderMembersGrid({ currentMemberId: "someone-else" });
+		const plain = bodyCells().filter((th) =>
+			th.className.includes("group-hover:bg-muted"),
+		);
+		expect(plain.length).toBeGreaterThan(0);
+		for (const th of plain) {
+			expect(baseShadow(th)).toContain("0_0_0_4px_var(--card)");
+		}
+	});
+
 	it("the hover and self-row variants fill the gap in the colour they show", async () => {
 		await renderMembersGrid({ currentMemberId: "someone-else" });
-		const cells = stickyLabelCells();
-		const hover = cells.filter((th) =>
+		const hover = bodyCells().filter((th) =>
 			th.className.includes("group-hover:bg-muted"),
 		);
 		expect(hover.length).toBeGreaterThan(0);
@@ -1696,14 +1722,29 @@ describe("SeasonGrid sticky label column fills the border-spacing gap (#1302)", 
 		}
 		cleanup();
 		await renderMembersGrid({ currentMemberId: "c1" });
-		const tinted = stickyLabelCells().filter((th) =>
+		const tinted = bodyCells().filter((th) =>
 			th.className.includes("color-mix"),
 		);
 		expect(tinted.length).toBe(1);
-		for (const th of tinted) {
-			expect(th.className).toMatch(
-				/shadow-\[[^\]]*0_0_0_4px_color-mix\(in_oklab,var\(--card\),var\(--primary\)_8%\)/,
-			);
-		}
+		const MIX = "color-mix(in_oklab,var(--card),var(--primary)_8%)";
+		// bg and spread are the same colour, or the gap shows a different frame
+		expect(tinted[0].className).toContain(`bg-[${MIX}]`);
+		expect(baseShadow(tinted[0])).toContain(`0_0_0_4px_${MIX}`);
+	});
+
+	it("a hovered or self row's label cell outranks its neighbours' spread but not the header", async () => {
+		await renderMembersGrid({ currentMemberId: "c1" });
+		const z = (th: Element) =>
+			th.className.match(/(?:^|\s)z-(\d+|\[\d+\])/)?.[1] ?? "";
+		expect(z(headerCell() as Element)).toBe("20");
+		const self = bodyCells().find((th) => th.className.includes("color-mix"));
+		expect(z(self as Element)).toBe("[11]");
+		cleanup();
+		await renderMembersGrid({ currentMemberId: "someone-else" });
+		const plain = bodyCells().find((th) =>
+			th.className.includes("group-hover:bg-muted"),
+		);
+		expect(z(plain as Element)).toBe("10");
+		expect(plain?.className).toContain("group-hover:z-[11]");
 	});
 });
