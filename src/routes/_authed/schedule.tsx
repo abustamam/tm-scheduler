@@ -147,6 +147,7 @@ function SeasonGridPage() {
 							</DropdownMenuItem>
 							<DropdownMenuItem asChild>
 								<Link
+									className="text-inherit"
 									to="/club/$clubId/next/tent"
 									params={{ clubId: data.clubSlug }}
 								>

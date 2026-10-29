@@ -96,6 +96,7 @@ export function MeetingExportMenu({
 				<DropdownMenuContent align="start">
 					<DropdownMenuItem asChild>
 						<Link
+							className="text-inherit"
 							to="/club/$clubId/meeting/$meetingId/print"
 							params={{ clubId: clubSlug, meetingId }}
 							search={printLayout ? { layout: printLayout } : {}}
@@ -109,6 +110,7 @@ export function MeetingExportMenu({
 					{presentIsPrimary ? null : (
 						<DropdownMenuItem asChild>
 							<Link
+								className="text-inherit"
 								to="/club/$clubId/meeting/$meetingId/present"
 								params={{ clubId: clubSlug, meetingId }}
 								target="_blank"
@@ -135,6 +137,7 @@ export function MeetingExportMenu({
 					    download menu above. */}
 					<DropdownMenuItem asChild>
 						<Link
+							className="text-inherit"
 							to="/club/$clubId/roles"
 							params={{ clubId: clubSlug }}
 							target="_blank"
@@ -148,6 +151,7 @@ export function MeetingExportMenu({
 					    name and an optional arrow, for taping up on the way in. */}
 					<DropdownMenuItem asChild>
 						<Link
+							className="text-inherit"
 							to="/club/$clubId/sign"
 							params={{ clubId: clubSlug }}
 							target="_blank"
@@ -164,6 +168,7 @@ export function MeetingExportMenu({
 					{hasWordOfTheDay(wordOfTheDay) ? (
 						<DropdownMenuItem asChild>
 							<Link
+								className="text-inherit"
 								to="/club/$clubId/meeting/$meetingId/word"
 								params={{ clubId: clubSlug, meetingId }}
 								target="_blank"
