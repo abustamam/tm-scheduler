@@ -389,6 +389,34 @@ describe("role descriptions", () => {
 		expect(document.querySelectorAll("details")).toHaveLength(0);
 	});
 
+	// protects=an expandable row shows a rotating chevron in its <summary>, a plain row none, and the summary has a focus ring (#1364);
+	// fails_when=the chevron is removed, loses group-open:rotate-90 or duration-200, the summary loses its focus-visible ring or shows the webkit marker;
+	// no_claim=jsdom has no layout, so it says nothing about the rotation or ring actually rendering
+	it("an expandable row has a chevron in its summary; a plain row has none", async () => {
+		await renderPage(
+			props({ roleDescriptions: { speaker: "Gives a prepared speech." } }),
+		);
+		const rowFor = (name: string) =>
+			Array.from(document.querySelectorAll("li")).find((li) =>
+				li.textContent?.includes(name),
+			);
+		const expandable = rowFor("Icebreaker Jitters");
+		const plain = rowFor("Toastmaster of the Day");
+		expect(expandable).toBeDefined();
+		expect(plain).toBeDefined();
+		expect(plain?.querySelector("svg.lucide-chevron-right")).toBeNull();
+		const summary = expandable?.querySelector("details > summary");
+		const chevron = summary?.querySelector("svg.lucide-chevron-right");
+		expect(chevron).not.toBeNull();
+		expect(chevron?.getAttribute("aria-hidden")).toBe("true");
+		expect(chevron?.classList.contains("group-open:rotate-90")).toBe(true);
+		expect(chevron?.classList.contains("duration-200")).toBe(true);
+		expect(
+			summary?.classList.contains("[&::-webkit-details-marker]:hidden"),
+		).toBe(true);
+		expect(summary?.classList.contains("focus-visible:ring-[3px]")).toBe(true);
+	});
+
 	// protects=no description, no <details>;
 	// fails_when=an empty disclosure is drawn;
 	// no_claim=says nothing about clubs with descriptions
