@@ -1652,3 +1652,58 @@ describe("SeasonGrid: optimistic claim and release (#1315)", () => {
 		);
 	});
 });
+
+describe("SeasonGrid sticky label column fills the border-spacing gap (#1302)", () => {
+	// The table is border-separate with a 4px spacing, so a sticky cell's
+	// background stops at its border box and whatever scrolls underneath shows
+	// through the gap. The fix is a 4px spread shadow in the cell's own colour.
+	// jsdom has no paint, so the class strings read off the RENDERED cells are
+	// the assertable contract; deleting the spread fails these.
+	const stickyLabelCells = () =>
+		Array.from(document.querySelectorAll("table th")).filter(
+			(th) =>
+				th.classList.contains("sticky") && th.classList.contains("left-0"),
+		);
+
+	it.each([
+		["roles", () => renderGrid(undefined, { currentMemberId: "admin-1" })],
+		["members", () => renderMembersGrid()],
+	])("every sticky label cell (%s view) carries a 4px own-colour spread", async (_n, mount) => {
+		await mount();
+		const cells = stickyLabelCells();
+		// the header cell plus at least one body row label
+		expect(cells.length).toBeGreaterThan(1);
+		for (const th of cells) {
+			expect(th.className).toMatch(/shadow-\[[^\]]*0_0_0_4px_[^\]]*\]/);
+		}
+		// the spread must equal the table's spacing, or a sliver stays open
+		expect(document.querySelector("table")?.className).toContain(
+			"border-spacing-1",
+		);
+	});
+
+	it("the hover and self-row variants fill the gap in the colour they show", async () => {
+		await renderMembersGrid({ currentMemberId: "someone-else" });
+		const cells = stickyLabelCells();
+		const hover = cells.filter((th) =>
+			th.className.includes("group-hover:bg-muted"),
+		);
+		expect(hover.length).toBeGreaterThan(0);
+		for (const th of hover) {
+			expect(th.className).toMatch(
+				/group-hover:shadow-\[[^\]]*0_0_0_4px_var\(--muted\)/,
+			);
+		}
+		cleanup();
+		await renderMembersGrid({ currentMemberId: "c1" });
+		const tinted = stickyLabelCells().filter((th) =>
+			th.className.includes("color-mix"),
+		);
+		expect(tinted.length).toBe(1);
+		for (const th of tinted) {
+			expect(th.className).toMatch(
+				/shadow-\[[^\]]*0_0_0_4px_color-mix\(in_oklab,var\(--card\),var\(--primary\)_8%\)/,
+			);
+		}
+	});
+});

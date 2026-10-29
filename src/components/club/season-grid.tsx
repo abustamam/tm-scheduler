@@ -624,7 +624,7 @@ export function SeasonGrid({
 						    scrolled (the grid auto-scrolls to the upcoming meeting). */}
 								<th
 									ref={labelHeadRef}
-									className="sticky top-0 left-0 z-20 w-36 max-w-36 bg-card px-3 py-2 text-left text-xs font-semibold shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]"
+									className="sticky top-0 left-0 z-20 w-36 max-w-36 bg-card px-3 py-2 text-left text-xs font-semibold shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35),0_0_0_4px_var(--card)]"
 								>
 									{labelHead}
 								</th>
@@ -799,8 +799,8 @@ export function SeasonGrid({
 												isSelfRow
 													? // Opaque tinted fill (color-mix stays opaque, so nothing
 														// bleeds under the sticky column) + a 3px inset accent bar.
-														"bg-[color-mix(in_oklab,var(--card),var(--primary)_8%)] shadow-[inset_3px_0_0_0_var(--primary),4px_0_6px_-4px_rgba(0,0,0,0.35)]"
-													: "bg-card group-hover:bg-muted shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]",
+														"bg-[color-mix(in_oklab,var(--card),var(--primary)_8%)] shadow-[inset_3px_0_0_0_var(--primary),4px_0_6px_-4px_rgba(0,0,0,0.35),0_0_0_4px_color-mix(in_oklab,var(--card),var(--primary)_8%)]"
+													: "bg-card group-hover:bg-muted shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35),0_0_0_4px_var(--card)] group-hover:shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35),0_0_0_4px_var(--muted)]",
 											)}
 										>
 											<div className="flex items-center gap-1.5">
