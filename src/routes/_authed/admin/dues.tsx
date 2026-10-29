@@ -391,7 +391,7 @@ function DuesTracker() {
 // Rows & cards
 // ---------------------------------------------------------------------------
 
-function StatCard({
+export function StatCard({
 	label,
 	value,
 	note,

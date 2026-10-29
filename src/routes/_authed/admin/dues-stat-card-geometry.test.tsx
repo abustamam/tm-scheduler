@@ -3,15 +3,16 @@
  * `StatCard`'s value/note row was a non-wrapping `flex`, so "from entered
  * amounts" ran past the card edge beside `$655.00` at 375px.
  *
- * Every class string is read from dues.tsx (the stat grid, the card, the label,
- * the row, the value, the note) and the page gutter from page-container.tsx, so
- * a change to the source changes what is measured. Only the text is synthetic.
- * Headless Chrome lays no window out narrower than 500px, so the page is a div
- * of the phone's width inside a 500px viewport.
+ * `StatCard` itself is rendered (exported from dues.tsx), so its markup and
+ * classes are the source's own. Only the surrounding stat grid and the page
+ * gutter are read from dues.tsx / page-container.tsx by regex. Headless Chrome
+ * lays no window out narrower than 500px, so the page is a div of the phone's
+ * width inside a 500px viewport.
  */
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { beforeAll, describe, expect, it } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { readSource } from "#/test/guard-source";
 import {
 	buildAppCss,
@@ -19,6 +20,11 @@ import {
 	renderAndReadTitle,
 } from "#/test/pinned-column-scroll";
 import { CHROME_TEST_TIMEOUT_MS, findChrome } from "#/test/print-page-count";
+import { StatCard } from "./dues";
+
+// dues.tsx reaches `#/db` through the server modules it imports, which throws
+// at import without a DATABASE_URL. StatCard never touches the database.
+vi.mock("#/db", () => ({ db: {} }));
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = resolve(HERE, "dues.tsx");
@@ -32,6 +38,12 @@ function capture(src: string, anchor: string, re: RegExp): string {
 	expect(m, `${re} not found after ${anchor}`).not.toBeNull();
 	return m?.[1] ?? "";
 }
+
+const collected = (value: string) =>
+	renderToStaticMarkup(
+		<StatCard label="Collected" value={value} note="from entered amounts" />,
+	).replace("<div", "<div data-card");
+const sibling = () => renderToStaticMarkup(<StatCard label="Paid" value="0" />);
 
 describe("dues stat card harness availability", () => {
 	it("has a browser when running in CI", () => {
@@ -49,30 +61,21 @@ describe.skipIf(!hasChrome)(
 		let css = "";
 		let pageBox = "";
 		let grid = "";
-		let card = "";
-		let label = "";
-		let valueRow = "";
-		let valueCls = "";
-		let noteCls = "";
 
-		function measure(o: { page: number; value: string; row?: string }) {
+		function measure(o: {
+			page: number;
+			value: string;
+			stripFlexWrap?: boolean;
+		}) {
+			let card = collected(o.value);
+			if (o.stripFlexWrap) card = card.replace(/\bflex-wrap\b/, "");
 			const body =
 				`<div data-page style="width:${o.page}px"><div class="${pageBox}">` +
-				`<div class="${grid}">` +
 				// The real grid holds four cards; three siblings keep the column
 				// count (two at 375px) the Collected card really gets.
-				[1, 2, 3]
-					.map(
-						() =>
-							`<div class="${card}"><div class="${label}">Paid</div><div class="${valueRow}"><span class="${valueCls}">0</span></div></div>`,
-					)
-					.join("") +
-				`<div class="${card}" data-card>` +
-				`<div class="${label}">Collected</div>` +
-				`<div class="${o.row ?? valueRow}" data-row><span class="${valueCls}" data-value>${o.value}</span>` +
-				`<span class="${noteCls}" data-note>from entered amounts</span></div>` +
-				`</div></div></div></div>`;
-			const script = `<script>(function(){var q=function(s){return document.querySelector(s)};var c=q("[data-card]").getBoundingClientRect();var n=q("[data-note]").getBoundingClientRect();var v=q("[data-value]").getBoundingClientRect();var p=q("[data-page]");document.title="noteRight="+Math.round(n.right)+";cardRight="+Math.round(c.right)+";noteTop="+Math.round(n.top)+";valueBottom="+Math.round(v.bottom)+";noteLeft="+Math.round(n.left)+";valueLeft="+Math.round(v.left)+";pageOverflow="+(p.scrollWidth-p.clientWidth);})();</script>`;
+				`<div class="${grid}">${sibling()}${sibling()}${sibling()}${card}</div>` +
+				"</div></div>";
+			const script = `<script>(function(){var r=function(e){return e.getBoundingClientRect()};var c=document.querySelector("[data-card]");var sp=c.querySelectorAll("span");var cr=r(c),v=r(sp[0]),n=r(sp[1]);var p=document.querySelector("[data-page]");document.title="noteRight="+Math.round(n.right)+";cardRight="+Math.round(cr.right)+";noteTop="+Math.round(n.top)+";valueBottom="+Math.round(v.bottom)+";noteLeft="+Math.round(n.left)+";valueLeft="+Math.round(v.left)+";pageOverflow="+(p.scrollWidth-p.clientWidth);})();</script>`;
 			const title = renderAndReadTitle({
 				bodyHtml: body,
 				css,
@@ -84,52 +87,28 @@ describe.skipIf(!hasChrome)(
 			const kv = new Map(
 				title.split(";").map((p) => p.split("=") as [string, string]),
 			);
-			const n = (k: string) => Number(kv.get(k));
+			const num = (k: string) => Number(kv.get(k));
 			return {
-				noteRight: n("noteRight"),
-				cardRight: n("cardRight"),
-				noteTop: n("noteTop"),
-				valueBottom: n("valueBottom"),
-				noteLeft: n("noteLeft"),
-				valueLeft: n("valueLeft"),
-				pageOverflow: n("pageOverflow"),
+				noteRight: num("noteRight"),
+				cardRight: num("cardRight"),
+				noteTop: num("noteTop"),
+				valueBottom: num("valueBottom"),
+				noteLeft: num("noteLeft"),
+				valueLeft: num("valueLeft"),
+				pageOverflow: num("pageOverflow"),
 			};
 		}
 
 		beforeAll(async () => {
-			const src = readSource(SRC);
 			grid = capture(
-				src,
+				readSource(SRC),
 				"{totals ? (",
 				/<div className="(grid grid-cols-\[[^"]*)"/,
-			);
-			card = capture(
-				src,
-				"function StatCard",
-				/"(rounded-xl border bg-surface-raised[^"]*)"/,
-			);
-			label = capture(
-				src,
-				"function StatCard",
-				/<div className="(text-xs font-bold[^"]*)"/,
-			);
-			valueRow = capture(
-				src,
-				"function StatCard",
-				/<div className="(mt-2 flex[^"]*)"/,
-			);
-			valueCls = capture(src, "function StatCard", /"(font-display[^"]*)"/);
-			noteCls = capture(
-				src,
-				"function StatCard",
-				/<span className="(text-xs text-muted-foreground)">\{note\}/,
 			);
 			pageBox = capture(readSource(CONTAINER), "cn(", /"([^"]*)"/);
 			css = await buildAppCss(
 				candidatesIn(
-					[pageBox, grid, card, label, valueRow, valueCls, noteCls]
-						.map((c) => `<i class="${c}"></i>`)
-						.join(""),
+					`<i class="${pageBox} ${grid}"></i>${collected("$655.00")}${sibling()}`,
 				),
 			);
 		});
@@ -152,7 +131,7 @@ describe.skipIf(!hasChrome)(
 			const m = measure({
 				page: 375,
 				value: "$655.00",
-				row: valueRow.replace(/\bflex-wrap\b/, ""),
+				stripFlexWrap: true,
 			});
 			expect(m.noteRight).toBeGreaterThan(m.cardRight);
 		});
