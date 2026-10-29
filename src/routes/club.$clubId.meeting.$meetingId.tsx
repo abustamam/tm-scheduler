@@ -333,19 +333,24 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 	notFoundComponent: MeetingRouteNotFound,
 	// Link preview: club name, date and theme ONLY. The page is public but the
 	// roll is members-only, so nothing roster-derived may reach a meta tag
-	// (share-meta.guard.test.ts).
+	// (share-meta.head.test.ts).
 	head: ({ match, params, loaderData }) => {
 		const club = match.context.clubName;
 		const meeting = loaderData?.meeting;
 		const when = meeting
 			? meetingHeading(meeting.theme, meeting.scheduledAt, loaderData.timezone)
 			: null;
+		const cancelled = meeting?.status === "cancelled";
+		const title = when ? `${club} · ${when.title}` : club;
+		const description = when?.detailDate
+			? `${club} meeting on ${when.detailDate}. See the agenda and roles.`
+			: `${club} meeting agenda and roles.`;
 		return {
 			meta: shareMeta({
-				title: when ? `${club} · ${when.title}` : club,
-				description: when?.detailDate
-					? `${club} meeting on ${when.detailDate}. See the agenda and roles.`
-					: `${club} meeting agenda and roles.`,
+				title: cancelled ? `Cancelled: ${title}` : title,
+				description: cancelled
+					? `This meeting is cancelled. ${description}`
+					: description,
 				path: `/club/${params.clubId}/meeting/${params.meetingId}`,
 			}),
 		};

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { absoluteUrl, NOINDEX, shareMeta } from "./share-meta";
+import { absoluteUrl, NOINDEX, shareMeta } from "#/lib/share-meta";
 
 describe("absoluteUrl", () => {
 	it("prefixes the production origin and leaves absolute URLs alone", () => {

@@ -31,7 +31,7 @@ export const Route = createFileRoute("/resources/$slug")({
 		return {
 			meta: shareMeta({
 				title,
-				description: resource?.desc ?? "",
+				description: resource?.desc ?? "Toastmasters resources from GavelUp.",
 				path: `/resources/${params.slug}`,
 			}),
 		};

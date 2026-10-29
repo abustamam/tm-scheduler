@@ -77,14 +77,17 @@ export const Route = createFileRoute(
 	},
 	component: FeedbackPage,
 	notFoundComponent: FeedbackNotFound,
-	head: ({ loaderData, params }) => ({
-		meta: shareMeta({
-			title: `Meeting feedback — ${loaderData?.clubName ?? "Club"}`,
-			description: `Share feedback on the ${loaderData?.clubName ?? "club"} meeting.`,
-			path: `/club/${params.clubId}/meeting/${params.meetingId}/feedback`,
-			extra: [NOINDEX],
-		}),
-	}),
+	head: ({ loaderData, params }) => {
+		const club = loaderData?.clubName ?? "Club";
+		return {
+			meta: shareMeta({
+				title: `Meeting feedback — ${club}`,
+				description: `Share feedback on the ${club} meeting.`,
+				path: `/club/${params.clubId}/meeting/${params.meetingId}/feedback`,
+				extra: [NOINDEX],
+			}),
+		};
+	},
 });
 
 function FeedbackNotFound() {

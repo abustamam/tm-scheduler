@@ -72,13 +72,16 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/vote")({
 	// holding the phone should be told it is the MEETING that is missing, in the
 	// same words every other meeting sub-route uses.
 	notFoundComponent: VoteNotFound,
-	head: ({ loaderData }) => ({
-		meta: shareMeta({
-			title: `Vote — ${loaderData?.clubName ?? "Club"}`,
-			description: `Cast your vote at the ${loaderData?.clubName ?? "club"} meeting.`,
-			extra: [NOINDEX],
-		}),
-	}),
+	head: ({ loaderData }) => {
+		const club = loaderData?.clubName ?? "Club";
+		return {
+			meta: shareMeta({
+				title: `Vote — ${club}`,
+				description: `Cast your vote at the ${club} meeting.`,
+				extra: [NOINDEX],
+			}),
+		};
+	},
 });
 
 function VoteNotFound() {

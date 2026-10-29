@@ -47,13 +47,11 @@ export const Route = createFileRoute("/request-access")({
 		kind: search.kind as unknown,
 	}),
 	head: () => ({
-		meta: [
-			...shareMeta({
-				title: TITLE,
-				description: DESCRIPTION,
-				path: "/request-access",
-			}),
-		],
+		meta: shareMeta({
+			title: TITLE,
+			description: DESCRIPTION,
+			path: "/request-access",
+		}),
 	}),
 	component: RequestAccess,
 });

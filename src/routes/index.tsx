@@ -40,14 +40,11 @@ export const Route = createFileRoute("/")({
 		}
 	},
 	head: () => ({
-		meta: [
-			...shareMeta({
-				title: TITLE,
-				description: DESCRIPTION,
-				path: "/",
-				image: "/landing/hero.png",
-			}),
-		],
+		meta: shareMeta({
+			title: TITLE,
+			description: DESCRIPTION,
+			path: "/",
+		}),
 	}),
 	component: Landing,
 });

@@ -20,14 +20,12 @@ const DESCRIPTION =
 // is already in may still want to send this page to someone who is not.
 export const Route = createFileRoute("/tour")({
 	head: () => ({
-		meta: [
-			...shareMeta({
-				title: TITLE,
-				description: DESCRIPTION,
-				path: "/tour",
-				image: "/landing/tour-agenda.png",
-			}),
-		],
+		meta: shareMeta({
+			title: TITLE,
+			description: DESCRIPTION,
+			path: "/tour",
+			image: "/landing/tour-agenda.png",
+		}),
 	}),
 	component: Tour,
 });

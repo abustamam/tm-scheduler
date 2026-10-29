@@ -12,9 +12,7 @@ const DESCRIPTION =
 // import graph reaches neither `#/server/timings` nor `#/db`.
 export const Route = createFileRoute("/timer")({
 	head: () => ({
-		meta: [
-			...shareMeta({ title: TITLE, description: DESCRIPTION, path: "/timer" }),
-		],
+		meta: shareMeta({ title: TITLE, description: DESCRIPTION, path: "/timer" }),
 	}),
 	component: TimerPage,
 });

@@ -26,14 +26,17 @@ export const Route = createFileRoute("/club/$clubId_/guest-book")({
 		};
 	},
 	component: GuestBook,
-	head: ({ loaderData, params }) => ({
-		meta: shareMeta({
-			title: `${loaderData?.clubName ?? "Club"} guest book`,
-			description: `Sign the guest book at ${loaderData?.clubName ?? "our club"}.`,
-			path: `/club/${params.clubId}/guest-book`,
-			extra: [NOINDEX],
-		}),
-	}),
+	head: ({ loaderData, params }) => {
+		const club = loaderData?.clubName ?? "Club";
+		return {
+			meta: shareMeta({
+				title: `${club} guest book`,
+				description: `Sign the guest book at ${club}.`,
+				path: `/club/${params.clubId}/guest-book`,
+				extra: [NOINDEX],
+			}),
+		};
+	},
 });
 
 function GuestBook() {
