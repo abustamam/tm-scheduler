@@ -9,6 +9,7 @@ import { Textarea } from "#/components/ui/textarea";
 import { CONTACT_MAILTO, PILOT_PRICING_LINE } from "#/lib/brand";
 import { CHARTER_OPTIONS, type CharterStatus } from "#/lib/club-charter";
 import { readRef } from "#/lib/marketing-ref";
+import { shareMeta } from "#/lib/share-meta";
 import {
 	type SubmitAccessRequestResult,
 	submitAccessRequest,
@@ -47,10 +48,11 @@ export const Route = createFileRoute("/request-access")({
 	}),
 	head: () => ({
 		meta: [
-			{ title: TITLE },
-			{ name: "description", content: DESCRIPTION },
-			{ property: "og:title", content: TITLE },
-			{ property: "og:description", content: DESCRIPTION },
+			...shareMeta({
+				title: TITLE,
+				description: DESCRIPTION,
+				path: "/request-access",
+			}),
 		],
 	}),
 	component: RequestAccess,

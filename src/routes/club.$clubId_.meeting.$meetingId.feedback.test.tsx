@@ -173,7 +173,10 @@ describe("feedback route loader (#984)", () => {
 
 	it("is not indexed", () => {
 		// biome-ignore lint/suspicious/noExplicitAny: head() takes a router ctx
-		const head = (Route.options as any).head();
+		const head = (Route.options as any).head({
+			loaderData: undefined,
+			params: { clubId: "c", meetingId: "m" },
+		});
 		expect(head.meta).toContainEqual({
 			name: "robots",
 			content: "noindex, nofollow",

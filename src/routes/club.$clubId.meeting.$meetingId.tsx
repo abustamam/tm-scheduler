@@ -140,6 +140,7 @@ import {
 	deriveRollGuests,
 	deriveRollRoster,
 } from "#/lib/roll-attendance";
+import { shareMeta } from "#/lib/share-meta";
 import { footerDate } from "#/lib/slide-layout";
 import { hasWordOfTheDay } from "#/lib/word-poster";
 import { getOpenActionItems } from "#/server/action-items";
@@ -330,6 +331,25 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 	},
 	component: MeetingView,
 	notFoundComponent: MeetingRouteNotFound,
+	// Link preview: club name, date and theme ONLY. The page is public but the
+	// roll is members-only, so nothing roster-derived may reach a meta tag
+	// (share-meta.guard.test.ts).
+	head: ({ match, params, loaderData }) => {
+		const club = match.context.clubName;
+		const meeting = loaderData?.meeting;
+		const when = meeting
+			? meetingHeading(meeting.theme, meeting.scheduledAt, loaderData.timezone)
+			: null;
+		return {
+			meta: shareMeta({
+				title: when ? `${club} · ${when.title}` : club,
+				description: when?.detailDate
+					? `${club} meeting on ${when.detailDate}. See the agenda and roles.`
+					: `${club} meeting agenda and roles.`,
+				path: `/club/${params.clubId}/meeting/${params.meetingId}`,
+			}),
+		};
+	},
 });
 
 function MeetingRouteNotFound() {

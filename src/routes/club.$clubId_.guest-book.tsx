@@ -10,6 +10,7 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { Toaster } from "#/components/ui/sonner";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { NOINDEX, shareMeta } from "#/lib/share-meta";
 import { submitGuestBook } from "#/server/guest-pipeline";
 
 // Escapes the `/club/$clubId` shell (trailing `_`) so it never hits the
@@ -25,8 +26,13 @@ export const Route = createFileRoute("/club/$clubId_/guest-book")({
 		};
 	},
 	component: GuestBook,
-	head: () => ({
-		meta: [{ name: "robots", content: "noindex, nofollow" }],
+	head: ({ loaderData, params }) => ({
+		meta: shareMeta({
+			title: `${loaderData?.clubName ?? "Club"} guest book`,
+			description: `Sign the guest book at ${loaderData?.clubName ?? "our club"}.`,
+			path: `/club/${params.clubId}/guest-book`,
+			extra: [NOINDEX],
+		}),
 	}),
 });
 

@@ -23,6 +23,7 @@ import {
 	GENERAL_FEEDBACK_LABEL,
 	TABLE_TOPICS_SPEAKER_LABEL,
 } from "#/lib/role-feedback-input";
+import { NOINDEX, shareMeta } from "#/lib/share-meta";
 import {
 	type FeedbackRoleChoice,
 	type FeedbackTargetsPublic,
@@ -76,8 +77,13 @@ export const Route = createFileRoute(
 	},
 	component: FeedbackPage,
 	notFoundComponent: FeedbackNotFound,
-	head: () => ({
-		meta: [{ name: "robots", content: "noindex, nofollow" }],
+	head: ({ loaderData, params }) => ({
+		meta: shareMeta({
+			title: `Meeting feedback — ${loaderData?.clubName ?? "Club"}`,
+			description: `Share feedback on the ${loaderData?.clubName ?? "club"} meeting.`,
+			path: `/club/${params.clubId}/meeting/${params.meetingId}/feedback`,
+			extra: [NOINDEX],
+		}),
 	}),
 });
 

@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { MarketingShell } from "#/components/marketing/marketing-shell";
 import { StandaloneTimer } from "#/components/timer/standalone-timer";
+import { shareMeta } from "#/lib/share-meta";
 
 const TITLE = "Toastmasters timer: free green, yellow and red stopwatch";
 const DESCRIPTION =
@@ -12,10 +13,7 @@ const DESCRIPTION =
 export const Route = createFileRoute("/timer")({
 	head: () => ({
 		meta: [
-			{ title: TITLE },
-			{ name: "description", content: DESCRIPTION },
-			{ property: "og:title", content: TITLE },
-			{ property: "og:description", content: DESCRIPTION },
+			...shareMeta({ title: TITLE, description: DESCRIPTION, path: "/timer" }),
 		],
 	}),
 	component: TimerPage,

@@ -285,7 +285,7 @@ describe("/tour", () => {
 		});
 		expect(meta).toContainEqual({
 			property: "og:image",
-			content: "/landing/tour-agenda.png",
+			content: "https://gavelup.app/landing/tour-agenda.png",
 		});
 		expect(meta.some((m) => m && "name" in m && m.name === "description")).toBe(
 			true,
