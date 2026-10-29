@@ -305,8 +305,19 @@ type Frame = {
 	controls: Control[];
 	/** Each of `SHARE_TOKENS` as resolved on the Share button, as RGBA. */
 	shareTokens: Record<string, string>;
-	/** Why a Share colour read can be off: a running fade, hover, the transition. */
-	shareDiag: { animations: number; hover: boolean; transition: string } | null;
+	/**
+	 * State of the "Copy shareable link" button (null when the surface has none),
+	 * recorded in the failure message. FRAME_PROBE disables transitions and
+	 * animations, so animations/transition should read 0 / "none 0s"; a non-zero
+	 * value means that override stopped applying, and hover: true means the
+	 * pointer state changed the colour. `color` is the button's computed ink.
+	 */
+	shareDiag: {
+		animations: number;
+		hover: boolean;
+		transition: string;
+		color: string;
+	} | null;
 };
 
 type Case = FrameCase;
@@ -321,8 +332,9 @@ const caseId = (s: Surface, w: number, theme: Theme, repaired: boolean) =>
  * and the ground composited beneath it, both normalised through a canvas.
  */
 const FRAME_PROBE = `<style>
-/* Test page only: the outline Button fades its inherited colour (150ms
-   transition-colors), so a read at load can catch the light value mid-fade. */
+/* Test page only: the Button base class carries the transition-colors class, so a
+   read at load could in principle catch a colour mid-fade. Suspected cause of
+   the #1403 flake, not reproduced; this removes it from the reads. */
 *, *::before, *::after { transition: none !important; animation: none !important; }
 </style><script>
 var TOKENS = ${JSON.stringify(SHARE_TOKENS)};
@@ -378,11 +390,10 @@ addEventListener("load", function () {
 	});
 	var tokens = {};
 	var diag = null;
-	var btn = card.querySelector("button[data-slot=button]");
+	var btn = Array.prototype.find.call(card.querySelectorAll("button[data-slot=button]"), function (b) { return b.textContent.trim() === "Copy shareable link"; });
 	if (btn) {
 		var cs = getComputedStyle(btn);
-		diag = { animations: btn.getAnimations().length, hover: btn.matches(":hover"), transition: cs.transitionProperty + " " + cs.transitionDuration };
-		diag = { animations: btn.getAnimations().length, hover: btn.matches(":hover"), transition: cs.transitionProperty + " " + cs.transitionDuration };
+		diag = { animations: btn.getAnimations().length, hover: btn.matches(":hover"), transition: cs.transitionProperty + " " + cs.transitionDuration, color: cs.color };
 		TOKENS.forEach(function (t) {
 			ctx.clearRect(0, 0, 1, 1);
 			ctx.globalCompositeOperation = "copy";
@@ -619,7 +630,7 @@ describe.skipIf(!hasChrome)(
 			if (share)
 				expect(
 					contrast(share),
-					JSON.stringify({ share, diag: f.shareDiag }),
+					JSON.stringify({ share, shareDiag: f.shareDiag }),
 				).toBeLessThan(2);
 		});
 	},
