@@ -6,7 +6,6 @@
  * so the meeting page and `get_agenda` could list such roles differently from
  * one load to the next (and get-agenda-readiness flaked on it).
  */
-import { inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { roleDefinitions, roleSlots } from "#/db/schema";
 import {
@@ -53,7 +52,8 @@ describe.skipIf(!hasTestDb)("loadMeetingSlots tied sortOrder", () => {
 		const [low, high] = defs.map((d) => d.id).sort();
 		if (!low || !high) throw new Error("role insert failed");
 
-		// Inserted so heap order is the OPPOSITE of the expected order.
+		// Inserted out of the expected order (the higher role id and slot 1 before
+		// their peers), so a plain scan could not return them sorted by accident.
 		const values = [
 			{ roleDefinitionId: high, slotIndex: 0 },
 			{ roleDefinitionId: low, slotIndex: 1 },
@@ -64,10 +64,6 @@ describe.skipIf(!hasTestDb)("loadMeetingSlots tied sortOrder", () => {
 			.values(values.map((v) => ({ ...v, meetingId: seed.meetingId })))
 			.returning({ id: roleSlots.id });
 		const mine = new Set(inserted.map((s) => s.id));
-		await testDb
-			.select()
-			.from(roleSlots)
-			.where(inArray(roleSlots.id, [...mine]));
 
 		const read = async () =>
 			(await loadMeetingSlots(seed.meetingId))
