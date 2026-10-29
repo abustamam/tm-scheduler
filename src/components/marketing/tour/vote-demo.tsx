@@ -41,7 +41,7 @@ export function VoteDemo() {
 								setTallies((t) => t.map((n, j) => (j === idx ? n + 1 : n)));
 								setVotedFor(idx);
 							}}
-							className={`flex w-full items-center justify-between rounded-xl border px-3 py-2.5 text-left font-bold text-sm motion-safe:transition-colors motion-safe:duration-200 motion-safe:ease-out enabled:cursor-pointer enabled:hover:border-link disabled:cursor-default ${
+							className={`flex w-full items-center justify-between rounded-xl border px-3 py-2.5 text-left font-bold text-sm motion-safe:transition-colors motion-safe:duration-200 motion-safe:ease-out enabled:cursor-pointer enabled:hover:border-link-fill disabled:cursor-default ${
 								votedFor === idx
 									? "border-success bg-success text-success-foreground"
 									: "border-border"

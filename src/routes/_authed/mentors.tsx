@@ -143,7 +143,7 @@ function MentorsPage() {
 							<h2 className="flex flex-wrap items-center gap-2 text-base font-bold text-foreground">
 								{m.name}
 								{pairings.some((p) => p.member.id === m.memberId) ? (
-									<span className="rounded-full bg-link/10 px-2 py-0.5 text-xs font-semibold text-link">
+									<span className="rounded-full bg-link-fill/10 px-2 py-0.5 text-xs font-semibold text-link">
 										Your mentor
 									</span>
 								) : null}

@@ -303,6 +303,6 @@ describe("charter dashboard", () => {
 		renderDashboard(data());
 		const bar = screen.getAllByRole("progressbar")[0];
 		expect(bar.firstElementChild?.className).toContain("bg-success");
-		expect(bar.firstElementChild?.className).not.toContain("bg-link");
+		expect(bar.firstElementChild?.className).not.toContain("bg-link-fill");
 	});
 });

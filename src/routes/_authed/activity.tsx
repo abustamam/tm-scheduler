@@ -75,7 +75,7 @@ function ActivityLog() {
 	}
 
 	const selectClass =
-		"h-9 min-w-[180px] rounded-lg border border-border bg-surface-raised px-3 text-sm font-semibold text-foreground transition-colors hover:border-link";
+		"h-9 min-w-[180px] rounded-lg border border-border bg-surface-raised px-3 text-sm font-semibold text-foreground transition-colors hover:border-link-fill";
 
 	return (
 		<PageContainer>

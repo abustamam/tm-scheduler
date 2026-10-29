@@ -585,7 +585,7 @@ function QuickAction({
 	return (
 		<Link
 			to={to}
-			className="flex items-center gap-2.5 rounded-xl border border-border bg-surface-raised px-4 py-3 text-sm font-semibold text-foreground no-underline transition-colors hover:border-link hover:bg-surface-soft"
+			className="flex items-center gap-2.5 rounded-xl border border-border bg-surface-raised px-4 py-3 text-sm font-semibold text-foreground no-underline transition-colors hover:border-link-fill hover:bg-surface-soft"
 		>
 			<Icon className="size-5 text-link" aria-hidden />
 			{children}

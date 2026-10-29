@@ -72,7 +72,7 @@ export function BrandMark({
 	return (
 		<div className="flex items-center gap-[11px]">
 			<span
-				className={`flex shrink-0 items-center justify-center bg-linear-150 from-highlight to-link shadow-[0_4px_12px_rgba(50,143,151,.35),0_1px_0_rgba(255,255,255,.4)_inset] ${s.chip}`}
+				className={`flex shrink-0 items-center justify-center bg-linear-150 from-highlight to-link-fill shadow-[0_4px_12px_rgba(50,143,151,.35),0_1px_0_rgba(255,255,255,.4)_inset] ${s.chip}`}
 			>
 				<GavelGlyph size={s.glyph} />
 			</span>

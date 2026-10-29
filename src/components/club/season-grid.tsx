@@ -894,7 +894,7 @@ export function SeasonGrid({
 																	CELL_KIND_CLASS[cell.kind],
 																	"w-full cursor-pointer transition-[filter,border-color] hover:brightness-95 disabled:opacity-50",
 																	cell.kind === "free" &&
-																		"group/cell hover:border-link hover:text-link focus-visible:border-link focus-visible:text-link",
+																		"group/cell hover:border-link-fill hover:text-link focus-visible:border-link-fill focus-visible:text-link",
 																)}
 															>
 																{cell.kind === "free" ? (

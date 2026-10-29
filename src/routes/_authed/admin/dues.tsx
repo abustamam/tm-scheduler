@@ -274,7 +274,7 @@ function DuesTracker() {
 							id="dues-period"
 							value={selectedId ?? ""}
 							onChange={(e) => setSelectedId(e.target.value || null)}
-							className="h-9 rounded-md border border-border bg-surface-raised px-3 text-sm font-semibold outline-none focus-visible:border-link"
+							className="h-9 rounded-md border border-border bg-surface-raised px-3 text-sm font-semibold outline-none focus-visible:border-link-fill"
 						>
 							{periods.map((p) => (
 								<option key={p.id} value={p.id}>

@@ -165,7 +165,7 @@ function ResourceCard({ resource }: { resource: Resource }) {
 		<Link
 			to="/resources/$slug"
 			params={{ slug: resource.slug }}
-			className="group flex flex-col gap-3 rounded-xl border border-border bg-surface-raised p-5 text-foreground no-underline shadow-[0_8px_20px_rgba(23,58,64,.05)] transition-[transform,border-color] hover:-translate-y-0.5 hover:border-link"
+			className="group flex flex-col gap-3 rounded-xl border border-border bg-surface-raised p-5 text-foreground no-underline shadow-[0_8px_20px_rgba(23,58,64,.05)] transition-[transform,border-color] hover:-translate-y-0.5 hover:border-link-fill"
 		>
 			<div className="flex items-center justify-between gap-2">
 				<span

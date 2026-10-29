@@ -101,7 +101,7 @@ export function ClubSwitcher({
 				<button
 					type="button"
 					disabled={busy}
-					className="flex max-w-[220px] items-center gap-2 rounded-lg border border-border bg-surface-raised px-3 py-2 text-left text-sm font-semibold text-foreground transition-colors hover:border-link disabled:opacity-60"
+					className="flex max-w-[220px] items-center gap-2 rounded-lg border border-border bg-surface-raised px-3 py-2 text-left text-sm font-semibold text-foreground transition-colors hover:border-link-fill disabled:opacity-60"
 				>
 					<span className="truncate">{active.name}</span>
 					<ChevronsUpDown
