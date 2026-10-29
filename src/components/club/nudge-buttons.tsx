@@ -374,6 +374,7 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 							<DropdownMenuItem key={m} asChild>
 								<a
 									href={item.href}
+									className="text-inherit"
 									{...(item.external
 										? { target: "_blank", rel: "noopener noreferrer" }
 										: {})}
