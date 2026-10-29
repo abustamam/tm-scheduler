@@ -113,19 +113,36 @@ describe.skipIf(!hasChrome)(
 			);
 		});
 
-		for (const page of [375, 320]) {
-			it(`${page}px: the note stays inside the card, under the value`, () => {
-				const m = measure({ page, value: "$655.00" });
-				expect(m.pageOverflow, "page scrolls sideways").toBeLessThanOrEqual(0);
-				expect(m.noteRight, "note runs past the card").toBeLessThanOrEqual(
-					m.cardRight,
-				);
-				expect(m.noteTop, "note should drop under the value").toBeGreaterThan(
-					m.valueBottom - 1,
-				);
+		it("375px: the note stays inside the card, under the value", () => {
+			const m = measure({ page: 375, value: "$655.00" });
+			expect(m.pageOverflow, "page scrolls sideways").toBeLessThanOrEqual(0);
+			expect(m.noteRight, "note runs past the card").toBeLessThanOrEqual(
+				m.cardRight,
+			);
+			expect(m.noteTop, "note should drop under the value").toBeGreaterThan(
+				m.valueBottom - 1,
+			);
+			expect(m.noteLeft, "wrapped note stays left-aligned").toBe(m.valueLeft);
+		});
+
+		// At 320px the grid falls to one column, so the card is wider than at
+		// 375px and whether the note still fits beside the value depends on the
+		// font's metrics (it does with CI's Linux fonts, not with macOS's). Either
+		// shape is right; running off the card is not.
+		it("320px: the note stays inside the card, beside or under the value", () => {
+			const m = measure({ page: 320, value: "$655.00" });
+			expect(m.pageOverflow, "page scrolls sideways").toBeLessThanOrEqual(0);
+			expect(m.noteRight, "note runs past the card").toBeLessThanOrEqual(
+				m.cardRight,
+			);
+			if (m.noteTop > m.valueBottom - 1) {
 				expect(m.noteLeft, "wrapped note stays left-aligned").toBe(m.valueLeft);
-			});
-		}
+			} else {
+				expect(m.noteLeft, "note beside the value").toBeGreaterThan(
+					m.valueLeft,
+				);
+			}
+		});
 
 		it("CONTROL: without `flex-wrap` the note runs past the card at 375px", () => {
 			const m = measure({
