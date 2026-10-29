@@ -285,11 +285,11 @@ function RunRow({
 	return (
 		<li>
 			<details className="group">
-				<summary className="flex cursor-pointer list-none items-start gap-2 [&::-webkit-details-marker]:hidden">
+				<summary className="flex cursor-pointer list-none items-start gap-2 rounded-md outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden">
 					<div className="min-w-0 flex-1">{body}</div>
 					<ChevronRight
 						aria-hidden
-						className="mt-3.5 size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90"
+						className="mt-3.5 size-4 shrink-0 text-muted-foreground transition-transform duration-200 group-open:rotate-90"
 					/>
 				</summary>
 				<p className="pb-3 pl-15 text-sm text-muted-foreground">
