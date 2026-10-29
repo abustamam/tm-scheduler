@@ -412,7 +412,7 @@ function StatCard({
 			<div className="text-xs font-bold tracking-[0.04em] text-muted-foreground uppercase">
 				{label}
 			</div>
-			<div className="mt-2 flex items-baseline gap-2">
+			<div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
 				<span
 					className={cn(
 						"font-display text-3xl leading-none font-semibold",
