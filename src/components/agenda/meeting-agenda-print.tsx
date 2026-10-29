@@ -1287,7 +1287,7 @@ function EditorialLayout({
 					{header.timeRange}
 				</span>
 				{header.location ? (
-					<span style={{ color: MUTED, fontWeight: 600 }}>
+					<span style={{ color: MUTED, fontWeight: 400 }}>
 						{header.location}
 					</span>
 				) : null}
