@@ -79,7 +79,7 @@ import {
 	Printer,
 	XCircle,
 } from "lucide-react";
-import { type ReactNode, useCallback, useState } from "react";
+import { type ReactNode, useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
 import {
@@ -106,6 +106,7 @@ import {
 	ROLE_CONFIRM_PROMPT,
 } from "#/lib/role-duties";
 import {
+	DUTY_TOAST_MS,
 	notComingMaybeRoleText,
 	notComingText,
 	notComingToast,
@@ -250,8 +251,11 @@ export function PersonalMeetingBody({
 	// Undo writes the PREVIOUS answer back through `setPlannedAttendance`, with
 	// no release flag and no confirm flag: it restores an answer and destroys
 	// and confirms nothing (#1427).
+	const undoing = useRef(false);
 	const undoAnswer = useCallback(
 		async (status: "coming" | "not_coming") => {
+			if (undoing.current) return;
+			undoing.current = true;
 			try {
 				await setPlannedAttendance({
 					data: { memberId: view.member.id, meetingId: meetingUuid, status },
@@ -262,6 +266,8 @@ export function PersonalMeetingBody({
 				await onChanged();
 			} catch (err) {
 				showWriteError(err, "Couldn't undo that.");
+			} finally {
+				undoing.current = false;
 			}
 		},
 		[meetingUuid, onChanged, view.member.id],
@@ -295,8 +301,16 @@ export function PersonalMeetingBody({
 						confirmedRoles.length > 0
 							? `Great — you're confirmed as ${listRoles(confirmedRoles)}. See you there.`
 							: "Great — see you there.";
-					if (canRelease && changed && previous === "not_coming") {
+					// Not when the switch confirmed held roles: Undo writes not_coming
+					// back but cannot un-confirm them, so it would not restore anything.
+					if (
+						canRelease &&
+						changed &&
+						previous === "not_coming" &&
+						confirmedRoles.length === 0
+					) {
 						toast.success(thanks, {
+							duration: DUTY_TOAST_MS,
 							action: {
 								label: "Undo",
 								onClick: () => undoAnswer("not_coming"),

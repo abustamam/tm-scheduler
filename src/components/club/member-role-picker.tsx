@@ -103,12 +103,19 @@ export function MemberRolePicker({
 					// Undo re-claims for the same member (#1427). Release needs a session
 					// already, so the claim is the session's own. Another member's row
 					// gets none: a re-claim would credit the officer's pick, not them.
+					// A speaker role gets none: release unlinks any speech and this
+					// picker holds no speech details to send back, so a re-claim could
+					// not restore it.
 					toast.success(roleFreedDutyText(1), {
 						duration: DUTY_TOAST_MS,
-						action: {
-							label: "Undo",
-							onClick: () => undoRelease(o),
-						},
+						...(o.isSpeakerRole
+							? {}
+							: {
+									action: {
+										label: "Undo",
+										onClick: () => undoRelease(o),
+									},
+								}),
 					});
 				} else {
 					toast.success(`Released ${o.label}.`);

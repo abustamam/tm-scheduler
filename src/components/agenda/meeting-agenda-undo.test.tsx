@@ -34,7 +34,7 @@ afterEach(() => {
 	vi.clearAllMocks();
 });
 
-function slot(): AgendaSlot {
+function slot(over: Partial<AgendaSlot> = {}): AgendaSlot {
 	return {
 		id: "s1",
 		roleName: "Timer",
@@ -54,6 +54,7 @@ function slot(): AgendaSlot {
 		maxMinutes: null,
 		description: null,
 		evaluates: null,
+		...over,
 	} as unknown as AgendaSlot;
 }
 
@@ -61,9 +62,11 @@ function mount(opts: {
 	viewerId: string;
 	canManage: boolean;
 	claim?: MeetingAgendaActions["claim"];
+	slot?: Partial<AgendaSlot>;
 }) {
 	const claim = vi.fn(opts.claim ?? (async () => {}));
 	const release = vi.fn(async () => {});
+	const onMutated = vi.fn(async () => {});
 	const actions: MeetingAgendaActions = {
 		claim,
 		release,
@@ -74,11 +77,11 @@ function mount(opts: {
 		moveSpeaker: async () => {},
 		removeRole: async () => {},
 		takeover: async () => {},
-		onMutated: async () => {},
+		onMutated,
 	};
 	render(
 		<MeetingAgenda
-			slots={[slot()]}
+			slots={[slot(opts.slot)]}
 			viewer={meetingViewer({
 				currentMemberId: opts.viewerId,
 				canManage: opts.canManage,
@@ -113,7 +116,7 @@ function mount(opts: {
 			contactedMemberIds={[]}
 		/>,
 	);
-	return { claim, release };
+	return { claim, release, onMutated };
 }
 
 type ToastOpts = { action?: { label: string; onClick: () => void } };
@@ -174,5 +177,39 @@ describe("MeetingAgenda: Undo on release (#1427)", () => {
 		await waitFor(() => expect(claim).toHaveBeenCalled());
 		await waitFor(() => expect(toastError).toHaveBeenCalled());
 		expect(toastSuccess).not.toHaveBeenCalledWith("Role back.");
+	});
+
+	it("offers no Undo on a released speaker role with a speech attached", async () => {
+		// protects=release unlinks the speech and a re-claim returns the slot as
+		//   TBA, so "Role back." is never offered for it
+		// fails_when=the speech gate is dropped
+		// no_claim=a speaker role with no speech (Undo is offered there)
+		const { release } = mount({
+			viewerId: "m-holder",
+			canManage: false,
+			slot: { isSpeakerRole: true, speechTitle: "My Ice Breaker" },
+		});
+		await userEvent.click(screen.getByRole("button", { name: "Release" }));
+		await waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+		expect(releaseToastOpts().action).toBeUndefined();
+	});
+
+	it("a successful Undo toasts and refreshes the agenda", async () => {
+		// protects=success path: "Role back." and the onMutated refresh
+		// fails_when=no refresh after the re-claim
+		// no_claim=server acceptance (stubbed)
+		const { release, onMutated } = mount({
+			viewerId: "m-holder",
+			canManage: false,
+		});
+		await userEvent.click(screen.getByRole("button", { name: "Release" }));
+		await waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+		const action = releaseToastOpts().action;
+		onMutated.mockClear();
+		action?.onClick();
+		await waitFor(() => expect(onMutated).toHaveBeenCalledTimes(1));
+		expect(toastSuccess).toHaveBeenCalledWith("Role back.");
 	});
 });

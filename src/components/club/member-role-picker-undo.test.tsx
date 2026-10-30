@@ -6,10 +6,11 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { claimSlot, releaseSlot, toastSuccess } = vi.hoisted(() => ({
+const { claimSlot, releaseSlot, toastSuccess, toastError } = vi.hoisted(() => ({
 	claimSlot: vi.fn(async () => ({ ok: true })),
 	releaseSlot: vi.fn(async () => ({ ok: true })),
 	toastSuccess: vi.fn(),
+	toastError: vi.fn(),
 }));
 vi.mock("#/server/slots", () => ({
 	claimSlot,
@@ -17,7 +18,7 @@ vi.mock("#/server/slots", () => ({
 	reassignSlot: vi.fn(),
 }));
 vi.mock("sonner", () => ({
-	toast: { success: toastSuccess, error: vi.fn() },
+	toast: { success: toastSuccess, error: toastError },
 }));
 vi.mock("@tanstack/react-router", () => ({
 	useRouter: () => ({ navigate: vi.fn() }),
@@ -30,46 +31,49 @@ afterEach(() => {
 	vi.clearAllMocks();
 });
 
-const data = {
-	rows: [
-		{
-			roleDefinitionId: "rd1",
-			slotIndex: 0,
-			label: "Timer",
-			shortCode: "TM",
-			sortOrder: 1,
-			isSpeakerRole: false,
-		},
-	],
-	cells: [
-		{
-			meetingId: "mt1",
-			roleDefinitionId: "rd1",
-			slotIndex: 0,
-			slotId: "slot-1",
-			memberId: "m1",
-			guestId: null,
-		},
-	],
-	memberNames: [{ id: "m1", name: "Ann" }],
-	guestNames: [],
-} as never;
+const rowData = (isSpeakerRole: boolean) =>
+	({
+		rows: [
+			{
+				roleDefinitionId: "rd1",
+				slotIndex: 0,
+				label: "Timer",
+				shortCode: "TM",
+				sortOrder: 1,
+				isSpeakerRole,
+			},
+		],
+		cells: [
+			{
+				meetingId: "mt1",
+				roleDefinitionId: "rd1",
+				slotIndex: 0,
+				slotId: "slot-1",
+				memberId: "m-target",
+				guestId: null,
+			},
+		],
+		memberNames: [{ id: "m-target", name: "Ann" }],
+		guestNames: [],
+	}) as never;
+const data = rowData(false);
+const onChanged = vi.fn(async () => {});
 
-async function openAndRelease(isOwnRow: boolean) {
+async function openAndRelease(isOwnRow: boolean, d: never = data) {
 	render(
 		<MemberRolePicker
-			data={data}
+			data={d}
 			meetingId="mt1"
 			meetingDate="Oct 6"
-			targetMemberId="m1"
+			targetMemberId="m-target"
 			targetName="Ann"
 			isOwnRow={isOwnRow}
 			canReassign={false}
-			actorMemberId="m1"
+			actorMemberId="m-actor"
 			declined={false}
 			onMarkUnavailable={() => {}}
 			onMarkAvailable={() => {}}
-			onChanged={async () => {}}
+			onChanged={onChanged}
 		>
 			<button type="button">cell</button>
 		</MemberRolePicker>,
@@ -94,7 +98,11 @@ describe("MemberRolePicker: Undo on release (#1427)", () => {
 		opts?.action?.onClick();
 		await waitFor(() => expect(claimSlot).toHaveBeenCalledTimes(1));
 		expect(claimSlot).toHaveBeenCalledWith({
-			data: { slotId: "slot-1", memberId: "m1", actorMemberId: "m1" },
+			data: {
+				slotId: "slot-1",
+				memberId: "m-target",
+				actorMemberId: "m-actor",
+			},
 		});
 	});
 
@@ -104,5 +112,41 @@ describe("MemberRolePicker: Undo on release (#1427)", () => {
 		// no_claim=toast wording
 		const opts = await openAndRelease(false);
 		expect(opts?.action).toBeUndefined();
+	});
+
+	it("a speaker role gets no Undo (release unlinks the speech)", async () => {
+		// protects=a re-claim cannot restore a speech, so none is offered
+		// fails_when=the isSpeakerRole gate is dropped
+		// no_claim=whether a speech was actually attached (the picker cannot tell)
+		const opts = await openAndRelease(true, rowData(true));
+		expect(opts?.action).toBeUndefined();
+	});
+
+	it("a successful Undo toasts and refreshes the page", async () => {
+		// protects=success path: "Assigned" toast and the onChanged refresh
+		// fails_when=no refresh after the re-claim
+		// no_claim=server acceptance (stubbed)
+		const opts = await openAndRelease(true);
+		onChanged.mockClear();
+		toastSuccess.mockClear();
+		opts?.action?.onClick();
+		await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+		expect(toastSuccess).toHaveBeenCalledWith("Assigned Timer.");
+	});
+
+	it("a refused re-claim shows the write-error toast and no success", async () => {
+		// protects=undoRelease's catch routes through showWriteError
+		// fails_when=the rejection is swallowed or toasts success
+		// no_claim=error wording beyond the fallback
+		const opts = await openAndRelease(true);
+		toastSuccess.mockClear();
+		onChanged.mockClear();
+		claimSlot.mockRejectedValueOnce("taken" as never);
+		opts?.action?.onClick();
+		await waitFor(() =>
+			expect(toastError).toHaveBeenCalledWith("Couldn't undo."),
+		);
+		expect(toastSuccess).not.toHaveBeenCalled();
+		expect(onChanged).not.toHaveBeenCalled();
 	});
 });

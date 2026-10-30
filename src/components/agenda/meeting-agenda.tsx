@@ -66,6 +66,21 @@ export type AgendaSlot = Awaited<
 >["slots"][number];
 type RoleRecency = Awaited<ReturnType<typeof getMeeting>>["roleRecency"];
 
+/** True when the slot carries any speech detail. Release unlinks the speech
+ *  (#1427), so Undo is withheld for these: a re-claim cannot restore it. */
+function slotHasSpeech(slot: AgendaSlot): boolean {
+	return Boolean(
+		slot.speechTitle ||
+			slot.pathwayPath ||
+			slot.projectName ||
+			slot.projectLevel ||
+			slot.projectId ||
+			slot.minMinutes != null ||
+			slot.maxMinutes != null ||
+			slot.presentationUrl,
+	);
+}
+
 /** Speaker details captured when claiming/booking a speaking slot. */
 export interface SpeakerDetails {
 	speechTitle?: string;
@@ -377,16 +392,23 @@ export function MeetingAgenda({
 				// ANOTHER member's role gets none: a re-claim would make the officer
 				// the holder, and restoring the original holder is an assignment.
 				// A failed re-claim (someone took it) goes through `run`'s write-error.
+				// A speaker role with a speech attached gets none either: release
+				// unlinks the speech and a re-claim brings the slot back as TBA, so
+				// "Role back." would not be true.
 				toast.success(roleFreedDutyText(1), {
 					duration: DUTY_TOAST_MS,
-					action: {
-						label: "Undo",
-						onClick: () =>
-							run(slot.id, async () => {
-								await actions.claim(slot);
-								toast.success("Role back.");
+					...(slotHasSpeech(slot)
+						? {}
+						: {
+								action: {
+									label: "Undo",
+									onClick: () =>
+										run(slot.id, async () => {
+											await actions.claim(slot);
+											toast.success("Role back.");
+										}),
+								},
 							}),
-					},
 				});
 			} else {
 				toast.success("Role released.");
