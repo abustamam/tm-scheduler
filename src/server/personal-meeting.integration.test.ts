@@ -182,6 +182,18 @@ describe.skipIf(!hasTestDb)("loadPublicPersonalMeetingView (#665)", () => {
 		expect((await viewOf(s, s.memberId))?.meeting.status).toBe("cancelled");
 	});
 
+	// protects=the calendar export's end time (#1423): the meeting's own length
+	// reaches the view; fails_when=the column is not selected or a default is
+	// hardcoded (a 45-minute meeting would read 90); no_claim=the .ics itself.
+	it("ships the meeting length, which ends the calendar event", async () => {
+		const s = await seedPersonal();
+		await testDb
+			.update(meetings)
+			.set({ lengthMinutes: 45 })
+			.where(eq(meetings.id, s.meetingId));
+		expect((await viewOf(s, s.memberId))?.meeting.lengthMinutes).toBe(45);
+	});
+
 	it("refuses a meeting belonging to a DIFFERENT club than the caller's", async () => {
 		// Without club scoping this rendered club B's meeting under a club-A URL,
 		// and the route then wrote a club-B member into club A's identity slot.

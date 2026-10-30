@@ -41,6 +41,7 @@ function viewWith(
 		meeting: {
 			id: "22222222-2222-4222-8222-222222222222",
 			scheduledAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+			lengthMinutes: 90,
 			theme: null,
 			wordOfTheDay: null,
 			tableTopicsNotes: null,

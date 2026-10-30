@@ -123,6 +123,7 @@ import {
 import { setPlannedAttendance } from "#/server/attendance-plan";
 import { markUnavailableReleasing } from "#/server/availability";
 import type { PersonalMeetingView } from "#/server/personal-meeting";
+import { RoleCalendarButton } from "./add-to-calendar-button";
 import { buildDutyContext } from "./duty-context";
 import { DUTY_ROW, DutyMark, dutyLabelClass } from "./duty-row";
 import { guideOpenState, RoleGuideSections } from "./role-guide-sections";
@@ -465,6 +466,14 @@ export function PersonalMeetingBody({
 								<h3 className="font-semibold text-base text-foreground">
 									{role.roleName}
 								</h3>
+								<div className="mt-2">
+									<RoleCalendarButton
+										view={view}
+										role={role}
+										clubId={clubId}
+										meetingKey={meetingId}
+									/>
+								</div>
 								<ul className="mt-2 space-y-1">
 									{duties.length > 0 ? (
 										duties.map((duty) => {
