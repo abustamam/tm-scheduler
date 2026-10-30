@@ -50,6 +50,7 @@ describe.skipIf(!hasTestDb)("loadMilestoneCounts", () => {
 		memberId?: string | null;
 		guestOwned?: boolean;
 		withSpeech?: boolean;
+		roleId?: string;
 	}) {
 		const [m] = await testDb
 			.insert(meetings)
@@ -69,7 +70,7 @@ describe.skipIf(!hasTestDb)("loadMilestoneCounts", () => {
 		}
 		await testDb.insert(roleSlots).values({
 			meetingId: m.id,
-			roleDefinitionId: speakerRoleId,
+			roleDefinitionId: opts.roleId ?? speakerRoleId,
 			assignedMemberId:
 				opts.memberId === undefined ? club.memberId : opts.memberId,
 			speechId,
@@ -135,6 +136,23 @@ describe.skipIf(!hasTestDb)("loadMilestoneCounts", () => {
 	// protects=a speaker slot with no speech attached (TBA) is not a delivered speech; fails_when=TBA counts; no_claim=none
 	it("ignores a speaker slot with no speech", async () => {
 		await speakerSlot({ at: new Date(Date.now() - DAY), withSpeech: false });
+		expect((await loadMilestoneCounts(club.memberId)).speechesDelivered).toBe(
+			0,
+		);
+	});
+
+	// protects=only SPEAKER-role slots count; fails_when=a non-speaker slot carrying a speech_id counts; no_claim=whether that state is reachable in the UI
+	it("ignores a non-speaker slot even when it carries a speech", async () => {
+		const [r] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: club.clubId,
+				name: "Timer",
+				category: "functionary",
+				isSpeakerRole: false,
+			})
+			.returning({ id: roleDefinitions.id });
+		await speakerSlot({ at: new Date(Date.now() - DAY), roleId: r.id });
 		expect((await loadMilestoneCounts(club.memberId)).speechesDelivered).toBe(
 			0,
 		);

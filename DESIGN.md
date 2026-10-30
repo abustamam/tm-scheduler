@@ -239,7 +239,7 @@ panels `xl` (14px). A nested element's radius is its parent's radius minus the g
   a member's first delivered speech, their 10th meeting attended, and claiming the last open
   role of a meeting. The first two are one celebration card at the top of the dashboard (the
   check icon scales 0.6 to 1 while a ring of eight palm, warning and lagoon dots moves outward
-  and fades); the third is the claim toast reading "That's every role filled for <date>." The
+  and fades); the third is the claim toast reading "That's every role filled for <date>. Thank you." The
   card's animation is **600ms**, ease-out, once, an explicit exception to "nothing longer than
   300ms"; it is dropped to near zero under `prefers-reduced-motion`. Seen-state is
   device-local.

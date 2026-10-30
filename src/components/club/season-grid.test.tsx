@@ -1426,6 +1426,49 @@ describe("SeasonGrid: optimistic claim and release (#1315)", () => {
 		expect(options.action.label).toBe("Undo");
 	});
 
+	// protects=an ASSERTED (name-pick) claim of the last role still thanks the claimer but offers no Undo; fails_when=Undo appears for a non-session proof on the every-role toast; no_claim=the session path (covered above)
+	it("the every-role toast carries no Undo for an asserted claim", async () => {
+		claimSlot.mockResolvedValueOnce({ ok: true, proof: "asserted" });
+		await mount(withHolder(null));
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Claim Timer/ }),
+		);
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		const [msg, options] = toastSuccess.mock.calls[0];
+		expect(msg).toMatch(/^That's every role filled for .+\. Thank you\.$/);
+		expect(options.action).toBeUndefined();
+	});
+
+	// protects=when the meeting is gone from the grid by the time the write lands, the plain toast shows (no crash, no false thanks); fails_when=the null lookup throws or says every role is filled; no_claim=concurrent claims
+	it("falls back to Role claimed. when the meeting left the grid mid-claim", async () => {
+		const d = deferred<{ ok: true; proof: "session" }>();
+		claimSlot.mockReturnValueOnce(d.promise);
+		let setData!: (next: SeasonGridData) => void;
+		function Host() {
+			const [current, set] = useState<SeasonGridData>(withHolder(null));
+			setData = set;
+			return (
+				<SeasonGrid
+					data={current}
+					orientation="roles"
+					count="all"
+					currentMemberId={ME}
+					currentMemberSource="session"
+				/>
+			);
+		}
+		await renderUnderMemoryRouter(<Host />);
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Claim Timer/ }),
+		);
+		await act(async () =>
+			setData({ ...withHolder(null), meetings: [], cells: [] }),
+		);
+		await act(async () => d.resolve({ ok: true, proof: "session" }));
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		expect(toastSuccess.mock.calls[0]?.[0]).toBe("Role claimed.");
+	});
+
 	// protects=a claim that leaves a role open keeps the plain toast; fails_when=the every-role toast shows with one still open; no_claim=none
 	it("claiming a non-last role says Role claimed.", async () => {
 		await mount(twoOpen);

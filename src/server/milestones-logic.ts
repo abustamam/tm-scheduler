@@ -8,11 +8,7 @@ import {
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
-
-export interface MyMilestoneCounts {
-	speechesDelivered: number;
-	meetingsAttended: number;
-}
+import type { MilestoneCounts } from "#/lib/milestones";
 
 /**
  * One roster member's own numbers, never anyone else's.
@@ -25,8 +21,7 @@ export interface MyMilestoneCounts {
  */
 export async function loadMilestoneCounts(
 	memberId: string,
-	now: Date = new Date(),
-): Promise<MyMilestoneCounts> {
+): Promise<MilestoneCounts> {
 	const [speechRow] = await db
 		.select({ n: sql<number>`count(*)::int` })
 		.from(roleSlots)
@@ -41,7 +36,7 @@ export async function loadMilestoneCounts(
 				eq(roleDefinitions.isSpeakerRole, true),
 				sql`${roleSlots.speechId} is not null`,
 				ne(meetings.status, "cancelled"),
-				sql`${meetings.scheduledAt} + ${meetings.lengthMinutes} * interval '1 minute' < ${now.toISOString()}::timestamptz`,
+				sql`${meetings.scheduledAt} + ${meetings.lengthMinutes} * interval '1 minute' < now()`,
 			),
 		);
 	const [attendRow] = await db

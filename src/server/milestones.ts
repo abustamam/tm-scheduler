@@ -2,6 +2,7 @@
 // the active club. The membership comes from the session, never from input.
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import type { MilestoneCounts } from "#/lib/milestones";
 import { requireClubViewAccess, requireUser } from "./guards";
 import { loadMilestoneCounts } from "./milestones-logic";
 
@@ -12,11 +13,7 @@ export const getMyMilestones = createServerFn({ method: "GET" })
 	.handler(
 		async ({
 			data,
-		}): Promise<{
-			memberId: string;
-			speechesDelivered: number;
-			meetingsAttended: number;
-		} | null> => {
+		}): Promise<(MilestoneCounts & { memberId: string }) | null> => {
 			const user = await requireUser();
 			const access = await requireClubViewAccess(user.id, data.clubId);
 			if (!access.membership) return null;

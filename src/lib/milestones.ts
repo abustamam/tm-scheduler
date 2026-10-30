@@ -20,11 +20,10 @@ export const MILESTONES_STORAGE_KEY = "gavelup:milestones";
 export const milestoneKey = (memberId: string, milestone: Milestone) =>
 	`${memberId}:${milestone}`;
 
-function reached(milestone: Milestone, counts: MilestoneCounts): boolean {
-	return milestone === "firstSpeech"
-		? counts.speechesDelivered >= 1
-		: counts.meetingsAttended >= 10;
-}
+const REACHED: Record<Milestone, (counts: MilestoneCounts) => boolean> = {
+	firstSpeech: (c) => c.speechesDelivered >= 1,
+	tenthMeeting: (c) => c.meetingsAttended >= 10,
+};
 
 /** The milestones reached and not yet seen, in `MILESTONE_ORDER`. */
 export function dueMilestones(
@@ -33,7 +32,7 @@ export function dueMilestones(
 	seen: Set<string>,
 ): Milestone[] {
 	return MILESTONE_ORDER.filter(
-		(m) => reached(m, counts) && !seen.has(milestoneKey(memberId, m)),
+		(m) => REACHED[m](counts) && !seen.has(milestoneKey(memberId, m)),
 	);
 }
 

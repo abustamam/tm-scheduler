@@ -52,10 +52,34 @@ describe("MilestoneCard", () => {
 		expect(document.querySelectorAll(".milestone-dot")).toHaveLength(8);
 		expect(document.querySelector(".milestone-check")).not.toBeNull();
 		const css = readFileSync("src/styles.css", "utf8");
-		expect(css).toMatch(/\.milestone-check\s*{[^}]*600ms/);
-		const block = css.slice(css.indexOf("prefers-reduced-motion: reduce"));
-		expect(block).toMatch(
-			/\*,\s*::before,\s*::after\s*{[^}]*animation-duration: 0\.01ms/,
+		// Both milestone classes carry the 600ms animation and its keyframes exist.
+		expect(css).toMatch(
+			/\.milestone-check\s*{[^}]*animation:\s*celebrate-check 600ms/,
 		);
+		expect(css).toMatch(
+			/\.milestone-dot\s*{[^}]*animation:\s*celebrate-dot 600ms/,
+		);
+		expect(css).toMatch(/@keyframes celebrate-check\s*{/);
+		expect(css).toMatch(/@keyframes celebrate-dot\s*{/);
+		// The reduced-motion block, by brace matching, not "everything after".
+		const start = css.indexOf("@media (prefers-reduced-motion: reduce)");
+		expect(start).toBeGreaterThanOrEqual(0);
+		let depth = 0;
+		let end = css.indexOf("{", start);
+		for (let i = end; i < css.length; i++) {
+			if (css[i] === "{") depth++;
+			if (css[i] === "}" && --depth === 0) {
+				end = i;
+				break;
+			}
+		}
+		const block = css.slice(start, end);
+		// The universal rule zeroes animation duration with !important, so the
+		// milestone classes (no inline override) are covered...
+		expect(block).toMatch(
+			/\*,\s*::before,\s*::after\s*{[^}]*animation-duration:\s*0\.01ms\s*!important/,
+		);
+		// ...and nothing in the block re-enables them.
+		expect(block).not.toMatch(/milestone-|celebrate-/);
 	});
 });

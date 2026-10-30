@@ -55,7 +55,7 @@ export function MilestoneCard({
 	return (
 		<section
 			aria-labelledby="milestone-heading"
-			className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-2xl border border-border bg-surface-raised px-5 py-4 shadow-[0_10px_24px_rgba(23,58,64,.05)]"
+			className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-xl border border-border bg-surface-raised px-5 py-4 shadow-[0_10px_24px_rgba(23,58,64,.05)]"
 		>
 			<div className="relative grid size-12 shrink-0 place-items-center">
 				<span className="milestone-check grid size-10 place-items-center rounded-full bg-success text-white">
@@ -71,7 +71,7 @@ export function MilestoneCard({
 					/>
 				))}
 			</div>
-			<div className="min-w-[12rem] flex-1">
+			<div className="min-w-48 flex-1">
 				<h2
 					id="milestone-heading"
 					className="display-title m-0 text-lg font-semibold"
@@ -80,7 +80,7 @@ export function MilestoneCard({
 				</h2>
 				<p className="m-0 mt-0.5 text-sm text-muted-foreground">{copy.body}</p>
 			</div>
-			<Button size="sm" variant="outline" onClick={() => setDismissed(true)}>
+			<Button size="touch" variant="outline" onClick={() => setDismissed(true)}>
 				{MILESTONE_DISMISS_LABEL}
 			</Button>
 		</section>
