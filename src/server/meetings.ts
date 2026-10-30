@@ -31,6 +31,7 @@ import {
 	isReadableClubForMeeting,
 	isReadableClubForMember,
 } from "./club-readable-logic";
+import { loadMeetingCoverRequests } from "./cover-logic";
 import {
 	canManageClub,
 	getActiveMembership,
@@ -521,6 +522,14 @@ async function loadMeetingDetail(
 	// it through `inRoomMeetingPayload` like everything else on this payload.
 	const nextMeeting = await loadNextMeetingSummary(meeting, tz, meetingNumber);
 
+	// Cover requests (#1438): who handed a role off, and who covered it. Names
+	// only, like the assignee names the public page already shows. Read off
+	// `slotsWithEvaluates` so a covered row is hidden once the holder changes.
+	const coverRequests = await loadMeetingCoverRequests(
+		meetingId,
+		slotsWithEvaluates,
+	);
+
 	return {
 		meeting,
 		meetingNumber,
@@ -570,6 +579,7 @@ async function loadMeetingDetail(
 		clubGuests,
 		clubRoles,
 		pairedRoleDefinitionIds,
+		coverRequests,
 	};
 }
 

@@ -37,6 +37,7 @@ import {
 	lockMemberAttendance,
 	setPlanStatus,
 } from "./attendance-plan-logic";
+import { closeCoverRequest } from "./cover-close";
 import { assertClubNotArchived, requireClubRole } from "./guards";
 import { loadTmodMemberId } from "./meeting-authz-logic";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
@@ -2093,6 +2094,9 @@ export async function claimSlotCore(
 		throw new Error("Sorry — this role was just claimed by someone else.");
 	}
 
+	// The slot is filled: close its open cover request (#1438), in this transaction.
+	await closeCoverRequest(tx, args.slotId, { memberId: args.memberId });
+
 	if (slot.isSpeakerRole) {
 		// Claiming a speaker slot captures a Speech owned by the claimant's
 		// Person (ADR-0009). Pure-TBA/empty input creates none — the slot
@@ -2284,6 +2288,9 @@ export async function reassignSlotCore(
 		await assertMeetingAcceptsOn(tx, slot.meetingId, "plan");
 		throw new Error(MEETING_CANCELLED_MESSAGE);
 	}
+
+	// The slot is filled: close its open cover request (#1438), in this transaction.
+	await closeCoverRequest(tx, args.slotId, { memberId: args.memberId });
 
 	await markComingOnSelfClaim(tx, {
 		memberId: args.memberId,

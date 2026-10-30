@@ -45,6 +45,7 @@ import {
 	officerTrainingRecords,
 	roleFeedbackNotes,
 	roleSlots,
+	slotCoverRequests,
 	speechRequests,
 	tableTopicsSpeakers,
 } from "#/db/schema";
@@ -493,6 +494,46 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		expect(row?.invitedByMemberId).toBe(keeperId);
 	});
 
+	it("keeps cover requests naming the absorbed member on the keeper (#1438)", async () => {
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+		const [slot] = await testDb
+			.insert(roleSlots)
+			.values({
+				meetingId: seed.meetingId,
+				roleDefinitionId: seed.roleDefinitionId,
+				status: "confirmed",
+			})
+			.returning({ id: roleSlots.id });
+		if (!slot) throw new Error("Failed to insert role slot");
+		const [cover] = await testDb
+			.insert(slotCoverRequests)
+			.values({
+				clubId: seed.clubId,
+				meetingId: seed.meetingId,
+				slotId: slot.id,
+				releasedByMemberId: absorbedId,
+				coveredByMemberId: absorbedId,
+				coveredAt: new Date(),
+				kind: "finding_cover",
+				priorStatus: "confirmed",
+			})
+			.returning({ id: slotCoverRequests.id });
+		if (!cover) throw new Error("Failed to insert cover request");
+
+		await collapse(keeperId, absorbedId);
+
+		const [row] = await testDb
+			.select({
+				released: slotCoverRequests.releasedByMemberId,
+				covered: slotCoverRequests.coveredByMemberId,
+			})
+			.from(slotCoverRequests)
+			.where(eq(slotCoverRequests.id, cover.id));
+		expect(row?.released).toBe(keeperId);
+		expect(row?.covered).toBe(keeperId);
+	});
+
 	it("keeps a guest's introducer on the keeper (#1046)", async () => {
 		// Without the re-point, deleting the absorbed membership SETs NULL the
 		// introducer and the guest silently loses who brought them.
@@ -781,6 +822,10 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			// table's unique is (guest, meeting), which carries no member, so it
 			// re-points plainly.
 			"guest_invites.invited_by_member_id",
+			// #1438 — cover handoff history. Nullable; the only unique is on the
+			// slot while open, so both re-point plainly.
+			"slot_cover_requests.released_by_member_id",
+			"slot_cover_requests.covered_by_member_id",
 			// #984 — anonymous role feedback. ON DELETE CASCADE with no
 			// member-unique index, so it re-points plainly; without it a merge
 			// would delete every note the absorbed membership received.

@@ -283,6 +283,33 @@ const MEETING_WRITERS: Record<string, Entry> = {
 	"src/server/availability-logic.ts#releaseHeldSlotsForPlan": {
 		class: "plan",
 	},
+	// Cover requests (#1438): a plan write, like the slot release it rides with.
+	"src/server/availability-logic.ts#recordLateDrops": {
+		class: "plan",
+		refusedBy: ["src/server/availability-logic.ts#releaseHeldSlotsForPlan"],
+	},
+	"src/server/cover-close.ts#closeCoverRequest": {
+		class: "plan",
+		refusedBy: [
+			"src/server/slots-logic.ts#claimSlotCore",
+			"src/server/slots-logic.ts#reassignSlotCore",
+			"src/server/guests-logic.ts#applyAssignGuestToSlot",
+		],
+		exemptCallers: {
+			"src/server/speeches-logic.ts#attachSpeechToOpenSlot":
+				"A record write that refuses a cancelled meeting itself before it fills the slot. Closing the request on a completed meeting is the bookkeeping of a fill the record class accepts, and writes nothing a member reads.",
+		},
+		overrides: {
+			cancelled: {
+				accept: true,
+				reason:
+					"The request is closed by a fill whose own refusal decides the meeting's status; claimSlotCore passes PLAN_ACCEPTING_CANCELLED for ORDER and refuses the UPDATE itself. Closing writes nothing the fill did not already allow.",
+			},
+		},
+	},
+	"src/server/cover-logic.ts#askForCoverCore": { class: "plan" },
+	"src/server/cover-logic.ts#releaseOwnSlotForCoverCore": { class: "plan" },
+	"src/server/cover-logic.ts#undoReleaseForCoverCore": { class: "plan" },
 	// The Absent release (#1256) is a RECORD write: the minutes record what
 	// happened, so a completed meeting is when an officer most needs it. Its own
 	// writer, with the class as a literal in its UPDATE, so the guard reads it.
@@ -2362,6 +2389,7 @@ const PINNED_SWEPT_TABLES = [
 	"meetings",
 	"roleFeedbackNotes",
 	"roleSlots",
+	"slotCoverRequests",
 	"speechRequests",
 	"tableTopicsSpeakers",
 ];

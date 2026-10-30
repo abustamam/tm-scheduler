@@ -33,6 +33,7 @@ import {
 import { logActivity } from "./activity";
 import { forUpdate, lockPersonsInOrder } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
+import { closeCoverRequest } from "./cover-close";
 import type { UpdateGuestProfileInput } from "./guest-pipeline-schemas";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
 import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
@@ -490,6 +491,9 @@ export async function applyAssignGuestToSlot(
 			if (status) assertMeetingAccepts(status.status, "plan");
 			throw new Error("Role not found.");
 		}
+
+		// The slot is filled: close its open cover request (#1438).
+		await closeCoverRequest(tx, slot.id, { guestId });
 
 		await logActivity(tx, {
 			clubId: slot.clubId,

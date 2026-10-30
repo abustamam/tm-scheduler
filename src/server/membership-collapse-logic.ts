@@ -35,6 +35,7 @@ import {
 	projectCompletionMarks,
 	roleFeedbackNotes,
 	roleSlots,
+	slotCoverRequests,
 	speechRequests,
 	tableTopicsSpeakers,
 } from "#/db/schema";
@@ -433,6 +434,20 @@ export async function collapseMemberships(
 		.update(guestInvites)
 		.set({ invitedByMemberId: keeperId })
 		.where(eq(guestInvites.invitedByMemberId, absorbedId));
+
+	// 7d2. slot_cover_requests.released_by_member_id / covered_by_member_id
+	//    (#1438) — nullable handoff history. The only unique index is on
+	//    (slot) while open, which carries no member, so a plain re-point cannot
+	//    collide. Without it the absorbed membership's delete would SET NULL
+	//    both, and the cover history would lose who released and who stepped in.
+	await tx
+		.update(slotCoverRequests)
+		.set({ releasedByMemberId: keeperId })
+		.where(eq(slotCoverRequests.releasedByMemberId, absorbedId));
+	await tx
+		.update(slotCoverRequests)
+		.set({ coveredByMemberId: keeperId })
+		.where(eq(slotCoverRequests.coveredByMemberId, absorbedId));
 
 	// 7e. role_feedback_notes.recipient_member_id (#984) — anonymous notes left
 	//    for this member about a role they served. ON DELETE CASCADE, so without

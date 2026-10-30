@@ -883,6 +883,13 @@
       "when": 1792637476024,
       "tag": "0125_demonic_khan",
       "breakpoints": true
+    },
+    {
+      "idx": 126,
+      "version": "7",
+      "when": 1793386689948,
+      "tag": "0126_lush_black_tarantula",
+      "breakpoints": true
     }
   ]
 }
