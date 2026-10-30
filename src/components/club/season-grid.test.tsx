@@ -1414,6 +1414,28 @@ describe("SeasonGrid: optimistic claim and release (#1315)", () => {
 		await act(async () => d.resolve({ ok: true, proof: "session" }));
 	});
 
+	// protects=claiming the meeting's last open role thanks the claimer and keeps Undo; fails_when=the plain toast shows, or Undo is lost; no_claim=concurrent claims (best-effort, client-side)
+	it("claiming the last open role says every role is filled, with Undo", async () => {
+		await mount(withHolder(null));
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Claim Timer/ }),
+		);
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		const [msg, options] = toastSuccess.mock.calls[0];
+		expect(msg).toMatch(/^That's every role filled for .+\. Thank you\.$/);
+		expect(options.action.label).toBe("Undo");
+	});
+
+	// protects=a claim that leaves a role open keeps the plain toast; fails_when=the every-role toast shows with one still open; no_claim=none
+	it("claiming a non-last role says Role claimed.", async () => {
+		await mount(twoOpen);
+		await userEvent.click(
+			await screen.findByRole("button", { name: /^Claim Timer/ }),
+		);
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		expect(toastSuccess.mock.calls[0]?.[0]).toBe("Role claimed.");
+	});
+
 	// protects=a failed refetch is not a claim error; fails_when=the error toast shows or the entry sticks; no_claim=the refetch itself
 	it("a refetch that fails after a successful claim shows the success toast, no error, and clears the entry", async () => {
 		const consoleError = vi

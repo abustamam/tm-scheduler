@@ -14,6 +14,7 @@ import {
 	MentorshipCard,
 } from "#/components/members/mentorship-cards";
 import { OrientationChecklist } from "#/components/members/orientation-checklist";
+import { MilestoneCard } from "#/components/milestone-card";
 import { PageContainer } from "#/components/page-container";
 import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
@@ -46,6 +47,7 @@ import {
 	setMyMentorBio,
 	setMyWillingToMentor,
 } from "#/server/mentorship";
+import { getMyMilestones } from "#/server/milestones";
 import {
 	dismissMyOrientation,
 	getMyOrientation,
@@ -84,6 +86,7 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			mentorRequests,
 			clubPendingRequests,
 			timezone,
+			milestones,
 		] = await Promise.all([
 			listMyCommitments(),
 			// Always WITH an input: no input is the pre-#681 stale-tab call, which
@@ -133,6 +136,11 @@ export const Route = createFileRoute("/_authed/dashboard")({
 						.then((settings) => settings.timezone)
 						.catch(() => "UTC")
 				: Promise.resolve("UTC"),
+			// Milestone counts (#1425). Caught to null like the cards above: a
+			// failed read hides the celebration, never the dashboard.
+			clubId
+				? getMyMilestones({ data: { clubId } }).catch(() => null)
+				: Promise.resolve(null),
 		]);
 		// Unreachable with an input sent; narrowed so the type is one shape.
 		const { speeches, speechLogTruncated } = Array.isArray(speechLog)
@@ -153,6 +161,7 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			mentorRequests,
 			clubPendingRequests,
 			timezone,
+			milestones,
 			// The instant the speech log is read against, pinned HERE rather than
 			// sampled while rendering. One value is dehydrated with the loader data,
 			// so the SSR pass and the hydration pass classify every row identically
@@ -194,6 +203,7 @@ function Dashboard() {
 		clubPendingRequests,
 		now,
 		timezone,
+		milestones,
 	} = Route.useLoaderData();
 	const router = useRouter();
 	const [busyProjectId, setBusyProjectId] = useState<string | null>(null);
@@ -281,6 +291,10 @@ function Dashboard() {
 			<div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[1.55fr_1fr]">
 				{/* Left column */}
 				<div className="flex min-w-0 flex-col gap-5">
+					{/* Milestone celebration (#1425): at most one card per load. */}
+					{milestones ? (
+						<MilestoneCard memberId={milestones.memberId} counts={milestones} />
+					) : null}
 					{/* New-member orientation (#940). Renders nothing unless this
 					    membership is in orientation, not dismissed and not done. */}
 					{activeClubId ? (

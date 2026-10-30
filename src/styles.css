@@ -459,6 +459,57 @@ a {
   }
 }
 
+/* The second authored moment (DESIGN.md, #1425): a milestone card's check icon
+   scales in and a ring of eight dots moves outward and fades. 600ms, ease-out,
+   once. The reduced-motion block below drops it to near zero. */
+.milestone-check {
+  animation: celebrate-check 600ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.milestone-dot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 9999px;
+  opacity: 0;
+  animation: celebrate-dot 600ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.milestone-dot[data-tone="palm"] {
+  background: var(--palm);
+}
+
+.milestone-dot[data-tone="warning"] {
+  background: var(--warning);
+}
+
+.milestone-dot[data-tone="lagoon"] {
+  background: var(--lagoon);
+}
+
+@keyframes celebrate-check {
+  from {
+    transform: scale(0.6);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+@keyframes celebrate-dot {
+  from {
+    opacity: 1;
+    transform: rotate(var(--angle)) translateX(8px);
+  }
+  to {
+    opacity: 0;
+    transform: rotate(var(--angle)) translateX(22px);
+  }
+}
+
 /* Reduced motion (DESIGN.md). Covers every transition and animation, including
    the 180ms link, 170ms nav underline and the marketing .rise-in. */
 @media (prefers-reduced-motion: reduce) {

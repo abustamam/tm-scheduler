@@ -177,6 +177,9 @@ export function SeasonGrid({
 	// A claim's identity-picker window is not yet `pending`; this ref keeps a
 	// second tap on the same cell from opening a duplicate claim meanwhile.
 	const claimingRef = useRef(new Set<string>());
+	const latestMeetingRef = useRef<
+		(slotId: string) => { openNow: number; date: string } | null
+	>(() => null);
 	const [busyMeetingId, setBusyMeetingId] = useState<string | null>(null);
 	// The assigned-cell confirm: releasing a role + marking unavailable. When
 	// `memberName` is set, an officer is acting on that member (not themselves).
@@ -265,6 +268,21 @@ export function SeasonGrid({
 		);
 	}
 
+	// The LATEST render's view of a slot's meeting: its open count (loader count
+	// plus the pending writes, this claim's -1 included) and its date. Read after
+	// the claim's server write succeeds, where this closure's own `data` is the
+	// render the tap happened in. Best-effort: a concurrent claim by someone else
+	// can make the last role go to a different claimer, or to nobody (#1425).
+	latestMeetingRef.current = (slotId: string) => {
+		const meetingId = data.cells.find((c) => c.slotId === slotId)?.meetingId;
+		const m = meetingId ? data.meetings.find((x) => x.id === meetingId) : null;
+		if (!m) return null;
+		return {
+			openNow: Math.max(0, m.openCount + (meetingOpenDelta.get(m.id) ?? 0)),
+			date: formatMeetingDate(m.scheduledAt, m.timezone),
+		};
+	};
+
 	// The write succeeded, so a failed refetch is not the write's error.
 	async function refetchQuietly(what: string) {
 		try {
@@ -302,11 +320,19 @@ export function SeasonGrid({
 			// RESPONSE, as `markUnavailable` below does and for its reason: a signed-
 			// in account with no membership here is refused the release too, and
 			// only the server knows that. Anything but `"session"` fails closed.
-			toast.success("Role claimed.", {
-				...(proof === "session"
-					? { action: { label: "Undo", onClick: () => release(slotId, true) } }
-					: {}),
-			});
+			const after = latestMeetingRef.current(slotId);
+			toast.success(
+				after && after.openNow === 0
+					? `That's every role filled for ${after.date}. Thank you.`
+					: "Role claimed.",
+				{
+					...(proof === "session"
+						? {
+								action: { label: "Undo", onClick: () => release(slotId, true) },
+							}
+						: {}),
+				},
+			);
 			await refetchQuietly("claim");
 		} catch (err) {
 			showWriteError(err, "Couldn't claim role.");
