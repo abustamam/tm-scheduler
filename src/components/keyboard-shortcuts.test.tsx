@@ -9,11 +9,31 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const navigate = vi.fn();
+// app-shell.tsx pulls in server fns that import `#/db`, which throws without DATABASE_URL.
+vi.mock("#/db", () => ({ db: {} }));
 vi.mock("@tanstack/react-router", () => ({
+	// A plain anchor that keeps `title`, the one attribute the sidebar test reads.
+	Link: ({
+		to,
+		children,
+		title,
+	}: {
+		to: string;
+		children: ReactNode;
+		title?: string;
+	}) => (
+		<a href={to} title={title}>
+			{children}
+		</a>
+	),
 	useNavigate: () => navigate,
+	useRouterState: () => "/",
 }));
 
-import type { NavGrants } from "#/lib/nav-destinations";
+import type { ReactNode } from "react";
+import { SidebarNav } from "#/components/app-shell";
+import { type NavGrants, visibleDestinations } from "#/lib/nav-destinations";
+import { activeShortcuts, SHORTCUTS } from "#/lib/shortcuts";
 import { KeyboardShortcuts } from "./keyboard-shortcuts";
 
 const MEMBER: NavGrants = {
@@ -124,20 +144,104 @@ describe("KeyboardShortcuts", () => {
 		expect(navigate).toHaveBeenLastCalledWith({ to: "/admin/meetings/new" });
 	});
 
-	// protects=`?` opens the sheet, Escape closes it, and the sheet lists exactly the active shortcuts plus Search; fails_when=an inactive shortcut is listed, an active one is missing, or Escape does not close; no_claim=the visual layout
-	it("? opens the sheet listing exactly the active shortcuts; Escape closes", () => {
-		mount(OFFICER);
+	// protects=`?` opens the sheet, Escape closes it, and the rendered rows are exactly the active shortcuts' labels plus the two Search rows, for an officer and a member; fails_when=an inactive shortcut is listed, an active one is missing, or Escape does not close; no_claim=the visual layout
+	it.each([
+		["an officer", OFFICER],
+		["a member", MEMBER],
+	])("? opens the sheet listing exactly the active shortcuts for %s; Escape closes", (_who, grants) => {
+		mount(grants);
 		press("?", document.body, { shiftKey: true });
 		const dialog = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
-		const rows = Array.from(dialog.querySelectorAll("li")).map(
-			(li) => li.textContent,
-		);
-		// 7 goto + new meetings + the sheet itself + Search
-		expect(rows).toHaveLength(10);
-		expect(rows.some((r) => r?.includes("VP Membership"))).toBe(true);
-		expect(rows.some((r) => r?.includes("Search"))).toBe(true);
+		const labels = Array.from(dialog.querySelectorAll("li"))
+			.map((li) => li.querySelector("span")?.textContent)
+			.sort();
+		const expected = [
+			...activeShortcuts(grants).map((s) => s.label),
+			"Search",
+			"Search",
+		].sort();
+		expect(labels).toEqual(expected);
 		fireEvent.keyDown(dialog, { key: "Escape" });
 		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	// protects=the sheet shows `/` and the platform's own modifier for Search; fails_when=the hint is hardcoded to the other platform or `/` is dropped; no_claim=the keys open search (app-shell-search-shortcut.test)
+	it("shows `/` and the platform modifier for Search", () => {
+		const nav = vi.spyOn(window.navigator, "platform", "get");
+		nav.mockReturnValue("Linux x86_64");
+		mount();
+		press("?", document.body, { shiftKey: true });
+		const text = screen.getByRole("dialog").textContent ?? "";
+		expect(text).toContain("Ctrl");
+		expect(text).not.toContain("⌘");
+		expect(text).toContain("/");
+		nav.mockRestore();
+	});
+
+	// protects=a dialog opening and closing by mouse between `g` and `r` still cancels the sequence; fails_when=only keys pressed while a dialog is open cancel it; no_claim=Radix itself
+	it("a dialog opened and closed after g cancels the sequence", async () => {
+		mount();
+		press("g");
+		const d = document.createElement("div");
+		d.setAttribute("role", "dialog");
+		d.setAttribute("data-state", "open");
+		document.body.appendChild(d);
+		await act(async () => {});
+		d.remove();
+		await act(async () => {});
+		press("r");
+		expect(navigate).not.toHaveBeenCalled();
+	});
+
+	// protects=the early return for an already-handled, composing or auto-repeating key; fails_when=any of the three checks is deleted; no_claim=Shift or modifier handling
+	it("ignores a defaultPrevented, composing or repeating key", () => {
+		mount(OFFICER);
+		const prevented = new KeyboardEvent("keydown", {
+			key: "n",
+			bubbles: true,
+			cancelable: true,
+		});
+		prevented.preventDefault();
+		document.body.dispatchEvent(prevented);
+		press("n", document.body, { isComposing: true });
+		press("n", document.body, { repeat: true });
+		expect(navigate).not.toHaveBeenCalled();
+		press("n");
+		expect(navigate).toHaveBeenCalledTimes(1);
+	});
+
+	// protects=a bare Shift press neither completes nor cancels a pending `g`; fails_when=the Shift early return is deleted; no_claim=Shift+/ producing `?`
+	it("a bare Shift press does not cancel a pending sequence", () => {
+		mount();
+		press("g");
+		press("Shift", document.body, { shiftKey: true });
+		press("r");
+		expect(navigate).toHaveBeenCalledWith({ to: "/roster" });
+	});
+
+	// protects=every shortcut's keys appear in its sidebar entry's title ("Roster (g r)") and an entry with none shows the bare label, rendered by the real SidebarNav; fails_when=NavItem stops using sidebarTitle or the registry and sidebar disagree; no_claim=tooltip appearance
+	it("sidebar entries carry their shortcut in the title", () => {
+		const { container } = render(
+			<SidebarNav grants={OFFICER} pathname="/schedule" />,
+		);
+		const titles = new Map(
+			Array.from(container.querySelectorAll("a")).map((a) => [
+				a.textContent?.trim(),
+				a.getAttribute("title"),
+			]),
+		);
+		const withShortcut = new Set<string>();
+		for (const sc of activeShortcuts(OFFICER)) {
+			if (!sc.to) continue;
+			withShortcut.add(sc.label);
+			expect(titles.get(sc.label)).toBe(`${sc.label} (${sc.keys})`);
+		}
+		expect(titles.get("Roster")).toBe("Roster (g r)");
+		const bare = visibleDestinations(OFFICER).filter(
+			(d) => !SHORTCUTS.some((sc) => sc.to === d.key),
+		);
+		expect(bare.length).toBeGreaterThan(0);
+		for (const d of bare) expect(titles.get(d.label)).toBe(d.label);
 	});
 
 	// protects=nothing fires while a dialog is open, and a sequence started before it is cancelled; fails_when=the open-dialog guard is missing; no_claim=Radix focus trapping

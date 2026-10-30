@@ -34,6 +34,9 @@ function goTo(
 	return { keys, label: d.label, to, grant: d.grant, group };
 }
 
+/** The shortcut that opens the help sheet; the one source for its key. */
+export const HELP_KEYS = "?";
+
 export const SHORTCUTS: readonly Shortcut[] = [
 	goTo("g d", "my-dashboard", "Go to"),
 	goTo("g s", "sign-up-sheet", "Go to"),
@@ -44,15 +47,12 @@ export const SHORTCUTS: readonly Shortcut[] = [
 	goTo("g a", "agendas", "Go to"),
 	goTo("n", "new-meetings", "Actions"),
 	{
-		keys: "?",
+		keys: HELP_KEYS,
 		label: "Keyboard shortcuts",
 		grant: "everyone",
 		group: "Actions",
 	},
 ];
-
-/** The shortcut that opens the help sheet. */
-export const HELP_KEYS = "?";
 
 function holds(grant: NavGrant, grants: NavGrants): boolean {
 	switch (grant) {
@@ -89,4 +89,19 @@ export function sidebarTitle(destination: {
 /** True on the present-mode route, which owns its own keys. */
 export function isPresentRoute(pathname: string): boolean {
 	return /^\/club\/[^/]+\/(?:.+\/)?present\/?$/.test(pathname);
+}
+
+/**
+ * The modifier the Search shortcut is shown with. app-shell's listener accepts
+ * Cmd or Ctrl on every platform, so this only picks which one to display.
+ */
+export function searchModifier(nav: {
+	platform?: string;
+	userAgent?: string;
+}): "⌘" | "Ctrl" {
+	return /Mac|iPhone|iPad|iPod/i.test(
+		`${nav.platform ?? ""} ${nav.userAgent ?? ""}`,
+	)
+		? "⌘"
+		: "Ctrl";
 }

@@ -3,14 +3,14 @@ import { NAV_DESTINATIONS, visibleDestinations } from "./nav-destinations";
 import { activeShortcuts, SHORTCUTS } from "./shortcuts";
 
 describe("SHORTCUTS registry", () => {
-	// protects=every shortcut's `to` is a real NAV_DESTINATIONS key and carries that destination's own grant, so no path or grant is retyped; fails_when=a key is misspelled, removed from the nav registry, or a grant drifts; no_claim=the route renders
-	it("every `to` is a real destination key with the destination's own grant", () => {
+	// protects=every shortcut's `to` is a real NAV_DESTINATIONS key so no path is retyped; fails_when=a key is misspelled or removed from the nav registry (grant agreement is the test below); no_claim=the route renders
+	it("every `to` is a real destination key", () => {
 		const byKey = new Map(NAV_DESTINATIONS.map((d) => [d.key as string, d]));
 		for (const s of SHORTCUTS) {
 			if (!s.to) continue;
 			const d = byKey.get(s.to);
 			expect(d, `${s.keys} -> ${s.to}`).toBeDefined();
-			expect(s.grant).toBe(d?.grant);
+			expect(d?.grant, `${s.keys} grant`).toBeDefined();
 		}
 	});
 

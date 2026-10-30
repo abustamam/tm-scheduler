@@ -20,6 +20,7 @@ import {
 	HELP_KEYS,
 	isPresentRoute,
 	type Shortcut,
+	searchModifier,
 } from "#/lib/shortcuts";
 
 /** How long `g` waits for its second key. */
@@ -27,7 +28,7 @@ export const SEQUENCE_WINDOW_MS = 1000;
 
 const DIALOG_OPEN = '[role="dialog"][data-state="open"]';
 
-function KeyChips({ keys }: { keys: string }) {
+function KeyChips({ keys, sep = "then" }: { keys: string; sep?: string }) {
 	const parts = keys.split(" ");
 	return (
 		<span className="flex items-center gap-1">
@@ -35,7 +36,7 @@ function KeyChips({ keys }: { keys: string }) {
 				// biome-ignore lint/suspicious/noArrayIndexKey: a fixed, static key list
 				<span key={i} className="flex items-center gap-1">
 					{i > 0 ? (
-						<span className="text-xs text-muted-foreground">then</span>
+						<span className="text-xs text-muted-foreground">{sep}</span>
 					) : null}
 					<kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">
 						{k}
@@ -63,9 +64,13 @@ export function KeyboardShortcuts({
 	const [helpOpen, setHelpOpen] = useState(false);
 	const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+	const watcher = useRef<MutationObserver | null>(null);
+
 	const clearPending = useCallback(() => {
 		if (pending.current) clearTimeout(pending.current);
 		pending.current = null;
+		watcher.current?.disconnect();
+		watcher.current = null;
 	}, []);
 
 	const onKeyDown = useEffectEvent((e: KeyboardEvent) => {
@@ -98,6 +103,17 @@ export function KeyboardShortcuts({
 		if (single) return run(single);
 		if (e.key === "g" && active.some((s) => s.keys.startsWith("g "))) {
 			pending.current = setTimeout(clearPending, SEQUENCE_WINDOW_MS);
+			// A dialog opening by mouse and closing again fires no key while it is
+			// open, so watch for it: opening one cancels the sequence.
+			watcher.current = new MutationObserver(() => {
+				if (document.querySelector(DIALOG_OPEN)) clearPending();
+			});
+			watcher.current.observe(document.body, {
+				childList: true,
+				subtree: true,
+				attributes: true,
+				attributeFilter: ["data-state"],
+			});
 		}
 	});
 
@@ -114,6 +130,9 @@ export function KeyboardShortcuts({
 		};
 	}, [clearPending]);
 
+	const modifier = searchModifier(
+		typeof navigator === "undefined" ? {} : navigator,
+	);
 	const active = activeShortcuts(grants);
 	const groups = (["Go to", "Actions"] as const).map((name) => ({
 		name,
@@ -146,12 +165,16 @@ export function KeyboardShortcuts({
 										</li>
 									))}
 									{g.name === "Actions" ? (
-										<li className="flex items-center justify-between gap-4 text-sm">
-											<span>Search</span>
-											<kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">
-												⌘K
-											</kbd>
-										</li>
+										<>
+											<li className="flex items-center justify-between gap-4 text-sm">
+												<span>Search</span>
+												<KeyChips keys="/" />
+											</li>
+											<li className="flex items-center justify-between gap-4 text-sm">
+												<span>Search</span>
+												<KeyChips keys={`${modifier} K`} sep="+" />
+											</li>
+										</>
 									) : null}
 								</ul>
 							</section>
