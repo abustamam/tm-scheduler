@@ -1119,6 +1119,82 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 			expect(rows[0]?.releasedByMemberId).toBe(seed.memberId);
 		});
 
+		it("replaces a stale open request on a freed slot instead of colliding with the unique index", async () => {
+			// protects=an open request left on a held slot (a fill site that missed
+			//   closing it) does not make the decline throw, and the decline's row wins
+			// fails_when=the delete before the insert in `recordLateDrops` is removed
+			// no_claim=how the stale row got there
+			await meetingStartsInHours(24);
+			await holdSeededSlot();
+			await testDb.insert(slotCoverRequests).values({
+				clubId: seed.clubId,
+				meetingId: seed.meetingId,
+				slotId: seed.slotId,
+				releasedByMemberId: seed.adminMemberId,
+				kind: "finding_cover",
+				priorStatus: "claimed",
+			});
+			sessionUserId = seed.memberUserId;
+
+			await declinePlannedAttendance(testDb, {
+				memberId: seed.memberId,
+				claimedActorMemberId: seed.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: true,
+			});
+
+			const rows = await coverRows();
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.kind).toBe("dropped");
+			expect(rows[0]?.releasedByMemberId).toBe(seed.memberId);
+		});
+
+		it("snapshots the slot AFTER a writer holding its lock commits", async () => {
+			// protects=the `prior_*` columns Undo restores are read under the slot lock:
+			//   a slot confirmed while the decline waits is recorded as confirmed
+			// fails_when=`readHeldSlots` stops locking the member's slots before it
+			//   reads them (the snapshot then shows the pre-commit `claimed`)
+			// no_claim=what Undo does with it (cover-logic.integration.test.ts)
+			await meetingStartsInHours(24);
+			await holdSeededSlot();
+			sessionUserId = seed.memberUserId;
+
+			let release!: () => void;
+			const gate = new Promise<void>((r) => {
+				release = r;
+			});
+			let locked!: () => void;
+			const held = new Promise<void>((r) => {
+				locked = r;
+			});
+			const writer = testDb.transaction(async (tx) => {
+				await tx
+					.update(roleSlots)
+					.set({ status: "confirmed" })
+					.where(eq(roleSlots.id, seed.slotId));
+				locked();
+				await gate;
+			});
+			await held;
+			const decline = declinePlannedAttendance(testDb, {
+				memberId: seed.memberId,
+				claimedActorMemberId: seed.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: true,
+			});
+			// Long enough for the decline to reach its snapshot read and block (with
+			// the fix) or pass it with the stale value (without).
+			await new Promise((r) => setTimeout(r, 500));
+			release();
+			await Promise.all([writer, decline]);
+
+			const rows = await coverRows();
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.priorStatus).toBe("confirmed");
+		});
+
 		it("writes none when the meeting is more than 48h away", async () => {
 			// protects=an early decline is not a cover request: there is time to
 			//   fill the role the ordinary way

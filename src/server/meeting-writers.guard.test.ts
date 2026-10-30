@@ -298,6 +298,10 @@ const MEETING_WRITERS: Record<string, Entry> = {
 		exemptCallers: {
 			"src/server/speeches-logic.ts#attachSpeechToOpenSlot":
 				"A record write that refuses a cancelled meeting itself before it fills the slot. Closing the request on a completed meeting is the bookkeeping of a fill the record class accepts, and writes nothing a member reads.",
+			"src/server/history-import-logic.ts#applyEasySpeakImport":
+				"A history import is the officer's bulk record of past meetings, not a plan write: it fills only a slot that is still empty, in the import's own transaction, and closing the open request records that fill. It writes nothing a member reads that the fill did not.",
+			"src/server/guest-pipeline-logic.ts#applyUnlinkGuestFromMember":
+				"The undo of a guest link: it hands back the slots the link recorded, and is not gated by the meeting's status. Closing the open request on each records the same restoration and writes nothing a member reads.",
 		},
 		overrides: {
 			cancelled: {

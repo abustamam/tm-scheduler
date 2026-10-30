@@ -33,10 +33,27 @@ function roleSlotSets(source: string): string[] {
 	].map((m) => m[1] ?? "");
 }
 
-/** A set that writes a NON-null assignee: a fill or a re-point, not a clear.
- *  `(?=\S)` pins the value's first character: without it `\s*` backtracks to
- *  zero and `(?!null)` then sees the space, so a `null` value would match. */
-const WRITES_ASSIGNEE = /assigned(?:Member|Guest)Id:\s*(?=\S)(?!null\b)/;
+/** A literal non-null assignee. `(?=\S)` pins the value's first character:
+ *  without it `\s*` backtracks to zero and `(?!null)` then sees the space, so a
+ *  `null` value would match. */
+const LITERAL_ASSIGNEE = /assigned(?:Member|Guest)Id:\s*(?=\S)(?!null\b)/;
+
+/** Variables a `.set(<name>)` may pass: a constant that only CLEARS the slot. */
+const CLEARING_SETS = new Set(["FREE_SLOT"]);
+
+/**
+ * A set that may write a NON-null assignee: a fill or a re-point, not a clear.
+ * Beyond the literal, a spread (`{ status, ...assignment }`) or a variable
+ * (`.set(patch)`) hides what it writes, so it counts too: a fill that builds its
+ * assignment elsewhere (history import did) must not slip past the guard. A
+ * variable in {@link CLEARING_SETS} is the one exception.
+ */
+function writesAssignee(set: string): boolean {
+	const text = set.trim();
+	if (LITERAL_ASSIGNEE.test(text)) return true;
+	if (!text.startsWith("{")) return !CLEARING_SETS.has(text);
+	return /(^|[\s,{])\.\.\./.test(text);
+}
 
 /**
  * The files that write a non-null assignee, and the number of such statements.
@@ -75,8 +92,13 @@ const KNOWN: Record<
 	},
 	"guest-pipeline-logic.ts": {
 		statements: 4,
-		closes: 0,
-		why: "link, unlink and convert re-point slots a guest or member already holds",
+		closes: 1,
+		why: "unlink restores the recorded slots to the guest and closes any open request on each; link and convert re-point slots already held",
+	},
+	"history-import-logic.ts": {
+		statements: 1,
+		closes: 1,
+		why: "the import fills a still-empty slot (its assignment is spread in, so the literal check alone missed it)",
 	},
 };
 
@@ -92,8 +114,8 @@ describe("every fill of an open slot closes its cover request (#1438)", () => {
 		//   cases read the closers)
 		const found: Record<string, number> = {};
 		for (const file of files) {
-			const count = roleSlotSets(readSource(file)).filter((s) =>
-				WRITES_ASSIGNEE.test(s),
+			const count = roleSlotSets(readSource(file)).filter(
+				writesAssignee,
 			).length;
 			if (count > 0) found[relative(SERVER, file)] = count;
 		}
@@ -105,40 +127,45 @@ describe("every fill of an open slot closes its cover request (#1438)", () => {
 		);
 	});
 
-	it("each closing site calls closeCoverRequest AFTER its UPDATE, and the count matches", () => {
-		// protects=the four closers (claim, reassign, guest assign, attach speech) keep closing,
-		//   in order: a close before the conditional UPDATE would close on a refusal
-		// fails_when=a closer's call is deleted, or moves above the UPDATE
-		// no_claim=behaviour; `cover-logic.integration.test.ts` runs them
+	it("every closeCoverRequest call comes AFTER an assignee-writing role_slots UPDATE in its function, and the count matches", () => {
+		// protects=the closers (claim, reassign, guest assign, attach speech, guest
+		//   unlink, history import) keep closing, and in order: a close before the
+		//   conditional UPDATE would close the request on a refused fill
+		// fails_when=a closer's call is deleted, or sits above the assignee-writing
+		//   `.update(roleSlots)` of the function it is in, or that function has none
+		// no_claim=behaviour (`cover-logic.integration.test.ts` runs the paths); that
+		//   the UPDATE is the one that fills (the function is the unit checked)
 		let closers = 0;
 		for (const [file, known] of Object.entries(KNOWN)) {
 			const source = readSource(join(SERVER, file));
-			const calls = [...source.matchAll(/closeCoverRequest\(/g)].length;
-			expect(calls, `${file}: ${known.why}`).toBe(known.closes);
-			closers += calls;
+			const calls = [...source.matchAll(/closeCoverRequest\(/g)];
+			expect(calls.length, `${file}: ${known.why}`).toBe(known.closes);
+			closers += calls.length;
+			const starts = [
+				...source.matchAll(/^(?:export )?(?:async )?function \w+/gm),
+			].map((m) => m.index ?? 0);
+			for (const call of calls) {
+				const at = call.index ?? 0;
+				const start = Math.max(...starts.filter((s) => s < at));
+				const before = source.slice(start, at);
+				expect(before.length, `${file}: empty slice`).toBeGreaterThan(0);
+				// An UPDATE that writes the assignee, not just any role_slots UPDATE:
+				// a function may clear or edit other columns of the row first.
+				const fills = [
+					...before.matchAll(
+						/\.update\(roleSlots\)\s*\.set\(([\s\S]*?)\)\s*\.where/g,
+					),
+				].filter((m) => writesAssignee(m[1] ?? ""));
+				expect(
+					fills.length,
+					`${file}: closeCoverRequest at ${at} has no assignee-writing role_slots UPDATE above it in its function`,
+				).toBeGreaterThan(0);
+			}
 		}
-		expect(closers).toBe(4);
-
-		const slots = readSource(join(SERVER, "slots-logic.ts"));
-		for (const name of ["claimSlotCore", "reassignSlotCore"]) {
-			const start = slots.indexOf(`export async function ${name}`);
-			expect(start, `${name} not found`).toBeGreaterThan(-1);
-			const end = slots.indexOf("\nexport ", start + 1);
-			const body = slots.slice(start, end === -1 ? slots.length : end);
-			const update = body.indexOf(".update(roleSlots)");
-			const close = body.indexOf("closeCoverRequest(");
-			expect(update, `${name}: UPDATE`).toBeGreaterThan(-1);
-			expect(close, `${name}: close`).toBeGreaterThan(update);
-		}
-		const guestsSource = readSource(join(SERVER, "guests-logic.ts"));
-		const g = guestsSource.indexOf(
-			"export async function applyAssignGuestToSlot",
+		expect(closers).toBe(
+			Object.values(KNOWN).reduce((n, k) => n + k.closes, 0),
 		);
-		const gEnd = guestsSource.indexOf("\nexport ", g + 1);
-		const gBody = guestsSource.slice(g, gEnd === -1 ? undefined : gEnd);
-		expect(gBody.indexOf("closeCoverRequest(")).toBeGreaterThan(
-			gBody.indexOf(".update(roleSlots)"),
-		);
+		expect(closers).toBe(6);
 	});
 
 	it("closeCoverRequest stays free of the modules that call it", () => {

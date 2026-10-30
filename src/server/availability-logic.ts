@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { db } from "#/db";
 import {
 	meetings,
@@ -35,6 +35,7 @@ import {
 	SELF_SERVICE_RUNGS,
 	setPlanStatus,
 } from "./attendance-plan-logic";
+import { openCoverRequestOf } from "./cover-close";
 import { assertClubNotArchived } from "./guards";
 import type { TokenClub } from "./mcp/authz-logic";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
@@ -68,6 +69,21 @@ export type ReleasedSlot = {
 /** What both release writers share, read BEFORE their UPDATE: every slot in the
  *  meeting, so labels are numbered off the whole meeting, and the member's own. */
 async function readHeldSlots(tx: Tx, meetingId: string, memberId: string) {
+	// Lock the member's own slots FIRST: the `prior_*` snapshot below is what a
+	// late drop's Undo restores, so it must be read after any writer that holds
+	// one of them has committed (READ COMMITTED: the read after the wait sees it).
+	// Ordered, so two releasers cannot lock the same rows in opposite orders.
+	await tx
+		.select({ id: roleSlots.id })
+		.from(roleSlots)
+		.where(
+			and(
+				eq(roleSlots.meetingId, meetingId),
+				eq(roleSlots.assignedMemberId, memberId),
+			),
+		)
+		.orderBy(roleSlots.id)
+		.for("update");
 	const all = await tx
 		.select({
 			id: roleSlots.id,
@@ -192,14 +208,7 @@ async function recordLateDrops(
 		.limit(1);
 	if (!meeting || !isLateDrop(meeting.scheduledAt, new Date())) return;
 	const slotIds = released.map((r) => r.id);
-	await tx
-		.delete(slotCoverRequests)
-		.where(
-			and(
-				inArray(slotCoverRequests.slotId, slotIds),
-				isNull(slotCoverRequests.coveredAt),
-			),
-		);
+	await tx.delete(slotCoverRequests).where(openCoverRequestOf(slotIds));
 	await tx.insert(slotCoverRequests).values(
 		released.map((r) => {
 			const was = read.before.get(r.id);

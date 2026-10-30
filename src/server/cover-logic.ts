@@ -19,7 +19,12 @@ import { resolveEffectiveRung } from "#/lib/attendance-panel";
 import type { CoverKind } from "#/lib/cover";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { logActivity } from "./activity";
-import { listPlanForMeetings } from "./attendance-plan-logic";
+import {
+	isMemberNotComing,
+	listPlanForMeetings,
+	lockMemberAttendance,
+} from "./attendance-plan-logic";
+import { openCoverRequestOf } from "./cover-close";
 import { assertClubNotArchived } from "./guards";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
 import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
@@ -31,6 +36,10 @@ type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 export const ONLY_HOLDER_MESSAGE =
 	"Only the person holding this role can hand it off.";
 export const ALREADY_TAKEN_MESSAGE = "Someone already took it.";
+export const NOT_A_COVER_RELEASE_MESSAGE =
+	"That role was dropped when you said you can't come, so there is nothing to undo.";
+export const NOT_COMING_UNDO_MESSAGE =
+	"You're marked as not coming to that meeting.";
 export const ONLY_RELEASER_MESSAGE =
 	"Only the person who dropped this role can ask for cover.";
 /** How many people the asker is offered. */
@@ -85,14 +94,7 @@ export async function releaseOwnSlotForCoverCore(
 		proof: "session",
 	});
 
-	await tx
-		.delete(slotCoverRequests)
-		.where(
-			and(
-				eq(slotCoverRequests.slotId, slot.id),
-				isNull(slotCoverRequests.coveredAt),
-			),
-		);
+	await tx.delete(slotCoverRequests).where(openCoverRequestOf(slot.id));
 	await tx.insert(slotCoverRequests).values({
 		clubId: slot.clubId,
 		meetingId: slot.meetingId,
@@ -131,6 +133,17 @@ export async function undoReleaseForCoverCore(
 		await lockMembershipsAgainstMerge(tx, [args.actorMemberId]);
 		await lockMemberForAssignment(tx, args.actorMemberId);
 	}
+	// The attendance lock comes BEFORE the slot lock, as a decline takes them
+	// (attendance, then the slots it frees): the other order deadlocks. The
+	// meeting id is an unlocked read; the locked read below is the authority.
+	const [unlocked] = await tx
+		.select({ meetingId: roleSlots.meetingId })
+		.from(roleSlots)
+		.where(eq(roleSlots.id, args.slotId))
+		.limit(1);
+	if (unlocked && args.actorMemberId) {
+		await lockMemberAttendance(tx, unlocked.meetingId, args.actorMemberId);
+	}
 	const [slot] = await tx
 		.select({
 			id: roleSlots.id,
@@ -151,12 +164,7 @@ export async function undoReleaseForCoverCore(
 	const [request] = await tx
 		.select()
 		.from(slotCoverRequests)
-		.where(
-			and(
-				eq(slotCoverRequests.slotId, slot.id),
-				isNull(slotCoverRequests.coveredAt),
-			),
-		)
+		.where(openCoverRequestOf(slot.id))
 		.limit(1)
 		.for("update");
 	if (
@@ -166,6 +174,18 @@ export async function undoReleaseForCoverCore(
 		request.releasedByMemberId !== args.actorMemberId
 	) {
 		throw new Error(ALREADY_TAKEN_MESSAGE);
+	}
+	// Undo is for a release the member made to find cover. A `dropped` row is a
+	// decline's, and a late "not coming" answer outranks a role handed back:
+	// `claimSlotCore` refuses that member the same way. Both before any write.
+	if (request.kind === "dropped") throw new Error(NOT_A_COVER_RELEASE_MESSAGE);
+	if (
+		await isMemberNotComing(tx, {
+			memberId: args.actorMemberId,
+			meetingId: slot.meetingId,
+		})
+	) {
+		throw new Error(NOT_COMING_UNDO_MESSAGE);
 	}
 
 	await tx
@@ -245,12 +265,7 @@ export async function askForCoverCore(
 			releasedByMemberId: slotCoverRequests.releasedByMemberId,
 		})
 		.from(slotCoverRequests)
-		.where(
-			and(
-				eq(slotCoverRequests.slotId, slot.id),
-				isNull(slotCoverRequests.coveredAt),
-			),
-		)
+		.where(openCoverRequestOf(slot.id))
 		.limit(1)
 		.for("update");
 	if (
@@ -308,12 +323,7 @@ export async function loadCoverCandidatesCore(args: {
 	const [openRequest] = await db
 		.select({ releasedByMemberId: slotCoverRequests.releasedByMemberId })
 		.from(slotCoverRequests)
-		.where(
-			and(
-				eq(slotCoverRequests.slotId, args.slotId),
-				isNull(slotCoverRequests.coveredAt),
-			),
-		)
+		.where(openCoverRequestOf(args.slotId))
 		.limit(1);
 
 	const [roster, plans, held, recency] = await Promise.all([
@@ -401,7 +411,9 @@ export interface MeetingCoverRequest {
 
 /**
  * The meeting payload's `coverRequests` (#1438): the newest request per slot, as
- * names only (the public page already shows assignee names).
+ * names only (the public page already shows assignee names). A releaser or
+ * coverer who is no longer an ACTIVE member reads as "Someone" (#1342: the
+ * payload is public, and a member who left must not be named on it).
  *
  * Two rows are hidden WITHOUT being written:
  *  - a `covered` one once the slot's assignee is no longer the person who
@@ -421,10 +433,12 @@ export async function loadMeetingCoverRequests(
 	const releaser = db
 		.select({ id: members.id, name: members.name })
 		.from(members)
+		.where(eq(members.status, "active"))
 		.as("releaser");
 	const coverer = db
 		.select({ id: members.id, name: members.name })
 		.from(members)
+		.where(eq(members.status, "active"))
 		.as("coverer");
 	const rows = await db
 		.select({

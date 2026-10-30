@@ -129,6 +129,7 @@ import { logActivity } from "./activity";
 import { importPlanAnswers } from "./attendance-plan-logic";
 import { lockClubForWrite } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
+import { closeCoverRequest } from "./cover-close";
 import { createGuestRecord } from "./guests-logic";
 import { insertRosterMember } from "./members-logic";
 import { openOfficerTermIfAbsent } from "./officer-terms-logic";
@@ -1401,6 +1402,9 @@ async function applyMeeting(
 					.returning();
 				if (updated) {
 					slot = updated;
+					// An open cover request on a slot the import just filled is covered
+					// by its holder (#1438).
+					if (owner) await closeCoverRequest(tx, updated.id, owner);
 				} else {
 					const [current] = await tx
 						.select()

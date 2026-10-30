@@ -3,13 +3,27 @@
 // live in modules `cover-logic.ts` itself imports from, and a cycle there is a
 // module-level `undefined` waiting for the full suite to find it. This file
 // imports only the schema.
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { db } from "#/db";
 import { slotCoverRequests } from "#/db/schema";
 
 type DbOrTx =
 	| typeof db
 	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+/**
+ * The one definition of "an open cover request" (not yet covered) on a slot, or
+ * on any of several. Every read, delete and update of an open request goes
+ * through it, so the rule lives in one place.
+ */
+export function openCoverRequestOf(slotId: string | readonly string[]) {
+	return and(
+		typeof slotId === "string"
+			? eq(slotCoverRequests.slotId, slotId)
+			: inArray(slotCoverRequests.slotId, [...slotId]),
+		isNull(slotCoverRequests.coveredAt),
+	);
+}
 
 /**
  * Mark the slot's open cover request covered by whoever just filled it. A no-op
@@ -33,10 +47,5 @@ export async function closeCoverRequest(
 			coveredGuestId: "guestId" in by ? by.guestId : null,
 			coveredAt: new Date(),
 		})
-		.where(
-			and(
-				eq(slotCoverRequests.slotId, slotId),
-				isNull(slotCoverRequests.coveredAt),
-			),
-		);
+		.where(openCoverRequestOf(slotId));
 }

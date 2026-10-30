@@ -10,7 +10,7 @@
  *
  * Run with a worktree's own database (`bun run test`), never an exported one.
  */
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	meetingAttendancePlan,
@@ -35,6 +35,8 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const {
 	ALREADY_TAKEN_MESSAGE,
 	COVER_CANDIDATE_LIMIT,
+	NOT_A_COVER_RELEASE_MESSAGE,
+	NOT_COMING_UNDO_MESSAGE,
 	ONLY_HOLDER_MESSAGE,
 	ONLY_RELEASER_MESSAGE,
 	askForCoverCore,
@@ -366,6 +368,53 @@ describe.skipIf(!hasTestDb)("cover requests (#1438)", () => {
 			expect(row?.coveredByMemberId).toBe(other);
 		});
 
+		it("refuses a decline's `dropped` request and leaves the slot open", async () => {
+			// protects=Undo is for a cover release only: a decline's `dropped` row must
+			//   not hand the role back confirmed
+			// fails_when=the kind check is removed
+			// no_claim=the toast copy
+			await testDb
+				.update(roleSlots)
+				.set({ status: "open", assignedMemberId: null, claimedAt: null })
+				.where(eq(roleSlots.id, seed.slotId));
+			await testDb.insert(slotCoverRequests).values({
+				clubId: seed.clubId,
+				meetingId: seed.meetingId,
+				slotId: seed.slotId,
+				releasedByMemberId: seed.memberId,
+				kind: "dropped",
+				priorStatus: "confirmed",
+			});
+			await expect(undo(seed.memberId)).rejects.toThrow(
+				NOT_A_COVER_RELEASE_MESSAGE,
+			);
+			const after = await slot();
+			expect(after.status).toBe("open");
+			expect(after.assignedMemberId).toBeNull();
+			expect(await requests()).toHaveLength(1);
+		});
+
+		it("is refused after a late `not coming`, and the slot stays open", async () => {
+			// protects=a member who said no cannot get the role back confirmed
+			//   (`claimSlotCore` refuses the same member the same way)
+			// fails_when=the attendance read is removed from Undo
+			// no_claim=the lock ordering, which the decline path shares
+			await holdSeededSlot();
+			await release(seed.memberId);
+			await testDb.insert(meetingAttendancePlan).values({
+				memberId: seed.memberId,
+				meetingId: seed.meetingId,
+				status: "not_coming",
+			});
+			await expect(undo(seed.memberId)).rejects.toThrow(
+				NOT_COMING_UNDO_MESSAGE,
+			);
+			const after = await slot();
+			expect(after.status).toBe("open");
+			expect(after.assignedMemberId).toBeNull();
+			expect(await requests()).toHaveLength(1);
+		});
+
 		it("does not restore a speech another slot took meanwhile", async () => {
 			// protects=the unique index on role_slots.speech_id: Undo must not throw
 			//   or steal the speech from the slot that now has it
@@ -479,11 +528,23 @@ describe.skipIf(!hasTestDb)("cover requests (#1438)", () => {
 			await plan(declinedButConfirmed, "not_coming");
 			await addMember("Silent Sid"); // no answer, no role: nobody to assume
 			// `declinedButConfirmed` holds a CONFIRMED role (assumed coming) but said
-			// no, and the explicit answer wins.
+			// no, and the explicit answer wins. The role is a DIFFERENT one from the
+			// slot being covered, so the "already holds this role" exclusion cannot be
+			// what removes them: only the not_coming rule can.
+			const [otherRole] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: seed.clubId,
+					name: "Evaluator",
+					category: "evaluator",
+					sortOrder: 9,
+				})
+				.returning({ id: roleDefinitions.id });
+			if (!otherRole) throw new Error("role");
 			await testDb.insert(roleSlots).values({
 				meetingId: seed.meetingId,
-				roleDefinitionId: seed.roleDefinitionId,
-				slotIndex: 5,
+				roleDefinitionId: otherRole.id,
+				slotIndex: 0,
 				assignedMemberId: declinedButConfirmed,
 				status: "confirmed",
 			});
@@ -602,6 +663,55 @@ describe.skipIf(!hasTestDb)("cover requests (#1438)", () => {
 				assigneeId: s.assignedMemberId,
 				assigneeGuestId: s.assignedGuestId,
 			}));
+
+		it("hides an open request on a held slot and never falls back to an older covered row", async () => {
+			// protects=newest row per slot wins even when it is hidden: the older
+			//   covered story must not take its place while its coverer still holds
+			//   the slot, and an open request is not shown on a held slot
+			// fails_when=the newest-first `seen` guard is removed, or the held-slot
+			//   check on an open row is
+			// no_claim=how an open request came to sit on a held slot
+			await holdSeededSlot();
+			await release(seed.memberId);
+			const cover = await addMember("Priya");
+			await claimFor(cover);
+			let out = await loadMeetingCoverRequests(seed.meetingId, await slotsOf());
+			expect(out).toHaveLength(1); // the older covered row, cover still holds
+
+			await testDb.insert(slotCoverRequests).values({
+				clubId: seed.clubId,
+				meetingId: seed.meetingId,
+				slotId: seed.slotId,
+				releasedByMemberId: seed.memberId,
+				kind: "dropped",
+				priorStatus: "claimed",
+				releasedAt: new Date(Date.now() + 1000),
+			});
+			out = await loadMeetingCoverRequests(seed.meetingId, await slotsOf());
+			expect(out).toHaveLength(0);
+		});
+
+		it("names a releaser or coverer who is no longer an active member as Someone", async () => {
+			// protects=the payload is public: a member who left is not named on it
+			//   (#1342's active-only rule)
+			// fails_when=the member joins stop filtering on status = active
+			// no_claim=the members' own list, which still shows them to officers
+			await holdSeededSlot();
+			await release(seed.memberId);
+			const cover = await addMember("Priya");
+			await claimFor(cover);
+			await testDb
+				.update(members)
+				.set({ status: "inactive" })
+				.where(inArray(members.id, [seed.memberId, cover]));
+			const out = await loadMeetingCoverRequests(
+				seed.meetingId,
+				await slotsOf(),
+			);
+			expect(out).toHaveLength(1);
+			expect(out[0]?.releasedName).toBe("Someone");
+			expect(out[0]?.coveredName).toBe("Someone");
+		});
 
 		it("shows an open request with names only, the covered story while the cover holds it, and nothing after a reassign", async () => {
 			// protects=the payload rules: newest per slot, covered shown only while the

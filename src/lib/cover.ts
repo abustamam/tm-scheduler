@@ -6,6 +6,7 @@
  *
  * The app suggests and drafts; the member sends (CONTEXT.md, "Cover request").
  */
+import type { coverRequestKindEnum } from "#/db/schema";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
 
 /** A drop this close to the meeting is a LATE drop: there is little time to
@@ -16,7 +17,7 @@ export const LATE_DROP_HOURS = 48;
  *  into "dropped". */
 export const COVER_FLIP_HOUR = 6;
 
-export type CoverKind = "finding_cover" | "dropped";
+export type CoverKind = (typeof coverRequestKindEnum.enumValues)[number];
 export type CoverStatus = "finding_cover" | "dropped" | "covered";
 
 /** True when the meeting is still ahead and starts within

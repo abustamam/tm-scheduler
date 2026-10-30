@@ -5,7 +5,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { meetings, roleSlots } from "#/db/schema";
+import { coverRequestKindEnum, meetings, roleSlots } from "#/db/schema";
 import {
 	askForCoverCore,
 	loadCoverCandidatesCore,
@@ -33,7 +33,7 @@ async function clubOfSlot(slotId: string): Promise<string> {
 
 const releaseSchema = z.object({
 	slotId: uuid,
-	kind: z.enum(["finding_cover", "dropped"]),
+	kind: z.enum(coverRequestKindEnum.enumValues),
 });
 
 /** Hand off your OWN role and record a cover request. AUTHED: a session bound to
