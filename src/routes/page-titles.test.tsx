@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import {
+	type AnyRoute,
 	createMemoryHistory,
 	createRootRoute,
 	createRoute,
@@ -47,7 +48,7 @@ describe("a signed-in page's tab title", () => {
 		const roster = createRoute({
 			getParentRoute: () => root,
 			path: "/roster",
-			head: RosterRoute.options.head as never,
+			head: RosterRoute.options.head as AnyRoute["options"]["head"],
 			component: () => <p>roster</p>,
 		});
 		const router = createRouter({

@@ -19,17 +19,13 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 /**
  * Layout routes: they render `<Outlet />` or a shell and the leaf below names
  * the page. `club.$clubId.tsx` is the public club shell, whose children set
- * their own `shareMeta` titles.
+ * their own `shareMeta` titles. Layouts only: a leaf never belongs here.
  */
 const LAYOUT_ROUTES = new Set([
 	"__root.tsx",
 	"_authed.tsx",
 	"_authed/superadmin.tsx",
 	"club.$clubId.tsx",
-	// Not a layout: a leaf whose `head` sets only robots noindex, with no title
-	// (found while writing this guard; #1422 did not list it). Naming a title
-	// there is a follow-up to the issue, so the gap is held here, visibly.
-	"club.$clubId_.meeting.$meetingId.present.tsx",
 ]);
 
 function routeFiles(): string[] {
@@ -44,14 +40,54 @@ function routeFiles(): string[] {
 		.sort();
 }
 
-/** The source from `head:` to the end of the file, comments removed, or null. */
-function headSource(rel: string): string | null {
-	const source = stripComments(readFileSync(join(HERE, rel), "utf8"));
-	const at = source.search(/^\t+head:/m);
-	return at === -1 ? null : source.slice(at);
+/**
+ * The text of the `head` property's own expression, comments removed, or null.
+ * Balanced over () [] {} (string literals skipped), ending at the `,` that closes
+ * the property or at the bracket that closes the route options. A later JSX
+ * `title=` prop in the same file is outside it.
+ */
+function headExpression(source: string): string | null {
+	const clean = stripComments(source);
+	const at = clean.search(/^\t+head:/m);
+	if (at === -1) return null;
+	const start = clean.indexOf("head:", at) + "head:".length;
+	let depth = 0;
+	for (let i = start; i < clean.length; i++) {
+		const ch = clean[i];
+		if (ch === '"' || ch === "'" || ch === "`") {
+			i++;
+			while (i < clean.length && clean[i] !== ch)
+				i += clean[i] === "\\" ? 2 : 1;
+		} else if ("([{".includes(ch)) {
+			depth++;
+		} else if (")]}".includes(ch)) {
+			depth--;
+			if (depth < 0) return clean.slice(start, i);
+		} else if (ch === "," && depth === 0) {
+			return clean.slice(start, i);
+		}
+	}
+	return clean.slice(start);
 }
 
-/** `_authed/admin/dues.tsx` -> `/admin/dues`; `index` collapses to its folder. */
+/** True when the head expression sets a `title:` key (or the `title,` shorthand). */
+function headHasTitle(head: string | null): boolean {
+	return head !== null && /\btitle\s*:|[{,]\s*title\s*[,}]/.test(head);
+}
+
+/** Registered paths no `_authed` route file serves. */
+function unroutedPaths(
+	registered: readonly string[],
+	routePaths: ReadonlySet<string>,
+): string[] {
+	return registered.filter((p) => !routePaths.has(p));
+}
+
+function headSource(rel: string): string | null {
+	return headExpression(readFileSync(join(HERE, rel), "utf8"));
+}
+
+/** `_authed/admin/dues.tsx` -> `/admin/dues` (a top-level file keeps its path); `index` collapses to its folder. */
 function authedPath(rel: string): string {
 	return `/${rel
 		.replace(/^_authed\//, "")
@@ -71,7 +107,7 @@ describe("route page titles", () => {
 		const missing = files.filter((rel) => {
 			if (LAYOUT_ROUTES.has(rel)) return false;
 			const head = headSource(rel);
-			return head === null || !/\btitle\b/.test(head);
+			return !headHasTitle(head);
 		});
 		expect(missing, `routes with no head title: ${missing.join(", ")}`).toEqual(
 			[],
@@ -79,33 +115,54 @@ describe("route page titles", () => {
 	});
 
 	// protects=a registered destination's page title reads its label from the registry, so the sidebar and the tab cannot drift apart
-	// fails_when=an `_authed` route whose path (or alsoActiveOn sibling) is registered retypes the label or omits navPageTitle(<path>) from its head
-	// no_claim=does not cover routes outside the registry, and does not run the head
+	// fails_when=the `_authed` route at a destination's own `to` retypes the label or omits navPageTitle(<to>) from its head expression; or a registered path has no route file
+	// no_claim=does not cover alsoActiveOn siblings (they name themselves from their own heading), and does not run the head
 	it("registered routes build their title from the registry", () => {
-		const files = new Set(routeFiles());
+		const files = routeFiles();
+		const relByPath = new Map(
+			files
+				.filter((rel) => !LAYOUT_ROUTES.has(rel))
+				.map((rel) => [authedPath(rel), rel] as const),
+		);
+		const routePaths = new Set(relByPath.keys());
 		const registry = NAV_DESTINATIONS as readonly NavDestination[];
 		const registered = registry.flatMap((d) => [
 			d.to,
 			...(d.alsoActiveOn ?? []),
 		]);
-		const covered: string[] = [];
-		const wrong: string[] = [];
-		for (const rel of files) {
-			if (!rel.startsWith("_authed/") || LAYOUT_ROUTES.has(rel)) continue;
-			const path = authedPath(rel);
-			if (!registered.includes(path)) continue;
-			covered.push(path);
-			const head = headSource(rel);
-			if (!head?.includes(`navPageTitle("${path}"`)) wrong.push(rel);
-		}
+		expect(
+			unroutedPaths(registered, routePaths),
+			"registered paths with no route file",
+		).toEqual([]);
+		const wrong = registry
+			.map((d) => d.to as string)
+			.filter((to) => {
+				const rel = relByPath.get(to);
+				// A public destination (`/resources`) is not an `_authed` page.
+				if (!rel?.startsWith("_authed/")) return false;
+				return !(rel && headSource(rel)?.includes(`navPageTitle("${to}"`));
+			});
 		expect(wrong, `routes not using navPageTitle: ${wrong.join(", ")}`).toEqual(
 			[],
 		);
-		// A registered path with no route file would pass vacuously above.
-		const withoutRoute = registered.filter(
-			(p) => !covered.includes(p) && files.has(`_authed${p}.tsx`),
+	});
+
+	// protects=the two checks above can fail: a robots-only head has no title, a JSX `title=` prop is not the head's, an unrouted registry path is flagged
+	// fails_when=headExpression runs past the head property, or unroutedPaths stops flagging a missing route
+	// no_claim=says nothing about real route files
+	it("the guard's own helpers can fail", () => {
+		const robotsOnly = `export const Route = createFileRoute("/x")({
+	head: () => ({
+		meta: [{ name: "robots", content: "noindex" }],
+	}),
+	component: () => <Card title="Roster" />,
+});`;
+		expect(headHasTitle(headExpression(robotsOnly))).toBe(false);
+		const titled = robotsOnly.replace(
+			'{ name: "robots"',
+			'{ title: "T" }, { name: "robots"',
 		);
-		expect(withoutRoute).toEqual([]);
-		expect(covered.length).toBeGreaterThan(20);
+		expect(headHasTitle(headExpression(titled))).toBe(true);
+		expect(unroutedPaths(["/a", "/b"], new Set(["/a"]))).toEqual(["/b"]);
 	});
 });

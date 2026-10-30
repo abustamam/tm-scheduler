@@ -8,7 +8,7 @@ import { Button } from "#/components/ui/button";
 import { Label } from "#/components/ui/label";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { navDestination } from "#/lib/nav-destinations";
-import { navPageTitle } from "#/lib/page-title";
+import { workspaceTitle } from "#/lib/page-title";
 import { ingestPathwaysProgress } from "#/server/pathways-sync";
 import type { SyncResult } from "#/server/pathways-sync-logic";
 
@@ -24,7 +24,7 @@ export const Route = createFileRoute("/_authed/admin/pathways-sync")({
 	head: ({ match }) => ({
 		meta: [
 			{
-				title: navPageTitle("/admin/pathways-sync", match.context),
+				title: workspaceTitle("Sync Pathways progress", match.context),
 			},
 		],
 	}),
