@@ -247,16 +247,40 @@ export function PersonalMeetingBody({
 	// club-local date key and both writers validate a uuid.
 	const meetingUuid = view.meeting.id;
 
+	// Undo writes the PREVIOUS answer back through `setPlannedAttendance`, with
+	// no release flag and no confirm flag: it restores an answer and destroys
+	// and confirms nothing (#1427).
+	const undoAnswer = useCallback(
+		async (status: "coming" | "not_coming") => {
+			try {
+				await setPlannedAttendance({
+					data: { memberId: view.member.id, meetingId: meetingUuid, status },
+				});
+				toast.success(
+					status === "coming" ? "Back to coming." : "Back to not coming.",
+				);
+				await onChanged();
+			} catch (err) {
+				showWriteError(err, "Couldn't undo that.");
+			}
+		},
+		[meetingUuid, onChanged, view.member.id],
+	);
+
 	const sendAnswer = useCallback(
 		async (coming: boolean) => {
 			setPending(coming ? "coming" : "release");
+			// Undo only when this CHANGES an answer, from a session (#1427, the
+			// season grid's rule). `canRelease` is the session: the write responses
+			// carry no `proof`, and an asserted caller cannot change an answer anyway.
+			const previous = view.planStatus;
 			try {
 				if (coming) {
 					// `confirmHeldRoles` is unconditional — rule 2 again. The server
 					// resolves which slots are still `claimed` at write time (#908), so
 					// a role assigned after this page loaded is confirmed too, and a
 					// member with none gets exactly the plain answer.
-					const { confirmedRoles } = await setPlannedAttendance({
+					const { confirmedRoles, changed } = await setPlannedAttendance({
 						data: {
 							memberId: view.member.id,
 							meetingId: meetingUuid,
@@ -267,11 +291,20 @@ export function PersonalMeetingBody({
 					// From the RESPONSE, never from `view.roles`: it names what the
 					// server actually flipped, which is the only thing this toast may
 					// claim.
-					toast.success(
+					const thanks =
 						confirmedRoles.length > 0
 							? `Great — you're confirmed as ${listRoles(confirmedRoles)}. See you there.`
-							: "Great — see you there.",
-					);
+							: "Great — see you there.";
+					if (canRelease && changed && previous === "not_coming") {
+						toast.success(thanks, {
+							action: {
+								label: "Undo",
+								onClick: () => undoAnswer("not_coming"),
+							},
+						});
+					} else {
+						toast.success(thanks);
+					}
 				} else if (canRelease) {
 					// Unconditional WITHIN this arm — see rule 1 in the header. The arm
 					// itself is chosen by the viewer's session, not by the view.
@@ -283,7 +316,18 @@ export function PersonalMeetingBody({
 						},
 					});
 					const t = notComingToast(released, false);
-					toast.success(t.text, { duration: t.duration });
+					// Not when roles were freed: restoring them is several re-claims.
+					toast.success(t.text, {
+						duration: t.duration,
+						...(released === 0 && previous === "coming"
+							? {
+									action: {
+										label: "Undo",
+										onClick: () => undoAnswer("coming"),
+									},
+								}
+							: {}),
+					});
 				} else {
 					// Session-less: record the answer and free nothing. `releaseHeldRoles`
 					// is left at its `false` default rather than sent as false, so this
@@ -320,6 +364,8 @@ export function PersonalMeetingBody({
 			holdsRole,
 			meetingUuid,
 			onChanged,
+			undoAnswer,
+			view.planStatus,
 			view.club.id,
 			view.member.id,
 		],

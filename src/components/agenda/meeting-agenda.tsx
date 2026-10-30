@@ -372,7 +372,22 @@ export function MeetingAgenda({
 			await actions.release(slot);
 			// An officer releasing someone else's role keeps the plain line.
 			if (currentMemberId !== null && slot.assigneeId === currentMemberId) {
-				toast.success(roleFreedDutyText(1), { duration: DUTY_TOAST_MS });
+				// UNDO ONLY FOR YOUR OWN ROLE (#1427). Release already needs a session,
+				// so Undo is a re-claim by that same session. An officer releasing
+				// ANOTHER member's role gets none: a re-claim would make the officer
+				// the holder, and restoring the original holder is an assignment.
+				// A failed re-claim (someone took it) goes through `run`'s write-error.
+				toast.success(roleFreedDutyText(1), {
+					duration: DUTY_TOAST_MS,
+					action: {
+						label: "Undo",
+						onClick: () =>
+							run(slot.id, async () => {
+								await actions.claim(slot);
+								toast.success("Role back.");
+							}),
+					},
+				});
 			} else {
 				toast.success("Role released.");
 			}
@@ -410,6 +425,7 @@ export function MeetingAgenda({
 	async function doTakeover(slot: AgendaSlot) {
 		await run(slot.id, async () => {
 			await actions.takeover?.(slot);
+			// No Undo here on purpose (#1427): it would write someone else's slot.
 			toast.success(`You've taken over ${slot.roleName}.`);
 			setTakeoverSlot(null);
 		});

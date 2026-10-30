@@ -77,6 +77,21 @@ export function MemberRolePicker({
 	const options = meetingRoleOptions(data, meetingId, targetMemberId);
 	const who = isOwnRow ? "You" : targetName;
 
+	async function undoRelease(o: RoleOption) {
+		setBusy(o.slotId);
+		try {
+			await claimSlot({
+				data: { slotId: o.slotId, memberId: targetMemberId, actorMemberId },
+			});
+			toast.success(`Assigned ${o.label}.`);
+			await onChanged();
+		} catch (err) {
+			showWriteError(err, "Couldn't undo.");
+		} finally {
+			setBusy(null);
+		}
+	}
+
 	async function act(o: RoleOption) {
 		const action = slotAction(o.state);
 		setBusy(o.slotId);
@@ -85,7 +100,16 @@ export function MemberRolePicker({
 				// No actor on the wire (#763): the server reads the session.
 				await releaseSlot({ data: { slotId: o.slotId } });
 				if (isOwnRow) {
-					toast.success(roleFreedDutyText(1), { duration: DUTY_TOAST_MS });
+					// Undo re-claims for the same member (#1427). Release needs a session
+					// already, so the claim is the session's own. Another member's row
+					// gets none: a re-claim would credit the officer's pick, not them.
+					toast.success(roleFreedDutyText(1), {
+						duration: DUTY_TOAST_MS,
+						action: {
+							label: "Undo",
+							onClick: () => undoRelease(o),
+						},
+					});
 				} else {
 					toast.success(`Released ${o.label}.`);
 				}
