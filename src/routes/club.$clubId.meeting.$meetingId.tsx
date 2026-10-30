@@ -2466,6 +2466,7 @@ function MeetingView() {
 										scheduledAt: meeting.scheduledAt,
 										clubSlug,
 										urlKey,
+										timeZone: timezone,
 									},
 								])
 							}
@@ -2881,7 +2882,6 @@ function MeetingView() {
 			    the same write; Keep roles records Absent alone; Cancel writes nothing. */}
 			<CoverSheet
 				slots={coverSlots}
-				timeZone={timezone}
 				onClose={() => setCoverSlots([])}
 				onChanged={() => router.invalidate()}
 			/>

@@ -14,6 +14,33 @@ export interface CoverSlot {
 	scheduledAt: string | Date;
 	clubSlug: string;
 	urlKey: string;
+	/** The covered meeting's own zone ("tomorrow", the weekday). Travels with
+	 *  the slot so no host can pass another row's zone. */
+	timeZone: string;
+}
+
+/** The slot for one of the viewer's commitments (`/me`, club home). The caller
+ *  names the link parts: `/me` keys the meeting by its uuid, club home by the
+ *  row's `urlKey`. The zone is always the covered row's own. */
+export function coverSlotFromCommitment(
+	c: {
+		slotId: string;
+		meetingId: string;
+		roleName: string;
+		scheduledAt: string | Date;
+		timezone: string;
+	},
+	link: { clubSlug: string; urlKey: string },
+): CoverSlot {
+	return {
+		slotId: c.slotId,
+		meetingId: c.meetingId,
+		roleLabel: c.roleName,
+		scheduledAt: c.scheduledAt,
+		clubSlug: link.clubSlug,
+		urlKey: link.urlKey,
+		timeZone: c.timezone,
+	};
 }
 
 /**
@@ -67,12 +94,11 @@ function weekdayOf(d: Date, timeZone?: string): string {
 export function coverDraft(args: {
 	slot: CoverSlot;
 	origin: string;
-	timeZone?: string;
 	firstName?: string | null;
 }): string {
 	const text = buildCoverAsk({
 		role: args.slot.roleLabel,
-		weekday: weekdayOf(new Date(args.slot.scheduledAt), args.timeZone),
+		weekday: weekdayOf(new Date(args.slot.scheduledAt), args.slot.timeZone),
 		link: coverLink(
 			args.origin,
 			args.slot.clubSlug,

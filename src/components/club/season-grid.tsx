@@ -184,10 +184,7 @@ export function SeasonGrid({
 	>(() => null);
 	const [busyMeetingId, setBusyMeetingId] = useState<string | null>(null);
 	// An own release inside 48h waits here for the cover sheet (#1439).
-	const [cover, setCover] = useState<{
-		slot: CoverSlot;
-		timeZone: string;
-	} | null>(null);
+	const [cover, setCover] = useState<CoverSlot | null>(null);
 	// The assigned-cell confirm: releasing a role + marking unavailable. When
 	// `memberName` is set, an officer is acting on that member (not themselves).
 	const [confirm, setConfirm] = useState<{
@@ -291,10 +288,10 @@ export function SeasonGrid({
 	};
 
 	/** The sheet's target for one slot, read off loader data: its meeting (date,
-	 *  URL key, zone) and its role row's label. Null when the grid cannot place it. */
-	function coverTargetFor(
-		slotId: string,
-	): { slot: CoverSlot; timeZone: string } | null {
+	 *  URL key, zone) and its role row's label. Null when the grid cannot place
+	 *  it (no slug for the link, no row for the label): a caller that has
+	 *  already decided the drop is late must then refuse, never release. */
+	function coverTargetFor(slotId: string): CoverSlot | null {
 		const cell = data.cells.find((c) => c.slotId === slotId);
 		const m = cell ? data.meetings.find((x) => x.id === cell.meetingId) : null;
 		if (!cell || !m || !data.clubSlug) return null;
@@ -303,17 +300,22 @@ export function SeasonGrid({
 				r.roleDefinitionId === cell.roleDefinitionId &&
 				r.slotIndex === cell.slotIndex,
 		);
+		if (!row) return null;
 		return {
-			slot: {
-				slotId,
-				meetingId: m.id,
-				roleLabel: row?.label ?? "role",
-				scheduledAt: m.scheduledAt,
-				clubSlug: data.clubSlug,
-				urlKey: m.urlKey ?? m.id,
-			},
+			slotId,
+			meetingId: m.id,
+			roleLabel: row.label,
+			scheduledAt: m.scheduledAt,
+			clubSlug: data.clubSlug,
+			urlKey: m.urlKey ?? m.id,
 			timeZone: m.timezone,
 		};
+	}
+
+	/** An own late drop that the grid cannot build the sheet for. Nothing is
+	 *  released until Ask or Drop it anyway (#1439 AC1), so it stops here. */
+	function coverUnavailable() {
+		toast.error("Couldn't open the cover sheet. Reload and try again.");
 	}
 
 	// The write succeeded, so a failed refetch is not the write's error.
@@ -380,19 +382,18 @@ export function SeasonGrid({
 		// The claim's Undo is not a drop: only a deliberate release of your own
 		// role inside 48h goes through the cover sheet (#1439).
 		if (!afterClaim) {
-			const target = coverTargetFor(slotId);
-			const own =
-				!!currentMemberId &&
-				data.cells.find((c) => c.slotId === slotId)?.memberId ===
-					currentMemberId;
+			const cell = data.cells.find((c) => c.slotId === slotId);
+			const meeting = cell
+				? data.meetings.find((x) => x.id === cell.meetingId)
+				: null;
+			const own = !!currentMemberId && cell?.memberId === currentMemberId;
 			if (
-				target &&
-				opensCoverSheet({
-					isOwnRole: own,
-					scheduledAt: target.slot.scheduledAt,
-				})
+				meeting &&
+				opensCoverSheet({ isOwnRole: own, scheduledAt: meeting.scheduledAt })
 			) {
-				setCover(target);
+				const target = coverTargetFor(slotId);
+				if (target) setCover(target);
+				else coverUnavailable();
 				return;
 			}
 		}
@@ -979,6 +980,7 @@ export function SeasonGrid({
 															onOwnLateRelease={(slotId) => {
 																const target = coverTargetFor(slotId);
 																if (target) setCover(target);
+																else coverUnavailable();
 															}}
 														>
 															<button
@@ -1131,8 +1133,7 @@ export function SeasonGrid({
 			) : null}
 
 			<CoverSheet
-				slots={cover ? [cover.slot] : []}
-				timeZone={cover?.timeZone}
+				slots={cover ? [cover] : []}
 				onClose={() => setCover(null)}
 				onChanged={() => refetchQuietly("cover")}
 			/>

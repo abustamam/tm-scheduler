@@ -39,8 +39,6 @@ export interface CoverSheetProps {
 	 * no release call is made and Ask calls `askForCover` per slot instead.
 	 */
 	mode?: "release" | "released";
-	/** The club's zone, for "tomorrow" and the weekday. Absent: the browser's. */
-	timeZone?: string;
 	/** Closes the sheet. */
 	onClose: () => void;
 	/** After a release, an ask or an Undo: the route re-fetches its data. */
@@ -58,7 +56,6 @@ export interface CoverSheetProps {
 export function CoverSheet({
 	slots,
 	mode = "release",
-	timeZone,
 	onClose,
 	onChanged,
 }: CoverSheetProps) {
@@ -68,6 +65,7 @@ export function CoverSheet({
 	// Asks only share.
 	const [handedOff, setHandedOff] = useState<Set<string>>(new Set());
 	const [candidates, setCandidates] = useState<Candidate[] | null>(null);
+	const [loadFailed, setLoadFailed] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [notSent, setNotSent] = useState(false);
 
@@ -87,6 +85,7 @@ export function CoverSheet({
 		if (!slotId || !meetingId) return;
 		let live = true;
 		setCandidates(null);
+		setLoadFailed(false);
 		setNotSent(false);
 		server()
 			.then((m) => m.loadCoverCandidates({ data: { meetingId, slotId } }))
@@ -94,9 +93,12 @@ export function CoverSheet({
 				if (live) setCandidates(rows);
 			})
 			.catch(() => {
-				// A failed look-up must not block the handoff: the sheet reads as
-				// "nobody yet" and still offers Ask and Drop it anyway.
-				if (live) setCandidates([]);
+				// A failed look-up must not block the handoff: the sheet says so and
+				// still offers Ask (the generic draft) and Drop it anyway.
+				if (live) {
+					setLoadFailed(true);
+					setCandidates([]);
+				}
 			});
 		return () => {
 			live = false;
@@ -112,11 +114,19 @@ export function CoverSheet({
 	}
 
 	const scheduledAt = new Date(slot.scheduledAt);
-	const dayWord = meetingDayWord(scheduledAt, new Date(), timeZone);
+	const dayWord = meetingDayWord(scheduledAt, new Date(), slot.timeZone);
 	const released = mode === "released" || handedOff.has(slot.slotId);
 
 	function markHandedOff(id: string) {
 		setHandedOff((prev) => new Set(prev).add(id));
+	}
+
+	function unmarkHandedOff(id: string) {
+		setHandedOff((prev) => {
+			const next = new Set(prev);
+			next.delete(id);
+			return next;
+		});
 	}
 
 	/** The release toast: the plain "role freed" line with Undo, which gives
@@ -132,6 +142,9 @@ export function CoverSheet({
 							data: { slotId: target.slotId },
 						});
 						toast.success("Role back.");
+						// The sheet is still open: it returns to its pre-release state,
+						// so the next Ask releases again and Drop it anyway is back.
+						unmarkHandedOff(target.slotId);
 						await onChanged?.();
 					} catch (err) {
 						showWriteError(err, "Something went wrong.");
@@ -189,7 +202,6 @@ export function CoverSheet({
 		const text = coverDraft({
 			slot: target,
 			origin: window.location.origin,
-			timeZone,
 			firstName,
 		});
 		try {
@@ -221,9 +233,11 @@ export function CoverSheet({
 				<SheetHeader>
 					<SheetTitle>Who can cover {slot.roleLabel}?</SheetTitle>
 					<SheetDescription>
-						{released
+						{handedOff.has(slot.slotId)
 							? `The meeting is ${dayWord}. ${slot.roleLabel} is open and the request is in.`
-							: `The meeting is ${dayWord}. If you just drop it, ${slot.roleLabel} sits empty and your VPE finds out at the meeting.`}
+							: mode === "released"
+								? `The meeting is ${dayWord}. ${slot.roleLabel} is open. Ask someone to take it.`
+								: `The meeting is ${dayWord}. If you just drop it, ${slot.roleLabel} sits empty and your VPE finds out at the meeting.`}
 					</SheetDescription>
 				</SheetHeader>
 
@@ -251,7 +265,11 @@ export function CoverSheet({
 						<p className="text-sm text-muted-foreground">Looking…</p>
 					) : candidates.length === 0 ? (
 						<>
-							<p className="text-sm">Nobody has said they're coming yet.</p>
+							<p className="text-sm">
+								{loadFailed
+									? "Couldn't load who's coming."
+									: "Nobody has said they're coming yet."}
+							</p>
 							<Button
 								type="button"
 								size="touch"

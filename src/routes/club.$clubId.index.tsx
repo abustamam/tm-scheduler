@@ -19,7 +19,10 @@ import { Label } from "#/components/ui/label";
 import { WhatsNewBanner } from "#/components/whats-new-banner";
 import { showWriteError } from "#/components/write-error-toast";
 import { authClient } from "#/lib/auth-client";
-import { opensCoverSheet } from "#/lib/cover-sheet-logic";
+import {
+	coverSlotFromCommitment,
+	opensCoverSheet,
+} from "#/lib/cover-sheet-logic";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { type StoredMember, useEffectiveMember } from "#/lib/member-identity";
 import { clubOgImage, OG_IMAGE_SIZE_META } from "#/lib/og-image-url";
@@ -122,14 +125,7 @@ function ClubHome() {
 		const c = commitments.data?.find((x) => x.slotId === slotId);
 		if (c && opensCoverSheet({ isOwnRole: true, scheduledAt: c.scheduledAt })) {
 			setCoverSlots([
-				{
-					slotId,
-					meetingId: c.meetingId,
-					roleLabel: c.roleName,
-					scheduledAt: c.scheduledAt,
-					clubSlug: clubId,
-					urlKey: c.urlKey,
-				},
+				coverSlotFromCommitment(c, { clubSlug: clubId, urlKey: c.urlKey }),
 			]);
 			return;
 		}
@@ -318,7 +314,6 @@ function ClubHome() {
 			</section>
 			<CoverSheet
 				slots={coverSlots}
-				timeZone={commitments.data?.[0]?.timezone}
 				onClose={() => setCoverSlots([])}
 				onChanged={refetchAll}
 			/>

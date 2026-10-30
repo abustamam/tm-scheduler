@@ -8,7 +8,10 @@ import { PageContainer } from "#/components/page-container";
 import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
-import { opensCoverSheet } from "#/lib/cover-sheet-logic";
+import {
+	coverSlotFromCommitment,
+	opensCoverSheet,
+} from "#/lib/cover-sheet-logic";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { navLabel } from "#/lib/nav-destinations";
 import { navPageTitle } from "#/lib/page-title";
@@ -61,15 +64,11 @@ function MyCommitments() {
 		// /me lists only your own commitments, so every row is an own role.
 		if (opensCoverSheet({ isOwnRole: true, scheduledAt: c.scheduledAt })) {
 			setCoverSlots([
-				{
-					slotId,
-					meetingId: c.meetingId,
-					roleLabel: c.roleName,
-					scheduledAt: c.scheduledAt,
+				// `parseMeetingKey` accepts the meeting's uuid.
+				coverSlotFromCommitment(c, {
 					clubSlug: c.clubSlug,
-					// `parseMeetingKey` accepts the meeting's uuid.
 					urlKey: c.meetingId,
-				},
+				}),
 			]);
 			return;
 		}
@@ -242,9 +241,6 @@ function MyCommitments() {
 			)}
 			<CoverSheet
 				slots={coverSlots}
-				timeZone={
-					commitments.find((c) => c.slotId === coverSlots[0]?.slotId)?.timezone
-				}
 				onClose={() => setCoverSlots([])}
 				onChanged={() => router.invalidate()}
 			/>

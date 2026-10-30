@@ -3,7 +3,7 @@
 // "Who can cover <Role>?" (#1439): what the sheet shows, what each button
 // writes and in which order, and what happens when the share fails.
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -31,7 +31,12 @@ vi.mock("sonner", () => ({
 }));
 
 import { CoverSheet, type CoverSlot } from "#/components/club/cover-sheet";
-import { coverDraft, meetingDayWord } from "#/lib/cover-sheet-logic";
+import {
+	coverDraft,
+	coverSlotFromCommitment,
+	meetingDayWord,
+	opensCoverSheet,
+} from "#/lib/cover-sheet-logic";
 
 const slot: CoverSlot = {
 	slotId: "11111111-1111-4111-8111-111111111111",
@@ -40,6 +45,7 @@ const slot: CoverSlot = {
 	scheduledAt: new Date(Date.now() + 20 * 3_600_000).toISOString(),
 	clubSlug: "demo",
 	urlKey: "2026-11-04",
+	timeZone: "UTC",
 };
 
 const priya = {
@@ -247,11 +253,114 @@ describe("CoverSheet", () => {
 		expect(releaseOwnSlotForCover).not.toHaveBeenCalled();
 	});
 
+	it("Undo while the sheet is open returns it to its pre-release state", async () => {
+		// protects=finding 1: after Undo the role is held again, so the sheet
+		//   says so, offers Drop it anyway, and the next Ask releases again
+		// fails_when=Undo leaves the slot in handedOff (sheet still reads "open
+		//   and the request is in", Drop it anyway hidden, next Ask only shares)
+		stubShare(async () => {});
+		mount();
+		await userEvent.click(
+			await screen.findByRole("button", { name: "Ask Priya Patel" }),
+		);
+		await screen.findByText(/is open and the request is in/);
+		expect(screen.queryByRole("button", { name: "Drop it anyway" })).toBeNull();
+		const action = (
+			toastSuccess.mock.calls[0][1] as {
+				action: { onClick: () => Promise<void> };
+			}
+		).action;
+		await act(async () => {
+			await action.onClick();
+		});
+		expect(screen.queryByText(/is open and the request is in/)).toBeNull();
+		expect(screen.getByText(/your VPE finds out at the meeting/)).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Drop it anyway" })).toBeTruthy();
+		await userEvent.click(screen.getByRole("button", { name: "Ask Sam Lee" }));
+		await waitFor(() =>
+			expect(releaseOwnSlotForCover).toHaveBeenCalledTimes(2),
+		);
+	});
+
+	it("a failed candidate load says so, and still offers Ask and Drop it anyway", async () => {
+		// protects=finding 3: an error is not "nobody is coming yet"
+		// fails_when=the failure reads as the empty state, or drops a button
+		loadCoverCandidates.mockRejectedValue(new Error("boom"));
+		const share = stubShare(async () => {});
+		mount();
+		expect(await screen.findByText("Couldn't load who's coming.")).toBeTruthy();
+		expect(screen.queryByText(/Nobody has said/)).toBeNull();
+		expect(screen.getByRole("button", { name: "Drop it anyway" })).toBeTruthy();
+		await userEvent.click(screen.getByRole("button", { name: "Ask" }));
+		await waitFor(() => expect(share).toHaveBeenCalledTimes(1));
+		expect(share.mock.calls[0][0].text as string).toMatch(/^Hi! /);
+	});
+
+	it("already-released mode does not claim the request is in before Ask", async () => {
+		// protects=finding 4: the copy is true at each point
+		// fails_when=released mode says "the request is in" before askForCover ran
+		stubShare(async () => {});
+		mount({ mode: "released" });
+		expect(screen.queryByText(/the request is in/)).toBeNull();
+		expect(screen.getByText(/Timer is open\. Ask someone/)).toBeTruthy();
+		await userEvent.click(
+			await screen.findByRole("button", { name: "Ask Priya Patel" }),
+		);
+		await screen.findByText(/is open and the request is in/);
+	});
+
 	it("renders nothing when there are no slots", () => {
 		// protects=closed means closed
 		// fails_when=the sheet opens on an empty list
 		mount({ slots: [] });
 		expect(screen.queryByRole("heading")).toBeNull();
+	});
+});
+
+describe("opensCoverSheet (the gate /me and club home call)", () => {
+	// Those two routes cannot mount in vitest (they import the database), so
+	// their AC2 behaviour is tested at the gate they both call; the source
+	// guard in cover-sheet-wiring.guard.test.ts pins that they call it first.
+	const now = new Date("2026-11-03T12:00:00Z");
+	const at = (h: number) => new Date(now.getTime() + h * 3_600_000);
+	it("opens only for an own role inside 48h", () => {
+		// protects=AC2: >48h own and another's row keep the immediate release
+		// fails_when=the 48h bound or the own-row term is dropped
+		expect(opensCoverSheet({ isOwnRole: true, scheduledAt: at(20), now })).toBe(
+			true,
+		);
+		expect(
+			opensCoverSheet({ isOwnRole: true, scheduledAt: at(100), now }),
+		).toBe(false);
+		expect(
+			opensCoverSheet({ isOwnRole: false, scheduledAt: at(20), now }),
+		).toBe(false);
+	});
+});
+
+describe("coverSlotFromCommitment", () => {
+	it("carries the covered row's own zone, and the caller's link parts", () => {
+		// protects=finding 5: the zone comes from the row, not a neighbour
+		// fails_when=the zone is dropped or the link parts are swapped
+		const out = coverSlotFromCommitment(
+			{
+				slotId: "s",
+				meetingId: "m",
+				roleName: "Timer",
+				scheduledAt: "2026-11-04T01:00:00Z",
+				timezone: "Asia/Tokyo",
+			},
+			{ clubSlug: "demo", urlKey: "m" },
+		);
+		expect(out).toEqual({
+			slotId: "s",
+			meetingId: "m",
+			roleLabel: "Timer",
+			scheduledAt: "2026-11-04T01:00:00Z",
+			clubSlug: "demo",
+			urlKey: "m",
+			timeZone: "Asia/Tokyo",
+		});
 	});
 });
 
@@ -276,7 +385,6 @@ describe("cover sheet words", () => {
 		const text = coverDraft({
 			slot,
 			origin: "https://x.test",
-			timeZone: "UTC",
 			firstName: "Priya",
 		});
 		expect(text.startsWith("Hi Priya! I can't make ")).toBe(true);

@@ -39,6 +39,7 @@ const slot = (id: string, roleLabel: string): CoverSlot => ({
 	scheduledAt: new Date(Date.now() + 20 * 3_600_000).toISOString(),
 	clubSlug: "demo",
 	urlKey: "2026-11-04",
+	timeZone: "UTC",
 });
 
 afterEach(cleanup);

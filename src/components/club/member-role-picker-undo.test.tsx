@@ -150,3 +150,61 @@ describe("MemberRolePicker: Undo on release (#1427)", () => {
 		expect(onChanged).not.toHaveBeenCalled();
 	});
 });
+
+describe("MemberRolePicker: the 48h cover gate (#1439)", () => {
+	async function openAndPick(
+		isOwnRow: boolean,
+		hoursOut: number,
+		onOwnLateRelease: (slotId: string) => void,
+	) {
+		render(
+			<MemberRolePicker
+				data={data}
+				meetingId="mt1"
+				meetingDate="Oct 6"
+				targetMemberId="m-target"
+				targetName="Ann"
+				isOwnRow={isOwnRow}
+				canReassign={false}
+				actorMemberId="m-actor"
+				declined={false}
+				onMarkUnavailable={() => {}}
+				onMarkAvailable={() => {}}
+				onChanged={onChanged}
+				scheduledAt={new Date(Date.now() + hoursOut * 3_600_000)}
+				onOwnLateRelease={onOwnLateRelease}
+			>
+				<button type="button">cell</button>
+			</MemberRolePicker>,
+		);
+		await userEvent.click(screen.getByRole("button", { name: "cell" }));
+		await userEvent.click(await screen.findByRole("button", { name: /Timer/ }));
+	}
+
+	it("an own release more than 48h out still releases at once", async () => {
+		// protects=AC2 for the picker
+		// fails_when=the gate ignores the 48h window
+		const late = vi.fn();
+		await openAndPick(true, 100, late);
+		await waitFor(() => expect(releaseSlot).toHaveBeenCalledTimes(1));
+		expect(late).not.toHaveBeenCalled();
+	});
+
+	it("an officer releasing another member's row inside 48h still releases at once", async () => {
+		// protects=AC2: the sheet is for your OWN drop only
+		// fails_when=isOwnRow stops being part of the gate
+		const late = vi.fn();
+		await openAndPick(false, 20, late);
+		await waitFor(() => expect(releaseSlot).toHaveBeenCalledTimes(1));
+		expect(late).not.toHaveBeenCalled();
+	});
+
+	it("an own release inside 48h goes to the sheet and releases nothing", async () => {
+		// protects=AC1 for the picker (the other side of the two cases above)
+		// fails_when=a late own release is written
+		const late = vi.fn();
+		await openAndPick(true, 20, late);
+		await waitFor(() => expect(late).toHaveBeenCalledWith("slot-1"));
+		expect(releaseSlot).not.toHaveBeenCalled();
+	});
+});
