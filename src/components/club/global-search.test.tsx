@@ -384,6 +384,34 @@ describe("GlobalSearch meetings group", () => {
 		});
 	});
 
+	// protects=typing an upcoming meeting's number lists it under Meetings and navigates to its key; fails_when=search only matches numbers on past rows; no_claim=how the server derives the number
+	it("finds an upcoming meeting by its number", async () => {
+		meetingsServer.listUpcomingMeetings.mockResolvedValue([
+			{
+				id: "up413",
+				scheduledAt: new Date("2099-03-11T19:00:00Z"),
+				theme: "Horizons",
+				urlKey: "2099-03-11",
+				timezone: "UTC",
+				meetingNumber: 413,
+			},
+		]);
+		meetingsServer.listPastMeetings.mockResolvedValue({
+			meetings: [],
+			timezone: "UTC",
+			clubSlug: "downtown",
+			hasMore: false,
+		});
+		renderSearch({ variant: "inline" });
+		await userEvent.type(screen.getByRole("combobox"), "#413");
+		expect(await screen.findByRole("list", { name: "Meetings" })).toBeTruthy();
+		await userEvent.click(await screen.findByText(/#413/));
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/club/$clubId/meeting/$meetingId",
+			params: { clubId: "club-1", meetingId: "2099-03-11" },
+		});
+	});
+
 	// protects=upcoming meetings show while the past call is pending or has failed, and navigate; fails_when=the pool waits on the past response; no_claim=past rows
 	it.each([
 		["pending", () => new Promise(() => {})],

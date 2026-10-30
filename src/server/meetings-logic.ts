@@ -29,7 +29,12 @@ import {
 	meetingDatePassed,
 	meetingDateReached,
 } from "#/lib/meeting-lifecycle";
-import { localDateKey, localDayRange } from "#/lib/meeting-url";
+import { deriveMeetingNumber } from "#/lib/meeting-number";
+import {
+	localDateKey,
+	localDayRange,
+	urlKeysForMeetings,
+} from "#/lib/meeting-url";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { logActivity } from "./activity";
 import type { AttendancePlanStatus as PlanStatus } from "./attendance-plan-logic";
@@ -48,6 +53,7 @@ import {
 } from "./meeting-number-logic";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
 import {
+	keyOfFrom,
 	resolveMeetingUrlKey,
 	urlKeysForClubMeetings,
 } from "./meeting-url-key-logic";
@@ -74,6 +80,9 @@ export interface UpcomingMeetingRow {
 	/** The canonical URL key (`resolveMeetingUrlKey`), counting cancelled
 	 *  meetings on the same date (#1396). */
 	urlKey: string;
+	/** Stored or derived from the nearest anchor, exactly as `loadPastMeetings`
+	 *  numbers a past meeting (#358); null when none can be determined (#1434). */
+	meetingNumber: number | null;
 	openSlots: number;
 	totalSlots: number;
 }
@@ -123,12 +132,27 @@ export async function loadPublicUpcomingMeetings(
 		)
 		.groupBy(meetings.id, clubs.timezone)
 		.orderBy(asc(meetings.scheduledAt));
-	const keys = await urlKeysForClubMeetings(
-		clubId,
-		rows,
-		rows[0]?.timezone ?? "UTC",
-	);
-	return rows.map((r) => ({ ...r, urlKey: keys(r.id) }));
+	if (rows.length === 0) return [];
+	// The club's full meeting spine, ordered: ONE query serving both the url
+	// keys and the numbers (no per-row lookup, the N+1 trap
+	// `loadPastMeetings` names). Cancelled rows stay in: a cancelled meeting can
+	// be the number anchor, and it collides url keys on the same date (#1396).
+	const spine = await db
+		.select({
+			id: meetings.id,
+			scheduledAt: meetings.scheduledAt,
+			status: meetings.status,
+			meetingNumber: meetings.meetingNumber,
+		})
+		.from(meetings)
+		.where(eq(meetings.clubId, clubId))
+		.orderBy(asc(meetings.scheduledAt));
+	const keys = keyOfFrom(urlKeysForMeetings(spine, rows[0].timezone));
+	return rows.map((r) => ({
+		...r,
+		urlKey: keys(r.id),
+		meetingNumber: deriveMeetingNumber(spine, r.id),
+	}));
 }
 
 export interface PublicNextMeetingKey {
