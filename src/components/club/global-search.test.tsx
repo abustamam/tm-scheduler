@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	GlobalSearch,
 	type GlobalSearchHandle,
+	type SearchableMeeting,
+	searchMeetings,
 	searchWorkspace,
 } from "./global-search";
 
@@ -22,6 +24,18 @@ vi.mock("#/server/members", () => ({
 		{ id: "m2", name: "Mahbuba", officerPositions: ["vp_education"] },
 	]),
 }));
+
+// Hoisted: the meetings fetch is asserted not to happen before focus (#1421).
+const meetingsServer = vi.hoisted(() => ({
+	listUpcomingMeetings: vi.fn().mockResolvedValue([]),
+	listPastMeetings: vi.fn().mockResolvedValue({
+		meetings: [],
+		timezone: "UTC",
+		clubSlug: null,
+		hasMore: false,
+	}),
+}));
+vi.mock("#/server/meetings", () => meetingsServer);
 
 const NOBODY = { hasOffice: false, isOfficer: false, isSuperadmin: false };
 const OFFICER = { hasOffice: true, isOfficer: true, isSuperadmin: false };
@@ -225,5 +239,191 @@ describe("GlobalSearch", () => {
 		renderSearch({ variant: "inline" });
 		await userEvent.type(screen.getByRole("combobox"), "zzz");
 		expect(await screen.findByText(/No matches for/)).toBeTruthy();
+	});
+});
+
+const meeting = (
+	over: Partial<SearchableMeeting> & { id: string },
+): SearchableMeeting => ({
+	scheduledAt: new Date("2026-03-04T19:00:00Z"),
+	theme: null,
+	urlKey: "2026-03-04",
+	timezone: "UTC",
+	meetingNumber: null,
+	upcoming: false,
+	...over,
+});
+
+describe("searchMeetings", () => {
+	const nov = meeting({
+		id: "nov",
+		scheduledAt: new Date("2026-11-04T19:00:00Z"),
+		meetingNumber: 412,
+		theme: "Growth Mindset",
+	});
+
+	// protects=a query word finds a meeting by day number, 3-letter or full month, in the club's timezone; fails_when=month/day matching is dropped, is prefix-based ("no" hits Nov), or reads UTC instead of the club zone; no_claim=other languages
+	it("matches the date by day number, month abbreviation and full month", () => {
+		const ids = (q: string) => searchMeetings(q, [nov]).map((m) => m.id);
+		expect(ids("4")).toEqual(["nov"]);
+		expect(ids("Nov")).toEqual(["nov"]);
+		expect(ids("november")).toEqual(["nov"]);
+		expect(ids("nov 4")).toEqual(["nov"]);
+		expect(ids("no")).toEqual([]);
+		expect(ids("nov 5")).toEqual([]);
+		// 2026-11-04T01:00Z is Nov 3 in New York.
+		const late = meeting({
+			id: "ny",
+			scheduledAt: new Date("2026-11-04T01:00:00Z"),
+			timezone: "America/New_York",
+		});
+		expect(searchMeetings("3", [late])).toHaveLength(1);
+		expect(searchMeetings("4", [late])).toHaveLength(0);
+	});
+
+	// protects=meeting number matches with or without '#', exactly; fails_when=41 matches #412 (substring) or '#' breaks it; no_claim=upcoming rows, which carry no number
+	it("matches the meeting number, with or without #", () => {
+		expect(searchMeetings("#412", [nov])).toHaveLength(1);
+		expect(searchMeetings("412", [nov])).toHaveLength(1);
+		expect(searchMeetings("41", [nov])).toHaveLength(0);
+	});
+
+	// protects=theme matches as a case-insensitive substring; fails_when=theme is ignored or case-sensitive; no_claim=word-order independence for themes
+	it("matches the theme as a case-insensitive substring", () => {
+		expect(searchMeetings("MINDSET", [nov])).toHaveLength(1);
+		expect(searchMeetings("growth m", [nov])).toHaveLength(1);
+		expect(searchMeetings("zzz", [nov])).toHaveLength(0);
+	});
+
+	// protects=upcoming soonest-first, then past newest-first, capped at 5 across both; fails_when=input order is kept, past precedes upcoming, or the cap is missing; no_claim=ties
+	it("orders upcoming first then past newest-first, capped at 5", () => {
+		const day = (n: number) => new Date(`2026-03-0${n}T19:00:00Z`);
+		const rows = [
+			meeting({ id: "p1", scheduledAt: day(1), theme: "x" }),
+			meeting({ id: "p3", scheduledAt: day(3), theme: "x" }),
+			meeting({ id: "p2", scheduledAt: day(2), theme: "x" }),
+			meeting({ id: "u9", scheduledAt: day(9), theme: "x", upcoming: true }),
+			meeting({ id: "u5", scheduledAt: day(5), theme: "x", upcoming: true }),
+			meeting({
+				id: "p0",
+				scheduledAt: new Date("2026-02-01T19:00:00Z"),
+				theme: "x",
+			}),
+		];
+		expect(searchMeetings("x", rows).map((m) => m.id)).toEqual([
+			"u5",
+			"u9",
+			"p3",
+			"p2",
+			"p1",
+		]);
+	});
+
+	// protects=a blank query lists nothing; fails_when=blank matches every meeting; no_claim=punctuation-only queries
+	it("returns nothing for a blank query", () => {
+		expect(searchMeetings("  ", [nov])).toEqual([]);
+	});
+});
+
+describe("GlobalSearch meetings group", () => {
+	afterEach(() => {
+		cleanup();
+		navigateMock.mockClear();
+		meetingsServer.listUpcomingMeetings.mockReset();
+		meetingsServer.listPastMeetings.mockReset();
+	});
+
+	function mockMeetings() {
+		meetingsServer.listUpcomingMeetings.mockReset();
+		meetingsServer.listPastMeetings.mockReset();
+		meetingsServer.listUpcomingMeetings.mockResolvedValue([]);
+		meetingsServer.listPastMeetings.mockResolvedValue({
+			meetings: [
+				{
+					id: "mt412",
+					scheduledAt: new Date("2026-03-04T19:00:00Z"),
+					theme: "Roots",
+					urlKey: "2026-03-04",
+					meetingNumber: 412,
+				},
+			],
+			timezone: "UTC",
+			clubSlug: "downtown",
+			hasMore: true,
+		});
+	}
+
+	// protects=nothing meeting-related is fetched on render, and both calls happen after focus (past with limit 52); fails_when=the queries are enabled on mount or the depth changes; no_claim=cache sharing
+	it("fetches meetings only once the input is focused", async () => {
+		mockMeetings();
+		renderSearch();
+		await new Promise((r) => setTimeout(r, 20));
+		expect(meetingsServer.listUpcomingMeetings).not.toHaveBeenCalled();
+		expect(meetingsServer.listPastMeetings).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("combobox"));
+		await vi.waitFor(() =>
+			expect(meetingsServer.listPastMeetings).toHaveBeenCalledWith({
+				data: { clubId: "club-1", limit: 52 },
+			}),
+		);
+		expect(meetingsServer.listUpcomingMeetings).toHaveBeenCalledWith({
+			data: "club-1",
+		});
+	});
+
+	// protects=typing a meeting number lists it under Meetings and choosing it navigates to the key URL; fails_when=the group is missing or navigation uses the id or the wrong slug; no_claim=Enter-key handling (rows are buttons)
+	it("lists a meeting by number and navigates to it", async () => {
+		mockMeetings();
+		renderSearch({ variant: "inline" });
+		await userEvent.type(screen.getByRole("combobox"), "412");
+		expect(await screen.findByRole("list", { name: "Meetings" })).toBeTruthy();
+		await userEvent.click(await screen.findByText(/#412/));
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/club/$clubId/meeting/$meetingId",
+			params: { clubId: "club-1", meetingId: "2026-03-04" },
+		});
+	});
+
+	// protects=upcoming meetings show while the past call is pending or has failed, and navigate; fails_when=the pool waits on the past response; no_claim=past rows
+	it.each([
+		["pending", () => new Promise(() => {})],
+		["rejected", () => Promise.reject(new Error("boom"))],
+	])("still lists upcoming meetings when the past call is %s", async (_n, past) => {
+		meetingsServer.listUpcomingMeetings.mockResolvedValue([
+			{
+				id: "up1",
+				scheduledAt: new Date("2099-03-04T19:00:00Z"),
+				theme: "Horizons",
+				urlKey: "2099-03-04",
+				timezone: "UTC",
+			},
+		]);
+		meetingsServer.listPastMeetings.mockImplementation(past);
+		renderSearch({ variant: "inline" });
+		await userEvent.type(screen.getByRole("combobox"), "horizons");
+		await userEvent.click(await screen.findByText("Horizons"));
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/club/$clubId/meeting/$meetingId",
+			params: { clubId: "club-1", meetingId: "2099-03-04" },
+		});
+	});
+
+	// protects=the shortcut hint shows on an empty popover input and hides once there is text; fails_when=it stays over typed text or shows in the drawer; no_claim=the hint's platform wording
+	it("shows the shortcut hint only while empty, and only in the popover", async () => {
+		const { container, unmount } = renderSearch();
+		expect(container.querySelector("kbd")).toBeTruthy();
+		await userEvent.type(screen.getByRole("combobox"), "a");
+		expect(container.querySelector("kbd")).toBeNull();
+		unmount();
+		const drawer = renderSearch({ variant: "inline" });
+		expect(drawer.container.querySelector("kbd")).toBeNull();
+	});
+
+	// protects=focus() on the handle focuses the input; fails_when=the handle method is missing or targets nothing; no_claim=the shell's key wiring
+	it("focus() on the handle focuses the input", () => {
+		const ref = createRef<GlobalSearchHandle>();
+		renderSearch({ ref });
+		act(() => ref.current?.focus());
+		expect(document.activeElement).toBe(screen.getByRole("combobox"));
 	});
 });

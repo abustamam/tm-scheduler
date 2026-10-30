@@ -1,9 +1,10 @@
 import { Link, useRouter, useRouterState } from "@tanstack/react-router";
-import { ChevronRight, Eye, LogOut, Menu, Network } from "lucide-react";
+import { ChevronRight, Eye, LogOut, Menu, Network, Search } from "lucide-react";
 import {
 	type ComponentType,
 	type ReactNode,
 	useEffect,
+	useEffectEvent,
 	useId,
 	useRef,
 	useState,
@@ -32,6 +33,7 @@ import {
 } from "#/components/whats-new-panel";
 import { initialsOf } from "#/lib/avatar";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
+import { isTypingTarget } from "#/lib/keyboard";
 import {
 	crumbOf,
 	destinationFor,
@@ -252,6 +254,44 @@ export function AppShell({
 	const [navOpen, setNavOpen] = useState(false);
 	// Lets Escape clear open drawer-search results before closing the drawer.
 	const drawerSearchRef = useRef<GlobalSearchHandle>(null);
+	const desktopSearchRef = useRef<GlobalSearchHandle>(null);
+	// Set when the drawer is opened to search: its open-autofocus then lands on
+	// the search input instead of the drawer itself.
+	const focusSearchOnOpen = useRef(false);
+
+	// Open search: the desktop input at lg+, else the nav drawer with its input
+	// focused. Shared by the ⌘K / `/` keys and the phone header's button (#1421).
+	const openSearch = useEffectEvent(() => {
+		if (window.matchMedia?.("(min-width: 1024px)").matches) {
+			desktopSearchRef.current?.focus();
+		} else if (navOpen) {
+			drawerSearchRef.current?.focus();
+		} else {
+			focusSearchOnOpen.current = true;
+			setNavOpen(true);
+		}
+	});
+	useEffect(() => {
+		function onKeyDown(e: KeyboardEvent) {
+			if (e.defaultPrevented || e.isComposing) return;
+			const isK = e.key.toLowerCase() === "k";
+			if (isK && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+				e.preventDefault();
+				openSearch();
+			} else if (
+				e.key === "/" &&
+				!e.metaKey &&
+				!e.ctrlKey &&
+				!e.altKey &&
+				!isTypingTarget(e.target)
+			) {
+				e.preventDefault();
+				openSearch();
+			}
+		}
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
+	}, []);
 
 	const sidebar = (
 		onNavigate?: () => void,
@@ -319,6 +359,12 @@ export function AppShell({
 							// don't autofocus it (that pops the phone keyboard over
 							// the nav). Focus the drawer itself; Tab reaches search.
 							e.preventDefault();
+							if (focusSearchOnOpen.current) {
+								// The user asked to search (button or shortcut).
+								focusSearchOnOpen.current = false;
+								drawerSearchRef.current?.focus();
+								return;
+							}
 							(e.currentTarget as HTMLElement | null)?.focus();
 						}}
 					>
@@ -364,7 +410,11 @@ export function AppShell({
 						</div>
 						<div className="flex-1" />
 						<div className="w-[248px] max-w-[34vw]">
-							<GlobalSearch clubId={activeClubId} grants={searchGrants} />
+							<GlobalSearch
+								ref={desktopSearchRef}
+								clubId={activeClubId}
+								grants={searchGrants}
+							/>
 						</div>
 						<ClubSwitcher
 							clubs={clubs}
@@ -382,6 +432,14 @@ export function AppShell({
 						<div className="min-w-0 flex-1 truncate text-xs font-semibold tracking-[0.01em] text-muted-foreground">
 							{crumbFor(pathname)}
 						</div>
+						<button
+							type="button"
+							onClick={() => openSearch()}
+							aria-label="Search"
+							className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-surface-soft hover:text-foreground outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+						>
+							<Search className="size-4" aria-hidden />
+						</button>
 						<ClubSwitcher
 							clubs={clubs}
 							activeClubId={activeClubId}
