@@ -7,6 +7,7 @@ import {
 	type LineupBlastData,
 	type LineupSlot,
 	lineupMailtoHref,
+	lineupRsvpUrl,
 	mayDraftLineupBlast,
 	openSummary,
 	withArticle,
@@ -290,5 +291,23 @@ describe("the join link is never in a lineup draft (#731)", () => {
 		} as LineupBlastData;
 		const blast = buildLineupBlast(smuggled);
 		expect(JSON.stringify(blast)).not.toContain("zoom.example");
+	});
+});
+
+describe("RSVP line (#1442)", () => {
+	it("carries the RSVP URL exactly once in text and names the weekday", () => {
+		const blast = buildLineupBlast(LINEUP);
+		const url = lineupRsvpUrl(LINEUP);
+		expect(url).toBe(`${ORIGIN}/club/downtown/meeting/2026-10-01/rsvp`);
+		expect(blast.text.split(url)).toHaveLength(2);
+		expect(blast.text).toContain(`Coming Thursday? Tap here → ${url}`);
+		expect(blast.html).toContain(`href="${url}"`);
+	});
+
+	it("sits before the claim line", () => {
+		const { text } = buildLineupBlast(LINEUP);
+		expect(text.indexOf("Coming Thursday?")).toBeLessThan(
+			text.indexOf("Claim or confirm your role"),
+		);
 	});
 });

@@ -314,6 +314,8 @@ function AttendanceRow({
 	duties,
 	evaluating,
 	personalNudgeBase,
+	rsvpUrl,
+	clubName,
 	linkIdentity,
 	canClearRung,
 	pending,
@@ -335,6 +337,9 @@ function AttendanceRow({
 	evaluating?: EvaluatorFormBrief;
 	/** Where a role draft's link points (#667) — `?as=` is appended per row. */
 	personalNudgeBase?: PersonalNudgeBase | null;
+	/** #1442 — see the panel's own prop of the same name. */
+	rsvpUrl?: string;
+	clubName?: string;
 	/** #727 — see the panel's `canViewMemberDetail` prop. */
 	linkIdentity: boolean;
 	/** #762 — see the panel's own prop of the same name. */
@@ -373,23 +378,30 @@ function AttendanceRow({
 	// product ceiling the sentence was describing. So the branch stays, and so
 	// does the re-ask copy: it is the honest draft for a member who is down as
 	// absent and still on the programme.
+	// #1442: a STILL-TO-ANSWER row (no answer, or asked and not replied) is sent
+	// the one-tap RSVP page, whatever role it holds: "Coming" there also confirms
+	// the roles they hold. An assumed Coming has `status: "coming"` and is not
+	// still to answer.
+	const stillToAnswer = m.status === null || m.status === "reached_out";
 	const nudgeMode =
-		m.role && m.status !== "not_coming"
-			? {
-					mode: "confirm" as const,
-					roleName: m.role.roleName,
-					// Both ride the CONFIRM branch, not the shared props below. The
-					// `attendance` arm addresses a member with no role, so it has
-					// neither a duty to name nor a checklist to send anyone to —
-					// hoisting either out of this ternary is how a role-less draft
-					// grows a clause about somebody else's job.
-					duties,
-					evaluating,
-					personalUrl: personalNudgeBase
-						? personalNudgeUrl(personalNudgeBase, m.id)
-						: null,
-				}
-			: { mode: "attendance" as const };
+		rsvpUrl && stillToAnswer
+			? { mode: "rsvp" as const, clubName: clubName ?? null }
+			: m.role && m.status !== "not_coming"
+				? {
+						mode: "confirm" as const,
+						roleName: m.role.roleName,
+						// Both ride the CONFIRM branch, not the shared props below. The
+						// `attendance` arm addresses a member with no role, so it has
+						// neither a duty to name nor a checklist to send anyone to —
+						// hoisting either out of this ternary is how a role-less draft
+						// grows a clause about somebody else's job.
+						duties,
+						evaluating,
+						personalUrl: personalNudgeBase
+							? personalNudgeUrl(personalNudgeBase, m.id)
+							: null,
+					}
+				: { mode: "attendance" as const };
 
 	// An assumed Coming can sit ON TOP OF a real stored rung, and without showing
 	// it two of the four menu choices are invisible: picking "Asked" writes
@@ -582,7 +594,7 @@ function AttendanceRow({
 						email={m.email}
 						preferredContact={m.preferredContact}
 						meetingDate={meetingDate}
-						shareUrl={shareUrl}
+						shareUrl={rsvpUrl && stillToAnswer ? rsvpUrl : shareUrl}
 						onContacted={() => onContacted(m.id)}
 					/>
 				</PanelActionLine>
@@ -950,6 +962,8 @@ export function MeetingAttendancePanel({
 	dutiesByMemberId = NO_DUTIES_BY_MEMBER,
 	evaluatingByMemberId = NO_EVALUATING_BY_MEMBER,
 	personalNudgeBase = null,
+	rsvpUrl,
+	clubName,
 	locked,
 	phaseCompleted = false,
 	busy = false,
@@ -1019,6 +1033,12 @@ export function MeetingAttendancePanel({
 	/** Where a role draft's link points (#667) — the member's own meeting page.
 	 *  Absent leaves every draft on `shareUrl`, which is what it was. */
 	personalNudgeBase?: PersonalNudgeBase | null;
+	/** The meeting's one-tap RSVP page (#1442). Present ⇒ a still-to-answer row
+	 *  drafts "coming? tap to say" with this link instead of the agenda's.
+	 *  Absent leaves every draft as it was. */
+	rsvpUrl?: string;
+	/** Wording of that draft only. */
+	clubName?: string;
 	locked: boolean;
 	/** Roll mode only. Once the meeting is a historical record nobody is being
 	 *  chased, so contact links disappear. Defaults false so plan mode's
@@ -1436,6 +1456,8 @@ export function MeetingAttendancePanel({
 										duties={dutiesByMemberId.get(m.id)}
 										evaluating={evaluatingByMemberId.get(m.id)}
 										personalNudgeBase={personalNudgeBase}
+										rsvpUrl={rsvpUrl}
+										clubName={clubName}
 										linkIdentity={canViewMemberDetail}
 										canClearRung={canClearRung}
 										pending={pendingId === m.id}

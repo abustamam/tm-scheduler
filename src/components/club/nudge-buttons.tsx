@@ -89,6 +89,11 @@ export type NudgeButtonsProps = NudgeButtonsBase &
 type NudgeButtonsMeetingArm =
 	| { mode: "attendance" | "arriving" }
 	| {
+			/** The one-tap RSVP ask (#1442): `shareUrl` is the RSVP page. */
+			mode: "rsvp";
+			clubName?: string | null;
+	  }
+	| {
 			/** A guest invite to the next meeting (#899). Role-less, and never
 			 *  carries a personal link or a `join_url`. */
 			mode: "invite";
@@ -240,12 +245,20 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 										items: props.items,
 										origin: props.origin,
 									}
-								: {
-										...common,
-										meetingDate: props.meetingDate,
-										shareUrl: props.shareUrl,
-										mode: props.mode,
-									},
+								: props.mode === "rsvp"
+									? {
+											...common,
+											meetingDate: props.meetingDate,
+											shareUrl: props.shareUrl,
+											mode: props.mode,
+											clubName: props.clubName,
+										}
+									: {
+											...common,
+											meetingDate: props.meetingDate,
+											shareUrl: props.shareUrl,
+											mode: props.mode,
+										},
 	);
 
 	const callUrl = preferredContact === "call" ? telHref(phone) : null;

@@ -160,6 +160,30 @@ export function resolveEffectiveRung(
 	return { status: assumed ? "coming" : stored, assumed };
 }
 
+/**
+ * "N coming" for everyone who is not running the meeting (#1442): the members
+ * who said Coming, plus role holders with a CONFIRMED slot and no answer of
+ * their own (`resolveEffectiveRung`, so a confirmed holder who said Not coming
+ * is out). A number and nothing else: it takes no names to answer it, and the
+ * public payload it reads (`answeredRungs`) carries none of the non-answerers.
+ */
+export function publicComingCount(
+	answeredRungs: readonly { memberId: string; status: PlanStatus }[],
+	roleByMemberId: Readonly<Record<string, Pick<PanelRole, "confirmed">>>,
+): number {
+	const stored = new Map(answeredRungs.map((r) => [r.memberId, r.status]));
+	const ids = new Set([...stored.keys(), ...Object.keys(roleByMemberId)]);
+	let n = 0;
+	for (const id of ids) {
+		const { status } = resolveEffectiveRung(
+			stored.get(id) ?? null,
+			roleByMemberId[id],
+		);
+		if (status === "coming") n++;
+	}
+	return n;
+}
+
 /** What the viewer is told when "No answer" removed nothing from ANOTHER
  *  member's `coming`. The pick that does what they usually mean is Not coming.
  *
@@ -346,12 +370,14 @@ export function buildPlanPanel(input: {
 
 	// Empty buckets are omitted rather than rendered as "0 out" — the line is a
 	// glance, and a zero is noise in a ~340px rail.
+	// "Asked" folds into "still to answer" (#1442): from the officer's chair a
+	// member who was messaged and has not replied is still owed an answer. The
+	// rows keep their own "asked" marker, and `counts` keeps the two apart.
 	const countsLine = (
 		[
 			[counts.coming, "coming"],
-			[counts.notComing, "out"],
-			[counts.reachedOut, "asked"],
-			[counts.noAnswer, "no answer"],
+			[counts.notComing, "can't"],
+			[counts.reachedOut + counts.noAnswer, "still to answer"],
 		] as const
 	)
 		.filter(([n]) => n > 0)
