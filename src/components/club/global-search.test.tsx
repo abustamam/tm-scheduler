@@ -361,7 +361,6 @@ describe("GlobalSearch meetings group", () => {
 		expect(meetingsServer.listUpcomingMeetings).not.toHaveBeenCalled();
 		expect(meetingsServer.listPastMeetings).not.toHaveBeenCalled();
 		await userEvent.click(screen.getByRole("combobox"));
-		await screen.findByRole("combobox");
 		await vi.waitFor(() =>
 			expect(meetingsServer.listPastMeetings).toHaveBeenCalledWith({
 				data: { clubId: "club-1", limit: 52 },
@@ -381,7 +380,31 @@ describe("GlobalSearch meetings group", () => {
 		await userEvent.click(await screen.findByText(/#412/));
 		expect(navigateMock).toHaveBeenCalledWith({
 			to: "/club/$clubId/meeting/$meetingId",
-			params: { clubId: "downtown", meetingId: "2026-03-04" },
+			params: { clubId: "club-1", meetingId: "2026-03-04" },
+		});
+	});
+
+	// protects=upcoming meetings show while the past call is pending or has failed, and navigate; fails_when=the pool waits on the past response; no_claim=past rows
+	it.each([
+		["pending", () => new Promise(() => {})],
+		["rejected", () => Promise.reject(new Error("boom"))],
+	])("still lists upcoming meetings when the past call is %s", async (_n, past) => {
+		meetingsServer.listUpcomingMeetings.mockResolvedValue([
+			{
+				id: "up1",
+				scheduledAt: new Date("2099-03-04T19:00:00Z"),
+				theme: "Horizons",
+				urlKey: "2099-03-04",
+				timezone: "UTC",
+			},
+		]);
+		meetingsServer.listPastMeetings.mockImplementation(past);
+		renderSearch({ variant: "inline" });
+		await userEvent.type(screen.getByRole("combobox"), "horizons");
+		await userEvent.click(await screen.findByText("Horizons"));
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/club/$clubId/meeting/$meetingId",
+			params: { clubId: "club-1", meetingId: "2099-03-04" },
 		});
 	});
 

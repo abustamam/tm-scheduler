@@ -20,6 +20,7 @@ import {
 } from "#/lib/nav-destinations";
 import { officerPositionLabel } from "#/lib/officers";
 import { isBlankQuery, searchPeople } from "#/lib/person-search";
+import { cn } from "#/lib/utils";
 import { listPastMeetings, listUpcomingMeetings } from "#/server/meetings";
 import { listMembers } from "#/server/members";
 
@@ -96,17 +97,14 @@ export function searchMeetings(
 }
 
 /** Pure result filtering — members match on name, preferred name or current
- *  office label via the shared matcher (#1333), pages on their nav label, gated by grants.
- *  `meetings` is optional: only a caller that passes it gets a `meetings` key. */
+ *  office label via the shared matcher (#1333), pages on their nav label, gated by grants. */
 export function searchWorkspace(
 	rawQuery: string,
 	members: readonly MemberRow[],
 	grants: SearchGrants,
-	meetings?: readonly SearchableMeeting[],
 ): {
 	members: MemberRow[];
 	pages: WorkspacePage[];
-	meetings?: SearchableMeeting[];
 } {
 	const q = rawQuery.trim().toLowerCase();
 	if (!q) return { members: [], pages: [] };
@@ -126,11 +124,7 @@ export function searchWorkspace(
 	const pageHits = visibleDestinations(grants).filter((p) =>
 		p.label.toLowerCase().includes(q),
 	);
-	return {
-		members: memberHits,
-		pages: pageHits,
-		...(meetings ? { meetings: searchMeetings(rawQuery, meetings) } : {}),
-	};
+	return { members: memberHits, pages: pageHits };
 }
 
 export interface GlobalSearchHandle {
@@ -200,21 +194,19 @@ export function GlobalSearch({
 			}),
 		enabled: meetingsEnabled,
 	});
-	const clubSlug = past?.clubSlug ?? null;
-	const searchable: SearchableMeeting[] | undefined =
-		clubSlug && (upcoming || past)
-			? [
-					...(upcoming ?? []).map((m) => ({ ...m, upcoming: true })),
-					...(past?.meetings ?? []).map((m) => ({
-						...m,
-						timezone: past?.timezone ?? "UTC",
-						upcoming: false,
-					})),
-				]
-			: undefined;
+	// Each list joins the pool as soon as its own query resolves; a slow or
+	// failed past call never hides the upcoming meetings.
+	const searchable: SearchableMeeting[] = [
+		...(upcoming ?? []).map((m) => ({ ...m, upcoming: true })),
+		...(past?.meetings ?? []).map((m) => ({
+			...m,
+			timezone: past?.timezone ?? "UTC",
+			upcoming: false,
+		})),
+	];
 
-	const results = searchWorkspace(query, members, grants, searchable);
-	const meetingHits = results.meetings ?? [];
+	const results = searchWorkspace(query, members, grants);
+	const meetingHits = searchMeetings(query, searchable);
 	// The popover only shows while focus is inside (blur dismisses it without
 	// losing the typed text); inline results just follow the query.
 	const open = active && (variant === "inline" || focusWithin);
@@ -268,7 +260,11 @@ export function GlobalSearch({
 						setQuery("");
 					}
 				}}
-				className="h-9 rounded-lg border-border bg-surface-raised"
+				className={cn(
+					"h-9 rounded-lg border-border bg-surface-raised",
+					// Keep the placeholder clear of the shortcut chip (lg+, empty popover).
+					variant === "popover" && !active && "lg:pr-14",
+				)}
 			/>
 			{variant === "popover" && !active ? (
 				<kbd
@@ -344,7 +340,8 @@ export function GlobalSearch({
 														navigate({
 															to: "/club/$clubId/meeting/$meetingId",
 															params: {
-																clubId: clubSlug ?? "",
+																// The route resolves a club id as well as a slug.
+																clubId: clubId ?? "",
 																meetingId: m.urlKey,
 															},
 														}),
