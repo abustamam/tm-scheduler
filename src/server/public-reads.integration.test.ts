@@ -14,7 +14,7 @@
  *     bunx vitest run src/server/public-reads.integration.test.ts
  */
 import { and, asc, eq, gte, ne, sql } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	clubs,
 	meetingAttendancePlan,
@@ -25,6 +25,7 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
+import { deriveMeetingNumber } from "#/lib/meeting-number";
 import {
 	listNotComingWithNames,
 	listReachedOutForMeeting,
@@ -36,6 +37,14 @@ import {
 	seedClub,
 	testDb,
 } from "#/test/db";
+
+// `#/db` is mocked to the test client so the REAL `loadPublicUpcomingMeetings`
+// is importable without a production DATABASE_URL (#1434).
+vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+
+const { loadPublicUpcomingMeetings } = await import("#/server/meetings-logic");
+
+const DAY = 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Helpers — replicate the public query logic from meetings.ts using testDb
@@ -304,6 +313,70 @@ describe.skipIf(!hasTestDb)("public reads (no session)", () => {
 		expect(row).toBeDefined();
 		expect(row?.openSlots).toBe(1);
 		expect(row?.totalSlots).toBe(1);
+	});
+
+	// protects=an upcoming row carries the number counted forward from the anchor, past or not; fails_when=the loader omits meetingNumber or counts from the wrong meeting; no_claim=numbers shown in any UI
+	it("loadPublicUpcomingMeetings numbers upcoming meetings from the anchor (#1434)", async () => {
+		await testDb.insert(meetings).values({
+			clubId: seed.clubId,
+			scheduledAt: new Date(Date.now() - 7 * DAY),
+			status: "completed",
+			meetingNumber: 410,
+		});
+		const [later] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: seed.clubId,
+				scheduledAt: new Date(Date.now() + 14 * DAY),
+				status: "scheduled",
+			})
+			.returning({ id: meetings.id });
+		const rows = await loadPublicUpcomingMeetings(seed.clubId);
+		expect(rows.map((r) => [r.id, r.meetingNumber])).toEqual([
+			[seed.meetingId, 411],
+			[later?.id, 412],
+		]);
+	});
+
+	// protects=a club with no stored number anywhere gets null, never a guess; fails_when=the loader invents a number such as 1 or the row index; no_claim=derivation rules (lib/meeting-number tests)
+	it("loadPublicUpcomingMeetings returns null meetingNumber when none is derivable (#1434)", async () => {
+		const rows = await loadPublicUpcomingMeetings(seed.clubId);
+		expect(rows.length).toBeGreaterThan(0);
+		expect(rows.every((r) => r.meetingNumber === null)).toBe(true);
+	});
+
+	// protects=a cancelled meeting between anchor and upcoming gets the same number the shared derivation gives over the same spine; fails_when=the loader drops cancelled rows from the spine or counts them as held; no_claim=a hand-typed number (equality with deriveMeetingNumber, plus one pinned sanity value)
+	it("loadPublicUpcomingMeetings agrees with deriveMeetingNumber across a cancelled meeting (#1434)", async () => {
+		await testDb.insert(meetings).values([
+			{
+				clubId: seed.clubId,
+				scheduledAt: new Date(Date.now() - 7 * DAY),
+				status: "completed",
+				meetingNumber: 410,
+			},
+			{
+				clubId: seed.clubId,
+				scheduledAt: new Date(Date.now() + 3 * DAY),
+				status: "cancelled",
+			},
+		]);
+		const spine = await testDb
+			.select({
+				id: meetings.id,
+				scheduledAt: meetings.scheduledAt,
+				status: meetings.status,
+				meetingNumber: meetings.meetingNumber,
+			})
+			.from(meetings)
+			.where(eq(meetings.clubId, seed.clubId))
+			.orderBy(asc(meetings.scheduledAt));
+		const rows = await loadPublicUpcomingMeetings(seed.clubId);
+		expect(rows).toHaveLength(1);
+		for (const r of rows) {
+			expect(r.meetingNumber).toBe(deriveMeetingNumber(spine, r.id));
+		}
+		// The cancelled meeting consumes no number: 410 -> 411, not 412.
+		expect(rows[0]?.meetingNumber).toBe(411);
 	});
 
 	// -------------------------------------------------------------------------
