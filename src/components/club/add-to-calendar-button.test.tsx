@@ -66,7 +66,7 @@ function button(over: Partial<Parameters<typeof AddToCalendarButton>[0]> = {}) {
 	);
 }
 
-function twoRoleView(status: "scheduled" | "cancelled", at: Date) {
+function twoRoleView(status: "scheduled", at: Date) {
 	const role = (slotId: string, roleName: string, roleKey: string) => ({
 		slotId,
 		roleName,
@@ -144,6 +144,35 @@ describe("AddToCalendarButton (#1423)", () => {
 		expect(triggers()).toHaveLength(0);
 	});
 
+	// protects=the download path when scheduledAt arrives as an ISO string, as
+	// after hydration; fails_when=the string is used unparsed; no_claim=the menu.
+	it("downloads an .ics when scheduledAt is an ISO string", async () => {
+		const blobs: Blob[] = [];
+		URL.createObjectURL = vi.fn((b: Blob) => {
+			blobs.push(b);
+			return "blob:x";
+		});
+		URL.revokeObjectURL = vi.fn();
+		const names: string[] = [];
+		vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+			this: HTMLAnchorElement,
+		) {
+			names.push(this.download);
+		});
+		const user = userEvent.setup();
+		vi.useFakeTimers({
+			toFake: ["Date"],
+			now: new Date("2026-11-01T00:00:00Z"),
+		});
+		render(button({ scheduledAt: "2026-11-13T01:00:00.000Z" }));
+		await user.click(screen.getByRole("button", { name: /add to calendar/i }));
+		await user.click(
+			await screen.findByRole("menuitem", { name: /Apple \/ Outlook/ }),
+		);
+		expect(names).toEqual(["harbor-city-2026-11-12-toastmaster.ics"]);
+		expect(await blobs[0]?.text()).toContain("DTSTART:20261113T010000Z");
+	});
+
 	// protects=the .ics download: filename, MIME and the event's content, with
 	// no location; fails_when=the file is not offered, is misnamed, or carries a
 	// contact/location; no_claim=a calendar app accepts the file.
@@ -206,13 +235,15 @@ describe("AddToCalendarButton (#1423)", () => {
 describe("surfaces (#1423)", () => {
 	// protects=one button per held role on the meeting page's jobs card;
 	// fails_when=the card shows none, or one for several roles, or any for a
-	// cancelled meeting; no_claim=the card's other contents.
+	// past meeting (a cancelled one renders no card at all, so it could not
+	// prove anything here; the button's own cancelled gate has its test above);
+	// no_claim=the card's other contents.
 	it.each([
-		["scheduled", 2],
-		["cancelled", 0],
-	] as const)("jobs card, %s meeting: %i buttons for two roles", async (status, n) => {
+		[FUTURE, 2],
+		[PAST, 0],
+	] as const)("jobs card, meeting at %s: %i buttons for two roles", async (at, n) => {
 		vi.mocked(getPublicPersonalMeetingView).mockResolvedValue(
-			twoRoleView(status, FUTURE),
+			twoRoleView("scheduled", at),
 		);
 		const qc = new QueryClient({
 			defaultOptions: { queries: { retry: false } },
@@ -228,8 +259,7 @@ describe("surfaces (#1423)", () => {
 				/>
 			</QueryClientProvider>,
 		);
-		if (n > 0) await screen.findByRole("heading", { name: "Your jobs" });
-		else await new Promise((r) => setTimeout(r, 50));
+		await screen.findByRole("heading", { name: "Your jobs" });
 		expect(triggers()).toHaveLength(n);
 	});
 
@@ -251,6 +281,7 @@ describe("surfaces (#1423)", () => {
 				roleGuides={[]}
 			/>,
 		);
+		await screen.findByRole("heading", { name: "Toastmaster" });
 		expect(triggers()).toHaveLength(n);
 	});
 });

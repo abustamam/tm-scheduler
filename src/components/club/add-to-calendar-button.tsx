@@ -13,14 +13,13 @@ import {
 	calendarEvent,
 	googleCalendarUrl,
 	icsFilename,
+	toDate,
 	toIcs,
 } from "#/lib/calendar";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { isMeetingOver } from "#/lib/meeting-lifecycle";
 import { rolesGuideUrl } from "#/lib/role-guide";
 import type { PersonalMeetingView } from "#/server/personal-meeting";
-
-const DEFAULT_LENGTH_MINUTES = 90;
 
 export function AddToCalendarButton({
 	clubName,
@@ -40,10 +39,9 @@ export function AddToCalendarButton({
 	timezone: string;
 	/** The raw `$meetingId` URL segment. */
 	meetingKey: string;
-	status: string;
+	status: PersonalMeetingView["meeting"]["status"];
 	scheduledAt: Date | string;
-	/** Absent reads as the schema default (`meetings.length_minutes`). */
-	lengthMinutes: number | undefined;
+	lengthMinutes: number;
 	slotId: string;
 	roleName: string;
 	roleKey: string | null | undefined;
@@ -58,7 +56,7 @@ export function AddToCalendarButton({
 			clubName,
 			roleName,
 			scheduledAt,
-			lengthMinutes: lengthMinutes ?? DEFAULT_LENGTH_MINUTES,
+			lengthMinutes,
 			meetingUrl: `${origin}/club/${encodeURIComponent(clubId)}/meeting/${encodeURIComponent(meetingKey)}`,
 			roleGuideUrl: roleKey ? rolesGuideUrl({ origin, clubId, roleKey }) : null,
 			uid: `${slotId}@gavelup`,
@@ -66,9 +64,10 @@ export function AddToCalendarButton({
 	};
 
 	const downloadIcs = () => {
-		const start =
-			typeof scheduledAt === "string" ? new Date(scheduledAt) : scheduledAt;
-		const localDate = utcToZonedWallTime(start, timezone).slice(0, 10);
+		const localDate = utcToZonedWallTime(toDate(scheduledAt), timezone).slice(
+			0,
+			10,
+		);
 		const blob = new Blob([toIcs(build())], {
 			type: "text/calendar;charset=utf-8",
 		});
@@ -79,7 +78,8 @@ export function AddToCalendarButton({
 		document.body.appendChild(a);
 		a.click();
 		a.remove();
-		URL.revokeObjectURL(href);
+		// Deferred: Safari can cancel the download if the URL dies synchronously.
+		setTimeout(() => URL.revokeObjectURL(href), 0);
 	};
 
 	const openGoogle = () => {

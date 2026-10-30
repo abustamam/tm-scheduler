@@ -136,11 +136,8 @@ export interface PersonalMeetingView {
 		scheduledAt: Date | string;
 		/**
 		 * Length of the meeting, for the calendar event's end time (#1423).
-		 * Optional on the type for the reason `hasTiming` is: four fixtures in
-		 * test files that predate it stay valid; the loader always sets it, and
-		 * the calendar button reads absent as the schema's 90-minute default.
 		 */
-		lengthMinutes?: number;
+		lengthMinutes: number;
 		theme: string | null;
 		wordOfTheDay: string | null;
 		/** Read by the Table Topics duty's tick (#880). */

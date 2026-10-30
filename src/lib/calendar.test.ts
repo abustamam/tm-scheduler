@@ -54,6 +54,23 @@ describe("calendarEvent", () => {
 	});
 });
 
+describe("calendarEvent with a string scheduledAt (post-hydration)", () => {
+	// protects=an ISO string from hydration yields the same instants as a Date;
+	// fails_when=the string is used unparsed; no_claim=timezone display.
+	it("parses the ISO string for start and end", () => {
+		const e = calendarEvent({
+			clubName: "C",
+			roleName: "Timer",
+			scheduledAt: "2026-11-13T01:00:00.000Z",
+			lengthMinutes: 90,
+			meetingUrl: "https://x/m",
+			uid: "s@gavelup",
+		});
+		expect(e.start.toISOString()).toBe("2026-11-13T01:00:00.000Z");
+		expect(e.end.toISOString()).toBe("2026-11-13T02:30:00.000Z");
+	});
+});
+
 describe("toIcs", () => {
 	/*
 	 * protects: the exact VCALENDAR bytes: CRLF, UTC stamps, PRODID, escaping.
@@ -82,7 +99,7 @@ describe("toIcs", () => {
 				"DTSTAMP:20261029T120000Z",
 				"DTSTART:20261113T010000Z",
 				"DTEND:20261113T023000Z",
-				"SUMMARY:Timer · A\\,B;C\\\\D meeting",
+				"SUMMARY:Timer · A\\,B\\;C\\\\D meeting",
 				"DESCRIPTION:You're Timer.\\nMeeting: https://x/m",
 				"URL:https://x/m",
 				"END:VEVENT",

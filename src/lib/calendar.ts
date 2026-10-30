@@ -15,6 +15,11 @@ export interface CalendarEvent {
 	uid: string;
 }
 
+/** `scheduledAt` is a Date on the server and an ISO string after hydration. */
+export function toDate(value: Date | string): Date {
+	return typeof value === "string" ? new Date(value) : value;
+}
+
 export function calendarEvent(args: {
 	clubName: string;
 	roleName: string;
@@ -25,10 +30,7 @@ export function calendarEvent(args: {
 	roleGuideUrl?: string | null;
 	uid: string;
 }): CalendarEvent {
-	const start =
-		typeof args.scheduledAt === "string"
-			? new Date(args.scheduledAt)
-			: args.scheduledAt;
+	const start = toDate(args.scheduledAt);
 	const end = new Date(start.getTime() + args.lengthMinutes * 60_000);
 	const lines = [`You're ${args.roleName}.`, `Meeting: ${args.meetingUrl}`];
 	if (args.roleGuideUrl) lines.push(`Role guide: ${args.roleGuideUrl}`);
@@ -54,7 +56,7 @@ export function icsUtc(d: Date): string {
 function escapeText(s: string): string {
 	return s
 		.replace(/\\/g, "\\\\")
-		.replace(/;/g, ";")
+		.replace(/;/g, "\\;")
 		.replace(/,/g, "\\,")
 		.replace(/\r\n|\r|\n/g, "\\n");
 }
@@ -68,14 +70,12 @@ function fold(line: string): string {
 	const out: string[] = [];
 	let cur = "";
 	let curBytes = 0;
-	let limit = 75;
 	for (const ch of line) {
 		const n = encoder.encode(ch).length;
-		if (curBytes + n > limit) {
+		if (curBytes + n > 75) {
 			out.push(cur);
 			cur = " ";
 			curBytes = 1;
-			limit = 75;
 		}
 		cur += ch;
 		curBytes += n;

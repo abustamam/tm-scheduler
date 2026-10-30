@@ -90,6 +90,7 @@ function makeView(
 			// Comfortably in the future so `isMeetingOver`'s day check is false
 			// regardless of when the suite runs — no wall-clock time bomb.
 			scheduledAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+			lengthMinutes: 90,
 			theme: null,
 			wordOfTheDay: null,
 			tableTopicsNotes: null,

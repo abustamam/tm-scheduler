@@ -55,6 +55,7 @@ function makeView(
 		meeting: {
 			id: "meeting-uuid",
 			scheduledAt: new Date(Date.now() + 7 * 86400000),
+			lengthMinutes: 90,
 			theme: null,
 			wordOfTheDay: null,
 			tableTopicsNotes: null,

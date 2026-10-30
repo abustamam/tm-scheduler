@@ -82,6 +82,7 @@ function makeView(
 		meeting: {
 			id: MEETING_UUID,
 			scheduledAt,
+			lengthMinutes: 90,
 			theme: null,
 			wordOfTheDay: null,
 			tableTopicsNotes: null,
