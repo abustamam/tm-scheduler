@@ -22,6 +22,7 @@ const { stubModule } = vi.hoisted(() => ({
 vi.mock("#/server/club", stubModule);
 vi.mock("#/server/meetings", stubModule);
 vi.mock("#/server/mentorship", stubModule);
+vi.mock("#/server/milestones", stubModule);
 vi.mock("#/server/orientation", stubModule);
 vi.mock("#/server/path-enrollment", stubModule);
 vi.mock("#/server/pathways-read", stubModule);

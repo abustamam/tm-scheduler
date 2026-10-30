@@ -229,12 +229,20 @@ panels `xl` (14px). A nested element's radius is its parent's radius minus the g
 - **Easing:** enter `cubic-bezier(0.2, 0, 0, 1)` (ease-out), exit `cubic-bezier(0.4, 0, 1, 1)`
   (ease-in), move ease-in-out.
 - **Duration:** micro 120ms (hover, press, focus), short 200ms (state change, menu open),
-  medium 300ms (sheet and dialog enter). Nothing longer in the app.
+  medium 300ms (sheet and dialog enter). Nothing longer in the app, except the milestone moment below.
 - **Reduced motion:** a `prefers-reduced-motion: reduce` block in `src/styles.css` drops
   transitions and animations to near zero.
 - **The one authored moment:** the claim. The tapped cell fills from amber outline to solid
   green in 200ms with a check, and the column's "N open" count ticks down, applied optimistically
   and rolled back on error.
+- **The second authored moment: milestones** (#1425). Three triggers, nothing else earns one:
+  a member's first delivered speech, their 10th meeting attended, and claiming the last open
+  role of a meeting. The first two are one celebration card at the top of the dashboard (the
+  check icon scales 0.6 to 1 while a ring of eight palm, warning and lagoon dots moves outward
+  and fades); the third is the claim toast reading "That's every role filled for <date>. Thank you." The
+  card's animation is **600ms**, ease-out, once, an explicit exception to "nothing longer than
+  300ms"; it is dropped to near zero under `prefers-reduced-motion`. Seen-state is
+  device-local.
 
 ## Decisions Log
 
@@ -247,3 +255,4 @@ panels `xl` (14px). A nested element's radius is its parent's radius minus the g
 | 2026-10-24 | Optimistic claim fill (R3) | Makes one tap feel like one tap; the write-error toast already handles rollback |
 | 2026-10-24 | Fraunces kept as display despite being a common choice | It is the shipped identity; constrained to upright 600 page titles |
 | 2026-10-24 | Background cut to one lagoon wash (R4) | The palm halo, bottom wash, `body::before` highlight and `body::after` grid overlay sat behind every Operate screen; the top-left wash alone keeps the identity |
+| 2026-10-29 | The second authored moment: milestones (600ms exception) | Toastmasters is about growth; first speech, 10th meeting and the last open role filled each get one beat of recognition, approved by the maintainer |
