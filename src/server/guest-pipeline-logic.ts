@@ -120,6 +120,7 @@ import {
 	noKeyUpdate,
 } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
+import { closeCoverRequest } from "./cover-close";
 import {
 	assertClubNotArchived,
 	assertStillClubAdmin,
@@ -3120,6 +3121,11 @@ export async function applyUnlinkGuestFromMember(
 				.update(roleSlots)
 				.set({ assignedMemberId: null, assignedGuestId: input.guestId })
 				.where(inArray(roleSlots.id, slotIds));
+			// The guest holds these slots again: an open cover request on one is covered
+			// by that guest, as every other fill closes it (#1438).
+			for (const slotId of slotIds) {
+				await closeCoverRequest(tx, slotId, { guestId: input.guestId });
+			}
 		}
 
 		await tx

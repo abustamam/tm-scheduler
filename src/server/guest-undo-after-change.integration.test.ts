@@ -1969,6 +1969,8 @@ describe.skipIf(!hasTestDb)(
 			"mentorship_requests.decided_by_member_id",
 			"mentorships.created_by_member_id",
 			"project_completion_marks.marked_by_member_id",
+			"slot_cover_requests.covered_by_member_id",
+			"slot_cover_requests.released_by_member_id",
 		];
 
 		async function liveKeys() {

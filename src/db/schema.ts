@@ -2101,6 +2101,74 @@ export const roleSlots = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Cover requests (#1438) — the durable record of "who left this slot, when,
+// whether they are finding cover, and who covered it". `releaseSlotCore` nulls
+// the assignee and `claimedAt`, so without this row a dropped role is a silent
+// blank and only `activity_log` (not indexed by slot) remembers who left.
+//
+// The slot itself goes back to `open` (maintainer decision 2026-10-30), so the
+// fill-blank claim works unchanged and nobody takes a role someone else holds.
+// `covered_at IS NULL` is "still open"; the partial unique index allows exactly
+// one open request per slot, and a later release of the same slot inserts a new
+// row once the previous one is covered.
+//
+// `prior_*` (eng review D4) hold what the release wiped, so Undo can put the
+// slot back exactly as it was: the status, `claimed_at` and the speech link.
+// ---------------------------------------------------------------------------
+
+export const coverRequestKindEnum = pgEnum("cover_request_kind", [
+	"finding_cover",
+	"dropped",
+]);
+
+export const slotCoverRequests = pgTable(
+	"slot_cover_requests",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		meetingId: uuid("meeting_id")
+			.notNull()
+			.references(() => meetings.id, { onDelete: "cascade" }),
+		slotId: uuid("slot_id")
+			.notNull()
+			.references(() => roleSlots.id, { onDelete: "cascade" }),
+		releasedByMemberId: uuid("released_by_member_id").references(
+			() => members.id,
+			{
+				onDelete: "set null",
+			},
+		),
+		kind: coverRequestKindEnum("kind").notNull(),
+		releasedAt: timestamp("released_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		coveredByMemberId: uuid("covered_by_member_id").references(
+			() => members.id,
+			{
+				onDelete: "set null",
+			},
+		),
+		coveredGuestId: uuid("covered_guest_id").references(() => guests.id, {
+			onDelete: "set null",
+		}),
+		coveredAt: timestamp("covered_at", { withTimezone: true }),
+		priorStatus: slotStatusEnum("prior_status").notNull(),
+		priorClaimedAt: timestamp("prior_claimed_at"),
+		priorSpeechId: uuid("prior_speech_id").references(() => speeches.id, {
+			onDelete: "set null",
+		}),
+	},
+	(t) => [
+		uniqueIndex("slot_cover_requests_open_uq")
+			.on(t.slotId)
+			.where(sql`${t.coveredAt} is null`),
+		index("slot_cover_requests_meeting_idx").on(t.meetingId),
+	],
+);
+
+// ---------------------------------------------------------------------------
 // Meeting templates — a named bundle of a role set plus a run-of-show, for a
 // meeting whose SHAPE differs from the club's standard night (a speech
 // contest). `meetings.template_id` NULL is the standard meeting and runs the

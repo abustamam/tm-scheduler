@@ -1362,6 +1362,10 @@ describe.skipIf(!hasTestDb)("remove a member on a past agenda (#1189)", () => {
 const CONSIDERED_NOT_BLOCKING: Record<string, string> = {
 	"activity_log.actor_member_id": "audit trail, not on an agenda",
 	"guest_invites.invited_by_member_id": "invite provenance, not on an agenda",
+	"slot_cover_requests.released_by_member_id":
+		"cover handoff history, not printed on an agenda",
+	"slot_cover_requests.covered_by_member_id":
+		"cover handoff history, not printed on an agenda",
 	"guests.converted_membership_id":
 		"the guest's own record points at who they became, not on an agenda",
 	"guests.introduced_by_member_id":

@@ -35,6 +35,7 @@ import {
 } from "#/db/schema";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { logActivity } from "./activity";
+import { closeCoverRequest } from "./cover-close";
 import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
 import { lockMemberForAssignment, markComingOnSelfClaim } from "./slots-logic";
@@ -398,6 +399,8 @@ export async function attachSpeechToOpenSlot(
 	if (updated.length === 0) {
 		throw new Error("That speaker slot was just claimed by someone else.");
 	}
+
+	await closeCoverRequest(conn, args.slotId, { memberId: membership.id });
 
 	// Same self-only rule as claimSlot/reassignSlotCore (#212): scheduling a
 	// speech into an open slot for YOURSELF (actor === the speech owner's

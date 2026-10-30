@@ -401,6 +401,17 @@ the nouns in `src/db/schema.ts`.
   ADR-0005. A slot is `open`, `claimed`, or `confirmed`.
 - **Claim / release** — a member takes (`claimSlot`) or gives up (`releaseSlot`) a slot.
   Claiming a speaker slot captures a **Speech** (or leaves it TBA to attach later).
+- **Cover request** — a member-driven handoff of their OWN role (`slot_cover_requests`, #1438).
+  The member releases the role (`releaseOwnSlotForCover`, refused for anyone but the holder) and
+  the slot goes back to `open`, so the ordinary fill-blank claim works unchanged and nobody takes
+  a role someone else holds. The row records who left, when, whether they are finding cover
+  (`finding_cover`) or the role was simply dropped (`dropped`, also written by a late "Can't make
+  it" under 48h away), who covered it, and what the release wiped (`prior_*`, so Undo restores it
+  exactly). **The app suggests and drafts; the member sends** (ADR-0028): it offers up to five
+  names, never their contact, and writes the message, and the member shares it from their own
+  phone. `finding_cover` turns into `dropped` at 06:00 club-local on the meeting day, derived and
+  never written. Every writer that fills an open slot closes the request
+  (`closeCoverRequest`). A roll Absent release does not create one.
 - **Speech** — a prepared speech a **Person** owns (`speeches`): title, optional introduction,
   Pathways path/project/level, and min/max minutes. Durable and independent of the schedule —
   a speaker slot *references* one via nullable `role_slots.speech_id` rather than embedding it,
@@ -1118,7 +1129,8 @@ four times, so four in-place fixes would have left the fifth arm to inherit it.
 detail capture, `/me` commitments with release, admin meeting creation with slot generation,
 seed data.
 
-**Out of scope (schema must not block, but build no logic):** swap matching, role-rotation
+**Out of scope (schema must not block, but build no logic):** swapping one held role for
+another (a **cover request** hands a role off; it is not a swap), role-rotation
 fairness, Pathways progress dashboards, calendar export. These are the later phases.
 
 **Reminders were built and then removed.** Role-reminder emails (#271 / #272 / #274) were taken

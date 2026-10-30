@@ -1,7 +1,14 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { db } from "#/db";
-import { meetings, roleDefinitions, roleSlots, speeches } from "#/db/schema";
+import {
+	meetings,
+	roleDefinitions,
+	roleSlots,
+	slotCoverRequests,
+	speeches,
+} from "#/db/schema";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
+import { isLateDrop } from "#/lib/cover";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { NO_PERMISSION_MESSAGE } from "#/lib/permission-message";
 import {
@@ -28,6 +35,7 @@ import {
 	SELF_SERVICE_RUNGS,
 	setPlanStatus,
 } from "./attendance-plan-logic";
+import { openCoverRequestOf } from "./cover-close";
 import { assertClubNotArchived } from "./guards";
 import type { TokenClub } from "./mcp/authz-logic";
 import { meetingAcceptsWrite } from "./meeting-write-gate";
@@ -61,6 +69,21 @@ export type ReleasedSlot = {
 /** What both release writers share, read BEFORE their UPDATE: every slot in the
  *  meeting, so labels are numbered off the whole meeting, and the member's own. */
 async function readHeldSlots(tx: Tx, meetingId: string, memberId: string) {
+	// Lock the member's own slots FIRST: the `prior_*` snapshot below is what a
+	// late drop's Undo restores, so it must be read after any writer that holds
+	// one of them has committed (READ COMMITTED: the read after the wait sees it).
+	// Ordered, so two releasers cannot lock the same rows in opposite orders.
+	await tx
+		.select({ id: roleSlots.id })
+		.from(roleSlots)
+		.where(
+			and(
+				eq(roleSlots.meetingId, meetingId),
+				eq(roleSlots.assignedMemberId, memberId),
+			),
+		)
+		.orderBy(roleSlots.id)
+		.for("update");
 	const all = await tx
 		.select({
 			id: roleSlots.id,
@@ -70,6 +93,11 @@ async function readHeldSlots(tx: Tx, meetingId: string, memberId: string) {
 			sortOrder: roleDefinitions.sortOrder,
 			slotsUnordered: roleDefinitions.slotsUnordered,
 			speechTitle: speeches.title,
+			// What a release wipes, kept for a late drop's cover request so an Undo
+			// can put the slot back exactly as it was (#1438, D4).
+			status: roleSlots.status,
+			claimedAt: roleSlots.claimedAt,
+			speechId: roleSlots.speechId,
 		})
 		.from(roleSlots)
 		.innerJoin(
@@ -158,6 +186,49 @@ async function reportFreed(
 }
 
 /**
+ * A decline that frees roles close to the meeting leaves one `dropped` cover
+ * request per freed slot (#1438, D2), so the role is not just a silent blank.
+ * In the release's own transaction. `released_by_member_id` is the member who
+ * declined. Roll Absent releases (`releaseHeldSlotsForRecord`) never call this.
+ *
+ * A stale open request on the slot (the slot was held, so it should have none)
+ * is replaced rather than colliding with the partial unique index.
+ */
+async function recordLateDrops(
+	tx: Tx,
+	read: HeldRead,
+	released: { id: string }[],
+	args: ReleaseContext,
+): Promise<void> {
+	if (released.length === 0) return;
+	const [meeting] = await tx
+		.select({ scheduledAt: meetings.scheduledAt })
+		.from(meetings)
+		.where(eq(meetings.id, args.meetingId))
+		.limit(1);
+	if (!meeting || !isLateDrop(meeting.scheduledAt, new Date())) return;
+	const slotIds = released.map((r) => r.id);
+	await tx.delete(slotCoverRequests).where(openCoverRequestOf(slotIds));
+	await tx.insert(slotCoverRequests).values(
+		released.map((r) => {
+			const was = read.before.get(r.id);
+			return {
+				clubId: args.clubId,
+				meetingId: args.meetingId,
+				slotId: r.id,
+				releasedByMemberId: args.memberId,
+				kind: "dropped" as const,
+				// A slot assigned in the gap between the read and the UPDATE has no
+				// `before` row; it was held, so it was at least claimed.
+				priorStatus: was?.status ?? ("claimed" as const),
+				priorClaimedAt: was?.claimedAt ?? null,
+				priorSpeechId: was?.speechId ?? null,
+			};
+		}),
+	);
+}
+
+/**
  * Free every slot `memberId` holds in `meetingId`, under the PLAN write class,
  * inside the CALLER's transaction. Not coming's release (#1135).
  *
@@ -191,7 +262,9 @@ export async function releaseHeldSlotsForPlan(
 			),
 		)
 		.returning({ id: roleSlots.id });
-	return reportFreed(tx, read, released, args);
+	const freed = await reportFreed(tx, read, released, args);
+	await recordLateDrops(tx, read, released, args);
+	return freed;
 }
 
 /**

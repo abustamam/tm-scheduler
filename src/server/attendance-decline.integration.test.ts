@@ -52,6 +52,7 @@ import {
 	members,
 	roleDefinitions,
 	roleSlots,
+	slotCoverRequests,
 	speeches,
 	user,
 } from "#/db/schema";
@@ -1041,6 +1042,201 @@ describe.skipIf(!hasTestDb)("declinePlannedAttendance (#663)", () => {
 					releaseHeldRoles: true,
 				}),
 			).rejects.toThrow(CLUB_ARCHIVED_MESSAGE);
+		});
+	});
+
+	describe("late drops leave a cover request (#1438, D2)", () => {
+		async function coverRows() {
+			return testDb
+				.select({
+					slotId: slotCoverRequests.slotId,
+					kind: slotCoverRequests.kind,
+					releasedByMemberId: slotCoverRequests.releasedByMemberId,
+					coveredAt: slotCoverRequests.coveredAt,
+					priorStatus: slotCoverRequests.priorStatus,
+				})
+				.from(slotCoverRequests)
+				.where(eq(slotCoverRequests.meetingId, seed.meetingId));
+		}
+
+		async function meetingStartsInHours(hours: number) {
+			await testDb
+				.update(meetings)
+				.set({ scheduledAt: new Date(Date.now() + hours * 3_600_000) })
+				.where(eq(meetings.id, seed.meetingId));
+		}
+
+		it("writes one `dropped` request per freed slot when the meeting is under 48h away", async () => {
+			// protects=a late "Can't make it" is not a silent blank: every freed slot
+			//   gets a durable `dropped` row naming who left and what the slot was
+			// fails_when=`recordLateDrops` is not called from `releaseHeldSlotsForPlan`,
+			//   writes one row for two slots, or records the wrong releaser
+			// no_claim=the cover flow after the drop (#1439-#1441)
+			await meetingStartsInHours(24);
+			await holdSeededSlot();
+			const secondSlotId = await addHeldSlot(seed, seed.memberId, "Timer 2");
+			sessionUserId = seed.memberUserId;
+
+			await declinePlannedAttendance(testDb, {
+				memberId: seed.memberId,
+				claimedActorMemberId: seed.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: true,
+			});
+
+			const rows = await coverRows();
+			expect(rows.map((r) => r.slotId).sort()).toEqual(
+				[seed.slotId, secondSlotId].sort(),
+			);
+			for (const r of rows) {
+				expect(r.kind).toBe("dropped");
+				expect(r.releasedByMemberId).toBe(seed.memberId);
+				expect(r.coveredAt).toBeNull();
+				expect(r.priorStatus).toBe("claimed");
+			}
+		});
+
+		it("credits the member who DECLINED, not the officer who did it for them", async () => {
+			// protects=`released_by_member_id` is the subject, so the story reads
+			//   "Sam dropped Timer" and not "the VPE dropped Timer"
+			// fails_when=the officer's actor id is written instead of `args.memberId`
+			// no_claim=the activity row, which does credit the officer
+			await meetingStartsInHours(24);
+			await holdSeededSlot();
+			sessionUserId = seed.adminUserId;
+
+			await declinePlannedAttendance(testDb, {
+				memberId: seed.memberId,
+				claimedActorMemberId: seed.adminMemberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: true,
+			});
+
+			const rows = await coverRows();
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.releasedByMemberId).toBe(seed.memberId);
+		});
+
+		it("replaces a stale open request on a freed slot instead of colliding with the unique index", async () => {
+			// protects=an open request left on a held slot (a fill site that missed
+			//   closing it) does not make the decline throw, and the decline's row wins
+			// fails_when=the delete before the insert in `recordLateDrops` is removed
+			// no_claim=how the stale row got there
+			await meetingStartsInHours(24);
+			await holdSeededSlot();
+			await testDb.insert(slotCoverRequests).values({
+				clubId: seed.clubId,
+				meetingId: seed.meetingId,
+				slotId: seed.slotId,
+				releasedByMemberId: seed.adminMemberId,
+				kind: "finding_cover",
+				priorStatus: "claimed",
+			});
+			sessionUserId = seed.memberUserId;
+
+			await declinePlannedAttendance(testDb, {
+				memberId: seed.memberId,
+				claimedActorMemberId: seed.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: true,
+			});
+
+			const rows = await coverRows();
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.kind).toBe("dropped");
+			expect(rows[0]?.releasedByMemberId).toBe(seed.memberId);
+		});
+
+		it("snapshots the slot AFTER a writer holding its lock commits", async () => {
+			// protects=the `prior_*` columns Undo restores are read under the slot lock:
+			//   a slot confirmed while the decline waits is recorded as confirmed
+			// fails_when=`readHeldSlots` stops locking the member's slots before it
+			//   reads them (the snapshot then shows the pre-commit `claimed`)
+			// no_claim=what Undo does with it (cover-logic.integration.test.ts)
+			await meetingStartsInHours(24);
+			await holdSeededSlot();
+			sessionUserId = seed.memberUserId;
+
+			let release!: () => void;
+			const gate = new Promise<void>((r) => {
+				release = r;
+			});
+			let locked!: () => void;
+			const held = new Promise<void>((r) => {
+				locked = r;
+			});
+			const writer = testDb.transaction(async (tx) => {
+				await tx
+					.update(roleSlots)
+					.set({ status: "confirmed" })
+					.where(eq(roleSlots.id, seed.slotId));
+				locked();
+				await gate;
+			});
+			await held;
+			const decline = declinePlannedAttendance(testDb, {
+				memberId: seed.memberId,
+				claimedActorMemberId: seed.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: true,
+			});
+			// Long enough for the decline to reach its snapshot read and block (with
+			// the fix) or pass it with the stale value (without).
+			await new Promise((r) => setTimeout(r, 500));
+			release();
+			await Promise.all([writer, decline]);
+
+			const rows = await coverRows();
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.priorStatus).toBe("confirmed");
+		});
+
+		it("writes none when the meeting is more than 48h away", async () => {
+			// protects=an early decline is not a cover request: there is time to
+			//   fill the role the ordinary way
+			// fails_when=the `isLateDrop` gate is removed
+			// no_claim=the release itself, which still happens
+			await meetingStartsInHours(72);
+			await holdSeededSlot();
+			sessionUserId = seed.memberUserId;
+
+			const { released } = await declinePlannedAttendance(testDb, {
+				memberId: seed.memberId,
+				claimedActorMemberId: seed.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+				releaseHeldRoles: true,
+			});
+
+			expect(released).toBe(1);
+			expect(await coverRows()).toHaveLength(0);
+		});
+
+		it("writes none, and frees nothing, for a signed-out caller", async () => {
+			// protects=the signed-out path cannot mint a cover request: since #762 a
+			//   session-less decline is refused before anything is freed
+			// fails_when=the proof gate is relaxed and the write runs without a session
+			// no_claim=that a signed-out member can decline at all
+			await meetingStartsInHours(24);
+			await holdSeededSlot();
+			sessionUserId = null;
+
+			await expect(
+				declinePlannedAttendance(testDb, {
+					memberId: seed.memberId,
+					claimedActorMemberId: seed.memberId,
+					meetingId: seed.meetingId,
+					clubId: seed.clubId,
+					releaseHeldRoles: true,
+				}),
+			).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+
+			expect(await coverRows()).toHaveLength(0);
+			expect((await seededSlot())?.assignedMemberId).toBe(seed.memberId);
 		});
 	});
 });

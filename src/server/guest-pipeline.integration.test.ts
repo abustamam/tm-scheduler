@@ -24,6 +24,7 @@ import {
 	officerTerms,
 	people,
 	roleSlots,
+	slotCoverRequests,
 	speeches,
 	speechRequests,
 	tableTopicsSpeakers,
@@ -3774,6 +3775,51 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				.where(eq(guests.id, guestId));
 			expect(g?.stage).toBe("following_up");
 			expect(g?.converted).toBeNull();
+		});
+
+		it("unlink closes an open cover request on a slot it hands back to the guest (#1438)", async () => {
+			// protects=every fill of a slot closes its cover request: unlink refills
+			//   the recorded slots, so a request left open on one is covered by the guest
+			// fails_when=`closeCoverRequest` is removed from the unlink's refill
+			// no_claim=how a request came to be open on a held slot
+			const guestId = await seedGuest(seed.clubId, "Cover Guest");
+			const memberId = await memberRow("Cover Guest");
+			const past = await seedPastMeeting(seed.clubId);
+			const guestSlot = await seedGuestRoleSlot(
+				past,
+				seed.roleDefinitionId,
+				guestId,
+			);
+			await applyLinkGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				memberId,
+				actorMemberId: seed.adminMemberId,
+			});
+			await testDb.insert(slotCoverRequests).values({
+				clubId: seed.clubId,
+				meetingId: past,
+				slotId: guestSlot,
+				releasedByMemberId: seed.adminMemberId,
+				kind: "dropped",
+				priorStatus: "claimed",
+			});
+
+			await applyUnlinkGuestFromMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			const [req] = await testDb
+				.select({
+					coveredGuestId: slotCoverRequests.coveredGuestId,
+					coveredAt: slotCoverRequests.coveredAt,
+				})
+				.from(slotCoverRequests)
+				.where(eq(slotCoverRequests.slotId, guestSlot));
+			expect(req?.coveredGuestId).toBe(guestId);
+			expect(req?.coveredAt).not.toBeNull();
 		});
 
 		it("refuses a member from another club", async () => {
