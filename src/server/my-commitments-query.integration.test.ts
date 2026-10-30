@@ -170,4 +170,28 @@ describe.skipIf(!hasTestDb)("loadMyCommitments query shape", () => {
 			await cleanup(clubId, [adminUserId, userId]);
 		}
 	});
+
+	it("carries the club slug and the meeting id the cover link is built from (#1439)", async () => {
+		// protects=/me's cover sheet link: `clubSlug` is the club's real slug and
+		//   `meetingId` is on every row, from the SAME single statement
+		// fails_when=clubSlug is dropped from the select, or comes from another
+		//   club, or the query grows a second statement to fetch it
+		const { userId, clubId, adminUserId } = await seedMemberWithCommitments({
+			count: 2,
+		});
+		try {
+			const statements = await statementsDuring(() =>
+				loadMyCommitments(userId),
+			);
+			expect(readsOf(statements, "role_slots")).toHaveLength(1);
+			const rows = await loadMyCommitments(userId);
+			expect(rows).toHaveLength(2);
+			for (const r of rows) {
+				expect(r.clubSlug).toBe(`test-club-${clubId}`);
+				expect(r.meetingId).toEqual(expect.any(String));
+			}
+		} finally {
+			await cleanup(clubId, [adminUserId, userId]);
+		}
+	});
 });

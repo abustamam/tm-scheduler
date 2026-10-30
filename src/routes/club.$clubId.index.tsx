@@ -4,6 +4,7 @@ import { CalendarDays, Loader2, MailCheck, Mic, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { ClubHomeHeader } from "#/components/club/club-home-header";
+import { CoverSheet, type CoverSlot } from "#/components/club/cover-sheet";
 import { GuestOnboarding } from "#/components/club/guest-onboarding";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { SeasonGrid } from "#/components/club/season-grid";
@@ -18,6 +19,10 @@ import { Label } from "#/components/ui/label";
 import { WhatsNewBanner } from "#/components/whats-new-banner";
 import { showWriteError } from "#/components/write-error-toast";
 import { authClient } from "#/lib/auth-client";
+import {
+	coverSlotFromCommitment,
+	opensCoverSheet,
+} from "#/lib/cover-sheet-logic";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { type StoredMember, useEffectiveMember } from "#/lib/member-identity";
 import { clubOgImage, OG_IMAGE_SIZE_META } from "#/lib/og-image-url";
@@ -97,6 +102,8 @@ function ClubHome() {
 	const router = useRouter();
 	const navigate = Route.useNavigate();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
+	// A late own release waits here for the cover sheet (#1439).
+	const [coverSlots, setCoverSlots] = useState<CoverSlot[]>([]);
 
 	const commitments = useQuery({
 		queryKey: ["commitments", member?.id],
@@ -114,6 +121,14 @@ function ClubHome() {
 
 	async function doRelease(slotId: string) {
 		if (!member) return;
+		// Only your own commitments render a Release, so every row is an own role.
+		const c = commitments.data?.find((x) => x.slotId === slotId);
+		if (c && opensCoverSheet({ isOwnRole: true, scheduledAt: c.scheduledAt })) {
+			setCoverSlots([
+				coverSlotFromCommitment(c, { clubSlug: clubId, urlKey: c.urlKey }),
+			]);
+			return;
+		}
 		setBusySlotId(slotId);
 		try {
 			// No actor on the wire (#763): the server reads the session.
@@ -297,6 +312,11 @@ function ClubHome() {
 					</p>
 				)}
 			</section>
+			<CoverSheet
+				slots={coverSlots}
+				onClose={() => setCoverSlots([])}
+				onChanged={refetchAll}
+			/>
 		</div>
 	);
 }

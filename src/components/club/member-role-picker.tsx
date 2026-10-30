@@ -8,6 +8,7 @@ import {
 	PopoverTrigger,
 } from "#/components/ui/popover";
 import { showWriteError } from "#/components/write-error-toast";
+import { opensCoverSheet } from "#/lib/cover-sheet-logic";
 import {
 	meetingRoleOptions,
 	type RoleOption,
@@ -39,6 +40,8 @@ export function MemberRolePicker({
 	onMarkUnavailable,
 	onMarkAvailable,
 	onChanged,
+	scheduledAt,
+	onOwnLateRelease,
 	children,
 }: {
 	data: SeasonGridData;
@@ -69,6 +72,11 @@ export function MemberRolePicker({
 	onMarkUnavailable: () => void;
 	onMarkAvailable: () => void;
 	onChanged: () => void | Promise<void>;
+	/** The meeting's start, for the 48h gate on an own release (#1439). */
+	scheduledAt?: string | Date;
+	/** Where your OWN release inside 48h goes instead of releasing at once:
+	 *  the host opens the cover sheet for this slot. Absent: immediate. */
+	onOwnLateRelease?: (slotId: string) => void;
 	children: React.ReactNode;
 }) {
 	const router = useRouter();
@@ -94,6 +102,16 @@ export function MemberRolePicker({
 
 	async function act(o: RoleOption) {
 		const action = slotAction(o.state);
+		if (
+			action === "release" &&
+			onOwnLateRelease &&
+			scheduledAt !== undefined &&
+			opensCoverSheet({ isOwnRole: isOwnRow, scheduledAt })
+		) {
+			setOpen(false);
+			onOwnLateRelease(o.slotId);
+			return;
+		}
 		setBusy(o.slotId);
 		try {
 			if (action === "release") {

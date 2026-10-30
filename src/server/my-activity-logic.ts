@@ -283,6 +283,9 @@ export async function loadMyCommitments(userId: string) {
 				theme: meetings.theme,
 				location: meetings.location,
 				clubName: clubs.name,
+				// The cover sheet's link (#1439) is built from the slug; a column of a
+				// table this statement already joins, so it stays ONE statement.
+				clubSlug: clubs.slug,
 				timezone: clubs.timezone,
 				roleName: roleDefinitions.name,
 				isSpeakerRole: roleDefinitions.isSpeakerRole,
