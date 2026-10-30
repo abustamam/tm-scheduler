@@ -14,6 +14,7 @@ import { type ChangeEvent, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { CONTACT_METHOD_ICONS } from "#/components/contact-method-icon";
+import { RosterSkeleton } from "#/components/members/roster-skeleton";
 import { PageContainer } from "#/components/page-container";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
@@ -154,6 +155,8 @@ export const Route = createFileRoute("/_authed/roster")({
 			now: Date.now(),
 		};
 	},
+	pendingMs: 150,
+	pendingComponent: RosterSkeleton,
 	component: Roster,
 	head: ({ match }) => ({
 		meta: [{ title: navPageTitle("/roster", match.context) }],
