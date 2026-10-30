@@ -16,6 +16,7 @@ import {
 } from "#/lib/area-limits";
 import { CLUB_NUMBER_MAX, CLUB_NUMBER_PATTERN } from "#/lib/club-charter";
 import { programYearLabel } from "#/lib/dcp";
+import { workspaceTitle } from "#/lib/page-title";
 import {
 	addAreaClub,
 	assignAreaDirector,
@@ -32,6 +33,9 @@ import type { ConsoleAreaDetail } from "#/server/areas-logic";
 export const Route = createFileRoute("/_authed/superadmin/areas/$areaId")({
 	loader: ({ params }) => getConsoleArea({ data: { areaId: params.areaId } }),
 	component: AreaDetail,
+	head: ({ match }) => ({
+		meta: [{ title: workspaceTitle("Area", match.context) }],
+	}),
 });
 
 // Pinned to UTC (#1017). With no zone this printed the RUNTIME's day, so the

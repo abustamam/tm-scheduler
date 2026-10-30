@@ -34,6 +34,7 @@ import {
 } from "#/lib/dues";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatShortDate } from "#/lib/format";
+import { navPageTitle } from "#/lib/page-title";
 import { cn } from "#/lib/utils";
 import { loadClubTimezoneSettings } from "#/server/clubs";
 import {
@@ -84,6 +85,9 @@ export const Route = createFileRoute("/_authed/admin/dues")({
 		return { clubId: club.clubId, ...overview, initial, timezone };
 	},
 	component: DuesTracker,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/admin/dues", match.context) }],
+	}),
 });
 
 /**

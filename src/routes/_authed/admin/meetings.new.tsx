@@ -9,6 +9,7 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { navDestination } from "#/lib/nav-destinations";
+import { navPageTitle } from "#/lib/page-title";
 import { getMeetingFormDefaults } from "#/server/batch-meetings";
 import { createMeeting } from "#/server/meetings";
 
@@ -23,6 +24,9 @@ export const Route = createFileRoute("/_authed/admin/meetings/new")({
 	loader: ({ context }) =>
 		getMeetingFormDefaults({ data: context.adminClub.clubId }),
 	component: NewMeeting,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/admin/meetings/new", match.context) }],
+	}),
 });
 
 function NewMeeting() {

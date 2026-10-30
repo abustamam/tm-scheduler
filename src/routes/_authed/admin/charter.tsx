@@ -2,6 +2,7 @@ import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { CharterDashboard } from "#/components/club/charter-dashboard";
 import { PageContainer } from "#/components/page-container";
 import { effectiveAdminClub } from "#/lib/effective-admin";
+import { navPageTitle } from "#/lib/page-title";
 import { getCharterDashboard } from "#/server/charter";
 
 // The charter dashboard (#943). Admin-only, like every `/admin/*` page; the
@@ -21,6 +22,9 @@ export const Route = createFileRoute("/_authed/admin/charter")({
 		return { clubId: context.charterClubId, dashboard };
 	},
 	component: CharterPage,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/admin/charter", match.context) }],
+	}),
 });
 
 function CharterPage() {

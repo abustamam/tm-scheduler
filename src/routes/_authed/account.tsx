@@ -5,6 +5,7 @@ import { PageContainer } from "#/components/page-container";
 import { PreferredContactSection } from "#/components/preferred-contact-section";
 import { SignInEmailSection } from "#/components/sign-in-email-section";
 import { navLabel } from "#/lib/nav-destinations";
+import { navPageTitle } from "#/lib/page-title";
 
 /**
  * Account settings (#912): the controls that belong to the signed-in PERSON
@@ -24,6 +25,9 @@ export const Route = createFileRoute("/_authed/account")({
 			? { emailChange: search.emailChange }
 			: {},
 	component: AccountSettings,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/account", match.context) }],
+	}),
 });
 
 function AccountSettings() {

@@ -13,6 +13,7 @@ import {
 } from "#/components/ui/dropdown-menu";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatMeetingDate } from "#/lib/format";
+import { navPageTitle } from "#/lib/page-title";
 import {
 	DEFAULT_PAST_COUNT,
 	type Orientation,
@@ -71,6 +72,9 @@ export const Route = createFileRoute("/_authed/schedule")({
 		return { data, cancelled };
 	},
 	component: SeasonGridPage,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/schedule", match.context) }],
+	}),
 });
 
 /** `past` as a search fragment. A value the viewer picked is ALWAYS written,

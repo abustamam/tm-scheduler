@@ -1,4 +1,5 @@
 import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
+import { workspaceTitle } from "#/lib/page-title";
 import { getMeeting } from "#/server/meetings";
 
 /**
@@ -18,4 +19,7 @@ export const Route = createFileRoute("/_authed/meetings/$id")({
 			params: { clubId: data.clubSlug, meetingId: data.urlKey },
 		});
 	},
+	head: ({ match }) => ({
+		meta: [{ title: workspaceTitle("Meeting", match.context) }],
+	}),
 });

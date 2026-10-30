@@ -13,12 +13,14 @@
 // so the two URLs can never name different meetings. This route either
 // redirects to that meeting's canonical `/club/$clubId/meeting/$meetingId` page
 // or, when nothing is scheduled, renders the empty state.
+
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { CalendarPlus, Grid3x3 } from "lucide-react";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { effectiveAdminClubFor } from "#/lib/effective-admin";
 import { isInRoom, validateMeetingRoomSearch } from "#/lib/meeting-hub";
+import { nextMeetingTitle } from "#/lib/page-title";
 import { getPublicNextMeetingKey } from "#/server/meetings";
 
 export const Route = createFileRoute("/club/$clubId/next")({
@@ -52,6 +54,9 @@ export const Route = createFileRoute("/club/$clubId/next")({
 		return { canSchedule };
 	},
 	component: NoUpcomingMeeting,
+	head: ({ match }) => ({
+		meta: [{ title: nextMeetingTitle(match.context.clubName) }],
+	}),
 });
 
 function NoUpcomingMeeting() {

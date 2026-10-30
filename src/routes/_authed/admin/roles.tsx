@@ -16,6 +16,7 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { pairedRoleIds } from "#/lib/meeting-roles";
+import { navPageTitle } from "#/lib/page-title";
 import { ROLE_GUIDE_NOTES_MAX } from "#/lib/role-guide";
 import {
 	createClubRole,
@@ -41,6 +42,9 @@ export const Route = createFileRoute("/_authed/admin/roles")({
 		return { roles };
 	},
 	component: RolesManager,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/admin/roles", match.context) }],
+	}),
 });
 
 const CATEGORIES = [

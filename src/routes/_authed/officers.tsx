@@ -13,6 +13,7 @@ import {
 	type OfficerTask,
 	officerTaskTitle,
 } from "#/lib/officer-tasks";
+import { navPageTitle } from "#/lib/page-title";
 import { firstNameOf } from "#/lib/person-name";
 import { getCharterSummary } from "#/server/charter";
 import type { CharterSummary } from "#/server/charter-logic";
@@ -47,6 +48,9 @@ export const Route = createFileRoute("/_authed/officers")({
 		return { checklist, charter };
 	},
 	component: OfficerHome,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/officers", match.context) }],
+	}),
 });
 
 function OfficerHome() {

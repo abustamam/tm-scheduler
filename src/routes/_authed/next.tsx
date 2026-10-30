@@ -1,4 +1,5 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
+import { navPageTitle } from "#/lib/page-title";
 import { getPublicNextMeetingKey } from "#/server/meetings";
 
 /**
@@ -27,4 +28,7 @@ export const Route = createFileRoute("/_authed/next")({
 			params: { clubId: r.clubSlug },
 		});
 	},
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/next", match.context) }],
+	}),
 });

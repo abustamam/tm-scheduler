@@ -8,6 +8,7 @@ import { Button } from "#/components/ui/button";
 import { Label } from "#/components/ui/label";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { navDestination } from "#/lib/nav-destinations";
+import { workspaceTitle } from "#/lib/page-title";
 import { ingestPathwaysProgress } from "#/server/pathways-sync";
 import type { SyncResult } from "#/server/pathways-sync-logic";
 
@@ -20,6 +21,13 @@ export const Route = createFileRoute("/_authed/admin/pathways-sync")({
 		return { adminClub };
 	},
 	component: PathwaysSync,
+	head: ({ match }) => ({
+		meta: [
+			{
+				title: workspaceTitle("Sync Pathways progress", match.context),
+			},
+		],
+	}),
 });
 
 const textareaClass =

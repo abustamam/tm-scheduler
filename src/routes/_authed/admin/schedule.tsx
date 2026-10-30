@@ -13,6 +13,7 @@ import {
 	WEEKDAY_LABELS,
 	type Weekday,
 } from "#/lib/meeting-recurrence";
+import { navPageTitle } from "#/lib/page-title";
 import {
 	getClubRecurrenceRule,
 	saveClubRecurrenceRule,
@@ -33,6 +34,9 @@ export const Route = createFileRoute("/_authed/admin/schedule")({
 		return { rule };
 	},
 	component: RecurringSchedule,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/admin/schedule", match.context) }],
+	}),
 });
 
 const selectClass =

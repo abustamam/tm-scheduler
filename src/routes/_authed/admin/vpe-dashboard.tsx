@@ -37,6 +37,7 @@ import {
 	type OrientationRosterRow,
 	orientationDayLabel,
 } from "#/lib/orientation-roster";
+import { navPageTitle } from "#/lib/page-title";
 import { cn } from "#/lib/utils";
 import {
 	getAttendanceLapse,
@@ -126,6 +127,13 @@ export const Route = createFileRoute("/_authed/admin/vpe-dashboard")({
 		};
 	},
 	component: VpeDashboard,
+	head: ({ match }) => ({
+		meta: [
+			{
+				title: navPageTitle("/admin/vpe-dashboard", match.context),
+			},
+		],
+	}),
 });
 
 /** "Presentation Mastery · Ice Breaker · Level 1", skipping missing pieces. */

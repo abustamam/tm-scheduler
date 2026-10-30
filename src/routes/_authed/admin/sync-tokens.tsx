@@ -11,6 +11,7 @@ import { Label } from "#/components/ui/label";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { APP_LOCALE } from "#/lib/format";
 import { navDestination } from "#/lib/nav-destinations";
+import { navPageTitle } from "#/lib/page-title";
 import { loadClubTimezoneSettings } from "#/server/clubs";
 import {
 	generateSyncToken,
@@ -29,6 +30,9 @@ export const Route = createFileRoute("/_authed/admin/sync-tokens")({
 	loader: ({ context }) =>
 		loadClubTimezoneSettings({ data: context.adminClub.clubId }),
 	component: SyncTokens,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/admin/sync-tokens", match.context) }],
+	}),
 });
 
 function SyncTokens() {

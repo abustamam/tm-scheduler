@@ -7,6 +7,7 @@ import {
 	CardTitle,
 } from "#/components/ui/card";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
+import { publicTitle } from "#/lib/page-title";
 
 // Public, static. Every role-reminder email GavelUp ever sent (#274) linked here
 // with a signed `?token=`. Reminder emails are gone (ADR-0028, #902: a human
@@ -14,6 +15,9 @@ import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 // changes nothing — it only keeps those old links from 404ing.
 export const Route = createFileRoute("/unsubscribe")({
 	component: Unsubscribe,
+	head: () => ({
+		meta: [{ title: publicTitle("Unsubscribe") }],
+	}),
 });
 
 function Unsubscribe() {

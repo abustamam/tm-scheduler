@@ -32,6 +32,7 @@ import {
 	trainingSuggestionNote,
 	windowPhase,
 } from "#/lib/officer-training";
+import { navPageTitle } from "#/lib/page-title";
 import { cn } from "#/lib/utils";
 import {
 	applyEducationSuggestions,
@@ -91,6 +92,9 @@ export const Route = createFileRoute("/_authed/admin/dcp")({
 		return { clubId: club.clubId, year, view, training, years };
 	},
 	component: DcpTracker,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/admin/dcp", match.context) }],
+	}),
 });
 
 function DcpTracker() {

@@ -4,6 +4,7 @@ import { PageContainer } from "#/components/page-container";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { formatArchiveDate, formatMeetingTime } from "#/lib/format";
+import { navPageTitle } from "#/lib/page-title";
 import { listPastMeetings } from "#/server/meetings";
 
 /** Rows per page. Deliberately NOT tied to the season grid's past lookback
@@ -44,6 +45,9 @@ export const Route = createFileRoute("/_authed/meetings/")({
 		};
 	},
 	component: PastMeetingsPage,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/meetings", match.context) }],
+	}),
 });
 
 function PastMeetingsPage() {

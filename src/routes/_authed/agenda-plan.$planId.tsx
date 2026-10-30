@@ -16,6 +16,7 @@
  * component are both places a vitest assertion cannot reach. This file renders
  * what it is handed; the only thing it decides is which page state to draw.
  */
+
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -23,6 +24,7 @@ import { AgendaDiffTable } from "#/components/agenda-plan/agenda-diff-table";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { formatMeetingDate } from "#/lib/format";
+import { workspaceTitle } from "#/lib/page-title";
 import {
 	type AgendaPendingView,
 	applyAgendaPendingPlan,
@@ -44,6 +46,9 @@ export const Route = createFileRoute("/_authed/agenda-plan/$planId")({
 		return { view, timezone };
 	},
 	component: AgendaPlanConfirm,
+	head: ({ match }) => ({
+		meta: [{ title: workspaceTitle("Agenda", match.context) }],
+	}),
 });
 
 const CARD = "rounded-2xl border border-border bg-surface-raised px-5 py-6";

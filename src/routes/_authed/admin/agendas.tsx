@@ -5,6 +5,7 @@ import {
 	effectiveAdminClub,
 	effectiveAdminClubFor,
 } from "#/lib/effective-admin";
+import { navPageTitle } from "#/lib/page-title";
 import { listClubAgendas } from "#/server/club-agendas";
 
 /** The one search key this route reads — see `validateSearch`. */
@@ -39,6 +40,9 @@ export const Route = createFileRoute("/_authed/admin/agendas")({
 		return { clubId: context.agendasClubId, agendas };
 	},
 	component: AgendasPage,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/admin/agendas", match.context) }],
+	}),
 });
 
 function AgendasPage() {

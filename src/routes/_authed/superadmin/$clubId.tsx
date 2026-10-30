@@ -17,6 +17,7 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { CHARTER_STATUS_LABEL, type CharterStatus } from "#/lib/club-charter";
 import { formatCalendarDay } from "#/lib/format";
+import { workspaceTitle } from "#/lib/page-title";
 import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
 import { startImpersonation } from "#/server/impersonation";
 import {
@@ -31,6 +32,11 @@ import {
 export const Route = createFileRoute("/_authed/superadmin/$clubId")({
 	loader: ({ params }) => getConsoleClubDetail({ data: params.clubId }),
 	component: ClubDetail,
+	head: ({ match, loaderData }) => ({
+		meta: [
+			{ title: workspaceTitle(loaderData?.name ?? "Club", match.context) },
+		],
+	}),
 });
 
 // Pinned to UTC (#1017). With no zone this printed the RUNTIME's day, so the

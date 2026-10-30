@@ -59,8 +59,11 @@ export const Route = createFileRoute(
 	},
 	component: PresentPage,
 	notFoundComponent: PresentNotFound,
-	head: () => ({
-		meta: [{ name: "robots", content: "noindex, nofollow" }],
+	head: ({ loaderData }) => ({
+		meta: [
+			{ title: `Present · ${loaderData?.clubName ?? "GavelUp"}` },
+			{ name: "robots", content: "noindex, nofollow" },
+		],
 	}),
 });
 

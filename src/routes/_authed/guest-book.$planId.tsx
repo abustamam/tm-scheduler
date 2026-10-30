@@ -18,6 +18,7 @@
  * renders what it is handed and sends edits back; the only thing it decides is
  * which of the six page states to draw.
  */
+
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -29,6 +30,7 @@ import type {
 	PendingEntryEdit,
 	PendingEntryField,
 } from "#/lib/guest-book-pending";
+import { workspaceTitle } from "#/lib/page-title";
 import { loadClubTimezoneSettings } from "#/server/clubs";
 import {
 	applyGuestBookPendingPlan,
@@ -51,6 +53,9 @@ export const Route = createFileRoute("/_authed/guest-book/$planId")({
 		return { view, timezone };
 	},
 	component: GuestBookConfirm,
+	head: ({ match }) => ({
+		meta: [{ title: workspaceTitle("Guest book", match.context) }],
+	}),
 });
 
 const CARD = "rounded-2xl border border-border bg-surface-raised px-5 py-6";
