@@ -315,6 +315,7 @@ function AttendanceRow({
 	evaluating,
 	personalNudgeBase,
 	rsvpUrl,
+	rsvpWeekday,
 	clubName,
 	linkIdentity,
 	canClearRung,
@@ -339,6 +340,7 @@ function AttendanceRow({
 	personalNudgeBase?: PersonalNudgeBase | null;
 	/** #1442 — see the panel's own prop of the same name. */
 	rsvpUrl?: string;
+	rsvpWeekday?: string;
 	clubName?: string;
 	/** #727 — see the panel's `canViewMemberDetail` prop. */
 	linkIdentity: boolean;
@@ -383,25 +385,29 @@ function AttendanceRow({
 	// the roles they hold. An assumed Coming has `status: "coming"` and is not
 	// still to answer.
 	const stillToAnswer = m.status === null || m.status === "reached_out";
-	const nudgeMode =
-		rsvpUrl && stillToAnswer
-			? { mode: "rsvp" as const, clubName: clubName ?? null }
-			: m.role && m.status !== "not_coming"
-				? {
-						mode: "confirm" as const,
-						roleName: m.role.roleName,
-						// Both ride the CONFIRM branch, not the shared props below. The
-						// `attendance` arm addresses a member with no role, so it has
-						// neither a duty to name nor a checklist to send anyone to —
-						// hoisting either out of this ternary is how a role-less draft
-						// grows a clause about somebody else's job.
-						duties,
-						evaluating,
-						personalUrl: personalNudgeBase
-							? personalNudgeUrl(personalNudgeBase, m.id)
-							: null,
-					}
-				: { mode: "attendance" as const };
+	const rsvpAsk = Boolean(rsvpUrl) && stillToAnswer;
+	const nudgeMode = rsvpAsk
+		? {
+				mode: "rsvp" as const,
+				clubName: clubName ?? null,
+				weekday: rsvpWeekday ?? null,
+			}
+		: m.role && m.status !== "not_coming"
+			? {
+					mode: "confirm" as const,
+					roleName: m.role.roleName,
+					// Both ride the CONFIRM branch, not the shared props below. The
+					// `attendance` arm addresses a member with no role, so it has
+					// neither a duty to name nor a checklist to send anyone to —
+					// hoisting either out of this ternary is how a role-less draft
+					// grows a clause about somebody else's job.
+					duties,
+					evaluating,
+					personalUrl: personalNudgeBase
+						? personalNudgeUrl(personalNudgeBase, m.id)
+						: null,
+				}
+			: { mode: "attendance" as const };
 
 	// An assumed Coming can sit ON TOP OF a real stored rung, and without showing
 	// it two of the four menu choices are invisible: picking "Asked" writes
@@ -594,7 +600,7 @@ function AttendanceRow({
 						email={m.email}
 						preferredContact={m.preferredContact}
 						meetingDate={meetingDate}
-						shareUrl={rsvpUrl && stillToAnswer ? rsvpUrl : shareUrl}
+						shareUrl={rsvpAsk && rsvpUrl ? rsvpUrl : shareUrl}
 						onContacted={() => onContacted(m.id)}
 					/>
 				</PanelActionLine>
@@ -963,6 +969,7 @@ export function MeetingAttendancePanel({
 	evaluatingByMemberId = NO_EVALUATING_BY_MEMBER,
 	personalNudgeBase = null,
 	rsvpUrl,
+	rsvpWeekday,
 	clubName,
 	locked,
 	phaseCompleted = false,
@@ -1037,6 +1044,8 @@ export function MeetingAttendancePanel({
 	 *  drafts "coming? tap to say" with this link instead of the agenda's.
 	 *  Absent leaves every draft as it was. */
 	rsvpUrl?: string;
+	/** Weekday the rsvp draft names, in the club's zone. */
+	rsvpWeekday?: string;
 	/** Wording of that draft only. */
 	clubName?: string;
 	locked: boolean;
@@ -1457,6 +1466,7 @@ export function MeetingAttendancePanel({
 										evaluating={evaluatingByMemberId.get(m.id)}
 										personalNudgeBase={personalNudgeBase}
 										rsvpUrl={rsvpUrl}
+										rsvpWeekday={rsvpWeekday}
 										clubName={clubName}
 										linkIdentity={canViewMemberDetail}
 										canClearRung={canClearRung}

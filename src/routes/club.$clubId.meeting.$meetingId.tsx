@@ -99,6 +99,7 @@ import {
 	meetingHeading,
 } from "#/lib/format";
 import { buildHeldRoleLabels } from "#/lib/held-role-labels";
+import { rsvpPageUrl } from "#/lib/lineup-blast";
 import { markedAbsentMemberIds } from "#/lib/marked-absent-member-ids";
 import { MINUTES_ANCHOR_ID } from "#/lib/meeting-anchors";
 import {
@@ -1141,7 +1142,12 @@ function MeetingView() {
 	// `arriving` drafts link to — those ask about the MEETING, and the public
 	// agenda is the page that answers.
 	// The one-tap RSVP page (#1442), which the still-to-answer rows draft.
-	const nudgeRsvpUrl = `${nudgeShareUrl}/rsvp`;
+	const nudgeRsvpUrl = rsvpPageUrl(nudgeShareUrl);
+	// The weekday the rsvp draft names, in the club's zone (as the blast does).
+	const nudgeWeekday = new Intl.DateTimeFormat("en-US", {
+		weekday: "long",
+		timeZone: timezone,
+	}).format(new Date(meeting.scheduledAt));
 	const nudgePersonalBase = {
 		origin: nudgeOrigin,
 		clubId,
@@ -2853,6 +2859,7 @@ function MeetingView() {
 							evaluatingByMemberId={nudgeEvaluatingByMemberId}
 							personalNudgeBase={nudgePersonalBase}
 							rsvpUrl={nudgeRsvpUrl}
+							rsvpWeekday={nudgeWeekday}
 							clubName={clubName}
 							locked={locked}
 							onWriteRung={writeRung}

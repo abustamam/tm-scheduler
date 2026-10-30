@@ -306,4 +306,50 @@ describe("rsvp page", () => {
 		await waitFor(() => expect(sheet.textContent).toBe("Toastmaster,Timer"));
 		expect(sheet.getAttribute("data-mode")).toBe("released");
 	});
+	it("a late session success does not replace a name picked after the timeout", async () => {
+		vi.mocked(authClient.useSession).mockReturnValue({
+			data: { user: { id: "user-1" } },
+			isPending: false,
+			// biome-ignore lint/suspicious/noExplicitAny: partial hook return
+		} as any);
+		let answer: (v: unknown) => void = () => {};
+		vi.mocked(getBallotSessionVoter).mockReturnValue(
+			new Promise((r) => {
+				answer = r;
+			}) as never,
+		);
+		localStorage.clear();
+		localStorage.setItem(
+			memberKey("downtown"),
+			JSON.stringify({ id: MEMBER_ID, name: "Pat Picked" }),
+		);
+		vi.mocked(getPublicPersonalMeetingView).mockResolvedValue(
+			view({ planStatus: null }),
+		);
+		await renderPage();
+		// The session never answered: the page falls back to the picked name.
+		expect(
+			await screen.findByRole(
+				"button",
+				{ name: "I'm coming" },
+				{ timeout: 4500 },
+			),
+		).toBeTruthy();
+		expect(screen.getByText("Not Ada Lovelace?")).toBeTruthy();
+
+		answer({
+			id: "99999999-9999-4999-8999-999999999999",
+			name: "Sally Session",
+		});
+		await new Promise((r) => setTimeout(r, 50));
+
+		// Signed-out chrome ("Not …?") is still there: the identity was not swapped.
+		expect(screen.getByText(/^Not .*\?$/)).toBeTruthy();
+		const memberIds = vi
+			.mocked(getPublicPersonalMeetingView)
+			.mock.calls.map(
+				(c) => (c[0] as { data: { memberId: string } }).data.memberId,
+			);
+		expect(new Set(memberIds)).toEqual(new Set([MEMBER_ID]));
+	}, 8000);
 });

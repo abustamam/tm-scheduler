@@ -5,7 +5,7 @@ import {
 } from "@tanstack/react-query";
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { BrandMark } from "#/components/brand-mark";
 import { CancelledMeetingNotice } from "#/components/club/cancelled-meeting-notice";
@@ -18,6 +18,7 @@ import { Button } from "#/components/ui/button";
 import { showWriteError } from "#/components/write-error-toast";
 import { authClient } from "#/lib/auth-client";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { rsvpPageUrl } from "#/lib/lineup-blast";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { isMeetingOver } from "#/lib/meeting-lifecycle";
 import { type StoredMember, useCurrentMember } from "#/lib/member-identity";
@@ -92,8 +93,12 @@ const SESSION_TIMEOUT_MS = 3000;
 
 /**
  * The signed-in member of this club, resolved on the CLIENT, the vote page's
- * way (`getBallotSessionVoter`): read-only, only asked once `useSession` reports
- * a user, and a failed lookup or a timeout means "no session member".
+ * way (`useSessionVoter`): read-only, only asked once `useSession` reports a
+ * user, and a failed lookup or a timeout means "no session member".
+ *
+ * The FIRST answer is final for this page view. `useSession` can drop and come
+ * back on a mounted page, and a late or retried success must not swap the
+ * identity under someone who has since picked their name.
  */
 function useSessionMember(meetingId: string): {
 	pending: boolean;
@@ -115,19 +120,36 @@ function useSessionMember(meetingId: string): {
 			return getBallotSessionVoter({ data: { meetingId } });
 		},
 	});
-	const [timedOut, setTimedOut] = useState(false);
-	const waiting = isPending || (userId !== null && resolved.isPending);
+
+	const [decided, setDecided] = useState<{ member: StoredMember | null }>();
+	const live: { member: StoredMember | null } | undefined = isPending
+		? undefined
+		: userId === null
+			? { member: null }
+			: resolved.isPending
+				? undefined
+				: {
+						member: resolved.data
+							? { id: resolved.data.id, name: resolved.data.name }
+							: null,
+					};
+	// Set during render: React re-renders at once with the latched value and
+	// never commits the intermediate output.
+	if (decided === undefined && live !== undefined) setDecided(live);
+
+	const undecided = decided === undefined;
 	useEffect(() => {
-		if (!waiting) return;
-		const t = setTimeout(() => setTimedOut(true), SESSION_TIMEOUT_MS);
-		return () => clearTimeout(t);
-	}, [waiting]);
-	if (waiting && !timedOut) return { pending: true, member: null };
-	const m = userId !== null ? resolved.data : null;
-	return {
-		pending: false,
-		member: m ? { id: m.id, name: m.name } : null,
-	};
+		if (!undecided) return;
+		const timer = setTimeout(
+			() => setDecided((d) => d ?? { member: null }),
+			SESSION_TIMEOUT_MS,
+		);
+		return () => clearTimeout(timer);
+	}, [undecided]);
+
+	return decided === undefined
+		? { pending: true, member: null }
+		: { pending: false, member: decided.member };
 }
 
 function RsvpPage() {
@@ -232,7 +254,10 @@ function RsvpAnswer({
 	onNotYou: (() => void) | null;
 	queryClient: QueryClient;
 }) {
-	const queryKey = ["rsvp-view", clubUuid, meetingKey, member.id];
+	const queryKey = useMemo(
+		() => ["rsvp-view", clubUuid, meetingKey, member.id],
+		[clubUuid, meetingKey, member.id],
+	);
 	const view = useQuery({
 		queryKey,
 		queryFn: () =>
@@ -245,10 +270,8 @@ function RsvpAnswer({
 			}),
 	});
 	const refresh = useCallback(async () => {
-		await queryClient.invalidateQueries({
-			queryKey: ["rsvp-view", clubUuid, meetingKey, member.id],
-		});
-	}, [queryClient, clubUuid, meetingKey, member.id]);
+		await queryClient.invalidateQueries({ queryKey });
+	}, [queryClient, queryKey]);
 
 	if (view.isPending) {
 		return (
@@ -381,7 +404,7 @@ function RsvpControls({
 					</p>
 					<Link
 						to="/signin"
-						search={{ redirect: `${meetingPath}/rsvp` }}
+						search={{ redirect: rsvpPageUrl(meetingPath) }}
 						className="inline-flex min-h-11 items-center text-sm font-semibold text-primary underline underline-offset-2"
 					>
 						Sign in to change it
@@ -425,7 +448,7 @@ function RsvpControls({
 			{onNotYou ? (
 				<Button
 					variant="ghost"
-					className="text-xs text-muted-foreground"
+					className="min-h-11 text-xs text-muted-foreground"
 					onClick={onNotYou}
 				>
 					Not {view.member.name}?

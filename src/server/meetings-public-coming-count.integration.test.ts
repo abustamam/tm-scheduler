@@ -12,20 +12,26 @@
  *
  *   TEST_DATABASE_URL=… bunx vitest run src/server/meetings-public-coming-count.integration.test.ts
  */
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { members, roleSlots } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	seedPerson,
 	testDb,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const { setPlanStatus } = await import("#/server/attendance-plan-logic");
+const { loadMeetingSlots } = await import("#/server/meeting-slots-logic");
 const { loadMeetingDetailForTest } = await import("#/server/meetings-logic");
-const { publicComingCount } = await import("#/lib/attendance-panel");
+const { buildPanelRoleMap, publicComingCount } = await import(
+	"#/lib/attendance-panel"
+);
 
 describe.skipIf(!hasTestDb)("public coming count (#1442)", () => {
 	let seed: SeededClub;
@@ -52,6 +58,22 @@ describe.skipIf(!hasTestDb)("public coming count (#1442)", () => {
 			status: "reached_out",
 			actorMemberId: seed.adminMemberId,
 		});
+		// A CONFIRMED role holder who has not answered: counted as coming through
+		// their role (`resolveEffectiveRung`), and only through it.
+		const personId = await seedPerson({ name: "Rita Holder" });
+		const [holder] = await testDb
+			.insert(members)
+			.values({ clubId: seed.clubId, personId, name: "Rita Holder" })
+			.returning({ id: members.id });
+		if (!holder) throw new Error("Failed to insert member");
+		await testDb
+			.update(roleSlots)
+			.set({
+				assignedMemberId: holder.id,
+				status: "confirmed",
+				claimedAt: new Date(),
+			})
+			.where(eq(roleSlots.id, seed.slotId));
 		const payload = await loadMeetingDetailForTest(seed.meetingId, {
 			canManage: false,
 		});
@@ -60,14 +82,14 @@ describe.skipIf(!hasTestDb)("public coming count (#1442)", () => {
 			{ memberId: seed.memberId, status: "coming" },
 		]);
 		expect(payload.plan).toEqual([]);
-		// Role holders' slots ride the payload too; with nobody confirmed the
-		// count is exactly the one stored Coming.
-		const roles: Record<string, { confirmed: boolean }> = {};
-		expect(publicComingCount(payload.answeredRungs, roles)).toBe(1);
+		// The role map the meeting route builds, from the slots the page loads.
+		const roles = buildPanelRoleMap(await loadMeetingSlots(seed.meetingId));
+		expect(roles[holder.id]?.confirmed).toBe(true);
+		// One stored Coming plus one confirmed holder with no answer.
+		expect(publicComingCount(payload.answeredRungs, roles)).toBe(2);
 		// The non-answerer's id appears nowhere in the rung data.
 		expect(JSON.stringify(payload.answeredRungs)).not.toContain(
 			seed.adminMemberId,
 		);
-		expect(JSON.stringify(payload.plan)).not.toContain(seed.adminMemberId);
 	});
 });

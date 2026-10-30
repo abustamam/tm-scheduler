@@ -53,6 +53,7 @@ function renderPanel(
 			meetingDate="Tue 19 Aug"
 			shareUrl="https://club.example/agenda"
 			rsvpUrl={RSVP_URL}
+			rsvpWeekday="Tuesday"
 			clubName="Test Club"
 			locked={false}
 			canClearRung
@@ -85,7 +86,7 @@ describe("still-to-answer rows draft the RSVP ask (#1442 AC 4)", () => {
 		// m1 has no answer, m2 was asked and has not replied: both are owed one.
 		for (const name of ["Ayesha Khan", "Bo Lin"]) {
 			const draft = await whatsappDraft(name);
-			expect(draft).toContain("coming to Test Club on Tue 19 Aug?");
+			expect(draft).toContain("coming to Test Club on Tuesday?");
 			expect(draft).toContain(RSVP_URL);
 			expect(draft).not.toContain("https://club.example/agenda");
 		}

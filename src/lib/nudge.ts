@@ -79,7 +79,11 @@ export type NudgeInput =
 	// constituent for the same reason `arriving` is: `shareUrl` here is the RSVP
 	// page, not the agenda, so it must not be reachable from a draft that links
 	// the agenda.
-	| (NudgeInputBase & { mode: "rsvp"; clubName?: string | null })
+	| (NudgeInputBase & {
+			mode: "rsvp";
+			clubName?: string | null;
+			weekday?: string | null;
+	  })
 	// SEPARATE constituent from `attendance` rather than `mode: "attendance" |
 	// "arriving"` on one, which is a type-level trap: TS removes a union member
 	// only when its whole discriminant is excluded, so two role-less modes sharing
@@ -210,7 +214,10 @@ function messageFor(i: NudgeInput): string {
 	}
 	if (i.mode === "rsvp") {
 		const where = i.clubName?.trim() ? ` to ${i.clubName.trim()}` : "";
-		return `Hi ${who}, coming${where} on ${i.meetingDate}? Tap to say: ${i.shareUrl}`;
+		// The weekday, in the club's zone, like the blast's "Coming <Weekday>?";
+		// the full date only when a caller has no weekday to give.
+		const when = i.weekday?.trim() || i.meetingDate;
+		return `Hi ${who}, coming${where} on ${when}? Tap to say: ${i.shareUrl}`;
 	}
 	if (i.mode === "level") {
 		const n = i.projectsLeft;

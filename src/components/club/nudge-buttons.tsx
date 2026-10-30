@@ -92,6 +92,7 @@ type NudgeButtonsMeetingArm =
 			/** The one-tap RSVP ask (#1442): `shareUrl` is the RSVP page. */
 			mode: "rsvp";
 			clubName?: string | null;
+			weekday?: string | null;
 	  }
 	| {
 			/** A guest invite to the next meeting (#899). Role-less, and never
@@ -252,6 +253,7 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 											shareUrl: props.shareUrl,
 											mode: props.mode,
 											clubName: props.clubName,
+											weekday: props.weekday,
 										}
 									: {
 											...common,
