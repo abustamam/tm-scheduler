@@ -10,6 +10,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { type DutyTarget, dutiesForRole } from "#/lib/role-duties";
 import { getPublicPersonalMeetingView } from "#/server/personal-meeting";
+import { RoleCalendarButton } from "./add-to-calendar-button";
 import { buildDutyContext } from "./duty-context";
 import { DUTY_ROW, DutyMark, dutyLabelClass } from "./duty-row";
 
@@ -77,6 +78,14 @@ export function MeetingYourJobs({
 						<h3 className="font-semibold text-base text-foreground">
 							{role.roleName}
 						</h3>
+						<div className="mt-2">
+							<RoleCalendarButton
+								view={view}
+								role={role}
+								clubId={clubId}
+								meetingKey={meetingKey}
+							/>
+						</div>
 						{duties.length > 0 ? (
 							<ul className="mt-1 space-y-1">
 								{duties.map((duty) => {
