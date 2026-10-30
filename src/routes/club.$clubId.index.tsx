@@ -7,8 +7,10 @@ import { ClubHomeHeader } from "#/components/club/club-home-header";
 import { GuestOnboarding } from "#/components/club/guest-onboarding";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { SeasonGrid } from "#/components/club/season-grid";
+import { ClubHomeSkeleton } from "#/components/club/season-grid-skeleton";
 import { ViewingAs } from "#/components/club/viewing-as";
 import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
+import { CLUB_HOME_WRAPPER_CLASS } from "#/components/route-layout";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -64,6 +66,8 @@ export const Route = createFileRoute("/club/$clubId/")({
 		]);
 		return { grid, profile, ogVersion };
 	},
+	pendingMs: 150,
+	pendingComponent: ClubHomeSkeleton,
 	component: ClubHome,
 	head: ({ match, params, loaderData }) => ({
 		meta: shareMeta({
@@ -125,7 +129,7 @@ function ClubHome() {
 	}
 
 	return (
-		<div className="mx-auto w-full max-w-public space-y-6 p-4 pb-8 md:p-6">
+		<div className={CLUB_HOME_WRAPPER_CLASS}>
 			{/* Header — the club name is the H1 (#542, F-005). */}
 			<ClubHomeHeader clubName={clubName} memberName={member?.name ?? null} />
 			{source === "anon" ? (

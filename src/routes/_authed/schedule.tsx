@@ -2,7 +2,9 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { CalendarX, Printer, Share2 } from "lucide-react";
 import { useSyncExternalStore } from "react";
 import { SeasonGrid } from "#/components/club/season-grid";
+import { ScheduleSkeleton } from "#/components/club/season-grid-skeleton";
 import { PageContainer } from "#/components/page-container";
+import { SCHEDULE_PAGE_CLASS } from "#/components/route-layout";
 import { copyShareLink } from "#/components/share-link-button";
 import { Button } from "#/components/ui/button";
 import {
@@ -71,6 +73,8 @@ export const Route = createFileRoute("/_authed/schedule")({
 		]);
 		return { data, cancelled };
 	},
+	pendingMs: 150,
+	pendingComponent: ScheduleSkeleton,
 	component: SeasonGridPage,
 	head: ({ match }) => ({
 		meta: [{ title: navPageTitle("/schedule", match.context) }],
@@ -118,7 +122,7 @@ function SeasonGridPage() {
 	const isPhone = useIsPhone();
 
 	return (
-		<PageContainer className="space-y-4">
+		<PageContainer className={SCHEDULE_PAGE_CLASS}>
 			<div className="flex flex-wrap items-center justify-between gap-3">
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					Sign-up sheet

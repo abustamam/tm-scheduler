@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { shareMeta } from "#/lib/share-meta";
+import { RouteProgress } from "../components/route-progress";
 import { ServiceWorkerManager } from "../components/service-worker-manager";
 import TanStackQueryDevtools from "../integrations/tanstack-query/devtools";
 import appCss from "../styles.css?url";
@@ -73,6 +74,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 				<HeadContent />
 			</head>
 			<body>
+				<RouteProgress />
 				{children}
 				<ServiceWorkerManager />
 				<TanStackDevtools

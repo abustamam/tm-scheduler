@@ -14,7 +14,13 @@ import { type ChangeEvent, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { CONTACT_METHOD_ICONS } from "#/components/contact-method-icon";
+import { RosterSkeleton } from "#/components/members/roster-skeleton";
 import { PageContainer } from "#/components/page-container";
+import {
+	ROSTER_FILTER_ROW_CLASS,
+	ROSTER_STATS_GRID_CLASS,
+	ROSTER_TABLE_GRID,
+} from "#/components/route-layout";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import {
@@ -154,6 +160,8 @@ export const Route = createFileRoute("/_authed/roster")({
 			now: Date.now(),
 		};
 	},
+	pendingMs: 150,
+	pendingComponent: RosterSkeleton,
 	component: Roster,
 	head: ({ match }) => ({
 		meta: [{ title: navPageTitle("/roster", match.context) }],
@@ -181,8 +189,8 @@ export const Route = createFileRoute("/_authed/roster")({
 // `lg` is no better — the 248px app sidebar returns at exactly that tier and
 // eats the viewport gain. `xl` is the first tier where the column is free: full
 // names, no clipping, every width below it laid out as it was before.
-const TABLE_GRID =
-	"grid-cols-[1fr_34px] sm:grid-cols-[1fr_150px_170px_34px] xl:grid-cols-[1fr_150px_170px_150px_34px]";
+// The string lives in `route-layout.ts` so the loading skeleton shares it.
+const TABLE_GRID = ROSTER_TABLE_GRID;
 
 // The same grid for a MANAGER, whose trailing Account column carries an invite
 // button beside the chevron (64px vs 34px) and pays for it out of Speeches and
@@ -466,14 +474,14 @@ function Roster() {
 			</div>
 
 			{/* Stat cards */}
-			<div className="mb-6 grid grid-cols-[repeat(auto-fit,minmax(168px,1fr))] gap-3">
+			<div className={ROSTER_STATS_GRID_CLASS}>
 				{stats.map((s) => (
 					<StatCard key={s.label} stat={s} />
 				))}
 			</div>
 
 			{/* Segment filters (membership status) */}
-			<div className="mb-4 flex flex-wrap items-center gap-2">
+			<div className={ROSTER_FILTER_ROW_CLASS}>
 				{ROSTER_SEGMENTS.map((s) => (
 					<SegmentChip
 						key={s.key}
