@@ -63,6 +63,9 @@ function mount(opts: {
 	canManage: boolean;
 	claim?: MeetingAgendaActions["claim"];
 	slot?: Partial<AgendaSlot>;
+	/** Hours from now to the meeting; default 30 days. */
+	hoursOut?: number;
+	onOwnLateRelease?: MeetingAgendaProps["onOwnLateRelease"];
 }) {
 	const claim = vi.fn(opts.claim ?? (async () => {}));
 	const release = vi.fn(async () => {});
@@ -101,7 +104,9 @@ function mount(opts: {
 			meeting={
 				{
 					id: "m1",
-					scheduledAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+					scheduledAt: new Date(
+						Date.now() + (opts.hoursOut ?? 30 * 24) * 3_600_000,
+					).toISOString(),
 					status: "scheduled",
 					lengthMinutes: 90,
 					theme: null,
@@ -114,6 +119,7 @@ function mount(opts: {
 			}
 			meetingOver={false}
 			contactedMemberIds={[]}
+			onOwnLateRelease={opts.onOwnLateRelease}
 		/>,
 	);
 	return { claim, release, onMutated };
@@ -211,5 +217,68 @@ describe("MeetingAgenda: Undo on release (#1427)", () => {
 		action?.onClick();
 		await waitFor(() => expect(onMutated).toHaveBeenCalledTimes(1));
 		expect(toastSuccess).toHaveBeenCalledWith("Role back.");
+	});
+});
+
+describe("MeetingAgenda: own release inside 48h (#1439)", () => {
+	it("hands your OWN release inside 48h to onOwnLateRelease and releases nothing", async () => {
+		// protects=the cover sheet gets the slot and nothing is released until it
+		//   asks for it (AC 1)
+		// fails_when=the release goes through anyway, or the callback is skipped
+		const onOwnLateRelease = vi.fn();
+		const { release } = mount({
+			viewerId: "m-holder",
+			canManage: false,
+			hoursOut: 24,
+			onOwnLateRelease,
+		});
+		await userEvent.click(screen.getByRole("button", { name: "Release" }));
+		expect(onOwnLateRelease).toHaveBeenCalledTimes(1);
+		expect(onOwnLateRelease.mock.calls[0][0]).toMatchObject({ id: "s1" });
+		expect(release).not.toHaveBeenCalled();
+		expect(toastSuccess).not.toHaveBeenCalled();
+	});
+
+	it("releases at once when the meeting is more than 48h out", async () => {
+		// protects=AC 2: a release further out behaves exactly as before
+		// fails_when=the gate ignores the date and opens the sheet always
+		const onOwnLateRelease = vi.fn();
+		const { release } = mount({
+			viewerId: "m-holder",
+			canManage: false,
+			hoursOut: 72,
+			onOwnLateRelease,
+		});
+		await userEvent.click(screen.getByRole("button", { name: "Release" }));
+		await waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+		expect(onOwnLateRelease).not.toHaveBeenCalled();
+	});
+
+	it("releases at once when an officer releases someone else's row inside 48h", async () => {
+		// protects=AC 2: the officer's release of another's row never opens the
+		//   sheet, which is for the holder's own handoff
+		// fails_when=the gate stops checking that the row is the viewer's own
+		const onOwnLateRelease = vi.fn();
+		const { release } = mount({
+			viewerId: "m-officer",
+			canManage: true,
+			hoursOut: 24,
+			onOwnLateRelease,
+		});
+		await userEvent.click(screen.getByRole("button", { name: "Release" }));
+		await waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+		expect(onOwnLateRelease).not.toHaveBeenCalled();
+	});
+
+	it("releases at once when the route supplies no sheet", async () => {
+		// protects=a surface that does not wire the sheet keeps today's release
+		// fails_when=doRelease assumes the callback exists
+		const { release } = mount({
+			viewerId: "m-holder",
+			canManage: false,
+			hoursOut: 24,
+		});
+		await userEvent.click(screen.getByRole("button", { name: "Release" }));
+		await waitFor(() => expect(release).toHaveBeenCalledTimes(1));
 	});
 });

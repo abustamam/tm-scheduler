@@ -2,11 +2,13 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { CalendarDays, Loader2, Mic } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { CoverSheet, type CoverSlot } from "#/components/club/cover-sheet";
 import { MySpeechRequests } from "#/components/club/my-speech-requests";
 import { PageContainer } from "#/components/page-container";
 import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
+import { opensCoverSheet } from "#/lib/cover-sheet-logic";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { navLabel } from "#/lib/nav-destinations";
 import { navPageTitle } from "#/lib/page-title";
@@ -41,6 +43,8 @@ function MyCommitments() {
 	const { currentMemberId, activeClubId } = Route.useRouteContext();
 	const router = useRouter();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
+	// A late own release waits here for the cover sheet (#1439).
+	const [coverSlots, setCoverSlots] = useState<CoverSlot[]>([]);
 
 	// Speaking roles assigned without a speech title/project yet — usually because
 	// an officer slotted you in from the sign-up sheet (#officer-assign).
@@ -48,9 +52,25 @@ function MyCommitments() {
 		(c) => c.isSpeakerRole && !c.speechTitle,
 	);
 
-	async function doRelease(slotId: string) {
+	async function doRelease(c: (typeof commitments)[number]) {
+		const slotId = c.slotId;
 		if (!currentMemberId) {
 			toast.error("Your account isn't linked to a club member yet.");
+			return;
+		}
+		// /me lists only your own commitments, so every row is an own role.
+		if (opensCoverSheet({ isOwnRole: true, scheduledAt: c.scheduledAt })) {
+			setCoverSlots([
+				{
+					slotId,
+					meetingId: c.meetingId,
+					roleLabel: c.roleName,
+					scheduledAt: c.scheduledAt,
+					clubSlug: c.clubSlug,
+					// `parseMeetingKey` accepts the meeting's uuid.
+					urlKey: c.meetingId,
+				},
+			]);
 			return;
 		}
 		setBusySlotId(slotId);
@@ -205,7 +225,7 @@ function MyCommitments() {
 									<Button
 										size="sm"
 										variant="outline"
-										onClick={() => doRelease(c.slotId)}
+										onClick={() => doRelease(c)}
 										disabled={busySlotId === c.slotId}
 									>
 										{busySlotId === c.slotId ? (
@@ -220,6 +240,14 @@ function MyCommitments() {
 					))}
 				</ul>
 			)}
+			<CoverSheet
+				slots={coverSlots}
+				timeZone={
+					commitments.find((c) => c.slotId === coverSlots[0]?.slotId)?.timezone
+				}
+				onClose={() => setCoverSlots([])}
+				onChanged={() => router.invalidate()}
+			/>
 		</PageContainer>
 	);
 }

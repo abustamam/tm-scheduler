@@ -27,6 +27,7 @@ import {
 	AbsentReleaseDialog,
 	type PendingAbsent,
 } from "#/components/club/absent-release-dialog";
+import { CoverSheet, type CoverSlot } from "#/components/club/cover-sheet";
 import {
 	DeclineReleaseDialog,
 	type PendingDecline,
@@ -481,6 +482,8 @@ function MeetingView() {
 	// an anonymous visitor, who has nothing to preview.
 	const previewAsMember = authCtx?.viewAs === "member";
 	const [lineupOpen, setLineupOpen] = useState(false);
+	// The viewer's own late release waits here for the cover sheet (#1439).
+	const [coverSlots, setCoverSlots] = useState<CoverSlot[]>([]);
 	// Cancel (#1057): the confirm before the write, and the notice sheet after
 	// it. Two flags because the sheet outlives the confirm — it opens on arrival
 	// too, when the URL carries `?notice=1` (see `doCancel`).
@@ -2454,6 +2457,18 @@ function MeetingView() {
 							meeting={meeting}
 							meetingUrlKey={urlKey}
 							clubSlug={clubSlug}
+							onOwnLateRelease={(slot) =>
+								setCoverSlots([
+									{
+										slotId: slot.id,
+										meetingId: meeting.id,
+										roleLabel: slotLabel(slot, roleCounts),
+										scheduledAt: meeting.scheduledAt,
+										clubSlug,
+										urlKey,
+									},
+								])
+							}
 							meetingOver={over}
 							requireIdentity={requireIdentity}
 							contactedMemberIds={contactedMemberIds}
@@ -2864,6 +2879,12 @@ function MeetingView() {
 			    optimistic override, the rollback and the invalidate are unchanged. */}
 			{/* #1256. Roll mode's Absent on a role-holder. Release roles frees them in
 			    the same write; Keep roles records Absent alone; Cancel writes nothing. */}
+			<CoverSheet
+				slots={coverSlots}
+				timeZone={timezone}
+				onClose={() => setCoverSlots([])}
+				onChanged={() => router.invalidate()}
+			/>
 			<AbsentReleaseDialog
 				pending={pendingAbsent}
 				offline={!online}

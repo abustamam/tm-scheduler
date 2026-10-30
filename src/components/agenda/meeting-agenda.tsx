@@ -45,6 +45,7 @@ import {
 	summarizeAgenda,
 	VISITING_TOASTMASTER_LEGEND,
 } from "#/lib/agenda";
+import { opensCoverSheet } from "#/lib/cover-sheet-logic";
 import { evaluatorFormBrief } from "#/lib/evaluator-form";
 import { isMeetingCancelled } from "#/lib/meeting-cancellation-notice";
 import { isMeetingLocked } from "#/lib/meeting-lifecycle";
@@ -204,6 +205,14 @@ export interface MeetingAgendaProps {
 		via: "nudge" | "manual",
 	) => void | Promise<void>;
 	onUncontacted?: (memberId: string) => void | Promise<void>;
+	/**
+	 * Where the viewer's OWN release of a role less than 48h before the meeting
+	 * goes instead of `actions.release` (#1439): the route opens the cover
+	 * sheet, which owns the release and its toast. Absent: the release is
+	 * immediate, as before. An officer releasing someone else's row and any
+	 * release further out never reach it.
+	 */
+	onOwnLateRelease?: (slot: AgendaSlot) => void;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -242,6 +251,7 @@ export function MeetingAgenda({
 	contactedMemberIds,
 	onContacted,
 	onUncontacted,
+	onOwnLateRelease,
 }: MeetingAgendaProps) {
 	const { currentMemberId } = viewer;
 	// Claiming an open slot requires the capability AND either an identity or a
@@ -383,6 +393,17 @@ export function MeetingAgenda({
 	}
 
 	async function doRelease(slot: AgendaSlot) {
+		if (
+			onOwnLateRelease &&
+			opensCoverSheet({
+				isOwnRole:
+					currentMemberId !== null && slot.assigneeId === currentMemberId,
+				scheduledAt: meeting.scheduledAt,
+			})
+		) {
+			onOwnLateRelease(slot);
+			return;
+		}
 		await run(slot.id, async () => {
 			await actions.release(slot);
 			// An officer releasing someone else's role keeps the plain line.

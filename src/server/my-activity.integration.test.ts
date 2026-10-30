@@ -435,6 +435,7 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 			theme: "Theme A",
 			location: "Location A",
 			clubName: "Club A",
+			clubSlug: `test-club-${clubA.clubId}`,
 			timezone: "America/Chicago",
 			roleName: inA.roleName,
 			isSpeakerRole: false,

@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { Loader2, Lock, Plus, X } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { CoverSheet, type CoverSlot } from "#/components/club/cover-sheet";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -13,6 +14,7 @@ import {
 } from "#/components/ui/dialog";
 import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { showWriteError } from "#/components/write-error-toast";
+import { opensCoverSheet } from "#/lib/cover-sheet-logic";
 import { formatMeetingDate } from "#/lib/format";
 import { mailtoHref } from "#/lib/mailto";
 import type { StoredMember } from "#/lib/member-identity";
@@ -181,6 +183,11 @@ export function SeasonGrid({
 		(slotId: string) => { openNow: number; date: string } | null
 	>(() => null);
 	const [busyMeetingId, setBusyMeetingId] = useState<string | null>(null);
+	// An own release inside 48h waits here for the cover sheet (#1439).
+	const [cover, setCover] = useState<{
+		slot: CoverSlot;
+		timeZone: string;
+	} | null>(null);
 	// The assigned-cell confirm: releasing a role + marking unavailable. When
 	// `memberName` is set, an officer is acting on that member (not themselves).
 	const [confirm, setConfirm] = useState<{
@@ -283,6 +290,32 @@ export function SeasonGrid({
 		};
 	};
 
+	/** The sheet's target for one slot, read off loader data: its meeting (date,
+	 *  URL key, zone) and its role row's label. Null when the grid cannot place it. */
+	function coverTargetFor(
+		slotId: string,
+	): { slot: CoverSlot; timeZone: string } | null {
+		const cell = data.cells.find((c) => c.slotId === slotId);
+		const m = cell ? data.meetings.find((x) => x.id === cell.meetingId) : null;
+		if (!cell || !m || !data.clubSlug) return null;
+		const row = data.rows.find(
+			(r) =>
+				r.roleDefinitionId === cell.roleDefinitionId &&
+				r.slotIndex === cell.slotIndex,
+		);
+		return {
+			slot: {
+				slotId,
+				meetingId: m.id,
+				roleLabel: row?.label ?? "role",
+				scheduledAt: m.scheduledAt,
+				clubSlug: data.clubSlug,
+				urlKey: m.urlKey ?? m.id,
+			},
+			timeZone: m.timezone,
+		};
+	}
+
 	// The write succeeded, so a failed refetch is not the write's error.
 	async function refetchQuietly(what: string) {
 		try {
@@ -344,6 +377,25 @@ export function SeasonGrid({
 
 	// No actor on the wire (#763): the server credits the session.
 	async function release(slotId: string, afterClaim = false) {
+		// The claim's Undo is not a drop: only a deliberate release of your own
+		// role inside 48h goes through the cover sheet (#1439).
+		if (!afterClaim) {
+			const target = coverTargetFor(slotId);
+			const own =
+				!!currentMemberId &&
+				data.cells.find((c) => c.slotId === slotId)?.memberId ===
+					currentMemberId;
+			if (
+				target &&
+				opensCoverSheet({
+					isOwnRole: own,
+					scheduledAt: target.slot.scheduledAt,
+				})
+			) {
+				setCover(target);
+				return;
+			}
+		}
 		const entry: PendingWrite = { kind: "release", afterClaim };
 		startPending(slotId, entry);
 		try {
@@ -923,6 +975,11 @@ export function SeasonGrid({
 																clearUnavailable(targetMemberId, m.id)
 															}
 															onChanged={() => onChanged?.()}
+															scheduledAt={m.scheduledAt}
+															onOwnLateRelease={(slotId) => {
+																const target = coverTargetFor(slotId);
+																if (target) setCover(target);
+															}}
 														>
 															<button
 																type="button"
@@ -1072,6 +1129,13 @@ export function SeasonGrid({
 					</span>
 				</p>
 			) : null}
+
+			<CoverSheet
+				slots={cover ? [cover.slot] : []}
+				timeZone={cover?.timeZone}
+				onClose={() => setCover(null)}
+				onChanged={() => refetchQuietly("cover")}
+			/>
 
 			<Dialog
 				open={confirm !== null}
