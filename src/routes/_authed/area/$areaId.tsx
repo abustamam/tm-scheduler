@@ -3,6 +3,7 @@ import { AreaHealthView } from "#/components/area/area-health-view";
 import { PageContainer } from "#/components/page-container";
 import { isAreaRefusal } from "#/lib/area-refusal";
 import { programYearLabel } from "#/lib/dcp";
+import { workspaceTitle } from "#/lib/page-title";
 import { getAreaHealth } from "#/server/area-health";
 
 /**
@@ -25,6 +26,9 @@ export const Route = createFileRoute("/_authed/area/$areaId")({
 		}
 	},
 	component: AreaPage,
+	head: ({ match }) => ({
+		meta: [{ title: workspaceTitle("Area", match.context) }],
+	}),
 });
 
 function AreaPage() {

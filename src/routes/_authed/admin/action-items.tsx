@@ -25,6 +25,7 @@ import { Label } from "#/components/ui/label";
 import { ACTION_ITEM_LIMITS } from "#/lib/action-item-limits";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatCalendarDay } from "#/lib/format";
+import { navPageTitle } from "#/lib/page-title";
 import { cn } from "#/lib/utils";
 import {
 	addActionItem,
@@ -53,6 +54,9 @@ export const Route = createFileRoute("/_authed/admin/action-items")({
 		return { items, members, clubId: club.clubId };
 	},
 	component: ActionItems,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/admin/action-items", match.context) }],
+	}),
 });
 
 function ActionItems() {

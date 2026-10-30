@@ -14,6 +14,7 @@ import {
 	CLUB_NUMBER_PATTERN,
 } from "#/lib/club-charter";
 import { REBUILD_CONFIRM } from "#/lib/demo-club-copy";
+import { navPageTitle } from "#/lib/page-title";
 import {
 	getDemoClubConsole,
 	listConsoleClubs,
@@ -30,6 +31,9 @@ export const Route = createFileRoute("/_authed/superadmin/")({
 		return { ...list, demo };
 	},
 	component: SuperadminConsole,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/superadmin", match.context) }],
+	}),
 });
 
 // Pinned to UTC (#1017). With no zone this printed the RUNTIME's day, so the

@@ -19,6 +19,7 @@ import {
 	type Weekday,
 } from "#/lib/meeting-recurrence";
 import { navDestination } from "#/lib/nav-destinations";
+import { navPageTitle } from "#/lib/page-title";
 import {
 	batchCreateMeetings,
 	getClubMeetingDates,
@@ -41,6 +42,13 @@ export const Route = createFileRoute("/_authed/admin/meetings/batch")({
 		return { existingDates, defaults };
 	},
 	component: BatchMeetings,
+	head: ({ match }) => ({
+		meta: [
+			{
+				title: navPageTitle("/admin/meetings/batch", match.context),
+			},
+		],
+	}),
 });
 
 const selectClass =

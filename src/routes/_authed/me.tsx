@@ -9,6 +9,7 @@ import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { navLabel } from "#/lib/nav-destinations";
+import { navPageTitle } from "#/lib/page-title";
 import { DUTY_TOAST_MS, roleFreedDutyText } from "#/lib/role-duty-copy";
 import { listMyCommitments } from "#/server/meetings";
 import { releaseSlot } from "#/server/slots";
@@ -30,6 +31,9 @@ export const Route = createFileRoute("/_authed/me")({
 		return { commitments, speechRequests };
 	},
 	component: MyCommitments,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/me", match.context) }],
+	}),
 });
 
 function MyCommitments() {

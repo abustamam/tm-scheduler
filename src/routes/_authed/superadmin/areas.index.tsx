@@ -13,6 +13,7 @@ import {
 	DIVISION_LETTER_MAX,
 } from "#/lib/area-limits";
 import { programYearLabel } from "#/lib/dcp";
+import { navPageTitle } from "#/lib/page-title";
 import {
 	createArea,
 	createDistrict,
@@ -27,6 +28,9 @@ import type {
 export const Route = createFileRoute("/_authed/superadmin/areas/")({
 	loader: () => listConsoleAreas(),
 	component: AreasConsole,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/superadmin/areas", match.context) }],
+	}),
 });
 
 /** Matches `selectClass` in the superadmin console's club form — the shadcn

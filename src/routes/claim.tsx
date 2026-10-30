@@ -10,6 +10,7 @@ import {
 	CardHeader,
 	CardTitle,
 } from "#/components/ui/card";
+import { publicTitle } from "#/lib/page-title";
 import { finishAccountClaim } from "#/server/account-invite";
 
 // The post-sign-in landing that finishes binding a picked Person to the account
@@ -47,6 +48,9 @@ export const Route = createFileRoute("/claim")({
 		}
 	},
 	component: ClaimResult,
+	head: () => ({
+		meta: [{ title: publicTitle("Claim your account") }],
+	}),
 });
 
 const COPY: Record<

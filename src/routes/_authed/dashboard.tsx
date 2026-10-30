@@ -24,6 +24,7 @@ import { SpeechLogToggle } from "#/components/speech-log-toggle";
 import { effectiveAdminClubFor } from "#/lib/effective-admin";
 import { formatMeetingDate } from "#/lib/format";
 import { MY_PATHWAYS_ANCHOR } from "#/lib/my-pathways-anchor";
+import { navPageTitle } from "#/lib/page-title";
 import {
 	speechLogEvaluatorLabel,
 	validateSpeechLogSearch,
@@ -170,6 +171,9 @@ export const Route = createFileRoute("/_authed/dashboard")({
 		};
 	},
 	component: Dashboard,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/dashboard", match.context) }],
+	}),
 });
 
 function Dashboard() {

@@ -48,6 +48,7 @@ import {
 	readImageDimensions,
 } from "#/lib/image-dimensions";
 import { MEETING_LIMITS } from "#/lib/meeting-limits";
+import { navPageTitle } from "#/lib/page-title";
 import {
 	formatTableTopicsClock,
 	MAX_TABLE_TOPICS_SECONDS,
@@ -269,6 +270,13 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 		};
 	},
 	component: ClubSettings,
+	head: ({ match }) => ({
+		meta: [
+			{
+				title: navPageTitle("/admin/club-settings", match.context),
+			},
+		],
+	}),
 });
 
 const textareaClass =

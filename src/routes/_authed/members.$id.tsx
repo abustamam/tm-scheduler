@@ -60,6 +60,7 @@ import {
 	officerPositionLabel,
 } from "#/lib/officers";
 import type { OrientationView } from "#/lib/orientation";
+import { workspaceTitle } from "#/lib/page-title";
 import { firstNameOf } from "#/lib/person-name";
 import {
 	availableContactMethods,
@@ -219,6 +220,16 @@ export const Route = createFileRoute("/_authed/members/$id")({
 		};
 	},
 	component: MemberDetail,
+	head: ({ match, loaderData }) => ({
+		meta: [
+			{
+				title: workspaceTitle(
+					loaderData?.member?.name ?? "Member",
+					match.context,
+				),
+			},
+		],
+	}),
 });
 
 function joinedLabel(value: Date | string, timeZone: string) {

@@ -61,6 +61,7 @@ import {
 import { isInvitableStage } from "#/lib/guest-invite";
 import { type BroughtCount, guestKindCaption } from "#/lib/guest-profile";
 import { mailtoHref } from "#/lib/mailto";
+import { navPageTitle } from "#/lib/page-title";
 import { cn } from "#/lib/utils";
 import { getClubByIdentifier } from "#/server/clubs";
 import {
@@ -134,6 +135,13 @@ export const Route = createFileRoute("/_authed/admin/vp-membership")({
 		};
 	},
 	component: VpMembership,
+	head: ({ match }) => ({
+		meta: [
+			{
+				title: navPageTitle("/admin/vp-membership", match.context),
+			},
+		],
+	}),
 });
 
 const NO_INVITE_CONTEXT: NextMeetingSummary = {

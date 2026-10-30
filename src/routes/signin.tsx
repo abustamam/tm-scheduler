@@ -20,6 +20,7 @@ import {
 	isSignedOAuthSearch,
 	oauthAuthorizeContinuation,
 } from "#/lib/oauth-continuation";
+import { publicTitle } from "#/lib/page-title";
 import { safeRedirect } from "#/lib/write-proof";
 
 export const Route = createFileRoute("/signin")({
@@ -51,6 +52,9 @@ export const Route = createFileRoute("/signin")({
 			? {}
 			: { redirect: safeRedirect(search.redirect) },
 	component: SignIn,
+	head: () => ({
+		meta: [{ title: publicTitle("Sign in") }],
+	}),
 });
 
 function SignIn() {

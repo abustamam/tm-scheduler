@@ -4,6 +4,7 @@ import { useState } from "react";
 import { PageContainer } from "#/components/page-container";
 import { formatActivity } from "#/lib/activity-format";
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
+import { navPageTitle } from "#/lib/page-title";
 import { listActivityActors } from "#/server/activity-actors";
 import { listActivity } from "#/server/activity-feed";
 import { loadClubTimezoneSettings } from "#/server/clubs";
@@ -29,6 +30,9 @@ export const Route = createFileRoute("/_authed/activity")({
 		return { activity, meetings, members, timezone };
 	},
 	component: ActivityLog,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/activity", match.context) }],
+	}),
 });
 
 const ALL = "all";

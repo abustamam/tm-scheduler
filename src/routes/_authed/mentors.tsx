@@ -26,6 +26,7 @@ import {
 	type MentorshipFocus,
 	mentorshipFocusText,
 } from "#/lib/mentorship";
+import { navPageTitle } from "#/lib/page-title";
 import {
 	getMyMentorRequests,
 	getMyMentorships,
@@ -103,6 +104,9 @@ export const Route = createFileRoute("/_authed/mentors")({
 		}
 	},
 	component: MentorsPage,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/mentors", match.context) }],
+	}),
 });
 
 /** "Mentoring 2 people now" / "Not mentoring anyone yet". */

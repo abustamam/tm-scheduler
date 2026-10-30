@@ -38,6 +38,7 @@ import { type InviteState, inviteStateOf } from "#/lib/invite-state";
 import { formatTenure } from "#/lib/members";
 import { foreignSkipSummary } from "#/lib/members-import-plan";
 import { OFFICER_POSITION_LABELS, officerPositionLabel } from "#/lib/officers";
+import { navPageTitle } from "#/lib/page-title";
 import {
 	CONTACT_METHOD_LABELS,
 	type ContactMethod,
@@ -154,6 +155,9 @@ export const Route = createFileRoute("/_authed/roster")({
 		};
 	},
 	component: Roster,
+	head: ({ match }) => ({
+		meta: [{ title: navPageTitle("/roster", match.context) }],
+	}),
 });
 
 // Roster grid: on small screens only Member + chevron (tap through for the

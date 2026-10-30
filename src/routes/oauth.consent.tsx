@@ -35,6 +35,7 @@
  *   with `not_a_member` whatever this page shows; both land on the same
  *   Decline-only card.
  */
+
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { BrandMark } from "#/components/brand-mark";
@@ -65,6 +66,7 @@ import {
 	oauthQueryFromLocation,
 	parseConsentQuery,
 } from "#/lib/oauth-continuation";
+import { publicTitle } from "#/lib/page-title";
 import { AUTH_BASE_PATH } from "#/lib/well-known-forward";
 import { signInHref } from "#/lib/write-proof";
 import { getOAuthConsentClient } from "#/server/oauth-consent";
@@ -97,6 +99,9 @@ export const Route = createFileRoute("/oauth/consent")({
 		return { query: deps.query, lookup };
 	},
 	component: OAuthConsent,
+	head: () => ({
+		meta: [{ title: publicTitle("Connect an app") }],
+	}),
 });
 
 /** Better Auth's consent endpoint, which owns the grant and the redirect. */

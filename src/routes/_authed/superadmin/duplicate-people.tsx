@@ -14,6 +14,7 @@ import {
 	DialogTrigger,
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
+import { navPageTitle } from "#/lib/page-title";
 import { cn } from "#/lib/utils";
 import {
 	listDuplicatePeopleFn,
@@ -38,6 +39,11 @@ import type {
 export const Route = createFileRoute("/_authed/superadmin/duplicate-people")({
 	loader: () => listDuplicatePeopleFn(),
 	component: DuplicatePeopleConsole,
+	head: ({ match }) => ({
+		meta: [
+			{ title: navPageTitle("/superadmin/duplicate-people", match.context) },
+		],
+	}),
 });
 
 function DuplicatePeopleConsole() {
