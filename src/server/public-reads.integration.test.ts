@@ -25,7 +25,6 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
-import { deriveMeetingNumber } from "#/lib/meeting-number";
 import {
 	listNotComingWithNames,
 	listReachedOutForMeeting,
@@ -345,8 +344,11 @@ describe.skipIf(!hasTestDb)("public reads (no session)", () => {
 		expect(rows.every((r) => r.meetingNumber === null)).toBe(true);
 	});
 
-	// protects=a cancelled meeting between anchor and upcoming gets the same number the shared derivation gives over the same spine; fails_when=the loader drops cancelled rows from the spine or counts them as held; no_claim=a hand-typed number (equality with deriveMeetingNumber, plus one pinned sanity value)
-	it("loadPublicUpcomingMeetings agrees with deriveMeetingNumber across a cancelled meeting (#1434)", async () => {
+	// protects=a cancelled meeting between anchor and upcoming consumes no number, and a cancelled meeting on the SAME date still suffixes the upcoming row's urlKey; fails_when=the loader counts the cancelled row as held (412), or drops cancelled rows from the spine so the same-date key loses its suffix; no_claim=derivation rules (lib/meeting-number tests)
+	it("loadPublicUpcomingMeetings numbers across a cancelled meeting and keeps its url key suffixed (#1434)", async () => {
+		const before = await loadPublicUpcomingMeetings(seed.clubId);
+		const upcoming = before.find((r) => r.id === seed.meetingId);
+		expect(upcoming).toBeDefined();
 		await testDb.insert(meetings).values([
 			{
 				clubId: seed.clubId,
@@ -359,24 +361,26 @@ describe.skipIf(!hasTestDb)("public reads (no session)", () => {
 				scheduledAt: new Date(Date.now() + 3 * DAY),
 				status: "cancelled",
 			},
+			{
+				clubId: seed.clubId,
+				scheduledAt: new Date(
+					(upcoming?.scheduledAt as Date).getTime() + 60_000,
+				),
+				status: "cancelled",
+			},
 		]);
-		const spine = await testDb
-			.select({
-				id: meetings.id,
-				scheduledAt: meetings.scheduledAt,
-				status: meetings.status,
-				meetingNumber: meetings.meetingNumber,
-			})
-			.from(meetings)
-			.where(eq(meetings.clubId, seed.clubId))
-			.orderBy(asc(meetings.scheduledAt));
 		const rows = await loadPublicUpcomingMeetings(seed.clubId);
 		expect(rows).toHaveLength(1);
-		for (const r of rows) {
-			expect(r.meetingNumber).toBe(deriveMeetingNumber(spine, r.id));
-		}
-		// The cancelled meeting consumes no number: 410 -> 411, not 412.
+		// The cancelled meetings consume no number: 410 -> 411, not 412 or 413.
 		expect(rows[0]?.meetingNumber).toBe(411);
+		// A same-date cancelled meeting collides the key, so it is suffixed.
+		expect(rows[0]?.urlKey).not.toBe(upcoming?.urlKey);
+	});
+
+	// protects=a readable club with no upcoming meetings returns an empty list; fails_when=the empty case throws reading rows[0].timezone; no_claim=numbering
+	it("loadPublicUpcomingMeetings returns [] when the club has no upcoming meetings (#1434)", async () => {
+		await testDb.delete(meetings).where(eq(meetings.id, seed.meetingId));
+		expect(await loadPublicUpcomingMeetings(seed.clubId)).toEqual([]);
 	});
 
 	// -------------------------------------------------------------------------
