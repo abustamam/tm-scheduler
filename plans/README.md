@@ -140,7 +140,7 @@ first run; statuses maintained the same way.
 | 017 | CI executes the bundled prod migrate runner (`.output/migrate.mjs`) | P2 | S | — | [#128](https://github.com/abustamam/tm-scheduler/issues/128) | DONE |
 | 018 | Extension CI job (wxt prepare, typecheck, tests, build) | P2 | S | — | [#129](https://github.com/abustamam/tm-scheduler/issues/129) | DONE |
 | 019 | Pin `latest`/nightly dependency ranges to locked versions | P2 | S | — | [#130](https://github.com/abustamam/tm-scheduler/issues/130) | DONE |
-| 020 | Reminders build: notifications schema v2, write points, poller, templates | P2 | L | 014 (soft — same `slots.ts` handlers) | [#7](https://github.com/abustamam/tm-scheduler/issues/7) (pre-existing) | TODO |
+| 020 | Reminders build: notifications schema v2, write points, poller, templates | P2 | L | 014 (soft — same `slots.ts` handlers) | [#7](https://github.com/abustamam/tm-scheduler/issues/7) (pre-existing) | REJECTED (2026-10-30) — reminders were removed under ADR-0028 (#902); the `notifications` table is gone (migration 0110). Do not execute. |
 
 Issues #125–#130 filed 2026-07-08 (repo is public, so #126's body is
 sanitized — the full finding detail lives in the plan file). Plan 020 maps to
@@ -232,4 +232,202 @@ issue). Tracker hygiene from the audit: #120 closed as shipped (#122/#123).
 - Untracked `samples/*.har` files in the working tree contain live Base Camp
   session tokens (gitignored, never committed) — operator advised to delete
   them and treat those session tokens as burned.
+
+---
+
+# Deep audit #3 — 2026-10-30, against commit `b955f240`
+
+A third full `/improve deep` run (eight category sweeps by subagents, every
+tabled finding re-read by the root session). The codebase has grown ~10x since
+audit #2 (209K lines of non-test source, 1,179 test files, ~8,400 tests) and
+its posture is strong: no unguarded server fn, no injection sink, every
+public reader on the archive gate except one low-impact picker. The leverage
+is in **a month-old critical dependency advisory**, **verification that reads
+green without a database**, **two fail-open paths** (email, the session guard)
+and **two dev-ex traps the repo has already paid for twice**. Six plans were
+selected by the maintainer from the vetted table; numbering continues at 021.
+
+Each plan carries a bare `## Files` heading listing only the files it edits,
+so its body can be pasted into a `ready-for-agent` issue and `bun run
+batch:issues` reads the change set.
+
+## Execution order & status (audit #3)
+
+| Plan | Title | Priority | Effort | Depends on | Issue | Status |
+|------|-------|----------|--------|------------|-------|--------|
+| 021 | A missing test database fails the run (setup-file throw in CI, workflow guard for `check`, `worktree:setup` exits 3, seed bundles run in CI) | P1 | S | — | — | TODO |
+| 022 | TanStack Start past GHSA-qx66-fv34-fjm8 (+ seroval, zod, MCP SDK `maxToolInputElements`, Dockerfile Bun pin, Dependabot) | P1 | S | 021 | — | TODO |
+| 023 | Email fails closed in production (never log a magic link) and the provider request has a timeout | P1 | S | — | — | TODO |
+| 024 | `getSessionUser` treats only "no request context" as signed-out | P1 | S | 021 | — | TODO |
+| 025 | Roster "Speeches given" / "Roles served this year" count held slots on past, uncancelled meetings, in the club's year | P2 | S | 021 | — | TODO |
+| 026 | A worktree gets its own DEV database (`tm_dev_wt_…`), so `dev`/`db:migrate`/`db:push` there never touch `tm_scheduler` | P2 | M | 021 | — | TODO |
+
+Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)
+
+## Recommended order (audit #3)
+
+**021 first** — it is the verification baseline; until it lands, "the suite
+passed" in a worktree or CI may mean a third of the tests skipped. Then **022**
+(the only critical, a lockfile refresh gated by the hydration job), then the
+two fail-open fixes **023** and **024** (independent, small), then **025**,
+then **026**.
+
+## Dependency notes (audit #3)
+
+- **021 before 026**: both edit `scripts/setup-worktree.sh` (021 its tail, 026
+  its step 5). 026's drift check says to rebase on 021.
+- **022 regenerates `bun.lock`**: rebase any other open branch after it lands.
+  The `better-auth` trio and `nitro` are deliberately NOT moved by 022; a
+  later `better-auth` 1.7.5 → 1.7.14 bump is its own change (see below).
+- **023 and 024 are independent** of everything and of each other.
+- **025** is DB-tested, so it wants 021's guarantee that its suite ran.
+- Plans in `plans/` are committed to a PUBLIC repo. 023 describes an
+  unmitigated fail-open path and 024 a silent sign-out; both are written as
+  hardening and name no exploit, but land them before linking to them.
+
+## Findings vetted but not selected (audit #3)
+
+Recorded with their evidence so they are not re-audited; each is a plan away
+if wanted. Letters match the table the maintainer chose from.
+
+- **G** Schedule top-up on every authed context load selects the club's whole
+  meeting history (`src/server/auth-context.ts:188-197`,
+  `schedule-topup-logic.ts:51-56`) — bound the read or gate it per club. S.
+- **H** Tied `orderBy(sortOrder, slotIndex)` (sort_order defaults 0) in six
+  sibling queries incl. `meeting-authz-logic.ts:410`; #1408 fixed only
+  `loadMeetingSlots`; #1372's root cause. One shared ordering helper. S.
+- **I** Two value-import cycles among server logic modules
+  (`meeting-templates-logic` ↔ `meeting-agenda-edit-logic` / `meeting-create-logic`;
+  `clubs-logic` → `voting-logic` → `guests-logic` → `clubs-logic`), no CI gate;
+  the #1266 class. M.
+- **K** Auth-adjacent caps tested only relative to themselves or not at all:
+  `IMPERSONATION_RW_TTL_MS` (`impersonation-logic.ts:27`),
+  `GUEST_BOOK_MAX_NEW_PER_WINDOW` (`guest-pipeline-logic.ts:606`), the
+  `auth.rateLimit` block (no test), `revokeApiToken`'s user scoping
+  (`api-tokens-logic.ts:99-108`, only mocked), `updateDuesPeriod`/`deleteDuesPeriod`
+  (untested); MCP uuid lowercasing only on `assign_roles`
+  (`set-awards.ts:127-133`, `edit-agenda.ts:114`). M as a bundle.
+- **L** No app-wide hardening headers (only `oauth.consent.tsx:90-91`,
+  `change-email-plugin.ts:116-119`, the logo route); runtime container runs as
+  root (`Dockerfile:46-54`); CI has no `permissions:`; `ACTIVE_CLUB_COOKIE` /
+  `VIEW_AS_COOKIE` lack `secure` (`auth-context.ts:284-313`). S-M.
+- **M** Agent-facing docs actively wrong: `README.md:6` promises reminders,
+  `:33` names a `tm-pg` container vs CLAUDE.md's `dev-postgres`, `:21`/`:81`
+  say four/three Chrome suites (34), `:116-117` describe the wrong deploy
+  mechanism and runbook; `docs/persistence-todo.md` is an orphan;
+  `.claude/hooks.json` is not a file Claude Code loads (hooks live in
+  `.claude/settings.json`) while `CLAUDE.md:211-213` says CodeLedger runs
+  through it; five CodeLedger boilerplate copies (`AGENTS.md`,
+  `.github/copilot-instructions.md`, `.windsurfrules`, `.cursor/`, `.kiro/`);
+  `docs/claude-connector.md:8` says "seven tools" (18 registered);
+  `.env.example` omits `ENABLE_DEV_LOGIN`, `DISABLE_REMINDER_POLLER`,
+  `REMINDER_POLL_INTERVAL_MS`, `SEED_SUPERADMIN_EMAIL`; `CLAUDE.md` carries
+  ~9 KB of root-session-only text into every subagent. S.
+- **N** Seven temporary PII backup tables still in `schema.ts` (lines 833,
+  859, 880, 902, 926, 945, 968) 18–44 days after their releases;
+  `CODING_STANDARDS.md:457-459` says drop after a release. One migration,
+  prod dump first, `## Prod check`. M; maintainer's call.
+- **O** `better-auth` trio 1.7.5 → 1.7.14. The critical GHSA-965c-763c-88jm
+  needs a social/Generic OAuth CLIENT provider (none configured —
+  `src/lib/auth.ts` has no `socialProviders`/`genericOAuth`/`oAuthProxy`), so
+  it is hygiene; a LOW rate-limit race is live; 1.7.7's notes say pending
+  magic links break at upgrade. S-M, off-hours.
+- **P** Anonymous ballots bounded only by a caller-chosen device token: each
+  fresh token inserts a new ballot (`voting-logic.ts:1031-1040`), no
+  per-session cap. Intent unverified against #982/ADR-0026 — ask before
+  capping. M.
+- **Q** Meeting page: ~15 serial awaits in `loadMeetingDetail`
+  (`meetings.ts:206-522`), no query budget. M.
+- **R** Service-worker nav cache (`public/sw.js:346-349`, cleared only on a
+  version bump) and `gavelup.auth-context` localStorage are not purged on
+  sign-out (`_authed.tsx:72`, `club.$clubId.tsx:94`). S-M.
+- **S** No Better-Auth session `cookieCache`; every server fn re-runs
+  `getSession` + membership; the dashboard fans out 13 fns. S, with a
+  revocation-lag trade-off.
+- Lower tier: `getProjectOptions` lacks the archive gate
+  (`project-picker-logic.ts:305-313`); `mcp/lock.ts:58` sets `lock_timeout`
+  for the whole apply transaction and maps any error to "busy";
+  `parseMDY` builds a server-local Date and accepts 2/31
+  (`members-csv.ts:77-86`); `offline-auth-context.ts` is dead while ADR-0015
+  and `sw.js` describe it as live; room strip polls `getBallot` every 10 s all
+  meeting day; `activity_log` has no `(club_id, action)` index;
+  `role_slots.evaluates_slot_id` has no index; Google Fonts `@import` with no
+  preconnect; `MeetingView` is 2,506 lines with 83 imports; 153 functions over
+  150 lines; `showWriteError` used at 35 of 174 toast sites; five copies of
+  "is a real calendar date"; 20 copies of `z.string().uuid()`; nitro pinned to
+  a June nightly with no recorded reason (an rc exists); Node 22 EOL
+  ~2027-04; no `test:ci`/`test:unit` script; CI `check` is one serial job
+  with no concurrency group or timeout; no logger or request id and a dead
+  `@sentry` external in `vite.config.ts`; Railway deploys before CI finishes
+  (`.railway/railway.ts:20`, likely an accepted tradeoff).
+
+## Direction options (audit #3; maintainer's call, not ranked against bugs)
+
+1. **Club calendar feed (webcal)** — the one engagement surface ADR-0028
+   leaves open; `src/lib/calendar.ts` builds only single-event `.ics`. M.
+2. **Close the data loop** — the export zip has no importer; DESIGN.md names
+   FreeToastHost as an incumbent but only Easy-Speak has one. M/L.
+3. **MCP read tools for the back office** — 18 tools, none read minutes,
+   dues, DCP, mentorship or the roster. M per group; officer-private data
+   flows to the connected LLM.
+4. **Area/district rung** — resolve the district-license spec's "weekly
+   digest" vs ADR-0028 first; a new cross-club reader needs its own ADR
+   (ADR-0032). L.
+5. **Next draft-and-send surfaces** the data already supports: chase a guest,
+   overdue dues, a level awaiting approval. S-M each.
+6. **PWA install** (manifest `id`/`scope`/`shortcuts`); #1428 covers only the
+   hint. S-M.
+7. `scripts/resync-template-roles.ts` is promised in `Dockerfile:44` and was
+   never written — ship it or retire the promise. S-M.
+
+Contradictions to fix in passing: `README.md:6` promises reminders;
+`CONTEXT.md:1115-1122`'s out-of-scope list is stale (Pathways dashboards,
+role recency and per-role calendar export are all built); the MCP spec's
+deferral table is stale; ADR-0015 calls the manifest "unused".
+
+## Findings considered and rejected (audit #3)
+
+- **better-auth critical "OAuth state as magic link"**: requires a social or
+  Generic OAuth client provider; none is configured. Hygiene (O), not a hole.
+- **MCP SDK body-size / batch advisories**: already mitigated by the app's own
+  1 MB streamed cap and batch rejection (`handle-request.ts:206-246`); only the
+  validation-memory one remained, folded into 022.
+- **undici, shell-quote, nanoid, js-yaml, postcss, browserslist,
+  launch-editor, vite, vitest advisories**: dev, build or test only
+  (`bun why` chains via jsdom, devtools-vite, vite). Dependabot (022) will
+  propose the in-range bumps.
+- **image-size via pptxgenjs**: client-lazy, PNG/JPEG only; pptxgenjs has no
+  release since 2025-06. Accept.
+- **Vendored 11 MB `codeledger-standalone.cjs`**: documented design;
+  provenance note only.
+- **Ingest per-request round-trips**: no new cost evidence; stays deferred
+  from audit #2.
+- **Per-item loops in admin-only paths** (`club-agendas-logic.ts:616-640`,
+  `lineup-blast-logic.ts:119-121`, `slots-logic.ts:436-475`): bounded, off
+  the hot path.
+- **Three rendering stacks** (react-pdf, satori+resvg, pptxgenjs): all live
+  and justified.
+- **TypeScript 7 / Vitest 5 / lucide 1.x**: no cost to staying behind.
+- **Guard-test proliferation → lint rules** (172 guard files, 38K lines):
+  real, but MED confidence that a Biome rule replaces the derived-sweep
+  guards; not planned.
+- **Meeting-route triplication** (audit #2's deferred item): gone —
+  `_authed/meetings.$id.tsx` is a 25-line redirect. The surviving route grew
+  3x instead (see MeetingView above).
+- **Print file copy-paste** (audit #2's deferred item): the four layouts now
+  overlap 4–17%; it is a size problem (3,393 lines), not duplication.
+
+## Not audited / caveats (audit #3)
+
+- No test, build or runtime reproduction by the audit itself: findings come
+  from reading code plus `bun run typecheck` (fails here only on a stale local
+  `node_modules` missing `satori`/`@resvg/resvg-js`), `bunx biome check`
+  (0 errors, 266 warnings), `bun audit` (78 advisories) and CI green on `main`.
+- Not read in full: `guest-pipeline-logic.ts` (5,588 lines),
+  `history-import-logic.ts`, `meeting-agenda-edit-logic.ts`,
+  `easy-speak-import-plan.ts`, migrations 0000–0099, the ~300 component test
+  files (sampled by grep), `extension/` beyond its test list.
+- Reachability of the TanStack and seroval advisories rests on the advisory
+  text plus the installed `server-functions-handler.js`; no exploit was run.
+- Timing claims (G, Q, S) are structural; no `EXPLAIN` or latency was measured.
 
