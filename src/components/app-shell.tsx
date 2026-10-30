@@ -20,6 +20,7 @@ import { ImpersonationBanner } from "#/components/club/impersonation-banner";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { ThemeToggle } from "#/components/club/theme-toggle";
 import { ViewAsBanner } from "#/components/club/view-as-banner";
+import { KeyboardShortcuts } from "#/components/keyboard-shortcuts";
 import { Sheet, SheetContent, SheetTitle } from "#/components/ui/sheet";
 import { Toaster } from "#/components/ui/sonner";
 import {
@@ -51,6 +52,7 @@ import {
 	officerRank,
 } from "#/lib/officers";
 import { shellStickyVars } from "#/lib/shell-sticky-offset";
+import { sidebarTitle } from "#/lib/shortcuts";
 import type { ViewAs } from "#/lib/view-as";
 import { setViewAs } from "#/server/auth-context";
 
@@ -471,6 +473,10 @@ export function AppShell({
 					</footer>
 				</main>
 				<Toaster position="top-center" />
+				<KeyboardShortcuts
+					grants={{ hasOffice, isOfficer, isSuperadmin }}
+					pathname={pathname}
+				/>
 			</div>
 		</WhatsNewProvider>
 	);
@@ -886,6 +892,7 @@ function NavItem({
 			// keeps Superadmin from matching under Duplicate people.
 			activeOptions={{ exact: "exact" in destination && destination.exact }}
 			aria-current={active ? "page" : undefined}
+			title={sidebarTitle(destination)}
 			className={navItemClass(active)}
 		>
 			<Icon className="size-4" />
