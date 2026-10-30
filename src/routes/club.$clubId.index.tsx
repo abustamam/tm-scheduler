@@ -7,12 +7,10 @@ import { ClubHomeHeader } from "#/components/club/club-home-header";
 import { GuestOnboarding } from "#/components/club/guest-onboarding";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { SeasonGrid } from "#/components/club/season-grid";
-import {
-	CLUB_HOME_WRAPPER_CLASS,
-	ClubHomeSkeleton,
-} from "#/components/club/season-grid-skeleton";
+import { ClubHomeSkeleton } from "#/components/club/season-grid-skeleton";
 import { ViewingAs } from "#/components/club/viewing-as";
 import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
+import { CLUB_HOME_WRAPPER_CLASS } from "#/components/route-layout";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";

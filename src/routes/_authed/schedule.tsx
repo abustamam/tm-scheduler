@@ -2,11 +2,9 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { CalendarX, Printer, Share2 } from "lucide-react";
 import { useSyncExternalStore } from "react";
 import { SeasonGrid } from "#/components/club/season-grid";
-import {
-	SCHEDULE_PAGE_CLASS,
-	ScheduleSkeleton,
-} from "#/components/club/season-grid-skeleton";
+import { ScheduleSkeleton } from "#/components/club/season-grid-skeleton";
 import { PageContainer } from "#/components/page-container";
+import { SCHEDULE_PAGE_CLASS } from "#/components/route-layout";
 import { copyShareLink } from "#/components/share-link-button";
 import { Button } from "#/components/ui/button";
 import {
