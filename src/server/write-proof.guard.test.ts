@@ -613,7 +613,7 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 	"guest-rsvp.ts#submitGuestRsvp": {
 		class: "public-intake",
 		reason:
-			"bounded guest RSVP intake: honeypot + fill time; shares the guest book's per-club hourly new-guest cap under the club lock; refuses non-scheduled, past and >60-day-out meetings",
+			"bounded guest RSVP intake: honeypot + client-measured fill time (a missing value counts as too fast); shares the guest book's per-club hourly new-guest cap under the club lock; refuses non-scheduled, past and >60-day-out meetings",
 	},
 	// The request-access form (#866). A prospect asks for a club or district
 	// before any account exists, so there is no session to prove. What bounds

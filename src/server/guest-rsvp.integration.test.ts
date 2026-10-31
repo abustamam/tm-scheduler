@@ -4,9 +4,10 @@
  * `#/db` is mocked to the test client; the suite skips without a test database.
  */
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	clubs,
 	guests,
 	meetingAttendance,
 	meetingGuestRsvps,
@@ -15,6 +16,7 @@ import {
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
+import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import { TMOD_ROLE_KEY } from "#/lib/meeting-roles";
 import {
 	cleanup,
@@ -29,8 +31,9 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const { captureGuestVisit, GUEST_BOOK_MAX_NEW_PER_WINDOW } = await import(
 	"./guest-pipeline-logic"
 );
-const { RSVP_MEETING_REFUSED_MESSAGE, submitGuestRsvpLogic } = await import(
-	"./guest-rsvp-logic"
+const { submitGuestRsvpLogic } = await import("./guest-rsvp-logic");
+const { guestRsvpSchema, RSVP_MEETING_REFUSED_MESSAGE } = await import(
+	"./guest-rsvp-schemas"
 );
 
 const created: SeededClub[] = [];
@@ -62,7 +65,7 @@ function rsvp(
 			email: null,
 			phone: null,
 			website: "",
-			startedAt: Date.now() - 10_000,
+			fillMs: 10_000,
 			...over,
 		},
 		now,
@@ -134,11 +137,11 @@ describe.skipIf(!hasTestDb)("submitGuestRsvp", () => {
 			ok: true,
 			confirmation: null,
 		});
-		expect(await rsvp(c, { startedAt: Date.now() - 500 })).toEqual({
+		expect(await rsvp(c, { fillMs: 500 })).toEqual({
 			ok: true,
 			confirmation: null,
 		});
-		expect(await rsvp(c, { startedAt: Number.NaN })).toEqual({
+		expect(await rsvp(c, { fillMs: Number.NaN })).toEqual({
 			ok: true,
 			confirmation: null,
 		});
@@ -184,7 +187,6 @@ describe.skipIf(!hasTestDb)("submitGuestRsvp", () => {
 
 	it("returns the confirmation: location falls back to the club's, joinUrl and the Toastmaster's first name ride along", async () => {
 		const c = await club();
-		const { clubs } = await import("#/db/schema");
 		await testDb
 			.update(clubs)
 			.set({ defaultLocation: "Club Hall" })
@@ -220,28 +222,96 @@ describe.skipIf(!hasTestDb)("submitGuestRsvp", () => {
 		const second = await rsvp(c);
 		expect(second.confirmation).toMatchObject({
 			location: "Room 4",
-			joinUrl: "https://meet.example/abc",
+			// Hybrid (location AND link): the link is not handed to a non-member.
+			joinUrl: null,
 			toastmasterFirstName: "Member",
+		});
+		await testDb
+			.update(meetings)
+			.set({ location: null })
+			.where(eq(meetings.id, c.meetingId));
+		await testDb
+			.update(clubs)
+			.set({ defaultLocation: null })
+			.where(eq(clubs.id, c.clubId));
+		const online = await rsvp(c);
+		expect(online.confirmation).toMatchObject({
+			location: null,
+			joinUrl: "https://meet.example/abc",
 		});
 	});
 
 	it("refuses an archived club and writes nothing", async () => {
 		const c = await club();
-		const { clubs } = await import("#/db/schema");
 		await testDb
 			.update(clubs)
 			.set({ archivedAt: new Date() })
 			.where(eq(clubs.id, c.clubId));
-		await expect(rsvp(c)).rejects.toThrow();
+		await expect(rsvp(c)).rejects.toThrow(CLUB_ARCHIVED_MESSAGE);
 		expect(await guestsOf(c)).toHaveLength(0);
 	});
 
-	it("an RSVP row cascades away with its guest, and the unique key is per meeting", async () => {
+	it("an RSVP row cascades away with its guest", async () => {
+		const c = await club();
+		await rsvp(c);
+		const [g] = await guestsOf(c);
+		await testDb.delete(guests).where(eq(guests.id, g?.id ?? ""));
+		expect(await rsvpsOf(c)).toHaveLength(0);
+	});
+
+	it("the retry key is per meeting: the same clientKey on a second meeting is its own RSVP", async () => {
+		const c = await club();
+		const [second] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: c.clubId,
+				scheduledAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+				status: "scheduled",
+			})
+			.returning({ id: meetings.id });
+		const clientKey = randomUUID();
+		const a = await rsvp(c, { clientKey });
+		const b = await rsvp(c, { clientKey, meetingId: second?.id ?? "" });
+		expect(b.confirmation?.rsvpId).toBeDefined();
+		expect(b.confirmation?.rsvpId).not.toBe(a.confirmation?.rsvpId);
+		const rows = await rsvpsOf(c);
+		expect(rows).toHaveLength(2);
+		expect(new Set(rows.map((r) => r.meetingId)).size).toBe(2);
+	});
+
+	it("a clientKey that is another guest's id attaches nothing to that guest", async () => {
+		const c = await club();
+		await captureGuestVisit({ clubId: c.clubId, name: "Existing Guest" });
+		const [existing] = await guestsOf(c);
+		// The request also carries the guest's id as an extra `guestId` field;
+		// the schema strips it, and the logic never takes a guest id.
+		const data = guestRsvpSchema.parse({
+			clubId: c.clubId,
+			meetingId: c.meetingId,
+			clientKey: existing?.id,
+			firstName: "Someone Else",
+			fillMs: 10_000,
+			guestId: existing?.id,
+		});
+		const result = await rsvp(c, {
+			clientKey: data.clientKey,
+			firstName: data.firstName,
+			fillMs: data.fillMs,
+		});
+		expect(result.confirmation?.rsvpId).toBeDefined();
+		const rows = await rsvpsOf(c);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.guestId).not.toBe(existing?.id);
+	});
+
+	it("a retry with the same clientKey is refused once the club is archived", async () => {
 		const c = await club();
 		const clientKey = randomUUID();
 		await rsvp(c, { clientKey });
-		const [g] = await guestsOf(c);
-		await testDb.delete(guests).where(and(eq(guests.id, g?.id ?? "")));
-		expect(await rsvpsOf(c)).toHaveLength(0);
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, c.clubId));
+		await expect(rsvp(c, { clientKey })).rejects.toThrow(CLUB_ARCHIVED_MESSAGE);
 	});
 });

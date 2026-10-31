@@ -696,7 +696,7 @@ export interface CaptureGuestResult {
  * longer contend for this row with each other at all; the strengths are about
  * the writers that do NOT take that lock.
  */
-async function lockOpenClub(
+export async function lockOpenClub(
 	tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
 	clubId: string,
 	strength: "no key update" | "share",
@@ -866,12 +866,11 @@ export async function resolveOrCreateBookGuest(
 	contact: { name: string; email: string | null; phone: string | null },
 ): Promise<{ guestId: string; created: boolean }> {
 	const { name, email, phone } = contact;
-	const input = { clubId };
 	// 1. Dedup, club-scoped: email → phone-with-name-agreement → none.
 	//    An `ambiguous` outcome (shared number, disagreeing name) resolves to
 	//    undefined here and creates a second prospect — which is #488's rule
 	//    and this path's long-standing behaviour, not an oversight.
-	const existing = await findGuestForContact(tx, input.clubId, {
+	const existing = await findGuestForContact(tx, clubId, {
 		name,
 		email,
 		phone,
@@ -883,10 +882,10 @@ export async function resolveOrCreateBookGuest(
 		guestId = existing.id;
 		created = false;
 		// Gate before the contact fill-in and the attendance row (#858).
-		await lockOpenClub(tx, input.clubId, "share");
+		await lockOpenClub(tx, clubId, "share");
 		// Fill in contact the returning guest supplied but we didn't have; keep
 		// their name and stage untouched.
-		await fillBlankGuestContact(tx, input.clubId, existing, { email, phone });
+		await fillBlankGuestContact(tx, clubId, existing, { email, phone });
 	} else {
 		// Throttle the CREATE path only. Both statements run inside this
 		// transaction, behind a lock on the club row — a count taken OUTSIDE
@@ -897,14 +896,12 @@ export async function resolveOrCreateBookGuest(
 		// under READ COMMITTED the COUNT below takes a fresh snapshot once the
 		// lock is granted, so it sees the rows the requests ahead committed.
 		// The same locked read is the archive gate (#858).
-		await lockOpenClub(tx, input.clubId, "no key update");
+		await lockOpenClub(tx, clubId, "no key update");
 		const since = new Date(Date.now() - GUEST_BOOK_WINDOW_MS);
 		const [recent] = await tx
 			.select({ n: count() })
 			.from(guests)
-			.where(
-				and(eq(guests.clubId, input.clubId), gte(guests.createdAt, since)),
-			);
+			.where(and(eq(guests.clubId, clubId), gte(guests.createdAt, since)));
 		if ((recent?.n ?? 0) >= GUEST_BOOK_MAX_NEW_PER_WINDOW) {
 			throw new Error(GUEST_BOOK_THROTTLED_MESSAGE);
 		}
@@ -913,7 +910,7 @@ export async function resolveOrCreateBookGuest(
 		// The address is the visitor's own note, typed with no session: it goes on
 		// the guest row, never the Person (#1157).
 		const row = await createGuestRecord(tx, {
-			clubId: input.clubId,
+			clubId,
 			name,
 			email: null,
 			bookEmail: email,

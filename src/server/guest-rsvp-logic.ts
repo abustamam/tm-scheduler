@@ -4,21 +4,20 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, meetingGuestRsvps, meetings, members } from "#/db/schema";
+import { defaultAttendanceMode } from "#/lib/attendance-mode";
 import { firstNameOf } from "#/lib/person-name";
 import { toStoredPhone } from "#/lib/phone";
 import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { assertClubNotArchived } from "./guards";
-import { resolveOrCreateBookGuest } from "./guest-pipeline-logic";
+import { lockOpenClub, resolveOrCreateBookGuest } from "./guest-pipeline-logic";
+import {
+	MAX_DAYS_OUT,
+	MIN_FILL_MS,
+	RSVP_MEETING_REFUSED_MESSAGE,
+} from "./guest-rsvp-schemas";
 import { loadTmodMemberId } from "./meeting-authz-logic";
 import { isDeadlock } from "./pg-errors";
-
-/** Under this many ms between opening the form and sending it is a bot. */
-export const MIN_FILL_MS = 3000;
-/** An RSVP is for a meeting at most this many days away. */
-export const MAX_DAYS_OUT = 60;
-export const RSVP_MEETING_REFUSED_MESSAGE =
-	"This meeting isn't taking RSVPs. Please check the date or ask an officer.";
 
 export interface GuestRsvpInput {
 	clubId: string;
@@ -28,8 +27,8 @@ export interface GuestRsvpInput {
 	email: string | null;
 	phone: string | null;
 	website: string;
-	/** Epoch ms from the client's clock when the form opened. */
-	startedAt: number;
+	/** How long the form was open, measured on the client. */
+	fillMs: number;
 }
 
 export interface GuestRsvpConfirmation {
@@ -61,8 +60,7 @@ export async function submitGuestRsvpLogic(
 	now: Date = new Date(),
 ): Promise<GuestRsvpResult> {
 	if (input.website !== "") return { ok: true, confirmation: null };
-	const filled = now.getTime() - input.startedAt;
-	if (!Number.isFinite(filled) || filled < MIN_FILL_MS) {
+	if (!Number.isFinite(input.fillMs) || input.fillMs < MIN_FILL_MS) {
 		return { ok: true, confirmation: null };
 	}
 
@@ -70,12 +68,15 @@ export async function submitGuestRsvpLogic(
 	const firstName = input.firstName.trim();
 	if (!firstName) throw new Error("Please enter your first name.");
 	const email = input.email?.trim() || null;
-	const cc = await loadClubDefaultCountryCode(input.clubId);
-	const phone = toStoredPhone(input.phone, cc);
+	const countryCode = await loadClubDefaultCountryCode(input.clubId);
+	const phone = toStoredPhone(input.phone, countryCode);
 
 	try {
 		return await db.transaction(async (tx) => {
 			await lockClubForWrite(tx, input.clubId);
+			// The in-transaction archive gate, on EVERY path: a retry that hits
+			// its clientKey would otherwise never take the club row lock.
+			await lockOpenClub(tx, input.clubId, "share");
 
 			// The meeting row FOR SHARE: a cancel in flight is waited for and seen.
 			const [meeting] = await tx
@@ -154,6 +155,8 @@ export async function submitGuestRsvpLogic(
 							),
 						)
 						.limit(1);
+					// Defensive: under the club write lock the conflicting row is
+					// committed and visible, so this cannot be reached; no test.
 					if (!existing) throw new Error(CLUB_BUSY_MESSAGE);
 					rsvpId = existing.id;
 				}
@@ -178,7 +181,11 @@ export async function submitGuestRsvpLogic(
 					scheduledAt: meeting.scheduledAt,
 					timeZone: club.timezone,
 					location: meeting.location ?? club.defaultLocation ?? null,
-					joinUrl: meeting.joinUrl ?? null,
+					// Online-only (join link and no location, #1049's rule) or nothing.
+					joinUrl:
+						defaultAttendanceMode(meeting) === "online"
+							? (meeting.joinUrl ?? null)
+							: null,
 					toastmasterFirstName,
 				},
 			};
