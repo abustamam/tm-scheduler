@@ -95,6 +95,22 @@ describe("CoverLandingCard", () => {
 		expect(onDecline).toHaveBeenCalledTimes(1);
 	});
 
+	it("the role name is body font, not display (DESIGN.md: one display line, the meeting h1)", () => {
+		render(
+			<CoverLandingCard
+				landing={landing}
+				roleLabel="Timer"
+				whenLine=""
+				description={null}
+				onTake={vi.fn()}
+				onDecline={vi.fn()}
+			/>,
+		);
+		const role = screen.getByText("Timer");
+		expect(role.className).not.toContain("font-display");
+		expect(role.className).toContain("text-2xl");
+	});
+
 	it("a filled slot says thanks and offers no buttons", () => {
 		render(
 			<CoverLandingCard

@@ -194,9 +194,7 @@ export function CoverLandingCard({
 			<p className="text-sm font-semibold text-warning-foreground">
 				{landing.request.releasedName} asked if you can cover
 			</p>
-			<h2 className="font-display text-2xl font-semibold tracking-tight">
-				{roleLabel}
-			</h2>
+			<h2 className="text-2xl font-bold tracking-tight">{roleLabel}</h2>
 			<p className="text-sm text-muted-foreground">{whenLine}</p>
 			{description ? <p className="text-sm">{description}</p> : null}
 			<div className="mt-1 flex flex-wrap gap-2">
