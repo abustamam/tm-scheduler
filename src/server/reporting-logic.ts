@@ -842,6 +842,52 @@ export async function loadEvaluatorPairings(
 }
 
 /**
+ * The meetings that count toward an attendance streak, newest first: in the
+ * past (strictly before `before`), not cancelled, and with at least one MEMBER
+ * attendance row. Shared by `loadAttendanceLapse` (a bounded window) and
+ * `loadWelcomeBack` (#1446, unbounded), so the toast and the lapse list can
+ * never disagree about which meetings count.
+ *
+ * DISTINCT over the join: a meeting qualifies once it has any MEMBER
+ * attendance row, and the join would otherwise repeat it per attendee, which
+ * at real club size (15-25 marked per meeting) would let one meeting eat the
+ * whole LIMIT and collapse the window.
+ *
+ * `isNotNull(memberId)` is load-bearing, not tidiness. Guest attendance rows
+ * carry a NULL member_id (ADR-0013), so a meeting where only VISITORS were
+ * logged would otherwise satisfy this join, enter the window, and score every
+ * member as not-present: a false "stopped attending" flag on the one surface
+ * whose whole job is spotting people who quietly left.
+ */
+export async function selectLapseEligibleMeetings(
+	conn: typeof db,
+	opts: { clubId: string; before: Date; limit?: number },
+): Promise<{ meetingId: string; scheduledAt: Date }[]> {
+	const query = conn
+		.selectDistinct({
+			meetingId: meetings.id,
+			scheduledAt: meetings.scheduledAt,
+		})
+		.from(meetings)
+		.innerJoin(
+			meetingAttendance,
+			and(
+				eq(meetingAttendance.meetingId, meetings.id),
+				isNotNull(meetingAttendance.memberId),
+			),
+		)
+		.where(
+			and(
+				eq(meetings.clubId, opts.clubId),
+				lt(meetings.scheduledAt, opts.before),
+				ne(meetings.status, "cancelled"),
+			),
+		)
+		.orderBy(desc(meetings.scheduledAt));
+	return opts.limit === undefined ? query : query.limit(opts.limit);
+}
+
+/**
  * Attendance lapse for a club (#530) — who has stopped turning up.
  *
  * This complements `loadOverdueMembers` rather than duplicating it, and the
@@ -866,38 +912,11 @@ export async function loadAttendanceLapse(
 ): Promise<(AttendanceLapseRow & Partial<LapseReachOut>)[]> {
 	const now = new Date();
 
-	// DISTINCT over the join: a meeting qualifies once it has any MEMBER
-	// attendance row, and the join would otherwise repeat it per attendee —
-	// which at real club size (15-25 marked per meeting) would let one meeting
-	// eat the whole LIMIT and collapse the window.
-	//
-	// `isNotNull(memberId)` is load-bearing, not tidiness. Guest attendance rows
-	// carry a NULL member_id (ADR-0013), so a meeting where only VISITORS were
-	// logged would otherwise satisfy this join, enter the window, and score
-	// every member as not-present — a false "stopped attending" flag on the one
-	// surface whose whole job is spotting people who quietly left.
-	const windowMeetings = await db
-		.selectDistinct({
-			meetingId: meetings.id,
-			scheduledAt: meetings.scheduledAt,
-		})
-		.from(meetings)
-		.innerJoin(
-			meetingAttendance,
-			and(
-				eq(meetingAttendance.meetingId, meetings.id),
-				isNotNull(meetingAttendance.memberId),
-			),
-		)
-		.where(
-			and(
-				eq(meetings.clubId, clubId),
-				lt(meetings.scheduledAt, now),
-				ne(meetings.status, "cancelled"),
-			),
-		)
-		.orderBy(desc(meetings.scheduledAt))
-		.limit(ATTENDANCE_LAPSE.windowMeetings);
+	const windowMeetings = await selectLapseEligibleMeetings(db, {
+		clubId,
+		before: now,
+		limit: ATTENDANCE_LAPSE.windowMeetings,
+	});
 
 	// No early return when the window is empty. Drizzle compiles an empty
 	// `inArray` to `false`, so the mark query returns nothing either way and a

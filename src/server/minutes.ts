@@ -34,6 +34,7 @@ import {
 } from "./minutes-logic";
 import { isEffectiveAdmin } from "./officers-logic";
 import { minutesAccess } from "./view-as-logic";
+import { loadWelcomeBack } from "./welcome-back-logic";
 
 const uuid = z.string().uuid();
 
@@ -221,10 +222,30 @@ export const setAttendance = createServerFn({ method: "POST" })
 				},
 				actorMemberId,
 			);
-			return { ok: true as const, released };
+			return { ok: true as const, released, welcomeBack: null };
 		}
 		await setMemberPresence(data);
-		return { ok: true as const, released: [] as ReleasedSlot[] };
+		// #1446: the officer's roll toasts "Welcome back" for a slipping or lapsed
+		// member. Read after the write, from meetings strictly before this one.
+		// The write has committed: a failed lookup must not fail it (the offline
+		// path would replay a Present that already landed), so it is non-fatal.
+		let welcomeBack: Awaited<ReturnType<typeof loadWelcomeBack>> = null;
+		if (data.status === "present") {
+			try {
+				welcomeBack = await loadWelcomeBack(db, {
+					clubId: await getMeetingClubId(data.meetingId),
+					memberId: data.memberId,
+					meetingId: data.meetingId,
+				});
+			} catch (err) {
+				console.error("welcome-back lookup failed", data.meetingId, err);
+			}
+		}
+		return {
+			ok: true as const,
+			released: [] as ReleasedSlot[],
+			welcomeBack,
+		};
 	});
 
 const addGuestSchema = z
