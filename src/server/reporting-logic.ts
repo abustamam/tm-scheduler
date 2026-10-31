@@ -20,6 +20,7 @@ import {
 	max,
 	min,
 	ne,
+	notInArray,
 	or,
 	sql,
 } from "drizzle-orm";
@@ -1049,6 +1050,12 @@ export async function loadAttendanceLapse(
  *
  * "Open" is `status = 'open'` with neither a member nor a guest assigned. A
  * role with several open slots counts once.
+ *
+ * Speaker and evaluator slots are never suggested (maintainer's decision,
+ * 2026-10-30): a lapsed member must not be asked "Speaker 1 is open. Want it?".
+ * A speaker role is `is_speaker_role` or category `speaker`; an evaluator is
+ * category `evaluator`. When only such slots are open the pick is null and the
+ * draft uses its no-role wording.
  */
 export async function loadSuggestedOpenRoles(
 	clubId: string,
@@ -1077,6 +1084,8 @@ export async function loadSuggestedOpenRoles(
 				eq(roleSlots.status, "open"),
 				isNull(roleSlots.assignedMemberId),
 				isNull(roleSlots.assignedGuestId),
+				eq(roleDefinitions.isSpeakerRole, false),
+				notInArray(roleDefinitions.category, ["speaker", "evaluator"]),
 			),
 		);
 	if (openSlots.length === 0) return result;

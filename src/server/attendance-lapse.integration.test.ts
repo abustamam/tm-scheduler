@@ -414,14 +414,18 @@ describe.skipIf(!hasTestDb)("Slipping tier and reach-out data (#1445)", () => {
 		return r;
 	}
 
-	async function addRole(name: string): Promise<string> {
+	async function addRole(
+		name: string,
+		category: "functionary" | "speaker" | "evaluator" = "functionary",
+		isSpeakerRole = false,
+	): Promise<string> {
 		const [r] = await testDb
 			.insert(roleDefinitions)
 			.values({
 				clubId: seed.clubId,
 				name,
-				category: "functionary",
-				isSpeakerRole: false,
+				category,
+				isSpeakerRole,
 			})
 			.returning({ id: roleDefinitions.id });
 		if (!r) throw new Error("role insert failed");
@@ -608,6 +612,33 @@ describe.skipIf(!hasTestDb)("Slipping tier and reach-out data (#1445)", () => {
 			await openSlot(b.id);
 			// All never held: sortOrder -5 beats Timer's default, then name.
 			expect((await row()).suggestedRole).toBe("Alpha");
+		});
+
+		it("skips a never-held open Speaker slot for a functionary role", async () => {
+			const sp = await addRole("Speaker 1", "speaker", true);
+			await openSlot(sp);
+			expect((await row()).suggestedRole).toBe("Timer");
+		});
+
+		it("skips an open slot flagged is_speaker_role whatever its category", async () => {
+			const sp = await addRole("Contestant", "functionary", true);
+			await openSlot(sp);
+			expect((await row()).suggestedRole).toBe("Timer");
+		});
+
+		it("skips a never-held open Evaluator slot for a functionary role", async () => {
+			const ev = await addRole("Evaluator 1", "evaluator");
+			await openSlot(ev);
+			expect((await row()).suggestedRole).toBe("Timer");
+		});
+
+		it("is null when only speaker and evaluator slots are open", async () => {
+			await testDb
+				.delete(roleSlots)
+				.where(eq(roleSlots.meetingId, seed.meetingId));
+			await openSlot(await addRole("Speaker 1", "speaker", true));
+			await openSlot(await addRole("Evaluator 1", "evaluator"));
+			expect((await row()).suggestedRole).toBeNull();
 		});
 
 		it("suggests a role to a lapsed member too", async () => {
