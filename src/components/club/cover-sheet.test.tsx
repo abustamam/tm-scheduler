@@ -13,12 +13,16 @@ const {
 	releaseOwnSlotForCover,
 	undoReleaseForCover,
 	toastSuccess,
+	toastDismiss,
+	toastError,
 } = vi.hoisted(() => ({
 	askForCover: vi.fn(async (_a: unknown) => ({ ok: true })),
 	loadCoverCandidates: vi.fn(async (_a: unknown) => [] as unknown[]),
 	releaseOwnSlotForCover: vi.fn(async (_a: unknown) => ({ ok: true })),
 	undoReleaseForCover: vi.fn(async (_a: unknown) => ({ ok: true })),
 	toastSuccess: vi.fn(),
+	toastDismiss: vi.fn(),
+	toastError: vi.fn(),
 }));
 vi.mock("#/server/cover", () => ({
 	askForCover,
@@ -27,7 +31,11 @@ vi.mock("#/server/cover", () => ({
 	undoReleaseForCover,
 }));
 vi.mock("sonner", () => ({
-	toast: Object.assign(vi.fn(), { success: toastSuccess, error: vi.fn() }),
+	toast: Object.assign(vi.fn(), {
+		success: toastSuccess,
+		error: toastError,
+		dismiss: toastDismiss,
+	}),
 }));
 
 import { CoverSheet, type CoverSlot } from "#/components/club/cover-sheet";
@@ -251,6 +259,11 @@ describe("CoverSheet", () => {
 			data: { slotId: slot.slotId },
 		});
 		expect(releaseOwnSlotForCover).not.toHaveBeenCalled();
+		// No release happened here, so there is nothing for an Undo to give back.
+		await screen.findByText(/is open and the request is in/);
+		expect(
+			screen.queryByRole("button", { name: /Undo: I'll keep/ }),
+		).toBeNull();
 	});
 
 	it("Undo while the sheet is open returns it to its pre-release state", async () => {
@@ -295,6 +308,9 @@ describe("CoverSheet", () => {
 			screen.getByRole("button", { name: /Undo: I'll keep/ }),
 		);
 		await waitFor(() => expect(undoReleaseForCover).toHaveBeenCalledTimes(1));
+		expect(undoReleaseForCover).toHaveBeenCalledWith({
+			data: { slotId: slot.slotId },
+		});
 		await waitFor(() =>
 			expect(
 				screen.getByRole("button", { name: "Drop it anyway" }),
@@ -303,6 +319,117 @@ describe("CoverSheet", () => {
 		expect(
 			screen.queryByRole("button", { name: /Undo: I'll keep/ }),
 		).toBeNull();
+	});
+
+	async function askAndOpenUndo() {
+		stubShare(async () => {});
+		toastSuccess.mockReturnValueOnce("release-toast");
+		mount();
+		await userEvent.click(
+			await screen.findByRole("button", { name: "Ask Priya Patel" }),
+		);
+		await screen.findByText(/is open and the request is in/);
+		return screen.getByRole("button", { name: /Undo: I'll keep/ });
+	}
+
+	it("a double-tap on the in-sheet Undo fires one undo, and Ask waits for it", async () => {
+		// protects=the busy guard on undoRelease: no double undo, no Ask mid-undo
+		// fails_when=undoRelease ignores busy
+		const undo = await askAndOpenUndo();
+		let finish: (v: { ok: boolean }) => void = () => {};
+		undoReleaseForCover.mockImplementationOnce(
+			() =>
+				new Promise((r) => {
+					finish = r;
+				}),
+		);
+		await userEvent.dblClick(undo);
+		expect(undoReleaseForCover).toHaveBeenCalledTimes(1);
+		expect(
+			(
+				screen.getByRole("button", {
+					name: /Undo: I'll keep/,
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(true);
+		expect(
+			(
+				screen.getByRole("button", {
+					name: "Ask Priya Patel",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(true);
+		await act(async () => {
+			finish({ ok: true });
+		});
+		await waitFor(() =>
+			expect(
+				screen.getByRole("button", { name: "Drop it anyway" }),
+			).toBeTruthy(),
+		);
+	});
+
+	it("the toast's Undo tapped twice (after the sheet's) fires one undo", async () => {
+		// protects=the early return in undoRelease, which the disabled button
+		//   cannot cover: the toast action is a second entry point
+		// fails_when=undoRelease does not return while busy
+		await askAndOpenUndo();
+		const action = (
+			toastSuccess.mock.calls[0][1] as {
+				action: { onClick: () => Promise<void> };
+			}
+		).action;
+		let finish: (v: { ok: boolean }) => void = () => {};
+		undoReleaseForCover.mockImplementationOnce(
+			() =>
+				new Promise((r) => {
+					finish = r;
+				}),
+		);
+		await act(async () => {
+			void action.onClick();
+		});
+		await act(async () => {
+			await action.onClick();
+		});
+		expect(undoReleaseForCover).toHaveBeenCalledTimes(1);
+		await act(async () => {
+			finish({ ok: true });
+		});
+	});
+
+	it("a successful in-sheet Undo dismisses the release toast", async () => {
+		// protects=a stale toast Undo that would later hit "Someone already took it"
+		// fails_when=the release toast id is not dismissed on Undo
+		const undo = await askAndOpenUndo();
+		await userEvent.click(undo);
+		await waitFor(() =>
+			expect(toastDismiss).toHaveBeenCalledWith("release-toast"),
+		);
+	});
+
+	it("a failed in-sheet Undo says so and keeps the sheet in its released state", async () => {
+		// protects=the error path of undoRelease
+		// fails_when=the error is swallowed, or the sheet reads as undone
+		const undo = await askAndOpenUndo();
+		undoReleaseForCover.mockRejectedValueOnce(
+			new Error("Someone already took it."),
+		);
+		await userEvent.click(undo);
+		await waitFor(() =>
+			expect(toastError).toHaveBeenCalledWith("Someone already took it."),
+		);
+		expect(toastDismiss).not.toHaveBeenCalled();
+		expect(screen.getByText(/is open and the request is in/)).toBeTruthy();
+		await waitFor(() =>
+			expect(
+				(
+					screen.getByRole("button", {
+						name: /Undo: I'll keep/,
+					}) as HTMLButtonElement
+				).disabled,
+			).toBe(false),
+		);
 	});
 
 	it("a failed candidate load says so, and still offers Ask and Drop it anyway", async () => {
