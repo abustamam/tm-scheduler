@@ -35,7 +35,6 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const {
 	ALREADY_TAKEN_MESSAGE,
 	COVER_CANDIDATE_LIMIT,
-	NOT_A_COVER_RELEASE_MESSAGE,
 	NOT_COMING_UNDO_MESSAGE,
 	ONLY_HOLDER_MESSAGE,
 	ONLY_RELEASER_MESSAGE,
@@ -94,7 +93,7 @@ describe.skipIf(!hasTestDb)("cover requests (#1438)", () => {
 
 	const release = (
 		actorMemberId: string | null,
-		kind = "finding_cover" as const,
+		kind: "finding_cover" | "dropped" = "finding_cover",
 	) =>
 		testDb.transaction((tx) =>
 			releaseOwnSlotForCoverCore(tx, {
@@ -368,25 +367,31 @@ describe.skipIf(!hasTestDb)("cover requests (#1438)", () => {
 			expect(row?.coveredByMemberId).toBe(other);
 		});
 
-		it("refuses a decline's `dropped` request and leaves the slot open", async () => {
-			// protects=Undo is for a cover release only: a decline's `dropped` row must
-			//   not hand the role back confirmed
-			// fails_when=the kind check is removed
+		it('restores a role dropped via "Drop it anyway" (kind `dropped`, member still coming)', async () => {
+			// protects=#1454: Undo after the sheet's Drop it anyway gives the role back
+			// fails_when=Undo refuses every `dropped` request again
 			// no_claim=the toast copy
-			await testDb
-				.update(roleSlots)
-				.set({ status: "open", assignedMemberId: null, claimedAt: null })
-				.where(eq(roleSlots.id, seed.slotId));
-			await testDb.insert(slotCoverRequests).values({
-				clubId: seed.clubId,
+			await holdSeededSlot();
+			await release(seed.memberId, "dropped");
+			await undo(seed.memberId);
+			const after = await slot();
+			expect(after.assignedMemberId).toBe(seed.memberId);
+			expect(await requests()).toHaveLength(0);
+		});
+
+		it("refuses a decline's `dropped` request (member not coming) and leaves the slot open", async () => {
+			// protects=a decline's `dropped` row must not hand the role back
+			// fails_when=the attendance read is removed from Undo
+			// no_claim=the toast copy
+			await holdSeededSlot();
+			await release(seed.memberId, "dropped");
+			await testDb.insert(meetingAttendancePlan).values({
+				memberId: seed.memberId,
 				meetingId: seed.meetingId,
-				slotId: seed.slotId,
-				releasedByMemberId: seed.memberId,
-				kind: "dropped",
-				priorStatus: "confirmed",
+				status: "not_coming",
 			});
 			await expect(undo(seed.memberId)).rejects.toThrow(
-				NOT_A_COVER_RELEASE_MESSAGE,
+				NOT_COMING_UNDO_MESSAGE,
 			);
 			const after = await slot();
 			expect(after.status).toBe("open");

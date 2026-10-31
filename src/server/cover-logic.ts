@@ -36,8 +36,6 @@ type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 export const ONLY_HOLDER_MESSAGE =
 	"Only the person holding this role can hand it off.";
 export const ALREADY_TAKEN_MESSAGE = "Someone already took it.";
-export const NOT_A_COVER_RELEASE_MESSAGE =
-	"That role was dropped when you said you can't come, so there is nothing to undo.";
 export const NOT_COMING_UNDO_MESSAGE =
 	"You're marked as not coming to that meeting.";
 export const ONLY_RELEASER_MESSAGE =
@@ -175,10 +173,11 @@ export async function undoReleaseForCoverCore(
 	) {
 		throw new Error(ALREADY_TAKEN_MESSAGE);
 	}
-	// Undo is for a release the member made to find cover. A `dropped` row is a
-	// decline's, and a late "not coming" answer outranks a role handed back:
-	// `claimSlotCore` refuses that member the same way. Both before any write.
-	if (request.kind === "dropped") throw new Error(NOT_A_COVER_RELEASE_MESSAGE);
+	// A `dropped` row is written by two paths: a decline (the member answered
+	// "not coming") and the sheet's "Drop it anyway" (#1454; the member still
+	// reads "Coming"). The kind cannot tell them apart, the attendance answer
+	// does: a late "not coming" outranks a role handed back, as `claimSlotCore`
+	// refuses that member. Before any write.
 	if (
 		await isMemberNotComing(tx, {
 			memberId: args.actorMemberId,
