@@ -1,7 +1,7 @@
 // "Welcome back" (#1446): when an officer marks a slipping or lapsed member
 // Present, the roll toasts how long it has been. Nothing is stored; the answer
 // is derived from the same rules the lapse list uses.
-import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { db } from "#/db";
 import { meetingAttendance, meetings, members, roleSlots } from "#/db/schema";
 import { ATTENDANCE_LAPSE, scoreAttendanceLapse } from "#/lib/attendance-lapse";
@@ -46,7 +46,6 @@ export async function loadWelcomeBack(
 		clubId: input.clubId,
 		before: meeting.scheduledAt,
 	});
-	if (window.length === 0) return null;
 	const ids = window.map((m) => m.meetingId);
 
 	const [markRows, roleRows] = await Promise.all([
@@ -70,7 +69,6 @@ export async function loadWelcomeBack(
 					inArray(roleSlots.meetingId, ids),
 					eq(roleSlots.assignedMemberId, input.memberId),
 					inArray(roleSlots.status, [...HELD_SLOT_STATUSES]),
-					isNotNull(roleSlots.assignedMemberId),
 				),
 			),
 	]);

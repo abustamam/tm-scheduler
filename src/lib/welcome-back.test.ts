@@ -29,4 +29,28 @@ describe("welcomeBackMessage (#1446)", () => {
 			welcomeBackMessage("Marco", "2026-10-08T12:00:00.000Z", now, "UTC"),
 		).toContain("Oct 8");
 	});
+	it("treats exactly 28 days as the day form, 28 days and a bit as the month", () => {
+		const DAY = 24 * 60 * 60 * 1000;
+		expect(
+			welcomeBackMessage(
+				"Marco",
+				new Date(now.getTime() - 28 * DAY),
+				now,
+				"UTC",
+			),
+		).toBe("Welcome back, Marco: first meeting since Oct 3");
+		expect(
+			welcomeBackMessage(
+				"Marco",
+				new Date(now.getTime() - 28 * DAY - 1),
+				now,
+				"UTC",
+			),
+		).toBe("Welcome back, Marco: first meeting since October");
+	});
+	it("falls back to the raw name when it has no first word", () => {
+		expect(welcomeBackMessage("   ", null, now)).toBe(
+			"Welcome back,    : first meeting since joining",
+		);
+	});
 });

@@ -227,14 +227,20 @@ export const setAttendance = createServerFn({ method: "POST" })
 		await setMemberPresence(data);
 		// #1446: the officer's roll toasts "Welcome back" for a slipping or lapsed
 		// member. Read after the write, from meetings strictly before this one.
-		const welcomeBack =
-			data.status === "present"
-				? await loadWelcomeBack(db, {
-						clubId: await getMeetingClubId(data.meetingId),
-						memberId: data.memberId,
-						meetingId: data.meetingId,
-					})
-				: null;
+		// The write has committed: a failed lookup must not fail it (the offline
+		// path would replay a Present that already landed), so it is non-fatal.
+		let welcomeBack: Awaited<ReturnType<typeof loadWelcomeBack>> = null;
+		if (data.status === "present") {
+			try {
+				welcomeBack = await loadWelcomeBack(db, {
+					clubId: await getMeetingClubId(data.meetingId),
+					memberId: data.memberId,
+					meetingId: data.meetingId,
+				});
+			} catch (err) {
+				console.error("welcome-back lookup failed", data.meetingId, err);
+			}
+		}
 		return {
 			ok: true as const,
 			released: [] as ReleasedSlot[],

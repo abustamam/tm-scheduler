@@ -1561,7 +1561,7 @@ function MeetingView() {
 		/** Only the Absent dialog's "Release roles" passes these (#1256): the slot
 		 *  ids it LISTED, which are the most the write may free. */
 		releaseSlotIds?: string[],
-		name = "this member",
+		name?: string,
 	) {
 		const release =
 			releaseSlotIds && releaseSlotIds.length > 0
@@ -1584,7 +1584,7 @@ function MeetingView() {
 				if (result.released.length > 0) {
 					toast.success(
 						releasedToastMessage(
-							name,
+							name ?? "this member",
 							result.released.map((r) => r.label),
 						),
 					);
@@ -1594,9 +1594,7 @@ function MeetingView() {
 				if (result.welcomeBack && !welcomedRef.current.has(memberId)) {
 					welcomedRef.current.add(memberId);
 					const who =
-						name !== "this member"
-							? name
-							: (roster?.find((r) => r.id === memberId)?.name ?? name);
+						name ?? roster?.find((r) => r.id === memberId)?.name ?? "";
 					toast.success(
 						welcomeBackMessage(
 							who,

@@ -198,6 +198,49 @@ describe.skipIf(!hasTestDb)("loadWelcomeBack (#1446)", () => {
 		expect(result?.lastPresentAt?.getTime()).toBe(ran.at.getTime());
 	});
 
+	it("returns null for a member id from another club", async () => {
+		await addMeeting(14);
+		await addMeeting(7);
+		const other = await seedClub();
+		try {
+			const result = await loadWelcomeBack(testDb, {
+				clubId: seed.clubId,
+				memberId: other.memberId,
+				meetingId: seed.meetingId,
+			});
+			expect(result).toBeNull();
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	it("meetings before joinedAt do not count toward the streak", async () => {
+		await addMeeting(30);
+		await addMeeting(20);
+		await addMeeting(7);
+		await testDb
+			.update(members)
+			.set({ joinedAt: new Date(Date.now() - 10 * DAY) })
+			.where(eq(members.id, seed.memberId));
+		expect(await lookup()).toBeNull();
+	});
+
+	it("falls back to createdAt when joinedAt is null", async () => {
+		await addMeeting(30);
+		await addMeeting(20);
+		await addMeeting(7);
+		await testDb
+			.update(members)
+			.set({ joinedAt: null, createdAt: new Date(Date.now() - 10 * DAY) })
+			.where(eq(members.id, seed.memberId));
+		expect(await lookup()).toBeNull();
+		await testDb
+			.update(members)
+			.set({ createdAt: new Date(Date.now() - 400 * DAY) })
+			.where(eq(members.id, seed.memberId));
+		expect(await lookup()).toEqual({ lastPresentAt: null });
+	});
+
 	describe("setAttendance", () => {
 		beforeEach(async () => {
 			await addMeeting(14, { member: "absent" });
@@ -213,6 +256,30 @@ describe.skipIf(!hasTestDb)("loadWelcomeBack (#1446)", () => {
 				},
 			} as never);
 			expect(result.welcomeBack).toEqual({ lastPresentAt: null });
+		});
+
+		it("returns none when marking Excused", async () => {
+			const result = await setAttendance({
+				data: {
+					meetingId: seed.meetingId,
+					memberId: seed.memberId,
+					status: "excused",
+				},
+			} as never);
+			expect(result.welcomeBack).toBeNull();
+		});
+
+		it("returns none on the release-roles path", async () => {
+			const result = await setAttendance({
+				data: {
+					meetingId: seed.meetingId,
+					memberId: seed.memberId,
+					status: "absent",
+					releaseHeldRoles: true,
+					releaseSlotIds: [seed.slotId],
+				},
+			} as never);
+			expect(result.welcomeBack).toBeNull();
 		});
 
 		it("returns none when marking Absent", async () => {
