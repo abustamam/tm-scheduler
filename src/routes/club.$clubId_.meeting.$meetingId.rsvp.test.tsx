@@ -355,6 +355,33 @@ describe("rsvp page", () => {
 			);
 		expect(new Set(memberIds)).toEqual(new Set([MEMBER_ID]));
 	}, 8000);
+	it("a session answer after the timeout still signs in a member who picked nobody (#1457)", async () => {
+		vi.mocked(authClient.useSession).mockReturnValue({
+			data: { user: { id: "user-1" } },
+			isPending: false,
+			// biome-ignore lint/suspicious/noExplicitAny: partial hook return
+		} as any);
+		let answer: (v: unknown) => void = () => {};
+		vi.mocked(getBallotSessionVoter).mockReturnValue(
+			new Promise((r) => {
+				answer = r;
+			}) as never,
+		);
+		localStorage.clear();
+		vi.mocked(getPublicPersonalMeetingView).mockResolvedValue(
+			view({ planStatus: null }),
+		);
+		await renderPage();
+		// The timeout fired first: the signed-out name pick shows.
+		await screen.findByText("pick-name-form", {}, { timeout: 4500 });
+
+		answer({ id: MEMBER_ID, name: "Ada Lovelace" });
+
+		expect(
+			await screen.findByRole("button", { name: "I'm coming" }),
+		).toBeTruthy();
+		expect(screen.queryByText("pick-name-form")).toBeNull();
+	}, 8000);
 });
 
 describe("guest RSVP (#1444)", () => {

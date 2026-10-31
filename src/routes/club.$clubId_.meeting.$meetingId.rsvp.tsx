@@ -122,11 +122,18 @@ const SESSION_TIMEOUT_MS = 3000;
  * way (`useSessionVoter`): read-only, only asked once `useSession` reports a
  * user, and a failed lookup or a timeout means "no session member".
  *
- * The FIRST answer is final for this page view. `useSession` can drop and come
- * back on a mounted page, and a late or retried success must not swap the
- * identity under someone who has since picked their name.
+ * The FIRST answer is final for this page view, with one exception (#1457): a
+ * TIMEOUT's "no session member" is provisional. `useSession`'s request can
+ * start late on this route, after the timer (which counts from mount) has
+ * fired, so a real member answer arriving later still wins while `canUpgrade`
+ * holds (nobody has picked a name). `useSession` can also drop and come back on
+ * a mounted page, and a late or retried success must not swap the identity
+ * under someone who has since picked their name, so `canUpgrade` is false then.
  */
-function useSessionMember(meetingId: string): {
+function useSessionMember(
+	meetingId: string,
+	canUpgrade: boolean,
+): {
 	pending: boolean;
 	member: StoredMember | null;
 } {
@@ -147,7 +154,10 @@ function useSessionMember(meetingId: string): {
 		},
 	});
 
-	const [decided, setDecided] = useState<{ member: StoredMember | null }>();
+	const [decided, setDecided] = useState<{
+		member: StoredMember | null;
+		provisional?: true;
+	}>();
 	const live: { member: StoredMember | null } | undefined = isPending
 		? undefined
 		: userId === null
@@ -162,12 +172,13 @@ function useSessionMember(meetingId: string): {
 	// Set during render: React re-renders at once with the latched value and
 	// never commits the intermediate output.
 	if (decided === undefined && live !== undefined) setDecided(live);
+	else if (decided?.provisional && canUpgrade && live?.member) setDecided(live);
 
 	const undecided = decided === undefined;
 	useEffect(() => {
 		if (!undecided) return;
 		const timer = setTimeout(
-			() => setDecided((d) => d ?? { member: null }),
+			() => setDecided((d) => d ?? { member: null, provisional: true }),
 			SESSION_TIMEOUT_MS,
 		);
 		return () => clearTimeout(timer);
@@ -181,8 +192,8 @@ function useSessionMember(meetingId: string): {
 function RsvpPage() {
 	const { clubId, clubName, timezone, meeting } = Route.useLoaderData();
 	const { clubId: clubKey, meetingId: meetingKey } = Route.useParams();
-	const session = useSessionMember(meeting.id);
 	const { member: picked, setMember, clearMember } = useCurrentMember(clubKey);
+	const session = useSessionMember(meeting.id, picked === null);
 	const member = session.member ?? picked;
 	const signedIn = session.member !== null;
 	const queryClient = useQueryClient();
