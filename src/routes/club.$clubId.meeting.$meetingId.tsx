@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import {
 	MeetingAgenda,
 	type MeetingAgendaActions,
+	type SpeakerDetails,
 } from "#/components/agenda/meeting-agenda";
 import { MeetingAnnouncements } from "#/components/agenda/meeting-announcements";
 import { MeetingMetaDialog } from "#/components/agenda/meeting-meta-dialog";
@@ -27,10 +28,15 @@ import {
 	AbsentReleaseDialog,
 	type PendingAbsent,
 } from "#/components/club/absent-release-dialog";
-import { CoverChip } from "#/components/club/cover-chip";
+import {
+	CoverChip,
+	coverChipsFor,
+	coverMeetingOver,
+} from "#/components/club/cover-chip";
 import {
 	CoverLandingCard,
-	resolveCoverLanding,
+	coverLandingView,
+	takeCoveredSlot,
 } from "#/components/club/cover-landing-card";
 import { CoverSheet, type CoverSlot } from "#/components/club/cover-sheet";
 import {
@@ -95,7 +101,6 @@ import {
 	publicComingCount,
 } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
-import { coverStatus } from "#/lib/cover";
 import { ballotUrlFor } from "#/lib/digital-voting";
 import { evaluatingByMember } from "#/lib/evaluator-form";
 import { feedbackWindow } from "#/lib/feedback-window";
@@ -145,7 +150,6 @@ import { outstandingDutiesByMember } from "#/lib/nudge";
 import { meetingOgImage, OG_IMAGE_SIZE_META } from "#/lib/og-image-url";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { notComingToast } from "#/lib/role-duty-copy";
-import { roleGuide } from "#/lib/role-guide";
 import {
 	deriveRollAttendance,
 	deriveRollGuests,
@@ -1796,18 +1800,25 @@ function MeetingView() {
 	// Self-serve (member / anon) actions: resolve identity first (a signed-in
 	// member resolves without a prompt; an anon visitor identifies at click) and
 	// carry `selfMemberId`, so the server takes the ADR-0010 self-serve path.
+	async function claimAs(
+		me: { id: string },
+		slot: { id: string },
+		speakerDetails?: SpeakerDetails,
+	) {
+		await claimSlot({
+			data: {
+				slotId: slot.id,
+				memberId: me.id,
+				actorMemberId: me.id,
+				speakerDetails,
+			},
+		});
+	}
 	const selfActions: MeetingAgendaActions = {
 		claim: async (slot, speakerDetails) => {
 			const me = await requireIdentity();
 			if (!me) return;
-			await claimSlot({
-				data: {
-					slotId: slot.id,
-					memberId: me.id,
-					actorMemberId: me.id,
-					speakerDetails,
-				},
-			});
+			await claimAs(me, slot, speakerDetails);
 		},
 		// Rendered only for a signed-in holder (`canReleaseOwn`, #1003), so there
 		// is no identity to resolve: the server reads the session (#763), and a
@@ -1844,62 +1855,45 @@ function MeetingView() {
 	// Cover requests (#1440): the landing card for a `?cover=` link, and a chip
 	// per request. The chips sit in one strip above the agenda, not under each
 	// role: the agenda component renders the rows and takes no per-slot content.
-	const coverLanding = coverCardDismissed
-		? null
-		: resolveCoverLanding({
-				cover: coverParam,
-				slots,
-				coverRequests,
-				meetingOver: over || meeting.status === "cancelled",
-			});
-	const coverLandingSlot =
-		coverLanding?.kind === "open"
-			? slots.find((s) => s.id === coverLanding.slotId)
-			: undefined;
-	const coverRoleDef = coverLandingSlot
-		? coverRoleDefs?.find((r) => r.name === coverLandingSlot.roleName)
-		: undefined;
-	const coverMeetingWhen = new Date(meeting.scheduledAt);
-	const coverWhenLine = [
-		new Intl.DateTimeFormat("en-US", {
-			weekday: "long",
-			timeZone: timezone,
-		}).format(coverMeetingWhen),
-		meetingNumber != null ? `Meeting ${meetingNumber}` : null,
-		formatMeetingTime(coverMeetingWhen, timezone),
-	]
-		.filter(Boolean)
-		.join(" · ");
-	const coverChips = coverRequests
-		.map((r) => {
-			const slot = slots.find((s) => s.id === r.slotId);
-			return slot
-				? {
-						request: r,
-						roleLabel: slotLabel(slot, roleCounts),
-						status: coverStatus(
-							r,
-							{ scheduledAt: coverMeetingWhen },
-							timezone,
-							now,
-						),
-					}
-				: null;
-		})
-		.filter((c) => c !== null)
-		.filter((c) => !(c.status === "covered" && over));
+	const coverOver = coverMeetingOver({ over, status: meeting.status });
+	const coverView = coverLandingView({
+		cover: coverParam,
+		dismissed: coverCardDismissed,
+		slots,
+		coverRequests,
+		meetingOver: coverOver,
+		roleCounts,
+		roleDefs: coverRoleDefs,
+		scheduledAt: new Date(meeting.scheduledAt),
+		timezone,
+		meetingNumber,
+	});
+	const coverChips = coverChipsFor({
+		coverRequests,
+		slots,
+		roleCounts,
+		scheduledAt: new Date(meeting.scheduledAt),
+		timezone,
+		now,
+		meetingOver: coverOver,
+	});
 	async function takeCoveredRole() {
-		if (!coverLandingSlot) return;
-		setCoverTakeBusy(true);
-		try {
+		const slot = coverView.slot;
+		if (!slot) return;
+		await takeCoveredSlot({
 			// The same self-serve claim the agenda uses: a signed-out visitor
 			// picks their name first (PickNameForm), a signed-in member does not.
-			await selfActions.claim(coverLandingSlot);
-		} catch (err) {
-			showWriteError(err, "Something went wrong.");
-		} finally {
-			setCoverTakeBusy(false);
-		}
+			claim: async () => {
+				const me = await requireIdentity();
+				if (!me) return false;
+				await claimAs(me, slot);
+				return true;
+			},
+			onTaken: () => toast.success(`You're on as ${coverView.roleLabel}.`),
+			refresh: () => router.invalidate(),
+			onError: (err) => showWriteError(err, "Something went wrong."),
+			setBusy: setCoverTakeBusy,
+		});
 	}
 
 	async function doAddRole(roleDefinitionId: string) {
@@ -2514,22 +2508,12 @@ function MeetingView() {
 			    Minutes and the ballot console instead of directly under the toolbar. */}
 			<div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:gap-6">
 				<div className="order-2 min-w-0 flex-1 space-y-5 lg:order-1">
-					{coverLanding ? (
+					{coverView.landing ? (
 						<CoverLandingCard
-							landing={coverLanding}
-							roleLabel={
-								coverLandingSlot ? slotLabel(coverLandingSlot, roleCounts) : ""
-							}
-							whenLine={coverWhenLine}
-							description={
-								coverRoleDef
-									? (roleGuide({
-											name: coverRoleDef.name,
-											key: coverRoleDef.key,
-											description: coverRoleDef.description,
-										}).description ?? null)
-									: null
-							}
+							landing={coverView.landing}
+							roleLabel={coverView.roleLabel}
+							whenLine={coverView.whenLine}
+							description={coverView.description}
 							busy={coverTakeBusy}
 							onTake={takeCoveredRole}
 							onDecline={() => setCoverCardDismissed(true)}
@@ -2540,13 +2524,12 @@ function MeetingView() {
 						<ul className="flex flex-col items-start gap-1.5">
 							{coverChips.map((c) => (
 								<li key={c.request.slotId} className="max-w-full">
-									<span className="sr-only">{c.roleLabel}: </span>
 									<CoverChip
 										request={c.request}
 										status={c.status}
 										roleLabel={c.roleLabel}
 										timeZone={timezone}
-										meetingOver={over}
+										meetingOver={coverOver}
 									/>
 								</li>
 							))}

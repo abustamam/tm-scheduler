@@ -1,4 +1,7 @@
 import { Button } from "#/components/ui/button";
+import { slotLabel } from "#/lib/agenda";
+import { APP_LOCALE, formatMeetingTime } from "#/lib/format";
+import { blankToNull, roleGuide } from "#/lib/role-guide";
 import type { MeetingCoverRequest } from "#/server/cover-logic";
 
 interface LandingSlot {
@@ -34,6 +37,115 @@ export function resolveCoverLanding(args: {
 		(r) => r.slotId === slot.id && r.coveredAt === null,
 	);
 	return request ? { kind: "open", slotId: slot.id, request } : null;
+}
+
+/** The role's one-liner: its description, else the first paragraph of its
+ *  Before guide, else of its During guide. Null when the club wrote none. */
+export function coverRoleOneLiner(
+	def: {
+		name: string;
+		key?: string | null;
+		description: string | null;
+		beforeNotes?: string | null;
+		duringNotes?: string | null;
+	} | null,
+): string | null {
+	if (!def) return null;
+	const g = roleGuide(def);
+	const firstParagraph = (t: string | null) =>
+		blankToNull(t?.split(/\n\s*\n/)[0]);
+	return g.description ?? firstParagraph(g.before) ?? firstParagraph(g.during);
+}
+
+/** "<Weekday> · Meeting <n> · <time>" */
+export function coverWhenLine(args: {
+	scheduledAt: Date;
+	timezone: string;
+	meetingNumber: number | null | undefined;
+}): string {
+	return [
+		new Intl.DateTimeFormat(APP_LOCALE, {
+			weekday: "long",
+			timeZone: args.timezone,
+		}).format(args.scheduledAt),
+		args.meetingNumber != null ? `Meeting ${args.meetingNumber}` : null,
+		formatMeetingTime(args.scheduledAt, args.timezone),
+	]
+		.filter(Boolean)
+		.join(" · ");
+}
+
+/** Everything the route hands the card, computed from the page's own data. */
+export function coverLandingView(args: {
+	cover: unknown;
+	dismissed: boolean;
+	slots: (LandingSlot & {
+		roleName: string;
+		slotIndex: number;
+		slotsUnordered?: boolean;
+	})[];
+	coverRequests: MeetingCoverRequest[];
+	meetingOver: boolean;
+	roleCounts: Record<string, number>;
+	roleDefs:
+		| {
+				name: string;
+				key?: string | null;
+				description: string | null;
+				beforeNotes?: string | null;
+				duringNotes?: string | null;
+		  }[]
+		| undefined;
+	scheduledAt: Date;
+	timezone: string;
+	meetingNumber: number | null | undefined;
+}) {
+	const landing = args.dismissed ? null : resolveCoverLanding(args);
+	const slot =
+		landing?.kind === "open"
+			? args.slots.find((s) => s.id === landing.slotId)
+			: undefined;
+	return {
+		landing,
+		slot,
+		roleLabel: slot ? slotLabel(slot, args.roleCounts) : "",
+		description: slot
+			? coverRoleOneLiner(
+					args.roleDefs?.find((r) => r.name === slot.roleName) ?? null,
+				)
+			: null,
+		whenLine: coverWhenLine(args),
+	};
+}
+
+/**
+ * "I'll take it": resolve who is taking it, claim, say so, and refresh the
+ * page so the card and the lineup show the slot filled. `claim` resolves false
+ * when no identity was given (the name picker was dismissed): nothing was
+ * written, so no toast. A refresh that fails after the write landed is not an
+ * error to show: the claim worked.
+ */
+export async function takeCoveredSlot(args: {
+	claim: () => Promise<boolean>;
+	refresh: () => Promise<unknown>;
+	onTaken: () => void;
+	onError: (err: unknown) => void;
+	setBusy: (busy: boolean) => void;
+}): Promise<void> {
+	args.setBusy(true);
+	try {
+		if (!(await args.claim())) return;
+		args.onTaken();
+		try {
+			await args.refresh();
+		} catch {
+			// the claim landed; the next navigation shows it
+		}
+	} catch (err) {
+		args.onError(err);
+	} finally {
+		args.setBusy(false);
+	}
 }
 
 /**
