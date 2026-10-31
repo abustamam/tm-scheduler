@@ -163,6 +163,7 @@ import {
 } from "#/lib/roll-attendance";
 import { shareMeta } from "#/lib/share-meta";
 import { footerDate } from "#/lib/slide-layout";
+import { welcomeBackMessage } from "#/lib/welcome-back";
 import { hasWordOfTheDay } from "#/lib/word-poster";
 import { getOpenActionItems } from "#/server/action-items";
 import {
@@ -560,6 +561,8 @@ function MeetingView() {
 	// clears the entry while the second is still outstanding, which hands the
 	// effect an override it is free to evict before its write has landed.
 	const pendingWritesRef = useRef<Map<string, number>>(new Map());
+	// Members already welcomed back in this view (#1446).
+	const welcomedRef = useRef(new Set<string>());
 	function retainPending(memberId: string) {
 		const m = pendingWritesRef.current;
 		m.set(memberId, (m.get(memberId) ?? 0) + 1);
@@ -1583,6 +1586,23 @@ function MeetingView() {
 						releasedToastMessage(
 							name,
 							result.released.map((r) => r.label),
+						),
+					);
+				}
+				// #1446: officer-only, nothing stored. Once per member per view:
+				// re-marking Present (or the mode toggle) must not toast twice.
+				if (result.welcomeBack && !welcomedRef.current.has(memberId)) {
+					welcomedRef.current.add(memberId);
+					const who =
+						name !== "this member"
+							? name
+							: (roster?.find((r) => r.id === memberId)?.name ?? name);
+					toast.success(
+						welcomeBackMessage(
+							who,
+							result.welcomeBack.lastPresentAt,
+							new Date(),
+							timezone,
 						),
 					);
 				}
