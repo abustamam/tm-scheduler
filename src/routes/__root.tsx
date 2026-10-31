@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { shareMeta } from "#/lib/share-meta";
+import { InstallHint } from "../components/install-hint";
 import { RouteProgress } from "../components/route-progress";
 import { ServiceWorkerManager } from "../components/service-worker-manager";
 import TanStackQueryDevtools from "../integrations/tanstack-query/devtools";
@@ -25,6 +26,16 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 			{
 				name: "viewport",
 				content: "width=device-width, initial-scale=1",
+			},
+			{
+				name: "theme-color",
+				content: "#f3faf5",
+				media: "(prefers-color-scheme: light)",
+			},
+			{
+				name: "theme-color",
+				content: "#0a1418",
+				media: "(prefers-color-scheme: dark)",
 			},
 			...shareMeta({
 				title: "GavelUp",
@@ -51,6 +62,7 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 				rel: "apple-touch-icon",
 				href: "/logo192.png",
 			},
+			{ rel: "manifest", href: "/manifest.json" },
 		],
 	}),
 	shellComponent: RootDocument,
@@ -77,6 +89,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 				<RouteProgress />
 				{children}
 				<ServiceWorkerManager />
+				<InstallHint />
 				<TanStackDevtools
 					config={{
 						position: "bottom-right",

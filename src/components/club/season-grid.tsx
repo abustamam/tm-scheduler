@@ -16,6 +16,7 @@ import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { showWriteError } from "#/components/write-error-toast";
 import { opensCoverSheet } from "#/lib/cover-sheet-logic";
 import { formatMeetingDate } from "#/lib/format";
+import { noteClaim } from "#/lib/install-hint";
 import { mailtoHref } from "#/lib/mailto";
 import type { StoredMember } from "#/lib/member-identity";
 import { meetingRoleOptions } from "#/lib/member-role-picker";
@@ -327,7 +328,7 @@ export function SeasonGrid({
 		}
 	}
 
-	async function claim(slotId: string) {
+	async function claim(slotId: string, afterRelease = false) {
 		// Guard the (possibly multi-second) identity-picker await: a second tap
 		// while the picker is open must not fire a duplicate claim.
 		if (claimingRef.current.has(slotId)) return;
@@ -368,6 +369,9 @@ export function SeasonGrid({
 						: {}),
 				},
 			);
+			// The Undo of a release re-takes a role the member already held: not a
+			// new claim, so it must not count toward the install hint (#1428).
+			if (!afterRelease) noteClaim();
 			await refetchQuietly("claim");
 		} catch (err) {
 			showWriteError(err, "Couldn't claim role.");
@@ -406,7 +410,7 @@ export function SeasonGrid({
 			// your own claim), so the holder here is always the viewer.
 			toast.success(roleFreedDutyText(1), {
 				duration: DUTY_TOAST_MS,
-				action: { label: "Undo", onClick: () => claim(slotId) },
+				action: { label: "Undo", onClick: () => claim(slotId, true) },
 			});
 			await refetchQuietly("release");
 		} catch (err) {
