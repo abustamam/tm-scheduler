@@ -275,7 +275,8 @@ size:
 - a migration (`drizzle/`, `schema.ts`);
 - the service worker (`public/sw.js`);
 - a cascading delete;
-- the session-less writes that mint PII: `captureGuestVisit` and `submitAccessRequestLogic`
+- the session-less writes that mint PII: `captureGuestVisit`, `submitGuestRsvp`
+  (`src/server/guest-rsvp-logic.ts`, #1443) and `submitAccessRequestLogic`
   (`src/server/access-requests-logic.ts`, #866). Add the next public PII path here.
 
 `/review-pr` prints a hint when a changed path is on that list; a silent hint is not a clean bill.

@@ -292,13 +292,13 @@ There is no per-club copy; `members.email` was dropped by migration 0109.
 | the member's own address change (`confirmEmailChange`, ADR-0030) | the new address was just proved by its link, and `eq(people.userId, …)` for the confirming account is in the UPDATE's own WHERE |
 | convert's adopt of a PRISTINE guest Person (`applyConvertGuestToMember`, #1124, ADR-0031) | `pristineGuestPerson(guestId)` in the UPDATE's own WHERE, before the membership insert: unbound, no membership of any status, no speech/enrolment/helper row, no other guest row, no roster-identity column, no `member_remove` on record (contact is NOT a condition since #1125). It re-writes the Person's own phone in canonical form and its email only when that is a vouched address already on the Person or the officer's `confirmedEmail` for this convert (#1157); never `guests.book_email`. Not a fill. Any other Person gets a fresh one |
 | an officer's edit of a GUEST's contact (`applyUpdateGuest`, #1125, ADR-0031) | `guestContactWritable(clubId)` in the UPDATE's own WHERE: unbound, no membership in any club, no past as a member (`noMemberHistory()`), and THIS club holds a guest row on the Person. Any club holding a guest row may correct a guest-only Person; a refused write rolls the whole edit back with the first reason (signed in, a member here, elsewhere, a former member). NOT `soleHoldingClub`: a guest row is never a holder |
-| the public guest book (`captureGuestVisit`, `fillBlankGuestContact`, #1125, #1157) | **never.** An address typed without a session is the guest row's note, `guests.book_email` (next row). Its blank PHONE fill writes `people.phone` under `guestContactFillable(clubId)` in the UPDATE's own WHERE: the writable rule, no guest row in any OTHER club, no past as a member; fill-only in the SET (`coalesce`) |
+| the public guest book and guest RSVP (`captureGuestVisit` and `submitGuestRsvp`, both through `resolveOrCreateBookGuest`; `fillBlankGuestContact`, #1125, #1157, #1443) | **never.** An address typed without a session is the guest row's note, `guests.book_email` (next row). Its blank PHONE fill writes `people.phone` under `guestContactFillable(clubId)` in the UPDATE's own WHERE: the writable rule, no guest row in any OTHER club, no past as a member; fill-only in the SET (`coalesce`) |
 | the Easy-Speak import's linked-member fill (`fillMemberContact`, `history-import-logic.ts`, #1240) | `isNull(people.userId)` AND `soleHoldingClub(clubId)` in the UPDATE's own WHERE, the address is blank, and `emailHeldByOther` (`normalizedEmail()`, guest-only Persons ignored) is asked inside the apply transaction; a created member's email goes in its INSERT after the same check |
 | the superadmin first-admin repair, `mergePeople` | their named waivers |
 | Separate (`applySeparateGuest`, #1127, #1175) | a plain INSERT of a fresh Person with no email or phone |
 | an officer of two clubs linking a guest across them (`applyLinkGuestAcrossClubs`, #1175, ADR-0031) | writes NO `people` column: it re-points one guest row at the other's Person and deletes the Person it left, which must be pristine (`pristineGuestPerson(guestId)`) with an email and phone that are blank or equal to the keeper's, so nothing is lost; both Persons guest-only (`identityIgnoredGuestPerson()`); refused when the keeper Person already has a card or an active seat in the absorbed guest's club (`personIsHereAlready`: one card per Person per club) |
 | a plain INSERT of a brand-new Person (`createGuestRecord` carries the guest's contact onto the Person it mints) | always — a fresh row is nobody's yet |
-| **not `people.email`:** `guests.book_email`, the club's unconfirmed note (#1157, ADR-0029 amendment) | written by `captureInTransaction` (create) and `fillBlankGuestContact` (fill-only, under `guestContactFillable(clubId)` in the UPDATE's own WHERE), cleared to NULL by convert's confirmed write and by `applyUpdateGuest` saving a non-null address, restored from a link's record by an unlink. No writer of `people` reads it; the convert's identity never contains it (an officer's `confirmedEmail` is the only way it becomes a Person fact). `guest-book-email.guard.test.ts` counts every `bookEmail` key |
+| **not `people.email`:** `guests.book_email`, the club's unconfirmed note (#1157, ADR-0029 amendment) | written by `resolveOrCreateBookGuest` (create, for the guest book and the guest RSVP) and `fillBlankGuestContact` (fill-only, under `guestContactFillable(clubId)` in the UPDATE's own WHERE), cleared to NULL by convert's confirmed write and by `applyUpdateGuest` saving a non-null address, restored from a link's record by an unlink. No writer of `people` reads it; the convert's identity never contains it (an officer's `confirmedEmail` is the only way it becomes a Person fact). `guest-book-email.guard.test.ts` counts every `bookEmail` key |
 
 **Guest conversion never writes an existing Person's address** (#907 review). The
 guest book is an anonymous public form; a fill would let anyone who knows a
@@ -780,13 +780,15 @@ race would have left exactly the PII the takedown was meant to stop collecting. 
 round trip, because the statement was already there. #616 admin-gated the only caller and #630
 deleted both.
 
-The live instance is `captureGuestVisit`, the guest-book write that mints a `guests` row carrying a
+A live instance is `captureGuestVisit`, the guest-book write that mints a `guests` row carrying a
 name, an email and a phone. It takes `SELECT … FROM clubs … FOR UPDATE` inside its transaction for
 the guest-book throttle, and since #858 it reads `archived_at` under that lock on both the
 new-guest and the returning-guest paths, rather than calling `assertClubNotArchived` before the
 transaction as #555 first shipped it. Keep it that way: moving the check back out in front of the
-transaction reopens the window on the one session-less path that mints PII, where a lock to gate in
-is already held.
+transaction reopens the window on a session-less path that mints PII, where a lock to gate in
+is already held. The guest RSVP (`submitGuestRsvp`, #1443) is the second such path: it shares
+`resolveOrCreateBookGuest` and takes the same row lock on every path, a retry that hits its
+`clientKey` included.
 
 **The enrollment sweep is now closed on both shapes**, having been closed on neither. The
 `\n});` body-slicing bug is fixed (#565) and `bodyStopsAtItsOwnDeclaration` fails on any

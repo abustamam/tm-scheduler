@@ -282,7 +282,7 @@ describe("guests.book_email never reaches a Person (#1157)", () => {
 			[
 				"src/server/guest-pipeline-logic.ts :: applyConvertGuestToMember :: null",
 				"src/server/guest-pipeline-logic.ts :: applyUpdateGuest :: null",
-				"src/server/guest-pipeline-logic.ts :: captureInTransaction :: email",
+				"src/server/guest-pipeline-logic.ts :: resolveOrCreateBookGuest :: email",
 				"src/server/guest-pipeline-logic.ts :: fillBlankGuestContact :: contact.email",
 				"src/server/guest-pipeline-logic.ts :: applyUnlinkGuestFromMember :: recordedEmail",
 			].sort(),

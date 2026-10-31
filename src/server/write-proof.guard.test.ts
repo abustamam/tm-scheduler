@@ -606,6 +606,15 @@ const WRITE_PROOF_EXCEPTIONS: Record<
 		class: "public-intake",
 		reason: "bounded guest intake",
 	},
+	// The guest RSVP (#1443): same shape as the guest book. Honeypot + minimum
+	// fill time answered with a silent success; the identity half is
+	// `resolveOrCreateBookGuest`, so the 30-new-guests-per-club-per-hour cap is
+	// shared with the guest book and enforced under the club lock.
+	"guest-rsvp.ts#submitGuestRsvp": {
+		class: "public-intake",
+		reason:
+			"bounded guest RSVP intake: honeypot + client-measured fill time (a missing value counts as too fast); shares the guest book's per-club hourly new-guest cap under the club lock; refuses non-scheduled, past and >60-day-out meetings",
+	},
 	// The request-access form (#866). A prospect asks for a club or district
 	// before any account exists, so there is no session to prove. What bounds
 	// it, all in `access-requests-logic.ts`:
@@ -1216,7 +1225,7 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 		).not.toContain(key);
 	});
 
-	it("holds exactly the 23 exceptions: 24 left after #762 and #752, plus #866 and #880, less #763's three", () => {
+	it("holds exactly the 24 exceptions: 24 left after #762 and #752, plus #866 and #880, less #763's three, plus #1443's guest RSVP", () => {
 		// The count is pinned, not just the shape. A twenty-fifth arriving
 		// silently is the thing to notice — either a new session-less write, or a
 		// child issue's row landing without its sibling being retired.
@@ -1263,10 +1272,10 @@ describe("write-proof classification of every POST server fn (#761)", () => {
 			publicIntake: byClass("public-intake"),
 			fillBlank: byClass("fill-blank"),
 		}).toEqual({
-			total: 23,
+			total: 24,
 			pendingProof: 0,
 			consoleAsserted: 15,
-			publicIntake: 3,
+			publicIntake: 4,
 			fillBlank: 5,
 		});
 	});

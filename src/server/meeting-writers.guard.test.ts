@@ -387,6 +387,11 @@ const MEETING_WRITERS: Record<string, Entry> = {
 	"src/server/guest-pipeline-logic.ts#captureInTransaction": {
 		class: "record",
 	},
+	"src/server/guest-rsvp-logic.ts#submitGuestRsvpLogic": {
+		class: "exempt",
+		reason:
+			"A guest's RSVP (#1443) is an expression of intent, not attendance and not the plan: it writes `meeting_guest_rsvps` (swept only because it has a meeting_id), never a slot, an attendance row or a status. It refuses a meeting that is not scheduled, past, or more than 60 days out itself (`assertRsvpOpen`, under the meeting row FOR SHARE). The rows go with the meeting or club by ON DELETE CASCADE.",
+	},
 	"src/server/guests-logic.ts#applyAssignGuestToSlot": {
 		class: "plan",
 		overrides: {
@@ -2384,6 +2389,7 @@ const PINNED_SWEPT_TABLES = [
 	"meetingAwards",
 	"meetingBallotGuests",
 	"meetingCandidateDisqualifications",
+	"meetingGuestRsvps",
 	"meetingTemplateBeats",
 	"meetingTemplateRoles",
 	"meetingTemplates",
