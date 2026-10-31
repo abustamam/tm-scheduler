@@ -2,6 +2,10 @@ import { Link } from "@tanstack/react-router";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import {
+	AttendanceExpectedGuests,
+	type ExpectedGuest,
+} from "#/components/club/attendance-expected-guests";
+import {
 	AttendanceGuestsGroup,
 	type GuestEditCapability,
 } from "#/components/club/attendance-guests-group";
@@ -27,6 +31,7 @@ import {
 	type PanelRole,
 	type PanelRowRole,
 	type PlanStatus,
+	pendingExpectedGuests,
 } from "#/lib/attendance-panel";
 import type { EvaluatorFormBrief } from "#/lib/evaluator-form";
 import { type PersonalNudgeBase, personalNudgeUrl } from "#/lib/nudge";
@@ -981,6 +986,8 @@ export function MeetingAttendancePanel({
 	onSetMode,
 	guests,
 	clubGuests,
+	expectedGuests,
+	onGuestHere,
 	canViewMemberDetail = false,
 	guestEdit,
 	onAddGuest,
@@ -1116,6 +1123,15 @@ export function MeetingAttendancePanel({
 	 *  empty group. */
 	guests?: MinutesGuestRow[];
 	clubGuests?: { id: string; name: string }[];
+	/**
+	 * Guests who RSVP'd (#1444), officers only (the payload carries them for no
+	 * one else). PLAN mode lists them under the roster with a visit label and
+	 * adds "· N guests" to the counts line. ROLL mode lists those not yet on the
+	 * roll as "Expected (RSVP'd)", each with Here (`onGuestHere`). Omitted ⇒ none.
+	 */
+	expectedGuests?: ExpectedGuest[];
+	/** Roll mode only. Here on an expected guest: the roll's own guest-add write. */
+	onGuestHere?: (guestId: string) => void | Promise<void>;
 	/**
 	 * #727. The viewer may open a member's detail page, so BOTH modes render the
 	 * name as a link to `/members/$id`; everyone else gets plain text.
@@ -1273,7 +1289,12 @@ export function MeetingAttendancePanel({
 		: null;
 	const planPanel = roll
 		? null
-		: buildPlanPanel({ roster, plan: effectivePlan, roleByMemberId });
+		: buildPlanPanel({
+				roster,
+				plan: effectivePlan,
+				roleByMemberId,
+				guestCount: expectedGuests?.length ?? 0,
+			});
 	const countsLine = rollPanel?.countsLine ?? planPanel?.countsLine ?? "";
 
 	async function writeRung(memberId: string, next: PlanStatus | null) {
@@ -1476,6 +1497,19 @@ export function MeetingAttendancePanel({
 									/>
 								))}
 					</ul>
+					{/* Before the meeting: who to look out for. */}
+					{!roll && expectedGuests ? (
+						<AttendanceExpectedGuests guests={expectedGuests} />
+					) : null}
+					{/* On the roll: the RSVP'd guests not yet marked. They are NOT
+					 *  present and NOT a visit until Here (#1444, D7). */}
+					{roll && guests && expectedGuests ? (
+						<AttendanceExpectedGuests
+							guests={pendingExpectedGuests(expectedGuests, guests)}
+							locked={writesLocked || busy}
+							onHere={onGuestHere}
+						/>
+					) : null}
 					{roll && guests ? (
 						/* `writesLocked` here too, and for the same reason as the chips:
 						 *  this group only ever renders in roll mode, the guest writes

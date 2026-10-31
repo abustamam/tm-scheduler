@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
 import {
+	attendanceCalendarEvent,
 	calendarEvent,
 	googleCalendarUrl,
 	icsFilename,
@@ -204,5 +205,41 @@ describe("icsFilename", () => {
 		expect(
 			icsFilename("Café Speakers!", "2026-11-12", "General Evaluator"),
 		).toBe("cafe-speakers-2026-11-12-general-evaluator.ics");
+	});
+});
+
+describe("attendanceCalendarEvent (#1444)", () => {
+	const build = (uid: string) =>
+		attendanceCalendarEvent({
+			clubName: "Downtown Speakers",
+			dateLabel: "Thursday, Nov 12",
+			scheduledAt: zonedWallTimeToUtc("2026-11-12T19:00", "America/Chicago"),
+			lengthMinutes: 90,
+			meetingUrl: "https://gavelup.example/club/downtown/meeting/2026-11-12",
+			uid,
+		});
+
+	/*
+	 * protects: the attendance copy, the end = start + length rule, the caller's uid.
+	 * fails_when: the copy drops the club or the date, or a role line sneaks in.
+	 * no_claim: says nothing about how a calendar app renders the event.
+	 */
+	it("says you're coming to the club on the date, with no role line", () => {
+		const e = build("m1-g1@gavelup");
+		expect(e.title).toBe("Downtown Speakers meeting");
+		expect(e.description).toBe(
+			"You're coming to Downtown Speakers on Thursday, Nov 12.\nMeeting: https://gavelup.example/club/downtown/meeting/2026-11-12",
+		);
+		expect(e.end.getTime() - e.start.getTime()).toBe(90 * 60_000);
+		expect(e.uid).toBe("m1-g1@gavelup");
+	});
+
+	// protects=O8: still no location, join link or contact in the .ics.
+	// fails_when=a location/join field is added to the event shape and serialised.
+	it("keeps the .ics free of location and join link", () => {
+		const ics = unfold(toIcs(build("m1-g1@gavelup"), NOW));
+		expect(ics).toContain("UID:m1-g1@gavelup");
+		expect(ics).not.toMatch(/LOCATION/);
+		expect(ics).not.toMatch(/zoom|join/i);
 	});
 });

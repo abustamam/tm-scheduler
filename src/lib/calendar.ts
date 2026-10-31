@@ -44,6 +44,39 @@ export function calendarEvent(args: {
 	};
 }
 
+/**
+ * The "I'm coming" event (#1444): a meeting attended, not a role held. For a
+ * guest and a member alike, so the .ics carries no role and, like every event
+ * here, no location, join link, email or phone.
+ *
+ * `uid` must be stable per meeting AND person (the caller passes
+ * `<meetingId>-<personKey>@gavelup`): importing twice then updates one calendar
+ * entry rather than stacking duplicates, and two people's entries never share one.
+ */
+export function attendanceCalendarEvent(args: {
+	clubName: string;
+	/** The club-local date as the person reads it, e.g. "Thursday, Nov 12". */
+	dateLabel: string;
+	scheduledAt: Date | string;
+	lengthMinutes: number;
+	meetingUrl: string;
+	uid: string;
+}): CalendarEvent {
+	const start = toDate(args.scheduledAt);
+	const end = new Date(start.getTime() + args.lengthMinutes * 60_000);
+	return {
+		title: `${args.clubName} meeting`,
+		start,
+		end,
+		description: [
+			`You're coming to ${args.clubName} on ${args.dateLabel}.`,
+			`Meeting: ${args.meetingUrl}`,
+		].join("\n"),
+		url: args.meetingUrl,
+		uid: args.uid,
+	};
+}
+
 /** `YYYYMMDDTHHMMSSZ`, UTC. */
 export function icsUtc(d: Date): string {
 	return d

@@ -1,5 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, notFound, useRouter } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	notFound,
+	useRouter,
+} from "@tanstack/react-router";
 import {
 	CalendarDays,
 	CalendarX,
@@ -99,6 +104,7 @@ import {
 	clearRefusedMessage,
 	type PlanStatus,
 	publicComingCount,
+	publicCountsLine,
 } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { ballotUrlFor } from "#/lib/digital-voting";
@@ -432,6 +438,9 @@ function MeetingView() {
 		coverRequests,
 		pairedRoleDefinitionIds,
 		clubGuests,
+		hasJoinLink,
+		guestRsvpCount,
+		guestRsvps,
 		roster: loaderRoster,
 		plan,
 		answeredRungs,
@@ -1622,7 +1631,9 @@ function MeetingView() {
 	// row on reconnect (#176 slice 5). `name` is resolved here because the queued
 	// op has to render an optimistic row offline, with no round trip to name it.
 	const guestName = (guestId: string) =>
-		clubGuests.find((g) => g.id === guestId)?.name ?? "Guest";
+		guestRsvps.find((g) => g.guestId === guestId)?.name ??
+		clubGuests.find((g) => g.id === guestId)?.name ??
+		"Guest";
 
 	async function addRollGuest(payload: {
 		guestId?: string;
@@ -2257,6 +2268,18 @@ function MeetingView() {
 							<Video className="size-4" aria-hidden />
 							Join the video call
 						</a>
+					) : hasJoinLink && !cancelled && !over ? (
+						/* #1444, D6. The link itself never reaches this viewer's payload
+						   (`public-meeting-payload.ts`): the RSVP page hands it over once
+						   they have said they are coming. */
+						<Link
+							to="/club/$clubId/meeting/$meetingId/rsvp"
+							params={{ clubId, meetingId: urlKey }}
+							className="flex min-h-11 items-center gap-1.5 font-semibold text-primary underline-offset-4 hover:underline sm:min-h-0"
+						>
+							<Video className="size-4" aria-hidden />
+							RSVP to get the video link
+						</Link>
 					) : null}
 				</div>
 				<MeetingRoomStrip
@@ -2823,7 +2846,18 @@ function MeetingView() {
 					// nothing behind it. It is computed from `answeredRungs` and the
 					// slots, both public, and names nobody.
 					<p className="order-1 text-sm text-muted-foreground lg:order-2 lg:w-[340px] lg:shrink-0 xl:w-96">
-						{comingCount} coming
+						{publicCountsLine(comingCount, guestRsvpCount)}
+					</p>
+				) : null}
+				{/* Guests but nobody else answered yet (#1444): the line above is
+				    gated on a coming count, this is its only-guests case. */}
+				{!showPanel &&
+				phase === "upcoming" &&
+				!cancelled &&
+				comingCount === 0 &&
+				guestRsvpCount > 0 ? (
+					<p className="order-1 text-sm text-muted-foreground lg:order-2 lg:w-[340px] lg:shrink-0 xl:w-96">
+						{publicCountsLine(0, guestRsvpCount)}
 					</p>
 				) : null}
 				{showPanel && !tmodPanelUnavailable ? (
@@ -2941,6 +2975,11 @@ function MeetingView() {
 							attendance={rollAttendance}
 							guests={rollGuests}
 							clubGuests={clubGuests}
+							// RSVP'd guests (#1444): the officer's payload only. Here is the
+							// roll's own guest add, so the offline queue and the once-per-guest
+							// write are the ones `addRollGuest` already has.
+							expectedGuests={guestRsvps}
+							onGuestHere={(guestId) => addRollGuest({ guestId })}
 							// Once the meeting is a historical record nobody is being chased
 							// over it, so the rows drop their contact drafts.
 							phaseCompleted={phase === "completed"}

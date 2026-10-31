@@ -31,7 +31,8 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const { captureGuestVisit, GUEST_BOOK_MAX_NEW_PER_WINDOW } = await import(
 	"./guest-pipeline-logic"
 );
-const { submitGuestRsvpLogic } = await import("./guest-rsvp-logic");
+const { countMeetingGuestRsvps, loadMeetingGuestRsvps, submitGuestRsvpLogic } =
+	await import("./guest-rsvp-logic");
 const { guestRsvpSchema, RSVP_MEETING_REFUSED_MESSAGE } = await import(
 	"./guest-rsvp-schemas"
 );
@@ -222,8 +223,9 @@ describe.skipIf(!hasTestDb)("submitGuestRsvp", () => {
 		const second = await rsvp(c);
 		expect(second.confirmation).toMatchObject({
 			location: "Room 4",
-			// Hybrid (location AND link): the link is not handed to a non-member.
-			joinUrl: null,
+			// Hybrid (location AND link): the link IS handed over (#1444, the
+			// maintainer's decision): any meeting with a join link.
+			joinUrl: "https://meet.example/abc",
 			toastmasterFirstName: "Member",
 		});
 		await testDb
@@ -313,5 +315,56 @@ describe.skipIf(!hasTestDb)("submitGuestRsvp", () => {
 			.set({ archivedAt: new Date() })
 			.where(eq(clubs.id, c.clubId));
 		await expect(rsvp(c, { clientKey })).rejects.toThrow(CLUB_ARCHIVED_MESSAGE);
+	});
+});
+
+describe.skipIf(!hasTestDb)("the officer's RSVP'd guest list (#1444)", () => {
+	// protects=AC5: a first-time guest reads visit 1, a guest with one earlier
+	// present record reads visit 2, and the public count is a number only.
+	// fails_when=the visit number ignores past attendance, counts an absent row,
+	// or the count is taken from the names list.
+	it("derives each guest's visit number from past present records", async () => {
+		const c = await club();
+		const email = unique();
+		const first = await rsvp(c, { firstName: "Dana", email });
+		await rsvp(c, { firstName: "Newcomer" });
+		const [dana] = await guestsOf(c).then((gs) =>
+			gs.filter((g) => g.name === "Dana"),
+		);
+		const [past] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: c.clubId,
+				scheduledAt: new Date(Date.now() - 7 * 86_400_000),
+			})
+			.returning({ id: meetings.id });
+		const [missed] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: c.clubId,
+				scheduledAt: new Date(Date.now() - 14 * 86_400_000),
+			})
+			.returning({ id: meetings.id });
+		await testDb.insert(meetingAttendance).values([
+			{
+				meetingId: past?.id ?? "",
+				guestId: dana?.id ?? "",
+				status: "present",
+			},
+			// A guest who was expected and did not come is not a visit.
+			{
+				meetingId: missed?.id ?? "",
+				guestId: dana?.id ?? "",
+				status: "absent",
+			},
+		]);
+
+		const list = await loadMeetingGuestRsvps(c.meetingId, c.clubId, "UTC");
+		expect(list.map((g) => [g.name, g.visitNumber])).toEqual([
+			["Dana", 2],
+			["Newcomer", 1],
+		]);
+		expect(first.confirmation?.rsvpId).toBeDefined();
+		expect(await countMeetingGuestRsvps(c.meetingId)).toBe(2);
 	});
 });
