@@ -27,6 +27,11 @@ import {
 	AbsentReleaseDialog,
 	type PendingAbsent,
 } from "#/components/club/absent-release-dialog";
+import { CoverChip } from "#/components/club/cover-chip";
+import {
+	CoverLandingCard,
+	resolveCoverLanding,
+} from "#/components/club/cover-landing-card";
 import { CoverSheet, type CoverSlot } from "#/components/club/cover-sheet";
 import {
 	DeclineReleaseDialog,
@@ -90,6 +95,7 @@ import {
 	publicComingCount,
 } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
+import { coverStatus } from "#/lib/cover";
 import { ballotUrlFor } from "#/lib/digital-voting";
 import { evaluatingByMember } from "#/lib/evaluator-form";
 import { feedbackWindow } from "#/lib/feedback-window";
@@ -139,6 +145,7 @@ import { outstandingDutiesByMember } from "#/lib/nudge";
 import { meetingOgImage, OG_IMAGE_SIZE_META } from "#/lib/og-image-url";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { notComingToast } from "#/lib/role-duty-copy";
+import { roleGuide } from "#/lib/role-guide";
 import {
 	deriveRollAttendance,
 	deriveRollGuests,
@@ -189,6 +196,7 @@ import { getMinutesRecipients } from "#/server/minutes-email";
 import type { AttendanceStatus, AwardCategory } from "#/server/minutes-logic";
 import { getMeetingOgVersion } from "#/server/og-card";
 import { clearContacted, setContacted } from "#/server/outreach";
+import { getPublicClubRoles } from "#/server/role-definitions";
 import {
 	addRoleSlot,
 	addSpeakerSlot,
@@ -417,6 +425,7 @@ function MeetingView() {
 		tableTopicsMinSeconds,
 		tableTopicsMaxSeconds,
 		clubRoles,
+		coverRequests,
 		pairedRoleDefinitionIds,
 		clubGuests,
 		roster: loaderRoster,
@@ -486,6 +495,19 @@ function MeetingView() {
 	const [lineupOpen, setLineupOpen] = useState(false);
 	// The viewer's own late release waits here for the cover sheet (#1439).
 	const [coverSlots, setCoverSlots] = useState<CoverSlot[]>([]);
+	// `?cover=<slotId>` (#1440): "Can't, sorry" hides the landing card for this
+	// visit; a reload with the link shows it again, which is the right reading
+	// of a link someone re-opened.
+	const [coverCardDismissed, setCoverCardDismissed] = useState(false);
+	const [coverTakeBusy, setCoverTakeBusy] = useState(false);
+	const coverParam = (search as { cover?: unknown }).cover;
+	// The role's one-liner: the public roles read, only when a cover link is
+	// present (the meeting payload's `clubRoles` is manager-only).
+	const { data: coverRoleDefs } = useQuery({
+		queryKey: ["public-club-roles", clubUuid] as const,
+		queryFn: () => getPublicClubRoles({ data: clubUuid }),
+		enabled: typeof coverParam === "string",
+	});
 	// Cancel (#1057): the confirm before the write, and the notice sheet after
 	// it. Two flags because the sheet outlives the confirm — it opens on arrival
 	// too, when the URL carries `?notice=1` (see `doCancel`).
@@ -1819,6 +1841,67 @@ function MeetingView() {
 
 	const actions = effectiveCanManage ? managerActions : selfActions;
 
+	// Cover requests (#1440): the landing card for a `?cover=` link, and a chip
+	// per request. The chips sit in one strip above the agenda, not under each
+	// role: the agenda component renders the rows and takes no per-slot content.
+	const coverLanding = coverCardDismissed
+		? null
+		: resolveCoverLanding({
+				cover: coverParam,
+				slots,
+				coverRequests,
+				meetingOver: over || meeting.status === "cancelled",
+			});
+	const coverLandingSlot =
+		coverLanding?.kind === "open"
+			? slots.find((s) => s.id === coverLanding.slotId)
+			: undefined;
+	const coverRoleDef = coverLandingSlot
+		? coverRoleDefs?.find((r) => r.name === coverLandingSlot.roleName)
+		: undefined;
+	const coverMeetingWhen = new Date(meeting.scheduledAt);
+	const coverWhenLine = [
+		new Intl.DateTimeFormat("en-US", {
+			weekday: "long",
+			timeZone: timezone,
+		}).format(coverMeetingWhen),
+		meetingNumber != null ? `Meeting ${meetingNumber}` : null,
+		formatMeetingTime(coverMeetingWhen, timezone),
+	]
+		.filter(Boolean)
+		.join(" · ");
+	const coverChips = coverRequests
+		.map((r) => {
+			const slot = slots.find((s) => s.id === r.slotId);
+			return slot
+				? {
+						request: r,
+						roleLabel: slotLabel(slot, roleCounts),
+						status: coverStatus(
+							r,
+							{ scheduledAt: coverMeetingWhen },
+							timezone,
+							now,
+						),
+					}
+				: null;
+		})
+		.filter((c) => c !== null)
+		.filter((c) => !(c.status === "covered" && over));
+	async function takeCoveredRole() {
+		if (!coverLandingSlot) return;
+		setCoverTakeBusy(true);
+		try {
+			// The same self-serve claim the agenda uses: a signed-out visitor
+			// picks their name first (PickNameForm), a signed-in member does not.
+			await selfActions.claim(coverLandingSlot);
+		} catch (err) {
+			showWriteError(err, "Something went wrong.");
+		} finally {
+			setCoverTakeBusy(false);
+		}
+	}
+
 	async function doAddRole(roleDefinitionId: string) {
 		setAddRoleBusy(true);
 		try {
@@ -2431,6 +2514,45 @@ function MeetingView() {
 			    Minutes and the ballot console instead of directly under the toolbar. */}
 			<div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:gap-6">
 				<div className="order-2 min-w-0 flex-1 space-y-5 lg:order-1">
+					{coverLanding ? (
+						<CoverLandingCard
+							landing={coverLanding}
+							roleLabel={
+								coverLandingSlot ? slotLabel(coverLandingSlot, roleCounts) : ""
+							}
+							whenLine={coverWhenLine}
+							description={
+								coverRoleDef
+									? (roleGuide({
+											name: coverRoleDef.name,
+											key: coverRoleDef.key,
+											description: coverRoleDef.description,
+										}).description ?? null)
+									: null
+							}
+							busy={coverTakeBusy}
+							onTake={takeCoveredRole}
+							onDecline={() => setCoverCardDismissed(true)}
+						/>
+					) : null}
+
+					{coverChips.length > 0 ? (
+						<ul className="flex flex-col items-start gap-1.5">
+							{coverChips.map((c) => (
+								<li key={c.request.slotId} className="max-w-full">
+									<span className="sr-only">{c.roleLabel}: </span>
+									<CoverChip
+										request={c.request}
+										status={c.status}
+										roleLabel={c.roleLabel}
+										timeZone={timezone}
+										meetingOver={over}
+									/>
+								</li>
+							))}
+						</ul>
+					) : null}
+
 					{effectiveCanManage ? null : <GuestResources clubId={clubId} />}
 
 					{readiness ? (
