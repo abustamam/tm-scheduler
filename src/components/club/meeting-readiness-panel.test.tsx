@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
 	MeetingReadiness,
@@ -8,6 +9,10 @@ import type {
 } from "#/lib/meeting-readiness";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
 import { MeetingReadinessPanel } from "./meeting-readiness-panel";
+
+vi.mock("sonner", () => ({
+	toast: { success: vi.fn(), error: vi.fn() },
+}));
 
 afterEach(cleanup);
 
@@ -164,6 +169,10 @@ describe("MeetingReadinessPanel (#963)", () => {
 	});
 
 	describe("cover gaps (#1441)", () => {
+		afterEach(() => {
+			vi.unstubAllGlobals();
+			vi.clearAllMocks();
+		});
 		const coverGap = (
 			n: number,
 			status: "dropped" | "finding_cover",
@@ -196,31 +205,83 @@ describe("MeetingReadinessPanel (#963)", () => {
 			);
 		});
 
+		const click = (name = 'Copy "we need a Timer"') =>
+			fireEvent.click(screen.getByRole("button", { name }));
+		const phone = (coarse: boolean) =>
+			vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: coarse }));
+
 		it("the button copies the role, the weekday and the cover link", async () => {
 			const writeText = vi.fn().mockResolvedValue(undefined);
 			vi.stubGlobal("navigator", { clipboard: { writeText } });
+			phone(false);
 			await renderPanel(cover([coverGap(1, "dropped")]));
-			fireEvent.click(
-				screen.getByRole("button", { name: 'Copy "we need a Timer"' }),
-			);
+			click();
 			await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
 			const text = writeText.mock.calls[0][0] as string;
 			expect(text).toContain("Timer");
 			expect(text).toContain("Saturday");
 			expect(text).toContain("/club/downtown/meeting/2026-10-10?cover=c1");
-			vi.unstubAllGlobals();
+			await vi.waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1));
+			expect(toast.error).not.toHaveBeenCalled();
 		});
 
-		it("uses the share sheet when the browser has one", async () => {
+		it("uses the share sheet on a phone (share and a coarse pointer)", async () => {
 			const share = vi.fn().mockResolvedValue(undefined);
-			vi.stubGlobal("navigator", { share });
+			const writeText = vi.fn();
+			vi.stubGlobal("navigator", { share, clipboard: { writeText } });
+			phone(true);
 			await renderPanel(cover([coverGap(1, "dropped")]));
-			fireEvent.click(
-				screen.getByRole("button", { name: 'Copy "we need a Timer"' }),
-			);
+			click();
 			await vi.waitFor(() => expect(share).toHaveBeenCalledTimes(1));
 			expect(share.mock.calls[0][0].text).toContain("?cover=c1");
-			vi.unstubAllGlobals();
+			expect(writeText).not.toHaveBeenCalled();
+		});
+
+		it("a desktop browser with navigator.share still copies", async () => {
+			const share = vi.fn();
+			const writeText = vi.fn().mockResolvedValue(undefined);
+			vi.stubGlobal("navigator", { share, clipboard: { writeText } });
+			phone(false);
+			await renderPanel(cover([coverGap(1, "dropped")]));
+			click();
+			await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+			expect(share).not.toHaveBeenCalled();
+		});
+
+		it("closing the share sheet is silent", async () => {
+			const share = vi
+				.fn()
+				.mockRejectedValue(new DOMException("closed", "AbortError"));
+			vi.stubGlobal("navigator", { share });
+			phone(true);
+			await renderPanel(cover([coverGap(1, "dropped")]));
+			click();
+			await vi.waitFor(() => expect(share).toHaveBeenCalledTimes(1));
+			await new Promise((r) => setTimeout(r, 0));
+			expect(toast.error).not.toHaveBeenCalled();
+			expect(toast.success).not.toHaveBeenCalled();
+		});
+
+		it("a blocked clipboard write shows the error toast", async () => {
+			const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+			vi.stubGlobal("navigator", { clipboard: { writeText } });
+			phone(false);
+			await renderPanel(cover([coverGap(1, "dropped")]));
+			click();
+			await vi.waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+			expect(toast.success).not.toHaveBeenCalled();
+		});
+
+		it("the label takes 'an' before a vowel", async () => {
+			vi.stubGlobal("navigator", { clipboard: { writeText: vi.fn() } });
+			await renderPanel(
+				cover([
+					{ ...coverGap(1, "dropped"), slotLabel: "Evaluator" },
+					{ ...coverGap(2, "dropped"), slotLabel: "Ah-Counter" },
+				]),
+			);
+			screen.getByRole("button", { name: 'Copy "we need an Evaluator"' });
+			screen.getByRole("button", { name: 'Copy "we need an Ah-Counter"' });
 		});
 
 		it("a plain gap has no button, and cover rows do not repeat in the plain list", async () => {

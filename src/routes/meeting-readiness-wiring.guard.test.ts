@@ -107,8 +107,11 @@ describe("the meeting route wires the readiness panel (#963)", () => {
 			"now,",
 			"timezone,",
 			"scheduledAt: meeting.scheduledAt,",
-		])
-			expect(sliceIn(decision, "meetingReadiness({", "})")).toContain(arg);
+		]) {
+			const call = sliceIn(decision, "meetingReadiness({", "})");
+			expect(call.length).toBeGreaterThan(0);
+			expect(call).toContain(arg);
+		}
 		expect(decision.trimEnd().endsWith(": null;")).toBe(true);
 	});
 
@@ -119,6 +122,7 @@ describe("the meeting route wires the readiness panel (#963)", () => {
 		// Present link is built from (`clubSlug={clubId}`, `meetingId={urlKey}`).
 		expect(tag).toContain("clubId={clubId}");
 		expect(tag).toContain("meetingId={urlKey}");
+		expect(tag).toContain("timezone={timezone}");
 	});
 
 	it("puts the panel directly above the agenda section, not inside it", () => {

@@ -9,6 +9,10 @@ import type { MeetingReadiness, ReadinessGap } from "#/lib/meeting-readiness";
 /** How many gaps a row names before it says "+N more". The data never truncates. */
 const MAX_GAPS_SHOWN = 3;
 
+/** "a Timer" / "an Evaluator": a leading vowel takes "an". */
+const withArticle = (label: string): string =>
+	`${/^[aeiou]/i.test(label) ? "an" : "a"} ${label}`;
+
 /** "Speaker 2 (Pat)", or "Ah-Counter (open)" when nobody holds the slot. */
 const gapText = (gap: ReadinessGap): string =>
 	`${gap.slotLabel} (${gap.holderName ?? "open"})`;
@@ -24,12 +28,18 @@ function coverNote(
 }
 
 /**
- * The officer's own group call (#1441): the share sheet where the browser has
- * one (phones), the clipboard otherwise. A person sends it; nothing here does.
+ * The officer's own group call (#1441): the share sheet on a phone (a browser
+ * with `navigator.share` AND a coarse pointer; desktop Safari/Chrome also have
+ * `share`, but there the button says "Copy"), the clipboard otherwise. A person
+ * sends it; nothing here does.
  */
 async function shareCoverCall(text: string): Promise<void> {
 	try {
-		if (typeof navigator.share === "function") {
+		const onPhone =
+			typeof navigator.share === "function" &&
+			typeof window.matchMedia === "function" &&
+			window.matchMedia("(pointer: coarse)").matches;
+		if (onPhone) {
 			await navigator.share({ text });
 			return;
 		}
@@ -50,9 +60,9 @@ async function shareCoverCall(text: string): Promise<void> {
  * nothing: asking a person is the reader's own move, from the agenda directly
  * below, which keeps its nudge drafts unchanged. The one button is a role a
  * member handed back (#1441): it DRAFTS the group call for the officer to send.
- * That is
- * `.out-of-scope/automatic-open-role-nudges.md` and ADR-0028 (humans send every
- * message) applied to a panel that could otherwise grow a "remind them" button.
+ * That is `.out-of-scope/automatic-open-role-nudges.md` and ADR-0028 (humans
+ * send every message) applied to a panel that could otherwise grow a "remind
+ * them" button.
  *
  * The deck gets a link and no line of its own: the projected deck is built from
  * the same meeting data (a blank theme or Word of the Day drops its slide), so
@@ -148,10 +158,15 @@ export function MeetingReadinessPanel({
 									{item.done ? ", done" : ", not done"}
 								</span>
 								{shown
-									.filter((gap) => gap.cover)
+									.filter(
+										(
+											gap,
+										): gap is ReadinessGap & {
+											cover: NonNullable<ReadinessGap["cover"]>;
+										} => Boolean(gap.cover),
+									)
 									.map((gap) => {
 										const cover = gap.cover;
-										if (!cover) return null;
 										return (
 											<div
 												key={gap.slotId}
@@ -184,7 +199,7 @@ export function MeetingReadinessPanel({
 													}
 												>
 													<Share2 className="size-4" aria-hidden />
-													Copy "we need a {gap.slotLabel}"
+													Copy "we need {withArticle(gap.slotLabel)}"
 												</Button>
 											</div>
 										);

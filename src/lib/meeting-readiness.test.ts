@@ -606,7 +606,7 @@ describe("meetingReadiness cover requests (#1441)", () => {
 		const gaps = item(r, "roles_filled")?.gaps ?? [];
 		expect(gaps[0]).toMatchObject({
 			slotId: dropped.id,
-			cover: { status: "dropped", releasedName: "Sam", weekday: "Saturday" },
+			cover: { status: "dropped", releasedName: "Sam" },
 		});
 		// The rest keep agenda order, behind it.
 		expect(gaps.slice(1).map((g) => g.slotId)).toEqual(others.map((o) => o.id));
@@ -615,18 +615,30 @@ describe("meetingReadiness cover requests (#1441)", () => {
 		);
 	});
 
-	it("finding_cover before the 06:00 flip, dropped after it", () => {
+	it("the weekday is the club's, not the server's or UTC's", () => {
+		// 20:00Z on Fri Oct 30 is Friday in UTC and in every US zone, but Saturday
+		// 09:00 in Auckland: no host zone from UTC to Pacific can mask a dropped
+		// `timeZone`.
+		const s = open();
+		const r = meetingReadiness({
+			...input([s], [request(s.id)]),
+			timezone: "Pacific/Auckland",
+			scheduledAt: new Date("2026-10-30T20:00:00.000Z"),
+		});
+		expect(item(r, "roles_filled")?.gaps[0]?.cover?.weekday).toBe("Saturday");
+	});
+
+	it("finding_cover until the 06:00 flip instant, dropped from it", () => {
+		// 06:00 CDT on Oct 31 is 11:00Z.
 		const s = open();
 		const asked = request(s.id, { kind: "finding_cover" });
-		const before = meetingReadiness(input([s], [asked]));
-		expect(item(before, "roles_filled")?.gaps[0]?.cover?.status).toBe(
-			"finding_cover",
-		);
-		const after = meetingReadiness({
-			...input([s], [asked]),
-			now: new Date("2026-10-31T12:00:00.000Z"),
-		});
-		expect(item(after, "roles_filled")?.gaps[0]?.cover?.status).toBe("dropped");
+		const at = (iso: string) =>
+			item(
+				meetingReadiness({ ...input([s], [asked]), now: new Date(iso) }),
+				"roles_filled",
+			)?.gaps[0]?.cover?.status;
+		expect(at("2026-10-31T10:59:59.000Z")).toBe("finding_cover");
+		expect(at("2026-10-31T11:00:00.000Z")).toBe("dropped");
 	});
 
 	it("a covered request, or one on a held slot, is not annotated", () => {
