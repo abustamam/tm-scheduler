@@ -100,20 +100,12 @@ describe("the route's guest RSVP wiring (#1444)", () => {
 		expect(ROUTE).toContain("{publicCountsLine(comingCount, guestRsvpCount)}");
 	});
 
-	it("opens the meta dialog only once the stored link is in hand for a viewer who is not shown it", () => {
-		// protects=the Edit meeting dialog never opens blank over a withheld link:
-		//   it always sends the field, and a blank would clear the club's link
-		// fails_when=the dialog opens on `meeting` for a viewer whose payload has
-		//   no joinUrl, is fed the withheld row, or the fetch loses its
-		//   writer-gated reader
-		expect(ROUTE).toContain("open={metaOpen && metaDialogReady}");
-		expect(ROUTE).toContain("meeting={metaDialogMeeting}");
-		expect(ROUTE).toContain(
-			"const metaDialogReady = !editorNeedsJoinUrl || editorJoinUrl !== undefined;",
-		);
-		expect(ROUTE).toContain(
-			'viewer.canEditMeetingMeta && hasJoinLink && !("joinUrl" in meeting)',
-		);
-		expect(ROUTE).toContain("getMeetingJoinUrlForEditor({");
+	it("never fetches the stored link for a non-member editor, and tells the dialog only whether one is set", () => {
+		// protects=the roster-picked Toastmaster can edit but is never handed the
+		//   link: the dialog gets the withheld payload and `hasJoinLink`
+		// fails_when=the route mounts a link reader again, or feeds the dialog a
+		//   row with `joinUrl` merged in
+		expect(ROUTE).not.toMatch(/JoinUrlFor|editorJoinUrl|metaDialogMeeting/);
+		expect(ROUTE).toContain("meeting={meeting} hasJoinLink={hasJoinLink}");
 	});
 });

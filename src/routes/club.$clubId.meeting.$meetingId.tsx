@@ -182,7 +182,6 @@ import {
 	cancelMeeting,
 	completeMeeting,
 	getMeetingByKey,
-	getMeetingJoinUrlForEditor,
 	getPublicMeetingByKey,
 	getTmodPanelData,
 	listPastMeetings,
@@ -1704,28 +1703,6 @@ function MeetingView() {
 	// The agenda's internal claim/assign acts as this member: the session member
 	// for a manager (null for an impersonator), the effective member otherwise.
 	const agendaMemberId = effectiveCanManage ? managerActorId : myId;
-	// The Edit meeting dialog seeds its link field from `meeting.joinUrl` and
-	// ALWAYS sends it, so a viewer who may edit but is not a member (a
-	// roster-picked Toastmaster) must not open it on the withheld payload: a blank
-	// would clear the club's link (#1444, D6). They read the stored link through
-	// the writer's own gate first, and the dialog mounts once it is here.
-	const editorNeedsJoinUrl =
-		viewer.canEditMeetingMeta && hasJoinLink && !("joinUrl" in meeting);
-	const editorJoinUrlKey = ["meeting-join-url-editor", meeting.id] as const;
-	const { data: editorJoinUrl } = useQuery({
-		queryKey: editorJoinUrlKey,
-		queryFn: () =>
-			getMeetingJoinUrlForEditor({
-				data: { meetingId: meeting.id, selfMemberId: agendaMemberId },
-			}),
-		enabled: editorNeedsJoinUrl,
-		gcTime: 0,
-	});
-	const metaDialogReady = !editorNeedsJoinUrl || editorJoinUrl !== undefined;
-	const metaDialogMeeting =
-		editorNeedsJoinUrl && editorJoinUrl !== undefined
-			? { ...meeting, joinUrl: editorJoinUrl }
-			: meeting;
 	const publicCountsEl = (
 		<p className="order-1 text-sm text-muted-foreground lg:order-2 lg:w-[340px] lg:shrink-0 xl:w-96">
 			{publicCountsLine(comingCount, guestRsvpCount)}
@@ -2459,18 +2436,16 @@ function MeetingView() {
 				) : null}
 				{viewer.canEditMeetingMeta ? (
 					<MeetingMetaDialog
-						open={metaOpen && metaDialogReady}
+						open={metaOpen}
 						onOpenChange={setMetaOpen}
-						meeting={metaDialogMeeting}
+						meeting={meeting}
+						hasJoinLink={hasJoinLink}
 						timezone={timezone}
 						selfMemberId={agendaMemberId}
 						canReschedule={viewer.canManage}
 						effectiveMeetingNumber={meetingNumber}
 						onSaved={async () => {
 							setMetaOpen(false);
-							await queryClient.invalidateQueries({
-								queryKey: editorJoinUrlKey,
-							});
 							await router.invalidate();
 						}}
 					/>

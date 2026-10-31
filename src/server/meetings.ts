@@ -886,38 +886,6 @@ export const updateMeeting = createServerFn({ method: "POST" })
 		});
 	});
 
-const meetingJoinUrlForEditorSchema = z.object({
-	meetingId: uuid,
-	/** Self-asserted TMOD member id (public page). Null for an authed admin. */
-	selfMemberId: uuid.nullable().optional(),
-});
-
-/**
- * The stored video-call link, for the people `updateMeeting` already lets
- * overwrite it (#1444, D6): an admin or the meeting's TMOD. The meeting payload
- * withholds the link from a non-member, a roster-picked TMOD included, and the
- * Edit meeting dialog seeds its link field from the payload and ALWAYS sends it,
- * so without this a blank field would CLEAR the stored link on any save. Same
- * gate as the writer, so this shows nobody anything they cannot already replace.
- * A GET like every reader (`club-logo-method.guard.test.ts`); the secret is in
- * the response, not the URL. Returns the bare link, or null. AUTHED or
- * self-assert.
- */
-export const getMeetingJoinUrlForEditor = createServerFn({ method: "GET" })
-	.validator((input: unknown) => meetingJoinUrlForEditorSchema.parse(input))
-	.handler(async ({ data }): Promise<string | null> => {
-		await requireMeetingAgendaEditor({
-			meetingId: data.meetingId,
-			selfMemberId: data.selfMemberId ?? null,
-		});
-		const [row] = await db
-			.select({ link: meetings.joinUrl })
-			.from(meetings)
-			.where(eq(meetings.id, data.meetingId))
-			.limit(1);
-		return row?.link ?? null;
-	});
-
 const updateWordOfTheDaySchema = z.object({
 	meetingId: uuid,
 	/** Self-asserted TMOD/Grammarian member id (public page). Null for authed admin. */

@@ -13,8 +13,8 @@
  * through seroval (the serializer TanStack Start dehydrates loader data with)
  * for a request that carries no cookie, so "signed out" is the absence of a
  * credential on the request and not a flag the test sets. The link pasted into
- * `location` / `notes` is scrubbed. `getMeetingJoinUrlForEditor` answers the
- * writer's own people and no one else.
+ * `location` / `notes` is scrubbed. No server fn returns the link behind a
+ * self-asserted gate (see `meeting-join-url-no-editor-reader.guard.test.ts`).
  * Does NOT cover: a real browser (`credentials: "omit"`, the HTTP response
  * body), nor Better Auth resolving a real cookie: the session lookup is
  * mocked, reading the request's cookie. The exceptions, `submitGuestRsvp`'s
@@ -24,8 +24,7 @@ import { randomUUID } from "node:crypto";
 import { eq, getTableColumns } from "drizzle-orm";
 import { serialize } from "seroval";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { meetings, roleDefinitions, roleSlots } from "#/db/schema";
-import { TMOD_ROLE_KEY } from "#/lib/meeting-roles";
+import { meetings } from "#/db/schema";
 import {
 	NON_MEMBER_MEETING_FIELDS,
 	nonMemberMeetingRow,
@@ -78,8 +77,7 @@ vi.mock("#/lib/auth", () => ({
 	},
 }));
 
-const { getMeeting, getMeetingJoinUrlForEditor, getPublicMeetingByKey } =
-	await import("#/server/meetings");
+const { getMeeting, getPublicMeetingByKey } = await import("#/server/meetings");
 
 const JOIN_URL = "https://meet.example/secret-room-4471";
 
@@ -224,50 +222,6 @@ describe.skipIf(!hasTestDb)("the meeting detail payload", () => {
 		signInAs(s.memberUserId);
 		const member = await readers(s).getMeeting();
 		expect(member.meeting.location).toBe(JOIN_URL);
-	});
-
-	// protects=data loss: a viewer who may edit the meeting but is not a member
-	//   (a roster-picked Toastmaster) gets the stored link from the writer's own
-	//   gate, so the Edit meeting dialog never opens on a blank it would then save
-	//   over the club's link. Anyone else is refused.
-	// fails_when=the reader skips requireMeetingAgendaEditor, or refuses the
-	//   self-asserted TMOD the writer accepts.
-	it("hands the stored link to the writer's people and refuses everyone else", async () => {
-		const s = await seed();
-		const read = (selfMemberId?: string | null) =>
-			getMeetingJoinUrlForEditor({
-				data: { meetingId: s.meetingId, selfMemberId },
-			});
-
-		signInAs(s.adminUserId);
-		expect(await read()).toBe(JOIN_URL);
-
-		signInAs(null);
-		await expect(read()).rejects.toThrow(/permission/);
-		// A name-pick that holds no Toastmaster slot is refused.
-		await expect(read(s.memberId)).rejects.toThrow(/permission/);
-		signInAs(randomUUID());
-		await expect(read()).rejects.toThrow(/permission/);
-
-		// The roster-picked Toastmaster, no session: the writer's own rule.
-		const [tmod] = await testDb
-			.insert(roleDefinitions)
-			.values({
-				clubId: s.clubId,
-				name: "Toastmaster of the Day",
-				key: TMOD_ROLE_KEY,
-				category: "leadership",
-				isSpeakerRole: false,
-			})
-			.returning({ id: roleDefinitions.id });
-		await testDb.insert(roleSlots).values({
-			meetingId: s.meetingId,
-			roleDefinitionId: tmod?.id ?? "",
-			status: "confirmed",
-			assignedMemberId: s.memberId,
-		});
-		signInAs(null);
-		expect(await read(s.memberId)).toBe(JOIN_URL);
 	});
 
 	// protects=the public reader never ships it, whoever is signed in.
