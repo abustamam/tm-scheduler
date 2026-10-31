@@ -194,7 +194,7 @@ function VpeDashboard() {
 	const overdueMembers = overdue.filter((m) => m.isOverdue);
 	const neverSpoken = rotation.filter((r) => r.lastSpokenAt === null).length;
 	const lapsed = lapse.filter((m) => m.isLapsed);
-	// Two misses short of stopped (#1445); disjoint from `lapsed` by definition.
+	// One miss short of stopped (#1445); disjoint from `lapsed` by definition.
 	const slipping = lapse.filter(isSlipping);
 	// SPEAKERS, not pairings and not evaluators — one row per speaker, kept if
 	// some evaluator appears twice in that speaker's shown window. A speaker
@@ -272,12 +272,8 @@ function VpeDashboard() {
 				))}
 			</div>
 
-			{/* Attendance lapse (#530). Sits ABOVE "Overdue for a role" on purpose:
-			    the two look alike but mean different things, and this is the more
-			    urgent one. A member who comes every week and never volunteers is
-			    a nudge; a member who has stopped coming is a resignation in
-			    progress. Both show as having no claimed role, so the section
-			    below cannot tell them apart — only attendance can. */}
+			{/* Slipping (#1445): one miss short of "Stopped attending", so a nudge
+			    here can keep the member from landing there. */}
 			<Section
 				title="Slipping"
 				subtitle={`Active members not recorded present at the last ${ATTENDANCE_LAPSE.slippingThreshold} meetings — a nudge now keeps them from stopping. Excused meetings don't count against anyone.`}
@@ -298,6 +294,12 @@ function VpeDashboard() {
 				)}
 			</Section>
 
+			{/* Attendance lapse (#530). Sits ABOVE "Overdue for a role" on purpose:
+			    the two look alike but mean different things, and this is the more
+			    urgent one. A member who comes every week and never volunteers is
+			    a nudge; a member who has stopped coming is a resignation in
+			    progress. Both show as having no claimed role, so the section
+			    below cannot tell them apart — only attendance can. */}
 			<Section
 				title="Stopped attending"
 				subtitle={`Active members not recorded present at the last ${ATTENDANCE_LAPSE.streakThreshold}+ meetings — longest absence first. Excused meetings don't count against anyone.`}
@@ -713,7 +715,7 @@ function LapseRow({
 			    navigates to the profile. Icon-only for the 375px row. */}
 			<div className="justify-self-end">
 				<NudgeButtons
-					mode="reach_out"
+					mode="reachOut"
 					iconOnly
 					name={member.name}
 					preferredName={member.preferredName}
@@ -721,7 +723,11 @@ function LapseRow({
 					email={member.email ?? null}
 					preferredContact={member.preferredContact}
 					clubName={clubName}
-					roleName={member.suggestedRole}
+					roleName={
+						member.suggestedForMeetingId === nudge?.meeting.id
+							? member.suggestedRole
+							: null
+					}
 					meetingDate={nudge?.meetingDate}
 					shareUrl={nudge?.shareUrl}
 				/>

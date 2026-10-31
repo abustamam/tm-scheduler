@@ -261,6 +261,23 @@ const memberGoesBy = sql<
 >`coalesce(${members.preferredName}, ${people.preferredName})`;
 
 /**
+ * Contact for a member a surface lists (#1445): a blank address is no address
+ * and the phone is normalised to E.164. Shared by Level proximity and Slipping.
+ * The caller resolves the preferred channel itself, in the function that
+ * selects `people.preferredContact` (`preferred-contact-reads.guard.test.ts`).
+ */
+function reachableContact(
+	m: { email: string | null; phone: string | null },
+	countryCode: string | null,
+): { email: string | null; phone: string | null } {
+	return {
+		// Blank is no address: `buildNudge` would otherwise draft to "".
+		email: m.email?.trim() ? m.email : null,
+		phone: toE164(m.phone, countryCode),
+	};
+}
+
+/**
  * "Close to a level" (#898): active members one or two projects from finishing
  * a Pathways level, and levels finished but not yet approved in Base Camp.
  *
@@ -305,10 +322,8 @@ export async function loadLevelProximity(
 		]);
 	const contact = new Map<string, LevelProximityContact>();
 	for (const m of roster) {
-		const email = m.email?.trim() ? m.email : null;
-		const phone = toE164(m.phone, countryCode);
+		const { email, phone } = reachableContact(m, countryCode);
 		contact.set(m.memberId, {
-			// Blank is no address: `buildNudge` would otherwise draft to "".
 			email,
 			phone,
 			preferredName: m.preferredName,
@@ -847,7 +862,7 @@ export async function loadEvaluatorPairings(
  */
 export async function loadAttendanceLapse(
 	clubId: string,
-): Promise<(AttendanceLapseRow & LapseReachOut)[]> {
+): Promise<(AttendanceLapseRow & Partial<LapseReachOut>)[]> {
 	const now = new Date();
 
 	// DISTINCT over the join: a meeting qualifies once it has any MEMBER
@@ -986,47 +1001,48 @@ export async function loadAttendanceLapse(
 	const listed = scored.filter(
 		(r) => r.streak >= ATTENDANCE_LAPSE.slippingThreshold,
 	);
+	const listedIds = new Set(listed.map((r) => r.memberId));
+	// The next meeting is resolved ONCE, by the same loader the draft's date and
+	// link come from, and the suggestion reads that meeting's id.
+	const { nextMeeting } = await loadNextMeetingSummary(clubId, now);
 	const [countryCode, suggested] = await Promise.all([
 		loadClubDefaultCountryCode(clubId),
 		loadSuggestedOpenRoles(
 			clubId,
 			listed.map((r) => r.memberId),
+			nextMeeting,
 		),
 	]);
-	const contact = new Map(
-		memberRows.map((m) => {
-			const email = m.email?.trim() ? m.email : null;
-			const phone = toE164(m.phone, countryCode);
-			return [
-				m.memberId,
-				{
-					// Blank is no address: `buildNudge` would otherwise draft to "".
-					email,
-					phone,
-					preferredName: m.preferredName,
-					preferredContact: effectivePreferredContact(m.storedContact, {
-						email,
-						phone,
-					}),
-				},
-			] as const;
-		}),
-	);
-	return scored.map((row) => ({
-		...row,
-		...(contact.get(row.memberId) ?? {
-			email: null,
-			phone: null,
-			preferredName: null,
-			preferredContact: null,
-		}),
-		suggestedRole: suggested.get(row.memberId) ?? null,
-	}));
+	// Contact only on the listed rows: everyone else's address and number
+	// never leave the loader.
+	const contact = new Map<string, LevelProximityContact>();
+	for (const m of memberRows.filter((r) => listedIds.has(r.memberId))) {
+		const { email, phone } = reachableContact(m, countryCode);
+		contact.set(m.memberId, {
+			email,
+			phone,
+			preferredName: m.preferredName,
+			preferredContact: effectivePreferredContact(m.storedContact, {
+				email,
+				phone,
+			}),
+		});
+	}
+	return scored.map((row) => {
+		const reach = contact.get(row.memberId);
+		if (!reach) return row;
+		return {
+			...row,
+			...reach,
+			suggestedRole: suggested.get(row.memberId) ?? null,
+			suggestedForMeetingId: nextMeeting?.id ?? null,
+		};
+	});
 }
 
 /**
- * For each member, the open role at the club's NEXT meeting they have gone
- * longest without (#1445): a role they have never held beats any they have,
+ * For each member, the open role at `next` (the club's next meeting, resolved
+ * by the caller) they have gone longest without (#1445): a role they have never held beats any they have,
  * then the oldest `lastServedAt` wins, then the role's sort order and name so
  * the pick is stable. Null for a member when no slot is open, and for everyone
  * when there is no next scheduled, non-cancelled meeting.
@@ -1037,26 +1053,12 @@ export async function loadAttendanceLapse(
 export async function loadSuggestedOpenRoles(
 	clubId: string,
 	memberIds: string[],
-	now: Date = new Date(),
+	next: { id: string; scheduledAt: Date } | null,
 ): Promise<Map<string, string | null>> {
 	const result = new Map<string, string | null>(
 		memberIds.map((id) => [id, null]),
 	);
-	if (memberIds.length === 0) return result;
-
-	const [next] = await db
-		.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
-		.from(meetings)
-		.where(
-			and(
-				eq(meetings.clubId, clubId),
-				gte(meetings.scheduledAt, now),
-				ne(meetings.status, "cancelled"),
-			),
-		)
-		.orderBy(asc(meetings.scheduledAt))
-		.limit(1);
-	if (!next) return result;
+	if (memberIds.length === 0 || !next) return result;
 
 	const openSlots = await db
 		.selectDistinct({

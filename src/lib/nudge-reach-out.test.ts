@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import { buildNudge } from "./nudge";
 
 const base = {
-	mode: "reach_out" as const,
+	mode: "reachOut" as const,
 	name: "Dana Drift",
 	clubName: "Downtown Club",
 	email: "dana@example.com",
 };
 
-describe("buildNudge reach_out (#1445)", () => {
+describe("buildNudge reachOut (#1445)", () => {
 	it("names the open role, the date and the link", () => {
 		const n = buildNudge({
 			...base,
@@ -29,7 +29,7 @@ describe("buildNudge reach_out (#1445)", () => {
 			shareUrl: "https://x.test/m",
 		});
 		expect(n.message).toBe(
-			"Hi Dana, we've missed you at Downtown Club. Hope to see you on Wed, Nov 5!",
+			"Hi Dana, we've missed you at Downtown Club. Hope to see you on Wed, Nov 5! https://x.test/m",
 		);
 	});
 

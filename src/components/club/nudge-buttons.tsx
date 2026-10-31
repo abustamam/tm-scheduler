@@ -76,7 +76,7 @@ export type NudgeButtonsProps = NudgeButtonsBase &
 				/** "We've missed you" to a member who stopped coming (#1445). The
 				 *  meeting is optional: no upcoming meeting drafts "hope to see you
 				 *  soon". `roleName` is an open role at that meeting, when one fits. */
-				mode: "reach_out";
+				mode: "reachOut";
 				clubName: string;
 				roleName?: string | null;
 				meetingDate?: string | null;
@@ -207,7 +207,7 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 					focusLabel: props.focusLabel,
 					origin: props.origin,
 				}
-			: props.mode === "reach_out"
+			: props.mode === "reachOut"
 				? {
 						...common,
 						mode: props.mode,

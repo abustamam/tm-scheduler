@@ -40,7 +40,7 @@ export type NudgeMode =
 	| "orientation"
 	| "mentorRequest"
 	| "mentorWelcome"
-	| "reach_out";
+	| "reachOut";
 
 interface NudgeInputBase {
 	name: string;
@@ -130,14 +130,12 @@ export type NudgeInput =
 			meetingDate?: string | null;
 			shareUrl?: string | null;
 	  })
-	// A mentee telling a mentor they asked (#1209), and the mentor's "say hi"
-	// after accepting. Neither mentions a meeting, so neither carries one.
 	// "We've missed you" to a member who has stopped coming (#1445). Role-less in
 	// type: the role it may name is optional and the draft falls back without it.
 	// The meeting is OPTIONAL like `orientation`'s: a club with no next meeting
 	// still gets a "hope to see you soon" draft. `shareUrl` is the meeting page.
 	| (Omit<NudgeInputBase, "meetingDate" | "shareUrl"> & {
-			mode: "reach_out";
+			mode: "reachOut";
 			clubName: string;
 			/** An open role at the next meeting the member could take; null/blank
 			 *  drops the role sentence. Needs `meetingDate` and `shareUrl` too. */
@@ -145,6 +143,8 @@ export type NudgeInput =
 			meetingDate?: string | null;
 			shareUrl?: string | null;
 	  })
+	// A mentee telling a mentor they asked (#1209), and the mentor's "say hi"
+	// after accepting. Neither mentions a meeting, so neither carries one.
 	| (Omit<NudgeInputBase, "meetingDate" | "shareUrl"> & {
 			mode: "mentorRequest";
 			/** The focus as it reads: the label, or the member's own `other` text. */
@@ -240,7 +240,7 @@ function messageFor(i: NudgeInput): string {
 	if (i.mode === "orientation") {
 		return orientationMessage(i, who);
 	}
-	if (i.mode === "reach_out") {
+	if (i.mode === "reachOut") {
 		const club = i.clubName.trim();
 		const date = i.meetingDate?.trim();
 		const url = i.shareUrl?.trim();
@@ -250,7 +250,7 @@ function messageFor(i: NudgeInput): string {
 		}
 		return role
 			? `Hi ${who}, we've missed you at ${club}! ${role} is open on ${date}. Want it? ${url}`
-			: `Hi ${who}, we've missed you at ${club}. Hope to see you on ${date}!`;
+			: `Hi ${who}, we've missed you at ${club}. Hope to see you on ${date}! ${url}`;
 	}
 	if (i.mode === "mentorRequest") {
 		return `Hi ${who}, I've asked you to be my mentor in GavelUp (${i.focusLabel}). You can accept or decline on your dashboard: ${i.origin}/dashboard`;
@@ -584,7 +584,7 @@ function subjectFor(i: NudgeInput): string {
 		const next = nextOrientationItem(i.items);
 		return next ? ORIENTATION_SUBJECTS[next] : "Your first weeks";
 	}
-	if (i.mode === "reach_out") return `We've missed you at ${i.clubName}`;
+	if (i.mode === "reachOut") return `We've missed you at ${i.clubName}`;
 	if (i.mode === "mentorRequest") return "Mentor request";
 	if (i.mode === "mentorWelcome") return "Mentoring";
 	if (i.mode === "invite") {

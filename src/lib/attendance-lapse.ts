@@ -86,7 +86,9 @@ export function isSlipping(
 
 /**
  * What an officer needs to reach out to a slipping or lapsed member (#1445).
- * Contact is PII: it rides only on `getAttendanceLapse`, which is admin-gated.
+ * Contact is PII: it rides only on `getAttendanceLapse`, which is admin-gated,
+ * and only on the rows it lists (streak at or past `slippingThreshold`); every
+ * other row carries none of these fields.
  */
 export interface LapseReachOut {
 	phone: string | null;
@@ -95,6 +97,9 @@ export interface LapseReachOut {
 	preferredContact: ContactMethod | null;
 	/** An open role at the next meeting they could take, or null. */
 	suggestedRole: string | null;
+	/** The meeting `suggestedRole` is open at, so a caller can check it is the
+	 *  same meeting its own draft names. */
+	suggestedForMeetingId: string | null;
 }
 
 interface ScoreInput {

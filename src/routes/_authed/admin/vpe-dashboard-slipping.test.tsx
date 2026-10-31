@@ -33,7 +33,7 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-type Row = AttendanceLapseRow & LapseReachOut;
+type Row = AttendanceLapseRow & Partial<LapseReachOut>;
 
 function row(over: Partial<Row>): Row {
 	return {
@@ -51,6 +51,7 @@ function row(over: Partial<Row>): Row {
 		preferredName: null,
 		preferredContact: null,
 		suggestedRole: null,
+		suggestedForMeetingId: "33333333-3333-4333-8333-333333333333",
 		...over,
 	};
 }
@@ -137,5 +138,31 @@ describe("VPE dashboard — Slipping tier (#1445)", () => {
 		// No anchor inside an anchor: the draft link has no anchor ancestor.
 		expect(link.parentElement?.closest("a")).toBeNull();
 		expect(link.querySelector("a")).toBeNull();
+	});
+
+	it("shows the empty state when nobody is slipping", async () => {
+		await renderRoute([
+			row({ memberId: "b", name: "Stan Stopped", streak: 3, isLapsed: true }),
+			row({ memberId: "c", name: "Fine Fran", streak: 0 }),
+		]);
+		expect(sectionOf("Slipping").textContent).toContain(
+			"Nobody is slipping right now.",
+		);
+		expect(sectionOf("Slipping").textContent).not.toContain("Fine Fran");
+	});
+
+	it("drops the role when it was suggested for a different meeting than the draft names", async () => {
+		await renderRoute([
+			row({
+				suggestedRole: "Timer",
+				suggestedForMeetingId: "99999999-9999-4999-8999-999999999999",
+			}),
+		]);
+		const link = await screen.findByLabelText(/Message Dana Drift on WhatsApp/);
+		const text = decodeURIComponent(
+			(link.getAttribute("href") ?? "").split("text=")[1] ?? "",
+		);
+		expect(text).not.toContain("Timer");
+		expect(text).toContain("Hope to see you on");
 	});
 });

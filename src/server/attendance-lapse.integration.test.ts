@@ -35,7 +35,9 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { loadAttendanceLapse } = await import("#/server/reporting-logic");
+const { loadAttendanceLapse, loadSuggestedOpenRoles } = await import(
+	"#/server/reporting-logic"
+);
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -489,11 +491,133 @@ describe.skipIf(!hasTestDb)("Slipping tier and reach-out data (#1445)", () => {
 		expect((await row()).suggestedRole).toBeNull();
 	});
 
-	it("is null when the next meeting is cancelled", async () => {
+	it("skips a cancelled next meeting and suggests from the next live one", async () => {
 		await testDb
 			.update(meetings)
 			.set({ status: "cancelled" })
 			.where(eq(meetings.id, seed.meetingId));
-		expect((await row()).suggestedRole).toBeNull();
+		const later = await addMeeting(seed.clubId, -14, "scheduled");
+		const grammarian = await addRole("Grammarian");
+		await testDb.insert(roleSlots).values({
+			meetingId: later,
+			roleDefinitionId: grammarian,
+			status: "open",
+		});
+		const r = await row();
+		expect(r.suggestedRole).toBe("Grammarian");
+		expect(r.suggestedForMeetingId).toBe(later);
+	});
+
+	it("is null when the next meeting is cancelled and nothing live follows", async () => {
+		await testDb
+			.update(meetings)
+			.set({ status: "cancelled" })
+			.where(eq(meetings.id, seed.meetingId));
+		const r = await row();
+		expect(r.suggestedRole).toBeNull();
+		expect(r.suggestedForMeetingId).toBeNull();
+	});
+
+	it("carries no contact on a member who is not slipping or stopped", async () => {
+		const [adminRow] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.id, seed.adminMemberId));
+		if (!adminRow) throw new Error("admin member missing");
+		await testDb
+			.update(people)
+			.set({ email: "fine@example.com", phone: "+14155550124" })
+			.where(eq(people.id, adminRow.personId));
+		const rows = await loadAttendanceLapse(seed.clubId);
+		const fine = rows.find((x) => x.memberId === seed.adminMemberId);
+		if (!fine) throw new Error("admin member missing");
+		expect(fine.streak).toBe(0);
+		expect("email" in fine).toBe(false);
+		expect("phone" in fine).toBe(false);
+		expect(JSON.stringify(fine)).not.toContain("fine@example.com");
+	});
+
+	describe("loadSuggestedOpenRoles branches", () => {
+		const next = () => ({ id: seed.meetingId, scheduledAt: new Date() });
+
+		it("runs no query for an empty member list", async () => {
+			const spy = vi.spyOn(testDb, "selectDistinct");
+			const sel = vi.spyOn(testDb, "select");
+			const out = await loadSuggestedOpenRoles(seed.clubId, [], next());
+			expect(out.size).toBe(0);
+			expect(spy).not.toHaveBeenCalled();
+			expect(sel).not.toHaveBeenCalled();
+			spy.mockRestore();
+			sel.mockRestore();
+		});
+
+		it("ignores a slot with a guest assigned", async () => {
+			const g = await addRole("Greeter");
+			const [guest] = await testDb
+				.insert(guests)
+				.values(
+					await withGuestPerson(
+						{ clubId: seed.clubId, name: "Visitor" },
+						testDb,
+					),
+				)
+				.returning({ id: guests.id });
+			await testDb.insert(roleSlots).values({
+				meetingId: seed.meetingId,
+				roleDefinitionId: g,
+				status: "open",
+				assignedGuestId: guest?.id,
+			});
+			expect((await row()).suggestedRole).toBe("Timer");
+		});
+
+		it("ignores a slot with a member assigned even while its status is open", async () => {
+			const g = await addRole("Greeter");
+			await testDb.insert(roleSlots).values({
+				meetingId: seed.meetingId,
+				roleDefinitionId: g,
+				status: "open",
+				assignedMemberId: seed.adminMemberId,
+			});
+			expect((await row()).suggestedRole).toBe("Timer");
+		});
+
+		it("breaks a tie by sort order, then name", async () => {
+			const [a] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: seed.clubId,
+					name: "Zeta",
+					category: "functionary",
+					isSpeakerRole: false,
+					sortOrder: -5,
+				})
+				.returning({ id: roleDefinitions.id });
+			const [b] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: seed.clubId,
+					name: "Alpha",
+					category: "functionary",
+					isSpeakerRole: false,
+					sortOrder: -5,
+				})
+				.returning({ id: roleDefinitions.id });
+			if (!a || !b) throw new Error("role insert failed");
+			await openSlot(a.id);
+			await openSlot(b.id);
+			// All never held: sortOrder -5 beats Timer's default, then name.
+			expect((await row()).suggestedRole).toBe("Alpha");
+		});
+
+		it("suggests a role to a lapsed member too", async () => {
+			const id = await addMeeting(seed.clubId, 21);
+			await mark(id, seed.adminMemberId, "present");
+			const r = await row();
+			expect(r.streak).toBe(3);
+			expect(r.isLapsed).toBe(true);
+			expect(r.suggestedRole).toBe("Timer");
+			expect(r.suggestedForMeetingId).toBe(seed.meetingId);
+		});
 	});
 });
