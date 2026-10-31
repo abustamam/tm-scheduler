@@ -21,6 +21,7 @@ import {
 	waitFor,
 } from "@testing-library/react";
 import type React from "react";
+import { useSyncExternalStore } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("#/server/meetings", () => ({ getPublicMeetingByKey: vi.fn() }));
@@ -37,7 +38,16 @@ vi.mock("#/server/ballot-session-voter", () => ({
 	getBallotSessionVoter: vi.fn(),
 }));
 vi.mock("#/components/club/pick-name-form", () => ({
-	PickNameForm: () => <div>pick-name-form</div>,
+	PickNameForm: (p: {
+		onPicked: (m: { id: string; name: string }) => void;
+	}) => (
+		<button
+			type="button"
+			onClick={() => p.onPicked({ id: "pick-id", name: "Pat Picked" })}
+		>
+			pick-name-form
+		</button>
+	),
 }));
 vi.mock("#/components/club/cover-sheet", () => ({
 	CoverSheet: (p: { slots: { roleLabel: string }[]; mode?: string }) => (
@@ -162,6 +172,39 @@ async function renderPage() {
 	});
 	render(<RouterProvider router={router} />);
 	await waitFor(() => expect(router.state.status).toBe("idle"));
+}
+
+let sessionValue: unknown = { data: null, isPending: false };
+const sessionListeners = new Set<() => void>();
+/** A reactive `useSession`: changing it re-renders the page, like better-auth. */
+function setSession(v: unknown) {
+	sessionValue = v;
+	for (const l of sessionListeners) l();
+	vi.mocked(authClient.useSession).mockImplementation((() =>
+		useSyncExternalStore(
+			(l) => {
+				sessionListeners.add(l);
+				return () => sessionListeners.delete(l);
+			},
+			() => sessionValue,
+		)) as never);
+}
+
+/** Signed in, but the member lookup answers only when the test says so. */
+function lateSignedInSession(): (v: unknown) => void {
+	vi.mocked(authClient.useSession).mockReturnValue({
+		data: { user: { id: "user-1" } },
+		isPending: false,
+		// biome-ignore lint/suspicious/noExplicitAny: partial hook return
+	} as any);
+	let answer: (v: unknown) => void = () => {};
+	vi.mocked(getBallotSessionVoter).mockReturnValue(
+		new Promise((r) => {
+			answer = r;
+		}) as never,
+	);
+	localStorage.clear();
+	return (v) => answer(v);
 }
 
 function signedOutAs(picked: boolean) {
@@ -309,36 +352,16 @@ describe("rsvp page", () => {
 		await waitFor(() => expect(sheet.textContent).toBe("Toastmaster,Timer"));
 		expect(sheet.getAttribute("data-mode")).toBe("released");
 	});
-	it("a late session success does not replace a name picked after the timeout", async () => {
-		vi.mocked(authClient.useSession).mockReturnValue({
-			data: { user: { id: "user-1" } },
-			isPending: false,
-			// biome-ignore lint/suspicious/noExplicitAny: partial hook return
-		} as any);
-		let answer: (v: unknown) => void = () => {};
-		vi.mocked(getBallotSessionVoter).mockReturnValue(
-			new Promise((r) => {
-				answer = r;
-			}) as never,
-		);
-		localStorage.clear();
-		localStorage.setItem(
-			memberKey("downtown"),
-			JSON.stringify({ id: MEMBER_ID, name: "Pat Picked" }),
-		);
+	it("a late session success does not replace a name picked in this view", async () => {
+		const answer = lateSignedInSession();
 		vi.mocked(getPublicPersonalMeetingView).mockResolvedValue(
 			view({ planStatus: null }),
 		);
 		await renderPage();
-		// The session never answered: the page falls back to the picked name.
-		expect(
-			await screen.findByRole(
-				"button",
-				{ name: "I'm coming" },
-				{ timeout: 4500 },
-			),
-		).toBeTruthy();
-		expect(screen.getByText("Not Ada Lovelace?")).toBeTruthy();
+		fireEvent.click(
+			await screen.findByText("pick-name-form", {}, { timeout: 4500 }),
+		);
+		expect(await screen.findByText(/^Not .*\?$/)).toBeTruthy();
 
 		answer({
 			id: "99999999-9999-4999-8999-999999999999",
@@ -353,7 +376,119 @@ describe("rsvp page", () => {
 			.mock.calls.map(
 				(c) => (c[0] as { data: { memberId: string } }).data.memberId,
 			);
-		expect(new Set(memberIds)).toEqual(new Set([MEMBER_ID]));
+		expect(new Set(memberIds)).toEqual(new Set(["pick-id"]));
+	}, 10000);
+	it("a late session success replaces a name stored by an earlier visit (#1457)", async () => {
+		const answer = lateSignedInSession();
+		localStorage.setItem(
+			memberKey("downtown"),
+			JSON.stringify({ id: "stored-id", name: "Pat Stored" }),
+		);
+		vi.mocked(getPublicPersonalMeetingView).mockResolvedValue(
+			view({ planStatus: null }),
+		);
+		await renderPage();
+		// The timeout fired first: the stored pick is what shows.
+		await screen.findByText(/^Not .*\?$/, {}, { timeout: 4500 });
+
+		answer({ id: MEMBER_ID, name: "Ada Lovelace" });
+
+		await waitFor(() => expect(screen.queryByText(/^Not .*\?$/)).toBeNull());
+		const memberIds = vi
+			.mocked(getPublicPersonalMeetingView)
+			.mock.calls.map(
+				(c) => (c[0] as { data: { memberId: string } }).data.memberId,
+			);
+		expect(memberIds.at(-1)).toBe(MEMBER_ID);
+	}, 8000);
+	it("a late session success does not undo a name cleared in this view", async () => {
+		const answer = lateSignedInSession();
+		localStorage.setItem(
+			memberKey("downtown"),
+			JSON.stringify({ id: "stored-id", name: "Pat Stored" }),
+		);
+		vi.mocked(getPublicPersonalMeetingView).mockResolvedValue(
+			view({ planStatus: null }),
+		);
+		await renderPage();
+		fireEvent.click(
+			await screen.findByText(/^Not .*\?$/, {}, { timeout: 4500 }),
+		);
+		await screen.findByText("pick-name-form");
+
+		answer({ id: MEMBER_ID, name: "Ada Lovelace" });
+		await new Promise((r) => setTimeout(r, 50));
+
+		expect(screen.getByText("pick-name-form")).toBeTruthy();
+	}, 8000);
+	it("a late session success does not unmount the guest form (#1457)", async () => {
+		const answer = lateSignedInSession();
+		await renderPage();
+		fireEvent.click(
+			await screen.findByRole(
+				"button",
+				{ name: "I'm a guest" },
+				{ timeout: 4500 },
+			),
+		);
+		const first = await screen.findByLabelText("First name");
+		fireEvent.change(first, { target: { value: "Dana" } });
+
+		answer({ id: MEMBER_ID, name: "Ada Lovelace" });
+		await new Promise((r) => setTimeout(r, 50));
+
+		expect(
+			(screen.getByLabelText("First name") as HTMLInputElement).value,
+		).toBe("Dana");
+	}, 8000);
+	it("an errored session lookup followed by a success still signs in (#1457)", async () => {
+		setSession({ data: null, isPending: false });
+		vi.mocked(getBallotSessionVoter).mockResolvedValue({
+			id: MEMBER_ID,
+			name: "Ada Lovelace",
+			// biome-ignore lint/suspicious/noExplicitAny: partial voter is enough
+		} as any);
+		localStorage.clear();
+		vi.mocked(getPublicPersonalMeetingView).mockResolvedValue(
+			view({ planStatus: null }),
+		);
+		await renderPage();
+		// Signed out at once (get-session errored): the name pick shows.
+		await screen.findByText("pick-name-form");
+
+		setSession({ data: { user: { id: "user-1" } }, isPending: false });
+
+		expect(
+			await screen.findByRole("button", { name: "I'm coming" }),
+		).toBeTruthy();
+		expect(screen.queryByText("pick-name-form")).toBeNull();
+	});
+	it("a session answer after the timeout still signs in a member who picked nobody (#1457)", async () => {
+		vi.mocked(authClient.useSession).mockReturnValue({
+			data: { user: { id: "user-1" } },
+			isPending: false,
+			// biome-ignore lint/suspicious/noExplicitAny: partial hook return
+		} as any);
+		let answer: (v: unknown) => void = () => {};
+		vi.mocked(getBallotSessionVoter).mockReturnValue(
+			new Promise((r) => {
+				answer = r;
+			}) as never,
+		);
+		localStorage.clear();
+		vi.mocked(getPublicPersonalMeetingView).mockResolvedValue(
+			view({ planStatus: null }),
+		);
+		await renderPage();
+		// The timeout fired first: the signed-out name pick shows.
+		await screen.findByText("pick-name-form", {}, { timeout: 4500 });
+
+		answer({ id: MEMBER_ID, name: "Ada Lovelace" });
+
+		expect(
+			await screen.findByRole("button", { name: "I'm coming" }),
+		).toBeTruthy();
+		expect(screen.queryByText("pick-name-form")).toBeNull();
 	}, 8000);
 });
 
