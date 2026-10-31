@@ -16,6 +16,7 @@ import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { showWriteError } from "#/components/write-error-toast";
 import { opensCoverSheet } from "#/lib/cover-sheet-logic";
 import { formatMeetingDate } from "#/lib/format";
+import { noteClaim } from "#/lib/install-hint";
 import { mailtoHref } from "#/lib/mailto";
 import type { StoredMember } from "#/lib/member-identity";
 import { meetingRoleOptions } from "#/lib/member-role-picker";
@@ -368,6 +369,7 @@ export function SeasonGrid({
 						: {}),
 				},
 			);
+			noteClaim();
 			await refetchQuietly("claim");
 		} catch (err) {
 			showWriteError(err, "Couldn't claim role.");
