@@ -87,6 +87,7 @@ import {
 	buildPanelRoleMap,
 	clearRefusedMessage,
 	type PlanStatus,
+	publicComingCount,
 } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { ballotUrlFor } from "#/lib/digital-voting";
@@ -98,6 +99,7 @@ import {
 	meetingHeading,
 } from "#/lib/format";
 import { buildHeldRoleLabels } from "#/lib/held-role-labels";
+import { rsvpPageUrl } from "#/lib/lineup-blast";
 import { markedAbsentMemberIds } from "#/lib/marked-absent-member-ids";
 import { MINUTES_ANCHOR_ID } from "#/lib/meeting-anchors";
 import {
@@ -1139,6 +1141,13 @@ function MeetingView() {
 	// only at the row. `shareUrl` above stays what the role-less `attendance` and
 	// `arriving` drafts link to — those ask about the MEETING, and the public
 	// agenda is the page that answers.
+	// The one-tap RSVP page (#1442), which the still-to-answer rows draft.
+	const nudgeRsvpUrl = rsvpPageUrl(nudgeShareUrl);
+	// The weekday the rsvp draft names, in the club's zone (as the blast does).
+	const nudgeWeekday = new Intl.DateTimeFormat("en-US", {
+		weekday: "long",
+		timeZone: timezone,
+	}).format(new Date(meeting.scheduledAt));
 	const nudgePersonalBase = {
 		origin: nudgeOrigin,
 		clubId,
@@ -1179,6 +1188,7 @@ function MeetingView() {
 	// never `buildPanelRoleMap(slots.filter(...))`. See `attendance-panel.test.ts`'s
 	// "numbers a role off every slot it HAS" for what the filtered call produces.
 	const panelRoleByMemberId = buildPanelRoleMap(slots);
+	const comingCount = publicComingCount(answeredRungs, panelRoleByMemberId);
 	// EVERY role a member holds, numbered, for the decline confirm (#663) — the
 	// rail's badge map above is one role per member by design, and the officer
 	// has to be told about all of them before all of them are freed. Also
@@ -2703,6 +2713,14 @@ function MeetingView() {
 						</DialogContent>
 					</Dialog>
 				</div>
+				{!showPanel && phase === "upcoming" && !cancelled && comingCount > 0 ? (
+					// #1442: everyone who is not running the meeting sees the count and
+					// nothing behind it. It is computed from `answeredRungs` and the
+					// slots, both public, and names nobody.
+					<p className="order-1 text-sm text-muted-foreground lg:order-2 lg:w-[340px] lg:shrink-0 xl:w-96">
+						{comingCount} coming
+					</p>
+				) : null}
 				{showPanel && !tmodPanelUnavailable ? (
 					<aside
 						// `sticky` pins this column, so its own height stops being the
@@ -2840,6 +2858,9 @@ function MeetingView() {
 							dutiesByMemberId={nudgeDutiesByMemberId}
 							evaluatingByMemberId={nudgeEvaluatingByMemberId}
 							personalNudgeBase={nudgePersonalBase}
+							rsvpUrl={nudgeRsvpUrl}
+							rsvpWeekday={nudgeWeekday}
+							clubName={clubName}
 							locked={locked}
 							onWriteRung={writeRung}
 							onContacted={markAsked}

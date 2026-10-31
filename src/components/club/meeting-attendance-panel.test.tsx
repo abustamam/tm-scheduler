@@ -164,7 +164,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		});
 		expect(getByText("Ayesha Khan")).toBeTruthy();
 		expect(getByText("Bo Lin")).toBeTruthy();
-		expect(getByText("1 coming · 2 no answer")).toBeTruthy();
+		expect(getByText("1 coming · 2 still to answer")).toBeTruthy();
 		// A real LIST, so an AT user gets a set size and a position in it. Asserted
 		// by ROLE rather than by tag: reverting the `<ul>`/`<li>` to sibling divs
 		// otherwise leaves the whole suite green, and the role is also what the
@@ -340,7 +340,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 			plan: [],
 			rungOverride: { m1: "coming" as const },
 		});
-		expect(getByText("1 coming · 2 no answer")).toBeTruthy();
+		expect(getByText("1 coming · 2 still to answer")).toBeTruthy();
 	});
 
 	it("collapses to the counts line below lg, and expands on tap", () => {
@@ -359,7 +359,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		window.innerWidth = 500;
 		try {
 			const { getByRole, queryByText, getByText } = renderPanel();
-			expect(getByText("3 no answer")).toBeTruthy();
+			expect(getByText("3 still to answer")).toBeTruthy();
 			expect(queryByText("Ayesha Khan")).toBeNull();
 			fireEvent.click(getByRole("button", { name: /show|expand/i }));
 			expect(getByText("Ayesha Khan")).toBeTruthy();

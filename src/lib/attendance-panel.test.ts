@@ -6,6 +6,7 @@ import {
 	COMING_NOT_YOURS_TO_CLEAR_TEXT,
 	clearRefusedMessage,
 	NOT_COMING_NOT_YOURS_TO_CLEAR_TEXT,
+	publicComingCount,
 } from "./attendance-panel";
 
 const roster = [
@@ -65,7 +66,7 @@ describe("buildPlanPanel", () => {
 		expect(
 			counts.coming + counts.notComing + counts.reachedOut + counts.noAnswer,
 		).toBe(roster.length);
-		expect(countsLine).toBe("1 coming · 1 out · 1 asked · 1 no answer");
+		expect(countsLine).toBe("1 coming · 1 can't · 2 still to answer");
 	});
 
 	it("omits empty buckets from the counts line", () => {
@@ -74,7 +75,7 @@ describe("buildPlanPanel", () => {
 			plan: [],
 			roleByMemberId: {},
 		});
-		expect(countsLine).toBe("1 no answer");
+		expect(countsLine).toBe("1 still to answer");
 	});
 
 	it("attaches the role a member holds, and an UNCONFIRMED one does not reorder", () => {
@@ -221,7 +222,7 @@ describe("buildPlanPanel — an assumed Coming is a real Coming", () => {
 			reachedOut: 0,
 			noAnswer: 1,
 		});
-		expect(countsLine).toBe("1 coming · 1 no answer");
+		expect(countsLine).toBe("1 coming · 1 still to answer");
 	});
 
 	it("sorts into the coming bucket, not the chase-me-first bucket", () => {
@@ -556,5 +557,28 @@ describe("clearRefusedMessage", () => {
 		expect(
 			clearRefusedMessage({ ...base, memberId: "me", previous: "coming" }),
 		).toBeNull();
+	});
+});
+
+describe("publicComingCount (#1442)", () => {
+	it("counts answered Coming plus confirmed role holders who have not answered", () => {
+		const n = publicComingCount(
+			[
+				{ memberId: "a", status: "coming" },
+				{ memberId: "b", status: "not_coming" },
+				{ memberId: "c", status: "reached_out" },
+			],
+			{
+				// confirmed and unanswered: assumed coming
+				d: { confirmed: true },
+				// confirmed but said Not coming: out
+				b: { confirmed: true },
+				// claimed only: not counted
+				e: { confirmed: false },
+				// answered Coming and holds a confirmed role: once
+				a: { confirmed: true },
+			},
+		);
+		expect(n).toBe(2);
 	});
 });

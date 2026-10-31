@@ -79,6 +79,7 @@ import { Route as AuthedAdminMeetingsNewRouteImport } from './routes/_authed/adm
 import { Route as AuthedAdminMeetingsBatchRouteImport } from './routes/_authed/admin/meetings.batch'
 import { Route as ClubClubIdMeetingMeetingIdWordRouteImport } from './routes/club.$clubId_.meeting.$meetingId.word'
 import { Route as ClubClubIdMeetingMeetingIdVoteRouteImport } from './routes/club.$clubId_.meeting.$meetingId.vote'
+import { Route as ClubClubIdMeetingMeetingIdRsvpRouteImport } from './routes/club.$clubId_.meeting.$meetingId.rsvp'
 import { Route as ClubClubIdMeetingMeetingIdPrintRouteImport } from './routes/club.$clubId_.meeting.$meetingId.print'
 import { Route as ClubClubIdMeetingMeetingIdPresentRouteImport } from './routes/club.$clubId_.meeting.$meetingId.present'
 import { Route as ClubClubIdMeetingMeetingIdFlyerRouteImport } from './routes/club.$clubId_.meeting.$meetingId.flyer'
@@ -454,6 +455,12 @@ const ClubClubIdMeetingMeetingIdVoteRoute =
     path: '/club/$clubId/meeting/$meetingId/vote',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ClubClubIdMeetingMeetingIdRsvpRoute =
+  ClubClubIdMeetingMeetingIdRsvpRouteImport.update({
+    id: '/club/$clubId_/meeting/$meetingId/rsvp',
+    path: '/club/$clubId/meeting/$meetingId/rsvp',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ClubClubIdMeetingMeetingIdPrintRoute =
   ClubClubIdMeetingMeetingIdPrintRouteImport.update({
     id: '/club/$clubId_/meeting/$meetingId/print',
@@ -633,6 +640,7 @@ export interface FileRoutesByFullPath {
   '/club/$clubId/meeting/$meetingId/flyer': typeof ClubClubIdMeetingMeetingIdFlyerRoute
   '/club/$clubId/meeting/$meetingId/present': typeof ClubClubIdMeetingMeetingIdPresentRoute
   '/club/$clubId/meeting/$meetingId/print': typeof ClubClubIdMeetingMeetingIdPrintRoute
+  '/club/$clubId/meeting/$meetingId/rsvp': typeof ClubClubIdMeetingMeetingIdRsvpRoute
   '/club/$clubId/meeting/$meetingId/vote': typeof ClubClubIdMeetingMeetingIdVoteRoute
   '/club/$clubId/meeting/$meetingId/word': typeof ClubClubIdMeetingMeetingIdWordRoute
   '/api/meetings/$id/role-sheets/$sheet/pdf': typeof ApiMeetingsIdRoleSheetsSheetPdfRoute
@@ -719,6 +727,7 @@ export interface FileRoutesByTo {
   '/club/$clubId/meeting/$meetingId/flyer': typeof ClubClubIdMeetingMeetingIdFlyerRoute
   '/club/$clubId/meeting/$meetingId/present': typeof ClubClubIdMeetingMeetingIdPresentRoute
   '/club/$clubId/meeting/$meetingId/print': typeof ClubClubIdMeetingMeetingIdPrintRoute
+  '/club/$clubId/meeting/$meetingId/rsvp': typeof ClubClubIdMeetingMeetingIdRsvpRoute
   '/club/$clubId/meeting/$meetingId/vote': typeof ClubClubIdMeetingMeetingIdVoteRoute
   '/club/$clubId/meeting/$meetingId/word': typeof ClubClubIdMeetingMeetingIdWordRoute
   '/api/meetings/$id/role-sheets/$sheet/pdf': typeof ApiMeetingsIdRoleSheetsSheetPdfRoute
@@ -809,6 +818,7 @@ export interface FileRoutesById {
   '/club/$clubId_/meeting/$meetingId/flyer': typeof ClubClubIdMeetingMeetingIdFlyerRoute
   '/club/$clubId_/meeting/$meetingId/present': typeof ClubClubIdMeetingMeetingIdPresentRoute
   '/club/$clubId_/meeting/$meetingId/print': typeof ClubClubIdMeetingMeetingIdPrintRoute
+  '/club/$clubId_/meeting/$meetingId/rsvp': typeof ClubClubIdMeetingMeetingIdRsvpRoute
   '/club/$clubId_/meeting/$meetingId/vote': typeof ClubClubIdMeetingMeetingIdVoteRoute
   '/club/$clubId_/meeting/$meetingId/word': typeof ClubClubIdMeetingMeetingIdWordRoute
   '/api/meetings/$id/role-sheets/$sheet/pdf': typeof ApiMeetingsIdRoleSheetsSheetPdfRoute
@@ -899,6 +909,7 @@ export interface FileRouteTypes {
     | '/club/$clubId/meeting/$meetingId/flyer'
     | '/club/$clubId/meeting/$meetingId/present'
     | '/club/$clubId/meeting/$meetingId/print'
+    | '/club/$clubId/meeting/$meetingId/rsvp'
     | '/club/$clubId/meeting/$meetingId/vote'
     | '/club/$clubId/meeting/$meetingId/word'
     | '/api/meetings/$id/role-sheets/$sheet/pdf'
@@ -985,6 +996,7 @@ export interface FileRouteTypes {
     | '/club/$clubId/meeting/$meetingId/flyer'
     | '/club/$clubId/meeting/$meetingId/present'
     | '/club/$clubId/meeting/$meetingId/print'
+    | '/club/$clubId/meeting/$meetingId/rsvp'
     | '/club/$clubId/meeting/$meetingId/vote'
     | '/club/$clubId/meeting/$meetingId/word'
     | '/api/meetings/$id/role-sheets/$sheet/pdf'
@@ -1074,6 +1086,7 @@ export interface FileRouteTypes {
     | '/club/$clubId_/meeting/$meetingId/flyer'
     | '/club/$clubId_/meeting/$meetingId/present'
     | '/club/$clubId_/meeting/$meetingId/print'
+    | '/club/$clubId_/meeting/$meetingId/rsvp'
     | '/club/$clubId_/meeting/$meetingId/vote'
     | '/club/$clubId_/meeting/$meetingId/word'
     | '/api/meetings/$id/role-sheets/$sheet/pdf'
@@ -1124,6 +1137,7 @@ export interface RootRouteChildren {
   ClubClubIdMeetingMeetingIdFlyerRoute: typeof ClubClubIdMeetingMeetingIdFlyerRoute
   ClubClubIdMeetingMeetingIdPresentRoute: typeof ClubClubIdMeetingMeetingIdPresentRoute
   ClubClubIdMeetingMeetingIdPrintRoute: typeof ClubClubIdMeetingMeetingIdPrintRoute
+  ClubClubIdMeetingMeetingIdRsvpRoute: typeof ClubClubIdMeetingMeetingIdRsvpRoute
   ClubClubIdMeetingMeetingIdVoteRoute: typeof ClubClubIdMeetingMeetingIdVoteRoute
   ClubClubIdMeetingMeetingIdWordRoute: typeof ClubClubIdMeetingMeetingIdWordRoute
   ApiMeetingsIdRoleSheetsSheetPdfRoute: typeof ApiMeetingsIdRoleSheetsSheetPdfRoute
@@ -1621,6 +1635,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ClubClubIdMeetingMeetingIdVoteRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/club/$clubId_/meeting/$meetingId/rsvp': {
+      id: '/club/$clubId_/meeting/$meetingId/rsvp'
+      path: '/club/$clubId/meeting/$meetingId/rsvp'
+      fullPath: '/club/$clubId/meeting/$meetingId/rsvp'
+      preLoaderRoute: typeof ClubClubIdMeetingMeetingIdRsvpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/club/$clubId_/meeting/$meetingId/print': {
       id: '/club/$clubId_/meeting/$meetingId/print'
       path: '/club/$clubId/meeting/$meetingId/print'
@@ -1908,6 +1929,7 @@ const rootRouteChildren: RootRouteChildren = {
   ClubClubIdMeetingMeetingIdPresentRoute:
     ClubClubIdMeetingMeetingIdPresentRoute,
   ClubClubIdMeetingMeetingIdPrintRoute: ClubClubIdMeetingMeetingIdPrintRoute,
+  ClubClubIdMeetingMeetingIdRsvpRoute: ClubClubIdMeetingMeetingIdRsvpRoute,
   ClubClubIdMeetingMeetingIdVoteRoute: ClubClubIdMeetingMeetingIdVoteRoute,
   ClubClubIdMeetingMeetingIdWordRoute: ClubClubIdMeetingMeetingIdWordRoute,
   ApiMeetingsIdRoleSheetsSheetPdfRoute: ApiMeetingsIdRoleSheetsSheetPdfRoute,

@@ -114,6 +114,7 @@ import { Route as FeedbackRoute } from "./club.$clubId_.meeting.$meetingId.feedb
 import { Route as FlyerRoute } from "./club.$clubId_.meeting.$meetingId.flyer";
 import { Route as PresentRoute } from "./club.$clubId_.meeting.$meetingId.present";
 import { Route as PrintRoute } from "./club.$clubId_.meeting.$meetingId.print";
+import { Route as RsvpRoute } from "./club.$clubId_.meeting.$meetingId.rsvp";
 import { Route as VoteRoute } from "./club.$clubId_.meeting.$meetingId.vote";
 import { Route as WordRoute } from "./club.$clubId_.meeting.$meetingId.word";
 
@@ -294,6 +295,14 @@ const KEY_READER_ROUTES: {
 		name: "print",
 		file: "club.$clubId_.meeting.$meetingId.print.tsx",
 		route: PrintRoute,
+		shell: false,
+		reader: getPublicMeetingByKey,
+		crossClubCheck: true,
+	},
+	{
+		name: "rsvp",
+		file: "club.$clubId_.meeting.$meetingId.rsvp.tsx",
+		route: RsvpRoute,
 		shell: false,
 		reader: getPublicMeetingByKey,
 		crossClubCheck: true,

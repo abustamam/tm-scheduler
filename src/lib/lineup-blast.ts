@@ -172,6 +172,17 @@ export function lineupMeetingUrl(data: LineupBlastData): string {
 	return `${data.origin}${promoMeetingPath(data.club.slug, data.meeting.urlKey)}`;
 }
 
+/** The one-tap RSVP page under a meeting page's URL or path (#1442). The ONE
+ *  place `/rsvp` is appended: the blast, the officer nudge and the page's own
+ *  sign-in redirect all build it here. */
+export function rsvpPageUrl(meetingUrlOrPath: string): string {
+	return `${meetingUrlOrPath}/rsvp`;
+}
+
+export function lineupRsvpUrl(data: LineupBlastData): string {
+	return rsvpPageUrl(lineupMeetingUrl(data));
+}
+
 /** One line as plain text. A claimed line ends on the bare dash, the way the
  *  source email leaves it: no "please confirm" (decision, 2026-09-28). */
 function lineText(line: LineupLine): string {
@@ -202,6 +213,12 @@ export function buildLineupBlast(data: LineupBlastData): LineupBlast {
 	const openCount = lines.filter((l) => l.state === "open").length;
 	const summary = openCount > 0 ? openSummary(openCount) : null;
 	const url = lineupMeetingUrl(data);
+	const rsvpUrl = lineupRsvpUrl(data);
+	const weekday = new Intl.DateTimeFormat("en-US", {
+		weekday: "long",
+		timeZone: tz,
+	}).format(new Date(data.meeting.scheduledAt));
+	const rsvpLine = `Coming ${weekday}? Tap here → ${rsvpUrl}`;
 
 	const heading = `🎤 ${data.club.name} lineup`;
 	const when = `📅 ${date}, ${time}`;
@@ -211,6 +228,7 @@ export function buildLineupBlast(data: LineupBlastData): LineupBlast {
 		`*${heading}*\n${when}`,
 		lines.map(lineText).join("\n"),
 		summary ?? "",
+		rsvpLine,
 		`Claim or confirm your role: ${url}`,
 	]
 		.filter(Boolean)
@@ -222,6 +240,7 @@ export function buildLineupBlast(data: LineupBlastData): LineupBlast {
 		summary
 			? `<p><span style="${NEEDED_STYLE}">${escapeHtml(summary)}</span></p>`
 			: "",
+		`<p>Coming ${escapeHtml(weekday)}? Tap here → <a href="${escapeHtml(rsvpUrl)}">${escapeHtml(rsvpUrl)}</a></p>`,
 		`<p>Claim or confirm your role: <a href="${escapeHtml(url)}">${escapeHtml(url)}</a></p>`,
 	]
 		.filter(Boolean)
