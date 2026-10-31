@@ -19,6 +19,8 @@ import {
 	meetingAttendance,
 	meetings,
 	members,
+	people,
+	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
 import {
@@ -380,5 +382,118 @@ describe.skipIf(!hasTestDb)("loadAttendanceLapse (#530)", () => {
 		expect(row.eligibleCount).toBe(2);
 		expect(row.streak).toBe(2);
 		expect(row.isLapsed).toBe(false);
+	});
+});
+
+describe.skipIf(!hasTestDb)("Slipping tier and reach-out data (#1445)", () => {
+	let seed: SeededClub;
+
+	beforeEach(async () => {
+		seed = await seedClub();
+		await testDb
+			.update(members)
+			.set({ createdAt: new Date(Date.now() - 400 * DAY) })
+			.where(eq(members.clubId, seed.clubId));
+		// Two held meetings the member missed: a streak of 2, i.e. slipping.
+		for (const d of [14, 7]) {
+			const id = await addMeeting(seed.clubId, d);
+			await mark(id, seed.adminMemberId, "present");
+		}
+	});
+
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	async function row() {
+		const rows = await loadAttendanceLapse(seed.clubId);
+		const r = rows.find((x) => x.memberId === seed.memberId);
+		if (!r) throw new Error("seeded member missing");
+		return r;
+	}
+
+	async function addRole(name: string): Promise<string> {
+		const [r] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seed.clubId,
+				name,
+				category: "functionary",
+				isSpeakerRole: false,
+			})
+			.returning({ id: roleDefinitions.id });
+		if (!r) throw new Error("role insert failed");
+		return r.id;
+	}
+
+	async function openSlot(roleDefinitionId: string) {
+		await testDb.insert(roleSlots).values({
+			meetingId: seed.meetingId,
+			roleDefinitionId,
+			status: "open",
+		});
+	}
+
+	/** The member held `roleDefinitionId` at a past meeting `daysAgo` back. */
+	async function held(roleDefinitionId: string, daysAgo: number) {
+		const id = await addMeeting(seed.clubId, daysAgo);
+		await testDb.insert(roleSlots).values({
+			meetingId: id,
+			roleDefinitionId,
+			assignedMemberId: seed.memberId,
+			status: "confirmed",
+		});
+	}
+
+	it("a streak of 2 is slipping, with the next meeting's open role suggested", async () => {
+		const r = await row();
+		// The member holds nothing in the window, so presence is only the roles.
+		expect(r.streak).toBe(2);
+		expect(r.isLapsed).toBe(false);
+		expect(r.suggestedRole).toBe("Timer");
+	});
+
+	it("carries the member's contact from the Person", async () => {
+		await testDb
+			.update(people)
+			.set({ email: "dana@example.com", phone: "+14155550123" })
+			.where(eq(people.id, seed.personId));
+		const r = await row();
+		expect(r.email).toBe("dana@example.com");
+		expect(r.phone).toBe("+14155550123");
+	});
+
+	it("prefers an open role the member has never held", async () => {
+		const grammarian = await addRole("Grammarian");
+		await openSlot(grammarian);
+		// They HAVE held Timer; they have never held Grammarian. (Holding a role
+		// counts as presence, so give the streak its two misses on older dates
+		// than this one by holding it before the window's recent two meetings.)
+		await held(seed.roleDefinitionId, 30);
+		expect((await row()).suggestedRole).toBe("Grammarian");
+	});
+
+	it("among held roles, picks the one served longest ago", async () => {
+		const grammarian = await addRole("Grammarian");
+		await openSlot(grammarian);
+		await held(seed.roleDefinitionId, 60);
+		await held(grammarian, 30);
+		expect((await row()).suggestedRole).toBe("Timer");
+	});
+
+	it("is null when no slot is open at the next meeting", async () => {
+		await testDb
+			.update(roleSlots)
+			.set({ status: "confirmed", assignedMemberId: seed.adminMemberId })
+			.where(eq(roleSlots.id, seed.slotId));
+		expect((await row()).suggestedRole).toBeNull();
+	});
+
+	it("is null when the next meeting is cancelled", async () => {
+		await testDb
+			.update(meetings)
+			.set({ status: "cancelled" })
+			.where(eq(meetings.id, seed.meetingId));
+		expect((await row()).suggestedRole).toBeNull();
 	});
 });

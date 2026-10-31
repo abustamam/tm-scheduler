@@ -39,6 +39,7 @@ import {
 import {
 	ATTENDANCE_LAPSE,
 	type AttendanceLapseRow,
+	type LapseReachOut,
 	scoreAttendanceLapse,
 } from "#/lib/attendance-lapse";
 import { DEFAULT_CLUB_TIMEZONE } from "#/lib/club-timezone";
@@ -65,6 +66,7 @@ import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { loadNextMeetingSummary } from "./meetings-logic";
 import { loadOrientationFactsForMembers } from "./orientation-logic";
 import { pathwaysByMember } from "./pathways-read-logic";
+import { loadRoleRecency } from "./role-recency-logic";
 
 export type {
 	LevelNudgeMeeting,
@@ -845,7 +847,7 @@ export async function loadEvaluatorPairings(
  */
 export async function loadAttendanceLapse(
 	clubId: string,
-): Promise<AttendanceLapseRow[]> {
+): Promise<(AttendanceLapseRow & LapseReachOut)[]> {
 	const now = new Date();
 
 	// DISTINCT over the join: a meeting qualifies once it has any MEMBER
@@ -893,8 +895,13 @@ export async function loadAttendanceLapse(
 				name: members.name,
 				joinedAt: members.joinedAt,
 				createdAt: members.createdAt,
+				email: people.email,
+				phone: people.phone,
+				preferredName: memberGoesBy,
+				storedContact: people.preferredContact,
 			})
 			.from(members)
+			.innerJoin(people, eq(people.id, members.personId))
 			.where(and(eq(members.clubId, clubId), eq(members.status, "active")))
 			.orderBy(asc(members.name)),
 		db
@@ -959,7 +966,7 @@ export async function loadAttendanceLapse(
 			: [],
 	);
 
-	return scoreAttendanceLapse({
+	const scored = scoreAttendanceLapse({
 		meetings: windowMeetings,
 		// `joined_at` is populated ONLY by the Toastmasters CSV import — every
 		// member added through the app has it NULL. Treating NULL as "has always
@@ -973,4 +980,124 @@ export async function loadAttendanceLapse(
 		})),
 		marks: [...explicit, ...fromRoles],
 	});
+
+	// Contact and a suggested role (#1445), for the rows the dashboard lists:
+	// slipping and lapsed. Contact is PII; `getAttendanceLapse` is admin-gated.
+	const listed = scored.filter(
+		(r) => r.streak >= ATTENDANCE_LAPSE.slippingThreshold,
+	);
+	const [countryCode, suggested] = await Promise.all([
+		loadClubDefaultCountryCode(clubId),
+		loadSuggestedOpenRoles(
+			clubId,
+			listed.map((r) => r.memberId),
+		),
+	]);
+	const contact = new Map(
+		memberRows.map((m) => {
+			const email = m.email?.trim() ? m.email : null;
+			const phone = toE164(m.phone, countryCode);
+			return [
+				m.memberId,
+				{
+					// Blank is no address: `buildNudge` would otherwise draft to "".
+					email,
+					phone,
+					preferredName: m.preferredName,
+					preferredContact: effectivePreferredContact(m.storedContact, {
+						email,
+						phone,
+					}),
+				},
+			] as const;
+		}),
+	);
+	return scored.map((row) => ({
+		...row,
+		...(contact.get(row.memberId) ?? {
+			email: null,
+			phone: null,
+			preferredName: null,
+			preferredContact: null,
+		}),
+		suggestedRole: suggested.get(row.memberId) ?? null,
+	}));
+}
+
+/**
+ * For each member, the open role at the club's NEXT meeting they have gone
+ * longest without (#1445): a role they have never held beats any they have,
+ * then the oldest `lastServedAt` wins, then the role's sort order and name so
+ * the pick is stable. Null for a member when no slot is open, and for everyone
+ * when there is no next scheduled, non-cancelled meeting.
+ *
+ * "Open" is `status = 'open'` with neither a member nor a guest assigned. A
+ * role with several open slots counts once.
+ */
+export async function loadSuggestedOpenRoles(
+	clubId: string,
+	memberIds: string[],
+	now: Date = new Date(),
+): Promise<Map<string, string | null>> {
+	const result = new Map<string, string | null>(
+		memberIds.map((id) => [id, null]),
+	);
+	if (memberIds.length === 0) return result;
+
+	const [next] = await db
+		.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
+		.from(meetings)
+		.where(
+			and(
+				eq(meetings.clubId, clubId),
+				gte(meetings.scheduledAt, now),
+				ne(meetings.status, "cancelled"),
+			),
+		)
+		.orderBy(asc(meetings.scheduledAt))
+		.limit(1);
+	if (!next) return result;
+
+	const openSlots = await db
+		.selectDistinct({
+			roleDefinitionId: roleDefinitions.id,
+			name: roleDefinitions.name,
+			sortOrder: roleDefinitions.sortOrder,
+		})
+		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
+		.where(
+			and(
+				eq(roleSlots.meetingId, next.id),
+				eq(roleSlots.status, "open"),
+				isNull(roleSlots.assignedMemberId),
+				isNull(roleSlots.assignedGuestId),
+			),
+		);
+	if (openSlots.length === 0) return result;
+
+	const recency = await loadRoleRecency({ clubId, before: next.scheduledAt });
+	const served = new Map<string, number>();
+	for (const r of recency) {
+		served.set(`${r.memberId}:${r.roleDefinitionId}`, r.lastServedAt.getTime());
+	}
+	for (const memberId of memberIds) {
+		const ranked = openSlots
+			.map((slot) => ({
+				...slot,
+				// Never held sorts before every real date.
+				at: served.get(`${memberId}:${slot.roleDefinitionId}`) ?? -Infinity,
+			}))
+			.sort(
+				(a, b) =>
+					a.at - b.at ||
+					a.sortOrder - b.sortOrder ||
+					a.name.localeCompare(b.name),
+			);
+		result.set(memberId, ranked[0]?.name ?? null);
+	}
+	return result;
 }

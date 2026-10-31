@@ -8,6 +8,8 @@
 // The window SELECTION (which meetings count) is SQL's job — see
 // `reporting-logic.ts`. This module scores whatever window it is handed.
 
+import type { ContactMethod } from "#/lib/preferred-contact";
+
 /**
  * The two numbers the feature is.
  *
@@ -27,6 +29,12 @@ export const ATTENDANCE_LAPSE = {
 	windowMeetings: 8,
 	/** Consecutive not-present meetings before a member is surfaced. */
 	streakThreshold: 3,
+	/**
+	 * Consecutive not-present meetings that earn a "Slipping" flag (#1445): one
+	 * miss short of "Stopped attending", early enough for a nudge to matter.
+	 * Asserted absolutely in the unit test, like the two above.
+	 */
+	slippingThreshold: 2,
 } as const;
 
 /** The persisted attendance statuses (`attendance_status` in the schema). */
@@ -67,6 +75,26 @@ export interface AttendanceLapseRow {
 	/** Most recent meeting the member was recorded present at. */
 	lastSeenAt: Date | null;
 	isLapsed: boolean;
+}
+
+/** Streak at or past `slippingThreshold` and not yet lapsed (#1445). */
+export function isSlipping(
+	row: Pick<AttendanceLapseRow, "streak" | "isLapsed">,
+): boolean {
+	return !row.isLapsed && row.streak >= ATTENDANCE_LAPSE.slippingThreshold;
+}
+
+/**
+ * What an officer needs to reach out to a slipping or lapsed member (#1445).
+ * Contact is PII: it rides only on `getAttendanceLapse`, which is admin-gated.
+ */
+export interface LapseReachOut {
+	phone: string | null;
+	email: string | null;
+	preferredName: string | null;
+	preferredContact: ContactMethod | null;
+	/** An open role at the next meeting they could take, or null. */
+	suggestedRole: string | null;
 }
 
 interface ScoreInput {

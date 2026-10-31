@@ -73,6 +73,16 @@ export type NudgeButtonsProps = NudgeButtonsBase &
 				shareUrl?: string | null;
 		  }
 		| {
+				/** "We've missed you" to a member who stopped coming (#1445). The
+				 *  meeting is optional: no upcoming meeting drafts "hope to see you
+				 *  soon". `roleName` is an open role at that meeting, when one fits. */
+				mode: "reach_out";
+				clubName: string;
+				roleName?: string | null;
+				meetingDate?: string | null;
+				shareUrl?: string | null;
+		  }
+		| {
 				/** A mentee's draft to the mentor they asked (#1209). No meeting. */
 				mode: "mentorRequest";
 				focusLabel: string;
@@ -197,70 +207,79 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 					focusLabel: props.focusLabel,
 					origin: props.origin,
 				}
-			: props.mode === "mentorWelcome"
-				? { ...common, mode: props.mode, origin: props.origin }
-				: props.mode === "confirm" || props.mode === "recruit"
-					? {
-							...common,
-							meetingDate: props.meetingDate,
-							shareUrl: props.shareUrl,
-							mode: props.mode,
-							roleName: props.roleName,
-							// Carried on the SAME branch as `roleName`, for the same reason:
-							// these three fields exist together on the role arm and a spread of
-							// `props` would put the duty clause back in reach of a draft that
-							// names no role.
-							duties: props.duties,
-							evaluating: props.evaluating,
-							personalUrl: props.personalUrl,
-							guideUrl: props.guideUrl,
-						}
-					: props.mode === "invite"
+			: props.mode === "reach_out"
+				? {
+						...common,
+						mode: props.mode,
+						clubName: props.clubName,
+						roleName: props.roleName,
+						meetingDate: props.meetingDate,
+						shareUrl: props.shareUrl,
+					}
+				: props.mode === "mentorWelcome"
+					? { ...common, mode: props.mode, origin: props.origin }
+					: props.mode === "confirm" || props.mode === "recruit"
 						? {
 								...common,
 								meetingDate: props.meetingDate,
 								shareUrl: props.shareUrl,
 								mode: props.mode,
-								clubName: props.clubName,
-								meetingTime: props.meetingTime,
-								location: props.location,
+								roleName: props.roleName,
+								// Carried on the SAME branch as `roleName`, for the same reason:
+								// these three fields exist together on the role arm and a spread of
+								// `props` would put the duty clause back in reach of a draft that
+								// names no role.
+								duties: props.duties,
+								evaluating: props.evaluating,
+								personalUrl: props.personalUrl,
+								guideUrl: props.guideUrl,
 							}
-						: props.mode === "level"
+						: props.mode === "invite"
 							? {
 									...common,
 									meetingDate: props.meetingDate,
 									shareUrl: props.shareUrl,
 									mode: props.mode,
-									pathName: props.pathName,
-									level: props.level,
-									projectsLeft: props.projectsLeft,
-									projectNames: props.projectNames,
-									electivesToChoose: props.electivesToChoose,
+									clubName: props.clubName,
+									meetingTime: props.meetingTime,
+									location: props.location,
 								}
-							: props.mode === "orientation"
+							: props.mode === "level"
 								? {
 										...common,
 										meetingDate: props.meetingDate,
 										shareUrl: props.shareUrl,
 										mode: props.mode,
-										items: props.items,
-										origin: props.origin,
+										pathName: props.pathName,
+										level: props.level,
+										projectsLeft: props.projectsLeft,
+										projectNames: props.projectNames,
+										electivesToChoose: props.electivesToChoose,
 									}
-								: props.mode === "rsvp"
+								: props.mode === "orientation"
 									? {
 											...common,
 											meetingDate: props.meetingDate,
 											shareUrl: props.shareUrl,
 											mode: props.mode,
-											clubName: props.clubName,
-											weekday: props.weekday,
+											items: props.items,
+											origin: props.origin,
 										}
-									: {
-											...common,
-											meetingDate: props.meetingDate,
-											shareUrl: props.shareUrl,
-											mode: props.mode,
-										},
+									: props.mode === "rsvp"
+										? {
+												...common,
+												meetingDate: props.meetingDate,
+												shareUrl: props.shareUrl,
+												mode: props.mode,
+												clubName: props.clubName,
+												weekday: props.weekday,
+											}
+										: {
+												...common,
+												meetingDate: props.meetingDate,
+												shareUrl: props.shareUrl,
+												mode: props.mode,
+											},
 	);
 
 	const callUrl = preferredContact === "call" ? telHref(phone) : null;
