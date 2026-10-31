@@ -12,8 +12,8 @@
  * Covers: the two payload readers, over a real DB, and the same payload run
  * through seroval (the serializer TanStack Start dehydrates loader data with)
  * for a request that carries no cookie, so "signed out" is the absence of a
- * credential on the request and not a flag the test sets. The link pasted into
- * `location` / `notes` is scrubbed. No server fn returns the link behind a
+ * credential on the request and not a flag the test sets. A link pasted into
+ * `location` / `notes` is returned as stored, never rewritten. No server fn returns the link behind a
  * self-asserted gate (see `meeting-join-url-no-editor-reader.guard.test.ts`).
  * Does NOT cover: a real browser (`credentials: "omit"`, the HTTP response
  * body), nor Better Auth resolving a real cookie: the session lookup is
@@ -104,40 +104,6 @@ describe("the allowlist", () => {
 	});
 });
 
-describe("the link pasted into free text", () => {
-	// protects=a club that pasted its video link into location, notes or a
-	//   reminder does not hand it to a non-member through them.
-	// fails_when=nonMemberMeetingRow keeps those fields as stored, or only strips
-	//   the exact stored spelling (a trailing slash, no scheme or another case).
-	it("takes the link out of location, notes and reminders, in any spelling", () => {
-		const row = {
-			id: "m",
-			joinUrl: JOIN_URL,
-			location: `Room 4 or ${JOIN_URL}`,
-			notes: `Join here: ${JOIN_URL}/ \nBring a pen`,
-			reminders: `${JOIN_URL.replace("https://", "").toUpperCase()}`,
-			promoNote: "Come and see us",
-		};
-		const out = nonMemberMeetingRow(row);
-		expect(JSON.stringify(out).toLowerCase()).not.toContain("secret-room-4471");
-		// A place that held the link is dropped, not left half-sentenced.
-		expect(out.location).toBeNull();
-		expect(out.notes).toBe("Join here:\nBring a pen");
-		expect(out.reminders).toBeNull();
-		// Text that never held it is untouched.
-		expect(out.promoNote).toBe("Come and see us");
-	});
-
-	it("leaves a row with no link, or text without it, as it was", () => {
-		const row = { id: "m", location: "12 Main St", notes: "Hi", joinUrl: null };
-		expect(nonMemberMeetingRow(row)).toEqual({
-			id: "m",
-			location: "12 Main St",
-			notes: "Hi",
-		});
-	});
-});
-
 describe.skipIf(!hasTestDb)("the meeting detail payload", () => {
 	let seeded: SeededClub | null = null;
 	afterEach(async () => {
@@ -199,29 +165,24 @@ describe.skipIf(!hasTestDb)("the meeting detail payload", () => {
 		expect(serialize(await readers(s).getMeeting())).toContain(JOIN_URL);
 	});
 
-	// protects=the same, for a club that pasted the link into location / notes.
-	// fails_when=the payload keeps location or notes verbatim for a stranger.
-	it("does not leak the link through location or notes", async () => {
+	// protects=the payload never rewrites stored text: an editor's save writes
+	//   every field back from this payload, so a changed location or notes would
+	//   be saved over the stored one. Pasted links are not scrubbed (out of scope).
+	// fails_when=nonMemberMeetingRow nulls, trims or strips location or notes.
+	it("returns location and notes exactly as stored, even holding the link", async () => {
 		const s = await seed();
+		const location = `Room 4, 12 Main St / ${JOIN_URL}`;
+		const notes = `Call in: ${JOIN_URL} (video)\n  Bring a pen `;
 		await testDb
 			.update(meetings)
-			.set({ location: JOIN_URL, notes: `Call in: ${JOIN_URL} (video)` })
+			.set({ location, notes })
 			.where(eq(meetings.id, s.meetingId));
 		for (const user of [null, randomUUID()]) {
 			signInAs(user);
-			for (const [name, read] of Object.entries(readers(s))) {
-				const data = await read();
-				expect(serialize(data), `${name} as ${user}`).not.toContain(
-					"secret-room-4471",
-				);
-				expect(data.meeting.location).toBeNull();
-				expect(data.meeting.notes).toBe("Call in: (video)");
-			}
+			const data = await readers(s).getMeeting();
+			expect(data.meeting.location).toBe(location);
+			expect(data.meeting.notes).toBe(notes);
 		}
-		// A member still reads the stored text.
-		signInAs(s.memberUserId);
-		const member = await readers(s).getMeeting();
-		expect(member.meeting.location).toBe(JOIN_URL);
 	});
 
 	// protects=the public reader never ships it, whoever is signed in.

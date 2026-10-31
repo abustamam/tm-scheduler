@@ -39,65 +39,19 @@ export const NON_MEMBER_MEETING_FIELDS = [
  *  way a new column passes the guard test. */
 export const WITHHELD_MEETING_FIELDS = ["joinUrl"] as const;
 
-/** The spellings of a join link worth removing from free text: as stored, with
- *  and without a trailing slash, and without its scheme. Longest first, so the
- *  scheme-less form never leaves an `https://` stub behind. */
-function joinUrlSpellings(joinUrl: string): string[] {
-	const noSlash = joinUrl.replace(/\/+$/, "");
-	const noScheme = noSlash.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
-	return [...new Set([joinUrl, noSlash, noScheme])]
-		.filter((v) => v.length > 0)
-		.sort((a, b) => b.length - a.length);
-}
-
 /**
- * A text field with the join link taken out. A club that pasted its video link
- * into `location` or the notes would otherwise hand the key to the door to the
- * stranger the allowlist was withholding it from. A field that was only the link
- * becomes null; one that held more keeps the rest with the gap closed.
- */
-function withoutJoinUrl(text: string, spellings: string[]): string | null {
-	let out = text;
-	for (const spelling of spellings) {
-		out = out.replace(
-			// A trailing slash is the same link.
-			new RegExp(`${spelling.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/*`, "gi"),
-			"",
-		);
-	}
-	if (out === text) return text;
-	const tidy = out
-		.replace(/[ \t]+\n/g, "\n")
-		.replace(/[ \t]{2,}/g, " ")
-		.trim();
-	return tidy === "" ? null : tidy;
-}
-
-/**
- * The meeting row narrowed to `NON_MEMBER_MEETING_FIELDS`, with the row's own
- * join link also taken out of every free-text field it was kept in. Typed as the
- * row without `joinUrl`: that is the only column withheld today, and the guard
- * test holds every other column to the allowlist, so the type stays true.
- *
- * `location` is dropped outright when it held the link (a place that was only a
- * URL says nothing without it), the others keep the text around it.
+ * The meeting row narrowed to `NON_MEMBER_MEETING_FIELDS`. Typed as the row
+ * without `joinUrl`: that is the only column withheld today, and the guard test
+ * holds every other column to the allowlist, so the type stays true.
  */
 export function nonMemberMeetingRow<M extends object>(
 	meeting: M,
 ): Omit<M, (typeof WITHHELD_MEETING_FIELDS)[number]> {
-	const source = meeting as Record<string, unknown>;
-	const joinUrl = typeof source.joinUrl === "string" ? source.joinUrl : "";
-	const spellings = joinUrl ? joinUrlSpellings(joinUrl) : [];
 	const kept: Record<string, unknown> = {};
 	for (const field of NON_MEMBER_MEETING_FIELDS) {
-		if (!Object.hasOwn(meeting, field)) continue;
-		const value = source[field];
-		if (typeof value !== "string" || spellings.length === 0) {
-			kept[field] = value;
-			continue;
+		if (Object.hasOwn(meeting, field)) {
+			kept[field] = (meeting as Record<string, unknown>)[field];
 		}
-		const cleaned = withoutJoinUrl(value, spellings);
-		kept[field] = field === "location" && cleaned !== value ? null : cleaned;
 	}
 	return kept as Omit<M, (typeof WITHHELD_MEETING_FIELDS)[number]>;
 }
