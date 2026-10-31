@@ -26,6 +26,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("#/server/meetings", () => ({ getPublicMeetingByKey: vi.fn() }));
 vi.mock("#/lib/club-route", () => ({ resolveClubOrRedirect: vi.fn() }));
 vi.mock("#/server/attendance-plan", () => ({ setPlannedAttendance: vi.fn() }));
+vi.mock("#/server/guest-rsvp", () => ({ submitGuestRsvp: vi.fn() }));
 vi.mock("#/server/personal-meeting", () => ({
 	getPublicPersonalMeetingView: vi.fn(),
 }));
@@ -49,11 +50,12 @@ vi.mock("#/components/club/cover-sheet", () => ({
 import { authClient } from "#/lib/auth-client";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { memberKey } from "#/lib/member-identity";
+import { Route } from "#/routes/club.$clubId_.meeting.$meetingId.rsvp";
 import { setPlannedAttendance } from "#/server/attendance-plan";
 import { getBallotSessionVoter } from "#/server/ballot-session-voter";
+import { submitGuestRsvp } from "#/server/guest-rsvp";
 import { getPublicMeetingByKey } from "#/server/meetings";
 import { getPublicPersonalMeetingView } from "#/server/personal-meeting";
-import { Route } from "./club.$clubId_.meeting.$meetingId.rsvp";
 
 const CLUB_ID = "11111111-1111-4111-8111-111111111111";
 const MEETING_ID = "22222222-2222-4222-8222-222222222222";
@@ -136,6 +138,7 @@ async function renderPage() {
 			id: MEETING_ID,
 			status: "scheduled",
 			scheduledAt: SOON,
+			lengthMinutes: 90,
 			theme: null,
 		},
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
@@ -352,4 +355,183 @@ describe("rsvp page", () => {
 			);
 		expect(new Set(memberIds)).toEqual(new Set([MEMBER_ID]));
 	}, 8000);
+});
+
+describe("guest RSVP (#1444)", () => {
+	const CONFIRMATION = {
+		rsvpId: "44444444-4444-4444-8444-444444444444",
+		clubName: "Downtown Toastmasters",
+		scheduledAt: SOON,
+		timeZone: "UTC",
+		location: "12 Main St",
+		joinUrl: null as string | null,
+		toastmasterFirstName: null as string | null,
+	};
+
+	async function startGuest() {
+		signedOutAs(false);
+		await renderPage();
+		fireEvent.click(await screen.findByRole("button", { name: "I'm a guest" }));
+		return screen.findByLabelText("First name");
+	}
+
+	async function submitFirstName(name = "Dana") {
+		fireEvent.change(await startGuest(), { target: { value: name } });
+		fireEvent.click(screen.getByRole("button", { name: "I'm coming" }));
+	}
+
+	beforeEach(() => {
+		vi.mocked(submitGuestRsvp).mockResolvedValue({
+			ok: true,
+			confirmation: { ...CONFIRMATION },
+			// biome-ignore lint/suspicious/noExplicitAny: confirmation dates
+		} as any);
+	});
+	afterEach(() => {
+		cleanup();
+		localStorage.clear();
+		vi.restoreAllMocks();
+		vi.clearAllMocks();
+	});
+
+	/*
+	 * protects: AC1, a guest with a first name only is submitted and sees the
+	 *   confirmation; no contact is sent, the honeypot is empty, fillMs is a number.
+	 * fails_when: the page demands a contact, sends the honeypot filled, or drops
+	 *   fillMs (the server reads a missing one as a bot).
+	 */
+	it("first name only: submits that and shows 'See you <Weekday>, <Name>!'", async () => {
+		await submitFirstName("Dana");
+		const weekday = new Intl.DateTimeFormat("en-US", {
+			weekday: "long",
+			timeZone: "UTC",
+		}).format(new Date(SOON));
+		expect(await screen.findByText(`See you ${weekday}, Dana!`)).toBeTruthy();
+		const { data } = vi.mocked(submitGuestRsvp).mock.calls[0][0] as {
+			data: Record<string, unknown>;
+		};
+		expect(data).toMatchObject({
+			clubId: CLUB_ID,
+			meetingId: MEETING_ID,
+			firstName: "Dana",
+			email: "",
+			phone: "",
+			website: "",
+		});
+		expect(typeof data.fillMs).toBe("number");
+		expect(data.clientKey).toMatch(/^[0-9a-f-]{36}$/);
+	});
+
+	// protects=an email-looking contact goes to `email`, anything else to `phone`.
+	// fails_when=both are sent in one field, or a phone is sent as an email.
+	it("routes the optional contact to email or phone by its shape", async () => {
+		fireEvent.change(await startGuest(), { target: { value: "Dana" } });
+		fireEvent.change(screen.getByLabelText(/Email or phone/), {
+			target: { value: "dana@example.test" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "I'm coming" }));
+		await screen.findByText(/^See you/);
+		expect(vi.mocked(submitGuestRsvp).mock.calls[0][0]).toMatchObject({
+			data: { email: "dana@example.test", phone: "" },
+		});
+	});
+
+	// protects=a non-empty phone value reaches the `phone` field, trimmed, and
+	//   `email` stays blank.
+	// fails_when=a phone is dropped, sent in `email`, or sent untrimmed.
+	it("sends a phone-shaped contact as phone", async () => {
+		fireEvent.change(await startGuest(), { target: { value: "Dana" } });
+		fireEvent.change(screen.getByLabelText(/Email or phone/), {
+			target: { value: "  555 010 1234 " },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "I'm coming" }));
+		await screen.findByText(/^See you/);
+		expect(vi.mocked(submitGuestRsvp).mock.calls[0][0]).toMatchObject({
+			data: { email: "", phone: "555 010 1234" },
+		});
+	});
+
+	// protects=AC2 on the page: a street address gets the map link.
+	// fails_when=the address has no link, or the link is not the maps search.
+	it("shows the address with a map link", async () => {
+		await submitFirstName();
+		const link = await screen.findByRole("link", { name: /Open in maps/ });
+		expect(link.getAttribute("href")).toBe(
+			"https://www.google.com/maps/search/?api=1&query=12%20Main%20St",
+		);
+	});
+
+	// protects=AC2 on the page: a URL location is text, never a map search.
+	it("shows no map link when the location is a URL", async () => {
+		vi.mocked(submitGuestRsvp).mockResolvedValue({
+			ok: true,
+			confirmation: { ...CONFIRMATION, location: "https://zoom.us/j/1" },
+			// biome-ignore lint/suspicious/noExplicitAny: confirmation dates
+		} as any);
+		await submitFirstName();
+		await screen.findByText(/^See you/);
+		expect(screen.queryByRole("link", { name: /Open in maps/ })).toBeNull();
+	});
+
+	// protects=the video link appears exactly when the confirmation carries it
+	// (hybrid included), and the Toastmaster line uses the D8 copy, only when filled.
+	// fails_when=a link is shown without joinUrl, or the old copy returns.
+	it("shows Join the video call and the Toastmaster line only when present", async () => {
+		await submitFirstName();
+		await screen.findByText(/^See you/);
+		expect(screen.queryByText("Join the video call")).toBeNull();
+		expect(screen.getByText("The club knows you're coming.")).toBeTruthy();
+		cleanup();
+
+		vi.mocked(submitGuestRsvp).mockResolvedValue({
+			ok: true,
+			confirmation: {
+				...CONFIRMATION,
+				joinUrl: "https://meet.example/abc",
+				toastmasterFirstName: "Lena",
+			},
+			// biome-ignore lint/suspicious/noExplicitAny: confirmation dates
+		} as any);
+		await submitFirstName();
+		const join = await screen.findByText("Join the video call");
+		expect(join.closest("a")?.getAttribute("href")).toBe(
+			"https://meet.example/abc",
+		);
+		expect(
+			screen.getByText(
+				"Lena is Toastmaster tonight. The club knows you're coming.",
+			),
+		).toBeTruthy();
+	});
+
+	// protects=a success-shaped bot answer (nothing written) is never shown as a
+	// confirmation. fails_when=the page confirms an RSVP the server did not record.
+	it("does not confirm when the server wrote nothing", async () => {
+		vi.mocked(submitGuestRsvp).mockResolvedValue({
+			ok: true,
+			confirmation: null,
+		});
+		await submitFirstName();
+		expect(await screen.findByRole("alert")).toBeTruthy();
+		expect(screen.queryByText(/^See you/)).toBeNull();
+	});
+
+	// protects=a refusal's message reaches the guest. fails_when=it is swallowed.
+	it("shows the server's refusal", async () => {
+		vi.mocked(submitGuestRsvp).mockRejectedValue(
+			new Error("This meeting isn't taking RSVPs."),
+		);
+		await submitFirstName();
+		expect(
+			await screen.findByText("This meeting isn't taking RSVPs."),
+		).toBeTruthy();
+	});
+
+	// protects=a first name is required before anything is sent.
+	it("sends nothing without a first name", async () => {
+		await startGuest();
+		fireEvent.click(screen.getByRole("button", { name: "I'm coming" }));
+		expect(await screen.findByRole("alert")).toBeTruthy();
+		expect(submitGuestRsvp).not.toHaveBeenCalled();
+	});
 });

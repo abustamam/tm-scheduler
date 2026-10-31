@@ -1,10 +1,19 @@
 // The db-touching half of the public guest RSVP (#1443), behind the
 // createServerFn in `guest-rsvp.ts` (never imported by client routes, so `#/db`
 // and `pg` stay out of the browser bundle).
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq, inArray, lt, ne, sql } from "drizzle-orm";
+import { union } from "drizzle-orm/pg-core";
 import { db } from "#/db";
-import { clubs, meetingGuestRsvps, meetings, members } from "#/db/schema";
-import { defaultAttendanceMode } from "#/lib/attendance-mode";
+import {
+	clubs,
+	guests,
+	meetingAttendance,
+	meetingGuestRsvps,
+	meetings,
+	members,
+	roleSlots,
+	tableTopicsSpeakers,
+} from "#/db/schema";
 import { firstNameOf } from "#/lib/person-name";
 import { toStoredPhone } from "#/lib/phone";
 import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
@@ -37,8 +46,10 @@ export interface GuestRsvpConfirmation {
 	scheduledAt: Date;
 	timeZone: string;
 	location: string | null;
-	/** Present for an online meeting only. The ONE non-member response that
-	 *  carries it (with the member RSVP confirmation, #1442). */
+	/** Present whenever the meeting has a join link, hybrid included (#1444).
+	 *  The ONE non-member response that carries it (with the member RSVP
+	 *  confirmation, #1442); the meeting detail payload strips it for a
+	 *  non-member (`public-meeting-payload.ts`). */
 	joinUrl: string | null;
 	/** The Toastmaster's first name, when that slot is filled (D8). */
 	toastmasterFirstName: string | null;
@@ -181,11 +192,8 @@ export async function submitGuestRsvpLogic(
 					scheduledAt: meeting.scheduledAt,
 					timeZone: club.timezone,
 					location: meeting.location ?? club.defaultLocation ?? null,
-					// Online-only (join link and no location, #1049's rule) or nothing.
-					joinUrl:
-						defaultAttendanceMode(meeting) === "online"
-							? (meeting.joinUrl ?? null)
-							: null,
+					// Any meeting with a join link, hybrid included (#1444).
+					joinUrl: meeting.joinUrl ?? null,
 					toastmasterFirstName,
 				},
 			};
@@ -213,4 +221,102 @@ function assertRsvpOpen(
 	if (endsAt < now.getTime() || meeting.scheduledAt.getTime() > horizon) {
 		throw new Error(RSVP_MEETING_REFUSED_MESSAGE);
 	}
+}
+
+/** One RSVP'd guest as the officer's panel shows them. */
+export interface MeetingGuestRsvp {
+	guestId: string;
+	name: string;
+	/** Which visit this RSVP is for: past visits plus one. 1 is a first visit. */
+	visitNumber: number;
+}
+
+/** How many guests have RSVP'd to a meeting. Public: a number, no names. */
+export async function countMeetingGuestRsvps(
+	meetingId: string,
+): Promise<number> {
+	const rows = await db
+		.select({ id: meetingGuestRsvps.id })
+		.from(meetingGuestRsvps)
+		.where(eq(meetingGuestRsvps.meetingId, meetingId));
+	return rows.length;
+}
+
+/**
+ * The guests who RSVP'd to a meeting, by name, oldest RSVP first, each with
+ * the visit this would be: the visits made at EARLIER meetings, plus one.
+ * OFFICERS ONLY: the caller gates it; a guest's name is not for a public payload.
+ *
+ * "Earlier" is strictly before THIS meeting's start, this meeting excluded. The
+ * pipeline's `loadGuestVisitSummaries` counts every visit up to today, so a guest
+ * who holds a role at this very meeting, or who came to a later one, would read
+ * as a returning guest on an RSVP for a meeting they had not yet attended. The
+ * visit rule itself is `guestVisits`' (a present row, a held slot or a Table
+ * Topics turn, at a non-cancelled meeting whose club-local date has arrived);
+ * only the "before this meeting" bound is added here.
+ */
+export async function loadMeetingGuestRsvps(
+	meetingId: string,
+	clubId: string,
+	timeZone: string,
+): Promise<MeetingGuestRsvp[]> {
+	const rows = await db
+		.select({ guestId: guests.id, name: guests.name })
+		.from(meetingGuestRsvps)
+		.innerJoin(guests, eq(guests.id, meetingGuestRsvps.guestId))
+		.where(eq(meetingGuestRsvps.meetingId, meetingId))
+		.orderBy(asc(meetingGuestRsvps.createdAt));
+	if (rows.length === 0) return [];
+
+	const [thisMeeting] = await db
+		.select({ scheduledAt: meetings.scheduledAt })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (!thisMeeting) return [];
+
+	const guestIds = rows.map((r) => r.guestId);
+	const earlier = and(
+		eq(meetings.clubId, clubId),
+		ne(meetings.status, "cancelled"),
+		lt(meetings.scheduledAt, thisMeeting.scheduledAt),
+		sql`(${meetings.scheduledAt} at time zone ${timeZone}::text)::date <= (now() at time zone ${timeZone}::text)::date`,
+	);
+	// `union` (not `union all`): a guest with a row AND a slot at one meeting
+	// is one visit.
+	const visits = await union(
+		db
+			.select({ guestId: meetingAttendance.guestId, meetingId: meetings.id })
+			.from(meetingAttendance)
+			.innerJoin(meetings, eq(meetings.id, meetingAttendance.meetingId))
+			.where(
+				and(
+					earlier,
+					inArray(meetingAttendance.guestId, guestIds),
+					eq(meetingAttendance.status, "present"),
+				),
+			),
+		db
+			.select({ guestId: roleSlots.assignedGuestId, meetingId: meetings.id })
+			.from(roleSlots)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.where(and(earlier, inArray(roleSlots.assignedGuestId, guestIds))),
+		db
+			.select({
+				guestId: tableTopicsSpeakers.guestId,
+				meetingId: meetings.id,
+			})
+			.from(tableTopicsSpeakers)
+			.innerJoin(meetings, eq(meetings.id, tableTopicsSpeakers.meetingId))
+			.where(and(earlier, inArray(tableTopicsSpeakers.guestId, guestIds))),
+	);
+	const past = new Map<string, number>();
+	for (const v of visits) {
+		if (v.guestId) past.set(v.guestId, (past.get(v.guestId) ?? 0) + 1);
+	}
+	return rows.map((r) => ({
+		guestId: r.guestId,
+		name: r.name,
+		visitNumber: (past.get(r.guestId) ?? 0) + 1,
+	}));
 }

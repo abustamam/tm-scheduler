@@ -323,6 +323,9 @@ export function buildPlanPanel(input: {
 	roster: Omit<PanelMember, "status" | "storedStatus" | "assumed" | "role">[];
 	plan: { memberId: string; status: PlanStatus }[];
 	roleByMemberId: Readonly<Record<string, PanelRole>>;
+	/** Guests who RSVP'd (#1444). Appended to the counts line; never a member
+	 *  count, so it is not part of `counts`. */
+	guestCount?: number;
 }): {
 	rows: PanelMember[];
 	counts: PlanPanelCounts;
@@ -384,5 +387,67 @@ export function buildPlanPanel(input: {
 		.map(([n, label]) => `${n} ${label}`)
 		.join(" · ");
 
-	return { rows, counts, countsLine };
+	return {
+		rows,
+		counts,
+		countsLine: joinCountsLine(countsLine, input.guestCount ?? 0),
+	};
+}
+
+/** "2 guests", "1 guest", or "" for none. */
+export function guestsPhrase(n: number): string {
+	return n <= 0 ? "" : `${n} ${n === 1 ? "guest" : "guests"}`;
+}
+
+/** The counts line with the guests phrase appended; either half may be empty. */
+export function joinCountsLine(line: string, guestCount: number): string {
+	return [line, guestsPhrase(guestCount)].filter(Boolean).join(" · ");
+}
+
+/**
+ * The line everyone who is not running the meeting sees (#1442, #1444): the
+ * coming count and the guest count, no names. Empty when both are zero.
+ */
+export function publicCountsLine(comingCount: number, guestCount: number) {
+	return joinCountsLine(
+		comingCount > 0 ? `${comingCount} coming` : "",
+		guestCount,
+	);
+}
+
+/**
+ * Which visit an RSVP'd guest's coming one is, as the officer reads it:
+ * "first visit", "2nd visit", "3rd visit", "11th visit". `visitNumber` is the
+ * count of visits already made, plus one.
+ */
+export function guestVisitLabel(visitNumber: number): string {
+	if (visitNumber <= 1) return "first visit";
+	const lastTwo = visitNumber % 100;
+	const suffix =
+		lastTwo >= 11 && lastTwo <= 13
+			? "th"
+			: (({ 1: "st", 2: "nd", 3: "rd" } as Record<number, string>)[
+					visitNumber % 10
+				] ?? "th");
+	return `${visitNumber}${suffix} visit`;
+}
+
+/**
+ * The RSVP'd guests still to be marked here (#1444, D7): the expected list minus
+ * every guest EXPLICITLY marked present. `present` is the DERIVED guest list (the
+ * loader's rows with the offline queue replayed over them), so a Here tap that
+ * is queued offline drops the row at once, and a removed guest returns.
+ *
+ * A `fromRole` row is NOT explicit: that guest is listed because they hold a
+ * slot or spoke at Table Topics, with no attendance row behind them. An RSVP'd
+ * guest booked for a role keeps their Here until an officer taps it.
+ */
+export function pendingExpectedGuests<T extends { guestId: string }>(
+	rsvps: readonly T[],
+	present: readonly { guestId: string; fromRole?: boolean }[] | undefined,
+): T[] {
+	const here = new Set(
+		(present ?? []).filter((g) => !g.fromRole).map((g) => g.guestId),
+	);
+	return rsvps.filter((g) => !here.has(g.guestId));
 }
