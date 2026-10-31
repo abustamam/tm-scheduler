@@ -47,6 +47,7 @@ const {
 const { claimSlotCore, reassignSlotCore } = await import("./slots-logic");
 const { applyAssignGuestToSlot } = await import("./guests-logic");
 const { attachSpeechToOpenSlot } = await import("./speeches-logic");
+const { releaseHeldSlotsForPlan } = await import("./availability-logic");
 
 const DAY = 86_400_000;
 
@@ -93,7 +94,9 @@ describe.skipIf(!hasTestDb)("cover requests (#1438)", () => {
 
 	const release = (
 		actorMemberId: string | null,
-		kind: "finding_cover" | "dropped" = "finding_cover",
+		kind: Parameters<
+			typeof releaseOwnSlotForCoverCore
+		>[1]["kind"] = "finding_cover",
 	) =>
 		testDb.transaction((tx) =>
 			releaseOwnSlotForCoverCore(tx, {
@@ -371,20 +374,36 @@ describe.skipIf(!hasTestDb)("cover requests (#1438)", () => {
 			// protects=#1454: Undo after the sheet's Drop it anyway gives the role back
 			// fails_when=Undo refuses every `dropped` request again
 			// no_claim=the toast copy
-			await holdSeededSlot();
+			const [speech] = await testDb
+				.insert(speeches)
+				.values({ personId: seed.personId, title: "Ice Breaker" })
+				.returning({ id: speeches.id });
+			if (!speech) throw new Error("speech");
+			const claimedAt = await holdSeededSlot({
+				status: "confirmed",
+				speechId: speech.id,
+			});
 			await release(seed.memberId, "dropped");
 			await undo(seed.memberId);
 			const after = await slot();
 			expect(after.assignedMemberId).toBe(seed.memberId);
+			expect(after.status).toBe("confirmed");
+			expect(after.claimedAt?.getTime()).toBe(claimedAt.getTime());
+			expect(after.speechId).toBe(speech.id);
 			expect(await requests()).toHaveLength(0);
 		});
 
-		it("refuses a decline's `dropped` request (member not coming) and leaves the slot open", async () => {
-			// protects=a decline's `dropped` row must not hand the role back
-			// fails_when=the attendance read is removed from Undo
-			// no_claim=the toast copy
+		it.each([
+			"finding_cover",
+			"dropped",
+		] as const)("is refused while the releaser reads `not coming`, whatever the kind (%s), and the slot stays open", async (kind) => {
+			// protects=Undo refuses while the releaser reads not_coming, whatever the
+			//   kind (a member who said no cannot get the role back confirmed;
+			//   `claimSlotCore` refuses the same member the same way)
+			// fails_when=the `isMemberNotComing` refusal is removed from Undo
+			// no_claim=the lock ordering, which the decline path shares
 			await holdSeededSlot();
-			await release(seed.memberId, "dropped");
+			await release(seed.memberId, kind);
 			await testDb.insert(meetingAttendancePlan).values({
 				memberId: seed.memberId,
 				meetingId: seed.meetingId,
@@ -399,25 +418,68 @@ describe.skipIf(!hasTestDb)("cover requests (#1438)", () => {
 			expect(await requests()).toHaveLength(1);
 		});
 
-		it("is refused after a late `not coming`, and the slot stays open", async () => {
-			// protects=a member who said no cannot get the role back confirmed
-			//   (`claimSlotCore` refuses the same member the same way)
-			// fails_when=the attendance read is removed from Undo
-			// no_claim=the lock ordering, which the decline path shares
-			await holdSeededSlot();
-			await release(seed.memberId);
-			await testDb.insert(meetingAttendancePlan).values({
-				memberId: seed.memberId,
-				meetingId: seed.meetingId,
-				status: "not_coming",
+		it("restores a role freed by a REAL late decline once the member reads Coming again (decision 2026-10-31)", async () => {
+			// protects=#1454's decided contract: a decline's `dropped` row is
+			//   undoable after the member flips back to Coming, with the prior
+			//   status, claim time and speech restored
+			// fails_when=Undo refuses `dropped` again, or a prior_* is not written back
+			// no_claim=the toast copy
+			const [speech] = await testDb
+				.insert(speeches)
+				.values({ personId: seed.personId, title: "Ice Breaker" })
+				.returning({ id: speeches.id });
+			if (!speech) throw new Error("speech");
+			const claimedAt = await holdSeededSlot({
+				status: "confirmed",
+				speechId: speech.id,
 			});
+			await testDb
+				.update(meetings)
+				.set({ scheduledAt: new Date(Date.now() + 24 * 3_600_000) })
+				.where(eq(meetings.id, seed.meetingId));
+
+			await testDb.transaction(async (tx) => {
+				await tx.insert(meetingAttendancePlan).values({
+					memberId: seed.memberId,
+					meetingId: seed.meetingId,
+					status: "not_coming",
+				});
+				await releaseHeldSlotsForPlan(tx, {
+					meetingId: seed.meetingId,
+					memberId: seed.memberId,
+					proof: "session",
+					cause: "not_coming",
+					clubId: seed.clubId,
+					actorMemberId: seed.memberId,
+				});
+			});
+			const [row] = await requests();
+			expect(row?.kind).toBe("dropped");
+			expect((await slot()).status).toBe("open");
+
+			// Still reads not coming: refused, nothing written.
 			await expect(undo(seed.memberId)).rejects.toThrow(
 				NOT_COMING_UNDO_MESSAGE,
 			);
-			const after = await slot();
-			expect(after.status).toBe("open");
-			expect(after.assignedMemberId).toBeNull();
+			expect((await slot()).status).toBe("open");
 			expect(await requests()).toHaveLength(1);
+
+			// Back to Coming (the answer cleared): Undo hands the role back whole.
+			await testDb
+				.delete(meetingAttendancePlan)
+				.where(
+					and(
+						eq(meetingAttendancePlan.memberId, seed.memberId),
+						eq(meetingAttendancePlan.meetingId, seed.meetingId),
+					),
+				);
+			await undo(seed.memberId);
+			const after = await slot();
+			expect(after.assignedMemberId).toBe(seed.memberId);
+			expect(after.status).toBe("confirmed");
+			expect(after.claimedAt?.getTime()).toBe(claimedAt.getTime());
+			expect(after.speechId).toBe(speech.id);
+			expect(await requests()).toHaveLength(0);
 		});
 
 		it("does not restore a speech another slot took meanwhile", async () => {
