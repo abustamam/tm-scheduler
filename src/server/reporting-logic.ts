@@ -20,6 +20,7 @@ import {
 	max,
 	min,
 	ne,
+	notInArray,
 	or,
 	sql,
 } from "drizzle-orm";
@@ -39,6 +40,7 @@ import {
 import {
 	ATTENDANCE_LAPSE,
 	type AttendanceLapseRow,
+	type LapseReachOut,
 	scoreAttendanceLapse,
 } from "#/lib/attendance-lapse";
 import { DEFAULT_CLUB_TIMEZONE } from "#/lib/club-timezone";
@@ -65,6 +67,7 @@ import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { loadNextMeetingSummary } from "./meetings-logic";
 import { loadOrientationFactsForMembers } from "./orientation-logic";
 import { pathwaysByMember } from "./pathways-read-logic";
+import { loadRoleRecency } from "./role-recency-logic";
 
 export type {
 	LevelNudgeMeeting,
@@ -259,6 +262,23 @@ const memberGoesBy = sql<
 >`coalesce(${members.preferredName}, ${people.preferredName})`;
 
 /**
+ * Contact for a member a surface lists (#1445): a blank address is no address
+ * and the phone is normalised to E.164. Shared by Level proximity and Slipping.
+ * The caller resolves the preferred channel itself, in the function that
+ * selects `people.preferredContact` (`preferred-contact-reads.guard.test.ts`).
+ */
+function reachableContact(
+	m: { email: string | null; phone: string | null },
+	countryCode: string | null,
+): { email: string | null; phone: string | null } {
+	return {
+		// Blank is no address: `buildNudge` would otherwise draft to "".
+		email: m.email?.trim() ? m.email : null,
+		phone: toE164(m.phone, countryCode),
+	};
+}
+
+/**
  * "Close to a level" (#898): active members one or two projects from finishing
  * a Pathways level, and levels finished but not yet approved in Base Camp.
  *
@@ -303,10 +323,8 @@ export async function loadLevelProximity(
 		]);
 	const contact = new Map<string, LevelProximityContact>();
 	for (const m of roster) {
-		const email = m.email?.trim() ? m.email : null;
-		const phone = toE164(m.phone, countryCode);
+		const { email, phone } = reachableContact(m, countryCode);
 		contact.set(m.memberId, {
-			// Blank is no address: `buildNudge` would otherwise draft to "".
 			email,
 			phone,
 			preferredName: m.preferredName,
@@ -845,7 +863,7 @@ export async function loadEvaluatorPairings(
  */
 export async function loadAttendanceLapse(
 	clubId: string,
-): Promise<AttendanceLapseRow[]> {
+): Promise<(AttendanceLapseRow & Partial<LapseReachOut>)[]> {
 	const now = new Date();
 
 	// DISTINCT over the join: a meeting qualifies once it has any MEMBER
@@ -893,8 +911,13 @@ export async function loadAttendanceLapse(
 				name: members.name,
 				joinedAt: members.joinedAt,
 				createdAt: members.createdAt,
+				email: people.email,
+				phone: people.phone,
+				preferredName: memberGoesBy,
+				storedContact: people.preferredContact,
 			})
 			.from(members)
+			.innerJoin(people, eq(people.id, members.personId))
 			.where(and(eq(members.clubId, clubId), eq(members.status, "active")))
 			.orderBy(asc(members.name)),
 		db
@@ -959,7 +982,7 @@ export async function loadAttendanceLapse(
 			: [],
 	);
 
-	return scoreAttendanceLapse({
+	const scored = scoreAttendanceLapse({
 		meetings: windowMeetings,
 		// `joined_at` is populated ONLY by the Toastmasters CSV import — every
 		// member added through the app has it NULL. Treating NULL as "has always
@@ -973,4 +996,119 @@ export async function loadAttendanceLapse(
 		})),
 		marks: [...explicit, ...fromRoles],
 	});
+
+	// Contact and a suggested role (#1445), for the rows the dashboard lists:
+	// slipping and lapsed. Contact is PII; `getAttendanceLapse` is admin-gated.
+	const listed = scored.filter(
+		(r) => r.streak >= ATTENDANCE_LAPSE.slippingThreshold,
+	);
+	const listedIds = new Set(listed.map((r) => r.memberId));
+	// The next meeting is resolved ONCE, by the same loader the draft's date and
+	// link come from, and the suggestion reads that meeting's id.
+	const { nextMeeting } = await loadNextMeetingSummary(clubId, now);
+	const [countryCode, suggested] = await Promise.all([
+		loadClubDefaultCountryCode(clubId),
+		loadSuggestedOpenRoles(
+			clubId,
+			listed.map((r) => r.memberId),
+			nextMeeting,
+		),
+	]);
+	// Contact only on the listed rows: everyone else's address and number
+	// never leave the loader.
+	const contact = new Map<string, LevelProximityContact>();
+	for (const m of memberRows.filter((r) => listedIds.has(r.memberId))) {
+		const { email, phone } = reachableContact(m, countryCode);
+		contact.set(m.memberId, {
+			email,
+			phone,
+			preferredName: m.preferredName,
+			preferredContact: effectivePreferredContact(m.storedContact, {
+				email,
+				phone,
+			}),
+		});
+	}
+	return scored.map((row) => {
+		const reach = contact.get(row.memberId);
+		if (!reach) return row;
+		return {
+			...row,
+			...reach,
+			suggestedRole: suggested.get(row.memberId) ?? null,
+			suggestedForMeetingId: nextMeeting?.id ?? null,
+		};
+	});
+}
+
+/**
+ * For each member, the open role at `next` (the club's next meeting, resolved
+ * by the caller) they have gone longest without (#1445): a role they have never held beats any they have,
+ * then the oldest `lastServedAt` wins, then the role's sort order and name so
+ * the pick is stable. Null for a member when no slot is open, and for everyone
+ * when there is no next scheduled, non-cancelled meeting.
+ *
+ * "Open" is `status = 'open'` with neither a member nor a guest assigned. A
+ * role with several open slots counts once.
+ *
+ * Speaker and evaluator slots are never suggested (maintainer's decision,
+ * 2026-10-30): a lapsed member must not be asked "Speaker 1 is open. Want it?".
+ * A speaker role is `is_speaker_role` or category `speaker`; an evaluator is
+ * category `evaluator`. When only such slots are open the pick is null and the
+ * draft uses its no-role wording.
+ */
+export async function loadSuggestedOpenRoles(
+	clubId: string,
+	memberIds: string[],
+	next: { id: string; scheduledAt: Date } | null,
+): Promise<Map<string, string | null>> {
+	const result = new Map<string, string | null>(
+		memberIds.map((id) => [id, null]),
+	);
+	if (memberIds.length === 0 || !next) return result;
+
+	const openSlots = await db
+		.selectDistinct({
+			roleDefinitionId: roleDefinitions.id,
+			name: roleDefinitions.name,
+			sortOrder: roleDefinitions.sortOrder,
+		})
+		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
+		.where(
+			and(
+				eq(roleSlots.meetingId, next.id),
+				eq(roleSlots.status, "open"),
+				isNull(roleSlots.assignedMemberId),
+				isNull(roleSlots.assignedGuestId),
+				eq(roleDefinitions.isSpeakerRole, false),
+				notInArray(roleDefinitions.category, ["speaker", "evaluator"]),
+			),
+		);
+	if (openSlots.length === 0) return result;
+
+	const recency = await loadRoleRecency({ clubId, before: next.scheduledAt });
+	const served = new Map<string, number>();
+	for (const r of recency) {
+		served.set(`${r.memberId}:${r.roleDefinitionId}`, r.lastServedAt.getTime());
+	}
+	for (const memberId of memberIds) {
+		const ranked = openSlots
+			.map((slot) => ({
+				...slot,
+				// Never held sorts before every real date.
+				at: served.get(`${memberId}:${slot.roleDefinitionId}`) ?? -Infinity,
+			}))
+			.sort(
+				(a, b) =>
+					a.at - b.at ||
+					a.sortOrder - b.sortOrder ||
+					a.name.localeCompare(b.name),
+			);
+		result.set(memberId, ranked[0]?.name ?? null);
+	}
+	return result;
 }

@@ -39,7 +39,8 @@ export type NudgeMode =
 	| "level"
 	| "orientation"
 	| "mentorRequest"
-	| "mentorWelcome";
+	| "mentorWelcome"
+	| "reachOut";
 
 interface NudgeInputBase {
 	name: string;
@@ -126,6 +127,19 @@ export type NudgeInput =
 			items: readonly OrientationTick[];
 			/** Absolute origin, e.g. `https://gavelup.app`. */
 			origin: string;
+			meetingDate?: string | null;
+			shareUrl?: string | null;
+	  })
+	// "We've missed you" to a member who has stopped coming (#1445). Role-less in
+	// type: the role it may name is optional and the draft falls back without it.
+	// The meeting is OPTIONAL like `orientation`'s: a club with no next meeting
+	// still gets a "hope to see you soon" draft. `shareUrl` is the meeting page.
+	| (Omit<NudgeInputBase, "meetingDate" | "shareUrl"> & {
+			mode: "reachOut";
+			clubName: string;
+			/** An open role at the next meeting the member could take; null/blank
+			 *  drops the role sentence. Needs `meetingDate` and `shareUrl` too. */
+			roleName?: string | null;
 			meetingDate?: string | null;
 			shareUrl?: string | null;
 	  })
@@ -225,6 +239,18 @@ function messageFor(i: NudgeInput): string {
 	}
 	if (i.mode === "orientation") {
 		return orientationMessage(i, who);
+	}
+	if (i.mode === "reachOut") {
+		const club = i.clubName.trim();
+		const date = i.meetingDate?.trim();
+		const url = i.shareUrl?.trim();
+		const role = i.roleName?.trim();
+		if (!date || !url) {
+			return `Hi ${who}, we've missed you at ${club}. Hope to see you soon!`;
+		}
+		return role
+			? `Hi ${who}, we've missed you at ${club}! ${role} is open on ${date}. Want it? ${url}`
+			: `Hi ${who}, we've missed you at ${club}. Hope to see you on ${date}! ${url}`;
 	}
 	if (i.mode === "mentorRequest") {
 		return `Hi ${who}, I've asked you to be my mentor in GavelUp (${i.focusLabel}). You can accept or decline on your dashboard: ${i.origin}/dashboard`;
@@ -558,6 +584,7 @@ function subjectFor(i: NudgeInput): string {
 		const next = nextOrientationItem(i.items);
 		return next ? ORIENTATION_SUBJECTS[next] : "Your first weeks";
 	}
+	if (i.mode === "reachOut") return `We've missed you at ${i.clubName}`;
 	if (i.mode === "mentorRequest") return "Mentor request";
 	if (i.mode === "mentorWelcome") return "Mentoring";
 	if (i.mode === "invite") {

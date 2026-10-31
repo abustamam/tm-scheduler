@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	ATTENDANCE_LAPSE,
 	type AttendanceMark,
+	isSlipping,
 	scoreAttendanceLapse,
 } from "./attendance-lapse";
 
@@ -280,5 +281,38 @@ describe("scoreAttendanceLapse — reported figures", () => {
 		expect(rows.filter((r) => r.isLapsed).map((r) => r.memberId)).toEqual([
 			"bob",
 		]);
+	});
+});
+
+describe("the Slipping tier (#1445)", () => {
+	it("flags slipping at exactly 2 consecutive misses", () => {
+		expect(ATTENDANCE_LAPSE.slippingThreshold).toBe(2);
+	});
+
+	function rowWith(statuses: (AttendanceMark | null)[]) {
+		const [row] = scoreAttendanceLapse({
+			meetings: meetingsNewestFirst(statuses.length),
+			members: [ALICE],
+			marks: marks("alice", statuses),
+		});
+		return row;
+	}
+
+	it("streak 1 is neither slipping nor lapsed", () => {
+		const row = rowWith(["absent", "present", "present"]);
+		expect(isSlipping(row)).toBe(false);
+		expect(row.isLapsed).toBe(false);
+	});
+
+	it("streak 2 is slipping and not lapsed", () => {
+		const row = rowWith(["absent", "absent", "present"]);
+		expect(isSlipping(row)).toBe(true);
+		expect(row.isLapsed).toBe(false);
+	});
+
+	it("streak 3 is lapsed only, never both tiers", () => {
+		const row = rowWith(["absent", "absent", "absent", "present"]);
+		expect(isSlipping(row)).toBe(false);
+		expect(row.isLapsed).toBe(true);
 	});
 });

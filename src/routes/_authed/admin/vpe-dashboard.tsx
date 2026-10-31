@@ -8,6 +8,8 @@ import { PageContainer } from "#/components/page-container";
 import {
 	ATTENDANCE_LAPSE,
 	type AttendanceLapseRow,
+	isSlipping,
+	type LapseReachOut,
 } from "#/lib/attendance-lapse";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
@@ -158,6 +160,7 @@ function VpeDashboard() {
 		timezone,
 		now,
 		clubId,
+		clubName,
 		clubSlug,
 		nextMeeting,
 	} = Route.useLoaderData();
@@ -191,6 +194,8 @@ function VpeDashboard() {
 	const overdueMembers = overdue.filter((m) => m.isOverdue);
 	const neverSpoken = rotation.filter((r) => r.lastSpokenAt === null).length;
 	const lapsed = lapse.filter((m) => m.isLapsed);
+	// One miss short of stopped (#1445); disjoint from `lapsed` by definition.
+	const slipping = lapse.filter(isSlipping);
 	// SPEAKERS, not pairings and not evaluators — one row per speaker, kept if
 	// some evaluator appears twice in that speaker's shown window. A speaker
 	// repeated by two different evaluators is one entry here, not two, so the
@@ -267,6 +272,28 @@ function VpeDashboard() {
 				))}
 			</div>
 
+			{/* Slipping (#1445): one miss short of "Stopped attending", so a nudge
+			    here can keep the member from landing there. */}
+			<Section
+				title="Slipping"
+				subtitle={`Active members not recorded present at the last ${ATTENDANCE_LAPSE.slippingThreshold} meetings — a nudge now keeps them from stopping. Excused meetings don't count against anyone.`}
+			>
+				{slipping.length === 0 ? (
+					<EmptyRow>Nobody is slipping right now.</EmptyRow>
+				) : (
+					slipping.map((m) => (
+						<LapseRow
+							key={m.memberId}
+							member={m}
+							timezone={timezone}
+							clock={clock}
+							clubName={clubName}
+							nudge={nudge}
+						/>
+					))
+				)}
+			</Section>
+
 			{/* Attendance lapse (#530). Sits ABOVE "Overdue for a role" on purpose:
 			    the two look alike but mean different things, and this is the more
 			    urgent one. A member who comes every week and never volunteers is
@@ -286,6 +313,8 @@ function VpeDashboard() {
 							member={m}
 							timezone={timezone}
 							clock={clock}
+							clubName={clubName}
+							nudge={nudge}
 						/>
 					))
 				)}
@@ -622,14 +651,25 @@ function OverdueRow({
 	);
 }
 
+/**
+ * One slipping or stopped member (#530, #1445).
+ *
+ * `ProximityRow`'s shape: the member-page `<Link>` wraps only the identity, NOT
+ * the row, because the right-hand cell holds the Reach out draft links and an
+ * anchor inside an anchor is invalid markup that swallows the click.
+ */
 function LapseRow({
 	member,
 	timezone,
 	clock,
+	clubName,
+	nudge,
 }: {
-	member: AttendanceLapseRow;
+	member: AttendanceLapseRow & Partial<LapseReachOut>;
 	timezone: string | undefined;
 	clock: TenureClock;
+	clubName: string;
+	nudge: LevelNudgeContext | null;
 }) {
 	// The rate is CONTEXT beside the streak, not a substitute for it — an
 	// officer wants to know whether this is someone who was always patchy or
@@ -643,30 +683,56 @@ function LapseRow({
 		? `last seen ${formatShortDate(member.lastSeenAt, timezone)}`
 		: "never recorded present";
 	return (
-		<Link
-			to="/members/$id"
-			params={{ id: member.memberId }}
+		<div
 			className={cn(
-				ROW_CLASS,
-				"grid-cols-[1fr_112px_28px] sm:grid-cols-[1fr_150px_34px]",
+				"grid items-center gap-3.5 border-b border-border px-5 py-3 last:border-b-0",
+				"grid-cols-[1fr_auto]",
 			)}
 		>
-			<MemberIdentity
-				memberId={member.memberId}
-				name={member.name}
-				joinedAt={member.joinedAt}
-				clock={clock}
-			/>
-			<div className="text-sm">
-				<span className="font-bold text-warning-strong">
-					{member.streak} missed
-				</span>
-				<div className="text-xs text-muted-foreground">
-					{rate ? `${seen} · ${rate}` : seen}
+			<div className="min-w-0">
+				<Link
+					to="/members/$id"
+					params={{ id: member.memberId }}
+					className="block min-w-0"
+				>
+					<MemberIdentity
+						memberId={member.memberId}
+						name={member.name}
+						joinedAt={member.joinedAt}
+						clock={clock}
+					/>
+				</Link>
+				<div className="mt-1 pl-[50px] text-sm">
+					<span className="font-bold text-warning-strong">
+						{member.streak} missed
+					</span>
+					<div className="text-xs text-muted-foreground">
+						{rate ? `${seen} · ${rate}` : seen}
+					</div>
 				</div>
 			</div>
-			<Chevron />
-		</Link>
+			{/* OUTSIDE the member-page link above, so opening a draft never
+			    navigates to the profile. Icon-only for the 375px row. */}
+			<div className="justify-self-end">
+				<NudgeButtons
+					mode="reachOut"
+					iconOnly
+					name={member.name}
+					preferredName={member.preferredName}
+					phone={member.phone ?? null}
+					email={member.email ?? null}
+					preferredContact={member.preferredContact}
+					clubName={clubName}
+					roleName={
+						member.suggestedForMeetingId === nudge?.meeting.id
+							? member.suggestedRole
+							: null
+					}
+					meetingDate={nudge?.meetingDate}
+					shareUrl={nudge?.shareUrl}
+				/>
+			</div>
+		</div>
 	);
 }
 
