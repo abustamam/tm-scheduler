@@ -512,6 +512,11 @@ const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
 		gate: "assertClubNotArchived",
 	},
 	{
+		fn: "submitGuestRsvp",
+		file: "src/server/guest-rsvp-logic.ts",
+		gate: "assertClubNotArchived",
+	},
+	{
 		fn: "submitVote",
 		file: "src/server/voting-logic.ts",
 		gate: "assertClubNotArchived",
@@ -1024,8 +1029,8 @@ describe("session-less writes carry the archive gate (#555)", () => {
 		// The count is the vacuity guard, so it moves deliberately with the table
 		// rather than being loosened to `toBeGreaterThan`.
 		// #984's `leaveFeedback` is the nineteenth, a genuinely new write.
-		// #982 deleted `joinBallot`, so 18.
-		expect(WRITE_GATES).toHaveLength(18);
+		// #982 deleted `joinBallot`, so 18. #1443's `submitGuestRsvp` is the 19th.
+		expect(WRITE_GATES).toHaveLength(19);
 	});
 
 	it("does not also waive a write it claims to gate", () => {

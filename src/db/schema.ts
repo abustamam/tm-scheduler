@@ -16,6 +16,7 @@ import {
 	smallint,
 	text,
 	timestamp,
+	unique,
 	uniqueIndex,
 	uuid,
 } from "drizzle-orm/pg-core";
@@ -2434,6 +2435,41 @@ export const attendanceModeEnum = pgEnum("attendance_mode", [
 	"in_person",
 	"online",
 ]);
+
+// A guest's "I'm coming" (#1443): written by the public RSVP, with no session.
+// NOT attendance: a visit is a `meeting_attendance` row written in the meeting
+// window, and an RSVP never becomes one. `client_key` is the browser's retry
+// identity (a UUID it keeps per meeting): the server looks it up FIRST, so a
+// double submit returns the same guest and the client never names a guest id.
+export const meetingGuestRsvps = pgTable(
+	"meeting_guest_rsvps",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		meetingId: uuid("meeting_id")
+			.notNull()
+			.references(() => meetings.id, { onDelete: "cascade" }),
+		guestId: uuid("guest_id")
+			.notNull()
+			.references(() => guests.id, { onDelete: "cascade" }),
+		clientKey: uuid("client_key").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(t) => [
+		unique("meeting_guest_rsvps_meeting_guest_unique").on(
+			t.meetingId,
+			t.guestId,
+		),
+		unique("meeting_guest_rsvps_meeting_client_key_unique").on(
+			t.meetingId,
+			t.clientKey,
+		),
+	],
+);
 
 export const meetingAttendance = pgTable(
 	"meeting_attendance",

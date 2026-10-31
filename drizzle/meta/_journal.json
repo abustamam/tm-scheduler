@@ -890,6 +890,13 @@
       "when": 1793386689948,
       "tag": "0126_lush_black_tarantula",
       "breakpoints": true
+    },
+    {
+      "idx": 127,
+      "version": "7",
+      "when": 1793410781628,
+      "tag": "0127_high_mathemanic",
+      "breakpoints": true
     }
   ]
 }

@@ -850,6 +850,82 @@ async function fillBlankGuestContact(
 		.where(and(eq(people.id, existing.personId), guestContactFillable(clubId)));
 }
 
+/**
+ * The identity half of a session-less guest write (#1443): find this club's
+ * guest by email, then phone-with-name-agreement, or create one under the
+ * per-club hourly cap. Shared by `captureGuestVisit` and `submitGuestRsvp` so
+ * dedupe, `book_email` (never `people.email`), phone-on-Person and the create cap
+ * are ONE code path and the cap counts both entrances together.
+ *
+ * The caller MUST already hold the club write lock (`lockClubForWrite`) inside
+ * `tx`; this takes the club row lock that gates archive and serialises the cap.
+ */
+export async function resolveOrCreateBookGuest(
+	tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+	clubId: string,
+	contact: { name: string; email: string | null; phone: string | null },
+): Promise<{ guestId: string; created: boolean }> {
+	const { name, email, phone } = contact;
+	const input = { clubId };
+	// 1. Dedup, club-scoped: email → phone-with-name-agreement → none.
+	//    An `ambiguous` outcome (shared number, disagreeing name) resolves to
+	//    undefined here and creates a second prospect — which is #488's rule
+	//    and this path's long-standing behaviour, not an oversight.
+	const existing = await findGuestForContact(tx, input.clubId, {
+		name,
+		email,
+		phone,
+	});
+
+	let guestId: string;
+	let created: boolean;
+	if (existing) {
+		guestId = existing.id;
+		created = false;
+		// Gate before the contact fill-in and the attendance row (#858).
+		await lockOpenClub(tx, input.clubId, "share");
+		// Fill in contact the returning guest supplied but we didn't have; keep
+		// their name and stage untouched.
+		await fillBlankGuestContact(tx, input.clubId, existing, { email, phone });
+	} else {
+		// Throttle the CREATE path only. Both statements run inside this
+		// transaction, behind a lock on the club row — a count taken OUTSIDE
+		// the transaction is not a cap at all: every concurrent request reads
+		// the same pre-insert total and they all pass. That exact bypass was
+		// proved on the voting guest cap (#510), where 200 concurrent calls
+		// cleared a limit of 60. The club lock serialises signups per club, and
+		// under READ COMMITTED the COUNT below takes a fresh snapshot once the
+		// lock is granted, so it sees the rows the requests ahead committed.
+		// The same locked read is the archive gate (#858).
+		await lockOpenClub(tx, input.clubId, "no key update");
+		const since = new Date(Date.now() - GUEST_BOOK_WINDOW_MS);
+		const [recent] = await tx
+			.select({ n: count() })
+			.from(guests)
+			.where(
+				and(eq(guests.clubId, input.clubId), gte(guests.createdAt, since)),
+			);
+		if ((recent?.n ?? 0) >= GUEST_BOOK_MAX_NEW_PER_WINDOW) {
+			throw new Error(GUEST_BOOK_THROTTLED_MESSAGE);
+		}
+		// The guest and their Person in one go (#1124): a failure on either
+		// insert leaves neither, so the public book cannot mint an orphan Person.
+		// The address is the visitor's own note, typed with no session: it goes on
+		// the guest row, never the Person (#1157).
+		const row = await createGuestRecord(tx, {
+			clubId: input.clubId,
+			name,
+			email: null,
+			bookEmail: email,
+			phone,
+			stage: "prospect",
+		});
+		guestId = row.id;
+		created = true;
+	}
+	return { guestId, created };
+}
+
 /** `captureGuestVisit`'s transaction — split out only so the deadlock
  *  translation wraps every statement in it at once. */
 function captureInTransaction(
@@ -868,62 +944,13 @@ function captureInTransaction(
 		//    serialisation and the archive gate.
 		await lockClubForWrite(tx, input.clubId);
 
-		// 1. Dedup, club-scoped: email → phone-with-name-agreement → none.
-		//    An `ambiguous` outcome (shared number, disagreeing name) resolves to
-		//    undefined here and creates a second prospect — which is #488's rule
-		//    and this path's long-standing behaviour, not an oversight.
-		const existing = await findGuestForContact(tx, input.clubId, {
-			name,
-			email,
-			phone,
-		});
-
-		let guestId: string;
-		let created: boolean;
-		if (existing) {
-			guestId = existing.id;
-			created = false;
-			// Gate before the contact fill-in and the attendance row (#858).
-			await lockOpenClub(tx, input.clubId, "share");
-			// Fill in contact the returning guest supplied but we didn't have; keep
-			// their name and stage untouched.
-			await fillBlankGuestContact(tx, input.clubId, existing, { email, phone });
-		} else {
-			// Throttle the CREATE path only. Both statements run inside this
-			// transaction, behind a lock on the club row — a count taken OUTSIDE
-			// the transaction is not a cap at all: every concurrent request reads
-			// the same pre-insert total and they all pass. That exact bypass was
-			// proved on the voting guest cap (#510), where 200 concurrent calls
-			// cleared a limit of 60. The club lock serialises signups per club, and
-			// under READ COMMITTED the COUNT below takes a fresh snapshot once the
-			// lock is granted, so it sees the rows the requests ahead committed.
-			// The same locked read is the archive gate (#858).
-			await lockOpenClub(tx, input.clubId, "no key update");
-			const since = new Date(Date.now() - GUEST_BOOK_WINDOW_MS);
-			const [recent] = await tx
-				.select({ n: count() })
-				.from(guests)
-				.where(
-					and(eq(guests.clubId, input.clubId), gte(guests.createdAt, since)),
-				);
-			if ((recent?.n ?? 0) >= GUEST_BOOK_MAX_NEW_PER_WINDOW) {
-				throw new Error(GUEST_BOOK_THROTTLED_MESSAGE);
-			}
-			// The guest and their Person in one go (#1124): a failure on either
-			// insert leaves neither, so the public book cannot mint an orphan Person.
-			// The address is the visitor's own note, typed with no session: it goes on
-			// the guest row, never the Person (#1157).
-			const row = await createGuestRecord(tx, {
-				clubId: input.clubId,
-				name,
-				email: null,
-				bookEmail: email,
-				phone,
-				stage: "prospect",
-			});
-			guestId = row.id;
-			created = true;
-		}
+		// 1. Dedup, club-scoped, or create under the throttle: the shared identity
+		//    half, also used by the guest RSVP (#1443).
+		const { guestId, created } = await resolveOrCreateBookGuest(
+			tx,
+			input.clubId,
+			{ name, email, phone },
+		);
 
 		// 2. Record the visit. Idempotent per (meeting, guest); a distinct meeting
 		//    for a returning guest yields a new row.
