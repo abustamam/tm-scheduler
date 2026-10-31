@@ -145,11 +145,12 @@ describe("branches", () => {
 	});
 });
 
-// protects: an installed app and a desktop never see the hint.
+// protects: an installed app and a desktop never see the hint, including when
+// the environment changes between the claim and the 4s timer.
 // fails_when: standalone or phone is not re-checked when the timer fires.
 // no_claim: matchMedia is stubbed, not a real display mode.
 describe("ineligible environments", () => {
-	it("standalone never shows", () => {
+	it("standalone from the start never shows", () => {
 		env({ standalone: true });
 		render(<InstallHint />);
 		fireInstallEvent();
@@ -157,6 +158,52 @@ describe("ineligible environments", () => {
 			noteClaim();
 			noteClaim();
 			vi.advanceTimersByTime(10_000);
+		});
+		expect(toastMock).not.toHaveBeenCalled();
+	});
+
+	it("desktop never shows", () => {
+		env({ phone: false });
+		render(<InstallHint />);
+		fireInstallEvent();
+		act(() => {
+			noteClaim();
+			noteClaim();
+			vi.advanceTimersByTime(10_000);
+		});
+		expect(toastMock).not.toHaveBeenCalled();
+		expect(window.localStorage.getItem(DISMISSED_KEY)).toBeNull();
+	});
+
+	it("installed between the second claim and the timer: not shown", () => {
+		env({});
+		render(<InstallHint />);
+		fireInstallEvent();
+		act(() => {
+			noteClaim();
+			noteClaim(); // timer armed: eligible now
+			vi.advanceTimersByTime(1_000);
+		});
+		env({ standalone: true });
+		act(() => {
+			vi.advanceTimersByTime(3_000);
+		});
+		expect(toastMock).not.toHaveBeenCalled();
+		expect(window.localStorage.getItem(DISMISSED_KEY)).toBeNull();
+	});
+
+	it("no longer a phone when the timer fires: not shown", () => {
+		env({});
+		render(<InstallHint />);
+		fireInstallEvent();
+		act(() => {
+			noteClaim();
+			noteClaim();
+			vi.advanceTimersByTime(1_000);
+		});
+		env({ phone: false });
+		act(() => {
+			vi.advanceTimersByTime(3_000);
 		});
 		expect(toastMock).not.toHaveBeenCalled();
 	});

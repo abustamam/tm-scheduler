@@ -298,6 +298,24 @@ describe("SeasonGrid prospective claim + undo", () => {
 		expect(releaseSlot).toHaveBeenCalledWith({ data: { slotId: "slot-1" } });
 	});
 
+	it("counts a real claim toward the install hint, not the Undo of a release (#1428)", async () => {
+		window.localStorage.clear();
+		await renderGrid(vi.fn(async () => PICKED));
+		await userEvent.click(
+			await screen.findByRole("button", { name: /claim/i }),
+		);
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+		expect(window.localStorage.getItem("gavelup:claims")).toBe("1");
+
+		// Undo the claim (a release), then Undo that release (a re-claim).
+		toastSuccess.mock.calls[0]?.[1]?.action.onClick();
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(2));
+		toastSuccess.mock.calls[1]?.[1]?.action.onClick();
+		await waitFor(() => expect(claimSlot).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(3));
+		expect(window.localStorage.getItem("gavelup:claims")).toBe("1");
+	});
+
 	it("withholds Undo from an ASSERTED claim (#763)", async () => {
 		// Undo is `releaseSlot`, session-gated since #763. Offered to a name-pick
 		// its every tap would come back "you need to be signed in" on the toast

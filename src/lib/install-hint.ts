@@ -25,26 +25,6 @@ export function shouldOfferInstall({
 }
 
 /** Counts one claim on this device; returns the new total, or 0 when storage fails. */
-export function noteClaim(): number {
-	let next = 0;
-	try {
-		const prev = Number.parseInt(
-			window.localStorage.getItem(CLAIMS_KEY) ?? "0",
-			10,
-		);
-		next = (Number.isFinite(prev) && prev > 0 ? prev : 0) + 1;
-		window.localStorage.setItem(CLAIMS_KEY, String(next));
-	} catch {
-		return 0;
-	}
-	try {
-		window.dispatchEvent(new Event(CLAIM_EVENT));
-	} catch {
-		// nothing listens; the count is already stored
-	}
-	return next;
-}
-
 export function readClaims(): number {
 	try {
 		const n = Number.parseInt(
@@ -55,6 +35,22 @@ export function readClaims(): number {
 	} catch {
 		return 0;
 	}
+}
+
+export function noteClaim(): number {
+	let next = 0;
+	try {
+		next = readClaims() + 1;
+		window.localStorage.setItem(CLAIMS_KEY, String(next));
+	} catch {
+		return 0;
+	}
+	try {
+		window.dispatchEvent(new Event(CLAIM_EVENT));
+	} catch {
+		// nothing listens; the count is already stored
+	}
+	return next;
 }
 
 /** A failed read counts as dismissed: never offer when storage is unusable. */
