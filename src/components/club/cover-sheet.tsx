@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
 import {
@@ -68,6 +68,11 @@ export function CoverSheet({
 	const [loadFailed, setLoadFailed] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [notSent, setNotSent] = useState(false);
+	/** Release-toast id per slot, so an in-sheet Undo can dismiss it. */
+	/** Set synchronously: `busy` only changes on the next render, after a
+	 *  second tap of the same render has already got through. */
+	const undoing = useRef(false);
+	const releaseToasts = useRef(new Map<string, string | number>());
 
 	const slotKey = slots.map((s) => s.slotId).join(",");
 	// biome-ignore lint/correctness/useExhaustiveDependencies: a new offer resets the sheet
@@ -115,7 +120,8 @@ export function CoverSheet({
 
 	const scheduledAt = new Date(slot.scheduledAt);
 	const dayWord = meetingDayWord(scheduledAt, new Date(), slot.timeZone);
-	const released = mode === "released" || handedOff.has(slot.slotId);
+	const slotHandedOff = handedOff.has(slot.slotId);
+	const released = mode === "released" || slotHandedOff;
 
 	function markHandedOff(id: string) {
 		setHandedOff((prev) => new Set(prev).add(id));
@@ -129,29 +135,42 @@ export function CoverSheet({
 		});
 	}
 
-	/** The release toast: the plain "role freed" line with Undo, which gives
-	 *  the role back exactly (`undoReleaseForCover`, eng review D4). */
+	/** Gives the role back exactly (`undoReleaseForCover`, eng review D4). The
+	 *  sheet returns to its pre-release state, so the next Ask releases again
+	 *  and Drop it anyway is back. */
+	async function undoRelease(target: CoverSlot) {
+		if (busy || undoing.current) return;
+		undoing.current = true;
+		setBusy(true);
+		try {
+			await (await server()).undoReleaseForCover({
+				data: { slotId: target.slotId },
+			});
+			const toastId = releaseToasts.current.get(target.slotId);
+			if (toastId !== undefined) {
+				toast.dismiss(toastId);
+				releaseToasts.current.delete(target.slotId);
+			}
+			toast.success("Role back.");
+			unmarkHandedOff(target.slotId);
+			await onChanged?.();
+		} catch (err) {
+			showWriteError(err, "Something went wrong.");
+		} finally {
+			undoing.current = false;
+			setBusy(false);
+		}
+	}
+
+	/** The release toast: the plain "role freed" line with Undo. While the
+	 *  sheet is open its modal overlay covers the toaster, so the sheet carries
+	 *  its own Undo button too (#1455); the toast's serves after the sheet closes. */
 	function toastReleased(target: CoverSlot) {
-		toast.success(roleFreedDutyText(1), {
+		const toastId = toast.success(roleFreedDutyText(1), {
 			duration: DUTY_TOAST_MS,
-			action: {
-				label: "Undo",
-				onClick: async () => {
-					try {
-						await (await server()).undoReleaseForCover({
-							data: { slotId: target.slotId },
-						});
-						toast.success("Role back.");
-						// The sheet is still open: it returns to its pre-release state,
-						// so the next Ask releases again and Drop it anyway is back.
-						unmarkHandedOff(target.slotId);
-						await onChanged?.();
-					} catch (err) {
-						showWriteError(err, "Something went wrong.");
-					}
-				},
-			},
+			action: { label: "Undo", onClick: () => undoRelease(target) },
 		});
+		releaseToasts.current.set(target.slotId, toastId);
 	}
 
 	async function drop() {
@@ -233,7 +252,7 @@ export function CoverSheet({
 				<SheetHeader>
 					<SheetTitle>Who can cover {slot.roleLabel}?</SheetTitle>
 					<SheetDescription>
-						{handedOff.has(slot.slotId)
+						{slotHandedOff
 							? `The meeting is ${dayWord}. ${slot.roleLabel} is open and the request is in.`
 							: mode === "released"
 								? `The meeting is ${dayWord}. ${slot.roleLabel} is open. Ask someone to take it.`
@@ -313,6 +332,18 @@ export function CoverSheet({
 						<output className="block text-sm text-destructive">
 							Not sent. Ask someone else, or close.
 						</output>
+					) : null}
+
+					{mode === "release" && slotHandedOff ? (
+						<Button
+							type="button"
+							size="touch"
+							variant="outline"
+							disabled={busy}
+							onClick={() => undoRelease(slot)}
+						>
+							Undo: I'll keep {slot.roleLabel}
+						</Button>
 					) : null}
 
 					{released ? (
