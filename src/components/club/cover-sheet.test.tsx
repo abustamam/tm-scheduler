@@ -282,6 +282,29 @@ describe("CoverSheet", () => {
 		);
 	});
 
+	it("the sheet carries its own Undo, because the overlay covers the toast's", async () => {
+		// protects=#1455: the toast's Undo is unclickable under the modal overlay
+		// fails_when=the in-sheet Undo button is removed
+		stubShare(async () => {});
+		mount();
+		await userEvent.click(
+			await screen.findByRole("button", { name: "Ask Priya Patel" }),
+		);
+		await screen.findByText(/is open and the request is in/);
+		await userEvent.click(
+			screen.getByRole("button", { name: /Undo: I'll keep/ }),
+		);
+		await waitFor(() => expect(undoReleaseForCover).toHaveBeenCalledTimes(1));
+		await waitFor(() =>
+			expect(
+				screen.getByRole("button", { name: "Drop it anyway" }),
+			).toBeTruthy(),
+		);
+		expect(
+			screen.queryByRole("button", { name: /Undo: I'll keep/ }),
+		).toBeNull();
+	});
+
 	it("a failed candidate load says so, and still offers Ask and Drop it anyway", async () => {
 		// protects=finding 3: an error is not "nobody is coming yet"
 		// fails_when=the failure reads as the empty state, or drops a button
