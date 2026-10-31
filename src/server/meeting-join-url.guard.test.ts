@@ -9,14 +9,23 @@
  * served document, serialised here the same blunt way: the URL appears nowhere
  * in it for a non-member, signed in or not, and does for a member and a manager.
  *
- * Covers: the two payload readers, over a real DB. Does NOT cover the browser
- * round trip (credentials omit, seroval); the exceptions, `submitGuestRsvp`'s
+ * Covers: the two payload readers, over a real DB, and the same payload run
+ * through seroval (the serializer TanStack Start dehydrates loader data with)
+ * for a request that carries no cookie, so "signed out" is the absence of a
+ * credential on the request and not a flag the test sets. The link pasted into
+ * `location` / `notes` is scrubbed. `getMeetingJoinUrlForEditor` answers the
+ * writer's own people and no one else.
+ * Does NOT cover: a real browser (`credentials: "omit"`, the HTTP response
+ * body), nor Better Auth resolving a real cookie: the session lookup is
+ * mocked, reading the request's cookie. The exceptions, `submitGuestRsvp`'s
  * confirmation and the member RSVP, are covered by their own tests.
  */
 import { randomUUID } from "node:crypto";
 import { eq, getTableColumns } from "drizzle-orm";
+import { serialize } from "seroval";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { meetings } from "#/db/schema";
+import { meetings, roleDefinitions, roleSlots } from "#/db/schema";
+import { TMOD_ROLE_KEY } from "#/lib/meeting-roles";
 import {
 	NON_MEMBER_MEETING_FIELDS,
 	nonMemberMeetingRow,
@@ -47,8 +56,13 @@ vi.mock("@tanstack/react-start", () => ({
 	}),
 }));
 
-let sessionUserId: string | null = null;
+// The session is a cookie on the request: signed out is a request WITHOUT one.
+// `signInAs` sets it, `signOut` removes it, and the mocked `getSession` below
+// reads it back off the headers it is handed.
 const request = { headers: new Headers() };
+function signInAs(userId: string | null) {
+	request.headers = new Headers(userId ? { cookie: `uid=${userId}` } : {});
+}
 vi.mock("@tanstack/react-start/server", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-start/server")>()),
 	getRequest: () => request,
@@ -56,13 +70,16 @@ vi.mock("@tanstack/react-start/server", async (importOriginal) => ({
 vi.mock("#/lib/auth", () => ({
 	auth: {
 		api: {
-			getSession: async () =>
-				sessionUserId ? { user: { id: sessionUserId } } : null,
+			getSession: async ({ headers }: { headers: Headers }) => {
+				const uid = /uid=([^;]+)/.exec(headers.get("cookie") ?? "")?.[1];
+				return uid ? { user: { id: uid } } : null;
+			},
 		},
 	},
 }));
 
-const { getMeeting, getPublicMeetingByKey } = await import("#/server/meetings");
+const { getMeeting, getMeetingJoinUrlForEditor, getPublicMeetingByKey } =
+	await import("#/server/meetings");
 
 const JOIN_URL = "https://meet.example/secret-room-4471";
 
@@ -89,10 +106,44 @@ describe("the allowlist", () => {
 	});
 });
 
+describe("the link pasted into free text", () => {
+	// protects=a club that pasted its video link into location, notes or a
+	//   reminder does not hand it to a non-member through them.
+	// fails_when=nonMemberMeetingRow keeps those fields as stored, or only strips
+	//   the exact stored spelling (a trailing slash, no scheme or another case).
+	it("takes the link out of location, notes and reminders, in any spelling", () => {
+		const row = {
+			id: "m",
+			joinUrl: JOIN_URL,
+			location: `Room 4 or ${JOIN_URL}`,
+			notes: `Join here: ${JOIN_URL}/ \nBring a pen`,
+			reminders: `${JOIN_URL.replace("https://", "").toUpperCase()}`,
+			promoNote: "Come and see us",
+		};
+		const out = nonMemberMeetingRow(row);
+		expect(JSON.stringify(out).toLowerCase()).not.toContain("secret-room-4471");
+		// A place that held the link is dropped, not left half-sentenced.
+		expect(out.location).toBeNull();
+		expect(out.notes).toBe("Join here:\nBring a pen");
+		expect(out.reminders).toBeNull();
+		// Text that never held it is untouched.
+		expect(out.promoNote).toBe("Come and see us");
+	});
+
+	it("leaves a row with no link, or text without it, as it was", () => {
+		const row = { id: "m", location: "12 Main St", notes: "Hi", joinUrl: null };
+		expect(nonMemberMeetingRow(row)).toEqual({
+			id: "m",
+			location: "12 Main St",
+			notes: "Hi",
+		});
+	});
+});
+
 describe.skipIf(!hasTestDb)("the meeting detail payload", () => {
 	let seeded: SeededClub | null = null;
 	afterEach(async () => {
-		sessionUserId = null;
+		signInAs(null);
 		if (!seeded) return;
 		await cleanup(seeded.clubId, [seeded.adminUserId, seeded.memberUserId]);
 		seeded = null;
@@ -119,7 +170,7 @@ describe.skipIf(!hasTestDb)("the meeting detail payload", () => {
 	it("carries no join URL for a signed-out reader or a non-member, and says one exists", async () => {
 		const s = await seed();
 		for (const user of [null, randomUUID()]) {
-			sessionUserId = user;
+			signInAs(user);
 			for (const [name, read] of Object.entries(readers(s))) {
 				const data = await read();
 				expect(JSON.stringify(data), `${name} as ${user}`).not.toContain(
@@ -131,11 +182,99 @@ describe.skipIf(!hasTestDb)("the meeting detail payload", () => {
 		}
 	});
 
+	// protects=D6(a) through the serializer: the dehydrated loader data of a
+	//   request with no cookie holds neither the URL nor a joinUrl key, and a
+	//   cookie-carrying member's does.
+	// fails_when=the strip is skipped for a cookie-less request, or the URL rides
+	//   a field the serializer emits.
+	it("serialises without the URL for a request that carries no cookie", async () => {
+		const s = await seed();
+		signInAs(null);
+		expect(request.headers.get("cookie")).toBeNull();
+		for (const [name, read] of Object.entries(readers(s))) {
+			const wire = serialize(await read());
+			expect(wire, name).not.toContain(JOIN_URL);
+			expect(wire, name).not.toContain("secret-room-4471");
+			expect(wire, name).not.toContain("joinUrl");
+		}
+		signInAs(s.memberUserId);
+		expect(serialize(await readers(s).getMeeting())).toContain(JOIN_URL);
+	});
+
+	// protects=the same, for a club that pasted the link into location / notes.
+	// fails_when=the payload keeps location or notes verbatim for a stranger.
+	it("does not leak the link through location or notes", async () => {
+		const s = await seed();
+		await testDb
+			.update(meetings)
+			.set({ location: JOIN_URL, notes: `Call in: ${JOIN_URL} (video)` })
+			.where(eq(meetings.id, s.meetingId));
+		for (const user of [null, randomUUID()]) {
+			signInAs(user);
+			for (const [name, read] of Object.entries(readers(s))) {
+				const data = await read();
+				expect(serialize(data), `${name} as ${user}`).not.toContain(
+					"secret-room-4471",
+				);
+				expect(data.meeting.location).toBeNull();
+				expect(data.meeting.notes).toBe("Call in: (video)");
+			}
+		}
+		// A member still reads the stored text.
+		signInAs(s.memberUserId);
+		const member = await readers(s).getMeeting();
+		expect(member.meeting.location).toBe(JOIN_URL);
+	});
+
+	// protects=data loss: a viewer who may edit the meeting but is not a member
+	//   (a roster-picked Toastmaster) gets the stored link from the writer's own
+	//   gate, so the Edit meeting dialog never opens on a blank it would then save
+	//   over the club's link. Anyone else is refused.
+	// fails_when=the reader skips requireMeetingAgendaEditor, or refuses the
+	//   self-asserted TMOD the writer accepts.
+	it("hands the stored link to the writer's people and refuses everyone else", async () => {
+		const s = await seed();
+		const read = (selfMemberId?: string | null) =>
+			getMeetingJoinUrlForEditor({
+				data: { meetingId: s.meetingId, selfMemberId },
+			});
+
+		signInAs(s.adminUserId);
+		expect(await read()).toBe(JOIN_URL);
+
+		signInAs(null);
+		await expect(read()).rejects.toThrow(/permission/);
+		// A name-pick that holds no Toastmaster slot is refused.
+		await expect(read(s.memberId)).rejects.toThrow(/permission/);
+		signInAs(randomUUID());
+		await expect(read()).rejects.toThrow(/permission/);
+
+		// The roster-picked Toastmaster, no session: the writer's own rule.
+		const [tmod] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: s.clubId,
+				name: "Toastmaster of the Day",
+				key: TMOD_ROLE_KEY,
+				category: "leadership",
+				isSpeakerRole: false,
+			})
+			.returning({ id: roleDefinitions.id });
+		await testDb.insert(roleSlots).values({
+			meetingId: s.meetingId,
+			roleDefinitionId: tmod?.id ?? "",
+			status: "confirmed",
+			assignedMemberId: s.memberId,
+		});
+		signInAs(null);
+		expect(await read(s.memberId)).toBe(JOIN_URL);
+	});
+
 	// protects=the public reader never ships it, whoever is signed in.
 	// fails_when=getPublicMeetingByKey starts reading the session's membership.
 	it("never carries it on the public reader, even for a signed-in admin", async () => {
 		const s = await seed();
-		sessionUserId = s.adminUserId;
+		signInAs(s.adminUserId);
 		const data = await readers(s).getPublicMeetingByKey();
 		expect(JSON.stringify(data)).not.toContain(JOIN_URL);
 	});
@@ -145,7 +284,7 @@ describe.skipIf(!hasTestDb)("the meeting detail payload", () => {
 	it("carries it for a member and for a manager", async () => {
 		const s = await seed();
 		for (const user of [s.memberUserId, s.adminUserId]) {
-			sessionUserId = user;
+			signInAs(user);
 			const data = await readers(s).getMeeting();
 			expect(data.meeting.joinUrl).toBe(JOIN_URL);
 			expect(data.hasJoinLink).toBe(true);
@@ -159,7 +298,7 @@ describe.skipIf(!hasTestDb)("the meeting detail payload", () => {
 			.update(meetings)
 			.set({ joinUrl: null })
 			.where(eq(meetings.id, s.meetingId));
-		sessionUserId = null;
+		signInAs(null);
 		expect((await readers(s).getMeeting()).hasJoinLink).toBe(false);
 	});
 });

@@ -1,25 +1,25 @@
 // The db-touching half of the public guest RSVP (#1443), behind the
 // createServerFn in `guest-rsvp.ts` (never imported by client routes, so `#/db`
 // and `pg` stay out of the browser bundle).
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray, lt, ne, sql } from "drizzle-orm";
+import { union } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import {
 	clubs,
 	guests,
+	meetingAttendance,
 	meetingGuestRsvps,
 	meetings,
 	members,
+	roleSlots,
+	tableTopicsSpeakers,
 } from "#/db/schema";
 import { firstNameOf } from "#/lib/person-name";
 import { toStoredPhone } from "#/lib/phone";
 import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { assertClubNotArchived } from "./guards";
-import {
-	loadGuestVisitSummaries,
-	lockOpenClub,
-	resolveOrCreateBookGuest,
-} from "./guest-pipeline-logic";
+import { lockOpenClub, resolveOrCreateBookGuest } from "./guest-pipeline-logic";
 import {
 	MAX_DAYS_OUT,
 	MIN_FILL_MS,
@@ -244,25 +244,76 @@ export async function countMeetingGuestRsvps(
 
 /**
  * The guests who RSVP'd to a meeting, by name, oldest RSVP first, each with
- * the visit this would be (the derived count of visits that already happened,
- * plus one: `loadGuestVisitSummaries`, the pipeline board's statement of it).
+ * the visit this would be: the visits made at EARLIER meetings, plus one.
  * OFFICERS ONLY: the caller gates it; a guest's name is not for a public payload.
+ *
+ * "Earlier" is strictly before THIS meeting's start, this meeting excluded. The
+ * pipeline's `loadGuestVisitSummaries` counts every visit up to today, so a guest
+ * who holds a role at this very meeting, or who came to a later one, would read
+ * as a returning guest on an RSVP for a meeting they had not yet attended. The
+ * visit rule itself is `guestVisits`' (a present row, a held slot or a Table
+ * Topics turn, at a non-cancelled meeting whose club-local date has arrived);
+ * only the "before this meeting" bound is added here.
  */
 export async function loadMeetingGuestRsvps(
 	meetingId: string,
 	clubId: string,
 	timeZone: string,
 ): Promise<MeetingGuestRsvp[]> {
-	const [rows, visits] = await Promise.all([
+	const rows = await db
+		.select({ guestId: guests.id, name: guests.name })
+		.from(meetingGuestRsvps)
+		.innerJoin(guests, eq(guests.id, meetingGuestRsvps.guestId))
+		.where(eq(meetingGuestRsvps.meetingId, meetingId))
+		.orderBy(asc(meetingGuestRsvps.createdAt));
+	if (rows.length === 0) return [];
+
+	const [thisMeeting] = await db
+		.select({ scheduledAt: meetings.scheduledAt })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (!thisMeeting) return [];
+
+	const guestIds = rows.map((r) => r.guestId);
+	const earlier = and(
+		eq(meetings.clubId, clubId),
+		ne(meetings.status, "cancelled"),
+		lt(meetings.scheduledAt, thisMeeting.scheduledAt),
+		sql`(${meetings.scheduledAt} at time zone ${timeZone}::text)::date <= (now() at time zone ${timeZone}::text)::date`,
+	);
+	// `union` (not `union all`): a guest with a row AND a slot at one meeting
+	// is one visit.
+	const visits = await union(
 		db
-			.select({ guestId: guests.id, name: guests.name })
-			.from(meetingGuestRsvps)
-			.innerJoin(guests, eq(guests.id, meetingGuestRsvps.guestId))
-			.where(eq(meetingGuestRsvps.meetingId, meetingId))
-			.orderBy(asc(meetingGuestRsvps.createdAt)),
-		loadGuestVisitSummaries(db, clubId, timeZone),
-	]);
-	const past = new Map(visits.map((v) => [v.guestId, v.visitCount]));
+			.select({ guestId: meetingAttendance.guestId, meetingId: meetings.id })
+			.from(meetingAttendance)
+			.innerJoin(meetings, eq(meetings.id, meetingAttendance.meetingId))
+			.where(
+				and(
+					earlier,
+					inArray(meetingAttendance.guestId, guestIds),
+					eq(meetingAttendance.status, "present"),
+				),
+			),
+		db
+			.select({ guestId: roleSlots.assignedGuestId, meetingId: meetings.id })
+			.from(roleSlots)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.where(and(earlier, inArray(roleSlots.assignedGuestId, guestIds))),
+		db
+			.select({
+				guestId: tableTopicsSpeakers.guestId,
+				meetingId: meetings.id,
+			})
+			.from(tableTopicsSpeakers)
+			.innerJoin(meetings, eq(meetings.id, tableTopicsSpeakers.meetingId))
+			.where(and(earlier, inArray(tableTopicsSpeakers.guestId, guestIds))),
+	);
+	const past = new Map<string, number>();
+	for (const v of visits) {
+		if (v.guestId) past.set(v.guestId, (past.get(v.guestId) ?? 0) + 1);
+	}
 	return rows.map((r) => ({
 		guestId: r.guestId,
 		name: r.name,

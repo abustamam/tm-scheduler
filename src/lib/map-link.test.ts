@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapLink } from "./map-link";
+import { mapLink } from "#/lib/map-link";
 
 describe("mapLink", () => {
 	/*

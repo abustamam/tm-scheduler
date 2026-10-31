@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { zonedWallTimeToUtc } from "#/lib/datetime";
 import {
 	attendanceCalendarEvent,
 	calendarEvent,
 	googleCalendarUrl,
 	icsFilename,
 	toIcs,
-} from "./calendar";
+} from "#/lib/calendar";
+import { zonedWallTimeToUtc } from "#/lib/datetime";
 
 const NOW = new Date("2026-10-29T12:00:00Z");
 

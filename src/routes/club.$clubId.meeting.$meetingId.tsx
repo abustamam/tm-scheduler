@@ -182,6 +182,7 @@ import {
 	cancelMeeting,
 	completeMeeting,
 	getMeetingByKey,
+	getMeetingJoinUrlForEditor,
 	getPublicMeetingByKey,
 	getTmodPanelData,
 	listPastMeetings,
@@ -1703,6 +1704,33 @@ function MeetingView() {
 	// The agenda's internal claim/assign acts as this member: the session member
 	// for a manager (null for an impersonator), the effective member otherwise.
 	const agendaMemberId = effectiveCanManage ? managerActorId : myId;
+	// The Edit meeting dialog seeds its link field from `meeting.joinUrl` and
+	// ALWAYS sends it, so a viewer who may edit but is not a member (a
+	// roster-picked Toastmaster) must not open it on the withheld payload: a blank
+	// would clear the club's link (#1444, D6). They read the stored link through
+	// the writer's own gate first, and the dialog mounts once it is here.
+	const editorNeedsJoinUrl =
+		viewer.canEditMeetingMeta && hasJoinLink && !("joinUrl" in meeting);
+	const editorJoinUrlKey = ["meeting-join-url-editor", meeting.id] as const;
+	const { data: editorJoinUrl } = useQuery({
+		queryKey: editorJoinUrlKey,
+		queryFn: () =>
+			getMeetingJoinUrlForEditor({
+				data: { meetingId: meeting.id, selfMemberId: agendaMemberId },
+			}),
+		enabled: editorNeedsJoinUrl,
+		gcTime: 0,
+	});
+	const metaDialogReady = !editorNeedsJoinUrl || editorJoinUrl !== undefined;
+	const metaDialogMeeting =
+		editorNeedsJoinUrl && editorJoinUrl !== undefined
+			? { ...meeting, joinUrl: editorJoinUrl }
+			: meeting;
+	const publicCountsEl = (
+		<p className="order-1 text-sm text-muted-foreground lg:order-2 lg:w-[340px] lg:shrink-0 xl:w-96">
+			{publicCountsLine(comingCount, guestRsvpCount)}
+		</p>
+	);
 	const containerClass = canManage
 		? "max-w-workspace px-4 pt-5 pb-10 sm:px-7 sm:pt-7 space-y-5"
 		: "mx-auto w-full max-w-reading p-4 pb-8 md:p-6 space-y-5";
@@ -2431,15 +2459,18 @@ function MeetingView() {
 				) : null}
 				{viewer.canEditMeetingMeta ? (
 					<MeetingMetaDialog
-						open={metaOpen}
+						open={metaOpen && metaDialogReady}
 						onOpenChange={setMetaOpen}
-						meeting={meeting}
+						meeting={metaDialogMeeting}
 						timezone={timezone}
 						selfMemberId={agendaMemberId}
 						canReschedule={viewer.canManage}
 						effectiveMeetingNumber={meetingNumber}
 						onSaved={async () => {
 							setMetaOpen(false);
+							await queryClient.invalidateQueries({
+								queryKey: editorJoinUrlKey,
+							});
 							await router.invalidate();
 						}}
 					/>
@@ -2841,25 +2872,16 @@ function MeetingView() {
 						</DialogContent>
 					</Dialog>
 				</div>
-				{!showPanel && phase === "upcoming" && !cancelled && comingCount > 0 ? (
-					// #1442: everyone who is not running the meeting sees the count and
-					// nothing behind it. It is computed from `answeredRungs` and the
-					// slots, both public, and names nobody.
-					<p className="order-1 text-sm text-muted-foreground lg:order-2 lg:w-[340px] lg:shrink-0 xl:w-96">
-						{publicCountsLine(comingCount, guestRsvpCount)}
-					</p>
-				) : null}
-				{/* Guests but nobody else answered yet (#1444): the line above is
-				    gated on a coming count, this is its only-guests case. */}
+				{/* #1442: everyone who is not running the meeting sees the count and
+				    nothing behind it. It is computed from `answeredRungs` and the
+				    slots, both public, and names nobody. #1444 adds the guest count
+				    and the guests-only case, in the one line. */}
 				{!showPanel &&
 				phase === "upcoming" &&
 				!cancelled &&
-				comingCount === 0 &&
-				guestRsvpCount > 0 ? (
-					<p className="order-1 text-sm text-muted-foreground lg:order-2 lg:w-[340px] lg:shrink-0 xl:w-96">
-						{publicCountsLine(0, guestRsvpCount)}
-					</p>
-				) : null}
+				(comingCount > 0 || guestRsvpCount > 0)
+					? publicCountsEl
+					: null}
 				{showPanel && !tmodPanelUnavailable ? (
 					<aside
 						// `sticky` pins this column, so its own height stops being the

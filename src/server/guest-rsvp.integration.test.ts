@@ -367,4 +367,75 @@ describe.skipIf(!hasTestDb)("the officer's RSVP'd guest list (#1444)", () => {
 		expect(first.confirmation?.rsvpId).toBeDefined();
 		expect(await countMeetingGuestRsvps(c.meetingId)).toBe(2);
 	});
+	async function seedRole(c: SeededClub, meetingId: string, guestId: string) {
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: c.clubId,
+				name: "Timer",
+				key: `timer-${randomUUID()}`,
+				category: "functionary",
+				isSpeakerRole: false,
+			})
+			.returning({ id: roleDefinitions.id });
+		await testDb.insert(roleSlots).values({
+			meetingId,
+			roleDefinitionId: def?.id ?? "",
+			status: "confirmed",
+			assignedGuestId: guestId,
+		});
+	}
+
+	// protects=the visit label counts visits BEFORE this meeting: a first-timer
+	// booked for a role at this very meeting, which has begun, reads "first visit".
+	// fails_when=the count includes this meeting (the pipeline's "up to today"
+	// count), which reads the guest as already on their 2nd visit.
+	it("does not count this meeting's own role as an earlier visit", async () => {
+		const c = await club();
+		await rsvp(c, { firstName: "Robin" });
+		const [robin] = await guestsOf(c);
+		await testDb
+			.update(meetings)
+			.set({ scheduledAt: new Date(Date.now() - 3_600_000) })
+			.where(eq(meetings.id, c.meetingId));
+		await seedRole(c, c.meetingId, robin?.id ?? "");
+
+		const list = await loadMeetingGuestRsvps(c.meetingId, c.clubId, "UTC");
+		expect(list.map((g) => [g.name, g.visitNumber])).toEqual([["Robin", 1]]);
+	});
+
+	// protects=a visit made AFTER this meeting does not raise this meeting's label.
+	// fails_when=the count has no upper bound at this meeting's start.
+	it("does not let a later visit raise an older meeting's label", async () => {
+		const c = await club();
+		await rsvp(c, { firstName: "Robin" });
+		const [robin] = await guestsOf(c);
+		// This meeting is last week's; Robin also came yesterday.
+		await testDb
+			.update(meetings)
+			.set({ scheduledAt: new Date(Date.now() - 7 * 86_400_000) })
+			.where(eq(meetings.id, c.meetingId));
+		const [later] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: c.clubId,
+				scheduledAt: new Date(Date.now() - 86_400_000),
+			})
+			.returning({ id: meetings.id });
+		await testDb.insert(meetingAttendance).values({
+			meetingId: later?.id ?? "",
+			guestId: robin?.id ?? "",
+			status: "present",
+		});
+
+		const list = await loadMeetingGuestRsvps(c.meetingId, c.clubId, "UTC");
+		expect(list.map((g) => g.visitNumber)).toEqual([1]);
+	});
+
+	it("is empty for a meeting nobody RSVP'd to", async () => {
+		const c = await club();
+		expect(await loadMeetingGuestRsvps(c.meetingId, c.clubId, "UTC")).toEqual(
+			[],
+		);
+	});
 });

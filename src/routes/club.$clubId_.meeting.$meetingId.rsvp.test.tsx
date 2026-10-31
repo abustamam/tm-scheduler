@@ -50,12 +50,12 @@ vi.mock("#/components/club/cover-sheet", () => ({
 import { authClient } from "#/lib/auth-client";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { memberKey } from "#/lib/member-identity";
+import { Route } from "#/routes/club.$clubId_.meeting.$meetingId.rsvp";
 import { setPlannedAttendance } from "#/server/attendance-plan";
 import { getBallotSessionVoter } from "#/server/ballot-session-voter";
 import { submitGuestRsvp } from "#/server/guest-rsvp";
 import { getPublicMeetingByKey } from "#/server/meetings";
 import { getPublicPersonalMeetingView } from "#/server/personal-meeting";
-import { Route } from "./club.$clubId_.meeting.$meetingId.rsvp";
 
 const CLUB_ID = "11111111-1111-4111-8111-111111111111";
 const MEETING_ID = "22222222-2222-4222-8222-222222222222";
@@ -138,6 +138,7 @@ async function renderPage() {
 			id: MEETING_ID,
 			status: "scheduled",
 			scheduledAt: SOON,
+			lengthMinutes: 90,
 			theme: null,
 		},
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
@@ -432,6 +433,21 @@ describe("guest RSVP (#1444)", () => {
 		await screen.findByText(/^See you/);
 		expect(vi.mocked(submitGuestRsvp).mock.calls[0][0]).toMatchObject({
 			data: { email: "dana@example.test", phone: "" },
+		});
+	});
+
+	// protects=a non-empty phone value reaches the `phone` field, trimmed, and
+	//   `email` stays blank.
+	// fails_when=a phone is dropped, sent in `email`, or sent untrimmed.
+	it("sends a phone-shaped contact as phone", async () => {
+		fireEvent.change(await startGuest(), { target: { value: "Dana" } });
+		fireEvent.change(screen.getByLabelText(/Email or phone/), {
+			target: { value: "  555 010 1234 " },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "I'm coming" }));
+		await screen.findByText(/^See you/);
+		expect(vi.mocked(submitGuestRsvp).mock.calls[0][0]).toMatchObject({
+			data: { email: "", phone: "555 010 1234" },
 		});
 	});
 

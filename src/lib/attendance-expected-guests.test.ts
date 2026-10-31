@@ -6,9 +6,9 @@ import {
 	pendingExpectedGuests,
 	publicCountsLine,
 } from "#/lib/attendance-panel";
+import type { MinutesOp } from "#/lib/offline-minutes-queue";
+import { deriveRollGuests } from "#/lib/roll-attendance";
 import type { MinutesData } from "#/server/minutes-logic";
-import type { MinutesOp } from "./offline-minutes-queue";
-import { deriveRollGuests } from "./roll-attendance";
 
 describe("guestVisitLabel", () => {
 	// protects=AC5: a first-time and a returning guest read differently, and the
@@ -82,7 +82,8 @@ describe("pendingExpectedGuests with the offline queue", () => {
 	// derived guest list then shows the guest present and the expected row goes
 	// away at once, and a queued removal brings it back.
 	// fails_when=an offline Here leaves the row (an invitation to tap twice), or
-	// the expected list is built from the raw loader rows instead of the derived.
+	// a queued removal does not bring it back. (That the panel feeds THIS
+	// function the derived guest list is `meeting-guest-rsvp-wiring.guard.test.ts`.)
 	it("drops a guest whose Here is queued offline, and restores one removed", () => {
 		const here: MinutesOp = {
 			type: "addGuest",
@@ -110,6 +111,20 @@ describe("pendingExpectedGuests with the offline queue", () => {
 			],
 		});
 		expect(pendingExpectedGuests(RSVPS, removed)).toHaveLength(2);
+	});
+
+	// protects=an RSVP'd guest booked for a role keeps their Here: the derived
+	//   roll lists role-only guests (`fromRole`, no attendance row) beside the
+	//   explicit ones, and only an explicit present row takes the guest off.
+	// fails_when=pendingExpectedGuests hides any guest on the derived roll.
+	it("keeps Here for a guest who is on the roll only through a role", () => {
+		const roll = [
+			{ guestId: "g-dana", fromRole: true },
+			{ guestId: "g-sam", fromRole: false },
+		];
+		expect(pendingExpectedGuests(RSVPS, roll).map((g) => g.name)).toEqual([
+			"Dana",
+		]);
 	});
 
 	// protects=nothing present yet lists everyone; undefined (roll not wired) too.

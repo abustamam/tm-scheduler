@@ -434,14 +434,20 @@ export function guestVisitLabel(visitNumber: number): string {
 
 /**
  * The RSVP'd guests still to be marked here (#1444, D7): the expected list minus
- * every guest already on the roll. `present` is the DERIVED guest list (the
+ * every guest EXPLICITLY marked present. `present` is the DERIVED guest list (the
  * loader's rows with the offline queue replayed over them), so a Here tap that
  * is queued offline drops the row at once, and a removed guest returns.
+ *
+ * A `fromRole` row is NOT explicit: that guest is listed because they hold a
+ * slot or spoke at Table Topics, with no attendance row behind them. An RSVP'd
+ * guest booked for a role keeps their Here until an officer taps it.
  */
 export function pendingExpectedGuests<T extends { guestId: string }>(
 	rsvps: readonly T[],
-	present: readonly { guestId: string }[] | undefined,
+	present: readonly { guestId: string; fromRole?: boolean }[] | undefined,
 ): T[] {
-	const here = new Set((present ?? []).map((g) => g.guestId));
+	const here = new Set(
+		(present ?? []).filter((g) => !g.fromRole).map((g) => g.guestId),
+	);
 	return rsvps.filter((g) => !here.has(g.guestId));
 }

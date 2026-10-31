@@ -512,14 +512,10 @@ function RsvpControls({
 	);
 }
 
-const UUID_RE =
-	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** A fresh retry key per form view: a resend of the SAME submit reuses it, so a
  *  double tap or a flaky network cannot create two RSVPs. */
 function newClientKey(): string {
-	const key = crypto.randomUUID();
-	return UUID_RE.test(key) ? key : "00000000-0000-4000-8000-000000000000";
+	return crypto.randomUUID();
 }
 
 type GuestConfirmation = NonNullable<
@@ -554,7 +550,7 @@ function GuestRsvp({
 	clubName: string;
 	clubKey: string;
 	meetingKey: string;
-	meeting: { id: string; scheduledAt: Date | string; lengthMinutes?: number };
+	meeting: { id: string; scheduledAt: Date | string; lengthMinutes: number };
 	timezone: string;
 	onBack: () => void;
 }) {
@@ -738,12 +734,11 @@ function GuestConfirmationView({
 	clubName: string;
 	clubKey: string;
 	meetingKey: string;
-	meeting: { id: string; scheduledAt: Date | string; lengthMinutes?: number };
+	meeting: { id: string; scheduledAt: Date | string; lengthMinutes: number };
 	timezone: string;
 }) {
 	const { weekday, dateLabel } = dayLabels(data.scheduledAt, timezone);
 	const map = mapLink(data.location);
-	const lengthMinutes = meeting.lengthMinutes ?? 90;
 	// Re-checked at render, the meeting page's rule: only an http(s) URL is an href.
 	const joinUrl = normalizePresentationUrl(data.joinUrl);
 	// Built at click time: `window` does not exist during SSR.
@@ -752,7 +747,7 @@ function GuestConfirmationView({
 			clubName,
 			dateLabel,
 			scheduledAt: data.scheduledAt,
-			lengthMinutes,
+			lengthMinutes: meeting.lengthMinutes,
 			meetingUrl: `${window.location.origin}${promoMeetingPath(clubKey, meetingKey)}`,
 			uid: `${meeting.id}-${data.rsvpId}@gavelup`,
 		});

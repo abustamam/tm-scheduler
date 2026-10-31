@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AttendanceExpectedGuests } from "./attendance-expected-guests";
+import { AttendanceExpectedGuests } from "#/components/club/attendance-expected-guests";
 
 afterEach(cleanup);
 
