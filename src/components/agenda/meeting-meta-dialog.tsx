@@ -47,6 +47,7 @@ export function MeetingMetaDialog({
 	selfMemberId,
 	canReschedule,
 	effectiveMeetingNumber = null,
+	hasJoinLink = false,
 	onSaved,
 }: {
 	open: boolean;
@@ -58,10 +59,18 @@ export function MeetingMetaDialog({
 	/** The meeting's EFFECTIVE number (stored or derived, #358) — shown as the
 	 *  placeholder so an admin can see what automatic numbering would produce. */
 	effectiveMeetingNumber?: number | null;
+	/** Whether the club has stored a link. Only read when the payload withholds
+	 *  `joinUrl` (a non-member editor, #1444): it words the field's hint. */
+	hasJoinLink?: boolean;
 	onSaved: () => void | Promise<void>;
 }) {
 	const [submitting, setSubmitting] = useState(false);
 	const [joinUrlError, setJoinUrlError] = useState<string | null>(null);
+	/** #1444, D6. The payload carries no `joinUrl` key for a viewer who may edit
+	 *  but is not a member (a roster-picked Toastmaster). The field then starts
+	 *  empty WITHOUT meaning "no link", so an untouched field must say nothing
+	 *  rather than send a blank, which would clear the stored link. */
+	const joinUrlWithheld = !("joinUrl" in meeting);
 
 	/**
 	 * #731. The join-link INPUT is uncontrolled, like every other field here, and
@@ -139,7 +148,9 @@ export function MeetingMetaDialog({
 					// `meetingUpdateFromForm` builds the fields this dialog has always
 					// had and does not know about this one; the key is spread last, so
 					// it stays correct if that ever changes.
-					joinUrl,
+					// Withheld and untouched (#1444): omit the key, so the patch leaves
+					// the stored link alone. Typed: sent, through the same gate.
+					...(joinUrlWithheld && !joinUrl ? {} : { joinUrl }),
 					// The promo note (#931) is admin-only, and the field below renders
 					// only for an admin — so it is sent only then. A self-serve TMOD's
 					// save must not carry the key at all: the writer refuses it on
@@ -248,7 +259,11 @@ export function MeetingMetaDialog({
 							// message this dialog cannot phrase.
 							type="text"
 							inputMode="url"
-							placeholder="https://zoom.us/j/…"
+							placeholder={
+								joinUrlWithheld && hasJoinLink
+									? "A link is set; leave blank to keep it"
+									: "https://zoom.us/j/…"
+							}
 							defaultValue={meeting.joinUrl ?? ""}
 							onChange={() => {
 								// Clear a standing error as soon as the officer edits, so the

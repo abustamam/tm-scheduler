@@ -21,6 +21,7 @@ import {
 import { pairedRoleIds } from "#/lib/meeting-roles";
 import { officerPositionLabel } from "#/lib/officers";
 import { PROMO_LIMITS } from "#/lib/promo-template";
+import { nonMemberMeetingRow } from "#/lib/public-meeting-payload";
 import { WOD_FIELDS, WOD_UPDATE_FIELDS } from "#/lib/wod-limits";
 import {
 	listNotComingWithNames,
@@ -44,6 +45,10 @@ import {
 	requireUser,
 	requireWordOfTheDayEditor,
 } from "./guards";
+import {
+	countMeetingGuestRsvps,
+	loadMeetingGuestRsvps,
+} from "./guest-rsvp-logic";
 import { listClubGuests } from "./guests-logic";
 import {
 	type Contact,
@@ -530,8 +535,28 @@ async function loadMeetingDetail(
 		slotsWithEvaluates,
 	);
 
+	// RSVP'd guests (#1444): the COUNT is public ("14 coming · 2 guests"), the
+	// names and visit numbers are the officer's.
+	const [guestRsvpCount, guestRsvps] = await Promise.all([
+		countMeetingGuestRsvps(meetingId),
+		canManage
+			? loadMeetingGuestRsvps(meetingId, meeting.clubId, tz)
+			: Promise.resolve([]),
+	]);
+
+	// The video link goes to a MEMBER only (#1444, D6). Everyone else gets a flag
+	// saying one exists, so the page can offer "RSVP to get the video link"; the
+	// URL itself rides the RSVP confirmation. An allowlist, not a delete: see
+	// `#/lib/public-meeting-payload`.
+	const meetingOut: Omit<typeof meeting, "joinUrl"> & {
+		joinUrl?: string | null;
+	} = viewerIsMember ? meeting : nonMemberMeetingRow(meeting);
+
 	return {
-		meeting,
+		meeting: meetingOut,
+		hasJoinLink: Boolean(meeting.joinUrl),
+		guestRsvpCount,
+		guestRsvps,
 		meetingNumber,
 		slots: slotsWithEvaluates,
 		canManage,

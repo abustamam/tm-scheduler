@@ -4,8 +4,14 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+	CalendarPlus,
+	ExternalLink,
+	Loader2,
+	MapPin,
+	Video,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { BrandMark } from "#/components/brand-mark";
 import { CancelledMeetingNotice } from "#/components/club/cancelled-meeting-notice";
@@ -15,16 +21,35 @@ import { ThemeToggle } from "#/components/club/theme-toggle";
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { PublicFooter } from "#/components/public-footer";
 import { Button } from "#/components/ui/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "#/components/ui/dropdown-menu";
+import { Input } from "#/components/ui/input";
+import { Label } from "#/components/ui/label";
 import { showWriteError } from "#/components/write-error-toast";
 import { authClient } from "#/lib/auth-client";
+import {
+	attendanceCalendarEvent,
+	googleCalendarUrl,
+	icsFilename,
+	toDate,
+	toIcs,
+} from "#/lib/calendar";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { utcToZonedWallTime } from "#/lib/datetime";
 import { rsvpPageUrl } from "#/lib/lineup-blast";
+import { mapLink } from "#/lib/map-link";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { isMeetingOver } from "#/lib/meeting-lifecycle";
 import { type StoredMember, useCurrentMember } from "#/lib/member-identity";
+import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { promoDate, promoMeetingPath, promoTime } from "#/lib/promo-template";
 import { NOINDEX, shareMeta } from "#/lib/share-meta";
 import { setPlannedAttendance } from "#/server/attendance-plan";
+import type { submitGuestRsvp } from "#/server/guest-rsvp";
 import { getPublicMeetingByKey } from "#/server/meetings";
 import {
 	getPublicPersonalMeetingView,
@@ -61,6 +86,7 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/rsvp")({
 				id: detail.meeting.id,
 				status: detail.meeting.status,
 				scheduledAt: detail.meeting.scheduledAt,
+				lengthMinutes: detail.meeting.lengthMinutes,
 				theme: detail.meeting.theme,
 			},
 		};
@@ -160,6 +186,8 @@ function RsvpPage() {
 	const member = session.member ?? picked;
 	const signedIn = session.member !== null;
 	const queryClient = useQueryClient();
+	// "I'm a guest" (#1444): a visitor who is not on the roster. Needs no session.
+	const [guestMode, setGuestMode] = useState(false);
 
 	const when = `${promoDate(meeting.scheduledAt, timezone)}, ${promoTime(meeting.scheduledAt, timezone)}`;
 	const cancelled = meeting.status === "cancelled";
@@ -223,9 +251,29 @@ function RsvpPage() {
 						onNotYou={signedIn ? null : clearMember}
 						queryClient={queryClient}
 					/>
+				) : guestMode ? (
+					<GuestRsvp
+						clubUuid={clubId}
+						clubName={clubName}
+						clubKey={clubKey}
+						meetingKey={meetingKey}
+						meeting={meeting}
+						timezone={timezone}
+						onBack={() => setGuestMode(false)}
+					/>
 				) : (
 					<div className="space-y-3">
 						<h2 className="text-base font-semibold">Who are you?</h2>
+						<Button
+							variant="outline"
+							className="min-h-11 w-full"
+							onClick={() => setGuestMode(true)}
+						>
+							I'm a guest
+						</Button>
+						<p className="text-xs text-muted-foreground">
+							Or find your name, if you're a member:
+						</p>
 						<PickNameForm clubUuid={clubId} onPicked={setMember} />
 					</div>
 				)}
@@ -460,6 +508,345 @@ function RsvpControls({
 				onClose={() => setFreed([])}
 				onChanged={onChanged}
 			/>
+		</div>
+	);
+}
+
+/** A fresh retry key per form view: a resend of the SAME submit reuses it, so a
+ *  double tap or a flaky network cannot create two RSVPs. */
+function newClientKey(): string {
+	return crypto.randomUUID();
+}
+
+type GuestConfirmation = NonNullable<
+	Awaited<ReturnType<typeof submitGuestRsvp>>["confirmation"]
+>;
+
+/** "Thursday" / "Thursday, Nov 12", in the club's timezone. */
+function dayLabels(scheduledAt: Date | string, timeZone: string) {
+	const at = toDate(scheduledAt);
+	const weekday = new Intl.DateTimeFormat("en-US", {
+		weekday: "long",
+		timeZone,
+	}).format(at);
+	const monthDay = new Intl.DateTimeFormat("en-US", {
+		month: "short",
+		day: "numeric",
+		timeZone,
+	}).format(at);
+	return { weekday, dateLabel: `${weekday}, ${monthDay}` };
+}
+
+function GuestRsvp({
+	clubUuid,
+	clubName,
+	clubKey,
+	meetingKey,
+	meeting,
+	timezone,
+	onBack,
+}: {
+	clubUuid: string;
+	clubName: string;
+	clubKey: string;
+	meetingKey: string;
+	meeting: { id: string; scheduledAt: Date | string; lengthMinutes: number };
+	timezone: string;
+	onBack: () => void;
+}) {
+	const [confirmation, setConfirmation] = useState<{
+		firstName: string;
+		data: GuestConfirmation;
+	} | null>(null);
+	if (confirmation) {
+		return (
+			<GuestConfirmationView
+				firstName={confirmation.firstName}
+				data={confirmation.data}
+				clubName={clubName}
+				clubKey={clubKey}
+				meetingKey={meetingKey}
+				meeting={meeting}
+				timezone={timezone}
+			/>
+		);
+	}
+	return (
+		<GuestRsvpForm
+			clubUuid={clubUuid}
+			meetingId={meeting.id}
+			onBack={onBack}
+			onConfirmed={(firstName, data) => setConfirmation({ firstName, data })}
+		/>
+	);
+}
+
+function GuestRsvpForm({
+	clubUuid,
+	meetingId,
+	onBack,
+	onConfirmed,
+}: {
+	clubUuid: string;
+	meetingId: string;
+	onBack: () => void;
+	onConfirmed: (firstName: string, data: GuestConfirmation) => void;
+}) {
+	const [firstName, setFirstName] = useState("");
+	const [contact, setContact] = useState("");
+	// The honeypot: a real person never sees or fills it.
+	const [website, setWebsite] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	// Measured HERE, on the client, from when the form opened: the server only
+	// compares a number, never two clocks.
+	const openedAt = useRef(Date.now());
+	const clientKey = useRef(newClientKey());
+
+	const submit = async (e: React.FormEvent) => {
+		e.preventDefault();
+		if (busy) return;
+		const name = firstName.trim();
+		if (!name) {
+			setError("Please enter your first name.");
+			return;
+		}
+		const trimmed = contact.trim();
+		const isEmail = trimmed.includes("@");
+		setBusy(true);
+		setError(null);
+		try {
+			// Loaded on submit, like the ballot's session lookup above: the server
+			// fn pulls `#/db` in at import, and nothing renders it until a tap.
+			const { submitGuestRsvp } = await import("#/server/guest-rsvp");
+			const result = await submitGuestRsvp({
+				data: {
+					clubId: clubUuid,
+					meetingId,
+					clientKey: clientKey.current,
+					firstName: name,
+					email: isEmail ? trimmed : "",
+					phone: !isEmail ? trimmed : "",
+					website,
+					fillMs: Date.now() - openedAt.current,
+				},
+			});
+			if (!result.confirmation) {
+				// A bot's answer is success-shaped with nothing written; so is a very
+				// quick real one. Never claim a RSVP that was not recorded.
+				openedAt.current = Date.now();
+				setError("That went through too fast to save. Please try again.");
+				return;
+			}
+			onConfirmed(name, result.confirmation);
+		} catch (err) {
+			setError(
+				err instanceof Error && err.message
+					? err.message
+					: "Couldn't save your RSVP. Please try again.",
+			);
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	return (
+		<form onSubmit={(e) => void submit(e)} className="space-y-4" noValidate>
+			<div className="space-y-1.5">
+				<Label htmlFor="guest-first-name">First name</Label>
+				<Input
+					id="guest-first-name"
+					name="firstName"
+					autoComplete="given-name"
+					required
+					maxLength={80}
+					value={firstName}
+					onChange={(e) => setFirstName(e.target.value)}
+				/>
+			</div>
+			<div className="space-y-1.5">
+				<Label htmlFor="guest-contact">Email or phone (optional)</Label>
+				<Input
+					id="guest-contact"
+					name="contact"
+					autoComplete="email"
+					maxLength={200}
+					value={contact}
+					onChange={(e) => setContact(e.target.value)}
+				/>
+				<p className="text-xs text-muted-foreground">
+					So the club can reach you if plans change.
+				</p>
+			</div>
+			{/* Honeypot. Off-screen rather than display:none, which some bots skip. */}
+			<div
+				aria-hidden
+				className="absolute -left-[9999px] h-0 w-0 overflow-hidden"
+			>
+				<label htmlFor="guest-website">Website</label>
+				<input
+					id="guest-website"
+					name="website"
+					tabIndex={-1}
+					autoComplete="off"
+					value={website}
+					onChange={(e) => setWebsite(e.target.value)}
+				/>
+			</div>
+			{error ? (
+				<p role="alert" className="text-sm text-destructive">
+					{error}
+				</p>
+			) : null}
+			<Button type="submit" className="min-h-11 w-full" disabled={busy}>
+				{busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+				I'm coming
+			</Button>
+			<Button
+				type="button"
+				variant="ghost"
+				className="min-h-11 text-xs text-muted-foreground"
+				onClick={onBack}
+			>
+				Back
+			</Button>
+		</form>
+	);
+}
+
+const WHAT_HAPPENS = [
+	"Short prepared speeches, a round of impromptu Table Topics, and kind, specific feedback.",
+	"You're welcome to just watch. Joining in is always your choice.",
+	"Come a few minutes early and a member will say hello.",
+] as const;
+
+function GuestConfirmationView({
+	firstName,
+	data,
+	clubName,
+	clubKey,
+	meetingKey,
+	meeting,
+	timezone,
+}: {
+	firstName: string;
+	data: GuestConfirmation;
+	clubName: string;
+	clubKey: string;
+	meetingKey: string;
+	meeting: { id: string; scheduledAt: Date | string; lengthMinutes: number };
+	timezone: string;
+}) {
+	const { weekday, dateLabel } = dayLabels(data.scheduledAt, timezone);
+	const map = mapLink(data.location);
+	// Re-checked at render, the meeting page's rule: only an http(s) URL is an href.
+	const joinUrl = normalizePresentationUrl(data.joinUrl);
+	// Built at click time: `window` does not exist during SSR.
+	const build = () =>
+		attendanceCalendarEvent({
+			clubName,
+			dateLabel,
+			scheduledAt: data.scheduledAt,
+			lengthMinutes: meeting.lengthMinutes,
+			meetingUrl: `${window.location.origin}${promoMeetingPath(clubKey, meetingKey)}`,
+			uid: `${meeting.id}-${data.rsvpId}@gavelup`,
+		});
+	const downloadIcs = () => {
+		const localDate = utcToZonedWallTime(
+			toDate(data.scheduledAt),
+			timezone,
+		).slice(0, 10);
+		const blob = new Blob([toIcs(build())], {
+			type: "text/calendar;charset=utf-8",
+		});
+		const href = URL.createObjectURL(blob);
+		const a = document.createElement("a");
+		a.href = href;
+		a.download = icsFilename(clubName, localDate, "meeting");
+		document.body.appendChild(a);
+		a.click();
+		a.remove();
+		setTimeout(() => URL.revokeObjectURL(href), 0);
+	};
+
+	return (
+		<div className="space-y-5">
+			<div className="space-y-1">
+				<h2 className="font-display text-xl font-semibold tracking-tight">
+					See you {weekday}, {firstName}!
+				</h2>
+				<p className="text-sm text-muted-foreground">
+					{data.toastmasterFirstName
+						? `${data.toastmasterFirstName} is Toastmaster tonight. The club knows you're coming.`
+						: "The club knows you're coming."}
+				</p>
+			</div>
+			{data.location ? (
+				<p className="flex items-start gap-1.5 text-sm">
+					<MapPin className="mt-0.5 size-4 shrink-0" aria-hidden />
+					<span className="min-w-0 break-words">
+						{data.location}
+						{map ? (
+							<>
+								{" "}
+								<a
+									href={map}
+									target="_blank"
+									rel="noopener noreferrer"
+									className="inline-flex items-center gap-1 font-semibold text-primary underline underline-offset-2"
+								>
+									Open in maps
+									<ExternalLink className="size-3" aria-hidden />
+								</a>
+							</>
+						) : null}
+					</span>
+				</p>
+			) : null}
+			{joinUrl ? (
+				<a
+					href={joinUrl}
+					target="_blank"
+					rel="noopener noreferrer"
+					className="flex min-h-11 items-center gap-1.5 text-sm font-semibold text-primary underline-offset-4 hover:underline"
+				>
+					<Video className="size-4" aria-hidden />
+					Join the video call
+				</a>
+			) : null}
+			<DropdownMenu>
+				<DropdownMenuTrigger asChild>
+					<Button variant="outline" className="min-h-11 w-full">
+						<CalendarPlus aria-hidden className="size-4" />
+						Add to calendar
+					</Button>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="start">
+					<DropdownMenuItem className="min-h-11" onSelect={downloadIcs}>
+						Apple / Outlook (.ics)
+					</DropdownMenuItem>
+					<DropdownMenuItem
+						className="min-h-11"
+						onSelect={() =>
+							window.open(
+								googleCalendarUrl(build()),
+								"_blank",
+								"noopener,noreferrer",
+							)
+						}
+					>
+						Google Calendar
+					</DropdownMenuItem>
+				</DropdownMenuContent>
+			</DropdownMenu>
+			<div className="space-y-1.5">
+				<h3 className="text-sm font-semibold">What happens at a meeting</h3>
+				<ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+					{WHAT_HAPPENS.map((line) => (
+						<li key={line}>{line}</li>
+					))}
+				</ul>
+			</div>
 		</div>
 	);
 }

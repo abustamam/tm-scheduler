@@ -39,7 +39,7 @@ describe("meeting route RSVP wiring (#1442)", () => {
 		//   past or cancelled meeting, never "0 coming"
 		// fails_when=any one of the four conditions is dropped or loosened
 		expect(squash(SRC)).toContain(
-			'{!showPanel && phase === "upcoming" && !cancelled && comingCount > 0 ? (',
+			'{!showPanel && phase === "upcoming" && !cancelled && (comingCount > 0 || guestRsvpCount > 0) ? publicCountsEl : null}',
 		);
 	});
 });
