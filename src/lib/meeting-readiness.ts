@@ -38,6 +38,8 @@
  * clock would put a second clock read in the render.
  */
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
+import { type CoverKind, coverStatus } from "#/lib/cover";
+import { APP_LOCALE } from "#/lib/format";
 import { meetingPhase } from "#/lib/meeting-lifecycle";
 import {
 	type DutyContext,
@@ -69,12 +71,36 @@ export interface ReadinessSlot {
 	speechTitle: string | null;
 }
 
+/**
+ * Structural view of a cover request (#1441), so `MeetingCoverRequest` fits
+ * without this module importing a server type. `releasedAt` is a string once
+ * the payload has crossed the wire.
+ */
+export interface ReadinessCoverRequest {
+	slotId: string;
+	kind: CoverKind;
+	releasedName: string;
+	releasedAt: Date | string;
+	coveredAt: Date | string | null;
+}
+
+/** An open slot someone handed back (#1441): what the panel says and drafts. */
+export interface ReadinessGapCover {
+	status: "dropped" | "finding_cover";
+	releasedName: string;
+	releasedAt: Date | string;
+	/** The meeting's weekday in the club's zone ("Tuesday"), for the group call. */
+	weekday: string;
+}
+
 export interface ReadinessGap {
 	slotId: string;
 	/** The agenda's own label, from `slotLabel` / `buildRoleCounts` ("Speaker 2"). */
 	slotLabel: string;
 	/** Null when the owning slot is open. A display name and nothing else. */
 	holderName: string | null;
+	/** Set on `roles_filled` gaps whose slot has a live cover request (#1441). */
+	cover?: ReadinessGapCover;
 }
 
 export interface ReadinessItem {
@@ -164,10 +190,16 @@ function buildItem(
 /**
  * What is still missing on a meeting, item by item.
  *
- * ORDER: this never sorts. It preserves the order of `slots`, and "agenda
- * order" means that order. Both callers pass `loadMeetingSlots` rows unchanged,
- * which that loader already orders by `role_definitions.sort_order`, then
- * `slot_index`.
+ * ORDER: `slots` order is agenda order, and every gap list keeps it, with ONE
+ * exception (#1441): in `roles_filled`, a slot with a live cover request
+ * (`dropped` or `finding_cover`) moves to the front, stably, so the UI's cap
+ * of three cannot hide it. Both callers pass `loadMeetingSlots` rows
+ * unchanged, which that loader already orders by `role_definitions.sort_order`,
+ * then `slot_index`.
+ *
+ * The cover inputs are all optional and travel together: without
+ * `coverRequests`, `now`, `timezone` and `scheduledAt` nothing is annotated
+ * (`get_agenda` passes none). `now` is the caller's one clock.
  *
  * An item with nothing to measure (`total` 0) is OMITTED rather than shown as
  * done: a meeting with no Grammarian slot has no Word of the Day line. A meeting
@@ -180,8 +212,39 @@ export function meetingReadiness(input: {
 		tableTopicsNotes: string | null;
 	};
 	slots: readonly ReadinessSlot[];
+	coverRequests?: readonly ReadinessCoverRequest[];
+	now?: Date;
+	timezone?: string;
+	scheduledAt?: Date | string;
 }): MeetingReadiness {
 	const { meeting, slots } = input;
+	const { coverRequests, now, timezone, scheduledAt } = input;
+	const coverBySlot = new Map<string, ReadinessGapCover>();
+	if (coverRequests && now && timezone && scheduledAt) {
+		const at = new Date(scheduledAt);
+		const weekday = new Intl.DateTimeFormat(APP_LOCALE, {
+			weekday: "long",
+			timeZone: timezone,
+		}).format(at);
+		for (const request of coverRequests) {
+			const status = coverStatus(
+				{
+					kind: request.kind,
+					coveredAt: request.coveredAt ? new Date(request.coveredAt) : null,
+				},
+				{ scheduledAt: at },
+				timezone,
+				now,
+			);
+			if (status === "covered") continue;
+			coverBySlot.set(request.slotId, {
+				status,
+				releasedName: request.releasedName,
+				releasedAt: request.releasedAt,
+				weekday,
+			});
+		}
+	}
 	// Numbered over the FULL input, exactly as the agenda numbers them.
 	const roleCounts = buildRoleCounts([...slots]);
 	const gapFor = (slot: ReadinessSlot): ReadinessGap => ({
@@ -195,14 +258,15 @@ export function meetingReadiness(input: {
 		if (item.total > 0) items.push(item);
 	};
 
-	addItem(
-		buildItem(
-			"roles_filled",
-			"Roles filled",
-			slots.length,
-			slots.filter((s) => s.status === "open").map(gapFor),
-		),
-	);
+	const openGaps = slots
+		.filter((s) => s.status === "open")
+		.map((s) => {
+			const cover = coverBySlot.get(s.id);
+			return cover ? { ...gapFor(s), cover } : gapFor(s);
+		});
+	// `sort` is stable: cover gaps first, everything else keeps agenda order.
+	openGaps.sort((a, b) => Number(!!b.cover) - Number(!!a.cover));
+	addItem(buildItem("roles_filled", "Roles filled", slots.length, openGaps));
 	const held = slots.filter((s) => s.status !== "open");
 	addItem(
 		buildItem(

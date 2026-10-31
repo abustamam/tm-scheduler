@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
 	MeetingReadiness,
 	ReadinessGap,
@@ -37,6 +37,7 @@ async function renderPanel(readiness: MeetingReadiness) {
 			readiness={readiness}
 			clubId="downtown"
 			meetingId="2026-10-10"
+			timezone="America/Chicago"
 		/>,
 	);
 }
@@ -160,5 +161,77 @@ describe("MeetingReadinessPanel (#963)", () => {
 		});
 		expect(screen.queryAllByRole("button")).toHaveLength(0);
 		expect(screen.getAllByRole("link")).toHaveLength(1);
+	});
+
+	describe("cover gaps (#1441)", () => {
+		const coverGap = (
+			n: number,
+			status: "dropped" | "finding_cover",
+		): ReadinessGap => ({
+			slotId: `c${n}`,
+			slotLabel: "Timer",
+			holderName: null,
+			cover: {
+				status,
+				releasedName: "Sam",
+				// Tue 9:14pm in Chicago
+				releasedAt: "2026-10-28T02:14:00.000Z",
+				weekday: "Saturday",
+			},
+		});
+		const cover = (gaps: ReadinessGap[]): MeetingReadiness => ({
+			ready: false,
+			items: [item({ id: "roles_filled", label: "Roles filled", gaps })],
+		});
+
+		it("shows the dropped note and the finding-cover note", async () => {
+			await renderPanel(
+				cover([coverGap(1, "dropped"), coverGap(2, "finding_cover")]),
+			);
+			expect(screen.getByTestId("readiness-cover-c1").textContent).toContain(
+				"Open: Sam dropped it Tue 9:14pm",
+			);
+			expect(screen.getByTestId("readiness-cover-c2").textContent).toContain(
+				"Sam is finding cover",
+			);
+		});
+
+		it("the button copies the role, the weekday and the cover link", async () => {
+			const writeText = vi.fn().mockResolvedValue(undefined);
+			vi.stubGlobal("navigator", { clipboard: { writeText } });
+			await renderPanel(cover([coverGap(1, "dropped")]));
+			fireEvent.click(
+				screen.getByRole("button", { name: 'Copy "we need a Timer"' }),
+			);
+			await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+			const text = writeText.mock.calls[0][0] as string;
+			expect(text).toContain("Timer");
+			expect(text).toContain("Saturday");
+			expect(text).toContain("/club/downtown/meeting/2026-10-10?cover=c1");
+			vi.unstubAllGlobals();
+		});
+
+		it("uses the share sheet when the browser has one", async () => {
+			const share = vi.fn().mockResolvedValue(undefined);
+			vi.stubGlobal("navigator", { share });
+			await renderPanel(cover([coverGap(1, "dropped")]));
+			fireEvent.click(
+				screen.getByRole("button", { name: 'Copy "we need a Timer"' }),
+			);
+			await vi.waitFor(() => expect(share).toHaveBeenCalledTimes(1));
+			expect(share.mock.calls[0][0].text).toContain("?cover=c1");
+			vi.unstubAllGlobals();
+		});
+
+		it("a plain gap has no button, and cover rows do not repeat in the plain list", async () => {
+			await renderPanel(cover([coverGap(1, "dropped"), gap(2)]));
+			expect(screen.getAllByRole("button")).toHaveLength(1);
+			expect(
+				screen.getByTestId("readiness-item-roles_filled").textContent,
+			).toContain("Role 2 (open)");
+			expect(
+				screen.getByTestId("readiness-item-roles_filled").textContent,
+			).not.toContain("Timer (open)");
+		});
 	});
 });

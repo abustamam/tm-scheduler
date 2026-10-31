@@ -558,6 +558,8 @@ describe("meeting-readiness stays db-free (#963)", () => {
 		);
 		expect(specifiers.sort()).toEqual([
 			"#/lib/agenda",
+			"#/lib/cover",
+			"#/lib/format",
 			"#/lib/meeting-lifecycle",
 			"#/lib/role-duties",
 		]);
@@ -566,5 +568,91 @@ describe("meeting-readiness stays db-free (#963)", () => {
 	it("never defaults a clock: showsMeetingReadiness gets its `now` from the caller", () => {
 		const source = readFileSync("src/lib/meeting-readiness.ts", "utf8");
 		expect(source).not.toMatch(/new Date\(\)|Date\.now\(\)/);
+	});
+});
+
+describe("meetingReadiness cover requests (#1441)", () => {
+	// Saturday 2026-10-31 10:00 Chicago; the club flips finding_cover to dropped at 06:00 that day.
+	const scheduledAt = new Date("2026-10-31T15:00:00.000Z");
+	const open = (o: Partial<ReadinessSlot> = {}) =>
+		slot({ status: "open", assigneeName: null, ...o });
+	const request = (slotId: string, o: Record<string, unknown> = {}) => ({
+		slotId,
+		kind: "dropped" as const,
+		releasedName: "Sam",
+		releasedAt: new Date("2026-10-28T02:14:00.000Z"),
+		coveredAt: null,
+		...o,
+	});
+	const input = (slots: ReadinessSlot[], coverRequests: unknown[]) => ({
+		meeting: FILLED_MEETING,
+		slots,
+		coverRequests: coverRequests as never,
+		now: new Date("2026-10-29T12:00:00.000Z"),
+		timezone: "America/Chicago",
+		scheduledAt,
+	});
+
+	it("a dropped slot is listed first even behind three other open gaps", () => {
+		const others = [
+			open({ roleName: "Ah-Counter" }),
+			open({ roleName: "Evaluator" }),
+			open({ roleName: "Grammarian", roleKey: "grammarian" }),
+		];
+		const dropped = open({ roleName: "Timer", roleKey: "timer" });
+		const r = meetingReadiness(
+			input([...others, dropped], [request(dropped.id)]),
+		);
+		const gaps = item(r, "roles_filled")?.gaps ?? [];
+		expect(gaps[0]).toMatchObject({
+			slotId: dropped.id,
+			cover: { status: "dropped", releasedName: "Sam", weekday: "Saturday" },
+		});
+		// The rest keep agenda order, behind it.
+		expect(gaps.slice(1).map((g) => g.slotId)).toEqual(others.map((o) => o.id));
+		expect(gaps.slice(0, 3)).toContainEqual(
+			expect.objectContaining({ slotId: dropped.id }),
+		);
+	});
+
+	it("finding_cover before the 06:00 flip, dropped after it", () => {
+		const s = open();
+		const asked = request(s.id, { kind: "finding_cover" });
+		const before = meetingReadiness(input([s], [asked]));
+		expect(item(before, "roles_filled")?.gaps[0]?.cover?.status).toBe(
+			"finding_cover",
+		);
+		const after = meetingReadiness({
+			...input([s], [asked]),
+			now: new Date("2026-10-31T12:00:00.000Z"),
+		});
+		expect(item(after, "roles_filled")?.gaps[0]?.cover?.status).toBe("dropped");
+	});
+
+	it("a covered request, or one on a held slot, is not annotated", () => {
+		const s = open();
+		const held = slot({ status: "claimed" });
+		const r = meetingReadiness(
+			input(
+				[s, held],
+				[
+					request(s.id, { coveredAt: new Date("2026-10-29T01:00:00.000Z") }),
+					request(held.id),
+				],
+			),
+		);
+		expect(item(r, "roles_filled")?.gaps[0]?.cover).toBeUndefined();
+		expect(item(r, "roles_confirmed")?.gaps[0]?.cover).toBeUndefined();
+	});
+
+	it("without the cover inputs nothing is annotated or reordered", () => {
+		const a = open({ roleName: "Ah-Counter" });
+		const b = open({ roleName: "Timer", roleKey: "timer" });
+		const r = meetingReadiness({ meeting: FILLED_MEETING, slots: [a, b] });
+		expect(item(r, "roles_filled")?.gaps.map((g) => g.slotId)).toEqual([
+			a.id,
+			b.id,
+		]);
+		expect(item(r, "roles_filled")?.gaps.some((g) => g.cover)).toBe(false);
 	});
 });

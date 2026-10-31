@@ -6,7 +6,7 @@ import type { MeetingCoverRequest } from "#/server/cover-logic";
 /** "Tue 9:14pm", in the club's zone. The time is the app's own
  *  `formatMeetingTime`; `format.ts` has no weekday-only helper, so the weekday
  *  uses its `APP_LOCALE`. */
-function droppedAt(at: Date, timeZone: string): string {
+export function droppedAt(at: Date, timeZone: string): string {
 	const day = new Intl.DateTimeFormat(APP_LOCALE, {
 		weekday: "short",
 		timeZone,

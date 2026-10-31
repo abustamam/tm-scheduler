@@ -1,5 +1,9 @@
 import { Link } from "@tanstack/react-router";
-import { Circle, CircleCheck, Presentation } from "lucide-react";
+import { Circle, CircleCheck, Presentation, Share2 } from "lucide-react";
+import { toast } from "sonner";
+import { droppedAt } from "#/components/club/cover-chip";
+import { Button } from "#/components/ui/button";
+import { buildCoverCall, coverLink } from "#/lib/cover";
 import type { MeetingReadiness, ReadinessGap } from "#/lib/meeting-readiness";
 
 /** How many gaps a row names before it says "+N more". The data never truncates. */
@@ -9,13 +13,44 @@ const MAX_GAPS_SHOWN = 3;
 const gapText = (gap: ReadinessGap): string =>
 	`${gap.slotLabel} (${gap.holderName ?? "open"})`;
 
+/** "Open: Sam dropped it Tue 9:14pm" / "Sam is finding cover". */
+function coverNote(
+	cover: NonNullable<ReadinessGap["cover"]>,
+	timezone: string,
+): string {
+	return cover.status === "dropped"
+		? `Open: ${cover.releasedName} dropped it ${droppedAt(new Date(cover.releasedAt), timezone)}`
+		: `${cover.releasedName} is finding cover`;
+}
+
+/**
+ * The officer's own group call (#1441): the share sheet where the browser has
+ * one (phones), the clipboard otherwise. A person sends it; nothing here does.
+ */
+async function shareCoverCall(text: string): Promise<void> {
+	try {
+		if (typeof navigator.share === "function") {
+			await navigator.share({ text });
+			return;
+		}
+		await navigator.clipboard.writeText(text);
+		toast.success("Copied. Paste it to the group.");
+	} catch (err) {
+		// Closing the share sheet is a choice, not a failure.
+		if (err instanceof DOMException && err.name === "AbortError") return;
+		toast.error("Couldn't copy. Your browser blocked clipboard access");
+	}
+}
+
 /**
  * "Is this meeting ready?" in one card (#963), for club admins and that
  * meeting's Toastmaster of the Day.
  *
- * READ-ONLY, on purpose. It names who is behind and sends nothing, writes
- * nothing and has no button: asking a person is the reader's own move, from the
- * agenda directly below, which keeps its nudge drafts unchanged. That is
+ * READ-ONLY, on purpose. It names who is behind and sends nothing and writes
+ * nothing: asking a person is the reader's own move, from the agenda directly
+ * below, which keeps its nudge drafts unchanged. The one button is a role a
+ * member handed back (#1441): it DRAFTS the group call for the officer to send.
+ * That is
  * `.out-of-scope/automatic-open-role-nudges.md` and ADR-0028 (humans send every
  * message) applied to a panel that could otherwise grow a "remind them" button.
  *
@@ -30,12 +65,15 @@ export function MeetingReadinessPanel({
 	readiness,
 	clubId,
 	meetingId,
+	timezone,
 }: {
 	readiness: MeetingReadiness;
 	/** The club slug the route links with. */
 	clubId: string;
 	/** The meeting key the route links with (`urlKey`), not necessarily the uuid. */
 	meetingId: string;
+	/** The club's zone, for the "dropped it Tue 9:14pm" note. */
+	timezone: string;
 }) {
 	// Built the way `MeetingToolbar`'s Present link is: the same route, the same
 	// params (the route's club slug and URL meeting key) and a new tab, so the
@@ -109,10 +147,57 @@ export function MeetingReadinessPanel({
 								<span className="sr-only">
 									{item.done ? ", done" : ", not done"}
 								</span>
-								{shown.length > 0 ? (
+								{shown
+									.filter((gap) => gap.cover)
+									.map((gap) => {
+										const cover = gap.cover;
+										if (!cover) return null;
+										return (
+											<div
+												key={gap.slotId}
+												data-testid={`readiness-cover-${gap.slotId}`}
+												className="mt-1.5 space-y-1.5"
+											>
+												<p className="text-xs">
+													<span className="font-semibold">{gap.slotLabel}</span>{" "}
+													<span className="text-warning-foreground">
+														{coverNote(cover, timezone)}
+													</span>
+												</p>
+												<Button
+													type="button"
+													variant="outline"
+													size="sm"
+													onClick={() =>
+														shareCoverCall(
+															buildCoverCall({
+																role: gap.slotLabel,
+																when: cover.weekday,
+																link: coverLink(
+																	window.location.origin,
+																	clubId,
+																	meetingId,
+																	gap.slotId,
+																),
+															}),
+														)
+													}
+												>
+													<Share2 className="size-4" aria-hidden />
+													Copy "we need a {gap.slotLabel}"
+												</Button>
+											</div>
+										);
+									})}
+								{shown.some((gap) => !gap.cover) || more > 0 ? (
 									<p className="text-muted-foreground text-xs">
-										{shown.map(gapText).join(", ")}
-										{more > 0 ? `, +${more} more` : ""}
+										{shown
+											.filter((gap) => !gap.cover)
+											.map(gapText)
+											.join(", ")}
+										{more > 0
+											? `${shown.some((gap) => !gap.cover) ? ", " : ""}+${more} more`
+											: ""}
 									</p>
 								) : null}
 							</div>

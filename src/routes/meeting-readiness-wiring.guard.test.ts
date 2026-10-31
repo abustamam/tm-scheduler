@@ -100,7 +100,15 @@ describe("the meeting route wires the readiness panel (#963)", () => {
 		expect(decision).toMatch(
 			/canSeeMeetingReadiness\([^)]*\)\s*&&\s*showsMeetingReadiness\(/,
 		);
-		expect(decision).toMatch(/meetingReadiness\(\{\s*meeting,\s*slots\s*\}\)/);
+		expect(decision).toMatch(/meetingReadiness\(\{\s*meeting,\s*slots,/);
+		// #1441: the cover inputs, off the page's own data and its one clock.
+		for (const arg of [
+			"coverRequests,",
+			"now,",
+			"timezone,",
+			"scheduledAt: meeting.scheduledAt,",
+		])
+			expect(sliceIn(decision, "meetingReadiness({", "})")).toContain(arg);
 		expect(decision.trimEnd().endsWith(": null;")).toBe(true);
 	});
 

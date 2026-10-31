@@ -760,7 +760,14 @@ function MeetingView() {
 			timezone,
 			now,
 		})
-			? meetingReadiness({ meeting, slots })
+			? meetingReadiness({
+					meeting,
+					slots,
+					coverRequests,
+					now,
+					timezone,
+					scheduledAt: meeting.scheduledAt,
+				})
 			: null;
 	const canComplete = meetingDateReached(meeting.scheduledAt, timezone, now);
 	// Cancel is offered on a scheduled meeting that is not completed and has not
@@ -2590,6 +2597,7 @@ function MeetingView() {
 							readiness={readiness}
 							clubId={clubId}
 							meetingId={urlKey}
+							timezone={timezone}
 						/>
 					) : null}
 
