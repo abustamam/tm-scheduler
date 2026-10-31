@@ -36,8 +36,6 @@ type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 export const ONLY_HOLDER_MESSAGE =
 	"Only the person holding this role can hand it off.";
 export const ALREADY_TAKEN_MESSAGE = "Someone already took it.";
-export const NOT_A_COVER_RELEASE_MESSAGE =
-	"That role was dropped when you said you can't come, so there is nothing to undo.";
 export const NOT_COMING_UNDO_MESSAGE =
 	"You're marked as not coming to that meeting.";
 export const ONLY_RELEASER_MESSAGE =
@@ -113,6 +111,13 @@ export async function releaseOwnSlotForCoverCore(
  * open and the caller is the open request's releaser; otherwise "Someone already
  * took it."
  *
+ * Refusals, all before any write: `ALREADY_TAKEN_MESSAGE` (no open request, the
+ * slot is no longer open, or the caller is not the releaser) and
+ * `NOT_COMING_UNDO_MESSAGE` (the releaser reads not_coming for the meeting).
+ * Any request kind is undoable otherwise, a decline's `dropped` row included
+ * (maintainer decision 2026-10-31, #1454; supersedes #1438's "Undo refuses
+ * `dropped`").
+ *
  * Deletes the request and writes the three `prior_*` values back onto the slot
  * with the releaser as holder, in one transaction, and NOT through
  * `claimSlotCore`: a claim would reset the status to `claimed`, stamp `claimed_at`
@@ -175,10 +180,12 @@ export async function undoReleaseForCoverCore(
 	) {
 		throw new Error(ALREADY_TAKEN_MESSAGE);
 	}
-	// Undo is for a release the member made to find cover. A `dropped` row is a
-	// decline's, and a late "not coming" answer outranks a role handed back:
-	// `claimSlotCore` refuses that member the same way. Both before any write.
-	if (request.kind === "dropped") throw new Error(NOT_A_COVER_RELEASE_MESSAGE);
+	// Undo refuses while the releaser reads not_coming, whatever the request's
+	// kind: a late "not coming" outranks a role handed back, as `claimSlotCore`
+	// refuses that member. A `dropped` row comes from a decline or from the
+	// sheet's "Drop it anyway" (#1454); once the member reads Coming again even a
+	// decline's row is undoable, by decision (2026-10-31), superseding #1438.
+	// Before any write.
 	if (
 		await isMemberNotComing(tx, {
 			memberId: args.actorMemberId,
