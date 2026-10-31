@@ -122,17 +122,18 @@ const SESSION_TIMEOUT_MS = 3000;
  * way (`useSessionVoter`): read-only, only asked once `useSession` reports a
  * user, and a failed lookup or a timeout means "no session member".
  *
- * The FIRST answer is final for this page view, with one exception (#1457): a
- * TIMEOUT's "no session member" is provisional. `useSession`'s request can
- * start late on this route, after the timer (which counts from mount) has
- * fired, so a real member answer arriving later still wins while `canUpgrade`
- * holds (nobody has picked a name). `useSession` can also drop and come back on
- * a mounted page, and a late or retried success must not swap the identity
- * under someone who has since picked their name, so `canUpgrade` is false then.
+ * A real member answer wins whenever it arrives, unless the visitor acted during
+ * THIS page view in a way it would undo (#1457): picked a name, cleared one, or
+ * entered guest mode (`visitorActedThisView`). A "no member" decision (a timeout,
+ * a signed-out answer, an errored or aborted get-session, a user who is not on
+ * the roster) is always provisional: `useSession`'s request can start late on
+ * this route, after the timer (which counts from mount) has fired. A name stored
+ * by an EARLIER visit is not an action of this view, so a session replaces it.
+ * Once a member is decided, that answer is final for the page view.
  */
 function useSessionMember(
 	meetingId: string,
-	canUpgrade: boolean,
+	visitorActedThisView: boolean,
 ): {
 	pending: boolean;
 	member: StoredMember | null;
@@ -156,7 +157,6 @@ function useSessionMember(
 
 	const [decided, setDecided] = useState<{
 		member: StoredMember | null;
-		provisional?: true;
 	}>();
 	const live: { member: StoredMember | null } | undefined = isPending
 		? undefined
@@ -172,13 +172,14 @@ function useSessionMember(
 	// Set during render: React re-renders at once with the latched value and
 	// never commits the intermediate output.
 	if (decided === undefined && live !== undefined) setDecided(live);
-	else if (decided?.provisional && canUpgrade && live?.member) setDecided(live);
+	else if (decided?.member === null && !visitorActedThisView && live?.member)
+		setDecided(live);
 
 	const undecided = decided === undefined;
 	useEffect(() => {
 		if (!undecided) return;
 		const timer = setTimeout(
-			() => setDecided((d) => d ?? { member: null, provisional: true }),
+			() => setDecided((d) => d ?? { member: null }),
 			SESSION_TIMEOUT_MS,
 		);
 		return () => clearTimeout(timer);
@@ -192,8 +193,23 @@ function useSessionMember(
 function RsvpPage() {
 	const { clubId, clubName, timezone, meeting } = Route.useLoaderData();
 	const { clubId: clubKey, meetingId: meetingKey } = Route.useParams();
-	const { member: picked, setMember, clearMember } = useCurrentMember(clubKey);
-	const session = useSessionMember(meeting.id, picked === null);
+	const {
+		member: picked,
+		setMember: storePick,
+		clearMember: clearPick,
+	} = useCurrentMember(clubKey);
+	// Set by a pick, a clear or guest mode in THIS page view; a late session
+	// answer must not undo any of them (#1457).
+	const [visitorActedThisView, setVisitorActedThisView] = useState(false);
+	const setMember = (m: StoredMember) => {
+		setVisitorActedThisView(true);
+		storePick(m);
+	};
+	const clearMember = () => {
+		setVisitorActedThisView(true);
+		clearPick();
+	};
+	const session = useSessionMember(meeting.id, visitorActedThisView);
 	const member = session.member ?? picked;
 	const signedIn = session.member !== null;
 	const queryClient = useQueryClient();
@@ -278,7 +294,10 @@ function RsvpPage() {
 						<Button
 							variant="outline"
 							className="min-h-11 w-full"
-							onClick={() => setGuestMode(true)}
+							onClick={() => {
+								setVisitorActedThisView(true);
+								setGuestMode(true);
+							}}
 						>
 							I'm a guest
 						</Button>
