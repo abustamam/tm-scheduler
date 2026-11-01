@@ -126,7 +126,7 @@ const LG_BREAKPOINT_PX = 1024;
  * claimed "sharing `AttendanceRow`'s shell verbatim is what stops the two modes
  * drifting apart", and what it had actually copied was the `<li>` class list: the
  * CONTENTS stayed pre-#594, so every fix that rebuild made for this 340px column
- * was missing from half the rows — a `truncate` single-line cutoff on unbounded
+ * was missing from half the rows — a single-line `truncate` cutoff on unbounded
  * names, the full role name in an unshrinkable `whitespace-nowrap` badge (~136px
  * of a ~292px column for "Toastmaster of the Day"), word-labelled contact buttons,
  * and no fixed action track at all, so the chip stretched full width and the
@@ -161,7 +161,8 @@ function PanelRow({ children }: { children: ReactNode }) {
  *  renders an unbounded name at full height. One constant, applied to whichever
  *  element is the text box, is what makes the linked row obey the same ceiling
  *  as the plain one. */
-const IDENTITY_NAME_CLASS = "min-w-0 truncate text-sm font-semibold";
+export const IDENTITY_NAME_CLASS =
+	"min-w-0 break-words line-clamp-2 text-sm font-semibold";
 
 /** Identity line. The name owns it — at 2-4 characters the role code costs it
  *  almost nothing, which is the whole reason the code replaced the full role name
@@ -229,8 +230,8 @@ function PanelIdentityLine({
 					 * (profile, pathways, path options, enrollments).
 					 *
 					 * This rail is a ~40-row PINNED column, which on the iPad it is run
-					 * from is scrolled by dragging — and `flex-1` in
-					 * `IDENTITY_NAME_CLASS` makes each anchor the full remaining width
+					 * from is scrolled by dragging — and the identity
+					 * wrapper's `flex-1` makes each anchor the full remaining width
 					 * of the row, so a drag starts on an anchor nearly every time. Every
 					 * such touch would fire four server fns for a page nobody is opening,
 					 * on club wifi, mid-meeting. Desktop loses a hover prefetch; that is
@@ -293,22 +294,40 @@ function PanelIdentityLine({
  *  No `flex-wrap` (#1309): the contact drafts are ONE `Contact <name>` menu
  *  icon now, so the line is the status track plus a 32px icon and never needs a
  *  second line, whatever channels the member prefers. The identity beside it
- *  is what gives way (`min-w-0` + `truncate`).
+ *  is what gives way (`min-w-0` + a two-line clamp); on a phone the whole line drops
+ *  under it (`PanelMainLine`, #1420).
  *  `pinned-column-reachability.test.ts` holds this under a forced 15px
  *  scrollbar. */
 function PanelActionLine({ children }: { children: ReactNode }) {
 	return (
-		<div className="flex shrink-0 items-center justify-end gap-3">
+		<div className="flex shrink-0 items-center justify-end gap-3 max-lg:@max-md:justify-start">
 			{children}
 		</div>
 	);
 }
 
-/** The ONE line of a roll row (#1309): identity on the left, which gives way
- *  (`min-w-0` + `truncate`), and the status control plus the contact menu on
- *  the right, which do not. */
+/** A row's main line. Identity on the left, which gives way (`min-w-0` + a
+ *  two-line clamp, #1420), and the status control plus the contact menu on the
+ *  right, which do not (#1309): ONE line, everywhere but a phone.
+ *
+ *  ON A PHONE (#1420, maintainer decision 2026-11-01) the action line drops
+ *  under the identity. The meeting page gives the panel 343px at a 375px
+ *  viewport, and the fixed controls cost 144 + 12 + 32 = 188px of the ~293px
+ *  list, so beside a "TD" chip the name had ~57px and beside "TOASTM" ~24px:
+ *  a 14-character name clamped, and a two-word name wrapped. Stacked, the name
+ *  gets the row (minus the chip); the status keeps its 144px track.
+ *
+ *  Both conditions are needed. `max-lg:` (viewport) is what keeps the 340px
+ *  `lg` rail on one line: the rail is narrower than the phone's list, so the
+ *  container query alone would stack it. `@max-md:` (the list, `@container`
+ *  on the `<ul>`) is what keeps a full-width tablet panel (below `lg`, but
+ *  >= 28rem) on one line. `PanelActionLine` carries the matching alignment. */
 function PanelMainLine({ children }: { children: ReactNode }) {
-	return <div className="flex items-center gap-2">{children}</div>;
+	return (
+		<div className="flex items-center gap-2 max-lg:@max-md:flex-col max-lg:@max-md:items-stretch">
+			{children}
+		</div>
+	);
 }
 
 function AttendanceRow({
@@ -509,10 +528,13 @@ function AttendanceRow({
 							 *  blocked); accepted, since hiding "asked" would make the "Asked"
 							 *  menu item look like a no-op. ("Not coming" carries no qualifier and
 							 *  is under 144px.)
-							 *  On a line the narrow track costs 144 + the 12px `gap-3` + the 32px
-							 *  contact-menu icon = 188px, leaving the identity (`min-w-0`,
-							 *  truncating) the rest of the row; the rail and phone cases in
-							 *  `roll-row-geometry.test.ts` hold that. */}
+							 *  Beside the identity (the 340px rail, a wide tablet panel) the
+							 *  narrow track costs 144 + the 12px `gap-3` + the 32px contact-menu
+							 *  icon = 188px, leaving the identity (`min-w-0`, clamped to two
+							 *  lines) the rest of the row. On a phone the action line sits under
+							 *  the identity instead (`PanelMainLine`) and the track is the same
+							 *  144px; the rail, phone and tablet cases in `roll-row-geometry.test.ts`
+							 *  hold both. */}
 							<Button
 								variant="outline"
 								size="sm"
@@ -886,9 +908,10 @@ function RollAttendanceRow({
 		// The rail's row (v1.19.0.0, #594), SHARED as code rather than as a copied
 		// class list — see `PanelRow` for what the copy had missed. Both modes now
 		// render the same three components, so the row is one thing again: ONE
-		// line (#1309), the identity (name and short role code, which truncates) on
-		// the left and the action line on the right, holding the status control in
-		// its fixed track and the one contact-menu icon.
+		// line (#1309; the action line drops under the identity on a phone, #1420),
+		// the identity (name and short role code; the name may wrap to two lines)
+		// on the left and the action line on the right, holding the status control
+		// in its fixed track and the one contact-menu icon.
 		<PanelRow>
 			<PanelMainLine>
 				<PanelIdentityLine
@@ -930,14 +953,17 @@ function RollAttendanceRow({
 					)}
 				</PanelActionLine>
 			</PanelMainLine>
-			{/* #1049. Its OWN right-aligned line under the chip, not a third item
-			 *  on the action line: the status track plus the contact-menu icon
-			 *  already fill most of the line at a phone's width, and squeezing the
-			 *  toggle in would move the chip off the rail's one right edge. Present rows only
+			{/* #1049. Its OWN line under the chip, not a third item on the action
+			 *  line: the status track plus the contact-menu icon already fill most
+			 *  of the line at a phone's width, and squeezing the toggle in would
+			 *  move the chip off the rail's one right edge. It is right-aligned
+			 *  on the rail and the tablet panel, and left-aligned on a phone, under
+			 *  the same condition as `PanelActionLine`, so the status and the toggle
+			 *  share a left edge there. Present rows only
 			 *  — someone absent or excused was in neither place, and the server
 			 *  clears the mode for them. Same disabled condition as the chip. */}
 			{row.status === "present" && onSetMode ? (
-				<div className="flex justify-end">
+				<div className="flex justify-end max-lg:@max-md:justify-start">
 					<AttendanceModeToggle
 						name={row.name}
 						mode={row.mode}

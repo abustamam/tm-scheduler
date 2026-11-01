@@ -1,33 +1,44 @@
 /**
- * A roll row is ONE line at a phone's width (#1309): name, role chip, status
- * trigger and the contact-menu trigger share a line, and the row is at most
- * 48px tall.
+ * A roll row's geometry at the widths the meeting page really gives it.
+ *
+ * ONE LINE (#1309) wherever the panel sits beside its controls: name, role
+ * chip, status trigger and contact-menu trigger share a line and the row is at
+ * most 48px tall. That is the 340px `lg` rail, the 384px `xl` rail and a
+ * full-width tablet panel. ON A PHONE (#1420) the status line drops UNDER the
+ * identity (name and role chip), so the name gets the row instead of the ~57px
+ * (beside "TD") or ~24px (beside "TOASTM") the controls left it.
  *
  * jsdom performs no layout and loads no stylesheet, so the component tests can
  * only see that a class is present, which is the half that is not the bug: a
  * `flex-wrap` that comes back, a name that stops being the shrinkable item, a
- * status track a few px too wide each satisfy every grep and leave the row on
- * two lines. Only a browser tells them apart.
+ * status track a few px too wide, a restack condition that reaches the rail,
+ * each satisfy every grep. Only a browser tells them apart.
  *
  * The class strings come out of the real source files (comment-blind), so
- * stripping any one of them from the component fails this. The markup BETWEEN
- * them is synthetic: mounting the real rail needs the router, the server fns
- * and the offline queue. Pair it with `meeting-attendance-panel.test.tsx`,
- * which pins what renders.
+ * stripping any one of them from the component fails this. The wrappers are the
+ * REAL page's: the route's `containerClass` gutter, its `flex flex-col gap-5
+ * lg:flex-row` column wrapper and its `<aside>`, read from the route file. The
+ * markup BETWEEN the panel's classes and the contents of a row are synthetic:
+ * mounting the real panel needs the router, the server fns and the offline
+ * queue. Pair it with `meeting-attendance-panel.test.tsx`, which pins what
+ * renders.
+ *
+ * "375px" is a 375px-wide box around those wrappers, not a window: headless
+ * Chrome lays no window out narrower than 500px. The window stays below every
+ * breakpoint the page uses at a phone (`sm` 640, `lg` 1024), so each media
+ * query answers as it would on a 375px phone.
  *
  * Scope, as the issue states it: a row with a RECORDED, non-present status.
  * A Present row also carries the in-person/online toggle (#1049) on its own
- * line, so it is taller by design and is not measured here.
+ * line, so it is taller by design; its height is not measured, only where the
+ * toggle sits horizontally (left with the status on a phone, right on the
+ * rail).
  *
- * The CONTROLS at the bottom are what let the rest fail: the old two-line shape
- * rebuilt from the same classes must measure taller than 48px, and the
- * viewport-keyed track (`md:`, no container, 24px of card padding) must leave
- * the real rail's identity box under its floor.
- *
- * The RAIL cases run the route's real `<aside>` classes at the two viewports
- * that fix its width (1024px: `lg:w-[340px]`; 1440px: `xl:w-96`), because the
- * bug was that the status track followed the VIEWPORT while the rail is
- * narrower than a phone.
+ * The CONTROLS are what let the rest fail: the old two-line shape rebuilt from
+ * the same classes must measure taller than 48px, the viewport-keyed track
+ * (`md:`, no container, 24px of card padding) must leave the real rail's
+ * identity box under its floor, and the phone page WITHOUT the restack must
+ * leave the name its old ~57px / ~24px.
  */
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,6 +57,7 @@ const NUDGE = resolve(HERE, "nudge-buttons.tsx");
 const BADGE = resolve(HERE, "../ui/badge.tsx");
 const BUTTON = resolve(HERE, "../ui/button.tsx");
 const CARD = resolve(HERE, "../ui/card.tsx");
+const TOGGLE = resolve(HERE, "attendance-mode-toggle.tsx");
 const ROUTE = resolve(HERE, "../../routes/club.$clubId.meeting.$meetingId.tsx");
 
 /** First `className="…"` after `tag`, in comment-stripped source. */
@@ -102,14 +114,15 @@ describe("roll-row geometry harness availability", () => {
 	});
 });
 
-/** Headless Chrome lays no window out narrower than 500px, so the PAGE is
- *  pinned to a phone's 375px instead; the probe reports the real
- *  `window.innerWidth`, and the assertions use that, not this request. */
+/** A phone's width. The page sits in a box this wide inside a 500px window
+ *  (see the header); the probe reports the real `window.innerWidth`. */
 const PHONE_PX = 375;
 const VIEWPORT = { width: 500, height: 800 };
-/** Tailwind's `md` breakpoint. The status track no longer follows it (it is a
- *  container query on the list now), so the phone cases still assert the
- *  viewport is below it only to prove they measure a phone. */
+/** The route's gutter below `sm` (`px-4`): the panel is the page less this. */
+const PHONE_GUTTER_PX = 32;
+/** `sm:px-7` (28px a side) applies from 640px, so at the 800px tablet window. */
+const TABLET_GUTTER_PX = 56;
+/** Tailwind's `md` breakpoint; the phone cases assert the window is below it. */
 const MD_PX = 768;
 /** The two viewports that fix the rail's width: `lg` (1024px) makes the aside
  *  340px, `xl` (1280px, tested at 1440) makes it 384px. */
@@ -117,16 +130,17 @@ const LG_VIEWPORT = { width: 1024, height: 800 };
 const XL_VIEWPORT = { width: 1440, height: 800 };
 const LG_RAIL_PX = 340;
 const XL_RAIL_PX = 384;
-/** A stacked tablet panel: `md` is on, `lg` is off, so the card is the page's
- *  width, and its list is wide enough for the `@md` (28rem) container query. */
+/** A full-width tablet panel: `md` is on, `lg` is off, so the panel is the page
+ *  less the gutters, and its list is wide enough for the `@md` (28rem) query. */
 const TABLET_VIEWPORT = { width: 800, height: 800 };
-const TABLET_PANEL_PX = 720;
 /** `@md` is `min-width: 28rem`. */
 const CONTAINER_MD_PX = 448;
-/** Card border (1px a side) plus `px-6` (24px a side): list width = card - 50. */
+/** Card border (1px a side) plus `px-6` (24px a side) below `lg`. */
 const CARD_CHROME_PX = 50;
+/** At `lg` the card's body is `lg:px-4`: border plus 16px a side. */
+const CARD_CHROME_LG_PX = 34;
 
-type Shape = "oneLine" | "twoLine" | "plan";
+type Shape = "roll" | "twoLine" | "plan";
 /** The widest label a plan trigger shows (an assumed Coming), and a long role
  *  code; the real chip shows the code, not the role name. */
 const PLAN_STATUS = "Coming";
@@ -137,11 +151,23 @@ type Qualifier = "assumed" | "asked";
 const PLAN_CODE = "TOASTM";
 /** The widest label a roll trigger shows. */
 const ROLL_LABEL = "Excused";
-
-const NAME = "Abdul-Rasheed Bustamam-Featherstonehaugh";
+/** A short name: one word, so it fits one line even in the narrowest name box
+ *  the single-line cases produce (24px, beside the widest role chip in a 340px
+ *  rail). The one-line height cases use it; a two-word name wraps in that rail
+ *  box, by design (#1420). */
+const NAME = "Al";
+/** A short TWO-word name (#1420 AC3): one line on a phone, beside any chip. */
+const TWO_WORD_NAME = "Ann Lee";
+/** About 14 characters (#1420): too wide for the box a role code leaves beside
+ *  the controls, so it must be shown whole once the controls drop under it. */
+const MID_NAME = "Demo Presenter";
+/** Too long for two lines anywhere, with a word wider than the box too. */
+const LONG_NAME =
+	"Abdul-Rasheed Bustamam-Featherstonehaugh Cholmondeley-Wellington";
 
 type Measure = {
 	innerWidth: number;
+	/** The `<aside>` the panel sits in. */
 	railWidth: number;
 	/** The `<ul>` every row's width (and the `@md:` track) is measured against. */
 	listWidth: number;
@@ -156,7 +182,14 @@ type Measure = {
 	chipMid: number;
 	statusMid: number;
 	menuMid: number;
-	nameTruncated: boolean;
+	/** The status trigger starts below the identity: the phone restack. */
+	stacked: boolean;
+	/** Rendered lines of the name: its box height over its line height. */
+	nameLines: number;
+	/** The name has content hidden below its box (the clamp's ellipsis). */
+	nameClippedV: boolean;
+	/** The name has content hidden past its right edge. */
+	nameClippedH: boolean;
 	/** The name's box width: what is left for it after the controls. */
 	nameWidth: number;
 	/** The status label's visible text (`innerText`: a `display:none` span is absent). */
@@ -168,76 +201,142 @@ type Measure = {
 	pageOverflow: number;
 	/** Right-most control edge minus the row's right edge; > 0 is clipped. */
 	overhang: number;
+	/** The phone's 375px box: its scroll width minus its width. The WINDOW is
+	 *  500px, so `pageOverflow` cannot see a row that spills past 375px. Falls
+	 *  back to `pageOverflow` where there is no box. */
+	boxOverflow: number;
+	/** Left edge of the status trigger and the row's content-left / right. */
+	statusLeft: number;
+	rowLeft: number;
+	rowRight: number;
+	/** The mode toggle's edges, `NaN` on a row without one. */
+	toggleLeft: number;
+	toggleRight: number;
 };
 
+const CLASS_KEYS = [
+	"pageBox",
+	"columns",
+	"leftColumn",
+	"aside",
+	"cardBase",
+	"card",
+	"cardHeaderBase",
+	"cardHeader",
+	"cardBodyBase",
+	"cardBody",
+	"list",
+	"row",
+	"mainLine",
+	"identity",
+	"name",
+	"linkName",
+	"badgeBase",
+	"badgeSecondary",
+	"chipBadge",
+	"actionLine",
+	"buttonBase",
+	"outline",
+	"ghost",
+	"sm",
+	"iconSm",
+	"status",
+	"planStatus",
+	"assumedMuted",
+	"qualifier",
+	"qualifierAsked",
+	"menuTrigger",
+	"toggleLine",
+	"toggle",
+] as const;
+type Classes = Record<(typeof CLASS_KEYS)[number], string>;
+
+type RowOptions = {
+	shape: Shape;
+	word?: Qualifier;
+	c?: Classes;
+	name?: string;
+	tag?: "span" | "a";
+	/** The role chip's text; `null` is a row with no role code. */
+	code?: string | null;
+	/** A Present row's #1049 in-person/online toggle, on its own line. */
+	toggle?: boolean;
+};
+
+type MeasureOptions = Omit<RowOptions, "shape"> & {
+	viewport?: { width: number; height: number };
+	/** The page's width: the real wrappers sit in a box this wide. Omitted, the
+	 *  page is the window itself (the `lg` / `xl` / tablet cases). */
+	pagePx?: number;
+	theme?: "light" | "dark";
+};
+
+/** Light and dark each paint the row from its own tokens (`styles.css`). */
+const THEMES = ["light", "dark"] as const;
+
 describe.skipIf(!hasChrome)(
-	"a roll row at a phone's width (#1309)",
+	"a roll row at the widths the meeting page gives it (#1309, #1420)",
 	{ timeout: CHROME_TEST_TIMEOUT_MS },
 	() => {
 		let css = "";
-		const cls = {
-			aside: "",
-			cardBase: "",
-			card: "",
-			cardHeaderBase: "",
-			cardHeader: "",
-			cardBodyBase: "",
-			cardBody: "",
-			list: "",
-			row: "",
-			mainLine: "",
-			identity: "",
-			name: "",
-			badgeBase: "",
-			badgeSecondary: "",
-			chipBadge: "",
-			actionLine: "",
-			buttonBase: "",
-			outline: "",
-			ghost: "",
-			sm: "",
-			iconSm: "",
-			status: "",
-			planStatus: "",
-			qualifier: "",
-			qualifierAsked: "",
-			menuTrigger: "",
-		};
-
-		type Classes = typeof cls;
+		const cls = Object.fromEntries(CLASS_KEYS.map((k) => [k, ""])) as Classes;
 		/** The classes as they were before the track followed the panel's width. */
 		let preFix: Classes;
-
-		/** Where the rail sits: a div pinned to a width (a phone, a stacked
-		 *  tablet panel), or the route's real `<aside>`, whose width the
-		 *  VIEWPORT decides through its `lg:` / `xl:` classes. */
-		type Rail = { px: number } | "aside";
+		/** The phone page without the restack: the controls stay beside the name. */
+		let unstacked: Classes;
 
 		const button = (c: Classes, variant: string, size: string, extra: string) =>
 			`${c.buttonBase} ${variant} ${size} ${extra}`;
 
-		/** One roll row, the shipped classes around synthetic contents. */
-		function rowHtml(
-			shape: Shape,
-			word: Qualifier = "assumed",
-			c: Classes = cls,
-		): string {
+		/** One row, the shipped classes around synthetic contents. */
+		function rowHtml(o: RowOptions): string {
+			const {
+				shape,
+				word = "assumed",
+				c = cls,
+				name = NAME,
+				tag = "span",
+				code,
+			} = o;
 			const plan = shape === "plan";
-			const chipText = plan ? PLAN_CODE : "TD";
-			const identity = `<div class="${c.identity}" data-identity><span class="${c.name}" title="${NAME}" data-name>${NAME}</span><span data-slot="badge" class="${c.badgeBase} ${c.badgeSecondary} ${c.chipBadge}" data-chip><span aria-hidden>${chipText}</span></span></div>`;
-			const status = `<button type="button" class="${button(c, c.outline, c.sm, plan ? c.planStatus : c.status)}" data-status><span class="sr-only">${NAME} status</span><span aria-hidden data-label>${plan ? `${PLAN_STATUS}<span class="${word === "assumed" ? c.qualifier : c.qualifierAsked}">${word === "assumed" ? PLAN_QUALIFIER : ASKED_QUALIFIER}</span>` : ROLL_LABEL}</span><svg class="size-3.5" viewBox="0 0 24 24" width="14" height="14"></svg></button>`;
-			const menu = `<button type="button" class="${button(c, c.ghost, c.iconSm, c.menuTrigger)}" aria-label="Contact ${NAME}" data-menu><svg class="size-4" viewBox="0 0 24 24" width="16" height="16"></svg></button>`;
+			const chipText = code === undefined ? (plan ? PLAN_CODE : "TD") : code;
+			const nameClass = tag === "a" ? `${c.name} ${c.linkName}` : c.name;
+			const chip =
+				chipText === null
+					? ""
+					: `<span data-slot="badge" class="${c.badgeBase} ${c.badgeSecondary} ${c.chipBadge}" data-chip><span aria-hidden>${chipText}</span></span>`;
+			const identity = `<div class="${c.identity}" data-identity><${tag} class="${nameClass}" title="${name}" data-name${tag === "a" ? ' href="#"' : ""}>${name}</${tag}>${chip}</div>`;
+			const status = `<button type="button" class="${button(c, c.outline, c.sm, plan ? c.planStatus : c.status)}" data-status><span class="sr-only">${name} status</span><span aria-hidden data-label>${plan ? `${PLAN_STATUS}<span class="${word === "assumed" ? c.qualifier : c.qualifierAsked}">${word === "assumed" ? PLAN_QUALIFIER : ASKED_QUALIFIER}</span>` : ROLL_LABEL}</span><svg class="size-3.5" viewBox="0 0 24 24" width="14" height="14"></svg></button>`;
+			const menu = `<button type="button" class="${button(c, c.ghost, c.iconSm, c.menuTrigger)}" aria-label="Contact ${name}" data-menu><svg class="size-4" viewBox="0 0 24 24" width="16" height="16"></svg></button>`;
 			const actions = `<div class="${c.actionLine}">${status}${menu}</div>`;
+			const toggleLine = o.toggle
+				? `<div class="${c.toggleLine}"><fieldset class="${c.toggle}" data-toggle><button type="button">In person</button><button type="button">Online</button></fieldset></div>`
+				: "";
 			// The CONTROL: the pre-#1309 shape, the action line under the identity.
 			const inner =
 				shape !== "twoLine"
-					? `<div class="${c.mainLine}">${identity}${actions}</div>`
+					? `<div class="${c.mainLine}">${identity}${actions}</div>${toggleLine}`
 					: `<div class="flex flex-col gap-1.5">${identity}${actions}</div>`;
 			// A divider-bearing row ABOVE it, as in the real list, so the measured
 			// row is the second and carries no `last:` exemption surprises. The list
 			// carries the panel's own `@container` class: the status track's `@md:`
-			// arm is measured against it.
-			return `<ul class="${c.list}" data-list><li class="${c.row}">${identity.replace(/data-[a-z]+/g, "")}</li><li class="${c.row}" data-row>${inner}</li></ul>`;
+			// arm and the phone restack are measured against it.
+			return `<ul class="${c.list}" data-list><li class="${c.row}">${identity.replace(/ data-[a-z]+/g, "")}</li><li class="${c.row}" data-row>${inner}</li></ul>`;
+		}
+
+		/** The meeting page's wrappers around the panel's card, every class read
+		 *  from the route: container gutter, column wrapper, `<aside>`. */
+		function pageHtml(o: MeasureOptions & RowOptions): string {
+			const c = o.c ?? cls;
+			const card = `<div class="${c.cardBase} ${c.card}"><div class="${c.cardHeaderBase} ${c.cardHeader}" data-header>Planned attendance</div><div class="${c.cardBodyBase} ${c.cardBody}" data-body>${rowHtml(o)}</div></div>`;
+			const page = `<div class="${c.pageBox}"><div class="${c.columns}"><div class="${c.leftColumn}"></div><aside class="${c.aside}" data-rail>${card}</aside></div></div>`;
+			const boxed =
+				o.pagePx === undefined
+					? page
+					: `<div style="width:${o.pagePx}px" data-page>${page}</div>`;
+			// `.dark` carries the dark tokens and `dark:` variants; the page's own
+			// `bg-background text-foreground` is what `body` would paint.
+			return `<div class="bg-background text-foreground" data-theme="${o.theme ?? "light"}">${boxed}</div>`;
 		}
 
 		const PROBE = `<script>
@@ -248,8 +347,9 @@ describe.skipIf(!hasChrome)(
 			var st = q("[data-status]"), menu = q("[data-menu]"), rail = q("[data-rail]");
 			var ident = q("[data-identity]"), list = q("[data-list]");
 			var header = q("[data-header]"), body = q("[data-body]");
-			if (!row || !nm || !chip || !st || !menu || !rail || !ident || !list || !header || !body) return fail("missing element");
+			if (!row || !nm || !st || !menu || !rail || !ident || !list || !header || !body) return fail("missing element");
 			var r = function (el) { return el.getBoundingClientRect(); };
+			var mid = function (el) { return Math.round(r(el).top + r(el).height / 2); };
 			var out = {
 				innerWidth: window.innerWidth,
 				railWidth: Math.round(r(rail).width),
@@ -258,59 +358,127 @@ describe.skipIf(!hasChrome)(
 				headerInset: parseFloat(getComputedStyle(header).paddingLeft),
 				bodyInset: parseFloat(getComputedStyle(body).paddingLeft),
 				rowHeight: row.clientHeight,
-				nameMid: Math.round(r(nm).top + r(nm).height / 2),
-				chipMid: Math.round(r(chip).top + r(chip).height / 2),
-				statusMid: Math.round(r(st).top + r(st).height / 2),
-				menuMid: Math.round(r(menu).top + r(menu).height / 2),
-				nameTruncated: nm.scrollWidth > nm.clientWidth ? 1 : 0,
+				nameMid: mid(nm),
+				chipMid: mid(chip || nm),
+				statusMid: mid(st),
+				menuMid: mid(menu),
+				stacked: r(st).top >= r(ident).bottom - 1 ? 1 : 0,
+				nameLines: Math.round(r(nm).height / parseFloat(getComputedStyle(nm).lineHeight)),
+				nameClippedV: nm.scrollHeight > nm.clientHeight ? 1 : 0,
+				nameClippedH: nm.scrollWidth > nm.clientWidth ? 1 : 0,
 				nameWidth: Math.round(r(nm).width),
 				labelText: q("[data-label]").innerText,
 				statusWidth: Math.round(r(st).width),
 				statusClip: st.scrollWidth - st.clientWidth,
 				pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-				overhang: Math.round(Math.max(r(st).right, r(menu).right) - r(row).right)
+				overhang: Math.round(Math.max(r(st).right, r(menu).right) - r(row).right),
+				boxOverflow: q("[data-page]") ? q("[data-page]").scrollWidth - q("[data-page]").clientWidth : document.documentElement.scrollWidth - document.documentElement.clientWidth,
+				statusLeft: Math.round(r(st).left),
+				rowLeft: Math.round(r(row).left + parseFloat(getComputedStyle(row).paddingLeft)),
+				rowRight: Math.round(r(row).right - parseFloat(getComputedStyle(row).paddingRight)),
+				toggleLeft: q("[data-toggle]") ? Math.round(r(q("[data-toggle]")).left) : "NaN",
+				toggleRight: q("[data-toggle]") ? Math.round(r(q("[data-toggle]")).right) : "NaN"
 			};
 			document.title = Object.keys(out).map(function (k) { return k + "=" + out[k]; }).join(";");
 		})();
 		</script>`;
 
-		function measure(
-			shape: Shape,
-			opts: {
-				viewport?: { width: number; height: number };
-				word?: Qualifier;
-				rail?: Rail;
-				c?: Classes;
-			} = {},
-		): Measure {
-			const {
-				viewport = VIEWPORT,
-				word = "assumed",
-				rail = { px: PHONE_PX },
-			} = opts;
-			const c = opts.c ?? cls;
-			const railOpen =
-				rail === "aside"
-					? `<aside class="${c.aside}" data-rail>`
-					: `<div style="width:${rail.px}px" data-rail>`;
-			const railClose = rail === "aside" ? "</aside>" : "</div>";
-			const bodyHtml = `${railOpen}<div class="${c.cardBase} ${c.card}"><div class="${c.cardHeaderBase} ${c.cardHeader}" data-header>Planned attendance</div><div class="${c.cardBodyBase} ${c.cardBody}" data-body>${rowHtml(shape, word, c)}</div></div>${railClose}`;
+		/** WCAG contrast of the row's text against what it is painted on, in the
+		 *  theme the wrapper carries. Colours go through a canvas so whatever CSS
+		 *  colour syntax the tokens use (oklch, color-mix) is read as sRGB. */
+		const PAINT_PROBE = `<script>
+		(function () {
+			var q = function (s) { return document.querySelector(s); };
+			// The app puts \`dark\` on <html>, where the :root tokens are redeclared and
+			// re-resolved; a wrapper div would keep the light-resolved ones. The
+			// \`a\` and \`button\` colour transitions would otherwise be read mid-flight.
+			var noMotion = document.createElement("style");
+			noMotion.textContent = "*,*::before,*::after{transition:none!important}";
+			document.head.appendChild(noMotion);
+			var themed = q("[data-theme]").getAttribute("data-theme") === "dark";
+			if (themed) document.documentElement.classList.add("dark");
+			var cv = document.createElement("canvas");
+			cv.width = 1; cv.height = 1;
+			var cx = cv.getContext("2d", { willReadFrequently: true });
+			function rgba(c) {
+				cx.clearRect(0, 0, 1, 1);
+				cx.fillStyle = "#000";
+				cx.fillStyle = c;
+				cx.fillRect(0, 0, 1, 1);
+				var d = cx.getImageData(0, 0, 1, 1).data;
+				return [d[0], d[1], d[2], d[3] / 255];
+			}
+			function over(top, under) {
+				var a = top[3];
+				return [0, 1, 2].map(function (k) { return top[k] * a + under[k] * (1 - a); });
+			}
+			function bgOf(el) {
+				var layers = [];
+				for (var e = el; e; e = e.parentElement) {
+					var c = rgba(getComputedStyle(e).backgroundColor);
+					layers.push(c);
+					if (c[3] >= 1) break;
+				}
+				var base = layers[layers.length - 1];
+				var out = base[3] >= 1 ? base.slice(0, 3) : [255, 255, 255];
+				for (var i = layers.length - (base[3] >= 1 ? 2 : 1); i >= 0; i--) out = over(layers[i], out);
+				return out;
+			}
+			function lum(c) {
+				var f = c.map(function (v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+				return 0.2126 * f[0] + 0.7152 * f[1] + 0.0722 * f[2];
+			}
+			function contrast(el) {
+				var bg = bgOf(el);
+				var fg = over(rgba(getComputedStyle(el).color), bg);
+				var a = lum(fg), b = lum(bg);
+				return ((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)).toFixed(2);
+			}
+			var nm = q("[data-name]"), label = q("[data-label]"), chip = q("[data-chip] span");
+			var out = {
+				dark: document.documentElement.classList.contains("dark") ? 1 : 0,
+				nameContrast: contrast(nm),
+				labelContrast: contrast(label),
+				chipContrast: contrast(chip),
+				nameClipped: nm.scrollHeight > nm.clientHeight || nm.scrollWidth > nm.clientWidth ? 1 : 0,
+				pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+				boxOverflow: q("[data-page]") ? q("[data-page]").scrollWidth - q("[data-page]").clientWidth : document.documentElement.scrollWidth - document.documentElement.clientWidth
+			};
+			document.title = Object.keys(out).map(function (k) { return k + "=" + out[k]; }).join(";");
+		})();
+		</script>`;
+
+		function read(
+			bodyHtml: string,
+			viewport: { width: number; height: number },
+			script: string,
+			marker: string,
+		): Map<string, string> {
 			const title = renderAndReadTitle({
 				bodyHtml,
 				css,
-				script: PROBE,
+				script,
 				viewport,
 				tmpPrefix: "roll-row-",
 			});
 			// A missing title means the script never ran, and every field would then
 			// read as "fits" — exactly the bug this measures.
-			if (!title.includes("rowHeight=")) {
+			if (!title.includes(marker)) {
 				throw new Error(
 					`probe produced no measurement (title: ${title || "∅"})`,
 				);
 			}
-			const kv = new Map(
+			return new Map(
 				title.split(";").map((p) => p.split("=") as [string, string]),
+			);
+		}
+
+		function measure(shape: Shape, opts: MeasureOptions = {}): Measure {
+			const kv = read(
+				pageHtml({ shape, ...opts }),
+				opts.viewport ?? VIEWPORT,
+				PROBE,
+				"rowHeight=",
 			);
 			const n = (k: string) => Number(kv.get(k) ?? "NaN");
 			return {
@@ -325,17 +493,67 @@ describe.skipIf(!hasChrome)(
 				chipMid: n("chipMid"),
 				statusMid: n("statusMid"),
 				menuMid: n("menuMid"),
-				nameTruncated: n("nameTruncated") === 1,
+				stacked: n("stacked") === 1,
+				nameLines: n("nameLines"),
+				nameClippedV: n("nameClippedV") === 1,
+				nameClippedH: n("nameClippedH") === 1,
 				nameWidth: n("nameWidth"),
 				labelText: kv.get("labelText") ?? "",
 				statusWidth: n("statusWidth"),
 				statusClip: n("statusClip"),
 				pageOverflow: n("pageOverflow"),
 				overhang: n("overhang"),
+				boxOverflow: n("boxOverflow"),
+				statusLeft: n("statusLeft"),
+				rowLeft: n("rowLeft"),
+				rowRight: n("rowRight"),
+				toggleLeft: n("toggleLeft"),
+				toggleRight: n("toggleRight"),
+			};
+		}
+
+		/** The phone page, 375px, in the given theme: the real row, painted. */
+		function paint(
+			shape: Shape,
+			theme: "light" | "dark",
+			opts: MeasureOptions,
+		) {
+			const kv = read(
+				pageHtml({ shape, theme, pagePx: PHONE_PX, ...opts }),
+				VIEWPORT,
+				PAINT_PROBE,
+				"nameContrast=",
+			);
+			const n = (k: string) => Number(kv.get(k) ?? "NaN");
+			return {
+				dark: n("dark") === 1,
+				nameContrast: n("nameContrast"),
+				labelContrast: n("labelContrast"),
+				chipContrast: n("chipContrast"),
+				nameClipped: n("nameClipped") === 1,
+				pageOverflow: n("pageOverflow"),
+				boxOverflow: n("boxOverflow"),
 			};
 		}
 
 		beforeAll(async () => {
+			// The route's own wrappers: gutter, column wrapper, left column, aside.
+			cls.pageBox = capture(
+				ROUTE,
+				/const containerClass = canManage\s*\?\s*"([^"]*)"/,
+				"containerClass (the manager arm)",
+			);
+			cls.columns = capture(
+				ROUTE,
+				/className="(flex flex-col gap-5 lg:flex-row[^"]*)"/,
+				"the column wrapper className",
+			);
+			cls.leftColumn = capture(
+				ROUTE,
+				/className="(order-2 min-w-0 flex-1[^"]*)"/,
+				"the left column className",
+				"flex flex-col gap-5 lg:flex-row",
+			);
 			cls.aside = classAfterTag(ROUTE, "<aside");
 			cls.cardBase = cnBaseOf(CARD, "Card");
 			cls.card = classAfterTag(PANEL, "<Card ");
@@ -349,8 +567,14 @@ describe.skipIf(!hasChrome)(
 			cls.identity = classAfterTag(PANEL, "function PanelIdentityLine");
 			cls.name = capture(
 				PANEL,
-				/IDENTITY_NAME_CLASS\s*=\s*"([^"]*)"/,
+				/const IDENTITY_NAME_CLASS\s*=\s*"([^"]*)"/,
 				"IDENTITY_NAME_CLASS",
+			);
+			// The linked name's extra classes, `cn(IDENTITY_NAME_CLASS, "…")`.
+			cls.linkName = capture(
+				PANEL,
+				/cn\(IDENTITY_NAME_CLASS,\s*"([^"]*)"\)/,
+				"the linked name's extra classes",
 			);
 			cls.badgeBase = capture(BADGE, /cva\(\s*"([^"]*)"/, "badge base");
 			cls.badgeSecondary = capture(
@@ -367,6 +591,18 @@ describe.skipIf(!hasChrome)(
 				"function PanelIdentityLine",
 			);
 			cls.actionLine = classAfterTag(PANEL, "function PanelActionLine");
+			// The #1049 toggle's own line (the Present row's third child) and the
+			// toggle's fieldset.
+			cls.toggleLine = capture(
+				PANEL,
+				/row\.status === "present" && onSetMode \? \(\s*<div className="([^"]*)"/,
+				"the mode toggle's line className",
+			);
+			cls.toggle = capture(
+				TOGGLE,
+				/cn\(\s*"(inline-flex shrink-0[^"]*)"/,
+				"the mode toggle's fieldset className",
+			);
 			cls.buttonBase = capture(BUTTON, /cva\(\s*"([^"]*)"/, "button base");
 			cls.outline = capture(
 				BUTTON,
@@ -401,6 +637,13 @@ describe.skipIf(!hasChrome)(
 				"plan row trigger className",
 				"function AttendanceRow",
 			);
+			// The muted ink an ASSUMED plan row's trigger adds.
+			cls.assumedMuted = capture(
+				PANEL,
+				/m\.assumed &&\s*"([^"]*)"/,
+				"the assumed row's muted class",
+				"function AttendanceRow",
+			);
 			// The qualifier span inside the aria-hidden visible label: ONE ternary,
 			// `qualifier === ASSUMED_WORD ? <assumed arm> : <asked arm>`. Both arms are
 			// read, so putting `hidden @md:inline` on the asked arm changes this test.
@@ -425,15 +668,22 @@ describe.skipIf(!hasChrome)(
 				"menu trigger className",
 				'layout === "menu"',
 			);
-			// The pre-fix shape, for the CONTROLS: every class this change moved,
-			// put back. `swap` fails when the shipped class is not there to swap, so
-			// a control cannot quietly measure the shipped markup twice.
+			// `swap`/`drop` fail when the shipped class is not there to change, so a
+			// control cannot quietly measure the shipped markup twice.
 			const swap = (value: string, from: string, to: string) => {
 				const was = value.replace(/\s+/g, " ").trim();
 				const out = was.replace(from, to).replace(/\s+/g, " ").trim();
 				expect(out, `\`${from}\` is not in "${was}"`).not.toBe(was);
 				return out;
 			};
+			const drop = (value: string, re: RegExp) => {
+				const was = value.replace(/\s+/g, " ").trim();
+				const out = was.replace(re, "").replace(/\s+/g, " ").trim();
+				expect(out, `${re} is not in "${was}"`).not.toBe(was);
+				return out;
+			};
+			// The pre-fix shape, for the CONTROLS: every class the rail fix moved,
+			// put back.
 			preFix = {
 				...cls,
 				aside: swap(cls.aside, " xl:w-96", ""),
@@ -444,226 +694,459 @@ describe.skipIf(!hasChrome)(
 				planStatus: swap(cls.planStatus, "@md:w-44", "md:w-44"),
 				qualifier: swap(cls.qualifier, "@md:inline", "md:inline"),
 			};
+			// The phone page as #1420's clamp alone left it: no restack.
+			unstacked = {
+				...cls,
+				mainLine: drop(cls.mainLine, /\bmax-lg:@max-md:\S+/g),
+				actionLine: drop(cls.actionLine, /\bmax-lg:@max-md:\S+/g),
+			};
 			css = await buildAppCss(
 				candidatesIn(
-					[...Object.values(cls), ...Object.values(preFix)]
-						.concat(["flex flex-col gap-1.5", "size-3.5", "size-4", "sr-only"])
+					[
+						...Object.values(cls),
+						...Object.values(preFix),
+						...Object.values(unstacked),
+					]
+						.concat([
+							"flex flex-col gap-1.5",
+							"size-3.5",
+							"size-4",
+							"sr-only",
+							"dark bg-background text-foreground",
+						])
 						.map((c) => `<i class="${c}"></i>`)
 						.join(""),
 				),
 			);
 		});
 
-		it("keeps name, role chip, status trigger and contact-menu trigger on one line, at most 48px tall", () => {
-			const m = measure("oneLine");
-			// The page is what is pinned to 375px; the probe's own reading is what
-			// proves the `md:` arm is OFF (the `w-36` track) and the rail is a phone's.
-			expect(m.innerWidth, "the md: breakpoint must be off").toBeLessThan(
-				MD_PX,
-			);
-			expect(m.railWidth).toBe(PHONE_PX);
-			expect(m.statusWidth, "status track below md is w-36").toBe(144);
-			// "Excused", the widest roll label (~55.7px + 42px of button chrome =
-			// ~98px, measured), fits the 144px track.
-			expect(
-				m.statusClip,
-				"the roll label overflows its track",
-			).toBeLessThanOrEqual(0);
-			expect(
-				m.rowHeight,
-				`row is ${m.rowHeight}px tall, not one line`,
-			).toBeLessThanOrEqual(48);
-			// Vertical CENTRES, not `top`: the row is `items-center`, so the 20px name
-			// text sits 6px below the 32px buttons' top edge on one shared line.
-			// Centres within 4px is "one line"; a wrapped row differs by 30px+.
-			const tops = [m.nameMid, m.chipMid, m.statusMid, m.menuMid];
-			expect(
-				Math.max(...tops) - Math.min(...tops),
-				`vertical centres (name, chip, status, menu) = ${tops.join(", ")}`,
-			).toBeLessThanOrEqual(4);
-			// What gives way is the name, not the controls.
-			expect(m.nameTruncated, "a long name truncates").toBe(true);
-			expect(m.overhang, "controls clipped by the row").toBeLessThanOrEqual(0);
-		});
-
-		it("keeps a plan row on one line at 375px: bare 'Coming' unclipped in the 144px trigger, the name given the room, nothing scrolling sideways", () => {
-			const m = measure("plan");
-			expect(m.innerWidth, "the md: breakpoint must be off").toBeLessThan(
-				MD_PX,
-			);
-			expect(m.statusWidth, "the plan trigger is w-36 below md").toBe(144);
-			// The qualifier is `display:none` below md: the label is the bare status.
-			expect(m.labelText, "visible label below md").toBe(PLAN_STATUS);
-			expect(
-				m.statusClip,
-				`"${PLAN_STATUS}" overflows its ${m.statusWidth}px trigger`,
-			).toBeLessThanOrEqual(0);
-			// What the name keeps: with a 6-char role chip it still gets a real box.
-			// Font-dependent, so the floor sits between the two tracks rather than on
-			// one font's number: at `w-36` the name measured 56px (macOS sans) and
-			// 49px (CI, DejaVu, whose chip is wider); at the old `w-44` it was 24px /
-			// ~17px. 40 fails the old track in both and passes the new one in both.
-			expect(m.nameWidth, "the name's box").toBeGreaterThanOrEqual(40);
-			expect(m.rowHeight, `row is ${m.rowHeight}px tall`).toBeLessThanOrEqual(
-				48,
-			);
+		/** Vertical centres within 4px is "one line"; a wrapped row differs by 30px+. */
+		const centresSpread = (m: Measure) => {
 			const mids = [m.nameMid, m.chipMid, m.statusMid, m.menuMid];
-			expect(
-				Math.max(...mids) - Math.min(...mids),
-				`vertical centres (name, chip, status, menu) = ${mids.join(", ")}`,
-			).toBeLessThanOrEqual(4);
-			expect(m.nameTruncated, "the long name is what gives way").toBe(true);
-			expect(m.overhang, "controls clipped by the row").toBeLessThanOrEqual(0);
-			expect(m.pageOverflow, "page scrolls sideways").toBeLessThanOrEqual(0);
-		});
+			return Math.max(...mids) - Math.min(...mids);
+		};
 
-		it("keeps 'Coming · asked' VISIBLE at 375px on one line, overflowing the 144px trigger by at most 8px (the harness font is the system sans, not Manrope: DejaVu overflows ~6px, Manrope fits)", () => {
-			const m = measure("plan", { word: "asked" });
-			expect(m.innerWidth, "the md: breakpoint must be off").toBeLessThan(
-				MD_PX,
-			);
-			expect(m.statusWidth).toBe(144);
-			expect(m.labelText, "visible label below md").toBe(
-				`${PLAN_STATUS}${ASKED_QUALIFIER}`,
-			);
-			expect(m.statusClip, "clip beyond the ~6px fallback").toBeLessThanOrEqual(
-				8,
-			);
-			expect(m.rowHeight, `row is ${m.rowHeight}px tall`).toBeLessThanOrEqual(
-				48,
-			);
-			expect(m.pageOverflow, "page scrolls sideways").toBeLessThanOrEqual(0);
-		});
+		/**
+		 * THE PHONE (#1420): the real page at 375px, a 343px panel and a 293px
+		 * list. The status line is under the identity, the name has the row, and
+		 * the 144px track and the contact menu are untouched. Both row shapes
+		 * (plan and recorded) share `PanelIdentityLine` and `PanelMainLine`, so both
+		 * run every case.
+		 */
+		describe("the phone page (375px, a 343px panel)", () => {
+			const PANEL_PX = PHONE_PX - PHONE_GUTTER_PX;
+			const LIST_PX = PANEL_PX - CARD_CHROME_PX;
+			const phone = (shape: Shape, o: MeasureOptions = {}) =>
+				measure(shape, { pagePx: PHONE_PX, ...o });
 
-		it("shows 'Coming · assumed' unclipped in the 176px trigger once the LIST is 28rem wide (a stacked 720px tablet panel)", () => {
-			const m = measure("plan", {
-				viewport: TABLET_VIEWPORT,
-				rail: { px: TABLET_PANEL_PX },
-			});
-			expect(m.listWidth, "the list the container query reads").toBe(
-				TABLET_PANEL_PX - CARD_CHROME_PX,
-			);
-			expect(m.listWidth).toBeGreaterThanOrEqual(CONTAINER_MD_PX);
-			expect(m.statusWidth, "the plan trigger is @md:w-44").toBe(176);
-			expect(m.labelText, "visible label from 28rem").toBe(PLAN_LABEL);
-			expect(
-				m.statusClip,
-				`"${PLAN_LABEL}" overflows its ${m.statusWidth}px trigger`,
-			).toBeLessThanOrEqual(0);
-			expect(m.rowHeight, `row is ${m.rowHeight}px tall`).toBeLessThanOrEqual(
-				48,
-			);
-		});
+			for (const shape of ["plan", "roll"] as const) {
+				it(`${shape}: the real wrappers give a ${PANEL_PX}px panel and a ${LIST_PX}px list, with the md: breakpoint off`, () => {
+					const m = phone(shape);
+					expect(m.innerWidth, "the md: breakpoint must be off").toBeLessThan(
+						MD_PX,
+					);
+					expect(m.railWidth, "the <aside>, at the route's gutter").toBe(
+						PANEL_PX,
+					);
+					expect(m.listWidth).toBe(LIST_PX);
+				});
 
-		it("switches the track at exactly 28rem of LIST width: 447px keeps the 144px track, 448px takes 176px", () => {
-			const under = measure("plan", {
-				rail: { px: CONTAINER_MD_PX - 1 + CARD_CHROME_PX },
+				it(`${shape}: the status line sits UNDER the identity, the 144px track holds, the contact menu stays in the row`, () => {
+					const m = phone(shape);
+					expect(m.stacked, "the status line did not drop").toBe(true);
+					expect(
+						Math.abs(m.statusLeft - m.rowLeft),
+						`status left ${m.statusLeft}px, the row's content-left ${m.rowLeft}px`,
+					).toBeLessThanOrEqual(1);
+					expect(m.statusWidth, "the status track is not narrowed").toBe(144);
+					expect(
+						m.statusClip,
+						"the status label overflows its track",
+					).toBeLessThanOrEqual(0);
+					expect(
+						m.identityWidth,
+						"the identity owns the whole list width",
+					).toBe(LIST_PX);
+					expect(m.statusMid, "the menu shares the status line").toBe(
+						m.menuMid,
+					);
+					expect(m.overhang, "controls clipped by the row").toBeLessThanOrEqual(
+						0,
+					);
+					expect(
+						m.boxOverflow,
+						"the 375px box scrolls sideways",
+					).toBeLessThanOrEqual(0);
+					// A role code never takes the name's second line: the chip is beside it.
+					expect(
+						Math.abs(m.nameMid - m.chipMid),
+						"the chip is on the name's line",
+					).toBeLessThanOrEqual(4);
+				});
+
+				// AC1 and AC3, on the real page. TD and TOASTM are the short and the
+				// widest codes; the unrestacked box was ~57px and ~24px.
+				for (const code of ["TD", PLAN_CODE, null] as const) {
+					it(`${shape}, ${code ?? "no role code"}: a ~14-character name shows WHOLE and a short two-word name sits on ONE line (#1420 AC1, AC3)`, () => {
+						for (const tag of ["span", "a"] as const) {
+							const mid = phone(shape, { name: MID_NAME, tag, code });
+							const at = `${tag}, "${MID_NAME}"`;
+							expect(mid.stacked, at).toBe(true);
+							expect(mid.nameLines, `${at}: ${mid.nameLines} lines`).toBe(1);
+							expect(
+								mid.nameClippedV,
+								`${at}: the name is cut by an ellipsis`,
+							).toBe(false);
+							expect(mid.nameClippedH, `${at}: clipped sideways`).toBe(false);
+							const two = phone(shape, { name: TWO_WORD_NAME, tag, code });
+							const at2 = `${tag}, "${TWO_WORD_NAME}"`;
+							expect(two.nameLines, `${at2}: ${two.nameLines} lines`).toBe(1);
+							expect(two.nameClippedV, at2).toBe(false);
+						}
+					});
+				}
+
+				for (const tag of ["span", "a"] as const) {
+					it(`${shape}, <${tag}>: a name too long for two lines clamps at EXACTLY two with an ellipsis, a long word breaks, controls stay inside (#1420)`, () => {
+						const m = phone(shape, { name: LONG_NAME, tag, code: PLAN_CODE });
+						expect(m.stacked).toBe(true);
+						expect(m.nameLines, `name is on ${m.nameLines} lines`).toBe(2);
+						expect(
+							m.nameClippedV,
+							"the long name was not cut: no ellipsis",
+						).toBe(true);
+						expect(m.nameClippedH, "a long word is clipped sideways").toBe(
+							false,
+						);
+						expect(m.statusWidth, "the status track is not narrowed").toBe(144);
+						expect(
+							m.overhang,
+							"controls clipped by the row",
+						).toBeLessThanOrEqual(0);
+						expect(
+							m.boxOverflow,
+							"the 375px box scrolls sideways",
+						).toBeLessThanOrEqual(0);
+						// Two 20px lines, the 8px gap, the 32px controls and the row's
+						// padding; a third line would add 20px.
+						expect(
+							m.rowHeight,
+							`row is ${m.rowHeight}px tall`,
+						).toBeLessThanOrEqual(96);
+					});
+				}
+			}
+
+			// A Present row's #1049 toggle sits on its own line under the chip: on a
+			// phone it shares the status trigger's left edge, not the right.
+			for (const shape of ["plan", "roll"] as const) {
+				it(`${shape}: a Present row's mode toggle lines up with the status trigger's left edge`, () => {
+					const m = phone(shape, { toggle: true });
+					expect(m.stacked).toBe(true);
+					expect(
+						Math.abs(m.statusLeft - m.rowLeft),
+						"the status left is the row's content-left",
+					).toBeLessThanOrEqual(1);
+					expect(
+						Math.abs(m.toggleLeft - m.statusLeft),
+						`toggle left ${m.toggleLeft}px, status left ${m.statusLeft}px`,
+					).toBeLessThanOrEqual(1);
+					expect(
+						m.boxOverflow,
+						"the 375px box scrolls sideways",
+					).toBeLessThanOrEqual(0);
+				});
+			}
+
+			it("the name box is nearly the whole row: a short name keeps >= 230px beside TD and >= 200px beside TOASTM", () => {
+				// Name box = list less the chip and the 6px gap; font-dependent, so the
+				// floors sit well under what Manrope and the fallback measure.
+				for (const [code, floor] of [
+					["TD", 230],
+					[PLAN_CODE, 200],
+				] as const) {
+					const m = phone("plan", { name: LONG_NAME, code });
+					expect(
+						m.nameWidth,
+						`${code}: name box is ${m.nameWidth}px`,
+					).toBeGreaterThanOrEqual(floor);
+				}
 			});
-			expect(under.listWidth).toBe(CONTAINER_MD_PX - 1);
-			expect(under.statusWidth).toBe(144);
-			expect(under.labelText).toBe(PLAN_STATUS);
-			const at = measure("plan", {
-				rail: { px: CONTAINER_MD_PX + CARD_CHROME_PX },
+
+			it("the linked <a> and the plain <span> measure the same for a mid and a long name", () => {
+				for (const name of [MID_NAME, LONG_NAME]) {
+					const span = phone("plan", { code: "TD", name });
+					const link = phone("plan", { code: "TD", name, tag: "a" });
+					expect(link.nameLines, name).toBe(span.nameLines);
+					expect(link.rowHeight, name).toBe(span.rowHeight);
+					expect(link.nameClippedV, name).toBe(span.nameClippedV);
+				}
 			});
-			expect(at.listWidth).toBe(CONTAINER_MD_PX);
-			expect(at.statusWidth).toBe(176);
-			expect(at.labelText).toBe(PLAN_LABEL);
+
+			it("plan: bare 'Coming' is unclipped in the 144px trigger; 'Coming · asked' stays VISIBLE and overflows it by at most 8px (the harness font is the system sans: DejaVu overflows ~6px, Manrope fits)", () => {
+				const bare = phone("plan");
+				expect(bare.labelText, "visible label under 28rem").toBe(PLAN_STATUS);
+				expect(bare.statusClip).toBeLessThanOrEqual(0);
+				const asked = phone("plan", { word: "asked" });
+				expect(asked.labelText).toBe(`${PLAN_STATUS}${ASKED_QUALIFIER}`);
+				expect(asked.statusWidth).toBe(144);
+				expect(
+					asked.statusClip,
+					"clip beyond the ~6px fallback",
+				).toBeLessThanOrEqual(8);
+				expect(asked.boxOverflow).toBeLessThanOrEqual(0);
+			});
+
+			it("CONTROL: the same page WITHOUT the restack leaves the name its old sliver: a TD chip ~57px, TOASTM ~24px, and a 14-character name does not fit on a line", () => {
+				const td = phone("plan", { c: unstacked, code: "TD", name: LONG_NAME });
+				expect(td.stacked).toBe(false);
+				expect(td.nameWidth, `TD name box ${td.nameWidth}px`).toBeLessThan(80);
+				const toastm = phone("plan", {
+					c: unstacked,
+					code: PLAN_CODE,
+					name: LONG_NAME,
+				});
+				expect(
+					toastm.nameWidth,
+					`TOASTM name box ${toastm.nameWidth}px`,
+				).toBeLessThan(40);
+				const mid = phone("plan", { c: unstacked, code: "TD", name: MID_NAME });
+				expect(mid.nameLines, "the clamp alone cannot keep it on a line").toBe(
+					2,
+				);
+				const two = phone("plan", {
+					c: unstacked,
+					code: PLAN_CODE,
+					name: TWO_WORD_NAME,
+				});
+				expect(two.nameLines, "a short name wrapped: AC3's regression").toBe(2);
+			});
 		});
 
 		/**
-		 * The bug, at the widths it lived at. The rail is the route's real
-		 * `<aside>`: 340px at `lg` (1024px) and 384px at `xl` (1440px), narrower
-		 * than a phone, and the status track used to follow the VIEWPORT, so both
-		 * got the widest (176px) track and left a role holder's name ~18px.
+		 * THE RESTACK'S BOUNDARY, on both axes. A phone's list is under 28rem
+		 * (stacked); a window narrower than `lg` whose list is 28rem or more (a
+		 * tablet panel) is not; the 340px `lg` rail, whose list is narrower than
+		 * the phone's, is not either (the rail cases below).
+		 */
+		describe("where the restack applies", () => {
+			const pageFor = (list: number) => list + CARD_CHROME_PX + PHONE_GUTTER_PX;
+			for (const shape of ["plan", "roll"] as const) {
+				it(`${shape}: 447px of LIST under lg is stacked on the 144px track, 448px is one line on the 176px track`, () => {
+					const under = measure(shape, {
+						pagePx: pageFor(CONTAINER_MD_PX - 1),
+					});
+					expect(under.listWidth).toBe(CONTAINER_MD_PX - 1);
+					expect(under.stacked, "447px: stacked").toBe(true);
+					expect(under.statusWidth).toBe(144);
+					const at = measure(shape, { pagePx: pageFor(CONTAINER_MD_PX) });
+					expect(at.listWidth).toBe(CONTAINER_MD_PX);
+					expect(at.stacked, "448px: one line").toBe(false);
+					expect(at.statusWidth).toBe(176);
+					expect(at.rowHeight).toBeLessThanOrEqual(48);
+				});
+
+				// Long-name pressure at the same boundary (#1309): beside the widest
+				// role code the name clamps at two lines, never stacks, and neither
+				// the track nor the row's edge gives way.
+				for (const [where, opts, track] of [
+					["448px of list", { pagePx: pageFor(CONTAINER_MD_PX) }, 176],
+					["the 800px tablet", { viewport: TABLET_VIEWPORT }, 176],
+				] as const) {
+					it(`${shape}: a LONG name beside ${PLAN_CODE} at ${where} stays one line of controls on the ${track}px track, controls inside the row`, () => {
+						const m = measure(shape, {
+							...opts,
+							name: LONG_NAME,
+							code: PLAN_CODE,
+						});
+						expect(m.stacked, `${where}: restacked`).toBe(false);
+						expect(m.statusWidth, `${where}: track`).toBe(track);
+						expect(
+							m.nameLines,
+							`${where}: ${m.nameLines} lines`,
+						).toBeLessThanOrEqual(2);
+						expect(m.nameClippedH, `${where}: a long word spills`).toBe(false);
+						expect(
+							m.overhang,
+							`${where}: controls clipped`,
+						).toBeLessThanOrEqual(0);
+						expect(
+							m.statusClip,
+							`${where}: status label clipped`,
+						).toBeLessThanOrEqual(0);
+						expect(
+							m.rowHeight,
+							`${where}: row is ${m.rowHeight}px tall`,
+						).toBeLessThanOrEqual(64);
+						expect(
+							Math.abs(m.statusMid - m.menuMid),
+							`${where}: status and menu share a line`,
+						).toBeLessThanOrEqual(4);
+					});
+				}
+
+				it(`${shape}: a full-width tablet panel (800px window, below lg) stays ONE line on the 176px track`, () => {
+					const m = measure(shape, { viewport: TABLET_VIEWPORT });
+					const list =
+						TABLET_VIEWPORT.width - TABLET_GUTTER_PX - CARD_CHROME_PX;
+					expect(m.listWidth, "the list the container query reads").toBe(list);
+					expect(m.listWidth).toBeGreaterThanOrEqual(CONTAINER_MD_PX);
+					expect(m.stacked, "a tablet panel is not restacked").toBe(false);
+					expect(m.statusWidth, "the track is @md:w-44").toBe(176);
+					expect(
+						m.statusClip,
+						"the status label overflows its track",
+					).toBeLessThanOrEqual(0);
+					expect(
+						m.rowHeight,
+						`row is ${m.rowHeight}px tall`,
+					).toBeLessThanOrEqual(48);
+					expect(centresSpread(m)).toBeLessThanOrEqual(4);
+					if (shape === "plan") {
+						expect(m.labelText, "visible label from 28rem").toBe(PLAN_LABEL);
+					}
+				});
+			}
+		});
+
+		/**
+		 * The rails, at the widths the bug in #1309 lived at: the route's real
+		 * `<aside>`, 340px at `lg` (1024px) and 384px at `xl` (1440px), narrower
+		 * than a phone's list is wide. `lg` is ON here, so the phone restack must
+		 * NOT reach them: the viewport half of its condition is what holds that,
+		 * since the rail's 306px list is under 28rem too.
 		 *
 		 * `identityWidth` is what the fixed controls leave of the row, so it does
 		 * not depend on the font: list (rail - 2px border - 2 x 16px padding) - 8px
 		 * gap - the 144px track - 12px gap - the 32px menu. The floors sit a few px
-		 * under what that measures. `nameWidth` is the font-dependent half and
-		 * keeps the looser margin the 375px case uses.
+		 * under what that measures.
 		 */
 		for (const [where, viewport, railPx, identityFloor] of [
 			["the 340px lg rail", LG_VIEWPORT, LG_RAIL_PX, 104],
 			["the 384px xl rail", XL_VIEWPORT, XL_RAIL_PX, 148],
 		] as const) {
-			it(`${where}: the track stays 144px, the identity box keeps >= ${identityFloor}px, one line, header and rows share one 16px inset`, () => {
-				for (const shape of ["oneLine", "plan"] as const) {
-					const m = measure(shape, { viewport, rail: "aside" });
-					const at = `${where}, ${shape}`;
-					expect(m.railWidth, `${at}: the aside's width`).toBe(railPx);
-					expect(m.listWidth, `${at}: the list's width`).toBe(railPx - 34);
-					expect(m.headerInset, `${at}: header padding`).toBe(16);
-					expect(m.bodyInset, `${at}: body padding`).toBe(16);
-					expect(
-						m.statusWidth,
-						`${at}: the viewport must not widen the track`,
-					).toBe(144);
-					expect(
-						m.identityWidth,
-						`${at}: identity is ${m.identityWidth}px`,
-					).toBeGreaterThanOrEqual(identityFloor);
-					expect(
-						m.rowHeight,
-						`${at}: row is ${m.rowHeight}px tall`,
-					).toBeLessThanOrEqual(48);
-					const mids = [m.nameMid, m.chipMid, m.statusMid, m.menuMid];
-					expect(
-						Math.max(...mids) - Math.min(...mids),
-						`${at}: vertical centres (name, chip, status, menu) = ${mids.join(", ")}`,
-					).toBeLessThanOrEqual(4);
-					expect(
-						m.statusClip,
-						`${at}: status label clipped`,
-					).toBeLessThanOrEqual(0);
-					expect(
-						m.overhang,
-						`${at}: controls clipped by the row`,
-					).toBeLessThanOrEqual(0);
-					expect(
-						m.pageOverflow,
-						`${at}: page scrolls sideways`,
-					).toBeLessThanOrEqual(0);
-					if (shape === "plan") {
-						expect(m.labelText, `${at}: assumed is hidden under 28rem`).toBe(
-							PLAN_STATUS,
+			describe(where, () => {
+				for (const shape of ["roll", "plan"] as const) {
+					it(`${shape}: the track stays 144px, the row stays ONE line (not restacked), the identity box keeps >= ${identityFloor}px, header and rows share one 16px inset`, () => {
+						const m = measure(shape, { viewport });
+						const at = `${where}, ${shape}`;
+						expect(m.railWidth, `${at}: the aside's width`).toBe(railPx);
+						expect(m.listWidth, `${at}: the list's width`).toBe(
+							railPx - CARD_CHROME_LG_PX,
 						);
-						// A 6-character role code is the widest chip a real row wears; the
-						// name still gets a box (macOS sans ~37px at lg, DejaVu narrower).
+						expect(m.headerInset, `${at}: header padding`).toBe(16);
+						expect(m.bodyInset, `${at}: body padding`).toBe(16);
+						expect(m.stacked, `${at}: the phone restack reached the rail`).toBe(
+							false,
+						);
 						expect(
-							m.nameWidth,
-							`${at}: the name's box beside a ${PLAN_CODE} chip`,
-						).toBeGreaterThanOrEqual(24);
+							m.statusWidth,
+							`${at}: the viewport must not widen the track`,
+						).toBe(144);
+						expect(
+							m.identityWidth,
+							`${at}: identity is ${m.identityWidth}px`,
+						).toBeGreaterThanOrEqual(identityFloor);
+						expect(
+							m.rowHeight,
+							`${at}: row is ${m.rowHeight}px tall`,
+						).toBeLessThanOrEqual(48);
+						expect(
+							centresSpread(m),
+							`${at}: vertical centres (name, chip, status, menu)`,
+						).toBeLessThanOrEqual(4);
+						expect(
+							m.statusClip,
+							`${at}: status label clipped`,
+						).toBeLessThanOrEqual(0);
+						expect(
+							m.overhang,
+							`${at}: controls clipped by the row`,
+						).toBeLessThanOrEqual(0);
+						expect(
+							m.pageOverflow,
+							`${at}: page scrolls sideways`,
+						).toBeLessThanOrEqual(0);
+						if (shape === "plan") {
+							expect(m.labelText, `${at}: assumed is hidden under 28rem`).toBe(
+								PLAN_STATUS,
+							);
+						}
+					});
+
+					// What #1309 and #1351 protected: a name with every kind of pressure
+					// (a 6-character role code, 64 characters with a word wider than the
+					// box) never pushes a control out of the row or narrows the track.
+					for (const tag of ["span", "a"] as const) {
+						it(`${shape}, <${tag}>: a LONG name beside a ${PLAN_CODE} chip clamps at two lines; the controls stay inside the row and the 144px track holds`, () => {
+							const m = measure(shape, {
+								viewport,
+								name: LONG_NAME,
+								tag,
+								code: PLAN_CODE,
+							});
+							const at = `${where}, ${shape}, ${tag}`;
+							expect(m.stacked, `${at}: restacked`).toBe(false);
+							expect(m.statusWidth, `${at}: track`).toBe(144);
+							expect(
+								m.nameLines,
+								`${at}: ${m.nameLines} lines`,
+							).toBeLessThanOrEqual(2);
+							expect(m.nameClippedH, `${at}: a long word spills`).toBe(false);
+							expect(
+								m.statusClip,
+								`${at}: status label clipped`,
+							).toBeLessThanOrEqual(0);
+							expect(
+								m.overhang,
+								`${at}: controls clipped by the row`,
+							).toBeLessThanOrEqual(0);
+							expect(
+								m.pageOverflow,
+								`${at}: page scrolls sideways`,
+							).toBeLessThanOrEqual(0);
+							// Two 20px lines against the 32px controls: the row grows by a
+							// name's second line at most, never a third.
+							expect(
+								m.rowHeight,
+								`${at}: row is ${m.rowHeight}px tall`,
+							).toBeLessThanOrEqual(64);
+							expect(
+								m.nameWidth,
+								`${at}: the name's box beside ${PLAN_CODE}`,
+							).toBeGreaterThanOrEqual(20);
+						});
 					}
 				}
 			});
 		}
 
-		it("the identity box on phones is font-independent too: a 375px card leaves it 129px, a real 375px page (16px gutters, a 343px card) 97px", () => {
-			// Not changed by the rail fix (phones keep the 144px track and 24px of
-			// card padding); pinned so a later change to either cannot quietly take
-			// the name's room, which is what the 176px track did to the rail.
-			const card = measure("oneLine");
-			expect(
-				card.identityWidth,
-				`identity is ${card.identityWidth}px`,
-			).toBeGreaterThanOrEqual(120);
-			const page = measure("plan", { rail: { px: PHONE_PX - 32 } });
-			expect(page.railWidth).toBe(PHONE_PX - 32);
-			expect(page.statusWidth).toBe(144);
-			expect(
-				page.identityWidth,
-				`identity is ${page.identityWidth}px`,
-			).toBeGreaterThanOrEqual(92);
-			expect(page.rowHeight).toBeLessThanOrEqual(48);
-			expect(page.pageOverflow).toBeLessThanOrEqual(0);
-		});
+		// A Present row's #1049 toggle stays right-aligned wherever the row is
+		// not restacked: its right edge is the row's content-right.
+		for (const [where, viewport] of [
+			["the 340px lg rail", LG_VIEWPORT],
+			["the 384px xl rail", XL_VIEWPORT],
+			["the 800px tablet panel", TABLET_VIEWPORT],
+		] as const) {
+			it(`${where}: a Present row's mode toggle is right-aligned`, () => {
+				const m = measure("roll", { viewport, toggle: true });
+				expect(m.stacked, "not restacked").toBe(false);
+				expect(
+					Math.abs(m.toggleRight - m.rowRight),
+					`toggle right ${m.toggleRight}px, row content-right ${m.rowRight}px`,
+				).toBeLessThanOrEqual(1);
+				expect(m.toggleLeft, "not at the left edge").toBeGreaterThan(
+					m.rowLeft + 8,
+				);
+			});
+		}
 
 		it("CONTROL: the pre-fix classes (viewport-keyed track, 24px card padding, no container) leave the real rail's identity box under the floor", () => {
 			for (const [viewport, railPx] of [
 				[LG_VIEWPORT, LG_RAIL_PX],
 				[XL_VIEWPORT, LG_RAIL_PX],
 			] as const) {
-				const m = measure("plan", { viewport, rail: "aside", c: preFix });
+				const m = measure("plan", { viewport, c: preFix });
 				// The old rail is 340px at BOTH viewports (no `xl:w-96`), and its track
 				// followed the viewport: 176px, the widest, in a rail narrower than a phone.
 				expect(m.railWidth).toBe(railPx);
@@ -676,11 +1159,71 @@ describe.skipIf(!hasChrome)(
 			}
 		});
 
-		it("CONTROL: the pre-#1309 two-line shape fails the same measurement", () => {
-			const m = measure("twoLine");
+		it("CONTROL: the pre-#1309 two-line shape fails the one-line measurement", () => {
+			const m = measure("twoLine", { viewport: LG_VIEWPORT });
 			expect(m.rowHeight).toBeGreaterThan(48);
 			const tops = [m.nameMid, m.statusMid];
 			expect(Math.max(...tops) - Math.min(...tops)).toBeGreaterThan(4);
+		});
+
+		/**
+		 * #1420 AC6: light and dark at 375px. The real row is painted by the real
+		 * stylesheet under each theme (`.dark` carries the dark tokens), and every
+		 * line of text on it must clear AA (4.5:1, all of it is under 18px) with
+		 * the name unclipped. The status label is measured plain and, on the plan
+		 * row, in the muted ink an ASSUMED row adds.
+		 */
+		describe("light and dark at 375px", () => {
+			for (const theme of THEMES) {
+				for (const shape of ["plan", "roll"] as const) {
+					for (const tag of ["span", "a"] as const) {
+						it(`${theme}, ${shape}, <${tag}>: name, status label and role chip clear 4.5:1, a 14-character name is whole, a long one clamps, nothing scrolls sideways`, () => {
+							const p = paint(shape, theme, {
+								name: LONG_NAME,
+								tag,
+								code: PLAN_CODE,
+							});
+							expect(p.dark, "the theme was not applied").toBe(
+								theme === "dark",
+							);
+							expect(p.nameContrast, `${theme} name`).toBeGreaterThanOrEqual(
+								4.5,
+							);
+							expect(
+								p.labelContrast,
+								`${theme} status label`,
+							).toBeGreaterThanOrEqual(4.5);
+							expect(
+								p.chipContrast,
+								`${theme} role chip`,
+							).toBeGreaterThanOrEqual(4.5);
+							expect(
+								p.nameClipped,
+								"the clamp's ellipsis is the only cut",
+							).toBe(true);
+							expect(p.boxOverflow).toBeLessThanOrEqual(0);
+							const whole = paint(shape, theme, {
+								name: MID_NAME,
+								tag,
+								code: "TD",
+							});
+							expect(whole.nameClipped, "a 14-character name is whole").toBe(
+								false,
+							);
+						});
+					}
+				}
+
+				it(`${theme}: an ASSUMED plan row's muted status ink still clears 4.5:1`, () => {
+					const p = paint("plan", theme, {
+						c: { ...cls, planStatus: `${cls.planStatus} ${cls.assumedMuted}` },
+					});
+					expect(
+						p.labelContrast,
+						`${theme} muted label`,
+					).toBeGreaterThanOrEqual(4.5);
+				});
+			}
 		});
 	},
 );

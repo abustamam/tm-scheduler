@@ -284,7 +284,11 @@ describe.skipIf(!hasChrome)(
 				expect(p.tailReachableByPageScroll).toBe(false);
 			});
 
-			it("a roll row stays on ONE line under a forced scrollbar: a long name gives way, the status track and the one contact-menu icon do not (#1309)", async () => {
+			it("a roll row stays on ONE line under a forced scrollbar: a long name clamps at two lines, the status track and the one contact-menu icon do not (#1309)", async () => {
+				// This is the RAIL (1280px viewport, `lg` on): the phone restack of
+				// #1420 (`max-lg:@max-md:flex-col` on the main line) must NOT reach it,
+				// so the row still measures `oneLine`. The phone side, where the controls
+				// drop under the name instead, is held by `roll-row-geometry.test.ts`.
 				// Classes come from the real source: the main line, the identity name
 				// box, the action line, the icon size and the status trigger's width.
 				// A classic 15px scrollbar is FORCED on the scroller, as Windows and
@@ -294,7 +298,7 @@ describe.skipIf(!hasChrome)(
 				const mainLine = classAfterTag(PANEL, "function PanelMainLine");
 				const line = classAfterTag(PANEL, "function PanelActionLine");
 				const identity = classAfterTag(PANEL, "function PanelIdentityLine");
-				const nameBox = /const IDENTITY_NAME_CLASS = "([^"]*)"/.exec(
+				const nameBox = /const IDENTITY_NAME_CLASS\s*=\s*"([^"]*)"/.exec(
 					readSource(PANEL),
 				)?.[1];
 				expect(nameBox, "IDENTITY_NAME_CLASS not found").toBeTruthy();
@@ -323,7 +327,7 @@ describe.skipIf(!hasChrome)(
 						Math.round(chip.top) === Math.round(icon.top) || (chip.top < icon.bottom && icon.top < chip.bottom) ? "oneLine" : "wrapped",
 						icon.right <= inner + 0.5 && chip.right <= inner + 0.5 ? "inside" : "outside",
 						nm.right <= chip.left + 0.5 ? "nameYields" : "nameOverlaps",
-						nameEl.scrollWidth > nameEl.clientWidth ? "truncated" : "notTruncated",
+						nameEl.scrollHeight > nameEl.clientHeight ? "clamped" : "notClamped",
 						body.scrollWidth <= body.clientWidth ? "noscroll" : "hscroll",
 						Math.round(chip.width),
 						Math.round(document.querySelector("aside").getBoundingClientRect().width),
@@ -343,7 +347,7 @@ describe.skipIf(!hasChrome)(
 				// track is the 144px `w-36`. It was 176px when `md:w-44` followed the
 				// viewport.
 				expect(title).toBe(
-					"oneLine,inside,nameYields,truncated,noscroll,144,384",
+					"oneLine,inside,nameYields,clamped,noscroll,144,384",
 				);
 			});
 
