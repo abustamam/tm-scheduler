@@ -66,6 +66,7 @@ function mount(opts: {
 	/** Hours from now to the meeting; default 30 days. */
 	hoursOut?: number;
 	onOwnLateRelease?: MeetingAgendaProps["onOwnLateRelease"];
+	slotExtra?: MeetingAgendaProps["slotExtra"];
 }) {
 	const claim = vi.fn(opts.claim ?? (async () => {}));
 	const release = vi.fn(async () => {});
@@ -120,6 +121,7 @@ function mount(opts: {
 			meetingOver={false}
 			contactedMemberIds={[]}
 			onOwnLateRelease={opts.onOwnLateRelease}
+			slotExtra={opts.slotExtra}
 		/>,
 	);
 	return { claim, release, onMutated };
@@ -280,5 +282,20 @@ describe("MeetingAgenda: own release inside 48h (#1439)", () => {
 		});
 		await userEvent.click(screen.getByRole("button", { name: "Release" }));
 		await waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+	});
+});
+
+describe("MeetingAgenda: slotExtra (#1461)", () => {
+	it("renders the caller's content inside that slot's row", () => {
+		// protects=a cover chip lands under its own role row, not above the lineup
+		// fails_when=the hook is dropped or rendered outside the row's <li>
+		mount({
+			viewerId: "m-holder",
+			canManage: false,
+			slotExtra: (s) => <span data-testid="extra">for {s.id}</span>,
+		});
+		const extra = screen.getByTestId("extra");
+		expect(extra.textContent).toBe("for s1");
+		expect(extra.closest("li")?.id).toBe("slot-s1");
 	});
 });

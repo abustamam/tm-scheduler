@@ -25,6 +25,17 @@ describe("meeting route: cover wiring (#1440)", () => {
 		expect(src).toContain("meetingOver={coverOver}");
 	});
 
+	it("each chip sits under its own row, with no strip above the agenda (#1461)", () => {
+		expect(src).toContain("slotExtra={coverChipUnderRow}");
+		// Structural: exactly one chip render site, defined before the agenda's
+		// JSX, so a strip rebuilt anywhere else adds a second `<CoverChip`.
+		const sites = src.split("<CoverChip").length - 1;
+		expect(sites).toBe(1);
+		const site = src.indexOf("<CoverChip");
+		expect(site).toBeGreaterThan(src.indexOf("const coverChipUnderRow"));
+		expect(site).toBeLessThan(src.indexOf("<MeetingAgenda"));
+	});
+
 	it("takes the claim through the same claim call as the agenda", () => {
 		expect(src).toContain("await claimAs(me, slot);");
 		expect(src).toContain("await claimAs(me, slot, speakerDetails);");

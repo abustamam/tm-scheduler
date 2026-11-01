@@ -68,9 +68,8 @@ function elapsedPhrase(from: Date, to: Date): string {
 	return "next day";
 }
 
-/** "Timer: Sam → Priya · covered in 17 min". */
+/** "Sam → Priya · covered in 17 min". The role is the row it sits under. */
 export function coveredStory(args: {
-	roleLabel: string;
 	releasedName: string;
 	coveredName: string;
 	releasedAt: Date;
@@ -78,7 +77,7 @@ export function coveredStory(args: {
 }): string {
 	const took = elapsedPhrase(args.releasedAt, args.coveredAt);
 	const when = took === "next day" ? "next day" : `in ${took}`;
-	return `${args.roleLabel}: ${args.releasedName} → ${args.coveredName} · covered ${when}`;
+	return `${args.releasedName} → ${args.coveredName} · covered ${when}`;
 }
 
 /** The meeting page, opened on the role that needs cover. */

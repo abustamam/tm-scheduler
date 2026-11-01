@@ -24,6 +24,9 @@ export function coverMeetingOver(args: {
 	return args.over || args.status === "cancelled";
 }
 
+const CHIP_CLASS =
+	"mt-2 inline-flex max-w-full items-center rounded-full border border-dashed border-warning px-2.5 py-0.5 text-xs font-semibold text-warning-foreground";
+
 /** The ONE "covered and over" rule: a covered story line stops showing once
  *  the meeting is past. */
 export function hidesCoveredStory(
@@ -33,7 +36,8 @@ export function hidesCoveredStory(
 	return status === "covered" && meetingOver;
 }
 
-/** One strip entry per cover request whose slot is on this meeting. */
+/** One chip per cover request whose slot is on this meeting; none once the
+ *  meeting is over or cancelled (#1461). */
 export function coverChipsFor(args: {
 	coverRequests: MeetingCoverRequest[];
 	slots: {
@@ -48,6 +52,7 @@ export function coverChipsFor(args: {
 	now: Date;
 	meetingOver: boolean;
 }) {
+	if (args.meetingOver) return [];
 	const chips: {
 		request: MeetingCoverRequest;
 		roleLabel: string;
@@ -102,10 +107,10 @@ export function CoverChip({
 		return (
 			<p
 				data-cover-chip="covered"
-				className="text-sm font-semibold text-success"
+				className="mt-2 text-sm font-semibold text-success"
 			>
+				<span className="sr-only">{roleLabel}: </span>
 				{coveredStory({
-					roleLabel,
 					releasedName: request.releasedName,
 					coveredName: request.coveredName,
 					releasedAt: new Date(request.releasedAt),
@@ -116,20 +121,16 @@ export function CoverChip({
 	}
 	if (status === "finding_cover") {
 		return (
-			<span
-				data-cover-chip="finding_cover"
-				className="inline-flex max-w-full items-center rounded-full border border-dashed border-warning px-2.5 py-0.5 text-xs font-semibold text-warning-foreground"
-			>
-				{roleLabel}: {request.releasedName} is finding cover
+			<span data-cover-chip="finding_cover" className={CHIP_CLASS}>
+				<span className="sr-only">{roleLabel}: </span>
+				{request.releasedName} is finding cover
 			</span>
 		);
 	}
 	return (
-		<span
-			data-cover-chip="dropped"
-			className="inline-flex max-w-full items-center rounded-full border border-dashed border-warning px-2.5 py-0.5 text-xs font-semibold text-warning-foreground"
-		>
-			{roleLabel} open: {request.releasedName} dropped it{" "}
+		<span data-cover-chip="dropped" className={CHIP_CLASS}>
+			<span className="sr-only">{roleLabel} open: </span>
+			{request.releasedName} dropped it{" "}
 			{droppedAt(new Date(request.releasedAt), timeZone)}
 		</span>
 	);

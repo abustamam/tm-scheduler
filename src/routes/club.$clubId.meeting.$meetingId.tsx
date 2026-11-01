@@ -1894,8 +1894,8 @@ function MeetingView() {
 	const actions = effectiveCanManage ? managerActions : selfActions;
 
 	// Cover requests (#1440): the landing card for a `?cover=` link, and a chip
-	// per request. The chips sit in one strip above the agenda, not under each
-	// role: the agenda component renders the rows and takes no per-slot content.
+	// per request. Each chip sits under its own role row, handed to the agenda
+	// through `slotExtra` (#1461); a cancelled or past meeting shows none.
 	const coverOver = coverMeetingOver({ over, status: meeting.status });
 	const coverView = coverLandingView({
 		cover: coverParam,
@@ -1918,6 +1918,22 @@ function MeetingView() {
 		now,
 		meetingOver: coverOver,
 	});
+	// slot id -> its chip: the agenda places each under its own row (#1461).
+	const coverChipBySlotId = new Map(
+		coverChips.map((c) => [c.request.slotId, c]),
+	);
+	const coverChipUnderRow = (slot: { id: string }) => {
+		const c = coverChipBySlotId.get(slot.id);
+		return c ? (
+			<CoverChip
+				request={c.request}
+				status={c.status}
+				roleLabel={c.roleLabel}
+				timeZone={timezone}
+				meetingOver={coverOver}
+			/>
+		) : null;
+	};
 	async function takeCoveredRole() {
 		const slot = coverView.slot;
 		if (!slot) return;
@@ -2574,22 +2590,6 @@ function MeetingView() {
 						/>
 					) : null}
 
-					{coverChips.length > 0 ? (
-						<ul className="flex flex-col items-start gap-1.5">
-							{coverChips.map((c) => (
-								<li key={c.request.slotId} className="max-w-full">
-									<CoverChip
-										request={c.request}
-										status={c.status}
-										roleLabel={c.roleLabel}
-										timeZone={timezone}
-										meetingOver={coverOver}
-									/>
-								</li>
-							))}
-						</ul>
-					) : null}
-
 					{effectiveCanManage ? null : <GuestResources clubId={clubId} />}
 
 					{readiness ? (
@@ -2605,6 +2605,7 @@ function MeetingView() {
 					    links to the digital agenda route). Always rendered. */}
 					<section id={MEETING_AGENDA_ANCHOR_ID} className="scroll-mt-28">
 						<MeetingAgenda
+							slotExtra={coverChipUnderRow}
 							slots={slots}
 							viewer={viewer}
 							actions={actions}
