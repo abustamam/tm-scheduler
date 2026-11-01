@@ -1918,6 +1918,22 @@ function MeetingView() {
 		now,
 		meetingOver: coverOver,
 	});
+	// slot id -> its chip: the agenda places each under its own row (#1461).
+	const coverChipByPlace = new Map(
+		coverChips.map((c) => [c.request.slotId, c]),
+	);
+	const coverChipUnderRow = (slot: { id: string }) => {
+		const c = coverChipByPlace.get(slot.id);
+		return c ? (
+			<CoverChip
+				request={c.request}
+				status={c.status}
+				roleLabel={c.roleLabel}
+				timeZone={timezone}
+				meetingOver={coverOver}
+			/>
+		) : null;
+	};
 	async function takeCoveredRole() {
 		const slot = coverView.slot;
 		if (!slot) return;
@@ -2574,22 +2590,6 @@ function MeetingView() {
 						/>
 					) : null}
 
-					{coverChips.length > 0 ? (
-						<ul className="flex flex-col items-start gap-1.5">
-							{coverChips.map((c) => (
-								<li key={c.request.slotId} className="max-w-full">
-									<CoverChip
-										request={c.request}
-										status={c.status}
-										roleLabel={c.roleLabel}
-										timeZone={timezone}
-										meetingOver={coverOver}
-									/>
-								</li>
-							))}
-						</ul>
-					) : null}
-
 					{effectiveCanManage ? null : <GuestResources clubId={clubId} />}
 
 					{readiness ? (
@@ -2605,6 +2605,7 @@ function MeetingView() {
 					    links to the digital agenda route). Always rendered. */}
 					<section id={MEETING_AGENDA_ANCHOR_ID} className="scroll-mt-28">
 						<MeetingAgenda
+							slotExtra={coverChipUnderRow}
 							slots={slots}
 							viewer={viewer}
 							actions={actions}

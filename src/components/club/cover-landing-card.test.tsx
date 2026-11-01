@@ -134,7 +134,10 @@ describe("CoverChip", () => {
 		const { container } = render(
 			<CoverChip {...props} request={request} status="finding_cover" />,
 		);
-		expect(screen.getByText("Timer: Sam is finding cover")).toBeTruthy();
+		expect(screen.getByText("Sam is finding cover")).toBeTruthy();
+		expect(
+			screen.getByLabelText("Timer: Sam is finding cover").textContent,
+		).toBe("Sam is finding cover");
 		expect(
 			container.querySelector('[data-cover-chip="finding_cover"]')?.className,
 		).toContain("border-dashed");
@@ -142,8 +145,9 @@ describe("CoverChip", () => {
 
 	it("dropped: names who dropped it and when, in the club's zone", () => {
 		render(<CoverChip {...props} request={request} status="dropped" />);
+		expect(screen.getByText(/^Sam dropped it Wed 2:14am/)).toBeTruthy();
 		expect(
-			screen.getByText(/Timer open: Sam dropped it Wed 2:14am/),
+			screen.getByLabelText(/^Timer open: Sam dropped it Wed 2:14am/),
 		).toBeTruthy();
 	});
 

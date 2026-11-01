@@ -25,6 +25,12 @@ describe("meeting route: cover wiring (#1440)", () => {
 		expect(src).toContain("meetingOver={coverOver}");
 	});
 
+	it("each chip sits under its own row, with no strip above the agenda (#1461)", () => {
+		expect(src).toContain("slotExtra={coverChipUnderRow}");
+		expect(src).toContain("coverChipByPlace.get(slot.id)");
+		expect(src).not.toContain("coverChips.length");
+	});
+
 	it("takes the claim through the same claim call as the agenda", () => {
 		expect(src).toContain("await claimAs(me, slot);");
 		expect(src).toContain("await claimAs(me, slot, speakerDetails);");

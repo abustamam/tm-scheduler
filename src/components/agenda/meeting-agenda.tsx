@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { Loader2, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { SuggestFillsDialog } from "#/components/agenda/suggest-fills-dialog";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
@@ -213,6 +213,12 @@ export interface MeetingAgendaProps {
 	 * release further out never reach it.
 	 */
 	onOwnLateRelease?: (slot: AgendaSlot) => void;
+	/**
+	 * Content the caller wants directly under a slot's row (#1461): the route
+	 * puts a slot's cover chip here. Returns null/undefined for no content.
+	 * The agenda stays unaware of what it is.
+	 */
+	slotExtra?: (slot: AgendaSlot) => ReactNode;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -252,6 +258,7 @@ export function MeetingAgenda({
 	onContacted,
 	onUncontacted,
 	onOwnLateRelease,
+	slotExtra,
 }: MeetingAgendaProps) {
 	const { currentMemberId } = viewer;
 	// Claiming an open slot requires the capability AND either an identity or a
@@ -980,6 +987,7 @@ export function MeetingAgenda({
 												)}
 											</div>
 										</div>
+										{slotExtra?.(slot)}
 									</li>
 								);
 							})}

@@ -33,7 +33,7 @@ export function hidesCoveredStory(
 	return status === "covered" && meetingOver;
 }
 
-/** One strip entry per cover request whose slot is on this meeting. */
+/** One chip per cover request whose slot is on this meeting. */
 export function coverChipsFor(args: {
 	coverRequests: MeetingCoverRequest[];
 	slots: {
@@ -102,7 +102,7 @@ export function CoverChip({
 		return (
 			<p
 				data-cover-chip="covered"
-				className="text-sm font-semibold text-success"
+				className="mt-2 text-sm font-semibold text-success"
 			>
 				{coveredStory({
 					roleLabel,
@@ -118,18 +118,22 @@ export function CoverChip({
 		return (
 			<span
 				data-cover-chip="finding_cover"
-				className="inline-flex max-w-full items-center rounded-full border border-dashed border-warning px-2.5 py-0.5 text-xs font-semibold text-warning-foreground"
+				role="note"
+				aria-label={`${roleLabel}: ${request.releasedName} is finding cover`}
+				className="mt-2 inline-flex max-w-full items-center rounded-full border border-dashed border-warning px-2.5 py-0.5 text-xs font-semibold text-warning-foreground"
 			>
-				{roleLabel}: {request.releasedName} is finding cover
+				{request.releasedName} is finding cover
 			</span>
 		);
 	}
 	return (
 		<span
 			data-cover-chip="dropped"
-			className="inline-flex max-w-full items-center rounded-full border border-dashed border-warning px-2.5 py-0.5 text-xs font-semibold text-warning-foreground"
+			role="note"
+			aria-label={`${roleLabel} open: ${request.releasedName} dropped it ${droppedAt(new Date(request.releasedAt), timeZone)}`}
+			className="mt-2 inline-flex max-w-full items-center rounded-full border border-dashed border-warning px-2.5 py-0.5 text-xs font-semibold text-warning-foreground"
 		>
-			{roleLabel} open: {request.releasedName} dropped it{" "}
+			{request.releasedName} dropped it{" "}
 			{droppedAt(new Date(request.releasedAt), timeZone)}
 		</span>
 	);
