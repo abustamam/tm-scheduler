@@ -729,6 +729,42 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		expect(el.getAttribute("title")).toBe(full);
 	});
 
+	it("drops the action line under the identity on a phone only: the main line and the action line both carry the max-lg + @max-md pair (#1420)", () => {
+		const { getByText } = renderPanel({
+			roster: [
+				{
+					id: "m1",
+					name: "Ann Lee",
+					preferredName: null,
+					phone: null,
+					email: null,
+				},
+			],
+		});
+		// HONEST LIMIT: jsdom lays nothing out, so that the pair really stacks on
+		// a 343px phone and really does NOT on the lg rail or a wide tablet panel
+		// is `roll-row-geometry.test.ts`'s job. Here: the main line (the identity's
+		// parent) and its action line (a sibling of the identity) each carry both
+		// halves of the condition, and neither half alone.
+		const identity = getByText("Ann Lee").parentElement;
+		const mainLine = identity?.parentElement;
+		const actionLine = identity?.nextElementSibling;
+		expect(mainLine, "no main line around the identity").toBeTruthy();
+		expect(actionLine, "no action line beside the identity").toBeTruthy();
+		for (const el of [mainLine, actionLine]) {
+			const tokens = (el?.className ?? "").split(/\s+/);
+			expect(
+				tokens.filter((t) => t.startsWith("max-lg:@max-md:")).length,
+				el?.className,
+			).toBeGreaterThan(0);
+			expect(
+				tokens.filter((t) => /^(@max-md|max-lg):(?!(@max-md|max-lg):)/.test(t)),
+				`a lone half of the condition on ${el?.className}`,
+			).toEqual([]);
+		}
+		expect(mainLine?.className).toContain("max-lg:@max-md:flex-col");
+	});
+
 	it("greets by the recorded preferred name, in both drafts", async () => {
 		// #486 wired end to end on THIS surface. Severing either prop at the
 		// `NudgeButtons` call site — `email={null}` or `preferredName={null}` — left

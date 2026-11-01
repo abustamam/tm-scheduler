@@ -285,6 +285,10 @@ describe.skipIf(!hasChrome)(
 			});
 
 			it("a roll row stays on ONE line under a forced scrollbar: a long name clamps at two lines, the status track and the one contact-menu icon do not (#1309)", async () => {
+				// This is the RAIL (1280px viewport, `lg` on): the phone restack of
+				// #1420 (`max-lg:@max-md:flex-col` on the main line) must NOT reach it,
+				// so the row still measures `oneLine`. The phone side, where the controls
+				// drop under the name instead, is held by `roll-row-geometry.test.ts`.
 				// Classes come from the real source: the main line, the identity name
 				// box, the action line, the icon size and the status trigger's width.
 				// A classic 15px scrollbar is FORCED on the scroller, as Windows and
@@ -294,7 +298,7 @@ describe.skipIf(!hasChrome)(
 				const mainLine = classAfterTag(PANEL, "function PanelMainLine");
 				const line = classAfterTag(PANEL, "function PanelActionLine");
 				const identity = classAfterTag(PANEL, "function PanelIdentityLine");
-				const nameBox = /const IDENTITY_NAME_CLASS = "([^"]*)"/.exec(
+				const nameBox = /const IDENTITY_NAME_CLASS\s*=\s*"([^"]*)"/.exec(
 					readSource(PANEL),
 				)?.[1];
 				expect(nameBox, "IDENTITY_NAME_CLASS not found").toBeTruthy();
