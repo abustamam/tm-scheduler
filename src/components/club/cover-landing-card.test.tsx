@@ -135,20 +135,24 @@ describe("CoverChip", () => {
 			<CoverChip {...props} request={request} status="finding_cover" />,
 		);
 		expect(screen.getByText("Sam is finding cover")).toBeTruthy();
-		expect(
-			screen.getByLabelText("Timer: Sam is finding cover").textContent,
-		).toBe("Sam is finding cover");
-		expect(
-			container.querySelector('[data-cover-chip="finding_cover"]')?.className,
-		).toContain("border-dashed");
+		const chip = container.querySelector('[data-cover-chip="finding_cover"]');
+		expect(chip?.className).toContain("border-dashed");
+		expect(chip?.textContent).toBe("Timer: Sam is finding cover");
+		const prefix = chip?.querySelector("span");
+		expect(prefix?.className).toContain("sr-only");
+		expect(prefix?.textContent).toBe("Timer: ");
+		expect(chip?.getAttribute("role")).toBeNull();
 	});
 
 	it("dropped: names who dropped it and when, in the club's zone", () => {
-		render(<CoverChip {...props} request={request} status="dropped" />);
-		expect(screen.getByText(/^Sam dropped it Wed 2:14am/)).toBeTruthy();
-		expect(
-			screen.getByLabelText(/^Timer open: Sam dropped it Wed 2:14am/),
-		).toBeTruthy();
+		const { container } = render(
+			<CoverChip {...props} request={request} status="dropped" />,
+		);
+		const chip = container.querySelector('[data-cover-chip="dropped"]');
+		expect(chip?.textContent).toMatch(/^Timer open: Sam dropped it Wed 2:14am/);
+		const prefix = chip?.querySelector("span");
+		expect(prefix?.className).toContain("sr-only");
+		expect(prefix?.textContent).toBe("Timer open: ");
 	});
 
 	const covered: MeetingCoverRequest = {
@@ -159,10 +163,15 @@ describe("CoverChip", () => {
 	};
 
 	it("covered: the story line while the meeting is ahead", () => {
-		render(<CoverChip {...props} request={covered} status="covered" />);
-		expect(
-			screen.getByText("Timer: Sam → Priya · covered in 17 min"),
-		).toBeTruthy();
+		const { container } = render(
+			<CoverChip {...props} request={covered} status="covered" />,
+		);
+		const chip = container.querySelector('[data-cover-chip="covered"]');
+		expect(chip?.textContent).toBe("Timer: Sam → Priya · covered in 17 min");
+		const prefix = chip?.querySelector("span");
+		expect(prefix?.className).toContain("sr-only");
+		expect(prefix?.textContent).toBe("Timer: ");
+		expect(screen.getByText("Sam → Priya · covered in 17 min")).toBeTruthy();
 	});
 
 	it("covered: hidden once the meeting is past", () => {
@@ -277,6 +286,24 @@ describe("the route's computation (coverLandingView / coverChipsFor)", () => {
 		const chips = coverChipsFor(args);
 		expect(chips).toHaveLength(1);
 		expect(chips[0]).toMatchObject({ roleLabel: "Timer 1", status: "covered" });
+		expect(coverChipsFor({ ...args, meetingOver: true })).toHaveLength(0);
+	});
+
+	it("a cancelled or past meeting shows no chip at all, open or dropped (#1461)", () => {
+		const args = {
+			coverRequests: [{ ...request, kind: "finding_cover" as const }, request],
+			slots: [slot],
+			roleCounts: { Timer: 1 },
+			scheduledAt: viewArgs.scheduledAt,
+			timezone: "UTC",
+			now: new Date("2026-11-04T03:00:00Z"),
+			meetingOver: false,
+		};
+		expect(
+			coverChipsFor(args)
+				.map((c) => c.status)
+				.sort(),
+		).toEqual(["dropped", "finding_cover"]);
 		expect(coverChipsFor({ ...args, meetingOver: true })).toHaveLength(0);
 	});
 });

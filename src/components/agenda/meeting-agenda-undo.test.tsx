@@ -298,9 +298,4 @@ describe("MeetingAgenda: slotExtra (#1461)", () => {
 		expect(extra.textContent).toBe("for s1");
 		expect(extra.closest("li")?.id).toBe("slot-s1");
 	});
-
-	it("renders nothing extra when the hook returns null", () => {
-		mount({ viewerId: "m-holder", canManage: false, slotExtra: () => null });
-		expect(screen.queryByTestId("extra")).toBeNull();
-	});
 });

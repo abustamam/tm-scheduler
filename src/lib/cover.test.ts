@@ -113,7 +113,6 @@ describe("coverStatus", () => {
 
 describe("coveredStory", () => {
 	const base = {
-		roleLabel: "Timer",
 		releasedName: "Sam",
 		coveredName: "Priya",
 		releasedAt: new Date("2026-11-04T10:00:00Z"),
@@ -125,13 +124,13 @@ describe("coveredStory", () => {
 		// no_claim=localisation
 		const at = (ms: number) => new Date(base.releasedAt.getTime() + ms);
 		expect(coveredStory({ ...base, coveredAt: at(17 * 60_000) })).toBe(
-			"Timer: Sam → Priya · covered in 17 min",
+			"Sam → Priya · covered in 17 min",
 		);
 		expect(coveredStory({ ...base, coveredAt: at(3 * HOUR) })).toBe(
-			"Timer: Sam → Priya · covered in 3 h",
+			"Sam → Priya · covered in 3 h",
 		);
 		expect(coveredStory({ ...base, coveredAt: at(30 * HOUR) })).toBe(
-			"Timer: Sam → Priya · covered next day",
+			"Sam → Priya · covered next day",
 		);
 	});
 

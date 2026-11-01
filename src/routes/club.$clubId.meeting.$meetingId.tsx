@@ -1894,8 +1894,8 @@ function MeetingView() {
 	const actions = effectiveCanManage ? managerActions : selfActions;
 
 	// Cover requests (#1440): the landing card for a `?cover=` link, and a chip
-	// per request. The chips sit in one strip above the agenda, not under each
-	// role: the agenda component renders the rows and takes no per-slot content.
+	// per request. Each chip sits under its own role row, handed to the agenda
+	// through `slotExtra` (#1461); a cancelled or past meeting shows none.
 	const coverOver = coverMeetingOver({ over, status: meeting.status });
 	const coverView = coverLandingView({
 		cover: coverParam,
@@ -1919,11 +1919,11 @@ function MeetingView() {
 		meetingOver: coverOver,
 	});
 	// slot id -> its chip: the agenda places each under its own row (#1461).
-	const coverChipByPlace = new Map(
+	const coverChipBySlotId = new Map(
 		coverChips.map((c) => [c.request.slotId, c]),
 	);
 	const coverChipUnderRow = (slot: { id: string }) => {
-		const c = coverChipByPlace.get(slot.id);
+		const c = coverChipBySlotId.get(slot.id);
 		return c ? (
 			<CoverChip
 				request={c.request}
