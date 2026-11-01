@@ -1,34 +1,62 @@
-// protects: the root document head links the manifest and both theme-color
-// metas, so Android Chrome can offer install. fails_when: either is dropped
-// from `head`. no_claim: calls the route's head() directly; it does not assert on the
-// server-rendered HTML (no in-process SSR harness for the root shell exists).
+// protects: the RENDERED root document head carries the manifest link and both
+// theme-color metas (light and dark, each with its media, neither duplicated).
+// HeadContent de-duplicates metas by `name`, so a theme-color placed in
+// head().meta silently loses one (#1463). fails_when: either meta is removed
+// from the shell, or moved back into head().meta where it collapses.
+// no_claim: renders the shell through a real router with renderToString; it
+// does not run the client hydration pass (that is `bun run test:hydration`).
+import {
+	createMemoryHistory,
+	createRoute,
+	createRouter,
+	RouterProvider,
+} from "@tanstack/react-router";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("#/db", () => ({ db: {} }));
 
-type Tag = Record<string, string>;
+async function renderHead(): Promise<string> {
+	const { Route } = await import("./__root");
+	const index = createRoute({
+		getParentRoute: () => Route,
+		path: "/",
+		component: () => null,
+	});
+	const router = createRouter({
+		routeTree: Route.addChildren([index]),
+		history: createMemoryHistory({ initialEntries: ["/"] }),
+		context: { queryClient: {} as never },
+	});
+	await router.load();
+	const html = renderToString(createElement(RouterProvider, { router }));
+	const start = html.indexOf("<head");
+	const end = html.indexOf("</head>");
+	expect(start).toBeGreaterThanOrEqual(0);
+	expect(end).toBeGreaterThan(start);
+	return html.slice(start, end);
+}
 
-describe("root head", () => {
-	it("links the manifest and light/dark theme-color", async () => {
-		const { Route } = await import("./__root");
-		const head = (
-			Route as unknown as {
-				options: { head: () => { meta: Tag[]; links: Tag[] } };
-			}
-		).options.head();
-		expect(head.links).toContainEqual({
-			rel: "manifest",
-			href: "/manifest.json",
-		});
-		expect(head.meta).toContainEqual({
-			name: "theme-color",
-			content: "#f3faf5",
-			media: "(prefers-color-scheme: light)",
-		});
-		expect(head.meta).toContainEqual({
-			name: "theme-color",
-			content: "#0a1418",
-			media: "(prefers-color-scheme: dark)",
-		});
+describe("root head (rendered)", () => {
+	it("renders the manifest link and exactly one light and one dark theme-color", async () => {
+		const head = await renderHead();
+		expect(head).toContain('rel="manifest"');
+		const metas = head.match(/<meta[^>]*name="theme-color"[^>]*>/g) ?? [];
+		expect(metas).toHaveLength(2);
+		expect(
+			metas.filter(
+				(m) =>
+					m.includes('content="#f3faf5"') &&
+					m.includes('media="(prefers-color-scheme: light)"'),
+			),
+		).toHaveLength(1);
+		expect(
+			metas.filter(
+				(m) =>
+					m.includes('content="#0a1418"') &&
+					m.includes('media="(prefers-color-scheme: dark)"'),
+			),
+		).toHaveLength(1);
 	});
 });
