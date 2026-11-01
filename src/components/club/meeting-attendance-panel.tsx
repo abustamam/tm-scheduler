@@ -126,7 +126,7 @@ const LG_BREAKPOINT_PX = 1024;
  * claimed "sharing `AttendanceRow`'s shell verbatim is what stops the two modes
  * drifting apart", and what it had actually copied was the `<li>` class list: the
  * CONTENTS stayed pre-#594, so every fix that rebuild made for this 340px column
- * was missing from half the rows — a `truncate` single-line cutoff on unbounded
+ * was missing from half the rows — a single-line `truncate` cutoff on unbounded
  * names, the full role name in an unshrinkable `whitespace-nowrap` badge (~136px
  * of a ~292px column for "Toastmaster of the Day"), word-labelled contact buttons,
  * and no fixed action track at all, so the chip stretched full width and the
@@ -161,7 +161,8 @@ function PanelRow({ children }: { children: ReactNode }) {
  *  renders an unbounded name at full height. One constant, applied to whichever
  *  element is the text box, is what makes the linked row obey the same ceiling
  *  as the plain one. */
-const IDENTITY_NAME_CLASS = "min-w-0 truncate text-sm font-semibold";
+// biome-ignore format: pinned-column-reachability.test.ts reads this declaration on one line
+export const IDENTITY_NAME_CLASS = "min-w-0 break-words line-clamp-2 text-sm font-semibold";
 
 /** Identity line. The name owns it — at 2-4 characters the role code costs it
  *  almost nothing, which is the whole reason the code replaced the full role name
@@ -293,7 +294,7 @@ function PanelIdentityLine({
  *  No `flex-wrap` (#1309): the contact drafts are ONE `Contact <name>` menu
  *  icon now, so the line is the status track plus a 32px icon and never needs a
  *  second line, whatever channels the member prefers. The identity beside it
- *  is what gives way (`min-w-0` + `truncate`).
+ *  is what gives way (`min-w-0` + a two-line clamp).
  *  `pinned-column-reachability.test.ts` holds this under a forced 15px
  *  scrollbar. */
 function PanelActionLine({ children }: { children: ReactNode }) {
@@ -305,7 +306,7 @@ function PanelActionLine({ children }: { children: ReactNode }) {
 }
 
 /** The ONE line of a roll row (#1309): identity on the left, which gives way
- *  (`min-w-0` + `truncate`), and the status control plus the contact menu on
+ *  (`min-w-0` + a two-line clamp, #1420), and the status control plus the contact menu on
  *  the right, which do not. */
 function PanelMainLine({ children }: { children: ReactNode }) {
 	return <div className="flex items-center gap-2">{children}</div>;
@@ -511,7 +512,7 @@ function AttendanceRow({
 							 *  is under 144px.)
 							 *  On a line the narrow track costs 144 + the 12px `gap-3` + the 32px
 							 *  contact-menu icon = 188px, leaving the identity (`min-w-0`,
-							 *  truncating) the rest of the row; the rail and phone cases in
+							 *  clamped to two lines) the rest of the row; the rail and phone cases in
 							 *  `roll-row-geometry.test.ts` hold that. */}
 							<Button
 								variant="outline"
@@ -886,7 +887,7 @@ function RollAttendanceRow({
 		// The rail's row (v1.19.0.0, #594), SHARED as code rather than as a copied
 		// class list — see `PanelRow` for what the copy had missed. Both modes now
 		// render the same three components, so the row is one thing again: ONE
-		// line (#1309), the identity (name and short role code, which truncates) on
+		// line (#1309), the identity (name and short role code; the name may wrap to two lines, #1420) on
 		// the left and the action line on the right, holding the status control in
 		// its fixed track and the one contact-menu icon.
 		<PanelRow>

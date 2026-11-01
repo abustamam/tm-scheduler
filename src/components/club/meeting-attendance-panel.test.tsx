@@ -31,7 +31,10 @@ vi.mock("#/server/guests", () => ({
 	updateGuestProfile: vi.fn(),
 }));
 
-import { MeetingAttendancePanel } from "./meeting-attendance-panel";
+import {
+	IDENTITY_NAME_CLASS,
+	MeetingAttendancePanel,
+} from "./meeting-attendance-panel";
 
 const roster = [
 	{
@@ -696,7 +699,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		expect(visibleLabel(answered)).toBe("Coming");
 	});
 
-	it("keeps a long name on ONE line: truncated, with the full name in its title (#1309)", () => {
+	it("clamps a long name at TWO lines, not one: line-clamp-2 + break-words, full name in its title (#1420)", () => {
 		const full = "Bartholomew Featherstonehaugh-Cholmondeley";
 		const { getByText } = renderPanel({
 			roster: [
@@ -710,16 +713,20 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 			],
 		});
 		const el = getByText(full);
-		// HONEST LIMIT: jsdom performs no layout, so the rendered one-line height
-		// is `roll-row-geometry.test.ts`'s job (Chrome). What is assertable here is
-		// the mechanism: the name truncates (and can shrink in its flex row via
-		// `min-w-0`), and the text it cuts stays reachable through `title`. A
-		// wrapping class coming back (`line-clamp-*`, `break-words`) would put the
-		// row on two lines again.
-		expect(el.classList.contains("truncate")).toBe(true);
-		expect(el.classList.contains("min-w-0")).toBe(true);
+		// HONEST LIMIT: jsdom performs no layout, so the rendered line count is
+		// `roll-row-geometry.test.ts`'s job (Chrome). What is assertable here is
+		// the mechanism, read from the component's own exported constant rather
+		// than a hand-copied string: every token of it is on the name, and the
+		// single-line `truncate` (which cut names to ~5 characters beside a role
+		// code) is not.
+		for (const token of IDENTITY_NAME_CLASS.split(" ")) {
+			expect(el.classList.contains(token), token).toBe(true);
+		}
+		expect(IDENTITY_NAME_CLASS).toMatch(/\bline-clamp-2\b/);
+		expect(IDENTITY_NAME_CLASS).toMatch(/\bbreak-words\b/);
+		expect(IDENTITY_NAME_CLASS).toMatch(/\bmin-w-0\b/);
+		expect(el.classList.contains("truncate")).toBe(false);
 		expect(el.getAttribute("title")).toBe(full);
-		expect(el.className).not.toMatch(/line-clamp|break-words/);
 	});
 
 	it("greets by the recorded preferred name, in both drafts", async () => {
@@ -1210,15 +1217,15 @@ describe("roll mode", () => {
 		const plan = render(<MeetingAttendancePanel {...shared} mode="plan" />);
 		expect(identityLine(plan)).toBe(rollLine);
 
-		// And name the one-line shape explicitly (#1309), because "identical to plan
-		// mode" would also be satisfied by breaking BOTH — a parity assertion cannot
-		// see a defect present on each side. The name truncates and the identity
-		// block is the flexible one (`min-w-0 flex-1`) in the one-line row; the
-		// two-line clamp is what this replaced.
-		expect(rollLine).toContain("truncate");
+		// And name the shape explicitly (#1309, #1420), because "identical to plan
+		// mode" would also be satisfied by breaking BOTH. The name wraps to at most
+		// two lines (the exported class, not a copy) and the identity block is the
+		// flexible one (`min-w-0 flex-1`); the single-line `truncate` is gone.
+		expect(rollLine).toContain(IDENTITY_NAME_CLASS);
+		expect(rollLine).toContain("line-clamp-2");
+		expect(rollLine).toContain("break-words");
+		expect(rollLine).not.toMatch(/\btruncate\b/);
 		expect(rollLine).toContain("min-w-0 flex-1");
-		expect(rollLine).not.toContain("line-clamp");
-		expect(rollLine).not.toContain("break-words");
 		// The 2-4 character CODE is what is VISIBLE; the full role name reaches a
 		// pointer through `title` and a screen reader through the `sr-only` span. On
 		// the surviving render, since the roll copy is unmounted above — and the two
@@ -1785,23 +1792,24 @@ describe("member identity link (#727)", () => {
 		expect(link.getAttribute("href")).toBe("/members/m1");
 	});
 
-	it("keeps the one-line truncation on the LINKED name (criterion 11, #1309)", async () => {
-		// `name` is unbounded user data and the rail is ~292px wide. The truncation
+	it("keeps the two-line clamp on the LINKED name (criterion 11, #1420)", async () => {
+		// `name` is unbounded user data and the rail is ~292px wide. The clamp
 		// has to be on the element holding the TEXT, so swapping a `<span>` for an
-		// `<a>` is the classic way to lose it — and jsdom performs no layout, so
-		// the rendered height is not measurable here (CLAUDE.md's jsdom trap; the
-		// Chrome geometry test covers the plain span). What IS assertable is that
-		// the link carries the same box the plain span does, which is the property
-		// the shared class constant exists to hold, plus the `title` that keeps the
-		// cut-off text reachable.
+		// `<a>` is the classic way to lose it, and jsdom performs no layout, so the
+		// rendered height is measured by the Chrome geometry test. What IS
+		// assertable is that the link carries the same exported class the plain
+		// span does, plus the `title` that keeps the full text reachable.
 		await renderUnderMemoryRouter(
 			<MeetingAttendancePanel {...linkProps} canViewMemberDetail={true} />,
 		);
 		const link = screen.getByRole("link", { name: "Ayesha Khan" });
-		expect(link.className).toContain("truncate");
-		expect(link.className).toContain("min-w-0");
+		for (const token of IDENTITY_NAME_CLASS.split(" ")) {
+			expect(link.classList.contains(token), token).toBe(true);
+		}
+		expect(link.classList.contains("line-clamp-2")).toBe(true);
+		expect(link.classList.contains("break-words")).toBe(true);
+		expect(link.classList.contains("truncate")).toBe(false);
 		expect(link.getAttribute("title")).toBe("Ayesha Khan");
-		expect(link.className).not.toMatch(/line-clamp|break-words/);
 	});
 
 	it("paints the link with its OWN text utility, not the base-layer anchor colour", async () => {
