@@ -31,7 +31,11 @@ async function renderHead(): Promise<string> {
 	});
 	await router.load();
 	const html = renderToString(createElement(RouterProvider, { router }));
-	return html.slice(html.indexOf("<head"), html.indexOf("</head>"));
+	const start = html.indexOf("<head");
+	const end = html.indexOf("</head>");
+	expect(start).toBeGreaterThanOrEqual(0);
+	expect(end).toBeGreaterThan(start);
+	return html.slice(start, end);
 }
 
 describe("root head (rendered)", () => {

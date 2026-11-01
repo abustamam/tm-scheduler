@@ -61,7 +61,7 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 // Rendered straight into <head>, NOT through head().meta: HeadContent
 // de-duplicates metas by `name`, ignoring `media`, so two theme-color entries
 // collapse to one and the light one was dropped (#1463).
-export function ThemeColorMetas() {
+function ThemeColorMetas() {
 	return (
 		<>
 			<meta
