@@ -953,14 +953,17 @@ function RollAttendanceRow({
 					)}
 				</PanelActionLine>
 			</PanelMainLine>
-			{/* #1049. Its OWN right-aligned line under the chip, not a third item
-			 *  on the action line: the status track plus the contact-menu icon
-			 *  already fill most of the line at a phone's width, and squeezing the
-			 *  toggle in would move the chip off the rail's one right edge. Present rows only
+			{/* #1049. Its OWN line under the chip, not a third item on the action
+			 *  line: the status track plus the contact-menu icon already fill most
+			 *  of the line at a phone's width, and squeezing the toggle in would
+			 *  move the chip off the rail's one right edge. It is right-aligned
+			 *  on the rail and the tablet panel, and left-aligned on a phone, under
+			 *  the same condition as `PanelActionLine`, so the status and the toggle
+			 *  share a left edge there. Present rows only
 			 *  — someone absent or excused was in neither place, and the server
 			 *  clears the mode for them. Same disabled condition as the chip. */}
 			{row.status === "present" && onSetMode ? (
-				<div className="flex justify-end">
+				<div className="flex justify-end max-lg:@max-md:justify-start">
 					<AttendanceModeToggle
 						name={row.name}
 						mode={row.mode}

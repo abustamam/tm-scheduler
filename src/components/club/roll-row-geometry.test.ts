@@ -30,7 +30,9 @@
  *
  * Scope, as the issue states it: a row with a RECORDED, non-present status.
  * A Present row also carries the in-person/online toggle (#1049) on its own
- * line, so it is taller by design and is not measured here.
+ * line, so it is taller by design; its height is not measured, only where the
+ * toggle sits horizontally (left with the status on a phone, right on the
+ * rail).
  *
  * The CONTROLS are what let the rest fail: the old two-line shape rebuilt from
  * the same classes must measure taller than 48px, the viewport-keyed track
@@ -55,6 +57,7 @@ const NUDGE = resolve(HERE, "nudge-buttons.tsx");
 const BADGE = resolve(HERE, "../ui/badge.tsx");
 const BUTTON = resolve(HERE, "../ui/button.tsx");
 const CARD = resolve(HERE, "../ui/card.tsx");
+const TOGGLE = resolve(HERE, "attendance-mode-toggle.tsx");
 const ROUTE = resolve(HERE, "../../routes/club.$clubId.meeting.$meetingId.tsx");
 
 /** First `className="…"` after `tag`, in comment-stripped source. */
@@ -198,6 +201,17 @@ type Measure = {
 	pageOverflow: number;
 	/** Right-most control edge minus the row's right edge; > 0 is clipped. */
 	overhang: number;
+	/** The phone's 375px box: its scroll width minus its width. The WINDOW is
+	 *  500px, so `pageOverflow` cannot see a row that spills past 375px. Falls
+	 *  back to `pageOverflow` where there is no box. */
+	boxOverflow: number;
+	/** Left edge of the status trigger and the row's content-left / right. */
+	statusLeft: number;
+	rowLeft: number;
+	rowRight: number;
+	/** The mode toggle's edges, `NaN` on a row without one. */
+	toggleLeft: number;
+	toggleRight: number;
 };
 
 const CLASS_KEYS = [
@@ -232,6 +246,8 @@ const CLASS_KEYS = [
 	"qualifier",
 	"qualifierAsked",
 	"menuTrigger",
+	"toggleLine",
+	"toggle",
 ] as const;
 type Classes = Record<(typeof CLASS_KEYS)[number], string>;
 
@@ -243,6 +259,8 @@ type RowOptions = {
 	tag?: "span" | "a";
 	/** The role chip's text; `null` is a row with no role code. */
 	code?: string | null;
+	/** A Present row's #1049 in-person/online toggle, on its own line. */
+	toggle?: boolean;
 };
 
 type MeasureOptions = Omit<RowOptions, "shape"> & {
@@ -291,10 +309,13 @@ describe.skipIf(!hasChrome)(
 			const status = `<button type="button" class="${button(c, c.outline, c.sm, plan ? c.planStatus : c.status)}" data-status><span class="sr-only">${name} status</span><span aria-hidden data-label>${plan ? `${PLAN_STATUS}<span class="${word === "assumed" ? c.qualifier : c.qualifierAsked}">${word === "assumed" ? PLAN_QUALIFIER : ASKED_QUALIFIER}</span>` : ROLL_LABEL}</span><svg class="size-3.5" viewBox="0 0 24 24" width="14" height="14"></svg></button>`;
 			const menu = `<button type="button" class="${button(c, c.ghost, c.iconSm, c.menuTrigger)}" aria-label="Contact ${name}" data-menu><svg class="size-4" viewBox="0 0 24 24" width="16" height="16"></svg></button>`;
 			const actions = `<div class="${c.actionLine}">${status}${menu}</div>`;
+			const toggleLine = o.toggle
+				? `<div class="${c.toggleLine}"><fieldset class="${c.toggle}" data-toggle><button type="button">In person</button><button type="button">Online</button></fieldset></div>`
+				: "";
 			// The CONTROL: the pre-#1309 shape, the action line under the identity.
 			const inner =
 				shape !== "twoLine"
-					? `<div class="${c.mainLine}">${identity}${actions}</div>`
+					? `<div class="${c.mainLine}">${identity}${actions}</div>${toggleLine}`
 					: `<div class="flex flex-col gap-1.5">${identity}${actions}</div>`;
 			// A divider-bearing row ABOVE it, as in the real list, so the measured
 			// row is the second and carries no `last:` exemption surprises. The list
@@ -350,7 +371,13 @@ describe.skipIf(!hasChrome)(
 				statusWidth: Math.round(r(st).width),
 				statusClip: st.scrollWidth - st.clientWidth,
 				pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-				overhang: Math.round(Math.max(r(st).right, r(menu).right) - r(row).right)
+				overhang: Math.round(Math.max(r(st).right, r(menu).right) - r(row).right),
+				boxOverflow: q("[data-page]") ? q("[data-page]").scrollWidth - q("[data-page]").clientWidth : document.documentElement.scrollWidth - document.documentElement.clientWidth,
+				statusLeft: Math.round(r(st).left),
+				rowLeft: Math.round(r(row).left + parseFloat(getComputedStyle(row).paddingLeft)),
+				rowRight: Math.round(r(row).right - parseFloat(getComputedStyle(row).paddingRight)),
+				toggleLeft: q("[data-toggle]") ? Math.round(r(q("[data-toggle]")).left) : "NaN",
+				toggleRight: q("[data-toggle]") ? Math.round(r(q("[data-toggle]")).right) : "NaN"
 			};
 			document.title = Object.keys(out).map(function (k) { return k + "=" + out[k]; }).join(";");
 		})();
@@ -414,7 +441,8 @@ describe.skipIf(!hasChrome)(
 				labelContrast: contrast(label),
 				chipContrast: contrast(chip),
 				nameClipped: nm.scrollHeight > nm.clientHeight || nm.scrollWidth > nm.clientWidth ? 1 : 0,
-				pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
+				pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+				boxOverflow: q("[data-page]") ? q("[data-page]").scrollWidth - q("[data-page]").clientWidth : document.documentElement.scrollWidth - document.documentElement.clientWidth
 			};
 			document.title = Object.keys(out).map(function (k) { return k + "=" + out[k]; }).join(";");
 		})();
@@ -475,6 +503,12 @@ describe.skipIf(!hasChrome)(
 				statusClip: n("statusClip"),
 				pageOverflow: n("pageOverflow"),
 				overhang: n("overhang"),
+				boxOverflow: n("boxOverflow"),
+				statusLeft: n("statusLeft"),
+				rowLeft: n("rowLeft"),
+				rowRight: n("rowRight"),
+				toggleLeft: n("toggleLeft"),
+				toggleRight: n("toggleRight"),
 			};
 		}
 
@@ -498,6 +532,7 @@ describe.skipIf(!hasChrome)(
 				chipContrast: n("chipContrast"),
 				nameClipped: n("nameClipped") === 1,
 				pageOverflow: n("pageOverflow"),
+				boxOverflow: n("boxOverflow"),
 			};
 		}
 
@@ -556,6 +591,18 @@ describe.skipIf(!hasChrome)(
 				"function PanelIdentityLine",
 			);
 			cls.actionLine = classAfterTag(PANEL, "function PanelActionLine");
+			// The #1049 toggle's own line (the Present row's third child) and the
+			// toggle's fieldset.
+			cls.toggleLine = capture(
+				PANEL,
+				/row\.status === "present" && onSetMode \? \(\s*<div className="([^"]*)"/,
+				"the mode toggle's line className",
+			);
+			cls.toggle = capture(
+				TOGGLE,
+				/cn\(\s*"(inline-flex shrink-0[^"]*)"/,
+				"the mode toggle's fieldset className",
+			);
 			cls.buttonBase = capture(BUTTON, /cva\(\s*"([^"]*)"/, "button base");
 			cls.outline = capture(
 				BUTTON,
@@ -707,6 +754,10 @@ describe.skipIf(!hasChrome)(
 				it(`${shape}: the status line sits UNDER the identity, the 144px track holds, the contact menu stays in the row`, () => {
 					const m = phone(shape);
 					expect(m.stacked, "the status line did not drop").toBe(true);
+					expect(
+						Math.abs(m.statusLeft - m.rowLeft),
+						`status left ${m.statusLeft}px, the row's content-left ${m.rowLeft}px`,
+					).toBeLessThanOrEqual(1);
 					expect(m.statusWidth, "the status track is not narrowed").toBe(144);
 					expect(
 						m.statusClip,
@@ -722,9 +773,10 @@ describe.skipIf(!hasChrome)(
 					expect(m.overhang, "controls clipped by the row").toBeLessThanOrEqual(
 						0,
 					);
-					expect(m.pageOverflow, "page scrolls sideways").toBeLessThanOrEqual(
-						0,
-					);
+					expect(
+						m.boxOverflow,
+						"the 375px box scrolls sideways",
+					).toBeLessThanOrEqual(0);
 					// A role code never takes the name's second line: the chip is beside it.
 					expect(
 						Math.abs(m.nameMid - m.chipMid),
@@ -741,7 +793,10 @@ describe.skipIf(!hasChrome)(
 							const at = `${tag}, "${MID_NAME}"`;
 							expect(mid.stacked, at).toBe(true);
 							expect(mid.nameLines, `${at}: ${mid.nameLines} lines`).toBe(1);
-							expect(mid.nameClippedV, `${at}: no ellipsis`).toBe(false);
+							expect(
+								mid.nameClippedV,
+								`${at}: the name is cut by an ellipsis`,
+							).toBe(false);
 							expect(mid.nameClippedH, `${at}: clipped sideways`).toBe(false);
 							const two = phone(shape, { name: TWO_WORD_NAME, tag, code });
 							const at2 = `${tag}, "${TWO_WORD_NAME}"`;
@@ -756,7 +811,10 @@ describe.skipIf(!hasChrome)(
 						const m = phone(shape, { name: LONG_NAME, tag, code: PLAN_CODE });
 						expect(m.stacked).toBe(true);
 						expect(m.nameLines, `name is on ${m.nameLines} lines`).toBe(2);
-						expect(m.nameClippedV, "no ellipsis: nothing was cut").toBe(true);
+						expect(
+							m.nameClippedV,
+							"the long name was not cut: no ellipsis",
+						).toBe(true);
 						expect(m.nameClippedH, "a long word is clipped sideways").toBe(
 							false,
 						);
@@ -765,9 +823,10 @@ describe.skipIf(!hasChrome)(
 							m.overhang,
 							"controls clipped by the row",
 						).toBeLessThanOrEqual(0);
-						expect(m.pageOverflow, "page scrolls sideways").toBeLessThanOrEqual(
-							0,
-						);
+						expect(
+							m.boxOverflow,
+							"the 375px box scrolls sideways",
+						).toBeLessThanOrEqual(0);
 						// Two 20px lines, the 8px gap, the 32px controls and the row's
 						// padding; a third line would add 20px.
 						expect(
@@ -776,6 +835,27 @@ describe.skipIf(!hasChrome)(
 						).toBeLessThanOrEqual(96);
 					});
 				}
+			}
+
+			// A Present row's #1049 toggle sits on its own line under the chip: on a
+			// phone it shares the status trigger's left edge, not the right.
+			for (const shape of ["plan", "roll"] as const) {
+				it(`${shape}: a Present row's mode toggle lines up with the status trigger's left edge`, () => {
+					const m = phone(shape, { toggle: true });
+					expect(m.stacked).toBe(true);
+					expect(
+						Math.abs(m.statusLeft - m.rowLeft),
+						"the status left is the row's content-left",
+					).toBeLessThanOrEqual(1);
+					expect(
+						Math.abs(m.toggleLeft - m.statusLeft),
+						`toggle left ${m.toggleLeft}px, status left ${m.statusLeft}px`,
+					).toBeLessThanOrEqual(1);
+					expect(
+						m.boxOverflow,
+						"the 375px box scrolls sideways",
+					).toBeLessThanOrEqual(0);
+				});
 			}
 
 			it("the name box is nearly the whole row: a short name keeps >= 230px beside TD and >= 200px beside TOASTM", () => {
@@ -814,7 +894,7 @@ describe.skipIf(!hasChrome)(
 					asked.statusClip,
 					"clip beyond the ~6px fallback",
 				).toBeLessThanOrEqual(8);
-				expect(asked.pageOverflow).toBeLessThanOrEqual(0);
+				expect(asked.boxOverflow).toBeLessThanOrEqual(0);
 			});
 
 			it("CONTROL: the same page WITHOUT the restack leaves the name its old sliver: a TD chip ~57px, TOASTM ~24px, and a 14-character name does not fit on a line", () => {
@@ -865,6 +945,45 @@ describe.skipIf(!hasChrome)(
 					expect(at.statusWidth).toBe(176);
 					expect(at.rowHeight).toBeLessThanOrEqual(48);
 				});
+
+				// Long-name pressure at the same boundary (#1309): beside the widest
+				// role code the name clamps at two lines, never stacks, and neither
+				// the track nor the row's edge gives way.
+				for (const [where, opts, track] of [
+					["448px of list", { pagePx: pageFor(CONTAINER_MD_PX) }, 176],
+					["the 800px tablet", { viewport: TABLET_VIEWPORT }, 176],
+				] as const) {
+					it(`${shape}: a LONG name beside ${PLAN_CODE} at ${where} stays one line of controls on the ${track}px track, controls inside the row`, () => {
+						const m = measure(shape, {
+							...opts,
+							name: LONG_NAME,
+							code: PLAN_CODE,
+						});
+						expect(m.stacked, `${where}: restacked`).toBe(false);
+						expect(m.statusWidth, `${where}: track`).toBe(track);
+						expect(
+							m.nameLines,
+							`${where}: ${m.nameLines} lines`,
+						).toBeLessThanOrEqual(2);
+						expect(m.nameClippedH, `${where}: a long word spills`).toBe(false);
+						expect(
+							m.overhang,
+							`${where}: controls clipped`,
+						).toBeLessThanOrEqual(0);
+						expect(
+							m.statusClip,
+							`${where}: status label clipped`,
+						).toBeLessThanOrEqual(0);
+						expect(
+							m.rowHeight,
+							`${where}: row is ${m.rowHeight}px tall`,
+						).toBeLessThanOrEqual(64);
+						expect(
+							Math.abs(m.statusMid - m.menuMid),
+							`${where}: status and menu share a line`,
+						).toBeLessThanOrEqual(4);
+					});
+				}
 
 				it(`${shape}: a full-width tablet panel (800px window, below lg) stays ONE line on the 176px track`, () => {
 					const m = measure(shape, { viewport: TABLET_VIEWPORT });
@@ -1002,6 +1121,26 @@ describe.skipIf(!hasChrome)(
 			});
 		}
 
+		// A Present row's #1049 toggle stays right-aligned wherever the row is
+		// not restacked: its right edge is the row's content-right.
+		for (const [where, viewport] of [
+			["the 340px lg rail", LG_VIEWPORT],
+			["the 384px xl rail", XL_VIEWPORT],
+			["the 800px tablet panel", TABLET_VIEWPORT],
+		] as const) {
+			it(`${where}: a Present row's mode toggle is right-aligned`, () => {
+				const m = measure("roll", { viewport, toggle: true });
+				expect(m.stacked, "not restacked").toBe(false);
+				expect(
+					Math.abs(m.toggleRight - m.rowRight),
+					`toggle right ${m.toggleRight}px, row content-right ${m.rowRight}px`,
+				).toBeLessThanOrEqual(1);
+				expect(m.toggleLeft, "not at the left edge").toBeGreaterThan(
+					m.rowLeft + 8,
+				);
+			});
+		}
+
 		it("CONTROL: the pre-fix classes (viewport-keyed track, 24px card padding, no container) leave the real rail's identity box under the floor", () => {
 			for (const [viewport, railPx] of [
 				[LG_VIEWPORT, LG_RAIL_PX],
@@ -1062,7 +1201,7 @@ describe.skipIf(!hasChrome)(
 								p.nameClipped,
 								"the clamp's ellipsis is the only cut",
 							).toBe(true);
-							expect(p.pageOverflow).toBeLessThanOrEqual(0);
+							expect(p.boxOverflow).toBeLessThanOrEqual(0);
 							const whole = paint(shape, theme, {
 								name: MID_NAME,
 								tag,
