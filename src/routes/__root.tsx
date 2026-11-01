@@ -27,16 +27,6 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 				name: "viewport",
 				content: "width=device-width, initial-scale=1",
 			},
-			{
-				name: "theme-color",
-				content: "#f3faf5",
-				media: "(prefers-color-scheme: light)",
-			},
-			{
-				name: "theme-color",
-				content: "#0a1418",
-				media: "(prefers-color-scheme: dark)",
-			},
 			...shareMeta({
 				title: "GavelUp",
 				description:
@@ -68,6 +58,26 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 	shellComponent: RootDocument,
 });
 
+// Rendered straight into <head>, NOT through head().meta: HeadContent
+// de-duplicates metas by `name`, ignoring `media`, so two theme-color entries
+// collapse to one and the light one was dropped (#1463).
+export function ThemeColorMetas() {
+	return (
+		<>
+			<meta
+				name="theme-color"
+				content="#f3faf5"
+				media="(prefers-color-scheme: light)"
+			/>
+			<meta
+				name="theme-color"
+				content="#0a1418"
+				media="(prefers-color-scheme: dark)"
+			/>
+		</>
+	);
+}
+
 function RootDocument({ children }: { children: React.ReactNode }) {
 	return (
 		// suppressHydrationWarning: the theme script below adds `.dark` to <html>
@@ -83,6 +93,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 						__html: `(function(){try{var t=localStorage.getItem('gavelup-theme');var d=t?t==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;if(d)document.documentElement.classList.add('dark');}catch(e){}})();`,
 					}}
 				/>
+				<ThemeColorMetas />
 				<HeadContent />
 			</head>
 			<body>
