@@ -90,8 +90,15 @@ describe("AssistantDemo", () => {
 		expect(screen.getByText("Beta")).toBeTruthy();
 		expect(screen.getByText(AI_CONNECTOR_SETUP_LINE)).toBeTruthy();
 		// There is no per-club switch since #873 (`mayUseConnector` admits any
-		// admin or officer of an open club), so the line must not promise one.
-		expect(AI_CONNECTOR_SETUP_LINE).toMatch(/^For club officers\./);
+		// active member of an open club since #1281), so the line must not
+		// promise one.
+		expect(AI_CONNECTOR_SETUP_LINE).toMatch(/^For club members\./);
 		expect(AI_CONNECTOR_SETUP_LINE).not.toMatch(/switch it on|ask us/i);
+		// ChatGPT's custom connectors are a Business/Enterprise feature; a line
+		// naming ChatGPT without that sends Free and Plus users looking for a
+		// setting their plan does not have.
+		expect(AI_CONNECTOR_SETUP_LINE).toMatch(
+			/ChatGPT on Business or Enterprise/,
+		);
 	});
 });

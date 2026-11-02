@@ -46,6 +46,19 @@ describe("ApiTokensSection", () => {
 		expect(details?.querySelector("summary")?.contains(title)).toBe(true);
 	});
 
+	it("tells a ChatGPT user which plans can connect, so a Free or Plus user knows it is the plan", async () => {
+		state.eligible = true;
+		renderSection();
+		await screen.findByText("From Claude or ChatGPT");
+		expect(screen.getByText(`${window.location.origin}/api/mcp`)).toBeTruthy();
+		const chatgpt = screen.getByText("ChatGPT:").parentElement;
+		expect(chatgpt?.textContent).toMatch(/Business or Enterprise workspace/);
+		expect(chatgpt?.textContent).toMatch(
+			/Free, Plus and Pro plans can't use GavelUp yet/,
+		);
+		expect(chatgpt?.textContent).toMatch(/not a problem with your account/);
+	});
+
 	it("renders nothing for an ineligible user", async () => {
 		state.eligible = false;
 		const { container } = renderSection();

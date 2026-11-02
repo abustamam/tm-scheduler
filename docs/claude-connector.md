@@ -1,18 +1,22 @@
-# Using GavelUp from Claude
+# Using GavelUp from Claude or ChatGPT
 
-GavelUp has an MCP server at `https://gavelup.app/api/mcp`. Connect Claude to it and you can
-run your club from a chat — "what's on Thursday's agenda?", "Dana wants to speak at the next
-meeting", "here's a photo of last night's guest book" — on the web, the desktop app, or your
-phone.
+GavelUp has an MCP server at `https://gavelup.app/api/mcp`. Connect Claude or ChatGPT to it and
+you can run your club from a chat — "what's on Thursday's agenda?", "Dana wants to speak at the
+next meeting", "here's a photo of last night's guest book".
 
-There are two ways in, and they reach the same seven tools with the same authority:
+"MCP server" and "connector" are the same thing seen from two sides: GavelUp runs the MCP
+server; Claude and ChatGPT call the thing you add a **connector** (ChatGPT also says "app" or
+"custom MCP server").
+
+There are three ways in, and they reach the same tools with the same authority:
 
 | From | How it signs in | Set up by |
 |---|---|---|
 | **claude.ai** (web, desktop, iOS, Android) | OAuth: you sign in to GavelUp and approve the connection | The connector, once per Claude account |
+| **ChatGPT** (web only; Business or Enterprise/Edu plans) | OAuth, the same way | A workspace admin, once per workspace |
 | **Claude Code** (your terminal) | A personal `tmk_` token pasted into a header | You, from Account settings (`/account`) |
 
-What either one can do is exactly what **you** can do: as a member it reads your own schedule
+What any of them can do is exactly what **you** can do: as a member it reads your own schedule
 and feedback; in every club where you are an admin or hold an open officer term it also gets the
 officer tools, and nowhere else. Every write is credited to you, the same as
 if you had made it in the app.
@@ -26,7 +30,7 @@ sees "Only active members of a GavelUp club can connect apps." with only a Decli
 
 ## Connecting claude.ai
 
-You need a GavelUp account that is an admin or officer of a club. Nothing else: there is no
+You need a GavelUp account that is an active member of an open club. Nothing else: there is no
 client ID or secret to ask anyone for.
 
 1. In claude.ai, open **Settings → Connectors → Add custom connector**.
@@ -44,6 +48,40 @@ nothing to set up on the phone.
 
 **Declining** is safe: nothing is connected, and "Return to the app" tells Claude so. If you had
 already connected before, declining a second request does not disconnect the first.
+
+## Connecting ChatGPT
+
+**Check your plan first.** Whether ChatGPT can use GavelUp is decided by your ChatGPT plan, not
+by GavelUp, and on the plans that can't, ChatGPT simply has no option to add it — GavelUp never
+hears about it, so it can't tell you why. As of OpenAI's help article "Connecting custom MCP
+servers in ChatGPT" (checked 2026-11-02):
+
+| ChatGPT plan | Can it use GavelUp? |
+|---|---|
+| Free, Go, Plus | **No.** These plans cannot add custom connectors |
+| Pro | **Not yet.** Pro may only add connectors whose tools are marked read-only, and GavelUp's are not marked yet |
+| Business | **Yes**, on the web. Only a workspace **admin or owner** can add it, then publish it for the workspace |
+| Enterprise / Edu | **Yes**, on the web. An admin or owner, or a member an admin has given permission to |
+
+ChatGPT's phone apps cannot add custom connectors; set it up on chatgpt.com.
+
+If you are on Business or Enterprise/Edu:
+
+1. On chatgpt.com, open **Plugins**, choose **+**, then **Add custom MCP server**. (OpenAI moves
+   this menu; older workspaces have it under **Settings → Apps → Create**.)
+2. Name it `GavelUp`. Under **Connection**, enter `https://gavelup.app/api/mcp`. Choose **OAuth**
+   for authentication and leave any client ID and secret empty — ChatGPT identifies itself to
+   GavelUp on its own.
+3. Accept ChatGPT's risk warning and create it. ChatGPT opens GavelUp: sign in, check the "Signed
+   in as …" line on **Connect ChatGPT?**, then **Approve**.
+4. On Business, an admin then publishes it for the workspace; each member who uses it connects
+   their **own** GavelUp account the same way, so their writes are credited to them.
+
+Use it by typing `@GavelUp` in a chat. ChatGPT may ask you to confirm before a tool that writes;
+GavelUp's own preview-then-apply step still applies on top of that.
+
+ChatGPT keeps a **snapshot** of GavelUp's tools from when the admin added it. When GavelUp adds or
+changes a tool, an admin has to refresh it in workspace settings before ChatGPT sees the change.
 
 ## What you can ask
 
@@ -163,6 +201,9 @@ Revoke the token on `/account` to disconnect; that takes effect on the next call
 | Every officer tool answers `FORBIDDEN` | The account you connected is a member, not an admin or officer, of that club. `whoami`, `get_my_feedback` and `get_my_schedule` still work |
 | `ARCHIVED` | That club has been archived; it can't be changed from anywhere |
 | The magic link says it has expired | Links work once, for five minutes. Ask for a new one |
+| ChatGPT has no "Add custom MCP server" option | Your ChatGPT plan doesn't include custom connectors (Free, Go, Plus), or you aren't an admin of a Business workspace. Nothing on GavelUp's side can change that — see "Connecting ChatGPT" |
+| ChatGPT (Pro) adds GavelUp but shows no tools | Pro only allows read-only tools, and GavelUp's are not marked read-only yet |
+| ChatGPT shows an old list of tools | An admin needs to refresh the app's tools in ChatGPT's workspace settings |
 
 ---
 
@@ -180,8 +221,8 @@ and redirect URI from it, and records an `oauth_client` row with no secret. Nobo
 anything and there is no shared secret to leak or rotate (#852, ADR-0027).
 
 GavelUp fetches **only** the URLs in `CIMD_ALLOWED_CLIENT_IDS` (`src/lib/oauth-connector-clients.ts`),
-by exact match. Today that is hosted Claude alone — Claude Code keeps using `tmk_` tokens. Any
-other `https://` client id is refused before it is fetched, and logged once:
+by exact match. Today that is hosted Claude and ChatGPT — Claude Code keeps using `tmk_` tokens.
+Any other `https://` client id is refused before it is fetched, and logged once:
 
 ```
 [oauth] refused CIMD client_id "https://…"
@@ -189,6 +230,17 @@ other `https://` client id is refused before it is fetched, and logged once:
 
 That line is how a new client's URL is found: attempt a connection from it, read the line in the
 Railway logs, then add the URL to the set with a fixture test beside Claude's.
+
+**ChatGPT** is `https://chatgpt.com/oauth/client.json` (named "ChatGPT", redirect
+`https://chatgpt.com/connector_platform_oauth_redirect`). Unlike Claude it is a
+`private_key_jwt` client: every token request carries an assertion signed with a key from
+`https://chatgpt.com/oauth/jwks.json`, which GavelUp fetches through the same CIMD transport.
+ChatGPT uses this STABLE document only because GavelUp's authorization-server metadata
+advertises `authorization_response_iss_parameter_supported: true`, returns a matching `iss` on
+every authorization response, and names an `issuer` identical to the protected resource's
+`authorization_servers` entry. Break any of the three and ChatGPT switches to a per-connector
+`https://chatgpt.com/oauth/{callback_id}/client.json`, which the exact match refuses: the refusal
+line above is what you would see.
 
 **Retiring the shared-secret client.** Before #852, claude.ai connected as one hand-registered
 confidential client named `claude.ai`. It keeps working until it is deleted. Once you have

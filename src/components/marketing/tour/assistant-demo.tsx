@@ -2,15 +2,18 @@ import { useEffect, useRef, useState } from "react";
 import { BETA_PILL_CLASS } from "./tour-styles";
 
 /**
- * Who may connect an assistant, and how, in one sentence (#867). Any admin or
- * officer of an open club may (`mayUseConnector`,
- * `src/server/connector-eligibility.ts`); there is no per-club switch. They
- * add GavelUp as a custom connector in claude.ai and approve it on GavelUp's
- * consent screen (`docs/claude-connector.md`). One constant, so the next
- * change to that setup lands in one place.
+ * Who may connect an assistant, and how, in one sentence (#867). Any active
+ * member of an open club may (`mayUseConnector`,
+ * `src/server/connector-eligibility.ts`, widened in #1281); there is no
+ * per-club switch. They add GavelUp as a custom connector in Claude or ChatGPT
+ * and approve it on GavelUp's consent screen (`docs/claude-connector.md`).
+ * ChatGPT is named with its plan limit because OpenAI offers custom
+ * connectors only on Business and Enterprise/Edu workspaces: someone on Free
+ * or Plus finds no way to add one and should not blame GavelUp for it. One
+ * constant, so the next change to that setup lands in one place.
  */
 export const AI_CONNECTOR_SETUP_LINE =
-	"For club officers. Tested with Claude: add GavelUp as a connector in claude.ai, then sign in to approve it.";
+	"For club members. Works with Claude, and with ChatGPT on Business or Enterprise plans: add GavelUp as a connector, then sign in to approve it.";
 
 export const ASSISTANT_DEMO_MESSAGES = [
 	{ from: "user", text: "Put Dana in Speaker 2 on Thursday." },

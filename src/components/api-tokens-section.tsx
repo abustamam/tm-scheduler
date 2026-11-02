@@ -26,6 +26,43 @@ import {
  * only, so a client-side check would hide this from an officer whose office is
  * in a different club than the one they happen to be looking at.
  */
+/**
+ * How to connect from Claude or ChatGPT, where nothing is pasted: the app
+ * signs in to GavelUp and the person approves it (`docs/claude-connector.md`).
+ *
+ * ChatGPT's plan limit is stated here because the failure is silent on
+ * OpenAI's side — on Free, Plus or Pro the "add a custom MCP server" option
+ * is missing or read-only, and GavelUp never sees a request to explain.
+ * OpenAI's help article "Connecting custom MCP servers in ChatGPT" is the
+ * source; re-check it when this copy changes.
+ */
+function ConnectorSetup() {
+	const mcpUrl = `${typeof window === "undefined" ? "https://<host>" : window.location.origin}/api/mcp`;
+	return (
+		<div className="min-w-0 space-y-2 text-sm">
+			<div className="font-semibold">From Claude or ChatGPT</div>
+			<p className="text-muted-foreground">
+				Add a custom connector with this URL, then sign in to GavelUp and
+				approve it:
+			</p>
+			<code className="block break-all font-mono text-xs">{mcpUrl}</code>
+			<ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+				<li>
+					<span className="font-semibold text-foreground">Claude:</span> Settings
+					→ Connectors → Add custom connector. Works on the web, desktop and
+					phone apps.
+				</li>
+				<li>
+					<span className="font-semibold text-foreground">ChatGPT:</span> needs a
+					Business or Enterprise workspace, and a workspace admin adds it, on
+					the web. Free, Plus and Pro plans can't use GavelUp yet — that's a
+					ChatGPT plan limit, not a problem with your account.
+				</li>
+			</ul>
+		</div>
+	);
+}
+
 export function ApiTokensSection() {
 	const qc = useQueryClient();
 	const [name, setName] = useState("");
@@ -67,8 +104,14 @@ export function ApiTokensSection() {
 				Connect an AI assistant
 			</summary>
 			<div className="mt-3 space-y-3">
+				<ConnectorSetup />
+
 				<div className="min-w-0">
 					<div className="font-semibold">Personal access tokens</div>
+					<p className="mt-1 text-sm text-muted-foreground">
+						For Claude Code and other assistants that take a token instead of
+						signing in.
+					</p>
 					<p className="mt-1 text-sm text-muted-foreground">
 						Let an AI assistant read your schedule and feedback on your behalf;
 						where you're an admin or officer it can also work on your club's

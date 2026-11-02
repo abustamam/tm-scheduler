@@ -8,16 +8,18 @@ import {
 } from "./oauth-connector-clients";
 
 const CLAUDE = "https://claude.ai/oauth/mcp-oauth-client-metadata";
+const CHATGPT = "https://chatgpt.com/oauth/client.json";
 
 afterEach(() => {
 	vi.restoreAllMocks();
 });
 
 describe("isCimdClientIdAllowed", () => {
-	it("admits hosted Claude's document, and only it, without logging", () => {
+	it("admits hosted Claude's and ChatGPT's documents, and only them, without logging", () => {
 		const info = vi.spyOn(console, "info").mockImplementation(() => {});
-		expect([...CIMD_ALLOWED_CLIENT_IDS]).toEqual([CLAUDE]);
+		expect([...CIMD_ALLOWED_CLIENT_IDS]).toEqual([CLAUDE, CHATGPT]);
 		expect(isCimdClientIdAllowed(CLAUDE)).toBe(true);
+		expect(isCimdClientIdAllowed(CHATGPT)).toBe(true);
 		expect(info).not.toHaveBeenCalled();
 	});
 
@@ -29,6 +31,11 @@ describe("isCimdClientIdAllowed", () => {
 		["a longer path on the same URL", `${CLAUDE}/extra`],
 		["a query on the same URL", `${CLAUDE}?x=1`],
 		["another origin", "https://evil.example/client"],
+		[
+			"ChatGPT's per-connector document",
+			"https://chatgpt.com/oauth/abc123/client.json",
+		],
+		["ChatGPT's origin alone", "https://chatgpt.com/"],
 	])("refuses %s — an exact match, not a prefix", (_label, url) => {
 		vi.spyOn(console, "info").mockImplementation(() => {});
 		expect(isCimdClientIdAllowed(url)).toBe(false);
@@ -85,6 +92,15 @@ describe("unlistedCimdClientId", () => {
 	it("passes the allowlisted client, an opaque registered id, and a request with none", () => {
 		const info = vi.spyOn(console, "info").mockImplementation(() => {});
 		expect(unlistedCimdClientId({ query: { client_id: CLAUDE } })).toBeNull();
+		// ChatGPT authenticates with private_key_jwt: its id is the assertion's.
+		expect(
+			unlistedCimdClientId({
+				body: {
+					client_id: CHATGPT,
+					client_assertion: assertion({ iss: CHATGPT, sub: CHATGPT }),
+				},
+			}),
+		).toBeNull();
 		expect(
 			unlistedCimdClientId({
 				body: { client_id: "aB3dE5fG7hJ9" },

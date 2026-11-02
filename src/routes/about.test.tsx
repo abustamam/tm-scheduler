@@ -43,7 +43,7 @@ const EXPORT_PROMISE =
 	"Club admins can download the club's roster, meetings, roles, attendance, speeches, guests, awards, dues and action items as spreadsheets at any time.";
 const APPROVED_PROMISES = [
 	"GavelUp doesn't share your club's data with advertisers or data brokers.",
-	"GavelUp shares your club's data only with the services that run it: Railway (hosting), Resend (email), and Anthropic, if a member connects Claude.",
+	"GavelUp shares your club's data only with the services that run it: Railway (hosting), Resend (email), and Anthropic or OpenAI, if a member connects Claude or ChatGPT.",
 	"Your club's data is used only to run GavelUp for your club.",
 	EXPORT_PROMISE,
 	DELETE_PROMISE,
