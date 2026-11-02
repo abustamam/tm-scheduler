@@ -31,6 +31,8 @@ import {
 	introducedSuffix,
 	numbered,
 	OPEN_LABEL,
+	type OpenSpeechSlots,
+	openSpeechView,
 	pairedEvaluatorSlots,
 	resolveDetailTokens,
 	type TimingMarks,
@@ -394,6 +396,11 @@ function toRow(
 	 * one thing `{evaluator:paired}` needs and `bound` cannot supply.
 	 */
 	blockSlot: AgendaSlot | null = null,
+	/** The FULL slot set, for detail tokens only (`{awards}`, `{roles}`, ...).
+	 *  `allSlots` above is the set rows are built from, with open speech slots
+	 *  dropped in "omit" mode (#1479); a token names what the club RUNS, as
+	 *  `expandRunSheet` resolves it, so an open slot is still a role. */
+	tokenSlots: AgendaSlot[] = allSlots,
 ): AgendaRow | null {
 	const label = capChars(row.label, MAX_TEMPLATE_LABEL_CHARS);
 	// Cap BEFORE resolving: the cap bounds what an officer TYPED, and resolution
@@ -407,7 +414,7 @@ function toRow(
 		: undefined;
 	const detail = resolveDetailTokens(
 		rawDetail,
-		allSlots,
+		tokenSlots,
 		// A materialized beat's `{roles}` always carries its own group, so there
 		// is no Beat-side list to fall back to. An officer who types a bare
 		// `{roles}` by hand gets nothing, which is honest.
@@ -430,7 +437,7 @@ function toRow(
 	// visiting Toastmaster named by `{names:role}` / `{evaluator:paired}` earns
 	// the legend on this row even when the row's own holder is a member.
 	const tokenVisiting = visitingFlag(
-		...detailTokenSlots(rawDetail, allSlots, pairedSlots),
+		...detailTokenSlots(rawDetail, tokenSlots, pairedSlots),
 	);
 	const base = {
 		detail,
@@ -574,7 +581,7 @@ function toRow(
 			...bound,
 			...(speechSlot?.speechTitle || evaluatedLabel
 				? []
-				: detailTokenSlots(rawDetail, allSlots, pairedSlots)),
+				: detailTokenSlots(rawDetail, tokenSlots, pairedSlots)),
 		),
 		...base,
 		// Slot-derived overrides, applied AFTER `base` so they win. Only ever set
@@ -629,8 +636,19 @@ function toRow(
 export function buildTemplateRowsWithSource(
 	beats: TemplateBeatRow[],
 	roles: TemplateRoleRow[],
-	slots: AgendaSlot[],
+	allSlots: AgendaSlot[],
+	/** What to do with a speech slot nobody holds, and the evaluators paired
+	 *  with it (#1479). `"omit"` (default): they emit no rows and reserve no
+	 *  time — the filter is applied to the slot set once, so numbering and
+	 *  "Evaluates Speaker N" agree with the rows that remain. `"zero"` (the
+	 *  agenda editor): the rows stay, at 0 minutes, flagged `openSpeech`. */
+	openSpeechSlots: OpenSpeechSlots = "omit",
 ): SourcedAgendaRow[] {
+	const {
+		droppedIds,
+		liveSlots: slots,
+		applyZeroMode,
+	} = openSpeechView(allSlots, openSpeechSlots);
 	const rolesByKey = new Map(roles.map((r) => [r.key, r]));
 	const ordered = [...beats].sort((a, b) => a.sortOrder - b.sortOrder);
 	const out: SourcedAgendaRow[] = [];
@@ -647,11 +665,39 @@ export function buildTemplateRowsWithSource(
 				// Capped the same as the repeat path below — see this function's
 				// docblock for why a writer-side cap on `defaultCount` is not
 				// enough on its own.
-				const owned = slotsForRole(slots, row.roleKey).slice(
+				const fullRole = slotsForRole(allSlots, row.roleKey);
+				const roleDropped = fullRole.filter((s) => droppedIds.has(s.id));
+				const keep = fullRole.filter((s) => !droppedIds.has(s.id));
+				// Every holder of this beat reserves no time (#1479): all open
+				// speakers or contestants, or all evaluators of open speeches.
+				const everyHolderDropped = roleDropped.length > 0 && keep.length === 0;
+				// "omit": a beat with nothing left to hold it is not emitted (a
+				// contest's one "Contest speeches" row with nobody entered, an
+				// evaluation of speeches that will not happen), and a beat with
+				// some holders left names those only, so the row names the same
+				// people print's does. "zero": every holder stays bound, and the
+				// row is zeroed only when none of them reserves time.
+				if (openSpeechSlots === "omit" && everyHolderDropped) {
+					i += 1;
+					continue;
+				}
+				const owned = (openSpeechSlots === "omit" ? keep : fullRole).slice(
 					0,
 					MAX_ROLE_REPEAT_SLOTS,
 				);
-				const emitted = toRow(row, rolesByKey, owned, 0, 0, slots);
+				const built = toRow(
+					row,
+					rolesByKey,
+					owned,
+					0,
+					0,
+					slots,
+					null,
+					allSlots,
+				);
+				const emitted = built
+					? applyZeroMode(built, everyHolderDropped)
+					: built;
 				if (emitted) {
 					out.push({
 						row: emitted,
@@ -661,7 +707,7 @@ export function buildTemplateRowsWithSource(
 					});
 				}
 			} else {
-				const emitted = toRow(row, rolesByKey, [], 0, 0, slots);
+				const emitted = toRow(row, rolesByKey, [], 0, 0, slots, null, allSlots);
 				if (emitted) {
 					out.push({
 						row: emitted,
@@ -729,10 +775,11 @@ export function buildTemplateRowsWithSource(
 					// is still about it (#719's speech preamble), and that is the only
 					// thing distinguishing it from an unrelated row on the sheet.
 					s,
+					allSlots,
 				);
 				if (emitted) {
 					out.push({
-						row: emitted,
+						row: applyZeroMode(emitted, droppedIds.has(s.id)),
 						beatId: blockRow.id,
 						iteration: n,
 						iterationCount: repeated.length,
@@ -752,6 +799,9 @@ export function buildTemplateRows(
 	beats: TemplateBeatRow[],
 	roles: TemplateRoleRow[],
 	slots: AgendaSlot[],
+	openSpeechSlots: OpenSpeechSlots = "omit",
 ): AgendaRow[] {
-	return buildTemplateRowsWithSource(beats, roles, slots).map((e) => e.row);
+	return buildTemplateRowsWithSource(beats, roles, slots, openSpeechSlots).map(
+		(e) => e.row,
+	);
 }

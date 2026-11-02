@@ -635,18 +635,25 @@ describe("expandRunSheet", () => {
 	});
 
 	it("uses the open placeholder and fallback duration for an open speaker with no details", () => {
-		const rows = expandRunSheet([
-			slot({
-				roleName: "Speaker",
-				category: "speaker",
-				isSpeakerRole: true,
-				assigneeName: null,
-			}),
-		]);
+		// "zero" (#1479): the default now omits an open speech slot, so the
+		// placeholder is what the EDITOR's builder still prints, at 0 minutes.
+		const rows = expandRunSheet(
+			[
+				slot({
+					roleName: "Speaker",
+					category: "speaker",
+					isSpeakerRole: true,
+					assigneeName: null,
+				}),
+			],
+			undefined,
+			"zero",
+		);
 		const sp = rows.find((r) => r.who.startsWith("Speaker"));
 		expect(sp?.who).toBe("Speaker · — open —");
-		expect(sp?.minutes).toBe(7);
+		expect(sp?.minutes).toBe(0);
 		expect(sp?.marks).toBeNull();
+		expect(sp?.openSpeech).toBe(true);
 	});
 
 	it("orders evaluators by the speaker they evaluate and labels 'Evaluates X'", () => {
@@ -753,7 +760,9 @@ describe("expandRunSheet", () => {
 				evaluates: null,
 			}),
 		];
-		const detail = expandRunSheet(slots)
+		// "zero" (#1479): the default omits the evaluator paired with the open
+		// Speaker 2; the editor's builder keeps it, and this is its label.
+		const detail = expandRunSheet(slots, undefined, "zero")
 			.filter((r) => r.who.startsWith("Evaluator"))
 			.map((r) => r.detail);
 		expect(detail).toContain("Evaluates Rehanna Khan");
@@ -783,7 +792,8 @@ describe("expandRunSheet", () => {
 				evaluates: { speakerName: null },
 			}),
 		];
-		const [row] = expandRunSheet(slots).filter((r) =>
+		// "zero" (#1479): see the #512 test above.
+		const [row] = expandRunSheet(slots, undefined, "zero").filter((r) =>
 			r.who.startsWith("Evaluator"),
 		);
 		expect(row.detail).toBe("Evaluates Speaker");

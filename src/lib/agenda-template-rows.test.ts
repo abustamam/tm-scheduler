@@ -93,7 +93,9 @@ describe("buildTemplateRows", () => {
 				repeatsRoleKey: "contestant",
 			}),
 		];
-		const slots = [0, 1, 2, 3].map((i) => slot("contestant", "Contestant", i));
+		const slots = [0, 1, 2, 3].map((i) =>
+			slot("contestant", "Contestant", i, `C${i}`),
+		);
 		const rows = buildTemplateRows(beats, ROLES, slots);
 
 		expect(rows).toHaveLength(8);
@@ -263,7 +265,7 @@ describe("buildTemplateRows", () => {
 				}),
 			],
 			ROLES,
-			[slot("contestant", "Contestant", 0)],
+			[slot("contestant", "Contestant", 0, "C0")],
 		);
 		expect(rows[0]?.minutes).toBe(2);
 		expect(rows[0]?.marks).toEqual({ green: 1, yellow: 1.5, red: 2 });
@@ -283,7 +285,7 @@ describe("buildTemplateRows", () => {
 				}),
 			],
 			ROLES,
-			[slot("contestant", "Contestant", 0)],
+			[slot("contestant", "Contestant", 0, "C0")],
 		);
 		expect(rows[0]?.marks).toBeNull();
 	});
@@ -422,8 +424,8 @@ describe("buildTemplateRows", () => {
 			}),
 		];
 		const slots = [
-			slot("contestant", "Contestant", 0),
-			slot("contestant", "Contestant", 1),
+			slot("contestant", "Contestant", 0, "C0"),
+			slot("contestant", "Contestant", 1, "C1"),
 			slot("ballot_counter", "Ballot Counter", 0),
 		];
 		expect(buildTemplateRows(beats, ROLES, slots)).toHaveLength(3);
@@ -440,7 +442,7 @@ describe("buildTemplateRows", () => {
 			}),
 		];
 		const slots = Array.from({ length: 50 }, (_, i) =>
-			slot("contestant", "Contestant", i),
+			slot("contestant", "Contestant", i, `C${i}`),
 		);
 		expect(buildTemplateRows(beats, ROLES, slots)).toHaveLength(20);
 	});
@@ -787,25 +789,27 @@ describe("a multi-holder row carries its names as DATA, not only as prose", () =
 		expect(row?.holder).toBe("Faisal Ali and Rehanna Khan");
 	});
 
-	it("still prints an unordered row nobody has entered, rather than dropping it", () => {
-		// The floor `collapseOpen` was written to protect (v1.24.0.0): a role with
-		// no holder must still appear. Dropping the placeholder must not drop the
-		// ROW — an empty contestant list is a contest with no entrants yet, and
-		// the sheet has to say so.
-		const [row] = buildTemplateRows(
-			[
-				beat({
-					sortOrder: 0,
-					kind: "role",
-					label: "Contest speeches",
-					roleKey: "contestant",
-				}),
-			],
-			ROLES,
-			[{ ...slot("contestant", "Contestant", 0), slotsUnordered: true }],
-		);
+	it("omits an unordered row nobody has entered, and keeps it at 0 minutes in zero mode", () => {
+		// Changed from "still prints an unordered row nobody has entered" (#1479):
+		// the maintainer decided on PR #1482 that criterion 6 applies. A contest
+		// with no entrants has no contest time, so the roster row is not emitted
+		// by default; the editor's "zero" mode still shows it, flagged openSpeech.
+		const beats = [
+			beat({
+				sortOrder: 0,
+				kind: "role",
+				label: "Contest speeches",
+				roleKey: "contestant",
+			}),
+		];
+		const slots = [
+			{ ...slot("contestant", "Contestant", 0), slotsUnordered: true },
+		];
+		expect(buildTemplateRows(beats, ROLES, slots)).toHaveLength(0);
+		const [row] = buildTemplateRows(beats, ROLES, slots, "zero");
 		expect(row?.roleLabel).toBe("Contest speeches");
 		expect(row?.holder).toBe(OPEN_LABEL);
+		expect(row).toMatchObject({ minutes: 0, marks: null, openSpeech: true });
 	});
 });
 
