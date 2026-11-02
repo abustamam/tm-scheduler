@@ -113,9 +113,9 @@ describe("meeting route: cancel wiring (#1057)", () => {
 	it("hides the attendance rail, the lineup blast and the ballot console on a cancelled meeting", () => {
 		expect(src).toContain('!cancelled && (panelMode === "plan"');
 		// The lineup blast's gate moved into `useMeetingOutreach` (#1476).
-		expect(
-			readSource(OUTREACH_HOOK).replace(/\s+/g, " "),
-		).toContain("const canLineupBlast = !cancelled && (effectiveCanManage ||");
+		expect(readSource(OUTREACH_HOOK).replace(/\s+/g, " ")).toContain(
+			"const canLineupBlast = !cancelled && (effectiveCanManage ||",
+		);
 		expect(src).toContain(
 			"(isVoteCounter || effectiveCanManage) && !cancelled ?",
 		);
