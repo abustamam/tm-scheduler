@@ -98,7 +98,7 @@ describe("AssistantDemo", () => {
 		// naming ChatGPT without that sends Free and Plus users looking for a
 		// setting their plan does not have.
 		expect(AI_CONNECTOR_SETUP_LINE).toMatch(
-			/ChatGPT on Business or Enterprise/,
+			/ChatGPT on Business, Enterprise or Edu/,
 		);
 	});
 });

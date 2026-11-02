@@ -26,13 +26,13 @@ Moved verbatim out of `CLAUDE.md` on 2026-10-05 so it stops riding in every sess
   **`/api/mcp` accepts two credential kinds** (#843) — how people connect, and the maintainer's
   register/rotate/revoke runbook, is `docs/claude-connector.md` — split by prefix in `handle-request.ts`:
   `tmk_…` is a personal token (Claude Code, pasted into a header), anything else is an OAuth
-  access token (claude.ai) verified by `src/server/mcp/oauth-credential.ts` — the ONLY file on
+  access token (claude.ai, ChatGPT) verified by `src/server/mcp/oauth-credential.ts` — the ONLY file on
   the MCP path allowed to import `#/lib/auth`, and `mcp-authz.guard.test.ts` holds that by
   resolved path. Both resolve to a user id and nothing else, so clubs and attribution are the
   same for both. The verifier fetches its JWKS over HTTP from this same server, so
   `oauth-credential.ts` refuses an unknown `kid` BEFORE it (a flood of junk `kid`s otherwise
-  drains the rate-limit bucket every refetch shares, and real calls 500). **claude.ai needs no
-  registered client** (#852): `cimd()` from `@better-auth/cimd` lets it identify itself by a
+  drains the rate-limit bucket every refetch shares, and real calls 500). **claude.ai and ChatGPT need no
+  registered client** (#852, #1486): `cimd()` from `@better-auth/cimd` lets each identify itself by a
   Client ID Metadata Document URL, and only `CIMD_ALLOWED_CLIENT_IDS`
   (`src/lib/oauth-connector-clients.ts`) is admitted, by EXACT match, twice: a `hooks.before`
   refuses any other URL-shaped client id before the provider resolves the client

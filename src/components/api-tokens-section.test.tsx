@@ -50,11 +50,15 @@ describe("ApiTokensSection", () => {
 		state.eligible = true;
 		renderSection();
 		await screen.findByText("From Claude or ChatGPT");
-		expect(screen.getByText(`${window.location.origin}/api/mcp`)).toBeTruthy();
+		expect(
+			await screen.findByText(`${window.location.origin}/api/mcp`),
+		).toBeTruthy();
 		const chatgpt = screen.getByText("ChatGPT:").parentElement;
-		expect(chatgpt?.textContent).toMatch(/Business or Enterprise workspace/);
 		expect(chatgpt?.textContent).toMatch(
-			/Free, Plus and Pro plans can't use GavelUp yet/,
+			/Business, Enterprise or Edu workspace/,
+		);
+		expect(chatgpt?.textContent).toMatch(
+			/Free, Go, Plus and Pro plans can't use GavelUp yet/,
 		);
 		expect(chatgpt?.textContent).toMatch(/not a problem with your account/);
 	});

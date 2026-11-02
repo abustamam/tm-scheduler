@@ -742,38 +742,30 @@ describe.skipIf(!hasTestDb)(
 					(call) => call[0] === "[oauth] refused CIMD client_id",
 				);
 
-			it("grants the live Claude document end to end as a public client, and the token calls whoami", async () => {
-				serveConnectorDocuments();
-				const info = vi.spyOn(console, "info");
-				const { email, cookie } = await officerCookie();
-				const { consentLocation, tokens } = await claudeGrant(cookie);
-
-				// The consent screen names the client from its document.
-				const lookup = await lookupConsentClient(
-					new Headers({ cookie }),
-					consentLocation.searchParams.get("client_id") as string,
-				);
-				expect(lookup).toMatchObject({
-					eligible: true,
-					client: { clientId: CLAUDE_CLIENT_ID, name: "Claude" },
-				});
-				expect(fetchClientMetadataResource).toHaveBeenCalled();
-				expect(refusalLogs(info)).toEqual([]);
-
-				// A public client: no secret was ever issued or stored.
+			/** The stored client row: no secret, and the auth method its document named. */
+			async function expectClientRow(
+				clientId: string,
+				tokenEndpointAuthMethod: string,
+			): Promise<void> {
 				const [row] = (
 					await testDb.execute<{
 						client_secret: string | null;
 						token_endpoint_auth_method: string | null;
 					}>(
-						sql`select client_secret, token_endpoint_auth_method from oauth_client where client_id = ${CLAUDE_CLIENT_ID}`,
+						sql`select client_secret, token_endpoint_auth_method from oauth_client where client_id = ${clientId}`,
 					)
 				).rows;
 				expect(row).toEqual({
 					client_secret: null,
-					token_endpoint_auth_method: "none",
+					token_endpoint_auth_method: tokenEndpointAuthMethod,
 				});
+			}
 
+			/** Call `whoami` on /api/mcp with an OAuth access token; it must answer as `email`. */
+			async function expectWhoamiAs(
+				accessToken: string,
+				email: string,
+			): Promise<void> {
 				const restoreFetch = oauth.routeJwksToHandler(loaded.handler);
 				try {
 					const res = await handleMcpRequest(
@@ -782,7 +774,7 @@ describe.skipIf(!hasTestDb)(
 							headers: {
 								"content-type": "application/json",
 								accept: "application/json, text/event-stream",
-								authorization: `Bearer ${tokens.access_token}`,
+								authorization: `Bearer ${accessToken}`,
 							},
 							body: JSON.stringify({
 								jsonrpc: "2.0",
@@ -804,6 +796,29 @@ describe.skipIf(!hasTestDb)(
 				} finally {
 					restoreFetch();
 				}
+			}
+
+			it("grants the live Claude document end to end as a public client, and the token calls whoami", async () => {
+				serveConnectorDocuments();
+				const info = vi.spyOn(console, "info");
+				const { email, cookie } = await officerCookie();
+				const { consentLocation, tokens } = await claudeGrant(cookie);
+
+				// The consent screen names the client from its document.
+				const lookup = await lookupConsentClient(
+					new Headers({ cookie }),
+					consentLocation.searchParams.get("client_id") as string,
+				);
+				expect(lookup).toMatchObject({
+					eligible: true,
+					client: { clientId: CLAUDE_CLIENT_ID, name: "Claude" },
+				});
+				expect(fetchClientMetadataResource).toHaveBeenCalled();
+				expect(refusalLogs(info)).toEqual([]);
+
+				// A public client: no secret was ever issued or stored.
+				await expectClientRow(CLAUDE_CLIENT_ID, "none");
+				await expectWhoamiAs(tokens.access_token, email);
 			});
 
 			it("rotates a public client's refresh token, and refuses the old one", async () => {
@@ -999,23 +1014,12 @@ describe.skipIf(!hasTestDb)(
 					params: Record<string, string>,
 					assertion = chatgptClientAssertion(),
 				): Promise<Response> {
-					return loaded.handler(
-						new Request(`${oauth.TEST_ISSUER}/oauth2/token`, {
-							method: "POST",
-							headers: {
-								"content-type": "application/x-www-form-urlencoded",
-								"x-real-ip": clientIp(),
-							},
-							body: new URLSearchParams({
-								client_id: CHATGPT_CLIENT_ID,
-								client_assertion_type:
-									"urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-								client_assertion: assertion,
-								resource: oauth.TEST_RESOURCE,
-								...params,
-							}).toString(),
-						}),
-					);
+					return tokenRequestFor(CHATGPT_CLIENT_ID, {
+						client_assertion_type:
+							"urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+						client_assertion: assertion,
+						...params,
+					});
 				}
 
 				/** Authorize → consent → code, for ChatGPT's id and redirect. */
@@ -1048,6 +1052,7 @@ describe.skipIf(!hasTestDb)(
 					// RFC 9207: ChatGPT rejects a callback without the matching `iss`
 					// once the metadata advertises it, which this server's does.
 					expect(next.searchParams.get("iss")).toBe(oauth.TEST_ISSUER);
+					expect(next.searchParams.get("code")).toBeTruthy();
 					return {
 						consentLocation,
 						code: next.searchParams.get("code") as string,
@@ -1085,49 +1090,9 @@ describe.skipIf(!hasTestDb)(
 							.mock.calls.map(([input]) => String(input)),
 					).toContain(CHATGPT_JWKS_URI);
 
-					const [row] = (
-						await testDb.execute<{
-							client_secret: string | null;
-							token_endpoint_auth_method: string | null;
-						}>(
-							sql`select client_secret, token_endpoint_auth_method from oauth_client where client_id = ${CHATGPT_CLIENT_ID}`,
-						)
-					).rows;
-					expect(row).toEqual({
-						client_secret: null,
-						token_endpoint_auth_method: "private_key_jwt",
-					});
-
-					const restoreFetch = oauth.routeJwksToHandler(loaded.handler);
-					try {
-						const res = await handleMcpRequest(
-							new Request("https://club.test/api/mcp", {
-								method: "POST",
-								headers: {
-									"content-type": "application/json",
-									accept: "application/json, text/event-stream",
-									authorization: `Bearer ${tokens.access_token}`,
-								},
-								body: JSON.stringify({
-									jsonrpc: "2.0",
-									id: 1,
-									method: "tools/call",
-									params: { name: "whoami", arguments: {} },
-								}),
-							}),
-						);
-						expect(res.status).toBe(200);
-						const parsed = (await res.json()) as {
-							result?: {
-								isError?: boolean;
-								structuredContent?: { user?: { email?: string } };
-							};
-						};
-						expect(parsed.result?.isError).toBeFalsy();
-						expect(parsed.result?.structuredContent?.user?.email).toBe(email);
-					} finally {
-						restoreFetch();
-					}
+					// No secret either: ChatGPT proves itself with its key instead.
+					await expectClientRow(CHATGPT_CLIENT_ID, "private_key_jwt");
+					await expectWhoamiAs(tokens.access_token, email);
 				});
 
 				it("refuses a code redeemed with an assertion ChatGPT's key did not sign", async () => {
@@ -1160,8 +1125,14 @@ describe.skipIf(!hasTestDb)(
 						code_verifier: verifier,
 						redirect_uri: CHATGPT_REDIRECT_URI,
 					});
-					expect(redeemed.status).toBeGreaterThanOrEqual(400);
-					expect(redeemed.status).toBeLessThan(500);
+					// Refused for the missing assertion itself, not for some other
+					// fault in the request: the provider names the auth method.
+					expect(redeemed.status).toBe(400);
+					expect(await redeemed.json()).toEqual({
+						error: "invalid_client",
+						error_description:
+							"client registered for private_key_jwt cannot use none",
+					});
 				});
 			});
 		});

@@ -194,6 +194,23 @@ describe.skipIf(!hasTestDb)("OAuth discovery at the origin root (#842)", () => {
 		);
 	});
 
+	it("advertises RFC 9207 issuer identification and the issuer the resource names — what makes ChatGPT use its stable client id (#1486)", async () => {
+		// ChatGPT sends `https://chatgpt.com/oauth/client.json`, the one URL
+		// `CIMD_ALLOWED_CLIENT_IDS` admits for it, only while this flag is true
+		// and the two issuers match byte for byte. Otherwise it switches to a
+		// per-connector document the allowlist refuses. The flag is the
+		// provider's default, so a library upgrade is what would drop it.
+		const [server, resource] = await Promise.all([
+			get(AUTH_SERVER).then((r) => r.json()),
+			get(PROTECTED_RESOURCE).then((r) => r.json()),
+		]);
+		expect(server.authorization_response_iss_parameter_supported).toBe(true);
+		expect(resource.authorization_servers).toEqual([server.issuer]);
+		expect(server.token_endpoint_auth_methods_supported).toContain(
+			"private_key_jwt",
+		);
+	});
+
 	it("answers the issuer-path-inserted alias with a byte-identical document", async () => {
 		// Not "also 200": a client that discovers through the alias and a client
 		// that discovers through the bare path must be configuring themselves

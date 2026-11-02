@@ -13,7 +13,7 @@ import { BETA_PILL_CLASS } from "./tour-styles";
  * constant, so the next change to that setup lands in one place.
  */
 export const AI_CONNECTOR_SETUP_LINE =
-	"For club members. Works with Claude, and with ChatGPT on Business or Enterprise plans: add GavelUp as a connector, then sign in to approve it.";
+	"For club members. Works with Claude, and with ChatGPT on Business, Enterprise or Edu plans: add GavelUp as a connector, then sign in to approve it.";
 
 export const ASSISTANT_DEMO_MESSAGES = [
 	{ from: "user", text: "Put Dana in Speaker 2 on Thursday." },

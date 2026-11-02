@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -11,6 +11,52 @@ import {
 	getApiTokenState,
 	revokeApiTokenFn,
 } from "#/server/api-tokens";
+
+/**
+ * How to connect from Claude or ChatGPT, where nothing is pasted: the app
+ * signs in to GavelUp and the person approves it (`docs/claude-connector.md`).
+ *
+ * ChatGPT's plan limit is stated here because the failure is silent on
+ * OpenAI's side — on Free, Go, Plus or Pro the "add a custom MCP server" option
+ * is missing or read-only, and GavelUp never sees a request to explain.
+ * OpenAI's help article "Connecting custom MCP servers in ChatGPT" is the
+ * source; re-check it when this copy changes.
+ *
+ * The origin is read after mount, never during render: a server render would
+ * have no `window` to read, and printing a placeholder there and the real
+ * origin on the client is a hydration mismatch.
+ */
+function ConnectorSetup() {
+	const [origin, setOrigin] = useState<string | null>(null);
+	useEffect(() => setOrigin(window.location.origin), []);
+	return (
+		<div className="min-w-0 space-y-2 text-sm">
+			<div className="font-semibold">From Claude or ChatGPT</div>
+			<p className="text-muted-foreground">
+				Add a custom connector with this URL, then sign in to GavelUp and
+				approve it:
+			</p>
+			{origin ? (
+				<code className="block break-all font-mono text-xs">
+					{origin}/api/mcp
+				</code>
+			) : null}
+			<ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+				<li>
+					<span className="font-semibold text-foreground">Claude:</span>{" "}
+					Settings → Connectors → Add custom connector. Works on the web,
+					desktop and phone apps.
+				</li>
+				<li>
+					<span className="font-semibold text-foreground">ChatGPT:</span> needs
+					a Business, Enterprise or Edu workspace, and a workspace admin adds
+					it, on the web. Free, Go, Plus and Pro plans can't use GavelUp yet —
+					that's a ChatGPT plan limit, not a problem with your account.
+				</li>
+			</ul>
+		</div>
+	);
+}
 
 /**
  * The "Personal access tokens" section of `/me` (#773).
@@ -26,43 +72,6 @@ import {
  * only, so a client-side check would hide this from an officer whose office is
  * in a different club than the one they happen to be looking at.
  */
-/**
- * How to connect from Claude or ChatGPT, where nothing is pasted: the app
- * signs in to GavelUp and the person approves it (`docs/claude-connector.md`).
- *
- * ChatGPT's plan limit is stated here because the failure is silent on
- * OpenAI's side — on Free, Plus or Pro the "add a custom MCP server" option
- * is missing or read-only, and GavelUp never sees a request to explain.
- * OpenAI's help article "Connecting custom MCP servers in ChatGPT" is the
- * source; re-check it when this copy changes.
- */
-function ConnectorSetup() {
-	const mcpUrl = `${typeof window === "undefined" ? "https://<host>" : window.location.origin}/api/mcp`;
-	return (
-		<div className="min-w-0 space-y-2 text-sm">
-			<div className="font-semibold">From Claude or ChatGPT</div>
-			<p className="text-muted-foreground">
-				Add a custom connector with this URL, then sign in to GavelUp and
-				approve it:
-			</p>
-			<code className="block break-all font-mono text-xs">{mcpUrl}</code>
-			<ul className="list-disc space-y-1 pl-5 text-muted-foreground">
-				<li>
-					<span className="font-semibold text-foreground">Claude:</span>{" "}
-					Settings → Connectors → Add custom connector. Works on the web,
-					desktop and phone apps.
-				</li>
-				<li>
-					<span className="font-semibold text-foreground">ChatGPT:</span> needs
-					a Business or Enterprise workspace, and a workspace admin adds it, on
-					the web. Free, Plus and Pro plans can't use GavelUp yet — that's a
-					ChatGPT plan limit, not a problem with your account.
-				</li>
-			</ul>
-		</div>
-	);
-}
-
 export function ApiTokensSection() {
 	const qc = useQueryClient();
 	const [name, setName] = useState("");

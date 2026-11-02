@@ -290,6 +290,12 @@ Each raised in review and deliberately not fixed here:
   confidential one, until it is retired, and hosted Claude's CIMD client — and both are Claude,
   so this is still harmless. It stops being harmless when a client that is NOT Claude is added
   to `CIMD_ALLOWED_CLIENT_IDS` or registered by hand.
+  **ChatGPT was added anyway (#1486, 2026-11-02), and the maintainer accepted full authority
+  for it** rather than adding scopes first. What bounds it is the same as for Claude: every
+  CIMD client goes through the per-person consent screen (no `skip_consent`), a token acts only
+  as the member who approved it, with exactly that member's per-tool `audience`, and the member
+  can disconnect it on `/account`. Scopes are still the answer the day a client should get LESS
+  than its approver can do.
 - ~~No way to revoke a connection from the app.~~ Closed by #851: `/me` → **Connected apps**
   (`disconnectApp`, `src/server/oauth-grants-logic.ts`) removes a person's consent, refresh
   tokens and pending codes, and migration 0087 refuses a refresh token for anyone with no consent
