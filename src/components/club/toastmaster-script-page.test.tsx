@@ -47,7 +47,7 @@ const LINES: ScriptLine[] = [
 ];
 
 async function renderPage(over: {
-	membersOnlyNote: boolean;
+	showMembersOnlyNote: boolean;
 	signInRedirect: string | null;
 }) {
 	await renderUnderMemoryRouter(
@@ -68,7 +68,7 @@ describe("ToastmasterScriptPage (#1480)", () => {
 	// no_claim=that the link resolves (the route table is not mounted here).
 	it("signed out: the members-only note with a Sign in link", async () => {
 		await renderPage({
-			membersOnlyNote: true,
+			showMembersOnlyNote: true,
 			signInRedirect: "/club/harbor-city/meeting/2026-09-08/me/script",
 		});
 		expect(
@@ -80,14 +80,15 @@ describe("ToastmasterScriptPage (#1480)", () => {
 	// protects=a signed-in non-member gets the note and no link; a member gets
 	//   neither.
 	// fails_when=the link shows for a signed-in non-member, or the note for a member.
+	// no_claim=that the route supplies these props (its wiring guard and the builder tests do).
 	it("signed-in non-member: the note, no link; member: neither", async () => {
-		await renderPage({ membersOnlyNote: true, signInRedirect: null });
+		await renderPage({ showMembersOnlyNote: true, signInRedirect: null });
 		expect(
 			screen.getByText(MEMBERS_ONLY_INTRO_NOTE, { exact: false }),
 		).toBeTruthy();
 		expect(screen.queryByRole("link", { name: "Sign in" })).toBeNull();
 		cleanup();
-		await renderPage({ membersOnlyNote: false, signInRedirect: null });
+		await renderPage({ showMembersOnlyNote: false, signInRedirect: null });
 		expect(
 			screen.queryByText(MEMBERS_ONLY_INTRO_NOTE, { exact: false }),
 		).toBeNull();
@@ -96,8 +97,9 @@ describe("ToastmasterScriptPage (#1480)", () => {
 	// protects=the line kinds are all drawn, the prep note outside the quote, and
 	//   the back cue above the Toastmaster's next line.
 	// fails_when=a kind is not rendered, or the prep note is inside the blockquote.
+	// no_claim=that the route supplies these props (its wiring guard and the builder tests do).
 	it("renders mine, speech, others and the back cue, with the prep note outside the quote", async () => {
-		await renderPage({ membersOnlyNote: false, signInRedirect: null });
+		await renderPage({ showMembersOnlyNote: false, signInRedirect: null });
 		expect(screen.getByText("Opens meeting")).toBeTruthy();
 		expect(
 			screen.getByText("Table Topics Master: Tom runs it (~20 min)", {

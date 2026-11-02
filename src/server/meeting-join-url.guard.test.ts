@@ -21,10 +21,10 @@
  * confirmation and the member RSVP, are covered by their own tests.
  */
 import { randomUUID } from "node:crypto";
-import { eq, getTableColumns } from "drizzle-orm";
+import { and, eq, getTableColumns } from "drizzle-orm";
 import { serialize } from "seroval";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { meetings, roleSlots, speeches } from "#/db/schema";
+import { meetings, members, roleSlots, speeches } from "#/db/schema";
 import {
 	MEMBERS_ONLY_DETAIL_FIELDS,
 	NON_MEMBER_MEETING_FIELDS,
@@ -78,7 +78,9 @@ vi.mock("#/lib/auth", () => ({
 	},
 }));
 
-const { getMeeting, getPublicMeetingByKey } = await import("#/server/meetings");
+const { getMeeting, getMeetingByKey, getPublicMeetingByKey } = await import(
+	"#/server/meetings"
+);
 
 const JOIN_URL = "https://meet.example/secret-room-4471";
 
@@ -276,6 +278,8 @@ describe.skipIf(!hasTestDb)(
 
 		const readers = (s: SeededClub) => ({
 			getMeeting: () => getMeeting({ data: s.meetingId }),
+			getMeetingByKey: () =>
+				getMeetingByKey({ data: { clubId: s.clubId, key: s.meetingId } }),
 			getPublicMeetingByKey: () =>
 				getPublicMeetingByKey({ data: { clubId: s.clubId, key: s.meetingId } }),
 		});
@@ -299,8 +303,46 @@ describe.skipIf(!hasTestDb)(
 			}
 		});
 
+		// protects=the gate is ACTIVE membership of THIS club: a former or inactive
+		//   member of this club, and an active member of ANOTHER club, get null.
+		// fails_when=the gate becomes "any membership row regardless of status", or
+		//   "a member of any club".
+		// no_claim=a real cookie resolving to a session (the session lookup is mocked).
+		it("is null for a former or inactive member of this club and for a member of another club", async () => {
+			const { s } = await seedSpeech();
+			const other = await seedClub();
+			try {
+				for (const status of ["former", "inactive"] as const) {
+					await testDb
+						.update(members)
+						.set({ status })
+						.where(
+							and(
+								eq(members.clubId, s.clubId),
+								eq(members.personId, s.personId),
+							),
+						);
+					signInAs(s.memberUserId);
+					for (const [name, read] of Object.entries(readers(s))) {
+						const data = await read();
+						expect(data.speechIntroductions, `${name} as ${status}`).toBeNull();
+						expect(serialize(data), name).not.toContain(INTRO);
+					}
+				}
+				signInAs(other.memberUserId);
+				for (const [name, read] of Object.entries(readers(s))) {
+					const data = await read();
+					expect(data.speechIntroductions, `${name} other club`).toBeNull();
+				}
+			} finally {
+				signInAs(null);
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
+		});
+
 		// protects=the public reader never ships it, even to a signed-in admin.
 		// fails_when=getPublicMeetingByKey starts reading the session's membership.
+		// no_claim=a real cookie resolving to a session (the session lookup is mocked).
 		it("is null on the public reader even for a signed-in admin", async () => {
 			const { s } = await seedSpeech();
 			signInAs(s.adminUserId);
@@ -312,6 +354,7 @@ describe.skipIf(!hasTestDb)(
 		// protects=the member half, keyed by slot id, non-blank only.
 		// fails_when=the gate hides it from members, or a blank introduction is
 		//   shipped as an entry.
+		// no_claim=a real cookie resolving to a session (the session lookup is mocked).
 		it("carries non-blank introductions, by slot id, for a member and a manager", async () => {
 			const { s, slotId, blankId } = await seedSpeech();
 			for (const user of [s.memberUserId, s.adminUserId]) {

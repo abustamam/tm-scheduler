@@ -86,7 +86,11 @@ export function buildToastmasterScript(input: {
 	/** Keyed by speech slot id. Null for a non-member viewer. */
 	introductions: Record<string, string> | null;
 }): ScriptLine[] {
-	const { rows, slots, introductions } = input;
+	const { slots, introductions } = input;
+	// A templated agenda's full-width section bands ("OPENING") belong to no one;
+	// left in, each would read as a run "OPENING runs it" (the stored-template
+	// path through `resolveAgendaRows` keeps them).
+	const rows = input.rows.filter((r) => r.section !== true);
 	const slotById = new Map(slots.map((s) => [s.id, s]));
 	const speechSlotOf = (row: TimelineRow | undefined): AgendaSlot | null => {
 		if (!row?.slotId) return null;
@@ -177,4 +181,20 @@ export function buildToastmasterScript(input: {
 		pendingBack = `You're back when ${last.holder ?? last.roleLabel ?? last.who} hands back.`;
 	}
 	return lines;
+}
+
+/**
+ * Where the members-only note's "Sign in" link goes, or null for no link. Keyed
+ * on the parent route's `hasSession` (is there a session at all), NOT on
+ * `authCtx`, which is null for a signed-in non-member too: that visitor is
+ * already signed in, so a sign-in link would be wrong for them.
+ */
+export function scriptSignInRedirect(args: {
+	showMembersOnlyNote: boolean;
+	hasSession: boolean;
+	clubId: string;
+	meetingKey: string;
+}): string | null {
+	if (!args.showMembersOnlyNote || args.hasSession) return null;
+	return `/club/${args.clubId}/meeting/${args.meetingKey}/me/script`;
 }

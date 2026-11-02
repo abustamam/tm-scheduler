@@ -26,7 +26,7 @@ export function ToastmasterScriptPage({
 	clubName,
 	theme,
 	backHref,
-	membersOnlyNote,
+	showMembersOnlyNote,
 	signInRedirect,
 }: {
 	lines: ScriptLine[];
@@ -36,7 +36,7 @@ export function ToastmasterScriptPage({
 	theme: string | null;
 	backHref: string;
 	/** True when the viewer is not an active member (introductions withheld). */
-	membersOnlyNote: boolean;
+	showMembersOnlyNote: boolean;
 	/** Set only for a signed-out viewer: where "Sign in" returns to. */
 	signInRedirect: string | null;
 }) {
@@ -60,7 +60,7 @@ export function ToastmasterScriptPage({
 						{theme ? ` · Theme: ${theme}` : ""}
 					</p>
 				</header>
-				{membersOnlyNote ? (
+				{showMembersOnlyNote ? (
 					<p className="rounded-md border border-border p-3 text-sm">
 						{MEMBERS_ONLY_INTRO_NOTE}
 						{signInRedirect ? (

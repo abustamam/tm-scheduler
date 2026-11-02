@@ -370,6 +370,7 @@ describe("the Toastmaster's script route (#1480)", () => {
 	// protects=the members-only introductions: the route must pick the loader by
 	//   `context.shell`, so a signed-out visitor is served the public reader.
 	// fails_when=the fork is replaced by one reader for everyone.
+	// no_claim=that the page renders; source text only.
 	it("keeps the PII loader fork verbatim", () => {
 		expect(script).toContain(
 			"context.shell ? getMeetingByKey : getPublicMeetingByKey",
@@ -378,6 +379,7 @@ describe("the Toastmaster's script route (#1480)", () => {
 
 	// protects=a time on the script is the printed agenda's.
 	// fails_when=the route skips applyFlex or buildTimeline, or re-derives rows.
+	// no_claim=that the page renders; source text only.
 	it("derives its times through the print route's own sequence", () => {
 		expect(script).toContain("resolveAgendaRows({");
 		expect(script).toMatch(/applyFlex\(runRows, meeting\.lengthMinutes\)/);
@@ -385,10 +387,37 @@ describe("the Toastmaster's script route (#1480)", () => {
 		expect(script).toContain("introductions: speechIntroductions");
 	});
 
-	// no_claim=anything about rendering; RAW negative, per `guard-source.ts`.
+	// protects=a signed-in non-member does not get the Sign in link: the route
+	//   reads the parent's `hasSession` (true for any session), not `authCtx`
+	//   (null for a signed-in non-member too).
+	// fails_when=the route reads `authCtx` again, or stops passing hasSession to
+	//   scriptSignInRedirect.
+	// no_claim=that the route renders (it cannot in vitest; the helper's own test
+	//   covers the decision).
+	it("keys the Sign in link on the parent's hasSession, not authCtx", () => {
+		expect(script).toContain("const { hasSession } = Route.useRouteContext()");
+		expect(script).toMatch(/scriptSignInRedirect\(\{[^}]*hasSession/);
+		expect(script).not.toContain("authCtx");
+	});
+
+	// protects=the route performs no write: the only server import is
+	//   `#/server/meetings`, and only its two readers come through it.
+	// fails_when=the route imports another server module, or a third name
+	//   (a writer) from `#/server/meetings`.
+	// no_claim=anything about rendering; RAW source, per `guard-source.ts`.
 	it("performs no write", () => {
 		const raw = readFileSync(resolve(ROOT, SCRIPT_ROUTE), "utf8");
-		expect(raw).not.toMatch(/#\/server\/(?!meetings)/);
+		const serverImports = [
+			...raw.matchAll(/import\s*\{([^}]*)\}\s*from\s*"#\/server\/([^"]+)"/g),
+		];
+		expect(serverImports.map((m) => m[2])).toEqual(["meetings"]);
+		const names = (serverImports[0]?.[1] ?? "")
+			.split(",")
+			.map((n) => n.trim())
+			.filter(Boolean)
+			.sort();
+		expect(names).toEqual(["getMeetingByKey", "getPublicMeetingByKey"]);
+		expect(raw).not.toMatch(/#\/server\/(?!meetings")/);
 	});
 });
 

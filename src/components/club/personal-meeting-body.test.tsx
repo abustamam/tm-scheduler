@@ -1031,7 +1031,20 @@ describe("PersonalMeetingBody - the Toastmaster's script link (#1480)", () => {
 	//   PDF href.
 	// no_claim=that the page renders (its own test).
 	it("shows 'Open your script' for the Toastmaster, pointing at /me/script", async () => {
-		await renderBody(makeView());
+		// A RENAMED role: only the key says it is the Toastmaster's.
+		await renderBody(
+			makeView({
+				roles: [
+					{
+						slotId: "44444444-4444-4444-8444-444444444444",
+						roleName: "Master of Ceremonies",
+						roleKey: "toastmaster_of_the_day",
+						speechTitle: null,
+						status: "claimed",
+					},
+				],
+			}),
+		);
 		const link = screen.getByRole("link", { name: /open your script/i });
 		expect(link.getAttribute("href")).toBe(
 			"/club/harbor-city/meeting/2026-09-05/me/script",
@@ -1050,8 +1063,15 @@ describe("PersonalMeetingBody - the Toastmaster's script link (#1480)", () => {
 	// protects=AC8's negative and AC9's other sheets: the Timer sees no script
 	//   link and keeps its PDF.
 	// fails_when=the link shows for every role, or another sheet is repointed.
+	// no_claim=that the script page itself renders or that its guide copy is right.
 	it("does not show it for another role, whose sheet stays a PDF", async () => {
-		await renderBody(makeView({ roles: [TIMER_ROLE] }));
+		// A Timer role carrying the Toastmaster's canonical NAME gets no link: the
+		// gate is the key, not the name.
+		await renderBody(
+			makeView({
+				roles: [{ ...TIMER_ROLE, roleName: "Toastmaster of the Day" }],
+			}),
+		);
 		expect(
 			screen.queryByRole("link", { name: /open your script/i }),
 		).toBeNull();

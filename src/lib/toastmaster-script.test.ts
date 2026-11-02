@@ -12,17 +12,16 @@ import {
 	applyFlex,
 	buildRunOfShow,
 	expandRunSheet,
+	resolveAgendaRows,
 } from "./agenda-runsheet";
-import {
-	buildTemplateRows,
-	type TemplateRoleRow,
-} from "./agenda-template-rows";
+import type { TemplateRoleRow } from "./agenda-template-rows";
 import { buildTimeline } from "./agenda-timing";
 import {
 	buildToastmasterScript,
 	evaluatorAskFor,
 	MISSING_TITLE_NOTE,
 	type ScriptLine,
+	scriptSignInRedirect,
 } from "./toastmaster-script";
 
 function slot(
@@ -186,6 +185,7 @@ describe("buildToastmasterScript", () => {
 	//   summed minutes, and the next mine line names the LAST row's holder.
 	// fails_when=the run splits per role, minutes are not summed, or backCue names
 	//   the first holder.
+	// no_claim=the wording of any `detail`, or that the route feeds these rows (the route guard covers that).
 	it("collapses Table Topics then the General Evaluator into one others line", () => {
 		const slots = club();
 		const rows = codeRows(slots);
@@ -213,6 +213,10 @@ describe("buildToastmasterScript", () => {
 		expect(next?.kind === "mine" && next.backCue).toBe(
 			`You're back when ${slice[slice.length - 1]?.holder} hands back.`,
 		);
+		// Pinned to the fixture: the General Evaluator is the run's last holder.
+		expect(next?.kind === "mine" && next.backCue).toBe(
+			"You're back when Gil hands back.",
+		);
 		expect(
 			lines.filter((l) => l.kind === "mine" && l.backCue !== null),
 		).toHaveLength(
@@ -225,6 +229,7 @@ describe("buildToastmasterScript", () => {
 	// protects=AC3: with the GE variant the functionary introduction is the
 	//   General Evaluator's, so it is an others line and not the Toastmaster's.
 	// fails_when=the builder reads English instead of the row's owner.
+	// no_claim=the wording of any `detail`, or that the route feeds these rows (the route guard covers that).
 	it("a GE-variant club: the functionary introduction is an others line", () => {
 		const slots = club();
 		const std = script(slots, null, false);
@@ -242,6 +247,7 @@ describe("buildToastmasterScript", () => {
 
 	// protects=AC4: the introduction wins for a member; the fallback otherwise.
 	// fails_when=members-only is reported for a member, or say ignores the text.
+	// no_claim=the wording of any `detail`, or that the route feeds these rows (the route guard covers that).
 	it("shows the introduction when there is one, the title line when not", () => {
 		const slots = club();
 		const withIntro = speeches(script(slots, { sp0: "Meet Ann, who climbs." }));
@@ -258,6 +264,7 @@ describe("buildToastmasterScript", () => {
 	// protects=AC4/AC5: a null `introductions` is a non-member; their say is the
 	//   fallback whatever exists.
 	// fails_when=members-only reads as "none" or "shown".
+	// no_claim=the wording of any `detail`, or that the route feeds these rows (the route guard covers that).
 	it("flags members-only for a null introductions map", () => {
 		const first = speeches(script(club(), null))[0];
 		expect(first?.kind === "speech" && first.introduction).toBe("members-only");
@@ -269,6 +276,7 @@ describe("buildToastmasterScript", () => {
 	// protects=AC6: no title -> "Introduce {speaker}." and the note outside it;
 	//   an introduction with no title keeps the note.
 	// fails_when=the note is dropped when an introduction exists, or is put in say.
+	// no_claim=the wording of any `detail`, or that the route feeds these rows (the route guard covers that).
 	it("no title: the plain line plus a prep note, and the note survives an introduction", () => {
 		const slots = club([null, null]);
 		const plain = speeches(script(slots, {}))[0];
@@ -283,6 +291,7 @@ describe("buildToastmasterScript", () => {
 	// protects=AC7: the ask names the person and never the role title, so a club
 	//   that renamed Evaluator is not shown the canonical one.
 	// fails_when=the ask is built from a role name.
+	// no_claim=the wording of any `detail`, or that the route feeds these rows (the route guard covers that).
 	it("a renamed Evaluator role: the ask carries the name and no role title", () => {
 		const slots = club(["Rise"], "Critic");
 		const first = speeches(script(slots, null))[0];
@@ -294,6 +303,7 @@ describe("buildToastmasterScript", () => {
 	// protects=the ask stays the sheet's sentence (#508/#509): only the
 	//   name replaces "our Evaluator, named on your agenda".
 	// fails_when=either copy of the wording changes without the other.
+	// no_claim=the wording of any `detail`, or that the route feeds these rows (the route guard covers that).
 	it("the evaluator ask equals the PDF sheet's line with the name substituted", () => {
 		const sheet = sheetScripts().toastmaster.find((c) =>
 			c.when.startsWith("Before each prepared speech"),
@@ -306,6 +316,7 @@ describe("buildToastmasterScript", () => {
 
 	// protects=no evaluator linked, and two linked.
 	// fails_when=a null evaluator still yields an ask, or only the first is named.
+	// no_claim=the wording of any `detail`, or that the route feeds these rows (the route guard covers that).
 	it("lists two linked evaluators and omits the ask for none", () => {
 		const slots = club(["Rise"]);
 		slots.push(evaluator(9, "Extra", "sp0"));
@@ -318,25 +329,51 @@ describe("buildToastmasterScript", () => {
 		expect(none?.kind === "speech" && none.evaluatorAsk).toBeNull();
 	});
 
-	// protects=a guest speaker is treated like a member.
-	// fails_when=the guest marker is lost or the speech row is skipped.
+	// protects=a guest speaker gets the same line shape as a member: the evaluator
+	//   ask and the say are carried, and the guest marker the agenda prints is
+	//   the only difference.
+	// fails_when=guest handling is lost (the speech row skipped, the evaluator ask
+	//   or say dropped, or the marker not read off the row).
+	// no_claim=how the marker is worded; only that it is the agenda's.
 	it("treats a guest speaker like a member", () => {
-		const slots = club(["Rise"]).map((s) =>
-			s.id === "sp0" ? { ...s, assigneeName: "Gus", assigneeIsGuest: true } : s,
-		) as AgendaSlot[];
-		const first = speeches(script(slots))[0];
-		expect(first?.kind).toBe("speech");
-		expect(first?.kind === "speech" && first.speaker).toContain("Gus");
+		const asPerson = (guest: boolean): AgendaSlot[] =>
+			club(["Rise"]).map((s) =>
+				s.id === "sp0"
+					? { ...s, assigneeName: "Gus", assigneeIsGuest: guest }
+					: s,
+			);
+		const member = speeches(script(asPerson(false)))[0];
+		const guest = speeches(script(asPerson(true)))[0];
+		expect(member?.kind).toBe("speech");
+		expect(guest?.kind).toBe("speech");
+		if (member?.kind !== "speech" || guest?.kind !== "speech") return;
+		expect(guest.speaker).toBe("Gus · Guest");
+		expect(guest.evaluatorAsk).toBe(member.evaluatorAsk);
+		expect(guest.evaluatorAsk).toContain("Eval0");
+		expect(guest).toEqual({
+			...member,
+			speaker: "Gus · Guest",
+			say: member.say.replaceAll("Gus", "Gus · Guest"),
+		});
 	});
 
-	// protects=AC2: the stored (materialised) agenda yields the same lines.
-	// fails_when=the builder depends on something only the code path carries.
+	// protects=AC2: the stored (materialised) agenda, resolved as the route does
+	//   (section bands included), yields the same lines.
+	// fails_when=the builder depends on something only the code path carries, or
+	//   a section band reads as a run ("OPENING runs it").
+	// no_claim=a club's own template beyond the seed.
 	it("gives identical lines from the code path and the materialised path", () => {
 		const slots = club(["Rise", null]);
 		const fromCode = script(slots, { sp0: "Hello." });
 		const seeds = withBeatIds(materialiseRunOfShow(false, null));
+		// What the route calls, so the section filtering is the product's own.
 		const stored = timed(
-			buildTemplateRows(seeds, ROLES, slots).filter((r) => r.section !== true),
+			resolveAgendaRows({
+				geIntroducesFunctionaries: false,
+				tableTopicsLimits: null,
+				template: { beats: seeds, roles: ROLES },
+				slots,
+			}),
 		);
 		const fromStored = buildToastmasterScript({
 			rows: stored,
@@ -344,5 +381,40 @@ describe("buildToastmasterScript", () => {
 			introductions: { sp0: "Hello." },
 		});
 		expect(fromStored).toEqual(fromCode);
+	});
+});
+
+describe("scriptSignInRedirect", () => {
+	const base = { clubId: "c", meetingKey: "m" };
+
+	// protects=the Sign in link is offered to a signed-out visitor only: a signed-in
+	//   non-member (hasSession true, no club shell) gets the note without it, and
+	//   a member (no note) gets neither.
+	// fails_when=the link is keyed on the club shell / authCtx instead of the
+	//   session, or shows when there is no note.
+	// no_claim=that the route passes the parent's hasSession (the route guard's
+	//   wiring test reads the source for that).
+	it("links only a signed-out visitor who sees the note", () => {
+		expect(
+			scriptSignInRedirect({
+				...base,
+				showMembersOnlyNote: true,
+				hasSession: false,
+			}),
+		).toBe("/club/c/meeting/m/me/script");
+		expect(
+			scriptSignInRedirect({
+				...base,
+				showMembersOnlyNote: true,
+				hasSession: true,
+			}),
+		).toBeNull();
+		expect(
+			scriptSignInRedirect({
+				...base,
+				showMembersOnlyNote: false,
+				hasSession: false,
+			}),
+		).toBeNull();
 	});
 });

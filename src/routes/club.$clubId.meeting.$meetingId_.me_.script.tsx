@@ -31,7 +31,10 @@ import { formatMeetingDate } from "#/lib/format";
 import { isMeetingCancelled } from "#/lib/meeting-cancellation-notice";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { personalMeetingHref } from "#/lib/role-duties";
-import { buildToastmasterScript } from "#/lib/toastmaster-script";
+import {
+	buildToastmasterScript,
+	scriptSignInRedirect,
+} from "#/lib/toastmaster-script";
 import { getMeetingByKey, getPublicMeetingByKey } from "#/server/meetings";
 
 export const Route = createFileRoute(
@@ -57,7 +60,7 @@ export const Route = createFileRoute(
 
 function ToastmasterScriptRoute() {
 	const { clubId, meetingId } = Route.useParams();
-	const { authCtx } = Route.useRouteContext();
+	const { hasSession } = Route.useRouteContext();
 	const {
 		meeting,
 		slots,
@@ -88,6 +91,7 @@ function ToastmasterScriptRoute() {
 	const flex = applyFlex(runRows, meeting.lengthMinutes);
 	const rows = buildTimeline(flex.rows, meeting.scheduledAt, timezone);
 
+	const showMembersOnlyNote = speechIntroductions === null;
 	const lines = buildToastmasterScript({
 		rows,
 		slots,
@@ -101,13 +105,14 @@ function ToastmasterScriptRoute() {
 			clubName={clubName}
 			theme={meeting.theme}
 			backHref={personalMeetingHref({ clubId, meetingId })}
-			membersOnlyNote={speechIntroductions === null}
+			showMembersOnlyNote={showMembersOnlyNote}
 			// A signed-in non-member gets the note without the link.
-			signInRedirect={
-				speechIntroductions === null && !authCtx?.user
-					? `/club/${clubId}/meeting/${meetingId}/me/script`
-					: null
-			}
+			signInRedirect={scriptSignInRedirect({
+				showMembersOnlyNote,
+				hasSession,
+				clubId,
+				meetingKey: meetingId,
+			})}
 		/>
 	);
 }
