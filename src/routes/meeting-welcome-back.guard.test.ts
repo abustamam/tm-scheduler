@@ -6,9 +6,10 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
 
+// `writePresence` moved from the route into `useMeetingRoll` (#1476).
 const ROUTE = resolve(
 	import.meta.dirname,
-	"club.$clubId.meeting.$meetingId.tsx",
+	"../components/club/use-meeting-roll.ts",
 );
 
 describe("meeting roll welcome-back once per member (#1446)", () => {

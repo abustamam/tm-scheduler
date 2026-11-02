@@ -24,6 +24,16 @@ import { readSource } from "#/test/guard-source";
 
 const ROUTES = dirname(fileURLToPath(import.meta.url));
 const ROUTE = resolve(ROUTES, "club.$clubId.meeting.$meetingId.tsx");
+// The lifecycle writes moved out of the route into `useMeetingLifecycle`
+// (#1476); the call sites and the derivations stay in the route.
+const LIFECYCLE_HOOK = resolve(
+	ROUTES,
+	"../components/club/use-meeting-lifecycle.ts",
+);
+const OUTREACH_HOOK = resolve(
+	ROUTES,
+	"../components/club/use-meeting-outreach.ts",
+);
 const TOOLBAR = resolve(ROUTES, "../components/club/meeting-toolbar.tsx");
 const SCHEDULE = resolve(ROUTES, "_authed/schedule.tsx");
 const MEETINGS_FNS = resolve(ROUTES, "../server/meetings.ts");
@@ -59,6 +69,7 @@ function handlerBody(src: string, name: string): string {
 
 describe("meeting route: cancel wiring (#1057)", () => {
 	const src = readSource(ROUTE);
+	const hook = readSource(LIFECYCLE_HOOK);
 
 	it("hands the toolbar all three cancel props, from the route's own derivations", () => {
 		expect(src).toContain("cancelled={cancelled}");
@@ -84,12 +95,8 @@ describe("meeting route: cancel wiring (#1057)", () => {
 	it("the confirm's write and the banner's Restore call the two handlers, not each other", () => {
 		expect(src).toContain("onClick={doCancel}");
 		expect(src).toContain("onClick={doRestore}");
-		expect(src).toContain(
-			"await cancelMeeting({ data: { meetingId: meeting.id } })",
-		);
-		expect(src).toContain(
-			"await restoreMeeting({ data: { meetingId: meeting.id } })",
-		);
+		expect(hook).toContain("await cancelMeeting({ data: { meetingId } })");
+		expect(hook).toContain("await restoreMeeting({ data: { meetingId } })");
 	});
 
 	it("locks the viewer on a cancelled meeting, after the shared resolver", () => {
@@ -105,7 +112,10 @@ describe("meeting route: cancel wiring (#1057)", () => {
 
 	it("hides the attendance rail, the lineup blast and the ballot console on a cancelled meeting", () => {
 		expect(src).toContain('!cancelled && (panelMode === "plan"');
-		expect(src).toContain("!cancelled &&\n\t\t(effectiveCanManage ||");
+		// The lineup blast's gate moved into `useMeetingOutreach` (#1476).
+		expect(
+			readSource(OUTREACH_HOOK).replace(/\s+/g, " "),
+		).toContain("const canLineupBlast = !cancelled && (effectiveCanManage ||");
 		expect(src).toContain(
 			"(isVoteCounter || effectiveCanManage) && !cancelled ?",
 		);
@@ -128,10 +138,10 @@ describe("meeting route: cancel wiring (#1057)", () => {
 	});
 
 	it("moves any other URL to the meeting's own key after cancelling, and opens the notice on arrival", () => {
-		expect(src).toContain("if (meetingKeyParam !== urlKey) {");
-		expect(src).toContain("cancellationNoticeHref(clubId, urlKey)");
+		expect(hook).toContain("if (meetingKeyParam !== urlKey) {");
+		expect(hook).toContain("cancellationNoticeHref(clubKey, urlKey)");
 		expect(src).toContain("isCancellationNoticeRequested(search)");
-		expect(src).toContain(
+		expect(hook).toContain(
 			"if (noticeRequested && cancelled && effectiveCanManage) {",
 		);
 	});
@@ -140,7 +150,7 @@ describe("meeting route: cancel wiring (#1057)", () => {
 		// Sliced to doCancel's OWN body (review of #1084): the file-wide pins
 		// above are satisfied with the else branch deleted, and an officer who
 		// cancels from a uuid URL is then left on a stale page with no notice.
-		const body = handlerBody(src, "doCancel").replace(/\s+/g, " ");
+		const body = handlerBody(hook, "doCancel").replace(/\s+/g, " ");
 		expect(body).toContain(
 			"} else { await router.invalidate(); setNoticeOpen(true); }",
 		);
@@ -148,7 +158,7 @@ describe("meeting route: cancel wiring (#1057)", () => {
 		// REPLACES the history entry (review of #1084, G), so Back does not land
 		// on the dead date URL a cancelled meeting no longer answers to.
 		expect(body).toContain(
-			"if (meetingKeyParam !== urlKey) { await router.navigate({ href: cancellationNoticeHref(clubId, urlKey), replace: true, }); }",
+			"if (meetingKeyParam !== urlKey) { await router.navigate({ href: cancellationNoticeHref(clubKey, urlKey), replace: true, }); }",
 		);
 	});
 
@@ -156,7 +166,7 @@ describe("meeting route: cancel wiring (#1057)", () => {
 		// Another officer got there first: the meeting is in the state that was
 		// asked for, and this officer still needs the notice. Exactly that one
 		// refusal is swallowed; anything else is rethrown to `showWriteError`.
-		const body = handlerBody(src, "doCancel").replace(/\s+/g, " ");
+		const body = handlerBody(hook, "doCancel").replace(/\s+/g, " ");
 		expect(body).toContain(
 			"if ( !(err instanceof Error) || err.message !== MEETING_ALREADY_CANCELLED_MESSAGE ) { throw err; } alreadyCancelled = true;",
 		);
@@ -180,11 +190,11 @@ describe("meeting route: cancel wiring (#1057)", () => {
 	});
 
 	it("only the pressed lifecycle control spins: the route tracks WHICH write runs (G)", () => {
-		expect(src).toContain("const lifecycleBusy = lifecycleAction !== null;");
+		expect(hook).toContain("const lifecycleBusy = lifecycleAction !== null;");
 		expect(src).toContain("busyAction={lifecycleAction}");
 		for (const action of ["complete", "reopen", "cancel", "restore"]) {
 			const fn = `do${action[0]?.toUpperCase()}${action.slice(1)}`;
-			const body = handlerBody(src, fn);
+			const body = handlerBody(hook, fn);
 			expect(body, fn).toContain(`setLifecycleAction("${action}");`);
 			expect(body, fn).toContain("setLifecycleAction(null);");
 		}
@@ -203,9 +213,9 @@ describe("meeting route: cancel wiring (#1057)", () => {
 	});
 
 	it("doRestore re-runs the loader after the write", () => {
-		const body = handlerBody(src, "doRestore").replace(/\s+/g, " ");
+		const body = handlerBody(hook, "doRestore").replace(/\s+/g, " ");
 		expect(body).toContain(
-			"await restoreMeeting({ data: { meetingId: meeting.id } }); toast.success(",
+			"await restoreMeeting({ data: { meetingId } }); toast.success(",
 		);
 		expect(
 			body,

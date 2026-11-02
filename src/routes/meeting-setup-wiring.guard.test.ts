@@ -27,6 +27,25 @@ import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
 
 const ROUTE = "src/routes/club.$clubId.meeting.$meetingId.tsx";
+// The dialogs' handlers moved out of the route into `useMeetingLifecycle`
+// (#1476); the route passes them straight through, and this reads the hook for
+// what each one does.
+const LIFECYCLE_HOOK = "src/components/club/use-meeting-lifecycle.ts";
+
+/** The body of one function in the lifecycle hook, up to the next declaration. */
+function hookFn(name: string): string {
+	const hook = readSource(LIFECYCLE_HOOK);
+	const at = hook.indexOf(`function ${name}(`);
+	expect(at, `${name} not found in use-meeting-lifecycle.ts`).toBeGreaterThan(
+		-1,
+	);
+	const next = hook.indexOf("\n\tasync function ", at + 1);
+	const nextSync = hook.indexOf("\n\tfunction ", at + 1);
+	const ends = [next, nextSync, hook.indexOf("\n\treturn {", at)].filter(
+		(i) => i > -1,
+	);
+	return hook.slice(at, Math.min(...ends));
+}
 
 describe("meeting route → toolbar meeting-setup gates", () => {
 	const src = readSource(ROUTE);
@@ -48,23 +67,20 @@ describe("meeting route → toolbar meeting-setup gates", () => {
 	});
 
 	it("Change meeting type loads its templates lazily, then opens the dialog", () => {
-		const block =
-			toolbar.match(/onChangeType=\{[\s\S]*?\n\t{5}\}\}/)?.[0] ?? "";
-		expect(block.length, "no onChangeType handler found").toBeGreaterThan(0);
+		expect(toolbar).toMatch(/onChangeType=\{openTemplateDialog\}/);
+		const block = hookFn("openTemplateDialog");
 		expect(block).toMatch(/listTemplatesForClub\(/);
 		expect(block).toMatch(/setTemplateOpen\(true\)/);
 	});
 
 	it("a failed template fetch is a write-error toast, not an unhandled rejection", () => {
-		const block =
-			toolbar.match(/onChangeType=\{[\s\S]*?\n\t{5}\}\}/)?.[0] ?? "";
-		expect(block.length, "no onChangeType handler found").toBeGreaterThan(0);
+		const block = hookFn("openTemplateDialog");
 		// The fetch AND the dialog open sit inside the `try`, so a failure never
 		// opens the dialog onto an empty or stale list; the `catch` reports it
 		// through the helper every other failed write on this route uses.
 		expect(
 			block,
-			"onChangeType must `try` the fetch, then open the dialog, and `catch` into showWriteError(…)",
+			"openTemplateDialog must `try` the fetch, then open the dialog, and `catch` into showWriteError(…)",
 		).toMatch(
 			/try\s*\{[\s\S]*listTemplatesForClub\([\s\S]*setTemplateOpen\(true\)[\s\S]*\}\s*catch\s*\(\w+\)\s*\{[\s\S]*showWriteError\(/,
 		);
@@ -94,17 +110,21 @@ describe("meeting route → the setup dialogs", () => {
 	});
 
 	it("each dialog refreshes the loader after a save, as the agenda's callback did", () => {
-		for (const dialog of [
-			"MeetingWordOfTheDayDialog",
-			"MeetingMetaDialog",
-			"MeetingTemplateDialog",
+		for (const [dialog, prop, handler] of [
+			["MeetingWordOfTheDayDialog", "onSaved", "onWodSaved"],
+			["MeetingMetaDialog", "onSaved", "onMetaSaved"],
+			["MeetingTemplateDialog", "onApply", "applyTemplate"],
 		]) {
 			const block =
 				src.match(new RegExp(`<${dialog}\\b[\\s\\S]*?\\n\\t{5}/>`))?.[0] ?? "";
 			expect(block.length, `no <${dialog} … /> found`).toBeGreaterThan(0);
 			expect(
 				block,
-				`<${dialog}> must call router.invalidate() once it has written`,
+				`<${dialog}> must be handed the lifecycle hook's ${handler}`,
+			).toContain(`${prop}={${handler}}`);
+			expect(
+				hookFn(handler),
+				`${handler} must call router.invalidate() once it has written`,
 			).toMatch(/router\.invalidate\(\)/);
 		}
 	});

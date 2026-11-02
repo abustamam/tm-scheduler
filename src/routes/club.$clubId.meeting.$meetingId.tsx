@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
 	createFileRoute,
 	Link,
@@ -18,36 +18,17 @@ import {
 	Video,
 	WifiOff,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
-import {
-	MeetingAgenda,
-	type MeetingAgendaActions,
-	type SpeakerDetails,
-} from "#/components/agenda/meeting-agenda";
+import { useMemo } from "react";
+import { MeetingAgenda } from "#/components/agenda/meeting-agenda";
 import { MeetingAnnouncements } from "#/components/agenda/meeting-announcements";
 import { MeetingMetaDialog } from "#/components/agenda/meeting-meta-dialog";
 import { MeetingTemplateDialog } from "#/components/agenda/meeting-template-dialog";
 import { MeetingWordOfTheDayDialog } from "#/components/agenda/meeting-word-of-the-day-dialog";
-import {
-	AbsentReleaseDialog,
-	type PendingAbsent,
-} from "#/components/club/absent-release-dialog";
-import {
-	CoverChip,
-	coverChipsFor,
-	coverMeetingOver,
-} from "#/components/club/cover-chip";
-import {
-	CoverLandingCard,
-	coverLandingView,
-	takeCoveredSlot,
-} from "#/components/club/cover-landing-card";
-import { CoverSheet, type CoverSlot } from "#/components/club/cover-sheet";
-import {
-	DeclineReleaseDialog,
-	type PendingDecline,
-} from "#/components/club/decline-release-dialog";
+import { AbsentReleaseDialog } from "#/components/club/absent-release-dialog";
+import { CoverChip } from "#/components/club/cover-chip";
+import { CoverLandingCard } from "#/components/club/cover-landing-card";
+import { CoverSheet } from "#/components/club/cover-sheet";
+import { DeclineReleaseDialog } from "#/components/club/decline-release-dialog";
 import { DigitalVotingSwitch } from "#/components/club/digital-voting-switch";
 import { GuestResources } from "#/components/club/guest-resources";
 import { useRequireIdentity } from "#/components/club/identity-gate";
@@ -61,13 +42,17 @@ import { MeetingPersonalStrip } from "#/components/club/meeting-personal-strip";
 import { MeetingReadinessPanel } from "#/components/club/meeting-readiness-panel";
 import { MeetingRoomStrip } from "#/components/club/meeting-room-strip";
 import {
-	type LifecycleAction,
 	MeetingToolbar,
 	stripIsPrimary,
 } from "#/components/club/meeting-toolbar";
 import { MeetingYourJobs } from "#/components/club/meeting-your-jobs";
 import { OpenActionItems } from "#/components/club/open-action-items";
 import { TableTopicsCapture } from "#/components/club/table-topics-capture";
+import { useMeetingCover } from "#/components/club/use-meeting-cover";
+import { useMeetingLifecycle } from "#/components/club/use-meeting-lifecycle";
+import { useMeetingOutreach } from "#/components/club/use-meeting-outreach";
+import { useMeetingRoll } from "#/components/club/use-meeting-roll";
+import { useMeetingVotes } from "#/components/club/use-meeting-votes";
 import { VoteCounterPanel } from "#/components/club/vote-counter-panel";
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { Button } from "#/components/ui/button";
@@ -82,27 +67,16 @@ import {
 } from "#/components/ui/dialog";
 import { Label } from "#/components/ui/label";
 import { WhatsNewBanner } from "#/components/whats-new-banner";
-import { showWriteError } from "#/components/write-error-toast";
-import {
-	releasedToastMessage,
-	useOfflineMinutes,
-} from "#/hooks/use-offline-minutes";
+import { useOfflineMinutes } from "#/hooks/use-offline-minutes";
 import { useOnlineStatus } from "#/hooks/use-online-status";
 import { buildHeldRoleLines } from "#/lib/absent-release-roles";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { applyFlex, resolveAgendaRows } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
 import { buildTemplateSlideDeck } from "#/lib/agenda-template-slides";
-import {
-	type AttendanceMode,
-	defaultAttendanceMode,
-	presenceWriteMode,
-	withMode,
-} from "#/lib/attendance-mode";
+import { defaultAttendanceMode } from "#/lib/attendance-mode";
 import {
 	buildPanelRoleMap,
-	clearRefusedMessage,
-	type PlanStatus,
 	publicComingCount,
 	publicCountsLine,
 } from "#/lib/attendance-panel";
@@ -120,11 +94,9 @@ import { rsvpPageUrl } from "#/lib/lineup-blast";
 import { markedAbsentMemberIds } from "#/lib/marked-absent-member-ids";
 import { MINUTES_ANCHOR_ID } from "#/lib/meeting-anchors";
 import {
-	cancellationNoticeHref,
 	holdersFromSlots,
 	isCancellationNoticeRequested,
 	isMeetingCancelled,
-	MEETING_ALREADY_CANCELLED_MESSAGE,
 	MEETING_CANCELLED_MESSAGE,
 	meetingHasStarted,
 } from "#/lib/meeting-cancellation-notice";
@@ -155,73 +127,21 @@ import { useEffectiveMember } from "#/lib/member-identity";
 import { outstandingDutiesByMember } from "#/lib/nudge";
 import { meetingOgImage, OG_IMAGE_SIZE_META } from "#/lib/og-image-url";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
-import { notComingToast } from "#/lib/role-duty-copy";
-import {
-	deriveRollAttendance,
-	deriveRollGuests,
-	deriveRollRoster,
-} from "#/lib/roll-attendance";
 import { shareMeta } from "#/lib/share-meta";
 import { footerDate } from "#/lib/slide-layout";
-import { welcomeBackMessage } from "#/lib/welcome-back";
 import { hasWordOfTheDay } from "#/lib/word-poster";
 import { getOpenActionItems } from "#/server/action-items";
-import {
-	clearPlannedAttendance,
-	setPlannedAttendance,
-} from "#/server/attendance-plan";
 import { getClubLogoMeta } from "#/server/club-logo";
-import { getGuestPipeline } from "#/server/guest-pipeline";
-import { getLineupBlastAccess } from "#/server/lineup-blast";
 import {
-	applyTemplateToMeeting,
-	listTemplatesForClub,
-	type MeetingTemplateSummary,
-	previewTemplateForMeeting,
-} from "#/server/meeting-templates";
-import {
-	cancelMeeting,
-	completeMeeting,
 	getMeetingByKey,
 	getPublicMeetingByKey,
-	getTmodPanelData,
 	listPastMeetings,
 	listUpcomingMeetings,
-	reopenMeeting,
-	restoreMeeting,
-	setMeetingDigitalVoting,
 } from "#/server/meetings";
 import { listMembers } from "#/server/members";
-import {
-	addMinutesGuest,
-	addTableTopics,
-	clearMinutesAward,
-	getMinutes,
-	moveTableTopics,
-	removeMinutesGuest,
-	removeTableTopics,
-	setAttendance,
-	setMinutesAward,
-} from "#/server/minutes";
+import { getMinutes } from "#/server/minutes";
 import { getMinutesRecipients } from "#/server/minutes-email";
-import type { AttendanceStatus, AwardCategory } from "#/server/minutes-logic";
 import { getMeetingOgVersion } from "#/server/og-card";
-import { clearContacted, setContacted } from "#/server/outreach";
-import { getPublicClubRoles } from "#/server/role-definitions";
-import {
-	addRoleSlot,
-	addSpeakerSlot,
-	claimSlot,
-	confirmSlot,
-	moveEvaluatorSlot,
-	moveSpeakerSlot,
-	reassignSlot,
-	releaseSlot,
-	removeRoleSlot,
-	removeSpeakerSlot,
-	unconfirmSlot,
-} from "#/server/slots";
-import { getVoteTally } from "#/server/voting";
 
 // Anonymous (non-shell) visitors never load minutes — this hidden default keeps
 // the loader's return shape uniform without a server call or any PII fetch.
@@ -398,20 +318,6 @@ function MeetingRouteNotFound() {
 	return <MeetingNotFound clubId={clubId} />;
 }
 
-/**
- * Plain error text, still used by the five Ballot Counter console handlers and
- * the digital-voting switch below.
- *
- * Everything else in this file went through `showWriteError` in #761, which
- * adds a "Sign in" action to the two write-proof refusals and is otherwise
- * identical to this. The vote surfaces are deliberately NOT converted: the
- * ballots child issue owns their error display, and doing it here would have it
- * land twice.
- */
-function errMessage(err: unknown) {
-	return err instanceof Error ? err.message : "Something went wrong.";
-}
-
 function MeetingView() {
 	// `meetingKeyParam` is the key the URL actually carries (a club-local date
 	// or the uuid); `canonicalUrlKey` below is the one the server resolved, and
@@ -494,114 +400,10 @@ function MeetingView() {
 	// superadmin (canManage without a linked member).
 	const managerActorId = session?.id ?? null;
 
-	const [addRoleOpen, setAddRoleOpen] = useState(false);
-	const [addRoleBusy, setAddRoleBusy] = useState(false);
-	// WHICH lifecycle write is in flight (#1057). Every lifecycle control
-	// disables while any one runs, but only the one pressed spins and carries
-	// `aria-busy` — Complete and Cancel used to share a single spinner.
-	const [lifecycleAction, setLifecycleAction] =
-		useState<LifecycleAction | null>(null);
-	const lifecycleBusy = lifecycleAction !== null;
 	// #320, made app-wide by #1113: the shell's "Preview as member" (a cookie, so it
 	// survives navigation and reload) is what the page reads. `authCtx` is null for
 	// an anonymous visitor, who has nothing to preview.
 	const previewAsMember = authCtx?.viewAs === "member";
-	const [lineupOpen, setLineupOpen] = useState(false);
-	// The viewer's own late release waits here for the cover sheet (#1439).
-	const [coverSlots, setCoverSlots] = useState<CoverSlot[]>([]);
-	// `?cover=<slotId>` (#1440): "Can't, sorry" hides the landing card for this
-	// visit; a reload with the link shows it again, which is the right reading
-	// of a link someone re-opened.
-	const [coverCardDismissed, setCoverCardDismissed] = useState(false);
-	const [coverTakeBusy, setCoverTakeBusy] = useState(false);
-	const coverParam = (search as { cover?: unknown }).cover;
-	// The role's one-liner: the public roles read, only when a cover link is
-	// present (the meeting payload's `clubRoles` is manager-only).
-	const { data: coverRoleDefs } = useQuery({
-		queryKey: ["public-club-roles", clubUuid] as const,
-		queryFn: () => getPublicClubRoles({ data: clubUuid }),
-		enabled: typeof coverParam === "string",
-	});
-	// Cancel (#1057): the confirm before the write, and the notice sheet after
-	// it. Two flags because the sheet outlives the confirm — it opens on arrival
-	// too, when the URL carries `?notice=1` (see `doCancel`).
-	const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
-	const [noticeOpen, setNoticeOpen] = useState(false);
-	// The meeting-setup dialogs the Manage menu and the Toastmaster's / Grammarian's
-	// buttons open (they lived on the agenda until the toolbar took the entries).
-	// "Change meeting type" loads its template list lazily, on open: an officer
-	// affordance nobody else pays for.
-	const [wodOpen, setWodOpen] = useState(false);
-	const [metaOpen, setMetaOpen] = useState(false);
-	const [templateOpen, setTemplateOpen] = useState(false);
-	const [templates, setTemplates] = useState<MeetingTemplateSummary[]>([]);
-	// Ballot Counter console (#510 Task 10) — its own Table Topics edits, kept
-	// separate from `MeetingMinutes`'s offline queue: the console is reachable
-	// even when `minutes.visible` is false (a non-admin Vote Counter on a
-	// not-yet-completed meeting), so it cannot ride that component's queue.
-	const [voteConsoleBusy, setVoteConsoleBusy] = useState(false);
-	// Optimistic rung overrides, keyed by member. `undefined` = no override, so
-	// a member can be optimistically cleared to `null` and still be
-	// distinguishable from "not touched" — which `??` alone cannot express.
-	const [rungOverride, setRungOverride] = useState<
-		Record<string, PlanStatus | null>
-	>({});
-	// Members with a plan write currently in flight — a ref, not state, since
-	// only `writeRung` and the reconciling effect below touch it and neither
-	// should re-render on it. The effect drops any override for a member NOT in
-	// this map the moment `plan` changes, so a write that is still pending
-	// cannot be evicted by a payload that hasn't caught up to it yet (whole-branch
-	// review I2).
-	//
-	// REFCOUNTED, not a `Set`: two writes can be outstanding for the SAME member
-	// at once, because an officer's own row carries two independent controls with
-	// two independent busy flags that cannot see each other — the panel's chip
-	// (`pendingId`) and the personal strip's ("I'll be there"/`myStatusBusy`).
-	// With a `Set` the second `add` is a no-op and the FIRST write's release
-	// clears the entry while the second is still outstanding, which hands the
-	// effect an override it is free to evict before its write has landed.
-	const pendingWritesRef = useRef<Map<string, number>>(new Map());
-	// Members already welcomed back in this view (#1446).
-	const welcomedRef = useRef(new Set<string>());
-	function retainPending(memberId: string) {
-		const m = pendingWritesRef.current;
-		m.set(memberId, (m.get(memberId) ?? 0) + 1);
-	}
-	function releasePending(memberId: string) {
-		const m = pendingWritesRef.current;
-		const left = (m.get(memberId) ?? 1) - 1;
-		if (left > 0) m.set(memberId, left);
-		else m.delete(memberId);
-	}
-	// Busy guard against a rapid double-tap on the strip's OWN write — the same
-	// class of race the panel's per-row `pendingId` already guards
-	// (meeting-attendance-panel.tsx:136, 174-181). Without this, tapping "I'll
-	// be there" then "undo" before the first request resolves fires
-	// `setPlannedAttendance` and `clearPlannedAttendance` concurrently with no
-	// ordering guarantee, and an out-of-order resolution leaves the persisted
-	// rung disagreeing with the member's last tap.
-	const [myStatusBusy, setMyStatusBusy] = useState(false);
-	// The decline the officer (or the member) has picked but not yet confirmed
-	// (#663). Null while nothing is pending. Held HERE rather than in the panel
-	// because BOTH surfaces that write a rung on this page go through
-	// `writeRung` — the rail's chips and the personal strip's "Can't make it" —
-	// and a confirm wired to only one of them would leave the other releasing
-	// roles silently.
-	const [pendingDecline, setPendingDecline] = useState<PendingDecline | null>(
-		null,
-	);
-	// The confirm's OWN in-flight flag. `writeRung` returns as soon as the dialog
-	// opens, so the panel's `pendingId` and the strip's `myStatusBusy` have both
-	// cleared by the time the officer answers — the confirmed write would
-	// otherwise be the one write on this page guarded by nothing.
-	const [declineBusy, setDeclineBusy] = useState(false);
-	// Roll mode's Absent on a role-holder asks first (#1256). Same shape as the
-	// decline above, and for the same reason: the release has no undo.
-	const [pendingAbsent, setPendingAbsent] = useState<PendingAbsent | null>(
-		null,
-	);
-	const [absentBusy, setAbsentBusy] = useState(false);
-
 	// One club config drives both renderings of this meeting (#367).
 	const flex = applyFlex(
 		resolveAgendaRows({
@@ -796,27 +598,6 @@ function MeetingView() {
 	// #1113: the TMOD arm is the viewer's OWN slot, which previewing does not
 	// change, so a member in your seat sees these controls and so do you.
 	const runsThisMeeting = effectiveCanManage || isTmod;
-	// Lineup blast (#1024): club admins, officers and this meeting's Toastmaster.
-	// `canManage` covers a stored admin and an officer with an open term, so a
-	// signed-in member or a self-identified Toastmaster asks the server, which decides through the same
-	// `mayDraftLineupBlast` rule its draft fn enforces.
-	const { data: lineupAccess } = useQuery({
-		queryKey: ["lineup-blast-access", meeting.id, myId] as const,
-		queryFn: () =>
-			getLineupBlastAccess({
-				data: { meetingId: meeting.id, selfMemberId: myId },
-			}),
-		enabled:
-			!effectiveCanManage &&
-			(!previewAsMember || isTmod) &&
-			(isSignedIn || isTmod),
-	});
-	// Never on a cancelled meeting (#1057): there is no lineup to blast, and the
-	// loader refuses the draft with `MEETING_CANCELLED_MESSAGE` anyway.
-	const canLineupBlast =
-		!cancelled &&
-		(effectiveCanManage ||
-			((!previewAsMember || isTmod) && lineupAccess?.allowed === true));
 	// The ONE filled button in the action area (#1307): the rule is
 	// `stripIsPrimary`, shared with the toolbar's own phase rules.
 	const stripPrimary = stripIsPrimary({
@@ -847,45 +628,6 @@ function MeetingView() {
 	// refused, and there is no roll to call.
 	const showPanel =
 		!cancelled && (panelMode === "plan" ? showPlanPanel : showRollPanel);
-	// Recorded rows ONLY, projected through the SAME offline queue the writes go
-	// into (#176). Online this is just the loader's rows — the server stays the
-	// source of truth and the chip moves on the refetch `offlineMinutes.mutate`
-	// triggers. Offline no refetch will ever land, so without replaying the queue
-	// an officer on dead club wifi taps "Present", nothing moves, and they tap
-	// again — on the one surface #176's queue exists for. `deriveRollAttendance`
-	// is the seam (`#/lib/roll-attendance`) because this route cannot mount in
-	// jsdom, so an inline expression here would be testable by nothing but a
-	// source grep; it also owns dropping `status: null`, which `buildRollPanel`
-	// needs absent so it can render the plan's answer as a dashed suggestion.
-	// `useMemo` for the same reason `meeting-minutes.tsx` uses one: `deriveMinutes`
-	// structuredClones the whole snapshot.
-	const rollAttendance = useMemo(
-		() =>
-			deriveRollAttendance({
-				online,
-				minutes: minutes.data,
-				snapshot: offlineMinutes.snapshot,
-				queue: offlineMinutes.queue,
-			}),
-		[online, minutes.data, offlineMinutes.snapshot, offlineMinutes.queue],
-	);
-	// The guests go through the SAME projection, for the same reason and one
-	// control to the right (fix round 2). Raw loader rows left an offline
-	// "+ Add guest" invisible AND kept the guest in the picker, since
-	// `AttendanceGuestsGroup` builds its already-present filter from this very
-	// list and holds no optimism of its own. Stays possibly-`undefined` — the prop
-	// is optional precisely so a caller with no guests wired renders nothing
-	// instead of an empty group.
-	const rollGuests = useMemo(
-		() =>
-			deriveRollGuests({
-				online,
-				minutes: minutes.data,
-				snapshot: offlineMinutes.snapshot,
-				queue: offlineMinutes.queue,
-			}),
-		[online, minutes.data, offlineMinutes.snapshot, offlineMinutes.queue],
-	);
 
 	// One viewer for all audiences: an admin keeps editing a past-but-open meeting
 	// until Complete; a member/anon agenda freezes once the date passes; a locked
@@ -915,11 +657,6 @@ function MeetingView() {
 	// Officers only, on a meeting that is actually cancelled — a stale link on
 	// a restored meeting opens nothing.
 	const noticeRequested = isCancellationNoticeRequested(search);
-	useEffect(() => {
-		if (noticeRequested && cancelled && effectiveCanManage) {
-			setNoticeOpen(true);
-		}
-	}, [noticeRequested, cancelled, effectiveCanManage]);
 
 	// Roster for the assign picker: a manager already has it (with contact) from
 	// the loader; a non-admin TMOD (public or signed-in) fetches the plain member
@@ -934,191 +671,6 @@ function MeetingView() {
 	});
 	const roster = canManage ? loaderRoster : fetchedRoster;
 
-	// The non-officer TMOD's ladder (#576). Mirrors `fetchedRoster` directly
-	// above: an officer gets it on the payload, everyone else who needs it
-	// fetches it behind a server-side check. `getTmodPanelData` verifies the claim
-	// against the slot and returns [] otherwise, so a stale `enabled` here can
-	// only under-fetch — it can never hand the confidential rung to a non-TMOD.
-	const queryClient = useQueryClient();
-	const tmodPlanKey = ["tmod-plan", meeting.id, myId] as const;
-	const {
-		data: tmodPanelData,
-		isPending: tmodPanelPending,
-		isError: tmodPanelFailed,
-	} = useQuery({
-		queryKey: tmodPlanKey,
-		queryFn: () =>
-			getTmodPanelData({
-				data: { meetingId: meeting.id, memberId: myId as string },
-			}),
-		enabled: needsTmodPlan,
-	});
-	// The guests the rail may EDIT (#727), and the stored fields to prefill the
-	// dialog with. Mirrors `fetchedRoster` / `getTmodPanelData` above: the
-	// payload deliberately projects `clubGuests` to `{ id, name }` because guest
-	// contact has never ridden on this page, so the one viewer who may fix a
-	// guest fetches it behind a gate of its own instead of widening the page for
-	// everyone. `getGuestPipeline` is that gate — `requireUser()` +
-	// `requireClubAdminView()` — and it is the SAME read VP Membership's loader
-	// makes, so both callers of the shared dialog hand it the same row type and
-	// there is no second definition of "what the dialog edits".
-	//
-	// `enabled` is the exact condition under which the control can appear, which
-	// is BOTH conjuncts: `showRollPanel` alone is `effectiveCanManage &&
-	// minutes.canEdit` and says nothing about the phase, so on its own it is
-	// true for an admin looking at an UPCOMING meeting — a page with no Guests
-	// group on it at all — and would pull a club's visitor contact details down
-	// on every pre-meeting render.
-	//
-	// `data` is undefined until it lands and undefined on a failure, which
-	// renders the names as plain text: exactly what a viewer without the
-	// capability sees. The conservative direction, and the necessary one — this
-	// form turns a blank field into `null` on save, so a dialog opened over rows
-	// that never arrived would wipe the record it was opened to fix.
-	// ONE key, read by the fetch, by the post-save refresh and by the eviction
-	// below — and `useMemo`'d so it can actually BE that one key. A fresh array
-	// every render cannot go in the eviction effect's deps (the effect would tear
-	// down and re-run every render, removing the query it just fetched), which is
-	// what had the eviction hand-writing its own copy of the literal. Written out
-	// three times it is three places to get a cache key subtly wrong, and every
-	// way of getting it wrong is silent: a refresh that misses leaves a stale
-	// prefill, which SAVES the old value on the next submit; an eviction that
-	// misses leaves a visitor's email and phone in the cache.
-	const guestPipelineKey = useMemo(
-		() => ["guest-pipeline", clubUuid] as const,
-		[clubUuid],
-	);
-	const { data: guestPipeline } = useQuery({
-		queryKey: guestPipelineKey,
-		queryFn: () => getGuestPipeline({ data: clubUuid }),
-		enabled: panelMode === "roll" && showRollPanel,
-	});
-	// `effectiveCanManage` and not `guestPipeline !== undefined` alone: the query
-	// is the DATA, the capability is the permission, and reading the presence of
-	// a fetch as a permission is exactly the shape that lets a cache entry from
-	// an earlier viewer arm a control for a later one.
-	//
-	// The client gate is `canManage` and the server's is `requireClubRole(…,
-	// ["admin"])`; both grant to a stored admin and to an elected officer holding
-	// an open `officer_terms` row (effective-admin, #202).
-	// `guest-edit-authz.integration.test.ts` pins that they agree.
-	const guestEdit =
-		effectiveCanManage && guestPipeline
-			? {
-					clubId: clubUuid,
-					// `router.invalidate()` inside the dialog re-runs LOADERS, and these
-					// rows are not loader-fetched — so without this the badge name
-					// refreshed and the dialog kept prefilling the pre-edit contact
-					// details, and the next save wrote them back over the edit that had
-					// just landed. Required by `GuestEditCapability` for that reason.
-					onSaved: () =>
-						queryClient.invalidateQueries({ queryKey: guestPipelineKey }),
-					fields: Object.fromEntries(
-						guestPipeline.map((g) => [
-							g.id,
-							{
-								id: g.id,
-								name: g.name,
-								preferredName: g.preferredName,
-								email: g.email,
-								// `phoneRaw`, the stored column — NEVER `g.phone`, which is
-								// coalesced to E.164 for display. See `GuestEditFields`.
-								phoneRaw: g.phoneRaw,
-								// Not written by the form — the dialog derives "already a
-								// member" from these, so its description is right on a guest
-								// who joined at THIS meeting and is still on tonight's rail.
-								stage: g.stage,
-								convertedMembershipId: g.convertedMembershipId,
-							},
-						]),
-					),
-				}
-			: undefined;
-	// Evict the contact roster when the viewer changes. Keying on `myId` makes a
-	// switch READ a different key; it does not remove the old one, and the default
-	// gcTime keeps it in memory for five minutes. That matters on the shared club
-	// laptop that gets passed around at a meeting: "not you? re-pick" would
-	// otherwise leave the previous Toastmaster's copy of every member's phone and
-	// email sitting in the cache (#576 review).
-	// biome-ignore lint/correctness/useExhaustiveDependencies: myId is the TRIGGER, not a value the body reads — a change of viewer is exactly when the previous viewer's cached contact roster must be dropped
-	useEffect(() => {
-		return () => {
-			queryClient.removeQueries({ queryKey: ["tmod-plan", meeting.id] });
-		};
-	}, [queryClient, meeting.id, myId]);
-	// The guest pipeline gets the same treatment, in its own effect (#727),
-	// because it carries every club guest's email and phone.
-	//
-	// What this actually buys, stated honestly: it drops the entry on UNMOUNT —
-	// navigating away from the meeting, or closing the page. The `myId` trigger
-	// is carried for symmetry with the eviction above and is very nearly inert
-	// here, because the one viewer class that can hold this entry is a signed-in
-	// admin, and the "not you? re-pick" flow that changes `myId` does not change
-	// who is signed in. So the shared-laptop case is covered only to the extent
-	// that the next person navigates; it is NOT the guarantee the roster eviction
-	// above gives. Signing out is what clears it properly.
-	//
-	// A separate effect rather than a second line in the one above because that
-	// statement is pinned verbatim by `attendance-panel-wiring.guard.test.ts`.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: myId is the TRIGGER, not a value the body reads — the same shape as the eviction above
-	useEffect(() => {
-		return () => {
-			queryClient.removeQueries({ queryKey: guestPipelineKey });
-		};
-	}, [queryClient, guestPipelineKey, myId]);
-	const fetchedPlan = tmodPanelData?.plan ?? [];
-	// The panel needs the CONTACT-bearing roster (`loaderRoster`), not the public
-	// one the assign picker falls back to — without phone and email every row
-	// renders "No contact on file" and the drafts the panel exists for are gone.
-	// `loaderRoster` is `[]` for a non-officer, which is why a TMOD's copy comes
-	// from the same verified call as their ladder.
-	const panelRoster = effectiveCanManage
-		? loaderRoster
-		: (tmodPanelData?.roster ?? []);
-	// ROLL mode's roster is the UNION of the active roster and anyone carrying a
-	// recorded attendance row for this meeting — exactly the list `loadMinutes`
-	// builds and `minutes.counts` is computed over. Without it a member marked
-	// present in March who left the club in April is missing from May's reopened
-	// minutes: uncorrectable (the Minutes card's own recorder is gone) and, worse,
-	// counted by the PDF and the emailed minutes but not by the panel, so one
-	// meeting showed two different numbers. `#/lib/roll-attendance` owns it for the
-	// same reason it owns the other two projections — this route cannot mount in
-	// jsdom — and `buildRollPanel` is deliberately untouched: it builds from
-	// whatever roster it is handed, and this is what hands it one.
-	const rollRoster = useMemo(
-		() =>
-			deriveRollRoster({
-				roster: panelRoster,
-				online,
-				minutes: minutes.data,
-				snapshot: offlineMinutes.snapshot,
-				queue: offlineMinutes.queue,
-			}),
-		[
-			panelRoster,
-			online,
-			minutes.data,
-			offlineMinutes.snapshot,
-			offlineMinutes.queue,
-		],
-	);
-	// ONE name for the roster the panel renders, so the two modes cannot diverge
-	// at the call site. PLAN mode keeps the active roster only — for an UPCOMING
-	// meeting a stale row must not resurrect a departed name onto a ladder nobody
-	// has answered, which is the property `roll-panel.test.ts` pins.
-	const panelRosterForMode = panelMode === "roll" ? rollRoster : panelRoster;
-	// A panel built from an EMPTY roster renders its header and a counts line of
-	// zeros — indistinguishable from "this club has no members" and from "you are
-	// no longer the Toastmaster". This page gets used mid-meeting on club wifi, so
-	// a failed fetch must not produce a confident lie about who is coming (#576
-	// review). Officers are unaffected: their data is on the payload, never here.
-	const tmodPanelUnavailable =
-		needsTmodPlan && (tmodPanelPending || tmodPanelFailed);
-	// ONE name for "the ladder this viewer may see", so the panel, the optimistic
-	// rollback, `markAsked` and `contactedMemberIds` cannot disagree about which
-	// array they are reading — the officer path and the TMOD path differ only in
-	// where the rows came from.
-	const effectivePlan = effectiveCanManage ? plan : fetchedPlan;
 	// The assign-slot roster above is `{ id, name, ... }`; the minutes-style
 	// picker `TableTopicsCapture` uses (`AssigneePicker`) expects `{ memberId,
 	// name }` — the same shape `MeetingMinutes` gets from `MinutesData["members"]`.
@@ -1129,35 +681,6 @@ function MeetingView() {
 		name: r.name,
 		preferredName: r.preferredName ?? null,
 	}));
-
-	// The Ballot Counter console's Table Topics list (#510). `getMinutes`'
-	// visibility gate is `canEdit || completed`, so it hands back `data: null` —
-	// and this list along with it — to a non-admin Vote Counter on any meeting
-	// that has not been completed yet. `getVoteTally` is already gated to
-	// admin-or-Vote-Counter and now carries the same speaker list (names only,
-	// no topic), so that is the source for anyone who cannot read the full
-	// minutes. Shares its query key with `VoteCounterPanel`'s own poll below —
-	// mounting both costs one request, not two.
-	const { data: voteTally } = useQuery({
-		queryKey: ["vote-tally", meeting.id],
-		queryFn: () =>
-			getVoteTally({ data: { meetingId: meeting.id, selfMemberId: myId } }),
-		enabled: isVoteCounter || effectiveCanManage,
-		refetchInterval: 5000,
-	});
-	// Same predicate `<MeetingMinutes>` uses for its own `canEdit` prop below —
-	// true exactly when `minutes.data` is populated and carries the full,
-	// topic-included row (including while an admin is "previewing as member",
-	// so the preview reflects what a non-admin Vote Counter would actually see).
-	const canReadFullMinutesSpeakers = effectiveCanManage && minutes.canEdit;
-	const consoleSpeakers = canReadFullMinutesSpeakers
-		? (minutes.data?.tableTopicsSpeakers ?? [])
-		: (voteTally?.tableTopicsSpeakers ?? []).map((s) => ({
-				id: s.id,
-				name: s.name,
-				isGuest: s.kind === "guest",
-				topic: null,
-			}));
 
 	// The SERVER's answer, not a second derivation of it (#801). This used to be
 	// `pairedRoleIds(clubRoles)`, which was right while `clubRoles` was the
@@ -1251,479 +774,180 @@ function MeetingView() {
 	// else, which is what keeps the recruit picker's "already asked" marks off a
 	// plain member's screen.
 	const unavailableMemberIds = unavailableMembers.map((m) => m.id);
+
+	// The page's wiring lives in five per-domain hooks (#1476). Each owns its
+	// state, queries and writes; anything one domain reads from another comes in
+	// as a parameter, and no hook calls another. Order matters only for the
+	// values that flow forward: cover (`declineFreesRoles`) and roll (the ladder
+	// and rail roster) feed outreach.
+	const {
+		actions,
+		coverSlots,
+		closeCoverSheet,
+		onCoverChanged,
+		onOwnLateRelease,
+		coverView,
+		coverOver,
+		coverChipBySlotId,
+		coverTakeBusy,
+		takeCoveredRole,
+		dismissCoverCard,
+		declineFreesRoles,
+	} = useMeetingCover({
+		clubUuid,
+		clubSlug,
+		meeting,
+		slots,
+		coverRequests,
+		meetingNumber,
+		timezone,
+		urlKey,
+		search,
+		now,
+		over,
+		roleCounts,
+		canManage,
+		effectiveCanManage,
+		isSignedIn,
+		myId,
+		managerActorId,
+		requireIdentity,
+	});
+	const {
+		rollAttendance,
+		rollGuests,
+		tmodPlanKey,
+		effectivePlan,
+		panelRosterForMode,
+		tmodPanelUnavailable,
+		guestEdit,
+		pendingAbsent,
+		absentBusy,
+		cancelAbsent,
+		writeAttendance,
+		writeAttendanceMode,
+		confirmAbsent,
+		addRollGuest,
+		setRollGuestMode,
+		removeRollGuest,
+	} = useMeetingRoll({
+		meetingId: meeting.id,
+		clubUuid,
+		timezone,
+		online,
+		myId,
+		effectiveCanManage,
+		minutes,
+		offlineMinutes,
+		loaderRoster,
+		roster,
+		plan,
+		guestRsvps,
+		clubGuests,
+		needsTmodPlan,
+		panelMode,
+		showRollPanel,
+		attendanceDefaultMode,
+		heldRolesByMember,
+		heldRoleLinesByMember,
+	});
+	const {
+		rungOverride,
+		myEffectiveStatus,
+		myStatusBusy,
+		pendingDecline,
+		declineBusy,
+		cancelDecline,
+		setLineupOpen,
+		lineupOpen,
+		canLineupBlast,
+		writeRung,
+		markAsked,
+		setMyStatus,
+		confirmDecline,
+		onContacted,
+		onUncontacted,
+	} = useMeetingOutreach({
+		meetingId: meeting.id,
+		meetingClubId: meeting.clubId,
+		myId,
+		isSignedIn,
+		isTmod,
+		holdsRole,
+		cancelled,
+		previewAsMember,
+		effectiveCanManage,
+		needsTmodPlan,
+		tmodPlanKey,
+		effectivePlan,
+		answeredRungs,
+		panelRosterForMode,
+		heldRolesByMember,
+		declineFreesRoles,
+	});
+	const {
+		addRoleOpen,
+		setAddRoleOpen,
+		addRoleBusy,
+		lifecycleAction,
+		lifecycleBusy,
+		cancelConfirmOpen,
+		setCancelConfirmOpen,
+		noticeOpen,
+		setNoticeOpen,
+		wodOpen,
+		setWodOpen,
+		metaOpen,
+		setMetaOpen,
+		templateOpen,
+		setTemplateOpen,
+		templates,
+		doAddRole,
+		doComplete,
+		doReopen,
+		doCancel,
+		doRestore,
+		openTemplateDialog,
+		loadTemplatePreview,
+		applyTemplate,
+		onWodSaved,
+		onMetaSaved,
+	} = useMeetingLifecycle({
+		meetingId: meeting.id,
+		meetingClubId: meeting.clubId,
+		clubKey: clubId,
+		meetingKeyParam,
+		urlKey,
+		noticeRequested,
+		cancelled,
+		effectiveCanManage,
+	});
+	const {
+		consoleSpeakers,
+		voteConsoleBusy,
+		digitalVotingBusy,
+		handleAddTableTopicsSpeaker,
+		handleRemoveTableTopicsSpeaker,
+		handleMoveTableTopicsSpeaker,
+		handleSetDigitalVotingDisabled,
+		handleSetVoteWinner,
+		handleClearVoteWinner,
+	} = useMeetingVotes({
+		meetingId: meeting.id,
+		myId,
+		isVoteCounter,
+		effectiveCanManage,
+		minutes,
+	});
+	// Derived here rather than carried as their own payload fields (#396 PR2
+	// task 6): `effectivePlan` already carries every rung including `reached_out`
+	// — the payload's gated `plan` for an officer, the separately-verified
+	// `getTmodPanelData` rows for this meeting's Toastmaster, and `[]` for
+	// everyone else, which is what keeps the recruit picker's "already asked"
+	// marks off a plain member's screen.
 	const contactedMemberIds = effectivePlan
 		.filter((p) => p.status === "reached_out")
 		.map((p) => p.memberId);
-
-	// What the caller asserts about THEMSELVES, so the server can check it against
-	// the meeting's Toastmaster slot (#576). Sent only on the non-officer path:
-	// an officer is identified by their session and `resolveWriteActor` ignores
-	// any claim from them anyway, so including it would be noise that reads like
-	// it matters. Omitted entirely when there is no identity, which leaves the
-	// server's self-only arm exactly as it was.
-	//
-	// This is an ASSERTION, never proof — the server club-scopes it and compares
-	// it to the slot before granting anything. Sending it cannot elevate a member
-	// who is not the TMOD.
-	const actorClaim = !effectiveCanManage && myId ? { actorMemberId: myId } : {};
-
-	/**
-	 * Whether a decline written by THIS viewer, about THIS member, frees roles.
-	 *
-	 * It predicts the server's ARM — `attendance-decline-logic.ts` releases on
-	 * the officer arm, on the member's own answer, and on the Toastmaster's own
-	 * row; it withholds only a Toastmaster acting on someone ELSE. So the two
-	 * clauses here are officer-or-self, and `isTmod` is deliberately NOT read:
-	 * the own-row TMOD case resolves to `via: "tmod"` server-side (arm order is
-	 * officer → TMOD → self) and releases anyway, so branching on it here would
-	 * put the client and the server back out of step.
-	 *
-	 * `canManage`, NOT `effectiveCanManage`: the server keys off the SESSION, and
-	 * an admin previewing-as-member (#320) still carries one, so the preview flag
-	 * would make this under-predict on a path where the release still lands.
-	 *
-	 * This decides COPY only. It is NOT the gate on whether to ask — see
-	 * `writeRung` — and it is not the gate on the release either, which is the
-	 * server's.
-	 */
-	function declineFreesRoles(memberId: string): boolean {
-		// #762 / ADR-0026: freeing roles needs `proof: "session"`, so this predicts
-		// the SERVER's answer per arm rather than gating the whole expression on
-		// one proxy for a session.
-		//
-		// `canManage` stands alone because it is already that answer for the
-		// officer arm: `canManageClub` grants on an admin membership OR a
-		// `read_write` impersonation and refuses `read_only`, which is exactly what
-		// `requireClubRole(admin)` resolves inside `resolveActor` and exactly what
-		// `requireSessionActor` admits. An earlier draft hoisted the session term
-		// in front of the whole disjunction, and that was a silent ADR-0016 / #246
-		// admin-parity regression: `isSignedIn` here is `effectiveMemberId &&
-		// authCtx?.user`, and an impersonating superadmin has NO `effectiveMemberId`
-		// (see the note where `managerActorId` is derived). So the one principal
-		// with full admin parity was predicted to free nothing, the dialog told them
-		// the role stays, the flag was stripped — and the member was marked
-		// `not_coming` while still holding every role, with no error and nothing on
-		// screen to notice.
-		//
-		// The SELF arm is the one that needs the session term, and only it: an
-		// anonymous roster pick reaches it — that is #699 — and the server refuses
-		// the request outright rather than downgrading, so a dialog that promised a
-		// release would be promising a write that throws before anything lands.
-		return canManage || (isSignedIn && memberId === myId);
-	}
-
-	async function writeRung(
-		memberId: string,
-		next: PlanStatus | null,
-		via: "nudge" | "manual" = "manual",
-	) {
-		// #663: EVERY decline asks first. Deliberately not gated on the page
-		// believing this member holds a role — `heldRolesByMember` comes from
-		// loader data and the rail does not poll (CODING_STANDARDS.md), so a slot
-		// claimed since the page rendered is absent from it while the server frees
-		// it anyway. Gating on it skipped the confirm on exactly the case where
-		// the officer has the least idea what is about to happen, which is the
-		// sibling surface's documented first-cut bug (`personal-meeting-body.tsx`).
-		// A toast afterwards is a receipt, not consent.
-		//
-		// Returns WITHOUT writing and without touching `rungOverride`, so
-		// cancelling leaves no optimistic chip to roll back.
-		if (next === "not_coming") {
-			setPendingDecline({
-				memberId,
-				name:
-					heldRolesByMember[memberId]?.name ??
-					panelRosterForMode.find((r) => r.id === memberId)?.name ??
-					"this member",
-				roleLabels: heldRolesByMember[memberId]?.labels ?? [],
-				self: memberId === myId,
-				willRelease: declineFreesRoles(memberId),
-			});
-			return;
-		}
-		return commitRung(memberId, next, via);
-	}
-
-	async function commitRung(
-		memberId: string,
-		next: PlanStatus | null,
-		via: "nudge" | "manual" = "manual",
-		/** The confirm dialog was shown and answered (#663). DEFAULT FALSE, and
-		 *  only `DeclineReleaseDialog`'s own action passes true — every other
-		 *  caller here reaches this through `writeRung`, which cannot get past the
-		 *  dialog for a `not_coming`. The server treats an absent flag as "record
-		 *  the rung, free nothing"; see the field's note in `attendance-plan.ts`. */
-		releaseHeldRoles = false,
-	) {
-		// #762: the opt-in survives only if this viewer's decline would actually
-		// free anything. It cannot for an anonymous roster pick, and the server
-		// refuses the REQUEST rather than downgrading it — so sending the flag
-		// anyway loses the member's answer entirely instead of recording it.
-		//
-		// Re-entered with the flag defaulted, so the rung still lands by exactly
-		// the path every other caller takes. One level only: the inner call passes
-		// no flag, so the condition cannot hold twice.
-		if (releaseHeldRoles && !declineFreesRoles(memberId)) {
-			return commitRung(memberId, next, via);
-		}
-		// Roll back to what the UI was ACTUALLY showing, not the loader's
-		// snapshot: nothing here awaits an invalidate before this runs, and for a
-		// plain member `effectivePlan` is ALWAYS `[]` — so a lookup in it alone
-		// would restore the very value the failed write already overwrote, every
-		// time (whole-branch review I1). Check the override first (a second write
-		// racing the same row), then `effectivePlan` (the ladder an officer or
-		// this meeting's TMOD can see), then `answeredRungs` (the public array a
-		// plain member's own row lives on).
-		const previous =
-			rungOverride[memberId] !== undefined
-				? rungOverride[memberId]
-				: (effectivePlan.find((p) => p.memberId === memberId)?.status ??
-					answeredRungs.find((r) => r.memberId === memberId)?.status ??
-					null);
-		setRungOverride((o) => ({ ...o, [memberId]: next }));
-		retainPending(memberId);
-		try {
-			const written = await (next === null
-				? clearPlannedAttendance({
-						data: { memberId, meetingId: meeting.id, ...actorClaim },
-					})
-				: setPlannedAttendance({
-						data: {
-							memberId,
-							meetingId: meeting.id,
-							status: next,
-							via,
-							releaseHeldRoles,
-							...actorClaim,
-						},
-					}));
-			// #663: say what actually happened. The confirm named the roles BEFORE
-			// the write; this is the receipt, and it reads the SERVER's count rather
-			// than the labels the dialog showed — the arm gate lives server-side, so
-			// the client's prediction is the thing that could be wrong.
-			const released = "released" in written ? written.released : 0;
-			// A "No answer" the server declined (`cleared: false`) leaves the row
-			// exactly as it was, and the refetch below then shows that — a control
-			// that did nothing and said nothing. On another member's answer it is
-			// because a member's answer is cleared by that member, or by an officer
-			// on the season grid, and not from here: say so, and point at the pick
-			// that does what an officer or Toastmaster usually means.
-			const refusedClear =
-				"cleared" in written
-					? clearRefusedMessage({
-							cleared: written.cleared,
-							memberId,
-							myId,
-							previous,
-						})
-					: null;
-			if (refusedClear) toast.message(refusedClear);
-			if (memberId === myId && next === "not_coming") {
-				// The viewer's own decline (#1280): the strip chip and the roster land
-				// here. `holdsRole` (this meeting's slots) is for COPY only, and only
-				// when the server freed nothing.
-				const t = notComingToast(released, holdsRole);
-				toast.success(t.text, { duration: t.duration });
-			} else if (released > 0) {
-				toast.success(
-					released === 1
-						? "Not coming — role freed."
-						: "Not coming — roles freed.",
-				);
-			}
-			// Fire-and-forget, NOT awaited: the override already holds the value
-			// this write just committed, so nothing on screen is waiting on this
-			// resolving. But SOME invalidate has to fire, or `contactedMemberIds` /
-			// `unavailableMemberIds` (both derived from loader values — `plan` /
-			// `unavailableMembers`) go stale for the recruit picker and the assign
-			// sheet after this tap (whole-branch review I3). This also feeds the
-			// reconciling effect below its own trigger, rather than relying on some
-			// unrelated action to refresh `plan`.
-			//
-			// The pending mark is released when this INVALIDATE settles, not when
-			// the write above resolved. Those are different moments, and between
-			// them the reconciling effect would happily evict this override: `plan`
-			// gets a fresh identity on every loader run, and this route has ~15
-			// other `router.invalidate()` call sites (meta save, minutes, add-role,
-			// lifecycle, every vote action). A loader request that started before
-			// this write committed, landing in that window, reverts a chip the
-			// officer just tapped — which reads as "it didn't save", so they tap
-			// again.
-			// The TMOD's ladder lives in a QUERY, not loader data, so
-			// `router.invalidate()` alone would leave it stale — and the
-			// reconciling effect below, seeing a fresh payload, would then drop the
-			// override back onto that stale row and visibly undo the officer's own
-			// tap. No-op for an officer, whose ladder is on the payload.
-			if (needsTmodPlan) {
-				void queryClient.invalidateQueries({ queryKey: tmodPlanKey });
-			}
-			void router
-				.invalidate()
-				// A failed refetch does NOT undo the write: the override still holds
-				// the committed value, so the panel stays correct. What goes stale is
-				// `contactedMemberIds` / `unavailableMemberIds` elsewhere on the page,
-				// and the next invalidate from any other action repairs it. Caught so
-				// it is not an unhandled rejection, but deliberately not toasted — a
-				// "couldn't save" here would be a lie about a write that succeeded.
-				.catch(() => undefined)
-				.finally(() => releasePending(memberId));
-		} catch (e) {
-			// Roll back to what the UI was actually displaying, not to `null` —
-			// reverting to empty would silently erase a rung the officer did not
-			// touch.
-			setRungOverride((o) => ({ ...o, [memberId]: previous }));
-			showWriteError(e, "Couldn't save that.");
-			// Released HERE rather than in a `finally`, because the success path
-			// hands the release to the invalidate above; a `finally` would release
-			// a second time and drop another concurrent write's refcount.
-			releasePending(memberId);
-		}
-	}
-
-	// Drop a stale override once a fresh payload arrives — but drop it
-	// UNCONDITIONALLY (any member with no write still in flight), not only when
-	// it agrees with the server. The old effect deleted an override only
-	// `if (server === value)`, which is backwards: agreement is the harmless
-	// case, and an override that DISAGREES with the server — the one case that
-	// matters — was pinned forever, masking every later payload for the rest of
-	// the session (whole-branch review I2). `pendingWritesRef` is what keeps
-	// this from evicting an override whose own write hasn't resolved yet.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: plan is the trigger (a fresh payload), not a value read in the body — including rungOverride would re-run on every write.
-	useEffect(() => {
-		setRungOverride((o) => {
-			const next = { ...o };
-			let changed = false;
-			for (const memberId of Object.keys(o)) {
-				if (pendingWritesRef.current.has(memberId)) continue;
-				delete next[memberId];
-				changed = true;
-			}
-			return changed ? next : o;
-		});
-	}, [effectivePlan]);
-
-	// Advances no-answer → reached out; must NOT touch a member who already
-	// answered (spec D5). Read through the override so a chip set a moment ago
-	// counts.
-	async function markAsked(memberId: string) {
-		const current =
-			rungOverride[memberId] !== undefined
-				? rungOverride[memberId]
-				: (effectivePlan.find((p) => p.memberId === memberId)?.status ?? null);
-		if (current !== null) return;
-		// Same event as the recruit picker's own `onContacted={"nudge"}` below —
-		// tagging it "manual" (the default) here would log the identical action
-		// under two different `via` spellings in activity_log (whole-branch
-		// review M1).
-		await writeRung(memberId, "reached_out", "nudge");
-	}
-
-	// Roll-mode writes. Every one goes through the route's SINGLE
-	// `useOfflineMinutes` instance (#176 / DP3) rather than calling the server fn
-	// directly: a direct call works online and silently vanishes offline, which
-	// is precisely the condition this page is used in — a phone on club wifi,
-	// mid-meeting. Reusing `offlineMinutes` rather than instantiating a second
-	// hook is what keeps one `draining` flag over one persisted queue; two would
-	// race it and replay a stale status over a newer one with no error.
-	async function writeAttendance(memberId: string, status: AttendanceStatus) {
-		// #1256: Absent on a member the page sees holding roles asks first. A member
-		// holding none is written at once, as before. Like the decline's confirm,
-		// the page cannot see a slot claimed since it loaded, so the list is what
-		// the page KNOWS; the release itself frees whatever the member holds when
-		// the write runs.
-		const held = heldRolesByMember[memberId];
-		if (status === "absent" && held && held.labels.length > 0) {
-			setPendingAbsent({
-				memberId,
-				name:
-					held.name ??
-					panelRosterForMode.find((r) => r.id === memberId)?.name ??
-					"this member",
-				roles: heldRoleLinesByMember[memberId] ?? [],
-			});
-			return;
-		}
-		// #1049: which mode, if any, rides this write — `presenceWriteMode` says
-		// why. Read against the PROJECTED rows, so an offline tap sees the status
-		// the officer is looking at, not the stale loader's.
-		const mode = presenceWriteMode({
-			status,
-			currentStatus: rollAttendance.find((a) => a.memberId === memberId)
-				?.status,
-			defaultMode: attendanceDefaultMode,
-		});
-		await writePresence(memberId, status, mode);
-	}
-
-	// The toggle on a present row (#1049). Same op, same server fn: a present
-	// write WITH a mode, which the server upserts.
-	async function writeAttendanceMode(memberId: string, mode: AttendanceMode) {
-		await writePresence(memberId, "present", mode);
-	}
-
-	async function writePresence(
-		memberId: string,
-		status: AttendanceStatus,
-		mode: AttendanceMode | undefined,
-		/** Only the Absent dialog's "Release roles" passes these (#1256): the slot
-		 *  ids it LISTED, which are the most the write may free. */
-		releaseSlotIds?: string[],
-		name?: string,
-	) {
-		const release =
-			releaseSlotIds && releaseSlotIds.length > 0
-				? ({ releaseHeldRoles: true, releaseSlotIds } as const)
-				: {};
-		await offlineMinutes.mutate(
-			async () => {
-				const result = await setAttendance({
-					data: {
-						meetingId: meeting.id,
-						memberId,
-						status,
-						...withMode(mode),
-						...release,
-					},
-				});
-				// The receipt for an ONLINE release: what the server actually freed,
-				// never what the dialog listed. Nothing when it freed nothing. The
-				// agenda refresh is the write's own `onMutated` (router.invalidate).
-				if (result.released.length > 0) {
-					toast.success(
-						releasedToastMessage(
-							name ?? "this member",
-							result.released.map((r) => r.label),
-						),
-					);
-				}
-				// #1446: officer-only, nothing stored. Once per member per view:
-				// re-marking Present (or the mode toggle) must not toast twice.
-				if (result.welcomeBack && !welcomedRef.current.has(memberId)) {
-					welcomedRef.current.add(memberId);
-					const who =
-						name ?? roster?.find((r) => r.id === memberId)?.name ?? "";
-					toast.success(
-						welcomeBackMessage(
-							who,
-							result.welcomeBack.lastPresentAt,
-							new Date(),
-							timezone,
-						),
-					);
-				}
-				return result;
-			},
-			() => ({
-				type: "setAttendance",
-				...offlineMinutes.opMeta(),
-				memberId,
-				status,
-				...withMode(mode),
-				...release,
-			}),
-		);
-	}
-
-	async function confirmAbsent(p: PendingAbsent, releaseHeldRoles: boolean) {
-		// Stays open until the write resolves, both controls disabled, like the
-		// decline's confirm. The mode rides as `writeAttendance` computes it.
-		if (absentBusy) return;
-		setAbsentBusy(true);
-		try {
-			await writePresence(
-				p.memberId,
-				"absent",
-				presenceWriteMode({
-					status: "absent",
-					currentStatus: rollAttendance.find((a) => a.memberId === p.memberId)
-						?.status,
-					defaultMode: attendanceDefaultMode,
-				}),
-				releaseHeldRoles ? p.roles.map((r) => r.slotId) : undefined,
-				p.name,
-			);
-		} finally {
-			setAbsentBusy(false);
-			setPendingAbsent(null);
-		}
-	}
-
-	// The two guest handlers are lifted from <MeetingMinutes>'s AttendanceSection
-	// wiring (meeting-minutes.tsx), whose copy Task 6 deletes — same bodies, not
-	// new ones, so nothing about the behaviour changes inside that deletion. The
-	// `crypto.randomUUID()` client-side guest PK is load-bearing: it is what makes
-	// a queued new-guest op replay idempotently instead of creating a second guest
-	// row on reconnect (#176 slice 5). `name` is resolved here because the queued
-	// op has to render an optimistic row offline, with no round trip to name it.
-	const guestName = (guestId: string) =>
-		guestRsvps.find((g) => g.guestId === guestId)?.name ??
-		clubGuests.find((g) => g.id === guestId)?.name ??
-		"Guest";
-
-	async function addRollGuest(payload: {
-		guestId?: string;
-		newGuest?: { name: string; email?: string; phone?: string };
-	}) {
-		// #1049: adding a guest IS recording them present, so it carries the
-		// mode the toggle starts on — the same rule as a member's first Present.
-		// Insert-only on the server: a guest ALREADY present (re-picked, or a
-		// re-typed returning visitor the server dedupes) keeps their mode.
-		const mode = attendanceDefaultMode;
-		await offlineMinutes.mutate(
-			() =>
-				addMinutesGuest({ data: { meetingId: meeting.id, ...payload, mode } }),
-			() =>
-				payload.newGuest
-					? {
-							type: "addGuest",
-							...offlineMinutes.opMeta(),
-							guestId: crypto.randomUUID(),
-							name: payload.newGuest.name,
-							newGuest: payload.newGuest,
-							mode,
-						}
-					: {
-							type: "addGuest",
-							...offlineMinutes.opMeta(),
-							guestId: payload.guestId as string,
-							name: guestName(payload.guestId as string),
-							mode,
-						},
-		);
-	}
-
-	// A guest's in person / online toggle (#1049). An `addGuest` with a mode AND
-	// `replaceMode` (the only add that may change an existing row's mode),
-	// which the server upserts onto the row — and, for a guest listed only
-	// because they hold a role, creates it (maintainer's decision 3). The name
-	// comes off the listed row first: a role-only guest need not be in
-	// `clubGuests`' picker list under the same name.
-	async function setRollGuestMode(guestId: string, mode: AttendanceMode) {
-		const name =
-			rollGuests?.find((g) => g.guestId === guestId)?.name ??
-			guestName(guestId);
-		await offlineMinutes.mutate(
-			() =>
-				addMinutesGuest({
-					data: { meetingId: meeting.id, guestId, mode, replaceMode: true },
-				}),
-			() => ({
-				type: "addGuest",
-				...offlineMinutes.opMeta(),
-				guestId,
-				name,
-				mode,
-				replaceMode: true,
-			}),
-		);
-	}
-
-	async function removeRollGuest(guestId: string) {
-		await offlineMinutes.mutate(
-			() => removeMinutesGuest({ data: { meetingId: meeting.id, guestId } }),
-			() => ({ type: "removeGuest", ...offlineMinutes.opMeta(), guestId }),
-		);
-	}
 
 	// The agenda's internal claim/assign acts as this member: the session member
 	// for a manager (null for an impersonator), the effective member otherwise.
@@ -1737,191 +961,6 @@ function MeetingView() {
 		? "max-w-workspace px-4 pt-5 pb-10 sm:px-7 sm:pt-7 space-y-5"
 		: "mx-auto w-full max-w-reading p-4 pb-8 md:p-6 space-y-5";
 
-	// The strip's own answer, read from the PUBLIC `answeredRungs` array — NEVER
-	// from `plan`, which is admin-only ([] whenever `!canManage`) and would read
-	// `null` forever for a plain member: they'd answer, the page would reload,
-	// and the strip would ask again. Mirrors `unavailableMemberIds` above: a
-	// public array filtered by the client-known `myId`, because the server
-	// cannot resolve "my" for an anonymous roster pick.
-	const myStatus = myId
-		? (answeredRungs.find((r) => r.memberId === myId)?.status ?? null)
-		: null;
-	// Same override the panel's chips apply, so the member's own tap is instant
-	// — but clamped off `reached_out`. `rungOverride` is shared with the
-	// officer panel, so an OFFICER setting their own row to `reached_out` from
-	// the panel would otherwise mislabel their own strip as "can't make this
-	// one — undo?", and tapping that "undo" actually DELETES the row. An
-	// officer's clear is not unrestricted: since #573 `clearPlannedAttendance`
-	// floors every clear server-side, and the officer arm's floor is the ASK
-	// (`CLEARABLE_ASK`, `reached_out`), the self arm's and the Toastmaster's own
-	// row an ANSWER (`SELF_SERVICE_RUNGS`), so neither erases the other's. On
-	// another member's row the ask is the only thing an officer may clear, and
-	// the Toastmaster may clear nothing. But the officer arm
-	// applies to their own row too, and `reached_out` is always in its floor, so
-	// the "undo" clear would erase the very outreach record the clamp exists to
-	// protect (whole-branch review M8). `answeredRungs` can never itself produce
-	// `reached_out` — it is filtered server-side — so this only ever intercepts
-	// the override.
-	let myEffectiveStatus =
-		myId && rungOverride[myId] !== undefined ? rungOverride[myId] : myStatus;
-	myEffectiveStatus =
-		myEffectiveStatus === "reached_out" ? null : myEffectiveStatus;
-
-	// Wraps the shared `writeRung` with the busy guard above — still ONE write
-	// path (the panel's chips call `writeRung` directly), just with the strip's
-	// own in-flight flag set first and cleared in `finally` so a rejected write
-	// never leaves the control stuck disabled.
-	async function setMyStatus(next: PlanStatus | null) {
-		if (!myId) return;
-		setMyStatusBusy(true);
-		try {
-			await writeRung(myId, next);
-		} finally {
-			setMyStatusBusy(false);
-		}
-	}
-
-	// Manager (admin) actions: act as the session member; exposes the manager-only
-	// confirm/unconfirm/moveSpeaker/moveEvaluator/removeRole set.
-	const managerActions: MeetingAgendaActions = {
-		claim: async (slot, speakerDetails) => {
-			if (!managerActorId) {
-				throw new Error("Your account isn't linked to a club member yet.");
-			}
-			await claimSlot({
-				data: {
-					slotId: slot.id,
-					memberId: managerActorId,
-					actorMemberId: managerActorId,
-					speakerDetails,
-				},
-			});
-		},
-		// No actor on the wire for release / reassign (#763): both read the
-		// session, which is what lets an impersonating superadmin release.
-		release: async (slot) => {
-			await releaseSlot({ data: { slotId: slot.id } });
-		},
-		takeover: async (slot) => {
-			if (!managerActorId) {
-				throw new Error("Your account isn't linked to a club member yet.");
-			}
-			await reassignSlot({
-				data: { slotId: slot.id, memberId: managerActorId },
-			});
-		},
-		confirm: async (slot) => {
-			await confirmSlot({ data: { slotId: slot.id } });
-		},
-		unconfirm: async (slot) => {
-			await unconfirmSlot({ data: { slotId: slot.id } });
-		},
-		moveSpeaker: async (slot, direction) => {
-			await moveSpeakerSlot({ data: { slotId: slot.id, direction } });
-		},
-		moveEvaluator: async (slot, direction) => {
-			await moveEvaluatorSlot({ data: { slotId: slot.id, direction } });
-		},
-		removeRole: async (slot) => {
-			await removeRoleSlot({ data: { slotId: slot.id } });
-		},
-		addSpeaker: async () => {
-			await addSpeakerSlot({
-				data: { meetingId: meeting.id, selfMemberId: managerActorId },
-			});
-		},
-		removeSpeaker: async () => {
-			await removeSpeakerSlot({
-				data: { meetingId: meeting.id, selfMemberId: managerActorId },
-			});
-		},
-		onMutated: () => router.invalidate(),
-	};
-
-	// Self-serve (member / anon) actions: resolve identity first (a signed-in
-	// member resolves without a prompt; an anon visitor identifies at click) and
-	// carry `selfMemberId`, so the server takes the ADR-0010 self-serve path.
-	async function claimAs(
-		me: { id: string },
-		slot: { id: string },
-		speakerDetails?: SpeakerDetails,
-	) {
-		await claimSlot({
-			data: {
-				slotId: slot.id,
-				memberId: me.id,
-				actorMemberId: me.id,
-				speakerDetails,
-			},
-		});
-	}
-	const selfActions: MeetingAgendaActions = {
-		claim: async (slot, speakerDetails) => {
-			const me = await requireIdentity();
-			if (!me) return;
-			await claimAs(me, slot, speakerDetails);
-		},
-		// Rendered only for a signed-in holder (`canReleaseOwn`, #1003), so there
-		// is no identity to resolve: the server reads the session (#763), and a
-		// refusal reaches the agenda's `showWriteError` with its sign-in link.
-		release: async (slot) => {
-			await releaseSlot({ data: { slotId: slot.id } });
-		},
-		takeover: async (slot) => {
-			const me = await requireIdentity();
-			if (!me) return;
-			await reassignSlot({ data: { slotId: slot.id, memberId: me.id } });
-		},
-		addSpeaker: async () => {
-			const me = await requireIdentity();
-			if (!me) return;
-			await addSpeakerSlot({
-				data: { meetingId: meeting.id, selfMemberId: me.id },
-			});
-			toast.success("Speaker added.");
-		},
-		removeSpeaker: async () => {
-			const me = await requireIdentity();
-			if (!me) return;
-			await removeSpeakerSlot({
-				data: { meetingId: meeting.id, selfMemberId: me.id },
-			});
-			toast.success("Speaker removed.");
-		},
-		onMutated: () => router.invalidate(),
-	};
-
-	const actions = effectiveCanManage ? managerActions : selfActions;
-
-	// Cover requests (#1440): the landing card for a `?cover=` link, and a chip
-	// per request. Each chip sits under its own role row, handed to the agenda
-	// through `slotExtra` (#1461); a cancelled or past meeting shows none.
-	const coverOver = coverMeetingOver({ over, status: meeting.status });
-	const coverView = coverLandingView({
-		cover: coverParam,
-		dismissed: coverCardDismissed,
-		slots,
-		coverRequests,
-		meetingOver: coverOver,
-		roleCounts,
-		roleDefs: coverRoleDefs,
-		scheduledAt: new Date(meeting.scheduledAt),
-		timezone,
-		meetingNumber,
-	});
-	const coverChips = coverChipsFor({
-		coverRequests,
-		slots,
-		roleCounts,
-		scheduledAt: new Date(meeting.scheduledAt),
-		timezone,
-		now,
-		meetingOver: coverOver,
-	});
-	// slot id -> its chip: the agenda places each under its own row (#1461).
-	const coverChipBySlotId = new Map(
-		coverChips.map((c) => [c.request.slotId, c]),
-	);
 	const coverChipUnderRow = (slot: { id: string }) => {
 		const c = coverChipBySlotId.get(slot.id);
 		return c ? (
@@ -1934,246 +973,6 @@ function MeetingView() {
 			/>
 		) : null;
 	};
-	async function takeCoveredRole() {
-		const slot = coverView.slot;
-		if (!slot) return;
-		await takeCoveredSlot({
-			// The same self-serve claim the agenda uses: a signed-out visitor
-			// picks their name first (PickNameForm), a signed-in member does not.
-			claim: async () => {
-				const me = await requireIdentity();
-				if (!me) return false;
-				await claimAs(me, slot);
-				return true;
-			},
-			onTaken: () => toast.success(`You're on as ${coverView.roleLabel}.`),
-			refresh: () => router.invalidate(),
-			onError: (err) => showWriteError(err, "Something went wrong."),
-			setBusy: setCoverTakeBusy,
-		});
-	}
-
-	async function doAddRole(roleDefinitionId: string) {
-		setAddRoleBusy(true);
-		try {
-			await addRoleSlot({ data: { meetingId: meeting.id, roleDefinitionId } });
-			toast.success("Role added.");
-			setAddRoleOpen(false);
-			await router.invalidate();
-		} catch (err) {
-			showWriteError(err, "Something went wrong.");
-		} finally {
-			setAddRoleBusy(false);
-		}
-	}
-
-	async function doComplete() {
-		setLifecycleAction("complete");
-		try {
-			await completeMeeting({ data: { meetingId: meeting.id } });
-			toast.success("Meeting closed out and locked.");
-			await router.invalidate();
-		} catch (err) {
-			showWriteError(err, "Something went wrong.");
-		} finally {
-			setLifecycleAction(null);
-		}
-	}
-
-	async function doReopen() {
-		setLifecycleAction("reopen");
-		try {
-			await reopenMeeting({ data: { meetingId: meeting.id } });
-			toast.success("Meeting reopened for edits.");
-			await router.invalidate();
-		} catch (err) {
-			showWriteError(err, "Something went wrong.");
-		} finally {
-			setLifecycleAction(null);
-		}
-	}
-
-	// Cancel (#1057), after the confirm. The officer stays on the page and the
-	// notice opens — by the uuid URL, because a bare-date key skips a cancelled
-	// meeting (`meeting-resolve-logic.ts`) and `router.invalidate()` on a date
-	// URL would 404 the page the officer is looking at. `replace`, so Back does
-	// not land on that dead date URL. Same-URL case: the loader is re-run and
-	// the sheet opens in place.
-	//
-	// "Already cancelled" is the SUCCESS path with a different sentence: another
-	// officer (or this one, in another tab) got there first, the meeting is in
-	// exactly the state that was asked for, and the officer still needs the
-	// notice. Compared by identity with the constant, never by substring.
-	async function doCancel() {
-		setLifecycleAction("cancel");
-		try {
-			let alreadyCancelled = false;
-			try {
-				await cancelMeeting({ data: { meetingId: meeting.id } });
-			} catch (err) {
-				if (
-					!(err instanceof Error) ||
-					err.message !== MEETING_ALREADY_CANCELLED_MESSAGE
-				) {
-					throw err;
-				}
-				alreadyCancelled = true;
-			}
-			setCancelConfirmOpen(false);
-			toast.success(
-				alreadyCancelled
-					? "This meeting was already cancelled. Nothing has been sent."
-					: "Meeting cancelled. Nothing has been sent.",
-			);
-			if (meetingKeyParam !== urlKey) {
-				await router.navigate({
-					href: cancellationNoticeHref(clubId, urlKey),
-					replace: true,
-				});
-			} else {
-				await router.invalidate();
-				setNoticeOpen(true);
-			}
-		} catch (err) {
-			showWriteError(err, "Something went wrong.");
-		} finally {
-			setLifecycleAction(null);
-		}
-	}
-
-	async function doRestore() {
-		setLifecycleAction("restore");
-		try {
-			await restoreMeeting({ data: { meetingId: meeting.id } });
-			toast.success("Meeting restored. Everyone still has their role.");
-			await router.invalidate();
-		} catch (err) {
-			showWriteError(err, "Something went wrong.");
-		} finally {
-			setLifecycleAction(null);
-		}
-	}
-
-	// Ballot Counter console handlers (#510 Task 10). These call the SAME
-	// server fns the minutes-edit UI uses (`addTableTopics` / `removeTableTopics`
-	// / `moveTableTopics` / `setMinutesAward` / `clearMinutesAward`) — there is
-	// no separate voting-aware write path for Table Topics speakers or award
-	// winners; only the vote open/close/tally calls (inside `VoteCounterPanel`)
-	// go through `voting.ts`. Each now carries `selfMemberId: myId` so a
-	// non-admin Vote Counter — who may not even be signed in, per the design's
-	// "pick your name" self-assert — reaches `requireVoteCounterCapability`'s
-	// self-assert path instead of the admin-only `gateAdmin` these five used to
-	// share with `setAttendance` / `addMinutesGuest` / `removeMinutesGuest`
-	// (still admin-only, unchanged). Harmless for an admin: their session grants
-	// first, before `selfMemberId` is even consulted.
-	async function handleAddTableTopicsSpeaker(payload: {
-		memberId?: string;
-		guestId?: string;
-		newGuest?: { name: string };
-		topic?: string;
-	}) {
-		setVoteConsoleBusy(true);
-		try {
-			await addTableTopics({
-				data: { meetingId: meeting.id, selfMemberId: myId, ...payload },
-			});
-			await router.invalidate();
-		} catch (err) {
-			toast.error(errMessage(err));
-		} finally {
-			setVoteConsoleBusy(false);
-		}
-	}
-
-	async function handleRemoveTableTopicsSpeaker(id: string) {
-		setVoteConsoleBusy(true);
-		try {
-			await removeTableTopics({
-				data: { meetingId: meeting.id, id, selfMemberId: myId },
-			});
-			await router.invalidate();
-		} catch (err) {
-			toast.error(errMessage(err));
-		} finally {
-			setVoteConsoleBusy(false);
-		}
-	}
-
-	async function handleMoveTableTopicsSpeaker(
-		id: string,
-		direction: "up" | "down",
-	) {
-		setVoteConsoleBusy(true);
-		try {
-			await moveTableTopics({
-				data: { meetingId: meeting.id, id, direction, selfMemberId: myId },
-			});
-			await router.invalidate();
-		} catch (err) {
-			toast.error(errMessage(err));
-		} finally {
-			setVoteConsoleBusy(false);
-		}
-	}
-
-	const [digitalVotingBusy, setDigitalVotingBusy] = useState(false);
-	/** #770. Invalidates rather than patching local state: the switch changes
-	 *  what the whole page renders (the vote panel, the deck's vote slides) and
-	 *  the loader is what computes `digitalVoting`. */
-	async function handleSetDigitalVotingDisabled(disabled: boolean) {
-		setDigitalVotingBusy(true);
-		try {
-			await setMeetingDigitalVoting({
-				data: { meetingId: meeting.id, disabled },
-			});
-			await router.invalidate();
-			toast.success(
-				disabled
-					? "Digital voting is off for this meeting."
-					: "Digital voting is back on for this meeting.",
-			);
-		} catch (e) {
-			toast.error(e instanceof Error ? e.message : "Couldn't save that.");
-		} finally {
-			setDigitalVotingBusy(false);
-		}
-	}
-
-	async function handleSetVoteWinner(
-		category: AwardCategory,
-		winner:
-			| { kind: "member" | "guest"; id: string }
-			| { kind: "writeIn"; name: string },
-	) {
-		try {
-			await setMinutesAward({
-				data: {
-					meetingId: meeting.id,
-					category,
-					memberId: winner.kind === "member" ? winner.id : undefined,
-					guestId: winner.kind === "guest" ? winner.id : undefined,
-					writeInName: winner.kind === "writeIn" ? winner.name : undefined,
-					selfMemberId: myId,
-				},
-			});
-			toast.success("Winner set.");
-			await router.invalidate();
-		} catch (err) {
-			toast.error(errMessage(err));
-		}
-	}
-
-	async function handleClearVoteWinner(category: AwardCategory) {
-		try {
-			await clearMinutesAward({
-				data: { meetingId: meeting.id, category, selfMemberId: myId },
-			});
-			toast.success("Winner cleared.");
-			await router.invalidate();
-		} catch (err) {
-			toast.error(errMessage(err));
-		}
-	}
 
 	return (
 		<div className={containerClass}>
@@ -2421,21 +1220,7 @@ function MeetingView() {
 					canEditWod={viewer.canEditWod}
 					onEditWod={() => setWodOpen(true)}
 					canChangeType={viewer.canManage}
-					onChangeType={async () => {
-						// A failed fetch must not open the dialog onto an empty or stale
-						// list, and must not be an unhandled rejection with no feedback:
-						// it surfaces the way this route surfaces every failed write.
-						try {
-							setTemplates(
-								await listTemplatesForClub({
-									data: { clubId: meeting.clubId },
-								}),
-							);
-							setTemplateOpen(true);
-						} catch (err) {
-							showWriteError(err, "Couldn't load the meeting types.");
-						}
-					}}
+					onChangeType={openTemplateDialog}
 					editAgendaParams={
 						viewer.canManage && meeting.templateId
 							? { clubId: meeting.clubId, meetingId: meeting.id }
@@ -2448,10 +1233,7 @@ function MeetingView() {
 						onOpenChange={setWodOpen}
 						meeting={meeting}
 						selfMemberId={agendaMemberId}
-						onSaved={async () => {
-							setWodOpen(false);
-							await router.invalidate();
-						}}
+						onSaved={onWodSaved}
 					/>
 				) : null}
 				{viewer.canManage ? (
@@ -2460,19 +1242,8 @@ function MeetingView() {
 						onOpenChange={setTemplateOpen}
 						currentTemplateKey={templateKey}
 						templates={templates}
-						loadPreview={(templateId) =>
-							previewTemplateForMeeting({
-								data: { meetingId: meeting.id, templateId },
-							})
-						}
-						onApply={async (templateId) => {
-							await applyTemplateToMeeting({
-								data: { meetingId: meeting.id, templateId },
-							});
-							// Re-runs the meeting loader, so the agenda re-renders in the
-							// meeting's new shape.
-							await router.invalidate();
-						}}
+						loadPreview={loadTemplatePreview}
+						onApply={applyTemplate}
 					/>
 				) : null}
 				{viewer.canEditMeetingMeta ? (
@@ -2485,10 +1256,7 @@ function MeetingView() {
 						selfMemberId={agendaMemberId}
 						canReschedule={viewer.canManage}
 						effectiveMeetingNumber={meetingNumber}
-						onSaved={async () => {
-							setMetaOpen(false);
-							await router.invalidate();
-						}}
+						onSaved={onMetaSaved}
 					/>
 				) : null}
 				{/* Cancel confirm (#1057). It states the three things an officer
@@ -2586,7 +1354,7 @@ function MeetingView() {
 							description={coverView.description}
 							busy={coverTakeBusy}
 							onTake={takeCoveredRole}
-							onDecline={() => setCoverCardDismissed(true)}
+							onDecline={dismissCoverCard}
 						/>
 					) : null}
 
@@ -2628,51 +1396,12 @@ function MeetingView() {
 							meeting={meeting}
 							meetingUrlKey={urlKey}
 							clubSlug={clubSlug}
-							onOwnLateRelease={(slot) =>
-								setCoverSlots([
-									{
-										slotId: slot.id,
-										meetingId: meeting.id,
-										roleLabel: slotLabel(slot, roleCounts),
-										scheduledAt: meeting.scheduledAt,
-										clubSlug,
-										urlKey,
-										timeZone: timezone,
-									},
-								])
-							}
+							onOwnLateRelease={onOwnLateRelease}
 							meetingOver={over}
 							requireIdentity={requireIdentity}
 							contactedMemberIds={contactedMemberIds}
-							onContacted={async (memberId, via) => {
-								try {
-									await setContacted({
-										data: {
-											memberId,
-											meetingId: meeting.id,
-											clubId: meeting.clubId,
-											via,
-										},
-									});
-									await router.invalidate();
-								} catch (err) {
-									showWriteError(err, "Something went wrong.");
-								}
-							}}
-							onUncontacted={async (memberId) => {
-								try {
-									await clearContacted({
-										data: {
-											memberId,
-											meetingId: meeting.id,
-											clubId: meeting.clubId,
-										},
-									});
-									await router.invalidate();
-								} catch (err) {
-									showWriteError(err, "Something went wrong.");
-								}
-							}}
+							onContacted={onContacted}
+							onUncontacted={onUncontacted}
 						/>
 					</section>
 
@@ -3071,37 +1800,22 @@ function MeetingView() {
 			    the same write; Keep roles records Absent alone; Cancel writes nothing. */}
 			<CoverSheet
 				slots={coverSlots}
-				onClose={() => setCoverSlots([])}
-				onChanged={() => router.invalidate()}
+				onClose={closeCoverSheet}
+				onChanged={onCoverChanged}
 			/>
 			<AbsentReleaseDialog
 				pending={pendingAbsent}
 				offline={!online}
 				busy={absentBusy || offlineMinutes.busy || offlineMinutes.draining}
-				onCancel={() => setPendingAbsent(null)}
+				onCancel={cancelAbsent}
 				onRelease={(p) => void confirmAbsent(p, true)}
 				onKeep={(p) => void confirmAbsent(p, false)}
 			/>
 			<DeclineReleaseDialog
 				pending={pendingDecline}
 				busy={declineBusy}
-				onCancel={() => setPendingDecline(null)}
-				onConfirm={async (p) => {
-					// Stays OPEN until the write resolves, with both controls disabled.
-					// The alternative — close first, write after — is what left this
-					// path with no in-flight guard at all: the dialog is modal, so
-					// while it is up nothing else on the page is tappable either.
-					if (declineBusy) return;
-					setDeclineBusy(true);
-					try {
-						// `true` is passed HERE and nowhere else: this is the one call
-						// site that has shown someone what would be freed.
-						await commitRung(p.memberId, "not_coming", "manual", true);
-					} finally {
-						setDeclineBusy(false);
-						setPendingDecline(null);
-					}
-				}}
+				onCancel={cancelDecline}
+				onConfirm={confirmDecline}
 			/>
 		</div>
 	);

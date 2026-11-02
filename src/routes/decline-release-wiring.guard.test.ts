@@ -32,10 +32,25 @@ const FILE = resolve(
 	dirname(fileURLToPath(import.meta.url)),
 	"club.$clubId.meeting.$meetingId.tsx",
 );
+// The decline handlers moved out of the route (#1476): the ladder's writes into
+// `useMeetingOutreach`, `declineFreesRoles` into `useMeetingCover`. The route
+// keeps the call sites (`onWriteRung={writeRung}`, `pending={pendingDecline}`).
+const COMPONENTS = resolve(
+	dirname(fileURLToPath(import.meta.url)),
+	"..",
+	"components",
+	"club",
+);
+const OUTREACH_FILE = resolve(COMPONENTS, "use-meeting-outreach.ts");
+const COVER_FILE = resolve(COMPONENTS, "use-meeting-cover.ts");
 /** Comment-blind — for "must BE present" only. */
 const SRC = readSource(FILE);
 /** Verbatim — for "must be ABSENT" only. */
 const RAW = readFileSync(FILE, "utf8");
+const OUT = readSource(OUTREACH_FILE);
+const OUT_RAW = readFileSync(OUTREACH_FILE, "utf8");
+const COVER = readSource(COVER_FILE);
+const COVER_RAW = readFileSync(COVER_FILE, "utf8");
 
 /** One `function <name>(`/`async function <name>(` declaration inside the route
  *  component, bounded by the next sibling declaration — so a per-function
@@ -46,10 +61,12 @@ function fnBody(source: string, name: string): string {
 	);
 	if (start === -1) {
 		throw new Error(
-			`${name} not found in the meeting route — it was renamed or removed. Re-point this guard rather than deleting the case.`,
+			`${name} not found in its hook — it was renamed or removed. Re-point this guard rather than deleting the case.`,
 		);
 	}
-	const next = source.slice(start + 1).search(/\n\t(?:async )?function \w+\(/);
+	const next = source
+		.slice(start + 1)
+		.search(/\n\t(?:async )?function \w+\(|\n\tconst \w/);
 	return next === -1
 		? source.slice(start)
 		: source.slice(start, start + 1 + next);
@@ -57,7 +74,7 @@ function fnBody(source: string, name: string): string {
 
 describe("the decline confirm is on the write path, not beside it (#663)", () => {
 	it("writeRung intercepts not_coming BEFORE it writes", () => {
-		const body = fnBody(SRC, "writeRung");
+		const body = fnBody(OUT, "writeRung");
 		expect(
 			body,
 			"the intercept IS the confirm — without it the release happens on the tap",
@@ -77,7 +94,7 @@ describe("the decline confirm is on the write path, not beside it (#663)", () =>
 		// server frees it anyway — so the one case it skipped was the one where the
 		// officer had the least idea what was about to happen. Same first-cut bug
 		// `personal-meeting-body.tsx` documents for the sibling surface.
-		const body = fnBody(RAW, "writeRung");
+		const body = fnBody(OUT_RAW, "writeRung");
 		expect(
 			body,
 			"the confirm must not be conditional on the page believing a role is held",
@@ -90,13 +107,13 @@ describe("the decline confirm is on the write path, not beside it (#663)", () =>
 		// `markAsked`, `setMyStatus`, the panel's chips — sends a payload the server
 		// treats as "record the rung, free nothing". Only the dialog's action, which
 		// has actually shown someone what would go, passes true.
-		expect(SRC).toMatch(/releaseHeldRoles = false,/);
-		expect(SRC).toContain("releaseHeldRoles,");
-		expect(SRC).toMatch(
+		expect(OUT).toMatch(/releaseHeldRoles = false,/);
+		expect(OUT).toContain("releaseHeldRoles,");
+		expect(OUT).toMatch(
 			/commitRung\(p\.memberId, "not_coming", "manual", true\)/,
 		);
 		// Exactly one call site passes it.
-		expect(RAW.split('"not_coming", "manual", true').length - 1).toBe(1);
+		expect(OUT_RAW.split('"not_coming", "manual", true').length - 1).toBe(1);
 	});
 
 	it("guards the confirmed write with its own in-flight flag", () => {
@@ -105,8 +122,8 @@ describe("the decline confirm is on the write path, not beside it (#663)", () =>
 		// the officer answers. Without this the confirmed write — the only
 		// destructive one on the page — would be the one guarded by nothing.
 		expect(SRC).toContain("busy={declineBusy}");
-		expect(SRC).toContain("if (declineBusy) return;");
-		expect(SRC).toContain("setDeclineBusy(true);");
+		expect(OUT).toContain("if (declineBusy) return;");
+		expect(OUT).toContain("setDeclineBusy(true);");
 	});
 
 	it("writeRung touches no optimistic state on the intercepted path", () => {
@@ -115,11 +132,11 @@ describe("the decline confirm is on the write path, not beside it (#663)", () =>
 		// was never told — and the reconciling effect only drops an override once a
 		// fresh payload arrives, so it would sit there until something else on the
 		// page invalidated.
-		expect(fnBody(RAW, "writeRung")).not.toContain("setRungOverride(");
+		expect(fnBody(OUT_RAW, "writeRung")).not.toContain("setRungOverride(");
 	});
 
 	it("commitRung is the one that actually writes", () => {
-		expect(fnBody(SRC, "commitRung")).toContain("setPlannedAttendance({");
+		expect(fnBody(OUT, "commitRung")).toContain("setPlannedAttendance({");
 	});
 
 	it("the rail is handed the INTERCEPTING writer", () => {
@@ -135,14 +152,15 @@ describe("the decline confirm is on the write path, not beside it (#663)", () =>
 		// It writes `not_coming` for the viewer's OWN row, which is a releasing arm.
 		// Wired straight to `commitRung` it would be the one surface on this page
 		// that frees a member's roles without asking.
-		const body = fnBody(SRC, "setMyStatus");
+		const body = fnBody(OUT, "setMyStatus");
 		expect(body).toContain("await writeRung(");
-		expect(fnBody(RAW, "setMyStatus")).not.toContain("commitRung(");
+		expect(fnBody(OUT_RAW, "setMyStatus")).not.toContain("commitRung(");
 	});
 
 	it("the confirm's own action writes, and writes not_coming", () => {
 		expect(SRC).toContain("pending={pendingDecline}");
-		expect(SRC).toMatch(/commitRung\(p\.memberId, "not_coming",/);
+		expect(OUT).toMatch(/commitRung\(p\.memberId, "not_coming",/);
+		expect(SRC).toContain("onConfirm={confirmDecline}");
 	});
 });
 
@@ -151,10 +169,10 @@ describe("the confirm predicts the SERVER's arm (#663)", () => {
 		// `effectiveCanManage` is `canManage && !previewAsMember` (#320). The server
 		// keys off the SESSION, which an admin previewing as a member still carries,
 		// so the preview flag would mispredict on a path where the release lands.
-		const body = fnBody(SRC, "declineFreesRoles");
+		const body = fnBody(COVER, "declineFreesRoles");
 		expect(body).toContain("canManage");
 		expect(
-			fnBody(RAW, "declineFreesRoles"),
+			fnBody(COVER_RAW, "declineFreesRoles"),
 			"the preview flag is not what the server sees",
 		).not.toContain("effectiveCanManage");
 	});
@@ -165,11 +183,11 @@ describe("the confirm predicts the SERVER's arm (#663)", () => {
 		// officer → TMOD → self, so a TMOD declining for themselves resolves to
 		// `tmod`. Reading `isTmod` here would put the copy back out of step with the
 		// server on exactly that row.
-		const body = fnBody(SRC, "declineFreesRoles");
+		const body = fnBody(COVER, "declineFreesRoles");
 		expect(body).toContain("canManage ||");
 		expect(body).toContain("memberId === myId");
 		expect(
-			fnBody(RAW, "declineFreesRoles"),
+			fnBody(COVER_RAW, "declineFreesRoles"),
 			"the own-row TMOD case releases server-side, so this must not exclude it",
 		).not.toContain("isTmod");
 	});
@@ -181,7 +199,7 @@ describe("the confirm predicts the SERVER's arm (#663)", () => {
 		// server's own answer for it, granting on an admin membership or a
 		// `read_write` impersonation and refusing `read_only`, which is what
 		// `requireClubRole(admin)` and `requireSessionActor` both do.
-		const body = fnBody(SRC, "declineFreesRoles");
+		const body = fnBody(COVER, "declineFreesRoles");
 		expect(
 			body,
 			"an asserted caller frees nothing, so the dialog must not promise a release and the payload must not ask for one",
@@ -201,7 +219,7 @@ describe("the confirm predicts the SERVER's arm (#663)", () => {
 		// Verbatim: a comment-blind read would let the paragraph above satisfy the
 		// very pattern it warns against.
 		expect(
-			fnBody(RAW, "declineFreesRoles"),
+			fnBody(COVER_RAW, "declineFreesRoles"),
 			"canManage is already the server's answer for the officer arm; gating it on a session proxy silently drops admin parity",
 		).not.toMatch(/isSignedIn\s*&&\s*\(/);
 	});
@@ -213,7 +231,7 @@ describe("the confirm predicts the SERVER's arm (#663)", () => {
 		// decline would free nothing, so the rung still lands by the same path
 		// every other caller takes. Deleted, the anonymous member who taps
 		// "Can't make it" gets a refusal instead of an answer recorded.
-		const body = fnBody(SRC, "commitRung");
+		const body = fnBody(OUT, "commitRung");
 		expect(body).toContain(
 			"if (releaseHeldRoles && !declineFreesRoles(memberId))",
 		);
@@ -227,7 +245,7 @@ describe("the confirm predicts the SERVER's arm (#663)", () => {
 		// `willRelease` picks between "this frees the role" and "that stays
 		// theirs". Dropped, the prop defaults to nothing and the dialog promises a
 		// release the server may decline to make.
-		const body = fnBody(SRC, "writeRung");
+		const body = fnBody(OUT, "writeRung");
 		expect(body).toContain("willRelease: declineFreesRoles(memberId)");
 		expect(body).toContain("roleLabels: heldRolesByMember[memberId]?.labels");
 	});

@@ -17,17 +17,24 @@ const ROUTE = resolve(
 	"club.$clubId.meeting.$meetingId.tsx",
 );
 
+// The attendance writes moved out of the route into `useMeetingRoll` (#1476).
+const ROLL_HOOK = resolve(
+	dirname(fileURLToPath(import.meta.url)),
+	"../components/club/use-meeting-roll.ts",
+);
+
 describe("attendance mode route wiring (#1049)", () => {
 	const src = readSource(ROUTE);
+	const hookSrc = readSource(ROLL_HOOK);
 	const panelTagAt = src.indexOf("<MeetingAttendancePanel");
 	const panelProps = src.slice(panelTagAt, src.indexOf("/>", panelTagAt));
 
-	/** The body of a function declared in the route, up to the next one. */
+	/** The body of a function declared in the roll hook, up to the next one. */
 	function body(name: string): string {
-		const at = src.indexOf(`async function ${name}(`);
-		expect(at, `${name} not found in the route`).toBeGreaterThan(-1);
-		const next = src.indexOf("async function ", at + 1);
-		return src.slice(at, next === -1 ? undefined : next);
+		const at = hookSrc.indexOf(`async function ${name}(`);
+		expect(at, `${name} not found in use-meeting-roll.ts`).toBeGreaterThan(-1);
+		const next = hookSrc.indexOf("async function ", at + 1);
+		return hookSrc.slice(at, next === -1 ? undefined : next);
 	}
 
 	it("finds the panel's call site", () => {
@@ -71,7 +78,7 @@ describe("attendance mode route wiring (#1049)", () => {
 	it("writes a guest's toggle as an addGuest WITH the mode", () => {
 		const b = body("setRollGuestMode");
 		expect(b).toMatch(
-			/addMinutesGuest\(\{\s*data: \{ meetingId: meeting\.id, guestId, mode, replaceMode: true \}/,
+			/addMinutesGuest\(\{\s*data: \{ meetingId, guestId, mode, replaceMode: true \}/,
 		);
 		expect(b).toMatch(/type: "addGuest",[\s\S]*mode,\s*replaceMode: true,/);
 	});
