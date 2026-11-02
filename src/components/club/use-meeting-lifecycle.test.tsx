@@ -45,7 +45,7 @@ vi.mock("#/server/slots", () => ({
 
 const base = {
 	meetingId: "m1",
-	meetingClubId: "c1",
+	clubUuid: "c1",
 	clubKey: "club",
 	meetingKeyParam: "2026-11-02",
 	urlKey: "uuid-1",

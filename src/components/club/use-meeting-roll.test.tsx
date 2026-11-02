@@ -145,8 +145,8 @@ describe("useMeetingRoll", () => {
 			welcomeBack: { lastPresentAt: "2026-09-01T00:00:00Z" },
 		});
 		const { result } = setup();
-		await act(() => result.current.writePresence("a", "present", undefined));
-		await act(() => result.current.writePresence("a", "present", undefined));
+		await act(() => result.current.writeAttendance("a", "present"));
+		await act(() => result.current.writeAttendance("a", "present"));
 		const welcomes = toastSuccess.mock.calls.filter((c) =>
 			String(c[0]).includes("Ann"),
 		);

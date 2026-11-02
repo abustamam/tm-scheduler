@@ -8,7 +8,6 @@ import type {
 } from "#/components/agenda/meeting-agenda";
 import { showWriteError } from "#/components/write-error-toast";
 import { slotLabel } from "#/lib/agenda";
-import type { getMeetingByKey } from "#/server/meetings";
 import { getPublicClubRoles } from "#/server/role-definitions";
 import {
 	addSpeakerSlot,
@@ -26,8 +25,7 @@ import { coverChipsFor, coverMeetingOver } from "./cover-chip";
 import { coverLandingView, takeCoveredSlot } from "./cover-landing-card";
 import type { CoverSlot } from "./cover-sheet";
 import type { useRequireIdentity } from "./identity-gate";
-
-type MeetingDetail = Awaited<ReturnType<typeof getMeetingByKey>>;
+import type { MeetingDetail } from "./use-meeting-types";
 
 /**
  * The meeting page's claim and cover domain (#1476): the agenda's claim /

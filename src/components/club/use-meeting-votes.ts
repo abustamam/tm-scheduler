@@ -24,7 +24,7 @@ import { getVoteTally } from "#/server/voting";
  * ballots child issue owns their error display, and doing it here would have it
  * land twice.
  */
-export function errMessage(err: unknown) {
+function errMessage(err: unknown) {
 	return err instanceof Error ? err.message : "Something went wrong.";
 }
 

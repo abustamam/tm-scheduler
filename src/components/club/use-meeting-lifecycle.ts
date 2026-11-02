@@ -29,7 +29,7 @@ import type { LifecycleAction } from "./meeting-toolbar";
 export function useMeetingLifecycle(args: {
 	meetingId: string;
 	/** The club's uuid, for the meeting-type list. */
-	meetingClubId: string;
+	clubUuid: string;
 	/** The club key in the URL (`clubId` route param). */
 	clubKey: string;
 	/** The key the URL actually carries (a club-local date or the uuid). */
@@ -43,7 +43,7 @@ export function useMeetingLifecycle(args: {
 }) {
 	const {
 		meetingId,
-		meetingClubId,
+		clubUuid,
 		clubKey,
 		meetingKeyParam,
 		urlKey,
@@ -193,7 +193,7 @@ export function useMeetingLifecycle(args: {
 		try {
 			setTemplates(
 				await listTemplatesForClub({
-					data: { clubId: meetingClubId },
+					data: { clubId: clubUuid },
 				}),
 			);
 			setTemplateOpen(true);

@@ -10,11 +10,9 @@ import {
 	setPlannedAttendance,
 } from "#/server/attendance-plan";
 import { getLineupBlastAccess } from "#/server/lineup-blast";
-import type { getMeetingByKey } from "#/server/meetings";
 import { clearContacted, setContacted } from "#/server/outreach";
 import type { PendingDecline } from "./decline-release-dialog";
-
-type MeetingDetail = Awaited<ReturnType<typeof getMeetingByKey>>;
+import type { HeldRolesByMember, MeetingDetail } from "./use-meeting-types";
 
 /**
  * The meeting page's outreach domain (#1476): the plan ladder's writes
@@ -29,7 +27,7 @@ type MeetingDetail = Awaited<ReturnType<typeof getMeetingByKey>>;
 export function useMeetingOutreach(args: {
 	meetingId: string;
 	/** The club's uuid, stamped on a contacted mark. */
-	meetingClubId: string;
+	clubUuid: string;
 	myId: string | null;
 	isSignedIn: boolean;
 	isTmod: boolean;
@@ -44,12 +42,12 @@ export function useMeetingOutreach(args: {
 	/** The public array a plain member's own row lives on. */
 	answeredRungs: MeetingDetail["answeredRungs"];
 	panelRosterForMode: { id: string; name: string }[];
-	heldRolesByMember: Record<string, { name: string | null; labels: string[] }>;
+	heldRolesByMember: HeldRolesByMember;
 	declineFreesRoles: (memberId: string) => boolean;
 }) {
 	const {
 		meetingId,
-		meetingClubId,
+		clubUuid,
 		myId,
 		isSignedIn,
 		isTmod,
@@ -430,7 +428,7 @@ export function useMeetingOutreach(args: {
 				data: {
 					memberId,
 					meetingId,
-					clubId: meetingClubId,
+					clubId: clubUuid,
 					via,
 				},
 			});
@@ -446,7 +444,7 @@ export function useMeetingOutreach(args: {
 				data: {
 					memberId,
 					meetingId,
-					clubId: meetingClubId,
+					clubId: clubUuid,
 				},
 			});
 			await router.invalidate();
@@ -466,7 +464,6 @@ export function useMeetingOutreach(args: {
 		setLineupOpen,
 		canLineupBlast,
 		writeRung,
-		commitRung,
 		markAsked,
 		setMyStatus,
 		confirmDecline,

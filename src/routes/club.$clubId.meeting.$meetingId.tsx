@@ -869,7 +869,7 @@ function MeetingView() {
 		onUncontacted,
 	} = useMeetingOutreach({
 		meetingId: meeting.id,
-		meetingClubId: meeting.clubId,
+		clubUuid: meeting.clubId,
 		myId,
 		isSignedIn,
 		isTmod,
@@ -914,7 +914,7 @@ function MeetingView() {
 		onMetaSaved,
 	} = useMeetingLifecycle({
 		meetingId: meeting.id,
-		meetingClubId: meeting.clubId,
+		clubUuid: meeting.clubId,
 		clubKey: clubId,
 		meetingKeyParam,
 		urlKey,

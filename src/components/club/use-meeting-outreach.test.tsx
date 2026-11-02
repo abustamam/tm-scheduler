@@ -43,7 +43,7 @@ vi.mock("#/server/outreach", () => ({
 
 const base = {
 	meetingId: "m1",
-	meetingClubId: "c1",
+	clubUuid: "c1",
 	myId: "me" as string | null,
 	isSignedIn: true,
 	isTmod: false,
@@ -134,9 +134,9 @@ describe("useMeetingOutreach", () => {
 
 	it("drops the release flag when the viewer's decline would not free roles", async () => {
 		const { result } = setup({ declineFreesRoles: () => false });
-		await act(() =>
-			result.current.commitRung("a", "not_coming" as never, "manual", true),
-		);
+		await act(() => result.current.writeRung("a", "not_coming" as never));
+		const p = result.current.pendingDecline as never;
+		await act(() => result.current.confirmDecline(p));
 		expect(setPlannedAttendance).toHaveBeenCalledWith({
 			data: expect.objectContaining({ releaseHeldRoles: false }),
 		});
@@ -147,7 +147,7 @@ describe("useMeetingOutreach", () => {
 		const { result } = setup({
 			effectivePlan: [{ memberId: "me", status: "maybe" }],
 		});
-		await act(() => result.current.commitRung("me", "coming" as never));
+		await act(() => result.current.writeRung("me", "coming" as never));
 		expect(showWriteError).toHaveBeenCalledTimes(1);
 		expect(result.current.rungOverride.me).toBe("maybe");
 		expect(invalidate).not.toHaveBeenCalled();
@@ -157,12 +157,12 @@ describe("useMeetingOutreach", () => {
 		const spy = () => vi.spyOn(qc, "invalidateQueries");
 		const plain = setup();
 		const s1 = spy();
-		await act(() => plain.result.current.commitRung("me", "coming" as never));
+		await act(() => plain.result.current.writeRung("me", "coming" as never));
 		expect(invalidate).toHaveBeenCalledTimes(1);
 		expect(s1).not.toHaveBeenCalled();
 		const tmod = setup({ needsTmodPlan: true });
 		const s2 = spy();
-		await act(() => tmod.result.current.commitRung("me", "coming" as never));
+		await act(() => tmod.result.current.writeRung("me", "coming" as never));
 		expect(s2).toHaveBeenCalledWith({ queryKey: ["tmod-plan", "m1", "me"] });
 	});
 
@@ -172,7 +172,7 @@ describe("useMeetingOutreach", () => {
 			effectiveCanManage: true,
 			effectivePlan: [{ memberId: "a", status: "coming" }],
 		});
-		await act(() => result.current.commitRung("a", null));
+		await act(() => result.current.writeRung("a", null));
 		expect(toastMessage).toHaveBeenCalledTimes(1);
 	});
 

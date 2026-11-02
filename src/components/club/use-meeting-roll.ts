@@ -17,7 +17,7 @@ import {
 } from "#/lib/roll-attendance";
 import { welcomeBackMessage } from "#/lib/welcome-back";
 import { getGuestPipeline } from "#/server/guest-pipeline";
-import { type getMeetingByKey, getTmodPanelData } from "#/server/meetings";
+import { getTmodPanelData } from "#/server/meetings";
 import {
 	addMinutesGuest,
 	type getMinutes,
@@ -26,9 +26,7 @@ import {
 } from "#/server/minutes";
 import type { AttendanceStatus } from "#/server/minutes-logic";
 import type { PendingAbsent } from "./absent-release-dialog";
-
-type MeetingDetail = Awaited<ReturnType<typeof getMeetingByKey>>;
-type Held = Record<string, { name: string | null; labels: string[] }>;
+import type { HeldRolesByMember, MeetingDetail } from "./use-meeting-types";
 
 /**
  * The meeting page's roll and attendance domain (#1476): recorded attendance
@@ -62,7 +60,7 @@ export function useMeetingRoll(args: {
 	showRollPanel: boolean;
 	attendanceDefaultMode: AttendanceMode;
 	/** Every role a member holds, numbered, keyed by member id. */
-	heldRolesByMember: Held;
+	heldRolesByMember: HeldRolesByMember;
 	/** The same roles as records (#1256), for the Absent dialog. */
 	heldRoleLinesByMember: Record<string, PendingAbsent["roles"]>;
 }) {
@@ -536,7 +534,6 @@ export function useMeetingRoll(args: {
 		cancelAbsent: () => setPendingAbsent(null),
 		writeAttendance,
 		writeAttendanceMode,
-		writePresence,
 		confirmAbsent,
 		addRollGuest,
 		setRollGuestMode,
