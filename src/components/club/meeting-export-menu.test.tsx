@@ -108,18 +108,32 @@ describe("MeetingExportMenu (#541 D2)", () => {
 		expect(screen.queryByRole("menuitem", { name: /word poster/i })).toBeNull();
 	});
 
-	it("opens the per-meeting role-sheet PDFs in a dialog, one downloadable link per sheet", async () => {
+	// protects=AC9: the Toastmaster's entry is the script PAGE and the other
+	//   sheets still download their PDFs.
+	// fails_when=the Toastmaster still points at the PDF, keeps `download`, or
+	//   another sheet is repointed.
+	// no_claim=that the PDF endpoint answers (its own test).
+	it("opens the role sheets in a dialog: the Toastmaster's is a page, the rest are PDFs", async () => {
 		await openMenu();
 		await userEvent.click(
 			screen.getByRole("menuitem", { name: /this meeting's role sheets/i }),
 		);
 		for (const sheet of ROLE_SHEETS) {
 			const link = screen.getByText(sheet.title).closest("a");
+			if (sheet.key === "toastmaster") {
+				expect(sheet.title).toBe("Toastmaster's script");
+				expect(link?.getAttribute("href")).toBe(
+					"/club/downtown/meeting/2026-08-10/me/script",
+				);
+				expect(link?.hasAttribute("download")).toBe(false);
+				continue;
+			}
 			expect(link?.getAttribute("href")).toBe(
 				`/api/meetings/${BASE.dbMeetingId}/role-sheets/${sheet.key}/pdf`,
 			);
 			expect(link?.hasAttribute("download")).toBe(true);
 		}
+		expect(ROLE_SHEETS.filter((s) => s.key !== "toastmaster")).toHaveLength(5);
 	});
 
 	it("opens every external link (Print, Present, All role sheets, Word poster) in a new tab with noopener", async () => {

@@ -24,8 +24,9 @@ import { randomUUID } from "node:crypto";
 import { eq, getTableColumns } from "drizzle-orm";
 import { serialize } from "seroval";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { meetings } from "#/db/schema";
+import { meetings, roleSlots, speeches } from "#/db/schema";
 import {
+	MEMBERS_ONLY_DETAIL_FIELDS,
 	NON_MEMBER_MEETING_FIELDS,
 	nonMemberMeetingRow,
 	WITHHELD_MEETING_FIELDS,
@@ -217,3 +218,110 @@ describe.skipIf(!hasTestDb)("the meeting detail payload", () => {
 		expect((await readers(s).getMeeting()).hasJoinLink).toBe(false);
 	});
 });
+
+describe.skipIf(!hasTestDb)(
+	"speech introductions on the detail payload (#1480)",
+	() => {
+		let seeded: SeededClub | null = null;
+		afterEach(async () => {
+			signInAs(null);
+			if (!seeded) return;
+			await cleanup(seeded.clubId, [seeded.adminUserId, seeded.memberUserId]);
+			seeded = null;
+		});
+
+		const INTRO = "Marcus-wrote-this-unique-introduction-9917";
+
+		async function seedSpeech() {
+			seeded = await seedClub();
+			const [speech] = await testDb
+				.insert(speeches)
+				.values({
+					personId: seeded.personId,
+					title: "A Speech",
+					introduction: INTRO,
+				})
+				.returning({ id: speeches.id });
+			const [blank] = await testDb
+				.insert(speeches)
+				.values({
+					personId: seeded.personId,
+					title: "Blank",
+					introduction: "  ",
+				})
+				.returning({ id: speeches.id });
+			const [withIntro, withBlank] = await testDb
+				.insert(roleSlots)
+				.values([
+					{
+						meetingId: seeded.meetingId,
+						roleDefinitionId: seeded.roleDefinitionId,
+						status: "open",
+						speechId: speech?.id,
+					},
+					{
+						meetingId: seeded.meetingId,
+						roleDefinitionId: seeded.roleDefinitionId,
+						status: "open",
+						speechId: blank?.id,
+					},
+				])
+				.returning({ id: roleSlots.id });
+			return {
+				s: seeded,
+				slotId: withIntro?.id as string,
+				blankId: withBlank?.id,
+			};
+		}
+
+		const readers = (s: SeededClub) => ({
+			getMeeting: () => getMeeting({ data: s.meetingId }),
+			getPublicMeetingByKey: () =>
+				getPublicMeetingByKey({ data: { clubId: s.clubId, key: s.meetingId } }),
+		});
+
+		// protects=members-only text: a signed-out reader and a signed-in non-member
+		//   get `null` on every member-only detail field, on both readers, and the
+		//   text is in neither the object nor its serialised wire form.
+		// fails_when=the introductions query is not gated on viewerIsMember.
+		// no_claim=a real cookie resolving to a session (the session lookup is mocked).
+		it("is null for a signed-out reader and a non-member, on every reader", async () => {
+			const { s } = await seedSpeech();
+			for (const user of [null, randomUUID()]) {
+				signInAs(user);
+				for (const [name, read] of Object.entries(readers(s))) {
+					const data = await read();
+					for (const field of MEMBERS_ONLY_DETAIL_FIELDS) {
+						expect(data[field], `${name}.${field} as ${user}`).toBeNull();
+					}
+					expect(serialize(data), name).not.toContain(INTRO);
+				}
+			}
+		});
+
+		// protects=the public reader never ships it, even to a signed-in admin.
+		// fails_when=getPublicMeetingByKey starts reading the session's membership.
+		it("is null on the public reader even for a signed-in admin", async () => {
+			const { s } = await seedSpeech();
+			signInAs(s.adminUserId);
+			const data = await readers(s).getPublicMeetingByKey();
+			expect(data.speechIntroductions).toBeNull();
+			expect(JSON.stringify(data)).not.toContain(INTRO);
+		});
+
+		// protects=the member half, keyed by slot id, non-blank only.
+		// fails_when=the gate hides it from members, or a blank introduction is
+		//   shipped as an entry.
+		it("carries non-blank introductions, by slot id, for a member and a manager", async () => {
+			const { s, slotId, blankId } = await seedSpeech();
+			for (const user of [s.memberUserId, s.adminUserId]) {
+				signInAs(user);
+				const data = await readers(s).getMeeting();
+				expect(data.speechIntroductions).toEqual({ [slotId]: INTRO });
+				expect(
+					Object.hasOwn(data.speechIntroductions ?? {}, blankId ?? ""),
+				).toBe(false);
+			}
+		});
+	},
+);

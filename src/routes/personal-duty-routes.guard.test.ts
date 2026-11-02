@@ -53,6 +53,8 @@ const WORD_ROUTE = "src/routes/club.$clubId.meeting.$meetingId_.me_.word.tsx";
 const TOPICS_ROUTE =
 	"src/routes/club.$clubId.meeting.$meetingId_.me_.topics.tsx";
 const TIMER_ROUTE = "src/routes/club.$clubId.meeting.$meetingId_.me_.timer.tsx";
+const SCRIPT_ROUTE =
+	"src/routes/club.$clubId.meeting.$meetingId_.me_.script.tsx";
 const EDITORS = "src/components/club/personal-meeting-editors.tsx";
 const PERSONAL_BODY = "src/components/club/personal-meeting-body.tsx";
 
@@ -61,6 +63,7 @@ const theme = readSource(resolve(ROOT, THEME_ROUTE));
 const word = readSource(resolve(ROOT, WORD_ROUTE));
 const topics = readSource(resolve(ROOT, TOPICS_ROUTE));
 const timer = readSource(resolve(ROOT, TIMER_ROUTE));
+const script = readSource(resolve(ROOT, SCRIPT_ROUTE));
 const editors = readSource(resolve(ROOT, EDITORS));
 /** Verbatim — for "this offender must be ABSENT". Never `readSource`. */
 const rawEditors = readFileSync(resolve(ROOT, EDITORS), "utf8");
@@ -126,6 +129,17 @@ describe("every duty href is a route that exists", () => {
 		).toBe(true);
 	});
 
+	it("the Toastmaster's script is a real route (#1480)", () => {
+		// protects=the job card's and the export menu's links to it; fails_when=the
+		// route file is renamed or moves out of the `me_` spelling (the parent
+		// assertion below catches the second); no_claim=that it renders.
+		expect(
+			fullPaths.has(
+				`/club/${TARGET.clubId}/meeting/${TARGET.meetingId}/me/script`,
+			),
+		).toBe(true);
+	});
+
 	// A matching URL is NOT proof the page renders, and this is the case that
 	// makes the distinction real rather than theoretical. Verified by mutation:
 	// renaming the theme route to `…$meetingId_.me.theme.tsx` — the obvious
@@ -136,7 +150,7 @@ describe("every duty href is a route that exists", () => {
 	// visitor is shown the personal page again with no error anywhere. Every
 	// assertion above stays green. The `me_` segment is what prevents it.
 	it("the editors hang off the club shell, not off the outlet-less personal page", () => {
-		for (const leaf of ["theme", "word", "timer", "topics"]) {
+		for (const leaf of ["theme", "word", "timer", "topics", "script"]) {
 			expect(
 				tree,
 				`${leaf} editor must be a child of the /club/$clubId shell`,
@@ -349,6 +363,32 @@ describe("the Timer's stopwatch route (#729)", () => {
 		const raw = readFileSync(resolve(ROOT, TIMER_ROUTE), "utf8");
 		expect(raw).not.toMatch(/#\/server\/timings/);
 		expect(raw).not.toMatch(/recordTiming\(/);
+	});
+});
+
+describe("the Toastmaster's script route (#1480)", () => {
+	// protects=the members-only introductions: the route must pick the loader by
+	//   `context.shell`, so a signed-out visitor is served the public reader.
+	// fails_when=the fork is replaced by one reader for everyone.
+	it("keeps the PII loader fork verbatim", () => {
+		expect(script).toContain(
+			"context.shell ? getMeetingByKey : getPublicMeetingByKey",
+		);
+	});
+
+	// protects=a time on the script is the printed agenda's.
+	// fails_when=the route skips applyFlex or buildTimeline, or re-derives rows.
+	it("derives its times through the print route's own sequence", () => {
+		expect(script).toContain("resolveAgendaRows({");
+		expect(script).toMatch(/applyFlex\(runRows, meeting\.lengthMinutes\)/);
+		expect(script).toContain("buildTimeline(flex.rows");
+		expect(script).toContain("introductions: speechIntroductions");
+	});
+
+	// no_claim=anything about rendering; RAW negative, per `guard-source.ts`.
+	it("performs no write", () => {
+		const raw = readFileSync(resolve(ROOT, SCRIPT_ROUTE), "utf8");
+		expect(raw).not.toMatch(/#\/server\/(?!meetings)/);
 	});
 });
 

@@ -4,6 +4,7 @@ import {
 	ClipboardList,
 	Download,
 	FileDown,
+	FileText,
 	Presentation,
 	Printer,
 	Signpost,
@@ -248,23 +249,43 @@ export function MeetingExportMenu({
 						includes what to say.
 					</DialogDescription>
 					<div className="flex flex-col">
-						{ROLE_SHEETS.map((sheet) => (
-							<Button
-								key={sheet.key}
-								asChild
-								variant="ghost"
-								size="sm"
-								className="h-auto justify-start px-2 py-1.5 font-normal"
-							>
-								<a
-									href={`/api/meetings/${dbMeetingId}/role-sheets/${sheet.key}/pdf`}
-									download
+						{ROLE_SHEETS.map((sheet) =>
+							sheet.key === "toastmaster" ? (
+								// The Toastmaster's is a page, not a download (#1480). The PDF
+								// endpoint stays live for open tabs and bookmarks.
+								<Button
+									key={sheet.key}
+									asChild
+									variant="ghost"
+									size="sm"
+									className="h-auto justify-start px-2 py-1.5 font-normal"
 								>
-									<FileDown className="text-muted-foreground" />
-									{sheet.title}
-								</a>
-							</Button>
-						))}
+									<Link
+										to="/club/$clubId/meeting/$meetingId/me/script"
+										params={{ clubId: clubSlug, meetingId }}
+									>
+										<FileText className="text-muted-foreground" />
+										{sheet.title}
+									</Link>
+								</Button>
+							) : (
+								<Button
+									key={sheet.key}
+									asChild
+									variant="ghost"
+									size="sm"
+									className="h-auto justify-start px-2 py-1.5 font-normal"
+								>
+									<a
+										href={`/api/meetings/${dbMeetingId}/role-sheets/${sheet.key}/pdf`}
+										download
+									>
+										<FileDown className="text-muted-foreground" />
+										{sheet.title}
+									</a>
+								</Button>
+							),
+						)}
 					</div>
 				</DialogContent>
 			</Dialog>

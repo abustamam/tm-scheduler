@@ -293,6 +293,31 @@ async function loadMeetingDetail(
 		? await listUnavailableWithNames(db, meetingId)
 		: await listNotComingWithNames(db, meetingId);
 
+	// Speakers' written introductions (#1480): MEMBER-WRITTEN text, so members
+	// only, like the roll above. A non-member gets `null` (not `{}`), so the
+	// payload does not even reveal whether any introduction exists. One query,
+	// non-blank only. `loadMeetingSlots` is deliberately not widened: it has
+	// other callers that are not members-only.
+	const speechIntroductions: Record<string, string> | null = viewerIsMember
+		? Object.fromEntries(
+				(
+					await db
+						.select({
+							slotId: roleSlots.id,
+							introduction: speeches.introduction,
+						})
+						.from(roleSlots)
+						.innerJoin(speeches, eq(speeches.id, roleSlots.speechId))
+						.where(
+							and(
+								eq(roleSlots.meetingId, meetingId),
+								sql`btrim(coalesce(${speeches.introduction}, '')) <> ''`,
+							),
+						)
+				).map((r) => [r.slotId, r.introduction as string]),
+			)
+		: null;
+
 	// ACTIVE members' rows only (#1342): `answeredRungs` is public, and a plan
 	// row of a member who left must not tell a signed-out reader who they were.
 	const allRungs = (
@@ -605,6 +630,7 @@ async function loadMeetingDetail(
 		clubRoles,
 		pairedRoleDefinitionIds,
 		coverRequests,
+		speechIntroductions,
 	};
 }
 

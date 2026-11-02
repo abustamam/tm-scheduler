@@ -1015,3 +1015,49 @@ describe("PersonalMeetingBody - role-duty copy (#1280)", () => {
 		);
 	});
 });
+
+describe("PersonalMeetingBody - the Toastmaster's script link (#1480)", () => {
+	const TIMER_ROLE = {
+		slotId: "55555555-5555-4555-8555-555555555555",
+		roleName: "Timer",
+		roleKey: "timer",
+		speechTitle: null,
+		status: "claimed" as const,
+	};
+
+	// protects=AC8 and AC9: the Toastmaster's job card opens the script page,
+	//   and its guide's sheet link no longer points at the PDF.
+	// fails_when=the link is gated on the role NAME, or the sheet link keeps the
+	//   PDF href.
+	// no_claim=that the page renders (its own test).
+	it("shows 'Open your script' for the Toastmaster, pointing at /me/script", async () => {
+		await renderBody(makeView());
+		const link = screen.getByRole("link", { name: /open your script/i });
+		expect(link.getAttribute("href")).toBe(
+			"/club/harbor-city/meeting/2026-09-05/me/script",
+		);
+		expect(
+			screen.getByText("Read it out loud once before the meeting."),
+		).toBeTruthy();
+		const sheet = screen.getByRole("link", {
+			name: /full script \(pdf\): toastmaster's script/i,
+		});
+		expect(sheet.getAttribute("href")).toBe(
+			"/club/harbor-city/meeting/2026-09-05/me/script",
+		);
+	});
+
+	// protects=AC8's negative and AC9's other sheets: the Timer sees no script
+	//   link and keeps its PDF.
+	// fails_when=the link shows for every role, or another sheet is repointed.
+	it("does not show it for another role, whose sheet stays a PDF", async () => {
+		await renderBody(makeView({ roles: [TIMER_ROLE] }));
+		expect(
+			screen.queryByRole("link", { name: /open your script/i }),
+		).toBeNull();
+		const sheet = screen.getByRole("link", { name: /full script \(pdf\)/i });
+		expect(sheet.getAttribute("href")).toMatch(
+			/^\/api\/meetings\/.+\/role-sheets\/timer\/pdf$/,
+		);
+	});
+});

@@ -55,3 +55,12 @@ export function nonMemberMeetingRow<M extends object>(
 	}
 	return kept as Omit<M, (typeof WITHHELD_MEETING_FIELDS)[number]>;
 }
+
+/**
+ * Keys of the meeting DETAIL payload (not the `meetings` row) that hold
+ * member-written text and are `null` for everyone who is not an active member
+ * (#1480). `null`, not an empty value, so the payload does not reveal whether
+ * the thing exists. `meeting-join-url.guard.test.ts` reads every non-member
+ * payload against this list; a new member-only field is named here.
+ */
+export const MEMBERS_ONLY_DETAIL_FIELDS = ["speechIntroductions"] as const;
