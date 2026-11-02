@@ -155,6 +155,58 @@ describe("useMeetingRoll", () => {
 		setAttendance.mockResolvedValue({ released: [], welcomeBack: null });
 	});
 
+	it("the mode toggle writes a present row WITH the mode, through the queue", async () => {
+		const { result } = setup();
+		await act(() => result.current.writeAttendanceMode("a", "online" as never));
+		expect(setAttendance).toHaveBeenCalledWith({
+			data: expect.objectContaining({
+				meetingId: "m1",
+				memberId: "a",
+				status: "present",
+				mode: "online",
+			}),
+		});
+		expect((mutate.mock.calls[0]?.[1] as () => unknown)()).toMatchObject({
+			type: "setAttendance",
+			memberId: "a",
+			status: "present",
+			mode: "online",
+		});
+	});
+
+	// The refresh after a roll write belongs to the offline queue's own
+	// `onMutated`, not to this hook, so the failure path is what the hook owns:
+	// the rejection reaches the caller (the panel toasts it) and nothing is
+	// toasted as a success.
+	it("a failed mode write rejects to the caller and toasts no receipt", async () => {
+		mutate.mockRejectedValueOnce(new Error("offline write failed"));
+		const { result } = setup();
+		await expect(
+			act(() => result.current.writeAttendanceMode("a", "online" as never)),
+		).rejects.toThrow("offline write failed");
+		expect(toastSuccess).not.toHaveBeenCalled();
+	});
+
+	it("a failed guest removal rejects to the caller", async () => {
+		mutate.mockRejectedValueOnce(new Error("remove failed"));
+		const { result } = setup();
+		await expect(
+			act(() => result.current.removeRollGuest("g1")),
+		).rejects.toThrow("remove failed");
+		expect(removeMinutesGuest).not.toHaveBeenCalled();
+	});
+
+	it("a failed Absent confirm clears the busy flag and closes the dialog", async () => {
+		const { result } = setup();
+		const p = { memberId: "a", name: "Ann", roles: [] } as never;
+		mutate.mockRejectedValueOnce(new Error("no"));
+		await expect(
+			act(() => result.current.confirmAbsent(p, false)),
+		).rejects.toThrow("no");
+		expect(result.current.absentBusy).toBe(false);
+		expect(result.current.pendingAbsent).toBeNull();
+	});
+
 	it("adds, re-modes and removes a guest through the queue", async () => {
 		const { result } = setup();
 		await act(() => result.current.addRollGuest({ guestId: "g1" }));

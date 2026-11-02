@@ -142,6 +142,7 @@ describe("useMeetingVotes", () => {
 			}),
 		});
 		expect(toastSuccess).toHaveBeenCalledWith("Winner set.");
+		expect(invalidate).toHaveBeenCalledTimes(2);
 	});
 
 	it("clears a winner and refreshes", async () => {

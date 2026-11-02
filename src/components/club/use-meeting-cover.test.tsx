@@ -153,6 +153,81 @@ describe("useMeetingCover", () => {
 		expect(toastSuccess).toHaveBeenCalledWith("Speaker added.");
 	});
 
+	// Manager actions (#1476). The manager arm sends NO actor on release (the
+	// server reads the session, #763) and `managerActorId` on takeover; the
+	// agenda calls `onMutated` after each, which is the router refresh.
+	it("manager release, confirm and unconfirm send only the slot id", async () => {
+		const { result } = setup({ effectiveCanManage: true });
+		await result.current.actions.release?.(slotRef as never);
+		expect(s.releaseSlot).toHaveBeenCalledWith({ data: { slotId: "slot1" } });
+		await result.current.actions.confirm?.(slotRef as never);
+		expect(s.confirmSlot).toHaveBeenCalledWith({ data: { slotId: "slot1" } });
+		await result.current.actions.unconfirm?.(slotRef as never);
+		expect(s.unconfirmSlot).toHaveBeenCalledWith({ data: { slotId: "slot1" } });
+		await result.current.actions.onMutated?.();
+		expect(invalidate).toHaveBeenCalledTimes(1);
+	});
+
+	it("manager takeover reassigns to the session member and refuses with none linked", async () => {
+		const { result } = setup({ effectiveCanManage: true });
+		await result.current.actions.takeover?.(slotRef as never);
+		expect(s.reassignSlot).toHaveBeenCalledWith({
+			data: { slotId: "slot1", memberId: "mgr" },
+		});
+		const unlinked = setup({
+			effectiveCanManage: true,
+			managerActorId: null,
+		});
+		await expect(
+			unlinked.result.current.actions.takeover?.(slotRef as never),
+		).rejects.toThrow(/isn't linked/);
+		expect(s.reassignSlot).toHaveBeenCalledTimes(1);
+	});
+
+	it("manager moveSpeaker, moveEvaluator and removeRole pass the slot and direction", async () => {
+		const { result } = setup({ effectiveCanManage: true });
+		await result.current.actions.moveSpeaker?.(slotRef as never, "up");
+		expect(s.moveSpeakerSlot).toHaveBeenCalledWith({
+			data: { slotId: "slot1", direction: "up" },
+		});
+		await result.current.actions.moveEvaluator?.(slotRef as never, "down");
+		expect(s.moveEvaluatorSlot).toHaveBeenCalledWith({
+			data: { slotId: "slot1", direction: "down" },
+		});
+		await result.current.actions.removeRole?.(slotRef as never);
+		expect(s.removeRoleSlot).toHaveBeenCalledWith({
+			data: { slotId: "slot1" },
+		});
+	});
+
+	it("manager addSpeaker and removeSpeaker carry the session member, with no toast", async () => {
+		const { result } = setup({ effectiveCanManage: true });
+		await result.current.actions.addSpeaker?.();
+		expect(s.addSpeakerSlot).toHaveBeenCalledWith({
+			data: { meetingId: "m1", selfMemberId: "mgr" },
+		});
+		await result.current.actions.removeSpeaker?.();
+		expect(s.removeSpeakerSlot).toHaveBeenCalledWith({
+			data: { meetingId: "m1", selfMemberId: "mgr" },
+		});
+		expect(toastSuccess).not.toHaveBeenCalled();
+	});
+
+	it("self release needs no identity; self removeSpeaker resolves it, toasts, and stops when there is none", async () => {
+		const { result } = setup();
+		await result.current.actions.release?.(slotRef as never);
+		expect(s.releaseSlot).toHaveBeenCalledWith({ data: { slotId: "slot1" } });
+		expect(requireIdentity).not.toHaveBeenCalled();
+		await result.current.actions.removeSpeaker?.();
+		expect(s.removeSpeakerSlot).toHaveBeenCalledWith({
+			data: { meetingId: "m1", selfMemberId: "me" },
+		});
+		expect(toastSuccess).toHaveBeenCalledWith("Speaker removed.");
+		requireIdentity.mockResolvedValueOnce(null);
+		await result.current.actions.removeSpeaker?.();
+		expect(s.removeSpeakerSlot).toHaveBeenCalledTimes(1);
+	});
+
 	it("refreshes the loader after a mutation", async () => {
 		const { result } = setup();
 		await result.current.actions.onMutated?.();
