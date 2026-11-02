@@ -20,6 +20,10 @@ const squash = (s: string) => s.replace(/\s+/g, " ");
 const ROUTE = squash(
 	readSource(resolve(__dirname, "club.$clubId.meeting.$meetingId.tsx")),
 );
+// `guestName` moved from the route into `useMeetingRoll` (#1476).
+const ROLL_HOOK = squash(
+	readSource(resolve(__dirname, "../components/club/use-meeting-roll.ts")),
+);
 const PANEL = squash(
 	readSource(
 		resolve(__dirname, "../components/club/meeting-attendance-panel.tsx"),
@@ -64,7 +68,7 @@ describe("the route's guest RSVP wiring (#1444)", () => {
 
 	it("names an RSVP'd guest the roll has no row for from the RSVP list", () => {
 		// fails_when=the optimistic Here row is named "Guest"
-		expect(ROUTE).toContain(
+		expect(ROLL_HOOK).toContain(
 			"guestRsvps.find((g) => g.guestId === guestId)?.name",
 		);
 	});

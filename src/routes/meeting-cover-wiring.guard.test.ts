@@ -10,18 +10,26 @@ const ROUTE = resolve(
 	"club.$clubId.meeting.$meetingId.tsx",
 );
 
+// The claim and cover handlers moved out of the route into `useMeetingCover`
+// (#1476); the chip's render site stays in the route.
+const COVER_HOOK = resolve(
+	dirname(fileURLToPath(import.meta.url)),
+	"../components/club/use-meeting-cover.ts",
+);
+
 describe("meeting route: cover wiring (#1440)", () => {
 	const src = readSource(ROUTE).replace(/\s+/g, " ");
+	const hook = readSource(COVER_HOOK).replace(/\s+/g, " ");
 
 	it("'I'll take it' refreshes the page after the claim", () => {
-		expect(src).toContain("refresh: () => router.invalidate()");
+		expect(hook).toContain("refresh: () => router.invalidate()");
 	});
 
 	it("the card and the chips share one over definition, cancelled included", () => {
-		expect(src).toContain(
+		expect(hook).toContain(
 			"const coverOver = coverMeetingOver({ over, status: meeting.status })",
 		);
-		expect(src).toContain("meetingOver: coverOver,");
+		expect(hook).toContain("meetingOver: coverOver,");
 		expect(src).toContain("meetingOver={coverOver}");
 	});
 
@@ -37,7 +45,7 @@ describe("meeting route: cover wiring (#1440)", () => {
 	});
 
 	it("takes the claim through the same claim call as the agenda", () => {
-		expect(src).toContain("await claimAs(me, slot);");
-		expect(src).toContain("await claimAs(me, slot, speakerDetails);");
+		expect(hook).toContain("await claimAs(me, slot);");
+		expect(hook).toContain("await claimAs(me, slot, speakerDetails);");
 	});
 });

@@ -49,8 +49,16 @@ const ROUTE = resolve(
 	"club.$clubId.meeting.$meetingId.tsx",
 );
 
+// The guest-edit query, key and eviction moved out of the route into
+// `useMeetingRoll` (#1476); the panel's call site stays in the route.
+const ROLL_HOOK = resolve(
+	dirname(fileURLToPath(import.meta.url)),
+	"../components/club/use-meeting-roll.ts",
+);
+
 describe("meeting rail identity wiring (#727)", () => {
 	const src = readSource(ROUTE);
+	const hook = readSource(ROLL_HOOK);
 
 	// The panel's own attribute list, sliced out of the route so the prop
 	// assertions are POSITIONAL rather than whole-file substring matches — this
@@ -97,8 +105,8 @@ describe("meeting rail identity wiring (#727)", () => {
 		// dialog, because this form turns a blank field into `null` on save: a
 		// dialog opened over rows that have not arrived would WIPE the guest's
 		// stored email, phone and goes-by name on the first save.
-		expect(src).toContain("const guestEdit =");
-		expect(src).toMatch(
+		expect(hook).toContain("const guestEdit =");
+		expect(hook).toMatch(
 			/const guestEdit =\s*effectiveCanManage && guestPipeline/,
 		);
 	});
@@ -111,8 +119,8 @@ describe("meeting rail identity wiring (#727)", () => {
 		// omitting it is a type error — what a source assertion adds is that it
 		// refreshes the RIGHT key: an `onSaved` pointed at some other query
 		// type-checks, runs, and reverts exactly as silently.
-		expect(src).toContain("const guestPipelineKey =");
-		expect(src).toMatch(
+		expect(hook).toContain("const guestPipelineKey =");
+		expect(hook).toMatch(
 			/onSaved: \(\) =>\s*queryClient\.invalidateQueries\(\{ queryKey: guestPipelineKey \}\)/,
 		);
 	});
@@ -126,16 +134,16 @@ describe("meeting rail identity wiring (#727)", () => {
 		// eviction to hand-write its own copy of the key — so the guard defended
 		// the duplication it existed to prevent — and being a prefix match it
 		// passed on `["guest-pipeline", meeting.id]`, which evicts nothing at all.
-		const at = src.indexOf("removeQueries({ queryKey: guestPipelineKey })");
+		const at = hook.indexOf("removeQueries({ queryKey: guestPipelineKey })");
 		expect(
 			at,
 			"expected the guest-pipeline cache to be evicted through guestPipelineKey",
 		).toBeGreaterThan(-1);
-		expect(src.slice(at, at + 200)).toContain("myId");
+		expect(hook.slice(at, at + 200)).toContain("myId");
 		// The key must be memoised, or it is a new array every render and the
 		// effect above tears down and re-runs each time — evicting the query it
 		// has just fetched, on every render.
-		expect(src).toMatch(/const guestPipelineKey = useMemo\(/);
+		expect(hook).toMatch(/const guestPipelineKey = useMemo\(/);
 	});
 
 	it("prefills the dialog from the STORED phone column", () => {
@@ -144,7 +152,7 @@ describe("meeting rail identity wiring (#727)", () => {
 		// renders a number. `phone` is coalesced to E.164 — a country-code GUESS —
 		// so "415-555-2671 x12" would prefill as "+1415555267112", a number nobody
 		// typed, in the dialog opened to fix a NAME.
-		expect(src).toContain("phoneRaw: g.phoneRaw");
+		expect(hook).toContain("phoneRaw: g.phoneRaw");
 	});
 
 	it("fetches the guest rows behind the admin-gated pipeline read", () => {
@@ -153,7 +161,7 @@ describe("meeting rail identity wiring (#727)", () => {
 		// page; widening it would put a visitor's email and phone on every meeting
 		// render for everyone the payload reaches. `getGuestPipeline` carries its
 		// own `requireUser()` + `requireClubAdminView()`.
-		expect(src).toContain("getGuestPipeline({ data: clubUuid })");
+		expect(hook).toContain("getGuestPipeline({ data: clubUuid })");
 		// …and only where the control can appear. BOTH conjuncts: `showRollPanel`
 		// is `effectiveCanManage && minutes.canEdit` and says nothing about the
 		// phase, so on its own it is true for an admin on an UPCOMING meeting —
@@ -161,12 +169,12 @@ describe("meeting rail identity wiring (#727)", () => {
 		// contact details down on every pre-meeting render. The phase test alone
 		// is worse: it would fetch for a viewer with no capability, and the
 		// server's refusal is not a reason to have asked.
-		const queryAt = src.indexOf("queryKey: guestPipelineKey");
+		const queryAt = hook.indexOf("queryKey: guestPipelineKey");
 		expect(
 			queryAt,
-			"expected the guest-pipeline useQuery in the route",
+			"expected the guest-pipeline useQuery in the roll hook",
 		).toBeGreaterThan(-1);
-		expect(src.slice(queryAt, queryAt + 400)).toContain(
+		expect(hook.slice(queryAt, queryAt + 400)).toContain(
 			'enabled: panelMode === "roll" && showRollPanel',
 		);
 	});

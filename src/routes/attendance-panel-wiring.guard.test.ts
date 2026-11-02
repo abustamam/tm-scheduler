@@ -29,6 +29,29 @@ const ROUTE = resolve(
 	"club.$clubId.meeting.$meetingId.tsx",
 );
 
+// The roll and outreach handlers moved out of the route into hooks (#1476).
+const ROLL_HOOK = resolve(
+	dirname(fileURLToPath(import.meta.url)),
+	"../components/club/use-meeting-roll.ts",
+);
+const OUTREACH_HOOK = resolve(
+	dirname(fileURLToPath(import.meta.url)),
+	"../components/club/use-meeting-outreach.ts",
+);
+
+/** Every file the meeting page's handlers can live in (#1476): the route plus
+ *  the five hooks. A "how many call sites" count reads all of them, so a second
+ *  site in a DIFFERENT hook still fails. */
+const ALL_HANDLER_FILES = [
+	ROUTE,
+	...["roll", "outreach", "cover", "lifecycle", "votes"].map((d) =>
+		resolve(
+			dirname(fileURLToPath(import.meta.url)),
+			`../components/club/use-meeting-${d}.ts`,
+		),
+	),
+];
+
 /** The rail's scroller lives here, not on the route's `<aside>` — see the
  *  cap/scroller pair below. */
 const PANEL = resolve(
@@ -38,6 +61,8 @@ const PANEL = resolve(
 
 describe("attendance panel route wiring (PR 2)", () => {
 	const src = readSource(ROUTE);
+	const rollSrc = readSource(ROLL_HOOK);
+	const outreachSrc = readSource(OUTREACH_HOOK);
 	// RAW (not comment-blanked) — for the one check below whose "must NOT
 	// contain" assertion is about COMMENT PROSE itself (M4). `readSource`'s
 	// comment-blind stripping would erase the very text that check needs to
@@ -150,13 +175,13 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// silently drops a departed member's row again.
 		expect(panelProps).toContain("roster={panelRosterForMode}");
 		expect(panelProps).toContain("roleByMemberId={panelRoleByMemberId}");
-		expect(src).toContain(
+		expect(rollSrc).toContain(
 			"const effectivePlan = effectiveCanManage ? plan : fetchedPlan;",
 		);
 		// Whitespace-collapsed rather than a multi-line regex: the formatter wraps
 		// this ternary and the exact break points are its business, not this
 		// guard's.
-		expect(src.replace(/\s+/g, " ")).toContain(
+		expect(rollSrc.replace(/\s+/g, " ")).toContain(
 			"const panelRoster = effectiveCanManage ? loaderRoster : (tmodPanelData?.roster ?? []);",
 		);
 	});
@@ -241,13 +266,17 @@ describe("attendance panel route wiring (PR 2)", () => {
 	// restricts the delete to the self-service rungs, so it becomes a silent
 	// WHERE-clause no-op with no thrown error and no toast.
 	it("sends the caller's own id on BOTH plan write paths, so the server can verify the TMOD", () => {
-		expect(src.replace(/\s+/g, " ")).toContain(
+		expect(outreachSrc.replace(/\s+/g, " ")).toContain(
 			"const actorClaim = !effectiveCanManage && myId ? { actorMemberId: myId } : {};",
 		);
 		// Both spread sites, counted rather than matched once — one is inside the
 		// clear call and one inside the set call, and a single `toContain` would
 		// pass with either deleted.
-		expect(src.split("...actorClaim").length - 1).toBe(2);
+		const actorClaimSites = ALL_HANDLER_FILES.reduce(
+			(n, file) => n + (readSource(file).split("...actorClaim").length - 1),
+			0,
+		);
+		expect(actorClaimSites).toBe(2);
 	});
 
 	it("fetches the Toastmaster's ladder with the viewer's own id, gated on needing it", () => {
@@ -258,17 +287,17 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// own id. Passing `memberId: someOtherId` would typecheck and silently ask
 		// the server to verify the wrong person. Stops before the closing braces so
 		// the formatter's trailing comma is not part of the contract.
-		expect(src.replace(/\s+/g, " ")).toContain(
-			"getTmodPanelData({ data: { meetingId: meeting.id, memberId: myId as string }",
+		expect(rollSrc.replace(/\s+/g, " ")).toContain(
+			"getTmodPanelData({ data: { meetingId, memberId: myId as string }",
 		);
-		expect(src).toContain("enabled: needsTmodPlan,");
+		expect(rollSrc).toContain("enabled: needsTmodPlan,");
 	});
 
 	it("refreshes the Toastmaster's query after a write, not just the router loader", () => {
 		// The ladder lives in a QUERY, so `router.invalidate()` alone leaves it
 		// stale — and the reconciling effect then drops the override back onto the
 		// stale row, visibly undoing the tap.
-		expect(src).toContain(
+		expect(outreachSrc).toContain(
 			"void queryClient.invalidateQueries({ queryKey: tmodPlanKey });",
 		);
 	});
@@ -276,7 +305,7 @@ describe("attendance panel route wiring (PR 2)", () => {
 	it("never renders the panel from a failed or in-flight Toastmaster fetch", () => {
 		// An empty roster renders a header plus a counts line of zeros, which is
 		// indistinguishable from "no members" and from "you were just demoted".
-		expect(src.replace(/\s+/g, " ")).toContain(
+		expect(rollSrc.replace(/\s+/g, " ")).toContain(
 			"const tmodPanelUnavailable = needsTmodPlan && (tmodPanelPending || tmodPanelFailed);",
 		);
 		// `showPanel` since PR 3 Task 5 — the render gate now covers BOTH modes
@@ -296,8 +325,8 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// change, which is the one moment it exists for. Both leave a bare
 		// `toContain` green while the stale-PII-cache bug is back, so pin the whole
 		// shape: the call inside the returned cleanup, and `myId` in the deps.
-		expect(src.replace(/\s+/g, " ")).toContain(
-			'return () => { queryClient.removeQueries({ queryKey: ["tmod-plan", meeting.id] }); }; }, [queryClient, meeting.id, myId]);',
+		expect(rollSrc.replace(/\s+/g, " ")).toContain(
+			'return () => { queryClient.removeQueries({ queryKey: ["tmod-plan", meetingId] }); }; }, [queryClient, meetingId, myId]);',
 		);
 	});
 
@@ -311,8 +340,8 @@ describe("attendance panel route wiring (PR 2)", () => {
 	// member — they'd answer, the page would reload, and the strip would ask
 	// again (the exact bug this guards against).
 	it("reads the strip's own rung from the PUBLIC array, never from admin-only `plan`", () => {
-		expect(src).toContain("answeredRungs.find");
-		expect(src).not.toContain("plan.find((p) => p.memberId === myId)");
+		expect(outreachSrc).toContain("answeredRungs.find");
+		expect(outreachSrc).not.toContain("plan.find((p) => p.memberId === myId)");
 	});
 
 	// Carried from the previous task's review: `contactedMemberIds` replaced a
@@ -357,15 +386,15 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// ORDER and proximity rather than brace-matched slicing, since a
 		// `try {…} finally {…}` closes its inner block on the same `}` a naive
 		// slice would mistake for the wrapper function's own end.
-		const fnStart = src.indexOf("async function setMyStatus(");
+		const fnStart = outreachSrc.indexOf("async function setMyStatus(");
 		expect(
 			fnStart,
 			"expected an `async function setMyStatus(...)` wrapper around `writeRung`",
 		).toBeGreaterThan(-1);
-		const busyTrueAt = src.indexOf("setMyStatusBusy(true)", fnStart);
-		const writeRungAt = src.indexOf("await writeRung(", fnStart);
-		const finallyAt = src.indexOf("finally", fnStart);
-		const busyFalseAt = src.indexOf("setMyStatusBusy(false)", fnStart);
+		const busyTrueAt = outreachSrc.indexOf("setMyStatusBusy(true)", fnStart);
+		const writeRungAt = outreachSrc.indexOf("await writeRung(", fnStart);
+		const finallyAt = outreachSrc.indexOf("finally", fnStart);
+		const busyFalseAt = outreachSrc.indexOf("setMyStatusBusy(false)", fnStart);
 		expect(busyTrueAt).toBeGreaterThan(fnStart);
 		expect(writeRungAt).toBeGreaterThan(busyTrueAt);
 		expect(finallyAt).toBeGreaterThan(writeRungAt);
@@ -385,10 +414,10 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// restores whatever was true at PAGE LOAD rather than the last
 		// successful write — because nothing here refetches `plan` before this
 		// runs.
-		expect(src).not.toContain(
+		expect(outreachSrc).not.toContain(
 			"const previous = plan.find((p) => p.memberId === memberId)?.status ?? null;",
 		);
-		expect(src).toContain(
+		expect(outreachSrc).toContain(
 			"answeredRungs.find((r) => r.memberId === memberId)?.status",
 		);
 		// …and that the catch block APPLIES it. The two assertions above only pin
@@ -398,7 +427,7 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// other test in the repo can see it, since this route does not render in
 		// jsdom.
 		expect(
-			src,
+			outreachSrc,
 			"the rollback must be applied in the catch block, not merely computed",
 		).toContain("setRungOverride((o) => ({ ...o, [memberId]: previous }));");
 	});
@@ -407,9 +436,9 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// The old effect deleted an override only `if (server === value)` —
 		// backwards, since agreement is the harmless case. An override that
 		// DISAGREES with the server is the one that must not be pinned forever.
-		expect(src).not.toContain("if (server === value) {");
-		expect(src).toContain("pendingWritesRef");
-		expect(src).toContain("pendingWritesRef.current.has(memberId)");
+		expect(outreachSrc).not.toContain("if (server === value) {");
+		expect(outreachSrc).toContain("pendingWritesRef");
+		expect(outreachSrc).toContain("pendingWritesRef.current.has(memberId)");
 	});
 
 	it("I3: invalidates after a successful plan write, fire-and-forget", () => {
@@ -431,7 +460,7 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// unsatisfiable: this route has ~15 other invalidate call sites and
 		// several legitimately await. Switching THIS one to `await` breaks the
 		// match below, which is the coverage that was wanted.
-		expect(src).toMatch(/void router\s*\n?\s*\.invalidate\(\)/);
+		expect(outreachSrc).toMatch(/void router\s*\n?\s*\.invalidate\(\)/);
 	});
 
 	it("releases the in-flight mark when the REFETCH settles, not when the write resolves", () => {
@@ -441,11 +470,13 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// sites. A loader request that started before the write committed and
 		// lands in that window reverts a chip the officer just tapped, which
 		// reads as "it didn't save" — so they tap again.
-		expect(src).toMatch(/\.finally\(\(\) => releasePending\(memberId\)\)/);
+		expect(outreachSrc).toMatch(
+			/\.finally\(\(\) => releasePending\(memberId\)\)/,
+		);
 		// A `finally` on the try/catch would double-release and drop a CONCURRENT
 		// write's refcount, which is the bug the refcount exists to prevent.
 		expect(
-			src,
+			outreachSrc,
 			"release on the failure path belongs in the catch — a finally double-releases",
 		).not.toMatch(/}\s*finally\s*{\s*releasePending\(memberId\);/);
 	});
@@ -457,9 +488,9 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// is a no-op and the FIRST write's release clears the entry while the
 		// second is still outstanding, handing the effect an override it may
 		// evict before its write has landed.
-		expect(src).toContain("useRef<Map<string, number>>(new Map())");
+		expect(outreachSrc).toContain("useRef<Map<string, number>>(new Map())");
 		expect(
-			src,
+			outreachSrc,
 			"a Set cannot represent two concurrent writes to the same member",
 		).not.toContain("useRef<Set<string>>(new Set())");
 
@@ -470,11 +501,11 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// while the first of two concurrent writes still frees the entry. So pin
 		// the arithmetic that makes it a refcount.
 		expect(
-			src,
+			outreachSrc,
 			"retainPending must INCREMENT, not just mark present",
 		).toContain("m.set(memberId, (m.get(memberId) ?? 0) + 1);");
 		expect(
-			src,
+			outreachSrc,
 			"releasePending must DECREMENT and only delete at zero",
 		).toMatch(
 			/const left = \(m\.get\(memberId\) \?\? 1\) - 1;\s*\n\s*if \(left > 0\) m\.set\(memberId, left\);\s*\n\s*else m\.delete\(memberId\);/,
@@ -499,18 +530,22 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// "Coming" flips to "Asked" on a WhatsApp tap and stays wrong until the
 		// refetch lands, which is the same lie the floor exists to prevent, just
 		// shorter-lived.
-		expect(src).toContain("if (current !== null) return;");
+		expect(outreachSrc).toContain("if (current !== null) return;");
 	});
 
 	it('M1: tags a nudge-triggered ask with via: "nudge", not the manual default', () => {
-		expect(src).toContain('writeRung(memberId, "reached_out", "nudge")');
+		expect(outreachSrc).toContain(
+			'writeRung(memberId, "reached_out", "nudge")',
+		);
 	});
 
 	it("M4: no longer explains itself by pointing at the deleted myUnavailable symbol", () => {
 		// The stale reference lived in a COMMENT, so this must check the raw
 		// file — `src` has every comment blanked out and would pass this
-		// assertion whether or not the comment was ever fixed.
+		// assertion whether or not the comment was ever fixed. The commented code
+		// moved to `use-meeting-outreach.ts`, so that is read raw too.
 		expect(rawSrc).not.toContain("myUnavailable");
+		expect(readFileSync(OUTREACH_HOOK, "utf8")).not.toContain("myUnavailable");
 	});
 
 	it("M8: clamps the officer's own reached_out rung before it reaches the personal strip", () => {
@@ -518,7 +553,7 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// their OWN row to `reached_out` must not mislabel their own strip, and
 		// — because an officer's clear is unrestricted — the mislabeled "undo"
 		// would actually delete that row.
-		expect(src).toContain(
+		expect(outreachSrc).toContain(
 			'myEffectiveStatus === "reached_out" ? null : myEffectiveStatus',
 		);
 	});
@@ -605,10 +640,10 @@ describe("attendance panel route wiring (PR 2)", () => {
 		//     a memo missing `offlineMinutes.queue` freezes at whatever the first
 		//     render computed, which is byte-identical to having no projection.
 		// Whitespace-collapsed because the formatter owns the wrapping.
-		expect(src.replace(/\s+/g, " ")).toContain(
+		expect(rollSrc.replace(/\s+/g, " ")).toContain(
 			"const rollAttendance = useMemo( () => deriveRollAttendance({ online, minutes: minutes.data, snapshot: offlineMinutes.snapshot, queue: offlineMinutes.queue, }), [online, minutes.data, offlineMinutes.snapshot, offlineMinutes.queue], );",
 		);
-		expect(src.replace(/\s+/g, " ")).toContain(
+		expect(rollSrc.replace(/\s+/g, " ")).toContain(
 			"const rollGuests = useMemo( () => deriveRollGuests({ online, minutes: minutes.data, snapshot: offlineMinutes.snapshot, queue: offlineMinutes.queue, }), [online, minutes.data, offlineMinutes.snapshot, offlineMinutes.queue], );",
 		);
 		// …and the raw forms must be GONE, not merely joined by the new ones. Each
@@ -616,11 +651,11 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// symptom), so the positives above cannot see a revert that leaves a prop
 		// wired to the old expression.
 		expect(
-			src.replace(/\s+/g, " "),
+			rollSrc.replace(/\s+/g, " "),
 			"the roll rows must come from the offline projection, not straight off the loader",
 		).not.toContain("(minutes.data?.members ?? []).flatMap(");
 		expect(
-			src.replace(/\s+/g, " "),
+			rollSrc.replace(/\s+/g, " "),
 			"the guests must come from the offline projection too — `AttendanceGuestsGroup` has no optimism of its own",
 		).not.toContain("minutes.data?.guests");
 	});
@@ -636,12 +671,12 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// verification pass — only the operation-specific `type: "setAttendance"`
 		// line caught it. Keep an op-specific assertion beside any generic one here,
 		// or this test stops being able to fail for the write it names.
-		expect(src).toContain("await offlineMinutes.mutate(");
-		expect(src).toContain('type: "setAttendance",');
+		expect(rollSrc).toContain("await offlineMinutes.mutate(");
+		expect(rollSrc).toContain('type: "setAttendance",');
 		// Exactly ONE instance per meeting (DP3) — a second would race the same queue.
 		expect(src.split("useOfflineMinutes({").length - 1).toBe(1);
 		expect(
-			src.replace(/\s+/g, " "),
+			rollSrc.replace(/\s+/g, " "),
 			"roll writes must not bypass the queue",
 		).not.toMatch(/onSetAttendance=\{\(memberId, status\) => setAttendance\(/);
 	});
@@ -684,7 +719,7 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// stale row cannot resurrect a name, which is right for an UPCOMING meeting.
 		// So the mode branch is load-bearing in both directions — dropping it would
 		// resurrect names onto the pre-meeting ladder.
-		expect(src).toContain(
+		expect(rollSrc).toContain(
 			'const panelRosterForMode = panelMode === "roll" ? rollRoster : panelRoster;',
 		);
 		// `panelRoster` itself is unchanged and still pinned above: it stays the
@@ -697,7 +732,7 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// expression: `roster: []`, `snapshot: minutes.data`, `online: true`), and
 		// the DEP ARRAY, since a memo missing `panelRoster` freezes on the first
 		// render's roster and a departed member reappears or vanishes at random.
-		expect(src.replace(/\s+/g, " ")).toContain(
+		expect(rollSrc.replace(/\s+/g, " ")).toContain(
 			"const rollRoster = useMemo( () => deriveRollRoster({ roster: panelRoster, online, minutes: minutes.data, snapshot: offlineMinutes.snapshot, queue: offlineMinutes.queue, }), [ panelRoster, online, minutes.data, offlineMinutes.snapshot, offlineMinutes.queue, ], );",
 		);
 	});
@@ -842,14 +877,15 @@ describe("attendance panel route wiring (PR 2)", () => {
 
 describe("roll Absent release wiring (#1256)", () => {
 	const src = readSource(ROUTE);
+	const rollSrc = readSource(ROLL_HOOK);
 
-	/** One `async function <name>` body of the route, up to the next one, so an
+	/** One `async function <name>` body of the roll hook, up to the next one, so an
 	 *  assertion cannot be satisfied by a neighbour. */
 	function body(name: string): string {
-		const at = src.indexOf(`async function ${name}(`);
-		expect(at, `${name} not found in the route`).toBeGreaterThan(-1);
-		const next = src.indexOf("\n\tasync function ", at + 1);
-		return src.slice(at, next === -1 ? src.length : next);
+		const at = rollSrc.indexOf(`async function ${name}(`);
+		expect(at, `${name} not found in the roll hook`).toBeGreaterThan(-1);
+		const next = rollSrc.indexOf("\n\tasync function ", at + 1);
+		return rollSrc.slice(at, next === -1 ? rollSrc.length : next);
 	}
 
 	it("Absent on a role-holder opens the dialog and returns before any write", () => {
@@ -874,7 +910,8 @@ describe("roll Absent release wiring (#1256)", () => {
 
 		expect(src).toContain("onRelease={(p) => void confirmAbsent(p, true)}");
 		expect(src).toContain("onKeep={(p) => void confirmAbsent(p, false)}");
-		expect(src).toContain("onCancel={() => setPendingAbsent(null)}");
+		expect(src).toContain("onCancel={cancelAbsent}");
+		expect(rollSrc).toContain("cancelAbsent: () => setPendingAbsent(null)");
 		// The flag is only ever sent from the confirm, never from the plain path.
 		expect(write).not.toContain("releaseHeldRoles");
 	});
@@ -932,15 +969,15 @@ describe("roll Absent release wiring (#1256)", () => {
 describe("a declined 'No answer' says why (clear floors)", () => {
 	// COMMENT-BLIND: every assertion is "must BE present", and the route's own
 	// prose names these identifiers.
-	const src = readSource(ROUTE);
+	const outreachSrc = readSource(OUTREACH_HOOK);
 
 	/** `commitRung`'s body, up to the next `async function`, so a neighbour's
 	 *  call cannot satisfy an assertion about it. */
 	function commitRungBody(): string {
-		const at = src.indexOf("async function commitRung(");
-		expect(at, "commitRung not found in the route").toBeGreaterThan(-1);
-		const next = src.indexOf("\n\tasync function ", at + 1);
-		return src.slice(at, next === -1 ? src.length : next);
+		const at = outreachSrc.indexOf("async function commitRung(");
+		expect(at, "commitRung not found in the outreach hook").toBeGreaterThan(-1);
+		const next = outreachSrc.indexOf("\n\tasync function ", at + 1);
+		return outreachSrc.slice(at, next === -1 ? outreachSrc.length : next);
 	}
 
 	it("toasts the server's `cleared: false` for another member's answered row", () => {
