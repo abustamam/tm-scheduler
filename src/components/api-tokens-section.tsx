@@ -48,13 +48,13 @@ function ConnectorSetup() {
 			<code className="block break-all font-mono text-xs">{mcpUrl}</code>
 			<ul className="list-disc space-y-1 pl-5 text-muted-foreground">
 				<li>
-					<span className="font-semibold text-foreground">Claude:</span> Settings
-					→ Connectors → Add custom connector. Works on the web, desktop and
-					phone apps.
+					<span className="font-semibold text-foreground">Claude:</span>{" "}
+					Settings → Connectors → Add custom connector. Works on the web,
+					desktop and phone apps.
 				</li>
 				<li>
-					<span className="font-semibold text-foreground">ChatGPT:</span> needs a
-					Business or Enterprise workspace, and a workspace admin adds it, on
+					<span className="font-semibold text-foreground">ChatGPT:</span> needs
+					a Business or Enterprise workspace, and a workspace admin adds it, on
 					the web. Free, Plus and Pro plans can't use GavelUp yet — that's a
 					ChatGPT plan limit, not a problem with your account.
 				</li>
