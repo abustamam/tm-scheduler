@@ -655,7 +655,7 @@ describe("attendance panel route wiring (PR 2)", () => {
 		expect(rollSrc).toContain("await offlineMinutes.mutate(");
 		expect(rollSrc).toContain('type: "setAttendance",');
 		// Exactly ONE instance per meeting (DP3) — a second would race the same queue.
-		expect(rollSrc.split("useOfflineMinutes({").length - 1).toBe(1);
+		expect(src.split("useOfflineMinutes({").length - 1).toBe(1);
 		expect(
 			rollSrc.replace(/\s+/g, " "),
 			"roll writes must not bypass the queue",
