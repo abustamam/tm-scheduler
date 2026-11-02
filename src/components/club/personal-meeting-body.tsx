@@ -617,6 +617,10 @@ export function PersonalMeetingBody({
 															? `${personalMeetingHref(target)}/script`
 															: meetingRoleSheetHref(meetingUuid, sheet),
 													title: sheet.title,
+													label:
+														role.roleKey === TMOD_ROLE_KEY
+															? "Toastmaster's script"
+															: undefined,
 												}
 											: null
 									}

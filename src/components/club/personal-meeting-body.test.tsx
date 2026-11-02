@@ -1040,7 +1040,7 @@ describe("PersonalMeetingBody - the Toastmaster's script link (#1480)", () => {
 			screen.getByText("Read it out loud once before the meeting."),
 		).toBeTruthy();
 		const sheet = screen.getByRole("link", {
-			name: /full script \(pdf\): toastmaster's script/i,
+			name: /^toastmaster's script: /i,
 		});
 		expect(sheet.getAttribute("href")).toBe(
 			"/club/harbor-city/meeting/2026-09-05/me/script",

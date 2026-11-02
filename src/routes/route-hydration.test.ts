@@ -277,6 +277,10 @@ const COVERED: Record<string, { who: Who; url: (f: Fixture) => string }> = {
 		who: "signed-out",
 		url: (f) => `/club/${f.slug}/meeting/${f.upcomingMeetingId}/rsvp`,
 	},
+	"/club/$clubId/meeting/$meetingId/me/script": {
+		who: "admin",
+		url: (f) => `/club/${f.slug}/meeting/${f.upcomingMeetingId}/me/script`,
+	},
 	"/club/$clubId/meeting/$meetingId/me/theme": {
 		who: "admin",
 		url: (f) => `/club/${f.slug}/meeting/${f.upcomingMeetingId}/me/theme`,
