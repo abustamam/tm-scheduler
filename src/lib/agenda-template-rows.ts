@@ -29,12 +29,16 @@ import {
 	detailTokenSlots,
 	evaluatedSpeakerLabel,
 	introducedSuffix,
+	isOpenSpeechSlot,
 	numbered,
 	OPEN_LABEL,
+	type OpenSpeechSlots,
+	openSpeechDroppedIds,
 	pairedEvaluatorSlots,
 	resolveDetailTokens,
 	type TimingMarks,
 	visitingFlag,
+	zeroOpenSpeechRow,
 } from "./agenda-runsheet";
 import {
 	MAX_ROLE_REPEAT_SLOTS,
@@ -629,8 +633,21 @@ function toRow(
 export function buildTemplateRowsWithSource(
 	beats: TemplateBeatRow[],
 	roles: TemplateRoleRow[],
-	slots: AgendaSlot[],
+	allSlots: AgendaSlot[],
+	/** What to do with a speech slot nobody holds, and the evaluators paired
+	 *  with it (#1479). `"omit"` (default): they emit no rows and reserve no
+	 *  time — the filter is applied to the slot set once, so numbering and
+	 *  "Evaluates Speaker N" agree with the rows that remain. `"zero"` (the
+	 *  agenda editor): the rows stay, at 0 minutes, flagged `openSpeech`. */
+	openSpeechSlots: OpenSpeechSlots = "omit",
 ): SourcedAgendaRow[] {
+	const dropped = openSpeechDroppedIds(allSlots);
+	const slots =
+		openSpeechSlots === "omit" && dropped.size > 0
+			? allSlots.filter((s) => !dropped.has(s.id))
+			: allSlots;
+	const zero = (row: AgendaRow, isDropped: boolean): AgendaRow =>
+		openSpeechSlots === "zero" && isDropped ? zeroOpenSpeechRow(row) : row;
 	const rolesByKey = new Map(roles.map((r) => [r.key, r]));
 	const ordered = [...beats].sort((a, b) => a.sortOrder - b.sortOrder);
 	const out: SourcedAgendaRow[] = [];
@@ -647,11 +664,33 @@ export function buildTemplateRowsWithSource(
 				// Capped the same as the repeat path below — see this function's
 				// docblock for why a writer-side cap on `defaultCount` is not
 				// enough on its own.
-				const owned = slotsForRole(slots, row.roleKey).slice(
+				const fullRole = slotsForRole(allSlots, row.roleKey);
+				const roleDropped = fullRole.filter((s) => dropped.has(s.id));
+				const keep = fullRole.filter((s) => !dropped.has(s.id));
+				// Every holder of this beat is dropped (#1479).
+				const allDropped = roleDropped.length > 0 && keep.length === 0;
+				// An evaluation of a speech that will not happen is not emitted. A
+				// SPEECH beat that is not repeated (a contest's one "Contest
+				// speeches" row) keeps today's behaviour instead: the row is the
+				// roster of entrants, and "nobody has entered yet" is something it
+				// has to say.
+				if (
+					openSpeechSlots === "omit" &&
+					allDropped &&
+					roleDropped.every((s) => !isOpenSpeechSlot(s))
+				) {
+					i += 1;
+					continue;
+				}
+				// The linked holders only, so the row names the same people print's
+				// does; when none remain the whole bound set stays.
+				const owned = (keep.length > 0 ? keep : fullRole).slice(
 					0,
 					MAX_ROLE_REPEAT_SLOTS,
 				);
-				const emitted = toRow(row, rolesByKey, owned, 0, 0, slots);
+				const zeroed = openSpeechSlots === "zero" && allDropped;
+				const built = toRow(row, rolesByKey, owned, 0, 0, slots);
+				const emitted = built ? zero(built, zeroed) : built;
 				if (emitted) {
 					out.push({
 						row: emitted,
@@ -732,7 +771,7 @@ export function buildTemplateRowsWithSource(
 				);
 				if (emitted) {
 					out.push({
-						row: emitted,
+						row: zero(emitted, dropped.has(s.id)),
 						beatId: blockRow.id,
 						iteration: n,
 						iterationCount: repeated.length,
@@ -752,6 +791,9 @@ export function buildTemplateRows(
 	beats: TemplateBeatRow[],
 	roles: TemplateRoleRow[],
 	slots: AgendaSlot[],
+	openSpeechSlots: OpenSpeechSlots = "omit",
 ): AgendaRow[] {
-	return buildTemplateRowsWithSource(beats, roles, slots).map((e) => e.row);
+	return buildTemplateRowsWithSource(beats, roles, slots, openSpeechSlots).map(
+		(e) => e.row,
+	);
 }

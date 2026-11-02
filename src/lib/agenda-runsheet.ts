@@ -88,6 +88,11 @@ export function visitingFlag(
 
 /** One rendered agenda row (no clock time yet — buildTimeline adds it). */
 export type AgendaRow = {
+	/** True on a row that belongs to an OPEN speech slot (or an evaluator paired
+	 *  with one) that the builder kept at 0 minutes rather than omitting (#1479,
+	 *  `openSpeechSlots: "zero"` — the agenda editor only). Absent everywhere else,
+	 *  so a booked-only row stays byte-identical. */
+	openSpeech?: true;
 	who: string; // "Speaker 1 · Rehanna Khan", "Sergeant-at-Arms", "Timer"
 	/** The owning role's stable `role_definitions.key` (#445), for consumers that
 	 *  need to know WHICH role this row belongs to rather than what it is called.
@@ -1574,6 +1579,46 @@ export const RUN_OF_SHOW: Beat[] = buildRunOfShow({
 	geIntroducesFunctionaries: false,
 });
 
+/**
+ * What a builder does with a speech slot nobody holds (#1479). A speaker or
+ * contestant slot open at meeting time means there is no speech, so by default
+ * (`"omit"`) its rows — and the evaluation paired with it — are not emitted and
+ * reserve no time. The agenda editor passes `"zero"`: the same rows stay, at 0
+ * minutes and flagged `openSpeech`, so the block remains editable and the
+ * editor's clock still equals print's.
+ */
+export type OpenSpeechSlots = "omit" | "zero";
+
+/** A speech slot — a speaker or contestant, NOT an evaluator (`isSpeakerRole`
+ *  is true for all three) — that nobody holds. */
+export function isOpenSpeechSlot(slot: AgendaSlot): boolean {
+	return (
+		slot.isSpeakerRole &&
+		slot.evaluatesSlotId == null &&
+		!matchesRole(slot, "evaluator", "Evaluator") &&
+		slotAssigneeDisplay(slot) === null
+	);
+}
+
+/** Ids of the slots that reserve no time: every open speech slot, plus every
+ *  evaluator whose `evaluatesSlotId` points at one (an orphaned evaluator).
+ *  An evaluator with no link is untouched. */
+export function openSpeechDroppedIds(slots: AgendaSlot[]): Set<string> {
+	const open = new Set(slots.filter(isOpenSpeechSlot).map((s) => s.id));
+	const dropped = new Set(open);
+	for (const s of slots) {
+		if (s.evaluatesSlotId != null && open.has(s.evaluatesSlotId)) {
+			dropped.add(s.id);
+		}
+	}
+	return dropped;
+}
+
+/** The row of an open speech slot kept in `"zero"` mode. */
+export function zeroOpenSpeechRow(row: AgendaRow): AgendaRow {
+	return { ...row, minutes: 0, marks: null, openSpeech: true };
+}
+
 /** "Speaker 1" when the role repeats this meeting, else "Speaker". */
 export function numbered(
 	roleName: string,
@@ -2039,8 +2084,25 @@ function requirementsMet(beat: Beat, slots: AgendaSlot[]): boolean {
 export function expandRunSheet(
 	slots: AgendaSlot[],
 	template: Beat[] = RUN_OF_SHOW,
+	openSpeechSlots: OpenSpeechSlots = "omit",
 ): AgendaRow[] {
 	const rows: AgendaRow[] = [];
+	// `"omit"` drops the open speech slots (and their paired evaluators) from
+	// `live`, the set the rows are BUILT from, so numbering, "Evaluates Speaker
+	// N" and the evaluator order agree with the rows that remain (#1479).
+	// `slots` stays the full set for "does the club run this" questions (beat
+	// requirements, fallbacks, the roles token): an open slot is still a role the
+	// club runs, and only its time is gone. Nothing dropped ⇒ the very same
+	// array, so a booked-only meeting is untouched.
+	const dropped = openSpeechDroppedIds(slots);
+	const live =
+		openSpeechSlots === "omit" && dropped.size > 0
+			? slots.filter((s) => !dropped.has(s.id))
+			: slots;
+	const zero = (row: AgendaRow, slotId: string): AgendaRow =>
+		openSpeechSlots === "zero" && dropped.has(slotId)
+			? zeroOpenSpeechRow(row)
+			: row;
 
 	for (const beat of template) {
 		const startLen = rows.length;
@@ -2106,7 +2168,7 @@ export function expandRunSheet(
 				roleKey: beat.roleKey,
 				roleName: beat.roleName,
 			};
-			const matching = slotsForRole(slots, owner.roleKey, owner.roleName);
+			const matching = slotsForRole(live, owner.roleKey, owner.roleName);
 
 			if (beat.role === "speaker") {
 				const ordered = [...matching].sort((a, b) => a.slotIndex - b.slotIndex);
@@ -2116,54 +2178,59 @@ export function expandRunSheet(
 				// speaker would be the same answer three times.
 				const preamble = beat.preamble;
 				const preambleOwner = preamble
-					? slotsForRole(slots, preamble.roleKey, preamble.roleName)[0]
+					? slotsForRole(live, preamble.roleKey, preamble.roleName)[0]
 					: undefined;
 				ordered.forEach((s, i) => {
 					if (preamble) {
-						rows.push({
-							// `renderUnowned`'s convention when the club runs no such role:
-							// the bare canonical name, because a missing Toastmaster is not
-							// a reason to drop the cue — the cue is what tells whoever IS
-							// holding the room what to do.
-							who: preambleOwner
-								? `${preambleOwner.roleName} · ${assigneeDisplay(preambleOwner)}`
-								: preamble.roleName,
-							roleLabel: preambleOwner?.roleName ?? preamble.roleName,
-							holder: preambleOwner ? assigneeDisplay(preambleOwner) : null,
-							...visitingFlag(preambleOwner),
-							roleKey: preamble.roleKey,
-							// NULL, and not either slot that made this row (#732). It is
-							// not the speaker's turn — the speech row below is — and it is
-							// not one of the Toastmaster's either: this row repeats once
-							// per speech, so binding it to the Toastmaster's single slot
-							// would attribute several rows to one slot. "Cannot be recorded
-							// against a person" is the honest answer.
-							slotId: null,
-							detail: resolveDetailTokens(
-								preamble.detail,
-								slots,
-								() => groupRoleNames(beat, slots),
-								() => introducedSuffix(pairedEvaluatorNames(s.id, slots)),
+						rows.push(
+							zero(
+								{
+									// `renderUnowned`'s convention when the club runs no such role:
+									// the bare canonical name, because a missing Toastmaster is not
+									// a reason to drop the cue — the cue is what tells whoever IS
+									// holding the room what to do.
+									who: preambleOwner
+										? `${preambleOwner.roleName} · ${assigneeDisplay(preambleOwner)}`
+										: preamble.roleName,
+									roleLabel: preambleOwner?.roleName ?? preamble.roleName,
+									holder: preambleOwner ? assigneeDisplay(preambleOwner) : null,
+									...visitingFlag(preambleOwner),
+									roleKey: preamble.roleKey,
+									// NULL, and not either slot that made this row (#732). It is
+									// not the speaker's turn — the speech row below is — and it is
+									// not one of the Toastmaster's either: this row repeats once
+									// per speech, so binding it to the Toastmaster's single slot
+									// would attribute several rows to one slot. "Cannot be recorded
+									// against a person" is the honest answer.
+									slotId: null,
+									detail: resolveDetailTokens(
+										preamble.detail,
+										slots,
+										() => groupRoleNames(beat, slots),
+										() => introducedSuffix(pairedEvaluatorNames(s.id, live)),
+									),
+									minutes: preamble.minutes,
+									marks: null,
+									// A 0-minute "X introduces Y" — the definition of `handoff` on a
+									// ROW, and it has to be set or the sheet does not fit. The print
+									// layouts render a hand-off as a compact band rather than a full
+									// segment block, and on the editorial one-pager those three
+									// blocks are the difference between one sheet and two: measured
+									// through `print-density.test.tsx`, a real MCF agenda goes
+									// 6.675pt → 6.366pt as bands and 6.675pt → FLOWS (raw 0.708,
+									// under `MIN_FIT_SCALE`) as full blocks.
+									//
+									// The DECK does not read this field — `buildSlideDeck` emits a
+									// slide per hand-off BEAT, by position — so no slide is added,
+									// which is #719's AC 7. `agenda-parity.test.ts` used row-level
+									// `handoff` as a stand-in for "came from a hand-off beat"; that
+									// proxy stopped holding here and its `handoffRows` now selects
+									// the beats directly.
+									handoff: true,
+								},
+								s.id,
 							),
-							minutes: preamble.minutes,
-							marks: null,
-							// A 0-minute "X introduces Y" — the definition of `handoff` on a
-							// ROW, and it has to be set or the sheet does not fit. The print
-							// layouts render a hand-off as a compact band rather than a full
-							// segment block, and on the editorial one-pager those three
-							// blocks are the difference between one sheet and two: measured
-							// through `print-density.test.tsx`, a real MCF agenda goes
-							// 6.675pt → 6.366pt as bands and 6.675pt → FLOWS (raw 0.708,
-							// under `MIN_FIT_SCALE`) as full blocks.
-							//
-							// The DECK does not read this field — `buildSlideDeck` emits a
-							// slide per hand-off BEAT, by position — so no slide is added,
-							// which is #719's AC 7. `agenda-parity.test.ts` used row-level
-							// `handoff` as a stand-in for "came from a hand-off beat"; that
-							// proxy stopped holding here and its `handoffRows` now selects
-							// the beats directly.
-							handoff: true,
-						});
+						);
 					}
 					// The row's two numbers answer two different questions (#394), so
 					// they read two different helpers: the marks need an assigned
@@ -2175,54 +2242,64 @@ export function expandRunSheet(
 					const marks = w
 						? { green: w.min, yellow: (w.min + w.max) / 2, red: w.max }
 						: null;
-					rows.push({
-						// The SLOT's name, not the beat's canonical one (#445). Binding is
-						// by key, so the beat found this slot through a rename (#368) —
-						// labelling it with the beat's constant then printed the canonical
-						// name in the `who` column while the header legend and
-						// `ROLES_TOKEN` printed the club's, two names for one role on one
-						// page. Identical output for a club that never renamed anything.
-						who: `${numbered(s.roleName, i, multi)} · ${assigneeDisplay(s)}`,
-						// The same two halves, unjoined (#463) — see `AgendaRow.roleLabel`.
-						roleLabel: numbered(s.roleName, i, multi),
-						holder: assigneeDisplay(s),
-						...visitingFlag(s),
-						roleKey: owner.roleKey,
-						// One row per slot, so this row is about exactly this one (#732).
-						slotId: s.id,
-						detail: s.speechTitle
-							? `"${s.speechTitle}"${s.projectLevel ? ` · ${s.projectLevel}` : ""}`
-							: beatDetail,
-						minutes: speechBookedMinutes(s),
-						marks,
-					});
+					rows.push(
+						zero(
+							{
+								// The SLOT's name, not the beat's canonical one (#445). Binding is
+								// by key, so the beat found this slot through a rename (#368) —
+								// labelling it with the beat's constant then printed the canonical
+								// name in the `who` column while the header legend and
+								// `ROLES_TOKEN` printed the club's, two names for one role on one
+								// page. Identical output for a club that never renamed anything.
+								who: `${numbered(s.roleName, i, multi)} · ${assigneeDisplay(s)}`,
+								// The same two halves, unjoined (#463) — see `AgendaRow.roleLabel`.
+								roleLabel: numbered(s.roleName, i, multi),
+								holder: assigneeDisplay(s),
+								...visitingFlag(s),
+								roleKey: owner.roleKey,
+								// One row per slot, so this row is about exactly this one (#732).
+								slotId: s.id,
+								detail: s.speechTitle
+									? `"${s.speechTitle}"${s.projectLevel ? ` · ${s.projectLevel}` : ""}`
+									: beatDetail,
+								minutes: speechBookedMinutes(s),
+								marks,
+							},
+							s.id,
+						),
+					);
 				});
 			} else if (beat.role === "evaluator") {
-				const ordered = orderEvaluators(matching, slots);
+				const ordered = orderEvaluators(matching, live);
 				const multi = ordered.length > 1;
 				ordered.forEach((s, i) => {
-					rows.push({
-						// The slot's name, per the speaker arm above (#445).
-						who: `${numbered(s.roleName, i, multi)} · ${assigneeDisplay(s)}`,
-						// The same two halves, unjoined (#463) — see `AgendaRow.roleLabel`.
-						roleLabel: numbered(s.roleName, i, multi),
-						holder: assigneeDisplay(s),
-						...visitingFlag(s),
-						roleKey: owner.roleKey,
-						// This evaluator's own slot — NOT `s.evaluatesSlotId`, which is
-						// the speech being evaluated. `orderEvaluators` only reorders the
-						// same slots, so the pairing here is unaffected by it (#732).
-						slotId: s.id,
-						// Names the speaker when known, else the speaking SLOT ("Speaker
-						// 2"), else the beat's generic wording (#512). See
-						// `evaluatedSpeakerLabel` for why the middle case matters.
-						detail: (() => {
-							const label = evaluatedSpeakerLabel(s, slots);
-							return label ? `Evaluates ${label}` : beatDetail;
-						})(),
-						minutes: beat.minutes,
-						marks: beat.marks ?? null,
-					});
+					rows.push(
+						zero(
+							{
+								// The slot's name, per the speaker arm above (#445).
+								who: `${numbered(s.roleName, i, multi)} · ${assigneeDisplay(s)}`,
+								// The same two halves, unjoined (#463) — see `AgendaRow.roleLabel`.
+								roleLabel: numbered(s.roleName, i, multi),
+								holder: assigneeDisplay(s),
+								...visitingFlag(s),
+								roleKey: owner.roleKey,
+								// This evaluator's own slot — NOT `s.evaluatesSlotId`, which is
+								// the speech being evaluated. `orderEvaluators` only reorders the
+								// same slots, so the pairing here is unaffected by it (#732).
+								slotId: s.id,
+								// Names the speaker when known, else the speaking SLOT ("Speaker
+								// 2"), else the beat's generic wording (#512). See
+								// `evaluatedSpeakerLabel` for why the middle case matters.
+								detail: (() => {
+									const label = evaluatedSpeakerLabel(s, live);
+									return label ? `Evaluates ${label}` : beatDetail;
+								})(),
+								minutes: beat.minutes,
+								marks: beat.marks ?? null,
+							},
+							s.id,
+						),
+					);
 				});
 			} else if (matching.length === 0) {
 				// Role not run by this club this meeting (#367/#368: disabled ⇒ no

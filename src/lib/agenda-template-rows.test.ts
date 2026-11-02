@@ -93,7 +93,9 @@ describe("buildTemplateRows", () => {
 				repeatsRoleKey: "contestant",
 			}),
 		];
-		const slots = [0, 1, 2, 3].map((i) => slot("contestant", "Contestant", i));
+		const slots = [0, 1, 2, 3].map((i) =>
+			slot("contestant", "Contestant", i, `C${i}`),
+		);
 		const rows = buildTemplateRows(beats, ROLES, slots);
 
 		expect(rows).toHaveLength(8);
@@ -422,8 +424,8 @@ describe("buildTemplateRows", () => {
 			}),
 		];
 		const slots = [
-			slot("contestant", "Contestant", 0),
-			slot("contestant", "Contestant", 1),
+			slot("contestant", "Contestant", 0, "C0"),
+			slot("contestant", "Contestant", 1, "C1"),
 			slot("ballot_counter", "Ballot Counter", 0),
 		];
 		expect(buildTemplateRows(beats, ROLES, slots)).toHaveLength(3);
@@ -440,7 +442,7 @@ describe("buildTemplateRows", () => {
 			}),
 		];
 		const slots = Array.from({ length: 50 }, (_, i) =>
-			slot("contestant", "Contestant", i),
+			slot("contestant", "Contestant", i, `C${i}`),
 		);
 		expect(buildTemplateRows(beats, ROLES, slots)).toHaveLength(20);
 	});

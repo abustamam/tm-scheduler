@@ -26,7 +26,7 @@ function slotsFor(contestants: number): AgendaSlot[] {
 			category: r.category,
 			isSpeakerRole: r.isSpeakerRole,
 			slotIndex: i,
-			assigneeName: null,
+			assigneeName: r.isSpeakerRole ? `Contestant ${i}` : null,
 			speechTitle: null,
 			projectLevel: null,
 			minMinutes: null,

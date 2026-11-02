@@ -219,6 +219,8 @@ function useAgendaModel(draft: AgendaDraft, localRows: AgendaDraftRow[]) {
 			localRows,
 			draft.roles,
 			draft.slots,
+			// The editor keeps an open speech slot's block, at 0 minutes (#1479).
+			"zero",
 		);
 		const flexed = applyFlex(
 			sourced.map((e) => e.row),
@@ -246,6 +248,17 @@ function useAgendaModel(draft: AgendaDraft, localRows: AgendaDraftRow[]) {
 			advice: flexBannerMessage(flexed),
 		};
 	}, [draft, localRows]);
+}
+
+/** Why an open speech slot's row counts 0 minutes in the clock (#1479). The
+ *  stored minutes still apply to every booked slot of the same block, so the
+ *  input beside this stays editable; this only says what the clock did. */
+function OpenSpeechNote() {
+	return (
+		<span className="ml-1 text-muted-foreground text-xs">
+			No speaker, not timed
+		</span>
+	);
 }
 
 /** `+2` / `85 under` / `on time` — the delta as a phrase. Never suppressed
@@ -1092,6 +1105,7 @@ function AgendaTableRow({
 							) : null}
 						</span>
 					)}
+					{entry.row.openSpeech ? <OpenSpeechNote /> : null}
 				</td>
 				<td className="py-1.5 text-right">
 					<RowActions
@@ -1227,6 +1241,7 @@ function RepeatTailRow({
 							<td className="py-1 text-xs">{entry.row.holder ?? ""}</td>
 							<td className="py-1 text-right text-xs tabular-nums">
 								{entry.row.minutes}
+								{entry.row.openSpeech ? <OpenSpeechNote /> : null}
 							</td>
 							<td className="py-1" />
 						</tr>

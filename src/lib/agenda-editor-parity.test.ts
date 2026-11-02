@@ -44,7 +44,9 @@ function printClock(f: ReturnType<typeof contestFixture>) {
 function editorClock(f: ReturnType<typeof contestFixture>) {
 	return buildTimeline(
 		applyFlex(
-			buildTemplateRowsWithSource(f.beats, f.roles, f.slots).map((e) => e.row),
+			buildTemplateRowsWithSource(f.beats, f.roles, f.slots, "zero").map(
+				(e) => e.row,
+			),
 			f.length,
 		).rows,
 		f.startsAt,
@@ -65,6 +67,31 @@ describe("editor / print clock parity", () => {
 			);
 		});
 	}
+
+	it("agrees on the end time when a contestant slot is open (#1479)", () => {
+		// protects=criterion 8: the editor's "zero" rows and print's omitted rows
+		// end the meeting at the same minute; fails_when=either side times an open
+		// slot or the editor passes the wrong mode; no_claim=row-for-row equality,
+		// which cannot hold: the editor keeps the open block's rows at 0 minutes.
+		const f = contestFixture(4);
+		f.slots = f.slots.map((s) =>
+			s.isSpeakerRole && s.slotIndex === 2 ? { ...s, assigneeName: null } : s,
+		);
+		const print = printClock(f);
+		const editor = editorClock(f);
+		const end = (rows: ReturnType<typeof printClock>) => {
+			const last = rows.at(-1);
+			return [last?.time, last?.minutes];
+		};
+		expect(end(editor)).toEqual(end(print));
+		expect(editor.reduce((n, r) => n + r.minutes, 0)).toBe(
+			print.reduce((n, r) => n + r.minutes, 0),
+		);
+		// Vacuity guards: the editor kept rows print dropped, and print is
+		// shorter than the all-booked meeting.
+		expect(editor.length).toBeGreaterThan(print.length);
+		expect(print.length).toBeLessThan(printClock(contestFixture(4)).length);
+	});
 
 	it("produces the 21 rows the seeded contest prints at four contestants", () => {
 		// Vacuity guard: an empty timeline would satisfy the equality above.

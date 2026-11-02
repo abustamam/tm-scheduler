@@ -661,6 +661,47 @@ describe("AgendaEditor repeat blocks", () => {
 		expect(screen.getAllByLabelText("Row minutes")).toHaveLength(2);
 	});
 
+	/** `contestDraft` with contestant `at` unassigned. */
+	function openDraft(at: number): AgendaDraft {
+		const d = contestDraft(4);
+		return {
+			...d,
+			slots: d.slots.map((s, i) =>
+				i === at ? { ...s, assigneeName: null } : s,
+			),
+		};
+	}
+
+	it("keeps an open contestant's block, labelled and at 0 minutes in the budget", () => {
+		// protects=#1479 criterion 8: the block stays shown and editable, says why
+		// it is not timed, and the budget counts it as 0;
+		// fails_when=the editor omits the block, drops the label, or still counts
+		// 7+1 minutes for it; no_claim=print's end time (agenda-editor-parity).
+		render(<AgendaEditor draft={openDraft(0)} {...noopHandlers} />);
+		expect(screen.getAllByText("No speaker, not timed").length).toBe(2);
+		// Still the shared beat's two editable Min inputs.
+		expect(screen.getAllByLabelText("Row minutes")).toHaveLength(2);
+		// 3 booked contestants x (7 + 1).
+		expect(screen.getByTestId("agenda-budget")?.textContent).toContain(
+			"24 min",
+		);
+	});
+
+	it("labels an open contestant folded into the 2..N band once expanded", async () => {
+		// protects=the label reaching the read-only rows; fails_when=only the
+		// editable iteration is labelled; no_claim=the band subtotal wording.
+		const user = userEvent.setup();
+		render(<AgendaEditor draft={openDraft(2)} {...noopHandlers} />);
+		expect(screen.queryByText("No speaker, not timed")).toBeNull();
+		await user.click(
+			screen.getByRole("button", { name: /show contestant 2–4/i }),
+		);
+		expect(screen.getAllByText("No speaker, not timed").length).toBe(2);
+		expect(screen.getByTestId("agenda-budget")?.textContent).toContain(
+			"24 min",
+		);
+	});
+
 	it("counts every contestant in the budget, folded or not", () => {
 		render(<AgendaEditor draft={contestDraft(4)} {...noopHandlers} />);
 		// 4 x (7 + 1) = 32, whatever is drawn. Folding is display only.
