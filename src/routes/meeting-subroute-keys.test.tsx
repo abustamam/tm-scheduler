@@ -105,6 +105,7 @@ import { getPublicFlyer } from "#/server/promo";
 import { getFeedbackTargetsPublic } from "#/server/role-feedback";
 import { Route as AgendaRoute } from "./club.$clubId.meeting.$meetingId_.agenda.edit";
 import { Route as MeRoute } from "./club.$clubId.meeting.$meetingId_.me";
+import { Route as ScriptRoute } from "./club.$clubId.meeting.$meetingId_.me_.script";
 import { Route as ThemeRoute } from "./club.$clubId.meeting.$meetingId_.me_.theme";
 import { Route as TimerRoute } from "./club.$clubId.meeting.$meetingId_.me_.timer";
 import { Route as MeTopicsRoute } from "./club.$clubId.meeting.$meetingId_.me_.topics";
@@ -239,6 +240,14 @@ const KEY_READER_ROUTES: {
 		name: "me/theme (signed-in member)",
 		file: "club.$clubId.meeting.$meetingId_.me_.theme.tsx",
 		route: ThemeRoute,
+		shell: true,
+		reader: getMeetingByKey,
+		crossClubCheck: true,
+	},
+	{
+		name: "me/script",
+		file: "club.$clubId.meeting.$meetingId_.me_.script.tsx",
+		route: ScriptRoute,
 		shell: true,
 		reader: getMeetingByKey,
 		crossClubCheck: true,

@@ -170,6 +170,22 @@ describe("RoleGuideSections, the PDF script link", () => {
 		).toBeTruthy();
 	});
 
+	it("uses a custom label when the sheet carries one (#1480)", () => {
+		render(
+			<RoleGuideSections
+				guide={FULL}
+				sheet={{ ...sheet, label: "Toastmaster's script" }}
+				open={{ before: true, during: true }}
+				showDescriptionFallback
+			/>,
+		);
+		const link = screen.getByRole("link", {
+			name: `Toastmaster's script: ${sheet.title}`,
+		});
+		expect(link.textContent).toContain("Toastmaster's script");
+		expect(screen.queryByText("Full script (PDF)")).toBeNull();
+	});
+
 	it("is absent without a sheet", () => {
 		render(
 			<RoleGuideSections

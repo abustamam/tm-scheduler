@@ -29,6 +29,9 @@ export interface RoleGuideSheetLink {
 	href: string;
 	/** The sheet's own title, for the accessible name. */
 	title: string;
+	/** The link's visible text. Default "Full script (PDF)"; the Toastmaster's
+	 *  link is a page, not a PDF (#1480). */
+	label?: string;
 }
 
 /**
@@ -70,14 +73,15 @@ function GuideText({ text }: { text: string }) {
 }
 
 function SheetLink({ sheet }: { sheet: RoleGuideSheetLink }) {
+	const label = sheet.label ?? "Full script (PDF)";
 	return (
 		<a
 			href={sheet.href}
 			className="-mx-2 inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm font-semibold text-primary"
-			aria-label={`Full script (PDF): ${sheet.title}`}
+			aria-label={`${label}: ${sheet.title}`}
 		>
 			<FileText aria-hidden className="size-4" />
-			Full script (PDF)
+			{label}
 		</a>
 	);
 }

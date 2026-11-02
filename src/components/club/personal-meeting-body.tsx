@@ -75,6 +75,7 @@ import {
 	ArrowRight,
 	CheckCircle2,
 	Circle,
+	FileText,
 	Loader2,
 	Printer,
 	XCircle,
@@ -99,10 +100,12 @@ import {
 	isMeetingOver,
 	meetingPhase,
 } from "#/lib/meeting-lifecycle";
+import { TMOD_ROLE_KEY } from "#/lib/meeting-roles";
 import { parseMeetingKey } from "#/lib/meeting-url";
 import {
 	type DutyTarget,
 	dutiesForRole,
+	personalMeetingHref,
 	ROLE_CONFIRM_PROMPT,
 } from "#/lib/role-duties";
 import {
@@ -526,6 +529,9 @@ export function PersonalMeetingBody({
 								<h3 className="font-semibold text-base text-foreground">
 									{role.roleName}
 								</h3>
+								{role.roleKey === TMOD_ROLE_KEY ? (
+									<ScriptLink clubId={clubId} meetingId={meetingId} />
+								) : null}
 								<div className="mt-2">
 									<RoleCalendarButton
 										view={view}
@@ -604,8 +610,17 @@ export function PersonalMeetingBody({
 									sheet={
 										sheet
 											? {
-													href: meetingRoleSheetHref(meetingUuid, sheet),
+													// The Toastmaster's is the script PAGE (#1480); the
+													// PDF endpoint stays live for open tabs.
+													href:
+														role.roleKey === TMOD_ROLE_KEY
+															? `${personalMeetingHref(target)}/script`
+															: meetingRoleSheetHref(meetingUuid, sheet),
 													title: sheet.title,
+													label:
+														role.roleKey === TMOD_ROLE_KEY
+															? "Toastmaster's script"
+															: undefined,
 												}
 											: null
 									}
@@ -876,4 +891,35 @@ export function AnswerState({
 		);
 	}
 	return null;
+}
+
+/** The Toastmaster's job-card entrance to their script page (#1480). Rendered
+ *  in code; the club's seeded guide text is not edited. */
+function ScriptLink({
+	clubId,
+	meetingId,
+}: {
+	clubId: string;
+	meetingId: string;
+}) {
+	return (
+		<div className="mt-2">
+			<Link
+				to="/club/$clubId/meeting/$meetingId/me/script"
+				params={{ clubId, meetingId }}
+				className={DUTY_ROW}
+			>
+				<FileText
+					aria-hidden
+					className="size-4 shrink-0 text-muted-foreground"
+				/>
+				<span>
+					Open your script
+					<span className="block text-muted-foreground text-xs">
+						Read it out loud once before the meeting.
+					</span>
+				</span>
+			</Link>
+		</div>
+	);
 }

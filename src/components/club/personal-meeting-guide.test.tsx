@@ -108,6 +108,13 @@ const speakerRole = {
 	speechTitle: null,
 	status: "confirmed" as const,
 };
+const timerRole = {
+	slotId: "77777777-7777-4777-8777-777777777777",
+	roleName: "Timer",
+	roleKey: "timer",
+	speechTitle: null,
+	status: "confirmed" as const,
+};
 const customRole = {
 	slotId: "66666666-6666-4666-8666-666666666666",
 	roleName: "Sergeant-at-Arms",
@@ -218,13 +225,27 @@ describe("the guide on /me, content", () => {
 	});
 
 	it("links the meeting-aware PDF script for a role with a sheet", async () => {
-		await renderBody(makeView(new Date(NOW.getTime() + 7 * DAY), [tmodRole]));
-		const link = within(card("Toastmaster")).getByRole("link", {
+		await renderBody(makeView(new Date(NOW.getTime() + 7 * DAY), [timerRole]));
+		const link = within(card("Timer")).getByRole("link", {
 			name: /Full script \(PDF\)/,
 		});
 		expect(link.getAttribute("href")).toBe(
-			`/api/meetings/${MEETING_UUID}/role-sheets/toastmaster/pdf`,
+			`/api/meetings/${MEETING_UUID}/role-sheets/timer/pdf`,
 		);
+	});
+
+	it("links the Toastmaster's sheet to the script page, labelled as a page (#1480)", async () => {
+		await renderBody(makeView(new Date(NOW.getTime() + 7 * DAY), [tmodRole]));
+		const link = within(card("Toastmaster")).getByRole("link", {
+			name: /Toastmaster's script/,
+		});
+		expect(link.getAttribute("href")).toMatch(/\/me\/script$/);
+		expect(link.textContent).toContain("Toastmaster's script");
+		expect(
+			within(card("Toastmaster")).queryByRole("link", {
+				name: /Full script \(PDF\)/,
+			}),
+		).toBeNull();
 	});
 
 	it("shows no PDF link for a role without a sheet", async () => {
