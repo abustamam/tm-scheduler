@@ -14,6 +14,7 @@ import {
 	applyFlex,
 	buildRunOfShow,
 	expandRunSheet,
+	OPEN_LABEL,
 	TABLE_TOPICS_MAX,
 } from "./agenda-runsheet";
 import {
@@ -125,6 +126,100 @@ const template = (slots: AgendaSlot[], mode?: "omit" | "zero") =>
 		(r) => r.section !== true,
 	);
 
+/** Today's rows for `club()` booked-only, from origin/main's builders at
+ *  67f978ec (both paths print the same rows): [who, minutes, detail]. */
+const BOOKED_GOLDEN: [string, number, string][] = [
+	[
+		"Sergeant-at-Arms",
+		1,
+		"Call to Order · phones silent · introduces the President",
+	],
+	["President", 1, "Opening remarks; welcomes guests"],
+	["Toastmaster of the Day · Tia", 3, "Opens meeting · introduces the theme"],
+	[
+		"Toastmaster of the Day · Tia",
+		3,
+		"Introduces the Timer, Grammarian & Ah-Counter; each explains their role · the Grammarian gives the Word of the Day",
+	],
+	["Toastmaster of the Day · Tia", 0, "Introduces the speakers"],
+	[
+		"Toastmaster of the Day · Tia",
+		0,
+		"Introduces the Evaluator: Eval0 · asks for the speech objectives and timing",
+	],
+	["Speaker 1 · Ann", 7, "Prepared speech"],
+	[
+		"Toastmaster of the Day · Tia",
+		0,
+		"Introduces the Evaluator: Eval1 · asks for the speech objectives and timing",
+	],
+	["Speaker 2 · Bea", 7, "Prepared speech"],
+	[
+		"Toastmaster of the Day · Tia",
+		0,
+		"Introduces the Evaluator: Eval2 · asks for the speech objectives and timing",
+	],
+	["Speaker 3 · Cy", 7, "Prepared speech"],
+	[
+		"Toastmaster of the Day · Tia",
+		1,
+		"Calls for the Timer's report · opens voting for Best Speaker",
+	],
+	[
+		"Toastmaster of the Day · Tia",
+		0,
+		"Introduces the Table Topics Master: Tom",
+	],
+	[
+		"Table Topics Master · Tom",
+		10,
+		"Impromptu topics using the Word of the Day · asks the Timer to explain the timing",
+	],
+	[
+		"Table Topics Master · Tom",
+		1,
+		"Calls for the Timer's report · opens voting for Best Table Topics",
+	],
+	["Table Topics Master · Tom", 0, "Introduces the General Evaluator: Gil"],
+	["General Evaluator · Gil", 0, "Introduces the speech evaluators"],
+	[
+		"General Evaluator · Gil",
+		1,
+		"Asks the Timer to explain the timing for an evaluation",
+	],
+	["Evaluator 1 · Eval0", 3, "Evaluates Speaker 1"],
+	["Evaluator 2 · Eval1", 3, "Evaluates Speaker 2"],
+	["Evaluator 3 · Eval2", 3, "Evaluates Speaker 3"],
+	[
+		"General Evaluator · Gil",
+		1,
+		"Calls for the Timer's report · opens voting for Best Evaluator",
+	],
+	["General Evaluator · Gil", 2, "Evaluates the evaluators"],
+	[
+		"General Evaluator · Gil",
+		3,
+		"Calls for the Timer, Grammarian & Ah-Counter to report",
+	],
+	[
+		"General Evaluator · Gil",
+		2,
+		"Overall meeting evaluation · returns control to the Toastmaster",
+	],
+	[
+		"Toastmaster of the Day · Tia",
+		2,
+		"Awards · Best Table Topics, Best Evaluator & Best Speaker · hands over to the President",
+	],
+	["President", 2, "Club business · announcements"],
+	[
+		"President",
+		2,
+		"Guest Comments · invites our guests to share their thoughts",
+	],
+	["President", 1, "Adjourns"],
+];
+
 describe("expandRunSheet: open speech slot", () => {
 	it("omits the speech, its preamble and its linked evaluation, and the clock drops by exactly their minutes", () => {
 		// protects=an open speaker slot reserving its booked minutes plus the
@@ -202,11 +297,17 @@ describe("expandRunSheet: open speech slot", () => {
 		expect(sum(rows)).toBe(sum(code(club(["Ann", null, "Cy"]))));
 	});
 
-	it("is byte-identical to today for a meeting with every speech slot booked", () => {
-		// protects=criterion 10; fails_when=booked-only rows change in either
-		// mode; no_claim=meetings with an open slot.
+	it("prints a booked-only meeting exactly as origin/main did", () => {
+		// protects=criterion 10 against a golden captured from origin/main's
+		// builders (not against our own zero mode); fails_when=a booked-only
+		// meeting's who, minutes or detail move on either path, or an openSpeech
+		// flag appears; no_claim=meetings with an open slot, or fields beyond
+		// who/minutes/detail.
 		const slots = club();
-		expect(code(slots, "omit")).toEqual(code(slots, "zero"));
+		const pick = (rows: AgendaRow[]) =>
+			rows.map((r) => [r.who, r.minutes, r.detail]);
+		expect(pick(code(slots))).toEqual(BOOKED_GOLDEN);
+		expect(pick(template(slots))).toEqual(BOOKED_GOLDEN);
 		expect(code(slots).some((r) => "openSpeech" in r)).toBe(false);
 		expect(template(slots).some((r) => "openSpeech" in r)).toBe(false);
 	});
@@ -268,10 +369,12 @@ describe("buildTemplateRows: open speech slot", () => {
 			...over,
 		});
 		const roles = ROLES.filter((r) => r.isSpeakerRole);
-		const slots = [speaker(0, "Ann"), speaker(1, null)].concat([
+		const slots: AgendaSlot[] = [
+			speaker(0, "Ann"),
+			speaker(1, null),
 			evaluator(0, "EvalA", "sp0"),
 			evaluator(1, "EvalB", "sp1"),
-		] as never);
+		];
 
 		it("emits nothing for an orphaned evaluator's iteration of a repeat block", () => {
 			// protects=7a (repeat form); fails_when=the orphan's iteration stays;
@@ -325,7 +428,8 @@ describe("buildTemplateRows: open speech slot", () => {
 
 		it("carries provenance for the surviving iterations only", () => {
 			// protects=sourced iteration indexes matching the rows that remain;
-			// fails_when=iteration numbers keep the dropped slot's index.
+			// fails_when=iteration numbers keep the dropped slot's index;
+			// no_claim=the rows themselves (the repeat-block test above) or zero mode.
 			const sourced = buildTemplateRowsWithSource(
 				[beat({ id: "e", sortOrder: 0, repeatsRoleKey: "evaluator" })],
 				roles,
@@ -335,6 +439,185 @@ describe("buildTemplateRows: open speech slot", () => {
 				[0, 1],
 			]);
 		});
+	});
+});
+
+describe("7-minute fallback", () => {
+	it("books a speaker with no stored window at the 7-minute fallback in omit mode", () => {
+		// protects=speechBookedMinutes' fallback surviving the omit filter;
+		// fails_when=a booked speaker with no min/max stops reserving 7 minutes;
+		// no_claim=an open slot (reserves 0, tested above).
+		const rows = code([
+			slot("sp0", "speaker", "Speaker", "Ann", {
+				isSpeakerRole: true,
+				category: "speaker",
+			}),
+		]);
+		const sp = rows.find((r) => r.slotId === "sp0");
+		expect(sp?.minutes).toBe(7);
+		expect(sp?.marks).toBeNull();
+	});
+});
+
+describe("tokens resolve against the full slot set", () => {
+	it("keeps {awards} listing Best Speaker on both paths when every speaker is open", () => {
+		// protects=a token naming what the club RUNS, not who is booked (the code
+		// path resolves against all slots); fails_when=the template path resolves
+		// tokens against the filtered set and drops Best Speaker;
+		// no_claim=row emission (filtered, tested elsewhere).
+		const slots = club([null, null, null]);
+		const awards = (rows: AgendaRow[]) =>
+			rows.find((r) => r.detail.startsWith("Awards"))?.detail;
+		expect(awards(code(slots))).toContain("Best Speaker");
+		expect(awards(template(slots))).toContain("Best Speaker");
+		expect(awards(template(slots))).toBe(awards(code(slots)));
+	});
+});
+
+describe("a non-repeating contest beat with every contestant open", () => {
+	const roles: TemplateRoleRow[] = [
+		{ key: "contestant", name: "Contestant", isSpeakerRole: true },
+		{ key: "chair", name: "Contest Chair", isSpeakerRole: false },
+	];
+	const b = (
+		over: Partial<TemplateBeatRow> & { id: string; sortOrder: number },
+	): TemplateBeatRow => ({
+		kind: "role",
+		label: "x",
+		detail: null,
+		minutes: 7,
+		roleKey: "contestant",
+		repeatsRoleKey: null,
+		flex: false,
+		handoff: false,
+		markGreen: null,
+		markYellow: null,
+		markRed: null,
+		clubGoverned: false,
+		...over,
+	});
+	const beats = [
+		b({ id: "open", sortOrder: 0, label: "Opening", roleKey: "chair" }),
+		b({ id: "speeches", sortOrder: 1, label: "Contest speeches" }),
+		b({
+			id: "preamble",
+			sortOrder: 2,
+			label: "Chair introduces",
+			roleKey: "chair",
+			minutes: 0,
+			handoff: true,
+			repeatsRoleKey: "contestant",
+		}),
+		b({
+			id: "speech",
+			sortOrder: 3,
+			label: "Contest speech",
+			repeatsRoleKey: "contestant",
+		}),
+		b({
+			id: "silence",
+			sortOrder: 4,
+			kind: "event",
+			roleKey: null,
+			label: "Silence",
+			minutes: 1,
+			repeatsRoleKey: "contestant",
+		}),
+	];
+	const contestants = (names: (string | null)[]) =>
+		names.map((n, i) =>
+			slot(`c${i}`, "contestant", "Contestant", n, {
+				isSpeakerRole: true,
+				category: "speaker",
+				slotIndex: i,
+				slotsUnordered: true,
+			}),
+		);
+	const chair = slot("ch", "chair", "Contest Chair", "Chi");
+
+	it("omit: emits no contest row, no preamble row and no per-iteration row", () => {
+		// protects=criterion 6 on the template path (maintainer decision on
+		// PR #1482): all-open means no contest time; fails_when=the "Contest
+		// speeches" row, a preamble (hand-off) row or a silence row survives, or
+		// the chair's own beat is lost; no_claim=a partly-open contest (criterion 3).
+		const rows = buildTemplateRows(beats, roles, [
+			chair,
+			...contestants([null, null]),
+		]);
+		expect(rows.map((r) => r.roleLabel ?? r.who)).toEqual(["Opening"]);
+		expect(rows.some((r) => r.handoff)).toBe(false);
+		expect(rows.some((r) => r.who.includes(OPEN_LABEL))).toBe(false);
+	});
+
+	it("zero: keeps every row at 0 minutes for the contestant rows, flagged", () => {
+		// protects=the editor keeping the all-open contest editable;
+		// fails_when=zero mode omits, keeps minutes, or leaves marks;
+		// no_claim=how the editor labels it.
+		const rows = buildTemplateRows(
+			beats,
+			roles,
+			[chair, ...contestants([null, null])],
+			"zero",
+		);
+		const speeches = rows.filter(
+			(r) => r.roleLabel === "Contest speeches" || r.openSpeech,
+		);
+		expect(speeches.length).toBeGreaterThanOrEqual(1);
+		expect(rows.find((r) => r.roleLabel === "Contest speeches")).toMatchObject({
+			minutes: 0,
+			marks: null,
+			openSpeech: true,
+		});
+		expect(speeches.every((r) => r.minutes === 0)).toBe(true);
+	});
+
+	it("still emits the contest row, naming the entrants, when one contestant is booked", () => {
+		// protects=the omit not firing on a partly-held beat;
+		// fails_when=a single booked entrant loses the roster row;
+		// no_claim=the minutes of the open iteration.
+		const rows = buildTemplateRows(beats, roles, [
+			chair,
+			...contestants(["Faisal", null]),
+		]);
+		const roster = rows.find((r) => r.roleLabel === "Contest speeches");
+		expect(roster?.holders).toEqual(["Faisal"]);
+	});
+});
+
+describe("zero mode, non-repeating evaluator beat with mixed holders", () => {
+	it("keeps every holder bound and zeroes nothing while one is linked", () => {
+		// protects=the maintainer's "the same rows are still emitted" for the
+		// editor; fails_when=zero mode narrows the bound set to the linked
+		// holders, or zeroes a beat that still has a linked holder;
+		// no_claim=omit mode (binds linked only, tested above).
+		const eb: TemplateBeatRow = {
+			id: "e",
+			sortOrder: 0,
+			kind: "role",
+			label: "Evaluation",
+			detail: null,
+			minutes: 3,
+			roleKey: "evaluator",
+			repeatsRoleKey: null,
+			flex: false,
+			handoff: false,
+			markGreen: null,
+			markYellow: null,
+			markRed: null,
+			clubGoverned: false,
+		};
+		const slots: AgendaSlot[] = [
+			speaker(0, "Ann"),
+			speaker(1, null),
+			evaluator(0, "EvalA", "sp0"),
+			evaluator(1, "EvalB", "sp1"),
+		];
+		const roles = ROLES.filter((r) => r.isSpeakerRole);
+		const rows = buildTemplateRows([eb], roles, slots, "zero");
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.holders).toEqual(["EvalA", "EvalB"]);
+		expect(rows[0]?.minutes).toBe(3);
+		expect(rows[0]?.openSpeech).toBeUndefined();
 	});
 });
 
@@ -401,5 +684,30 @@ describe("connector clock", () => {
 			applyFlex(buildTemplateRows(f.beats, f.roles, f.slots), f.length)
 				.projectedMinutes,
 		);
+	});
+
+	it("totals the same minutes as print for the code run of show with Speaker 2 open and a linked evaluator", () => {
+		// protects=criterion 9 on criterion 1's meeting: the connector's clock
+		// over the materialised run of show equals the print clock over the code
+		// run of show, and both equal a hand-computed golden; fails_when=either
+		// side times Speaker 2 or its evaluation, or the two disagree;
+		// no_claim=per-row start strings.
+		const slots = club(["Ann", null, "Cy"]);
+		const length = 120;
+		const printed = applyFlex(code(slots), length);
+		const sheet = agendaRunSheet({
+			idSource: "stored",
+			rows: seeds(),
+			roles: ROLES,
+			slots,
+			scheduledAt: "2026-11-05T19:00:00.000Z",
+			timeZone: "UTC",
+			lengthMinutes: length,
+			tableTopicsLimits: null,
+		});
+		expect(sheet.totalMinutes).toBe(printed.projectedMinutes);
+		// 66 booked minutes - Speaker 2's 7 - its evaluation's 3 = 56, with Table
+		// Topics (10 booked) flexed to the 25 cap: 56 - 10 + 25.
+		expect(sheet.totalMinutes).toBe(71);
 	});
 });

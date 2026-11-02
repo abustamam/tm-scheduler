@@ -1614,6 +1614,38 @@ export function openSpeechDroppedIds(slots: AgendaSlot[]): Set<string> {
 	return dropped;
 }
 
+/**
+ * The one place both builders decide what an open speech slot does (#1479).
+ *
+ * - `droppedIds`: the slots that reserve no time (open speech slots and their
+ *   orphaned evaluators).
+ * - `liveSlots`: the slot set rows are BUILT from. In `"omit"` mode the dropped
+ *   slots are filtered out, so numbering and "Evaluates Speaker N" agree with
+ *   the rows that remain; otherwise the very same array, so a booked-only
+ *   meeting is untouched.
+ * - `applyZeroMode(row, isDropped)`: in `"zero"` mode a dropped row stays at 0
+ *   minutes, flagged; anywhere else the row is returned as is.
+ */
+export function openSpeechView(
+	slots: AgendaSlot[],
+	mode: OpenSpeechSlots,
+): {
+	droppedIds: Set<string>;
+	liveSlots: AgendaSlot[];
+	applyZeroMode: (row: AgendaRow, isDropped: boolean) => AgendaRow;
+} {
+	const droppedIds = openSpeechDroppedIds(slots);
+	return {
+		droppedIds,
+		liveSlots:
+			mode === "omit" && droppedIds.size > 0
+				? slots.filter((s) => !droppedIds.has(s.id))
+				: slots,
+		applyZeroMode: (row, isDropped) =>
+			mode === "zero" && isDropped ? zeroOpenSpeechRow(row) : row,
+	};
+}
+
 /** The row of an open speech slot kept in `"zero"` mode. */
 export function zeroOpenSpeechRow(row: AgendaRow): AgendaRow {
 	return { ...row, minutes: 0, marks: null, openSpeech: true };
@@ -2094,15 +2126,13 @@ export function expandRunSheet(
 	// requirements, fallbacks, the roles token): an open slot is still a role the
 	// club runs, and only its time is gone. Nothing dropped ⇒ the very same
 	// array, so a booked-only meeting is untouched.
-	const dropped = openSpeechDroppedIds(slots);
-	const live =
-		openSpeechSlots === "omit" && dropped.size > 0
-			? slots.filter((s) => !dropped.has(s.id))
-			: slots;
-	const zero = (row: AgendaRow, slotId: string): AgendaRow =>
-		openSpeechSlots === "zero" && dropped.has(slotId)
-			? zeroOpenSpeechRow(row)
-			: row;
+	const {
+		droppedIds,
+		liveSlots: live,
+		applyZeroMode,
+	} = openSpeechView(slots, openSpeechSlots);
+	const zeroIfSlotDropped = (row: AgendaRow, slotId: string): AgendaRow =>
+		applyZeroMode(row, droppedIds.has(slotId));
 
 	for (const beat of template) {
 		const startLen = rows.length;
@@ -2183,7 +2213,7 @@ export function expandRunSheet(
 				ordered.forEach((s, i) => {
 					if (preamble) {
 						rows.push(
-							zero(
+							zeroIfSlotDropped(
 								{
 									// `renderUnowned`'s convention when the club runs no such role:
 									// the bare canonical name, because a missing Toastmaster is not
@@ -2243,7 +2273,7 @@ export function expandRunSheet(
 						? { green: w.min, yellow: (w.min + w.max) / 2, red: w.max }
 						: null;
 					rows.push(
-						zero(
+						zeroIfSlotDropped(
 							{
 								// The SLOT's name, not the beat's canonical one (#445). Binding is
 								// by key, so the beat found this slot through a rename (#368) —
@@ -2274,7 +2304,7 @@ export function expandRunSheet(
 				const multi = ordered.length > 1;
 				ordered.forEach((s, i) => {
 					rows.push(
-						zero(
+						zeroIfSlotDropped(
 							{
 								// The slot's name, per the speaker arm above (#445).
 								who: `${numbered(s.roleName, i, multi)} · ${assigneeDisplay(s)}`,
