@@ -39,6 +39,19 @@ const OUTREACH_HOOK = resolve(
 	"../components/club/use-meeting-outreach.ts",
 );
 
+/** Every file the meeting page's handlers can live in (#1476): the route plus
+ *  the five hooks. A "how many call sites" count reads all of them, so a second
+ *  site in a DIFFERENT hook still fails. */
+const ALL_HANDLER_FILES = [
+	ROUTE,
+	...["roll", "outreach", "cover", "lifecycle", "votes"].map((d) =>
+		resolve(
+			dirname(fileURLToPath(import.meta.url)),
+			`../components/club/use-meeting-${d}.ts`,
+		),
+	),
+];
+
 /** The rail's scroller lives here, not on the route's `<aside>` — see the
  *  cap/scroller pair below. */
 const PANEL = resolve(
@@ -259,7 +272,11 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// Both spread sites, counted rather than matched once — one is inside the
 		// clear call and one inside the set call, and a single `toContain` would
 		// pass with either deleted.
-		expect(outreachSrc.split("...actorClaim").length - 1).toBe(2);
+		const actorClaimSites = ALL_HANDLER_FILES.reduce(
+			(n, file) => n + (readSource(file).split("...actorClaim").length - 1),
+			0,
+		);
+		expect(actorClaimSites).toBe(2);
 	});
 
 	it("fetches the Toastmaster's ladder with the viewer's own id, gated on needing it", () => {
@@ -524,9 +541,11 @@ describe("attendance panel route wiring (PR 2)", () => {
 
 	it("M4: no longer explains itself by pointing at the deleted myUnavailable symbol", () => {
 		// The stale reference lived in a COMMENT, so this must check the raw
-		// file — `outreachSrc` has every comment blanked out and would pass this
-		// assertion whether or not the comment was ever fixed.
+		// file — `src` has every comment blanked out and would pass this
+		// assertion whether or not the comment was ever fixed. The commented code
+		// moved to `use-meeting-outreach.ts`, so that is read raw too.
 		expect(rawSrc).not.toContain("myUnavailable");
+		expect(readFileSync(OUTREACH_HOOK, "utf8")).not.toContain("myUnavailable");
 	});
 
 	it("M8: clamps the officer's own reached_out rung before it reaches the personal strip", () => {
@@ -603,7 +622,7 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// visibly moved. Both locals now go through `#/lib/roll-attendance`, which
 		// replays the offline queue (and owns the `status === null` drop the dashed
 		// suggestion depends on). The guard follows the code here; the projections'
-		// BEHAVIOUR is tested in `rollSrc/lib/roll-attendance.test.ts`, since this route
+		// BEHAVIOUR is tested in `src/lib/roll-attendance.test.ts`, since this route
 		// does not mount in jsdom.
 		//
 		// ONE literal per local, from the `const` to the closing `);` (fix round 2,
@@ -860,11 +879,11 @@ describe("roll Absent release wiring (#1256)", () => {
 	const src = readSource(ROUTE);
 	const rollSrc = readSource(ROLL_HOOK);
 
-	/** One `async function <name>` body of the route, up to the next one, so an
+	/** One `async function <name>` body of the roll hook, up to the next one, so an
 	 *  assertion cannot be satisfied by a neighbour. */
 	function body(name: string): string {
 		const at = rollSrc.indexOf(`async function ${name}(`);
-		expect(at, `${name} not found in the route`).toBeGreaterThan(-1);
+		expect(at, `${name} not found in the roll hook`).toBeGreaterThan(-1);
 		const next = rollSrc.indexOf("\n\tasync function ", at + 1);
 		return rollSrc.slice(at, next === -1 ? rollSrc.length : next);
 	}
@@ -956,7 +975,7 @@ describe("a declined 'No answer' says why (clear floors)", () => {
 	 *  call cannot satisfy an assertion about it. */
 	function commitRungBody(): string {
 		const at = outreachSrc.indexOf("async function commitRung(");
-		expect(at, "commitRung not found in the route").toBeGreaterThan(-1);
+		expect(at, "commitRung not found in the outreach hook").toBeGreaterThan(-1);
 		const next = outreachSrc.indexOf("\n\tasync function ", at + 1);
 		return outreachSrc.slice(at, next === -1 ? outreachSrc.length : next);
 	}

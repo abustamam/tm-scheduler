@@ -41,6 +41,12 @@ const COMPONENTS = resolve(
 	"components",
 	"club",
 );
+const ALL_HANDLER_FILES = [
+	FILE,
+	...["roll", "outreach", "cover", "lifecycle", "votes"].map((d) =>
+		resolve(COMPONENTS, `use-meeting-${d}.ts`),
+	),
+];
 const OUTREACH_FILE = resolve(COMPONENTS, "use-meeting-outreach.ts");
 const COVER_FILE = resolve(COMPONENTS, "use-meeting-cover.ts");
 /** Comment-blind — for "must BE present" only. */
@@ -112,8 +118,17 @@ describe("the decline confirm is on the write path, not beside it (#663)", () =>
 		expect(OUT).toMatch(
 			/commitRung\(p\.memberId, "not_coming", "manual", true\)/,
 		);
-		// Exactly one call site passes it.
-		expect(OUT_RAW.split('"not_coming", "manual", true').length - 1).toBe(1);
+		// Exactly one call site passes it — across the route and ALL five hooks, so
+		// a second releasing call in any other hook fails too.
+		const releasingSites = ALL_HANDLER_FILES.reduce(
+			(n, file) =>
+				n +
+				(readFileSync(file, "utf8").split('"not_coming", "manual", true')
+					.length -
+					1),
+			0,
+		);
+		expect(releasingSites).toBe(1);
 	});
 
 	it("guards the confirmed write with its own in-flight flag", () => {

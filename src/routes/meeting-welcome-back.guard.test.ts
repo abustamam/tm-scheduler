@@ -7,13 +7,13 @@ import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
 
 // `writePresence` moved from the route into `useMeetingRoll` (#1476).
-const ROUTE = resolve(
+const ROLL_HOOK = resolve(
 	import.meta.dirname,
 	"../components/club/use-meeting-roll.ts",
 );
 
 describe("meeting roll welcome-back once per member (#1446)", () => {
-	const src = readSource(ROUTE);
+	const src = readSource(ROLL_HOOK);
 	const start = src.indexOf("async function writePresence(");
 	const body = src.slice(start, src.indexOf("async function confirmAbsent"));
 
