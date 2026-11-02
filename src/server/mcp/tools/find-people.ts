@@ -45,6 +45,7 @@ const inputSchema = {
 export const findPeopleTool: McpToolDefinition = {
 	name: "find_people",
 	audience: "officer",
+	annotations: { readOnlyHint: true },
 	config: {
 		title: "Find people",
 		description:

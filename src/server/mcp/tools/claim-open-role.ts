@@ -147,6 +147,12 @@ async function compute(
 export const claimOpenRoleTool: McpToolDefinition = {
 	name: TOOL,
 	audience: "member",
+	// Fills an open slot only; a second call can take another open slot of the same role.
+	annotations: {
+		readOnlyHint: false,
+		destructiveHint: false,
+		idempotentHint: false,
+	},
 	config: {
 		title: "Claim an open role",
 		description:

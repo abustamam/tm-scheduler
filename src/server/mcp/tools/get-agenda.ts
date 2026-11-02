@@ -75,6 +75,7 @@ async function loadAwards(
 export const getAgendaTool: McpToolDefinition = {
 	name: "get_agenda",
 	audience: "officer",
+	annotations: { readOnlyHint: true },
 	config: {
 		title: "Get agenda",
 		description:

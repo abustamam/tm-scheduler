@@ -101,6 +101,9 @@ function buildServer(ctx: McpToolContext): McpServer {
 			{
 				title: tool.config.title,
 				description: tool.config.description,
+				// No tool reaches past GavelUp's own records; the protocol's default
+				// for an absent openWorldHint is true.
+				annotations: { ...tool.annotations, openWorldHint: false },
 				// An absent input schema means "no arguments" (whoami).
 				...(tool.config.inputSchema
 					? { inputSchema: tool.config.inputSchema }

@@ -125,6 +125,12 @@ interface LockedSlot {
 export const assignRolesTool: McpToolDefinition = {
 	name: "assign_roles",
 	audience: "officer",
+	// Replaces or clears whoever holds a slot; the same assignments again change nothing.
+	annotations: {
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: true,
+	},
 	config: {
 		title: "Assign roles",
 		description:

@@ -33,6 +33,7 @@ const inputSchema = {
 export const getImportReportTool: McpToolDefinition = {
 	name: "get_import_report",
 	audience: "officer",
+	annotations: { readOnlyHint: true },
 	config: {
 		title: "Get import report",
 		description:

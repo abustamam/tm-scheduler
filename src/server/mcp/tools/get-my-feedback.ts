@@ -108,6 +108,7 @@ function trimToLocalDates(
 export const getMyFeedbackTool: McpToolDefinition = {
 	name: "get_my_feedback",
 	audience: "member",
+	annotations: { readOnlyHint: true },
 	config: {
 		title: "Get my feedback",
 		description:

@@ -74,6 +74,7 @@ export function combineAttendance(
 export const getMyScheduleTool: McpToolDefinition = {
 	name: "get_my_schedule",
 	audience: "member",
+	annotations: { readOnlyHint: true },
 	config: {
 		title: "Get my schedule",
 		description:

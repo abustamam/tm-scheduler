@@ -212,6 +212,37 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 		]);
 	});
 
+	it("tools/list carries each tool's annotations", async () => {
+		const res = await handleMcpRequest(
+			mcpRequest(
+				{ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+				{ token: adminToken },
+			),
+		);
+		const listed = JSON.parse(await res.text()) as {
+			result: { tools: { name: string; annotations?: unknown }[] };
+		};
+		const byName = new Map(
+			listed.result.tools.map((t) => [t.name, t.annotations]),
+		);
+		expect(byName.get("whoami")).toEqual({
+			readOnlyHint: true,
+			openWorldHint: false,
+		});
+		expect(byName.get("assign_roles")).toEqual({
+			readOnlyHint: false,
+			destructiveHint: true,
+			idempotentHint: true,
+			openWorldHint: false,
+		});
+		for (const tool of MCP_TOOLS) {
+			expect(byName.get(tool.name), tool.name).toEqual({
+				...tool.annotations,
+				openWorldHint: false,
+			});
+		}
+	});
+
 	it("401s an unknown token", async () => {
 		const res = await handleMcpRequest(
 			mcpRequest(

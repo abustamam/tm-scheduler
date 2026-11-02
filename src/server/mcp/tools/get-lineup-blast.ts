@@ -29,6 +29,7 @@ const inputSchema = { meetingId: z.string().uuid() };
 export const getLineupBlastTool: McpToolDefinition = {
 	name: "get_lineup_blast",
 	audience: "officer",
+	annotations: { readOnlyHint: true },
 	config: {
 		title: "Get lineup blast",
 		description:

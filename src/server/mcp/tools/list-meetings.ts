@@ -44,6 +44,7 @@ const inputSchema = {
 export const listMeetingsTool: McpToolDefinition = {
 	name: "list_meetings",
 	audience: "officer",
+	annotations: { readOnlyHint: true },
 	config: {
 		title: "List meetings",
 		description:

@@ -200,6 +200,12 @@ async function standingNow(tx: Tx, who: Who): Promise<TokenClub["via"] | null> {
 export const setAttendanceTool: McpToolDefinition = {
 	name: TOOL,
 	audience: "officer",
+	// not_coming frees every role the member holds; repeating it frees nothing more.
+	annotations: {
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: true,
+	},
 	config: {
 		title: "Set a member's attendance",
 		description:
