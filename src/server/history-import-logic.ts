@@ -5,7 +5,7 @@
  * The planning rules are pure and live in `#/lib/easy-speak-import-plan`; this
  * module reads what the club holds, hands it to the planner, and writes what the
  * plan says. It has NO session of its own: `history-import.ts` runs the
- * superadmin gate before it calls anything here, and the MCP tool authorises a
+ * history-import gate (`requireHistoryImportRunner`) before it calls anything here, and the MCP tool authorises a
  * club admin before it calls {@link loadImportReport}.
  *
  * ## Apply rules
@@ -138,6 +138,11 @@ import { importPlanAnswers } from "./attendance-plan-logic";
 import { lockClubForWrite } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { closeCoverRequest } from "./cover-close";
+import {
+	assertStillClubAdmin,
+	type HistoryImportRunner,
+	runnerAttribution,
+} from "./guards";
 import { createGuestRecord } from "./guests-logic";
 import { insertRosterMember } from "./members-logic";
 import { openOfficerTermIfAbsent } from "./officer-terms-logic";
@@ -181,6 +186,89 @@ export const INTRODUCER_NOT_IN_CLUB_MESSAGE =
 	"The member who introduced this guest is not in this club.";
 
 // ---------------------------------------------------------------------------
+// Club binding (#1492)
+// ---------------------------------------------------------------------------
+
+/** The Easy-Speak club a GavelUp club was first imported from. */
+export interface BoundEasySpeakClub {
+	esClubId: string;
+	name: string;
+	number: string | null;
+}
+
+const boundClubSchema = z.object({
+	esClubId: z.string(),
+	name: z.string(),
+	number: z.string().nullable().optional(),
+});
+
+/**
+ * The Easy-Speak club of the club's EARLIEST applied import, or null while none
+ * has been applied. Read from the stored rows: there is no binding column.
+ */
+export async function boundEasySpeakClub(
+	conn: Pick<typeof db, "select">,
+	clubId: string,
+): Promise<BoundEasySpeakClub | null> {
+	const [row] = await conn
+		.select({ club: sql<unknown>`${clubImports.bundle}->'club'` })
+		.from(clubImports)
+		.where(
+			and(eq(clubImports.clubId, clubId), isNotNull(clubImports.appliedAt)),
+		)
+		.orderBy(asc(clubImports.appliedAt), asc(clubImports.createdAt))
+		.limit(1);
+	const parsed = boundClubSchema.safeParse(row?.club);
+	if (!parsed.success) return null;
+	return {
+		esClubId: parsed.data.esClubId,
+		name: parsed.data.name,
+		number: parsed.data.number ?? null,
+	};
+}
+
+/** "0012345" and "12345" are the same club number. */
+const normalizeClubNumber = (n: string) => n.trim().replace(/^0+/u, "");
+
+/**
+ * Why a bundle may not be imported into this club, or null. With a bound
+ * Easy-Speak club, only that club's bundles; before the first import, a club
+ * number on both sides must agree.
+ */
+export function bundleClubMismatch(
+	bundleClub: { esClubId: string; name: string; number: string | null },
+	clubNumber: string | null,
+	bound: BoundEasySpeakClub | null,
+): string | null {
+	if (bound) {
+		return bundleClub.esClubId !== bound.esClubId
+			? `This export is from ${bundleClub.name}, not ${bound.name}, the Easy-Speak club this club was imported from.`
+			: null;
+	}
+	if (
+		bundleClub.number &&
+		clubNumber &&
+		normalizeClubNumber(bundleClub.number) !== normalizeClubNumber(clubNumber)
+	) {
+		return `This export is from Easy-Speak club ${bundleClub.name} (#${bundleClub.number}), but this club's number is ${clubNumber}.`;
+	}
+	return null;
+}
+
+/** Throws {@link bundleClubMismatch}'s sentence unless `override` (a superadmin's). Returns whether it overrode one. */
+export function assertBundleMatchesClub(
+	bundleClub: { esClubId: string; name: string; number: string | null },
+	clubNumber: string | null,
+	bound: BoundEasySpeakClub | null,
+	override: boolean | undefined,
+): { overrode: boolean } {
+	const mismatch = bundleClubMismatch(bundleClub, clubNumber, bound);
+	if (mismatch === null) return { overrode: false };
+	if (override === true) return { overrode: true };
+	throw new BundleRefusal(mismatch);
+}
+
+// ---------------------------------------------------------------------------
 // Upload
 // ---------------------------------------------------------------------------
 
@@ -218,6 +306,8 @@ export async function storeEasySpeakBundle(input: {
 	clubId: string;
 	uploadedByUserId: string;
 	text: string;
+	/** A superadmin's override of the club binding; the server fn passes it only for one. */
+	overrideClubBinding?: boolean;
 }): Promise<StoredImport> {
 	const bytes = Buffer.byteLength(input.text, "utf8");
 	if (bytes > MAX_BUNDLE_BYTES) {
@@ -271,12 +361,19 @@ export async function storeEasySpeakBundle(input: {
 	const bundleSha256 = createHash("sha256").update(input.text).digest("hex");
 
 	const [club] = await db
-		.select({ archivedAt: clubs.archivedAt })
+		.select({ archivedAt: clubs.archivedAt, clubNumber: clubs.clubNumber })
 		.from(clubs)
 		.where(eq(clubs.id, input.clubId))
 		.limit(1);
 	if (!club) throw new Error("Club not found.");
 	if (isClubArchived(club)) throw new Error(CLUB_ARCHIVED_MESSAGE);
+	// Refused before a row is stored: a bundle from another Easy-Speak club never lands.
+	assertBundleMatchesClub(
+		check.data.club,
+		club.clubNumber,
+		await boundEasySpeakClub(db, input.clubId),
+		input.overrideClubBinding,
+	);
 
 	const find = () =>
 		db
@@ -588,11 +685,35 @@ async function loadContactState(
 		.from(members)
 		.innerJoin(people, eq(people.id, members.personId))
 		.where(eq(members.clubId, clubId));
+	// The member-edit rule for a linked member's email (#907), asked with the same
+	// predicates the apply's UPDATE carries, so the plan never promises a fill the
+	// apply will skip. Read in its own query on `people`, the shape `soleHoldingClub` is written for.
+	const writable = new Set<string>();
+	const personIds = [...new Set(memberRows.map((m) => m.personId))];
+	for (let i = 0; i < personIds.length; i += 1000) {
+		const rows = await db
+			.select({ id: people.id })
+			.from(people)
+			.where(
+				and(
+					inArray(people.id, personIds.slice(i, i + 1000)),
+					isNull(people.userId),
+					soleHoldingClub(clubId),
+				),
+			);
+		for (const r of rows) writable.add(r.id);
+	}
 	const holders = new Map<string, Set<string>>();
 	for (let i = 0; i < emails.length; i += 1000) {
+		// Held by a member of THIS club only (#1492): who holds an address in another
+		// club is not something a club admin's preview may learn.
 		const rows = await db
 			.select({ id: people.id, email: people.email })
 			.from(people)
+			.innerJoin(
+				members,
+				and(eq(members.personId, people.id), eq(members.clubId, clubId)),
+			)
 			.where(
 				and(
 					inArray(normalizedEmail(people.email), emails.slice(i, i + 1000)),
@@ -608,7 +729,12 @@ async function loadContactState(
 		members: new Map(
 			memberRows.map((m) => [
 				m.memberId,
-				{ personId: m.personId, email: m.email, phone: m.phone },
+				{
+					personId: m.personId,
+					email: m.email,
+					phone: m.phone,
+					emailWritable: writable.has(m.personId),
+				},
 			]),
 		),
 		emailHolders: holders,
@@ -645,6 +771,12 @@ export interface ImportPreview {
 	appliedAt: string | null;
 	bundleClub: { name: string; number: string | null };
 	club: { name: string; number: string | null };
+	/** The first import's Easy-Speak club → this club; null once a club is bound (#1492). */
+	binding: {
+		esName: string;
+		esNumber: string | null;
+		clubName: string;
+	} | null;
 	warnings: string[];
 	counts: PlanCounts;
 	people: ImportPreviewPerson[];
@@ -741,15 +873,10 @@ export async function previewEasySpeakImport(input: {
 	const plan = buildImportPlan(stored.bundle, loaded.ctx);
 	const warnings: string[] = [];
 	const { club } = stored.bundle;
-	if (
-		club.number &&
-		loaded.club.clubNumber &&
-		club.number !== loaded.club.clubNumber
-	) {
-		warnings.push(
-			`The bundle is for club ${club.number} ("${club.name}") but this club's number is ${loaded.club.clubNumber}.`,
-		);
-	}
+	const bound = await boundEasySpeakClub(db, input.clubId);
+	// The apply refuses this; the preview of an already stored bundle says why.
+	const mismatch = bundleClubMismatch(club, loaded.club.clubNumber, bound);
+	if (mismatch) warnings.push(mismatch);
 	if (isClubArchived(loaded.club)) warnings.push(CLUB_ARCHIVED_MESSAGE);
 	warnings.push(...plan.notes);
 	return {
@@ -758,6 +885,13 @@ export async function previewEasySpeakImport(input: {
 		appliedAt: stored.appliedAt?.toISOString() ?? null,
 		bundleClub: { name: club.name, number: club.number },
 		club: { name: loaded.club.name, number: loaded.club.clubNumber },
+		binding: bound
+			? null
+			: {
+					esName: club.name,
+					esNumber: club.number,
+					clubName: loaded.club.name,
+				},
 		warnings,
 		counts: plan.counts,
 		people: plan.people.map(previewPerson),
@@ -844,8 +978,8 @@ interface Resolved {
 
 /** What the member-making part of the apply needs beyond the plan (#1240). */
 export interface WritePeopleOptions {
-	/** The superadmin each `member_add` is attributed to. */
-	superadminUserId?: string | null;
+	/** Who each `member_add` is attributed to. */
+	runner?: HistoryImportRunner | null;
 	/** The answers saved by the earlier apply: a replay of one is not a change. */
 	previousResolutions?: Record<string, PersonResolution>;
 	now?: Date;
@@ -855,8 +989,15 @@ export interface WritePeopleOptions {
 	countryCode?: string | null;
 }
 
+/** The actor columns for a write with or without a known runner (a direct caller). */
+const attribution = (runner: HistoryImportRunner | null | undefined) =>
+	runner
+		? runnerAttribution(runner)
+		: { actorMemberId: null, impersonatedBy: null };
+
+/** One neutral sentence for every skip: it names no club, no person and no account. */
 const emailTakenNote = (row: number, name: string) =>
-	`The email in row ${row} was taken since the preview; left blank for ${name}.`;
+	`The email in row ${row} was left blank for ${name}: that address is already in use in GavelUp.`;
 
 /** Another Person (any club) already holds this email, case-insensitively. */
 async function emailHeldByOther(
@@ -1072,8 +1213,7 @@ export async function writePeopleAndRoles(
 			});
 			await logActivity(tx, {
 				clubId,
-				actorMemberId: null,
-				impersonatedBy: opts.superadminUserId ?? null,
+				...attribution(opts.runner),
 				action: "member_add",
 				targetType: "member",
 				targetId: created.id,
@@ -1807,7 +1947,7 @@ export async function takeImportLock(tx: Tx, clubId: string): Promise<void> {
 }
 
 /**
- * Apply a stored bundle to its club. The caller has proved the superadmin.
+ * Apply a stored bundle to its club. The caller has proved who may run it.
  *
  * Refused while any person is unresolved, and for an archived club. Re-running is
  * safe: see the module header. Returns the stored report.
@@ -1815,13 +1955,15 @@ export async function takeImportLock(tx: Tx, clubId: string): Promise<void> {
 export async function applyEasySpeakImport(input: {
 	clubId: string;
 	importId: string;
-	/** The superadmin the change is attributed to. */
-	superadminUserId: string;
+	/** Who runs it; the change is attributed to them. */
+	runner: HistoryImportRunner;
 	resolutions?: Record<string, PersonResolution>;
-	/** The `planHash` of the preview the superadmin confirmed; a plan that has moved is refused. */
+	/** The `planHash` of the preview the runner confirmed; a plan that has moved is refused. */
 	planHash?: string;
 	/** Pasted `name, email, phone` rows (#1240): placed on people, never stored by the import. */
 	contacts?: string;
+	/** A superadmin's override of the club binding; the server fn passes it only for one. */
+	overrideClubBinding?: boolean;
 	now?: Date;
 }): Promise<ApplyResult> {
 	// ONE apply per club at a time, held for the whole run by a transaction that
@@ -1835,17 +1977,35 @@ export async function applyEasySpeakImport(input: {
 	// it is queued behind.
 	return db.transaction(async (guard) => {
 		await takeImportLock(guard, input.clubId);
+		await assertRunnerStillAllowed(guard, input.runner, input.clubId);
 		return applyUnderImportLock(input);
 	});
+}
+
+/**
+ * Re-ask the club-admin question inside the transaction, after the lock (#806):
+ * an admin whose term closed, or whose club was archived, while the run queued
+ * writes nothing. A superadmin and a read-write impersonation (no membership to
+ * re-ask about) are not re-checked here.
+ */
+export async function assertRunnerStillAllowed(
+	tx: Tx,
+	runner: HistoryImportRunner,
+	clubId: string,
+): Promise<void> {
+	if (runner.kind === "admin" && runner.actorMemberId !== null) {
+		await assertStillClubAdmin(tx, runner.userId, clubId);
+	}
 }
 
 async function applyUnderImportLock(input: {
 	clubId: string;
 	importId: string;
-	superadminUserId: string;
+	runner: HistoryImportRunner;
 	resolutions?: Record<string, PersonResolution>;
 	planHash?: string;
 	contacts?: string;
+	overrideClubBinding?: boolean;
 	now?: Date;
 }): Promise<ApplyResult> {
 	const now = input.now ?? new Date();
@@ -1864,6 +2024,13 @@ async function applyUnderImportLock(input: {
 		input.contacts,
 	);
 	if (isClubArchived(loaded.club)) throw new Error(CLUB_ARCHIVED_MESSAGE);
+	// A bundle stored before another one was applied is refused here too.
+	const binding = assertBundleMatchesClub(
+		stored.bundle.club,
+		loaded.club.clubNumber,
+		await boundEasySpeakClub(db, input.clubId),
+		input.overrideClubBinding,
+	);
 	const plan = buildImportPlan(stored.bundle, loaded.ctx);
 	if (!plan.canApply) {
 		throw new Error(UNRESOLVED_PEOPLE_MESSAGE(plan.unresolved.length));
@@ -1876,7 +2043,7 @@ async function applyUnderImportLock(input: {
 	}
 
 	const resolved = await writePeopleAndRoles(input.clubId, plan, {
-		superadminUserId: input.superadminUserId,
+		runner: input.runner,
 		previousResolutions: stored.state.resolutions,
 		now,
 		timezone: loaded.ctx.clubTimezone,
@@ -1979,16 +2146,14 @@ async function applyUnderImportLock(input: {
 			);
 		await logActivity(tx, {
 			clubId: input.clubId,
-			actorMemberId: null,
-			// The superadmin is memberless in the club: attributed through the
-			// impersonation column, as every other superadmin write is.
-			impersonatedBy: input.superadminUserId,
+			...runnerAttribution(input.runner),
 			action: "history_imported",
 			targetType: "club",
 			targetId: input.clubId,
 			detail: {
 				importId: input.importId,
 				source: SOURCE,
+				...(binding.overrode ? { overrodeClubBinding: true } : {}),
 				reconciled: report.reconciled,
 				failedMeetings: report.meetings.failed.length,
 				counts: Object.fromEntries(
@@ -2054,7 +2219,7 @@ function speechRequestSourceId(
 
 /**
  * Import the stored bundle's OPEN speech requests as queue rows. The caller has
- * proved the superadmin.
+ * proved who may run it.
  *
  * - `requested` becomes an open request. `scheduled` and `completed` are skipped
  *   (the meeting history carries them) and counted.
@@ -2069,8 +2234,8 @@ function speechRequestSourceId(
 export async function importSpeechRequests(input: {
 	clubId: string;
 	importId: string;
-	/** The superadmin the change is attributed to. */
-	superadminUserId: string;
+	/** Who runs it; the change is attributed to them. */
+	runner: HistoryImportRunner;
 	now?: Date;
 }): Promise<SpeechRequestImportResult> {
 	const now = input.now ?? new Date();
@@ -2080,6 +2245,7 @@ export async function importSpeechRequests(input: {
 
 	return db.transaction(async (tx) => {
 		await takeImportLock(tx, input.clubId);
+		await assertRunnerStillAllowed(tx, input.runner, input.clubId);
 		await lockClubForWrite(tx, input.clubId);
 		await assertClubNotArchivedTx(tx, input.clubId);
 
@@ -2175,8 +2341,7 @@ export async function importSpeechRequests(input: {
 
 		await logActivity(tx, {
 			clubId: input.clubId,
-			actorMemberId: null,
-			impersonatedBy: input.superadminUserId,
+			...runnerAttribution(input.runner),
 			action: "history_imported",
 			targetType: "club",
 			targetId: input.clubId,
@@ -2197,6 +2362,8 @@ export async function importSpeechRequests(input: {
 
 export const importClubSchema = z.object({ clubId: z.string().uuid() });
 export const uploadImportSchema = importClubSchema.extend({
+	/** A superadmin's override of the club binding; refused from anyone else (#1492). */
+	overrideClubBinding: z.boolean().optional(),
 	/** The bundle's JSON text, as read from the file. The logic enforces the cap. */
 	text: z.string().min(1, "Choose a file to upload."),
 });
@@ -2220,5 +2387,6 @@ export const storedImportSchema = importClubSchema.extend({
 });
 /** An apply names the preview it confirms: see {@link planFingerprint}. */
 export const importApplySchema = importRunSchema.extend({
+	overrideClubBinding: z.boolean().optional(),
 	planHash: z.string().length(64, "Preview again before applying."),
 });

@@ -188,7 +188,7 @@ describe.skipIf(!hasTestDb)(
 			logic.applyEasySpeakImport({
 				clubId: seed.clubId,
 				importId,
-				superadminUserId: superadminId,
+				runner: { kind: "superadmin", userId: superadminId },
 				resolutions,
 				now: NOW,
 			});
@@ -276,7 +276,7 @@ describe.skipIf(!hasTestDb)(
 			const mentored = await mentorLogic.importMentorPairs({
 				clubId: seed.clubId,
 				importId: stored.importId,
-				superadminUserId: superadminId,
+				runner: { kind: "superadmin", userId: superadminId },
 			});
 			// Nova's pair, and Ghost Pepper's: she is on the member list, so the apply
 			// made her a member (#1240).
@@ -295,7 +295,7 @@ describe.skipIf(!hasTestDb)(
 			const requested = await logic.importSpeechRequests({
 				clubId: seed.clubId,
 				importId: stored.importId,
-				superadminUserId: superadminId,
+				runner: { kind: "superadmin", userId: superadminId },
 			});
 			expect(requested.imported).toBe(2);
 			const rows = await testDb
@@ -341,14 +341,14 @@ describe.skipIf(!hasTestDb)(
 			const mentored = await mentorLogic.importMentorPairs({
 				clubId: seed.clubId,
 				importId: stored.importId,
-				superadminUserId: superadminId,
+				runner: { kind: "superadmin", userId: superadminId },
 			});
 			expect(mentored.skipped).toEqual([]);
 			expect(mentored.imported).toBe(2);
 			const requested = await logic.importSpeechRequests({
 				clubId: seed.clubId,
 				importId: stored.importId,
-				superadminUserId: superadminId,
+				runner: { kind: "superadmin", userId: superadminId },
 			});
 			expect(requested).toMatchObject({ imported: 2, skippedNoMember: 0 });
 		});
@@ -406,7 +406,7 @@ describe.skipIf(!hasTestDb)(
 			const mentoredEarly = await mentorLogic.importMentorPairs({
 				clubId: seed.clubId,
 				importId: stored.importId,
-				superadminUserId: superadminId,
+				runner: { kind: "superadmin", userId: superadminId },
 			});
 			expect(mentoredEarly.imported).toBe(0);
 
@@ -428,13 +428,13 @@ describe.skipIf(!hasTestDb)(
 			const mentored = await mentorLogic.importMentorPairs({
 				clubId: seed.clubId,
 				importId: stored.importId,
-				superadminUserId: superadminId,
+				runner: { kind: "superadmin", userId: superadminId },
 			});
 			expect(mentored.imported).toBe(2);
 			const requested = await logic.importSpeechRequests({
 				clubId: seed.clubId,
 				importId: stored.importId,
-				superadminUserId: superadminId,
+				runner: { kind: "superadmin", userId: superadminId },
 			});
 			expect(requested.imported).toBe(2);
 

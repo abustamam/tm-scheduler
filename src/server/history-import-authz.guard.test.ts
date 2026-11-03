@@ -1,11 +1,11 @@
 /**
- * Who may run the Easy-Speak import (#1051), pinned at the server fns.
+ * Who may run the Easy-Speak import (#1051, #1492), pinned at the server fns.
  *
  * `history-import-logic.ts` has no session and trusts its caller, and a
  * `createServerFn` handler body cannot be run by a source read. This pins, for
  * every declaration in `history-import.ts` (no hand-written list decides which
- * are covered), that `requireUser` runs first, `requireSuperadmin` runs on that
- * user's own id next, and only then any call into the logic.
+ * are covered), that `requireUser` runs first, `requireHistoryImportRunner` runs on that
+ * user's own id and the request's own `clubId` next, and only then any call into the logic.
  * `history-import-authz.integration.test.ts` proves the refusal itself.
  *
  * Read COMMENT-BLIND (`readSource`), as `areas-authz.guard.test.ts` does.
@@ -50,7 +50,16 @@ function logicCallNames(source: string): string[] {
 
 const LOGIC_NAMES = logicCallNames(SOURCE);
 
-describe("history-import.ts server fns are superadmin-only (#1051)", () => {
+/** The gate: that user's own id and the request's own club. Whitespace-tolerant (biome wraps it). */
+const GATE =
+	/await requireHistoryImportRunner\(\s*currentUser\.id,\s*data\.clubId,?\s*\)/;
+/** Where the gate's call ENDS in a handler, or -1. */
+function gateEnd(handler: string): number {
+	const m = GATE.exec(handler);
+	return m ? m.index + m[0].length : -1;
+}
+
+describe("history-import.ts server fns are superadmin-or-club-admin only (#1051, #1492)", () => {
 	it("sweeps every declared fn", () => {
 		expect(DECLARATIONS.map((d) => d.name).sort()).toEqual(
 			[...EXPECTED_FNS].sort(),
@@ -59,7 +68,7 @@ describe("history-import.ts server fns are superadmin-only (#1051)", () => {
 	});
 
 	for (const declaration of DECLARATIONS) {
-		it(`${declaration.name} runs requireUser, then requireSuperadmin on that user, before any logic call`, () => {
+		it(`${declaration.name} runs requireUser, then requireHistoryImportRunner on that user and club, before any logic call`, () => {
 			const handlerAt = declaration.body.indexOf(".handler(");
 			expect(handlerAt, "no .handler( in the declaration").toBeGreaterThan(-1);
 			const handler = declaration.body.slice(handlerAt);
@@ -67,11 +76,12 @@ describe("history-import.ts server fns are superadmin-only (#1051)", () => {
 			const session = handler.indexOf(
 				"const currentUser = await requireUser();",
 			);
-			const gate = handler.indexOf("await requireSuperadmin(currentUser.id);");
+			const gate = gateEnd(handler);
 			expect(session, "requireUser() is gone").toBeGreaterThan(-1);
-			expect(gate, "requireSuperadmin(currentUser.id) is gone").toBeGreaterThan(
-				-1,
-			);
+			expect(
+				gate,
+				"requireHistoryImportRunner(currentUser.id, data.clubId) is gone",
+			).toBeGreaterThan(-1);
 			expect(session).toBeLessThan(gate);
 
 			const calls = LOGIC_NAMES.map((name) => ({
@@ -85,7 +95,7 @@ describe("history-import.ts server fns are superadmin-only (#1051)", () => {
 			for (const call of calls) {
 				expect(
 					call.at,
-					`${call.name}( runs before requireSuperadmin`,
+					`${call.name}( runs before requireHistoryImportRunner`,
 				).toBeGreaterThan(gate);
 			}
 		});
@@ -100,7 +110,7 @@ describe("history-import.ts server fns are superadmin-only (#1051)", () => {
 		const declaration = DECLARATIONS.find((d) => d.name === name);
 		const handler =
 			declaration?.body.slice(declaration.body.indexOf(".handler(")) ?? "";
-		const gate = handler.indexOf("await requireSuperadmin(currentUser.id);");
+		const gate = gateEnd(handler);
 		const check = handler.indexOf(
 			"await assertNotReadOnlyImpersonation(currentUser.id);",
 		);
@@ -109,6 +119,20 @@ describe("history-import.ts server fns are superadmin-only (#1051)", () => {
 		expect(check).toBeLessThan(
 			handler.search(new RegExp(`\\b${logicCall}\\(`)),
 		);
+	});
+
+	it("the club-binding override is passed down only through overrideFor, which refuses a non-superadmin", () => {
+		for (const name of ["uploadEasySpeakBundle", "applyEasySpeakImport"]) {
+			const declaration = DECLARATIONS.find((d) => d.name === name);
+			expect(declaration?.body, name).toMatch(
+				/overrideClubBinding:\s*overrideFor\(runner,\s*data\.overrideClubBinding\)/,
+			);
+		}
+		const helper = /function overrideFor[\s\S]*?\n}\n/.exec(SOURCE)?.[0] ?? "";
+		expect(helper).toContain(
+			'requested === true && runner.kind !== "superadmin"',
+		);
+		expect(helper).toContain("throw new Error(");
 	});
 
 	it("the read-only check refuses a read_only session and only that", () => {

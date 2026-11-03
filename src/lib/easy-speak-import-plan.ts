@@ -126,13 +126,22 @@ export interface PlanContext {
 	 */
 	contacts?: string;
 	/**
-	 * What the roster members already hold, by member id, and which Persons (any
-	 * club) hold an email, by lower-cased email. Read only to place `contacts`.
+	 * What the roster members already hold, by member id, and which Persons hold
+	 * an email AS A MEMBER OF THIS CLUB, by lower-cased email (#1492: a Person in
+	 * no membership of this club is not the roster's business). Read only to place
+	 * `contacts`. `emailWritable` is the member-edit rule for a linked member's
+	 * email (#907): nobody has signed in as the Person and this club is their sole
+	 * holder; the apply refuses the write otherwise, so the plan must not promise it.
 	 */
 	contactState?: {
 		members: ReadonlyMap<
 			string,
-			{ personId: string; email: string | null; phone: string | null }
+			{
+				personId: string;
+				email: string | null;
+				phone: string | null;
+				emailWritable: boolean;
+			}
 		>;
 		emailHolders: ReadonlyMap<string, ReadonlySet<string>>;
 	};
@@ -1315,7 +1324,7 @@ function placeContacts(
 				: false;
 			if (heldByOther) {
 				warnings.push(
-					`An email in row ${v.row} already belongs to someone else; left blank for ${v.target.name}.`,
+					`An email in row ${v.row} is already on another member of this club; left blank for ${v.target.name}.`,
 				);
 				email = null;
 			}
@@ -1324,6 +1333,12 @@ function placeContacts(
 		// A linked member keeps what they have.
 		if (memberState) {
 			if (!isBlank(memberState.email)) email = null;
+			else if (email && !memberState.emailWritable) {
+				warnings.push(
+					`The email in row ${v.row} was left blank for ${v.target.name}: the person has a GavelUp account or belongs to another club, so it is theirs to add.`,
+				);
+				email = null;
+			}
 			if (!isBlank(memberState.phone)) phone = null;
 		}
 		if (email || phone) {

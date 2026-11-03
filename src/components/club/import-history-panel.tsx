@@ -12,6 +12,7 @@ import {
 	type PersonResolution,
 	personKeyOf,
 } from "#/lib/easy-speak-import-plan";
+import { EXTENSION_LISTINGS } from "#/lib/extension-listings";
 import { GUEST_KIND_LABELS, GUEST_KINDS } from "#/lib/guest-profile";
 import { MAX_BUNDLE_BYTES } from "#/lib/import-bundle-limit";
 import {
@@ -24,11 +25,49 @@ import {
 } from "#/server/history-import";
 
 /**
- * The Easy-Speak history import (#1051), on the superadmin club page: upload a
- * bundle, read the preview, decide each person the matcher could not, apply, and
- * read the reconciliation report. Everything here is a server fn behind
- * `requireSuperadmin`; the page only shows what they return.
+ * The Easy-Speak history import (#1051), on the superadmin club page and, for a
+ * club's own admin, at `/admin/import-history` (#1492): upload a bundle, read the
+ * preview, decide each person the matcher could not, apply, and read the
+ * reconciliation report. Everything here is a server fn behind
+ * `requireHistoryImportRunner`; the page only shows what they return.
  */
+
+/** The sentence a refusal starts with when a bundle is from another Easy-Speak club. */
+const BINDING_REFUSAL = /^This export is from /u;
+
+/** The install line: a link per listing that exists, or who to ask. */
+export function ExtensionInstallLine() {
+	const links = [
+		["Chrome", EXTENSION_LISTINGS.chrome],
+		["Firefox", EXTENSION_LISTINGS.firefox],
+	].filter((l): l is [string, string] => l[1] !== null);
+	return (
+		<div className="space-y-1 text-sm" data-testid="extension-install">
+			<p className="font-semibold">Install the extension</p>
+			{links.length > 0 ? (
+				<p>
+					Install the GavelUp extension for{" "}
+					{links.map(([label, href], i) => (
+						<span key={label}>
+							{i > 0 ? " or " : ""}
+							<a href={href} target="_blank" rel="noreferrer">
+								{label}
+							</a>
+						</span>
+					))}
+					.
+				</p>
+			) : (
+				<p>Ask GavelUp support for the browser extension.</p>
+			)}
+			<ol className="list-decimal pl-5 text-muted-foreground">
+				<li>Install the extension and sign in to Easy-Speak.</li>
+				<li>Press Export and save the file.</li>
+				<li>Upload the saved file here.</li>
+			</ol>
+		</div>
+	);
+}
 
 const selectClass =
 	"h-8 rounded-md border border-border bg-background px-2 text-sm";
@@ -67,9 +106,12 @@ function toResolution(d: Draft): PersonResolution | null {
 export function ImportHistoryPanel({
 	clubId,
 	clubName,
+	isSuperadmin = false,
 }: {
 	clubId: string;
 	clubName: string;
+	/** Only a superadmin may import a bundle from another Easy-Speak club (#1492). */
+	isSuperadmin?: boolean;
 }) {
 	const queryClient = useQueryClient();
 	const fileRef = useRef<HTMLInputElement>(null);
@@ -81,6 +123,19 @@ export function ImportHistoryPanel({
 	// a round trip. Sent with the preview and the apply, and kept nowhere else.
 	const [contacts, setContacts] = useState("");
 	const [contactsRead, setContactsRead] = useState("");
+	// A superadmin's override of the club binding (#1492): offered only after an
+	// upload or an apply was refused with a binding message, and never rendered
+	// for anyone else. `refusedFile` is the upload to retry once it is ticked.
+	const [bindingRefused, setBindingRefused] = useState(false);
+	const [overrideBinding, setOverrideBinding] = useState(false);
+	const [refusedFile, setRefusedFile] = useState<File | null>(null);
+	const override = isSuperadmin && overrideBinding ? true : undefined;
+	const noteRefusal = (err: unknown, file: File | null = null) => {
+		if (err instanceof Error && BINDING_REFUSAL.test(err.message)) {
+			setBindingRefused(true);
+			setRefusedFile(file);
+		}
+	};
 
 	const imports = useQuery({
 		queryKey: ["easy-speak-imports", clubId],
@@ -131,7 +186,11 @@ export function ImportHistoryPanel({
 				throw new Error(oversizeMessage(file.size, head));
 			}
 			return uploadEasySpeakBundle({
-				data: { clubId, text: await file.text() },
+				data: {
+					clubId,
+					text: await file.text(),
+					...(override ? { overrideClubBinding: true } : {}),
+				},
 			});
 		},
 		onSuccess: (stored) => {
@@ -145,8 +204,10 @@ export function ImportHistoryPanel({
 			refresh();
 			if (fileRef.current) fileRef.current.value = "";
 		},
-		onError: (err) =>
-			toast.error(err instanceof Error ? err.message : "Upload failed."),
+		onError: (err, file) => {
+			noteRefusal(err, file);
+			toast.error(err instanceof Error ? err.message : "Upload failed.");
+		},
 	});
 
 	const apply = useMutation({
@@ -158,6 +219,7 @@ export function ImportHistoryPanel({
 					resolutions,
 					contacts: contactsRead,
 					planHash: preview.data?.planHash ?? "",
+					...(override ? { overrideClubBinding: true } : {}),
 				},
 			}),
 		onSuccess: (result) => {
@@ -171,6 +233,7 @@ export function ImportHistoryPanel({
 		},
 		onError: (err) => {
 			setConfirming(false);
+			noteRefusal(err);
 			toast.error(err instanceof Error ? err.message : "Import failed.");
 		},
 	});
@@ -239,13 +302,15 @@ export function ImportHistoryPanel({
 			<div className="space-y-1">
 				<h2 className="text-sm font-bold">Import Easy-Speak history</h2>
 				<p className="text-sm text-muted-foreground">
-					Upload the JSON bundle the browser extension exported for{" "}
+					Upload the file the browser extension exported for{" "}
 					<span className="font-semibold">{clubName}</span>. Nothing is written
 					until you apply. Applying again adds nothing that is already there.
 					The uploaded bundle, with every guest's name, is kept until the club
 					is deleted.
 				</p>
 			</div>
+
+			<ExtensionInstallLine />
 
 			<div className="flex flex-wrap items-center gap-2">
 				<input
@@ -268,6 +333,30 @@ export function ImportHistoryPanel({
 					<Upload className="size-4 text-muted-foreground" aria-hidden />
 				)}
 			</div>
+
+			{isSuperadmin && bindingRefused ? (
+				<div className="flex flex-wrap items-center gap-2 text-sm">
+					<label className="inline-flex items-center gap-2">
+						<input
+							type="checkbox"
+							checked={overrideBinding}
+							onChange={(e) => setOverrideBinding(e.target.checked)}
+						/>
+						Import anyway (another Easy-Speak club)
+					</label>
+					{overrideBinding && refusedFile ? (
+						<Button
+							type="button"
+							size="sm"
+							variant="outline"
+							disabled={upload.isPending}
+							onClick={() => upload.mutate(refusedFile)}
+						>
+							Upload again
+						</Button>
+					) : null}
+				</div>
+			) : null}
 
 			<div className="space-y-1">
 				<label className="text-sm font-semibold" htmlFor="import-contacts">
@@ -329,6 +418,14 @@ export function ImportHistoryPanel({
 
 			{data ? (
 				<div className="space-y-4">
+					{data.binding ? (
+						<p className="text-sm font-semibold" data-testid="import-binding">
+							Easy-Speak club {data.binding.esName}
+							{data.binding.esNumber ? ` (#${data.binding.esNumber})` : ""}
+							{" → "}
+							{data.binding.clubName}
+						</p>
+					) : null}
 					<p className="text-sm">
 						Bundle from{" "}
 						<span className="font-semibold">

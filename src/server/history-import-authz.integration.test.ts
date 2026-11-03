@@ -1,6 +1,7 @@
 /**
- * Every server fn in `history-import.ts` refuses a signed-in non-superadmin, and
- * `apply` refuses a read-only impersonation session (#1051).
+ * Every server fn in `history-import.ts` admits a superadmin or an admin of THAT
+ * club and refuses everyone else (#1051, #1492), and the fns that write refuse a
+ * read-only impersonation session.
  *
  * Runs the REAL handlers through the same minimal `createServerFn` adapter
  * `areas-authz.integration.test.ts` uses, with the cookie -> session lookup
@@ -13,8 +14,11 @@ import { count, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	clubImports,
+	clubs,
 	impersonationSessions,
 	meetings,
+	members,
+	officerTerms,
 	user,
 } from "#/db/schema";
 import {
@@ -52,12 +56,14 @@ vi.mock("#/lib/auth", () => ({
 }));
 
 const fns = await import("./history-import");
-const { NO_PERMISSION_MESSAGE } = await import("./guards");
+const { NO_PERMISSION_MESSAGE, NOT_A_MEMBER_MESSAGE, mayRunHistoryImport } =
+	await import("./guards");
 
 type Fn = (input: { data: unknown }) => Promise<unknown>;
 
 describe.skipIf(!hasTestDb)("history-import.ts authorization (#1051)", () => {
 	let seed: SeededClub;
+	let otherSeed: SeededClub | null = null;
 	let memberUserId: string;
 	let superadminId: string;
 	const userIds: string[] = [];
@@ -108,6 +114,13 @@ describe.skipIf(!hasTestDb)("history-import.ts authorization (#1051)", () => {
 	afterEach(async () => {
 		sessionUserId = null;
 		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+		if (otherSeed) {
+			await cleanup(otherSeed.clubId, [
+				otherSeed.adminUserId,
+				otherSeed.memberUserId,
+			]);
+			otherSeed = null;
+		}
 		await testDb
 			.delete(impersonationSessions)
 			.where(inArray(impersonationSessions.superadminUserId, userIds));
@@ -128,17 +141,172 @@ describe.skipIf(!hasTestDb)("history-import.ts authorization (#1051)", () => {
 		"applyEasySpeakImport",
 		"importEasySpeakSpeechRequests",
 		"importEasySpeakMentors",
-	])("%s refuses a signed-in non-superadmin", async (name) => {
+	])("%s refuses a signed-in non-member", async (name) => {
 		await expect(calls(seed.clubId)[name]?.()).rejects.toThrow(
-			NO_PERMISSION_MESSAGE,
+			NOT_A_MEMBER_MESSAGE,
 		);
 	});
 
-	it("refuses the club's own admin: this is not a club-admin tool", async () => {
+	/** What each fn says once it is PAST the gate, for an import id that does not exist. */
+	const PAST_THE_GATE: Record<string, RegExp | "list"> = {
+		listEasySpeakImports: "list",
+		uploadEasySpeakBundle: /not an Easy-Speak bundle/i,
+		previewEasySpeakImport: /not found/i,
+		applyEasySpeakImport: /not found/i,
+		importEasySpeakSpeechRequests: /not found/i,
+		importEasySpeakMentors: /not found/i,
+	};
+
+	async function expectAdmitted(name: string) {
+		const outcome = PAST_THE_GATE[name];
+		if (outcome === "list") {
+			await expect(calls(seed.clubId)[name]?.()).resolves.toEqual([]);
+		} else {
+			await expect(calls(seed.clubId)[name]?.()).rejects.toThrow(outcome);
+		}
+	}
+
+	async function expectRefused(name: string, message: string | RegExp) {
+		await expect(calls(seed.clubId)[name]?.()).rejects.toThrow(message);
+	}
+
+	// protects=a club's own admin, and a member holding an open officer term (the
+	// effective-admin arm), run the import for their club through all six fns;
+	// fails_when=any fn still demands a superadmin, or admits through a different
+	// rule than requireClubRole;
+	// no_claim=what the logic then does (the logic integration tests).
+	it.each(
+		Object.keys(PAST_THE_GATE),
+	)("%s admits the club's own admin", async (name) => {
 		sessionUserId = seed.adminUserId;
-		await expect(calls(seed.clubId).uploadEasySpeakBundle?.()).rejects.toThrow(
-			NO_PERMISSION_MESSAGE,
+		await expectAdmitted(name);
+	});
+
+	it.each(
+		Object.keys(PAST_THE_GATE),
+	)("%s admits an open officer term (effective admin)", async (name) => {
+		await testDb.insert(officerTerms).values({
+			membershipId: seed.memberId,
+			position: "vp_education",
+			termStart: new Date(),
+			termEnd: null,
+		});
+		sessionUserId = seed.memberUserId;
+		await expectAdmitted(name);
+	});
+
+	// protects=a plain member, an admin of ANOTHER club and a former member are
+	// refused by every fn with requireClubRole's own sentence, and the answer
+	// does not name the club they asked about;
+	// fails_when=the gate checks "an admin somewhere" instead of "this club";
+	// no_claim=none beyond protects.
+	it.each(
+		Object.keys(PAST_THE_GATE),
+	)("%s refuses a plain member, another club's admin, and a former member", async (name) => {
+		sessionUserId = seed.memberUserId;
+		await expectRefused(name, NO_PERMISSION_MESSAGE);
+		otherSeed = await seedClub();
+		sessionUserId = otherSeed.adminUserId;
+		await expectRefused(name, NOT_A_MEMBER_MESSAGE);
+		await testDb
+			.update(members)
+			.set({ status: "former" })
+			.where(eq(members.id, seed.adminMemberId));
+		sessionUserId = seed.adminUserId;
+		await expectRefused(name, NOT_A_MEMBER_MESSAGE);
+	});
+
+	// protects=an archived club takes no import from its admin (ADR-0016);
+	// fails_when=the gate drops the archive check;
+	// no_claim=a superadmin's own handling of an archived club (the logic's).
+	it.each(
+		Object.keys(PAST_THE_GATE),
+	)("%s refuses an admin of an archived club", async (name) => {
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, seed.clubId));
+		sessionUserId = seed.adminUserId;
+		await expectRefused(name, /archived/i);
+	});
+
+	// protects=mayRunHistoryImport answers true exactly where the gate passes, for
+	// every case above (it is the same function, caught);
+	// fails_when=the affordance and the gate drift apart;
+	// no_claim=none beyond protects.
+	it("mayRunHistoryImport agrees with the gate for every case", async () => {
+		expect(await mayRunHistoryImport(superadminId, seed.clubId)).toBe(true);
+		expect(await mayRunHistoryImport(seed.adminUserId, seed.clubId)).toBe(true);
+		expect(await mayRunHistoryImport(seed.memberUserId, seed.clubId)).toBe(
+			false,
 		);
+		expect(await mayRunHistoryImport(memberUserId, seed.clubId)).toBe(false);
+		await testDb.insert(officerTerms).values({
+			membershipId: seed.memberId,
+			position: "vp_education",
+			termStart: new Date(),
+			termEnd: null,
+		});
+		expect(await mayRunHistoryImport(seed.memberUserId, seed.clubId)).toBe(
+			true,
+		);
+		otherSeed = await seedClub();
+		expect(await mayRunHistoryImport(otherSeed.adminUserId, seed.clubId)).toBe(
+			false,
+		);
+		await testDb
+			.update(members)
+			.set({ status: "former" })
+			.where(eq(members.id, seed.adminMemberId));
+		expect(await mayRunHistoryImport(seed.adminUserId, seed.clubId)).toBe(
+			false,
+		);
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, seed.clubId));
+		expect(await mayRunHistoryImport(seed.memberUserId, seed.clubId)).toBe(
+			false,
+		);
+	});
+
+	// protects=a club admin's overrideClubBinding: true is refused BEFORE any
+	// logic runs (nothing stored), while a superadmin's reaches the logic;
+	// fails_when=the flag is passed down for a non-superadmin;
+	// no_claim=what the override then does (the logic integration test).
+	it("refuses a club admin's binding override before the logic, and passes a superadmin's", async () => {
+		sessionUserId = seed.adminUserId;
+		const refusal =
+			/Only GavelUp support can import a bundle from another Easy-Speak club/;
+		await expect(
+			(fns.uploadEasySpeakBundle as Fn)({
+				data: {
+					clubId: seed.clubId,
+					text: "{}",
+					overrideClubBinding: true,
+				},
+			}),
+		).rejects.toThrow(refusal);
+		await expect(
+			(fns.applyEasySpeakImport as Fn)({
+				data: {
+					clubId: seed.clubId,
+					importId: randomUUID(),
+					planHash: "0".repeat(64),
+					overrideClubBinding: true,
+				},
+			}),
+		).rejects.toThrow(refusal);
+		sessionUserId = superadminId;
+		await expect(
+			(fns.uploadEasySpeakBundle as Fn)({
+				data: {
+					clubId: seed.clubId,
+					text: "{}",
+					overrideClubBinding: true,
+				},
+			}),
+		).rejects.toThrow(/not an Easy-Speak bundle/i);
 	});
 
 	it("a refused upload stores nothing", async () => {

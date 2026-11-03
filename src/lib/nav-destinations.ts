@@ -239,6 +239,16 @@ export const NAV_DESTINATIONS = [
 		alsoActiveOn: ["/admin/pathways-sync"],
 	},
 
+	{
+		// Move a club's Easy-Speak history in (#1492). Its own club admins run it.
+		key: "import-history",
+		to: "/admin/import-history",
+		label: "Import from Easy-Speak",
+		group: "setup",
+		grant: "officer",
+		icon: History,
+	},
+
 	// Me
 	{
 		key: "my-dashboard",

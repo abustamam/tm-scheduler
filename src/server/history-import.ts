@@ -1,6 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { z } from "zod";
-import { requireSuperadmin, requireUser } from "./guards";
+import {
+	type HistoryImportRunner,
+	requireHistoryImportRunner,
+	requireUser,
+} from "./guards";
 import {
 	applyEasySpeakImport as applyEasySpeakImportLogic,
 	importApplySchema,
@@ -16,8 +20,9 @@ import {
 import { getActiveImpersonationForUser } from "./impersonation-logic";
 import { importMentorPairs as importMentorPairsLogic } from "./mentor-import-logic";
 
-// The Easy-Speak history import (#1051): superadmin only. EVERY fn here runs
-// `requireUser()` then `requireSuperadmin()` before it touches the logic
+// The Easy-Speak history import (#1051): a superadmin or a club admin of THAT
+// club (#1492). EVERY fn here runs `requireUser()` then
+// `requireHistoryImportRunner(user.id, data.clubId)` before it touches the logic
 // (`history-import-authz.guard.test.ts` pins that order), because
 // `history-import-logic.ts` has no session of its own and writes club data.
 //
@@ -35,6 +40,20 @@ async function assertNotReadOnlyImpersonation(userId: string): Promise<void> {
 	}
 }
 
+const OVERRIDE_REFUSED_MESSAGE =
+	"Only GavelUp support can import a bundle from another Easy-Speak club.";
+
+/** The binding override is a superadmin's; `true` from anyone else is refused before any logic runs. */
+function overrideFor(
+	runner: HistoryImportRunner,
+	requested: boolean | undefined,
+): boolean | undefined {
+	if (requested === true && runner.kind !== "superadmin") {
+		throw new Error(OVERRIDE_REFUSED_MESSAGE);
+	}
+	return requested;
+}
+
 function parse<S extends z.ZodType>(schema: S, input: unknown): z.output<S> {
 	const result = schema.safeParse(input);
 	if (!result.success) {
@@ -48,7 +67,7 @@ export const listEasySpeakImports = createServerFn({ method: "GET" })
 	.validator((input: unknown) => parse(importClubSchema, input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireSuperadmin(currentUser.id);
+		await requireHistoryImportRunner(currentUser.id, data.clubId);
 		return listClubImportsLogic(data.clubId);
 	});
 
@@ -57,12 +76,16 @@ export const uploadEasySpeakBundle = createServerFn({ method: "POST" })
 	.validator((input: unknown) => parse(uploadImportSchema, input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireSuperadmin(currentUser.id);
+		const runner = await requireHistoryImportRunner(
+			currentUser.id,
+			data.clubId,
+		);
 		await assertNotReadOnlyImpersonation(currentUser.id);
 		return storeEasySpeakBundleLogic({
 			clubId: data.clubId,
 			uploadedByUserId: currentUser.id,
 			text: data.text,
+			overrideClubBinding: overrideFor(runner, data.overrideClubBinding),
 		});
 	});
 
@@ -74,7 +97,7 @@ export const previewEasySpeakImport = createServerFn({ method: "POST" })
 	.validator((input: unknown) => parse(importRunSchema, input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireSuperadmin(currentUser.id);
+		await requireHistoryImportRunner(currentUser.id, data.clubId);
 		return previewEasySpeakImportLogic({
 			clubId: data.clubId,
 			importId: data.importId,
@@ -88,15 +111,19 @@ export const applyEasySpeakImport = createServerFn({ method: "POST" })
 	.validator((input: unknown) => parse(importApplySchema, input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireSuperadmin(currentUser.id);
+		const runner = await requireHistoryImportRunner(
+			currentUser.id,
+			data.clubId,
+		);
 		await assertNotReadOnlyImpersonation(currentUser.id);
 		return applyEasySpeakImportLogic({
 			clubId: data.clubId,
 			importId: data.importId,
-			superadminUserId: currentUser.id,
+			runner,
 			resolutions: data.resolutions,
 			planHash: data.planHash,
 			contacts: data.contacts,
+			overrideClubBinding: overrideFor(runner, data.overrideClubBinding),
 		});
 	});
 
@@ -109,12 +136,15 @@ export const importEasySpeakSpeechRequests = createServerFn({ method: "POST" })
 	.validator((input: unknown) => parse(storedImportSchema, input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireSuperadmin(currentUser.id);
+		const runner = await requireHistoryImportRunner(
+			currentUser.id,
+			data.clubId,
+		);
 		await assertNotReadOnlyImpersonation(currentUser.id);
 		return importSpeechRequestsLogic({
 			clubId: data.clubId,
 			importId: data.importId,
-			superadminUserId: currentUser.id,
+			runner,
 		});
 	});
 
@@ -127,11 +157,14 @@ export const importEasySpeakMentors = createServerFn({ method: "POST" })
 	.validator((input: unknown) => parse(storedImportSchema, input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireSuperadmin(currentUser.id);
+		const runner = await requireHistoryImportRunner(
+			currentUser.id,
+			data.clubId,
+		);
 		await assertNotReadOnlyImpersonation(currentUser.id);
 		return importMentorPairsLogic({
 			clubId: data.clubId,
 			importId: data.importId,
-			superadminUserId: currentUser.id,
+			runner,
 		});
 	});

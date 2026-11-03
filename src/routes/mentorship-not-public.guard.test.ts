@@ -129,10 +129,11 @@ describe("mentorship stays off every public surface (#939)", () => {
 			"server/orientation-logic.ts",
 			// Re-points pairings on a member merge; returns none of them.
 			"server/membership-collapse-logic.ts",
-			// The superadmin-only Easy-Speak mentor step (#1053): it writes the
+			// The Easy-Speak mentor step (#1053), run by a superadmin or an admin of
+			// the club (#1492): it writes the
 			// pairings the bundle names and returns bundle names and counts, never
 			// a stored pairing. Its one caller is `importEasySpeakMentors`
-			// (requireSuperadmin, `history-import-authz.guard.test.ts`). It is its
+			// (requireHistoryImportRunner, `history-import-authz.guard.test.ts`). It is its
 			// own module because `history-import-logic.ts` is also imported by
 			// `mcp/tools/get-import-report.ts`, which officers can reach; the next
 			// test pins that nothing but `history-import.ts` imports this one.

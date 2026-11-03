@@ -25,6 +25,7 @@ import {
 	meetingAwards,
 	meetings,
 	members,
+	officerTerms,
 	people,
 	roleDefinitions,
 	roleSlots,
@@ -71,6 +72,7 @@ vi.mock("./club-write-lock", async (importOriginal) => {
 });
 
 const logic = await import("./history-import-logic");
+const { NO_PERMISSION_MESSAGE } = await import("./guards");
 
 const FIXTURE = resolve(
 	__dirname,
@@ -195,7 +197,7 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 		return logic.applyEasySpeakImport({
 			clubId: seed.clubId,
 			importId,
-			superadminUserId: superadminId,
+			runner: { kind: "superadmin", userId: superadminId },
 			resolutions,
 			now,
 		});
@@ -1428,7 +1430,7 @@ EXECUTE FUNCTION zz_claim_slot()`),
 			logic.applyEasySpeakImport({
 				clubId: seed.clubId,
 				importId: stored.importId,
-				superadminUserId: superadminId,
+				runner: { kind: "superadmin", userId: superadminId },
 				resolutions,
 				planHash: preview.planHash,
 				now: NOW,
@@ -1446,7 +1448,7 @@ EXECUTE FUNCTION zz_claim_slot()`),
 		const { report } = await logic.applyEasySpeakImport({
 			clubId: seed.clubId,
 			importId: stored.importId,
-			superadminUserId: superadminId,
+			runner: { kind: "superadmin", userId: superadminId },
 			resolutions,
 			planHash: fresh.planHash,
 			now: NOW,
@@ -1479,7 +1481,7 @@ EXECUTE FUNCTION zz_claim_slot()`),
 			logic.applyEasySpeakImport({
 				clubId: seed.clubId,
 				importId: stored.importId,
-				superadminUserId: superadminId,
+				runner: { kind: "superadmin", userId: superadminId },
 				resolutions,
 				planHash: preview.planHash,
 				now: NOW,
@@ -1599,5 +1601,488 @@ EXECUTE FUNCTION zz_claim_slot()`),
 		);
 		expect(row?.count).toBe(4);
 		expect(report.reconciled).toBe(true);
+	});
+
+	// ---------------------------------------------------------------------
+	// Self-serve import (#1492)
+	// ---------------------------------------------------------------------
+
+	const adminRunner = () =>
+		({
+			kind: "admin",
+			userId: seed.adminUserId,
+			actorMemberId: seed.adminMemberId,
+			impersonatedBy: null,
+		}) as const;
+
+	/** The fixture, from another Easy-Speak club, with a name and number of our choosing. */
+	function bundleFrom(club: {
+		esClubId: string;
+		name: string;
+		number: string | null;
+	}): string {
+		const bundle = JSON.parse(bundleText()) as EasySpeakBundleV1;
+		bundle.club = { ...bundle.club, ...club };
+		return JSON.stringify(bundle);
+	}
+
+	async function historyImportedRows() {
+		return testDb
+			.select({
+				actorMemberId: activityLog.actorMemberId,
+				impersonatedBy: activityLog.impersonatedBy,
+				detail: activityLog.detail,
+			})
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, seed.clubId),
+					eq(activityLog.action, "history_imported"),
+				),
+			);
+	}
+
+	// protects=an apply a club admin runs is credited to that admin's membership
+	// with no impersonation, one a superadmin runs stays memberless and credited
+	// through impersonated_by (every activity_log row of the apply);
+	// fails_when=the runner is dropped back to a bare superadmin id, or the admin
+	// is credited as an impersonator;
+	// no_claim=the member_add rows (no created member in this fixture).
+	it("attributes an admin's apply to the admin and a superadmin's to the superadmin", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await logic.applyEasySpeakImport({
+			clubId: seed.clubId,
+			importId: stored.importId,
+			runner: adminRunner(),
+			resolutions,
+			now: NOW,
+		});
+		expect(await historyImportedRows()).toEqual([
+			expect.objectContaining({
+				actorMemberId: seed.adminMemberId,
+				impersonatedBy: null,
+			}),
+		]);
+		await testDb.delete(activityLog).where(eq(activityLog.clubId, seed.clubId));
+		await apply(stored.importId, resolutions);
+		expect(await historyImportedRows()).toEqual([
+			expect.objectContaining({
+				actorMemberId: null,
+				impersonatedBy: superadminId,
+			}),
+		]);
+	});
+
+	// protects=an admin whose officer term closed after the gate passed but before
+	// the import lock was taken writes nothing (#806);
+	// fails_when=assertStillClubAdmin is not asked after the lock;
+	// no_claim=the up-front gate (the authz integration test).
+	it("writes nothing for an admin who is no longer one once the lock is taken", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		const [term] = await testDb
+			.insert(officerTerms)
+			.values({
+				membershipId: seed.memberId,
+				position: "vp_education",
+				termStart: new Date("2026-01-01T00:00:00Z"),
+				termEnd: null,
+			})
+			.returning({ id: officerTerms.id });
+		const runner = {
+			kind: "admin",
+			userId: seed.memberUserId,
+			actorMemberId: seed.memberId,
+			impersonatedBy: null,
+		} as const;
+		await testDb
+			.update(officerTerms)
+			.set({ termEnd: new Date("2026-02-01T00:00:00Z") })
+			.where(eq(officerTerms.id, term?.id as string));
+		const before = await counts();
+		await expect(
+			logic.applyEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				runner,
+				resolutions,
+				now: NOW,
+			}),
+		).rejects.toThrow(NO_PERMISSION_MESSAGE);
+		expect(await counts()).toEqual(before);
+		expect(await historyImportedRows()).toEqual([]);
+	});
+
+	// protects=the two follow-up steps re-ask the admin question after THEIR lock
+	// too (#806): an admin whose term closed since the apply writes no speech
+	// request and no pairing;
+	// fails_when=either step takes the lock without re-checking the runner;
+	// no_claim=what the steps write for a current admin (their own suites).
+	it("refuses the speech-request and mentor steps for an admin who lapsed", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await apply(stored.importId, resolutions);
+		const [term] = await testDb
+			.insert(officerTerms)
+			.values({
+				membershipId: seed.memberId,
+				position: "vp_education",
+				termStart: new Date("2026-01-01T00:00:00Z"),
+				termEnd: new Date("2026-02-01T00:00:00Z"),
+			})
+			.returning({ id: officerTerms.id });
+		expect(term).toBeDefined();
+		const runner = {
+			kind: "admin",
+			userId: seed.memberUserId,
+			actorMemberId: seed.memberId,
+			impersonatedBy: null,
+		} as const;
+		await expect(
+			logic.importSpeechRequests({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				runner,
+				now: NOW,
+			}),
+		).rejects.toThrow(NO_PERMISSION_MESSAGE);
+		const { importMentorPairs } = await import("./mentor-import-logic");
+		await expect(
+			importMentorPairs({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				runner,
+			}),
+		).rejects.toThrow(NO_PERMISSION_MESSAGE);
+		expect(
+			(await historyImportedRows()).filter(
+				(r) => (r.detail as { step?: string }).step !== undefined,
+			),
+		).toEqual([]);
+	});
+
+	describe("contacts parity (#1492)", () => {
+		let otherClub: SeededClub;
+		beforeEach(async () => {
+			otherClub = await seedClub();
+		});
+		afterEach(async () => {
+			await cleanup(otherClub.clubId, [
+				otherClub.adminUserId,
+				otherClub.memberUserId,
+			]);
+		});
+
+		const personOf = async (name: string) => {
+			const [row] = await testDb
+				.select({ id: members.personId })
+				.from(members)
+				.where(and(eq(members.clubId, seed.clubId), eq(members.name, name)))
+				.limit(1);
+			return row?.id as string;
+		};
+		const emailOf = async (name: string) => {
+			const [row] = await testDb
+				.select({ email: people.email })
+				.from(people)
+				.where(eq(people.id, await personOf(name)));
+			return row?.email ?? null;
+		};
+		/** Put a Person on another club's roster. */
+		const holdInOtherClub = async (personId: string) => {
+			await testDb.insert(members).values({
+				clubId: otherClub.clubId,
+				personId,
+				name: "Held Elsewhere",
+				clubRole: "member",
+				status: "active",
+			});
+		};
+
+		// protects=the preview's "already on another member" warning is about THIS
+		// club's roster: an address held by a Person on another club's roster alone
+		// raises none, one held by a member of this club does, and neither names a
+		// club or a holder;
+		// fails_when=loadContactState reads every Person in the database;
+		// no_claim=what the apply does with the address (the next tests).
+		it("scopes the preview's holder warning to this club's members", async () => {
+			const [outsiderPerson] = await testDb
+				.insert(people)
+				.values({ name: "Outsider", email: "outsider@example.test" })
+				.returning({ id: people.id });
+			await holdInOtherClub(outsiderPerson?.id as string);
+			await testDb
+				.update(people)
+				.set({ email: "taken@example.test" })
+				.where(eq(people.id, await personOf("Jules Valewood")));
+			const stored = await upload();
+			const preview = await logic.previewEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				contacts: `Elliot Tansley, outsider@example.test, \nParker Vexford, taken@example.test, `,
+				now: NOW,
+			});
+			expect(preview.contacts.warnings).toEqual([
+				"An email in row 2 is already on another member of this club; left blank for Parker Vexford.",
+			]);
+			expect(preview.contacts.emails).toBe(1);
+		});
+
+		// protects=a linked member whose Person belongs to another club (or has
+		// signed in) is planned no email fill, the preview says why, and the apply
+		// leaves people.email blank; a sole-holder unbound member still gets the fill
+		// in preview and in apply;
+		// fails_when=the plan promises a fill the apply's UPDATE then skips, or the
+		// control stops being filled;
+		// no_claim=the member edit itself (#907's own tests).
+		it("plans and writes an email fill only where the member-edit rule allows it", async () => {
+			await holdInOtherClub(await personOf("Elliot Tansley"));
+			const [signedIn] = await testDb
+				.insert(user)
+				.values({
+					id: randomUUID(),
+					name: "S",
+					email: `signed-${randomUUID()}@test.example`,
+					emailVerified: true,
+				})
+				.returning({ id: user.id });
+			extraUsers.push(signedIn?.id as string);
+			await testDb
+				.update(people)
+				.set({ userId: signedIn?.id as string })
+				.where(eq(people.id, await personOf("Kai Larkspur")));
+			const contacts = [
+				"Elliot Tansley, tansley@example.test, ",
+				"Kai Larkspur, kai@example.test, ",
+				"Parker Vexford, parker@example.test, ",
+			].join("\n");
+			const stored = await upload();
+			const { resolutions } = await resolveAll(stored.importId);
+			const preview = await logic.previewEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				resolutions,
+				contacts,
+				now: NOW,
+			});
+			expect(preview.contacts.emails).toBe(1);
+			expect(preview.contacts.warnings).toEqual([
+				"The email in row 1 was left blank for Elliot Tansley: the person has a GavelUp account or belongs to another club, so it is theirs to add.",
+				"The email in row 2 was left blank for Kai Larkspur: the person has a GavelUp account or belongs to another club, so it is theirs to add.",
+			]);
+			await logic.applyEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				runner: adminRunner(),
+				resolutions,
+				contacts,
+				planHash: preview.planHash,
+				now: NOW,
+			});
+			expect(await emailOf("Elliot Tansley")).toBeNull();
+			expect(await emailOf("Kai Larkspur")).toBeNull();
+			expect(await emailOf("Parker Vexford")).toBe("parker@example.test");
+		});
+
+		// protects=an address held by a Person outside the club is left blank at
+		// apply with exactly one neutral sentence, and nothing in the stored report
+		// names another club, a holder count or whether the holder signed in;
+		// fails_when=the note leaks, or the write overwrites the holder's address;
+		// no_claim=a created member (the one-upload suite covers that arm).
+		it("leaves an address held outside the club blank with one neutral note", async () => {
+			const [outsider] = await testDb
+				.insert(people)
+				.values({ name: "Outsider", email: "outsider@example.test" })
+				.returning({ id: people.id });
+			await holdInOtherClub(outsider?.id as string);
+			const stored = await upload();
+			const { resolutions } = await resolveAll(stored.importId);
+			const { report } = await logic.applyEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				runner: adminRunner(),
+				resolutions,
+				contacts: "Elliot Tansley, outsider@example.test, ",
+				now: NOW,
+			});
+			expect(report.contactNotes).toEqual([
+				"The email in row 1 was left blank for Elliot Tansley: that address is already in use in GavelUp.",
+			]);
+			expect(await emailOf("Elliot Tansley")).toBeNull();
+			expect(JSON.stringify(report)).not.toMatch(
+				/another club|signed in|account/iu,
+			);
+		});
+	});
+
+	describe("club binding (#1492)", () => {
+		const X = { esClubId: "4242", name: "Fixture Speakers", number: "9999" };
+		const Y = { esClubId: "7777", name: "Other Speakers", number: "7777" };
+		const rowsStored = async () => {
+			const [row] = await testDb
+				.select({ n: count() })
+				.from(clubImports)
+				.where(eq(clubImports.clubId, seed.clubId));
+			return Number(row?.n);
+		};
+
+		// protects=once a club's first import is applied, a bundle from another
+		// Easy-Speak club is refused at upload (nothing stored) and a bundle from
+		// the same club is accepted; one stored BEFORE the apply is refused at apply
+		// and writes nothing;
+		// fails_when=the esClubId comparison is gone from either site;
+		// no_claim=a superadmin override (next test).
+		it("refuses a bundle from another Easy-Speak club at upload and at apply", async () => {
+			const early = await upload(bundleFrom(Y));
+			const x = await upload(bundleFrom(X));
+			const { resolutions } = await resolveAll(x.importId);
+			await apply(x.importId, resolutions);
+			const stored = await rowsStored();
+			await expect(upload(bundleFrom({ ...Y, name: "Third" }))).rejects.toThrow(
+				"This export is from Third, not Fixture Speakers, the Easy-Speak club this club was imported from.",
+			);
+			expect(await rowsStored()).toBe(stored);
+			const before = await counts();
+			await expect(apply(early.importId, resolutions)).rejects.toThrow(
+				"This export is from Other Speakers, not Fixture Speakers, the Easy-Speak club this club was imported from.",
+			);
+			expect(await counts()).toEqual(before);
+			await expect(
+				upload(bundleFrom({ ...X, name: "Renamed" })),
+			).resolves.toMatchObject({ reused: false });
+		});
+
+		// protects=a superadmin's override imports a mismatched bundle and the
+		// apply's activity row says so; without the flag the same apply is refused;
+		// fails_when=the override is ignored, or is not recorded;
+		// no_claim=that a club admin cannot pass the flag (the authz test).
+		it("lets a superadmin override the binding and records it", async () => {
+			const x = await upload(bundleFrom(X));
+			const { resolutions } = await resolveAll(x.importId);
+			await apply(x.importId, resolutions);
+			await expect(upload(bundleFrom(Y))).rejects.toThrow(
+				/This export is from/,
+			);
+			const y = await logic.storeEasySpeakBundle({
+				clubId: seed.clubId,
+				uploadedByUserId: superadminId,
+				text: bundleFrom(Y),
+				overrideClubBinding: true,
+			});
+			await expect(apply(y.importId, resolutions)).rejects.toThrow(
+				/This export is from/,
+			);
+			await logic.applyEasySpeakImport({
+				clubId: seed.clubId,
+				importId: y.importId,
+				runner: { kind: "superadmin", userId: superadminId },
+				resolutions,
+				overrideClubBinding: true,
+				now: NOW,
+			});
+			const rows = await historyImportedRows();
+			expect(
+				rows.filter(
+					(r) =>
+						(r.detail as { overrodeClubBinding?: boolean }).overrodeClubBinding,
+				),
+			).toHaveLength(1);
+		});
+
+		// protects=before any import, the number on both sides must agree after
+		// trimming and stripping leading zeros, and either side null is accepted;
+		// fails_when=the normalization is dropped (0012345 refused) or the check
+		// compares raw strings;
+		// no_claim=the bound arm (above).
+		it("compares club numbers by value on the first import", async () => {
+			await testDb
+				.update(clubs)
+				.set({ clubNumber: "12345" })
+				.where(eq(clubs.id, seed.clubId));
+			await expect(
+				upload(bundleFrom({ ...X, number: "0012345" })),
+			).resolves.toMatchObject({ reused: false });
+			await expect(
+				upload(bundleFrom({ ...X, number: "67890" })),
+			).rejects.toThrow(
+				"This export is from Easy-Speak club Fixture Speakers (#67890), but this club's number is 12345.",
+			);
+			await expect(
+				upload(bundleFrom({ ...X, number: null })),
+			).resolves.toMatchObject({ reused: false });
+			await testDb
+				.update(clubs)
+				.set({ clubNumber: null })
+				.where(eq(clubs.id, seed.clubId));
+			await expect(
+				upload(bundleFrom({ ...X, number: "55555" })),
+			).resolves.toMatchObject({ reused: false });
+		});
+
+		// protects=the first import's preview leads with the Easy-Speak club -> this
+		// club, and a later import's does not;
+		// fails_when=the line shows after the club is bound, or never;
+		// no_claim=how the panel words it (the component test).
+		it("shows the binding in the first preview only", async () => {
+			const x = await upload(bundleFrom(X));
+			const { preview, resolutions } = await resolveAll(x.importId);
+			expect(preview.binding).toEqual({
+				esName: "Fixture Speakers",
+				esNumber: "9999",
+				clubName: "Test Club",
+			});
+			await apply(x.importId, resolutions);
+			const after = await logic.previewEasySpeakImport({
+				clubId: seed.clubId,
+				importId: x.importId,
+				now: NOW,
+			});
+			expect(after.binding).toBeNull();
+		});
+	});
+});
+
+// The number rules are pure: they run without a database.
+describe("bundleClubMismatch (#1492)", () => {
+	const bundleClub = { esClubId: "1", name: "Alpha", number: "0012345" };
+	it("accepts a number that differs only by leading zeros and refuses a different one", () => {
+		expect(logic.bundleClubMismatch(bundleClub, "12345", null)).toBeNull();
+		expect(logic.bundleClubMismatch(bundleClub, " 12345 ", null)).toBeNull();
+		expect(logic.bundleClubMismatch(bundleClub, "67890", null)).toBe(
+			"This export is from Easy-Speak club Alpha (#0012345), but this club's number is 67890.",
+		);
+	});
+	it("accepts either side without a number", () => {
+		expect(
+			logic.bundleClubMismatch({ ...bundleClub, number: null }, "1", null),
+		).toBeNull();
+		expect(logic.bundleClubMismatch(bundleClub, null, null)).toBeNull();
+	});
+	it("once bound, compares only the Easy-Speak club id, never the number", () => {
+		const bound = { esClubId: "1", name: "Alpha", number: null };
+		expect(
+			logic.bundleClubMismatch({ ...bundleClub, number: "9" }, "5", bound),
+		).toBeNull();
+		expect(
+			logic.bundleClubMismatch(
+				{ ...bundleClub, esClubId: "2" },
+				"12345",
+				bound,
+			),
+		).toBe(
+			"This export is from Alpha, not Alpha, the Easy-Speak club this club was imported from.",
+		);
+	});
+	it("the override skips both checks and reports that it did", () => {
+		expect(
+			logic.assertBundleMatchesClub(bundleClub, "67890", null, true),
+		).toEqual({ overrode: true });
+		expect(() =>
+			logic.assertBundleMatchesClub(bundleClub, "67890", null, false),
+		).toThrow(/This export is from/);
+		expect(
+			logic.assertBundleMatchesClub(bundleClub, "12345", null, true),
+		).toEqual({ overrode: false });
 	});
 });

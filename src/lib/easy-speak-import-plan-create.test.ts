@@ -295,16 +295,21 @@ describe("pasted contacts (#1240)", () => {
 		}));
 	const withState = (
 		contacts: string,
-		memberState: Array<[string, string | null, string | null]> = [],
+		memberState: Array<[string, string | null, string | null, boolean?]> = [],
 		emailHolders: Array<[string, string[]]> = [],
 	) =>
 		ctx({
 			contacts,
 			contactState: {
 				members: new Map(
-					memberState.map(([memberId, email, phone]) => [
+					memberState.map(([memberId, email, phone, emailWritable = true]) => [
 						memberId,
-						{ personId: `person-of-${memberId}`, email, phone },
+						{
+							personId: `person-of-${memberId}`,
+							email,
+							phone,
+							emailWritable,
+						},
 					]),
 				),
 				emailHolders: new Map(
@@ -418,8 +423,63 @@ describe("pasted contacts (#1240)", () => {
 		});
 		expect(fillFor("Ada Linked")?.email).toBe("ada@example.com");
 		expect(plan.contactWarnings).toEqual([
-			"An email in row 1 already belongs to someone else; left blank for New Person.",
+			"An email in row 1 is already on another member of this club; left blank for New Person.",
 		]);
+	});
+
+	// protects=the preview promises an email fill only where the apply's UPDATE
+	// would perform it (#907: nobody signed in as the Person, this club the sole
+	// holder); a phone is unaffected;
+	// fails_when=a linked member whose Person is signed in or in another club is
+	// planned an email fill the apply then skips;
+	// no_claim=`emailWritable` itself is computed by the SQL in loadContactState
+	// (the integration test); here it is injected.
+	it("plans no email fill for a linked member whose email is not writable, and says why", () => {
+		const bundle = bundleWith({ holders: holders("Ada Linked") });
+		const plan = buildImportPlan(
+			bundle,
+			withState("Ada Linked, ada@example.com, 555-0199", [
+				[ADA.memberId, null, null, false],
+			]),
+		);
+		expect(plan.contactFills).toHaveLength(1);
+		expect(plan.contactFills[0]).toMatchObject({
+			email: null,
+			phone: "555-0199",
+		});
+		expect(plan.contactWarnings).toEqual([
+			"The email in row 1 was left blank for Ada Linked: the person has a GavelUp account or belongs to another club, so it is theirs to add.",
+		]);
+	});
+
+	// protects=a sole-holder unbound member with a blank email still gets the fill;
+	// fails_when=the writable check refuses every linked member;
+	// no_claim=the same injected state as above.
+	it("plans the email fill for a linked member whose email is writable", () => {
+		const bundle = bundleWith({ holders: holders("Ada Linked") });
+		const plan = buildImportPlan(
+			bundle,
+			withState("Ada Linked, ada@example.com, ", [
+				[ADA.memberId, null, null, true],
+			]),
+		);
+		expect(plan.contactFills[0]?.email).toBe("ada@example.com");
+		expect(plan.contactWarnings).toEqual([]);
+	});
+
+	// protects=a member who already holds an email gets no "theirs to add" note
+	// (they keep what they have, silently, as before);
+	// fails_when=the new warning fires for a member with an existing email;
+	// no_claim=none beyond protects.
+	it("does not warn about an unwritable email for a member who already has one", () => {
+		const bundle = bundleWith({ holders: holders("Ada Linked") });
+		const plan = buildImportPlan(
+			bundle,
+			withState("Ada Linked, ada@example.com, ", [
+				[ADA.memberId, "ada@old.example", null, false],
+			]),
+		);
+		expect(plan.contactWarnings).toEqual([]);
 	});
 
 	// protects=no contacts means no fills and no warnings;

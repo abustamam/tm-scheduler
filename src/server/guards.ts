@@ -619,6 +619,77 @@ export async function requireSuperadmin(userId: string) {
 }
 
 /**
+ * Who is running an Easy-Speak history import (#1492), and how to attribute what
+ * they write. A superadmin is memberless in the club and is credited through the
+ * impersonation column; a club admin is credited as themselves. A read-write
+ * impersonation resolves as `kind: "admin"` with a null `actorMemberId`.
+ */
+export type HistoryImportRunner =
+	| { kind: "superadmin"; userId: string }
+	| {
+			kind: "admin";
+			userId: string;
+			actorMemberId: string | null;
+			impersonatedBy: string | null;
+	  };
+
+/** The `logActivity` actor columns for a write the import makes on `runner`'s behalf. */
+export function runnerAttribution(runner: HistoryImportRunner): {
+	actorMemberId: string | null;
+	impersonatedBy: string | null;
+} {
+	return runner.kind === "admin"
+		? {
+				actorMemberId: runner.actorMemberId,
+				impersonatedBy: runner.impersonatedBy,
+			}
+		: { actorMemberId: null, impersonatedBy: runner.userId };
+}
+
+/**
+ * Who may run the Easy-Speak history import for a club: a superadmin, or
+ * `requireClubRole(userId, clubId, ["admin"])` (a stored admin, an open officer
+ * term, a read-write impersonation; an archived club and a read-only
+ * impersonation are refused). Throws that gate's message. Superadmin is asked
+ * first, so a superadmin who is also a member is `kind: "superadmin"`.
+ */
+export async function requireHistoryImportRunner(
+	userId: string,
+	clubId: string,
+): Promise<HistoryImportRunner> {
+	const [row] = await db
+		.select({ isSuperadmin: user.isSuperadmin })
+		.from(user)
+		.where(eq(user.id, userId))
+		.limit(1);
+	if (row?.isSuperadmin) return { kind: "superadmin", userId };
+	const membership = await requireClubRole(userId, clubId, ["admin"]);
+	return {
+		kind: "admin",
+		userId,
+		actorMemberId: membership.id,
+		impersonatedBy: membership.impersonatedBy ?? null,
+	};
+}
+
+/**
+ * The non-throwing form of {@link requireHistoryImportRunner}, for affordances
+ * (the nav entry, #1498's `canRunImport`). It calls the same function and
+ * catches: it is not a second statement of the rule.
+ */
+export async function mayRunHistoryImport(
+	userId: string,
+	clubId: string,
+): Promise<boolean> {
+	try {
+		await requireHistoryImportRunner(userId, clubId);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Gate a per-meeting agenda write (meta edit + slot management). Allowed when
  * the current session is a club `admin` OR the self-asserted `selfMemberId`
  * holds the meeting's TMOD slot (ADR-0010). Throws when neither path applies.

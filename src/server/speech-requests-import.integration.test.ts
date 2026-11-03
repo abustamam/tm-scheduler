@@ -134,7 +134,7 @@ describe.skipIf(!hasTestDb)("speech-request import (#1052)", () => {
 		return logic.importSpeechRequests({
 			clubId: seed.clubId,
 			importId,
-			superadminUserId: superadminId,
+			runner: { kind: "superadmin", userId: superadminId },
 		});
 	}
 
@@ -342,7 +342,7 @@ describe.skipIf(!hasTestDb)("speech-request import (#1052)", () => {
 				logic.importSpeechRequests({
 					clubId: other.clubId,
 					importId,
-					superadminUserId: superadminId,
+					runner: { kind: "superadmin", userId: superadminId },
 				}),
 			).rejects.toThrow();
 			const stray = await testDb

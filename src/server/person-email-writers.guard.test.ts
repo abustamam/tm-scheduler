@@ -50,7 +50,9 @@ const BINDER_FN = "bindVerifiedPerson";
 /**
  * Writers that set `people.email` outside the bind, each keyed by the FUNCTION
  * that does it and carrying the number of write sites its file is allowed. Both
- * are SUPERADMIN-ONLY and unreachable by a club officer.
+ * are unreachable by a club officer, except `fillMemberContact`, which a club
+ * admin of the club can reach through the Easy-Speak import (#1492) and which
+ * therefore carries the member-edit predicates (#907).
  *
  * Keyed per function and per COUNT on purpose: the test this one replaces waived
  * whole files, so a second `update(people).set({ email })` added anywhere inside
@@ -160,7 +162,10 @@ const WAIVERS: Array<{
 		requiresUnlinkedGuard: true,
 		requiresSoleHolder: true,
 	},
-	// The Easy-Speak importer's fill-only address (#1240). Superadmin-only.
+	// The Easy-Speak importer's fill-only address (#1240). Reachable by a club
+	// admin of that club as well as a superadmin (#1492), so it follows the
+	// member-edit rule (#907) in its own statement: BOTH predicates below are
+	// required, and the plan (`placeContacts`, `emailWritable`) mirrors them.
 	{
 		file: "server/history-import-logic.ts",
 		fn: "fillMemberContact",

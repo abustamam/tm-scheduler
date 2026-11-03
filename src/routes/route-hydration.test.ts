@@ -197,6 +197,7 @@ const COVERED: Record<string, { who: Who; url: (f: Fixture) => string }> = {
 	"/admin/club-settings": { who: "admin", url: () => "/admin/club-settings" },
 	"/admin/dcp": { who: "admin", url: () => "/admin/dcp" },
 	"/admin/dues": { who: "admin", url: () => "/admin/dues" },
+	"/admin/import-history": { who: "admin", url: () => "/admin/import-history" },
 	"/admin/pathways-sync": { who: "admin", url: () => "/admin/pathways-sync" },
 	"/admin/roles": { who: "admin", url: () => "/admin/roles" },
 	"/admin/schedule": { who: "admin", url: () => "/admin/schedule" },
