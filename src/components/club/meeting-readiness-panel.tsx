@@ -1,10 +1,20 @@
 import { Link } from "@tanstack/react-router";
-import { Circle, CircleCheck, Presentation, Share2 } from "lucide-react";
+import {
+	Circle,
+	CircleCheck,
+	MessageCircle,
+	Presentation,
+	Share2,
+} from "lucide-react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { droppedAt } from "#/components/club/cover-chip";
 import { Button } from "#/components/ui/button";
 import { buildCoverCall, coverLink } from "#/lib/cover";
 import type { MeetingReadiness, ReadinessGap } from "#/lib/meeting-readiness";
+import { buildNudge, toastmasterScriptUrl } from "#/lib/nudge";
+import { detectPlatform } from "#/lib/platform";
+import type { FirstTimeToastmaster } from "#/server/first-time-toastmaster-logic";
 
 /** How many gaps a row names before it says "+N more". The data never truncates. */
 const MAX_GAPS_SHOWN = 3;
@@ -33,7 +43,10 @@ function coverNote(
  * `share`, but there the button says "Copy"), the clipboard otherwise. A person
  * sends it; nothing here does.
  */
-async function shareCoverCall(text: string): Promise<void> {
+async function shareCoverCall(
+	text: string,
+	copiedMessage = "Copied. Paste it to the group.",
+): Promise<void> {
 	try {
 		const onPhone =
 			typeof navigator.share === "function" &&
@@ -44,12 +57,78 @@ async function shareCoverCall(text: string): Promise<void> {
 			return;
 		}
 		await navigator.clipboard.writeText(text);
-		toast.success("Copied. Paste it to the group.");
+		toast.success(copiedMessage);
 	} catch (err) {
 		// Closing the share sheet is a choice, not a failure.
 		if (err instanceof DOMException && err.name === "AbortError") return;
 		toast.error("Couldn't copy. Your browser blocked clipboard access");
 	}
+}
+
+/**
+ * "{Name}'s first time as Toastmaster here", with a drafted note to send them
+ * (#1481). A NOTE, not a readiness item: it never changes `ready` and shows in
+ * both states of the panel. The draft is copied, or opened in WhatsApp when the
+ * member has a phone; a person sends it, nothing here does (ADR-0028).
+ */
+function FirstTimeToastmasterRow({
+	note,
+	clubId,
+	meetingId,
+	meetingDate,
+}: {
+	note: FirstTimeToastmaster;
+	clubId: string;
+	meetingId: string;
+	meetingDate: string;
+}) {
+	// Same hydration rule as `NudgeButtons`: the server pass cannot know the
+	// platform, so detection waits for the first client render.
+	const [mounted, setMounted] = useState(false);
+	useEffect(() => setMounted(true), []);
+	const origin = mounted ? window.location.origin : "";
+	const draft = buildNudge({
+		mode: "firstTimeToastmaster",
+		name: note.name,
+		preferredName: note.preferredName,
+		phone: note.phone,
+		meetingDate,
+		scriptUrl: toastmasterScriptUrl(origin, { clubId, meetingId }),
+		platform: mounted ? detectPlatform(navigator) : "mobile",
+	});
+	return (
+		<div
+			data-testid="first-time-toastmaster-note"
+			className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-sm"
+		>
+			<p className="min-w-0 break-words">
+				{note.preferredName}'s first time as Toastmaster here.
+			</p>
+			{draft.whatsappUrl ? (
+				<Button asChild variant="outline" size="sm">
+					<a href={draft.whatsappUrl} target="_blank" rel="noopener noreferrer">
+						<MessageCircle className="size-4" aria-hidden />
+						Note to {note.preferredName}
+					</a>
+				</Button>
+			) : (
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					onClick={() =>
+						shareCoverCall(
+							draft.message,
+							`Copied. Send it to ${note.preferredName}.`,
+						)
+					}
+				>
+					<Share2 className="size-4" aria-hidden />
+					Note to {note.preferredName}
+				</Button>
+			)}
+		</div>
+	);
 }
 
 /**
@@ -76,6 +155,7 @@ export function MeetingReadinessPanel({
 	clubId,
 	meetingId,
 	timezone,
+	firstTime,
 }: {
 	readiness: MeetingReadiness;
 	/** The club slug the route links with. */
@@ -84,7 +164,31 @@ export function MeetingReadinessPanel({
 	meetingId: string;
 	/** The club's zone, for the "dropped it Tue 9:14pm" note. */
 	timezone: string;
+	/** The first-time Toastmaster note's inputs (#1481). The payload carries
+	 *  `note` for officers only, and this component re-checks who is looking. */
+	firstTime?: {
+		note: FirstTimeToastmaster | null;
+		/** An admin outside preview: the only viewer the note is for. The panel
+		 *  also opens for the Toastmaster, who must not see it. */
+		isOfficer: boolean;
+		/** The viewer's own member id; an officer who IS the first-timer does not
+		 *  see the note about themselves. */
+		viewerMemberId: string | null;
+		/** The meeting's date as a draft reads it (`footerDate`). */
+		meetingDate: string;
+	};
 }) {
+	const firstTimeNote =
+		firstTime?.note &&
+		firstTime.isOfficer &&
+		firstTime.viewerMemberId !== firstTime.note.memberId ? (
+			<FirstTimeToastmasterRow
+				note={firstTime.note}
+				clubId={clubId}
+				meetingId={meetingId}
+				meetingDate={firstTime.meetingDate}
+			/>
+		) : null;
 	// Built the way `MeetingToolbar`'s Present link is: the same route, the same
 	// params (the route's club slug and URL meeting key) and a new tab, so the
 	// meeting page stays where the reader left it. Nothing ties the two call
@@ -107,13 +211,16 @@ export function MeetingReadinessPanel({
 			<section
 				aria-label="Meeting readiness"
 				data-testid="meeting-readiness-panel"
-				className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-lg border bg-card px-4 py-3"
+				className="space-y-2 rounded-lg border bg-card px-4 py-3"
 			>
-				<p className="flex min-w-0 items-center gap-2 text-sm font-semibold">
-					<CircleCheck className="size-4 shrink-0 text-success" aria-hidden />
-					Everything's set for this meeting
-				</p>
-				{deckLink}
+				<div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+					<p className="flex min-w-0 items-center gap-2 text-sm font-semibold">
+						<CircleCheck className="size-4 shrink-0 text-success" aria-hidden />
+						Everything's set for this meeting
+					</p>
+					{deckLink}
+				</div>
+				{firstTimeNote}
 			</section>
 		);
 	}
@@ -220,6 +327,7 @@ export function MeetingReadinessPanel({
 					);
 				})}
 			</ul>
+			{firstTimeNote}
 			{deckLink}
 		</section>
 	);

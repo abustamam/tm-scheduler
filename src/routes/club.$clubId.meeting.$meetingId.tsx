@@ -343,6 +343,7 @@ function MeetingView() {
 		tableTopicsMaxSeconds,
 		clubRoles,
 		coverRequests,
+		firstTimeToastmaster,
 		pairedRoleDefinitionIds,
 		clubGuests,
 		hasJoinLink,
@@ -722,6 +723,15 @@ function MeetingView() {
 		meetingKey: urlKey,
 	};
 	const nudgeDate = footerDate(meeting.scheduledAt, timezone);
+	// The first-time Toastmaster note's inputs (#1481); the panel re-checks who
+	// is looking. `effectiveCanManage`, so an admin previewing as a member is no
+	// officer here.
+	const firstTimeContext = {
+		note: firstTimeToastmaster ?? null,
+		isOfficer: effectiveCanManage,
+		viewerMemberId: myId,
+		meetingDate: nudgeDate,
+	};
 	// What each member's role still owes, for the rail's confirm drafts (#667).
 	// Built from the SAME unfiltered `slots` array as `panelRoleByMemberId`
 	// below — both take a double-booked member's first slot, so the role the
@@ -1366,6 +1376,7 @@ function MeetingView() {
 							clubId={clubId}
 							meetingId={urlKey}
 							timezone={timezone}
+							firstTime={firstTimeContext}
 						/>
 					) : null}
 
