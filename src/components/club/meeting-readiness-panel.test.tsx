@@ -359,6 +359,8 @@ describe("first-time Toastmaster note (#1481)", () => {
 		expect(text).toContain("Hi Pat,");
 		expect(text).toContain("/club/downtown/meeting/2026-10-10/me/script");
 		expect(text).toContain("Sat, Oct 10");
+		// A one-to-one note, so the toast must not say "Paste it to the group".
+		expect(toast.success).toHaveBeenCalledWith("Copied. Send it to Pat.");
 		vi.unstubAllGlobals();
 	});
 

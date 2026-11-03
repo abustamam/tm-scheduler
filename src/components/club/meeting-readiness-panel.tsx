@@ -14,6 +14,7 @@ import { buildCoverCall, coverLink } from "#/lib/cover";
 import type { MeetingReadiness, ReadinessGap } from "#/lib/meeting-readiness";
 import { buildNudge, toastmasterScriptUrl } from "#/lib/nudge";
 import { detectPlatform } from "#/lib/platform";
+import type { FirstTimeToastmaster } from "#/server/first-time-toastmaster-logic";
 
 /** How many gaps a row names before it says "+N more". The data never truncates. */
 const MAX_GAPS_SHOWN = 3;
@@ -42,7 +43,10 @@ function coverNote(
  * `share`, but there the button says "Copy"), the clipboard otherwise. A person
  * sends it; nothing here does.
  */
-async function shareCoverCall(text: string): Promise<void> {
+async function shareCoverCall(
+	text: string,
+	copiedMessage = "Copied. Paste it to the group.",
+): Promise<void> {
 	try {
 		const onPhone =
 			typeof navigator.share === "function" &&
@@ -53,20 +57,12 @@ async function shareCoverCall(text: string): Promise<void> {
 			return;
 		}
 		await navigator.clipboard.writeText(text);
-		toast.success("Copied. Paste it to the group.");
+		toast.success(copiedMessage);
 	} catch (err) {
 		// Closing the share sheet is a choice, not a failure.
 		if (err instanceof DOMException && err.name === "AbortError") return;
 		toast.error("Couldn't copy. Your browser blocked clipboard access");
 	}
-}
-
-/** The member the server found to be a first-time Toastmaster (#1481). */
-export interface FirstTimeToastmasterNote {
-	memberId: string;
-	name: string;
-	preferredName: string;
-	phone: string | null;
 }
 
 /**
@@ -81,7 +77,7 @@ function FirstTimeToastmasterRow({
 	meetingId,
 	meetingDate,
 }: {
-	note: FirstTimeToastmasterNote;
+	note: FirstTimeToastmaster;
 	clubId: string;
 	meetingId: string;
 	meetingDate: string;
@@ -120,7 +116,12 @@ function FirstTimeToastmasterRow({
 					type="button"
 					variant="outline"
 					size="sm"
-					onClick={() => shareCoverCall(draft.message)}
+					onClick={() =>
+						shareCoverCall(
+							draft.message,
+							`Copied. Send it to ${note.preferredName}.`,
+						)
+					}
 				>
 					<Share2 className="size-4" aria-hidden />
 					Note to {note.preferredName}
@@ -166,7 +167,7 @@ export function MeetingReadinessPanel({
 	/** The first-time Toastmaster note's inputs (#1481). The payload carries
 	 *  `note` for officers only, and this component re-checks who is looking. */
 	firstTime?: {
-		note: FirstTimeToastmasterNote | null;
+		note: FirstTimeToastmaster | null;
 		/** An admin outside preview: the only viewer the note is for. The panel
 		 *  also opens for the Toastmaster, who must not see it. */
 		isOfficer: boolean;

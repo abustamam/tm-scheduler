@@ -4,17 +4,10 @@
 // and the client never imports it (server-bundle rule).
 import { and, asc, eq, isNotNull, lt, ne } from "drizzle-orm";
 import { db } from "#/db";
-import {
-	meetings,
-	members,
-	people,
-	roleDefinitions,
-	roleSlots,
-} from "#/db/schema";
+import { meetings, members, roleDefinitions, roleSlots } from "#/db/schema";
+import { TMOD_ROLE_KEY } from "#/lib/meeting-roles";
 import { greetingName } from "#/lib/person-name";
 import { contactKey, loadHolderContacts } from "./meeting-contacts-logic";
-
-export const TOASTMASTER_ROLE_KEY = "toastmaster_of_the_day";
 
 export interface FirstTimeToastmaster {
 	memberId: string;
@@ -55,7 +48,7 @@ export async function firstTimeToastmaster(
 		.where(
 			and(
 				eq(roleSlots.meetingId, meetingId),
-				eq(roleDefinitions.key, TOASTMASTER_ROLE_KEY),
+				eq(roleDefinitions.key, TMOD_ROLE_KEY),
 				isNotNull(roleSlots.assignedMemberId),
 			),
 		)
@@ -75,7 +68,7 @@ export async function firstTimeToastmaster(
 		.where(
 			and(
 				eq(roleSlots.assignedMemberId, memberId),
-				eq(roleDefinitions.key, TOASTMASTER_ROLE_KEY),
+				eq(roleDefinitions.key, TMOD_ROLE_KEY),
 				lt(meetings.scheduledAt, meeting.scheduledAt),
 				ne(meetings.status, "cancelled"),
 			),
@@ -83,10 +76,11 @@ export async function firstTimeToastmaster(
 		.limit(1);
 	if (earlier) return null;
 
+	// `members.name`, the same column the roster and `loadHolderContacts` read,
+	// so one page cannot show this person under two names.
 	const [person] = await db
-		.select({ name: people.name })
+		.select({ name: members.name })
 		.from(members)
-		.innerJoin(people, eq(people.id, members.personId))
 		.where(and(eq(members.id, memberId), eq(members.clubId, meeting.clubId)));
 	if (!person) return null;
 
