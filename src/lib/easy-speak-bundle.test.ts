@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-	type EasySpeakBundleV1,
-	easySpeakBundleV1Schema,
+	type EasySpeakBundleV2,
+	easySpeakUploadSchema,
 	isContactPageUrl,
 } from "./easy-speak-bundle";
 
@@ -28,27 +28,27 @@ const EXPECTED = resolve(FIXTURES, "bundle.expected.json");
 const read = (name: string): string =>
 	readFileSync(resolve(FIXTURES, name), "utf8");
 
-const load = (): EasySpeakBundleV1 =>
+const load = (): EasySpeakBundleV2 =>
 	JSON.parse(readFileSync(EXPECTED, "utf8"));
 
 const CONTACT_CASES: { url: string; expected: boolean }[] = JSON.parse(
 	read("contact-page-cases.json"),
 ).cases;
 
-describe("easySpeakBundleV1Schema", () => {
+describe("easySpeakUploadSchema", () => {
 	it("accepts the bundle the extension's parsers produce from the fixtures", () => {
-		const parsed = easySpeakBundleV1Schema.safeParse(load());
+		const parsed = easySpeakUploadSchema.safeParse(load());
 		expect(parsed.error?.issues ?? []).toEqual([]);
 		expect(parsed.success).toBe(true);
 	});
 
 	it("round-trips the bundle unchanged: the schema drops and adds nothing", () => {
 		const bundle = load();
-		expect(easySpeakBundleV1Schema.parse(bundle)).toEqual(bundle);
+		expect(easySpeakUploadSchema.parse(bundle)).toEqual(bundle);
 	});
 
 	it("covers each section the issue lists", () => {
-		const b = easySpeakBundleV1Schema.parse(load());
+		const b = easySpeakUploadSchema.parse(load());
 		expect(b.meetings.length).toBeGreaterThan(0);
 		expect(b.meetings.some((m) => m.awards.length === 3)).toBe(true);
 		expect(
@@ -72,7 +72,7 @@ describe("easySpeakBundleV1Schema", () => {
 	});
 
 	it("never carries memberlist.php or clubdata.php in raw", () => {
-		const b = easySpeakBundleV1Schema.parse(load());
+		const b = easySpeakUploadSchema.parse(load());
 		expect(b.raw.some((r) => isContactPageUrl(r.url))).toBe(false);
 	});
 
@@ -88,7 +88,7 @@ describe("easySpeakBundleV1Schema", () => {
 		// The fixture's `raw` is `[]` since #1235, so the page is written out here.
 		const page = { url, fetchedAt: "2026-10-13T12:00:00.000Z", html: "x" };
 		const bad = { ...b, raw: [...b.raw, page] };
-		const parsed = easySpeakBundleV1Schema.safeParse(bad);
+		const parsed = easySpeakUploadSchema.safeParse(bad);
 		expect(parsed.success).toBe(false);
 		expect(parsed.error?.issues[0]?.path).toEqual(["raw", b.raw.length, "url"]);
 	});
@@ -129,26 +129,35 @@ describe("easySpeakBundleV1Schema", () => {
 			evaluations: [],
 			raw: [],
 		};
-		expect(easySpeakBundleV1Schema.safeParse(empty).success).toBe(true);
+		expect(easySpeakUploadSchema.safeParse(empty).success).toBe(true);
 	});
 
 	it.each([
 		[
 			"another format",
-			(b: EasySpeakBundleV1) => ({ ...b, format: "gavelup.other" }),
+			(b: EasySpeakBundleV2) => ({ ...b, format: "gavelup.other" }),
 		],
-		["another version", (b: EasySpeakBundleV1) => ({ ...b, version: 2 })],
-		["no club", (b: EasySpeakBundleV1) => ({ ...b, club: undefined })],
+		["the old version", (b: EasySpeakBundleV2) => ({ ...b, version: 1 })],
+		["a newer version", (b: EasySpeakBundleV2) => ({ ...b, version: 3 })],
+		[
+			"no extensionVersion",
+			(b: EasySpeakBundleV2) => ({ ...b, extensionVersion: undefined }),
+		],
+		[
+			"an empty extensionVersion",
+			(b: EasySpeakBundleV2) => ({ ...b, extensionVersion: "" }),
+		],
+		["no club", (b: EasySpeakBundleV2) => ({ ...b, club: undefined })],
 		[
 			"a meeting time that is not a time",
-			(b: EasySpeakBundleV1) => ({
+			(b: EasySpeakBundleV2) => ({
 				...b,
 				meetings: [{ ...b.meetings[0], startsAt: "next Tuesday" }],
 			}),
 		],
 		[
 			"an attendance plan the contract does not have",
-			(b: EasySpeakBundleV1) => ({
+			(b: EasySpeakBundleV2) => ({
 				...b,
 				meetings: [
 					{
@@ -160,7 +169,7 @@ describe("easySpeakBundleV1Schema", () => {
 		],
 		[
 			"an award category the contract does not have",
-			(b: EasySpeakBundleV1) => ({
+			(b: EasySpeakBundleV2) => ({
 				...b,
 				meetings: [
 					{
@@ -174,7 +183,7 @@ describe("easySpeakBundleV1Schema", () => {
 		],
 		[
 			"a guest category the contract does not have",
-			(b: EasySpeakBundleV1) => ({
+			(b: EasySpeakBundleV2) => ({
 				...b,
 				meetings: [
 					{
@@ -186,14 +195,14 @@ describe("easySpeakBundleV1Schema", () => {
 		],
 		[
 			"a person with no name",
-			(b: EasySpeakBundleV1) => ({
+			(b: EasySpeakBundleV2) => ({
 				...b,
 				people: [{ ...b.people[0], name: undefined }],
 			}),
 		],
 		[
 			"a slot of zero",
-			(b: EasySpeakBundleV1) => ({
+			(b: EasySpeakBundleV2) => ({
 				...b,
 				meetings: [
 					{ ...b.meetings[1], roles: [{ ...b.meetings[1].roles[0], slot: 0 }] },
@@ -202,14 +211,12 @@ describe("easySpeakBundleV1Schema", () => {
 		],
 		[
 			"a joined date that is not a date",
-			(b: EasySpeakBundleV1) => ({
+			(b: EasySpeakBundleV2) => ({
 				...b,
 				people: [{ ...b.people[0], joined: "May 2025" }],
 			}),
 		],
 	])("rejects %s", (_name, mutate) => {
-		expect(easySpeakBundleV1Schema.safeParse(mutate(load())).success).toBe(
-			false,
-		);
+		expect(easySpeakUploadSchema.safeParse(mutate(load())).success).toBe(false);
 	});
 });

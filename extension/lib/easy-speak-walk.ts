@@ -37,7 +37,7 @@
  */
 import {
 	type AssembleInput,
-	type EasySpeakBundleV1,
+	type EasySpeakBundleV2,
 	type EsArchiveV1,
 	type EsEvaluation,
 	type EsRawPage,
@@ -219,6 +219,8 @@ export interface WalkDeps {
 	owner: string;
 	/** The club and account exporting now, read from the live page, never from the store. */
 	identity: Identity;
+	/** The extension's own version, recorded in the bundle for diagnosis. */
+	extensionVersion: string;
 }
 
 export interface Progress {
@@ -404,7 +406,7 @@ export function followResume(initial: ResumeState, deps: FollowDeps): { cancel: 
 
 /** The upload bundle (`raw: []`) and the archive of raw pages, each with its file name. */
 export interface ExportResult {
-	bundle: EasySpeakBundleV1;
+	bundle: EasySpeakBundleV2;
 	fileName: string;
 	archive: EsArchiveV1;
 	archiveFileName: string;
@@ -842,6 +844,7 @@ async function walk(
 	}
 
 	const input: AssembleInput = {
+		extensionVersion: deps.extensionVersion,
 		exportedAt: new Date(now()).toISOString(),
 		exportedBy: clubPage.viewer.username ?? "",
 		club: {

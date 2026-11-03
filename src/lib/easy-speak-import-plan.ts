@@ -35,7 +35,7 @@
  */
 import { z } from "zod";
 import { zonedWallTimeToUtc } from "./datetime";
-import type { EasySpeakBundleV1, EsPersonRef } from "./easy-speak-bundle";
+import type { EasySpeakBundle, EsPersonRef } from "./easy-speak-bundle";
 import { ownRoleDisplayName, standardRoleKeyFor } from "./easy-speak-roles";
 import {
 	GUEST_KINDS,
@@ -46,7 +46,7 @@ import { type OfficerPosition, parseOfficerPosition } from "./officers";
 import { isValidEmail, parseRosterText } from "./roster-import";
 
 type EsGuestCategory =
-	EasySpeakBundleV1["meetings"][number]["guests"][number]["category"];
+	EasySpeakBundle["meetings"][number]["guests"][number]["category"];
 
 // ---------------------------------------------------------------------------
 // Names
@@ -484,7 +484,7 @@ function kindForCategories(categories: EsGuestCategory[]): GuestKind {
 
 /** The bundle's past meetings, with their instants, in date order. */
 export function pastMeetings(
-	bundle: EasySpeakBundleV1,
+	bundle: EasySpeakBundle,
 	now: Date,
 	clubTimezone: string,
 ) {
@@ -545,7 +545,7 @@ export function leftAloneReason(status: string): string {
 
 /** Build the plan. Never touches a database: everything it needs is in `ctx`. */
 export function buildImportPlan(
-	bundle: EasySpeakBundleV1,
+	bundle: EasySpeakBundle,
 	ctx: PlanContext,
 ): ImportPlan {
 	const { past: allPast, future } = pastMeetings(
@@ -1465,7 +1465,7 @@ export interface ExpectedRecords {
 
 /** What the bundle holds for the meetings an import covers, read the way the plan reads it. */
 export function expectedFromBundle(
-	bundle: EasySpeakBundleV1,
+	bundle: EasySpeakBundle,
 	now: Date,
 	clubTimezone: string,
 	/** Meetings the apply left alone: none of their records are expected. */
@@ -1527,7 +1527,7 @@ const NOT_IMPORTED_ID_CAP = 200;
 
 /** Everything in the bundle that is intentionally not imported, each with its reason. */
 export function notImportedFromBundle(
-	bundle: EasySpeakBundleV1,
+	bundle: EasySpeakBundle,
 	now: Date,
 	clubTimezone: string,
 	leftAlone: ReadonlySet<string> = new Set(),
@@ -1659,7 +1659,7 @@ function breakdown(
 
 /** The report: the bundle's counts against what the apply left, by source id. */
 export function buildReconciliation(input: {
-	bundle: EasySpeakBundleV1;
+	bundle: EasySpeakBundle;
 	bundleSha256: string;
 	now: Date;
 	clubTimezone: string;

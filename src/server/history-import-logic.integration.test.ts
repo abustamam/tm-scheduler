@@ -9,7 +9,7 @@
  *   bunx vitest run src/server/history-import-logic.integration.test.ts
  * (a bootstrapped worktree has its own database; without one this skips.)
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { and, count, eq, inArray, isNull, type SQL, sql } from "drizzle-orm";
@@ -307,6 +307,46 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 		const again = await upload();
 		expect(again).toMatchObject({ importId: first.importId, reused: true });
 		expect(await logic.listClubImports(seed.clubId)).toHaveLength(1);
+	});
+
+	it("a stored v1 row (no extensionVersion, inserted directly) still loads, previews and applies like the v2 upload", async () => {
+		// protects=every club_imports row on prod (all v1) still opening after the v2 bump; fails_when=loadStoredBundle parses stored rows with the upload schema only, or a v1 row previews or reconciles differently; no_claim=a real prod row (the fixture reshaped to v1)
+		const v2 = JSON.parse(bundleText()) as Record<string, unknown>;
+		const viaUpload = await upload();
+		const v1: Record<string, unknown> = { ...v2, version: 1 };
+		delete v1.extensionVersion;
+		const text = JSON.stringify(v1);
+		const [row] = await testDb
+			.insert(clubImports)
+			.values({
+				clubId: seed.clubId,
+				source: "easy_speak",
+				bundle: v1,
+				bundleSha256: createHash("sha256").update(text).digest("hex"),
+				uploadedByUserId: superadminId,
+			})
+			.returning({ id: clubImports.id });
+		const v1Id = row?.id as string;
+		const shape = (
+			p: Awaited<ReturnType<typeof logic.previewEasySpeakImport>>,
+		) => ({
+			counts: p.counts,
+			people: p.people.map((x) => x.key).sort(),
+		});
+		const fromV2 = await logic.previewEasySpeakImport({
+			clubId: seed.clubId,
+			importId: viaUpload.importId,
+			now: NOW,
+		});
+		const fromV1 = await logic.previewEasySpeakImport({
+			clubId: seed.clubId,
+			importId: v1Id,
+			now: NOW,
+		});
+		expect(shape(fromV1)).toEqual(shape(fromV2));
+		const { resolutions } = await resolveAll(v1Id);
+		const { report } = await apply(v1Id, resolutions);
+		expect(report.reconciled).toBe(true);
 	});
 
 	it("refuses to apply while a person is unresolved, and writes nothing", async () => {

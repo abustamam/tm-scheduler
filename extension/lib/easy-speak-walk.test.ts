@@ -125,6 +125,7 @@ describe("the walk", () => {
 				identity: FIXTURE_IDENTITY,
 				sleep: c.sleep,
 				now: c.now,
+				extensionVersion: "0.0.0-test",
 			}),
 		).rejects.toThrow(/not a signed-in Easy-Speak page/);
 		expect([...store.data.keys()].some((k) => k.startsWith("page:"))).toBe(false);
@@ -298,6 +299,16 @@ describe("the archive file", () => {
 		expect(archiveFileName).toBe(fileName.replace(/\.json$/, "-pages.json"));
 		expect(archive.pages.map((p) => p.url).sort()).toEqual([...PRE_CHANGE_RAW_URLS].sort());
 		expect(archive.pages.some((p) => /view_meeting\.php/.test(p.url) && p.html.length > 0)).toBe(true);
+	});
+});
+
+describe("the bundle's format version (#1497)", () => {
+	it("is version 2 and records the injected extension version, right after format and version", async () => {
+		// protects=a stale or unversioned bundle the server would refuse; fails_when=version or extensionVersion is dropped or reordered; no_claim=the real manifest version (the test injects one)
+		const { bundle } = await setup().run();
+		expect(bundle.version).toBe(2);
+		expect(bundle.extensionVersion).toBe("0.0.0-test");
+		expect(Object.keys(bundle).slice(0, 3)).toEqual(["format", "version", "extensionVersion"]);
 	});
 });
 
