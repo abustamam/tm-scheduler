@@ -139,7 +139,7 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 	{ detail: "Prepared speech", section: "speech" },
 	{
 		detail:
-			"Calls for the {role:timer}'s report · opens voting for Best Speaker",
+			"Calls for the {role:timer}'s report · calls for votes for Best Speaker",
 		section: "voteSpeaker",
 	},
 	{
@@ -154,7 +154,7 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 	},
 	{
 		detail:
-			"Calls for the {role:timer}'s report · opens voting for Best Table Topics",
+			"Calls for the {role:timer}'s report · calls for votes for Best Table Topics",
 		section: "voteTableTopics",
 	},
 	{
@@ -182,7 +182,7 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 	{ detail: "Evaluates a speaker", section: "evaluation", id: "evaluation" },
 	{
 		detail:
-			"Calls for the {role:timer}'s report · opens voting for Best Evaluator",
+			"Calls for the {role:timer}'s report · calls for votes for Best Evaluator",
 		section: "voteEvaluator",
 	},
 	{
@@ -1378,7 +1378,7 @@ describe("vote-caller agreement — deck ⇄ run sheet (#363)", () => {
 	/** The three vote beats' rows, in order. */
 	const voteRows = (slots: AgendaSlot[], config: RunOfShowConfig) =>
 		expandRunSheet(slots, buildRunOfShow(config)).filter((r) =>
-			r.detail.includes("voting for Best"),
+			r.detail.includes("votes for Best"),
 		);
 
 	for (const { name, slots } of CASES) {

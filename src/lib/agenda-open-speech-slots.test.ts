@@ -163,7 +163,7 @@ const BOOKED_GOLDEN: [string, number, string][] = [
 	[
 		"Toastmaster of the Day · Tia",
 		1,
-		"Calls for the Timer's report · opens voting for Best Speaker",
+		"Calls for the Timer's report · calls for votes for Best Speaker",
 	],
 	[
 		"Toastmaster of the Day · Tia",
@@ -178,7 +178,7 @@ const BOOKED_GOLDEN: [string, number, string][] = [
 	[
 		"Table Topics Master · Tom",
 		1,
-		"Calls for the Timer's report · opens voting for Best Table Topics",
+		"Calls for the Timer's report · calls for votes for Best Table Topics",
 	],
 	["Table Topics Master · Tom", 0, "Introduces the General Evaluator: Gil"],
 	["General Evaluator · Gil", 0, "Introduces the speech evaluators"],
@@ -193,7 +193,7 @@ const BOOKED_GOLDEN: [string, number, string][] = [
 	[
 		"General Evaluator · Gil",
 		1,
-		"Calls for the Timer's report · opens voting for Best Evaluator",
+		"Calls for the Timer's report · calls for votes for Best Evaluator",
 	],
 	["General Evaluator · Gil", 2, "Evaluates the evaluators"],
 	[

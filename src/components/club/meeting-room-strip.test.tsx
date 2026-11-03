@@ -48,6 +48,7 @@ function ballot(open: boolean): Ballot {
 			best_table_topics: cat(false),
 		},
 		digitalVotingOff: false,
+		opensAt: null,
 	} as Ballot;
 }
 

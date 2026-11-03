@@ -8,6 +8,7 @@ import {
 	getBallotDeviceToken,
 	VOTE_CAST_ELSEWHERE_MESSAGE,
 } from "#/lib/ballot-device";
+import { formatVoteTime } from "#/lib/vote-window";
 import { WRITE_IN_LIMITS, writeInKey } from "#/lib/write-in-limits";
 import { signInHref } from "#/lib/write-proof";
 import type { BallotData } from "#/server/voting";
@@ -238,6 +239,22 @@ export function Ballot({
 	// when one is. Never a blank screen — this is the whole ballot when the room
 	// is between votes.
 	if (visible.length === 0) {
+		// #1472: before the meeting's automatic window, say WHEN. Formatted on the
+		// phone, in its own locale and time zone: the phone is in the room, so its
+		// clock is the right one (the club's `timezone` is often left at default).
+		const opensAt = ballot.data?.opensAt ? new Date(ballot.data.opensAt) : null;
+		if (opensAt && opensAt.getTime() > Date.now()) {
+			return (
+				<div className="rounded-2xl border border-border bg-card px-6 py-10 text-center">
+					<h2 className="font-display text-xl font-semibold">
+						Voting opens at {formatVoteTime(opensAt)}
+					</h2>
+					<p className="mt-1 text-sm text-muted-foreground">
+						Keep this page open — it updates by itself when voting starts.
+					</p>
+				</div>
+			);
+		}
 		return (
 			<div className="rounded-2xl border border-border bg-card px-6 py-10 text-center">
 				<h2 className="font-display text-xl font-semibold">

@@ -184,7 +184,7 @@ describe("slideLayout bodies", () => {
 		]);
 		// The Best-Speaker vote beat's fallback drops the timer's-report clause on
 		// the same signal; the vote itself still happens. Without this, a club with
-		// no Timer prints "Toastmaster · Opens voting for Best Speaker" while the
+		// no Timer prints "Toastmaster · Calls for votes for Best Speaker" while the
 		// deck tells the presenter to call for a report from a role nobody holds.
 		expect(lines(false)).toEqual([
 			{ role: "head", text: "Please Vote for Best Speaker:" },

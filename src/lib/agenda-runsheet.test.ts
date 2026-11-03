@@ -174,7 +174,7 @@ describe("buildRunOfShow", () => {
 		// since #445, which would make the lookup a copy assertion in disguise.
 		const gateOf = (segment: string) =>
 			beats
-				.find((b) => b.detail.endsWith(`opens voting for ${segment}`))
+				.find((b) => b.detail.endsWith(`calls for votes for ${segment}`))
 				?.requiresAnyOf?.map((r) => r.roleKey);
 		expect(gateOf("Best Speaker")).toEqual(["speaker"]);
 		expect(gateOf("Best Table Topics")).toEqual(["table_topics_master"]);
@@ -966,26 +966,26 @@ describe("expandRunSheet — omission of no-slot beats (#367)", () => {
 });
 
 describe("expandRunSheet — vote beats are owned by the segment leader (#363)", () => {
-	// "voting for Best" narrows to the three scored-segment votes and keeps the
+	// "votes for Best" narrows to the three scored-segment votes and keeps the
 	// functionary intro out of them: its `{roles}` list can name a Vote Counter,
 	// which a looser `/vot/i` would swallow.
 	const voteRows = (rows: AgendaRow[]) =>
-		rows.filter((r) => /voting for Best/i.test(r.detail));
+		rows.filter((r) => /votes for Best/i.test(r.detail));
 
 	it("attributes each vote to the leader running that segment", () => {
 		const rows = voteRows(expandRunSheet(sixRoleClub(), RUN_OF_SHOW));
 		expect(rows.map((r) => [r.who, r.detail])).toEqual([
 			[
 				"Toastmaster of the Day · Faisal",
-				"Calls for the Timer's report · opens voting for Best Speaker",
+				"Calls for the Timer's report · calls for votes for Best Speaker",
 			],
 			[
 				"Table Topics Master · Rasheed",
-				"Calls for the Timer's report · opens voting for Best Table Topics",
+				"Calls for the Timer's report · calls for votes for Best Table Topics",
 			],
 			[
 				"General Evaluator · Riyaz",
-				"Calls for the Timer's report · opens voting for Best Evaluator",
+				"Calls for the Timer's report · calls for votes for Best Evaluator",
 			],
 		]);
 	});
@@ -1003,9 +1003,9 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 			(r) => r.detail,
 		);
 		expect(details).toEqual([
-			"Calls for the Timekeeper's report · opens voting for Best Speaker",
-			"Calls for the Timekeeper's report · opens voting for Best Table Topics",
-			"Calls for the Timekeeper's report · opens voting for Best Evaluator",
+			"Calls for the Timekeeper's report · calls for votes for Best Speaker",
+			"Calls for the Timekeeper's report · calls for votes for Best Table Topics",
+			"Calls for the Timekeeper's report · calls for votes for Best Evaluator",
 		]);
 		// The legend the club reads at the top of the same page. Asserted here rather
 		// than trusted, because agreeing with it IS the fix.
@@ -1104,7 +1104,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 			s.roleKey === "timer" ? { ...s, roleName: "Timer $& $` $' Squad" } : s,
 		);
 		expect(voteRows(expandRunSheet(hostile, RUN_OF_SHOW))[0].detail).toBe(
-			"Calls for the Timer $& $` $' Squad's report · opens voting for Best Speaker",
+			"Calls for the Timer $& $` $' Squad's report · calls for votes for Best Speaker",
 		);
 	});
 
@@ -1122,7 +1122,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 			);
 			const detail = voteRows(expandRunSheet(club, RUN_OF_SHOW))[0].detail;
 			expect(detail).toBe(
-				`Calls for the ${hostileName}'s report · opens voting for Best Speaker`,
+				`Calls for the ${hostileName}'s report · calls for votes for Best Speaker`,
 			);
 			// The tell: no award label and no second role name leaked in.
 			expect(detail).not.toContain("Best Table Topics,");
@@ -1195,9 +1195,12 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 				r.detail,
 			]),
 		).toEqual([
-			["Toastmaster of the Day · Faisal", "Opens voting for Best Speaker"],
-			["Table Topics Master · Rasheed", "Opens voting for Best Table Topics"],
-			["General Evaluator · Riyaz", "Opens voting for Best Evaluator"],
+			["Toastmaster of the Day · Faisal", "Calls for votes for Best Speaker"],
+			[
+				"Table Topics Master · Rasheed",
+				"Calls for votes for Best Table Topics",
+			],
+			["General Evaluator · Riyaz", "Calls for votes for Best Evaluator"],
 		]);
 	});
 
@@ -1212,7 +1215,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		);
 		expect(voteRows(expandRunSheet(noTm, RUN_OF_SHOW))[0]).toMatchObject({
 			who: "Toastmaster of the Day",
-			detail: "Calls for the Timer's report · opens voting for Best Speaker",
+			detail: "Calls for the Timer's report · calls for votes for Best Speaker",
 		});
 	});
 
@@ -1223,8 +1226,8 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		expect(
 			voteRows(expandRunSheet(noTopics, RUN_OF_SHOW)).map((r) => r.detail),
 		).toEqual([
-			"Calls for the Timer's report · opens voting for Best Speaker",
-			"Calls for the Timer's report · opens voting for Best Evaluator",
+			"Calls for the Timer's report · calls for votes for Best Speaker",
+			"Calls for the Timer's report · calls for votes for Best Evaluator",
 		]);
 	});
 
@@ -1243,7 +1246,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 			roleKey: "toastmaster_of_the_day",
 			// Unowned: no slot matched, so no id to carry (#732).
 			slotId: null,
-			detail: "Opens voting for Best Speaker",
+			detail: "Calls for votes for Best Speaker",
 			minutes: 1,
 			marks: null,
 		});
@@ -1257,7 +1260,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		const noGe = sixRoleClub().filter((s) => s.roleKey !== "general_evaluator");
 		expect(
 			voteRows(expandRunSheet(noGe, RUN_OF_SHOW)).find((r) =>
-				r.detail.endsWith("voting for Best Evaluator"),
+				r.detail.endsWith("votes for Best Evaluator"),
 			),
 		).toEqual({
 			who: "Toastmaster of the Day · Faisal",
@@ -1265,7 +1268,8 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 			holder: "Faisal",
 			roleKey: "toastmaster_of_the_day",
 			slotId: "tm",
-			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
+			detail:
+				"Calls for the Timer's report · calls for votes for Best Evaluator",
 			minutes: 1,
 			marks: null,
 		});
@@ -1280,7 +1284,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		);
 		expect(
 			voteRows(expandRunSheet(neither, RUN_OF_SHOW)).find((r) =>
-				r.detail.endsWith("voting for Best Evaluator"),
+				r.detail.endsWith("votes for Best Evaluator"),
 			),
 		).toEqual({
 			who: "Toastmaster of the Day · Faisal",
@@ -1288,7 +1292,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 			holder: "Faisal",
 			roleKey: "toastmaster_of_the_day",
 			slotId: "tm",
-			detail: "Opens voting for Best Evaluator",
+			detail: "Calls for votes for Best Evaluator",
 			minutes: 1,
 			marks: null,
 		});
@@ -1305,7 +1309,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		);
 		expect(
 			voteRows(expandRunSheet(neither, RUN_OF_SHOW)).find((r) =>
-				r.detail.endsWith("voting for Best Evaluator"),
+				r.detail.endsWith("votes for Best Evaluator"),
 			),
 		).toEqual({
 			who: "Toastmaster of the Day",
@@ -1313,7 +1317,8 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 			// Unowned again — the fallback moved the OWNER, and that role has no
 			// slot either, so there is still nothing to carry (#732).
 			slotId: null,
-			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
+			detail:
+				"Calls for the Timer's report · calls for votes for Best Evaluator",
 			minutes: 1,
 			marks: null,
 		});
@@ -1339,7 +1344,7 @@ describe("the Toastmaster covers the General Evaluator's role (#363)", () => {
 	 *  the reports row names it (#584). */
 	const GE_STRETCH = [
 		"Introduces the speech evaluators",
-		"Calls for the Timer's report · opens voting for Best Evaluator",
+		"Calls for the Timer's report · calls for votes for Best Evaluator",
 		"Evaluates the evaluators",
 		"Calls for the Timer to report",
 		"Overall meeting evaluation",
@@ -1432,7 +1437,7 @@ describe("the Toastmaster covers the General Evaluator's role (#363)", () => {
 		expect(
 			rows.filter((r) => GE_STRETCH.includes(r.detail)).map((r) => r.detail),
 		).toEqual([
-			"Calls for the Timer's report · opens voting for Best Evaluator",
+			"Calls for the Timer's report · calls for votes for Best Evaluator",
 		]);
 		// …and that one row names a role, never a person who does not exist.
 		expect(rows.find((r) => GE_STRETCH.includes(r.detail))?.who).toBe(
@@ -1785,7 +1790,7 @@ describe("expandRunSheet — vote beats are gated on their segment (#367)", () =
 
 	it("prints no vote at all for a club that runs none of the three segments", () => {
 		const rows = expandRunSheet([timer]);
-		expect(rows.some((r) => r.detail.includes("voting for Best"))).toBe(false);
+		expect(rows.some((r) => r.detail.includes("votes for Best"))).toBe(false);
 	});
 
 	it("prints only the votes whose segment is on the agenda", () => {
@@ -1793,11 +1798,11 @@ describe("expandRunSheet — vote beats are gated on their segment (#367)", () =
 		// Table Topic — the segment is not on its agenda.
 		const rows = expandRunSheet([timer, speaker, evaluator]);
 		const votes = rows
-			.filter((r) => r.detail.includes("voting for Best"))
+			.filter((r) => r.detail.includes("votes for Best"))
 			.map((r) => r.detail);
 		expect(votes).toEqual([
-			"Calls for the Timer's report · opens voting for Best Speaker",
-			"Calls for the Timer's report · opens voting for Best Evaluator",
+			"Calls for the Timer's report · calls for votes for Best Speaker",
+			"Calls for the Timer's report · calls for votes for Best Evaluator",
 		]);
 	});
 
@@ -1807,7 +1812,7 @@ describe("expandRunSheet — vote beats are gated on their segment (#367)", () =
 			rows.some(
 				(r) =>
 					r.detail ===
-					"Calls for the Timer's report · opens voting for Best Table Topics",
+					"Calls for the Timer's report · calls for votes for Best Table Topics",
 			),
 		).toBe(true);
 	});
@@ -1856,7 +1861,7 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 	// the old literal would have made every one of those negatives pass
 	// vacuously, against a string the code can no longer produce. The trailing
 	// clause is invariant and unique: no other beat's detail ends "to report"
-	// ("Calls for the {role:timer}'s report · opens voting…" is a different beat
+	// ("Calls for the {role:timer}'s report · calls for votes…" is a different beat
 	// and a different ending).
 	const reportsRow = (rows: { detail: string }[]) =>
 		rows.find((r) => r.detail.endsWith("to report"));
@@ -2883,7 +2888,7 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 			fallbacks: [
 				{
 					unless: { roleKey: "timer", roleName: "Timer" },
-					detail: "Opens voting for Best Speaker",
+					detail: "Calls for votes for Best Speaker",
 				},
 			],
 		};
@@ -2897,7 +2902,7 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 		];
 		expect(expandRunSheet(slots, [withDetail])[0]).toMatchObject({
 			who: "Table Topics Master · Rasheed",
-			detail: "Opens voting for Best Speaker",
+			detail: "Calls for votes for Best Speaker",
 		});
 	});
 
@@ -3029,10 +3034,10 @@ describe("BeatFallback — plural, per-field resolution (#363)", () => {
 		kind: "role",
 		...GE,
 		role: "plain",
-		detail: "Calls for the Timer's report · opens voting for Best Evaluator",
+		detail: "Calls for the Timer's report · calls for votes for Best Evaluator",
 		minutes: 1,
 		fallbacks: [
-			{ unless: TIMER, detail: "Opens voting for Best Evaluator" },
+			{ unless: TIMER, detail: "Calls for votes for Best Evaluator" },
 			{ unless: GE, owner: TM },
 		],
 	};
@@ -3062,28 +3067,30 @@ describe("BeatFallback — plural, per-field resolution (#363)", () => {
 	it("applies neither entry when both `unless` roles have slots", () => {
 		expect(expandRunSheet([tm, ge, timer], [twoFallbacks])[0]).toMatchObject({
 			who: "General Evaluator · Riyaz",
-			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
+			detail:
+				"Calls for the Timer's report · calls for votes for Best Evaluator",
 		});
 	});
 
 	it("applies only the entry whose `unless` role is missing — the Timer's", () => {
 		expect(expandRunSheet([tm, ge], [twoFallbacks])[0]).toMatchObject({
 			who: "General Evaluator · Riyaz",
-			detail: "Opens voting for Best Evaluator",
+			detail: "Calls for votes for Best Evaluator",
 		});
 	});
 
 	it("applies only the entry whose `unless` role is missing — the GE's", () => {
 		expect(expandRunSheet([tm, timer], [twoFallbacks])[0]).toMatchObject({
 			who: "Toastmaster of the Day · Faisal",
-			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
+			detail:
+				"Calls for the Timer's report · calls for votes for Best Evaluator",
 		});
 	});
 
 	it("applies BOTH when both `unless` roles are missing — the case a singular fallback could not express", () => {
 		expect(expandRunSheet([tm], [twoFallbacks])[0]).toMatchObject({
 			who: "Toastmaster of the Day · Faisal",
-			detail: "Opens voting for Best Evaluator",
+			detail: "Calls for votes for Best Evaluator",
 		});
 	});
 
@@ -3094,12 +3101,12 @@ describe("BeatFallback — plural, per-field resolution (#363)", () => {
 			...twoFallbacks,
 			fallbacks: [
 				{ unless: GE, owner: TM },
-				{ unless: TIMER, detail: "Opens voting for Best Evaluator" },
+				{ unless: TIMER, detail: "Calls for votes for Best Evaluator" },
 			],
 		};
 		expect(expandRunSheet([tm], [detailAfterOwner])[0]).toMatchObject({
 			who: "Toastmaster of the Day · Faisal",
-			detail: "Opens voting for Best Evaluator",
+			detail: "Calls for votes for Best Evaluator",
 		});
 	});
 
@@ -3127,7 +3134,7 @@ describe("renderUnowned (#363)", () => {
 			roleKey: "toastmaster_of_the_day",
 			roleName: "Toastmaster of the Day",
 			role: "plain",
-			detail: "Opens voting for Best Speaker",
+			detail: "Calls for votes for Best Speaker",
 			minutes: 1,
 			renderUnowned: true,
 		};
@@ -3136,7 +3143,7 @@ describe("renderUnowned (#363)", () => {
 				who: "Toastmaster of the Day",
 				roleKey: "toastmaster_of_the_day",
 				slotId: null,
-				detail: "Opens voting for Best Speaker",
+				detail: "Calls for votes for Best Speaker",
 				minutes: 1,
 				marks: null,
 			},
@@ -3149,7 +3156,7 @@ describe("renderUnowned (#363)", () => {
 			roleKey: "toastmaster_of_the_day",
 			roleName: "Toastmaster of the Day",
 			role: "plain",
-			detail: "Opens voting for Best Speaker",
+			detail: "Calls for votes for Best Speaker",
 			minutes: 1,
 			renderUnowned: true,
 		};
@@ -3184,7 +3191,7 @@ describe("renderUnowned (#363)", () => {
 			roleKey: "toastmaster_of_the_day",
 			roleName: "Toastmaster of the Day",
 			role: "plain",
-			detail: "Opens voting for Best Speaker",
+			detail: "Calls for votes for Best Speaker",
 			minutes: 1,
 			renderUnowned: true,
 			requiresAnyOf: [{ roleKey: "speaker", roleName: "Speaker" }],

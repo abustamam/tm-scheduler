@@ -709,7 +709,7 @@ export async function resolveTableTopicsNotesAuthz(
 export interface VoteCounterAuthz {
 	clubId: string;
 	allowed: boolean;
-	via: "admin" | "vote-counter-self-assert" | null;
+	via: "admin" | "vote-counter-self-assert" | "tmod-self-assert" | null;
 	voteCounterMemberId: string | null;
 	/** The member to credit in `activity_log` (null for an impersonated admin). */
 	actorMemberId: string | null;
@@ -745,7 +745,9 @@ export async function resolveVoteCounterAuthz(
 	// lock check (a Ballot Counter's capabilities span the live meeting), which is
 	// why the archive gate cannot be folded into `assertMeetingNotLocked`.
 	await assertMeetingClubNotArchived(clubId);
-	const { voteCounterMemberId } = await loadRoleSlotAssignees(input.meetingId);
+	const { voteCounterMemberId, tmodMemberId } = await loadRoleSlotAssignees(
+		input.meetingId,
+	);
 	const admin = await resolveAdminGrant(input.sessionUserId, clubId);
 	if (admin.granted) {
 		return {
@@ -770,6 +772,28 @@ export async function resolveVoteCounterAuthz(
 			via: "vote-counter-self-assert",
 			voteCounterMemberId,
 			actorMemberId: voteCounter.actorMemberId,
+			meetingStatus: meeting.status,
+		};
+	}
+
+	// #1472: the meeting's Toastmaster announces the awards, so they may read the
+	// tally and record the winner when nobody holds the Vote Counter slot. Checked
+	// LAST: admin, then Vote Counter, then Toastmaster, the first match wins, so a
+	// person holding two grants keeps the stronger one. The one capability they
+	// do NOT get is ruling a candidate out: `requireSignedInVoteCounter` refuses
+	// `via === "tmod-self-assert"`.
+	const tmod = resolveSelfAssertGrant({
+		selfMemberId: input.selfMemberId,
+		slotMemberId: tmodMemberId,
+		session: sessionOf(input.sessionUserId, admin.membershipIds),
+	});
+	if (tmod.granted) {
+		return {
+			clubId,
+			allowed: true,
+			via: "tmod-self-assert",
+			voteCounterMemberId,
+			actorMemberId: tmod.actorMemberId,
 			meetingStatus: meeting.status,
 		};
 	}

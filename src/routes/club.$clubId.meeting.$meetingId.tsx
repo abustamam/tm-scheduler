@@ -474,10 +474,14 @@ function MeetingView() {
 				ballotUrl,
 			});
 
-	const { isTmod, isGrammarian, isVoteCounter } = deriveMeetingRoleFlags(
-		slots,
-		myId,
-	);
+	const {
+		isTmod,
+		isGrammarian,
+		isVoteCounter: isSlotVoteCounter,
+	} = deriveMeetingRoleFlags(slots, myId);
+	// #1472: the Toastmaster reads the tally and settles rulings, as the
+	// assigned Vote Counter does (the server's "tmod-self-assert" arm).
+	const isVoteCounter = isSlotVoteCounter || isTmod;
 	// ONE clock for the whole render (spec D1): every phase/freeze/completability
 	// consumer on this page reads the same instant, so a render can't straddle
 	// midnight and show a "today" toolbar over an already-frozen agenda. There
@@ -945,6 +949,7 @@ function MeetingView() {
 	} = useMeetingVotes({
 		meetingId: meeting.id,
 		myId,
+		// #1472: the Toastmaster reads the tally too, so the poll runs for them.
 		isVoteCounter,
 		effectiveCanManage,
 		minutes,
@@ -1555,6 +1560,9 @@ function MeetingView() {
 									// from the one principal the gate allows outright — see
 									// `declineFreesRoles` for the same bug caught once already.
 									canManageClub={canManage}
+									// #1472: a Toastmaster who is neither admin nor Vote Counter
+									// may read the tally and record the winner, never rule.
+									rulingExcluded={isTmod && !isSlotVoteCounter && !canManage}
 									onSetWinner={handleSetVoteWinner}
 									onClearWinner={handleClearVoteWinner}
 								/>

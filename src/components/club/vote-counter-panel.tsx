@@ -7,6 +7,7 @@ import {
 	DISQUALIFICATION_LIMITS,
 	DISQUALIFICATION_PRESETS,
 } from "#/lib/disqualification";
+import { formatVoteTime } from "#/lib/vote-window";
 import { RULING_NEEDS_SESSION_MESSAGE } from "#/lib/write-proof";
 import type { AwardCategory } from "#/server/minutes-logic";
 import {
@@ -45,6 +46,39 @@ function candidatePayload(r: {
 	return r.kind === "writeIn"
 		? { kind: "writeIn", name: r.name }
 		: { kind: r.kind, id: r.id };
+}
+
+/** "Opens / Closes on its own at {time}" under a category's button (#1472).
+ *  A category WITH a session row is read from the row's own window (opened_at /
+ *  closed_at), and only a category with none from the meeting's automatic
+ *  window: a row closed before the window must not say it opens on its own.
+ *  Formatted on this device, in the room's own clock. */
+function autoWindowNote(
+	t:
+		| {
+				isOpen: boolean;
+				openedAt: string | null;
+				closedAt: string | null;
+				autoWindow: { opensAt: string; closesAt: string } | null;
+		  }
+		| undefined,
+): string | null {
+	if (!t) return null;
+	const now = Date.now();
+	const at = (iso: string) => formatVoteTime(new Date(iso));
+	const hasRow = t.openedAt != null;
+	// The window this category is governed by: its row's, else the meeting's.
+	const opensAt = hasRow ? t.openedAt : (t.autoWindow?.opensAt ?? null);
+	const closesAt = hasRow ? t.closedAt : (t.autoWindow?.closesAt ?? null);
+	if (t.isOpen) {
+		return closesAt && new Date(closesAt).getTime() > now
+			? `Closes on its own at ${at(closesAt)}`
+			: null;
+	}
+	if (opensAt && new Date(opensAt).getTime() > now) {
+		return `Opens on its own at ${at(opensAt)}`;
+	}
+	return null;
 }
 
 /**
@@ -93,6 +127,7 @@ export function VoteCounterPanel({
 	selfMemberId,
 	sessionMemberId,
 	canManageClub,
+	rulingExcluded = false,
 	onSetWinner,
 	onClearWinner,
 }: {
@@ -129,6 +164,13 @@ export function VoteCounterPanel({
 	 * exact ADR-0016 regression #762's review caught in six places at once.
 	 */
 	canManageClub: boolean;
+	/**
+	 * The viewer reaches this console only as the meeting's Toastmaster (#1472):
+	 * not an admin, not the Vote Counter. The server refuses them the two ruling
+	 * controls (`requireSignedInVoteCounter`), so a session they happen to hold
+	 * must not make the console show those controls.
+	 */
+	rulingExcluded?: boolean;
 	/** Calls the EXISTING setAward path the minutes UI already uses — the winner
 	 *  lives in `meeting_awards`, not in the vote tables. */
 	onSetWinner: (
@@ -150,7 +192,8 @@ export function VoteCounterPanel({
 	 * satisfies with no membership id at all. The session term is the one the
 	 * self-assert arm needs, and only it.
 	 */
-	const canRule = canManageClub || sessionMemberId !== null;
+	const canRule =
+		canManageClub || (sessionMemberId !== null && !rulingExcluded);
 	const qc = useQueryClient();
 	const tally = useQuery({
 		queryKey: ["vote-tally", meetingId],
@@ -358,6 +401,8 @@ export function VoteCounterPanel({
 					);
 				};
 
+				const windowNote = autoWindowNote(t);
+
 				return (
 					<section
 						key={category}
@@ -391,6 +436,10 @@ export function VoteCounterPanel({
 							<p className="mt-2 text-xs font-semibold text-destructive">
 								{(toggle.error as Error).message}
 							</p>
+						) : null}
+
+						{windowNote ? (
+							<p className="mt-2 text-xs text-muted-foreground">{windowNote}</p>
 						) : null}
 
 						<p className="mt-2 text-sm text-muted-foreground">

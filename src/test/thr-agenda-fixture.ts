@@ -161,7 +161,7 @@ export function thrAgenda(captions: { veena: string; david: string }): {
 			beat(
 				TM,
 				LAYLA,
-				"Calls for the Timer's report · opens voting for Best Speaker",
+				"Calls for the Timer's report · calls for votes for Best Speaker",
 				"12:44",
 			),
 			section("Table Topics"),
@@ -177,7 +177,7 @@ export function thrAgenda(captions: { veena: string; david: string }): {
 			beat(
 				TTM,
 				ESRA,
-				"Calls for the Timer's report · opens voting for Best Table Topics",
+				"Calls for the Timer's report · calls for votes for Best Table Topics",
 				"1:04",
 			),
 			section("Evaluations"),
@@ -207,7 +207,7 @@ export function thrAgenda(captions: { veena: string; david: string }): {
 			beat(
 				GE,
 				VEENA,
-				"Calls for the Timer's report · opens voting for Best Evaluator",
+				"Calls for the Timer's report · calls for votes for Best Evaluator",
 				"1:15",
 			),
 			beat(GE, VEENA, "Evaluates the evaluators", "1:16"),

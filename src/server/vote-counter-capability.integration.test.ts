@@ -51,8 +51,30 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
+// The signed-in arm reads the session off the request, which a test process has
+// none of; mocked at the library boundary like `disqualify-session-gate`. Null
+// by default, so every case written before #1472 is still an anonymous one.
+let sessionUserId: string | null = null;
+vi.mock("@tanstack/react-start/server", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@tanstack/react-start/server")>()),
+	getRequest: () => ({ headers: new Headers() }),
+}));
+vi.mock("#/lib/auth", () => ({
+	auth: {
+		api: {
+			getSession: async () =>
+				sessionUserId ? { user: { id: sessionUserId } } : null,
+		},
+	},
+}));
+
 const { resolveVoteCounterAuthz } = await import("./meeting-authz-logic");
-const { requireVoteCounterCapability } = await import("./guards");
+const {
+	requireSignedInVoteCounter,
+	requireVoteCounterCapability,
+	VOTE_COUNTER_CAPABILITY_REFUSAL,
+	VOTE_RULING_REFUSAL,
+} = await import("./guards");
 
 /** Add a named role def + slot to the meeting; optionally assign a member.
  *  Returns the slot id. Mirrors `word-of-the-day.integration.test.ts`'s
@@ -251,6 +273,100 @@ describe.skipIf(!hasTestDb)(
 				meetingId: club.meetingId,
 			});
 			expect(authz.allowed).toBe(false);
+		});
+	},
+);
+
+describe.skipIf(!hasTestDb)(
+	"the Toastmaster joins the Ballot Counter capability, except ruling (#1472)",
+	() => {
+		let club: SeededClub;
+
+		beforeEach(async () => {
+			sessionUserId = null;
+			club = await seedClub();
+		});
+		afterEach(async () => {
+			sessionUserId = null;
+			await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
+		});
+
+		// protects=the meeting's Toastmaster, with no Vote Counter slot at all, may
+		//   read the tally and record the winner: `resolveVoteCounterAuthz` is the
+		//   one decision behind all 8 `requireVoteCounterCapability` callers
+		//   (openVoteFn, closeVoteFn, getVoteTally, addTableTopics,
+		//   removeTableTopics, moveTableTopics, setMinutesAward, clearMinutesAward;
+		//   which gate each calls is pinned by minutes-authz.guard.test.ts and
+		//   voting-authz.guard.test.ts);
+		// fails_when=the Toastmaster branch is deleted, or reads the Vote Counter
+		//   slot instead of the Toastmaster's;
+		// no_claim=the 8 server fns are not invoked (createServerFn cannot be
+		//   outside a request); the gate they call is
+		it("admits the self-asserted Toastmaster, via tmod-self-assert", async () => {
+			await addRoleSlot(club, "Toastmaster of the Day", club.memberId);
+			await expect(
+				requireVoteCounterCapability({
+					meetingId: club.meetingId,
+					selfMemberId: club.memberId,
+				}),
+			).resolves.toMatchObject({
+				allowed: true,
+				via: "tmod-self-assert",
+				actorMemberId: club.memberId,
+			});
+		});
+
+		// protects=ruling a candidate out stays with the Ballot Counter and the
+		//   admin grants: a signed-in Toastmaster is refused by the gate behind
+		//   disqualifyCandidateFn and undoDisqualificationFn;
+		// fails_when=requireSignedInVoteCounter stops refusing via tmod-self-assert;
+		// no_claim=the two server fns' own handlers are not run
+		it("refuses a signed-in Toastmaster at the disqualify/undo gate", async () => {
+			await addRoleSlot(club, "Toastmaster of the Day", club.memberId);
+			sessionUserId = club.memberUserId;
+			await expect(
+				requireVoteCounterCapability({
+					meetingId: club.meetingId,
+					selfMemberId: club.memberId,
+				}),
+			).resolves.toMatchObject({ via: "tmod-self-assert" });
+			await expect(
+				requireSignedInVoteCounter({
+					meetingId: club.meetingId,
+					selfMemberId: club.memberId,
+				}),
+			).rejects.toThrow(VOTE_RULING_REFUSAL);
+		});
+
+		// protects=a person holding the Toastmaster slot AND the Vote Counter slot
+		//   keeps disqualify through the Vote Counter grant (first match wins);
+		// fails_when=the Toastmaster branch is checked before the Vote Counter's;
+		// no_claim=an admin who is also Toastmaster (admin is checked first, and is
+		//   covered by "allows a club admin" above)
+		it("keeps disqualify for a Toastmaster who also holds the Vote Counter slot", async () => {
+			await addRoleSlot(club, "Toastmaster of the Day", club.memberId);
+			await addRoleSlot(club, "Vote Counter", club.memberId);
+			sessionUserId = club.memberUserId;
+			await expect(
+				requireSignedInVoteCounter({
+					meetingId: club.meetingId,
+					selfMemberId: club.memberId,
+				}),
+			).resolves.toMatchObject({ via: "vote-counter-self-assert" });
+		});
+
+		// protects=a member holding neither slot is refused by the same gate;
+		// fails_when=the Toastmaster branch matches on anything but the slot holder;
+		// no_claim=none beyond protects
+		it("still refuses a member with no slot, and names the Toastmaster in the copy", async () => {
+			await addRoleSlot(club, "Toastmaster of the Day", null);
+			const other = await addRosterMember(club.clubId, "Someone Else");
+			await expect(
+				requireVoteCounterCapability({
+					meetingId: club.meetingId,
+					selfMemberId: other,
+				}),
+			).rejects.toThrow(VOTE_COUNTER_CAPABILITY_REFUSAL);
 		});
 	},
 );

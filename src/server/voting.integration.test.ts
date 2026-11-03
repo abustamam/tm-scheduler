@@ -55,20 +55,27 @@ const { GUEST_VOTE_CAST_ELSEWHERE_MESSAGE, VOTE_CAST_ELSEWHERE_MESSAGE } =
 	await import("#/lib/ballot-device");
 const { MEETING_LOCKED_MESSAGE } = await import("#/lib/meeting-lifecycle");
 
+const { autoVoteWindow } = await import("#/lib/vote-window");
 const {
 	anonymousBallotLockKey,
 	castVote,
+	closeAllVotesTx,
+	closeClubVotesTx,
 	closeVote,
+	closeVoteTx,
 	disqualifyCandidate,
 	joinBallotAsGuest,
 	listVoteSessions,
 	loadBallot,
 	loadParticipation,
 	loadTally,
+	materialiseAutoSession,
 	openVote,
+	sessionOpenNow,
 	undoDisqualification,
 } = await import("#/server/voting-logic");
 const { applyCompleteMeeting } = await import("#/server/meetings-logic");
+const { applyClubAgendaSettingsUpdate } = await import("#/server/clubs-logic");
 const { setAward } = await import("#/server/minutes-logic");
 
 describe.skipIf(!hasTestDb)("vote table constraints (#510)", () => {
@@ -231,7 +238,19 @@ describe.skipIf(!hasTestDb)("open and close a vote (#510)", () => {
 			.from(meetingVoteSessions)
 			.where(eq(meetingVoteSessions.meetingId, seed.meetingId));
 		expect(rows).toHaveLength(1);
-		expect(rows[0].closedAt).toBeNull();
+		// #1472: a re-open before the window's end closes on its own at that end
+		// (it was NULL, "until Complete", before the window existed). seedClub's
+		// meeting is a week away, so the window's end is still ahead.
+		const [m] = await testDb
+			.select({
+				scheduledAt: meetings.scheduledAt,
+				lengthMinutes: meetings.lengthMinutes,
+			})
+			.from(meetings)
+			.where(eq(meetings.id, seed.meetingId));
+		expect(rows[0].closedAt?.getTime()).toBe(
+			autoVoteWindow(m.scheduledAt, m.lengthMinutes).closesAt.getTime(),
+		);
 	});
 
 	it("opening twice is idempotent, not an error", async () => {
@@ -2911,4 +2930,580 @@ describe.skipIf(!hasTestDb)("digital voting switched off (#770)", () => {
 	it("loadBallot reports digitalVotingOff false while it is on", async () => {
 		expect((await loadBallot(seed.meetingId)).digitalVotingOff).toBe(false);
 	});
+});
+
+describe.skipIf(!hasTestDb)("the automatic vote window (#1472)", () => {
+	let seed: SeededClub;
+	const MIN = 60_000;
+	// seedClub's meeting is 90 minutes long; the window ends 60 minutes after that.
+	const WINDOW_END_AFTER_START = (90 + 60) * MIN;
+
+	beforeEach(async () => {
+		seed = await seedClub();
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seed.clubId,
+				name: "Speaker",
+				category: "speaker",
+				sortOrder: 99,
+			})
+			.returning({ id: roleDefinitions.id });
+		// The admin member speaks, so they are the one eligible Best Speaker.
+		await testDb.insert(roleSlots).values({
+			meetingId: seed.meetingId,
+			roleDefinitionId: def.id,
+			slotIndex: 0,
+			assignedMemberId: seed.adminMemberId,
+		});
+	});
+
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	/** Move the meeting so it started `msAgo` ago (negative: starts in the future). */
+	async function startedAgo(msAgo: number): Promise<Date> {
+		const scheduledAt = new Date(Date.now() - msAgo);
+		await testDb
+			.update(meetings)
+			.set({ scheduledAt })
+			.where(eq(meetings.id, seed.meetingId));
+		return scheduledAt;
+	}
+
+	const vote = (category: "best_speaker" | "best_evaluator" = "best_speaker") =>
+		castVote({
+			meetingId: seed.meetingId,
+			category,
+			voter: { kind: "member", id: seed.memberId },
+			candidate: { kind: "member", id: seed.adminMemberId },
+			deviceToken: PHONE,
+		});
+
+	const args = (
+		category: "best_speaker" | "best_evaluator" = "best_speaker",
+	) => ({
+		meetingId: seed.meetingId,
+		category,
+		actorMemberId: seed.adminMemberId,
+		clubId: seed.clubId,
+	});
+
+	const sessionRows = () =>
+		testDb
+			.select()
+			.from(meetingVoteSessions)
+			.where(eq(meetingVoteSessions.meetingId, seed.meetingId));
+
+	// protects=a phone with no session casts a vote inside the window without
+	//   anyone tapping Open, and the row that results records the window (AC 1);
+	// fails_when=the vote is refused, a second row appears, the row's times or
+	//   opened_by are wrong, or a vote_open is logged for a tap nobody made;
+	// no_claim=a first vote on a meeting whose window is NOT yet open (next test);
+	//   the ballot UI's rendering of the row
+	it("accepts a first vote inside the window and materialises ONE row for it", async () => {
+		const scheduledAt = await startedAgo(MIN);
+		await vote();
+
+		const rows = await sessionRows();
+		expect(rows).toHaveLength(1);
+		expect(rows[0].category).toBe("best_speaker");
+		expect(rows[0].openedAt.getTime()).toBe(scheduledAt.getTime());
+		expect(rows[0].closedAt?.getTime()).toBe(
+			scheduledAt.getTime() + WINDOW_END_AFTER_START,
+		);
+		expect(rows[0].openedByMemberId).toBeNull();
+		const votes = await testDb
+			.select()
+			.from(meetingVotes)
+			.where(eq(meetingVotes.sessionId, rows[0].id));
+		expect(votes).toHaveLength(1);
+		const logged = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, seed.clubId),
+					eq(activityLog.action, "vote_open"),
+				),
+			);
+		expect(logged).toHaveLength(0);
+	});
+
+	// protects=the anonymous arm materialises the row too (the other public write
+	//   path); fails_when=castAnonymousVote still demands a pre-existing row;
+	// no_claim=none beyond protects
+	it("accepts an anonymous first vote inside the window", async () => {
+		await startedAgo(MIN);
+		await vote_anonymous();
+		const rows = await sessionRows();
+		expect(rows).toHaveLength(1);
+		expect(rows[0].openedByMemberId).toBeNull();
+
+		async function vote_anonymous() {
+			await castVote({
+				meetingId: seed.meetingId,
+				category: "best_speaker",
+				voter: { kind: "anonymous" },
+				candidate: { kind: "member", id: seed.adminMemberId },
+				deviceToken: PHONE,
+			});
+		}
+	});
+
+	// protects=before the window nothing opens and nothing is written (AC 2);
+	// fails_when=the vote lands, or a closed row is left behind;
+	// no_claim=none beyond protects
+	it("refuses a vote before the window and writes no row", async () => {
+		await startedAgo(-MIN);
+		await expect(vote()).rejects.toThrow("Voting for this award is not open.");
+		expect(await sessionRows()).toHaveLength(0);
+	});
+
+	// protects=the window's end is exclusive in practice, and a vote past it is
+	//   refused with no row (AC 3); fails_when=the grace is mis-added (a second
+	//   late vote lands) or an inclusive end accepts it;
+	// no_claim=the exact-boundary instant: the real clock cannot be pinned, so the
+	//   boundary itself is `vote-window.test.ts` plus the `now()` equality case below
+	it("refuses a vote after the window's end and accepts one just inside it", async () => {
+		await startedAgo(WINDOW_END_AFTER_START + 1000);
+		await expect(vote()).rejects.toThrow("Voting for this award is not open.");
+		expect(await sessionRows()).toHaveLength(0);
+
+		await startedAgo(WINDOW_END_AFTER_START - 5000);
+		await vote();
+		expect(await sessionRows()).toHaveLength(1);
+	});
+
+	// protects=a row whose closed_at is EXACTLY now() is closed (strict `>`), which
+	//   is what makes the window's end exclusive in the database (AC 3);
+	// fails_when=`closed_at > now()` becomes `>=`;
+	// no_claim=the predicate in isolation: now() is the transaction's, so reading
+	//   it inside the transaction that wrote it is the one place equality happens
+	it("treats a row closed at exactly now() as closed", async () => {
+		await startedAgo(MIN);
+		const out = await testDb.transaction(async (tx) => {
+			await tx.insert(meetingVoteSessions).values({
+				meetingId: seed.meetingId,
+				category: "best_speaker",
+				openedAt: sql`timezone('UTC', now()) - interval '1 hour'`,
+				closedAt: sql`timezone('UTC', now())`,
+			});
+			await tx.insert(meetingVoteSessions).values({
+				meetingId: seed.meetingId,
+				category: "best_evaluator",
+				openedAt: sql`timezone('UTC', now()) - interval '1 hour'`,
+				closedAt: sql`timezone('UTC', now()) + interval '1 second'`,
+			});
+			return tx
+				.select({ category: meetingVoteSessions.category })
+				.from(meetingVoteSessions)
+				.where(
+					and(
+						eq(meetingVoteSessions.meetingId, seed.meetingId),
+						sessionOpenNow(),
+					),
+				);
+		});
+		expect(out.map((r) => r.category)).toEqual(["best_evaluator"]);
+	});
+
+	// protects=Complete ends voting and leaves every row closed (AC 4);
+	// fails_when=a vote lands after Complete, or the materialised row keeps its
+	//   future closed_at;
+	// no_claim=none beyond protects
+	it("refuses a vote after Complete and closes the materialised row", async () => {
+		await startedAgo(MIN);
+		await vote();
+		await applyCompleteMeeting({
+			meetingId: seed.meetingId,
+			actorMemberId: seed.adminMemberId,
+		});
+		await expect(vote()).rejects.toThrow();
+		const [{ stillOpen }] = await testDb
+			.select({ stillOpen: sql<number>`count(*)::int` })
+			.from(meetingVoteSessions)
+			.where(
+				and(
+					eq(meetingVoteSessions.meetingId, seed.meetingId),
+					sessionOpenNow(),
+				),
+			);
+		expect(stillOpen).toBe(0);
+		const [{ future }] = await testDb
+			.select({ future: sql<number>`count(*)::int` })
+			.from(meetingVoteSessions)
+			.where(
+				and(
+					eq(meetingVoteSessions.meetingId, seed.meetingId),
+					sql`${meetingVoteSessions.closedAt} > timezone('UTC', now())`,
+				),
+			);
+		expect(future).toBe(0);
+	});
+
+	// protects=Close before the window keeps that category shut for the whole
+	//   window, and a later Open overrides it until the window's end (AC 5);
+	// fails_when=the window re-opens a category an officer closed, or Open does
+	//   not take effect, or Open forgets the window's end;
+	// no_claim=none beyond protects
+	it("Close before the window shuts the category; Open afterwards reopens it until the window's end", async () => {
+		await startedAgo(-60 * MIN);
+		await closeVote(args());
+		const closed = await sessionRows();
+		expect(closed).toHaveLength(1);
+		expect(closed[0].closedAt?.getTime()).toBeLessThanOrEqual(Date.now());
+
+		// The window now begins; the Close still holds.
+		const scheduledAt = await startedAgo(MIN);
+		await expect(vote()).rejects.toThrow("Voting for this award is not open.");
+		expect((await listVoteSessions(seed.meetingId)).best_speaker.isOpen).toBe(
+			false,
+		);
+
+		await openVote(args());
+		await vote();
+		const [row] = await sessionRows();
+		expect(row.closedAt?.getTime()).toBe(
+			scheduledAt.getTime() + WINDOW_END_AFTER_START,
+		);
+		// An unrelated category was never closed, so the window still governs it.
+		expect((await listVoteSessions(seed.meetingId)).best_evaluator.isOpen).toBe(
+			true,
+		);
+	});
+
+	// protects=Close mid-window shuts a ballot that opened by itself: its row has a
+	//   future closed_at, so a Close that tested `closed_at IS NULL` would be a
+	//   silent no-op and the room could keep voting;
+	// fails_when=closeVote matches on `closed_at IS NULL`, so the vote after the
+	//   Close still lands;
+	// no_claim=none beyond protects
+	it("Close mid-window closes the materialised row and logs vote_close once", async () => {
+		await startedAgo(MIN);
+		await vote();
+		await closeVote(args());
+		await closeVote(args());
+		await expect(vote()).rejects.toThrow("Voting for this award is not open.");
+		expect((await listVoteSessions(seed.meetingId)).best_speaker.isOpen).toBe(
+			false,
+		);
+		const logged = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, seed.clubId),
+					eq(activityLog.action, "vote_close"),
+				),
+			);
+		expect(logged).toHaveLength(1);
+	});
+
+	// protects=Open after the window has passed stays open until Complete, as it
+	//   did before the window existed (AC 6); fails_when=closed_at is set to the
+	//   past window's end, so the ballot opens and shuts in the same instant;
+	// no_claim=none beyond protects
+	it("Open after the window has passed leaves closed_at NULL and accepts votes", async () => {
+		await startedAgo(WINDOW_END_AFTER_START + 60 * MIN);
+		await openVote(args());
+		const [row] = await sessionRows();
+		expect(row.closedAt).toBeNull();
+		await vote();
+		const votes = await testDb
+			.select()
+			.from(meetingVotes)
+			.where(eq(meetingVotes.sessionId, row.id));
+		expect(votes).toHaveLength(1);
+	});
+
+	// protects=both bulk closers close a materialised row whose closed_at is in
+	//   the FUTURE, which the old `isNull(closed_at)` predicate missed (AC 7);
+	// fails_when=either keeps testing `closed_at IS NULL`;
+	// no_claim=none beyond protects
+	it("closeAllVotesTx and closeClubVotesTx close a row with a future closed_at", async () => {
+		await startedAgo(MIN);
+		await vote();
+		const open = async () =>
+			(await sessionRows()).filter(
+				(r) => r.closedAt === null || r.closedAt.getTime() > Date.now(),
+			);
+		expect(await open()).toHaveLength(1);
+
+		await testDb.transaction((tx) => closeAllVotesTx(tx, seed.meetingId));
+		expect(await open()).toHaveLength(0);
+
+		// Put it back to a future closed_at, then use the club-wide closer.
+		await testDb
+			.update(meetingVoteSessions)
+			.set({ closedAt: new Date(Date.now() + 60 * MIN) })
+			.where(eq(meetingVoteSessions.meetingId, seed.meetingId));
+		expect(await open()).toHaveLength(1);
+		await testDb.transaction((tx) => closeClubVotesTx(tx, seed.clubId));
+		expect(await open()).toHaveLength(0);
+	});
+
+	// protects=the phone's payload in all three states of a category with no row
+	//   (AC 8): before (closed, never opened, no candidates, opensAt = start),
+	//   inside (open, with candidates), after (closed, has opened, no candidates);
+	// fails_when=any state's isOpen/hasOpened/candidates/opensAt is wrong;
+	// no_claim=none beyond protects
+	it("getBallot reports before, inside and after the window with no row", async () => {
+		const before = await startedAgo(-60 * MIN);
+		const b = await loadBallot(seed.meetingId);
+		expect(b.opensAt).toBe(before.toISOString());
+		expect(b.categories.best_speaker).toEqual({
+			isOpen: false,
+			hasOpened: false,
+			candidates: [],
+		});
+
+		await startedAgo(MIN);
+		const inside = await loadBallot(seed.meetingId);
+		expect(inside.categories.best_speaker).toMatchObject({
+			isOpen: true,
+			hasOpened: true,
+		});
+		expect(inside.categories.best_speaker.candidates.length).toBeGreaterThan(0);
+
+		await startedAgo(WINDOW_END_AFTER_START + MIN);
+		const after = await loadBallot(seed.meetingId);
+		expect(after.categories.best_speaker).toEqual({
+			isOpen: false,
+			hasOpened: true,
+			candidates: [],
+		});
+		// Nothing was written by merely reading.
+		expect(await sessionRows()).toHaveLength(0);
+	});
+
+	// protects=a completed or cancelled meeting advertises no opening time;
+	// fails_when=opensAt is set for a meeting that will not open;
+	// no_claim=none beyond protects
+	it("getBallot has no opensAt for a cancelled meeting", async () => {
+		await startedAgo(-60 * MIN);
+		await testDb
+			.update(meetings)
+			.set({ status: "cancelled" })
+			.where(eq(meetings.id, seed.meetingId));
+		const b = await loadBallot(seed.meetingId);
+		expect(b.opensAt).toBeNull();
+		expect(b.categories.best_speaker.isOpen).toBe(false);
+	});
+
+	// protects=a paper-ballot club sees no change: digitalVotingOff, no opensAt,
+	//   and a cast inside the window is still refused (AC 12);
+	// fails_when=the window opens a ballot the club switched off;
+	// no_claim=none beyond protects
+	it("a club with digital voting off: no opensAt, and a vote inside the window is refused", async () => {
+		await startedAgo(MIN);
+		await testDb
+			.update(clubs)
+			.set({ digitalVotingEnabled: false })
+			.where(eq(clubs.id, seed.clubId));
+		const b = await loadBallot(seed.meetingId);
+		expect(b.digitalVotingOff).toBe(true);
+		expect(b.opensAt).toBeNull();
+		await expect(vote()).rejects.toThrow(
+			"Digital voting is off for this meeting.",
+		);
+		expect(await sessionRows()).toHaveLength(0);
+	});
+
+	/** vote_close rows logged for this club. */
+	const closeLogs = () =>
+		testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, seed.clubId),
+					eq(activityLog.action, "vote_close"),
+				),
+			);
+
+	/** Rows still open right now, by the shared predicate. */
+	const openRowCount = async () => {
+		const [{ n }] = await testDb
+			.select({ n: sql<number>`count(*)::int` })
+			.from(meetingVoteSessions)
+			.where(
+				and(
+					eq(meetingVoteSessions.meetingId, seed.meetingId),
+					sessionOpenNow(),
+				),
+			);
+		return n;
+	};
+
+	// protects=Close always ends with the category closed, even when a first vote
+	//   has inserted its row but not committed yet (RISK P1): Close's UPDATE
+	//   cannot see that row, its INSERT conflicts, and the conflict must close it;
+	// fails_when=the conflict is DO NOTHING (Close silently does nothing and the
+	//   category stays open), or vote_close is logged for a no-op;
+	// no_claim=two real phones; the uncommitted first vote is a held transaction
+	it("Close racing an uncommitted first vote still closes the category", async () => {
+		await startedAgo(MIN);
+		const writer = await openBlockingTx(async (tx) => {
+			await materialiseAutoSession(tx, seed.meetingId, "best_speaker");
+		});
+		const closePending = closeVote(args());
+		closePending.catch(() => {});
+		// Close's INSERT is parked on the writer's uncommitted unique-index entry.
+		await waitForLockWait('"meeting_vote_sessions"', writer.pid);
+		await writer.commit();
+		await closePending;
+
+		const rows = await sessionRows();
+		expect(rows).toHaveLength(1);
+		expect(await openRowCount()).toBe(0);
+		await expect(vote()).rejects.toThrow("Voting for this award is not open.");
+		expect(await closeLogs()).toHaveLength(1);
+	});
+
+	// protects=a first vote and Complete cannot interleave so that the vote's
+	//   row survives Complete's bulk close (RISK P2): the vote reads the meeting
+	//   FOR SHARE, so Complete waits for it and then closes its row;
+	// fails_when=materialiseAutoSession reads the meeting without the share lock
+	//   (Complete does not wait, and its close misses the uncommitted row,
+	//   leaving an open row on a completed meeting);
+	// no_claim=the order where Complete commits first (the test above refuses it)
+	it("Complete waits for an uncommitted first vote and closes its row", async () => {
+		await startedAgo(MIN);
+		const writer = await openBlockingTx(async (tx) => {
+			await materialiseAutoSession(tx, seed.meetingId, "best_speaker");
+		});
+		const completing = applyCompleteMeeting({
+			meetingId: seed.meetingId,
+			actorMemberId: seed.adminMemberId,
+		});
+		completing.catch(() => {});
+		await waitForLockWait('"meetings"', writer.pid);
+		await writer.commit();
+		await completing;
+
+		expect(await sessionRows()).toHaveLength(1);
+		expect(await openRowCount()).toBe(0);
+	});
+
+	// protects=the same for the meeting's own digital-voting switch (RISK P2);
+	// fails_when=as above, for `applyMeetingDigitalVoting`;
+	// no_claim=the club-wide switch (next test)
+	it("the meeting switch-off waits for an uncommitted first vote and closes its row", async () => {
+		await startedAgo(MIN);
+		const { applyMeetingDigitalVoting } = await import(
+			"#/server/meetings-logic"
+		);
+		const writer = await openBlockingTx(async (tx) => {
+			await materialiseAutoSession(tx, seed.meetingId, "best_speaker");
+		});
+		const switching = applyMeetingDigitalVoting({
+			meetingId: seed.meetingId,
+			disabled: true,
+			actorMemberId: seed.adminMemberId,
+		});
+		switching.catch(() => {});
+		await waitForLockWait('"meetings"', writer.pid);
+		await writer.commit();
+		await switching;
+
+		expect(await sessionRows()).toHaveLength(1);
+		expect(await openRowCount()).toBe(0);
+	});
+
+	// protects=the same for the club-wide switch, which updates the club row
+	//   (RISK P2); fails_when=the club row is not locked FOR SHARE by the vote;
+	// no_claim=none beyond protects
+	it("the club switch-off waits for an uncommitted first vote and closes its row", async () => {
+		await startedAgo(MIN);
+		const writer = await openBlockingTx(async (tx) => {
+			await materialiseAutoSession(tx, seed.meetingId, "best_speaker");
+		});
+		const switching = applyClubAgendaSettingsUpdate({
+			clubId: seed.clubId,
+			geIntroducesFunctionaries: false,
+			tableTopicsMinSeconds: 60,
+			tableTopicsMaxSeconds: 120,
+			digitalVotingEnabled: false,
+		});
+		switching.catch(() => {});
+		await waitForLockWait('"clubs"', writer.pid);
+		await writer.commit();
+		await switching;
+
+		expect(await sessionRows()).toHaveLength(1);
+		expect(await openRowCount()).toBe(0);
+	});
+
+	// protects=Close on a club with digital voting off, or a meeting switched
+	//   off, inserts NO row: a row would flip usesDigitalVoting and drop the paper
+	//   tally from the packet (RISK P3); the Ballot Counter can still call Close;
+	// fails_when=the insert runs regardless of the switches;
+	// no_claim=Close of an open vote with digital voting off (existing test)
+	it("Close inserts no row for a club or meeting with digital voting off", async () => {
+		await startedAgo(MIN);
+		await testDb
+			.update(clubs)
+			.set({ digitalVotingEnabled: false })
+			.where(eq(clubs.id, seed.clubId));
+		await closeVote(args());
+		expect(await sessionRows()).toHaveLength(0);
+
+		await testDb
+			.update(clubs)
+			.set({ digitalVotingEnabled: true })
+			.where(eq(clubs.id, seed.clubId));
+		await testDb
+			.update(meetings)
+			.set({ digitalVotingDisabled: true })
+			.where(eq(meetings.id, seed.meetingId));
+		await closeVote(args());
+		expect(await sessionRows()).toHaveLength(0);
+		expect(await closeLogs()).toHaveLength(0);
+	});
+
+	// protects=the window checks are right whatever the Postgres session time zone
+	//   is (RISK P3): the columns are `timestamp` without zone, written as UTC, so
+	//   a bare now() comparison is wrong by the zone offset;
+	// fails_when=a comparison or write uses now() (session zone) instead of
+	//   timezone('UTC', now()): the first vote is refused or the close time skews;
+	// no_claim=a zone set on the real pool (src/db/index.ts is untouched); each
+	//   transaction here sets its own zone with SET LOCAL
+	for (const zone of ["America/Chicago", "Asia/Tokyo"]) {
+		it(`materialises, reads and closes correctly under session time zone ${zone}`, async () => {
+			const scheduledAt = await startedAgo(MIN);
+			await testDb.transaction(async (tx) => {
+				await tx.execute(sql.raw(`set local time zone '${zone}'`));
+				await materialiseAutoSession(tx, seed.meetingId, "best_speaker");
+				const rows = await tx
+					.select()
+					.from(meetingVoteSessions)
+					.where(eq(meetingVoteSessions.meetingId, seed.meetingId));
+				expect(rows).toHaveLength(1);
+				expect(rows[0].openedAt.getTime()).toBe(scheduledAt.getTime());
+				const open = await tx
+					.select({ id: meetingVoteSessions.id })
+					.from(meetingVoteSessions)
+					.where(sessionOpenNow());
+				expect(open).toHaveLength(1);
+
+				await closeVoteTx(tx, args());
+				const [closed] = await tx
+					.select()
+					.from(meetingVoteSessions)
+					.where(eq(meetingVoteSessions.meetingId, seed.meetingId));
+				// Written as UTC wall clock: within a minute of the real instant.
+				expect(
+					Math.abs((closed.closedAt?.getTime() ?? 0) - Date.now()),
+				).toBeLessThan(MIN);
+				expect(
+					await tx
+						.select({ id: meetingVoteSessions.id })
+						.from(meetingVoteSessions)
+						.where(sessionOpenNow()),
+				).toHaveLength(0);
+			});
+		});
+	}
 });

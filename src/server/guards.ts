@@ -731,6 +731,14 @@ export async function requireVoteCounterCapability(input: {
 	return voteCounterCapabilityFor(await getSessionUser(), input);
 }
 
+/** The refusal when nobody in the Vote Counter capability matches (#1472). */
+export const VOTE_COUNTER_CAPABILITY_REFUSAL =
+	"Only the Ballot Counter, the Toastmaster or a club admin can do that.";
+
+/** The refusal for ruling a candidate out: the Toastmaster is not granted it. */
+export const VOTE_RULING_REFUSAL =
+	"Only the Ballot Counter or a club admin can do that.";
+
 /**
  * The body of the gate above, against a session the CALLER has already resolved.
  *
@@ -787,7 +795,7 @@ async function voteCounterCapabilityFor(
 			actorMemberId: membership.id,
 		};
 	}
-	throw new Error("Only the Ballot Counter or a club admin can do that.");
+	throw new Error(VOTE_COUNTER_CAPABILITY_REFUSAL);
 }
 
 /**
@@ -863,7 +871,15 @@ export async function requireSignedInVoteCounter(input: {
 	// Pinned, because a reorder is invisible to every case that uses a meeting
 	// which EXISTS: the same file refuses a nonexistent meeting id and asserts it
 	// gets this message.
-	return voteCounterCapabilityFor(sessionUser, input);
+	const authz = await voteCounterCapabilityFor(sessionUser, input);
+	// #1472: the Toastmaster joined the capability to read the tally and record
+	// the winner. Ruling a candidate out is the one thing that stays with the
+	// Ballot Counter and the admin grants, so a Toastmaster who holds neither is
+	// refused here, whatever session they carry.
+	if (authz.via === "tmod-self-assert") {
+		throw new Error(VOTE_RULING_REFUSAL);
+	}
+	return authz;
 }
 
 /** Fetch a roster member by id (server-only, no auth check). */

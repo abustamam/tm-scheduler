@@ -30,6 +30,7 @@ vi.mock("#/server/voting", () => ({
 	undoDisqualificationFn,
 }));
 
+import { formatVoteTime } from "#/lib/vote-window";
 import { VoteCounterPanel } from "./vote-counter-panel";
 
 const MEETING_ID = "11111111-1111-4111-8111-111111111111";
@@ -44,9 +45,15 @@ function category(over: {
 	disqualified?: (Entry & { count: number; reason: string })[];
 	voterNames?: string[];
 	anonymousCount?: number;
+	openedAt?: string | null;
+	closedAt?: string | null;
+	autoWindow?: { opensAt: string; closesAt: string } | null;
 }) {
 	return {
 		isOpen: over.isOpen ?? false,
+		openedAt: over.openedAt ?? null,
+		closedAt: over.closedAt ?? null,
+		autoWindow: over.autoWindow ?? null,
 		results: over.results ?? [],
 		disqualified: over.disqualified ?? [],
 		voterNames: over.voterNames ?? [],
@@ -75,7 +82,11 @@ function tally(over: Partial<Record<string, ReturnType<typeof category>>>) {
  * absence is what a reader should have to opt into.
  */
 function renderPanel(
-	over: { sessionMemberId?: string | null; canManageClub?: boolean } = {},
+	over: {
+		sessionMemberId?: string | null;
+		canManageClub?: boolean;
+		rulingExcluded?: boolean;
+	} = {},
 ) {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const utils = render(
@@ -90,6 +101,7 @@ function renderPanel(
 				// own reason to exist. An admin default would make every case here an
 				// admin case and the session arm would go untested.
 				canManageClub={over.canManageClub ?? false}
+				rulingExcluded={over.rulingExcluded}
 				onSetWinner={vi.fn()}
 				onClearWinner={vi.fn()}
 			/>
@@ -959,5 +971,109 @@ describe("VoteCounterPanel who has voted (#982)", () => {
 		expect(await speaker.findByText("Who has voted (1)")).toBeTruthy();
 		expect(speaker.getByText("Bo")).toBeTruthy();
 		expect(card("Best Evaluator").queryByText(/Who has voted/)).toBeNull();
+	});
+});
+
+describe("VoteCounterPanel automatic window (#1472)", () => {
+	afterEach(() => {
+		cleanup();
+		vi.clearAllMocks();
+	});
+
+	const at = formatVoteTime;
+
+	// protects=the Vote Counter is told a closed category will open by itself, and
+	//   when, so they do not tap Open at the start; fails_when=the line is absent
+	//   or reads the club's clock; no_claim=the window arithmetic (vote-window.test)
+	it("says when a category not yet open will open on its own", async () => {
+		const opensAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					autoWindow: {
+						opensAt: opensAt.toISOString(),
+						closesAt: new Date(opensAt.getTime() + 3600_000).toISOString(),
+					},
+				}),
+			}),
+		);
+		renderPanel();
+		expect(
+			await card("Best Speaker").findByText(
+				`Opens on its own at ${at(opensAt)}`,
+			),
+		).toBeTruthy();
+		// The button is the override and keeps its label.
+		expect(
+			card("Best Speaker").getByRole("button", { name: /Open voting/ }),
+		).toBeTruthy();
+	});
+
+	// protects=an open category says when it closes by itself; fails_when=a row with
+	//   a past or null closedAt prints a close time; no_claim=none beyond protects
+	it("says when an open category will close on its own, and nothing otherwise", async () => {
+		const closesAt = new Date(Date.now() + 60 * 60 * 1000);
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: true,
+					openedAt: new Date(Date.now() - 60_000).toISOString(),
+					closedAt: closesAt.toISOString(),
+				}),
+				best_evaluator: category({
+					isOpen: true,
+					openedAt: new Date(Date.now() - 60_000).toISOString(),
+					closedAt: null,
+				}),
+			}),
+		);
+		renderPanel();
+		expect(
+			await card("Best Speaker").findByText(
+				`Closes on its own at ${at(closesAt)}`,
+			),
+		).toBeTruthy();
+		expect(card("Best Evaluator").queryByText(/on its own/)).toBeNull();
+	});
+
+	// protects=a category the Vote Counter closed BEFORE the window opens does not
+	//   claim it will open on its own (AC 5): a row exists, so its own window rules;
+	// fails_when=the note reads the meeting's autoWindow although a row exists;
+	// no_claim=the server keeps the category closed (voting.integration.test.ts)
+	it("says nothing about opening on its own once the category was closed before the window", async () => {
+		const now = Date.now();
+		const opensAt = new Date(now + 2 * 60 * 60 * 1000);
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					openedAt: new Date(now).toISOString(),
+					closedAt: new Date(now).toISOString(),
+					autoWindow: {
+						opensAt: opensAt.toISOString(),
+						closesAt: new Date(opensAt.getTime() + 3600_000).toISOString(),
+					},
+				}),
+			}),
+		);
+		renderPanel();
+		await card("Best Speaker").findByRole("button", { name: /Open voting/ });
+		expect(card("Best Speaker").queryByText(/on its own/)).toBeNull();
+	});
+
+	// protects=a Toastmaster who holds a session is not shown the ruling controls
+	//   the server refuses them; fails_when=rulingExcluded is ignored;
+	// no_claim=that the route passes it (vote-counter-tmod-wiring.guard.test.ts)
+	it("hides the ruling controls from a Toastmaster-only viewer", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: true,
+					results: [member("m1", "Ana", 2)],
+				}),
+			}),
+		);
+		renderPanel({ rulingExcluded: true });
+		await screen.findAllByText("Ana");
+		expect(screen.queryAllByRole("button", { name: /Disqualify/ })).toEqual([]);
 	});
 });

@@ -10,7 +10,7 @@
  * "Off" removes digital voting only — the ballot QR, the Ballot Counter's vote
  * panel, the public ballot, and the server paths that open a vote, take a
  * ballot or add a guest to one. Paper voting is untouched: the agenda still
- * says who opens voting for Best Speaker, the deck still shows the nominees,
+ * says who calls for votes for Best Speaker, the deck still shows the nominees,
  * and the winners are still recorded in the minutes.
  *
  * Pure and `#/db`-free so the client bundle, the print route and the server

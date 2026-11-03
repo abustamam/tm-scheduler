@@ -27,6 +27,7 @@ const { getBallot, submitVote } = vi.hoisted(() => ({
 }));
 vi.mock("#/server/voting", () => ({ getBallot, submitVote }));
 
+import { formatVoteTime } from "#/lib/vote-window";
 import { ANONYMOUS_VOTER, Ballot, type BallotIdentity } from "./ballot";
 
 const MEETING_ID = "11111111-1111-4111-8111-111111111111";
@@ -94,6 +95,7 @@ function fixture(overrides: Partial<BallotData["categories"]>): BallotData {
 			...overrides,
 		},
 		digitalVotingOff: false,
+		opensAt: null,
 	};
 }
 
@@ -173,6 +175,42 @@ describe("Ballot", () => {
 				await screen.findByText("Digital voting is off for this meeting"),
 			).toBeTruthy();
 			expect(screen.queryByText(WAITING_PANEL)).toBeNull();
+		});
+	});
+
+	describe("the automatic window (#1472)", () => {
+		// protects=a phone that arrives before the window is told WHEN voting opens,
+		//   in its own locale, not the "No vote is open" line; fails_when=the line is
+		//   missing, shows the club's time, or shows for a past opensAt;
+		// no_claim=the server's choice of opensAt (voting.integration.test.ts);
+		//   the rendered clock text is whatever this runner's locale produces
+		it("shows 'Voting opens at {time}' when nothing is open and opensAt is ahead", async () => {
+			const opensAt = new Date(Date.now() + 3 * 60 * 60 * 1000);
+			getBallot.mockResolvedValue({
+				...fixture({}),
+				opensAt: opensAt.toISOString(),
+			});
+			renderBallot();
+
+			const time = formatVoteTime(opensAt);
+			expect(await screen.findByText(`Voting opens at ${time}`)).toBeTruthy();
+			expect(screen.queryByText(WAITING_PANEL)).toBeNull();
+		});
+
+		// protects=a phone that arrives after the window opened but with nothing
+		//   open (every category closed by hand) still reads "No vote is open right
+		//   now", not a stale "Voting opens at" for a past time;
+		// fails_when=the opens-at branch ignores that opensAt is already past;
+		// no_claim=the formatting of the time (covered by the test above)
+		it("keeps 'No vote is open right now' once opensAt has passed", async () => {
+			getBallot.mockResolvedValue({
+				...fixture({}),
+				opensAt: new Date(Date.now() - 60_000).toISOString(),
+			});
+			renderBallot();
+
+			expect(await screen.findByText(WAITING_PANEL)).toBeTruthy();
+			expect(screen.queryByText(/Voting opens at/)).toBeNull();
 		});
 	});
 
