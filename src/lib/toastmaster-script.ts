@@ -13,6 +13,7 @@
 // type, so only two shapes are structural and only those are recognised — a
 // speech row (its `slotId` is a speech slot) and the per-speech preamble (a
 // Toastmaster `handoff` row directly before a speech row).
+
 import {
 	type AgendaSlot,
 	matchesRole,
@@ -116,6 +117,10 @@ export function buildToastmasterScript(input: {
 
 		if (speechSlot) {
 			const speaker = row.holder ?? OPEN_LABEL;
+			// The marker is for the eye; the Toastmaster reads the bare name aloud.
+			// Taken from the slot, never parsed back out of the rendered text: a
+			// member's own name can end in " (V)" or " \u00b7 Guest".
+			const spoken = speechSlot.assigneeName ?? OPEN_LABEL;
 			const title = speechSlot.speechTitle?.trim() || null;
 			const evaluators = pairedEvaluatorNames(speechSlot.id, slots);
 			const written = introductions?.[speechSlot.id]?.trim() || null;
@@ -125,8 +130,8 @@ export function buildToastmasterScript(input: {
 				introduction === "shown" && written
 					? written
 					: title
-						? `${title} – ${speaker} – ${speaker} – ${title}`
-						: `Introduce ${speaker}.`;
+						? `${title} – ${spoken} – ${spoken} – ${title}`
+						: `Introduce ${spoken}.`;
 			const names = evaluators.length > 0 ? joinNames(evaluators) : null;
 			lines.push({
 				kind: "speech",

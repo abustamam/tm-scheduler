@@ -348,13 +348,51 @@ describe("buildToastmasterScript", () => {
 		expect(guest?.kind).toBe("speech");
 		if (member?.kind !== "speech" || guest?.kind !== "speech") return;
 		expect(guest.speaker).toBe("Gus · Guest");
+		expect(guest.say).not.toContain("Guest");
+		expect(guest.say).toContain("Gus");
 		expect(guest.evaluatorAsk).toBe(member.evaluatorAsk);
 		expect(guest.evaluatorAsk).toContain("Eval0");
 		expect(guest).toEqual({
 			...member,
 			speaker: "Gus · Guest",
-			say: member.say.replaceAll("Gus", "Gus · Guest"),
+			say: member.say,
 		});
+	});
+
+	// protects=the spoken name comes from the slot's bare name: a visiting-
+	//   Toastmaster guest keeps "(V)" on `speaker` but not in `say`.
+	// fails_when=`say` is built from the rendered `speaker` text.
+	// no_claim=the wording of the marker.
+	it("a visiting-Toastmaster guest: the marker stays on speaker, not in say", () => {
+		const slots = club(["Rise"]).map((s) =>
+			s.id === "sp0"
+				? {
+						...s,
+						assigneeName: "Vic",
+						assigneeIsGuest: true,
+						assigneeIsVisitingToastmaster: true,
+					}
+				: s,
+		);
+		const line = speeches(script(slots))[0];
+		if (line?.kind !== "speech") throw new Error("no speech line");
+		expect(line.speaker).toBe("Vic (V)");
+		expect(line.say).toBe("Rise \u2013 Vic \u2013 Vic \u2013 Rise");
+	});
+
+	// protects=a MEMBER whose own name contains " (V)" or " \u00b7 Guest" is read
+	//   aloud in full: the name is never parsed back out of the rendered text.
+	// fails_when=`say` strips a marker-shaped substring from the display string.
+	// no_claim=how such a name is displayed.
+	it("a member whose own name looks like a marker keeps it in say", () => {
+		for (const name of ["Ann (V)", "Bo \u00b7 Guest"]) {
+			const slots = club(["Rise"]).map((s) =>
+				s.id === "sp0" ? { ...s, assigneeName: name } : s,
+			);
+			const line = speeches(script(slots))[0];
+			if (line?.kind !== "speech") throw new Error("no speech line");
+			expect(line.say).toBe(`Rise \u2013 ${name} \u2013 ${name} \u2013 Rise`);
+		}
 	});
 
 	// protects=AC2: the stored (materialised) agenda, resolved as the route does
