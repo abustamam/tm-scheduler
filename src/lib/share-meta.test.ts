@@ -37,7 +37,7 @@ describe("shareMeta", () => {
 		expect(meta.filter((m) => "title" in m)).toEqual([{ title: "T" }]);
 		expect(meta).toContainEqual({
 			property: "og:image",
-			content: "https://gavelup.app/landing/hero.png",
+			content: "https://gavelup.app/og/default.png",
 		});
 		expect(meta).toContainEqual({
 			property: "og:url",

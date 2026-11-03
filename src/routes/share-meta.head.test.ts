@@ -34,7 +34,7 @@ describe("QR-scanned routes keep noindex and gain a preview", () => {
 		});
 		expect(m).toContainEqual({ title: "Vote — Acme Speakers" });
 		expect(prop(m, "robots")).toBe("noindex, nofollow");
-		expect(prop(m, "og:image")).toBe("https://gavelup.app/landing/hero.png");
+		expect(prop(m, "og:image")).toBe("https://gavelup.app/og/default.png");
 	});
 	it("feedback", async () => {
 		const { Route } = await import(
@@ -122,7 +122,7 @@ describe("sign-up sheet head", () => {
 	it("an undefined clubUuid keeps the default image, never 'undefined'", async () => {
 		const m = await clubHead({}, { ogVersion: "abc123def456" });
 		expect(JSON.stringify(m)).not.toContain("undefined");
-		expect(prop(m, "og:image")).toBe("https://gavelup.app/landing/hero.png");
+		expect(prop(m, "og:image")).toBe("https://gavelup.app/og/default.png");
 	});
 });
 
@@ -218,7 +218,7 @@ describe("meeting page head", () => {
 	it("an undefined clubUuid keeps the default image, never 'undefined'", async () => {
 		const m = await withOg({}, { ...base, ogVersion: "abc123def456" });
 		expect(JSON.stringify(m)).not.toContain("undefined");
-		expect(prop(m, "og:image")).toBe("https://gavelup.app/landing/hero.png");
+		expect(prop(m, "og:image")).toBe("https://gavelup.app/og/default.png");
 	});
 
 	it("PRIVACY: no roster field reaches any meta tag", async () => {
