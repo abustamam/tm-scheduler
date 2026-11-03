@@ -348,12 +348,14 @@ describe("buildToastmasterScript", () => {
 		expect(guest?.kind).toBe("speech");
 		if (member?.kind !== "speech" || guest?.kind !== "speech") return;
 		expect(guest.speaker).toBe("Gus · Guest");
+		expect(guest.say).not.toContain("Guest");
+		expect(guest.say).toContain("Gus");
 		expect(guest.evaluatorAsk).toBe(member.evaluatorAsk);
 		expect(guest.evaluatorAsk).toContain("Eval0");
 		expect(guest).toEqual({
 			...member,
 			speaker: "Gus · Guest",
-			say: member.say.replaceAll("Gus", "Gus · Guest"),
+			say: member.say,
 		});
 	});
 
