@@ -10,15 +10,22 @@
  *
  * Since #852 it also carries the two rules that decide who may connect what:
  * only an officer may APPROVE (every approving case below signs in as one,
- * via `officerCookie`), and only hosted Claude's Client ID Metadata Document
- * is fetched — served here from `src/test/fixtures/claude-cimd-metadata.json`
- * by mocking the one transport module, so nothing calls claude.ai.
+ * via `officerCookie`), and only hosted Claude's and ChatGPT's Client ID
+ * Metadata Documents are fetched — served here from `src/test/fixtures/` by
+ * mocking the one transport module, so nothing calls claude.ai or chatgpt.com.
  *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/routes/oauth-consent.integration.test.ts
  */
-import { createHash, randomBytes } from "node:crypto";
+import {
+	createHash,
+	generateKeyPairSync,
+	type KeyObject,
+	randomBytes,
+	randomUUID,
+	sign,
+} from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq, sql } from "drizzle-orm";
@@ -75,19 +82,77 @@ function clientIp(): string {
 	return `198.18.${a ?? 0}.${1 + ((b ?? 0) % 254)}`;
 }
 
-/** Serve the fixture for Claude's URL, as claude.ai serves it; refuse anything else. */
-function serveClaudeDocument(): void {
-	vi.mocked(fetchClientMetadataResource).mockImplementation(async (input) => {
-		const url = input instanceof Request ? input.url : String(input);
-		if (url !== CLAUDE_CLIENT_ID)
-			throw new TypeError(`unexpected fetch ${url}`);
-		return new Response(CLAUDE_CIMD_DOCUMENT, {
+/** ChatGPT's stable client id (`#/lib/oauth-connector-clients` says why stable). */
+const CHATGPT_CLIENT_ID = "https://chatgpt.com/oauth/client.json";
+const CHATGPT_REDIRECT_URI =
+	"https://chatgpt.com/connector_platform_oauth_redirect";
+const CHATGPT_JWKS_URI = "https://chatgpt.com/oauth/jwks.json";
+
+/**
+ * The live document as fetched 2026-11-02, under the same rule as Claude's:
+ * never edit it to make a test pass. Unlike Claude, ChatGPT is a
+ * `private_key_jwt` client: it signs every token request with a key published
+ * at its `jwks_uri`.
+ */
+const CHATGPT_CIMD_DOCUMENT = readFileSync(
+	join(import.meta.dirname, "../test/fixtures/chatgpt-cimd-metadata.json"),
+	"utf8",
+);
+
+/**
+ * Stand-in for ChatGPT's signing key: its real private key is OpenAI's, so
+ * `serveConnectorDocuments` serves THIS key's public half at the real
+ * `jwks_uri`.
+ */
+const CHATGPT_KID = "test-chatgpt-key";
+const chatgptKey = generateKeyPairSync("rsa", { modulusLength: 2048 });
+
+/** An RFC 7523 client assertion as ChatGPT sends one, signed with `key`. */
+function chatgptClientAssertion(
+	key: KeyObject = chatgptKey.privateKey,
+	kid: string = CHATGPT_KID,
+): string {
+	const now = Math.floor(Date.now() / 1000);
+	const part = (value: object) =>
+		Buffer.from(JSON.stringify(value)).toString("base64url");
+	const signingInput = `${part({ alg: "RS256", typ: "JWT", kid })}.${part({
+		iss: CHATGPT_CLIENT_ID,
+		sub: CHATGPT_CLIENT_ID,
+		aud: `${oauth.TEST_ISSUER}/oauth2/token`,
+		iat: now,
+		exp: now + 120,
+		jti: randomUUID(),
+	})}`;
+	const signature = sign("sha256", Buffer.from(signingInput), key);
+	return `${signingInput}.${signature.toString("base64url")}`;
+}
+
+/**
+ * Serve each allowlisted client's fixture at its URL, as claude.ai and
+ * chatgpt.com serve them, plus ChatGPT's (test) JWKS; refuse anything else.
+ */
+function serveConnectorDocuments(): void {
+	const json = (body: string) =>
+		new Response(body, {
 			status: 200,
 			headers: {
 				"content-type": "application/json",
 				"cache-control": "public, max-age=300",
 			},
 		});
+	vi.mocked(fetchClientMetadataResource).mockImplementation(async (input) => {
+		const url = input instanceof Request ? input.url : String(input);
+		if (url === CLAUDE_CLIENT_ID) return json(CLAUDE_CIMD_DOCUMENT);
+		if (url === CHATGPT_CLIENT_ID) return json(CHATGPT_CIMD_DOCUMENT);
+		if (url === CHATGPT_JWKS_URI) {
+			const jwk = chatgptKey.publicKey.export({ format: "jwk" });
+			return json(
+				JSON.stringify({
+					keys: [{ ...jwk, kid: CHATGPT_KID, use: "sig", alg: "RS256" }],
+				}),
+			);
+		}
+		throw new TypeError(`unexpected fetch ${url}`);
 	});
 }
 
@@ -126,7 +191,9 @@ describe.skipIf(!hasTestDb)(
 
 		afterAll(async () => {
 			await oauth.cleanupOAuth(
-				client ? [client.clientId, CLAUDE_CLIENT_ID] : [CLAUDE_CLIENT_ID],
+				client
+					? [client.clientId, CLAUDE_CLIENT_ID, CHATGPT_CLIENT_ID]
+					: [CLAUDE_CLIENT_ID, CHATGPT_CLIENT_ID],
 				[...emails],
 			);
 			for (const seeded of [club, archivedClub]) {
@@ -599,6 +666,13 @@ describe.skipIf(!hasTestDb)(
 
 			/** `POST /oauth2/token` as a PUBLIC client: a client id and no secret. */
 			function tokenRequest(params: Record<string, string>): Promise<Response> {
+				return tokenRequestFor(CLAUDE_CLIENT_ID, params);
+			}
+
+			function tokenRequestFor(
+				clientId: string,
+				params: Record<string, string>,
+			): Promise<Response> {
 				return loaded.handler(
 					new Request(`${oauth.TEST_ISSUER}/oauth2/token`, {
 						method: "POST",
@@ -607,7 +681,7 @@ describe.skipIf(!hasTestDb)(
 							"x-real-ip": clientIp(),
 						},
 						body: new URLSearchParams({
-							client_id: CLAUDE_CLIENT_ID,
+							client_id: clientId,
 							resource: oauth.TEST_RESOURCE,
 							...params,
 						}).toString(),
@@ -667,38 +741,30 @@ describe.skipIf(!hasTestDb)(
 					(call) => call[0] === "[oauth] refused CIMD client_id",
 				);
 
-			it("grants the live Claude document end to end as a public client, and the token calls whoami", async () => {
-				serveClaudeDocument();
-				const info = vi.spyOn(console, "info");
-				const { email, cookie } = await officerCookie();
-				const { consentLocation, tokens } = await claudeGrant(cookie);
-
-				// The consent screen names the client from its document.
-				const lookup = await lookupConsentClient(
-					new Headers({ cookie }),
-					consentLocation.searchParams.get("client_id") as string,
-				);
-				expect(lookup).toMatchObject({
-					eligible: true,
-					client: { clientId: CLAUDE_CLIENT_ID, name: "Claude" },
-				});
-				expect(fetchClientMetadataResource).toHaveBeenCalled();
-				expect(refusalLogs(info)).toEqual([]);
-
-				// A public client: no secret was ever issued or stored.
+			/** The stored client row: no secret, and the auth method its document named. */
+			async function expectClientRow(
+				clientId: string,
+				tokenEndpointAuthMethod: string,
+			): Promise<void> {
 				const [row] = (
 					await testDb.execute<{
 						client_secret: string | null;
 						token_endpoint_auth_method: string | null;
 					}>(
-						sql`select client_secret, token_endpoint_auth_method from oauth_client where client_id = ${CLAUDE_CLIENT_ID}`,
+						sql`select client_secret, token_endpoint_auth_method from oauth_client where client_id = ${clientId}`,
 					)
 				).rows;
 				expect(row).toEqual({
 					client_secret: null,
-					token_endpoint_auth_method: "none",
+					token_endpoint_auth_method: tokenEndpointAuthMethod,
 				});
+			}
 
+			/** Call `whoami` on /api/mcp with an OAuth access token; it must answer as `email`. */
+			async function expectWhoamiAs(
+				accessToken: string,
+				email: string,
+			): Promise<void> {
 				const restoreFetch = oauth.routeJwksToHandler(loaded.handler);
 				try {
 					const res = await handleMcpRequest(
@@ -707,7 +773,7 @@ describe.skipIf(!hasTestDb)(
 							headers: {
 								"content-type": "application/json",
 								accept: "application/json, text/event-stream",
-								authorization: `Bearer ${tokens.access_token}`,
+								authorization: `Bearer ${accessToken}`,
 							},
 							body: JSON.stringify({
 								jsonrpc: "2.0",
@@ -729,10 +795,33 @@ describe.skipIf(!hasTestDb)(
 				} finally {
 					restoreFetch();
 				}
+			}
+
+			it("grants the live Claude document end to end as a public client, and the token calls whoami", async () => {
+				serveConnectorDocuments();
+				const info = vi.spyOn(console, "info");
+				const { email, cookie } = await officerCookie();
+				const { consentLocation, tokens } = await claudeGrant(cookie);
+
+				// The consent screen names the client from its document.
+				const lookup = await lookupConsentClient(
+					new Headers({ cookie }),
+					consentLocation.searchParams.get("client_id") as string,
+				);
+				expect(lookup).toMatchObject({
+					eligible: true,
+					client: { clientId: CLAUDE_CLIENT_ID, name: "Claude" },
+				});
+				expect(fetchClientMetadataResource).toHaveBeenCalled();
+				expect(refusalLogs(info)).toEqual([]);
+
+				// A public client: no secret was ever issued or stored.
+				await expectClientRow(CLAUDE_CLIENT_ID, "none");
+				await expectWhoamiAs(tokens.access_token, email);
 			});
 
 			it("rotates a public client's refresh token, and refuses the old one", async () => {
-				serveClaudeDocument();
+				serveConnectorDocuments();
 				const { cookie } = await officerCookie();
 				const { tokens } = await claudeGrant(cookie, {
 					scope: "email offline_access",
@@ -782,7 +871,7 @@ describe.skipIf(!hasTestDb)(
 				],
 				["an arbitrary origin", `https://evil.example/client-${SUFFIX}`],
 			])("refuses %s before fetching it, writes no client, and logs it once", async (_label, clientId) => {
-				serveClaudeDocument();
+				serveConnectorDocuments();
 				const info = vi.spyOn(console, "info").mockImplementation(() => {});
 				const { cookie } = await officerCookie();
 				const { response } = await authorizeByUrl(clientId, cookie);
@@ -805,7 +894,7 @@ describe.skipIf(!hasTestDb)(
 				// plugin's per-origin fetch allowance (30 a minute), so the real
 				// client's next metadata fetch still goes through.
 				const { cookie } = await officerCookie();
-				serveClaudeDocument();
+				serveConnectorDocuments();
 				const info = vi.spyOn(console, "info").mockImplementation(() => {});
 				// Past any cached copy of Claude's document (max-age=300), so the
 				// authorize below must FETCH it, and so needs that allowance.
@@ -903,7 +992,7 @@ describe.skipIf(!hasTestDb)(
 						),
 				],
 			])("refuses an unlisted id arriving in %s, with the provider's unknown-client error", async (_label, build) => {
-				serveClaudeDocument();
+				serveConnectorDocuments();
 				const info = vi.spyOn(console, "info").mockImplementation(() => {});
 				const clientId = `https://unlisted.example/${SUFFIX}/${randomBytes(3).toString("hex")}`;
 				const res = await loaded.handler(build(clientId));
@@ -916,6 +1005,166 @@ describe.skipIf(!hasTestDb)(
 				expect(refusalLogs(info)).toEqual([
 					["[oauth] refused CIMD client_id", JSON.stringify(clientId)],
 				]);
+			});
+
+			describe("ChatGPT connects by its stable document, signing its token requests", () => {
+				/** `POST /oauth2/token` as ChatGPT sends it: a signed client assertion. */
+				function chatgptTokenRequest(
+					params: Record<string, string>,
+					assertion = chatgptClientAssertion(),
+				): Promise<Response> {
+					return tokenRequestFor(CHATGPT_CLIENT_ID, {
+						client_assertion_type:
+							"urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+						client_assertion: assertion,
+						...params,
+					});
+				}
+
+				/** Authorize → consent → code, for ChatGPT's id and redirect. */
+				async function chatgptCode(cookie: string): Promise<{
+					consentLocation: URL;
+					code: string;
+					verifier: string;
+				}> {
+					const { response, verifier } = await authorizeByUrl(
+						CHATGPT_CLIENT_ID,
+						cookie,
+						{ redirect_uri: CHATGPT_REDIRECT_URI },
+					);
+					const consentLocation = new URL(
+						response.headers.get("location") ?? "",
+						oauth.TEST_ORIGIN,
+					);
+					expect(consentLocation.pathname, await response.clone().text()).toBe(
+						"/oauth/consent",
+					);
+					const consent = await oauth.postConsent(
+						loaded,
+						cookie,
+						consentLocation.search.slice(1),
+						true,
+					);
+					expect(consent.status).toBe(200);
+					const next = new URL(((await consent.json()) as { url: string }).url);
+					expect(`${next.origin}${next.pathname}`).toBe(CHATGPT_REDIRECT_URI);
+					// RFC 9207: ChatGPT rejects a callback without the matching `iss`
+					// once the metadata advertises it, which this server's does.
+					expect(next.searchParams.get("iss")).toBe(oauth.TEST_ISSUER);
+					expect(next.searchParams.get("code")).toBeTruthy();
+					return {
+						consentLocation,
+						code: next.searchParams.get("code") as string,
+						verifier,
+					};
+				}
+
+				it("grants end to end with private_key_jwt, names ChatGPT on consent, and the token calls whoami", async () => {
+					serveConnectorDocuments();
+					const info = vi.spyOn(console, "info");
+					const { email, cookie } = await officerCookie();
+					const { consentLocation, code, verifier } = await chatgptCode(cookie);
+
+					const lookup = await lookupConsentClient(
+						new Headers({ cookie }),
+						consentLocation.searchParams.get("client_id") as string,
+					);
+					expect(lookup).toMatchObject({
+						eligible: true,
+						client: { clientId: CHATGPT_CLIENT_ID, name: "ChatGPT" },
+					});
+					expect(refusalLogs(info)).toEqual([]);
+
+					const redeemed = await chatgptTokenRequest({
+						grant_type: "authorization_code",
+						code,
+						code_verifier: verifier,
+						redirect_uri: CHATGPT_REDIRECT_URI,
+					});
+					expect(redeemed.status, await redeemed.clone().text()).toBe(200);
+					const tokens = (await redeemed.json()) as { access_token: string };
+					expect(
+						vi
+							.mocked(fetchClientMetadataResource)
+							.mock.calls.map(([input]) => String(input)),
+					).toContain(CHATGPT_JWKS_URI);
+
+					// No secret either: ChatGPT proves itself with its key instead.
+					await expectClientRow(CHATGPT_CLIENT_ID, "private_key_jwt");
+					await expectWhoamiAs(tokens.access_token, email);
+				});
+
+				it("refuses a code redeemed with an assertion ChatGPT's key did not sign", async () => {
+					serveConnectorDocuments();
+					const { cookie } = await officerCookie();
+					const { code, verifier } = await chatgptCode(cookie);
+					const impostor = generateKeyPairSync("rsa", { modulusLength: 2048 });
+					const redeemed = await chatgptTokenRequest(
+						{
+							grant_type: "authorization_code",
+							code,
+							code_verifier: verifier,
+							redirect_uri: CHATGPT_REDIRECT_URI,
+						},
+						chatgptClientAssertion(impostor.privateKey),
+					);
+					expect(redeemed.status).toBe(401);
+					expect(await redeemed.json()).toMatchObject({
+						error: "invalid_client",
+					});
+				});
+
+				it("a flood of assertions naming unknown keys fetches ChatGPT's JWKS at most once", async () => {
+					// The provider refetches a client's JWKS whenever no cached key
+					// matches an assertion's `kid`, BEFORE checking its signature. With
+					// nothing in between, anyone could make GavelUp fetch chatgpt.com
+					// once per request (a Codex reproduction: 35 requests, 36 fetches)
+					// and get the server throttled there. `#/lib/cimd-jwks-throttle`
+					// allows one fetch per JWKS URL per minute.
+					serveConnectorDocuments();
+					const jwksFetches = () =>
+						vi
+							.mocked(fetchClientMetadataResource)
+							.mock.calls.filter(
+								([input]) => String(input) === CHATGPT_JWKS_URI,
+							).length;
+					const before = jwksFetches();
+					for (let i = 0; i < 20; i++) {
+						const impostor = generateKeyPairSync("rsa", {
+							modulusLength: 2048,
+						});
+						const res = await chatgptTokenRequest(
+							{ grant_type: "authorization_code", code: "x" },
+							chatgptClientAssertion(
+								impostor.privateKey,
+								`unknown-${randomBytes(4).toString("hex")}`,
+							),
+						);
+						expect(res.status).toBeGreaterThanOrEqual(400);
+						expect(await res.json()).toMatchObject({ error: "invalid_client" });
+					}
+					expect(jwksFetches() - before).toBeLessThanOrEqual(1);
+				});
+
+				it("refuses a code redeemed with no assertion at all, as a public client", async () => {
+					serveConnectorDocuments();
+					const { cookie } = await officerCookie();
+					const { code, verifier } = await chatgptCode(cookie);
+					const redeemed = await tokenRequestFor(CHATGPT_CLIENT_ID, {
+						grant_type: "authorization_code",
+						code,
+						code_verifier: verifier,
+						redirect_uri: CHATGPT_REDIRECT_URI,
+					});
+					// Refused for the missing assertion itself, not for some other
+					// fault in the request: the provider names the auth method.
+					expect(redeemed.status).toBe(400);
+					expect(await redeemed.json()).toEqual({
+						error: "invalid_client",
+						error_description:
+							"client registered for private_key_jwt cannot use none",
+					});
+				});
 			});
 		});
 	},

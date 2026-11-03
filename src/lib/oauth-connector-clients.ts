@@ -24,9 +24,15 @@
  */
 
 /**
- * The only Client ID Metadata Document URLs GavelUp will fetch. Hosted Claude
- * only (web, desktop, mobile): Claude Code keeps using personal `tmk_` tokens,
- * and its own CIMD document declares loopback redirects.
+ * The only Client ID Metadata Document URLs GavelUp will fetch: hosted Claude
+ * (web, desktop, mobile) and ChatGPT. Claude Code keeps using personal `tmk_`
+ * tokens, and its own CIMD document declares loopback redirects.
+ *
+ * ChatGPT's is its STABLE document, which it uses only because this server
+ * advertises `authorization_response_iss_parameter_supported` and its issuer
+ * matches the protected resource's exactly. Lose either and ChatGPT switches
+ * to a per-connector `https://chatgpt.com/oauth/{callback_id}/client.json`,
+ * which this exact match refuses (OpenAI's Apps SDK auth docs).
  *
  * Adding a client is one entry here plus a fixture test beside the Claude one
  * in `src/routes/oauth-consent.integration.test.ts`. A refused id is logged
@@ -35,6 +41,7 @@
  */
 export const CIMD_ALLOWED_CLIENT_IDS: ReadonlySet<string> = new Set([
 	"https://claude.ai/oauth/mcp-oauth-client-metadata",
+	"https://chatgpt.com/oauth/client.json",
 ]);
 
 /** The longest slice of a refused client id that reaches the log. */

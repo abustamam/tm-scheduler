@@ -95,7 +95,7 @@ export function ConnectedAppsSection({
 					Connected apps
 				</h2>
 				<p className="mt-1 text-sm text-muted-foreground">
-					Apps you've allowed to use GavelUp as you, such as Claude.
+					Apps you've allowed to use GavelUp as you, such as Claude or ChatGPT.
 				</p>
 			</div>
 

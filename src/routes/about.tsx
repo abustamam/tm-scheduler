@@ -52,7 +52,7 @@ const FOUNDER_PARAGRAPHS = [
  * - connector: `maskEmail` / `maskPhone` in `src/server/mcp/serialize.ts`, as
  *   `find_people` returns guests. Scoped to LOOKUPS on purpose: guest-book
  *   transcription (`record_guest_book`) sends Claude's plaintext reading of the
- *   photo IN, so "Claude only ever sees masked contact" would be false.
+ *   photo IN, so "the assistant only ever sees masked contact" would be false.
  * - scripts: no analytics dependency in `package.json`; the one inline script
  *   in `src/routes/__root.tsx` applies the saved theme
  */
@@ -60,7 +60,7 @@ export const DATA_FACTS = [
 	"GavelUp runs on Railway, and your club's data lives in a managed PostgreSQL database there.",
 	"You sign in with a link emailed to you, so GavelUp stores no passwords.",
 	"Members can claim roles from your club's shared sheet without creating an account.",
-	"When Claude looks up guests in GavelUp, their email addresses and phone numbers come back masked.",
+	"When an AI assistant looks up guests in GavelUp, their email addresses and phone numbers come back masked.",
 	"GavelUp loads no advertising or third-party analytics scripts.",
 ];
 
@@ -114,7 +114,7 @@ export const DATA_FACTS = [
  */
 const DATA_PROMISES = [
 	"GavelUp doesn't share your club's data with advertisers or data brokers.",
-	"GavelUp shares your club's data only with the services that run it: Railway (hosting), Resend (email), and Anthropic, if a member connects Claude.",
+	"GavelUp shares your club's data only with the services that run it: Railway (hosting), Resend (email), and Anthropic or OpenAI, if a member connects Claude or ChatGPT.",
 	"Your club's data is used only to run GavelUp for your club.",
 	"Club admins can download the club's roster, meetings, roles, attendance, speeches, guests, awards, dues and action items as spreadsheets at any time.",
 	"If your club leaves GavelUp, we delete its data on request: the club, its meetings and guests, and the member records we hold only for that club. It is gone from our backups within 90 days.",

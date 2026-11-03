@@ -46,6 +46,35 @@ describe("ApiTokensSection", () => {
 		expect(details?.querySelector("summary")?.contains(title)).toBe(true);
 	});
 
+	it("tells a ChatGPT user which plans can connect, so a Free or Plus user knows it is the plan", async () => {
+		state.eligible = true;
+		renderSection();
+		await screen.findByText("From Claude or ChatGPT");
+		expect(
+			await screen.findByText(`${window.location.origin}/api/mcp`),
+		).toBeTruthy();
+		const chatgpt = screen.getByText("ChatGPT:").parentElement;
+		expect(chatgpt?.textContent).toMatch(
+			/Business, Enterprise or Edu workspace/,
+		);
+		expect(chatgpt?.textContent).toMatch(
+			/Free, Go and Plus plans can't use GavelUp, and Pro can only read/,
+		);
+		expect(chatgpt?.textContent).toMatch(/not a problem with your account/);
+	});
+
+	it("offers tokens for Claude Code only, the provider the privacy promise names", async () => {
+		// `about.tsx` promises club data reaches only the services it lists
+		// (Anthropic or OpenAI for assistants). Inviting "other assistants" to
+		// take a token would send it somewhere that list doesn't name.
+		state.eligible = true;
+		renderSection();
+		const copy = await screen.findByText(
+			/For Claude Code, which takes a token/,
+		);
+		expect(copy.textContent).not.toMatch(/other assistants/);
+	});
+
 	it("renders nothing for an ineligible user", async () => {
 		state.eligible = false;
 		const { container } = renderSection();
