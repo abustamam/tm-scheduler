@@ -24,7 +24,6 @@ export const Route = createFileRoute("/tour")({
 			title: TITLE,
 			description: DESCRIPTION,
 			path: "/tour",
-			image: "/landing/tour-agenda.png",
 		}),
 	}),
 	component: Tour,

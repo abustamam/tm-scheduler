@@ -278,14 +278,14 @@ describe("/tour", () => {
 		}
 	});
 
-	it("sets the title and an og:image of the printed agenda", () => {
+	it("sets the title and the default share card as og:image", () => {
 		const meta = headMeta();
 		expect(meta).toContainEqual({
 			title: "How GavelUp works: a tour for Toastmasters officers",
 		});
 		expect(meta).toContainEqual({
 			property: "og:image",
-			content: "https://gavelup.app/landing/tour-agenda.png",
+			content: "https://gavelup.app/og/default.png",
 		});
 		expect(meta.some((m) => m && "name" in m && m.name === "description")).toBe(
 			true,
