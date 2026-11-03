@@ -1,13 +1,30 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { absoluteUrl, NOINDEX, shareMeta } from "#/lib/share-meta";
+import {
+	absoluteUrl,
+	DEFAULT_SHARE_IMAGE,
+	NOINDEX,
+	shareMeta,
+} from "#/lib/share-meta";
 
 describe("absoluteUrl", () => {
 	it("prefixes the production origin and leaves absolute URLs alone", () => {
-		expect(absoluteUrl("/landing/hero.png")).toBe(
-			"https://gavelup.app/landing/hero.png",
+		expect(absoluteUrl("/og/default.png")).toBe(
+			"https://gavelup.app/og/default.png",
 		);
 		expect(absoluteUrl("tour")).toBe("https://gavelup.app/tour");
 		expect(absoluteUrl("https://x.test/a.png")).toBe("https://x.test/a.png");
+	});
+});
+
+// protects=every page without its own card previews a real 1200x630 file;
+// fails_when=the default points at a deleted or mis-sized file under public/.
+describe("DEFAULT_SHARE_IMAGE", () => {
+	it("is a 1200x630 PNG under public/", () => {
+		const png = readFileSync(`public${DEFAULT_SHARE_IMAGE}`);
+		expect(png.subarray(1, 4).toString("ascii")).toBe("PNG");
+		expect(png.readUInt32BE(16)).toBe(1200);
+		expect(png.readUInt32BE(20)).toBe(630);
 	});
 });
 
