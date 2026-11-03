@@ -1,15 +1,18 @@
 /**
- * Source guard: **every database write the Easy-Speak import makes, and every
- * read of `people` it makes, is named here** (#1492).
+ * Source guard for #1492. It checks ONE thing: the write call sites (`.insert(`,
+ * `.update(`, `.delete(`, `execute(`) and the `from(people)` reads written
+ * directly in `history-import-logic.ts` and `mentor-import-logic.ts`, by function
+ * and by count. A new call site, or one removed or moved to another function,
+ * fails here until somebody names it and the rule it follows (the issue's
+ * W1-W16 / R1-R2 table). Same shape as `person-email-writers.guard.test.ts`.
  *
- * A club's own admin now runs the import, so each write has to follow the rule of
- * the equivalent manual admin edit (the issue's W1-W16 table) and each read of a
- * Person has to be club-scoped or deliberately not. A new `.insert(`,
- * `.update(`, `.delete(` or `execute(` in `history-import-logic.ts` or
- * `mentor-import-logic.ts`, or a new `from(people)`, fails here until somebody
- * names its function, its count and the rule it follows. The same shape as
- * `person-email-writers.guard.test.ts`: by function and by count, so a second
- * write inside a function already on the list is not silently exempt.
+ * What it does NOT check: writes made by a helper these files CALL. Those writers
+ * are outside the scan and are held by their own tests and rules: W4
+ * `insertRosterMember` (the roster paste's helper), `createGuestRecord`, W5
+ * `openOfficerTermIfAbsent`, `importPlanAnswers`, `closeCoverRequest` and
+ * `logActivity`. P1 (the plan's `emailWritable` rule in `placeContacts`) lives in
+ * `src/lib/easy-speak-import-plan.ts`, outside the scan; it is pinned by that
+ * module's tests, and below only by the name being present.
  *
  * Read COMMENT-BLIND (`readSource`).
  */
@@ -127,6 +130,10 @@ const PEOPLE_READS: Record<string, { count: number; scope: string }> = {
 };
 
 describe("history import write sites (#1492)", () => {
+	// protects=no write call site appears in the two import files without being
+	// listed (function and count) with the manual rule it follows;
+	// fails_when=a .insert/.update/.delete/execute is added, removed or moved;
+	// no_claim=writes inside helpers these files call (see the header).
 	it("names every insert, update, delete and execute, by function and count", () => {
 		const found = countByFunction(
 			/\.(?:insert|update|delete)\(|\bexecute[<(]/g,
@@ -138,6 +145,9 @@ describe("history import write sites (#1492)", () => {
 		expect(found).toEqual(declared);
 	});
 
+	// protects=every from(people) read in the two files is listed with its scope;
+	// fails_when=a people read is added, removed or moved;
+	// no_claim=reads in helpers they call, or what the scope list says is true.
 	it("names every read of the people table, by function and count", () => {
 		const found = countByFunction(/\.from\(people\)/g);
 		expect(found).toEqual(
@@ -147,6 +157,11 @@ describe("history import write sites (#1492)", () => {
 		);
 	});
 
+	// protects=R1's holder read stays an INNER JOIN on members of THIS club with the
+	// member-edit predicates;
+	// fails_when=the members.clubId scope, isNull(people.userId) or soleHoldingClub
+	// is dropped from loadContactState;
+	// no_claim=the rows it returns (the integration suite).
 	it("the club-scoped holder read joins members on THIS club", () => {
 		const source = readSource("src/server/history-import-logic.ts");
 		const body =
@@ -158,11 +173,24 @@ describe("history import write sites (#1492)", () => {
 		expect(body).toContain("soleHoldingClub(clubId)");
 	});
 
+	// protects=W6's update keeps both member-edit predicates inside fillMemberContact;
+	// fails_when=isNull(people.userId) or soleHoldingClub is dropped from it;
+	// no_claim=that the statement filters on them (person-email-writers.guard.test.ts).
 	it("the email write keeps both member-edit predicates in its own statement", () => {
 		const source = readSource("src/server/history-import-logic.ts");
 		const body =
 			/async function fillMemberContact[\s\S]*?\n}\n/.exec(source)?.[0] ?? "";
 		expect(body).toContain("isNull(people.userId)");
 		expect(body).toContain("soleHoldingClub(clubId)");
+	});
+
+	// protects=P1's plan-side rule exists where the guard cannot scan: the plan
+	// module still carries emailWritable;
+	// fails_when=emailWritable is removed from easy-speak-import-plan.ts;
+	// no_claim=what placeContacts does with it (easy-speak-import-plan tests).
+	it("names P1: the plan module still has the emailWritable rule", () => {
+		expect(readSource("src/lib/easy-speak-import-plan.ts")).toContain(
+			"emailWritable",
+		);
 	});
 });

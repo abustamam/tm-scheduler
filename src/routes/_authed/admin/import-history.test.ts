@@ -21,8 +21,18 @@ vi.mock("#/server/history-import", () => ({
 import { Route } from "./import-history";
 
 const CLUB = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-const context = (clubRole: "admin" | "member", officers: string[] = []) => ({
-	clubs: [{ clubId: CLUB, name: "Club A", clubNumber: null, clubRole }],
+const OTHER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+type Role = "admin" | "member";
+/** Two clubs, the first NOT the active one, so the first-club fallback cannot pass for the guard. */
+const context = (
+	activeRole: Role,
+	officers: string[] = [],
+	otherRole: Role = "member",
+) => ({
+	clubs: [
+		{ clubId: OTHER, name: "Club B", clubNumber: null, clubRole: otherRole },
+		{ clubId: CLUB, name: "Club A", clubNumber: null, clubRole: activeRole },
+	],
 	activeClubId: CLUB,
 	officerPositions: officers,
 });
@@ -34,14 +44,22 @@ const run = (ctx: ReturnType<typeof context>) =>
 	)({ context: ctx });
 
 describe("/admin/import-history beforeLoad", () => {
+	// protects=an admin and an officer reach the page for the ACTIVE club, not the
+	// first club in the list;
+	// fails_when=the guard resolves another club (here clubs[0] is a different one);
+	// no_claim=a plain member (next test).
 	it("admits an admin and an officer, resolving the active club", () => {
 		expect(run(context("admin")).adminClub.clubId).toBe(CLUB);
 		expect(run(context("member", ["vpe"])).adminClub.clubId).toBe(CLUB);
 	});
 
-	it("redirects a plain member to /dashboard", () => {
+	// protects=a plain member of the active club is redirected even when they are
+	// an admin of ANOTHER club;
+	// fails_when=the guard admits on an admin role in any club, or checks clubs[0];
+	// no_claim=the server fns re-ask the rule themselves.
+	it("redirects a plain member of the active club to /dashboard, whatever they are elsewhere", () => {
 		try {
-			run(context("member"));
+			run(context("member", [], "admin"));
 			expect.unreachable("a plain member got through");
 		} catch (thrown) {
 			expect(thrown).toBeInstanceOf(Response);

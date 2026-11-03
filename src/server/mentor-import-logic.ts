@@ -20,12 +20,13 @@ import type { EasySpeakBundle } from "#/lib/easy-speak-bundle";
 import { personKeyOf } from "#/lib/easy-speak-import-plan";
 import { logActivity } from "./activity";
 import { lockClubForWrite } from "./club-write-lock";
-import { type HistoryImportRunner, runnerAttribution } from "./guards";
+import type { HistoryImportRunner } from "./guards";
 import {
 	assertClubNotArchivedTx,
 	assertRunnerStillAllowed,
 	loadStoredBundle,
 	putRef,
+	runnerAttribution,
 	SOURCE,
 	type Tx,
 	takeImportLock,
@@ -300,8 +301,8 @@ export async function importMentorPairs(input: {
 
 	return db.transaction(async (tx) => {
 		await takeImportLock(tx, input.clubId);
-		await assertRunnerStillAllowed(tx, input.runner, input.clubId);
 		await lockClubForWrite(tx, input.clubId);
+		await assertRunnerStillAllowed(tx, input.runner, input.clubId);
 		await assertClubNotArchivedTx(tx, input.clubId);
 
 		const refs = await tx

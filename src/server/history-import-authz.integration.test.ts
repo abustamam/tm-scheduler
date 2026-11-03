@@ -10,6 +10,8 @@
  * harness that refuses everything.
  */
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { count, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -56,8 +58,15 @@ vi.mock("#/lib/auth", () => ({
 }));
 
 const fns = await import("./history-import");
-const { NO_PERMISSION_MESSAGE, NOT_A_MEMBER_MESSAGE, mayRunHistoryImport } =
-	await import("./guards");
+const {
+	NO_PERMISSION_MESSAGE,
+	NOT_A_MEMBER_MESSAGE,
+	mayRunHistoryImport,
+	requireHistoryImportRunner,
+} = await import("./guards");
+const { runnerAttribution, storeEasySpeakBundle } = await import(
+	"./history-import-logic"
+);
 
 type Fn = (input: { data: unknown }) => Promise<unknown>;
 
@@ -270,11 +279,41 @@ describe.skipIf(!hasTestDb)("history-import.ts authorization (#1051)", () => {
 		);
 	});
 
-	// protects=a club admin's overrideClubBinding: true is refused BEFORE any
-	// logic runs (nothing stored), while a superadmin's reaches the logic;
-	// fails_when=the flag is passed down for a non-superadmin;
+	// protects=a club admin's overrideClubBinding: true is refused BEFORE any logic
+	// runs, shown with a VALID bundle and a REAL stored import: nothing is stored
+	// by the upload, the stored import is not applied and no meeting is written;
+	// a superadmin's flag reaches the logic;
+	// fails_when=the flag is passed down for a non-superadmin (the valid bundle
+	// would then be stored / applied);
 	// no_claim=what the override then does (the logic integration test).
 	it("refuses a club admin's binding override before the logic, and passes a superadmin's", async () => {
+		const text = readFileSync(
+			resolve(
+				__dirname,
+				"../../extension/lib/__fixtures__/easy-speak/bundle.expected.json",
+			),
+			"utf8",
+		);
+		const stored = await storeEasySpeakBundle({
+			clubId: seed.clubId,
+			uploadedByUserId: superadminId,
+			text,
+		});
+		const imports = async () =>
+			testDb
+				.select({ id: clubImports.id, appliedAt: clubImports.appliedAt })
+				.from(clubImports)
+				.where(eq(clubImports.clubId, seed.clubId));
+		const meetingCount = async () =>
+			(
+				await testDb
+					.select({ id: meetings.id })
+					.from(meetings)
+					.where(eq(meetings.clubId, seed.clubId))
+			).length;
+		const importsBefore = await imports();
+		const meetingsBefore = await meetingCount();
+		expect(importsBefore).toEqual([{ id: stored.importId, appliedAt: null }]);
 		sessionUserId = seed.adminUserId;
 		const refusal =
 			/Only GavelUp support can import a bundle from another Easy-Speak club/;
@@ -282,7 +321,7 @@ describe.skipIf(!hasTestDb)("history-import.ts authorization (#1051)", () => {
 			(fns.uploadEasySpeakBundle as Fn)({
 				data: {
 					clubId: seed.clubId,
-					text: "{}",
+					text,
 					overrideClubBinding: true,
 				},
 			}),
@@ -291,22 +330,50 @@ describe.skipIf(!hasTestDb)("history-import.ts authorization (#1051)", () => {
 			(fns.applyEasySpeakImport as Fn)({
 				data: {
 					clubId: seed.clubId,
-					importId: randomUUID(),
+					importId: stored.importId,
 					planHash: "0".repeat(64),
 					overrideClubBinding: true,
 				},
 			}),
 		).rejects.toThrow(refusal);
+		expect(await imports()).toEqual(importsBefore);
+		expect(await meetingCount()).toBe(meetingsBefore);
 		sessionUserId = superadminId;
 		await expect(
-			(fns.uploadEasySpeakBundle as Fn)({
+			(fns.applyEasySpeakImport as Fn)({
 				data: {
 					clubId: seed.clubId,
-					text: "{}",
+					importId: stored.importId,
+					planHash: "0".repeat(64),
 					overrideClubBinding: true,
 				},
 			}),
-		).rejects.toThrow(/not an Easy-Speak bundle/i);
+		).rejects.toThrow(/Preview again/i);
+	});
+
+	// protects=a READ-WRITE impersonation session is admitted by all six fns, and it
+	// resolves as the superadmin (kind "superadmin", credited through
+	// impersonatedBy), not as an admin with a member id;
+	// fails_when=the superadmin arm is not asked first, or a fn admits through a
+	// different rule;
+	// no_claim=a read-only session (the tests below refuse it).
+	it.each(
+		Object.keys(PAST_THE_GATE),
+	)("%s admits a read-write impersonation session", async (name) => {
+		sessionUserId = superadminId;
+		await testDb.insert(impersonationSessions).values({
+			superadminUserId: superadminId,
+			clubId: seed.clubId,
+			mode: "read_write",
+			expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+		});
+		await expectAdmitted(name);
+		const runner = await requireHistoryImportRunner(superadminId, seed.clubId);
+		expect(runner).toEqual({ kind: "superadmin", userId: superadminId });
+		expect(runnerAttribution(runner)).toEqual({
+			actorMemberId: null,
+			impersonatedBy: superadminId,
+		});
 	});
 
 	it("a refused upload stores nothing", async () => {

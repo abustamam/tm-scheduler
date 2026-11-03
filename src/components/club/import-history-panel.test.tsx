@@ -714,6 +714,10 @@ describe("ImportHistoryPanel self-serve (#1492)", () => {
 		});
 	});
 
+	// protects=a club admin never sees the "Import anyway" override, even after the
+	// server's binding refusal reached the panel;
+	// fails_when=the checkbox is rendered without the isSuperadmin gate;
+	// no_claim=the server also refuses the flag (the authz integration test).
 	it("never renders the override for a club admin, even after a binding refusal", async () => {
 		fns.listEasySpeakImports.mockResolvedValue([]);
 		fns.uploadEasySpeakBundle.mockRejectedValueOnce(new Error(REFUSAL));

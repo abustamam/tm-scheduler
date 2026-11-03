@@ -1815,3 +1815,14 @@ export function buildReconciliation(input: {
 		reconciled,
 	};
 }
+
+/**
+ * How a refusal of a bundle from another Easy-Speak club begins. The server's
+ * message is built from it and the import panel keys its superadmin override on
+ * it (#1492), so rewording the sentence cannot drop the checkbox.
+ */
+export const BINDING_REFUSAL_PREFIX = "This export is from ";
+
+/** Whether `message` is a club-binding refusal (see {@link BINDING_REFUSAL_PREFIX}). */
+export const isBindingRefusal = (message: string): boolean =>
+	message.startsWith(BINDING_REFUSAL_PREFIX);

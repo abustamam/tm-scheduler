@@ -9,6 +9,7 @@ import {
 } from "#/lib/easy-speak-bundle-version";
 import {
 	type ImportReport,
+	isBindingRefusal,
 	type PersonResolution,
 	personKeyOf,
 } from "#/lib/easy-speak-import-plan";
@@ -31,9 +32,6 @@ import {
  * reconciliation report. Everything here is a server fn behind
  * `requireHistoryImportRunner`; the page only shows what they return.
  */
-
-/** The sentence a refusal starts with when a bundle is from another Easy-Speak club. */
-const BINDING_REFUSAL = /^This export is from /u;
 
 /** The install line: a link per listing that exists, or who to ask. */
 export function ExtensionInstallLine() {
@@ -131,7 +129,7 @@ export function ImportHistoryPanel({
 	const [refusedFile, setRefusedFile] = useState<File | null>(null);
 	const override = isSuperadmin && overrideBinding ? true : undefined;
 	const noteRefusal = (err: unknown, file: File | null = null) => {
-		if (err instanceof Error && BINDING_REFUSAL.test(err.message)) {
+		if (err instanceof Error && isBindingRefusal(err.message)) {
 			setBindingRefused(true);
 			setRefusedFile(file);
 		}

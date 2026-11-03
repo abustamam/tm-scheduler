@@ -622,7 +622,9 @@ export async function requireSuperadmin(userId: string) {
  * Who is running an Easy-Speak history import (#1492), and how to attribute what
  * they write. A superadmin is memberless in the club and is credited through the
  * impersonation column; a club admin is credited as themselves. A read-write
- * impersonation resolves as `kind: "admin"` with a null `actorMemberId`.
+ * impersonation session belongs to a superadmin, so it resolves as
+ * `kind: "superadmin"` (the admin arm's `impersonatedBy` is the gate's own field,
+ * null for every real admin).
  */
 export type HistoryImportRunner =
 	| { kind: "superadmin"; userId: string }
@@ -632,19 +634,6 @@ export type HistoryImportRunner =
 			actorMemberId: string | null;
 			impersonatedBy: string | null;
 	  };
-
-/** The `logActivity` actor columns for a write the import makes on `runner`'s behalf. */
-export function runnerAttribution(runner: HistoryImportRunner): {
-	actorMemberId: string | null;
-	impersonatedBy: string | null;
-} {
-	return runner.kind === "admin"
-		? {
-				actorMemberId: runner.actorMemberId,
-				impersonatedBy: runner.impersonatedBy,
-			}
-		: { actorMemberId: null, impersonatedBy: runner.userId };
-}
 
 /**
  * Who may run the Easy-Speak history import for a club: a superadmin, or

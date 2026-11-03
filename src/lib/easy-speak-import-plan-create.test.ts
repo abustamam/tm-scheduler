@@ -398,9 +398,9 @@ describe("pasted contacts (#1240)", () => {
 		expect(warnings).not.toMatch(/@example/u);
 	});
 
-	// protects=an email another Person (any club) already holds is not set, and
-	// the warning names the row and the person, never the email; the person's OWN
-	// email is not "someone else's";
+	// protects=an email another Person already holds in THIS club (the holder set
+	// is club-scoped by the lookup) is not set, and the warning names the row and
+	// the person, never the email; the person's OWN email is not "someone else's";
 	// fails_when=the email is set anyway, or a linked member is refused their own;
 	// no_claim=the lookup that fills `emailHolders` is the integration test's.
 	it("refuses an email another person holds and names the row", () => {
@@ -425,6 +425,29 @@ describe("pasted contacts (#1240)", () => {
 		expect(plan.contactWarnings).toEqual([
 			"An email in row 1 is already on another member of this club; left blank for New Person.",
 		]);
+	});
+
+	// protects=R1's wording: with several holders in the club the warning is the one
+	// neutral sentence per row, with no holder count, no other club and no hint of
+	// whether anyone has signed in;
+	// fails_when=the sentence gains a count, a club name or an account hint;
+	// no_claim=which Persons are holders (loadContactState's integration test).
+	it("words the holder warning neutrally however many holders there are", () => {
+		const bundle = bundleWith({ holders: holders("New Person") });
+		const plan = buildImportPlan(
+			bundle,
+			withState(
+				"New Person, taken@example.com, ",
+				[],
+				[["taken@example.com", ["holder-one", "holder-two", "holder-three"]]],
+			),
+		);
+		expect(plan.contactWarnings).toEqual([
+			"An email in row 1 is already on another member of this club; left blank for New Person.",
+		]);
+		expect(plan.contactWarnings.join(" ")).not.toMatch(
+			/\d{2,}|three|3 |account|signed|another club/iu,
+		);
 	});
 
 	// protects=the preview promises an email fill only where the apply's UPDATE

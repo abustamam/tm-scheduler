@@ -30,11 +30,13 @@ import {
 	roleDefinitions,
 	roleSlots,
 	speeches,
+	speechRequests,
 	tableTopicsSpeakers,
 	user,
 } from "#/db/schema";
 import type { EasySpeakBundleV1 } from "#/lib/easy-speak-bundle";
 import {
+	isBindingRefusal,
 	isJsonbSafeText,
 	MEETING_LEFT_ALONE,
 	type PersonResolution,
@@ -1714,6 +1716,162 @@ EXECUTE FUNCTION zz_claim_slot()`),
 		expect(await historyImportedRows()).toEqual([]);
 	});
 
+	/** Closes the admin's open officer term when the `lockCall`-th club lock is taken. */
+	async function lapseAtLock(lockCall: number) {
+		const [term] = await testDb
+			.insert(officerTerms)
+			.values({
+				membershipId: seed.memberId,
+				position: "vp_education",
+				termStart: new Date("2026-01-01T00:00:00Z"),
+				termEnd: null,
+			})
+			.returning({ id: officerTerms.id });
+		lockHook.run = async (_tx, call) => {
+			if (call !== lockCall) return;
+			await testDb
+				.update(officerTerms)
+				.set({ termEnd: new Date("2026-02-01T00:00:00Z") })
+				.where(eq(officerTerms.id, term?.id as string));
+		};
+		return {
+			kind: "admin",
+			userId: seed.memberUserId,
+			actorMemberId: seed.memberId,
+			impersonatedBy: null,
+		} as const;
+	}
+	const appliedAtOf = async (importId: string) => {
+		const [row] = await testDb
+			.select({ appliedAt: clubImports.appliedAt })
+			.from(clubImports)
+			.where(eq(clubImports.id, importId));
+		return row?.appliedAt ?? null;
+	};
+
+	// protects=an admin whose officer term closes BETWEEN the apply's transactions
+	// (#806, risk review of #1505): every later writing transaction re-asks under
+	// its own club lock, so the first meeting lands, the second is refused, the
+	// the apply rejects and the import is not marked applied;
+	// fails_when=assertRunnerStillAllowed is dropped from the per-meeting
+	// transaction;
+	// no_claim=the people transaction and the final one (next two tests).
+	it("stops at the second meeting when the admin lapses after the first transaction", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		const runner = await lapseAtLock(3);
+		const before = (await counts()).meetings;
+		await expect(
+			logic.applyEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				runner,
+				resolutions,
+				now: NOW_ALL_PAST,
+			}),
+		).rejects.toThrow(NO_PERMISSION_MESSAGE);
+		expect((await counts()).meetings).toBe(before + 1);
+		expect(await appliedAtOf(stored.importId)).toBeNull();
+		expect(await historyImportedRows()).toEqual([]);
+	});
+
+	// protects=the people-and-roles transaction re-asks under its own lock: an admin
+	// who lapses after the apply's first check writes no person and no meeting;
+	// fails_when=writePeopleAndRoles drops its re-check;
+	// no_claim=later transactions (neighbouring tests).
+	it("writes no person when the admin lapses before the people transaction", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		const runner = await lapseAtLock(1);
+		const before = await counts();
+		await expect(
+			logic.applyEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				runner,
+				resolutions,
+				now: NOW,
+			}),
+		).rejects.toThrow(NO_PERMISSION_MESSAGE);
+		expect(await counts()).toEqual(before);
+	});
+
+	// protects=the closing club_imports update re-asks under the lock too: an admin
+	// who lapses after the last meeting does not get the import marked applied
+	// (which would also bind the club);
+	// fails_when=the final transaction takes no lock or skips the re-check;
+	// no_claim=the meetings, which have already landed by then.
+	it("does not mark the import applied when the admin lapses before the final transaction", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		const runner = await lapseAtLock(5);
+		const before = (await counts()).meetings;
+		await expect(
+			logic.applyEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				runner,
+				resolutions,
+				now: NOW_ALL_PAST,
+			}),
+		).rejects.toThrow(NO_PERMISSION_MESSAGE);
+		expect((await counts()).meetings).toBe(before + 3);
+		expect(await appliedAtOf(stored.importId)).toBeNull();
+		expect(await historyImportedRows()).toEqual([]);
+		expect(await logic.boundEasySpeakClub(testDb, seed.clubId)).toBeNull();
+	});
+
+	// protects=a step that takes the lock then finds the admin gone writes nothing:
+	// the speech-request step re-asks AFTER its lock, not before;
+	// fails_when=importSpeechRequests asks only before lockClubForWrite;
+	// no_claim=the mentor step (its own test).
+	it("re-asks the speech-request step's admin under the lock it takes", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await apply(stored.importId, resolutions);
+		lockHook.calls = 0;
+		const runner = await lapseAtLock(1);
+		const [{ n: before } = { n: 0 }] = await testDb
+			.select({ n: count() })
+			.from(speechRequests)
+			.where(eq(speechRequests.clubId, seed.clubId));
+		// The up-front check passes (the term is open when it runs); the lock hook then closes it.
+		await expect(
+			logic.importSpeechRequests({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				runner,
+				now: NOW,
+			}),
+		).rejects.toThrow(NO_PERMISSION_MESSAGE);
+		const [{ n: after } = { n: 0 }] = await testDb
+			.select({ n: count() })
+			.from(speechRequests)
+			.where(eq(speechRequests.clubId, seed.clubId));
+		expect(Number(after)).toBe(Number(before));
+	});
+
+	// protects=the mentor step re-asks the admin under its own lock;
+	// fails_when=importMentorPairs asks before lockClubForWrite only;
+	// no_claim=the speech-request step (previous test).
+	it("re-asks the mentor step's admin under the lock it takes", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await apply(stored.importId, resolutions);
+		lockHook.calls = 0;
+		const runner = await lapseAtLock(1);
+		const { importMentorPairs } = await import("./mentor-import-logic");
+		const before = await historyImportedRows();
+		await expect(
+			importMentorPairs({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				runner,
+			}),
+		).rejects.toThrow(NO_PERMISSION_MESSAGE);
+		expect(await historyImportedRows()).toEqual(before);
+	});
+
 	// protects=the two follow-up steps re-ask the admin question after THEIR lock
 	// too (#806): an admin whose term closed since the apply writes no speech
 	// request and no pairing;
@@ -1990,6 +2148,71 @@ EXECUTE FUNCTION zz_claim_slot()`),
 			).toHaveLength(1);
 		});
 
+		// protects=the binding is the FIRST applied import: X applied, Y applied by
+		// override, X applied AGAIN: the club is still bound to X (a re-apply
+		// refreshes applied_at, which must not move the binding), a Y-like bundle is
+		// still refused and X can still be re-applied;
+		// fails_when=the binding orders by the latest applied_at, or a re-apply
+		// overwrites the first-applied stamp;
+		// no_claim=the report a re-apply stores (the latest-report tests).
+		it("keeps the first applied import as the binding across a re-apply", async () => {
+			const x = await upload(bundleFrom(X));
+			const { resolutions } = await resolveAll(x.importId);
+			await apply(x.importId, resolutions, NOW);
+			const y = await logic.storeEasySpeakBundle({
+				clubId: seed.clubId,
+				uploadedByUserId: superadminId,
+				text: bundleFrom(Y),
+				overrideClubBinding: true,
+			});
+			await logic.applyEasySpeakImport({
+				clubId: seed.clubId,
+				importId: y.importId,
+				runner: { kind: "superadmin", userId: superadminId },
+				resolutions,
+				overrideClubBinding: true,
+				now: new Date(NOW.getTime() + 3_600_000),
+			});
+			await apply(x.importId, resolutions, new Date(NOW.getTime() + 7_200_000));
+			expect(await logic.boundEasySpeakClub(testDb, seed.clubId)).toEqual({
+				esClubId: X.esClubId,
+				name: X.name,
+				number: X.number,
+			});
+			await expect(upload(bundleFrom({ ...Y, name: "Third" }))).rejects.toThrow(
+				/not Fixture Speakers/,
+			);
+			// The latest report is still the re-apply's: applied_at moved, the stamp did not.
+			expect(
+				(await logic.loadImportReport({ clubId: seed.clubId }))?.importId,
+			).toBe(x.importId);
+		});
+
+		// protects=a row applied before the first-applied stamp existed (no
+		// firstAppliedAt in its bundle) keeps the binding it had when re-applied:
+		// the stamp is seeded from its own applied_at, not from now;
+		// fails_when=the coalesce drops the applied_at fallback;
+		// no_claim=the new-row path (previous test).
+		it("seeds the stamp from applied_at for a row applied before it existed", async () => {
+			const x = await upload(bundleFrom(X));
+			const { resolutions } = await resolveAll(x.importId);
+			await apply(x.importId, resolutions, NOW);
+			await testDb
+				.update(clubImports)
+				.set({ bundle: sql`${clubImports.bundle} - 'firstAppliedAt'` })
+				.where(eq(clubImports.id, x.importId));
+			await apply(x.importId, resolutions, new Date(NOW.getTime() + 7_200_000));
+			const [row] = await testDb
+				.select({
+					stamp: sql<string>`${clubImports.bundle}->>'firstAppliedAt'`,
+				})
+				.from(clubImports)
+				.where(eq(clubImports.id, x.importId));
+			expect(new Date(row?.stamp as string).toISOString()).toBe(
+				NOW.toISOString(),
+			);
+		});
+
 		// protects=before any import, the number on both sides must agree after
 		// trimming and stripping leading zeros, and either side null is accepted;
 		// fails_when=the normalization is dropped (0012345 refused) or the check
@@ -2046,6 +2269,10 @@ EXECUTE FUNCTION zz_claim_slot()`),
 // The number rules are pure: they run without a database.
 describe("bundleClubMismatch (#1492)", () => {
 	const bundleClub = { esClubId: "1", name: "Alpha", number: "0012345" };
+	// protects=the first-import club number rule: leading zeros and padding are
+	// not a difference, a different number is refused with the sentence;
+	// fails_when=normalizeClubNumber is dropped or the refusal wording changes;
+	// no_claim=the bound arm (the later tests).
 	it("accepts a number that differs only by leading zeros and refuses a different one", () => {
 		expect(logic.bundleClubMismatch(bundleClub, "12345", null)).toBeNull();
 		expect(logic.bundleClubMismatch(bundleClub, " 12345 ", null)).toBeNull();
@@ -2053,14 +2280,21 @@ describe("bundleClubMismatch (#1492)", () => {
 			"This export is from Easy-Speak club Alpha (#0012345), but this club's number is 67890.",
 		);
 	});
+	// protects=a missing number on either side never refuses a first import;
+	// fails_when=a null number is treated as a mismatch;
+	// no_claim=the bound arm.
 	it("accepts either side without a number", () => {
 		expect(
 			logic.bundleClubMismatch({ ...bundleClub, number: null }, "1", null),
 		).toBeNull();
 		expect(logic.bundleClubMismatch(bundleClub, null, null)).toBeNull();
 	});
+	// protects=once bound, only the Easy-Speak club id decides (the number is
+	// ignored) and the refusal names the bundle's club and the bound one;
+	// fails_when=the bound arm compares numbers, or names the wrong club;
+	// no_claim=how the bound club is found (the integration suite).
 	it("once bound, compares only the Easy-Speak club id, never the number", () => {
-		const bound = { esClubId: "1", name: "Alpha", number: null };
+		const bound = { esClubId: "1", name: "Beta", number: null };
 		expect(
 			logic.bundleClubMismatch({ ...bundleClub, number: "9" }, "5", bound),
 		).toBeNull();
@@ -2071,9 +2305,13 @@ describe("bundleClubMismatch (#1492)", () => {
 				bound,
 			),
 		).toBe(
-			"This export is from Alpha, not Alpha, the Easy-Speak club this club was imported from.",
+			"This export is from Alpha, not Beta, the Easy-Speak club this club was imported from.",
 		);
 	});
+	// protects=the override passes both the number and the bound check and reports
+	// whether it overrode anything; without it the refusal is thrown;
+	// fails_when=override is ignored, or reports overrode:true on a match;
+	// no_claim=who may pass the flag (the authz tests).
 	it("the override skips both checks and reports that it did", () => {
 		expect(
 			logic.assertBundleMatchesClub(bundleClub, "67890", null, true),
@@ -2084,5 +2322,26 @@ describe("bundleClubMismatch (#1492)", () => {
 		expect(
 			logic.assertBundleMatchesClub(bundleClub, "12345", null, true),
 		).toEqual({ overrode: false });
+	});
+});
+
+// protects=the server's binding refusals are recognised by the SHARED marker the
+// import panel keys its override checkbox on, both arms, and an unrelated
+// refusal is not;
+// fails_when=either message is reworded away from BINDING_REFUSAL_PREFIX, or the
+// panel's matcher drifts from it;
+// no_claim=the checkbox's rendering (the panel test).
+describe("binding refusal marker (#1492)", () => {
+	const club = { esClubId: "1", name: "Alpha", number: "0012345" };
+	it("is the start of both refusal messages", () => {
+		const first = logic.bundleClubMismatch(club, "67890", null) as string;
+		const bound = logic.bundleClubMismatch({ ...club, esClubId: "2" }, "1", {
+			esClubId: "1",
+			name: "Beta",
+			number: null,
+		}) as string;
+		expect(isBindingRefusal(first)).toBe(true);
+		expect(isBindingRefusal(bound)).toBe(true);
+		expect(isBindingRefusal("That file is not valid JSON.")).toBe(false);
 	});
 });

@@ -49,10 +49,11 @@ const BINDER_FN = "bindVerifiedPerson";
 
 /**
  * Writers that set `people.email` outside the bind, each keyed by the FUNCTION
- * that does it and carrying the number of write sites its file is allowed. Both
- * are unreachable by a club officer, except `fillMemberContact`, which a club
- * admin of the club can reach through the Easy-Speak import (#1492) and which
- * therefore carries the member-edit predicates (#907).
+ * that does it and carrying the number of write sites its file is allowed.
+ * `fillMemberContact` is reachable by a club's own admin through the Easy-Speak
+ * import (#1492; an officer with an open term is an effective admin there, and a
+ * superadmin runs it too), so it carries the member-edit predicates in its
+ * statement (#907), whoever calls it.
  *
  * Keyed per function and per COUNT on purpose: the test this one replaces waived
  * whole files, so a second `update(people).set({ email })` added anywhere inside

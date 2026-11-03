@@ -90,6 +90,7 @@ import {
 	wrongVersionMessage,
 } from "#/lib/easy-speak-bundle-version";
 import {
+	BINDING_REFUSAL_PREFIX,
 	buildImportPlan,
 	buildReconciliation,
 	type ContactFill,
@@ -138,11 +139,7 @@ import { importPlanAnswers } from "./attendance-plan-logic";
 import { lockClubForWrite } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { closeCoverRequest } from "./cover-close";
-import {
-	assertStillClubAdmin,
-	type HistoryImportRunner,
-	runnerAttribution,
-} from "./guards";
+import { assertStillClubAdmin, type HistoryImportRunner } from "./guards";
 import { createGuestRecord } from "./guests-logic";
 import { insertRosterMember } from "./members-logic";
 import { openOfficerTermIfAbsent } from "./officer-terms-logic";
@@ -189,6 +186,19 @@ export const INTRODUCER_NOT_IN_CLUB_MESSAGE =
 // Club binding (#1492)
 // ---------------------------------------------------------------------------
 
+/** The `logActivity` actor columns for a write the import makes on `runner`'s behalf. */
+export function runnerAttribution(runner: HistoryImportRunner): {
+	actorMemberId: string | null;
+	impersonatedBy: string | null;
+} {
+	return runner.kind === "admin"
+		? {
+				actorMemberId: runner.actorMemberId,
+				impersonatedBy: runner.impersonatedBy,
+			}
+		: { actorMemberId: null, impersonatedBy: runner.userId };
+}
+
 /** The Easy-Speak club a GavelUp club was first imported from. */
 export interface BoundEasySpeakClub {
 	esClubId: string;
@@ -216,7 +226,10 @@ export async function boundEasySpeakClub(
 		.where(
 			and(eq(clubImports.clubId, clubId), isNotNull(clubImports.appliedAt)),
 		)
-		.orderBy(asc(clubImports.appliedAt), asc(clubImports.createdAt))
+		.orderBy(
+			sql`coalesce((${clubImports.bundle}->>'firstAppliedAt')::timestamptz, ${clubImports.appliedAt})`,
+			asc(clubImports.createdAt),
+		)
 		.limit(1);
 	const parsed = boundClubSchema.safeParse(row?.club);
 	if (!parsed.success) return null;
@@ -236,13 +249,13 @@ const normalizeClubNumber = (n: string) => n.trim().replace(/^0+/u, "");
  * number on both sides must agree.
  */
 export function bundleClubMismatch(
-	bundleClub: { esClubId: string; name: string; number: string | null },
+	bundleClub: BoundEasySpeakClub,
 	clubNumber: string | null,
 	bound: BoundEasySpeakClub | null,
 ): string | null {
 	if (bound) {
 		return bundleClub.esClubId !== bound.esClubId
-			? `This export is from ${bundleClub.name}, not ${bound.name}, the Easy-Speak club this club was imported from.`
+			? `${BINDING_REFUSAL_PREFIX}${bundleClub.name}, not ${bound.name}, the Easy-Speak club this club was imported from.`
 			: null;
 	}
 	if (
@@ -250,14 +263,14 @@ export function bundleClubMismatch(
 		clubNumber &&
 		normalizeClubNumber(bundleClub.number) !== normalizeClubNumber(clubNumber)
 	) {
-		return `This export is from Easy-Speak club ${bundleClub.name} (#${bundleClub.number}), but this club's number is ${clubNumber}.`;
+		return `${BINDING_REFUSAL_PREFIX}Easy-Speak club ${bundleClub.name} (#${bundleClub.number}), but this club's number is ${clubNumber}.`;
 	}
 	return null;
 }
 
 /** Throws {@link bundleClubMismatch}'s sentence unless `override` (a superadmin's). Returns whether it overrode one. */
 export function assertBundleMatchesClub(
-	bundleClub: { esClubId: string; name: string; number: string | null },
+	bundleClub: BoundEasySpeakClub,
 	clubNumber: string | null,
 	bound: BoundEasySpeakClub | null,
 	override: boolean | undefined,
@@ -1088,6 +1101,7 @@ export async function writePeopleAndRoles(
 ): Promise<Resolved> {
 	return db.transaction(async (tx) => {
 		await lockClubForWrite(tx, clubId);
+		if (opts.runner) await assertRunnerStillAllowed(tx, opts.runner, clubId);
 		await assertClubNotArchivedTx(tx, clubId);
 		const out: Resolved = {
 			members: new Map(),
@@ -1310,6 +1324,8 @@ interface MeetingEnv {
 	lengthMinutes: number;
 	resolved: Resolved;
 	personByMember: Map<string, string>;
+	/** Who runs the apply; asked again under the lock in every meeting's transaction. */
+	runner: HistoryImportRunner;
 }
 
 const ownerOf = (env: MeetingEnv, key: string | null): Owner => {
@@ -1362,6 +1378,7 @@ async function applyMeeting(
 	let applied = true;
 	await db.transaction(async (tx) => {
 		await lockClubForWrite(tx, clubId);
+		await assertRunnerStillAllowed(tx, env.runner, clubId);
 		await assertClubNotArchivedTx(tx, clubId);
 
 		// -- The meeting row --------------------------------------------------
@@ -1985,15 +2002,16 @@ export async function applyEasySpeakImport(input: {
 /**
  * Re-ask the club-admin question inside the transaction, after the lock (#806):
  * an admin whose term closed, or whose club was archived, while the run queued
- * writes nothing. A superadmin and a read-write impersonation (no membership to
- * re-ask about) are not re-checked here.
+ * writes nothing. A superadmin (a read-write impersonation session is one) has no
+ * membership to re-ask about and is not re-checked here. Called after
+ * `lockClubForWrite` in EVERY transaction that writes, not once per run.
  */
 export async function assertRunnerStillAllowed(
 	tx: Tx,
 	runner: HistoryImportRunner,
 	clubId: string,
 ): Promise<void> {
-	if (runner.kind === "admin" && runner.actorMemberId !== null) {
+	if (runner.kind === "admin") {
 		await assertStillClubAdmin(tx, runner.userId, clubId);
 	}
 }
@@ -2053,6 +2071,7 @@ async function applyUnderImportLock(input: {
 		clubId: input.clubId,
 		now,
 		lengthMinutes: loaded.club.defaultMeetingMinutes,
+		runner: input.runner,
 		resolved,
 		personByMember: new Map([
 			...loaded.personByMember,
@@ -2132,11 +2151,15 @@ async function applyUnderImportLock(input: {
 
 	const importState = JSON.stringify({ resolutions, report });
 	await db.transaction(async (tx) => {
+		await lockClubForWrite(tx, input.clubId);
+		await assertRunnerStillAllowed(tx, input.runner, input.clubId);
 		await tx
 			.update(clubImports)
 			.set({
 				appliedAt: now,
-				bundle: sql`${clubImports.bundle} || jsonb_build_object('importState', ${importState}::jsonb)`,
+				// The binding reads the FIRST apply (`boundEasySpeakClub`); a re-apply
+				// refreshes `applied_at` (the latest report) but never this stamp.
+				bundle: sql`${clubImports.bundle} || jsonb_build_object('importState', ${importState}::jsonb, 'firstAppliedAt', coalesce(${clubImports.bundle}->>'firstAppliedAt', ${clubImports.appliedAt}::text, ${now.toISOString()}::text))`,
 			})
 			.where(
 				and(
@@ -2245,8 +2268,8 @@ export async function importSpeechRequests(input: {
 
 	return db.transaction(async (tx) => {
 		await takeImportLock(tx, input.clubId);
-		await assertRunnerStillAllowed(tx, input.runner, input.clubId);
 		await lockClubForWrite(tx, input.clubId);
+		await assertRunnerStillAllowed(tx, input.runner, input.clubId);
 		await assertClubNotArchivedTx(tx, input.clubId);
 
 		const refs = await tx
