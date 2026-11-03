@@ -10,7 +10,7 @@ import {
 import {
 	CURRENT_BUNDLE_VERSION,
 	oversizeMessage,
-	sniffBundleHead,
+	SNIFF_HEAD_BYTES,
 	wrongVersionMessage,
 } from "./easy-speak-bundle-version";
 import versions from "./easy-speak-bundle-versions.json";
@@ -79,7 +79,10 @@ describe("oversizeMessage", () => {
 	});
 	it("calls a current-version head with inline raw an older extension", () => {
 		const h = head('"version":2,') + '"raw":[ {"url":"https://x"';
-		expect(sniffBundleHead(h)).toEqual({ kind: "stale", version: null });
+		expect(oversizeMessage(SIXTY_MIB, h)).toBe(`${SIZE} ${OLDER}`);
+	});
+	it("reads a head of 65536 bytes", () => {
+		expect(SNIFF_HEAD_BYTES).toBe(65536);
 	});
 	it("adds nothing for a head that is not a bundle", () => {
 		expect(oversizeMessage(SIXTY_MIB, '{"hello":"world"}')).toBe(SIZE);

@@ -29,9 +29,13 @@ export type SniffResult =
 	| { kind: "stale"; version: number | null }
 	| { kind: "newer"; version: number }
 	| { kind: "archive" }
+	| { kind: "current" }
 	| { kind: "unknown" };
 
-/** Classify an over-limit file from its first bytes (the panel passes the first 64 KiB as text). */
+/** How many leading bytes of an over-limit file the panel reads to classify it. */
+export const SNIFF_HEAD_BYTES = 64 * 1024;
+
+/** Classify an over-limit file from its first bytes (the panel passes the first SNIFF_HEAD_BYTES as text). */
 export function sniffBundleHead(head: string): SniffResult {
 	if (/"format"\s*:\s*"gavelup\.easy-speak-pages"/.test(head)) {
 		return { kind: "archive" };
@@ -49,7 +53,7 @@ export function sniffBundleHead(head: string): SniffResult {
 	if (/"raw"\s*:\s*\[\s*\{\s*"url"/.test(head)) {
 		return { kind: "stale", version: null };
 	}
-	return { kind: "unknown" };
+	return { kind: "current" };
 }
 
 /** The panel's sentence for an over-limit file. */
@@ -62,6 +66,7 @@ export function oversizeMessage(bytes: number, head: string): string {
 			return `${size} ${wrongVersionMessage(sniffed.version)}`;
 		case "archive":
 			return `${size} ${ARCHIVE_UPLOADED_MESSAGE}`;
+		case "current":
 		case "unknown":
 			return size;
 	}

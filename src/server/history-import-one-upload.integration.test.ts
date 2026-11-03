@@ -353,13 +353,17 @@ describe.skipIf(!hasTestDb)(
 			return JSON.stringify(b);
 		};
 		const refused = async (text: string, message: string) => {
-			await expect(
-				logic.storeEasySpeakBundle({
+			const error = await logic
+				.storeEasySpeakBundle({
 					clubId: seed.clubId,
 					uploadedByUserId: superadminId,
 					text,
-				}),
-			).rejects.toThrow(message);
+				})
+				.then(
+					() => null,
+					(e: unknown) => e,
+				);
+			expect((error as Error | null)?.message).toBe(message);
 			expect(await importRows()).toBe(0);
 		};
 
@@ -404,6 +408,43 @@ describe.skipIf(!hasTestDb)(
 				}),
 				"This file came from a newer GavelUp extension (format 3) than this site reads yet. Try again after the next GavelUp update.",
 			);
+		});
+
+		it("refuses a payload that is not an object, and a v1 with no format", async () => {
+			const NOT_BUNDLE_PREFIX = "That is not an Easy-Speak bundle:";
+			for (const text of ["[]", "42", "null"]) {
+				const error = await logic
+					.storeEasySpeakBundle({
+						clubId: seed.clubId,
+						uploadedByUserId: superadminId,
+						text,
+					})
+					.then(
+						() => null,
+						(e: unknown) => e,
+					);
+				expect((error as Error | null)?.message).toMatch(
+					new RegExp(`^${NOT_BUNDLE_PREFIX}`),
+				);
+				expect(await importRows()).toBe(0);
+			}
+			const noFormat = await logic
+				.storeEasySpeakBundle({
+					clubId: seed.clubId,
+					uploadedByUserId: superadminId,
+					text: envelope((b) => {
+						b.version = 1;
+						delete b.format;
+					}),
+				})
+				.then(
+					() => null,
+					(e: unknown) => e,
+				);
+			expect((noFormat as Error | null)?.message).toMatch(
+				new RegExp(`^${NOT_BUNDLE_PREFIX}`),
+			);
+			expect(await importRows()).toBe(0);
 		});
 
 		it("refuses the pages archive", async () => {

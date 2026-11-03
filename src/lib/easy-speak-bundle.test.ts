@@ -132,6 +132,9 @@ describe("easySpeakUploadSchema", () => {
 		expect(easySpeakUploadSchema.safeParse(empty).success).toBe(true);
 	});
 
+	// protects=the upload contract refusing a stale v1, a newer v3, and a file with no build name (stored v1 rows are the union's job);
+	// fails_when=the upload schema accepts version 1 or 3, or lets extensionVersion be absent or empty;
+	// no_claim=the sentence the admin sees (storeEasySpeakBundle's envelope check, its own suite)
 	it.each([
 		[
 			"another format",

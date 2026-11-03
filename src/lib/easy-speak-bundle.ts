@@ -2,7 +2,15 @@ import { z } from "zod";
 import { BUNDLE_FORMAT } from "./easy-speak-bundle-version";
 
 /**
- * The Easy-Speak export bundle, version 1 (#1047, part of the #1054 migration).
+ * The Easy-Speak export bundle, version 2 (#1047, part of the #1054 migration;
+ * versioned in #1497).
+ *
+ * Version 2 is the only version an UPLOAD may carry (`easySpeakUploadSchema`,
+ * `version: 2` plus a non-empty `extensionVersion` naming the extension build
+ * that wrote the file). Stored `club_imports` rows may be v1 or v2
+ * (`easySpeakStoredSchema`, the union), so rows written before v2 still
+ * re-parse. A stale, newer or wrong-format upload is refused by the envelope
+ * check in `storeEasySpeakBundle`, before this schema runs.
  *
  * The CANONICAL copy of the contract. The internal browser extension
  * (`extension/lib/easy-speak-bundle.ts`) walks an Easy-Speak club in the user's

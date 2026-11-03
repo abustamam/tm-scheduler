@@ -3,7 +3,10 @@ import { Loader2, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
-import { oversizeMessage } from "#/lib/easy-speak-bundle-version";
+import {
+	oversizeMessage,
+	SNIFF_HEAD_BYTES,
+} from "#/lib/easy-speak-bundle-version";
 import {
 	type ImportReport,
 	type PersonResolution,
@@ -124,7 +127,7 @@ export function ImportHistoryPanel({
 		mutationFn: async (file: File) => {
 			// Refuse before reading: file.text() would pull the whole file into memory.
 			if (file.size > MAX_BUNDLE_BYTES) {
-				const head = await file.slice(0, 64 * 1024).text();
+				const head = await file.slice(0, SNIFF_HEAD_BYTES).text();
 				throw new Error(oversizeMessage(file.size, head));
 			}
 			return uploadEasySpeakBundle({
