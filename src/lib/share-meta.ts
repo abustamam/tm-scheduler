@@ -11,7 +11,7 @@
  */
 export const SITE_ORIGIN = "https://gavelup.app";
 export const SITE_NAME = "GavelUp";
-export const DEFAULT_SHARE_IMAGE = "/landing/hero.png";
+export const DEFAULT_SHARE_IMAGE = "/og/default.png";
 
 export type MetaTag = Record<string, string>;
 
