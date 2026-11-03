@@ -17,8 +17,9 @@ import {
  * signs in to GavelUp and the person approves it (`docs/claude-connector.md`).
  *
  * ChatGPT's plan limit is stated here because the failure is silent on
- * OpenAI's side — on Free, Go, Plus or Pro the "add a custom MCP server" option
- * is missing or read-only, and GavelUp never sees a request to explain.
+ * OpenAI's side — on Free, Go or Plus the "add a custom MCP server" option
+ * is missing (on Pro, only read-only tools are offered), and GavelUp never
+ * sees a request to explain.
  * OpenAI's help article "Connecting custom MCP servers in ChatGPT" is the
  * source; re-check it when this copy changes.
  *
@@ -50,8 +51,9 @@ function ConnectorSetup() {
 				<li>
 					<span className="font-semibold text-foreground">ChatGPT:</span> needs
 					a Business, Enterprise or Edu workspace, and a workspace admin adds
-					it, on the web. Free, Go, Plus and Pro plans can't use GavelUp yet —
-					that's a ChatGPT plan limit, not a problem with your account.
+					it, on the web. Free, Go and Plus plans can't use GavelUp, and Pro can
+					only read — that's a ChatGPT plan limit, not a problem with your
+					account.
 				</li>
 			</ul>
 		</div>
@@ -118,13 +120,10 @@ export function ApiTokensSection() {
 				<div className="min-w-0">
 					<div className="font-semibold">Personal access tokens</div>
 					<p className="mt-1 text-sm text-muted-foreground">
-						For Claude Code and other assistants that take a token instead of
-						signing in.
-					</p>
-					<p className="mt-1 text-sm text-muted-foreground">
-						Let an AI assistant read your schedule and feedback on your behalf;
-						where you're an admin or officer it can also work on your club's
-						meetings. A token acts as you. Treat it like a password.
+						For Claude Code, which takes a token instead of signing in. It can
+						read your schedule and feedback on your behalf; where you're an
+						admin or officer it can also work on your club's meetings. A token
+						acts as you. Treat it like a password.
 					</p>
 				</div>
 

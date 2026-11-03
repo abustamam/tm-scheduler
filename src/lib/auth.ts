@@ -13,6 +13,7 @@ import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { db } from "#/db";
 import { recordAuthInitFailure } from "#/lib/auth-init-status";
 import { memberEmailChange } from "#/lib/change-email-plugin";
+import { throttleJwksFetches } from "#/lib/cimd-jwks-throttle";
 import { fetchClientMetadataResource } from "#/lib/cimd-transport";
 import { captureDevMagicLink, isDevLoginEnabled } from "#/lib/dev-login";
 import { sendEmail } from "#/lib/email";
@@ -22,6 +23,7 @@ import {
 	MAGIC_LINK_EXPIRY_SECONDS,
 } from "#/lib/magic-link-email";
 import {
+	CIMD_ALLOWED_CLIENT_IDS,
 	isCimdClientIdAllowed,
 	NOT_A_MEMBER,
 	NOT_A_MEMBER_MESSAGE,
@@ -323,7 +325,13 @@ export const auth = betterAuth({
 		// their defaults on purpose: nothing here assigns a CIMD client trust
 		// (no `skip_consent`, which would exempt it from Disconnect, #851).
 		cimd({
-			fetchClientMetadataResource,
+			// ChatGPT's JWKS is fetched through this transport too, and an unknown
+			// `kid` makes the provider refetch it on demand: capped per URL in
+			// `#/lib/cimd-jwks-throttle`, which says why.
+			fetchClientMetadataResource: throttleJwksFetches(
+				fetchClientMetadataResource,
+				(url) => CIMD_ALLOWED_CLIENT_IDS.has(url),
+			),
 			metadataProfile: "mcp-2026-07-28",
 			isMetadataDocumentUrlAllowed: isCimdClientIdAllowed,
 		}),

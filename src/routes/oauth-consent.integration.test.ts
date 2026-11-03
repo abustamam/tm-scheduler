@@ -110,20 +110,19 @@ const chatgptKey = generateKeyPairSync("rsa", { modulusLength: 2048 });
 /** An RFC 7523 client assertion as ChatGPT sends one, signed with `key`. */
 function chatgptClientAssertion(
 	key: KeyObject = chatgptKey.privateKey,
+	kid: string = CHATGPT_KID,
 ): string {
 	const now = Math.floor(Date.now() / 1000);
 	const part = (value: object) =>
 		Buffer.from(JSON.stringify(value)).toString("base64url");
-	const signingInput = `${part({ alg: "RS256", typ: "JWT", kid: CHATGPT_KID })}.${part(
-		{
-			iss: CHATGPT_CLIENT_ID,
-			sub: CHATGPT_CLIENT_ID,
-			aud: `${oauth.TEST_ISSUER}/oauth2/token`,
-			iat: now,
-			exp: now + 120,
-			jti: randomUUID(),
-		},
-	)}`;
+	const signingInput = `${part({ alg: "RS256", typ: "JWT", kid })}.${part({
+		iss: CHATGPT_CLIENT_ID,
+		sub: CHATGPT_CLIENT_ID,
+		aud: `${oauth.TEST_ISSUER}/oauth2/token`,
+		iat: now,
+		exp: now + 120,
+		jti: randomUUID(),
+	})}`;
 	const signature = sign("sha256", Buffer.from(signingInput), key);
 	return `${signingInput}.${signature.toString("base64url")}`;
 }
@@ -1113,6 +1112,38 @@ describe.skipIf(!hasTestDb)(
 					expect(await redeemed.json()).toMatchObject({
 						error: "invalid_client",
 					});
+				});
+
+				it("a flood of assertions naming unknown keys fetches ChatGPT's JWKS at most once", async () => {
+					// The provider refetches a client's JWKS whenever no cached key
+					// matches an assertion's `kid`, BEFORE checking its signature. With
+					// nothing in between, anyone could make GavelUp fetch chatgpt.com
+					// once per request (a Codex reproduction: 35 requests, 36 fetches)
+					// and get the server throttled there. `#/lib/cimd-jwks-throttle`
+					// allows one fetch per JWKS URL per minute.
+					serveConnectorDocuments();
+					const jwksFetches = () =>
+						vi
+							.mocked(fetchClientMetadataResource)
+							.mock.calls.filter(
+								([input]) => String(input) === CHATGPT_JWKS_URI,
+							).length;
+					const before = jwksFetches();
+					for (let i = 0; i < 20; i++) {
+						const impostor = generateKeyPairSync("rsa", {
+							modulusLength: 2048,
+						});
+						const res = await chatgptTokenRequest(
+							{ grant_type: "authorization_code", code: "x" },
+							chatgptClientAssertion(
+								impostor.privateKey,
+								`unknown-${randomBytes(4).toString("hex")}`,
+							),
+						);
+						expect(res.status).toBeGreaterThanOrEqual(400);
+						expect(await res.json()).toMatchObject({ error: "invalid_client" });
+					}
+					expect(jwksFetches() - before).toBeLessThanOrEqual(1);
 				});
 
 				it("refuses a code redeemed with no assertion at all, as a public client", async () => {

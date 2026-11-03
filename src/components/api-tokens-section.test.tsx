@@ -58,9 +58,21 @@ describe("ApiTokensSection", () => {
 			/Business, Enterprise or Edu workspace/,
 		);
 		expect(chatgpt?.textContent).toMatch(
-			/Free, Go, Plus and Pro plans can't use GavelUp yet/,
+			/Free, Go and Plus plans can't use GavelUp, and Pro can only read/,
 		);
 		expect(chatgpt?.textContent).toMatch(/not a problem with your account/);
+	});
+
+	it("offers tokens for Claude Code only, the provider the privacy promise names", async () => {
+		// `about.tsx` promises club data reaches only the services it lists
+		// (Anthropic or OpenAI for assistants). Inviting "other assistants" to
+		// take a token would send it somewhere that list doesn't name.
+		state.eligible = true;
+		renderSection();
+		const copy = await screen.findByText(
+			/For Claude Code, which takes a token/,
+		);
+		expect(copy.textContent).not.toMatch(/other assistants/);
 	});
 
 	it("renders nothing for an ineligible user", async () => {

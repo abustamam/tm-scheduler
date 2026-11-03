@@ -59,7 +59,7 @@ servers in ChatGPT" (checked 2026-11-02):
 | ChatGPT plan | Can it use GavelUp? |
 |---|---|
 | Free, Go, Plus | **No.** These plans cannot add custom connectors |
-| Pro | **Not yet.** Pro may only add connectors whose tools are marked read-only, and GavelUp's are not marked yet |
+| Pro | **Read-only.** Pro can only use tools marked read-only: asking about agendas, schedules, feedback and the roster works; nothing that changes the club does (claiming a role, assigning, cancelling) 
 | Business | **Yes**, on the web. Only a workspace **admin or owner** can add it, then publish it for the workspace |
 | Enterprise / Edu | **Yes**, on the web. An admin or owner, or a member an admin has given permission to |
 
@@ -202,7 +202,7 @@ Revoke the token on `/account` to disconnect; that takes effect on the next call
 | `ARCHIVED` | That club has been archived; it can't be changed from anywhere |
 | The magic link says it has expired | Links work once, for five minutes. Ask for a new one |
 | ChatGPT has no "Add custom MCP server" option | Your ChatGPT plan doesn't include custom connectors (Free, Go, Plus), or you aren't an admin of a Business workspace. Nothing on GavelUp's side can change that — see "Connecting ChatGPT" |
-| ChatGPT (Pro) adds GavelUp but shows no tools | Pro only allows read-only tools, and GavelUp's are not marked read-only yet |
+| ChatGPT (Pro) can read but never changes anything | Pro only allows read-only tools. Claiming roles, assigning and every other write need a Business or Enterprise/Edu workspace 
 | ChatGPT shows an old list of tools | An admin needs to refresh the app's tools in ChatGPT's workspace settings |
 
 ---
