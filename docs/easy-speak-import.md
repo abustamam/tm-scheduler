@@ -16,7 +16,7 @@ former member are refused, and so is an admin of an archived club.
    the link on that page (Chrome or Firefox). With no link yet, ask GavelUp
    support for it.
 2. Sign in to Easy-Speak and press **Export** in the extension.
-3. Upload the file it saves on the same page.
+3. Upload the file it saves on the same page. A club keeps its 5 most recent unapplied uploads; a sixth replaces the oldest (applied uploads are never removed).
 4. Optional: paste `name, email, phone`, one person per line, into **Contacts**.
    The export carries no email or phone by design, so this is the only way
    GavelUp learns them. Without it, members are created with no contact details

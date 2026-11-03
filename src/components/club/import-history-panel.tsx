@@ -304,7 +304,7 @@ export function ImportHistoryPanel({
 					<span className="font-semibold">{clubName}</span>. Nothing is written
 					until you apply. Applying again adds nothing that is already there.
 					The uploaded bundle, with every guest's name, is kept until the club
-					is deleted.
+					is deleted. GavelUp keeps your 5 most recent unapplied uploads.
 				</p>
 			</div>
 

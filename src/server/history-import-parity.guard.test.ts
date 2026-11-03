@@ -69,8 +69,8 @@ function countByFunction(
  */
 const WRITES: Record<string, { count: number; rule: string }> = {
 	"history-import-logic.ts#storeEasySpeakBundle": {
-		count: 1,
-		rule: "W1 insert club_imports: import-only table, club-scoped",
+		count: 2,
+		rule: "W1 insert club_imports: import-only table, club-scoped; W1b delete club_imports beyond the newest MAX_UNAPPLIED_IMPORTS unapplied rows of this club (applied_at IS NULL and club_id in the statement), import-only table, no manual equivalent",
 	},
 	"history-import-logic.ts#putRef": {
 		count: 1,
@@ -102,7 +102,7 @@ const WRITES: Record<string, { count: number; rule: string }> = {
 	},
 	"mentor-import-logic.ts#importWillingFlags": {
 		count: 1,
-		rule: "W16 update members.willing_to_mentor, club + active in the statement",
+		rule: "W16 update members.willing_to_mentor, club + active in the statement. ACCEPTED (maintainer, 2026-11-03): the flag is set only for active members of THIS club named as mentors in the club's own Easy-Speak history; it does not list them on 'Find a mentor' (mentor_listed_at stays null); an admin can already pair members directly, so the import grants nothing new",
 	},
 	"mentor-import-logic.ts#importMentorPairs": {
 		count: 1,

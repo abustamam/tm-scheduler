@@ -47,11 +47,13 @@ import { createHash } from "node:crypto";
 import {
 	and,
 	asc,
+	desc,
 	eq,
 	inArray,
 	isNotNull,
 	isNull,
 	not,
+	notInArray,
 	or,
 	sql,
 } from "drizzle-orm";
@@ -297,6 +299,9 @@ function allTextIsJsonbSafe(value: unknown): boolean {
 	return true;
 }
 
+/** A club keeps at most this many unapplied stored uploads; a newer one replaces the oldest. */
+export const MAX_UNAPPLIED_IMPORTS = 5;
+
 /** What an upload refusal says, for a toast. */
 export class BundleRefusal extends Error {}
 
@@ -309,7 +314,8 @@ export interface StoredImport {
 
 /**
  * Validate an uploaded bundle with `easy-speak-bundle.ts` and store it in
- * `club_imports`. The same hash for the same club is the same row.
+ * `club_imports`. The same hash for the same club is the same row. A club holds
+ * at most `MAX_UNAPPLIED_IMPORTS` unapplied rows: storing another deletes the oldest.
  *
  * The raw TEXT is what is hashed, and the parsed JSON (not zod's output, which
  * drops keys the schema does not know) is what is stored, so the row keeps the
@@ -407,17 +413,46 @@ export async function storeEasySpeakBundle(input: {
 			appliedAt: existing.appliedAt,
 		};
 	}
-	const [inserted] = await db
-		.insert(clubImports)
-		.values({
-			clubId: input.clubId,
-			source: SOURCE,
-			bundle: parsed,
-			bundleSha256,
-			uploadedByUserId: input.uploadedByUserId,
-		})
-		.onConflictDoNothing()
-		.returning({ id: clubImports.id });
+	// The count, the delete and the insert are one transaction under the club
+	// write lock, so two concurrent uploads cannot both see room and exceed the cap.
+	const inserted = await db.transaction(async (tx) => {
+		await lockClubForWrite(tx, input.clubId);
+		const [row] = await tx
+			.insert(clubImports)
+			.values({
+				clubId: input.clubId,
+				source: SOURCE,
+				bundle: parsed,
+				bundleSha256,
+				uploadedByUserId: input.uploadedByUserId,
+			})
+			.onConflictDoNothing()
+			.returning({ id: clubImports.id });
+		if (!row) return null;
+		// Keep the newest MAX_UNAPPLIED_IMPORTS unapplied rows (by created_at, then
+		// id); applied rows are neither counted nor deleted.
+		const keep = tx
+			.select({ id: clubImports.id })
+			.from(clubImports)
+			.where(
+				and(
+					eq(clubImports.clubId, input.clubId),
+					isNull(clubImports.appliedAt),
+				),
+			)
+			.orderBy(desc(clubImports.createdAt), desc(clubImports.id))
+			.limit(MAX_UNAPPLIED_IMPORTS);
+		await tx
+			.delete(clubImports)
+			.where(
+				and(
+					eq(clubImports.clubId, input.clubId),
+					isNull(clubImports.appliedAt),
+					notInArray(clubImports.id, keep),
+				),
+			);
+		return row;
+	});
 	if (inserted) {
 		return { importId: inserted.id, reused: false, appliedAt: null };
 	}

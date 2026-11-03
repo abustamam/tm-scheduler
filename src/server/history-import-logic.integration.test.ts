@@ -164,11 +164,14 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 	});
 
 	async function upload(text = bundleText()) {
-		return logic.storeEasySpeakBundle({
+		const stored = await logic.storeEasySpeakBundle({
 			clubId: seed.clubId,
 			uploadedByUserId: superadminId,
 			text,
 		});
+		// The store takes the club write lock too; the hook numbers the APPLY's calls.
+		lockHook.calls = 0;
+		return stored;
 	}
 
 	/** Every person the plan could not place becomes a guest, and the second Dovecott stays a different person. */
