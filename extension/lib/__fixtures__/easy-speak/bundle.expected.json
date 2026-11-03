@@ -1,6 +1,7 @@
 {
 	"format": "gavelup.easy-speak-bundle",
-	"version": 1,
+	"version": 2,
+	"extensionVersion": "0.0.0-test",
 	"exportedAt": "2026-10-12T12:00:41.040Z",
 	"exportedBy": "fixtureuser",
 	"club": {

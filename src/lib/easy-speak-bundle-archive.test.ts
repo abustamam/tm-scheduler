@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { easySpeakBundleV1Schema } from "./easy-speak-bundle";
+import {
+	easySpeakStoredSchema,
+	easySpeakUploadSchema,
+} from "./easy-speak-bundle";
 import { MAX_BUNDLE_BYTES } from "./import-bundle-limit";
 
 /**
@@ -23,12 +26,15 @@ const expected = JSON.parse(
 describe("the upload bundle without raw pages", () => {
 	it("is what the export writes now, and parses with an empty raw", () => {
 		expect(expected.raw).toEqual([]);
-		expect(easySpeakBundleV1Schema.parse(expected).raw).toEqual([]);
+		expect(easySpeakUploadSchema.parse(expected).raw).toEqual([]);
 	});
 
-	it("an old bundle that still carries raw pages still parses", () => {
+	it("an old v1 bundle that still carries raw pages still loads, but is no longer an upload", () => {
+		// protects=stored club_imports rows (all v1) re-parsing; fails_when=the stored schema drops v1, or the upload schema accepts it; no_claim=a real prod row (this is the fixture reshaped to v1)
+		const { extensionVersion: _drop, ...rest } = expected;
 		const old = {
-			...expected,
+			...rest,
+			version: 1,
 			raw: [
 				{
 					url: "https://easy-speak.org/view_meeting.php?t=1",
@@ -37,7 +43,8 @@ describe("the upload bundle without raw pages", () => {
 				},
 			],
 		};
-		expect(easySpeakBundleV1Schema.parse(old).raw).toHaveLength(1);
+		expect(easySpeakStoredSchema.parse(old).raw).toHaveLength(1);
+		expect(easySpeakUploadSchema.safeParse(old).success).toBe(false);
 	});
 
 	it("an old bundle with a contact page in raw is still refused", () => {
@@ -51,7 +58,7 @@ describe("the upload bundle without raw pages", () => {
 				},
 			],
 		};
-		expect(easySpeakBundleV1Schema.safeParse(bad).success).toBe(false);
+		expect(easySpeakUploadSchema.safeParse(bad).success).toBe(false);
 	});
 
 	it("a bundle of 771 meetings is far under the upload cap", () => {

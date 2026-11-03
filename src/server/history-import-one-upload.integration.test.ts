@@ -329,6 +329,146 @@ describe.skipIf(!hasTestDb)(
 			};
 		}
 
+		// The format version gate (#1497). protects=the admin's instruction when a
+		// stale, newer or wrong file is uploaded, and no row stored for it;
+		// fails_when=the version check is skipped, runs after the zod parse, or a
+		// refused file leaves a club_imports row; no_claim=the panel's oversize
+		// sniff (its own test) and a real extension's file (the fixture stands in).
+		const OLDER_N1 =
+			"This file came from an older GavelUp extension (format 1). Install the latest and export again.";
+		const OLDER =
+			"This file came from an older GavelUp extension. Install the latest and export again.";
+		const importRows = async () =>
+			Number(
+				(
+					await testDb
+						.select({ n: count() })
+						.from(clubImports)
+						.where(eq(clubImports.clubId, seed.clubId))
+				)[0]?.n ?? 0,
+			);
+		const envelope = (edit: (b: Record<string, unknown>) => void) => {
+			const b = JSON.parse(bundleText()) as Record<string, unknown>;
+			edit(b);
+			return JSON.stringify(b);
+		};
+		const refused = async (text: string, message: string) => {
+			const error = await logic
+				.storeEasySpeakBundle({
+					clubId: seed.clubId,
+					uploadedByUserId: superadminId,
+					text,
+				})
+				.then(
+					() => null,
+					(e: unknown) => e,
+				);
+			expect((error as Error | null)?.message).toBe(message);
+			expect(await importRows()).toBe(0);
+		};
+
+		it("stores the v2 bundle with its extensionVersion verbatim", async () => {
+			const stored = await upload();
+			const [row] = await testDb
+				.select({ bundle: clubImports.bundle })
+				.from(clubImports)
+				.where(eq(clubImports.id, stored.importId));
+			expect(row?.bundle).toMatchObject({
+				version: 2,
+				extensionVersion: "0.0.0-test",
+			});
+		});
+
+		it("refuses a v1 bundle with the older-extension sentence", async () => {
+			await refused(
+				envelope((b) => {
+					b.version = 1;
+					delete b.extensionVersion;
+				}),
+				OLDER_N1,
+			);
+		});
+
+		it("refuses a missing version, a string version and a newer version", async () => {
+			await refused(
+				envelope((b) => {
+					delete b.version;
+				}),
+				OLDER,
+			);
+			await refused(
+				envelope((b) => {
+					b.version = "2";
+				}),
+				OLDER,
+			);
+			await refused(
+				envelope((b) => {
+					b.version = 3;
+				}),
+				"This file came from a newer GavelUp extension (format 3) than this site reads yet. Try again after the next GavelUp update.",
+			);
+		});
+
+		it("refuses a payload that is not an object, and a v1 with no format", async () => {
+			const NOT_BUNDLE_PREFIX = "That is not an Easy-Speak bundle:";
+			for (const text of ["[]", "42", "null"]) {
+				const error = await logic
+					.storeEasySpeakBundle({
+						clubId: seed.clubId,
+						uploadedByUserId: superadminId,
+						text,
+					})
+					.then(
+						() => null,
+						(e: unknown) => e,
+					);
+				expect((error as Error | null)?.message).toMatch(
+					new RegExp(`^${NOT_BUNDLE_PREFIX}`),
+				);
+				expect(await importRows()).toBe(0);
+			}
+			const noFormat = await logic
+				.storeEasySpeakBundle({
+					clubId: seed.clubId,
+					uploadedByUserId: superadminId,
+					text: envelope((b) => {
+						b.version = 1;
+						delete b.format;
+					}),
+				})
+				.then(
+					() => null,
+					(e: unknown) => e,
+				);
+			expect((noFormat as Error | null)?.message).toMatch(
+				new RegExp(`^${NOT_BUNDLE_PREFIX}`),
+			);
+			expect(await importRows()).toBe(0);
+		});
+
+		it("refuses the pages archive", async () => {
+			await refused(
+				JSON.stringify({
+					format: "gavelup.easy-speak-pages",
+					version: 1,
+					pages: [],
+				}),
+				"That is the pages archive (the file ending in -pages.json). Upload the other file the export saved.",
+			);
+		});
+
+		it("gives a v1 bundle with a bad field the version sentence, not a zod message", async () => {
+			await refused(
+				envelope((b) => {
+					b.version = 1;
+					delete b.extensionVersion;
+					(b.meetings as { startsAt: string }[])[0].startsAt = "next Tuesday";
+				}),
+				OLDER_N1,
+			);
+		});
+
 		// protects=an applied upload leaves exactly the members the rules promise
 		// (2 active, one an admin with one open president term; 2 former with
 		// ended_at NULL), one guest, nothing for the erased account, and a `person`

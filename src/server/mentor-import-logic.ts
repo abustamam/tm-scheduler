@@ -16,7 +16,7 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "#/db";
 import { importRefs, members, mentorships } from "#/db/schema";
-import type { EasySpeakBundleV1 } from "#/lib/easy-speak-bundle";
+import type { EasySpeakBundle } from "#/lib/easy-speak-bundle";
 import { personKeyOf } from "#/lib/easy-speak-import-plan";
 import { logActivity } from "./activity";
 import { lockClubForWrite } from "./club-write-lock";
@@ -32,7 +32,7 @@ import {
 export const MENTORS_NOT_APPLIED_MESSAGE =
 	"Apply the import before importing its mentor pairs: they are matched to the people it resolved.";
 
-type EsPerson = EasySpeakBundleV1["mentors"][number]["mentee"];
+type EsPerson = EasySpeakBundle["mentors"][number]["mentee"];
 
 /**
  * Why one bundle pair was not written. Only its own pair is blocked (AC2).
@@ -187,7 +187,7 @@ async function importWillingFlags(
 		clubId: string;
 		importId: string;
 		superadminUserId: string;
-		rows: EasySpeakBundleV1["mentors"];
+		rows: EasySpeakBundle["mentors"];
 		sideOf: (who: EsPerson) => Side;
 		/** Member ids already remembered; grows as this run remembers more. */
 		done: Set<string>;

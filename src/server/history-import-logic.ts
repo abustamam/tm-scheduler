@@ -78,9 +78,17 @@ import {
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
 import {
-	type EasySpeakBundleV1,
-	easySpeakBundleV1Schema,
+	type EasySpeakBundle,
+	easySpeakStoredSchema,
+	easySpeakUploadSchema,
 } from "#/lib/easy-speak-bundle";
+import {
+	ARCHIVE_FORMAT,
+	ARCHIVE_UPLOADED_MESSAGE,
+	BUNDLE_FORMAT,
+	CURRENT_BUNDLE_VERSION,
+	wrongVersionMessage,
+} from "#/lib/easy-speak-bundle-version";
 import {
 	buildImportPlan,
 	buildReconciliation,
@@ -232,7 +240,27 @@ export async function storeEasySpeakBundle(input: {
 			"That bundle contains text that cannot be stored (an unpaired surrogate).",
 		);
 	}
-	const check = easySpeakBundleV1Schema.safeParse(parsed);
+	// The envelope first: a stale, newer or archive file gets a sentence about
+	// what to do, not whichever zod issue happens to come first.
+	if (typeof parsed === "object" && parsed !== null) {
+		const envelope = parsed as { format?: unknown; version?: unknown };
+		if (envelope.format === ARCHIVE_FORMAT) {
+			throw new BundleRefusal(ARCHIVE_UPLOADED_MESSAGE);
+		}
+		if (
+			envelope.format === BUNDLE_FORMAT &&
+			envelope.version !== CURRENT_BUNDLE_VERSION
+		) {
+			throw new BundleRefusal(
+				wrongVersionMessage(
+					Number.isInteger(envelope.version)
+						? (envelope.version as number)
+						: null,
+				),
+			);
+		}
+	}
+	const check = easySpeakUploadSchema.safeParse(parsed);
 	if (!check.success) {
 		const issue = check.error.issues[0];
 		const where = issue?.path.length ? ` (at ${issue.path.join(".")})` : "";
@@ -302,7 +330,7 @@ export async function loadStoredBundle(
 	clubId: string,
 	importId: string,
 ): Promise<{
-	bundle: EasySpeakBundleV1;
+	bundle: EasySpeakBundle;
 	bundleSha256: string;
 	appliedAt: Date | null;
 	state: ImportState;
@@ -317,7 +345,7 @@ export async function loadStoredBundle(
 		.where(and(eq(clubImports.id, importId), eq(clubImports.clubId, clubId)))
 		.limit(1);
 	if (!row) throw new Error(IMPORT_NOT_FOUND_MESSAGE);
-	const bundle = easySpeakBundleV1Schema.parse(row.bundle);
+	const bundle = easySpeakStoredSchema.parse(row.bundle);
 	const rawState = (row.bundle as { importState?: unknown }).importState;
 	return {
 		bundle,
@@ -2006,7 +2034,7 @@ export interface SpeechRequestImportResult {
  * ask appears twice, so a re-run reproduces the same ids in the same order.
  */
 function speechRequestSourceId(
-	request: EasySpeakBundleV1["speechRequests"][number],
+	request: EasySpeakBundle["speechRequests"][number],
 	seen: Map<string, number>,
 ): string {
 	if (request.esSpeechId) return request.esSpeechId;

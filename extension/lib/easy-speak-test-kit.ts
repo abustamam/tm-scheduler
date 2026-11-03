@@ -534,6 +534,7 @@ export function setup(opts: FakeSiteOptions & { store?: ReturnType<typeof memory
 			onProgress: (p) => progress.push(p.label),
 			sleep: c.sleep,
 			now: c.now,
+			extensionVersion: "0.0.0-test",
 		});
 	return { run, log, store, c, progress, maxInFlight: () => maxInFlight };
 }

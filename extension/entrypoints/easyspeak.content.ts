@@ -119,6 +119,7 @@ export default defineContentScript({
 						identity: await freshIdentity(fetchImpl, parseHtml, sleep),
 						sleep,
 						now: Date.now,
+						extensionVersion: browser.runtime.getManifest().version,
 						onProgress,
 					});
 					// The upload bundle first, so the file that matters lands even if the browser

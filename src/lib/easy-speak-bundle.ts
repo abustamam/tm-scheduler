@@ -1,7 +1,16 @@
 import { z } from "zod";
+import { BUNDLE_FORMAT } from "./easy-speak-bundle-version";
 
 /**
- * The Easy-Speak export bundle, version 1 (#1047, part of the #1054 migration).
+ * The Easy-Speak export bundle, version 2 (#1047, part of the #1054 migration;
+ * versioned in #1497).
+ *
+ * Version 2 is the only version an UPLOAD may carry (`easySpeakUploadSchema`,
+ * `version: 2` plus a non-empty `extensionVersion` naming the extension build
+ * that wrote the file). Stored `club_imports` rows may be v1 or v2
+ * (`easySpeakStoredSchema`, the union), so rows written before v2 still
+ * re-parse. A stale, newer or wrong-format upload is refused by the envelope
+ * check in `storeEasySpeakBundle`, before this schema runs.
  *
  * The CANONICAL copy of the contract. The internal browser extension
  * (`extension/lib/easy-speak-bundle.ts`) walks an Easy-Speak club in the user's
@@ -144,7 +153,7 @@ const speechRequestSchema = z.object({
 });
 
 export const easySpeakBundleV1Schema = z.object({
-	format: z.literal("gavelup.easy-speak-bundle"),
+	format: z.literal(BUNDLE_FORMAT),
 	version: z.literal(1),
 	exportedAt: z.iso.datetime({ offset: true }),
 	/** The Easy-Speak username of whoever ran the export. */
@@ -216,5 +225,40 @@ export const easySpeakBundleV1Schema = z.object({
 	),
 });
 
+/**
+ * Version 2 (#1497): v1's shape plus `extensionVersion`. Every change to the
+ * bundle's shape adds a new schema like this one and bumps
+ * `CURRENT_BUNDLE_VERSION`; `easy-speak-bundle-version.test.ts` enforces it.
+ */
+export const easySpeakBundleV2Schema = easySpeakBundleV1Schema.extend({
+	version: z.literal(2),
+	/**
+	 * The GavelUp extension's own version (its `package.json`), for diagnosis
+	 * only. Nothing reads it to decide anything.
+	 */
+	extensionVersion: z.string().min(1).max(64),
+});
+
+/** The schema for `CURRENT_BUNDLE_VERSION`: the only shape an upload may have. */
+export const easySpeakUploadSchema = easySpeakBundleV2Schema;
+
+/**
+ * Every version ever shipped: a stored `club_imports` row is re-parsed with
+ * this. The next version appends to the list and never removes one.
+ */
+export const easySpeakStoredSchema = z.discriminatedUnion("version", [
+	easySpeakBundleV1Schema,
+	easySpeakBundleV2Schema,
+]);
+
+/** Each shipped version's schema, keyed by version (read by the shape test). */
+export const BUNDLE_SCHEMAS = {
+	1: easySpeakBundleV1Schema,
+	2: easySpeakBundleV2Schema,
+} as const;
+
 export type EsPersonRef = z.infer<typeof esPersonRefSchema>;
 export type EasySpeakBundleV1 = z.infer<typeof easySpeakBundleV1Schema>;
+export type EasySpeakBundleV2 = z.infer<typeof easySpeakBundleV2Schema>;
+/** What every consumer reads: any stored version. Narrow on `version` to read a field only some versions have. */
+export type EasySpeakBundle = z.infer<typeof easySpeakStoredSchema>;

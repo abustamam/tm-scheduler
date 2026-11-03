@@ -4,15 +4,16 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
 import {
+	oversizeMessage,
+	SNIFF_HEAD_BYTES,
+} from "#/lib/easy-speak-bundle-version";
+import {
 	type ImportReport,
 	type PersonResolution,
 	personKeyOf,
 } from "#/lib/easy-speak-import-plan";
 import { GUEST_KIND_LABELS, GUEST_KINDS } from "#/lib/guest-profile";
-import {
-	bundleTooBigMessage,
-	MAX_BUNDLE_BYTES,
-} from "#/lib/import-bundle-limit";
+import { MAX_BUNDLE_BYTES } from "#/lib/import-bundle-limit";
 import {
 	applyEasySpeakImport,
 	importEasySpeakMentors,
@@ -126,7 +127,8 @@ export function ImportHistoryPanel({
 		mutationFn: async (file: File) => {
 			// Refuse before reading: file.text() would pull the whole file into memory.
 			if (file.size > MAX_BUNDLE_BYTES) {
-				throw new Error(bundleTooBigMessage(file.size));
+				const head = await file.slice(0, SNIFF_HEAD_BYTES).text();
+				throw new Error(oversizeMessage(file.size, head));
 			}
 			return uploadEasySpeakBundle({
 				data: { clubId, text: await file.text() },

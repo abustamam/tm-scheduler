@@ -270,6 +270,29 @@ describe("ImportHistoryPanel (#1051)", () => {
 		expect(fns.uploadEasySpeakBundle).not.toHaveBeenCalled();
 	});
 
+	it("tells an over-cap file from an older extension to update it, reading at most 64 KiB", async () => {
+		// protects=the admin learning WHY a stale export is too big; fails_when=the toast is the bare size error, the whole file is read, or the server is called; no_claim=a real 60 MB file (size is stubbed, the head is a small File)
+		fns.listEasySpeakImports.mockResolvedValue([]);
+		renderPanel();
+		const input = await screen.findByLabelText("Easy-Speak bundle");
+		const head =
+			'{"format":"gavelup.easy-speak-bundle","version":1,"exportedAt":"x"';
+		const file = new File([head], "bundle.json", { type: "application/json" });
+		Object.defineProperty(file, "size", { value: 60 * 1024 * 1024 });
+		const slice = vi.spyOn(file, "slice");
+		const read = vi.spyOn(file, "text");
+		fireEvent.change(input, { target: { files: [file] } });
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith(
+				"That file is 60.0 MB; the limit is 50.0 MB. This file came from an older GavelUp extension (format 1). Install the latest and export again.",
+			),
+		);
+		expect(slice).toHaveBeenCalledTimes(1);
+		expect(slice.mock.calls[0][1]).toBeLessThanOrEqual(65536);
+		expect(read).not.toHaveBeenCalled();
+		expect(fns.uploadEasySpeakBundle).not.toHaveBeenCalled();
+	});
+
 	it("keeps Import speech requests disabled until the import is applied", async () => {
 		fns.previewEasySpeakImport.mockResolvedValue(previewFor(false));
 		await openImport();
