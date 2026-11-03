@@ -235,6 +235,7 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		const mk = (name: string, audience: "member" | "officer") => ({
 			name,
 			audience,
+			annotations: { readOnlyHint: true as const },
 			config: {
 				title: name,
 				description: "test probe",

@@ -125,6 +125,14 @@ interface LockedSlot {
 export const assignRolesTool: McpToolDefinition = {
 	name: "assign_roles",
 	audience: "officer",
+	// Replaces or clears whoever holds a slot. Not idempotent: it applies with
+	// no planHash, and repeating a guest assignment restamps `claimedAt` and
+	// logs another reassign.
+	annotations: {
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: false,
+	},
 	config: {
 		title: "Assign roles",
 		description:

@@ -150,6 +150,12 @@ function toPendingEntries(
 export const recordGuestBookTool: McpToolDefinition = {
 	name: "record_guest_book",
 	audience: "officer",
+	// Stores a pending plan, never a guest: a person applies it on the confirm page. Each call stores another.
+	annotations: {
+		readOnlyHint: false,
+		destructiveHint: false,
+		idempotentHint: false,
+	},
 	config: {
 		title: "Record guest book",
 		description:

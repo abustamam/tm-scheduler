@@ -65,6 +65,12 @@ function asMcpRefusal(err: unknown): unknown {
 export const cancelMeetingTool: McpToolDefinition = {
 	name: "cancel_meeting",
 	audience: "officer",
+	// Takes the meeting off the calendar (restore_meeting undoes it); a second cancel is refused.
+	annotations: {
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: true,
+	},
 	config: {
 		title: "Cancel meeting",
 		description:

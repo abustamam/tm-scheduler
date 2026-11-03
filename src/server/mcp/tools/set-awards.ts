@@ -196,6 +196,12 @@ function describeWinner(w: AwardWinner | null): string {
 export const setAwardsTool: McpToolDefinition = {
 	name: "set_awards",
 	audience: "officer",
+	// Replaces or clears a recorded winner; the same entries again change nothing.
+	annotations: {
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: true,
+	},
 	config: {
 		title: "Set awards",
 		description:

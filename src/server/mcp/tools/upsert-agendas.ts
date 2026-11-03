@@ -66,6 +66,12 @@ const inputSchema = {
 export const upsertAgendasTool: McpToolDefinition = {
 	name: "upsert_agendas",
 	audience: "officer",
+	// Stores a pending plan, never an agenda: a person applies it on the confirm page. Each call stores another.
+	annotations: {
+		readOnlyHint: false,
+		destructiveHint: false,
+		idempotentHint: false,
+	},
 	config: {
 		title: "Set meeting agendas",
 		description:

@@ -15,6 +15,7 @@ import type { McpToolDefinition } from "../tool";
 export const whoamiTool: McpToolDefinition = {
 	name: "whoami",
 	audience: "member",
+	annotations: { readOnlyHint: true },
 	config: {
 		title: "Who am I",
 		description:

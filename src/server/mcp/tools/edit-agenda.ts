@@ -441,6 +441,13 @@ function applyError(err: unknown): unknown {
 export const editAgendaTool: McpToolDefinition = {
 	name: EDIT_AGENDA_TOOL,
 	audience: "officer",
+	// Removes rows. Kept non-idempotent: a fresh preview of the same adds
+	// applies them again.
+	annotations: {
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: false,
+	},
 	config: {
 		title: "Edit agenda rows",
 		description:

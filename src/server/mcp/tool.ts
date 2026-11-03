@@ -58,11 +58,34 @@ export type McpToolContext = (
 /** `officer`: an admin or open-term officer of the club. `member`: any active member. */
 export type McpToolAudience = "officer" | "member";
 
+/**
+ * The MCP tool annotations a client reads to tell a read from a write.
+ *
+ * REQUIRED, with `readOnlyHint` always stated, because the protocol's default
+ * for an absent hint is `false`: an undeclared reader looks like a writer, and
+ * ChatGPT's Pro plan connects only servers whose tools are read-only — so a
+ * missing hint hides the tool there. A writer must also say whether it can
+ * overwrite or remove what is there (`destructiveHint`) and whether repeating
+ * the same call changes nothing more (`idempotentHint`); clients use those to
+ * decide when to ask the user first.
+ *
+ * `readOnlyHint: true` means the call changes nothing a person would see. Two
+ * writes do not count against it: a reader that tops up the schedule
+ * (`list_meetings`, `get_my_schedule`) runs the same top-up as every
+ * signed-in read of the calendar (ADR-0021), and a `tmk_` token's
+ * `lastUsedAt` is bookkeeping every call makes, writer or not.
+ */
+export type McpToolAnnotations =
+	| { readOnlyHint: true }
+	| { readOnlyHint: false; destructiveHint: boolean; idempotentHint: boolean };
+
 export interface McpToolDefinition {
 	/** The tool name as MCP clients see it, e.g. `record_guest_book`. */
 	name: string;
 	/** REQUIRED, no default: who may call this tool (#1281). */
 	audience: McpToolAudience;
+	/** REQUIRED: what `tools/list` tells the client about this tool's effects. */
+	annotations: McpToolAnnotations;
 	config: {
 		title: string;
 		description: string;

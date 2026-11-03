@@ -114,6 +114,12 @@ async function compute(
 export const setMyAttendanceTool: McpToolDefinition = {
 	name: TOOL,
 	audience: "member",
+	// not_coming frees every role the caller holds; repeating it frees nothing more.
+	annotations: {
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: true,
+	},
 	config: {
 		title: "Set my attendance",
 		description:

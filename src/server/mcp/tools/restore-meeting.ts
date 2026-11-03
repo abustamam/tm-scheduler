@@ -41,6 +41,12 @@ function asMcpRefusal(err: unknown): unknown {
 export const restoreMeetingTool: McpToolDefinition = {
 	name: "restore_meeting",
 	audience: "officer",
+	// Puts back exactly what was there; a second restore is refused.
+	annotations: {
+		readOnlyHint: false,
+		destructiveHint: false,
+		idempotentHint: true,
+	},
 	config: {
 		title: "Restore meeting",
 		description:
