@@ -147,10 +147,12 @@ async function compute(
 export const claimOpenRoleTool: McpToolDefinition = {
 	name: TOOL,
 	audience: "member",
-	// Fills an open slot only; a second call can take another open slot of the same role.
+	// Fills an open slot, and replaces the caller's own attendance answer (a
+	// decline, or an officer's ask) with `coming`. Kept non-idempotent: a
+	// fresh preview of the same input can take another open slot of that role.
 	annotations: {
 		readOnlyHint: false,
-		destructiveHint: false,
+		destructiveHint: true,
 		idempotentHint: false,
 	},
 	config: {

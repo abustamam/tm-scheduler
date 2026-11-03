@@ -58,7 +58,23 @@ describe("MCP tool annotations", () => {
 		expect(destructive).toEqual([
 			"assign_roles",
 			"cancel_meeting",
+			"claim_open_role",
 			"edit_agenda",
+			"set_attendance",
+			"set_awards",
+			"set_my_attendance",
+		]);
+	});
+
+	it("exactly these writers are idempotent", () => {
+		const idempotent = MCP_TOOLS.filter(
+			(t) => !t.annotations.readOnlyHint && t.annotations.idempotentHint,
+		)
+			.map((t) => t.name)
+			.sort();
+		expect(idempotent).toEqual([
+			"cancel_meeting",
+			"restore_meeting",
 			"set_attendance",
 			"set_awards",
 			"set_my_attendance",

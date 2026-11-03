@@ -69,9 +69,11 @@ export type McpToolAudience = "officer" | "member";
  * the same call changes nothing more (`idempotentHint`); clients use those to
  * decide when to ask the user first.
  *
- * `readOnlyHint: true` means the call changes nothing a person would see. A
- * reader that tops up the schedule (`list_meetings`) still qualifies: the same
- * top-up runs on every signed-in read of the calendar (ADR-0021).
+ * `readOnlyHint: true` means the call changes nothing a person would see. Two
+ * writes do not count against it: a reader that tops up the schedule
+ * (`list_meetings`, `get_my_schedule`) runs the same top-up as every
+ * signed-in read of the calendar (ADR-0021), and a `tmk_` token's
+ * `lastUsedAt` is bookkeeping every call makes, writer or not.
  */
 export type McpToolAnnotations =
 	| { readOnlyHint: true }

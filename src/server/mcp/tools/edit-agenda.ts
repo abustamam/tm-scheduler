@@ -441,7 +441,8 @@ function applyError(err: unknown): unknown {
 export const editAgendaTool: McpToolDefinition = {
 	name: EDIT_AGENDA_TOOL,
 	audience: "officer",
-	// Removes rows, and an add or a move applied twice lands twice.
+	// Removes rows. Kept non-idempotent: a fresh preview of the same adds
+	// applies them again.
 	annotations: {
 		readOnlyHint: false,
 		destructiveHint: true,

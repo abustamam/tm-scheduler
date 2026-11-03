@@ -232,7 +232,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 		expect(byName.get("assign_roles")).toEqual({
 			readOnlyHint: false,
 			destructiveHint: true,
-			idempotentHint: true,
+			idempotentHint: false,
 			openWorldHint: false,
 		});
 		for (const tool of MCP_TOOLS) {
