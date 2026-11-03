@@ -28,7 +28,8 @@ outer loop; this section is one turn of it, and each turn is a fresh session:
 5. Each agent opens its PR and **stops**: `gh pr create`, body carrying `Closes #N`, no merge.
 6. **From the main session**: review the wave's PRs, then land them one at a time — see
    **Landing the wave** below. The merge decision is the maintainer's, not an agent's.
-7. Run `/qa-only` once against the deployed app. Read `main`'s CI (**Landing the wave**,
+7. Run `/qa-only` once against the deployed app, on GavelUp Demo Club (CLAUDE.md's "Verify a
+   wave"). Read `main`'s CI (**Landing the wave**,
    step 5). Write the handoff (CLAUDE.md's format) and **stop**. The next stage belongs to a
    new session, which starts again at 1.
 
