@@ -62,17 +62,20 @@ const {
 	closeAllVotesTx,
 	closeClubVotesTx,
 	closeVote,
+	closeVoteTx,
 	disqualifyCandidate,
 	joinBallotAsGuest,
 	listVoteSessions,
 	loadBallot,
 	loadParticipation,
 	loadTally,
+	materialiseAutoSession,
 	openVote,
 	sessionOpenNow,
 	undoDisqualification,
 } = await import("#/server/voting-logic");
 const { applyCompleteMeeting } = await import("#/server/meetings-logic");
+const { applyClubAgendaSettingsUpdate } = await import("#/server/clubs-logic");
 const { setAward } = await import("#/server/minutes-logic");
 
 describe.skipIf(!hasTestDb)("vote table constraints (#510)", () => {
@@ -2997,7 +3000,8 @@ describe.skipIf(!hasTestDb)("the automatic vote window (#1472)", () => {
 	//   anyone tapping Open, and the row that results records the window (AC 1);
 	// fails_when=the vote is refused, a second row appears, the row's times or
 	//   opened_by are wrong, or a vote_open is logged for a tap nobody made;
-	// no_claim=real clock: the meeting is moved to start a minute ago
+	// no_claim=a first vote on a meeting whose window is NOT yet open (next test);
+	//   the ballot UI's rendering of the row
 	it("accepts a first vote inside the window and materialises ONE row for it", async () => {
 		const scheduledAt = await startedAgo(MIN);
 		await vote();
@@ -3083,14 +3087,14 @@ describe.skipIf(!hasTestDb)("the automatic vote window (#1472)", () => {
 			await tx.insert(meetingVoteSessions).values({
 				meetingId: seed.meetingId,
 				category: "best_speaker",
-				openedAt: sql`now() - interval '1 hour'`,
-				closedAt: sql`now()`,
+				openedAt: sql`timezone('UTC', now()) - interval '1 hour'`,
+				closedAt: sql`timezone('UTC', now())`,
 			});
 			await tx.insert(meetingVoteSessions).values({
 				meetingId: seed.meetingId,
 				category: "best_evaluator",
-				openedAt: sql`now() - interval '1 hour'`,
-				closedAt: sql`now() + interval '1 second'`,
+				openedAt: sql`timezone('UTC', now()) - interval '1 hour'`,
+				closedAt: sql`timezone('UTC', now()) + interval '1 second'`,
 			});
 			return tx
 				.select({ category: meetingVoteSessions.category })
@@ -3133,7 +3137,7 @@ describe.skipIf(!hasTestDb)("the automatic vote window (#1472)", () => {
 			.where(
 				and(
 					eq(meetingVoteSessions.meetingId, seed.meetingId),
-					sql`${meetingVoteSessions.closedAt} > now()`,
+					sql`${meetingVoteSessions.closedAt} > timezone('UTC', now())`,
 				),
 			);
 		expect(future).toBe(0);
@@ -3306,4 +3310,200 @@ describe.skipIf(!hasTestDb)("the automatic vote window (#1472)", () => {
 		);
 		expect(await sessionRows()).toHaveLength(0);
 	});
+
+	/** vote_close rows logged for this club. */
+	const closeLogs = () =>
+		testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, seed.clubId),
+					eq(activityLog.action, "vote_close"),
+				),
+			);
+
+	/** Rows still open right now, by the shared predicate. */
+	const openRowCount = async () => {
+		const [{ n }] = await testDb
+			.select({ n: sql<number>`count(*)::int` })
+			.from(meetingVoteSessions)
+			.where(
+				and(
+					eq(meetingVoteSessions.meetingId, seed.meetingId),
+					sessionOpenNow(),
+				),
+			);
+		return n;
+	};
+
+	// protects=Close always ends with the category closed, even when a first vote
+	//   has inserted its row but not committed yet (RISK P1): Close's UPDATE
+	//   cannot see that row, its INSERT conflicts, and the conflict must close it;
+	// fails_when=the conflict is DO NOTHING (Close silently does nothing and the
+	//   category stays open), or vote_close is logged for a no-op;
+	// no_claim=two real phones; the uncommitted first vote is a held transaction
+	it("Close racing an uncommitted first vote still closes the category", async () => {
+		await startedAgo(MIN);
+		const writer = await openBlockingTx(async (tx) => {
+			await materialiseAutoSession(tx, seed.meetingId, "best_speaker");
+		});
+		const closePending = closeVote(args());
+		closePending.catch(() => {});
+		// Close's INSERT is parked on the writer's uncommitted unique-index entry.
+		await waitForLockWait('"meeting_vote_sessions"', writer.pid);
+		await writer.commit();
+		await closePending;
+
+		const rows = await sessionRows();
+		expect(rows).toHaveLength(1);
+		expect(await openRowCount()).toBe(0);
+		await expect(vote()).rejects.toThrow("Voting for this award is not open.");
+		expect(await closeLogs()).toHaveLength(1);
+	});
+
+	// protects=a first vote and Complete cannot interleave so that the vote's
+	//   row survives Complete's bulk close (RISK P2): the vote reads the meeting
+	//   FOR SHARE, so Complete waits for it and then closes its row;
+	// fails_when=materialiseAutoSession reads the meeting without the share lock
+	//   (Complete does not wait, and its close misses the uncommitted row,
+	//   leaving an open row on a completed meeting);
+	// no_claim=the order where Complete commits first (the test above refuses it)
+	it("Complete waits for an uncommitted first vote and closes its row", async () => {
+		await startedAgo(MIN);
+		const writer = await openBlockingTx(async (tx) => {
+			await materialiseAutoSession(tx, seed.meetingId, "best_speaker");
+		});
+		const completing = applyCompleteMeeting({
+			meetingId: seed.meetingId,
+			actorMemberId: seed.adminMemberId,
+		});
+		completing.catch(() => {});
+		await waitForLockWait('"meetings"', writer.pid);
+		await writer.commit();
+		await completing;
+
+		expect(await sessionRows()).toHaveLength(1);
+		expect(await openRowCount()).toBe(0);
+	});
+
+	// protects=the same for the meeting's own digital-voting switch (RISK P2);
+	// fails_when=as above, for `applyMeetingDigitalVoting`;
+	// no_claim=the club-wide switch (next test)
+	it("the meeting switch-off waits for an uncommitted first vote and closes its row", async () => {
+		await startedAgo(MIN);
+		const { applyMeetingDigitalVoting } = await import(
+			"#/server/meetings-logic"
+		);
+		const writer = await openBlockingTx(async (tx) => {
+			await materialiseAutoSession(tx, seed.meetingId, "best_speaker");
+		});
+		const switching = applyMeetingDigitalVoting({
+			meetingId: seed.meetingId,
+			disabled: true,
+			actorMemberId: seed.adminMemberId,
+		});
+		switching.catch(() => {});
+		await waitForLockWait('"meetings"', writer.pid);
+		await writer.commit();
+		await switching;
+
+		expect(await sessionRows()).toHaveLength(1);
+		expect(await openRowCount()).toBe(0);
+	});
+
+	// protects=the same for the club-wide switch, which updates the club row
+	//   (RISK P2); fails_when=the club row is not locked FOR SHARE by the vote;
+	// no_claim=none beyond protects
+	it("the club switch-off waits for an uncommitted first vote and closes its row", async () => {
+		await startedAgo(MIN);
+		const writer = await openBlockingTx(async (tx) => {
+			await materialiseAutoSession(tx, seed.meetingId, "best_speaker");
+		});
+		const switching = applyClubAgendaSettingsUpdate({
+			clubId: seed.clubId,
+			geIntroducesFunctionaries: false,
+			tableTopicsMinSeconds: 60,
+			tableTopicsMaxSeconds: 120,
+			digitalVotingEnabled: false,
+		});
+		switching.catch(() => {});
+		await waitForLockWait('"clubs"', writer.pid);
+		await writer.commit();
+		await switching;
+
+		expect(await sessionRows()).toHaveLength(1);
+		expect(await openRowCount()).toBe(0);
+	});
+
+	// protects=Close on a club with digital voting off, or a meeting switched
+	//   off, inserts NO row: a row would flip usesDigitalVoting and drop the paper
+	//   tally from the packet (RISK P3); the Ballot Counter can still call Close;
+	// fails_when=the insert runs regardless of the switches;
+	// no_claim=Close of an open vote with digital voting off (existing test)
+	it("Close inserts no row for a club or meeting with digital voting off", async () => {
+		await startedAgo(MIN);
+		await testDb
+			.update(clubs)
+			.set({ digitalVotingEnabled: false })
+			.where(eq(clubs.id, seed.clubId));
+		await closeVote(args());
+		expect(await sessionRows()).toHaveLength(0);
+
+		await testDb
+			.update(clubs)
+			.set({ digitalVotingEnabled: true })
+			.where(eq(clubs.id, seed.clubId));
+		await testDb
+			.update(meetings)
+			.set({ digitalVotingDisabled: true })
+			.where(eq(meetings.id, seed.meetingId));
+		await closeVote(args());
+		expect(await sessionRows()).toHaveLength(0);
+		expect(await closeLogs()).toHaveLength(0);
+	});
+
+	// protects=the window checks are right whatever the Postgres session time zone
+	//   is (RISK P3): the columns are `timestamp` without zone, written as UTC, so
+	//   a bare now() comparison is wrong by the zone offset;
+	// fails_when=a comparison or write uses now() (session zone) instead of
+	//   timezone('UTC', now()): the first vote is refused or the close time skews;
+	// no_claim=a zone set on the real pool (src/db/index.ts is untouched); each
+	//   transaction here sets its own zone with SET LOCAL
+	for (const zone of ["America/Chicago", "Asia/Tokyo"]) {
+		it(`materialises, reads and closes correctly under session time zone ${zone}`, async () => {
+			const scheduledAt = await startedAgo(MIN);
+			await testDb.transaction(async (tx) => {
+				await tx.execute(sql.raw(`set local time zone '${zone}'`));
+				await materialiseAutoSession(tx, seed.meetingId, "best_speaker");
+				const rows = await tx
+					.select()
+					.from(meetingVoteSessions)
+					.where(eq(meetingVoteSessions.meetingId, seed.meetingId));
+				expect(rows).toHaveLength(1);
+				expect(rows[0].openedAt.getTime()).toBe(scheduledAt.getTime());
+				const open = await tx
+					.select({ id: meetingVoteSessions.id })
+					.from(meetingVoteSessions)
+					.where(sessionOpenNow());
+				expect(open).toHaveLength(1);
+
+				await closeVoteTx(tx, args());
+				const [closed] = await tx
+					.select()
+					.from(meetingVoteSessions)
+					.where(eq(meetingVoteSessions.meetingId, seed.meetingId));
+				// Written as UTC wall clock: within a minute of the real instant.
+				expect(
+					Math.abs((closed.closedAt?.getTime() ?? 0) - Date.now()),
+				).toBeLessThan(MIN);
+				expect(
+					await tx
+						.select({ id: meetingVoteSessions.id })
+						.from(meetingVoteSessions)
+						.where(sessionOpenNow()),
+				).toHaveLength(0);
+			});
+		});
+	}
 });

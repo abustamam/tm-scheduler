@@ -81,26 +81,56 @@ export interface VoteSessionState {
 export type VoteSessionStates = Record<AwardCategory, VoteSessionState>;
 
 /**
+ * The database's "now" as the wall-clock `timestamp` these columns hold (#1472).
+ * `opened_at` / `closed_at` are `timestamp` WITHOUT time zone, and drizzle
+ * writes a `Date` into them as its UTC wall clock (`toISOString()`) and reads
+ * them back as UTC. A bare `now()` (timestamptz) compared with, or assigned to,
+ * such a column goes through the Postgres SESSION time zone instead, so it is
+ * right only while that zone is UTC. `timezone('UTC', now())` is UTC whatever
+ * the session says, and still the transaction's own clock like `now()`.
+ */
+const utcNow = sql`timezone('UTC', now())`;
+
+/**
+ * `opens <= now < closes`, with a NULL `closes` meaning "no end": the ONE SQL
+ * window test, shared by the session-row predicate and the materialiser's
+ * automatic-window test, so the two cannot drift. Strict `<` / `>` on the end,
+ * so a window ending AT `now()` is closed.
+ */
+function openWindowSql(opens: SQL, closes: SQL): SQL {
+	return sql`(${opens} <= ${utcNow} and (${closes} is null or ${closes} > ${utcNow}))`;
+}
+
+/**
  * "This session row is open right now" (#1472), the ONE predicate every writer
  * and reader of a row's window shares. A row carries its own window: `opened_at`
  * is when it opened and `closed_at` is when it closes, which may be in the
  * future (the automatic row is materialised with the window's end already in
  * `closed_at`). So `closed_at IS NULL` alone no longer means open, and a bulk
- * closer that kept testing it would miss a materialised row. Compared against
- * the database's `now()`; strict `>` so a row closed AT `now()` is closed.
+ * closer that kept testing it would miss a materialised row.
  */
 export function sessionOpenNow(): SQL {
-	return sql`(${meetingVoteSessions.openedAt} <= now() and (${meetingVoteSessions.closedAt} is null or ${meetingVoteSessions.closedAt} > now()))`;
+	return openWindowSql(
+		sql`${meetingVoteSessions.openedAt}`,
+		sql`${meetingVoteSessions.closedAt}`,
+	);
 }
 
-/** The same predicate, for a row already read into TS. */
+/** The latest instant a JS `Date` can hold; a NULL `closed_at` reads as it. */
+const MAX_DATE_MS = 8.64e15;
+
+/** The same predicate, for a row already read into TS: the window helper, with
+ *  a NULL end read as "no end". */
 function rowOpenAt(
 	row: { openedAt: Date; closedAt: Date | null },
 	now: Date,
 ): boolean {
-	return (
-		row.openedAt.getTime() <= now.getTime() &&
-		(row.closedAt == null || row.closedAt.getTime() > now.getTime())
+	return isInAutoVoteWindow(
+		{
+			opensAt: row.openedAt,
+			closesAt: row.closedAt ?? new Date(MAX_DATE_MS),
+		},
+		now,
 	);
 }
 
@@ -114,8 +144,15 @@ interface MeetingVoteContext {
 async function loadMeetingVoteContext(
 	meetingId: string,
 	conn: typeof db | Tx,
+	// The first-vote path reads the meeting's status and both digital-voting
+	// switches to decide whether to WRITE a row, so it takes them FOR SHARE: that
+	// conflicts with Complete and the meeting switch (`lockMeetingForSlotEdit`,
+	// FOR UPDATE on the meeting row) and with the club switch (an UPDATE of the
+	// club row), so each either commits first (and this read sees it) or waits
+	// for this vote to commit (and its bulk close then sees the row).
+	lock = false,
 ): Promise<MeetingVoteContext | null> {
-	const [row] = await conn
+	const query = conn
 		.select({
 			status: meetings.status,
 			scheduledAt: meetings.scheduledAt,
@@ -126,6 +163,9 @@ async function loadMeetingVoteContext(
 		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
+	const [row] = await (lock
+		? query.for("share", { of: [meetings, clubs] })
+		: query);
 	if (!row) return null;
 	return {
 		autoWindow: autoVoteWindow(row.scheduledAt, row.lengthMinutes),
@@ -150,11 +190,15 @@ export async function loadVoteSessionView(
 	conn: typeof db | Tx = db,
 	now: Date = new Date(),
 ): Promise<VoteSessionView> {
-	const rows = await conn
-		.select()
-		.from(meetingVoteSessions)
-		.where(eq(meetingVoteSessions.meetingId, meetingId));
-	const ctx = await loadMeetingVoteContext(meetingId, conn);
+	// Two independent indexed reads, overlapped: this runs on the read every phone
+	// in the room makes every 5 seconds.
+	const [rows, ctx] = await Promise.all([
+		conn
+			.select()
+			.from(meetingVoteSessions)
+			.where(eq(meetingVoteSessions.meetingId, meetingId)),
+		loadMeetingVoteContext(meetingId, conn),
+	]);
 	const byCategory = new Map(rows.map((r) => [r.category, r]));
 	const sessions = {} as VoteSessionStates;
 	for (const category of AWARD_CATEGORIES) {
@@ -338,7 +382,7 @@ export async function openVote(input: WindowInput): Promise<void> {
 			.values({
 				meetingId: input.meetingId,
 				category: input.category,
-				openedAt: sql`now()`,
+				openedAt: utcNow,
 				closedAt: closesAt,
 				openedByMemberId: input.actorMemberId,
 			})
@@ -346,9 +390,9 @@ export async function openVote(input: WindowInput): Promise<void> {
 				target: [meetingVoteSessions.meetingId, meetingVoteSessions.category],
 				set: {
 					closedAt: closesAt,
-					openedAt: sql`now()`,
+					openedAt: utcNow,
 					openedByMemberId: input.actorMemberId,
-					updatedAt: sql`now()`,
+					updatedAt: utcNow,
 				},
 			});
 		await logActivity(tx, {
@@ -371,55 +415,70 @@ export async function closeVote(input: WindowInput): Promise<void> {
 	// sessions, so a session can still be open here; completing closes them all,
 	// so this is the refusal that answers for a completed meeting first.
 	await assertVoteMeetingAccepts(db, input.meetingId);
-	await db.transaction(async (tx) => {
-		const closed = await tx
-			.update(meetingVoteSessions)
-			.set({ closedAt: sql`now()`, updatedAt: sql`now()` })
-			.where(
-				and(
-					eq(meetingVoteSessions.meetingId, input.meetingId),
-					eq(meetingVoteSessions.category, input.category),
-					sessionOpenNow(),
-				),
-			)
+	await db.transaction((tx) => closeVoteTx(tx, input));
+}
+
+/**
+ * The body of `closeVote`, on a caller's transaction (a test runs it under a
+ * chosen session time zone). Always ends with the category closed, when it
+ * accepts votes at all:
+ *
+ *  1. close an open row (a manual one, or the automatic window's);
+ *  2. otherwise write a row already closed, so the automatic window never
+ *     opens the category (#1472 AC 5);
+ *  3. a row the first vote inserted but has not committed is invisible to (1),
+ *     and the INSERT in (2) then waits on it and conflicts. DO NOTHING there
+ *     would leave Close having done nothing, so the conflict closes the row
+ *     (`WHERE` it is still open: an already-closed row stays untouched, which
+ *     keeps a double-tap idempotent).
+ *
+ * `vote_close` is logged only when a row changed or was inserted closed.
+ */
+export async function closeVoteTx(tx: Tx, input: WindowInput): Promise<void> {
+	let closed = await tx
+		.update(meetingVoteSessions)
+		.set({ closedAt: utcNow, updatedAt: utcNow })
+		.where(
+			and(
+				eq(meetingVoteSessions.meetingId, input.meetingId),
+				eq(meetingVoteSessions.category, input.category),
+				sessionOpenNow(),
+			),
+		)
+		.returning({ id: meetingVoteSessions.id });
+	if (closed.length === 0) {
+		// A close on a meeting that does not exist, one whose club has digital
+		// voting off, or one that does not accept votes inserts NOTHING: the row
+		// would flip `usesDigitalVoting` (`packet-context-logic.ts`) and drop the
+		// paper tally from the packet for a meeting that never voted digitally.
+		// The row written below is already closed (opened_at = closed_at = now),
+		// so nobody can vote through it; the gates guard carves `closeVote` out
+		// of "a way to take part in a vote" by name.
+		const ctx = await loadMeetingVoteContext(input.meetingId, tx);
+		if (!ctx?.acceptsAutoVotes) return;
+		closed = await tx
+			.insert(meetingVoteSessions)
+			.values({
+				meetingId: input.meetingId,
+				category: input.category,
+				openedAt: utcNow,
+				closedAt: utcNow,
+			})
+			.onConflictDoUpdate({
+				target: [meetingVoteSessions.meetingId, meetingVoteSessions.category],
+				set: { closedAt: utcNow, updatedAt: utcNow },
+				setWhere: sessionOpenNow(),
+			})
 			.returning({ id: meetingVoteSessions.id });
-		if (closed.length === 0) {
-			// #1472: no row yet. Closing a category the automatic window has not
-			// opened (or has not materialised) writes a row already closed, so the
-			// window never opens it. An existing, already-closed row conflicts and
-			// is left alone, which keeps a double-tap idempotent.
-			// The meeting check keeps a close on a meeting that does not exist the
-			// quiet no-op it always was. The row is already closed (opened_at =
-			// closed_at = now), so nobody can vote through this insert; the gates
-			// guard carves `closeVote` out of "a way to take part in a vote" by name.
-			const [meeting] = await tx
-				.select({ id: meetings.id })
-				.from(meetings)
-				.where(eq(meetings.id, input.meetingId))
-				.limit(1);
-			if (!meeting) return;
-			const inserted = await tx
-				.insert(meetingVoteSessions)
-				.values({
-					meetingId: input.meetingId,
-					category: input.category,
-					openedAt: sql`now()`,
-					closedAt: sql`now()`,
-				})
-				.onConflictDoNothing({
-					target: [meetingVoteSessions.meetingId, meetingVoteSessions.category],
-				})
-				.returning({ id: meetingVoteSessions.id });
-			if (inserted.length === 0) return;
-		}
-		await logActivity(tx, {
-			clubId: input.clubId,
-			actorMemberId: input.actorMemberId,
-			action: "vote_close",
-			targetType: "meeting",
-			targetId: input.meetingId,
-			detail: { category: input.category },
-		});
+		if (closed.length === 0) return;
+	}
+	await logActivity(tx, {
+		clubId: input.clubId,
+		actorMemberId: input.actorMemberId,
+		action: "vote_close",
+		targetType: "meeting",
+		targetId: input.meetingId,
+		detail: { category: input.category },
 	});
 }
 
@@ -439,7 +498,7 @@ export async function closeAllVotesTx(
 ): Promise<void> {
 	await tx
 		.update(meetingVoteSessions)
-		.set({ closedAt: sql`now()`, updatedAt: sql`now()` })
+		.set({ closedAt: utcNow, updatedAt: utcNow })
 		.where(and(eq(meetingVoteSessions.meetingId, meetingId), sessionOpenNow()));
 }
 
@@ -455,7 +514,7 @@ export async function closeAllVotesTx(
 export async function closeClubVotesTx(tx: Tx, clubId: string): Promise<void> {
 	await tx
 		.update(meetingVoteSessions)
-		.set({ closedAt: sql`now()`, updatedAt: sql`now()` })
+		.set({ closedAt: utcNow, updatedAt: utcNow })
 		.where(
 			and(
 				sessionOpenNow(),
@@ -769,28 +828,31 @@ export const ANONYMOUS_VOTE_NEEDS_DEVICE_MESSAGE =
  * `opened_by_member_id` NULL: nobody tapped, and `vote_open` is not logged.
  *
  * Outside the window nothing is written, and the vote is refused with the
- * unchanged "not open" sentence. The window test runs in SQL against the
- * database's `now()`, the clock the stored rows are compared with. `ON CONFLICT
+ * unchanged "not open" sentence. The window test runs in SQL (`openWindowSql`, the
+ * predicate the stored rows are read with) against the database's clock. `ON CONFLICT
  * DO NOTHING` makes two first votes at once both succeed against the one row,
  * and leaves a manual Open/Close row (or a Close-before-window one) untouched.
  * A completed or cancelled meeting and a digital-voting-off club never reach
  * here: `castVote` refuses them first.
  */
-async function materialiseAutoSession(
+export async function materialiseAutoSession(
 	tx: Tx,
 	meetingId: string,
 	category: AwardCategory,
 ): Promise<void> {
-	const ctx = await loadMeetingVoteContext(meetingId, tx);
+	// FOR SHARE: a Complete or a digital-voting switch-off racing this first vote
+	// either commits first (and `acceptsAutoVotes` reads false) or waits for this
+	// transaction, whose row its bulk close then sees.
+	const ctx = await loadMeetingVoteContext(meetingId, tx, true);
 	if (!ctx?.acceptsAutoVotes) return;
 	// ISO strings, cast to `timestamp`: the columns are `timestamp` without time
 	// zone, written elsewhere as UTC wall-clock by drizzle's `toISOString()`.
-	const opens = ctx.autoWindow.opensAt.toISOString();
-	const closes = ctx.autoWindow.closesAt.toISOString();
+	const opens = sql`${ctx.autoWindow.opensAt.toISOString()}::timestamp`;
+	const closes = sql`${ctx.autoWindow.closesAt.toISOString()}::timestamp`;
 	await tx.execute(sql`
 		insert into meeting_vote_sessions (meeting_id, category, opened_at, closed_at, opened_by_member_id)
-		select ${meetingId}::uuid, ${category}::award_category, ${opens}::timestamp, ${closes}::timestamp, null
-		where now() >= ${opens}::timestamp and now() < ${closes}::timestamp
+		select ${meetingId}::uuid, ${category}::award_category, ${opens}, ${closes}, null
+		where ${openWindowSql(opens, closes)}
 		on conflict (meeting_id, category) do nothing
 	`);
 }
@@ -1315,10 +1377,8 @@ export interface BallotData {
 	 *  phone says why instead of "No vote is open right now". */
 	digitalVotingOff: boolean;
 	/** ISO instant the automatic window opens (#1472): set when digital voting
-	 *  is on and the meeting is neither completed nor cancelled, else null.
-	 *  Optional only so a test fixture written before #1472 still type-checks;
-	 *  `loadBallot` always sets it. */
-	opensAt?: string | null;
+	 *  is on and the meeting is neither completed nor cancelled, else null. */
+	opensAt: string | null;
 }
 
 /** Every category at zero ballots — the not-found participation badge. */

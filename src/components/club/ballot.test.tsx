@@ -197,6 +197,11 @@ describe("Ballot", () => {
 			expect(screen.queryByText(WAITING_PANEL)).toBeNull();
 		});
 
+		// protects=a phone that arrives after the window opened but with nothing
+		//   open (every category closed by hand) still reads "No vote is open right
+		//   now", not a stale "Voting opens at" for a past time;
+		// fails_when=the opens-at branch ignores that opensAt is already past;
+		// no_claim=the formatting of the time (covered by the test above)
 		it("keeps 'No vote is open right now' once opensAt has passed", async () => {
 			getBallot.mockResolvedValue({
 				...fixture({}),

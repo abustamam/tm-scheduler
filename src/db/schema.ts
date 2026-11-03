@@ -2751,9 +2751,11 @@ export const meetingVoteSessions = pgTable(
 			.references(() => meetings.id, { onDelete: "cascade" }),
 		category: awardCategoryEnum("category").notNull(),
 		openedAt: timestamp("opened_at").defaultNow().notNull(),
-		// NULL means OPEN. Re-opening a closed vote sets this back to null on the
-		// same row rather than inserting a second one; the open/close history lives
-		// in `activity_log`.
+		// When the window closes (#1472). NULL means no end is set: open until
+		// closed or until Complete. A time in the future means open until then, so
+		// "open" is `opened_at <= now < closed_at`, never `closed_at IS NULL`
+		// alone. Re-opening a closed vote rewrites this on the same row rather than
+		// inserting a second one; the open/close history lives in `activity_log`.
 		closedAt: timestamp("closed_at"),
 		openedByMemberId: uuid("opened_by_member_id").references(() => members.id, {
 			onDelete: "set null",

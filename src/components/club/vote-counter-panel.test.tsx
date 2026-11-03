@@ -45,12 +45,13 @@ function category(over: {
 	disqualified?: (Entry & { count: number; reason: string })[];
 	voterNames?: string[];
 	anonymousCount?: number;
+	openedAt?: string | null;
 	closedAt?: string | null;
 	autoWindow?: { opensAt: string; closesAt: string } | null;
 }) {
 	return {
 		isOpen: over.isOpen ?? false,
-		openedAt: null as string | null,
+		openedAt: over.openedAt ?? null,
 		closedAt: over.closedAt ?? null,
 		autoWindow: over.autoWindow ?? null,
 		results: over.results ?? [],
@@ -1016,9 +1017,14 @@ describe("VoteCounterPanel automatic window (#1472)", () => {
 			tally({
 				best_speaker: category({
 					isOpen: true,
+					openedAt: new Date(Date.now() - 60_000).toISOString(),
 					closedAt: closesAt.toISOString(),
 				}),
-				best_evaluator: category({ isOpen: true, closedAt: null }),
+				best_evaluator: category({
+					isOpen: true,
+					openedAt: new Date(Date.now() - 60_000).toISOString(),
+					closedAt: null,
+				}),
 			}),
 		);
 		renderPanel();
@@ -1028,6 +1034,30 @@ describe("VoteCounterPanel automatic window (#1472)", () => {
 			),
 		).toBeTruthy();
 		expect(card("Best Evaluator").queryByText(/on its own/)).toBeNull();
+	});
+
+	// protects=a category the Vote Counter closed BEFORE the window opens does not
+	//   claim it will open on its own (AC 5): a row exists, so its own window rules;
+	// fails_when=the note reads the meeting's autoWindow although a row exists;
+	// no_claim=the server keeps the category closed (voting.integration.test.ts)
+	it("says nothing about opening on its own once the category was closed before the window", async () => {
+		const now = Date.now();
+		const opensAt = new Date(now + 2 * 60 * 60 * 1000);
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					openedAt: new Date(now).toISOString(),
+					closedAt: new Date(now).toISOString(),
+					autoWindow: {
+						opensAt: opensAt.toISOString(),
+						closesAt: new Date(opensAt.getTime() + 3600_000).toISOString(),
+					},
+				}),
+			}),
+		);
+		renderPanel();
+		await card("Best Speaker").findByRole("button", { name: /Open voting/ });
+		expect(card("Best Speaker").queryByText(/on its own/)).toBeNull();
 	});
 
 	// protects=a Toastmaster who holds a session is not shown the ruling controls

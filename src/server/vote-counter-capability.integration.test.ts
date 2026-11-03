@@ -69,8 +69,12 @@ vi.mock("#/lib/auth", () => ({
 }));
 
 const { resolveVoteCounterAuthz } = await import("./meeting-authz-logic");
-const { requireSignedInVoteCounter, requireVoteCounterCapability } =
-	await import("./guards");
+const {
+	requireSignedInVoteCounter,
+	requireVoteCounterCapability,
+	VOTE_COUNTER_CAPABILITY_REFUSAL,
+	VOTE_RULING_REFUSAL,
+} = await import("./guards");
 
 /** Add a named role def + slot to the meeting; optionally assign a member.
  *  Returns the slot id. Mirrors `word-of-the-day.integration.test.ts`'s
@@ -331,7 +335,7 @@ describe.skipIf(!hasTestDb)(
 					meetingId: club.meetingId,
 					selfMemberId: club.memberId,
 				}),
-			).rejects.toThrow(/Ballot Counter or a club admin/);
+			).rejects.toThrow(VOTE_RULING_REFUSAL);
 		});
 
 		// protects=a person holding the Toastmaster slot AND the Vote Counter slot
@@ -362,9 +366,7 @@ describe.skipIf(!hasTestDb)(
 					meetingId: club.meetingId,
 					selfMemberId: other,
 				}),
-			).rejects.toThrow(
-				"Only the Ballot Counter, the Toastmaster or a club admin can do that.",
-			);
+			).rejects.toThrow(VOTE_COUNTER_CAPABILITY_REFUSAL);
 		});
 	},
 );

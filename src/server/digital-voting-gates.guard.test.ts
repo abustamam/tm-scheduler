@@ -32,14 +32,15 @@ describe("every voting write that lets someone vote is gated on the switch", () 
 	 *  disqualification writes only UPDATE or touch other tables, and must keep
 	 *  working once voting is off.
 	 *
-	 *  `closeVote` is carved out BY NAME (#1472): when the category has no row
+	 *  `closeVoteTx` (the body of `closeVote`) is carved out BY NAME (#1472): when the category has no row
 	 *  yet it inserts one that is already closed (`opened_at = closed_at = now`),
 	 *  so nobody can vote through it, and a vote left open must stay closable
-	 *  with digital voting off. The "closed-row shape" test below pins that. */
+	 *  with digital voting off. The "closed-row shape" test below pins that, and that the
+	 *  insert is refused outright for a club or meeting that does not accept votes. */
 	const VOTING_INSERT =
 		/\.insert\((meetingVotes|meetingVoteSessions|meetingBallotGuests)\)/;
 	const participating = [...fns].filter(
-		([name, body]) => name !== "closeVote" && VOTING_INSERT.test(body),
+		([name, body]) => name !== "closeVoteTx" && VOTING_INSERT.test(body),
 	);
 
 	it("finds the writers (not vacuous)", () => {
@@ -63,20 +64,37 @@ describe("every voting write that lets someone vote is gated on the switch", () 
 	});
 });
 
-describe("closeVote's insert writes an already-closed row", () => {
+describe("closeVoteTx's insert writes an already-closed row", () => {
 	const body = exportedFunctions(readSource("src/server/voting-logic.ts")).get(
-		"closeVote",
+		"closeVoteTx",
 	);
 
-	it("inserts a session row with closedAt set alongside openedAt", () => {
+	// protects=a Close on a category with no row inserts a row that is ALREADY
+	//   closed (closedAt the same `utcNow` as openedAt), so the carve-out in this
+	//   file's "ways to vote" derivation is safe: nobody can vote through it;
+	// fails_when=closedAt becomes null (an open row), or a window end such as
+	//   the automatic window's closesAt (a row that stays open for votes);
+	// no_claim=the runtime value (voting.integration.test.ts reads the row)
+	it("sets openedAt and closedAt to the same instant", () => {
 		expect(body).toBeDefined();
 		const insert =
 			/\.insert\(meetingVoteSessions\)\s*\.values\(\{([^}]*)\}\)/.exec(
 				body ?? "",
 			);
 		expect(insert).not.toBeNull();
-		expect(insert?.[1]).toMatch(/openedAt:/);
-		expect(insert?.[1]).toMatch(/closedAt:/);
+		expect(insert?.[1]).toMatch(/openedAt:\s*utcNow,/);
+		expect(insert?.[1]).toMatch(/closedAt:\s*utcNow,/);
+	});
+
+	// protects=a Close on a club with digital voting off, or a meeting that does
+	//   not accept votes, inserts no row (it would flip usesDigitalVoting and drop
+	//   the paper tally from the packet); fails_when=the acceptsAutoVotes check
+	//   is removed or moved after the insert; no_claim=the runtime (integration)
+	it("returns before the insert unless the meeting accepts votes", () => {
+		const check = (body ?? "").indexOf("acceptsAutoVotes");
+		const insert = (body ?? "").indexOf(".insert(meetingVoteSessions)");
+		expect(check).toBeGreaterThan(-1);
+		expect(insert).toBeGreaterThan(check);
 	});
 });
 

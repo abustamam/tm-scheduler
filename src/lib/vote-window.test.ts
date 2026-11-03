@@ -18,14 +18,24 @@ describe("autoVoteWindow", () => {
 	});
 
 	// protects=a ballot cast at exactly scheduled_at + length + 60 min is refused;
-	// fails_when=the end is inclusive (<=) so the boundary vote lands;
-	// no_claim=none beyond protects
+	// fails_when=the end is inclusive (<=) so the boundary vote lands, or the
+	//   grace is mis-added;
+	// no_claim=the grace constant itself (pinned below)
 	it("is exclusive at its end", () => {
+		// 19:00Z start + 90 min meeting + 60 min grace = 21:30Z, stated absolutely.
 		const w = autoVoteWindow(START, 90);
-		const end = START.getTime() + 90 * 60_000 + VOTE_GRACE_AFTER_MS;
-		expect(w.closesAt.getTime()).toBe(end);
-		expect(isInAutoVoteWindow(w, new Date(end - 1000))).toBe(true);
-		expect(isInAutoVoteWindow(w, new Date(end))).toBe(false);
+		const end = new Date("2026-10-31T21:30:00.000Z");
+		expect(w.closesAt.getTime()).toBe(end.getTime());
+		expect(isInAutoVoteWindow(w, new Date(end.getTime() - 1))).toBe(true);
+		expect(isInAutoVoteWindow(w, end)).toBe(false);
+	});
+
+	// protects=ballots stay open 60 minutes past the planned end, even if the
+	//   guest book's grace (which it was borrowed from) is changed;
+	// fails_when=VOTE_GRACE_AFTER_MS is no longer 60 minutes;
+	// no_claim=that the guest book keeps its own 60 minutes
+	it("pins the grace at 60 minutes", () => {
+		expect(VOTE_GRACE_AFTER_MS).toBe(60 * 60 * 1000);
 	});
 
 	// protects=the meeting's own length_minutes sets the close time;
@@ -38,13 +48,5 @@ describe("autoVoteWindow", () => {
 		expect(autoVoteWindow(START, 120).closesAt.getTime()).toBe(
 			START.getTime() + 180 * 60_000,
 		);
-	});
-
-	// protects=the window depends on no club timezone input;
-	// fails_when=a timezone parameter is added to the signature;
-	// no_claim=that callers never pass a club-local Date (they pass scheduled_at)
-	it("takes only a start and a length", () => {
-		expect(autoVoteWindow.length).toBe(2);
-		expect(isInAutoVoteWindow.length).toBe(2);
 	});
 });

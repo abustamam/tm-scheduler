@@ -33,7 +33,11 @@ describe("Toastmaster vote console wiring (#1472)", () => {
 	// no_claim=the hook's own enabled expression
 	it("enables the tally poll for the Toastmaster", () => {
 		expect(src).toContain("const isVoteCounter = isSlotVoteCounter || isTmod;");
-		expect(src).toMatch(/useMeetingVotes\([\s\S]*?\n\t\tisVoteCounter,/);
+		// Bounded to the call's own `})`: an unbounded lazy match would reach any
+		// later `isVoteCounter,` in the file.
+		expect(src).toMatch(
+			/useMeetingVotes\(\{[^}]*?\n\t\tisVoteCounter,[^}]*\}\)/,
+		);
 	});
 
 	// protects=a Toastmaster-only viewer is not shown Disqualify/Undo, which the

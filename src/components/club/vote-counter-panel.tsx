@@ -49,12 +49,15 @@ function candidatePayload(r: {
 }
 
 /** "Opens / Closes on its own at {time}" under a category's button (#1472).
- *  Read from the session row when there is one, else from the meeting's
- *  automatic window. Formatted on this device, in the room's own clock. */
+ *  A category WITH a session row is read from the row's own window (opened_at /
+ *  closed_at), and only a category with none from the meeting's automatic
+ *  window: a row closed before the window must not say it opens on its own.
+ *  Formatted on this device, in the room's own clock. */
 function autoWindowNote(
 	t:
 		| {
 				isOpen: boolean;
+				openedAt: string | null;
 				closedAt: string | null;
 				autoWindow: { opensAt: string; closesAt: string } | null;
 		  }
@@ -63,14 +66,17 @@ function autoWindowNote(
 	if (!t) return null;
 	const now = Date.now();
 	const at = (iso: string) => formatVoteTime(new Date(iso));
+	const hasRow = t.openedAt != null;
+	// The window this category is governed by: its row's, else the meeting's.
+	const opensAt = hasRow ? t.openedAt : (t.autoWindow?.opensAt ?? null);
+	const closesAt = hasRow ? t.closedAt : (t.autoWindow?.closesAt ?? null);
 	if (t.isOpen) {
-		const closes = t.closedAt ?? t.autoWindow?.closesAt ?? null;
-		return closes && new Date(closes).getTime() > now
-			? `Closes on its own at ${at(closes)}`
+		return closesAt && new Date(closesAt).getTime() > now
+			? `Closes on its own at ${at(closesAt)}`
 			: null;
 	}
-	if (t.autoWindow && new Date(t.autoWindow.opensAt).getTime() > now) {
-		return `Opens on its own at ${at(t.autoWindow.opensAt)}`;
+	if (opensAt && new Date(opensAt).getTime() > now) {
+		return `Opens on its own at ${at(opensAt)}`;
 	}
 	return null;
 }
