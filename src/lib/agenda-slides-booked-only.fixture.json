@@ -1,0 +1,146 @@
+[
+	{
+		"kind": "title",
+		"clubName": "MCF Toastmasters Club",
+		"logoUrl": null,
+		"district": "District 39",
+		"clubNumber": "28677176",
+		"meetingNumber": null,
+		"scheduledAt": "2026-06-25T23:45:00.000Z",
+		"timezone": "America/Chicago"
+	},
+	{
+		"kind": "toastmaster",
+		"name": "Faisal"
+	},
+	{
+		"kind": "functionaryIntro",
+		"owner": "Toastmaster of the Day",
+		"name": "Faisal",
+		"team": [
+			{
+				"role": "Timer",
+				"name": "Tess"
+			}
+		]
+	},
+	{
+		"kind": "handoff",
+		"from": {
+			"role": "Toastmaster of the Day",
+			"name": "Faisal"
+		},
+		"to": "the speakers",
+		"toLabel": "the speakers",
+		"toNames": []
+	},
+	{
+		"kind": "speech",
+		"label": "First Speech",
+		"speaker": "Bea",
+		"title": "Ice",
+		"projectLevel": null,
+		"time": "7 minutes",
+		"link": null
+	},
+	{
+		"kind": "speech",
+		"label": "Second Speech",
+		"speaker": "Cy",
+		"title": "Fire",
+		"projectLevel": null,
+		"time": "7 minutes",
+		"link": null
+	},
+	{
+		"kind": "voteSpeaker",
+		"names": ["Bea", "Cy"],
+		"hasTimer": true,
+		"caller": {
+			"role": "Toastmaster of the Day",
+			"name": "Faisal"
+		},
+		"ballotUrl": "https://gavelup.test/club/mcf/meeting/2026-06-25/vote"
+	},
+	{
+		"kind": "handoff",
+		"from": {
+			"role": "Toastmaster of the Day",
+			"name": "Faisal"
+		},
+		"to": "the General Evaluator",
+		"toLabel": "the General Evaluator",
+		"toNames": ["Riyaz"]
+	},
+	{
+		"kind": "handoff",
+		"from": {
+			"role": "General Evaluator",
+			"name": "Riyaz"
+		},
+		"to": "the speech evaluators",
+		"toLabel": "the speech evaluators",
+		"toNames": []
+	},
+	{
+		"kind": "evaluation",
+		"label": "Evaluation 1",
+		"evaluator": "Eli",
+		"speaker": "Bea",
+		"time": "2–3 minutes"
+	},
+	{
+		"kind": "evaluation",
+		"label": "Evaluation 2",
+		"evaluator": "Fay",
+		"speaker": "Cy",
+		"time": "2–3 minutes"
+	},
+	{
+		"kind": "voteEvaluator",
+		"names": ["Eli", "Fay"],
+		"hasTimer": true,
+		"caller": {
+			"role": "General Evaluator",
+			"name": "Riyaz"
+		},
+		"ballotUrl": "https://gavelup.test/club/mcf/meeting/2026-06-25/vote"
+	},
+	{
+		"kind": "evaluatorEvaluation",
+		"owner": "General Evaluator",
+		"name": "Riyaz",
+		"time": "2 minutes"
+	},
+	{
+		"kind": "functionaryReports",
+		"owner": "General Evaluator",
+		"name": "Riyaz",
+		"team": [
+			{
+				"role": "Timer",
+				"name": "Tess"
+			}
+		]
+	},
+	{
+		"kind": "generalEvaluation",
+		"owner": "General Evaluator",
+		"time": "2 minutes",
+		"feedbackUrl": null
+	},
+	{
+		"kind": "awards",
+		"categories": ["Best Evaluator", "Best Speaker"]
+	},
+	{
+		"kind": "guestComments"
+	},
+	{
+		"kind": "thankYou",
+		"meetingSchedule": "2nd & 4th Thursday",
+		"nextMeetingAt": null,
+		"timezone": "America/Chicago",
+		"feedbackUrl": null
+	}
+]

@@ -16,7 +16,7 @@ import {
 	introducedSlots,
 	matchesRole,
 	numbered,
-	openSpeechDroppedIds,
+	openSpeechView,
 	orderEvaluators,
 	visitingFlag,
 } from "./agenda-runsheet";
@@ -761,9 +761,7 @@ export function buildSlideDeck({
 	// An open speech slot, and an evaluator linked to one, project no slide
 	// (#1484), the same set every other agenda surface drops (#1479). The
 	// legend and every other slide still read the full `slots`.
-	const droppedIds = openSpeechDroppedIds(slots);
-	const liveSlots =
-		droppedIds.size > 0 ? slots.filter((s) => !droppedIds.has(s.id)) : slots;
+	const { liveSlots } = openSpeechView(slots, "omit");
 	const speakers = byRole(liveSlots, ROLE.speaker).sort(
 		(a, b) => a.slotIndex - b.slotIndex,
 	);
