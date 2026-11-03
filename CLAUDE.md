@@ -242,7 +242,7 @@ been shown to pay, release ceremony is zero, deferred debt is not logged. `/ship
 | Open a PR | `gh pr create`. The agent stops there. |
 | Review a PR | `/review-pr N` from the main session; gstack `/review` in the PR's worktree **as well** for a risk category (below). |
 | Land | `gh pr merge --squash --auto` (needs "Allow auto-merge" ON). `gh pr update-branch N` only for a real conflict. |
-| Verify a wave | `/qa-only` against the deployed app, once per wave. A finding becomes an issue only per "What earns an issue". |
+| Verify a wave | `/qa-only` against the deployed app, once per wave, **on GavelUp Demo Club** (`/club/gavelup-demo-club`): seed the data a check needs there, list the writes in the report, revert them after. Never write to a real club. A finding becomes an issue only per "What earns an issue". |
 | See what shipped | `/retro` (gstack); `/session-retro` for what made a session harder than it needed to be. |
 | Park debt | Don't. `TODOS/` takes no new files. |
 
