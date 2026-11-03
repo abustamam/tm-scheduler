@@ -28,12 +28,19 @@ describe("every voting write that lets someone vote is gated on the switch", () 
 	const fns = exportedFunctions(readSource("src/server/voting-logic.ts"));
 
 	/** DERIVED, not listed: a function that inserts a ballot, a vote session
-	 *  or a ballot guest is a way to take part in a digital vote. `closeVote`
-	 *  and the disqualification writes only UPDATE or touch other tables, and
-	 *  must keep working once voting is off. */
+	 *  or a ballot guest is a way to take part in a digital vote. The
+	 *  disqualification writes only UPDATE or touch other tables, and must keep
+	 *  working once voting is off.
+	 *
+	 *  `closeVote` is carved out BY NAME (#1472): when the category has no row
+	 *  yet it inserts one that is already closed (`opened_at = closed_at = now`),
+	 *  so nobody can vote through it, and a vote left open must stay closable
+	 *  with digital voting off. The "closed-row shape" test below pins that. */
 	const VOTING_INSERT =
 		/\.insert\((meetingVotes|meetingVoteSessions|meetingBallotGuests)\)/;
-	const participating = [...fns].filter(([, body]) => VOTING_INSERT.test(body));
+	const participating = [...fns].filter(
+		([name, body]) => name !== "closeVote" && VOTING_INSERT.test(body),
+	);
 
 	it("finds the writers (not vacuous)", () => {
 		expect(participating.map(([name]) => name).sort()).toEqual(
@@ -53,6 +60,23 @@ describe("every voting write that lets someone vote is gated on the switch", () 
 		expect(body).not.toMatch(
 			/assertDigitalVotingOnTx\(|isDigitalVotingOnFor\(/,
 		);
+	});
+});
+
+describe("closeVote's insert writes an already-closed row", () => {
+	const body = exportedFunctions(readSource("src/server/voting-logic.ts")).get(
+		"closeVote",
+	);
+
+	it("inserts a session row with closedAt set alongside openedAt", () => {
+		expect(body).toBeDefined();
+		const insert =
+			/\.insert\(meetingVoteSessions\)\s*\.values\(\{([^}]*)\}\)/.exec(
+				body ?? "",
+			);
+		expect(insert).not.toBeNull();
+		expect(insert?.[1]).toMatch(/openedAt:/);
+		expect(insert?.[1]).toMatch(/closedAt:/);
 	});
 });
 

@@ -95,6 +95,16 @@ const DEVICE_TOKEN = "5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a";
  */
 const STATUS_READ = 'select "status" from "meetings"';
 
+/** #1472: a session is open when it has begun and has not yet closed; a row may
+ *  carry a future `closedAt` (the window's end), so `closedAt === null` is not it. */
+function isOpenNow(row: { openedAt: Date; closedAt: Date | null } | undefined) {
+	return (
+		row !== undefined &&
+		row.openedAt.getTime() <= Date.now() &&
+		(row.closedAt === null || row.closedAt.getTime() > Date.now())
+	);
+}
+
 describe.skipIf(!hasTestDb)(
 	"voting writers refuse a frozen meeting by write class (#1138)",
 	() => {
@@ -178,6 +188,7 @@ describe.skipIf(!hasTestDb)(
 				await testDb
 					.select({
 						category: meetingVoteSessions.category,
+						openedAt: meetingVoteSessions.openedAt,
 						closedAt: meetingVoteSessions.closedAt,
 					})
 					.from(meetingVoteSessions)
@@ -286,7 +297,7 @@ describe.skipIf(!hasTestDb)(
 						await freeze(status);
 						await expect(closeVote(voteWindow())).rejects.toThrow(message);
 						const [session] = await sessions();
-						expect(session?.closedAt).toBeNull();
+						expect(isOpenNow(session)).toBe(true);
 						expect(await activityActions()).toStrictEqual(logOpened);
 					});
 
@@ -524,7 +535,7 @@ describe.skipIf(!hasTestDb)(
 						// The precondition the whole block rests on: a session left open,
 						// so the closed-window error is not what refuses these.
 						const [session] = await sessions();
-						expect(session?.closedAt).toBeNull();
+						expect(isOpenNow(session)).toBe(true);
 					});
 
 					it("castVote refuses a member's ballot with the status's sentence", async () => {

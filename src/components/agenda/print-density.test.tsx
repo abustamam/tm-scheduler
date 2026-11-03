@@ -234,7 +234,7 @@ const mcfRows: TimelineRow[] = [
 	{
 		who: TM,
 		roleKey: "toastmaster_of_the_day",
-		detail: "Calls for the Timer's report · opens voting for Best Speaker",
+		detail: "Calls for the Timer's report · calls for votes for Best Speaker",
 		minutes: 1,
 		marks: null,
 		time: "7:20",
@@ -260,7 +260,8 @@ const mcfRows: TimelineRow[] = [
 	{
 		who: TTM,
 		roleKey: "table_topics_master",
-		detail: "Calls for the Timer's report · opens voting for Best Table Topics",
+		detail:
+			"Calls for the Timer's report · calls for votes for Best Table Topics",
 		minutes: 1,
 		marks: null,
 		time: "7:26",
@@ -299,7 +300,7 @@ const mcfRows: TimelineRow[] = [
 	{
 		who: GE,
 		roleKey: "general_evaluator",
-		detail: "Calls for the Timer's report · opens voting for Best Evaluator",
+		detail: "Calls for the Timer's report · calls for votes for Best Evaluator",
 		minutes: 1,
 		marks: null,
 		time: "7:34",

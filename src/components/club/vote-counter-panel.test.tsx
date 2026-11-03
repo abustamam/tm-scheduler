@@ -30,6 +30,7 @@ vi.mock("#/server/voting", () => ({
 	undoDisqualificationFn,
 }));
 
+import { formatVoteTime } from "#/lib/vote-window";
 import { VoteCounterPanel } from "./vote-counter-panel";
 
 const MEETING_ID = "11111111-1111-4111-8111-111111111111";
@@ -44,9 +45,14 @@ function category(over: {
 	disqualified?: (Entry & { count: number; reason: string })[];
 	voterNames?: string[];
 	anonymousCount?: number;
+	closedAt?: string | null;
+	autoWindow?: { opensAt: string; closesAt: string } | null;
 }) {
 	return {
 		isOpen: over.isOpen ?? false,
+		openedAt: null as string | null,
+		closedAt: over.closedAt ?? null,
+		autoWindow: over.autoWindow ?? null,
 		results: over.results ?? [],
 		disqualified: over.disqualified ?? [],
 		voterNames: over.voterNames ?? [],
@@ -75,7 +81,11 @@ function tally(over: Partial<Record<string, ReturnType<typeof category>>>) {
  * absence is what a reader should have to opt into.
  */
 function renderPanel(
-	over: { sessionMemberId?: string | null; canManageClub?: boolean } = {},
+	over: {
+		sessionMemberId?: string | null;
+		canManageClub?: boolean;
+		rulingExcluded?: boolean;
+	} = {},
 ) {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const utils = render(
@@ -90,6 +100,7 @@ function renderPanel(
 				// own reason to exist. An admin default would make every case here an
 				// admin case and the session arm would go untested.
 				canManageClub={over.canManageClub ?? false}
+				rulingExcluded={over.rulingExcluded}
 				onSetWinner={vi.fn()}
 				onClearWinner={vi.fn()}
 			/>
@@ -959,5 +970,80 @@ describe("VoteCounterPanel who has voted (#982)", () => {
 		expect(await speaker.findByText("Who has voted (1)")).toBeTruthy();
 		expect(speaker.getByText("Bo")).toBeTruthy();
 		expect(card("Best Evaluator").queryByText(/Who has voted/)).toBeNull();
+	});
+});
+
+describe("VoteCounterPanel automatic window (#1472)", () => {
+	afterEach(() => {
+		cleanup();
+		vi.clearAllMocks();
+	});
+
+	const at = formatVoteTime;
+
+	// protects=the Vote Counter is told a closed category will open by itself, and
+	//   when, so they do not tap Open at the start; fails_when=the line is absent
+	//   or reads the club's clock; no_claim=the window arithmetic (vote-window.test)
+	it("says when a category not yet open will open on its own", async () => {
+		const opensAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					autoWindow: {
+						opensAt: opensAt.toISOString(),
+						closesAt: new Date(opensAt.getTime() + 3600_000).toISOString(),
+					},
+				}),
+			}),
+		);
+		renderPanel();
+		expect(
+			await card("Best Speaker").findByText(
+				`Opens on its own at ${at(opensAt)}`,
+			),
+		).toBeTruthy();
+		// The button is the override and keeps its label.
+		expect(
+			card("Best Speaker").getByRole("button", { name: /Open voting/ }),
+		).toBeTruthy();
+	});
+
+	// protects=an open category says when it closes by itself; fails_when=a row with
+	//   a past or null closedAt prints a close time; no_claim=none beyond protects
+	it("says when an open category will close on its own, and nothing otherwise", async () => {
+		const closesAt = new Date(Date.now() + 60 * 60 * 1000);
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: true,
+					closedAt: closesAt.toISOString(),
+				}),
+				best_evaluator: category({ isOpen: true, closedAt: null }),
+			}),
+		);
+		renderPanel();
+		expect(
+			await card("Best Speaker").findByText(
+				`Closes on its own at ${at(closesAt)}`,
+			),
+		).toBeTruthy();
+		expect(card("Best Evaluator").queryByText(/on its own/)).toBeNull();
+	});
+
+	// protects=a Toastmaster who holds a session is not shown the ruling controls
+	//   the server refuses them; fails_when=rulingExcluded is ignored;
+	// no_claim=that the route passes it (vote-counter-tmod-wiring.guard.test.ts)
+	it("hides the ruling controls from a Toastmaster-only viewer", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: true,
+					results: [member("m1", "Ana", 2)],
+				}),
+			}),
+		);
+		renderPanel({ rulingExcluded: true });
+		await screen.findAllByText("Ana");
+		expect(screen.queryAllByRole("button", { name: /Disqualify/ })).toEqual([]);
 	});
 });

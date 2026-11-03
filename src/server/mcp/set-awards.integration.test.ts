@@ -378,6 +378,27 @@ describe.skipIf(!hasTestDb)("set_awards (#1172)", () => {
 		expect(await awardRows()).toHaveLength(0);
 	});
 
+	it("refuses a set while the automatic vote window is running, with no session row at all (#1472)", async () => {
+		// protects=a winner is not recorded under a ballot that opened by itself (#510):
+		//   `isOpen` is read through the window, not only through a row
+		// fails_when=the block reads `closed_at IS NULL` on rows alone, so a meeting
+		//   mid-window with nobody having tapped Open lets the winner through
+		// no_claim=the window arithmetic (vote-window.test.ts); the meeting is moved
+		//   to start a minute ago, and no vote has been cast to materialise a row
+		await testDb
+			.update(meetings)
+			.set({ scheduledAt: new Date(Date.now() - 60_000) })
+			.where(eq(meetings.id, seed.meetingId));
+
+		const { blocking } = await blocked({
+			meetingId: seed.meetingId,
+			awards: [{ category: "best_speaker", memberId: seed.memberId }],
+		});
+
+		expect(blocking[0]).toMatchObject({ code: "VOTE_OPEN", entryIndex: 0 });
+		expect(await awardRows()).toHaveLength(0);
+	});
+
 	it("reports every problem across entries, not just the first", async () => {
 		// protects=blocking items are collected across all entries before the throw
 		// fails_when=the call stops at the first problem and the caller fixes one at a time

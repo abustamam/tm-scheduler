@@ -59,10 +59,21 @@ const openBestSpeaker = (seed: SeededClub, meetingId: string) =>
 		clubId: seed.clubId,
 	});
 
+/** #1472: a session is open when it has begun and has not yet closed; a row may
+ *  carry a future `closedAt` (the window's end), so `closedAt === null` is not it. */
+function isOpenNow(row: { openedAt: Date; closedAt: Date | null } | undefined) {
+	return (
+		row !== undefined &&
+		row.openedAt.getTime() <= Date.now() &&
+		(row.closedAt === null || row.closedAt.getTime() > Date.now())
+	);
+}
+
 async function bestSpeakerSession(meetingId: string) {
 	const [row] = await testDb
 		.select({
 			id: meetingVoteSessions.id,
+			openedAt: meetingVoteSessions.openedAt,
 			closedAt: meetingVoteSessions.closedAt,
 		})
 		.from(meetingVoteSessions)
@@ -141,7 +152,7 @@ describe.skipIf(!hasTestDb)("the meeting switch (#770)", () => {
 
 		const after = await bestSpeakerSession(seed.meetingId);
 		expect(after.id).toBe(before.id);
-		expect(after.closedAt).toBeNull();
+		expect(isOpenNow(after)).toBe(true);
 		const votes = await testDb
 			.select({ id: meetingVotes.id })
 			.from(meetingVotes)
@@ -236,7 +247,7 @@ describe.skipIf(!hasTestDb)("the club switch (#770)", () => {
 		expect(club.on).toBe(false);
 		expect((await bestSpeakerSession(seed.meetingId)).closedAt).not.toBeNull();
 		expect((await bestSpeakerSession(secondMeetingId)).closedAt).not.toBeNull();
-		expect((await bestSpeakerSession(other.meetingId)).closedAt).toBeNull();
+		expect(isOpenNow(await bestSpeakerSession(other.meetingId))).toBe(true);
 	});
 
 	it("a save that does not mention the switch leaves it alone (a tab from before #770)", async () => {

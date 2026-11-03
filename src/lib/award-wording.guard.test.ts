@@ -115,8 +115,8 @@ const SURFACES: { file: string; needles: string[] }[] = [
 		file: "src/lib/agenda-runsheet.ts",
 		needles: [
 			`label: "${PLURAL}"`,
-			`report · opens voting for ${PLURAL}`,
-			`detail: "Opens voting for ${PLURAL}"`,
+			`report · calls for votes for ${PLURAL}`,
+			`detail: "Calls for votes for ${PLURAL}"`,
 		],
 	},
 	{

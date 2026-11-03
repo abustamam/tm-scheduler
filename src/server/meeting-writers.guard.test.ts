@@ -774,6 +774,10 @@ const MEETING_WRITERS: Record<string, Entry> = {
 	"src/server/voting-logic.ts#closeVote": { class: "plan" },
 	"src/server/voting-logic.ts#disqualifyCandidate": { class: "plan" },
 	"src/server/voting-logic.ts#joinInTransaction": { class: "plan" },
+	"src/server/voting-logic.ts#materialiseAutoSession": {
+		class: "plan",
+		refusedBy: ["src/server/voting-logic.ts#castVote"],
+	},
 	"src/server/voting-logic.ts#openVote": { class: "plan" },
 	"src/server/voting-logic.ts#undoDisqualification": { class: "plan" },
 };

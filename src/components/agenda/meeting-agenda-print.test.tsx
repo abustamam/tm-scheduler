@@ -553,7 +553,7 @@ describe("MeetingAgendaPrint hand-off band", () => {
 		{
 			who: "Table Topics Master · Rasheed",
 			detail:
-				"Calls for the Timer's report · opens voting for Best Table Topics",
+				"Calls for the Timer's report · calls for votes for Best Table Topics",
 			minutes: 1,
 			marks: null,
 			time: "7:20",
@@ -1401,7 +1401,8 @@ describe("MeetingAgendaPrint consolidates adjacent same-presenter beats", () => 
 		{
 			who: "General Evaluator · Faisal",
 			roleKey: "general_evaluator",
-			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
+			detail:
+				"Calls for the Timer's report · calls for votes for Best Evaluator",
 			minutes: 1,
 			marks: null,
 			time: "7:34",

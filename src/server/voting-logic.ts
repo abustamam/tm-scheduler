@@ -9,7 +9,7 @@
  * Authorization is the caller's job (`resolveVoteCounterAuthz`), matching how
  * `minutes-logic.ts` trusts its server fn's admin gate.
  */
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, type SQL, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	clubs,
@@ -35,6 +35,11 @@ import {
 } from "#/lib/digital-voting";
 import { disqualificationReasonSchema } from "#/lib/disqualification";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
+import {
+	type AutoVoteWindow,
+	autoVoteWindow,
+	isInAutoVoteWindow,
+} from "#/lib/vote-window";
 import {
 	WRITE_IN_LIMITS,
 	writeInKey,
@@ -66,11 +71,121 @@ import { resolveWriteActorWithProof } from "./write-actor-logic";
 
 export interface VoteSessionState {
 	isOpen: boolean;
+	/** True once the category has been open at least once: a row exists, or the
+	 *  automatic window has begun (#1472). */
+	hasOpened: boolean;
 	openedAt: Date | null;
 	closedAt: Date | null;
 }
 
 export type VoteSessionStates = Record<AwardCategory, VoteSessionState>;
+
+/**
+ * "This session row is open right now" (#1472), the ONE predicate every writer
+ * and reader of a row's window shares. A row carries its own window: `opened_at`
+ * is when it opened and `closed_at` is when it closes, which may be in the
+ * future (the automatic row is materialised with the window's end already in
+ * `closed_at`). So `closed_at IS NULL` alone no longer means open, and a bulk
+ * closer that kept testing it would miss a materialised row. Compared against
+ * the database's `now()`; strict `>` so a row closed AT `now()` is closed.
+ */
+export function sessionOpenNow(): SQL {
+	return sql`(${meetingVoteSessions.openedAt} <= now() and (${meetingVoteSessions.closedAt} is null or ${meetingVoteSessions.closedAt} > now()))`;
+}
+
+/** The same predicate, for a row already read into TS. */
+function rowOpenAt(
+	row: { openedAt: Date; closedAt: Date | null },
+	now: Date,
+): boolean {
+	return (
+		row.openedAt.getTime() <= now.getTime() &&
+		(row.closedAt == null || row.closedAt.getTime() > now.getTime())
+	);
+}
+
+/** What a category with NO session row is governed by: the meeting's window. */
+interface MeetingVoteContext {
+	autoWindow: AutoVoteWindow;
+	/** Not completed, not cancelled, digital voting on. */
+	acceptsAutoVotes: boolean;
+}
+
+async function loadMeetingVoteContext(
+	meetingId: string,
+	conn: typeof db | Tx,
+): Promise<MeetingVoteContext | null> {
+	const [row] = await conn
+		.select({
+			status: meetings.status,
+			scheduledAt: meetings.scheduledAt,
+			lengthMinutes: meetings.lengthMinutes,
+			...DIGITAL_VOTING_SWITCHES,
+		})
+		.from(meetings)
+		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (!row) return null;
+	return {
+		autoWindow: autoVoteWindow(row.scheduledAt, row.lengthMinutes),
+		acceptsAutoVotes:
+			row.status !== "completed" &&
+			row.status !== "cancelled" &&
+			isDigitalVotingOn(row, row),
+	};
+}
+
+export interface VoteSessionView {
+	sessions: VoteSessionStates;
+	/** The meeting's automatic window; null for a meeting that does not exist. */
+	autoWindow: AutoVoteWindow | null;
+	/** Digital voting on and the meeting neither completed nor cancelled. */
+	acceptsAutoVotes: boolean;
+}
+
+/** Every category's window state, plus the meeting's automatic window. */
+export async function loadVoteSessionView(
+	meetingId: string,
+	conn: typeof db | Tx = db,
+	now: Date = new Date(),
+): Promise<VoteSessionView> {
+	const rows = await conn
+		.select()
+		.from(meetingVoteSessions)
+		.where(eq(meetingVoteSessions.meetingId, meetingId));
+	const ctx = await loadMeetingVoteContext(meetingId, conn);
+	const byCategory = new Map(rows.map((r) => [r.category, r]));
+	const sessions = {} as VoteSessionStates;
+	for (const category of AWARD_CATEGORIES) {
+		const row = byCategory.get(category);
+		if (row) {
+			sessions[category] = {
+				isOpen: rowOpenAt(row, now),
+				hasOpened: true,
+				openedAt: row.openedAt,
+				closedAt: row.closedAt,
+			};
+			continue;
+		}
+		// No row: the automatic window decides (#1472 section 2).
+		sessions[category] = {
+			isOpen: Boolean(
+				ctx?.acceptsAutoVotes && isInAutoVoteWindow(ctx.autoWindow, now),
+			),
+			hasOpened: Boolean(
+				ctx && now.getTime() >= ctx.autoWindow.opensAt.getTime(),
+			),
+			openedAt: null,
+			closedAt: null,
+		};
+	}
+	return {
+		sessions,
+		autoWindow: ctx?.autoWindow ?? null,
+		acceptsAutoVotes: ctx?.acceptsAutoVotes ?? false,
+	};
+}
 
 /** Every category's window state, whether or not a session row exists. */
 export async function listVoteSessions(
@@ -79,21 +194,7 @@ export async function listVoteSessions(
 	// the answer is the answer for the state that transaction has locked.
 	conn: typeof db | Tx = db,
 ): Promise<VoteSessionStates> {
-	const rows = await conn
-		.select()
-		.from(meetingVoteSessions)
-		.where(eq(meetingVoteSessions.meetingId, meetingId));
-	const byCategory = new Map(rows.map((r) => [r.category, r]));
-	const out = {} as VoteSessionStates;
-	for (const category of AWARD_CATEGORIES) {
-		const row = byCategory.get(category);
-		out[category] = {
-			isOpen: Boolean(row) && row?.closedAt == null,
-			openedAt: row?.openedAt ?? null,
-			closedAt: row?.closedAt ?? null,
-		};
-	}
-	return out;
+	return (await loadVoteSessionView(meetingId, conn)).sessions;
 }
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -224,20 +325,30 @@ export async function openVote(input: WindowInput): Promise<void> {
 		// switch, which keeps its buttons until it reloads — must be a harmless
 		// no-op rather than an error the officer cannot act on.
 		await assertDigitalVotingOnTx(tx, input.meetingId);
+		// #1472: the override. Opened now, and closing on its own at the window's
+		// end when that is still ahead; past it, open until Complete (as before
+		// the window existed). The same values whether or not a row exists.
+		const ctx = await loadMeetingVoteContext(input.meetingId, tx);
+		const closesAt =
+			ctx && Date.now() < ctx.autoWindow.closesAt.getTime()
+				? ctx.autoWindow.closesAt
+				: null;
 		await tx
 			.insert(meetingVoteSessions)
 			.values({
 				meetingId: input.meetingId,
 				category: input.category,
+				openedAt: sql`now()`,
+				closedAt: closesAt,
 				openedByMemberId: input.actorMemberId,
 			})
 			.onConflictDoUpdate({
 				target: [meetingVoteSessions.meetingId, meetingVoteSessions.category],
 				set: {
-					closedAt: null,
-					openedAt: new Date(),
+					closedAt: closesAt,
+					openedAt: sql`now()`,
 					openedByMemberId: input.actorMemberId,
-					updatedAt: new Date(),
+					updatedAt: sql`now()`,
 				},
 			});
 		await logActivity(tx, {
@@ -263,16 +374,44 @@ export async function closeVote(input: WindowInput): Promise<void> {
 	await db.transaction(async (tx) => {
 		const closed = await tx
 			.update(meetingVoteSessions)
-			.set({ closedAt: new Date(), updatedAt: new Date() })
+			.set({ closedAt: sql`now()`, updatedAt: sql`now()` })
 			.where(
 				and(
 					eq(meetingVoteSessions.meetingId, input.meetingId),
 					eq(meetingVoteSessions.category, input.category),
-					isNull(meetingVoteSessions.closedAt),
+					sessionOpenNow(),
 				),
 			)
 			.returning({ id: meetingVoteSessions.id });
-		if (closed.length === 0) return;
+		if (closed.length === 0) {
+			// #1472: no row yet. Closing a category the automatic window has not
+			// opened (or has not materialised) writes a row already closed, so the
+			// window never opens it. An existing, already-closed row conflicts and
+			// is left alone, which keeps a double-tap idempotent.
+			// The meeting check keeps a close on a meeting that does not exist the
+			// quiet no-op it always was. The row is already closed (opened_at =
+			// closed_at = now), so nobody can vote through this insert; the gates
+			// guard carves `closeVote` out of "a way to take part in a vote" by name.
+			const [meeting] = await tx
+				.select({ id: meetings.id })
+				.from(meetings)
+				.where(eq(meetings.id, input.meetingId))
+				.limit(1);
+			if (!meeting) return;
+			const inserted = await tx
+				.insert(meetingVoteSessions)
+				.values({
+					meetingId: input.meetingId,
+					category: input.category,
+					openedAt: sql`now()`,
+					closedAt: sql`now()`,
+				})
+				.onConflictDoNothing({
+					target: [meetingVoteSessions.meetingId, meetingVoteSessions.category],
+				})
+				.returning({ id: meetingVoteSessions.id });
+			if (inserted.length === 0) return;
+		}
 		await logActivity(tx, {
 			clubId: input.clubId,
 			actorMemberId: input.actorMemberId,
@@ -301,12 +440,7 @@ export async function closeAllVotesTx(
 	await tx
 		.update(meetingVoteSessions)
 		.set({ closedAt: sql`now()`, updatedAt: sql`now()` })
-		.where(
-			and(
-				eq(meetingVoteSessions.meetingId, meetingId),
-				isNull(meetingVoteSessions.closedAt),
-			),
-		);
+		.where(and(eq(meetingVoteSessions.meetingId, meetingId), sessionOpenNow()));
 }
 
 /**
@@ -324,7 +458,7 @@ export async function closeClubVotesTx(tx: Tx, clubId: string): Promise<void> {
 		.set({ closedAt: sql`now()`, updatedAt: sql`now()` })
 		.where(
 			and(
-				isNull(meetingVoteSessions.closedAt),
+				sessionOpenNow(),
 				inArray(
 					meetingVoteSessions.meetingId,
 					tx
@@ -628,6 +762,40 @@ export const ANONYMOUS_VOTE_NEEDS_DEVICE_MESSAGE =
 	"Couldn't send that — refresh the page and tap your choice again.";
 
 /**
+ * Materialise the automatic window as a session row on the first vote cast
+ * inside it (#1472 section 3), inside the vote's own transaction and BEFORE its
+ * `INSERT ... SELECT` / `FOR SHARE` read, so the vote then finds the row like
+ * any other. `opened_at` is the window's start and `closed_at` its end, with
+ * `opened_by_member_id` NULL: nobody tapped, and `vote_open` is not logged.
+ *
+ * Outside the window nothing is written, and the vote is refused with the
+ * unchanged "not open" sentence. The window test runs in SQL against the
+ * database's `now()`, the clock the stored rows are compared with. `ON CONFLICT
+ * DO NOTHING` makes two first votes at once both succeed against the one row,
+ * and leaves a manual Open/Close row (or a Close-before-window one) untouched.
+ * A completed or cancelled meeting and a digital-voting-off club never reach
+ * here: `castVote` refuses them first.
+ */
+async function materialiseAutoSession(
+	tx: Tx,
+	meetingId: string,
+	category: AwardCategory,
+): Promise<void> {
+	const ctx = await loadMeetingVoteContext(meetingId, tx);
+	if (!ctx?.acceptsAutoVotes) return;
+	// ISO strings, cast to `timestamp`: the columns are `timestamp` without time
+	// zone, written elsewhere as UTC wall-clock by drizzle's `toISOString()`.
+	const opens = ctx.autoWindow.opensAt.toISOString();
+	const closes = ctx.autoWindow.closesAt.toISOString();
+	await tx.execute(sql`
+		insert into meeting_vote_sessions (meeting_id, category, opened_at, closed_at, opened_by_member_id)
+		select ${meetingId}::uuid, ${category}::award_category, ${opens}::timestamp, ${closes}::timestamp, null
+		where now() >= ${opens}::timestamp and now() < ${closes}::timestamp
+		on conflict (meeting_id, category) do nothing
+	`);
+}
+
+/**
  * Cast (or change) one ballot.
  *
  * Three things the client is NOT trusted for, in order:
@@ -842,6 +1010,7 @@ export async function castVote(input: {
 	// with `CLUB_BUSY_MESSAGE`. The INSERT itself is the same single statement.
 	const inserted = await db.transaction(async (tx) => {
 		await lockMembershipsAgainstMerge(tx, [voterMemberId, candidateMemberId]);
+		await materialiseAutoSession(tx, input.meetingId, input.category);
 		return tx
 			.insert(meetingVotes)
 			.select(
@@ -879,7 +1048,7 @@ export async function castVote(input: {
 						and(
 							eq(meetingVoteSessions.meetingId, input.meetingId),
 							eq(meetingVoteSessions.category, input.category),
-							isNull(meetingVoteSessions.closedAt),
+							sessionOpenNow(),
 						),
 					)
 					.for("share"),
@@ -926,7 +1095,7 @@ export async function castVote(input: {
 				and(
 					eq(meetingVoteSessions.meetingId, input.meetingId),
 					eq(meetingVoteSessions.category, input.category),
-					isNull(meetingVoteSessions.closedAt),
+					sessionOpenNow(),
 				),
 			)
 			.limit(1);
@@ -994,6 +1163,7 @@ async function castAnonymousVote(input: {
 		// session FOR SHARE — the identified arm's order, for its reason: a merge
 		// absorbing the candidate must not set-null this ballot's choice.
 		await lockMembershipsAgainstMerge(tx, [input.candidate.memberId]);
+		await materialiseAutoSession(tx, input.meetingId, input.category);
 		const [session] = await tx
 			.select({ id: meetingVoteSessions.id })
 			.from(meetingVoteSessions)
@@ -1001,7 +1171,7 @@ async function castAnonymousVote(input: {
 				and(
 					eq(meetingVoteSessions.meetingId, input.meetingId),
 					eq(meetingVoteSessions.category, input.category),
-					isNull(meetingVoteSessions.closedAt),
+					sessionOpenNow(),
 				),
 			)
 			.for("share");
@@ -1144,6 +1314,11 @@ export interface BallotData {
 	 *  (#770). Every category then reads closed with nobody on it, and the
 	 *  phone says why instead of "No vote is open right now". */
 	digitalVotingOff: boolean;
+	/** ISO instant the automatic window opens (#1472): set when digital voting
+	 *  is on and the meeting is neither completed nor cancelled, else null.
+	 *  Optional only so a test fixture written before #1472 still type-checks;
+	 *  `loadBallot` always sets it. */
+	opensAt?: string | null;
 }
 
 /** Every category at zero ballots — the not-found participation badge. */
@@ -1189,6 +1364,7 @@ export async function loadBallot(meetingId: string): Promise<BallotData> {
 			meetingId,
 			categories: closedBallotCategories(),
 			digitalVotingOff: false,
+			opensAt: null,
 		};
 	}
 	// #770. Answered like the archived club above — closed, nobody on it — so a
@@ -1198,6 +1374,7 @@ export async function loadBallot(meetingId: string): Promise<BallotData> {
 			meetingId,
 			categories: closedBallotCategories(),
 			digitalVotingOff: true,
+			opensAt: null,
 		};
 	}
 	// ONE load of the disqualification index, shared by both candidate
@@ -1207,17 +1384,18 @@ export async function loadBallot(meetingId: string): Promise<BallotData> {
 	// `where meeting_id = ?` twice per poll, on the read every phone in the
 	// room makes every 5 seconds.
 	const disqualified = await loadDisqualifications(meetingId);
-	const [sessions, candidates, writeIns] = await Promise.all([
-		listVoteSessions(meetingId),
+	const [view, candidates, writeIns] = await Promise.all([
+		loadVoteSessionView(meetingId),
 		loadAwardCandidates(meetingId, disqualified),
 		loadWriteInCandidates(meetingId, disqualified),
 	]);
+	const sessions = view.sessions;
 	const categories = {} as Record<AwardCategory, BallotCategory>;
 	for (const category of AWARD_CATEGORIES) {
 		const session = sessions[category];
 		categories[category] = {
 			isOpen: session.isOpen,
-			hasOpened: session.openedAt != null,
+			hasOpened: session.hasOpened,
 			// Derived candidates first, then write-ins already cast in this session
 			// — which is the whole dedup mechanism (#582). Showing them back means
 			// the second voter for the same person TAPS the existing entry instead
@@ -1229,7 +1407,17 @@ export async function loadBallot(meetingId: string): Promise<BallotData> {
 				: [],
 		};
 	}
-	return { meetingId, categories, digitalVotingOff: false };
+	return {
+		meetingId,
+		categories,
+		digitalVotingOff: false,
+		// #1472: when the automatic window opens, for the phone's "Voting opens at"
+		// line. Null for a completed or cancelled meeting, which will not open.
+		opensAt:
+			view.autoWindow && view.acceptsAutoVotes
+				? view.autoWindow.opensAt.toISOString()
+				: null,
+	};
 }
 
 /**
@@ -1311,6 +1499,15 @@ export interface DisqualifiedTallyResult extends TallyResult {
 
 export interface CategoryTally {
 	isOpen: boolean;
+	/** The session row's window as ISO instants (#1472), both null when the
+	 *  category has no row yet. `closedAt` may be in the future: the row closes
+	 *  on its own then. */
+	openedAt: string | null;
+	closedAt: string | null;
+	/** The meeting's automatic window (#1472), what a category with no row is
+	 *  governed by. The same for every category; carried per category so the
+	 *  gated `getVoteTally` payload (`voting.ts`) needs no new field. */
+	autoWindow: { opensAt: string; closesAt: string } | null;
 	/** ELIGIBLE candidates only, ranked. This is the winner list (#723 AC 4) —
 	 *  a disqualified candidate is not in it at any count, so a Set winner tap
 	 *  cannot reach one by accident. */
@@ -1349,11 +1546,12 @@ export async function loadTally(
 	// `where meeting_id = ?` twice per poll, on the read every phone in the
 	// room makes every 5 seconds.
 	const disqualified = await loadDisqualifications(meetingId);
-	const [sessions, candidates, writeIns] = await Promise.all([
-		listVoteSessions(meetingId),
+	const [view, candidates, writeIns] = await Promise.all([
+		loadVoteSessionView(meetingId),
 		loadAwardCandidates(meetingId, disqualified),
 		loadWriteInCandidates(meetingId, disqualified),
 	]);
+	const sessions = view.sessions;
 	const rows = await db
 		.select({
 			category: meetingVoteSessions.category,
@@ -1408,6 +1606,14 @@ export async function loadTally(
 			.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 		out[category] = {
 			isOpen: sessions[category].isOpen,
+			openedAt: sessions[category].openedAt?.toISOString() ?? null,
+			closedAt: sessions[category].closedAt?.toISOString() ?? null,
+			autoWindow: view.autoWindow
+				? {
+						opensAt: view.autoWindow.opensAt.toISOString(),
+						closesAt: view.autoWindow.closesAt.toISOString(),
+					}
+				: null,
 			results: ranked
 				.filter((r) => !r.disqualified)
 				.map(({ disqualified: _, ...r }) => r),

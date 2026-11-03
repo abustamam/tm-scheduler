@@ -426,7 +426,7 @@ export function slideLayout(
 		case "voteSpeaker": {
 			// Timer-aware like the other two vote slides: the Best-Speaker vote
 			// beat's fallback drops the same clause (#367), so a club with no Timer
-			// prints "Toastmaster · Opens voting for Best Speaker" and must not be
+			// prints "Toastmaster · Calls for votes for Best Speaker" and must not be
 			// told to call for a report from a role nobody holds.
 			const lines: Line[] = [];
 			// The segment leader who calls the report and the vote (#363), first and

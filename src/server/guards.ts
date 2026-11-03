@@ -787,7 +787,9 @@ async function voteCounterCapabilityFor(
 			actorMemberId: membership.id,
 		};
 	}
-	throw new Error("Only the Ballot Counter or a club admin can do that.");
+	throw new Error(
+		"Only the Ballot Counter, the Toastmaster or a club admin can do that.",
+	);
 }
 
 /**
@@ -863,7 +865,15 @@ export async function requireSignedInVoteCounter(input: {
 	// Pinned, because a reorder is invisible to every case that uses a meeting
 	// which EXISTS: the same file refuses a nonexistent meeting id and asserts it
 	// gets this message.
-	return voteCounterCapabilityFor(sessionUser, input);
+	const authz = await voteCounterCapabilityFor(sessionUser, input);
+	// #1472: the Toastmaster joined the capability to read the tally and record
+	// the winner. Ruling a candidate out is the one thing that stays with the
+	// Ballot Counter and the admin grants, so a Toastmaster who holds neither is
+	// refused here, whatever session they carry.
+	if (authz.via === "tmod-self-assert") {
+		throw new Error("Only the Ballot Counter or a club admin can do that.");
+	}
+	return authz;
 }
 
 /** Fetch a roster member by id (server-only, no auth check). */
