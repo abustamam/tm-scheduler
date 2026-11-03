@@ -20,6 +20,7 @@ import {
 	outstandingDuties,
 	outstandingDutiesByMember,
 	personalNudgeUrl,
+	toastmasterScriptUrl,
 } from "./nudge";
 
 const base = {
@@ -1361,5 +1362,52 @@ describe("buildNudge mentor drafts (#1209)", () => {
 		expect(r.whatsappUrl).toContain(encodeURIComponent(text));
 		expect(r.mailtoUrl).toContain("subject=Mentoring");
 		expect(r.mailtoUrl).toContain(encodeURIComponent(text));
+	});
+});
+
+describe("buildNudge firstTimeToastmaster mode (#1481)", () => {
+	const scriptUrl = toastmasterScriptUrl("https://gavelup.app", {
+		clubId: "mcf",
+		meetingId: "2026-11-10",
+	});
+
+	// protects=the first-timer note greets the member by their preferred name and
+	// links THIS meeting's absolute /me/script URL, with the issue's three
+	// paragraphs; fails_when=the URL is relative, points at another leaf, or the
+	// greeting uses the stored full name over the preferred one;
+	// no_claim=that the script route exists (personal-duty-routes.guard.test.ts)
+	it("greets by preferred name, links the absolute script URL, and carries the issue's text", () => {
+		expect(scriptUrl).toBe(
+			"https://gavelup.app/club/mcf/meeting/2026-11-10/me/script",
+		);
+		const r = buildNudge({
+			mode: "firstTimeToastmaster",
+			name: "Abdul-Rasheed Bustamam",
+			preferredName: "Rasheed",
+			meetingDate: "Tue, Nov 10",
+			scriptUrl,
+		});
+		expect(r.message).toBe(
+			`Hi Rasheed, here's your Toastmaster script for Tue, Nov 10: ${scriptUrl}\nIt walks through the whole meeting in order, with everyone's names and what to say for each speaker. Read it out loud once before the meeting; it takes about 10 minutes.\nWant to run through it together the day before?`,
+		);
+	});
+
+	// protects=WhatsApp targets the member's phone with the same text, and is
+	// absent without one; fails_when=the link drops the number, or appears when
+	// there is no phone; no_claim=the phone's provenance (the integration test)
+	it("links WhatsApp to the phone when there is one, and omits it otherwise", () => {
+		const input = {
+			mode: "firstTimeToastmaster" as const,
+			name: "Sam Smith",
+			meetingDate: "Tue, Nov 10",
+			scriptUrl,
+		};
+		const withPhone = buildNudge({ ...input, phone: "+15555550122" });
+		expect(withPhone.whatsappUrl).toContain("15555550122");
+		expect(withPhone.whatsappUrl).toContain(
+			encodeURIComponent(withPhone.message),
+		);
+		expect(withPhone.message.startsWith("Hi Sam,")).toBe(true);
+		expect(buildNudge({ ...input, phone: null }).whatsappUrl).toBeUndefined();
 	});
 });

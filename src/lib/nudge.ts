@@ -40,7 +40,8 @@ export type NudgeMode =
 	| "orientation"
 	| "mentorRequest"
 	| "mentorWelcome"
-	| "reachOut";
+	| "reachOut"
+	| "firstTimeToastmaster";
 
 interface NudgeInputBase {
 	name: string;
@@ -156,6 +157,14 @@ export type NudgeInput =
 			mode: "mentorWelcome";
 			origin: string;
 	  })
+	// A first-time Toastmaster's note from an officer (#1481). Role-less: it is
+	// about the one role, so there is nothing to name. `scriptUrl` is the ABSOLUTE
+	// `/me/script` link (build it with `toastmasterScriptUrl`), and replaces the
+	// agenda `shareUrl` this draft has no use for.
+	| (Omit<NudgeInputBase, "shareUrl"> & {
+			mode: "firstTimeToastmaster";
+			scriptUrl: string;
+	  })
 	| (NudgeInputBase & {
 			mode: "confirm" | "recruit";
 			/** The role being asked about. Role-specific asks stay on the slot
@@ -251,6 +260,9 @@ function messageFor(i: NudgeInput): string {
 		return role
 			? `Hi ${who}, we've missed you at ${club}! ${role} is open on ${date}. Want it? ${url}`
 			: `Hi ${who}, we've missed you at ${club}. Hope to see you on ${date}! ${url}`;
+	}
+	if (i.mode === "firstTimeToastmaster") {
+		return `Hi ${who}, here's your Toastmaster script for ${i.meetingDate}: ${i.scriptUrl}\nIt walks through the whole meeting in order, with everyone's names and what to say for each speaker. Read it out loud once before the meeting; it takes about 10 minutes.\nWant to run through it together the day before?`;
 	}
 	if (i.mode === "mentorRequest") {
 		return `Hi ${who}, I've asked you to be my mentor in GavelUp (${i.focusLabel}). You can accept or decline on your dashboard: ${i.origin}/dashboard`;
@@ -587,6 +599,9 @@ function subjectFor(i: NudgeInput): string {
 	if (i.mode === "reachOut") return `We've missed you at ${i.clubName}`;
 	if (i.mode === "mentorRequest") return "Mentor request";
 	if (i.mode === "mentorWelcome") return "Mentoring";
+	if (i.mode === "firstTimeToastmaster") {
+		return `Your Toastmaster script — ${i.meetingDate}`;
+	}
 	if (i.mode === "invite") {
 		return `See you at ${i.clubName} on ${i.meetingDate}?`;
 	}
@@ -596,6 +611,14 @@ function subjectFor(i: NudgeInput): string {
 	return i.mode === "confirm"
 		? `Confirming your ${i.roleName} role — ${i.meetingDate}`
 		: `Open ${i.roleName} role — ${i.meetingDate} meeting?`;
+}
+
+/** The absolute link to a meeting's Toastmaster script (#1480), for a draft. */
+export function toastmasterScriptUrl(
+	origin: string,
+	target: { clubId: string; meetingId: string },
+): string {
+	return `${origin}${personalMeetingHref(target)}/script`;
 }
 
 export function buildNudge(input: NudgeInput): Nudge {

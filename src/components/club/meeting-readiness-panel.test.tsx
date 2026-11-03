@@ -296,3 +296,112 @@ describe("MeetingReadinessPanel (#963)", () => {
 		});
 	});
 });
+
+describe("first-time Toastmaster note (#1481)", () => {
+	const note = {
+		memberId: "m-new",
+		name: "Pat Newcomer",
+		preferredName: "Pat",
+		phone: null as string | null,
+	};
+	const notReady: MeetingReadiness = {
+		ready: false,
+		items: [
+			item({
+				id: "roles_filled",
+				label: "Roles filled",
+				total: 5,
+				gaps: [gap(1)],
+			}),
+		],
+	};
+	const allDone: MeetingReadiness = {
+		ready: true,
+		items: [item({ id: "roles_filled", label: "Roles filled", total: 5 })],
+	};
+
+	async function renderWith(
+		readiness: MeetingReadiness,
+		over: {
+			note?: typeof note | null;
+			isOfficer?: boolean;
+			viewerMemberId?: string | null;
+		} = {},
+	) {
+		await renderUnderMemoryRouter(
+			<MeetingReadinessPanel
+				readiness={readiness}
+				clubId="downtown"
+				meetingId="2026-10-10"
+				timezone="America/Chicago"
+				firstTime={{
+					note,
+					isOfficer: true,
+					viewerMemberId: "officer",
+					meetingDate: "Sat, Oct 10",
+					...over,
+				}}
+			/>,
+		);
+	}
+
+	// protects=an officer sees the row with the member's preferred name and a Note button that copies the draft (script URL included) when there is no phone; fails_when=the row is not rendered, the name is the stored full name, or the draft lacks the /me/script link; no_claim=the WhatsApp path (next test)
+	it("an officer sees the row, and the button copies the drafted note", async () => {
+		const writeText = vi.fn().mockResolvedValue(undefined);
+		vi.stubGlobal("navigator", { clipboard: { writeText } });
+		await renderWith(notReady);
+		expect(
+			screen.getByText("Pat's first time as Toastmaster here."),
+		).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Note to Pat" }));
+		await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+		const text = writeText.mock.calls[0][0] as string;
+		expect(text).toContain("Hi Pat,");
+		expect(text).toContain("/club/downtown/meeting/2026-10-10/me/script");
+		expect(text).toContain("Sat, Oct 10");
+		vi.unstubAllGlobals();
+	});
+
+	// protects=with a phone the button is a WhatsApp link carrying the draft; fails_when=the phone is ignored and a copy button renders; no_claim=the number's formatting (nudge.test.ts)
+	it("with a phone the button opens WhatsApp", async () => {
+		await renderWith(notReady, {
+			note: { ...note, phone: "+15555550122" },
+		});
+		const link = screen.getByRole("link", { name: "Note to Pat" });
+		expect(link.getAttribute("href")).toContain("15555550122");
+		expect(decodeURIComponent(link.getAttribute("href") ?? "")).toContain(
+			"/me/script",
+		);
+	});
+
+	// protects=an officer who IS the first-timer, a non-officer viewer (the Toastmaster the panel also opens for) and a null prop see no row; fails_when=any of the three gates is dropped; no_claim=who the route opens the panel for (the wiring guard)
+	it("hides for the first-timer themselves, for a non-officer and for a null prop", async () => {
+		await renderWith(notReady, { viewerMemberId: "m-new" });
+		expect(screen.queryByTestId("first-time-toastmaster-note")).toBeNull();
+		cleanup();
+		await renderWith(notReady, { isOfficer: false });
+		expect(screen.queryByTestId("first-time-toastmaster-note")).toBeNull();
+		cleanup();
+		await renderWith(notReady, { note: null });
+		expect(screen.queryByTestId("first-time-toastmaster-note")).toBeNull();
+	});
+
+	// protects=the row shows beside "Everything's set" and neither state's rows change; fails_when=the ready branch returns before the note, or the note replaces a readiness row; no_claim=`meetingReadiness()`'s own `ready` (meeting-readiness tests)
+	it("shows when everything is set, and in the not-ready card without touching its items", async () => {
+		await renderWith(allDone);
+		expect(screen.getByText("Everything's set for this meeting")).toBeTruthy();
+		expect(screen.getByTestId("first-time-toastmaster-note")).toBeTruthy();
+		cleanup();
+		await renderWith(notReady);
+		expect(screen.getByTestId("first-time-toastmaster-note")).toBeTruthy();
+		expect(screen.getAllByTestId(/^readiness-item-/)).toHaveLength(1);
+	});
+
+	// protects=`ready` and `items` are not an input the note can change: the readiness object is passed through untouched; fails_when=the panel or a helper mutates the readiness it was given; no_claim=get_agenda's output (its own regression test)
+	it("leaves the readiness it was given unchanged", async () => {
+		const before = JSON.stringify(allDone);
+		await renderWith(allDone);
+		expect(JSON.stringify(allDone)).toBe(before);
+		expect(allDone.ready).toBe(true);
+	});
+});

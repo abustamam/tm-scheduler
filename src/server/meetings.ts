@@ -33,6 +33,7 @@ import {
 	isReadableClubForMember,
 } from "./club-readable-logic";
 import { loadMeetingCoverRequests } from "./cover-logic";
+import { firstTimeToastmasterFor } from "./first-time-toastmaster-logic";
 import {
 	canManageClub,
 	getActiveMembership,
@@ -631,6 +632,9 @@ async function loadMeetingDetail(
 		pairedRoleDefinitionIds,
 		coverRequests,
 		speechIntroductions,
+		// The officer's "first time as Toastmaster" note (#1481). Null for every
+		// other viewer: it names a person's inexperience and carries their phone.
+		firstTimeToastmaster: await firstTimeToastmasterFor(meetingId, canManage),
 	};
 }
 
