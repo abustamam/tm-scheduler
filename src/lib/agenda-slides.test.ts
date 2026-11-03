@@ -838,17 +838,17 @@ describe("hand-off slides (#363)", () => {
 	 */
 	it("carries an empty toNames when the target role is unassigned", () => {
 		const open = handoffs({
-			slots: [totd, { ...speaker, assigneeName: null }],
+			slots: [totd, speaker, { ...evaluator, assigneeName: null }],
 		});
-		expect(open).toEqual([
-			{
-				kind: "handoff",
-				from: { role: "Toastmaster of the Day", name: "Faisal" },
-				to: "the speakers",
-				toLabel: "the speakers",
-				toNames: [],
-			},
-		]);
+		// The speakers hand-off is not the empty one: an open SPEECH slot is
+		// dropped from the deck (#1484), so the unclaimed evaluator carries it.
+		expect(open.at(-1)).toEqual({
+			kind: "handoff",
+			from: { role: "Toastmaster of the Day", name: "Faisal" },
+			to: "the speech evaluators",
+			toLabel: "the speech evaluators",
+			toNames: [],
+		});
 	});
 
 	it("names an unclaimed role's placeholder, exactly as the printed row does", () => {
@@ -1978,5 +1978,132 @@ describe("buildSlideDeck feedback QR placement (#1282)", () => {
 			feedbackUrl: FB,
 		});
 		expect(deck.at(-1)).toMatchObject({ kind: "thankYou", feedbackUrl: FB });
+	});
+});
+
+describe("buildSlideDeck open speech slots (#1484)", () => {
+	const sp = (id: string, i: number, name: string | null) =>
+		slot({
+			id,
+			roleName: "Speaker",
+			category: "speaker",
+			isSpeakerRole: true,
+			slotIndex: i,
+			assigneeName: name,
+		});
+	const ev = (
+		id: string,
+		i: number,
+		name: string | null,
+		evaluatesSlotId: string | null,
+	) =>
+		slot({
+			id,
+			roleName: "Evaluator",
+			category: "evaluator",
+			slotIndex: i,
+			assigneeName: name,
+			evaluatesSlotId,
+			evaluates: null,
+		});
+	const labels = (slots: AgendaSlot[], kind: string) =>
+		build({ slots })
+			.filter((s) => s.kind === kind)
+			.map((s) => (s as unknown as { label: string }).label);
+	const text = (slots: AgendaSlot[]) => JSON.stringify(build({ slots }));
+
+	const open0 = [
+		sp("a", 0, null),
+		sp("b", 1, "Bea"),
+		sp("c", 2, "Cy"),
+		ev("ea", 3, null, "a"),
+		ev("eb", 4, "Eli", "b"),
+		ev("ec", 5, "Fay", "c"),
+	];
+
+	it("drops the open speech and its orphaned evaluation, renumbering the rest", () => {
+		// protects=the standard deck shows only booked speeches and their evaluations, numbered among themselves; fails_when=buildSlideDeck stops filtering by openSpeechDroppedIds; no_claim=the legend slide or the template deck
+		expect(labels(open0, "speech")).toEqual(["First Speech", "Second Speech"]);
+		expect(labels(open0, "evaluation")).toEqual([
+			"Evaluation 1",
+			"Evaluation 2",
+		]);
+		const deck = build({ slots: open0 });
+		for (const s of deck.filter(
+			(x) => x.kind === "speech" || x.kind === "evaluation",
+		)) {
+			expect(JSON.stringify(s)).not.toContain("— open —");
+		}
+		expect(deck.find((s) => s.kind === "voteSpeaker")).toMatchObject({
+			names: ["Bea", "Cy"],
+		});
+	});
+
+	it("a lone booked speech among open ones is labelled 'Speech'", () => {
+		// protects=single-versus-multi counts booked slots only; fails_when=the multi flag counts open slots; no_claim=evaluation labels
+		const slots = [sp("a", 0, null), sp("b", 1, "Bea"), sp("c", 2, null)];
+		expect(labels(slots, "speech")).toEqual(["Speech"]);
+	});
+
+	it("all speech slots open: no speech, evaluation, vote or speaker hand-off slides, and no throw", () => {
+		// protects=an all-open meeting projects none of the speech section; fails_when=the filter is dropped or a hand-off is built from an empty list; no_claim=the legend slide
+		const slots = [
+			sp("a", 0, null),
+			sp("b", 1, null),
+			ev("ea", 2, null, "a"),
+			ev("eb", 3, "Eli", "b"),
+		];
+		const k = kinds(slots);
+		for (const gone of [
+			"speech",
+			"voteSpeaker",
+			"evaluation",
+			"voteEvaluator",
+		]) {
+			expect(k).not.toContain(gone);
+		}
+		expect(text(slots)).not.toContain("the speakers");
+		expect(text(slots)).not.toContain("the speech evaluators");
+	});
+
+	it("an unlinked evaluator, and an open evaluator of a booked speaker, keep their slides", () => {
+		// protects=only speech slots and evaluators linked to them are dropped; fails_when=the filter drops all open evaluators or all unlinked ones; no_claim=ordering
+		const slots = [
+			sp("a", 0, null),
+			sp("b", 1, "Bea"),
+			ev("eu", 2, "Una", null),
+			ev("eb", 3, null, "b"),
+		];
+		expect(labels(slots, "evaluation")).toEqual([
+			"Evaluation 1",
+			"Evaluation 2",
+		]);
+	});
+
+	it("the team slide still lists open roles when a speech slot is open", () => {
+		// protects=the team slide is built from every slot, open roles included (maintainer decision 2026-11-02); fails_when=the team slide is built from the filtered slots; no_claim=speaker slots, which the functionary legend never lists
+		const slots = [
+			...open0,
+			slot({
+				id: "tm",
+				roleName: "Toastmaster of the Day",
+				category: "functionary",
+				assigneeName: "Faisal",
+			}),
+			slot({ id: "t", roleName: "Timer", category: "functionary" }),
+		];
+		const intro = build({ slots }).find((s) => s.kind === "functionaryIntro");
+		expect(JSON.stringify(intro)).toContain("Timer");
+		expect(JSON.stringify(intro)).toContain("— open —");
+	});
+
+	it("a meeting with only booked slots is untouched", () => {
+		// protects=the filter is a no-op without open speeches; fails_when=booked slots get dropped; no_claim=the slide contents
+		const booked = open0.filter((s) => s.assigneeName != null);
+		expect(labels(booked, "speech")).toEqual(["First Speech", "Second Speech"]);
+		expect(labels(booked, "evaluation")).toEqual([
+			"Evaluation 1",
+			"Evaluation 2",
+		]);
 	});
 });

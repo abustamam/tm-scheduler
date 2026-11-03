@@ -1012,3 +1012,50 @@ describe("the (V) key in the .pptx (#1164)", () => {
 		expect(memberText).not.toContain("(V)");
 	});
 });
+
+describe("open speech slots in the .pptx (#1484)", () => {
+	it("a meeting with an open speech slot exports no open speech or evaluation slide", () => {
+		// protects=the .pptx has no "— open —" speech or evaluation slide; fails_when=buildSlideDeck stops dropping open speech slots; no_claim=the team slide, which lists open roles on purpose
+		const slots = [
+			slot({
+				id: "o",
+				roleName: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+				slotIndex: 0,
+			}),
+			slot({
+				id: "b",
+				roleName: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+				slotIndex: 1,
+				assigneeName: "Bea",
+			}),
+			slot({
+				id: "eo",
+				roleName: "Evaluator",
+				category: "evaluator",
+				slotIndex: 2,
+				evaluatesSlotId: "o",
+			}),
+		];
+		const deck = buildSlideDeck({
+			meeting,
+			club,
+			slots,
+			ballotUrl: BALLOT_URL,
+			geIntroducesFunctionaries: false,
+		});
+		const pptx = deckToPptx(PptxGenJS, deck);
+		// biome-ignore lint/suspicious/noExplicitAny: reads pptxgenjs internals
+		expect((pptx as any).slides).toHaveLength(deck.length);
+		deck.forEach((s, i) => {
+			if (s.kind === "speech" || s.kind === "evaluation") {
+				expect(slideText(pptx, i)).not.toContain("— open —");
+			}
+		});
+		expect(deck.some((s) => s.kind === "evaluation")).toBe(false);
+		expect(deck.filter((s) => s.kind === "speech")).toHaveLength(1);
+	});
+});

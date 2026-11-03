@@ -16,6 +16,7 @@ import {
 	introducedSlots,
 	matchesRole,
 	numbered,
+	openSpeechDroppedIds,
 	orderEvaluators,
 	visitingFlag,
 } from "./agenda-runsheet";
@@ -757,7 +758,13 @@ export function buildSlideDeck({
 	// `isSpeakerRole` flag, which a club-invented role can also carry. Such a
 	// role binds to no beat (correct, per the spec), so it must project no
 	// slide and win no Best-Speaker vote either.
-	const speakers = byRole(slots, ROLE.speaker).sort(
+	// An open speech slot, and an evaluator linked to one, project no slide
+	// (#1484), the same set every other agenda surface drops (#1479). The
+	// legend and every other slide still read the full `slots`.
+	const droppedIds = openSpeechDroppedIds(slots);
+	const liveSlots =
+		droppedIds.size > 0 ? slots.filter((s) => !droppedIds.has(s.id)) : slots;
+	const speakers = byRole(liveSlots, ROLE.speaker).sort(
 		(a, b) => a.slotIndex - b.slotIndex,
 	);
 	pushHandoff(
@@ -856,7 +863,10 @@ export function buildSlideDeck({
 		introducedSlots(slots, HANDOFF_ROLES.generalEvaluator),
 	);
 
-	const evaluators = orderEvaluators(byRole(slots, ROLE.evaluator), slots);
+	const evaluators = orderEvaluators(
+		byRole(liveSlots, ROLE.evaluator),
+		liveSlots,
+	);
 	// Likewise the evaluators' hand-off falls back to the Toastmaster at a club
 	// with no General Evaluator — somebody still has to introduce them.
 	pushHandoff(
