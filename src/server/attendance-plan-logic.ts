@@ -705,6 +705,7 @@ export async function importPlanAnswers(
 		meetingId: string;
 		answers: ReadonlyArray<{ memberId: string; status: AttendancePlanStatus }>;
 	},
+	options: { allowScheduled?: boolean } = {},
 ): Promise<{ inserted: number }> {
 	if (args.answers.length === 0) return { inserted: 0 };
 	const status = await meetingStatusOf(database, args.meetingId);
@@ -713,7 +714,12 @@ export async function importPlanAnswers(
 		// This path takes no `lockMemberAttendance` and logs nothing, which is only
 		// safe on a meeting nobody is deciding plans for any more: the class policy
 		// also lets a scheduled meeting through, so a completed one is named here.
-		if (status !== "completed") throw new Error(IMPORT_PLAN_STATUS_MESSAGE);
+		// `allowScheduled` is the upcoming-meeting import's opt-in (#1495): the
+		// insert stays ON CONFLICT DO NOTHING, so a member's own answer wins.
+		const accepted =
+			status === "completed" ||
+			(options.allowScheduled === true && status === "scheduled");
+		if (!accepted) throw new Error(IMPORT_PLAN_STATUS_MESSAGE);
 	}
 	const written = await database
 		.insert(meetingAttendancePlan)

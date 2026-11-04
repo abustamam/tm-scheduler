@@ -2432,7 +2432,11 @@ async function applyUpcomingMeeting(
 			planAnswers.push({ memberId: owner.memberId, status: p.status });
 		}
 		if (pm.action !== "update") {
-			await importPlanAnswers(tx, { meetingId, answers: planAnswers });
+			await importPlanAnswers(
+				tx,
+				{ meetingId, answers: planAnswers },
+				{ allowScheduled: true },
+			);
 		}
 	});
 	return { applied, omissions };

@@ -2523,8 +2523,14 @@ EXECUTE FUNCTION zz_claim_slot()`),
 			) as EasySpeakBundleV1;
 			const src = bundle.meetings.find((m) => m.esMeetingId === "644360");
 			if (!src) throw new Error("fixture changed");
+			const clone = JSON.parse(JSON.stringify(src)) as typeof src;
+			// A speech belongs to one slot, so the copy needs speech ids of its own.
+			for (const role of clone.roles) {
+				if (role.speech?.esSpeechId)
+					role.speech.esSpeechId = `${role.speech.esSpeechId}-copy`;
+			}
 			bundle.meetings.push({
-				...JSON.parse(JSON.stringify(src)),
+				...clone,
 				esMeetingId: "990001",
 				startsAt: "2028-03-15T02:00:00.000Z",
 			});
@@ -2561,7 +2567,17 @@ EXECUTE FUNCTION zz_claim_slot()`),
 				...extra,
 			});
 		}
+		/** The club's Timer, carrying the standard key the plan matches a role on. */
 		async function timerDefId() {
+			await testDb
+				.update(roleDefinitions)
+				.set({ key: "timer" })
+				.where(
+					and(
+						eq(roleDefinitions.clubId, seed.clubId),
+						eq(roleDefinitions.name, "Timer"),
+					),
+				);
 			const [row] = await testDb
 				.select({ id: roleDefinitions.id })
 				.from(roleDefinitions)
@@ -2723,7 +2739,8 @@ EXECUTE FUNCTION zz_claim_slot()`),
 			const stored = await upload(upcomingText());
 			const { resolutions } = await resolveAll(stored.importId);
 			const preview = await previewUp(stored.importId, resolutions);
-			// A member claims slot 1 after the preview.
+			// A member claims slot 0 after the preview: the slot the plan put the Timer
+			// holder in. (Claiming slot 1 leaves the placement, and so the hash, alone.)
 			const [claimer] = await testDb
 				.select({ id: members.id })
 				.from(members)
@@ -2733,13 +2750,15 @@ EXECUTE FUNCTION zz_claim_slot()`),
 				.update(roleSlots)
 				.set({ assignedMemberId: claimer?.id as string, status: "confirmed" })
 				.where(
-					and(eq(roleSlots.meetingId, adoptId), eq(roleSlots.slotIndex, 1)),
+					and(eq(roleSlots.meetingId, adoptId), eq(roleSlots.slotIndex, 0)),
 				);
 			await expect(
 				applyUp(stored.importId, resolutions, { planHash: preview.planHash }),
 			).rejects.toThrow(realLogic.PLAN_CHANGED_MESSAGE);
 			await applyUp(stored.importId, resolutions);
-			const after = (await slotRows(adoptId)).find((s) => s.slotIndex === 1);
+			const after = (await slotRows(adoptId)).find(
+				(s) => s.roleDefinitionId === timer && s.slotIndex === 0,
+			);
 			expect(after?.assignedMemberId).toBe(claimer?.id);
 		});
 

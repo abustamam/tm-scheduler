@@ -270,8 +270,11 @@ const MEETING_WRITERS: Record<string, Entry> = {
 			completed: {
 				accept: true,
 				reason: PLAN_SEAM_COMPLETED,
-				// An upcoming meeting (#1495) is `scheduled`: its writer refuses a
-				// completed or cancelled one by the plan class itself.
+				// An upcoming meeting (#1495) is `scheduled`, which this function
+				// refuses unless the caller opts in with `{ allowScheduled: true }`;
+				// applyUpcomingMeeting is the only caller that does (see
+				// attendance-plan-import-scheduled.integration.test.ts), and it
+				// refuses a completed or cancelled day by the plan class itself.
 				refusedBy: ["src/server/history-import-logic.ts#applyUpcomingMeeting"],
 				exemptCallers: {
 					"src/server/history-import-logic.ts#applyMeeting":
