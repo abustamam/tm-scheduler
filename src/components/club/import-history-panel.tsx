@@ -76,7 +76,7 @@ const selectClass =
 /** A calendar day, UTC, as an ISO date: no runtime-resolved locale or zone. */
 const isoDay = (d: Date | string) => new Date(d).toISOString().slice(0, 10);
 
-type Choice = "member" | "guest" | "skip";
+type Choice = "member" | "create" | "guest" | "skip";
 
 /** A person's local decision, before it is a `PersonResolution`. */
 interface Draft {
@@ -97,6 +97,7 @@ function toResolution(d: Draft): PersonResolution | null {
 	if (d.choice === "member" && d.memberId) {
 		return { action: "member", memberId: d.memberId };
 	}
+	if (d.choice === "create") return { action: "create" };
 	if (d.choice === "guest") return { action: "guest", kind: d.kind };
 	if (d.choice === "skip" && d.reason.trim()) {
 		return { action: "skip", reason: d.reason.trim() };
@@ -427,6 +428,18 @@ export function ImportHistoryPanel({
 					It is never kept by the import: only the values that land on a person
 					are.
 				</p>
+				{contactsRead.trim() === "" &&
+				data?.people.some(
+					(p) => p.status === "create" || p.status === "possible_match",
+				) ? (
+					<p
+						className="text-xs text-muted-foreground"
+						data-testid="contacts-hint"
+					>
+						Paste Easy-Speak's member list into Contacts to match people by
+						email.
+					</p>
+				) : null}
 			</div>
 
 			{imports.data && imports.data.length > 0 ? (
@@ -873,11 +886,13 @@ function PeopleToResolve({
 								<span className="font-normal text-muted-foreground">
 									{p.status === "ambiguous"
 										? "matches more than one member"
-										: "is not on the roster"}
+										: p.status === "possible_match"
+											? "may be a member already"
+											: "is not on the roster"}
 									; {a.roles} roles, {a.attendance} attendance, {a.awards}{" "}
 									awards, {a.tableTopics} Table Topics
 									{fromLists.length > 0 ? `, ${fromLists.join(", ")}` : ""}
-									{p.listOnly
+									{p.listOnly && p.status !== "possible_match"
 										? ". Named by no meeting: it can only be matched to a member or skipped"
 										: ""}
 								</span>
@@ -900,6 +915,9 @@ function PeopleToResolve({
 								>
 									<option value="">Choose...</option>
 									<option value="member">A member</option>
+									{p.status === "possible_match" ? (
+										<option value="create">Create a new member</option>
+									) : null}
 									{p.listOnly ? null : <option value="guest">A guest</option>}
 									<option value="skip">Skip</option>
 								</select>

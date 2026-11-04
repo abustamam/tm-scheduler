@@ -1629,12 +1629,19 @@ describe.skipIf(!hasTestDb)(
 			const stored = await upload();
 			const contacts = "Mo Member, mo.held@contacts.example,";
 			const shown = await preview(stored.importId, contacts);
-			expect(shown.contacts.warnings.join("\n")).toMatch(
-				/already on another member of this club/u,
-			);
+			// #1493: an address a roster member holds LINKS the person who names it, so it
+			// is never written to a second Person. The holder lookup folding case and
+			// blanks is what finds Holder here.
+			expect(shown.people.find((p) => p.name === "Mo Member")).toMatchObject({
+				status: "member",
+				via: "email",
+				memberId: holder ? (await memberByName("Holder"))?.id : undefined,
+			});
 			await apply(stored.importId, contacts, shown.planHash);
-			const mo = await memberByName("Mo Member");
-			expect((await personRow(mo?.personId as string))?.email).toBeNull();
+			expect(await memberByName("Mo Member")).toBeUndefined();
+			expect((await personRow(holder?.id as string))?.email).toBe(
+				"  MO.Held@Contacts.Example ",
+			);
 		});
 
 		// protects=the in-transaction holder check also folds case and blanks: an

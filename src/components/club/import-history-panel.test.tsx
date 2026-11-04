@@ -939,3 +939,66 @@ describe("ImportHistoryPanel upcoming meetings (#1495)", () => {
 		});
 	});
 });
+
+describe("ImportHistoryPanel close names and the contacts hint (#1493)", () => {
+	const bob = {
+		...person,
+		key: "es:910001",
+		name: "Bob Smith",
+		esUserId: "910001",
+		status: "possible_match",
+		candidates: [{ memberId: M1, name: "Robert Smith" }],
+	};
+
+	// protects=a possible match is offered "Create a new member" (and an ambiguous one is not), and the answer is sent as a create resolution;
+	// fails_when=the option is missing for a possible match, shown for an ambiguous person, or the choice sends another action;
+	// no_claim=what the server does with the answer (its integration test); the server fns are mocked.
+	it("offers Create a new member only for a possible match, and sends it", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue({
+			...previewFor(false),
+			people: [bob, person],
+		});
+		await openImport();
+		const select = (await screen.findByLabelText(
+			"What to do with Bob Smith",
+		)) as HTMLSelectElement;
+		expect([...select.options].map((o) => o.value)).toContain("create");
+		expect(screen.getByTestId("resolve-es:910001").textContent).toContain(
+			"may be a member already",
+		);
+		const ambiguous = (await screen.findByLabelText(
+			"What to do with Elliot Dovecott",
+		)) as HTMLSelectElement;
+		expect([...ambiguous.options].map((o) => o.value)).not.toContain("create");
+		fireEvent.change(select, { target: { value: "create" } });
+		await waitFor(() => {
+			const last = fns.previewEasySpeakImport.mock.calls.at(-1)?.[0];
+			expect(last.data.resolutions["es:910001"]).toEqual({ action: "create" });
+		});
+	});
+
+	// protects=the hint under Contacts appears only while the box is empty and someone would be created or asked about;
+	// fails_when=it shows with contacts pasted, or with nobody to match;
+	// no_claim=none beyond protects.
+	it("hints at pasting the member list only while Contacts is empty and a create or possible match exists", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue({
+			...previewFor(false),
+			people: [bob],
+		});
+		await openImport();
+		expect((await screen.findByTestId("contacts-hint")).textContent).toContain(
+			"Paste Easy-Speak's member list into Contacts to match people by email.",
+		);
+		const box = screen.getByLabelText("Contacts (optional)");
+		fireEvent.change(box, { target: { value: "Bob Smith, b@example.test" } });
+		fireEvent.blur(box);
+		await waitFor(() =>
+			expect(screen.queryByTestId("contacts-hint")).toBeNull(),
+		);
+		cleanup();
+		fns.previewEasySpeakImport.mockResolvedValue(previewFor(true));
+		await openImport();
+		await screen.findByRole("button", { name: "Apply import" });
+		expect(screen.queryByTestId("contacts-hint")).toBeNull();
+	});
+});

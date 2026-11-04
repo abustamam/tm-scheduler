@@ -2016,9 +2016,16 @@ EXECUTE FUNCTION zz_claim_slot()`),
 				contacts: `Elliot Tansley, outsider@example.test, \nParker Vexford, taken@example.test, `,
 				now: NOW,
 			});
+			// #1493: an address held by ANOTHER member of this club than the one the row's
+			// name matches is a disagreement the preview asks about, so Parker is
+			// ambiguous (between Jules and Parker) and row 2 is placed on no one. The
+			// other club's holder of row 1's address still blocks nothing.
 			expect(preview.contacts.warnings).toEqual([
-				"An email in row 2 is already on another member of this club; left blank for Parker Vexford.",
+				"Contact row 2 matches no one being linked or created; it is applied to no one.",
 			]);
+			expect(
+				preview.people.find((p) => p.name === "Parker Vexford")?.status,
+			).toBe("ambiguous");
 			expect(preview.contacts.emails).toBe(1);
 		});
 
@@ -3317,6 +3324,174 @@ EXECUTE FUNCTION zz_claim_slot()`),
 				(await slotRows(meetingId)).find((x) => x.roleDefinitionId === joke?.id)
 					?.assignedMemberId,
 			).toBe(dana);
+		});
+	});
+	describe("email match and close names (#1493)", () => {
+		const ROBERT_EMAIL = "robert.nickname@example.test";
+
+		/** The fixture plus Easy-Speak's "Bob Smith" on the member list. */
+		const bobBundleText = () => {
+			const bundle = JSON.parse(bundleText()) as EasySpeakBundleV1;
+			bundle.people.push({
+				esUserId: "910001",
+				name: "Bob Smith",
+				status: "Member",
+				joined: "2025-02-03",
+			});
+			return JSON.stringify(bundle);
+		};
+		const addRobert = async () => {
+			const [person] = await testDb
+				.insert(people)
+				.values({ name: "Robert Smith", email: ROBERT_EMAIL })
+				.returning({ id: people.id });
+			const [member] = await testDb
+				.insert(members)
+				.values({
+					clubId: seed.clubId,
+					personId: person?.id as string,
+					name: "Robert Smith",
+					clubRole: "member",
+					status: "active",
+				})
+				.returning({ id: members.id });
+			return member?.id as string;
+		};
+		const memberCount = async () =>
+			Number(
+				(
+					await testDb
+						.select({ n: count() })
+						.from(members)
+						.where(eq(members.clubId, seed.clubId))
+				)[0]?.n ?? 0,
+			);
+		const rowOf = async (memberId: string) =>
+			(await testDb.select().from(members).where(eq(members.id, memberId)))[0];
+
+		// protects=a possible match blocks the apply; `create` adds exactly one member and leaves Robert's row as it was; `member` adds none;
+		// fails_when=the apply goes ahead unanswered, `create` also touches Robert, or `member` still creates;
+		// no_claim=the extension's real bundle; the member list row is hand-added to the B fixture.
+		it("refuses while a possible match is unanswered, then creates or links", async () => {
+			const robert = await addRobert();
+			const stored = await upload(bobBundleText());
+			const { preview, resolutions } = await resolveAll(stored.importId);
+			const bob = preview.people.find((p) => p.key === "es:910001");
+			expect(bob?.status).toBe("possible_match");
+			expect(bob?.candidates.map((c) => c.memberId)).toEqual([robert]);
+			expect(preview.canApply).toBe(false);
+			const before = await memberCount();
+			const made = (p: typeof preview) =>
+				p.counts.newActiveMembers + p.counts.newFormerMembers;
+			const ifCreated = await logic.previewEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				now: NOW,
+				resolutions: { ...resolutions, "es:910001": { action: "create" } },
+			});
+			const ifLinked = await logic.previewEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				now: NOW,
+				resolutions: {
+					...resolutions,
+					"es:910001": { action: "member", memberId: robert },
+				},
+			});
+			expect(made(ifCreated)).toBe(made(ifLinked) + 1);
+			const robertBefore = await rowOf(robert);
+			await expect(apply(stored.importId, resolutions)).rejects.toThrow(
+				logic.UNRESOLVED_PEOPLE_MESSAGE(1),
+			);
+			expect(await memberCount()).toBe(before);
+			await apply(stored.importId, {
+				...resolutions,
+				"es:910001": { action: "create" },
+			});
+			expect(await memberCount()).toBe(before + made(ifCreated));
+			expect(await rowOf(robert)).toEqual(robertBefore);
+		});
+
+		it("links to the member when answered, creating nobody", async () => {
+			const robert = await addRobert();
+			const stored = await upload(bobBundleText());
+			const { resolutions } = await resolveAll(stored.importId);
+			const before = await memberCount();
+			const answers = {
+				...resolutions,
+				"es:910001": { action: "member" as const, memberId: robert },
+			};
+			const planned = await logic.previewEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				now: NOW,
+				resolutions: answers,
+			});
+			await apply(stored.importId, answers);
+			expect(await memberCount()).toBe(
+				before +
+					planned.counts.newActiveMembers +
+					planned.counts.newFormerMembers,
+			);
+		});
+
+		// protects=a pasted address links the nickname member with no question, the apply remembers it as a ref, and the next preview matches by ref with no contacts;
+		// fails_when=the loaded roster emails are not read, the ref is not written, or the address lands in the stored report;
+		// no_claim=more than one club; the roster email comes from a real people row.
+		it("links by pasted email, writes the ref, and re-matches by ref afterwards", async () => {
+			const robert = await addRobert();
+			const stored = await upload(bobBundleText());
+			const contacts = `Bob Smith, ${ROBERT_EMAIL}, `;
+			const { resolutions } = await resolveAll(stored.importId);
+			const preview = await logic.previewEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				now: NOW,
+				contacts,
+				resolutions,
+			});
+			const bob = preview.people.find((p) => p.key === "es:910001");
+			expect(bob).toMatchObject({
+				status: "member",
+				via: "email",
+				memberId: robert,
+			});
+			const before = await memberCount();
+			const others =
+				preview.counts.newActiveMembers + preview.counts.newFormerMembers;
+			await logic.applyEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				runner: { kind: "superadmin", userId: superadminId },
+				resolutions,
+				contacts,
+				planHash: preview.planHash,
+				upcoming: NO_UPCOMING,
+				now: NOW,
+			});
+			expect(await memberCount()).toBe(before + others);
+			const refs = await testDb
+				.select()
+				.from(importRefs)
+				.where(
+					and(
+						eq(importRefs.clubId, seed.clubId),
+						eq(importRefs.sourceId, "es:910001"),
+					),
+				);
+			expect(refs.map((r) => r.targetId)).toEqual([robert]);
+			const again = await logic.previewEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				now: NOW,
+			});
+			expect(again.people.find((p) => p.key === "es:910001")).toMatchObject({
+				status: "member",
+				via: "ref",
+				memberId: robert,
+			});
+			const report = await logic.loadImportReport({ clubId: seed.clubId });
+			expect(JSON.stringify(report)).not.toContain(ROBERT_EMAIL);
 		});
 	});
 });
