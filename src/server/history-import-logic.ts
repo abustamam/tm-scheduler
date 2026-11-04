@@ -2641,7 +2641,7 @@ function replaceUpcomingSlots(
 	const out: PlanMeeting["slots"] = [...keep];
 	for (const [roleKey, group] of groups) {
 		const defId = env.resolved.roleDefIds.get(roleKey);
-		const mine = defId
+		const slotsOfRole = defId
 			? target.filter((t) => t.roleDefinitionId === defId)
 			: [];
 		const { placements } = placeRoleHolders(
@@ -2655,7 +2655,7 @@ function replaceUpcomingSlots(
 						: null,
 				};
 			}),
-			mine,
+			slotsOfRole,
 			env.skipRoles.has(roleKey),
 		);
 		group.forEach((ps, i) => {

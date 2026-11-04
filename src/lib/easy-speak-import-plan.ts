@@ -680,10 +680,10 @@ export type RolePlacement =
  */
 export function placeRoleHolders(
 	holders: ReadonlyArray<{ ownerId: string | null }>,
-	mine: ReadonlyArray<PlanTargetSlot>,
+	targetSlots: ReadonlyArray<PlanTargetSlot>,
 	skipped: boolean,
 ): { placements: RolePlacement[]; overflow: number } {
-	const sorted = [...mine].sort((a, b) => a.slotIndex - b.slotIndex);
+	const sorted = [...targetSlots].sort((a, b) => a.slotIndex - b.slotIndex);
 	const heldAt = new Map<string, number>();
 	for (const t of sorted) {
 		const id = holderIdOf(t.holder);
@@ -823,12 +823,12 @@ export function buildImportPlan(
 		const claimedDates = new Set<string>();
 		const acceptable = (m: PlanExistingMeeting) =>
 			m.status === "scheduled" && m.scheduledAt.getTime() > ctx.now.getTime();
-		const left = (m: PlanExistingMeeting): UpcomingDisposition => ({
+		const leftAlone = (m: PlanExistingMeeting): UpcomingDisposition => ({
 			action: "skip",
 			existing: null,
 			skip: { kind: "exists", reason: leftAloneReason(m.status) },
 		});
-		const another = (date: string): UpcomingDisposition => ({
+		const otherMeetingOnDate = (date: string): UpcomingDisposition => ({
 			action: "skip",
 			existing: null,
 			skip: {
@@ -857,7 +857,10 @@ export function buildImportPlan(
 				continue;
 			}
 			if (claimedMeetings.has(referenced.id)) {
-				upcomingDisp.set(id, another(clubDate(referenced.scheduledAt)));
+				upcomingDisp.set(
+					id,
+					otherMeetingOnDate(clubDate(referenced.scheduledAt)),
+				);
 				continue;
 			}
 			claimedMeetings.add(referenced.id);
@@ -866,13 +869,13 @@ export function buildImportPlan(
 				id,
 				acceptable(referenced)
 					? { action: "update", existing: referenced, skip: null }
-					: left(referenced),
+					: leftAlone(referenced),
 			);
 		}
 		for (const { meeting, at } of pending) {
 			const date = clubDate(at);
 			if (claimedDates.has(date)) {
-				upcomingDisp.set(meeting.esMeetingId, another(date));
+				upcomingDisp.set(meeting.esMeetingId, otherMeetingOnDate(date));
 				continue;
 			}
 			claimedDates.add(date);
@@ -890,7 +893,7 @@ export function buildImportPlan(
 				});
 			} else if (blocker) {
 				claimedMeetings.add(blocker.id);
-				upcomingDisp.set(meeting.esMeetingId, left(blocker));
+				upcomingDisp.set(meeting.esMeetingId, leftAlone(blocker));
 			} else {
 				upcomingDisp.set(meeting.esMeetingId, {
 					action: "create",
@@ -1505,7 +1508,7 @@ export function buildImportPlan(
 	for (const { meeting, at } of future) {
 		const disp = upcomingDisp.get(meeting.esMeetingId);
 		if (!disp) continue;
-		const blank = {
+		const skippedMeeting = {
 			esMeetingId: meeting.esMeetingId,
 			upcoming: true as const,
 			venue: null,
@@ -1520,7 +1523,7 @@ export function buildImportPlan(
 		};
 		if (disp.action === "skip") {
 			upcomingMeetings.push({
-				...blank,
+				...skippedMeeting,
 				scheduledAt: at,
 				action: "skip",
 				existingMeetingId: null,
@@ -1554,7 +1557,7 @@ export function buildImportPlan(
 			if (!first) continue;
 			const resolved = resolveRoleKey(first.role);
 			const defId = resolved.existing?.id ?? null;
-			const mine = defId
+			const slotsOfRole = defId
 				? target.filter((t) => t.roleDefinitionId === defId)
 				: [];
 			const planSlot = (
@@ -1595,7 +1598,7 @@ export function buildImportPlan(
 							? (ownerIds.get(personKeyOf(role.holder)) ?? null)
 							: null,
 				})),
-				mine,
+				slotsOfRole,
 				skipRoles.has(planKey),
 			);
 			if (overflow > 0) {
@@ -1650,7 +1653,7 @@ export function buildImportPlan(
 			}
 		}
 		upcomingMeetings.push({
-			...blank,
+			...skippedMeeting,
 			scheduledAt: existing?.scheduledAt ?? at,
 			action: disp.action,
 			existingMeetingId: existing?.id ?? null,

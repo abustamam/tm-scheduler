@@ -195,6 +195,9 @@ export function ImportHistoryPanel({
 					...(upcoming ? { upcoming } : {}),
 				},
 			});
+			// Set here and not in an effect on purpose: the query key then changes
+			// before the first result renders, so the section does not appear, vanish
+			// (the key gained `upcoming`) and appear again.
 			const server = result.upcoming?.defaultIncluded;
 			if (server !== undefined) setKnownDefault((known) => known ?? server);
 			return result;
