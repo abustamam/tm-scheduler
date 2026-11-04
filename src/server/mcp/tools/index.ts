@@ -30,6 +30,7 @@ import { restoreMeetingTool } from "./restore-meeting";
 import { setAttendanceTool } from "./set-attendance";
 import { setAwardsTool } from "./set-awards";
 import { setMyAttendanceTool } from "./set-my-attendance";
+import { updateMeetingScheduleTool } from "./update-meeting-schedule";
 import { upsertAgendasTool } from "./upsert-agendas";
 import { whoamiTool } from "./whoami";
 
@@ -52,4 +53,5 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	editAgendaTool,
 	cancelMeetingTool,
 	restoreMeetingTool,
+	updateMeetingScheduleTool,
 ];

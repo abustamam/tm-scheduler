@@ -276,6 +276,39 @@ export async function applyClubProfileUpdate(input: ClubProfileInput) {
 	return { ok: true as const };
 }
 
+/**
+ * SPARSE write of the two club-level schedule columns (#1514): the free-text
+ * schedule line and the default meeting length. OMITTED leaves the stored value
+ * alone, which is the difference from `applyClubProfileUpdate` above — that one
+ * replaces district and mission with null when they are not sent, so it cannot
+ * carry a schedule-only edit. `meetingSchedule` null clears the line; blank text
+ * collapses to null like every other profile field. The length is copied onto
+ * NEW meetings only (copy-at-insert), so existing meetings never move. Caller
+ * enforces the admin and archive gates.
+ */
+export async function applyClubScheduleSettingsUpdate(input: {
+	clubId: string;
+	meetingSchedule?: string | null;
+	defaultMeetingMinutes?: number;
+}): Promise<{ ok: true }> {
+	const set: Partial<typeof clubs.$inferInsert> = {};
+	if (input.meetingSchedule !== undefined) {
+		const trimmed = input.meetingSchedule?.trim() ?? "";
+		set.meetingSchedule = trimmed.length === 0 ? null : trimmed;
+	}
+	if (input.defaultMeetingMinutes !== undefined) {
+		set.defaultMeetingMinutes = input.defaultMeetingMinutes;
+	}
+	if (Object.keys(set).length === 0) return { ok: true as const };
+	const [updated] = await db
+		.update(clubs)
+		.set(set)
+		.where(eq(clubs.id, input.clubId))
+		.returning({ id: clubs.id });
+	if (!updated) throw new Error("Club not found.");
+	return { ok: true as const };
+}
+
 // ---------------------------------------------------------------------------
 // Agenda settings — the club's run-of-show variant (#367).
 // ---------------------------------------------------------------------------

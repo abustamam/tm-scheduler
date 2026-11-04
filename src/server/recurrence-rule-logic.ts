@@ -6,7 +6,7 @@
 // the OLD pattern are deleted and regenerated under the new rule. Meetings that
 // someone has touched (claimed slot, set content, said they're not coming) and
 // meetings off the old pattern (manual/one-off) are never deleted.
-import { and, eq, gt, inArray, isNotNull, or } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNotNull, or } from "drizzle-orm";
 import { db } from "#/db";
 import { clubMeetingRecurrence, clubs, meetings, roleSlots } from "#/db/schema";
 import { utcToZonedWallTime } from "#/lib/datetime";
@@ -143,13 +143,21 @@ export async function findPristineEmptyMeetingIds(
 		.map((m) => m.id);
 }
 
-/** Delete pristine-empty future meetings that sit on the OLD rule's dates. */
-async function reconcileEmptyShells(
+/**
+ * Future `scheduled` meetings on the OLD rule's dates, split into the pristine
+ * empty ones a pattern change deletes and the touched ones it keeps. The one
+ * selection `reconcileEmptyShells` deletes by and `update_meeting_schedule`
+ * previews and hashes by, so the plan cannot drift from the delete.
+ */
+export async function selectOldPatternMeetings(
 	oldRule: RecurrenceRuleRow,
 	clubId: string,
 	timezone: string,
 	now: Date,
-): Promise<void> {
+): Promise<{
+	deleted: { id: string; scheduledAt: Date }[];
+	kept: { id: string; scheduledAt: Date }[];
+}> {
 	const notBefore = utcToZonedWallTime(now, timezone).slice(0, 10);
 	const oldDates = new Set(
 		generateOccurrences(
@@ -166,17 +174,42 @@ async function reconcileEmptyShells(
 				eq(meetings.status, "scheduled"),
 				gt(meetings.scheduledAt, now),
 			),
-		);
-
-	const onOldPattern = future
-		.filter((m) =>
-			oldDates.has(utcToZonedWallTime(m.scheduledAt, timezone).slice(0, 10)),
 		)
-		.map((m) => m.id);
+		.orderBy(asc(meetings.scheduledAt), asc(meetings.id));
 
-	const pristine = await findPristineEmptyMeetingIds(onOldPattern);
-	if (pristine.length > 0) {
-		await db.delete(meetings).where(inArray(meetings.id, pristine));
+	const onOldPattern = future.filter((m) =>
+		oldDates.has(utcToZonedWallTime(m.scheduledAt, timezone).slice(0, 10)),
+	);
+
+	const pristine = new Set(
+		await findPristineEmptyMeetingIds(onOldPattern.map((m) => m.id)),
+	);
+	return {
+		deleted: onOldPattern.filter((m) => pristine.has(m.id)),
+		kept: onOldPattern.filter((m) => !pristine.has(m.id)),
+	};
+}
+
+/** Delete pristine-empty future meetings that sit on the OLD rule's dates. */
+async function reconcileEmptyShells(
+	oldRule: RecurrenceRuleRow,
+	clubId: string,
+	timezone: string,
+	now: Date,
+): Promise<void> {
+	const { deleted } = await selectOldPatternMeetings(
+		oldRule,
+		clubId,
+		timezone,
+		now,
+	);
+	if (deleted.length > 0) {
+		await db.delete(meetings).where(
+			inArray(
+				meetings.id,
+				deleted.map((m) => m.id),
+			),
+		);
 	}
 }
 
