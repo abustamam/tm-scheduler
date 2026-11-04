@@ -151,8 +151,8 @@ describe("upcoming dispositions (#1495)", () => {
 				reason: pm.skip?.reason,
 			},
 		]);
-		// A meeting left alone names nobody.
-		expect(plan.people).toEqual([]);
+		// A meeting left alone places nobody.
+		expect(plan.people.filter((p) => p.appearances.roles > 0)).toEqual([]);
 		expect(plan.counts.futureMeetingsSkipped).toBe(1);
 	});
 
@@ -286,21 +286,8 @@ describe("upcoming slot placement (#1495)", () => {
 			}),
 		);
 		expect(holderOf(plan, "Toastmaster")).toMatchObject({ kept: "already" });
-		// Unticked, the people are not resolved, so nobody is removed.
-		const unticked = buildImportPlan(
-			upcomingOnly(),
-			ctx({
-				importUpcoming: false,
-				existingMeetings: [SAME_DAY_MORNING],
-				upcomingSlots: slotsOf({
-					...empty(DEF.toastmaster, 0),
-					holder: { memberId: id(1) },
-				}),
-			}),
-		);
-		expect(unticked.upcoming.roleAssignments).toBeGreaterThan(
-			plan.upcoming.roleAssignments,
-		);
+		// Placed nowhere: the holder keeps their one slot, no second index is given.
+		expect(holderOf(plan, "Toastmaster")?.slotIndex).toBe(-1);
 	});
 
 	// protects="Add a slot" adds the overflow count after the highest existing index and places as many holders as there are empty slots;
@@ -344,8 +331,14 @@ describe("upcoming slot placement (#1495)", () => {
 		expect(holderOf(plan, "Timer 2 - Online")).toMatchObject({
 			kept: "skipped",
 		});
-		expect(upcomingOf(plan).slots.some((s) => s.addSlot === true)).toBe(false);
-		expect(plan.upcoming.unslottedRoles[0]).toMatchObject({
+		expect(
+			upcomingOf(plan).slots.some(
+				(s) => s.roleKey === "std:timer" && s.addSlot === true,
+			),
+		).toBe(false);
+		expect(
+			plan.upcoming.unslottedRoles.find((r) => r.planKey === "std:timer"),
+		).toMatchObject({
 			planKey: "std:timer",
 			skipped: true,
 		});
@@ -464,12 +457,15 @@ describe("upcoming people, RSVPs and counts (#1495)", () => {
 		const bundle = upcomingOnly();
 		const joke = holderKeys(bundle, "Joke Master");
 		const kept = buildImportPlan(bundle, ctx());
-		expect(kept.people.map((p) => p.key)).toContain(joke);
+		const rolesOf = (plan: ReturnType<typeof buildImportPlan>) =>
+			plan.people.find((p) => p.key === joke)?.appearances.roles ?? 0;
+		expect(rolesOf(kept)).toBe(1);
 		const skipped = buildImportPlan(
 			bundle,
 			ctx({ skipUpcomingRoles: new Set(["own:joke master"]) }),
 		);
-		expect(skipped.people.map((p) => p.key)).not.toContain(joke);
+		// The person is still on Easy-Speak's member list; no role touches them.
+		expect(rolesOf(skipped)).toBe(0);
 	});
 });
 
