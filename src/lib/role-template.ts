@@ -34,7 +34,21 @@ export type RoleSeed = {
 	 */
 	beforeNotes: string;
 	duringNotes: string;
+	/**
+	 * The `duringNotes` for a club whose `geIntroducesFunctionaries` is ON (#1471):
+	 * the General Evaluator, not the Toastmaster, introduces the functionaries.
+	 * Present only on the two roles whose guide differs between the variants;
+	 * `duringNotesFor` falls back to `duringNotes` for every other role.
+	 */
+	geDuringNotes?: string;
 };
+
+/** A role's seeded "during" guide for the club's `geIntroducesFunctionaries`. */
+export function duringNotesFor(seed: RoleSeed, geIntroduces: boolean): string {
+	return geIntroduces
+		? (seed.geDuringNotes ?? seed.duringNotes)
+		: seed.duringNotes;
+}
 
 export const ROLE_TEMPLATE: RoleSeed[] = [
 	{
@@ -50,6 +64,8 @@ export const ROLE_TEMPLATE: RoleSeed[] = [
 			"Choose a theme and add it to the meeting page, so the Grammarian can pick a Word of the Day to match.\nA few days out, check the agenda: every role filled, and each speaker's title and time known.\nWrite a short introduction for each speaker, and plan how you'll tie the segments to your theme.",
 		duringNotes:
 			"Open the meeting and introduce the theme.\nIntroduce the functionaries, who each explain their role.\nIntroduce each speaker, and before each speech ask their evaluator for the speech objectives and timing.\nAfter the speeches, call for the Timer's report, open voting for Best Speaker and introduce the Table Topics Master.\nWhen the General Evaluator hands back, present the awards and hand over to the President.",
+		geDuringNotes:
+			"Open the meeting and introduce the theme.\nIntroduce the General Evaluator, who introduces the functionaries and hands back.\nIntroduce each speaker, and before each speech ask their evaluator for the speech objectives and timing.\nAfter the speeches, call for the Timer's report, open voting for Best Speaker and introduce the Table Topics Master.\nWhen the General Evaluator hands back, present the awards and hand over to the President.",
 	},
 	{
 		name: "Table Topics Master",
@@ -109,6 +125,8 @@ export const ROLE_TEMPLATE: RoleSeed[] = [
 			"Check that the Timer, Ah-Counter and Grammarian are confirmed and know they'll report to you.\nMake sure every speaker has an evaluator.\nDecide what you'll watch across the whole meeting: timing, hand-offs, preparation and the room's energy.",
 		duringNotes:
 			"Take notes on the whole meeting, from the opening onwards.\nWhen the Table Topics Master introduces you, introduce the speech evaluators and ask the Timer to explain the timing for an evaluation.\nAfter the evaluations, call for the Timer's report and open voting for Best Evaluator.\nEvaluate the evaluators, call for the functionaries' reports, give your overall evaluation of the meeting and hand back to the Toastmaster.",
+		geDuringNotes:
+			"Take notes on the whole meeting, from the opening onwards.\nWhen the Toastmaster hands over at the opening, introduce the functionaries, who each explain their role, then hand back.\nWhen the Table Topics Master introduces you, introduce the speech evaluators and ask the Timer to explain the timing for an evaluation.\nAfter the evaluations, call for the Timer's report and open voting for Best Evaluator.\nEvaluate the evaluators, call for the functionaries' reports, give your overall evaluation of the meeting and hand back to the Toastmaster.",
 	},
 	{
 		name: "Timer",
