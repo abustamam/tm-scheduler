@@ -8,10 +8,25 @@ import {
 	type Identity,
 	type Progress,
 	type ResumeState,
+	readSession,
 	releaseLease,
 	resumeState,
 	runExport,
 } from "../lib/easy-speak-walk";
+import {
+	CLUB_CHANGED_MESSAGE,
+	EARLIEST_MEETING_YEAR,
+	clubChanged,
+	finishExport,
+	idbKv,
+	monthLabel,
+	monthName,
+	type PickedMonth,
+	prefill,
+	readLastExport,
+	saveLastExport,
+	startMonth,
+} from "../lib/last-export";
 import { type PageGlobal, pageFetch } from "../lib/page-fetch";
 
 /**
@@ -45,6 +60,8 @@ export default defineContentScript({
 		// does not already show it, the button press asks.
 		let identity: Identity | null = null;
 		let resume: ResumeState = { kind: "none" };
+		// The month the last successful export of this club left off at (#1491); blank when none.
+		let picked: PickedMonth = prefill(null, null);
 		try {
 			// An abandoned export past its twelve hours is deleted, unless a walker still holds the lease.
 			await discardExpiredSession(store, owner, Date.now());
@@ -56,6 +73,11 @@ export default defineContentScript({
 			if (identity) resume = await resumeState(store, owner, Date.now(), identity);
 		} catch {
 			// Unreadable identity: no resume; pressing the button reports why.
+		}
+		// Awaited here, before the widget exists, so the selects are filled before anyone can touch them.
+		const loadIdentity = identity;
+		if (loadIdentity) {
+			picked = prefill(loadIdentity, await readLastExport(loadIdentity.esClubId));
 		}
 		// A reload's old lease is not ours: give it up as the page goes (best effort; the
 		// re-check below covers the case where this never completes).
@@ -79,6 +101,41 @@ export default defineContentScript({
 				"style",
 				"position:fixed;bottom:16px;right:16px;z-index:2147483647;font:13px system-ui,sans-serif;background:#fff;color:#111827;border:1px solid #d1d5db;border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,.15);padding:10px 12px;max-width:300px;",
 			);
+			// "Meetings from": a month and a year select (Firefox renders <input type=month> as free text).
+			// Year blank = the whole history; the month select is then disabled.
+			const fromRow = document.createElement("div");
+			fromRow.setAttribute("style", "display:flex;align-items:center;gap:6px;margin-bottom:8px;");
+			const fromLabel = document.createElement("span");
+			fromLabel.textContent = "Meetings from";
+			const monthSel = document.createElement("select");
+			for (let m = 1; m <= 12; m++) {
+				const mm = String(m).padStart(2, "0");
+				monthSel.append(new Option(monthName(mm).slice(0, 3), mm));
+			}
+			const yearSel = document.createElement("select");
+			yearSel.append(new Option("all history", ""));
+			const nextYear = new Date().getUTCFullYear() + 1;
+			for (let y = nextYear; y >= EARLIEST_MEETING_YEAR; y--) yearSel.append(new Option(String(y), String(y)));
+			monthSel.value = picked.month;
+			yearSel.value = picked.year;
+			// A stored session shows (and is locked to) its own start month; "Resume" passes it back.
+			let sessionFrom: string | null = null;
+			let locked = false;
+			const lockTo = (session: { fromMonth?: string | null }) => {
+				sessionFrom = session.fromMonth ?? null;
+				locked = true;
+				monthSel.value = sessionFrom ? sessionFrom.slice(5, 7) : "01";
+				yearSel.value = sessionFrom ? sessionFrom.slice(0, 4) : "";
+				syncSelects();
+			};
+			const syncSelects = () => {
+				monthSel.disabled = yearSel.value === "" || locked;
+				yearSel.disabled = locked;
+			};
+			yearSel.addEventListener("change", syncSelects);
+			syncSelects();
+			if (resume.kind === "auto" || resume.kind === "manual") lockTo(resume.session);
+			fromRow.append(fromLabel, monthSel, yearSel);
 			const row = document.createElement("div");
 			row.setAttribute("style", "display:flex;align-items:center;gap:8px;");
 			const btn = document.createElement("button");
@@ -95,7 +152,7 @@ export default defineContentScript({
 				"style",
 				"margin-top:8px;white-space:pre-wrap;line-height:1.35;",
 			);
-			root.append(row, status);
+			root.append(fromRow, row, status);
 
 			function setStatus(msg: string, color = "#374151") {
 				status.textContent = msg;
@@ -109,34 +166,64 @@ export default defineContentScript({
 				setStatus("Starting...");
 				follower?.cancel();
 				try {
-					const { bundle, fileName, archive, archiveFileName } = await runExport({
+					const fromMonth = startMonth(locked ? { fromMonth: sessionFrom } : null, {
+						year: yearSel.value,
+						month: monthSel.value,
+					});
+					const result = await runExport({
 						fetchImpl,
 						parseHtml,
 						store,
 						owner,
 						// Asked of the server now, not read off this page, which may be hours old: the
 						// user may have switched club or account in another tab since it loaded.
-						identity: await freshIdentity(fetchImpl, parseHtml, sleep),
+						// The pre-filled month belongs to the club the page was loaded for: refuse before any walk.
+						identity: await freshIdentity(fetchImpl, parseHtml, sleep).then((id) => {
+							if (clubChanged(loadIdentity, id)) throw new Error(CLUB_CHANGED_MESSAGE);
+							return id;
+						}),
 						sleep,
 						now: Date.now,
 						extensionVersion: browser.runtime.getManifest().version,
+						fromMonth,
 						onProgress,
 					});
-					// The upload bundle first, so the file that matters lands even if the browser
-					// blocks a second automatic download.
-					download(fileName, JSON.stringify(bundle));
-					download(archiveFileName, JSON.stringify(archive));
+					const { bundle, fileName, archiveFileName } = result;
+					// Both downloads, then the remembered month: nothing is saved unless both returned.
+					const after = await finishExport(result, {
+						download,
+						save: (esClubId, month) => saveLastExport(esClubId, month, { kv: idbKv() }),
+					});
+					const range = bundle.range ? ` from ${monthLabel(bundle.range.fromMonth)} on` : "";
 					setStatus(
-						`Saved ${fileName} (upload this one) and ${archiveFileName} (raw pages, keep it; if it is missing, your browser may have blocked the second download, so check its download prompt).\n${bundle.meetings.length} meetings, ${bundle.speechRequests.length} speeches, ${bundle.people.length} people.`,
+						[
+							`Saved ${fileName} (upload this one) and ${archiveFileName} (raw pages, keep it; if it is missing, your browser may have blocked the second download, so check its download prompt).`,
+							`${bundle.meetings.length} meetings${range}, ${bundle.speechRequests.length} speeches, ${bundle.people.length} people.`,
+							...after,
+						].join("\n"),
 						"#065f46",
 					);
 					btn.textContent = "Export this club for GavelUp";
+					locked = false;
+					syncSelects();
 				} catch (err) {
+					if ((err as Error).message === CLUB_CHANGED_MESSAGE) {
+						// Nothing was walked and nothing is stored: no Resume.
+						setStatus(CLUB_CHANGED_MESSAGE, "#b91c1c");
+						return;
+					}
 					setStatus(
 						`${(err as Error).message}\nPress Resume to continue where it stopped.`,
 						"#b91c1c",
 					);
 					btn.textContent = "Resume export";
+					// A walk that stopped left a session: Resume continues it, with its own start month.
+					try {
+						const left = await readSession(store, Date.now());
+						if (left) lockTo(left);
+					} catch {
+						// Best effort: the selects stay open.
+					}
 				} finally {
 					btn.disabled = false;
 				}
@@ -149,8 +236,12 @@ export default defineContentScript({
 			let follower: { cancel: () => void } | undefined;
 			function react(state: ResumeState) {
 				if (state.kind === "auto") {
+					// The other tab's session sets the start month: walking from the pre-filled
+					// month would discard its unfinished export.
+					lockTo(state.session);
 					void start();
 				} else if (state.kind === "manual") {
+					lockTo(state.session);
 					btn.textContent = "Resume export";
 					setStatus(`An unfinished export is stored (${state.session.pages} pages).`);
 				} else if (state.kind === "elsewhere") {

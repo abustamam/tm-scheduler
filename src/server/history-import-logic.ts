@@ -52,6 +52,7 @@ import {
 	inArray,
 	isNotNull,
 	isNull,
+	lte,
 	not,
 	notInArray,
 	or,
@@ -80,6 +81,7 @@ import {
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
 import {
+	bundleRange,
 	type EasySpeakBundle,
 	easySpeakStoredSchema,
 	easySpeakUploadSchema,
@@ -123,6 +125,7 @@ import {
 import { type ImportRefKind, importRefKindSchema } from "#/lib/import-refs";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { localDateKey } from "#/lib/meeting-url";
+import { monthLabel } from "#/lib/month-label";
 import { toStoredPhone } from "#/lib/phone";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
@@ -831,6 +834,8 @@ export interface ImportPreview {
 		clubName: string;
 	} | null;
 	warnings: string[];
+	/** The months the bundle's meeting list covers (#1491); null for a full-history bundle, and for v1/v2. */
+	range: { fromMonth: string } | null;
 	counts: PlanCounts;
 	people: ImportPreviewPerson[];
 	roleDefinitions: Array<{
@@ -903,6 +908,54 @@ export function planFingerprint(plan: ImportPlan, contacts = ""): string {
 	return createHash("sha256").update(canonical).digest("hex");
 }
 
+/**
+ * The month (`yyyy-mm`, club-local) the club's next Easy-Speak export should start from
+ * (#1491): the newest imported meeting that had started by the newest applied import's
+ * `exportedAt` (the export also lists upcoming meetings, whose month would skip the ones held
+ * since). Null when the club has no applied import or no such meeting. A meeting row deleted
+ * since the import drops out of the join; that is accepted.
+ */
+export async function nextExportMonth(clubId: string): Promise<string | null> {
+	const [cutoffRow] = await db
+		.select({
+			at: sql<
+				string | Date | null
+			>`max((${clubImports.bundle}->>'exportedAt')::timestamptz)`,
+		})
+		.from(clubImports)
+		.where(
+			and(eq(clubImports.clubId, clubId), isNotNull(clubImports.appliedAt)),
+		);
+	if (!cutoffRow?.at) return null;
+	const cutoff = new Date(cutoffRow.at);
+	const [newest] = await db
+		.select({ at: sql<string | Date | null>`max(${meetings.scheduledAt})` })
+		.from(importRefs)
+		.innerJoin(
+			meetings,
+			and(
+				eq(meetings.id, importRefs.targetId),
+				eq(meetings.clubId, importRefs.clubId),
+			),
+		)
+		.where(
+			and(
+				eq(importRefs.clubId, clubId),
+				eq(importRefs.source, SOURCE),
+				eq(importRefs.kind, "meeting"),
+				lte(meetings.scheduledAt, cutoff),
+			),
+		);
+	if (!newest?.at) return null;
+	const [club] = await db
+		.select({ timezone: clubs.timezone })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	if (!club) return null;
+	return localDateKey(new Date(newest.at), club.timezone).slice(0, 7);
+}
+
 /** The preview a superadmin confirms: the plan, summarised, plus any stored report. */
 export async function previewEasySpeakImport(input: {
 	clubId: string;
@@ -931,6 +984,17 @@ export async function previewEasySpeakImport(input: {
 	const mismatch = bundleClubMismatch(club, loaded.club.clubNumber, bound);
 	if (mismatch) warnings.push(mismatch);
 	if (isClubArchived(loaded.club)) warnings.push(CLUB_ARCHIVED_MESSAGE);
+	const range = bundleRange(stored.bundle);
+	// A bounded bundle that starts after the club's imported history ends leaves a gap:
+	// warn, never block (it does not touch `canApply`).
+	if (range && stored.appliedAt === null) {
+		const next = await nextExportMonth(input.clubId);
+		if (next !== null && range.fromMonth > next) {
+			warnings.push(
+				`This bundle starts ${monthLabel(range.fromMonth)}; GavelUp's imported history ends ${monthLabel(next)}. Meetings in between will not be imported. Export from ${monthLabel(next)} to close the gap.`,
+			);
+		}
+	}
 	warnings.push(...plan.notes);
 	return {
 		importId: input.importId,
@@ -946,6 +1010,7 @@ export async function previewEasySpeakImport(input: {
 					clubName: loaded.club.name,
 				},
 		warnings,
+		range,
 		counts: plan.counts,
 		people: plan.people.map(previewPerson),
 		roleDefinitions: plan.roleDefinitions.map((d) => ({

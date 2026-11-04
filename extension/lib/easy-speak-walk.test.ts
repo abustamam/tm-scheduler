@@ -303,10 +303,10 @@ describe("the archive file", () => {
 });
 
 describe("the bundle's format version (#1497)", () => {
-	it("is version 2 and records the injected extension version, right after format and version", async () => {
+	it("is version 3 and records the injected extension version, right after format and version", async () => {
 		// protects=a stale or unversioned bundle the server would refuse; fails_when=version or extensionVersion is dropped or reordered; no_claim=the real manifest version (the test injects one)
 		const { bundle } = await setup().run();
-		expect(bundle.version).toBe(2);
+		expect(bundle.version).toBe(3);
 		expect(bundle.extensionVersion).toBe("0.0.0-test");
 		expect(Object.keys(bundle).slice(0, 3)).toEqual(["format", "version", "extensionVersion"]);
 	});
@@ -469,5 +469,98 @@ describe("the fixture guard as a function", () => {
 		expect(v).toMatch(/123456/);
 		expect(v).toMatch(/212\) 555-0142/);
 		expect(v).toMatch(/email/);
+	});
+});
+
+describe("a bounded walk (#1491)", () => {
+	const posts = (log: FakeRequest[]) =>
+		log
+			.filter((r) => r.method === "POST")
+			.map((r) => new URLSearchParams(r.body ?? ""))
+			.map((p) => ({ year: p.get("start_year"), month: p.get("start_month") }));
+	const key = (r: FakeRequest) => `${r.method} ${r.url} ${r.body ?? ""}`;
+
+	it("asks for 2027 and 2026 only, 2026 from May, and nothing earlier (AC 1)", async () => {
+		// protects=a bounded export fetching only the months since the last one; fails_when=a year below fromMonth's, or a wrong start_month, is requested; no_claim=that Easy-Speak honours start_month (the fake site ignores it)
+		const s = setup({ fromMonth: "2026-05" });
+		await s.run();
+		expect(posts(s.log)).toEqual([
+			{ year: "2027", month: "01" },
+			{ year: "2026", month: "05" },
+		]);
+		expect(s.log.some((r) => /start_year=2025|\/2025/.test(r.body ?? ""))).toBe(false);
+	});
+
+	it("still asks for every year back to 2004 with no fromMonth (AC 2)", async () => {
+		// protects=the full-history export unchanged; fails_when=a null range stops early or shifts a start_month; no_claim=none beyond protects
+		const s = setup({ fromMonth: null });
+		await s.run();
+		const asked = posts(s.log);
+		expect(asked).toHaveLength(2027 - EARLIEST_MEETING_YEAR + 1);
+		expect(asked.every((p) => p.month === "01")).toBe(true);
+		expect(asked.at(-1)?.year).toBe(String(EARLIEST_MEETING_YEAR));
+	});
+
+	it("resumes a stored session by its start month: none stored = a full walk, a match resumes, anything else starts fresh (AC 3)", async () => {
+		// protects=a Resume never mixing pages from another range into a bundle that claims its own; fails_when=the fromMonth comparison in the resume check is dropped; no_claim=the widget passing the right month (its own pure-function tests)
+		const failAtSpeeches = (u: string) => u.endsWith("/tm_all_speeches.php");
+
+		// A session stored by a build that had no fromMonth was a full walk: it resumes for null.
+		const legacy = memoryStore();
+		await expect(setup({ store: legacy, failOn: failAtSpeeches }).run()).rejects.toThrow();
+		const stored = legacy.data.get("meta") as Record<string, unknown>;
+		delete stored.fromMonth;
+		legacy.data.set("meta", stored);
+		const legacyResume = setup({ store: legacy, fromMonth: null });
+		await legacyResume.run();
+		expect(legacyResume.log.filter((r) => r.method === "POST")).toEqual([]);
+
+		// A bounded session resumed with the same month re-requests no stored page.
+		const store = memoryStore();
+		const first = setup({ store, fromMonth: "2026-05", failOn: failAtSpeeches });
+		await expect(first.run()).rejects.toThrow();
+		const finished = first.log.filter((r) => !failAtSpeeches(r.url)).map(key);
+		expect(finished.length).toBeGreaterThan(5);
+		const same = setup({ store, fromMonth: "2026-05" });
+		await same.run();
+		expect(same.log.map(key).filter((k) => finished.includes(k))).toEqual([]);
+
+		// Another start month (or none) discards it and walks fresh, saying so.
+		for (const other of [null, "2026-03"]) {
+			const st = memoryStore();
+			await expect(setup({ store: st, fromMonth: "2026-05", failOn: failAtSpeeches }).run()).rejects.toThrow();
+			const fresh = setup({ store: st, fromMonth: other });
+			const { bundle } = await fresh.run();
+			expect(posts(fresh.log).length).toBeGreaterThan(0);
+			expect(bundle.range).toEqual(other ? { fromMonth: other } : null);
+			expect(fresh.progress).toContain("Discarding an unfinished export with another start month; starting fresh.");
+		}
+	});
+
+	it("stops with a message naming the month when a bounded list is empty; the full message is unchanged (AC 4)", async () => {
+		// protects=an admin knowing why a bounded export found nothing; fails_when=the empty-range message loses the month or the full one changes; no_claim=none beyond protects
+		await expect(setup({ fromMonth: "2026-05", listByYear: {} }).run()).rejects.toThrow(
+			"Easy-Speak's meeting list showed no meetings from May 2026 on.",
+		);
+		await expect(setup({ listByYear: {} }).run()).rejects.toThrow(
+			"Easy-Speak's meeting list showed no meetings for this club.",
+		);
+	});
+
+	it.each([
+		["2003-12", "2003-12"],
+		["2028-01", "2028-01"],
+		["2026-13", "2026-13"],
+	])("refuses the start month %s before any request (AC 4)", async (value) => {
+		// protects=a bad remembered or typed month never reaching Easy-Speak; fails_when=a month outside 2004..next year, or a 13th month, is walked; no_claim=the widget's selects cannot produce these
+		const s = setup({ fromMonth: value });
+		await expect(s.run()).rejects.toThrow(`The start month ${value} is outside 2004 to 2027.`);
+		expect(s.log).toEqual([]);
+	});
+
+	it("records the range in the bundle: the month for a bounded walk, null for a full one (AC 5)", async () => {
+		// protects=the importer knowing what a bundle covers; fails_when=range is dropped, or a bounded walk claims the full history; no_claim=how GavelUp uses it
+		expect((await setup({ fromMonth: "2026-05" }).run()).bundle.range).toEqual({ fromMonth: "2026-05" });
+		expect((await setup().run()).bundle.range).toBeNull();
 	});
 });

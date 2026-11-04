@@ -17,11 +17,13 @@ import {
 import { EXTENSION_LISTINGS } from "#/lib/extension-listings";
 import { GUEST_KIND_LABELS, GUEST_KINDS } from "#/lib/guest-profile";
 import { MAX_BUNDLE_BYTES } from "#/lib/import-bundle-limit";
+import { monthLabel } from "#/lib/month-label";
 import {
 	applyEasySpeakImport,
 	importEasySpeakMentors,
 	importEasySpeakSpeechRequests,
 	listEasySpeakImports,
+	nextEasySpeakExport,
 	previewEasySpeakImport,
 	uploadEasySpeakBundle,
 } from "#/server/history-import";
@@ -141,6 +143,12 @@ export function ImportHistoryPanel({
 		queryFn: () => listEasySpeakImports({ data: { clubId } }),
 	});
 
+	// Where the club's next export should start (#1491); display only.
+	const nextExport = useQuery({
+		queryKey: ["easy-speak-next-export", clubId],
+		queryFn: () => nextEasySpeakExport({ data: { clubId } }),
+	});
+
 	const resolutions: Record<string, PersonResolution> = {};
 	for (const [key, d] of Object.entries(drafts)) {
 		const r = toResolution(d);
@@ -174,6 +182,9 @@ export function ImportHistoryPanel({
 		});
 		void queryClient.invalidateQueries({
 			queryKey: ["easy-speak-preview", clubId],
+		});
+		void queryClient.invalidateQueries({
+			queryKey: ["easy-speak-next-export", clubId],
 		});
 	};
 
@@ -308,6 +319,13 @@ export function ImportHistoryPanel({
 					is deleted. Only the club's {MAX_UNAPPLIED_IMPORTS} most recent
 					unapplied uploads are kept; an older one is replaced.
 				</p>
+				{nextExport.data ? (
+					<p className="text-sm font-semibold" data-testid="import-next-export">
+						{nextExport.data.fromMonth
+							? `Next export: from ${monthLabel(nextExport.data.fromMonth)}.`
+							: "Next export: the full history."}
+					</p>
+				) : null}
 			</div>
 
 			<ExtensionInstallLine />
@@ -439,6 +457,12 @@ export function ImportHistoryPanel({
 						</span>
 						.
 					</p>
+					{data.range ? (
+						<p className="text-sm" data-testid="import-bundle-range">
+							This bundle holds meetings from {monthLabel(data.range.fromMonth)}{" "}
+							on.
+						</p>
+					) : null}
 					{data.warnings.map((w) => (
 						<p key={w} className="text-sm text-warning-foreground">
 							{w}
