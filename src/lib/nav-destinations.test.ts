@@ -80,6 +80,7 @@ describe("visibleDestinations", () => {
 			"Club settings",
 			"Charter",
 			"Pathways sync",
+			"Import from Easy-Speak",
 		]);
 		expect(keysIn(OFFICE_HOLDER, "platform")).toEqual([]);
 	});

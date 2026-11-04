@@ -131,7 +131,7 @@ describe.skipIf(!hasTestDb)("mentor-pair import (#1053)", () => {
 		return mentors.importMentorPairs({
 			clubId: seed.clubId,
 			importId,
-			superadminUserId: superadminId,
+			runner: { kind: "superadmin", userId: superadminId },
 		});
 	}
 
@@ -1035,7 +1035,7 @@ describe.skipIf(!hasTestDb)("mentor-pair import (#1053)", () => {
 				mentors.importMentorPairs({
 					clubId: other.clubId,
 					importId,
-					superadminUserId: superadminId,
+					runner: { kind: "superadmin", userId: superadminId },
 				}),
 			).rejects.toThrow(logic.IMPORT_NOT_FOUND_MESSAGE);
 			const stray = await testDb

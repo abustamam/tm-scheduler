@@ -63,6 +63,7 @@ import { Route as AuthedAdminSyncTokensRouteImport } from './routes/_authed/admi
 import { Route as AuthedAdminScheduleRouteImport } from './routes/_authed/admin/schedule'
 import { Route as AuthedAdminRolesRouteImport } from './routes/_authed/admin/roles'
 import { Route as AuthedAdminPathwaysSyncRouteImport } from './routes/_authed/admin/pathways-sync'
+import { Route as AuthedAdminImportHistoryRouteImport } from './routes/_authed/admin/import-history'
 import { Route as AuthedAdminDuesRouteImport } from './routes/_authed/admin/dues'
 import { Route as AuthedAdminDcpRouteImport } from './routes/_authed/admin/dcp'
 import { Route as AuthedAdminClubSettingsRouteImport } from './routes/_authed/admin/club-settings'
@@ -370,6 +371,12 @@ const AuthedAdminPathwaysSyncRoute = AuthedAdminPathwaysSyncRouteImport.update({
   path: '/admin/pathways-sync',
   getParentRoute: () => AuthedRoute,
 } as any)
+const AuthedAdminImportHistoryRoute =
+  AuthedAdminImportHistoryRouteImport.update({
+    id: '/admin/import-history',
+    path: '/admin/import-history',
+    getParentRoute: () => AuthedRoute,
+  } as any)
 const AuthedAdminDuesRoute = AuthedAdminDuesRouteImport.update({
   id: '/admin/dues',
   path: '/admin/dues',
@@ -605,6 +612,7 @@ export interface FileRoutesByFullPath {
   '/admin/club-settings': typeof AuthedAdminClubSettingsRoute
   '/admin/dcp': typeof AuthedAdminDcpRoute
   '/admin/dues': typeof AuthedAdminDuesRoute
+  '/admin/import-history': typeof AuthedAdminImportHistoryRoute
   '/admin/pathways-sync': typeof AuthedAdminPathwaysSyncRoute
   '/admin/roles': typeof AuthedAdminRolesRoute
   '/admin/schedule': typeof AuthedAdminScheduleRoute
@@ -693,6 +701,7 @@ export interface FileRoutesByTo {
   '/admin/club-settings': typeof AuthedAdminClubSettingsRoute
   '/admin/dcp': typeof AuthedAdminDcpRoute
   '/admin/dues': typeof AuthedAdminDuesRoute
+  '/admin/import-history': typeof AuthedAdminImportHistoryRoute
   '/admin/pathways-sync': typeof AuthedAdminPathwaysSyncRoute
   '/admin/roles': typeof AuthedAdminRolesRoute
   '/admin/schedule': typeof AuthedAdminScheduleRoute
@@ -785,6 +794,7 @@ export interface FileRoutesById {
   '/_authed/admin/club-settings': typeof AuthedAdminClubSettingsRoute
   '/_authed/admin/dcp': typeof AuthedAdminDcpRoute
   '/_authed/admin/dues': typeof AuthedAdminDuesRoute
+  '/_authed/admin/import-history': typeof AuthedAdminImportHistoryRoute
   '/_authed/admin/pathways-sync': typeof AuthedAdminPathwaysSyncRoute
   '/_authed/admin/roles': typeof AuthedAdminRolesRoute
   '/_authed/admin/schedule': typeof AuthedAdminScheduleRoute
@@ -877,6 +887,7 @@ export interface FileRouteTypes {
     | '/admin/club-settings'
     | '/admin/dcp'
     | '/admin/dues'
+    | '/admin/import-history'
     | '/admin/pathways-sync'
     | '/admin/roles'
     | '/admin/schedule'
@@ -965,6 +976,7 @@ export interface FileRouteTypes {
     | '/admin/club-settings'
     | '/admin/dcp'
     | '/admin/dues'
+    | '/admin/import-history'
     | '/admin/pathways-sync'
     | '/admin/roles'
     | '/admin/schedule'
@@ -1056,6 +1068,7 @@ export interface FileRouteTypes {
     | '/_authed/admin/club-settings'
     | '/_authed/admin/dcp'
     | '/_authed/admin/dues'
+    | '/_authed/admin/import-history'
     | '/_authed/admin/pathways-sync'
     | '/_authed/admin/roles'
     | '/_authed/admin/schedule'
@@ -1536,6 +1549,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAdminPathwaysSyncRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/admin/import-history': {
+      id: '/_authed/admin/import-history'
+      path: '/admin/import-history'
+      fullPath: '/admin/import-history'
+      preLoaderRoute: typeof AuthedAdminImportHistoryRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/_authed/admin/dues': {
       id: '/_authed/admin/dues'
       path: '/admin/dues'
@@ -1820,6 +1840,7 @@ interface AuthedRouteChildren {
   AuthedAdminClubSettingsRoute: typeof AuthedAdminClubSettingsRoute
   AuthedAdminDcpRoute: typeof AuthedAdminDcpRoute
   AuthedAdminDuesRoute: typeof AuthedAdminDuesRoute
+  AuthedAdminImportHistoryRoute: typeof AuthedAdminImportHistoryRoute
   AuthedAdminPathwaysSyncRoute: typeof AuthedAdminPathwaysSyncRoute
   AuthedAdminRolesRoute: typeof AuthedAdminRolesRoute
   AuthedAdminScheduleRoute: typeof AuthedAdminScheduleRoute
@@ -1853,6 +1874,7 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedAdminClubSettingsRoute: AuthedAdminClubSettingsRoute,
   AuthedAdminDcpRoute: AuthedAdminDcpRoute,
   AuthedAdminDuesRoute: AuthedAdminDuesRoute,
+  AuthedAdminImportHistoryRoute: AuthedAdminImportHistoryRoute,
   AuthedAdminPathwaysSyncRoute: AuthedAdminPathwaysSyncRoute,
   AuthedAdminRolesRoute: AuthedAdminRolesRoute,
   AuthedAdminScheduleRoute: AuthedAdminScheduleRoute,

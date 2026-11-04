@@ -28,6 +28,14 @@ vi.mock("sonner", () => ({
 	toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }));
 
+const listings = vi.hoisted(() => ({
+	EXTENSION_LISTINGS: {
+		chrome: null as string | null,
+		firefox: null as string | null,
+	},
+}));
+vi.mock("#/lib/extension-listings", () => listings);
+
 import { ImportHistoryPanel } from "./import-history-panel";
 
 const CLUB = "3f0b5c1e-6a3d-4d1b-9f5e-2c7a8b9d0e1f";
@@ -117,13 +125,13 @@ function previewFor(
 	};
 }
 
-function renderPanel() {
+function renderPanel(props: { isSuperadmin?: boolean } = {}) {
 	const client = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
 	});
 	return render(
 		<QueryClientProvider client={client}>
-			<ImportHistoryPanel clubId={CLUB} clubName="Test Club" />
+			<ImportHistoryPanel clubId={CLUB} clubName="Test Club" {...props} />
 		</QueryClientProvider>,
 	);
 }
@@ -149,6 +157,18 @@ async function openImport() {
 }
 
 describe("ImportHistoryPanel (#1051)", () => {
+	// protects=the panel says the bundle is kept with the club and that only the 5 newest unapplied uploads are kept, without contradiction;
+	// fails_when=the sentence is dropped or reverts to the per-person wording;
+	// no_claim=the server cap itself.
+	it("states the retention and the unapplied-upload cap", () => {
+		renderPanel();
+		expect(
+			screen.getByText(
+				/The uploaded bundle, with every guest's name, is kept until the club is deleted\. Only the club's 5 most recent unapplied uploads are kept; an older one is replaced\./,
+			),
+		).toBeTruthy();
+	});
+
 	it("keeps Apply disabled until the person is decided, then sends the decision", async () => {
 		fns.previewEasySpeakImport.mockImplementation(
 			async ({ data }: { data: { resolutions?: Record<string, unknown> } }) =>
@@ -618,5 +638,131 @@ describe("people named only by the lists (#1203)", () => {
 		expect(screen.getByTestId("resolve-es:900005").textContent).toContain(
 			"in the speech requests",
 		);
+	});
+});
+
+describe("ImportHistoryPanel self-serve (#1492)", () => {
+	const REFUSAL =
+		"This export is from Other Speakers, not Fixture Speakers, the Easy-Speak club this club was imported from.";
+
+	async function uploadFile() {
+		const input = await screen.findByLabelText("Easy-Speak bundle");
+		const file = new File(["{}"], "bundle.json", { type: "application/json" });
+		fireEvent.change(input, { target: { files: [file] } });
+		return file;
+	}
+
+	// protects=the first import's preview leads with the Easy-Speak club -> this
+	// club, number part omitted when null, and a later import shows no such line;
+	// fails_when=the line shows once bound, or its number part prints "null";
+	// no_claim=that the server computed the binding (the logic integration test).
+	it("leads the first preview with the binding, and only the first", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue({
+			...previewFor(true),
+			binding: {
+				esName: "Fixture Speakers",
+				esNumber: null,
+				clubName: "Test Club",
+			},
+		});
+		await openImport();
+		expect((await screen.findByTestId("import-binding")).textContent).toBe(
+			"Easy-Speak club Fixture Speakers → Test Club",
+		);
+		cleanup();
+		fns.previewEasySpeakImport.mockResolvedValue({
+			...previewFor(true),
+			binding: {
+				esName: "Fixture Speakers",
+				esNumber: "9999",
+				clubName: "Test Club",
+			},
+		});
+		await openImport();
+		expect((await screen.findByTestId("import-binding")).textContent).toBe(
+			"Easy-Speak club Fixture Speakers (#9999) → Test Club",
+		);
+		cleanup();
+		fns.previewEasySpeakImport.mockResolvedValue({
+			...previewFor(true),
+			binding: null,
+		});
+		await openImport();
+		await screen.findByText(/Bundle from/);
+		expect(screen.queryByTestId("import-binding")).toBeNull();
+	});
+
+	// protects=the override checkbox appears only for a superadmin and only after
+	// a binding refusal, and a ticked retry sends overrideClubBinding: true;
+	// fails_when=it is always shown, shown to a club admin, or never sent;
+	// no_claim=that the server refuses the flag from a non-superadmin (authz test).
+	it("offers the override to a superadmin only after a binding refusal, and sends it", async () => {
+		fns.listEasySpeakImports.mockResolvedValue([]);
+		fns.uploadEasySpeakBundle.mockRejectedValueOnce(new Error(REFUSAL));
+		renderPanel({ isSuperadmin: true });
+		expect(screen.queryByText(/Import anyway/)).toBeNull();
+		await uploadFile();
+		const box = await screen.findByLabelText(
+			"Import anyway (another Easy-Speak club)",
+		);
+		expect(
+			fns.uploadEasySpeakBundle.mock.calls[0]?.[0].data,
+		).not.toHaveProperty("overrideClubBinding");
+		fns.uploadEasySpeakBundle.mockResolvedValue({
+			importId: IMPORT,
+			reused: false,
+			appliedAt: null,
+		});
+		fireEvent.click(box);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Upload again" }),
+		);
+		await waitFor(() =>
+			expect(fns.uploadEasySpeakBundle).toHaveBeenCalledTimes(2),
+		);
+		expect(fns.uploadEasySpeakBundle.mock.calls[1]?.[0].data).toMatchObject({
+			clubId: CLUB,
+			overrideClubBinding: true,
+		});
+	});
+
+	// protects=a club admin never sees the "Import anyway" override, even after the
+	// server's binding refusal reached the panel;
+	// fails_when=the checkbox is rendered without the isSuperadmin gate;
+	// no_claim=the server also refuses the flag (the authz integration test).
+	it("never renders the override for a club admin, even after a binding refusal", async () => {
+		fns.listEasySpeakImports.mockResolvedValue([]);
+		fns.uploadEasySpeakBundle.mockRejectedValueOnce(new Error(REFUSAL));
+		renderPanel({ isSuperadmin: false });
+		await uploadFile();
+		await waitFor(() => expect(toast.error).toHaveBeenCalledWith(REFUSAL));
+		expect(screen.queryByText(/Import anyway/)).toBeNull();
+	});
+
+	// protects=the install line links each listing that exists and falls back to
+	// "ask support" when none does;
+	// fails_when=a null listing renders a dead link, or the fallback is missing;
+	// no_claim=the listing URLs themselves (the maintainer pastes them).
+	it("links the listings that exist and falls back when none does", async () => {
+		fns.listEasySpeakImports.mockResolvedValue([]);
+		listings.EXTENSION_LISTINGS.chrome = null;
+		listings.EXTENSION_LISTINGS.firefox = null;
+		renderPanel();
+		await screen.findByLabelText("Easy-Speak bundle");
+		expect(
+			screen.getByText("Ask GavelUp support for the browser extension."),
+		).toBeTruthy();
+		expect(screen.queryByRole("link", { name: "Chrome" })).toBeNull();
+		cleanup();
+		listings.EXTENSION_LISTINGS.chrome = "https://chromewebstore.example/ext";
+		renderPanel();
+		await screen.findByLabelText("Easy-Speak bundle");
+		const chrome = screen.getByRole("link", { name: "Chrome" });
+		expect(chrome.getAttribute("href")).toBe(
+			"https://chromewebstore.example/ext",
+		);
+		expect(screen.queryByRole("link", { name: "Firefox" })).toBeNull();
+		expect(screen.queryByText(/Ask GavelUp support/)).toBeNull();
+		listings.EXTENSION_LISTINGS.chrome = null;
 	});
 });

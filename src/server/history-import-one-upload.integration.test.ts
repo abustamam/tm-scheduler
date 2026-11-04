@@ -233,7 +233,7 @@ describe.skipIf(!hasTestDb)(
 			logic.applyEasySpeakImport({
 				clubId: seed.clubId,
 				importId,
-				superadminUserId: superadminId,
+				runner: { kind: "superadmin", userId: superadminId },
 				resolutions: resolutions(),
 				contacts,
 				planHash,
@@ -835,10 +835,24 @@ describe.skipIf(!hasTestDb)(
 				.insert(people)
 				.values({ name: "Holder", email: "released@contacts.example" })
 				.returning({ id: people.id });
+			// A holder on THIS club's roster is what the preview counts (#1492).
+			const [holderMember] = await testDb
+				.insert(members)
+				.values({
+					clubId: seed.clubId,
+					personId: holder?.id as string,
+					name: "Holder",
+					clubRole: "member",
+					status: "active",
+				})
+				.returning({ id: members.id });
 			const stored = await upload();
 			const contacts = "Mo Member, released@contacts.example, 555-0160";
 			const shown = await preview(stored.importId, contacts);
 			expect(shown.contacts.emails).toBe(0);
+			await testDb
+				.delete(members)
+				.where(eq(members.id, holderMember?.id as string));
 			await testDb.delete(people).where(eq(people.id, holder?.id as string));
 			await expect(
 				apply(stored.importId, contacts, shown.planHash),
@@ -899,7 +913,7 @@ describe.skipIf(!hasTestDb)(
 			const pia = await memberByName("Pia President");
 			expect((await personRow(pia?.personId as string))?.email).toBeNull();
 			expect(report.contactNotes).toEqual([
-				"The email in row 1 was taken since the preview; left blank for Pia President.",
+				"The email in row 1 was left blank for Pia President: that address is already in use in GavelUp.",
 			]);
 			expect(JSON.stringify(report)).not.toContain("race@contacts.example");
 		});
@@ -1568,7 +1582,9 @@ describe.skipIf(!hasTestDb)(
 			const stored = await upload();
 			const contacts = "Mo Member, mo.held@contacts.example,";
 			const shown = await preview(stored.importId, contacts);
-			expect(shown.contacts.warnings.join("\n")).toMatch(/already belongs/u);
+			expect(shown.contacts.warnings.join("\n")).toMatch(
+				/already on another member of this club/u,
+			);
 			await apply(stored.importId, contacts, shown.planHash);
 			const mo = await memberByName("Mo Member");
 			expect((await personRow(mo?.personId as string))?.email).toBeNull();
@@ -1626,7 +1642,7 @@ describe.skipIf(!hasTestDb)(
 			const { report } = await apply(stored.importId, contacts, shown.planHash);
 			expect((await personRow(adaPersonId))?.email).toBeNull();
 			expect(report.contactNotes).toEqual([
-				"The email in row 1 was taken since the preview; left blank for Ada Linked.",
+				"The email in row 1 was left blank for Ada Linked: that address is already in use in GavelUp.",
 			]);
 		});
 
@@ -1664,7 +1680,7 @@ describe.skipIf(!hasTestDb)(
 			await logic.applyEasySpeakImport({
 				clubId: seed.clubId,
 				importId: stored.importId,
-				superadminUserId: superadminId,
+				runner: { kind: "superadmin", userId: superadminId },
 				resolutions: resolutions(),
 				now: new Date("2026-10-12T02:00:00Z"),
 			});

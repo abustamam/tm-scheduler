@@ -111,7 +111,9 @@ const ALLOWED: { file: string; kind: Write["kind"]; contains: string }[] = [
 		contains: "beforeNotes: stock?.beforeNotes ?? null",
 	},
 	// Seeding — the standard roles an Easy-Speak import (#1051) needs and the
-	// club lacks, copied from ROLE_TEMPLATE; superadmin-only.
+	// club lacks, copied from ROLE_TEMPLATE; reachable by a superadmin or an admin
+	// of that club (#1492), and it mints the stock guide with `standing: false`,
+	// the same rows an admin's own role edit may add.
 	{
 		file: "src/server/history-import-logic.ts",
 		kind: "values",

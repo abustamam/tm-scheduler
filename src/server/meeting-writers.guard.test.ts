@@ -273,7 +273,7 @@ const MEETING_WRITERS: Record<string, Entry> = {
 				refusedBy: [],
 				exemptCallers: {
 					"src/server/history-import-logic.ts#applyMeeting":
-						"Superadmin-only, and the meeting it writes into is a past one it created as completed or adopted because it was already completed (a scheduled, cancelled or rescheduled meeting is skipped and reported), so a completed meeting is exactly what it is meant to reach.",
+						"Reachable by a superadmin or by an admin of that club (#1492), who may write only into the club's own meetings, and the meeting it writes into is a past one it created as completed or adopted because it was already completed (a scheduled, cancelled or rescheduled meeting is skipped and reported), so a completed meeting is exactly what it is meant to reach.",
 				},
 			},
 		},

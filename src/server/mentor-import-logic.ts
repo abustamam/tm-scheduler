@@ -20,10 +20,13 @@ import type { EasySpeakBundle } from "#/lib/easy-speak-bundle";
 import { personKeyOf } from "#/lib/easy-speak-import-plan";
 import { logActivity } from "./activity";
 import { lockClubForWrite } from "./club-write-lock";
+import type { HistoryImportRunner } from "./guards";
 import {
 	assertClubNotArchivedTx,
+	assertRunnerStillAllowed,
 	loadStoredBundle,
 	putRef,
+	runnerAttribution,
 	SOURCE,
 	type Tx,
 	takeImportLock,
@@ -186,7 +189,7 @@ async function importWillingFlags(
 	ctx: {
 		clubId: string;
 		importId: string;
-		superadminUserId: string;
+		runner: HistoryImportRunner;
 		rows: EasySpeakBundle["mentors"];
 		sideOf: (who: EsPerson) => Side;
 		/** Member ids already remembered; grows as this run remembers more. */
@@ -251,8 +254,7 @@ async function importWillingFlags(
 		result.set++;
 		await logActivity(tx, {
 			clubId: ctx.clubId,
-			actorMemberId: null,
-			impersonatedBy: ctx.superadminUserId,
+			...runnerAttribution(ctx.runner),
 			action: "member_edit",
 			targetType: "member",
 			targetId: side.id,
@@ -266,7 +268,7 @@ async function importWillingFlags(
 
 /**
  * Import the stored bundle's mentor pairs as #939 mentorships. The caller has
- * proved the superadmin.
+ * proved who may run it.
  *
  * - Each row with a mentor becomes one ACTIVE pairing with no focus. Both people
  *   must resolve through the `person` refs the import's apply wrote to members
@@ -290,8 +292,8 @@ async function importWillingFlags(
 export async function importMentorPairs(input: {
 	clubId: string;
 	importId: string;
-	/** The superadmin the change is attributed to. */
-	superadminUserId: string;
+	/** Who runs it; the change is attributed to them. */
+	runner: HistoryImportRunner;
 }): Promise<MentorImportResult> {
 	const stored = await loadStoredBundle(input.clubId, input.importId);
 	if (!stored.appliedAt) throw new Error(MENTORS_NOT_APPLIED_MESSAGE);
@@ -300,6 +302,7 @@ export async function importMentorPairs(input: {
 	return db.transaction(async (tx) => {
 		await takeImportLock(tx, input.clubId);
 		await lockClubForWrite(tx, input.clubId);
+		await assertRunnerStillAllowed(tx, input.runner, input.clubId);
 		await assertClubNotArchivedTx(tx, input.clubId);
 
 		const refs = await tx
@@ -446,11 +449,10 @@ export async function importMentorPairs(input: {
 			imported.add(sourceId);
 			active.set(pairKey, made.id);
 			result.imported++;
-			// The same entry `createMentorship` writes, attributed to the superadmin.
+			// The same entry `createMentorship` writes, attributed to the runner.
 			await logActivity(tx, {
 				clubId: input.clubId,
-				actorMemberId: null,
-				impersonatedBy: input.superadminUserId,
+				...runnerAttribution(input.runner),
 				action: "member_edit",
 				targetType: "member",
 				targetId: menteeId,
@@ -469,7 +471,7 @@ export async function importMentorPairs(input: {
 		await importWillingFlags(tx, {
 			clubId: input.clubId,
 			importId: input.importId,
-			superadminUserId: input.superadminUserId,
+			runner: input.runner,
 			rows,
 			sideOf,
 			done: willingDone,
@@ -478,8 +480,7 @@ export async function importMentorPairs(input: {
 
 		await logActivity(tx, {
 			clubId: input.clubId,
-			actorMemberId: null,
-			impersonatedBy: input.superadminUserId,
+			...runnerAttribution(input.runner),
 			action: "history_imported",
 			targetType: "club",
 			targetId: input.clubId,

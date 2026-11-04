@@ -163,7 +163,7 @@ function ImportHistoryDisclosure({
 			<Suspense
 				fallback={<p className="text-sm text-muted-foreground">Loading...</p>}
 			>
-				<ImportHistoryPanel clubId={clubId} clubName={clubName} />
+				<ImportHistoryPanel clubId={clubId} clubName={clubName} isSuperadmin />
 			</Suspense>
 		);
 	}
