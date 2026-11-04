@@ -29,6 +29,7 @@ import { deriveMeetingNumber } from "#/lib/meeting-number";
 import { ensureScheduleToppedUp } from "#/server/schedule-topup-logic";
 import { authorizeToken } from "../authz-logic";
 import type { McpToolDefinition } from "../tool";
+import { isoInTimezone } from "./get-my-schedule";
 
 // `get_agenda` reads `clubLocalParts` through this module. Re-exported rather
 // than repointed because `get-agenda.ts` is outside #776's declared change set;
@@ -50,7 +51,7 @@ export const listMeetingsTool: McpToolDefinition = {
 		description:
 			"A club's meetings between two club-local dates (default: the next " +
 			"three months). Returns each meeting's id, club-local date and time, " +
-			"meeting number, theme, status and how many role slots are still open.",
+			"meeting number, length in minutes, club-local end time, theme, status and how many role slots are still open.",
 		inputSchema,
 	},
 	handler: async (input, ctx) => {
@@ -92,6 +93,7 @@ export const listMeetingsTool: McpToolDefinition = {
 			.select({
 				id: meetings.id,
 				scheduledAt: meetings.scheduledAt,
+				lengthMinutes: meetings.lengthMinutes,
 				status: meetings.status,
 				theme: meetings.theme,
 				openSlots: sql<number>`count(*) filter (where ${roleSlots.status} = 'open')`,
@@ -124,6 +126,12 @@ export const listMeetingsTool: McpToolDefinition = {
 					meetingId: m.id,
 					date,
 					weekday,
+					lengthMinutes: m.lengthMinutes,
+					// Club-local ISO with offset: start + length.
+					endsAt: isoInTimezone(
+						new Date(m.scheduledAt.getTime() + m.lengthMinutes * 60_000),
+						club.timezone,
+					),
 					time,
 					// Numbers freeze when a meeting is completed (#358); until then
 					// the displayed one is derived and can still move, so say which

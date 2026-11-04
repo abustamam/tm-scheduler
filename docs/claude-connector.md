@@ -104,6 +104,7 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
 | `restore_meeting` | **writes immediately** | "Put Saturday's meeting back." Every role is exactly as it was; possible until the end of the meeting's day |
 | `edit_agenda` | previews, then writes when you approve | "Open with 15 minutes of Introductions so the program starts at 12:15" — add, remove, move or retime agenda rows |
 | `update_meeting_schedule` | previews, then writes when you approve | **Admins and officers.** "Move our standing meeting to 7:30 PM", "our meetings are 60 minutes now" — change the standing time, the schedule line guests see, and/or the default meeting length |
+| `reschedule_meeting` | previews, then writes when you approve | **Admins and officers.** "Move Thursday's meeting to 7:30 PM", "make the 28th a 60-minute meeting" — change one upcoming meeting's date, start time and/or length |
 | `upsert_agendas` | writes nothing — gives you a link | "Set the themes for October's meetings" |
 | `record_guest_book` | writes nothing — gives you a link | "Here's a photo of last night's guest book" |
 
@@ -141,6 +142,16 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
   changed the agenda in between it gets a fresh plan instead. The whole batch applies or none of
   it does. It never changes the meeting's scheduled time, and a completed or cancelled meeting is
   refused. Anything it did is undone in the agenda editor like any other edit.
+- **`reschedule_meeting` asks twice.** The first call writes nothing: it shows the meeting's old and
+  new start, end and date in club time, and warns when the agenda's run sheet would end after the
+  new end time (a warning, not a refusal; use `edit_agenda` to shorten rows). It applies only when
+  Claude calls again with the plan's hash; if the meeting changed in between, Claude gets a fresh
+  plan. An omitted field keeps its stored value. It is refused for a meeting that is completed or
+  has already started, a cancelled one, a new start in the past, or a date and time another
+  meeting of the club already holds. It uses the same save as the meeting dialog, so the change
+  shows in the activity log. It does not retime agenda rows and does not change the standing
+  schedule. `list_meetings` and `get_agenda` now return each meeting's `lengthMinutes` and `endsAt`
+  (club-local ISO time).
 - **`update_meeting_schedule` asks twice, and a time change deletes meetings.** The first call
   writes nothing: it shows old and new for each field you sent, which upcoming meetings will be
   deleted and recreated at the new time (only meetings nobody has touched, the same ones the
