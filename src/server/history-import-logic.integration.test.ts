@@ -3262,11 +3262,12 @@ EXECUTE FUNCTION zz_claim_slot()`),
 			const preview = await previewUp(stored.importId, resolutions, skipAll);
 			expect(preview.upcoming.shape.length).toBe(3);
 
-			// The default changes after the preview: its hash is stale.
+			// The default gains a role nobody holds (so no holder moves) after the preview:
+			// only the shape differs, and the hash must still be stale.
 			await testDb.insert(meetingTemplateRoles).values({
 				templateId,
-				key: "grammarian",
-				name: "Grammarian",
+				key: "ah_counter",
+				name: "Ah-Counter",
 				category: "functionary",
 				defaultCount: 1,
 				sortOrder: 9,
