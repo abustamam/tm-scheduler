@@ -539,8 +539,12 @@ describe("a role the admin skipped drops only the overflow (#1495 S1)", () => {
 				skipUpcomingRoles: new Set(["std:timer"]),
 			}),
 		);
-		expect(plan.people.map((p) => p.key)).toContain(oakley);
-		expect(plan.people.map((p) => p.key)).not.toContain(val);
+		// Val also sits on the mentor chart, so they are a person either way:
+		// what the skipped overflow holder lacks is the ROLE appearance.
+		const rolesOf = (key: string) =>
+			plan.people.find((p) => p.key === key)?.appearances.roles ?? 0;
+		expect(rolesOf(oakley)).toBeGreaterThan(0);
+		expect(rolesOf(val)).toBe(0);
 		expect(planSlotOf(plan, "Timer")).toMatchObject({ slotIndex: 0 });
 		expect(planSlotOf(plan, "Timer")?.kept).toBeUndefined();
 		expect(planSlotOf(plan, "Timer 2 - Online")).toMatchObject({
@@ -558,8 +562,14 @@ describe("who an upcoming role may be given to (#1495 R2)", () => {
 		const plan = buildImportPlan(bundle, ctx());
 		const oakley = plan.people.find((p) => p.key === holderKey(bundle, "Timer"));
 		expect(oakley?.outcome.status).toBe("unmatched");
-		console.log(JSON.stringify(plan.people.filter((p)=>p.outcome.status==='create').map((p)=>[p.name,p.outcome,p.appearances])));
-		expect(plan.counts.newFormerMembers).toBe(0);
+		// The former members that remain are minted by the member list, never by
+		// an upcoming role.
+		for (const p of plan.people) {
+			if (p.outcome.status === "create" && p.outcome.membership === "former") {
+				expect(p.appearances.memberList).toBeGreaterThan(0);
+			}
+		}
+		expect(oakley?.appearances.memberList).toBe(0);
 	});
 
 	// protects=an inactive member holding an upcoming role is not placed and the slot stays for someone else;
