@@ -70,7 +70,6 @@ import {
 	guests,
 	importRefs,
 	meetingAttendance,
-	meetingAttendancePlan,
 	meetingAwards,
 	meetings,
 	meetingTemplates,
@@ -157,6 +156,7 @@ import {
 import { logActivity } from "./activity";
 import {
 	importPlanAnswers,
+	listPlanForMeetings,
 	lockMemberAttendance,
 } from "./attendance-plan-logic";
 import { lockClubForWrite } from "./club-write-lock";
@@ -2395,23 +2395,12 @@ async function applyUpcomingMeeting(
 							)
 					).map((r) => r.id),
 		);
+		// Through the plan seam (`attendance-plan-logic.ts`), not an inline query.
 		const answered = new Map(
-			memberIds.length === 0
+			(memberIds.length === 0
 				? []
-				: (
-						await tx
-							.select({
-								memberId: meetingAttendancePlan.memberId,
-								status: meetingAttendancePlan.status,
-							})
-							.from(meetingAttendancePlan)
-							.where(
-								and(
-									eq(meetingAttendancePlan.meetingId, meetingId),
-									inArray(meetingAttendancePlan.memberId, memberIds),
-								),
-							)
-					).map((r) => [r.memberId, r.status] as const),
+				: await listPlanForMeetings(tx, [meetingId])
+			).map((r) => [r.memberId, r.status] as const),
 		);
 		/** Why a holder is not given the role: nobody to give it to, inactive, said Not coming, or deleted. */
 		const blockedFor = (ps: PlanMeeting["slots"][number]) => {
