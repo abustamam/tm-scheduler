@@ -119,6 +119,13 @@ const ALLOWED: { file: string; kind: Write["kind"]; contains: string }[] = [
 		kind: "values",
 		contains: "seed.beforeNotes",
 	},
+	// Swap (#1471) — the GE-introduces-functionaries toggle rewrites only the two
+	// seeded roles, and only when the stored text equals the old variant's seed.
+	{
+		file: "src/server/clubs-logic.ts",
+		kind: "set",
+		contains: "duringNotesFor(seed, to)",
+	},
 ];
 
 /**
@@ -133,6 +140,7 @@ const TEMPLATE_READERS = new Set([
 	"scripts/import-agendas-logic.ts", // seeding: Vote Counter backfill
 	"src/server/meeting-templates-logic.ts", // seeding: a minted standard role (#910)
 	"src/server/history-import-logic.ts", // seeding: standard roles an import needs (#1051)
+	"src/server/clubs-logic.ts", // swap: GE-variant guide on the toggle (#1471)
 ]);
 
 describe("role guide writers (#933)", () => {
