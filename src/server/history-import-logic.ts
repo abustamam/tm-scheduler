@@ -2321,7 +2321,6 @@ async function applyUpcomingMeeting(
 					.returning();
 				if (!created) throw new Error("Could not create a role slot.");
 				slot = created;
-				await closeCoverRequest(tx, created.id, owner);
 			} else if (
 				slot.assignedMemberId === null &&
 				slot.assignedGuestId === null

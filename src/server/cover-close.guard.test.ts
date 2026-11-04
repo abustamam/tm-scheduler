@@ -96,9 +96,9 @@ const KNOWN: Record<
 		why: "unlink restores the recorded slots to the guest and closes any open request on each; link and convert re-point slots already held",
 	},
 	"history-import-logic.ts": {
-		statements: 1,
-		closes: 1,
-		why: "the import fills a still-empty slot (its assignment is spread in, so the literal check alone missed it)",
+		statements: 2,
+		closes: 2,
+		why: "applyMeeting fills a still-empty past slot and applyUpcomingMeeting a still-empty upcoming one, each closing that slot's request (the assignment is spread in, so the literal check alone missed it); a slot the import inserts is new and has no request to close",
 	},
 };
 
@@ -165,7 +165,7 @@ describe("every fill of an open slot closes its cover request (#1438)", () => {
 		expect(closers).toBe(
 			Object.values(KNOWN).reduce((n, k) => n + k.closes, 0),
 		);
-		expect(closers).toBe(6);
+		expect(closers).toBe(7);
 	});
 
 	it("closeCoverRequest stays free of the modules that call it", () => {
