@@ -1,6 +1,6 @@
 -- #1471: clubs with geIntroducesFunctionaries ON get the General-Evaluator variant of the
 -- Toastmaster / General Evaluator "during" guide, only where it still equals the standard seed.
--- Text is copied from ROLE_TEMPLATE; src/lib/role-guide.test.ts holds the two together.
+-- Text is copied from ROLE_TEMPLATE; the "GE-variant guide migration parity" test in src/lib/role-guide.test.ts holds the two together.
 UPDATE "role_definitions" rd SET "during_notes" = 'Open the meeting and introduce the theme.
 Introduce the General Evaluator, who introduces the functionaries and hands back.
 Introduce each speaker, and before each speech ask their evaluator for the speech objectives and timing.

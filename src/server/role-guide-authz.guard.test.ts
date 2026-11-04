@@ -1,7 +1,7 @@
 /**
  * Who may write a role's Before/During guide (#933).
  *
- * Two kinds of writer exist, and this file lists both by name:
+ * Three kinds of writer exist, and this file lists all by name:
  *
  * 1. EDITING: `applyRoleDefinitionUpdate`, reached only through
  *    `updateClubRole`, which gates on `requireClubRole(…, ["admin"])` before it
@@ -10,6 +10,9 @@
  *    (onboarding a new club, the dev seed, the agenda importer's Vote Counter
  *    backfill). They write the template's default text into a club's own new
  *    rows and never touch an existing row.
+ * 3. SWAPPING (#1471): `swapGeGuidesTx`, run when a club toggles
+ *    `geIntroducesFunctionaries`. It rewrites existing rows, but only the ones
+ *    whose `during_notes` still equal the old variant's seed text.
  *
  * A `createServerFn` handler cannot be invoked from vitest, so these are
  * source guards. The write sweep reads every non-test module under the
@@ -154,7 +157,7 @@ describe("role guide writers (#933)", () => {
 		expect(write).toBeGreaterThan(gate);
 	});
 
-	it("writes guide text only from the update path and the template-seeding inserts", () => {
+	it("writes guide text only from the update path, the template-seeding inserts and the GE-variant swap", () => {
 		const writes = guideWrites();
 		// Non-empty: a sweep that finds nothing proves nothing.
 		expect(writes.length).toBeGreaterThanOrEqual(ALLOWED.length);

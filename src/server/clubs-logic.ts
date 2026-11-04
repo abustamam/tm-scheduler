@@ -6,6 +6,7 @@ import { z } from "zod";
 import { db } from "#/db";
 import { clubs, roleDefinitions } from "#/db/schema";
 import { AGENDA_LAYOUTS, type AgendaLayout } from "#/lib/agenda-layouts";
+import { GE_LOCKED_MESSAGE } from "#/lib/club-agendas-copy";
 import { isClubArchived } from "#/lib/club-archive";
 import {
 	CLUB_TIMEZONES,
@@ -391,8 +392,8 @@ async function swapGeGuidesTx(
 	tx: Pick<typeof db, "update">,
 	clubId: string,
 	from: boolean,
-	to: boolean,
 ): Promise<void> {
+	const to = !from;
 	for (const seed of ROLE_TEMPLATE) {
 		if (seed.geDuringNotes === undefined) continue;
 		const oldText = duringNotesFor(seed, from).trim();
@@ -416,10 +417,23 @@ export async function applyClubAgendaSettingsUpdate(
 ): Promise<{ ok: true }> {
 	await db.transaction(async (tx) => {
 		const [before] = await tx
-			.select({ ge: clubs.geIntroducesFunctionaries })
+			.select({
+				ge: clubs.geIntroducesFunctionaries,
+				defaultTemplateId: clubs.defaultTemplateId,
+			})
 			.from(clubs)
 			.where(eq(clubs.id, input.clubId))
 			.for("update");
+		// The wrapper's `assertGeChangeAllowed` runs outside this transaction, so a
+		// default agenda created in between would slip past it. Re-check under the
+		// row lock, with the same refusal (spec D5).
+		if (
+			before &&
+			before.defaultTemplateId !== null &&
+			before.ge !== input.geIntroducesFunctionaries
+		) {
+			throw new Error(GE_LOCKED_MESSAGE);
+		}
 		const [updated] = await tx
 			.update(clubs)
 			.set({
@@ -439,12 +453,7 @@ export async function applyClubAgendaSettingsUpdate(
 		// #1471. A CHANGE of who introduces the functionaries swaps the two role
 		// guides that say so, from the old variant's seed text to the new one's.
 		if (before && before.ge !== input.geIntroducesFunctionaries) {
-			await swapGeGuidesTx(
-				tx,
-				input.clubId,
-				before.ge,
-				input.geIntroducesFunctionaries,
-			);
+			await swapGeGuidesTx(tx, input.clubId, before.ge);
 		}
 		// #770. Switching the club off closes every open vote in every one of its
 		// meetings, in this transaction — the same reason the meeting switch

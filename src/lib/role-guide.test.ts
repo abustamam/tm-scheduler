@@ -14,7 +14,7 @@ import {
 	rolesGuideUrl,
 	staticRoleSheetHref,
 } from "#/lib/role-guide";
-import { ROLE_TEMPLATE } from "#/lib/role-template";
+import { duringNotesFor, ROLE_TEMPLATE } from "#/lib/role-template";
 import { readSource } from "#/test/guard-source";
 
 describe("roleGuide", () => {
@@ -181,6 +181,27 @@ describe("ROLE_TEMPLATE guide text (#933)", () => {
 		expect(Object.fromEntries(backfilled)).toEqual(
 			Object.fromEntries(expected),
 		);
+	});
+});
+
+describe("GE-variant guide migration parity (#1471)", () => {
+	it("moves each role's standard seed to its GE variant, never the other way", () => {
+		const sqlText = readSource("drizzle/0128_ge_variant_role_guides.sql");
+		const re =
+			/UPDATE "role_definitions" rd SET "during_notes" = '((?:[^']|'')*)' FROM "clubs" c WHERE [^;]*?rd\."key" = '([a-z_]+)' AND btrim\(rd\."during_notes", E' \\t\\r\\n'\) = '((?:[^']|'')*)';/g;
+		const un = (t: string | undefined) => (t ?? "").replace(/''/g, "'");
+		const found = [...sqlText.matchAll(re)];
+		const variants = ROLE_TEMPLATE.filter((r) => r.geDuringNotes !== undefined);
+		expect(found.length).toBe(variants.length);
+		expect(variants.length).toBeGreaterThan(0);
+		for (const seed of variants) {
+			const m = found.find((f) => f[2] === seed.key);
+			if (!m) throw new Error(`no migration statement for ${seed.key}`);
+			expect(un(m[1]), `${seed.key} SET`).toBe(duringNotesFor(seed, true));
+			expect(un(m[3]), `${seed.key} WHERE`).toBe(
+				duringNotesFor(seed, false).trim(),
+			);
+		}
 	});
 });
 

@@ -4,9 +4,10 @@
  * wrote. Covers both the settings save and the one-time data migration.
  */
 import { readFileSync } from "node:fs";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clubs, roleDefinitions } from "#/db/schema";
+import { clubs, meetingTemplates, roleDefinitions } from "#/db/schema";
+import { GE_LOCKED_MESSAGE } from "#/lib/club-agendas-copy";
 import { duringNotesFor, ROLE_TEMPLATE, roleSeed } from "#/lib/role-template";
 import {
 	cleanup,
@@ -82,8 +83,10 @@ describe.skipIf(!hasTestDb)("GE-variant role guides (#1471)", () => {
 		g = await guides(seed.clubId);
 		expect(g.tm?.duringNotes).toBe(TM.duringNotes);
 		expect(g.ge?.duringNotes).toBe(GE.duringNotes);
-		expect(g.tm?.beforeNotes).toBe("BEFORE");
-		expect(g.tm?.description).toBe("DESC");
+		for (const row of [g.tm, g.ge]) {
+			expect(row?.beforeNotes).toBe("BEFORE");
+			expect(row?.description).toBe("DESC");
+		}
 	});
 
 	it.each([
@@ -99,6 +102,11 @@ describe.skipIf(!hasTestDb)("GE-variant role guides (#1471)", () => {
 		expect((await guides(seed.clubId))[which]?.duringNotes).toBe(edited);
 		await save(seed.clubId, false);
 		expect((await guides(seed.clubId))[which]?.duringNotes).toBe(edited);
+		const g = await guides(seed.clubId);
+		for (const row of [g.tm, g.ge]) {
+			expect(row?.beforeNotes).toBe("BEFORE");
+			expect(row?.description).toBe("DESC");
+		}
 	});
 
 	it("a cleared (NULL) guide stays NULL", async () => {
@@ -110,17 +118,66 @@ describe.skipIf(!hasTestDb)("GE-variant role guides (#1471)", () => {
 	});
 
 	it("saving the same value changes no guide", async () => {
+		// OFF club holding the standard text, saved OFF: a swap would move it to the GE text.
 		await seedRoles(seed.clubId, { tm: TM.duringNotes, ge: GE.duringNotes });
 		await save(seed.clubId, false);
-		const g = await guides(seed.clubId);
+		let g = await guides(seed.clubId);
 		expect(g.tm?.duringNotes).toBe(TM.duringNotes);
-		// An ON club whose guide is still the STANDARD text is not rewritten by an ON save.
+		expect(g.ge?.duringNotes).toBe(GE.duringNotes);
+		// ON club holding the GE text, saved ON: a swap would move it back to the standard text.
+		await testDb
+			.update(roleDefinitions)
+			.set({ duringNotes: duringNotesFor(TM, true) })
+			.where(
+				and(
+					eq(roleDefinitions.clubId, seed.clubId),
+					eq(roleDefinitions.key, TM.key),
+				),
+			);
 		await testDb
 			.update(clubs)
 			.set({ geIntroducesFunctionaries: true })
 			.where(eq(clubs.id, seed.clubId));
 		await save(seed.clubId, true);
-		expect((await guides(seed.clubId)).tm?.duringNotes).toBe(TM.duringNotes);
+		g = await guides(seed.clubId);
+		expect(g.tm?.duringNotes).toBe(duringNotesFor(TM, true));
+	});
+
+	it("refuses a change while the club has its own default agenda, and changes no guide", async () => {
+		await seedRoles(seed.clubId, { tm: TM.duringNotes, ge: GE.duringNotes });
+		const [tpl] = await testDb
+			.insert(meetingTemplates)
+			.values({ clubId: seed.clubId, key: "own-agenda", name: "Own agenda" })
+			.returning({ id: meetingTemplates.id });
+		await testDb
+			.update(clubs)
+			.set({ defaultTemplateId: tpl?.id })
+			.where(eq(clubs.id, seed.clubId));
+		await expect(save(seed.clubId, true)).rejects.toThrow(GE_LOCKED_MESSAGE);
+		const g = await guides(seed.clubId);
+		expect(g.tm?.duringNotes).toBe(TM.duringNotes);
+		expect(g.ge?.duringNotes).toBe(GE.duringNotes);
+		const [club] = await testDb
+			.select({ ge: clubs.geIntroducesFunctionaries })
+			.from(clubs)
+			.where(eq(clubs.id, seed.clubId));
+		expect(club?.ge).toBe(false);
+		// Not changing the value still saves.
+		await expect(save(seed.clubId, false)).resolves.toEqual({ ok: true });
+	});
+
+	it("touches only the club that was toggled", async () => {
+		const other = await seedClub();
+		try {
+			await seedRoles(seed.clubId, { tm: TM.duringNotes, ge: GE.duringNotes });
+			await seedRoles(other.clubId, { tm: TM.duringNotes, ge: GE.duringNotes });
+			await save(seed.clubId, true);
+			const o = await guides(other.clubId);
+			expect(o.tm?.duringNotes).toBe(TM.duringNotes);
+			expect(o.ge?.duringNotes).toBe(GE.duringNotes);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
 	});
 
 	it("matches by key, not by the name a club gave the role", async () => {
@@ -128,7 +185,12 @@ describe.skipIf(!hasTestDb)("GE-variant role guides (#1471)", () => {
 		await testDb
 			.update(roleDefinitions)
 			.set({ name: "Host" })
-			.where(eq(roleDefinitions.key, TM.key));
+			.where(
+				and(
+					eq(roleDefinitions.clubId, seed.clubId),
+					eq(roleDefinitions.key, TM.key),
+				),
+			);
 		await save(seed.clubId, true);
 		expect((await guides(seed.clubId)).tm?.duringNotes).toBe(
 			duringNotesFor(TM, true),
@@ -176,16 +238,27 @@ describe.skipIf(!hasTestDb)("GE-variant guides data migration (#1471)", () => {
 		const b = await guides(off.clubId);
 		expect(b.tm?.duringNotes).toBe(TM.duringNotes);
 		expect(b.ge?.duringNotes).toBe(GE.duringNotes);
+		for (const row of [a.tm, a.ge, b.tm, b.ge]) {
+			expect(row?.beforeNotes).toBe("BEFORE");
+			expect(row?.description).toBe("DESC");
+		}
 	});
 
-	it("is the same text as ROLE_TEMPLATE", () => {
+	it("leaves an edited Toastmaster guide in an ON club untouched", async () => {
+		await testDb
+			.update(clubs)
+			.set({ geIntroducesFunctionaries: true })
+			.where(eq(clubs.id, on.clubId));
+		await seedRoles(on.clubId, { tm: "Club edited TM.", ge: GE.duringNotes });
 		const file = readFileSync(
 			"drizzle/0128_ge_variant_role_guides.sql",
 			"utf8",
 		);
-		for (const r of [TM, GE]) {
-			expect(file).toContain(r.geDuringNotes?.replace(/'/g, "''"));
-			expect(file).toContain(r.duringNotes.trim().replace(/'/g, "''"));
+		for (const stmt of file.split(";\n").filter((s) => /UPDATE/.test(s))) {
+			await testDb.execute(sql.raw(stmt));
 		}
+		const a = await guides(on.clubId);
+		expect(a.tm?.duringNotes).toBe("Club edited TM.");
+		expect(a.ge?.duringNotes).toBe(duringNotesFor(GE, true));
 	});
 });
