@@ -207,6 +207,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"set_attendance",
 			"set_awards",
 			"set_my_attendance",
+			"update_meeting_schedule",
 			"upsert_agendas",
 			"whoami",
 		]);
@@ -614,6 +615,11 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			toolsCall("claim_open_role", {
 				meetingId: seed.meetingId,
 				role: "Toastmaster",
+			}),
+			// Preview only (no planHash): writes nothing.
+			toolsCall("update_meeting_schedule", {
+				clubId: seed.clubId,
+				scheduleText: "Tuesdays 7 PM",
 			}),
 		];
 		const rawByTool = new Map<string, string>();

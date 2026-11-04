@@ -103,6 +103,7 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
 | `cancel_meeting` | **writes immediately** | "We're not meeting this Saturday — cancel it." Everyone keeps their role; Claude gets a drafted notice naming the date and every role holder, for you to copy and send |
 | `restore_meeting` | **writes immediately** | "Put Saturday's meeting back." Every role is exactly as it was; possible until the end of the meeting's day |
 | `edit_agenda` | previews, then writes when you approve | "Open with 15 minutes of Introductions so the program starts at 12:15" — add, remove, move or retime agenda rows |
+| `update_meeting_schedule` | previews, then writes when you approve | **Admins and officers.** "Move our standing meeting to 7:30 PM", "our meetings are 60 minutes now" — change the standing time, the schedule line guests see, and/or the default meeting length |
 | `upsert_agendas` | writes nothing — gives you a link | "Set the themes for October's meetings" |
 | `record_guest_book` | writes nothing — gives you a link | "Here's a photo of last night's guest book" |
 
@@ -140,6 +141,22 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
   changed the agenda in between it gets a fresh plan instead. The whole batch applies or none of
   it does. It never changes the meeting's scheduled time, and a completed or cancelled meeting is
   refused. Anything it did is undone in the agenda editor like any other edit.
+- **`update_meeting_schedule` asks twice, and a time change deletes meetings.** The first call
+  writes nothing: it shows old and new for each field you sent, which upcoming meetings will be
+  deleted and recreated at the new time (only meetings nobody has touched, the same ones the
+  app's schedule save replaces: a claimed role, any content, a "not coming", a guest RSVP or
+  invite, or a venue, length, join link or number set on that one meeting all count as touched),
+  and which touched meetings keep their old time
+  (move those one at a time in the app). A meeting is also kept when its length or venue
+  differs from the club's **current** default: meetings copy those values when they are
+  created, so after the club changes its default length or venue, every meeting made before
+  that looks customised. The plan gives these their own note (the default probably changed
+  after the meeting was created) and they stay at the old time, so after a default change a
+  time change moves nothing for them. The schedule line guests see is **never**
+  rewritten unless you send it: after a time change Claude warns that it may be out of date.
+  The default length applies to new meetings only. If anyone touches a meeting in between,
+  nothing is written and Claude gets a fresh plan. It needs an existing standing schedule, switched on,
+  for a time change, and it does not change the weekday or pattern.
 - **`upsert_agendas` and `record_guest_book` never write anything themselves.** They return a
   plan and a **link**. Open the link — on your phone it opens in the browser, so you need to be
   signed in to GavelUp there too — check it against the source (the guest-book page, the

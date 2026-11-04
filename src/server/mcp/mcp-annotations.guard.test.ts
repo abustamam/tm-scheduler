@@ -63,6 +63,7 @@ describe("MCP tool annotations", () => {
 			"set_attendance",
 			"set_awards",
 			"set_my_attendance",
+			"update_meeting_schedule",
 		]);
 	});
 
@@ -78,6 +79,7 @@ describe("MCP tool annotations", () => {
 			"set_attendance",
 			"set_awards",
 			"set_my_attendance",
+			"update_meeting_schedule",
 		]);
 	});
 });

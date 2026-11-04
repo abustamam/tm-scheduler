@@ -8,6 +8,7 @@ import { clubs, roleDefinitions } from "#/db/schema";
 import { AGENDA_LAYOUTS, type AgendaLayout } from "#/lib/agenda-layouts";
 import { GE_LOCKED_MESSAGE } from "#/lib/club-agendas-copy";
 import { isClubArchived } from "#/lib/club-archive";
+import { normalizeScheduleText } from "#/lib/club-schedule-settings";
 import {
 	CLUB_TIMEZONES,
 	DEFAULT_CLUB_TIMEZONE,
@@ -270,6 +271,41 @@ export async function applyClubProfileUpdate(input: ClubProfileInput) {
 			}),
 			defaultCountryCode: input.defaultCountryCode ?? null,
 		})
+		.where(eq(clubs.id, input.clubId))
+		.returning({ id: clubs.id });
+	if (!updated) throw new Error("Club not found.");
+	return { ok: true as const };
+}
+
+/**
+ * SPARSE write of the two club-level schedule columns (#1514): the free-text
+ * schedule line and the default meeting length. OMITTED leaves the stored value
+ * alone, which is the difference from `applyClubProfileUpdate` above — that one
+ * replaces district and mission with null when they are not sent, so it cannot
+ * carry a schedule-only edit. `meetingSchedule` null clears the line; blank text
+ * collapses to null like every other profile field. The length is copied onto
+ * NEW meetings only (copy-at-insert), so existing meetings never move. Caller
+ * enforces the admin and archive gates.
+ */
+export async function applyClubScheduleSettingsUpdate(
+	input: {
+		clubId: string;
+		meetingSchedule?: string | null;
+		defaultMeetingMinutes?: number;
+	},
+	conn: DbOrTx = db,
+): Promise<{ ok: true }> {
+	const set: Partial<typeof clubs.$inferInsert> = {};
+	if (input.meetingSchedule !== undefined) {
+		set.meetingSchedule = normalizeScheduleText(input.meetingSchedule);
+	}
+	if (input.defaultMeetingMinutes !== undefined) {
+		set.defaultMeetingMinutes = input.defaultMeetingMinutes;
+	}
+	if (Object.keys(set).length === 0) return { ok: true as const };
+	const [updated] = await conn
+		.update(clubs)
+		.set(set)
 		.where(eq(clubs.id, input.clubId))
 		.returning({ id: clubs.id });
 	if (!updated) throw new Error("Club not found.");
