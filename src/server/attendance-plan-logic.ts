@@ -696,7 +696,8 @@ export async function deletePlanRowsOfEndedMember(
  * never on a re-apply (so an answer a member cleared is not revived), and the
  * insert is `ON CONFLICT DO NOTHING`, so a member's own answer is never
  * overwritten. A second caller must meet the same four conditions. The caller
- * is superadmin only and decides which meetings and which members; this function
+ * (run by a superadmin or that club's admin, #1492) decides which meetings and
+ * which members; this function
  * trusts its `memberId`s to be members of the meeting's club, exactly as
  * `setPlanStatus` does.
  *
