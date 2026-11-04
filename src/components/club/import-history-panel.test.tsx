@@ -869,6 +869,41 @@ describe("ImportHistoryPanel upcoming meetings (#1495)", () => {
 		);
 	});
 
+	it("labels the numbers 'up to' while the box is unticked (S3)", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue(previewWith(true));
+		await openImport();
+		const summary = await screen.findByTestId("import-upcoming-summary");
+		expect(summary.textContent).not.toContain("up to");
+		fireEvent.click(box());
+		await waitFor(() =>
+			expect(
+				screen.getByTestId("import-upcoming-summary").textContent,
+			).toContain(
+				"create up to 2, fill up to 1 already in GavelUp, leave 1 as they are; place up to 30 role holders and up to 20 RSVPs",
+			),
+		);
+	});
+
+	it("shows the report's upcoming notes beside the contact notes (S3)", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue({
+			...previewWith(false),
+			report: {
+				reconciled: true,
+				counts: [],
+				meetings: { applied: 1, failed: [] },
+				notImported: [],
+				skippedPeople: [],
+				created: { guests: 0, roleDefinitions: [] },
+				upcomingNotes: [
+					"Easy-Speak has the meeting at 19:00; GavelUp's 11:00 stands.",
+				],
+			},
+		});
+		await openImport();
+		const notes = await screen.findByTestId("report-upcoming-notes");
+		expect(notes.textContent).toContain("GavelUp's 11:00 stands");
+	});
+
 	it("sends the Add or Skip answer with the preview and the apply", async () => {
 		fns.previewEasySpeakImport.mockResolvedValue(previewWith(true));
 		fns.applyEasySpeakImport.mockResolvedValue({

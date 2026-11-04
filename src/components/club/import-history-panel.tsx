@@ -1101,6 +1101,16 @@ function ReportView({ report }: { report: ImportReport }) {
 					: ""}
 				.
 			</p>
+			{report.upcomingNotes && report.upcomingNotes.length > 0 ? (
+				<div className="text-sm" data-testid="report-upcoming-notes">
+					<p className="font-semibold">Upcoming meetings</p>
+					<ul className="list-disc pl-5">
+						{report.upcomingNotes.map((n) => (
+							<li key={n}>{n}</li>
+						))}
+					</ul>
+				</div>
+			) : null}
 			{report.contactNotes && report.contactNotes.length > 0 ? (
 				<div className="text-sm" data-testid="report-contact-notes">
 					<p className="font-semibold">Contacts left out</p>
@@ -1138,6 +1148,8 @@ function UpcomingSection({
 	onSkip: (planKey: string, skip: boolean) => void;
 }) {
 	const fill = upcoming.toAdopt + upcoming.toUpdate;
+	// Unticked, nothing is removed and these are what ticking could do at most.
+	const upTo = include ? "" : "up to ";
 	return (
 		<div className="space-y-2" data-testid="import-upcoming">
 			<label className="flex items-center gap-2 text-sm font-semibold">
@@ -1149,10 +1161,12 @@ function UpcomingSection({
 				Import upcoming meetings
 			</label>
 			<p className="text-sm" data-testid="import-upcoming-summary">
-				Upcoming: create {upcoming.toCreate}, fill {fill} already in GavelUp,
-				leave {upcoming.leftAlone.length} as they are; place{" "}
+				Upcoming: create {upTo}
+				{upcoming.toCreate}, fill {upTo}
+				{fill} already in GavelUp, leave {upcoming.leftAlone.length} as they
+				are; place {upTo}
 				{upcoming.roleAssignments} role{" "}
-				{upcoming.roleAssignments === 1 ? "holder" : "holders"} and{" "}
+				{upcoming.roleAssignments === 1 ? "holder" : "holders"} and {upTo}
 				{upcoming.rsvps} {upcoming.rsvps === 1 ? "RSVP" : "RSVPs"}.
 			</p>
 			{upcoming.leftAlone.length > 0 || upcoming.timeNotes.length > 0 ? (
