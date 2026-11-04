@@ -8,6 +8,7 @@ import { clubs, roleDefinitions } from "#/db/schema";
 import { AGENDA_LAYOUTS, type AgendaLayout } from "#/lib/agenda-layouts";
 import { GE_LOCKED_MESSAGE } from "#/lib/club-agendas-copy";
 import { isClubArchived } from "#/lib/club-archive";
+import { normalizeScheduleText } from "#/lib/club-schedule-settings";
 import {
 	CLUB_TIMEZONES,
 	DEFAULT_CLUB_TIMEZONE,
@@ -286,21 +287,23 @@ export async function applyClubProfileUpdate(input: ClubProfileInput) {
  * NEW meetings only (copy-at-insert), so existing meetings never move. Caller
  * enforces the admin and archive gates.
  */
-export async function applyClubScheduleSettingsUpdate(input: {
-	clubId: string;
-	meetingSchedule?: string | null;
-	defaultMeetingMinutes?: number;
-}): Promise<{ ok: true }> {
+export async function applyClubScheduleSettingsUpdate(
+	input: {
+		clubId: string;
+		meetingSchedule?: string | null;
+		defaultMeetingMinutes?: number;
+	},
+	conn: DbOrTx = db,
+): Promise<{ ok: true }> {
 	const set: Partial<typeof clubs.$inferInsert> = {};
 	if (input.meetingSchedule !== undefined) {
-		const trimmed = input.meetingSchedule?.trim() ?? "";
-		set.meetingSchedule = trimmed.length === 0 ? null : trimmed;
+		set.meetingSchedule = normalizeScheduleText(input.meetingSchedule);
 	}
 	if (input.defaultMeetingMinutes !== undefined) {
 		set.defaultMeetingMinutes = input.defaultMeetingMinutes;
 	}
 	if (Object.keys(set).length === 0) return { ok: true as const };
-	const [updated] = await db
+	const [updated] = await conn
 		.update(clubs)
 		.set(set)
 		.where(eq(clubs.id, input.clubId))

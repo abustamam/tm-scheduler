@@ -144,12 +144,14 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
 - **`update_meeting_schedule` asks twice, and a time change deletes meetings.** The first call
   writes nothing: it shows old and new for each field you sent, which upcoming meetings will be
   deleted and recreated at the new time (only meetings nobody has touched, the same ones the
-  app's schedule save replaces), and which touched meetings keep their old time
+  app's schedule save replaces: a claimed role, any content, a "not coming", a guest RSVP or
+  invite, or a venue, length, join link or number set on that one meeting all count as touched),
+  and which touched meetings keep their old time
   (move those one at a time in the app). The schedule line guests see is **never**
   rewritten unless you send it: after a time change Claude warns that it may be out of date.
   The default length applies to new meetings only. If anyone touches a meeting in between,
-  nothing is written and Claude gets a fresh plan. It needs an existing standing schedule for a
-  time change, and it does not change the weekday or pattern.
+  nothing is written and Claude gets a fresh plan. It needs an existing standing schedule, switched on,
+  for a time change, and it does not change the weekday or pattern.
 - **`upsert_agendas` and `record_guest_book` never write anything themselves.** They return a
   plan and a **link**. Open the link — on your phone it opens in the browser, so you need to be
   signed in to GavelUp there too — check it against the source (the guest-book page, the

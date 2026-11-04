@@ -11,7 +11,10 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	guestInvites,
+	guests,
 	meetingAttendancePlan,
+	meetingGuestRsvps,
 	meetings,
 	meetingTemplateRoles,
 	meetingTemplates,
@@ -25,13 +28,25 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+// Pass-through; one test makes the top-up throw to prove the save is atomic.
+vi.mock("./schedule-topup-logic", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("./schedule-topup-logic")>();
+	return {
+		...actual,
+		ensureScheduleToppedUp: vi.fn(actual.ensureScheduleToppedUp),
+	};
+});
 
 const { saveRecurrenceRule, getRecurrenceRule, findPristineEmptyMeetingIds } =
 	await import("./recurrence-rule-logic");
 const { applyTemplateConversion } = await import("./meeting-templates-logic");
+const { ensureScheduleToppedUp } = await import("./schedule-topup-logic");
+const { lockRecurrenceRule } = await import("./recurrence-rule-logic");
 
 const TZ = "America/Chicago";
 const NOW = new Date("2026-06-01T12:00:00Z");
@@ -377,6 +392,139 @@ describe.skipIf(!hasTestDb)(
 						.from(roleDefinitions)
 						.where(eq(roleDefinitions.id, banked[0]?.id ?? "")),
 				).toHaveLength(1);
+			});
+		});
+
+		// #1514 risk review: what a time change must never delete, through the web
+		// save (the same predicate guards `update_meeting_schedule`).
+		describe("a time change keeps what the top-up did not create", () => {
+			const retimed = { ...weeklyThursday, timeOfDay: "19:30" };
+
+			async function seedWeek() {
+				await saveRecurrenceRule(club.clubId, weeklyThursday, NOW);
+				const before = await futureScheduled(club.clubId);
+				const target = before[1];
+				if (!target) throw new Error("no meeting seeded");
+				return { before, target };
+			}
+			async function ids() {
+				return (await futureScheduled(club.clubId)).map((r) => r.id);
+			}
+			async function guest() {
+				const [g] = await testDb
+					.insert(guests)
+					.values(
+						await withGuestPerson({ clubId: club.clubId, name: "Visiting Vi" }),
+					)
+					.returning({ id: guests.id });
+				if (!g) throw new Error("no guest");
+				return g.id;
+			}
+
+			it("control: an untouched top-up meeting IS recreated at the new time", async () => {
+				const { before } = await seedWeek();
+				await saveRecurrenceRule(club.clubId, retimed, NOW);
+				const after = await ids();
+				expect(after.some((id) => before.some((b) => b.id === id))).toBe(false);
+				expect(after).toHaveLength(4);
+			});
+
+			it("a guest RSVP keeps the meeting and its RSVP", async () => {
+				const { target } = await seedWeek();
+				const guestId = await guest();
+				await testDb.insert(meetingGuestRsvps).values({
+					clubId: club.clubId,
+					meetingId: target.id,
+					guestId,
+					clientKey: crypto.randomUUID(),
+				});
+				await saveRecurrenceRule(club.clubId, retimed, NOW);
+				expect(await ids()).toContain(target.id);
+				expect(
+					await testDb
+						.select({ id: meetingGuestRsvps.id })
+						.from(meetingGuestRsvps)
+						.where(eq(meetingGuestRsvps.meetingId, target.id)),
+				).toHaveLength(1);
+			});
+
+			it("a guest invite keeps the meeting and its invite", async () => {
+				const { target } = await seedWeek();
+				const guestId = await guest();
+				await testDb.insert(guestInvites).values({
+					clubId: club.clubId,
+					meetingId: target.id,
+					guestId,
+				});
+				await saveRecurrenceRule(club.clubId, retimed, NOW);
+				expect(await ids()).toContain(target.id);
+				expect(
+					await testDb
+						.select({ id: guestInvites.id })
+						.from(guestInvites)
+						.where(eq(guestInvites.meetingId, target.id)),
+				).toHaveLength(1);
+			});
+
+			it.each([
+				["location", { location: "Zoom room" }],
+				["length", { lengthMinutes: 45 }],
+				["join link", { joinUrl: "https://example.com/join" }],
+				["meeting number", { meetingNumber: 77 }],
+			])("a per-meeting %s override keeps the meeting", async (_l, patch) => {
+				const { target } = await seedWeek();
+				await testDb
+					.update(meetings)
+					.set(patch)
+					.where(eq(meetings.id, target.id));
+				await saveRecurrenceRule(club.clubId, retimed, NOW);
+				const after = await futureScheduled(club.clubId);
+				const kept = after.find((r) => r.id === target.id);
+				expect(kept).toBeDefined();
+				expect(
+					utcToZonedWallTime(kept?.scheduledAt as Date, TZ).slice(11, 16),
+				).toBe("18:45");
+			});
+
+			it("a failure in the top-up rolls back the delete and the rule save (one transaction)", async () => {
+				const { before } = await seedWeek();
+				vi.mocked(ensureScheduleToppedUp).mockRejectedValueOnce(
+					new Error("boom in the top-up"),
+				);
+				await expect(
+					saveRecurrenceRule(club.clubId, retimed, NOW),
+				).rejects.toThrow("boom in the top-up");
+				expect(await ids()).toEqual(before.map((b) => b.id));
+				expect((await getRecurrenceRule(club.clubId))?.timeOfDay).toBe("18:45");
+			});
+
+			it("a save waits for a transaction that holds the rule's row lock", async () => {
+				await seedWeek();
+				let release: () => void = () => {};
+				const held = new Promise<void>((r) => {
+					release = r;
+				});
+				let locked: () => void = () => {};
+				const gotLock = new Promise<void>((r) => {
+					locked = r;
+				});
+				const holder = testDb.transaction(async (tx) => {
+					await lockRecurrenceRule(tx, club.clubId);
+					locked();
+					await held;
+				});
+				await gotLock;
+				let settled = false;
+				const save = saveRecurrenceRule(club.clubId, retimed, NOW).then(() => {
+					settled = true;
+				});
+				await new Promise((r) => setTimeout(r, 400));
+				expect(settled).toBe(false);
+				release();
+				await holder;
+				await save;
+				expect(settled).toBe(true);
+				expect((await getRecurrenceRule(club.clubId))?.timeOfDay).toBe("19:30");
 			});
 		});
 	},

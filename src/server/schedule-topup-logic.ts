@@ -26,6 +26,90 @@ export interface TopUpResult {
 	created: number;
 }
 
+/** The pool or an open transaction (#1514: the rule save runs in one). */
+export type DbOrTx =
+	| typeof db
+	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+/**
+ * What the top-up gives a meeting it creates, beyond its date. THE definition
+ * of "untouched": `findPristineEmptyMeetingIds` compares a meeting against
+ * exactly these values, so an officer's per-meeting override (a venue, a
+ * length, a join link, a typed meeting number) is never mistaken for a default.
+ * `joinUrl` and `meetingNumber` are never written at insert (the number is
+ * derived for display until a human types one, or the meeting completes).
+ */
+export function newMeetingDefaults(
+	rule: { location: string | null },
+	club: { defaultMeetingMinutes: number; defaultLocation: string | null },
+): {
+	lengthMinutes: number;
+	location: string | null;
+	joinUrl: null;
+	meetingNumber: null;
+} {
+	return {
+		lengthMinutes: club.defaultMeetingMinutes,
+		location: effectiveLocation(rule.location, club.defaultLocation),
+		joinUrl: null,
+		meetingNumber: null,
+	};
+}
+
+/**
+ * The instants the top-up would create: the slot logic, pure. `existing` is
+ * every meeting of the club (any status keeps its local date taken; future
+ * `scheduled` ones count toward `keepAhead`). `ensureScheduleToppedUp` creates
+ * exactly this list, and `update_meeting_schedule` plans its replacements from
+ * it, so the plan cannot promise a meeting the apply will not create.
+ */
+export function planTopUpInstants(input: {
+	rule: Parameters<typeof buildTopUpRecurrenceInput>[0] & {
+		keepAhead: number;
+		enabled: boolean;
+	};
+	timezone: string;
+	existing: { scheduledAt: Date; status: string }[];
+	now: Date;
+}): Date[] {
+	const { rule, timezone, existing, now } = input;
+	if (!rule.enabled) return [];
+	// Existing meetings: count FUTURE `scheduled` toward keep_ahead; every meeting
+	// of ANY status occupies its local calendar date (a cancelled meeting keeps
+	// its date reserved — cancellation is the skip mechanism).
+	const takenDates = new Set(
+		existing.map((m) =>
+			utcToZonedWallTime(m.scheduledAt, timezone).slice(0, 10),
+		),
+	);
+	const futureScheduled = existing.filter(
+		(m) => m.status === "scheduled" && m.scheduledAt.getTime() > now.getTime(),
+	).length;
+
+	const needed = rule.keepAhead - futureScheduled;
+	if (needed <= 0) return [];
+
+	// Generate a window of upcoming occurrences from the rule, starting on/after
+	// today's local date, then take the first `needed` that are strictly in the
+	// future and not already taken.
+	const notBefore = utcToZonedWallTime(now, timezone).slice(0, 10);
+	const { occurrences } = generateOccurrences(
+		buildTopUpRecurrenceInput(rule, notBefore),
+	);
+
+	const toCreate: Date[] = [];
+	const claimed = new Set(takenDates);
+	for (const occ of occurrences) {
+		if (toCreate.length >= needed) break;
+		if (claimed.has(occ.date)) continue; // date already occupied — skip
+		const instant = zonedWallTimeToUtc(occ.wallTime, timezone);
+		if (instant.getTime() <= now.getTime()) continue; // must be future
+		claimed.add(occ.date);
+		toCreate.push(instant);
+	}
+	return toCreate;
+}
+
 /**
  * Ensure the club's calendar holds `keep_ahead` future `scheduled` meetings,
  * generating the missing ones from the standing rule. No-op when the club has
@@ -36,19 +120,19 @@ export interface TopUpResult {
 export async function ensureScheduleToppedUp(
 	clubId: string,
 	now: Date = new Date(),
+	conn: DbOrTx = db,
 ): Promise<TopUpResult> {
-	const rule = await db.query.clubMeetingRecurrence.findFirst({
+	const rule = await conn.query.clubMeetingRecurrence.findFirst({
 		where: eq(clubMeetingRecurrence.clubId, clubId),
 	});
 	if (!rule || !rule.enabled) return { created: 0 };
 
-	const club = await db.query.clubs.findFirst({ where: eq(clubs.id, clubId) });
+	const club = await conn.query.clubs.findFirst({
+		where: eq(clubs.id, clubId),
+	});
 	if (!club) return { created: 0 };
 
-	// Existing meetings: count FUTURE `scheduled` toward keep_ahead; every meeting
-	// of ANY status occupies its local calendar date (a cancelled meeting keeps
-	// its date reserved — cancellation is the skip mechanism).
-	const existing = await db
+	const existing = await conn
 		.select({
 			scheduledAt: meetings.scheduledAt,
 			status: meetings.status,
@@ -56,19 +140,15 @@ export async function ensureScheduleToppedUp(
 		.from(meetings)
 		.where(eq(meetings.clubId, clubId));
 
-	const takenDates = new Set(
-		existing.map((m) =>
-			utcToZonedWallTime(m.scheduledAt, club.timezone).slice(0, 10),
-		),
-	);
-	const futureScheduled = existing.filter(
-		(m) => m.status === "scheduled" && m.scheduledAt.getTime() > now.getTime(),
-	).length;
+	const toCreate = planTopUpInstants({
+		rule,
+		timezone: club.timezone,
+		existing,
+		now,
+	});
+	if (toCreate.length === 0) return { created: 0 };
 
-	const needed = rule.keepAhead - futureScheduled;
-	if (needed <= 0) return { created: 0 };
-
-	const defs = await db
+	const defs = await conn
 		.select()
 		.from(roleDefinitions)
 		// The club's whole BANK, and `standing` is what keeps a contest role off an
@@ -86,35 +166,17 @@ export async function ensureScheduleToppedUp(
 		.where(eq(roleDefinitions.clubId, clubId))
 		.orderBy(asc(roleDefinitions.sortOrder));
 
-	// Generate a window of upcoming occurrences from the rule, starting on/after
-	// today's local date, then take the first `needed` that are strictly in the
-	// future and not already taken.
-	const notBefore = utcToZonedWallTime(now, club.timezone).slice(0, 10);
-	const input = buildTopUpRecurrenceInput(rule, notBefore);
-	const { occurrences } = generateOccurrences(input);
-
-	const toCreate: Date[] = [];
-	const claimed = new Set(takenDates);
-	for (const occ of occurrences) {
-		if (toCreate.length >= needed) break;
-		if (claimed.has(occ.date)) continue; // date already occupied — skip
-		const instant = zonedWallTimeToUtc(occ.wallTime, club.timezone);
-		if (instant.getTime() <= now.getTime()) continue; // must be future
-		claimed.add(occ.date);
-		toCreate.push(instant);
-	}
-	if (toCreate.length === 0) return { created: 0 };
-
+	const defaults = newMeetingDefaults(rule, club);
 	let created = 0;
-	await db.transaction(async (tx) => {
+	await conn.transaction(async (tx) => {
 		for (const scheduledAt of toCreate) {
 			const id = await insertMeetingWithSlots(
 				tx,
 				{
 					clubId,
 					scheduledAt,
-					lengthMinutes: club.defaultMeetingMinutes,
-					location: effectiveLocation(rule.location, club.defaultLocation),
+					lengthMinutes: defaults.lengthMinutes,
+					location: defaults.location,
 				},
 				defs,
 			);

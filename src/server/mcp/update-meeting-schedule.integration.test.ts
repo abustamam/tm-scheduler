@@ -12,6 +12,9 @@ import {
 	apiTokens,
 	clubMeetingRecurrence,
 	clubs,
+	guestInvites,
+	guests,
+	meetingGuestRsvps,
 	meetings,
 	roleSlots,
 } from "#/db/schema";
@@ -23,9 +26,20 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+// Pass-through, so one test can make the top-up throw AFTER the club columns
+// were written and see the transaction roll them back.
+vi.mock("#/server/schedule-topup-logic", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("#/server/schedule-topup-logic")>();
+	return {
+		...actual,
+		ensureScheduleToppedUp: vi.fn(actual.ensureScheduleToppedUp),
+	};
+});
 
 const { updateMeetingScheduleTool } = await import(
 	"#/server/mcp/tools/update-meeting-schedule"
@@ -37,6 +51,9 @@ const { saveRecurrenceRule, getRecurrenceRule } = await import(
 );
 const { ensureScheduleToppedUp } = await import(
 	"#/server/schedule-topup-logic"
+);
+const { SWITCHED_OFF_MESSAGE } = await import(
+	"#/server/mcp/tools/update-meeting-schedule"
 );
 
 const TZ = "America/Chicago";
@@ -67,6 +84,13 @@ interface Result {
 			time: string;
 			newTime: string;
 		}[];
+		removedWithoutReplacement: {
+			meetingId: string;
+			date: string;
+			time: string;
+		}[];
+		created: { date: string; time: string }[];
+		lengthForNewMeetings: number;
 		staying: { meetingId: string; date: string; time: string; note: string }[];
 		warnings: string[];
 		currentScheduleText: string | null;
@@ -249,7 +273,11 @@ describe.skipIf(!hasTestDb)("update_meeting_schedule (#1514)", () => {
 			apply(input, p.planHash as string),
 			"PLAN_STALE",
 		);
-		expect(JSON.stringify(err)).not.toBe("");
+		const detail = err.detail as { plan: Result["plan"]; planHash: string };
+		expect(detail.planHash).toMatch(/^[0-9a-f]{64}$/);
+		expect(detail.planHash).not.toBe(p.planHash);
+		// The fresh plan names the newly touched meeting as staying.
+		expect(detail.plan.staying.map((m) => m.meetingId)).toEqual([before[2].id]);
 		expect((await future()).map((m) => m.id)).toEqual(before.map((m) => m.id));
 		expect((await getRecurrenceRule(seed.clubId))?.timeOfDay).toBe("18:45");
 	});
@@ -364,12 +392,226 @@ describe.skipIf(!hasTestDb)("update_meeting_schedule (#1514)", () => {
 		await expectMcpError(call(adminToken, input), "VALIDATION");
 	});
 
-	it("a switched-off schedule warns that deleted meetings will not be recreated", async () => {
+	it("refuses a time change while the schedule is switched off, and writes nothing", async () => {
 		await testDb
 			.update(clubMeetingRecurrence)
 			.set({ enabled: false })
 			.where(eq(clubMeetingRecurrence.clubId, seed.clubId));
+		const before = await snapshot();
+		const err = await expectMcpError(
+			call(adminToken, { timeOfDay: "19:30" }),
+			"VALIDATION",
+		);
+		expect(err.message).toBe(SWITCHED_OFF_MESSAGE);
+		expect(err.message).toContain("in the app first");
+		expect(await snapshot()).toEqual(before);
+		// The other fields do not need the schedule on.
+		const p = await preview({ defaultMeetingMinutes: 45 });
+		expect(p.plan.changes.defaultMeetingMinutes).toEqual({ from: 90, to: 45 });
+	});
+
+	it("a member sending invalid input gets FORBIDDEN, not the bounds", async () => {
+		await expectMcpError(
+			call(memberToken, { defaultMeetingMinutes: 100000 }),
+			"FORBIDDEN",
+		);
+		await expectMcpError(call(memberToken, {}), "FORBIDDEN");
+		await expectMcpError(
+			call(memberToken, { scheduleText: "x".repeat(201) }),
+			"FORBIDDEN",
+		);
+		// An officer still sees the bound.
+		await expectMcpError(
+			call(adminToken, { defaultMeetingMinutes: 1441 }),
+			"VALIDATION",
+		);
+		// The edge itself is accepted.
+		const ok = await preview({ defaultMeetingMinutes: 1440 });
+		expect(ok.plan.changes.defaultMeetingMinutes).toEqual({
+			from: 90,
+			to: 1440,
+		});
+		const text = await preview({ scheduleText: "x".repeat(200) });
+		expect(text.plan.changes.scheduleText?.to).toHaveLength(200);
+		await expectMcpError(
+			call(adminToken, { scheduleText: "x".repeat(201) }),
+			"VALIDATION",
+		);
+	});
+
+	it("a guest RSVP or invite keeps its meeting: listed as staying, not deleted", async () => {
+		const before = await future();
+		const [g] = await testDb
+			.insert(guests)
+			.values(
+				await withGuestPerson({ clubId: seed.clubId, name: "Visiting Vi" }),
+			)
+			.returning({ id: guests.id });
+		const guestId = (g as { id: string }).id;
+		await testDb.insert(meetingGuestRsvps).values({
+			clubId: seed.clubId,
+			meetingId: before[0].id,
+			guestId,
+			clientKey: randomUUID(),
+		});
+		await testDb.insert(guestInvites).values({
+			clubId: seed.clubId,
+			meetingId: before[1].id,
+			guestId,
+		});
+
+		const input = { timeOfDay: "19:30" };
+		const p = await preview(input);
+		expect(p.plan.staying.map((m) => m.meetingId).sort()).toEqual(
+			[before[0].id, before[1].id].sort(),
+		);
+		expect(p.plan.recreated).toHaveLength(2);
+		await apply(input, p.planHash as string);
+		const after = (await future()).map((m) => m.id);
+		expect(after).toContain(before[0].id);
+		expect(after).toContain(before[1].id);
+		expect(
+			await testDb
+				.select()
+				.from(meetingGuestRsvps)
+				.where(eq(meetingGuestRsvps.meetingId, before[0].id)),
+		).toHaveLength(1);
+		expect(
+			await testDb
+				.select()
+				.from(guestInvites)
+				.where(eq(guestInvites.meetingId, before[1].id)),
+		).toHaveLength(1);
+	});
+
+	it.each([
+		["location", { location: "Zoom room" }],
+		["length", { lengthMinutes: 45 }],
+		["join link", { joinUrl: "https://example.com/join" }],
+		["meeting number", { meetingNumber: 77 }],
+	])("a per-meeting %s override is listed as staying, not deleted", async (_l, patch) => {
+		const before = await future();
+		await testDb
+			.update(meetings)
+			.set(patch)
+			.where(eq(meetings.id, before[2].id));
+		const input = { timeOfDay: "19:30" };
+		const p = await preview(input);
+		expect(p.plan.staying.map((m) => m.meetingId)).toEqual([before[2].id]);
+		expect(p.plan.recreated.map((m) => m.meetingId)).not.toContain(
+			before[2].id,
+		);
+		await apply(input, p.planHash as string);
+		expect((await future()).map((m) => m.id)).toContain(before[2].id);
+	});
+
+	it("a failure after the club columns are written rolls everything back", async () => {
+		const before = await snapshot();
+		vi.mocked(ensureScheduleToppedUp).mockRejectedValueOnce(
+			new Error("boom after the club write"),
+		);
+		const input = {
+			timeOfDay: "19:30",
+			scheduleText: "Thursdays, 7:30 PM",
+			defaultMeetingMinutes: 60,
+		};
+		const p = await preview(input);
+		await expect(apply(input, p.planHash as string)).rejects.toThrow(
+			"boom after the club write",
+		);
+		const after = await snapshot();
+		expect(after.club?.meetingSchedule).toBe("Thursdays, 6:45 PM");
+		expect(after.club?.defaultMeetingMinutes).toBe(90);
+		expect(after).toEqual(before);
+	});
+
+	it("today's meeting moved to a time that has passed by apply is PLAN_STALE, and nothing is deleted", async () => {
+		// Thursday 2027-03-04, 17:55 Chicago (CST, UTC-6).
+		vi.setSystemTime(new Date("2027-03-04T23:55:00Z"));
+		const before = await future();
+		const today = before.find(
+			(m) =>
+				utcToZonedWallTime(m.scheduledAt, TZ).slice(0, 10) === "2027-03-04",
+		);
+		expect(today).toBeDefined();
+		const input = { timeOfDay: "18:00" };
+		const p = await preview(input);
+		expect(p.plan.recreated.map((m) => m.date)).toContain("2027-03-04");
+		expect(p.plan.created.map((c) => c.date)).toContain("2027-03-04");
+
+		// 18:05: the 18:00 slot has gone; today's old 18:45 meeting still exists.
+		vi.setSystemTime(new Date("2027-03-05T00:05:00Z"));
+		const err = await expectMcpError(
+			apply(input, p.planHash as string),
+			"PLAN_STALE",
+		);
+		const detail = err.detail as { plan: Result["plan"] };
+		expect(detail.plan.created.map((c) => c.date)).not.toContain("2027-03-04");
+		expect(detail.plan.removedWithoutReplacement.map((m) => m.date)).toEqual([
+			"2027-03-04",
+		]);
+		expect((await future()).map((m) => m.id)).toEqual(before.map((m) => m.id));
+		expect((await getRecurrenceRule(seed.clubId))?.timeOfDay).toBe("18:45");
+	});
+
+	it("a default length changed between preview and apply is PLAN_STALE, even for a time-only preview", async () => {
+		const input = { timeOfDay: "19:30" };
+		const p = await preview(input);
+		expect(p.plan.lengthForNewMeetings).toBe(90);
+		await testDb
+			.update(clubs)
+			.set({ defaultMeetingMinutes: 60 })
+			.where(eq(clubs.id, seed.clubId));
+		const err = await expectMcpError(
+			apply(input, p.planHash as string),
+			"PLAN_STALE",
+		);
+		const detail = err.detail as { plan: Result["plan"] };
+		expect(detail.plan.lengthForNewMeetings).toBe(60);
+	});
+
+	it("a time change and a new default length together: recreated meetings get the new length", async () => {
+		const input = { timeOfDay: "19:30", defaultMeetingMinutes: 60 };
+		const p = await preview(input);
+		expect(p.plan.lengthForNewMeetings).toBe(60);
+		await apply(input, p.planHash as string);
+		const after = await future();
+		expect(after).toHaveLength(4);
+		expect(after.map((m) => m.lengthMinutes)).toEqual([60, 60, 60, 60]);
+		expect(after.map((m) => localTime(m.scheduledAt))).toEqual(
+			Array(4).fill("19:30"),
+		);
+	});
+
+	it("an apply returns the created count; the summary is singular for one meeting and plural for several", async () => {
+		const plural = await preview({ timeOfDay: "19:30" });
+		expect(plural.summary).toContain("4 meetings recreated");
+		const out = await apply({ timeOfDay: "19:30" }, plural.planHash as string);
+		expect(out.created).toBe(4);
+
+		// Touch three of the four, so exactly one is recreated.
+		const now = await future();
+		for (const m of now.slice(0, 3)) {
+			await testDb
+				.update(roleSlots)
+				.set({ assignedMemberId: seed.memberId, status: "claimed" })
+				.where(eq(roleSlots.meetingId, m.id));
+		}
+		const one = await preview({ timeOfDay: "20:15" });
+		expect(one.summary).toContain("1 meeting recreated");
+		expect(one.summary).not.toContain("1 meetings");
+		const out2 = await apply({ timeOfDay: "20:15" }, one.planHash as string);
+		expect(out2.created).toBe(1);
+	});
+
+	it("warns that no schedule line is set when there is none to go stale", async () => {
+		await testDb
+			.update(clubs)
+			.set({ meetingSchedule: null })
+			.where(eq(clubs.id, seed.clubId));
 		const p = await preview({ timeOfDay: "19:30" });
-		expect(p.plan.warnings.join(" ")).toContain("switched off");
+		expect(p.plan.warnings).toEqual([
+			"No schedule line is set for guests, so nothing there can be out of date.",
+		]);
 	});
 });

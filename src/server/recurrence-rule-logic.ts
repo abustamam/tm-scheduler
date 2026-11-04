@@ -8,12 +8,23 @@
 // meetings off the old pattern (manual/one-off) are never deleted.
 import { and, asc, eq, gt, inArray, isNotNull, or } from "drizzle-orm";
 import { db } from "#/db";
-import { clubMeetingRecurrence, clubs, meetings, roleSlots } from "#/db/schema";
+import {
+	clubMeetingRecurrence,
+	clubs,
+	guestInvites,
+	meetingGuestRsvps,
+	meetings,
+	roleSlots,
+} from "#/db/schema";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { generateOccurrences } from "#/lib/meeting-recurrence";
 import { buildTopUpRecurrenceInput } from "#/lib/recurrence-rule";
 import { listNotComingForMeetings } from "./attendance-plan-logic";
-import { ensureScheduleToppedUp } from "./schedule-topup-logic";
+import {
+	type DbOrTx,
+	ensureScheduleToppedUp,
+	newMeetingDefaults,
+} from "./schedule-topup-logic";
 
 /** The rule shape the CRUD accepts (pre-normalization). */
 export interface RecurrenceRuleInput {
@@ -40,8 +51,9 @@ function normalize(input: RecurrenceRuleInput): RecurrenceRuleInput {
 /** Load a club's standing rule, or null. */
 export async function getRecurrenceRule(
 	clubId: string,
+	conn: DbOrTx = db,
 ): Promise<RecurrenceRuleRow | null> {
-	const row = await db.query.clubMeetingRecurrence.findFirst({
+	const row = await conn.query.clubMeetingRecurrence.findFirst({
 		where: eq(clubMeetingRecurrence.clubId, clubId),
 	});
 	return row ?? null;
@@ -65,18 +77,26 @@ function patternChanged(
 
 /**
  * Of the given meeting ids, which are pristine-empty — i.e. safe to reconcile:
- * `scheduled`, every content field blank, no claimed role slot, and nobody
- * planned NOT to come. (Attendance/awards/table-topics are post-meeting artifacts
- * a future meeting never carries.)
+ * `scheduled`, every content field blank, no claimed role slot, nobody planned
+ * NOT to come, no guest RSVP or invite, and nothing the top-up would not have
+ * given it itself (a venue, length, join link or typed number an officer set
+ * on this one meeting). (Attendance/awards/table-topics are post-meeting
+ * artifacts a future meeting never carries.)
  */
 export async function findPristineEmptyMeetingIds(
 	meetingIds: string[],
+	conn: DbOrTx = db,
 ): Promise<string[]> {
 	if (meetingIds.length === 0) return [];
 
-	const rows = await db
+	const rows = await conn
 		.select({
 			id: meetings.id,
+			clubId: meetings.clubId,
+			lengthMinutes: meetings.lengthMinutes,
+			location: meetings.location,
+			joinUrl: meetings.joinUrl,
+			meetingNumber: meetings.meetingNumber,
 			status: meetings.status,
 			theme: meetings.theme,
 			wordOfTheDay: meetings.wordOfTheDay,
@@ -90,7 +110,7 @@ export async function findPristineEmptyMeetingIds(
 		.from(meetings)
 		.where(inArray(meetings.id, meetingIds));
 
-	const claimed = await db
+	const claimed = await conn
 		.select({ meetingId: roleSlots.meetingId })
 		.from(roleSlots)
 		.where(
@@ -109,8 +129,61 @@ export async function findPristineEmptyMeetingIds(
 	// not — nobody has edited an agenda by answering a question, and treating a
 	// `coming` row as a touch would let one keen member pin the whole schedule
 	// against a pattern edit.
-	const declined = await listNotComingForMeetings(db, meetingIds);
+	const declined = await listNotComingForMeetings(conn, meetingIds);
 	const declinedSet = new Set(declined.map((a) => a.meetingId));
+
+	// A guest who RSVPed on the public page, or whom a member drafted an invite
+	// for, is a fact about THIS meeting row; both cascade from `meetings`, so a
+	// regenerate would silently erase them. `guest_invites` has no status column
+	// (a row exists exactly while the invite is drafted/sent), so EVERY row
+	// counts, not a subset.
+	const guestRsvps = await conn
+		.select({ meetingId: meetingGuestRsvps.meetingId })
+		.from(meetingGuestRsvps)
+		.where(inArray(meetingGuestRsvps.meetingId, meetingIds));
+	const guestInviteRows = await conn
+		.select({ meetingId: guestInvites.meetingId })
+		.from(guestInvites)
+		.where(inArray(guestInvites.meetingId, meetingIds));
+	const guestTouched = new Set([
+		...guestRsvps.map((g) => g.meetingId),
+		...guestInviteRows.map((g) => g.meetingId),
+	]);
+
+	// Per-meeting overrides: compare against exactly what the top-up gives a
+	// meeting it creates (`newMeetingDefaults`), per club.
+	const clubIds = [...new Set(rows.map((r) => r.clubId))];
+	const clubRows = await conn
+		.select({
+			id: clubs.id,
+			defaultMeetingMinutes: clubs.defaultMeetingMinutes,
+			defaultLocation: clubs.defaultLocation,
+		})
+		.from(clubs)
+		.where(inArray(clubs.id, clubIds));
+	const ruleRows = await conn
+		.select({
+			clubId: clubMeetingRecurrence.clubId,
+			location: clubMeetingRecurrence.location,
+		})
+		.from(clubMeetingRecurrence)
+		.where(inArray(clubMeetingRecurrence.clubId, clubIds));
+	const clubById = new Map(clubRows.map((c) => [c.id, c]));
+	const ruleByClub = new Map(ruleRows.map((r) => [r.clubId, r]));
+	const isOverridden = (m: (typeof rows)[number]): boolean => {
+		const club = clubById.get(m.clubId);
+		if (!club) return true; // unknown club: do not delete
+		const d = newMeetingDefaults(
+			{ location: ruleByClub.get(m.clubId)?.location ?? null },
+			club,
+		);
+		return (
+			m.lengthMinutes !== d.lengthMinutes ||
+			m.location !== d.location ||
+			m.joinUrl !== d.joinUrl ||
+			m.meetingNumber !== d.meetingNumber
+		);
+	};
 
 	return rows
 		.filter(
@@ -125,6 +198,8 @@ export async function findPristineEmptyMeetingIds(
 				!m.tableTopicsNotes &&
 				!claimedSet.has(m.id) &&
 				!declinedSet.has(m.id) &&
+				!guestTouched.has(m.id) &&
+				!isOverridden(m) &&
 				// A templated meeting is not an empty shell, whatever its content
 				// fields say. Until #622 that meant "somebody deliberately reshaped
 				// it into a contest"; it now ALSO means "somebody edited its
@@ -154,6 +229,7 @@ export async function selectOldPatternMeetings(
 	clubId: string,
 	timezone: string,
 	now: Date,
+	conn: DbOrTx = db,
 ): Promise<{
 	deleted: { id: string; scheduledAt: Date }[];
 	kept: { id: string; scheduledAt: Date }[];
@@ -165,7 +241,7 @@ export async function selectOldPatternMeetings(
 		).occurrences.map((o) => o.date),
 	);
 
-	const future = await db
+	const future = await conn
 		.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
 		.from(meetings)
 		.where(
@@ -182,7 +258,10 @@ export async function selectOldPatternMeetings(
 	);
 
 	const pristine = new Set(
-		await findPristineEmptyMeetingIds(onOldPattern.map((m) => m.id)),
+		await findPristineEmptyMeetingIds(
+			onOldPattern.map((m) => m.id),
+			conn,
+		),
 	);
 	return {
 		deleted: onOldPattern.filter((m) => pristine.has(m.id)),
@@ -190,44 +269,59 @@ export async function selectOldPatternMeetings(
 	};
 }
 
-/** Delete pristine-empty future meetings that sit on the OLD rule's dates. */
+/** Delete the pristine-empty future meetings a pattern change replaces. */
 async function reconcileEmptyShells(
-	oldRule: RecurrenceRuleRow,
-	clubId: string,
-	timezone: string,
-	now: Date,
+	conn: DbOrTx,
+	meetingIds: string[],
 ): Promise<void> {
-	const { deleted } = await selectOldPatternMeetings(
-		oldRule,
-		clubId,
-		timezone,
-		now,
-	);
-	if (deleted.length > 0) {
-		await db.delete(meetings).where(
-			inArray(
-				meetings.id,
-				deleted.map((m) => m.id),
-			),
-		);
-	}
+	if (meetingIds.length === 0) return;
+	await conn.delete(meetings).where(inArray(meetings.id, meetingIds));
 }
 
 export interface SaveRuleResult {
 	rule: RecurrenceRuleRow;
 	created: number;
+	/** Ids of the meetings the pattern change deleted (empty when none). */
+	deletedMeetingIds: string[];
 }
 
 /**
- * Upsert a club's standing rule, reconcile empty shells if the pattern changed,
- * and top the schedule up under the new rule. `now` is injectable for tests.
+ * Lock the club's rule row for the rest of the transaction, so a concurrent
+ * save (web or `update_meeting_schedule`) waits and re-reads afterwards. No row
+ * yet (first save) locks nothing; the upsert's unique key covers that case.
  */
-export async function saveRecurrenceRule(
+export async function lockRecurrenceRule(
+	conn: DbOrTx,
+	clubId: string,
+): Promise<void> {
+	await conn
+		.select({ id: clubMeetingRecurrence.id })
+		.from(clubMeetingRecurrence)
+		.where(eq(clubMeetingRecurrence.clubId, clubId))
+		.for("update");
+}
+
+/**
+ * `saveRecurrenceRule` on a connection the caller already holds a transaction
+ * on: lock the rule, select the meetings to delete, upsert, delete exactly that
+ * selection, top up. Used by the MCP tool so its re-plan, hash check and every
+ * write share one transaction.
+ */
+export async function saveRecurrenceRuleIn(
+	conn: DbOrTx,
 	clubId: string,
 	input: RecurrenceRuleInput,
 	now: Date = new Date(),
+	/**
+	 * Runs after the delete and before the top-up, inside the same transaction.
+	 * For a caller that must change a club column the top-up reads (the default
+	 * length) WITHOUT it affecting which meetings count as untouched: that
+	 * selection has already been made against the old values.
+	 */
+	beforeTopUp?: () => Promise<void>,
 ): Promise<SaveRuleResult> {
-	const existing = await getRecurrenceRule(clubId);
+	await lockRecurrenceRule(conn, clubId);
+	const existing = await getRecurrenceRule(clubId, conn);
 	const n = normalize(input);
 	const values = {
 		mode: n.mode,
@@ -241,7 +335,27 @@ export async function saveRecurrenceRule(
 		enabled: n.enabled,
 	};
 
-	await db
+	// Selected BEFORE the upsert, against the rule being replaced: the override
+	// check compares a meeting with what THAT rule's top-up gave it.
+	let toDelete: { id: string; scheduledAt: Date }[] = [];
+	if (existing && patternChanged(existing, n)) {
+		const club = await conn.query.clubs.findFirst({
+			where: eq(clubs.id, clubId),
+		});
+		if (club) {
+			toDelete = (
+				await selectOldPatternMeetings(
+					existing,
+					clubId,
+					club.timezone,
+					now,
+					conn,
+				)
+			).deleted;
+		}
+	}
+
+	await conn
 		.insert(clubMeetingRecurrence)
 		.values({ clubId, ...values })
 		.onConflictDoUpdate({
@@ -249,19 +363,44 @@ export async function saveRecurrenceRule(
 			set: { ...values, updatedAt: new Date() },
 		});
 
-	if (existing && patternChanged(existing, n)) {
-		const club = await db.query.clubs.findFirst({
-			where: eq(clubs.id, clubId),
-		});
-		if (club) {
-			await reconcileEmptyShells(existing, clubId, club.timezone, now);
-		}
-	}
+	await reconcileEmptyShells(
+		conn,
+		toDelete.map((m) => m.id),
+	);
 
-	const { created } = await ensureScheduleToppedUp(clubId, now);
-	const rule = await getRecurrenceRule(clubId);
+	await beforeTopUp?.();
+	const { created } = await ensureScheduleToppedUp(clubId, now, conn);
+	const rule = await getRecurrenceRule(clubId, conn);
 	if (!rule) throw new Error("Rule vanished after save.");
-	return { rule, created };
+	return { rule, created, deletedMeetingIds: toDelete.map((m) => m.id) };
+}
+
+/**
+ * Upsert a club's standing rule, reconcile empty shells if the pattern changed,
+ * and top the schedule up under the new rule, all in one transaction. `now` is
+ * injectable for tests.
+ */
+export async function saveRecurrenceRule(
+	clubId: string,
+	input: RecurrenceRuleInput,
+	now: Date = new Date(),
+): Promise<SaveRuleResult> {
+	return db.transaction((tx) => saveRecurrenceRuleIn(tx, clubId, input, now));
+}
+
+/** The nine rule fields a save takes, read off a stored row. */
+export function ruleToInput(rule: RecurrenceRuleRow): RecurrenceRuleInput {
+	return {
+		mode: rule.mode,
+		weekday: rule.weekday,
+		intervalWeeks: rule.intervalWeeks,
+		anchorDate: rule.anchorDate,
+		ordinals: rule.ordinals,
+		timeOfDay: rule.timeOfDay,
+		location: rule.location,
+		keepAhead: rule.keepAhead,
+		enabled: rule.enabled,
+	};
 }
 
 /** Delete a club's standing rule entirely. Existing meetings are left in place. */
