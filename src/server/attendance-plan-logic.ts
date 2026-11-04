@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { db } from "#/db";
 import {
 	type attendancePlanStatusEnum,
@@ -56,6 +56,25 @@ export async function memberHasAttendancePlanRows(
 		.where(eq(meetingAttendancePlan.memberId, memberId))
 		.limit(1);
 	return rows.length > 0;
+}
+
+/**
+ * Take FOR UPDATE row locks on every RSVP row of the given meetings, in `id`
+ * order, and return nothing. The recurrence-rule save calls it inside its
+ * transaction so a concurrent RSVP write waits (or the save waits) before the
+ * pristine check reads the plan (#1514). An empty list is a no-op.
+ */
+export async function lockPlanRowsForMeetings(
+	conn: DbOrTx,
+	meetingIds: string[],
+): Promise<void> {
+	if (meetingIds.length === 0) return;
+	await conn
+		.select({ id: meetingAttendancePlan.id })
+		.from(meetingAttendancePlan)
+		.where(inArray(meetingAttendancePlan.meetingId, meetingIds))
+		.orderBy(asc(meetingAttendancePlan.id))
+		.for("update");
 }
 
 // DERIVED from the Postgres enum, never hand-listed — see the same warning in

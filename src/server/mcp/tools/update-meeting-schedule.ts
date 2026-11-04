@@ -88,6 +88,10 @@ export const BAD_TIME_MESSAGE =
 	"timeOfDay must be a club-local 24-hour time like 18:45.";
 export const SWITCHED_OFF_MESSAGE =
 	"This club's standing meeting schedule is switched off, so a new time would delete meetings and create none. Switch the schedule on in the app first, then change the time.";
+export const TOUCHED_NOTE =
+	"Someone has touched this meeting, so it keeps its old time. Move it on its own in the app.";
+export const DEFAULTS_DIFFER_NOTE =
+	"This meeting's length or venue differs from the club's current default length or venue. The club's default was probably changed after the meeting was created, so it stays at its old time. Move it on its own in the app.";
 const STALE_PLAN_MESSAGE =
 	"The club's schedule or its meetings changed since that preview. Show the user the fresh plan and ask again.";
 
@@ -260,7 +264,8 @@ async function buildPlan(
 		staying = kept.map((m) => ({
 			meetingId: m.id,
 			...wallTime(m.scheduledAt, club.timezone),
-			note: "Someone has touched this meeting, so it keeps its old time. Move it on its own in the app.",
+			note:
+				m.reason === "defaults_differ" ? DEFAULTS_DIFFER_NOTE : TOUCHED_NOTE,
 		}));
 		if (removedWithoutReplacement.length > 0) {
 			warnings.push(

@@ -11,6 +11,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	clubs,
 	guestInvites,
 	guests,
 	meetingAttendancePlan,
@@ -46,7 +47,9 @@ const { saveRecurrenceRule, getRecurrenceRule, findPristineEmptyMeetingIds } =
 	await import("./recurrence-rule-logic");
 const { applyTemplateConversion } = await import("./meeting-templates-logic");
 const { ensureScheduleToppedUp } = await import("./schedule-topup-logic");
-const { lockRecurrenceRule } = await import("./recurrence-rule-logic");
+const { lockRecurrenceRule, saveRecurrenceRuleIn, classifyMeetings } =
+	await import("./recurrence-rule-logic");
+const { claimSlotCore } = await import("./slots-logic");
 
 const TZ = "America/Chicago";
 const NOW = new Date("2026-06-01T12:00:00Z");
@@ -496,6 +499,247 @@ describe.skipIf(!hasTestDb)(
 				).rejects.toThrow("boom in the top-up");
 				expect(await ids()).toEqual(before.map((b) => b.id));
 				expect((await getRecurrenceRule(club.clubId))?.timeOfDay).toBe("18:45");
+			});
+
+			// #1516 round 3: the save locks the candidates (meetings, role slots,
+			// attendance-plan rows) BEFORE its untouched check. Each test holds a
+			// write on a second connection, uncommitted, starts the save, proves it
+			// waits, commits the write, and asserts the meeting was KEPT with the
+			// write intact. Without the matching lock the save reads the old state,
+			// then its DELETE cascades the write away.
+			async function saveWaitsForWrite(
+				write: (
+					tx: Parameters<Parameters<typeof testDb.transaction>[0]>[0],
+				) => Promise<void>,
+			) {
+				let release: () => void = () => {};
+				const held = new Promise<void>((r) => {
+					release = r;
+				});
+				let written: () => void = () => {};
+				const gotWrite = new Promise<void>((r) => {
+					written = r;
+				});
+				const holder = testDb.transaction(async (tx) => {
+					await write(tx);
+					written();
+					await held;
+				});
+				await gotWrite;
+				let settled = false;
+				const save = saveRecurrenceRule(club.clubId, retimed, NOW).then(() => {
+					settled = true;
+				});
+				await new Promise((r) => setTimeout(r, 400));
+				expect(settled).toBe(false);
+				release();
+				await holder;
+				await save;
+			}
+
+			it("a role claim in flight when the save starts keeps the meeting and its claim", async () => {
+				const { target } = await seedWeek();
+				await saveWaitsForWrite(async (tx) => {
+					await tx
+						.update(roleSlots)
+						.set({ assignedMemberId: club.memberId, status: "claimed" })
+						.where(eq(roleSlots.meetingId, target.id));
+				});
+				expect(await ids()).toContain(target.id);
+				const slots = await testDb
+					.select({ status: roleSlots.status })
+					.from(roleSlots)
+					.where(eq(roleSlots.meetingId, target.id));
+				expect(slots.length).toBeGreaterThan(0);
+				expect(slots.every((x) => x.status === "claimed")).toBe(true);
+			});
+
+			it("a guest RSVP in flight when the save starts keeps the meeting and its RSVP", async () => {
+				const { target } = await seedWeek();
+				const guestId = await guest();
+				await saveWaitsForWrite(async (tx) => {
+					await tx.insert(meetingGuestRsvps).values({
+						clubId: club.clubId,
+						meetingId: target.id,
+						guestId,
+						clientKey: crypto.randomUUID(),
+					});
+				});
+				expect(await ids()).toContain(target.id);
+				expect(
+					await testDb
+						.select({ id: meetingGuestRsvps.id })
+						.from(meetingGuestRsvps)
+						.where(eq(meetingGuestRsvps.meetingId, target.id)),
+				).toHaveLength(1);
+			});
+
+			it("a decline flipped in flight when the save starts keeps the meeting and its decline", async () => {
+				const { target } = await seedWeek();
+				await testDb.insert(meetingAttendancePlan).values({
+					memberId: club.memberId,
+					meetingId: target.id,
+					status: "coming",
+				});
+				await saveWaitsForWrite(async (tx) => {
+					await tx
+						.update(meetingAttendancePlan)
+						.set({ status: "not_coming" })
+						.where(eq(meetingAttendancePlan.meetingId, target.id));
+				});
+				expect(await ids()).toContain(target.id);
+				const rows = await testDb
+					.select({ status: meetingAttendancePlan.status })
+					.from(meetingAttendancePlan)
+					.where(eq(meetingAttendancePlan.meetingId, target.id));
+				expect(rows).toEqual([{ status: "not_coming" }]);
+			});
+
+			it("while a save holds the locks, a claim and a guest RSVP wait, then fail cleanly after the delete", async () => {
+				const { target } = await seedWeek();
+				const [slot] = await testDb
+					.select({ id: roleSlots.id })
+					.from(roleSlots)
+					.where(eq(roleSlots.meetingId, target.id))
+					.limit(1);
+				if (!slot) throw new Error("no slot");
+				const guestId = await guest();
+
+				let release: () => void = () => {};
+				const held = new Promise<void>((r) => {
+					release = r;
+				});
+				let locked: () => void = () => {};
+				const gotLock = new Promise<void>((r) => {
+					locked = r;
+				});
+				// Connection 1: the save, paused after the locks and the delete,
+				// before commit.
+				const saver = testDb.transaction(async (tx) => {
+					await saveRecurrenceRuleIn(
+						tx,
+						club.clubId,
+						retimed,
+						NOW,
+						async () => {
+							locked();
+							await held;
+						},
+					);
+				});
+				await gotLock;
+
+				let claimSettled = false;
+				let rsvpSettled = false;
+				// Connection 2: a claim. Connection 3: a guest RSVP insert.
+				const claim = testDb
+					.transaction((tx) =>
+						claimSlotCore(tx, {
+							slotId: slot.id,
+							memberId: club.memberId,
+							actorMemberId: club.memberId,
+						}),
+					)
+					.then(
+						() => ({ ok: true as const }),
+						(e: Error) => ({ ok: false as const, message: e.message }),
+					)
+					.finally(() => {
+						claimSettled = true;
+					});
+				const rsvp = testDb
+					.insert(meetingGuestRsvps)
+					.values({
+						clubId: club.clubId,
+						meetingId: target.id,
+						guestId,
+						clientKey: crypto.randomUUID(),
+					})
+					.then(
+						() => ({ ok: true as const }),
+						() => ({ ok: false as const }),
+					)
+					.finally(() => {
+						rsvpSettled = true;
+					});
+				await new Promise((r) => setTimeout(r, 400));
+				expect(claimSettled).toBe(false);
+				expect(rsvpSettled).toBe(false);
+				release();
+				await saver;
+
+				// Either the meeting is kept or the write fails; never a silent loss.
+				const claimResult = await claim;
+				const rsvpResult = await rsvp;
+				expect(claimResult.ok).toBe(false);
+				expect(rsvpResult.ok).toBe(false);
+				expect((claimResult as { message: string }).message).toBe(
+					"Sorry \u2014 this role was just claimed by someone else.",
+				);
+				// Meeting gone with no orphans.
+				expect(await ids()).not.toContain(target.id);
+				for (const [table, col] of [
+					[roleSlots, roleSlots.meetingId],
+					[meetingGuestRsvps, meetingGuestRsvps.meetingId],
+				] as const) {
+					expect(
+						await testDb.select().from(table).where(eq(col, target.id)),
+					).toHaveLength(0);
+				}
+			});
+
+			it("the preview path takes no lock: classifyMeetings without lock does not wait on a held slot", async () => {
+				const { target } = await seedWeek();
+				let release: () => void = () => {};
+				const held = new Promise<void>((r) => {
+					release = r;
+				});
+				let written: () => void = () => {};
+				const got = new Promise<void>((r) => {
+					written = r;
+				});
+				const holder = testDb.transaction(async (tx) => {
+					await tx
+						.update(roleSlots)
+						.set({ status: "claimed", assignedMemberId: club.memberId })
+						.where(eq(roleSlots.meetingId, target.id));
+					written();
+					await held;
+				});
+				await got;
+				const verdicts = await classifyMeetings([target.id]);
+				expect(verdicts.get(target.id)).toBeNull();
+				release();
+				await holder;
+			});
+
+			it("a meeting kept only because the club default length changed is kept with its own reason", async () => {
+				const { target } = await seedWeek();
+				await testDb
+					.update(clubs)
+					.set({ defaultMeetingMinutes: 45 })
+					.where(eq(clubs.id, club.clubId));
+				const verdicts = await classifyMeetings([target.id]);
+				expect(verdicts.get(target.id)).toBe("defaults_differ");
+				await saveRecurrenceRule(club.clubId, retimed, NOW);
+				const kept = (await futureScheduled(club.clubId)).find(
+					(r) => r.id === target.id,
+				);
+				expect(kept).toBeDefined();
+				expect(
+					utcToZonedWallTime(kept?.scheduledAt as Date, TZ).slice(11, 16),
+				).toBe("18:45");
+			});
+
+			it("a touched meeting that also differs from the defaults reads as touched", async () => {
+				const { target } = await seedWeek();
+				await testDb
+					.update(meetings)
+					.set({ theme: "Space", lengthMinutes: 12 })
+					.where(eq(meetings.id, target.id));
+				expect((await classifyMeetings([target.id])).get(target.id)).toBe(
+					"touched",
+				);
 			});
 
 			it("a save waits for a transaction that holds the rule's row lock", async () => {

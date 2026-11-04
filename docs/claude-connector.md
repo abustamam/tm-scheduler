@@ -147,7 +147,12 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
   app's schedule save replaces: a claimed role, any content, a "not coming", a guest RSVP or
   invite, or a venue, length, join link or number set on that one meeting all count as touched),
   and which touched meetings keep their old time
-  (move those one at a time in the app). The schedule line guests see is **never**
+  (move those one at a time in the app). A meeting is also kept when its length or venue
+  differs from the club's **current** default: meetings copy those values when they are
+  created, so after the club changes its default length or venue, every meeting made before
+  that looks customised. The plan gives these their own note (the default probably changed
+  after the meeting was created) and they stay at the old time, so after a default change a
+  time change moves nothing for them. The schedule line guests see is **never**
   rewritten unless you send it: after a time change Claude warns that it may be out of date.
   The default length applies to new meetings only. If anyone touches a meeting in between,
   nothing is written and Claude gets a fresh plan. It needs an existing standing schedule, switched on,

@@ -19,7 +19,10 @@ import {
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { generateOccurrences } from "#/lib/meeting-recurrence";
 import { buildTopUpRecurrenceInput } from "#/lib/recurrence-rule";
-import { listNotComingForMeetings } from "./attendance-plan-logic";
+import {
+	listNotComingForMeetings,
+	lockPlanRowsForMeetings,
+} from "./attendance-plan-logic";
 import {
 	type DbOrTx,
 	ensureScheduleToppedUp,
@@ -76,18 +79,66 @@ function patternChanged(
 }
 
 /**
+ * Why a meeting is NOT safe to reconcile.
+ * - `touched`: someone changed or answered something on this meeting.
+ * - `defaults_differ`: nothing but its length or location differs from the
+ *   club's CURRENT defaults. Meetings copy those values when they are created,
+ *   so this is also what a meeting looks like after the club changed its default
+ *   length or venue; there is no record of which of the two happened.
+ */
+export type KeptReason = "touched" | "defaults_differ";
+
+export interface PristineOptions {
+	/**
+	 * Lock the candidates before reading anything: the meeting rows, their role
+	 * slots and their attendance-plan rows, each `FOR UPDATE` in id order. For a
+	 * caller inside the transaction that deletes by this answer, so a claim, RSVP
+	 * or decline that is in flight waits, then finds the meeting gone (or is
+	 * waited on, and the meeting is kept). Needs a transaction; the preview
+	 * stays lock-free.
+	 */
+	lock?: boolean;
+}
+
+/** Take the row locks `PristineOptions.lock` describes, in one fixed order. */
+async function lockCandidates(
+	conn: DbOrTx,
+	meetingIds: string[],
+): Promise<void> {
+	await conn
+		.select({ id: meetings.id })
+		.from(meetings)
+		.where(inArray(meetings.id, meetingIds))
+		.orderBy(asc(meetings.id))
+		.for("update");
+	await conn
+		.select({ id: roleSlots.id })
+		.from(roleSlots)
+		.where(inArray(roleSlots.meetingId, meetingIds))
+		.orderBy(asc(roleSlots.id))
+		.for("update");
+	await lockPlanRowsForMeetings(conn, meetingIds);
+}
+
+/**
  * Of the given meeting ids, which are pristine-empty — i.e. safe to reconcile:
  * `scheduled`, every content field blank, no claimed role slot, nobody planned
  * NOT to come, no guest RSVP or invite, and nothing the top-up would not have
  * given it itself (a venue, length, join link or typed number an officer set
  * on this one meeting). (Attendance/awards/table-topics are post-meeting
  * artifacts a future meeting never carries.)
+ *
+ * Maps each id to `null` when pristine, else the reason it is kept. The ONE
+ * predicate; `findPristineEmptyMeetingIds` is its boolean view.
  */
-export async function findPristineEmptyMeetingIds(
+export async function classifyMeetings(
 	meetingIds: string[],
 	conn: DbOrTx = db,
-): Promise<string[]> {
-	if (meetingIds.length === 0) return [];
+	options: PristineOptions = {},
+): Promise<Map<string, KeptReason | null>> {
+	const result = new Map<string, KeptReason | null>();
+	if (meetingIds.length === 0) return result;
+	if (options.lock) await lockCandidates(conn, meetingIds);
 
 	const rows = await conn
 		.select({
@@ -170,52 +221,61 @@ export async function findPristineEmptyMeetingIds(
 		.where(inArray(clubMeetingRecurrence.clubId, clubIds));
 	const clubById = new Map(clubRows.map((c) => [c.id, c]));
 	const ruleByClub = new Map(ruleRows.map((r) => [r.clubId, r]));
-	const isOverridden = (m: (typeof rows)[number]): boolean => {
+	const defaultsDiffer = (m: (typeof rows)[number]): boolean => {
 		const club = clubById.get(m.clubId);
 		if (!club) return true; // unknown club: do not delete
 		const d = newMeetingDefaults(
 			{ location: ruleByClub.get(m.clubId)?.location ?? null },
 			club,
 		);
-		return (
-			m.lengthMinutes !== d.lengthMinutes ||
-			m.location !== d.location ||
-			m.joinUrl !== d.joinUrl ||
-			m.meetingNumber !== d.meetingNumber
-		);
+		return m.lengthMinutes !== d.lengthMinutes || m.location !== d.location;
 	};
 
-	return rows
-		.filter(
-			(m) =>
-				m.status === "scheduled" &&
-				!m.theme &&
-				!m.wordOfTheDay &&
-				!m.wodDefinition &&
-				!m.wodExample &&
-				!m.notes &&
-				!m.reminders &&
-				!m.tableTopicsNotes &&
-				!claimedSet.has(m.id) &&
-				!declinedSet.has(m.id) &&
-				!guestTouched.has(m.id) &&
-				!isOverridden(m) &&
-				// A templated meeting is not an empty shell, whatever its content
-				// fields say. Until #622 that meant "somebody deliberately reshaped
-				// it into a contest"; it now ALSO means "somebody edited its
-				// agenda", because the first edit of an ordinary meeting
-				// materializes a private copy. Both are content, and this predicate
-				// already declines to prune a meeting with content of any kind — a
-				// theme, a Word of the Day, a claimed slot. The set this clause
-				// excludes is therefore much larger than it was, by design.
-				// It also can't be safely deleted even if it looked pristine:
-				// `meeting_templates.meeting_id` cascades from `meetings`, but the
-				// materialized `role_definitions` pointing at that private template
-				// are ON DELETE RESTRICT, so deleting this row would throw a
-				// foreign-key violation.
-				m.templateId === null,
-		)
-		.map((m) => m.id);
+	for (const m of rows) {
+		const touched =
+			m.status !== "scheduled" ||
+			!!m.theme ||
+			!!m.wordOfTheDay ||
+			!!m.wodDefinition ||
+			!!m.wodExample ||
+			!!m.notes ||
+			!!m.reminders ||
+			!!m.tableTopicsNotes ||
+			claimedSet.has(m.id) ||
+			declinedSet.has(m.id) ||
+			guestTouched.has(m.id) ||
+			m.joinUrl !== null ||
+			m.meetingNumber !== null ||
+			// A templated meeting is not an empty shell, whatever its content
+			// fields say. Until #622 that meant "somebody deliberately reshaped
+			// it into a contest"; it now ALSO means "somebody edited its
+			// agenda", because the first edit of an ordinary meeting
+			// materializes a private copy. Both are content, and this predicate
+			// already declines to prune a meeting with content of any kind — a
+			// theme, a Word of the Day, a claimed slot. The set this clause
+			// excludes is therefore much larger than it was, by design.
+			// It also can't be safely deleted even if it looked pristine:
+			// `meeting_templates.meeting_id` cascades from `meetings`, but the
+			// materialized `role_definitions` pointing at that private template
+			// are ON DELETE RESTRICT, so deleting this row would throw a
+			// foreign-key violation.
+			m.templateId !== null;
+		result.set(
+			m.id,
+			touched ? "touched" : defaultsDiffer(m) ? "defaults_differ" : null,
+		);
+	}
+	return result;
+}
+
+/** The ids `classifyMeetings` finds pristine. */
+export async function findPristineEmptyMeetingIds(
+	meetingIds: string[],
+	conn: DbOrTx = db,
+	options: PristineOptions = {},
+): Promise<string[]> {
+	const verdicts = await classifyMeetings(meetingIds, conn, options);
+	return [...verdicts].filter(([, why]) => why === null).map(([id]) => id);
 }
 
 /**
@@ -230,9 +290,10 @@ export async function selectOldPatternMeetings(
 	timezone: string,
 	now: Date,
 	conn: DbOrTx = db,
+	options: PristineOptions = {},
 ): Promise<{
 	deleted: { id: string; scheduledAt: Date }[];
-	kept: { id: string; scheduledAt: Date }[];
+	kept: { id: string; scheduledAt: Date; reason: KeptReason }[];
 }> {
 	const notBefore = utcToZonedWallTime(now, timezone).slice(0, 10);
 	const oldDates = new Set(
@@ -257,15 +318,20 @@ export async function selectOldPatternMeetings(
 		oldDates.has(utcToZonedWallTime(m.scheduledAt, timezone).slice(0, 10)),
 	);
 
-	const pristine = new Set(
-		await findPristineEmptyMeetingIds(
-			onOldPattern.map((m) => m.id),
-			conn,
-		),
+	const verdicts = await classifyMeetings(
+		onOldPattern.map((m) => m.id),
+		conn,
+		options,
 	);
+	const kept: { id: string; scheduledAt: Date; reason: KeptReason }[] = [];
+	for (const m of onOldPattern) {
+		const why = verdicts.get(m.id);
+		// A meeting deleted while we waited for its lock has no verdict: gone.
+		if (why) kept.push({ ...m, reason: why });
+	}
 	return {
-		deleted: onOldPattern.filter((m) => pristine.has(m.id)),
-		kept: onOldPattern.filter((m) => !pristine.has(m.id)),
+		deleted: onOldPattern.filter((m) => verdicts.get(m.id) === null),
+		kept,
 	};
 }
 
@@ -350,6 +416,7 @@ export async function saveRecurrenceRuleIn(
 					club.timezone,
 					now,
 					conn,
+					{ lock: true },
 				)
 			).deleted;
 		}

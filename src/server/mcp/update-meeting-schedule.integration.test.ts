@@ -41,6 +41,15 @@ vi.mock("#/server/schedule-topup-logic", async (importOriginal) => {
 	};
 });
 
+vi.mock("#/server/recurrence-rule-logic", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("#/server/recurrence-rule-logic")>();
+	return {
+		...actual,
+		selectOldPatternMeetings: vi.fn(actual.selectOldPatternMeetings),
+	};
+});
+
 const { updateMeetingScheduleTool } = await import(
 	"#/server/mcp/tools/update-meeting-schedule"
 );
@@ -52,9 +61,7 @@ const { saveRecurrenceRule, getRecurrenceRule } = await import(
 const { ensureScheduleToppedUp } = await import(
 	"#/server/schedule-topup-logic"
 );
-const { SWITCHED_OFF_MESSAGE } = await import(
-	"#/server/mcp/tools/update-meeting-schedule"
-);
+const recurrenceLogic = await import("#/server/recurrence-rule-logic");
 
 const TZ = "America/Chicago";
 const NOW = new Date("2027-03-01T12:00:00Z");
@@ -402,8 +409,9 @@ describe.skipIf(!hasTestDb)("update_meeting_schedule (#1514)", () => {
 			call(adminToken, { timeOfDay: "19:30" }),
 			"VALIDATION",
 		);
-		expect(err.message).toBe(SWITCHED_OFF_MESSAGE);
-		expect(err.message).toContain("in the app first");
+		expect(err.message).toBe(
+			"This club's standing meeting schedule is switched off, so a new time would delete meetings and create none. Switch the schedule on in the app first, then change the time.",
+		);
 		expect(await snapshot()).toEqual(before);
 		// The other fields do not need the schedule on.
 		const p = await preview({ defaultMeetingMinutes: 45 });
@@ -503,6 +511,88 @@ describe.skipIf(!hasTestDb)("update_meeting_schedule (#1514)", () => {
 		);
 		await apply(input, p.planHash as string);
 		expect((await future()).map((m) => m.id)).toContain(before[2].id);
+	});
+
+	it("after the club default length changes, a time change keeps those meetings with their own note", async () => {
+		await apply(
+			{ defaultMeetingMinutes: 60 },
+			(await preview({ defaultMeetingMinutes: 60 })).planHash as string,
+		);
+		const before = await future();
+		const p = await preview({ timeOfDay: "19:30" });
+		expect(p.plan.recreated).toHaveLength(0);
+		expect(p.plan.staying).toHaveLength(before.length);
+		for (const m of p.plan.staying) {
+			expect(m.note).toContain("default length or venue");
+			expect(m.note).toContain("stays at its old time");
+			expect(m.note).not.toContain("Someone has touched");
+		}
+		await apply({ timeOfDay: "19:30" }, p.planHash as string);
+		const after = await future();
+		expect(after.map((m) => m.id)).toEqual(before.map((m) => m.id));
+		expect(after.every((m) => localTime(m.scheduledAt) === "18:45")).toBe(true);
+	});
+
+	it("after the default length changes, a genuinely touched meeting still says touched", async () => {
+		await apply(
+			{ defaultMeetingMinutes: 60 },
+			(await preview({ defaultMeetingMinutes: 60 })).planHash as string,
+		);
+		const before = await future();
+		await testDb
+			.update(meetings)
+			.set({ theme: "Space" })
+			.where(eq(meetings.id, before[0].id));
+		const p = await preview({ timeOfDay: "19:30" });
+		const line = p.plan.staying.find((m) => m.meetingId === before[0].id);
+		expect(line?.note).toContain("Someone has touched");
+	});
+
+	it("a planned delete set that differs from what the save deletes rolls everything back and is PLAN_STALE with a fresh plan", async () => {
+		const before = await snapshot();
+		const input = { timeOfDay: "19:30", defaultMeetingMinutes: 60 };
+		const selection = vi.mocked(recurrenceLogic.selectOldPatternMeetings);
+		const real = selection.getMockImplementation() as NonNullable<
+			ReturnType<typeof selection.getMockImplementation>
+		>;
+		// The plan (preview and the apply's re-plan, both through the tool's own
+		// call) sees one meeting fewer than the save's internal selection does, so
+		// the hash matches and only the DRIFT check can catch it.
+		selection.mockImplementation(async (...args) => {
+			const r = await real(...args);
+			return { ...r, deleted: r.deleted.slice(1) };
+		});
+		try {
+			const p = await preview(input);
+			expect(p.plan.recreated).toHaveLength(3);
+			const err = await expectMcpError(
+				apply(input, p.planHash as string),
+				"PLAN_STALE",
+			);
+			const detail = err.detail as {
+				plan: Result["plan"];
+				planHash: string;
+			};
+			expect(detail.plan.recreated).toHaveLength(3);
+			expect(detail.planHash).toMatch(/^[0-9a-f]{64}$/);
+		} finally {
+			selection.mockImplementation(real);
+		}
+		// Rolled back: rule, club columns (length too) and every meeting.
+		expect(await snapshot()).toEqual(before);
+	});
+
+	it.each([
+		["a 1440-minute length", { defaultMeetingMinutes: 1440 }, true],
+		["a 1441-minute length", { defaultMeetingMinutes: 1441 }, false],
+		["a 200-character line", { scheduleText: "x".repeat(200) }, true],
+		["a 201-character line", { scheduleText: "x".repeat(201) }, false],
+	])("the tool schema takes %s: %s", async (_l, input, ok) => {
+		if (ok) {
+			expect((await preview(input)).applied).toBe(false);
+		} else {
+			await expectMcpError(call(adminToken, input), "VALIDATION");
+		}
 	});
 
 	it("a failure after the club columns are written rolls everything back", async () => {
