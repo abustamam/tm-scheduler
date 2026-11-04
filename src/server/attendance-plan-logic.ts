@@ -686,11 +686,18 @@ export async function deletePlanRowsOfEndedMember(
  * importing over a meeting people have since touched, changes nothing.
  *
  * Gated like every other writer here: a cancelled meeting is refused by the
- * class policy, and so is a scheduled one (it has no lock and no log, so it is
- * only for a meeting nobody decides plans on any more); a completed one is
- * the one thing ACCEPTED, because a past meeting is the only thing a history
- * import writes. The caller (`history-import-logic.ts`,
- * superadmin only) decides which meetings and which members; this function
+ * class policy. A completed meeting is accepted, because a past meeting is what
+ * a history import writes. A scheduled meeting is accepted ONLY for a caller that
+ * passes `allowScheduled`, and that is safe only because of what the one such
+ * caller (`applyUpcomingMeeting` in `history-import-logic.ts`, #1495) guarantees
+ * and this function does not check: it gives only ACTIVE members, it takes
+ * `lockMemberAttendance` for each of them first (this function takes none and
+ * logs nothing), it calls on the apply that first brings the meeting over and
+ * never on a re-apply (so an answer a member cleared is not revived), and the
+ * insert is `ON CONFLICT DO NOTHING`, so a member's own answer is never
+ * overwritten. A second caller must meet the same four conditions. The caller
+ * (run by a superadmin or that club's admin, #1492) decides which meetings and
+ * which members; this function
  * trusts its `memberId`s to be members of the meeting's club, exactly as
  * `setPlanStatus` does.
  *
@@ -705,15 +712,19 @@ export async function importPlanAnswers(
 		meetingId: string;
 		answers: ReadonlyArray<{ memberId: string; status: AttendancePlanStatus }>;
 	},
+	options: { allowScheduled?: boolean } = {},
 ): Promise<{ inserted: number }> {
 	if (args.answers.length === 0) return { inserted: 0 };
 	const status = await meetingStatusOf(database, args.meetingId);
 	if (status !== null) {
 		assertMeetingAccepts(status, "plan", PLAN_SEAM_WRITE_OPTIONS);
-		// This path takes no `lockMemberAttendance` and logs nothing, which is only
-		// safe on a meeting nobody is deciding plans for any more: the class policy
-		// also lets a scheduled meeting through, so a completed one is named here.
-		if (status !== "completed") throw new Error(IMPORT_PLAN_STATUS_MESSAGE);
+		// This path takes no `lockMemberAttendance` and logs nothing: a completed
+		// meeting is one nobody decides plans on any more. A scheduled one is let
+		// through only for the opt-in caller, on the conditions the doc above names.
+		const accepted =
+			status === "completed" ||
+			(options.allowScheduled === true && status === "scheduled");
+		if (!accepted) throw new Error(IMPORT_PLAN_STATUS_MESSAGE);
 	}
 	const written = await database
 		.insert(meetingAttendancePlan)

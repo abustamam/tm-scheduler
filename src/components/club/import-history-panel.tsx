@@ -124,6 +124,12 @@ export function ImportHistoryPanel({
 	// a round trip. Sent with the preview and the apply, and kept nowhere else.
 	const [contacts, setContacts] = useState("");
 	const [contactsRead, setContactsRead] = useState("");
+	// The upcoming-meetings box (#1495). `null` until the admin touches it: the
+	// server's default for this club (`upcoming.defaultIncluded`, read from the
+	// first preview) stands in, so the box is "initialised once" and a later preview
+	// cannot flip it back. `skipChoices` holds the roles answered "Skip".
+	const [includeChoice, setIncludeChoice] = useState<boolean | null>(null);
+	const [skipChoices, setSkipChoices] = useState<Record<string, boolean>>({});
 	// A superadmin's override of the club binding (#1492): offered only after an
 	// upload or an apply was refused with a binding message, and never rendered
 	// for anyone else. `refusedFile` is the upload to retry once it is ticked.
@@ -155,6 +161,21 @@ export function ImportHistoryPanel({
 		if (r) resolutions[key] = r;
 	}
 
+	// Sent with every preview and the apply. Absent until the first preview has said
+	// what the default is: the server then uses the same default itself.
+	const [knownDefault, setKnownDefault] = useState<boolean | null>(null);
+	const includeUpcoming = includeChoice ?? knownDefault;
+	const upcoming =
+		includeUpcoming === null
+			? undefined
+			: {
+					include: includeUpcoming,
+					skipRoles: Object.entries(skipChoices)
+						.filter(([, skip]) => skip)
+						.map(([key]) => key)
+						.sort(),
+				};
+
 	const preview = useQuery({
 		queryKey: [
 			"easy-speak-preview",
@@ -162,16 +183,25 @@ export function ImportHistoryPanel({
 			importId,
 			resolutions,
 			contactsRead,
+			upcoming ?? null,
 		],
-		queryFn: () =>
-			previewEasySpeakImport({
+		queryFn: async () => {
+			const result = await previewEasySpeakImport({
 				data: {
 					clubId,
 					importId: importId as string,
 					resolutions,
 					contacts: contactsRead,
+					...(upcoming ? { upcoming } : {}),
 				},
-			}),
+			});
+			// Set here and not in an effect on purpose: the query key then changes
+			// before the first result renders, so the section does not appear, vanish
+			// (the key gained `upcoming`) and appear again.
+			const server = result.upcoming?.defaultIncluded;
+			if (server !== undefined) setKnownDefault((known) => known ?? server);
+			return result;
+		},
 		enabled: importId !== null,
 		retry: false,
 	});
@@ -211,6 +241,9 @@ export function ImportHistoryPanel({
 			);
 			setImportId(stored.importId);
 			setDrafts({});
+			setIncludeChoice(null);
+			setKnownDefault(null);
+			setSkipChoices({});
 			refresh();
 			if (fileRef.current) fileRef.current.value = "";
 		},
@@ -228,6 +261,7 @@ export function ImportHistoryPanel({
 					importId: importId as string,
 					resolutions,
 					contacts: contactsRead,
+					...(upcoming ? { upcoming } : {}),
 					planHash: preview.data?.planHash ?? "",
 					...(override ? { overrideClubBinding: true } : {}),
 				},
@@ -406,6 +440,9 @@ export function ImportHistoryPanel({
 								onClick={() => {
 									setImportId(row.importId);
 									setDrafts({});
+									setIncludeChoice(null);
+									setKnownDefault(null);
+									setSkipChoices({});
 								}}
 							>
 								{row.clubName ?? "Bundle"}, {row.meetings} meetings
@@ -479,7 +516,7 @@ export function ImportHistoryPanel({
 							n={data.counts.meetingsToSkip}
 						/>
 						<Count
-							label="Future meetings skipped"
+							label="Upcoming meetings not imported"
 							n={data.counts.futureMeetingsSkipped}
 						/>
 						<Count label="Role assignments" n={data.counts.roleAssignments} />
@@ -497,6 +534,18 @@ export function ImportHistoryPanel({
 						<Count label="New guests" n={data.counts.newGuests} />
 						<Count label="New club roles" n={data.counts.newRoleDefinitions} />
 					</dl>
+
+					{data.upcoming ? (
+						<UpcomingSection
+							upcoming={data.upcoming}
+							include={includeUpcoming ?? data.upcoming.included}
+							onInclude={setIncludeChoice}
+							skipChoices={skipChoices}
+							onSkip={(planKey, skip) =>
+								setSkipChoices((prev) => ({ ...prev, [planKey]: skip }))
+							}
+						/>
+					) : null}
 
 					{data.roleDefinitions.some((r) => r.isNew) ? (
 						<p className="text-sm text-muted-foreground">
@@ -1055,6 +1104,16 @@ function ReportView({ report }: { report: ImportReport }) {
 					: ""}
 				.
 			</p>
+			{report.upcomingNotes && report.upcomingNotes.length > 0 ? (
+				<div className="text-sm" data-testid="report-upcoming-notes">
+					<p className="font-semibold">Upcoming meetings</p>
+					<ul className="list-disc pl-5">
+						{report.upcomingNotes.map((n) => (
+							<li key={n}>{n}</li>
+						))}
+					</ul>
+				</div>
+			) : null}
 			{report.contactNotes && report.contactNotes.length > 0 ? (
 				<div className="text-sm" data-testid="report-contact-notes">
 					<p className="font-semibold">Contacts left out</p>
@@ -1065,6 +1124,91 @@ function ReportView({ report }: { report: ImportReport }) {
 					</ul>
 				</div>
 			) : null}
+		</div>
+	);
+}
+
+type UpcomingPreview = NonNullable<
+	Awaited<ReturnType<typeof previewEasySpeakImport>>["upcoming"]
+>;
+
+/**
+ * The upcoming meetings (#1495): the box, what ticking it would do (shown either
+ * way), each meeting left alone, and a role the club's agenda has no slot for with
+ * "Add a slot" (the default) or "Skip".
+ */
+function UpcomingSection({
+	upcoming,
+	include,
+	onInclude,
+	skipChoices,
+	onSkip,
+}: {
+	upcoming: UpcomingPreview;
+	include: boolean;
+	onInclude: (include: boolean) => void;
+	skipChoices: Record<string, boolean>;
+	onSkip: (planKey: string, skip: boolean) => void;
+}) {
+	const fill = upcoming.toAdopt + upcoming.toUpdate;
+	// Unticked, nothing is removed and these are what ticking could do at most.
+	const upTo = include ? "" : "up to ";
+	return (
+		<div className="space-y-2" data-testid="import-upcoming">
+			<label className="flex items-center gap-2 text-sm font-semibold">
+				<input
+					type="checkbox"
+					checked={include}
+					onChange={(e) => onInclude(e.target.checked)}
+				/>
+				Import upcoming meetings
+			</label>
+			<p className="text-sm" data-testid="import-upcoming-summary">
+				Upcoming: create {upTo}
+				{upcoming.toCreate}, fill {upTo}
+				{fill} already in GavelUp, leave {upcoming.leftAlone.length} as they
+				are; place {upTo}
+				{upcoming.roleAssignments} role{" "}
+				{upcoming.roleAssignments === 1 ? "holder" : "holders"} and {upTo}
+				{upcoming.rsvps} {upcoming.rsvps === 1 ? "RSVP" : "RSVPs"}.
+			</p>
+			{upcoming.leftAlone.length > 0 || upcoming.timeNotes.length > 0 ? (
+				<ul
+					className="list-disc space-y-0.5 pl-5 text-sm text-muted-foreground"
+					data-testid="import-upcoming-notes"
+				>
+					{upcoming.leftAlone.map((m) => (
+						<li key={m.esMeetingId}>
+							{m.date}: {m.reason}
+						</li>
+					))}
+					{upcoming.timeNotes.map((note) => (
+						<li key={note}>{note}</li>
+					))}
+				</ul>
+			) : null}
+			{upcoming.unslottedRoles.map((r) => (
+				<div
+					key={r.planKey}
+					className="flex flex-wrap items-center gap-2 text-sm"
+					data-testid="import-upcoming-role"
+				>
+					<span>
+						{r.name}: no slot on the club's agenda ({r.holders}{" "}
+						{r.holders === 1 ? "holder" : "holders"} over {r.meetings}{" "}
+						{r.meetings === 1 ? "meeting" : "meetings"})
+					</span>
+					<select
+						className={selectClass}
+						aria-label={`What to do with the ${r.name} role`}
+						value={(skipChoices[r.planKey] ?? r.skipped) ? "skip" : "add"}
+						onChange={(e) => onSkip(r.planKey, e.target.value === "skip")}
+					>
+						<option value="add">Add a slot</option>
+						<option value="skip">Skip</option>
+					</select>
+				</div>
+			))}
 		</div>
 	);
 }

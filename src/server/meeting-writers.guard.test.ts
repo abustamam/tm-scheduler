@@ -270,7 +270,12 @@ const MEETING_WRITERS: Record<string, Entry> = {
 			completed: {
 				accept: true,
 				reason: PLAN_SEAM_COMPLETED,
-				refusedBy: [],
+				// An upcoming meeting (#1495) is `scheduled`, which this function
+				// refuses unless the caller opts in with `{ allowScheduled: true }`;
+				// applyUpcomingMeeting is the only caller that does (see
+				// attendance-plan-import-scheduled.integration.test.ts), and it
+				// refuses a completed or cancelled day by the plan class itself.
+				refusedBy: ["src/server/history-import-logic.ts#applyUpcomingMeeting"],
 				exemptCallers: {
 					"src/server/history-import-logic.ts#applyMeeting":
 						"Reachable by a superadmin or by an admin of that club (#1492), who may write only into the club's own meetings, and the meeting it writes into is a past one it created as completed or adopted because it was already completed (a scheduled, cancelled or rescheduled meeting is skipped and reported), so a completed meeting is exactly what it is meant to reach.",
@@ -328,6 +333,32 @@ const MEETING_WRITERS: Record<string, Entry> = {
 	// writes a meeting's status, and a scheduled, cancelled or rescheduled meeting
 	// is left as it is and reported (D1 of #1196).
 	"src/server/history-import-logic.ts#applyMeeting": { class: "record" },
+	// An UPCOMING meeting (#1495): created `scheduled` from the club's agenda, or
+	// adopted only while it is still `scheduled` and ahead, under FOR NO KEY UPDATE
+	// and through the PLAN class (a cancelled or completed meeting is left alone and
+	// reported). It fills only empty slots and fills blank meta; it never moves a
+	// holder, a time or a status, and sends nothing.
+	"src/server/history-import-logic.ts#applyUpcomingMeeting": { class: "plan" },
+	// The two helpers the past and the upcoming writer share (#1495 T6): the speech
+	// a filled slot gets, and the evaluator -> speaker link. Each refuses nothing
+	// itself; both callers refuse first, applyUpcomingMeeting by the plan class and
+	// applyMeeting by the record class.
+	"src/server/history-import-logic.ts#attachSpeech": {
+		class: "plan",
+		refusedBy: ["src/server/history-import-logic.ts#applyUpcomingMeeting"],
+		exemptCallers: {
+			"src/server/history-import-logic.ts#applyMeeting":
+				"The past writer: it refuses by the record class before any slot write (a completed meeting is exactly what it reaches), and the helper only puts a speech on a slot the bundle's holder holds.",
+		},
+	},
+	"src/server/history-import-logic.ts#linkEvaluators": {
+		class: "plan",
+		refusedBy: ["src/server/history-import-logic.ts#applyUpcomingMeeting"],
+		exemptCallers: {
+			"src/server/history-import-logic.ts#applyMeeting":
+				"The past writer: it refuses by the record class before any slot write, and the helper only sets an evaluator's link where it has none.",
+		},
+	},
 	// The speech-request step (#1052) writes queue rows (`speech_requests`), which
 	// are swept only because `scheduled_slot_id` points at a role slot. It writes
 	// no slot and never sets that column.

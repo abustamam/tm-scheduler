@@ -113,6 +113,7 @@ export const previewEasySpeakImport = createServerFn({ method: "POST" })
 			importId: data.importId,
 			resolutions: data.resolutions,
 			contacts: data.contacts,
+			upcoming: data.upcoming,
 		});
 	});
 
@@ -133,6 +134,7 @@ export const applyEasySpeakImport = createServerFn({ method: "POST" })
 			resolutions: data.resolutions,
 			planHash: data.planHash,
 			contacts: data.contacts,
+			upcoming: data.upcoming,
 			overrideClubBinding: overrideFor(runner, data.overrideClubBinding),
 		});
 	});
