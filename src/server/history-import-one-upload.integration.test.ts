@@ -1117,12 +1117,9 @@ describe.skipIf(!hasTestDb)(
 			expect(await memberByName("Pia President")).toBeUndefined();
 		});
 
-		// protects=a linked member who was added under superadmin impersonation (a null
-		// actor) and later MERGED away is not a tombstone: the person is matched by name
-		// again (D4 of #1196), their history kept;
-		// fails_when=a null-actor member_add row is read as "the import made this";
-		// no_claim=what the merge does to the keeper's own history.
-		it("a null-actor member_add on a merged-away member is not a tombstone", async () => {
+		// Shared setup: a linked member with a null-actor member_add, and a keeper
+		// they are merged into.
+		const mergeAdaIntoKeeper = async (resetRef: boolean) => {
 			const stored = await upload();
 			await apply(stored.importId);
 			await testDb.insert(activityLog).values({
@@ -1151,9 +1148,58 @@ describe.skipIf(!hasTestDb)(
 			await testDb.transaction((tx) =>
 				collapseMemberships(tx, seed.clubId, keeper?.id as string, adaMemberId),
 			);
+			if (resetRef) {
+				// The state a merge from before #1494 left behind: the person ref
+				// still names the deleted member.
+				await testDb
+					.update(importRefs)
+					.set({ targetId: adaMemberId })
+					.where(
+						and(
+							eq(importRefs.clubId, seed.clubId),
+							eq(importRefs.kind, "person"),
+							eq(importRefs.sourceId, `es:${P(7)}`),
+						),
+					);
+			}
 			await apply(stored.importId);
+			return { keeperId: keeper?.id as string };
+		};
+
+		// protects=a LEGACY dangling ref (a merge done before #1494 left the person ref
+		// on the deleted id) to a member added under superadmin impersonation (a null
+		// actor) is not a tombstone: the person is matched by name again (D4 of #1196);
+		// fails_when=a null-actor member_add row is read as "the import made this";
+		// no_claim=merges done after #1494, which carry the ref to the keeper.
+		it("a null-actor member_add on a merged-away member is not a tombstone", async () => {
+			await mergeAdaIntoKeeper(true);
 			const back = await memberByName("Ada Linked");
 			expect(back).toBeDefined();
+		});
+
+		// protects=a merge done now carries Ada's person ref to the keeper, so a
+		// re-apply creates no second "Ada Linked" and her records resolve to the keeper;
+		// fails_when=collapseMemberships leaves the person ref on the deleted id;
+		// no_claim=legacy dangling refs, the test above.
+		it("a merge carries the person ref to the keeper, so a re-apply makes no duplicate", async () => {
+			const { keeperId } = await mergeAdaIntoKeeper(false);
+			expect(await memberByName("Ada Linked")).toBeUndefined();
+			const [ref] = await testDb
+				.select({ targetId: importRefs.targetId })
+				.from(importRefs)
+				.where(
+					and(
+						eq(importRefs.clubId, seed.clubId),
+						eq(importRefs.kind, "person"),
+						eq(importRefs.sourceId, `es:${P(7)}`),
+					),
+				);
+			expect(ref?.targetId).toBe(keeperId);
+			const held = await testDb
+				.select({ id: roleSlots.id })
+				.from(roleSlots)
+				.where(eq(roleSlots.assignedMemberId, keeperId));
+			expect(held.length).toBeGreaterThan(0);
 		});
 
 		// protects=one list entry plus a name-only meeting reference of the same name

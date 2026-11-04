@@ -754,8 +754,9 @@ export function buildImportPlan(
 		} else {
 			// A vanished MEMBER ref is a tombstone only when the club logged the
 			// member's removal (`member_remove`, below), except a convert undo that
-			// kept the membership. A merge logs none, so a merged-away member is
-			// matched by name again (D4 of #1196).
+			// kept the membership. A merge carries the refs to the keeper (#1494);
+			// only a pre-#1494 merge leaves one dangling, and that member is matched
+			// by name again (D4 of #1196).
 			// Two spellings under one name-only key (José / Jose) cannot take the exact
 			// pass: it would match the first spelling and hand the second its member.
 			// The fold's candidates go to a human, or to nobody if the roster has none.
