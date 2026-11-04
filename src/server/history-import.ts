@@ -12,6 +12,7 @@ import {
 	importRunSchema,
 	importSpeechRequests as importSpeechRequestsLogic,
 	listClubImports as listClubImportsLogic,
+	nextExportMonth as nextExportMonthLogic,
 	previewEasySpeakImport as previewEasySpeakImportLogic,
 	storedImportSchema,
 	storeEasySpeakBundle as storeEasySpeakBundleLogic,
@@ -69,6 +70,15 @@ export const listEasySpeakImports = createServerFn({ method: "GET" })
 		const currentUser = await requireUser();
 		await requireHistoryImportRunner(currentUser.id, data.clubId);
 		return listClubImportsLogic(data.clubId);
+	});
+
+/** The month the club's next Easy-Speak export should start from (#1491); display only. */
+export const nextEasySpeakExport = createServerFn({ method: "GET" })
+	.validator((input: unknown) => parse(importClubSchema, input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireHistoryImportRunner(currentUser.id, data.clubId);
+		return { fromMonth: await nextExportMonthLogic(data.clubId) };
 	});
 
 /** Store an uploaded bundle (validated, size-capped, deduplicated by hash). Refused under read-only impersonation. */

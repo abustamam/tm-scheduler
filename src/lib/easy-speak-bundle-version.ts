@@ -8,7 +8,7 @@ export const BUNDLE_FORMAT = "gavelup.easy-speak-bundle";
 export const ARCHIVE_FORMAT = "gavelup.easy-speak-pages";
 
 /** The one version an upload may carry. Bump it with every change to the bundle's shape. */
-export const CURRENT_BUNDLE_VERSION = 2;
+export const CURRENT_BUNDLE_VERSION = 3;
 
 /** The refusal for a pages archive uploaded where the bundle belongs. */
 export const ARCHIVE_UPLOADED_MESSAGE =

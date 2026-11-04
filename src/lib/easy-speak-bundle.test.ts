@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-	type EasySpeakBundleV2,
+	bundleRange,
+	type EasySpeakBundleV3,
+	easySpeakStoredSchema,
 	easySpeakUploadSchema,
 	isContactPageUrl,
 } from "./easy-speak-bundle";
@@ -28,7 +30,7 @@ const EXPECTED = resolve(FIXTURES, "bundle.expected.json");
 const read = (name: string): string =>
 	readFileSync(resolve(FIXTURES, name), "utf8");
 
-const load = (): EasySpeakBundleV2 =>
+const load = (): EasySpeakBundleV3 =>
 	JSON.parse(readFileSync(EXPECTED, "utf8"));
 
 const CONTACT_CASES: { url: string; expected: boolean }[] = JSON.parse(
@@ -133,34 +135,35 @@ describe("easySpeakUploadSchema", () => {
 	});
 
 	// protects=the upload contract refusing a stale v1, a newer v3, and a file with no build name (stored v1 rows are the union's job);
-	// fails_when=the upload schema accepts version 1 or 3, or lets extensionVersion be absent or empty;
+	// fails_when=the upload schema accepts version 1, 2 or 4, or lets extensionVersion be absent or empty;
 	// no_claim=the sentence the admin sees (storeEasySpeakBundle's envelope check, its own suite)
 	it.each([
 		[
 			"another format",
-			(b: EasySpeakBundleV2) => ({ ...b, format: "gavelup.other" }),
+			(b: EasySpeakBundleV3) => ({ ...b, format: "gavelup.other" }),
 		],
-		["the old version", (b: EasySpeakBundleV2) => ({ ...b, version: 1 })],
-		["a newer version", (b: EasySpeakBundleV2) => ({ ...b, version: 3 })],
+		["the old version", (b: EasySpeakBundleV3) => ({ ...b, version: 1 })],
+		["a newer version", (b: EasySpeakBundleV3) => ({ ...b, version: 4 })],
+		["the previous version", (b: EasySpeakBundleV3) => ({ ...b, version: 2 })],
 		[
 			"no extensionVersion",
-			(b: EasySpeakBundleV2) => ({ ...b, extensionVersion: undefined }),
+			(b: EasySpeakBundleV3) => ({ ...b, extensionVersion: undefined }),
 		],
 		[
 			"an empty extensionVersion",
-			(b: EasySpeakBundleV2) => ({ ...b, extensionVersion: "" }),
+			(b: EasySpeakBundleV3) => ({ ...b, extensionVersion: "" }),
 		],
-		["no club", (b: EasySpeakBundleV2) => ({ ...b, club: undefined })],
+		["no club", (b: EasySpeakBundleV3) => ({ ...b, club: undefined })],
 		[
 			"a meeting time that is not a time",
-			(b: EasySpeakBundleV2) => ({
+			(b: EasySpeakBundleV3) => ({
 				...b,
 				meetings: [{ ...b.meetings[0], startsAt: "next Tuesday" }],
 			}),
 		],
 		[
 			"an attendance plan the contract does not have",
-			(b: EasySpeakBundleV2) => ({
+			(b: EasySpeakBundleV3) => ({
 				...b,
 				meetings: [
 					{
@@ -172,7 +175,7 @@ describe("easySpeakUploadSchema", () => {
 		],
 		[
 			"an award category the contract does not have",
-			(b: EasySpeakBundleV2) => ({
+			(b: EasySpeakBundleV3) => ({
 				...b,
 				meetings: [
 					{
@@ -186,7 +189,7 @@ describe("easySpeakUploadSchema", () => {
 		],
 		[
 			"a guest category the contract does not have",
-			(b: EasySpeakBundleV2) => ({
+			(b: EasySpeakBundleV3) => ({
 				...b,
 				meetings: [
 					{
@@ -198,14 +201,14 @@ describe("easySpeakUploadSchema", () => {
 		],
 		[
 			"a person with no name",
-			(b: EasySpeakBundleV2) => ({
+			(b: EasySpeakBundleV3) => ({
 				...b,
 				people: [{ ...b.people[0], name: undefined }],
 			}),
 		],
 		[
 			"a slot of zero",
-			(b: EasySpeakBundleV2) => ({
+			(b: EasySpeakBundleV3) => ({
 				...b,
 				meetings: [
 					{ ...b.meetings[1], roles: [{ ...b.meetings[1].roles[0], slot: 0 }] },
@@ -214,12 +217,58 @@ describe("easySpeakUploadSchema", () => {
 		],
 		[
 			"a joined date that is not a date",
-			(b: EasySpeakBundleV2) => ({
+			(b: EasySpeakBundleV3) => ({
 				...b,
 				people: [{ ...b.people[0], joined: "May 2025" }],
 			}),
 		],
 	])("rejects %s", (_name, mutate) => {
 		expect(easySpeakUploadSchema.safeParse(mutate(load())).success).toBe(false);
+	});
+});
+
+describe("the bundle's range (#1491)", () => {
+	// protects=an upload stating the months it covers, and an old stored bundle reading as a full walk;
+	// fails_when=a bad or missing range is accepted, or a v1/v2 bundle reads as bounded;
+	// no_claim=that the extension writes a true range (its walk tests)
+	it("accepts a bounded range and a null one", () => {
+		const bounded = { ...load(), range: { fromMonth: "2026-05" } };
+		expect(easySpeakUploadSchema.safeParse(bounded).success).toBe(true);
+		expect(
+			easySpeakUploadSchema.safeParse({ ...load(), range: null }).success,
+		).toBe(true);
+	});
+
+	it.each([
+		"2026-5",
+		"2026-13",
+		"2026-00",
+		"May 2026",
+		"2026-05-01",
+		"",
+	])("refuses the start month %j", (fromMonth) => {
+		expect(
+			easySpeakUploadSchema.safeParse({ ...load(), range: { fromMonth } })
+				.success,
+		).toBe(false);
+	});
+
+	it("refuses a v3 bundle with no range", () => {
+		const { range: _range, ...rest } = load();
+		expect(easySpeakUploadSchema.safeParse(rest).success).toBe(false);
+	});
+
+	it("reads a stored v1 or v2 bundle as range null, and a v3 one as its own", () => {
+		const { range: _r, ...v2 } = load();
+		const v2Bundle = easySpeakStoredSchema.parse({ ...v2, version: 2 });
+		expect(bundleRange(v2Bundle)).toBeNull();
+		const { extensionVersion: _e, ...v1 } = v2;
+		expect(
+			bundleRange(easySpeakStoredSchema.parse({ ...v1, version: 1 })),
+		).toBeNull();
+		const bounded = { ...load(), range: { fromMonth: "2026-05" } };
+		expect(bundleRange(easySpeakStoredSchema.parse(bounded))).toEqual({
+			fromMonth: "2026-05",
+		});
 	});
 });

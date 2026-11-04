@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fns = vi.hoisted(() => ({
 	listEasySpeakImports: vi.fn(),
+	nextEasySpeakExport: vi.fn(),
 	uploadEasySpeakBundle: vi.fn(),
 	previewEasySpeakImport: vi.fn(),
 	applyEasySpeakImport: vi.fn(),
@@ -101,8 +102,10 @@ function previewFor(
 	resolved: boolean,
 	report: unknown = null,
 	appliedAt: Date | null = null,
+	range: { fromMonth: string } | null = null,
 ) {
 	return {
+		range,
 		importId: IMPORT,
 		planHash: PLAN_HASH,
 		appliedAt,
@@ -155,6 +158,41 @@ async function openImport() {
 	renderPanel();
 	fireEvent.click(await screen.findByText(/Fixture Speakers, 3 meetings/));
 }
+
+describe("the next export and the bundle's range (#1491)", () => {
+	// protects=the admin knowing which month the next extension export should start from, and that a bounded bundle holds only part of the history;
+	// fails_when=the line shows another month, shows nothing for a null month, or the range line appears for a full bundle;
+	// no_claim=that the server computes the month (its integration test); the server fns are mocked
+	it("shows where the next export starts, or the full history", async () => {
+		fns.nextEasySpeakExport.mockResolvedValue({ fromMonth: "2026-05" });
+		const first = renderPanel();
+		expect((await screen.findByTestId("import-next-export")).textContent).toBe(
+			"Next export: from May 2026.",
+		);
+		first.unmount();
+		fns.nextEasySpeakExport.mockResolvedValue({ fromMonth: null });
+		renderPanel();
+		expect((await screen.findByTestId("import-next-export")).textContent).toBe(
+			"Next export: the full history.",
+		);
+	});
+
+	it("says a bounded bundle holds meetings from its month on, and a full one says nothing", async () => {
+		fns.nextEasySpeakExport.mockResolvedValue({ fromMonth: null });
+		fns.previewEasySpeakImport.mockResolvedValue(
+			previewFor(true, null, null, { fromMonth: "2026-05" }),
+		);
+		await openImport();
+		expect((await screen.findByTestId("import-bundle-range")).textContent).toBe(
+			"This bundle holds meetings from May 2026 on.",
+		);
+		cleanup();
+		fns.previewEasySpeakImport.mockResolvedValue(previewFor(true));
+		await openImport();
+		await screen.findByRole("button", { name: "Apply import" });
+		expect(screen.queryByTestId("import-bundle-range")).toBeNull();
+	});
+});
 
 describe("ImportHistoryPanel (#1051)", () => {
 	// protects=the panel says the bundle is kept with the club and that only the 5 newest unapplied uploads are kept, without contradiction;

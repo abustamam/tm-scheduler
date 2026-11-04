@@ -37,7 +37,7 @@
  */
 import {
 	type AssembleInput,
-	type EasySpeakBundleV2,
+	type EasySpeakBundleV3,
 	type EsArchiveV1,
 	type EsEvaluation,
 	type EsRawPage,
@@ -49,6 +49,7 @@ import {
 	bundleFileName,
 	isContactPage,
 } from "./easy-speak-bundle";
+import { isWalkableMonth, monthLabel, monthName } from "./last-export";
 import { EASY_SPEAK_ORIGIN } from "./easy-speak-hosts";
 import {
 	PageShapeError,
@@ -221,6 +222,11 @@ export interface WalkDeps {
 	identity: Identity;
 	/** The extension's own version, recorded in the bundle for diagnosis. */
 	extensionVersion: string;
+	/**
+	 * The month (`yyyy-mm`, inclusive) to walk the meeting list from, or null for every year back
+	 * to `EARLIEST_MEETING_YEAR`. Omitted counts as null (#1491).
+	 */
+	fromMonth?: string | null;
 }
 
 export interface Progress {
@@ -235,6 +241,11 @@ export interface Session {
 	pages: number;
 	/** The club and account that started this export; another identity never resumes it. */
 	identity: Identity;
+	/**
+	 * The start month this export walks from, null for the full history. A session stored by a
+	 * build that predates #1491 has none and is read as null (it was a full walk).
+	 */
+	fromMonth?: string | null;
 }
 
 interface Entry {
@@ -406,7 +417,7 @@ export function followResume(initial: ResumeState, deps: FollowDeps): { cancel: 
 
 /** The upload bundle (`raw: []`) and the archive of raw pages, each with its file name. */
 export interface ExportResult {
-	bundle: EasySpeakBundleV2;
+	bundle: EasySpeakBundleV3;
 	fileName: string;
 	archive: EsArchiveV1;
 	archiveFileName: string;
@@ -444,19 +455,30 @@ async function walk(
 		if (!wrote) throw new LeaseError("Another Easy-Speak tab took over this export.");
 	}
 
+	const fromMonth = deps.fromMonth ?? null;
+	const thisYear = new Date(now()).getUTCFullYear();
+	// Refused before any request, and before an unfinished export is discarded.
+	if (fromMonth !== null && !isWalkableMonth(fromMonth, EARLIEST_MEETING_YEAR, thisYear + 1)) {
+		throw new WalkError(
+			`The start month ${fromMonth} is outside ${EARLIEST_MEETING_YEAR} to ${thisYear + 1}.`,
+		);
+	}
+
 	const existing = await readSession(store, now());
 	let session: Session;
-	if (existing && sameIdentity(existing.identity, deps.identity)) {
+	if (existing && sameIdentity(existing.identity, deps.identity) && (existing.fromMonth ?? null) === fromMonth) {
 		session = existing;
 	} else {
 		if (existing) {
 			deps.onProgress?.({
 				done: 0,
 				total: 0,
-				label: "Discarding an unfinished export of another club or Easy-Speak account; starting fresh.",
+				label: sameIdentity(existing.identity, deps.identity)
+					? "Discarding an unfinished export with another start month; starting fresh."
+					: "Discarding an unfinished export of another club or Easy-Speak account; starting fresh.",
 			});
 		}
-		session = { startedAt: now(), lastActivityAt: now(), pages: 0, identity: deps.identity };
+		session = { startedAt: now(), lastActivityAt: now(), pages: 0, identity: deps.identity, fromMonth };
 		// Empty the store and take the lease again (the clear took it with everything else), as one
 		// step that only happens if the lease is still ours.
 		await fenced({
@@ -661,22 +683,25 @@ async function walk(
 
 	// ---- every meeting: walk the list year by year, newest first, back to the first
 	const meetingIds: string[] = [];
-	const thisYear = new Date(now()).getUTCFullYear();
-	for (let year = thisYear + 1; year >= EARLIEST_MEETING_YEAR; year--) {
+	const lowest = fromMonth ? Number(fromMonth.slice(0, 4)) : EARLIEST_MEETING_YEAR;
+	for (let year = thisYear + 1; year >= lowest; year--) {
 		total += 1;
+		// Only the lowest year of a bounded walk starts mid-year (the list is month-granular).
+		const startMonth = fromMonth && year === lowest ? fromMonth.slice(5) : "01";
+		const bounded = fromMonth !== null && year === lowest;
 		const ids = await page<string[]>({
-			key: `list:${year}`,
+			key: bounded ? `list:${year}-${startMonth}` : `list:${year}`,
 			url: get("meeting_list.php"),
 			rawUrl: get(
-				`meeting_list.php#POST mode=roles&start_month=01&start_year=${year}&end_month=12&end_year=${year}`,
+				`meeting_list.php#POST mode=roles&start_month=${startMonth}&start_year=${year}&end_month=12&end_year=${year}`,
 			),
-			label: `meetings in ${year}`,
+			label: bounded ? `meetings in ${year} from ${monthName(startMonth)}` : `meetings in ${year}`,
 			init: {
 				method: "POST",
 				headers: { "Content-Type": "application/x-www-form-urlencoded" },
 				body: new URLSearchParams({
 					mode: "roles",
-					start_month: "01",
+					start_month: startMonth,
 					start_year: String(year),
 					end_month: "12",
 					end_year: String(year),
@@ -688,7 +713,11 @@ async function walk(
 		for (const id of ids) if (!meetingIds.includes(id)) meetingIds.push(id);
 	}
 	if (meetingIds.length === 0) {
-		throw new WalkError("Easy-Speak's meeting list showed no meetings for this club.");
+		throw new WalkError(
+			fromMonth
+				? `Easy-Speak's meeting list showed no meetings from ${monthLabel(fromMonth)} on.`
+				: "Easy-Speak's meeting list showed no meetings for this club.",
+		);
 	}
 
 	total += meetingIds.length;
@@ -853,6 +882,7 @@ async function walk(
 			name: clubPage.club.name ?? "",
 			timezone: tz,
 		},
+		range: fromMonth ? { fromMonth } : null,
 		people: memberPage.people.map((p) => ({ ...p, joined: null })),
 		joined: new Map(mentoring.joined),
 		meetings,

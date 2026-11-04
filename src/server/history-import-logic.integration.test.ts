@@ -34,7 +34,10 @@ import {
 	tableTopicsSpeakers,
 	user,
 } from "#/db/schema";
-import type { EasySpeakBundleV1 } from "#/lib/easy-speak-bundle";
+import type {
+	EasySpeakBundleV1,
+	EasySpeakBundleV3,
+} from "#/lib/easy-speak-bundle";
 import {
 	isBindingRefusal,
 	isJsonbSafeText,
@@ -2265,6 +2268,220 @@ EXECUTE FUNCTION zz_claim_slot()`),
 				now: NOW,
 			});
 			expect(after.binding).toBeNull();
+		});
+	});
+
+	// ---- bounded export (#1491)
+
+	/**
+	 * The fixture's bundle as a bounded export holds it: its one imported meeting plus one new past
+	 * meeting at `newAt` (a Toastmaster-style role with no speech, held by someone the plan matches),
+	 * stamped with its own `exportedAt` so each is a distinct upload.
+	 */
+	function boundedText(
+		fromMonth: string | null,
+		newAt: string,
+		exportedAt: string,
+	): string {
+		const bundle = JSON.parse(bundleText()) as EasySpeakBundleV3;
+		const past = bundle.meetings.find((m) => m.esMeetingId === "644304");
+		const plain = past?.roles.find((r) => !r.speech && r.holder);
+		if (!past || !plain) throw new Error("fixture changed");
+		bundle.version = 3;
+		bundle.range = fromMonth ? { fromMonth } : null;
+		bundle.exportedAt = exportedAt;
+		bundle.meetings.push({
+			...past,
+			esMeetingId: `new-${newAt}`,
+			startsAt: newAt,
+			roles: [{ ...plain, slot: 1 }],
+			attendance: [],
+			guests: [],
+			awards: [],
+			tableTopics: [],
+		});
+		return JSON.stringify(bundle);
+	}
+
+	async function addImportedMeeting(
+		clubId: string,
+		at: Date,
+		sourceId: string,
+	): Promise<void> {
+		const [row] = await testDb
+			.insert(meetings)
+			.values({ clubId, scheduledAt: at, status: "completed" })
+			.returning({ id: meetings.id });
+		await testDb.insert(importRefs).values({
+			clubId,
+			source: "easy_speak",
+			kind: "meeting",
+			sourceId,
+			targetId: row?.id as string,
+		});
+	}
+
+	async function applyFull() {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await apply(stored.importId, resolutions);
+		return stored;
+	}
+
+	// protects=the panel's "Next export" month: the newest imported meeting that had started when the newest APPLIED import was exported, in the club's zone;
+	// fails_when=an imported meeting after exportedAt, another club's refs or an unapplied import's later exportedAt moves the month, or a club with no applied import gets one;
+	// no_claim=the display (the panel test); the fixture's one past meeting stands in for a real history
+	it("nextExportMonth is the club-local month of the newest imported meeting held by the last export (AC 9)", async () => {
+		expect(await logic.nextExportMonth(seed.clubId)).toBeNull();
+		await applyFull();
+		// FIRST_AT is 2026-09-23T02:00Z: still the 22nd in Los Angeles.
+		expect(await logic.nextExportMonth(seed.clubId)).toBe("2026-09");
+
+		// An imported meeting after the export's exportedAt (2026-10-12T12:00:41Z) is not "held".
+		await addImportedMeeting(
+			seed.clubId,
+			new Date("2026-10-20T02:00:00Z"),
+			"later",
+		);
+		expect(await logic.nextExportMonth(seed.clubId)).toBe("2026-09");
+
+		// An unapplied import, even with a later exportedAt, does not move the cutoff.
+		await addImportedMeeting(
+			seed.clubId,
+			new Date("2026-10-12T12:30:00Z"),
+			"between",
+		);
+		await upload(
+			boundedText(null, "2026-10-12T12:20:00.000Z", "2026-10-12T13:00:00.000Z"),
+		);
+		expect(await logic.nextExportMonth(seed.clubId)).toBe("2026-09");
+
+		// Another club's refs and meetings, newer and before the cutoff, are not this club's.
+		const other = await seedClub();
+		try {
+			await testDb
+				.update(meetings)
+				.set({ scheduledAt: new Date("2026-10-01T20:00:00Z") })
+				.where(eq(meetings.id, other.meetingId));
+			await testDb.insert(importRefs).values({
+				clubId: other.clubId,
+				source: "easy_speak",
+				kind: "meeting",
+				sourceId: "elsewhere",
+				targetId: other.meetingId,
+			});
+			expect(await logic.nextExportMonth(seed.clubId)).toBe("2026-09");
+			// ...and it has no applied import of its own.
+			expect(await logic.nextExportMonth(other.clubId)).toBeNull();
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	// protects=the preview warning an admin that a bounded bundle leaves a hole after the club's imported history, without ever blocking the apply;
+	// fails_when=the warning appears for an in-range, full, applied or first-ever import, repeats, names the wrong month, or changes canApply;
+	// no_claim=the wording's place in the panel (its own test)
+	it("warns once, and only, when an unapplied bounded bundle starts after the imported history ends (AC 11)", async () => {
+		const gap = boundedText(
+			"2026-11",
+			"2026-11-04T02:00:00.000Z",
+			"2026-11-05T12:00:00.000Z",
+		);
+		const message =
+			"This bundle starts November 2026; GavelUp's imported history ends September 2026. Meetings in between will not be imported. Export from September 2026 to close the gap.";
+		const warningsOf = async (importId: string) =>
+			(
+				await logic.previewEasySpeakImport({
+					clubId: seed.clubId,
+					importId,
+					now: NOW,
+				})
+			).warnings;
+		const gapOnly = (w: string[]) =>
+			w.filter((x) => x.startsWith("This bundle starts"));
+
+		// A club with no applied import: nothing to compare with.
+		const first = await upload(gap);
+		expect(gapOnly(await warningsOf(first.importId))).toEqual([]);
+
+		await applyFull();
+
+		expect(gapOnly(await warningsOf(first.importId))).toEqual([message]);
+		// The same bundle read as a full history, and ranges in or before the imported month, get none.
+		const full = await upload(
+			boundedText(null, "2026-11-04T02:00:00.000Z", "2026-11-05T12:00:00.000Z"),
+		);
+		const inside = await upload(
+			boundedText(
+				"2026-09",
+				"2026-11-04T02:00:00.000Z",
+				"2026-11-05T12:00:00.000Z",
+			),
+		);
+		const before = await upload(
+			boundedText(
+				"2026-08",
+				"2026-11-04T02:00:00.000Z",
+				"2026-11-05T12:00:00.000Z",
+			),
+		);
+		for (const s of [full, inside, before]) {
+			expect(gapOnly(await warningsOf(s.importId))).toEqual([]);
+		}
+		// canApply does not depend on the warning.
+		const withWarning = await logic.previewEasySpeakImport({
+			clubId: seed.clubId,
+			importId: first.importId,
+			now: NOW,
+		});
+		const without = await logic.previewEasySpeakImport({
+			clubId: seed.clubId,
+			importId: full.importId,
+			now: NOW,
+		});
+		expect(withWarning.canApply).toBe(without.canApply);
+		expect(withWarning.range).toEqual({ fromMonth: "2026-11" });
+		expect(without.range).toBeNull();
+
+		// Once applied, the warning is history.
+		const { resolutions } = await resolveAll(first.importId);
+		await apply(first.importId, resolutions);
+		expect(gapOnly(await warningsOf(first.importId))).toEqual([]);
+	});
+
+	// protects=a bounded export adding only the meetings since the last import: no one is created, changed or removed because older meetings are absent, and the report still reconciles;
+	// fails_when=the apply touches an existing member row, loses or recreates older meetings, or reports a difference for records outside the bundle;
+	// no_claim=a real multi-year club (one past meeting plus one new one)
+	it("applying a bounded bundle adds only its new meetings and changes no member (AC 12)", async () => {
+		await applyFull();
+		const before = await counts();
+		const membersOf = () =>
+			testDb
+				.select()
+				.from(members)
+				.where(eq(members.clubId, seed.clubId))
+				.orderBy(members.id);
+		const membersBefore = await membersOf();
+
+		const stored = await upload(
+			boundedText(
+				"2026-09",
+				"2026-10-05T02:00:00.000Z",
+				"2026-10-12T13:00:00.000Z",
+			),
+		);
+		const { resolutions } = await resolveAll(stored.importId);
+		const { report } = await apply(stored.importId, resolutions);
+
+		expect(report.reconciled).toBe(true);
+		const after = await counts();
+		expect(after.meetings).toBe(before.meetings + 1);
+		expect(JSON.stringify(await membersOf())).toBe(
+			JSON.stringify(membersBefore),
+		);
+		expect(report.counts.find((c) => c.key === "meetings")).toMatchObject({
+			bundle: 2,
+			gavelup: 2,
 		});
 	});
 });

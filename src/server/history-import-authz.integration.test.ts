@@ -93,6 +93,8 @@ describe.skipIf(!hasTestDb)("history-import.ts authorization (#1051)", () => {
 	const calls = (clubId: string): Record<string, () => Promise<unknown>> => ({
 		listEasySpeakImports: () =>
 			(fns.listEasySpeakImports as Fn)({ data: { clubId } }),
+		nextEasySpeakExport: () =>
+			(fns.nextEasySpeakExport as Fn)({ data: { clubId } }),
 		uploadEasySpeakBundle: () =>
 			(fns.uploadEasySpeakBundle as Fn)({ data: { clubId, text: "{}" } }),
 		previewEasySpeakImport: () =>
@@ -145,6 +147,7 @@ describe.skipIf(!hasTestDb)("history-import.ts authorization (#1051)", () => {
 
 	it.each([
 		"listEasySpeakImports",
+		"nextEasySpeakExport",
 		"uploadEasySpeakBundle",
 		"previewEasySpeakImport",
 		"applyEasySpeakImport",
@@ -157,8 +160,9 @@ describe.skipIf(!hasTestDb)("history-import.ts authorization (#1051)", () => {
 	});
 
 	/** What each fn says once it is PAST the gate, for an import id that does not exist. */
-	const PAST_THE_GATE: Record<string, RegExp | "list"> = {
+	const PAST_THE_GATE: Record<string, RegExp | "list" | "next"> = {
 		listEasySpeakImports: "list",
+		nextEasySpeakExport: "next",
 		uploadEasySpeakBundle: /not an Easy-Speak bundle/i,
 		previewEasySpeakImport: /not found/i,
 		applyEasySpeakImport: /not found/i,
@@ -170,6 +174,10 @@ describe.skipIf(!hasTestDb)("history-import.ts authorization (#1051)", () => {
 		const outcome = PAST_THE_GATE[name];
 		if (outcome === "list") {
 			await expect(calls(seed.clubId)[name]?.()).resolves.toEqual([]);
+		} else if (outcome === "next") {
+			await expect(calls(seed.clubId)[name]?.()).resolves.toEqual({
+				fromMonth: null,
+			});
 		} else {
 			await expect(calls(seed.clubId)[name]?.()).rejects.toThrow(outcome);
 		}

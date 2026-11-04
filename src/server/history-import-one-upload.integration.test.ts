@@ -367,15 +367,16 @@ describe.skipIf(!hasTestDb)(
 			expect(await importRows()).toBe(0);
 		};
 
-		it("stores the v2 bundle with its extensionVersion verbatim", async () => {
+		it("stores the v3 bundle with its extensionVersion and range verbatim", async () => {
 			const stored = await upload();
 			const [row] = await testDb
 				.select({ bundle: clubImports.bundle })
 				.from(clubImports)
 				.where(eq(clubImports.id, stored.importId));
 			expect(row?.bundle).toMatchObject({
-				version: 2,
+				version: 3,
 				extensionVersion: "0.0.0-test",
+				range: null,
 			});
 		});
 
@@ -404,9 +405,9 @@ describe.skipIf(!hasTestDb)(
 			);
 			await refused(
 				envelope((b) => {
-					b.version = 3;
+					b.version = 4;
 				}),
-				"This file came from a newer GavelUp extension (format 3) than this site reads yet. Try again after the next GavelUp update.",
+				"This file came from a newer GavelUp extension (format 4) than this site reads yet. Try again after the next GavelUp update.",
 			);
 		});
 

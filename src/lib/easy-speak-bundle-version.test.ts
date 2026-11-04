@@ -23,7 +23,7 @@ const OLDER_N1 =
 const OLDER =
 	"This file came from an older GavelUp extension. Install the latest and export again.";
 const NEWER =
-	"This file came from a newer GavelUp extension (format 3) than this site reads yet. Try again after the next GavelUp update.";
+	"This file came from a newer GavelUp extension (format 4) than this site reads yet. Try again after the next GavelUp update.";
 const ARCHIVE =
 	"That is the pages archive (the file ending in -pages.json). Upload the other file the export saved.";
 const head = (rest: string) =>
@@ -38,7 +38,7 @@ describe("wrongVersionMessage", () => {
 		expect(wrongVersionMessage(null)).toBe(OLDER);
 	});
 	it("says a newer extension is ahead of the site", () => {
-		expect(wrongVersionMessage(3)).toBe(NEWER);
+		expect(wrongVersionMessage(4)).toBe(NEWER);
 	});
 });
 
@@ -54,8 +54,8 @@ describe("oversizeMessage", () => {
 			'{ "format" : "gavelup.easy-speak-bundle", "version" : 1, "exportedAt":"x",';
 		expect(oversizeMessage(SIXTY_MIB, h)).toBe(`${SIZE} ${OLDER_N1}`);
 	});
-	it("adds the newer sentence for version 3", () => {
-		expect(oversizeMessage(SIXTY_MIB, head('"version":3,'))).toBe(
+	it("adds the newer sentence for version 4", () => {
+		expect(oversizeMessage(SIXTY_MIB, head('"version":4,'))).toBe(
 			`${SIZE} ${NEWER}`,
 		);
 	});
@@ -75,10 +75,10 @@ describe("oversizeMessage", () => {
 		expect(oversizeMessage(SIXTY_MIB, h)).toBe(`${SIZE} ${ARCHIVE}`);
 	});
 	it("adds nothing for a current-version head without inline raw", () => {
-		expect(oversizeMessage(SIXTY_MIB, head('"version":2,'))).toBe(SIZE);
+		expect(oversizeMessage(SIXTY_MIB, head('"version":3,'))).toBe(SIZE);
 	});
 	it("calls a current-version head with inline raw an older extension", () => {
-		const h = head('"version":2,') + '"raw":[ {"url":"https://x"';
+		const h = head('"version":3,') + '"raw":[ {"url":"https://x"';
 		expect(oversizeMessage(SIXTY_MIB, h)).toBe(`${SIZE} ${OLDER}`);
 	});
 	it("reads a head of 65536 bytes", () => {
