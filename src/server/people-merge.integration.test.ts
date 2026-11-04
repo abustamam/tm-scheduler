@@ -26,6 +26,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
 	clubs,
+	importRefs,
 	members,
 	pathEnrollments,
 	pathLevelProgress,
@@ -368,6 +369,50 @@ describe.skipIf(!hasTestDb)("mergePeople", () => {
 			.from(people)
 			.where(eq(people.id, absorbed));
 		expect(absRows).toHaveLength(0);
+	});
+
+	it("re-points import refs of a collapsed member to the keeper's membership (#1494)", async () => {
+		const club = await makeClub();
+		const keeper = await makePerson();
+		const absorbed = await makePerson();
+		const keeperMember = await addMembership(club, keeper);
+		const absorbedMember = await addMembership(club, absorbed);
+		const bystander = await addMembership(club, await makePerson());
+		const other = randomUUID();
+		const ref = (kind: string, sourceId: string, targetId: string) => ({
+			clubId: club,
+			source: "easy_speak" as const,
+			kind,
+			sourceId,
+			targetId,
+		});
+		await testDb.insert(importRefs).values([
+			// The absorbed member's refs: one per member-targeted kind.
+			ref("person", "es-absorbed", absorbedMember),
+			ref("willing_to_mentor", absorbedMember, absorbedMember),
+			// The keeper already holds a ref of the same kind: no clash, both stay.
+			ref("person", "es-keeper", keeperMember),
+			ref("person", "es-bystander", bystander),
+			// A kind that targets a non-member row must not be touched.
+			ref("speech", "es-speech", absorbedMember),
+			ref("meeting", "es-meeting", other),
+		]);
+
+		await mergePeople({ keeperPersonId: keeper, absorbedPersonId: absorbed });
+
+		const rows = await testDb
+			.select()
+			.from(importRefs)
+			.where(eq(importRefs.clubId, club));
+		const target = (kind: string, sourceId: string) =>
+			rows.find((r) => r.kind === kind && r.sourceId === sourceId)?.targetId;
+		expect(rows).toHaveLength(6);
+		expect(target("person", "es-absorbed")).toBe(keeperMember);
+		expect(target("willing_to_mentor", absorbedMember)).toBe(keeperMember);
+		expect(target("person", "es-keeper")).toBe(keeperMember);
+		expect(target("person", "es-bystander")).toBe(bystander);
+		expect(target("speech", "es-speech")).toBe(absorbedMember);
+		expect(target("meeting", "es-meeting")).toBe(other);
 	});
 
 	it("collapses two memberships of the SAME club into one keeper membership", async () => {
