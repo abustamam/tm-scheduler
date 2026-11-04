@@ -69,8 +69,15 @@ export const Route = createFileRoute("/club/$clubId")({
 
 function ClubShell() {
 	const { clubId } = Route.useParams();
-	const { clubUuid, clubName, clubNumber, shell, authCtx, effectiveMemberId } =
-		Route.useRouteContext();
+	const {
+		clubUuid,
+		clubName,
+		clubNumber,
+		shell,
+		authCtx,
+		effectiveMemberId,
+		hasSession,
+	} = Route.useRouteContext();
 	const router = useRouter();
 	// Sign-in returns here, not to "/"; `/signin` validates it with `safeRedirect`.
 	const here = useRouterState({ select: (st) => st.location.href });
@@ -141,7 +148,9 @@ function ClubShell() {
 				{/* Bridge to the full signed-in workspace (dashboard, Pathways,
 				    resources) — the sign-up sheet stays usable without it. */}
 				<span className="hidden shrink-0 text-xs text-muted-foreground min-[420px]:inline">
-					Not signed in
+					{hasSession
+						? "Signed in · not a member of this club"
+						: "Not signed in"}
 				</span>
 				<Button
 					asChild
@@ -149,9 +158,13 @@ function ClubShell() {
 					size="sm"
 					className="h-11 shrink-0 md:h-8"
 				>
-					<Link to="/signin" search={{ redirect: here }}>
-						Sign in
-					</Link>
+					{hasSession ? (
+						<Link to="/">Your clubs</Link>
+					) : (
+						<Link to="/signin" search={{ redirect: here }}>
+							Sign in
+						</Link>
+					)}
 				</Button>
 			</header>
 			<IdentityGateProvider

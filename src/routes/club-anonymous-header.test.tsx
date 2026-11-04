@@ -6,6 +6,8 @@ import { cleanup, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const ctx = vi.hoisted(() => ({ hasSession: false }));
+
 vi.mock("#/db", () => ({ db: {} }));
 vi.mock("@tanstack/react-router", () => ({
 	createFileRoute: () => (options: Record<string, unknown>) => ({
@@ -18,6 +20,7 @@ vi.mock("@tanstack/react-router", () => ({
 			shell: false,
 			authCtx: null,
 			effectiveMemberId: null,
+			hasSession: ctx.hasSession,
 		}),
 	}),
 	Link: ({
@@ -57,7 +60,10 @@ vi.mock("#/server/impersonation", () => ({ endImpersonation: vi.fn() }));
 
 import { Route } from "./club.$clubId";
 
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	ctx.hasSession = false;
+});
 
 describe("anonymous club header", () => {
 	it("renders a Sign in button back to the current page, and a Not signed in label", () => {
@@ -71,5 +77,22 @@ describe("anonymous club header", () => {
 		);
 		expect(link.getAttribute("data-slot")).toBe("button");
 		expect(screen.getByText("Not signed in")).toBeTruthy();
+	});
+
+	it("tells a signed-in non-member so, with a Your clubs link and no Sign in", () => {
+		ctx.hasSession = true;
+		const Shell = (
+			Route as unknown as { options: { component: () => ReactNode } }
+		).options.component;
+		render(<Shell />);
+		const link = screen.getByRole("link", { name: "Your clubs" });
+		expect(link.getAttribute("href")).toBe("/?redirect=");
+		expect(link.getAttribute("data-slot")).toBe("button");
+		expect(link.className).toContain("h-11");
+		expect(
+			screen.getByText("Signed in · not a member of this club"),
+		).toBeTruthy();
+		expect(screen.queryByRole("link", { name: "Sign in" })).toBeNull();
+		expect(screen.queryByText("Not signed in")).toBeNull();
 	});
 });
