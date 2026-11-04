@@ -43,6 +43,11 @@ import {
 	isJsonbSafeText,
 	MEETING_LEFT_ALONE,
 	type PersonResolution,
+	UPCOMING_INACTIVE_MEMBER,
+	UPCOMING_KEPT_HOLDER,
+	UPCOMING_NOT_COMING,
+	UPCOMING_RELEASED,
+	UPCOMING_ROLES_SKIPPED,
 } from "#/lib/easy-speak-import-plan";
 import {
 	cleanup,
@@ -2806,6 +2811,184 @@ EXECUTE FUNCTION zz_claim_slot()`),
 					upcoming: { include: true, skipRoles: [row?.planKey as string] },
 				}),
 			).rejects.toThrow(realLogic.PLAN_CHANGED_MESSAGE);
+		});
+
+		async function memberIdOf(name: string) {
+			const [row] = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(and(eq(members.clubId, seed.clubId), eq(members.name, name)));
+			return row?.id as string;
+		}
+		type Rep = Awaited<ReturnType<typeof applyUp>>["report"];
+		/** The stored report's row for one omission cause. */
+		const omissionRow = (report: Rep, cause: { what: string }) =>
+			report.notImported.find((r) => r.what === cause.what);
+		/** The meeting an import ref points the Easy-Speak meeting at. */
+		async function createdMeeting(esMeetingId = "644360") {
+			const ref = (await refsOfKind("meeting")).find(
+				(r) => r.sourceId === esMeetingId,
+			);
+			return ref?.targetId as string;
+		}
+		async function planRows(meetingId: string) {
+			return testDb
+				.select({
+					memberId: meetingAttendancePlan.memberId,
+					status: meetingAttendancePlan.status,
+				})
+				.from(meetingAttendancePlan)
+				.where(eq(meetingAttendancePlan.meetingId, meetingId));
+		}
+
+		// protects=a slot an earlier import filled and its member then released is not filled again by a re-apply, and the report says so;
+		// fails_when=the re-apply fills any empty slot it finds, deleted or merely released;
+		// no_claim=a slot deleted since (the existing "Deleted in GavelUp" rows).
+		it("does not refill a slot the member released since the first import (R1)", async () => {
+			const timer = await timerDefId();
+			await addMember("Oakley Oakenshaw");
+			const stored = await upload(upcomingText());
+			const { resolutions } = await resolveAll(stored.importId);
+			await applyUp(stored.importId, resolutions);
+			const meetingId = await createdMeeting();
+			const filled = (await slotRows(meetingId)).find(
+				(x) => x.roleDefinitionId === timer && x.assignedMemberId,
+			);
+			expect(filled).toBeTruthy();
+			await testDb
+				.update(roleSlots)
+				.set({ assignedMemberId: null, status: "open" })
+				.where(eq(roleSlots.id, filled?.id as string));
+			const { report } = await applyUp(stored.importId, resolutions);
+			const after = (await slotRows(meetingId)).find(
+				(x) => x.id === filled?.id,
+			);
+			expect(after?.assignedMemberId).toBeNull();
+			expect(omissionRow(report, UPCOMING_RELEASED)).toBeTruthy();
+		});
+
+		// protects=an inactive or former member is given neither an upcoming role nor an RSVP, and the report names each;
+		// fails_when=the roster's membership status is ignored by the writer;
+		// no_claim=a member who goes inactive between the preview and the apply is read under the lock too.
+		it.each(["inactive", "former"] as const)(
+			"gives a %s member no role and no RSVP (R2)",
+			async (status) => {
+				await testDb
+					.update(members)
+					.set({ status })
+					.where(
+						and(
+							eq(members.clubId, seed.clubId),
+							eq(members.name, "Zéphyr Ashlowe"),
+						),
+					);
+				const zephyr = await memberIdOf("Zéphyr Ashlowe");
+				const stored = await upload(upcomingText());
+				const { resolutions } = await resolveAll(stored.importId);
+				const { report } = await applyUp(stored.importId, resolutions);
+				const meetingId = await createdMeeting();
+				const held = (await slotRows(meetingId)).filter(
+					(x) => x.assignedMemberId === zephyr,
+				);
+				expect(held).toEqual([]);
+				expect(
+					(await planRows(meetingId)).filter((r) => r.memberId === zephyr),
+				).toEqual([]);
+				const row = omissionRow(report, UPCOMING_INACTIVE_MEMBER);
+				expect(row).toBeTruthy();
+				// The role AND the RSVP are both named.
+				expect(row?.count).toBeGreaterThanOrEqual(2);
+				// An active member's answer is written.
+				const kai = await memberIdOf("Kai Larkspur");
+				expect(
+					(await planRows(meetingId)).find((r) => r.memberId === kai)?.status,
+				).toBe("coming");
+			},
+		);
+
+		// protects=a member who goes inactive AFTER the plan was read but before the meeting's lock is given neither the role nor the RSVP (the writer re-reads the status);
+		// fails_when=the writer trusts the plan's roster instead of the status it reads under the lock;
+		// no_claim=a member already inactive at the plan (the test above).
+		it("re-reads the member's status under the lock (R2)", async () => {
+			const zephyr = await memberIdOf("Zéphyr Ashlowe");
+			lockHook.run = async (tx, call) => {
+				if (call !== 2) return;
+				await (tx as typeof testDb)
+					.update(members)
+					.set({ status: "inactive" })
+					.where(eq(members.id, zephyr));
+			};
+			const stored = await upload(upcomingText());
+			const { resolutions } = await resolveAll(stored.importId);
+			const { report } = await applyUp(stored.importId, resolutions);
+			lockHook.run = null;
+			const meetingId = await createdMeeting();
+			expect(
+				(await slotRows(meetingId)).filter((x) => x.assignedMemberId === zephyr),
+			).toEqual([]);
+			expect(
+				(await planRows(meetingId)).filter((r) => r.memberId === zephyr),
+			).toEqual([]);
+			// The role and the RSVP, on each of the two upcoming meetings.
+			expect(omissionRow(report, UPCOMING_INACTIVE_MEMBER)?.count).toBe(4);
+		});
+
+		// protects=a member who told GavelUp they are not coming is not given a role in their name;
+		// fails_when=the member's plan row is not read before a slot is filled;
+		// no_claim=the row itself (it is theirs and stays).
+		it("does not fill a member who answered Not coming (R3)", async () => {
+			const adoptId = await seedMeetingAt(MORNING_13, "scheduled");
+			const zephyr = await memberIdOf("Zéphyr Ashlowe");
+			await testDb.insert(meetingAttendancePlan).values({
+				meetingId: adoptId,
+				memberId: zephyr,
+				status: "not_coming",
+			});
+			const stored = await upload(upcomingText());
+			const { resolutions } = await resolveAll(stored.importId);
+			const { report } = await applyUp(stored.importId, resolutions);
+			expect(await createdMeeting()).toBe(adoptId);
+			expect(
+				(await slotRows(adoptId)).filter((x) => x.assignedMemberId === zephyr),
+			).toEqual([]);
+			expect(omissionRow(report, UPCOMING_NOT_COMING)).toBeTruthy();
+			expect(
+				(await planRows(adoptId)).find((r) => r.memberId === zephyr)?.status,
+			).toBe("not_coming");
+		});
+
+		// protects=RSVPs are written once, on the apply that first brings the meeting over, and never over a member's own row; a re-apply does not revive an answer that was cleared;
+		// fails_when=every apply of a meeting writes its RSVPs, or an existing row is overwritten;
+		// no_claim=which statuses map where (the plan unit tests).
+		it("writes RSVPs on the first apply only and never over a member's own (R4)", async () => {
+			const adoptId = await seedMeetingAt(MORNING_13, "scheduled");
+			const kai = await memberIdOf("Kai Larkspur");
+			const elliot = await memberIdOf("Elliot Tansley");
+			await testDb.insert(meetingAttendancePlan).values({
+				meetingId: adoptId,
+				memberId: kai,
+				status: "reached_out",
+			});
+			const stored = await upload(upcomingText());
+			const { resolutions } = await resolveAll(stored.importId);
+			await applyUp(stored.importId, resolutions);
+			const first = await planRows(adoptId);
+			expect(first.find((r) => r.memberId === kai)?.status).toBe("reached_out");
+			expect(first.find((r) => r.memberId === elliot)?.status).toBe(
+				"not_coming",
+			);
+			await testDb
+				.delete(meetingAttendancePlan)
+				.where(
+					and(
+						eq(meetingAttendancePlan.meetingId, adoptId),
+						eq(meetingAttendancePlan.memberId, elliot),
+					),
+				);
+			await applyUp(stored.importId, resolutions);
+			expect(
+				(await planRows(adoptId)).find((r) => r.memberId === elliot),
+			).toBeUndefined();
 		});
 	});
 });
