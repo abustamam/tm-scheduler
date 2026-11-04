@@ -121,6 +121,7 @@ function previewFor(
 			{ memberId: M2, name: "Elliot Dovecott" },
 		],
 		contacts: { emails: 0, phones: 0, warnings: [] },
+		officialRoster: { official: 6, active: 6, complete: true },
 		unresolvedCount: resolved ? 0 : 1,
 		canApply: resolved,
 		savedResolutions: {},
@@ -1020,5 +1021,38 @@ describe("ImportHistoryPanel close names and the contacts hint (#1493)", () => {
 		});
 		await openImport();
 		expect(await screen.findByTestId("contacts-hint")).toBeTruthy();
+	});
+});
+
+describe("the roster notice (#1498)", () => {
+	// protects=an admin hears to load the roster before importing into a thin one;
+	// fails_when=the notice shows for a complete roster or after the apply, or omits the counts;
+	// no_claim=the counts' source (server integration test); the server fns are mocked.
+	it("shows with the counts and a roster link while incomplete, hidden when complete", async () => {
+		fns.nextEasySpeakExport.mockResolvedValue({ fromMonth: null });
+		fns.previewEasySpeakImport.mockResolvedValue({
+			...previewFor(true),
+			officialRoster: { official: 1, active: 8, complete: false },
+		});
+		await openImport();
+		const notice = await screen.findByTestId("import-roster-notice");
+		expect(notice.textContent).toContain("Only 1 of your 8 members");
+		expect(notice.querySelector("a")).not.toBeNull();
+		cleanup();
+		fns.previewEasySpeakImport.mockResolvedValue(previewFor(true));
+		await openImport();
+		await screen.findByRole("button", { name: "Apply import" });
+		expect(screen.queryByTestId("import-roster-notice")).toBeNull();
+	});
+
+	it("is hidden once the import has been applied, even with a thin roster", async () => {
+		fns.nextEasySpeakExport.mockResolvedValue({ fromMonth: null });
+		fns.previewEasySpeakImport.mockResolvedValue({
+			...previewFor(true, null, new Date("2026-10-13T00:00:00Z")),
+			officialRoster: { official: 1, active: 8, complete: false },
+		});
+		await openImport();
+		await screen.findByText(/Fixture Speakers/);
+		expect(screen.queryByTestId("import-roster-notice")).toBeNull();
 	});
 });

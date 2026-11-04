@@ -3,7 +3,11 @@ import type { OnboardingChecklistStatus } from "#/server/onboarding-checklist-lo
 import {
 	buildOnboardingChecklistItems,
 	CHECKLIST_MEMBER_THRESHOLD,
+	isNewClubFor,
+	officialRosterComplete,
 	onboardingDismissKey,
+	onboardingPathKey,
+	resolveOnboardingPath,
 } from "./onboarding-checklist";
 
 const ALL_DONE: OnboardingChecklistStatus = {
@@ -17,6 +21,13 @@ const ALL_DONE: OnboardingChecklistStatus = {
 	hasMeeting: true,
 	hasOfficerTerm: true,
 	isNewClub: false,
+	officialRosterCount: 12,
+	hasOfficialRoster: true,
+	hasImport: true,
+	hasAppliedImport: true,
+	hasUpcomingMeeting: true,
+	isNewClubEasySpeak: false,
+	canRunImport: true,
 };
 
 const NONE_DONE: OnboardingChecklistStatus = {
@@ -30,6 +41,13 @@ const NONE_DONE: OnboardingChecklistStatus = {
 	hasMeeting: false,
 	hasOfficerTerm: false,
 	isNewClub: true,
+	officialRosterCount: 0,
+	hasOfficialRoster: false,
+	hasImport: false,
+	hasAppliedImport: false,
+	hasUpcomingMeeting: false,
+	isNewClubEasySpeak: true,
+	canRunImport: true,
 };
 
 describe("buildOnboardingChecklistItems", () => {
@@ -138,5 +156,92 @@ describe("onboardingDismissKey", () => {
 		expect(onboardingDismissKey("club-b")).not.toBe(
 			onboardingDismissKey("club-a"),
 		);
+	});
+});
+
+// protects=the Easy-Speak roster row's boundary; fails_when=an empty roster or a
+// thin official share clears it; no_claim=the DB query that supplies the counts.
+describe("officialRosterComplete", () => {
+	it("is incomplete on an empty roster", () => {
+		expect(officialRosterComplete(0, 0)).toBe(false);
+	});
+	it("is incomplete with 4 of 6 official and complete with 5 of 6", () => {
+		expect(officialRosterComplete(4, 6)).toBe(false);
+		expect(officialRosterComplete(5, 6)).toBe(true);
+	});
+	it("is complete when a 3-member club is entirely official", () => {
+		expect(officialRosterComplete(3, 3)).toBe(true);
+		expect(officialRosterComplete(2, 3)).toBe(false);
+	});
+});
+
+// protects=data beats storage; fails_when=a stored choice overrides an import or a
+// stale value switches paths; no_claim=localStorage itself.
+describe("resolveOnboardingPath / isNewClubFor", () => {
+	it("is fresh with no import and no stored choice", () => {
+		expect(resolveOnboardingPath({ hasImport: false }, null)).toBe("fresh");
+		expect(resolveOnboardingPath({ hasImport: false }, "junk")).toBe("fresh");
+	});
+	it("honours the stored choice only before an import", () => {
+		expect(resolveOnboardingPath({ hasImport: false }, "easy-speak")).toBe(
+			"easy-speak",
+		);
+	});
+	it("an import forces Easy-Speak whatever is stored", () => {
+		expect(resolveOnboardingPath({ hasImport: true }, null)).toBe("easy-speak");
+	});
+	it("graduation reads the path's own flag", () => {
+		const s = { isNewClub: true, isNewClubEasySpeak: false };
+		expect(isNewClubFor(s, "fresh")).toBe(true);
+		expect(isNewClubFor(s, "easy-speak")).toBe(false);
+	});
+	it("namespaces the path key per club", () => {
+		expect(onboardingPathKey("a")).toBe("gavelup:onboarding-path:a");
+	});
+});
+
+// protects=the seven Easy-Speak rows and who may act on the import steps;
+// fails_when=order, keys, the generate row or the lock drift.
+describe("buildOnboardingChecklistItems (easy-speak)", () => {
+	it("lists seven rows in order with no generate-meetings row", () => {
+		const keys = buildOnboardingChecklistItems(NONE_DONE, "easy-speak").map(
+			(i) => i.key,
+		);
+		expect(keys).toEqual([
+			"club-details",
+			"official-roster",
+			"history",
+			"upcoming",
+			"recurrence",
+			"invite",
+			"officers",
+		]);
+	});
+	it("locks only rows 3 and 4, and only when the viewer cannot run the import", () => {
+		const locked = buildOnboardingChecklistItems(
+			{ ...NONE_DONE, canRunImport: false },
+			"easy-speak",
+		)
+			.filter((i) => i.locked)
+			.map((i) => i.key);
+		expect(locked).toEqual(["history", "upcoming"]);
+		expect(
+			buildOnboardingChecklistItems(NONE_DONE, "easy-speak").some(
+				(i) => i.locked,
+			),
+		).toBe(false);
+	});
+	it("ticks each new row from its own flag", () => {
+		const items = buildOnboardingChecklistItems(
+			{
+				...NONE_DONE,
+				hasOfficialRoster: true,
+				hasAppliedImport: true,
+				hasUpcomingMeeting: true,
+			},
+			"easy-speak",
+		);
+		const done = items.filter((i) => i.complete).map((i) => i.key);
+		expect(done).toEqual(["official-roster", "history", "upcoming"]);
 	});
 });

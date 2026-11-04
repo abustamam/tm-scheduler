@@ -518,6 +518,20 @@ export function ImportHistoryPanel({
 							{w}
 						</p>
 					))}
+					{!data.appliedAt && data.officialRoster?.complete === false ? (
+						<p
+							className="text-sm text-warning-foreground"
+							data-testid="import-roster-notice"
+						>
+							Only {data.officialRoster.official} of your{" "}
+							{data.officialRoster.active} members came from the Toastmasters
+							roster, so this import may create people who are already members.
+							Load the roster from Club Central first.{" "}
+							<a href="/roster" className="underline">
+								Load the roster
+							</a>
+						</p>
+					) : null}
 
 					<dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-3">
 						<Count label="Meetings" n={data.counts.meetings} />

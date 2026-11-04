@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	clubImports,
 	clubMeetingRecurrence,
 	clubs,
 	meetings,
@@ -28,7 +29,10 @@ import {
 	testDb,
 } from "#/test/db";
 import { prepareMemberInvite } from "./account-invite-logic";
-import { getOnboardingChecklistStatus } from "./onboarding-checklist-logic";
+import {
+	countOfficialRosterMembers,
+	getOnboardingChecklistStatus,
+} from "./onboarding-checklist-logic";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
@@ -39,9 +43,11 @@ async function addActiveMember(
 	clubId: string,
 	name: string,
 	status: "active" | "inactive" = "active",
+	customerId: string | null = null,
 ): Promise<string> {
 	const personId = await seedPerson({
 		name,
+		customerId,
 		email: `checklist-${randomUUID()}@test.example`,
 	});
 	const [row] = await testDb
@@ -318,6 +324,135 @@ describe.skipIf(!hasTestDb)(
 			await expect(
 				getOnboardingChecklistStatus("00000000-0000-0000-0000-000000000000"),
 			).rejects.toThrow(/club not found/i);
+		});
+		// Easy-Speak path (#1498).
+		// protects=the official-roster row counts only ACTIVE members whose Person has a customer_id;
+		// fails_when=an inactive member or one without a customer_id is counted, or an empty roster clears the row;
+		// no_claim=the CSV import that writes customer_id (a fixture sets it directly).
+		it("officialRosterCount excludes inactive members and people without a customer_id", async () => {
+			await testDb.delete(members).where(eq(members.clubId, seeded.clubId));
+			let status = await getOnboardingChecklistStatus(seeded.clubId);
+			expect(status.hasOfficialRoster).toBe(false); // empty roster
+			for (let i = 0; i < 5; i++) {
+				await addActiveMember(
+					seeded.clubId,
+					`Official ${i}`,
+					"active",
+					`cid-${randomUUID()}`,
+				);
+			}
+			await addActiveMember(seeded.clubId, "No Id"); // active, no customer_id
+			await addActiveMember(
+				seeded.clubId,
+				"Gone",
+				"inactive",
+				`cid-${randomUUID()}`,
+			);
+			status = await getOnboardingChecklistStatus(seeded.clubId);
+			expect(status.memberCount).toBe(6);
+			expect(status.officialRosterCount).toBe(5);
+			expect(status.hasOfficialRoster).toBe(true); // 5 of 6 >= min(5, 6)
+			expect(await countOfficialRosterMembers(seeded.clubId)).toEqual({
+				official: 5,
+				active: 6,
+			});
+		});
+
+		it("4 official of 6 active is not enough", async () => {
+			await testDb.delete(members).where(eq(members.clubId, seeded.clubId));
+			for (let i = 0; i < 4; i++) {
+				await addActiveMember(
+					seeded.clubId,
+					`Official ${i}`,
+					"active",
+					`cid-${randomUUID()}`,
+				);
+			}
+			await addActiveMember(seeded.clubId, "A");
+			await addActiveMember(seeded.clubId, "B");
+			const status = await getOnboardingChecklistStatus(seeded.clubId);
+			expect(status.hasOfficialRoster).toBe(false);
+		});
+
+		// protects=hasImport switches the path on any row while hasAppliedImport waits for applied_at;
+		// fails_when=an unapplied upload counts as applied, or a club with none reads as imported;
+		// no_claim=the upload/apply flow that writes these rows.
+		it("hasImport is any club_imports row; hasAppliedImport needs applied_at", async () => {
+			let status = await getOnboardingChecklistStatus(seeded.clubId);
+			expect(status.hasImport).toBe(false);
+			expect(status.hasAppliedImport).toBe(false);
+			const [row] = await testDb
+				.insert(clubImports)
+				.values({
+					clubId: seeded.clubId,
+					source: "easy_speak",
+					bundle: {},
+					bundleSha256: randomUUID(),
+					uploadedByUserId: seeded.adminUserId,
+				})
+				.returning({ id: clubImports.id });
+			status = await getOnboardingChecklistStatus(seeded.clubId);
+			expect(status.hasImport).toBe(true);
+			expect(status.hasAppliedImport).toBe(false);
+			await testDb
+				.update(clubImports)
+				.set({ appliedAt: new Date() })
+				.where(eq(clubImports.id, row?.id as string));
+			status = await getOnboardingChecklistStatus(seeded.clubId);
+			expect(status.hasAppliedImport).toBe(true);
+		});
+
+		// protects=the upcoming row ticks only for a scheduled meeting in the future;
+		// fails_when=a cancelled or past meeting ticks it;
+		// no_claim=that the meeting came from an import.
+		it("hasUpcomingMeeting ignores cancelled and past meetings", async () => {
+			await testDb.delete(meetings).where(eq(meetings.clubId, seeded.clubId));
+			const hour = 60 * 60 * 1000;
+			await testDb.insert(meetings).values([
+				{
+					clubId: seeded.clubId,
+					scheduledAt: new Date(Date.now() + hour),
+					status: "cancelled",
+				},
+				{
+					clubId: seeded.clubId,
+					scheduledAt: new Date(Date.now() - hour),
+					status: "scheduled",
+				},
+			]);
+			let status = await getOnboardingChecklistStatus(seeded.clubId);
+			expect(status.hasUpcomingMeeting).toBe(false);
+			await testDb.insert(meetings).values({
+				clubId: seeded.clubId,
+				scheduledAt: new Date(Date.now() + hour),
+				status: "scheduled",
+			});
+			status = await getOnboardingChecklistStatus(seeded.clubId);
+			expect(status.hasUpcomingMeeting).toBe(true);
+		});
+
+		// protects=Easy-Speak graduation is independent of the fresh rule;
+		// fails_when=isNewClubEasySpeak mirrors isNewClub;
+		// no_claim=the invite fan-out beyond the stamp prepareMemberInvite writes.
+		it("isNewClubEasySpeak follows applied history, an upcoming meeting and invites", async () => {
+			// seedClub: 2 members (thin roster => isNewClub true), invited, upcoming meeting, no import.
+			let status = await getOnboardingChecklistStatus(seeded.clubId);
+			expect(status.isNewClub).toBe(true);
+			expect(status.isNewClubEasySpeak).toBe(true); // no applied import
+			await testDb.insert(clubImports).values({
+				clubId: seeded.clubId,
+				source: "easy_speak",
+				bundle: {},
+				bundleSha256: randomUUID(),
+				uploadedByUserId: seeded.adminUserId,
+				appliedAt: new Date(),
+			});
+			status = await getOnboardingChecklistStatus(seeded.clubId);
+			expect(status.isNewClub).toBe(true); // still thin
+			expect(status.isNewClubEasySpeak).toBe(false); // graduated here
+			await testDb.delete(meetings).where(eq(meetings.clubId, seeded.clubId));
+			status = await getOnboardingChecklistStatus(seeded.clubId);
+			expect(status.isNewClubEasySpeak).toBe(true); // no upcoming meeting
 		});
 	},
 );

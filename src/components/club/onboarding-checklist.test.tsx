@@ -8,7 +8,10 @@ import {
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
-import { onboardingDismissKey } from "#/lib/onboarding-checklist";
+import {
+	onboardingDismissKey,
+	onboardingPathKey,
+} from "#/lib/onboarding-checklist";
 import type { OnboardingChecklistStatus } from "#/server/onboarding-checklist-logic";
 import { OnboardingChecklist } from "./onboarding-checklist";
 
@@ -23,6 +26,13 @@ const NEW_CLUB: OnboardingChecklistStatus = {
 	hasMeeting: false,
 	hasOfficerTerm: false,
 	isNewClub: true,
+	officialRosterCount: 0,
+	hasOfficialRoster: false,
+	hasImport: false,
+	hasAppliedImport: false,
+	hasUpcomingMeeting: false,
+	isNewClubEasySpeak: true,
+	canRunImport: true,
 };
 
 const ESTABLISHED_CLUB: OnboardingChecklistStatus = {
@@ -125,5 +135,66 @@ describe("OnboardingChecklist", () => {
 		const checks = document.querySelectorAll("svg.text-success");
 		expect(checks.length).toBeGreaterThan(0);
 		expect(document.querySelector("svg.text-link")).toBeNull();
+	});
+
+	// protects=the path switch line; fails_when=it does not write/clear the key or
+	// shows after an import; no_claim=server data (statuses are fixtures).
+	it("the switch line writes the path key and the way back clears it", async () => {
+		await renderChecklist({ clubId: "club-1", status: NEW_CLUB });
+		await userEvent.click(
+			screen.getByRole("button", { name: "Show the migration steps" }),
+		);
+		expect(localStorage.getItem(onboardingPathKey("club-1"))).toBe(
+			"easy-speak",
+		);
+		expect(screen.getByText("Move your club to GavelUp")).toBeTruthy();
+		await userEvent.click(
+			screen.getByRole("button", { name: "Show the standard steps" }),
+		);
+		expect(localStorage.getItem(onboardingPathKey("club-1"))).toBeNull();
+		expect(screen.getByText("Get your club set up")).toBeTruthy();
+	});
+
+	it("shows no switch line once the club has an import", async () => {
+		await renderChecklist({
+			clubId: "club-1",
+			status: { ...NEW_CLUB, hasImport: true },
+		});
+		expect(screen.getByText("Move your club to GavelUp")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /show the/i })).toBeNull();
+	});
+
+	it("numbers rows and puts one Next badge on the first incomplete row", async () => {
+		await renderChecklist({
+			clubId: "club-1",
+			status: { ...NEW_CLUB, clubDetailsComplete: true },
+		});
+		const numbers = screen
+			.getAllByTestId("checklist-number")
+			.map((n) => n.textContent);
+		expect(numbers).toEqual(["1.", "2.", "3.", "4.", "5.", "6."]);
+		const next = screen.getAllByTestId("checklist-next");
+		expect(next).toHaveLength(1);
+		expect(next[0].parentElement?.textContent).toContain("Import your roster");
+	});
+
+	it("renders a locked row without a link and with the admin-only text", async () => {
+		await renderChecklist({
+			clubId: "club-1",
+			status: { ...NEW_CLUB, hasImport: true, canRunImport: false },
+		});
+		expect(screen.getAllByText("A club admin does this step.")).toHaveLength(2);
+		const history = screen.getByText("Import your Easy-Speak history");
+		expect(history.closest("a")).toBeNull();
+		const roster = screen.getByText("Load your official roster");
+		expect(roster.closest("a")).not.toBeNull();
+	});
+
+	it("on the Easy-Speak path graduation follows its own flag", async () => {
+		await renderChecklist({
+			clubId: "club-1",
+			status: { ...NEW_CLUB, hasImport: true, isNewClubEasySpeak: false },
+		});
+		expect(screen.queryByText("Move your club to GavelUp")).toBeNull();
 	});
 });

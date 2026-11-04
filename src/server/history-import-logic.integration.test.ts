@@ -59,6 +59,7 @@ import {
 	seedClub,
 	testDb,
 } from "#/test/db";
+import { countOfficialRosterMembers } from "./onboarding-checklist-logic";
 
 vi.mock("#/lib/email", async (importOriginal) => ({
 	...(await importOriginal<typeof import("#/lib/email")>()),
@@ -320,6 +321,33 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 			),
 		};
 	}
+
+	// protects=the preview's roster notice reading the same counts as the checklist;
+	// fails_when=the preview counts a different set or marks a thin roster complete;
+	// no_claim=the panel's wording (component test).
+	it("the preview's officialRoster matches the checklist's count", async () => {
+		const [m] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.clubId, seed.clubId))
+			.limit(1);
+		await testDb
+			.update(people)
+			.set({ customerId: `cid-${randomUUID()}` })
+			.where(eq(people.id, m?.personId as string));
+		const stored = await upload();
+		const preview = await logic.previewEasySpeakImport({
+			clubId: seed.clubId,
+			importId: stored.importId,
+			now: NOW,
+		});
+		const counted = await countOfficialRosterMembers(seed.clubId);
+		expect(preview.officialRoster).toEqual({
+			...counted,
+			complete: false,
+		});
+		expect(counted.official).toBe(1);
+	});
 
 	it("refuses an upload that is not JSON, not a bundle, or too big, with a sentence", async () => {
 		await expect(upload("not json")).rejects.toThrow(/not valid JSON/);
