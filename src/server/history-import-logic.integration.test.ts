@@ -76,7 +76,23 @@ vi.mock("./club-write-lock", async (importOriginal) => {
 	};
 });
 
-const logic = await import("./history-import-logic");
+const realLogic = await import("./history-import-logic");
+/**
+ * #1495 ticks "Import upcoming meetings" by default on a club's first import. The
+ * tests below are about PAST meetings and predate the box, so their preview and
+ * apply say "unticked" unless a test names `upcoming` itself; the #1495 tests
+ * at the end of the file call `realLogic` or pass `upcoming`.
+ */
+const NO_UPCOMING = { include: false, skipRoles: [] as string[] };
+const logic = {
+	...realLogic,
+	previewEasySpeakImport: (
+		input: Parameters<typeof realLogic.previewEasySpeakImport>[0],
+	) => realLogic.previewEasySpeakImport({ upcoming: NO_UPCOMING, ...input }),
+	applyEasySpeakImport: (
+		input: Parameters<typeof realLogic.applyEasySpeakImport>[0],
+	) => realLogic.applyEasySpeakImport({ upcoming: NO_UPCOMING, ...input }),
+};
 const { NO_PERMISSION_MESSAGE } = await import("./guards");
 
 const FIXTURE = resolve(

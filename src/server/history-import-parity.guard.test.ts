@@ -88,6 +88,10 @@ const WRITES: Record<string, { count: number; rule: string }> = {
 		count: 10,
 		rule: "W8-W13 guest kind, meeting fill-only/insert, role slot create/fill-empty, speech, attendance, awards, table topics: club-loaded ids, fill-only",
 	},
+	"history-import-logic.ts#applyUpcomingMeeting": {
+		count: 6,
+		rule: "writes only into the club's own meetings, under the club lock, through the plan class; fills empty slots only; creates scheduled meetings; sends nothing",
+	},
 	"history-import-logic.ts#applyUnderImportLock": {
 		count: 1,
 		rule: "W14 update club_imports applied marker, (id, club_id)",
