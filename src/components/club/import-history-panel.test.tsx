@@ -804,3 +804,103 @@ describe("ImportHistoryPanel self-serve (#1492)", () => {
 		listings.EXTENSION_LISTINGS.chrome = null;
 	});
 });
+
+describe("ImportHistoryPanel upcoming meetings (#1495)", () => {
+	const upcomingFor = (defaultIncluded: boolean) => ({
+		included: defaultIncluded,
+		defaultIncluded,
+		skipRoles: [] as string[],
+		toCreate: 2,
+		toAdopt: 1,
+		toUpdate: 0,
+		leftAlone: [
+			{ esMeetingId: "7", date: "2026-10-27", reason: "Cancelled in GavelUp." },
+		],
+		roleAssignments: 30,
+		keptGavelUpHolder: 0,
+		rsvps: 20,
+		timeNotes: [],
+		unslottedRoles: [
+			{
+				planKey: "own:joke master",
+				name: "Joke Master",
+				meetings: 2,
+				holders: 2,
+				skipped: false,
+			},
+		],
+	});
+	const previewWith = (defaultIncluded: boolean) => ({
+		...previewFor(true),
+		upcoming: upcomingFor(defaultIncluded),
+	});
+	const box = () =>
+		screen.getByRole("checkbox", {
+			name: "Import upcoming meetings",
+		}) as HTMLInputElement;
+
+	it("ticks the box by the server's default and keeps the admin's choice", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue(previewWith(true));
+		await openImport();
+		await screen.findByTestId("import-upcoming");
+		expect(box().checked).toBe(true);
+		fireEvent.click(box());
+		await waitFor(() => expect(box().checked).toBe(false));
+		cleanup();
+		vi.clearAllMocks();
+
+		fns.previewEasySpeakImport.mockResolvedValue(previewWith(false));
+		await openImport();
+		await screen.findByTestId("import-upcoming");
+		expect(box().checked).toBe(false);
+	});
+
+	it("summarises what ticking the box would do and says what is left alone", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue(previewWith(true));
+		await openImport();
+		const summary = await screen.findByTestId("import-upcoming-summary");
+		expect(summary.textContent).toContain(
+			"create 2, fill 1 already in GavelUp",
+		);
+		expect(summary.textContent).toContain("leave 1 as they are");
+		expect(summary.textContent).toContain("30 role holders and 20 RSVPs");
+		expect(screen.getByTestId("import-upcoming-notes").textContent).toContain(
+			"2026-10-27: Cancelled in GavelUp.",
+		);
+	});
+
+	it("sends the Add or Skip answer with the preview and the apply", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue(previewWith(true));
+		fns.applyEasySpeakImport.mockResolvedValue({
+			report: {
+				reconciled: true,
+				counts: [],
+				meetings: { applied: 1, failed: [] },
+				notImported: [],
+				skippedPeople: [],
+				created: { guests: 0, roleDefinitions: [] },
+			},
+		});
+		await openImport();
+		fireEvent.change(
+			await screen.findByLabelText("What to do with the Joke Master role"),
+			{ target: { value: "skip" } },
+		);
+		await waitFor(() => {
+			const last = fns.previewEasySpeakImport.mock.calls.at(-1)?.[0];
+			expect(last.data.upcoming).toEqual({
+				include: true,
+				skipRoles: ["own:joke master"],
+			});
+		});
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Apply import" }),
+		);
+		fireEvent.click(await screen.findByRole("button", { name: "Yes, apply" }));
+		await waitFor(() => expect(fns.applyEasySpeakImport).toHaveBeenCalled());
+		expect(fns.applyEasySpeakImport.mock.calls[0]?.[0].data.upcoming).toEqual({
+			include: true,
+			skipRoles: ["own:joke master"],
+		});
+	});
+});
