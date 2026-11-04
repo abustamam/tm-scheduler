@@ -26,6 +26,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
 	clubs,
+	importRefs,
+	meetingAttendance,
+	meetings,
 	members,
 	pathEnrollments,
 	pathLevelProgress,
@@ -34,6 +37,7 @@ import {
 	speeches,
 	user,
 } from "#/db/schema";
+import type { ImportRefKind } from "#/lib/import-refs";
 import { hasTestDb, openBlockingTx, testDb, waitForLockWait } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -368,6 +372,123 @@ describe.skipIf(!hasTestDb)("mergePeople", () => {
 			.from(people)
 			.where(eq(people.id, absorbed));
 		expect(absRows).toHaveLength(0);
+	});
+
+	it("re-points import refs of a collapsed member to the keeper's membership (#1494)", async () => {
+		const club = await makeClub();
+		const otherClub = await makeClub();
+		const keeper = await makePerson();
+		const absorbed = await makePerson();
+		const keeperMember = await addMembership(club, keeper);
+		const absorbedMember = await addMembership(club, absorbed);
+		const bystander = await addMembership(club, await makePerson());
+		const other = randomUUID();
+		const ref = (
+			kind: ImportRefKind,
+			sourceId: string,
+			targetId: string,
+			clubId = club,
+		) => ({ clubId, source: "easy_speak" as const, kind, sourceId, targetId });
+		await testDb.insert(importRefs).values([
+			ref("person", "es-absorbed", absorbedMember),
+			ref("willing_to_mentor", absorbedMember, absorbedMember),
+			// The keeper already holds refs: no clash, both stay.
+			ref("person", "es-keeper", keeperMember),
+			ref("willing_to_mentor", keeperMember, keeperMember),
+			ref("person", "es-bystander", bystander),
+			// A kind that targets a non-member row must not be touched.
+			ref("speech", "es-speech", absorbedMember),
+			ref("meeting", "es-meeting", other),
+			// Another club's ref with the same ids is out of scope.
+			ref("person", "es-elsewhere", absorbedMember, otherClub),
+		]);
+
+		await mergePeople({ keeperPersonId: keeper, absorbedPersonId: absorbed });
+
+		const rows = await testDb
+			.select()
+			.from(importRefs)
+			.where(eq(importRefs.clubId, club));
+		const target = (kind: ImportRefKind, sourceId: string) =>
+			rows.find((r) => r.kind === kind && r.sourceId === sourceId)?.targetId;
+		// The absorbed willing ref folded into the keeper's own: one row, not two.
+		expect(rows).toHaveLength(6);
+		expect(target("person", "es-absorbed")).toBe(keeperMember);
+		expect(target("person", "es-keeper")).toBe(keeperMember);
+		expect(target("person", "es-bystander")).toBe(bystander);
+		expect(target("willing_to_mentor", keeperMember)).toBe(keeperMember);
+		expect(target("willing_to_mentor", absorbedMember)).toBeUndefined();
+		expect(target("speech", "es-speech")).toBe(absorbedMember);
+		expect(target("meeting", "es-meeting")).toBe(other);
+		const [elsewhere] = await testDb
+			.select()
+			.from(importRefs)
+			.where(eq(importRefs.clubId, otherClub));
+		expect(elsewhere?.targetId).toBe(absorbedMember);
+	});
+
+	it("moves an attendance import ref off a dropped duplicate onto the keeper's row (#1494)", async () => {
+		const club = await makeClub();
+		const keeper = await makePerson();
+		const absorbed = await makePerson();
+		const keeperMember = await addMembership(club, keeper);
+		const absorbedMember = await addMembership(club, absorbed);
+		const meetingRows = await testDb
+			.insert(meetings)
+			.values([
+				{ clubId: club, scheduledAt: new Date("2026-01-06T19:00:00Z") },
+				{ clubId: club, scheduledAt: new Date("2026-01-13T19:00:00Z") },
+			])
+			.returning({ id: meetings.id });
+		const [both, onlyAbsorbed] = meetingRows.map((m) => m.id);
+		const att = async (meetingId: string, memberId: string) => {
+			const [row] = await testDb
+				.insert(meetingAttendance)
+				.values({ meetingId, memberId, status: "present" })
+				.returning({ id: meetingAttendance.id });
+			return row?.id as string;
+		};
+		const keeperRow = await att(both as string, keeperMember);
+		const droppedRow = await att(both as string, absorbedMember);
+		const movedRow = await att(onlyAbsorbed as string, absorbedMember);
+		await testDb.insert(importRefs).values(
+			(
+				[
+					["a-dropped", droppedRow],
+					["a-moved", movedRow],
+					["a-keeper", keeperRow],
+				] as const
+			).map(([sourceId, targetId]) => ({
+				clubId: club,
+				source: "easy_speak" as const,
+				kind: "attendance" satisfies ImportRefKind,
+				sourceId,
+				targetId,
+			})),
+		);
+
+		await mergePeople({ keeperPersonId: keeper, absorbedPersonId: absorbed });
+
+		const rows = await testDb
+			.select()
+			.from(importRefs)
+			.where(eq(importRefs.clubId, club));
+		const target = (sourceId: string) =>
+			rows.find((r) => r.sourceId === sourceId)?.targetId;
+		// The duplicate row is gone; its ref follows to the row that survived.
+		expect(target("a-dropped")).toBe(keeperRow);
+		expect(target("a-moved")).toBe(movedRow);
+		expect(target("a-keeper")).toBe(keeperRow);
+		const live = await testDb
+			.select({ id: meetingAttendance.id })
+			.from(meetingAttendance)
+			.where(
+				inArray(
+					meetingAttendance.id,
+					rows.map((r) => r.targetId),
+				),
+			);
+		expect(live).toHaveLength(2);
 	});
 
 	it("collapses two memberships of the SAME club into one keeper membership", async () => {

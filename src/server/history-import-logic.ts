@@ -671,8 +671,9 @@ async function loadPlanContext(
 
 	// A `person` ref that names no row, for a member the club REMOVED: the removal
 	// logs `member_remove` against the member id (`applyMemberRemove`), which
-	// survives the delete. A merge logs nothing of the kind, so a merged-away
-	// member is matched by name again (D4 of #1196). A null `member_add` actor is
+	// survives the delete. A merge carries the refs to the keeper
+	// (`collapseMemberships`, #1494), so only a merge from before that leaves one
+	// dangling: that member is matched by name again (D4 of #1196). A null `member_add` actor is
 	// NOT used: impersonated adds, bulk imports and a removed actor all have one.
 	const refMemberIds = refs
 		.filter((r) => r.kind === "person")
