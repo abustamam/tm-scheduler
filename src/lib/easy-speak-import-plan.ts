@@ -1826,3 +1826,6 @@ export const BINDING_REFUSAL_PREFIX = "This export is from ";
 /** Whether `message` is a club-binding refusal (see {@link BINDING_REFUSAL_PREFIX}). */
 export const isBindingRefusal = (message: string): boolean =>
 	message.startsWith(BINDING_REFUSAL_PREFIX);
+
+/** A club keeps at most this many unapplied stored uploads; a newer one replaces the oldest. */
+export const MAX_UNAPPLIED_IMPORTS = 5;

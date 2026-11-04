@@ -159,4 +159,28 @@ describe.skipIf(!hasTestDb)("unapplied upload cap", () => {
 		await Promise.all([store(seed, 6), store(seed, 7), store(seed, 8)]);
 		expect(await rows(seed, true)).toHaveLength(5);
 	});
+
+	// protects=an upload while an apply holds the club's import lock deletes nothing (the running apply's row survives); the next upload trims;
+	// fails_when=the trim ignores the lock result;
+	// no_claim=the apply itself.
+	it("skips the trim while the import lock is held, trims on the next upload", async () => {
+		for (let n = 1; n <= 5; n++) await store(seed, n);
+		const holder = await testDb.$client.connect();
+		try {
+			await holder.query("begin");
+			const got = await holder.query(
+				"select pg_try_advisory_xact_lock(hashtextextended($1, 0)) as ok",
+				[`history-import:${seed.clubId}`],
+			);
+			expect(got.rows[0].ok).toBe(true);
+			const sixth = await store(seed, 6);
+			expect(sixth.reused).toBe(false);
+			expect(await rows(seed, true)).toHaveLength(6);
+		} finally {
+			await holder.query("rollback");
+			holder.release();
+		}
+		await store(seed, 7);
+		expect(await rows(seed, true)).toHaveLength(5);
+	});
 });

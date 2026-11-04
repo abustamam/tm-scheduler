@@ -102,6 +102,7 @@ import {
 	type ImportReport,
 	isJsonbSafeText,
 	leftAloneReason,
+	MAX_UNAPPLIED_IMPORTS,
 	MEETING_LEFT_ALONE,
 	needsDecision,
 	type Omission,
@@ -299,8 +300,7 @@ function allTextIsJsonbSafe(value: unknown): boolean {
 	return true;
 }
 
-/** A club keeps at most this many unapplied stored uploads; a newer one replaces the oldest. */
-export const MAX_UNAPPLIED_IMPORTS = 5;
+export { MAX_UNAPPLIED_IMPORTS };
 
 /** What an upload refusal says, for a toast. */
 export class BundleRefusal extends Error {}
@@ -429,28 +429,33 @@ export async function storeEasySpeakBundle(input: {
 			.onConflictDoNothing()
 			.returning({ id: clubImports.id });
 		if (!row) return null;
-		// Keep the newest MAX_UNAPPLIED_IMPORTS unapplied rows (by created_at, then
-		// id); applied rows are neither counted nor deleted.
-		const keep = tx
-			.select({ id: clubImports.id })
-			.from(clubImports)
-			.where(
-				and(
-					eq(clubImports.clubId, input.clubId),
-					isNull(clubImports.appliedAt),
-				),
-			)
-			.orderBy(desc(clubImports.createdAt), desc(clubImports.id))
-			.limit(MAX_UNAPPLIED_IMPORTS);
-		await tx
-			.delete(clubImports)
-			.where(
-				and(
-					eq(clubImports.clubId, input.clubId),
-					isNull(clubImports.appliedAt),
-					notInArray(clubImports.id, keep),
-				),
-			);
+		// A running apply holds the import lock and its final update targets its
+		// own row: trimming then could delete that row. Skip the trim; the next
+		// upload trims.
+		if (await tryTakeImportLock(tx, input.clubId)) {
+			// Keep the newest MAX_UNAPPLIED_IMPORTS unapplied rows (by created_at, then
+			// id); applied rows are neither counted nor deleted.
+			const keep = tx
+				.select({ id: clubImports.id })
+				.from(clubImports)
+				.where(
+					and(
+						eq(clubImports.clubId, input.clubId),
+						isNull(clubImports.appliedAt),
+					),
+				)
+				.orderBy(desc(clubImports.createdAt), desc(clubImports.id))
+				.limit(MAX_UNAPPLIED_IMPORTS);
+			await tx
+				.delete(clubImports)
+				.where(
+					and(
+						eq(clubImports.clubId, input.clubId),
+						isNull(clubImports.appliedAt),
+						notInArray(clubImports.id, keep),
+					),
+				);
+		}
 		return row;
 	});
 	if (inserted) {
@@ -1991,11 +1996,20 @@ export interface ApplyResult {
  * at a time. It TRIES the lock and refuses at once rather than waiting, because
  * the holder keeps a pooled connection for its whole run. Held until `tx` ends.
  */
-export async function takeImportLock(tx: Tx, clubId: string): Promise<void> {
+export async function tryTakeImportLock(
+	tx: Tx,
+	clubId: string,
+): Promise<boolean> {
 	const taken = await tx.execute<{ ok: boolean }>(
 		sql`select pg_try_advisory_xact_lock(hashtextextended(${`history-import:${clubId}`}, 0)) as ok`,
 	);
-	if (!taken.rows[0]?.ok) throw new Error(IMPORT_RUNNING_MESSAGE);
+	return taken.rows[0]?.ok === true;
+}
+
+export async function takeImportLock(tx: Tx, clubId: string): Promise<void> {
+	if (!(await tryTakeImportLock(tx, clubId))) {
+		throw new Error(IMPORT_RUNNING_MESSAGE);
+	}
 }
 
 /**

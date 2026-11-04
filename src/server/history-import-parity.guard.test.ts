@@ -70,7 +70,7 @@ function countByFunction(
 const WRITES: Record<string, { count: number; rule: string }> = {
 	"history-import-logic.ts#storeEasySpeakBundle": {
 		count: 2,
-		rule: "W1 insert club_imports: import-only table, club-scoped; W1b delete club_imports beyond the newest MAX_UNAPPLIED_IMPORTS unapplied rows of this club (applied_at IS NULL and club_id in the statement), import-only table, no manual equivalent",
+		rule: "W1 insert club_imports: import-only table, club-scoped; W1b delete club_imports beyond the newest MAX_UNAPPLIED_IMPORTS unapplied rows of this club (applied_at IS NULL and club_id in the statement) and only when the club's import lock is free, import-only table, no manual equivalent",
 	},
 	"history-import-logic.ts#putRef": {
 		count: 1,
@@ -92,7 +92,7 @@ const WRITES: Record<string, { count: number; rule: string }> = {
 		count: 1,
 		rule: "W14 update club_imports applied marker, (id, club_id)",
 	},
-	"history-import-logic.ts#takeImportLock": {
+	"history-import-logic.ts#tryTakeImportLock": {
 		count: 1,
 		rule: "advisory lock (execute), no row written",
 	},

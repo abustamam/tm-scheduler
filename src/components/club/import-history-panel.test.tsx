@@ -157,6 +157,18 @@ async function openImport() {
 }
 
 describe("ImportHistoryPanel (#1051)", () => {
+	// protects=the panel says the bundle is kept with the club and that only the 5 newest unapplied uploads are kept, without contradiction;
+	// fails_when=the sentence is dropped or reverts to the per-person wording;
+	// no_claim=the server cap itself.
+	it("states the retention and the unapplied-upload cap", () => {
+		renderPanel();
+		expect(
+			screen.getByText(
+				/The uploaded bundle, with every guest's name, is kept until the club is deleted\. Only the club's 5 most recent unapplied uploads are kept; an older one is replaced\./,
+			),
+		).toBeTruthy();
+	});
+
 	it("keeps Apply disabled until the person is decided, then sends the decision", async () => {
 		fns.previewEasySpeakImport.mockImplementation(
 			async ({ data }: { data: { resolutions?: Record<string, unknown> } }) =>

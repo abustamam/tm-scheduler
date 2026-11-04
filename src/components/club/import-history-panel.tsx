@@ -10,6 +10,7 @@ import {
 import {
 	type ImportReport,
 	isBindingRefusal,
+	MAX_UNAPPLIED_IMPORTS,
 	type PersonResolution,
 	personKeyOf,
 } from "#/lib/easy-speak-import-plan";
@@ -304,7 +305,8 @@ export function ImportHistoryPanel({
 					<span className="font-semibold">{clubName}</span>. Nothing is written
 					until you apply. Applying again adds nothing that is already there.
 					The uploaded bundle, with every guest's name, is kept until the club
-					is deleted. GavelUp keeps your 5 most recent unapplied uploads.
+					is deleted. Only the club's {MAX_UNAPPLIED_IMPORTS} most recent
+					unapplied uploads are kept; an older one is replaced.
 				</p>
 			</div>
 
