@@ -52,6 +52,10 @@ import {
 	testDb,
 } from "#/test/db";
 
+vi.mock("#/lib/email", async (importOriginal) => ({
+	...(await importOriginal<typeof import("#/lib/email")>()),
+	sendEmail: vi.fn(async () => {}),
+}));
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 // One seam to make a meeting's transaction fail AFTER it has written: the hook
@@ -2507,6 +2511,259 @@ EXECUTE FUNCTION zz_claim_slot()`),
 		expect(report.counts.find((c) => c.key === "meetings")).toMatchObject({
 			bundle: 2,
 			gavelup: 2,
+		});
+	});
+
+	describe("upcoming meetings (#1495)", () => {
+		const UP = { include: true, skipRoles: [] as string[] };
+		/** 644360 (Tue 13 Oct local) and 644363 (Tue 27 Oct) are ahead of NOW, plus one made on a third date. */
+		function upcomingText(): string {
+			const bundle = JSON.parse(
+				readFileSync(FIXTURE, "utf8"),
+			) as EasySpeakBundleV1;
+			const src = bundle.meetings.find((m) => m.esMeetingId === "644360");
+			if (!src) throw new Error("fixture changed");
+			bundle.meetings.push({
+				...JSON.parse(JSON.stringify(src)),
+				esMeetingId: "990001",
+				startsAt: "2028-03-15T02:00:00.000Z",
+			});
+			return JSON.stringify(bundle);
+		}
+		const MORNING_13 = new Date("2026-10-13T18:00:00.000Z");
+		const MORNING_27 = new Date("2026-10-27T18:00:00.000Z");
+
+		async function previewUp(
+			importId: string,
+			resolutions: Record<string, PersonResolution>,
+			upcoming = UP,
+		) {
+			return realLogic.previewEasySpeakImport({
+				clubId: seed.clubId,
+				importId,
+				resolutions,
+				now: NOW,
+				upcoming,
+			});
+		}
+		async function applyUp(
+			importId: string,
+			resolutions: Record<string, PersonResolution>,
+			extra: { planHash?: string; upcoming?: typeof UP } = {},
+		) {
+			return realLogic.applyEasySpeakImport({
+				clubId: seed.clubId,
+				importId,
+				runner: { kind: "superadmin", userId: superadminId },
+				resolutions,
+				now: NOW,
+				upcoming: UP,
+				...extra,
+			});
+		}
+		async function timerDefId() {
+			const [row] = await testDb
+				.select({ id: roleDefinitions.id })
+				.from(roleDefinitions)
+				.where(
+					and(
+						eq(roleDefinitions.clubId, seed.clubId),
+						eq(roleDefinitions.name, "Timer"),
+					),
+				);
+			return row?.id as string;
+		}
+		async function slotRows(meetingId: string) {
+			return testDb
+				.select()
+				.from(roleSlots)
+				.where(eq(roleSlots.meetingId, meetingId));
+		}
+
+		// protects=the first import of a club ticks the box and a later one does not;
+		// fails_when=the default ignores applied imports;
+		// no_claim=the panel's rendering (the panel test).
+		it("defaults the box to ticked until an import has been applied", async () => {
+			const stored = await upload(upcomingText());
+			const { resolutions } = await resolveAll(stored.importId);
+			const first = await realLogic.previewEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				resolutions,
+				now: NOW,
+			});
+			expect(first.upcoming.included).toBe(true);
+			expect(first.upcoming.defaultIncluded).toBe(true);
+			await applyUp(stored.importId, resolutions);
+			const later = await realLogic.previewEasySpeakImport({
+				clubId: seed.clubId,
+				importId: stored.importId,
+				resolutions,
+				now: NOW,
+			});
+			expect(later.upcoming.included).toBe(false);
+			expect(later.upcoming.defaultIncluded).toBe(false);
+		});
+
+		// protects=one apply creates a meeting on a free date, adopts a scheduled one by local date and fills only its blanks and empty slots, and leaves a cancelled one untouched; a re-apply writes nothing; nothing is emailed;
+		// fails_when=the date is matched by instant, a cancelled meeting is revived, a held slot is displaced, or a second apply duplicates rows;
+		// no_claim=the race between preview and apply (next tests).
+		it("creates, adopts and leaves alone, keeps a holder, and a re-apply writes nothing", async () => {
+			const { sendEmail } = await import("#/lib/email");
+			const sent = vi.mocked(sendEmail);
+			sent.mockClear();
+			const timer = await timerDefId();
+			// 13 Oct: a scheduled meeting at another instant, its Timer slot held by a member.
+			const adoptId = await seedMeetingAt(MORNING_13, "scheduled");
+			const [holder] = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.clubId, seed.clubId))
+				.limit(1);
+			await testDb.insert(roleSlots).values([
+				{
+					meetingId: adoptId,
+					roleDefinitionId: timer,
+					slotIndex: 0,
+					assignedMemberId: holder?.id as string,
+					status: "confirmed",
+				},
+				{
+					meetingId: adoptId,
+					roleDefinitionId: timer,
+					slotIndex: 1,
+					status: "open",
+				},
+			]);
+			await testDb
+				.update(meetings)
+				.set({ theme: "Mine" })
+				.where(eq(meetings.id, adoptId));
+			// 27 Oct: a cancelled meeting.
+			const cancelledId = await seedMeetingAt(MORNING_27, "cancelled");
+
+			const stored = await upload(upcomingText());
+			const { resolutions } = await resolveAll(stored.importId);
+			const preview = await previewUp(stored.importId, resolutions);
+			expect(preview.upcoming).toMatchObject({
+				toAdopt: 1,
+				toCreate: 1,
+				included: true,
+			});
+			expect(preview.upcoming.leftAlone).toHaveLength(1);
+			const { report } = await applyUp(stored.importId, resolutions, {
+				planHash: preview.planHash,
+			});
+			expect(report.reconciled).toBe(true);
+
+			// Adopted: theme kept, the held slot kept, the empty one filled by Easy-Speak's second Timer.
+			const adopted = await meetingRow(adoptId);
+			expect(adopted).toMatchObject({ status: "scheduled", theme: "Mine" });
+			const slots = await slotRows(adoptId);
+			const timers = slots.filter((s) => s.roleDefinitionId === timer);
+			expect(timers.find((s) => s.slotIndex === 0)?.assignedMemberId).toBe(
+				holder?.id,
+			);
+			expect(timers.find((s) => s.slotIndex === 1)?.assignedMemberId).not.toBe(
+				null,
+			);
+			// Cancelled: untouched.
+			expect(await meetingRow(cancelledId)).toMatchObject({
+				status: "cancelled",
+				theme: null,
+			});
+			expect(await slotsOf(cancelledId)).toBe(0);
+			// Created: the third date, scheduled, with its holders and RSVPs.
+			const created = (await refsOfKind("meeting")).find(
+				(r) => r.sourceId === "990001",
+			);
+			expect(created).toBeTruthy();
+			expect(await meetingRow(created?.targetId as string)).toMatchObject({
+				status: "scheduled",
+			});
+			expect(
+				(await slotRows(created?.targetId as string)).some(
+					(s) => s.assignedMemberId || s.assignedGuestId,
+				),
+			).toBe(true);
+			const rsvps = await testDb
+				.select({ n: count() })
+				.from(meetingAttendancePlan)
+				.where(eq(meetingAttendancePlan.meetingId, adoptId));
+			expect(Number(rsvps[0]?.n)).toBeGreaterThan(0);
+
+			// A second apply writes no row at all.
+			const before = await counts();
+			await applyUp(stored.importId, resolutions);
+			expect(await counts()).toEqual(before);
+			// The import writes records; it sends nothing to anyone.
+			expect(sent).not.toHaveBeenCalled();
+		});
+
+		// protects=a member who claims an empty slot between the preview and the apply keeps it: with the preview's hash the apply is refused, and without one the writer's re-read leaves the slot alone;
+		// fails_when=the writer overwrites a slot that was empty in the plan;
+		// no_claim=the hash of an unchanged plan (the test above).
+		it("does not displace a slot claimed after the preview", async () => {
+			const timer = await timerDefId();
+			const adoptId = await seedMeetingAt(MORNING_13, "scheduled");
+			await testDb.insert(roleSlots).values([
+				{
+					meetingId: adoptId,
+					roleDefinitionId: timer,
+					slotIndex: 0,
+					status: "open",
+				},
+				{
+					meetingId: adoptId,
+					roleDefinitionId: timer,
+					slotIndex: 1,
+					status: "open",
+				},
+			]);
+			const stored = await upload(upcomingText());
+			const { resolutions } = await resolveAll(stored.importId);
+			const preview = await previewUp(stored.importId, resolutions);
+			// A member claims slot 1 after the preview.
+			const [claimer] = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.clubId, seed.clubId))
+				.limit(1);
+			await testDb
+				.update(roleSlots)
+				.set({ assignedMemberId: claimer?.id as string, status: "confirmed" })
+				.where(
+					and(eq(roleSlots.meetingId, adoptId), eq(roleSlots.slotIndex, 1)),
+				);
+			await expect(
+				applyUp(stored.importId, resolutions, { planHash: preview.planHash }),
+			).rejects.toThrow(realLogic.PLAN_CHANGED_MESSAGE);
+			await applyUp(stored.importId, resolutions);
+			const after = (await slotRows(adoptId)).find((s) => s.slotIndex === 1);
+			expect(after?.assignedMemberId).toBe(claimer?.id);
+		});
+
+		// protects=the box and each Skip answer are part of the plan the hash names;
+		// fails_when=changing either leaves the hash and the apply goes through;
+		// no_claim=how the answers render.
+		it("refuses an apply whose box or Skip answer differs from the preview", async () => {
+			const stored = await upload(upcomingText());
+			const { resolutions } = await resolveAll(stored.importId);
+			const preview = await previewUp(stored.importId, resolutions);
+			await expect(
+				applyUp(stored.importId, resolutions, {
+					planHash: preview.planHash,
+					upcoming: { include: false, skipRoles: [] },
+				}),
+			).rejects.toThrow(realLogic.PLAN_CHANGED_MESSAGE);
+			const row = preview.upcoming.unslottedRoles[0];
+			expect(row).toBeTruthy();
+			await expect(
+				applyUp(stored.importId, resolutions, {
+					planHash: preview.planHash,
+					upcoming: { include: true, skipRoles: [row?.planKey as string] },
+				}),
+			).rejects.toThrow(realLogic.PLAN_CHANGED_MESSAGE);
 		});
 	});
 });
