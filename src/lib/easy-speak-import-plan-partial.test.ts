@@ -97,6 +97,7 @@ describe("a bounded bundle against a club that holds the older history (#1491)",
 		expect(bounded.unresolved).toEqual([]);
 		expect(bounded.canApply).toBe(true);
 		// Everyone the bounded plan does cover is planned exactly as the full plan plans them.
+		expect(bounded.people.length).toBeGreaterThan(0);
 		for (const p of bounded.people) {
 			expect(p.outcome).toEqual(
 				full.people.find((f) => f.key === p.key)?.outcome,

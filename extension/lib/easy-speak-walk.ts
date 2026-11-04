@@ -49,7 +49,7 @@ import {
 	bundleFileName,
 	isContactPage,
 } from "./easy-speak-bundle";
-import { isWalkableMonth, monthLabel, monthName } from "./last-export";
+import { EARLIEST_MEETING_YEAR, isWalkableMonth, monthLabel, monthName } from "./last-export";
 import { EASY_SPEAK_ORIGIN } from "./easy-speak-hosts";
 import {
 	PageShapeError,
@@ -101,7 +101,7 @@ export const LEASE_RECHECK_SLACK_MS = 250;
  * offers no earliest-year picker to bound it (its start and end years are free
  * text inputs), so this is the floor.
  */
-export const EARLIEST_MEETING_YEAR = 2004;
+export { EARLIEST_MEETING_YEAR };
 
 export interface WalkStore {
 	get(key: string): Promise<unknown | undefined>;

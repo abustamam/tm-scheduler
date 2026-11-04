@@ -10,6 +10,9 @@
  */
 import type { EasySpeakBundleV3, EsMeeting } from "./easy-speak-bundle";
 
+/** The first year Easy-Speak's meeting list can be asked for; the walk re-exports it (it lives here to avoid an import cycle). */
+export const EARLIEST_MEETING_YEAR = 2004;
+
 const MONTH_NAMES = [
 	"January",
 	"February",
@@ -25,8 +28,6 @@ const MONTH_NAMES = [
 	"December",
 ] as const;
 
-/** The first year Easy-Speak's meeting list can be asked for (mirrors `EARLIEST_MEETING_YEAR` in the walk). */
-const FIRST_YEAR = 2004;
 
 /** `"05"` -> `"May"`. A fixed English list: no runtime locale. */
 export function monthName(mm: string): string {
@@ -35,7 +36,8 @@ export function monthName(mm: string): string {
 
 /** `"2026-05"` -> `"May 2026"`. */
 export function monthLabel(yyyyMm: string): string {
-	return `${monthName(yyyyMm.slice(5, 7))} ${yyyyMm.slice(0, 4)}`;
+	const name = MONTH_NAMES[Number(yyyyMm.slice(5, 7)) - 1];
+	return name ? `${name} ${yyyyMm.slice(0, 4)}` : yyyyMm;
 }
 
 /** True for a `yyyy-mm` whose year lies in `[minYear, maxYear]`. */
@@ -161,7 +163,7 @@ export async function readLastExport(esClubId: string, deps: LastExportDeps = {}
 		const month = value?.month;
 		if (typeof month !== "string") return null;
 		const thisYear = new Date((deps.now ?? Date.now)()).getUTCFullYear();
-		return isWalkableMonth(month, FIRST_YEAR, thisYear + 1) ? month : null;
+		return isWalkableMonth(month, EARLIEST_MEETING_YEAR, thisYear + 1) ? month : null;
 	} catch {
 		return null;
 	}

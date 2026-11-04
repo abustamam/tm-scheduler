@@ -37,6 +37,8 @@ describe("monthLabel", () => {
 		expect(monthLabel("2026-05")).toBe("May 2026");
 		expect(monthLabel("2004-01")).toBe("January 2004");
 		expect(monthLabel("2026-12")).toBe("December 2026");
+		expect(monthLabel("2026-13")).toBe("2026-13");
+		expect(monthLabel("")).toBe("");
 	});
 });
 

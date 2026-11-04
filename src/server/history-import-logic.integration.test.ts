@@ -2337,6 +2337,15 @@ EXECUTE FUNCTION zz_claim_slot()`),
 		// FIRST_AT is 2026-09-23T02:00Z: still the 22nd in Los Angeles.
 		expect(await logic.nextExportMonth(seed.clubId)).toBe("2026-09");
 
+		// A meeting at 2026-10-01T02:00Z is still 30 September in Los Angeles: the month is the
+		// club's, so a UTC slice (2026-10) is wrong.
+		await addImportedMeeting(
+			seed.clubId,
+			new Date("2026-10-01T02:00:00Z"),
+			"boundary",
+		);
+		expect(await logic.nextExportMonth(seed.clubId)).toBe("2026-09");
+
 		// An imported meeting after the export's exportedAt (2026-10-12T12:00:41Z) is not "held".
 		await addImportedMeeting(
 			seed.clubId,

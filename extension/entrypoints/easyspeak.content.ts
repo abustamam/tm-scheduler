@@ -15,6 +15,7 @@ import {
 } from "../lib/easy-speak-walk";
 import {
 	CLUB_CHANGED_MESSAGE,
+	EARLIEST_MEETING_YEAR,
 	clubChanged,
 	finishExport,
 	idbKv,
@@ -113,8 +114,8 @@ export default defineContentScript({
 			}
 			const yearSel = document.createElement("select");
 			yearSel.append(new Option("all history", ""));
-			const nextYear = new Date().getFullYear() + 1;
-			for (let y = nextYear; y >= 2004; y--) yearSel.append(new Option(String(y), String(y)));
+			const nextYear = new Date().getUTCFullYear() + 1;
+			for (let y = nextYear; y >= EARLIEST_MEETING_YEAR; y--) yearSel.append(new Option(String(y), String(y)));
 			monthSel.value = picked.month;
 			yearSel.value = picked.year;
 			// A stored session shows (and is locked to) its own start month; "Resume" passes it back.
@@ -235,8 +236,12 @@ export default defineContentScript({
 			let follower: { cancel: () => void } | undefined;
 			function react(state: ResumeState) {
 				if (state.kind === "auto") {
+					// The other tab's session sets the start month: walking from the pre-filled
+					// month would discard its unfinished export.
+					lockTo(state.session);
 					void start();
 				} else if (state.kind === "manual") {
+					lockTo(state.session);
 					btn.textContent = "Resume export";
 					setStatus(`An unfinished export is stored (${state.session.pages} pages).`);
 				} else if (state.kind === "elsewhere") {
