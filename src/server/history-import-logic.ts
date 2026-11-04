@@ -1005,7 +1005,10 @@ function previewPerson(p: PlanPerson): ImportPreviewPerson {
 		memberId: o.status === "member" ? o.memberId : null,
 		kind: o.status === "guest" ? o.kind : null,
 		reason: o.status === "skipped" ? o.reason : null,
-		candidates: o.status === "ambiguous" ? o.candidates : [],
+		candidates:
+			o.status === "ambiguous" || o.status === "possible_match"
+				? o.candidates
+				: [],
 		rejectedChoice: p.rejectedChoice,
 		appearances: p.appearances,
 		listOnly: p.listOnly,

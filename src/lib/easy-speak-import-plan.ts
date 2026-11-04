@@ -47,6 +47,7 @@ import {
 	type GuestKind,
 	readLegacyGuestKind,
 } from "./guest-profile";
+import { isCloseName } from "./name-short-forms";
 import { type OfficerPosition, parseOfficerPosition } from "./officers";
 import { isValidEmail, parseRosterText } from "./roster-import";
 
@@ -208,6 +209,8 @@ const MAX_SKIP_REASON = 500;
 /** A human's answer for one person the plan could not place. */
 export const personResolutionSchema = z.discriminatedUnion("action", [
 	z.object({ action: z.literal("member"), memberId: z.string().uuid() }),
+	// "Not that member: make a new one." Only a `possible_match` person takes it (#1493).
+	z.object({ action: z.literal("create") }),
 	z.object({
 		action: z.literal("guest"),
 		// A decision saved before #1208 can hold `guest_speaker`; reading it as
@@ -252,7 +255,7 @@ export type PlanPersonOutcome =
 	| {
 			status: "member";
 			memberId: string;
-			via: "ref" | "exact" | "folded" | "chosen";
+			via: "ref" | "email" | "exact" | "folded" | "chosen";
 	  }
 	| {
 			status: "guest";
@@ -285,6 +288,16 @@ export type PlanPersonOutcome =
 	 */
 	| { status: "deleted" }
 	| { status: "ambiguous"; candidates: PlanRosterMember[] }
+	/**
+	 * Nobody on the roster matches, but a member holds a close name (a nickname or
+	 * short form, #1493): a human picks that member or "create new". `fallback` is
+	 * the create outcome a `create` answer gives.
+	 */
+	| {
+			status: "possible_match";
+			candidates: PlanRosterMember[];
+			fallback: Extract<PlanPersonOutcome, { status: "create" }>;
+	  }
 	| { status: "unmatched" };
 
 export interface PlanPerson {
@@ -617,13 +630,15 @@ function spellingOf(name: string): string {
 }
 
 /**
- * Whether a person needs a human before the apply: an ambiguous match, and only
- * that (#1240): nobody else needs asking, because a person the roster does not
+ * Whether a person needs a human before the apply: an ambiguous match or a
+ * possible match (#1493), and only that (#1240): nobody else needs asking, because a person the roster does not
  * hold is created, a guest, or skipped by rule. The one rule the plan's
  * `unresolved` and the preview's `needsDecision` both read.
  */
 export function needsDecision(p: PlanPerson): boolean {
-	return p.outcome.status === "ambiguous";
+	return (
+		p.outcome.status === "ambiguous" || p.outcome.status === "possible_match"
+	);
 }
 
 /** Why an existing meeting is left as it is: the report says it in these words. */
@@ -1078,7 +1093,22 @@ export function buildImportPlan(
 		rosterByFold.set(fold, [...(rosterByFold.get(fold) ?? []), m]);
 	}
 	const rosterIds = new Set(ctx.roster.map((m) => m.memberId));
+	const rosterById = new Map(ctx.roster.map((m) => [m.memberId, m] as const));
+	const { links: emailLinks, warnings: emailWarnings } = linkByEmail(
+		ctx,
+		seen,
+		rosterIds,
+	);
 
+	interface Draft {
+		key: string;
+		ref: EsPersonRef;
+		appearances: PlanPerson["appearances"];
+		listOnly: boolean;
+		guestRef: string | null;
+		outcome: PlanPersonOutcome;
+	}
+	const drafts: Draft[] = [];
 	const people: PlanPerson[] = [];
 	const notes: string[] = [];
 	for (const [key, entry] of seen) {
@@ -1093,7 +1123,6 @@ export function buildImportPlan(
 			0;
 		const upcomingOnly = entry.fromUpcoming && !entry.namedByPast;
 		let outcome: PlanPersonOutcome = { status: "unmatched" };
-		let rejectedChoice: string | null = null;
 
 		const memberRef = refTarget("person", key);
 		const guestRef = refTarget("guest", key);
@@ -1128,7 +1157,19 @@ export function buildImportPlan(
 			const folded = rosterByFold.get(foldName(ref.name)) ?? [];
 			const candidates = exact.length > 0 ? exact : folded;
 			const first = candidates[0];
-			if (candidates.length === 1 && first && !collided) {
+			const emailMember = emailLinks.get(key)?.memberId;
+			const emailTarget = emailMember ? rosterById.get(emailMember) : undefined;
+			if (emailTarget) {
+				// The email names one member. A name that points anywhere else is a
+				// disagreement a human settles (#1493).
+				const others = candidates.filter(
+					(c) => c.memberId !== emailTarget.memberId,
+				);
+				outcome =
+					others.length === 0
+						? { status: "member", memberId: emailTarget.memberId, via: "email" }
+						: { status: "ambiguous", candidates: [emailTarget, ...others] };
+			} else if (candidates.length === 1 && first && !collided) {
 				outcome = {
 					status: "member",
 					memberId: first.memberId,
@@ -1179,6 +1220,54 @@ export function buildImportPlan(
 			// the roster when it has them, otherwise left alone and not asked about
 			// (#1203).
 		}
+		drafts.push({ key, ref, appearances, listOnly, guestRef, outcome });
+	}
+
+	// Two people on one member, when an email is involved (#1493): the email-linked
+	// person and any name-matched person are both `ambiguous` between that member,
+	// except one that came by its own ref, which keeps it. Two people who collide by
+	// name alone behave as before.
+	{
+		const holders = new Map<string, Draft[]>();
+		for (const d of drafts) {
+			if (d.outcome.status !== "member") continue;
+			holders.set(d.outcome.memberId, [
+				...(holders.get(d.outcome.memberId) ?? []),
+				d,
+			]);
+		}
+		for (const [memberId, group] of holders) {
+			const target = rosterById.get(memberId);
+			const viaOf = (d: Draft) =>
+				d.outcome.status === "member" ? d.outcome.via : null;
+			if (
+				!target ||
+				group.length < 2 ||
+				!group.some((d) => viaOf(d) === "email")
+			)
+				continue;
+			for (const d of group) {
+				if (viaOf(d) === "ref") continue;
+				d.outcome = { status: "ambiguous", candidates: [target] };
+			}
+		}
+	}
+
+	// The roster members whose name is close to this person's (#1493).
+	const closeMembers = (name: string) =>
+		ctx.roster.filter((m) => isCloseName(name, m.name));
+	// A person the plan would create although a roster member's name is close: the one
+	// predicate behind both the "create" answer's set-aside note and the question.
+	const createWithCloseMembers = (
+		outcome: PlanPersonOutcome,
+		name: string,
+	): outcome is Extract<PlanPersonOutcome, { status: "create" }> =>
+		outcome.status === "create" && closeMembers(name).length > 0;
+
+	for (const d of drafts) {
+		const { key, ref, appearances, listOnly, guestRef } = d;
+		let outcome = d.outcome;
+		let rejectedChoice: string | null = null;
 		// A saved answer wins over every automatic outcome but a tombstone (D2).
 		// A list-only person is never made a guest, and with no roster match and no
 		// row of the member list there is nothing to decide, so no answer is read.
@@ -1195,13 +1284,24 @@ export function buildImportPlan(
 					`${ref.name}: the saved answer "guest" is set aside because the club deleted that guest; they stay a member.`,
 				);
 			}
+			if (
+				saved?.action === "create" &&
+				!createWithCloseMembers(outcome, ref.name)
+			) {
+				notes.push(
+					`${ref.name}: the saved answer "create" is set aside; they are matched automatically.`,
+				);
+			}
 			const choice =
 				listOnly &&
 				(saved?.action === "guest" ||
 					(outcome.status === "unmatched" && saved !== undefined))
 					? undefined
 					: saved;
-			if (choice?.action === "member") {
+			if (choice?.action === "create") {
+				// "Not that member": a create stays a create, and is not asked about.
+				// Anyone else is matched automatically (noted above).
+			} else if (choice?.action === "member") {
 				if (rosterIds.has(choice.memberId)) {
 					outcome = {
 						status: "member",
@@ -1257,7 +1357,6 @@ export function buildImportPlan(
 	// DEFERRED is a non-blocking `skipped` outcome that imports nothing and writes no
 	// ref and no answer; the `es:` creates stay ordinary separate creates.
 	const answered = (p: PlanPerson) => ctx.resolutions?.[p.key] !== undefined;
-	const rosterById = new Map(ctx.roster.map((m) => [m.memberId, m] as const));
 	const peopleByFold = new Map<string, PlanPerson[]>();
 	for (const p of people) {
 		const fold = foldName(p.name);
@@ -1341,14 +1440,33 @@ export function buildImportPlan(
 			if (p && merged.has(p)) people.splice(i, 1);
 		}
 	}
+	// A close name for a person the plan would create and no answer has settled
+	// (#1493). After the namesake pass above, so a name-only reference follows the
+	// `es:` person it belongs to. Only a `create` answer is the answer and is not asked
+	// again; any other saved answer that left the person a create (a member no longer
+	// on the roster, a deleted guest) did not take effect, so the question stands.
+	for (const p of people) {
+		if (
+			ctx.resolutions?.[p.key]?.action === "create" ||
+			!createWithCloseMembers(p.outcome, p.name)
+		)
+			continue;
+		p.outcome = {
+			status: "possible_match",
+			candidates: closeMembers(p.name),
+			fallback: p.outcome,
+		};
+	}
 	people.sort(
 		(a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key),
 	);
 	const unresolved = people.filter(needsDecision);
-	const { fills: contactFills, warnings: contactWarnings } = placeContacts(
+	const { fills: contactFills, warnings: placedWarnings } = placeContacts(
 		ctx,
 		people,
+		emailLinks,
 	);
+	const contactWarnings = [...emailWarnings, ...placedWarnings];
 
 	// -- Role definitions ------------------------------------------------------
 	const roleDefs = new Map<string, PlanRoleDefinitionPlan>();
@@ -1776,6 +1894,96 @@ export function buildImportPlan(
 
 const isBlank = (v: string | null | undefined) => !v || v.trim() === "";
 
+/** An Easy-Speak person linked to a roster member by a pasted contact's email (#1493). */
+interface EmailLink {
+	memberId: string;
+	/** The 1-based contacts row that named the person. */
+	row: number;
+}
+
+/**
+ * Link Easy-Speak people to roster members by the emails of the pasted contacts.
+ * A person links only when exactly one contacts row names them, that row's email
+ * is valid and on no other row, and exactly one roster member holds it. Anything
+ * short of that falls through to the name rungs; a row whose address is shared
+ * says so in a warning that names the row and the person, never the address.
+ */
+function linkByEmail(
+	ctx: PlanContext,
+	seen: ReadonlyMap<string, { ref: EsPersonRef }>,
+	rosterIds: ReadonlySet<string>,
+): { links: Map<string, EmailLink>; warnings: string[] } {
+	const links = new Map<string, EmailLink>();
+	const warnings: string[] = [];
+	const text = ctx.contacts ?? "";
+	const state = ctx.contactState;
+	if (text.trim() === "" || !state) return { links, warnings };
+	const rows = parseRosterText(text);
+	const norm = (e: string) => e.trim().toLowerCase();
+
+	const rowsByEmail = new Map<string, number>();
+	for (const r of rows) {
+		const e = norm(r.email);
+		if (e !== "") rowsByEmail.set(e, (rowsByEmail.get(e) ?? 0) + 1);
+	}
+	const holdersByEmail = new Map<string, string[]>();
+	for (const [memberId, m] of state.members) {
+		if (!rosterIds.has(memberId) || !m.email || m.email.trim() === "") continue;
+		const e = norm(m.email);
+		holdersByEmail.set(e, [...(holdersByEmail.get(e) ?? []), memberId]);
+	}
+
+	const people = [...seen.entries()].map(([key, v]) => ({
+		key,
+		name: v.ref.name,
+		isEs: key.startsWith("es:"),
+	}));
+	const namedBy = (name: string) => {
+		const exact = people.filter((p) => p.name.trim() === name.trim());
+		const hits =
+			exact.length > 0
+				? exact
+				: people.filter((p) => foldName(p.name) === foldName(name));
+		// A name-only reference beside one `es:` person of the same name is that person.
+		const es = hits.filter((p) => p.isEs);
+		return es.length === 1 &&
+			hits.every(
+				(p) => p.isEs || foldName(p.name) === foldName(es[0]?.name ?? ""),
+			)
+			? es
+			: hits;
+	};
+	const personsWithRow = new Set<string>();
+	rows.forEach((r, i) => {
+		const row = i + 1;
+		if (r.name.trim() === "") return;
+		const named = namedBy(r.name);
+		const [person] = named;
+		if (named.length !== 1 || !person) return;
+		// A second row for the same person is ignored: the first row is the one.
+		if (personsWithRow.has(person.key)) return;
+		personsWithRow.add(person.key);
+		const email = norm(r.email);
+		if (email === "" || !isValidEmail(email)) return;
+		if ((rowsByEmail.get(email) ?? 0) > 1) {
+			warnings.push(
+				`Contact row ${row}'s email is on more than one contacts row; ${person.name} is matched by name instead.`,
+			);
+			return;
+		}
+		const holders = holdersByEmail.get(email) ?? [];
+		if (holders.length > 1) {
+			warnings.push(
+				`Contact row ${row}'s email is on ${holders.length} roster members; ${person.name} is matched by name instead.`,
+			);
+			return;
+		}
+		const [memberId] = holders;
+		if (memberId) links.set(person.key, { memberId, row });
+	});
+	return { links, warnings };
+}
+
 /**
  * Place the pasted contact rows on the people the import creates or links. A row
  * matches by the plan's own name matcher (exact, then case and accent folded)
@@ -1786,6 +1994,7 @@ const isBlank = (v: string | null | undefined) => !v || v.trim() === "";
 function placeContacts(
 	ctx: PlanContext,
 	people: PlanPerson[],
+	emailLinks: ReadonlyMap<string, EmailLink>,
 ): { fills: ContactFill[]; warnings: string[] } {
 	const text = ctx.contacts ?? "";
 	if (text.trim() === "") return { fills: [], warnings: [] };
@@ -1828,6 +2037,16 @@ function placeContacts(
 		byFold.set(fold, [...(byFold.get(fold) ?? []), t]);
 	}
 
+	// The row that linked a person by email is placed on that member directly: its
+	// name is the Easy-Speak spelling, which the roster name need not match (#1493).
+	const linkedRow = new Map<number, Target>();
+	for (const p of people) {
+		const link = emailLinks.get(p.key);
+		if (!link || p.outcome.status !== "member") continue;
+		if (p.outcome.memberId !== link.memberId) continue;
+		const t = targets.get(`m:${link.memberId}`);
+		if (t) linkedRow.set(link.row, t);
+	}
 	const warnings: string[] = [];
 	const firstRow = new Map<
 		string,
@@ -1840,8 +2059,12 @@ function placeContacts(
 			return;
 		}
 		const exact = byExact.get(r.name.trim()) ?? [];
-		const candidates =
-			exact.length > 0 ? exact : (byFold.get(foldName(r.name)) ?? []);
+		const linked = linkedRow.get(row);
+		const candidates = linked
+			? [linked]
+			: exact.length > 0
+				? exact
+				: (byFold.get(foldName(r.name)) ?? []);
 		if (candidates.length === 0) {
 			warnings.push(
 				`Contact row ${row} matches no one being linked or created; it is applied to no one.`,

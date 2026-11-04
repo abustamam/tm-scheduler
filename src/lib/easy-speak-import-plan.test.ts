@@ -1816,3 +1816,343 @@ describe("text that has to survive a jsonb column", () => {
 		expect(scrubJsonbText("ab\u{1F600}", 3)).toBe("ab\uFFFD");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// #1493: the email rung, close names and the "create" answer
+// ---------------------------------------------------------------------------
+
+describe("matching by pasted-contact email and close names (#1493)", () => {
+	const ROBERT = id(40);
+	const OTHER = id(41);
+	const BOB_KEY = "es:910001";
+	const ADDR = "robert.private@example.org";
+
+	/** The fixture, its member list and its people reduced to the Easy-Speak people given. */
+	const bundleOf = (
+		people: Array<{ esUserId: string; name: string }>,
+		extra: (b: EasySpeakBundleV1) => void = () => {},
+	) => {
+		const bundle = load();
+		bundle.people = people.map((p) => ({
+			...p,
+			status: "Member",
+			joined: "2025-01-01",
+		}));
+		extra(bundle);
+		return bundle;
+	};
+	const bob = [{ esUserId: "910001", name: "Bob Smith" }];
+
+	const rosterOf = (...extra: PlanRosterMember[]): PlanRosterMember[] => [
+		{ memberId: ROBERT, name: "Robert Smith" },
+		...extra,
+	];
+	const state = (
+		held: Array<[string, string | null, string | null]> = [
+			[ROBERT, ADDR, null],
+		],
+	): NonNullable<PlanContext["contactState"]> => ({
+		members: new Map(
+			held.map(([memberId, email, phone]) => [
+				memberId,
+				{ personId: `p-${memberId}`, email, phone, emailWritable: true },
+			]),
+		),
+		emailHolders: new Map(
+			held.flatMap(([memberId, email]) =>
+				email
+					? [[email.toLowerCase(), new Set([`p-${memberId}`])] as const]
+					: [],
+			),
+		),
+	});
+	const plan = (
+		bundle: EasySpeakBundleV1,
+		over: Partial<PlanContext> & { roster?: PlanRosterMember[] } = {},
+	) =>
+		buildImportPlan(
+			bundle,
+			ctx({
+				roster: rosterOf(),
+				contactState: state(),
+				contacts: `Bob Smith, ${ADDR}, 555-0100`,
+				...over,
+			}),
+		);
+	const bobOf = (p: ReturnType<typeof buildImportPlan>) =>
+		p.people.find((x) => x.key === BOB_KEY);
+
+	// protects=a nickname member is linked to the roster member holding the pasted address, and with no contacts is asked about;
+	// fails_when=the email is ignored (a create or a possible match with contacts) or a close name links on its own;
+	// no_claim=the apply; the plan is pure and `contactState` stands in for the people table.
+	it("links Bob Smith to Robert Smith by email, and only suggests him without contacts (AC 1)", () => {
+		const linked = plan(bundleOf(bob));
+		expect(bobOf(linked)?.outcome).toEqual({
+			status: "member",
+			memberId: ROBERT,
+			via: "email",
+		});
+		const bare = plan(bundleOf(bob), { contacts: undefined });
+		const o = bobOf(bare)?.outcome;
+		expect(o?.status).toBe("possible_match");
+		expect(
+			o?.status === "possible_match" && o.candidates.map((c) => c.memberId),
+		).toEqual([ROBERT]);
+		expect(bare.canApply).toBe(false);
+		expect(bare.unresolved.map((p) => p.key)).toContain(BOB_KEY);
+	});
+
+	// protects=an address that is not one person's alone links nobody and says which row, without the address;
+	// fails_when=a shared address links the first holder, or the warning prints it;
+	// no_claim=what the person is matched to instead (name rungs, tested above).
+	it.each([
+		[
+			"two roster members hold it",
+			{
+				roster: rosterOf({ memberId: OTHER, name: "Rob Smyth" }),
+				contactState: state([
+					[ROBERT, ADDR, null],
+					[OTHER, ADDR.toUpperCase(), null],
+				]),
+			},
+			"Contact row 1's email is on 2 roster members; Bob Smith is matched by name instead.",
+		],
+		[
+			"two contacts rows carry it",
+			{
+				contacts: `Bob Smith, ${ADDR}\nSomebody Else, ${ADDR.toUpperCase()}`,
+			},
+			"Contact row 1's email is on more than one contacts row; Bob Smith is matched by name instead.",
+		],
+	])("does not link when %s (AC 2, 11)", (_l, over, warning) => {
+		const p = plan(bundleOf(bob), over);
+		expect(bobOf(p)?.outcome.status).toBe("possible_match");
+		expect(p.contactWarnings).toContain(warning);
+		// Lower-cased, so an upper-cased address cannot slip past the check.
+		expect(
+			JSON.stringify([p.contactWarnings, p.notes]).toLowerCase(),
+		).not.toContain("private@");
+	});
+
+	// protects=a contacts row that names two Easy-Speak people links neither;
+	// fails_when=the first of them is linked;
+	// no_claim=the rows' phone placement.
+	it("does not link when the row's name is two Easy-Speak people (AC 2)", () => {
+		const p = plan(
+			bundleOf([
+				{ esUserId: "910001", name: "Bob Smith" },
+				{ esUserId: "910002", name: "Bob Smith" },
+			]),
+		);
+		expect(p.people.filter((x) => x.outcome.status === "member")).toHaveLength(
+			0,
+		);
+		// §1 warns only when the address itself is shared; two people on one row
+		// is not that, so the one warning is the row's usual "matches no one".
+		expect(p.contactWarnings).toEqual([
+			"Contact row 1 matches no one being linked or created; it is applied to no one.",
+		]);
+		expect(JSON.stringify(p.contactWarnings).toLowerCase()).not.toContain(
+			"private@",
+		);
+	});
+
+	// protects=a saved member answer that does not take effect (the member left the roster) does not silence the close-name question;
+	// fails_when=the person is left a create with a close name and no question, so the apply makes a duplicate;
+	// no_claim=an answer that takes effect (tested above).
+	it("still asks when a saved member answer is rejected (AC 8)", () => {
+		const p = plan(bundleOf(bob), {
+			contacts: undefined,
+			resolutions: { [BOB_KEY]: { action: "member", memberId: OTHER } },
+		});
+		expect(bobOf(p)?.rejectedChoice).toBe(OTHER);
+		const o = bobOf(p)?.outcome;
+		expect(o?.status).toBe("possible_match");
+		expect(
+			o?.status === "possible_match" && o.candidates.map((c) => c.memberId),
+		).toEqual([ROBERT]);
+		expect(p.canApply).toBe(false);
+	});
+
+	// protects=an email that disagrees with the name goes to a human, one that agrees is automatic;
+	// fails_when=the email wins over a different name match, or an agreeing folded name is asked about;
+	// no_claim=the saved-answer path.
+	it("asks when email and exact name disagree, and links when a folded name agrees (AC 3)", () => {
+		const N = id(42);
+		const disagree = plan(bundleOf(bob), {
+			roster: rosterOf({ memberId: N, name: "Bob Smith" }),
+		});
+		const o = bobOf(disagree)?.outcome;
+		expect(o?.status).toBe("ambiguous");
+		expect(
+			o?.status === "ambiguous" && o.candidates.map((c) => c.memberId),
+		).toEqual([ROBERT, N]);
+		const agree = plan(bundleOf(bob), {
+			roster: [{ memberId: ROBERT, name: "BOB SMITH" }],
+		});
+		expect(bobOf(agree)?.outcome).toMatchObject({
+			status: "member",
+			via: "email",
+		});
+	});
+
+	// protects=two people on one member, one by email, are both asked, except one that holds it by its own ref;
+	// fails_when=the email person silently takes the member another person is matched to;
+	// no_claim=two people who collide by name alone (unchanged, tested above).
+	it("makes the email person and a name match both ambiguous, and spares a ref (AC 4)", () => {
+		const two = bundleOf([
+			{ esUserId: "910001", name: "Bob Smith" },
+			{ esUserId: "910002", name: "Robert Smith" },
+		]);
+		const both = plan(two);
+		for (const k of ["es:910001", "es:910002"]) {
+			const o = both.people.find((x) => x.key === k)?.outcome;
+			expect(o?.status).toBe("ambiguous");
+			expect(
+				o?.status === "ambiguous" && o.candidates.map((c) => c.memberId),
+			).toEqual([ROBERT]);
+		}
+		const byRef = plan(two, {
+			refs: [{ kind: "person", sourceId: "es:910002", targetId: ROBERT }],
+		});
+		expect(byRef.people.find((x) => x.key === "es:910002")?.outcome).toEqual({
+			status: "member",
+			memberId: ROBERT,
+			via: "ref",
+		});
+		expect(bobOf(byRef)?.outcome.status).toBe("ambiguous");
+	});
+
+	// protects=a ref and a saved member answer each win over the email;
+	// fails_when=the email overrides either;
+	// no_claim=none beyond protects.
+	it("lets a ref and a saved member answer win over the email (AC 5, 12)", () => {
+		const elsewhere = rosterOf({ memberId: OTHER, name: "Someone Else" });
+		const byRef = plan(bundleOf(bob), {
+			roster: elsewhere,
+			refs: [{ kind: "person", sourceId: BOB_KEY, targetId: OTHER }],
+		});
+		expect(bobOf(byRef)?.outcome).toMatchObject({
+			via: "ref",
+			memberId: OTHER,
+		});
+		const noContacts = plan(bundleOf(bob), {
+			contacts: undefined,
+			refs: [{ kind: "person", sourceId: BOB_KEY, targetId: ROBERT }],
+		});
+		expect(bobOf(noContacts)?.outcome).toMatchObject({
+			via: "ref",
+			memberId: ROBERT,
+		});
+		const saved = plan(bundleOf(bob), {
+			roster: elsewhere,
+			resolutions: { [BOB_KEY]: { action: "member", memberId: OTHER } },
+		});
+		expect(bobOf(saved)?.outcome).toMatchObject({
+			via: "chosen",
+			memberId: OTHER,
+		});
+	});
+
+	// protects=which names are close enough to ask about;
+	// fails_when=one letter off (Jan/Jane), a one-word name or a non-member-list person is suggested, or a real nickname is missed;
+	// no_claim=the short-form table beyond these pairs.
+	it.each([
+		["Jane Smith", "Jan Smith", false],
+		["Dan Lee", "Daniel Lee", true],
+		["Chris Lee", "Christopher Lee", true],
+		["Bob", "Robert Smith", false],
+		["Bob Smith", "Smith, Robert", true],
+	])("%s against roster %s: suggested=%s (AC 6)", (esName, rosterName, suggested) => {
+		const p = buildImportPlan(
+			bundleOf([{ esUserId: "910001", name: esName }]),
+			ctx({ roster: [{ memberId: ROBERT, name: rosterName }] }),
+		);
+		expect(bobOf(p)?.outcome.status).toBe(
+			suggested ? "possible_match" : "create",
+		);
+	});
+
+	// protects=a guest and a person the plan leaves unmatched are never asked about;
+	// fails_when=a close name is suggested for a guest category or a chart-only person;
+	// no_claim=a list-only person on the member list, who IS created and so is asked about.
+	it("suggests nobody for a guest or a person only a list names (AC 7)", () => {
+		const guest = buildImportPlan(
+			withGuestSpeaker(),
+			ctx({ roster: [{ memberId: ROBERT, name: "Yaelle Saltmarsh" }] }),
+		);
+		expect(outcomeOf(guest, "900025")?.status).toBe("guest");
+		const chartOnly = load();
+		chartOnly.people = [];
+		chartOnly.speechRequests = [
+			{
+				...(chartOnly.speechRequests[0] ?? ({} as never)),
+				who: { esUserId: "910001", name: "Bob Smith" },
+			},
+		];
+		const only = buildImportPlan(chartOnly, ctx({ roster: rosterOf() }));
+		expect(bobOf(only)?.outcome.status).toBe("unmatched");
+	});
+
+	// protects=the apply waits on a possible match, `create` makes the person with their own membership, `member` links;
+	// fails_when=a possible match does not block, `create` loses the join date, or a stale `create` answer changes a matched person;
+	// no_claim=the database apply (the integration test).
+	it("blocks the apply until answered, then creates or links (AC 8, 9)", () => {
+		const blocked = plan(bundleOf(bob), { contacts: undefined });
+		expect(blocked.canApply).toBe(false);
+		const created = plan(bundleOf(bob), {
+			contacts: undefined,
+			resolutions: { [BOB_KEY]: { action: "create" } },
+		});
+		expect(created.canApply).toBe(true);
+		expect(bobOf(created)?.outcome).toMatchObject({
+			status: "create",
+			membership: "active",
+			joinedAt: "2025-01-01",
+		});
+		const linked = plan(bundleOf(bob), {
+			contacts: undefined,
+			resolutions: { [BOB_KEY]: { action: "member", memberId: ROBERT } },
+		});
+		expect(bobOf(linked)?.outcome).toMatchObject({
+			status: "member",
+			via: "chosen",
+		});
+		const stale = plan(bundleOf(bob), {
+			resolutions: { [BOB_KEY]: { action: "create" } },
+		});
+		expect(bobOf(stale)?.outcome).toMatchObject({
+			status: "member",
+			via: "email",
+		});
+		expect(stale.notes).toContain(
+			'Bob Smith: the saved answer "create" is set aside; they are matched automatically.',
+		);
+	});
+
+	// protects=the row that linked a person lands on that member (its name is Easy-Speak's spelling), and no value reaches a warning;
+	// fails_when=the row warns "matches no one", or the phone is not filled;
+	// no_claim=the email fill, which the member already holds.
+	it("places the linked row's phone on the member and says nothing about it (AC 10, 11)", () => {
+		const p = plan(bundleOf(bob));
+		expect(p.contactFills).toEqual([
+			expect.objectContaining({
+				name: "Robert Smith",
+				row: 1,
+				phone: "555-0100",
+			}),
+		]);
+		expect(p.contactWarnings).toEqual([]);
+		expect(JSON.stringify(p.notes)).not.toContain("555-0100");
+	});
+
+	// protects=a member who already has a phone keeps it when the linked row has one;
+	// fails_when=the pasted phone overwrites it;
+	// no_claim=none beyond protects.
+	it("fills no phone on a linked member who has one", () => {
+		const p = plan(bundleOf(bob), {
+			contactState: state([[ROBERT, ADDR, "555-9999"]]),
+		});
+		expect(p.contactFills).toEqual([]);
+	});
+});
