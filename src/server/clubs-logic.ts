@@ -1,10 +1,10 @@
 // Club identifier resolution. Lives away from the createServerFn wrapper
 // (`clubs.ts`, client-imported) so its `db` import is never bundled into the
 // client. See the header of `members-logic.ts`.
-import { eq, or, type SQL } from "drizzle-orm";
+import { and, eq, or, type SQL, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { clubs } from "#/db/schema";
+import { clubs, roleDefinitions } from "#/db/schema";
 import { AGENDA_LAYOUTS, type AgendaLayout } from "#/lib/agenda-layouts";
 import { isClubArchived } from "#/lib/club-archive";
 import {
@@ -15,6 +15,7 @@ import {
 } from "#/lib/club-timezone";
 import { MEETING_FIELDS } from "#/lib/meeting-limits";
 import { DEFAULT_COUNTRY_CODE } from "#/lib/phone";
+import { duringNotesFor, ROLE_TEMPLATE } from "#/lib/role-template";
 import { refuseTableTopicsSeconds } from "#/lib/table-topics-limits";
 import { isReadableClub } from "./club-readable-logic";
 import { closeClubVotesTx } from "./voting-logic";
@@ -379,12 +380,46 @@ export const clubAgendaSettingsSchema = z
 	});
 export type ClubAgendaSettingsInput = z.infer<typeof clubAgendaSettingsSchema>;
 
+/**
+ * Move each GE-variant role's `during_notes` from the OLD variant's seed text to
+ * the NEW one's (#1471), only where the stored text (trimmed) equals the old
+ * seed exactly. A guide the club edited or cleared is not touched; roles are
+ * found by `key`, never by name. `before_notes` and `description` are never
+ * written.
+ */
+async function swapGeGuidesTx(
+	tx: Pick<typeof db, "update">,
+	clubId: string,
+	from: boolean,
+	to: boolean,
+): Promise<void> {
+	for (const seed of ROLE_TEMPLATE) {
+		if (seed.geDuringNotes === undefined) continue;
+		const oldText = duringNotesFor(seed, from).trim();
+		await tx
+			.update(roleDefinitions)
+			.set({ duringNotes: duringNotesFor(seed, to) })
+			.where(
+				and(
+					eq(roleDefinitions.clubId, clubId),
+					eq(roleDefinitions.key, seed.key),
+					eq(sql`btrim(${roleDefinitions.duringNotes}, E' \t\r\n')`, oldText),
+				),
+			);
+	}
+}
+
 /** Persist a club's agenda settings. Caller enforces admin authz (see the
  *  `updateClubAgendaSettings` wrapper). */
 export async function applyClubAgendaSettingsUpdate(
 	input: ClubAgendaSettingsInput,
 ): Promise<{ ok: true }> {
 	await db.transaction(async (tx) => {
+		const [before] = await tx
+			.select({ ge: clubs.geIntroducesFunctionaries })
+			.from(clubs)
+			.where(eq(clubs.id, input.clubId))
+			.for("update");
 		const [updated] = await tx
 			.update(clubs)
 			.set({
@@ -401,6 +436,16 @@ export async function applyClubAgendaSettingsUpdate(
 			.where(eq(clubs.id, input.clubId))
 			.returning({ id: clubs.id });
 		if (!updated) throw new Error("Club not found.");
+		// #1471. A CHANGE of who introduces the functionaries swaps the two role
+		// guides that say so, from the old variant's seed text to the new one's.
+		if (before && before.ge !== input.geIntroducesFunctionaries) {
+			await swapGeGuidesTx(
+				tx,
+				input.clubId,
+				before.ge,
+				input.geIntroducesFunctionaries,
+			);
+		}
 		// #770. Switching the club off closes every open vote in every one of its
 		// meetings, in this transaction — the same reason the meeting switch
 		// does (`applyMeetingDigitalVoting`). Unconditional on the PREVIOUS
