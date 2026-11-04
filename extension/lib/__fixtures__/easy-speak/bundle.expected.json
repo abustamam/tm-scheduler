@@ -1,6 +1,6 @@
 {
 	"format": "gavelup.easy-speak-bundle",
-	"version": 2,
+	"version": 3,
 	"extensionVersion": "0.0.0-test",
 	"exportedAt": "2026-10-12T12:00:41.040Z",
 	"exportedBy": "fixtureuser",
@@ -10,6 +10,7 @@
 		"name": "Fixture Speakers",
 		"timezone": "America/Los_Angeles"
 	},
+	"range": null,
 	"people": [
 		{
 			"esUserId": "900057",

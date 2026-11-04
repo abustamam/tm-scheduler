@@ -18,6 +18,7 @@ const DECLARATIONS = serverFnDeclarations(SOURCE);
 
 const EXPECTED_FNS = [
 	"listEasySpeakImports",
+	"nextEasySpeakExport",
 	"uploadEasySpeakBundle",
 	"previewEasySpeakImport",
 	"applyEasySpeakImport",
@@ -60,15 +61,15 @@ function gateEnd(handler: string): number {
 }
 
 describe("history-import.ts server fns are superadmin-or-club-admin only (#1051, #1492)", () => {
-	// protects=the sweep covers exactly the six server fns (no hand-written list
-	// decides what is covered) and six logic names;
+	// protects=the sweep covers exactly the seven server fns (no hand-written list
+	// decides what is covered) and seven logic names;
 	// fails_when=a server fn is added or removed without this list moving;
 	// no_claim=what any fn does.
 	it("sweeps every declared fn", () => {
 		expect(DECLARATIONS.map((d) => d.name).sort()).toEqual(
 			[...EXPECTED_FNS].sort(),
 		);
-		expect(LOGIC_NAMES).toHaveLength(6);
+		expect(LOGIC_NAMES).toHaveLength(7);
 	});
 
 	for (const declaration of DECLARATIONS) {

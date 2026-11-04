@@ -1656,5 +1656,856 @@
 			],
 			"additionalProperties": false
 		}
+	},
+	"3": {
+		"extension": "0.5.0",
+		"shape": {
+			"$schema": "https://json-schema.org/draft/2020-12/schema",
+			"type": "object",
+			"properties": {
+				"format": {
+					"type": "string",
+					"const": "gavelup.easy-speak-bundle"
+				},
+				"version": {
+					"type": "number",
+					"const": 3
+				},
+				"exportedAt": {
+					"type": "string",
+					"format": "date-time",
+					"pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+				},
+				"exportedBy": {
+					"type": "string"
+				},
+				"club": {
+					"type": "object",
+					"properties": {
+						"esClubId": {
+							"type": "string"
+						},
+						"number": {
+							"anyOf": [
+								{
+									"type": "string"
+								},
+								{
+									"type": "null"
+								}
+							]
+						},
+						"name": {
+							"type": "string"
+						},
+						"timezone": {
+							"anyOf": [
+								{
+									"type": "string"
+								},
+								{
+									"type": "null"
+								}
+							]
+						}
+					},
+					"required": ["esClubId", "number", "name", "timezone"],
+					"additionalProperties": false
+				},
+				"people": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"esUserId": {
+								"type": "string"
+							},
+							"name": {
+								"type": "string"
+							},
+							"status": {
+								"type": "string"
+							},
+							"joined": {
+								"anyOf": [
+									{
+										"type": "string",
+										"pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+									},
+									{
+										"type": "null"
+									}
+								]
+							}
+						},
+						"required": ["esUserId", "name", "status", "joined"],
+						"additionalProperties": false
+					}
+				},
+				"meetings": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"esMeetingId": {
+								"type": "string"
+							},
+							"startsAt": {
+								"type": "string",
+								"format": "date-time",
+								"pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z||([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+							},
+							"venue": {
+								"anyOf": [
+									{
+										"type": "string"
+									},
+									{
+										"type": "null"
+									}
+								]
+							},
+							"joinUrl": {
+								"anyOf": [
+									{
+										"type": "string"
+									},
+									{
+										"type": "null"
+									}
+								]
+							},
+							"theme": {
+								"anyOf": [
+									{
+										"type": "string"
+									},
+									{
+										"type": "null"
+									}
+								]
+							},
+							"wordOfTheDay": {
+								"anyOf": [
+									{
+										"type": "string"
+									},
+									{
+										"type": "null"
+									}
+								]
+							},
+							"manager": {
+								"anyOf": [
+									{
+										"type": "string"
+									},
+									{
+										"type": "null"
+									}
+								]
+							},
+							"roles": {
+								"type": "array",
+								"items": {
+									"type": "object",
+									"properties": {
+										"role": {
+											"type": "string"
+										},
+										"slot": {
+											"type": "integer",
+											"minimum": 1,
+											"maximum": 9007199254740991
+										},
+										"holder": {
+											"anyOf": [
+												{
+													"type": "object",
+													"properties": {
+														"esUserId": {
+															"anyOf": [
+																{
+																	"type": "string"
+																},
+																{
+																	"type": "null"
+																}
+															]
+														},
+														"name": {
+															"type": "string"
+														}
+													},
+													"required": ["esUserId", "name"],
+													"additionalProperties": false
+												},
+												{
+													"type": "null"
+												}
+											]
+										},
+										"speech": {
+											"type": "object",
+											"properties": {
+												"esSpeechId": {
+													"anyOf": [
+														{
+															"type": "string"
+														},
+														{
+															"type": "null"
+														}
+													]
+												},
+												"title": {
+													"anyOf": [
+														{
+															"type": "string"
+														},
+														{
+															"type": "null"
+														}
+													]
+												},
+												"path": {
+													"anyOf": [
+														{
+															"type": "string"
+														},
+														{
+															"type": "null"
+														}
+													]
+												},
+												"level": {
+													"anyOf": [
+														{
+															"type": "integer",
+															"minimum": -9007199254740991,
+															"maximum": 9007199254740991
+														},
+														{
+															"type": "null"
+														}
+													]
+												},
+												"project": {
+													"anyOf": [
+														{
+															"type": "string"
+														},
+														{
+															"type": "null"
+														}
+													]
+												},
+												"minMin": {
+													"anyOf": [
+														{
+															"type": "number"
+														},
+														{
+															"type": "null"
+														}
+													]
+												},
+												"maxMin": {
+													"anyOf": [
+														{
+															"type": "number"
+														},
+														{
+															"type": "null"
+														}
+													]
+												},
+												"introduction": {
+													"anyOf": [
+														{
+															"type": "string"
+														},
+														{
+															"type": "null"
+														}
+													]
+												}
+											},
+											"required": [
+												"esSpeechId",
+												"title",
+												"path",
+												"level",
+												"project",
+												"minMin",
+												"maxMin",
+												"introduction"
+											],
+											"additionalProperties": false
+										},
+										"evaluates": {
+											"type": "integer",
+											"minimum": 1,
+											"maximum": 9007199254740991
+										}
+									},
+									"required": ["role", "slot", "holder"],
+									"additionalProperties": false
+								}
+							},
+							"attendance": {
+								"type": "array",
+								"items": {
+									"type": "object",
+									"properties": {
+										"who": {
+											"type": "object",
+											"properties": {
+												"esUserId": {
+													"anyOf": [
+														{
+															"type": "string"
+														},
+														{
+															"type": "null"
+														}
+													]
+												},
+												"name": {
+													"type": "string"
+												}
+											},
+											"required": ["esUserId", "name"],
+											"additionalProperties": false
+										},
+										"plan": {
+											"anyOf": [
+												{
+													"type": "string",
+													"enum": [
+														"attending",
+														"not_attending",
+														"tentative",
+														"unknown"
+													]
+												},
+												{
+													"type": "null"
+												}
+											]
+										},
+										"record": {
+											"anyOf": [
+												{
+													"type": "string",
+													"enum": ["attended", "attended_online"]
+												},
+												{
+													"type": "null"
+												}
+											]
+										}
+									},
+									"required": ["who", "plan", "record"],
+									"additionalProperties": false
+								}
+							},
+							"guests": {
+								"type": "array",
+								"items": {
+									"type": "object",
+									"properties": {
+										"who": {
+											"type": "object",
+											"properties": {
+												"esUserId": {
+													"anyOf": [
+														{
+															"type": "string"
+														},
+														{
+															"type": "null"
+														}
+													]
+												},
+												"name": {
+													"type": "string"
+												}
+											},
+											"required": ["esUserId", "name"],
+											"additionalProperties": false
+										},
+										"category": {
+											"type": "string",
+											"enum": [
+												"guest_speaker",
+												"visitor",
+												"past_visitor",
+												"visitor_other_club"
+											]
+										}
+									},
+									"required": ["who", "category"],
+									"additionalProperties": false
+								}
+							},
+							"awards": {
+								"type": "array",
+								"items": {
+									"type": "object",
+									"properties": {
+										"category": {
+											"type": "string",
+											"enum": [
+												"best_speaker",
+												"best_evaluator",
+												"best_table_topics"
+											]
+										},
+										"who": {
+											"type": "object",
+											"properties": {
+												"esUserId": {
+													"anyOf": [
+														{
+															"type": "string"
+														},
+														{
+															"type": "null"
+														}
+													]
+												},
+												"name": {
+													"type": "string"
+												}
+											},
+											"required": ["esUserId", "name"],
+											"additionalProperties": false
+										}
+									},
+									"required": ["category", "who"],
+									"additionalProperties": false
+								}
+							},
+							"tableTopics": {
+								"type": "array",
+								"items": {
+									"type": "object",
+									"properties": {
+										"who": {
+											"type": "object",
+											"properties": {
+												"esUserId": {
+													"anyOf": [
+														{
+															"type": "string"
+														},
+														{
+															"type": "null"
+														}
+													]
+												},
+												"name": {
+													"type": "string"
+												}
+											},
+											"required": ["esUserId", "name"],
+											"additionalProperties": false
+										},
+										"topic": {
+											"anyOf": [
+												{
+													"type": "string"
+												},
+												{
+													"type": "null"
+												}
+											]
+										}
+									},
+									"required": ["who", "topic"],
+									"additionalProperties": false
+								}
+							}
+						},
+						"required": [
+							"esMeetingId",
+							"startsAt",
+							"venue",
+							"joinUrl",
+							"theme",
+							"wordOfTheDay",
+							"manager",
+							"roles",
+							"attendance",
+							"guests",
+							"awards",
+							"tableTopics"
+						],
+						"additionalProperties": false
+					}
+				},
+				"speechRequests": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"esSpeechId": {
+								"anyOf": [
+									{
+										"type": "string"
+									},
+									{
+										"type": "null"
+									}
+								]
+							},
+							"who": {
+								"type": "object",
+								"properties": {
+									"esUserId": {
+										"anyOf": [
+											{
+												"type": "string"
+											},
+											{
+												"type": "null"
+											}
+										]
+									},
+									"name": {
+										"type": "string"
+									}
+								},
+								"required": ["esUserId", "name"],
+								"additionalProperties": false
+							},
+							"title": {
+								"anyOf": [
+									{
+										"type": "string"
+									},
+									{
+										"type": "null"
+									}
+								]
+							},
+							"path": {
+								"anyOf": [
+									{
+										"type": "string"
+									},
+									{
+										"type": "null"
+									}
+								]
+							},
+							"project": {
+								"anyOf": [
+									{
+										"type": "string"
+									},
+									{
+										"type": "null"
+									}
+								]
+							},
+							"introduction": {
+								"anyOf": [
+									{
+										"type": "string"
+									},
+									{
+										"type": "null"
+									}
+								]
+							},
+							"requestedOn": {
+								"anyOf": [
+									{
+										"type": "string",
+										"pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+									},
+									{
+										"type": "null"
+									}
+								]
+							},
+							"preferred": {
+								"type": "array",
+								"items": {
+									"anyOf": [
+										{
+											"type": "string",
+											"pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+										},
+										{
+											"type": "null"
+										}
+									]
+								}
+							},
+							"scheduledOn": {
+								"anyOf": [
+									{
+										"type": "string",
+										"pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+									},
+									{
+										"type": "null"
+									}
+								]
+							},
+							"status": {
+								"type": "string"
+							}
+						},
+						"required": [
+							"esSpeechId",
+							"who",
+							"title",
+							"path",
+							"project",
+							"introduction",
+							"requestedOn",
+							"preferred",
+							"scheduledOn",
+							"status"
+						],
+						"additionalProperties": false
+					}
+				},
+				"mentors": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"mentee": {
+								"type": "object",
+								"properties": {
+									"esUserId": {
+										"anyOf": [
+											{
+												"type": "string"
+											},
+											{
+												"type": "null"
+											}
+										]
+									},
+									"name": {
+										"type": "string"
+									}
+								},
+								"required": ["esUserId", "name"],
+								"additionalProperties": false
+							},
+							"mentor": {
+								"anyOf": [
+									{
+										"type": "object",
+										"properties": {
+											"esUserId": {
+												"anyOf": [
+													{
+														"type": "string"
+													},
+													{
+														"type": "null"
+													}
+												]
+											},
+											"name": {
+												"type": "string"
+											}
+										},
+										"required": ["esUserId", "name"],
+										"additionalProperties": false
+									},
+									{
+										"type": "null"
+									}
+								]
+							},
+							"wantsMentee": {
+								"type": "boolean"
+							}
+						},
+						"required": ["mentee", "mentor", "wantsMentee"],
+						"additionalProperties": false
+					}
+				},
+				"visitorsIntroduced": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"visitor": {
+								"type": "object",
+								"properties": {
+									"esUserId": {
+										"anyOf": [
+											{
+												"type": "string"
+											},
+											{
+												"type": "null"
+											}
+										]
+									},
+									"name": {
+										"type": "string"
+									}
+								},
+								"required": ["esUserId", "name"],
+								"additionalProperties": false
+							},
+							"introducedBy": {
+								"type": "object",
+								"properties": {
+									"esUserId": {
+										"anyOf": [
+											{
+												"type": "string"
+											},
+											{
+												"type": "null"
+											}
+										]
+									},
+									"name": {
+										"type": "string"
+									}
+								},
+								"required": ["esUserId", "name"],
+								"additionalProperties": false
+							}
+						},
+						"required": ["visitor", "introducedBy"],
+						"additionalProperties": false
+					}
+				},
+				"evaluations": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"esId": {
+								"type": "string"
+							},
+							"speaker": {
+								"type": "object",
+								"properties": {
+									"esUserId": {
+										"anyOf": [
+											{
+												"type": "string"
+											},
+											{
+												"type": "null"
+											}
+										]
+									},
+									"name": {
+										"type": "string"
+									}
+								},
+								"required": ["esUserId", "name"],
+								"additionalProperties": false
+							},
+							"evaluator": {
+								"type": "object",
+								"properties": {
+									"esUserId": {
+										"anyOf": [
+											{
+												"type": "string"
+											},
+											{
+												"type": "null"
+											}
+										]
+									},
+									"name": {
+										"type": "string"
+									}
+								},
+								"required": ["esUserId", "name"],
+								"additionalProperties": false
+							},
+							"date": {
+								"type": "string"
+							},
+							"text": {
+								"type": "string"
+							}
+						},
+						"required": ["esId", "speaker", "evaluator", "date", "text"],
+						"additionalProperties": false
+					}
+				},
+				"raw": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"url": {
+								"type": "string"
+							},
+							"fetchedAt": {
+								"type": "string",
+								"format": "date-time",
+								"pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+							},
+							"html": {
+								"type": "string"
+							}
+						},
+						"required": ["url", "fetchedAt", "html"],
+						"additionalProperties": false
+					}
+				},
+				"extensionVersion": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 64
+				},
+				"range": {
+					"anyOf": [
+						{
+							"type": "object",
+							"properties": {
+								"fromMonth": {
+									"type": "string",
+									"pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+								}
+							},
+							"required": ["fromMonth"],
+							"additionalProperties": false
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"format",
+				"version",
+				"exportedAt",
+				"exportedBy",
+				"club",
+				"people",
+				"meetings",
+				"speechRequests",
+				"mentors",
+				"visitorsIntroduced",
+				"evaluations",
+				"raw",
+				"extensionVersion",
+				"range"
+			],
+			"additionalProperties": false
+		}
 	}
 }

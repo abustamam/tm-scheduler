@@ -10,7 +10,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import config from "../wxt.config";
 import { BASECAMP_MATCHES } from "./basecamp-hosts";
-import { type EasySpeakBundleV2, isContactPage } from "./easy-speak-bundle";
+import { type EasySpeakBundleV3, isContactPage } from "./easy-speak-bundle";
 import { EASY_SPEAK_MATCHES } from "./easy-speak-hosts";
 import { stripCredentials } from "./easy-speak-parse";
 import { norm } from "./easy-speak-text";
@@ -37,10 +37,10 @@ const phrases = new Set(Object.entries(allowed).filter(([k]) => k !== "_about").
 
 /** A name-shaped run that is neither a fake person nor an allowed non-person phrase. */
 const unknownRuns = (runs: string[]) => runs.filter((r) => !names.has(r) && !phrases.has(r));
-const expected = (): EasySpeakBundleV2 => JSON.parse(readFixture("bundle.expected.json"));
+const expected = (): EasySpeakBundleV3 => JSON.parse(readFixture("bundle.expected.json"));
 
 /** Every person name the bundle carries, wherever the contract puts one. */
-function bundleNames(b: EasySpeakBundleV2): string[] {
+function bundleNames(b: EasySpeakBundleV3): string[] {
 	const out: string[] = [];
 	const ref = (r: { name: string } | null | undefined) => r && out.push(r.name);
 	out.push(...b.people.map((p) => p.name));

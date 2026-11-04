@@ -500,13 +500,13 @@ export const FIXTURE_IDENTITY: Identity = (() => {
 })();
 
 /** One walker over the fake site. `owner` names it in the lease; a second harness on the same `store` is a second tab. */
-export function setup(opts: FakeSiteOptions & { store?: ReturnType<typeof memoryStore>; owner?: string; clock?: ReturnType<typeof clock>; identity?: Identity } = {}) {
+export function setup(opts: FakeSiteOptions & { store?: ReturnType<typeof memoryStore>; owner?: string; clock?: ReturnType<typeof clock>; identity?: Identity; fromMonth?: string | null } = {}) {
 	const c = opts.clock ?? clock();
 	const log: FakeRequest[] = [];
 	const store = opts.store ?? memoryStore();
 	let inFlight = 0;
 	let maxInFlight = 0;
-	const { store: _s, owner: _o, clock: _c, identity: _i, ...siteOpts } = opts;
+	const { store: _s, owner: _o, clock: _c, identity: _i, fromMonth, ...siteOpts } = opts;
 	// The default site answers as whoever the walker says it is; a test that wants the two to
 	// differ (the user switched account mid-walk) passes `as`.
 	const site = fakeEasySpeak({ clock: c.now, log, as: opts.identity, ...siteOpts });
@@ -535,6 +535,7 @@ export function setup(opts: FakeSiteOptions & { store?: ReturnType<typeof memory
 			sleep: c.sleep,
 			now: c.now,
 			extensionVersion: "0.0.0-test",
+			fromMonth,
 		});
 	return { run, log, store, c, progress, maxInFlight: () => maxInFlight };
 }
