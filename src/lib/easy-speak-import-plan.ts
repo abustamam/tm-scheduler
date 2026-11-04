@@ -83,6 +83,11 @@ export function personKeyOf(ref: EsPersonRef): string {
 export interface PlanRosterMember {
 	memberId: string;
 	name: string;
+	/**
+	 * `false` for an inactive or former membership (#1495): such a member is never
+	 * given an upcoming role or RSVP. Absent means active.
+	 */
+	active?: boolean;
 }
 
 export interface PlanRoleDefinition {
@@ -140,6 +145,8 @@ export interface PlanContext {
 	newMeetingShape?: Array<{ roleDefinitionId: string; count: number }>;
 	/** Slots of every GavelUp meeting that is `scheduled` and after `now`, by meeting id. */
 	upcomingSlots?: ReadonlyMap<string, PlanTargetSlot[]>;
+	/** Whether the box is ticked by default for this club (no applied import yet); the server reads it. */
+	upcomingDefaultIncluded?: boolean;
 	/**
 	 * The optional pasted contacts (`name, email, phone`, #1240). Read by the plan
 	 * only to say which person gets which value; never stored by the import.
@@ -401,9 +408,11 @@ export interface PlanSlot {
 	/**
 	 * Upcoming only: the holder is NOT placed. `taken`: no empty slot is left and
 	 * nobody is moved. `skipped`: the admin chose "Skip" for the role. `already`:
-	 * the person already holds a slot of this role on the meeting.
+	 * the person already holds a slot of this role on the meeting (`slotIndex` is
+	 * THAT slot: nothing is filled, but its speech and evaluator link come over).
+	 * `inactive`: the holder is an inactive or former member.
 	 */
-	kept?: "taken" | "skipped" | "already";
+	kept?: "taken" | "skipped" | "already" | "inactive";
 }
 
 /** Why a past meeting is left alone: see {@link MeetingDisposition}. */
@@ -491,7 +500,10 @@ export interface UpcomingPlan {
 	/** Holders the apply would place. */
 	roleAssignments: number;
 	keptGavelUpHolder: number;
+	/** Up to this many: active members with an RSVP; an answer already in GavelUp is not counted out. */
 	rsvps: number;
+	/** The slots a NEW meeting gets (role definition id, count), sorted; part of the plan fingerprint. */
+	shape: Array<[string, number]>;
 	unslottedRoles: Array<{
 		planKey: string;
 		name: string;
@@ -586,6 +598,10 @@ interface Seen {
 	 * exact-name matcher must not pick one of them for both.
 	 */
 	spellings: Set<string>;
+	/** Named by an upcoming meeting (#1495). */
+	fromUpcoming: boolean;
+	/** Named by a past meeting or a visitor chart row: a meeting that happened. */
+	namedByPast: boolean;
 	/**
 	 * A real meeting signal: a role, an award, Table Topics, an introducer link, a
 	 * guest category, or an attendance row with a record or an attending
@@ -636,6 +652,83 @@ interface UpcomingDisposition {
 	action: "update" | "adopt" | "create" | "skip";
 	existing: PlanExistingMeeting | null;
 	skip: { kind: MeetingSkipKind; reason: string } | null;
+}
+
+/** `m:<member id>` / `g:<guest id>`: who holds a slot, or who a plan person resolved to. */
+export const holderIdOf = (h: PlanTargetSlot["holder"]): string | null =>
+	!h ? null : "memberId" in h ? `m:${h.memberId}` : `g:${h.guestId}`;
+
+/** Where one Easy-Speak holder of a role lands on an upcoming meeting (see {@link placeRoleHolders}). */
+export type RolePlacement =
+	| { index: number; addSlot: boolean; kept?: undefined }
+	| { index: number; kept: "already" | "skipped" | "taken" };
+
+/**
+ * #1495 section 3: place the Easy-Speak holders of ONE role (in Easy-Speak slot
+ * order) on the meeting's slots of that role. Pure, so the plan and the apply's
+ * re-placement of a meeting found under the lock use the same rules.
+ *
+ * - **Already there**: a holder who already holds a slot of the role is not
+ *   placed again (`already`, `index` is the slot they hold).
+ * - **Overflow** = max(0, holders left - GavelUp's slots of the role). "Skip"
+ *   drops the last `overflow` holders (`skipped`); "Add a slot" appends
+ *   `overflow` slots after the highest existing index.
+ * - **Placement**: the i-th holder left takes slot `i` when it is empty, else
+ *   the lowest empty slot not yet given; none left is `taken` (nobody is moved).
+ *
+ * `ownerId` is null for a holder who resolves to nobody the plan knows yet.
+ */
+export function placeRoleHolders(
+	holders: ReadonlyArray<{ ownerId: string | null }>,
+	mine: ReadonlyArray<PlanTargetSlot>,
+	skipped: boolean,
+): { placements: RolePlacement[]; overflow: number } {
+	const sorted = [...mine].sort((a, b) => a.slotIndex - b.slotIndex);
+	const heldAt = new Map<string, number>();
+	for (const t of sorted) {
+		const id = holderIdOf(t.holder);
+		if (id && !heldAt.has(id)) heldAt.set(id, t.slotIndex);
+	}
+	const out: Array<RolePlacement | undefined> = holders.map(() => undefined);
+	let rest: number[] = [];
+	holders.forEach((h, i) => {
+		const at = h.ownerId ? heldAt.get(h.ownerId) : undefined;
+		if (at !== undefined) out[i] = { index: at, kept: "already" };
+		else rest.push(i);
+	});
+	const overflow = Math.max(0, rest.length - sorted.length);
+	if (overflow > 0 && skipped) {
+		for (const i of rest.slice(rest.length - overflow)) {
+			out[i] = { index: -1, kept: "skipped" };
+		}
+		rest = rest.slice(0, rest.length - overflow);
+	}
+	const free = sorted.filter((t) => t.holder === null).map((t) => t.slotIndex);
+	const added = new Set<number>();
+	if (overflow > 0 && !skipped) {
+		const top = sorted.reduce((n, t) => Math.max(n, t.slotIndex), -1);
+		for (let i = 1; i <= overflow; i++) {
+			free.push(top + i);
+			added.add(top + i);
+		}
+	}
+	const given = new Set<number>();
+	rest.forEach((holderIndex, k) => {
+		const index =
+			free.includes(k) && !given.has(k)
+				? k
+				: [...free].sort((a, b) => a - b).find((n) => !given.has(n));
+		if (index === undefined) {
+			out[holderIndex] = { index: -1, kept: "taken" };
+			return;
+		}
+		given.add(index);
+		out[holderIndex] = { index, addSlot: added.has(index) };
+	});
+	return {
+		placements: out.map((p) => p ?? { index: -1, kept: "taken" as const }),
+		overflow,
+	};
 }
 
 /** Build the plan. Never touches a database: everything it needs is in `ctx`. */
@@ -808,6 +901,38 @@ export function buildImportPlan(
 		}
 	}
 
+	// -- Role definitions the labels land on ------------------------------------
+	const defsByKey = new Map(
+		ctx.roleDefinitions
+			.filter((d) => d.key)
+			.map((d) => [d.key as string, d] as const),
+	);
+	const defsByFold = new Map<string, PlanRoleDefinition>();
+	for (const d of ctx.roleDefinitions) {
+		const fold = foldName(d.name);
+		if (!defsByFold.has(fold)) defsByFold.set(fold, d);
+	}
+	/** The role a label lands on, without registering it in the plan. */
+	const resolveRoleKey = (label: string) => {
+		const standard = standardRoleKeyFor(label);
+		const display = ownRoleDisplayName(label);
+		const existing = standard
+			? defsByKey.get(standard)
+			: defsByFold.get(foldName(display));
+		return { planKey: planKeyForLabel(label), standard, display, existing };
+	};
+	/** The slots an upcoming meeting offers: its own, or what a NEW meeting would get. */
+	const targetFor = (existing: PlanExistingMeeting | null): PlanTargetSlot[] =>
+		existing
+			? [...(ctx.upcomingSlots?.get(existing.id) ?? [])]
+			: (ctx.newMeetingShape ?? []).flatMap((d) =>
+					Array.from({ length: d.count }, (_, i) => ({
+						roleDefinitionId: d.roleDefinitionId,
+						slotIndex: i,
+						holder: null,
+					})),
+				);
+
 	// -- Who the imported records name ---------------------------------------
 	const memberListIds = new Set(bundle.people.map((p) => p.esUserId));
 	const listRows = new Map(bundle.people.map((p) => [p.esUserId, p] as const));
@@ -820,6 +945,7 @@ export function buildImportPlan(
 			field === "awards" ||
 			field === "tableTopics" ||
 			field === "introducedBy",
+		fromUpcoming = false,
 	) => {
 		const key = personKeyOf(ref);
 		let entry = seen.get(key);
@@ -834,6 +960,8 @@ export function buildImportPlan(
 						})()
 					: null,
 				spellings: new Set(),
+				fromUpcoming: false,
+				namedByPast: false,
 				signalled: false,
 				appearances: {
 					roles: 0,
@@ -850,6 +978,16 @@ export function buildImportPlan(
 			seen.set(key, entry);
 		}
 		entry.spellings.add(spellingOf(ref.name));
+		if (fromUpcoming) entry.fromUpcoming = true;
+		else if (
+			field === "roles" ||
+			field === "attendance" ||
+			field === "awards" ||
+			field === "tableTopics" ||
+			field === "introducedBy"
+		) {
+			entry.namedByPast = true;
+		}
 		if (signal || category) entry.signalled = true;
 		entry.appearances[field]++;
 		if (category && !entry.appearances.guestCategories.includes(category)) {
@@ -872,18 +1010,39 @@ export function buildImportPlan(
 		for (const tt of meeting.tableTopics) touch(tt.who, "tableTopics");
 	}
 	// Upcoming holders and RSVPs, only when the box is ticked (#1495): a meeting
-	// left alone names nobody, a holder of a role the admin skipped is not placed,
-	// and a guest-section row on an upcoming meeting touches nobody.
+	// left alone names nobody, the holders a skipped role has no slot for are not
+	// placed (the in-slot ones are), and a guest-section row on an upcoming
+	// meeting touches nobody. They are touched `fromUpcoming`, so naming a person
+	// only here never makes a former member out of them.
 	if (ctx.importUpcoming) {
 		for (const { meeting } of future) {
-			if (upcomingDisp.get(meeting.esMeetingId)?.action === "skip") continue;
-			for (const role of meeting.roles) {
-				if (role.holder && !skipRoles.has(planKeyForLabel(role.role)))
-					touch(role.holder, "roles");
+			const disp = upcomingDisp.get(meeting.esMeetingId);
+			if (!disp || disp.action === "skip") continue;
+			const target = targetFor(disp.existing);
+			const perKey = new Map<string, number>();
+			for (const role of [...meeting.roles].sort((a, b) => a.slot - b.slot)) {
+				if (!role.holder) continue;
+				const key = planKeyForLabel(role.role);
+				const n = perKey.get(key) ?? 0;
+				perKey.set(key, n + 1);
+				if (skipRoles.has(key)) {
+					const defId = resolveRoleKey(role.role).existing?.id;
+					const slots = defId
+						? target.filter((t) => t.roleDefinitionId === defId).length
+						: 0;
+					if (n >= slots) continue;
+				}
+				touch(role.holder, "roles", undefined, undefined, true);
 			}
 			for (const row of meeting.attendance) {
 				if (row.plan === "attending" || row.plan === "not_attending") {
-					touch(row.who, "attendance", undefined, row.plan === "attending");
+					touch(
+						row.who,
+						"attendance",
+						undefined,
+						row.plan === "attending",
+						true,
+					);
 				}
 			}
 		}
@@ -929,6 +1088,7 @@ export function buildImportPlan(
 				appearances.tableTopics +
 				appearances.introducedBy ===
 			0;
+		const upcomingOnly = entry.fromUpcoming && !entry.namedByPast;
 		let outcome: PlanPersonOutcome = { status: "unmatched" };
 		let rejectedChoice: string | null = null;
 
@@ -979,8 +1139,13 @@ export function buildImportPlan(
 				// them would bring back a removed officer as an admin (#1240), so it is
 				// a tombstone, the way a vanished guest is.
 				outcome = { status: "deleted" };
-			} else if (entry.listRow) {
+			} else if (
+				entry.listRow &&
+				!(upcomingOnly && INACTIVE_STATUS.test(entry.listRow.status))
+			) {
 				// Easy-Speak lists them as a member: that wins over a guest category.
+				// (A person only an UPCOMING meeting names, whom the list calls inactive,
+				// is not made a former member for it: they are omitted from the lineup.)
 				const inactive = INACTIVE_STATUS.test(entry.listRow.status);
 				outcome = {
 					status: "create",
@@ -997,7 +1162,7 @@ export function buildImportPlan(
 					via: "category",
 					guestId: null,
 				};
-			} else if (entry.signalled) {
+			} else if (entry.signalled && !upcomingOnly) {
 				// A past person a meeting names (a real signal, not a bare attendance
 				// line) and nobody lists: a former member.
 				outcome = {
@@ -1183,26 +1348,7 @@ export function buildImportPlan(
 	);
 
 	// -- Role definitions ------------------------------------------------------
-	const defsByKey = new Map(
-		ctx.roleDefinitions
-			.filter((d) => d.key)
-			.map((d) => [d.key as string, d] as const),
-	);
-	const defsByFold = new Map<string, PlanRoleDefinition>();
-	for (const d of ctx.roleDefinitions) {
-		const fold = foldName(d.name);
-		if (!defsByFold.has(fold)) defsByFold.set(fold, d);
-	}
 	const roleDefs = new Map<string, PlanRoleDefinitionPlan>();
-	/** The role a label lands on, without registering it in the plan. */
-	const resolveRoleKey = (label: string) => {
-		const standard = standardRoleKeyFor(label);
-		const display = ownRoleDisplayName(label);
-		const existing = standard
-			? defsByKey.get(standard)
-			: defsByFold.get(foldName(display));
-		return { planKey: planKeyForLabel(label), standard, display, existing };
-	};
 	const roleKeyFor = (label: string): string => {
 		const { planKey, standard, display, existing } = resolveRoleKey(label);
 		let def = roleDefs.get(planKey);
@@ -1334,14 +1480,23 @@ export function buildImportPlan(
 	// Computed whether or not the box is ticked, so the preview shows what ticking
 	// would do; only `ctx.importUpcoming` decides whether they join `meetings`.
 	const ownerIds = new Map<string, string>();
+	/** People who resolve to a member who is not active: never given an upcoming role or RSVP. */
+	const inactiveKeys = new Set<string>();
+	/** People who resolve to an active member (existing or about to be created), for the RSVP count. */
+	const activeMemberKeys = new Set<string>();
 	for (const p of people) {
 		const o = p.outcome;
-		if (o.status === "member") ownerIds.set(p.key, `m:${o.memberId}`);
-		else if (o.status === "guest" && o.guestId)
+		if (o.status === "member") {
+			ownerIds.set(p.key, `m:${o.memberId}`);
+			if (rosterById.get(o.memberId)?.active === false) inactiveKeys.add(p.key);
+			else activeMemberKeys.add(p.key);
+		} else if (o.status === "guest" && o.guestId) {
 			ownerIds.set(p.key, `g:${o.guestId}`);
+		} else if (o.status === "create") {
+			if (o.membership === "active") activeMemberKeys.add(p.key);
+			else inactiveKeys.add(p.key);
+		}
 	}
-	const holderId = (h: PlanTargetSlot["holder"]): string | null =>
-		!h ? null : "memberId" in h ? `m:${h.memberId}` : `g:${h.guestId}`;
 	const shape = ctx.newMeetingShape ?? [];
 	const upcomingMeetings: PlanMeeting[] = [];
 	const unslotted = new Map<string, UpcomingPlan["unslottedRoles"][number]>();
@@ -1386,15 +1541,7 @@ export function buildImportPlan(
 				`Easy-Speak has the meeting of ${clubDate(at)} at ${time(at)}; GavelUp's ${time(existing.scheduledAt)} stands.`,
 			);
 		}
-		const target: PlanTargetSlot[] = existing
-			? [...(ctx.upcomingSlots?.get(existing.id) ?? [])]
-			: shape.flatMap((d) =>
-					Array.from({ length: d.count }, (_, i) => ({
-						roleDefinitionId: d.roleDefinitionId,
-						slotIndex: i,
-						holder: null,
-					})),
-				);
+		const target = targetFor(existing);
 		const groups = new Map<string, EsRole[]>();
 		for (const role of [...meeting.roles].sort((a, b) => a.slot - b.slot)) {
 			if (!role.holder) continue;
@@ -1407,9 +1554,9 @@ export function buildImportPlan(
 			if (!first) continue;
 			const resolved = resolveRoleKey(first.role);
 			const defId = resolved.existing?.id ?? null;
-			const mine = (
-				defId ? target.filter((t) => t.roleDefinitionId === defId) : []
-			).sort((a, b) => a.slotIndex - b.slotIndex);
+			const mine = defId
+				? target.filter((t) => t.roleDefinitionId === defId)
+				: [];
 			const planSlot = (
 				role: EsRole,
 				slotIndex: number,
@@ -1428,76 +1575,62 @@ export function buildImportPlan(
 					...extra,
 				};
 			};
-			// Already there: a holder who already holds a slot of this role on the
-			// meeting is neither placed twice nor displaced. Needs resolved people,
-			// so it runs only when the box is ticked.
-			let list = roles;
-			if (ctx.importUpcoming && mine.length > 0) {
-				const held = new Set(
-					mine.flatMap((t) => {
-						const id = holderId(t.holder);
-						return id ? [id] : [];
-					}),
-				);
-				list = [];
-				for (const role of roles) {
-					const id = role.holder
-						? ownerIds.get(personKeyOf(role.holder))
-						: undefined;
-					if (id && held.has(id)) {
-						slots.push(planSlot(role, -1, { kept: "already" }));
-					} else list.push(role);
-				}
+			// An inactive or former member is not given an upcoming role.
+			const list: EsRole[] = [];
+			for (const role of roles) {
+				if (
+					ctx.importUpcoming &&
+					role.holder &&
+					inactiveKeys.has(personKeyOf(role.holder))
+				) {
+					slots.push(planSlot(role, -1, { kept: "inactive" }));
+				} else list.push(role);
 			}
-			const overflow = Math.max(0, list.length - mine.length);
-			const skipped = skipRoles.has(planKey);
+			// "Already there" needs resolved people, so it runs only when the box is
+			// ticked; unticked nobody is removed and the numbers are "up to".
+			const { placements, overflow } = placeRoleHolders(
+				list.map((role) => ({
+					ownerId:
+						ctx.importUpcoming && role.holder
+							? (ownerIds.get(personKeyOf(role.holder)) ?? null)
+							: null,
+				})),
+				mine,
+				skipRoles.has(planKey),
+			);
 			if (overflow > 0) {
 				const row = unslotted.get(planKey) ?? {
 					planKey,
 					name: resolved.existing?.name ?? resolved.display,
 					meetings: 0,
 					holders: 0,
-					skipped,
+					skipped: skipRoles.has(planKey),
 				};
 				row.meetings++;
 				row.holders += overflow;
 				unslotted.set(planKey, row);
 			}
-			if (overflow > 0 && skipped) {
-				for (const role of list.splice(list.length - overflow)) {
-					slots.push(planSlot(role, -1, { kept: "skipped" }));
-				}
-			}
-			const free = mine
-				.filter((t) => t.holder === null)
-				.map((t) => t.slotIndex);
-			const added = new Set<number>();
-			if (overflow > 0 && !skipped) {
-				const top = mine.reduce((n, t) => Math.max(n, t.slotIndex), -1);
-				for (let i = 1; i <= overflow; i++) {
-					free.push(top + i);
-					added.add(top + i);
-				}
-			}
-			const given = new Set<number>();
 			list.forEach((role, i) => {
-				const index =
-					free.includes(i) && !given.has(i)
-						? i
-						: [...free].sort((a, b) => a - b).find((n) => !given.has(n));
-				if (index === undefined) {
-					slots.push(planSlot(role, -1, { kept: "taken" }));
-					return;
-				}
-				given.add(index);
+				const placed = placements[i];
+				if (!placed) return;
 				slots.push(
-					planSlot(role, index, added.has(index) ? { addSlot: true } : {}),
+					planSlot(
+						role,
+						placed.index,
+						placed.kept
+							? { kept: placed.kept }
+							: placed.addSlot
+								? { addSlot: true }
+								: {},
+					),
 				);
 			});
 			// A role definition that is new is made only for holders who are placed.
 			if (
 				ctx.importUpcoming &&
-				slots.some((sl) => sl.roleKey === planKey && !sl.kept)
+				slots.some(
+					(sl) => sl.roleKey === planKey && (!sl.kept || sl.kept === "already"),
+				)
 			) {
 				for (const role of roles) roleKeyFor(role.role);
 			}
@@ -1534,7 +1667,7 @@ export function buildImportPlan(
 	const writtenUpcoming = upcomingMeetings.filter((m) => m.action !== "skip");
 	const upcoming: UpcomingPlan = {
 		included: ctx.importUpcoming === true,
-		defaultIncluded: false,
+		defaultIncluded: ctx.upcomingDefaultIncluded === true,
 		skipRoles: [...skipRoles].sort(),
 		toCreate: writtenUpcoming.filter((m) => m.action === "create").length,
 		toAdopt: writtenUpcoming.filter((m) => m.action === "adopt").length,
@@ -1548,9 +1681,18 @@ export function buildImportPlan(
 			(n, m) => n + m.slots.filter((sl) => sl.kept === "taken").length,
 			0,
 		),
+		// Up to: only an active member's reply is written, and never over an answer
+		// the member already has in GavelUp (the plan cannot see those).
 		rsvps: writtenUpcoming
 			.filter((m) => m.action === "create" || m.action === "adopt")
-			.reduce((n, m) => n + m.plans.length, 0),
+			.reduce(
+				(n, m) =>
+					n + m.plans.filter((p) => activeMemberKeys.has(p.personKey)).length,
+				0,
+			),
+		shape: shape
+			.map((d): [string, number] => [d.roleDefinitionId, d.count])
+			.sort((a, b) => a[0].localeCompare(b[0])),
 		unslottedRoles: [...unslotted.values()].sort((a, b) =>
 			a.name.localeCompare(b.name),
 		),
@@ -1849,6 +1991,8 @@ export interface ImportReport {
 	 * a value. Absent on an older report.
 	 */
 	contactNotes?: string[];
+	/** #1495: notes on upcoming meetings the apply wrote, such as a time GavelUp keeps. */
+	upcomingNotes?: string[];
 	/** True only when every count matched and no meeting failed. */
 	reconciled: boolean;
 }
@@ -1871,7 +2015,8 @@ export type OmissionKind =
 	| "speech"
 	| "award"
 	| "tableTopic"
-	| "attendance";
+	| "attendance"
+	| "rsvp";
 
 /**
  * A record the apply left out ON PURPOSE (an existing meeting it must not touch,
@@ -1900,9 +2045,25 @@ export const UPCOMING_KEPT_HOLDER = {
 	what: "Kept GavelUp's holder",
 	reason: "The slot is already taken in GavelUp; nobody is moved.",
 } as const;
-export const UPCOMING_ALREADY_HOLDS = {
-	what: "Already holds this role in GavelUp",
-	reason: "The person already holds a slot of this role on the meeting.",
+export const UPCOMING_INACTIVE_MEMBER = {
+	what: "Not placed: not an active member",
+	reason:
+		"An inactive or former member is not given an upcoming role or RSVP; nobody is reactivated.",
+} as const;
+export const UPCOMING_NOT_COMING = {
+	what: "Not placed: answered Not coming",
+	reason:
+		"The member told GavelUp they cannot come to this meeting, so the role is not filled in their name.",
+} as const;
+export const UPCOMING_RELEASED = {
+	what: "Not placed: released since the import",
+	reason:
+		"An earlier import filled this slot and it is empty now, so the holder let it go; it is not filled again.",
+} as const;
+export const UPCOMING_NO_OWNER = {
+	what: "Not placed: no one to give the role to",
+	reason:
+		"The holder is not on the club's roster (or was left out of the import), and an upcoming role never creates a member.",
 } as const;
 export const UPCOMING_ROLES_SKIPPED = {
 	what: "Upcoming roles skipped",

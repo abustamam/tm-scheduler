@@ -70,6 +70,7 @@ import {
 	guests,
 	importRefs,
 	meetingAttendance,
+	meetingAttendancePlan,
 	meetingAwards,
 	meetings,
 	meetingTemplates,
@@ -120,10 +121,14 @@ import {
 	type PlanRosterMember,
 	type PlanTargetSlot,
 	personKeyOf,
+	placeRoleHolders,
 	resolutionsSchema,
 	scrubJsonbText,
-	UPCOMING_ALREADY_HOLDS,
+	UPCOMING_INACTIVE_MEMBER,
 	UPCOMING_KEPT_HOLDER,
+	UPCOMING_NO_OWNER,
+	UPCOMING_NOT_COMING,
+	UPCOMING_RELEASED,
 	UPCOMING_ROLES_SKIPPED,
 	type UpcomingPlan,
 } from "#/lib/easy-speak-import-plan";
@@ -150,7 +155,10 @@ import {
 	soleHoldingClub,
 } from "./account-link-logic";
 import { logActivity } from "./activity";
-import { importPlanAnswers } from "./attendance-plan-logic";
+import {
+	importPlanAnswers,
+	lockMemberAttendance,
+} from "./attendance-plan-logic";
 import { lockClubForWrite } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { closeCoverRequest } from "./cover-close";
@@ -747,6 +755,7 @@ async function loadPlanContext(
 				memberId: members.id,
 				personId: members.personId,
 				name: members.name,
+				status: members.status,
 			})
 			.from(members)
 			.where(eq(members.clubId, clubId))
@@ -821,13 +830,18 @@ async function loadPlanContext(
 			),
 			contacts,
 			contactState: await loadContactState(clubId, contacts),
-			roster: roster.map((m) => ({ memberId: m.memberId, name: m.name })),
+			roster: roster.map((m) => ({
+				memberId: m.memberId,
+				name: m.name,
+				active: m.status === "active",
+			})),
 			roleDefinitions: defs,
 			guestIds: new Set(guestRows.map((g) => g.id)),
 			existingMeetings: meetingRows,
 			refs,
 			resolutions,
 			importUpcoming: upcoming.include,
+			upcomingDefaultIncluded: upcoming.defaultIncluded,
 			skipUpcomingRoles: upcoming.skipRoles,
 			newMeetingShape: await loadNewMeetingShape(clubId),
 			upcomingSlots: await loadUpcomingSlots(clubId, now),
@@ -1027,6 +1041,9 @@ export function planFingerprint(plan: ImportPlan, contacts = ""): string {
 			? {
 					included: plan.upcoming.included,
 					skipRoles: plan.upcoming.skipRoles,
+					// A NEW meeting's shape comes from the club's default agenda, which
+					// the apply reads again: a template changed in between moves the plan.
+					shape: plan.upcoming.shape,
 					targets: plan.meetings
 						.filter((m) => m.upcoming)
 						.map((m) => [
@@ -1125,7 +1142,6 @@ export async function previewEasySpeakImport(input: {
 		choice,
 	);
 	const plan = buildImportPlan(stored.bundle, loaded.ctx);
-	plan.upcoming.defaultIncluded = choice.defaultIncluded;
 	const warnings: string[] = [];
 	const { club } = stored.bundle;
 	const bound = await boundEasySpeakClub(db, input.clubId);
@@ -1583,6 +1599,8 @@ interface MeetingEnv {
 	timezone: string;
 	/** The club's role bank, for a created upcoming meeting's slots (#1495). */
 	bankDefs: Array<typeof roleDefinitions.$inferSelect>;
+	/** The plan role keys the admin answered "Skip" for: a meeting found under the lock is placed by them again (#1495). */
+	skipRoles: ReadonlySet<string>;
 	/** Who runs the apply; asked again under the lock in every meeting's transaction. */
 	runner: HistoryImportRunner;
 }
@@ -1614,10 +1632,181 @@ async function stillThere(
 	return new Set(rows.map((r) => String(r.id)));
 }
 
+/** Test seam (#1495 T3): runs just before the upcoming writer's guarded slot UPDATE, so a test can claim the slot in between. */
+export const importTestHooks: {
+	beforeUpcomingSlotWrite?: (slotId: string) => Promise<void>;
+} = {};
+
+type OmitFn = (
+	kind: Omission["kind"],
+	sourceId: string,
+	cause?: { what: string; reason: string },
+) => void;
+
+/** `omit(kind, sourceId, cause)`: one row of what a meeting's writer left out on purpose. */
+const omitInto =
+	(omissions: Omission[]): OmitFn =>
+	(kind, sourceId, cause = DELETED_SINCE_IMPORT) => {
+		omissions.push({ kind, sourceId, ...cause });
+	};
+
+/** The import refs for `sourceIds`, as `refOf(kind, sourceId)` and `targetsOf(kind)` read them. */
+async function readImportRefs(tx: Tx, clubId: string, sourceIds: string[]) {
+	const refRows =
+		sourceIds.length === 0
+			? []
+			: await tx
+					.select({
+						kind: importRefs.kind,
+						sourceId: importRefs.sourceId,
+						targetId: importRefs.targetId,
+					})
+					.from(importRefs)
+					.where(
+						and(
+							eq(importRefs.clubId, clubId),
+							eq(importRefs.source, SOURCE),
+							inArray(importRefs.sourceId, sourceIds),
+						),
+					);
+	return {
+		refOf: (kind: ImportRefKind, sourceId: string) =>
+			refRows.find((r) => r.kind === kind && r.sourceId === sourceId)?.targetId,
+		targetsOf: (kind: ImportRefKind) =>
+			refRows.filter((r) => r.kind === kind).map((r) => r.targetId),
+	};
+}
+
+/**
+ * The speech a role slot gets, shared by the past and the upcoming writer. A
+ * speech sits on the slot of the one who owns it: a member's on a slot that
+ * member holds, a guest's on a slot that guest holds, and never the other way
+ * about; a slot that already has a speech keeps it. An imported speech a human
+ * deleted since is not written again. `verifyOwner` (upcoming): a reused speech
+ * ref must belong to the holder, else a new speech is made and the ref moved.
+ */
+async function attachSpeech(
+	tx: Tx,
+	io: {
+		clubId: string;
+		personByMember: Map<string, string>;
+		omit: OmitFn;
+		refOf: (kind: ImportRefKind, sourceId: string) => string | undefined;
+		keptSpeeches: ReadonlySet<string>;
+		verifyOwner: boolean;
+	},
+	slot: typeof roleSlots.$inferSelect,
+	owner: NonNullable<Owner>,
+	speech: NonNullable<PlanMeeting["slots"][number]["speech"]>,
+): Promise<void> {
+	const holds =
+		"memberId" in owner
+			? slot.assignedMemberId === owner.memberId
+			: slot.assignedGuestId === owner.guestId;
+	if (!holds || slot.speechId) return;
+	const ownerColumnsOf = (): { personId: string } | { guestId: string } => {
+		if ("memberId" in owner) {
+			const personId = io.personByMember.get(owner.memberId);
+			if (!personId) throw new Error("A member has no Person.");
+			return { personId };
+		}
+		return { guestId: owner.guestId };
+	};
+	const speechRef = io.refOf("speech", speech.sourceId);
+	let speechId: string | undefined;
+	let replaceRef = false;
+	if (speechRef && !io.keptSpeeches.has(speechRef)) {
+		// The imported speech was deleted since: not written again.
+		io.omit("speech", speech.sourceId);
+	} else if (speechRef) {
+		if (io.verifyOwner) {
+			const ownerColumns = ownerColumnsOf();
+			const [row] = await tx
+				.select({ personId: speeches.personId, guestId: speeches.guestId })
+				.from(speeches)
+				.where(eq(speeches.id, speechRef))
+				.limit(1);
+			const belongs =
+				"personId" in ownerColumns
+					? row?.personId === ownerColumns.personId
+					: row?.guestId === ownerColumns.guestId;
+			if (belongs) speechId = speechRef;
+			else replaceRef = true;
+		} else {
+			speechId = speechRef;
+		}
+	}
+	if (!speechId && (!speechRef || replaceRef)) {
+		const [created] = await tx
+			.insert(speeches)
+			.values({
+				...ownerColumnsOf(),
+				title: speech.title,
+				introduction: speech.introduction,
+				pathwayPath: speech.path,
+				projectName: speech.project,
+				projectLevel: speech.level,
+				minMinutes: speech.minMinutes,
+				maxMinutes: speech.maxMinutes,
+			})
+			.returning({ id: speeches.id });
+		if (!created) throw new Error("Could not create a speech.");
+		speechId = created.id;
+		if (replaceRef) {
+			await tx
+				.update(importRefs)
+				.set({ targetId: created.id })
+				.where(
+					and(
+						eq(importRefs.clubId, io.clubId),
+						eq(importRefs.source, SOURCE),
+						eq(importRefs.kind, "speech"),
+						eq(importRefs.sourceId, speech.sourceId),
+					),
+				);
+		} else {
+			await putRef(tx, io.clubId, "speech", speech.sourceId, speechId);
+		}
+	}
+	if (speechId) {
+		await tx
+			.update(roleSlots)
+			.set({ speechId })
+			.where(
+				and(eq(roleSlots.id, slot.id), sql`${roleSlots.speechId} is null`),
+			);
+	}
+}
+
+/** Evaluator -> the speaker slot it evaluates, once every slot is placed. Only an evaluator with no link yet. */
+async function linkEvaluators(
+	tx: Tx,
+	slots: PlanMeeting["slots"],
+	slotIdByEsSlot: ReadonlyMap<number, string>,
+): Promise<void> {
+	for (const ps of slots) {
+		if (ps.evaluatesEsSlot === null) continue;
+		const evaluator = slotIdByEsSlot.get(ps.esSlot);
+		const speaker = slotIdByEsSlot.get(ps.evaluatesEsSlot);
+		if (!evaluator || !speaker) continue;
+		await tx
+			.update(roleSlots)
+			.set({ evaluatesSlotId: speaker })
+			.where(
+				and(
+					eq(roleSlots.id, evaluator),
+					sql`${roleSlots.evaluatesSlotId} is null`,
+				),
+			);
+	}
+}
+
 /** What one meeting's transaction did: written, or left alone, and what it left out on purpose. */
 interface MeetingOutcome {
 	applied: boolean;
 	omissions: Omission[];
+	/** Notes for the report, such as a meeting time GavelUp keeps (#1495). */
+	notes?: string[];
 }
 
 /** One meeting, in its own transaction: all of it, or none of it. */
@@ -1627,13 +1816,7 @@ async function applyMeeting(
 ): Promise<MeetingOutcome> {
 	const { clubId } = env;
 	const omissions: Omission[] = [];
-	const omit = (
-		kind: Omission["kind"],
-		sourceId: string,
-		cause: { what: string; reason: string } = DELETED_SINCE_IMPORT,
-	) => {
-		omissions.push({ kind, sourceId, ...cause });
-	};
+	const omit = omitInto(omissions);
 	let applied = true;
 	await db.transaction(async (tx) => {
 		await lockClubForWrite(tx, clubId);
@@ -1737,27 +1920,7 @@ async function applyMeeting(
 			...pm.awards.map((a) => a.sourceId),
 			...pm.tableTopics.map((t) => t.sourceId),
 		];
-		const refRows =
-			sourceIds.length === 0
-				? []
-				: await tx
-						.select({
-							kind: importRefs.kind,
-							sourceId: importRefs.sourceId,
-							targetId: importRefs.targetId,
-						})
-						.from(importRefs)
-						.where(
-							and(
-								eq(importRefs.clubId, clubId),
-								eq(importRefs.source, SOURCE),
-								inArray(importRefs.sourceId, sourceIds),
-							),
-						);
-		const refOf = (kind: ImportRefKind, sourceId: string) =>
-			refRows.find((r) => r.kind === kind && r.sourceId === sourceId)?.targetId;
-		const targetsOf = (kind: ImportRefKind) =>
-			refRows.filter((r) => r.kind === kind).map((r) => r.targetId);
+		const { refOf, targetsOf } = await readImportRefs(tx, clubId, sourceIds);
 		// A ref whose row is gone: a human deleted it since the import. Never re-made.
 		const keptSpeeches = await stillThere(tx, speeches.id, targetsOf("speech"));
 		const keptAttendance = await stillThere(
@@ -1871,77 +2034,25 @@ async function applyMeeting(
 				await putRef(tx, clubId, "role_slot", ps.sourceId, slot.id);
 			}
 
-			// A speech sits on the slot of the one who owns it: a member's on a slot
-			// that member holds, a guest's on a slot that guest holds, and never the
-			// other way about. A slot someone else already holds gets no speech.
-			const holds =
-				owner &&
-				("memberId" in owner
-					? slot.assignedMemberId === owner.memberId
-					: slot.assignedGuestId === owner.guestId);
-			if (ps.speech && owner && holds && !slot.speechId) {
-				const speechRef = refOf("speech", ps.speech.sourceId);
-				let speechId: string | undefined;
-				if (speechRef && !keptSpeeches.has(speechRef)) {
-					// The imported speech was deleted since: not written again.
-					omit("speech", ps.speech.sourceId);
-				} else if (speechRef) {
-					speechId = speechRef;
-				} else {
-					let ownerColumns: { personId: string } | { guestId: string };
-					if ("memberId" in owner) {
-						const personId = env.personByMember.get(owner.memberId);
-						if (!personId) throw new Error("A member has no Person.");
-						ownerColumns = { personId };
-					} else {
-						ownerColumns = { guestId: owner.guestId };
-					}
-					const [created] = await tx
-						.insert(speeches)
-						.values({
-							...ownerColumns,
-							title: ps.speech.title,
-							introduction: ps.speech.introduction,
-							pathwayPath: ps.speech.path,
-							projectName: ps.speech.project,
-							projectLevel: ps.speech.level,
-							minMinutes: ps.speech.minMinutes,
-							maxMinutes: ps.speech.maxMinutes,
-						})
-						.returning({ id: speeches.id });
-					if (!created) throw new Error("Could not create a speech.");
-					speechId = created.id;
-					await putRef(tx, clubId, "speech", ps.speech.sourceId, speechId);
-				}
-				if (speechId) {
-					await tx
-						.update(roleSlots)
-						.set({ speechId })
-						.where(
-							and(
-								eq(roleSlots.id, slot.id),
-								sql`${roleSlots.speechId} is null`,
-							),
-						);
-				}
+			if (ps.speech && owner) {
+				await attachSpeech(
+					tx,
+					{
+						clubId,
+						personByMember: env.personByMember,
+						omit,
+						refOf,
+						keptSpeeches,
+						verifyOwner: false,
+					},
+					slot,
+					owner,
+					ps.speech,
+				);
 			}
 		}
 		// Evaluator -> the speaker slot it evaluates, once every slot exists.
-		for (const ps of pm.slots) {
-			if (ps.evaluatesEsSlot === null) continue;
-			const evaluator = slotIdByEsSlot.get(ps.esSlot);
-			const speaker = slotIdByEsSlot.get(ps.evaluatesEsSlot);
-			if (!evaluator || !speaker) continue;
-			await tx
-				.update(roleSlots)
-				.set({ evaluatesSlotId: speaker })
-				.where(
-					and(
-						eq(roleSlots.id, evaluator),
-						sql`${roleSlots.evaluatesSlotId} is null`,
-					),
-				);
-		}
+		await linkEvaluators(tx, pm.slots, slotIdByEsSlot);
 
 		// -- Attendance, and the plan answers a record does not supersede ------
 		for (const a of pm.attendance) {
@@ -2097,13 +2208,8 @@ async function applyUpcomingMeeting(
 ): Promise<MeetingOutcome> {
 	const { clubId } = env;
 	const omissions: Omission[] = [];
-	const omit = (
-		kind: Omission["kind"],
-		sourceId: string,
-		cause: { what: string; reason: string } = DELETED_SINCE_IMPORT,
-	) => {
-		omissions.push({ kind, sourceId, ...cause });
-	};
+	const notes: string[] = [];
+	const omit = omitInto(omissions);
 	const omitHolder = (
 		ps: PlanMeeting["slots"][number],
 		cause: { what: string; reason: string },
@@ -2124,6 +2230,9 @@ async function applyUpcomingMeeting(
 			utcToZonedWallTime(d, env.timezone).slice(0, 10);
 		const joinUrl = normalizePresentationUrl(pm.joinUrl);
 		let m: typeof meetings.$inferSelect | undefined;
+		// The plan said `create` and a meeting is there now: the day is placed
+		// again against what is on it (#1495 section 3), as an adopt would be.
+		let turnedAdopt = false;
 		if (pm.existingMeetingId) {
 			[m] = await tx
 				.select()
@@ -2157,6 +2266,7 @@ async function applyUpcomingMeeting(
 				(x) => dateOf(x.scheduledAt) === dateOf(pm.scheduledAt),
 			);
 			m = onDate.find(acceptable) ?? onDate[0];
+			turnedAdopt = m !== undefined;
 		}
 		if (m && !acceptable(m)) {
 			omit("meeting", pm.esMeetingId, {
@@ -2204,108 +2314,207 @@ async function applyUpcomingMeeting(
 			// A meeting appeared at this very instant since the read above: adopt it
 			// if it is a scheduled one, or leave it alone.
 			if (!row) throw new Error("Could not create the meeting.");
-			if (!createdId && !acceptable(row)) {
-				omit("meeting", pm.esMeetingId, {
-					what: MEETING_LEFT_ALONE,
-					reason: leftAloneReason(row.status),
-				});
-				applied = false;
-				return;
+			if (!createdId) {
+				if (!acceptable(row)) {
+					omit("meeting", pm.esMeetingId, {
+						what: MEETING_LEFT_ALONE,
+						reason: leftAloneReason(row.status),
+					});
+					applied = false;
+					return;
+				}
+				turnedAdopt = true;
 			}
 			m = row;
 		}
 		// Refuses a cancelled or completed meeting, by the plan class.
 		assertMeetingAccepts(m.status, "plan");
 		const meetingId = m.id;
-		// Fill a blank, nothing else: the status and the time are not ours to change.
+		if (turnedAdopt && m.scheduledAt.getTime() !== pm.scheduledAt.getTime()) {
+			const time = (d: Date) => utcToZonedWallTime(d, env.timezone).slice(11);
+			notes.push(
+				`Easy-Speak has the meeting of ${dateOf(pm.scheduledAt)} at ${time(pm.scheduledAt)}; GavelUp's ${time(m.scheduledAt)} stands.`,
+			);
+		}
+		// Whether this apply is the one that first brings the meeting over: it has
+		// no import ref yet. Only then are RSVPs written (a later run never revives
+		// an answer a member cleared).
+		const [priorRef] = await tx
+			.select({ targetId: importRefs.targetId })
+			.from(importRefs)
+			.where(
+				and(
+					eq(importRefs.clubId, clubId),
+					eq(importRefs.source, SOURCE),
+					eq(importRefs.kind, "meeting"),
+					eq(importRefs.sourceId, pm.esMeetingId),
+				),
+			)
+			.limit(1);
+		const firstApply = !priorRef;
+		// Fill a blank, nothing else: the status and the time are not ours to
+		// change. `coalesce` in the statement, so the guard does not rest on the lock.
 		await tx
 			.update(meetings)
 			.set({
-				location: m.location ?? pm.venue,
-				joinUrl: m.joinUrl ?? joinUrl,
-				theme: m.theme ?? pm.theme,
-				wordOfTheDay: m.wordOfTheDay ?? pm.wordOfTheDay,
+				location: sql`coalesce(${meetings.location}, ${pm.venue})`,
+				joinUrl: sql`coalesce(${meetings.joinUrl}, ${joinUrl})`,
+				theme: sql`coalesce(${meetings.theme}, ${pm.theme})`,
+				wordOfTheDay: sql`coalesce(${meetings.wordOfTheDay}, ${pm.wordOfTheDay})`,
 			})
 			.where(eq(meetings.id, m.id));
 		await putRef(tx, clubId, "meeting", pm.esMeetingId, meetingId);
 
+		// -- Who may be given anything here -------------------------------------
+		// Every member this meeting names is locked first (ADR-0026, after the club
+		// lock, in id order), so a decline that lands now is seen, not raced.
+		const memberIds = [
+			...new Set(
+				[
+					...pm.slots.map((sl) => ownerOf(env, sl.holderKey)),
+					...pm.plans.map((p) => ownerOf(env, p.personKey)),
+				].flatMap((o) => (o && "memberId" in o ? [o.memberId] : [])),
+			),
+		].sort();
+		for (const memberId of memberIds) {
+			await lockMemberAttendance(tx, meetingId, memberId);
+		}
+		const activeIds = new Set(
+			memberIds.length === 0
+				? []
+				: (
+						await tx
+							.select({ id: members.id })
+							.from(members)
+							.where(
+								and(
+									eq(members.clubId, clubId),
+									eq(members.status, "active"),
+									inArray(members.id, memberIds),
+								),
+							)
+					).map((r) => r.id),
+		);
+		const answered = new Map(
+			memberIds.length === 0
+				? []
+				: (
+						await tx
+							.select({
+								memberId: meetingAttendancePlan.memberId,
+								status: meetingAttendancePlan.status,
+							})
+							.from(meetingAttendancePlan)
+							.where(
+								and(
+									eq(meetingAttendancePlan.meetingId, meetingId),
+									inArray(meetingAttendancePlan.memberId, memberIds),
+								),
+							)
+					).map((r) => [r.memberId, r.status] as const),
+		);
+		/** Why a holder is not given the role: nobody to give it to, inactive, said Not coming, or deleted. */
+		const blockedFor = (ps: PlanMeeting["slots"][number]) => {
+			if (isTombstoned(env, ps.holderKey)) return DELETED_SINCE_IMPORT;
+			const owner = ownerOf(env, ps.holderKey);
+			if (!owner) return UPCOMING_NO_OWNER;
+			if ("memberId" in owner) {
+				if (!activeIds.has(owner.memberId)) return UPCOMING_INACTIVE_MEMBER;
+				if (answered.get(owner.memberId) === "not_coming") {
+					return UPCOMING_NOT_COMING;
+				}
+			}
+			return null;
+		};
+
 		// -- Refs this meeting already has ------------------------------------
-		const sourceIds = [
+		const { refOf, targetsOf } = await readImportRefs(tx, clubId, [
 			...pm.slots.map((sl) => sl.sourceId),
 			...pm.slots.flatMap((sl) => (sl.speech ? [sl.speech.sourceId] : [])),
-		];
-		const refRows =
-			sourceIds.length === 0
-				? []
-				: await tx
-						.select({
-							kind: importRefs.kind,
-							sourceId: importRefs.sourceId,
-							targetId: importRefs.targetId,
-						})
-						.from(importRefs)
-						.where(
-							and(
-								eq(importRefs.clubId, clubId),
-								eq(importRefs.source, SOURCE),
-								inArray(importRefs.sourceId, sourceIds),
-							),
-						);
-		const refOf = (kind: ImportRefKind, sourceId: string) =>
-			refRows.find((r) => r.kind === kind && r.sourceId === sourceId)?.targetId;
-		const keptSpeeches = await stillThere(
-			tx,
-			speeches.id,
-			refRows.filter((r) => r.kind === "speech").map((r) => r.targetId),
-		);
+		]);
+		const keptSpeeches = await stillThere(tx, speeches.id, targetsOf("speech"));
 
 		// -- Role slots: the empty ones only ------------------------------------
 		const existingSlots = await tx
 			.select()
 			.from(roleSlots)
 			.where(eq(roleSlots.meetingId, meetingId));
+		let planned = pm.slots;
+		if (turnedAdopt) {
+			// Placed by the same rules against the slots read under the lock, and
+			// overflow follows the role's Add/Skip answer.
+			planned = replaceUpcomingSlots(
+				env,
+				pm.slots,
+				existingSlots.map((x) => ({
+					roleDefinitionId: x.roleDefinitionId,
+					slotIndex: x.slotIndex,
+					holder: x.assignedMemberId
+						? { memberId: x.assignedMemberId }
+						: x.assignedGuestId
+							? { guestId: x.assignedGuestId }
+							: null,
+				})),
+				(ps) => blockedFor(ps) !== null,
+			);
+		}
 		const slotIdByEsSlot = new Map<number, string>();
-		for (const ps of pm.slots) {
+		for (const ps of planned) {
 			if (ps.kept === "skipped") {
 				omitHolder(ps, UPCOMING_ROLES_SKIPPED);
-				continue;
-			}
-			if (ps.kept === "already") {
-				omitHolder(ps, UPCOMING_ALREADY_HOLDS);
 				continue;
 			}
 			if (ps.kept === "taken") {
 				omitHolder(ps, UPCOMING_KEPT_HOLDER);
 				continue;
 			}
+			if (ps.kept === "inactive") {
+				omitHolder(ps, UPCOMING_INACTIVE_MEMBER);
+				continue;
+			}
 			const roleDefinitionId = env.resolved.roleDefIds.get(ps.roleKey);
 			if (!roleDefinitionId)
 				throw new Error(`No role definition for ${ps.label}.`);
-			if (isTombstoned(env, ps.holderKey)) {
-				omitHolder(ps, DELETED_SINCE_IMPORT);
+			const blocked = blockedFor(ps);
+			if (blocked) {
+				omitHolder(ps, blocked);
 				continue;
 			}
 			const owner = ownerOf(env, ps.holderKey);
 			if (!owner) continue;
-			const importedSlot = refOf("role_slot", ps.sourceId);
-			if (importedSlot && !existingSlots.some((x) => x.id === importedSlot)) {
+			const importedSlotId = refOf("role_slot", ps.sourceId);
+			const importedSlot = importedSlotId
+				? existingSlots.find((x) => x.id === importedSlotId)
+				: undefined;
+			if (importedSlotId && !importedSlot) {
 				// This role slot was imported and has been deleted since.
 				omitHolder(ps, DELETED_SINCE_IMPORT);
+				continue;
+			}
+			if (
+				importedSlot &&
+				importedSlot.assignedMemberId === null &&
+				importedSlot.assignedGuestId === null
+			) {
+				// An earlier import filled this slot and it is empty now: its holder
+				// let it go. Not filled again.
+				omitHolder(ps, UPCOMING_RELEASED);
 				continue;
 			}
 			const assignment =
 				"memberId" in owner
 					? { assignedMemberId: owner.memberId, assignedGuestId: null }
 					: { assignedMemberId: null, assignedGuestId: owner.guestId };
-			let slot = existingSlots.find(
-				(x) =>
-					x.roleDefinitionId === roleDefinitionId &&
-					x.slotIndex === ps.slotIndex,
-			);
+			let slot =
+				importedSlot ??
+				existingSlots.find(
+					(x) =>
+						x.roleDefinitionId === roleDefinitionId &&
+						x.slotIndex === ps.slotIndex,
+				);
 			if (!slot) {
-				// Only a slot the plan said to add, or any slot of a meeting made under
-				// the lock whose shape the plan could not see, is inserted.
-				if (!ps.addSlot && pm.action !== "create") {
+				// Only a slot the plan said to add is inserted.
+				if (!ps.addSlot) {
 					omitHolder(ps, UPCOMING_KEPT_HOLDER);
 					continue;
 				}
@@ -2325,6 +2534,7 @@ async function applyUpcomingMeeting(
 				slot.assignedMemberId === null &&
 				slot.assignedGuestId === null
 			) {
+				await importTestHooks.beforeUpcomingSlotWrite?.(slot.id);
 				// Only a slot that is STILL empty: someone who claimed it since the plan
 				// keeps it, and the row is read again to say so.
 				const [updated] = await tx
@@ -2356,81 +2566,46 @@ async function applyUpcomingMeeting(
 			}
 			slotIdByEsSlot.set(ps.esSlot, slot.id);
 			await putRef(tx, clubId, "role_slot", ps.sourceId, slot.id);
-
-			if (ps.speech && !slot.speechId) {
-				const speechRef = refOf("speech", ps.speech.sourceId);
-				let speechId: string | undefined;
-				if (speechRef && !keptSpeeches.has(speechRef)) {
-					omit("speech", ps.speech.sourceId);
-				} else if (speechRef) {
-					speechId = speechRef;
-				} else {
-					let ownerColumns: { personId: string } | { guestId: string };
-					if ("memberId" in owner) {
-						const personId = env.personByMember.get(owner.memberId);
-						if (!personId) throw new Error("A member has no Person.");
-						ownerColumns = { personId };
-					} else {
-						ownerColumns = { guestId: owner.guestId };
-					}
-					const [created] = await tx
-						.insert(speeches)
-						.values({
-							...ownerColumns,
-							title: ps.speech.title,
-							introduction: ps.speech.introduction,
-							pathwayPath: ps.speech.path,
-							projectName: ps.speech.project,
-							projectLevel: ps.speech.level,
-							minMinutes: ps.speech.minMinutes,
-							maxMinutes: ps.speech.maxMinutes,
-						})
-						.returning({ id: speeches.id });
-					if (!created) throw new Error("Could not create a speech.");
-					speechId = created.id;
-					await putRef(tx, clubId, "speech", ps.speech.sourceId, speechId);
-				}
-				if (speechId) {
-					await tx
-						.update(roleSlots)
-						.set({ speechId })
-						.where(
-							and(
-								eq(roleSlots.id, slot.id),
-								sql`${roleSlots.speechId} is null`,
-							),
-						);
-				}
+			if (ps.speech) {
+				await attachSpeech(
+					tx,
+					{
+						clubId,
+						personByMember: env.personByMember,
+						omit,
+						refOf,
+						keptSpeeches,
+						verifyOwner: true,
+					},
+					slot,
+					owner,
+					ps.speech,
+				);
 			}
 		}
-		// Evaluator -> the speaker slot it evaluates, once every slot is placed.
-		for (const ps of pm.slots) {
-			if (ps.evaluatesEsSlot === null) continue;
-			const evaluator = slotIdByEsSlot.get(ps.esSlot);
-			const speaker = slotIdByEsSlot.get(ps.evaluatesEsSlot);
-			if (!evaluator || !speaker) continue;
-			await tx
-				.update(roleSlots)
-				.set({ evaluatesSlotId: speaker })
-				.where(
-					and(
-						eq(roleSlots.id, evaluator),
-						sql`${roleSlots.evaluatesSlotId} is null`,
-					),
-				);
-		}
+		await linkEvaluators(tx, planned, slotIdByEsSlot);
 
-		// -- RSVPs, only on the first apply of the meeting ------------------------
-		const planAnswers: Array<{
-			memberId: string;
-			status: (typeof pm.plans)[number]["status"];
-		}> = [];
-		for (const p of pm.plans) {
-			const owner = ownerOf(env, p.personKey);
-			if (!owner || !("memberId" in owner)) continue;
-			planAnswers.push({ memberId: owner.memberId, status: p.status });
-		}
-		if (pm.action !== "update") {
+		// -- RSVPs, only on the apply that first brings the meeting over ---------
+		// Active members only, and `importPlanAnswers` never overwrites a row, so a
+		// member's own answer stands.
+		if (firstApply) {
+			const planAnswers: Array<{
+				memberId: string;
+				status: (typeof pm.plans)[number]["status"];
+			}> = [];
+			for (const p of pm.plans) {
+				const owner = ownerOf(env, p.personKey);
+				if (!owner || !("memberId" in owner)) continue;
+				if (!activeIds.has(owner.memberId)) {
+					omit(
+						"rsvp",
+						`${pm.esMeetingId}:${p.personKey}`,
+						UPCOMING_INACTIVE_MEMBER,
+					);
+					continue;
+				}
+				planAnswers.push({ memberId: owner.memberId, status: p.status });
+			}
 			await importPlanAnswers(
 				tx,
 				{ meetingId, answers: planAnswers },
@@ -2438,7 +2613,67 @@ async function applyUpcomingMeeting(
 			);
 		}
 	});
-	return { applied, omissions };
+	return { applied, omissions, notes };
+}
+
+/**
+ * A meeting found under the lock where the plan said `create` (#1495 S2): the
+ * holders are placed again by {@link placeRoleHolders} against the slots read
+ * there. A holder who is blocked (inactive, Not coming, no owner) takes no slot.
+ * Holders already dropped by the plan keep their reason except `skipped` and
+ * `taken`, which the new slots decide afresh.
+ */
+function replaceUpcomingSlots(
+	env: MeetingEnv,
+	slots: PlanMeeting["slots"],
+	target: PlanTargetSlot[],
+	isBlocked: (ps: PlanMeeting["slots"][number]) => boolean,
+): PlanMeeting["slots"] {
+	const keep: PlanMeeting["slots"] = [];
+	const groups = new Map<string, PlanMeeting["slots"]>();
+	for (const ps of [...slots].sort((a, b) => a.esSlot - b.esSlot)) {
+		if (ps.kept === "inactive" || isBlocked(ps)) {
+			keep.push(ps);
+			continue;
+		}
+		groups.set(ps.roleKey, [...(groups.get(ps.roleKey) ?? []), ps]);
+	}
+	const out: PlanMeeting["slots"] = [...keep];
+	for (const [roleKey, group] of groups) {
+		const defId = env.resolved.roleDefIds.get(roleKey);
+		const mine = defId
+			? target.filter((t) => t.roleDefinitionId === defId)
+			: [];
+		const { placements } = placeRoleHolders(
+			group.map((ps) => {
+				const owner = ownerOf(env, ps.holderKey);
+				return {
+					ownerId: owner
+						? "memberId" in owner
+							? `m:${owner.memberId}`
+							: `g:${owner.guestId}`
+						: null,
+				};
+			}),
+			mine,
+			env.skipRoles.has(roleKey),
+		);
+		group.forEach((ps, i) => {
+			const placed = placements[i];
+			if (!placed) return;
+			const { kept: _k, addSlot: _a, ...rest } = ps;
+			out.push({
+				...rest,
+				slotIndex: placed.index,
+				...(placed.kept
+					? { kept: placed.kept }
+					: placed.addSlot
+						? { addSlot: true }
+						: {}),
+			});
+		});
+	}
+	return out.sort((a, b) => a.esSlot - b.esSlot);
 }
 
 /** What a failed meeting says in the report: never the SQL, which carries names. */
@@ -2472,6 +2707,7 @@ const sameOwner = (a: Owner, member: string | null, guest: string | null) =>
 async function loadFoundSourceIds(
 	clubId: string,
 	expected: ExpectedHolders,
+	includeUpcoming: boolean,
 ): Promise<FoundSourceIds> {
 	const scope = (kind: ImportRefKind) =>
 		and(
@@ -2494,11 +2730,16 @@ async function loadFoundSourceIds(
 			.select({ sourceId: importRefs.sourceId })
 			.from(importRefs)
 			.innerJoin(meetings, eq(meetings.id, importRefs.targetId))
-			// A past meeting is `completed`; an upcoming one (#1495) stays `scheduled`.
+			// A past meeting is `completed`; an upcoming one (#1495) stays `scheduled`,
+			// and only counts when this run imported upcoming meetings: a past meeting
+			// that is `scheduled` has not been imported.
 			.where(
 				and(
 					scope("meeting"),
-					inArray(meetings.status, ["completed", "scheduled"]),
+					inArray(
+						meetings.status,
+						includeUpcoming ? ["completed", "scheduled"] : ["completed"],
+					),
 				),
 			),
 		db
@@ -2729,6 +2970,7 @@ async function applyUnderImportLock(input: {
 		lengthMinutes: loaded.club.defaultMeetingMinutes,
 		timezone: loaded.ctx.clubTimezone,
 		bankDefs,
+		skipRoles: choice.skipRoles,
 		runner: input.runner,
 		resolved,
 		personByMember: new Map([
@@ -2738,6 +2980,7 @@ async function applyUnderImportLock(input: {
 	};
 	const failed: Array<{ esMeetingId: string; message: string }> = [];
 	const omissions: Omission[] = [];
+	const upcomingNotes: string[] = [];
 	let appliedMeetings = 0;
 	for (const pm of [...plan.meetings].sort(
 		(a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime(),
@@ -2759,6 +3002,7 @@ async function applyUnderImportLock(input: {
 				? await applyUpcomingMeeting(env, pm)
 				: await applyMeeting(env, pm);
 			omissions.push(...outcome.omissions);
+			upcomingNotes.push(...(outcome.notes ?? []));
 			if (outcome.applied) appliedMeetings++;
 		} catch (err) {
 			failed.push({
@@ -2779,7 +3023,11 @@ async function applyUnderImportLock(input: {
 			if (owner) expected.awards.set(a.sourceId, owner);
 		}
 	}
-	const found = await loadFoundSourceIds(input.clubId, expected);
+	const found = await loadFoundSourceIds(
+		input.clubId,
+		expected,
+		plan.upcoming.included,
+	);
 	const report = buildReconciliation({
 		bundle: stored.bundle,
 		bundleSha256: stored.bundleSha256,
@@ -2809,6 +3057,9 @@ async function applyUnderImportLock(input: {
 		(n) => scrubJsonbText(n),
 	);
 	if (contactNotes.length > 0) report.contactNotes = contactNotes;
+	if (upcomingNotes.length > 0) {
+		report.upcomingNotes = upcomingNotes.map((n) => scrubJsonbText(n));
+	}
 
 	const importState = JSON.stringify({ resolutions, report });
 	await db.transaction(async (tx) => {

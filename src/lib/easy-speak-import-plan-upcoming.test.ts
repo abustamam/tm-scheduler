@@ -6,6 +6,7 @@ import {
 	buildImportPlan,
 	expectedFromBundle,
 	notImportedFromBundle,
+	placeRoleHolders,
 	type PlanContext,
 	type PlanExistingMeeting,
 	type PlanTargetSlot,
@@ -286,8 +287,8 @@ describe("upcoming slot placement (#1495)", () => {
 			}),
 		);
 		expect(holderOf(plan, "Toastmaster")).toMatchObject({ kept: "already" });
-		// Placed nowhere: the holder keeps their one slot, no second index is given.
-		expect(holderOf(plan, "Toastmaster")?.slotIndex).toBe(-1);
+		// The slot they hold, so its speech and evaluator link can still come over (R5).
+		expect(holderOf(plan, "Toastmaster")?.slotIndex).toBe(0);
 	});
 
 	// protects="Add a slot" adds the overflow count after the highest existing index and places as many holders as there are empty slots;
@@ -423,7 +424,9 @@ describe("upcoming people, RSVPs and counts (#1495)", () => {
 		expect(ashlowe?.status).toBe("coming");
 		expect(plans.filter((p) => p.status === "coming")).toHaveLength(6);
 		expect(plans.filter((p) => p.status === "not_coming")).toHaveLength(4);
-		expect(plan.upcoming.rsvps).toBe(10);
+		// "Up to": only the replies of people who resolve to an active member (3 of
+		// the 10 are on the roster), never a guest or an unresolved name (R8).
+		expect(plan.upcoming.rsvps).toBe(3);
 		expect(new Set(plans.map((p) => p.personKey)).size).toBe(plans.length);
 	});
 
@@ -505,5 +508,125 @@ describe("the reconciliation reads upcoming meetings (#1495)", () => {
 			).map((r) => r.what);
 		expect(names(false)).toContain("Future meetings");
 		expect(names(true)).not.toContain("Future meetings");
+	});
+});
+
+const holderKey = (b: EasySpeakBundleV1, label: string) => {
+	const holder = meeting360(b).roles.find((r) => r.role === label)?.holder;
+	if (!holder) throw new Error(`no ${label}`);
+	return personKeyOf(holder);
+};
+const planSlotOf = (
+	plan: ReturnType<typeof buildImportPlan>,
+	label: string,
+) => upcomingOf(plan).slots.find((sl) => sl.label === label);
+
+describe("a role the admin skipped drops only the overflow (#1495 S1)", () => {
+	// protects=Skip drops the LAST `overflow` holders only: the one the template has a slot for is resolved and placed, the overflow holder is resolved by nobody and reported as skipped;
+	// fails_when=every holder of a skipped role is dropped (the in-slot holder is never resolved and silently lost at the apply);
+	// no_claim=the apply's omission rows (integration test).
+	it("resolves and places the in-slot holder, drops the overflow one", () => {
+		const bundle = upcomingOnly();
+		const oakley = holderKey(bundle, "Timer");
+		const val = holderKey(bundle, "Timer 2 - Online");
+		const plan = buildImportPlan(
+			bundle,
+			ctx({
+				newMeetingShape: [
+					{ roleDefinitionId: DEF.toastmaster, count: 1 },
+					{ roleDefinitionId: DEF.timer, count: 1 },
+				],
+				skipUpcomingRoles: new Set(["std:timer"]),
+			}),
+		);
+		expect(plan.people.map((p) => p.key)).toContain(oakley);
+		expect(plan.people.map((p) => p.key)).not.toContain(val);
+		expect(planSlotOf(plan, "Timer")).toMatchObject({ slotIndex: 0 });
+		expect(planSlotOf(plan, "Timer")?.kept).toBeUndefined();
+		expect(planSlotOf(plan, "Timer 2 - Online")).toMatchObject({
+			kept: "skipped",
+		});
+	});
+});
+
+describe("who an upcoming role may be given to (#1495 R2)", () => {
+	// protects=a person only an upcoming meeting names, whom nobody lists, is not minted as a former member for it;
+	// fails_when=the old "signalled -> former" rule applies to an upcoming role;
+	// no_claim=the same person named by a PAST meeting (the past tests: they are still created).
+	it("does not create a former member for an upcoming-only holder", () => {
+		const bundle = upcomingOnly();
+		const plan = buildImportPlan(bundle, ctx());
+		const oakley = plan.people.find((p) => p.key === holderKey(bundle, "Timer"));
+		expect(oakley?.outcome.status).toBe("unmatched");
+		console.log(JSON.stringify(plan.people.filter((p)=>p.outcome.status==='create').map((p)=>[p.name,p.outcome,p.appearances])));
+		expect(plan.counts.newFormerMembers).toBe(0);
+	});
+
+	// protects=an inactive member holding an upcoming role is not placed and the slot stays for someone else;
+	// fails_when=the roster's status is ignored;
+	// no_claim=a member who goes inactive between the plan and the apply (the apply re-reads the status).
+	it("keeps an inactive member out of the lineup", () => {
+		const plan = buildImportPlan(
+			upcomingOnly(),
+			ctx({
+				roster: [
+					{ memberId: id(1), name: "Zéphyr Ashlowe", active: false },
+					{ memberId: id(2), name: "Kai Larkspur" },
+				],
+			}),
+		);
+		expect(planSlotOf(plan, "Toastmaster")).toMatchObject({ kept: "inactive" });
+		// Their RSVP is not counted either: Zephyr's is one of the three.
+		expect(plan.upcoming.rsvps).toBe(2);
+	});
+});
+
+describe("placeRoleHolders (#1495 section 3)", () => {
+	const slot = (slotIndex: number, memberId?: string): PlanTargetSlot => ({
+		roleDefinitionId: DEF.timer,
+		slotIndex,
+		holder: memberId ? { memberId } : null,
+	});
+	// protects=a holder who already holds a slot is `already` on THAT slot and consumes no empty one;
+	// fails_when=they are placed again or reported on index -1;
+	// no_claim=the write.
+	it("puts an already-holder on the slot they hold", () => {
+		const out = placeRoleHolders(
+			[{ ownerId: "m:a" }, { ownerId: "m:b" }],
+			[slot(0, "a"), slot(1)],
+			false,
+		);
+		expect(out.placements).toEqual([
+			{ index: 0, kept: "already" },
+			{ index: 1, addSlot: false },
+		]);
+	});
+	// protects="Skip" drops the last overflow holders, "Add a slot" appends after the highest index;
+	// fails_when=the wrong holders are dropped or an index is reused;
+	// no_claim=none beyond protects.
+	it("skips the last overflow holders or adds slots after the highest index", () => {
+		const holders = [{ ownerId: null }, { ownerId: null }, { ownerId: null }];
+		const mine = [slot(0), slot(1)];
+		expect(placeRoleHolders(holders, mine, true).placements).toEqual([
+			{ index: 0, addSlot: false },
+			{ index: 1, addSlot: false },
+			{ index: -1, kept: "skipped" },
+		]);
+		expect(placeRoleHolders(holders, mine, false).placements).toEqual([
+			{ index: 0, addSlot: false },
+			{ index: 1, addSlot: false },
+			{ index: 2, addSlot: true },
+		]);
+	});
+	// protects=a holder with no empty slot left is `taken`: nobody is moved;
+	// fails_when=a held slot is handed to the holder;
+	// no_claim=none beyond protects.
+	it("reports a holder with no empty slot as taken", () => {
+		const out = placeRoleHolders(
+			[{ ownerId: null }],
+			[slot(0, "x"), slot(1, "y")],
+			false,
+		);
+		expect(out.placements).toEqual([{ index: -1, kept: "taken" }]);
 	});
 });

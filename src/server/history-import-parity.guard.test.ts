@@ -85,12 +85,20 @@ const WRITES: Record<string, { count: number; rule: string }> = {
 		rule: "W6 update people.email carries isNull(userId) + soleHoldingClub (#907); W7 update people.phone fills a blank only (stricter than the member edit)",
 	},
 	"history-import-logic.ts#applyMeeting": {
-		count: 10,
-		rule: "W8-W13 guest kind, meeting fill-only/insert, role slot create/fill-empty, speech, attendance, awards, table topics: club-loaded ids, fill-only",
+		count: 7,
+		rule: "W8-W13 guest kind, meeting fill-only/insert, role slot create/fill-empty, attendance, awards, table topics: club-loaded ids, fill-only (its speech and evaluator writes are attachSpeech and linkEvaluators, below)",
 	},
 	"history-import-logic.ts#applyUpcomingMeeting": {
-		count: 6,
-		rule: "writes only into the club's own meetings, under the club lock, through the plan class; fills empty slots only; creates scheduled meetings; sends nothing",
+		count: 3,
+		rule: "meeting blank fill (coalesce in the statement), role slot insert (only an addSlot) and guarded fill of a still-empty slot, under the club lock, through the plan class; creates scheduled meetings through insertMeetingWithSlots; sends nothing (its speech and evaluator writes are attachSpeech and linkEvaluators)",
+	},
+	"history-import-logic.ts#attachSpeech": {
+		count: 3,
+		rule: "insert speeches (the slot holder's own, club-scoped by the slot), update import_refs.target_id only for a speech ref whose speech belongs to someone else (club + source + kind + source id in the statement), update role_slots.speech_id only where it is null",
+	},
+	"history-import-logic.ts#linkEvaluators": {
+		count: 1,
+		rule: "update role_slots.evaluates_slot_id only where it is null",
 	},
 	"history-import-logic.ts#applyUnderImportLock": {
 		count: 1,

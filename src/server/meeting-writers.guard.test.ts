@@ -339,6 +339,26 @@ const MEETING_WRITERS: Record<string, Entry> = {
 	// reported). It fills only empty slots and fills blank meta; it never moves a
 	// holder, a time or a status, and sends nothing.
 	"src/server/history-import-logic.ts#applyUpcomingMeeting": { class: "plan" },
+	// The two helpers the past and the upcoming writer share (#1495 T6): the speech
+	// a filled slot gets, and the evaluator -> speaker link. Each refuses nothing
+	// itself; both callers refuse first, applyUpcomingMeeting by the plan class and
+	// applyMeeting by the record class.
+	"src/server/history-import-logic.ts#attachSpeech": {
+		class: "plan",
+		refusedBy: ["src/server/history-import-logic.ts#applyUpcomingMeeting"],
+		exemptCallers: {
+			"src/server/history-import-logic.ts#applyMeeting":
+				"The past writer: it refuses by the record class before any slot write (a completed meeting is exactly what it reaches), and the helper only puts a speech on a slot the bundle's holder holds.",
+		},
+	},
+	"src/server/history-import-logic.ts#linkEvaluators": {
+		class: "plan",
+		refusedBy: ["src/server/history-import-logic.ts#applyUpcomingMeeting"],
+		exemptCallers: {
+			"src/server/history-import-logic.ts#applyMeeting":
+				"The past writer: it refuses by the record class before any slot write, and the helper only sets an evaluator's link where it has none.",
+		},
+	},
 	// The speech-request step (#1052) writes queue rows (`speech_requests`), which
 	// are swept only because `scheduled_slot_id` points at a role slot. It writes
 	// no slot and never sets that column.

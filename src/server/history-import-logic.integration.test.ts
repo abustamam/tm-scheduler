@@ -2589,6 +2589,27 @@ EXECUTE FUNCTION zz_claim_slot()`),
 				);
 			return row?.id as string;
 		}
+		/** A roster member the bundle's upcoming holders can resolve to. */
+		async function addMember(
+			name: string,
+			status: "active" | "inactive" | "former" = "active",
+		) {
+			const [person] = await testDb
+				.insert(people)
+				.values({ name })
+				.returning({ id: people.id });
+			const [row] = await testDb
+				.insert(members)
+				.values({
+					clubId: seed.clubId,
+					personId: person?.id as string,
+					name,
+					clubRole: "member",
+					status,
+				})
+				.returning({ id: members.id });
+			return row?.id as string;
+		}
 		async function slotRows(meetingId: string) {
 			return testDb
 				.select()
@@ -2657,6 +2678,8 @@ EXECUTE FUNCTION zz_claim_slot()`),
 				.where(eq(meetings.id, adoptId));
 			// 27 Oct: a cancelled meeting.
 			const cancelledId = await seedMeetingAt(MORNING_27, "cancelled");
+			// Easy-Speak's first Timer is a member here; an upcoming role never makes one.
+			await addMember("Oakley Oakenshaw");
 
 			const stored = await upload(upcomingText());
 			const { resolutions } = await resolveAll(stored.importId);
