@@ -23,7 +23,6 @@ import { db } from "#/db";
 import {
 	activityLog,
 	guests,
-	importRefs,
 	members,
 	pathEnrollments,
 	pathLevelProgress,
@@ -308,22 +307,6 @@ export async function mergePeople(
 				// Both Persons are members of this club — fuse the two memberships so
 				// the club never ends up with two rows for one human.
 				await collapseMemberships(tx, abs.clubId, keeperMembershipId, abs.id);
-				// The collapse deletes the absorbed member row, so an import ref that
-				// names it would dangle and a re-import would match by name again
-				// (#1494). `target_id` is not in the table's key (club, source, kind,
-				// source_id), so a keeper that already holds a ref of the same kind
-				// cannot clash: different source ids, both now naming the keeper. A
-				// plain re-point below keeps the member id, so it needs nothing.
-				await tx
-					.update(importRefs)
-					.set({ targetId: keeperMembershipId })
-					.where(
-						and(
-							eq(importRefs.clubId, abs.clubId),
-							eq(importRefs.targetId, abs.id),
-							inArray(importRefs.kind, ["person", "willing_to_mentor"]),
-						),
-					);
 				collapsed++;
 			} else {
 				await tx

@@ -18,6 +18,7 @@ import {
 	clubActionItems,
 	guestInvites,
 	guests,
+	importRefs,
 	meetingAttendance,
 	meetingAttendancePlan,
 	meetingAwards,
@@ -40,6 +41,7 @@ import {
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { MEMBERSHIP_ENDED_CHANGE } from "#/lib/activity-format";
+import type { ImportRefKind } from "#/lib/import-refs";
 import { earliestDate } from "#/lib/person-identity";
 import { logActivity } from "./activity";
 import { deletePlanRowsOfEndedMember } from "./attendance-plan-logic";
@@ -362,6 +364,19 @@ export async function collapseMemberships(
 
 	// 4. meeting_attendance.member_id — unique (meeting, member). Drop the
 	//    absorbed dup where the keeper is already recorded, then re-point.
+	//    An `attendance` import ref naming a dup row moves to the keeper's row
+	//    for the same meeting first: left on the deleted id, a re-import's
+	//    `stillThere` check would report the record omitted (#1494).
+	await tx.execute(sql`
+		UPDATE import_refs r
+		SET target_id = k.id
+		FROM meeting_attendance a, meeting_attendance k
+		WHERE r.club_id = ${clubId}
+			AND r.kind = ${"attendance" satisfies ImportRefKind}
+			AND r.target_id = a.id
+			AND a.member_id = ${absorbedId}
+			AND k.member_id = ${keeperId}
+			AND k.meeting_id = a.meeting_id`);
 	await tx.execute(sql`
 		DELETE FROM meeting_attendance
 		WHERE member_id = ${absorbedId}
@@ -855,6 +870,45 @@ export async function collapseMemberships(
 			});
 		}
 	}
+
+	// --- Import refs naming the absorbed membership (#1494) -----------------
+	//     The delete below would leave them dangling, and a re-import would
+	//     match the person by name again (a duplicate or a "decide" prompt).
+	//     Every caller (`mergePeople`, the club admin's `applyMemberMerge`)
+	//     passes here, so the re-point lives here. No other kind targets a
+	//     member row; a plain Person re-point keeps the member id and needs none.
+	//
+	//     `person`: `target_id` is not in the key (club, source, kind,
+	//     source_id), so it cannot clash with a ref the keeper already holds.
+	await tx
+		.update(importRefs)
+		.set({ targetId: keeperId })
+		.where(
+			and(
+				eq(importRefs.clubId, clubId),
+				eq(importRefs.kind, "person" satisfies ImportRefKind),
+				eq(importRefs.targetId, absorbedId),
+			),
+		);
+	//     `willing_to_mentor`: the mentor step reads it by `source_id` (the
+	//     member id), so the key itself moves to (keeper, keeper). The keeper's
+	//     own ref wins: it may record a flag they turned off since.
+	const willing: ImportRefKind = "willing_to_mentor";
+	await tx.execute(sql`
+		INSERT INTO import_refs (club_id, source, kind, source_id, target_id)
+		SELECT club_id, source, kind, ${keeperId}, ${keeperId}
+		FROM import_refs
+		WHERE club_id = ${clubId} AND kind = ${willing} AND source_id = ${absorbedId}
+		ON CONFLICT DO NOTHING`);
+	await tx
+		.delete(importRefs)
+		.where(
+			and(
+				eq(importRefs.clubId, clubId),
+				eq(importRefs.kind, willing),
+				eq(importRefs.sourceId, absorbedId),
+			),
+		);
 
 	// --- Delete the now-empty absorbed membership --------------------------
 	await tx.delete(members).where(eq(members.id, absorbedId));
