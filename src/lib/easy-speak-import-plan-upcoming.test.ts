@@ -6,11 +6,11 @@ import {
 	buildImportPlan,
 	expectedFromBundle,
 	notImportedFromBundle,
-	placeRoleHolders,
 	type PlanContext,
 	type PlanExistingMeeting,
 	type PlanTargetSlot,
 	personKeyOf,
+	placeRoleHolders,
 } from "./easy-speak-import-plan";
 
 /**
@@ -516,10 +516,8 @@ const holderKey = (b: EasySpeakBundleV1, label: string) => {
 	if (!holder) throw new Error(`no ${label}`);
 	return personKeyOf(holder);
 };
-const planSlotOf = (
-	plan: ReturnType<typeof buildImportPlan>,
-	label: string,
-) => upcomingOf(plan).slots.find((sl) => sl.label === label);
+const planSlotOf = (plan: ReturnType<typeof buildImportPlan>, label: string) =>
+	upcomingOf(plan).slots.find((sl) => sl.label === label);
 
 describe("a role the admin skipped drops only the overflow (#1495 S1)", () => {
 	// protects=Skip drops the LAST `overflow` holders only: the one the template has a slot for is resolved and placed, the overflow holder is resolved by nobody and reported as skipped;
@@ -560,7 +558,9 @@ describe("who an upcoming role may be given to (#1495 R2)", () => {
 	it("does not create a former member for an upcoming-only holder", () => {
 		const bundle = upcomingOnly();
 		const plan = buildImportPlan(bundle, ctx());
-		const oakley = plan.people.find((p) => p.key === holderKey(bundle, "Timer"));
+		const oakley = plan.people.find(
+			(p) => p.key === holderKey(bundle, "Timer"),
+		);
 		expect(oakley?.outcome.status).toBe("unmatched");
 		// The former members that remain are minted by the member list, never by
 		// an upcoming role.
