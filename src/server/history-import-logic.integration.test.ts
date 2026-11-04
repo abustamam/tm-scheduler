@@ -24,6 +24,8 @@ import {
 	meetingAttendancePlan,
 	meetingAwards,
 	meetings,
+	meetingTemplateRoles,
+	meetingTemplates,
 	members,
 	officerTerms,
 	people,
@@ -49,6 +51,7 @@ import {
 	UPCOMING_RELEASED,
 	UPCOMING_ROLES_SKIPPED,
 } from "#/lib/easy-speak-import-plan";
+import { ROLE_TEMPLATE } from "#/lib/role-template";
 import {
 	cleanup,
 	hasTestDb,
@@ -86,6 +89,7 @@ vi.mock("./club-write-lock", async (importOriginal) => {
 });
 
 const realLogic = await import("./history-import-logic");
+const { setClubDefaultTemplate } = await import("./club-agendas-logic");
 /**
  * #1495 ticks "Import upcoming meetings" by default on a club's first import. The
  * tests below are about PAST meetings and predate the box, so their preview and
@@ -3187,6 +3191,131 @@ EXECUTE FUNCTION zz_claim_slot()`),
 			expect(
 				report.notImported.some((r) => r.sourceIds?.includes("1473488")),
 			).toBe(true);
+		});
+
+		// protects=with a club default agenda a created meeting carries a copy of it (template_id set) and exactly the slots the preview promised, a Joke Master among them, and a change of the default after the preview is a changed plan;
+		// fails_when=the created meeting ignores the default, the preview's shape and the written slots differ, or the shape is not in the plan's hash;
+		// no_claim=a club with no default (the other upcoming tests).
+		it("shapes a created meeting like the club default agenda (S4, R6)", async () => {
+			await testDb.delete(meetings).where(eq(meetings.clubId, seed.clubId));
+			await testDb
+				.delete(roleDefinitions)
+				.where(eq(roleDefinitions.clubId, seed.clubId));
+			await testDb
+				.insert(roleDefinitions)
+				.values(ROLE_TEMPLATE.map((r) => ({ ...r, clubId: seed.clubId })));
+			await testDb.insert(roleDefinitions).values({
+				clubId: seed.clubId,
+				name: "Joke Master",
+				key: "joke_master",
+				category: "functionary",
+				isSpeakerRole: false,
+			});
+			const [tpl] = await testDb
+				.insert(meetingTemplates)
+				.values({
+					clubId: seed.clubId,
+					meetingId: null,
+					key: `default-${randomUUID().slice(0, 8)}`,
+					name: "Club default",
+				})
+				.returning({ id: meetingTemplates.id });
+			const templateId = tpl?.id as string;
+			const declared = [
+				...ROLE_TEMPLATE.filter((r) =>
+					["toastmaster_of_the_day", "timer"].includes(r.key),
+				),
+				{
+					key: "joke_master",
+					name: "Joke Master",
+					category: "functionary" as const,
+					defaultCount: 1,
+					isSpeakerRole: false,
+				},
+			];
+			await testDb.insert(meetingTemplateRoles).values(
+				declared.map((r, i) => ({
+					templateId,
+					key: r.key,
+					name: r.name,
+					category: r.category,
+					defaultCount: r.defaultCount,
+					isSpeakerRole: r.isSpeakerRole,
+					sortOrder: i,
+				})),
+			);
+			await setClubDefaultTemplate({
+				clubId: seed.clubId,
+				templateId,
+				actorMemberId: null,
+			});
+
+			const stored = await upload(upcomingText());
+			const { resolutions } = await resolveAll(stored.importId);
+			// Every role the default has no slot for is Skipped, so the meeting's slots
+			// are the shape alone (an Add answer would put the extra ones on top).
+			const open = await previewUp(stored.importId, resolutions);
+			const skipAll = {
+				include: true,
+				skipRoles: open.upcoming.unslottedRoles.map((r) => r.planKey),
+			};
+			const preview = await previewUp(stored.importId, resolutions, skipAll);
+			expect(preview.upcoming.shape.length).toBe(3);
+
+			// The default changes after the preview: its hash is stale.
+			await testDb.insert(meetingTemplateRoles).values({
+				templateId,
+				key: "grammarian",
+				name: "Grammarian",
+				category: "functionary",
+				defaultCount: 1,
+				sortOrder: 9,
+			});
+			const changed = await previewUp(stored.importId, resolutions, skipAll);
+			expect(changed.planHash).not.toBe(preview.planHash);
+			await expect(
+				applyUp(stored.importId, resolutions, {
+					planHash: preview.planHash,
+					upcoming: skipAll,
+				}),
+			).rejects.toThrow(realLogic.PLAN_CHANGED_MESSAGE);
+
+			await applyUp(stored.importId, resolutions, {
+				planHash: changed.planHash,
+				upcoming: skipAll,
+			});
+			const meetingId = await createdMeeting();
+			const [row] = await testDb
+				.select({ templateId: meetings.templateId })
+				.from(meetings)
+				.where(eq(meetings.id, meetingId));
+			expect(row?.templateId).not.toBeNull();
+			expect(row?.templateId).not.toBe(templateId);
+			const perRole = new Map<string, number>();
+			for (const x of await slotRows(meetingId)) {
+				perRole.set(
+					x.roleDefinitionId,
+					(perRole.get(x.roleDefinitionId) ?? 0) + 1,
+				);
+			}
+			expect([...perRole].sort((a, b) => a[0].localeCompare(b[0]))).toEqual(
+				changed.upcoming.shape,
+			);
+			// The Joke Master slot is held by Easy-Speak's Joke Master.
+			const [joke] = await testDb
+				.select({ id: roleDefinitions.id })
+				.from(roleDefinitions)
+				.where(
+					and(
+						eq(roleDefinitions.clubId, seed.clubId),
+						eq(roleDefinitions.key, "joke_master"),
+					),
+				);
+			const dana = await memberIdOf("Dana Vexford");
+			expect(
+				(await slotRows(meetingId)).find((x) => x.roleDefinitionId === joke?.id)
+					?.assignedMemberId,
+			).toBe(dana);
 		});
 	});
 });
