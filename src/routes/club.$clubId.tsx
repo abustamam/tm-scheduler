@@ -134,7 +134,7 @@ function ClubShell() {
 		);
 	}
 
-	// Anonymous visitor → today's lightweight header + name-pick, unchanged.
+	// No membership (anonymous or signed-in non-member) → lightweight header + name-pick.
 	return (
 		<div className="flex min-h-svh w-full flex-col bg-background">
 			<header className="flex items-center gap-3 border-b border-border px-4 py-3 md:px-6">

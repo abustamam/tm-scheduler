@@ -33,7 +33,7 @@ vi.mock("@tanstack/react-router", () => ({
 		search?: { redirect?: string };
 		children: ReactNode;
 	}) => (
-		<a href={`${to}?redirect=${search?.redirect ?? ""}`} {...rest}>
+		<a href={search ? `${to}?redirect=${search.redirect ?? ""}` : to} {...rest}>
 			{children}
 		</a>
 	),
@@ -86,7 +86,7 @@ describe("anonymous club header", () => {
 		).options.component;
 		render(<Shell />);
 		const link = screen.getByRole("link", { name: "Your clubs" });
-		expect(link.getAttribute("href")).toBe("/?redirect=");
+		expect(link.getAttribute("href")).toBe("/");
 		expect(link.getAttribute("data-slot")).toBe("button");
 		expect(link.className).toContain("h-11");
 		expect(
