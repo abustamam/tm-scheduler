@@ -1001,4 +1001,24 @@ describe("ImportHistoryPanel close names and the contacts hint (#1493)", () => {
 		await screen.findByRole("button", { name: "Apply import" });
 		expect(screen.queryByTestId("contacts-hint")).toBeNull();
 	});
+
+	// protects=a person the plan would create (no close member) still brings the hint while Contacts is empty;
+	// fails_when=the hint is gated on a possible match alone, so a plain create shows none;
+	// no_claim=the hint's wording, covered above.
+	it("shows the contacts hint when the only person is a create", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue({
+			...previewFor(false),
+			people: [
+				{
+					...bob,
+					key: "es:910002",
+					name: "Zed Newcomer",
+					status: "create",
+					candidates: [],
+				},
+			],
+		});
+		await openImport();
+		expect(await screen.findByTestId("contacts-hint")).toBeTruthy();
+	});
 });

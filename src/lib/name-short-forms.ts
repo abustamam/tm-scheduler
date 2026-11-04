@@ -7,6 +7,8 @@
 // is never linked automatically: a wrong link merges two real people's history.
 //
 // English only, two-way, no spelling distance, no surname change.
+import { foldName } from "./easy-speak-import-plan";
+import { firstNameOf } from "./person-name";
 
 /**
  * Short form -> the full names it may stand for. Reviewed as data. A short form
@@ -123,21 +125,11 @@ const SHORT_FORMS: Record<string, readonly string[]> = {
 	zach: ["zachary"],
 };
 
-/** Lower-case, accent-free, single-spaced: the comparison form. */
-function fold(s: string): string {
-	return s
-		.normalize("NFD")
-		.replace(/\p{M}/gu, "")
-		.toLowerCase()
-		.replace(/\s+/gu, " ")
-		.trim();
-}
-
 const stripPunct = (s: string) => s.replace(/[,;.]+/gu, "");
 
 /** The family name: before the comma in "Last, First", else the last word. `""` for a one-word name. */
 export function surnameOf(name: string): string {
-	const trimmed = fold(name);
+	const trimmed = foldName(name);
 	const comma = trimmed.indexOf(",");
 	if (comma !== -1) {
 		const before = stripPunct(trimmed.slice(0, comma)).trim();
@@ -147,14 +139,6 @@ export function surnameOf(name: string): string {
 	const parts = trimmed.split(" ").filter(Boolean);
 	if (parts.length < 2) return "";
 	return stripPunct(parts[parts.length - 1] ?? "");
-}
-
-/** The given name, folded: what follows the comma in "Last, First", else the first word. */
-export function givenNameOf(name: string): string {
-	const trimmed = fold(name);
-	const comma = trimmed.indexOf(",");
-	const rest = comma !== -1 ? trimmed.slice(comma + 1) : trimmed;
-	return stripPunct(rest.trim().split(" ")[0] ?? "");
 }
 
 /** Whether two given names (already folded) are related by the table, either way round. */
@@ -181,8 +165,8 @@ function prefixPair(a: string, b: string): boolean {
 
 /** Whether two given names may be the same person's: equal, a short form, or a prefix. */
 export function givenNamesRelated(a: string, b: string): boolean {
-	const x = fold(a);
-	const y = fold(b);
+	const x = foldName(a);
+	const y = foldName(b);
 	if (x === "" || y === "") return false;
 	return x === y || shortFormPair(x, y) || prefixPair(x, y);
 }
@@ -195,5 +179,5 @@ export function isCloseName(a: string, b: string): boolean {
 	const sa = surnameOf(a);
 	const sb = surnameOf(b);
 	if (sa === "" || sb === "" || sa !== sb) return false;
-	return givenNamesRelated(givenNameOf(a), givenNameOf(b));
+	return givenNamesRelated(firstNameOf(a), firstNameOf(b));
 }

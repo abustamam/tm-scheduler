@@ -1632,10 +1632,12 @@ describe.skipIf(!hasTestDb)(
 			// #1493: an address a roster member holds LINKS the person who names it, so it
 			// is never written to a second Person. The holder lookup folding case and
 			// blanks is what finds Holder here.
+			const holderMember = await memberByName("Holder");
+			expect(holderMember).toBeDefined();
 			expect(shown.people.find((p) => p.name === "Mo Member")).toMatchObject({
 				status: "member",
 				via: "email",
-				memberId: holder ? (await memberByName("Holder"))?.id : undefined,
+				memberId: holderMember?.id,
 			});
 			await apply(stored.importId, contacts, shown.planHash);
 			expect(await memberByName("Mo Member")).toBeUndefined();

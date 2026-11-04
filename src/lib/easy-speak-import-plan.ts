@@ -1256,6 +1256,13 @@ export function buildImportPlan(
 	// The roster members whose name is close to this person's (#1493).
 	const closeMembers = (name: string) =>
 		ctx.roster.filter((m) => isCloseName(name, m.name));
+	// A person the plan would create although a roster member's name is close: the one
+	// predicate behind both the "create" answer's set-aside note and the question.
+	const createWithCloseMembers = (
+		outcome: PlanPersonOutcome,
+		name: string,
+	): outcome is Extract<PlanPersonOutcome, { status: "create" }> =>
+		outcome.status === "create" && closeMembers(name).length > 0;
 
 	for (const d of drafts) {
 		const { key, ref, appearances, listOnly, guestRef } = d;
@@ -1279,7 +1286,7 @@ export function buildImportPlan(
 			}
 			if (
 				saved?.action === "create" &&
-				!(outcome.status === "create" && closeMembers(ref.name).length > 0)
+				!createWithCloseMembers(outcome, ref.name)
 			) {
 				notes.push(
 					`${ref.name}: the saved answer "create" is set aside; they are matched automatically.`,
@@ -1435,18 +1442,20 @@ export function buildImportPlan(
 	}
 	// A close name for a person the plan would create and no answer has settled
 	// (#1493). After the namesake pass above, so a name-only reference follows the
-	// `es:` person it belongs to. A `create` answer is the answer: it is not asked again.
+	// `es:` person it belongs to. Only a `create` answer is the answer and is not asked
+	// again; any other saved answer that left the person a create (a member no longer
+	// on the roster, a deleted guest) did not take effect, so the question stands.
 	for (const p of people) {
-		if (p.outcome.status !== "create" || ctx.resolutions?.[p.key] !== undefined)
+		if (
+			ctx.resolutions?.[p.key]?.action === "create" ||
+			!createWithCloseMembers(p.outcome, p.name)
+		)
 			continue;
-		const close = closeMembers(p.name);
-		if (close.length > 0) {
-			p.outcome = {
-				status: "possible_match",
-				candidates: close,
-				fallback: p.outcome,
-			};
-		}
+		p.outcome = {
+			status: "possible_match",
+			candidates: closeMembers(p.name),
+			fallback: p.outcome,
+		};
 	}
 	people.sort(
 		(a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key),
@@ -1944,7 +1953,7 @@ function linkByEmail(
 			? es
 			: hits;
 	};
-	const rowOf = new Set<string>();
+	const personsWithRow = new Set<string>();
 	rows.forEach((r, i) => {
 		const row = i + 1;
 		if (r.name.trim() === "") return;
@@ -1952,8 +1961,8 @@ function linkByEmail(
 		const [person] = named;
 		if (named.length !== 1 || !person) return;
 		// A second row for the same person is ignored: the first row is the one.
-		if (rowOf.has(person.key)) return;
-		rowOf.add(person.key);
+		if (personsWithRow.has(person.key)) return;
+		personsWithRow.add(person.key);
 		const email = norm(r.email);
 		if (email === "" || !isValidEmail(email)) return;
 		if ((rowsByEmail.get(email) ?? 0) > 1) {

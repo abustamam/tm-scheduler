@@ -1928,9 +1928,10 @@ describe("matching by pasted-contact email and close names (#1493)", () => {
 		const p = plan(bundleOf(bob), over);
 		expect(bobOf(p)?.outcome.status).toBe("possible_match");
 		expect(p.contactWarnings).toContain(warning);
-		expect(JSON.stringify([p.contactWarnings, p.notes])).not.toContain(
-			"private@",
-		);
+		// Lower-cased, so an upper-cased address cannot slip past the check.
+		expect(
+			JSON.stringify([p.contactWarnings, p.notes]).toLowerCase(),
+		).not.toContain("private@");
 	});
 
 	// protects=a contacts row that names two Easy-Speak people links neither;
@@ -1946,6 +1947,31 @@ describe("matching by pasted-contact email and close names (#1493)", () => {
 		expect(p.people.filter((x) => x.outcome.status === "member")).toHaveLength(
 			0,
 		);
+		// §1 warns only when the address itself is shared; two people on one row
+		// is not that, so the one warning is the row's usual "matches no one".
+		expect(p.contactWarnings).toEqual([
+			"Contact row 1 matches no one being linked or created; it is applied to no one.",
+		]);
+		expect(JSON.stringify(p.contactWarnings).toLowerCase()).not.toContain(
+			"private@",
+		);
+	});
+
+	// protects=a saved member answer that does not take effect (the member left the roster) does not silence the close-name question;
+	// fails_when=the person is left a create with a close name and no question, so the apply makes a duplicate;
+	// no_claim=an answer that takes effect (tested above).
+	it("still asks when a saved member answer is rejected (AC 8)", () => {
+		const p = plan(bundleOf(bob), {
+			contacts: undefined,
+			resolutions: { [BOB_KEY]: { action: "member", memberId: OTHER } },
+		});
+		expect(bobOf(p)?.rejectedChoice).toBe(OTHER);
+		const o = bobOf(p)?.outcome;
+		expect(o?.status).toBe("possible_match");
+		expect(
+			o?.status === "possible_match" && o.candidates.map((c) => c.memberId),
+		).toEqual([ROBERT]);
+		expect(p.canApply).toBe(false);
 	});
 
 	// protects=an email that disagrees with the name goes to a human, one that agrees is automatic;

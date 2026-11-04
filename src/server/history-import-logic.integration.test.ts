@@ -3412,6 +3412,9 @@ EXECUTE FUNCTION zz_claim_slot()`),
 			expect(await rowOf(robert)).toEqual(robertBefore);
 		});
 
+		// protects=answering `member` links the nickname to Robert and creates no second Smith;
+		// fails_when=the answer is ignored and a Bob Smith member is created, or a different number of people is added;
+		// no_claim=the roster rows other than Smith (the bundle's other new people are counted as a fixed number).
 		it("links to the member when answered, creating nobody", async () => {
 			const robert = await addRobert();
 			const stored = await upload(bobBundleText());
@@ -3421,18 +3424,18 @@ EXECUTE FUNCTION zz_claim_slot()`),
 				...resolutions,
 				"es:910001": { action: "member" as const, memberId: robert },
 			};
-			const planned = await logic.previewEasySpeakImport({
-				clubId: seed.clubId,
-				importId: stored.importId,
-				now: NOW,
-				resolutions: answers,
-			});
 			await apply(stored.importId, answers);
-			expect(await memberCount()).toBe(
-				before +
-					planned.counts.newActiveMembers +
-					planned.counts.newFormerMembers,
-			);
+			// Absolute, not the plan's own counts: nobody is named Bob Smith, and the
+			// bundle's other new people are the only ones added.
+			expect(
+				await testDb
+					.select({ id: members.id })
+					.from(members)
+					.where(
+						and(eq(members.clubId, seed.clubId), eq(members.name, "Bob Smith")),
+					),
+			).toEqual([]);
+			expect(await memberCount()).toBe(before + 3);
 		});
 
 		// protects=a pasted address links the nickname member with no question, the apply remembers it as a ref, and the next preview matches by ref with no contacts;
