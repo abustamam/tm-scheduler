@@ -491,4 +491,123 @@ describe.skipIf(!hasTestDb)("speech pointer lifecycle (ADR-0009)", () => {
 			expect(row?.projectLevel).toBe("Level 2");
 		});
 	});
+	describe("a guest holding the speaker slot (#1518)", () => {
+		let guestId: string;
+		let otherGuestId: string;
+
+		beforeEach(async () => {
+			const { createGuestRecord } = await import("./guests-logic");
+			guestId = (
+				await createGuestRecord(testDb, {
+					clubId: seed.clubId,
+					name: "Guest A",
+				})
+			).id;
+			otherGuestId = (
+				await createGuestRecord(testDb, {
+					clubId: seed.clubId,
+					name: "Guest B",
+				})
+			).id;
+			await testDb
+				.update(roleSlots)
+				.set({ assignedMemberId: null, assignedGuestId: guestId })
+				.where(eq(roleSlots.id, speakerSlotId));
+		});
+
+		async function guestSpeech() {
+			const id = await speechIdOf(speakerSlotId);
+			if (!id) return null;
+			const [row] = await testDb
+				.select()
+				.from(speeches)
+				.where(eq(speeches.id, id));
+			return row ?? null;
+		}
+
+		async function createGuestOwned(title: string) {
+			const { editSlotSpeech } = await import("./slots-logic");
+			await editSlotSpeech(testDb, {
+				slotId: speakerSlotId,
+				guestId,
+				currentSpeechId: null,
+				input: { speechTitle: title },
+			});
+			return (await guestSpeech())!;
+		}
+
+		it("creates a guest-owned speech, updates it in place and unlinks on blank", async () => {
+			const { editSlotSpeech } = await import("./slots-logic");
+			const created = await createGuestOwned("Guest talk");
+			expect(created.guestId).toBe(guestId);
+			expect(created.personId).toBeNull();
+
+			await editSlotSpeech(testDb, {
+				slotId: speakerSlotId,
+				guestId,
+				currentSpeechId: created.id,
+				input: { speechTitle: "Renamed" },
+			});
+			const updated = await guestSpeech();
+			expect(updated?.id).toBe(created.id);
+			expect(updated?.title).toBe("Renamed");
+
+			await editSlotSpeech(testDb, {
+				slotId: speakerSlotId,
+				guestId,
+				currentSpeechId: created.id,
+				input: { speechTitle: "" },
+			});
+			expect(await speechIdOf(speakerSlotId)).toBeNull();
+			const [kept] = await testDb
+				.select()
+				.from(speeches)
+				.where(eq(speeches.id, created.id));
+			expect(kept?.guestId).toBe(guestId);
+		});
+
+		it("never shows up under a member's Person", async () => {
+			await createGuestOwned("Guest talk");
+			const owned = await testDb
+				.select({ id: speeches.id })
+				.from(speeches)
+				.where(eq(speeches.personId, seed.personId));
+			expect(owned).toHaveLength(0);
+		});
+
+		it("reassigning to a member unlinks the speech, keeps it guest-owned", async () => {
+			const created = await createGuestOwned("Guest talk");
+			const { reassignSlotCore } = await import("./slots-logic");
+			await testDb.transaction((tx) =>
+				reassignSlotCore(tx, {
+					slotId: speakerSlotId,
+					memberId: seed.memberId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			);
+			expect(await speechIdOf(speakerSlotId)).toBeNull();
+			const [row] = await testDb
+				.select()
+				.from(speeches)
+				.where(eq(speeches.id, created.id));
+			expect(row?.guestId).toBe(guestId);
+			expect(row?.personId).toBeNull();
+		});
+
+		it("assigning another guest unlinks the speech, keeps it with the first guest", async () => {
+			const created = await createGuestOwned("Guest talk");
+			const { applyAssignGuestToSlot } = await import("./guests-logic");
+			await applyAssignGuestToSlot({
+				slotId: speakerSlotId,
+				guestId: otherGuestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect(await speechIdOf(speakerSlotId)).toBeNull();
+			const [row] = await testDb
+				.select()
+				.from(speeches)
+				.where(eq(speeches.id, created.id));
+			expect(row?.guestId).toBe(guestId);
+		});
+	});
 });

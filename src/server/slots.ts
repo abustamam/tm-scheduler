@@ -341,6 +341,7 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 				meetingStatus: meetings.status,
 				speechId: roleSlots.speechId,
 				assignedMemberId: roleSlots.assignedMemberId,
+				assignedGuestId: roleSlots.assignedGuestId,
 				personId: members.personId,
 			})
 			.from(roleSlots)
@@ -375,8 +376,15 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 		if (!slot.isSpeakerRole) {
 			throw new Error("Only speaker roles have speech details.");
 		}
-		// A speech is Person-owned, so it needs an assignee to own it.
-		if (!slot.assignedMemberId || !slot.personId) {
+		// A speech has exactly one owner (#1046): the member's Person, or the
+		// guest holding the slot (#1518). An empty slot has nobody to own it.
+		const owner =
+			slot.assignedMemberId && slot.personId
+				? { personId: slot.personId }
+				: slot.assignedGuestId
+					? { guestId: slot.assignedGuestId }
+					: null;
+		if (!owner) {
 			throw new Error("Assign a member before adding speech details.");
 		}
 		await db.transaction(async (tx) => {
@@ -389,7 +397,7 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 				write: () =>
 					editSlotSpeech(tx, {
 						slotId: data.slotId,
-						personId: slot.personId as string,
+						...owner,
 						currentSpeechId: slot.speechId,
 						input: data.speakerDetails,
 					}),

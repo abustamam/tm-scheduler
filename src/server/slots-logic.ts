@@ -1336,22 +1336,31 @@ async function applyProjectDisplay(
 	return { ...content, ...display };
 }
 
+/** Who owns a new speech (#1518): the slot holder's Person, or the guest. */
+export type SpeechOwner = { personId: string } | { guestId: string };
+
 /**
- * Attach a new Person-owned Speech to a freshly-claimed speaker slot and point
+ * Attach a new Speech to a freshly-claimed speaker slot and point
  * the slot at it. Pure-TBA / empty input creates nothing (slot stays TBA,
  * `speech_id` NULL). Returns the new speech id, or null when nothing was created.
  * Assumes the slot has no speech yet (a just-claimed slot).
  */
 export async function attachSpeechToSlot(
 	conn: DbOrTx,
-	args: { slotId: string; personId: string; input?: SpeechInput },
+	args: { slotId: string; input?: SpeechInput } & SpeechOwner,
 ): Promise<string | null> {
 	const { content, hasContent } = normalizeSpeech(args.input);
 	if (!hasContent) return null;
 	const values = await applyProjectDisplay(conn, content);
 	const [row] = await conn
 		.insert(speeches)
-		.values({ personId: args.personId, ...values })
+		.values({
+			// Exactly one owner (#1046): a guest's speech has `person_id` NULL.
+			...("guestId" in args
+				? { personId: null, guestId: args.guestId }
+				: { personId: args.personId, guestId: null }),
+			...values,
+		})
 		.returning({ id: speeches.id });
 	if (!row) throw new Error("Failed to create speech.");
 	await conn
@@ -2524,16 +2533,15 @@ export async function writeSpeakerDetails(
  *  - real content + no speech yet → create one owned by `personId` and link it.
  *  - blank/TBA input + slot has a speech → unlink it (the speech persists).
  *  - blank/TBA input + no speech → no-op.
- * `personId` is the current assignee's Person (required to own a new speech).
+ * The owner is the current holder's Person, or the guest holding the slot.
  */
 export async function editSlotSpeech(
 	conn: DbOrTx,
 	args: {
 		slotId: string;
-		personId: string;
 		currentSpeechId: string | null;
 		input?: SpeechInput;
-	},
+	} & SpeechOwner,
 ): Promise<void> {
 	const { hasContent } = normalizeSpeech(args.input);
 	if (!hasContent) {
@@ -2555,10 +2563,9 @@ export async function updateOrAttachSlotSpeech(
 	conn: DbOrTx,
 	args: {
 		slotId: string;
-		personId: string;
 		currentSpeechId: string | null;
 		input?: SpeechInput;
-	},
+	} & SpeechOwner,
 ): Promise<void> {
 	const { content } = normalizeSpeech(args.input);
 	if (args.currentSpeechId) {
@@ -2571,7 +2578,9 @@ export async function updateOrAttachSlotSpeech(
 	}
 	await attachSpeechToSlot(conn, {
 		slotId: args.slotId,
-		personId: args.personId,
+		...("guestId" in args
+			? { guestId: args.guestId }
+			: { personId: args.personId }),
 		input: args.input,
 	});
 }
