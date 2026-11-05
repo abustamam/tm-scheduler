@@ -11,12 +11,13 @@
  * skips when unset.
  */
 import { randomUUID } from "node:crypto";
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
 	guests,
 	meetings,
+	members,
 	pathEnrollments,
 	pathLevelProgress,
 	pathwaysPaths,
@@ -44,6 +45,7 @@ const {
 	applyUndoGuestConversion,
 	applyUnlinkGuestFromMember,
 } = await import("#/server/guest-pipeline-logic");
+const { mergePeople } = await import("#/server/people-merge-logic");
 const { pathwaysForPerson } = await import("#/server/pathways-read-logic");
 const { loadSpeechLog } = await import("#/server/my-activity-logic");
 const { loadMilestoneCounts } = await import("#/server/milestones-logic");
@@ -212,11 +214,11 @@ describe.skipIf(!hasTestDb)(
 			return (await loadMilestoneCounts(membershipId)).speechesDelivered;
 		}
 
-		/** Hand a speech to a Person other than the one it was transferred to. */
+		/** Hand a speech to an unrelated Person; the membership does not move. */
 		async function moveToOtherPerson(speechId: string) {
 			const [other] = await testDb
 				.insert(people)
-				.values({ name: `Merged Keeper ${randomUUID().slice(0, 8)}` })
+				.values({ name: `Third Party ${randomUUID().slice(0, 8)}` })
 				.returning({ id: people.id });
 			if (!other) throw new Error("Failed to seed person");
 			strayPeople.push(other.id);
@@ -225,6 +227,44 @@ describe.skipIf(!hasTestDb)(
 				.set({ personId: other.id })
 				.where(eq(speeches.id, speechId));
 			return other.id;
+		}
+
+		/**
+		 * The member attaches the speech to a slot THEY hold, as
+		 * `attachSpeechToOpenSlot` does: the guest's own slot lets go of it and a slot of the member's, in a later meeting,
+		 * points at it.
+		 */
+		async function attachToMemberSlot(speechId: string, membershipId: string) {
+			// `role_slots_speech_unique`: one slot per speech, so let go first.
+			await testDb
+				.update(roleSlots)
+				.set({ speechId: null })
+				.where(eq(roleSlots.speechId, speechId));
+			const [role] = await testDb
+				.select({ id: roleDefinitions.id })
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.clubId, seed.clubId));
+			const [meeting] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: seed.clubId,
+					scheduledAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+					status: "scheduled",
+				})
+				.returning({ id: meetings.id });
+			if (!role || !meeting) throw new Error("Failed to seed member slot");
+			const [slot] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: meeting.id,
+					roleDefinitionId: role.id,
+					assignedMemberId: membershipId,
+					status: "claimed",
+					speechId,
+				})
+				.returning({ id: roleSlots.id });
+			if (!slot) throw new Error("Failed to seed member slot");
+			return slot.id;
 		}
 
 		/** An older-style record: drop `speechIds` from every activity detail. */
@@ -277,7 +317,7 @@ describe.skipIf(!hasTestDb)(
 				);
 			});
 
-			it("undo leaves a recorded speech a merge moved to another Person with that Person", async () => {
+			it("undo leaves a recorded speech re-owned to an unrelated Person with that Person", async () => {
 				const { guestId, speechId } = await guestWithSpeech();
 				await convert(guestId);
 				const keeper = await moveToOtherPerson(speechId);
@@ -286,6 +326,73 @@ describe.skipIf(!hasTestDb)(
 					personId: keeper,
 					guestId: null,
 				});
+			});
+
+			it("undo leaves a speech the member attached to a slot they hold in ANOTHER club with the member", async () => {
+				const { guestId, speechId } = await guestWithSpeech();
+				const { personId } = await convert(guestId);
+				// Same Person, second club: the undo's same-club history guard does not
+				// see this slot, so the restore predicate is what protects it.
+				const other = await seedClub();
+				try {
+					const [otherMember] = await testDb
+						.insert(members)
+						.values({
+							clubId: other.clubId,
+							personId,
+							name: "Same Person Elsewhere",
+						})
+						.returning({ id: members.id });
+					if (!otherMember) throw new Error("Failed to seed membership");
+					await testDb
+						.update(roleSlots)
+						.set({ speechId: null })
+						.where(eq(roleSlots.speechId, speechId));
+					await testDb
+						.update(roleSlots)
+						.set({
+							assignedMemberId: otherMember.id,
+							status: "claimed",
+							speechId,
+						})
+						.where(eq(roleSlots.id, other.slotId));
+					await undo(guestId);
+					expect(await owner(speechId)).toEqual({ personId, guestId: null });
+				} finally {
+					// Detach the shared Person (the main club's to clean up) first.
+					await testDb
+						.delete(members)
+						.where(
+							and(
+								eq(members.clubId, other.clubId),
+								eq(members.name, "Same Person Elsewhere"),
+							),
+						);
+					await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+				}
+			});
+
+			it("after a real people merge of the converted Person, undo returns the slots AND the speech to the guest", async () => {
+				const { guestId, speechId } = await guestWithSpeech();
+				const { personId } = await convert(guestId);
+				const [keeper] = await testDb
+					.insert(people)
+					.values({ name: `Merge Keeper ${randomUUID().slice(0, 8)}` })
+					.returning({ id: people.id });
+				if (!keeper) throw new Error("Failed to seed person");
+				strayPeople.push(keeper.id);
+				await mergePeople({
+					keeperPersonId: keeper.id,
+					absorbedPersonId: personId,
+				});
+				expect((await owner(speechId)).personId).toBe(keeper.id);
+				await undo(guestId);
+				expect(await owner(speechId)).toEqual({ personId: null, guestId });
+				const slots = await testDb
+					.select({ guest: roleSlots.assignedGuestId })
+					.from(roleSlots)
+					.where(eq(roleSlots.speechId, speechId));
+				expect(slots.map((r) => r.guest)).toEqual([guestId]);
 			});
 
 			it("undo of a record without speechIds succeeds and issues no speech UPDATE", async () => {
@@ -360,7 +467,7 @@ describe.skipIf(!hasTestDb)(
 				);
 			});
 
-			it("unlink leaves a recorded speech a merge moved to another Person with that Person", async () => {
+			it("unlink leaves a recorded speech re-owned to an unrelated Person with that Person", async () => {
 				const { guestId, speechId } = await guestWithSpeech();
 				await link(guestId);
 				const keeper = await moveToOtherPerson(speechId);
@@ -369,6 +476,46 @@ describe.skipIf(!hasTestDb)(
 					personId: keeper,
 					guestId: null,
 				});
+			});
+
+			it("unlink leaves a speech the member attached to a slot they hold with the member", async () => {
+				const { guestId, speechId } = await guestWithSpeech();
+				await link(guestId);
+				const slotId = await attachToMemberSlot(speechId, seed.memberId);
+				await unlink(guestId);
+				expect(await owner(speechId)).toEqual({
+					personId: seed.personId,
+					guestId: null,
+				});
+				const [slot] = await testDb
+					.select({ speechId: roleSlots.speechId })
+					.from(roleSlots)
+					.where(eq(roleSlots.id, slotId));
+				expect(slot?.speechId).toBe(speechId);
+			});
+
+			it("after a real people merge the member's Person changed: unlink returns the slots AND the speech to the guest", async () => {
+				const { guestId, speechId } = await guestWithSpeech();
+				await link(guestId);
+				const [keeper] = await testDb
+					.insert(people)
+					.values({ name: `Merge Keeper ${randomUUID().slice(0, 8)}` })
+					.returning({ id: people.id });
+				if (!keeper) throw new Error("Failed to seed person");
+				strayPeople.push(keeper.id);
+				await mergePeople({
+					keeperPersonId: keeper.id,
+					absorbedPersonId: seed.personId,
+				});
+				// The merge moved both the membership and the speech to the keeper.
+				expect((await owner(speechId)).personId).toBe(keeper.id);
+				await unlink(guestId);
+				expect(await owner(speechId)).toEqual({ personId: null, guestId });
+				const slots = await testDb
+					.select({ guest: roleSlots.assignedGuestId })
+					.from(roleSlots)
+					.where(eq(roleSlots.speechId, speechId));
+				expect(slots.map((r) => r.guest)).toEqual([guestId]);
 			});
 
 			it("unlink of a record without speechIds succeeds and issues no speech UPDATE", async () => {

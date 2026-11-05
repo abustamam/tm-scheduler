@@ -3263,11 +3263,14 @@ async function reownGuestSpeeches(
 
 /**
  * Reverse `reownGuestSpeeches` for the recorded ids only, and only those still
- * owned by `ownerPersonId`, the Person they were handed to. A speech created
- * for the member since is not in the record and stays with them; a recorded one
- * a people merge has since moved to another Person is theirs now, as a recorded
- * slot reassigned since stays with its new holder. An empty record is a no-op
- * (`inArray(col, [])` would compile to `false`).
+ * owned by `ownerPersonId` (the membership's CURRENT Person, so a people merge
+ * since the hand-over is followed) AND not attached to a slot anywhere except a
+ * slot the guest holds. The caller has already handed the returned slots back,
+ * so "the guest holds it" is `assigned_guest_id = guestId`: a slot the member
+ * attached the speech to since (`attachSpeechToOpenSlot`) keeps it, as a
+ * recorded slot reassigned since stays with its new holder. A speech created
+ * for the member since is not in the record and stays with them. An empty
+ * record is a no-op (`inArray(col, [])` would compile to `false`).
  */
 async function restoreGuestSpeeches(
 	tx: DbOrTx,
@@ -3280,7 +3283,24 @@ async function restoreGuestSpeeches(
 		.update(speeches)
 		.set({ personId: null, guestId })
 		.where(
-			and(inArray(speeches.id, ids), eq(speeches.personId, ownerPersonId)),
+			and(
+				inArray(speeches.id, ids),
+				eq(speeches.personId, ownerPersonId),
+				notExists(
+					tx
+						.select({ one: sql`1` })
+						.from(roleSlots)
+						.where(
+							and(
+								eq(roleSlots.speechId, speeches.id),
+								or(
+									isNull(roleSlots.assignedGuestId),
+									ne(roleSlots.assignedGuestId, guestId),
+								),
+							),
+						),
+				),
+			),
 		);
 }
 
@@ -4608,7 +4628,7 @@ export async function applyUndoGuestConversion(
 		await restoreGuestSpeeches(
 			tx,
 			input.guestId,
-			record.personId,
+			memberPersonId,
 			record.speechIds,
 		);
 
